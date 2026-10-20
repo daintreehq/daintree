@@ -4,7 +4,7 @@ import path from "path";
 import { CHANNELS } from "../channels.js";
 import { broadcastToRenderer, checkRateLimit, typedHandle } from "../utils.js";
 import { defineIpcNamespace, op } from "../define.js";
-import { resolveForCwd } from "./forgeResolution.js";
+import { resolveForCwd, type ResolvedForgeContext } from "./forgeResolution.js";
 import { auditForgeCall, summarizeForgeArgs } from "../../services/forge/forgeAuditService.js";
 import { getForgeProviderImpl } from "../../services/forgeProviderRegistry.js";
 import { getCommitCount } from "../../utils/git.js";
@@ -186,12 +186,12 @@ const SINGLE_FLIGHT_TTL_MS = 150;
 
 /**
  * Closure-scoped single-flight coalescer. Concurrent callers with the same key
- * share one in-flight promise; a key keeps collapsing for {@link
- * SINGLE_FLIGHT_TTL_MS} after it resolves, and is evicted immediately on
+ * share one in-flight promise; a key keeps collapsing for `retainMs` (default
+ * {@link SINGLE_FLIGHT_TTL_MS}) after it resolves, and is evicted immediately on
  * rejection so the next caller retries. The map is per-`registerForgeDataHandlers`
  * call so it never leaks across project teardown.
  */
-function createSingleFlight() {
+function createSingleFlight(retainMs = SINGLE_FLIGHT_TTL_MS) {
   const inflight = new Map<string, Promise<unknown>>();
   return function singleFlight<T>(key: string, run: () => Promise<T>): Promise<T> {
     const existing = inflight.get(key);
@@ -201,9 +201,13 @@ function createSingleFlight() {
     inflight.set(key, promise);
     promise.then(
       () => {
+        if (retainMs <= 0) {
+          if (inflight.get(key) === promise) inflight.delete(key);
+          return;
+        }
         setTimeout(() => {
           if (inflight.get(key) === promise) inflight.delete(key);
-        }, SINGLE_FLIGHT_TTL_MS);
+        }, retainMs);
       },
       () => {
         if (inflight.get(key) === promise) inflight.delete(key);
@@ -1018,20 +1022,51 @@ async function handleForgeListIssueComments(payload: {
   );
 }
 
+/**
+ * Pending-only (no retention after settle): the providers own completed-value
+ * caching and negative-result policy, so holding a settled `null` here would
+ * only pin a transient miss. Keys carry the provider's cache generation, so a
+ * caller after a credential or instance change never joins an earlier lookup.
+ */
+const avatarSingleFlight = createSingleFlight(0);
+
 async function handleForgeResolveAuthorAvatar(payload: {
   cwd: string;
   email: string;
 }): Promise<string | null> {
-  checkRateLimit(CHANNELS.FORGE_RESOLVE_AUTHOR_AVATAR, 30, 60_000);
   if (!payload || typeof payload !== "object") return null;
   if (typeof payload.cwd !== "string" || !payload.cwd.trim()) return null;
   if (typeof payload.email !== "string" || !payload.email.trim()) return null;
+  const email = payload.email.trim().toLowerCase();
+
+  let resolved: ResolvedForgeContext;
   try {
-    const { impl } = await resolveForCwd(payload.cwd);
-    return (await impl.avatars?.resolveAuthorAvatar(payload.email.trim().toLowerCase())) ?? null;
+    resolved = await resolveForCwd(payload.cwd);
   } catch {
     return null;
   }
+  const { impl, repoRef, namespaceId } = resolved;
+  const avatars = impl.avatars;
+  if (!avatars) return null;
+
+  // Admission is charged once per actual provider lookup, not per subscriber:
+  // a burst of committer chips for one author spends one slot (#13598). The
+  // limiter's throw stays outside the provider catch so every joiner sees it.
+  const lookup = async (): Promise<string | null> => {
+    checkRateLimit(CHANNELS.FORGE_RESOLVE_AUTHOR_AVATAR, 30, 60_000);
+    try {
+      return (await avatars.resolveAuthorAvatar(email)) ?? null;
+    } catch {
+      return null;
+    }
+  };
+
+  const generation = avatars.getCacheGeneration?.();
+  if (generation === undefined) return lookup();
+  return avatarSingleFlight(
+    JSON.stringify([namespaceId, repoRef.host.toLowerCase(), generation, email]),
+    lookup
+  );
 }
 
 // Replay the current token-health state on mount so a second window can

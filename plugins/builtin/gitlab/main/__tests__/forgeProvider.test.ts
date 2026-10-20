@@ -9,7 +9,7 @@ import {
   setProvenanceAccessors,
 } from "../GitLabAuth.js";
 import { resetLastRateLimitInfo } from "../GitLabClient.js";
-import { clearGitLabCaches } from "../readOps.js";
+import { clearGitLabCaches, resolveAuthorAvatarImpl } from "../readOps.js";
 import { clearValidatedUserInfo } from "../GitLabAuth.js";
 
 const REPO: RepoRef = { host: "gitlab.com", owner: "group", repo: "project", rawData: null };
@@ -1410,5 +1410,86 @@ describe("repoStats", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("commit-author avatar lookups (#13598)", () => {
+  function deferredResponse() {
+    let resolve!: (response: Response) => void;
+    const promise = new Promise<Response>((res) => {
+      resolve = res;
+    });
+    return { promise, resolve };
+  }
+
+  it("shares one /avatar request across concurrent lookups for the same host and email", async () => {
+    const pending = deferredResponse();
+    fetchMock().mockImplementation(() => pending.promise);
+
+    const lookups = Array.from({ length: 20 }, (_, i) =>
+      resolveAuthorAvatarImpl("gitlab.com", i % 2 ? " Dev@Example.com" : "dev@example.com")
+    );
+    await vi.waitFor(() => expect(fetchMock()).toHaveBeenCalledTimes(1));
+    pending.resolve(jsonResponse({ avatar_url: "https://gitlab.com/uploads/dev.png" }));
+
+    expect(new Set(await Promise.all(lookups))).toEqual(
+      new Set(["https://gitlab.com/uploads/dev.png"])
+    );
+    expect(fetchMock()).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps different hosts and emails in separate requests", async () => {
+    fetchMock().mockImplementation(async () => jsonResponse({ avatar_url: null }));
+    await Promise.all([
+      resolveAuthorAvatarImpl("gitlab.com", "a@example.com"),
+      resolveAuthorAvatarImpl("gitlab.com", "b@example.com"),
+      resolveAuthorAvatarImpl("gitlab.internal.example", "a@example.com"),
+    ]);
+    expect(fetchMock()).toHaveBeenCalledTimes(3);
+  });
+
+  it("starts a fresh request after an invalidation instead of joining the earlier one", async () => {
+    const first = deferredResponse();
+    const second = deferredResponse();
+    fetchMock()
+      .mockImplementationOnce(() => first.promise)
+      .mockImplementationOnce(() => second.promise);
+
+    const before = resolveAuthorAvatarImpl("gitlab.com", "dev@example.com");
+    await vi.waitFor(() => expect(fetchMock()).toHaveBeenCalledTimes(1));
+    clearGitLabCaches();
+    const after = resolveAuthorAvatarImpl("gitlab.com", "dev@example.com");
+    await vi.waitFor(() => expect(fetchMock()).toHaveBeenCalledTimes(2));
+
+    // The pre-invalidation request settling first must not evict the newer
+    // flight, so a third reader still joins it.
+    first.resolve(jsonResponse({ avatar_url: "https://gitlab.com/old.png" }));
+    expect(await before).toBe("https://gitlab.com/old.png");
+    const joiner = resolveAuthorAvatarImpl("gitlab.com", "dev@example.com");
+    second.resolve(jsonResponse({ avatar_url: "https://gitlab.com/new.png" }));
+
+    expect(await after).toBe("https://gitlab.com/new.png");
+    expect(await joiner).toBe("https://gitlab.com/new.png");
+    expect(fetchMock()).toHaveBeenCalledTimes(2);
+    // The stale result never landed in the cache.
+    expect(await resolveAuthorAvatarImpl("gitlab.com", "dev@example.com")).toBe(
+      "https://gitlab.com/new.png"
+    );
+    expect(fetchMock()).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries a transient failure but remembers a definitive miss", async () => {
+    fetchMock().mockImplementationOnce(async () => jsonResponse({}, { status: 503 }));
+    expect(await resolveAuthorAvatarImpl("gitlab.com", "dev@example.com")).toBeNull();
+    fetchMock().mockImplementationOnce(async () => jsonResponse({}, { status: 404 }));
+    expect(await resolveAuthorAvatarImpl("gitlab.com", "dev@example.com")).toBeNull();
+    expect(await resolveAuthorAvatarImpl("gitlab.com", "dev@example.com")).toBeNull();
+    expect(fetchMock()).toHaveBeenCalledTimes(2);
+  });
+
+  it("exposes the cache generation, bumped by every invalidation", () => {
+    const before = gitlabForgeProvider.avatars?.getCacheGeneration?.();
+    clearGitLabCaches();
+    expect(gitlabForgeProvider.avatars?.getCacheGeneration?.()).toBe((before ?? 0) + 1);
   });
 });

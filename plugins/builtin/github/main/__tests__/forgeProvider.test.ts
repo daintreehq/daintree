@@ -4253,3 +4253,10 @@ describe("checks.getChecks", () => {
     expect(mockGraphQLClient).toHaveBeenCalledTimes(2);
   });
 });
+
+describe("avatars capability (#13598)", () => {
+  it("reports the live token version as its cache generation", () => {
+    vi.mocked(GitHubAuth.getTokenVersion).mockReturnValueOnce(7);
+    expect(githubForgeProvider.avatars?.getCacheGeneration?.()).toBe(7);
+  });
+});

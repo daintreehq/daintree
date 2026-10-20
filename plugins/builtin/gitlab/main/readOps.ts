@@ -67,6 +67,13 @@ interface CacheEntry<T> {
 const issueTooltipCache = new Map<string, CacheEntry<IssueTooltipData | null>>();
 const prTooltipCache = new Map<string, CacheEntry<PRTooltipData | null>>();
 const avatarCache = new Map<string, CacheEntry<string | null>>();
+/**
+ * Pending `/avatar` lookups, so a burst of committer chips for one author
+ * shares a single request. Cleared with the caches: a lookup started before an
+ * invalidation stays with the callers that already joined it, and every later
+ * caller starts its own.
+ */
+const avatarInflight = new Map<string, Promise<string | null>>();
 const repoStatsCache = new Map<string, CacheEntry<RepoStatsSnapshot>>();
 
 /**
@@ -82,8 +89,14 @@ export function clearGitLabCaches(): void {
   issueTooltipCache.clear();
   prTooltipCache.clear();
   avatarCache.clear();
+  avatarInflight.clear();
   repoStatsCache.clear();
   resetRateLimitSnapshots();
+}
+
+/** Current invalidation generation, for the host's avatar IPC coalescing. */
+export function getGitLabCacheGeneration(): number {
+  return cacheGeneration;
 }
 
 /** Snapshot the generation before an await; pass it to {@link cacheSet}. */
@@ -459,6 +472,20 @@ export async function resolveAuthorAvatarImpl(
   const key = `${instanceHost.toLowerCase()}:${normalizedEmail}`;
   const cached = cacheGet(avatarCache, key, AVATAR_CACHE_TTL_MS);
   if (cached !== undefined) return cached;
+  const pending = avatarInflight.get(key);
+  if (pending) return pending;
+  const request = fetchAuthorAvatar(instanceHost, normalizedEmail, key).finally(() => {
+    if (avatarInflight.get(key) === request) avatarInflight.delete(key);
+  });
+  avatarInflight.set(key, request);
+  return request;
+}
+
+async function fetchAuthorAvatar(
+  instanceHost: string,
+  normalizedEmail: string,
+  key: string
+): Promise<string | null> {
   const epoch = cacheEpoch();
   try {
     const { data } = await gitlabRest<{ avatar_url?: unknown }>({

@@ -32,6 +32,7 @@ import {
   findPRByBranchImpl,
   findPRsByBranchesImpl,
   getCIStatusImpl,
+  getGitLabCacheGeneration,
   getIssueImpl,
   getIssueTooltipImpl,
   getLatestReleaseImpl,
@@ -335,5 +336,6 @@ export const gitlabForgeProvider: ForgeProviderImpl = {
     async resolveAuthorAvatar(email: string): Promise<string | null> {
       return resolveAuthorAvatarImpl(await getInstanceHost(), email);
     },
+    getCacheGeneration: getGitLabCacheGeneration,
   },
 };
