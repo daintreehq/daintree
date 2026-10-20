@@ -61,7 +61,7 @@ const RESUME_STALE_PROBE_CHARS = 500;
 const REASONING_LOOP_THRESHOLD = 3;
 
 // eslint-disable-next-line no-control-regex
-const ANSI_PATTERN = /\[[0-9;?]*[A-Za-z]|\][^]*(?:|\\)/g;
+const ANSI_PATTERN = /\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*(?:\x07|\x1b\\)/g;
 
 const REFUSED_PATTERNS: readonly RegExp[] = [
   /\b(?:i (?:cannot|can't|am unable to|won't))\b/i,

@@ -46,7 +46,7 @@ afterEach(() => {
 
 describe("WorktreeLoadErrorBanner (#8400)", () => {
   it("renders the title and the sanitized, length-bounded error", () => {
-    render(<WorktreeLoadErrorBanner error={"[31mNot a git repository[0m"} />);
+    render(<WorktreeLoadErrorBanner error={"\x1b[31mNot a git repository\x1b[0m"} />);
 
     expect(screen.getByText("Couldn't load worktrees")).toBeTruthy();
     // ANSI escape sequences are stripped before render.

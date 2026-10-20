@@ -566,9 +566,9 @@ describe("readClaudeLastMessage — reading from the end", () => {
   });
 
   it("stays inside the response cap even when every character escapes to six bytes", async () => {
-    const question = { questions: [{ question: "".repeat(1200) }] };
+    const question = { questions: [{ question: "\x01".repeat(1200) }] };
     await seed([
-      assistant("msg_1", [text("".repeat(60 * 1024))]),
+      assistant("msg_1", [text("\x1b".repeat(60 * 1024))]),
       ...Array.from({ length: 4 }, (_, i) =>
         assistant("msg_1", [toolUse(`toolu_${i}`, "AskUserQuestion", question)])
       ),
@@ -1056,7 +1056,7 @@ describe("tailWithinJsonBytes", () => {
   });
 
   it("counts a control character at its escaped size", () => {
-    expect(tailWithinJsonBytes("ab", 6)).toEqual({ text: "", truncated: true });
+    expect(tailWithinJsonBytes("ab\x01", 6)).toEqual({ text: "\x01", truncated: true });
     expect(tailWithinJsonBytes("ab\n", 3)).toEqual({ text: "b\n", truncated: true });
   });
 

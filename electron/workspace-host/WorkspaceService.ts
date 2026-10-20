@@ -2405,9 +2405,9 @@ export class WorkspaceService {
       const git = await createHardenedGit(cwd);
       const remotes = await git.getRemotes(true);
       const signature = remotes
-        .map((remote) => `${remote.name} ${remote.refs?.fetch ?? ""}`)
+        .map((remote) => `${remote.name}\x00${remote.refs?.fetch ?? ""}`)
         .sort()
-        .join("");
+        .join("\x01");
       // Selection honours the project's `forgeRemote` setting (#11408). The
       // signature above deliberately still covers ALL remotes: it answers "did
       // the remote table change", independent of which entry we route through.
