@@ -10,12 +10,21 @@ import { markPerformance, withPerformanceSpan } from "../utils/performance.js";
 
 const PROJECT_STATE_CACHE_TTL_MS = 60_000;
 const PROJECT_STATE_CACHE_SWEEP_MS = 60_000;
+// A read only retries while something keeps superseding it. Past this it hands
+// back what it read without caching it, rather than spin.
+const PROJECT_STATE_READ_ATTEMPTS = 3;
 
 export const PROJECT_STATE_SCHEMA_VERSION = 1;
 
 interface ProjectStateCacheEntry {
   expiresAt: number;
   value: ProjectState | null;
+}
+
+/** What a disk read had to outlive to still be the newest answer it gives. */
+interface ProjectStateReadFence {
+  epoch: number;
+  generation: number;
 }
 
 export interface ProjectStateReadResult {
@@ -60,6 +69,15 @@ type UpdateOutcome =
 
 export class ProjectStateManager {
   private projectStateCache = new Map<string, ProjectStateCacheEntry>();
+  /**
+   * Bumped by every save, clear and invalidation of a project, so a disk read
+   * that started before one of them can tell its bytes are no longer the
+   * newest. Never reset or deleted: a counter that could return to an earlier
+   * value would let a read from before the reset pass for current.
+   */
+  private stateGenerations = new Map<string, number>();
+  /** The same, for invalidations that reach every project at once. */
+  private cacheEpoch = 0;
   private pendingQuarantines = new Map<string, string>();
   // Projects whose state.json existed on disk this session but could not be read
   // into a complete terminal enumeration — future-schema quarantine, parse
@@ -132,7 +150,23 @@ export class ProjectStateManager {
       clearInterval(this.sweepTimer);
       this.sweepTimer = null;
     }
+    this.cacheEpoch++;
     this.projectStateCache.clear();
+  }
+
+  private bumpStateGeneration(projectId: string): void {
+    this.stateGenerations.set(projectId, (this.stateGenerations.get(projectId) ?? 0) + 1);
+  }
+
+  private captureReadFence(projectId: string): ProjectStateReadFence {
+    return { epoch: this.cacheEpoch, generation: this.stateGenerations.get(projectId) ?? 0 };
+  }
+
+  private isReadCurrent(projectId: string, fence: ProjectStateReadFence): boolean {
+    return (
+      fence.epoch === this.cacheEpoch &&
+      fence.generation === (this.stateGenerations.get(projectId) ?? 0)
+    );
   }
 
   private cloneProjectState(state: ProjectState | null): ProjectState | null {
@@ -175,9 +209,11 @@ export class ProjectStateManager {
 
   invalidateProjectStateCache(projectId?: string): void {
     if (projectId) {
+      this.bumpStateGeneration(projectId);
       this.projectStateCache.delete(projectId);
       return;
     }
+    this.cacheEpoch++;
     this.projectStateCache.clear();
   }
 
@@ -457,7 +493,9 @@ export class ProjectStateManager {
     // Stamp the id we actually saved under, so a cached read and a fresh disk
     // read agree. The disk path treats the state directory as authoritative, and
     // a caller passing a stale embedded id must not get a different answer just
-    // because the cache happened to be warm.
+    // because the cache happened to be warm. The bump retires any read still in
+    // flight, which would otherwise land its older bytes on top of this.
+    this.bumpStateGeneration(projectId);
     this.setProjectStateCache(projectId, { ...validatedState, projectId });
     // After the cache, so an observer that reads back through this manager sees
     // the state it was just handed rather than the previous one.
@@ -465,16 +503,47 @@ export class ProjectStateManager {
   }
 
   async getProjectState(projectId: string): Promise<ProjectState | null> {
-    const cachedState = this.getCachedProjectState(projectId);
-    if (cachedState !== undefined) {
-      return cachedState;
-    }
+    for (let attempt = 1; ; attempt++) {
+      const cachedState = this.getCachedProjectState(projectId);
+      if (cachedState !== undefined) {
+        return cachedState;
+      }
 
-    const filePath = stateFilePath(this.projectsConfigDir, projectId);
-    if (!filePath) {
-      this.setProjectStateCache(projectId, null);
-      return null;
+      const filePath = stateFilePath(this.projectsConfigDir, projectId);
+      if (!filePath) {
+        this.setProjectStateCache(projectId, null);
+        return null;
+      }
+
+      // A save or clear that finishes while this read is out makes its bytes
+      // older than what is now on disk. Caching them would hand the next queued
+      // update a superseded state to write back (#13575), and returning them is
+      // no better — `runBatch` is one of the callers. Read again instead, which
+      // usually lands on the cache the save just published.
+      const fence = this.captureReadFence(projectId);
+      const read = await this.readProjectStateFromDisk(projectId, filePath, fence);
+      if (read.current || attempt >= PROJECT_STATE_READ_ATTEMPTS) {
+        return read.state;
+      }
     }
+  }
+
+  /**
+   * One disk read. Publishes to the cache — and quarantines a bad file — only
+   * while `fence` is still current; `current: false` means the result was
+   * superseded and nothing was published.
+   */
+  private async readProjectStateFromDisk(
+    projectId: string,
+    filePath: string,
+    fence: ProjectStateReadFence
+  ): Promise<{ state: ProjectState | null; current: boolean }> {
+    const superseded = { state: null, current: false };
+    const publishNull = () => {
+      if (!this.isReadCurrent(projectId, fence)) return superseded;
+      this.setProjectStateCache(projectId, null);
+      return { state: null, current: true };
+    };
 
     try {
       const content = await withPerformanceSpan(
@@ -497,6 +566,9 @@ export class ProjectStateManager {
         // Avoid a deterministic destination so neither POSIX silently
         // clobbers a prior quarantine nor Windows throws EEXIST. A previously
         // quarantined .future-v{N} file is preserved with a timestamp suffix.
+        // A superseded read must not move the file: a save may have just
+        // replaced it with one this build reads fine.
+        if (!this.isReadCurrent(projectId, fence)) return superseded;
         let quarantinePath = `${filePath}.future-v${onDiskVersion}`;
         if (existsSync(quarantinePath)) {
           quarantinePath = `${quarantinePath}.${Date.now()}`;
@@ -514,8 +586,7 @@ export class ProjectStateManager {
             renameError
           );
         }
-        this.setProjectStateCache(projectId, null);
-        return null;
+        return publishNull();
       }
 
       // A present-but-non-array `terminals` field means the enumeration we can
@@ -574,24 +645,25 @@ export class ProjectStateManager {
           : undefined,
       };
 
+      if (!this.isReadCurrent(projectId, fence)) return superseded;
       // `state` was just built from parsed JSON and is shared with nothing, so
       // the cache can take it as-is and the caller gets the only other copy.
       this.cacheUnsharedProjectState(projectId, state);
-      return this.cloneProjectState(state);
+      return { state: this.cloneProjectState(state), current: true };
     } catch (error) {
       const code =
         error instanceof Error && "code" in error
           ? (error as NodeJS.ErrnoException).code
           : undefined;
       if (code === "ENOENT") {
-        this.setProjectStateCache(projectId, null);
-        return null;
+        return publishNull();
       }
       // State existed but couldn't be read (parse failure, EACCES/EMFILE/EIO,
       // etc.). Record it before the corruption quarantine below so a double
       // fault — unreadable AND unrenameable — is still visible to the sweep.
       this.unreadableProjectIds.add(projectId);
       console.error(`[ProjectStateManager] Failed to load state for project ${projectId}:`, error);
+      if (!this.isReadCurrent(projectId, fence)) return superseded;
       try {
         const quarantinePath = `${filePath}.corrupted.${Date.now()}`;
         markPerformance(PERF_MARKS.PROJECT_STATE_QUARANTINE, { projectId });
@@ -601,8 +673,7 @@ export class ProjectStateManager {
       } catch {
         // Ignore
       }
-      this.setProjectStateCache(projectId, null);
-      return null;
+      return publishNull();
     }
   }
 
