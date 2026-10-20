@@ -1221,6 +1221,21 @@ describe("forge:resolve-author-avatar coalescing (#13598)", () => {
     await expect(resolveAvatar("one-too-many@example.com")).rejects.toThrow();
   });
 
+  it("hands a rate-limit rejection to every joiner and lets the same author retry later", async () => {
+    resolveAuthorAvatar.mockResolvedValue(null);
+    for (let i = 0; i < 30; i++) await resolveAvatar(`filler-${i}@example.com`);
+    resolveAuthorAvatar.mockClear();
+
+    const reads = Array.from({ length: 5 }, () => resolveAvatar("dev@example.com"));
+    const settled = await Promise.allSettled(reads);
+    expect(settled.every((r) => r.status === "rejected")).toBe(true);
+    expect(resolveAuthorAvatar).not.toHaveBeenCalled();
+
+    _resetRateLimitQueuesForTest();
+    resolveAuthorAvatar.mockResolvedValue("https://avatars.test/dev.png");
+    expect(await resolveAvatar("dev@example.com")).toBe("https://avatars.test/dev.png");
+  });
+
   it("does not hold a settled result, so the next read reaches the provider again", async () => {
     resolveAuthorAvatar.mockResolvedValue(null);
     expect(await resolveAvatar("dev@example.com")).toBeNull();
