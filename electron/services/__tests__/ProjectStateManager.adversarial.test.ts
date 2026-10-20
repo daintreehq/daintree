@@ -247,3 +247,172 @@ describe("ProjectStateManager unreadable-session mark under rename double-fault 
     expect(manager.wasStateUnreadableThisSession(projectId)).toBe(true);
   });
 });
+
+describe("ProjectStateManager late reads racing saves and clears (mocked fs)", () => {
+  let tempDir: string;
+  let manager: ProjectStateManager;
+  let projectId: string;
+
+  const terminal = (id: string) => ({ id, title: id, location: "grid" as const, cwd: "/tmp" });
+  const oldBytes = () =>
+    JSON.stringify({
+      _schemaVersion: 1,
+      sidebarWidth: 350,
+      terminals: [terminal("t1"), terminal("t2")],
+    });
+
+  /** Hold the next readFile open until the test releases it with the given bytes. */
+  function holdNextRead(): (result: string | Error) => void {
+    let settle!: (result: string | Error) => void;
+    fsPromisesMock.readFile.mockImplementationOnce(
+      () =>
+        new Promise<string>((resolve, reject) => {
+          settle = (result) => (result instanceof Error ? reject(result) : resolve(result));
+        })
+    );
+    return (result) => settle(result);
+  }
+
+  function lastWrittenTerminalIds(): string[] {
+    const calls = utilsMock.resilientAtomicWriteFile.mock.calls;
+    const payload = JSON.parse(calls[calls.length - 1][1] as string);
+    return payload.terminals.map((t: { id: string }) => t.id);
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    utilsMock.resilientAtomicWriteFile.mockResolvedValue(undefined);
+    utilsMock.resilientRename.mockResolvedValue(undefined);
+    utilsMock.resilientUnlink.mockResolvedValue(undefined);
+    fsPromisesMock.mkdir.mockResolvedValue(undefined);
+    fsPromisesMock.readFile.mockRejectedValue(
+      Object.assign(new Error("ENOENT"), { code: "ENOENT" })
+    );
+
+    tempDir = path.join(os.tmpdir(), "daintree-late-read-adv");
+    manager = new ProjectStateManager(tempDir);
+    projectId = generateProjectId("/test/adversarial-late-read-project");
+  });
+
+  afterEach(() => {
+    manager.dispose();
+  });
+
+  it("a read that finishes after a save does not replace the saved state", async () => {
+    const release = holdNextRead();
+    const lateRead = manager.getProjectState(projectId);
+    await vi.waitFor(() => expect(fsPromisesMock.readFile).toHaveBeenCalledTimes(1));
+
+    await manager.saveProjectState(projectId, makeState({ terminals: [terminal("new")] }));
+    release(oldBytes());
+
+    // The late reader is handed the newer state too, not the bytes it read.
+    expect((await lateRead)?.terminals.map((t) => t.id)).toEqual(["new"]);
+    expect((await manager.getProjectState(projectId))?.terminals.map((t) => t.id)).toEqual(["new"]);
+
+    await manager.enqueueProjectStateUpdate(projectId, (existing) => ({
+      ...existing!,
+      sidebarWidth: 400,
+    }));
+    expect(lastWrittenTerminalIds()).toEqual(["new"]);
+  });
+
+  it("a read that finishes after a clear does not resurrect the cleared panels", async () => {
+    const release = holdNextRead();
+    const lateRead = manager.getProjectState(projectId);
+    await vi.waitFor(() => expect(fsPromisesMock.readFile).toHaveBeenCalledTimes(1));
+
+    await manager.clearProjectState(projectId);
+    release(oldBytes());
+
+    // The file is gone, so the retried read reports no state.
+    expect(await lateRead).toBeNull();
+    expect(await manager.getProjectState(projectId)).toBeNull();
+
+    await manager.enqueueProjectStateUpdate(projectId, (existing) =>
+      makeState({ ...existing, sidebarWidth: 400 })
+    );
+    expect(lastWrittenTerminalIds()).toEqual([]);
+  });
+
+  it("a read that finishes after a global invalidation does not repopulate the cache", async () => {
+    const release = holdNextRead();
+    const lateRead = manager.getProjectState(projectId);
+    await vi.waitFor(() => expect(fsPromisesMock.readFile).toHaveBeenCalledTimes(1));
+
+    manager.invalidateProjectStateCache();
+    release(oldBytes());
+
+    // The retry re-reads disk (ENOENT here) rather than trusting the stale bytes.
+    expect(await lateRead).toBeNull();
+    expect(fsPromisesMock.readFile).toHaveBeenCalledTimes(2);
+  });
+
+  it("a read that opened the file during a clear that ends in ENOENT is still retired", async () => {
+    let finishUnlink!: (error: Error) => void;
+    utilsMock.resilientUnlink.mockImplementationOnce(
+      () => new Promise((_resolve, reject) => (finishUnlink = reject))
+    );
+    const clearing = manager.clearProjectState(projectId);
+
+    // Starts after the clear's eager invalidation, so only its completion can fence it.
+    const release = holdNextRead();
+    const lateRead = manager.getProjectState(projectId);
+    await vi.waitFor(() => expect(fsPromisesMock.readFile).toHaveBeenCalledTimes(1));
+
+    finishUnlink(Object.assign(new Error("ENOENT"), { code: "ENOENT" }));
+    await clearing;
+    release(oldBytes());
+
+    expect(await lateRead).toBeNull();
+    expect(fsPromisesMock.readFile).toHaveBeenCalledTimes(2);
+  });
+
+  it("a read that outlives a failed save re-reads rather than trust its bytes", async () => {
+    const release = holdNextRead();
+    const lateRead = manager.getProjectState(projectId);
+    await vi.waitFor(() => expect(fsPromisesMock.readFile).toHaveBeenCalledTimes(1));
+
+    // The atomic write can rename into place and then fail its directory sync.
+    utilsMock.resilientAtomicWriteFile.mockRejectedValueOnce(
+      Object.assign(new Error("EIO"), { code: "EIO" })
+    );
+    await expect(
+      manager.saveProjectState(projectId, makeState({ terminals: [terminal("new")] }))
+    ).rejects.toThrow("EIO");
+    release(oldBytes());
+
+    expect(await lateRead).toBeNull();
+    expect(fsPromisesMock.readFile).toHaveBeenCalledTimes(2);
+  });
+
+  it("a read superseded on every attempt fails rather than return stale state", async () => {
+    fsPromisesMock.readFile.mockImplementation(async () => {
+      manager.invalidateProjectStateCache(projectId);
+      return oldBytes();
+    });
+
+    await expect(manager.getProjectState(projectId)).rejects.toThrow(/kept changing/);
+    expect(fsPromisesMock.readFile).toHaveBeenCalledTimes(3);
+
+    // The queued update never sees the stale snapshot, so nothing is written.
+    await expect(
+      manager.enqueueProjectStateUpdate(projectId, (existing) => existing)
+    ).rejects.toThrow(/kept changing/);
+    expect(utilsMock.resilientAtomicWriteFile).not.toHaveBeenCalled();
+  });
+
+  it("a stale read of a corrupt file does not quarantine the file a newer save wrote", async () => {
+    const release = holdNextRead();
+    const lateRead = manager.getProjectStateWithRecovery(projectId);
+    await vi.waitFor(() => expect(fsPromisesMock.readFile).toHaveBeenCalledTimes(1));
+
+    await manager.saveProjectState(projectId, makeState({ terminals: [terminal("new")] }));
+    release("{ not valid json");
+
+    const result = await lateRead;
+    expect(result.state?.terminals.map((t) => t.id)).toEqual(["new"]);
+    expect(result.quarantinedPath).toBeUndefined();
+    expect(utilsMock.resilientRename).not.toHaveBeenCalled();
+  });
+});
