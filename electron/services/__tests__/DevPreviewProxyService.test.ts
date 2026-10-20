@@ -1005,6 +1005,49 @@ describe("DevPreviewProxyService", () => {
       );
     });
 
+    it("502s with provenance and reports upstream-error when the local resolver throws (#13550)", async () => {
+      const onDiagnostic = vi.fn<(event: DevPreviewProxyDiagnostic) => void>();
+      proxy = new DevPreviewProxyService(() => {
+        throw new Error("Resolver unavailable");
+      }, onDiagnostic);
+      const proxyPort = await proxy.start();
+
+      const res = await request(proxyPort, `dp-test.localhost:${proxyPort}`);
+
+      expect(res.status).toBe(502);
+      expect(res.statusText).toBe(DEV_PREVIEW_PROXY_STATUS_TEXT);
+      expect(onDiagnostic).toHaveBeenCalledTimes(1);
+      expect(onDiagnostic).toHaveBeenCalledWith({
+        subdomain: "dp-test",
+        kind: "http",
+        cause: "upstream-error",
+      });
+    });
+
+    it("destroys the upgrade socket and reports when the local resolver throws (#13550)", async () => {
+      const onDiagnostic = vi.fn<(event: DevPreviewProxyDiagnostic) => void>();
+      proxy = new DevPreviewProxyService(() => {
+        throw new Error("Resolver unavailable");
+      }, onDiagnostic);
+      const proxyPort = await proxy.start();
+
+      const client = new WebSocket(`ws://127.0.0.1:${proxyPort}/`, {
+        headers: { host: `dp-test.localhost:${proxyPort}` },
+      });
+      let opened = false;
+      client.on("open", () => (opened = true));
+      client.on("error", () => {});
+      await new Promise<void>((resolve) => client.on("close", () => resolve()));
+
+      expect(opened).toBe(false);
+      expect(onDiagnostic).toHaveBeenCalledTimes(1);
+      expect(onDiagnostic).toHaveBeenCalledWith({
+        subdomain: "dp-test",
+        kind: "ws",
+        cause: "upstream-error",
+      });
+    });
+
     it("never lets a throwing diagnostics listener break proxying", async () => {
       upstream = http.createServer((_req, res) => {
         res.writeHead(200);
@@ -1105,5 +1148,52 @@ describe("DevPreviewProxyService remote upstream fallback", () => {
     const failed = await request(proxyPort, `dp-broken.localhost:${proxyPort}`);
     expect(failed.status).toBe(502);
     expect(failed.body).toContain("No dev server is registered");
+  });
+
+  it("falls back to the local miss when the remote resolver throws synchronously (#13550)", async () => {
+    const onDiagnostic = vi.fn<(event: DevPreviewProxyDiagnostic) => void>();
+    proxy = new DevPreviewProxyService(
+      () => null,
+      onDiagnostic,
+      () => {
+        throw new Error("link down");
+      }
+    );
+    const proxyPort = await proxy.start();
+
+    const res = await request(proxyPort, `dp-broken.localhost:${proxyPort}`);
+    expect(res.status).toBe(502);
+    expect(res.statusText).toBe(DEV_PREVIEW_PROXY_STATUS_TEXT);
+    expect(res.body).toContain("No dev server is registered");
+    expect(onDiagnostic).toHaveBeenCalledTimes(1);
+    expect(onDiagnostic).toHaveBeenCalledWith(
+      expect.objectContaining({ subdomain: "dp-broken", kind: "http", cause: "no-session" })
+    );
+  });
+
+  it("closes the upgrade socket on a local miss when the remote resolver throws synchronously (#13550)", async () => {
+    const onDiagnostic = vi.fn<(event: DevPreviewProxyDiagnostic) => void>();
+    proxy = new DevPreviewProxyService(
+      () => null,
+      onDiagnostic,
+      () => {
+        throw new Error("link down");
+      }
+    );
+    const proxyPort = await proxy.start();
+
+    const client = new WebSocket(`ws://127.0.0.1:${proxyPort}/`, {
+      headers: { host: `dp-broken.localhost:${proxyPort}` },
+    });
+    let opened = false;
+    client.on("open", () => (opened = true));
+    client.on("error", () => {});
+    await new Promise<void>((resolve) => client.on("close", () => resolve()));
+
+    expect(opened).toBe(false);
+    expect(onDiagnostic).toHaveBeenCalledTimes(1);
+    expect(onDiagnostic).toHaveBeenCalledWith(
+      expect.objectContaining({ subdomain: "dp-broken", kind: "ws", cause: "no-session" })
+    );
   });
 });

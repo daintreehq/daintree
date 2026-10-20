@@ -230,11 +230,17 @@ export class DevPreviewProxyService {
     });
     this.proxy = proxy;
 
+    // The handlers settle their own failures; these catches are the backstop so an
+    // unforeseen rejection still finishes the response instead of leaving it hanging.
     const server = http.createServer((req, res) => {
-      void this.handleRequest(req, res);
+      this.handleRequest(req, res).catch(() => {
+        this.send502(res, "The dev server isn't responding.");
+      });
     });
     server.on("upgrade", (req, socket, head) => {
-      void this.handleUpgrade(req, socket, head);
+      this.handleUpgrade(req, socket, head).catch(() => {
+        socket.destroy();
+      });
     });
     server.on("connection", (socket) => {
       this.sockets.add(socket);
@@ -294,7 +300,12 @@ export class DevPreviewProxyService {
       return;
     }
 
-    const { subdomain, resolution } = await this.resolveWithRemote(req.headers.host);
+    const resolved = await this.resolveOrReport(req, "http");
+    if (!resolved) {
+      this.send502(res, "The dev server isn't responding.");
+      return;
+    }
+    const { subdomain, resolution } = resolved;
     if (resolution.kind === "unknown-subdomain") {
       this.reportFailure(subdomain, "http", "no-session");
       this.send502(res, "No dev server is registered for this preview.");
@@ -410,7 +421,12 @@ export class DevPreviewProxyService {
     this.sockets.add(socket);
     socket.once("close", () => this.sockets.delete(socket));
 
-    const { subdomain, resolution } = await this.resolveWithRemote(req.headers.host);
+    const resolved = await this.resolveOrReport(req, "ws");
+    if (!resolved) {
+      socket.destroy();
+      return;
+    }
+    const { subdomain, resolution } = resolved;
     if (resolution.kind !== "ok") {
       this.reportFailure(
         subdomain,
@@ -443,6 +459,23 @@ export class DevPreviewProxyService {
     }
   }
 
+  /**
+   * Resolve the request's upstream, reporting a resolver that throws as an upstream
+   * error. Returns null when resolution failed, so the caller finishes the request
+   * through its usual failure path instead of rejecting into a discarded promise.
+   */
+  private async resolveOrReport(
+    req: http.IncomingMessage,
+    kind: "http" | "ws"
+  ): Promise<{ subdomain: string | null; resolution: RemoteUpstreamResolution } | null> {
+    try {
+      return await this.resolveWithRemote(req.headers.host);
+    } catch {
+      this.reportFailure(parseDevPreviewProxyHost(req.headers.host), kind, "upstream-error");
+      return null;
+    }
+  }
+
   /** Local resolution, then the remote host's for a subdomain this machine doesn't know. */
   private async resolveWithRemote(host: string | undefined): Promise<{
     subdomain: string | null;
@@ -450,10 +483,11 @@ export class DevPreviewProxyService {
   }> {
     const local = this.resolveUpstream(host);
     if (local.resolution.kind !== "unknown-subdomain" || !local.subdomain) return local;
-    const pending = this.resolveRemoteUpstreamFn?.(local.subdomain);
-    if (!pending) return local;
+    if (!this.resolveRemoteUpstreamFn) return local;
+    // A remote resolver that throws synchronously is treated like one that rejects:
+    // fall back to the local miss.
     try {
-      const remote = await pending;
+      const remote = await this.resolveRemoteUpstreamFn(local.subdomain);
       return remote ? { subdomain: local.subdomain, resolution: remote } : local;
     } catch {
       return local;
