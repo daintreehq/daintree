@@ -78,6 +78,8 @@ describe("link frames", () => {
       for (let i = 0; i < n; i++) payload[i] = i & 0xff;
       return { lane: Lane.BULK, kind: 1, streamId: 3, payload };
     };
+    // toEqual walks typed arrays entry by entry, which is far too slow at MiB sizes.
+    const sameBytes = (a: Uint8Array, b: Uint8Array) => Buffer.from(a).equals(Buffer.from(b));
 
     it("releases oversized storage once small traffic settles after a large frame", () => {
       const d = new FrameDecoder();
@@ -90,7 +92,7 @@ describe("link frames", () => {
       }
       expect(d.bufferedBytes).toBe(0);
       expect(d.capacityBytes).toBeLessThanOrEqual(128 * 1024);
-      expect(large!.payload).toEqual(big(9 * 1024 * 1024).payload);
+      expect(sameBytes(large!.payload, big(9 * 1024 * 1024).payload)).toBe(true);
     });
 
     it("keeps the warmed buffer while large frames keep arriving", () => {
@@ -99,6 +101,7 @@ describe("link frames", () => {
       const warmed = d.capacityBytes;
       for (let round = 0; round < 5; round++) {
         for (let i = 0; i < 15; i++) d.push(encodeFrame(frame(Lane.CONTROL, 2)));
+        expect(d.capacityBytes).toBe(warmed);
         d.push(encodeFrame(big(1024 * 1024)));
         expect(d.capacityBytes).toBe(warmed);
       }
@@ -118,7 +121,7 @@ describe("link frames", () => {
         Buffer.concat([encodeFrame(big(1024 * 1024)), ...Array.from({ length: 16 }, () => small)])
       );
       expect(out).toHaveLength(17);
-      expect(out[0]!.payload).toEqual(big(1024 * 1024).payload);
+      expect(sameBytes(out[0]!.payload, big(1024 * 1024).payload)).toBe(true);
       expect(b.capacityBytes).toBe(128 * 1024);
     });
 
@@ -132,9 +135,22 @@ describe("link frames", () => {
       const out = d.push(Buffer.concat([small, next.subarray(0, 2)]));
       expect(out).toHaveLength(1);
       expect(d.bufferedBytes).toBe(2);
+      expect(d.capacityBytes).toBe(128 * 1024);
       const rest = [...d.push(next.subarray(2, 5)), ...d.push(next.subarray(5))];
       expect(rest).toHaveLength(1);
-      expect(rest[0]!.payload).toEqual(big(600 * 1024).payload);
+      expect(sameBytes(rest[0]!.payload, big(600 * 1024).payload)).toBe(true);
+    });
+
+    it("counts frames of exactly the settled size as small and anything larger as large", () => {
+      const settled = 128 * 1024 - FRAME_HEADER_BYTES;
+      const d = new FrameDecoder();
+      d.push(encodeFrame(big(1024 * 1024)));
+      const warmed = d.capacityBytes;
+      for (let i = 0; i < 15; i++) d.push(encodeFrame(big(settled)));
+      d.push(encodeFrame(big(settled + 1)));
+      expect(d.capacityBytes).toBe(warmed);
+      for (let i = 0; i < 16; i++) d.push(encodeFrame(big(settled)));
+      expect(d.capacityBytes).toBe(128 * 1024);
     });
 
     it("accepts a maximum legal frame and rejects one byte more", () => {
