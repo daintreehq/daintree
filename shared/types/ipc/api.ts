@@ -1087,6 +1087,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       branch?: string;
       skip?: number;
       limit?: number;
+      includeTotal?: boolean;
     }): Promise<import("../git.js").GitCommitListResponse>;
     stageFile(cwd: string, filePath: string): Promise<void>;
     unstageFile(cwd: string, filePath: string): Promise<void>;

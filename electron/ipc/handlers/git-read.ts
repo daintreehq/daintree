@@ -176,13 +176,14 @@ export function registerGitReadHandlers(deps: HandlerDependencies): () => void {
     branch?: string;
     skip?: number;
     limit?: number;
+    includeTotal?: boolean;
   }) => {
     checkRateLimit(CHANNELS.GIT_LIST_COMMITS, 10, 10_000);
     if (!payload || typeof payload !== "object") {
       throw new Error("Invalid payload");
     }
 
-    const { cwd, search, branch, skip, limit } = payload;
+    const { cwd, search, branch, skip, limit, includeTotal } = payload;
 
     if (typeof cwd !== "string" || !cwd) {
       throw new Error("Invalid working directory");
@@ -190,10 +191,13 @@ export function registerGitReadHandlers(deps: HandlerDependencies): () => void {
     if (!path.isAbsolute(cwd)) {
       throw new Error("Working directory must be an absolute path");
     }
+    if (includeTotal !== undefined && typeof includeTotal !== "boolean") {
+      throw new Error("includeTotal must be a boolean");
+    }
 
     const { listCommits } = await import("../../utils/git.js");
 
-    return listCommits({ cwd, search, branch, skip, limit });
+    return listCommits({ cwd, search, branch, skip, limit, includeTotal });
   };
   handlers.push(typedHandle(CHANNELS.GIT_LIST_COMMITS, handleGitListCommits));
 
