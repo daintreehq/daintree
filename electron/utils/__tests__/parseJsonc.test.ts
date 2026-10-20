@@ -17,7 +17,7 @@ describe("parseJsonc", () => {
       a: [1, 2],
       b: { c: 3 },
     });
-    expect(parseJsonc('[1, // last\n]')).toEqual([1]);
+    expect(parseJsonc("[1, // last\n]")).toEqual([1]);
     expect(parseJsonc('{ "a": 1, /* gone */ }')).toEqual({ a: 1 });
   });
 
