@@ -5,7 +5,8 @@ import path from "node:path";
 import { store } from "../store.js";
 import { resilientAtomicWriteFileSync } from "../utils/fs.js";
 import { createLogger } from "../utils/logger.js";
-import { closeTelemetry } from "./TelemetryService.js";
+import { closeTelemetry, reportGpuProcessExit } from "./TelemetryService.js";
+import { isGpuContextLossExit } from "./childProcessExitReport.js";
 import { getCrashLoopGuard } from "./CrashLoopGuardService.js";
 import { getCrashRecoveryService } from "./CrashRecoveryService.js";
 import { getPanelSuspectLedger } from "./PanelSuspectLedgerService.js";
@@ -156,6 +157,21 @@ class GpuCrashMonitorService {
         reason: details.reason,
         exitCode: details.exitCode,
       });
+
+      // Chromium restarts the GPU process on purpose after a context loss, so
+      // a lone one is not a crash. It still is once it repeats, or when this
+      // strike is the one that moves acceleration to a fallback.
+      const selectsFallback =
+        !this.relaunching &&
+        !alreadyDisabled &&
+        (effectiveCount >= GPU_CRASH_THRESHOLD ||
+          (effectiveCount === 1 &&
+            !alreadyHasAngleFallback &&
+            process.platform === "linux" &&
+            process.env.XDG_SESSION_TYPE === "wayland"));
+      if (!isGpuContextLossExit(details) || effectiveCount > 1 || selectsFallback) {
+        reportGpuProcessExit(details, { crashCount: effectiveCount, selectsFallback });
+      }
 
       if (this.relaunching) return;
 

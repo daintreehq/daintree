@@ -73,6 +73,7 @@ vi.mock("../../lifecycle/shutdownCoordinator.js", () => ({
 
 const telemetryServiceMock = vi.hoisted(() => ({
   closeTelemetry: vi.fn(() => Promise.resolve()),
+  reportGpuProcessExit: vi.fn(),
 }));
 
 vi.mock("../TelemetryService.js", () => telemetryServiceMock);
@@ -311,6 +312,57 @@ describe("GpuCrashMonitorService", () => {
       expect(isGpuAngleFallbackByFlag(tmpDir)).toBe(false);
       expect(storeMock.set).toHaveBeenCalledWith("gpu", {
         hardwareAccelerationDisabled: true,
+      });
+    });
+
+    describe("Sentry reporting", () => {
+      const { reportGpuProcessExit } = telemetryServiceMock;
+
+      it("does not report a lone context-loss restart that selects no fallback", async () => {
+        Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
+        await loadAndInit();
+        emitGpuCrash("abnormal-exit", 8704);
+        expect(reportGpuProcessExit).not.toHaveBeenCalled();
+      });
+
+      it("reports a repeated context loss inside the window", async () => {
+        Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
+        await loadAndInit();
+        emitGpuCrash("abnormal-exit", 8704);
+        emitGpuCrash("abnormal-exit", 8704);
+        expect(reportGpuProcessExit).toHaveBeenCalledTimes(1);
+        expect(reportGpuProcessExit).toHaveBeenCalledWith(
+          expect.objectContaining({ exitCode: 8704 }),
+          { crashCount: 2, selectsFallback: false }
+        );
+      });
+
+      it("reports a context loss that moves acceleration to the ANGLE fallback", async () => {
+        await loadAndInit();
+        emitGpuCrash("abnormal-exit", 8704);
+        expect(reportGpuProcessExit).toHaveBeenCalledWith(expect.anything(), {
+          crashCount: 1,
+          selectsFallback: true,
+        });
+      });
+
+      it("reports any other GPU exit on the first strike", async () => {
+        Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
+        await loadAndInit();
+        emitGpuCrash("abnormal-exit", 1);
+        expect(reportGpuProcessExit).toHaveBeenCalledTimes(1);
+      });
+
+      it("still counts a context loss toward the fallback", async () => {
+        writeGpuAngleFallbackFlag(tmpDir);
+        await loadAndInit();
+        emitGpuCrash("abnormal-exit", 8704);
+        emitGpuCrash("abnormal-exit", 8704);
+        emitGpuCrash("abnormal-exit", 8704);
+        await vi.waitFor(() => {
+          expect(appMock.exit).toHaveBeenCalledWith(0);
+        });
+        expect(isGpuDisabledByFlag(tmpDir)).toBe(true);
       });
     });
 
