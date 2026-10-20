@@ -337,7 +337,7 @@ index 1a2b3c4..5d6e7f8 100644
     });
 
     it("returns file list for two-dot range", async () => {
-      gitClientMock.raw.mockResolvedValue("M\tsrc/app.ts\nA\tsrc/new.ts\n");
+      gitClientMock.raw.mockResolvedValue("M\0src/app.ts\0A\0src/new.ts\0");
 
       const service = new GitService(tempDir);
       const result = await service.compareWorktrees("main", "feature/test");
@@ -612,7 +612,7 @@ index 1a2b3c4..5d6e7f8 100644
   });
 
   it("passes --no-ext-diff to git.raw for cross-worktree file list", async () => {
-    gitClientMock.raw.mockResolvedValue("M\tsrc/app.ts\n");
+    gitClientMock.raw.mockResolvedValue("M\0src/app.ts\0");
 
     const service = new GitService(tempDir);
     await service.compareWorktrees("main", "feature/test");

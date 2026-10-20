@@ -45,6 +45,8 @@ import {
   invalidateWorktreeCache,
   __clearPerFileDiffStatCacheForTesting,
   __clearLastCommitLogCacheForTesting,
+  parseNameStatusZ,
+  parseNumstatZ,
 } from "../git.js";
 import { createHardenedGit, createWslHardenedGit } from "../hardenedGit.js";
 import { logError, logWarn } from "../logger.js";
@@ -1680,5 +1682,57 @@ describe("getCommitCount", () => {
     });
 
     await expect(getCommitCount("/weird")).rejects.toThrow();
+  });
+});
+
+describe("parseNameStatusZ", () => {
+  it("keeps names exact and reads both paths of renames and copies", () => {
+    const output = "M\0trailing \0R087\0old\tname\0new\nname\0C100\0a.txt\0b.txt\0D\0M\0";
+
+    expect(parseNameStatusZ(output)).toEqual([
+      { status: "M", path: "trailing " },
+      { status: "R087", path: "new\nname", oldPath: "old\tname" },
+      { status: "C100", path: "b.txt", oldPath: "a.txt" },
+      { status: "D", path: "M" },
+    ]);
+  });
+});
+
+describe("parseNameStatusZ truncation", () => {
+  it("drops records cut short at any field boundary", () => {
+    expect(parseNameStatusZ("M\0")).toEqual([]);
+    expect(parseNameStatusZ("M\0a.txt")).toEqual([]);
+    expect(parseNameStatusZ("A\0a.txt\0R100\0old\0")).toEqual([{ status: "A", path: "a.txt" }]);
+  });
+});
+
+describe("parseNumstatZ", () => {
+  it("keys churn by exact path, nulls binary counts and reads rename records", () => {
+    const output = [
+      '3\t1\tquote"name ',
+      "-\t-\tlogo.png",
+      "2\t0\t",
+      "old.txt",
+      "new\tname.txt",
+      "",
+    ].join("\0");
+
+    expect(parseNumstatZ(output)).toEqual(
+      new Map([
+        ['quote"name ', { insertions: 3, deletions: 1 }],
+        ["logo.png", { insertions: null, deletions: null }],
+        ["new\tname.txt", { insertions: 2, deletions: 0 }],
+      ])
+    );
+  });
+});
+
+describe("parseNumstatZ truncation", () => {
+  it("drops an unterminated or half-read rename and nulls malformed counts", () => {
+    expect(parseNumstatZ("1\t1\ta.txt")).toEqual(new Map());
+    expect(parseNumstatZ(["2\t0\t", "old.txt", ""].join("\0"))).toEqual(new Map());
+    expect(parseNumstatZ(["12oops\t-4\tb.txt", ""].join("\0"))).toEqual(
+      new Map([["b.txt", { insertions: null, deletions: null }]])
+    );
   });
 });
