@@ -17,6 +17,8 @@ import {
 import { adaptBuiltinSlashCommands } from "./staticCatalog.js";
 
 const RESULT_CACHE_TTL_MS = 30_000;
+/** One entry per agent × project × env revision; a handful of each is typical. */
+const RESULT_CACHE_MAX_ENTRIES = 64;
 const DEFAULT_SCAN_CONCURRENCY = 8;
 
 /** Merge order: built-ins lose to global, global to user, user to project. */
@@ -41,6 +43,7 @@ interface Contribution {
 interface CachedResult {
   promise: Promise<SlashCommand[]>;
   expires: number;
+  settled: boolean;
 }
 
 /** Shallow-clone each result so callers can't mutate a cached entry. */
@@ -58,15 +61,21 @@ function cloneResults(results: SlashCommand[]): SlashCommand[] {
  *
  * The result is cached per instance for 30s (keyed on
  * `agentId + projectRoot + env revision`, coalesced, evicted on failure) so
- * repeated picker-opens don't rescan. Fresh instances (one per test) isolate
- * the cache.
+ * repeated picker-opens don't rescan. Residency is bounded without a timer:
+ * every `list()` sweeps expired settled entries and trims to an LRU cap. A
+ * pending scan is never evicted — dropping it would break coalescing and
+ * start a duplicate scan — so the cap can briefly overshoot while scans are
+ * in flight. Fresh instances (one per test) isolate the cache.
  */
 export class CompletionDiscoveryEngine {
   private readonly resultCache = new Map<string, CachedResult>();
+  /** Bumped by clearCache() so a lookup that straddled the clear isn't cached. */
+  private generation = 0;
 
   constructor(private readonly scanConcurrency: number = DEFAULT_SCAN_CONCURRENCY) {}
 
   clearCache(): void {
+    this.generation++;
     this.resultCache.clear();
   }
 
@@ -74,6 +83,7 @@ export class CompletionDiscoveryEngine {
     const sources = getAgentConfig(agentId)?.completionSources;
     if (!sources || sources.length === 0) return [];
 
+    const generation = this.generation;
     const projectRoot = projectPath ? await resolveProjectRoot(projectPath) : undefined;
     const ctx: PathResolveContext = {
       home: os.homedir(),
@@ -82,19 +92,62 @@ export class CompletionDiscoveryEngine {
       env: process.env,
     };
 
+    // Sources were read before the await; a clear in between means they may be
+    // stale, so serve this caller without seeding the new generation.
+    if (generation !== this.generation) {
+      return this.compute(agentId, sources, ctx).then(cloneResults);
+    }
+
     const key = this.resultKey(agentId, projectRoot, ctx);
     const now = Date.now();
+    this.sweepExpired(now);
     const cached = this.resultCache.get(key);
-    if (cached && cached.expires > now) return cached.promise.then(cloneResults);
+    if (cached && cached.expires > now) {
+      // Re-insert so Map order tracks recency for the LRU trim.
+      this.resultCache.delete(key);
+      this.resultCache.set(key, cached);
+      return cached.promise.then(cloneResults);
+    }
 
-    const promise = this.compute(agentId, sources, ctx).catch((err) => {
-      if (this.resultCache.get(key)?.promise === promise) this.resultCache.delete(key);
-      throw err;
-    });
-    this.resultCache.set(key, { promise, expires: now + RESULT_CACHE_TTL_MS });
+    // Identity, not presence: after clearCache() or an expiry overwrite the key
+    // may hold a newer entry that a stale scan must not touch.
+    const promise = this.compute(agentId, sources, ctx).then(
+      (results) => {
+        entry.settled = true;
+        // A settle may free room that pending entries pushed past the cap.
+        if (this.resultCache.get(key) === entry) this.trimToCap();
+        return results;
+      },
+      (err) => {
+        entry.settled = true;
+        if (this.resultCache.get(key) === entry) this.resultCache.delete(key);
+        throw err;
+      }
+    );
+    const entry: CachedResult = { promise, expires: now + RESULT_CACHE_TTL_MS, settled: false };
+    this.resultCache.delete(key);
+    this.resultCache.set(key, entry);
+    this.trimToCap();
     // Clone so a caller can never mutate a cached entry (element-level, not just
     // the array) on the next cache hit.
     return promise.then(cloneResults);
+  }
+
+  private sweepExpired(now: number): void {
+    for (const [key, entry] of this.resultCache) {
+      if (entry.settled && entry.expires <= now) this.resultCache.delete(key);
+    }
+  }
+
+  private trimToCap(): void {
+    let excess = this.resultCache.size - RESULT_CACHE_MAX_ENTRIES;
+    if (excess <= 0) return;
+    for (const [key, entry] of this.resultCache) {
+      if (excess <= 0) break;
+      if (!entry.settled) continue;
+      this.resultCache.delete(key);
+      excess--;
+    }
   }
 
   private async compute(
