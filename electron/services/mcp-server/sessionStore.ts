@@ -9,7 +9,11 @@ import type {
   McpRelaySession,
   McpSessionOrigin,
 } from "./shared.js";
-import { MCP_SSE_IDLE_TIMEOUT_MS, MCP_TIER_ELEVATION_TTL_MS } from "./shared.js";
+import {
+  MCP_PANE_SESSION_CAP,
+  MCP_SSE_IDLE_TIMEOUT_MS,
+  MCP_TIER_ELEVATION_TTL_MS,
+} from "./shared.js";
 import type { DedupCacheEntry, DedupInFlightEntry } from "./sessionDedup.js";
 import { GrantCache, type GrantLifecycleEmitter } from "./grantCache.js";
 import { ResourceOwnershipLedger } from "./resourceOwnership.js";
@@ -176,6 +180,13 @@ export class SessionStore {
   // suspend/resume cycles via SystemSleepService.getAwakeTimeSince().
   private readonly idleStartedAt = new Map<string, number>();
   private readonly httpIdleStartedAt = new Map<string, number>();
+  // Sessions a per-pane bearer opened, on either transport, → the pane's
+  // principal (#13635). They have no idle timer: Codex never re-initializes
+  // after the 404 an expired session gets, so reaping one strands the pane
+  // without its tools until it restarts. They end when the client closes them,
+  // the pane's bearer is revoked, or the per-pane cap retires the least
+  // recently used. Insertion order is recency: each request re-inserts.
+  private readonly paneSessions = new Map<string, string>();
 
   // Connection metadata captured at handshake, keyed by sessionId, so the
   // MCP-disable confirmation can name the external clients about to be
@@ -332,6 +343,7 @@ export class SessionStore {
     this.sessionViewlessHelpMap.delete(sessionId);
     this.sessionCredentialMap.delete(sessionId);
     this.sessionRelayMap.delete(sessionId);
+    this.paneSessions.delete(sessionId);
     this.resourceOwnership.clearSession(sessionId);
     this.toolListRouteWatch.forget(sessionId);
   }
@@ -500,7 +512,7 @@ export class SessionStore {
 
   resetIdleTimer(sessionId: string): void {
     const session = this.sessions.get(sessionId);
-    if (!session) return;
+    if (!session || this.touchPaneSession(sessionId)) return;
     clearTimeout(session.idleTimer);
     session.idleTimer = this.createIdleTimer(sessionId);
   }
@@ -554,9 +566,56 @@ export class SessionStore {
     return timer;
   }
 
+  /**
+   * Arm a new session's idle timer, or — for a session a pane bearer opened,
+   * `panePrincipal` being its principal — file it as a pane session with none
+   * (#13635). Called once per session, as it is filed. At the per-pane cap the
+   * pane's least recently used session is retired to make room.
+   */
+  armIdleTimer(
+    sessionId: string,
+    transport: "sse" | "streamable-http",
+    panePrincipal: string | null
+  ): ReturnType<typeof setTimeout> | undefined {
+    if (panePrincipal === null) {
+      return transport === "sse"
+        ? this.createIdleTimer(sessionId)
+        : this.createHttpIdleTimer(sessionId);
+    }
+    const held = this.paneSessionsOf(panePrincipal);
+    for (const id of held.slice(0, Math.max(0, held.length - MCP_PANE_SESSION_CAP + 1))) {
+      this.revokeSession(id);
+    }
+    this.paneSessions.set(sessionId, panePrincipal);
+    return undefined;
+  }
+
+  /**
+   * The live sessions a pane's bearer holds, least recently used first — what
+   * revoking the bearer must close (#13635). Read from this map rather than the
+   * ownership ledger: a session filed after a drain cleared its ledger binding
+   * is still filed here.
+   */
+  paneSessionsOf(panePrincipal: string): string[] {
+    const held: string[] = [];
+    for (const [id, principal] of this.paneSessions) {
+      if (principal === panePrincipal) held.push(id);
+    }
+    return held;
+  }
+
+  /** Mark a pane session most recently used; false when `sessionId` is not one. */
+  private touchPaneSession(sessionId: string): boolean {
+    const principal = this.paneSessions.get(sessionId);
+    if (principal === undefined) return false;
+    this.paneSessions.delete(sessionId);
+    this.paneSessions.set(sessionId, principal);
+    return true;
+  }
+
   resetHttpIdleTimer(sessionId: string): void {
     const session = this.httpSessions.get(sessionId);
-    if (!session) return;
+    if (!session || this.touchPaneSession(sessionId)) return;
     clearTimeout(session.idleTimer);
     session.idleTimer = this.createHttpIdleTimer(sessionId);
   }
@@ -565,6 +624,7 @@ export class SessionStore {
     // Snapshot entries to avoid mutation-during-iteration from timer callbacks.
     const sseEntries = Array.from(this.sessions.entries());
     for (const [sessionId, session] of sseEntries) {
+      if (this.paneSessions.has(sessionId)) continue;
       let startedAt = this.idleStartedAt.get(sessionId);
       if (startedAt === undefined) {
         console.warn(`[MCP] Missing idleStartedAt for SSE session ${sessionId}, resetting`);
@@ -590,6 +650,7 @@ export class SessionStore {
 
     const httpEntries = Array.from(this.httpSessions.entries());
     for (const [sessionId, session] of httpEntries) {
+      if (this.paneSessions.has(sessionId)) continue;
       let startedAt = this.httpIdleStartedAt.get(sessionId);
       if (startedAt === undefined) {
         console.warn(`[MCP] Missing httpIdleStartedAt for HTTP session ${sessionId}, resetting`);
@@ -935,6 +996,7 @@ export class SessionStore {
     }
     this.httpSessions.clear();
     this.httpIdleStartedAt.clear();
+    this.paneSessions.clear();
     for (const session of this.relaySessions.values()) {
       try {
         Promise.resolve(session.transport.close()).catch(() => {
