@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { beforeAll, describe, it, expect } from "vitest";
 import { findWireStrippedKeywords } from "@shared/utils/mcpWireSchema";
 import { HELP_TIER_CUMULATIVE } from "@shared/config/helpAssistantTierAllowlists";
 import {
@@ -155,6 +155,12 @@ async function surface(): Promise<WireTool[]> {
   cached ??= await measureWireSurface();
   return cached;
 }
+
+// The first measurement cold-loads every action definition, which alone can run
+// past a test's 15s budget on a slow CI runner; pay it once here instead.
+beforeAll(async () => {
+  await surface();
+}, 120_000);
 
 /** Every property description above the one-clause target, allowlist applied. */
 async function propertiesOverTarget(): Promise<Array<{ id: string; path: string; bytes: number }>> {
