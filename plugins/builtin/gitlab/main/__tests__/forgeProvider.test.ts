@@ -81,6 +81,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // Cancels the cache sweep timer before a test's fake timers are restored.
+  clearGitLabCaches();
   setInstanceUrlReader(null);
   vi.unstubAllGlobals();
 });
