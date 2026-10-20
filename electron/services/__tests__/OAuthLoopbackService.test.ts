@@ -335,44 +335,47 @@ describe("OAuthLoopbackService", () => {
         vi.spyOn(console, "error"),
       ];
 
-      const loopbackPromise = startOAuthLoopback(authUrl, "test-panel");
-      let settled = false;
-      void loopbackPromise.then(() => {
-        settled = true;
-      });
+      try {
+        const loopbackPromise = startOAuthLoopback(authUrl, "test-panel");
+        let settled = false;
+        void loopbackPromise.then(() => {
+          settled = true;
+        });
 
-      await vi.waitFor(() => {
-        expect(shell.openExternal).toHaveBeenCalledTimes(1);
-      });
-      const rewrittenUrl = (shell.openExternal as ReturnType<typeof vi.fn>).mock
-        .calls[0][0] as string;
-      const redirectUri = new URL(rewrittenUrl).searchParams.get("redirect_uri")!;
-      const port = Number(new URL(redirectUri).port);
+        await vi.waitFor(() => {
+          expect(shell.openExternal).toHaveBeenCalledTimes(1);
+        });
+        const rewrittenUrl = (shell.openExternal as ReturnType<typeof vi.fn>).mock
+          .calls[0][0] as string;
+        const redirectUri = new URL(rewrittenUrl).searchParams.get("redirect_uri")!;
+        const port = Number(new URL(redirectUri).port);
 
-      for (const target of [
-        "//[",
-        "//[/oauth/callback?code=LEAKED_CODE",
-        "//evil.example/oauth/callback?code=LEAKED_CODE",
-        "/\\evil.example/oauth/callback?code=LEAKED_CODE",
-        "http://[/oauth/callback?code=LEAKED_CODE",
-        "http://evil.example/oauth/callback?code=LEAKED_CODE",
-        `http://127.0.0.1:${port}/oauth/callback?code=LEAKED_CODE`,
-      ]) {
-        expect(await rawRequest(port, target)).toBe(400);
+        for (const target of [
+          "//[",
+          "//[/oauth/callback?code=LEAKED_CODE",
+          "//evil.example/oauth/callback?code=LEAKED_CODE",
+          "/\\evil.example/oauth/callback?code=LEAKED_CODE",
+          "http://[/oauth/callback?code=LEAKED_CODE",
+          "http://evil.example/oauth/callback?code=LEAKED_CODE",
+          `http://127.0.0.1:${port}/oauth/callback?code=LEAKED_CODE`,
+        ]) {
+          expect(await rawRequest(port, target)).toBe(400);
+        }
+        expect(settled).toBe(false);
+
+        // The listener survives and the real callback still completes the flow.
+        const response = await fetchUrl(`${redirectUri}?code=REAL_CODE`);
+        expect(response.status).toBe(200);
+        const result = await loopbackPromise;
+        expect(result.success).toBe(true);
+        if (!result.success) throw new Error("expected success");
+        expect(new URL(result.callbackUrl).searchParams.get("code")).toBe("REAL_CODE");
+
+        const logged = logSpies.flatMap((spy) => spy.mock.calls.flat().map(String)).join("\n");
+        expect(logged).not.toContain("LEAKED_CODE");
+      } finally {
+        for (const spy of logSpies) spy.mockRestore();
       }
-      expect(settled).toBe(false);
-
-      // The listener survives and the real callback still completes the flow.
-      const response = await fetchUrl(`${redirectUri}?code=REAL_CODE`);
-      expect(response.status).toBe(200);
-      const result = await loopbackPromise;
-      expect(result.success).toBe(true);
-      if (!result.success) throw new Error("expected success");
-      expect(new URL(result.callbackUrl).searchParams.get("code")).toBe("REAL_CODE");
-
-      const logged = logSpies.flatMap((spy) => spy.mock.calls.flat().map(String)).join("\n");
-      expect(logged).not.toContain("LEAKED_CODE");
-      for (const spy of logSpies) spy.mockRestore();
     });
 
     it("cancels a previous flow when starting a new one for the same panel", async () => {

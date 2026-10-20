@@ -130,9 +130,10 @@ export function startOAuthLoopback(authUrl: string, panelId: string): Promise<OA
 
     const server = createServer((req: IncomingMessage, res: ServerResponse) => {
       // `req.url` is client-controlled and Node's parser accepts targets the URL
-      // constructor rejects (`//[`). A malformed or foreign target (absolute-form,
-      // or protocol-relative naming another host) is answered here and must never
-      // settle the pending flow; neither the target nor its query is logged.
+      // constructor rejects (`//[`). A malformed target, or one whose authority
+      // resolves anywhere but the bare loopback base (absolute-form with a port or
+      // foreign host, protocol-relative, backslash escapes), is answered here and
+      // must never settle the pending flow; neither the target nor its query is logged.
       let reqUrl: URL;
       try {
         reqUrl = new URL(req.url ?? "/", LOOPBACK_BASE);
