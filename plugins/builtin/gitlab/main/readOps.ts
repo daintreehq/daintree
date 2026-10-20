@@ -27,6 +27,7 @@ import {
   getRateLimitSnapshot,
   resetRateLimitSnapshots,
 } from "./GitLabClient.js";
+import { BoundedCache } from "./boundedCache.js";
 import { getInstanceHost } from "./GitLabAuth.js";
 import { encodeProjectId, repoFullPath } from "./gitlabRemote.js";
 import {
@@ -46,6 +47,8 @@ import {
 const TOOLTIP_CACHE_TTL_MS = 30_000;
 const AVATAR_CACHE_TTL_MS = 60 * 60 * 1000;
 const REPO_STATS_CACHE_TTL_MS = 30_000;
+const REPO_STATS_STALE_RETAIN_MS = 5 * 60 * 1000;
+const CACHE_SWEEP_INTERVAL_MS = 60_000;
 /**
  * One page size for BOTH the list endpoints and the stats first page — they
  * cannot diverge. GitLab pages by NUMBER, so the `"2"` cursor the stats page
@@ -59,14 +62,18 @@ const DEFAULT_LIST_PAGE_SIZE = 30;
 /** Branches per batched GraphQL branch→MR query. */
 export const GRAPHQL_BRANCH_CHUNK_SIZE = 20;
 
-interface CacheEntry<T> {
-  value: T;
-  at: number;
-}
-
-const issueTooltipCache = new Map<string, CacheEntry<IssueTooltipData | null>>();
-const prTooltipCache = new Map<string, CacheEntry<PRTooltipData | null>>();
-const avatarCache = new Map<string, CacheEntry<string | null>>();
+const issueTooltipCache = new BoundedCache<IssueTooltipData | null>({
+  maxEntries: 200,
+  retainMs: TOOLTIP_CACHE_TTL_MS,
+});
+const prTooltipCache = new BoundedCache<PRTooltipData | null>({
+  maxEntries: 200,
+  retainMs: TOOLTIP_CACHE_TTL_MS,
+});
+const avatarCache = new BoundedCache<string | null>({
+  maxEntries: 1000,
+  retainMs: AVATAR_CACHE_TTL_MS,
+});
 /**
  * Pending `/avatar` lookups, so a burst of committer chips for one author
  * shares a single request. Cleared with the caches: a lookup started before an
@@ -74,7 +81,20 @@ const avatarCache = new Map<string, CacheEntry<string | null>>();
  * caller starts its own.
  */
 const avatarInflight = new Map<string, Promise<string | null>>();
-const repoStatsCache = new Map<string, CacheEntry<RepoStatsSnapshot>>();
+/**
+ * Retained past its freshness TTL so a failed refresh can fall back to the
+ * last good snapshot — but only for this long after it was fetched.
+ */
+const repoStatsCache = new BoundedCache<RepoStatsSnapshot>({
+  maxEntries: 20,
+  retainMs: REPO_STATS_STALE_RETAIN_MS,
+});
+const allCaches: ReadonlyArray<BoundedCache<unknown>> = [
+  issueTooltipCache,
+  prTooltipCache,
+  avatarCache,
+  repoStatsCache,
+];
 
 /**
  * Bumped by every invalidation. A read that started before the bump writes its
@@ -84,13 +104,31 @@ const repoStatsCache = new Map<string, CacheEntry<RepoStatsSnapshot>>();
  */
 let cacheGeneration = 0;
 
+/**
+ * Armed only while something is resident, so expired entries are released
+ * even when nothing reads their keys again.
+ */
+let sweepTimer: ReturnType<typeof setTimeout> | null = null;
+
+function armSweep(): void {
+  if (sweepTimer !== null) return;
+  sweepTimer = setTimeout(() => {
+    sweepTimer = null;
+    const now = Date.now();
+    for (const cache of allCaches) cache.sweep(now);
+    if (allCaches.some((cache) => cache.size > 0)) armSweep();
+  }, CACHE_SWEEP_INTERVAL_MS);
+  sweepTimer.unref?.();
+}
+
 export function clearGitLabCaches(): void {
   cacheGeneration += 1;
-  issueTooltipCache.clear();
-  prTooltipCache.clear();
-  avatarCache.clear();
+  for (const cache of allCaches) cache.clear();
   avatarInflight.clear();
-  repoStatsCache.clear();
+  if (sweepTimer !== null) {
+    clearTimeout(sweepTimer);
+    sweepTimer = null;
+  }
   resetRateLimitSnapshots();
 }
 
@@ -99,24 +137,28 @@ export function getGitLabCacheGeneration(): number {
   return cacheGeneration;
 }
 
+/** Resident entry counts, for tests that assert expired entries are released. */
+export function gitLabCacheSizesForTests(): Record<
+  "issueTooltips" | "prTooltips" | "avatars" | "repoStats",
+  number
+> {
+  return {
+    issueTooltips: issueTooltipCache.size,
+    prTooltips: prTooltipCache.size,
+    avatars: avatarCache.size,
+    repoStats: repoStatsCache.size,
+  };
+}
+
 /** Snapshot the generation before an await; pass it to {@link cacheSet}. */
 function cacheEpoch(): number {
   return cacheGeneration;
 }
 
-function cacheSet<T>(map: Map<string, CacheEntry<T>>, key: string, value: T, epoch: number): void {
+function cacheSet<T>(cache: BoundedCache<T>, key: string, value: T, epoch: number): void {
   if (epoch !== cacheGeneration) return;
-  map.set(key, { value, at: Date.now() });
-}
-
-function cacheGet<T>(map: Map<string, CacheEntry<T>>, key: string, ttlMs: number): T | undefined {
-  const entry = map.get(key);
-  if (!entry) return undefined;
-  if (Date.now() - entry.at > ttlMs) {
-    map.delete(key);
-    return undefined;
-  }
-  return entry.value;
+  cache.set(key, value);
+  armSweep();
 }
 
 /**
@@ -414,7 +456,7 @@ export async function getIssueTooltipImpl(
   issueNumber: number
 ): Promise<IssueTooltipData | null> {
   const key = tooltipKey(repo, issueNumber);
-  const cached = cacheGet(issueTooltipCache, key, TOOLTIP_CACHE_TTL_MS);
+  const cached = issueTooltipCache.get(key, TOOLTIP_CACHE_TTL_MS);
   if (cached !== undefined) return cached;
   const epoch = cacheEpoch();
   try {
@@ -432,7 +474,7 @@ export async function getPRTooltipImpl(
   prNumber: number
 ): Promise<PRTooltipData | null> {
   const key = tooltipKey(repo, prNumber);
-  const cached = cacheGet(prTooltipCache, key, TOOLTIP_CACHE_TTL_MS);
+  const cached = prTooltipCache.get(key, TOOLTIP_CACHE_TTL_MS);
   if (cached !== undefined) return cached;
   const epoch = cacheEpoch();
   try {
@@ -470,7 +512,7 @@ export async function resolveAuthorAvatarImpl(
   // Keyed by host + email: an instance-URL change must not serve avatars
   // resolved against the previous instance.
   const key = `${instanceHost.toLowerCase()}:${normalizedEmail}`;
-  const cached = cacheGet(avatarCache, key, AVATAR_CACHE_TTL_MS);
+  const cached = avatarCache.get(key, AVATAR_CACHE_TTL_MS);
   if (cached !== undefined) return cached;
   const pending = avatarInflight.get(key);
   if (pending) return pending;
@@ -534,7 +576,7 @@ export async function getRepoStatsImpl(
   const key = `${repo.host}/${repoFullPath(repo)}`;
   const epoch = cacheEpoch();
   if (!opts?.bypassCache) {
-    const cached = cacheGet(repoStatsCache, key, REPO_STATS_CACHE_TTL_MS);
+    const cached = repoStatsCache.get(key, REPO_STATS_CACHE_TTL_MS);
     if (cached !== undefined) return { ...cached, source: "memory-cache" };
   }
 
@@ -588,7 +630,7 @@ export async function getRepoStatsImpl(
     cacheSet(repoStatsCache, key, snapshot, epoch);
     return snapshot;
   } catch (err) {
-    const stale = repoStatsCache.get(key)?.value;
+    const stale = repoStatsCache.peek(key);
     const message = formatErrorMessage(err, "GitLab request failed");
     // A 429 is a block with a known end, not a generic failure: the host
     // renders its rate-limit banner and paces its polling off these fields,
