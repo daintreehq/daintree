@@ -40,23 +40,29 @@ type FakePanel = { id: string; location?: Location; kind?: string };
 function setStore(options: {
   panels: FakePanel[];
   focusedId?: string | null;
-  groups?: string[][];
+  groups?: { location: "grid" | "dock"; panelIds: string[] }[];
   /** A mover that leaves the panel where it was. */
   inertMoves?: boolean;
 }) {
-  const panelsById: Record<string, FakePanel> = {};
+  let panelsById: Record<string, FakePanel> = {};
   for (const p of options.panels) panelsById[p.id] = { ...p };
   const groups = options.groups ?? [];
+  // Like the real lookup, a group only counts while the panel is where the
+  // group lives.
   const getPanelGroup = (id: string) => {
-    const members = groups.find((g) => g.includes(id));
-    return members ? { panelIds: members } : undefined;
+    const location = panelsById[id]?.location ?? "grid";
+    return groups.find((g) => g.panelIds.includes(id) && g.location === location);
   };
+  // Commits replace the record map, as the store does, so an action reading the
+  // pre-move snapshot instead of committed state sees the old location.
   const place = (id: string, location: Location) => {
     if (options.inertMoves) return;
+    const next = { ...panelsById };
     for (const member of getPanelGroup(id)?.panelIds ?? [id]) {
-      const panel = panelsById[member];
-      if (panel) panel.location = location;
+      const panel = next[member];
+      if (panel) next[member] = { ...panel, location };
     }
+    panelsById = next;
   };
   const store = {
     backgroundTerminal: vi.fn((id: string) => place(id, "background")),
@@ -75,7 +81,10 @@ function setStore(options: {
     getPanelGroup,
     ...store,
   }));
-  return { ...store, panelsById };
+  return {
+    ...store,
+    location: (id: string) => panelsById[id]?.location,
+  };
 }
 
 function setupActions() {
@@ -84,7 +93,15 @@ function setupActions() {
   registerTerminalLayoutActions(actions, {} as ActionCallbacks);
   return (id: string, args?: unknown, ctx?: unknown): Promise<unknown> => {
     const def = actions.get(id)!() as AnyActionDefinition;
-    return Promise.resolve(def.run(args, (ctx ?? {}) as never));
+    // ActionService rejects a result that breaks the action's own schema, so
+    // every answer these tests accept has to satisfy the published contract.
+    if (!def.resultSchema || def.mcpOutputSchema !== true) {
+      throw new Error(`${id} no longer publishes its placement result`);
+    }
+    const schema = def.resultSchema;
+    return Promise.resolve(def.run(args, (ctx ?? {}) as never)).then((result) =>
+      schema.parse(result)
+    );
   };
 }
 
@@ -119,7 +136,7 @@ describe("placement actions on a panel this view does not hold (#13663)", () => 
     expect(spies.moveTerminalToDock).not.toHaveBeenCalled();
     expect(spies.moveTerminalToGrid).not.toHaveBeenCalled();
     expect(pushLayoutSnapshot).not.toHaveBeenCalled();
-    expect(spies.panelsById.p1?.location).toBe("grid");
+    expect(spies.location("p1")).toBe("grid");
   });
 
   it.each(ACTIONS)("%s names the project a terminal is running in", async (id) => {
@@ -175,7 +192,7 @@ describe("placement results and refusals (#13663)", () => {
     const spies = setStore({ panels: [{ id: "p1", location: from }] });
 
     await expect(setupActions()(id, { terminalId: "p1" })).resolves.toEqual({ location: to });
-    expect(spies.panelsById.p1?.location).toBe(to);
+    expect(spies.location("p1")).toBe(to);
   });
 
   it("opens the dock on the panel it docked", async () => {
@@ -219,7 +236,7 @@ describe("placement results and refusals (#13663)", () => {
     const err = await rejection(setupActions()(id, { terminalId: "p1" }));
 
     expect(err).toBeInstanceOf(UnactionableTargetError);
-    expect(spies.panelsById.p1?.location).toBe(location);
+    expect(spies.location("p1")).toBe(location);
     expect(spies.backgroundTerminal).not.toHaveBeenCalled();
     expect(spies.moveTerminalToGrid).not.toHaveBeenCalled();
     expect(spies.moveTerminalToDock).not.toHaveBeenCalled();
@@ -242,7 +259,7 @@ describe("placement results and refusals (#13663)", () => {
         { id: "p1", location: "grid" },
         { id: "p2", location: "grid", kind: "diff" },
       ],
-      groups: [["p1", "p2"]],
+      groups: [{ location: "grid", panelIds: ["p1", "p2"] }],
     });
 
     const err = await rejection(setupActions()("terminal.moveToDock", { terminalId: "p1" }));
@@ -258,7 +275,7 @@ describe("placement results and refusals (#13663)", () => {
         { id: "p1", location: "grid" },
         { id: "p2", location: "grid" },
       ],
-      groups: [["p1", "p2"]],
+      groups: [{ location: "grid", panelIds: ["p1", "p2"] }],
     });
 
     await expect(
@@ -277,13 +294,81 @@ describe("placement results and refusals (#13663)", () => {
     await expect(setupActions()(id, { terminalId: "p1" })).rejects.toThrow(/did not move to the/);
   });
 
-  it.each(ACTIONS)("%s acts on the focused panel when none is named", async (id) => {
-    const from = id === "terminal.moveToGrid" ? "dock" : "grid";
-    const spies = setStore({ panels: [{ id: "p1", location: from }], focusedId: "p1" });
+  it.each([
+    ["terminal.background", "grid", "background", "backgroundTerminal"],
+    ["terminal.moveToDock", "grid", "dock", "moveTerminalToDock"],
+    ["terminal.moveToGrid", "dock", "grid", "moveTerminalToGrid"],
+  ] as const)(
+    "%s acts on the focused panel when none is named",
+    async (id, from, to, mover) => {
+      const spies = setStore({
+        panels: [
+          { id: "p1", location: from },
+          { id: "other", location: from },
+        ],
+        focusedId: "p1",
+      });
 
-    const result = (await setupActions()(id, {})) as { location: string | null };
+      await expect(setupActions()(id, {})).resolves.toEqual({ location: to });
+      expect(spies[mover]).toHaveBeenCalledWith("p1");
+      expect(spies[mover]).toHaveBeenCalledTimes(1);
+      expect(spies.location("p1")).toBe(to);
+      expect(spies.location("other")).toBe(from);
+    }
+  );
 
-    expect(result.location).not.toBeNull();
-    expect(spies.panelsById.p1?.location).toBe(result.location);
+  it.each(ACTIONS)("%s refuses a focused panel in the trash", async (id) => {
+    setStore({ panels: [{ id: "p1", location: "trash" }], focusedId: "p1" });
+
+    await expect(setupActions()(id, {})).rejects.toBeInstanceOf(UnactionableTargetError);
+  });
+
+  it.each(ACTIONS)("%s fails an empty id instead of falling back to focus", async (id) => {
+    const spies = setStore({ panels: [{ id: "p1", location: "grid" }], focusedId: "p1" });
+
+    await expect(setupActions()(id, { terminalId: "" })).rejects.toThrow(/no panel with id ""/);
+    expect(spies.location("p1")).toBe("grid");
+  });
+
+  it("reopens the dock on a panel already docked, without moving it", async () => {
+    const spies = setStore({ panels: [{ id: "p1", location: "dock" }] });
+
+    await setupActions()("terminal.moveToDock", { terminalId: "p1" });
+
+    expect(spies.openDockTerminal).toHaveBeenCalledWith("p1");
+    expect(spies.moveTerminalToDock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["terminal.moveToDock", "dock"],
+    ["terminal.moveToGrid", "grid"],
+  ] as const)("%s leaves a group already there untouched", async (id, location) => {
+    const spies = setStore({
+      panels: [
+        { id: "p1", location },
+        { id: "p2", location },
+      ],
+      groups: [{ location, panelIds: ["p1", "p2"] }],
+    });
+
+    await expect(setupActions()(id, { terminalId: "p1" })).resolves.toEqual({ location });
+    expect(spies.moveTerminalToDock).not.toHaveBeenCalled();
+    expect(spies.moveTerminalToGrid).not.toHaveBeenCalled();
+    expect(pushLayoutSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("moves a grouped panel's whole group to the dock", async () => {
+    const spies = setStore({
+      panels: [
+        { id: "p1", location: "grid" },
+        { id: "p2", location: "grid" },
+      ],
+      groups: [{ location: "grid", panelIds: ["p1", "p2"] }],
+    });
+
+    await expect(setupActions()("terminal.moveToDock", { terminalId: "p1" })).resolves.toEqual({
+      location: "dock",
+    });
+    expect(spies.location("p2")).toBe("dock");
   });
 });

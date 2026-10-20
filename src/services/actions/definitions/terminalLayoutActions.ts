@@ -44,6 +44,9 @@ export function registerTerminalLayoutActions(
       // Refused before the undo snapshot, so a move that never happens leaves
       // no undo entry behind.
       if (assertPlacementAllowed("terminal.moveToDock", targetId, "dock", state)) {
+        // Nothing to move, but the call still reveals it: a replayed dock or a
+        // named one reopens the popover the way a real move would.
+        state.openDockTerminal(targetId);
         return { location: "dock" as const };
       }
 
