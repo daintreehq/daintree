@@ -177,6 +177,69 @@ describe("PromptHistoryPalette", () => {
     expect(texts.find((t) => t.includes("summarise"))).toContain("Daintree");
   });
 
+  describe("in a remote host's view", () => {
+    afterEach(() => {
+      delete window.__DAINTREE_HOST_ID__;
+    });
+
+    it("lists this project's prompts from the host-scoped bucket, not a same-id local one", () => {
+      window.__DAINTREE_HOST_ID__ = { id: "studio-01" };
+      seed({
+        [`studio-01:${PROJECT}`]: [entry("a", "tail the remote build log", 1)],
+        [PROJECT]: [entry("b", "a local prompt with the same project id", 2)],
+      });
+      renderPalette();
+      const texts = optionTexts();
+      expect(texts).toHaveLength(1);
+      expect(texts[0]).toContain("tail the remote build log");
+    });
+
+    it("never fills an empty remote bucket from a same-id local one", () => {
+      window.__DAINTREE_HOST_ID__ = { id: "studio-01" };
+      seed({ [PROJECT]: [entry("a", "a local prompt with the same project id", 1)] });
+      renderPalette();
+      expect(optionTexts()).toHaveLength(0);
+    });
+
+    it("lists only this host's projects across all projects, named by their bare ids", async () => {
+      window.__DAINTREE_HOST_ID__ = { id: "studio-01" };
+      useProjectStore.setState({
+        projects: [
+          { id: PROJECT, name: "Daintree", path: "/a", emoji: "🌳", lastOpened: 0 },
+          { id: OTHER, name: "Helios", path: "/b", emoji: "☀️", lastOpened: 0 },
+        ],
+      });
+      seed({
+        [`studio-01:${PROJECT}`]: [entry("a", "tail the remote build log", 1)],
+        [`studio-01:${OTHER}`]: [entry("b", "add a dark mode toggle", 2)],
+        [`devbox:${PROJECT}`]: [entry("c", "a prompt from another host", 3)],
+        [PROJECT]: [entry("d", "a prompt from this machine", 4)],
+      });
+      const input = renderPalette();
+      await act(async () => {
+        fireEvent.keyDown(input, { key: "r", metaKey: true });
+      });
+      const texts = optionTexts();
+      expect(texts).toHaveLength(2);
+      expect(texts.find((t) => t.includes("dark mode"))).toContain("Helios");
+      expect(texts.find((t) => t.includes("remote build log"))).toContain("Daintree");
+    });
+  });
+
+  it("keeps remote hosts' buckets out of a local view's all-projects list", async () => {
+    seed({
+      [PROJECT]: [entry("a", "summarise the diff", 1)],
+      [`studio-01:${OTHER}`]: [entry("b", "tail the remote build log", 2)],
+    });
+    const input = renderPalette();
+    await act(async () => {
+      fireEvent.keyDown(input, { key: "r", metaKey: true });
+    });
+    const texts = optionTexts();
+    expect(texts).toHaveLength(1);
+    expect(texts[0]).toContain("summarise the diff");
+  });
+
   it("describes the scope and its chord from the search field, and announces a switch", async () => {
     const announce = vi.spyOn(useAnnouncerStore.getState(), "announce");
     seed({ [PROJECT]: [entry("a", "summarise the diff", 1)] });

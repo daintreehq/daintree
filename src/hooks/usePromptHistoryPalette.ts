@@ -4,6 +4,8 @@ import { useCommandHistoryStore, type PromptHistoryEntry } from "@/store/command
 import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { toPromptPreview } from "@/utils/promptHistoryPreview";
+import { currentHostId, hostScopedKey } from "@/hooks/useHostPlatform";
+import { parseHostScopedKey } from "@shared/types/remoteHosts";
 import { useSearchablePalette } from "./useSearchablePalette";
 
 /** A history entry plus the one-line preview the row shows and search runs over. */
@@ -49,7 +51,7 @@ function toItem(entry: SourcedEntry): PromptHistoryItem {
 /**
  * One row per distinct prompt, newest first. The store keeps a fleet
  * broadcast's repeats apart when the armed set differed, and the global view
- * merges every project's list — but recall only ever inserts the text, so two
+ * merges every list on this view's host — but recall only ever inserts the text, so two
  * rows for one prompt are two identical choices spending the result cap.
  */
 function newestPerPrompt(entries: readonly SourcedEntry[]): SourcedEntry[] {
@@ -69,12 +71,18 @@ export function usePromptHistoryPalette({ terminalId, projectId }: UsePromptHist
   const history = useCommandHistoryStore((s) => s.history);
 
   const items = useMemo(() => {
+    // The store keys each bucket by host as well as project, so a remote
+    // view reads its own host's buckets and names rows by the bare id.
+    const hostId = currentHostId();
     const buckets =
       scope === "project"
         ? projectId
-          ? [[projectId, history[projectId] ?? []] as const]
+          ? [[projectId, history[hostScopedKey(projectId)] ?? []] as const]
           : []
-        : Object.entries(history);
+        : Object.entries(history).flatMap(([key, list]) => {
+            const parsed = parseHostScopedKey(key);
+            return parsed.hostId === hostId ? [[parsed.projectId, list] as const] : [];
+          });
     const entries = buckets.flatMap(([source, list]) =>
       list.map((entry) => ({ ...entry, projectId: source }))
     );
