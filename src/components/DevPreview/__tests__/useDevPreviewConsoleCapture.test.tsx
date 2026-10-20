@@ -22,7 +22,7 @@ const startConsoleCapture = vi.fn(() => Promise.resolve());
 const stopConsoleCapture = vi.fn(() => Promise.resolve());
 
 function makeWebviewElement(getWebContentsId: () => number = () => WC_ID): Electron.WebviewTag {
-  return { getWebContentsId } as unknown as Electron.WebviewTag;
+  return Object.assign(new EventTarget(), { getWebContentsId }) as unknown as Electron.WebviewTag;
 }
 
 function row(overrides: Partial<SerializedConsoleRow> = {}): SerializedConsoleRow {
@@ -47,23 +47,27 @@ beforeEach(() => {
   useConsoleCaptureStore.setState({ messages: new Map(), counters: new Map() });
   // Default: panel is NOT registered (treated as a real teardown).
   usePanelStore.setState({ panelsById: {} });
-  (window as unknown as { electron: Record<string, unknown> }).electron = {
-    webview: {
-      registerPanel,
-      startConsoleCapture,
-      stopConsoleCapture,
-      onConsoleMessage: vi.fn((cb: (r: SerializedConsoleRow) => void) => {
-        messageCb = cb;
-        return offMessage;
-      }),
-      onConsoleContextCleared: vi.fn(
-        (cb: (p: { paneId: string; navigationGeneration: number }) => void) => {
-          clearedCb = cb;
-          return offCleared;
-        }
-      ),
+  Object.defineProperty(window, "electron", {
+    configurable: true,
+    writable: true,
+    value: {
+      webview: {
+        registerPanel,
+        startConsoleCapture,
+        stopConsoleCapture,
+        onConsoleMessage: vi.fn((cb: (r: SerializedConsoleRow) => void) => {
+          messageCb = cb;
+          return offMessage;
+        }),
+        onConsoleContextCleared: vi.fn(
+          (cb: (p: { paneId: string; navigationGeneration: number }) => void) => {
+            clearedCb = cb;
+            return offCleared;
+          }
+        ),
+      },
     },
-  };
+  });
 });
 
 afterEach(() => {
@@ -127,6 +131,52 @@ describe("useDevPreviewConsoleCapture", () => {
     rerender({ ready: true });
     expect(registerPanel).toHaveBeenCalledWith(WC_ID, PANE_ID);
     await waitFor(() => expect(startConsoleCapture).toHaveBeenCalledWith(WC_ID, PANE_ID));
+  });
+
+  // A DOM move of the <webview> replaces its guest under the same element while
+  // isWebviewReady stays true; capture must follow the new webContents (#13634).
+  it("restarts capture on the replacement guest when dom-ready reports a new webContents id", async () => {
+    let guestId = WC_ID;
+    const webview = makeWebviewElement(() => guestId);
+    const { result } = renderHook(() => useDevPreviewConsoleCapture(PANE_ID, webview, true, false));
+    await waitFor(() => expect(startConsoleCapture).toHaveBeenCalledWith(WC_ID, PANE_ID));
+    expect(result.current.guestWebContentsId).toBe(WC_ID);
+
+    // dom-ready for the same guest (a plain reload) must not restart capture.
+    act(() => {
+      webview.dispatchEvent(new Event("dom-ready"));
+    });
+    expect(startConsoleCapture).toHaveBeenCalledTimes(1);
+
+    guestId = WC_ID + 1;
+    act(() => {
+      webview.dispatchEvent(new Event("dom-ready"));
+    });
+    expect(registerPanel).toHaveBeenLastCalledWith(WC_ID + 1, PANE_ID);
+    await waitFor(() => expect(startConsoleCapture).toHaveBeenLastCalledWith(WC_ID + 1, PANE_ID));
+    expect(startConsoleCapture).toHaveBeenCalledTimes(2);
+    expect(result.current.guestWebContentsId).toBe(WC_ID + 1);
+  });
+
+  it("reports HMR failures from a replacement guest whose navigation generations start over", async () => {
+    let guestId = WC_ID;
+    const webview = makeWebviewElement(() => guestId);
+    const { result } = renderHook(() => useDevPreviewConsoleCapture(PANE_ID, webview, true, false));
+    await waitFor(() => expect(startConsoleCapture).toHaveBeenCalledTimes(1));
+    act(() => {
+      clearedCb?.({ paneId: PANE_ID, navigationGeneration: 5 });
+    });
+
+    guestId = WC_ID + 1;
+    act(() => {
+      webview.dispatchEvent(new Event("dom-ready"));
+    });
+    await waitFor(() => expect(startConsoleCapture).toHaveBeenCalledTimes(2));
+
+    act(() => {
+      addRowViaCb(row({ summaryText: "[vite] server connection lost", navigationGeneration: 1 }));
+    });
+    expect(result.current.hmrDead).toBe(true);
   });
 
   it("stops capture and unsubscribes on unmount", async () => {

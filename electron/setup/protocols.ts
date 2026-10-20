@@ -2456,6 +2456,13 @@ export function setupWebviewCSP(): void {
 
         if (!shortcut && !isReload && !isCloseShortcut) return;
 
+        // Always claim the close chord from a webview guest, before any lookup
+        // can bail. Unclaimed, it reaches the native role:"close" accelerator
+        // and closes the whole window — which is what happens when the guest
+        // was replaced (any DOM move of the <webview>) and isn't registered yet
+        // (#13634). A swallowed Cmd+W is recoverable; a closed window is not.
+        if (isCloseShortcut) event.preventDefault();
+
         const dialogService = getWebviewDialogService();
         const panelId = dialogService.getPanelId(contents.id);
         if (!panelId) return;
@@ -2484,7 +2491,6 @@ export function setupWebviewCSP(): void {
           // instead of falling through to the native role:"close" accelerator,
           // which would otherwise close the whole window (#10859).
           if (findParentWindow && !findParentWindow.isDestroyed()) {
-            event.preventDefault();
             getAppWebContents(findParentWindow).send(CHANNELS.WEBVIEW_CLOSE_SHORTCUT, {
               panelId,
             });
