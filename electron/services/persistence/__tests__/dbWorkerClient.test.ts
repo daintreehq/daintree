@@ -496,6 +496,21 @@ describe("DbWorkerClient", () => {
       expect(fresh).toHaveBeenCalledTimes(1);
     });
 
+    it("does not rewrite the fence for main-only ring writes once a timeout degrade drained the queue", async () => {
+      const worker = new FakeWorker(); // wedged
+      const { client, fence } = holdingClient(worker, { requestTimeoutMs: 10 });
+      const fallback = vi.fn(() => "main-result");
+
+      await client.run(staleWrite, fallback);
+      expect(fence.state.epoch).toBe(1);
+
+      for (let i = 0; i < 3; i++) {
+        await expect(client.run(staleWrite, fallback)).resolves.toBe("main-result");
+      }
+      expect(fence.state.epoch).toBe(1);
+      expect(fallback).toHaveBeenCalledTimes(4);
+    });
+
     it("still runs the fallback of another ring's write after a sync fence", async () => {
       const worker = new FakeWorker();
       const { client } = holdingClient(worker);

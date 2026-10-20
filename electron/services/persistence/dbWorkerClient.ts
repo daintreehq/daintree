@@ -96,8 +96,13 @@ export class DbWorkerClient {
     if (!this.canUseWorker()) {
       // A main-only ring write is as new as a synchronous one — e.g. after a
       // timed-out shutdown drain, an older write may still be pending and its
-      // fallback must not land on top of this snapshot.
-      if (ring !== null) this.fence(ring);
+      // fallback must not land on top of this snapshot. The DB fence only
+      // needs to move while requests are pending; a degraded client's wedged
+      // worker has none left, so its writes skip the pragma.
+      if (ring !== null) {
+        this.supersede(ring);
+        if (this.pending.size > 0) this.advanceFence();
+      }
       return fallback();
     }
     const generation = ring === null ? 0 : this.supersedeCount(ring);
@@ -124,8 +129,12 @@ export class DbWorkerClient {
    * skip their main-thread fallbacks, so other rings' snapshots still land.
    */
   fence(ring: string): void {
-    this.ringSupersedes.set(ring, this.supersedeCount(ring) + 1);
+    this.supersede(ring);
     this.advanceFenceIfLive();
+  }
+
+  private supersede(ring: string): void {
+    this.ringSupersedes.set(ring, this.supersedeCount(ring) + 1);
   }
 
   private supersedeCount(ring: string): number {
