@@ -1151,10 +1151,10 @@ describe("git-write commit and working diff", () => {
 
     it("skips binary files reported by numstat", async () => {
       const git = makeFakeGit({
-        diff: stagedDiff(["image.png"]),
-        diff: vi.fn().mockResolvedValue("-\t-\timage.png\n"),
+        diff: stagedDiff(["image.png"], ["image.png"]),
       });
       await expect(scanStagedFilesForConflictMarkers(git as never)).resolves.toBeUndefined();
+      expect(git.diff).toHaveBeenCalledTimes(2);
       expect(git.raw).not.toHaveBeenCalled();
     });
 
@@ -1177,6 +1177,7 @@ describe("git-write commit and working diff", () => {
           "--no-textconv",
           "--cached",
           "--no-renames",
+          "--no-relative",
           "-z",
           probe,
         ]);

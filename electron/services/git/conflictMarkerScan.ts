@@ -9,7 +9,16 @@ const CONFLICT_MARKER_RE = /^(?:<{7}|\|{7}|={7}|>{7})[ \t\r]?/m;
 // blob to read, and `git commit` refuses the latter on its own.
 const BLOB_MODES = new Set(["100644", "100755", "120000"]);
 
-const STAGED_DIFF_ARGS = ["--no-ext-diff", "--no-textconv", "--cached", "--no-renames", "-z"];
+// `--no-relative` overrides `diff.relative`, which would otherwise drop files
+// outside a subdirectory cwd and print paths `cat-file :path` can't resolve.
+const STAGED_DIFF_ARGS = [
+  "--no-ext-diff",
+  "--no-textconv",
+  "--cached",
+  "--no-renames",
+  "--no-relative",
+  "-z",
+];
 
 // `--raw -z` emits `:<src mode> <dst mode> <src oid> <dst oid> <status>` and the
 // path as separate NUL-terminated fields; `--no-renames` keeps it to one path.

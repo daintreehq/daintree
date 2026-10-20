@@ -112,9 +112,22 @@ describe("scanStagedFilesForConflictMarkers (real git)", () => {
     expect(() => git(["merge", "-q", "topic"])).toThrow();
 
     await expect(scan()).resolves.toBeUndefined();
+    expect(() => git(["commit", "-qm", "unresolved"])).toThrow();
 
     git(["add", "README.md"]);
     await expect(scan()).rejects.toThrow(/conflict markers found in README\.md/);
+  });
+
+  it("scans the whole index from a subdirectory under diff.relative", async () => {
+    git(["config", "diff.relative", "true"]);
+    write("src/clean.ts", "clean\n");
+    write("root.txt", CONFLICTED);
+    git(["add", "src/clean.ts", "root.txt"]);
+
+    const client = await createHardenedGit(path.join(repoDir, "src"));
+    await expect(scanStagedFilesForConflictMarkers(client)).rejects.toThrow(
+      /conflict markers found in root\.txt/
+    );
   });
 
   it("scans the first commit of an unborn branch", async () => {
