@@ -460,6 +460,42 @@ describe("DbWorkerClient", () => {
       expect(fresh).toHaveBeenCalledTimes(1);
     });
 
+    it("skips a ring fallback when the fence lands after the rejection but before it is handled", async () => {
+      const worker = new FakeWorker();
+      const { client } = holdingClient(worker);
+      const fallback = vi.fn(() => "resurrected");
+
+      const pending = client.run(staleWrite, fallback);
+      worker.emit("exit", 1);
+      client.fence("a");
+
+      await expect(pending).resolves.toBeUndefined();
+      expect(fallback).not.toHaveBeenCalled();
+    });
+
+    it("lets a main-only ring write after a timed-out shutdown drain supersede the pending one", async () => {
+      const worker = new FakeWorker(); // never answers, not even close
+      const fence = fakeFenceDb(0);
+      const client = new DbWorkerClient({
+        spawnWorker: () => worker.asWorker(),
+        isDbReady: () => true,
+        isDisabled: () => false,
+        getMainSqlite: () => fence.handle,
+        shutdownDrainTimeoutMs: 10,
+      });
+      const stale = vi.fn(() => "stale");
+      const fresh = vi.fn(() => "fresh");
+
+      const pending = client.run(staleWrite, stale);
+      await client.shutdown();
+      await expect(client.run({ ...staleWrite, records: ["new"] }, fresh)).resolves.toBe("fresh");
+      worker.emit("exit", 0);
+
+      await expect(pending).resolves.toBeUndefined();
+      expect(stale).not.toHaveBeenCalled();
+      expect(fresh).toHaveBeenCalledTimes(1);
+    });
+
     it("still runs the fallback of another ring's write after a sync fence", async () => {
       const worker = new FakeWorker();
       const { client } = holdingClient(worker);

@@ -92,10 +92,14 @@ export class DbWorkerClient {
    * its fallback: the stale snapshot would overwrite the newer durable one.
    */
   async run<T>(op: DbWorkerOp, fallback: () => T): Promise<T> {
+    const ring = op.op === "ringWriteAll" ? op.ring : null;
     if (!this.canUseWorker()) {
+      // A main-only ring write is as new as a synchronous one — e.g. after a
+      // timed-out shutdown drain, an older write may still be pending and its
+      // fallback must not land on top of this snapshot.
+      if (ring !== null) this.fence(ring);
       return fallback();
     }
-    const ring = op.op === "ringWriteAll" ? op.ring : null;
     const generation = ring === null ? 0 : this.supersedeCount(ring);
     try {
       return (await this.request(op)) as T;
