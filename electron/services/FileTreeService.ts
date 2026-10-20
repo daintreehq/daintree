@@ -15,8 +15,9 @@ const NAME_COLLATOR = new Intl.Collator(undefined, { numeric: true });
 // How many entries of one listing read their metadata at once. Unbounded, a
 // 10,000-entry directory queued 10,000 `lstat`s ahead of every other fs call
 // in the process (#13600); serial was the bottleneck #7140 removed. Sixteen
-// keeps libuv's four threads saturated without one wide folder monopolizing
-// them. A slot covers an entry's whole read, symlink resolution included.
+// sits above libuv's default four threads, so the pool stays fed, while
+// capping how much backlog one wide folder can queue in front of other work.
+// A slot covers an entry's whole read, symlink resolution included.
 export const FILE_TREE_METADATA_CONCURRENCY = 16;
 
 /**
