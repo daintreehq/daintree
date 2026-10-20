@@ -253,12 +253,75 @@ describe("ProjectFileStore adversarial", () => {
     expect(utilsMock.resilientAtomicWriteFile).not.toHaveBeenCalled();
   });
 
-  it("quarantine rename failure does not throw — getRecipes still returns []", async () => {
-    fsMock.readFile.mockResolvedValue("{ not valid json");
-    utilsMock.resilientRename.mockRejectedValueOnce(new Error("EBUSY"));
+  describe.each([
+    ["malformed JSON", "{ not valid json"],
+    ["future-version envelope", JSON.stringify({ _schemaVersion: 999, recipes: [] })],
+    ["envelope without a recipes array", JSON.stringify({ _schemaVersion: 1, recipes: "nope" })],
+    ["non-array, non-envelope root", JSON.stringify({ notAnArray: true })],
+  ])("quarantine rename failure on %s", (_label, payload) => {
+    beforeEach(() => {
+      fsMock.readFile.mockResolvedValue(payload);
+      utilsMock.resilientRename.mockRejectedValue(
+        Object.assign(new Error("EBUSY"), { code: "EBUSY" })
+      );
+    });
 
-    const result = await store.getRecipes(VALID_ID);
-    expect(result).toEqual([]);
+    it("getRecipes throws instead of reporting an empty list", async () => {
+      await expect(store.getRecipes(VALID_ID)).rejects.toThrow(/could not be moved aside/);
+    });
+
+    it("addRecipe aborts without overwriting the unpreserved file", async () => {
+      await expect(
+        store.addRecipe(VALID_ID, {
+          id: "r1",
+          name: "new",
+          terminals: [],
+          createdAt: 1000,
+        } as TerminalRecipe)
+      ).rejects.toThrow(/could not be moved aside/);
+      expect(utilsMock.resilientAtomicWriteFile).not.toHaveBeenCalled();
+    });
+
+    it("updateRecipe and deleteRecipe abort without writing", async () => {
+      await expect(store.updateRecipe(VALID_ID, "r1", { name: "x" })).rejects.toThrow(
+        /could not be moved aside/
+      );
+      await expect(store.deleteRecipe(VALID_ID, "r1")).rejects.toThrow(/could not be moved aside/);
+      expect(utilsMock.resilientAtomicWriteFile).not.toHaveBeenCalled();
+    });
+  });
+
+  it("a mutation rejected by a failed quarantine does not block a later retry", async () => {
+    fsMock.readFile.mockResolvedValue("{ not valid json");
+    utilsMock.resilientRename.mockRejectedValueOnce(
+      Object.assign(new Error("EBUSY"), { code: "EBUSY" })
+    );
+    const recipe = { id: "r1", name: "new", terminals: [], createdAt: 1000 } as TerminalRecipe;
+
+    await expect(store.addRecipe(VALID_ID, recipe)).rejects.toThrow(/could not be moved aside/);
+    expect(utilsMock.resilientAtomicWriteFile).not.toHaveBeenCalled();
+
+    await store.addRecipe(VALID_ID, recipe);
+
+    expect(utilsMock.resilientRename).toHaveBeenCalledTimes(2);
+    expect(utilsMock.resilientAtomicWriteFile).toHaveBeenCalledTimes(1);
+  });
+
+  it("a successful quarantine still yields [] and lets the next mutation write", async () => {
+    fsMock.readFile
+      .mockResolvedValueOnce("{ not valid json")
+      .mockRejectedValue(Object.assign(new Error("ENOENT"), { code: "ENOENT" }));
+
+    await store.addRecipe(VALID_ID, {
+      id: "r1",
+      name: "new",
+      terminals: [],
+      createdAt: 1000,
+    } as TerminalRecipe);
+
+    expect(utilsMock.resilientRename).toHaveBeenCalledTimes(1);
+    const write = utilsMock.resilientAtomicWriteFile.mock.calls[0];
+    expect(JSON.parse(write[1] as string).recipes.map((r: { id: string }) => r.id)).toEqual(["r1"]);
   });
 
   it("deleteRecipe filters the target out and writes the remaining recipes in envelope format", async () => {

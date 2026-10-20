@@ -2,6 +2,7 @@ import type { TerminalRecipe } from "../types/index.js";
 import fs from "fs/promises";
 import path from "path";
 import { resilientRename, resilientAtomicWriteFile } from "../utils/fs.js";
+import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { TerminalRecipeSchema, filterValidTerminalEntries } from "../schemas/ipc.js";
 
 const RECIPES_FILENAME = "recipes.json";
@@ -68,16 +69,23 @@ export class GlobalFileStore {
       }
     } catch (error) {
       // Only genuinely malformed content reaches here — quarantine and reset to
-      // empty so the app recovers instead of failing every read.
+      // empty so the app recovers instead of failing every read. If the file
+      // can't be moved aside, throw: an empty snapshot would let the next
+      // mutator write straight over bytes we failed to preserve.
       console.error("[GlobalFileStore] Failed to parse recipes:", error);
+      const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const quarantinePath = `${this.recipesPath}.corrupted.${suffix}`;
       try {
-        const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-        const quarantinePath = `${this.recipesPath}.corrupted.${suffix}`;
         await resilientRename(this.recipesPath, quarantinePath);
-        console.warn(`[GlobalFileStore] Corrupted recipes file moved to ${quarantinePath}`);
-      } catch {
-        // Ignore
+      } catch (renameError) {
+        console.error("[GlobalFileStore] Failed to quarantine recipes:", renameError);
+        const reason = formatErrorMessage(renameError, "rename failed");
+        throw new Error(
+          `Global recipes file is unreadable and could not be moved aside (${reason}); leaving it untouched`,
+          { cause: renameError }
+        );
       }
+      console.warn(`[GlobalFileStore] Corrupted recipes file moved to ${quarantinePath}`);
       return [];
     }
 

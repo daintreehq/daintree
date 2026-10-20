@@ -3,6 +3,7 @@ import type { TerminalRecipe } from "../types/index.js";
 import fs from "fs/promises";
 import { existsSync } from "fs";
 import { resilientRename, resilientAtomicWriteFile } from "../utils/fs.js";
+import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import {
   getProjectStateDir,
   recipesFilePath,
@@ -56,13 +57,7 @@ export class ProjectFileStore {
       parsed = JSON.parse(content);
     } catch {
       console.error(`[ProjectFileStore] Failed to parse recipes JSON for project ${projectId}`);
-      try {
-        const quarantinePath = `${filePath}.corrupted.${Date.now()}`;
-        await resilientRename(filePath, quarantinePath);
-        console.warn(`[ProjectFileStore] Corrupted recipes file moved to ${quarantinePath}`);
-      } catch {
-        // Ignore
-      }
+      await this.quarantineRecipes(projectId, filePath, `${filePath}.corrupted.${Date.now()}`);
       return [];
     }
 
@@ -85,17 +80,10 @@ export class ProjectFileStore {
         if (existsSync(quarantinePath)) {
           quarantinePath = `${quarantinePath}.${Date.now()}`;
         }
-        try {
-          await resilientRename(filePath, quarantinePath);
-          console.warn(
-            `[ProjectFileStore] recipes.json for ${projectId} was written by a newer app (v${onDiskVersion} > v${RECIPES_SCHEMA_VERSION}); quarantined to ${quarantinePath}`
-          );
-        } catch (renameError) {
-          console.error(
-            `[ProjectFileStore] Failed to quarantine future-version recipes for ${projectId}:`,
-            renameError
-          );
-        }
+        console.warn(
+          `[ProjectFileStore] recipes.json for ${projectId} was written by a newer app (v${onDiskVersion} > v${RECIPES_SCHEMA_VERSION})`
+        );
+        await this.quarantineRecipes(projectId, filePath, quarantinePath);
         return [];
       }
 
@@ -104,13 +92,7 @@ export class ProjectFileStore {
         console.warn(
           `[ProjectFileStore] Invalid recipes envelope for ${projectId}, expected recipes array`
         );
-        try {
-          const quarantinePath = `${filePath}.corrupted.${Date.now()}`;
-          await resilientRename(filePath, quarantinePath);
-          console.warn(`[ProjectFileStore] Corrupted recipes file moved to ${quarantinePath}`);
-        } catch {
-          // Ignore
-        }
+        await this.quarantineRecipes(projectId, filePath, `${filePath}.corrupted.${Date.now()}`);
         return [];
       }
 
@@ -134,14 +116,32 @@ export class ProjectFileStore {
     console.warn(
       `[ProjectFileStore] Invalid recipes format for ${projectId}, expected array or envelope`
     );
-    try {
-      const quarantinePath = `${filePath}.corrupted.${Date.now()}`;
-      await resilientRename(filePath, quarantinePath);
-      console.warn(`[ProjectFileStore] Corrupted recipes file moved to ${quarantinePath}`);
-    } catch {
-      // Ignore
-    }
+    await this.quarantineRecipes(projectId, filePath, `${filePath}.corrupted.${Date.now()}`);
     return [];
+  }
+
+  /**
+   * Move an unreadable recipes file aside. A rename failure **throws** rather
+   * than letting the caller report `[]`: every mutator builds on that snapshot,
+   * so an empty result would let the next add/update/delete write a fresh file
+   * straight over bytes we failed to preserve (mirrors readCopyTreeHistory).
+   */
+  private async quarantineRecipes(
+    projectId: string,
+    filePath: string,
+    quarantinePath: string
+  ): Promise<void> {
+    try {
+      await resilientRename(filePath, quarantinePath);
+    } catch (error) {
+      console.error(`[ProjectFileStore] Failed to quarantine recipes for ${projectId}:`, error);
+      const reason = formatErrorMessage(error, "rename failed");
+      throw new Error(
+        `Recipes file for project ${projectId} is unreadable and could not be moved aside (${reason}); leaving it untouched`,
+        { cause: error }
+      );
+    }
+    console.warn(`[ProjectFileStore] Unreadable recipes file moved to ${quarantinePath}`);
   }
 
   /**
