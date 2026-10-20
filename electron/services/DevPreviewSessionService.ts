@@ -18,7 +18,12 @@ import {
   type DevPreviewDiagnosticInput,
   type DevPreviewDiagnosticsRingMap,
 } from "./DevPreviewDiagnosticsRing.js";
-import { releasePort, waitForPortFree, PORT_FREE_TIMEOUT_MS } from "./DevPreviewPortAllocator.js";
+import {
+  clearPortRegistry,
+  releasePort,
+  waitForPortFree,
+  PORT_FREE_TIMEOUT_MS,
+} from "./DevPreviewPortAllocator.js";
 import { waitForServerReady, READINESS_TIMEOUT_MS } from "./DevPreviewReadinessProbe.js";
 import {
   createSessionKey,
@@ -438,7 +443,7 @@ export class DevPreviewSessionService {
     this.terminalToSession.clear();
     this.sessions.clear();
     this.locks.clear();
-    this.portRegistry.clear();
+    clearPortRegistry(this.portRegistry);
     this.worktreeToSession.clear();
     this.diagnostics.clear();
   }
