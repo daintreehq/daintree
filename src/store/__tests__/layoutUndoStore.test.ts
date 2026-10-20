@@ -108,6 +108,8 @@ describe("layoutUndoStore", () => {
       tabGroups: new Map(),
       focusedId: null,
       maximizedId: null,
+      maximizeTarget: null,
+      preMaximizeLayout: null,
       activeDockTerminalId: null,
     });
     useLayoutConfigStore.setState({ gridDimensions: null });
@@ -549,6 +551,69 @@ describe("layoutUndoStore", () => {
       const state = usePanelStore.getState();
       expect(state.tabGroups.has("g1")).toBe(false);
       expect(state.panelsById["b"]!.location).toBe("dialog");
+    });
+
+    it("clears the whole maximize state when the snapshot's maximized panel is now trashed", () => {
+      const a = makeTerminal({ id: "a", location: "grid" });
+      const b = makeTerminal({ id: "b", location: "grid" });
+      seedTerminals([a, b]);
+      usePanelStore.setState({ maximizedId: "a" });
+
+      useLayoutUndoStore.getState().pushLayoutSnapshot();
+      setTerminals([{ ...a, location: "trash" }, b]);
+      usePanelStore.setState({
+        maximizedId: "b",
+        maximizeTarget: { type: "panel", id: "b" },
+        preMaximizeLayout: { gridCols: 2, gridItemCount: 2, worktreeId: undefined },
+      });
+      useLayoutUndoStore.getState().undo();
+
+      const state = usePanelStore.getState();
+      expect(state.maximizedId).toBeNull();
+      expect(state.maximizeTarget).toBeNull();
+      expect(state.preMaximizeLayout).toBeNull();
+    });
+
+    it("drops a closed ephemeral panel from restored groups and focus", () => {
+      const a = makeTerminal({ id: "a", location: "grid" });
+      const b = makeTerminal({ id: "b", location: "grid" });
+      const e = makeTerminal({ id: "e", location: "grid", excludeFromPersistence: true });
+      seedTerminals([a, b, e]);
+      usePanelStore.setState({
+        tabGroups: new Map([
+          ["g1", { id: "g1", location: "grid", panelIds: ["a", "e"], activeTabId: "e" }],
+        ]),
+        focusedId: "e",
+      });
+
+      useLayoutUndoStore.getState().pushLayoutSnapshot();
+      setTerminals([a, { ...b, location: "dock" }]);
+      usePanelStore.setState({ tabGroups: new Map() });
+      useLayoutUndoStore.getState().undo();
+
+      const state = usePanelStore.getState();
+      expect(state.panelsById["e"]).toBeUndefined();
+      expect(state.tabGroups.has("g1")).toBe(false);
+      expect(state.focusedId).toBeNull();
+      expect(state.panelsById["b"]!.location).toBe("grid");
+    });
+
+    it("keeps a panel trashed between undo and redo in the trash", () => {
+      const a = makeTerminal({ id: "a", location: "grid" });
+      const b = makeTerminal({ id: "b", location: "grid" });
+      seedTerminals([a, b]);
+
+      useLayoutUndoStore.getState().pushLayoutSnapshot();
+      setTerminals([{ ...a, location: "dock" }, b]);
+      useLayoutUndoStore.getState().undo();
+
+      setTerminals([a, { ...b, location: "trash" }]);
+      useLayoutUndoStore.getState().redo();
+
+      const state = usePanelStore.getState();
+      expect(state.panelsById["a"]!.location).toBe("dock");
+      expect(state.panelsById["b"]!.location).toBe("trash");
+      expect(state.panelIds).toEqual(["a", "b"]);
     });
   });
 

@@ -11,7 +11,10 @@ import {
 import { getWorktreeSelectionSnapshot } from "@/store/storeAccessors";
 import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
 import { buildWorktreeIndex } from "@/store/slices/panelRegistry/worktreeIndex";
-import { syncWorktreeAttributionToHost } from "@/store/slices/panelRegistry/helpers";
+import {
+  removePanelIdsFromTabGroups,
+  syncWorktreeAttributionToHost,
+} from "@/store/slices/panelRegistry/helpers";
 import { reconcileMovedPanel } from "@/services/terminal/crossWorktreeMove";
 
 type CarrierPanel = Parameters<typeof getNarrowPanel>[0][string];
@@ -94,31 +97,26 @@ function applySnapshot(snapshot: LayoutSnapshot): boolean {
     }
   }
 
+  // A panel trashed, moved into a dialog or closed since the snapshot left its
+  // group then; restoring that membership would hand a tab strip a panel it
+  // can't render, and a group needs two members to exist at all.
+  const goneFromLayout = new Set<string>();
+  for (const group of snapshot.tabGroups.values()) {
+    for (const pid of group.panelIds) {
+      const live = panelsById[pid];
+      if (!live || isExcludedFromLayout(live)) goneFromLayout.add(pid);
+    }
+  }
+  const restoredGroups = removePanelIdsFromTabGroups(
+    structuredClone(snapshot.tabGroups),
+    goneFromLayout
+  ).tabGroups;
+
   // Restore group metadata, but normalize any dock group whose live membership
   // is no longer fully dockable back to grid (#11375). A tab group is atomic —
   // it can't keep half its members in a dock the others can't render — so this
   // is all-or-nothing. Members read their effective location from the (possibly
   // rescued) group location below so a member and its group never disagree.
-  const restoredGroups = structuredClone(snapshot.tabGroups);
-  // A panel trashed or moved into a dialog since the snapshot left its group
-  // then; restoring that membership would hand a tab strip a panel it can't
-  // render, and a group needs two members to exist at all.
-  for (const [groupId, group] of restoredGroups) {
-    const members = group.panelIds.filter((pid) => {
-      const live = panelsById[pid];
-      return !live || !isExcludedFromLayout(live);
-    });
-    if (members.length === group.panelIds.length) continue;
-    if (members.length <= 1) {
-      restoredGroups.delete(groupId);
-      continue;
-    }
-    restoredGroups.set(groupId, {
-      ...group,
-      panelIds: members,
-      activeTabId: members.includes(group.activeTabId) ? group.activeTabId : members[0]!,
-    });
-  }
   const groupOverrideByPanelId = new Map<
     string,
     { location: TabGroupLocation; worktreeId?: string }
@@ -213,12 +211,13 @@ function applySnapshot(snapshot: LayoutSnapshot): boolean {
     activeDockPanel.location === "dock" &&
     panelKindIsDockable(activeDockPanel.kind ?? "terminal");
 
-  // Focus and maximize must not land on a panel that has since gone to the
-  // trash or a dialog — neither renders in the layout the snapshot restores.
+  // Focus and maximize must not land on a panel that is gone or has since moved
+  // to the trash or a dialog — none of those render in the restored layout.
   const layoutPointer = (id: string | null): string | null => {
     const target = id ? newTerminalsById[id] : undefined;
-    return target && (target.location === "trash" || target.location === "dialog") ? null : id;
+    return target && target.location !== "trash" && target.location !== "dialog" ? id : null;
   };
+  const restoredMaximizedId = layoutPointer(snapshot.maximizedId);
 
   const worktreeBefore = new Map<string, string | undefined>();
   for (const id of newTerminalIds) worktreeBefore.set(id, panelsById[id]?.worktreeId);
@@ -232,7 +231,10 @@ function applySnapshot(snapshot: LayoutSnapshot): boolean {
     panelIdsByWorktreeId: buildWorktreeIndex(newTerminalIds, newTerminalsById),
     tabGroups: restoredGroups,
     focusedId: layoutPointer(snapshot.focusedId),
-    maximizedId: layoutPointer(snapshot.maximizedId),
+    maximizedId: restoredMaximizedId,
+    // Every maximize writes the trio together; leaving the live target behind a
+    // null `maximizedId` turns the next maximize click into an unmaximize.
+    ...(restoredMaximizedId === null && { maximizeTarget: null, preMaximizeLayout: null }),
     activeDockTerminalId: activeDockStillValid ? restoredActiveDock : null,
   });
 
