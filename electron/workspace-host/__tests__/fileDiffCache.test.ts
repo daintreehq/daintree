@@ -266,7 +266,8 @@ describe("getFileDiff paging over a real repo", () => {
       const get = vi.spyOn(FileDiffCache.prototype, "get");
       try {
         await page("link", second.nextOffset!, untracked);
-        expect(get.mock.results.at(-1)?.value).not.toBeNull();
+        expect(get).toHaveBeenCalled();
+        expect(get.mock.results.at(-1)?.value).toBeInstanceOf(Uint8Array);
       } finally {
         get.mockRestore();
       }
