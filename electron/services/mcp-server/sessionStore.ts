@@ -582,15 +582,26 @@ export class SessionStore {
         ? this.createIdleTimer(sessionId)
         : this.createHttpIdleTimer(sessionId);
     }
-    const held: string[] = [];
-    for (const [id, principal] of this.paneSessions) {
-      if (principal === panePrincipal) held.push(id);
-    }
+    const held = this.paneSessionsOf(panePrincipal);
     for (const id of held.slice(0, Math.max(0, held.length - MCP_PANE_SESSION_CAP + 1))) {
       this.revokeSession(id);
     }
     this.paneSessions.set(sessionId, panePrincipal);
     return undefined;
+  }
+
+  /**
+   * The live sessions a pane's bearer holds, least recently used first — what
+   * revoking the bearer must close (#13635). Read from this map rather than the
+   * ownership ledger: a session filed after a drain cleared its ledger binding
+   * is still filed here.
+   */
+  paneSessionsOf(panePrincipal: string): string[] {
+    const held: string[] = [];
+    for (const [id, principal] of this.paneSessions) {
+      if (principal === panePrincipal) held.push(id);
+    }
+    return held;
   }
 
   /** Mark a pane session most recently used; false when `sessionId` is not one. */

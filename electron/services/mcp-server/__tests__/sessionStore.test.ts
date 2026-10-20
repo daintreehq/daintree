@@ -1577,6 +1577,18 @@ describe("SessionStore pane-bearer sessions never idle out (#13635)", () => {
     }
   });
 
+  it("still finds a pane session filed after a drain cleared its ownership binding", () => {
+    // An /mcp initialize binds its principal before awaiting the body; a stop()
+    // in between drains the ledger, and the handshake then files the session.
+    store.resourceOwnership.bindPrincipal("late", "principal-a");
+    store.drain();
+    filePaneHttp("late", "principal-a");
+
+    expect(store.paneSessionsOf("principal-a")).toEqual(["late"]);
+    store.revokeSession("late");
+    expect(store.paneSessionsOf("principal-a")).toEqual([]);
+  });
+
   it("forgets a pane session on teardown, so a reused id is idle-reaped again", () => {
     filePaneHttp("pane-http", "principal-a");
     store.revokeSession("pane-http");

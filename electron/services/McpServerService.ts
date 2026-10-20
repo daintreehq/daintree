@@ -562,7 +562,7 @@ export class McpServerService {
    * (#13635), so this is what ends them.
    */
   revokePaneBearer(principal: string): void {
-    const sessionIds = this.sessionStore.resourceOwnership.sessionsOf(principal);
+    const sessionIds = this.sessionStore.paneSessionsOf(principal);
     try {
       this.revokeOwnershipPrincipal(principal);
     } finally {
