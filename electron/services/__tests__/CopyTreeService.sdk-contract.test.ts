@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { execFileSync } from "child_process";
 import fs from "fs/promises";
 import os from "os";
 import path from "path";
@@ -115,6 +116,57 @@ describe("CopyTreeService against the installed CopyTree", () => {
       expect(real.content).toContain(file.path);
     }
     expect(preview.includedFiles).toBe(preview.files?.length);
+  });
+
+  // CopyTree reads git state through its own simple-git client, so these are
+  // the only cases that exercise that client against the installed simple-git.
+  describe("selecting by git state", () => {
+    function git(...args: string[]): string {
+      return execFileSync("git", args, {
+        cwd: tempDir,
+        env: { ...process.env, GIT_CONFIG_NOSYSTEM: "1" },
+        encoding: "utf8",
+      }).trim();
+    }
+
+    beforeEach(async () => {
+      git("init", "-q", "-b", "main");
+      git("config", "user.email", "copytree@example.com");
+      git("config", "user.name", "CopyTree");
+      git("config", "commit.gpgsign", "false");
+      await fs.writeFile(path.join(tempDir, "stable.ts"), "export const s = 1;\n");
+      git("add", "-A");
+      git("commit", "-q", "-m", "base");
+    });
+
+    it("keeps only files with staged or unstaged changes when modified is set", async () => {
+      await fs.writeFile(path.join(tempDir, "small.ts"), "export const a = 2;\n");
+      await fs.writeFile(path.join(tempDir, "staged.ts"), "export const c = 3;\n");
+      git("add", "staged.ts");
+
+      const result = await copyTreeService.testConfig(tempDir, { modified: true });
+
+      expect(result.error).toBeUndefined();
+      const paths = result.files?.map((file) => file.path);
+      expect(paths).toEqual(expect.arrayContaining(["small.ts", "staged.ts"]));
+      expect(paths).not.toContain("stable.ts");
+    });
+
+    it("keeps only files changed since a ref when changed is set", async () => {
+      const base = git("rev-parse", "HEAD");
+      await fs.writeFile(path.join(tempDir, "feature.ts"), "export const f = 4;\n");
+      git("add", "feature.ts");
+      git("commit", "-q", "-m", "feature");
+
+      const preview = await copyTreeService.testConfig(tempDir, { changed: base });
+      const real = await copyTreeService.generate(tempDir, { changed: base });
+
+      expect(preview.error).toBeUndefined();
+      expect(real.error).toBeUndefined();
+      expect(preview.files?.map((file) => file.path)).toEqual(["feature.ts"]);
+      expect(real.content).toContain("feature.ts");
+      expect(real.content).not.toContain("stable.ts");
+    });
   });
 
   describe("scoping to a folder", () => {

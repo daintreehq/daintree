@@ -9,7 +9,7 @@ import type {
   SubmoduleState,
 } from "../../shared/types/submodule.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
-import { createHardenedGit } from "./hardenedGit.js";
+import { createBoundRepositoryGit, createHardenedGit } from "./hardenedGit.js";
 import { logDebug } from "./logger.js";
 import { withTimeout } from "./withTimeout.js";
 
@@ -976,7 +976,7 @@ async function readModuleHead(
   timeoutMs: number
 ): Promise<{ oid: string; branch?: string } | null> {
   try {
-    const git = await createHardenedGit(moduleGitDir, signal);
+    const git = await createBoundRepositoryGit(moduleGitDir, signal);
     const output = await runGit(
       git,
       ["--git-dir", moduleGitDir, "rev-parse", "HEAD", "--abbrev-ref", "HEAD"],
@@ -1008,7 +1008,7 @@ async function readModuleFiles(
   timeoutMs: number
 ): Promise<{ dirty: string[]; untracked: string[] } | null> {
   try {
-    const git = await createHardenedGit(checkoutDir, signal);
+    const git = await createBoundRepositoryGit(checkoutDir, signal);
     return parseStatusPaths(
       await runGit(
         git,
@@ -1060,7 +1060,7 @@ async function readAtRiskCommits(
   maxCount: number
 ): Promise<{ commits: SubmoduleAtRiskCommit[]; truncated: boolean } | null> {
   try {
-    const git = await createHardenedGit(moduleGitDir, signal);
+    const git = await createBoundRepositoryGit(moduleGitDir, signal);
     const output = await runGit(
       git,
       [

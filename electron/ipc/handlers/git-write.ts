@@ -38,7 +38,7 @@ import {
   validateCwd,
   createHardenedGit,
   createAuthenticatedGit,
-  buildContinueEnv,
+  createContinueGit,
 } from "../../utils/hardenedGit.js";
 import {
   getPerFileDiffStats,
@@ -1723,11 +1723,11 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
     checkRateLimit(CHANNELS.GIT_CONTINUE_REPOSITORY_OPERATION, 5, 10_000);
     validateCwd(cwd);
 
-    // One .env() call only: simple-git's .env() replaces the spawn env
-    // wholesale, so re-stating the full hardened env (plus editor suppression)
-    // via buildContinueEnv is the only way to keep createHardenedGit's
-    // hardening intact on the continue path (#7058, #10786).
-    const git = (await createHardenedGit(cwd)).env(buildContinueEnv());
+    // The continue profile carries the hardened env plus editor suppression in
+    // the one env it is built with: a later .env() would replace the hardening
+    // wholesale (#7058, #10786), and the plain hardened profile is not allowed
+    // GIT_EDITOR at all.
+    const git = await createContinueGit(cwd);
     const gitDir = await resolveGitDir(git, cwd);
     const { state } = await detectRepoOperationState(gitDir, false);
 

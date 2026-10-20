@@ -28,13 +28,13 @@ vi.mock("../../../services/getSoundService.js", () => ({
 
 const createHardenedGitMock = vi.hoisted(() => vi.fn());
 const createAuthenticatedGitMock = vi.hoisted(() => vi.fn());
-const buildContinueEnvMock = vi.hoisted(() => vi.fn(() => ({})));
+const createContinueGitMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../../../utils/hardenedGit.js", () => ({
   validateCwd: vi.fn(),
   createHardenedGit: createHardenedGitMock,
   createAuthenticatedGit: createAuthenticatedGitMock,
-  buildContinueEnv: buildContinueEnvMock,
+  createContinueGit: createContinueGitMock,
 }));
 
 const detectRepoOperationStateMock = vi.hoisted(() => vi.fn());
@@ -655,10 +655,6 @@ describe("git:list-base-integration-commits", () => {
 });
 
 describe("git:continue-repository-operation handler", () => {
-  // Sentinel returned by the mocked buildContinueEnv so the test can assert the
-  // handler passes its result to .env() rather than raw process.env.
-  const CONTINUE_ENV_SENTINEL = { __continueEnv: true } as const;
-
   type FakeGit = {
     env: ReturnType<typeof vi.fn>;
     merge: ReturnType<typeof vi.fn>;
@@ -688,8 +684,7 @@ describe("git:continue-repository-operation handler", () => {
 
   function setup(state: RepoState) {
     const git = makeFakeGit();
-    createHardenedGitMock.mockReturnValue(git);
-    buildContinueEnvMock.mockReturnValue(CONTINUE_ENV_SENTINEL);
+    createContinueGitMock.mockResolvedValue(git);
     resolveGitDirMock.mockResolvedValue("/tmp/repo/.git");
     detectRepoOperationStateMock.mockResolvedValue({
       state,
@@ -701,14 +696,16 @@ describe("git:continue-repository-operation handler", () => {
     return { git, handler: getHandler(CONTINUE_CHANNEL) };
   }
 
-  it("applies the hardened continue env via a single .env() call", async () => {
+  // A later .env() would replace the continue profile's hardened env wholesale
+  // (#7058), and the plain hardened profile is refused GIT_EDITOR outright.
+  it("runs on the continue profile without layering another env over it", async () => {
     const { git, handler } = setup("REBASING");
 
     await handler(null, "/tmp/repo");
 
-    expect(buildContinueEnvMock).toHaveBeenCalledTimes(1);
-    expect(git.env).toHaveBeenCalledTimes(1);
-    expect(git.env).toHaveBeenCalledWith(CONTINUE_ENV_SENTINEL);
+    expect(createContinueGitMock).toHaveBeenCalledWith("/tmp/repo");
+    expect(createHardenedGitMock).not.toHaveBeenCalled();
+    expect(git.env).not.toHaveBeenCalled();
   });
 
   it("continues a rebase with --continue (no --no-edit, env suppresses editor)", async () => {

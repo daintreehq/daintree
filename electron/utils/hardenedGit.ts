@@ -261,7 +261,16 @@ function getAuthenticatedGitConfig(extraConfig?: string[], platform?: NodeJS.Pla
   ];
 }
 
-const UNSAFE_FLAGS = {
+type UnsafeFlags = NonNullable<SimpleGitOptions["unsafe"]>;
+
+/**
+ * simple-git refuses a `-c` key or env variable in these categories even when
+ * the value is the defensive one we pin, so each is allowed for exactly the
+ * keys the hardened config sets. Two categories are deliberately absent and
+ * granted per profile instead: `allowUnsafeEditor` (createContinueGit only) and
+ * `allowUnsafeConfigPaths` (createBoundRepositoryGit only).
+ */
+const UNSAFE_FLAGS: UnsafeFlags = {
   allowUnsafeAskPass: true,
   allowUnsafeCredentialHelper: true,
   allowUnsafeProtocolOverride: true,
@@ -270,71 +279,44 @@ const UNSAFE_FLAGS = {
   allowUnsafeSshCommand: true,
   allowUnsafeGitProxy: true,
   allowUnsafeHooksPath: true,
-  // simple-git 3.36.0 scans the spawn env and rejects any EDITOR / GIT_EDITOR /
-  // GIT_SEQUENCE_EDITOR key unless this flag is set, even when the value is the
-  // non-interactive `true` we set ourselves to suppress the editor on
-  // `git rebase --continue` (see buildContinueEnv). The scanner fires on the
-  // presence of the key, not its origin, so the flag is required.
-  allowUnsafeEditor: true,
-} as const;
+};
 
-const BLOCKED_INHERITED_GIT_ENV_KEYS = new Set([
-  "EDITOR",
-  "GIT_ASKPASS",
-  "GIT_CONFIG",
-  "GIT_CONFIG_COUNT",
-  "GIT_CONFIG_GLOBAL",
-  // Git's own carrier for `-c` overrides, so an inherited one can set any config
-  // key (core.fsmonitor, core.sshCommand, core.hooksPath, ...). simple-git
-  // passes our config as argv `-c` and its env scanner never looks at this key.
-  "GIT_CONFIG_PARAMETERS",
-  "GIT_CONFIG_SYSTEM",
-  "GIT_EDITOR",
-  "GIT_EXEC_PATH",
-  "GIT_EXTERNAL_DIFF",
-  // The other three global pathspec modes, stripped so the hardened env owns
-  // pathspec interpretation outright instead of negotiating with whatever the
-  // user's shell exported.
-  //
-  // GLOB and ICASE are the load-bearing pair: git hard-fails when either is set
-  // alongside the GIT_LITERAL_PATHSPECS we add below — "fatal: global 'literal'
-  // pathspec setting is incompatible with all other global pathspec settings",
-  // exit 128 — which would turn every path-bearing command (diff, add, reset,
-  // checkout) into a hard failure for anyone who exports one.
-  //
-  // NOGLOB is the exception: git accepts it together with literal (verified on
-  // 2.50.1). It is stripped anyway, because inheriting a second, contradictory
-  // opinion about how to read our paths has no upside.
-  "GIT_GLOB_PATHSPECS",
-  "GIT_ICASE_PATHSPECS",
-  // Inherited GIT_MERGE_AUTOEDIT=yes would re-open the editor on
-  // `git merge --continue`; strip it so buildContinueEnv's explicit "no" wins.
-  "GIT_MERGE_AUTOEDIT",
-  "GIT_NOGLOB_PATHSPECS",
-  "GIT_PAGER",
-  "GIT_PROXY_COMMAND",
-  "GIT_SEQUENCE_EDITOR",
-  "GIT_SSH",
-  "GIT_SSH_COMMAND",
-  "GIT_TEMPLATE_DIR",
-  "PAGER",
-  "PREFIX",
-  "SSH_ASKPASS",
-  // Git's editor fallback after GIT_EDITOR and core.editor. allowUnsafeEditor
-  // is on (see UNSAFE_FLAGS), and simple-git 3.36.0 never scans VISUAL anyway.
-  "VISUAL",
-]);
+/**
+ * The only inherited `GIT_*` variables that reach git; every other one is
+ * dropped. simple-git refuses an instance whose env carries a `GIT_*` key it
+ * was not told to allow, and the rest either redirect git (GIT_DIR,
+ * GIT_WORK_TREE, GIT_INDEX_FILE), reconfigure it (GIT_CONFIG_PARAMETERS,
+ * GIT_CONFIG_COUNT, GIT_EXEC_PATH), or contradict the profile — git hard-fails
+ * when GIT_GLOB_PATHSPECS or GIT_ICASE_PATHSPECS meets our
+ * GIT_LITERAL_PATHSPECS. These only label commits, choose a CA bundle, or
+ * narrow where git looks for config and repositories.
+ */
+const INHERITED_GIT_ENV_PASSTHROUGH = [
+  "GIT_AUTHOR_NAME",
+  "GIT_AUTHOR_EMAIL",
+  "GIT_COMMITTER_NAME",
+  "GIT_COMMITTER_EMAIL",
+  "GIT_SSL_CAINFO",
+  "GIT_SSL_CAPATH",
+  "GIT_CONFIG_NOSYSTEM",
+  "GIT_CEILING_DIRECTORIES",
+] as const;
+
+const INHERITED_GIT_ENV_PASSTHROUGH_SET: ReadonlySet<string> = new Set(
+  INHERITED_GIT_ENV_PASSTHROUGH
+);
+
+/** Non-`GIT_` variables git reads as a program to run. */
+const BLOCKED_INHERITED_ENV_KEYS = new Set(["EDITOR", "PAGER", "PREFIX", "SSH_ASKPASS", "VISUAL"]);
 
 function getSanitizedProcessEnv(): NodeJS.ProcessEnv {
   const env = { ...process.env };
   for (const key of Object.keys(env)) {
-    const normalizedKey = key.toUpperCase();
-    if (
-      BLOCKED_INHERITED_GIT_ENV_KEYS.has(normalizedKey) ||
-      /^GIT_CONFIG_(KEY|VALUE)_\d+$/.test(normalizedKey)
-    ) {
-      delete env[key];
-    }
+    const normalizedKey = key.trim().toUpperCase();
+    const blocked = normalizedKey.startsWith("GIT_")
+      ? !INHERITED_GIT_ENV_PASSTHROUGH_SET.has(normalizedKey)
+      : BLOCKED_INHERITED_ENV_KEYS.has(normalizedKey);
+    if (blocked) delete env[key];
   }
   return env;
 }
@@ -350,12 +332,12 @@ export function validateCwd(cwd: unknown): asserts cwd is string {
 
 export const GIT_BLOCK_TIMEOUT_MS = 30_000;
 
-// simple-git's own rule for a `binary` value (custom-binary.plugin.ts, 3.36.0):
+// simple-git's own rule for a `binary` value (custom-binary.plugin.ts, 4.0.2):
 // an optional drive letter, then letters, digits and `/ . \ _ ~ -` only.
 const SIMPLE_GIT_BINARY_CHARACTERS = /^([a-z]:)?([a-z0-9/.\\_~-]+)$/i;
 const SIMPLE_GIT_BINARY_WARNING = "Invalid value supplied for custom binary";
 
-type SimpleGitConfig = Omit<Partial<SimpleGitOptions>, "binary" | "unsafe">;
+type SimpleGitConfig = Omit<Partial<SimpleGitOptions>, "binary" | "unsafe" | "allowEnvironment">;
 
 /**
  * On Windows, git's absolute path from PATH; elsewhere, simple-git's bare `git`.
@@ -379,16 +361,25 @@ async function nativeGitBinary(platform: NodeJS.Platform): Promise<string | unde
  * simple-git still prints a warning for each instance it accepts that way,
  * which the workspace host would forward to the log on every git call, so that
  * one line is dropped while the instance is built.
+ *
+ * `owned` is everything the profile sets on top of the sanitized process env,
+ * and the env is applied here, once: `.env()` replaces the spawn env wholesale
+ * (issue #7058), and simple-git refuses any `GIT_*` key the instance was not
+ * built to allow, so a later `.env()` adding one would throw at spawn time.
  */
 function buildSimpleGit(
   simpleGit: SimpleGitFactory,
   options: SimpleGitConfig,
-  binary?: string | [string, string]
+  binary: string | [string, string] | undefined,
+  owned: NodeJS.ProcessEnv,
+  unsafe: UnsafeFlags = UNSAFE_FLAGS
 ): SimpleGit {
-  if (binary === undefined) return simpleGit({ ...options, unsafe: UNSAFE_FLAGS });
+  const env = { ...getSanitizedProcessEnv(), ...owned };
+  const allowEnvironment = [...INHERITED_GIT_ENV_PASSTHROUGH, ...Object.keys(owned)];
+  if (binary === undefined) return simpleGit({ ...options, allowEnvironment, unsafe }).env(env);
   const parts = typeof binary === "string" ? [binary] : binary;
   if (parts.every((part) => SIMPLE_GIT_BINARY_CHARACTERS.test(part))) {
-    return simpleGit({ ...options, binary, unsafe: UNSAFE_FLAGS });
+    return simpleGit({ ...options, binary, allowEnvironment, unsafe }).env(env);
   }
   const warn = console.warn;
   console.warn = (...args: unknown[]) => {
@@ -399,8 +390,9 @@ function buildSimpleGit(
     return simpleGit({
       ...options,
       binary,
-      unsafe: { ...UNSAFE_FLAGS, allowUnsafeCustomBinary: true },
-    });
+      allowEnvironment,
+      unsafe: { ...unsafe, allowUnsafeCustomBinary: true },
+    }).env(env);
   } finally {
     console.warn = warn;
   }
@@ -428,8 +420,11 @@ export function getGitLocaleEnv(
 export function buildHardenedGitEnv(
   platform: NodeJS.Platform = process.platform
 ): NodeJS.ProcessEnv {
+  return { ...getSanitizedProcessEnv(), ...hardenedGitEnvOverrides(platform) };
+}
+
+function hardenedGitEnvOverrides(platform: NodeJS.Platform): NodeJS.ProcessEnv {
   return {
-    ...getSanitizedProcessEnv(),
     ...getGitLocaleEnv(platform),
     // Clear inherited LC_ALL so the more specific LC_CTYPE / LC_MESSAGES
     // values above actually take effect. POSIX locale resolution gives LC_ALL
@@ -454,7 +449,7 @@ export function buildHardenedGitEnv(
     // file's instead. `--` alone does not help; it only stops a leading `-`
     // being read as an option. Set here rather than per-call so no future call
     // site can reintroduce the class. The competing pathspec modes are
-    // stripped from the inherited env (see BLOCKED_INHERITED_GIT_ENV_KEYS) —
+    // stripped from the inherited env (see INHERITED_GIT_ENV_PASSTHROUGH) —
     // git errors out if any of them survives alongside this one.
     GIT_LITERAL_PATHSPECS: "1",
     // Block git's built-in TTY prompt for credentials/passphrases. Some
@@ -482,25 +477,30 @@ export function buildHardenedGitEnv(
  * --continue` has no `--no-edit` flag, so `GIT_EDITOR=true` is the only way to
  * keep it from spawning an editor in the Electron main process.
  *
- * Returns a single env object meant to be passed in one `.env()` call:
- * simple-git's `.env()` replaces the spawn env wholesale, so layering a second
- * `.env()` over `createHardenedGit` would silently drop all the hardening above
- * (issue #7058). Set the editor keys AFTER the spread — `buildHardenedGitEnv`
- * strips inherited `GIT_EDITOR`/`EDITOR` via the block list, and we re-add the
- * intentional non-interactive value here.
+ * The editor keys are set after the hardened overrides — the sanitizer strips
+ * inherited `GIT_EDITOR`/`EDITOR`/`GIT_MERGE_AUTOEDIT`, and the intentional
+ * non-interactive values are re-added here. Use it through `createContinueGit`:
+ * an instance built by `createHardenedGit` is not allowed `GIT_EDITOR` and
+ * rejects a later `.env()` carrying it.
  */
 export function buildContinueEnv(platform: NodeJS.Platform = process.platform): NodeJS.ProcessEnv {
+  return { ...getSanitizedProcessEnv(), ...continueGitEnvOverrides(platform) };
+}
+
+function continueGitEnvOverrides(platform: NodeJS.Platform): NodeJS.ProcessEnv {
   return {
-    ...buildHardenedGitEnv(platform),
+    ...hardenedGitEnvOverrides(platform),
     GIT_EDITOR: "true",
     GIT_MERGE_AUTOEDIT: "no",
   };
 }
 
-export async function createHardenedGit(
+async function buildHardenedProfile(
   cwd: string,
-  signal?: AbortSignal,
-  platform: NodeJS.Platform = process.platform
+  signal: AbortSignal | undefined,
+  platform: NodeJS.Platform,
+  owned: NodeJS.ProcessEnv,
+  unsafe: UnsafeFlags
 ): Promise<SimpleGit> {
   const { simpleGit } = await simpleGitModule;
   const binary = await nativeGitBinary(platform);
@@ -512,9 +512,64 @@ export async function createHardenedGit(
       timeout: { block: GIT_BLOCK_TIMEOUT_MS },
       ...(signal ? { abort: signal } : {}),
     },
-    binary
-  ).env(buildHardenedGitEnv(platform));
+    binary,
+    owned,
+    unsafe
+  );
 }
+
+export async function createHardenedGit(
+  cwd: string,
+  signal?: AbortSignal,
+  platform: NodeJS.Platform = process.platform
+): Promise<SimpleGit> {
+  return buildHardenedProfile(
+    cwd,
+    signal,
+    platform,
+    hardenedGitEnvOverrides(platform),
+    UNSAFE_FLAGS
+  );
+}
+
+/**
+ * Hardened profile for `rebase/merge/cherry-pick/revert --continue`: the only
+ * one allowed to set an editor, and only the non-interactive `true` from
+ * `buildContinueEnv`.
+ */
+export async function createContinueGit(
+  cwd: string,
+  signal?: AbortSignal,
+  platform: NodeJS.Platform = process.platform
+): Promise<SimpleGit> {
+  return buildHardenedProfile(cwd, signal, platform, continueGitEnvOverrides(platform), {
+    ...UNSAFE_FLAGS,
+    allowUnsafeEditor: true,
+  });
+}
+
+/**
+ * Hardened profile that may bind a repository explicitly with the global
+ * `--git-dir` / `--work-tree` options, for probes that must read a module store
+ * or checkout that upward discovery would resolve to the wrong repository.
+ * simple-git files those options under config paths and refuses them otherwise.
+ */
+export async function createBoundRepositoryGit(
+  cwd: string,
+  signal?: AbortSignal,
+  platform: NodeJS.Platform = process.platform
+): Promise<SimpleGit> {
+  return buildHardenedProfile(cwd, signal, platform, hardenedGitEnvOverrides(platform), {
+    ...UNSAFE_FLAGS,
+    allowUnsafeConfigPaths: true,
+  });
+}
+
+/** Variables `createWslHardenedGit` names in WSLENV so they cross into the distro. */
+const WSLENV_FORWARDED: ReadonlySet<string> = new Set([
+  "GIT_LITERAL_PATHSPECS",
+  "GIT_TEST_DISALLOW_ABBREVIATED_OPTIONS",
+]);
 
 export interface WslGitInvocation {
   /** WSL distro name extracted from the worktree's UNC path. */
@@ -598,55 +653,59 @@ export async function createWslHardenedGit(
       timeout: { block: GIT_BLOCK_TIMEOUT_MS },
       ...(signal ? { abort: signal } : {}),
     },
-    [windowsSystemTool("wsl.exe"), "git"]
-  ).env({
-    ...getSanitizedProcessEnv(),
-    LC_CTYPE: "C.UTF-8",
-    LC_ALL: "",
-    LC_MESSAGES: "C",
-    LANGUAGE: "",
-    GIT_OPTIONAL_LOCKS: "0",
-    // Surface the targeted distro to wsl.exe via env. wsl.exe doesn't honour
-    // WSL_DISTRO_NAME for selection (it uses the default distro), but having
-    // this env var present makes diagnostic output unambiguous if the user
-    // captures process state during a hang.
-    WSL_DISTRO_NAME: distro,
-    // The git binary inside WSL is Linux git, so the same non-interactive +
-    // lock-suppression hardening that createHardenedGit applies on POSIX
-    // must reach the WSL distro too. GCM_INTERACTIVE is harmless inside
-    // WSL (no GCM there) but kept for defense in depth in case wsl.exe ever
-    // surfaces it back to the host credential helper chain.
-    //
-    // Setting a variable here is NOT enough to make the Linux process see it:
-    // wsl.exe forwards only the variables named in WSLENV (plus PATH and the
-    // proxy trio), and drops everything else. `GIT_LITERAL_PATHSPECS` has to
-    // cross, because this route runs pathspec-bearing commands with real
-    // filenames — `getWorktreeChangesWithStats` reaches the `--numstat ... --
-    // <paths>` calls in utils/git.ts through `gitForChanges`. So it is
-    // declared below with the `/u` flag (share Windows → Linux); `/u` rather
-    // than `/p` because it is a flag, not a path to translate.
-    //
-    // The credential/prompt vars beneath it predate this and are NOT in
-    // WSLENV, so they do not currently reach the distro either. Left alone on
-    // purpose: routing them through would newly change credential-prompt
-    // behaviour inside WSL, which needs a Windows box to verify and belongs in
-    // its own change rather than riding along with a pathspec fix.
-    GIT_LITERAL_PATHSPECS: "1",
-    // Colon-delimited on BOTH sides — WSLENV is read by the interop layer, not
-    // by Windows, so it does not follow the `;` convention that PATH-style
-    // Windows variables use. Any inherited value is extended rather than
-    // replaced, and a pre-existing entry for this variable is dropped first so
-    // the list cannot accumulate duplicates across nested launches.
-    WSLENV: [
-      ...(process.env.WSLENV ?? "")
-        .split(":")
-        .filter((entry) => entry && entry.split("/")[0] !== "GIT_LITERAL_PATHSPECS"),
-      "GIT_LITERAL_PATHSPECS/u",
-    ].join(":"),
-    GIT_TERMINAL_PROMPT: "0",
-    GIT_ASKPASS: "true",
-    GCM_INTERACTIVE: "Never",
-  });
+    [windowsSystemTool("wsl.exe"), "git"],
+    {
+      LC_CTYPE: "C.UTF-8",
+      LC_ALL: "",
+      LC_MESSAGES: "C",
+      LANGUAGE: "",
+      GIT_OPTIONAL_LOCKS: "0",
+      // Surface the targeted distro to wsl.exe via env. wsl.exe doesn't honour
+      // WSL_DISTRO_NAME for selection (it uses the default distro), but having
+      // this env var present makes diagnostic output unambiguous if the user
+      // captures process state during a hang.
+      WSL_DISTRO_NAME: distro,
+      // The git binary inside WSL is Linux git, so the same non-interactive +
+      // lock-suppression hardening that createHardenedGit applies on POSIX
+      // must reach the WSL distro too. GCM_INTERACTIVE is harmless inside
+      // WSL (no GCM there) but kept for defense in depth in case wsl.exe ever
+      // surfaces it back to the host credential helper chain.
+      //
+      // Setting a variable here is NOT enough to make the Linux process see it:
+      // wsl.exe forwards only the variables named in WSLENV (plus PATH and the
+      // proxy trio), and drops everything else. `GIT_LITERAL_PATHSPECS` has to
+      // cross, because this route runs pathspec-bearing commands with real
+      // filenames — `getWorktreeChangesWithStats` reaches the `--numstat ... --
+      // <paths>` calls in utils/git.ts through `gitForChanges`. So it is
+      // declared below with the `/u` flag (share Windows → Linux); `/u` rather
+      // than `/p` because it is a flag, not a path to translate.
+      //
+      // The credential/prompt vars beneath it predate this and are NOT in
+      // WSLENV, so they do not currently reach the distro either. Left alone on
+      // purpose: routing them through would newly change credential-prompt
+      // behaviour inside WSL, which needs a Windows box to verify and belongs in
+      // its own change rather than riding along with a pathspec fix.
+      GIT_LITERAL_PATHSPECS: "1",
+      // Colon-delimited on BOTH sides — WSLENV is read by the interop layer, not
+      // by Windows, so it does not follow the `;` convention that PATH-style
+      // Windows variables use. Any inherited value is extended rather than
+      // replaced, and a pre-existing entry for this variable is dropped first so
+      // the list cannot accumulate duplicates across nested launches.
+      //
+      // GIT_TEST_DISALLOW_ABBREVIATED_OPTIONS is set by simple-git itself on
+      // every spawn, and it is git, not simple-git, that refuses an abbreviated
+      // long option — so the Linux git has to receive it too.
+      WSLENV: [
+        ...(process.env.WSLENV ?? "")
+          .split(":")
+          .filter((entry) => entry && !WSLENV_FORWARDED.has(entry.split("/")[0])),
+        ...[...WSLENV_FORWARDED].map((name) => `${name}/u`),
+      ].join(":"),
+      GIT_TERMINAL_PROMPT: "0",
+      GIT_ASKPASS: "true",
+      GCM_INTERACTIVE: "Never",
+    }
+  );
 }
 
 const USER_SSH_COMMAND_TTL_MS = 60_000;
@@ -732,6 +791,14 @@ export async function createAuthenticatedGit(
   cwd: string,
   opts: AuthenticatedGitOptions = {}
 ): Promise<SimpleGit> {
+  return buildAuthenticatedGit(cwd, opts, {});
+}
+
+async function buildAuthenticatedGit(
+  cwd: string,
+  opts: AuthenticatedGitOptions,
+  extraEnv: NodeJS.ProcessEnv
+): Promise<SimpleGit> {
   const { signal, progress, extraConfig, platform = process.platform } = opts;
   const { simpleGit } = await simpleGitModule;
   const sshCommand = await resolveAuthenticatedSshCommand();
@@ -745,26 +812,27 @@ export async function createAuthenticatedGit(
       ...(signal ? { abort: signal } : {}),
       ...(progress ? { progress } : {}),
     },
-    binary
-  ).env({
-    ...getSanitizedProcessEnv(),
-    ...getGitLocaleEnv(),
-    LC_ALL: "",
-    LC_MESSAGES: "C",
-    LANGUAGE: "",
-    GIT_TERMINAL_PROMPT: "0",
-    GIT_SSH_COMMAND: sshCommand,
-    // Same lock-suppression and Windows-GCM hardening as createHardenedGit.
-    // GIT_ASKPASS is intentionally NOT set here — credentialed commands
-    // (clone/push) need legitimate ASKPASS resolution.
-    // GIT_LITERAL_PATHSPECS matches the hardened profile: this factory is for
-    // network commands that take refspecs rather than pathspecs today, but
-    // pinning it keeps the guarantee whole if a pathspec-bearing command is
-    // ever routed through the authenticated profile.
-    GIT_LITERAL_PATHSPECS: "1",
-    GIT_OPTIONAL_LOCKS: "0",
-    GCM_INTERACTIVE: "Never",
-  });
+    binary,
+    {
+      ...getGitLocaleEnv(platform),
+      LC_ALL: "",
+      LC_MESSAGES: "C",
+      LANGUAGE: "",
+      GIT_TERMINAL_PROMPT: "0",
+      GIT_SSH_COMMAND: sshCommand,
+      // Same lock-suppression and Windows-GCM hardening as createHardenedGit.
+      // GIT_ASKPASS is intentionally NOT set here — credentialed commands
+      // (clone/push) need legitimate ASKPASS resolution.
+      // GIT_LITERAL_PATHSPECS matches the hardened profile: this factory is for
+      // network commands that take refspecs rather than pathspecs today, but
+      // pinning it keeps the guarantee whole if a pathspec-bearing command is
+      // ever routed through the authenticated profile.
+      GIT_LITERAL_PATHSPECS: "1",
+      GIT_OPTIONAL_LOCKS: "0",
+      GCM_INTERACTIVE: "Never",
+      ...extraEnv,
+    }
+  );
 }
 
 /**
@@ -794,9 +862,8 @@ export interface BackgroundFetchGitOptions {
 }
 
 /**
- * SimpleGit instance for background `git fetch` invocations. Wraps
- * `createAuthenticatedGit` so the system credential helper still works for
- * HTTPS remotes, but layers on:
+ * SimpleGit instance for background `git fetch` invocations. The authenticated
+ * profile, so the system credential helper still works for HTTPS remotes, plus:
  *   - lock-friendly config (see `BACKGROUND_FETCH_CONFIG`)
  *   - `GIT_ASKPASS=true` on POSIX so credential helpers that ignore
  *     `GIT_TERMINAL_PROMPT=0` fail fast instead of hanging on a TTY prompt
@@ -811,29 +878,14 @@ export async function createBackgroundFetchGit(
   opts: BackgroundFetchGitOptions
 ): Promise<SimpleGit> {
   const { signal, progress, extraConfig, platform = process.platform } = opts;
-  const git = await createAuthenticatedGit(cwd, {
-    signal,
-    progress,
-    extraConfig: [...BACKGROUND_FETCH_CONFIG, ...(extraConfig ?? [])],
-    platform,
-  });
-  if (platform !== "win32") {
-    return git.env({
-      ...getSanitizedProcessEnv(),
-      ...getGitLocaleEnv(platform),
-      LC_ALL: "",
-      LC_MESSAGES: "C",
-      LANGUAGE: "",
-      GIT_TERMINAL_PROMPT: "0",
-      GIT_SSH_COMMAND: await resolveAuthenticatedSshCommand(),
-      GIT_ASKPASS: "true",
-      // simple-git's .env() replaces the env wholesale, so the hardening
-      // flags from createAuthenticatedGit's first .env() call must be
-      // re-stated here or they will be lost on POSIX.
-      GIT_OPTIONAL_LOCKS: "0",
-      GIT_LITERAL_PATHSPECS: "1",
-      GCM_INTERACTIVE: "Never",
-    });
-  }
-  return git;
+  return buildAuthenticatedGit(
+    cwd,
+    {
+      signal,
+      progress,
+      extraConfig: [...BACKGROUND_FETCH_CONFIG, ...(extraConfig ?? [])],
+      platform,
+    },
+    platform !== "win32" ? { GIT_ASKPASS: "true" } : {}
+  );
 }

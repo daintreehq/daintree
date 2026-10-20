@@ -33,9 +33,14 @@ export function git(cwd: string, args: string[]): string {
 }
 
 export const testGit: GitFactory = {
-  local: async (cwd) => simpleGit(cwd, { unsafe: { allowUnsafeConfigPaths: true } }).env(GIT_ENV),
+  local: async (cwd) =>
+    simpleGit(cwd, {
+      allowEnvironment: Object.keys(GIT_ENV),
+      unsafe: { allowUnsafeConfigPaths: true },
+    }).env(GIT_ENV),
   network: async (cwd, signal) =>
     simpleGit(cwd, {
+      allowEnvironment: Object.keys(GIT_ENV),
       unsafe: { allowUnsafeConfigPaths: true },
       ...(signal ? { abort: signal } : {}),
     }).env(GIT_ENV),
