@@ -226,6 +226,10 @@ vi.mock("../../../services/ProjectStore.js", () => ({
 import { registerDiagnosticsHandlers } from "../diagnostics.js";
 import type { DiagnosticsReviewPayload } from "../../../../shared/types/ipc/system.js";
 import { resetAppMetricsSnapshotForTesting } from "../../../utils/appMetricsSnapshot.js";
+import {
+  resetPhysFootprintReaderForTesting,
+  setPhysFootprintReaderForTesting,
+} from "../../../utils/processMemory.js";
 
 function getHandlerFn(channelName: string): (...args: unknown[]) => unknown {
   const call = ipcMainMock.handle.mock.calls.find((c: unknown[]) => c[0] === channelName);
@@ -493,6 +497,45 @@ describe("registerDiagnosticsHandlers", () => {
       // sum to 0 here — that's the regression this guards.
       expect(result.totalMemoryMB).toBe(290);
       expect(result.unavailable).toBeUndefined();
+    });
+
+    it("reports the GPU process at its resident size in the pressure figure only (#13637)", () => {
+      appMock.getAppMetrics.mockImplementationOnce(() => [
+        {
+          pid: 1,
+          type: "GPU",
+          name: "GPU",
+          memory: { privateBytes: 0, workingSetSize: 205 * 1024 },
+          cpu: { percentCPUUsage: 1 },
+        },
+        {
+          pid: 2,
+          type: "Browser",
+          name: "Browser",
+          memory: { privateBytes: 0, workingSetSize: 300 * 1024 },
+          cpu: { percentCPUUsage: 1 },
+        },
+      ]);
+      const footprintMb = new Map([
+        [1, 3328],
+        [2, 400],
+      ]);
+      setPhysFootprintReaderForTesting({
+        readPhysFootprints: (pids: number[]) =>
+          pids.map((pid) => (footprintMb.get(pid) ?? 0) * 1024 * 1024),
+        isAvailable: () => true,
+        getLoadError: () => null,
+      });
+      try {
+        registerDiagnosticsHandlers(deps);
+        const handler = getHandlerFn("system:get-app-metrics");
+        const result = handler() as { totalMemoryMB: number; pressureMemoryMB?: number };
+
+        expect(result.totalMemoryMB).toBe(3728);
+        expect(result.pressureMemoryMB).toBe(605);
+      } finally {
+        resetPhysFootprintReaderForTesting();
+      }
     });
 
     it("flags unavailable instead of returning a misleading 0 on error", () => {

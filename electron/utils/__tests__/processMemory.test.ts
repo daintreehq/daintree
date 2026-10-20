@@ -12,6 +12,7 @@ vi.mock("../logger.js", () => ({ logWarn: logWarnMock }));
 import {
   attachPhysFootprints,
   getMetricsMemorySource,
+  getPressureMemoryKb,
   getProcessMemoryKb,
   readPhysFootprintsKb,
   resetPhysFootprintReaderForTesting,
@@ -219,6 +220,30 @@ describe("getProcessMemoryKb", () => {
     const later = metric(100, 12_000);
 
     expect(getProcessMemoryKb(later)).toBe(12_000);
+  });
+});
+
+describe("getPressureMemoryKb", () => {
+  it("counts the GPU process at its resident size and every other process at its footprint", () => {
+    useReader();
+    // IOSurface and Metal memory charged to the GPU process (#13637).
+    readPhysFootprints.mockReturnValue([3_328 * MB, 180 * MB]);
+    const gpu = { ...metric(100, 205 * 1024), type: "GPU" } as Electron.ProcessMetric;
+    const metrics = [gpu, metric(101, 150_000)];
+
+    attachPhysFootprints(metrics);
+
+    expect(metrics.map(getProcessMemoryKb)).toEqual([3_328 * 1024, 180 * 1024]);
+    expect(metrics.map(getPressureMemoryKb)).toEqual([205 * 1024, 180 * 1024]);
+  });
+
+  it("matches getProcessMemoryKb when there is no footprint to read", () => {
+    const gpu = { ...metric(100, 205 * 1024), type: "GPU" } as Electron.ProcessMetric;
+    const metrics = [gpu, metric(101, 150_000)];
+
+    attachPhysFootprints(metrics);
+
+    expect(metrics.map(getPressureMemoryKb)).toEqual(metrics.map(getProcessMemoryKb));
   });
 });
 

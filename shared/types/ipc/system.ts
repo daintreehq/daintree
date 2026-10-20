@@ -303,8 +303,17 @@ export interface HardwareInfo {
 
 /** Summary of real app memory metrics from app.getAppMetrics() */
 export interface AppMetricsSummary {
-  /** Aggregate working-set across Daintree's Electron processes, in MB. 0 when unavailable. */
+  /**
+   * Aggregate memory across Daintree's Electron processes, in MB: physical
+   * footprint on macOS, working set elsewhere. 0 when unavailable.
+   */
   totalMemoryMB: number;
+  /**
+   * The same aggregate with the GPU process at its resident size, which is what
+   * the badge's warning thresholds compare against: its footprint is mostly
+   * graphics memory (#13637). When absent, readers fall back to the total.
+   */
+  pressureMemoryMB?: number;
   /** Set when the metric could not be read; the renderer should suppress the value rather than show 0. */
   unavailable?: true;
 }
