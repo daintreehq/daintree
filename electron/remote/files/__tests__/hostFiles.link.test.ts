@@ -976,9 +976,10 @@ describe("saving on the Shell", () => {
       const handle = await realOpen(...(args as Parameters<typeof fs.open>));
       if (String(args[0]).endsWith(".daintree-part")) {
         const stat = handle.stat.bind(handle);
-        handle.stat = (async () => {
-          const real = await stat();
-          return Object.assign(real, { size: real.size - 1 });
+        handle.stat = (async (opts?: { bigint?: boolean }) => {
+          const real = await stat(opts as { bigint: false });
+          const size = real.size as number | bigint;
+          return Object.assign(real, { size: typeof size === "bigint" ? size - 1n : size - 1 });
         }) as typeof handle.stat;
       }
       return handle;
@@ -993,6 +994,147 @@ describe("saving on the Shell", () => {
       await expectEventuallyEmpty(downloads);
     } finally {
       open.mockRestore();
+    }
+  });
+
+  function noHardLinks() {
+    return vi
+      .spyOn(fs, "link")
+      .mockRejectedValue(
+        Object.assign(new Error("operation not supported"), { code: "EOPNOTSUPP" })
+      );
+  }
+
+  it("copies into place when the destination has no hard links, never overwriting", async () => {
+    const { transport } = await setup();
+    const bytes = crypto.randomBytes(300 * 1024 + 5);
+    await fs.writeFile(path.join(project, "report.bin"), bytes);
+    await fs.writeFile(path.join(downloads, "report.bin"), "already here");
+    const link = noHardLinks();
+    try {
+      const saved = await transport.download(HOST, path.join(project, "report.bin"), {
+        webContentsId: 7,
+        destinationDir: downloads,
+      });
+      expect(link).toHaveBeenCalled();
+      expect(path.basename(saved.localPath)).toBe("report (1).bin");
+      expect(sha256(await fs.readFile(saved.localPath))).toBe(sha256(bytes));
+      expect(await fs.readFile(path.join(downloads, "report.bin"), "utf8")).toBe("already here");
+      expect((await fs.readdir(downloads)).sort()).toEqual(["report (1).bin", "report.bin"]);
+      if (process.platform === "darwin") {
+        const probe = path.join(downloads, ".xattr-probe");
+        await fs.writeFile(probe, "");
+        let tagsWork = true;
+        try {
+          execFileSync("/usr/bin/xattr", ["-w", "dev.daintree.probe", "1", probe]);
+        } catch {
+          tagsWork = false;
+        }
+        await fs.rm(probe, { force: true });
+        if (tagsWork) {
+          const tag = execFileSync("/usr/bin/xattr", [
+            "-p",
+            "com.apple.quarantine",
+            saved.localPath,
+          ]);
+          expect(tag.toString()).toMatch(/^0081;[0-9a-f]+;Daintree;/);
+        }
+      }
+    } finally {
+      link.mockRestore();
+    }
+  });
+
+  it("removes a partial copy when the fallback copy fails", async () => {
+    const { transport } = await setup();
+    await fs.writeFile(path.join(project, "broken.bin"), crypto.randomBytes(200 * 1024));
+    const link = noHardLinks();
+    const realOpen = fs.open.bind(fs);
+    let failed = false;
+    const open = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      const handle = await realOpen(...(args as Parameters<typeof fs.open>));
+      if (String(args[0]) === path.join(downloads, "broken.bin")) {
+        const write = handle.write.bind(handle) as (...a: unknown[]) => Promise<unknown>;
+        let calls = 0;
+        // The first chunk lands, so the target is genuinely partial when the disk fills.
+        handle.write = ((...a: unknown[]) => {
+          if (++calls === 1) return write(...a);
+          failed = true;
+          return Promise.reject(new Error("disk full"));
+        }) as typeof handle.write;
+      }
+      return handle;
+    });
+    try {
+      await expect(
+        transport.download(HOST, path.join(project, "broken.bin"), {
+          webContentsId: 7,
+          destinationDir: downloads,
+        })
+      ).rejects.toThrow();
+      expect(failed).toBe(true);
+      await expectEventuallyEmpty(downloads);
+    } finally {
+      open.mockRestore();
+      link.mockRestore();
+    }
+  });
+
+  it("discards a fallback copy cancelled while it is being written", async () => {
+    const { transport } = await setup();
+    await fs.writeFile(path.join(project, "slow.bin"), crypto.randomBytes(200 * 1024));
+    const link = noHardLinks();
+    const controller = new AbortController();
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    let copyStarted!: () => void;
+    const started = new Promise<void>((resolve) => (copyStarted = resolve));
+    const realOpen = fs.open.bind(fs);
+    const open = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      const handle = await realOpen(...(args as Parameters<typeof fs.open>));
+      if (String(args[0]) === path.join(downloads, "slow.bin")) {
+        const write = handle.write.bind(handle) as (...a: unknown[]) => Promise<unknown>;
+        handle.write = (async (...a: unknown[]) => {
+          copyStarted();
+          await held;
+          return write(...a);
+        }) as typeof handle.write;
+      }
+      return handle;
+    });
+    try {
+      const pending = transport.download(HOST, path.join(project, "slow.bin"), {
+        webContentsId: 7,
+        destinationDir: downloads,
+        signal: controller.signal,
+      });
+      await started;
+      controller.abort();
+      release();
+      await expect(pending).rejects.toMatchObject({ code: "CANCELLED" });
+      await expectEventuallyEmpty(downloads);
+    } finally {
+      open.mockRestore();
+      link.mockRestore();
+    }
+  });
+
+  it("still fails on a link error a copy would not fix", async () => {
+    const { transport } = await setup();
+    await fs.writeFile(path.join(project, "denied.bin"), "bytes");
+    const link = vi
+      .spyOn(fs, "link")
+      .mockRejectedValue(Object.assign(new Error("no space"), { code: "ENOSPC" }));
+    try {
+      await expect(
+        transport.download(HOST, path.join(project, "denied.bin"), {
+          webContentsId: 7,
+          destinationDir: downloads,
+        })
+      ).rejects.toMatchObject({ code: "ENOSPC" });
+      await expectEventuallyEmpty(downloads);
+    } finally {
+      link.mockRestore();
     }
   });
 });
