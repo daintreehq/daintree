@@ -46,21 +46,24 @@ interface LayoutUndoState {
   clearHistory: () => void;
 }
 
+// Ephemeral panels sit outside layout history: a dialog panel captured in a
+// snapshot is gone the moment the dialog closes, and `applySnapshot` rejects a
+// whole snapshot whose ids no longer resolve — one file peek would void the undo
+// entry. Outside history means untouched by it, so apply carries them verbatim.
+function isExcludedFromLayout(panel: CarrierPanel): boolean {
+  return (
+    panel.location === "trash" ||
+    panel.location === "dialog" ||
+    panel.excludeFromPersistence === true
+  );
+}
+
 function captureCurrentLayout(): LayoutSnapshot {
   const state = usePanelStore.getState();
   return {
     terminals: state.panelIds
       .map((id) => state.panelsById[id])
-      // Ephemeral panels are excluded: a dialog panel captured here is gone the
-      // moment the dialog closes, and `applySnapshot` rejects a whole snapshot
-      // whose ids no longer resolve — one file peek would void the undo entry.
-      .filter(
-        (t): t is CarrierPanel =>
-          Boolean(t) &&
-          t!.location !== "trash" &&
-          t!.location !== "dialog" &&
-          t!.excludeFromPersistence !== true
-      )
+      .filter((t): t is CarrierPanel => Boolean(t) && !isExcludedFromLayout(t!))
       .map((t) => ({
         id: t.id,
         location: t.location,
@@ -97,6 +100,25 @@ function applySnapshot(snapshot: LayoutSnapshot): boolean {
   // is all-or-nothing. Members read their effective location from the (possibly
   // rescued) group location below so a member and its group never disagree.
   const restoredGroups = structuredClone(snapshot.tabGroups);
+  // A panel trashed or moved into a dialog since the snapshot left its group
+  // then; restoring that membership would hand a tab strip a panel it can't
+  // render, and a group needs two members to exist at all.
+  for (const [groupId, group] of restoredGroups) {
+    const members = group.panelIds.filter((pid) => {
+      const live = panelsById[pid];
+      return !live || !isExcludedFromLayout(live);
+    });
+    if (members.length === group.panelIds.length) continue;
+    if (members.length <= 1) {
+      restoredGroups.delete(groupId);
+      continue;
+    }
+    restoredGroups.set(groupId, {
+      ...group,
+      panelIds: members,
+      activeTabId: members.includes(group.activeTabId) ? group.activeTabId : members[0]!,
+    });
+  }
   const groupOverrideByPanelId = new Map<
     string,
     { location: TabGroupLocation; worktreeId?: string }
@@ -131,18 +153,13 @@ function applySnapshot(snapshot: LayoutSnapshot): boolean {
     }
   }
 
-  // Build combined entry list: snapshot entries first, then post-snapshot terminals.
-  // Post-snapshot terminals go at the end so they're overflowed first by capacity clamping.
+  // Build combined entry list: snapshot entries first, then post-snapshot panels.
+  // The rebuild below replaces the whole registry, so every live panel must be
+  // listed here — including the ones excluded from history (#13560).
   const postSnapshotEntries: TerminalLayoutEntry[] = [];
   for (const tid of panelIds) {
     const t = panelsById[tid];
-    if (
-      t &&
-      !snapshotIds.has(t.id) &&
-      t.location !== "trash" &&
-      t.location !== "dialog" &&
-      t.excludeFromPersistence !== true
-    ) {
+    if (t && !snapshotIds.has(t.id)) {
       postSnapshotEntries.push({ id: t.id, location: t.location, worktreeId: t.worktreeId });
     }
   }
@@ -155,6 +172,13 @@ function applySnapshot(snapshot: LayoutSnapshot): boolean {
   for (const entry of allEntries) {
     const current = panelsById[entry.id];
     if (!current) continue;
+    // An excluded panel keeps its live lifecycle — a snapshot entry from before
+    // it was trashed must not drag it back out of the trash.
+    if (isExcludedFromLayout(current)) {
+      newTerminalsById[entry.id] = current;
+      newTerminalIds.push(entry.id);
+      continue;
+    }
     // A grouped panel follows its group's (normalized) location and adopted
     // worktree; an ungrouped panel normalizes its own entry location. Either way
     // a non-dockable kind never lands back in the dock (#11375).
@@ -189,6 +213,13 @@ function applySnapshot(snapshot: LayoutSnapshot): boolean {
     activeDockPanel.location === "dock" &&
     panelKindIsDockable(activeDockPanel.kind ?? "terminal");
 
+  // Focus and maximize must not land on a panel that has since gone to the
+  // trash or a dialog — neither renders in the layout the snapshot restores.
+  const layoutPointer = (id: string | null): string | null => {
+    const target = id ? newTerminalsById[id] : undefined;
+    return target && (target.location === "trash" || target.location === "dialog") ? null : id;
+  };
+
   const worktreeBefore = new Map<string, string | undefined>();
   for (const id of newTerminalIds) worktreeBefore.set(id, panelsById[id]?.worktreeId);
 
@@ -200,8 +231,8 @@ function applySnapshot(snapshot: LayoutSnapshot): boolean {
     // otherwise see stale buckets after an undo of a cross-worktree move.
     panelIdsByWorktreeId: buildWorktreeIndex(newTerminalIds, newTerminalsById),
     tabGroups: restoredGroups,
-    focusedId: snapshot.focusedId,
-    maximizedId: snapshot.maximizedId,
+    focusedId: layoutPointer(snapshot.focusedId),
+    maximizedId: layoutPointer(snapshot.maximizedId),
     activeDockTerminalId: activeDockStillValid ? restoredActiveDock : null,
   });
 

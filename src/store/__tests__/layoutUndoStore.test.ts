@@ -439,6 +439,119 @@ describe("layoutUndoStore", () => {
     expect(allTerminals[1]!.location).toBe("dock");
   });
 
+  describe("panels excluded from layout history (#13560)", () => {
+    const excludedCases: Array<[string, Partial<PtyPanelData>]> = [
+      ["trashed", { location: "trash", worktreeId: "w1" }],
+      ["dialog", { location: "dialog", worktreeId: "w1" }],
+      ["excludeFromPersistence", { location: "grid", excludeFromPersistence: true }],
+    ];
+
+    it.each(excludedCases)("undo and redo keep an untouched %s panel", (_label, overrides) => {
+      const normal = makeTerminal({ id: "normal", location: "grid" });
+      const excluded = makeTerminal({ id: "excluded", ...overrides });
+      seedTerminals([normal, excluded]);
+
+      useLayoutUndoStore.getState().pushLayoutSnapshot();
+      setTerminals([{ ...normal, location: "dock" }, excluded]);
+
+      useLayoutUndoStore.getState().undo();
+
+      let state = usePanelStore.getState();
+      expect(state.panelsById["normal"]!.location).toBe("grid");
+      expect(state.panelsById["excluded"]).toEqual(excluded);
+      expect(state.panelIds).toEqual(["normal", "excluded"]);
+
+      useLayoutUndoStore.getState().redo();
+
+      state = usePanelStore.getState();
+      expect(state.panelsById["normal"]!.location).toBe("dock");
+      expect(state.panelsById["excluded"]).toEqual(excluded);
+      expect(state.panelIds).toEqual(["normal", "excluded"]);
+    });
+
+    it("keeps a trashed panel's worktree index entry across undo", () => {
+      const normal = makeTerminal({ id: "normal", location: "grid", worktreeId: "w1" });
+      const trashed = makeTerminal({ id: "trashed", location: "trash", worktreeId: "w1" });
+      seedTerminals([normal, trashed]);
+
+      useLayoutUndoStore.getState().pushLayoutSnapshot();
+      setTerminals([{ ...normal, location: "dock" }, trashed]);
+      useLayoutUndoStore.getState().undo();
+
+      expect(usePanelStore.getState().panelIdsByWorktreeId["w1"]).toEqual(["normal", "trashed"]);
+    });
+
+    it("does not un-trash a panel captured in the snapshot and trashed afterwards", () => {
+      const normal = makeTerminal({ id: "normal", location: "grid" });
+      const later = makeTerminal({ id: "later", location: "dock" });
+      seedTerminals([normal, later]);
+
+      useLayoutUndoStore.getState().pushLayoutSnapshot();
+      setTerminals([
+        { ...normal, location: "dock" },
+        { ...later, location: "trash" },
+      ]);
+      useLayoutUndoStore.getState().undo();
+
+      const state = usePanelStore.getState();
+      expect(state.panelsById["normal"]!.location).toBe("grid");
+      expect(state.panelsById["later"]!.location).toBe("trash");
+      expect(state.panelIds).toEqual(["normal", "later"]);
+    });
+
+    it("drops a since-trashed member from a restored group and clears pointers to it", () => {
+      const a = makeTerminal({ id: "a", location: "grid" });
+      const b = makeTerminal({ id: "b", location: "grid" });
+      const c = makeTerminal({ id: "c", location: "grid" });
+      seedTerminals([a, b, c]);
+      const group: TabGroup = {
+        id: "g1",
+        location: "grid",
+        panelIds: ["a", "b", "c"],
+        activeTabId: "b",
+      };
+      usePanelStore.setState({
+        tabGroups: new Map([["g1", group]]),
+        focusedId: "b",
+        maximizedId: "b",
+      });
+
+      useLayoutUndoStore.getState().pushLayoutSnapshot();
+      setTerminals([a, { ...b, location: "trash" }, { ...c, location: "dock" }]);
+      usePanelStore.setState({ tabGroups: new Map(), focusedId: "a", maximizedId: null });
+      useLayoutUndoStore.getState().undo();
+
+      const state = usePanelStore.getState();
+      expect(state.panelsById["b"]!.location).toBe("trash");
+      expect(state.panelsById["c"]!.location).toBe("grid");
+      const restored = state.tabGroups.get("g1");
+      expect(restored?.panelIds).toEqual(["a", "c"]);
+      expect(restored?.activeTabId).toBe("a");
+      expect(state.focusedId).toBeNull();
+      expect(state.maximizedId).toBeNull();
+    });
+
+    it("deletes a restored group left with a single layout member", () => {
+      const a = makeTerminal({ id: "a", location: "grid" });
+      const b = makeTerminal({ id: "b", location: "grid" });
+      seedTerminals([a, b]);
+      usePanelStore.setState({
+        tabGroups: new Map([
+          ["g1", { id: "g1", location: "grid", panelIds: ["a", "b"], activeTabId: "a" }],
+        ]),
+      });
+
+      useLayoutUndoStore.getState().pushLayoutSnapshot();
+      setTerminals([a, { ...b, location: "dialog" }]);
+      usePanelStore.setState({ tabGroups: new Map() });
+      useLayoutUndoStore.getState().undo();
+
+      const state = usePanelStore.getState();
+      expect(state.tabGroups.has("g1")).toBe(false);
+      expect(state.panelsById["b"]!.location).toBe("dialog");
+    });
+  });
+
   // Scrollable panel grid (#8805): undo no longer clamps panels to the
   // screen-fit capacity. The grid scrolls vertically, so restoring a snapshot
   // returns every panel to its captured location regardless of how many fit.
