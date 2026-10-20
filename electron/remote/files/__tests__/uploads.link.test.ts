@@ -73,6 +73,7 @@ async function setup(
     leaseId?: () => number | null;
     rootsFor?: (projectId: string) => Promise<string[]>;
     outcomeTtlMs?: number;
+    maxPendingPerSession?: number;
   } = {}
 ) {
   const { host, client } = await openSessionPair(socketDir);
@@ -83,6 +84,7 @@ async function setup(
     rootsFor: options.rootsFor ?? (async (projectId) => (projectId === "p1" ? [project] : [])),
     isDriving: () => options.driving?.() ?? true,
     outcomeTtlMs: options.outcomeTtlMs,
+    maxPendingPerSession: options.maxPendingPerSession,
     leaseIdFor: () => (options.leaseId ? options.leaseId() : 1),
     inbox,
     freeBytes: async () => (options.freeBytes === undefined ? null : options.freeBytes),
@@ -668,6 +670,129 @@ describe("operation records", () => {
     await new Promise((resolve) => setTimeout(resolve, 5));
     await prepare("op-next", "two");
     expect([...records(service).keys()].some((key) => key.endsWith("op-abandoned"))).toBe(false);
+  });
+});
+
+describe("pending upload limit", () => {
+  const prepareInbox = (client: LinkSession, opId: string, content: string) => {
+    const source = TEXT(content);
+    return client.call(UploadLinkMethod.PREPARE, {
+      endpointId: "view-7",
+      name: `${opId}.txt`,
+      size: source.size,
+      sha256: source.sha256,
+      opId,
+      destination: { kind: "inbox", bucket: "files" },
+    }) as Promise<{ status: string; reason?: string; token?: string }>;
+  };
+
+  function gateEnsure(inbox: HostInbox) {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const realEnsure = inbox.ensure.bind(inbox);
+    const ensure = vi.spyOn(inbox, "ensure").mockImplementation(async () => {
+      await gate;
+      await realEnsure();
+    });
+    return { ensure, release };
+  }
+
+  it("counts a prepare still checking its destination toward the limit", async () => {
+    const { client, inbox } = await setup({ maxPendingPerSession: 1 });
+    const { ensure, release } = gateEnsure(inbox);
+    try {
+      const first = prepareInbox(client, "op-first", "one");
+      await vi.waitFor(() => expect(ensure).toHaveBeenCalledTimes(1));
+      expect(await prepareInbox(client, "op-second", "two")).toEqual({
+        status: "refused",
+        reason: "busy",
+      });
+      expect(ensure).toHaveBeenCalledTimes(1);
+      release();
+      expect(await first).toMatchObject({ status: "ready" });
+    } finally {
+      release();
+    }
+  });
+
+  it("holds the default limit when every prepare is in flight at once", async () => {
+    const { client, inbox } = await setup();
+    const { ensure, release } = gateEnsure(inbox);
+    try {
+      const answers = Array.from({ length: 17 }, (_, i) =>
+        prepareInbox(client, `op-${i}`, `c${i}`)
+      );
+      await vi.waitFor(() => expect(ensure).toHaveBeenCalledTimes(16));
+      release();
+      const settled = await Promise.all(answers);
+      expect(settled.filter((answer) => answer.status === "ready")).toHaveLength(16);
+      expect(settled.filter((answer) => answer.status === "refused")).toEqual([
+        { status: "refused", reason: "busy" },
+      ]);
+    } finally {
+      release();
+    }
+  });
+
+  it("keeps the slot through the ready token until its bytes are sent", async () => {
+    const { client } = await setup({ maxPendingPerSession: 1 });
+    const source = TEXT("one");
+    const prepared = await client.call(UploadLinkMethod.PREPARE, {
+      endpointId: "view-7",
+      name: "one.txt",
+      size: source.size,
+      sha256: source.sha256,
+      opId: "op-one",
+      destination: { kind: "inbox", bucket: "files" },
+    });
+    const { token } = prepared as { status: string; token: string };
+    expect(prepared).toMatchObject({ status: "ready" });
+    expect(await prepareInbox(client, "op-two", "two")).toEqual({
+      status: "refused",
+      reason: "busy",
+    });
+    await client.transfers.send(source, {
+      name: "one.txt",
+      destination: { kind: "path", path: `${UPLOAD_SINK_PREFIX}${token}` },
+    });
+    expect(await prepareInbox(client, "op-three", "three")).toMatchObject({ status: "ready" });
+  });
+
+  it("gives the slot back when a prepare fails, is refused, or finds a duplicate", async () => {
+    const { client, inbox, upload } = await setup({ maxPendingPerSession: 1 });
+    const existing = await upload(TEXT("already here"), "dup.txt");
+
+    const ensure = vi.spyOn(inbox, "ensure").mockRejectedValueOnce(new Error("disk gone"));
+    await expect(prepareInbox(client, "op-fails", "x")).rejects.toBeTruthy();
+    expect(ensure).toHaveBeenCalledTimes(1);
+
+    const outsideSource = TEXT("elsewhere");
+    expect(
+      await client.call(UploadLinkMethod.PREPARE, {
+        endpointId: "view-7",
+        name: "elsewhere.txt",
+        size: outsideSource.size,
+        sha256: outsideSource.sha256,
+        opId: "op-outside",
+        destination: { kind: "worktree", directory: outside },
+      })
+    ).toEqual({ status: "refused", reason: "outside-project" });
+
+    const source = TEXT("already here");
+    expect(
+      await client.call(UploadLinkMethod.PREPARE, {
+        endpointId: "view-7",
+        name: "dup.txt",
+        size: source.size,
+        sha256: source.sha256,
+        opId: "op-dup",
+        destination: { kind: "inbox", bucket: "files" },
+      })
+    ).toEqual({ status: "duplicate", hostPath: existing.hostPath });
+
+    expect(await prepareInbox(client, "op-after", "y")).toMatchObject({ status: "ready" });
   });
 });
 
