@@ -273,6 +273,72 @@ export function parseNumstat(diffOutput: string, gitRoot: string): Map<string, D
   return stats;
 }
 
+export interface NameStatusEntry {
+  status: string;
+  path: string;
+  oldPath?: string;
+}
+
+/**
+ * Parse `git diff --name-status -z`. Paths arrive as raw bytes with no
+ * C-quoting, so a trailing space, tab, quote or newline in a name survives
+ * exactly; renames and copies carry two path fields.
+ */
+export function parseNameStatusZ(output: string): NameStatusEntry[] {
+  const fields = output.split("\0");
+  const entries: NameStatusEntry[] = [];
+  let i = 0;
+  while (i < fields.length) {
+    const status = fields[i++];
+    if (!status) continue;
+    if (status[0] === "R" || status[0] === "C") {
+      const oldPath = fields[i++];
+      const path = fields[i++];
+      if (oldPath === undefined || path === undefined) break;
+      entries.push({ status, path, oldPath });
+    } else {
+      const path = fields[i++];
+      if (path === undefined) break;
+      entries.push({ status, path });
+    }
+  }
+  return entries;
+}
+
+/**
+ * Parse `git diff --numstat -z` into a map keyed by the exact repo-relative
+ * path. A rename record leaves the path field empty and follows it with the
+ * old and new paths; its churn is keyed under the new path.
+ */
+export function parseNumstatZ(output: string): Map<string, DiffStat> {
+  const fields = output.split("\0");
+  const stats = new Map<string, DiffStat>();
+  const toCount = (raw: string) => {
+    if (raw === "-") return null;
+    const value = Number.parseInt(raw, 10);
+    return Number.isNaN(value) ? null : value;
+  };
+  let i = 0;
+  while (i < fields.length) {
+    const record = fields[i++];
+    if (!record) continue;
+    const firstTab = record.indexOf("\t");
+    const secondTab = firstTab === -1 ? -1 : record.indexOf("\t", firstTab + 1);
+    if (secondTab === -1) continue;
+    let path = record.slice(secondTab + 1);
+    if (path === "") {
+      i++; // old path of a rename
+      path = fields[i++] ?? "";
+      if (!path) continue;
+    }
+    stats.set(path, {
+      insertions: toCount(record.slice(0, firstTab)),
+      deletions: toCount(record.slice(firstTab + 1, secondTab)),
+    });
+  }
+  return stats;
+}
+
 /**
  * Commit count on the checked-out branch.
  *

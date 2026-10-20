@@ -1,7 +1,7 @@
 // eager-import-allow: performs sync fs existence checks while resolving git paths
 import type { SimpleGit, BranchSummary } from "simple-git";
 import { resolve, dirname, normalize, sep, isAbsolute } from "path";
-import { existsSync, realpathSync } from "fs";
+import { existsSync } from "fs";
 import { readFile, stat } from "fs/promises";
 import { logDebug, logError, logWarn } from "../utils/logger.js";
 import { newFileDiff } from "../utils/newFileDiff.js";
@@ -14,8 +14,7 @@ import { validateBranchName } from "../../shared/utils/pathPattern.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { isMissingGitExecutableError } from "../../shared/utils/gitOperationErrors.js";
 import { isBinaryDiffOutput } from "../../shared/utils/gitDiffParsing.js";
-import { parseNumstat } from "../utils/git.js";
-import type { DiffStat } from "../utils/git.js";
+import { parseNameStatusZ, parseNumstatZ } from "../utils/git.js";
 import { branchRefName, readBranchCommitterDates } from "../utils/branchCommitterDates.js";
 
 function escapeRegex(str: string): string {
@@ -660,12 +659,16 @@ export class GitService {
     // Return the list of changed files with per-file churn (--numstat)
     try {
       const git = await this.getGit();
-      const [nameStatusOutput, numstatOutput, toplevel] = await Promise.all([
+      // `-z` turns off Git's C-quoting and line framing, so names with a
+      // trailing space, tab, quote or newline come back byte-exact and can be
+      // handed straight to the per-file diff above (#13572).
+      const [nameStatusOutput, numstatOutput] = await Promise.all([
         git.raw([
           "diff",
           "--no-ext-diff",
           "--no-textconv",
           "--name-status",
+          "-z",
           ...(ignoreWhitespace ? ["--ignore-all-space"] : []),
           "--end-of-options",
           range,
@@ -677,6 +680,7 @@ export class GitService {
             "--no-textconv",
             "--no-renames",
             "--numstat",
+            "-z",
             ...(ignoreWhitespace ? ["--ignore-all-space"] : []),
             "--end-of-options",
             range,
@@ -692,56 +696,29 @@ export class GitService {
             );
             return "";
           }),
-        git.revparse(["--show-toplevel"]),
       ]);
 
-      const toSlashes = (p: string) => (sep === "\\" ? p.replace(/\\/g, "/") : p);
-      const gitRoot = toSlashes(realpathSync(toplevel.trim()));
-      const rootPrefix = gitRoot.endsWith("/") ? gitRoot : `${gitRoot}/`;
-
-      // Build relative-path-keyed numstat map from the numstat output
-      let numstatByRelPath = new Map<string, DiffStat>();
-      if (numstatOutput) {
-        const numstatByAbsPath = parseNumstat(numstatOutput, gitRoot);
-        numstatByRelPath = new Map<string, DiffStat>();
-        for (const [absPath, stats] of numstatByAbsPath) {
-          const normalized = toSlashes(absPath);
-          const relative = normalized.startsWith(rootPrefix)
-            ? normalized.slice(rootPrefix.length)
-            : normalized;
-          numstatByRelPath.set(relative, stats);
-        }
-      }
-
+      const numstatByRelPath = parseNumstatZ(numstatOutput);
       const files: CrossWorktreeFile[] = [];
 
-      for (const line of nameStatusOutput.split("\n")) {
-        const trimmed = line.trim();
-        if (!trimmed) continue;
+      for (const entry of parseNameStatusZ(nameStatusOutput)) {
+        const status = entry.status[0] as CrossWorktreeFile["status"];
 
-        const parts = trimmed.split(/\t/);
-        if (parts.length < 2) continue;
-
-        const statusRaw = parts[0];
-        const status = statusRaw[0] as CrossWorktreeFile["status"];
-
-        if (status === "R" || status === "C") {
-          const newPath = parts[2] ?? parts[1];
-          const oldPath = parts[1];
-          const insStats = numstatByRelPath.get(newPath);
-          const delStats = numstatByRelPath.get(oldPath);
+        if (entry.oldPath !== undefined) {
+          const insStats = numstatByRelPath.get(entry.path);
+          const delStats = numstatByRelPath.get(entry.oldPath);
           files.push({
             status,
-            path: newPath,
-            oldPath,
+            path: entry.path,
+            oldPath: entry.oldPath,
             insertions: insStats?.insertions ?? null,
             deletions: delStats?.deletions ?? null,
           });
         } else {
-          const stats = numstatByRelPath.get(parts[1]);
+          const stats = numstatByRelPath.get(entry.path);
           files.push({
             status,
-            path: parts[1],
+            path: entry.path,
             insertions: stats?.insertions ?? null,
             deletions: stats?.deletions ?? null,
           });
