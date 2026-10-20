@@ -99,7 +99,7 @@ describe("projectSettingsStore", () => {
     expect(state.isLoading).toBe(false);
   });
 
-  it("recovers with safe defaults when loading fails", async () => {
+  it("leaves nothing to edit or save when the first load fails", async () => {
     getSettingsMock.mockRejectedValueOnce(new Error("boom"));
     detectRunnersMock.mockResolvedValueOnce(DETECTED_RUNNERS);
 
@@ -107,7 +107,7 @@ describe("projectSettingsStore", () => {
 
     const state = useProjectSettingsStore.getState();
     expect(state.projectId).toBe("project-fail");
-    expect(state.settings).toEqual({ runCommands: [] });
+    expect(state.settings).toBeNull();
     expect(state.detectedRunners).toEqual([]);
     expect(state.allDetectedRunners).toEqual([]);
     expect(state.error).toBe("boom");
@@ -217,7 +217,7 @@ describe("projectSettingsStore", () => {
 
     const state = useProjectSettingsStore.getState();
     expect(state.projectId).toBe("project-b");
-    expect(state.settings).toEqual({ runCommands: [] });
+    expect(state.settings).toBeNull();
     expect(state.allDetectedRunners).toEqual([]);
     expect(state.error).toBe("boom");
   });

@@ -436,8 +436,16 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     let projectArgs: string[] | undefined;
     let projectCwd: string | undefined;
     if (resolvedProject && !launchAgentId) {
-      const projSettings = await projectStore.getProjectSettings(resolvedProject.id);
-      const ts = projSettings.terminalSettings;
+      const projSettings = await projectStore
+        .getProjectSettings(resolvedProject.id)
+        .catch((error: unknown) => {
+          console.warn(
+            "[TerminalSpawn] Couldn't read project settings; spawning without project terminal overrides:",
+            error
+          );
+          return null;
+        });
+      const ts = projSettings?.terminalSettings;
       if (ts) {
         if (!validatedOptions.shell && ts.shell) {
           projectShell = ts.shell;

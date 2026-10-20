@@ -518,6 +518,28 @@ describe("terminal spawn handler - projectId resolution", () => {
     const spawnArgs = ptyClient.spawn.mock.calls[0][1];
     expect(spawnArgs.shell).toBe("/bin/bash");
   });
+
+  it("still spawns a plain shell when the project's settings can't be read", async () => {
+    mockGetProjectById.mockReturnValue(projectA);
+    mockGetProjectSettings.mockRejectedValue(
+      Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" })
+    );
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const deps = { ptyClient } as unknown as HandlerDependencies;
+    registerTerminalLifecycleHandlers(deps);
+
+    const handler = getSpawnHandler();
+    await handler({} as Electron.IpcMainInvokeEvent, {
+      projectId: "project-a-id",
+      cols: 80,
+      rows: 24,
+    });
+    warnSpy.mockRestore();
+
+    expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
+    expect(ptyClient.spawn.mock.calls[0][1].shell).not.toBe("/bin/bash");
+  });
 });
 
 // A request naming both a projectId and a worktreeId asserts a relationship
