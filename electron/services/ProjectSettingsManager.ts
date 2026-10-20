@@ -405,8 +405,6 @@ export class ProjectSettingsManager {
         typeof settings.turbopackEnabled === "boolean" ? settings.turbopackEnabled : undefined,
     };
 
-    this.notificationOverridesCache.set(projectId, runtimeSettings.notificationOverrides);
-
     if (settings.projectIconSvg) {
       const sanitizeResult = sanitizeSvg(settings.projectIconSvg);
       if (sanitizeResult.ok) {
@@ -494,6 +492,10 @@ export class ProjectSettingsManager {
         throw retryError;
       }
     }
+
+    // Published only once the write lands, so a failed save leaves the last
+    // saved overrides in effect.
+    this.notificationOverridesCache.set(projectId, runtimeSettings.notificationOverrides);
 
     // Invalidate after durable write succeeds. Dynamic import avoids
     // expanding the static module graph for tests that mock ProjectStore.

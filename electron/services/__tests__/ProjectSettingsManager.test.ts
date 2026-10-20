@@ -5,6 +5,12 @@ import path from "path";
 import { ProjectSettingsManager } from "../ProjectSettingsManager.js";
 import { generateProjectId } from "../projectStorePaths.js";
 import { PROJECT_SETTINGS_SCHEMA_VERSION } from "../projectSettingsCodec.js";
+import { resilientAtomicWriteFile } from "../../utils/fs.js";
+
+vi.mock("../../utils/fs.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../utils/fs.js")>();
+  return { ...actual, resilientAtomicWriteFile: vi.fn(actual.resilientAtomicWriteFile) };
+});
 
 vi.mock("../CommandService.js", () => ({
   commandService: {
@@ -486,6 +492,75 @@ describe("ProjectSettingsManager caching", () => {
     await expect(manager.addBrowserAllowedHost(projectId, "example.com")).resolves.toEqual([
       "example.com",
     ]);
+  });
+
+  describe("notification overrides after a failed save", () => {
+    const enospc = () =>
+      Object.assign(new Error("ENOSPC: no space left on device"), {
+        code: "ENOSPC",
+      });
+
+    beforeEach(() => {
+      vi.spyOn(console, "error").mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it.each([
+      { saved: false, rejected: true },
+      { saved: true, rejected: false },
+    ])(
+      "keeps completedEnabled=$saved in effect when saving $rejected fails",
+      async ({ saved, rejected }) => {
+        await manager.saveProjectSettings(projectId, {
+          runCommands: [],
+          notificationOverrides: { completedEnabled: saved },
+        });
+        await manager.getProjectSettings(projectId);
+
+        vi.mocked(resilientAtomicWriteFile).mockRejectedValueOnce(enospc());
+        await expect(
+          manager.saveProjectSettings(projectId, {
+            runCommands: [],
+            notificationOverrides: { completedEnabled: rejected },
+          })
+        ).rejects.toThrow("ENOSPC");
+
+        const onDisk = await new ProjectSettingsManager(
+          tempDir,
+          createMockStore()
+        ).getProjectSettings(projectId);
+        expect(onDisk.notificationOverrides?.completedEnabled).toBe(saved);
+        expect(manager.getEffectiveNotificationSettings(projectId).completedEnabled).toBe(saved);
+      }
+    );
+
+    it("keeps the global settings when the first save of a project fails", async () => {
+      vi.mocked(resilientAtomicWriteFile).mockRejectedValueOnce(enospc());
+      await expect(
+        manager.saveProjectSettings(projectId, {
+          runCommands: [],
+          notificationOverrides: { completedEnabled: false },
+        })
+      ).rejects.toThrow("ENOSPC");
+
+      expect(manager.getEffectiveNotificationSettings(projectId).completedEnabled).toBe(true);
+    });
+
+    it("publishes the overrides once a save lands after the directory is recreated", async () => {
+      await fs.rm(path.join(tempDir, projectId), { recursive: true, force: true });
+      vi.mocked(resilientAtomicWriteFile).mockClear();
+
+      await manager.saveProjectSettings(projectId, {
+        runCommands: [],
+        notificationOverrides: { completedEnabled: false },
+      });
+
+      expect(resilientAtomicWriteFile).toHaveBeenCalledTimes(2);
+      expect(manager.getEffectiveNotificationSettings(projectId).completedEnabled).toBe(false);
+    });
   });
 
   describe("addBrowserAllowedHost", () => {
