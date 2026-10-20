@@ -864,6 +864,119 @@ describe("persistence boundary hardening", () => {
     }
   });
 
+  function installOnceThrowingReadStorage(saved: string): Map<string, string> {
+    const backing = new Map<string, string>([["read-fail-key", saved]]);
+    let readFailed = false;
+    installLocalStorage(
+      createStorageMock({
+        getItem: (key) => {
+          if (!readFailed) {
+            readFailed = true;
+            throw new Error("SecurityError");
+          }
+          return backing.get(key) ?? null;
+        },
+        setItem: (key, value) => {
+          backing.set(key, value);
+        },
+        removeItem: (key) => {
+          backing.delete(key);
+        },
+      })
+    );
+    return backing;
+  }
+
+  it("notifies when a read error forces createSafeJSONStorage into memory-only persistence (#13590)", async () => {
+    const saved = JSON.stringify({ state: { value: 1 }, version: 1 });
+    const backing = installOnceThrowingReadStorage(saved);
+    const notifySpy = vi.fn();
+
+    const { createSafeJSONStorage, setPermanentFallbackHandler } =
+      await import("../persistence/safeStorage");
+    setPermanentFallbackHandler(notifySpy);
+    try {
+      const storage = createSafeJSONStorage<{ value: number }>();
+      expect(storage.getItem("read-fail-key")).toBeNull();
+      expect(notifySpy).toHaveBeenCalledTimes(1);
+
+      storage.setItem("read-fail-key", { state: { value: 2 }, version: 1 });
+      storage.setItem("read-fail-key", { state: { value: 3 }, version: 1 });
+
+      expect(storage.getItem("read-fail-key")).toEqual({ state: { value: 3 }, version: 1 });
+      expect(backing.get("read-fail-key")).toBe(saved);
+      expect(notifySpy).toHaveBeenCalledTimes(1);
+    } finally {
+      setPermanentFallbackHandler(null);
+    }
+  });
+
+  it("notifies when a read error forces createDebouncedSafeJSONStorage into memory-only persistence (#13590)", async () => {
+    vi.useFakeTimers();
+    const saved = JSON.stringify({ state: { value: 1 }, version: 1 });
+    const backing = installOnceThrowingReadStorage(saved);
+    const notifySpy = vi.fn();
+
+    const { createDebouncedSafeJSONStorage, setPermanentFallbackHandler } =
+      await import("../persistence/safeStorage");
+    setPermanentFallbackHandler(notifySpy);
+    try {
+      const storage = createDebouncedSafeJSONStorage<{ value: number }>(300);
+      expect(storage.getItem("read-fail-key")).toBeNull();
+
+      storage.setItem("read-fail-key", { state: { value: 2 }, version: 1 });
+      vi.advanceTimersByTime(300);
+
+      expect(backing.get("read-fail-key")).toBe(saved);
+      expect(notifySpy).toHaveBeenCalledTimes(1);
+    } finally {
+      setPermanentFallbackHandler(null);
+      vi.useRealTimers();
+    }
+  });
+
+  it("delivers fallback notices raised before any handler was registered, once (#13590)", async () => {
+    let readFailed = false;
+    installLocalStorage(
+      createStorageMock({
+        getItem: () => {
+          if (!readFailed) {
+            readFailed = true;
+            throw new Error("SecurityError");
+          }
+          return null;
+        },
+        setItem: () => {
+          throw new Error("SecurityError");
+        },
+      })
+    );
+    const notifySpy = vi.fn();
+
+    const { createSafeJSONStorage, setPermanentFallbackHandler } =
+      await import("../persistence/safeStorage");
+    try {
+      // Stores hydrate at module eval, before notify.ts registers its handler.
+      const readFailure = createSafeJSONStorage<{ value: number }>();
+      expect(readFailure.getItem("read-fail-key")).toBeNull();
+      const writeFailure = createSafeJSONStorage<{ value: number }>();
+      writeFailure.setItem("write-fail-key", { state: { value: 1 }, version: 1 });
+
+      setPermanentFallbackHandler(null);
+      expect(notifySpy).not.toHaveBeenCalled();
+
+      setPermanentFallbackHandler(notifySpy);
+      expect(notifySpy).toHaveBeenCalledTimes(1);
+
+      readFailure.setItem("read-fail-key", { state: { value: 2 }, version: 1 });
+      writeFailure.setItem("write-fail-key", { state: { value: 2 }, version: 1 });
+      setPermanentFallbackHandler(notifySpy);
+      expect(notifySpy).toHaveBeenCalledTimes(1);
+    } finally {
+      setPermanentFallbackHandler(null);
+    }
+  });
+
   it("preferencesStore clamps a corrupt closed-set field at the current version via merge", async () => {
     installLocalStorage(
       createStorageMock({

@@ -29,8 +29,23 @@ export const backupKeyFor = (name: string): string => `${name}${BACKUP_KEY_SUFFI
  */
 let permanentFallbackHandler: (() => void) | null = null;
 
+// Stores hydrate during module evaluation, usually before notify.ts registers
+// its handler, so a fallback hit then is latched and delivered on registration.
+let pendingPermanentFallbackNotice = false;
+
+function dispatchPermanentFallbackNotice(): void {
+  const handler = permanentFallbackHandler;
+  if (!handler) {
+    pendingPermanentFallbackNotice = true;
+    return;
+  }
+  pendingPermanentFallbackNotice = false;
+  handler();
+}
+
 export function setPermanentFallbackHandler(handler: (() => void) | null): void {
   permanentFallbackHandler = handler;
+  if (handler && pendingPermanentFallbackNotice) dispatchPermanentFallbackNotice();
 }
 
 /**
@@ -148,7 +163,7 @@ function createResilientStorage(baseStorage: StateStorage | undefined): Resilien
   const notifyPermanentFallbackOnce = (): void => {
     if (hasNotifiedPermanentFallback) return;
     hasNotifiedPermanentFallback = true;
-    permanentFallbackHandler?.();
+    dispatchPermanentFallbackNotice();
   };
 
   return {
@@ -179,7 +194,9 @@ function createResilientStorage(baseStorage: StateStorage | undefined): Resilien
             storage,
           });
         }
-        return switchToMemoryStorage().getItem(name);
+        const fallbackValue = switchToMemoryStorage().getItem(name);
+        notifyPermanentFallbackOnce();
+        return fallbackValue;
       }
     },
     setItem: (name, value) => {
