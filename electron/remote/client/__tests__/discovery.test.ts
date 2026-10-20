@@ -45,7 +45,8 @@ const NETBIRD_STATUS = JSON.stringify({
       { fqdn: "lazy.netbird.cloud", netbirdIp: "100.92.0.6/16", status: "Idle" },
       { fqdn: "", netbirdIp: "100.92.0.7", status: "Connecting" },
       { fqdn: "bad name;rm", netbirdIp: "", status: "Connected" },
-      { fqdn: "Greg-MBP.netbird.cloud.", netbirdIp: "100.92.0.1", status: "Connected" },
+      { fqdn: "Greg-MBP.netbird.cloud.", netbirdIp: "100.92.0.99", status: "Connected" },
+      { fqdn: "stale-name.netbird.cloud", netbirdIp: "100.92.0.1", status: "Idle" },
     ],
   },
 });
@@ -459,6 +460,56 @@ describe("discoverHosts", () => {
       ["100.92.0.7", "100.92.0.7", "netbird", null, false],
     ]);
     expect(asked.sort()).toEqual(["dev-vm.netbird.cloud", "lazy.netbird.cloud"]);
+  });
+
+  it("drops a peer whose name doesn't resolve and has no IP, and treats a failed lookup as unresolved", async () => {
+    const status = JSON.stringify({
+      peers: {
+        details: [
+          { fqdn: "no-ip.netbird.cloud", netbirdIp: "", status: "Connected" },
+          { fqdn: "flaky.netbird.cloud", netbirdIp: "100.92.0.8", status: "Connected" },
+        ],
+      },
+    });
+    const run: CommandRunner = async (command) => (command === "netbird" ? ok(status) : missing);
+    const hosts = await discoverHosts({
+      run,
+      platform: "linux",
+      knownConnections: [],
+      resolves: async (name) => {
+        if (name === "flaky.netbird.cloud") throw new Error("EAI_AGAIN");
+        return false;
+      },
+    });
+    expect(hosts.map((h) => sshTargetOf(h.connection))).toEqual(["100.92.0.8"]);
+  });
+
+  it("resolves a large mesh's names a few at a time", async () => {
+    const details = Array.from({ length: 12 }, (_, i) => ({
+      fqdn: `peer-${i}.netbird.cloud`,
+      netbirdIp: `100.92.1.${i + 1}`,
+      status: "Idle",
+    }));
+    const run: CommandRunner = async (command) =>
+      command === "netbird" ? ok(JSON.stringify({ peers: { details } })) : missing;
+    let inFlight = 0;
+    let peak = 0;
+    const hosts = await discoverHosts({
+      run,
+      platform: "linux",
+      knownConnections: [],
+      resolves: async () => {
+        inFlight++;
+        peak = Math.max(peak, inFlight);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        inFlight--;
+        return true;
+      },
+    });
+    expect(hosts).toHaveLength(12);
+    expect(hosts.every((h) => sshTargetOf(h.connection)?.endsWith(".netbird.cloud"))).toBe(true);
+    expect(peak).toBeGreaterThan(1);
+    expect(peak).toBeLessThanOrEqual(4);
   });
 
   it("lists no NetBird peers when the daemon is stopped, without trying another install", async () => {

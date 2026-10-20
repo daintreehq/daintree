@@ -312,6 +312,10 @@ async function discoverTailscale(deps: DiscoverDeps): Promise<DiscoveryCandidate
 }
 
 const RESOLVE_DEADLINE_MS = 1_500;
+/** getaddrinfo shares libuv's small threadpool with file I/O, so a big mesh resolves a few at a time. */
+const RESOLVE_CONCURRENCY = 4;
+/** Past this, peers still waiting are reached by IP rather than holding up the list. */
+const RESOLVE_BUDGET_MS = 3_000;
 
 /**
  * getaddrinfo, as ssh itself resolves, so NetBird's own DNS routing and
@@ -335,6 +339,37 @@ async function resolvesBySystem(name: string): Promise<boolean> {
   }
 }
 
+/**
+ * A peer's name comes from the management server even when NetBird DNS is off
+ * on this client, so each name is checked here; one that doesn't resolve is
+ * replaced by the peer's IP, which always routes, or the peer is dropped.
+ */
+async function withReachableTargets(
+  peers: DiscoveryCandidate[],
+  resolves: (name: string) => Promise<boolean>,
+  signal: AbortSignal | undefined
+): Promise<DiscoveryCandidate[]> {
+  const startedAt = Date.now();
+  const out: Array<DiscoveryCandidate | null> = [...peers];
+  let next = 0;
+  const worker = async () => {
+    while (next < out.length) {
+      const index = next++;
+      const peer = out[index]!;
+      if (isIpAddress(peer.sshTarget)) continue;
+      const ok =
+        !signal?.aborted &&
+        Date.now() - startedAt < RESOLVE_BUDGET_MS &&
+        (await resolves(peer.sshTarget).catch(() => false));
+      if (ok) continue;
+      const ip = peer.aliases?.find(isIpAddress);
+      out[index] = ip ? { ...peer, sshTarget: ip } : null;
+    }
+  };
+  await Promise.all(Array.from({ length: RESOLVE_CONCURRENCY }, worker));
+  return out.filter((peer): peer is DiscoveryCandidate => peer !== null);
+}
+
 async function discoverNetbird(deps: DiscoverDeps): Promise<DiscoveryCandidate[]> {
   for (const command of NETBIRD_CANDIDATES) {
     const result = await deps.run(command, ["status", "--json"], {
@@ -344,17 +379,10 @@ async function discoverNetbird(deps: DiscoverDeps): Promise<DiscoveryCandidate[]
     if (result.spawnError !== null) continue;
     // A stopped daemon exits non-zero with no JSON; a logged-out one lists no peers.
     if (result.code !== 0) return [];
-    const peers = parseNetbirdStatus(result.stdout);
-    const resolves = deps.resolves ?? resolvesBySystem;
-    // A peer's name comes from the management server even when NetBird DNS is
-    // off on this client; its IP always routes.
-    return Promise.all(
-      peers.map(async (peer) => {
-        const ip = peer.aliases?.find(isIpAddress);
-        if (!ip || isIpAddress(peer.sshTarget)) return peer;
-        const ok = await resolves(peer.sshTarget).catch(() => false);
-        return ok ? peer : { ...peer, sshTarget: ip };
-      })
+    return withReachableTargets(
+      parseNetbirdStatus(result.stdout),
+      deps.resolves ?? resolvesBySystem,
+      deps.signal
     );
   }
   return [];
