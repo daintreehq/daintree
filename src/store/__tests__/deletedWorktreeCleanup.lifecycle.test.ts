@@ -396,6 +396,24 @@ describe("startDeletedWorktreeCleanup view lifecycle", () => {
     );
   });
 
+  it("re-arms an armed row when cleanup went off and back on with no sweep between", () => {
+    start();
+    addRow();
+    advance(DELETED_WORKTREE_SWEEP_INTERVAL_MS);
+    advance(10_000);
+    goCached();
+    usePreferencesStore.setState({ deletedWorktreeCleanupSeconds: 0 });
+    advance(10 * 60_000);
+    usePreferencesStore.setState({ deletedWorktreeCleanupSeconds: TTL_SECONDS });
+    advance(DELETED_WORKTREE_SWEEP_INTERVAL_MS);
+    goActive();
+    goRevealed();
+
+    // The old deadline would have spent the ten minutes under Never.
+    expect(bulkTrashByWorktree).not.toHaveBeenCalled();
+    expect(remainingNow()).toBe(TTL_MS);
+  });
+
   it("grants a full window when cleanup is switched back on while watching", () => {
     usePreferencesStore.setState({ deletedWorktreeCleanupSeconds: 0 });
     start();

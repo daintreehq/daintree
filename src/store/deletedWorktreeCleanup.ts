@@ -370,12 +370,19 @@ export function sweepDeletedWorktreeCleanup(deps: SweepDeps = DEFAULT_DEPS): voi
     }
   }
   const ttlSeconds = usePreferencesStore.getState().deletedWorktreeCleanupSeconds;
+  // Cleanup went off and back on with no sweep in between to disarm anything,
+  // so a deadline still standing was spending through time it was switched off.
+  const reEnabledSinceLastSweep =
+    cleanupEnabledAt !== null && previousSweepAt !== null && cleanupEnabledAt > previousSweepAt;
 
   for (const entry of deletedWorktrees.values()) {
     // An unarmed entry is a fresh (or re-recorded) row — any stale state from a
     // previous row under the same id must not leak into its countdown.
     if (entry.expiresAt === null) forgetRow(entry.id);
     else if (firedIds.has(entry.id)) continue;
+    // Disarmed in effect, so it re-arms like a fresh row from the enable time.
+    const staleArm = entry.expiresAt !== null && reEnabledSinceLastSweep;
+    if (staleArm) forgetRow(entry.id);
 
     if (ttlSeconds === 0) {
       if (entry.expiresAt !== null || entry.holdReason !== null) {
@@ -401,7 +408,7 @@ export function sweepDeletedWorktreeCleanup(deps: SweepDeps = DEFAULT_DEPS): voi
     if (ttlChanged) {
       // The TTL just changed: a full window of the new one from now.
       expiresAt = now + ttlMs;
-    } else if (entry.expiresAt === null) {
+    } else if (entry.expiresAt === null || staleArm) {
       // Fresh row. Charge the slowed rate for the part of the gap it existed
       // with cleanup on — measured from `deletedAt` or the moment cleanup was
       // switched back on, never earlier, and with no sweep on record that is
