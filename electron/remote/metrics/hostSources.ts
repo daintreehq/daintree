@@ -8,6 +8,8 @@ import { peekDriveLeaseService } from "../../services/DriveLeaseService.js";
 import { helpSessionService } from "../../services/HelpSessionService.js";
 import { projectStore } from "../../services/ProjectStore.js";
 import { scratchStore } from "../../services/ScratchStore.js";
+import type { PtyClient } from "../../services/PtyClient.js";
+import { getSharedTerminalSnapshot } from "../../services/sharedTerminalSnapshot.js";
 import { classifyRun, computeProjectAgentCounts } from "../../services/projectAgentCounts.js";
 import {
   getAgentVersionService,
@@ -18,7 +20,9 @@ import {
 } from "../../window/serviceRefs.js";
 import { executableForSpawn } from "../../utils/windowsExecutable.js";
 import { createForgeObserver } from "./hostForges.js";
-import type { HostSampleSources, ObservedAgents } from "./sampler.js";
+import type { HostSampleSources, ObservedAgents, SampleReaders } from "./sampler.js";
+
+type ProjectInventory = ReturnType<typeof projectStore.getAllProjects>;
 
 const COMMAND_TIMEOUT_MS = 2_000;
 const WORKTREE_COUNT_TTL_MS = 30_000;
@@ -52,10 +56,10 @@ async function listDir(path: string): Promise<string[]> {
 }
 
 /** Projects with a live workspace on this host: what "open" means here. */
-export function openProjects() {
-  return projectStore
-    .getAllProjects()
-    .filter((project) => project.status === "active" || project.status === "background");
+export function openProjects(projects: ProjectInventory = projectStore.getAllProjects()) {
+  return projects.filter(
+    (project) => project.status === "active" || project.status === "background"
+  );
 }
 
 /**
@@ -66,15 +70,27 @@ export function openProjects() {
  * Null when the terminals can't all be seen — no PTY client, or a shard that
  * didn't answer. The updater's restart guard reads these counts, and a tally
  * missing a shard would read a busy host as idle.
+ *
+ * With no options it reads everything fresh, as that guard needs. The summary
+ * passes the sample's project list and the pollers' shared terminal read.
  */
-export async function observeAgents(): Promise<ObservedAgents | null> {
+export async function observeAgents(
+  options: {
+    projectIds?: readonly string[];
+    readTerminals?: (
+      pty: PtyClient
+    ) => ReturnType<PtyClient["getAllTerminalsWithCompletenessAsync"]>;
+  } = {}
+): Promise<ObservedAgents | null> {
   const pty = getPtyClient();
   if (!pty) return null;
   const projectIds = [
-    ...projectStore.getAllProjects().map((p) => p.id),
+    ...(options.projectIds ?? projectStore.getAllProjects().map((p) => p.id)),
     ...scratchStore.getAllScratches().map((s) => s.id),
   ];
-  const { terminals, degraded } = await pty.getAllTerminalsWithCompletenessAsync();
+  const { terminals, degraded } = await (options.readTerminals
+    ? options.readTerminals(pty)
+    : pty.getAllTerminalsWithCompletenessAsync());
   if (degraded) return null;
   const counts = computeProjectAgentCounts(
     projectIds,
@@ -144,11 +160,13 @@ async function countWorktrees(
 }
 
 /** The most recent holder across this host's projects, when anyone drives one. */
-function currentDriver(): DriveLeaseHolder | null {
+function currentDriver(
+  projects: () => ProjectInventory = () => projectStore.getAllProjects()
+): DriveLeaseHolder | null {
   const lease = peekDriveLeaseService();
   if (!lease) return null;
   let latest: DriveLeaseHolder | null = null;
-  for (const project of projectStore.getAllProjects()) {
+  for (const project of projects()) {
     const holder = lease.getHolder(project.id);
     if (holder && (!latest || holder.acquiredAt > latest.acquiredAt)) latest = holder;
   }
@@ -161,6 +179,16 @@ export function createHostSampleSources(now: () => number = Date.now): HostSampl
   let clis: { list: Array<{ agentId: string; version: string | null }>; at: number } | null = null;
   const forges = createForgeObserver(now);
   const platform: HostPlatform = process.platform === "darwin" ? "darwin" : "linux";
+
+  async function projectsSample(open: ProjectInventory) {
+    if (!worktrees || now() - worktrees.at > WORKTREE_COUNT_TTL_MS) {
+      const count = await countWorktrees(open);
+      // An incomplete count is unknown, and isn't cached: the next sample asks again.
+      if (count === null) return { projectCount: open.length, worktreeCount: null };
+      worktrees = { count, at: now() };
+    }
+    return { projectCount: open.length, worktreeCount: worktrees.count };
+  }
 
   return {
     platform,
@@ -175,18 +203,34 @@ export function createHostSampleSources(now: () => number = Date.now): HostSampl
       const state = getResourceProfileService()?.getSnapshot().thermalState;
       return state && state !== "unknown" ? state : null;
     },
-    agents: observeAgents,
-    async projects() {
-      const open = openProjects();
-      if (!worktrees || now() - worktrees.at > WORKTREE_COUNT_TTL_MS) {
-        const count = await countWorktrees(open);
-        // An incomplete count is unknown, and isn't cached: the next sample asks again.
-        if (count === null) return { projectCount: open.length, worktreeCount: null };
-        worktrees = { count, at: now() };
-      }
-      return { projectCount: open.length, worktreeCount: worktrees.count };
+    agents: () => observeAgents({ readTerminals: getSharedTerminalSnapshot }),
+    projects: () => projectsSample(openProjects()),
+    driver: () => currentDriver(),
+    beginSample(): SampleReaders {
+      // One project list per sample, failure included: a store that threw for
+      // one reader is unknown to all three, and the next sample asks again.
+      let read: { projects: ProjectInventory } | { error: unknown } | null = null;
+      const inventory = (): ProjectInventory => {
+        if (!read) {
+          try {
+            read = { projects: projectStore.getAllProjects() };
+          } catch (error) {
+            read = { error };
+          }
+        }
+        if ("error" in read) throw read.error;
+        return read.projects;
+      };
+      return {
+        agents: async () =>
+          observeAgents({
+            projectIds: inventory().map((p) => p.id),
+            readTerminals: getSharedTerminalSnapshot,
+          }),
+        projects: async () => projectsSample(openProjects(inventory())),
+        driver: () => currentDriver(inventory),
+      };
     },
-    driver: currentDriver,
     async agentClis() {
       if (clis && now() - clis.at < AGENT_CLIS_TTL_MS) return clis.list;
       const service = getCliAvailabilityServiceRef();

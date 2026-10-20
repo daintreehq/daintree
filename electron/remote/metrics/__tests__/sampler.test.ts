@@ -168,4 +168,29 @@ describe("HostMetricsSampler", () => {
     const summary = await new HostMetricsSampler(sources({ agents: async () => null })).sample();
     expect(summary.agentsObserved).toBeNull();
   });
+
+  it("reads agents, projects and driver from one sample's readers when the sources scope them", async () => {
+    let begun = 0;
+    const summary = await new HostMetricsSampler(
+      sources({
+        agents: async () => {
+          throw new Error("unscoped");
+        },
+        beginSample: () => {
+          begun += 1;
+          return {
+            agents: async () => ({ working: 5, waiting: 0, idle: 0 }),
+            projects: async () => ({ projectCount: 1, worktreeCount: 2 }),
+            driver: () => null,
+          };
+        },
+      })
+    ).sample();
+    expect(begun).toBe(1);
+    expect(summary).toMatchObject({
+      agentsObserved: { working: 5, waiting: 0, idle: 0 },
+      projectCount: 1,
+      worktreeCount: 2,
+    });
+  });
 });

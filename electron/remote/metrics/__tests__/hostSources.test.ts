@@ -36,8 +36,9 @@ const DEFAULT_PROJECTS = [
   { id: "p1", path: "/p1", status: "active" },
   { id: "p2", path: "/p2", status: "background" },
 ];
+const getAllProjects = vi.hoisted(() => vi.fn(() => store.projects));
 vi.mock("../../../services/ProjectStore.js", () => ({
-  projectStore: { getAllProjects: () => store.projects },
+  projectStore: { getAllProjects },
 }));
 vi.mock("../../../services/ScratchStore.js", () => ({
   scratchStore: { getAllScratches: () => [] },
@@ -48,8 +49,12 @@ vi.mock("../../../services/HelpSessionService.js", () => ({
 vi.mock("../../../services/AgentAvailabilityStore.js", () => ({
   getAgentAvailabilityStore: () => ({ isHelpTerminal: () => false }),
 }));
+const lease = vi.hoisted(() => ({
+  holders: null as null | Record<string, { acquiredAt: number }>,
+}));
 vi.mock("../../../services/DriveLeaseService.js", () => ({
-  peekDriveLeaseService: () => null,
+  peekDriveLeaseService: () =>
+    lease.holders ? { getHolder: (id: string) => lease.holders?.[id] ?? null } : null,
 }));
 vi.mock("../../../services/projectAgentCounts.js", () => ({
   classifyRun: () => null,
@@ -71,6 +76,9 @@ const WORKING = { id: "t1", projectId: "p1", agentState: "working" };
 
 beforeEach(() => {
   store.projects = DEFAULT_PROJECTS;
+  getAllProjects.mockReset();
+  getAllProjects.mockImplementation(() => store.projects);
+  lease.holders = null;
   workspace.client = null;
   pty.client = {
     getAllTerminalsWithCompletenessAsync: vi.fn(async () => ({
@@ -186,5 +194,77 @@ describe("createHostSampleSources", () => {
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe("one host-summary sample", () => {
+  async function sampleOnce(sources = createHostSampleSources()) {
+    const readers = sources.beginSample!();
+    const [agents, projects] = await Promise.all([readers.agents(), readers.projects()]);
+    return { agents, projects, driver: readers.driver() };
+  }
+
+  it("lists the projects once for its agents, projects and driver", async () => {
+    store.projects = [...DEFAULT_PROJECTS, { id: "p3", path: "/p3", status: "closed" }];
+    lease.holders = { p2: { acquiredAt: 5 }, p3: { acquiredAt: 9 } };
+    await expect(sampleOnce()).resolves.toEqual({
+      agents: { working: 1, waiting: 0, idle: 0 },
+      projects: { projectCount: 2, worktreeCount: null },
+      // A closed project's lease still counts, as it did when each reader listed its own.
+      driver: { acquiredAt: 9 },
+    });
+    expect(getAllProjects).toHaveBeenCalledTimes(1);
+  });
+
+  it("lists them again next sample, so a change shows", async () => {
+    const sources = createHostSampleSources();
+    await sampleOnce(sources);
+    store.projects = [DEFAULT_PROJECTS[0]!];
+    await expect(sampleOnce(sources)).resolves.toMatchObject({
+      projects: { projectCount: 1 },
+    });
+    expect(getAllProjects).toHaveBeenCalledTimes(2);
+  });
+
+  it("is unknown everywhere the list was needed when the store fails, and asks once", async () => {
+    lease.holders = { p1: { acquiredAt: 1 } };
+    getAllProjects.mockImplementationOnce(() => {
+      throw new Error("db locked");
+    });
+    const readers = createHostSampleSources().beginSample!();
+    await expect(readers.agents()).rejects.toThrow("db locked");
+    await expect(readers.projects()).rejects.toThrow("db locked");
+    expect(() => readers.driver()).toThrow("db locked");
+    expect(getAllProjects).toHaveBeenCalledTimes(1);
+  });
+
+  it("shares the background pollers' terminal read", async () => {
+    const sources = createHostSampleSources();
+    await sampleOnce(sources);
+    await sampleOnce(sources);
+    expect(pty.client!.getAllTerminalsWithCompletenessAsync).toHaveBeenCalledTimes(1);
+  });
+
+  it("never hands the restart guard the shared read", async () => {
+    // The summary cached an idle host; an agent has started since.
+    pty.client!.getAllTerminalsWithCompletenessAsync.mockResolvedValueOnce({
+      terminals: [],
+      degraded: false,
+      shardsTotal: 2,
+      shardsFailed: 0,
+    });
+    await expect(sampleOnce()).resolves.toMatchObject({
+      agents: { working: 0, waiting: 0, idle: 0 },
+    });
+    await expect(observeAgents()).resolves.toEqual({ working: 1, waiting: 0, idle: 0 });
+    expect(pty.client!.getAllTerminalsWithCompletenessAsync).toHaveBeenCalledTimes(2);
+
+    pty.client!.getAllTerminalsWithCompletenessAsync.mockResolvedValueOnce({
+      terminals: [],
+      degraded: true,
+      shardsTotal: 2,
+      shardsFailed: 1,
+    });
+    await expect(observeAgents()).resolves.toBeNull();
   });
 });
