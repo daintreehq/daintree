@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Stats } from "node:fs";
 import * as path from "node:path";
-import { FileTreeService, _resetBaseRealpathCacheForTests } from "../FileTreeService.js";
+import { FileTreeService } from "../FileTreeService.js";
 
 const shared = vi.hoisted(() => ({
   realpath: vi.fn(),
@@ -81,7 +81,6 @@ describe("FileTreeService adversarial", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    _resetBaseRealpathCacheForTests();
     service = new FileTreeService();
 
     shared.realpath.mockImplementation(async (target: string) => target);
@@ -278,29 +277,30 @@ describe("FileTreeService adversarial", () => {
     ]);
   });
 
-  it("REALPATH_CACHE_SHARED_ACROSS_CALLS", async () => {
-    let realpathCalls = 0;
-    shared.realpath.mockImplementation(async (target: string) => {
-      realpathCalls += 1;
-      return target;
-    });
+  it("BASE_REALPATH_RESOLVED_PER_CALL", async () => {
+    // A retargeted root symlink (#13561): the base and the target move
+    // together, so a canonical base remembered from the first call would put
+    // every later target outside it.
+    let canonicalRoot = "/canonical/first";
+    shared.realpath.mockImplementation(async () => canonicalRoot);
 
-    await service.getFileTree("/repo");
-    await service.getFileTree("/repo");
+    await expect(service.getFileTree("/repo")).resolves.toEqual([]);
+    canonicalRoot = "/canonical/second";
+    await expect(service.getFileTree("/repo")).resolves.toEqual([]);
 
-    // 3 = 1 base-realpath (cached across calls) + 2 target-realpath (per-call)
-    expect(realpathCalls).toBe(3);
+    expect(shared.realpath.mock.calls.map(([target]) => target)).toEqual([
+      path.resolve("/repo"),
+      path.resolve("/repo"),
+      path.resolve("/repo"),
+      path.resolve("/repo"),
+    ]);
   });
 
-  it("REALPATH_CACHE_ERROR_EVICTED", async () => {
-    // First call: base realpath fails, cache evicted, fallback returned
+  it("BASE_REALPATH_FAILURE_FALLS_BACK_TO_LEXICAL_BASE", async () => {
     shared.realpath.mockRejectedValueOnce(new Error("EACCES"));
-    await expect(service.getFileTree("/repo")).resolves.toBeDefined();
+    await expect(service.getFileTree("/repo")).resolves.toEqual([]);
+    await expect(service.getFileTree("/repo")).resolves.toEqual([]);
 
-    // Second call: base realpath retried (cache was evicted)
-    await expect(service.getFileTree("/repo")).resolves.toBeDefined();
-
-    // 4 = (1 base fail + 1 target ok) × 2 calls
     expect(shared.realpath).toHaveBeenCalledTimes(4);
   });
 });

@@ -12,23 +12,6 @@ import type { FileTreeNode, FileTreeSymlink } from "../../shared/types/ipc.js";
 // collator construction is costly.
 const NAME_COLLATOR = new Intl.Collator(undefined, { numeric: true });
 
-const _baseRealpathCache = new Map<string, Promise<string>>();
-
-export function _resetBaseRealpathCacheForTests(): void {
-  _baseRealpathCache.clear();
-}
-
-function _getBaseRealpath(resolvedBasePath: string): Promise<string> {
-  const cached = _baseRealpathCache.get(resolvedBasePath);
-  if (cached) return cached;
-  const promise = fs.realpath(resolvedBasePath).catch((_err) => {
-    _baseRealpathCache.delete(resolvedBasePath);
-    return resolvedBasePath;
-  });
-  _baseRealpathCache.set(resolvedBasePath, promise);
-  return promise;
-}
-
 /**
  * Whether `candidate` sits at or under `root`, both already canonical.
  *
@@ -215,8 +198,13 @@ export class FileTreeService {
     }
 
     try {
-      const resolvedBaseRealPath = await _getBaseRealpath(resolvedBasePath);
-      const targetRealPath = await fs.realpath(targetPath).catch(() => targetPath);
+      // Resolved on every call, never cached: a symlinked project root can be
+      // retargeted while the app runs, and a stale canonical base would reject
+      // every listing under the new target (#13561).
+      const [resolvedBaseRealPath, targetRealPath] = await Promise.all([
+        fs.realpath(resolvedBasePath).catch(() => resolvedBasePath),
+        fs.realpath(targetPath).catch(() => targetPath),
+      ]);
       // Still the guard that makes an out-of-root link non-expandable: the
       // listing leaves such a node `isDirectory: false` so the renderer never
       // asks, but this is what holds if something asks anyway.
