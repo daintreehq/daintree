@@ -232,14 +232,20 @@ describe("allocatePort", () => {
       queueCandidates(4250);
       const registry = new Map<string, number>();
 
-      const [a, b] = await Promise.all([
-        allocatePort(registry, "same-free"),
-        allocatePort(registry, "same-free"),
-      ]);
+      const probesOf4250 = () => netMock.listens.filter((l) => l.port === 4250).length;
+      const first = allocatePort(registry, "same-free");
+      let probesWhenSecondSettled = -1;
+      const second = allocatePort(registry, "same-free").then((port) => {
+        probesWhenSecondSettled = probesOf4250();
+        return port;
+      });
+      const [a, b] = await Promise.all([first, second]);
 
       expect(a).toBe(4250);
       expect(b).toBe(4250);
-      expect(netMock.listens.filter((l) => l.port === 4250)).toHaveLength(5);
+      // Every address was probed once, and before the joiner was answered.
+      expect(probesOf4250()).toBe(5);
+      expect(probesWhenSecondSettled).toBe(5);
     });
 
     it("rejects a run released mid-probe and lets a fresh allocation own the session", async () => {
@@ -299,15 +305,20 @@ describe("allocatePort", () => {
       expect(await allocatePort(registry, "session-x")).toBeGreaterThan(0);
     });
 
-    it("abandons in-flight allocations when the registry is cleared", async () => {
+    it("abandons in-flight allocations when the registry is cleared, without disturbing the next one", async () => {
       queueCandidates(5100);
       const registry = new Map<string, number>();
 
       const pending = allocatePort(registry, "session-c");
       clearPortRegistry(registry);
 
+      const fresh = allocatePort(registry, "session-c");
+      const joiner = allocatePort(registry, "session-c");
+
       await expect(pending).rejects.toThrow("released");
-      expect(registry.size).toBe(0);
+      const [freshPort, joinerPort] = await Promise.all([fresh, joiner]);
+      expect(joinerPort).toBe(freshPort);
+      expect(registry.get("session-c")).toBe(freshPort);
     });
   });
 });
