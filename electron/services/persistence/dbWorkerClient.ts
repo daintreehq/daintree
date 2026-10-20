@@ -79,6 +79,9 @@ export class DbWorkerClient {
   // failure or shutdown fence advances, whose fallbacks must still replay.
   private readonly ringSupersedes = new Map<string, number>();
   private lastRequestAt: number | null = null;
+  // Sticky: once a fence advance has failed, a stale worker write may land at
+  // any later point, so nothing may assume the DB holds what it last wrote.
+  private fenceFailed = false;
 
   constructor(deps: Partial<DbWorkerClientDeps> = {}) {
     this.deps = { ...defaultDeps, ...deps };
@@ -131,6 +134,11 @@ export class DbWorkerClient {
   fence(ring: string): boolean {
     this.supersede(ring);
     return this.advanceFenceIfLive();
+  }
+
+  /** False once any fence advance has failed this session. */
+  isFenceIntact(): boolean {
+    return !this.fenceFailed;
   }
 
   private supersede(ring: string): void {
@@ -307,6 +315,7 @@ export class DbWorkerClient {
       return true;
     } catch (error) {
       console.warn("[DbWorker] Failed to advance write fence:", error);
+      this.fenceFailed = true;
       return false;
     }
   }
@@ -342,6 +351,15 @@ export function runDbWork<T>(op: DbWorkerOp, fallback: () => T): Promise<T> {
  */
 export function fenceDbWorkerWrites(ring: string): boolean {
   return instance?.fence(ring) ?? true;
+}
+
+/**
+ * Whether every write fence so far has advanced. While true, a write the
+ * caller saw acknowledged is still what the DB holds; once false, a stale
+ * queued write may have landed (or may still land) on top of it.
+ */
+export function isDbWorkerFenceIntact(): boolean {
+  return instance?.isFenceIntact() ?? true;
 }
 
 export async function shutdownDbWorker(): Promise<void> {

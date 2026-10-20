@@ -8,7 +8,7 @@ import {
   type RingStatements,
 } from "./auditRingSql.js";
 import { getSharedSqlite } from "./db.js";
-import { fenceDbWorkerWrites, runDbWork } from "./dbWorkerClient.js";
+import { fenceDbWorkerWrites, isDbWorkerFenceIntact, runDbWork } from "./dbWorkerClient.js";
 
 export type AuditRingName =
   | "mcpAuditLog"
@@ -159,7 +159,12 @@ export class AuditRingStore {
     const target = state.pending;
     if (!target) return;
     state.pending = null;
-    const delta = state.acked && target.keyed ? diffRows(state.acked, target.rows) : null;
+    // After a failed fence a stale worker write can land behind any later one,
+    // so only full replacements (which repair whatever it changed) are safe.
+    const delta =
+      state.acked && target.keyed && isDbWorkerFenceIntact()
+        ? diffRows(state.acked, target.rows)
+        : null;
     if (delta && delta.upserts.length === 0 && delta.deletes.length === 0) return;
 
     const generation = state.generation;

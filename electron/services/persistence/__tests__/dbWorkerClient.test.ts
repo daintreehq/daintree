@@ -452,6 +452,7 @@ describe("DbWorkerClient", () => {
       const { client } = holdingClient(worker);
       void client.run(staleWrite, () => null);
       expect(client.fence("a")).toBe(true);
+      expect(client.isFenceIntact()).toBe(true);
 
       const failing = fakeFenceDb(0, () => {
         throw new Error("SQLITE_BUSY");
@@ -463,7 +464,9 @@ describe("DbWorkerClient", () => {
         getMainSqlite: () => failing.handle,
       });
       void busy.run(staleWrite, () => null);
+      expect(busy.isFenceIntact()).toBe(true);
       expect(busy.fence("a")).toBe(false);
+      expect(busy.isFenceIntact()).toBe(false);
     });
 
     it("skips a keyed-delta fallback when the worker exits after a sync fence", async () => {

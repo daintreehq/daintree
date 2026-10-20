@@ -18,10 +18,12 @@ const harness = vi.hoisted(() => ({
 
 const mockRunDbWork = vi.hoisted(() => vi.fn());
 const mockFence = vi.hoisted(() => vi.fn());
+const mockFenceIntact = vi.hoisted(() => vi.fn());
 
 vi.mock("../dbWorkerClient.js", () => ({
   runDbWork: mockRunDbWork,
   fenceDbWorkerWrites: mockFence,
+  isDbWorkerFenceIntact: mockFenceIntact,
 }));
 
 vi.mock("../db.js", () => ({
@@ -116,6 +118,7 @@ describe("AuditRingStore", () => {
     createSchema(harness.db);
     mockRunDbWork.mockImplementation((op: DbWorkerOp) => Promise.resolve(workerExecutes(op)));
     mockFence.mockReturnValue(true);
+    mockFenceIntact.mockReturnValue(true);
     vi.spyOn(console, "warn").mockImplementation(() => {});
     store = new AuditRingStore();
   });
@@ -450,5 +453,13 @@ describe("AuditRingStore", () => {
     store.writeAll("pluginAuditLog", [rec("z"), rec("b"), rec("c")], 2);
     await settle();
     expect(mockRunDbWork).toHaveBeenCalledTimes(1);
+  });
+  it("stops sending deltas once any write fence has failed this session", async () => {
+    store.writeAll("mcpAuditLog", [rec("a")], 10);
+    await settle();
+    mockFenceIntact.mockReturnValue(false);
+    store.writeAll("mcpAuditLog", [rec("a"), rec("b")], 10);
+    await settle();
+    expect(sentOps()[1]!.op).toBe("ringWriteAll");
   });
 });
