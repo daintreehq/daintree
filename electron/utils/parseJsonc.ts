@@ -10,6 +10,8 @@ export function parseJsonc(text: string): unknown {
   return JSON.parse(stripTrailingCommas(stripComments(stripUtf8Bom(text))));
 }
 
+const JSON_WHITESPACE = new Set([" ", "\t", "\n", "\r"]);
+
 function stringEnd(text: string, start: number): number {
   let j = start + 1;
   while (j < text.length && text[j] !== '"') j += text[j] === "\\" ? 2 : 1;
@@ -27,7 +29,7 @@ function stripComments(text: string): string {
       out += text.slice(i, end);
       i = end;
     } else if (ch === "/" && text[i + 1] === "/") {
-      while (i < text.length && text[i] !== "\n") i++;
+      while (i < text.length && text[i] !== "\n" && text[i] !== "\r") i++;
     } else if (ch === "/" && text[i + 1] === "*") {
       const end = text.indexOf("*/", i + 2);
       // An unclosed comment is a broken file, not a comment to the end.
@@ -59,14 +61,14 @@ function stripTrailingCommas(text: string): string {
     // `{,}` and `[,]` have nothing for the comma to trail, so they stay invalid.
     if (ch === "," && prev !== "{" && prev !== "[" && prev !== ",") {
       let j = i + 1;
-      while (j < text.length && /\s/.test(text[j]!)) j++;
+      while (j < text.length && JSON_WHITESPACE.has(text[j]!)) j++;
       if (text[j] === "}" || text[j] === "]") {
         i++;
         continue;
       }
     }
     out += ch;
-    if (!/\s/.test(ch)) prev = ch;
+    if (!JSON_WHITESPACE.has(ch)) prev = ch;
     i++;
   }
   return out;

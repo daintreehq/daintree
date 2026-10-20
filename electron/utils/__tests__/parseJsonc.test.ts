@@ -37,6 +37,10 @@ describe("parseJsonc", () => {
     expect(() => parseJsonc("[1/**/2]")).toThrow(SyntaxError);
   });
 
+  it("ends a line comment at CR as well as LF", () => {
+    expect(parseJsonc('{ // c\r"a": 1 }')).toEqual({ a: 1 });
+  });
+
   it("strips a leading BOM", () => {
     expect(parseJsonc('﻿// c\n{"a":1,}')).toEqual({ a: 1 });
   });
@@ -44,6 +48,7 @@ describe("parseJsonc", () => {
   it("still rejects malformed input", () => {
     for (const text of [
       "",
+      "// only a comment",
       "{invalid json",
       '{ "a": 1 /* unterminated }',
       '{ "a": "unterminated }',
