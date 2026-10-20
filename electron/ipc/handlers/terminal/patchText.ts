@@ -59,16 +59,117 @@ export async function applyPatchToleratingTransportCrlf(
   }
 }
 
+const C_ESCAPES = new Map<string, number>([
+  ["a", 0x07],
+  ["b", 0x08],
+  ["f", 0x0c],
+  ["n", 0x0a],
+  ["r", 0x0d],
+  ["t", 0x09],
+  ["v", 0x0b],
+  ['"', 0x22],
+  ["\\", 0x5c],
+]);
+
 /**
- * The `b/` side of every `+++` header. git appends a tab to a path containing
- * a space, and a CRLF patch ends each line with `\r`; neither is part of the
- * name.
+ * Decodes a path git wrote C-style quoted (`core.quotePath`, or a name holding
+ * a tab, newline, `"` or `\\`). Octal escapes are raw bytes of the UTF-8 name,
+ * so they are gathered as bytes and decoded once. Returns `null` for anything
+ * git would not have written, or bytes that are not UTF-8, rather than
+ * guessing a name.
+ */
+function unquoteCStylePath(quoted: string): string | null {
+  if (quoted.length < 2 || !quoted.startsWith('"') || !quoted.endsWith('"')) return null;
+  const encoder = new TextEncoder();
+  const bytes: number[] = [];
+  const body = quoted.slice(1, -1);
+  for (let i = 0; i < body.length; i++) {
+    const ch = body[i]!;
+    if (ch === '"') return null;
+    if (ch !== "\\") {
+      const codePoint = body.codePointAt(i)!;
+      const char = String.fromCodePoint(codePoint);
+      bytes.push(...encoder.encode(char));
+      i += char.length - 1;
+      continue;
+    }
+    const next = body[i + 1];
+    if (next === undefined) return null;
+    const octal = /^[0-3][0-7]{2}/.exec(body.slice(i + 1, i + 4));
+    if (octal) {
+      // git cuts a name at NUL, so no real path carries one.
+      if (octal[0] === "000") return null;
+      bytes.push(parseInt(octal[0], 8));
+      i += 3;
+      continue;
+    }
+    const escaped = C_ESCAPES.get(next);
+    if (escaped === undefined) return null;
+    bytes.push(escaped);
+    i += 1;
+  }
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(new Uint8Array(bytes));
+  } catch {
+    return null;
+  }
+}
+
+// git appends a tab to a name containing a space, quoted or not.
+function parseNewSidePath(header: string): string | null {
+  const raw = header.endsWith("\t") ? header.slice(0, -1) : header;
+  const path = raw.startsWith('"') ? unquoteCStylePath(raw) : raw;
+  if (path === null || !path.startsWith("b/")) return null;
+  return path.slice(2);
+}
+
+const HUNK_HEADER = /^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@/;
+
+/**
+ * The `b/` side of every `+++` header, so deleted files (`+++ /dev/null`) are
+ * left out. Hunk line counts are tracked so an added `++ b/x` or removed
+ * `-- a/x` content line is never read as a header. A CRLF patch ends each line
+ * with `\r`, which is not part of the name.
  */
 export function parsePatchModifiedFiles(patch: string): string[] {
   const files: string[] = [];
-  for (const line of patch.split("\n")) {
-    const match = /^\+\+\+ b\/(.+?)\t?\r?$/.exec(line);
-    if (match) files.push(match[1]!);
+  let oldLeft = 0;
+  let newLeft = 0;
+  let afterOldHeader = false;
+  for (const rawLine of patch.split("\n")) {
+    const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
+    if (oldLeft > 0 || newLeft > 0) {
+      const marker = line[0];
+      if (marker === "\\") continue;
+      if (marker === "+") {
+        newLeft--;
+        continue;
+      }
+      if (marker === "-") {
+        oldLeft--;
+        continue;
+      }
+      // Some transports strip the trailing space of an empty context line.
+      if (marker === " " || line === "") {
+        oldLeft--;
+        newLeft--;
+        continue;
+      }
+      oldLeft = 0;
+      newLeft = 0;
+    }
+    const hunk = HUNK_HEADER.exec(line);
+    if (hunk) {
+      oldLeft = Number(hunk[1] ?? 1);
+      newLeft = Number(hunk[2] ?? 1);
+      afterOldHeader = false;
+      continue;
+    }
+    if (afterOldHeader && line.startsWith("+++ ")) {
+      const path = parseNewSidePath(line.slice(4));
+      if (path !== null) files.push(path);
+    }
+    afterOldHeader = line.startsWith("--- ");
   }
   return files;
 }
