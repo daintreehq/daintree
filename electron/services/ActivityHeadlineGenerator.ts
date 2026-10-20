@@ -30,7 +30,10 @@ const COMMAND_PATTERNS: Array<{ pattern: RegExp; headline: string }> = [
     pattern: /^npm\s+run\s+build|^yarn\s+(?:run\s+)?build|^pnpm\s+build|^vite\s+build|^webpack/i,
     headline: "Building project",
   },
-  { pattern: /^npm\s+run\s+dev|^yarn\s+(?:run\s+)?dev|^pnpm\s+dev|^vite/i, headline: "Starting dev server" },
+  {
+    pattern: /^npm\s+run\s+dev|^yarn\s+(?:run\s+)?dev|^pnpm\s+dev|^vite/i,
+    headline: "Starting dev server",
+  },
   { pattern: /^npm\s+run\s+lint|^eslint|^prettier/i, headline: "Running linter" },
   { pattern: /^git\s+clone/i, headline: "Cloning repository" },
   { pattern: /^git\s+push/i, headline: "Pushing changes" },
