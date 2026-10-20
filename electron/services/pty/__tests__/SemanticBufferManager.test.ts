@@ -139,6 +139,22 @@ describe("SemanticBufferManager", () => {
     manager.dispose();
   });
 
+  it("starts a new line after a capped line completed in the first flush", () => {
+    const info = createTerminalInfo();
+    const manager = new SemanticBufferManager(info);
+
+    manager.onData("x".repeat(1200) + "\n");
+    manager.flush();
+    manager.onData("after\n");
+    manager.flush();
+
+    expect(info.semanticBuffer[0]).toBe("x".repeat(1000) + "... [truncated]");
+    expect(info.semanticBuffer[1]).toBe("after");
+    expect(manager.getLastCommand()).toBe("after");
+
+    manager.dispose();
+  });
+
   it("truncates a line that reaches the cap only through a continuation", () => {
     const info = createTerminalInfo();
     const manager = new SemanticBufferManager(info);

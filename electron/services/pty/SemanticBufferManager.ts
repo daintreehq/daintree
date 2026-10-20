@@ -25,6 +25,7 @@ function isTruncatedLine(line: string): boolean {
 export class SemanticBufferManager {
   private pendingSemanticData = "";
   private semanticFlushTimer: NodeJS.Timeout | null = null;
+  private lastChunkEndedWithNewline = false;
 
   constructor(private terminalInfo: TerminalInfo) {}
 
@@ -90,9 +91,17 @@ export class SemanticBufferManager {
     const normalized = chunk.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
     const lines = normalized.split("\n");
 
-    if (terminal.semanticBuffer.length > 0 && lines.length > 0 && !normalized.startsWith("\n")) {
-      const lastIndex = terminal.semanticBuffer.length - 1;
-      const last = terminal.semanticBuffer[lastIndex];
+    const lastIndex = terminal.semanticBuffer.length - 1;
+    const last = terminal.semanticBuffer[lastIndex];
+    // The first flush filters out its trailing empty entry, so a completed line can be the last
+    // retained one; the next chunk then starts a new line rather than continuing it.
+    const continuesLastLine =
+      lastIndex >= 0 &&
+      !normalized.startsWith("\n") &&
+      !(this.lastChunkEndedWithNewline && last !== "");
+    this.lastChunkEndedWithNewline = normalized.endsWith("\n");
+
+    if (continuesLastLine) {
       // A capped line has already discarded its tail; dropping the continuation keeps it bounded
       // and stops the next fragment from being joined onto the marker.
       if (!isTruncatedLine(last)) {
