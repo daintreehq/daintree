@@ -294,7 +294,11 @@ export class DevPreviewProxyService {
     // upstream. Gate it before resolving an upstream port so it works even while
     // the dev server is down (restarting), which is one of the cases it exists
     // to survive.
-    const url = new URL(req.url ?? "/", `http://${req.headers.host ?? PROXY_LISTEN_HOST}`);
+    const url = this.parseRequestUrl(req);
+    if (!url) {
+      this.send400(res);
+      return;
+    }
     if (url.pathname === DEV_PREVIEW_BOOTSTRAP_PATH) {
       this.handleBootstrap(req, res, url);
       return;
@@ -421,6 +425,12 @@ export class DevPreviewProxyService {
     this.sockets.add(socket);
     socket.once("close", () => this.sockets.delete(socket));
 
+    if (!this.parseRequestUrl(req)) {
+      // No ServerResponse on an upgrade; end() flushes the 400 before closing.
+      socket.end("HTTP/1.1 400 Bad Request\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
+      return;
+    }
+
     const resolved = await this.resolveOrReport(req, "ws");
     if (!resolved) {
       socket.destroy();
@@ -533,6 +543,23 @@ export class DevPreviewProxyService {
     } catch {
       // Diagnostics must never break proxying.
     }
+  }
+
+  /**
+   * Node's parser accepts a target (`//[`) or Host (`[`) the URL constructor
+   * rejects; null lets callers answer those as a client error.
+   */
+  private parseRequestUrl(req: http.IncomingMessage): URL | null {
+    try {
+      return new URL(req.url ?? "/", `http://${req.headers.host ?? PROXY_LISTEN_HOST}`);
+    } catch {
+      return null;
+    }
+  }
+
+  private send400(res: http.ServerResponse): void {
+    res.writeHead(400, { "Content-Type": "text/plain; charset=utf-8", Connection: "close" });
+    res.end("Bad request.");
   }
 
   private send502(res: http.ServerResponse, message: string): void {

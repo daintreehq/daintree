@@ -450,6 +450,69 @@ describe("DevPreviewProxyService", () => {
     ).rejects.toBeTruthy();
   });
 
+  it("answers a malformed request target or Host with 400 and keeps serving", async () => {
+    upstream = http.createServer((_req, res) => {
+      res.writeHead(200, { "Content-Type": "text/plain" });
+      res.end("hello from upstream");
+    });
+    const upstreamPort = await listen(upstream);
+
+    proxy = new DevPreviewProxyService((sub) =>
+      sub === "dp-test" ? { port: upstreamPort, isHttps: false } : null
+    );
+    const proxyPort = await proxy.start();
+
+    expect((await request(proxyPort, `dp-test.localhost:${proxyPort}`, "//[")).status).toBe(400);
+    expect((await request(proxyPort, `dp-test.localhost:${proxyPort}`, "http://[/x")).status).toBe(
+      400
+    );
+    expect((await request(proxyPort, "[", "/")).status).toBe(400);
+
+    const res = await request(proxyPort, `dp-test.localhost:${proxyPort}`);
+    expect(res.status).toBe(200);
+    expect(res.body).toBe("hello from upstream");
+  });
+
+  it("answers a malformed WebSocket upgrade target with 400 instead of forwarding it", async () => {
+    let upstreamConnections = 0;
+    wss = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+    await new Promise<void>((resolve) => wss!.on("listening", resolve));
+    const upstreamPort = (wss.address() as AddressInfo).port;
+    wss.on("connection", () => upstreamConnections++);
+
+    proxy = new DevPreviewProxyService(() => ({ port: upstreamPort, isHttps: false }));
+    const proxyPort = await proxy.start();
+
+    const status = await new Promise<number>((resolve, reject) => {
+      const req = http.request({
+        host: "127.0.0.1",
+        port: proxyPort,
+        path: "//[",
+        agent: false,
+        headers: {
+          host: `dp-test.localhost:${proxyPort}`,
+          connection: "Upgrade",
+          upgrade: "websocket",
+          "sec-websocket-version": "13",
+          "sec-websocket-key": "dGhlIHNhbXBsZSBub25jZQ==",
+        },
+      });
+      req.on("response", (res) => {
+        res.resume();
+        resolve(res.statusCode ?? 0);
+      });
+      req.on("upgrade", (_res, socket) => {
+        socket.destroy();
+        reject(new Error("unexpected upgrade"));
+      });
+      req.on("error", reject);
+      req.end();
+    });
+
+    expect(status).toBe(400);
+    expect(upstreamConnections).toBe(0);
+  });
+
   it("stops accepting connections after dispose", async () => {
     proxy = new DevPreviewProxyService(() => null);
     const proxyPort = await proxy.start();
