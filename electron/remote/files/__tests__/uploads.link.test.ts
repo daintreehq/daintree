@@ -721,16 +721,18 @@ describe("pending upload limit", () => {
     const { client, inbox } = await setup();
     const { ensure, release } = gateEnsure(inbox);
     try {
-      const answers = Array.from({ length: 17 }, (_, i) =>
+      const admitted = Array.from({ length: 16 }, (_, i) =>
         prepareInbox(client, `op-${i}`, `c${i}`)
       );
       await vi.waitFor(() => expect(ensure).toHaveBeenCalledTimes(16));
+      expect(await prepareInbox(client, "op-extra", "extra")).toEqual({
+        status: "refused",
+        reason: "busy",
+      });
+      expect(ensure).toHaveBeenCalledTimes(16);
       release();
-      const settled = await Promise.all(answers);
-      expect(settled.filter((answer) => answer.status === "ready")).toHaveLength(16);
-      expect(settled.filter((answer) => answer.status === "refused")).toEqual([
-        { status: "refused", reason: "busy" },
-      ]);
+      const settled = await Promise.all(admitted);
+      expect(settled.every((answer) => answer.status === "ready")).toBe(true);
     } finally {
       release();
     }

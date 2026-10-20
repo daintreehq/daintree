@@ -288,7 +288,7 @@ export class HostUploadService {
     for (const subscription of this.subscriptions.values()) subscription.dispose();
     this.subscriptions.clear();
     this.replaceGrants.clear();
-    for (const record of this.operations.values()) record.settle();
+    for (const [key, record] of this.operations) this.forgetOperation(key, record);
     this.operations.clear();
   }
 
