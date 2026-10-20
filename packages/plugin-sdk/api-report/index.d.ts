@@ -893,6 +893,13 @@ interface ProjectHealthCapability {
  */
 interface AvatarCapability {
     resolveAuthorAvatar(email: string): Promise<string | null>;
+    /**
+     * Synchronous counter that changes whenever a credential or instance change
+     * invalidates earlier lookups. When present, the host shares one in-flight
+     * lookup between concurrent callers for the same author within a generation;
+     * without it every call reaches the provider on its own.
+     */
+    getCacheGeneration?(): number;
 }
 /** A single named rate-limit bucket as reported by the provider. */
 interface RateLimitBucket {

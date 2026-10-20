@@ -1,10 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 let mockToken: string | null = "test-token";
+let mockTokenVersion = 0;
 
 vi.mock("../GitHubAuth.js", () => ({
   GitHubAuth: {
     getToken: vi.fn(() => mockToken),
+    getTokenVersion: vi.fn(() => mockTokenVersion),
   },
   GITHUB_API_TIMEOUT_MS: 5000,
   rateLimitAwareFetch: (input: RequestInfo | URL, init?: RequestInit) =>
@@ -37,6 +39,7 @@ describe("GitHubProfilePicture", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockToken = "test-token";
+    mockTokenVersion = 0;
     _resetGitHubProfilePictureCachesForTests();
   });
 
@@ -179,6 +182,31 @@ describe("GitHubProfilePicture", () => {
     expect(await resolveAuthorAvatar("flaky@example.com")).toBe(
       "https://avatars.example/recovered"
     );
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not let a lookup started under an earlier token serve callers after a token change", async () => {
+    let resolveOld: (v: unknown) => void = () => {};
+    let resolveNew: (v: unknown) => void = () => {};
+    mockFetch
+      .mockReturnValueOnce(new Promise((res) => (resolveOld = res)))
+      .mockReturnValueOnce(new Promise((res) => (resolveNew = res)));
+
+    const before = resolveAuthorAvatar("dev@example.com");
+    mockTokenVersion = 1;
+    const after = resolveAuthorAvatar("dev@example.com");
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+
+    // The old lookup settling first must neither evict the new flight nor
+    // seed the cache the new token reads from.
+    resolveOld(okResponse([{ avatar_url: "https://avatars.example/old" }]));
+    expect(await before).toBe("https://avatars.example/old");
+    const joiner = resolveAuthorAvatar("dev@example.com");
+    resolveNew(okResponse([{ avatar_url: "https://avatars.example/new" }]));
+
+    expect(await after).toBe("https://avatars.example/new");
+    expect(await joiner).toBe("https://avatars.example/new");
+    expect(await resolveAuthorAvatar("dev@example.com")).toBe("https://avatars.example/new");
     expect(mockFetch).toHaveBeenCalledTimes(2);
   });
 });
