@@ -533,7 +533,10 @@ describe("terminal action hardening", () => {
       activeDockTerminalId: null,
     });
 
-    await moveToDock.run({ terminalId: "missing" }, {} as never);
+    // A miss is reported, not acknowledged (#13663), and still touches nothing.
+    await expect(moveToDock.run({ terminalId: "missing" }, {} as never)).rejects.toThrow(
+      /no panel with id "missing"/
+    );
 
     expect(usePanelStore.getState().focusedId).toBe("existing");
     expect(usePanelStore.getState().activeDockTerminalId).toBeNull();
