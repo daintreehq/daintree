@@ -1161,7 +1161,8 @@ describe("RunCommandDetector", () => {
       expect(dc[0]!.command).toBe("curl http://localhost:3000/* && npm run dev");
     });
 
-    it("returns empty for devcontainer.json with an unterminated comment", async () => {
+    it("warns and returns empty for devcontainer.json with an unterminated comment", async () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
       const devcontainerDir = path.join(tempDir, ".devcontainer");
       await fs.mkdir(devcontainerDir);
       await fs.writeFile(
@@ -1173,6 +1174,8 @@ describe("RunCommandDetector", () => {
       const commands = await detector.detect(tempDir);
       const dc = commands.filter((cmd) => cmd.id === "devcontainer-poststart");
       expect(dc).toEqual([]);
+      expect(warn.mock.calls.some(([msg]) => String(msg).includes("devcontainer.json"))).toBe(true);
+      warn.mockRestore();
     });
   });
 

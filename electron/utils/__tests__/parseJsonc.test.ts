@@ -55,6 +55,9 @@ describe("parseJsonc", () => {
       "{,}",
       "[,]",
       "[1,,]",
+      "[1,/**/,]",
+      '["a\\',
+      '["a\\"]',
       "{ a: 1 }",
     ]) {
       expect(() => parseJsonc(text), text).toThrow(SyntaxError);
