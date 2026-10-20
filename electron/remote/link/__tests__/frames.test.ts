@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  DEFAULT_MAX_FRAME_BYTES,
   FRAME_HEADER_BYTES,
   FrameDecoder,
   FrameProtocolError,
@@ -69,5 +70,82 @@ describe("link frames", () => {
     expect(() =>
       encodeFrame({ lane: Lane.RPC, kind: 1, streamId: -1, payload: new Uint8Array() })
     ).toThrow();
+  });
+
+  describe("reassembly capacity", () => {
+    const big = (n: number) => {
+      const payload = new Uint8Array(n);
+      for (let i = 0; i < n; i++) payload[i] = i & 0xff;
+      return { lane: Lane.BULK, kind: 1, streamId: 3, payload };
+    };
+
+    it("releases oversized storage once small traffic settles after a large frame", () => {
+      const d = new FrameDecoder();
+      const [large] = d.push(encodeFrame(big(9 * 1024 * 1024)));
+      expect(large!.payload.byteLength).toBe(9 * 1024 * 1024);
+      expect(d.capacityBytes).toBeGreaterThanOrEqual(9 * 1024 * 1024);
+      for (let i = 0; i < 100; i++) {
+        const out = d.push(encodeFrame(frame(Lane.EVENTS, 1)));
+        expect(out).toHaveLength(1);
+      }
+      expect(d.bufferedBytes).toBe(0);
+      expect(d.capacityBytes).toBeLessThanOrEqual(128 * 1024);
+      expect(large!.payload).toEqual(big(9 * 1024 * 1024).payload);
+    });
+
+    it("keeps the warmed buffer while large frames keep arriving", () => {
+      const d = new FrameDecoder();
+      d.push(encodeFrame(big(1024 * 1024)));
+      const warmed = d.capacityBytes;
+      for (let round = 0; round < 5; round++) {
+        for (let i = 0; i < 15; i++) d.push(encodeFrame(frame(Lane.CONTROL, 2)));
+        d.push(encodeFrame(big(1024 * 1024)));
+        expect(d.capacityBytes).toBe(warmed);
+      }
+    });
+
+    it("shrinks on the sixteenth consecutive small frame, coalesced or not", () => {
+      const small = encodeFrame(frame(Lane.RPC, 3));
+      const a = new FrameDecoder();
+      a.push(encodeFrame(big(1024 * 1024)));
+      for (let i = 0; i < 15; i++) a.push(small);
+      expect(a.capacityBytes).toBeGreaterThan(256 * 1024);
+      a.push(small);
+      expect(a.capacityBytes).toBe(128 * 1024);
+
+      const b = new FrameDecoder();
+      const out = b.push(
+        Buffer.concat([encodeFrame(big(1024 * 1024)), ...Array.from({ length: 16 }, () => small)])
+      );
+      expect(out).toHaveLength(17);
+      expect(out[0]!.payload).toEqual(big(1024 * 1024).payload);
+      expect(b.capacityBytes).toBe(128 * 1024);
+    });
+
+    it("never shrinks under a partial frame and decodes it intact afterwards", () => {
+      const d = new FrameDecoder();
+      d.push(encodeFrame(big(1024 * 1024)));
+      const small = encodeFrame(frame(Lane.RPC, 3));
+      for (let i = 0; i < 15; i++) d.push(small);
+      const next = encodeFrame(big(600 * 1024));
+      // The sixteenth small frame shares a chunk with the head of a large frame.
+      const out = d.push(Buffer.concat([small, next.subarray(0, 2)]));
+      expect(out).toHaveLength(1);
+      expect(d.bufferedBytes).toBe(2);
+      const rest = [...d.push(next.subarray(2, 5)), ...d.push(next.subarray(5))];
+      expect(rest).toHaveLength(1);
+      expect(rest[0]!.payload).toEqual(big(600 * 1024).payload);
+    });
+
+    it("accepts a maximum legal frame and rejects one byte more", () => {
+      const max = DEFAULT_MAX_FRAME_BYTES - FRAME_HEADER_BYTES;
+      const d = new FrameDecoder();
+      const [f] = d.push(encodeFrame(big(max)));
+      expect(f!.payload.byteLength).toBe(max);
+      const header = new Uint8Array(FRAME_HEADER_BYTES);
+      new DataView(header.buffer).setUint32(0, DEFAULT_MAX_FRAME_BYTES - 3);
+      expect(() => d.push(header)).toThrow(/invalid frame length/);
+      expect(d.capacityBytes).toBe(0);
+    });
   });
 });
