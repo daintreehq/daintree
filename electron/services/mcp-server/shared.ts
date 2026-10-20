@@ -215,6 +215,14 @@ export const MAX_PORT_RETRIES = 10;
 export const MCP_SSE_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 
 /**
+ * Live sessions one pane bearer may hold, across both transports. A pane
+ * session never idles out (#13635), so this bounds a client that keeps
+ * initializing without closing; the pane's least recently used session is
+ * retired to admit a new one. Same bound as the plugin route's (#13532).
+ */
+export const MCP_PANE_SESSION_CAP = 8;
+
+/**
  * Cadence of the SSE comment heartbeat on an open `/sse` stream. Well inside
  * undici's 300 s body timeout, which is what Claude Code's client applies.
  */
@@ -232,7 +240,8 @@ export const MCP_SSE_HEARTBEAT_INTERVAL_MS = 15_000;
  * corrected via {@link SystemSleepService.getAwakeTimeSince} so suspend time
  * doesn't count against it, exactly like the idle reaper. Intentionally
  * equal to {@link MCP_SSE_IDLE_TIMEOUT_MS}: a tier can never silently apply
- * to a session the idle reaper has already collected.
+ * to a session the idle reaper has already collected. A pane bearer's session
+ * is never reaped (#13635); the elevation still decays on this timer.
  */
 export const MCP_TIER_ELEVATION_TTL_MS = 30 * 60 * 1000;
 
@@ -256,7 +265,8 @@ export const MCP_GRANT_TTL_MS = 15 * 60 * 1000;
  * next out-of-baseline call then re-triggers the tier-mismatch banner and
  * the user must re-approve (#9161). Intentionally equal to
  * {@link MCP_SSE_IDLE_TIMEOUT_MS} and {@link MCP_TIER_ELEVATION_TTL_MS} so a
- * grant can never outlive its SSE session.
+ * grant can never outlive its SSE session. A pane bearer's session outlives
+ * both (#13635); the grant still expires on its own clock.
  */
 export const MCP_GRANT_MAX_LIFETIME_MS = 30 * 60 * 1000;
 
@@ -1201,13 +1211,15 @@ export interface McpSseSession {
   // same reason; the SSE path previously let the reference go out of scope
   // after `server.connect(transport)`.
   server: import("@modelcontextprotocol/sdk/server/index.js").Server;
-  idleTimer: ReturnType<typeof setTimeout>;
+  /** Absent for a per-pane bearer's session, which never idles out (#13635). */
+  idleTimer: ReturnType<typeof setTimeout> | undefined;
 }
 
 export interface McpHttpSession {
   transport: import("@modelcontextprotocol/sdk/server/streamableHttp.js").StreamableHTTPServerTransport;
   server: import("@modelcontextprotocol/sdk/server/index.js").Server;
-  idleTimer: ReturnType<typeof setTimeout>;
+  /** Absent for a per-pane bearer's session, which never idles out (#13635). */
+  idleTimer: ReturnType<typeof setTimeout> | undefined;
 }
 
 /**

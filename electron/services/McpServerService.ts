@@ -557,6 +557,22 @@ export class McpServerService {
   }
 
   /**
+   * A pane's bearer is gone (its terminal exited or relaunched): revoke what
+   * it owns and close the sessions it holds. Pane sessions never idle out
+   * (#13635), so this is what ends them.
+   */
+  revokePaneBearer(principal: string): void {
+    const sessionIds = this.sessionStore.resourceOwnership.sessionsOf(principal);
+    try {
+      this.revokeOwnershipPrincipal(principal);
+    } finally {
+      for (const sessionId of sessionIds) {
+        this.sessionStore.revokeSession(sessionId);
+      }
+    }
+  }
+
+  /**
    * Hand a running terminal to an orchestrating agent pane (#12490).
    *
    * Reached only over the renderer's IPC — never an action and never an MCP

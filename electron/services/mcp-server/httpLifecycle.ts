@@ -655,6 +655,13 @@ export class HttpLifecycle {
     return helpSessionId === null ? null : helpOwnershipPrincipal(helpSessionId);
   }
 
+  /** The principal of a live pane bearer (#12487), or null for every other bearer. */
+  private resolvePanePrincipal(authHeader: string): string | null {
+    const token = extractBearerToken(authHeader);
+    if (!token) return null;
+    return this.paneOwnershipPrincipalResolver?.(token) ?? null;
+  }
+
   /**
    * The pane a pane bearer's notices are typed into: its own terminal, keyed
    * by the ownership principal so a reconnect finds the same notices. Null for
@@ -1551,7 +1558,11 @@ export class HttpLifecycle {
       );
       const server = createSessionServer(sessionId, deps);
 
-      const idleTimer = this.deps.sessionStore.createIdleTimer(sessionId);
+      const idleTimer = this.deps.sessionStore.armIdleTimer(
+        sessionId,
+        "sse",
+        this.resolvePanePrincipal(authHeader)
+      );
       this.deps.sessionStore.sessions.set(sessionId, { transport, server, idleTimer });
       let heartbeat: ReturnType<typeof setInterval> | undefined;
       transport.onclose = () => {
@@ -1816,7 +1827,14 @@ export class HttpLifecycle {
           initializedSessionId,
           sessionCredentialDigest(authHeader)
         );
-        const idleTimer = this.deps.sessionStore.createHttpIdleTimer(initializedSessionId);
+        // Resolved now, not with the rest of the handshake: a pane revoked
+        // while this request was out closes only the sessions already filed,
+        // so one filed after it falls back to the idle reaper.
+        const idleTimer = this.deps.sessionStore.armIdleTimer(
+          initializedSessionId,
+          "streamable-http",
+          this.resolvePanePrincipal(authHeader)
+        );
         this.deps.sessionStore.httpSessions.set(initializedSessionId, {
           transport,
           server,

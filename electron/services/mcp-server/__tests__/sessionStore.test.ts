@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  MCP_PANE_SESSION_CAP,
   MCP_SSE_IDLE_TIMEOUT_MS,
   MCP_TIER_ELEVATION_TTL_MS,
   type HelpAssistantTier,
@@ -1515,6 +1516,78 @@ describe("SessionStore pane-bearer ownership survives session teardown (#12487)"
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("SessionStore pane-bearer sessions never idle out (#13635)", () => {
+  let store: SessionStore;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    setAwakeTime(0);
+    store = new SessionStore(() => {});
+  });
+
+  afterEach(() => {
+    store.drain();
+    store.grantCache.dispose();
+    vi.useRealTimers();
+  });
+
+  function filePaneHttp(id: string, principal: string): McpHttpSession {
+    const session: McpHttpSession = { ...fakeHttpSession(), idleTimer: undefined };
+    session.idleTimer = store.armIdleTimer(id, "streamable-http", principal);
+    store.httpSessions.set(id, session);
+    return session;
+  }
+
+  it("keeps pane sessions on both transports through idle time, resets and wake, and reaps the rest", () => {
+    filePaneHttp("pane-http", "principal-a");
+    const paneSse: McpSseSession = { ...fakeSseSession(), idleTimer: undefined };
+    paneSse.idleTimer = store.armIdleTimer("pane-sse", "sse", "principal-a");
+    store.sessions.set("pane-sse", paneSse);
+    const apiKey: McpHttpSession = { ...fakeHttpSession(), idleTimer: undefined };
+    apiKey.idleTimer = store.armIdleTimer("api-key", "streamable-http", null);
+    store.httpSessions.set("api-key", apiKey);
+
+    store.resetHttpIdleTimer("pane-http");
+    store.resetIdleTimer("pane-sse");
+    setAwakeTime(MCP_SSE_IDLE_TIMEOUT_MS * 10);
+    vi.advanceTimersByTime(MCP_SSE_IDLE_TIMEOUT_MS * 10);
+    store.recomputeIdleTimers();
+
+    expect(store.httpSessions.has("api-key")).toBe(false);
+    expect(store.httpSessions.has("pane-http")).toBe(true);
+    expect(store.sessions.has("pane-sse")).toBe(true);
+  });
+
+  it("retires a pane's least recently used session at the cap, and leaves other panes alone", () => {
+    const ids = Array.from({ length: MCP_PANE_SESSION_CAP }, (_, i) => `a-${i}`);
+    const sessions = ids.map((id) => filePaneHttp(id, "principal-a"));
+    filePaneHttp("b-0", "principal-b");
+    // A request on the oldest makes the second-oldest the one to go.
+    store.resetHttpIdleTimer("a-0");
+
+    filePaneHttp("a-new", "principal-a");
+
+    expect(store.httpSessions.has("a-1")).toBe(false);
+    expect(sessions[1]!.transport.close).toHaveBeenCalled();
+    for (const id of [ids[0]!, ...ids.slice(2), "a-new", "b-0"]) {
+      expect(store.httpSessions.has(id)).toBe(true);
+    }
+  });
+
+  it("forgets a pane session on teardown, so a reused id is idle-reaped again", () => {
+    filePaneHttp("pane-http", "principal-a");
+    store.revokeSession("pane-http");
+
+    const reused: McpHttpSession = { ...fakeHttpSession(), idleTimer: undefined };
+    reused.idleTimer = store.armIdleTimer("pane-http", "streamable-http", null);
+    store.httpSessions.set("pane-http", reused);
+    setAwakeTime(MCP_SSE_IDLE_TIMEOUT_MS + 1);
+    store.recomputeIdleTimers();
+
+    expect(store.httpSessions.has("pane-http")).toBe(false);
   });
 });
 

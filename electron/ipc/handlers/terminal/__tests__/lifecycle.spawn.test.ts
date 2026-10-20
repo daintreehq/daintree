@@ -188,7 +188,7 @@ const {
   mockRegisterPaneWorkspaceBinding,
   mockSetPaneWorkspaceBindingResolver,
   mockSetPaneOwnershipPrincipalResolver,
-  mockRevokeOwnershipPrincipal,
+  mockRevokePaneBearer,
   mockGetOwnershipPrincipalForToken,
   mockSetOwnershipPrincipalRevokedListener,
   mockSetPaneTerminalResolver,
@@ -204,7 +204,7 @@ const {
   mockSetPaneWorkspaceBindingResolver: vi.fn(),
   mockSetPaneOwnershipPrincipalResolver:
     vi.fn<(resolver: ((token: string) => string | null) | null) => void>(),
-  mockRevokeOwnershipPrincipal: vi.fn<(principal: string) => void>(),
+  mockRevokePaneBearer: vi.fn<(principal: string) => void>(),
   mockGetOwnershipPrincipalForToken: vi.fn<(token: string) => string | null>(),
   mockSetOwnershipPrincipalRevokedListener:
     vi.fn<(listener: ((principal: string) => void) | null) => void>(),
@@ -282,7 +282,7 @@ vi.mock("../../../../services/McpServerService.js", () => ({
       mockSetPaneOwnershipPrincipalResolver(resolver),
     setPaneTerminalResolver: (resolver: ((token: string) => string | null) | null) =>
       mockSetPaneTerminalResolver(resolver),
-    revokeOwnershipPrincipal: (principal: string) => mockRevokeOwnershipPrincipal(principal),
+    revokePaneBearer: (principal: string) => mockRevokePaneBearer(principal),
   },
 }));
 
@@ -2563,7 +2563,7 @@ describe("terminal spawn handler - Claude pane launch-workspace binding (#12486)
     expect(resolver!("pane-token")).toBe("principal-1");
     expect(mockGetOwnershipPrincipalForToken).toHaveBeenCalledWith("pane-token");
     listener!("principal-1");
-    expect(mockRevokeOwnershipPrincipal).toHaveBeenCalledWith("principal-1");
+    expect(mockRevokePaneBearer).toHaveBeenCalledWith("principal-1");
   });
 
   it("wires the pane bearer's own terminal before the PTY starts (#12491)", async () => {

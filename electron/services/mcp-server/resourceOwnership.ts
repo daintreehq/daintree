@@ -159,6 +159,16 @@ export class ResourceOwnershipLedger {
     return this.principalBySession.get(sessionId) ?? sessionId;
   }
 
+  /** The live sessions bound to `principalId` — what revoking its bearer must close (#13635). */
+  sessionsOf(principalId: string): string[] {
+    const owner = principalOwnerKey(principalId);
+    const out: string[] = [];
+    for (const [sessionId, bound] of this.principalBySession) {
+      if (bound === owner) out.push(sessionId);
+    }
+    return out;
+  }
+
   /** Whether `owner` is a bearer principal, whose records outlive any one session. */
   isPrincipalOwner(owner: string): boolean {
     return isPrincipalOwner(owner);
