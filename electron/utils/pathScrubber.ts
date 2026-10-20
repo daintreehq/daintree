@@ -37,5 +37,11 @@ export function sanitizePath(str: string): string {
       .replace(/([A-Za-z]:\\\\Users\\\\)[^\\"]+/gi, "$1USER")
       .replace(/([A-Za-z]:\\Users\\)[^\\"]+/gi, "$1USER")
       .replace(/([A-Za-z]:\/Users\/)[^/"\\]+/gi, "$1USER")
+      // Dash-encoded home directories, as Claude Code names its per-project
+      // dirs (`-Users-alice-proj`, `-home-alice-proj`, `C--Users-alice-proj`).
+      // The username can itself contain dashes and nothing marks where it
+      // ends, so the whole remainder of the component is redacted.
+      .replace(/(^|[/\\\s"'`=:(])-(Users|home)-[^/\\\s"'`]+/g, "$1-$2-USER")
+      .replace(/\b([A-Za-z])--Users-[^/\\\s"'`]+/g, "$1--Users-USER")
   );
 }

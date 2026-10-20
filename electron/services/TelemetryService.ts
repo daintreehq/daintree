@@ -49,9 +49,43 @@ export interface SentryEvent {
   [key: string]: unknown;
 }
 
-function sanitizeString(value: string): string {
-  return scrubSecrets(sanitizePath(value));
+// Telemetry-local rather than a `scrubSecrets` pattern: that catalogue also
+// drives `findSecretInValue`, which would start rejecting `GIT_AUTHOR_EMAIL`
+// style config values as credentials. Matches the `%40`-encoded form that
+// query strings carry. The TLD must be alphabetic so `pkg@1.2.3` survives.
+const EMAIL_REGEX =
+  /[A-Za-z0-9._%+-]{1,64}(?:@|%40)(?:[A-Za-z0-9-]{1,63}\.){1,10}[A-Za-z]{2,63}\b/gi;
+const EMBEDDED_HTTP_URL_REGEX = /\bhttps?:\/\/[^\s"'`<>\\)]+/gi;
+const REDACTED_URL = "[REDACTED_URL]";
+
+function scrubText(value: string): string {
+  return scrubSecrets(sanitizePath(value)).replace(EMAIL_REGEX, "[EMAIL]");
 }
+
+// Paths and query strings name private repos (`/repos/<owner>/<repo>`) and
+// carry search terms (`search/users?q=<email>`), so only the origin is kept.
+function reduceUrl(raw: string): string {
+  try {
+    const u = new URL(raw);
+    if (u.protocol === "http:" || u.protocol === "https:") return u.origin;
+    return u.host ? `${u.protocol}//${u.host}` : u.protocol;
+  } catch {
+    return REDACTED_URL;
+  }
+}
+
+// For fields that hold nothing but a URL. Both branches of `reduceUrl` end in
+// the full string scrub here (lesson #10101).
+function sanitizeUrlField(value: string): string {
+  return scrubText(reduceUrl(value));
+}
+
+function sanitizeString(value: string): string {
+  return scrubText(value.replace(EMBEDDED_HTTP_URL_REGEX, (url) => reduceUrl(url)));
+}
+
+const BREADCRUMB_URL_KEYS = ["url", "from", "to"] as const;
+const BREADCRUMB_DROPPED_KEYS = ["http.query", "http.fragment"] as const;
 
 // Recurse through arrays and plain objects, sanitizing every string leaf.
 // Depth-capped to guard against pathological / circular inputs — Sentry
@@ -95,8 +129,10 @@ export function sanitizeEvent(event: SentryEvent): SentryEvent | null {
         if (Array.isArray(ex.stacktrace?.frames)) {
           for (const frame of ex.stacktrace.frames) {
             if (!frame || typeof frame !== "object") continue;
-            if (frame.filename) frame.filename = sanitizeString(frame.filename);
-            if (frame.abs_path) frame.abs_path = sanitizeString(frame.abs_path);
+            // Frame locations are often URLs themselves; reducing them to an
+            // origin would strip the file the frame points at.
+            if (frame.filename) frame.filename = scrubText(frame.filename);
+            if (frame.abs_path) frame.abs_path = scrubText(frame.abs_path);
             // contextLinesIntegration and localVariablesIntegration (default
             // integrations in @sentry/electron) populate these fields with
             // raw source lines and local variable values before beforeSend
@@ -124,19 +160,7 @@ export function sanitizeEvent(event: SentryEvent): SentryEvent | null {
     }
     if (event.request) {
       if (typeof event.request.url === "string") {
-        try {
-          const u = new URL(event.request.url);
-          u.search = "";
-          u.hash = "";
-          u.username = "";
-          u.password = "";
-          // Path segments can still carry user paths or token-shaped strings.
-          event.request.url = sanitizeString(u.toString());
-        } catch {
-          // Not parseable as an absolute URL (relative path, mailto:, etc.)
-          // Still scrub any inline free-text secrets before giving up.
-          event.request.url = sanitizeString(event.request.url);
-        }
+        event.request.url = sanitizeUrlField(event.request.url);
       }
       if (event.request.headers && typeof event.request.headers === "object") {
         event.request.headers = sanitizeStringsDeep(event.request.headers) as Record<
@@ -150,9 +174,7 @@ export function sanitizeEvent(event: SentryEvent): SentryEvent | null {
       if (event.request.data !== undefined) {
         event.request.data = sanitizeStringsDeep(event.request.data);
       }
-      if (event.request.query_string !== undefined) {
-        event.request.query_string = sanitizeStringsDeep(event.request.query_string);
-      }
+      delete event.request.query_string;
     }
     if (Array.isArray(event.breadcrumbs)) {
       for (const breadcrumb of event.breadcrumbs) {
@@ -161,7 +183,15 @@ export function sanitizeEvent(event: SentryEvent): SentryEvent | null {
           breadcrumb.message = sanitizeString(breadcrumb.message);
         }
         if (breadcrumb.data && typeof breadcrumb.data === "object") {
-          breadcrumb.data = sanitizeStringsDeep(breadcrumb.data) as Record<string, unknown>;
+          // Network breadcrumbs (electron.net, http, fetch, xhr) carry `url`
+          // plus split-out query/fragment keys; navigation carries `from`/`to`.
+          const data = breadcrumb.data;
+          for (const key of BREADCRUMB_DROPPED_KEYS) delete data[key];
+          for (const key of BREADCRUMB_URL_KEYS) {
+            const value = data[key];
+            if (typeof value === "string") data[key] = sanitizeUrlField(value);
+          }
+          breadcrumb.data = sanitizeStringsDeep(data) as Record<string, unknown>;
         }
       }
     }
