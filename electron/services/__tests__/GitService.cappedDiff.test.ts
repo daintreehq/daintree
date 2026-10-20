@@ -1,6 +1,8 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChildProcess } from "node:child_process";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import { createRequire, syncBuiltinESMExports } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { GitService } from "../GitService.js";
@@ -13,19 +15,41 @@ import { runWithCappedStdout } from "../../utils/cappedGitOutput.js";
  * historical blobs.
  */
 
-function git(cwd: string, args: string[]): string {
-  return execFileSync("git", args, {
-    cwd,
-    encoding: "utf8",
-    stdio: "pipe",
-    timeout: 10_000,
-    env: {
-      ...process.env,
-      GIT_CONFIG_GLOBAL: os.devNull,
-      GIT_CONFIG_SYSTEM: os.devNull,
-      GIT_TERMINAL_PROMPT: "0",
-    },
-  });
+const require = createRequire(import.meta.url);
+const cjsCp = require("child_process") as typeof import("child_process");
+const realSpawn = cjsCp.spawn;
+
+let home: string;
+
+function fixtureEnv(): NodeJS.ProcessEnv {
+  return {
+    PATH: process.env.PATH ?? "",
+    HOME: home,
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_TERMINAL_PROMPT: "0",
+    LC_ALL: "C",
+  };
+}
+
+function git(cwd: string, args: string[]): void {
+  execFileSync("git", args, { cwd, env: fixtureEnv(), stdio: "pipe", timeout: 10_000 });
+}
+
+/** Every git child spawned, forwarded unchanged to the real spawn, with the stdout bytes it delivered. */
+function captureChildren(): { child: ChildProcess; stdoutBytes: number }[] {
+  const children: { child: ChildProcess; stdoutBytes: number }[] = [];
+  vi.spyOn(cjsCp, "spawn").mockImplementation(((...args: Parameters<typeof cjsCp.spawn>) => {
+    const child = (realSpawn as (...a: unknown[]) => ChildProcess)(...args);
+    const entry = { child, stdoutBytes: 0 };
+    child.stdout?.on("data", (chunk: Buffer) => {
+      entry.stdoutBytes += chunk.length;
+    });
+    children.push(entry);
+    return child;
+  }) as typeof cjsCp.spawn);
+  // simple-git's ESM build binds `spawn` as a named import.
+  syncBuiltinESMExports();
+  return children;
 }
 
 // ~2MiB of text, so every patch that carries it is past the 1MiB ceiling.
@@ -35,14 +59,24 @@ describe("GitService capped preview diffs (real git)", () => {
   let repoDir: string;
 
   beforeEach(() => {
-    repoDir = fs.mkdtempSync(path.join(os.tmpdir(), "daintree-git-capped-diff-"));
+    home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "daintree-git-capped-home-")));
+    vi.stubEnv("HOME", home);
+    vi.stubEnv("XDG_CONFIG_HOME", path.join(home, ".config"));
+    vi.stubEnv("GIT_CONFIG_NOSYSTEM", "1");
+    repoDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "daintree-git-capped-diff-")));
     git(repoDir, ["init", "-q", "-b", "main"]);
     git(repoDir, ["config", "user.email", "test@example.com"]);
     git(repoDir, ["config", "user.name", "Test"]);
+    git(repoDir, ["config", "commit.gpgsign", "false"]);
+    git(repoDir, ["config", "core.autocrlf", "false"]);
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
+    syncBuiltinESMExports();
+    vi.unstubAllEnvs();
     fs.rmSync(repoDir, { recursive: true, force: true });
+    fs.rmSync(home, { recursive: true, force: true });
   });
 
   function commitAll(message: string): void {
@@ -56,6 +90,19 @@ describe("GitService capped preview diffs (real git)", () => {
     fs.rmSync(path.join(repoDir, "big.txt"));
 
     const diff = await new GitService(repoDir).getFileDiff("big.txt", "deleted");
+
+    expect(diff).toBe("FILE_TOO_LARGE");
+  });
+
+  it("measures the ceiling in bytes, so a multibyte patch short in characters is refused", async () => {
+    // Each line is 193 UTF-8 bytes but 65 UTF-16 units, so the deletion patch
+    // is past 1MiB in bytes while its string length stays under it.
+    const text = ("界".repeat(64) + "\n").repeat(6_000);
+    fs.writeFileSync(path.join(repoDir, "wide.txt"), text);
+    commitAll("add wide");
+    fs.rmSync(path.join(repoDir, "wide.txt"));
+
+    const diff = await new GitService(repoDir).getFileDiff("wide.txt", "deleted");
 
     expect(diff).toBe("FILE_TOO_LARGE");
   });
@@ -106,18 +153,30 @@ describe("GitService capped preview diffs (real git)", () => {
     );
   });
 
-  it("stops git once stdout passes the cap and leaves smaller output intact", async () => {
+  it("stops and reaps git once stdout passes the cap, having read a fraction of it", async () => {
     fs.writeFileSync(path.join(repoDir, "big.txt"), LARGE_TEXT);
     commitAll("add big");
+    const children = captureChildren();
 
     const capped = await runWithCappedStdout(repoDir, 64 * 1024, (g) =>
       g.raw(["cat-file", "-p", "HEAD:big.txt"])
     );
-    const whole = await runWithCappedStdout(repoDir, LARGE_TEXT.length, (g) =>
+
+    expect(capped).toBeNull();
+    expect(children).toHaveLength(1);
+    const [{ child, stdoutBytes }] = children;
+    expect(child.exitCode !== null || child.signalCode !== null).toBe(true);
+    expect(stdoutBytes).toBeLessThan(LARGE_TEXT.length / 2);
+  });
+
+  it("returns output that fits the cap exactly", async () => {
+    fs.writeFileSync(path.join(repoDir, "big.txt"), LARGE_TEXT);
+    commitAll("add big");
+
+    const whole = await runWithCappedStdout(repoDir, Buffer.byteLength(LARGE_TEXT), (g) =>
       g.raw(["cat-file", "-p", "HEAD:big.txt"])
     );
 
-    expect(capped).toBeNull();
     expect(whole).toBe(LARGE_TEXT);
   });
 });

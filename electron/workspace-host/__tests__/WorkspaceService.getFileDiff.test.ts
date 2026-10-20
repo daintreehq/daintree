@@ -419,20 +419,35 @@ describe("WorkspaceService.getFileDiff", () => {
     mockSimpleGit.outputHandler.mockImplementationOnce((fn) => {
       handler = fn;
     });
+    const { createHardenedGit } = await import("../../utils/hardenedGit.js");
     let stdout: PassThrough | undefined;
-    mockSimpleGit.diff.mockImplementationOnce(
-      () =>
-        new Promise((_resolve, reject) => {
-          stdout = new PassThrough();
-          handler?.("git", stdout, new PassThrough());
-          stdout.on("close", () => reject(new Error("Abort signal received")));
-          stdout.write(Buffer.alloc(GIT_FILE_DIFF_MAX_PATCH_BYTES + 1, 0x61));
-        })
-    );
+    let signal: AbortSignal | undefined;
+    let written = 0;
+    mockSimpleGit.diff.mockImplementationOnce(async () => {
+      // simple-git rejects the task from the instance's abort signal, not from
+      // the stream closing, so a cap that never aborts leaves this hanging.
+      signal = vi.mocked(createHardenedGit).mock.calls.at(-1)?.[1];
+      stdout = new PassThrough();
+      handler?.("git", stdout, new PassThrough());
+      const aborted = new Promise<never>((_resolve, reject) => {
+        signal?.addEventListener("abort", () => reject(new Error("Abort signal received")));
+      });
+      // The abort lands mid-loop, before the rejection is returned and observed.
+      aborted.catch(() => {});
+      const chunk = Buffer.alloc(1024 * 1024, 0x61);
+      while (!signal?.aborted && written <= GIT_FILE_DIFF_MAX_PATCH_BYTES) {
+        stdout.write(chunk);
+        written += chunk.length;
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+      return aborted;
+    });
 
     await service.getFileDiff("req-cap", "/test/repo", "huge-deleted.txt", "deleted");
 
+    expect(signal?.aborted).toBe(true);
     expect(stdout?.destroyed).toBe(true);
+    expect(written).toBeLessThanOrEqual(GIT_FILE_DIFF_MAX_PATCH_BYTES + 1024 * 1024);
     expect(mockSendEvent).toHaveBeenCalledWith(
       expect.objectContaining({ requestId: "req-cap", diff: "FILE_TOO_LARGE", totalBytes: 0 })
     );
