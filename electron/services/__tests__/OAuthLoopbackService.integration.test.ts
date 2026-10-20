@@ -31,8 +31,10 @@ vi.mock("electron", () => ({
       // Simulate IdP: after "authentication", redirect to the loopback with a code
       // Small delay to simulate network round-trip
       setTimeout(() => {
-        const callbackUrl = `${redirectUri}?code=FAKE_AUTH_CODE_${Date.now()}&state=${state || ""}`;
-        http.get(callbackUrl).on("error", () => {
+        const callback = new URL(redirectUri);
+        callback.searchParams.set("code", `FAKE_AUTH_CODE_${Date.now()}`);
+        if (state !== null) callback.searchParams.set("state", state);
+        http.get(callback.toString()).on("error", () => {
           // Connection may be refused if server already shut down — that's fine
         });
       }, 50);

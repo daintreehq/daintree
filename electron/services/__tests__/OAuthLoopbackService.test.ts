@@ -18,18 +18,30 @@ import {
 } from "../OAuthLoopbackService.js";
 import { shell } from "electron";
 
-function fetchUrl(url: string): Promise<{ status: number; body: string }> {
+function fetchUrl(url: string, method = "GET"): Promise<{ status: number; body: string }> {
   return new Promise((resolve, reject) => {
     http
-      .get(url, (res) => {
+      .request(url, { method }, (res) => {
         let body = "";
         res.on("data", (chunk: Buffer) => {
           body += chunk.toString();
         });
         res.on("end", () => resolve({ status: res.statusCode ?? 0, body }));
       })
-      .on("error", reject);
+      .on("error", reject)
+      .end();
   });
+}
+
+async function startAndCaptureRedirect(
+  authUrl: string
+): Promise<{ promise: ReturnType<typeof startOAuthLoopback>; redirect: string }> {
+  const promise = startOAuthLoopback(authUrl, "test-panel");
+  await vi.waitFor(() => {
+    expect(shell.openExternal).toHaveBeenCalledTimes(1);
+  });
+  const rewrittenUrl = (shell.openExternal as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+  return { promise, redirect: new URL(rewrittenUrl).searchParams.get("redirect_uri")! };
 }
 
 describe("OAuthLoopbackService", () => {
@@ -328,8 +340,8 @@ describe("OAuthLoopbackService", () => {
       const authUrl =
         "https://auth.example.com/authorize?client_id=abc&response_type=code&redirect_uri=http://localhost:3000/auth/callback";
 
-      const promiseA = startOAuthLoopback(authUrl, "panel-a");
-      const promiseB = startOAuthLoopback(authUrl, "panel-b");
+      const promiseA = startOAuthLoopback(`${authUrl}&state=a`, "panel-a");
+      const promiseB = startOAuthLoopback(`${authUrl}&state=b`, "panel-b");
 
       await vi.waitFor(() => {
         expect(shell.openExternal).toHaveBeenCalledTimes(2);
@@ -358,6 +370,120 @@ describe("OAuthLoopbackService", () => {
 
       expect(new URL(resultA.callbackUrl).searchParams.get("code")).toBe("CODE_A");
       expect(new URL(resultB.callbackUrl).searchParams.get("code")).toBe("CODE_B");
+    });
+  });
+
+  describe("callback admission", () => {
+    const statefulAuthUrl =
+      "https://auth.example.com/authorize?client_id=abc&response_type=code&redirect_uri=http://localhost:3000/auth/callback&state=expected";
+    const statelessAuthUrl =
+      "https://auth.example.com/authorize?client_id=abc&response_type=code&redirect_uri=http://localhost:3000/auth/callback";
+
+    it.each([
+      ["a wrong state", "?code=UNRELATED&state=wrong"],
+      ["a missing state", "?code=UNRELATED"],
+      ["a repeated state", "?code=UNRELATED&state=expected&state=wrong"],
+      ["an error with a wrong state", "?error=access_denied&state=wrong"],
+      ["a state with no code or error", "?state=expected"],
+      ["both code and error", "?code=X&error=access_denied&state=expected"],
+      ["a repeated code", "?code=X&code=Y&state=expected"],
+      ["an empty code", "?code=&state=expected"],
+    ])("refuses %s and keeps the flow open for the real callback", async (_label, query) => {
+      const { promise, redirect } = await startAndCaptureRedirect(statefulAuthUrl);
+
+      const refused = await fetchUrl(`${redirect}${query}`);
+      expect(refused.status).toBe(400);
+      expect(refused.body).not.toContain("Authentication");
+
+      const accepted = await fetchUrl(`${redirect}?code=REAL&state=expected`);
+      expect(accepted.status).toBe(200);
+
+      const result = await promise;
+      if (!result.success) throw new Error("expected success");
+      expect(new URL(result.callbackUrl).searchParams.get("code")).toBe("REAL");
+    });
+
+    it("refuses a POST to the callback path without consuming the flow", async () => {
+      const { promise, redirect } = await startAndCaptureRedirect(statefulAuthUrl);
+
+      const refused = await fetchUrl(`${redirect}?code=REAL&state=expected`, "POST");
+      expect(refused.status).toBe(405);
+
+      await fetchUrl(`${redirect}?code=REAL&state=expected`);
+      const result = await promise;
+      expect(result.success).toBe(true);
+    });
+
+    it("forwards an error response whose state matches", async () => {
+      const { promise, redirect } = await startAndCaptureRedirect(statefulAuthUrl);
+
+      const response = await fetchUrl(`${redirect}?error=access_denied&state=expected`);
+      expect(response.status).toBe(200);
+
+      const result = await promise;
+      if (!result.success) throw new Error("expected success");
+      const resultUrl = new URL(result.callbackUrl);
+      expect(resultUrl.searchParams.get("error")).toBe("access_denied");
+      expect(resultUrl.searchParams.get("state")).toBe("expected");
+    });
+
+    it("accepts a stateless callback only when the auth URL carried no state", async () => {
+      const { promise, redirect } = await startAndCaptureRedirect(statelessAuthUrl);
+
+      const refused = await fetchUrl(`${redirect}?code=FORGED&state=unsolicited`);
+      expect(refused.status).toBe(400);
+
+      await fetchUrl(`${redirect}?code=REAL`);
+      const result = await promise;
+      if (!result.success) throw new Error("expected success");
+      expect(new URL(result.callbackUrl).searchParams.get("code")).toBe("REAL");
+    });
+
+    it.each([
+      ["repeats state", `${statefulAuthUrl}&state=other`],
+      ["has an empty state", `${statelessAuthUrl}&state=`],
+    ])("refuses to start when the auth URL %s", async (_label, authUrl) => {
+      const result = await startOAuthLoopback(authUrl, "test-panel");
+      expect(result).toEqual({ success: false, cause: "server-error" });
+      expect(shell.openExternal).not.toHaveBeenCalled();
+    });
+
+    it("refuses a callback whose Host is not the loopback literal", async () => {
+      const { promise, redirect } = await startAndCaptureRedirect(statefulAuthUrl);
+      const port = new URL(redirect).port;
+
+      const refused = await new Promise<number>((resolve, reject) => {
+        http
+          .request(
+            {
+              host: "127.0.0.1",
+              port,
+              path: "/oauth/callback?code=REAL&state=expected",
+              headers: { Host: `localhost:${port}` },
+            },
+            (res) => {
+              res.resume();
+              resolve(res.statusCode ?? 0);
+            }
+          )
+          .on("error", reject)
+          .end();
+      });
+      expect(refused).toBe(400);
+
+      await fetchUrl(`${redirect}?code=REAL&state=expected`);
+      const result = await promise;
+      expect(result.success).toBe(true);
+    });
+
+    it("refuses HEAD on the callback path", async () => {
+      const { promise, redirect } = await startAndCaptureRedirect(statefulAuthUrl);
+
+      const refused = await fetchUrl(`${redirect}?code=REAL&state=expected`, "HEAD");
+      expect(refused.status).toBe(405);
+
+      cancelOAuthLoopback("test-panel");
+      expect(await promise).toEqual({ success: false, cause: "cancelled" });
     });
   });
 });
