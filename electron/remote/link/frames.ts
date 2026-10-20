@@ -45,6 +45,16 @@ export const DEFAULT_MAX_FRAME_BYTES = 16 * 1024 * 1024;
 /** Bulk payloads are split into chunks no larger than this so other lanes interleave. */
 export const BULK_CHUNK_BYTES = 64 * 1024;
 
+// One large message must not pin its reassembly buffer for the life of the
+// session. A buffer above the oversized mark is cut back to the settled size
+// once this many frames that fit the settled size complete in a row; any larger
+// frame restarts the run, so a stream of large transfers keeps its warm buffer.
+// Pings keep a quiet session pushing, so the run still completes after silence.
+const INITIAL_REASSEMBLY_BYTES = 4096;
+const SETTLED_REASSEMBLY_BYTES = 2 * BULK_CHUNK_BYTES;
+const OVERSIZED_REASSEMBLY_BYTES = 4 * BULK_CHUNK_BYTES;
+const SMALL_FRAMES_BEFORE_SHRINK = 16;
+
 export class FrameProtocolError extends Error {
   constructor(message: string) {
     super(message);
@@ -90,10 +100,11 @@ export function encodeFrame(frame: LinkFrame, maxFrameBytes = DEFAULT_MAX_FRAME_
  * copy.
  */
 export class FrameDecoder {
-  private buf = new Uint8Array(4096);
+  private buf = new Uint8Array(INITIAL_REASSEMBLY_BYTES);
   private start = 0;
   private end = 0;
   private failed = false;
+  private smallFrameRun = 0;
 
   constructor(private maxFrameBytes = DEFAULT_MAX_FRAME_BYTES) {}
 
@@ -127,6 +138,7 @@ export class FrameDecoder {
       this.failed = true;
       this.buf = new Uint8Array(0);
       this.start = this.end = 0;
+      this.smallFrameRun = 0;
       throw err;
     }
     return frames;
@@ -134,6 +146,11 @@ export class FrameDecoder {
 
   get bufferedBytes(): number {
     return this.end - this.start;
+  }
+
+  /** Size of the reassembly buffer currently held, whether or not it is in use. */
+  get capacityBytes(): number {
+    return this.buf.byteLength;
   }
 
   private buffered(): number {
@@ -194,6 +211,24 @@ export class FrameDecoder {
     };
     this.start += total;
     if (this.start === this.end) this.start = this.end = 0;
+    this.noteCompleted(total);
     return frame;
+  }
+
+  private noteCompleted(total: number): void {
+    if (this.buf.byteLength <= OVERSIZED_REASSEMBLY_BYTES) {
+      this.smallFrameRun = 0;
+      return;
+    }
+    if (total > SETTLED_REASSEMBLY_BYTES) {
+      this.smallFrameRun = 0;
+      return;
+    }
+    if (++this.smallFrameRun < SMALL_FRAMES_BEFORE_SHRINK) return;
+    // push() only buffers bytes the frame in progress can use, so a completed
+    // frame always leaves the decoder empty here; the guard keeps it that way.
+    if (this.buffered() !== 0) return;
+    this.buf = new Uint8Array(SETTLED_REASSEMBLY_BYTES);
+    this.smallFrameRun = 0;
   }
 }
