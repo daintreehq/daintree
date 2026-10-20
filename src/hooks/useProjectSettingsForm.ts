@@ -298,7 +298,9 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
     setWorktreePathPattern(initialWorktreePathPattern);
     setTerminalShell(initialTerminalSettings?.shell);
     setTerminalShellArgs(
-      initialTerminalSettings?.shellArgs ? formatShellArgs(initialTerminalSettings.shellArgs) : undefined
+      initialTerminalSettings?.shellArgs
+        ? formatShellArgs(initialTerminalSettings.shellArgs)
+        : undefined
     );
     setTerminalDefaultCwd(initialTerminalSettings?.defaultWorkingDirectory);
     setTerminalScrollback(
