@@ -105,40 +105,53 @@ describe("OAuthLoopbackService", () => {
     });
 
     it.each([
-      ["a malformed auth URL", "not a url"],
-      ["no redirect_uri", "https://auth.example.com/authorize?client_id=abc&response_type=code"],
+      ["a malformed auth URL", "not a url", "server-error"],
+      [
+        "no redirect_uri",
+        "https://auth.example.com/authorize?client_id=abc&response_type=code",
+        "server-error",
+      ],
       [
         "an unparseable redirect_uri",
         "https://auth.example.com/authorize?client_id=abc&response_type=code&redirect_uri=not-a-url",
+        "server-error",
       ],
-    ])("keeps the in-flight session live when a later call has %s", async (_label, badUrl) => {
-      const authUrl =
-        "https://auth.example.com/authorize?client_id=abc&response_type=code&redirect_uri=http://localhost:3000/auth/callback&state=s1";
+      [
+        "a disallowed scheme",
+        "file:///etc/passwd?redirect_uri=http://localhost:3000/auth/callback",
+        "open-external-failed",
+      ],
+    ])(
+      "keeps the in-flight session live when a later call has %s",
+      async (_label, badUrl, cause) => {
+        const authUrl =
+          "https://auth.example.com/authorize?client_id=abc&response_type=code&redirect_uri=http://localhost:3000/auth/callback&state=s1";
 
-      const firstPromise = startOAuthLoopback(authUrl, "test-panel");
-      await vi.waitFor(() => {
+        const firstPromise = startOAuthLoopback(authUrl, "test-panel");
+        await vi.waitFor(() => {
+          expect(shell.openExternal).toHaveBeenCalledTimes(1);
+        });
+        const loopbackRedirectUri = new URL(
+          (shell.openExternal as ReturnType<typeof vi.fn>).mock.calls[0][0] as string
+        ).searchParams.get("redirect_uri")!;
+
+        const badResult = await startOAuthLoopback(badUrl, "test-panel");
+        expect(badResult).toEqual({ success: false, cause });
         expect(shell.openExternal).toHaveBeenCalledTimes(1);
-      });
-      const loopbackRedirectUri = new URL(
-        (shell.openExternal as ReturnType<typeof vi.fn>).mock.calls[0][0] as string
-      ).searchParams.get("redirect_uri")!;
 
-      const badResult = await startOAuthLoopback(badUrl, "test-panel");
-      expect(badResult).toEqual({ success: false, cause: "server-error" });
-      expect(shell.openExternal).toHaveBeenCalledTimes(1);
+        // The first listener must still accept a real callback and complete the flow.
+        const response = await fetchUrl(`${loopbackRedirectUri}?code=FIRST_CODE&state=s1`);
+        expect(response.status).toBe(200);
 
-      // The first listener must still accept a real callback and complete the flow.
-      const response = await fetchUrl(`${loopbackRedirectUri}?code=FIRST_CODE&state=s1`);
-      expect(response.status).toBe(200);
-
-      const firstResult = await firstPromise;
-      expect(firstResult.success).toBe(true);
-      if (!firstResult.success) throw new Error("expected success");
-      const resultUrl = new URL(firstResult.callbackUrl);
-      expect(resultUrl.origin + resultUrl.pathname).toBe("http://localhost:3000/auth/callback");
-      expect(resultUrl.searchParams.get("code")).toBe("FIRST_CODE");
-      expect(firstResult.loopbackRedirectUri).toBe(loopbackRedirectUri);
-    });
+        const firstResult = await firstPromise;
+        expect(firstResult.success).toBe(true);
+        if (!firstResult.success) throw new Error("expected success");
+        const resultUrl = new URL(firstResult.callbackUrl);
+        expect(resultUrl.origin + resultUrl.pathname).toBe("http://localhost:3000/auth/callback");
+        expect(resultUrl.searchParams.get("code")).toBe("FIRST_CODE");
+        expect(firstResult.loopbackRedirectUri).toBe(loopbackRedirectUri);
+      }
+    );
 
     it("never opens a disallowed scheme even with a valid redirect_uri", async () => {
       const redirect = encodeURIComponent("http://localhost:3000/auth/callback");

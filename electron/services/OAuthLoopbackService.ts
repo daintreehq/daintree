@@ -7,7 +7,7 @@
 
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from "http";
 import { app } from "electron";
-import { openExternalUrl } from "../utils/openExternal.js";
+import { canOpenExternalUrl, openExternalUrl } from "../utils/openExternal.js";
 
 export { looksLikeOAuthUrl } from "../../shared/utils/urlUtils.js";
 export type { OAuthLoopbackResult } from "../../shared/types/oauth.js";
@@ -60,6 +60,11 @@ export function startOAuthLoopback(authUrl: string, panelId: string): Promise<OA
   } catch {
     console.warn("[OAuthLoopback] Invalid redirect_uri:", originalRedirectUri);
     return Promise.resolve({ success: false, cause: "server-error" });
+  }
+
+  if (!canOpenExternalUrl(authUrl)) {
+    console.warn("[OAuthLoopback] Disallowed auth URL protocol:", parsed.protocol);
+    return Promise.resolve({ success: false, cause: "open-external-failed" });
   }
 
   cancelOAuthLoopback(panelId);
