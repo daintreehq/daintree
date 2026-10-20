@@ -574,6 +574,8 @@ if (!gotTheLock) {
       onRegistered?: (windowId: number) => void;
       /** A restored window that was on this host-scoped workspace; it moves there once Remote Hosts is up. */
       remoteWorkspaceKey?: string;
+      /** The user chose to open `initialProjectPath` anyway at critical memory pressure (#13638). */
+      ignoreMemoryPressure?: boolean;
     }
   ): Promise<CreateWindowResult> {
     const { win, appView, loadRenderer, smokeTestTimer, smokeRendererUnresponsive } =
@@ -928,6 +930,7 @@ if (!gotTheLock) {
         initialAppView: appView,
         backgroundProjectIds: opts?.backgroundProjectIds,
         createWindowForPath,
+        initialOpenIgnoresMemoryPressure: opts?.ignoreMemoryPressure,
       });
     } finally {
       releaseRestoreClaim?.(isWindowBound(windowRegistry, ctx.windowId));
@@ -1007,12 +1010,16 @@ if (!gotTheLock) {
   // For folders opened from outside the app that need a window of their own
   // (#12593). Resolves to the new window's id so the open can report where it
   // landed.
-  async function createWindowForPath(dirPath: string): Promise<number> {
+  async function createWindowForPath(
+    dirPath: string,
+    options?: { ignoreMemoryPressure?: boolean }
+  ): Promise<number> {
     let windowId: number | undefined;
     const result = await createWindow(dirPath, undefined, {
       onRegistered: (id) => {
         windowId = id;
       },
+      ignoreMemoryPressure: options?.ignoreMemoryPressure,
     });
     if (result !== "ok" || windowId === undefined) {
       throw new Error(`No window was created for ${dirPath} (${result})`);

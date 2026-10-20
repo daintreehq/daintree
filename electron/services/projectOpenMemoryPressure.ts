@@ -1,4 +1,4 @@
-import { dialog, type BrowserWindow, type MessageBoxOptions } from "electron";
+import { BrowserWindow, dialog, type MessageBoxOptions } from "electron";
 import { checkKernelPressureCritical } from "./SystemMemoryPressureMonitor.js";
 import { logInfo } from "../utils/logger.js";
 
@@ -9,6 +9,8 @@ export interface ColdOpenConfirmation {
   projectId: string | null;
   /** The window that asked, when there is one still open to sit the dialog on. */
   parent?: BrowserWindow | null;
+  /** Closes the dialog as a Cancel once the request it answers is abandoned. */
+  signal?: AbortSignal;
 }
 
 /**
@@ -24,6 +26,7 @@ export async function confirmColdOpenAtMemoryPressure({
   projectName,
   projectId,
   parent,
+  signal,
 }: ColdOpenConfirmation): Promise<boolean> {
   if (!(await checkKernelPressureCritical())) return true;
   logInfo("project-open-held-memory-pressure", { projectId });
@@ -36,12 +39,18 @@ export async function confirmColdOpenAtMemoryPressure({
     buttons: ["Open anyway", "Cancel"],
     defaultId: 1,
     cancelId: 1,
+    ...(signal ? { signal } : {}),
   };
-  const live = parent && !parent.isDestroyed() ? parent : null;
+  // On macOS a message box with no window runs synchronously and stalls main
+  // until it is answered, so one with no window that asked (an external open)
+  // still sits on a window if there is any.
+  const live = [parent, BrowserWindow.getFocusedWindow(), ...BrowserWindow.getAllWindows()].find(
+    (win): win is BrowserWindow => win != null && !win.isDestroyed() && win.isVisible()
+  );
   const { response } = live
     ? await dialog.showMessageBox(live, options)
     : await dialog.showMessageBox(options);
-  const admitted = response === 0;
+  const admitted = response === 0 && signal?.aborted !== true;
   if (admitted) logInfo("project-open-memory-pressure-overridden", { projectId });
   return admitted;
 }

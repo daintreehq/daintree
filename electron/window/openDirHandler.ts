@@ -37,6 +37,14 @@ import {
  * project is brought forward instead. An occupied window is never replaced.
  * In-app "open in a new window" requests take the same route (#12594).
  */
+/**
+ * Passed on once the user chose to open anyway at critical memory pressure, so
+ * the project's own open isn't held again behind the answer just given.
+ */
+export interface ColdOpenOptions {
+  ignoreMemoryPressure?: boolean;
+}
+
 export interface OpenDirHandlerDeps {
   /**
    * Resolve (registering if new) the project a folder opens as. Rejects when it
@@ -45,9 +53,9 @@ export interface OpenDirHandlerDeps {
    */
   resolveProject: (dirPath: string) => Promise<{ id: string; path: string }>;
   /** Open a directory as a project in an existing window (handleDirectoryOpen). */
-  openDirectory: (dirPath: string, win: BrowserWindow) => Promise<void>;
+  openDirectory: (dirPath: string, win: BrowserWindow, options?: ColdOpenOptions) => Promise<void>;
   /** Create a window bound to this directory; resolves to its id, rejects if none was made. */
-  createWindowForPath: (dirPath: string) => Promise<number>;
+  createWindowForPath: (dirPath: string, options?: ColdOpenOptions) => Promise<number>;
   getWindowRegistry: () => WindowRegistry | null | undefined;
   getPreference: () => OpenFoldersInNewWindow;
   /** Whether a workspace id names a closed project — its window is showing the picker. */
@@ -162,15 +170,16 @@ export async function routeProjectOpen(
   // stands for the window this open makes, wherever routing lands it after.
   let admitted = deps.admitColdOpen === undefined;
   const admit = async (): Promise<boolean> => {
-    if (!admitted) {
-      admitted = await deps.admitColdOpen!({
-        projectId: project?.id ?? null,
-        projectPath: targetPath,
-        initiatingWindowId: routing.initiatingWindowId,
-      });
-    }
+    admitted = await deps.admitColdOpen!({
+      projectId: project?.id ?? null,
+      projectPath: targetPath,
+      initiatingWindowId: routing.initiatingWindowId,
+    });
     return admitted;
   };
+  // Passed only once the user was asked, so an open nobody asked about goes as it always has.
+  const admittedArg = (): [] | [ColdOpenOptions] =>
+    deps.admitColdOpen !== undefined && admitted ? [{ ignoreMemoryPressure: true }] : [];
 
   // Synchronous from the snapshot to the reservation: nothing may change the
   // world between deciding on a window and claiming it. A cached view moving to
@@ -225,8 +234,11 @@ export async function routeProjectOpen(
   // it mid-read — nothing has awaited since. Opening somewhere beats dropping
   // the folder.
   if (decision.kind === "create" || !win || win.isDestroyed()) {
-    if (!(await admit())) return { kind: "cancelled" };
-    return { kind: "created", windowId: await deps.createWindowForPath(targetPath) };
+    if (!admitted && !(await admit())) return { kind: "cancelled" };
+    return {
+      kind: "created",
+      windowId: await deps.createWindowForPath(targetPath, ...admittedArg()),
+    };
   }
 
   // In-app requests hand a live owner to the owner redirect (#12596). Only once
@@ -258,7 +270,7 @@ export async function routeProjectOpen(
       // as empty to the next open in line.
       if (isOwner && redirectToOwner()) return;
       revealWindow(win);
-      await deps.openDirectory(targetPath, win);
+      await deps.openDirectory(targetPath, win, ...admittedArg());
     },
     () => isWindowBound(registry, windowId, deps.isProjectClosed)
   );

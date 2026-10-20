@@ -127,12 +127,12 @@ const isProjectClosed = (projectId: string): boolean =>
 // window creation comes from main.ts, which owns it; the install-once guard
 // lives in openDirHandler.ts.
 function createOpenDirDeps(
-  createWindowForPath: (dirPath: string) => Promise<number>
+  createWindowForPath: OpenDirHandlerDeps["createWindowForPath"]
 ): OpenDirHandlerDeps {
   return {
     resolveProject: (dirPath) => projectStore.addProject(dirPath),
-    openDirectory: (dirPath, win) =>
-      handleDirectoryOpen(dirPath, win, getCliAvailabilityServiceRef() ?? undefined),
+    openDirectory: (dirPath, win, options) =>
+      handleDirectoryOpen(dirPath, win, getCliAvailabilityServiceRef() ?? undefined, options),
     createWindowForPath,
     getWindowRegistry,
     // Read per open so a change in Settings applies to the next folder opened.
@@ -163,7 +163,7 @@ function createOpenDirDeps(
           (projectId !== null ? projectStore.getProjectById(projectId)?.name : undefined) ||
           basename(projectPath) ||
           projectPath,
-        // An external open has no window that asked, so its dialog stands alone.
+        // An external open has no window that asked; its dialog finds one.
         parent:
           initiatingWindowId === null
             ? null
@@ -238,7 +238,9 @@ export interface SetupWindowServicesOptions {
    */
   backgroundProjectIds?: readonly string[];
   /** Create a window bound to a folder, for opens from outside the app that need one. */
-  createWindowForPath: (dirPath: string) => Promise<number>;
+  createWindowForPath: OpenDirHandlerDeps["createWindowForPath"];
+  /** The user chose to open `initialProjectPath` anyway at critical memory pressure (#13638). */
+  initialOpenIgnoresMemoryPressure?: boolean;
 }
 
 /**
@@ -887,9 +889,9 @@ export async function setupWindowServices(
       ctx.windowId,
       { projectId: null, projectPath: initialProjectPath },
       () =>
-        handleDirectoryOpen(initialProjectPath, win, cliAvailabilityService ?? undefined).catch(
-          (err) => console.error("[MAIN] Failed to open initial project path:", err)
-        ),
+        handleDirectoryOpen(initialProjectPath, win, cliAvailabilityService ?? undefined, {
+          ignoreMemoryPressure: opts.initialOpenIgnoresMemoryPressure === true,
+        }).catch((err) => console.error("[MAIN] Failed to open initial project path:", err)),
       () => isWindowBound(windowRegistry, ctx.windowId, isProjectClosed)
     );
   }

@@ -426,26 +426,24 @@ function createWindowControl(hooks: RemoteHostsClientHooks): WindowControl {
       revealWindow(owner.context.browserWindow);
       return owner.context.windowId;
     },
-    admitProjectOpen({ windowId, askingWindowId, hostId, projectId, projectName }) {
+    admitProjectOpen({ windowId, askingWindowId, hostId, projectId, projectName, signal }) {
       const registry = getWindowRegistry();
-      if (windowId !== null && projectId !== undefined) {
+      if (windowId !== null) {
         const key = isLocalHostId(hostId) ? projectId : toHostScopedKey(hostId, projectId);
         // A view the window can show as it is starts nothing.
         const pvm = registry?.getByWindowId(windowId)?.services.projectViewManager;
         if (hasReusableProjectView(pvm, key)) return Promise.resolve(true);
       }
-      const name =
-        projectName ??
-        (projectId === undefined
-          ? null
-          : (projectStore.getProjectById(projectId)?.name ??
-            scratchStore.getScratchById(projectId)?.name ??
-            null));
       const parentId = windowId ?? askingWindowId;
       return confirmColdOpenAtMemoryPressure({
-        projectId: projectId ?? null,
-        projectName: name ?? projectId ?? "project",
+        projectId,
+        projectName:
+          projectName ??
+          projectStore.getProjectById(projectId)?.name ??
+          scratchStore.getScratchById(projectId)?.name ??
+          projectId,
         parent: parentId === null ? null : registry?.getByWindowId(parentId)?.browserWindow,
+        signal,
       });
     },
     revealWindow(windowId) {

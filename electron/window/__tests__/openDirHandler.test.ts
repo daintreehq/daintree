@@ -218,6 +218,7 @@ describe("routeExternalOpen (#12593 acceptance)", () => {
 
     expect(outcome).toEqual({ kind: "activated", windowId: empty.id });
     expect(deps.admitColdOpen).not.toHaveBeenCalled();
+    expect(deps.openDirectory).toHaveBeenCalledExactlyOnceWith("/work/new", empty.win);
   });
 
   it("fills the one empty window and brings it forward", async () => {
@@ -606,7 +607,10 @@ describe("routeProjectOpen — an explicit new window (#12594)", () => {
 
     expect(outcome).toEqual({ kind: "created", windowId: asking.id + 1 });
     expect(deps.admitColdOpen).toHaveBeenCalledOnce();
-    expect(deps.createWindowForPath).toHaveBeenCalledExactlyOnceWith("/work/new");
+    // The answer goes with it, so the project's own open isn't held again.
+    expect(deps.createWindowForPath).toHaveBeenCalledExactlyOnceWith("/work/new", {
+      ignoreMemoryPressure: true,
+    });
   });
 
   it("re-routes after the prompt, landing in a window that came free meanwhile (#13638)", async () => {
@@ -624,7 +628,9 @@ describe("routeProjectOpen — an explicit new window (#12594)", () => {
     const outcome = await routeProjectOpen("/work/new", newWindowFrom(asking.id), deps);
 
     expect(outcome).toEqual({ kind: "activated", windowId: empty!.id });
-    expect(deps.openDirectory).toHaveBeenCalledExactlyOnceWith("/work/new", empty!.win);
+    expect(deps.openDirectory).toHaveBeenCalledExactlyOnceWith("/work/new", empty!.win, {
+      ignoreMemoryPressure: true,
+    });
     expect(deps.createWindowForPath).not.toHaveBeenCalled();
     expect(deps.admitColdOpen).toHaveBeenCalledOnce();
   });

@@ -134,8 +134,10 @@ export interface WindowControl {
     windowId: number | null;
     askingWindowId: number | null;
     hostId: HostId;
-    projectId: string | undefined;
+    projectId: string;
     projectName: string | null;
+    /** Aborted once the switch is abandoned, which answers it as a Cancel. */
+    signal?: AbortSignal;
   }): Promise<boolean>;
   /**
    * Put a fresh window on this machine (its project picker) where `windowId`
@@ -954,13 +956,23 @@ export class RemoteHostsClient {
       if (redirected) return this.focusedElsewhere(redirected, focusIntent);
     }
 
-    // A new window is a renderer whatever it goes on to show, so it is asked
-    // about before it opens; one already open is asked in its turn below.
+    // A new window opening on a project is asked about before it opens; one
+    // already open is asked in its turn below. A new window offering only a
+    // host's project list loads none, as a plain New Window doesn't.
     if (
       newWindow &&
-      !(await this.admitColdOpen(exempt, null, askingWindowId, hostId, projectId, projectName))
+      projectId !== undefined &&
+      !(await this.admitColdOpen(
+        exempt,
+        ticket,
+        null,
+        askingWindowId,
+        hostId,
+        projectId,
+        projectName
+      ))
     ) {
-      return { outcome: "superseded", hostId };
+      return superseded() ?? { outcome: "superseded", hostId };
     }
     const staleAdmit = superseded();
     if (staleAdmit) return staleAdmit;
@@ -984,6 +996,7 @@ export class RemoteHostsClient {
         targetProjectId !== undefined &&
         !(await this.admitColdOpen(
           exempt,
+          ticket,
           windowId,
           askingWindowId,
           hostId,
@@ -991,7 +1004,7 @@ export class RemoteHostsClient {
           projectName
         ))
       ) {
-        return { outcome: "superseded", hostId };
+        return superseded() ?? { outcome: "superseded", hostId };
       }
       const admittedLate = superseded();
       if (admittedLate) return admittedLate;
@@ -1099,27 +1112,37 @@ export class RemoteHostsClient {
     return switching.finally(() => releaseClaim());
   }
 
+  /**
+   * Whether a cold open may go ahead at critical memory pressure (#13638).
+   * A switch abandoned while the question is up (a newer navigation in the
+   * window, or Cancel) answers it as a Cancel and closes it, so the window's
+   * next switch never waits behind a question nobody needs answered.
+   */
   private async admitColdOpen(
     exempt: boolean,
+    ticket: SwitchTicket | null,
     windowId: number | null,
     askingWindowId: number | null,
     hostId: HostId,
-    projectId: string | undefined,
+    projectId: string,
     projectName: string | null
   ): Promise<boolean> {
-    if (exempt || !this.options.windows.admitProjectOpen) return true;
-    return this.options.windows.admitProjectOpen({
+    const admitProjectOpen = this.options.windows.admitProjectOpen;
+    if (exempt || !admitProjectOpen) return true;
+    const abort = new AbortController();
+    const asked = admitProjectOpen({
       windowId,
       askingWindowId,
       hostId,
       projectId,
-      // A new window offering a host's project list names the host instead.
-      projectName:
-        projectName ??
-        (projectId === undefined && !isLocalHostId(hostId)
-          ? (this.options.registry.get(hostId)?.name ?? null)
-          : null),
+      projectName,
+      signal: abort.signal,
     });
+    if (!ticket) return asked;
+    const answer = await Promise.race([asked, ticket.abandoned]);
+    if (answer !== ABANDONED) return answer;
+    abort.abort();
+    return false;
   }
 
   /** The window that already had the project takes the focus the switch was asked for. */

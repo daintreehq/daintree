@@ -3,11 +3,16 @@ import type { BrowserWindow } from "electron";
 
 const mocks = vi.hoisted(() => ({
   showMessageBox: vi.fn(),
+  getFocusedWindow: vi.fn<() => unknown>(() => null),
+  getAllWindows: vi.fn<() => unknown[]>(() => []),
   checkKernelPressureCritical: vi.fn<() => Promise<boolean>>(),
   logInfo: vi.fn(),
 }));
 
-vi.mock("electron", () => ({ dialog: { showMessageBox: mocks.showMessageBox } }));
+vi.mock("electron", () => ({
+  dialog: { showMessageBox: mocks.showMessageBox },
+  BrowserWindow: { getFocusedWindow: mocks.getFocusedWindow, getAllWindows: mocks.getAllWindows },
+}));
 vi.mock("../SystemMemoryPressureMonitor.js", () => ({
   checkKernelPressureCritical: mocks.checkKernelPressureCritical,
 }));
@@ -15,13 +20,15 @@ vi.mock("../../utils/logger.js", () => ({ logInfo: mocks.logInfo }));
 
 import { confirmColdOpenAtMemoryPressure } from "../projectOpenMemoryPressure.js";
 
-const fakeWindow = (destroyed = false) =>
-  ({ isDestroyed: () => destroyed }) as unknown as BrowserWindow;
+const fakeWindow = ({ destroyed = false, visible = true } = {}) =>
+  ({ isDestroyed: () => destroyed, isVisible: () => visible }) as unknown as BrowserWindow;
 
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.checkKernelPressureCritical.mockResolvedValue(true);
   mocks.showMessageBox.mockResolvedValue({ response: 1 });
+  mocks.getFocusedWindow.mockReturnValue(null);
+  mocks.getAllWindows.mockReturnValue([]);
 });
 
 describe("confirmColdOpenAtMemoryPressure (#13638)", () => {
@@ -56,19 +63,55 @@ describe("confirmColdOpenAtMemoryPressure (#13638)", () => {
     ).resolves.toBe(true);
   });
 
-  it("sits the dialog on the window that asked, and stands alone without one", async () => {
+  it("sits the dialog on the window that asked", async () => {
     const parent = fakeWindow();
-    await confirmColdOpenAtMemoryPressure({ projectName: "app", projectId: "p1", parent });
-    expect(mocks.showMessageBox.mock.calls[0][0]).toBe(parent);
+    mocks.getFocusedWindow.mockReturnValue(fakeWindow());
 
+    await confirmColdOpenAtMemoryPressure({ projectName: "app", projectId: "p1", parent });
+
+    expect(mocks.showMessageBox.mock.calls[0][0]).toBe(parent);
+  });
+
+  it("finds a window for the dialog when the one that asked is gone or there was none", async () => {
+    // Unparented, the macOS message box runs synchronously and stalls main.
+    const focused = fakeWindow();
+    mocks.getFocusedWindow.mockReturnValue(focused);
     await confirmColdOpenAtMemoryPressure({
       projectName: "app",
       projectId: "p1",
-      parent: fakeWindow(true),
+      parent: fakeWindow({ destroyed: true }),
     });
+    expect(mocks.showMessageBox.mock.calls[0][0]).toBe(focused);
+
+    const shown = fakeWindow();
+    mocks.getFocusedWindow.mockReturnValue(null);
+    mocks.getAllWindows.mockReturnValue([fakeWindow({ visible: false }), shown]);
     await confirmColdOpenAtMemoryPressure({ projectName: "app", projectId: "p1", parent: null });
-    for (const call of mocks.showMessageBox.mock.calls.slice(1)) {
-      expect(call).toHaveLength(1);
-    }
+    expect(mocks.showMessageBox.mock.calls[1][0]).toBe(shown);
+  });
+
+  it("stands alone only when no window is showing", async () => {
+    mocks.getAllWindows.mockReturnValue([fakeWindow({ visible: false })]);
+
+    await confirmColdOpenAtMemoryPressure({ projectName: "app", projectId: "p1" });
+
+    expect(mocks.showMessageBox.mock.calls[0]).toHaveLength(1);
+  });
+
+  it("answers a question its request abandoned as a Cancel", async () => {
+    const abort = new AbortController();
+    mocks.showMessageBox.mockImplementation(async (options: { signal?: AbortSignal }) => {
+      expect(options.signal).toBe(abort.signal);
+      abort.abort();
+      return { response: 0 };
+    });
+
+    await expect(
+      confirmColdOpenAtMemoryPressure({
+        projectName: "app",
+        projectId: "p1",
+        signal: abort.signal,
+      })
+    ).resolves.toBe(false);
   });
 });
