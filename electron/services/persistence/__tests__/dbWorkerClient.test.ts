@@ -123,18 +123,25 @@ describe("DbWorkerClient", () => {
     });
 
     await Promise.all([
-      client.run({ op: "ringWriteAll", ring: "a", records: ["1"], maxRecords: 5 }, () => null),
-      client.run({ op: "ringWriteAll", ring: "a", records: ["2"], maxRecords: 5 }, () => null),
-      client.run({ op: "ringWriteAll", ring: "a", records: ["3"], maxRecords: 5 }, () => null),
+      client.run(
+        { op: "ringWriteAll", ring: "a", rows: [{ recordId: null, record: "1" }], maxRecords: 5 },
+        () => null
+      ),
+      client.run(
+        { op: "ringWriteAll", ring: "a", rows: [{ recordId: null, record: "2" }], maxRecords: 5 },
+        () => null
+      ),
+      client.run(
+        { op: "ringWriteAll", ring: "a", rows: [{ recordId: null, record: "3" }], maxRecords: 5 },
+        () => null
+      ),
     ]);
 
     const ids = worker.posted.map((msg) => msg.id);
     expect(ids).toEqual([...ids].sort((a, b) => a - b));
-    expect(worker.posted.map((msg) => (msg.op === "ringWriteAll" ? msg.records[0] : ""))).toEqual([
-      "1",
-      "2",
-      "3",
-    ]);
+    expect(
+      worker.posted.map((msg) => (msg.op === "ringWriteAll" ? msg.rows[0]!.record : ""))
+    ).toEqual(["1", "2", "3"]);
   });
 
   it("falls back to main when the worker reports an op failure", async () => {
@@ -215,7 +222,10 @@ describe("DbWorkerClient", () => {
       isDisabled: () => false,
     });
 
-    await client.run({ op: "ringWriteAll", ring: "a", records: ["1"], maxRecords: 5 }, fallback);
+    await client.run(
+      { op: "ringWriteAll", ring: "a", rows: [{ recordId: null, record: "1" }], maxRecords: 5 },
+      fallback
+    );
     await client.shutdown();
 
     expect(worker.posted.map((msg) => msg.op)).toEqual(["ringWriteAll", "close"]);
@@ -246,7 +256,10 @@ describe("DbWorkerClient", () => {
       getMainSqlite: () => fence.handle,
     });
 
-    await client.run({ op: "ringWriteAll", ring: "a", records: ["1"], maxRecords: 5 }, () => null);
+    await client.run(
+      { op: "ringWriteAll", ring: "a", rows: [{ recordId: null, record: "1" }], maxRecords: 5 },
+      () => null
+    );
     expect(worker.posted[0]!.fence).toBe(7);
   });
 
@@ -263,14 +276,14 @@ describe("DbWorkerClient", () => {
     });
 
     const first = client.run(
-      { op: "ringWriteAll", ring: "a", records: ["1"], maxRecords: 5 },
+      { op: "ringWriteAll", ring: "a", rows: [{ recordId: null, record: "1" }], maxRecords: 5 },
       () => {
         events.push("fallback-1");
         return null;
       }
     );
     const second = client.run(
-      { op: "ringWriteAll", ring: "a", records: ["2"], maxRecords: 5 },
+      { op: "ringWriteAll", ring: "a", rows: [{ recordId: null, record: "2" }], maxRecords: 5 },
       () => {
         events.push("fallback-2");
         return null;
@@ -318,7 +331,7 @@ describe("DbWorkerClient", () => {
     });
 
     const first = client.run(
-      { op: "ringWriteAll", ring: "a", records: ["1"], maxRecords: 5 },
+      { op: "ringWriteAll", ring: "a", rows: [{ recordId: null, record: "1" }], maxRecords: 5 },
       () => null
     );
     // Snapshot between two queued writes — a pure read must not advance the
@@ -326,17 +339,16 @@ describe("DbWorkerClient", () => {
     const mid = client.getGovernanceSnapshot();
     expect(mid.queueDepth).toBe(1);
     const second = client.run(
-      { op: "ringWriteAll", ring: "a", records: ["2"], maxRecords: 5 },
+      { op: "ringWriteAll", ring: "a", rows: [{ recordId: null, record: "2" }], maxRecords: 5 },
       () => null
     );
     await Promise.all([first, second]);
 
     expect(fence.state.epoch).toBe(3);
     expect(worker.posted.map((msg) => msg.fence)).toEqual([3, 3]);
-    expect(worker.posted.map((msg) => (msg.op === "ringWriteAll" ? msg.records[0] : ""))).toEqual([
-      "1",
-      "2",
-    ]);
+    expect(
+      worker.posted.map((msg) => (msg.op === "ringWriteAll" ? msg.rows[0]!.record : ""))
+    ).toEqual(["1", "2"]);
   });
 
   it("reports degraded and shutting-down states as governance-visible but untouchable", async () => {
@@ -368,7 +380,7 @@ describe("DbWorkerClient", () => {
     const staleWrite: Extract<DbWorkerOp, { op: "ringWriteAll" }> = {
       op: "ringWriteAll",
       ring: "a",
-      records: ["old"],
+      rows: [{ recordId: null, record: "old" }],
       maxRecords: 5,
     };
 
@@ -435,6 +447,22 @@ describe("DbWorkerClient", () => {
       expect(fallback).not.toHaveBeenCalled();
     });
 
+    it("skips a keyed-delta fallback when the worker exits after a sync fence", async () => {
+      const worker = new FakeWorker();
+      const { client } = holdingClient(worker);
+      const fallback = vi.fn(() => "resurrected");
+
+      const pending = client.run(
+        { op: "ringApply", ring: "a", upserts: [{ recordId: "r1", record: "old" }], deletes: [] },
+        fallback
+      );
+      client.fence("a");
+      worker.emit("exit", 1);
+
+      await expect(pending).resolves.toBeUndefined();
+      expect(fallback).not.toHaveBeenCalled();
+    });
+
     it("still runs the ring fallback when the worker fails without a sync fence", async () => {
       const worker = new FakeWorker();
       const { client, fence } = holdingClient(worker);
@@ -456,7 +484,10 @@ describe("DbWorkerClient", () => {
 
       const first = client.run(staleWrite, stale);
       client.fence("a");
-      const second = client.run({ ...staleWrite, records: ["new"] }, fresh);
+      const second = client.run(
+        { ...staleWrite, rows: [{ recordId: null, record: "new" }] },
+        fresh
+      );
       worker.emit("exit", 1);
 
       await expect(first).resolves.toBeUndefined();
@@ -493,7 +524,9 @@ describe("DbWorkerClient", () => {
 
       const pending = client.run(staleWrite, stale);
       await client.shutdown();
-      await expect(client.run({ ...staleWrite, records: ["new"] }, fresh)).resolves.toBe("fresh");
+      await expect(
+        client.run({ ...staleWrite, rows: [{ recordId: null, record: "new" }] }, fresh)
+      ).resolves.toBe("fresh");
       worker.emit("exit", 0);
 
       await expect(pending).resolves.toBeUndefined();

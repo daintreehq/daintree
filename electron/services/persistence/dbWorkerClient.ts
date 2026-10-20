@@ -92,7 +92,7 @@ export class DbWorkerClient {
    * its fallback: the stale snapshot would overwrite the newer durable one.
    */
   async run<T>(op: DbWorkerOp, fallback: () => T): Promise<T> {
-    const ring = op.op === "ringWriteAll" ? op.ring : null;
+    const ring = op.op === "ringWriteAll" || op.op === "ringApply" ? op.ring : null;
     if (!this.canUseWorker()) {
       // A main-only ring write is as new as a synchronous one — e.g. after a
       // timed-out shutdown drain, an older write may still be pending and its
@@ -122,9 +122,9 @@ export class DbWorkerClient {
    * Advance the DB-level write fence when a synchronous main-thread ring write
    * is about to run while a worker exists. Any ring write already queued on the
    * worker was stamped with the previous epoch and will no-op, so an older
-   * snapshot can never land after the newer synchronous one. Collateral: queued
-   * snapshots for OTHER rings are dropped too — harmless, since every write is
-   * a full snapshot and the owner's next flush rewrites it. On the failure
+   * write can never land after the newer synchronous one. Collateral: queued
+   * writes for OTHER rings are dropped too — they resolve `false` and
+   * AuditRingStore re-sends that ring as a full replacement. On the failure
    * path the supersede is scoped to `ring`: only that ring's in-flight writes
    * skip their main-thread fallbacks, so other rings' snapshots still land.
    */
