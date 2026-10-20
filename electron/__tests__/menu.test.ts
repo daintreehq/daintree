@@ -1539,6 +1539,24 @@ describe("handleDirectoryOpen at critical memory pressure (#13530)", () => {
     expect(manager.switchTo).not.toHaveBeenCalled();
   });
 
+  it("opens straight away once the user chose to open it anyway (#13638)", async () => {
+    const send = vi.fn();
+    getAppWebContentsMock.mockImplementation(() => ({
+      isDestroyed: () => false,
+      isLoadingMainFrame: () => false,
+      send,
+    }));
+    const manager = createManager();
+    useManager(manager);
+
+    await handleDirectoryOpen(PROJECT.path, targetWindow, undefined, {
+      ignoreMemoryPressure: true,
+    });
+
+    expect(manager.switchTo).toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalledWith(CHANNELS.MENU_ACTION, expect.anything());
+  });
+
   it("opens a project this window already has a view of without asking", async () => {
     const manager = createManager([
       {

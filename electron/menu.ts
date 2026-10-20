@@ -1084,7 +1084,9 @@ async function openLocalFolderInHostWindow(
 export async function handleDirectoryOpen(
   directoryPath: string,
   targetWindow: BrowserWindow,
-  cliAvailabilityService?: CliAvailabilityService
+  cliAvailabilityService?: CliAvailabilityService,
+  /** Set once the user chose to open anyway at critical memory pressure (#13638). */
+  options?: { ignoreMemoryPressure?: boolean }
 ): Promise<void> {
   if (targetWindow.isDestroyed()) return;
   supersedePendingHostSwitch(targetWindow.id);
@@ -1130,7 +1132,12 @@ export async function handleDirectoryOpen(
     // A cold open at critical kernel memory pressure goes through the view's
     // own switch instead (#13530): main refuses it there, and the view holds
     // it with an "Open anyway" rather than a renderer starting from here.
-    if (pvm && !hasReusableProjectView(pvm, project.id) && (await checkKernelPressureCritical())) {
+    if (
+      options?.ignoreMemoryPressure !== true &&
+      pvm &&
+      !hasReusableProjectView(pvm, project.id) &&
+      (await checkKernelPressureCritical())
+    ) {
       const wc = getAppWebContents(targetWindow);
       const sendSwitch = (): void => {
         if (wc.isDestroyed()) return;

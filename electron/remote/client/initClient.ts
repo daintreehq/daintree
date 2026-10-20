@@ -35,12 +35,14 @@ import { completeLocalProjectActivation } from "../../window/localProjectActivat
 import {
   claimProjectActivation,
   findOtherProjectOwner,
+  hasReusableProjectView,
   redirectToProjectOwner,
   releaseCachedOwner,
   revealWindow,
   type ProjectOwner,
 } from "../../window/projectOwnership.js";
 import { hasPendingActivation } from "../../window/projectActivationClaims.js";
+import { confirmColdOpenAtMemoryPressure } from "../../services/projectOpenMemoryPressure.js";
 import { activateScratchInWindow } from "../../ipc/handlers/scratch/activation.js";
 import {
   getPtyClient,
@@ -423,6 +425,27 @@ function createWindowControl(hooks: RemoteHostsClientHooks): WindowControl {
       // A scratch has no project row to hand over: its window comes forward.
       revealWindow(owner.context.browserWindow);
       return owner.context.windowId;
+    },
+    admitProjectOpen({ windowId, askingWindowId, hostId, projectId, projectName, signal }) {
+      const registry = getWindowRegistry();
+      if (windowId !== null) {
+        const key = isLocalHostId(hostId) ? projectId : toHostScopedKey(hostId, projectId);
+        // A view the window can show as it is starts nothing.
+        const pvm = registry?.getByWindowId(windowId)?.services.projectViewManager;
+        if (hasReusableProjectView(pvm, key)) return Promise.resolve(true);
+      }
+      const parentId = windowId ?? askingWindowId;
+      const answer = confirmColdOpenAtMemoryPressure({
+        projectId,
+        projectName:
+          projectName ??
+          projectStore.getProjectById(projectId)?.name ??
+          scratchStore.getScratchById(projectId)?.name ??
+          projectId,
+        parent: parentId === null ? null : registry?.getByWindowId(parentId)?.browserWindow,
+        signal,
+      });
+      return answer.then((choice) => choice !== "cancel");
     },
     revealWindow(windowId) {
       const ctx = getWindowRegistry()?.getByWindowId(windowId);

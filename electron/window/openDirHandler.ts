@@ -14,6 +14,7 @@ import {
 import {
   decideProjectOpenTarget,
   type OpenWorld,
+  type ProjectOpenDecision,
   type ProjectOpenSource,
 } from "./windowOpenPolicy.js";
 import { cachedViewBusy } from "./cachedViewBusy.js";
@@ -36,6 +37,14 @@ import {
  * project is brought forward instead. An occupied window is never replaced.
  * In-app "open in a new window" requests take the same route (#12594).
  */
+/**
+ * Passed on once the user chose to open anyway at critical memory pressure, so
+ * the project's own open isn't held again behind the answer just given.
+ */
+export interface ColdOpenOptions {
+  ignoreMemoryPressure?: boolean;
+}
+
 export interface OpenDirHandlerDeps {
   /**
    * Resolve (registering if new) the project a folder opens as. Rejects when it
@@ -44,9 +53,9 @@ export interface OpenDirHandlerDeps {
    */
   resolveProject: (dirPath: string) => Promise<{ id: string; path: string }>;
   /** Open a directory as a project in an existing window (handleDirectoryOpen). */
-  openDirectory: (dirPath: string, win: BrowserWindow) => Promise<void>;
+  openDirectory: (dirPath: string, win: BrowserWindow, options?: ColdOpenOptions) => Promise<void>;
   /** Create a window bound to this directory; resolves to its id, rejects if none was made. */
-  createWindowForPath: (dirPath: string) => Promise<number>;
+  createWindowForPath: (dirPath: string, options?: ColdOpenOptions) => Promise<number>;
   getWindowRegistry: () => WindowRegistry | null | undefined;
   getPreference: () => OpenFoldersInNewWindow;
   /** Whether a workspace id names a closed project — its window is showing the picker. */
@@ -66,6 +75,18 @@ export interface OpenDirHandlerDeps {
    * let it go — the open then switches to it there, as before.
    */
   releaseCachedView?: (projectId: string, windowId: number) => boolean;
+  /**
+   * Whether an open that has to make a new window may go ahead (#13638), asked
+   * before anything moves: `open` when pressure isn't critical, `open-anyway`
+   * when the user chose to at critical pressure, `cancel` when they declined.
+   * An open into an existing window is never asked here; that window's own
+   * switch holds it.
+   */
+  admitColdOpen?: (request: {
+    projectId: string | null;
+    projectPath: string;
+    initiatingWindowId: number | null;
+  }) => Promise<"open" | "open-anyway" | "cancel">;
 }
 
 // App-lifetime consumer: macOS `open-file` is app-lifetime, so this wires once.
@@ -145,22 +166,49 @@ export async function routeProjectOpen(
   const targetPath = project?.path ?? dirPath;
   const registry = deps.getWindowRegistry();
 
+  // A new window is a renderer started from nothing, so at critical memory
+  // pressure the user is asked first. Asked once per request: what it decides
+  // stands for the window this open makes, wherever routing lands it after.
+  let admitted = deps.admitColdOpen === undefined;
+  let overridden = false;
+  const admit = async (): Promise<boolean> => {
+    const answer = await deps.admitColdOpen!({
+      projectId: project?.id ?? null,
+      projectPath: targetPath,
+      initiatingWindowId: routing.initiatingWindowId,
+    });
+    admitted = answer !== "cancel";
+    overridden = answer === "open-anyway";
+    return admitted;
+  };
+  // Only the user's own "Open anyway" goes on: pressure that turns critical
+  // after a plain admission is still the project's own open to hold.
+  const admittedArg = (): [] | [ColdOpenOptions] =>
+    overridden ? [{ ignoreMemoryPressure: true }] : [];
+
   // Synchronous from the snapshot to the reservation: nothing may change the
   // world between deciding on a window and claiming it. A cached view moving to
   // a new window is released inside that span too, so the project never has a
-  // live view in two windows.
-  const world = snapshotOpenWorld(registry, deps.getPreference(), deps.isProjectClosed);
-  let decision = decideProjectOpenTarget(
-    {
-      projectId: project?.id ?? null,
-      projectPath: targetPath,
-      source: routing.source,
-      intent: "open",
-      disposition: routing.disposition,
-      initiatingWindowId: routing.initiatingWindowId,
-    },
-    world
-  );
+  // live view in two windows. The question above is the one await allowed
+  // before it, and the world is read again once it has its answer.
+  let world: OpenWorld;
+  let decision: ProjectOpenDecision;
+  for (;;) {
+    world = snapshotOpenWorld(registry, deps.getPreference(), deps.isProjectClosed);
+    decision = decideProjectOpenTarget(
+      {
+        projectId: project?.id ?? null,
+        projectPath: targetPath,
+        source: routing.source,
+        intent: "open",
+        disposition: routing.disposition,
+        initiatingWindowId: routing.initiatingWindowId,
+      },
+      world
+    );
+    if (decision.kind !== "create" || admitted) break;
+    if (!(await admit())) return { kind: "cancelled" };
+  }
   const releaseFrom = decision.kind === "focus" ? undefined : decision.releaseFromWindowId;
   if (
     releaseFrom !== undefined &&
@@ -191,7 +239,11 @@ export async function routeProjectOpen(
   // it mid-read — nothing has awaited since. Opening somewhere beats dropping
   // the folder.
   if (decision.kind === "create" || !win || win.isDestroyed()) {
-    return { kind: "created", windowId: await deps.createWindowForPath(targetPath) };
+    if (!admitted && !(await admit())) return { kind: "cancelled" };
+    return {
+      kind: "created",
+      windowId: await deps.createWindowForPath(targetPath, ...admittedArg()),
+    };
   }
 
   // In-app requests hand a live owner to the owner redirect (#12596). Only once
@@ -223,7 +275,7 @@ export async function routeProjectOpen(
       // as empty to the next open in line.
       if (isOwner && redirectToOwner()) return;
       revealWindow(win);
-      await deps.openDirectory(targetPath, win);
+      await deps.openDirectory(targetPath, win, ...admittedArg());
     },
     () => isWindowBound(registry, windowId, deps.isProjectClosed)
   );

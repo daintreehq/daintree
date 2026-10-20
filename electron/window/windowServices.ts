@@ -2,6 +2,7 @@
 import { app, BrowserWindow, dialog } from "electron";
 import fs from "fs";
 import os from "os";
+import { basename } from "path";
 import { registerIpcHandlers, sendToRenderer } from "../ipc/handlers.js";
 import { getAppWebContents } from "./webContentsRegistry.js";
 import { distributePortsToView } from "./portDistribution.js";
@@ -19,6 +20,7 @@ import { runFreezeHarness } from "../services/freezeHarness.js";
 import { markPerformance } from "../utils/performance.js";
 import { getCurrentDiskSpaceStatus } from "../services/DiskSpaceMonitor.js";
 import { deliverOpenSystemMemoryPressure } from "./systemMemoryPressureDelivery.js";
+import { confirmColdOpenAtMemoryPressure } from "../services/projectOpenMemoryPressure.js";
 import { deliverPowerPolicy } from "./powerPolicyDelivery.js";
 import { PERF_MARKS } from "../../shared/perf/marks.js";
 import { isCleaningUp } from "../lifecycle/shutdownCoordinator.js";
@@ -125,12 +127,12 @@ const isProjectClosed = (projectId: string): boolean =>
 // window creation comes from main.ts, which owns it; the install-once guard
 // lives in openDirHandler.ts.
 function createOpenDirDeps(
-  createWindowForPath: (dirPath: string) => Promise<number>
+  createWindowForPath: OpenDirHandlerDeps["createWindowForPath"]
 ): OpenDirHandlerDeps {
   return {
     resolveProject: (dirPath) => projectStore.addProject(dirPath),
-    openDirectory: (dirPath, win) =>
-      handleDirectoryOpen(dirPath, win, getCliAvailabilityServiceRef() ?? undefined),
+    openDirectory: (dirPath, win, options) =>
+      handleDirectoryOpen(dirPath, win, getCliAvailabilityServiceRef() ?? undefined, options),
     createWindowForPath,
     getWindowRegistry,
     // Read per open so a change in Settings applies to the next folder opened.
@@ -154,6 +156,19 @@ function createOpenDirDeps(
       getWindowRegistry()
         ?.getByWindowId(windowId)
         ?.services.projectViewManager?.releaseCachedView(projectId) === true,
+    admitColdOpen: ({ projectId, projectPath, initiatingWindowId }) =>
+      confirmColdOpenAtMemoryPressure({
+        projectId,
+        projectName:
+          (projectId !== null ? projectStore.getProjectById(projectId)?.name : undefined) ||
+          basename(projectPath) ||
+          projectPath,
+        // An external open has no window that asked; its dialog finds one.
+        parent:
+          initiatingWindowId === null
+            ? null
+            : getWindowRegistry()?.getByWindowId(initiatingWindowId)?.browserWindow,
+      }),
   };
 }
 
@@ -223,7 +238,9 @@ export interface SetupWindowServicesOptions {
    */
   backgroundProjectIds?: readonly string[];
   /** Create a window bound to a folder, for opens from outside the app that need one. */
-  createWindowForPath: (dirPath: string) => Promise<number>;
+  createWindowForPath: OpenDirHandlerDeps["createWindowForPath"];
+  /** The user chose to open `initialProjectPath` anyway at critical memory pressure (#13638). */
+  initialOpenIgnoresMemoryPressure?: boolean;
 }
 
 /**
@@ -872,9 +889,9 @@ export async function setupWindowServices(
       ctx.windowId,
       { projectId: null, projectPath: initialProjectPath },
       () =>
-        handleDirectoryOpen(initialProjectPath, win, cliAvailabilityService ?? undefined).catch(
-          (err) => console.error("[MAIN] Failed to open initial project path:", err)
-        ),
+        handleDirectoryOpen(initialProjectPath, win, cliAvailabilityService ?? undefined, {
+          ignoreMemoryPressure: opts.initialOpenIgnoresMemoryPressure === true,
+        }).catch((err) => console.error("[MAIN] Failed to open initial project path:", err)),
       () => isWindowBound(windowRegistry, ctx.windowId, isProjectClosed)
     );
   }
