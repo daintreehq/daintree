@@ -203,6 +203,48 @@ describe("createHostSampleSources", () => {
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it("counts the project's own worktrees when Daintree inherited a GIT_DIR", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "rh-wt-"));
+    try {
+      const git = (repo: string, ...args: string[]) =>
+        execFileSync("git", ["-C", repo, ...args], { stdio: "ignore" });
+      const repo = path.join(root, "repo");
+      const other = path.join(root, "other");
+      for (const dir of [repo, other]) {
+        fs.mkdirSync(dir);
+        git(dir, "init", "-q");
+        git(
+          dir,
+          "-c",
+          "user.email=t@t",
+          "-c",
+          "user.name=t",
+          "commit",
+          "-q",
+          "--allow-empty",
+          "-m",
+          "i"
+        );
+      }
+      git(repo, "worktree", "add", "-q", path.join(root, "wt"));
+      vi.stubEnv("GIT_DIR", path.join(other, ".git"));
+      store.projects = [{ id: "unloaded", path: repo, status: "background" }];
+      workspace.client = {
+        getAllStatesForProjectResultAsync: vi.fn(async () => ({
+          status: "unavailable",
+          reason: "project-unavailable",
+        })),
+      };
+      await expect(createHostSampleSources().projects()).resolves.toEqual({
+        projectCount: 1,
+        worktreeCount: 2,
+      });
+    } finally {
+      vi.unstubAllEnvs();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("one host-summary sample", () => {

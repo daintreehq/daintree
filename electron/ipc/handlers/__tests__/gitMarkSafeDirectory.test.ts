@@ -329,4 +329,28 @@ describe("git:mark-safe-directory handler", () => {
     const addCall = calls.find(([, args]) => Array.isArray(args) && args.includes("--add"));
     expect(addCall).toBeUndefined();
   });
+
+  it("reads and writes the global config git would find without an inherited GIT_CONFIG_GLOBAL", async () => {
+    vi.stubEnv("GIT_CONFIG_GLOBAL", "/elsewhere/gitconfig");
+    vi.stubEnv("GIT_DIR", "/elsewhere/.git");
+    try {
+      registerGitWriteHandlers({} as Parameters<typeof registerGitWriteHandlers>[0]);
+      await getHandler("git:mark-safe-directory")(null, "/Users/foo/my repo");
+
+      const calls = execFileMock.mock.calls as [
+        string,
+        string[],
+        { env: NodeJS.ProcessEnv },
+        unknown,
+      ][];
+      expect(calls).toHaveLength(2);
+      for (const [, , opts] of calls) {
+        expect(opts.env.GIT_CONFIG_GLOBAL).toBeUndefined();
+        expect(opts.env.GIT_DIR).toBeUndefined();
+        expect(opts.env.LC_ALL).toBe("C");
+      }
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
 });

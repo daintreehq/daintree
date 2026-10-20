@@ -63,6 +63,7 @@ import {
 } from "../../services/git/conflictMarkerScan.js";
 import { shouldPlayUiFeedbackSound } from "../../utils/uiFeedbackSound.js";
 import { resolveExecutableForSpawn } from "../../utils/windowsExecutable.js";
+import { getSanitizedProcessEnv } from "../../utils/gitEnv.js";
 
 type SoundId = keyof typeof SoundServiceModule.SOUND_FILES;
 
@@ -1928,11 +1929,14 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
     // expected for first-time users and must not propagate as an error.
     let alreadyConfigured = false;
     const git = await resolveExecutableForSpawn("git");
+    // Without an inherited GIT_CONFIG_GLOBAL, so the exception lands in the
+    // global config the hardened profiles read.
+    const env = { ...getSanitizedProcessEnv(), LC_ALL: "C" };
     try {
       const { stdout } = await execFileAsync(
         git,
         ["config", "--global", "--get-all", "safe.directory"],
-        { env: { ...process.env, LC_ALL: "C" }, windowsHide: true }
+        { env, windowsHide: true }
       );
       const entries = stdout
         .split("\n")
@@ -1954,7 +1958,7 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
 
     if (!alreadyConfigured) {
       await execFileAsync(git, ["config", "--global", "--add", "safe.directory", normalized], {
-        env: { ...process.env, LC_ALL: "C" },
+        env,
         windowsHide: true,
       });
     }
