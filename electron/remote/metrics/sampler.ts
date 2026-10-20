@@ -49,8 +49,16 @@ export interface HostSampleSources {
   agentClis(): Promise<Array<{ agentId: string; version: string | null }>>;
   /** This host's forge providers and their sign-in state; absent where nothing reports it. */
   forges?(): Promise<HostForgeObservation[]>;
+  /**
+   * Readers for one sample, so the reads they share (the project list) happen
+   * once per sample rather than once per reader. Absent, the sampler uses the
+   * plain readers above.
+   */
+  beginSample?(): SampleReaders;
   now(): number;
 }
+
+export type SampleReaders = Pick<HostSampleSources, "agents" | "projects" | "driver">;
 
 const LINUX_THERMAL_DIR = "/sys/class/thermal";
 
@@ -77,6 +85,7 @@ export class HostMetricsSampler {
     const cpus = s.cpus();
     const cpuPercent = cpuPercentBetween(this.previousCpus, cpus);
     this.previousCpus = cpus;
+    const readers: SampleReaders = s.beginSample?.() ?? s;
 
     const [memory, agents, projects, agentClis, forges] = await Promise.all([
       settle(() => (s.platform === "darwin" ? this.darwinMemory() : this.linuxMemory()), {
@@ -89,11 +98,14 @@ export class HostMetricsSampler {
         cpuPressure: null,
       }),
       // A failed read is unknown, not zero: zero working agents lets an update restart the host.
-      settle<ObservedAgents | null>(() => s.agents(), null),
-      settle<{ projectCount: number | null; worktreeCount: number | null }>(() => s.projects(), {
-        projectCount: null,
-        worktreeCount: null,
-      }),
+      settle<ObservedAgents | null>(() => readers.agents(), null),
+      settle<{ projectCount: number | null; worktreeCount: number | null }>(
+        () => readers.projects(),
+        {
+          projectCount: null,
+          worktreeCount: null,
+        }
+      ),
       settle(() => s.agentClis(), []),
       // A failed read is unknown, never "not connected".
       settle<HostForgeObservation[] | null | undefined>(
@@ -104,7 +116,7 @@ export class HostMetricsSampler {
 
     let driver: DriveLeaseHolder | null;
     try {
-      driver = s.driver();
+      driver = readers.driver();
     } catch {
       driver = null;
     }
