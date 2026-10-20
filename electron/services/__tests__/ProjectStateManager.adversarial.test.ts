@@ -348,6 +348,44 @@ describe("ProjectStateManager late reads racing saves and clears (mocked fs)", (
     expect(fsPromisesMock.readFile).toHaveBeenCalledTimes(2);
   });
 
+  it("a read that opened the file during a clear that ends in ENOENT is still retired", async () => {
+    let finishUnlink!: (error: Error) => void;
+    utilsMock.resilientUnlink.mockImplementationOnce(
+      () => new Promise((_resolve, reject) => (finishUnlink = reject))
+    );
+    const clearing = manager.clearProjectState(projectId);
+
+    // Starts after the clear's eager invalidation, so only its completion can fence it.
+    const release = holdNextRead();
+    const lateRead = manager.getProjectState(projectId);
+    await vi.waitFor(() => expect(fsPromisesMock.readFile).toHaveBeenCalledTimes(1));
+
+    finishUnlink(Object.assign(new Error("ENOENT"), { code: "ENOENT" }));
+    await clearing;
+    release(oldBytes());
+
+    expect(await lateRead).toBeNull();
+    expect(fsPromisesMock.readFile).toHaveBeenCalledTimes(2);
+  });
+
+  it("a read that outlives a failed save re-reads rather than trust its bytes", async () => {
+    const release = holdNextRead();
+    const lateRead = manager.getProjectState(projectId);
+    await vi.waitFor(() => expect(fsPromisesMock.readFile).toHaveBeenCalledTimes(1));
+
+    // The atomic write can rename into place and then fail its directory sync.
+    utilsMock.resilientAtomicWriteFile.mockRejectedValueOnce(
+      Object.assign(new Error("EIO"), { code: "EIO" })
+    );
+    await expect(
+      manager.saveProjectState(projectId, makeState({ terminals: [terminal("new")] }))
+    ).rejects.toThrow("EIO");
+    release(oldBytes());
+
+    expect(await lateRead).toBeNull();
+    expect(fsPromisesMock.readFile).toHaveBeenCalledTimes(2);
+  });
+
   it("a read superseded on every attempt fails rather than return stale state", async () => {
     fsPromisesMock.readFile.mockImplementation(async () => {
       manager.invalidateProjectStateCache(projectId);

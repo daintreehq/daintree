@@ -472,6 +472,10 @@ export class ProjectStateManager {
     } catch (error) {
       const isEnoent = error instanceof Error && "code" in error && error.code === "ENOENT";
       if (!isEnoent) {
+        // A failed save may still have replaced the file — the atomic write
+        // renames before it syncs the directory — so neither the cache nor a
+        // read already in flight can be trusted to match disk any more.
+        this.invalidateProjectStateCache(projectId);
         console.error(
           `[ProjectStateManager] Failed to save state for project ${projectId}:`,
           error
@@ -482,6 +486,7 @@ export class ProjectStateManager {
       try {
         await attemptSave(true);
       } catch (retryError) {
+        this.invalidateProjectStateCache(projectId);
         console.error(
           `[ProjectStateManager] Failed to save state for project ${projectId}:`,
           retryError
@@ -522,7 +527,9 @@ export class ProjectStateManager {
       // usually lands on the cache the save just published.
       const fence = this.captureReadFence(projectId);
       const read = await this.readProjectStateFromDisk(projectId, filePath, fence);
-      if (read.current) {
+      // Checked again here: a save can land between the helper publishing and
+      // this resuming, and the retry then serves the save's cached state.
+      if (read.current && this.isReadCurrent(projectId, fence)) {
         return read.state;
       }
       if (attempt >= PROJECT_STATE_READ_ATTEMPTS) {
@@ -739,7 +746,9 @@ export class ProjectStateManager {
           : undefined;
       if (code === "ENOENT") {
         // Already absent, which is the state the caller asked for — same
-        // authoritative emptiness as a successful unlink.
+        // authoritative emptiness as a successful unlink, and the same need to
+        // retire a read that opened the file before it went.
+        this.invalidateProjectStateCache(projectId);
         this.notifyStatePersisted(projectId, null);
         return;
       }
