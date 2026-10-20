@@ -27,6 +27,7 @@ import {
   createSearchAddon,
   createFileLinksAddon,
   createImageLinksAddon,
+  createSuggestedCommandLinksAddon,
   createWebLinksAddon,
 } from "./TerminalAddonManager";
 import { TerminalOutputIngestService } from "./TerminalOutputIngestService";
@@ -36,6 +37,7 @@ import { TerminalParserHandler } from "./TerminalParserHandler";
 import { TerminalUnseenOutputTracker, UnseenOutputSnapshot } from "./TerminalUnseenOutputTracker";
 import { TerminalOffscreenManager } from "./TerminalOffscreenManager";
 import { TerminalLinkHandler } from "./TerminalLinkHandler";
+import { isSuggestedCommandSource, runSuggestedCommand } from "./suggestedCommandRunner";
 import { TerminalResizeController, hasStreamingWrites } from "./TerminalResizeController";
 import { TerminalRendererPolicy } from "./TerminalRendererPolicy";
 import { TerminalWebGLManager } from "./TerminalWebGLManager";
@@ -1923,6 +1925,20 @@ class TerminalInstanceService {
     // The file/image/web link providers are synchronous, so build them first and
     // unconditionally — the lazy, async ImageAddon load below must not defer them
     // behind a microtask (they are observable synchronously on tier upgrade).
+    // Claude Code's `! command` suggestions register first: xterm gives an
+    // overlapping link to the earliest provider, and a suggestion often holds a
+    // path or URL that must not take the click away from the whole command.
+    if (!managed.commandLinksDisposable) {
+      try {
+        managed.commandLinksDisposable = createSuggestedCommandLinksAddon(
+          managed.terminal,
+          () => isSuggestedCommandSource(id, this.instances.get(id)?.runtimeAgentId),
+          (command) => runSuggestedCommand(id, command)
+        );
+      } catch (err) {
+        logWarn("Failed to create SuggestedCommandLinksAddon", { id, error: err });
+      }
+    }
     if (!managed.fileLinksDisposable) {
       try {
         managed.fileLinksDisposable = createFileLinksAddon(
@@ -2615,6 +2631,7 @@ class TerminalInstanceService {
       ["image addon", managed.imageAddon],
       ["file links", managed.fileLinksDisposable],
       ["image links", managed.imageLinksDisposable],
+      ["command links", managed.commandLinksDisposable],
       ["web links", managed.webLinksAddon],
     ] as const) {
       try {
@@ -2626,6 +2643,7 @@ class TerminalInstanceService {
     managed.imageAddon = null;
     managed.fileLinksDisposable = null;
     managed.imageLinksDisposable = null;
+    managed.commandLinksDisposable = null;
     managed.webLinksAddon = null;
 
     // Before dispose: the manager holds pool/lease references to this exact
@@ -4161,6 +4179,11 @@ class TerminalInstanceService {
       managed.imageLinksDisposable?.dispose();
     } catch (error) {
       logWarn("Error disposing image links", { error });
+    }
+    try {
+      managed.commandLinksDisposable?.dispose();
+    } catch (error) {
+      logWarn("Error disposing command links", { error });
     }
     try {
       managed.webLinksAddon?.dispose();

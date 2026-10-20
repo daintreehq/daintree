@@ -130,6 +130,7 @@ function makeManaged(visible = true, id = "term"): ManagedTerminal {
     searchAddon: {} as ManagedTerminal["searchAddon"],
     fileLinksDisposable: null,
     imageLinksDisposable: null,
+    commandLinksDisposable: null,
     webLinksAddon: null,
     hoveredLink: null,
   } as ManagedTerminal;
