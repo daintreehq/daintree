@@ -1117,7 +1117,12 @@ describe("RemoteHostsClient", () => {
         })
       ).resolves.toEqual({ outcome: "switched", hostId: "studio-01", projectId: "proj-1" });
       expect(windows.admitProjectOpen).toHaveBeenCalledOnce();
-      expect(windows.openRemoteProject).toHaveBeenCalledWith(1, "studio-01", "proj-1", "/srv/proj-1");
+      expect(windows.openRemoteProject).toHaveBeenCalledWith(
+        1,
+        "studio-01",
+        "proj-1",
+        "/srv/proj-1"
+      );
     });
 
     it("never asks about restoring a window to the host project it was showing", async () => {
