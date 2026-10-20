@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import type { Worker } from "node:worker_threads";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { DbWorkerRequest, DbWorkerResponse } from "../dbWorkerProtocol.js";
+import type { DbWorkerOp, DbWorkerRequest, DbWorkerResponse } from "../dbWorkerProtocol.js";
 
 vi.mock("electron", () => ({
   app: {
@@ -365,7 +365,12 @@ describe("DbWorkerClient", () => {
   });
 
   describe("fallbacks superseded by a synchronous write", () => {
-    const staleWrite = { op: "ringWriteAll", ring: "a", records: ["old"], maxRecords: 5 } as const;
+    const staleWrite: Extract<DbWorkerOp, { op: "ringWriteAll" }> = {
+      op: "ringWriteAll",
+      ring: "a",
+      records: ["old"],
+      maxRecords: 5,
+    };
 
     function holdingClient(worker: FakeWorker, overrides: { requestTimeoutMs?: number } = {}) {
       const fence = fakeFenceDb(0);
@@ -538,10 +543,7 @@ describe("DbWorkerClient", () => {
     });
 
     it("does not treat the shutdown fence as superseding pending ring writes", async () => {
-      const worker = new FakeWorker((w, msg) => {
-        // Swallow close so the drain times out, then let the worker die.
-        if (msg.op === "close") return;
-      });
+      const worker = new FakeWorker(); // swallows close, so the drain times out
       const fence = fakeFenceDb(0);
       const client = new DbWorkerClient({
         spawnWorker: () => worker.asWorker(),
