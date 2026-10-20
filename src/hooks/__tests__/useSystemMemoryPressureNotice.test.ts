@@ -282,6 +282,31 @@ describe("useSystemMemoryPressureNotice", () => {
     expect(notifyMock.mock.calls.map(([p]) => p.priority)).toEqual(["low", "high", "low"]);
   });
 
+  it("leaves the critical toast up when the episode escalates again (#13639)", async () => {
+    await mountAndCapture();
+
+    act(() => captured!(DEGRADED));
+    act(() => captured!(CRITICAL));
+    act(() => captured!({ ...CRITICAL, swapUsedPercent: 97 }));
+
+    const [, toast, escalation] = notifyMock.mock.calls.map(([p]) => p);
+    expect(toast.replaceKey).toEqual(expect.any(String));
+    // A replaceKey would dismiss the sticky toast; the inbox row still supersedes.
+    expect(escalation.replaceKey).toBeUndefined();
+    expect(escalation.supersedeKey).toBe(toast.supersedeKey);
+  });
+
+  it("dismisses the critical toast on recovery after an escalation", async () => {
+    await mountAndCapture();
+
+    act(() => captured!(CRITICAL));
+    act(() => captured!({ ...CRITICAL, swapUsedPercent: 97 }));
+    act(() => captured!(NORMAL));
+
+    const [toast, , resolution] = notifyMock.mock.calls.map(([p]) => p);
+    expect(resolution.replaceKey).toBe(toast.replaceKey);
+  });
+
   it("toasts an episode that opens at the critical level", async () => {
     await mountAndCapture();
 
