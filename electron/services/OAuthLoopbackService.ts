@@ -7,7 +7,7 @@
 
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from "http";
 import { app } from "electron";
-import { openExternalUrl } from "../utils/openExternal.js";
+import { canOpenExternalUrl, openExternalUrl } from "../utils/openExternal.js";
 
 export { looksLikeOAuthUrl } from "../../shared/utils/urlUtils.js";
 export type { OAuthLoopbackResult } from "../../shared/types/oauth.js";
@@ -35,10 +35,9 @@ interface LoopbackSession {
 const activeSessions = new Map<string, LoopbackSession>();
 
 export function startOAuthLoopback(authUrl: string, panelId: string): Promise<OAuthLoopbackResult> {
-  // Validate the renderer-supplied URL before any side effect: a malformed
-  // string would otherwise throw out of the typed-result contract, and
-  // cancelling the in-flight session before validation would kill a live flow
-  // on a bad input.
+  // Validate the whole request before any side effect: a malformed string
+  // would otherwise throw out of the typed-result contract, and cancelling the
+  // in-flight session before validation would kill a live flow on a bad input.
   let parsed: URL;
   try {
     parsed = new URL(authUrl);
@@ -46,8 +45,6 @@ export function startOAuthLoopback(authUrl: string, panelId: string): Promise<OA
     console.warn("[OAuthLoopback] Invalid auth URL");
     return Promise.resolve({ success: false, cause: "server-error" });
   }
-
-  cancelOAuthLoopback(panelId);
 
   const originalRedirectUri = parsed.searchParams.get("redirect_uri");
 
@@ -64,6 +61,13 @@ export function startOAuthLoopback(authUrl: string, panelId: string): Promise<OA
     console.warn("[OAuthLoopback] Invalid redirect_uri:", originalRedirectUri);
     return Promise.resolve({ success: false, cause: "server-error" });
   }
+
+  if (!canOpenExternalUrl(authUrl)) {
+    console.warn("[OAuthLoopback] Disallowed auth URL protocol:", parsed.protocol);
+    return Promise.resolve({ success: false, cause: "open-external-failed" });
+  }
+
+  cancelOAuthLoopback(panelId);
 
   return new Promise((resolve) => {
     let settled = false;

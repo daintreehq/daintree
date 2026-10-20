@@ -89,7 +89,7 @@ describe("OAuthLoopbackService", () => {
   });
 
   describe("startOAuthLoopback", () => {
-    it("returns null when auth URL has no redirect_uri", async () => {
+    it("returns server-error when auth URL has no redirect_uri", async () => {
       const result = await startOAuthLoopback(
         "https://auth.example.com/authorize?client_id=abc&response_type=code",
         "test-panel"
@@ -104,24 +104,54 @@ describe("OAuthLoopbackService", () => {
       expect(shell.openExternal).not.toHaveBeenCalled();
     });
 
-    it("does not cancel an in-flight session when a later call has a malformed URL", async () => {
-      const authUrl =
-        "https://auth.example.com/authorize?client_id=abc&response_type=code&redirect_uri=http://localhost:3000/auth/callback";
+    it.each([
+      ["a malformed auth URL", "not a url", "server-error"],
+      [
+        "no redirect_uri",
+        "https://auth.example.com/authorize?client_id=abc&response_type=code",
+        "server-error",
+      ],
+      [
+        "an unparseable redirect_uri",
+        "https://auth.example.com/authorize?client_id=abc&response_type=code&redirect_uri=not-a-url",
+        "server-error",
+      ],
+      [
+        "a disallowed scheme",
+        "file:///etc/passwd?redirect_uri=http://localhost:3000/auth/callback",
+        "open-external-failed",
+      ],
+    ])(
+      "keeps the in-flight session live when a later call has %s",
+      async (_label, badUrl, cause) => {
+        const authUrl =
+          "https://auth.example.com/authorize?client_id=abc&response_type=code&redirect_uri=http://localhost:3000/auth/callback&state=s1";
 
-      const firstPromise = startOAuthLoopback(authUrl, "test-panel");
-      await vi.waitFor(() => {
+        const firstPromise = startOAuthLoopback(authUrl, "test-panel");
+        await vi.waitFor(() => {
+          expect(shell.openExternal).toHaveBeenCalledTimes(1);
+        });
+        const loopbackRedirectUri = new URL(
+          (shell.openExternal as ReturnType<typeof vi.fn>).mock.calls[0][0] as string
+        ).searchParams.get("redirect_uri")!;
+
+        const badResult = await startOAuthLoopback(badUrl, "test-panel");
+        expect(badResult).toEqual({ success: false, cause });
         expect(shell.openExternal).toHaveBeenCalledTimes(1);
-      });
 
-      // A malformed URL for the same panel must not disturb the live flow.
-      const badResult = await startOAuthLoopback("not a url", "test-panel");
-      expect(badResult).toEqual({ success: false, cause: "server-error" });
+        // The first listener must still accept a real callback and complete the flow.
+        const response = await fetchUrl(`${loopbackRedirectUri}?code=FIRST_CODE&state=s1`);
+        expect(response.status).toBe(200);
 
-      // The original session is still live — cancelling it now resolves it.
-      cancelOAuthLoopback("test-panel");
-      const firstResult = await firstPromise;
-      expect(firstResult).toEqual({ success: false, cause: "cancelled" });
-    });
+        const firstResult = await firstPromise;
+        expect(firstResult.success).toBe(true);
+        if (!firstResult.success) throw new Error("expected success");
+        const resultUrl = new URL(firstResult.callbackUrl);
+        expect(resultUrl.origin + resultUrl.pathname).toBe("http://localhost:3000/auth/callback");
+        expect(resultUrl.searchParams.get("code")).toBe("FIRST_CODE");
+        expect(firstResult.loopbackRedirectUri).toBe(loopbackRedirectUri);
+      }
+    );
 
     it("never opens a disallowed scheme even with a valid redirect_uri", async () => {
       const redirect = encodeURIComponent("http://localhost:3000/auth/callback");
