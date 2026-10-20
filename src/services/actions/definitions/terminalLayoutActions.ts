@@ -9,6 +9,13 @@ import { panelKindIsDockable } from "@shared/config/panelKindRegistry";
 import { getGridLayoutSnapshot } from "@/components/Terminal/gridLayoutSnapshot";
 import { animatePanelMove } from "@/components/Panel/animatePanelMove";
 import { requireExplicitTerminalIdForAgentDispatch } from "./terminalTargetBinding";
+import {
+  PanelPlacementResultSchema,
+  assertPlacementAllowed,
+  confirmPlacement,
+  resolvePlacementTarget,
+  throwTerminalMiss,
+} from "./terminalPlacement";
 export function registerTerminalLayoutActions(
   actions: ActionRegistry,
   callbacks: ActionCallbacks
@@ -17,38 +24,41 @@ export function registerTerminalLayoutActions(
     id: "terminal.moveToDock",
     title: "Move to dock",
     description:
-      "Move a terminal out of the main grid into the sidebar dock, keeping its process running. This rearranges what the user sees and is reversible by moving it back. Name the target explicitly — an automated caller cannot see what the user has focused.",
+      "Move a terminal out of the main grid into the sidebar dock, keeping its process running; a grouped panel takes its group along. Reversible. A panel not in this view, a kind the dock can't show, or one in the trash, background, an overlay or a dialog is refused. Name the target explicitly; the result names where it is now.",
     category: "terminal",
     kind: "command",
     danger: "safe",
     scope: "renderer",
     argsSchema: z.object({ terminalId: z.string().optional() }),
+    resultSchema: PanelPlacementResultSchema,
+    mcpOutputSchema: true,
     run: async (args: unknown, ctx) => {
       const { terminalId } = args as { terminalId?: string };
       requireExplicitTerminalIdForAgentDispatch("terminal.moveToDock", terminalId, ctx);
       const state = usePanelStore.getState();
-      const targetId = terminalId ?? state.focusedId;
-      if (targetId) {
-        const terminal = state.panelsById[targetId];
-        if (!terminal) {
-          return;
-        }
-        // Dock membership is capability-gated (PTY kinds + dockable non-PTY
-        // kinds like file panels). Reject the rest so they don't silently
-        // disappear into a dock slot that won't render them.
-        if (!panelKindIsDockable(terminal.kind ?? "terminal")) {
-          return;
-        }
-
-        useLayoutUndoStore.getState().pushLayoutSnapshot();
-
-        animatePanelMove(targetId, "minimize", () => state.moveTerminalToDock(targetId));
-
-        const moved = usePanelStore.getState().panelsById[targetId];
-        if (moved?.location === "dock") {
-          state.openDockTerminal(targetId);
-        }
+      if (terminalId !== undefined && !Object.hasOwn(state.panelsById, terminalId)) {
+        return throwTerminalMiss("terminal.moveToDock", terminalId);
       }
+      const targetId = resolvePlacementTarget(terminalId, state);
+      if (!targetId) return { location: null };
+      // Refused before the undo snapshot, so a move that never happens leaves
+      // no undo entry behind.
+      if (assertPlacementAllowed("terminal.moveToDock", targetId, "dock", state)) {
+        return { location: "dock" as const };
+      }
+
+      useLayoutUndoStore.getState().pushLayoutSnapshot();
+
+      animatePanelMove(targetId, "minimize", () => state.moveTerminalToDock(targetId));
+
+      const result = confirmPlacement(
+        "terminal.moveToDock",
+        targetId,
+        "dock",
+        usePanelStore.getState().panelsById[targetId]
+      );
+      state.openDockTerminal(targetId);
+      return result;
     },
   }));
 
@@ -56,25 +66,36 @@ export function registerTerminalLayoutActions(
     id: "terminal.moveToGrid",
     title: "Move to grid",
     description:
-      "Move a terminal from the sidebar dock back into the main grid, keeping its process running. This rearranges what the user sees and is reversible. Name the target explicitly — an automated caller cannot see what the user has focused.",
+      "Move a terminal from the sidebar dock back into the main grid, keeping its process running; a grouped panel takes its group along. Reversible. A panel not in this view, or one in the trash, background, an overlay or a dialog, is refused. Name the target explicitly; the result names where it is now.",
     category: "terminal",
     kind: "command",
     danger: "safe",
     scope: "renderer",
     argsSchema: z.object({ terminalId: z.string().optional() }),
+    resultSchema: PanelPlacementResultSchema,
+    mcpOutputSchema: true,
     run: async (args: unknown, ctx) => {
       const { terminalId } = args as { terminalId?: string };
       requireExplicitTerminalIdForAgentDispatch("terminal.moveToGrid", terminalId, ctx);
       const state = usePanelStore.getState();
-      const targetId = terminalId ?? state.focusedId;
-      if (targetId) {
-        const terminal = state.panelsById[targetId];
-        if (!terminal) {
-          return;
-        }
-        useLayoutUndoStore.getState().pushLayoutSnapshot();
-        animatePanelMove(targetId, "restore", () => state.moveTerminalToGrid(targetId));
+      if (terminalId !== undefined && !Object.hasOwn(state.panelsById, terminalId)) {
+        return throwTerminalMiss("terminal.moveToGrid", terminalId);
       }
+      const targetId = resolvePlacementTarget(terminalId, state);
+      if (!targetId) return { location: null };
+      // A trashed or backgrounded panel has its own restore path, which clears
+      // the bookkeeping a plain grid move would leave behind.
+      if (assertPlacementAllowed("terminal.moveToGrid", targetId, "grid", state)) {
+        return { location: "grid" as const };
+      }
+      useLayoutUndoStore.getState().pushLayoutSnapshot();
+      animatePanelMove(targetId, "restore", () => state.moveTerminalToGrid(targetId));
+      return confirmPlacement(
+        "terminal.moveToGrid",
+        targetId,
+        "grid",
+        usePanelStore.getState().panelsById[targetId]
+      );
     },
   }));
 

@@ -23,11 +23,13 @@ import {
 } from "@/utils/destructiveSessionConfirm";
 import { isEphemeralPanel } from "@/store/slices/panelRegistry/panelCount";
 import { requireExplicitTerminalIdForAgentDispatch } from "./terminalTargetBinding";
-import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import {
-  TerminalInOtherProjectError,
-  formatNoPanelMessage,
-} from "@shared/utils/terminalInOtherProject";
+  PanelPlacementResultSchema,
+  assertPlacementAllowed,
+  confirmPlacement,
+  resolvePlacementTarget,
+  throwTerminalMiss,
+} from "./terminalPlacement";
 import { isForegroundDispatch } from "./dispatchSource";
 import { logWarn } from "@/utils/logger";
 import {
@@ -170,30 +172,6 @@ function settleCloseForDispatch(ids: readonly string[], ctx: { dispatchSource?: 
   }
   flushOptimisticCloses();
   return { closedIds: closedPanelIds(ids) };
-}
-
-/**
- * Fail a named terminal that is not in this view, saying whether it is running
- * in another project's instead of reporting every miss as gone (#13120). Only
- * the miss path pays for the lookup, and it only ever throws: nothing outside
- * this view is acted on. The receiving workspace is read before the await, and
- * an unknown one or a same-workspace owner keeps the ordinary miss — the code
- * claims another project, never a local/backend discrepancy. Callers bound to
- * one view get the ordinary miss either way; main masks the code for them.
- */
-async function throwTerminalMiss(actionId: string, terminalId: string): Promise<never> {
-  const ownWorkspaceId = getViewWorkspaceId();
-  if (ownWorkspaceId) {
-    const location = await terminalClient.locate(terminalId).catch(() => null);
-    if (location?.found && location.projectId !== ownWorkspaceId) {
-      throw new TerminalInOtherProjectError(actionId, {
-        terminalId,
-        projectId: location.projectId,
-        viewResident: location.viewResident,
-      });
-    }
-  }
-  throw new Error(formatNoPanelMessage(actionId, terminalId));
 }
 
 export function registerTerminalLifecycleActions(
@@ -380,26 +358,42 @@ export function registerTerminalLifecycleActions(
   actions.set("terminal.background", () => ({
     id: "terminal.background",
     title: "Send to background",
-    description: "Hide terminal from view while keeping its process alive",
+    description:
+      "Hide a terminal from view while keeping its process alive; a grouped panel takes its group along. A panel not in this view, or one in the trash, an overlay or a dialog, is refused. The result names where the panel is now.",
     category: "terminal",
     kind: "command",
     danger: "safe",
     scope: "renderer",
     keywords: ["hide", "minimize", "stash", "park"],
     argsSchema: z.object({ terminalId: z.string().optional() }).optional(),
+    resultSchema: PanelPlacementResultSchema,
+    mcpOutputSchema: true,
     run: async (args: unknown, ctx) => {
       const { terminalId } = (args as { terminalId?: string } | undefined) ?? {};
       requireExplicitTerminalIdForAgentDispatch("terminal.background", terminalId, ctx);
       const state = usePanelStore.getState();
-      const targetId = terminalId ?? state.focusedId;
-      if (targetId) {
-        const group = state.getPanelGroup(targetId);
-        if (group) {
-          state.backgroundPanelGroup(targetId);
-        } else {
-          state.backgroundTerminal(targetId);
-        }
+      // A named panel this view does not hold fails like `terminal.close`'s
+      // miss: the store movers ignore an unknown id, so without this the call
+      // answered ok for a panel that never moved (#13663).
+      if (terminalId !== undefined && !Object.hasOwn(state.panelsById, terminalId)) {
+        return throwTerminalMiss("terminal.background", terminalId);
       }
+      const targetId = resolvePlacementTarget(terminalId, state);
+      if (!targetId) return { location: null };
+      if (assertPlacementAllowed("terminal.background", targetId, "background", state)) {
+        return { location: "background" as const };
+      }
+      if (state.getPanelGroup(targetId)) {
+        state.backgroundPanelGroup(targetId);
+      } else {
+        state.backgroundTerminal(targetId);
+      }
+      return confirmPlacement(
+        "terminal.background",
+        targetId,
+        "background",
+        usePanelStore.getState().panelsById[targetId]
+      );
     },
   }));
 
