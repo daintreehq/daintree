@@ -368,8 +368,10 @@ export class PluginSettingsManager {
     const subs = this.settingsSubscribers.get(pluginId);
     if (!subs) return;
     // The subscriber hears what a read would return: a cleared value reads back
-    // as the declared default, and a written one in its persisted JSON form.
-    value = value === undefined ? this.getDeclaredDefault(pluginId, key) : cloneValue(value);
+    // as the declared default, and a written one in its persisted JSON form. A
+    // secret is the documented exception and delivers the value as passed.
+    if (value === undefined) value = this.getDeclaredDefault(pluginId, key);
+    else if (!this.isSecretKey(pluginId, key)) value = cloneValue(value);
     // Snapshot so a callback that disposes itself doesn't mutate the live set
     // mid-iteration.
     for (const sub of [...subs]) {
