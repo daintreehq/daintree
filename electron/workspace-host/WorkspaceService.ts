@@ -13,6 +13,7 @@ import {
 import { sliceUtf8Bytes } from "../../shared/utils/boundedOutput.js";
 import {
   GIT_FILE_DIFF_MAX_BYTES,
+  GIT_FILE_DIFF_MAX_PATCH_BYTES,
   GIT_FILE_DIFF_MAX_SOURCE_BYTES,
 } from "../../shared/config/gitReadLimits.js";
 import { settingsFilePath } from "../services/projectStorePaths.js";
@@ -22,6 +23,7 @@ import {
   createBoundRepositoryGit,
   createHardenedGit,
 } from "../utils/hardenedGit.js";
+import { runWithCappedStdout } from "../utils/cappedGitOutput.js";
 import { readRemotesWithStatus } from "../utils/baseCompareRef.js";
 import { createRemoteInventoryReader } from "./remoteInventory.js";
 import { copyWorktreeIncludeFiles } from "./worktreeInclude.js";
@@ -5493,9 +5495,9 @@ export class WorkspaceService {
         sendWindow(bytes);
       };
 
-      // Bounds peak memory: both branches materialize a full result before
-      // windowing — the untracked one inlines the file, and git buffers a
-      // tracked file's entire diff. The ceiling is 16x the 1MB cliff it
+      // Bounds peak memory for the untracked branch, which inlines the file,
+      // and refuses a tracked file early; the tracked patch itself is capped
+      // while git writes it, below. The ceiling is 16x the 1MB cliff it
       // replaced, so the "large file, small diff" case that the old gate
       // wrongly refused now succeeds (#11531). lstat, not stat: a symlink's
       // diff is its target path, whatever size the file it points at is.
@@ -5573,19 +5575,27 @@ export class WorkspaceService {
       // diff at all, and `diff` emits patches for files INSIDE the submodule
       // under their own paths — neither of which this pane can render or
       // recognise as a gitlink (#12309).
-      const diff = await git.diff([
-        // Pinned to the commit the freshness key was taken against, so a HEAD
-        // that moves away and back mid-diff cannot pass off a patch against
-        // the other commit as fresh.
-        freshness?.head ?? "HEAD",
-        "--no-ext-diff",
-        "--no-textconv",
-        "--no-color",
-        "--submodule=short",
-        ...(ignoreWhitespace ? ["--ignore-all-space"] : []),
-        "--",
-        normalizedPath,
-      ]);
+      // Capped while git runs, since the stat gate above fails open for a
+      // deleted file and never sees the HEAD blob.
+      const diff = await runWithCappedStdout(cwd, GIT_FILE_DIFF_MAX_PATCH_BYTES, (capped) =>
+        capped.diff([
+          // Pinned to the commit the freshness key was taken against, so a HEAD
+          // that moves away and back mid-diff cannot pass off a patch against
+          // the other commit as fresh.
+          freshness?.head ?? "HEAD",
+          "--no-ext-diff",
+          "--no-textconv",
+          "--no-color",
+          "--submodule=short",
+          ...(ignoreWhitespace ? ["--ignore-all-space"] : []),
+          "--",
+          normalizedPath,
+        ])
+      );
+      if (diff === null) {
+        sendSentinel("FILE_TOO_LARGE");
+        return;
+      }
 
       if (isBinaryDiffOutput(diff)) {
         sendSentinel("BINARY_FILE");

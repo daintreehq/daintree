@@ -30,10 +30,18 @@ export const GIT_FILE_DIFF_DEFAULT_MAX_BYTES = 24 * 1024;
  */
 export const GIT_FILE_DIFF_MAX_BYTES = 1024 * 1024;
 /**
- * Source-size ceiling applied before a diff is produced at all. Both paths hold a
- * full result in memory before it can be windowed — the untracked path inlines the
- * file, and git buffers a tracked file's whole diff — so the gate gives peak memory
- * an upper bound. Sixteen times the 1MB cliff it replaced, which refused any file
- * over 1MB regardless of how small its diff was.
+ * Source-size ceiling applied before a diff is produced at all. The untracked path
+ * inlines the whole file before it can be windowed, so the gate bounds its peak
+ * memory; a tracked file's patch is bounded separately, as git writes it. Sixteen
+ * times the 1MB cliff it replaced, which refused any file over 1MB regardless of
+ * how small its diff was.
  */
 export const GIT_FILE_DIFF_MAX_SOURCE_BYTES = 16 * 1024 * 1024;
+/**
+ * Ceiling on the patch git may write for one file before the read is stopped
+ * and refused as FILE_TOO_LARGE. The source gate cannot see a deleted file or
+ * an old blob, so this bounds what is buffered regardless of the inputs. Twice
+ * the source ceiling: a full rewrite of a file at that ceiling carries both
+ * sides.
+ */
+export const GIT_FILE_DIFF_MAX_PATCH_BYTES = 2 * GIT_FILE_DIFF_MAX_SOURCE_BYTES;

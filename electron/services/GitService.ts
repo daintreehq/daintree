@@ -10,6 +10,7 @@ import type { BranchInfo, CreateWorktreeOptions } from "../../shared/types/git.j
 import { WorktreeRemovedError, GitError, toGitOperationError } from "../utils/errorTypes.js";
 import type { CrossWorktreeDiffResult, CrossWorktreeFile } from "../../shared/types/ipc/git.js";
 import { createHardenedGit } from "../utils/hardenedGit.js";
+import { runWithCappedStdout } from "../utils/cappedGitOutput.js";
 import { validateBranchName } from "../../shared/utils/pathPattern.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { isMissingGitExecutableError } from "../../shared/utils/gitOperationErrors.js";
@@ -32,6 +33,10 @@ export interface HeadFileReadOptions {
   /** Called once the blob is known to need reading, just before its content is fetched. */
   beforeRead?: () => void;
 }
+
+// Preview ceiling for a single file's patch; larger ones come back as
+// FILE_TOO_LARGE without git's full output ever being held.
+const MAX_DIFF_PREVIEW_BYTES = 1024 * 1024;
 
 const OBJECT_ID_RE = /^([0-9a-f]{40}|[0-9a-f]{64})$/i;
 
@@ -349,9 +354,14 @@ export class GitService {
     try {
       // `--no-textconv` blocks user-defined diff drivers that would otherwise
       // execute arbitrary binaries via `.gitattributes` textconv mappings.
-      const diff = await (
-        await this.getGit()
-      ).diff(["HEAD", "--no-ext-diff", "--no-textconv", "--no-color", "--", normalizedPath]);
+      // Capped while git runs: a deleted or shortened file has no worktree
+      // size to gate on, and its patch can be as large as the HEAD blob.
+      const diff = await runWithCappedStdout(this.rootPath, MAX_DIFF_PREVIEW_BYTES, (git) =>
+        git.diff(["HEAD", "--no-ext-diff", "--no-textconv", "--no-color", "--", normalizedPath])
+      );
+      if (diff === null) {
+        return "FILE_TOO_LARGE";
+      }
 
       if (isBinaryDiffOutput(diff)) {
         return "BINARY_FILE";
@@ -361,7 +371,7 @@ export class GitService {
         return "NO_CHANGES";
       }
 
-      if (diff.length > 1024 * 1024) {
+      if (diff.length > MAX_DIFF_PREVIEW_BYTES) {
         return "FILE_TOO_LARGE";
       }
 
@@ -620,23 +630,26 @@ export class GitService {
     if (filePath) {
       // Return the unified diff for a specific file
       try {
-        const diff = await (
-          await this.getGit()
-        ).raw([
-          "diff",
-          "--no-ext-diff",
-          "--no-textconv",
-          "--no-color",
-          // Pins the gitlink format against the user's `diff.submodule`, which
-          // would otherwise replace the patch with a commit summary or with the
-          // submodule's own files (#12309).
-          "--submodule=short",
-          ...(ignoreWhitespace ? ["--ignore-all-space"] : []),
-          "--end-of-options",
-          range,
-          "--",
-          filePath,
-        ]);
+        const diff = await runWithCappedStdout(this.rootPath, MAX_DIFF_PREVIEW_BYTES, (git) =>
+          git.raw([
+            "diff",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--no-color",
+            // Pins the gitlink format against the user's `diff.submodule`, which
+            // would otherwise replace the patch with a commit summary or with the
+            // submodule's own files (#12309).
+            "--submodule=short",
+            ...(ignoreWhitespace ? ["--ignore-all-space"] : []),
+            "--end-of-options",
+            range,
+            "--",
+            filePath,
+          ])
+        );
+        if (diff === null) {
+          return "FILE_TOO_LARGE";
+        }
 
         if (!diff.trim()) {
           return "NO_CHANGES";
@@ -646,7 +659,7 @@ export class GitService {
           return "BINARY_FILE";
         }
 
-        if (diff.length > 1024 * 1024) {
+        if (diff.length > MAX_DIFF_PREVIEW_BYTES) {
           return "FILE_TOO_LARGE";
         }
 

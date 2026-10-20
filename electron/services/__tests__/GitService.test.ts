@@ -9,6 +9,7 @@ const gitClientMock = vi.hoisted(() => ({
   raw: vi.fn(),
   getRemotes: vi.fn(),
   revparse: vi.fn(),
+  outputHandler: vi.fn(),
 }));
 
 const createHardenedGitMock = vi.hoisted(() => vi.fn());
