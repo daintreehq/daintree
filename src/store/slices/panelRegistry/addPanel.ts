@@ -84,6 +84,23 @@ async function resolveProjectStore() {
 type RegistryState = ReturnType<PanelRegistryStoreApi["getState"]>;
 
 /**
+ * Restore target recorded on a panel born parked. A replayed hydration keeps
+ * the entry already in the map (see `commitParked`), so the record follows it
+ * and the save made inside the commit writes the target a restore will use.
+ */
+function parkedRestoreTarget(
+  state: RegistryState,
+  id: string,
+  options: { backgroundRestoreLocation?: "grid" | "dock" }
+): "grid" | "dock" {
+  return (
+    state.backgroundedTerminals.get(id)?.originalLocation ??
+    options.backgroundRestoreLocation ??
+    "grid"
+  );
+}
+
+/**
  * Wraps a commit so a panel born parked lands with its restore entry in the
  * same `set()`: `restoreBackgroundTerminal` reads only `backgroundedTerminals`,
  * and an entry written a commit later leaves a window where the panel is
@@ -497,7 +514,7 @@ export const createAddPanelActions = (
         worktreeId: effectiveWorktreeId,
         location,
         ...(location === "background" && {
-          backgroundRestoreLocation: options.backgroundRestoreLocation ?? "grid",
+          backgroundRestoreLocation: parkedRestoreTarget(get(), id, options),
         }),
         isVisible: location === "grid",
         runtimeStatus,
@@ -816,7 +833,7 @@ export const createAddPanelActions = (
       lastStateChange,
       location,
       ...(location === "background" && {
-        backgroundRestoreLocation: options.backgroundRestoreLocation ?? "grid",
+        backgroundRestoreLocation: parkedRestoreTarget(get(), id, options),
       }),
       command: options.command,
       // Initialize grid terminals as visible to avoid initial under-throttling

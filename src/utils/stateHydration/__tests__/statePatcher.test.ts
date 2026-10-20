@@ -3995,3 +3995,23 @@ describe("parkIfSavedInBackground (#13661)", () => {
     }
   });
 });
+
+describe("buildArgsForNonPtyRecreation with a parked panel (#13661)", () => {
+  it("returns a parked panel to the dock it was parked from", () => {
+    const args = buildArgsForNonPtyRecreation(
+      { id: "b1", location: "background", backgroundRestoreLocation: "dock" },
+      "browser",
+      "/p"
+    );
+    expect(args.location).toBe("dock");
+  });
+
+  it("returns a parked panel with no recorded target to the grid", () => {
+    const args = buildArgsForNonPtyRecreation(
+      { id: "b1", location: "background" },
+      "browser",
+      "/p"
+    );
+    expect(args.location).toBe("grid");
+  });
+});

@@ -72,6 +72,7 @@ beforeEach(() => {
 const { usePanelStore } = await import("../../../panelStore");
 const { terminalInstanceService } = await import("@/services/TerminalInstanceService");
 const { TerminalRefreshTier } = await import("@/types");
+const { saveNormalized } = await import("../persistence");
 
 type Snapshot = {
   location: string | undefined;
@@ -180,6 +181,9 @@ describe("addPanel with location: background (#13661)", () => {
     // The panel's own target follows the kept entry, so a later save can't
     // send it somewhere a restore in this session wouldn't.
     expect(usePanelStore.getState().panelsById["bg-2"]?.backgroundRestoreLocation).toBe("grid");
+    // ...including the record handed to persistence inside the commit.
+    const saved = vi.mocked(saveNormalized).mock.calls.at(-1)?.[0]["bg-2"];
+    expect(saved?.backgroundRestoreLocation).toBe("grid");
   });
 
   it("parks an agent without resizing its PTY to an active-grid estimate", async () => {

@@ -1043,7 +1043,14 @@ export function buildArgsForNonPtyRecreation(
   projectRoot: string,
   activeWorktreeId?: string | null
 ): AddTerminalArgs {
-  const savedLocation = (saved.location === "dock" ? "dock" : "grid") as "grid" | "dock";
+  // A parked non-PTY panel is not re-parked (nothing is left running), so it
+  // returns to where it was parked from and takes the dock rescue below.
+  const savedLocation = (
+    saved.location === "dock" ||
+    (saved.location === "background" && saved.backgroundRestoreLocation === "dock")
+      ? "dock"
+      : "grid"
+  ) as "grid" | "dock";
   // Rescue a persisted dock panel whose kind can't dock (or isn't registered yet
   // during this hydration) HERE, where the saved active worktree is known —
   // `addPanel`'s own dock→grid rescue runs too late to adopt a worktree (worktree
