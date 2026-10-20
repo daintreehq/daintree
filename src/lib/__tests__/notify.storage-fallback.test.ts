@@ -2,12 +2,18 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const originalLocalStorageDescriptor = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+const originalElectronDescriptor = Object.getOwnPropertyDescriptor(window, "electron");
 
 afterEach(() => {
   vi.clearAllTimers();
   vi.useRealTimers();
   if (originalLocalStorageDescriptor) {
     Object.defineProperty(globalThis, "localStorage", originalLocalStorageDescriptor);
+  }
+  if (originalElectronDescriptor) {
+    Object.defineProperty(window, "electron", originalElectronDescriptor);
+  } else {
+    delete (window as Partial<Window>).electron;
   }
   vi.resetModules();
   vi.restoreAllMocks();
