@@ -426,6 +426,22 @@ describe("FileTreeService symlinks (#11939)", () => {
 
     expect(names).toEqual(["app.ts", "dangling.ts"]);
   });
+
+  it("follows a project root symlink after it is retargeted (#13561)", async (ctx) => {
+    await fs.mkdir(path.join(tempDir, "first"));
+    await fs.writeFile(path.join(tempDir, "first", "old.txt"), "old");
+    await fs.mkdir(path.join(tempDir, "second"));
+    await fs.writeFile(path.join(tempDir, "second", "new.txt"), "new");
+    const project = path.join(tempDir, "project");
+    await symlinkOrSkip(ctx, path.join(tempDir, "first"), project, "dir");
+
+    expect((await service.getFileTree(project)).map((node) => node.name)).toEqual(["old.txt"]);
+
+    await fs.unlink(project);
+    await fs.symlink(path.join(tempDir, "second"), project, "dir");
+
+    expect((await service.getFileTree(project)).map((node) => node.name)).toEqual(["new.txt"]);
+  });
 });
 
 describe("FileTreeService mtimeMs (#11620)", () => {
