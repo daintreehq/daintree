@@ -1352,19 +1352,47 @@ describe("listCommits", () => {
     }
 
     it("never counts revisions across pages and searches when totals are declined", async () => {
-      mockGit.raw.mockResolvedValue(makeLogOutput([commit("aaa1111"), commit("bbb2222")]));
+      mockGit.raw
+        .mockResolvedValueOnce(makeLogOutput([commit("aaa1111"), commit("bbb2222")]))
+        .mockResolvedValueOnce(makeLogOutput([commit("bbb2222")]))
+        .mockResolvedValueOnce(makeLogOutput([commit("ccc3333")]));
 
       const first = await listCommits({ cwd: "/test", limit: 1, includeTotal: false });
       const next = await listCommits({ cwd: "/test", skip: 1, limit: 1, includeTotal: false });
       const search = await listCommits({ cwd: "/test", search: "fix", includeTotal: false });
 
       expect(revListCalls()).toEqual([]);
-      expect(mockGit.raw).toHaveBeenCalledTimes(3);
+      const logCalls = mockGit.raw.mock.calls.map((call) => call[0] as string[]);
+      expect(logCalls).toHaveLength(3);
+      expect(logCalls[0]).toEqual(expect.arrayContaining(["--skip=0", "2"]));
+      expect(logCalls[1]).toEqual(expect.arrayContaining(["--skip=1", "2"]));
+      expect(logCalls[2]).toEqual(expect.arrayContaining(["--skip=0", "--grep=fix", "-i"]));
       expect(first.items.map((c) => c.hash)).toEqual(["aaa1111"]);
       expect(first.hasMore).toBe(true);
-      expect(next.hasMore).toBe(true);
-      expect(search.items).toHaveLength(2);
+      expect(next.items.map((c) => c.hash)).toEqual(["bbb2222"]);
+      expect(next.hasMore).toBe(false);
+      expect(search.items.map((c) => c.hash)).toEqual(["ccc3333"]);
       expect(first.total).toBe(0);
+    });
+
+    it("returns the empty result when log fails on an unborn HEAD with totals declined", async () => {
+      mockGit.raw.mockRejectedValue(
+        new Error("fatal: your current branch 'main' does not have any commits yet")
+      );
+
+      const result = await listCommits({ cwd: "/test", includeTotal: false });
+
+      expect(revListCalls()).toEqual([]);
+      expect(result).toEqual({ items: [], hasMore: false, total: 0 });
+    });
+
+    it("ends revision arguments so an unknown branch is never read as a path", async () => {
+      mockGit.raw.mockResolvedValueOnce("");
+
+      await listCommits({ cwd: "/test", branch: "src", includeTotal: false });
+
+      const logCall = mockGit.raw.mock.calls[0][0] as string[];
+      expect(logCall.slice(-2)).toEqual(["src", "--"]);
     });
 
     it("keeps hash-prefix resolution when totals are declined", async () => {

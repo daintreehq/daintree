@@ -466,6 +466,9 @@ export async function listCommits(options: ListCommitsOptions): Promise<ListComm
     if (branch) {
       logOptions.push(branch);
     }
+    // Without the separator, an unknown branch that names a worktree path is
+    // read as a pathspec and returns HEAD history filtered to that path.
+    logOptions.push("--");
 
     const output = await git.raw(logOptions);
     const msgCommits = parseCommitOutput(output);
