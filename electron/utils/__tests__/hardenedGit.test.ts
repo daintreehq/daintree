@@ -1360,6 +1360,7 @@ describe("buildContinueEnv", () => {
       GIT_CONFIG_PARAMETERS: "'core.editor'='/tmp/evil/editor'",
       VISUAL: "/tmp/evil/visual",
     };
+    const originals = new Map(Object.keys(blocked).map((key) => [key, process.env[key]]));
     Object.assign(process.env, blocked);
     try {
       const env = buildContinueEnv("linux");
@@ -1368,8 +1369,10 @@ describe("buildContinueEnv", () => {
       }
       expect(env.GIT_EDITOR).toBe("true");
     } finally {
-      // Cleanup beyond the describe-level saved keys.
-      for (const key of Object.keys(blocked)) delete process.env[key];
+      for (const [key, value] of originals) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
     }
   });
 
