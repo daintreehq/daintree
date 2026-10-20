@@ -472,4 +472,28 @@ describe("subprocess options", () => {
     // PATH must survive the override, or git isn't found at all.
     expect(opts.env?.PATH).toBe(process.env.PATH);
   });
+
+  describe("with git variables inherited", () => {
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
+    it("drops the ones the hardened profile drops, so the probe sees the same repository", async () => {
+      vi.stubEnv("GIT_DIR", "/elsewhere/.git");
+      vi.stubEnv("GIT_COMMON_DIR", "/elsewhere/.git");
+      vi.stubEnv("GIT_WORK_TREE", "/elsewhere");
+      vi.stubEnv("GIT_INDEX_FILE", "/elsewhere/index");
+      vi.stubEnv("GIT_CEILING_DIRECTORIES", "/ceiling");
+      mockGitOutput(".git\n");
+
+      await getGitDir("/repo", { cache: false });
+
+      const env = (execFileMock.mock.calls[0][2] as { env: NodeJS.ProcessEnv }).env;
+      expect(env.GIT_DIR).toBeUndefined();
+      expect(env.GIT_COMMON_DIR).toBeUndefined();
+      expect(env.GIT_WORK_TREE).toBeUndefined();
+      expect(env.GIT_INDEX_FILE).toBeUndefined();
+      expect(env.GIT_CEILING_DIRECTORIES).toBe("/ceiling");
+    });
+  });
 });

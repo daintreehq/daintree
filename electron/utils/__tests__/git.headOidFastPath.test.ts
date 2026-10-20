@@ -112,6 +112,23 @@ describe("HEAD OID filesystem fast path", () => {
     expect(logCallsAfterSecond).toBe(logCallsAfterFirst + 1);
   });
 
+  // Every git the hardened profile spawns drops these, so the `.git` entry is
+  // still the repository rev-parse would report.
+  it.each(["GIT_DIR", "GIT_COMMON_DIR"])(
+    "keeps the fast path while %s is inherited",
+    async (key) => {
+      vi.stubEnv(key, join(root, "elsewhere.git"));
+      try {
+        makeMainRepo(root, OID_A);
+        await getWorktreeChangesWithStats(root, true);
+        await getWorktreeChangesWithStats(root, true);
+        expect(revParseCalls()).toHaveLength(1);
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    }
+  );
+
   it("resolves a detached HEAD directly from the HEAD file", async () => {
     const gitDir = join(root, ".git");
     mkdirSync(join(gitDir, "refs", "heads"), { recursive: true });
