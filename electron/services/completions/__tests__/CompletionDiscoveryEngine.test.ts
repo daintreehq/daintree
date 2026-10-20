@@ -1,10 +1,11 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { promises as fsp } from "fs";
 import * as os from "os";
 import * as path from "path";
 import { CompletionDiscoveryEngine } from "../CompletionDiscoveryEngine.js";
 import { adaptBuiltinSlashCommands } from "../staticCatalog.js";
 import { resolveLocationDir, type PathResolveContext } from "../completionPathTemplates.js";
+import type { SlashCommand } from "../../../../shared/types/index.js";
 import type {
   CompletionLocation,
   CompletionPlatform,
@@ -193,7 +194,7 @@ describe("resolveLocationDir", () => {
 });
 
 describe("CompletionDiscoveryEngine", () => {
-  it("caches results and re-scans only after clearCache (result cache, not scan I/O)", async () => {
+  it("reuses results within the TTL and re-scans after clearCache (result cache, not scan I/O)", async () => {
     const homeRoot = await makeTempDir();
     const projectRoot = await makeTempDir();
     const prev = overrideHome(homeRoot);
@@ -488,5 +489,262 @@ Body.
       await fsp.rm(homeRoot, { recursive: true, force: true });
       await fsp.rm(projectRoot, { recursive: true, force: true });
     }
+  });
+});
+
+describe("CompletionDiscoveryEngine result-cache residency", () => {
+  type Compute = (...args: unknown[]) => Promise<SlashCommand[]>;
+  let base: string;
+  let now: number;
+
+  const cacheOf = (engine: CompletionDiscoveryEngine) =>
+    (engine as unknown as { resultCache: Map<string, { expires: number }> }).resultCache;
+  const cacheSize = (engine: CompletionDiscoveryEngine) => cacheOf(engine).size;
+
+  /** Settled residency cap, discovered by filling an engine sequentially. */
+  async function discoverCap(): Promise<number> {
+    const engine = new CompletionDiscoveryEngine();
+    stubCompute(engine);
+    let i = 0;
+    let size = -1;
+    while (i < 500 && cacheSize(engine) !== size) {
+      size = cacheSize(engine);
+      await engine.list("claude", project(i++));
+    }
+    expect(size).toBeLessThan(500);
+    return size;
+  }
+
+  function stubCompute(engine: CompletionDiscoveryEngine, impl?: Compute) {
+    const spy = vi.fn<Compute>(impl ?? (async () => []));
+    (engine as unknown as { compute: Compute }).compute = spy;
+    return spy;
+  }
+
+  function deferred() {
+    let resolve!: (value: SlashCommand[]) => void;
+    let reject!: (err: Error) => void;
+    const promise = new Promise<SlashCommand[]>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    return { promise, resolve, reject };
+  }
+
+  // Project paths that need not exist: resolveProjectRoot falls back to the
+  // resolved input when no .git is found, so each index is a distinct key.
+  const project = (i: number) => path.join(base, `p${i}`);
+
+  beforeEach(async () => {
+    base = await makeTempDir();
+    now = 1_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+  });
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await fsp.rm(base, { recursive: true, force: true });
+  });
+
+  it("sweeps expired entries for keys that are never revisited", async () => {
+    const engine = new CompletionDiscoveryEngine();
+    const compute = stubCompute(engine);
+
+    for (let i = 0; i < 20; i++) await engine.list("claude", project(i));
+    expect(cacheSize(engine)).toBe(20);
+
+    now += 60_000;
+    await engine.list("claude", project(0));
+    expect(cacheSize(engine)).toBe(1);
+    expect(compute).toHaveBeenCalledTimes(21);
+  });
+
+  it("sweeps expired entries on a warm hit, not only on a miss", async () => {
+    const engine = new CompletionDiscoveryEngine();
+    const compute = stubCompute(engine);
+
+    await engine.list("claude", project(0));
+    now += 20_000;
+    await engine.list("claude", project(1));
+    now += 15_000;
+    // project(0) has expired; project(1) is still warm and is served from cache.
+    await engine.list("claude", project(1));
+    expect(compute).toHaveBeenCalledTimes(2);
+    expect(cacheSize(engine)).toBe(1);
+  });
+
+  it("reuses within the TTL and rescans after expiry", async () => {
+    const engine = new CompletionDiscoveryEngine();
+    const compute = stubCompute(engine);
+
+    await engine.list("claude", project(0));
+    const [{ expires }] = [...cacheOf(engine).values()];
+    now = expires - 1;
+    await engine.list("claude", project(0));
+    expect(compute).toHaveBeenCalledTimes(1);
+    now = expires;
+    await engine.list("claude", project(0));
+    expect(compute).toHaveBeenCalledTimes(2);
+  });
+
+  it("caps residency, evicting the least recently used key", async () => {
+    const engine = new CompletionDiscoveryEngine();
+    const compute = stubCompute(engine);
+
+    await engine.list("claude", project(0));
+    let size = cacheSize(engine);
+    let i = 1;
+    // Fill until the cap stops growth, touching project(0) each time so it stays
+    // most recently used.
+    while (i < 500) {
+      await engine.list("claude", project(i++));
+      await engine.list("claude", project(0));
+      if (cacheSize(engine) === size) break;
+      size = cacheSize(engine);
+    }
+    const cap = cacheSize(engine);
+    expect(cap).toBeLessThan(500);
+    const callsBefore = compute.mock.calls.length;
+
+    // project(0) survived as the most recent; project(1) was the oldest untouched.
+    await engine.list("claude", project(0));
+    expect(compute.mock.calls.length).toBe(callsBefore);
+    await engine.list("claude", project(1));
+    expect(compute.mock.calls.length).toBe(callsBefore + 1);
+    expect(cacheSize(engine)).toBe(cap);
+  });
+
+  it("never evicts a pending scan, so concurrent callers still coalesce", async () => {
+    const engine = new CompletionDiscoveryEngine();
+    const pending = deferred();
+    const compute = stubCompute(engine, async () => []);
+    compute.mockImplementationOnce(() => pending.promise);
+
+    const first = engine.list("claude", project(0));
+    await vi.waitFor(() => expect(compute).toHaveBeenCalledTimes(1));
+    // Flood well past the cap; the pending entry must survive the trim.
+    for (let i = 1; i <= 200; i++) await engine.list("claude", project(i));
+    expect(cacheSize(engine)).toBeLessThan(200);
+    now += 1_000;
+    const second = engine.list("claude", project(0));
+
+    pending.resolve([{ id: "x", label: "/x" } as SlashCommand]);
+    expect(await first).toEqual([{ id: "x", label: "/x" }]);
+    expect(await second).toEqual([{ id: "x", label: "/x" }]);
+    expect(compute).toHaveBeenCalledTimes(201);
+  });
+
+  it("contracts a pending overshoot back to the cap once scans settle", async () => {
+    const engine = new CompletionDiscoveryEngine();
+    const scans: Array<ReturnType<typeof deferred>> = [];
+    stubCompute(engine, () => {
+      const d = deferred();
+      scans.push(d);
+      return d.promise;
+    });
+
+    const calls: Array<Promise<SlashCommand[]>> = [];
+    for (let i = 0; i < 100; i++) calls.push(engine.list("claude", project(i)));
+    await vi.waitFor(() => expect(scans).toHaveLength(100));
+    expect(cacheSize(engine)).toBe(100);
+
+    for (const scan of scans) scan.resolve([]);
+    await Promise.all(calls);
+    expect(cacheSize(engine)).toBe(await discoverCap());
+  });
+
+  it("replaces an expired pending scan, and the stale one cannot disturb its replacement", async () => {
+    const engine = new CompletionDiscoveryEngine();
+    const stale = deferred();
+    const fresh = deferred();
+    const compute = stubCompute(engine);
+    compute.mockImplementationOnce(() => stale.promise);
+    compute.mockImplementationOnce(() => fresh.promise);
+
+    const staleCall = engine.list("claude", project(0));
+    await vi.waitFor(() => expect(compute).toHaveBeenCalledTimes(1));
+    now += 60_000;
+    const freshCall = engine.list("claude", project(0));
+    await vi.waitFor(() => expect(compute).toHaveBeenCalledTimes(2));
+
+    stale.reject(new Error("stale"));
+    await expect(staleCall).rejects.toThrow("stale");
+    fresh.resolve([]);
+    await freshCall;
+
+    expect(cacheSize(engine)).toBe(1);
+    await engine.list("claude", project(0));
+    expect(compute).toHaveBeenCalledTimes(2);
+  });
+
+  it("keys on the environment revision", async () => {
+    const engine = new CompletionDiscoveryEngine();
+    const compute = stubCompute(engine);
+    const prev = process.env.CLAUDE_CONFIG_DIR;
+
+    try {
+      process.env.CLAUDE_CONFIG_DIR = path.join(base, "config-a");
+      await engine.list("claude", project(0));
+      process.env.CLAUDE_CONFIG_DIR = path.join(base, "config-b");
+      await engine.list("claude", project(0));
+      expect(compute).toHaveBeenCalledTimes(2);
+      await engine.list("claude", project(0));
+      expect(compute).toHaveBeenCalledTimes(2);
+      expect(cacheSize(engine)).toBe(2);
+    } finally {
+      if (prev !== undefined) process.env.CLAUDE_CONFIG_DIR = prev;
+      else delete process.env.CLAUDE_CONFIG_DIR;
+    }
+  });
+
+  it("does not cache a lookup that straddled clearCache", async () => {
+    const engine = new CompletionDiscoveryEngine();
+    const compute = stubCompute(engine);
+
+    // list() reads sources, then awaits project-root resolution; the clear
+    // lands in that gap.
+    const call = engine.list("claude", project(0));
+    engine.clearCache();
+    expect(await call).toEqual([]);
+    expect(compute).toHaveBeenCalledTimes(1);
+    expect(cacheSize(engine)).toBe(0);
+  });
+
+  it("evicts a failed scan so the next call retries", async () => {
+    const engine = new CompletionDiscoveryEngine();
+    const compute = stubCompute(engine);
+    compute.mockRejectedValueOnce(new Error("boom"));
+
+    await expect(engine.list("claude", project(0))).rejects.toThrow("boom");
+    expect(cacheSize(engine)).toBe(0);
+    await engine.list("claude", project(0));
+    expect(compute).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not let a scan invalidated by clearCache touch the newer entry", async () => {
+    const engine = new CompletionDiscoveryEngine();
+    const stale = deferred();
+    const fresh = deferred();
+    const compute = stubCompute(engine);
+    compute.mockImplementationOnce(() => stale.promise);
+    compute.mockImplementationOnce(() => fresh.promise);
+
+    const staleCall = engine.list("claude", project(0));
+    await vi.waitFor(() => expect(compute).toHaveBeenCalledTimes(1));
+    engine.clearCache();
+    const freshCall = engine.list("claude", project(0));
+    await vi.waitFor(() => expect(compute).toHaveBeenCalledTimes(2));
+
+    // The stale scan failing must neither delete the newer entry nor mark it
+    // settled (which would expose it to the sweep while still pending).
+    stale.reject(new Error("stale"));
+    await expect(staleCall).rejects.toThrow("stale");
+    expect(cacheSize(engine)).toBe(1);
+    now += 60_000;
+    await engine.list("claude", project(1));
+    expect(cacheSize(engine)).toBe(2);
+
+    fresh.resolve([]);
+    await freshCall;
   });
 });
