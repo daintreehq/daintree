@@ -574,6 +574,40 @@ describe("layoutUndoStore", () => {
       expect(state.preMaximizeLayout).toBeNull();
     });
 
+    it("keeps the live maximize target so redo can return to fullscreen", () => {
+      const a = makeTerminal({ id: "a", location: "grid" });
+      const b = makeTerminal({ id: "b", location: "grid" });
+      seedTerminals([a, b]);
+
+      useLayoutUndoStore.getState().pushLayoutSnapshot();
+      setTerminals([{ ...a, location: "dock" }, b]);
+      usePanelStore.setState({
+        maximizedId: "b",
+        maximizeTarget: { type: "panel", id: "b" },
+      });
+
+      useLayoutUndoStore.getState().undo();
+      useLayoutUndoStore.getState().redo();
+
+      const state = usePanelStore.getState();
+      expect(state.maximizedId).toBe("b");
+      expect(state.maximizeTarget).toEqual({ type: "panel", id: "b" });
+    });
+
+    it("keeps a retained pre-maximize layout when nothing was maximized", () => {
+      const a = makeTerminal({ id: "a", location: "grid" });
+      const b = makeTerminal({ id: "b", location: "grid" });
+      seedTerminals([a, b]);
+      const retained = { gridCols: 2, gridItemCount: 2, worktreeId: undefined };
+      usePanelStore.setState({ preMaximizeLayout: retained });
+
+      useLayoutUndoStore.getState().pushLayoutSnapshot();
+      setTerminals([b, a]);
+      useLayoutUndoStore.getState().undo();
+
+      expect(usePanelStore.getState().preMaximizeLayout).toEqual(retained);
+    });
+
     it("drops a closed ephemeral panel from restored groups and focus", () => {
       const a = makeTerminal({ id: "a", location: "grid" });
       const b = makeTerminal({ id: "b", location: "grid" });

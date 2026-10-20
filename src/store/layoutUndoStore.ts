@@ -232,9 +232,12 @@ function applySnapshot(snapshot: LayoutSnapshot): boolean {
     tabGroups: restoredGroups,
     focusedId: layoutPointer(snapshot.focusedId),
     maximizedId: restoredMaximizedId,
-    // Every maximize writes the trio together; leaving the live target behind a
-    // null `maximizedId` turns the next maximize click into an unmaximize.
-    ...(restoredMaximizedId === null && { maximizeTarget: null, preMaximizeLayout: null }),
+    // Rejecting the snapshot's maximized panel must clear the trio together, or
+    // the live target turns the next maximize click into an unmaximize. Any
+    // other restore leaves them alone: snapshots don't carry the target, so redo
+    // relies on it, and `preMaximizeLayout` deliberately outlives an unmaximize.
+    ...(snapshot.maximizedId !== null &&
+      restoredMaximizedId === null && { maximizeTarget: null, preMaximizeLayout: null }),
     activeDockTerminalId: activeDockStillValid ? restoredActiveDock : null,
   });
 
