@@ -76,16 +76,17 @@ export interface OpenDirHandlerDeps {
    */
   releaseCachedView?: (projectId: string, windowId: number) => boolean;
   /**
-   * Whether an open that has to make a new window may go ahead (#13638): asked
-   * before anything moves, and false when the user declined it at critical
-   * memory pressure. An open into an existing window is never asked here; that
-   * window's own switch holds it.
+   * Whether an open that has to make a new window may go ahead (#13638), asked
+   * before anything moves: `open` when pressure isn't critical, `open-anyway`
+   * when the user chose to at critical pressure, `cancel` when they declined.
+   * An open into an existing window is never asked here; that window's own
+   * switch holds it.
    */
   admitColdOpen?: (request: {
     projectId: string | null;
     projectPath: string;
     initiatingWindowId: number | null;
-  }) => Promise<boolean>;
+  }) => Promise<"open" | "open-anyway" | "cancel">;
 }
 
 // App-lifetime consumer: macOS `open-file` is app-lifetime, so this wires once.
@@ -169,17 +170,21 @@ export async function routeProjectOpen(
   // pressure the user is asked first. Asked once per request: what it decides
   // stands for the window this open makes, wherever routing lands it after.
   let admitted = deps.admitColdOpen === undefined;
+  let overridden = false;
   const admit = async (): Promise<boolean> => {
-    admitted = await deps.admitColdOpen!({
+    const answer = await deps.admitColdOpen!({
       projectId: project?.id ?? null,
       projectPath: targetPath,
       initiatingWindowId: routing.initiatingWindowId,
     });
+    admitted = answer !== "cancel";
+    overridden = answer === "open-anyway";
     return admitted;
   };
-  // Passed only once the user was asked, so an open nobody asked about goes as it always has.
+  // Only the user's own "Open anyway" goes on: pressure that turns critical
+  // after a plain admission is still the project's own open to hold.
   const admittedArg = (): [] | [ColdOpenOptions] =>
-    deps.admitColdOpen !== undefined && admitted ? [{ ignoreMemoryPressure: true }] : [];
+    overridden ? [{ ignoreMemoryPressure: true }] : [];
 
   // Synchronous from the snapshot to the reservation: nothing may change the
   // world between deciding on a window and claiming it. A cached view moving to

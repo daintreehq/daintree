@@ -2,6 +2,12 @@ import { BrowserWindow, dialog, type MessageBoxOptions } from "electron";
 import { checkKernelPressureCritical } from "./SystemMemoryPressureMonitor.js";
 import { logInfo } from "../utils/logger.js";
 
+/**
+ * `open`: pressure isn't critical, so nothing was asked. `open-anyway`: the
+ * user chose to open at critical pressure. `cancel`: the user declined.
+ */
+export type ColdOpenAnswer = "open" | "open-anyway" | "cancel";
+
 export interface ColdOpenConfirmation {
   /** What the dialog names: a project name, or the folder's when it has none. */
   projectName: string;
@@ -18,17 +24,16 @@ export interface ColdOpenConfirmation {
  * critical memory pressure (#13638), for the opens main makes on its own: a new
  * window, an external open, a switch between hosts. None has a view on screen
  * that could hold it with the "Open anyway" toast the switch handler's refusal
- * gets (#13530), so the question is a native dialog. Resolves true when the
- * open may go ahead: pressure isn't critical, or the user chose to open anyway.
- * Cancel ends the request; nothing is retried once pressure eases.
+ * gets (#13530), so the question is a native dialog. Cancel ends the request;
+ * nothing is retried once pressure eases.
  */
 export async function confirmColdOpenAtMemoryPressure({
   projectName,
   projectId,
   parent,
   signal,
-}: ColdOpenConfirmation): Promise<boolean> {
-  if (!(await checkKernelPressureCritical())) return true;
+}: ColdOpenConfirmation): Promise<ColdOpenAnswer> {
+  if (!(await checkKernelPressureCritical())) return "open";
   logInfo("project-open-held-memory-pressure", { projectId });
   const options: MessageBoxOptions = {
     type: "warning",
@@ -50,7 +55,7 @@ export async function confirmColdOpenAtMemoryPressure({
   const { response } = live
     ? await dialog.showMessageBox(live, options)
     : await dialog.showMessageBox(options);
-  const admitted = response === 0 && signal?.aborted !== true;
-  if (admitted) logInfo("project-open-memory-pressure-overridden", { projectId });
-  return admitted;
+  if (response !== 0 || signal?.aborted === true) return "cancel";
+  logInfo("project-open-memory-pressure-overridden", { projectId });
+  return "open-anyway";
 }

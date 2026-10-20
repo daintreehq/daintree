@@ -435,7 +435,7 @@ function createWindowControl(hooks: RemoteHostsClientHooks): WindowControl {
         if (hasReusableProjectView(pvm, key)) return Promise.resolve(true);
       }
       const parentId = windowId ?? askingWindowId;
-      return confirmColdOpenAtMemoryPressure({
+      const answer = confirmColdOpenAtMemoryPressure({
         projectId,
         projectName:
           projectName ??
@@ -445,6 +445,7 @@ function createWindowControl(hooks: RemoteHostsClientHooks): WindowControl {
         parent: parentId === null ? null : registry?.getByWindowId(parentId)?.browserWindow,
         signal,
       });
+      return answer.then((choice) => choice !== "cancel");
     },
     revealWindow(windowId) {
       const ctx = getWindowRegistry()?.getByWindowId(windowId);

@@ -37,14 +37,14 @@ describe("confirmColdOpenAtMemoryPressure (#13638)", () => {
 
     await expect(
       confirmColdOpenAtMemoryPressure({ projectName: "app", projectId: "p1" })
-    ).resolves.toBe(true);
+    ).resolves.toBe("open");
     expect(mocks.showMessageBox).not.toHaveBeenCalled();
   });
 
   it("asks at critical pressure, Cancel being the default, and holds the open on Cancel", async () => {
     await expect(
       confirmColdOpenAtMemoryPressure({ projectName: "app", projectId: "p1" })
-    ).resolves.toBe(false);
+    ).resolves.toBe("cancel");
 
     const [options] = mocks.showMessageBox.mock.calls[0];
     expect(options.message).toContain('"app"');
@@ -60,7 +60,7 @@ describe("confirmColdOpenAtMemoryPressure (#13638)", () => {
 
     await expect(
       confirmColdOpenAtMemoryPressure({ projectName: "app", projectId: null })
-    ).resolves.toBe(true);
+    ).resolves.toBe("open-anyway");
   });
 
   it("sits the dialog on the window that asked", async () => {
@@ -112,6 +112,6 @@ describe("confirmColdOpenAtMemoryPressure (#13638)", () => {
         projectId: "p1",
         signal: abort.signal,
       })
-    ).resolves.toBe(false);
+    ).resolves.toBe("cancel");
   });
 });

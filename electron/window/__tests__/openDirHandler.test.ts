@@ -196,7 +196,7 @@ describe("routeExternalOpen (#12593 acceptance)", () => {
   it("holds an external open that would start a window at critical memory pressure (#13638)", async () => {
     const world = makeWorld();
     world.add({ active: "busy" });
-    const deps = { ...makeDeps(world), admitColdOpen: vi.fn(async () => false) };
+    const deps = { ...makeDeps(world), admitColdOpen: vi.fn(async () => "cancel" as const) };
 
     const outcome = await routeExternalOpen("/work/new", deps);
 
@@ -212,7 +212,7 @@ describe("routeExternalOpen (#12593 acceptance)", () => {
   it("never asks to open in an existing window: that window's own switch holds it", async () => {
     const world = makeWorld();
     const empty = world.add();
-    const deps = { ...makeDeps(world), admitColdOpen: vi.fn(async () => false) };
+    const deps = { ...makeDeps(world), admitColdOpen: vi.fn(async () => "cancel" as const) };
 
     const outcome = await routeExternalOpen("/work/new", deps);
 
@@ -582,7 +582,7 @@ describe("routeProjectOpen — an explicit new window (#12594)", () => {
     const holder = world.add({ active: "front" });
     holder.views.push(idFor("/work/known"));
     const asking = world.add({ active: "other" });
-    const deps = { ...makeDeps(world), admitColdOpen: vi.fn(async () => false) };
+    const deps = { ...makeDeps(world), admitColdOpen: vi.fn(async () => "cancel" as const) };
 
     const outcome = await routeProjectOpen("/work/known", newWindowFrom(asking.id), deps);
 
@@ -601,7 +601,7 @@ describe("routeProjectOpen — an explicit new window (#12594)", () => {
   it("opens the new window once the cold open is admitted (#13638)", async () => {
     const world = makeWorld();
     const asking = world.add({ active: "other" });
-    const deps = { ...makeDeps(world), admitColdOpen: vi.fn(async () => true) };
+    const deps = { ...makeDeps(world), admitColdOpen: vi.fn(async () => "open-anyway" as const) };
 
     const outcome = await routeProjectOpen("/work/new", newWindowFrom(asking.id), deps);
 
@@ -613,6 +613,16 @@ describe("routeProjectOpen — an explicit new window (#12594)", () => {
     });
   });
 
+  it("passes no override on when pressure wasn't critical and nothing was asked (#13638)", async () => {
+    const world = makeWorld();
+    const asking = world.add({ active: "other" });
+    const deps = { ...makeDeps(world), admitColdOpen: vi.fn(async () => "open" as const) };
+
+    await routeProjectOpen("/work/new", newWindowFrom(asking.id), deps);
+
+    expect(deps.createWindowForPath).toHaveBeenCalledExactlyOnceWith("/work/new");
+  });
+
   it("re-routes after the prompt, landing in a window that came free meanwhile (#13638)", async () => {
     const world = makeWorld();
     const asking = world.add({ active: "other" });
@@ -621,7 +631,7 @@ describe("routeProjectOpen — an explicit new window (#12594)", () => {
       ...makeDeps(world),
       admitColdOpen: vi.fn(async () => {
         empty = world.add();
-        return true;
+        return "open-anyway" as const;
       }),
     };
 
