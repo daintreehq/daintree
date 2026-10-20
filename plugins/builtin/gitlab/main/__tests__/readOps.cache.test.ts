@@ -45,20 +45,36 @@ afterEach(() => {
 });
 
 describe("GitLab cache residency", () => {
-  it("releases expired tooltip entries without their keys being read again", async () => {
-    restMock.mockImplementation(async ({ path }: { path: string }) => ({
-      data: issue(Number(path.split("/").pop())),
-      headers: new Headers(),
-    }));
-    for (let i = 1; i <= 1_000; i++) await getIssueTooltipImpl(REPO, i);
-    expect(gitLabCacheSizesForTests().issueTooltips).toBeGreaterThan(0);
-    expect(gitLabCacheSizesForTests().issueTooltips).toBeLessThan(1_000);
+  function serveEverything(): void {
+    restMock.mockImplementation(async ({ path }: { path: string }) => {
+      if (path === "/avatar") {
+        return { data: { avatar_url: "https://gitlab.com/a.png" }, headers: new Headers() };
+      }
+      return { data: issue(Number(path.split("/").pop())), headers: new Headers() };
+    });
+  }
 
-    await vi.advanceTimersByTimeAsync(2 * 60_000);
+  it.each([
+    ["issueTooltips", (i: number) => getIssueTooltipImpl(REPO, i), 2 * 60_000],
+    ["prTooltips", (i: number) => getPRTooltipImpl(REPO, i), 2 * 60_000],
+    [
+      "avatars",
+      (i: number) => resolveAuthorAvatarImpl("gitlab.com", `user${i}@example.com`),
+      62 * 60_000,
+    ],
+  ] as const)(
+    "releases expired %s entries without their keys being read again",
+    async (cacheName, read, idleMs) => {
+      serveEverything();
+      for (let i = 1; i <= 1_000; i++) await read(i);
+      expect(gitLabCacheSizesForTests()[cacheName]).toBeGreaterThan(0);
 
-    expect(gitLabCacheSizesForTests().issueTooltips).toBe(0);
-    expect(vi.getTimerCount()).toBe(0);
-  });
+      await vi.advanceTimersByTimeAsync(idleMs);
+
+      expect(gitLabCacheSizesForTests()[cacheName]).toBe(0);
+      expect(vi.getTimerCount()).toBe(0);
+    }
+  );
 
   it("keeps a fresh entry through a sweep that releases older ones", async () => {
     restMock.mockImplementation(async ({ path }: { path: string }) => ({
@@ -77,10 +93,7 @@ describe("GitLab cache residency", () => {
   });
 
   it("caps every cache however many distinct keys are visited", async () => {
-    restMock.mockImplementation(async ({ path }: { path: string }) => {
-      if (path === "/avatar") return { data: { avatar_url: null }, headers: new Headers() };
-      return { data: issue(Number(path.split("/").pop())), headers: new Headers() };
-    });
+    serveEverything();
     restPageMock.mockResolvedValue({ items: [], nextCursor: null, hasMore: false, totalCount: 0 });
     for (let i = 1; i <= 1_500; i++) {
       await getIssueTooltipImpl(REPO, i);
@@ -89,12 +102,25 @@ describe("GitLab cache residency", () => {
     }
     for (let i = 0; i < 100; i++) await getRepoStatsImpl(repo(`r${i}`));
 
+    for (const size of Object.values(gitLabCacheSizesForTests())) {
+      expect(size).toBeGreaterThan(0);
+    }
     const sizes = gitLabCacheSizesForTests();
     expect(sizes.issueTooltips).toBeLessThan(1_500);
     expect(sizes.prTooltips).toBeLessThan(1_500);
     expect(sizes.avatars).toBeLessThan(1_500);
     expect(sizes.repoStats).toBeLessThan(100);
     expect(vi.getTimerCount()).toBe(1);
+
+    // The most recent key of each cache is still served without the network.
+    const rest = restMock.mock.calls.length;
+    const pages = restPageMock.mock.calls.length;
+    await getIssueTooltipImpl(REPO, 1_500);
+    await getPRTooltipImpl(REPO, 1_500);
+    await resolveAuthorAvatarImpl("gitlab.com", "user1500@example.com");
+    expect((await getRepoStatsImpl(repo("r99"))).source).toBe("memory-cache");
+    expect(restMock.mock.calls.length).toBe(rest);
+    expect(restPageMock.mock.calls.length).toBe(pages);
   });
 
   it("keeps serving hits and negative entries", async () => {
@@ -173,5 +199,46 @@ describe("repository stats stale fallback", () => {
     const result = await getRepoStatsImpl(REPO, { bypassCache: true });
     expect(result.source).toBe("network");
     expect(result.counts.issueCount).toBeNull();
+  });
+
+  it("bypassCache refetches over a fresh snapshot", async () => {
+    seedStats();
+    await getRepoStatsImpl(REPO);
+    restPageMock.mockResolvedValue({ items: [], nextCursor: null, hasMore: false, totalCount: 5 });
+    const pages = restPageMock.mock.calls.length;
+
+    const result = await getRepoStatsImpl(REPO, { bypassCache: true });
+    expect(restPageMock.mock.calls.length).toBeGreaterThan(pages);
+    expect(result.source).toBe("network");
+    expect(result.counts.issueCount).toBe(5);
+  });
+
+  it("keeps 429 metadata on a stale fallback", async () => {
+    seedStats();
+    await getRepoStatsImpl(REPO);
+    const resetAt = Date.now() + 60_000;
+    restPageMock.mockRejectedValue(new GitLabApiError(429, "Too Many Requests", resetAt));
+
+    const result = await getRepoStatsImpl(REPO, { bypassCache: true });
+    expect(result.source).toBe("memory-cache");
+    expect(result.counts).toMatchObject({
+      issueCount: 1,
+      stale: true,
+      rateLimitKind: "primary",
+      rateLimitResetAt: resetAt,
+    });
+  });
+
+  it("has nothing to fall back to once capacity evicted the snapshot", async () => {
+    seedStats();
+    await getRepoStatsImpl(REPO);
+    for (let i = 0; i < 50; i++) await getRepoStatsImpl(repo(`other${i}`));
+    restPageMock.mockRejectedValue(new GitLabApiError(500, "Server error"));
+
+    const evicted = await getRepoStatsImpl(REPO, { bypassCache: true });
+    expect(evicted.source).toBe("network");
+    expect(evicted.issues).toBeNull();
+    const retained = await getRepoStatsImpl(repo("other49"), { bypassCache: true });
+    expect(retained.source).toBe("memory-cache");
   });
 });

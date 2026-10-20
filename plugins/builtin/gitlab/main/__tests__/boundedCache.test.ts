@@ -23,7 +23,9 @@ describe("BoundedCache", () => {
   it("drops expired entries before evicting live ones", () => {
     const cache = new BoundedCache<string>({ maxEntries: 2, retainMs: 100 });
     cache.set("old", "O", 0);
-    cache.set("live", "L", 150);
+    cache.set("live", "L", 60);
+    // "old" becomes most recently used, leaving the live entry as the LRU.
+    expect(cache.get("old", 100, 70)).toBe("O");
     cache.set("new", "N", 150);
     expect(cache.size).toBe(2);
     expect(cache.get("live", 1_000, 150)).toBe("L");
