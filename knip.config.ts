@@ -275,6 +275,7 @@ const baseConfig: KnipConfig = {
     // their own package.json "main" entries and are consumed via createRequire.
     // Knip walks the app source graph and does not treat local file:
     // dependency declaration files as package entry points.
+    "electron/native/mac-phys-footprint/index.d.ts",
     "electron/native/posix-pty-reaper/index.d.ts",
     "electron/native/win-job-object/index.d.ts",
 

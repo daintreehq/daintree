@@ -49,7 +49,10 @@ function makeRepo(dir: string): void {
 }
 
 beforeAll(() => {
-  root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "daintree-gitutils-realgit-")));
+  // The Windows temp directory can use an 8.3 alias that git expands.
+  root = fs.realpathSync.native(
+    fs.mkdtempSync(path.join(os.tmpdir(), "daintree-gitutils-realgit-"))
+  );
   home = path.join(root, "home");
   main = path.join(root, "main");
   linked = path.join(root, "linked");

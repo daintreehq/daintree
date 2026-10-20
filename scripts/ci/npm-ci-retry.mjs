@@ -49,6 +49,7 @@ export const TRANSIENT_PATTERNS = [
 // Transient infrastructure crashes that can be logged underneath node-gyp.
 // These must be checked before the broad node-gyp deterministic pattern.
 export const TRANSIENT_OVERRIDE_PATTERNS = [
+  /gyp (?:ERR!|error) Completion callback never invoked!/i,
   /AssertionError \[ERR_ASSERTION\][\s\S]*assert\(!this\.paused\)[\s\S]*node-gyp[\s\S]*undici/i,
   /(?:ConnectTimeoutError|UND_ERR_CONNECT_TIMEOUT)[\s\S]*node-gyp|node-gyp[\s\S]*(?:ConnectTimeoutError|UND_ERR_CONNECT_TIMEOUT)/i,
   /(?:ETIMEDOUT|ENETUNREACH)[\s\S]*node-gyp|node-gyp[\s\S]*(?:ETIMEDOUT|ENETUNREACH)/i,

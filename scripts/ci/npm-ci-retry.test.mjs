@@ -203,6 +203,20 @@ Postinstall failures (2):
       expect(classifyFailure(stderr)).toBe("transient");
     });
 
+    it("retries node-gyp exiting during the header download without a completion callback", () => {
+      const stderr = `
+npm error command C:\\Windows\\system32\\cmd.exe /d /s /c node-gyp rebuild
+npm error gyp http GET https://nodejs.org/download/release/v22.23.3/node-v22.23.3-headers.tar.gz
+npm error gyp http 200 https://nodejs.org/download/release/v22.23.3/node-v22.23.3-headers.tar.gz
+npm error gyp ERR! Completion callback never invoked!
+npm error gyp ERR! System Windows_NT 10.0.20348
+`;
+      expect(classifyFailure(stderr)).toBe("transient");
+      expect(
+        classifyFailure(`${stderr}\nnode-pty binding.gyp patch: target_defaults missing`)
+      ).toBe("deterministic");
+    });
+
     it("handles case-insensitive matching", () => {
       expect(classifyFailure("Gyp Err! build failed\neconnreset\n")).toBe("deterministic");
     });

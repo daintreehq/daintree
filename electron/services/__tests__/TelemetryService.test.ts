@@ -2043,22 +2043,42 @@ describe("child process exit reporting", () => {
     expect(appMock.listenerCount("render-process-gone")).toBe(0);
   });
 
-  it("reports the GPU exits the crash monitor passes on", async () => {
-    const { mod } = await initFresh();
-    mod.reportGpuProcessExit(
-      { type: "GPU", reason: "abnormal-exit", exitCode: 8704 },
-      { crashCount: 2 }
-    );
-    // The monitor only passes on a crash when it selects a fallback.
-    mod.reportGpuProcessExit({ type: "GPU", reason: "crashed", exitCode: 11 }, { crashCount: 1 });
-    expect(captureEventMock).toHaveBeenCalledTimes(2);
-    const [contextLoss, crash] = captureEventMock.mock.calls.map(
-      (call) => (call as unknown[])[0] as SentryEvent
-    );
-    expect(contextLoss.extra).toMatchObject({ crashCount: 2, rawExitCode: 8704 });
-    expect(crash.level).toBe("fatal");
-    await mod.closeTelemetry();
-  });
+  it.each(["darwin", "linux", "win32"] as const)(
+    "reports the GPU exits the crash monitor passes on (%s)",
+    async (platform) => {
+      const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
+      Object.defineProperty(process, "platform", { value: platform });
+      try {
+        const { mod } = await initFresh();
+        try {
+          mod.reportGpuProcessExit(
+            { type: "GPU", reason: "abnormal-exit", exitCode: 8704 },
+            { crashCount: 2 }
+          );
+          // The monitor only passes on a crash when it selects a fallback.
+          mod.reportGpuProcessExit(
+            { type: "GPU", reason: "crashed", exitCode: 11 },
+            { crashCount: 1 }
+          );
+          expect(captureEventMock).toHaveBeenCalledTimes(2);
+          const [contextLoss, crash] = captureEventMock.mock.calls.map(
+            (call) => (call as unknown[])[0] as SentryEvent
+          );
+          expect(contextLoss.extra).toEqual(
+            platform === "win32" ? { crashCount: 2 } : { crashCount: 2, rawExitCode: 8704 }
+          );
+          expect(contextLoss.tags).toMatchObject({
+            "exit.code": platform === "win32" ? "8704" : "34",
+          });
+          expect(crash.level).toBe("fatal");
+        } finally {
+          await mod.closeTelemetry();
+        }
+      } finally {
+        Object.defineProperty(process, "platform", originalPlatform);
+      }
+    }
+  );
 
   it("limits a repeated console breadcrumb and strips service instance names", async () => {
     const { mod, options } = await initFresh();
