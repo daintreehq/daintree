@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fs from "fs/promises";
+import type { FileHandle } from "fs/promises";
 import { createHash } from "crypto";
 import os from "os";
 import path from "path";
 import { fingerprintPaths } from "../pathFingerprint.js";
+import { FILE_PREVIEW_MAX_BYTES } from "../../utils/fileLimits.js";
 
 /**
  * Exercised against a real filesystem rather than a mocked `fs`: the whole point
@@ -48,6 +50,55 @@ describe("fingerprintPaths", () => {
   it("folds previewable file contents into the fingerprint", async () => {
     const content = "content signal";
     const file = path.join(root, "content.txt");
+    await fs.writeFile(file, content);
+
+    const [fingerprint] = await fingerprintPaths(root, [file]);
+    const digest = createHash("sha1").update(content).digest("hex").slice(0, 16);
+
+    expect(fingerprint).toMatch(new RegExp(`:${digest}$`));
+  });
+
+  it("reads no more than the preview ceiling when a file grows after its stat", async () => {
+    const file = path.join(root, "growing.log");
+    await fs.writeFile(file, "start");
+    const realOpen = fs.open;
+    let bytesRead = 0;
+    let closed = false;
+    const spy = vi.spyOn(fs, "open").mockImplementation((async (...args: unknown[]) => {
+      const handle = await (realOpen as (...a: unknown[]) => Promise<FileHandle>)(...args);
+      const realRead = handle.read.bind(handle) as (...a: unknown[]) => Promise<{
+        bytesRead: number;
+      }>;
+      let grown = false;
+      const realClose = handle.close.bind(handle);
+      return Object.assign(Object.create(handle) as FileHandle, {
+        read: async (...readArgs: unknown[]) => {
+          // A writer appends far past the ceiling once the descriptor is open.
+          if (!grown) {
+            grown = true;
+            await fs.appendFile(file, Buffer.alloc(FILE_PREVIEW_MAX_BYTES * 4, 0x61));
+          }
+          const result = await realRead(...readArgs);
+          bytesRead += result.bytesRead;
+          return result;
+        },
+        close: async () => {
+          closed = true;
+          await realClose();
+        },
+      });
+    }) as typeof fs.open);
+    const [fingerprint] = await fingerprintPaths(root, [file]).finally(() => spy.mockRestore());
+
+    // Past the ceiling the digest falls back to the metadata-only marker.
+    expect(fingerprint).toMatch(/:-$/);
+    expect(bytesRead).toBeLessThanOrEqual(FILE_PREVIEW_MAX_BYTES + 1);
+    expect(closed).toBe(true);
+  });
+
+  it("digests a file of exactly the preview ceiling", async () => {
+    const file = path.join(root, "exact.txt");
+    const content = Buffer.alloc(FILE_PREVIEW_MAX_BYTES, 0x62);
     await fs.writeFile(file, content);
 
     const [fingerprint] = await fingerprintPaths(root, [file]);

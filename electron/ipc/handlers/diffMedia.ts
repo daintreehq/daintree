@@ -7,6 +7,7 @@ import { isLfsPointer } from "./files.js";
 import { DiffMediaReadFileVersionsPayloadSchema } from "../../schemas/ipc.js";
 import { gitServiceCache } from "../../services/GitServiceCache.js";
 import { AppError } from "../../utils/errorTypes.js";
+import { readBoundedFromHandle } from "../../utils/boundedRead.js";
 import type { HeadFileReadOptions, HeadFileReadResult } from "../../services/GitService.js";
 import {
   DIFF_MEDIA_MAX_BYTES,
@@ -243,14 +244,21 @@ async function readWorkingSide(
         return { ok: true, unchanged: true, version };
       }
       options.beforeRead?.();
-      content = await fileHandle.readFile();
+      // The fd stat is only a hint: a writer growing the file after it must not
+      // pull more than the cap into main.
+      const read = await readBoundedFromHandle(
+        fileHandle,
+        Number(fdStat.size),
+        DIFF_MEDIA_MAX_BYTES
+      );
+      if (read === null) {
+        return { ok: false, error: "TOO_LARGE" };
+      }
+      content = read;
     } finally {
       await fileHandle.close().catch(() => {});
     }
 
-    if (content.byteLength > DIFF_MEDIA_MAX_BYTES) {
-      return { ok: false, error: "TOO_LARGE" };
-    }
     return toImageSide(mime, content, version);
   } catch (error) {
     if (isRateLimited(error)) throw error;

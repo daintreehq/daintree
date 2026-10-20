@@ -1,4 +1,3 @@
-import type { FileHandle } from "fs/promises";
 import { PLUGIN_INVOKE_MAX_RESULT_BYTES } from "../../../shared/config/pluginBudgets.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import type {
@@ -65,38 +64,6 @@ export function validateReadFilesCall(
     maxBytesPerFile: max as number | undefined,
     signal: opts.signal,
   };
-}
-
-/**
- * Read at most `limit + 1` bytes from `handle`, sized from the opened file's
- * length so a small file never allocates the whole budget. Resolves `null`
- * when the file holds more than `limit` bytes — the extra byte is how that is
- * recognised without reading further.
- */
-export async function readBoundedFromHandle(
-  handle: FileHandle,
-  sizeHint: number,
-  limit: number,
-  signal: AbortSignal | undefined
-): Promise<Buffer | null> {
-  if (sizeHint > limit) return null;
-  let buffer = Buffer.allocUnsafe(Math.min(limit, Math.max(0, sizeHint)) + 1);
-  let filled = 0;
-  for (;;) {
-    signal?.throwIfAborted();
-    if (filled === buffer.length) {
-      // The file grew after it was opened; keep going up to the ceiling.
-      if (buffer.length > limit) break;
-      const grown = Buffer.allocUnsafe(Math.min(limit + 1, buffer.length * 2));
-      buffer.copy(grown, 0, 0, filled);
-      buffer = grown;
-    }
-    const { bytesRead } = await handle.read(buffer, filled, buffer.length - filled, null);
-    if (bytesRead === 0) break;
-    filled += bytesRead;
-  }
-  if (filled > limit) return null;
-  return buffer.subarray(0, filled);
 }
 
 /** What reading one contained path produced. */

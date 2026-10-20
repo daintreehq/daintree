@@ -12,7 +12,7 @@ const readPreviousFileVersionMock = vi.hoisted(() => vi.fn());
 const getGitServiceMock = vi.hoisted(() => vi.fn());
 
 const fileHandleMock = vi.hoisted(() => ({
-  readFile: vi.fn(),
+  read: vi.fn(),
   stat: vi.fn(),
   close: vi.fn(async () => {}),
 }));
@@ -33,6 +33,7 @@ vi.mock("../../../services/GitServiceCache.js", () => ({
 import { registerDiffMediaHandlers } from "../diffMedia.js";
 import { DIFF_MEDIA_METHOD_CHANNELS } from "../diffMedia.preload.js";
 import { _resetRateLimitQueuesForTest } from "../../utils.js";
+import { DIFF_MEDIA_MAX_BYTES } from "../../../../shared/types/ipc/diffMedia.js";
 import type {
   DiffMediaFileVersionsResponse,
   DiffMediaReadFileVersionsPayload,
@@ -63,6 +64,27 @@ const ROOT = path.parse(process.cwd()).root;
 const REPO_ROOT = path.join(ROOT, "repo");
 const OUTSIDE_FILE = path.join(ROOT, "elsewhere", "img.png");
 
+/**
+ * Each open serves `content` from offset 0 through `FileHandle.read`, as a
+ * descriptor would. The returned tally counts bytes the reader asked for.
+ */
+function serveWorkingFile(content: Buffer): { requested: number } {
+  const tally = { requested: 0 };
+  let offset = 0;
+  fsMock.open.mockImplementation(async () => {
+    offset = 0;
+    return fileHandleMock;
+  });
+  fileHandleMock.read.mockImplementation(async (buffer: Buffer, at: number, length: number) => {
+    tally.requested += length;
+    const n = Math.max(0, Math.min(length, content.length - offset));
+    content.copy(buffer, at, offset, offset + n);
+    offset += n;
+    return { bytesRead: n, buffer };
+  });
+  return tally;
+}
+
 describe("diffMedia readFileVersions", () => {
   let cleanup: () => void;
 
@@ -80,8 +102,7 @@ describe("diffMedia readFileVersions", () => {
 
     fsMock.realpath.mockImplementation(async (p: string) => p);
     fsMock.stat.mockResolvedValue({ size: WORKING_BUFFER.byteLength, isFile: () => true });
-    fsMock.open.mockResolvedValue(fileHandleMock);
-    fileHandleMock.readFile.mockResolvedValue(WORKING_BUFFER);
+    serveWorkingFile(WORKING_BUFFER);
     fileHandleMock.stat.mockResolvedValue({
       size: WORKING_BUFFER.byteLength,
       isFile: () => true,
@@ -224,6 +245,26 @@ describe("diffMedia readFileVersions", () => {
     expect(result.head.ok).toBe(true);
   });
 
+  it("stops at the cap when the working file grows after the descriptor stat", async () => {
+    const tally = serveWorkingFile(Buffer.alloc(DIFF_MEDIA_MAX_BYTES * 2, 0x61));
+
+    const result = await invoke({ cwd: REPO_ROOT, filePath: "img.png" });
+
+    expect(result.working).toEqual({ ok: false, error: "TOO_LARGE" });
+    expect(tally.requested).toBeLessThanOrEqual(DIFF_MEDIA_MAX_BYTES + 1);
+    expect(fileHandleMock.close).toHaveBeenCalled();
+    expect(result.head.ok).toBe(true);
+  });
+
+  it("serves a working file that grew after the stat but stays under the cap", async () => {
+    const grown = Buffer.concat([WORKING_BUFFER, Buffer.from("more bytes")]);
+    serveWorkingFile(grown);
+
+    const result = await invoke({ cwd: REPO_ROOT, filePath: "img.png" });
+
+    expect(result.working).toMatchObject({ ok: true, byteSize: grown.byteLength });
+  });
+
   it("maps an unexpected git failure to a HEAD-side ERROR instead of rejecting", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     readFileAtHeadMock.mockRejectedValue(new Error("git exploded"));
@@ -311,13 +352,13 @@ describe("diffMedia readFileVersions", () => {
 
     it("returns unchanged sides without reading or resending bytes", async () => {
       const known = await freshVersions();
-      fileHandleMock.readFile.mockClear();
+      fileHandleMock.read.mockClear();
 
       const result = await invoke({ cwd: REPO_ROOT, filePath: "img.png", known });
 
       expect(result.head).toEqual({ ok: true, unchanged: true, version: known.head });
       expect(result.working).toEqual({ ok: true, unchanged: true, version: known.working });
-      expect(fileHandleMock.readFile).not.toHaveBeenCalled();
+      expect(fileHandleMock.read).not.toHaveBeenCalled();
       expect(fileHandleMock.close).toHaveBeenCalled();
     });
 
@@ -360,7 +401,7 @@ describe("diffMedia readFileVersions", () => {
       const known = await freshVersions();
       for (let i = 0; i < 9; i++) await invoke({ cwd: REPO_ROOT, filePath: "img.png" });
       fileHandleMock.stat.mockResolvedValue({ ...FD_STAT, ctimeNs: FD_STAT.ctimeNs + 1n });
-      fileHandleMock.readFile.mockClear();
+      fileHandleMock.read.mockClear();
       const headReads = vi.fn();
       readFileAtHeadMock.mockImplementation(
         async (_path: string, _max: number, options: { beforeRead?: () => void }) => {
@@ -374,7 +415,7 @@ describe("diffMedia readFileVersions", () => {
         code: "RATE_LIMITED",
       });
       expect(headReads).not.toHaveBeenCalled();
-      expect(fileHandleMock.readFile).not.toHaveBeenCalled();
+      expect(fileHandleMock.read).not.toHaveBeenCalled();
     });
 
     it("passes the known head version through to the committed-deletion fallback", async () => {

@@ -196,6 +196,26 @@ function getEventHandlers(
   );
 }
 
+/**
+ * `FileHandle.read` over `content`, from the descriptor's offset. A read into
+ * the start of a buffer begins a new pass, so one handle can serve every
+ * request a test makes. `requested` tallies how many bytes were asked for,
+ * which bounds what the reader allocated.
+ */
+function readsFrom(content: Buffer) {
+  let offset = 0;
+  const read = vi.fn(async (buffer: Buffer, at: number, length: number) => {
+    if (at === 0) offset = 0;
+    read.requested += length;
+    const n = Math.max(0, Math.min(length, content.length - offset));
+    content.copy(buffer, at, offset, offset + n);
+    offset += n;
+    return { bytesRead: n, buffer };
+  }) as ReturnType<typeof vi.fn> & { requested: number };
+  read.requested = 0;
+  return read;
+}
+
 describe("setupWebviewCSP — webview guest navigation restriction", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -1623,7 +1643,7 @@ describe("createDaintreeFileProtocolHandler — symlink containment", () => {
   function makeFileHandle(content: string | Buffer = "data") {
     const buffer = typeof content === "string" ? Buffer.from(content) : content;
     return {
-      readFile: vi.fn().mockResolvedValue(buffer),
+      read: readsFrom(buffer),
       close: vi.fn().mockResolvedValue(undefined),
     };
   }
@@ -1680,7 +1700,7 @@ describe("createDaintreeFileProtocolHandler — symlink containment", () => {
   });
 
   it("uses the read buffer length for Content-Length, not the pre-read stat.size", async () => {
-    // If the file changes between stat() and readFile(), Content-Length must
+    // If the file changes between stat() and the read, Content-Length must
     // reflect what was actually returned in the body — using stat.size would
     // declare a stale length that mismatches the response body.
     const fs = await import("fs/promises");
@@ -1819,22 +1839,38 @@ describe("createDaintreeFileProtocolHandler — symlink containment", () => {
 
   it("rejects a file that grows past the cap between stat and read (413 after open)", async () => {
     // The pre-open stat is advisory; a writer can grow/swap the file before the
-    // read. The post-read length check is the real ceiling — without it an
-    // oversized buffer would reach the renderer and risk a decode OOM.
+    // read. The read itself holds the ceiling, so main never buffers past it.
     const fs = await import("fs/promises");
     vi.mocked(fs.realpath).mockImplementation((p) => Promise.resolve(p as string));
     vi.mocked(fs.stat).mockResolvedValue({ size: 4 } as Awaited<ReturnType<typeof fs.stat>>);
-    const oversized = Buffer.alloc(512 * 1024 + 1);
-    vi.mocked(fs.open).mockResolvedValue(
-      makeFileHandle(oversized) as unknown as Awaited<ReturnType<typeof fs.open>>
-    );
+    const limit = 512 * 1024;
+    const handle = makeFileHandle(Buffer.alloc(limit * 8));
+    vi.mocked(fs.open).mockResolvedValue(handle as unknown as Awaited<ReturnType<typeof fs.open>>);
 
     const handler = await captureHandler("daintree-file");
     const response = await handler(makeRequest("/project/grew.bin", "/project"));
 
     expect(response.status).toBe(413);
-    // The open/read did happen — this is the second, post-read guard, not the stat guard.
+    // The open/read did happen — this is the read's guard, not the stat guard.
     expect(fs.open).toHaveBeenCalledTimes(1);
+    expect(handle.read.requested).toBeLessThanOrEqual(limit + 1);
+    expect(handle.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("serves a file that grew after the stat but stays within the cap", async () => {
+    const fs = await import("fs/promises");
+    vi.mocked(fs.realpath).mockImplementation((p) => Promise.resolve(p as string));
+    vi.mocked(fs.stat).mockResolvedValue({ size: 4 } as Awaited<ReturnType<typeof fs.stat>>);
+    vi.mocked(fs.open).mockResolvedValue(
+      makeFileHandle("grown content") as unknown as Awaited<ReturnType<typeof fs.open>>
+    );
+
+    const handler = await captureHandler("daintree-file");
+    const response = await handler(makeRequest("/project/grew.txt", "/project"));
+
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe("grown content");
+    expect(response.headers.get("Content-Length")).toBe(String("grown content".length));
   });
 
   it("returns 404 when O_NOFOLLOW rejects a final-component symlink with ELOOP (TOCTOU)", async () => {
@@ -1861,11 +1897,11 @@ describe("createDaintreeFileProtocolHandler — symlink containment", () => {
     expect(response.status).toBe(404);
   });
 
-  it("closes the file handle even when readFile fails", async () => {
+  it("closes the file handle even when the read fails", async () => {
     const fs = await import("fs/promises");
     vi.mocked(fs.realpath).mockImplementation((p) => Promise.resolve(p as string));
     const handle = {
-      readFile: vi.fn().mockRejectedValue(new Error("EIO")),
+      read: vi.fn().mockRejectedValue(new Error("EIO")),
       close: vi.fn().mockResolvedValue(undefined),
     };
     vi.mocked(fs.open).mockResolvedValue(handle as unknown as Awaited<ReturnType<typeof fs.open>>);
@@ -1881,7 +1917,7 @@ describe("createDaintreeFileProtocolHandler — symlink containment", () => {
     const fs = await import("fs/promises");
     vi.mocked(fs.realpath).mockImplementation((p) => Promise.resolve(p as string));
     const handle = {
-      readFile: vi.fn().mockResolvedValue(Buffer.from("ok")),
+      read: readsFrom(Buffer.from("ok")),
       close: vi.fn().mockRejectedValue(new Error("EBADF")),
     };
     vi.mocked(fs.open).mockResolvedValue(handle as unknown as Awaited<ReturnType<typeof fs.open>>);
@@ -2063,7 +2099,7 @@ describe("createDaintreeFileProtocolHandler — video streaming (#11382)", () =>
       ),
       close: vi.fn().mockResolvedValue(undefined),
       // The buffered core's entry point — a video must never reach it.
-      readFile: vi.fn(),
+      read: vi.fn(),
     };
   }
 
@@ -2104,7 +2140,7 @@ describe("createDaintreeFileProtocolHandler — video streaming (#11382)", () =>
     expect(response.headers.get("Content-Length")).toBe(String(size));
     expect(response.headers.get("Accept-Ranges")).toBe("bytes");
     expect(response.headers.get("Content-Type")).toBe("video/mp4");
-    expect(handle.readFile).not.toHaveBeenCalled();
+    expect(handle.read).not.toHaveBeenCalled();
     expect(handle.createReadStream).toHaveBeenCalledWith({
       start: 0,
       end: size - 1,
@@ -2130,7 +2166,7 @@ describe("createDaintreeFileProtocolHandler — video streaming (#11382)", () =>
       expect(response.headers.get("Content-Length")).toBe(String(size));
       expect(response.headers.get("Content-Type")).toBe("audio/mpeg");
       expect(response.headers.get("Accept-Ranges")).toBe("bytes");
-      expect(handle.readFile).not.toHaveBeenCalled();
+      expect(handle.read).not.toHaveBeenCalled();
     });
 
     it("rejects an oversize audio alias of a text file with 413 before opening it", async () => {
@@ -2150,7 +2186,7 @@ describe("createDaintreeFileProtocolHandler — video streaming (#11382)", () =>
         size: 5 * 1024 * 1024,
       } as Awaited<ReturnType<typeof fs.stat>>);
       const bufferedHandle = {
-        readFile: vi.fn(),
+        read: vi.fn(),
         close: vi.fn().mockResolvedValue(undefined),
       };
       vi.mocked(fs.open).mockResolvedValue(
@@ -2161,7 +2197,7 @@ describe("createDaintreeFileProtocolHandler — video streaming (#11382)", () =>
       const response = await handler(makeVideoRequest("/project/track.mp3", "/project"));
 
       expect(response.status).toBe(413);
-      expect(bufferedHandle.readFile).not.toHaveBeenCalled();
+      expect(bufferedHandle.read).not.toHaveBeenCalled();
     });
   });
 
@@ -2401,7 +2437,7 @@ describe("createDaintreeFileProtocolHandler — video streaming (#11382)", () =>
     expect(response.headers.get("Accept-Ranges")).toBe("bytes");
     expect(response.headers.get("Content-Type")).toBe("video/mp4");
     expect(handle.createReadStream).not.toHaveBeenCalled();
-    expect(handle.readFile).not.toHaveBeenCalled();
+    expect(handle.read).not.toHaveBeenCalled();
     expect(handle.close).toHaveBeenCalledTimes(1);
   });
 
@@ -2489,7 +2525,7 @@ describe("createDaintreeFileProtocolHandler — video streaming (#11382)", () =>
     );
     vi.mocked(fs.stat).mockResolvedValue({ size: 4 } as Awaited<ReturnType<typeof fs.stat>>);
     const bufferedHandle = {
-      readFile: vi.fn().mockResolvedValue(Buffer.from("data")),
+      read: readsFrom(Buffer.from("data")),
       close: vi.fn().mockResolvedValue(undefined),
     };
     vi.mocked(fs.open).mockResolvedValue(
@@ -2502,7 +2538,8 @@ describe("createDaintreeFileProtocolHandler — video streaming (#11382)", () =>
     expect(response.status).toBe(200);
     expect(response.headers.get("Content-Type")).toBe("text/plain");
     // Buffered semantics: the whole (capped) read, not a stream.
-    expect(bufferedHandle.readFile).toHaveBeenCalledTimes(1);
+    expect(bufferedHandle.read).toHaveBeenCalled();
+    expect(await response.text()).toBe("data");
   });
 });
 
@@ -2550,7 +2587,7 @@ describe("createDaintreeMediaProtocolHandler — direct range streaming (#12242)
       ),
       close: vi.fn().mockResolvedValue(undefined),
       // The buffered core's entry point — this scheme must never reach it.
-      readFile: vi.fn(),
+      read: vi.fn(),
     };
   }
 
@@ -2626,7 +2663,7 @@ describe("createDaintreeMediaProtocolHandler — direct range streaming (#12242)
     const response = await handler(makeMediaRequest("/project/clip.mp4", "/project"));
 
     expect(response.status).toBe(404);
-    expect(handle.readFile).not.toHaveBeenCalled();
+    expect(handle.read).not.toHaveBeenCalled();
     expect(handle.createReadStream).not.toHaveBeenCalled();
   });
 
@@ -3605,7 +3642,7 @@ describe("createDaintreeHtmlProtocolHandler — sandboxed HTML preview (#11191)"
   function makeFileHandle(content: string | Buffer = "<h1>hi</h1>") {
     const buffer = typeof content === "string" ? Buffer.from(content) : content;
     return {
-      readFile: vi.fn().mockResolvedValue(buffer),
+      read: readsFrom(buffer),
       close: vi.fn().mockResolvedValue(undefined),
     };
   }
@@ -3773,7 +3810,7 @@ describe("createDaintreePdfProtocolHandler — inline PDF preview (#11427)", () 
   function makeFileHandle(content: string | Buffer = "%PDF-1.4 body") {
     const buffer = typeof content === "string" ? Buffer.from(content) : content;
     return {
-      readFile: vi.fn().mockResolvedValue(buffer),
+      read: readsFrom(buffer),
       stat: vi.fn().mockResolvedValue({ size: buffer.length, isFile: () => true }),
       close: vi.fn().mockResolvedValue(undefined),
     };
@@ -3949,7 +3986,7 @@ describe("createDaintreePdfProtocolHandler — inline PDF preview (#11427)", () 
 
       expect(response.status).toBe(200);
       expect(response.headers.get("Content-Length")).toBe("4096");
-      expect(handle.readFile).not.toHaveBeenCalled();
+      expect(handle.read).not.toHaveBeenCalled();
       expect(handle.close).toHaveBeenCalledTimes(1);
     });
 
@@ -3994,7 +4031,7 @@ describe("createDaintreePdfProtocolHandler — inline PDF preview (#11427)", () 
 
       expect(response.status).toBe(500);
       expect(response.headers.get("Access-Control-Allow-Origin")).toBe("app://daintree");
-      expect(handle.readFile).not.toHaveBeenCalled();
+      expect(handle.read).not.toHaveBeenCalled();
       expect(handle.close).toHaveBeenCalledTimes(1);
     });
 
@@ -4107,15 +4144,14 @@ describe("createDaintreePdfProtocolHandler — inline PDF preview (#11427)", () 
     const fs = await import("fs/promises");
     vi.mocked(fs.stat).mockResolvedValue({ size: 100 } as Awaited<ReturnType<typeof fs.stat>>);
     // The pre-read stat is advisory — a writer can swap the file underneath it,
-    // so the bytes actually read are re-checked before they reach the renderer.
-    vi.mocked(fs.open).mockResolvedValue(
-      makeFileHandle(Buffer.alloc(60 * 1024 * 1024)) as unknown as Awaited<
-        ReturnType<typeof fs.open>
-      >
-    );
+    // so the read stops at the ceiling instead of buffering the whole file.
+    const handle = makeFileHandle(Buffer.alloc(60 * 1024 * 1024));
+    vi.mocked(fs.open).mockResolvedValue(handle as unknown as Awaited<ReturnType<typeof fs.open>>);
 
     const handler = await captureHandler();
     expect((await handler(makeRequest("/project/spec.pdf", "/project"))).status).toBe(413);
+    expect(handle.read.requested).toBeLessThanOrEqual(50 * 1024 * 1024 + 1);
+    expect(handle.close).toHaveBeenCalledTimes(1);
   });
 
   it("percent-encodes an extended filename so a conforming parser accepts it", async () => {

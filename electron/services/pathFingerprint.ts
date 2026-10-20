@@ -3,6 +3,7 @@ import fs from "fs/promises";
 import { createHash } from "crypto";
 import { TimeoutError, withTimeout } from "../utils/withTimeout.js";
 import { FILE_PREVIEW_MAX_BYTES } from "../utils/fileLimits.js";
+import { readBoundedFromHandle } from "../utils/boundedRead.js";
 import { isPathInside } from "../../shared/utils/path.js";
 
 /**
@@ -107,11 +108,32 @@ async function fingerprintDirectory(target: string, mtime: bigint): Promise<Path
 async function digestPreviewableFile(target: string, size: bigint): Promise<string> {
   if (size > BigInt(FILE_PREVIEW_MAX_BYTES)) return "-";
   const contents = await withTimeout(
-    fs.readFile(target),
+    readPreviewableFile(target, Number(size)),
     FS_TIMEOUT_MS,
     `read timed out: ${target}`
   );
+  // Grown past the ceiling since the stat: no more renderable than one that
+  // was already over it.
+  if (contents === null) return "-";
   return createHash("sha1").update(contents).digest("hex").slice(0, 16);
+}
+
+/**
+ * At most the preview ceiling's worth of `target`, or `null` past it. The
+ * handle closes when the read settles even if `withTimeout` gave up first.
+ */
+async function readPreviewableFile(target: string, sizeHint: number): Promise<Buffer | null> {
+  // O_NONBLOCK so a FIFO swapped in after the stat can't hang the open, and
+  // O_NOFOLLOW so a link swapped in can't point the digest outside the root.
+  const handle = await fs.open(
+    target,
+    fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0)
+  );
+  try {
+    return await readBoundedFromHandle(handle, sizeHint, FILE_PREVIEW_MAX_BYTES);
+  } finally {
+    await handle.close().catch(() => {});
+  }
 }
 
 /**

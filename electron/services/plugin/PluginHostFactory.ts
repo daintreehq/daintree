@@ -4,6 +4,7 @@ import path from "path";
 import { createHash, randomUUID } from "node:crypto";
 import { resilientAtomicWriteFile } from "../../utils/fs.js";
 import { runExclusive } from "../../utils/keyedMutex.js";
+import { readBoundedFromHandle } from "../../utils/boundedRead.js";
 import { watchShared } from "../FileObservationService.js";
 import { fileTreeService } from "../FileTreeService.js";
 import { clipboard, shell } from "electron";
@@ -55,12 +56,7 @@ import {
   type PluginStorageManager,
 } from "./PluginStorageManager.js";
 import { createListenerFailureState, invokeTrackedListener } from "./pluginCallbackUtils.js";
-import {
-  readBoundedFromHandle,
-  runReadFiles,
-  validateReadFilesCall,
-  type ReadOneOutcome,
-} from "./pluginFsReadFiles.js";
+import { runReadFiles, validateReadFilesCall, type ReadOneOutcome } from "./pluginFsReadFiles.js";
 import {
   MIN_PLUGIN_SUBSCRIPTION_DEBOUNCE_MS,
   WorktreeChangeTracker,
