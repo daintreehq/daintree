@@ -23,10 +23,11 @@ export class GlobalFileStore {
   /**
    * Serialize recipe read-modify-write updates. Each queued updater runs after
    * the previous has committed, so its reads see the prior write's result. The
-   * updater does its own reads (via {@link getRecipes}) and returns the list to
+   * updater does its own reads (via {@link readRecipes}) and returns the list to
    * persist, or `null` to skip the write. Updaters must not call another queued
-   * method (they would chain behind the awaiting outer turn and self-deadlock);
-   * the unqueued {@link getRecipes} is safe. `.catch(() => {})` keeps one failed
+   * method, including the queued {@link getRecipes} (they would chain behind the
+   * awaiting outer turn and self-deadlock); the unqueued {@link readRecipes} is
+   * safe. `.catch(() => {})` keeps one failed
    * update from poisoning the chain — the failure still reaches its own caller.
    */
   private enqueueRecipesUpdate(
@@ -44,7 +45,21 @@ export class GlobalFileStore {
     return next;
   }
 
+  /**
+   * Takes a queue turn because {@link readRecipes} may quarantine the file: a
+   * reader holding bytes from before a queued save would otherwise rename the
+   * newly committed file aside, and concurrent readers could both try to.
+   */
   async getRecipes(): Promise<TerminalRecipe[]> {
+    let recipes: TerminalRecipe[] = [];
+    await this.enqueueRecipesUpdate(async () => {
+      recipes = await this.readRecipes();
+      return null;
+    });
+    return recipes;
+  }
+
+  private async readRecipes(): Promise<TerminalRecipe[]> {
     let content: string;
     try {
       content = await fs.readFile(this.recipesPath, "utf-8");
@@ -126,7 +141,7 @@ export class GlobalFileStore {
 
   async addRecipe(recipe: TerminalRecipe): Promise<void> {
     await this.enqueueRecipesUpdate(async () => {
-      const recipes = await this.getRecipes();
+      const recipes = await this.readRecipes();
       recipes.push(recipe);
       return recipes;
     });
@@ -137,7 +152,7 @@ export class GlobalFileStore {
     updates: Partial<Omit<TerminalRecipe, "id" | "projectId" | "createdAt">>
   ): Promise<void> {
     await this.enqueueRecipesUpdate(async () => {
-      const recipes = await this.getRecipes();
+      const recipes = await this.readRecipes();
       const index = recipes.findIndex((r) => r.id === recipeId);
       if (index === -1) {
         throw new Error(`Global recipe ${recipeId} not found`);
@@ -164,12 +179,12 @@ export class GlobalFileStore {
   async transformRecipes(
     transform: (recipes: TerminalRecipe[]) => TerminalRecipe[] | null
   ): Promise<void> {
-    await this.enqueueRecipesUpdate(async () => transform(await this.getRecipes()));
+    await this.enqueueRecipesUpdate(async () => transform(await this.readRecipes()));
   }
 
   async deleteRecipe(recipeId: string): Promise<void> {
     await this.enqueueRecipesUpdate(async () => {
-      const recipes = await this.getRecipes();
+      const recipes = await this.readRecipes();
       return recipes.filter((r) => r.id !== recipeId);
     });
   }

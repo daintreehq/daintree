@@ -23,6 +23,7 @@ export class ProjectSettingsManager {
   });
   // Writes to one project's settings run one at a time, so an update to a
   // single field reads a file no other write is halfway through replacing.
+  // Uncached reads take a turn here too, because a read may quarantine the file.
   private readonly writeQueues = new Map<string, Promise<void>>();
   private readonly projectsBeingWritten = new Set<string>();
   // Bumped as each write starts and ends: a read that overlapped a write may
@@ -64,7 +65,26 @@ export class ProjectSettingsManager {
     };
   }
 
+  /**
+   * Reads take a turn in the project's write queue unless it is idle and the
+   * cache is warm: an unreadable file is quarantined by rename, so a read
+   * holding bytes from before a queued save would otherwise move the newly
+   * saved file aside, and a cached copy predates any save still waiting to run.
+   */
   async getProjectSettings(projectId: string): Promise<ProjectSettings> {
+    if (!this.writeQueues.has(projectId)) {
+      const cached = this.settingsCache.get(projectId);
+      if (cached) return cached;
+    }
+    return this.enqueue(projectId, () => this.readProjectSettings(projectId));
+  }
+
+  /**
+   * Unqueued read, for code already inside a {@link serializeWrite} turn for
+   * this project, where the queued {@link getProjectSettings} would wait behind
+   * the turn awaiting it.
+   */
+  private async readProjectSettings(projectId: string): Promise<ProjectSettings> {
     const cached = this.settingsCache.get(projectId);
     if (cached) return cached;
     const generation = this.writeGenerations.get(projectId) ?? 0;
@@ -183,8 +203,7 @@ export class ProjectSettingsManager {
       this.writeGenerations.set(projectId, (this.writeGenerations.get(projectId) ?? 0) + 1);
       this.settingsCache.invalidate(projectId);
     };
-    const previous = this.writeQueues.get(projectId) ?? Promise.resolve();
-    const result = previous.then(async () => {
+    return this.enqueue(projectId, async () => {
       this.projectsBeingWritten.add(projectId);
       bumpGeneration();
       try {
@@ -194,6 +213,11 @@ export class ProjectSettingsManager {
         bumpGeneration();
       }
     });
+  }
+
+  private enqueue<T>(projectId: string, task: () => Promise<T>): Promise<T> {
+    const previous = this.writeQueues.get(projectId) ?? Promise.resolve();
+    const result = previous.then(task);
     const settled = result.then(
       () => undefined,
       () => undefined
@@ -212,7 +236,7 @@ export class ProjectSettingsManager {
    */
   async addBrowserAllowedHost(projectId: string, hostname: string): Promise<string[]> {
     return this.serializeWrite(projectId, async () => {
-      const settings = await this.getProjectSettings(projectId);
+      const settings = await this.readProjectSettings(projectId);
       const hosts = settings.browserAllowedHosts ?? [];
       if (hosts.some((host) => host.toLowerCase() === hostname)) return hosts;
       const next = [...hosts, hostname];

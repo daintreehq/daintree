@@ -345,3 +345,65 @@ describe("GlobalFileStore write serialization", () => {
     expect(result.find((r) => r.id === "g1")?.name).toBe("g1");
   });
 });
+
+describe("GlobalFileStore recipe reads that quarantine (#13553)", () => {
+  let store: GlobalFileStore;
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    store = new GlobalFileStore(CONFIG_DIR);
+    fsMock.mkdir.mockResolvedValue(undefined);
+  });
+
+  const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+  it("a paused quarantining read cannot move aside a recipe saved behind it", async () => {
+    const box = installDiskModel();
+    box.content = "{ not json";
+    const quarantined: string[] = [];
+    const releases: Array<() => void> = [];
+    // Each rename waits on its own gate, then moves whatever is live at the path.
+    utilsMock.resilientRename.mockImplementation(async () => {
+      await new Promise<void>((resolve) => releases.push(resolve));
+      if (box.content === null) {
+        throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+      }
+      quarantined.push(box.content);
+      box.content = null;
+    });
+
+    const first = store.getRecipes();
+    await flush();
+    expect(releases).toHaveLength(1);
+
+    const add = store.addRecipe(recipe("kept"));
+    const second = store.getRecipes();
+    await flush();
+    expect(releases).toHaveLength(1);
+
+    releases[0]();
+    await expect(first).resolves.toEqual([]);
+    await add;
+    expect((await second).map((r) => r.id)).toEqual(["kept"]);
+
+    expect(quarantined).toEqual(["{ not json"]);
+    expect((JSON.parse(box.content as string) as TerminalRecipe[]).map((r) => r.id)).toEqual([
+      "kept",
+    ]);
+  });
+
+  it("every mutator over a damaged file completes instead of waiting on itself", async () => {
+    const box = installDiskModel();
+    box.content = "{ not json";
+    utilsMock.resilientRename.mockImplementation(async () => {
+      box.content = null;
+    });
+
+    await store.addRecipe(recipe("a"));
+    await store.updateRecipe("a", { name: "renamed" });
+    await store.transformRecipes((recipes) => [...recipes, recipe("b")]);
+    await store.deleteRecipe("b");
+
+    expect(await store.getRecipes()).toEqual([{ ...recipe("a"), name: "renamed" }]);
+  });
+});
