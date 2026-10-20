@@ -264,7 +264,6 @@ export function DevPreviewPane({
   const [consoleTerminalId, setConsoleTerminalId] = useState<string | null>(terminalId);
   const isConsoleOpen = terminal?.devPreviewConsoleOpen ?? false;
   const activeConsoleTab = terminal?.devPreviewConsoleTab ?? "output";
-  const [guestWebContentsId, setGuestWebContentsId] = useState<number | undefined>(undefined);
   const isSettingsLoading = useProjectSettingsStore((state) => state.isLoading);
   const settingsLoadError = useProjectSettingsStore((state) =>
     state.settings === null ? state.error : null
@@ -754,9 +753,9 @@ export function DevPreviewPane({
   }, [currentUrl, isWebviewReady, webviewElement]);
 
   // Wire the guest-page CDP console capture into the renderer store. The hook
-  // owns start/stop keyed on the ready/eviction lifecycle; here we only mirror
-  // the live webContentsId so lazy object inspection can reach the right guest.
-  const { hmrDead, resetHmrDead } = useDevPreviewConsoleCapture(
+  // owns start/stop keyed on the ready/eviction lifecycle and reports the guest
+  // it is bound to, so lazy object inspection reaches the right guest.
+  const { hmrDead, resetHmrDead, guestWebContentsId } = useDevPreviewConsoleCapture(
     id,
     webviewElement,
     isWebviewReady,
@@ -770,18 +769,6 @@ export function DevPreviewPane({
   useEffect(() => {
     if (status !== "running") resetHmrDead();
   }, [status, resetHmrDead]);
-
-  useEffect(() => {
-    if (!isWebviewReady || isEvicted) {
-      setGuestWebContentsId(undefined);
-      return;
-    }
-    try {
-      setGuestWebContentsId(webviewRef.current?.getWebContentsId());
-    } catch {
-      setGuestWebContentsId(undefined);
-    }
-  }, [isWebviewReady, isEvicted]);
 
   // Blank the webview and clear timers before React unmounts it for faster memory reclamation
   useEffect(() => {

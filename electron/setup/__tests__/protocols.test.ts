@@ -565,6 +565,65 @@ describe("setupWebviewCSP — webview guest navigation restriction", () => {
       });
     });
 
+    it("swallows Cmd/Ctrl+W from an unregistered webview guest so it never closes the window (#13634)", () => {
+      const mockSend = vi.fn();
+      mockFromWebContents.mockReturnValue({
+        isDestroyed: () => false,
+        webContents: { send: mockSend },
+      });
+      mockedGetWebviewDialogService.mockReturnValue({
+        registerDialog: vi.fn(),
+        getPanelId: vi.fn(() => undefined),
+        getPanelKind: vi.fn(() => undefined),
+      } as unknown as ReturnType<typeof getWebviewDialogService>);
+
+      const contents = createMockWebContents("webview");
+      (contents as unknown as { hostWebContents: unknown }).hostWebContents = { id: 99 };
+      simulateWebContentsCreated(contents);
+
+      const beforeInputHandlers = getEventHandlers(contents, "before-input-event");
+      const mockEvent = { preventDefault: vi.fn() };
+      const isMac = process.platform === "darwin";
+      beforeInputHandlers[0](mockEvent, {
+        type: "keyDown",
+        key: "w",
+        meta: isMac,
+        control: !isMac,
+        alt: false,
+        shift: false,
+      });
+
+      expect(mockEvent.preventDefault).toHaveBeenCalledTimes(1);
+      expect(mockSend).not.toHaveBeenCalled();
+    });
+
+    it("swallows Cmd/Ctrl+W even when the guest's parent window can't be resolved (#13634)", () => {
+      mockFromWebContents.mockReturnValue(null);
+      mockedGetWebviewDialogService.mockReturnValue({
+        registerDialog: vi.fn(),
+        getPanelId: vi.fn(() => "panel-1"),
+        getPanelKind: vi.fn(() => "dev-preview"),
+      } as unknown as ReturnType<typeof getWebviewDialogService>);
+
+      const contents = createMockWebContents("webview");
+      (contents as unknown as { hostWebContents: unknown }).hostWebContents = { id: 99 };
+      simulateWebContentsCreated(contents);
+
+      const beforeInputHandlers = getEventHandlers(contents, "before-input-event");
+      const mockEvent = { preventDefault: vi.fn() };
+      const isMac = process.platform === "darwin";
+      beforeInputHandlers[0](mockEvent, {
+        type: "keyDown",
+        key: "w",
+        meta: isMac,
+        control: !isMac,
+        alt: false,
+        shift: false,
+      });
+
+      expect(mockEvent.preventDefault).toHaveBeenCalledTimes(1);
+    });
+
     it("ignores Cmd/Ctrl+Shift+W so it does not shadow other shortcuts (#10859)", () => {
       const mockSend = vi.fn();
       mockFromWebContents.mockReturnValue({
