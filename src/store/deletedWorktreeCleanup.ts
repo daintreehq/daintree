@@ -208,10 +208,12 @@ const heldRemaining = new Map<string, RemainingSnapshot>();
 // again.
 const holdStartedAt = new Map<string, number>();
 
-// Rows the sweep disarmed because cleanup was off. They are unarmed again, but
-// not fresh: turning cleanup back on grants a full window rather than charging
-// them for time the countdown was switched off.
-const disarmedIds = new Set<string>();
+// When cleanup was last switched on from Never. A row first armed after that
+// is charged from no earlier than this, so time the countdown was switched off
+// is never spent. Stamped by a preference subscription rather than by the
+// sweep, which does not run while cached and would miss a toggle made from
+// another project's settings.
+let cleanupEnabledAt: number | null = null;
 
 /**
  * When the last sweep actually ran. The gap to the next one is time nobody
@@ -232,7 +234,6 @@ function forgetRow(id: string): void {
   armedTtlMs.delete(id);
   heldRemaining.delete(id);
   holdStartedAt.delete(id);
-  disarmedIds.delete(id);
 }
 
 function forgetAllRows(): void {
@@ -240,12 +241,12 @@ function forgetAllRows(): void {
   armedTtlMs.clear();
   heldRemaining.clear();
   holdStartedAt.clear();
-  disarmedIds.clear();
 }
 
 export function resetDeletedWorktreeCleanupState(): void {
   forgetAllRows();
   lastSweepAt = null;
+  cleanupEnabledAt = null;
 }
 
 /**
@@ -319,7 +320,6 @@ export function sweepDeletedWorktreeCleanup(deps: SweepDeps = DEFAULT_DEPS): voi
     ...armedTtlMs.keys(),
     ...heldRemaining.keys(),
     ...holdStartedAt.keys(),
-    ...disarmedIds,
   ]) {
     if (!deletedWorktrees.has(id)) forgetRow(id);
   }
@@ -374,7 +374,6 @@ export function sweepDeletedWorktreeCleanup(deps: SweepDeps = DEFAULT_DEPS): voi
   for (const entry of deletedWorktrees.values()) {
     // An unarmed entry is a fresh (or re-recorded) row — any stale state from a
     // previous row under the same id must not leak into its countdown.
-    const wasDisarmed = entry.expiresAt === null && disarmedIds.has(entry.id);
     if (entry.expiresAt === null) forgetRow(entry.id);
     else if (firedIds.has(entry.id)) continue;
 
@@ -383,7 +382,6 @@ export function sweepDeletedWorktreeCleanup(deps: SweepDeps = DEFAULT_DEPS): voi
         setDeletedWorktreeCleanupState(entry.id, { expiresAt: null, holdReason: null });
       }
       forgetRow(entry.id);
-      disarmedIds.add(entry.id);
       continue;
     }
 
@@ -400,17 +398,18 @@ export function sweepDeletedWorktreeCleanup(deps: SweepDeps = DEFAULT_DEPS): voi
 
     // Resolve this row's deadline before any hold or expiry decision.
     let expiresAt: number;
-    if (ttlChanged || wasDisarmed) {
-      // The TTL just changed, or cleanup was just turned back on: a full
-      // window of the current TTL from now.
+    if (ttlChanged) {
+      // The TTL just changed: a full window of the new one from now.
       expiresAt = now + ttlMs;
     } else if (entry.expiresAt === null) {
       // Fresh row. Charge the slowed rate for the part of the gap it existed
-      // for — measured from `deletedAt`, never earlier, and with no sweep on
-      // record that is the only start there is. Same threshold and the same
-      // one-interval allowance as the shared gap, so a row recorded between
-      // two ordinary ticks is armed at a full window.
-      const rowGapMs = now - Math.max(entry.deletedAt, previousSweepAt ?? entry.deletedAt);
+      // with cleanup on — measured from `deletedAt` or the moment cleanup was
+      // switched back on, never earlier, and with no sweep on record that is
+      // the only start there is. Same threshold and the same one-interval
+      // allowance as the shared gap, so a row recorded between two ordinary
+      // ticks is armed at a full window.
+      const rowGapMs =
+        now - Math.max(entry.deletedAt, previousSweepAt ?? entry.deletedAt, cleanupEnabledAt ?? 0);
       const rowUnobservedMs =
         rowGapMs > deps.maxObservedGapMs ? rowGapMs - DELETED_WORKTREE_SWEEP_INTERVAL_MS : 0;
       expiresAt = now + ttlMs - unobservedSpendMs(rowUnobservedMs);
@@ -540,6 +539,15 @@ export function startDeletedWorktreeCleanup(): () => void {
     if (phase === "revealed") sweepDeletedWorktreeCleanup();
   });
 
+  const offCleanupPreference = usePreferencesStore.subscribe((state, prevState) => {
+    if (
+      prevState.deletedWorktreeCleanupSeconds === 0 &&
+      state.deletedWorktreeCleanupSeconds !== 0
+    ) {
+      cleanupEnabledAt = DEFAULT_DEPS.now();
+    }
+  });
+
   const offRows = useWorktreeSelectionStore.subscribe((state, prevState) => {
     if (state.deletedWorktrees === prevState.deletedWorktrees) return;
     if (state.deletedWorktrees.size > 0) {
@@ -560,6 +568,7 @@ export function startDeletedWorktreeCleanup(): () => void {
   return () => {
     stopSweeping();
     offRows();
+    offCleanupPreference();
     offViewLifecycle();
     document.removeEventListener("visibilitychange", onVisibilityChange);
   };

@@ -656,14 +656,15 @@ describe("sweepDeletedWorktreeCleanup", () => {
     sweepDeletedWorktreeCleanup(makeDeps({ ...OBSERVED, now: () => at }));
 
     expect(bulkTrashByWorktree).not.toHaveBeenCalled();
-    // Four minutes away takes 48s off a 60s countdown, not all of it.
+    // Four minutes away takes under 49s off a 60s countdown, not all of it.
     expect(getRemainingAt(at)).toBe(TTL_MS - spentAcrossGap(gapMs));
-    expect(getRemainingAt(at)).toBe(12_200);
+    expect(getRemainingAt(at)).toBeGreaterThan(0);
   });
 
   it("spends observed and unobserved time at their own rates on one row (#13538)", () => {
     // The issue's own example: 20s on screen leaves 40s, which then takes
-    // 200s unobserved.
+    // about 200s unobserved — 196s, since the return sweep spends its first
+    // interval in full.
     addRow();
     sweepDeletedWorktreeCleanup(makeDeps({ ...OBSERVED }));
     let at = NOW;
@@ -683,7 +684,7 @@ describe("sweepDeletedWorktreeCleanup", () => {
     }
     expect(bulkTrashByWorktree).not.toHaveBeenCalled();
 
-    // …and 200s away runs the 40s out, cleaned up on the first sweep back.
+    // …and 200s away has run the 40s out, cleaned up on the first sweep back.
     hiddenAt += DELETED_WORKTREE_SWEEP_INTERVAL_MS;
     sweepDeletedWorktreeCleanup(makeDeps({ ...OBSERVED, now: () => hiddenAt }));
     expect(bulkTrashByWorktree).toHaveBeenCalledTimes(1);
@@ -745,20 +746,26 @@ describe("sweepDeletedWorktreeCleanup", () => {
     expect(getRemainingAt(at)).toBe(TTL_MS);
   });
 
-  it("grants a full window when cleanup is turned back on after a long absence", () => {
-    // A row disarmed under Never is unarmed again but not fresh: time the
-    // countdown was switched off is not time it should have been spending.
-    usePreferencesStore.setState({ deletedWorktreeCleanupSeconds: 0 });
-    addRow();
+  it("holds a fresh aged row whose agent is still working instead of trashing it", () => {
+    // Arrived while unobserved and long since out of slowed window, but the
+    // agent is still working: the hold wins, pinned at nothing left rather
+    // than a fresh window, and the row goes once the agent stops.
+    setPanels([{ id: "t1", worktreeId: "wt-1", agentState: "working" }]);
+    usePanelStore.setState({ bulkTrashByWorktree });
     sweepDeletedWorktreeCleanup(makeDeps({ ...OBSERVED }));
-    expect(getExpiry()).toBeNull();
-
-    usePreferencesStore.setState({ deletedWorktreeCleanupSeconds: 60 });
+    addRow({ deletedAt: NOW });
     const at = NOW + 10 * 60_000;
     sweepDeletedWorktreeCleanup(makeDeps({ ...OBSERVED, now: () => at }));
 
+    expect(getHoldReason()).toBe("agent");
+    expect(getRemainingAt(at)).toBe(0);
     expect(bulkTrashByWorktree).not.toHaveBeenCalled();
-    expect(getRemainingAt(at)).toBe(TTL_MS);
+
+    setPanels([{ id: "t1", worktreeId: "wt-1", agentState: "idle" }]);
+    usePanelStore.setState({ bulkTrashByWorktree });
+    const after = at + DELETED_WORKTREE_SWEEP_INTERVAL_MS;
+    sweepDeletedWorktreeCleanup(makeDeps({ ...OBSERVED, now: () => after }));
+    expect(bulkTrashByWorktree).toHaveBeenCalledTimes(1);
   });
 
   it("cleans up a burst that ran out while unobserved with one inbox entry", () => {
@@ -864,7 +871,10 @@ describe("sweepDeletedWorktreeCleanup", () => {
     // Cached for longer than the agent cap. If the cap counted that — even at
     // the deadline's slowed rate — the row would wake with its protection
     // already gone and trash a working agent the sweep could not see.
-    const at = NOW + DELETED_WORKTREE_AGENT_HOLD_CAP_MS + 60_000;
+    // Longer than the cap even at the slowed rate, so a cap charged a fifth of
+    // the gap would be caught too.
+    const at =
+      NOW + DELETED_WORKTREE_AGENT_HOLD_CAP_MS * DELETED_WORKTREE_UNOBSERVED_SLOWDOWN + 60_000;
     sweepDeletedWorktreeCleanup(makeDeps({ ...observed, now: () => at }));
 
     expect(getHoldReason()).toBe("agent");

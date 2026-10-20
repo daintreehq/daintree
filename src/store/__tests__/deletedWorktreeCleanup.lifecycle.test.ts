@@ -86,6 +86,22 @@ function spentAcrossGap(gapMs: number): number {
   );
 }
 
+function setAgentState(agentState: string): void {
+  usePanelStore.setState({
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+    panelsById: {
+      t1: {
+        id: "t1",
+        kind: "terminal",
+        title: "t1",
+        worktreeId: "wt-1",
+        location: "grid",
+        agentState,
+      },
+    } as never,
+  });
+}
+
 /** Remaining the row would display right now. */
 function remainingNow(): number | null {
   const expiresAt = getRow()?.expiresAt;
@@ -318,18 +334,81 @@ describe("startDeletedWorktreeCleanup view lifecycle", () => {
     const heldRemaining = remainingNow();
     expect(getRow()?.holdReason).toBe("agent");
 
+    // Past the agent cap even at the slowed rate, so a cap charged a fifth of
+    // the cached stretch would show up here too.
     goCached();
-    advance(90 * 60_000);
+    advance(6 * 60 * 60_000);
     goActive();
     goRevealed();
 
-    // The agent is still working, and the hour and a half spent cached is not
+    // The agent is still working, and the six hours spent cached are not
     // charged against either the countdown or the hold's cap — not even at the
     // slowed rate, since the sweep could not see the agent — otherwise the
     // agent's protection would be gone the moment the user came back.
     expect(getRow()?.holdReason).toBe("agent");
     expect(remainingNow()).toBe(heldRemaining);
     expect(bulkTrashByWorktree).not.toHaveBeenCalled();
+  });
+
+  it("resumes a hold released while cached from its pinned remaining", () => {
+    start();
+    addRow();
+    advance(DELETED_WORKTREE_SWEEP_INTERVAL_MS);
+    advance(10_000);
+    setAgentState("working");
+    advance(DELETED_WORKTREE_SWEEP_INTERVAL_MS);
+    const heldRemaining = remainingNow() ?? 0;
+    expect(getRow()?.holdReason).toBe("agent");
+
+    // The agent finishes while nobody is looking. The sweep could not see when,
+    // so the cached stretch is not charged — the pin is all it knows.
+    goCached();
+    setAgentState("idle");
+    advance(60 * 60_000);
+    goActive();
+    goRevealed();
+
+    expect(getRow()?.holdReason).toBeNull();
+    expect(remainingNow()).toBe(heldRemaining);
+    expect(bulkTrashByWorktree).not.toHaveBeenCalled();
+
+    advance(heldRemaining + DELETED_WORKTREE_SWEEP_INTERVAL_MS);
+    expect(bulkTrashByWorktree).toHaveBeenCalledTimes(1);
+  });
+
+  it("charges a row only from when cleanup was switched back on", () => {
+    // Never was on when the row arrived, and was switched off from another
+    // project's settings while this view was cached — the sweep never saw it.
+    usePreferencesStore.setState({ deletedWorktreeCleanupSeconds: 0 });
+    start();
+    goCached();
+    addRow();
+    advance(10 * 60_000);
+    usePreferencesStore.setState({ deletedWorktreeCleanupSeconds: TTL_SECONDS });
+    const sinceEnabledMs = 60_000;
+    advance(sinceEnabledMs);
+    goActive();
+    goRevealed();
+
+    expect(bulkTrashByWorktree).not.toHaveBeenCalled();
+    expect(remainingNow()).toBe(
+      TTL_MS + DELETED_WORKTREE_SWEEP_INTERVAL_MS - spentAcrossGap(sinceEnabledMs)
+    );
+  });
+
+  it("grants a full window when cleanup is switched back on while watching", () => {
+    usePreferencesStore.setState({ deletedWorktreeCleanupSeconds: 0 });
+    start();
+    goCached();
+    addRow();
+    advance(10 * 60_000);
+    goActive();
+    goRevealed();
+    expect(getRow()?.expiresAt).toBeNull();
+
+    usePreferencesStore.setState({ deletedWorktreeCleanupSeconds: TTL_SECONDS });
+    advance(DELETED_WORKTREE_SWEEP_INTERVAL_MS);
+    expect(remainingNow()).toBe(TTL_MS);
   });
 
   it("re-arms to the new TTL when the preference changed while cached", () => {
@@ -493,9 +572,11 @@ describe("deleted-worktree sweep idle cost", () => {
     hidden = false;
     document.dispatchEvent(new Event("visibilitychange"));
 
-    // The two minutes nobody could see spend at the slowed rate, not in full.
+    // The two minutes nobody could see — plus the idle five before them, still
+    // in the gap — spend at the slowed rate, not in full.
     expect(bulkTrashByWorktree).not.toHaveBeenCalled();
     const expiresAt = useWorktreeSelectionStore.getState().deletedWorktrees.get("wt-2")?.expiresAt;
-    expect((expiresAt ?? 0) - Date.now()).toBeGreaterThan(0);
+    const gapMs = 125_000;
+    expect((expiresAt ?? 0) - Date.now()).toBe(60_000 - 120_000 + gapMs - spentAcrossGap(gapMs));
   });
 });
