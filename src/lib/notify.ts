@@ -1377,7 +1377,7 @@ setPermanentFallbackHandler(() => {
     type: "warning",
     title: "Settings won't be saved",
     message:
-      "Couldn't write to local storage, so changes made this session won't persist after restart.",
+      "Couldn't access local storage, so changes made this session won't persist after restart.",
     // settings is a passive eventKind (→ priority "low" / inbox-only); a
     // storage-failure warning must surface as a toast, so pin it high.
     priority: "high",
