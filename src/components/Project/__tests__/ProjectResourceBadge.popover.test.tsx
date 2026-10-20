@@ -261,6 +261,28 @@ describe("ProjectResourceBadge — popover memory honesty", () => {
     expect(container.textContent?.toLowerCase()).toContain("counted twice");
   });
 
+  it("leaves the high-memory warning to the pressure figure, not the snapshot total (#13637)", async () => {
+    // 8 GB → critical at ~2.7 GB. The snapshot total counts the GPU process's
+    // graphics footprint; the badge's pressure figure doesn't.
+    const snapshot = makeMemorySnapshot();
+    snapshot.electron.totalWorkingSetMb = 4_000;
+    mockGetMemorySnapshot.mockResolvedValue(snapshot);
+    mockGetAppMetrics.mockResolvedValue({ totalMemoryMB: 4_000, pressureMemoryMB: 500 });
+
+    const container = await renderOpenBadge();
+
+    expect(findMemoryRow(container, "3.9 GB")).toBeTruthy();
+    expect(document.body.textContent).not.toContain("memory use is high");
+  });
+
+  it("warns in the popover once the pressure figure itself is high", async () => {
+    mockGetAppMetrics.mockResolvedValue({ totalMemoryMB: 4_000, pressureMemoryMB: 3_000 });
+
+    await renderOpenBadge();
+
+    expect(document.body.textContent).toContain("memory use is high");
+  });
+
   it("stops the popover poll when the project view is cached", async () => {
     await renderOpenBadge();
     const onOpen = mockGetMemorySnapshot.mock.calls.length;

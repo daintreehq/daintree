@@ -58,6 +58,10 @@ import {
 } from "../../../shared/types/powerPolicy.js";
 import { resolveResourceProfileConfig } from "../../utils/resourceProfileConfig.js";
 import { resetAppMetricsSnapshotForTesting } from "../../utils/appMetricsSnapshot.js";
+import {
+  resetPhysFootprintReaderForTesting,
+  setPhysFootprintReaderForTesting,
+} from "../../utils/processMemory.js";
 import { resetMemoryAccountingForTesting } from "../memoryAccounting.js";
 import { getSystemMemoryThresholds } from "../../utils/systemMemory.js";
 import type { MemoryRollup } from "../../../shared/types/pty-host.js";
@@ -1645,6 +1649,41 @@ describe("ResourceProfileService", () => {
       expect(snap.reasons).toEqual([
         { signal: "memory", contribution: 1, detail: expect.stringContaining("app memory") },
       ]);
+    });
+
+    it("scores the GPU process at its resident size, not its graphics footprint (#13637)", () => {
+      vi.spyOn(os, "totalmem").mockReturnValue(16 * 1024 * 1024 * 1024);
+      const service = new ResourceProfileService(createDeps());
+      const gpu = { ...makeMetricMacShape("GPU", 205), pid: 4001 };
+      const browser = { ...makeMetricMacShape("Browser", 150), pid: 4002 };
+      const footprintMbByPid = new Map([
+        [4001, 3328],
+        [4002, 300],
+      ]);
+      setPhysFootprintReaderForTesting({
+        readPhysFootprints: (pids: number[]) =>
+          pids.map((pid) => (footprintMbByPid.get(pid) ?? 0) * 1024 * 1024),
+        isAvailable: () => true,
+        getLoadError: () => null,
+      });
+      try {
+        mockGetAppMetrics.mockReturnValue([gpu, browser]);
+        resetAppMetricsSnapshotForTesting();
+
+        const snap = service.getWhySlowResourceSnapshot();
+
+        expect(snap.reasons.filter((r) => r.signal === "memory")).toEqual([]);
+        expect(snap.pressureScore).toBe(0);
+
+        // Non-GPU footprint still counts: 16 GB → LOW ~1311MB.
+        footprintMbByPid.set(4002, 1500);
+        resetAppMetricsSnapshotForTesting();
+        expect(service.getWhySlowResourceSnapshot().reasons).toEqual([
+          { signal: "memory", contribution: 1, detail: "app memory 1705MB" },
+        ]);
+      } finally {
+        resetPhysFootprintReaderForTesting();
+      }
     });
 
     it("keeps pressureScore equal to the summed reason contributions (drift guard)", () => {

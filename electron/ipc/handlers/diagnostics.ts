@@ -33,7 +33,7 @@ import {
 } from "../../services/ProcessMemoryMonitor.js";
 import { parseInputBlockingSnapshot } from "../../utils/inputBlockingSnapshot.js";
 import { getAppMetricsSnapshot } from "../../utils/appMetricsSnapshot.js";
-import { getProcessMemoryKb } from "../../utils/processMemory.js";
+import { getPressureMemoryKb, getProcessMemoryKb } from "../../utils/processMemory.js";
 import { getRegisteredProjectViews } from "../../window/webContentsRegistry.js";
 import { projectStore } from "../../services/ProjectStore.js";
 
@@ -393,10 +393,15 @@ export function registerDiagnosticsHandlers(deps: HandlerDependencies): () => vo
     try {
       const metrics = getAppMetricsSnapshot();
       let totalKB = 0;
+      let pressureKB = 0;
       for (const proc of metrics) {
         totalKB += getProcessMemoryKb(proc);
+        pressureKB += getPressureMemoryKb(proc);
       }
-      return { totalMemoryMB: Math.round(totalKB / 1024) };
+      return {
+        totalMemoryMB: Math.round(totalKB / 1024),
+        pressureMemoryMB: Math.round(pressureKB / 1024),
+      };
     } catch {
       // Distinguish a real read failure from a genuine 0 reading so the badge
       // can suppress the value instead of rendering a misleading "0MB".

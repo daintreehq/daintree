@@ -109,6 +109,17 @@ export function getProcessMemoryMb(metric: Electron.ProcessMetric): number {
   return getProcessMemoryKb(metric) / 1024;
 }
 
+/**
+ * Memory of one process as the pressure heuristics count it (#13637): the GPU
+ * process at its resident size, everything else as {@link getProcessMemoryKb}.
+ * The GPU process's footprint is mostly IOSurface and Metal memory, gigabytes
+ * of graphics cache on a busy display, while the score and badge thresholds
+ * were tuned on its ~200 MB resident reading. Elsewhere the two are the same.
+ */
+export function getPressureMemoryKb(metric: Electron.ProcessMetric): number {
+  return metric.type === "GPU" ? metric.memory.workingSetSize : getProcessMemoryKb(metric);
+}
+
 /** What {@link getProcessMemoryKb} measures for the processes of this sweep. */
 export function getMetricsMemorySource(metrics: readonly Electron.ProcessMetric[]): MemorySource {
   return footprintSweeps.has(metrics) ? "footprint" : "resident";

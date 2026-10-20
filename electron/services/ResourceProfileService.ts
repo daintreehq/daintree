@@ -20,7 +20,7 @@ import {
   readExcessEventLoopDelay,
 } from "../utils/eventLoopDelay.js";
 import { getAppMetricsSnapshot } from "../utils/appMetricsSnapshot.js";
-import { getProcessMemoryMb } from "../utils/processMemory.js";
+import { getPressureMemoryKb } from "../utils/processMemory.js";
 import { getCachedMemoryRollup } from "./memoryAccounting.js";
 import type { PtyClient } from "./PtyClient.js";
 import type { WorkspaceClient } from "./WorkspaceClient.js";
@@ -874,21 +874,22 @@ export class ResourceProfileService {
     // full process table back-to-back.
     try {
       const metrics = getAppMetricsSnapshot();
-      let totalPrivateMb = 0;
+      let totalKb = 0;
       for (const proc of metrics) {
-        totalPrivateMb += getProcessMemoryMb(proc);
+        totalKb += getPressureMemoryKb(proc);
       }
+      const appMemoryMb = totalKb / 1024;
 
-      if (totalPrivateMb > this.memoryThresholdHighMb) {
+      if (appMemoryMb > this.memoryThresholdHighMb) {
         memoryScore = 2;
-      } else if (totalPrivateMb > this.memoryThresholdLowMb) {
+      } else if (appMemoryMb > this.memoryThresholdLowMb) {
         memoryScore = 1;
       }
       if (memoryScore > 0) {
         reasons.push({
           signal: "memory",
           contribution: memoryScore,
-          detail: `app memory ${Math.round(totalPrivateMb)}MB`,
+          detail: `app memory ${Math.round(appMemoryMb)}MB`,
         });
       }
     } catch {
