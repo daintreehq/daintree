@@ -84,6 +84,27 @@ describe("RunCommandDetector", () => {
     ]);
   });
 
+  it("uses explicit yarn run so built-in names cannot shadow project scripts", async () => {
+    await fs.writeFile(
+      path.join(tempDir, "package.json"),
+      JSON.stringify({
+        name: "test",
+        scripts: { dev: "vite", help: "echo marker", install: "echo setup" },
+      }),
+      "utf-8"
+    );
+    await fs.writeFile(path.join(tempDir, "yarn.lock"), "", "utf-8");
+
+    const commands = await detector.detect(tempDir);
+    const npmCommands = commands.filter((cmd) => cmd.id.startsWith("npm-"));
+
+    expect(npmCommands).toEqual([
+      expect.objectContaining({ id: "npm-dev", command: "yarn run dev" }),
+      expect.objectContaining({ id: "npm-help", command: "yarn run help" }),
+      expect.objectContaining({ id: "npm-install", command: "yarn run install" }),
+    ]);
+  });
+
   it("filters composer scripts with unsafe names", async () => {
     const scripts: Record<string, string> = {
       test: "phpunit",

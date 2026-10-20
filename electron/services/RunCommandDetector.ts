@@ -174,7 +174,7 @@ export class RunCommandDetector {
       } else if (existsSync(path.join(root, "pnpm-lock.yaml"))) {
         runner = "pnpm run";
       } else if (existsSync(path.join(root, "yarn.lock"))) {
-        runner = "yarn";
+        runner = "yarn run";
       }
 
       const commands: RunCommand[] = Object.entries(pkg.scripts)
