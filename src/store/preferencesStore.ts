@@ -190,8 +190,9 @@ interface PreferencesState {
   setSkipPushConfirmForWorktree: (worktreePath: string, value: boolean) => void;
   /**
    * How long a deleted worktree's row holds its surviving terminals before
-   * they are moved to trash automatically. The countdown measures time the
-   * project view was actually awake, and holds — for a bounded stretch — while
+   * they are moved to trash automatically. The countdown runs in real time
+   * while the project view is on screen and five times slower while it is
+   * cached or the window is hidden, and holds — for a bounded stretch — while
    * a drag is in progress, an agent is still working, or the row's
    * close-confirm dialog is open (`deletedWorktreeCleanup.ts`).
    * 0 disables auto-cleanup.

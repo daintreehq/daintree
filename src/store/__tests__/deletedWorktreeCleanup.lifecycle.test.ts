@@ -6,6 +6,7 @@ import { useWorktreeSelectionStore, type DeletedWorktree } from "@/store/worktre
 import { __resetProjectViewCacheStateForTests } from "@/lib/viewCacheState";
 import {
   DELETED_WORKTREE_SWEEP_INTERVAL_MS,
+  DELETED_WORKTREE_UNOBSERVED_SLOWDOWN,
   resetDeletedWorktreeCleanupState,
   startDeletedWorktreeCleanup,
 } from "../deletedWorktreeCleanup";
@@ -77,6 +78,14 @@ function getRow(): DeletedWorktree | undefined {
   return useWorktreeSelectionStore.getState().deletedWorktrees.get("wt-1");
 }
 
+/** What an unobserved gap of `gapMs` spends: one interval in full, the rest slowed. */
+function spentAcrossGap(gapMs: number): number {
+  return (
+    DELETED_WORKTREE_SWEEP_INTERVAL_MS +
+    Math.floor((gapMs - DELETED_WORKTREE_SWEEP_INTERVAL_MS) / DELETED_WORKTREE_UNOBSERVED_SLOWDOWN)
+  );
+}
+
 /** Remaining the row would display right now. */
 function remainingNow(): number | null {
   const expiresAt = getRow()?.expiresAt;
@@ -138,7 +147,7 @@ afterEach(() => {
 });
 
 describe("startDeletedWorktreeCleanup view lifecycle", () => {
-  it("does not trash a row whose deadline elapsed while the view was cached", () => {
+  it("spends a cached stretch at the slowed rate instead of in real time", () => {
     start();
     addRow();
     advance(DELETED_WORKTREE_SWEEP_INTERVAL_MS);
@@ -149,34 +158,64 @@ describe("startDeletedWorktreeCleanup view lifecycle", () => {
     expect(remainingWhenCached).toBeGreaterThan(0);
 
     goCached();
-    // Away far longer than the whole TTL — this is the case that used to trash
-    // surviving agents on the first tick after thaw with no window to react.
-    advance(60 * 60_000);
+    // Two minutes away is longer than the remaining TTL in wall time, which
+    // used to be the case that trashed surviving agents on the first tick
+    // after thaw with no window to react.
+    const awayMs = 2 * 60_000;
+    advance(awayMs);
     goActive();
     goRevealed();
 
     expect(bulkTrashByWorktree).not.toHaveBeenCalled();
-    // The hour is credited back; only the interval every sweep always spends
-    // comes off, so the user still returns to a real rescue window.
     const spentWhileAway = (remainingWhenCached ?? 0) - (remainingNow() ?? 0);
-    expect(spentWhileAway).toBeLessThanOrEqual(DELETED_WORKTREE_SWEEP_INTERVAL_MS);
-    expect(remainingNow()).toBeGreaterThan(0);
+    expect(spentWhileAway).toBe(spentAcrossGap(awayMs));
   });
 
-  it("arms a row recorded while the view was cached instead of trashing it on wake", () => {
+  it("cleans up on reveal a row whose slowed countdown ran out while cached", () => {
+    start();
+    addRow();
+    advance(DELETED_WORKTREE_SWEEP_INTERVAL_MS);
+    advance(10_000);
+
+    goCached();
+    advance(60 * 60_000);
+    expect(bulkTrashByWorktree).not.toHaveBeenCalled();
+    goActive();
+    goRevealed();
+
+    // No fresh window: the hour away spent far more than the row had left.
+    expect(bulkTrashByWorktree).toHaveBeenCalledTimes(1);
+  });
+
+  it("charges a row recorded while the view was cached for its time away", () => {
     start();
     goCached();
     // Main keeps broadcasting worktree-removed to a cached view.
+    addRow();
+    const awayMs = 2 * 60_000;
+    advance(awayMs);
+    expect(getRow()?.expiresAt).toBeNull();
+    goActive();
+    goRevealed();
+
+    expect(bulkTrashByWorktree).not.toHaveBeenCalled();
+    expect(remainingNow()).toBe(
+      TTL_MS + DELETED_WORKTREE_SWEEP_INTERVAL_MS - spentAcrossGap(awayMs)
+    );
+  });
+
+  it("cleans up on reveal a row recorded while cached that has outlived its slowed window", () => {
+    start();
+    goCached();
     addRow();
     advance(60 * 60_000);
     goActive();
     goRevealed();
 
-    expect(bulkTrashByWorktree).not.toHaveBeenCalled();
-    expect(remainingNow()).toBe(TTL_MS);
+    expect(bulkTrashByWorktree).toHaveBeenCalledTimes(1);
   });
 
-  it("charges only awake time across repeated cache cycles", () => {
+  it("charges awake time in full and cached time slowed across repeated cache cycles", () => {
     start();
     addRow();
     advance(DELETED_WORKTREE_SWEEP_INTERVAL_MS);
@@ -184,23 +223,22 @@ describe("startDeletedWorktreeCleanup view lifecycle", () => {
     expect(startRemaining).toBeGreaterThan(0);
 
     const cycles = 3;
+    const cachedMs = 30_000;
     let awakeMs = 0;
     for (let cycle = 0; cycle < cycles; cycle++) {
       advance(5_000);
       awakeMs += 5_000;
       goCached();
-      advance(30 * 60_000);
+      advance(cachedMs);
       goActive();
       goRevealed();
     }
 
-    // An hour and a half of wall clock passed, of which 15s was watchable.
-    // Each cycle spends its awake seconds plus the one interval every sweep
-    // always spends, and none of its cached ones — so the countdown neither
-    // stalls nor gets re-granted by switching projects.
+    // Each cycle spends its awake seconds in full and its cached ones at the
+    // slowed rate — so the countdown neither stalls nor gets re-granted by
+    // switching projects.
     const spent = startRemaining - (remainingNow() ?? 0);
-    expect(spent).toBeGreaterThanOrEqual(awakeMs);
-    expect(spent).toBeLessThanOrEqual(awakeMs + cycles * DELETED_WORKTREE_SWEEP_INTERVAL_MS);
+    expect(spent).toBe(awakeMs + cycles * spentAcrossGap(cachedMs));
     expect(bulkTrashByWorktree).not.toHaveBeenCalled();
   });
 
@@ -239,18 +277,22 @@ describe("startDeletedWorktreeCleanup view lifecycle", () => {
   it("arms a row added during a cached start only once the view is back", () => {
     // The switch-storm case: the view was already cached before this module
     // evaluated, so no `cached` phase is ever delivered and the latch is the
-    // only thing that knows.
+    // only thing that knows. No sweep has ever run, so the row's own
+    // `deletedAt` is the only start its time away can be measured from.
     latchedCached = true;
     start();
     addRow();
-    advance(60 * 60_000);
+    const awayMs = 2 * 60_000;
+    advance(awayMs);
     expect(getRow()?.expiresAt).toBeNull();
 
     goActive();
     goRevealed();
 
     expect(bulkTrashByWorktree).not.toHaveBeenCalled();
-    expect(remainingNow()).toBe(TTL_MS);
+    expect(remainingNow()).toBe(
+      TTL_MS + DELETED_WORKTREE_SWEEP_INTERVAL_MS - spentAcrossGap(awayMs)
+    );
   });
 
   it("keeps a hold's remaining and its cap across a long cache", () => {
@@ -282,7 +324,8 @@ describe("startDeletedWorktreeCleanup view lifecycle", () => {
     goRevealed();
 
     // The agent is still working, and the hour and a half spent cached is not
-    // charged against either the countdown or the hold's cap — otherwise the
+    // charged against either the countdown or the hold's cap — not even at the
+    // slowed rate, since the sweep could not see the agent — otherwise the
     // agent's protection would be gone the moment the user came back.
     expect(getRow()?.holdReason).toBe("agent");
     expect(remainingNow()).toBe(heldRemaining);
@@ -437,7 +480,7 @@ describe("deleted-worktree sweep idle cost", () => {
     );
   });
 
-  it("still credits a hidden stretch to a row that arrives already armed after the map emptied", () => {
+  it("still slows a hidden stretch for a row that arrives already armed after the map emptied", () => {
     disposeCleanup = startDeletedWorktreeCleanup();
     addRow("wt-1");
     vi.advanceTimersByTime(1_000);
@@ -450,7 +493,7 @@ describe("deleted-worktree sweep idle cost", () => {
     hidden = false;
     document.dispatchEvent(new Event("visibilitychange"));
 
-    // The two minutes nobody could see are credited, not spent.
+    // The two minutes nobody could see spend at the slowed rate, not in full.
     expect(bulkTrashByWorktree).not.toHaveBeenCalled();
     const expiresAt = useWorktreeSelectionStore.getState().deletedWorktrees.get("wt-2")?.expiresAt;
     expect((expiresAt ?? 0) - Date.now()).toBeGreaterThan(0);
