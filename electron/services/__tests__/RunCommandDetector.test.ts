@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { execFileSync } from "child_process";
 import fs from "fs/promises";
 import os from "os";
 import path from "path";
+import { setAgentCommandDialectResolver } from "../../../shared/utils/shellEscape.js";
 import { RunCommandDetector } from "../RunCommandDetector.js";
 
 describe("RunCommandDetector", () => {
@@ -901,6 +903,100 @@ describe("RunCommandDetector", () => {
       const dc = commands.filter((cmd) => cmd.id === "devcontainer-poststart");
 
       expect(dc[0]?.command).toBe("npm run dev");
+    });
+
+    describe("array argv serialization", () => {
+      const writeDevcontainer = async (postStartCommand: unknown) => {
+        const devcontainerDir = path.join(tempDir, ".devcontainer");
+        await fs.mkdir(devcontainerDir);
+        await fs.writeFile(
+          path.join(devcontainerDir, "devcontainer.json"),
+          JSON.stringify({ postStartCommand }),
+          "utf-8"
+        );
+      };
+
+      const detectCommand = async () => {
+        const commands = await detector.detect(tempDir);
+        return commands.find((cmd) => cmd.id === "devcontainer-poststart")?.command;
+      };
+
+      beforeEach(() => {
+        setAgentCommandDialectResolver(() => "posix");
+      });
+
+      afterEach(() => {
+        setAgentCommandDialectResolver(null);
+      });
+
+      const reproArgv = ["node", "-e", "process.stdout.write('audit-marker')"];
+      const reproCommand = "node -e 'process.stdout.write('\\''audit-marker'\\'')'";
+
+      it("quotes shell-significant tokens in a top-level array", async () => {
+        await writeDevcontainer(reproArgv);
+        expect(await detectCommand()).toBe(reproCommand);
+      });
+
+      it("quotes shell-significant tokens in an object-member array", async () => {
+        await writeDevcontainer({ server: reproArgv });
+        expect(await detectCommand()).toBe(reproCommand);
+      });
+
+      it("preserves spaces, empty arguments and punctuation", async () => {
+        await writeDevcontainer(["printf", "%s|", "a b", "", "$HOME;&>x", "*"]);
+        expect(await detectCommand()).toBe("printf '%s|' 'a b' '' '$HOME;&>x' '*'");
+      });
+
+      it("keeps a literal trailing & argument instead of stripping it", async () => {
+        await writeDevcontainer(["echo", "a", "&"]);
+        expect(await detectCommand()).toBe("echo a '&'");
+      });
+
+      it("drops a leading nohup token", async () => {
+        await writeDevcontainer(["nohup", "npm", "run", "dev"]);
+        expect(await detectCommand()).toBe("npm run dev");
+      });
+
+      it("keeps the bash -c interpreter while stripping a backgrounded script", async () => {
+        await writeDevcontainer(["bash", "-c", "nohup npm run dev &"]);
+        expect(await detectCommand()).toBe("bash -c 'npm run dev'");
+      });
+
+      it("rejects arrays with non-string items instead of shifting argv", async () => {
+        await writeDevcontainer(["node", 42, "server.js"]);
+        expect(await detectCommand()).toBeUndefined();
+      });
+
+      it("falls through to the next key when an object-member array is invalid", async () => {
+        await writeDevcontainer({ server: ["node", null], dev: ["npm", "run", "dev"] });
+        expect(await detectCommand()).toBe("npm run dev");
+      });
+
+      it("uses PowerShell quoting with the call operator under the windows dialect", async () => {
+        setAgentCommandDialectResolver(() => "windows");
+        await writeDevcontainer(["C:\\Program Files\\nodejs\\node.exe", "-e", "it's", ""]);
+        expect(await detectCommand()).toBe("& 'C:\\Program Files\\nodejs\\node.exe' -e 'it''s' ''");
+      });
+
+      it.skipIf(process.platform === "win32")(
+        "round-trips argv through a POSIX shell",
+        async () => {
+          const argv = ["it's", "a b", "", "$HOME", "`x`", "a\\b", "*", ";&|"];
+          await writeDevcontainer([
+            process.execPath,
+            "-e",
+            "process.stdout.write(JSON.stringify(process.argv.slice(1)))",
+            ...argv,
+          ]);
+          const command = await detectCommand();
+          expect(command).toBeDefined();
+          const output = execFileSync("/bin/sh", ["-c", command!], {
+            cwd: tempDir,
+            encoding: "utf-8",
+          });
+          expect(JSON.parse(output)).toEqual(argv);
+        }
+      );
     });
 
     it("picks highest-priority key from object postStartCommand", async () => {

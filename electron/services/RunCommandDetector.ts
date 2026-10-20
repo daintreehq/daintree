@@ -7,6 +7,7 @@ import type { RunCommand } from "../types/index.js";
 import { Cache } from "../utils/cache.js";
 import { YAML_MERGE_SCHEMA } from "../utils/yamlMergeSchema.js";
 import { stripUtf8Bom } from "../utils/stripUtf8Bom.js";
+import { agentCommandDialect, quoteLaunchArgOptional } from "../../shared/utils/shellEscape.js";
 
 const RESERVED_SCRIPT_NAMES = new Set(["__proto__", "constructor", "prototype"]);
 const COMPOSER_LIFECYCLE_SCRIPTS = new Set([
@@ -521,17 +522,15 @@ export class RunCommandDetector {
       let command: string | undefined;
 
       if (typeof postStart === "string") {
-        command = postStart.trim();
+        command = this.stripShellWrappers(postStart);
       } else if (Array.isArray(postStart)) {
-        command = postStart
-          .filter((item): item is string => typeof item === "string")
-          .join(" ")
-          .trim();
+        command = this.argvToCommand(postStart);
       } else if (typeof postStart === "object" && postStart !== null) {
         const keys = Object.keys(postStart as Record<string, unknown>);
         if (keys.length > 0) {
           const isValidVal = (v: unknown): boolean =>
-            (typeof v === "string" && v.trim().length > 0) || Array.isArray(v);
+            (typeof v === "string" && v.trim().length > 0) ||
+            (Array.isArray(v) && this.argvToCommand(v) !== undefined);
 
           const keyPriority = ["server", "dev", "start", "app"];
           const bestKey =
@@ -546,20 +545,14 @@ export class RunCommandDetector {
           if (bestKey) {
             const val = (postStart as Record<string, unknown>)[bestKey];
             if (typeof val === "string") {
-              command = val.trim();
+              command = this.stripShellWrappers(val);
             } else if (Array.isArray(val)) {
-              command = val
-                .filter((item): item is string => typeof item === "string")
-                .join(" ")
-                .trim();
+              command = this.argvToCommand(val);
             }
           }
         }
       }
 
-      if (!command || command.length === 0) return [];
-
-      command = this.stripShellWrappers(command);
       if (!command || command.length === 0) return [];
 
       return [
@@ -575,6 +568,33 @@ export class RunCommandDetector {
       console.warn(`[RunCommandDetector] Failed to parse ${devcontainerPath}:`, error);
       return [];
     }
+  }
+
+  /**
+   * Array lifecycle commands are exec'd without a shell, but the detected
+   * command runs through one, so every token is quoted to survive intact.
+   * Wrapper stripping happens on tokens: a quoted `'&'` is a literal argument.
+   */
+  private argvToCommand(items: unknown[]): string | undefined {
+    if (!items.every((item): item is string => typeof item === "string")) return undefined;
+    let argv: string[] = items;
+
+    if (argv[0] === "nohup") argv = argv.slice(1);
+
+    // Keep the named interpreter: the host shell may not run a bash script the same way.
+    if (argv.length === 3 && (argv[0] === "bash" || argv[0] === "sh") && argv[1] === "-c") {
+      const script = this.stripShellWrappers(argv[2]);
+      if (script.length === 0) return undefined;
+      argv = [argv[0], "-c", script];
+    }
+
+    if (argv.length === 0 || argv[0].length === 0) return undefined;
+
+    const dialect = agentCommandDialect();
+    const quoted = argv.map((arg) => quoteLaunchArgOptional(arg, dialect));
+    // PowerShell treats a quoted first token as a string expression, not a command.
+    if (dialect === "windows" && quoted[0] !== argv[0]) quoted[0] = `& ${quoted[0]}`;
+    return quoted.join(" ");
   }
 
   private stripShellWrappers(command: string): string {
