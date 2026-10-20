@@ -70,24 +70,34 @@ export function formatByte(byte) {
   return `0x${byte.toString(16).padStart(2, "0")}`;
 }
 
+// Paths stay as raw bytes: git allows filenames that are not valid UTF-8, and
+// decoding them would point lstat at a different, nonexistent path.
 function listTrackedFiles() {
-  return execFileSync("git", ["ls-files", "-z"], { cwd: root, maxBuffer: 64 * 1024 * 1024 })
-    .toString("utf8")
-    .split("\0")
-    .filter(Boolean);
+  const out = execFileSync("git", ["ls-files", "-z"], { cwd: root, maxBuffer: 64 * 1024 * 1024 });
+  const paths = [];
+  let start = 0;
+  for (let i = 0; i < out.length; i++) {
+    if (out[i] !== 0) continue;
+    if (i > start) paths.push(out.subarray(start, i));
+    start = i + 1;
+  }
+  return paths;
 }
 
 function main() {
   let failures = 0;
   let scanned = 0;
-  for (const rel of listTrackedFiles()) {
+  const rootPrefix = Buffer.from(root + path.sep);
+  for (const relBytes of listTrackedFiles()) {
+    const rel = relBytes.toString("utf8");
     if (isBinaryPath(rel)) continue;
-    const abs = path.join(root, rel);
+    const abs = Buffer.concat([rootPrefix, relBytes]);
     let stat;
     try {
       stat = lstatSync(abs);
-    } catch {
-      continue; // tracked but deleted in the working tree
+    } catch (error) {
+      if (error.code === "ENOENT" || error.code === "ENOTDIR") continue; // tracked but deleted in the working tree
+      throw error;
     }
     if (!stat.isFile()) continue; // symlinks, submodule gitlinks
     scanned++;
