@@ -374,13 +374,36 @@ describe("sanitizeEvent — breadcrumb canaries (#13541)", () => {
             type: EMAIL,
             mechanism: { type: "generic", data: { url: `/repos/${OWNER}/${REPO}` } },
             stacktrace: {
-              frames: [{ filename: "app:///dist/renderer.js?q=query13541#fragment13541" }],
+              frames: [
+                {
+                  filename: "app:///dist/renderer.js?q=query13541#fragment13541",
+                  function: `Object.${EMAIL}`,
+                  module: `-Users-${USER}-project13541`,
+                },
+              ],
             },
           },
         ],
       },
       debug_meta: { images: [{ code_file: `app:///dist/main.js?${ENCODED_EMAIL}` }] },
-      threads: { values: [{ name: `worker for ${EMAIL}` }] },
+      threads: {
+        values: [
+          {
+            name: `worker for ${EMAIL}`,
+            stacktrace: {
+              frames: [
+                {
+                  filename: "app:///dist/worker.js",
+                  function: EMAIL,
+                  module: `/Users/${USER}/app`,
+                  context_line: `fetch("${REST_URL}")`,
+                  vars: { url: `/repos/${OWNER}/${REPO}?q=query13541` },
+                },
+              ],
+            },
+          },
+        ],
+      },
     } as unknown as SentryEvent;
     const result = sanitizeEvent(event);
     expectNoCanaries(result);
@@ -388,6 +411,13 @@ describe("sanitizeEvent — breadcrumb canaries (#13541)", () => {
     expect(result?.exception?.values?.[0]?.stacktrace?.frames?.[0]?.filename).toBe(
       "app:///dist/renderer.js"
     );
+    const threadFrame = (
+      result?.threads as {
+        values: Array<{ stacktrace: { frames: Array<Record<string, unknown>> } }>;
+      }
+    ).values[0].stacktrace.frames[0];
+    expect(threadFrame.filename).toBe("app:///dist/worker.js");
+    expect(threadFrame.vars).toEqual({ url: "[REDACTED_URL]" });
   });
 
   it("scrubs string-valued breadcrumb data and nested relative url keys", () => {
@@ -412,6 +442,9 @@ describe("sanitizeEvent — breadcrumb canaries (#13541)", () => {
       `GET https://api.github.com/repos/${OWNER}/${REPO}(name)?query13541=1#fragment13541`,
       `wss://api.github.com/repos/${OWNER}/${REPO}?query13541=1`,
       `remote git@github.com:${OWNER}/${REPO}.git`,
+      JSON.stringify({
+        url: `https://api.github.com/x?q="query13541"&next=/repos/${OWNER}/${REPO}`,
+      }),
     ].join("\n");
     const result = sanitizeEvent({ breadcrumbs: [{ category: "console", message: text }] });
     expectNoCanaries(result);
@@ -426,6 +459,8 @@ describe("sanitizeEvent — breadcrumb canaries (#13541)", () => {
       "alice13541%40privacy%2Eexample",
       "Name <alice13541@privacy.example>",
       "mailto:alice13541@privacy.example",
+      "git@privacy13541.example",
+      "git%40privacy13541.example",
     ];
     for (const address of addresses) {
       const result = sanitizeEvent({ message: `author ${address} pushed` });

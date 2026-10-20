@@ -57,20 +57,21 @@ export interface SentryEvent {
 // style config values as credentials. Matches the `%40`/`%2E`-encoded forms
 // query strings carry; the lookbehind makes the whole local part go, not just
 // a suffix of it. The TLD must be alphabetic so `pkg@1.2.3` survives, and the
-// `git@` of an SSH remote is left to the remote rule.
+// `git@host:` of an SSH remote is left to the remote rule.
 const EMAIL_LOCAL_CHARS = "A-Za-z0-9._%+!#$&'*~-";
 const EMAIL_REGEX = new RegExp(
-  `(?<![${EMAIL_LOCAL_CHARS}])(?!git(?:@|%40))[${EMAIL_LOCAL_CHARS}]{1,256}(?:@|%40)` +
+  `(?<![${EMAIL_LOCAL_CHARS}])(?!git@[A-Za-z0-9.-]{1,253}:)[${EMAIL_LOCAL_CHARS}]{1,256}(?:@|%40)` +
     `(?:[A-Za-z0-9-]{1,63}(?:\\.|%2E)){1,10}[A-Za-z]{2,63}\\b`,
   "gi"
 );
 // SSH remotes name the (possibly private) owner and repo.
 const SSH_REMOTE_REGEX =
   /\b(git@[A-Za-z0-9.-]{1,253}:)[A-Za-z0-9._-]{1,100}\/[A-Za-z0-9._-]{1,100}(?:\/[A-Za-z0-9._-]{1,100}){0,10}/g;
-// Also matches the slash-escaped form a JSON-stringified log argument carries.
+// Also matches the escaped form a JSON-stringified log argument carries (`\/`,
+// and `\"` inside a query value).
 // Parentheses and apostrophes are legal inside a URL path, so they don't end
 // the match; a closing one from surrounding prose goes with the path.
-const EMBEDDED_URL_REGEX = /\b(?:https?|wss?|ssh|git):(?:\/\/|\\\/\\\/)(?:\\\/|[^\s"`<>\\])+/gi;
+const EMBEDDED_URL_REGEX = /\b(?:https?|wss?|ssh|git):(?:\/\/|\\\/\\\/)(?:\\[/"]|[^\s"`<>\\])+/gi;
 const ORIGIN_PROTOCOLS = new Set(["http:", "https:", "ws:", "wss:"]);
 const REDACTED_URL = "[REDACTED_URL]";
 
@@ -119,6 +120,27 @@ function sanitizeLocation(value: string): string {
     }
   }
   return scrubText(value);
+}
+
+const FRAME_LOCATION_KEYS = new Set(["filename", "abs_path"]);
+
+// Shared by exception and thread stacks. contextLinesIntegration and
+// localVariablesIntegration (default integrations in @sentry/electron) fill
+// `context_line`, `pre_context`/`post_context` and `vars` with raw source lines
+// and local values before beforeSend fires; `function` and `module` are
+// caller-influenced too (computed method names), so every field is scrubbed.
+function sanitizeFrames(frames: unknown): void {
+  if (!Array.isArray(frames)) return;
+  for (const frame of frames) {
+    if (!frame || typeof frame !== "object") continue;
+    const record = frame as Record<string, unknown>;
+    for (const [key, val] of Object.entries(record)) {
+      record[key] =
+        FRAME_LOCATION_KEYS.has(key) && typeof val === "string"
+          ? sanitizeLocation(val)
+          : sanitizeStringsDeep(val);
+    }
+  }
 }
 
 const BREADCRUMB_URL_KEYS = ["url", "from", "to"] as const;
@@ -172,30 +194,7 @@ export function sanitizeEvent(event: SentryEvent): SentryEvent | null {
     if (Array.isArray(event.exception?.values)) {
       for (const ex of event.exception.values) {
         if (!ex || typeof ex !== "object") continue;
-        if (Array.isArray(ex.stacktrace?.frames)) {
-          for (const frame of ex.stacktrace.frames) {
-            if (!frame || typeof frame !== "object") continue;
-            if (frame.filename) frame.filename = sanitizeLocation(frame.filename);
-            if (frame.abs_path) frame.abs_path = sanitizeLocation(frame.abs_path);
-            // contextLinesIntegration and localVariablesIntegration (default
-            // integrations in @sentry/electron) populate these fields with
-            // raw source lines and local variable values before beforeSend
-            // fires. Source lines may contain string literals with user paths;
-            // local variable values may hold paths, tokens, or transcripts.
-            if (typeof frame.context_line === "string") {
-              frame.context_line = sanitizeString(frame.context_line);
-            }
-            if (Array.isArray(frame.pre_context)) {
-              frame.pre_context = sanitizeStringsDeep(frame.pre_context) as string[];
-            }
-            if (Array.isArray(frame.post_context)) {
-              frame.post_context = sanitizeStringsDeep(frame.post_context) as string[];
-            }
-            if (frame.vars && typeof frame.vars === "object") {
-              frame.vars = sanitizeStringsDeep(frame.vars) as Record<string, unknown>;
-            }
-          }
-        }
+        sanitizeFrames(ex.stacktrace?.frames);
         if (ex.value) ex.value = sanitizeString(ex.value);
         // The browser SDK copies `Error.name` into `type`, and it is caller-set.
         if (typeof ex.type === "string") ex.type = sanitizeString(ex.type);
@@ -208,9 +207,23 @@ export function sanitizeEvent(event: SentryEvent): SentryEvent | null {
     for (const key of ["logentry", "fingerprint"] as const) {
       if (event[key] !== undefined) event[key] = sanitizeStringsDeep(event[key]);
     }
-    // Thread stacks and debug images hold source locations, like frames.
-    for (const key of ["threads", "debug_meta"] as const) {
-      if (event[key] !== undefined) event[key] = sanitizeStringsDeep(event[key], sanitizeLocation);
+    const threads = (event.threads as { values?: unknown } | undefined)?.values;
+    if (Array.isArray(threads)) {
+      for (const thread of threads) {
+        if (!thread || typeof thread !== "object") continue;
+        const record = thread as Record<string, unknown>;
+        for (const [key, val] of Object.entries(record)) {
+          if (key === "stacktrace") {
+            sanitizeFrames((val as { frames?: unknown } | undefined)?.frames);
+          } else {
+            record[key] = sanitizeStringsDeep(val);
+          }
+        }
+      }
+    }
+    // Debug images name the same source locations the frames do.
+    if (event.debug_meta !== undefined) {
+      event.debug_meta = sanitizeStringsDeep(event.debug_meta, sanitizeLocation);
     }
     if (typeof event.message === "string") {
       event.message = sanitizeString(event.message);
