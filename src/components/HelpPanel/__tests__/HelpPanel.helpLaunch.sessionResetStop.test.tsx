@@ -1280,6 +1280,43 @@ describe("HelpPanel — closing one parallel lane (#12108)", () => {
     expect(helpPanelState.setOpen).not.toHaveBeenCalledWith(false);
   });
 
+  it("slides the panel out when the last lane closes with nothing bound yet", () => {
+    // #13544: the recreated slot 0 gets a fresh, live controller, so leaving the
+    // panel open would let a consented auto-launch start a session straight back
+    // up — `endSession`'s slide-out never runs for a lane with no terminal.
+    helpPanelState.sessions = {
+      0: {
+        terminalId: null,
+        agentId: null,
+        sessionId: null,
+        conversationTouched: false,
+        figures: [],
+        activeFigureNumber: null,
+      },
+    };
+
+    const { container } = render(<HelpPanel width={380} />);
+    fireEvent.click(closeButtonFor(container, "Session 1"));
+
+    expect(helpPanelState.setOpen).toHaveBeenCalledWith(false);
+    expect(helpPanelState.closeSlot).toHaveBeenCalledWith(0);
+  });
+
+  it("keeps the panel open when an unbound lane closes beside another", () => {
+    setupTwoLanes();
+    helpPanelState.sessions[1] = {
+      ...helpPanelState.sessions[1],
+      terminalId: null,
+      sessionId: null,
+    };
+
+    const { container } = render(<HelpPanel width={380} />);
+    fireEvent.click(closeButtonFor(container, "Session 2"));
+
+    expect(helpPanelState.closeSlot).toHaveBeenCalledWith(1);
+    expect(helpPanelState.setOpen).not.toHaveBeenCalledWith(false);
+  });
+
   it("confirms before closing a lane whose agent is working, gated on THAT lane", () => {
     setupTwoLanes({ backgroundAgentState: "working" });
 

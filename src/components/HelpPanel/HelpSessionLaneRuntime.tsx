@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import { useHelpPanelStore, selectSlot } from "@/store/helpPanelStore";
-import { acquireHelpSessionController } from "@/controllers/helpSessionControllerRegistry";
+import { useHelpSessionController } from "@/controllers/helpSessionControllerRegistry";
 import type { HelpProjectRef } from "@/controllers/HelpSessionController";
 
 interface HelpSessionLaneRuntimeProps {
@@ -44,7 +44,7 @@ export function HelpSessionLaneRuntime({
   isOpen,
   isActive,
 }: HelpSessionLaneRuntimeProps) {
-  const controller = acquireHelpSessionController(slot);
+  const controller = useHelpSessionController(slot);
   const terminalId = useHelpPanelStore((s) => selectSlot(s, slot).terminalId);
 
   useEffect(() => {

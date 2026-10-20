@@ -43,6 +43,7 @@ import { getTerminalTaskTitle } from "@/utils/terminalTitleDisplay";
 import {
   acquireHelpSessionController,
   releaseHelpSessionController,
+  useHelpSessionController,
 } from "@/controllers/helpSessionControllerRegistry";
 import { HelpPanelBanners } from "./HelpPanelBanners";
 import { HelpPanelVersionGate } from "./HelpPanelVersionGate";
@@ -236,7 +237,7 @@ export function HelpPanel({
   // screen keeps its launch phase, banners and IPC subscriptions intact. A
   // `useState` instance would be per-component and would die on tab switch.
   const activeSlot = useHelpPanelStore((s) => s.activeSlot);
-  const controller = acquireHelpSessionController(activeSlot);
+  const controller = useHelpSessionController(activeSlot);
 
   const session = useSyncExternalStore(controller.subscribe, controller.getSnapshot);
 
@@ -1250,6 +1251,10 @@ export function HelpPanel({
         const discarded = window.electron.help.discardConversation?.(activeWorkspaceId, slot);
         if (discarded) safeFireAndForget(discarded, { context: "HelpPanel.closeSlot discard" });
       }
+      // An unbound last lane — dormant, or closed mid-launch before anything
+      // bound — never reaches `endSession`'s slide-out, but the recreated slot 0
+      // still gets a fresh controller that would auto-launch into the open panel.
+      if (!selectOpenSlots(state).some((open) => open !== slot)) state.setOpen(false);
       releaseHelpSessionController(slot);
       state.closeSlot(slot);
     },
