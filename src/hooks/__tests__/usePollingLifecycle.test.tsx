@@ -36,6 +36,9 @@ function createDeferred<T>() {
   return { promise, resolve: resolve!, reject: reject! };
 }
 
+// Long enough for several 20ms (or shorter) test poll intervals to elapse.
+const SEVERAL_POLL_INTERVALS_MS = 80;
+
 function setupHook(opts: {
   fetchFn?: (ctx: TestFetchContext) => Promise<void>;
   calculateNextInterval?: (ctx: { isVisible: boolean }) => number;
@@ -304,6 +307,127 @@ describe("usePollingLifecycle", () => {
       });
 
       expect(firstInvalidatedAfter).toBe(true);
+    });
+
+    it("does not arm the next poll until a queued refresh settles (#13566)", async () => {
+      const first = createDeferred<void>();
+      const second = createDeferred<void>();
+      const contexts: TestFetchContext[] = [];
+      const fetchFn = vi.fn().mockImplementation(async (ctx: TestFetchContext) => {
+        contexts.push(ctx);
+        await (contexts.length === 1 ? first.promise : second.promise);
+      });
+
+      const { hook } = setupHook({ fetchFn, calculateNextInterval: () => 20 });
+
+      await waitFor(() => {
+        expect(fetchFn).toHaveBeenCalledTimes(1);
+      });
+
+      let refreshSettled = false;
+      let refreshPromise!: Promise<void>;
+      act(() => {
+        refreshPromise = hook.result.current.refresh({ force: true }).then(() => {
+          refreshSettled = true;
+        });
+      });
+
+      await act(async () => {
+        first.resolve();
+        await Promise.resolve();
+      });
+
+      await waitFor(() => {
+        expect(fetchFn).toHaveBeenCalledTimes(2);
+      });
+      expect(contexts[1]?.force).toBe(true);
+
+      // Several intervals elapse while the queued refresh is still pending —
+      // no scheduled poll may fire and invalidate it.
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, SEVERAL_POLL_INTERVALS_MS));
+      });
+
+      expect(fetchFn).toHaveBeenCalledTimes(2);
+      expect(contexts[1]?.isInvalidated()).toBe(false);
+      expect(refreshSettled).toBe(false);
+
+      await act(async () => {
+        second.resolve();
+        await refreshPromise;
+      });
+
+      expect(refreshSettled).toBe(true);
+      hook.unmount();
+    });
+
+    it("keeps polling after a queued refresh's fetch throws", async () => {
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const first = createDeferred<void>();
+      let callCount = 0;
+      const fetchFn = vi.fn().mockImplementation(async () => {
+        callCount += 1;
+        if (callCount === 1) await first.promise;
+        if (callCount === 2) throw new Error("drain failed");
+      });
+      const { hook } = setupHook({ fetchFn, calculateNextInterval: () => 20 });
+
+      await waitFor(() => {
+        expect(fetchFn).toHaveBeenCalledTimes(1);
+      });
+
+      let refreshPromise!: Promise<void>;
+      act(() => {
+        refreshPromise = hook.result.current.refresh();
+      });
+
+      await act(async () => {
+        first.resolve();
+        await refreshPromise;
+      });
+
+      expect(fetchFn).toHaveBeenCalledTimes(2);
+      await waitFor(() => {
+        expect(fetchFn.mock.calls.length).toBeGreaterThanOrEqual(3);
+      });
+      expect(fetchFn.mock.calls[2]?.[0]?.reason).toBe("scheduled");
+
+      hook.unmount();
+      warnSpy.mockRestore();
+    });
+
+    it("does not arm a timer when unmounted while a queued refresh is pending", async () => {
+      const first = createDeferred<void>();
+      const second = createDeferred<void>();
+      let callCount = 0;
+      const fetchFn = vi.fn().mockImplementation(async () => {
+        callCount += 1;
+        await (callCount === 1 ? first.promise : second.promise);
+      });
+      const calculateNextInterval = vi.fn().mockReturnValue(5);
+      const { hook } = setupHook({ fetchFn, calculateNextInterval });
+
+      await waitFor(() => {
+        expect(fetchFn).toHaveBeenCalledTimes(1);
+      });
+
+      let refreshPromise!: Promise<void>;
+      act(() => {
+        refreshPromise = hook.result.current.refresh();
+      });
+
+      hook.unmount();
+
+      await act(async () => {
+        first.resolve();
+        second.resolve();
+        await refreshPromise;
+        await new Promise((resolve) => setTimeout(resolve, SEVERAL_POLL_INTERVALS_MS));
+      });
+
+      // The queue is dropped on teardown, and nothing re-arms polling.
+      expect(fetchFn).toHaveBeenCalledTimes(1);
+      expect(calculateNextInterval).not.toHaveBeenCalled();
     });
   });
 
