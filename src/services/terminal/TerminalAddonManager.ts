@@ -7,6 +7,7 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { systemClient } from "@/clients/systemClient";
 import { FileLinksAddon, HoverCallback } from "./FileLinksAddon";
 import { ImageLinksAddon, OnActivateFigure } from "./ImageLinksAddon";
+import { SuggestedCommandLinksAddon, OnRunSuggestedCommand } from "./SuggestedCommandLinksAddon";
 
 const IMAGE_ADDON_OPTIONS = { pixelLimit: 2_000_000, storageLimit: 8 };
 
@@ -89,6 +90,7 @@ export interface TerminalAddons {
   searchAddon: SearchAddon | null;
   fileLinksDisposable: IDisposable | null;
   imageLinksDisposable: IDisposable | null;
+  commandLinksDisposable: IDisposable | null;
   webLinksAddon: WebLinksAddon | null;
 }
 
@@ -139,6 +141,7 @@ export async function setupTerminalAddons(terminal: Terminal): Promise<TerminalA
     searchAddon: null,
     fileLinksDisposable: null,
     imageLinksDisposable: null,
+    commandLinksDisposable: null,
     webLinksAddon: null,
   };
 }
@@ -184,6 +187,23 @@ export function createImageLinksAddon(
 ): IDisposable {
   const addon = new ImageLinksAddon(terminal, getFigureNumbers, onActivate);
   return terminal.registerLinkProvider(addon);
+}
+
+export function createSuggestedCommandLinksAddon(
+  terminal: Terminal,
+  isEnabled: () => boolean,
+  onRun: OnRunSuggestedCommand
+): IDisposable {
+  const addon = new SuggestedCommandLinksAddon(terminal, isEnabled, onRun);
+  const registration = terminal.registerLinkProvider(addon);
+  // Composed for the same reason as the file links: dropping the registration
+  // leaves an already-provided link able to activate.
+  return {
+    dispose: () => {
+      registration.dispose();
+      addon.dispose();
+    },
+  };
 }
 
 export function createWebLinksAddon(

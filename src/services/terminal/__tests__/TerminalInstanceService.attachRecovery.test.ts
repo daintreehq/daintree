@@ -125,11 +125,13 @@ vi.mock("../TerminalAddonManager", () => ({
     searchAddon: {},
     fileLinksDisposable: null,
     imageLinksDisposable: null,
+    commandLinksDisposable: null,
     webLinksAddon: null,
   })),
   createImageAddon: createImageAddonMock,
   createFileLinksAddon: vi.fn(() => ({ dispose: vi.fn() })),
   createImageLinksAddon: vi.fn(() => ({ dispose: vi.fn() })),
+  createSuggestedCommandLinksAddon: vi.fn(() => ({ dispose: vi.fn() })),
   createWebLinksAddon: vi.fn(() => ({ dispose: vi.fn() })),
 }));
 

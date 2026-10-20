@@ -82,6 +82,7 @@ export interface ManagedTerminal {
   searchAddonPromise?: Promise<SearchAddon | null>;
   fileLinksDisposable: IDisposable | null;
   imageLinksDisposable: IDisposable | null;
+  commandLinksDisposable: IDisposable | null;
   webLinksAddon: WebLinksAddon | null;
   // Currently-hovered link (tracked via xterm addon hover/leave callbacks).
   // Read synchronously by the right-click context menu so it reflects the
