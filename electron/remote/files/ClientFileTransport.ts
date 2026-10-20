@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import crypto from "node:crypto";
+import type { BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { HostId } from "../../../shared/types/remoteHosts.js";
@@ -144,16 +145,19 @@ const LINK_UNSUPPORTED = new Set([
   ...(process.platform === "win32" ? ["EISDIR"] : []),
 ]);
 
-interface Placed {
+interface FileIdentity {
+  dev: bigint;
+  ino: bigint;
+}
+
+interface Placed extends FileIdentity {
   path: string;
-  dev: number;
-  ino: number;
 }
 
 /** Remove a placed file only while its name still holds the file this download created. */
 async function removePlaced(placed: Placed): Promise<void> {
   try {
-    const there = await fs.lstat(placed.path);
+    const there = await fs.lstat(placed.path, { bigint: true });
     if (there.dev !== placed.dev || there.ino !== placed.ino) return;
     await fs.rm(placed.path, { force: true });
   } catch {
@@ -180,7 +184,7 @@ async function copyUnique(
   let placed: Placed | null = null;
   let complete = false;
   try {
-    const created = await out.stat();
+    const created = await out.stat({ bigint: true });
     placed = { path: target, dev: created.dev, ino: created.ino };
     // Tagged while still empty: a link would have carried the part file's tag.
     await markDownloaded(target);
@@ -192,10 +196,8 @@ async function copyUnique(
     }
   } finally {
     await out.close().catch(() => {});
-    if (!complete) {
-      if (placed) await removePlaced(placed);
-      else await fs.rm(target, { force: true }).catch(() => {});
-    }
+    // Without the created file's identity the name can't be proven ours: leave it.
+    if (!complete && placed) await removePlaced(placed);
   }
   if (!complete) {
     throw new AppError({
@@ -210,6 +212,7 @@ async function copyUnique(
 /** Move the finished part file to the first free name; never overwrites. */
 async function placeUnique(
   partPath: string,
+  part: FileIdentity,
   dir: string,
   name: string,
   stopped: () => boolean
@@ -227,9 +230,9 @@ async function placeUnique(
         linkable = false;
       }
       if (linkable) {
-        const linked = await fs.lstat(target);
         await fs.unlink(partPath).catch(() => {});
-        return { path: target, dev: linked.dev, ino: linked.ino };
+        // A hard link is the part file itself.
+        return { path: target, ...part };
       }
     }
     const placed = await copyUnique(partPath, target, stopped);
@@ -502,10 +505,10 @@ export class ClientFileTransport {
           }
         },
         async commit() {
-          let savedBytes: number;
+          let saved: BigIntStats;
           try {
             await handle.sync();
-            savedBytes = (await handle.stat()).size;
+            saved = await handle.stat({ bigint: true });
           } finally {
             await close();
           }
@@ -516,7 +519,7 @@ export class ClientFileTransport {
           if (signal?.aborted) throw new Error("cancelled");
           try {
             // The checksum covers what arrived, not what landed on disk.
-            if (savedBytes !== written || written !== begin.size) {
+            if (saved.size !== BigInt(written) || written !== begin.size) {
               throw new AppError({
                 code: "INTERNAL",
                 message: "The saved download is not the size that was sent",
@@ -525,7 +528,13 @@ export class ClientFileTransport {
             }
             // A copy can outlast the commit budget; the abort that follows must win.
             const stopped = () => aborted || !!signal?.aborted;
-            const placed = await placeUnique(partPath, options.destinationDir, name, stopped);
+            const placed = await placeUnique(
+              partPath,
+              { dev: saved.dev, ino: saved.ino },
+              options.destinationDir,
+              name,
+              stopped
+            );
             // No await between this check and resolving: an abort can't slip in after it.
             if (stopped()) {
               await removePlaced(placed);

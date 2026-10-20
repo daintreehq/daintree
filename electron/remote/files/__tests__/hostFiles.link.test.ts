@@ -976,9 +976,10 @@ describe("saving on the Shell", () => {
       const handle = await realOpen(...(args as Parameters<typeof fs.open>));
       if (String(args[0]).endsWith(".daintree-part")) {
         const stat = handle.stat.bind(handle);
-        handle.stat = (async () => {
-          const real = await stat();
-          return Object.assign(real, { size: real.size - 1 });
+        handle.stat = (async (opts?: { bigint?: boolean }) => {
+          const real = await stat(opts as { bigint: false });
+          const size = real.size as number | bigint;
+          return Object.assign(real, { size: typeof size === "bigint" ? size - 1n : size - 1 });
         }) as typeof handle.stat;
       }
       return handle;
