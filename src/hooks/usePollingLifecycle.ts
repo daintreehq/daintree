@@ -225,7 +225,9 @@ export function usePollingLifecycle(config: PollingLifecycleConfig): PollingLife
   const pollDueAtRef = useRef<number | null>(null);
   const pausedDueAtRef = useRef<number | null>(null);
   const isVisibleRef = useRef(!document.hidden);
-  const inFlightRef = useRef(false);
+  // The running fetch chain: the in-flight fetch plus any follow-up queued
+  // behind it. Null when idle.
+  const chainRef = useRef<Promise<void> | null>(null);
   const queuedFetchRef = useRef<{
     pending: boolean;
     force: boolean;
@@ -253,47 +255,76 @@ export function usePollingLifecycle(config: PollingLifecycleConfig): PollingLife
     configRef.current = config;
   });
 
-  const callFetchFn = useCallback(async function callFetchFnImpl(
+  const callFetchFn = useCallback(function callFetchFnImpl(
     force: boolean,
     reason: PollingLifecycleFetchReason
   ): Promise<void> {
-    if (inFlightRef.current) {
+    // Every caller — the one that started the chain and each one that queued
+    // into it — gets the same promise, which settles only once the in-flight
+    // fetch and every queued follow-up have finished. Callers chain
+    // `scheduleNextPoll` off it, so the next interval can't start (and fire a
+    // `scheduled` fetch that invalidates the drained one) mid-chain (#13566).
+    if (chainRef.current) {
       queuedFetchRef.current.pending = true;
       queuedFetchRef.current.force = queuedFetchRef.current.force || force;
       queuedFetchRef.current.reason = strongerReason(queuedFetchRef.current.reason, reason);
       invalidatedFetchIdRef.current = activeFetchIdRef.current;
-      return;
+      return chainRef.current;
     }
 
-    try {
-      inFlightRef.current = true;
-      activeFetchIdRef.current += 1;
-      const fetchId = activeFetchIdRef.current;
-      const isInvalidated = () => invalidatedFetchIdRef.current === fetchId;
-      try {
-        await configRef.current.fetchFn({ force, fetchId, isInvalidated, reason });
-      } catch (err) {
-        // The consumer's fetchFn is responsible for surfacing its own errors
-        // (setError, lastErrorRef). The primitive catches here so a throw —
-        // e.g. an IPC failure on `projectClient.getCurrent()` outside the
-        // consumer's inner try/catch — does not silently kill polling. Every
-        // fire-and-forget call site below chains `.then(scheduleNextPoll)`
-        // without a `.catch`; an uncaught rejection here would skip that
-        // chain and freeze the lifecycle until the next external trigger.
-        console.warn("usePollingLifecycle: fetchFn threw", err);
-      }
-    } finally {
-      inFlightRef.current = false;
-      if (aliveRef.current && queuedFetchRef.current.pending) {
-        const queuedForce = queuedFetchRef.current.force;
-        const queuedReason = queuedFetchRef.current.reason;
-        queuedFetchRef.current = { pending: false, force: false, reason: "initial" };
-        // Named-function self-recursion — avoids referencing the outer
-        // `callFetchFn` variable, which would close over a potentially
-        // stale binding before useCallback returns.
-        void callFetchFnImpl(queuedForce, queuedReason);
-      }
+    if (pollTimerRef.current) {
+      clearTimeout(pollTimerRef.current);
+      pollTimerRef.current = null;
     }
+    pollDueAtRef.current = null;
+
+    let settle!: () => void;
+    // Published before `fetchFn` runs so a trigger fired synchronously from
+    // inside it joins this chain instead of starting a concurrent one.
+    const chain = new Promise<void>((resolve) => {
+      settle = resolve;
+    });
+    chainRef.current = chain;
+
+    void (async () => {
+      let nextForce = force;
+      let nextReason = reason;
+      try {
+        for (;;) {
+          activeFetchIdRef.current += 1;
+          const fetchId = activeFetchIdRef.current;
+          const isInvalidated = () => invalidatedFetchIdRef.current === fetchId;
+          try {
+            await configRef.current.fetchFn({
+              force: nextForce,
+              fetchId,
+              isInvalidated,
+              reason: nextReason,
+            });
+          } catch (err) {
+            // The consumer's fetchFn is responsible for surfacing its own
+            // errors (setError, lastErrorRef). The primitive catches here so a
+            // throw — e.g. an IPC failure on `projectClient.getCurrent()`
+            // outside the consumer's inner try/catch — neither stalls the
+            // queue nor rejects the chain: every call site chains
+            // `.then(scheduleNextPoll)` without a `.catch`, so a rejection
+            // would freeze the lifecycle until the next external trigger.
+            console.warn("usePollingLifecycle: fetchFn threw", err);
+          }
+          if (!aliveRef.current || !queuedFetchRef.current.pending) break;
+          nextForce = queuedFetchRef.current.force;
+          nextReason = queuedFetchRef.current.reason;
+          queuedFetchRef.current = { pending: false, force: false, reason: "initial" };
+        }
+      } finally {
+        // Cleared before settling so the callers' scheduling tails see an idle
+        // lifecycle and arm the timer.
+        chainRef.current = null;
+        settle();
+      }
+    })();
+
+    return chain;
   }, []);
 
   const scheduleNextPoll = useCallback(
@@ -308,6 +339,9 @@ export function usePollingLifecycle(config: PollingLifecycleConfig): PollingLife
         pollTimerRef.current = null;
       }
       pollDueAtRef.current = null;
+      // A running chain arms the timer itself once it settles, against the
+      // interval inputs current at that point.
+      if (chainRef.current) return;
       // A cached view polls nothing — this also covers every fetch's
       // reschedule tail. `onViewActivated` re-arms on warm reactivation.
       if (isProjectViewCached()) return;
