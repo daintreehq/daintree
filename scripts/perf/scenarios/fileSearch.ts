@@ -130,8 +130,9 @@ const OLD_TTL_PAUSE_MS = 11_000;
 const PAST_TTL_OFFSET_MS = 360_000;
 
 /**
- * Strictly increasing stand-in for `WorktreeMonitor._workingTreeChangedAt`,
- * which stamps `Math.max(Date.now(), prev + 1)` per flush. The invalidator
+ * Strictly increasing stand-in for `WorktreeMonitor`'s watcher stamps
+ * (`_workingTreeChangedAt`, `_pathMembershipChangedAt`), which stamp
+ * `Math.max(Date.now(), prev + 1)` per flush. The invalidator
  * ignores a repeated value on purpose, so two iterations landing in the same
  * millisecond must not look like one flush.
  */
@@ -144,6 +145,10 @@ let filesChangedStamp = Date.now();
  * for a reason this scenario is not measuring.
  */
 const PERF_HOST_EPOCH = "perf-197-host-epoch";
+
+/** PERF-197's in-place save arm: how many saves, and what the picker keeps typing. */
+const CONTENT_EDIT_SAVES = 5;
+const CONTENT_EDIT_QUERY = "terminal";
 const PERF_MONITOR_GENERATION = 1;
 function nextFilesChangedStamp(): number {
   filesChangedStamp += 1;
@@ -372,8 +377,12 @@ export const fileSearchScenarios: PerfScenario[] = [
       "the cache's clock past the 10s TTL this replaced with no filesystem change, and searches " +
       "again: coldReloads counts `git ls-files` spawns across that keystroke and must be 0. The " +
       "second arm is the oracle in the other direction — a tracked path is added and the real " +
-      "FileSearchCacheInvalidator is driven with an advanced workingTreeChangedAt, after which the " +
-      "reload MUST happen and MUST surface the new path. Idle time is simulated by offsetting " +
+      "FileSearchCacheInvalidator is driven with an advanced pathMembershipChangedAt, after which the " +
+      "reload MUST happen and MUST surface the new path. The third arm is an agent saving an existing " +
+      "file over and over (#13595): coverage is seeded, the cache primed, and the invalidator driven " +
+      "with only workingTreeChangedAt advancing between searches — contentEditReloads counts the " +
+      "`git ls-files` spawns that costs and must be 0, with every search returning the primed " +
+      "results. Idle time is simulated by offsetting " +
       "Date.now(), which is what the cache reads; every reported duration is real performance.now() " +
       "elapsed. NOT in the bracket, and not claimable from it: the filesystem watch itself, its " +
       "250-800ms debounce, and the utility-process hop that carries the snapshot to main.",
@@ -381,7 +390,7 @@ export const fileSearchScenarios: PerfScenario[] = [
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 4, ci: 8, nightly: 12 },
     warmups: 1,
-    correctness: ["pauseMisses", "changeMisses", "spawnObserverMisses"],
+    correctness: ["pauseMisses", "changeMisses", "contentEditMisses", "spawnObserverMisses"],
     async run() {
       const fixture = getFileSearchFixture();
       const { fileSearchService } = await loadFileSearchModule();
@@ -418,7 +427,7 @@ export const fileSearchScenarios: PerfScenario[] = [
         fileSearchCacheInvalidator.handleWorktreeUpdate(
           {
             path: repo.path,
-            workingTreeChangedAt: nextFilesChangedStamp(),
+            pathMembershipChangedAt: nextFilesChangedStamp(),
             isCurrent: true,
             generation: PERF_MONITOR_GENERATION,
           },
@@ -433,6 +442,37 @@ export const fileSearchScenarios: PerfScenario[] = [
         removeTrackedPath(repo, addedPath);
         fileSearchService.invalidate(repo.path);
       }
+
+      // Arm 3 — repeated in-place saves to a file already in the index. Coverage
+      // is seeded BEFORE priming: a first sighting drops the index by design,
+      // and it must not be the thing this arm's reload count measures.
+      const watched = {
+        path: repo.path,
+        pathMembershipChangedAt: nextFilesChangedStamp(),
+        isCurrent: true,
+        generation: PERF_MONITOR_GENERATION,
+      };
+      const producer = { projectPath: repo.path, hostEpoch: PERF_HOST_EPOCH };
+      fileSearchCacheInvalidator.handleWorktreeUpdate(watched, producer);
+      await primeCache(search, invalidate, repo);
+      const editQuery = { cwd: repo.path, query: CONTENT_EDIT_QUERY, limit: 50 };
+      const primedResults = await search(editQuery);
+      let contentEditMisses = primedResults.length > 0 ? 0 : 1;
+      const editMark = gitSpawnMark();
+      const editStart = performance.now();
+      for (let save = 0; save < CONTENT_EDIT_SAVES; save++) {
+        // The snapshot a content-only flush produces: the raw-write stamp moves
+        // and the membership stamp stays put.
+        fileSearchCacheInvalidator.handleWorktreeUpdate(
+          Object.assign({ ...watched }, { workingTreeChangedAt: nextFilesChangedStamp() }),
+          producer
+        );
+        const results = await search(editQuery);
+        if (results.join("\0") !== primedResults.join("\0")) contentEditMisses += 1;
+      }
+      const contentEditKeystrokeMs = (performance.now() - editStart) / CONTENT_EDIT_SAVES;
+      const contentEditReloads = gitSpawnsSince(editMark).bySubcommand["ls-files"] ?? 0;
+      fileSearchService.invalidate(repo.path);
 
       const durationMs = performance.now() - start;
 
@@ -459,6 +499,9 @@ export const fileSearchScenarios: PerfScenario[] = [
           returnKeystrokeMs,
           changedColdReloads,
           changedKeystrokeMs,
+          contentEditReloads,
+          contentEditKeystrokeMs,
+          contentEditMisses,
           pausedMs: OLD_TTL_PAUSE_MS,
           fileCount: repo.fileCount,
           pauseMisses,

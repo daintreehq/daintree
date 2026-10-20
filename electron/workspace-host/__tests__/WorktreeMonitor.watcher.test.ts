@@ -1753,6 +1753,100 @@ describe("WorktreeMonitor", () => {
     });
   });
 
+  describe("path-membership signal (#13595)", () => {
+    const WATCH_CONFIG: WorktreeMonitorConfig = {
+      ...TEST_CONFIG,
+      gitWatchEnabled: true,
+    };
+    const ACTIVE_WORKTREE: Worktree = { ...TEST_WORKTREE, isCurrent: true };
+
+    beforeEach(() => {
+      mockWatcherStartResult = true;
+      mockGetWorktreeChangesWithStats.mockResolvedValue({
+        worktreeId: "/test/worktree",
+        rootPath: "/test",
+        changes: [],
+        changedFileCount: 0,
+        lastUpdated: Date.now(),
+      });
+    });
+
+    type FilesChanged = (dirs: readonly string[] | null, pathMembershipChanged: boolean) => void;
+    const lastSnapshot = (callbacks: ReturnType<typeof makeCallbacks>) =>
+      vi.mocked(callbacks.onUpdate).mock.calls.at(-1)?.[0];
+
+    it("advances the raw stamp but not the membership stamp for a content-only flush", async () => {
+      const callbacks = makeCallbacks();
+      const monitor = new WorktreeMonitor(ACTIVE_WORKTREE, WATCH_CONFIG, callbacks, "main");
+      await monitor.start();
+      const fire = capturedWatcherOptions?.onWorktreeFilesChanged as FilesChanged;
+
+      fire(["src"], true);
+      const structural = lastSnapshot(callbacks);
+      fire(["src"], false);
+      const edited = lastSnapshot(callbacks);
+
+      expect(structural?.pathMembershipChangedAt).toBeGreaterThan(0);
+      expect(edited?.workingTreeChangedAt).toBeGreaterThan(structural?.workingTreeChangedAt ?? 0);
+      expect(edited?.pathMembershipChangedAt).toBe(structural?.pathMembershipChangedAt);
+
+      monitor.stop();
+    });
+
+    it("treats an undescribed burst as a membership change whatever it was labelled", async () => {
+      const callbacks = makeCallbacks();
+      const monitor = new WorktreeMonitor(ACTIVE_WORKTREE, WATCH_CONFIG, callbacks, "main");
+      await monitor.start();
+      const before = lastSnapshot(callbacks)?.pathMembershipChangedAt ?? 0;
+
+      (capturedWatcherOptions?.onWorktreeFilesChanged as FilesChanged)(null, false);
+
+      expect(lastSnapshot(callbacks)?.pathMembershipChangedAt).toBeGreaterThan(before);
+      monitor.stop();
+    });
+
+    it("stamps and emits on a membership-only signal, strictly increasing", async () => {
+      const callbacks = makeCallbacks();
+      const monitor = new WorktreeMonitor(ACTIVE_WORKTREE, WATCH_CONFIG, callbacks, "main");
+      await monitor.start();
+      const firePathMembershipChanged = capturedWatcherOptions?.onPathMembershipChanged as
+        (() => void) | undefined;
+      expect(firePathMembershipChanged).toBeDefined();
+      const rawBefore = lastSnapshot(callbacks)?.workingTreeChangedAt;
+      const emitsBefore = vi.mocked(callbacks.onUpdate).mock.calls.length;
+
+      firePathMembershipChanged?.();
+      const first = lastSnapshot(callbacks)?.pathMembershipChangedAt;
+      firePathMembershipChanged?.();
+      const second = lastSnapshot(callbacks)?.pathMembershipChangedAt;
+
+      expect(vi.mocked(callbacks.onUpdate).mock.calls.length).toBe(emitsBefore + 2);
+      expect(first).toBeGreaterThan(0);
+      expect(second).toBeGreaterThan(first ?? 0);
+      // Not a filesystem write: the file browser's stamp stays where it was.
+      expect(lastSnapshot(callbacks)?.workingTreeChangedAt).toBe(rawBefore);
+
+      monitor.stop();
+    });
+
+    it("retains a membership stamp raised before initial status for the first snapshot", async () => {
+      const callbacks = makeCallbacks();
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, WATCH_CONFIG, callbacks, "main");
+      await monitor.start();
+      expect(monitor.hasInitialStatus).toBe(false);
+
+      (capturedWatcherOptions?.onPathMembershipChanged as () => void)();
+      expect(callbacks.onUpdate).not.toHaveBeenCalled();
+
+      await flushInitialStatus();
+      expect(
+        vi.mocked(callbacks.onUpdate).mock.calls[0]?.[0]?.pathMembershipChangedAt
+      ).toBeGreaterThan(0);
+
+      monitor.stop();
+    });
+  });
+
   describe("backgrounded project (#12459)", () => {
     const WATCH_CONFIG: WorktreeMonitorConfig = {
       ...TEST_CONFIG,

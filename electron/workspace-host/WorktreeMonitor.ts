@@ -237,6 +237,13 @@ export class WorktreeMonitor {
    * when it could not be described. `undefined` until the first flush.
    */
   private _workingTreeChangedDirs: readonly string[] | null | undefined = undefined;
+  /**
+   * Monotonic timestamp of the last moment the worktree's path set may have
+   * changed — a subset of `_workingTreeChangedAt`'s flushes plus git-internal
+   * writes and watcher (re)arms. What the file-search cache invalidates on, so
+   * in-place edits keep its index warm (#13595).
+   */
+  private _pathMembershipChangedAt: number = 0;
   // Stamped by the watcher's onTriggerUpdate hook before a forced refresh
   // fires. The stat pre-check compares against `lastStatBaselineAt` to know
   // whether an event arrived since the baseline was captured — if so, the
@@ -517,7 +524,9 @@ export class WorktreeMonitor {
         monitor.callbacks.onEmfileLimitReached?.(worktreeId),
       onWatcherRecovered: () => monitor.callbacks.onWatcherRecovered?.(monitor.id),
       onGitConfigChanged: () => monitor.callbacks.onGitConfigChanged?.(monitor.id),
-      onWorktreeFilesChanged: (affectedDirs) => monitor.handleWorktreeFilesChanged(affectedDirs),
+      onWorktreeFilesChanged: (affectedDirs, pathMembershipChanged) =>
+        monitor.handleWorktreeFilesChanged(affectedDirs, pathMembershipChanged),
+      onPathMembershipChanged: () => monitor.handlePathMembershipChanged(),
     };
     this.watcherController = new WatcherController(watcherHost);
 
@@ -692,6 +701,9 @@ export class WorktreeMonitor {
       },
       get workingTreeChangedDirs() {
         return monitor._workingTreeChangedDirs;
+      },
+      get pathMembershipChangedAt() {
+        return monitor._pathMembershipChangedAt;
       },
       get fetchAuthFailed() {
         return monitor._fetchAuthFailed;
@@ -2291,14 +2303,35 @@ export class WorktreeMonitor {
    * the difference — so the retained case reports `null` (refresh everything)
    * rather than a set it cannot prove is complete.
    */
-  private handleWorktreeFilesChanged(affectedDirs: readonly string[] | null): void {
+  private handleWorktreeFilesChanged(
+    affectedDirs: readonly string[] | null,
+    pathMembershipChanged = true
+  ): void {
     this._workingTreeChangedAt = Math.max(Date.now(), this._workingTreeChangedAt + 1);
+    // A burst that could not be described could have been anything.
+    if (pathMembershipChanged || affectedDirs === null) this.stampPathMembershipChange();
     if (this._hasInitialStatus) {
       this._workingTreeChangedDirs = affectedDirs;
       this.emitUpdate();
     } else {
       this._workingTreeChangedDirs = null;
     }
+  }
+
+  /**
+   * The path set may have moved with no worktree flush to carry it. Emits on its
+   * own because nothing else is guaranteed to: the status pass a git-internal
+   * write also queues may find nothing changed, and a watcher re-arm queues no
+   * pass at all. Retained for the first snapshot before initial status, like
+   * `handleWorktreeFilesChanged`.
+   */
+  private handlePathMembershipChanged(): void {
+    this.stampPathMembershipChange();
+    if (this._hasInitialStatus) this.emitUpdate();
+  }
+
+  private stampPathMembershipChange(): void {
+    this._pathMembershipChangedAt = Math.max(Date.now(), this._pathMembershipChangedAt + 1);
   }
 
   emitUpdate(): void {

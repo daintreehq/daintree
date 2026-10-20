@@ -294,7 +294,7 @@ const FAMILIES: readonly Family[] = [
     kind: "mechanism",
     fidelity: withFidelity({ processTopology: "partial" }),
     claim:
-      "The real cache policy and the real watcher-to-invalidation rule, driven directly. Idle time is a Date.now() offset, so nothing here says how long the filesystem watch, its debounce or the utility-process hop take to deliver a change.",
+      "The real cache policy and the real watcher-to-invalidation rule, driven directly. Idle time is a Date.now() offset, so nothing here says how long the filesystem watch, its debounce or the utility-process hop take to deliver a change. The in-place save arm feeds the invalidator the stamps a content-only flush produces; whether the watcher classifies a real save that way is the watcher's own tests' claim, not this one's.",
   },
   {
     label: "file search index retention",
