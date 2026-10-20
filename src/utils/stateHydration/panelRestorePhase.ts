@@ -32,6 +32,7 @@ import {
   resolveRespawnAgentId,
   type BuildArgsForRespawnOptions,
 } from "./statePatcher";
+import { parkIfSavedInBackground } from "./backgroundParking";
 import {
   buildResumeLatestCommand,
   resolveResumeOnRestart,
@@ -895,7 +896,16 @@ export async function restorePanelsPhase(
       // Gated on `taskIsPty`: the `-1` tier only reorders PTY spawning, so a
       // visible non-PTY panel stays on the concurrent non-PTY path.
       const isVisible = taskIsPty && visiblePanelId !== undefined && saved.id === visiblePanelId;
-      const priority = isVisible ? -1 : isActiveWorktree || isMostRecentInOtherWorktree ? 0 : 1;
+      // A parked panel is never on screen, so it waits for the last tier
+      // whatever worktree it belongs to.
+      const isParked = saved.location === "background";
+      const priority = isParked
+        ? 1
+        : isVisible
+          ? -1
+          : isActiveWorktree || isMostRecentInOtherWorktree
+            ? 0
+            : 1;
 
       const capturedIndex = savedIndex;
       panelTasks.push({
@@ -933,6 +943,7 @@ export async function restorePanelsPhase(
               saved.id
             );
             const location = args.location as "grid" | "dock";
+            parkIfSavedInBackground(args, saved);
 
             logHydrationInfo(`[HYDRATION] Adding terminal from backend:`, {
               id: backendTerminal.id,
@@ -1007,6 +1018,7 @@ export async function restorePanelsPhase(
                   terminalSizes,
                   saved.id
                 );
+                parkIfSavedInBackground(reconnectArgs, saved);
                 const restoredTerminalId = await addPanel(reconnectArgs);
                 restoredIdsByIndex.set(capturedIndex, restoredTerminalId);
 
@@ -1143,6 +1155,9 @@ export async function restorePanelsPhase(
                   restoreRecovery: respawnArgs.restoreRecovery?.reason,
                 });
 
+                // A held pane is waiting on the user's choice, so it comes back
+                // where it can be seen rather than parked out of sight.
+                if (!respawnArgs.restoreRecovery) parkIfSavedInBackground(respawnArgs, saved);
                 const restoredTerminalId = await addPanel(respawnArgs);
                 restoredIdsByIndex.set(capturedIndex, restoredTerminalId);
               }
@@ -1177,6 +1192,7 @@ export async function restorePanelsPhase(
               // `resolveRestoredWorktreeId`: this builder keeps `saved.worktreeId`
               // untouched, so a worktree-less workspace needs it cleared here too.
               if (!workspaceHasWorktrees) nonPtyArgs.worktreeId = undefined;
+              parkIfSavedInBackground(nonPtyArgs, saved);
               const nonPtyId = await addPanel(nonPtyArgs);
               restoredIdsByIndex.set(capturedIndex, nonPtyId);
             }

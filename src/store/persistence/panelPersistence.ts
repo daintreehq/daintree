@@ -45,6 +45,7 @@ const BASE_PANEL_FIELDS = [
   "worktreeId",
   "worktreeGitDir",
   "location",
+  "backgroundRestoreLocation",
   "extensionState",
   "extensionStateVersion",
   "pluginId",
@@ -135,7 +136,13 @@ function buildPanelSnapshot(
     ...(t.titleMode !== undefined && { titleMode: t.titleMode }),
     worktreeId: t.worktreeId,
     ...(worktreeGitDir !== undefined && { worktreeGitDir }),
-    location: t.location === "trash" || t.location === "background" ? "grid" : t.location,
+    location: t.location === "trash" ? "grid" : t.location,
+    // A parked panel keeps its restore target, so a reloaded view rebuilds the
+    // entry `restoreBackgroundTerminal` reads instead of re-adopting the live
+    // PTY as a grid orphan.
+    ...(t.location === "background" && {
+      backgroundRestoreLocation: t.backgroundRestoreLocation === "dock" ? "dock" : "grid",
+    }),
     ...(t.extensionState !== undefined && { extensionState: t.extensionState }),
     // Written only alongside a bag, and only ever the version the record
     // already carries. Re-deriving it from the registry here would re-stamp a
@@ -194,7 +201,6 @@ const DEFAULT_OPTIONS: Required<Omit<PanelPersistenceOptions, "getProjectId">> &
   debounceMs: 500,
   filter: (t) =>
     t.location !== "trash" &&
-    t.location !== "background" &&
     // Dialog panels are ephemeral by location, independent of the flag below —
     // persisting one would resurrect it as a grid panel on restart, since
     // hydration coerces unknown locations to "grid".

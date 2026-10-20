@@ -119,7 +119,8 @@ export interface HydrationOptions {
     title?: string;
     cwd: string;
     worktreeId?: string;
-    location?: "grid" | "dock";
+    location?: "grid" | "dock" | "background";
+    backgroundRestoreLocation?: "grid" | "dock";
     command?: string;
     agentState?: AgentState;
     waitingReason?: WaitingReason;

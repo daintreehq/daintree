@@ -11,6 +11,7 @@ import { isForegroundDispatch } from "./dispatchSource";
 import { getWorktreePathIndex } from "@/store/storeAccessors";
 import {
   AgentIdSchema,
+  AgentLaunchLocationSchema,
   LaunchLocationSchema,
   TerminalSpawnSourceSchema,
   AddPanelFocusPolicySchema,
@@ -370,7 +371,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     keywords: ["spawn", "start", "run", "new", "agents", "task", "model", "effort", "reasoning"],
     argsSchema: z.object({
       agentId: AgentIdSchema,
-      location: LaunchLocationSchema.optional(),
+      location: AgentLaunchLocationSchema.optional(),
       cwd: z
         .string()
         .optional()
@@ -477,7 +478,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     resultSchema: z.object({
       launched: z.boolean(),
       terminalId: z.string().nullable(),
-      location: z.enum(["grid", "dock"]).nullable(),
+      location: z.enum(["grid", "dock", "background"]).nullable(),
       spawnStatus: z
         .enum(["missing-cli", "panel-limit", "already-launching", "spawn-failed", "unavailable"])
         .nullable()
@@ -523,7 +524,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
         name,
       } = args as {
         agentId: string;
-        location?: "grid" | "dock" | "overlay";
+        location?: "grid" | "dock" | "overlay" | "background";
         cwd?: string;
         worktreeId?: string;
         prompt?: string;
@@ -606,6 +607,13 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
       ) {
         throw new UnactionableTargetError(
           "notify waits for an agent to stop working, and this id is not a registered agent: a plain shell or panel never reports working or idle. Launch a registered agent, or launch without notify."
+        );
+      }
+      // The background list only shows terminal panes, so a parked browser or
+      // dev preview would be running with no way back to it.
+      if (location === "background" && HANDBACK_PANEL_LAUNCH_IDS.has(agentId)) {
+        throw new UnactionableTargetError(
+          `A ${agentId} panel can't be launched into the background. Launch it in the grid or dock instead.`
         );
       }
       const handbackCode = handback === true ? mintHandbackCode() : undefined;

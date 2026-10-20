@@ -205,9 +205,8 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         },
         location: {
           type: "string",
-          enum: ["grid", "dock", "overlay"],
-          description:
-            '"grid" main grid (default), "dock" sidebar dock, "overlay" floating overlay.',
+          enum: ["grid", "dock", "overlay", "background"],
+          description: 'Default "grid". "background" runs it unmounted until restored.',
         },
         cwd: {
           description:
@@ -347,7 +346,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           anyOf: [
             {
               type: "string",
-              enum: ["grid", "dock"],
+              enum: ["grid", "dock", "background"],
             },
             {
               type: "null",

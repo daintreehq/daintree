@@ -71,7 +71,7 @@ import { sanitizeScratchpad } from "@/lib/terminalScratchpad";
  */
 export interface AddTerminalArgs extends AddPanelOptionsBase {
   cwd: string;
-  location?: "grid" | "dock";
+  location?: "grid" | "dock" | "background";
   browserUrl?: string;
   browserHistory?: BrowserHistory;
   browserZoom?: number;
@@ -131,6 +131,7 @@ export interface SavedTerminalData {
   cwd?: string;
   worktreeId?: string;
   location?: string;
+  backgroundRestoreLocation?: string;
   command?: string;
   isInputLocked?: boolean;
   browserUrl?: string;

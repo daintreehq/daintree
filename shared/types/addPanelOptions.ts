@@ -39,6 +39,11 @@ export interface AddPanelOptionsBase {
   cwd?: string;
   location?: PanelLocation;
   /**
+   * Restore target for a panel created with `location: "background"`
+   * (default grid). Ignored for any other location.
+   */
+  backgroundRestoreLocation?: "grid" | "dock";
+  /**
    * Opt-in placement hint: land the new panel immediately after this one
    * instead of at the end. Resolved against live store state at commit time,
    * never precomputed as a numeric index — `addPanel` has async gaps (agent

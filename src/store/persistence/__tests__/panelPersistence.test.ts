@@ -131,6 +131,40 @@ describe("PanelPersistence", () => {
       expect(savedTerminals).not.toContainEqual(expect.objectContaining({ id: "trash-1" }));
     });
 
+    it("keeps parked panels with their restore target (#13661)", async () => {
+      const client = createMockProjectClient();
+      const persistence = new PanelPersistence(client, { debounceMs: 100 });
+
+      persistence.save(
+        [
+          createMockTerminal({
+            id: "bg-dock",
+            location: "background",
+            backgroundRestoreLocation: "dock",
+          }),
+          // A panel parked before the field existed falls back to the grid.
+          createMockTerminal({ id: "bg-legacy", location: "background" }),
+          // A stale target on a panel that is no longer parked is never written.
+          createMockTerminal({ id: "grid-1", location: "grid", backgroundRestoreLocation: "dock" }),
+        ],
+        projectId
+      );
+      await vi.advanceTimersByTimeAsync(100);
+
+      const saved = client.setTerminals.mock.calls[0]![1] as TerminalSnapshot[];
+      const byId = new Map(saved.map((s) => [s.id, s]));
+      expect(byId.get("bg-dock")).toMatchObject({
+        location: "background",
+        backgroundRestoreLocation: "dock",
+      });
+      expect(byId.get("bg-legacy")).toMatchObject({
+        location: "background",
+        backgroundRestoreLocation: "grid",
+      });
+      expect(byId.get("grid-1")?.location).toBe("grid");
+      expect(byId.get("grid-1")).not.toHaveProperty("backgroundRestoreLocation");
+    });
+
     it("excludes dialog panels that are missing the ephemeral flag", async () => {
       // The location alone has to be disqualifying. Hydration coerces any
       // unrecognized location to "grid", so a dialog snapshot that slipped

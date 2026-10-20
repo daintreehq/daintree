@@ -1181,6 +1181,68 @@ describe("agent.launch dispatch integration", () => {
   });
 });
 
+describe("agent.launch into the background (#13661)", () => {
+  async function dispatch(
+    actionId: string,
+    args: Record<string, unknown>,
+    callbacks = makeCallbacks()
+  ) {
+    const { ActionService } = await import("../../../ActionService");
+    const service = new ActionService();
+    const registry: ActionRegistry = new Map();
+    registerAgentActions(registry, callbacks);
+    for (const [, factory] of registry) {
+      service.register(factory());
+    }
+    const result = await service.dispatch(actionId as never, args, { source: "user" });
+    return { result, callbacks };
+  }
+
+  it("passes a background location through to the launcher and reports it back", async () => {
+    const callbacks = makeCallbacks();
+    vi.mocked(callbacks.onLaunchAgent).mockResolvedValue({
+      terminalId: "term-bg",
+      location: "background",
+      ...LAUNCH_IDENTITY,
+    });
+
+    const { result } = await dispatch(
+      "agent.launch",
+      { agentId: "claude", location: "background" },
+      callbacks
+    );
+
+    expect(callbacks.onLaunchAgent).toHaveBeenCalledWith(
+      "claude",
+      expect.objectContaining({ location: "background" })
+    );
+    expect(result).toMatchObject({
+      ok: true,
+      result: { launched: true, terminalId: "term-bg", location: "background" },
+    });
+  });
+
+  it.each(["browser", "dev-preview"])(
+    "refuses to park a %s panel, which the background list cannot show",
+    async (agentId) => {
+      const { result, callbacks } = await dispatch("agent.launch", {
+        agentId,
+        location: "background",
+      });
+
+      expect(result.ok).toBe(false);
+      expect(callbacks.onLaunchAgent).not.toHaveBeenCalled();
+    }
+  );
+
+  it("keeps background off the per-agent shortcut actions", async () => {
+    const { result, callbacks } = await dispatch("agent.claude", { location: "background" });
+
+    expect(result.ok).toBe(false);
+    expect(callbacks.onLaunchAgent).not.toHaveBeenCalled();
+  });
+});
+
 describe("agent.listToolbar (#10838)", () => {
   type ToolbarRow = {
     id: string;

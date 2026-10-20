@@ -81,6 +81,35 @@ async function resolveProjectStore() {
  * bucket order is not guaranteed to be flat order projected by worktree, and
  * reusing one structure's answer in the other would misplace the copy.
  */
+type RegistryState = ReturnType<PanelRegistryStoreApi["getState"]>;
+
+/**
+ * Wraps a commit so a panel born parked lands with its restore entry in the
+ * same `set()`: `restoreBackgroundTerminal` reads only `backgroundedTerminals`,
+ * and an entry written a commit later leaves a window where the panel is
+ * parked with no way back. A replayed hydration keeps the entry already there,
+ * which may carry tab-group metadata the snapshot never had.
+ */
+function commitParked(
+  set: PanelRegistryStoreApi["setState"],
+  panel: { id: string; location?: string; backgroundRestoreLocation?: "grid" | "dock" }
+) {
+  return (updater: (state: RegistryState) => Partial<RegistryState> | RegistryState): void => {
+    set((state) => {
+      const patch = updater(state);
+      if (patch === state || panel.location !== "background") return patch;
+      const current = patch.backgroundedTerminals ?? state.backgroundedTerminals;
+      if (current.has(panel.id)) return patch;
+      const backgroundedTerminals = new Map(current);
+      backgroundedTerminals.set(panel.id, {
+        id: panel.id,
+        originalLocation: panel.backgroundRestoreLocation ?? "grid",
+      });
+      return { ...patch, backgroundedTerminals };
+    });
+  };
+}
+
 function earliestIndexOf(order: readonly string[], ids: readonly string[]): number {
   let earliest = -1;
   for (const id of ids) {
@@ -416,7 +445,10 @@ export const createAddPanelActions = (
       // mis-backgrounded (#10512).
       const isInActiveWorktree =
         activeWorktreeId === null || (effectiveWorktreeId ?? null) === (activeWorktreeId ?? null);
-      const shouldBackground = location === "dock" || (location === "grid" && !isInActiveWorktree);
+      const shouldBackground =
+        location === "dock" ||
+        location === "background" ||
+        (location === "grid" && !isInActiveWorktree);
       const runtimeStatus: TerminalRuntimeStatus = shouldBackground ? "background" : "running";
 
       const kindConfig = getPanelKindConfig(requestedKind);
@@ -448,6 +480,9 @@ export const createAddPanelActions = (
         ...(options.titleMode && { titleMode: options.titleMode }),
         worktreeId: effectiveWorktreeId,
         location,
+        ...(location === "background" && {
+          backgroundRestoreLocation: options.backgroundRestoreLocation ?? "grid",
+        }),
         isVisible: location === "grid",
         runtimeStatus,
         extensionState: options.extensionState,
@@ -468,7 +503,10 @@ export const createAddPanelActions = (
       if (isHydrationBatchActive()) {
         // Batched path: commit `panelsById` immediately (event listeners can find
         // the panel by id) and defer the `panelIds` append + persist to flush.
-        set((state) => {
+        commitParked(
+          set,
+          terminal
+        )((state) => {
           const existing = state.panelsById[id];
           if (existing) {
             logDebug("[TerminalStore] Panel already exists, updating instead of adding", { id });
@@ -498,7 +536,10 @@ export const createAddPanelActions = (
         const popoverSuppressed =
           options.focusPolicy === "preserve" ||
           !resolvePanelKindPolicy(requestedKind).dockPopoverOnSpawn;
-        set((state) => {
+        commitParked(
+          set,
+          terminal
+        )((state) => {
           const existing = state.panelsById[id];
           if (existing) {
             logDebug("[TerminalStore] Panel already exists, updating instead of adding", { id });
@@ -591,7 +632,10 @@ export const createAddPanelActions = (
     // tiers once the worktree is set.
     const isInActiveWorktree =
       activeWorktreeId === null || (options.worktreeId ?? null) === (activeWorktreeId ?? null);
-    const shouldBackground = location === "dock" || (location === "grid" && !isInActiveWorktree);
+    const shouldBackground =
+      location === "dock" ||
+      location === "background" ||
+      (location === "grid" && !isInActiveWorktree);
     const runtimeStatus: TerminalRuntimeStatus = shouldBackground ? "background" : "running";
 
     // Capture the owning workspace synchronously before any async work to avoid race
@@ -755,6 +799,9 @@ export const createAddPanelActions = (
       waitingReason,
       lastStateChange,
       location,
+      ...(location === "background" && {
+        backgroundRestoreLocation: options.backgroundRestoreLocation ?? "grid",
+      }),
       command: options.command,
       // Initialize grid terminals as visible to avoid initial under-throttling
       // IntersectionObserver will update this once mounted
@@ -832,7 +879,10 @@ export const createAddPanelActions = (
     // only persists when ids were added — would never write the new record.
     if (isHydrationBatchActive() && !options.replacesRestoreRecovery) {
       // Batched path: commit `panelsById` immediately; defer `panelIds` append.
-      set((state) => {
+      commitParked(
+        set,
+        terminal
+      )((state) => {
         const existing = state.panelsById[id];
         const existingPty = existing && isPtyPanel(existing) ? existing : undefined;
         const preservedTerminal: CarrierPanel =
@@ -900,7 +950,10 @@ export const createAddPanelActions = (
       const ptyPopoverSuppressed =
         options.focusPolicy === "preserve" ||
         !resolvePanelKindPolicy(requestedKind).dockPopoverOnSpawn;
-      set((state) => {
+      commitParked(
+        set,
+        terminal
+      )((state) => {
         const existing = state.panelsById[id];
         if (existing) {
           // Update existing terminal in place (reconnection case or double hydration)
@@ -1120,6 +1173,7 @@ export const createAddPanelActions = (
       const currentActiveWorktreeId = getWorktreeSelectionSnapshot()?.activeWorktreeId ?? null;
       const isDockOrInactive =
         location === "dock" ||
+        location === "background" ||
         (currentActiveWorktreeId !== null &&
           (options.worktreeId ?? null) !== (currentActiveWorktreeId ?? null));
 
