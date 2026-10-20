@@ -349,12 +349,16 @@ describe("createHardenedGit", () => {
       "GIT_CONFIG_COUNT",
       "GIT_CONFIG_KEY_0",
       "GIT_CONFIG_VALUE_0",
+      "GIT_CONFIG_PARAMETERS",
+      "git_config_parameters",
       "GIT_PAGER",
       "GIT_SSH",
       "GIT_SSH_COMMAND",
       "PAGER",
       "PREFIX",
       "SSH_ASKPASS",
+      "VISUAL",
+      "Visual",
     ];
     const originals = new Map(envKeys.map((key) => [key, process.env[key]]));
     for (const key of envKeys) {
@@ -678,6 +682,28 @@ describe("createBackgroundFetchGit", () => {
     const lastEnv = mockGitInstance.env.mock.calls[mockGitInstance.env.mock.calls.length - 1][0];
     expect(lastEnv.GIT_OPTIONAL_LOCKS).toBe("0");
     expect(lastEnv.GCM_INTERACTIVE).toBe("Never");
+  });
+
+  it("strips inherited VISUAL and GIT_CONFIG_PARAMETERS from every .env() call", async () => {
+    const inherited = ["VISUAL", "GIT_CONFIG_PARAMETERS"];
+    const originals = new Map(inherited.map((key) => [key, process.env[key]]));
+    for (const key of inherited) process.env[key] = "inherited-unsafe-value";
+    try {
+      await createBackgroundFetchGit("/test/repo", {
+        signal: new AbortController().signal,
+        platform: "darwin",
+      });
+
+      expect(mockGitInstance.env.mock.calls).toHaveLength(2);
+      for (const [env] of mockGitInstance.env.mock.calls) {
+        for (const key of inherited) expect(env[key]).toBeUndefined();
+      }
+    } finally {
+      for (const [key, value] of originals) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
   });
 
   it("does not set GIT_ASKPASS on Windows (no `true` binary on PATH)", async () => {
@@ -1331,14 +1357,23 @@ describe("buildContinueEnv", () => {
       GIT_CONFIG_COUNT: "1",
       GIT_CONFIG_KEY_0: "core.editor",
       GIT_CONFIG_VALUE_0: "/tmp/evil/editor",
+      GIT_CONFIG_PARAMETERS: "'core.editor'='/tmp/evil/editor'",
+      VISUAL: "/tmp/evil/visual",
     };
+    const originals = new Map(Object.keys(blocked).map((key) => [key, process.env[key]]));
     Object.assign(process.env, blocked);
-    const env = buildContinueEnv("linux");
-    for (const key of Object.keys(blocked)) {
-      expect(env[key]).toBeUndefined();
+    try {
+      const env = buildContinueEnv("linux");
+      for (const key of Object.keys(blocked)) {
+        expect(env[key]).toBeUndefined();
+      }
+      expect(env.GIT_EDITOR).toBe("true");
+    } finally {
+      for (const [key, value] of originals) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
     }
-    // Cleanup beyond the describe-level saved keys.
-    for (const key of Object.keys(blocked)) delete process.env[key];
   });
 
   it("does not set GIT_ASKPASS on win32 but still suppresses the editor", async () => {
