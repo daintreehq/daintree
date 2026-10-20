@@ -3,7 +3,7 @@ import { buildHandbackInstruction } from "@shared/utils/handback";
 import { isRegisteredAgent } from "@/config/agents";
 import { z } from "zod";
 import type { ActionCallbacks, ActionRegistry, AnyActionDefinition } from "../../actionTypes";
-import type { ActionContext } from "@shared/types/actions";
+import type { ActionContext, ActionId } from "@shared/types/actions";
 import { UnactionableTargetError } from "../../unactionableTarget";
 
 const panelStoreMock = vi.hoisted(() => ({
@@ -1183,7 +1183,7 @@ describe("agent.launch dispatch integration", () => {
 
 describe("agent.launch into the background (#13661)", () => {
   async function dispatch(
-    actionId: string,
+    actionId: ActionId,
     args: Record<string, unknown>,
     callbacks = makeCallbacks()
   ) {
@@ -1194,7 +1194,7 @@ describe("agent.launch into the background (#13661)", () => {
     for (const [, factory] of registry) {
       service.register(factory());
     }
-    const result = await service.dispatch(actionId as never, args, { source: "user" });
+    const result = await service.dispatch(actionId, args, { source: "user" });
     return { result, callbacks };
   }
 
