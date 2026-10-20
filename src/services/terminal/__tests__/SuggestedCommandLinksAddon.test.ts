@@ -60,6 +60,9 @@ describe("findSuggestedCommand", () => {
     ]);
     expect(commandAt(terminal, 1)).toBe(command);
     expect(commandAt(terminal, 0)).toBeNull();
+    // Prose above can't hold a command, so the line before needn't be blank
+    // even where the wrap width is unknown.
+    expect(findSuggestedCommand(terminal.buffer.active, 150, 1, 4)?.command).toBe(command);
   });
 
   it("joins a word-wrapped command with the space the wrap dropped, from either row", async () => {
@@ -86,6 +89,11 @@ describe("findSuggestedCommand", () => {
 
     const wrapped = await render(70, [`  ! echo ${"a".repeat(61)}`, "  --dry-run", ""]);
     expect(commandAt(wrapped, 0)).toBeNull();
+  });
+
+  it("leaves a command inert when a wide glyph couldn't fit at the end of its row", async () => {
+    const terminal = await render(70, [`  ! echo ${"a".repeat(60)}`, "  界界界 done"]);
+    expect(commandAt(terminal, 0)).toBeNull();
   });
 
   it("ends at a row filled to the edge when nothing continues it", async () => {
@@ -298,7 +306,7 @@ describe("SuggestedCommandLinksAddon", () => {
     expect(provide(addon, 2)?.[0]?.text).toMatch(/--since=2\.weeks --author=/);
   });
 
-  it("stops linking wrapped commands pushed into scrollback by a width change", async () => {
+  it("stops linking wrapped commands after a width change until the screen is repainted", async () => {
     const terminal = new HeadlessTerminal({
       cols: 70,
       rows: 5,
@@ -306,12 +314,33 @@ describe("SuggestedCommandLinksAddon", () => {
       allowProposedApi: true,
     });
     const addon = new SuggestedCommandLinksAddon(terminal, () => true, vi.fn());
-    await write(terminal, [GIT_HEAD, GIT_TAIL, "", "", "", "", "", ""].join("\r\n"));
-    expect(terminal.buffer.active.baseY).toBeGreaterThan(1);
-    expect(provide(addon, 1)).toHaveLength(1);
+    await write(terminal, ["", "", "", GIT_HEAD, GIT_TAIL].join("\r\n"));
+    const head = terminal.buffer.active.length - 1;
+    expect(provide(addon, head)).toHaveLength(1);
 
+    // Still on screen but laid out for 70 columns: at 100 the tail would fit.
     terminal.resize(100, 5);
-    expect(provide(addon, 1)).toBeUndefined();
+    expect(provide(addon, head)).toBeUndefined();
+
+    const repaint = [`  ! echo ${"a".repeat(90)}`, `  ${"b".repeat(20)}`];
+    await write(terminal, "\x1b[H\x1b[2K" + repaint.join("\r\n\x1b[2K"));
+    const top = terminal.buffer.active.baseY + 1;
+    expect(provide(addon, top + 1)?.[0]?.text).toBe(`echo ${"a".repeat(90)} ${"b".repeat(20)}`);
+  });
+
+  it("keeps linking new wrapped commands as scrollback trims older rows", async () => {
+    const terminal = new HeadlessTerminal({
+      cols: 70,
+      rows: 5,
+      scrollback: 5,
+      allowProposedApi: true,
+    });
+    await write(terminal, Array.from({ length: 10 }, (_, i) => `  prose ${i}`).join("\r\n"));
+    const addon = new SuggestedCommandLinksAddon(terminal, () => true, vi.fn());
+    await write(terminal, ["", "", "", GIT_HEAD, GIT_TAIL].join("\r\n"));
+    const head = terminal.buffer.active.length - 1;
+    expect(terminal.buffer.active.getLine(head - 1)?.translateToString(true)).toBe(GIT_HEAD);
+    expect(provide(addon, head)).toHaveLength(1);
   });
 
   it("runs nothing after it is disposed", async () => {

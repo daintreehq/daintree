@@ -3,15 +3,28 @@ import type {
   IBufferCell,
   IBufferRange,
   IDisposable,
+  IFunctionIdentifier,
   ILink,
   ILinkProvider,
+  IMarker,
 } from "@xterm/xterm";
 
-/** The slice of a terminal the provider reads. */
+/** The slice of a terminal the provider reads and listens to. */
 export interface SuggestedCommandTerminal {
-  readonly buffer: { readonly active: IBuffer; readonly normal: IBuffer };
+  readonly buffer: {
+    readonly active: IBuffer;
+    readonly normal: IBuffer;
+    onBufferChange(listener: (buffer: IBuffer) => void): IDisposable;
+  };
   readonly cols: number;
+  readonly parser: {
+    registerCsiHandler(
+      id: IFunctionIdentifier,
+      callback: (params: (number | number[])[]) => boolean
+    ): IDisposable;
+  };
   onResize(listener: (size: { cols: number; rows: number }) => void): IDisposable;
+  registerMarker(cursorYOffset?: number): IMarker;
 }
 
 /** Called with the exact command a clicked `! command` suggestion shows. */
@@ -148,6 +161,21 @@ function couldWrapOnto(
   return rowWidth(upper) + 1 + leadingWordWidth(lower, CONTINUATION_INDENT) > cols;
 }
 
+/**
+ * Whether row `y` could be part of a suggestion: a head, or a run of
+ * continuation-shaped rows back to one. Prose above a suggestion can't hold
+ * the command, so only then can a head below it be a continuation.
+ */
+function mayBelongToSuggestion(buffer: IBuffer, cols: number, y: number): boolean {
+  for (let k = y; k > y - MAX_ROWS; k--) {
+    const row = readRow(buffer, k, cols);
+    if (!row || row.cells.length === 0) return false;
+    if (isHead(row)) return true;
+    if (!row.isWrapped && !hasContinuationShape(row)) return false;
+  }
+  return true;
+}
+
 /** The last buffer row holding anything, or -1 for an empty buffer. */
 function lastContentRow(buffer: IBuffer): number {
   for (let y = buffer.length - 1; y >= 0; y--) {
@@ -176,10 +204,10 @@ function textFrom(row: Row, from: number): string {
  * Where the rows can't say what the command is, the whole suggestion stays
  * inert rather than running part of it or more than it:
  * - text that isn't drawn plainly (concealed, coloured, unsafe characters);
- * - an upper row filled to the edge, where a token cut mid-word and a word
- *   that ended at the margin leave identical rows;
+ * - an upper row with no room left for the next glyph, where a token cut
+ *   mid-word and a word that ended at the margin leave identical rows;
  * - a row that would continue the command but reads as a new suggestion, or a
- *   suggestion that could be the continuation of the row above it;
+ *   suggestion that could continue one on the row above it;
  * - a possible continuation on rows whose wrap width is unknown: rows from
  *   before `widthKnownFrom` were laid out for another pane width, and so were
  *   rows xterm reflowed on a resize;
@@ -197,7 +225,12 @@ export function readSuggestedCommand(
   if (!row || !isHead(row)) return null;
   const startCol = row.cells[HEAD_LENGTH]!.col;
   let widthKnown = headY >= widthKnownFrom;
-  if (couldWrapOnto(readRow(buffer, headY - 1, cols), row, cols, widthKnown)) return null;
+  if (
+    couldWrapOnto(readRow(buffer, headY - 1, cols), row, cols, widthKnown) &&
+    mayBelongToSuggestion(buffer, cols, headY - 1)
+  ) {
+    return null;
+  }
 
   let command = "";
   let from = HEAD_LENGTH;
@@ -217,7 +250,10 @@ export function readSuggestedCommand(
     } else {
       if (next.cells.length === 0) break;
       if (!couldWrapOnto(row, next, cols, widthKnown)) break;
-      if (!widthKnown || isHead(next) || rowWidth(row) >= cols || rows >= MAX_ROWS) return null;
+      if (!widthKnown || isHead(next) || rows >= MAX_ROWS) return null;
+      // A glyph that wouldn't fit on the row even without a space is how a
+      // token cut mid-word looks, so the join's space can't be known.
+      if (rowWidth(row) + next.cells[CONTINUATION_INDENT]!.width > cols) return null;
       command += " ";
       from = CONTINUATION_INDENT;
     }
@@ -255,6 +291,11 @@ export function findSuggestedCommand(
   return null;
 }
 
+/** `CSI H` to the top-left cell: no parameters, or row and column 1 (0 means 1). */
+function isHome(params: (number | number[])[]): boolean {
+  return params.slice(0, 2).every((param) => typeof param === "number" && param <= 1);
+}
+
 function sameRange(a: IBufferRange, b: IBufferRange): boolean {
   return (
     a.start.x === b.start.x && a.start.y === b.start.y && a.end.x === b.end.x && a.end.y === b.end.y
@@ -265,10 +306,14 @@ export class SuggestedCommandLinksAddon implements ILinkProvider {
   private _terminal: SuggestedCommandTerminal | null;
   private _isEnabled: () => boolean;
   private _onRun: OnRunSuggestedCommand;
-  private _resizeListener: IDisposable;
+  private _listeners: IDisposable[];
   private _cols: number;
-  // First normal-buffer row known to be laid out at the current width.
-  private _widthKnownFrom: number;
+  // Last normal-buffer row laid out for another pane width. A marker, so it
+  // follows the rows as scrollback trims them away.
+  private _staleThrough: IMarker | undefined;
+  // Rows to mark stale once the normal buffer is active again.
+  private _staleOnReturn = false;
+  private _awaitingRepaint = false;
 
   constructor(
     terminal: SuggestedCommandTerminal,
@@ -281,19 +326,63 @@ export class SuggestedCommandLinksAddon implements ILinkProvider {
     this._cols = terminal.cols;
     // Whatever is already on screen (a restored buffer, output from before the
     // pane opened) may have been laid out at another width.
-    this._widthKnownFrom = lastContentRow(terminal.buffer.normal) + 1;
-    // Claude Code repaints the screen at the new width on a resize, but rows
-    // already in scrollback keep the width they were wrapped at.
-    this._resizeListener = terminal.onResize(({ cols }) => {
-      if (cols === this._cols) return;
-      this._cols = cols;
-      this._widthKnownFrom = terminal.buffer.normal.baseY;
-    });
+    this._markAllStale();
+    this._listeners = [
+      terminal.onResize(({ cols }) => {
+        if (cols === this._cols) return;
+        this._cols = cols;
+        this._markAllStale();
+        this._awaitingRepaint = true;
+      }),
+      // Claude Code answers a width change by homing the cursor and repainting
+      // the screen at the new width. From then on only scrollback is stale.
+      terminal.parser.registerCsiHandler({ final: "H" }, (params) => {
+        if (this._awaitingRepaint && isHome(params) && this._isNormalActive()) {
+          this._awaitingRepaint = false;
+          this._markStaleThrough(terminal.buffer.normal.baseY - 1);
+        }
+        return false;
+      }),
+      terminal.buffer.onBufferChange(() => {
+        if (this._staleOnReturn && this._isNormalActive()) this._markAllStale();
+      }),
+    ];
+  }
+
+  private _isNormalActive(): boolean {
+    return this._terminal?.buffer.active.type === "normal";
+  }
+
+  private _markAllStale(): void {
+    const terminal = this._terminal;
+    if (!terminal) return;
+    this._markStaleThrough(lastContentRow(terminal.buffer.normal));
+  }
+
+  private _markStaleThrough(row: number): void {
+    const terminal = this._terminal;
+    if (!terminal) return;
+    // Markers land relative to the active buffer's cursor; wait for the
+    // normal buffer rather than mark the wrong one.
+    if (!this._isNormalActive()) {
+      this._staleOnReturn = true;
+      return;
+    }
+    this._staleOnReturn = false;
+    this._staleThrough?.dispose();
+    this._staleThrough = undefined;
+    if (row < 0) return;
+    const normal = terminal.buffer.normal;
+    this._staleThrough = terminal.registerMarker(row - (normal.baseY + normal.cursorY));
   }
 
   private _knownFrom(buffer: IBuffer): number {
     // The alternate screen has no scrollback; an app there redraws it whole.
-    return buffer.type === "normal" ? this._widthKnownFrom : 0;
+    if (buffer.type !== "normal") return 0;
+    if (this._staleOnReturn) return buffer.length;
+    const marker = this._staleThrough;
+    // A disposed marker went with the rows trimmed out of scrollback.
+    return marker && !marker.isDisposed ? marker.line + 1 : 0;
   }
 
   provideLinks(bufferLineNumber: number, callback: (links: ILink[] | undefined) => void): void {
@@ -331,7 +420,9 @@ export class SuggestedCommandLinksAddon implements ILinkProvider {
   }
 
   dispose(): void {
-    this._resizeListener.dispose();
+    for (const listener of this._listeners) listener.dispose();
+    this._staleThrough?.dispose();
+    this._staleThrough = undefined;
     this._terminal = null;
   }
 }
