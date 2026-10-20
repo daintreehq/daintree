@@ -70,8 +70,9 @@ export function isGpuContextLossExit(
 const MAX_FATAL_ERROR_LENGTH = 300;
 // Absolute paths name the project and worktree, and vary per machine.
 // A quoted path can hold spaces; an unquoted one ends at whitespace.
-const QUOTED_ABSOLUTE_PATH = /(['"`])(?:[A-Za-z]:[\\/]|\\\\|\/)[^'"`\n]*\1/g;
-const ABSOLUTE_PATH = /(?<![\w.-])(?:[A-Za-z]:[\\/]|\\\\|\/)[^\s'"`,;()<>]*[^\s'"`,;()<>.:]/g;
+// A URL's `//` is left to sanitizeEvent, which reduces it to its origin.
+const QUOTED_ABSOLUTE_PATH = /(['"`])(?:[A-Za-z]:[\\/]|\\\\|\/)(?:(?!\1)[^\n])*\1/g;
+const ABSOLUTE_PATH = /(?<![\w.:/-])(?:[A-Za-z]:[\\/]|\\\\|\/)[^\s'"`,;()<>]*[^\s'"`,;()<>.:]/g;
 const VOLATILE_ID =
   /\b(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{12,}|\d{5,})\b/gi;
 

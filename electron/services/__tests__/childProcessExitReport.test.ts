@@ -172,6 +172,13 @@ describe("describeFatalError", () => {
       'spawn "<path>" failed'
     );
     expect(describeFatalError("cannot read C:/acme/file.txt")).toBe("cannot read <path>");
+    expect(describeFatalError(`open "/work/John's Secret/config.json"`)).toBe('open "<path>"');
+  });
+
+  it("leaves URLs for the event scrubber to reduce", () => {
+    expect(describeFatalError("fetch https://api.example.com/v1 failed")).toBe(
+      "fetch https://api.example.com/v1 failed"
+    );
   });
 
   it("keeps relative paths and words with slashes", () => {
