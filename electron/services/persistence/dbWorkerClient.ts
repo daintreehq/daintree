@@ -75,6 +75,9 @@ export class DbWorkerClient {
   private degraded = false;
   private shuttingDown = false;
   private fenceEpoch: number | null = null;
+  // Per-ring count of synchronous writes, bumped only by fence() — never by the
+  // failure or shutdown fence advances, whose fallbacks must still replay.
+  private readonly ringSupersedes = new Map<string, number>();
   private lastRequestAt: number | null = null;
 
   constructor(deps: Partial<DbWorkerClientDeps> = {}) {
@@ -84,15 +87,32 @@ export class DbWorkerClient {
   /**
    * Run `op` on the worker thread; on any failure (kill switch, DB not open
    * yet, spawn failure, worker crash, timeout) run `fallback` synchronously on
-   * the main thread instead — the pre-worker behavior.
+   * the main thread instead — the pre-worker behavior. A ring write fenced by
+   * a newer synchronous write while in flight resolves `undefined` without
+   * its fallback: the stale snapshot would overwrite the newer durable one.
    */
   async run<T>(op: DbWorkerOp, fallback: () => T): Promise<T> {
+    const ring = op.op === "ringWriteAll" ? op.ring : null;
     if (!this.canUseWorker()) {
+      // A main-only ring write is as new as a synchronous one — e.g. after a
+      // timed-out shutdown drain, an older write may still be pending and its
+      // fallback must not land on top of this snapshot. The DB fence only
+      // needs to move while requests are pending; a degraded client's wedged
+      // worker has none left, so its writes skip the pragma.
+      if (ring !== null) {
+        this.supersede(ring);
+        if (this.pending.size > 0) this.advanceFence();
+      }
       return fallback();
     }
+    const generation = ring === null ? 0 : this.supersedeCount(ring);
     try {
       return (await this.request(op)) as T;
     } catch (error) {
+      if (ring !== null && generation !== this.supersedeCount(ring)) {
+        console.warn(`[DbWorker] "${op.op}" failed after being superseded — dropped:`, error);
+        return undefined as T;
+      }
       console.warn(`[DbWorker] "${op.op}" failed — running on main thread:`, error);
       return fallback();
     }
@@ -104,11 +124,21 @@ export class DbWorkerClient {
    * worker was stamped with the previous epoch and will no-op, so an older
    * snapshot can never land after the newer synchronous one. Collateral: queued
    * snapshots for OTHER rings are dropped too — harmless, since every write is
-   * a full snapshot and the owner's next flush rewrites it.
+   * a full snapshot and the owner's next flush rewrites it. On the failure
+   * path the supersede is scoped to `ring`: only that ring's in-flight writes
+   * skip their main-thread fallbacks, so other rings' snapshots still land.
    */
-  fence(): void {
-    if (this.worker === null && this.pending.size === 0) return;
-    this.advanceFence();
+  fence(ring: string): void {
+    this.supersede(ring);
+    this.advanceFenceIfLive();
+  }
+
+  private supersede(ring: string): void {
+    this.ringSupersedes.set(ring, this.supersedeCount(ring) + 1);
+  }
+
+  private supersedeCount(ring: string): number {
+    return this.ringSupersedes.get(ring) ?? 0;
   }
 
   /**
@@ -137,7 +167,7 @@ export class DbWorkerClient {
       } catch {
         // Worker already gone — nothing left to drain.
       }
-      this.fence();
+      this.advanceFenceIfLive();
     }
   }
 
@@ -243,6 +273,11 @@ export class DbWorkerClient {
     this.failAllPending(new Error(`db worker unavailable: ${reason}`));
   }
 
+  private advanceFenceIfLive(): void {
+    if (this.worker === null && this.pending.size === 0) return;
+    this.advanceFence();
+  }
+
   private failAllPending(error: Error): void {
     if (this.pending.size === 0) return;
     this.advanceFence();
@@ -300,8 +335,8 @@ export function runDbWork<T>(op: DbWorkerOp, fallback: () => T): Promise<T> {
  * Fence any queued worker ring writes before a synchronous main-thread write.
  * No-ops when the client (and thus the worker) was never created.
  */
-export function fenceDbWorkerWrites(): void {
-  instance?.fence();
+export function fenceDbWorkerWrites(ring: string): void {
+  instance?.fence(ring);
 }
 
 export async function shutdownDbWorker(): Promise<void> {

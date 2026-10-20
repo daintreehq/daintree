@@ -96,7 +96,7 @@ class AuditRingStore {
       return;
     }
     if (options?.sync) {
-      fenceDbWorkerWrites();
+      fenceDbWorkerWrites(ring);
       this.writeAllSerialized(ring, serialized, maxRecords);
       return;
     }
