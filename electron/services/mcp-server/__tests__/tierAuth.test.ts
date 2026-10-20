@@ -676,7 +676,13 @@ describe("external tool surface budget (#11585)", () => {
   // already detects the PR and every worktree listing carries it; the slot
   // buys waiting on that observation rather than re-deriving it, and it grants
   // no write of any kind.
-  const EXTERNAL_BUDGET_MAX = 34;
+  //
+  // 34 → 35 for #13662's `terminal.placeOwned`. An orchestrator parking idle
+  // seats in the background had only `terminal.revealOwned` to change where a
+  // panel sat, and that takes the user there each time. The generic placements
+  // take any id, so a session could hide panes it never opened; one owned tool
+  // covers the background, dock and grid, and never moves focus.
+  const EXTERNAL_BUDGET_MAX = 35;
 
   it(`advertises at most ${EXTERNAL_BUDGET_MAX} tools`, () => {
     expect(TIER_ALLOWLISTS.external.size).toBeLessThanOrEqual(EXTERNAL_BUDGET_MAX);

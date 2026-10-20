@@ -1048,6 +1048,11 @@ describe("McpServerService", () => {
         description: "Bring the user to a terminal this MCP session created",
       }),
       createManifestEntry({
+        id: "terminal.placeOwned" as ActionId,
+        title: "Place Owned Terminal",
+        description: "Move a terminal this MCP session created without focusing it",
+      }),
+      createManifestEntry({
         id: "terminal.interruptOwned" as ActionId,
         title: "Interrupt Owned Agent",
         description: "Stop the turn an agent this MCP session created is running",

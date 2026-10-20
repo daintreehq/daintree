@@ -441,6 +441,7 @@ export const BUILT_IN_ACTION_IDS = [
   "terminal.close",
   "terminal.closeOwned",
   "terminal.revealOwned",
+  "terminal.placeOwned",
   "terminal.trash",
   "terminal.kill",
   "terminal.killBatch",
@@ -623,6 +624,8 @@ export const DENY_PLUGIN_DISPATCH_ACTION_IDS = [
   "terminal.getOutput",
   "terminal.copy",
   "terminal.injectOwned",
+  // Main checks ownership before dispatching it; nothing in its `run()` does.
+  "terminal.placeOwned",
   "terminal.setClientMetadata",
   "terminal.paste",
   "project.runCheck",

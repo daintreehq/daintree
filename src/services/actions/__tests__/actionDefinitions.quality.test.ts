@@ -333,7 +333,10 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // 8_200 → 8_300 for #12980, measured at 8_291 B: the five external
   // hand-over tools name where a hand-over comes from (right-click > Hand to
   // orchestrator), so an agent refused a user's terminal can say what to click.
-  const MAX_EXTERNAL_TOTAL_BYTES = 8_300;
+  // 8_300 → 8_500 for #13662's `terminal.placeOwned`, a 166 B description: the
+  // surface had no headroom, and the prose has to say it never takes focus,
+  // since that is the whole difference from `terminal.revealOwned`.
+  const MAX_EXTERNAL_TOTAL_BYTES = 8_500;
 
   // Raised from 48_000 by #11908, which put seven tools on the in-app surface
   // (a deterministic session resume, the four bookmark mutations, and the two
@@ -519,7 +522,9 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // this project's other assistants, addressed with the agent messaging tools,
   // and that a start that isn't ready still runs. In-app only, off the
   // external surface.
-  const MAX_COHORT_TOTAL_BYTES = 21_300;
+  // 21_300 → 21_400 for #13662's `terminal.placeOwned`, measured at 21_399 B:
+  // the same description the external ceiling pays for, on both surfaces.
+  const MAX_COHORT_TOTAL_BYTES = 21_400;
 
   const ARG_SECTION = /\b(?:args?|arguments?|parameters?)\s*(?:\([^)]*\))?\s*:|\btakes no args\b/i;
 
@@ -1470,6 +1475,7 @@ describe("plugin-dispatch injection guard (#10558)", () => {
       "terminal.setClientMetadata": { terminalId: "t-placeholder", clientMetadata: null },
       "terminal.sendKeys": { terminalId: "t-placeholder", keys: ["Enter"] },
       "terminal.sendKeysOwned": { terminalId: "t-placeholder", keys: ["Enter"] },
+      "terminal.placeOwned": { terminalId: "t-placeholder", location: "dock" },
       "agent.launchMany": { agentIds: ["claude"], prompt: "p" },
       "terminal.sendCommandMany": { sends: [{ terminalId: "t-placeholder", command: "c" }] },
       "terminal.closeMany": { terminalIds: ["t-placeholder"] },

@@ -508,15 +508,16 @@ export const createCorePanelActions = (
     return get().panelsById[id];
   },
 
-  moveTerminalToDock: (id) => {
+  moveTerminalToDock: (id, options) => {
     // Overlay panels (the Daintree Assistant) self-manage their placement and
     // must never be relocated into the dock by a layout action (#9699).
     // Dialog panels are owned by their modal host on the same grounds.
     const dockSourceLocation = get().panelsById[id]?.location;
     if (dockSourceLocation === "overlay" || dockSourceLocation === "dialog") return;
 
-    // Check if panel is in a group - if so, move the entire group
-    const group = get().getPanelGroup(id);
+    // Check if panel is in a group - if so, move the entire group, unless the
+    // caller placed this one panel (`moveGroup: false`), which detaches it.
+    const group = options?.moveGroup === false ? undefined : get().getPanelGroup(id);
     if (group) {
       get().moveTabGroupToLocation(group.id, "dock");
       return;
@@ -561,7 +562,7 @@ export const createCorePanelActions = (
     }
   },
 
-  moveTerminalToGrid: (id) => {
+  moveTerminalToGrid: (id, options) => {
     // Overlay panels (the Daintree Assistant) self-manage their placement and
     // must never be relocated into the grid by a layout action (#9699).
     // Dialog panels are ephemeral and uncounted, so promoting one is an
@@ -570,8 +571,9 @@ export const createCorePanelActions = (
     const gridSourceLocation = get().panelsById[id]?.location;
     if (gridSourceLocation === "overlay" || gridSourceLocation === "dialog") return false;
 
-    // Check if panel is in a group - if so, move the entire group
-    const group = get().getPanelGroup(id);
+    // Check if panel is in a group - if so, move the entire group, unless the
+    // caller placed this one panel (`moveGroup: false`), which detaches it.
+    const group = options?.moveGroup === false ? undefined : get().getPanelGroup(id);
     if (group) {
       return get().moveTabGroupToLocation(group.id, "grid");
     }
