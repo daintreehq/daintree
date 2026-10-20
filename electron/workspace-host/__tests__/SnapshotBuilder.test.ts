@@ -62,6 +62,7 @@ function makeHost(overrides: Partial<SnapshotBuilderHost> = {}): SnapshotBuilder
     lastGitStatusCheckedAt: 0,
     workingTreeChangedAt: 0,
     workingTreeChangedDirs: undefined,
+    pathMembershipChangedAt: 0,
     fetchAuthFailed: false,
     fetchNetworkFailed: false,
     hasRemote: undefined,
@@ -260,6 +261,21 @@ describe("SnapshotBuilder", () => {
 
     const stamped = makeHost({ workingTreeChangedAt: 1_725_000_000_000 });
     expect(new SnapshotBuilder(stamped).build().workingTreeChangedAt).toBe(1_725_000_000_000);
+  });
+
+  it("carries the membership stamp independently of the raw-write stamp (#13595)", () => {
+    expect(new SnapshotBuilder(makeHost()).build().pathMembershipChangedAt).toBeUndefined();
+
+    // A content-only edit after a structural one: the two stamps diverge, and
+    // the file-search cache reads only the second.
+    const built = new SnapshotBuilder(
+      makeHost({
+        workingTreeChangedAt: 1_725_000_000_500,
+        pathMembershipChangedAt: 1_725_000_000_000,
+      })
+    ).build();
+    expect(built.workingTreeChangedAt).toBe(1_725_000_000_500);
+    expect(built.pathMembershipChangedAt).toBe(1_725_000_000_000);
   });
 
   it("carries the monitor's incarnation stamp onto the snapshot", () => {

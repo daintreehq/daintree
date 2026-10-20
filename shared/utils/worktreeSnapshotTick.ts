@@ -12,6 +12,7 @@ export const WORKTREE_SNAPSHOT_VOLATILE_KEYS = [
   "lastGitStatusCheckedAt",
   "workingTreeChangedAt",
   "workingTreeChangedDirs",
+  "pathMembershipChangedAt",
 ] as const satisfies readonly (keyof WorktreeSnapshot)[];
 
 const VOLATILE_KEYS: ReadonlySet<string> = new Set(WORKTREE_SNAPSHOT_VOLATILE_KEYS);
@@ -77,6 +78,7 @@ export function toWorktreeTick(snapshot: WorktreeSnapshot): WorktreeTick {
     lastGitStatusCheckedAt: snapshot.lastGitStatusCheckedAt,
     workingTreeChangedAt: snapshot.workingTreeChangedAt,
     workingTreeChangedDirs: snapshot.workingTreeChangedDirs,
+    pathMembershipChangedAt: snapshot.pathMembershipChangedAt,
   };
 }
 
@@ -88,6 +90,7 @@ export function applyWorktreeTick(base: WorktreeSnapshot, tick: WorktreeTick): W
     lastGitStatusCheckedAt: tick.lastGitStatusCheckedAt,
     workingTreeChangedAt: tick.workingTreeChangedAt,
     workingTreeChangedDirs: tick.workingTreeChangedDirs,
+    pathMembershipChangedAt: tick.pathMembershipChangedAt,
   };
 }
 

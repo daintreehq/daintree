@@ -89,6 +89,7 @@ interface MutableHost {
   onEmfileLimitReached: ReturnType<typeof vi.fn>;
   onWatcherRecovered: ReturnType<typeof vi.fn>;
   onWorktreeFilesChanged: ReturnType<typeof vi.fn>;
+  onPathMembershipChanged: ReturnType<typeof vi.fn>;
 }
 
 function makeHost(overrides: Partial<MutableHost> = {}): MutableHost {
@@ -109,6 +110,7 @@ function makeHost(overrides: Partial<MutableHost> = {}): MutableHost {
     onEmfileLimitReached: vi.fn(),
     onWatcherRecovered: vi.fn(),
     onWorktreeFilesChanged: vi.fn(),
+    onPathMembershipChanged: vi.fn(),
     ...overrides,
   };
 }
@@ -564,17 +566,39 @@ describe("WatcherController", () => {
     await settle();
 
     const fireWorktreeFilesChanged = capturedWatcherOptions?.onWorktreeFilesChanged as
-      ((affectedDirs: readonly string[] | null) => void) | undefined;
+      | ((affectedDirs: readonly string[] | null, pathMembershipChanged: boolean) => void)
+      | undefined;
     expect(fireWorktreeFilesChanged).toBeDefined();
 
-    fireWorktreeFilesChanged?.(["src/panels"]);
+    fireWorktreeFilesChanged?.(["src/panels"], false);
     expect(host.onWorktreeFilesChanged).toHaveBeenCalledTimes(1);
     // Forwarded verbatim: the controller is a disposal gate, not a place where
-    // the burst's directories get reinterpreted (#12244).
-    expect(host.onWorktreeFilesChanged).toHaveBeenCalledWith(["src/panels"]);
+    // the burst's directories or its membership verdict get reinterpreted
+    // (#12244, #13595).
+    expect(host.onWorktreeFilesChanged).toHaveBeenCalledWith(["src/panels"], false);
 
-    fireWorktreeFilesChanged?.(null);
-    expect(host.onWorktreeFilesChanged).toHaveBeenLastCalledWith(null);
+    fireWorktreeFilesChanged?.(null, true);
+    expect(host.onWorktreeFilesChanged).toHaveBeenLastCalledWith(null, true);
+  });
+
+  it("forwards onPathMembershipChanged, and drops it once the host stops", async () => {
+    mockWatcherStartResult = true;
+    const host = makeHost({ isElevated: true });
+    const ctrl = new WatcherController(host as WatcherControllerHost);
+    ctrl.start();
+    await settle();
+
+    const firePathMembershipChanged = capturedWatcherOptions?.onPathMembershipChanged as
+      (() => void) | undefined;
+    expect(firePathMembershipChanged).toBeDefined();
+
+    firePathMembershipChanged?.();
+    expect(host.onPathMembershipChanged).toHaveBeenCalledTimes(1);
+
+    host.isRunning = false;
+    ctrl.stop();
+    firePathMembershipChanged?.();
+    expect(host.onPathMembershipChanged).toHaveBeenCalledTimes(1);
   });
 
   it("drops a late onWorktreeFilesChanged once the host is no longer running", async () => {
@@ -585,14 +609,15 @@ describe("WatcherController", () => {
     await settle();
 
     const fireWorktreeFilesChanged = capturedWatcherOptions?.onWorktreeFilesChanged as
-      ((affectedDirs: readonly string[] | null) => void) | undefined;
+      | ((affectedDirs: readonly string[] | null, pathMembershipChanged: boolean) => void)
+      | undefined;
 
     // A watcher rotated out (or a stopped controller) can still fire its
     // debounced flush; the controller-level guard must not stamp the host
     // after teardown.
     host.isRunning = false;
     ctrl.stop();
-    fireWorktreeFilesChanged?.(["src"]);
+    fireWorktreeFilesChanged?.(["src"], false);
 
     expect(host.onWorktreeFilesChanged).not.toHaveBeenCalled();
   });

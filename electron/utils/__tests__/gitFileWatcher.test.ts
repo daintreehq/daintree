@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { watch, type FSWatcher } from "fs";
-import { readFile, realpath } from "fs/promises";
+import { lstat, readFile, realpath } from "fs/promises";
 import { join as pathJoin, resolve as pathResolve } from "path";
 import { getGitDir } from "../gitUtils.js";
 import { logWarn } from "../logger.js";
@@ -32,9 +32,19 @@ vi.mock("fs", () => ({
 }));
 
 vi.mock("fs/promises", () => ({
+  lstat: vi.fn(),
   readFile: vi.fn(),
   realpath: vi.fn(),
 }));
+
+/** An `lstat` result for a path of the given kind. */
+function statOf(kind: "file" | "dir" | "symlink") {
+  return {
+    isFile: () => kind === "file",
+    isDirectory: () => kind === "dir",
+    isSymbolicLink: () => kind === "symlink",
+  };
+}
 
 vi.mock("../gitUtils.js", () => ({
   getGitDir: vi.fn(),
@@ -157,6 +167,8 @@ describe("GitFileWatcher", () => {
     vi.mocked(readFile).mockRejectedValue(new Error("commondir missing"));
     // No symlink alias by default: the configured root IS the canonical one.
     vi.mocked(realpath).mockImplementation(((p: string) => Promise.resolve(p)) as never);
+    // Every path an update names is still a regular file: a plain content save.
+    vi.mocked(lstat).mockResolvedValue(statOf("file") as never);
     // Default classification: nothing is ignored, so every classified burst
     // refreshes. `clearAllMocks` resets calls but not implementations, so the
     // implementation is (re)installed here rather than once at module scope.
@@ -1168,7 +1180,8 @@ describe("GitFileWatcher", () => {
 
     function watcherWithPaths() {
       const onChange = vi.fn();
-      const onWorktreeFilesChanged = vi.fn<(dirs: readonly string[] | null) => void>();
+      const onWorktreeFilesChanged =
+        vi.fn<(dirs: readonly string[] | null, membershipChanged: boolean) => void>();
       const mock = setupSubscribeMock();
       const gitWatcher = new GitFileWatcher({
         worktreePath: pathJoin("/repo"),
@@ -1226,8 +1239,10 @@ describe("GitFileWatcher", () => {
       expect(onWorktreeFilesChanged).toHaveBeenCalledTimes(1);
       // Explicitly null, not merely absent: the callback has to SAY "unknown"
       // rather than leave the consumer to infer it from a missing argument.
-      expect(onWorktreeFilesChanged.mock.calls[0]).toHaveLength(1);
+      expect(onWorktreeFilesChanged.mock.calls[0]).toHaveLength(2);
       expect(onWorktreeFilesChanged.mock.calls[0][0]).toBeNull();
+      // An unplaceable burst can never be proved content-only.
+      expect(onWorktreeFilesChanged.mock.calls[0][1]).toBe(true);
       gitWatcher.dispose();
     });
 
@@ -1246,6 +1261,299 @@ describe("GitFileWatcher", () => {
       // The second flush must not still be carrying `src`: a scope that grows
       // forever converges on the full sweep it exists to avoid.
       expect(reportedDirs(onWorktreeFilesChanged, 1)).toEqual(["electron"]);
+      gitWatcher.dispose();
+    });
+  });
+
+  describe("path membership (#13595)", () => {
+    const gitDir = pathJoin("/repo", ".git");
+
+    function membershipWatcher() {
+      const onChange = vi.fn();
+      const onWorktreeFilesChanged =
+        vi.fn<(dirs: readonly string[] | null, membershipChanged: boolean) => void>();
+      const onPathMembershipChanged = vi.fn();
+      const onWorktreeWatcherReady = vi.fn();
+      const mock = setupSubscribeMock();
+      const gitWatcher = new GitFileWatcher({
+        worktreePath: pathJoin("/repo"),
+        branch: "main",
+        debounceMs: 300,
+        onChange,
+        onWorktreeFilesChanged,
+        onPathMembershipChanged,
+        onWorktreeWatcherReady,
+        watchWorktree: true,
+        worktreeMinDebounceMs: 500,
+        worktreeMaxDebounceMs: 500,
+        worktreeMaxWaitMs: 2000,
+      });
+      return {
+        gitWatcher,
+        onChange,
+        onWorktreeFilesChanged,
+        onPathMembershipChanged,
+        onWorktreeWatcherReady,
+        mock,
+      };
+    }
+
+    /** Start, let the subscription go live, and forget the readiness bump. */
+    async function liveWatcher() {
+      const harness = membershipWatcher();
+      await expect(harness.gitWatcher.start()).resolves.toBe(true);
+      harness.mock.resolve();
+      await flushParcelWatcherCallbacks();
+      harness.onPathMembershipChanged.mockClear();
+      return { ...harness, cb: harness.mock.getCallback() };
+    }
+
+    function gitDirCallback() {
+      const call = vi.mocked(watch).mock.calls.find(([path]) => path === gitDir) as
+        [unknown, unknown, unknown] | undefined;
+      return call?.[2] as
+        ((eventType: string, filename: string | Buffer | null) => void) | undefined;
+    }
+
+    const file = (name: string) => pathJoin("/repo", "src", name);
+
+    it("reports repeated in-place saves of an existing file as content-only", async () => {
+      const { gitWatcher, cb, onWorktreeFilesChanged, onPathMembershipChanged } =
+        await liveWatcher();
+
+      for (let save = 0; save < 3; save++) {
+        fireEvents(cb, [{ type: "update", path: file("a.ts") }]);
+        await vi.advanceTimersByTimeAsync(500);
+        await flushClassification();
+      }
+
+      expect(onWorktreeFilesChanged).toHaveBeenCalledTimes(3);
+      expect(onWorktreeFilesChanged.mock.calls.map(([, changed]) => changed)).toEqual([
+        false,
+        false,
+        false,
+      ]);
+      expect(lstat).toHaveBeenCalledWith(file("a.ts"));
+      expect(onPathMembershipChanged).not.toHaveBeenCalled();
+      gitWatcher.dispose();
+    });
+
+    it.each([
+      ["a create", [{ type: "create", path: file("new.ts") }]],
+      ["a delete", [{ type: "delete", path: file("old.ts") }]],
+      [
+        "a rename (delete + create)",
+        [
+          { type: "delete", path: file("before.ts") },
+          { type: "create", path: file("after.ts") },
+        ],
+      ],
+      ["an event without a type", [{ path: file("a.ts") } as unknown as WatcherEvent]],
+      ["an event without a path", [{ type: "update" }]],
+      ["a .gitignore edit", [{ type: "update", path: pathJoin("/repo", ".gitignore") }]],
+      ["an update outside the worktree", [{ type: "update", path: "/elsewhere/a.ts" }]],
+    ])("reports %s as a membership change", async (_label, events) => {
+      const { gitWatcher, cb, onWorktreeFilesChanged } = await liveWatcher();
+
+      fireEvents(cb, [{ type: "update", path: file("a.ts") }, ...(events as WatcherEvent[])]);
+      await vi.advanceTimersByTimeAsync(500);
+
+      expect(onWorktreeFilesChanged).toHaveBeenCalledTimes(1);
+      expect(onWorktreeFilesChanged.mock.calls[0][1]).toBe(true);
+      gitWatcher.dispose();
+    });
+
+    it("keeps a membership change sticky across batches of one burst", async () => {
+      const { gitWatcher, cb, onWorktreeFilesChanged } = await liveWatcher();
+
+      fireEvents(cb, [{ type: "create", path: file("new.ts") }]);
+      await vi.advanceTimersByTimeAsync(100);
+      fireEvents(cb, [{ type: "update", path: file("new.ts") }]);
+      await vi.advanceTimersByTimeAsync(500);
+
+      expect(onWorktreeFilesChanged).toHaveBeenCalledTimes(1);
+      expect(onWorktreeFilesChanged.mock.calls[0][1]).toBe(true);
+      gitWatcher.dispose();
+    });
+
+    it("does not carry a membership change into the next burst", async () => {
+      const { gitWatcher, cb, onWorktreeFilesChanged } = await liveWatcher();
+
+      fireEvents(cb, [{ type: "create", path: file("new.ts") }]);
+      await vi.advanceTimersByTimeAsync(500);
+      fireEvents(cb, [{ type: "update", path: file("new.ts") }]);
+      await vi.advanceTimersByTimeAsync(500);
+
+      expect(onWorktreeFilesChanged.mock.calls.map(([, changed]) => changed)).toEqual([
+        true,
+        false,
+      ]);
+      gitWatcher.dispose();
+    });
+
+    it("reports an overflow/rescan as a membership change", async () => {
+      const { gitWatcher, cb, onWorktreeFilesChanged } = await liveWatcher();
+
+      fireError(cb, new Error("Events were dropped and must be re-scanned"));
+      await vi.advanceTimersByTimeAsync(500);
+
+      expect(onWorktreeFilesChanged).toHaveBeenCalledTimes(1);
+      expect(onWorktreeFilesChanged.mock.calls[0]).toEqual([null, true]);
+      gitWatcher.dispose();
+    });
+
+    it("does not stat a burst too wide to be a save", async () => {
+      const { gitWatcher, cb, onWorktreeFilesChanged } = await liveWatcher();
+
+      fireEvents(
+        cb,
+        Array.from({ length: 65 }, (_, i) => ({ type: "update", path: file(`f${i}.ts`) }))
+      );
+      await vi.advanceTimersByTimeAsync(2000);
+
+      expect(onWorktreeFilesChanged.mock.calls[0][1]).toBe(true);
+      expect(lstat).not.toHaveBeenCalled();
+      gitWatcher.dispose();
+    });
+
+    it.each([
+      ["a directory", () => Promise.resolve(statOf("dir"))],
+      [
+        "a vanished path",
+        () => Promise.reject(Object.assign(new Error("gone"), { code: "ENOENT" })),
+      ],
+    ])(
+      "corrects a content-only report when an updated path turns out to be %s",
+      async (_label, impl) => {
+        // Parcel folds a delete and re-create of one path into `update`, so a
+        // file replaced by a directory moved in from outside reads as an edit.
+        const { gitWatcher, cb, onWorktreeFilesChanged, onPathMembershipChanged } =
+          await liveWatcher();
+        vi.mocked(lstat).mockImplementation(((p: string) =>
+          p === file("swapped") ? impl() : Promise.resolve(statOf("file"))) as never);
+
+        fireEvents(cb, [
+          { type: "update", path: file("a.ts") },
+          { type: "update", path: file("swapped") },
+        ]);
+        await vi.advanceTimersByTimeAsync(500);
+        await flushClassification();
+
+        expect(onWorktreeFilesChanged.mock.calls[0][1]).toBe(false);
+        expect(onPathMembershipChanged).toHaveBeenCalledTimes(1);
+        gitWatcher.dispose();
+      }
+    );
+
+    it("accepts a symlink as content-only, since git lists it as one entry", async () => {
+      const { gitWatcher, cb, onPathMembershipChanged } = await liveWatcher();
+      vi.mocked(lstat).mockResolvedValue(statOf("symlink") as never);
+
+      fireEvents(cb, [{ type: "update", path: file("link") }]);
+      await vi.advanceTimersByTimeAsync(500);
+      await flushClassification();
+
+      expect(onPathMembershipChanged).not.toHaveBeenCalled();
+      gitWatcher.dispose();
+    });
+
+    it("drops a failed verification that lands after dispose", async () => {
+      const { gitWatcher, cb, onPathMembershipChanged } = await liveWatcher();
+      let rejectStat: ((error: Error) => void) | undefined;
+      vi.mocked(lstat).mockImplementation(
+        (() =>
+          new Promise((_resolve, reject) => {
+            rejectStat = reject;
+          })) as never
+      );
+
+      fireEvents(cb, [{ type: "update", path: file("a.ts") }]);
+      await vi.advanceTimersByTimeAsync(500);
+      gitWatcher.dispose();
+      rejectStat?.(new Error("gone"));
+      await flushClassification();
+
+      expect(onPathMembershipChanged).not.toHaveBeenCalled();
+    });
+
+    it("reports a membership change when the recursive subscription goes live", async () => {
+      // Whatever happened while nothing watched the tree — before startup, during
+      // a pause or a failure, before an agent elevated it — is unaccounted for.
+      const { gitWatcher, mock, onPathMembershipChanged, onWorktreeWatcherReady } =
+        membershipWatcher();
+      await expect(gitWatcher.start()).resolves.toBe(true);
+      expect(onPathMembershipChanged).not.toHaveBeenCalled();
+
+      mock.resolve();
+      await flushParcelWatcherCallbacks();
+
+      expect(onPathMembershipChanged).toHaveBeenCalledTimes(1);
+      expect(onWorktreeWatcherReady).toHaveBeenCalledTimes(1);
+      expect(onPathMembershipChanged.mock.invocationCallOrder[0]).toBeLessThan(
+        onWorktreeWatcherReady.mock.invocationCallOrder[0]
+      );
+      gitWatcher.dispose();
+    });
+
+    it("reports a membership change for an index-only write", async () => {
+      // `git rm --cached` of an ignored file, `git add -f`: the listing moves
+      // and the working tree raises nothing.
+      const { gitWatcher, onChange, onWorktreeFilesChanged, onPathMembershipChanged } =
+        await liveWatcher();
+
+      gitDirCallback()?.("rename", "index");
+      await vi.advanceTimersByTimeAsync(300);
+
+      expect(onPathMembershipChanged).toHaveBeenCalledTimes(1);
+      expect(onChange).toHaveBeenCalledTimes(1);
+      expect(onWorktreeFilesChanged).not.toHaveBeenCalled();
+      gitWatcher.dispose();
+    });
+
+    it("watches info/exclude and reports an edit to it", async () => {
+      const { gitWatcher, onPathMembershipChanged, onChange } = await liveWatcher();
+      const infoDir = pathJoin(gitDir, "info");
+      const infoCall = vi.mocked(watch).mock.calls.find(([path]) => path === infoDir) as
+        [unknown, unknown, unknown] | undefined;
+      const infoCallback = infoCall?.[2] as
+        ((eventType: string, filename: string | Buffer | null) => void) | undefined;
+      expect(infoCallback).toBeDefined();
+
+      infoCallback?.("change", "exclude");
+      await vi.advanceTimersByTimeAsync(300);
+
+      expect(onPathMembershipChanged).toHaveBeenCalledTimes(1);
+      expect(onChange).toHaveBeenCalledTimes(1);
+      gitWatcher.dispose();
+    });
+
+    it("does not report membership for a fetch moving remote-tracking refs", async () => {
+      const { gitWatcher, onPathMembershipChanged, onChange } = await liveWatcher();
+      const remotesDir = pathJoin(gitDir, "refs", "remotes", "origin");
+      const remotesCall = vi.mocked(watch).mock.calls.find(([path]) => path === remotesDir) as
+        [unknown, unknown, unknown] | undefined;
+      const remotesCallback = remotesCall?.[2] as (() => void) | undefined;
+      expect(remotesCallback).toBeDefined();
+
+      remotesCallback?.();
+      await vi.advanceTimersByTimeAsync(300);
+
+      expect(onChange).toHaveBeenCalledTimes(1);
+      expect(onPathMembershipChanged).not.toHaveBeenCalled();
+      gitWatcher.dispose();
+    });
+
+    it("reports membership when a fetch and an index write share a debounce", async () => {
+      const { gitWatcher, onPathMembershipChanged } = await liveWatcher();
+      const remotesDir = pathJoin(gitDir, "refs", "remotes", "origin");
+      const remotesCall = vi.mocked(watch).mock.calls.find(([path]) => path === remotesDir) as
+        [unknown, unknown, unknown] | undefined;
+
+      (remotesCall?.[2] as (() => void) | undefined)?.();
+      gitDirCallback()?.("rename", "index");
+      await vi.advanceTimersByTimeAsync(300);
+
+      expect(onPathMembershipChanged).toHaveBeenCalledTimes(1);
       gitWatcher.dispose();
     });
   });
@@ -1836,7 +2144,7 @@ describe("GitFileWatcher", () => {
       expect(rescanWarnings()).toHaveLength(1);
       expect(onChange).toHaveBeenCalledTimes(3);
       expect(onWorktreeFilesChanged).toHaveBeenCalledTimes(3);
-      expect(onWorktreeFilesChanged).toHaveBeenLastCalledWith(null);
+      expect(onWorktreeFilesChanged).toHaveBeenLastCalledWith(null, true);
 
       // One millisecond short of the window is still inside it.
       await vi.advanceTimersByTimeAsync(14_999);

@@ -556,7 +556,8 @@
       "p95Ms": 900,
       "maxMetricValues": {
         "coldReloads": 0,
-        "returnKeystrokeMs": 2
+        "returnKeystrokeMs": 2,
+        "contentEditReloads": 0
       }
     },
     "PERF-198": {

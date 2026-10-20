@@ -1,6 +1,6 @@
 import { watch as fsWatch, FSWatcher } from "fs";
 import type { InotifyLimit } from "../../shared/types/workspace-host.js";
-import { readFile, realpath } from "fs/promises";
+import { lstat, readFile, realpath } from "fs/promises";
 import {
   join as pathJoin,
   dirname,
@@ -94,6 +94,14 @@ const WORKTREE_EXCLUSION_CANDIDATES = [
 const WORKTREE_BURST_PATH_CAP = 2048;
 
 /**
+ * Most paths an update-only burst may name and still be checked as content-only.
+ * Past it the burst counts as a membership change without a single `lstat`: an
+ * editor save or an agent's write touches a handful of files, while a burst this
+ * wide is a checkout or a generator, which is structural anyway.
+ */
+const CONTENT_ONLY_VERIFY_CAP = 64;
+
+/**
  * Deadline for the per-flush classification. `GIT_BLOCK_TIMEOUT_MS` (30s) stays
  * the hard ceiling inside the helper, but this path is latency-sensitive: a
  * wedged git must not hold an isolated save's status refresh open for half a
@@ -159,7 +167,19 @@ export interface GitFileWatcherOptions {
    * (`""` = the worktree root), or `null` when the burst could not be described
    * and the subscriber must assume everything changed (#12244).
    */
-  onWorktreeFilesChanged?: (affectedDirs: readonly string[] | null) => void;
+  onWorktreeFilesChanged?: (
+    affectedDirs: readonly string[] | null,
+    pathMembershipChanged: boolean
+  ) => void;
+  /**
+   * Fired when the set of paths in the worktree may have changed outside a
+   * worktree flush, or after one that `onWorktreeFilesChanged` reported as
+   * content-only turned out not to be: a git-internal write (index, HEAD, refs,
+   * config, `info/exclude`), the recursive subscription becoming live, or a
+   * content-only burst whose paths failed the regular-file check (#13595).
+   * Conservative by construction — it only ever over-reports.
+   */
+  onPathMembershipChanged?: () => void;
   /** Watch the working tree recursively for file edits (macOS FSEvents). */
   watchWorktree?: boolean;
   /** Minimum debounce delay for worktree events — first event in a burst fires at this delay. */
@@ -230,9 +250,12 @@ export class GitFileWatcher {
   private readonly onChange: () => void;
   private readonly onGitConfigChanged: (() => void) | undefined;
   private readonly onWorktreeFilesChanged:
-    ((affectedDirs: readonly string[] | null) => void) | undefined;
+    ((affectedDirs: readonly string[] | null, pathMembershipChanged: boolean) => void) | undefined;
+  private readonly onPathMembershipChanged: (() => void) | undefined;
   /** Set when the current (unflushed) burst touched `.git/config`. */
   private gitConfigChangePending = false;
+  /** Set when the current git-internal burst may have moved path membership. */
+  private gitMembershipChangePending = false;
   /**
    * Absolute paths seen in the current (unflushed) worktree burst, or `null`
    * once the burst is "unknown" — an overflow signal, an event without a
@@ -240,6 +263,13 @@ export class GitFileWatcher {
    * unknown burst always takes the full refresh.
    */
   private pendingWorktreePaths: Set<string> | null = new Set();
+  /**
+   * Whether the current (unflushed) burst carried anything but `update` events.
+   * Sticky like an unknown burst. Only half the proof of a content-only burst:
+   * Parcel folds a delete and re-create of one path into `update`, so the flush
+   * still checks that every path is a regular file.
+   */
+  private pendingMembershipChange = false;
   /** Canonical form of `worktreePath`, when it differs (macOS /var -> /private/var). */
   private worktreeRealPath: string | null = null;
   /** Aborts the in-flight classification when it is superseded or disposed. */
@@ -287,6 +317,7 @@ export class GitFileWatcher {
     this.onChange = options.onChange;
     this.onGitConfigChanged = options.onGitConfigChanged;
     this.onWorktreeFilesChanged = options.onWorktreeFilesChanged;
+    this.onPathMembershipChanged = options.onPathMembershipChanged;
     this.onWatcherFailed = options.onWatcherFailed;
     this.onInotifyLimitReached = options.onInotifyLimitReached;
     this.onWorktreeWatcherReady = options.onWorktreeWatcherReady;
@@ -345,6 +376,10 @@ export class GitFileWatcher {
       // onGitConfigChanged (#11155).
       this.gitConfigDir = commonDir;
       this.watchFile(pathJoin(commonDir, GIT_CONFIG_FILE_NAME));
+      // Repo-local ignore rules: an edit here changes both `git status` and the
+      // file-search listing without touching the working tree. Silently absent
+      // when a repo was created without the template's `info/` directory.
+      this.watchFile(pathJoin(commonDir, "info", "exclude"));
 
       // For linked worktrees, the per-worktree reflog lives under gitDir, not commonDir.
       // Watch it so branch changes in linked worktrees trigger the onChange callback.
@@ -562,6 +597,8 @@ export class GitFileWatcher {
     }
     this.worktreeBurstCount = 0;
     this.gitConfigChangePending = false;
+    this.gitMembershipChangePending = false;
+    this.pendingMembershipChange = false;
     // Retire any in-flight classification: the generation bump makes its
     // result inert, and the abort stops the subprocess rather than leaving it
     // to run out its deadline against a worktree nobody is watching.
@@ -635,6 +672,12 @@ export class GitFileWatcher {
           sub.unsubscribe();
         } else {
           this.worktreeSubscription = sub;
+          // Nothing was watching the working tree until now — at startup, after
+          // a pause, a failure or an elevation — so whatever the listing was
+          // built from may already be stale. Before the readiness notice, so a
+          // listener disposing this watcher cannot swallow it.
+          this.onPathMembershipChanged?.();
+          if (this.disposed) return;
           this.onWorktreeWatcherReady?.();
         }
       })
@@ -748,8 +791,10 @@ export class GitFileWatcher {
    */
   private watchRemoteRefsDir(dirPath: string): void {
     try {
+      // A fetch moves remote-tracking refs and nothing in the working tree, so
+      // this is the one git-internal signal that never reports membership.
       const watcher = fsWatch(dirPath, { persistent: false }, () => {
-        this.handleGitFileChange();
+        this.handleGitFileChange({ pathMembership: false });
       });
 
       watcher.on("error", (error) => {
@@ -853,10 +898,16 @@ export class GitFileWatcher {
   }
 
   /** Handle git-internal file changes (HEAD, refs, reflog). Fast debounce. */
-  private handleGitFileChange(): void {
+  private handleGitFileChange({ pathMembership = true }: { pathMembership?: boolean } = {}): void {
     if (this.disposed) {
       return;
     }
+
+    // Index, HEAD, config and exclude writes can all move the listing without
+    // one working-tree event: `git rm --cached` of an ignored file, `git add -f`,
+    // a new exclude rule. Not worth telling apart from a commit's reflog write,
+    // which is rare next to the content saves this exists to keep cheap.
+    if (pathMembership) this.gitMembershipChangePending = true;
 
     // A git-internal write is where the tracked/ignored overlap can change:
     // `git add -f` of an ignored file writes the index, and a checkout can
@@ -875,6 +926,10 @@ export class GitFileWatcher {
       // run belongs to the next burst, not this one.
       const configChanged = this.gitConfigChangePending;
       this.gitConfigChangePending = false;
+      const membershipChanged = this.gitMembershipChangePending;
+      this.gitMembershipChangePending = false;
+      if (membershipChanged) this.onPathMembershipChanged?.();
+      if (this.disposed) return;
       this.onChange();
       if (configChanged) {
         this.onGitConfigChanged?.();
@@ -945,6 +1000,12 @@ export class GitFileWatcher {
    * event — because this runs once per watcher event.
    */
   private collectWorktreePaths(events: readonly WorktreeEvent[] | null): void {
+    // Before the unknown short-circuit, though an unknown burst counts as a
+    // membership change anyway: the flag must describe every event it saw.
+    if (events === null || events.some((event) => event?.type !== "update")) {
+      this.pendingMembershipChange = true;
+    }
+
     const pending = this.pendingWorktreePaths;
     if (pending === null) return;
 
@@ -993,6 +1054,39 @@ export class GitFileWatcher {
       if (path.startsWith(prefix) && path.length > prefix.length) return true;
     }
     return false;
+  }
+
+  /**
+   * Prove an update-only burst left the path set alone, or report that it may
+   * not have. `update` alone is not that proof: Parcel's event list folds a
+   * delete followed by a re-create of the same path into `update`, so a file
+   * swapped for a directory moved in from elsewhere — whose children raise no
+   * events of their own — reads as an edit. Every path still being a regular
+   * file (or a symlink, which git lists as one entry) rules that out; a
+   * directory, a vanished path or any stat failure reports a change.
+   *
+   * Arrives a few milliseconds after the content-only report, never instead of
+   * one, so the conservative answer at worst follows a stamp the file browser
+   * already acted on. Not fenced against later bursts: a late "may have
+   * changed" is always safe to deliver.
+   */
+  private async verifyContentOnlyBurst(paths: readonly string[]): Promise<void> {
+    let contentOnly: boolean;
+    try {
+      const stats = await Promise.all(paths.map((path) => lstat(path)));
+      contentOnly = stats.every((stat) => stat.isFile() || stat.isSymbolicLink());
+    } catch {
+      contentOnly = false;
+    }
+    if (contentOnly || this.disposed) return;
+    try {
+      this.onPathMembershipChanged?.();
+    } catch (error) {
+      logWarn("Path membership listener threw after content-only verification", {
+        path: this.worktreePath,
+        error: (error as Error)?.message ?? String(error),
+      });
+    }
   }
 
   /**
@@ -1054,6 +1148,8 @@ export class GitFileWatcher {
     // landing while they execute belongs to the next burst, not this one.
     const burst = this.pendingWorktreePaths;
     this.pendingWorktreePaths = new Set();
+    const typedMembershipChange = this.pendingMembershipChange;
+    this.pendingMembershipChange = false;
 
     // A classification still in flight belongs to an older burst whose
     // `onChange` was never fired. Retire it and refresh for both: the newer
@@ -1073,12 +1169,22 @@ export class GitFileWatcher {
     // superseded burst only lost its *classification*, and the burst it
     // superseded already delivered its own directories through this same
     // callback. Nothing is unaccounted for, so the scope stays exact.
+    // Membership is decided per burst, so supersession is irrelevant here too.
+    // An update-only burst is reported as content-only now, while the file
+    // browser still wants the stamp immediately, and verified straight after.
+    const membershipChanged =
+      burst === null || typedMembershipChange || burst.size > CONTENT_ONLY_VERIFY_CAP;
     this.onWorktreeFilesChanged?.(
-      affectedDirsForBurst(burst, this.worktreePath, this.worktreeRealPath)
+      affectedDirsForBurst(burst, this.worktreePath, this.worktreeRealPath),
+      membershipChanged
     );
 
     // The callback above is synchronous and may dispose this watcher.
     if (this.disposed) return;
+
+    if (!membershipChanged && burst !== null && burst.size > 0) {
+      void this.verifyContentOnlyBurst([...burst]);
+    }
 
     const paths = burst === null || superseded ? null : [...burst];
     if (paths === null || paths.length === 0) {

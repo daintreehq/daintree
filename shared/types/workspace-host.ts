@@ -249,6 +249,16 @@ export interface WorktreeSnapshot {
    */
   workingTreeChangedDirs?: readonly string[] | null;
 
+  /**
+   * Monotonic epoch ms of the last moment this worktree's set of paths may have
+   * changed — a create, delete or rename, an ignore-rule or index write, or a
+   * gap in watcher coverage closing. A burst of in-place content edits advances
+   * `workingTreeChangedAt` but not this, which is what lets the file-search
+   * index survive active editing (#13595). Uncertainty always counts as a
+   * change. Volatile like `workingTreeChangedAt`; absent until the first one.
+   */
+  pathMembershipChangedAt?: number;
+
   /** True when this worktree's repo is in an auth-failed fetch state. */
   fetchAuthFailed?: boolean;
 
@@ -364,6 +374,7 @@ export interface WorktreeTick {
   lastGitStatusCheckedAt?: number;
   workingTreeChangedAt?: number;
   workingTreeChangedDirs?: readonly string[] | null;
+  pathMembershipChangedAt?: number;
 }
 
 /** Monitor configuration for polling intervals */

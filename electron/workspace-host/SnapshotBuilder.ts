@@ -71,6 +71,7 @@ export interface SnapshotBuilderHost {
   readonly lastGitStatusCheckedAt: number;
   readonly workingTreeChangedAt: number;
   readonly workingTreeChangedDirs: readonly string[] | null | undefined;
+  readonly pathMembershipChangedAt: number;
   readonly fetchAuthFailed: boolean;
   readonly fetchNetworkFailed: boolean;
   readonly hasRemote: boolean | undefined;
@@ -205,6 +206,7 @@ export class SnapshotBuilder {
       workingTreeChangedDirs: this.host.workingTreeChangedAt
         ? this.host.workingTreeChangedDirs
         : undefined,
+      pathMembershipChangedAt: this.host.pathMembershipChangedAt || undefined,
       fetchAuthFailed: this.host.fetchAuthFailed || undefined,
       fetchNetworkFailed: this.host.fetchNetworkFailed || undefined,
       // Verbatim: `false` is the answer that matters, so it must survive.

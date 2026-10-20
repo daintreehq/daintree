@@ -98,8 +98,22 @@ export interface WatcherControllerHost {
    * `affectedDirs` names the burst's worktree-relative parent directories
    * (`""` = the worktree root), or is `null` when the burst could not be
    * described and every listing must be re-read (#12244).
+   *
+   * `pathMembershipChanged` is false only for a burst of plain `update` events,
+   * whose paths are then verified and corrected through
+   * `onPathMembershipChanged` if they were not (#13595).
    */
-  onWorktreeFilesChanged?(affectedDirs: readonly string[] | null): void;
+  onWorktreeFilesChanged?(
+    affectedDirs: readonly string[] | null,
+    pathMembershipChanged: boolean
+  ): void;
+  /**
+   * The worktree's set of paths may have changed with no worktree flush to say
+   * so: a git-internal write, the recursive watch going live, or a content-only
+   * burst that failed verification. Lets the host advance the stamp the
+   * file-search cache invalidates on (#13595).
+   */
+  onPathMembershipChanged?(): void;
 }
 
 /**
@@ -258,7 +272,9 @@ export class WatcherController {
       upstreamRef: this.upstreamRef,
       onChange: () => this.handleGitFileChange(),
       onGitConfigChanged: () => this.host.onGitConfigChanged?.(),
-      onWorktreeFilesChanged: (affectedDirs) => this.handleWorktreeFilesChanged(affectedDirs),
+      onWorktreeFilesChanged: (affectedDirs, pathMembershipChanged) =>
+        this.handleWorktreeFilesChanged(affectedDirs, pathMembershipChanged),
+      onPathMembershipChanged: () => this.handlePathMembershipChanged(),
       watchWorktree: mode === "recursive",
       ...this.debouncePolicy(),
       worktreeQuietWindowMs: WATCHER_WORKTREE_QUIET_WINDOW_MS,
@@ -720,9 +736,18 @@ export class WatcherController {
    * can't stamp the monitor after `stop()`. `flushWorktreeChange` already
    * checks the watcher's own disposed flag; this is the controller-level gate.
    */
-  private handleWorktreeFilesChanged(affectedDirs: readonly string[] | null): void {
+  private handleWorktreeFilesChanged(
+    affectedDirs: readonly string[] | null,
+    pathMembershipChanged: boolean
+  ): void {
     if (this.disposed || !this.host.isRunning) return;
-    this.host.onWorktreeFilesChanged?.(affectedDirs);
+    this.host.onWorktreeFilesChanged?.(affectedDirs, pathMembershipChanged);
+  }
+
+  /** Same gate as the raw-filesystem signal, for the same reason. */
+  private handlePathMembershipChanged(): void {
+    if (this.disposed || !this.host.isRunning) return;
+    this.host.onPathMembershipChanged?.();
   }
 
   private handleGitFileChange(): void {
