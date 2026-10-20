@@ -86,6 +86,7 @@ function sortDiscovered(found: DiscoveredHost[]): DiscoveredHost[] {
 
 const SOURCE_LABEL: Record<DiscoveredHost["source"], string> = {
   tailscale: "Tailnet",
+  netbird: "NetBird",
   bonjour: "Local network",
   manual: "Entered",
   wsl: "WSL",
