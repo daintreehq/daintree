@@ -11,6 +11,7 @@ import {
   type EnvVar,
 } from "@/components/Project/projectSettingsDirty";
 import { validatePathPattern } from "@shared/utils/pathPattern";
+import { formatShellArgs, parseShellArgs } from "@shared/utils/shellArgs";
 import type { RunCommand, CopyTreeSettings } from "@/types";
 import type {
   DaintreeMcpTier,
@@ -107,8 +108,10 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
   const currentTerminalSettings = useMemo((): ProjectTerminalSettings | undefined => {
     const result: ProjectTerminalSettings = {};
     if (terminalShell !== undefined && terminalShell.trim()) result.shell = terminalShell.trim();
-    if (terminalShellArgs !== undefined && terminalShellArgs.trim())
-      result.shellArgs = terminalShellArgs.trim().split(/\s+/);
+    if (terminalShellArgs !== undefined) {
+      const shellArgs = parseShellArgs(terminalShellArgs);
+      if (shellArgs.length > 0) result.shellArgs = shellArgs;
+    }
     if (terminalDefaultCwd !== undefined && terminalDefaultCwd.trim())
       result.defaultWorkingDirectory = terminalDefaultCwd.trim();
     if (terminalScrollback !== undefined && terminalScrollback.trim()) {
@@ -295,7 +298,7 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
     setWorktreePathPattern(initialWorktreePathPattern);
     setTerminalShell(initialTerminalSettings?.shell);
     setTerminalShellArgs(
-      initialTerminalSettings?.shellArgs ? initialTerminalSettings.shellArgs.join(" ") : undefined
+      initialTerminalSettings?.shellArgs ? formatShellArgs(initialTerminalSettings.shellArgs) : undefined
     );
     setTerminalDefaultCwd(initialTerminalSettings?.defaultWorkingDirectory);
     setTerminalScrollback(
