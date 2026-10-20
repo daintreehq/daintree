@@ -64,6 +64,141 @@ describe("parsePatchModifiedFiles", () => {
     const patch = "--- a/x.md\n+++ b/x.md\n@@ -1 +1 @@\n-a\n+++ not/a/header\n";
     expect(parsePatchModifiedFiles(patch)).toEqual(["x.md"]);
   });
+
+  it("does not read an added '++ b/' content line as a header", () => {
+    const patch = [
+      "diff --git a/real.md b/real.md",
+      "index 1111111..2222222 100644",
+      "--- a/real.md",
+      "+++ b/real.md",
+      "@@ -1 +1 @@",
+      "-original",
+      "+++ b/fake.md",
+      "",
+    ].join("\n");
+    expect(parsePatchModifiedFiles(patch)).toEqual(["real.md"]);
+    expect(parsePatchModifiedFiles(toCrlf(patch))).toEqual(["real.md"]);
+  });
+
+  it("does not read a removed '-- a/' line and added '++ b/' line pair as a header", () => {
+    const patch = [
+      "--- a/real.md",
+      "+++ b/real.md",
+      "@@ -1,3 +1,3 @@",
+      " keep",
+      "--- a/other.md",
+      "+++ b/fake.md",
+      " keep",
+      "--- a/next.md",
+      "+++ b/next.md",
+      "@@ -1 +1 @@",
+      "-a",
+      "+b",
+      "",
+    ].join("\n");
+    expect(parsePatchModifiedFiles(patch)).toEqual(["real.md", "next.md"]);
+  });
+
+  it("counts lines with omitted counts, empty context lines and no-newline markers", () => {
+    const patch = [
+      "--- a/a.md",
+      "+++ b/a.md",
+      "@@ -1,3 +1,3 @@",
+      " one",
+      "",
+      "-two",
+      "\\ No newline at end of file",
+      "+++ b/fake.md",
+      "\\ No newline at end of file",
+      "--- a/b.md",
+      "+++ b/b.md",
+      "@@ -1 +1 @@",
+      "-x",
+      "+y",
+      "",
+    ].join("\n");
+    expect(parsePatchModifiedFiles(patch)).toEqual(["a.md", "b.md"]);
+  });
+
+  it("decodes git's C-quoted paths", () => {
+    const patch = [
+      'diff --git "a/\\346\\227\\245\\346\\234\\254\\350\\252\\236.txt" "b/\\346\\227\\245\\346\\234\\254\\350\\252\\236.txt"',
+      "index 1111111..2222222 100644",
+      '--- "a/\\346\\227\\245\\346\\234\\254\\350\\252\\236.txt"',
+      '+++ "b/\\346\\227\\245\\346\\234\\254\\350\\252\\236.txt"',
+      "@@ -1 +1 @@",
+      "-a",
+      "+b",
+      'diff --git "a/tab\\there" "b/tab\\there"',
+      '--- "a/tab\\there"',
+      '+++ "b/tab\\there"',
+      "@@ -1 +1 @@",
+      "-a",
+      "+b",
+      'diff --git "a/say \\"hi\\"\\\\caf\\303\\251.md" "b/say \\"hi\\"\\\\caf\\303\\251.md"',
+      '--- "a/say \\"hi\\"\\\\caf\\303\\251.md"',
+      '+++ "b/say \\"hi\\"\\\\caf\\303\\251.md"',
+      "@@ -1 +1 @@",
+      "-a",
+      "+b",
+      "",
+    ].join("\n");
+    expect(parsePatchModifiedFiles(patch)).toEqual([
+      "日本語.txt",
+      "tab\there",
+      'say "hi"\\café.md',
+    ]);
+    expect(parsePatchModifiedFiles(toCrlf(patch))).toEqual([
+      "日本語.txt",
+      "tab\there",
+      'say "hi"\\café.md',
+    ]);
+  });
+
+  it("drops the tab git appends after a quoted path containing a space", () => {
+    const patch =
+      '--- "a/\\346\\227\\245 \\350\\252\\236.txt"\t\n+++ "b/\\346\\227\\245 \\350\\252\\236.txt"\t\n@@ -1 +1 @@\n-a\n+b\n';
+    expect(parsePatchModifiedFiles(patch)).toEqual(["日 語.txt"]);
+    expect(parsePatchModifiedFiles(toCrlf(patch))).toEqual(["日 語.txt"]);
+  });
+
+  it("lists new files and rename destinations", () => {
+    const patch = [
+      "diff --git a/new.md b/new.md",
+      "new file mode 100644",
+      "--- /dev/null",
+      "+++ b/new.md",
+      "@@ -0,0 +1,2 @@",
+      "+--- a/x",
+      "+++ b/y",
+      "diff --git a/old.md b/moved.md",
+      "similarity index 80%",
+      "rename from old.md",
+      "rename to moved.md",
+      "--- a/old.md",
+      "+++ b/moved.md",
+      "@@ -1 +1 @@",
+      "-a",
+      "+b",
+      "",
+    ].join("\n");
+    expect(parsePatchModifiedFiles(patch)).toEqual(["new.md", "moved.md"]);
+  });
+
+  it("ignores a '+++' header with no '---' header before it", () => {
+    expect(parsePatchModifiedFiles("+++ b/orphan.md\n@@ -1 +1 @@\n-a\n+b\n")).toEqual([]);
+  });
+
+  it("skips a quoted path whose bytes are not UTF-8", () => {
+    const patch = '--- "a/\\377.md"\n+++ "b/\\377.md"\n@@ -1 +1 @@\n-a\n+b\n';
+    expect(parsePatchModifiedFiles(patch)).toEqual([]);
+  });
+
+  it("skips a quoted header it cannot decode rather than inventing a path", () => {
+    const patch =
+      '--- "a/x\\q"\n+++ "b/x\\q"\n@@ -1 +1 @@\n-a\n+b\n--- a/ok.md\n+++ b/ok.md\n@@ -1 +1 @@\n-a\n+b\n';
+    expect(parsePatchModifiedFiles(patch)).toEqual(["ok.md"]);
+  });
 });
 
 describe("stripTransportCrlf", () => {
