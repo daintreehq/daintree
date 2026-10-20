@@ -581,9 +581,11 @@ export class RunCommandDetector {
 
     if (argv[0] === "nohup") argv = argv.slice(1);
 
+    // Keep the named interpreter: the host shell may not run a bash script the same way.
     if (argv.length === 3 && (argv[0] === "bash" || argv[0] === "sh") && argv[1] === "-c") {
       const script = this.stripShellWrappers(argv[2]);
-      return script.length > 0 ? script : undefined;
+      if (script.length === 0) return undefined;
+      argv = [argv[0], "-c", script];
     }
 
     if (argv.length === 0 || argv[0].length === 0) return undefined;

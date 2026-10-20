@@ -957,9 +957,9 @@ describe("RunCommandDetector", () => {
         expect(await detectCommand()).toBe("npm run dev");
       });
 
-      it("unwraps a bash -c array to its script", async () => {
-        await writeDevcontainer(["bash", "-c", "npm run dev &"]);
-        expect(await detectCommand()).toBe("npm run dev");
+      it("keeps the bash -c interpreter while stripping a backgrounded script", async () => {
+        await writeDevcontainer(["bash", "-c", "nohup npm run dev &"]);
+        expect(await detectCommand()).toBe("bash -c 'npm run dev'");
       });
 
       it("rejects arrays with non-string items instead of shifting argv", async () => {
