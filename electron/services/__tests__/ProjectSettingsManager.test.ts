@@ -411,28 +411,46 @@ describe("ProjectSettingsManager caching", () => {
     const started = new Promise<void>((resolve) => (readStarted = resolve));
     let releaseRead!: () => void;
     const gate = new Promise<void>((resolve) => (releaseRead = resolve));
-    const readSpy = vi.spyOn(fs, "readFile").mockImplementationOnce((async (
+    let saveEntered!: () => void;
+    const entered = new Promise<void>((resolve) => (saveEntered = resolve));
+    let calls = 0;
+    // The first read holds the damaged bytes until released; any later read is
+    // the save starting its turn (it reads the saved allow-list first).
+    const readSpy = vi.spyOn(fs, "readFile").mockImplementation((async (
       file: string,
       encoding: string
     ) => {
-      const content = await realReadFile(file, encoding);
-      readStarted();
-      await gate;
-      return content;
+      calls += 1;
+      if (calls === 1) {
+        const content = await realReadFile(file, encoding);
+        readStarted();
+        await gate;
+        return content;
+      }
+      saveEntered();
+      return realReadFile(file, encoding);
     }) as unknown as typeof fs.readFile);
 
-    const read = manager.getProjectSettings(projectId);
-    await started;
-    const save = manager.saveProjectSettings(projectId, {
-      runCommands: [],
-      devServerCommand: "npm run dev",
-    });
-    // An unserialized save would land here, before the read resumes; a
-    // serialized one is still waiting, so the race falls through to the timer.
-    await Promise.race([save, new Promise((resolve) => setTimeout(resolve, 50))]);
-    releaseRead();
-    await Promise.all([read, save]);
-    readSpy.mockRestore();
+    let read: Promise<unknown> = Promise.resolve();
+    let save: Promise<unknown> = Promise.resolve();
+    try {
+      read = manager.getProjectSettings(projectId);
+      await started;
+      save = manager.saveProjectSettings(projectId, {
+        runCommands: [],
+        devServerCommand: "npm run dev",
+      });
+      const saveRanFirst = await Promise.race([
+        entered.then(() => true),
+        new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 50)),
+      ]);
+      expect(saveRanFirst).toBe(false);
+    } finally {
+      releaseRead();
+      await Promise.allSettled([read, save]);
+      readSpy.mockRestore();
+    }
+    await expect(save).resolves.toBeUndefined();
 
     const fresh = new ProjectSettingsManager(tempDir, createMockStore());
     expect((await fresh.getProjectSettings(projectId)).devServerCommand).toBe("npm run dev");
