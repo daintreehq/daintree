@@ -139,6 +139,16 @@ describe("PluginStorageManager subscribers", () => {
     expect(userCb).toHaveBeenCalledTimes(1);
   });
 
+  it("delivers a written value in the JSON form a read returns", () => {
+    const mgr = managerFor();
+    const cb = vi.fn();
+    mgr.addSubscriber(PLUGIN_ID, { key: "k", scope: "user", cb });
+    mgr.notifyStorageSubscribers(PLUGIN_ID, "user", "k", NaN);
+    mgr.notifyStorageSubscribers(PLUGIN_ID, "user", "k", { n: -Infinity });
+    mgr.notifyStorageSubscribers(PLUGIN_ID, "user", "k", undefined);
+    expect(cb.mock.calls).toEqual([[null], [{ n: null }], [undefined]]);
+  });
+
   it("stops firing after removeSubscriber", () => {
     const mgr = managerFor();
     const cb = vi.fn();

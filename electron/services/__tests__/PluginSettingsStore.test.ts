@@ -119,6 +119,18 @@ describe("PluginSettingsStore", () => {
     expect(await store.get<{ a: number }>("config")).toEqual({ a: 1 });
   });
 
+  it.each([NaN, Infinity, -Infinity])(
+    "caches a top-level %s as the null it persists as",
+    async (value) => {
+      const { store, filePath } = storeAt("acme.plugin.json");
+      expect(await store.set("count", value)).toBe(true);
+      expect(await store.get("count")).toBeNull();
+      expect(JSON.parse(await fs.readFile(filePath, "utf-8")).count).toBeNull();
+      expect(await new PluginSettingsStore(filePath).get("count")).toBeNull();
+      expect(await store.set("count", null)).toBe(false);
+    }
+  );
+
   const idempotentIt = process.platform === "win32" || process.getuid?.() === 0 ? it.skip : it;
   idempotentIt("treats an equal-value set as a no-op, even when the dir is read-only", async () => {
     const dir = path.join(tmpDir, "idem");

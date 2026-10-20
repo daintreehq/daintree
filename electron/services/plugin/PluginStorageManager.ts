@@ -1,5 +1,5 @@
 import path from "path";
-import { PluginSettingsStore } from "../PluginSettingsStore.js";
+import { cloneValue, PluginSettingsStore } from "../PluginSettingsStore.js";
 import { pluginManifestIdFromInstanceKey } from "./projectPluginIdentity.js";
 import { projectStore } from "../ProjectStore.js";
 import type { PluginStorageScope } from "../../../shared/types/plugin.js";
@@ -202,6 +202,8 @@ export class PluginStorageManager {
   ): void {
     const subs = this.storageSubscribers.get(pluginId);
     if (!subs) return;
+    // Deliver the value as a read would return it, in its persisted JSON form.
+    if (value !== undefined) value = cloneValue(value);
     // Snapshot so a callback that disposes itself doesn't mutate the live set
     // mid-iteration.
     for (const sub of [...subs]) {
