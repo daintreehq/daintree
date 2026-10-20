@@ -497,8 +497,23 @@ describe("CompletionDiscoveryEngine result-cache residency", () => {
   let base: string;
   let now: number;
 
-  const cacheSize = (engine: CompletionDiscoveryEngine) =>
-    (engine as unknown as { resultCache: Map<string, unknown> }).resultCache.size;
+  const cacheOf = (engine: CompletionDiscoveryEngine) =>
+    (engine as unknown as { resultCache: Map<string, { expires: number }> }).resultCache;
+  const cacheSize = (engine: CompletionDiscoveryEngine) => cacheOf(engine).size;
+
+  /** Settled residency cap, discovered by filling an engine sequentially. */
+  async function discoverCap(): Promise<number> {
+    const engine = new CompletionDiscoveryEngine();
+    stubCompute(engine);
+    let i = 0;
+    let size = -1;
+    while (i < 500 && cacheSize(engine) !== size) {
+      size = cacheSize(engine);
+      await engine.list("claude", project(i++));
+    }
+    expect(size).toBeLessThan(500);
+    return size;
+  }
 
   function stubCompute(engine: CompletionDiscoveryEngine, impl?: Compute) {
     const spy = vi.fn<Compute>(impl ?? (async () => []));
@@ -563,10 +578,11 @@ describe("CompletionDiscoveryEngine result-cache residency", () => {
     const compute = stubCompute(engine);
 
     await engine.list("claude", project(0));
-    now += 29_999;
+    const [{ expires }] = [...cacheOf(engine).values()];
+    now = expires - 1;
     await engine.list("claude", project(0));
     expect(compute).toHaveBeenCalledTimes(1);
-    now += 1;
+    now = expires;
     await engine.list("claude", project(0));
     expect(compute).toHaveBeenCalledTimes(2);
   });
@@ -634,8 +650,51 @@ describe("CompletionDiscoveryEngine result-cache residency", () => {
 
     for (const scan of scans) scan.resolve([]);
     await Promise.all(calls);
-    expect(cacheSize(engine)).toBeLessThan(100);
-    expect(cacheSize(engine)).toBeGreaterThan(0);
+    expect(cacheSize(engine)).toBe(await discoverCap());
+  });
+
+  it("replaces an expired pending scan, and the stale one cannot disturb its replacement", async () => {
+    const engine = new CompletionDiscoveryEngine();
+    const stale = deferred();
+    const fresh = deferred();
+    const compute = stubCompute(engine);
+    compute.mockImplementationOnce(() => stale.promise);
+    compute.mockImplementationOnce(() => fresh.promise);
+
+    const staleCall = engine.list("claude", project(0));
+    await vi.waitFor(() => expect(compute).toHaveBeenCalledTimes(1));
+    now += 60_000;
+    const freshCall = engine.list("claude", project(0));
+    await vi.waitFor(() => expect(compute).toHaveBeenCalledTimes(2));
+
+    stale.reject(new Error("stale"));
+    await expect(staleCall).rejects.toThrow("stale");
+    fresh.resolve([]);
+    await freshCall;
+
+    expect(cacheSize(engine)).toBe(1);
+    await engine.list("claude", project(0));
+    expect(compute).toHaveBeenCalledTimes(2);
+  });
+
+  it("keys on the environment revision", async () => {
+    const engine = new CompletionDiscoveryEngine();
+    const compute = stubCompute(engine);
+    const prev = process.env.CLAUDE_CONFIG_DIR;
+
+    try {
+      process.env.CLAUDE_CONFIG_DIR = path.join(base, "config-a");
+      await engine.list("claude", project(0));
+      process.env.CLAUDE_CONFIG_DIR = path.join(base, "config-b");
+      await engine.list("claude", project(0));
+      expect(compute).toHaveBeenCalledTimes(2);
+      await engine.list("claude", project(0));
+      expect(compute).toHaveBeenCalledTimes(2);
+      expect(cacheSize(engine)).toBe(2);
+    } finally {
+      if (prev !== undefined) process.env.CLAUDE_CONFIG_DIR = prev;
+      else delete process.env.CLAUDE_CONFIG_DIR;
+    }
   });
 
   it("does not cache a lookup that straddled clearCache", async () => {
