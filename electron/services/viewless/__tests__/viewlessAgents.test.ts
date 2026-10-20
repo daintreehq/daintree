@@ -243,6 +243,39 @@ describe("agent.launch with no frontend", () => {
     expect(invoke.mock.calls.some(([, channel]) => channel === CHANNELS.TERMINAL_SPAWN)).toBe(true);
   });
 
+  it("parks an agent launched into the background and records its grid restore target", async () => {
+    const { deps, invoke, store } = launchDeps();
+
+    const result = await executeViewlessAction(
+      request("agent.launch", { agentId: "claude", location: "background" }),
+      deps
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      result: { launched: true, location: "background", spawnStatus: null },
+    });
+    const terminalId = (result as { result: { terminalId: string } }).result.terminalId;
+    expect(spawned(invoke).id).toBe(terminalId);
+    expect(store.read()?.terminals.find((t) => t.id === terminalId)).toMatchObject({
+      location: "background",
+      backgroundRestoreLocation: "grid",
+    });
+  });
+
+  it("writes no restore target for a launch to the dock", async () => {
+    const { deps, store } = launchDeps();
+
+    await executeViewlessAction(
+      request("agent.launch", { agentId: "claude", location: "dock" }),
+      deps
+    );
+
+    const snapshot = store.read()?.terminals[0];
+    expect(snapshot?.location).toBe("dock");
+    expect(snapshot).not.toHaveProperty("backgroundRestoreLocation");
+  });
+
   it("records the worktree's stable handle so restore follows a worktree move", async () => {
     const moved = makeWorktree({ ...WORKTREE, gitDir: "/repo/.git/worktrees/feature" });
     const { deps, store } = makeDeps(

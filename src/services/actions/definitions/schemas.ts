@@ -29,6 +29,12 @@ export const LaunchLocationSchema = z
   .enum(["grid", "dock", "overlay"])
   .describe('"grid" main grid (default), "dock" sidebar dock, "overlay" floating overlay.');
 
+// `agent.launch` alone can park a new agent: the shortcut actions open a pane
+// the user asked to see, so they keep the visible locations.
+export const AgentLaunchLocationSchema = z
+  .enum(["grid", "dock", "overlay", "background"])
+  .describe('Default "grid". "background" runs it unmounted until restored.');
+
 /**
  * Mirror of `TerminalSpawnSource` from `shared/types/panel.ts`. Kept in lockstep
  * with that union so action argsSchemas can validate the field. The MCP bridge

@@ -76,7 +76,11 @@ export const createBackgroundActions = (
       if (!existing) return state;
       const newById: Record<string, CarrierPanel> = {
         ...state.panelsById,
-        [id]: { ...existing, location: "background" as const },
+        [id]: {
+          ...existing,
+          location: "background" as const,
+          backgroundRestoreLocation: originalLocation,
+        },
       };
       const newBackgrounded = new Map(state.backgroundedTerminals);
       newBackgrounded.set(id, {
@@ -140,7 +144,11 @@ export const createBackgroundActions = (
       const newById = { ...s.panelsById };
       for (const bid of bgPanelIds) {
         if (newById[bid]) {
-          newById[bid] = { ...newById[bid], location: "background" as const };
+          newById[bid] = {
+            ...newById[bid],
+            location: "background" as const,
+            backgroundRestoreLocation: originalLocation,
+          };
         }
       }
 

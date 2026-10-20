@@ -310,6 +310,12 @@ interface BasePanelData {
   titleMode?: PanelTitleMode;
   /** Location in the UI - grid (main view) or dock (minimized) */
   location: PanelLocation;
+  /**
+   * Where a parked (`location: "background"`) panel returns when restored.
+   * Read only while backgrounded; carried on the panel so the saved layout can
+   * record it and a reloaded view can rebuild the restore entry.
+   */
+  backgroundRestoreLocation?: "grid" | "dock";
   /** ID of the worktree this panel is associated with */
   worktreeId?: string;
   /** Whether the panel pane is currently visible in the viewport */
@@ -1166,6 +1172,7 @@ export interface TerminalInstance {
   activityType?: "interactive" | "background" | "idle";
   lastCommand?: string;
   location: PanelLocation;
+  backgroundRestoreLocation?: "grid" | "dock";
   command?: string;
   isVisible?: boolean;
   restartKey?: number;

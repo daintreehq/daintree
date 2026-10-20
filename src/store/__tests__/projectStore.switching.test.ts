@@ -483,7 +483,7 @@ describe("buildOutgoingState terminal/tabGroup snapshot (#5001)", () => {
     expect(outgoing.terminals).toEqual([{ id: "browser-1", kind: "browser" }]);
   });
 
-  it("excludes trash, background, assistant, and smoke-test panels", async () => {
+  it("excludes trash, assistant, and smoke-test panels but keeps parked ones", async () => {
     const { setPanelStoreAccessor } = await import("../storeAccessors");
     const panels = {
       "t-trash": { id: "t-trash", kind: "terminal", location: "trash" },
@@ -505,8 +505,9 @@ describe("buildOutgoingState terminal/tabGroup snapshot (#5001)", () => {
     await Promise.resolve();
 
     const outgoing = projectClientMock.switch.mock.calls[0]![1];
-    expect(outgoing.terminals).toHaveLength(1);
-    expect(outgoing.terminals[0].id).toBe("t-keep");
+    // A parked panel survives the switch (#13661): dropping it would bring its
+    // live PTY back as a grid orphan. Its serialized shape is panelPersistence's.
+    expect(outgoing.terminals.map((t: { id: string }) => t.id)).toEqual(["t-bg", "t-keep"]);
   });
 
   it("includes multi-panel tab groups, excludes single-panel groups", async () => {

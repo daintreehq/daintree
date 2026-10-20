@@ -38,7 +38,7 @@ const WAKE_CONCURRENCY = 2;
  * a hung wake (IPC stall, oversized incremental restore) on the focused
  * panel doesn't block the other visible panels from refreshing.
  *
- * Dock and trash terminals are excluded — they manage their own visibility.
+ * Dock, trash and parked terminals are excluded — they manage their own visibility.
  */
 export async function wakeActiveWorktreeTerminals(): Promise<void> {
   try {
@@ -73,6 +73,7 @@ function collectActiveWorktreeTerminalTargets(): string[] {
     if (
       location === "dock" ||
       location === "trash" ||
+      location === "background" ||
       location === "overlay" ||
       location === "dialog"
     )

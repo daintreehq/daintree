@@ -246,7 +246,7 @@ export interface LaunchDecline {
 
 export interface LaunchAgentResult extends LaunchAgentIdentity {
   terminalId: string;
-  location: "grid" | "dock";
+  location: "grid" | "dock" | "background";
   /** Atomic launch result: no PTY was started; a setup diagnostic panel was opened. */
   spawnStatus?: "missing-cli";
 }
@@ -669,7 +669,14 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
           const terminalId = await addPanel(options, addPanelCommit);
           if (!terminalId) return declineAddPanel();
           const rawLocation = usePanelStore.getState().panelsById[terminalId]?.location ?? "grid";
-          const location = rawLocation === "dock" ? "dock" : "grid";
+          // "background" only when the caller parked it: a panel the user
+          // backgrounded in the meantime still reports where the launch put it.
+          const location =
+            rawLocation === "dock"
+              ? "dock"
+              : rawLocation === "background" && launchOptions?.location === "background"
+                ? "background"
+                : "grid";
           return { terminalId, location, ...launchIdentity };
         } catch (error) {
           logError(`Failed to launch ${agentId} agent`, error);

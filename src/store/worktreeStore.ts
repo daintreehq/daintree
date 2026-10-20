@@ -980,8 +980,14 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
     const lastFocusedTerminalId = get().lastFocusedTerminalByWorktree.get(id);
     if (lastFocusedTerminalId) {
       const terminal = usePanelStore.getState().panelsById[lastFocusedTerminalId];
-      // Validate terminal still exists, belongs to this worktree, and isn't in trash
-      if (terminal && terminal.worktreeId === id && terminal.location !== "trash") {
+      // Validate terminal still exists, belongs to this worktree, and isn't in
+      // trash or parked — focusing a parked panel would restore it unasked.
+      if (
+        terminal &&
+        terminal.worktreeId === id &&
+        terminal.location !== "trash" &&
+        terminal.location !== "background"
+      ) {
         usePanelStore.getState().setFocused(lastFocusedTerminalId);
       }
     }
@@ -1592,18 +1598,20 @@ function applyWorktreeTerminalPolicy(
     const isInActiveWorktree = (terminal.worktreeId ?? null) === (targetWorktreeId ?? null);
 
     const location = terminal.location ?? "grid";
-    const isDockOrTrash = location === "dock" || location === "trash";
+    // A parked panel stays quiet whichever worktree is selected: only a restore
+    // brings it back on screen.
+    const isOffGrid = location === "dock" || location === "trash" || location === "background";
 
     // Let DockedTerminalItem manage open/closed dock policy, but if the active dock
     // terminal is not in the active worktree, force it to BACKGROUND.
-    if (terminal.id === activeDockTerminalId && isDockOrTrash && isInActiveWorktree) {
+    if (terminal.id === activeDockTerminalId && isOffGrid && isInActiveWorktree) {
       continue;
     }
 
-    const isArmedInFleetScope = armedIds?.has(terminal.id) && !isDockOrTrash;
+    const isArmedInFleetScope = armedIds?.has(terminal.id) && !isOffGrid;
 
     const targetTier =
-      isArmedInFleetScope || (isInActiveWorktree && !isDockOrTrash)
+      isArmedInFleetScope || (isInActiveWorktree && !isOffGrid)
         ? TerminalRefreshTier.VISIBLE
         : TerminalRefreshTier.BACKGROUND;
 

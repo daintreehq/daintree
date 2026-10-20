@@ -56,7 +56,7 @@ import {
 /** The renderer action's arguments; the UI-only ones are accepted and have no effect here. */
 const AgentLaunchArgsSchema = z.object({
   agentId: z.string().min(1),
-  location: z.enum(["grid", "dock", "overlay"]).optional(),
+  location: z.enum(["grid", "dock", "overlay", "background"]).optional(),
   cwd: z.string().optional(),
   worktreeId: z.string().optional(),
   prompt: z.string().optional(),
@@ -309,7 +309,8 @@ export async function runAgentLaunch(
   }
 
   const id = args.requestedId || `terminal-${randomUUID()}`;
-  const location = args.location === "dock" ? "dock" : "grid";
+  const location =
+    args.location === "dock" ? "dock" : args.location === "background" ? "background" : "grid";
   const spawnedBy = spawnSourceForMcpOrigin(request.sessionOrigin);
   const layers = await deps.getLaunchEnvLayers(project.id).catch((err: unknown) => {
     console.warn("[Viewless] Could not read environment variables for a launch:", err);
@@ -394,6 +395,9 @@ export async function runAgentLaunch(
     // persistence records it (#11388).
     ...(worktree?.gitDir ? { worktreeGitDir: worktree.gitDir } : {}),
     location,
+    // Recorded as a view's persistence records a parked panel, so the view
+    // that later opens this project rebuilds its restore entry.
+    ...(location === "background" ? { backgroundRestoreLocation: "grid" as const } : {}),
     ...serializePtyPanel(panel),
   };
   try {

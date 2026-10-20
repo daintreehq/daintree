@@ -80,6 +80,18 @@ function applyBatchFlush(set: Set, token: HydrationBatchToken | null): void {
   commitPendingIds(set, pendingIds);
 }
 
+/**
+ * A move out of the background is a restore by another route: the parked
+ * entry has to go with it, or trash/undo and the background list keep reading
+ * a restore target for a panel that is already on screen. Null when absent.
+ */
+function dropBackgroundEntry<T>(entries: Map<string, T>, id: string): Map<string, T> | null {
+  if (!entries.has(id)) return null;
+  const next = new Map(entries);
+  next.delete(id);
+  return next;
+}
+
 export const createCorePanelActions = (
   set: Set,
   get: Get,
@@ -535,9 +547,11 @@ export const createCorePanelActions = (
       if (groupPrune.changed) {
         saveTabGroups(groupPrune.tabGroups);
       }
+      const unparked = dropBackgroundEntry(state.backgroundedTerminals, id);
       return {
         panelsById: newById,
         ...(groupPrune.changed && { tabGroups: groupPrune.tabGroups }),
+        ...(unparked && { backgroundedTerminals: unparked }),
       };
     });
 
@@ -604,8 +618,10 @@ export const createCorePanelActions = (
       if (groupPrune.changed) {
         saveTabGroups(groupPrune.tabGroups);
       }
+      const unparked = dropBackgroundEntry(state.backgroundedTerminals, id);
       return {
         panelsById: newById,
+        ...(unparked && { backgroundedTerminals: unparked }),
         ...(adoptedWorktreeId !== null && {
           panelIdsByWorktreeId: transferBetweenWorktreeIndex(
             state.panelIdsByWorktreeId,

@@ -59,7 +59,6 @@ type CarrierPanel = Parameters<typeof getNarrowPanel>[0][string];
 function shouldPersistTerminal(t: NonNullable<CarrierPanel>): boolean {
   return (
     t.location !== "trash" &&
-    t.location !== "background" &&
     // The carrier's kind is the discriminated union of built-in kinds; the
     // runtime can still hand us an assistant panel whose kind escapes the
     // declared union, so widen to string before comparing.
