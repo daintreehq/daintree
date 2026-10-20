@@ -552,6 +552,28 @@ describe("createHost — settings", () => {
     expect(cb).toHaveBeenCalledWith("v1");
   });
 
+  it("onDidChange delivers a non-finite number as the null a read returns", async () => {
+    const { service } = await setupSettingsService("acme.settings-nonfinite");
+    const { host } = createSettingsHost(service, "acme.settings-nonfinite");
+    const cb = vi.fn();
+    await host.settings.onDidChange("count", cb);
+    await host.settings.set("count", Infinity);
+    expect(cb).toHaveBeenCalledWith(null);
+    expect(await host.settings.get("count")).toBeNull();
+  });
+
+  it("onDidChange delivers a secret's non-string value as passed", async () => {
+    safeStorageMock.state.available = true;
+    const pluginId = "acme.settings-secret-raw";
+    const { service } = await setupSettingsService(pluginId, [{ id: "token", type: "secret" }]);
+    const { host } = createSettingsHost(service, pluginId);
+    const cb = vi.fn();
+    await host.settings.onDidChange("token", cb);
+    await host.settings.set("token", NaN);
+    expect(cb).toHaveBeenCalledWith(NaN);
+    expect(await host.settings.get("token")).toBe("null");
+  });
+
   it("onDidChange does not fire for a no-op write", async () => {
     const { service } = await setupSettingsService("acme.settings-noop");
     const { host } = createSettingsHost(service, "acme.settings-noop");

@@ -5,7 +5,7 @@ import {
   projectIdFromPluginInstanceKey,
 } from "./projectPluginIdentity.js";
 import { isProjectWorkspaceId } from "../../../shared/utils/workspaceIds.js";
-import { PluginSettingsStore } from "../PluginSettingsStore.js";
+import { cloneValue, PluginSettingsStore } from "../PluginSettingsStore.js";
 import { projectStore } from "../ProjectStore.js";
 import { safeStorageCipher, type SecretCipher } from "./secretCipher.js";
 import type {
@@ -367,9 +367,11 @@ export class PluginSettingsManager {
     this.deps.onSettingChanged?.(pluginId);
     const subs = this.settingsSubscribers.get(pluginId);
     if (!subs) return;
-    // A cleared value reads back as the declared default, so that is what the
-    // subscriber hears.
+    // The subscriber hears what a read would return: a cleared value reads back
+    // as the declared default, and a written one in its persisted JSON form. A
+    // secret is the documented exception and delivers the value as passed.
     if (value === undefined) value = this.getDeclaredDefault(pluginId, key);
+    else if (!this.isSecretKey(pluginId, key)) value = cloneValue(value);
     // Snapshot so a callback that disposes itself doesn't mutate the live set
     // mid-iteration.
     for (const sub of [...subs]) {

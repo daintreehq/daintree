@@ -475,11 +475,13 @@ function valuesEqual(a: unknown, b: unknown): boolean {
 }
 
 /**
- * JSON-faithful clone. Primitives pass through; objects are round-tripped so the
- * returned value shares no references with the caller's input. Values are always
- * JSON-serializable here (validated by the host before reaching the store).
+ * JSON-faithful clone: the value exactly as it reads back from disk. Objects are
+ * round-tripped so the result shares no references with the caller's input, and
+ * numbers are too, since a top-level NaN/Infinity persists as null and -0 as 0.
+ * Values are always JSON-serializable here (validated by the host before
+ * reaching the store).
  */
-function cloneValue<T>(value: T): T {
-  if (value === null || typeof value !== "object") return value;
+export function cloneValue<T>(value: T): T {
+  if (value === null || (typeof value !== "object" && typeof value !== "number")) return value;
   return JSON.parse(JSON.stringify(value)) as T;
 }
