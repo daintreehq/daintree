@@ -1049,10 +1049,18 @@ describe("saving on the Shell", () => {
     await fs.writeFile(path.join(project, "broken.bin"), crypto.randomBytes(200 * 1024));
     const link = noHardLinks();
     const realOpen = fs.open.bind(fs);
+    let failed = false;
     const open = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
       const handle = await realOpen(...(args as Parameters<typeof fs.open>));
       if (String(args[0]) === path.join(downloads, "broken.bin")) {
-        handle.write = (() => Promise.reject(new Error("disk full"))) as typeof handle.write;
+        const write = handle.write.bind(handle) as (...a: unknown[]) => Promise<unknown>;
+        let calls = 0;
+        // The first chunk lands, so the target is genuinely partial when the disk fills.
+        handle.write = ((...a: unknown[]) => {
+          if (++calls === 1) return write(...a);
+          failed = true;
+          return Promise.reject(new Error("disk full"));
+        }) as typeof handle.write;
       }
       return handle;
     });
@@ -1063,6 +1071,46 @@ describe("saving on the Shell", () => {
           destinationDir: downloads,
         })
       ).rejects.toThrow();
+      expect(failed).toBe(true);
+      await expectEventuallyEmpty(downloads);
+    } finally {
+      open.mockRestore();
+      link.mockRestore();
+    }
+  });
+
+  it("discards a fallback copy cancelled while it is being written", async () => {
+    const { transport } = await setup();
+    await fs.writeFile(path.join(project, "slow.bin"), crypto.randomBytes(200 * 1024));
+    const link = noHardLinks();
+    const controller = new AbortController();
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    let copyStarted!: () => void;
+    const started = new Promise<void>((resolve) => (copyStarted = resolve));
+    const realOpen = fs.open.bind(fs);
+    const open = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      const handle = await realOpen(...(args as Parameters<typeof fs.open>));
+      if (String(args[0]) === path.join(downloads, "slow.bin")) {
+        const write = handle.write.bind(handle) as (...a: unknown[]) => Promise<unknown>;
+        handle.write = (async (...a: unknown[]) => {
+          copyStarted();
+          await held;
+          return write(...a);
+        }) as typeof handle.write;
+      }
+      return handle;
+    });
+    try {
+      const pending = transport.download(HOST, path.join(project, "slow.bin"), {
+        webContentsId: 7,
+        destinationDir: downloads,
+        signal: controller.signal,
+      });
+      await started;
+      controller.abort();
+      release();
+      await expect(pending).rejects.toMatchObject({ code: "CANCELLED" });
       await expectEventuallyEmpty(downloads);
     } finally {
       open.mockRestore();

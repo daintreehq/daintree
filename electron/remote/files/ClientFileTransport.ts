@@ -132,27 +132,56 @@ async function markDownloaded(file: string): Promise<void> {
   });
 }
 
-/** What link() answers on a filesystem without hard links (FAT, exFAT, some SMB and FUSE mounts). */
-const LINK_UNSUPPORTED = new Set(["EPERM", "ENOTSUP", "EOPNOTSUPP", "ENOSYS"]);
+/**
+ * What link() answers on a filesystem without hard links (FAT, exFAT, some SMB
+ * and FUSE mounts). Windows reports FAT and exFAT's ERROR_INVALID_FUNCTION as EISDIR.
+ */
+const LINK_UNSUPPORTED = new Set([
+  "EPERM",
+  "ENOTSUP",
+  "EOPNOTSUPP",
+  "ENOSYS",
+  ...(process.platform === "win32" ? ["EISDIR"] : []),
+]);
+
+interface Placed {
+  path: string;
+  dev: number;
+  ino: number;
+}
+
+/** Remove a placed file only while its name still holds the file this download created. */
+async function removePlaced(placed: Placed): Promise<void> {
+  try {
+    const there = await fs.lstat(placed.path);
+    if (there.dev !== placed.dev || there.ino !== placed.ino) return;
+    await fs.rm(placed.path, { force: true });
+  } catch {
+    // Gone already, or no longer ours to remove.
+  }
+}
 
 /**
- * Copy the part file into a name created exclusively. False when the name is
+ * Copy the part file into a name created exclusively. Null when the name is
  * taken; a copy that fails or comes up short leaves nothing at the name.
  */
 async function copyUnique(
   partPath: string,
   target: string,
   stopped: () => boolean
-): Promise<boolean> {
+): Promise<Placed | null> {
   let out: Awaited<ReturnType<typeof fs.open>>;
   try {
     out = await fs.open(target, NEW_FILE_FLAGS, 0o600);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "EEXIST") return false;
+    if ((error as NodeJS.ErrnoException).code === "EEXIST") return null;
     throw error;
   }
+  let placed: Placed | null = null;
   let complete = false;
   try {
+    const created = await out.stat();
+    placed = { path: target, dev: created.dev, ino: created.ino };
     // Tagged while still empty: a link would have carried the part file's tag.
     await markDownloaded(target);
     const source = await fs.open(partPath, "r");
@@ -163,7 +192,10 @@ async function copyUnique(
     }
   } finally {
     await out.close().catch(() => {});
-    if (!complete) await fs.rm(target, { force: true }).catch(() => {});
+    if (!complete) {
+      if (placed) await removePlaced(placed);
+      else await fs.rm(target, { force: true }).catch(() => {});
+    }
   }
   if (!complete) {
     throw new AppError({
@@ -172,7 +204,7 @@ async function copyUnique(
       userMessage: "The download couldn't be saved completely. Try again.",
     });
   }
-  return true;
+  return placed;
 }
 
 /** Move the finished part file to the first free name; never overwrites. */
@@ -181,25 +213,29 @@ async function placeUnique(
   dir: string,
   name: string,
   stopped: () => boolean
-): Promise<string> {
+): Promise<Placed> {
   let linkable = true;
   for (let attempt = 0; attempt < MAX_UNIQUE_ATTEMPTS; attempt++) {
     const target = path.join(dir, candidateName(name, attempt));
     if (linkable) {
       try {
         await fs.link(partPath, target);
-        await fs.unlink(partPath).catch(() => {});
-        return target;
       } catch (error) {
         const code = (error as NodeJS.ErrnoException).code;
         if (code === "EEXIST") continue;
         if (!code || !LINK_UNSUPPORTED.has(code)) throw error;
         linkable = false;
       }
+      if (linkable) {
+        const linked = await fs.lstat(target);
+        await fs.unlink(partPath).catch(() => {});
+        return { path: target, dev: linked.dev, ino: linked.ino };
+      }
     }
-    if (await copyUnique(partPath, target, stopped)) {
+    const placed = await copyUnique(partPath, target, stopped);
+    if (placed) {
       await fs.unlink(partPath).catch(() => {});
-      return target;
+      return placed;
     }
   }
   throw new AppError({ code: "INTERNAL", message: "No free file name for the download" });
@@ -488,13 +524,14 @@ export class ClientFileTransport {
               });
             }
             // A copy can outlast the commit budget; the abort that follows must win.
-            const localPath = await placeUnique(
-              partPath,
-              options.destinationDir,
-              name,
-              () => aborted || !!signal?.aborted
-            );
-            settle.resolve({ localPath, bytes: written });
+            const stopped = () => aborted || !!signal?.aborted;
+            const placed = await placeUnique(partPath, options.destinationDir, name, stopped);
+            // No await between this check and resolving: an abort can't slip in after it.
+            if (stopped()) {
+              await removePlaced(placed);
+              throw new Error("cancelled");
+            }
+            settle.resolve({ localPath: placed.path, bytes: written });
           } catch (error) {
             await fs.rm(partPath, { force: true }).catch(() => {});
             settle.reject(error instanceof Error ? error : new Error(String(error)));
