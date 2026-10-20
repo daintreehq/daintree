@@ -16,6 +16,7 @@ import type { OAuthLoopbackResult } from "../../shared/types/oauth.js";
 
 const CALLBACK_PATH = "/oauth/callback";
 const TIMEOUT_MS = 300_000; // 5 minutes
+const LOOPBACK_BASE = "http://127.0.0.1";
 
 function escapeHtml(str: string): string {
   return str
@@ -128,10 +129,18 @@ export function startOAuthLoopback(authUrl: string, panelId: string): Promise<OA
     };
 
     const server = createServer((req: IncomingMessage, res: ServerResponse) => {
+      // `req.url` is client-controlled and Node's parser accepts targets the URL
+      // constructor rejects (`//[`). A malformed or foreign target (absolute-form,
+      // or protocol-relative naming another host) is answered here and must never
+      // settle the pending flow; neither the target nor its query is logged.
       let reqUrl: URL;
       try {
-        reqUrl = new URL(req.url ?? "/", "http://127.0.0.1");
+        reqUrl = new URL(req.url ?? "/", LOOPBACK_BASE);
       } catch {
+        refuse(res, 400);
+        return;
+      }
+      if (reqUrl.origin !== LOOPBACK_BASE) {
         refuse(res, 400);
         return;
       }

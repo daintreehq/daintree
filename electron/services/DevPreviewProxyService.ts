@@ -294,7 +294,15 @@ export class DevPreviewProxyService {
     // upstream. Gate it before resolving an upstream port so it works even while
     // the dev server is down (restarting), which is one of the cases it exists
     // to survive.
-    const url = new URL(req.url ?? "/", `http://${req.headers.host ?? PROXY_LISTEN_HOST}`);
+    // Node's parser accepts a target (`//[`) or Host (`[`) the URL constructor
+    // rejects; answer those as a client error instead of rejecting the handler.
+    let url: URL;
+    try {
+      url = new URL(req.url ?? "/", `http://${req.headers.host ?? PROXY_LISTEN_HOST}`);
+    } catch {
+      this.send400(res);
+      return;
+    }
     if (url.pathname === DEV_PREVIEW_BOOTSTRAP_PATH) {
       this.handleBootstrap(req, res, url);
       return;
@@ -533,6 +541,11 @@ export class DevPreviewProxyService {
     } catch {
       // Diagnostics must never break proxying.
     }
+  }
+
+  private send400(res: http.ServerResponse): void {
+    res.writeHead(400, { "Content-Type": "text/plain; charset=utf-8", Connection: "close" });
+    res.end("Bad request.");
   }
 
   private send502(res: http.ServerResponse, message: string): void {

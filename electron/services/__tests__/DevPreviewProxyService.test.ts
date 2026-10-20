@@ -450,6 +450,29 @@ describe("DevPreviewProxyService", () => {
     ).rejects.toBeTruthy();
   });
 
+  it("answers a malformed request target or Host with 400 and keeps serving", async () => {
+    upstream = http.createServer((_req, res) => {
+      res.writeHead(200, { "Content-Type": "text/plain" });
+      res.end("hello from upstream");
+    });
+    const upstreamPort = await listen(upstream);
+
+    proxy = new DevPreviewProxyService((sub) =>
+      sub === "dp-test" ? { port: upstreamPort, isHttps: false } : null
+    );
+    const proxyPort = await proxy.start();
+
+    expect((await request(proxyPort, `dp-test.localhost:${proxyPort}`, "//[")).status).toBe(400);
+    expect((await request(proxyPort, `dp-test.localhost:${proxyPort}`, "http://[/x")).status).toBe(
+      400
+    );
+    expect((await request(proxyPort, "[", "/")).status).toBe(400);
+
+    const res = await request(proxyPort, `dp-test.localhost:${proxyPort}`);
+    expect(res.status).toBe(200);
+    expect(res.body).toBe("hello from upstream");
+  });
+
   it("stops accepting connections after dispose", async () => {
     proxy = new DevPreviewProxyService(() => null);
     const proxyPort = await proxy.start();
