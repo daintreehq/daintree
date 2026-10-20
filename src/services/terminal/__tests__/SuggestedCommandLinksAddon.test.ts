@@ -8,6 +8,10 @@ import {
   readSuggestedCommand,
 } from "../SuggestedCommandLinksAddon";
 
+function write(terminal: HeadlessTerminal, data: string): Promise<void> {
+  return new Promise((resolve) => terminal.write(data, resolve));
+}
+
 async function render(cols: number, lines: string[]): Promise<HeadlessTerminal> {
   const terminal = new HeadlessTerminal({
     cols,
@@ -71,11 +75,29 @@ describe("findSuggestedCommand", () => {
     expect(commandAt(terminal, 3)).toBeNull();
   });
 
-  it("rejoins a token cut mid-word at the right edge without a space", async () => {
+  // A token cut mid-word and a word that ended exactly at the margin leave the
+  // same two rows, and only one of them has a space at the join.
+  it("leaves a command inert when its row is filled to the edge before a wrap", async () => {
     const head = `  ! echo ${LONG_TOKEN.slice(0, 61)}`;
     expect(head).toHaveLength(70);
-    const terminal = await render(70, [head, `  ${LONG_TOKEN.slice(61)}ABCDEFGHIJ done`, ""]);
-    expect(commandAt(terminal, 1)).toBe(`echo ${LONG_TOKEN}ABCDEFGHIJ done`);
+    const cut = await render(70, [head, `  ${LONG_TOKEN.slice(61)}ABCDEFGHIJ done`, ""]);
+    expect(commandAt(cut, 0)).toBeNull();
+    expect(commandAt(cut, 1)).toBeNull();
+
+    const wrapped = await render(70, [`  ! echo ${"a".repeat(61)}`, "  --dry-run", ""]);
+    expect(commandAt(wrapped, 0)).toBeNull();
+  });
+
+  it("ends at a row filled to the edge when nothing continues it", async () => {
+    const head = `  ! echo ${"a".repeat(61)}`;
+    const terminal = await render(70, [head, "", "  Then check."]);
+    expect(commandAt(terminal, 0)).toBe(`echo ${"a".repeat(61)}`);
+  });
+
+  it("leaves a command inert when its continuation reads as a new suggestion", async () => {
+    const terminal = await render(70, [`  ! echo ${"a".repeat(57)} ok`, "  ! false"]);
+    expect(commandAt(terminal, 0)).toBeNull();
+    expect(commandAt(terminal, 1)).toBeNull();
   });
 
   it("stops at an indented line whose first word would have fit above", async () => {
@@ -127,6 +149,32 @@ describe("findSuggestedCommand", () => {
     expect(commandAt(terminal, 0)).toBeNull();
   });
 
+  it("leaves a wrapped command inert on rows laid out for another width", async () => {
+    const terminal = await render(70, [GIT_HEAD, GIT_TAIL, "", "  ! npm test", ""]);
+    const buffer = terminal.buffer.active;
+    expect(findSuggestedCommand(buffer, 70, 0, 2)).toBeNull();
+    expect(findSuggestedCommand(buffer, 70, 1, 2)).toBeNull();
+    expect(findSuggestedCommand(buffer, 70, 0, 1)).toBeNull();
+    expect(findSuggestedCommand(buffer, 70, 3, 2)?.command).toBe("npm test");
+    expect(findSuggestedCommand(buffer, 70, 3, 5)?.command).toBe("npm test");
+  });
+
+  it("leaves a command inert when xterm wrapped a blank row into it", async () => {
+    const terminal = await render(70, [`  ! echo '${"a".repeat(60)}${" ".repeat(70)}b'`, ""]);
+    expect(commandAt(terminal, 0)).toBeNull();
+  });
+
+  it("leaves a command inert when xterm padded a wide character onto the next row", async () => {
+    const terminal = await render(70, [`  ! echo ${"a".repeat(60)}界`, ""]);
+    expect(terminal.buffer.active.getLine(1)?.isWrapped).toBe(true);
+    expect(commandAt(terminal, 0)).toBeNull();
+  });
+
+  it("refuses a command ending in a backslash", async () => {
+    const terminal = await render(70, ["  ! echo foo\\", ""]);
+    expect(commandAt(terminal, 0)).toBeNull();
+  });
+
   it("refuses a command with concealed text", async () => {
     const terminal = await render(80, ["  ! echo safe\x1b[8m; rm -rf ~\x1b[28m", ""]);
     expect(commandAt(terminal, 0)).toBeNull();
@@ -141,6 +189,22 @@ describe("findSuggestedCommand", () => {
   });
 
   it.each([
+    ["an explicit foreground", "\x1b[31m"],
+    ["an explicit background", "\x1b[48;2;201;209;217m"],
+    ["inverse video", "\x1b[7m"],
+    ["dim text", "\x1b[2m"],
+  ])("refuses a command drawn with %s", async (_name, sgr) => {
+    const terminal = await render(80, [`  ! echo safe${sgr}; touch /tmp/hidden\x1b[0m`, ""]);
+    expect(commandAt(terminal, 0)).toBeNull();
+  });
+
+  it("reads a suggestion whose marker is coloured", async () => {
+    const terminal = await render(70, ["\x1b[38;2;255;255;255m⏺\x1b[39m ! npm test", ""]);
+    expect(commandAt(terminal, 0)).toBe("npm test");
+  });
+
+  it.each([
+    ["Braille blank", "\u2800"],
     ["zero-width space", "\u200b"],
     ["bidi override", "\u202e"],
     ["no-break space", "\u00a0"],
@@ -213,6 +277,41 @@ describe("SuggestedCommandLinksAddon", () => {
     await new Promise<void>((resolve) => terminal.write("\x1b[1;1H  ! rm -rf ~", resolve));
     link!.activate(CLICK, link!.text);
     expect(onRun).not.toHaveBeenCalled();
+  });
+
+  it("ignores the second click of a double click", async () => {
+    const terminal = await render(70, ["  ! npm test", ""]);
+    const onRun = vi.fn();
+    const addon = new SuggestedCommandLinksAddon(terminal, () => true, onRun);
+    const [link] = provide(addon, 1)!;
+    link!.activate(new MouseEvent("click", { detail: 2 }), link!.text);
+    expect(onRun).not.toHaveBeenCalled();
+  });
+
+  it("links a wrapped command written after it started, not one already on screen", async () => {
+    const before = await render(70, [GIT_HEAD, GIT_TAIL, ""]);
+    expect(provide(new SuggestedCommandLinksAddon(before, () => true, vi.fn()), 1)).toBeUndefined();
+
+    const terminal = new HeadlessTerminal({ cols: 70, rows: 30, allowProposedApi: true });
+    const addon = new SuggestedCommandLinksAddon(terminal, () => true, vi.fn());
+    await write(terminal, [GIT_HEAD, GIT_TAIL, ""].join("\r\n"));
+    expect(provide(addon, 2)?.[0]?.text).toMatch(/--since=2\.weeks --author=/);
+  });
+
+  it("stops linking wrapped commands pushed into scrollback by a width change", async () => {
+    const terminal = new HeadlessTerminal({
+      cols: 70,
+      rows: 5,
+      scrollback: 100,
+      allowProposedApi: true,
+    });
+    const addon = new SuggestedCommandLinksAddon(terminal, () => true, vi.fn());
+    await write(terminal, [GIT_HEAD, GIT_TAIL, "", "", "", "", "", ""].join("\r\n"));
+    expect(terminal.buffer.active.baseY).toBeGreaterThan(1);
+    expect(provide(addon, 1)).toHaveLength(1);
+
+    terminal.resize(100, 5);
+    expect(provide(addon, 1)).toBeUndefined();
   });
 
   it("runs nothing after it is disposed", async () => {

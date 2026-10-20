@@ -1,9 +1,17 @@
-import type { IBuffer, IBufferCell, IBufferRange, ILink, ILinkProvider } from "@xterm/xterm";
+import type {
+  IBuffer,
+  IBufferCell,
+  IBufferRange,
+  IDisposable,
+  ILink,
+  ILinkProvider,
+} from "@xterm/xterm";
 
-/** The slice of a terminal the provider reads: its active buffer and width. */
+/** The slice of a terminal the provider reads. */
 export interface SuggestedCommandTerminal {
-  readonly buffer: { readonly active: IBuffer };
+  readonly buffer: { readonly active: IBuffer; readonly normal: IBuffer };
   readonly cols: number;
+  onResize(listener: (size: { cols: number; rows: number }) => void): IDisposable;
 }
 
 /** Called with the exact command a clicked `! command` suggestion shows. */
@@ -18,14 +26,14 @@ interface Cell {
   ch: string;
   col: number;
   width: number;
+  /** Drawn as itself: a safe character in the default colours, nothing hiding it. */
+  plain: boolean;
 }
 
 interface Row {
   /** Trailing blanks trimmed. Wide characters occupy one entry. */
   cells: Cell[];
   isWrapped: boolean;
-  /** A cell carries text the screen doesn't show as itself. */
-  unsafe: boolean;
 }
 
 // Claude Code prints a suggestion as its own paragraph line: two spaces, `!`,
@@ -44,42 +52,24 @@ const MAX_COMMAND_LENGTH = 2048;
 // Characters that render as nothing, or as something other than themselves:
 // controls, format characters (bidi, zero-width), line/paragraph separators,
 // non-ASCII spaces, fillers and variation selectors.
-const UNSAFE_CATEGORY = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]|(?! )\p{Zs}/u;
+// Characters that render as nothing, or as something other than themselves:
+// controls, format characters (bidi, zero-width), line/paragraph separators,
+// non-ASCII spaces, default-ignorables (fillers, variation selectors) and the
+// blank Braille pattern.
+const UNSAFE_CHAR = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}\u2800]|(?! )\p{Zs}/u;
 
-// Default-ignorable code points outside those categories: fillers and
-// variation selectors. Matched by code point, since several are combining marks
-// a regex character class can't hold.
-const UNSAFE_RANGES: ReadonlyArray<readonly [number, number]> = [
-  [0x034f, 0x034f],
-  [0x115f, 0x1160],
-  [0x17b4, 0x17b5],
-  [0x180b, 0x180f],
-  [0x3164, 0x3164],
-  [0xfe00, 0xfe0f],
-  [0xffa0, 0xffa0],
-  [0xe0100, 0xe01ef],
-];
-
-function hasUnsafeChar(ch: string): boolean {
-  if (UNSAFE_CATEGORY.test(ch)) return true;
-  for (const char of ch) {
-    const codePoint = char.codePointAt(0)!;
-    if (UNSAFE_RANGES.some(([low, high]) => codePoint >= low && codePoint <= high)) return true;
-  }
-  return false;
-}
-
-function isVisibleCell(cell: IBufferCell, ch: string): boolean {
-  if (cell.isInvisible()) return false;
-  if (hasUnsafeChar(ch)) return false;
-  if (
-    !cell.isFgDefault() &&
-    cell.getFgColorMode() === cell.getBgColorMode() &&
-    cell.getFgColor() === cell.getBgColor()
-  ) {
-    return false;
-  }
-  return true;
+// Claude Code draws a suggestion's text in the default colours. Requiring them
+// is what proves the text is visible without resolving the theme: any colour,
+// inverse or dim could be a foreground matched to its background.
+function isPlainCell(cell: IBufferCell, ch: string): boolean {
+  return (
+    cell.isFgDefault() &&
+    cell.isBgDefault() &&
+    !cell.isInverse() &&
+    !cell.isDim() &&
+    !cell.isInvisible() &&
+    !UNSAFE_CHAR.test(ch)
+  );
 }
 
 function readRow(buffer: IBuffer, y: number, cols: number): Row | undefined {
@@ -87,7 +77,6 @@ function readRow(buffer: IBuffer, y: number, cols: number): Row | undefined {
   const line = buffer.getLine(y);
   if (!line) return undefined;
   const cells: Cell[] = [];
-  let unsafe = false;
   let scratch: IBufferCell | undefined;
   // A row can outlast a narrowing resize; only what fits the pane is on screen.
   const limit = Math.min(line.length, cols);
@@ -99,13 +88,12 @@ function readRow(buffer: IBuffer, y: number, cols: number): Row | undefined {
     if (width === 0) continue;
     // Ink moves the cursor over gaps, leaving empty cells that read as blanks.
     const ch = cell.getChars() || " ";
-    if (ch !== " " && !isVisibleCell(cell, ch)) unsafe = true;
-    cells.push({ ch, col, width });
+    cells.push({ ch, col, width, plain: ch === " " || isPlainCell(cell, ch) });
   }
   let end = cells.length;
   while (end > 0 && cells[end - 1]!.ch === " ") end--;
   cells.length = end;
-  return { cells, isWrapped: line.isWrapped, unsafe };
+  return { cells, isWrapped: line.isWrapped };
 }
 
 function isHead(row: Row): boolean {
@@ -137,12 +125,35 @@ function leadingWordWidth(row: Row, from: number): number {
   return width;
 }
 
-function trailingWordWidth(row: Row): number {
-  let width = 0;
-  for (let i = row.cells.length - 1; i >= 0 && row.cells[i]!.ch !== " "; i--) {
-    width += row.cells[i]!.width;
+function isPlainFrom(row: Row, from: number): boolean {
+  for (let i = from; i < row.cells.length; i++) if (!row.cells[i]!.plain) return false;
+  return true;
+}
+
+/**
+ * Whether Ink could have word-wrapped `upper` onto `lower`: `lower` is shaped
+ * like a continuation (a head counts, since a command can contain ` ! `) and
+ * its first word wouldn't have fit at the end of `upper`. Without the width the
+ * rows were wrapped at, any continuation shape could be one.
+ */
+function couldWrapOnto(
+  upper: Row | undefined,
+  lower: Row,
+  cols: number,
+  widthKnown: boolean
+): boolean {
+  if (!upper || upper.cells.length === 0 || lower.isWrapped) return false;
+  if (!isHead(lower) && !hasContinuationShape(lower)) return false;
+  if (!widthKnown) return true;
+  return rowWidth(upper) + 1 + leadingWordWidth(lower, CONTINUATION_INDENT) > cols;
+}
+
+/** The last buffer row holding anything, or -1 for an empty buffer. */
+function lastContentRow(buffer: IBuffer): number {
+  for (let y = buffer.length - 1; y >= 0; y--) {
+    if (buffer.getLine(y)?.translateToString(true)) return y;
   }
-  return width;
+  return -1;
 }
 
 function textFrom(row: Row, from: number): string {
@@ -159,55 +170,61 @@ function textFrom(row: Row, from: number): string {
  * two-space indent, with a real newline between the rows, so xterm records no
  * wrap. A row is only taken as a continuation when its first word could not
  * have fit on the row above: that is the one case a word-wrapper breaks, so a
- * short command followed by an indented line of prose stays one row. The space
- * a word wrap drops comes back as one space; a token wider than the text box
- * is cut mid-word at the right edge and rejoins with none.
+ * short command followed by an indented line of prose stays one row, and the
+ * space the wrap dropped comes back as one space.
  *
- * Anything that makes the shown text and the run text differ leaves the whole
- * suggestion inert rather than running part of it: a concealed or unsafe cell,
- * an over-budget run, or a hard wrap after rows xterm reflowed on resize,
- * where the width Ink wrapped at is no longer known.
+ * Where the rows can't say what the command is, the whole suggestion stays
+ * inert rather than running part of it or more than it:
+ * - text that isn't drawn plainly (concealed, coloured, unsafe characters);
+ * - an upper row filled to the edge, where a token cut mid-word and a word
+ *   that ended at the margin leave identical rows;
+ * - a row that would continue the command but reads as a new suggestion, or a
+ *   suggestion that could be the continuation of the row above it;
+ * - a possible continuation on rows whose wrap width is unknown: rows from
+ *   before `widthKnownFrom` were laid out for another pane width, and so were
+ *   rows xterm reflowed on a resize;
+ * - an xterm wrap whose upper row stops short of the edge (wide-character
+ *   padding and blanks look alike), a command ending in a backslash (the
+ *   escaped space after it can't survive the trim), or an over-budget run.
  */
 export function readSuggestedCommand(
   buffer: IBuffer,
   cols: number,
-  headY: number
+  headY: number,
+  widthKnownFrom = 0
 ): SuggestedCommand | null {
   let row = readRow(buffer, headY, cols);
   if (!row || !isHead(row)) return null;
   const startCol = row.cells[HEAD_LENGTH]!.col;
+  let widthKnown = headY >= widthKnownFrom;
+  if (couldWrapOnto(readRow(buffer, headY - 1, cols), row, cols, widthKnown)) return null;
 
   let command = "";
   let from = HEAD_LENGTH;
   let y = headY;
-  let reflowed = false;
   for (let rows = 1; ; rows++) {
-    if (row.unsafe) return null;
+    if (!isPlainFrom(row, from)) return null;
     command += textFrom(row, from);
     if (command.length > MAX_COMMAND_LENGTH) return null;
 
     const next = readRow(buffer, y + 1, cols);
-    if (!next || next.cells.length === 0) break;
+    if (!next) break;
     if (next.isWrapped) {
-      if (rows >= MAX_ROWS) return null;
-      // xterm's own wrap: the upper row ran to the edge, blanks included.
-      command += " ".repeat(Math.max(0, cols - rowWidth(row)));
-      reflowed = true;
+      // xterm's own wrap carries the text on cell for cell.
+      if (rowWidth(row) < cols || next.cells.length === 0 || rows >= MAX_ROWS) return null;
+      widthKnown = false;
       from = 0;
     } else {
-      if (isHead(next) || !hasContinuationShape(next)) break;
-      if (rowWidth(row) + 1 + leadingWordWidth(next, CONTINUATION_INDENT) <= cols) break;
-      if (reflowed || rows >= MAX_ROWS) return null;
-      const midWord =
-        rowWidth(row) === cols &&
-        trailingWordWidth(row) + leadingWordWidth(next, CONTINUATION_INDENT) >
-          cols - CONTINUATION_INDENT;
-      if (!midWord) command += " ";
+      if (next.cells.length === 0) break;
+      if (!couldWrapOnto(row, next, cols, widthKnown)) break;
+      if (!widthKnown || isHead(next) || rowWidth(row) >= cols || rows >= MAX_ROWS) return null;
+      command += " ";
       from = CONTINUATION_INDENT;
     }
     y++;
     row = next;
   }
+  if (command.endsWith("\\")) return null;
 
   const last = row.cells[row.cells.length - 1]!;
   return {
@@ -223,13 +240,14 @@ export function readSuggestedCommand(
 export function findSuggestedCommand(
   buffer: IBuffer,
   cols: number,
-  y: number
+  y: number,
+  widthKnownFrom = 0
 ): SuggestedCommand | null {
   for (let headY = y; headY > y - MAX_ROWS; headY--) {
     const row = readRow(buffer, headY, cols);
     if (!row || row.cells.length === 0) return null;
     if (isHead(row)) {
-      const found = readSuggestedCommand(buffer, cols, headY);
+      const found = readSuggestedCommand(buffer, cols, headY, widthKnownFrom);
       return found && found.range.end.y >= y + 1 ? found : null;
     }
     if (!row.isWrapped && !hasContinuationShape(row)) return null;
@@ -247,6 +265,10 @@ export class SuggestedCommandLinksAddon implements ILinkProvider {
   private _terminal: SuggestedCommandTerminal | null;
   private _isEnabled: () => boolean;
   private _onRun: OnRunSuggestedCommand;
+  private _resizeListener: IDisposable;
+  private _cols: number;
+  // First normal-buffer row known to be laid out at the current width.
+  private _widthKnownFrom: number;
 
   constructor(
     terminal: SuggestedCommandTerminal,
@@ -256,6 +278,22 @@ export class SuggestedCommandLinksAddon implements ILinkProvider {
     this._terminal = terminal;
     this._isEnabled = isEnabled;
     this._onRun = onRun;
+    this._cols = terminal.cols;
+    // Whatever is already on screen (a restored buffer, output from before the
+    // pane opened) may have been laid out at another width.
+    this._widthKnownFrom = lastContentRow(terminal.buffer.normal) + 1;
+    // Claude Code repaints the screen at the new width on a resize, but rows
+    // already in scrollback keep the width they were wrapped at.
+    this._resizeListener = terminal.onResize(({ cols }) => {
+      if (cols === this._cols) return;
+      this._cols = cols;
+      this._widthKnownFrom = terminal.buffer.normal.baseY;
+    });
+  }
+
+  private _knownFrom(buffer: IBuffer): number {
+    // The alternate screen has no scrollback; an app there redraws it whole.
+    return buffer.type === "normal" ? this._widthKnownFrom : 0;
   }
 
   provideLinks(bufferLineNumber: number, callback: (links: ILink[] | undefined) => void): void {
@@ -265,7 +303,13 @@ export class SuggestedCommandLinksAddon implements ILinkProvider {
       callback(undefined);
       return;
     }
-    const found = findSuggestedCommand(terminal.buffer.active, terminal.cols, bufferLineNumber - 1);
+    const buffer = terminal.buffer.active;
+    const found = findSuggestedCommand(
+      buffer,
+      terminal.cols,
+      bufferLineNumber - 1,
+      this._knownFrom(buffer)
+    );
     callback(found ? [new SuggestedCommandLink(found, () => this._activate(found))] : undefined);
   }
 
@@ -274,10 +318,12 @@ export class SuggestedCommandLinksAddon implements ILinkProvider {
   private _activate(hovered: SuggestedCommand): void {
     const terminal = this._terminal;
     if (!terminal || !this._isEnabled()) return;
+    const buffer = terminal.buffer.active;
     const current = readSuggestedCommand(
-      terminal.buffer.active,
+      buffer,
       terminal.cols,
-      hovered.range.start.y - 1
+      hovered.range.start.y - 1,
+      this._knownFrom(buffer)
     );
     if (!current || current.command !== hovered.command) return;
     if (!sameRange(current.range, hovered.range)) return;
@@ -285,6 +331,7 @@ export class SuggestedCommandLinksAddon implements ILinkProvider {
   }
 
   dispose(): void {
+    this._resizeListener.dispose();
     this._terminal = null;
   }
 }
@@ -304,7 +351,9 @@ class SuggestedCommandLink implements ILink {
     this.text = found.command;
   }
 
-  activate(_event: MouseEvent, _text: string): void {
+  activate(event: MouseEvent, _text: string): void {
+    // A double click's second click would open a second terminal.
+    if (event.detail > 1) return;
     this._onActivate();
   }
 }
