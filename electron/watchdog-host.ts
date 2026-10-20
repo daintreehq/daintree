@@ -5,8 +5,9 @@
  * still be force-killed. Receives the main PID via `--main-pid=<pid>` argv,
  * expects a "ping" message every HEARTBEAT_INTERVAL_MS, and SIGKILLs main
  * after MAX_MISSED missed beats — MAX_MISSED_UNDER_PRESSURE when main last
- * reported memory pressure (or had no reading) or the watchdog itself just
- * stalled.
+ * reported memory pressure (or had no reading), main's pings were already
+ * arriving late, the watchdog itself just stalled, or (off macOS) the
+ * watchdog's own read finds memory nearly exhausted.
  * CrashRecoveryService and CrashLoopGuard handle the relaunch + safe-mode path.
  *
  * Fail-open: if anything is malformed (no PID, no parentPort, watchdog
@@ -15,9 +16,11 @@
  */
 
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { MessagePort } from "node:worker_threads";
 import {
+  availableMemoryRatio,
   createWatchdog,
   parseMainPid,
   writeWatchdogKillFlag,
@@ -75,7 +78,20 @@ const killFlagDeps = {
   joinPath: (userData: string, name: string) => path.join(userData, name),
 };
 
+// A syscall (or a /proc read) and no spawn, so it is safe to take under thrash.
+// Skipped on macOS, where the free count leaves out cached pages.
+function readAvailableMemoryRatio(): number | null {
+  // On Linux `os.freemem()` reads the host's MemAvailable.
+  return availableMemoryRatio(
+    process.availableMemory(),
+    os.freemem(),
+    os.totalmem(),
+    process.constrainedMemory()
+  );
+}
+
 const watchdog = createWatchdog({
+  readAvailableMemoryRatio: process.platform === "darwin" ? undefined : readAvailableMemoryRatio,
   killMain: () => {
     if (mainPid === null) return;
     if (!isMainAlive(mainPid)) {
@@ -127,5 +143,5 @@ port.on("message", (rawMsg: unknown) => {
 });
 
 console.log(
-  `[WatchdogHost] Started; main PID=${mainPid ?? "<missing>"}, interval=${HEARTBEAT_INTERVAL_MS}ms, threshold=${MAX_MISSED} (${MAX_MISSED_UNDER_PRESSURE} under memory pressure)`
+  `[WatchdogHost] Started; main PID=${mainPid ?? "<missing>"}, interval=${HEARTBEAT_INTERVAL_MS}ms, threshold=${MAX_MISSED} (${MAX_MISSED_UNDER_PRESSURE} with evidence of memory pressure or a stall)`
 );
