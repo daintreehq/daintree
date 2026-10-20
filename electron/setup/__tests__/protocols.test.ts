@@ -197,22 +197,23 @@ function getEventHandlers(
 }
 
 /**
- * `FileHandle.read` over `content`, from the descriptor's offset. A read into
- * the start of a buffer begins a new pass, so one handle can serve every
- * request a test makes. `requested` tallies how many bytes were asked for,
- * which bounds what the reader allocated.
+ * `FileHandle.read` over `content`, from the descriptor's offset. `rewind()`
+ * puts the offset back to 0, as reopening the file would. `requested` tallies
+ * how many bytes were asked for, which bounds what the reader transferred.
  */
 function readsFrom(content: Buffer) {
   let offset = 0;
   const read = vi.fn(async (buffer: Buffer, at: number, length: number) => {
-    if (at === 0) offset = 0;
     read.requested += length;
     const n = Math.max(0, Math.min(length, content.length - offset));
     content.copy(buffer, at, offset, offset + n);
     offset += n;
     return { bytesRead: n, buffer };
-  }) as ReturnType<typeof vi.fn> & { requested: number };
+  }) as ReturnType<typeof vi.fn> & { requested: number; rewind: () => void };
   read.requested = 0;
+  read.rewind = () => {
+    offset = 0;
+  };
   return read;
 }
 
@@ -1642,9 +1643,11 @@ describe("createDaintreeFileProtocolHandler — symlink containment", () => {
 
   function makeFileHandle(content: string | Buffer = "data") {
     const buffer = typeof content === "string" ? Buffer.from(content) : content;
+    const read = readsFrom(buffer);
     return {
-      read: readsFrom(buffer),
-      close: vi.fn().mockResolvedValue(undefined),
+      read,
+      // Closing ends the pass, so a handle the test hands out again reads from 0.
+      close: vi.fn(async () => read.rewind()),
     };
   }
 
@@ -1740,12 +1743,19 @@ describe("createDaintreeFileProtocolHandler — symlink containment", () => {
     vi.mocked(fs.stat).mockResolvedValue({ size: 512 * 1024 } as Awaited<
       ReturnType<typeof fs.stat>
     >);
+    vi.mocked(fs.open).mockResolvedValue(
+      makeFileHandle(Buffer.alloc(512 * 1024, 0x61)) as unknown as Awaited<
+        ReturnType<typeof fs.open>
+      >
+    );
 
     const handler = await captureHandler("daintree-file");
     const response = await handler(makeRequest("/project/edge.bin", "/project"));
 
     expect(response.status).toBe(200);
     expect(fs.open).toHaveBeenCalledTimes(1);
+    expect(response.headers.get("Content-Length")).toBe(String(512 * 1024));
+    expect((await response.arrayBuffer()).byteLength).toBe(512 * 1024);
   });
 
   it("serves an image past the 512 KB text cap (images use the larger ceiling)", async () => {
@@ -1809,6 +1819,11 @@ describe("createDaintreeFileProtocolHandler — symlink containment", () => {
     vi.mocked(fs.stat).mockResolvedValue({ size: 25 * 1024 * 1024 } as Awaited<
       ReturnType<typeof fs.stat>
     >);
+    vi.mocked(fs.open).mockResolvedValue(
+      makeFileHandle(Buffer.alloc(25 * 1024 * 1024)) as unknown as Awaited<
+        ReturnType<typeof fs.open>
+      >
+    );
     const appProtocol = await import("../../utils/appProtocol.js");
     vi.mocked(appProtocol.getMimeType).mockReturnValue("image/png");
 
@@ -1817,6 +1832,7 @@ describe("createDaintreeFileProtocolHandler — symlink containment", () => {
 
     expect(response.status).toBe(200);
     expect(fs.open).toHaveBeenCalledTimes(1);
+    expect(response.headers.get("Content-Length")).toBe(String(25 * 1024 * 1024));
   });
 
   it("does not extend the raster ceiling to SVG (kept at the text cap)", async () => {
@@ -2663,7 +2679,7 @@ describe("createDaintreeMediaProtocolHandler — direct range streaming (#12242)
     const response = await handler(makeMediaRequest("/project/clip.mp4", "/project"));
 
     expect(response.status).toBe(404);
-    expect(handle.read).not.toHaveBeenCalled();
+    expect(fs.open).not.toHaveBeenCalled();
     expect(handle.createReadStream).not.toHaveBeenCalled();
   });
 
@@ -3641,9 +3657,11 @@ describe("createDaintreeHtmlProtocolHandler — sandboxed HTML preview (#11191)"
 
   function makeFileHandle(content: string | Buffer = "<h1>hi</h1>") {
     const buffer = typeof content === "string" ? Buffer.from(content) : content;
+    const read = readsFrom(buffer);
     return {
-      read: readsFrom(buffer),
-      close: vi.fn().mockResolvedValue(undefined),
+      read,
+      // Closing ends the pass, so a handle the test hands out again reads from 0.
+      close: vi.fn(async () => read.rewind()),
     };
   }
 
@@ -3809,10 +3827,12 @@ describe("createDaintreePdfProtocolHandler — inline PDF preview (#11427)", () 
 
   function makeFileHandle(content: string | Buffer = "%PDF-1.4 body") {
     const buffer = typeof content === "string" ? Buffer.from(content) : content;
+    const read = readsFrom(buffer);
     return {
-      read: readsFrom(buffer),
+      read,
       stat: vi.fn().mockResolvedValue({ size: buffer.length, isFile: () => true }),
-      close: vi.fn().mockResolvedValue(undefined),
+      // Closing ends the pass, so a handle the test hands out again reads from 0.
+      close: vi.fn(async () => read.rewind()),
     };
   }
 

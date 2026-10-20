@@ -88,29 +88,32 @@ function getReadHandler() {
 }
 
 /**
- * `FileHandle.read` over `content`, from the descriptor's offset. A read into
- * the start of a buffer begins a new pass, so one handle can serve every
- * request a test makes. `requested` tallies how many bytes were asked for,
- * which bounds what the reader allocated.
+ * `FileHandle.read` over `content`, from the descriptor's offset. `rewind()`
+ * puts the offset back to 0, as reopening the file would. `requested` tallies
+ * how many bytes were asked for, which bounds what the reader transferred.
  */
 function readsFrom(content: Buffer) {
   let offset = 0;
   const read = vi.fn(async (buffer: Buffer, at: number, length: number) => {
-    if (at === 0) offset = 0;
     read.requested += length;
     const n = Math.max(0, Math.min(length, content.length - offset));
     content.copy(buffer, at, offset, offset + n);
     offset += n;
     return { bytesRead: n, buffer };
-  }) as ReturnType<typeof vi.fn> & { requested: number };
+  }) as ReturnType<typeof vi.fn> & { requested: number; rewind: () => void };
   read.requested = 0;
+  read.rewind = () => {
+    offset = 0;
+  };
   return read;
 }
 
 function makeFileHandle(buffer: Buffer): FileHandleLike {
+  const read = readsFrom(buffer);
   return {
-    read: readsFrom(buffer),
-    close: vi.fn().mockResolvedValue(undefined),
+    read,
+    // Closing ends the pass, so a handle the test hands out again reads from 0.
+    close: vi.fn(async () => read.rewind()),
     // The same file the real path's stat named (the stat mocks carry no inode).
     stat: vi.fn().mockResolvedValue({
       isFile: () => true,

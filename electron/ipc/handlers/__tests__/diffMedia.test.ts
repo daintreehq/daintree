@@ -256,6 +256,17 @@ describe("diffMedia readFileVersions", () => {
     expect(result.head.ok).toBe(true);
   });
 
+  it("serves a working file of exactly the cap", async () => {
+    const exact = Buffer.alloc(DIFF_MEDIA_MAX_BYTES, 0x61);
+    fsMock.stat.mockResolvedValue({ size: exact.byteLength, isFile: () => true });
+    fileHandleMock.stat.mockResolvedValue({ size: exact.byteLength, isFile: () => true });
+    serveWorkingFile(exact);
+
+    const result = await invoke({ cwd: REPO_ROOT, filePath: "img.png" });
+
+    expect(result.working).toMatchObject({ ok: true, byteSize: DIFF_MEDIA_MAX_BYTES });
+  });
+
   it("serves a working file that grew after the stat but stays under the cap", async () => {
     const grown = Buffer.concat([WORKING_BUFFER, Buffer.from("more bytes")]);
     serveWorkingFile(grown);

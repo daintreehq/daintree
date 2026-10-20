@@ -96,6 +96,30 @@ describe("fingerprintPaths", () => {
     expect(closed).toBe(true);
   });
 
+  it("closes the descriptor when the read fails", async () => {
+    const file = path.join(root, "failing.txt");
+    await fs.writeFile(file, "content");
+    const realOpen = fs.open;
+    let closed = false;
+    const spy = vi.spyOn(fs, "open").mockImplementation((async (...args: unknown[]) => {
+      const handle = await (realOpen as (...a: unknown[]) => Promise<FileHandle>)(...args);
+      const realClose = handle.close.bind(handle);
+      return Object.assign(Object.create(handle) as FileHandle, {
+        read: async () => {
+          throw Object.assign(new Error("EIO"), { code: "EIO" });
+        },
+        close: async () => {
+          closed = true;
+          await realClose();
+        },
+      });
+    }) as typeof fs.open);
+    const [fingerprint] = await fingerprintPaths(root, [file]).finally(() => spy.mockRestore());
+
+    expect(fingerprint).toBeNull();
+    expect(closed).toBe(true);
+  });
+
   it("digests a file of exactly the preview ceiling", async () => {
     const file = path.join(root, "exact.txt");
     const content = Buffer.alloc(FILE_PREVIEW_MAX_BYTES, 0x62);
