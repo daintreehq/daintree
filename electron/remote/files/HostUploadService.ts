@@ -87,6 +87,8 @@ interface OperationRecord {
   /** The prepare token while `prepared`, and the link it was issued on. */
   pendingToken: string | null;
   pendingIn: SessionUploads | null;
+  /** The link whose upload slot this prepare holds until it is ready or forgotten. */
+  reservedIn: SessionUploads | null;
   hostPath: string | null;
   bytes: number;
   expiresAt: number;
@@ -133,6 +135,8 @@ interface SessionUploads {
   session: LinkSession;
   endpoints: Map<string, HostFileEndpoint>;
   pending: Map<string, PendingUpload>;
+  /** Prepares still checking their destination: they count toward the limit too. */
+  preparing: Set<OperationRecord>;
   unregister: Array<() => void>;
 }
 
@@ -284,7 +288,7 @@ export class HostUploadService {
     for (const subscription of this.subscriptions.values()) subscription.dispose();
     this.subscriptions.clear();
     this.replaceGrants.clear();
-    for (const record of this.operations.values()) record.settle();
+    for (const [key, record] of this.operations) this.forgetOperation(key, record);
     this.operations.clear();
   }
 
@@ -295,6 +299,7 @@ export class HostUploadService {
       session,
       endpoints: new Map(),
       pending: new Map(),
+      preparing: new Set(),
       unregister: [],
     };
     created.unregister.push(
@@ -408,6 +413,8 @@ export class HostUploadService {
 
   private forgetOperation(key: string, record: OperationRecord): void {
     if (this.operations.get(key) === record) this.operations.delete(key);
+    record.reservedIn?.preparing.delete(record);
+    record.reservedIn = null;
     record.settle();
   }
 
@@ -531,6 +538,7 @@ export class HostUploadService {
       state: "preparing",
       pendingToken: null,
       pendingIn: null,
+      reservedIn: null,
       hostPath: null,
       bytes: 0,
       // A prepare stuck on the filesystem must not hold the id forever.
@@ -562,11 +570,16 @@ export class HostUploadService {
       return { status: "refused", reason: "too-large" };
     }
     this.expirePending(uploads);
+    // Reserved in the same turn as the check, before any await: concurrent
+    // prepares can't all pass it while their filesystem checks run.
     if (
-      uploads.pending.size >= (this.options.maxPendingPerSession ?? DEFAULT_MAX_PENDING_PER_SESSION)
+      uploads.pending.size + uploads.preparing.size >=
+      (this.options.maxPendingPerSession ?? DEFAULT_MAX_PENDING_PER_SESSION)
     ) {
       return { status: "refused", reason: "busy" };
     }
+    uploads.preparing.add(record);
+    record.reservedIn = uploads;
 
     let destination: PreparedDestination;
     if (payload.destination.kind === "inbox") {
@@ -662,6 +675,8 @@ export class HostUploadService {
     if (this.operations.get(opKey) !== record) return { status: "refused", reason: "busy" };
     this.admit(uploads, payload.endpointId);
     const token = crypto.randomBytes(16).toString("hex");
+    uploads.preparing.delete(record);
+    record.reservedIn = null;
     record.state = "prepared";
     record.expiresAt = Date.now() + this.abandonAfterMs();
     record.pendingToken = token;
