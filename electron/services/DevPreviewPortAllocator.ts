@@ -110,12 +110,48 @@ export async function probePortFree(port: number, signal?: AbortSignal): Promise
   return true;
 }
 
-export async function allocatePort(
+// Same-session callers that overlap must share one allocation: the registry
+// entry written before the probe is only a reservation against other
+// sessions, and handing it out would skip the probe (#13608).
+const inFlightAllocations = new WeakMap<Map<string, number>, Map<string, Promise<number>>>();
+
+export function allocatePort(
   portRegistry: Map<string, number>,
   sessionKey: string
 ): Promise<number> {
+  let pending = inFlightAllocations.get(portRegistry);
+  const inFlight = pending?.get(sessionKey);
+  if (inFlight) return inFlight;
+
   const existing = portRegistry.get(sessionKey);
-  if (existing !== undefined) return existing;
+  if (existing !== undefined) return Promise.resolve(existing);
+
+  if (!pending) {
+    pending = new Map();
+    inFlightAllocations.set(portRegistry, pending);
+  }
+  const allocations = pending;
+  const allocation: Promise<number> = allocateFreshPort(
+    portRegistry,
+    sessionKey,
+    () => allocations.get(sessionKey) === allocation
+  ).finally(() => {
+    if (allocations.get(sessionKey) === allocation) allocations.delete(sessionKey);
+  });
+  allocations.set(sessionKey, allocation);
+  return allocation;
+}
+
+async function allocateFreshPort(
+  portRegistry: Map<string, number>,
+  sessionKey: string,
+  isCurrent: () => boolean
+): Promise<number> {
+  // Released mid-await: the session's registry entry may already belong to a
+  // newer allocation, so this run must neither retry nor touch it.
+  const assertCurrent = () => {
+    if (!isCurrent()) throw new Error("Port allocation was released");
+  };
 
   for (let attempt = 0; attempt < 20; attempt++) {
     const candidate = 3000 + Math.floor(Math.random() * 7000);
@@ -124,8 +160,10 @@ export async function allocatePort(
     // Reserve before the async probe so concurrent allocatePort() calls for
     // different session keys can't pick the same candidate between probe and registration.
     portRegistry.set(sessionKey, candidate);
-    if (await probePortFree(candidate)) return candidate;
-    releasePort(portRegistry, sessionKey);
+    const free = await probePortFree(candidate);
+    assertCurrent();
+    if (free) return candidate;
+    portRegistry.delete(sessionKey);
   }
 
   // Fall back to an OS-assigned port. It is only IPv4-assigned, so it still
@@ -133,11 +171,14 @@ export async function allocatePort(
   // number while we were binding.
   for (let attempt = 0; attempt < MAX_OS_ASSIGNED_ATTEMPTS; attempt++) {
     const port = await requestOsAssignedPort();
+    assertCurrent();
     if (port === null) continue;
     if (new Set(portRegistry.values()).has(port)) continue;
     portRegistry.set(sessionKey, port);
-    if (await probePortFree(port)) return port;
-    releasePort(portRegistry, sessionKey);
+    const free = await probePortFree(port);
+    assertCurrent();
+    if (free) return port;
+    portRegistry.delete(sessionKey);
   }
   throw new Error("Failed to allocate port");
 }
@@ -167,6 +208,12 @@ function requestOsAssignedPort(): Promise<number | null> {
 
 export function releasePort(portRegistry: Map<string, number>, sessionKey: string): void {
   portRegistry.delete(sessionKey);
+  inFlightAllocations.get(portRegistry)?.delete(sessionKey);
+}
+
+export function clearPortRegistry(portRegistry: Map<string, number>): void {
+  portRegistry.clear();
+  inFlightAllocations.get(portRegistry)?.clear();
 }
 
 /**

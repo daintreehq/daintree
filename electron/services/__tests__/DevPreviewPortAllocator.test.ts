@@ -72,6 +72,8 @@ vi.mock("node:net", () => {
 
 import {
   allocatePort,
+  clearPortRegistry,
+  releasePort,
   probePortFree,
   waitForPortFree,
   PORT_FREE_POLL_INTERVAL_MS,
@@ -187,6 +189,126 @@ describe("allocatePort", () => {
     );
     expect(registry.get("other-session")).toBe(5678);
     expect(registry.has("session-collide")).toBe(false);
+  });
+
+  describe("overlapping allocations", () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    // Math.random() → candidate: 3000 + floor(r * 7000).
+    function queueCandidates(...ports: number[]) {
+      const spy = vi.spyOn(Math, "random");
+      for (const port of ports) spy.mockReturnValueOnce((port - 3000 + 0.5) / 7000);
+    }
+
+    it("hands an overlapping caller for the same session the verified port, not the busy candidate", async () => {
+      netMock.busy.set("127.0.0.1|3000", "EADDRINUSE");
+      queueCandidates(3000, 5800);
+      const registry = new Map<string, number>();
+
+      const first = allocatePort(registry, "same-session");
+      const second = allocatePort(registry, "same-session");
+      const [a, b] = await Promise.all([first, second]);
+
+      expect(a).toBe(5800);
+      expect(b).toBe(5800);
+      expect(registry.get("same-session")).toBe(5800);
+    });
+
+    it("keeps a different session off the candidate still being probed", async () => {
+      queueCandidates(4200, 4200, 4300);
+      const registry = new Map<string, number>();
+
+      const first = allocatePort(registry, "session-a");
+      const second = allocatePort(registry, "session-b");
+      const [a, b] = await Promise.all([first, second]);
+
+      expect(a).toBe(4200);
+      expect(b).toBe(4300);
+    });
+
+    it("joins one allocation when the same session overlaps on a free candidate", async () => {
+      queueCandidates(4250);
+      const registry = new Map<string, number>();
+
+      const [a, b] = await Promise.all([
+        allocatePort(registry, "same-free"),
+        allocatePort(registry, "same-free"),
+      ]);
+
+      expect(a).toBe(4250);
+      expect(b).toBe(4250);
+      expect(netMock.listens.filter((l) => l.port === 4250)).toHaveLength(5);
+    });
+
+    it("rejects a run released mid-probe and lets a fresh allocation own the session", async () => {
+      queueCandidates(4400, 4500);
+      const registry = new Map<string, number>();
+
+      const stale = allocatePort(registry, "session-r");
+      releasePort(registry, "session-r");
+      const fresh = allocatePort(registry, "session-r");
+
+      await expect(stale).rejects.toThrow("released");
+      expect(await fresh).toBe(4500);
+      expect(registry.get("session-r")).toBe(4500);
+    });
+
+    it("stops a released run whose probe failed from retrying over the newer reservation", async () => {
+      netMock.busy.set("127.0.0.1|4600", "EADDRINUSE");
+      queueCandidates(4600, 4700);
+      const registry = new Map<string, number>();
+
+      const stale = allocatePort(registry, "session-s");
+      releasePort(registry, "session-s");
+      const fresh = allocatePort(registry, "session-s");
+
+      await expect(stale).rejects.toThrow("released");
+      expect(await fresh).toBe(4700);
+      expect(registry.get("session-s")).toBe(4700);
+    });
+
+    it("keeps a released run off a newer reservation that picked the same port", async () => {
+      netMock.busyForCalls.set("127.0.0.1|4900", 1);
+      queueCandidates(4900, 4900);
+      const registry = new Map<string, number>();
+
+      const stale = allocatePort(registry, "session-same");
+      releasePort(registry, "session-same");
+      const fresh = allocatePort(registry, "session-same");
+
+      await expect(stale).rejects.toThrow("released");
+      expect(await fresh).toBe(4900);
+      expect(registry.get("session-same")).toBe(4900);
+    });
+
+    it("lets a later call retry after an overlapping allocation fails", async () => {
+      for (let port = 3000; port < 10_000; port++)
+        netMock.busy.set(`0.0.0.0|${port}`, "EADDRINUSE");
+      const registry = new Map<string, number>();
+
+      const results = await Promise.allSettled([
+        allocatePort(registry, "session-x"),
+        allocatePort(registry, "session-x"),
+      ]);
+      expect(results.map((r) => r.status)).toEqual(["rejected", "rejected"]);
+      expect(registry.has("session-x")).toBe(false);
+
+      netMock.busy.clear();
+      expect(await allocatePort(registry, "session-x")).toBeGreaterThan(0);
+    });
+
+    it("abandons in-flight allocations when the registry is cleared", async () => {
+      queueCandidates(5100);
+      const registry = new Map<string, number>();
+
+      const pending = allocatePort(registry, "session-c");
+      clearPortRegistry(registry);
+
+      await expect(pending).rejects.toThrow("released");
+      expect(registry.size).toBe(0);
+    });
   });
 });
 
