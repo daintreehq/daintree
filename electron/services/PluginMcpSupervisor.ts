@@ -871,7 +871,7 @@ export class PluginMcpSupervisor {
    * already bounds the overall shutdown window.
    */
   async shutdown(input: { pluginId: string }): Promise<void> {
-    const ownedKeys = [...this.states.keys()].filter((k) => k.startsWith(`${input.pluginId} `));
+    const ownedKeys = [...this.states.keys()].filter((k) => k.startsWith(`${input.pluginId}\x00`));
     await Promise.all(ownedKeys.map((key) => this.shutdownOne(key)));
   }
 
@@ -1188,7 +1188,7 @@ function writeFrame(stdin: NodeJS.WritableStream, payload: unknown): void {
 }
 
 function stateKey(pluginId: string, serverId: string): string {
-  return `${pluginId} ${serverId}`;
+  return `${pluginId}\x00${serverId}`;
 }
 
 /**

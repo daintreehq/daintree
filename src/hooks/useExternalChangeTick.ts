@@ -116,7 +116,7 @@ export function useExternalChangeTick(
         if (generation !== generationRef.current) return;
         // A separator no fingerprint can contain, so two different per-path
         // answers can never join to the same string.
-        const next = fingerprints.map((value) => value ?? "-").join("");
+        const next = fingerprints.map((value) => value ?? "-").join("\x1f");
         const previous = baselineRef.current;
         baselineRef.current = { key, root, sample: next };
         // The first sample of a set establishes what "unchanged" looks like and

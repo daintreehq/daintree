@@ -1900,20 +1900,20 @@ export class PtyClient extends EventEmitter {
       enter: "\r",
       return: "\r",
       tab: "\t",
-      "shift+tab": "[Z",
-      esc: "",
-      escape: "",
+      "shift+tab": "\x1b[Z",
+      esc: "\x1b",
+      escape: "\x1b",
       backspace: "",
-      delete: "[3~",
-      insert: "[2~",
-      home: "[H",
-      end: "[F",
-      pageup: "[5~",
-      pagedown: "[6~",
-      up: "[A",
-      down: "[B",
-      right: "[C",
-      left: "[D",
+      delete: "\x1b[3~",
+      insert: "\x1b[2~",
+      home: "\x1b[H",
+      end: "\x1b[F",
+      pageup: "\x1b[5~",
+      pagedown: "\x1b[6~",
+      up: "\x1b[A",
+      down: "\x1b[B",
+      right: "\x1b[C",
+      left: "\x1b[D",
     };
 
     if (simpleMap[normalizedKey]) return simpleMap[normalizedKey];
@@ -1928,7 +1928,7 @@ export class PtyClient extends EventEmitter {
     if (altMatch) {
       const rest = this.resolveKeySequence(altMatch[1]);
       if (!rest) return null;
-      return `${rest}`;
+      return `\x1b${rest}`;
     }
 
     if (normalizedKey.length === 1) return normalizedKey;

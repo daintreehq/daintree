@@ -81,7 +81,7 @@ describe("detectCheckResult", () => {
   });
 
   it("strips ANSI codes before matching", () => {
-    const out = "[31mFound 2 errors.[0m";
+    const out = "\x1b[31mFound 2 errors.\x1b[0m";
     const result = detectCheckResult(out, RAN_AT);
     expect(result?.passed).toBe(false);
     expect(result?.failureSummary).toContain("Found 2 errors");
