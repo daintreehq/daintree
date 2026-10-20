@@ -1427,6 +1427,133 @@ describe("persistence boundary hardening", () => {
       }
     });
 
+    it("repopulates the memory fallback with a snapshot it last wrote durably (#13601)", async () => {
+      const backing = new Map<string, string>();
+      let readsThrow = false;
+      installLocalStorage(
+        createStorageMock({
+          getItem: (key) => {
+            if (readsThrow) throw new Error("storage gone");
+            return backing.get(key) ?? null;
+          },
+          setItem: (key, value) => {
+            backing.set(key, value);
+          },
+        })
+      );
+      vi.useFakeTimers();
+      const { createDebouncedSafeJSONStorage, setPermanentFallbackHandler } =
+        await import("../persistence/safeStorage");
+      setPermanentFallbackHandler(() => {});
+      try {
+        const storage = createDebouncedSafeJSONStorage<{ value: number }>(300);
+        const snapshot = { state: { value: 1 }, version: 1 };
+
+        storage.setItem("m", snapshot);
+        vi.advanceTimersByTime(300);
+        readsThrow = true;
+        expect(storage.getItem("other")).toBeNull(); // forces the memory fallback
+
+        storage.setItem("m", snapshot);
+        vi.advanceTimersByTime(300);
+        expect(storage.getItem("m")).toEqual(snapshot);
+      } finally {
+        setPermanentFallbackHandler(null);
+        vi.useRealTimers();
+      }
+    });
+
+    describe("mergeOnWrite edges (#13601)", () => {
+      type Sessions = { sessions: Record<string, { v: string }> };
+      const KEY = "merge-debounced-edges";
+      const val = (sessions: Sessions["sessions"]) => ({ state: { sessions }, version: 1 });
+
+      async function setup(primaryQuota: () => boolean) {
+        const backing = new Map<string, string>();
+        installLocalStorage({
+          getItem: (key) => backing.get(key) ?? null,
+          setItem: (key, value) => {
+            if (key === KEY && primaryQuota()) {
+              throw new DOMException("Quota exceeded", "QuotaExceededError");
+            }
+            backing.set(key, value);
+          },
+          removeItem: (key) => {
+            backing.delete(key);
+          },
+        });
+        const { createDebouncedSafeJSONStorage } = await import("../persistence/safeStorage");
+        const { mergeRecordByWriterDelta } = await import("../persistence/persistWriteMerge");
+        const mergeSessions: PersistWriteMerge<Sessions> = ({ baseline, onDisk, incoming }) => {
+          if (!onDisk) return incoming;
+          return {
+            version: incoming.version,
+            state: {
+              sessions: mergeRecordByWriterDelta(
+                baseline?.state.sessions ?? {},
+                incoming.state.sessions,
+                onDisk.state.sessions ?? {}
+              ),
+            },
+          };
+        };
+        const view = createDebouncedSafeJSONStorage<Sessions>(300, {
+          mergeOnWrite: mergeSessions,
+        });
+        const diskSessions = () => {
+          const parsed: { state: Sessions } | null = JSON.parse(backing.get(KEY) ?? "null");
+          return parsed?.state.sessions;
+        };
+        const flushOnce = (sessions: Sessions["sessions"]) => {
+          view.setItem(KEY, val(sessions));
+          vi.advanceTimersByTime(300);
+        };
+        return { backing, view, diskSessions, flushOnce };
+      }
+
+      it("keeps the baseline across a quota failure so the retried deletion still applies", async () => {
+        vi.useFakeTimers();
+        try {
+          let quota = false;
+          const { backing, view, diskSessions, flushOnce } = await setup(() => quota);
+          backing.set(KEY, JSON.stringify(val({ a: { v: "a" } })));
+          void view.getItem(KEY); // baseline { a }
+
+          quota = true;
+          flushOnce({});
+          expect(diskSessions()).toEqual({ a: { v: "a" } });
+
+          quota = false;
+          backing.set(KEY, JSON.stringify(val({ a: { v: "a" }, b: { v: "b" } })));
+          flushOnce({});
+          expect(diskSessions()).toEqual({ b: { v: "b" } });
+          expect(backing.get(`${KEY}.__bak`)).toBe(backing.get(KEY));
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      it("a read resets the fixed point so the next flush merges against the new baseline", async () => {
+        vi.useFakeTimers();
+        try {
+          const { backing, view, diskSessions, flushOnce } = await setup(() => false);
+          void view.getItem(KEY);
+          flushOnce({ a: { v: "a" } });
+          backing.set(KEY, JSON.stringify(val({ a: { v: "a" }, b: { v: "b" } })));
+          for (let i = 0; i < 4; i += 1) flushOnce({ a: { v: "a" } });
+          expect(diskSessions()).toEqual({ a: { v: "a" }, b: { v: "b" } });
+
+          // Hydrating takes `b` into the baseline; an unchanged snapshot without
+          // it is now a deletion of `b` and must not be skipped as settled.
+          void view.getItem(KEY);
+          flushOnce({ a: { v: "a" } });
+          expect(diskSessions()).toEqual({ a: { v: "a" } });
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+    });
+
     it("mergeOnWrite settles repeated flushes yet still reconciles sibling writes and deletions (#13601)", async () => {
       const backing = new Map<string, string>();
       let primaryWrites = 0;

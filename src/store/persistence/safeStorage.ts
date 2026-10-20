@@ -137,6 +137,7 @@ interface ResilientStorage {
   writeBackup: (name: string, value: string) => void;
   readBackup: (name: string) => string | null;
   removeBackup: (name: string) => void;
+  usesMemory: () => boolean;
 }
 
 function createResilientStorage(baseStorage: StateStorage | undefined): ResilientStorage {
@@ -284,6 +285,7 @@ function createResilientStorage(baseStorage: StateStorage | undefined): Resilien
         // Best-effort cleanup.
       }
     },
+    usesMemory: () => activeStorage === memoryStorage,
   };
 }
 
@@ -378,7 +380,10 @@ function createPersistWriter<T>(
   raw: ResilientStorage,
   mergeOnWrite: PersistWriteMerge<T> | undefined
 ) {
-  const lastWritten = new Map<string, string>();
+  // The bytes this writer last landed per key, and whether they landed in the
+  // in-memory fallback. A switch to memory after a durable write invalidates
+  // the entry, so the repeat still populates the fallback.
+  const lastWritten = new Map<string, { serialized: string; memory: boolean }>();
   // What this writer last knew, per key — its hydration read or last durable
   // write. Feeds the three-way merge so a stale snapshot can't clobber a
   // sibling view (issue #11351). Only tracked when a merger is configured.
@@ -407,7 +412,7 @@ function createPersistWriter<T>(
       // incoming) against these exact disk bytes reproduces them, and the
       // primary and backup still hold those bytes. Mergers are pure, so the
       // skipped write would have rewritten identical bytes.
-      const incoming = serializedValue ?? JSON.stringify(value);
+      const incoming = JSON.stringify(value);
       const onDiskRaw = raw.getItem(name);
       const last = lastMergeWrite.get(name);
       if (
@@ -449,13 +454,14 @@ function createPersistWriter<T>(
       return;
     }
     const serialized = serializedValue ?? JSON.stringify(value);
-    if (lastWritten.get(name) === serialized) return;
+    const last = lastWritten.get(name);
+    if (last?.serialized === serialized && last.memory === raw.usesMemory()) return;
     const result = raw.setItem(name, serialized);
     if (result === "durable") {
-      lastWritten.set(name, serialized);
+      lastWritten.set(name, { serialized, memory: false });
       raw.writeBackup(name, serialized);
     } else if (result === "memory") {
-      lastWritten.set(name, serialized);
+      lastWritten.set(name, { serialized, memory: true });
     }
   };
 
