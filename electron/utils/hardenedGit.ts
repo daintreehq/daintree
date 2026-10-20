@@ -284,6 +284,10 @@ const BLOCKED_INHERITED_GIT_ENV_KEYS = new Set([
   "GIT_CONFIG",
   "GIT_CONFIG_COUNT",
   "GIT_CONFIG_GLOBAL",
+  // Git's own carrier for `-c` overrides, so an inherited one can set any config
+  // key (core.fsmonitor, core.sshCommand, core.hooksPath, ...). simple-git
+  // passes our config as argv `-c` and its env scanner never looks at this key.
+  "GIT_CONFIG_PARAMETERS",
   "GIT_CONFIG_SYSTEM",
   "GIT_EDITOR",
   "GIT_EXEC_PATH",
@@ -316,6 +320,9 @@ const BLOCKED_INHERITED_GIT_ENV_KEYS = new Set([
   "PAGER",
   "PREFIX",
   "SSH_ASKPASS",
+  // Git's editor fallback after GIT_EDITOR and core.editor. allowUnsafeEditor
+  // is on (see UNSAFE_FLAGS), and simple-git 3.36.0 never scans VISUAL anyway.
+  "VISUAL",
 ]);
 
 function getSanitizedProcessEnv(): NodeJS.ProcessEnv {
