@@ -215,6 +215,31 @@ describe("PrivacyDataTab", () => {
     }
   });
 
+  it("names every breadcrumb kind sent with crash reports", async () => {
+    render(<PrivacyDataTab activeSubtab="telemetry" onSubtabChange={vi.fn()} />, {
+      wrapper: TooltipProvider,
+    });
+
+    const disclosure = await waitFor(() =>
+      screen.getByRole("group", { name: /What's collected at each level/i })
+    );
+    const text = disclosure.textContent ?? "";
+    for (const kind of [
+      /main and renderer processes/i,
+      /lifecycle/i,
+      /console logs/i,
+      /network requests/i,
+      /child-process/i,
+      /navigation/i,
+      /clicks/i,
+      /earlier error reports/i,
+    ]) {
+      expect(text).toMatch(kind);
+    }
+    expect(text).toMatch(/reduced to their origin/i);
+    expect(text).toMatch(/email addresses/i);
+  });
+
   it("does not render telemetry disclosure on the storage subtab", async () => {
     render(<PrivacyDataTab activeSubtab="storage" onSubtabChange={vi.fn()} />, {
       wrapper: TooltipProvider,

@@ -185,6 +185,319 @@ describe("sanitizePath", () => {
   });
 });
 
+describe("sanitizePath — dash-encoded home directories", () => {
+  // The username canary has its own dashes: a rule that stops at the first
+  // dash would leak "beta13541".
+  const user = "os13541-alpha-beta13541";
+
+  it("redacts the macOS scratchpad slug and keeps the following components", () => {
+    const path = `/private/tmp/claude-501/-Users-${user}-project13541/session13541/scratchpad/wt-x`;
+    const result = sanitizePath(path);
+    expect(result).toBe("/private/tmp/claude-501/-Users-USER/session13541/scratchpad/wt-x");
+  });
+
+  it("redacts the Linux and Windows slug forms", () => {
+    for (const path of [
+      `/tmp/claude-1000/-home-${user}-project13541/s`,
+      `C:\\Temp\\claude\\C--Users-${user}-project13541\\s`,
+    ]) {
+      const result = sanitizePath(path);
+      expect(result).not.toContain("alpha");
+      expect(result).not.toContain("beta13541");
+      expect(result).not.toContain("project13541");
+    }
+  });
+
+  it("redacts a quoted slug inside a log line and is idempotent", () => {
+    const line = `worktree created at "-Users-${user}-proj" and '-home-${user}'`;
+    const once = sanitizePath(line);
+    expect(once).toBe(`worktree created at "-Users-USER" and '-home-USER'`);
+    expect(sanitizePath(once)).toBe(once);
+  });
+
+  it("redacts bracketed and lowercase-drive slugs and stops at the slug alphabet", () => {
+    expect(sanitizePath(`[-Users-${user}-proj]`)).toBe("[-Users-USER]");
+    expect(sanitizePath(`cwd=-Users-${user}-proj;exit=1`)).toBe("cwd=-Users-USER;exit=1");
+    expect(sanitizePath(`c--users-${user}-proj\\s`)).toBe("c--users-USER\\s");
+  });
+
+  it("leaves ordinary dashed words and CLI flags alone", () => {
+    for (const text of ["--user-agent", "my-Users-list", "npm run home-page"]) {
+      expect(sanitizePath(text)).toBe(text);
+    }
+  });
+});
+
+describe("sanitizeEvent — breadcrumb canaries (#13541)", () => {
+  const EMAIL = "breadcrumb.canary+13541@privacy.example";
+  const ENCODED_EMAIL = encodeURIComponent(EMAIL);
+  const OWNER = "owner13541-private";
+  const REPO = "repo13541-confidential";
+  const USER = "os13541-alpha-beta13541";
+  const SCRATCHPAD = `/private/tmp/claude-501/-Users-${USER}-project13541/session13541/scratchpad/wt-canary`;
+  const SEARCH_URL = `https://api.github.com/search/users?q=${ENCODED_EMAIL}+in:email`;
+  const REST_URL = `https://api.github.com/repos/${OWNER}/${REPO}/pulls?query13541=1#fragment13541`;
+  const CANARIES = [
+    EMAIL,
+    ENCODED_EMAIL,
+    "canary+13541",
+    "canary%2B13541",
+    OWNER,
+    REPO,
+    USER,
+    "beta13541",
+    "project13541",
+    "query13541",
+    "fragment13541",
+    "search/users",
+    "/repos/",
+  ];
+
+  function expectNoCanaries(result: SentryEvent | null): void {
+    // A dropped event would trivially satisfy the absence checks below.
+    expect(result).not.toBeNull();
+    const serialized = JSON.stringify(result);
+    for (const canary of CANARIES) expect(serialized).not.toContain(canary);
+  }
+
+  it("reduces network breadcrumb URLs to their origin for every SDK shape", () => {
+    const event: SentryEvent = {
+      breadcrumbs: [
+        {
+          type: "http",
+          category: "electron.net",
+          data: { url: SEARCH_URL, method: "GET", status_code: 200 },
+        },
+        {
+          type: "http",
+          category: "http",
+          data: {
+            url: `https://api.github.com/repos/${OWNER}/${REPO}/events`,
+            method: "GET",
+            status_code: 304,
+            "http.query": `q=${ENCODED_EMAIL}`,
+            "http.fragment": "fragment13541",
+          },
+        },
+        { type: "http", category: "fetch", data: { url: REST_URL, method: "GET" } },
+        { type: "http", category: "xhr", data: { url: REST_URL, method: "POST" } },
+      ],
+    };
+    const result = sanitizeEvent(event);
+    expectNoCanaries(result);
+    expect(result?.breadcrumbs?.map((crumb) => crumb.category)).toEqual([
+      "electron.net",
+      "http",
+      "fetch",
+      "xhr",
+    ]);
+    for (const crumb of result?.breadcrumbs ?? []) {
+      expect(crumb.data?.url).toBe("https://api.github.com");
+      expect(crumb.data?.method).toBeDefined();
+      // toHaveProperty would read the dotted keys as nested paths.
+      expect(Object.keys(crumb.data ?? {})).not.toContain("http.query");
+      expect(Object.keys(crumb.data ?? {})).not.toContain("http.fragment");
+    }
+    expect(result?.breadcrumbs?.[0]?.data?.status_code).toBe(200);
+    expect(result?.breadcrumbs?.[1]?.data?.status_code).toBe(304);
+    expect(result?.breadcrumbs?.[3]?.data?.method).toBe("POST");
+  });
+
+  it("reduces navigation from/to, including relative URLs", () => {
+    const event: SentryEvent = {
+      breadcrumbs: [
+        {
+          category: "navigation",
+          data: { from: `/repos/${OWNER}/${REPO}?q=${ENCODED_EMAIL}`, to: REST_URL },
+        },
+      ],
+    };
+    const result = sanitizeEvent(event);
+    expectNoCanaries(result);
+    expect(result?.breadcrumbs?.[0]?.data).toEqual({
+      from: "[REDACTED_URL]",
+      to: "https://api.github.com",
+    });
+  });
+
+  it("scrubs URLs, emails, and scratchpad paths from console breadcrumbs", () => {
+    const event: SentryEvent = {
+      breadcrumbs: [
+        {
+          category: "console",
+          message: `[WorkspaceHost] fetch ${REST_URL} for ${EMAIL} in ${SCRATCHPAD}`,
+          data: {
+            arguments: [
+              "[GitHub] avatar lookup",
+              { url: SEARCH_URL, author: EMAIL, nested: [SCRATCHPAD, ENCODED_EMAIL] },
+            ],
+            logger: "console",
+          },
+        },
+        { type: "process", category: "child-process", message: `exited in ${SCRATCHPAD}` },
+      ],
+    };
+    const result = sanitizeEvent(event);
+    expectNoCanaries(result);
+    const message = result?.breadcrumbs?.[0]?.message ?? "";
+    expect(message).toContain("https://api.github.com");
+    expect(message).toContain("[EMAIL]");
+    expect(message).toContain("-Users-USER/session13541");
+  });
+
+  it("scrubs the same canaries from messages, exceptions, extra, tags, and contexts", () => {
+    const text = `${SEARCH_URL} ${EMAIL} ${SCRATCHPAD}`;
+    const event = {
+      message: text,
+      exception: { values: [{ value: text }] },
+      extra: { detail: text },
+      tags: { origin: text },
+      contexts: { app: { note: text } },
+    } as SentryEvent;
+    const result = sanitizeEvent(event);
+    expectNoCanaries(result);
+    expect(result?.message).toBe(
+      "https://api.github.com [EMAIL] /private/tmp/claude-501/-Users-USER/session13541/scratchpad/wt-canary"
+    );
+    expect(result?.exception?.values?.[0]?.value).toBe(result?.message);
+    expect(result?.extra?.detail).toBe(result?.message);
+  });
+
+  it("scrubs fields outside the message and breadcrumbs that carry caller text", () => {
+    const event = {
+      transaction: REST_URL,
+      logentry: { message: "lookup %s", params: [EMAIL, SEARCH_URL] },
+      fingerprint: ["{{ default }}", EMAIL],
+      exception: {
+        values: [
+          {
+            type: EMAIL,
+            mechanism: { type: "generic", data: { url: `/repos/${OWNER}/${REPO}` } },
+            stacktrace: {
+              frames: [
+                {
+                  filename: "app:///dist/renderer.js?q=query13541#fragment13541",
+                  function: `Object.${EMAIL}`,
+                  module: `-Users-${USER}-project13541`,
+                },
+              ],
+            },
+          },
+        ],
+      },
+      debug_meta: { images: [{ code_file: `app:///dist/main.js?${ENCODED_EMAIL}` }] },
+      threads: {
+        values: [
+          {
+            name: `worker for ${EMAIL}`,
+            stacktrace: {
+              frames: [
+                {
+                  filename: "app:///dist/worker.js",
+                  function: EMAIL,
+                  module: `/Users/${USER}/app`,
+                  context_line: `fetch("${REST_URL}")`,
+                  vars: { url: `/repos/${OWNER}/${REPO}?q=query13541` },
+                },
+              ],
+            },
+          },
+        ],
+      },
+    } as unknown as SentryEvent;
+    const result = sanitizeEvent(event);
+    expectNoCanaries(result);
+    // Source locations keep their file so frames still symbolicate.
+    expect(result?.exception?.values?.[0]?.stacktrace?.frames?.[0]?.filename).toBe(
+      "app:///dist/renderer.js"
+    );
+    const threadFrame = (
+      result?.threads as {
+        values: Array<{ stacktrace: { frames: Array<Record<string, unknown>> } }>;
+      }
+    ).values[0].stacktrace.frames[0];
+    expect(threadFrame.filename).toBe("app:///dist/worker.js");
+    expect(threadFrame.vars).toEqual({ url: "[REDACTED_URL]" });
+  });
+
+  it("scrubs string-valued breadcrumb data and nested relative url keys", () => {
+    const event = {
+      breadcrumbs: [
+        { category: "custom", data: `${EMAIL} ${REST_URL}` },
+        {
+          category: "console",
+          data: { arguments: [{ url: `/repos/${OWNER}/${REPO}?q=${ENCODED_EMAIL}` }] },
+        },
+      ],
+    } as unknown as SentryEvent;
+    const result = sanitizeEvent(event);
+    expectNoCanaries(result);
+    expect(result?.breadcrumbs?.[0]?.data).toBe("[EMAIL] https://api.github.com");
+    expect(result?.breadcrumbs?.[1]?.data).toEqual({ arguments: [{ url: "[REDACTED_URL]" }] });
+  });
+
+  it("reduces escaped, parenthesised, and websocket URLs embedded in text", () => {
+    const text = [
+      `https:\\/\\/api.github.com\\/repos\\/${OWNER}\\/${REPO}`,
+      `GET https://api.github.com/repos/${OWNER}/${REPO}(name)?query13541=1#fragment13541`,
+      `wss://api.github.com/repos/${OWNER}/${REPO}?query13541=1`,
+      `remote git@github.com:${OWNER}/${REPO}.git`,
+      JSON.stringify({
+        url: `https://api.github.com/x?q="query13541"&next=/repos/${OWNER}/${REPO}`,
+      }),
+    ].join("\n");
+    const result = sanitizeEvent({ breadcrumbs: [{ category: "console", message: text }] });
+    expectNoCanaries(result);
+    expect(result?.breadcrumbs?.[0]?.message).toContain("git@github.com:REDACTED/REDACTED");
+  });
+
+  it("redacts whole email addresses, including unusual local parts and encodings", () => {
+    const addresses = [
+      "o'connor13541@privacy.example",
+      "alice13541!private@privacy.example",
+      `${"a".repeat(60)}13541%2Btag%40privacy.example`,
+      "alice13541%40privacy%2Eexample",
+      "Name <alice13541@privacy.example>",
+      "mailto:alice13541@privacy.example",
+      "git@privacy13541.example",
+      "git%40privacy13541.example",
+    ];
+    for (const address of addresses) {
+      const result = sanitizeEvent({ message: `author ${address} pushed` });
+      expect(result?.message).not.toContain("13541");
+      expect(result?.message).toContain("[EMAIL]");
+    }
+  });
+
+  it("still runs the full string scrub over a retained origin (lesson #10101)", () => {
+    const secret = "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef0123456";
+    const url = `https://${secret}.example.com/path`;
+    const result = sanitizeEvent({
+      request: { url },
+      breadcrumbs: [{ category: "electron.net", data: { url } }],
+    });
+    expect(result).not.toBeNull();
+    expect(JSON.stringify(result).toLowerCase()).not.toContain(secret.toLowerCase());
+    expect(result?.request?.url).toContain("[REDACTED]");
+  });
+
+  it("keeps version-pinned package specifiers that look like addresses", () => {
+    const result = sanitizeEvent({ message: "loaded @sentry/electron@7.20.0 and react@19.2.1" });
+    expect(result?.message).toBe("loaded @sentry/electron@7.20.0 and react@19.2.1");
+  });
+
+  it("is idempotent over an already-sanitized event", () => {
+    const build = (): SentryEvent => ({
+      message: `${REST_URL} ${EMAIL} ${SCRATCHPAD}`,
+      breadcrumbs: [{ category: "electron.net", data: { url: SEARCH_URL } }],
+    });
+    const once = sanitizeEvent(build());
+    expect(once).not.toBeNull();
+    const twice = sanitizeEvent(structuredClone(once) as SentryEvent);
+    expect(twice).toEqual(once);
+  });
+});
+
 describe("sanitizeEvent", () => {
   it("scrubs a GitHub PAT from event.message", () => {
     const secret = "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef0123456";
@@ -350,27 +663,24 @@ describe("sanitizeEvent", () => {
     expect(result?.breadcrumbs?.[1]?.message).not.toContain("ghp_");
   });
 
-  it("clears username, password, search, and hash from request.url", () => {
+  it("reduces request.url to its origin, dropping credentials, path, search, and hash", () => {
     const event: SentryEvent = {
       request: {
         url: "https://user:pat@api.example.com/path?access_token=abc#token=xyz",
       },
     };
     const result = sanitizeEvent(event);
-    expect(result?.request?.url).toBe("https://api.example.com/path");
+    expect(result?.request?.url).toBe("https://api.example.com");
   });
 
-  it("scrubs a relative URL in-place when URL() throws", () => {
+  it("replaces a relative request.url with a marker when URL() throws", () => {
     const event: SentryEvent = {
       request: {
         url: "/oauth/callback?code=supersecretcode123&state=abc",
       },
     };
     const result = sanitizeEvent(event);
-    // `new URL("/oauth/callback...")` throws, so the catch branch runs
-    // sanitizeString on the raw string — `code=` matches the oauth pattern.
-    expect(result?.request?.url).toContain("code=[REDACTED]");
-    expect(result?.request?.url).not.toContain("supersecretcode123");
+    expect(result?.request?.url).toBe("[REDACTED_URL]");
   });
 
   it("scrubs Bearer tokens in request.headers", () => {
@@ -400,7 +710,7 @@ describe("sanitizeEvent", () => {
     const result = sanitizeEvent(event);
     expect(result?.request?.cookies).not.toContain(secret);
     expect((result?.request?.data as { payload: string }).payload).not.toContain(secret);
-    expect(result?.request?.query_string).not.toContain(secret);
+    expect(result?.request?.query_string).toBeUndefined();
   });
 
   it("scrubs a secret nested deeper than the recursion cap (depth 11+)", () => {
@@ -535,29 +845,15 @@ describe("sanitizeEvent", () => {
     expect(frame?.vars).toBeUndefined();
   });
 
-  it("scrubs user paths from parsed request.url path segments", () => {
-    const event: SentryEvent = {
-      request: {
-        url: "https://api.example.com/Users/alice/repos",
-      },
-    };
-    const result = sanitizeEvent(event);
-    // URL() parses fine, so the try branch runs — the path segment must
-    // still go through sanitizeString, not just the search/hash clears.
-    expect(result?.request?.url).toBe("https://api.example.com/Users/USER/repos");
-    expect(result?.request?.url).not.toContain("alice");
-  });
-
-  it("scrubs token-shaped path segments from parsed request.url", () => {
+  it("drops user paths and token-shaped segments from parsed request.url", () => {
     const secret = "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef0123456";
-    const event: SentryEvent = {
-      request: {
-        url: `https://api.example.com/download/${secret}/artifact`,
-      },
-    };
-    const result = sanitizeEvent(event);
-    expect(result?.request?.url).not.toContain(secret);
-    expect(result?.request?.url).toContain("[REDACTED]");
+    for (const url of [
+      "https://api.example.com/Users/alice/repos",
+      `https://api.example.com/download/${secret}/artifact`,
+    ]) {
+      const result = sanitizeEvent({ request: { url } });
+      expect(result?.request?.url).toBe("https://api.example.com");
+    }
   });
 
   it("scrubs secret values in event.tags and preserves non-string values", () => {

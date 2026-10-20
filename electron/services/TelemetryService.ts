@@ -29,7 +29,9 @@ export interface SentryRequest {
 export interface SentryEvent {
   exception?: {
     values?: Array<{
+      type?: string;
       value?: string;
+      mechanism?: unknown;
       stacktrace?: {
         frames?: Array<{
           filename?: string;
@@ -43,35 +45,135 @@ export interface SentryEvent {
     }>;
   };
   message?: string;
+  transaction?: string;
   request?: SentryRequest;
   breadcrumbs?: SentryBreadcrumb[];
   extra?: Record<string, unknown>;
   [key: string]: unknown;
 }
 
-function sanitizeString(value: string): string {
-  return scrubSecrets(sanitizePath(value));
+// Telemetry-local rather than a `scrubSecrets` pattern: that catalogue also
+// drives `findSecretInValue`, which would start rejecting `GIT_AUTHOR_EMAIL`
+// style config values as credentials. Matches the `%40`/`%2E`-encoded forms
+// query strings carry; the lookbehind makes the whole local part go, not just
+// a suffix of it. The TLD must be alphabetic so `pkg@1.2.3` survives, and the
+// `git@host:` of an SSH remote is left to the remote rule.
+const EMAIL_LOCAL_CHARS = "A-Za-z0-9._%+!#$&'*~-";
+const EMAIL_REGEX = new RegExp(
+  `(?<![${EMAIL_LOCAL_CHARS}])(?!git@[A-Za-z0-9.-]{1,253}:)[${EMAIL_LOCAL_CHARS}]{1,256}(?:@|%40)` +
+    `(?:[A-Za-z0-9-]{1,63}(?:\\.|%2E)){1,10}[A-Za-z]{2,63}\\b`,
+  "gi"
+);
+// SSH remotes name the (possibly private) owner and repo.
+const SSH_REMOTE_REGEX =
+  /\b(git@[A-Za-z0-9.-]{1,253}:)[A-Za-z0-9._-]{1,100}\/[A-Za-z0-9._-]{1,100}(?:\/[A-Za-z0-9._-]{1,100}){0,10}/g;
+// Also matches the escaped form a JSON-stringified log argument carries (`\/`,
+// and `\"` inside a query value).
+// Parentheses and apostrophes are legal inside a URL path, so they don't end
+// the match; a closing one from surrounding prose goes with the path.
+const EMBEDDED_URL_REGEX = /\b(?:https?|wss?|ssh|git):(?:\/\/|\\\/\\\/)(?:\\[/"]|[^\s"`<>\\])+/gi;
+const ORIGIN_PROTOCOLS = new Set(["http:", "https:", "ws:", "wss:"]);
+const REDACTED_URL = "[REDACTED_URL]";
+
+function scrubText(value: string): string {
+  return scrubSecrets(sanitizePath(value))
+    .replace(SSH_REMOTE_REGEX, "$1REDACTED/REDACTED")
+    .replace(EMAIL_REGEX, "[EMAIL]");
 }
+
+// Paths and query strings name private repos (`/repos/<owner>/<repo>`) and
+// carry search terms (`search/users?q=<email>`), so only the origin is kept.
+function reduceUrl(raw: string): string {
+  try {
+    const u = new URL(raw);
+    if (ORIGIN_PROTOCOLS.has(u.protocol)) return u.origin;
+    return u.host ? `${u.protocol}//${u.host}` : u.protocol;
+  } catch {
+    return REDACTED_URL;
+  }
+}
+
+// For fields that hold nothing but a URL. Both branches of `reduceUrl` end in
+// the full string scrub here (lesson #10101).
+function sanitizeUrlField(value: string): string {
+  return scrubText(reduceUrl(value));
+}
+
+function sanitizeString(value: string): string {
+  return scrubText(value.replace(EMBEDDED_URL_REGEX, (url) => reduceUrl(url)));
+}
+
+// Stack locations are often URLs (`app:///dist/main.js`), and reducing them to
+// an origin would strip the file the frame points at. Only the query,
+// fragment and credentials go.
+function sanitizeLocation(value: string): string {
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(value)) {
+    try {
+      const u = new URL(value);
+      u.search = "";
+      u.hash = "";
+      u.username = "";
+      u.password = "";
+      return scrubText(u.toString());
+    } catch {
+      // fall through to the plain scrub
+    }
+  }
+  return scrubText(value);
+}
+
+const FRAME_LOCATION_KEYS = new Set(["filename", "abs_path"]);
+
+// Shared by exception and thread stacks. contextLinesIntegration and
+// localVariablesIntegration (default integrations in @sentry/electron) fill
+// `context_line`, `pre_context`/`post_context` and `vars` with raw source lines
+// and local values before beforeSend fires; `function` and `module` are
+// caller-influenced too (computed method names), so every field is scrubbed.
+function sanitizeFrames(frames: unknown): void {
+  if (!Array.isArray(frames)) return;
+  for (const frame of frames) {
+    if (!frame || typeof frame !== "object") continue;
+    const record = frame as Record<string, unknown>;
+    for (const [key, val] of Object.entries(record)) {
+      record[key] =
+        FRAME_LOCATION_KEYS.has(key) && typeof val === "string"
+          ? sanitizeLocation(val)
+          : sanitizeStringsDeep(val);
+    }
+  }
+}
+
+const BREADCRUMB_URL_KEYS = ["url", "from", "to"] as const;
+const BREADCRUMB_DROPPED_KEYS = ["http.query", "http.fragment"] as const;
 
 // Recurse through arrays and plain objects, sanitizing every string leaf.
 // Depth-capped to guard against pathological / circular inputs — Sentry
 // breadcrumbs and `event.extra` are typically shallow, so 10 levels is well
-// beyond any realistic payload.
+// beyond any realistic payload. A `url` key anywhere (console arguments,
+// contexts) gets the URL-field treatment rather than the free-text one, which
+// would leave a relative path intact.
 const MAX_DEEP_SANITIZE_DEPTH = 10;
 
-function sanitizeStringsDeep(value: unknown, depth = 0): unknown {
+function sanitizeStringsDeep(
+  value: unknown,
+  scrub: (value: string) => string = sanitizeString,
+  depth = 0
+): unknown {
   // Scrub scalar strings regardless of depth — a secret nested beyond the
   // recursion cap is still worth redacting. Only the descent into containers
   // is stopped when depth overflows.
-  if (typeof value === "string") return sanitizeString(value);
+  if (typeof value === "string") return scrub(value);
   if (depth > MAX_DEEP_SANITIZE_DEPTH) return value;
   if (Array.isArray(value)) {
-    return value.map((item) => sanitizeStringsDeep(item, depth + 1));
+    return value.map((item) => sanitizeStringsDeep(item, scrub, depth + 1));
   }
   if (value && typeof value === "object") {
     const result: Record<string, unknown> = {};
     for (const [key, val] of Object.entries(value as Record<string, unknown>)) {
-      result[key] = sanitizeStringsDeep(val, depth + 1);
+      result[key] =
+        key === "url" && typeof val === "string" && scrub === sanitizeString
+          ? sanitizeUrlField(val)
+          : sanitizeStringsDeep(val, scrub, depth + 1);
     }
     return result;
   }
@@ -92,51 +194,43 @@ export function sanitizeEvent(event: SentryEvent): SentryEvent | null {
     if (Array.isArray(event.exception?.values)) {
       for (const ex of event.exception.values) {
         if (!ex || typeof ex !== "object") continue;
-        if (Array.isArray(ex.stacktrace?.frames)) {
-          for (const frame of ex.stacktrace.frames) {
-            if (!frame || typeof frame !== "object") continue;
-            if (frame.filename) frame.filename = sanitizeString(frame.filename);
-            if (frame.abs_path) frame.abs_path = sanitizeString(frame.abs_path);
-            // contextLinesIntegration and localVariablesIntegration (default
-            // integrations in @sentry/electron) populate these fields with
-            // raw source lines and local variable values before beforeSend
-            // fires. Source lines may contain string literals with user paths;
-            // local variable values may hold paths, tokens, or transcripts.
-            if (typeof frame.context_line === "string") {
-              frame.context_line = sanitizeString(frame.context_line);
-            }
-            if (Array.isArray(frame.pre_context)) {
-              frame.pre_context = sanitizeStringsDeep(frame.pre_context) as string[];
-            }
-            if (Array.isArray(frame.post_context)) {
-              frame.post_context = sanitizeStringsDeep(frame.post_context) as string[];
-            }
-            if (frame.vars && typeof frame.vars === "object") {
-              frame.vars = sanitizeStringsDeep(frame.vars) as Record<string, unknown>;
-            }
+        sanitizeFrames(ex.stacktrace?.frames);
+        if (ex.value) ex.value = sanitizeString(ex.value);
+        // The browser SDK copies `Error.name` into `type`, and it is caller-set.
+        if (typeof ex.type === "string") ex.type = sanitizeString(ex.type);
+        if (ex.mechanism !== undefined) ex.mechanism = sanitizeStringsDeep(ex.mechanism);
+      }
+    }
+    if (typeof event.transaction === "string") {
+      event.transaction = sanitizeString(event.transaction);
+    }
+    for (const key of ["logentry", "fingerprint"] as const) {
+      if (event[key] !== undefined) event[key] = sanitizeStringsDeep(event[key]);
+    }
+    const threads = (event.threads as { values?: unknown } | undefined)?.values;
+    if (Array.isArray(threads)) {
+      for (const thread of threads) {
+        if (!thread || typeof thread !== "object") continue;
+        const record = thread as Record<string, unknown>;
+        for (const [key, val] of Object.entries(record)) {
+          if (key === "stacktrace") {
+            sanitizeFrames((val as { frames?: unknown } | undefined)?.frames);
+          } else {
+            record[key] = sanitizeStringsDeep(val);
           }
         }
-        if (ex.value) ex.value = sanitizeString(ex.value);
       }
+    }
+    // Debug images name the same source locations the frames do.
+    if (event.debug_meta !== undefined) {
+      event.debug_meta = sanitizeStringsDeep(event.debug_meta, sanitizeLocation);
     }
     if (typeof event.message === "string") {
       event.message = sanitizeString(event.message);
     }
     if (event.request) {
       if (typeof event.request.url === "string") {
-        try {
-          const u = new URL(event.request.url);
-          u.search = "";
-          u.hash = "";
-          u.username = "";
-          u.password = "";
-          // Path segments can still carry user paths or token-shaped strings.
-          event.request.url = sanitizeString(u.toString());
-        } catch {
-          // Not parseable as an absolute URL (relative path, mailto:, etc.)
-          // Still scrub any inline free-text secrets before giving up.
-          event.request.url = sanitizeString(event.request.url);
-        }
+        event.request.url = sanitizeUrlField(event.request.url);
       }
       if (event.request.headers && typeof event.request.headers === "object") {
         event.request.headers = sanitizeStringsDeep(event.request.headers) as Record<
@@ -150,9 +244,7 @@ export function sanitizeEvent(event: SentryEvent): SentryEvent | null {
       if (event.request.data !== undefined) {
         event.request.data = sanitizeStringsDeep(event.request.data);
       }
-      if (event.request.query_string !== undefined) {
-        event.request.query_string = sanitizeStringsDeep(event.request.query_string);
-      }
+      delete event.request.query_string;
     }
     if (Array.isArray(event.breadcrumbs)) {
       for (const breadcrumb of event.breadcrumbs) {
@@ -160,8 +252,20 @@ export function sanitizeEvent(event: SentryEvent): SentryEvent | null {
         if (typeof breadcrumb.message === "string") {
           breadcrumb.message = sanitizeString(breadcrumb.message);
         }
-        if (breadcrumb.data && typeof breadcrumb.data === "object") {
-          breadcrumb.data = sanitizeStringsDeep(breadcrumb.data) as Record<string, unknown>;
+        const rawData: unknown = breadcrumb.data;
+        if (typeof rawData === "string") {
+          // A `toJSON()` on the original data can leave a bare string here.
+          breadcrumb.data = sanitizeString(rawData) as unknown as Record<string, unknown>;
+        } else if (breadcrumb.data && typeof breadcrumb.data === "object") {
+          // Network breadcrumbs (electron.net, http, fetch, xhr) carry `url`
+          // plus split-out query/fragment keys; navigation carries `from`/`to`.
+          const data = breadcrumb.data;
+          for (const key of BREADCRUMB_DROPPED_KEYS) delete data[key];
+          for (const key of BREADCRUMB_URL_KEYS) {
+            const value = data[key];
+            if (typeof value === "string") data[key] = sanitizeUrlField(value);
+          }
+          breadcrumb.data = sanitizeStringsDeep(data) as Record<string, unknown>;
         }
       }
     }
