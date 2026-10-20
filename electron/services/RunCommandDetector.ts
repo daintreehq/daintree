@@ -7,6 +7,7 @@ import type { RunCommand } from "../types/index.js";
 import { Cache } from "../utils/cache.js";
 import { YAML_MERGE_SCHEMA } from "../utils/yamlMergeSchema.js";
 import { stripUtf8Bom } from "../utils/stripUtf8Bom.js";
+import { parseJsonc } from "../utils/parseJsonc.js";
 import { agentCommandDialect, quoteLaunchArgOptional } from "../../shared/utils/shellEscape.js";
 
 const RESERVED_SCRIPT_NAMES = new Set(["__proto__", "constructor", "prototype"]);
@@ -515,8 +516,8 @@ export class RunCommandDetector {
 
     try {
       const content = await fs.readFile(devcontainerPath, "utf-8");
-      const config = JSON.parse(stripUtf8Bom(content));
-      const postStart = config.postStartCommand;
+      const config = parseJsonc(content) as { postStartCommand?: unknown } | null;
+      const postStart = config?.postStartCommand;
       if (postStart === undefined || postStart === null) return [];
 
       let command: string | undefined;

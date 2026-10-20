@@ -1138,6 +1138,42 @@ describe("RunCommandDetector", () => {
       const dc = commands.filter((cmd) => cmd.id === "devcontainer-poststart");
       expect(dc).toEqual([]);
     });
+
+    it("parses devcontainer.json with comments and trailing commas", async () => {
+      const devcontainerDir = path.join(tempDir, ".devcontainer");
+      await fs.mkdir(devcontainerDir);
+      await fs.writeFile(
+        path.join(devcontainerDir, "devcontainer.json"),
+        [
+          "﻿{",
+          "  // Start the development server",
+          '  "image": "node:20", /* pinned */',
+          '  "postStartCommand": "curl http://localhost:3000/* && npm run dev",',
+          '  "forwardPorts": [3000,],',
+          "}",
+        ].join("\n"),
+        "utf-8"
+      );
+
+      const commands = await detector.detect(tempDir);
+      const dc = commands.filter((cmd) => cmd.id === "devcontainer-poststart");
+      expect(dc).toHaveLength(1);
+      expect(dc[0]!.command).toBe("curl http://localhost:3000/* && npm run dev");
+    });
+
+    it("returns empty for devcontainer.json with an unterminated comment", async () => {
+      const devcontainerDir = path.join(tempDir, ".devcontainer");
+      await fs.mkdir(devcontainerDir);
+      await fs.writeFile(
+        path.join(devcontainerDir, "devcontainer.json"),
+        '{ "postStartCommand": "npm run dev" /* unterminated }',
+        "utf-8"
+      );
+
+      const commands = await detector.detect(tempDir);
+      const dc = commands.filter((cmd) => cmd.id === "devcontainer-poststart");
+      expect(dc).toEqual([]);
+    });
   });
 
   describe("framework-aware ordering", () => {
