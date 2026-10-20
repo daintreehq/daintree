@@ -44,6 +44,7 @@ import { getWebviewDialogService } from "../services/WebviewDialogService.js";
 import { looksLikeOAuthUrl } from "../services/OAuthLoopbackService.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { logWarn } from "../utils/logger.js";
+import { readBoundedFromHandle } from "../utils/boundedRead.js";
 import { isPluginDirResolverLive, markPluginDirResolverLive } from "./pluginProtocolReadiness.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { isValidRemoteHostId } from "../../shared/types/remoteHosts.js";
@@ -603,7 +604,7 @@ async function openContainedDaintreeFile(
     throw err;
   }
 
-  return { fileHandle, realFile, maxBytes };
+  return { fileHandle, realFile, maxBytes, sizeHint: fileStat.size };
 }
 
 /**
@@ -612,7 +613,7 @@ async function openContainedDaintreeFile(
  */
 // Return type is inferred, not annotated: annotating `buffer: Buffer` widens it
 // to `Buffer<ArrayBufferLike>`, which `new Response(...)` rejects as a BodyInit.
-// Inference preserves the exact `readFile()` result type the Response accepts.
+// Inference preserves the exact `Buffer<ArrayBuffer>` the Response accepts.
 async function readContainedDaintreeFile(
   normalizedRoot: string,
   normalizedFile: string,
@@ -620,16 +621,15 @@ async function readContainedDaintreeFile(
 ) {
   const opened = await openContainedDaintreeFile(normalizedRoot, normalizedFile, kind);
   if (opened instanceof Response) return opened;
-  const { fileHandle, realFile, maxBytes } = opened;
+  const { fileHandle, realFile, maxBytes, sizeHint } = opened;
 
   try {
-    const buffer = await fileHandle.readFile();
     // The pre-read stat is advisory: a writer can grow or swap the file between
     // stat and read (O_NOFOLLOW blocks only a final-component symlink swap, not
-    // a regular-file replacement or in-place growth). Re-check the bytes we
-    // actually read so an oversized file can never reach the renderer, where the
-    // decode-OOM risk this cap exists to bound actually lives.
-    if (buffer.length > maxBytes) {
+    // a regular-file replacement or in-place growth). The read itself holds the
+    // cap, so neither main nor the renderer ever buffers past it.
+    const buffer = await readBoundedFromHandle(fileHandle, sizeHint, maxBytes);
+    if (buffer === null) {
       return new Response("Payload Too Large", {
         status: 413,
         headers: buildDaintreeFileErrorHeaders(),
@@ -858,7 +858,7 @@ function createDaintreeFileRequestCore() {
       if (result instanceof Response) return result;
 
       // Content-Length reflects the bytes actually returned. If the file
-      // grew between stat() and readFile(), buffer.length is the truth.
+      // changed size between stat() and the read, buffer.length is the truth.
       return new Response(result.buffer, {
         status: 200,
         headers: buildDaintreeFileHeaders(getMimeType(result.realFile), result.buffer.length),

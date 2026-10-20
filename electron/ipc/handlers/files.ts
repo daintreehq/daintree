@@ -14,6 +14,7 @@ import {
 } from "../../schemas/ipc.js";
 import type { FileReadResult } from "../../../shared/types/ipc/files.js";
 import { AppError } from "../../utils/errorTypes.js";
+import { readBoundedFromHandle } from "../../utils/boundedRead.js";
 import { FILE_PREVIEW_MAX_BYTES } from "../../utils/fileLimits.js";
 
 // Git LFS pointer files are plain ASCII with a fixed v1 header. The spec caps
@@ -244,7 +245,18 @@ export function registerFilesHandlers(): () => void {
           context: { filePath, rootPath },
         });
       }
-      buffer = await fileHandle.readFile();
+      // The stat above is only a hint: a writer can grow the file after it, so
+      // the read itself holds the budget and never returns oversized text.
+      const read = await readBoundedFromHandle(fileHandle, opened.size, FILE_PREVIEW_MAX_BYTES);
+      if (read === null) {
+        throw new AppError({
+          code: "FILE_TOO_LARGE",
+          message: `File exceeds ${FILE_PREVIEW_MAX_BYTES} byte limit`,
+          userMessage: "This file is too large to preview.",
+          context: { filePath, limit: FILE_PREVIEW_MAX_BYTES },
+        });
+      }
+      buffer = read;
     } catch (error) {
       throw fsErrorToAppError(error, "Could not read file");
     } finally {
