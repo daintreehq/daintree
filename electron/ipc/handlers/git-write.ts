@@ -53,7 +53,10 @@ import { store } from "../../store.js";
 import { getSoundService } from "../../services/getSoundService.js";
 import type * as SoundServiceModule from "../../services/SoundService.js";
 import { detectRepoOperationState, resolveGitDir } from "../../services/git/repoOperationState.js";
-import { parsePorcelainV2Conflicts } from "../../services/git/porcelainConflicts.js";
+import {
+  parsePorcelainV2Conflicts,
+  PORCELAIN_V2_CONFLICT_ARGS,
+} from "../../services/git/porcelainConflicts.js";
 import {
   STAGED_FILE_SIZE_CAP,
   scanStagedFilesForConflictMarkers,
@@ -1645,7 +1648,7 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
     let conflictedFiles: ConflictedFileEntry[] = [];
     if (conflicted.length > 0) {
       try {
-        const porcelain = await git.raw(["-c", "core.quotepath=false", "status", "--porcelain=v2"]);
+        const porcelain = await git.raw(PORCELAIN_V2_CONFLICT_ARGS);
         conflictedFiles = parsePorcelainV2Conflicts(porcelain);
       } catch {
         // Fall back to the simple-git path list without XY labels.
