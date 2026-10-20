@@ -145,6 +145,20 @@ export function useFindInPage(
     };
   }, [webviewElement, isOpen, query, safeFind]);
 
+  // Resume an open search when the webview becomes ready or is replaced. Only a
+  // target change acts here; typing and toggling matchCase already search.
+  const resumeTargetRef = useRef({ webviewElement, isWebviewReady });
+  useEffect(() => {
+    const prev = resumeTargetRef.current;
+    if (prev.webviewElement === webviewElement && prev.isWebviewReady === isWebviewReady) return;
+    resumeTargetRef.current = { webviewElement, isWebviewReady };
+    if (!isOpen) return;
+    latestRequestIdRef.current = null;
+    setActiveMatch(0);
+    setMatchCount(0);
+    if (query && !isComposingRef.current) safeFind(query, { findNext: false });
+  }, [webviewElement, isWebviewReady, isOpen, query, safeFind]);
+
   // Listen for daintree:find-in-panel (Cmd+F from keybinding when renderer has focus)
   useEffect(() => {
     if (!isFocused) return;
