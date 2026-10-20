@@ -60,6 +60,17 @@ describe("devServerActions", () => {
     );
   });
 
+  it("opens the preview without a command when the project's settings can't be read", async () => {
+    projectClientMock.getSettings.mockRejectedValue(new Error("EACCES: permission denied"));
+    const run = setupActions();
+
+    await run("devServer.start", { projectId: "project-1" });
+
+    expect(panelStoreMock.getState().addPanel).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "dev-preview", cwd: "/repo", devCommand: undefined })
+    );
+  });
+
   it("uses the active worktree path from the view store when context path is missing", async () => {
     getCurrentViewStoreMock.mockReturnValue({
       getState: () => ({

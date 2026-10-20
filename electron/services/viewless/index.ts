@@ -80,7 +80,16 @@ async function loadLiveDeps(): Promise<ViewlessDeps> {
     getProject: (projectId) => projectStore.getProjectById(projectId),
     getLaunchEnvLayers: async (projectId) => ({
       global: store.get("globalEnvironmentVariables") ?? {},
-      project: (await projectStore.getProjectSettings(projectId))?.environmentVariables ?? {},
+      project:
+        (
+          await projectStore.getProjectSettings(projectId).catch((error: unknown) => {
+            console.warn(
+              "[viewless] Couldn't read project settings; launching without project env:",
+              error
+            );
+            return null;
+          })
+        )?.environmentVariables ?? {},
     }),
     getProjectState: (projectId) => projectStore.getProjectState(projectId),
     stateWriter: projectStore,

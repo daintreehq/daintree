@@ -90,7 +90,7 @@ export class ProjectSettingsManager {
     const generation = this.writeGenerations.get(projectId) ?? 0;
 
     const filePath = settingsFilePath(this.projectsConfigDir, projectId);
-    if (!filePath || !existsSync(filePath)) {
+    if (!filePath) {
       this.notificationOverridesCache.delete(projectId);
       return { runCommands: [] };
     }
@@ -106,19 +106,13 @@ export class ProjectSettingsManager {
         console.error(`[ProjectSettingsManager] Failed to parse settings for ${projectId}:`, error);
         const quarantinedPath = await this.quarantine(filePath, "corrupted");
         void this.broadcastCorruption(quarantinedPath);
-      } else {
-        const code =
-          error && typeof error === "object" && "code" in error
-            ? (error as NodeJS.ErrnoException).code
-            : undefined;
-        if (code !== "ENOENT") {
-          console.error(
-            `[ProjectSettingsManager] Failed to load settings for ${projectId}:`,
-            error
-          );
-        }
+        return { runCommands: [] };
       }
-      return { runCommands: [] };
+      if (isMissingFileError(error)) return { runCommands: [] };
+      // The file is there but couldn't be read. Defaults here would become the
+      // draft the next save writes over it, so the read fails instead.
+      console.error(`[ProjectSettingsManager] Failed to load settings for ${projectId}:`, error);
+      throw error;
     }
 
     const decoded = decode(parsed);
@@ -315,13 +309,21 @@ export class ProjectSettingsManager {
   private async readSavedBrowserAllowedHosts(projectId: string): Promise<string[] | undefined> {
     const filePath = settingsFilePath(this.projectsConfigDir, projectId);
     if (!filePath) return undefined;
+    let content: string;
     try {
-      const content = await fs.readFile(filePath, "utf-8");
+      content = await fs.readFile(filePath, "utf-8");
+    } catch (error) {
+      // An existing file that can't be read may hold settings the save would
+      // erase, so the save fails rather than replace it unseen.
+      if (isMissingFileError(error)) return undefined;
+      throw error;
+    }
+    try {
       const stripped = content.startsWith(UTF8_BOM) ? content.slice(UTF8_BOM.length) : content;
       const decoded = decode(JSON.parse(stripped));
       return decoded.ok ? decoded.settings.browserAllowedHosts : undefined;
     } catch {
-      // Missing or unreadable: there is no saved list for the save to keep.
+      // Unparseable: there is no saved list for the save to keep.
       return undefined;
     }
   }
@@ -509,8 +511,12 @@ export class ProjectSettingsManager {
     const unique = [...new Set(projectIds)];
     const results = await Promise.all(
       unique.map(async (id) => {
-        const settings = await this.getProjectSettings(id);
-        return { id, overrides: settings.notificationOverrides };
+        try {
+          const settings = await this.getProjectSettings(id);
+          return { id, overrides: settings.notificationOverrides };
+        } catch {
+          return { id, overrides: undefined };
+        }
       })
     );
     const record: Record<string, Partial<NotificationSettings>> = {};
@@ -531,4 +537,8 @@ export class ProjectSettingsManager {
     this.settingsCache.invalidate(oldId);
     projectEnvSecureStorage.migrateAllForProject(oldId, newId);
   }
+}
+
+function isMissingFileError(error: unknown): boolean {
+  return !!error && typeof error === "object" && (error as NodeJS.ErrnoException).code === "ENOENT";
 }

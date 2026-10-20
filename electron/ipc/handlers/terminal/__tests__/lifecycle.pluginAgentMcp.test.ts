@@ -352,6 +352,22 @@ describe("terminal spawn handler - plugin MCP servers for agent launches", () =>
     expect(pluginMcpGrantRegistry.listForTerminal("term-core")).toHaveLength(1);
   });
 
+  it("still hands over the plugin's server when the project's settings can't be read", async () => {
+    mockGetProjectSettings.mockRejectedValue(
+      Object.assign(new Error("EIO: i/o error"), { code: "EIO" })
+    );
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    setProjectAgentMcpAccess(PROJECT_A, "acme.ledger", "read-write");
+
+    await spawn({ id: "term-unreadable" });
+    warnSpy.mockRestore();
+
+    const spawnArgs = ptyClient.spawn.mock.calls[0][1];
+    expect(spawnArgs.env?.DAINTREE_MCP_TOKEN).toBeUndefined();
+    const servers = await readServers(configPathFromCommand(spawnArgs.command));
+    expect(Object.keys(servers)).toEqual(["daintree-ledger"]);
+  });
+
   it("mints nothing for a plugin with no access, and never loads PluginService", async () => {
     await spawn({ id: "term-disabled" });
 
@@ -591,7 +607,10 @@ describe("terminal spawn handler - plugin MCP servers for agent launches", () =>
       projectId: PROJECT_A,
       terminalId: "term-prior",
     });
-    mockGetProjectSettings.mockRejectedValue(new Error("settings unreadable"));
+    setProjectAgentMcpAccess(PROJECT_A, "acme.ledger", "read-write");
+    mockListPlugins.mockImplementation(() => {
+      throw new Error("plugin registry unavailable");
+    });
 
     await spawn({ id: "term-prior" });
 

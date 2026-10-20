@@ -266,6 +266,12 @@ export function DevPreviewPane({
   const activeConsoleTab = terminal?.devPreviewConsoleTab ?? "output";
   const [guestWebContentsId, setGuestWebContentsId] = useState<number | undefined>(undefined);
   const isSettingsLoading = useProjectSettingsStore((state) => state.isLoading);
+  const settingsLoadError = useProjectSettingsStore((state) =>
+    state.settings === null ? state.error : null
+  );
+  const handleRetrySettingsLoad = () => {
+    if (currentProjectId) void useProjectSettingsStore.getState().loadSettings(currentProjectId);
+  };
 
   const isMountedRef = useRef(true);
 
@@ -1050,6 +1056,8 @@ export function DevPreviewPane({
                 isAutoDetecting={isAutoDetecting}
                 attemptingCommand={attemptingCommand}
                 isSettingsLoading={isSettingsLoading}
+                settingsLoadError={settingsLoadError}
+                handleRetrySettingsLoad={handleRetrySettingsLoad}
                 handleAutoDetect={handleAutoDetect}
                 autoDetectFailedCommand={autoDetectFailedCommand}
                 candidates={candidates}

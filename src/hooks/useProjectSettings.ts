@@ -79,7 +79,7 @@ export function useProjectSettings(projectId?: string): UseProjectSettingsReturn
       logError("Failed to load project settings", err);
       if (requestedProjectId === latestTargetIdRef.current) {
         setLocalError(formatErrorMessage(err, "Failed to load project settings"));
-        setLocalSettings({ runCommands: [] });
+        setLocalSettings(null);
         setLocalDetectedRunners([]);
         setLocalAllDetectedRunners([]);
       }

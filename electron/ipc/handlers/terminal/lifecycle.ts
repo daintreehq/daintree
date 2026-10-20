@@ -43,7 +43,7 @@ import type {
   AgentSessionRetentionDays,
 } from "../../../../shared/types/ipc/agentSessionHistory.js";
 import type { HostMemoryPauseSnapshot } from "../../../../shared/types/pty-host.js";
-import { resolveDaintreeMcpTier } from "../../../../shared/types/project.js";
+import { resolveDaintreeMcpTier, type ProjectSettings } from "../../../../shared/types/project.js";
 import {
   normalizeTerminalGridDimension,
   type TerminalKillOptions,
@@ -436,8 +436,16 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     let projectArgs: string[] | undefined;
     let projectCwd: string | undefined;
     if (resolvedProject && !launchAgentId) {
-      const projSettings = await projectStore.getProjectSettings(resolvedProject.id);
-      const ts = projSettings.terminalSettings;
+      const projSettings = await projectStore
+        .getProjectSettings(resolvedProject.id)
+        .catch((error: unknown) => {
+          console.warn(
+            "[TerminalSpawn] Couldn't read project settings; spawning without project terminal overrides:",
+            error
+          );
+          return null;
+        });
+      const ts = projSettings?.terminalSettings;
       if (ts) {
         if (!validatedOptions.shell && ts.shell) {
           projectShell = ts.shell;
@@ -850,7 +858,17 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
           ? validatedOptions.actionContext
           : undefined;
       try {
-        const projSettings = await projectStore.getProjectSettings(resolvedProject.id);
+        // Unreadable settings leave Daintree's own server off, but the
+        // plugin servers this project turned on are still handed over.
+        const projSettings: ProjectSettings = await projectStore
+          .getProjectSettings(resolvedProject.id)
+          .catch((error: unknown) => {
+            console.warn(
+              "[TerminalSpawn] Couldn't read project settings; launching without Daintree MCP:",
+              error
+            );
+            return { runCommands: [] };
+          });
         const tier = resolveDaintreeMcpTier(projSettings);
         const pluginServers = await resolvePluginMcpServers(
           resolvedProject.id,

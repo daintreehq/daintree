@@ -61,6 +61,8 @@ function Harness() {
           isAutoDetecting={fixture.isAutoDetecting ?? false}
           attemptingCommand={fixture.attemptingCommand ?? null}
           isSettingsLoading={false}
+          settingsLoadError={null}
+          handleRetrySettingsLoad={() => {}}
           handleAutoDetect={async () => true}
           autoDetectFailedCommand={fixture.autoDetectFailedCommand ?? null}
           candidates={candidates}

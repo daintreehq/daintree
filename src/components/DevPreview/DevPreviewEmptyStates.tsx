@@ -43,6 +43,9 @@ interface DevPreviewEmptyStatesProps {
   isAutoDetecting: boolean;
   attemptingCommand: string | null;
   isSettingsLoading: boolean;
+  /** Set when the project's settings never loaded, so whether a command is configured is unknown. */
+  settingsLoadError: string | null;
+  handleRetrySettingsLoad: () => void;
   handleAutoDetect: (candidateCommand?: string) => Promise<boolean>;
   autoDetectFailedCommand: string | null;
   candidates: RunCommand[];
@@ -151,6 +154,8 @@ export function DevPreviewEmptyStates({
   isAutoDetecting,
   attemptingCommand,
   isSettingsLoading,
+  settingsLoadError,
+  handleRetrySettingsLoad,
   handleAutoDetect,
   autoDetectFailedCommand,
   candidates,
@@ -376,6 +381,23 @@ export function DevPreviewEmptyStates({
     }
 
     if (status === "stopped") {
+      if (!devCommand && settingsLoadError) {
+        return (
+          <PaneState
+            live="alert"
+            icon={<XCircle className="text-status-error" />}
+            title="Couldn't load project settings"
+            description={settingsLoadError}
+          >
+            <PaneStateActions>
+              <Button onClick={handleRetrySettingsLoad} variant="subtle" size="sm">
+                <RefreshCw />
+                Retry
+              </Button>
+            </PaneStateActions>
+          </PaneState>
+        );
+      }
       if (!showStoppedPrompt || !devCommand) {
         return <div className="absolute inset-0 bg-surface-canvas" />;
       }
