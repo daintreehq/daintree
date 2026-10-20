@@ -29,7 +29,9 @@ export interface SentryRequest {
 export interface SentryEvent {
   exception?: {
     values?: Array<{
+      type?: string;
       value?: string;
+      mechanism?: unknown;
       stacktrace?: {
         frames?: Array<{
           filename?: string;
@@ -43,6 +45,7 @@ export interface SentryEvent {
     }>;
   };
   message?: string;
+  transaction?: string;
   request?: SentryRequest;
   breadcrumbs?: SentryBreadcrumb[];
   extra?: Record<string, unknown>;
@@ -51,15 +54,30 @@ export interface SentryEvent {
 
 // Telemetry-local rather than a `scrubSecrets` pattern: that catalogue also
 // drives `findSecretInValue`, which would start rejecting `GIT_AUTHOR_EMAIL`
-// style config values as credentials. Matches the `%40`-encoded form that
-// query strings carry. The TLD must be alphabetic so `pkg@1.2.3` survives.
-const EMAIL_REGEX =
-  /[A-Za-z0-9._%+-]{1,64}(?:@|%40)(?:[A-Za-z0-9-]{1,63}\.){1,10}[A-Za-z]{2,63}\b/gi;
-const EMBEDDED_HTTP_URL_REGEX = /\bhttps?:\/\/[^\s"'`<>\\)]+/gi;
+// style config values as credentials. Matches the `%40`/`%2E`-encoded forms
+// query strings carry; the lookbehind makes the whole local part go, not just
+// a suffix of it. The TLD must be alphabetic so `pkg@1.2.3` survives, and the
+// `git@` of an SSH remote is left to the remote rule.
+const EMAIL_LOCAL_CHARS = "A-Za-z0-9._%+!#$&'*~-";
+const EMAIL_REGEX = new RegExp(
+  `(?<![${EMAIL_LOCAL_CHARS}])(?!git(?:@|%40))[${EMAIL_LOCAL_CHARS}]{1,256}(?:@|%40)` +
+    `(?:[A-Za-z0-9-]{1,63}(?:\\.|%2E)){1,10}[A-Za-z]{2,63}\\b`,
+  "gi"
+);
+// SSH remotes name the (possibly private) owner and repo.
+const SSH_REMOTE_REGEX =
+  /\b(git@[A-Za-z0-9.-]{1,253}:)[A-Za-z0-9._-]{1,100}\/[A-Za-z0-9._-]{1,100}(?:\/[A-Za-z0-9._-]{1,100}){0,10}/g;
+// Also matches the slash-escaped form a JSON-stringified log argument carries.
+// Parentheses and apostrophes are legal inside a URL path, so they don't end
+// the match; a closing one from surrounding prose goes with the path.
+const EMBEDDED_URL_REGEX = /\b(?:https?|wss?|ssh|git):(?:\/\/|\\\/\\\/)(?:\\\/|[^\s"`<>\\])+/gi;
+const ORIGIN_PROTOCOLS = new Set(["http:", "https:", "ws:", "wss:"]);
 const REDACTED_URL = "[REDACTED_URL]";
 
 function scrubText(value: string): string {
-  return scrubSecrets(sanitizePath(value)).replace(EMAIL_REGEX, "[EMAIL]");
+  return scrubSecrets(sanitizePath(value))
+    .replace(SSH_REMOTE_REGEX, "$1REDACTED/REDACTED")
+    .replace(EMAIL_REGEX, "[EMAIL]");
 }
 
 // Paths and query strings name private repos (`/repos/<owner>/<repo>`) and
@@ -67,7 +85,7 @@ function scrubText(value: string): string {
 function reduceUrl(raw: string): string {
   try {
     const u = new URL(raw);
-    if (u.protocol === "http:" || u.protocol === "https:") return u.origin;
+    if (ORIGIN_PROTOCOLS.has(u.protocol)) return u.origin;
     return u.host ? `${u.protocol}//${u.host}` : u.protocol;
   } catch {
     return REDACTED_URL;
@@ -81,7 +99,26 @@ function sanitizeUrlField(value: string): string {
 }
 
 function sanitizeString(value: string): string {
-  return scrubText(value.replace(EMBEDDED_HTTP_URL_REGEX, (url) => reduceUrl(url)));
+  return scrubText(value.replace(EMBEDDED_URL_REGEX, (url) => reduceUrl(url)));
+}
+
+// Stack locations are often URLs (`app:///dist/main.js`), and reducing them to
+// an origin would strip the file the frame points at. Only the query,
+// fragment and credentials go.
+function sanitizeLocation(value: string): string {
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(value)) {
+    try {
+      const u = new URL(value);
+      u.search = "";
+      u.hash = "";
+      u.username = "";
+      u.password = "";
+      return scrubText(u.toString());
+    } catch {
+      // fall through to the plain scrub
+    }
+  }
+  return scrubText(value);
 }
 
 const BREADCRUMB_URL_KEYS = ["url", "from", "to"] as const;
@@ -90,22 +127,31 @@ const BREADCRUMB_DROPPED_KEYS = ["http.query", "http.fragment"] as const;
 // Recurse through arrays and plain objects, sanitizing every string leaf.
 // Depth-capped to guard against pathological / circular inputs — Sentry
 // breadcrumbs and `event.extra` are typically shallow, so 10 levels is well
-// beyond any realistic payload.
+// beyond any realistic payload. A `url` key anywhere (console arguments,
+// contexts) gets the URL-field treatment rather than the free-text one, which
+// would leave a relative path intact.
 const MAX_DEEP_SANITIZE_DEPTH = 10;
 
-function sanitizeStringsDeep(value: unknown, depth = 0): unknown {
+function sanitizeStringsDeep(
+  value: unknown,
+  scrub: (value: string) => string = sanitizeString,
+  depth = 0
+): unknown {
   // Scrub scalar strings regardless of depth — a secret nested beyond the
   // recursion cap is still worth redacting. Only the descent into containers
   // is stopped when depth overflows.
-  if (typeof value === "string") return sanitizeString(value);
+  if (typeof value === "string") return scrub(value);
   if (depth > MAX_DEEP_SANITIZE_DEPTH) return value;
   if (Array.isArray(value)) {
-    return value.map((item) => sanitizeStringsDeep(item, depth + 1));
+    return value.map((item) => sanitizeStringsDeep(item, scrub, depth + 1));
   }
   if (value && typeof value === "object") {
     const result: Record<string, unknown> = {};
     for (const [key, val] of Object.entries(value as Record<string, unknown>)) {
-      result[key] = sanitizeStringsDeep(val, depth + 1);
+      result[key] =
+        key === "url" && typeof val === "string" && scrub === sanitizeString
+          ? sanitizeUrlField(val)
+          : sanitizeStringsDeep(val, scrub, depth + 1);
     }
     return result;
   }
@@ -129,10 +175,8 @@ export function sanitizeEvent(event: SentryEvent): SentryEvent | null {
         if (Array.isArray(ex.stacktrace?.frames)) {
           for (const frame of ex.stacktrace.frames) {
             if (!frame || typeof frame !== "object") continue;
-            // Frame locations are often URLs themselves; reducing them to an
-            // origin would strip the file the frame points at.
-            if (frame.filename) frame.filename = scrubText(frame.filename);
-            if (frame.abs_path) frame.abs_path = scrubText(frame.abs_path);
+            if (frame.filename) frame.filename = sanitizeLocation(frame.filename);
+            if (frame.abs_path) frame.abs_path = sanitizeLocation(frame.abs_path);
             // contextLinesIntegration and localVariablesIntegration (default
             // integrations in @sentry/electron) populate these fields with
             // raw source lines and local variable values before beforeSend
@@ -153,7 +197,20 @@ export function sanitizeEvent(event: SentryEvent): SentryEvent | null {
           }
         }
         if (ex.value) ex.value = sanitizeString(ex.value);
+        // The browser SDK copies `Error.name` into `type`, and it is caller-set.
+        if (typeof ex.type === "string") ex.type = sanitizeString(ex.type);
+        if (ex.mechanism !== undefined) ex.mechanism = sanitizeStringsDeep(ex.mechanism);
       }
+    }
+    if (typeof event.transaction === "string") {
+      event.transaction = sanitizeString(event.transaction);
+    }
+    for (const key of ["logentry", "fingerprint"] as const) {
+      if (event[key] !== undefined) event[key] = sanitizeStringsDeep(event[key]);
+    }
+    // Thread stacks and debug images hold source locations, like frames.
+    for (const key of ["threads", "debug_meta"] as const) {
+      if (event[key] !== undefined) event[key] = sanitizeStringsDeep(event[key], sanitizeLocation);
     }
     if (typeof event.message === "string") {
       event.message = sanitizeString(event.message);
@@ -182,7 +239,11 @@ export function sanitizeEvent(event: SentryEvent): SentryEvent | null {
         if (typeof breadcrumb.message === "string") {
           breadcrumb.message = sanitizeString(breadcrumb.message);
         }
-        if (breadcrumb.data && typeof breadcrumb.data === "object") {
+        const rawData: unknown = breadcrumb.data;
+        if (typeof rawData === "string") {
+          // A `toJSON()` on the original data can leave a bare string here.
+          breadcrumb.data = sanitizeString(rawData) as unknown as Record<string, unknown>;
+        } else if (breadcrumb.data && typeof breadcrumb.data === "object") {
           // Network breadcrumbs (electron.net, http, fetch, xhr) carry `url`
           // plus split-out query/fragment keys; navigation carries `from`/`to`.
           const data = breadcrumb.data;

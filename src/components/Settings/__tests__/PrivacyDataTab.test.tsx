@@ -232,6 +232,7 @@ describe("PrivacyDataTab", () => {
       /child-process/i,
       /navigation/i,
       /clicks/i,
+      /earlier error reports/i,
     ]) {
       expect(text).toMatch(kind);
     }

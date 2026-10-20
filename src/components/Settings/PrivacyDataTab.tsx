@@ -81,9 +81,9 @@ const TELEMETRY_DISCLOSURE: Array<{
       "App version, Node.js version, and build environment (production or development)",
       "Operating system name, version, and architecture",
       "Default runtime metadata provided by the Sentry Electron SDK (CPU, memory, GPU, locale, timezone, and similar vendor-supplied fields)",
-      "Breadcrumbs of recent activity in the main and renderer processes preceding the crash: app and window lifecycle events, console logs, network requests, child-process and utility-process exits, app actions, page navigation, and clicks and key presses on page elements",
+      "Breadcrumbs of recent activity in the main and renderer processes preceding the crash: app, window, screen, power and update lifecycle events, console logs, network requests, child-process and utility-process exits and errors, app actions, page navigation, clicks and key presses on page elements, and earlier error reports",
       "Network request and navigation URLs reduced to their origin, with paths, query strings and fragments removed",
-      "Email addresses and home-directory usernames redacted from every field",
+      "Email addresses, home-directory usernames and repository names in SSH remotes redacted from messages, breadcrumbs, and error details",
     ],
   },
   {

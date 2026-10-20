@@ -215,6 +215,12 @@ describe("sanitizePath — dash-encoded home directories", () => {
     expect(sanitizePath(once)).toBe(once);
   });
 
+  it("redacts bracketed and lowercase-drive slugs and stops at the slug alphabet", () => {
+    expect(sanitizePath(`[-Users-${user}-proj]`)).toBe("[-Users-USER]");
+    expect(sanitizePath(`cwd=-Users-${user}-proj;exit=1`)).toBe("cwd=-Users-USER;exit=1");
+    expect(sanitizePath(`c--users-${user}-proj\\s`)).toBe("c--users-USER\\s");
+  });
+
   it("leaves ordinary dashed words and CLI flags alone", () => {
     for (const text of ["--user-agent", "my-Users-list", "npm run home-page"]) {
       expect(sanitizePath(text)).toBe(text);
@@ -279,6 +285,12 @@ describe("sanitizeEvent — breadcrumb canaries (#13541)", () => {
     };
     const result = sanitizeEvent(event);
     expectNoCanaries(result);
+    expect(result?.breadcrumbs?.map((crumb) => crumb.category)).toEqual([
+      "electron.net",
+      "http",
+      "fetch",
+      "xhr",
+    ]);
     for (const crumb of result?.breadcrumbs ?? []) {
       expect(crumb.data?.url).toBe("https://api.github.com");
       expect(crumb.data?.method).toBeDefined();
@@ -287,6 +299,8 @@ describe("sanitizeEvent — breadcrumb canaries (#13541)", () => {
       expect(Object.keys(crumb.data ?? {})).not.toContain("http.fragment");
     }
     expect(result?.breadcrumbs?.[0]?.data?.status_code).toBe(200);
+    expect(result?.breadcrumbs?.[1]?.data?.status_code).toBe(304);
+    expect(result?.breadcrumbs?.[3]?.data?.method).toBe("POST");
   });
 
   it("reduces navigation from/to, including relative URLs", () => {
@@ -340,7 +354,96 @@ describe("sanitizeEvent — breadcrumb canaries (#13541)", () => {
       tags: { origin: text },
       contexts: { app: { note: text } },
     } as SentryEvent;
-    expectNoCanaries(sanitizeEvent(event));
+    const result = sanitizeEvent(event);
+    expectNoCanaries(result);
+    expect(result?.message).toBe(
+      "https://api.github.com [EMAIL] /private/tmp/claude-501/-Users-USER/session13541/scratchpad/wt-canary"
+    );
+    expect(result?.exception?.values?.[0]?.value).toBe(result?.message);
+    expect(result?.extra?.detail).toBe(result?.message);
+  });
+
+  it("scrubs fields outside the message and breadcrumbs that carry caller text", () => {
+    const event = {
+      transaction: REST_URL,
+      logentry: { message: "lookup %s", params: [EMAIL, SEARCH_URL] },
+      fingerprint: ["{{ default }}", EMAIL],
+      exception: {
+        values: [
+          {
+            type: EMAIL,
+            mechanism: { type: "generic", data: { url: `/repos/${OWNER}/${REPO}` } },
+            stacktrace: {
+              frames: [{ filename: "app:///dist/renderer.js?q=query13541#fragment13541" }],
+            },
+          },
+        ],
+      },
+      debug_meta: { images: [{ code_file: `app:///dist/main.js?${ENCODED_EMAIL}` }] },
+      threads: { values: [{ name: `worker for ${EMAIL}` }] },
+    } as unknown as SentryEvent;
+    const result = sanitizeEvent(event);
+    expectNoCanaries(result);
+    // Source locations keep their file so frames still symbolicate.
+    expect(result?.exception?.values?.[0]?.stacktrace?.frames?.[0]?.filename).toBe(
+      "app:///dist/renderer.js"
+    );
+  });
+
+  it("scrubs string-valued breadcrumb data and nested relative url keys", () => {
+    const event = {
+      breadcrumbs: [
+        { category: "custom", data: `${EMAIL} ${REST_URL}` },
+        {
+          category: "console",
+          data: { arguments: [{ url: `/repos/${OWNER}/${REPO}?q=${ENCODED_EMAIL}` }] },
+        },
+      ],
+    } as unknown as SentryEvent;
+    const result = sanitizeEvent(event);
+    expectNoCanaries(result);
+    expect(result?.breadcrumbs?.[0]?.data).toBe("[EMAIL] https://api.github.com");
+    expect(result?.breadcrumbs?.[1]?.data).toEqual({ arguments: [{ url: "[REDACTED_URL]" }] });
+  });
+
+  it("reduces escaped, parenthesised, and websocket URLs embedded in text", () => {
+    const text = [
+      `https:\\/\\/api.github.com\\/repos\\/${OWNER}\\/${REPO}`,
+      `GET https://api.github.com/repos/${OWNER}/${REPO}(name)?query13541=1#fragment13541`,
+      `wss://api.github.com/repos/${OWNER}/${REPO}?query13541=1`,
+      `remote git@github.com:${OWNER}/${REPO}.git`,
+    ].join("\n");
+    const result = sanitizeEvent({ breadcrumbs: [{ category: "console", message: text }] });
+    expectNoCanaries(result);
+    expect(result?.breadcrumbs?.[0]?.message).toContain("git@github.com:REDACTED/REDACTED");
+  });
+
+  it("redacts whole email addresses, including unusual local parts and encodings", () => {
+    const addresses = [
+      "o'connor13541@privacy.example",
+      "alice13541!private@privacy.example",
+      `${"a".repeat(60)}13541%2Btag%40privacy.example`,
+      "alice13541%40privacy%2Eexample",
+      "Name <alice13541@privacy.example>",
+      "mailto:alice13541@privacy.example",
+    ];
+    for (const address of addresses) {
+      const result = sanitizeEvent({ message: `author ${address} pushed` });
+      expect(result?.message).not.toContain("13541");
+      expect(result?.message).toContain("[EMAIL]");
+    }
+  });
+
+  it("still runs the full string scrub over a retained origin (lesson #10101)", () => {
+    const secret = "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef0123456";
+    const url = `https://${secret}.example.com/path`;
+    const result = sanitizeEvent({
+      request: { url },
+      breadcrumbs: [{ category: "electron.net", data: { url } }],
+    });
+    expect(result).not.toBeNull();
+    expect(JSON.stringify(result).toLowerCase()).not.toContain(secret.toLowerCase());
+    expect(result?.request?.url).toContain("[REDACTED]");
   });
 
   it("keeps version-pinned package specifiers that look like addresses", () => {
@@ -354,6 +457,7 @@ describe("sanitizeEvent — breadcrumb canaries (#13541)", () => {
       breadcrumbs: [{ category: "electron.net", data: { url: SEARCH_URL } }],
     });
     const once = sanitizeEvent(build());
+    expect(once).not.toBeNull();
     const twice = sanitizeEvent(structuredClone(once) as SentryEvent);
     expect(twice).toEqual(once);
   });
