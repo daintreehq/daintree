@@ -348,6 +348,22 @@ describe("ProjectStateManager late reads racing saves and clears (mocked fs)", (
     expect(fsPromisesMock.readFile).toHaveBeenCalledTimes(2);
   });
 
+  it("a read superseded on every attempt fails rather than return stale state", async () => {
+    fsPromisesMock.readFile.mockImplementation(async () => {
+      manager.invalidateProjectStateCache(projectId);
+      return oldBytes();
+    });
+
+    await expect(manager.getProjectState(projectId)).rejects.toThrow(/kept changing/);
+    expect(fsPromisesMock.readFile).toHaveBeenCalledTimes(3);
+
+    // The queued update never sees the stale snapshot, so nothing is written.
+    await expect(
+      manager.enqueueProjectStateUpdate(projectId, (existing) => existing)
+    ).rejects.toThrow(/kept changing/);
+    expect(utilsMock.resilientAtomicWriteFile).not.toHaveBeenCalled();
+  });
+
   it("a stale read of a corrupt file does not quarantine the file a newer save wrote", async () => {
     const release = holdNextRead();
     const lateRead = manager.getProjectStateWithRecovery(projectId);

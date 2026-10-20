@@ -10,8 +10,8 @@ import { markPerformance, withPerformanceSpan } from "../utils/performance.js";
 
 const PROJECT_STATE_CACHE_TTL_MS = 60_000;
 const PROJECT_STATE_CACHE_SWEEP_MS = 60_000;
-// A read only retries while something keeps superseding it. Past this it hands
-// back what it read without caching it, rather than spin.
+// A read only retries while something keeps superseding it. Past this it fails
+// rather than spin — and rather than hand back bytes it knows are out of date.
 const PROJECT_STATE_READ_ATTEMPTS = 3;
 
 export const PROJECT_STATE_SCHEMA_VERSION = 1;
@@ -522,8 +522,13 @@ export class ProjectStateManager {
       // usually lands on the cache the save just published.
       const fence = this.captureReadFence(projectId);
       const read = await this.readProjectStateFromDisk(projectId, filePath, fence);
-      if (read.current || attempt >= PROJECT_STATE_READ_ATTEMPTS) {
+      if (read.current) {
         return read.state;
+      }
+      if (attempt >= PROJECT_STATE_READ_ATTEMPTS) {
+        throw new Error(
+          `Project state for ${projectId} kept changing during ${attempt} reads; refusing a stale result`
+        );
       }
     }
   }
