@@ -17,7 +17,11 @@ import {
 } from "../../shared/config/gitReadLimits.js";
 import { settingsFilePath } from "../services/projectStorePaths.js";
 import { SimpleGit, BranchSummary } from "simple-git";
-import { createHardenedGit, createAuthenticatedGit } from "../utils/hardenedGit.js";
+import {
+  createAuthenticatedGit,
+  createBoundRepositoryGit,
+  createHardenedGit,
+} from "../utils/hardenedGit.js";
 import { readRemotesWithStatus } from "../utils/baseCompareRef.js";
 import { createRemoteInventoryReader } from "./remoteInventory.js";
 import { copyWorktreeIncludeFiles } from "./worktreeInclude.js";
@@ -5223,7 +5227,7 @@ export class WorkspaceService {
     storeGitDir: string
   ): Promise<SubmoduleAtRiskCommit[] | null> {
     try {
-      const git = await createHardenedGit(storeGitDir, this._shutdownController.signal);
+      const git = await createBoundRepositoryGit(storeGitDir, this._shutdownController.signal);
       const output = await withTimeout(
         git.raw([
           "--git-dir",

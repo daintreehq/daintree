@@ -36,7 +36,7 @@ vi.mock("../../../utils/hardenedGit.js", () => ({
   validateCwd: vi.fn(),
   createHardenedGit: createHardenedGitMock,
   createAuthenticatedGit: createAuthenticatedGitMock,
-  buildContinueEnv: vi.fn(() => ({})),
+  createContinueGit: vi.fn(),
 }));
 
 import { registerGitWriteHandlers } from "../git-write.js";
