@@ -51,8 +51,8 @@ export type PathFingerprint = string | null;
  * How many entries are hashed between checks of the time budget, and how much
  * main-thread time one uninterrupted stretch of hashing may take before it
  * yields. Checking the clock per block rather than per entry keeps the check
- * itself off the hot path; a directory narrower than one block never reads the
- * clock or yields at all, so the common case pays nothing for this.
+ * itself off the hot path; a directory narrower than one block never reaches a
+ * checkpoint, so the common case never yields.
  */
 const DIGEST_CHECK_INTERVAL = 512;
 const DIGEST_SLICE_BUDGET_MS = 4;

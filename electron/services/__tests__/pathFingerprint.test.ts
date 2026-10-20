@@ -312,8 +312,18 @@ describe("fingerprintPaths", () => {
       vi.restoreAllMocks();
     });
 
+    // Each entry's kind is read exactly once per digest, so this counts how
+    // far hashing has got through the current listing.
+    let hashed = 0;
+
     function entry(name: string, isDirectory = false) {
-      return { name, isDirectory: () => isDirectory };
+      return {
+        name,
+        isDirectory: () => {
+          hashed++;
+          return isDirectory;
+        },
+      };
     }
 
     function names(count: number) {
@@ -335,9 +345,8 @@ describe("fingerprintPaths", () => {
     }
 
     async function sample(entries: ReturnType<typeof entry>[]) {
-      serve(entries);
-      const [fingerprint] = await fingerprintPaths(root, [wide]);
-      vi.restoreAllMocks();
+      const spy = serve(entries);
+      const [fingerprint] = await fingerprintPaths(root, [wide]).finally(() => spy.mockRestore());
       expect(fingerprint).not.toBeNull();
       return fingerprint;
     }
@@ -349,26 +358,44 @@ describe("fingerprintPaths", () => {
       vi.spyOn(performance, "now").mockImplementation(() => (now += 50));
     }
 
+    function freezeClock() {
+      // No time ever passes, so the budget is never spent however many
+      // checkpoints a listing crosses.
+      vi.spyOn(performance, "now").mockReturnValue(0);
+    }
+
     async function settleOrder(entries: ReturnType<typeof entry>[]) {
       // An Immediate queued the moment the listing is handed back can only run
       // before the fingerprint settles if hashing that listing gave the event
       // loop a turn: everything after `readdir` is otherwise microtasks.
       const order: string[] = [];
-      serve(entries, () => setImmediate(() => order.push("event loop")));
+      let hashedWhenLoopRan = -1;
+      serve(entries, () => {
+        hashed = 0;
+        setImmediate(() => {
+          hashedWhenLoopRan = hashed;
+          order.push("event loop");
+        });
+      });
       const [fingerprint] = await fingerprintPaths(root, [wide]);
       order.push("settled");
       await new Promise<void>((resolve) => setImmediate(resolve));
-      return { fingerprint, order };
+      return { fingerprint, order, hashedWhenLoopRan };
     }
 
     it("gives the event loop a turn while hashing a wide listing", async () => {
       const entries = names(5_000);
+      freezeClock();
       const unyielded = await sample(entries);
+      vi.restoreAllMocks();
 
       exhaustEverySlice();
-      const { fingerprint, order } = await settleOrder(entries);
+      const { fingerprint, order, hashedWhenLoopRan } = await settleOrder(entries);
 
       expect(order).toEqual(["event loop", "settled"]);
+      // The turn came part-way through, not after the whole listing was hashed.
+      expect(hashedWhenLoopRan).toBeGreaterThan(0);
+      expect(hashedWhenLoopRan).toBeLessThan(entries.length);
       // Yielding changes when the answer arrives, never what it is.
       expect(fingerprint).toBe(unyielded);
     });
@@ -376,6 +403,13 @@ describe("fingerprintPaths", () => {
     it("hashes a listing narrower than one checkpoint without yielding", async () => {
       exhaustEverySlice();
       const { order } = await settleOrder(names(100));
+
+      expect(order).toEqual(["settled", "event loop"]);
+    });
+
+    it("hashes a wide listing straight through while it stays inside the budget", async () => {
+      freezeClock();
+      const { order } = await settleOrder(names(5_000));
 
       expect(order).toEqual(["settled", "event loop"]);
     });
@@ -395,8 +429,8 @@ describe("fingerprintPaths", () => {
       expect(shuffled).toBe(forward);
     });
 
-    it("moves on any single-entry rename or kind change among near-identical names", async () => {
-      // Same count, same directory mtime, long shared prefixes and one-character
+    it("moves on any single-entry rename, kind change, addition or removal among near-identical names", async () => {
+      // Same directory mtime, long shared prefixes and one-character
       // differences: the shapes a weak per-entry hash folds together.
       const base = names(2_000);
       const variants = [base];
@@ -413,6 +447,8 @@ describe("fingerprintPaths", () => {
           swap(entry(`file-${index}.ts\u{1F600}`))
         );
       }
+
+      variants.push(base.slice(1), [...base, entry("file-2000.ts")]);
 
       const prints = new Set<string | null>();
       for (const variant of variants) prints.add(await sample(variant));
