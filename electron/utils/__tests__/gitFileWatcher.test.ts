@@ -41,12 +41,13 @@ vi.mock("fs/promises", () => ({
  * An `lstat` result for a path of the given kind. Born long before any burst by
  * default — the shape of a file being edited in place.
  */
-function statOf(kind: "file" | "dir" | "symlink", birthtimeMs = 1) {
+function statOf(kind: "file" | "dir" | "symlink", birthtimeMs = 1, ctimeMs = Date.now()) {
   return {
     isFile: () => kind === "file",
     isDirectory: () => kind === "dir",
     isSymbolicLink: () => kind === "symlink",
     birthtimeMs,
+    ctimeMs,
   };
 }
 
@@ -1428,7 +1429,7 @@ describe("GitFileWatcher", () => {
       ],
       // A directory moved out and a file written in its place: the final type
       // passes, the birth time gives the fold away.
-      ["a file born inside the burst", () => Promise.resolve(statOf("file", Date.now()))],
+      ["a file born inside the burst", () => Promise.resolve(statOf("file", Date.now(), 2))],
       [
         "a vanished path",
         () => Promise.reject(Object.assign(new Error("gone"), { code: "ENOENT" })),
@@ -1455,6 +1456,24 @@ describe("GitFileWatcher", () => {
         gitWatcher.dispose();
       }
     );
+
+    it("trusts type alone when libuv stands ctime in for the birth time", async () => {
+      // No statx: birthtime mirrors ctime, which every in-place write moves, so
+      // holding it to the birth check would invalidate on every save.
+      const { gitWatcher, cb, onWorktreeFilesChanged, onPathMembershipChanged } =
+        await liveWatcher();
+      const now = Date.now();
+      vi.mocked(lstat).mockResolvedValue(statOf("file", now, now) as never);
+
+      fireEvents(cb, [{ type: "update", path: file("a.ts") }]);
+      await vi.advanceTimersByTimeAsync(500);
+      await flushClassification();
+
+      expect(onWorktreeFilesChanged.mock.calls[0][1]).toBe(false);
+      expect(lstat).toHaveBeenCalledWith(file("a.ts"));
+      expect(onPathMembershipChanged).not.toHaveBeenCalled();
+      gitWatcher.dispose();
+    });
 
     it("trusts type alone on a filesystem that reports no birth time", async () => {
       const { gitWatcher, cb, onWorktreeFilesChanged, onPathMembershipChanged } =

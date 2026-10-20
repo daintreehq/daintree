@@ -1092,7 +1092,10 @@ export class GitFileWatcher {
    * the whole case this optimisation serves — an atomic save already arrives as
    * `create` on every backend. A symlink is never content-only: retargeting
    * one moves every listing rooted beneath it. A filesystem reporting no birth
-   * time (0) cannot be held to that check and is trusted on type alone.
+   * time (0, or libuv's ctime stand-in) cannot be held to that check and is
+   * trusted on type alone. Neither check sees an old file renamed onto the
+   * path of a directory moved away within one batch; the cache's absolute TTL
+   * bounds that.
    *
    * Arrives a few milliseconds after the content-only report, never instead of
    * one, so the conservative answer at worst follows a stamp the file browser
@@ -1111,7 +1114,10 @@ export class GitFileWatcher {
       const checks = Promise.all(
         paths.map(async (path) => {
           const stat = await lstat(path);
-          if (!stat.isFile() || (stat.birthtimeMs > 0 && stat.birthtimeMs >= bornBefore)) {
+          // libuv reports ctime as the birth time where statx is unavailable, and
+          // every write moves ctime — so equal values are no birth time at all.
+          const birth = stat.birthtimeMs > 0 && stat.birthtimeMs !== stat.ctimeMs;
+          if (!stat.isFile() || (birth && stat.birthtimeMs >= bornBefore)) {
             throw new Error("not an in-place edit");
           }
         })
