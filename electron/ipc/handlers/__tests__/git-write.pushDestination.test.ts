@@ -1071,9 +1071,7 @@ describe("git push as an operation", () => {
 });
 
 describe("git-write commit and working diff", () => {
-  type FakeStatusFile = { path: string; index: string; working_dir: string };
   type FakeGit = {
-    status: ReturnType<typeof vi.fn>;
     diff: ReturnType<typeof vi.fn>;
     raw: ReturnType<typeof vi.fn>;
     commit: ReturnType<typeof vi.fn>;
@@ -1081,7 +1079,6 @@ describe("git-write commit and working diff", () => {
 
   function makeFakeGit(overrides: Partial<FakeGit> = {}): FakeGit {
     return {
-      status: vi.fn().mockResolvedValue({ files: [] as FakeStatusFile[] }),
       diff: vi.fn().mockResolvedValue(""),
       raw: vi.fn().mockResolvedValue(""),
       commit: vi.fn().mockResolvedValue({
@@ -1098,8 +1095,22 @@ describe("git-write commit and working diff", () => {
     return call[1] as (_e: unknown, ...args: unknown[]) => unknown;
   }
 
-  function stagedFile(path: string, index = "M"): FakeStatusFile {
-    return { path, index, working_dir: " " };
+  type StagedEntry = string | { path: string; mode: string };
+
+  // Answers the scanner's `--raw -z` and `--numstat -z` staged-diff queries.
+  function stagedDiff(entries: StagedEntry[], binary: string[] = []) {
+    const raw = entries
+      .map((entry) => {
+        const { path, mode } = typeof entry === "string" ? { path: entry, mode: "100644" } : entry;
+        return `:100644 ${mode} 1111111 2222222 M\0${path}\0`;
+      })
+      .join("");
+    const numstat = binary.map((path) => `-\t-\t${path}\0`).join("");
+    return vi.fn(async (args: string[]) => {
+      if (args.includes("--raw")) return raw;
+      if (args.includes("--numstat")) return numstat;
+      return "";
+    });
   }
 
   describe("scanStagedFilesForConflictMarkers", () => {
@@ -1110,7 +1121,7 @@ describe("git-write commit and working diff", () => {
       [">>>>>>> branch", "end"],
     ])("throws for the %s marker line", async (markerLine) => {
       const git = makeFakeGit({
-        status: vi.fn().mockResolvedValue({ files: [stagedFile("f.txt")] }),
+        diff: stagedDiff(["f.txt"]),
         raw: vi.fn().mockResolvedValue(`head\n${markerLine}\ntail\n`),
       });
       await expect(scanStagedFilesForConflictMarkers(git as never)).rejects.toThrow(
@@ -1122,56 +1133,62 @@ describe("git-write commit and working diff", () => {
       // An indented `=======` should not trip the scan; ensures the `^` anchor
       // in CONFLICT_MARKER_RE is doing its job.
       const git = makeFakeGit({
-        status: vi.fn().mockResolvedValue({ files: [stagedFile("doc.md")] }),
+        diff: stagedDiff(["doc.md"]),
         raw: vi.fn().mockResolvedValue("  =======\ninline <<<<<<< text\n"),
       });
       await expect(scanStagedFilesForConflictMarkers(git as never)).resolves.toBeUndefined();
     });
 
-    it("skips deleted staged entries without reading any blobs", async () => {
-      const git = makeFakeGit({
-        status: vi.fn().mockResolvedValue({ files: [stagedFile("gone.ts", "D")] }),
-      });
+    it.each([
+      ["deleted", "000000"],
+      ["gitlink", "160000"],
+    ])("skips %s staged entries without reading any blobs", async (_kind, mode) => {
+      const git = makeFakeGit({ diff: stagedDiff([{ path: "entry", mode }]) });
       await expect(scanStagedFilesForConflictMarkers(git as never)).resolves.toBeUndefined();
       expect(git.raw).not.toHaveBeenCalled();
-      expect(git.diff).not.toHaveBeenCalled();
+      expect(git.diff).toHaveBeenCalledTimes(1);
     });
 
     it("skips binary files reported by numstat", async () => {
       const git = makeFakeGit({
-        status: vi.fn().mockResolvedValue({ files: [stagedFile("image.png")] }),
-        diff: vi.fn().mockResolvedValue("-\t-\timage.png\n"),
+        diff: stagedDiff(["image.png"], ["image.png"]),
       });
       await expect(scanStagedFilesForConflictMarkers(git as never)).resolves.toBeUndefined();
+      expect(git.diff).toHaveBeenCalledTimes(2);
       expect(git.raw).not.toHaveBeenCalled();
     });
 
     it("short-circuits when there are no staged files", async () => {
       const git = makeFakeGit();
       await expect(scanStagedFilesForConflictMarkers(git as never)).resolves.toBeUndefined();
-      expect(git.diff).not.toHaveBeenCalled();
+      expect(git.diff).toHaveBeenCalledTimes(1);
       expect(git.raw).not.toHaveBeenCalled();
     });
 
-    it("uses --no-ext-diff and --no-textconv for the numstat probe", async () => {
+    it("uses --no-ext-diff and --no-textconv for both staged-diff probes", async () => {
       const git = makeFakeGit({
-        status: vi.fn().mockResolvedValue({ files: [stagedFile("a.ts")] }),
+        diff: stagedDiff(["a.ts"]),
         raw: vi.fn().mockResolvedValue("ok\n"),
       });
       await scanStagedFilesForConflictMarkers(git as never);
-      expect(git.diff).toHaveBeenCalledWith([
-        "--no-ext-diff",
-        "--no-textconv",
-        "--cached",
-        "--numstat",
-      ]);
+      for (const probe of ["--raw", "--numstat"]) {
+        expect(git.diff).toHaveBeenCalledWith([
+          "--no-ext-diff",
+          "--no-textconv",
+          "--cached",
+          "--no-renames",
+          "--no-relative",
+          "-z",
+          probe,
+        ]);
+      }
     });
 
     it("guards leading-dash filenames in the index reference via --end-of-options", async () => {
       // A file named `-danger.ts` would otherwise produce `:-danger.ts`, which
       // an unprotected argv parser could see as a flag-like token.
       const git = makeFakeGit({
-        status: vi.fn().mockResolvedValue({ files: [stagedFile("-danger.ts")] }),
+        diff: stagedDiff(["-danger.ts"]),
         raw: vi.fn().mockResolvedValue("clean content\n"),
       });
       await expect(scanStagedFilesForConflictMarkers(git as never)).resolves.toBeUndefined();
@@ -1180,9 +1197,7 @@ describe("git-write commit and working diff", () => {
 
     it("stops on the first offending file and identifies it", async () => {
       const git = makeFakeGit({
-        status: vi.fn().mockResolvedValue({
-          files: [stagedFile("clean.ts"), stagedFile("bad.ts"), stagedFile("other.ts")],
-        }),
+        diff: stagedDiff(["clean.ts", "bad.ts", "other.ts"]),
         raw: vi.fn(async (args: string[]) => {
           if (args.includes(":bad.ts")) return "<<<<<<< HEAD\n";
           return "clean content\n";
@@ -1201,7 +1216,7 @@ describe("git-write commit and working diff", () => {
 
     it("blocks a first-line marker that follows a UTF-8 BOM", async () => {
       const git = makeFakeGit({
-        status: vi.fn().mockResolvedValue({ files: [stagedFile("bom.txt")] }),
+        diff: stagedDiff(["bom.txt"]),
         raw: vi.fn().mockResolvedValue("\uFEFF<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> b\n"),
       });
       await expect(scanStagedFilesForConflictMarkers(git as never)).rejects.toThrow(
@@ -1215,7 +1230,7 @@ describe("git-write commit and working diff", () => {
       const markerLine = "<<<<<<< HEAD\n";
       const content = markerLine + "a".repeat(1_000_000 - markerLine.length);
       const git = makeFakeGit({
-        status: vi.fn().mockResolvedValue({ files: [stagedFile("edge.txt")] }),
+        diff: stagedDiff(["edge.txt"]),
         raw: vi.fn().mockResolvedValue(content),
       });
       expect(Buffer.byteLength(content, "utf8")).toBe(1_000_000);
@@ -1228,7 +1243,7 @@ describe("git-write commit and working diff", () => {
       // `>` not `>=` check: 1_000_001 bytes → skip silently, commit proceeds.
       const content = "<<<<<<< HEAD\n" + "a".repeat(1_000_001 - "<<<<<<< HEAD\n".length);
       const git = makeFakeGit({
-        status: vi.fn().mockResolvedValue({ files: [stagedFile("huge.txt")] }),
+        diff: stagedDiff(["huge.txt"]),
         raw: vi.fn().mockResolvedValue(content),
       });
       expect(Buffer.byteLength(content, "utf8")).toBe(1_000_001);
@@ -1237,7 +1252,7 @@ describe("git-write commit and working diff", () => {
 
     it("propagates cat-file rejections (does not silently permit)", async () => {
       const git = makeFakeGit({
-        status: vi.fn().mockResolvedValue({ files: [stagedFile("src/foo.ts")] }),
+        diff: stagedDiff(["src/foo.ts"]),
         raw: vi.fn().mockRejectedValue(new Error("fatal: bad revision")),
       });
       await expect(scanStagedFilesForConflictMarkers(git as never)).rejects.toThrow(/bad revision/);
@@ -1247,7 +1262,7 @@ describe("git-write commit and working diff", () => {
   describe("git:commit handler", () => {
     it("invokes git.commit when staged content is clean", async () => {
       const git = makeFakeGit({
-        status: vi.fn().mockResolvedValue({ files: [stagedFile("src/foo.ts")] }),
+        diff: stagedDiff(["src/foo.ts"]),
         raw: vi.fn().mockResolvedValue("clean\n"),
       });
       createHardenedGitMock.mockReturnValue(git);
@@ -1264,7 +1279,7 @@ describe("git-write commit and working diff", () => {
 
     it("blocks the commit when a staged file carries conflict markers", async () => {
       const git = makeFakeGit({
-        status: vi.fn().mockResolvedValue({ files: [stagedFile("src/foo.ts")] }),
+        diff: stagedDiff(["src/foo.ts"]),
         raw: vi.fn().mockResolvedValue("<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> branch\n"),
       });
       createHardenedGitMock.mockReturnValue(git);
