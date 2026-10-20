@@ -364,6 +364,139 @@ describe("DbWorkerClient", () => {
     expect(shuttingDown.getGovernanceSnapshot().state).toBe("shutting-down");
   });
 
+  describe("fallbacks superseded by a synchronous write", () => {
+    const staleWrite = { op: "ringWriteAll", ring: "a", records: ["old"], maxRecords: 5 } as const;
+
+    function holdingClient(worker: FakeWorker, overrides: { requestTimeoutMs?: number } = {}) {
+      const fence = fakeFenceDb(0);
+      const client = new DbWorkerClient({
+        spawnWorker: () => worker.asWorker(),
+        isDbReady: () => true,
+        isDisabled: () => false,
+        getMainSqlite: () => fence.handle,
+        ...overrides,
+      });
+      return { client, fence };
+    }
+
+    it("skips a ring fallback when the worker exits after a sync fence", async () => {
+      const worker = new FakeWorker(); // holds the request
+      const { client } = holdingClient(worker);
+      const fallback = vi.fn(() => "resurrected");
+
+      const pending = client.run(staleWrite, fallback);
+      client.fence();
+      worker.emit("exit", 1);
+
+      await expect(pending).resolves.toBeUndefined();
+      expect(fallback).not.toHaveBeenCalled();
+    });
+
+    it("skips a ring fallback when the worker errors after a sync fence", async () => {
+      const worker = new FakeWorker();
+      const { client } = holdingClient(worker);
+      const fallback = vi.fn(() => "resurrected");
+
+      const pending = client.run(staleWrite, fallback);
+      client.fence();
+      worker.emit("error", new Error("boom"));
+
+      await expect(pending).resolves.toBeUndefined();
+      expect(fallback).not.toHaveBeenCalled();
+    });
+
+    it("skips a ring fallback when the worker reports an op failure after a sync fence", async () => {
+      const worker = new FakeWorker();
+      const { client } = holdingClient(worker);
+      const fallback = vi.fn(() => "resurrected");
+
+      const pending = client.run(staleWrite, fallback);
+      client.fence();
+      worker.respond({ id: worker.posted[0]!.id, ok: false, error: "disk I/O error" });
+
+      await expect(pending).resolves.toBeUndefined();
+      expect(fallback).not.toHaveBeenCalled();
+    });
+
+    it("skips a ring fallback when the request times out after a sync fence", async () => {
+      const worker = new FakeWorker();
+      const { client } = holdingClient(worker, { requestTimeoutMs: 10 });
+      const fallback = vi.fn(() => "resurrected");
+
+      const pending = client.run(staleWrite, fallback);
+      client.fence();
+
+      await expect(pending).resolves.toBeUndefined();
+      expect(fallback).not.toHaveBeenCalled();
+    });
+
+    it("still runs the ring fallback when the worker fails without a sync fence", async () => {
+      const worker = new FakeWorker();
+      const { client, fence } = holdingClient(worker);
+      const fallback = vi.fn(() => "main-result");
+
+      const pending = client.run(staleWrite, fallback);
+      worker.emit("exit", 1);
+
+      await expect(pending).resolves.toBe("main-result");
+      expect(fallback).toHaveBeenCalledTimes(1);
+      expect(fence.state.epoch).toBe(1);
+    });
+
+    it("still runs the fallback of a ring write queued after the sync fence", async () => {
+      const worker = new FakeWorker();
+      const { client } = holdingClient(worker);
+      const stale = vi.fn(() => "stale");
+      const fresh = vi.fn(() => "fresh");
+
+      const first = client.run(staleWrite, stale);
+      client.fence();
+      const second = client.run({ ...staleWrite, records: ["new"] }, fresh);
+      worker.emit("exit", 1);
+
+      await expect(first).resolves.toBeUndefined();
+      await expect(second).resolves.toBe("fresh");
+      expect(stale).not.toHaveBeenCalled();
+      expect(fresh).toHaveBeenCalledTimes(1);
+    });
+
+    it("still runs non-ring fallbacks after a sync fence", async () => {
+      const worker = new FakeWorker();
+      const { client } = holdingClient(worker);
+      const fallback = vi.fn(() => "main-result");
+
+      const pending = client.run(checkpointOp, fallback);
+      client.fence();
+      worker.emit("exit", 1);
+
+      await expect(pending).resolves.toBe("main-result");
+      expect(fallback).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not treat the shutdown fence as superseding pending ring writes", async () => {
+      const worker = new FakeWorker((w, msg) => {
+        // Swallow close so the drain times out, then let the worker die.
+        if (msg.op === "close") return;
+      });
+      const fence = fakeFenceDb(0);
+      const client = new DbWorkerClient({
+        spawnWorker: () => worker.asWorker(),
+        isDbReady: () => true,
+        isDisabled: () => false,
+        getMainSqlite: () => fence.handle,
+        shutdownDrainTimeoutMs: 10,
+      });
+      const fallback = vi.fn(() => "main-result");
+
+      const pending = client.run(staleWrite, fallback);
+      await client.shutdown();
+      worker.emit("exit", 0);
+
+      await expect(pending).resolves.toBe("main-result");
+      expect(fallback).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it("advances the fence when the shutdown drain times out", async () => {
     const fence = fakeFenceDb(0);
     const worker = new FakeWorker((w, msg) => {

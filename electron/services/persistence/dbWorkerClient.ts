@@ -75,6 +75,9 @@ export class DbWorkerClient {
   private degraded = false;
   private shuttingDown = false;
   private fenceEpoch: number | null = null;
+  // Bumped only by a synchronous ring write's fence(), never by the failure or
+  // shutdown fence advances — those must still replay their fallbacks.
+  private supersedeGeneration = 0;
   private lastRequestAt: number | null = null;
 
   constructor(deps: Partial<DbWorkerClientDeps> = {}) {
@@ -84,15 +87,22 @@ export class DbWorkerClient {
   /**
    * Run `op` on the worker thread; on any failure (kill switch, DB not open
    * yet, spawn failure, worker crash, timeout) run `fallback` synchronously on
-   * the main thread instead — the pre-worker behavior.
+   * the main thread instead — the pre-worker behavior. A ring write fenced by
+   * a newer synchronous write while in flight resolves `undefined` without
+   * its fallback: the stale snapshot would overwrite the newer durable one.
    */
   async run<T>(op: DbWorkerOp, fallback: () => T): Promise<T> {
     if (!this.canUseWorker()) {
       return fallback();
     }
+    const generation = this.supersedeGeneration;
     try {
       return (await this.request(op)) as T;
     } catch (error) {
+      if (op.op === "ringWriteAll" && generation !== this.supersedeGeneration) {
+        console.warn(`[DbWorker] "${op.op}" failed after being superseded — dropped:`, error);
+        return undefined as T;
+      }
       console.warn(`[DbWorker] "${op.op}" failed — running on main thread:`, error);
       return fallback();
     }
@@ -104,11 +114,12 @@ export class DbWorkerClient {
    * worker was stamped with the previous epoch and will no-op, so an older
    * snapshot can never land after the newer synchronous one. Collateral: queued
    * snapshots for OTHER rings are dropped too — harmless, since every write is
-   * a full snapshot and the owner's next flush rewrites it.
+   * a full snapshot and the owner's next flush rewrites it. The same holds on
+   * the failure path: those writes' main-thread fallbacks are skipped too.
    */
   fence(): void {
-    if (this.worker === null && this.pending.size === 0) return;
-    this.advanceFence();
+    this.supersedeGeneration++;
+    this.advanceFenceIfLive();
   }
 
   /**
@@ -137,7 +148,7 @@ export class DbWorkerClient {
       } catch {
         // Worker already gone — nothing left to drain.
       }
-      this.fence();
+      this.advanceFenceIfLive();
     }
   }
 
@@ -241,6 +252,11 @@ export class DbWorkerClient {
       this.degraded = true;
     }
     this.failAllPending(new Error(`db worker unavailable: ${reason}`));
+  }
+
+  private advanceFenceIfLive(): void {
+    if (this.worker === null && this.pending.size === 0) return;
+    this.advanceFence();
   }
 
   private failAllPending(error: Error): void {
