@@ -264,7 +264,8 @@ describe("FileTreeService adversarial", () => {
   it("WINDOWS_SEPARATORS_NORMALIZE_TO_POSIX_PATHS", async () => {
     // Emitted paths are POSIX on every platform: they are matched against a
     // CopyTree manifest, which is POSIX-relative to the root, and handed to
-    // agents as `@`-references.
+    // agents as `@`-references. A backslash is only a separator on Windows;
+    // elsewhere it is part of the directory name and must survive (#13562).
     shared.readdir.mockResolvedValueOnce([d("visible.txt")]);
     shared.lstat.mockResolvedValue(createStats({ size: 7 }));
 
@@ -272,7 +273,7 @@ describe("FileTreeService adversarial", () => {
       {
         isDirectory: false,
         name: "visible.txt",
-        path: "nested/dir/visible.txt",
+        path: process.platform === "win32" ? "nested/dir/visible.txt" : "nested\\dir/visible.txt",
         size: 7,
       },
     ]);

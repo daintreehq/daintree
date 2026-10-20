@@ -745,14 +745,17 @@ describe("GitService.readFileAtHead", () => {
     expect(result).toEqual({ ok: true, content: Buffer.from("image-data"), version: BLOB_OID });
   });
 
-  it("converts backslash separators to git's forward-slash path", async () => {
-    gitClientMock.raw.mockResolvedValue(lsTreeRecord("assets/logo.png"));
+  // A backslash is a separator only on Windows; on Unix it is a filename byte
+  // and must reach git unchanged (#13562).
+  it("converts backslash separators to git's forward-slash path only on Windows", async () => {
+    const treePath = process.platform === "win32" ? "assets/logo.png" : "assets\\logo.png";
+    gitClientMock.raw.mockResolvedValue(lsTreeRecord(treePath));
     binaryCatFileMock.mockResolvedValue(Buffer.from("data"));
     const service = new GitService(tempDir);
 
     await service.readFileAtHead("assets\\logo.png", 1024);
 
-    expect(gitClientMock.raw).toHaveBeenCalledWith(lsTreeArgs("assets/logo.png"));
+    expect(gitClientMock.raw).toHaveBeenCalledWith(lsTreeArgs(treePath));
   });
 
   it("maps a file missing at HEAD (empty listing) to NOT_FOUND", async () => {
@@ -982,7 +985,8 @@ describe("GitService.readPreviousFileVersion", () => {
     expect(beforeRead).not.toHaveBeenCalled();
   });
 
-  it("converts backslash separators to git's forward-slash path", async () => {
+  it("converts backslash separators to git's forward-slash path only on Windows", async () => {
+    const treePath = process.platform === "win32" ? "assets/logo.png" : "assets\\logo.png";
     mockRevList(`${DELETING_SHA}\n${PREVIOUS_SHA}\n`);
     binaryCatFileMock.mockResolvedValue(Buffer.from("data"));
     const service = new GitService(tempDir);
@@ -996,7 +1000,7 @@ describe("GitService.readPreviousFileVersion", () => {
       "--end-of-options",
       "HEAD",
       "--",
-      "assets/logo.png",
+      treePath,
     ]);
   });
 

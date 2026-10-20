@@ -37,6 +37,37 @@ describe("FileTreeService", () => {
     );
   });
 
+  // NTFS forbids `\` in names; on Unix it is an ordinary byte (#13562).
+  it.skipIf(process.platform === "win32")(
+    "expands a directory whose name contains a backslash, not the nested lookalike",
+    async () => {
+      await fs.mkdir(path.join(tempDir, "a\\b"));
+      await fs.writeFile(path.join(tempDir, "a\\b", "child.txt"), "");
+      await fs.mkdir(path.join(tempDir, "a", "b"), { recursive: true });
+      await fs.writeFile(path.join(tempDir, "a", "b", "wrong.txt"), "");
+
+      const root = await service.getFileTree(tempDir);
+      const node = root.find((entry) => entry.name === "a\\b");
+      expect(node?.path).toBe("a\\b");
+
+      const children = await service.getFileTree(tempDir, node!.path);
+
+      expect(children.map((entry) => entry.path)).toEqual(["a\\b/child.txt"]);
+    }
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "expands a directory named like a Windows-separated traversal",
+    async () => {
+      await fs.mkdir(path.join(tempDir, "..\\x"));
+      await fs.writeFile(path.join(tempDir, "..\\x", "child.txt"), "");
+
+      const children = await service.getFileTree(tempDir, "..\\x");
+
+      expect(children.map((entry) => entry.name)).toEqual(["child.txt"]);
+    }
+  );
+
   it("sorts sibling names in natural numeric order", async () => {
     // The old lexicographic comparator sorts version_10 between version_1 and
     // version_2; assert the full natural order instead. Input is scrambled so
