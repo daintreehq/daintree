@@ -99,6 +99,56 @@ describe("useVisibilityAwareInterval", () => {
     expect(cb).not.toHaveBeenCalled();
   });
 
+  it("leaves no interval running when the callback unmounts its owner during a restore", () => {
+    let unmountSelf: () => void = () => {};
+    const cb = vi.fn(() => unmountSelf());
+    visibilityState = "hidden";
+    const view = renderHook(() => useVisibilityAwareInterval(cb, 1000));
+    unmountSelf = view.unmount;
+
+    act(() => {
+      setVisibility("visible");
+    });
+
+    expect(cb).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
+    act(() => {
+      vi.advanceTimersByTime(5000);
+    });
+    expect(cb).toHaveBeenCalledTimes(1);
+  });
+
+  it("stays stopped when the callback hides the view again during a restore", () => {
+    let hideOnTick = true;
+    const cb = vi.fn(() => {
+      if (!hideOnTick) return;
+      hideOnTick = false;
+      setVisibility("hidden");
+    });
+    visibilityState = "hidden";
+    const { unmount } = renderHook(() => useVisibilityAwareInterval(cb, 1000));
+
+    act(() => {
+      setVisibility("visible");
+    });
+
+    expect(cb).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
+    act(() => {
+      vi.advanceTimersByTime(5000);
+    });
+    expect(cb).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      setVisibility("visible");
+    });
+    expect(cb).toHaveBeenCalledTimes(2);
+    expect(vi.getTimerCount()).toBe(1);
+
+    unmount();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("always calls the latest callback without re-subscribing", () => {
     const first = vi.fn();
     const second = vi.fn();
@@ -200,6 +250,27 @@ describe("useVisibilityAwareInterval", () => {
 
       unmount();
       expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it("stays stopped when the callback caches the view again during activation", () => {
+      latchedCached = true;
+      const cb = vi.fn();
+      cb.mockImplementationOnce(() => emit(handlers.cached));
+      const { unmount } = renderHook(() => useVisibilityAwareInterval(cb, 1000));
+
+      emit(handlers.warm);
+      expect(cb).toHaveBeenCalledTimes(1);
+      expect(vi.getTimerCount()).toBe(0);
+      act(() => {
+        vi.advanceTimersByTime(5000);
+      });
+      expect(cb).toHaveBeenCalledTimes(1);
+
+      emit(handlers.warm);
+      expect(cb).toHaveBeenCalledTimes(2);
+      expect(vi.getTimerCount()).toBe(1);
+
+      unmount();
     });
 
     it("ignores a window restore underneath a cached view", () => {

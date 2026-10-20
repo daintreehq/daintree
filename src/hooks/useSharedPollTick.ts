@@ -67,8 +67,15 @@ function acquire(intervalMs: number, subscriber: () => void): () => void {
         // unregisters this very listener. Restarting unconditionally would
         // then leave an interval running on a detached ticker with nothing to
         // notify and no way to reach it again, and the map would report
-        // nothing wrong.
-        if (tickers.get(intervalMs) !== created || created.subscribers.size === 0) return;
+        // nothing wrong. A callback can equally hide or cache the view again
+        // without unmounting, and that nested edge has already run its stop.
+        if (
+          tickers.get(intervalMs) !== created ||
+          created.subscribers.size === 0 ||
+          !isProjectViewObservable()
+        ) {
+          return;
+        }
         startInterval(created, intervalMs);
       }),
     };
