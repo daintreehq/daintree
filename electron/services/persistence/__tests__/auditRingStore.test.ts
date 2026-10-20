@@ -115,10 +115,13 @@ describe("AuditRingStore", () => {
     harness.db = new Database(":memory:");
     createSchema(harness.db);
     mockRunDbWork.mockImplementation((op: DbWorkerOp) => Promise.resolve(workerExecutes(op)));
+    mockFence.mockReturnValue(true);
+    vi.spyOn(console, "warn").mockImplementation(() => {});
     store = new AuditRingStore();
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     harness.db?.close();
     harness.db = null;
   });
@@ -351,5 +354,101 @@ describe("AuditRingStore", () => {
 
     store.writeAll("mcpAuditLog", [rec("a"), rec("b"), rec("c")], 10);
     expect(held[2]!.op.op).toBe("ringWriteAll");
+  });
+  it("diffs a write submitted while a pre-clear delta is still in flight against the cleared ring", async () => {
+    const held = holdWorker();
+    store.writeAll("mcpAuditLog", [rec("a")], 10);
+    held[0]!.resolve(workerExecutes(held[0]!.op));
+    await settle();
+
+    store.writeAll("mcpAuditLog", [rec("a"), rec("b")], 10);
+    const stale = held[1]!;
+    store.writeAll("mcpAuditLog", [], 10, { sync: true });
+    store.writeAll("mcpAuditLog", [rec("c")], 10);
+    // Still one write in flight: the new snapshot waits behind the stale one.
+    expect(held).toHaveLength(2);
+
+    // Even a late "applied" from the stale write must not become the baseline.
+    stale.resolve(true);
+    await settle();
+    expect(held[2]!.op).toMatchObject({
+      op: "ringApply",
+      upserts: [{ recordId: "c" }],
+      deletes: [],
+    });
+    held[2]!.resolve(workerExecutes(held[2]!.op));
+    await settle();
+    expect(store.readAll<Rec>("mcpAuditLog").map((r) => r.id)).toEqual(["c"]);
+
+    store.writeAll("mcpAuditLog", [rec("c"), rec("d")], 10);
+    expect(held[3]!.op).toMatchObject({ op: "ringApply", upserts: [{ recordId: "d" }] });
+  });
+
+  it("replaces the ring on the next write when a sync write could not fence the worker", async () => {
+    store.writeAll("mcpAuditLog", [rec("a")], 10);
+    await settle();
+    mockFence.mockReturnValue(false);
+    store.writeAll("mcpAuditLog", [], 10, { sync: true });
+    // A stale worker delta the fence failed to exclude lands afterwards.
+    workerExecutes({
+      op: "ringApply",
+      ring: "mcpAuditLog",
+      upserts: [{ recordId: "b", record: JSON.stringify(rec("b")) }],
+      deletes: [],
+    });
+
+    store.writeAll("mcpAuditLog", [rec("c")], 10);
+    await settle();
+    expect(sentOps()[1]!.op).toBe("ringWriteAll");
+    expect(store.readAll<Rec>("mcpAuditLog").map((r) => r.id)).toEqual(["c"]);
+  });
+
+  it("treats a rejected write like a failed one and replaces the ring next time", async () => {
+    store.writeAll("mcpAuditLog", [rec("a")], 10);
+    await settle();
+    mockRunDbWork.mockRejectedValueOnce(new Error("fallback threw"));
+    store.writeAll("mcpAuditLog", [rec("a"), rec("b")], 10);
+    await settle();
+
+    store.writeAll("mcpAuditLog", [rec("a"), rec("b"), rec("c")], 10);
+    await settle();
+    expect(sentOps()[2]!.op).toBe("ringWriteAll");
+    expect(store.readAll<Rec>("mcpAuditLog").map((r) => r.id)).toEqual(["a", "b", "c"]);
+  });
+
+  it("leaves the ring untouched when a record cannot be serialized", async () => {
+    store.writeAll("mcpAuditLog", [rec("a")], 10);
+    await settle();
+    const circular: Rec & { self?: unknown } = rec("x");
+    circular.self = circular;
+    store.writeAll("mcpAuditLog", [rec("a"), circular], 10);
+    await settle();
+    expect(mockRunDbWork).toHaveBeenCalledTimes(1);
+
+    store.writeAll("mcpAuditLog", [rec("a"), rec("b")], 10);
+    await settle();
+    expect(sentOps()[1]).toMatchObject({ op: "ringApply", upserts: [{ recordId: "b" }] });
+  });
+
+  it("keeps each ring's rows and baseline separate even when record ids collide", async () => {
+    store.writeAll("mcpAuditLog", [rec("same", "mcp")], 10);
+    store.writeAll("forgeAuditLog", [rec("same", "forge")], 10);
+    await settle();
+
+    store.writeAll("mcpAuditLog", [], 10, { sync: true });
+    store.writeAll("forgeAuditLog", [rec("same", "forge"), rec("next")], 10);
+    await settle();
+
+    expect(store.readAll("mcpAuditLog")).toEqual([]);
+    expect(store.readAll<Rec>("forgeAuditLog").map((r) => r.v)).toEqual(["forge", "next"]);
+    expect(sentOps().at(-1)).toMatchObject({ ring: "forgeAuditLog", op: "ringApply" });
+  });
+
+  it("sends nothing when the retained suffix is unchanged after trimming", async () => {
+    store.writeAll("pluginAuditLog", [rec("a"), rec("b"), rec("c")], 2);
+    await settle();
+    store.writeAll("pluginAuditLog", [rec("z"), rec("b"), rec("c")], 2);
+    await settle();
+    expect(mockRunDbWork).toHaveBeenCalledTimes(1);
   });
 });

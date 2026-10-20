@@ -447,6 +447,25 @@ describe("DbWorkerClient", () => {
       expect(fallback).not.toHaveBeenCalled();
     });
 
+    it("reports whether the fence excluded queued writes", () => {
+      const worker = new FakeWorker();
+      const { client } = holdingClient(worker);
+      void client.run(staleWrite, () => null);
+      expect(client.fence("a")).toBe(true);
+
+      const failing = fakeFenceDb(0, () => {
+        throw new Error("SQLITE_BUSY");
+      });
+      const busy = new DbWorkerClient({
+        spawnWorker: () => new FakeWorker().asWorker(),
+        isDbReady: () => true,
+        isDisabled: () => false,
+        getMainSqlite: () => failing.handle,
+      });
+      void busy.run(staleWrite, () => null);
+      expect(busy.fence("a")).toBe(false);
+    });
+
     it("skips a keyed-delta fallback when the worker exits after a sync fence", async () => {
       const worker = new FakeWorker();
       const { client } = holdingClient(worker);

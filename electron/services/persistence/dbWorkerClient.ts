@@ -128,9 +128,9 @@ export class DbWorkerClient {
    * path the supersede is scoped to `ring`: only that ring's in-flight writes
    * skip their main-thread fallbacks, so other rings' snapshots still land.
    */
-  fence(ring: string): void {
+  fence(ring: string): boolean {
     this.supersede(ring);
-    this.advanceFenceIfLive();
+    return this.advanceFenceIfLive();
   }
 
   private supersede(ring: string): void {
@@ -273,9 +273,10 @@ export class DbWorkerClient {
     this.failAllPending(new Error(`db worker unavailable: ${reason}`));
   }
 
-  private advanceFenceIfLive(): void {
-    if (this.worker === null && this.pending.size === 0) return;
-    this.advanceFence();
+  /** False only when a live worker may still hold writes the fence failed to exclude. */
+  private advanceFenceIfLive(): boolean {
+    if (this.worker === null && this.pending.size === 0) return true;
+    return this.advanceFence();
   }
 
   private failAllPending(error: Error): void {
@@ -296,15 +297,17 @@ export class DbWorkerClient {
    * serialization guarantees that once the bump commits, every still-queued
    * ring write no-ops.
    */
-  private advanceFence(): void {
+  private advanceFence(): boolean {
     const db = this.deps.getMainSqlite();
-    if (!db) return;
+    if (!db) return false;
     try {
       const next = this.currentFence() + 1;
       db.pragma(`user_version = ${next}`);
       this.fenceEpoch = next;
+      return true;
     } catch (error) {
       console.warn("[DbWorker] Failed to advance write fence:", error);
+      return false;
     }
   }
 
@@ -333,10 +336,12 @@ export function runDbWork<T>(op: DbWorkerOp, fallback: () => T): Promise<T> {
 
 /**
  * Fence any queued worker ring writes before a synchronous main-thread write.
- * No-ops when the client (and thus the worker) was never created.
+ * No-ops when the client (and thus the worker) was never created. Returns
+ * false when the fence could not be advanced, so a queued write may still land
+ * after the caller's write.
  */
-export function fenceDbWorkerWrites(ring: string): void {
-  instance?.fence(ring);
+export function fenceDbWorkerWrites(ring: string): boolean {
+  return instance?.fence(ring) ?? true;
 }
 
 export async function shutdownDbWorker(): Promise<void> {

@@ -142,9 +142,11 @@ export class AuditRingStore {
     if (options?.sync) {
       state.generation++;
       state.pending = null;
-      fenceDbWorkerWrites(ring);
+      const fenced = fenceDbWorkerWrites(ring);
       const applied = this.replaceOnMain(ring, target);
-      state.acked = applied === true ? ackedOf(target) : null;
+      // An unfenced worker write can still land on top of this one, so the DB
+      // contents are unknown until the next full replacement.
+      state.acked = applied === true && fenced ? ackedOf(target) : null;
       return;
     }
     state.pending = target;
@@ -171,7 +173,10 @@ export class AuditRingStore {
           () => this.replaceOnMain(ring, target)
         );
     void write
-      .catch(() => undefined)
+      .catch((error: unknown) => {
+        console.warn(`[AuditRingStore] writeAll failed for "${ring}":`, error);
+        return undefined;
+      })
       .then((result) => this.settle(ring, state, generation, target, result));
   }
 
