@@ -1,12 +1,12 @@
 ---
 name: work-batch
-description: "Work this repository's issue backlog in batches on this machine. A Claude Code agent in the main worktree picks the batch with /next-batch, each issue gets its own worktree and a Claude Code agent running /work, and once every one of them has finished a Claude Code agent in the main worktree runs /prs:merge. Checks in every 10 minutes. One batch by default; with 'drain' it keeps picking, working and merging batches until /next-batch finds nothing ready. Use when the user asks to run, work or drain the next batch of issues, not to only list what the next batch would be."
+description: "Work this repository's issue backlog in batches. A Claude Code agent in the main worktree picks the batch with /next-batch, this machine and every host it reaches over SSH that holds the repository are brought up to date with origin's base branch, each issue gets its own worktree and a Claude Code agent running /work, and once every one of them has finished a Claude Code agent in the main worktree runs /prs:merge. Checks in every 10 minutes. One batch by default; with 'drain' it keeps picking, working and merging batches until /next-batch finds nothing ready. Use when the user asks to run, work or drain the next batch of issues, not to only list what the next batch would be."
 argument-hint: "[batch size, default 8] [drain] [filters for /next-batch, e.g. only bugs]"
 ---
 
 # Work batch
 
-A round is: pick a batch, give every issue its own worktree and `/work` agent, wait until every agent has settled, run one `/prs:merge`, tidy, report. You coordinate and verify; you never pick issues, implement, review or merge yourself. Every pane you start is a **Claude Code terminal** (`agentId: "claude"`), whatever agent you run on and whatever the user's default agent is: `/next-batch` and `/prs:merge` in the main worktree, `/work` in each issue's own worktree. Launch with no `model` and no `presetId`, so they run the user's saved Claude defaults like the user's own panes.
+A round is: pick a batch, bring every instance up to date with origin, give every issue its own worktree and `/work` agent, wait until every agent has settled, run one `/prs:merge`, tidy, report. You coordinate and verify; you never pick issues, implement, review or merge yourself. Every pane you start is a **Claude Code terminal** (`agentId: "claude"`), whatever agent you run on and whatever the user's default agent is: `/next-batch` and `/prs:merge` in the main worktree, `/work` in each issue's own worktree. Launch with no `model` and no `presetId`, so they run the user's saved Claude defaults like the user's own panes.
 
 Arguments: `$ARGUMENTS`
 
@@ -21,6 +21,7 @@ The runbook that owns these rounds is `daintree.orchestration.work-in-waves` (me
 
 - **The batch and its overlap policy are `/next-batch`'s.** It allows ordinary overlap and leaves it to `/prs:merge`, excluding only structural clashes: the user's policy, looser than a disjointness gate. Report its verdict as the gate's result; don't re-split, serialize or drop issues.
 - **The cap is the batch size**, already approved.
+- **Every instance starts a batch on origin's base.** This machine and every host it reaches over SSH that holds this repository fetch origin and fast-forward to `origin/<base>` before the round creates anything, whatever runbook drives the round (see Sync). Fast-forwards only: an instance is never switched, stashed, reset, cleaned or force-updated, and one that can't fast-forward holds the round until the user fixes it or says to go on without it.
 - **Each unit's whole chain is one command, `/work <n>`**, sent unchanged with no brief.
 - **No `handback` on `/work` or `/prs:merge`**, for `daintree.agents.run-agent-command`'s reason: Daintree appends its instruction to the prompt text, which would become the command's arguments. Both print their own end markers, read exactly with `terminal.readLastMessageOwned`. The pick is a sentence, so it takes `handback`.
 - **`/prs:merge` lands every eligible open PR in the repository**, not only this batch's.
@@ -32,9 +33,10 @@ The runbook that owns these rounds is `daintree.orchestration.work-in-waves` (me
 1. `worktree.list`: the main worktree is the row with `isMain: true`. Run `gh repo view --json nameWithOwner,defaultBranchRef` in its path for the repo and the base branch. Every later `gh` call takes `--repo <owner>/<repo>` and every `git` call `-C <path>`, because your own working directory is not the repository. A failed forge read is unknown, never an empty result.
 2. `slashCommands.list` with `agentId: "claude"` and the main path as `projectPath`: `/next-batch`, `/work` and `/prs:merge` must each be listed once. Otherwise stop before launching anything, and say which.
 3. A checkpoint for this repository that is neither `done` nor `cancelled` is an active run: resume it instead.
-4. If the main checkout isn't clean and on the base, say so now: the merge step waits for it.
-5. Tell the user in a few lines: batch size, one round or drain, any filters, that `/prs:merge` lands every eligible PR, that every worktree the run creates is deleted after each merge (each delete may ask them to confirm), and that a question from any pane parks the run until they answer it.
-6. Write the checkpoint, then create the cron.
+4. **Find the instances.** This machine is one. `host.list` (it dials an idle controlled host first); for each host `connected` with `control: true`, find this repository among its `projects` with `host.call` `project.runCommand` and `git remote get-url origin`, the projects whose name matches the repository's first, stopping at the first URL that names `<owner>/<repo>` (https or ssh, `.git` or not). That host and project are an instance. A project answers only with outcome `ok`, `result.isError: false` and `result.structured.exitCode` 0; a non-zero exit means it isn't this repository. A host with no match, but `projects: null` or a call that didn't answer, is unresolved: it is held as Sync holds an instance. `project.runCommand` answers only an assistant at the **full** tier, so a tier refusal (`TIER_NOT_PERMITTED`) means no host can be synced: stop and ask the user to raise the assistant's tier, or to go on without the hosts. Any other host is noted for the user. No `host.list` tool, or no hosts: this machine is the only instance.
+5. If the main checkout isn't clean and on the base, say so now: the merge step waits for it, and Sync holds one with uncommitted changes on the base.
+6. Tell the user in a few lines: batch size, one round or drain, any filters, which hosts are brought up to date with origin before each round and which can't be reached, that `/prs:merge` lands every eligible PR, that every worktree the run creates is deleted after each merge (each delete may ask them to confirm), and that a question from any pane parks the run until they answer it.
+7. Write the checkpoint, then create the cron.
 
 ## Pacing
 
@@ -44,7 +46,7 @@ Every read stays in your context for hours, so keep checks lean: one `terminal.g
 
 ## Run state
 
-Checkpoint: `~/.daintree/work-batch/<owner>-<repo>.json`, outside the repository and kept across restarts, written atomically (temp file, then `mv`). Record intent before acting (the branch before a create, the `requestedId` before a launch, `nudged` before a nudge), so a lost reply is reconciled, never replayed. It holds the run (id, repo, base, main worktree id and path, size, drain, filters, `stopAfterRound`, `cancelled`, cron id and creation time, round, phase `pick`/`work`/`merge`/`tidy`/`done`), the pick and merge panes, each unit (issue, branch, worktree id and path, `requestedId`, terminal id, status, PR, `lastOutputChangeAt` and when it was counted, quiet checks, `nudged`, a reported question's id), and one line per finished round. Live state outranks it. Panes are named `Batch <k> · next-batch`, `Batch <k> · #<n>` and `Batch <k> · merge`.
+Checkpoint: `~/.daintree/work-batch/<owner>-<repo>.json`, outside the repository and kept across restarts, written atomically (temp file, then `mv`). Record intent before acting (the branch before a create, the `requestedId` before a launch, `nudged` before a nudge), so a lost reply is reconciled, never replayed. It holds the run (id, repo, base, main worktree id and path, size, drain, filters, `stopAfterRound`, `cancelled`, cron id and creation time, round, phase `pick`/`sync`/`work`/`merge`/`tidy`/`done`), the instances (host id and name, project id, the SHA each last synced to, why one is held or left out), the round's target SHA, the pick and merge panes, each unit (issue, branch, worktree id and path, `requestedId`, terminal id, status, PR, `lastOutputChangeAt` and when it was counted, quiet checks, `nudged`, a reported question's id), and one line per finished round. Live state outranks it. Panes are named `Batch <k> · next-batch`, `Batch <k> · #<n>` and `Batch <k> · merge`.
 
 Unit statuses: `setting-up`, `dispatching`, `running`, `done` (finished with a PR), `no-op` (finished, nothing to change), `failed`, `blocked` (waiting on the user), `skipped`. Settled means `done`, `no-op`, `failed`, or `skipped` and no longer working.
 
@@ -58,7 +60,7 @@ Claude launches go one at a time. A good result has `launched: true` and the req
 
 ## Every check
 
-Read the checkpoint first: `cancelled` or `done` means do nothing more (delete the cron if it still exists). Otherwise take a fresh `terminal.getStatus`, and for each live pane:
+Read the checkpoint first: `cancelled` or `done` means do nothing more (delete the cron if it still exists). Phase `sync` has no panes: run Sync again. Otherwise take a fresh `terminal.getStatus`, and for each live pane:
 
 1. **Working**: a quiet check counts only when `lastOutputChangeAt` hasn't moved and 9 minutes have passed since the last counted one. At two in a row, take a 30-line screen read: a dialog is handled as in 2; otherwise tell the user once it may be stuck, and keep waiting. Never interrupt or close a working pane. (The merge pane has its own rule, in step 4.)
 2. **Stopped** (not working, or exited): `terminal.readLastMessageOwned`, then classify by the phase's end marker.
@@ -68,6 +70,29 @@ Read the checkpoint first: `cancelled` or `done` means do nothing more (delete t
 3. **Stopped without its marker or a question** (not the merge pane): one 30-line screen read. A usage or rate limit naming a reset time: record it and wait. Otherwise, or once reset, set `nudged` and nudge once with `terminal.sendCommand` (`notify: true`) and the phase's nudge text. Stopping again without its marker after that fails it.
 
 Never resend a launch prompt. A pane showing no sign that its command started is `blocked`: ask the user.
+
+## Sync
+
+Each round brings every instance up to date with origin before step 2 creates anything, in phase `sync`. Merges since the last round, the user's and other sessions' included, move `origin/<base>`, and neither a forge merge nor worktree creation updates any checkout.
+
+The sync command, with `<base>` filled in, fetches the base and then fast-forwards: the checkout itself only when it is on the base with no uncommitted changes to tracked files, and otherwise only its local `<base>` branch, which git refuses while another worktree has it checked out.
+
+```bash
+git fetch --quiet origin "+refs/heads/<base>:refs/remotes/origin/<base>" || exit $?; if [ "$(git branch --show-current)" != "<base>" ]; then git fetch --quiet origin "<base>:<base>"; elif [ -n "$(git status --porcelain --untracked-files=no)" ]; then echo "uncommitted changes on <base>"; false; else git merge --ff-only --quiet "origin/<base>"; fi; s=$?; git branch --show-current; git rev-parse "refs/heads/<base>" "refs/remotes/origin/<base>"; exit $s
+```
+
+1. **This machine.** Run it as `(cd "<main path>" && <command>)`, the one git call here without `-C`, then save `git -C <main path> rev-parse origin/<base>` to the checkpoint as the round's target.
+2. **The hosts.** A fresh `host.list`, adding any instance new since Preflight as found there, then one call per instance. It runs in the project's root as the host's user, and `timeoutMs` keeps the relay waiting as long as the command may run (without it the relay gives up after 90 seconds):
+
+```json tool=host.call
+{"hostId":"<host id>","projectId":"<its project id>","tool":"project.runCommand","args":{"projectId":"<its project id>","command":"<the sync command>","timeoutMs":300000}}
+```
+
+3. **Read each answer** from `result.structured`: `exitCode`, `timedOut`, and the `output`, whose last two lines are the SHAs. Up to date is exit 0 with both at the target. When one differs, fetch here again: if this machine's `origin/<base>` moved, that is the new target, so sync every instance again, once; any mismatch left is held.
+   - `ambiguous`: resend under its `callId`. `expired`: its record is gone, so run it again as a new call; the sync is safe to repeat. `rate_limited`: retry after `retryAfterMs`. `not_found`: list again; a host or project still missing isn't an instance any more, and is reported.
+   - `disconnected`, `opted_out` or `unsupported`: the host can't be reached this round. Report it and go on without it.
+   - Anything else is **held**: a non-zero exit or a timeout, a result with `isError` (`DRIVEN_ELSEWHERE` names the machine driving that project: never take it over), or another outcome, with its `detail`. Report it once with the last lines of its output. Never switch, stash, reset, clean or force-update to make it pass.
+4. Step 2 creates nothing while an instance is held, unless the user has said to go on without that host. Record each instance's SHA or reason in the checkpoint. A check in phase `sync` runs Sync again from step 1, so the user's fix is picked up and every instance meets the same target.
 
 ## 1. Pick
 
@@ -86,7 +111,7 @@ With filters, the first sentence becomes `Run /next-batch with a count of <size>
 
 ## 2. Start
 
-`git -C <main path> fetch origin <base>` first: neither a forge merge nor worktree creation updates local refs. Each issue's branch is `bugfix/issue-<n>-<slug>` with the `bug` label, else `feature/issue-<n>-<slug>`; the slug is the lowercased title with every run of other characters than a-z and 0-9 as one `-`, cut to 40 characters at a hyphen, or `untitled` if nothing is left. Derive both with exactly these reads, one issue at a time, never by splitting `@tsv` with `IFS read` (an empty field collapses, so an unlabelled issue's title lands in the labels and its branch ends `issue-<n>-`):
+Run Sync first, and create nothing until it clears. Each issue's branch is `bugfix/issue-<n>-<slug>` with the `bug` label, else `feature/issue-<n>-<slug>`; the slug is the lowercased title with every run of other characters than a-z and 0-9 as one `-`, cut to 40 characters at a hyphen, or `untitled` if nothing is left. Derive both with exactly these reads, one issue at a time, never by splitting `@tsv` with `IFS read` (an empty field collapses, so an unlabelled issue's title lands in the labels and its branch ends `issue-<n>-`):
 
 ```bash
 J=$(gh issue view <n> --repo <owner>/<repo> --json labels,title)
@@ -131,7 +156,7 @@ Runs once the merge has completed, failed, or been skipped. It clears out every 
 
 ## 6. Report, then continue or stop
 
-Report the round in a few lines: each issue with its PR and state, or why it has none; what is blocked or pending; what happens next.
+Report the round in a few lines: the SHA the instances started from and any host left out, each issue with its PR and state, or why it has none; what is blocked or pending; what happens next.
 
 With `drain`, a completed or skipped merge starts the next round at step 1 straight away, including after a round of only no-ops. A drain ends normally only on `BATCH: none`. It stops early, reported as stuck rather than drained, when:
 
@@ -147,6 +172,7 @@ Without `drain`, the run ends after one round. At the end: the final report, the
 - "status": report from the checkpoint and a fresh status read; send, nudge, count and advance nothing.
 - "stop after this batch": set `stopAfterRound` in the checkpoint now.
 - "stop now": set `cancelled`, delete the cron, launch and send nothing more, and leave running agents alone. Report what is still running.
+- "go on without <host>": leave that host out of the run's syncs from now on, and say so in each report.
 - "skip #n": takes it out of the round's required outcomes. A unit still working keeps its slot and still holds the merge; interrupt it (`terminal.interruptOwned`) only if the user says so.
 - "drain" or "continue": set drain. After a `done` or `cancelled` run this starts a new run with a new id, from Preflight.
 
@@ -161,6 +187,7 @@ With no checkpoint, never infer size, drain or filters. Report the `Batch` panes
 ## Final report
 
 - Rounds run, and each issue with its PR and final state.
+- Hosts left out of a sync or still held, with why.
 - Failed, blocked, reverted and unlanded units, with their branch, PR and why they didn't land.
 - Issues this run assigned that have no landed PR. An assigned issue never reaches a later `/next-batch`, so the user may want to unassign them.
 - Every worktree this run created that is still on disk, with its path, pane name and why: dirty, a foreign pane, delete pending or refused, or a run that stopped before tidy.
