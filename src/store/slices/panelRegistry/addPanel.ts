@@ -88,7 +88,8 @@ type RegistryState = ReturnType<PanelRegistryStoreApi["getState"]>;
  * same `set()`: `restoreBackgroundTerminal` reads only `backgroundedTerminals`,
  * and an entry written a commit later leaves a window where the panel is
  * parked with no way back. A replayed hydration keeps the entry already there,
- * which may carry tab-group metadata the snapshot never had.
+ * which may carry tab-group metadata the snapshot never had, and the panel's
+ * restore target is aligned to it.
  */
 function commitParked(
   set: PanelRegistryStoreApi["setState"],
@@ -99,7 +100,22 @@ function commitParked(
       const patch = updater(state);
       if (patch === state || panel.location !== "background") return patch;
       const current = patch.backgroundedTerminals ?? state.backgroundedTerminals;
-      if (current.has(panel.id)) return patch;
+      const kept = current.get(panel.id);
+      if (kept) {
+        // The panel's field is what the next save writes, so it follows the
+        // entry that is kept rather than the snapshot's.
+        const committed = patch.panelsById?.[panel.id];
+        if (!committed || committed.backgroundRestoreLocation === kept.originalLocation) {
+          return patch;
+        }
+        return {
+          ...patch,
+          panelsById: {
+            ...patch.panelsById,
+            [panel.id]: { ...committed, backgroundRestoreLocation: kept.originalLocation },
+          },
+        };
+      }
       const backgroundedTerminals = new Map(current);
       backgroundedTerminals.set(panel.id, {
         id: panel.id,

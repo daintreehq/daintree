@@ -980,8 +980,14 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
     const lastFocusedTerminalId = get().lastFocusedTerminalByWorktree.get(id);
     if (lastFocusedTerminalId) {
       const terminal = usePanelStore.getState().panelsById[lastFocusedTerminalId];
-      // Validate terminal still exists, belongs to this worktree, and isn't in trash
-      if (terminal && terminal.worktreeId === id && terminal.location !== "trash") {
+      // Validate terminal still exists, belongs to this worktree, and isn't in
+      // trash or parked — focusing a parked panel would restore it unasked.
+      if (
+        terminal &&
+        terminal.worktreeId === id &&
+        terminal.location !== "trash" &&
+        terminal.location !== "background"
+      ) {
         usePanelStore.getState().setFocused(lastFocusedTerminalId);
       }
     }

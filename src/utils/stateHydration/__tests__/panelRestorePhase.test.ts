@@ -2721,6 +2721,16 @@ describe("restorePanelsPhase — parked panels (#13661)", () => {
     });
   });
 
+  it("brings a parked non-PTY panel back visible, since nothing is left running", async () => {
+    const ctx = makeContext();
+
+    await restorePanelsPhase([panel("b1", { kind: "browser", location: "background" })], ctx);
+
+    expect(ctx.addPanel).toHaveBeenCalledTimes(1);
+    expect(ctx.addPanel.mock.calls[0]![0]).not.toMatchObject({ location: "background" });
+    expect(ctx.addPanel.mock.calls[0]![0]).not.toHaveProperty("backgroundRestoreLocation");
+  });
+
   it("leaves a grid panel's placement to the builder", async () => {
     const ctx = makeContext();
     ctx.backendTerminalMap.set("g", backend("g"));

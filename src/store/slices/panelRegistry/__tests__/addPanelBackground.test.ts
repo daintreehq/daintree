@@ -53,6 +53,7 @@ vi.mock("@/services/TerminalInstanceService", () => ({
     sendPtyResize: vi.fn(),
     waitForAttachSettled: vi.fn().mockResolvedValue(undefined),
     wake: vi.fn(),
+    invalidatePtyGrid: vi.fn(),
     get: vi.fn(() => null),
   },
 }));
@@ -176,6 +177,64 @@ describe("addPanel with location: background (#13661)", () => {
       groupRestoreId: "group-x",
       groupMetadata,
     });
+    // The panel's own target follows the kept entry, so a later save can't
+    // send it somewhere a restore in this session wouldn't.
+    expect(usePanelStore.getState().panelsById["bg-2"]?.backgroundRestoreLocation).toBe("grid");
+  });
+
+  it("parks an agent without resizing its PTY to an active-grid estimate", async () => {
+    await usePanelStore.getState().addPanel({
+      kind: "terminal",
+      launchAgentId: "claude",
+      requestedId: "bg-agent",
+      cwd: "/tmp",
+      location: "background",
+    });
+
+    const state = usePanelStore.getState();
+    expect(state.panelsById["bg-agent"]?.location).toBe("background");
+    expect(state.backgroundedTerminals.get("bg-agent")?.originalLocation).toBe("grid");
+    expect(terminalInstanceService.prewarmTerminal).toHaveBeenCalled();
+    expect(terminalInstanceService.sendPtyResize).not.toHaveBeenCalled();
+  });
+
+  it("seeds the restore entry on the batched hydration commit, before the ids flush", async () => {
+    const { beginHydrationBatch, flushHydrationBatch } = usePanelStore.getState();
+    const token = beginHydrationBatch();
+
+    await usePanelStore.getState().addPanel({
+      kind: "terminal",
+      existingId: "bg-batch",
+      cwd: "/tmp",
+      location: "background",
+      backgroundRestoreLocation: "dock",
+    });
+
+    const mid = usePanelStore.getState();
+    expect(mid.panelsById["bg-batch"]?.location).toBe("background");
+    expect(mid.backgroundedTerminals.get("bg-batch")?.originalLocation).toBe("dock");
+    expect(mid.panelIds).not.toContain("bg-batch");
+
+    flushHydrationBatch(token);
+    expect(usePanelStore.getState().panelIds).toContain("bg-batch");
+
+    usePanelStore.getState().restoreBackgroundTerminal("bg-batch");
+    expect(usePanelStore.getState().panelsById["bg-batch"]?.location).toBe("dock");
+  });
+
+  it("drops the restore entry when a parked panel is moved out by another route", async () => {
+    await usePanelStore.getState().addPanel({
+      kind: "terminal",
+      requestedId: "bg-move",
+      cwd: "/tmp",
+      location: "background",
+    });
+
+    usePanelStore.getState().moveTerminalToDock("bg-move");
+
+    const state = usePanelStore.getState();
+    expect(state.panelsById["bg-move"]?.location).toBe("dock");
+    expect(state.backgroundedTerminals.has("bg-move")).toBe(false);
   });
 
   it("writes no restore entry for a panel placed on the grid", async () => {

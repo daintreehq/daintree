@@ -179,6 +179,19 @@ describe("wakeActiveWorktreeTerminals", () => {
     expect(fullWakeMock).toHaveBeenCalledWith("a");
   });
 
+  it("leaves parked terminals asleep (#13661)", async () => {
+    mockActiveWorktreeId = "wt-1";
+    const a = panel("a", { worktreeId: "wt-1" });
+    const parked = panel("parked", { worktreeId: "wt-1", location: "background" });
+    mockPanelIds = ["a", "parked"];
+    mockPanelsById = { a, parked };
+
+    await wakeActiveWorktreeTerminals();
+
+    expect(fullWakeMock).toHaveBeenCalledTimes(1);
+    expect(fullWakeMock).toHaveBeenCalledWith("a");
+  });
+
   it("excludes non-terminal panel kinds", async () => {
     mockActiveWorktreeId = "wt-1";
     const term = panel("term", { worktreeId: "wt-1", kind: "terminal" });

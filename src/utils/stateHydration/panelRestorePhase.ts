@@ -1192,7 +1192,10 @@ export async function restorePanelsPhase(
               // `resolveRestoredWorktreeId`: this builder keeps `saved.worktreeId`
               // untouched, so a worktree-less workspace needs it cleared here too.
               if (!workspaceHasWorktrees) nonPtyArgs.worktreeId = undefined;
-              parkIfSavedInBackground(nonPtyArgs, saved);
+              // Not re-parked: there is no process to keep alive, and the
+              // background list shows only terminals, so a parked browser or
+              // preview would be left with no way back. It returns to the
+              // grid/dock target the builder resolved.
               const nonPtyId = await addPanel(nonPtyArgs);
               restoredIdsByIndex.set(capturedIndex, nonPtyId);
             }
