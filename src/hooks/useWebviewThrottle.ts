@@ -11,6 +11,8 @@ import { safeFireAndForget } from "@/utils/safeFireAndForget";
  * it provides a full JS lifecycle freeze — stronger than the timer/frame
  * throttling that `webContents.setBackgroundThrottling` applies.
  */
+const FREEZE_DELAY_MS = 500;
+
 export function useWebviewThrottle(
   panelId: string,
   location: string,
@@ -45,20 +47,29 @@ export function useWebviewThrottle(
     }
 
     // Delay freeze to avoid rapid churn during panel transitions.
-    freezeTimerRef.current = setTimeout(() => {
-      freezeTimerRef.current = null;
-      let webContentsId: number;
-      try {
-        webContentsId = webviewElement.getWebContentsId();
-      } catch {
-        return;
-      }
-      safeFireAndForget(window.electron.webview.setLifecycleState(webContentsId, true), {
-        context: "Freezing webview lifecycle state",
-      });
-    }, 500);
+    const armFreeze = () => {
+      if (freezeTimerRef.current) clearTimeout(freezeTimerRef.current);
+      freezeTimerRef.current = setTimeout(() => {
+        freezeTimerRef.current = null;
+        let webContentsId: number;
+        try {
+          webContentsId = webviewElement.getWebContentsId();
+        } catch {
+          return;
+        }
+        safeFireAndForget(window.electron.webview.setLifecycleState(webContentsId, true), {
+          context: "Freezing webview lifecycle state",
+        });
+      }, FREEZE_DELAY_MS);
+    };
+    armFreeze();
+    // Moving a docked panel's wrapper replaces its guest, which starts unfrozen
+    // and unregistered — main drops a freeze aimed at it. Re-arm on the new
+    // guest's dom-ready so it freezes once re-registered (#13634).
+    webviewElement.addEventListener("dom-ready", armFreeze);
 
     return () => {
+      webviewElement.removeEventListener("dom-ready", armFreeze);
       if (freezeTimerRef.current) {
         clearTimeout(freezeTimerRef.current);
         freezeTimerRef.current = null;
