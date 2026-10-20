@@ -141,6 +141,10 @@ export function handleSystemMemoryPressure(payload: SystemMemoryPressurePayload)
   // before macOS starts killing processes, Daintree's terminals among them.
   useSystemMemoryNoticeStore.getState().setNotice({ reading, detail: message, action, critical });
   const toast = critical && !noticeCritical;
+  // Once the critical toast is up, a replaceKey on a later quiet publish would
+  // dismiss it (#13639); supersedeKey alone still retires the inbox row, and
+  // recovery's replaceKey takes the toast down.
+  const replace = !noticeCritical;
   noticeCritical ||= critical;
   notify({
     type: "warning",
@@ -149,7 +153,7 @@ export function handleSystemMemoryPressure(payload: SystemMemoryPressurePayload)
     countable: false,
     title: critical ? "Critical system memory pressure" : "High system memory use",
     message,
-    replaceKey: SUPERSEDE_KEY,
+    ...(replace ? { replaceKey: SUPERSEDE_KEY } : {}),
     supersedeKey: SUPERSEDE_KEY,
     context: { eventKind: "host" },
     actions: [action],
