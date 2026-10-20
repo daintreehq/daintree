@@ -164,10 +164,13 @@ export function registerArtifactHandlers(deps: HandlerDependencies): () => void 
       });
     }
 
-    const tmpPatchPath = path.join(os.tmpdir(), `daintree-patch-${Date.now()}.patch`);
-    await fs.writeFile(tmpPatchPath, patchContent, "utf-8");
+    // mkdtemp reserves the directory atomically, so concurrent requests never
+    // share (or delete) each other's patch file.
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-patch-"));
+    const tmpPatchPath = path.join(tmpDir, "patch.patch");
 
     try {
+      await fs.writeFile(tmpPatchPath, patchContent, "utf-8");
       const { execa } = await import("execa");
       try {
         await applyPatchToleratingTransportCrlf(patchContent, async (content) => {
@@ -189,7 +192,7 @@ export function registerArtifactHandlers(deps: HandlerDependencies): () => void 
 
       return { modifiedFiles: parsePatchModifiedFiles(patchContent) };
     } finally {
-      await fs.unlink(tmpPatchPath).catch(() => {});
+      await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
     }
   };
   const namespace = defineIpcNamespace({
