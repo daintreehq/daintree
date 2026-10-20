@@ -96,6 +96,81 @@ describe("SemanticBufferManager", () => {
     manager.dispose();
   });
 
+  it("caps a line that grows across many flushes and keeps the following line", () => {
+    const info = createTerminalInfo();
+    const manager = new SemanticBufferManager(info);
+    const capped = "a".repeat(1000) + "... [truncated]";
+
+    manager.onData("before\na");
+    vi.advanceTimersByTime(100);
+    for (let i = 0; i < 200; i++) {
+      manager.onData("a".repeat(8 * 1024));
+      vi.advanceTimersByTime(100);
+    }
+    manager.onData("XYZ");
+    vi.advanceTimersByTime(100);
+
+    expect(info.semanticBuffer).toEqual(["before", capped]);
+
+    manager.onData("discarded tail\nafter\n");
+    vi.advanceTimersByTime(100);
+
+    expect(info.semanticBuffer.slice(0, 3)).toEqual(["before", capped, "after"]);
+    expect(info.semanticBuffer.join("\n")).not.toContain("XYZ");
+    expect(info.semanticBuffer.join("\n")).not.toContain("discarded");
+
+    manager.dispose();
+  });
+
+  it("keeps the following line when a newline arrives after a capped line", () => {
+    const info = createTerminalInfo();
+    const manager = new SemanticBufferManager(info);
+
+    manager.onData("x".repeat(1200));
+    manager.flush();
+    manager.onData("more");
+    manager.flush();
+    manager.onData("\nafter\n");
+    manager.flush();
+
+    expect(info.semanticBuffer[0]).toBe("x".repeat(1000) + "... [truncated]");
+    expect(info.semanticBuffer).toContain("after");
+
+    manager.dispose();
+  });
+
+  it("truncates a line that reaches the cap only through a continuation", () => {
+    const info = createTerminalInfo();
+    const manager = new SemanticBufferManager(info);
+
+    manager.onData("b".repeat(1000));
+    vi.advanceTimersByTime(100);
+    expect(info.semanticBuffer[0]).toBe("b".repeat(1000));
+
+    manager.onData("cc");
+    vi.advanceTimersByTime(100);
+    manager.onData("dd");
+    vi.advanceTimersByTime(100);
+
+    expect(info.semanticBuffer).toEqual(["b".repeat(1000) + "... [truncated]"]);
+
+    manager.dispose();
+  });
+
+  it("still joins continuations onto short text that ends with the marker", () => {
+    const info = createTerminalInfo();
+    const manager = new SemanticBufferManager(info);
+
+    manager.onData("log... [truncated]");
+    vi.advanceTimersByTime(100);
+    manager.onData(" more\n");
+    vi.advanceTimersByTime(100);
+
+    expect(info.semanticBuffer[0]).toBe("log... [truncated] more");
+
+    manager.dispose();
+  });
+
   it("caps buffer at max lines", () => {
     const info = createTerminalInfo();
     const manager = new SemanticBufferManager(info);

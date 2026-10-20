@@ -8,6 +8,20 @@ import {
 
 const PENDING_SEMANTIC_DATA_MAX_CHARS = 64 * 1024;
 
+function capLine(line: string): string {
+  if (line.length > SEMANTIC_BUFFER_MAX_LINE_LENGTH) {
+    return line.substring(0, SEMANTIC_BUFFER_MAX_LINE_LENGTH) + SEMANTIC_BUFFER_TRUNCATION_MARKER;
+  }
+  return line;
+}
+
+function isTruncatedLine(line: string): boolean {
+  return (
+    line.length === SEMANTIC_BUFFER_MAX_LINE_LENGTH + SEMANTIC_BUFFER_TRUNCATION_MARKER.length &&
+    line.endsWith(SEMANTIC_BUFFER_TRUNCATION_MARKER)
+  );
+}
+
 export class SemanticBufferManager {
   private pendingSemanticData = "";
   private semanticFlushTimer: NodeJS.Timeout | null = null;
@@ -77,20 +91,19 @@ export class SemanticBufferManager {
     const lines = normalized.split("\n");
 
     if (terminal.semanticBuffer.length > 0 && lines.length > 0 && !normalized.startsWith("\n")) {
-      terminal.semanticBuffer[terminal.semanticBuffer.length - 1] += lines[0];
+      const lastIndex = terminal.semanticBuffer.length - 1;
+      const last = terminal.semanticBuffer[lastIndex];
+      // A capped line has already discarded its tail; dropping the continuation keeps it bounded
+      // and stops the next fragment from being joined onto the marker.
+      if (!isTruncatedLine(last)) {
+        terminal.semanticBuffer[lastIndex] = capLine(last + lines[0]);
+      }
       lines.shift();
     }
 
     const processedLines = lines
       .filter((line) => line.length > 0 || terminal.semanticBuffer.length > 0)
-      .map((line) => {
-        if (line.length > SEMANTIC_BUFFER_MAX_LINE_LENGTH) {
-          return (
-            line.substring(0, SEMANTIC_BUFFER_MAX_LINE_LENGTH) + SEMANTIC_BUFFER_TRUNCATION_MARKER
-          );
-        }
-        return line;
-      });
+      .map(capLine);
 
     terminal.semanticBuffer.push(...processedLines.slice(-SEMANTIC_BUFFER_MAX_LINES));
 
