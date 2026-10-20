@@ -285,7 +285,9 @@ export interface NameStatusEntry {
  * exactly; renames and copies carry two path fields.
  */
 export function parseNameStatusZ(output: string): NameStatusEntry[] {
-  const fields = output.split("\0");
+  // Every field is NUL-terminated, so the last split element is the
+  // unterminated remainder of a truncated read and never a whole field.
+  const fields = output.split("\0").slice(0, -1);
   const entries: NameStatusEntry[] = [];
   let i = 0;
   while (i < fields.length) {
@@ -294,11 +296,11 @@ export function parseNameStatusZ(output: string): NameStatusEntry[] {
     if (status[0] === "R" || status[0] === "C") {
       const oldPath = fields[i++];
       const path = fields[i++];
-      if (oldPath === undefined || path === undefined) break;
+      if (!oldPath || !path) break;
       entries.push({ status, path, oldPath });
     } else {
       const path = fields[i++];
-      if (path === undefined) break;
+      if (!path) break;
       entries.push({ status, path });
     }
   }
@@ -311,13 +313,9 @@ export function parseNameStatusZ(output: string): NameStatusEntry[] {
  * old and new paths; its churn is keyed under the new path.
  */
 export function parseNumstatZ(output: string): Map<string, DiffStat> {
-  const fields = output.split("\0");
+  const fields = output.split("\0").slice(0, -1);
   const stats = new Map<string, DiffStat>();
-  const toCount = (raw: string) => {
-    if (raw === "-") return null;
-    const value = Number.parseInt(raw, 10);
-    return Number.isNaN(value) ? null : value;
-  };
+  const toCount = (raw: string) => (/^\d+$/.test(raw) ? Number.parseInt(raw, 10) : null);
   let i = 0;
   while (i < fields.length) {
     const record = fields[i++];
@@ -327,9 +325,9 @@ export function parseNumstatZ(output: string): Map<string, DiffStat> {
     if (secondTab === -1) continue;
     let path = record.slice(secondTab + 1);
     if (path === "") {
-      i++; // old path of a rename
+      const oldPath = fields[i++];
       path = fields[i++] ?? "";
-      if (!path) continue;
+      if (!oldPath || !path) break;
     }
     stats.set(path, {
       insertions: toCount(record.slice(0, firstTab)),

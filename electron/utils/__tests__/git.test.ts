@@ -1698,6 +1698,14 @@ describe("parseNameStatusZ", () => {
   });
 });
 
+describe("parseNameStatusZ truncation", () => {
+  it("drops records cut short at any field boundary", () => {
+    expect(parseNameStatusZ("M\0")).toEqual([]);
+    expect(parseNameStatusZ("M\0a.txt")).toEqual([]);
+    expect(parseNameStatusZ("A\0a.txt\0R100\0old\0")).toEqual([{ status: "A", path: "a.txt" }]);
+  });
+});
+
 describe("parseNumstatZ", () => {
   it("keys churn by exact path, nulls binary counts and reads rename records", () => {
     const output = [
@@ -1715,6 +1723,16 @@ describe("parseNumstatZ", () => {
         ["logo.png", { insertions: null, deletions: null }],
         ["new\tname.txt", { insertions: 2, deletions: 0 }],
       ])
+    );
+  });
+});
+
+describe("parseNumstatZ truncation", () => {
+  it("drops an unterminated or half-read rename and nulls malformed counts", () => {
+    expect(parseNumstatZ("1\t1\ta.txt")).toEqual(new Map());
+    expect(parseNumstatZ(["2\t0\t", "old.txt", ""].join("\0"))).toEqual(new Map());
+    expect(parseNumstatZ(["12oops\t-4\tb.txt", ""].join("\0"))).toEqual(
+      new Map([["b.txt", { insertions: null, deletions: null }]])
     );
   });
 });
