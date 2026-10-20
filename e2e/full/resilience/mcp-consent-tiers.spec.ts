@@ -424,6 +424,8 @@ test.describe.serial("MCP: consent dialogs and project tiers, end to end", () =>
     const again = approvalDialog(ownerPage, "Delete worktree");
     await expect(again).toBeVisible({ timeout: T_LONG });
     await expect(approvalDialog(otherPage, "Delete worktree")).toHaveCount(0);
+    // A window that doesn't know the worktree can only title it generically (#13667).
+    await expect(again).toContainText("mcp-consent-delete");
     // Enabled only once the preview has landed and the destructive cooldown has run.
     const confirm = again.getByRole("button", { name: "Delete worktree", exact: true });
     await expect(confirm).toBeEnabled({ timeout: T_LONG });

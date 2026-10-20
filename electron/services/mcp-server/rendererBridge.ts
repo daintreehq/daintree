@@ -496,11 +496,27 @@ export function createRendererBridge(
    * focus event, so single-window and cold-start behaviour is unchanged — only
    * the multi-window pick moves to the focused window. The module-singleton
    * manager's active view comes last.
+   *
+   * The window Electron reports focused right now goes ahead of the history
+   * (#13667): the history is only as current as the last focus event, and a
+   * call landing just after a dialog closed in the focused window could reach
+   * a window the user never moved to. Read per window rather than through
+   * `getFocusedWindow()`, so a focused DevTools window simply matches nothing.
    */
   function* activeViewCandidates(): Generator<Electron.WebContents> {
     const registry = getRegistry();
     if (registry) {
-      for (const ctx of registry.focusOrder()) {
+      const focusOrder = registry.focusOrder();
+      const focused = focusOrder.find(
+        (ctx) =>
+          !ctx.browserWindow.isDestroyed() &&
+          typeof ctx.browserWindow.isFocused === "function" &&
+          ctx.browserWindow.isFocused()
+      );
+      const ordered = focused
+        ? [focused, ...focusOrder.filter((ctx) => ctx !== focused)]
+        : focusOrder;
+      for (const ctx of ordered) {
         if (ctx.browserWindow.isDestroyed()) continue;
         const webContents = ctx.services.projectViewManager?.getActiveView()?.webContents;
         if (webContents) yield webContents;
