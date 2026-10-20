@@ -1,3 +1,4 @@
+import { useSyncExternalStore } from "react";
 import { HelpSessionController } from "./HelpSessionController";
 
 /**
@@ -16,6 +17,18 @@ import { HelpSessionController } from "./HelpSessionController";
  * which is the same granularity `helpPanelStore` already has.
  */
 const controllers = new Map<number, HelpSessionController>();
+const listeners = new Set<() => void>();
+
+function notifyListeners(): void {
+  for (const listener of listeners) listener();
+}
+
+function subscribeHelpSessionControllers(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
+}
 
 export function acquireHelpSessionController(slot: number): HelpSessionController {
   let controller = controllers.get(slot);
@@ -24,6 +37,26 @@ export function acquireHelpSessionController(slot: number): HelpSessionControlle
     controllers.set(slot, controller);
   }
   return controller;
+}
+
+/**
+ * The lane's controller, for a component that holds it across renders (#13544).
+ *
+ * A bare `acquireHelpSessionController(slot)` in render is memoized by the React
+ * Compiler on `slot` alone, so once the lane is released and the slot reused —
+ * closing the only tab recreates slot 0 — the component keeps the stopped
+ * controller while every call-time acquire mints a fresh one nothing has synced.
+ * Subscribing to releases makes identity follow the registry instead.
+ *
+ * The snapshot only peeks: React reads it synchronously inside the release
+ * notification, and minting there would leave a controller behind for a lane
+ * that is mid-close.
+ */
+export function useHelpSessionController(slot: number): HelpSessionController {
+  const registered = useSyncExternalStore(subscribeHelpSessionControllers, () =>
+    controllers.get(slot)
+  );
+  return registered ?? acquireHelpSessionController(slot);
 }
 
 /**
@@ -39,9 +72,15 @@ export function releaseHelpSessionController(slot: number): void {
   if (!controller) return;
   controllers.delete(slot);
   controller.stop();
+  notifyListeners();
 }
 
 export function __resetHelpSessionControllersForTests(): void {
   for (const controller of controllers.values()) controller.stop();
   controllers.clear();
+  notifyListeners();
+}
+
+export function __hasHelpSessionControllerForTests(slot: number): boolean {
+  return controllers.has(slot);
 }
