@@ -30,6 +30,11 @@ export const LATE_TICK_GAP_MS = HEARTBEAT_INTERVAL_MS * 2;
 // to still hold when a silence that begins just after it reaches MAX_MISSED.
 export const STALL_EVIDENCE_MS = 30_000;
 
+// Below this share of memory available to it, the watchdog's own read counts
+// as pressure (#13636). It covers pressure that builds after main's last
+// sample, while main is too stalled to say so.
+export const LOW_AVAILABLE_MEMORY_RATIO = 0.05;
+
 export interface WatchdogDeps {
   /** Send SIGKILL (or equivalent) to the main process. The watchdog never
    * calls this directly — it's injected so tests can observe and so the
@@ -46,6 +51,11 @@ export interface WatchdogDeps {
    * required (not `Date.now`) because it's immune to wall-clock jumps
    * from NTP adjustments and user time changes. */
   now?: () => number;
+  /** The share of memory available to the watchdog, read at the moment a
+   * silence reaches MAX_MISSED. Null or absent when no trustworthy reading
+   * exists: on macOS the free count leaves out cached pages and reads low on
+   * a healthy machine. Must not spawn — it runs on the kill decision path. */
+  readAvailableMemoryRatio?: () => number | null;
 }
 
 export interface WatchdogMessage {
@@ -73,6 +83,10 @@ export interface WatchdogState {
   mainPressure: boolean | null;
   /** Monotonic timestamp of the last armed tick that arrived late, or null. */
   lastLateTickAt: number | null;
+  /** Monotonic timestamp of the last ping that arrived a full beat late, or
+   * null. A main whose pings slow down before it goes quiet is struggling, as
+   * it does under page-in thrash, rather than wedged (#13636). */
+  lastLatePingAt: number | null;
   /** The current silence reached MAX_MISSED with pressure evidence, so the
    * kill waits for MAX_MISSED_UNDER_PRESSURE. Latched until main is heard
    * from again, so evidence ageing out mid-stall can't pull the deadline in. */
@@ -102,6 +116,7 @@ export function createWatchdog(deps: WatchdogDeps): Watchdog {
     lastWakeTimestamp: 0,
     mainPressure: false,
     lastLateTickAt: null,
+    lastLatePingAt: null,
     killDeferred: false,
   };
   // The runtime starts its interval as it creates the watchdog. Updated on
@@ -109,6 +124,22 @@ export function createWatchdog(deps: WatchdogDeps): Watchdog {
   // the watchdog itself having stalled.
   let lastTickAt = now();
   let killHeld = false;
+  // Null whenever the gap to the next ping would span a disarmed or suspended
+  // stretch, which says nothing about how main is keeping up.
+  let lastPingAt: number | null = null;
+
+  function lowAvailableMemory(): string | null {
+    if (!deps.readAvailableMemoryRatio) return null;
+    let ratio: number | null;
+    try {
+      ratio = deps.readAvailableMemoryRatio();
+    } catch {
+      return null;
+    }
+    if (typeof ratio !== "number" || !Number.isFinite(ratio) || ratio < 0) return null;
+    if (ratio >= LOW_AVAILABLE_MEMORY_RATIO) return null;
+    return `only ${(ratio * 100).toFixed(1)}% of memory is available`;
+  }
 
   function pressureEvidence(t: number): string | null {
     if (state.mainPressure === true) return "main reported memory pressure";
@@ -116,7 +147,10 @@ export function createWatchdog(deps: WatchdogDeps): Watchdog {
     if (state.lastLateTickAt !== null && t - state.lastLateTickAt <= STALL_EVIDENCE_MS) {
       return "the watchdog itself stalled";
     }
-    return null;
+    if (state.lastLatePingAt !== null && t - state.lastLatePingAt <= STALL_EVIDENCE_MS) {
+      return "main's pings were already arriving late";
+    }
+    return lowAvailableMemory();
   }
 
   function tick(): void {
@@ -174,12 +208,17 @@ export function createWatchdog(deps: WatchdogDeps): Watchdog {
     state.killDeferred = false;
     killHeld = false;
     state.isArmed = false;
+    lastPingAt = null;
+    state.lastLatePingAt = null;
   }
 
   function handleMessage(msg: WatchdogMessage | null | undefined): boolean {
     if (!msg || typeof msg.type !== "string") return false;
     switch (msg.type) {
-      case "ping":
+      case "ping": {
+        const t = now();
+        if (lastPingAt !== null && t - lastPingAt >= LATE_TICK_GAP_MS) state.lastLatePingAt = t;
+        lastPingAt = state.isPaused ? null : t;
         if (state.killDeferred) {
           log(
             `[WatchdogHost] Main process responded after ${state.missedBeats} missed beats; deferred kill cancelled.`
@@ -192,8 +231,10 @@ export function createWatchdog(deps: WatchdogDeps): Watchdog {
         state.mainPressure =
           msg.memoryPressure === true ? true : msg.memoryPressure === null ? null : false;
         return true;
+      }
       case "sleep":
         state.isPaused = true;
+        lastPingAt = null;
         state.missedBeats = 0;
         state.killDeferred = false;
         killHeld = false;
@@ -208,9 +249,12 @@ export function createWatchdog(deps: WatchdogDeps): Watchdog {
         // about the machine now.
         lastTickAt = state.lastWakeTimestamp;
         state.lastLateTickAt = null;
+        state.lastLatePingAt = null;
+        lastPingAt = null;
         return true;
       case "dispose":
         state.isArmed = false;
+        lastPingAt = null;
         return true;
       default:
         return false;
@@ -219,9 +263,23 @@ export function createWatchdog(deps: WatchdogDeps): Watchdog {
 
   function disarm(): void {
     state.isArmed = false;
+    lastPingAt = null;
   }
 
   return { state, tick, handleMessage, disarm };
+}
+
+/** The share of memory available, for {@link WatchdogDeps.readAvailableMemoryRatio}.
+ * A positive constraint (a cgroup or job limit) caps the total, but never
+ * beyond physical memory: libuv may report "unlimited" as a huge figure. */
+export function availableMemoryRatio(
+  availableBytes: number,
+  totalBytes: number,
+  constrainedBytes: number
+): number | null {
+  const total = constrainedBytes > 0 ? Math.min(totalBytes, constrainedBytes) : totalBytes;
+  if (!(total > 0) || !Number.isFinite(availableBytes)) return null;
+  return availableBytes / total;
 }
 
 /** Name of the sidecar flag file the watchdog writes synchronously before
