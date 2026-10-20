@@ -371,7 +371,8 @@ export class GitService {
   }
 
   // Reject absolute, NUL-byte, and traversal paths, and return the path in
-  // git object-spec form (forward slashes, even on Windows).
+  // git object-spec form (forward slashes, even on Windows). A backslash is a
+  // separator only on Windows; elsewhere it is a filename byte (#13562).
   private normalizeTreePath(filePath: string): string {
     if (isAbsolute(filePath)) {
       throw new Error("Absolute paths are not allowed");
@@ -380,13 +381,16 @@ export class GitService {
       throw new Error("Path contains null bytes");
     }
 
+    const backslashIsSeparator = sep === "\\";
     const normalizedPath = normalize(filePath);
-    const pathSegments = normalizedPath.split(/[\\/]+/).filter(Boolean);
+    const pathSegments = normalizedPath
+      .split(backslashIsSeparator ? /[\\/]+/ : /\/+/)
+      .filter(Boolean);
     if (pathSegments.includes("..") || normalizedPath.startsWith(sep)) {
       throw new Error("Path traversal detected");
     }
 
-    return normalizedPath.replaceAll("\\", "/");
+    return backslashIsSeparator ? normalizedPath.replaceAll("\\", "/") : normalizedPath;
   }
 
   // Size-probe then read a blob at `<rev>:<path>`. The rev prefix keeps the
@@ -691,7 +695,8 @@ export class GitService {
         git.revparse(["--show-toplevel"]),
       ]);
 
-      const gitRoot = realpathSync(toplevel.trim()).replace(/\\/g, "/");
+      const toSlashes = (p: string) => (sep === "\\" ? p.replace(/\\/g, "/") : p);
+      const gitRoot = toSlashes(realpathSync(toplevel.trim()));
       const rootPrefix = gitRoot.endsWith("/") ? gitRoot : `${gitRoot}/`;
 
       // Build relative-path-keyed numstat map from the numstat output
@@ -700,7 +705,7 @@ export class GitService {
         const numstatByAbsPath = parseNumstat(numstatOutput, gitRoot);
         numstatByRelPath = new Map<string, DiffStat>();
         for (const [absPath, stats] of numstatByAbsPath) {
-          const normalized = absPath.replace(/\\/g, "/");
+          const normalized = toSlashes(absPath);
           const relative = normalized.startsWith(rootPrefix)
             ? normalized.slice(rootPrefix.length)
             : normalized;

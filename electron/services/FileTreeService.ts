@@ -197,7 +197,10 @@ export class FileTreeService {
     }
 
     const normalizedDirPath = path.normalize(dirPath);
-    const normalizedForCheck = normalizedDirPath.replace(/\\/g, "/");
+    // A backslash is a separator only on Windows; elsewhere it is a filename
+    // byte, and rewriting it would open a different folder (#13562).
+    const normalizedForCheck =
+      path.sep === "\\" ? normalizedDirPath.replace(/\\/g, "/") : normalizedDirPath;
     if (
       normalizedForCheck === ".." ||
       normalizedForCheck.startsWith("../") ||
