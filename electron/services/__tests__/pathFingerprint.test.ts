@@ -294,6 +294,133 @@ describe("fingerprintPaths", () => {
     expect(afterHang).toEqual([null, null]);
   });
 
+  describe("wide directories", () => {
+    // Synthetic listings served for one real directory: its realpath and stat
+    // stay genuine, so mtime and count are pinned and only the digest of the
+    // names can differ between samples.
+    let wide: string;
+    let wideRealPath: string;
+
+    beforeEach(async () => {
+      wide = path.join(root, "wide");
+      await fs.mkdir(wide);
+      // `readdir` sees the resolved path — macOS's tmpdir is itself a symlink.
+      wideRealPath = await fs.realpath(wide);
+    });
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    function entry(name: string, isDirectory = false) {
+      return { name, isDirectory: () => isDirectory };
+    }
+
+    function names(count: number) {
+      return Array.from({ length: count }, (_, index) => entry(`file-${index}.ts`));
+    }
+
+    function serve(entries: ReturnType<typeof entry>[], onListed?: () => void) {
+      const realReaddir = fs.readdir;
+      return vi.spyOn(fs, "readdir").mockImplementation((async (
+        target: string,
+        options?: unknown
+      ) => {
+        if (target !== wideRealPath) {
+          return (realReaddir as (t: string, o?: unknown) => Promise<unknown>)(target, options);
+        }
+        onListed?.();
+        return entries;
+      }) as typeof fs.readdir);
+    }
+
+    async function sample(entries: ReturnType<typeof entry>[]) {
+      serve(entries);
+      const [fingerprint] = await fingerprintPaths(root, [wide]);
+      vi.restoreAllMocks();
+      expect(fingerprint).not.toBeNull();
+      return fingerprint;
+    }
+
+    function exhaustEverySlice() {
+      // Every clock read lands past the slice budget, so the digest yields at
+      // each checkpoint regardless of how fast the machine actually hashes.
+      let now = 0;
+      vi.spyOn(performance, "now").mockImplementation(() => (now += 50));
+    }
+
+    async function settleOrder(entries: ReturnType<typeof entry>[]) {
+      // An Immediate queued the moment the listing is handed back can only run
+      // before the fingerprint settles if hashing that listing gave the event
+      // loop a turn: everything after `readdir` is otherwise microtasks.
+      const order: string[] = [];
+      serve(entries, () => setImmediate(() => order.push("event loop")));
+      const [fingerprint] = await fingerprintPaths(root, [wide]);
+      order.push("settled");
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      return { fingerprint, order };
+    }
+
+    it("gives the event loop a turn while hashing a wide listing", async () => {
+      const entries = names(5_000);
+      const unyielded = await sample(entries);
+
+      exhaustEverySlice();
+      const { fingerprint, order } = await settleOrder(entries);
+
+      expect(order).toEqual(["event loop", "settled"]);
+      // Yielding changes when the answer arrives, never what it is.
+      expect(fingerprint).toBe(unyielded);
+    });
+
+    it("hashes a listing narrower than one checkpoint without yielding", async () => {
+      exhaustEverySlice();
+      const { order } = await settleOrder(names(100));
+
+      expect(order).toEqual(["settled", "event loop"]);
+    });
+
+    it("is independent of the order readdir returns entries in", async () => {
+      const entries = [...names(3_000), entry("nested", true)];
+
+      const forward = await sample(entries);
+      const reversed = await sample([...entries].reverse());
+      const shuffled = await sample(
+        entries
+          .filter((_, index) => index % 2 === 1)
+          .concat(entries.filter((_, index) => index % 2 === 0))
+      );
+
+      expect(reversed).toBe(forward);
+      expect(shuffled).toBe(forward);
+    });
+
+    it("moves on any single-entry rename or kind change among near-identical names", async () => {
+      // Same count, same directory mtime, long shared prefixes and one-character
+      // differences: the shapes a weak per-entry hash folds together.
+      const base = names(2_000);
+      const variants = [base];
+      for (const index of [0, 1, 9, 10, 99, 500, 1_023, 1_024, 1_999]) {
+        const swap = (replacement: ReturnType<typeof entry>) =>
+          base.map((item, at) => (at === index ? replacement : item));
+        variants.push(
+          swap(entry(`file-${index}.tsx`)),
+          swap(entry(`file-${index}.t`)),
+          swap(entry(`File-${index}.ts`)),
+          swap(entry(`file-${index + 2_000}.ts`)),
+          swap(entry(`file-${index}.ts`, true)),
+          swap(entry(`file-${index}.ts\u0301`)),
+          swap(entry(`file-${index}.ts\u{1F600}`))
+        );
+      }
+
+      const prints = new Set<string | null>();
+      for (const variant of variants) prints.add(await sample(variant));
+
+      expect(prints.size).toBe(variants.length);
+    });
+  });
+
   it("returns nothing for an empty request without touching the filesystem", async () => {
     expect(await fingerprintPaths(root, [])).toEqual([]);
   });
