@@ -291,10 +291,26 @@ describe("ProjectFileStore adversarial", () => {
     });
   });
 
-  it("a successful quarantine still yields [] and lets the next mutation write", async () => {
-    fsMock.readFile.mockResolvedValueOnce("{ not valid json").mockRejectedValue(
-      Object.assign(new Error("ENOENT"), { code: "ENOENT" })
+  it("a mutation rejected by a failed quarantine does not block a later retry", async () => {
+    fsMock.readFile.mockResolvedValue("{ not valid json");
+    utilsMock.resilientRename.mockRejectedValueOnce(
+      Object.assign(new Error("EBUSY"), { code: "EBUSY" })
     );
+    const recipe = { id: "r1", name: "new", terminals: [], createdAt: 1000 } as TerminalRecipe;
+
+    await expect(store.addRecipe(VALID_ID, recipe)).rejects.toThrow(/could not be moved aside/);
+    expect(utilsMock.resilientAtomicWriteFile).not.toHaveBeenCalled();
+
+    await store.addRecipe(VALID_ID, recipe);
+
+    expect(utilsMock.resilientRename).toHaveBeenCalledTimes(2);
+    expect(utilsMock.resilientAtomicWriteFile).toHaveBeenCalledTimes(1);
+  });
+
+  it("a successful quarantine still yields [] and lets the next mutation write", async () => {
+    fsMock.readFile
+      .mockResolvedValueOnce("{ not valid json")
+      .mockRejectedValue(Object.assign(new Error("ENOENT"), { code: "ENOENT" }));
 
     await store.addRecipe(VALID_ID, {
       id: "r1",
@@ -305,9 +321,7 @@ describe("ProjectFileStore adversarial", () => {
 
     expect(utilsMock.resilientRename).toHaveBeenCalledTimes(1);
     const write = utilsMock.resilientAtomicWriteFile.mock.calls[0];
-    expect(JSON.parse(write[1] as string).recipes.map((r: { id: string }) => r.id)).toEqual([
-      "r1",
-    ]);
+    expect(JSON.parse(write[1] as string).recipes.map((r: { id: string }) => r.id)).toEqual(["r1"]);
   });
 
   it("deleteRecipe filters the target out and writes the remaining recipes in envelope format", async () => {

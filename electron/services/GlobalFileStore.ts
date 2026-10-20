@@ -2,6 +2,7 @@ import type { TerminalRecipe } from "../types/index.js";
 import fs from "fs/promises";
 import path from "path";
 import { resilientRename, resilientAtomicWriteFile } from "../utils/fs.js";
+import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { TerminalRecipeSchema, filterValidTerminalEntries } from "../schemas/ipc.js";
 
 const RECIPES_FILENAME = "recipes.json";
@@ -78,8 +79,9 @@ export class GlobalFileStore {
         await resilientRename(this.recipesPath, quarantinePath);
       } catch (renameError) {
         console.error("[GlobalFileStore] Failed to quarantine recipes:", renameError);
+        const reason = formatErrorMessage(renameError, "rename failed");
         throw new Error(
-          "Global recipes file is unreadable and could not be moved aside; leaving it untouched",
+          `Global recipes file is unreadable and could not be moved aside (${reason}); leaving it untouched`,
           { cause: renameError }
         );
       }
