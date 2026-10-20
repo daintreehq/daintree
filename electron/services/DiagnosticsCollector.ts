@@ -16,6 +16,7 @@ import { getRendererTerminalDiagnosticsSamples } from "./RendererTerminalDiagnos
 import type { HandlerDependencies } from "../ipc/types.js";
 import { cliSpawnTarget } from "../utils/windowsCliSpawn.js";
 import { findWindowsCommand } from "../utils/windowsExecutable.js";
+import { getSanitizedProcessEnv } from "../utils/gitEnv.js";
 import type {
   WhySlowFocusThrottleSnapshot,
   WhySlowMemorySnapshot,
@@ -156,14 +157,15 @@ function truncateDeep(value: unknown): unknown {
 async function runCommand(
   cmd: string,
   args: string[],
-  timeoutMs = SECTION_TIMEOUT_MS
+  timeoutMs = SECTION_TIMEOUT_MS,
+  baseEnv: NodeJS.ProcessEnv = process.env
 ): Promise<string | null> {
   try {
     const target = await cliSpawnTarget(cmd, args);
     const { stdout } = await execFileAsync(target.command, target.args, {
       encoding: "utf8",
       timeout: timeoutMs,
-      env: { ...process.env, ...target.env },
+      env: { ...baseEnv, ...target.env },
       windowsHide: true,
       windowsVerbatimArguments: target.windowsVerbatimArguments,
     });
@@ -352,7 +354,12 @@ async function collectTools() {
       if (!path) return { tool, available: false, path: null, version: null };
 
       // The file just found, so the version probe does not search PATH again.
-      const version = await runCommand(isWindows ? path : tool, ["--version"], 3000);
+      const version = await runCommand(
+        isWindows ? path : tool,
+        ["--version"],
+        3000,
+        tool === "git" ? getSanitizedProcessEnv() : process.env
+      );
       return {
         tool,
         available: true,
@@ -373,10 +380,18 @@ async function collectTools() {
   );
 }
 
+// Reports what Daintree's own git sees, so inherited GIT_DIR/GIT_CONFIG_* are
+// dropped here as they are for every other git the app runs.
 async function collectGit() {
   const result: Record<string, unknown> = {};
+  const env = getSanitizedProcessEnv();
 
-  const configOutput = await runCommand("git", ["config", "--list", "--show-origin"]);
+  const configOutput = await runCommand(
+    "git",
+    ["config", "--list", "--show-origin"],
+    SECTION_TIMEOUT_MS,
+    env
+  );
   if (configOutput) {
     const lines = configOutput.split("\n").filter(Boolean);
     const safeConfig: string[] = [];
@@ -397,7 +412,7 @@ async function collectGit() {
     result.config = { error: "Failed to get git config" };
   }
 
-  const remoteOutput = await runCommand("git", ["remote", "-v"]);
+  const remoteOutput = await runCommand("git", ["remote", "-v"], SECTION_TIMEOUT_MS, env);
   if (remoteOutput) {
     result.remotes = remoteOutput
       .split("\n")
@@ -405,7 +420,7 @@ async function collectGit() {
       .map((line) => sanitizeString(line));
   }
 
-  const versionOutput = await runCommand("git", ["--version"]);
+  const versionOutput = await runCommand("git", ["--version"], SECTION_TIMEOUT_MS, env);
   result.version = versionOutput;
 
   return result;

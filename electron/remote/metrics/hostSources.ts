@@ -19,6 +19,7 @@ import {
   getWorkspaceClientRef,
 } from "../../window/serviceRefs.js";
 import { executableForSpawn } from "../../utils/windowsExecutable.js";
+import { getSanitizedProcessEnv } from "../../utils/gitEnv.js";
 import { createForgeObserver } from "./hostForges.js";
 import type { HostSampleSources, ObservedAgents, SampleReaders } from "./sampler.js";
 
@@ -28,12 +29,16 @@ const COMMAND_TIMEOUT_MS = 2_000;
 const WORKTREE_COUNT_TTL_MS = 30_000;
 const AGENT_CLIS_TTL_MS = 10 * 60_000;
 
-function runCommand(command: string, args: string[]): Promise<string | null> {
+function runCommand(
+  command: string,
+  args: string[],
+  env: NodeJS.ProcessEnv = process.env
+): Promise<string | null> {
   return new Promise((resolve) => {
     execFile(
       command,
       args,
-      { timeout: COMMAND_TIMEOUT_MS, maxBuffer: 256 * 1024, windowsHide: true },
+      { timeout: COMMAND_TIMEOUT_MS, maxBuffer: 256 * 1024, windowsHide: true, env },
       (error, stdout) => resolve(error ? null : String(stdout))
     );
   });
@@ -124,7 +129,12 @@ export async function observeAgents(
 /** Working trees git lists for the repository at `path`, its main one included; null when git can't say. */
 async function gitWorktreeCount(path: string): Promise<number | null> {
   const git = executableForSpawn("git");
-  const out = await runCommand(git, ["-C", path, "worktree", "list", "--porcelain"]);
+  // An inherited GIT_DIR would override -C and count another repository.
+  const out = await runCommand(
+    git,
+    ["-C", path, "worktree", "list", "--porcelain"],
+    getSanitizedProcessEnv()
+  );
   if (out === null) return null;
   const entries = out.split("\n\n").filter((entry) => entry.startsWith("worktree "));
   // A bare main repository has no working tree of its own.

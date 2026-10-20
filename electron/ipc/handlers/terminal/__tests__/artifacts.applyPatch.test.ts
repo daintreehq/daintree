@@ -128,4 +128,25 @@ describe("artifacts applyPatch temp staging", () => {
     expect(result).toEqual({ modifiedFiles: ["a.txt"] });
     expect(await stagedEntries()).toEqual([]);
   });
+
+  it("runs git apply without the inherited GIT_DIR or GIT_INDEX_FILE", async () => {
+    vi.stubEnv("GIT_DIR", "/elsewhere/.git");
+    vi.stubEnv("GIT_INDEX_FILE", "/elsewhere/.git/index");
+    try {
+      execaMock.mockResolvedValue({ stdout: "", stderr: "" });
+
+      await applyPatchHandler()(FAKE_EVENT, { patchContent: patchFor("a.txt"), cwd: repoDir });
+
+      const options = execaMock.mock.calls[0][2] as {
+        env: NodeJS.ProcessEnv;
+        extendEnv: boolean;
+      };
+      expect(options.extendEnv).toBe(false);
+      expect(options.env.GIT_DIR).toBeUndefined();
+      expect(options.env.GIT_INDEX_FILE).toBeUndefined();
+      expect(options.env.PATH).toBe(process.env.PATH);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
 });

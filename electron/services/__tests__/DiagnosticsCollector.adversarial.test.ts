@@ -288,6 +288,43 @@ describe("DiagnosticsCollector adversarial", () => {
     }
   });
 
+  it("GIT_SECTION_IGNORES_INHERITED_GIT_ENV (#13669)", async () => {
+    vi.stubEnv("GIT_DIR", "/elsewhere/.git");
+    vi.stubEnv("GIT_CONFIG_GLOBAL", "/elsewhere/gitconfig");
+    try {
+      await diagnostics.collectDiagnostics(createDeps());
+      const calls = shared.execFileHandler.mock.calls as [
+        string,
+        string[],
+        { env: NodeJS.ProcessEnv },
+        unknown,
+      ][];
+      const gitCalls = calls.filter(
+        ([file, args]) => file === "git" && (args[0] === "config" || args[0] === "remote")
+      );
+      expect(gitCalls.map(([, args]) => args[0]).sort()).toEqual(["config", "remote"]);
+      for (const [, , options] of gitCalls) {
+        expect(options.env.GIT_DIR).toBeUndefined();
+        expect(options.env.GIT_CONFIG_GLOBAL).toBeUndefined();
+        expect(options.env.PATH).toBe(process.env.PATH);
+      }
+      // The tool probe runs by name on POSIX and by the file found on Windows.
+      const probe = (tool: string) =>
+        calls.filter(
+          ([file, args]) =>
+            args[0] === "--version" && (file === tool || file === `C:\\tools\\${tool}.exe`)
+        );
+      const gitProbes = probe("git");
+      expect(gitProbes.length).toBeGreaterThan(0);
+      for (const [, , options] of gitProbes) expect(options.env.GIT_DIR).toBeUndefined();
+      // Other tools keep the environment they inherited.
+      const [nodeProbe] = probe("node");
+      expect(nodeProbe[2].env.GIT_DIR).toBe("/elsewhere/.git");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("TOOL_PROBES_LAUNCH_WINDOWS_SHIMS_AND_REPORT_THE_LAUNCHABLE_PATH", async () => {
     const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
     Object.defineProperty(process, "platform", { value: "win32" });
