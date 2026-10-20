@@ -1,10 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { EventEmitter } from "events";
+import { PassThrough } from "stream";
 import path from "node:path";
 import type { WorkspaceService } from "../WorkspaceService.js";
 import type { WorkspaceHostEvent } from "../../../shared/types/workspace-host.js";
 import {
   GIT_FILE_DIFF_MAX_BYTES,
+  GIT_FILE_DIFF_MAX_PATCH_BYTES,
   GIT_FILE_DIFF_MAX_SOURCE_BYTES,
 } from "../../../shared/config/gitReadLimits.js";
 
@@ -12,6 +14,7 @@ const mockSimpleGit = {
   raw: vi.fn().mockResolvedValue(undefined),
   branch: vi.fn().mockResolvedValue({ current: "main" }),
   diff: vi.fn().mockResolvedValue(""),
+  outputHandler: vi.fn(),
 };
 
 vi.mock("simple-git", () => ({
@@ -406,6 +409,36 @@ describe("WorkspaceService.getFileDiff", () => {
     );
     // The point of the gate: git never buffers the diff of a file this size.
     expect(mockSimpleGit.diff).not.toHaveBeenCalled();
+  });
+
+  it("stops git once a deleted file's patch passes the patch ceiling", async () => {
+    // A deleted file has nothing to stat, so only the output cap can bound it.
+    const { lstat } = await import("fs/promises");
+    vi.mocked(lstat).mockRejectedValueOnce(Object.assign(new Error("ENOENT"), { code: "ENOENT" }));
+    let handler: ((command: string, stdout: PassThrough, stderr: PassThrough) => void) | undefined;
+    mockSimpleGit.outputHandler.mockImplementationOnce((fn) => {
+      handler = fn;
+    });
+    let stdout: PassThrough | undefined;
+    mockSimpleGit.diff.mockImplementationOnce(
+      () =>
+        new Promise((_resolve, reject) => {
+          stdout = new PassThrough();
+          handler?.("git", stdout, new PassThrough());
+          stdout.on("close", () => reject(new Error("Abort signal received")));
+          stdout.write(Buffer.alloc(GIT_FILE_DIFF_MAX_PATCH_BYTES + 1, 0x61));
+        })
+    );
+
+    await service.getFileDiff("req-cap", "/test/repo", "huge-deleted.txt", "deleted");
+
+    expect(stdout?.destroyed).toBe(true);
+    expect(mockSendEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ requestId: "req-cap", diff: "FILE_TOO_LARGE", totalBytes: 0 })
+    );
+    expect(mockSendEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({ error: expect.any(String) })
+    );
   });
 
   it("never windows the BINARY_FILE sentinel", async () => {
