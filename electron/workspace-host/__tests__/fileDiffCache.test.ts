@@ -256,6 +256,37 @@ describe("getFileDiff paging over a real repo", () => {
     await expectRestMatches("link", offset, expectedDiff("link"), { maxBytes: 40 });
   });
 
+  it.skipIf(process.platform === "win32")(
+    "diffs an untracked symlink as its target and recomputes when it is retargeted",
+    async () => {
+      symlinkSync("a.txt", path.join(repo, "link"));
+      const untracked = { status: "untracked", maxBytes: 20 };
+      const first = await page("link", 0, untracked);
+      const second = await page("link", first.nextOffset!, untracked);
+      const get = vi.spyOn(FileDiffCache.prototype, "get");
+      try {
+        await page("link", second.nextOffset!, untracked);
+        expect(get.mock.results.at(-1)?.value).not.toBeNull();
+      } finally {
+        get.mockRestore();
+      }
+      // The same file through another spelling: following the link would see
+      // nothing change.
+      rmSync(path.join(repo, "link"));
+      symlinkSync("./a.txt", path.join(repo, "link"));
+      let rest = "";
+      for (let next: number | null = second.nextOffset!; next !== null;) {
+        const window = await page("link", next, untracked);
+        rest += window.diff;
+        next = window.nextOffset;
+      }
+      const whole = (await page("link", 0, { status: "untracked", maxBytes: 4096 })).diff;
+      expect(whole).toContain("new file mode 120000");
+      expect(whole).toContain("\n+./a.txt\n\\ No newline at end of file");
+      expect(rest).toBe(whole.slice(second.nextOffset!));
+    }
+  );
+
   it("keeps whitespace-insensitive diffs apart from exact ones", async () => {
     writeFileSync(path.join(repo, "a.txt"), content("old").replaceAll(" ", "  ") + "\nextra");
     const first = await page("a.txt", 0, { maxBytes: 40 });

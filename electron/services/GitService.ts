@@ -2,7 +2,7 @@
 import type { SimpleGit, BranchSummary } from "simple-git";
 import { resolve, dirname, normalize, sep, isAbsolute } from "path";
 import { existsSync } from "fs";
-import { readFile, stat } from "fs/promises";
+import { lstat, readFile, readlink } from "fs/promises";
 import { logDebug, logError, logWarn } from "../utils/logger.js";
 import { newFileDiff } from "../utils/newFileDiff.js";
 import type { GitStatus, WorktreeChanges } from "../../shared/types/index.js";
@@ -313,8 +313,10 @@ export class GitService {
     // Git always uses forward slashes in diff output, even on Windows
     const gitPath = normalizedPath.replaceAll("\\", "/");
 
+    // lstat, not stat: a symlink's diff is its target path, so neither the
+    // size nor the readability of what it points at matters.
     try {
-      const stats = await stat(absolutePath);
+      const stats = await lstat(absolutePath);
       if (stats.size > 1024 * 1024) {
         return "FILE_TOO_LARGE";
       }
@@ -324,6 +326,10 @@ export class GitService {
 
     if (status === "untracked" || status === "added") {
       try {
+        if ((await lstat(absolutePath)).isSymbolicLink()) {
+          return newFileDiff(gitPath, await readlink(absolutePath), "120000");
+        }
+
         const buffer = await readFile(absolutePath);
 
         if (this.isBinaryBuffer(buffer)) {

@@ -78,9 +78,13 @@ export class FileDiffCache {
     return [source, cwd, gitPath, status, String(ignoreWhitespace)].join("\u0000");
   }
 
-  /** Freshness of a diff built from the worktree file alone (untracked/added). */
+  /**
+   * Freshness of a diff built from the worktree file alone (untracked/added).
+   * Not followed: a symlink's patch is its target string, and retargeting it
+   * replaces the link entry itself.
+   */
   static fileFreshness(absolutePath: string): Promise<string | null> {
-    return statKey(absolutePath);
+    return statKey(absolutePath, false);
   }
 
   /**

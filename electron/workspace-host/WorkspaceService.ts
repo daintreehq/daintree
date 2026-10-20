@@ -33,7 +33,7 @@ import {
   getGitRecoveryHint,
 } from "../../shared/utils/gitOperationErrors.js";
 import { logError, logWarn } from "../utils/logger.js";
-import { newFileDiff } from "../utils/newFileDiff.js";
+import { newFileDiff, type NewFileMode } from "../utils/newFileDiff.js";
 import { isBinaryDiffOutput } from "../../shared/utils/gitDiffParsing.js";
 import type {
   LifecycleCommandReview,
@@ -456,8 +456,9 @@ function samePath(a: string, b: string): boolean {
 }
 
 /**
- * The bytes an untracked or added file contributes to its diff, as git would
- * show them: a symlink is its target path, never what it points at, and a
+ * The bytes an untracked or added file contributes to its diff, and the mode
+ * git records it with, as git would show them: a symlink is its target path
+ * (mode 120000), never what it points at, and a
  * file reached through a linked folder (a path git itself never lists) is
  * refused. The caller names the path and its status, so neither may turn a
  * diff into a read of something outside the worktree.
@@ -466,7 +467,7 @@ async function readWorktreeFileForDiff(
   cwd: string,
   absolutePath: string,
   readFile: (file: string) => Promise<Buffer>
-): Promise<Buffer> {
+): Promise<{ bytes: Buffer; mode: NewFileMode }> {
   const { lstat, open, readlink, realpath } = await import("fs/promises");
   const { constants } = await import("fs");
   const { dirname, isAbsolute, relative } = await import("path");
@@ -482,8 +483,10 @@ async function readWorktreeFileForDiff(
   };
   await contained();
   const stats = await lstat(absolutePath);
-  if (stats.isSymbolicLink()) return Buffer.from(await readlink(absolutePath), "utf-8");
-  if (stats.isDirectory()) return readFile(absolutePath);
+  if (stats.isSymbolicLink()) {
+    return { bytes: Buffer.from(await readlink(absolutePath), "utf-8"), mode: "120000" };
+  }
+  if (stats.isDirectory()) return { bytes: await readFile(absolutePath), mode: "100644" };
   // The last step can't be a link (it would refuse to open), the descriptor
   // must be the file the contained path still names, and its folder must
   // still be inside: what was read is what was checked.
@@ -495,7 +498,7 @@ async function readWorktreeFileForDiff(
     const opened = await handle.stat();
     if (!opened.isFile() || opened.ino !== stats.ino || opened.dev !== stats.dev) outside();
     await contained();
-    return await handle.readFile();
+    return { bytes: await handle.readFile(), mode: "100644" };
   } finally {
     await handle.close().catch(() => {});
   }
@@ -5494,10 +5497,11 @@ export class WorkspaceService {
       // windowing — the untracked one inlines the file, and git buffers a
       // tracked file's entire diff. The ceiling is 16x the 1MB cliff it
       // replaced, so the "large file, small diff" case that the old gate
-      // wrongly refused now succeeds (#11531).
+      // wrongly refused now succeeds (#11531). lstat, not stat: a symlink's
+      // diff is its target path, whatever size the file it points at is.
       try {
-        const { stat } = await import("fs/promises");
-        const stats = await stat(absolutePath);
+        const { lstat } = await import("fs/promises");
+        const stats = await lstat(absolutePath);
         if (stats.size > GIT_FILE_DIFF_MAX_SOURCE_BYTES) {
           sendSentinel("FILE_TOO_LARGE");
           return;
@@ -5525,15 +5529,16 @@ export class WorkspaceService {
         // Only for `added`: an untracked directory has no index entry, so the
         // tracked diff would come back empty and report NO_CHANGES — which
         // claims something the request cannot know.
-        let buffer: Buffer | null = null;
+        let entry: { bytes: Buffer; mode: NewFileMode } | null = null;
         try {
-          buffer = await readWorktreeFileForDiff(cwd, absolutePath, readFile);
+          entry = await readWorktreeFileForDiff(cwd, absolutePath, readFile);
         } catch (error) {
           const isDirectory = (error as NodeJS.ErrnoException).code === "EISDIR";
           if (!isDirectory || status !== "added") throw error;
         }
 
-        if (buffer !== null) {
+        if (entry !== null) {
+          const buffer = entry.bytes;
           let isBinary = false;
           const checkLength = Math.min(buffer.length, 8192);
           for (let i = 0; i < checkLength; i++) {
@@ -5548,7 +5553,7 @@ export class WorkspaceService {
             return;
           }
 
-          const diff = newFileDiff(gitPath, buffer.toString("utf-8"));
+          const diff = newFileDiff(gitPath, buffer.toString("utf-8"), entry.mode);
 
           serve(diff, fileKey, freshness);
           return;

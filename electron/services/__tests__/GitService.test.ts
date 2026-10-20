@@ -107,6 +107,56 @@ describe("GitService", () => {
     expect(diff).toContain("diff --git");
   });
 
+  describe.skipIf(process.platform === "win32")("new symlinks", () => {
+    it.each(["untracked", "added"] as const)(
+      "diffs a %s symlink as its link target, not the target's contents",
+      async (status) => {
+        await fs.writeFile(path.join(tempDir, "a.txt"), "committed a\n", "utf8");
+        await fs.symlink("a.txt", path.join(tempDir, "link.txt"));
+
+        const service = new GitService(tempDir);
+        const diff = await service.getFileDiff("link.txt", status);
+
+        expect(diff).toBe(
+          "diff --git a/link.txt b/link.txt\nnew file mode 120000\n--- /dev/null\n+++ b/link.txt\n@@ -0,0 +1,1 @@\n+a.txt\n\\ No newline at end of file"
+        );
+      }
+    );
+
+    it("diffs a broken symlink", async () => {
+      await fs.symlink("missing/target.txt", path.join(tempDir, "dangling"));
+
+      const service = new GitService(tempDir);
+      const diff = await service.getFileDiff("dangling", "untracked");
+
+      expect(diff).toContain("new file mode 120000");
+      expect(diff).toContain("\n+missing/target.txt\n");
+    });
+
+    it("does not size or binary-check a symlink by its target", async () => {
+      const big = Buffer.alloc(2 * 1024 * 1024, 0);
+      await fs.writeFile(path.join(tempDir, "big.bin"), big);
+      await fs.symlink("big.bin", path.join(tempDir, "big-link"));
+
+      const service = new GitService(tempDir);
+      const diff = await service.getFileDiff("big-link", "added");
+
+      expect(diff).toContain("new file mode 120000");
+      expect(diff).toContain("\n+big.bin\n");
+    });
+
+    it("does not binary-check a symlink by a small binary target", async () => {
+      await fs.writeFile(path.join(tempDir, "blob.bin"), Buffer.from([0x00, 0xff, 0x00]));
+      await fs.symlink("blob.bin", path.join(tempDir, "blob-link"));
+
+      const service = new GitService(tempDir);
+      const diff = await service.getFileDiff("blob-link", "untracked");
+
+      expect(diff).toContain("new file mode 120000");
+      expect(diff).toContain("\n+blob.bin\n");
+    });
+  });
+
   it("returns the diff for a tracked file whose added lines quote the binary marker", async () => {
     const trackedDiff = `diff --git a/README.md b/README.md
 index 1a2b3c4..5d6e7f8 100644

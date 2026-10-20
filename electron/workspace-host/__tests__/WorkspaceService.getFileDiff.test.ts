@@ -231,21 +231,57 @@ describe("WorkspaceService.getFileDiff", () => {
     expect(mockSimpleGit.diff).toHaveBeenCalledWith(expect.arrayContaining(["--submodule=short"]));
   });
 
-  it("shows an untracked symlink as its target, never what it points at", async () => {
-    const { lstat, readlink, readFile } = await import("fs/promises");
-    vi.mocked(lstat).mockResolvedValueOnce({
-      isSymbolicLink: () => true,
-      isDirectory: () => false,
-    } as never);
-    vi.mocked(readlink).mockResolvedValueOnce("/home/me/.config/Daintree/config.json" as never);
+  it.each(["untracked", "added"])(
+    "shows an %s symlink as its target with git's symlink mode, never what it points at",
+    async (status) => {
+      const { lstat, readlink, readFile } = await import("fs/promises");
+      const link = { isSymbolicLink: () => true, isDirectory: () => false, size: 37 };
+      // Once for the size gate, once for the read.
+      vi.mocked(lstat)
+        .mockResolvedValueOnce(link as never)
+        .mockResolvedValueOnce(link as never);
+      vi.mocked(readlink).mockResolvedValueOnce("/home/me/.config/Daintree/config.json" as never);
 
-    await service.getFileDiff("req-link", "/test/repo", "notes/secret", "untracked");
+      await service.getFileDiff("req-link", "/test/repo", "notes/secret", status);
+
+      const event = mockSendEvent.mock.calls
+        .map((call) => call[0])
+        .find((e) => e.requestId === "req-link");
+      expect(event.diff).toContain("new file mode 120000");
+      expect(event.diff).toContain(
+        "+/home/me/.config/Daintree/config.json\n\\ No newline at end of file"
+      );
+      expect(readFile).not.toHaveBeenCalled();
+    }
+  );
+
+  it("sizes a symlink by its own entry, not the file it points at", async () => {
+    const { lstat, stat } = await import("fs/promises");
+    vi.mocked(stat).mockResolvedValue({ size: GIT_FILE_DIFF_MAX_SOURCE_BYTES + 1 } as never);
+    const link = { isSymbolicLink: () => true, isDirectory: () => false, size: 7 };
+    vi.mocked(lstat)
+      .mockResolvedValueOnce(link as never)
+      .mockResolvedValueOnce(link as never);
+
+    try {
+      await service.getFileDiff("req-big-link", "/test/repo", "big-link", "untracked");
+    } finally {
+      vi.mocked(stat).mockRejectedValue(new Error("ENOENT"));
+    }
 
     const event = mockSendEvent.mock.calls
       .map((call) => call[0])
-      .find((e) => e.requestId === "req-link");
-    expect(event.diff).toContain("+/home/me/.config/Daintree/config.json");
-    expect(readFile).not.toHaveBeenCalled();
+      .find((e) => e.requestId === "req-big-link");
+    expect(event.diff).toContain("new file mode 120000");
+  });
+
+  it("keeps the regular-file mode for an untracked file", async () => {
+    await service.getFileDiff("req-mode", "/test/repo", "notes.txt", "untracked");
+
+    const event = mockSendEvent.mock.calls
+      .map((call) => call[0])
+      .find((e) => e.requestId === "req-mode");
+    expect(event.diff).toContain("new file mode 100644");
   });
 
   it("refuses a file the caller names through a linked folder", async () => {
@@ -339,8 +375,8 @@ describe("WorkspaceService.getFileDiff", () => {
   });
 
   it("refuses a file past the source ceiling without reading it or diffing", async () => {
-    const { stat, readFile } = await import("fs/promises");
-    vi.mocked(stat).mockResolvedValueOnce({ size: GIT_FILE_DIFF_MAX_SOURCE_BYTES + 1 } as never);
+    const { lstat, readFile } = await import("fs/promises");
+    vi.mocked(lstat).mockResolvedValueOnce({ size: GIT_FILE_DIFF_MAX_SOURCE_BYTES + 1 } as never);
 
     await service.getFileDiff("req-7", "/test/repo", "huge.txt", "untracked");
 
@@ -360,8 +396,8 @@ describe("WorkspaceService.getFileDiff", () => {
   });
 
   it("applies the source ceiling to tracked files too, bounding peak memory", async () => {
-    const { stat } = await import("fs/promises");
-    vi.mocked(stat).mockResolvedValueOnce({ size: GIT_FILE_DIFF_MAX_SOURCE_BYTES + 1 } as never);
+    const { lstat } = await import("fs/promises");
+    vi.mocked(lstat).mockResolvedValueOnce({ size: GIT_FILE_DIFF_MAX_SOURCE_BYTES + 1 } as never);
 
     await service.getFileDiff("req-16", "/test/repo", "huge.ts", "modified");
 
@@ -443,8 +479,8 @@ index 1a2b3c4..5d6e7f8 100644
   });
 
   it("diffs a large file with a small diff, which the old 1MB gate refused", async () => {
-    const { stat } = await import("fs/promises");
-    vi.mocked(stat).mockResolvedValueOnce({
+    const { lstat } = await import("fs/promises");
+    vi.mocked(lstat).mockResolvedValueOnce({
       size: GIT_FILE_DIFF_MAX_SOURCE_BYTES / 2,
     } as never);
     mockSimpleGit.diff.mockResolvedValueOnce("diff --git a/big.ts b/big.ts\n+one line");
