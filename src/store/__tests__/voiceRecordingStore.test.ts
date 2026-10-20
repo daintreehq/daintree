@@ -470,6 +470,63 @@ describe("voiceRecordingStore cross-view write merge (#11351)", () => {
     expect(titles).toEqual(["Mine", "Sib"]); // sibling target not clobbered
   });
 
+  it("stops writing unchanged recent targets once a sustained session settles (#13601)", async () => {
+    const backing = installLocalStorage({});
+    let writes = 0;
+    const storage = globalThis.localStorage;
+    const setItem = storage.setItem.bind(storage);
+    storage.setItem = (key: string, value: string) => {
+      writes += 1;
+      setItem(key, value);
+    };
+    const { useVoiceRecordingStore: store } = await import("../voiceRecordingStore");
+    vi.advanceTimersByTime(400);
+
+    vi.setSystemTime(3000);
+    store
+      .getState()
+      .recordRecentTarget({ panelId: "p1", panelTitle: "Mine", worktreeId: "wt-mine" });
+    vi.advanceTimersByTime(400);
+    const persisted = readTargets(backing);
+
+    // Ten seconds of animation-frame audio levels plus a per-second timer.
+    const before = writes;
+    for (let frame = 0; frame < 600; frame += 1) {
+      store.getState().setAudioLevel((frame % 10) / 10);
+      if (frame % 60 === 0) store.getState().setElapsedSeconds(frame / 60);
+      vi.advanceTimersByTime(16);
+    }
+    vi.advanceTimersByTime(400);
+    const sessionWrites = writes - before;
+
+    // Once the merge reaches its fixed point (at most a couple of flushes),
+    // the rest of the session writes nothing.
+    expect(sessionWrites).toBeLessThanOrEqual(4);
+    expect(readTargets(backing)).toEqual(persisted);
+
+    const settled = writes;
+    for (let frame = 0; frame < 600; frame += 1) {
+      store.getState().setAudioLevel((frame % 10) / 10);
+      vi.advanceTimersByTime(500);
+    }
+    expect(writes).toBe(settled);
+
+    // A sibling's target still lands through the next transient flush.
+    writeDisk(backing, [
+      ...readTargets(backing),
+      { panelTitle: "Sib", worktreeId: "wt-sib", lastUsedAt: 9000 },
+    ]);
+    store.getState().setAudioLevel(0.25);
+    vi.advanceTimersByTime(400);
+    expect(writes).toBeGreaterThan(settled);
+    expect(
+      readTargets(backing)
+        .map((t) => t.panelTitle)
+        .sort()
+    ).toEqual(["Mine", "Sib"]);
+    expect(backing.get(`${STORAGE_KEY}.__bak`)).toBe(backing.get(STORAGE_KEY));
+  });
+
   it("dedupes a same-identity target to the newer entry and keeps other sibling targets", async () => {
     const backing = installLocalStorage({});
     const { useVoiceRecordingStore: store } = await import("../voiceRecordingStore");

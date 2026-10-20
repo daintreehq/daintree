@@ -368,104 +368,125 @@ function readPersistedValue<T>(
   }
 }
 
-export function createSafeJSONStorage<T>(options?: SafeJSONStorageOptions<T>): PersistStorage<T> {
-  const raw = createResilientStorage(resolveLocalStorage());
+/**
+ * The write half shared by both adapters, so the debounced flush and the plain
+ * `setItem` dedup, merge and back up identically (issue #13601). `write` lands
+ * one snapshot; `read` records a hydration read as the merge baseline; `forget`
+ * drops everything remembered for a key.
+ */
+function createPersistWriter<T>(
+  raw: ResilientStorage,
+  mergeOnWrite: PersistWriteMerge<T> | undefined
+) {
   const lastWritten = new Map<string, string>();
-  const mergeOnWrite = options?.mergeOnWrite;
   // What this writer last knew, per key — its hydration read or last durable
   // write. Feeds the three-way merge so a stale snapshot can't clobber a
   // sibling view (issue #11351). Only tracked when a merger is configured.
   const baselines = new Map<string, StorageValue<T> | null>();
   // The last merge write this writer landed, per key: its serialized incoming
   // snapshot, the exact bytes it wrote, whether those bytes were backed up, and
-  // whether that write was a verified fixed point (see setItem). Only tracked
+  // whether that write was a verified fixed point (see write). Only tracked
   // with a merger.
   const lastMergeWrite = new Map<
     string,
     { incoming: string; written: string; backedUp: boolean; settled: boolean }
   >();
 
-  return {
-    getItem: (name) => {
-      const parsed = readPersistedValue<T>(raw, name);
-      if (mergeOnWrite) {
-        baselines.set(name, parsed);
-        lastMergeWrite.delete(name);
-      }
-      return parsed;
-    },
-    setItem: (name, value) => {
-      if (mergeOnWrite) {
-        // Zustand calls setItem after every set(), including no-op and
-        // transient-field sets, so most calls repeat the last snapshot. We must
-        // NOT dedup on the incoming value or the merged output alone: identical
-        // `value`s can merge differently as the shared disk changes, and
-        // different disk states can merge to the same bytes (e.g. re-applying a
-        // deletion the disk resurrected). Nor is one write enough to reach a
-        // fixed point — a merger may resolve a baseline version mismatch by
-        // deferring to disk, then apply the writer's own values on the next,
-        // identical write. So a repeat is skipped only once a full merge has
-        // already shown that merging this exact snapshot (as both baseline and
-        // incoming) against these exact disk bytes reproduces them, and the
-        // primary and backup still hold those bytes. Mergers are pure, so the
-        // skipped write would have rewritten identical bytes.
-        const incoming = JSON.stringify(value);
-        const onDiskRaw = raw.getItem(name);
-        const last = lastMergeWrite.get(name);
-        if (
-          last?.settled &&
-          last.incoming === incoming &&
-          last.written === onDiskRaw &&
-          (!last.backedUp || raw.readBackup(name) === last.written)
-        ) {
-          return;
-        }
-        const merged = mergeOnWrite({
-          baseline: baselines.get(name) ?? null,
-          onDisk: readPersistedValue<T>(raw, name, onDiskRaw),
-          incoming: value,
-        });
-        const serialized = JSON.stringify(merged);
-        const result = raw.setItem(name, serialized);
-        // Only advance the backup when the primary write actually reached durable
-        // storage (see the debounced flush for the full rationale).
-        if (result === "durable") raw.writeBackup(name, serialized);
-        // Advance the baseline to the writer's own snapshot (never the merged
-        // result, which may hold sibling-only keys this view never took into
-        // memory). A transient quota failure keeps the old baseline so the next
-        // retry still merges correctly.
-        if (result !== "quota") {
-          baselines.set(name, value);
-          lastMergeWrite.set(name, {
-            incoming,
-            written: serialized,
-            backedUp: result === "durable",
-            // The baseline was already this snapshot and the merge left the
-            // disk bytes unchanged: repeating it is a no-op.
-            settled: last?.incoming === incoming && serialized === onDiskRaw,
-          });
-        } else {
-          lastMergeWrite.delete(name);
-        }
+  const write = (name: string, value: StorageValue<T>, serializedValue?: string): void => {
+    if (mergeOnWrite) {
+      // Zustand calls setItem after every set(), including no-op and
+      // transient-field sets, so most calls repeat the last snapshot. We must
+      // NOT dedup on the incoming value or the merged output alone: identical
+      // `value`s can merge differently as the shared disk changes, and
+      // different disk states can merge to the same bytes (e.g. re-applying a
+      // deletion the disk resurrected). Nor is one write enough to reach a
+      // fixed point — a merger may resolve a baseline version mismatch by
+      // deferring to disk, then apply the writer's own values on the next,
+      // identical write. So a repeat is skipped only once a full merge has
+      // already shown that merging this exact snapshot (as both baseline and
+      // incoming) against these exact disk bytes reproduces them, and the
+      // primary and backup still hold those bytes. Mergers are pure, so the
+      // skipped write would have rewritten identical bytes.
+      const incoming = serializedValue ?? JSON.stringify(value);
+      const onDiskRaw = raw.getItem(name);
+      const last = lastMergeWrite.get(name);
+      if (
+        last?.settled &&
+        last.incoming === incoming &&
+        last.written === onDiskRaw &&
+        (!last.backedUp || raw.readBackup(name) === last.written)
+      ) {
         return;
       }
-      const serialized = JSON.stringify(value);
-      if (lastWritten.get(name) === serialized) return;
+      const merged = mergeOnWrite({
+        baseline: baselines.get(name) ?? null,
+        onDisk: readPersistedValue<T>(raw, name, onDiskRaw),
+        incoming: value,
+      });
+      const serialized = JSON.stringify(merged);
+      const result = raw.setItem(name, serialized);
       // Only advance the backup when the primary write actually reached durable
       // storage. On a quota failure the primary keeps its old value, so writing
       // a newer backup would leave the two inconsistent and recover stale state.
-      const result = raw.setItem(name, serialized);
-      if (result === "durable") {
-        lastWritten.set(name, serialized);
-        raw.writeBackup(name, serialized);
-      } else if (result === "memory") {
-        lastWritten.set(name, serialized);
+      if (result === "durable") raw.writeBackup(name, serialized);
+      // Advance the baseline to the writer's own snapshot (never the merged
+      // result, which may hold sibling-only keys this view never took into
+      // memory). A transient quota failure keeps the old baseline so the next
+      // retry still merges correctly.
+      if (result !== "quota") {
+        baselines.set(name, value);
+        lastMergeWrite.set(name, {
+          incoming,
+          written: serialized,
+          backedUp: result === "durable",
+          // The baseline was already this snapshot and the merge left the
+          // disk bytes unchanged: repeating it is a no-op.
+          settled: last?.incoming === incoming && serialized === onDiskRaw,
+        });
+      } else {
+        lastMergeWrite.delete(name);
       }
+      return;
+    }
+    const serialized = serializedValue ?? JSON.stringify(value);
+    if (lastWritten.get(name) === serialized) return;
+    const result = raw.setItem(name, serialized);
+    if (result === "durable") {
+      lastWritten.set(name, serialized);
+      raw.writeBackup(name, serialized);
+    } else if (result === "memory") {
+      lastWritten.set(name, serialized);
+    }
+  };
+
+  return {
+    write,
+    read: (name: string, parsed: StorageValue<T> | null): void => {
+      if (!mergeOnWrite) return;
+      baselines.set(name, parsed);
+      lastMergeWrite.delete(name);
     },
-    removeItem: (name) => {
+    forget: (name: string): void => {
       lastWritten.delete(name);
       baselines.delete(name);
       lastMergeWrite.delete(name);
+    },
+  };
+}
+
+export function createSafeJSONStorage<T>(options?: SafeJSONStorageOptions<T>): PersistStorage<T> {
+  const raw = createResilientStorage(resolveLocalStorage());
+  const writer = createPersistWriter(raw, options?.mergeOnWrite);
+
+  return {
+    getItem: (name) => {
+      const parsed = readPersistedValue<T>(raw, name);
+      writer.read(name, parsed);
+      return parsed;
+    },
+    setItem: (name, value) => writer.write(name, value),
+    removeItem: (name) => {
+      writer.forget(name);
       raw.removeItem(name);
       raw.removeBackup(name);
     },
@@ -477,49 +498,31 @@ export function createSafeJSONStorage<T>(options?: SafeJSONStorageOptions<T>): P
  * through a trailing-edge debounce. Reads stay synchronous so hydration is
  * unaffected; `removeItem` cancels any pending write for the same key so a
  * `clearAll` followed shortly by a tear-down can't be silently re-populated by
- * a stale write timer.
+ * a stale write timer. Flushes share the plain adapter's write path, so a
+ * snapshot that already landed is not rewritten by a later identical flush.
  */
 export function createDebouncedSafeJSONStorage<T>(
   delayMs: number,
   options?: SafeJSONStorageOptions<T>
 ): PersistStorage<T> {
   const raw = createResilientStorage(resolveLocalStorage());
+  const writer = createPersistWriter(raw, options?.mergeOnWrite);
   // Retain the typed incoming value (not just its serialized form) so a
   // merge-enabled flush can reconcile it against the freshest disk state read
-  // at flush time. `serialized` is kept purely to coalesce identical enqueues.
+  // at flush time (issue #11351). `serialized` coalesces identical enqueues.
   const pending = new Map<
     string,
     { timer: ReturnType<typeof setTimeout>; value: StorageValue<T>; serialized: string }
   >();
-  const mergeOnWrite = options?.mergeOnWrite;
-  const baselines = new Map<string, StorageValue<T> | null>();
 
   const flush = (name: string): void => {
     const entry = pending.get(name);
     if (!entry) return;
+    // A read-triggered flush must disarm its timer, or the stale callback would
+    // later flush a newer enqueue before its own debounce window elapsed.
+    clearTimeout(entry.timer);
     pending.delete(name);
-    // Merge against disk at flush time — not enqueue time — so a sibling view's
-    // write that landed during the debounce window is preserved (issue #11351).
-    const toWrite = mergeOnWrite
-      ? mergeOnWrite({
-          baseline: baselines.get(name) ?? null,
-          onDisk: readPersistedValue<T>(raw, name),
-          incoming: entry.value,
-        })
-      : entry.value;
-    const serialized = mergeOnWrite ? JSON.stringify(toWrite) : entry.serialized;
-    // Only advance the backup when the primary write actually reached durable
-    // storage. On a quota failure the primary keeps its old value, so writing
-    // a newer backup would leave the two inconsistent and recover stale state.
-    const result = raw.setItem(name, serialized);
-    if (result === "durable") {
-      raw.writeBackup(name, serialized);
-    }
-    // Advance to the writer's own snapshot (never the merged result) once the
-    // write landed; a transient quota failure keeps the old baseline.
-    if (mergeOnWrite && result !== "quota") {
-      baselines.set(name, entry.value);
-    }
+    writer.write(name, entry.value, entry.serialized);
   };
 
   return {
@@ -527,7 +530,7 @@ export function createDebouncedSafeJSONStorage<T>(
       // Flush any pending write so reads-after-writes are coherent.
       flush(name);
       const parsed = readPersistedValue<T>(raw, name);
-      if (mergeOnWrite) baselines.set(name, parsed);
+      writer.read(name, parsed);
       return parsed;
     },
     setItem: (name, value) => {
@@ -544,7 +547,7 @@ export function createDebouncedSafeJSONStorage<T>(
         clearTimeout(existing.timer);
         pending.delete(name);
       }
-      baselines.delete(name);
+      writer.forget(name);
       raw.removeItem(name);
       raw.removeBackup(name);
     },
