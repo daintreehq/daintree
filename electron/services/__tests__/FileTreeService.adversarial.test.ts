@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Stats } from "node:fs";
 import * as path from "node:path";
-import { FileTreeService } from "../FileTreeService.js";
+import { FILE_TREE_METADATA_CONCURRENCY, FileTreeService } from "../FileTreeService.js";
 
 const shared = vi.hoisted(() => ({
   realpath: vi.fn(),
@@ -74,6 +74,53 @@ function deferred<T>() {
     reject = rej;
   });
   return { promise, resolve, reject };
+}
+
+// Every `lstat` parks until the test releases it, so the number of listing
+// operations in flight at once is observable rather than inferred from timing.
+function gateLstat() {
+  const parked = new Map<string, { release: () => void; fail: () => void }>();
+  let active = 0;
+  let peak = 0;
+  shared.lstat.mockImplementation(
+    (target: string) =>
+      new Promise<MockStats>((resolve, reject) => {
+        active += 1;
+        peak = Math.max(peak, active);
+        const settle = () => {
+          active -= 1;
+          parked.delete(target);
+        };
+        parked.set(target, {
+          release: () => {
+            settle();
+            resolve(createStats({ size: 1 }));
+          },
+          fail: () => {
+            settle();
+            reject(eacces("EACCES: permission denied"));
+          },
+        });
+      })
+  );
+  return { parked, active: () => active, peak: () => peak };
+}
+
+const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
+
+async function drain(gate: ReturnType<typeof gateLstat>, failing = new Set<string>()) {
+  await flush();
+  while (gate.parked.size > 0) {
+    for (const [target, op] of [...gate.parked]) {
+      if (failing.has(target)) op.fail();
+      else op.release();
+    }
+    await flush();
+  }
+}
+
+function files(count: number) {
+  return Array.from({ length: count }, (_, i) => d(`f${i}.txt`));
 }
 
 describe("FileTreeService adversarial", () => {
@@ -303,5 +350,92 @@ describe("FileTreeService adversarial", () => {
     await expect(service.getFileTree("/repo")).resolves.toEqual([]);
 
     expect(shared.realpath).toHaveBeenCalledTimes(4);
+  });
+  it("WIDE_DIRECTORY_METADATA_FANOUT_IS_BOUNDED", async () => {
+    // One `lstat` per entry used to start at once: 10,000 entries meant 10,000
+    // pending filesystem requests queued ahead of every other fs call (#13600).
+    shared.readdir.mockResolvedValueOnce(files(10_000));
+    const gate = gateLstat();
+
+    const listing = service.getFileTree("/repo");
+    await flush();
+    expect(gate.active()).toBe(FILE_TREE_METADATA_CONCURRENCY);
+
+    await drain(gate);
+    const nodes = await listing;
+
+    expect(gate.peak()).toBe(FILE_TREE_METADATA_CONCURRENCY);
+    expect(nodes).toHaveLength(10_000);
+    expect(new Set(nodes.map((node) => node.name)).size).toBe(10_000);
+    expect(nodes.slice(0, 3).map((node) => node.name)).toEqual(["f0.txt", "f1.txt", "f2.txt"]);
+    expect(nodes.at(-1)?.name).toBe("f9999.txt");
+  });
+
+  it("FREED_SLOT_STARTS_THE_NEXT_ENTRY_WITHOUT_WAITING_FOR_ITS_BATCH", async () => {
+    // A batch-of-N implementation would also cap the fan-out, but one slow
+    // entry would then stall the other N-1 slots behind it.
+    const entries = files(FILE_TREE_METADATA_CONCURRENCY * 2 + 3);
+    shared.readdir.mockResolvedValueOnce(entries);
+    const gate = gateLstat();
+
+    const listing = service.getFileTree("/repo");
+    await flush();
+    gate.parked.get(path.resolve("/repo", "f3.txt"))?.release();
+    await flush();
+
+    expect(gate.active()).toBe(FILE_TREE_METADATA_CONCURRENCY);
+    expect(shared.lstat).toHaveBeenCalledTimes(FILE_TREE_METADATA_CONCURRENCY + 1);
+    expect(shared.lstat).toHaveBeenLastCalledWith(
+      path.resolve("/repo", `f${FILE_TREE_METADATA_CONCURRENCY}.txt`)
+    );
+
+    await drain(gate);
+    await expect(listing).resolves.toHaveLength(entries.length);
+  });
+
+  it("FAILURE_PAST_THE_FIRST_WINDOW_DROPS_ONLY_THAT_ENTRY", async () => {
+    const count = FILE_TREE_METADATA_CONCURRENCY * 3;
+    const failingName = `f${count - 2}.txt`;
+    shared.readdir.mockResolvedValueOnce(files(count));
+    const gate = gateLstat();
+
+    const listing = service.getFileTree("/repo");
+    await drain(gate, new Set([path.resolve("/repo", failingName)]));
+    const names = (await listing).map((node) => node.name);
+
+    expect(names).toHaveLength(count - 1);
+    expect(names).not.toContain(failingName);
+    expect(names).toContain(`f${count - 1}.txt`);
+  });
+
+  it("SLOW_SYMLINK_RESOLUTION_HOLDS_ITS_SLOT", async () => {
+    // A link's slot covers its whole read (`lstat`, `readlink`, `realpath`,
+    // target `lstat`), not just the first call, or slow link targets would
+    // pile up unbounded behind a fast first `lstat`.
+    const count = FILE_TREE_METADATA_CONCURRENCY + 4;
+    shared.readdir.mockResolvedValueOnce(
+      Array.from({ length: count }, (_, i) => d(`link${i}`, { symlink: true }))
+    );
+    shared.lstat.mockImplementation(async () => createStats({ isSymbolicLink: true, size: 7 }));
+    const readlinks: Array<() => void> = [];
+    shared.readlink.mockImplementation(
+      () => new Promise<string>((resolve) => readlinks.push(() => resolve("./target")))
+    );
+
+    const listing = service.getFileTree("/repo");
+    await flush();
+
+    expect(shared.readlink).toHaveBeenCalledTimes(FILE_TREE_METADATA_CONCURRENCY);
+    const firstWindow = new Set(
+      Array.from({ length: FILE_TREE_METADATA_CONCURRENCY }, (_, i) =>
+        path.resolve("/repo", `link${i}`)
+      )
+    );
+    for (const [target] of shared.lstat.mock.calls) expect(firstWindow).toContain(target);
+
+    while ((await Promise.race([listing.then(() => true), flush().then(() => false)])) === false) {
+      readlinks.splice(0).forEach((release) => release());
+    }
+    await expect(listing).resolves.toHaveLength(count);
   });
 });
