@@ -409,7 +409,7 @@ export function WorktreeSettingsTab() {
         <SettingsGroup>
           <SettingsSelect
             label="Close leftover terminals"
-            description="Leftover terminals move to trash when the timer ends. The timer only counts down while the project is open."
+            description="Leftover terminals move to trash when the timer ends. The timer runs five times slower while the project isn't on screen."
             controlWidth="wide"
             value={String(cleanupSeconds)}
             onValueChange={handleCleanupChange}

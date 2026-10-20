@@ -120,8 +120,9 @@ export interface DeletedWorktree {
    * holds, and fires it — nothing else writes this.
    *
    * A row is recorded UNARMED and the sweep arms it on its first tick with the
-   * view awake, so a project cached at deletion time is never charged for the
-   * wall time it spent frozen (#11259).
+   * view awake, charging any time since `deletedAt` the view spent cached or
+   * hidden at the slowed unobserved rate rather than in real time (#11259,
+   * #13538).
    */
   expiresAt: number | null;
   /**
@@ -203,9 +204,9 @@ export function createDeletedWorktreeRecord(
     ...(metadata?.gitDir ? { gitDir: metadata.gitDir } : {}),
     deletedAt: Date.now(),
     // Recorded UNARMED: the sweep arms it on its first tick with the view
-    // awake, and only ever advances across awake seconds. A wall-clock
-    // deadline stamped here would come back already spent for a project that
-    // was cached at deletion time, with no window to rescue anything (#11259).
+    // awake, charging unobserved time at the slowed rate. A wall-clock
+    // deadline stamped here would spend that time in real time instead, and
+    // the sweep cannot write deadlines for a view nobody can see (#11259).
     expiresAt: null,
     holdReason: null,
     pinnedBeforeWorktreeId: getPinnedDeletedWorktreeAnchorId(worktreeId),
