@@ -361,6 +361,41 @@ describe("usePollingLifecycle", () => {
       hook.unmount();
     });
 
+    it("ignores direct scheduleNextPoll calls while a fetch chain is running", async () => {
+      const first = createDeferred<void>();
+      const contexts: TestFetchContext[] = [];
+      const fetchFn = vi.fn().mockImplementation(async (ctx: TestFetchContext) => {
+        contexts.push(ctx);
+        if (contexts.length === 1) await first.promise;
+      });
+      const { hook } = setupHook({ fetchFn, calculateNextInterval: () => 20 });
+
+      await waitFor(() => {
+        expect(fetchFn).toHaveBeenCalledTimes(1);
+      });
+
+      // e.g. a rate-limit park or visibility-hidden rescheduling mid-fetch.
+      await act(async () => {
+        hook.result.current.scheduleNextPoll();
+        await new Promise((resolve) => setTimeout(resolve, SEVERAL_POLL_INTERVALS_MS));
+      });
+
+      expect(fetchFn).toHaveBeenCalledTimes(1);
+      expect(contexts[0]?.isInvalidated()).toBe(false);
+
+      await act(async () => {
+        first.resolve();
+      });
+
+      // The chain's own tail arms polling once it settles.
+      await waitFor(() => {
+        expect(fetchFn.mock.calls.length).toBeGreaterThanOrEqual(2);
+      });
+      expect(fetchFn.mock.calls[1]?.[0]?.reason).toBe("scheduled");
+
+      hook.unmount();
+    });
+
     it("keeps polling after a queued refresh's fetch throws", async () => {
       const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
       const first = createDeferred<void>();
