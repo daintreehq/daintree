@@ -14,6 +14,7 @@ import {
 import {
   decideProjectOpenTarget,
   type OpenWorld,
+  type ProjectOpenDecision,
   type ProjectOpenSource,
 } from "./windowOpenPolicy.js";
 import { cachedViewBusy } from "./cachedViewBusy.js";
@@ -66,6 +67,17 @@ export interface OpenDirHandlerDeps {
    * let it go — the open then switches to it there, as before.
    */
   releaseCachedView?: (projectId: string, windowId: number) => boolean;
+  /**
+   * Whether an open that has to make a new window may go ahead (#13638): asked
+   * before anything moves, and false when the user declined it at critical
+   * memory pressure. An open into an existing window is never asked here; that
+   * window's own switch holds it.
+   */
+  admitColdOpen?: (request: {
+    projectId: string | null;
+    projectPath: string;
+    initiatingWindowId: number | null;
+  }) => Promise<boolean>;
 }
 
 // App-lifetime consumer: macOS `open-file` is app-lifetime, so this wires once.
@@ -145,22 +157,44 @@ export async function routeProjectOpen(
   const targetPath = project?.path ?? dirPath;
   const registry = deps.getWindowRegistry();
 
+  // A new window is a renderer started from nothing, so at critical memory
+  // pressure the user is asked first. Asked once per request: what it decides
+  // stands for the window this open makes, wherever routing lands it after.
+  let admitted = deps.admitColdOpen === undefined;
+  const admit = async (): Promise<boolean> => {
+    if (!admitted) {
+      admitted = await deps.admitColdOpen!({
+        projectId: project?.id ?? null,
+        projectPath: targetPath,
+        initiatingWindowId: routing.initiatingWindowId,
+      });
+    }
+    return admitted;
+  };
+
   // Synchronous from the snapshot to the reservation: nothing may change the
   // world between deciding on a window and claiming it. A cached view moving to
   // a new window is released inside that span too, so the project never has a
-  // live view in two windows.
-  const world = snapshotOpenWorld(registry, deps.getPreference(), deps.isProjectClosed);
-  let decision = decideProjectOpenTarget(
-    {
-      projectId: project?.id ?? null,
-      projectPath: targetPath,
-      source: routing.source,
-      intent: "open",
-      disposition: routing.disposition,
-      initiatingWindowId: routing.initiatingWindowId,
-    },
-    world
-  );
+  // live view in two windows. The question above is the one await allowed
+  // before it, and the world is read again once it has its answer.
+  let world: OpenWorld;
+  let decision: ProjectOpenDecision;
+  for (;;) {
+    world = snapshotOpenWorld(registry, deps.getPreference(), deps.isProjectClosed);
+    decision = decideProjectOpenTarget(
+      {
+        projectId: project?.id ?? null,
+        projectPath: targetPath,
+        source: routing.source,
+        intent: "open",
+        disposition: routing.disposition,
+        initiatingWindowId: routing.initiatingWindowId,
+      },
+      world
+    );
+    if (decision.kind !== "create" || admitted) break;
+    if (!(await admit())) return { kind: "cancelled" };
+  }
   const releaseFrom = decision.kind === "focus" ? undefined : decision.releaseFromWindowId;
   if (
     releaseFrom !== undefined &&
@@ -191,6 +225,7 @@ export async function routeProjectOpen(
   // it mid-read — nothing has awaited since. Opening somewhere beats dropping
   // the folder.
   if (decision.kind === "create" || !win || win.isDestroyed()) {
+    if (!(await admit())) return { kind: "cancelled" };
     return { kind: "created", windowId: await deps.createWindowForPath(targetPath) };
   }
 

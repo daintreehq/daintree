@@ -1045,6 +1045,93 @@ describe("RemoteHostsClient", () => {
     expect(bindings.get(1)).toBe("studio-01");
   });
 
+  describe("cold opens at critical memory pressure (#13638)", () => {
+    it("asks before opening a new window, and opens none on Cancel", async () => {
+      windows.admitProjectOpen = vi.fn(async () => false);
+
+      await expect(
+        client.switchWindowHost(ctxFor(5, 1), {
+          hostId: "studio-01",
+          newWindow: true,
+          projectId: "proj-2",
+        })
+      ).resolves.toEqual({ outcome: "superseded", hostId: "studio-01" });
+
+      expect(windows.admitProjectOpen).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          windowId: null,
+          askingWindowId: 1,
+          hostId: "studio-01",
+          projectId: "proj-2",
+        })
+      );
+      expect(windows.openWindow).not.toHaveBeenCalled();
+      expect(windows.openRemoteProject).not.toHaveBeenCalled();
+    });
+
+    it("names the host when a new window would offer its project list", async () => {
+      windows.admitProjectOpen = vi.fn(async () => false);
+
+      await client.switchWindowHost(ctxFor(5, 1), { hostId: "studio-01", newWindow: true });
+
+      expect(windows.admitProjectOpen).toHaveBeenCalledWith(
+        expect.objectContaining({ windowId: null, projectName: "studio-01" })
+      );
+      expect(windows.openWindow).not.toHaveBeenCalled();
+    });
+
+    it("leaves an existing window on its host and view when a switch is declined", async () => {
+      await client.switchWindowHost(ctxFor(5, 1), {
+        hostId: "studio-01",
+        newWindow: false,
+        projectId: "proj-1",
+      });
+      windows.admitProjectOpen = vi.fn(async () => false);
+      windows.claimProject = vi.fn(() => () => {});
+
+      await expect(client.switchWindowToLocal(1, "abc")).resolves.toEqual({
+        outcome: "superseded",
+        hostId: "local",
+      });
+
+      expect(windows.admitProjectOpen).toHaveBeenCalledExactlyOnceWith({
+        windowId: 1,
+        askingWindowId: 1,
+        hostId: "local",
+        projectId: "abc",
+        projectName: null,
+      });
+      expect(windows.openLocalProject).not.toHaveBeenCalled();
+      expect(windows.claimProject).not.toHaveBeenCalled();
+      expect(bindings.get(1)).toBe("studio-01");
+    });
+
+    it("goes ahead once the open is admitted", async () => {
+      windows.admitProjectOpen = vi.fn(async () => true);
+
+      await expect(
+        client.switchWindowHost(ctxFor(5, 1), {
+          hostId: "studio-01",
+          newWindow: false,
+          projectId: "proj-1",
+        })
+      ).resolves.toEqual({ outcome: "switched", hostId: "studio-01", projectId: "proj-1" });
+      expect(windows.admitProjectOpen).toHaveBeenCalledOnce();
+      expect(windows.openRemoteProject).toHaveBeenCalledWith(1, "studio-01", "proj-1", "/srv/proj-1");
+    });
+
+    it("never asks about restoring a window to the host project it was showing", async () => {
+      windows.admitProjectOpen = vi.fn(async () => false);
+
+      await expect(client.switchWindowToHostProject(1, "studio-01", "proj-1")).resolves.toEqual({
+        outcome: "switched",
+        hostId: "studio-01",
+        projectId: "proj-1",
+      });
+      expect(windows.admitProjectOpen).not.toHaveBeenCalled();
+    });
+  });
+
   it("opens a host project named by its host path in a new window on that host", async () => {
     manager.connect("studio-01");
     await expect(client.openHostProjectInNewWindow("studio-01", "/srv/app")).resolves.toEqual({

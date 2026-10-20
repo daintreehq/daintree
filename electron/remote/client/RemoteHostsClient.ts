@@ -125,6 +125,19 @@ export interface WindowControl {
   /** Call `onClosed` once when the window closes. */
   watchWindow(windowId: number, onClosed: () => void): void;
   /**
+   * Whether a switch the user asked for may start a renderer at critical
+   * memory pressure (#13638): asked before a new window opens (`windowId`
+   * null), or before `windowId` loads a project it has no reusable view of.
+   * False when the user declined; the switch then changes nothing.
+   */
+  admitProjectOpen?(request: {
+    windowId: number | null;
+    askingWindowId: number | null;
+    hostId: HostId;
+    projectId: string | undefined;
+    projectName: string | null;
+  }): Promise<boolean>;
+  /**
    * Put a fresh window on this machine (its project picker) where `windowId`
    * is, and close that one: for a window whose host is going away with no
    * project of this machine's to return to, since a view's host is fixed.
@@ -426,7 +439,8 @@ export class RemoteHostsClient {
             : this.switchWindow(
                 windowId,
                 { hostId: LOCAL_HOST_ID, newWindow: false, projectId },
-                () => stillOnHost(windowId)
+                () => stillOnHost(windowId),
+                { exempt: true }
               ).then(
                 // That project went to another window meanwhile: still nothing here to show.
                 (result) =>
@@ -611,7 +625,9 @@ export class RemoteHostsClient {
     projectId: string,
     stillWanted?: () => boolean
   ): Promise<SwitchWindowHostResult> {
-    return this.switchWindow(windowId, { hostId, newWindow: false, projectId }, stillWanted);
+    return this.switchWindow(windowId, { hostId, newWindow: false, projectId }, stillWanted, {
+      exempt: true,
+    });
   }
 
   /**
@@ -653,7 +669,13 @@ export class RemoteHostsClient {
   private async switchWindow(
     askingWindowId: number | null,
     payload: SwitchWindowHostPayload,
-    stillWanted?: () => boolean
+    stillWanted?: () => boolean,
+    /**
+     * A switch main makes on its own, restoring a window or bringing one home
+     * from a host going away, is never held at memory pressure: there is no
+     * request to decline, and the window has to land somewhere.
+     */
+    { exempt = false }: { exempt?: boolean } = {}
   ): Promise<SwitchWindowHostResult> {
     const hostId = hostIdOf(payload);
     const newWindow = payload.newWindow === true;
@@ -751,6 +773,7 @@ export class RemoteHostsClient {
         announce,
         commitPending,
         (name) => void (pendingProjectName = name),
+        exempt,
         focusIntent
       );
       // A window is showing that host now: it's the one the switcher offers first.
@@ -781,6 +804,7 @@ export class RemoteHostsClient {
     /** Called once the switch commits: past here it can't be cancelled. */
     commit: () => void,
     nameProject: (name: string | null) => void,
+    exempt: boolean,
     focusIntent?: ProjectFocusOnActivateIntent
   ): Promise<SwitchWindowHostResult> {
     let projectId = requestedProjectId;
@@ -930,6 +954,16 @@ export class RemoteHostsClient {
       if (redirected) return this.focusedElsewhere(redirected, focusIntent);
     }
 
+    // A new window is a renderer whatever it goes on to show, so it is asked
+    // about before it opens; one already open is asked in its turn below.
+    if (
+      newWindow &&
+      !(await this.admitColdOpen(exempt, null, askingWindowId, hostId, projectId, projectName))
+    ) {
+      return { outcome: "superseded", hostId };
+    }
+    const staleAdmit = superseded();
+    if (staleAdmit) return staleAdmit;
     const windowId = newWindow ? await this.options.windows.openWindow() : sourceWindowId;
     if (windowId === null) {
       throw new AppError({ code: "INTERNAL", message: "No window to attach to the host" });
@@ -944,6 +978,23 @@ export class RemoteHostsClient {
       // one waited behind the window's previous switch.
       const late = superseded();
       if (late) return late;
+      // Before anything moves, so a Cancel leaves the window exactly as it was.
+      if (
+        !newWindow &&
+        targetProjectId !== undefined &&
+        !(await this.admitColdOpen(
+          exempt,
+          windowId,
+          askingWindowId,
+          hostId,
+          targetProjectId,
+          projectName
+        ))
+      ) {
+        return { outcome: "superseded", hostId };
+      }
+      const admittedLate = superseded();
+      if (admittedLate) return admittedLate;
       // From here the window moves: nothing checks for a newer request again,
       // so it is no longer on offer to cancel.
       commit();
@@ -1046,6 +1097,29 @@ export class RemoteHostsClient {
     });
     // Held until the window's views have the project (or the switch gave up).
     return switching.finally(() => releaseClaim());
+  }
+
+  private async admitColdOpen(
+    exempt: boolean,
+    windowId: number | null,
+    askingWindowId: number | null,
+    hostId: HostId,
+    projectId: string | undefined,
+    projectName: string | null
+  ): Promise<boolean> {
+    if (exempt || !this.options.windows.admitProjectOpen) return true;
+    return this.options.windows.admitProjectOpen({
+      windowId,
+      askingWindowId,
+      hostId,
+      projectId,
+      // A new window offering a host's project list names the host instead.
+      projectName:
+        projectName ??
+        (projectId === undefined && !isLocalHostId(hostId)
+          ? (this.options.registry.get(hostId)?.name ?? null)
+          : null),
+    });
   }
 
   /** The window that already had the project takes the focus the switch was asked for. */

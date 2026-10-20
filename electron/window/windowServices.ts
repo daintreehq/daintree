@@ -2,6 +2,7 @@
 import { app, BrowserWindow, dialog } from "electron";
 import fs from "fs";
 import os from "os";
+import { basename } from "path";
 import { registerIpcHandlers, sendToRenderer } from "../ipc/handlers.js";
 import { getAppWebContents } from "./webContentsRegistry.js";
 import { distributePortsToView } from "./portDistribution.js";
@@ -19,6 +20,7 @@ import { runFreezeHarness } from "../services/freezeHarness.js";
 import { markPerformance } from "../utils/performance.js";
 import { getCurrentDiskSpaceStatus } from "../services/DiskSpaceMonitor.js";
 import { deliverOpenSystemMemoryPressure } from "./systemMemoryPressureDelivery.js";
+import { confirmColdOpenAtMemoryPressure } from "../services/projectOpenMemoryPressure.js";
 import { deliverPowerPolicy } from "./powerPolicyDelivery.js";
 import { PERF_MARKS } from "../../shared/perf/marks.js";
 import { isCleaningUp } from "../lifecycle/shutdownCoordinator.js";
@@ -154,6 +156,19 @@ function createOpenDirDeps(
       getWindowRegistry()
         ?.getByWindowId(windowId)
         ?.services.projectViewManager?.releaseCachedView(projectId) === true,
+    admitColdOpen: ({ projectId, projectPath, initiatingWindowId }) =>
+      confirmColdOpenAtMemoryPressure({
+        projectId,
+        projectName:
+          (projectId !== null ? projectStore.getProjectById(projectId)?.name : undefined) ||
+          basename(projectPath) ||
+          projectPath,
+        // An external open has no window that asked, so its dialog stands alone.
+        parent:
+          initiatingWindowId === null
+            ? null
+            : getWindowRegistry()?.getByWindowId(initiatingWindowId)?.browserWindow,
+      }),
   };
 }
 

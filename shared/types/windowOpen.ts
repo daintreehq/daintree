@@ -50,8 +50,8 @@ export function isOpenFoldersInNewWindow(value: unknown): value is OpenFoldersIn
  * - `focused`: a window already showing the project was brought forward.
  * - `activated`: the project was opened or switched to inside an existing window.
  * - `created`: a new window was made for it.
+ * - `cancelled`: a new window would have been made at critical memory pressure,
+ *   and the user chose not to open it (#13638). Nothing changed.
  */
-export interface ProjectOpenOutcome {
-  kind: "focused" | "activated" | "created";
-  windowId: number;
-}
+export type ProjectOpenOutcome =
+  { kind: "focused" | "activated" | "created"; windowId: number } | { kind: "cancelled" };

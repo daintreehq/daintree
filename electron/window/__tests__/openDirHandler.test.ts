@@ -193,6 +193,33 @@ describe("routeExternalOpen (#12593 acceptance)", () => {
     expect(five.map((w) => w.active)).toEqual(["p1", "p2", "p3", "p4", "p5"]);
   });
 
+  it("holds an external open that would start a window at critical memory pressure (#13638)", async () => {
+    const world = makeWorld();
+    world.add({ active: "busy" });
+    const deps = { ...makeDeps(world), admitColdOpen: vi.fn(async () => false) };
+
+    const outcome = await routeExternalOpen("/work/new", deps);
+
+    expect(outcome).toEqual({ kind: "cancelled" });
+    expect(deps.admitColdOpen).toHaveBeenCalledExactlyOnceWith({
+      projectId: idFor("/work/new"),
+      projectPath: "/work/new",
+      initiatingWindowId: null,
+    });
+    expect(deps.createWindowForPath).not.toHaveBeenCalled();
+  });
+
+  it("never asks to open in an existing window: that window's own switch holds it", async () => {
+    const world = makeWorld();
+    const empty = world.add();
+    const deps = { ...makeDeps(world), admitColdOpen: vi.fn(async () => false) };
+
+    const outcome = await routeExternalOpen("/work/new", deps);
+
+    expect(outcome).toEqual({ kind: "activated", windowId: empty.id });
+    expect(deps.admitColdOpen).not.toHaveBeenCalled();
+  });
+
   it("fills the one empty window and brings it forward", async () => {
     const world = makeWorld();
     const empty = world.add({ minimized: true });
@@ -547,6 +574,59 @@ describe("routeProjectOpen — an explicit new window (#12594)", () => {
     expect(deps.redirectToOwner).not.toHaveBeenCalled();
     expect(holder.active).toBe("front");
     expect(asking.active).toBe("other");
+  });
+
+  it("asks before starting a new window at critical memory pressure, and opens nothing on Cancel (#13638)", async () => {
+    const world = makeWorld();
+    const holder = world.add({ active: "front" });
+    holder.views.push(idFor("/work/known"));
+    const asking = world.add({ active: "other" });
+    const deps = { ...makeDeps(world), admitColdOpen: vi.fn(async () => false) };
+
+    const outcome = await routeProjectOpen("/work/known", newWindowFrom(asking.id), deps);
+
+    expect(outcome).toEqual({ kind: "cancelled" });
+    expect(deps.admitColdOpen).toHaveBeenCalledExactlyOnceWith({
+      projectId: idFor("/work/known"),
+      projectPath: "/work/known",
+      initiatingWindowId: asking.id,
+    });
+    expect(deps.createWindowForPath).not.toHaveBeenCalled();
+    // Asked before the cached view was let go, so Cancel leaves it where it was.
+    expect(deps.releaseCachedView).not.toHaveBeenCalled();
+    expect(holder.views).toEqual(["front", idFor("/work/known")]);
+  });
+
+  it("opens the new window once the cold open is admitted (#13638)", async () => {
+    const world = makeWorld();
+    const asking = world.add({ active: "other" });
+    const deps = { ...makeDeps(world), admitColdOpen: vi.fn(async () => true) };
+
+    const outcome = await routeProjectOpen("/work/new", newWindowFrom(asking.id), deps);
+
+    expect(outcome).toEqual({ kind: "created", windowId: asking.id + 1 });
+    expect(deps.admitColdOpen).toHaveBeenCalledOnce();
+    expect(deps.createWindowForPath).toHaveBeenCalledExactlyOnceWith("/work/new");
+  });
+
+  it("re-routes after the prompt, landing in a window that came free meanwhile (#13638)", async () => {
+    const world = makeWorld();
+    const asking = world.add({ active: "other" });
+    let empty: ReturnType<typeof world.add> | null = null;
+    const deps = {
+      ...makeDeps(world),
+      admitColdOpen: vi.fn(async () => {
+        empty = world.add();
+        return true;
+      }),
+    };
+
+    const outcome = await routeProjectOpen("/work/new", newWindowFrom(asking.id), deps);
+
+    expect(outcome).toEqual({ kind: "activated", windowId: empty!.id });
+    expect(deps.openDirectory).toHaveBeenCalledExactlyOnceWith("/work/new", empty!.win);
+    expect(deps.createWindowForPath).not.toHaveBeenCalled();
+    expect(deps.admitColdOpen).toHaveBeenCalledOnce();
   });
 
   it("moves a view the asking window keeps cached into an empty window", async () => {
