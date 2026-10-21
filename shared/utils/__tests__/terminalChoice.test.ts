@@ -287,3 +287,26 @@ describe("planListedChoice", () => {
     ]);
   });
 });
+
+describe("listed choices as they were shown", () => {
+  const masked = (label: string) => label.replace(/\d{4,}/g, "[redacted]");
+
+  it("offers each label as shown and presses the raw option it was shown for", () => {
+    const screen = ["❯ 1. Yes", "  2. Use key 123456", "  3. No", "", HINT].join("\n");
+    expect(listChoices(screen, masked)).toEqual(["Yes", "Use key [redacted]", "No"]);
+    expect(planListedChoice(screen, "Use key [redacted]", masked)).toEqual({
+      ok: true,
+      keys: ["Down", "Enter"],
+    });
+    // The raw label never reached the asker, so it answers nothing.
+    expect(planListedChoice(screen, "Use key 123456", masked)).toMatchObject({ ok: false });
+  });
+
+  it("offers and answers nothing when two options read the same once shown", () => {
+    const screen = ["❯ 1. Use key 123456", "  2. Use key 987654", "  3. No", "", HINT].join("\n");
+    expect(listChoices(screen, masked)).toEqual([]);
+    const plan = planListedChoice(screen, "No", masked);
+    expect(plan).toMatchObject({ ok: false });
+    expect(JSON.stringify(plan)).not.toMatch(/123456|987654/);
+  });
+});

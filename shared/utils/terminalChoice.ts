@@ -199,21 +199,52 @@ export function parseChoiceList(screen: string): ChoiceList | null {
   return { labels, cursor: rows.indexOf(cursor) };
 }
 
-/** The labels a remote page offers as one-key answers: the current list's, or none. */
-export function listChoices(screen: string): string[] {
-  return parseChoiceList(screen)?.labels ?? [];
+/**
+ * The labels as they reached the asker, after `shown`: a paired device is sent
+ * them with secrets redacted. Two options that read the same once shown can't
+ * be told apart by the asker, so the list is null, as for a raw duplicate.
+ */
+function shownLabels(list: ChoiceList, shown: (label: string) => string): string[] | null {
+  const labels = list.labels.map(shown);
+  const folded = labels.map((label) => label.trim().toLowerCase());
+  return new Set(folded).size === folded.length ? labels : null;
+}
+
+/**
+ * The labels a remote page offers as one-key answers: the current list's, or
+ * none. `shown` is how each label is sent; `planListedChoice` must be given
+ * the same one to answer them.
+ */
+export function listChoices(
+  screen: string,
+  shown: (label: string) => string = (text) => text
+): string[] {
+  const list = parseChoiceList(screen);
+  return (list && shownLabels(list, shown)) ?? [];
 }
 
 /**
  * `planChoice` for a caller that may only pick from the current list: the
  * label must be one of `parseChoiceList`'s, whole, and the keys move from its
- * highlight to that very option.
+ * highlight to that very option. The label is matched as `shown` sent it,
+ * while the keys come from the list as drawn.
  */
-export function planListedChoice(screen: string, label: string): ChoicePlan {
+export function planListedChoice(
+  screen: string,
+  label: string,
+  shown: (label: string) => string = (text) => text
+): ChoicePlan {
   const list = parseChoiceList(screen);
   if (!list) return { ok: false, reason: "No list of options is on the screen." };
+  const labels = shownLabels(list, shown);
+  if (!labels) {
+    return {
+      ok: false,
+      reason: "Two options on the screen read the same as shown, so neither can be picked.",
+    };
+  }
   const wanted = label.trim().toLowerCase();
-  const index = list.labels.findIndex((option) => option.toLowerCase() === wanted);
+  const index = labels.findIndex((option) => option.trim().toLowerCase() === wanted);
   if (index === -1) return { ok: false, reason: `No option "${label}" is on the screen.` };
   const steps = index - list.cursor;
   const move = steps > 0 ? "Down" : "Up";

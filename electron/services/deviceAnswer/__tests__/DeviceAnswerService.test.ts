@@ -248,6 +248,26 @@ describe("DeviceAnswerService", () => {
     expect(settings().answers[0]).toMatchObject({ outcome: "refused" });
   });
 
+  it("keeps a secret a device sends out of the audit and the refusal", async () => {
+    const { service, port, api, pair, answer, settings } = await setup();
+    await service.setEnabled({ enabled: true });
+    const token = await pair();
+    answer.mockRejectedValueOnce({
+      userMessage: 'No option "Use token=abcdef123456" is on the screen. Nothing was pressed.',
+    });
+    const reply = await request(port(), "POST", "/api/answer", {
+      headers: { ...api, Authorization: `Bearer ${token}` },
+      body: { runId: "run-1", spawnedAt: 100, label: "Use token=abcdef123456" },
+    });
+    expect(reply.status).toBe(409);
+    expect(settings().answers[0]).toMatchObject({
+      label: "Use token=[redacted]",
+      outcome: "refused",
+    });
+    expect(JSON.stringify(settings().answers)).not.toContain("abcdef123456");
+    expect(reply.json().error).not.toContain("abcdef123456");
+  });
+
   it("refuses a removed device at once, and mid-answer through stillAllowed", async () => {
     const { service, port, api, pair, answer, settings } = await setup();
     await service.setEnabled({ enabled: true });
