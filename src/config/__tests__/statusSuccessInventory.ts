@@ -353,14 +353,6 @@ export const STATUS_SUCCESS_INVENTORY = {
       rationale: "Git status letter A, the notation git itself paints green",
     },
   ],
-  "src/components/Worktree/WorktreeCard/MainWorktreeSummaryRows.tsx": [
-    {
-      category: "outcome",
-      signature: "text-status-success",
-      expectedOccurrences: 1,
-      rationale: "Recorded result of the last CI run on the branch",
-    },
-  ],
   "src/components/Worktree/WorktreeCard/UpstreamSyncBadge.tsx": [
     {
       category: "domain",
@@ -539,5 +531,5 @@ export const STATUS_SUCCESS_INVENTORY = {
  * another added) still trips the per-site checks, and these catch the case
  * where a whole file moves without either check firing.
  */
-export const EXPECTED_STATUS_SUCCESS_SITES = 59;
-export const EXPECTED_STATUS_SUCCESS_OCCURRENCES = 61;
+export const EXPECTED_STATUS_SUCCESS_SITES = 58;
+export const EXPECTED_STATUS_SUCCESS_OCCURRENCES = 60;

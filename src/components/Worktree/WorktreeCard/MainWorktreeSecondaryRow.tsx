@@ -4,7 +4,7 @@ import { BranchLabel } from "../BranchLabel";
 import { UpstreamSyncBadge } from "./UpstreamSyncBadge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip";
 import { FolderGit2 } from "lucide-react";
-import type { AggregateCounts } from "./MainWorktreeSummaryRows";
+import type { AggregateCounts } from "./aggregateCounts";
 import { pluralize } from "@/lib/pluralize";
 import { bucketCountPhrase } from "@/lib/agentStateVocabulary";
 

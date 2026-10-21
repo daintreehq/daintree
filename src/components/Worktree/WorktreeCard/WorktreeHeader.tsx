@@ -8,7 +8,7 @@ import { BranchLabel } from "../BranchLabel";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { Sprout, Pin, BellOff } from "lucide-react";
 import { FolderOutput } from "@/components/icons";
-import type { AggregateCounts } from "./MainWorktreeSummaryRows";
+import type { AggregateCounts } from "./aggregateCounts";
 import { IssueBadge } from "./IssueBadge";
 import { PRBadge } from "./PRBadge";
 import { EnvironmentPopover } from "./EnvironmentPopover";
