@@ -83,6 +83,7 @@ import { registerWebviewNavigationHandlers } from "./handlers/webviewNavigation.
 import { registerWebviewCaptureHandlers } from "./handlers/webviewCapture.js";
 import { registerRemoteHostsHandlers } from "./handlers/remoteHosts.js";
 import { registerHostModeHandlers } from "./handlers/hostMode.js";
+import { registerDeviceAnswerHandlers } from "./handlers/deviceAnswer.js";
 import { registerDriveLeaseHandlers } from "./handlers/driveLease.js";
 import { registerOperationsHandlers } from "./handlers/operations.js";
 import { registerHostFilesHandlers } from "./handlers/hostFiles.js";
@@ -280,6 +281,7 @@ export function registerIpcHandlers(deps: HandlerDependencies): () => void {
     if (isEitherRemoteRoleSupported()) {
       register(() => registerRemoteHostsHandlers());
       register(() => registerHostModeHandlers());
+      register(() => registerDeviceAnswerHandlers());
       register(() => registerDriveLeaseHandlers());
       register(() => registerOperationsHandlers());
       register(() => registerHostFilesHandlers());

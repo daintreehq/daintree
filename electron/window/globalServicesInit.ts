@@ -1349,6 +1349,19 @@ export async function initGlobalServices(
       run: () => startMcpServerOnce(registryRef),
     });
 
+    // Answer from another device: nothing is loaded unless the user left it on.
+    registerDeferredTask({
+      name: "device-answer",
+      run: async () => {
+        try {
+          const { startDeviceAnswerIfEnabled } = await import("../services/deviceAnswer/index.js");
+          await startDeviceAnswerIfEnabled();
+        } catch (err) {
+          console.warn("[MAIN] Answer from another device failed to start:", err);
+        }
+      },
+    });
+
     registerDeferredTask({
       name: "help-session-gc",
       run: async () => {

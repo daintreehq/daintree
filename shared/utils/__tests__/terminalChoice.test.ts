@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { planChoice } from "../terminalChoice.js";
+import { listChoices, planChoice } from "../terminalChoice.js";
 
 describe("planChoice", () => {
   it("moves down past the highlighted default on Claude's trust dialog", () => {
@@ -102,5 +102,61 @@ describe("planChoice", () => {
       ok: false,
       reason: 'No option "Yes" is on the screen.',
     });
+  });
+});
+
+describe("listChoices", () => {
+  it("lists a permission dialog's options in order, without the heading or footer", () => {
+    const screen = [
+      " Do you want to proceed?",
+      " ❯ 1. Yes",
+      "   2. Yes, and don't ask again for this command",
+      "   3. No, and tell Claude what to do differently (esc)",
+      "",
+      " Enter to confirm · Esc to cancel",
+    ].join("\n");
+    expect(listChoices(screen)).toEqual([
+      "Yes",
+      "Yes, and don't ask again for this command",
+      "No, and tell Claude what to do differently (esc)",
+    ]);
+  });
+
+  it("skips wrapped descriptions and the description column", () => {
+    const screen = [
+      "  › 1. Allow                   Run the tool",
+      "                               and continue",
+      "    2. Allow for this session  Run the tool",
+      "    3. Always allow            Run the tool",
+    ].join("\n");
+    expect(listChoices(screen)).toEqual(["Allow", "Allow for this session", "Always allow"]);
+  });
+
+  it("reads a boxed dialog from inside its frame", () => {
+    const screen = [
+      "│ Allow execution?            │",
+      "│ ● 1. Yes, allow once        │",
+      "│   2. Yes, allow always      │",
+      "│   3. No                     │",
+    ].join("\n");
+    expect(listChoices(screen)).toEqual(["Yes, allow once", "Yes, allow always", "No"]);
+  });
+
+  it("lists only labels a press can reach, every one of them", () => {
+    const screen = ["❯ No, exit", "  Yes, I trust this folder"].join("\n");
+    const labels = listChoices(screen);
+    expect(labels).toEqual(["No, exit", "Yes, I trust this folder"]);
+    for (const label of labels) expect(planChoice(screen, label).ok).toBe(true);
+  });
+
+  it("offers nothing for a lone highlighted row, an echoed answer or a screen with no list", () => {
+    expect(listChoices("> answered: Yes, I trust this folder")).toEqual([]);
+    expect(listChoices("Working on it…\n\n> ")).toEqual([]);
+    expect(listChoices("")).toEqual([]);
+  });
+
+  it("keeps a short label beside a longer one it prefixes, since each matches exactly", () => {
+    const screen = ["❯ Yes", "  Yes, always", "  No"].join("\n");
+    expect(listChoices(screen)).toEqual(["Yes", "Yes, always", "No"]);
   });
 });

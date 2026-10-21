@@ -100,3 +100,52 @@ export function planChoice(screen: string, label: string): ChoicePlan {
   const move = cursor < target ? "Down" : "Up";
   return { ok: true, keys: [...Array<string>(steps).fill(move), "Enter"] };
 }
+
+/**
+ * The labels of the selection list drawn nearest the bottom of the screen, in
+ * the order shown: what a remote page offers as one-key answers. Only labels
+ * `planChoice` can reach are listed, so every one offered presses something,
+ * and a lone highlighted row (an echoed `> answer`) is not a list.
+ */
+export function listChoices(screen: string): string[] {
+  const lines = screen.split("\n").map(unframe);
+  const optionText = (row: string) =>
+    (
+      row
+        .replace(OPTION_PREFIX, "")
+        .trim()
+        .split(/\s{2,}/)[0] ?? ""
+    ).trim();
+
+  for (let cursor = lines.length - 1; cursor >= 0; cursor--) {
+    const row = lines[cursor]!;
+    if (!HIGHLIGHT_MARKER.test(row) || optionText(row) === "") continue;
+    const optionIndent = indentOf(row);
+    const isOption = (i: number) => {
+      const indent = indentOf(lines[i]!);
+      return indent >= optionIndent - 1 && indent <= optionIndent + 1;
+    };
+    const isDescription = (i: number) => indentOf(lines[i]!) > optionIndent + 1;
+    const rows = [cursor];
+    for (const step of [-1, 1]) {
+      for (
+        let i = cursor + step;
+        i >= 0 && i < lines.length && Math.abs(i - cursor) <= MAX_LIST_ROWS;
+        i += step
+      ) {
+        if (lines[i]!.trim() === "") break;
+        if (isOption(i)) rows.push(i);
+        else if (!isDescription(i)) break;
+      }
+    }
+    rows.sort((a, b) => a - b);
+    const labels: string[] = [];
+    for (const i of rows) {
+      const label = optionText(lines[i]!);
+      if (label === "" || labels.includes(label)) continue;
+      if (planChoice(screen, label).ok) labels.push(label);
+    }
+    if (labels.length >= 2) return labels;
+  }
+  return [];
+}

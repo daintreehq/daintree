@@ -57,8 +57,8 @@ import {
   watchedTerminal,
 } from "./canopyTerminalWatch.js";
 import { isImageAttachmentPath } from "../../../shared/utils/imageAttachmentInput.js";
-import { planChoice } from "../../../shared/utils/terminalChoice.js";
 import { AppError } from "../../utils/errorTypes.js";
+import { answerRunByLabel, isAnswerLabel } from "../../services/terminalAnswer.js";
 import { isCanopyViewerEndpointId } from "../endpoint.js";
 import { terminalAnswerOf } from "../../../shared/utils/terminalSubmission.js";
 import { getGitBranch } from "../../utils/gitUtils.js";
@@ -75,12 +75,6 @@ const MAX_SUBMIT_IMAGES = 10;
 const MAX_KEY_LENGTH = 32;
 const MAX_LABEL_LENGTH = 200;
 const BACKDROP_JPEG_QUALITY = 85;
-/** Rows read to find the option being chosen; dialogs sit at the bottom. */
-const ANSWER_SCREEN_LINES = 40;
-/** Between keys, so a TUI reading a burst as one chunk still sees each one. */
-const ANSWER_KEY_GAP_MS = 80;
-/** Runs a one-key answer is still pressing keys into. */
-const answering = new Set<string>();
 /**
  * Canopy acts on nothing until the user has turned it on. Checked here as well
  * as in the panel, so no other caller can reach a terminal through it.
@@ -145,17 +139,6 @@ function hiddenOrIdleSnapshot(): CanopySnapshot {
     failedRuns: [],
   };
 }
-
-/** Why a one-key answer pressed nothing, in words the panel shows as is. */
-function answerRefused(reason: string): AppError {
-  return new AppError({ code: "NOT_FOUND", message: reason, userMessage: reason });
-}
-
-const ANSWER_KEY_SEQUENCES: Record<string, string> = {
-  Up: "\x1b[A",
-  Down: "\x1b[B",
-  Enter: "\r",
-};
 
 let service: CanopyService | null = null;
 let unsubscribeFleet: (() => void) | null = null;
@@ -1226,58 +1209,27 @@ export const canopyNamespace = defineIpcNamespace({
         assertRunId(runId);
         assertTarget(target);
         assertDrivesRun(ctx, runId);
-        if (typeof label !== "string" || label.trim() === "" || label.length > MAX_LABEL_LENGTH) {
-          throw new Error("Invalid option");
-        }
-        // One answer at a time per run: a second, planned from a screen the
-        // first is still pressing keys into, would land its Enter on whatever
-        // dialog comes next.
-        if (answering.has(runId)) {
-          throw answerRefused("Still answering that agent. Nothing more was pressed.");
-        }
-        answering.add(runId);
-        try {
-          const pty = requirePtyClient();
-          const generation = pty.getLiveGeneration(runId);
-          const record = await pty.getTerminalAsync(runId);
-          // Nothing is pressed unless the dialog is still there to answer.
-          if (!record || record.spawnedAt !== target.spawnedAt || record.isExited === true) {
-            throw answerRefused("That terminal has moved on since the list showed it.");
-          }
-          const screen = await readPluginTerminalScreen(pty, runId, null, ANSWER_SCREEN_LINES);
-          if (screen.status !== "ok") {
-            throw answerRefused("Couldn't read the terminal to find that option.");
-          }
-          const plan = planChoice(screen.text, label);
-          if (!plan.ok) throw answerRefused(`${plan.reason} Nothing was pressed.`);
-          for (const [index, key] of plan.keys.entries()) {
-            if (index > 0) await new Promise((resolve) => setTimeout(resolve, ANSWER_KEY_GAP_MS));
-            // Every key, not just the first, is for the terminal the screen was
-            // read from, while Canopy is still on: a restart under the same id
-            // or Canopy turned off between keys stops the rest.
-            if (
-              !currentPlan().activated ||
-              (generation !== null && !pty.isLiveGeneration(runId, generation))
-            ) {
-              throw answerRefused("That terminal has moved on since the list showed it.");
-            }
+        if (!isAnswerLabel(label)) throw new Error("Invalid option");
+        await answerRunByLabel({
+          pty: requirePtyClient(),
+          runId,
+          spawnedAt: target.spawnedAt,
+          label,
+          stillAllowed: () => {
+            // Canopy turned off between keys stops the rest.
+            if (!currentPlan().activated)
+              return "That terminal has moved on since the list showed it.";
             // The panel that asked is gone: the rest of the answer is no one's.
             if (ctx.endpoint.isClosed()) {
-              throw answerRefused(
-                "Canopy closed before the answer was finished. Nothing more was pressed."
-              );
+              return "Canopy closed before the answer was finished. Nothing more was pressed.";
             }
             // Control can move to another screen between keys.
             if (!drivesRun(ctx, runId)) {
-              throw answerRefused(
-                "Another screen took control of that project. Nothing more was pressed."
-              );
+              return "Another screen took control of that project. Nothing more was pressed.";
             }
-            pty.write(runId, ANSWER_KEY_SEQUENCES[key] ?? key);
-          }
-        } finally {
-          answering.delete(runId);
-        }
+            return null;
+          },
+        });
         service?.noteUserSent(runId, target.spawnedAt);
         service?.markHandled(runId, target.spawnedAt);
       },

@@ -819,6 +819,7 @@ describe("initGlobalServices task ordering", () => {
       "plugin-cli-server",
       "plugin-mcp-audit-warm",
       "mcp-server",
+      "device-answer",
       "help-session-gc",
       "help-session-pty",
       "session-eviction",

@@ -670,6 +670,11 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
         import("../services/McpServerService.js")
           .then(({ mcpServerService }) => mcpServerService.stop())
           .catch(() => {}),
+        // Closes the device listener, if it was ever started, so no answer
+        // lands in a terminal the PTY host is tearing down.
+        import("../services/deviceAnswer/index.js")
+          .then(({ stopDeviceAnswer }) => stopDeviceAnswer())
+          .catch(() => {}),
         // Flush any debounced plugin-audit records before exit — the flush
         // timer is unref'd, so the tail of a session would otherwise be lost.
         // Lazy-import guarded like MCP: skip silently if init never ran.

@@ -84,6 +84,7 @@ import { buildSentryPreloadBindings } from "./ipc/handlers/sentry.preload.js";
 import { buildPrivacyPreloadBindings } from "./ipc/handlers/privacy.preload.js";
 import { buildRemoteHostsPreloadBindings } from "./ipc/handlers/remoteHosts.preload.js";
 import { buildHostModePreloadBindings } from "./ipc/handlers/hostMode.preload.js";
+import { buildDeviceAnswerPreloadBindings } from "./ipc/handlers/deviceAnswer.preload.js";
 import { buildDriveLeasePreloadBindings } from "./ipc/handlers/driveLease.preload.js";
 import { buildOperationsPreloadBindings } from "./ipc/handlers/operations.preload.js";
 import { buildHostFilesPreloadBindings } from "./ipc/handlers/hostFiles.preload.js";
@@ -3238,6 +3239,11 @@ function buildElectronApi(): ElectronAPI {
       ...buildHostModePreloadBindings(_unwrappingInvoke),
       onEvent: (callback: (event: IpcEventMap["host-mode:event"]) => void) =>
         _typedOn("host-mode:event", callback),
+    },
+    deviceAnswer: {
+      ...buildDeviceAnswerPreloadBindings(_unwrappingInvoke),
+      onEvent: (callback: (event: IpcEventMap["device-answer:event"]) => void) =>
+        _typedOn("device-answer:event", callback),
     },
     driveLease: {
       ...buildDriveLeasePreloadBindings(_unwrappingInvoke),

@@ -231,6 +231,23 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["copy-tree-history:get-records"]["args"]
     ): Promise<IpcInvokeMap["copy-tree-history:get-records"]["result"]>;
   };
+  deviceAnswer: {
+    cancelPairingCode(
+      ...args: IpcInvokeMap["device-answer:cancel-pairing-code"]["args"]
+    ): Promise<IpcInvokeMap["device-answer:cancel-pairing-code"]["result"]>;
+    createPairingCode(
+      ...args: IpcInvokeMap["device-answer:create-pairing-code"]["args"]
+    ): Promise<IpcInvokeMap["device-answer:create-pairing-code"]["result"]>;
+    getStatus(
+      ...args: IpcInvokeMap["device-answer:get-status"]["args"]
+    ): Promise<IpcInvokeMap["device-answer:get-status"]["result"]>;
+    revokeDevice(
+      ...args: IpcInvokeMap["device-answer:revoke-device"]["args"]
+    ): Promise<IpcInvokeMap["device-answer:revoke-device"]["result"]>;
+    setEnabled(
+      ...args: IpcInvokeMap["device-answer:set-enabled"]["args"]
+    ): Promise<IpcInvokeMap["device-answer:set-enabled"]["result"]>;
+  };
   devPreview: {
     ensure(
       ...args: IpcInvokeMap["dev-preview:ensure"]["args"]

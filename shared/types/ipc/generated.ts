@@ -552,6 +552,26 @@ export interface GeneratedIpcInvokeMap {
     args: [request: import("./devPreview.js").DevPreviewStopDevServerByWorktreeRequest];
     result: import("./devPreview.js").DevPreviewSessionState;
   };
+  "device-answer:cancel-pairing-code": {
+    args: [];
+    result: import("./deviceAnswer.js").DeviceAnswerStatus;
+  };
+  "device-answer:create-pairing-code": {
+    args: [];
+    result: import("./deviceAnswer.js").DeviceAnswerStatus;
+  };
+  "device-answer:get-status": {
+    args: [];
+    result: import("./deviceAnswer.js").DeviceAnswerStatus;
+  };
+  "device-answer:revoke-device": {
+    args: [deviceId: string];
+    result: import("./deviceAnswer.js").DeviceAnswerStatus;
+  };
+  "device-answer:set-enabled": {
+    args: [payload: import("./deviceAnswer.js").SetDeviceAnswerPayload];
+    result: import("./deviceAnswer.js").DeviceAnswerStatus;
+  };
   "diff-media:read-file-versions": {
     args: [payload: import("./diffMedia.js").DiffMediaReadFileVersionsPayload];
     result: import("./diffMedia.js").DiffMediaFileVersionsResponse;

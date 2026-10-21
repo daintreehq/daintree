@@ -8,6 +8,7 @@ import { useRemoteHosts } from "@/hooks/useRemoteHosts";
 import { remoteConnectionKind } from "@/lib/remoteHosts";
 import { formatHostConnection, type HostConnection, type HostId } from "@shared/types/remoteHosts";
 import HostModeGroup from "../HostModeGroup";
+import DeviceAnswerGroup from "../DeviceAnswerGroup";
 import { SettingsSection } from "../SettingsSection";
 import { SettingsEmptyRow, SettingsGroup, SettingsRow } from "../SettingsGroup";
 import { AddHostDialog } from "./AddHostDialog";
@@ -270,6 +271,8 @@ export default function HostsSettingsTab() {
       </SettingsSection>
 
       <HostModeGroup />
+
+      <DeviceAnswerGroup />
 
       {addOpen && <AddHostDialog isOpen onClose={() => setAddOpen(false)} />}
       <ConfirmDialog
