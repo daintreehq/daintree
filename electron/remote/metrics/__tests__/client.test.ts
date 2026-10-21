@@ -312,6 +312,34 @@ describe("HostMetricsClient", () => {
     expect(entries).toEqual([
       expect.objectContaining({ hostId: "old", worktreeId: "/srv/app", observed: null }),
     ]);
+    expect(entries[0]).not.toHaveProperty("runs");
+  });
+
+  it("keeps each agent a host observed in a worktree, with the terminal a switch can focus", async () => {
+    const h = harness([descriptor("new")]);
+    h.hook.call = async () => [
+      {
+        projectId: "p1",
+        projectName: "app",
+        worktreeId: "/srv/app",
+        name: "app",
+        branch: "main",
+        path: "/srv/app",
+        isMainWorktree: true,
+        modifiedCount: null,
+        lastActivityAt: null,
+        observed: { band: "needs-you", agentState: "waiting" },
+        runs: [
+          { terminalId: "t2", band: "needs-you", agentState: "waiting", extra: "dropped" },
+          { terminalId: "t1", band: "running", agentState: "working" },
+        ],
+      },
+    ];
+    const [entry] = await h.client.listWorktrees({ hostId: "new" });
+    expect(entry?.runs).toEqual([
+      { terminalId: "t2", band: "needs-you", agentState: "waiting" },
+      { terminalId: "t1", band: "running", agentState: "working" },
+    ]);
   });
 
   it("holds a host's attention to its notice budget and shows its names as plain text", async () => {

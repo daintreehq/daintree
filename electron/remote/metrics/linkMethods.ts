@@ -4,6 +4,8 @@ import { FLEET_BANDS } from "../../../shared/utils/fleetBands.js";
 /** Bounds on what one host answers, so a busy host can't flood a Shell. */
 export const MAX_FLEET_TARGETS = 500;
 export const MAX_HOST_WORKTREES = 2000;
+/** One worktree's agents: more than any pane grid holds. */
+export const MAX_WORKTREE_RUNS = 64;
 export const MAX_FLEET_SUBMIT_CHARS = 1024 * 1024;
 
 /**
@@ -104,6 +106,19 @@ export const WorktreeListSchema = z
           .strip()
           .nullable()
           .default(null),
+        // Absent from a host from before it was sent: the reader falls back to `observed`.
+        runs: z
+          .array(
+            z
+              .object({
+                terminalId: id,
+                band: z.enum(FLEET_BANDS),
+                agentState: agentState.nullable(),
+              })
+              .strip()
+          )
+          .max(MAX_WORKTREE_RUNS)
+          .optional(),
       })
       .strip()
   )

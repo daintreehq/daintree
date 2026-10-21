@@ -92,9 +92,20 @@ export interface HostWorktreeEntry {
    * there, or (a host from before this was sent) didn't say.
    */
   observed: HostWorktreeObservation | null;
+  /**
+   * Every agent the host's fleet placed in this worktree, most urgent first,
+   * so another machine can count agents rather than worktrees and land on the
+   * one it names. Absent from a host from before this was sent.
+   */
+  runs?: HostWorktreeRun[];
 }
 
 export interface HostWorktreeObservation {
   band: FleetBand;
   agentState: AgentState | null;
+}
+
+export interface HostWorktreeRun extends HostWorktreeObservation {
+  /** The agent's terminal on that host, which a switch there can focus. */
+  terminalId: string;
 }
