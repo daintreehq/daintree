@@ -10,11 +10,12 @@ import { FILE_METADATA_STRIP_CLASS } from "@/components/FileViewer/fileMetadataS
 import { whenPluginUiReady } from "@daintreehq/plugin-ui";
 
 const BASE = {
+  filePath: "docs/release-plan.md",
   lineCount: 117,
   byteLength: 12_392,
   hasBom: false,
   eolLabel: "LF",
-  mixedEol: false,
+  lineEnding: "LF" as const,
   dirty: false,
   saving: false,
   saveBlocked: false,
@@ -40,10 +41,9 @@ describe("MarkdownEditorStatusBar", () => {
   });
 
   it("the read-mode twin carries the same shared geometry", () => {
-    // FilePane is far too large to mount here, so this asserts the structural
-    // fact instead: it takes its class from the shared constant and holds no
-    // second copy of the geometry.
-    const source = read("src/panels/file/FilePane.tsx");
+    // Asserts the structural fact: Source mode's strip takes its class from the
+    // shared constant and holds no second copy of the geometry.
+    const source = read("src/components/FileViewer/FileSourceMetadataStrip.tsx");
     expect(source).toMatch(
       /data-testid="file-viewer-metadata"[\s\S]{0,80}FILE_METADATA_STRIP_CLASS/
     );
@@ -97,7 +97,7 @@ describe("MarkdownEditorStatusBar", () => {
     render(<MarkdownEditorStatusBar {...BASE} dirty />);
     const metadata = strip().firstElementChild as HTMLElement;
     expect(metadata.className).toContain("min-w-0");
-    expect(metadata.className).toContain("truncate");
+    expect(metadata.className).toContain("overflow-hidden");
     const actions = strip().lastElementChild as HTMLElement;
     expect(actions.className).toContain("shrink-0");
     expect(actions.className).toContain("whitespace-nowrap");
@@ -106,19 +106,18 @@ describe("MarkdownEditorStatusBar", () => {
   it("states the destination of the line-ending conversion, and never truncates it away", async () => {
     render(
       <TooltipProvider>
-        <MarkdownEditorStatusBar {...BASE} mixedEol eolLabel="CRLF" />
+        <MarkdownEditorStatusBar {...BASE} lineEnding="mixed" eolLabel="CRLF" />
       </TooltipProvider>
     );
-    const warning = screen.getByTestId("markdown-editor-mixed-eol");
-    // The destination is the actionable half — a warning that says only
-    // "mixed line endings" tells the user nothing about what saving will do.
-    expect(warning.textContent).toContain("CRLF");
-    // Explained through the shared tooltip, never the OS one.
+    const fact = strip().querySelector<HTMLElement>('[data-fact="eol"]')!;
+    // Worded as Source mode words it, so the facts don't move on a toggle; the
+    // destination — the actionable half — is what the tooltip adds here.
+    const warning = fact.querySelector<HTMLElement>(".text-status-warning")!;
     expect(warning.hasAttribute("title")).toBe(false);
     fireEvent.focus(warning);
     expect((await screen.findByRole("tooltip")).textContent).toContain("CRLF");
-    expect(warning.className).toContain("shrink-0");
-    expect(warning.className).toContain("whitespace-nowrap");
+    expect(fact.className).toContain("shrink-0");
+    expect(fact.className).toContain("whitespace-nowrap");
   });
 
   it("renders no mono face — mono is carried by the numerics as tabular figures", () => {

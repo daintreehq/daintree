@@ -5,6 +5,7 @@ import { openSearchPanel } from "@codemirror/search";
 import type { LanguageSupport } from "@codemirror/language";
 import type { FileEditorViewProps } from "@/registry/fileEditorRegistry";
 import { loadMarkdownSupport } from "@/components/FileViewer/codeMirrorLanguages";
+import { countLines, detectLineEnding } from "@/components/FileViewer/FileMetadataFacts";
 import { activateMarkdownLink } from "@/components/Markdown/markdownRenderPolicy";
 // The host banner for the conflict strip only: its Compare action has to stay
 // focusable while unavailable, and a kit Button can only be natively disabled.
@@ -335,17 +336,36 @@ export function MarkdownEditorView(props: FileEditorViewProps) {
   const base = record.base;
   const text = currentText(record) ?? "";
   const dirty = record.draft !== null;
-  const lineCount = text.length === 0 ? 0 : text.split("\n").length;
+  const lineCount = countLines(text);
   const eolLabel = base?.eol === "\r\n" ? "CRLF" : "LF";
+  // What the file has, not what a save would write. The buffer stores the
+  // dominant ending as `\n` and keeps any lone CR, so a `\n` here is the
+  // file's own ending and a CR is a CR.
+  const bufferEnding = detectLineEnding(text);
+  const lineEnding = base?.mixedEol
+    ? "mixed"
+    : bufferEnding === "LF" && base?.eol === "\r\n"
+      ? "CRLF"
+      : bufferEnding;
+  // A clean document is the file, so it reports the size Source mode reads off
+  // disk. A draft has no disk size yet; it reports what a save would write —
+  // its own ending and BOM re-applied to the `\n`-joined, BOM-less buffer.
+  const byteLength =
+    !dirty && base
+      ? base.size
+      : new TextEncoder().encode(text).byteLength +
+        (base?.eol === "\r\n" ? Math.max(0, lineCount - 1) : 0) +
+        (base?.hasBom ? 3 : 0);
 
   return (
     <div className="flex min-h-full flex-col" data-testid="markdown-editor">
       <MarkdownEditorStatusBar
+        filePath={filePath}
         lineCount={lineCount}
-        byteLength={new TextEncoder().encode(text).byteLength}
+        byteLength={byteLength}
         hasBom={base?.hasBom ?? false}
         eolLabel={eolLabel}
-        mixedEol={base?.mixedEol ?? false}
+        lineEnding={lineEnding}
         dirty={dirty}
         saving={record.saving}
         saveBlocked={record.conflict !== null}

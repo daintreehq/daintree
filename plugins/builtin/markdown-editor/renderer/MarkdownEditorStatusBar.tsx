@@ -1,31 +1,25 @@
-import { AlertTriangle, Save } from "lucide-react";
-import { Button, Tooltip, formatBytes } from "@daintreehq/plugin-ui";
-import {
-  FILE_METADATA_RUN_CLASS,
-  FILE_METADATA_STRIP_CLASS,
-} from "@/components/FileViewer/fileMetadataStrip";
+import { Save } from "lucide-react";
+import { Button } from "@daintreehq/plugin-ui";
+import { FILE_METADATA_STRIP_CLASS } from "@/components/FileViewer/fileMetadataStrip";
+import { FileMetadataFacts, type FileLineEnding } from "@/components/FileViewer/FileMetadataFacts";
+import { matchCodeMirrorLanguage } from "@/components/FileViewer/codeMirrorLanguages";
 
 export interface MarkdownEditorStatusBarProps {
+  /** Names the language fact, matched the way Source mode's viewer matches it. */
+  filePath: string;
   lineCount: number;
+  /** The bytes a save would write: BOM and line endings included. */
   byteLength: number;
   hasBom: boolean;
-  /** "LF" or "CRLF" — what the file has, and what a save normalises to. */
+  /** "LF" or "CRLF" — what an edited save normalises every line to. */
   eolLabel: string;
-  mixedEol: boolean;
+  /** The endings the file has now, which a save may not keep; null for a single line. */
+  lineEnding: FileLineEnding | null;
   dirty: boolean;
   saving: boolean;
   /** Saving is held while a disk conflict is unresolved. */
   saveBlocked: boolean;
   onSave: () => void;
-}
-
-/** A dimmed dot between two metadata facts. Hidden from AT, which reads the items. */
-function Dot() {
-  return (
-    <span aria-hidden="true" className="text-text-muted">
-      ·
-    </span>
-  );
 }
 
 /**
@@ -47,11 +41,12 @@ function Dot() {
  * lowest tier that stays actionable).
  */
 export function MarkdownEditorStatusBar({
+  filePath,
   lineCount,
   byteLength,
   hasBom,
   eolLabel,
-  mixedEol,
+  lineEnding,
   dirty,
   saving,
   saveBlocked,
@@ -62,34 +57,22 @@ export function MarkdownEditorStatusBar({
   return (
     <div data-testid="markdown-editor-status" className={FILE_METADATA_STRIP_CLASS}>
       {/* The metadata run yields its width to the state and the action: under
-          pressure a truncated byte count is worth less than a legible answer to
-          "are my edits safe?". */}
-      <span className={FILE_METADATA_RUN_CLASS}>
-        <span className="tabular-nums">{lineCount} lines</span>
-        <Dot />
-        <span className="tabular-nums">{formatBytes(byteLength)}</span>
-        <Dot />
-        <span>UTF-8{hasBom ? " with BOM" : ""}</span>
-        <Dot />
-        <span>{eolLabel}</span>
-      </span>
+          pressure a dropped byte count is worth less than a legible answer to
+          "are my edits safe?". Mixed endings stay a T1 warning inside the run,
+          worded as Source mode words it so the facts don't move on a toggle;
+          only its tooltip differs, because here a save changes the file. */}
+      <FileMetadataFacts
+        facts={{
+          language: matchCodeMirrorLanguage(filePath)?.name ?? "Plain text",
+          lineCount,
+          byteLength,
+          encoding: hasBom ? "utf-8-bom" : "utf-8",
+          lineEnding,
+        }}
+        mixedEndingsTooltip={`This file has more than one kind of line ending. Saving normalises every line to ${eolLabel}.`}
+      />
 
-      {mixedEol && (
-        <Tooltip
-          side="top"
-          content={`This file mixes LF and CRLF line endings. Saving normalises every line to ${eolLabel}.`}
-        >
-          <span
-            className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap text-status-warning"
-            data-testid="markdown-editor-mixed-eol"
-          >
-            <AlertTriangle aria-hidden="true" className="h-3 w-3" />
-            Mixed endings → {eolLabel}
-          </span>
-        </Tooltip>
-      )}
-
-      <span className="ml-auto flex shrink-0 items-center gap-2 whitespace-nowrap">
+      <span className="flex shrink-0 items-center gap-2 whitespace-nowrap">
         {/* No `aria-live` here: `DocumentController` already announces every
             terminal result through the app-global announcer, and a second live
             region would both double those announcements and fire on the first
