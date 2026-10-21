@@ -99,7 +99,7 @@ function RowTooltip({ lines, children }: { lines: readonly string[]; children: R
   return (
     <Tooltip>
       <TooltipTrigger asChild>{children}</TooltipTrigger>
-      <TooltipContent side="right" className="max-w-80">
+      <TooltipContent side="right">
         {lines.map((line, i) => (
           <div key={`${i}:${line}`} className="[overflow-wrap:anywhere]">
             {line}
@@ -149,7 +149,7 @@ function HostCounts({ summary }: { summary: OtherHostSummary }) {
 function nameSpan(summary: OtherHostSummary | null, away: boolean): (typeof NAME_SPAN)[number] {
   if (away) return NAME_SPAN[0];
   const first = ROW_BANDS.findIndex((band) => (summary?.counts[band] ?? 0) > 0);
-  return NAME_SPAN[first === -1 ? ROW_BANDS.length : first];
+  return NAME_SPAN[first === -1 ? ROW_BANDS.length : first] ?? NAME_SPAN[0];
 }
 
 interface HiddenPast {
