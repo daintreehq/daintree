@@ -5,12 +5,7 @@ import { ipcMain, BrowserWindow } from "electron";
 import { openWithDefaultApp } from "../utils/openPath.js";
 import { CHANNELS } from "./channels.js";
 import { getLogFilePath, logError as logErrorUtil } from "../utils/logger.js";
-import { broadcastToRenderer, broadcastToVisibleRenderers, typedHandle } from "./utils.js";
-import {
-  getAllAppWebContents,
-  isCachedViewWebContents,
-  onRendererScopeChanged,
-} from "../window/webContentsRegistry.js";
+import { broadcastToRenderer, broadcastToVisibleRenderersOrAll, typedHandle } from "./utils.js";
 import { getErrorDetails, getRetryability, getUserMessage } from "../utils/errorTypes.js";
 import { classifyError } from "../utils/errorClassification.js";
 import { store } from "../store.js";
@@ -222,16 +217,6 @@ class ErrorService {
     );
   }
 
-  // Errors go only to non-cached views: every project view owns its own error
-  // store, toast and Problems-dock auto-open, so a global broadcast surfaces
-  // one failure once per open project (#13711).
-  private canNotifyVisibleRenderer(): boolean {
-    if (!this.canSendToRenderer()) return false;
-    return getAllAppWebContents().some(
-      (wc) => !wc.isDestroyed() && !isCachedViewWebContents(wc.id)
-    );
-  }
-
   private bufferError(error: ErrorRecord): void {
     this.pendingQueue.push(error);
     if (this.pendingQueue.length > MAX_PENDING_ERRORS) {
@@ -260,12 +245,12 @@ class ErrorService {
   }
 
   sendError(error: ErrorRecord) {
-    if (!this.canNotifyVisibleRenderer()) {
+    if (!this.canSendToRenderer()) {
       this.bufferError(error);
       return;
     }
 
-    broadcastToVisibleRenderers(CHANNELS.ERROR_NOTIFY, error);
+    broadcastToVisibleRenderersOrAll(CHANNELS.ERROR_NOTIFY, error);
   }
 
   notifyError(error: unknown, options: Parameters<typeof createErrorRecord>[1] = {}) {
@@ -292,14 +277,14 @@ class ErrorService {
 
   flushPendingErrors(): void {
     if (this.isFlushing || this.pendingQueue.length === 0) return;
-    if (!this.canNotifyVisibleRenderer()) return;
+    if (!this.canSendToRenderer()) return;
 
     this.isFlushing = true;
     try {
       const errors = this.pendingQueue.splice(0);
       for (const error of errors) {
         try {
-          broadcastToVisibleRenderers(CHANNELS.ERROR_NOTIFY, error);
+          broadcastToVisibleRenderersOrAll(CHANNELS.ERROR_NOTIFY, error);
         } catch {
           // Window may have been destroyed mid-flush; re-buffer remaining
         }
@@ -308,17 +293,6 @@ class ErrorService {
     } finally {
       this.isFlushing = false;
     }
-  }
-
-  // An error held back while every view was cached reaches the next view the
-  // user sees — but only once that view has loaded, so a view still booting
-  // keeps waiting for the did-finish-load flush in windowServices.
-  flushPendingErrorsToLoadedView(): void {
-    if (this.pendingQueue.length === 0) return;
-    const hasLoadedVisibleView = getAllAppWebContents().some(
-      (wc) => !wc.isDestroyed() && !isCachedViewWebContents(wc.id) && !wc.isLoading()
-    );
-    if (hasLoadedVisibleView) this.flushPendingErrors();
   }
 
   getPendingPersistedErrors(): ErrorRecord[] {
@@ -610,9 +584,6 @@ export function registerErrorHandlers(
     return errorService.getPendingPersistedErrors();
   };
   handlers.push(typedHandle(CHANNELS.ERROR_GET_PENDING, handleGetPending));
-
-  // Reactivating a cached view re-registers it as its window's app view.
-  handlers.push(onRendererScopeChanged(() => errorService.flushPendingErrorsToLoadedView()));
 
   return () => {
     handlers.forEach((cleanup) => cleanup());

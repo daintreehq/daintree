@@ -18,7 +18,7 @@ const storeMock = vi.hoisted(() => ({
   set: vi.fn(),
 }));
 
-const broadcastToVisibleRenderersMock = vi.hoisted(() => vi.fn());
+const broadcastToVisibleRenderersOrAllMock = vi.hoisted(() => vi.fn());
 
 const crashLoopGuardMock = vi.hoisted(() => ({
   shouldRelaunch: vi.fn(() => true),
@@ -47,7 +47,7 @@ vi.mock("../../services/TelemetryService.js", () => ({
 }));
 
 vi.mock("../../ipc/utils.js", () => ({
-  broadcastToVisibleRenderers: broadcastToVisibleRenderersMock,
+  broadcastToVisibleRenderersOrAll: broadcastToVisibleRenderersOrAllMock,
 }));
 
 vi.mock("../../ipc/channels.js", () => ({
@@ -202,7 +202,7 @@ describe("globalErrorHandlers", () => {
       const error = new Error("test crash");
       uncaughtHandler(error);
 
-      expect(broadcastToVisibleRenderersMock).toHaveBeenCalledWith(
+      expect(broadcastToVisibleRenderersOrAllMock).toHaveBeenCalledWith(
         "error:notify",
         expect.objectContaining({
           type: "unknown",
@@ -250,7 +250,7 @@ describe("globalErrorHandlers", () => {
     });
 
     it("does not throw when broadcast fails", async () => {
-      broadcastToVisibleRenderersMock.mockImplementation(() => {
+      broadcastToVisibleRenderersOrAllMock.mockImplementation(() => {
         throw new Error("broadcast failed");
       });
 
@@ -326,7 +326,7 @@ describe("globalErrorHandlers", () => {
     it("builds AppError with correct message from Error", () => {
       uncaughtHandler(new Error("specific error message"));
 
-      const sentPayload = broadcastToVisibleRenderersMock.mock.calls[0]?.[1];
+      const sentPayload = broadcastToVisibleRenderersOrAllMock.mock.calls[0]?.[1];
       expect(sentPayload.message).toContain("specific error message");
       expect(sentPayload.message).toContain("UNCAUGHT_EXCEPTION");
       expect(sentPayload.details).toBeDefined();
@@ -348,7 +348,7 @@ describe("globalErrorHandlers", () => {
     it("sends error notification to renderer with correct payload", () => {
       rejectionHandler(new Error("rejected"));
 
-      const sentPayload = broadcastToVisibleRenderersMock.mock.calls[0]?.[1];
+      const sentPayload = broadcastToVisibleRenderersOrAllMock.mock.calls[0]?.[1];
       expect(sentPayload.type).toBe("unknown");
       expect(sentPayload.source).toBe("main-process");
       expect(sentPayload.message).toContain("rejected");

@@ -720,7 +720,6 @@ describe("errorHandlers", () => {
       return {
         id,
         isDestroyed: () => false,
-        isLoading: () => false,
         send: vi.fn(),
         once: vi.fn(),
         removeListener: vi.fn(),
@@ -759,7 +758,7 @@ describe("errorHandlers", () => {
       expect(notifyCalls(cached, CHANNELS.ERROR_NOTIFY)).toHaveLength(0);
     });
 
-    it("buffers errors while every project view is cached and delivers them on reactivation", async () => {
+    it("falls back to every view when all project views are cached", async () => {
       const CHANNELS = await getChannels();
       createMockWindow();
       const { registry, active, cached } = await registerViews();
@@ -769,13 +768,22 @@ describe("errorHandlers", () => {
       const retryHandler = getInvokeHandler(CHANNELS.ERROR_RETRY);
       await retryHandler({} as never, undefined as never).catch(() => {});
 
-      expect(notifyCalls(active, CHANNELS.ERROR_NOTIFY)).toHaveLength(0);
-      expect(notifyCalls(cached, CHANNELS.ERROR_NOTIFY)).toHaveLength(0);
+      expect(notifyCalls(active, CHANNELS.ERROR_NOTIFY)).toHaveLength(1);
+      expect(notifyCalls(cached, CHANNELS.ERROR_NOTIFY)).toHaveLength(1);
+    });
 
-      // Mirrors ProjectViewLifecycleController.activateView.
-      registry.registerAppView({ id: 1 } as never, { webContents: active } as never);
-      registry.unregisterCachedViewWebContents(active.id);
-      await Promise.resolve();
+    it("delivers buffered errors only to the active view on flush", async () => {
+      const CHANNELS = await getChannels();
+      createMockWindow({ destroyed: true });
+      registerErrorHandlers(null, null);
+
+      const retryHandler = getInvokeHandler(CHANNELS.ERROR_RETRY);
+      await retryHandler({} as never, undefined as never).catch(() => {});
+
+      createMockWindow();
+      const { active, cached } = await registerViews();
+      flushPendingErrors();
+      flushPendingErrors();
 
       expect(notifyCalls(active, CHANNELS.ERROR_NOTIFY)).toHaveLength(1);
       expect(notifyCalls(cached, CHANNELS.ERROR_NOTIFY)).toHaveLength(0);
