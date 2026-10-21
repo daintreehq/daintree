@@ -34,11 +34,17 @@ vi.mock("../../../store.js", () => ({
   auditLogsStore: { get: vi.fn(() => []), set: vi.fn() },
 }));
 
-const registryMock = vi.hoisted(() => ({
-  getRegisteredForgeProviders: vi.fn<() => ForgeProviderEntry[]>(() => []),
-  getForgeProviderImpl: vi.fn<(id: string) => unknown>(() => undefined),
-  listMatchingProviders: vi.fn<(remoteUrl: string) => unknown[]>(() => [{}]),
-}));
+const registryMock = vi.hoisted(() => {
+  const getForgeProviderImpl = vi.fn<(id: string) => unknown>(() => undefined);
+  return {
+    getRegisteredForgeProviders: vi.fn<() => ForgeProviderEntry[]>(() => []),
+    getForgeProviderImpl,
+    // Credential import takes the role-agnostic lookup; these tests bind a full
+    // provider, which both lookups return.
+    getForgeProviderBaseImpl: (id: string) => getForgeProviderImpl(id),
+    listMatchingProviders: vi.fn<(remoteUrl: string) => unknown[]>(() => [{}]),
+  };
+});
 
 vi.mock("../../../services/forgeProviderRegistry.js", () => registryMock);
 
