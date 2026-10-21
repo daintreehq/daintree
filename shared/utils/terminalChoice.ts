@@ -102,15 +102,17 @@ export function planChoice(screen: string, label: string): ChoicePlan {
 }
 
 const NUMBERED_OPTION = /^\s*(?:[❯›>▶➜→●]\s*)?(\d+)[.)]\s+/;
-/**
- * Markers an unnumbered list may be drawn with. `>` and `›` are left out: a
- * quote, an echoed answer and Codex's composer open rows with them.
- */
-const UNNUMBERED_MARKER = /^\s*[❯▶➜→●]\s*/;
+/** The highlight a dialog draws; `>` is left out, since quotes and composers open rows with it. */
+const DIALOG_HIGHLIGHT = /^\s*[❯›▶➜→●]\s*\d+[.)]\s+/;
+/** A composer sits between full-width rules; a dialog's options never touch one. */
+const HORIZONTAL_RULE = /^\s*[─━]{8,}\s*$/;
+/** The key hint a dialog draws under its options ("Esc to cancel", "Press enter to confirm"). */
+const KEY_HINT = /\b(?:enter|esc)\b/i;
+const HINT_VERB = /\b(?:confirm|cancel|select)\b/i;
 
 /** The selection list a screen is asking about right now, as `parseChoiceList` reads it. */
 export interface ChoiceList {
-  /** Option labels top to bottom, as drawn. */
+  /** Option labels top to bottom, as drawn (the first row of a wrapped one). */
   labels: string[];
   /** Index into `labels` of the highlighted option. */
   cursor: number;
@@ -125,18 +127,27 @@ function labelOf(row: string): string {
   ).trim();
 }
 
+function optionNumber(row: string): number | null {
+  const match = NUMBERED_OPTION.exec(row);
+  return match ? Number(match[1]) : null;
+}
+
 /**
- * The selection list the screen ends on, or null when the screen isn't
+ * The numbered dialog the screen ends on, or null when the screen isn't
  * plainly asking one. Stricter than `planChoice` on purpose: it backs answers
  * from a device that sends only a label, so anything that could be a
  * composer, a quote or ordinary output reads as no list at all.
  *
- * - The lowest highlighted row is the current surface. An empty one is the
- *   input box, and an older dialog above it is not offered.
- * - Options are the rows around it at its indent, all numbered (in order) or
- *   all unnumbered like it; deeper rows are descriptions, and a blank row or
- *   anything else ends the list.
- * - A numbered row below the list is a newer list with no highlight drawn yet.
+ * - The lowest highlighted row is the current surface, and it must be a
+ *   numbered option drawn with a dialog's highlight. The input box, an
+ *   unnumbered list and a quote never are, and an older dialog above them is
+ *   not offered.
+ * - The options are the consecutively numbered rows of the block of rows
+ *   around it; rows between them are wraps or descriptions, never steps.
+ * - A rule in that block means a composer, and a numbered row below it a
+ *   newer list with no highlight drawn yet.
+ * - A dialog says how to answer it ("Esc to cancel"); a screen without that
+ *   hint under the list isn't one.
  * - Two options with the same label can't be told apart, so neither is offered.
  */
 export function parseChoiceList(screen: string): ChoiceList | null {
@@ -148,49 +159,40 @@ export function parseChoiceList(screen: string): ChoiceList | null {
       break;
     }
   }
-  if (cursor === -1) return null;
-  const cursorRow = lines[cursor]!;
-  if (labelOf(cursorRow) === "") return null;
-  const cursorNumber = NUMBERED_OPTION.exec(cursorRow);
-  if (!cursorNumber && !UNNUMBERED_MARKER.test(cursorRow)) return null;
-  const numbered = cursorNumber !== null;
-  const optionIndent = indentOf(cursorRow);
+  if (cursor === -1 || !DIALOG_HIGHLIGHT.test(lines[cursor]!)) return null;
 
-  const isOption = (row: string) => {
-    const indent = indentOf(row);
-    if (indent < optionIndent - 1 || indent > optionIndent + 1) return false;
-    return NUMBERED_OPTION.test(row) === numbered;
-  };
-  const isDescription = (row: string) => indentOf(row) > optionIndent + 1;
+  let top = cursor;
+  while (top > 0 && lines[top - 1]!.trim() !== "") top--;
+  let bottom = cursor;
+  while (bottom < lines.length - 1 && lines[bottom + 1]!.trim() !== "") bottom++;
+  for (let i = top; i <= bottom; i++) if (HORIZONTAL_RULE.test(lines[i]!)) return null;
 
+  const cursorNumber = optionNumber(lines[cursor]!)!;
   const rows = [cursor];
-  let last = cursor;
-  for (const step of [-1, 1]) {
-    for (let i = cursor + step; i >= 0 && i < lines.length; i += step) {
-      const row = lines[i]!;
-      if (row.trim() === "") break;
-      if (isOption(row)) {
-        rows.push(i);
-        if (step === 1) last = i;
-      } else if (isDescription(row)) {
-        if (step === 1) last = i;
-      } else {
-        break;
-      }
-    }
+  let expected = cursorNumber - 1;
+  for (let i = cursor - 1; i >= top && expected >= 0; i--) {
+    const n = optionNumber(lines[i]!);
+    if (n === null) continue;
+    if (n !== expected) break;
+    rows.unshift(i);
+    expected--;
   }
-  for (let i = last + 1; i < lines.length; i++) {
-    if (NUMBERED_OPTION.test(lines[i]!)) return null;
+  expected = cursorNumber + 1;
+  for (let i = cursor + 1; i <= bottom; i++) {
+    const n = optionNumber(lines[i]!);
+    if (n === null) continue;
+    if (n !== expected) return null;
+    rows.push(i);
+    expected++;
   }
-  rows.sort((a, b) => a - b);
+  for (let i = bottom + 1; i < lines.length; i++) {
+    if (optionNumber(lines[i]!) !== null) return null;
+  }
   if (rows.length < 2) return null;
 
-  if (numbered) {
-    const numbers = rows.map((i) => Number(NUMBERED_OPTION.exec(lines[i]!)![1]));
-    for (let k = 1; k < numbers.length; k++) {
-      if (numbers[k] !== numbers[k - 1]! + 1) return null;
-    }
-  }
+  const hinted = lines.slice(cursor + 1).some((row) => KEY_HINT.test(row) && HINT_VERB.test(row));
+  if (!hinted) return null;
+
   const labels = rows.map((i) => labelOf(lines[i]!));
   const folded = labels.map((label) => label.toLowerCase());
   if (labels.some((label) => label === "") || new Set(folded).size !== folded.length) return null;

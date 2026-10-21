@@ -31,7 +31,7 @@ vi.mock("../../DriveLeaseService.js", () => ({ peekDriveLeaseService: () => stat
 vi.mock("../../plugin/pluginTerminalScreenRead.js", () => ({
   readPluginTerminalScreen: async () => ({
     status: "ok",
-    text: "❯ 1. Yes\n  2. No",
+    text: "❯ 1. Yes\n  2. No\n\n Esc to cancel",
     lineCount: 2,
     truncated: false,
   }),

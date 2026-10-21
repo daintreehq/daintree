@@ -35,7 +35,7 @@ function snapshot(runs: FleetRunRow[]): FleetSnapshot {
 
 describe("listWaitingRuns", () => {
   it("lists every project's waiting runs, longest waiting first, with what was observed", async () => {
-    screens.set("a", "❯ 1. Yes\n  2. No");
+    screens.set("a", "❯ 1. Yes\n  2. No\n\n Esc to cancel");
     screens.set("b", null);
     const runs = await listWaitingRuns({
       fleet: () =>
@@ -77,7 +77,7 @@ describe("listWaitingRuns", () => {
   });
 
   it("shows no screen for an id respawned since the fleet row was taken", async () => {
-    screens.set("a", "❯ 1. Yes\n  2. No");
+    screens.set("a", "❯ 1. Yes\n  2. No\n\n Esc to cancel");
     const runs = await listWaitingRuns({
       fleet: () => snapshot([row({ runId: "a", agentState: "waiting", spawnedAt: 100 })]),
       pty: () => ptyAt(200),
@@ -87,7 +87,7 @@ describe("listWaitingRuns", () => {
   });
 
   it("drops a run that stopped waiting while its screen was read", async () => {
-    screens.set("a", "❯ 1. Yes\n  2. No");
+    screens.set("a", "❯ 1. Yes\n  2. No\n\n Esc to cancel");
     let reads = 0;
     const runs = await listWaitingRuns({
       fleet: () =>

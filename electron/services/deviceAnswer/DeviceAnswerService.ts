@@ -524,6 +524,8 @@ export class DeviceAnswerService {
   private sendJson(res: http.ServerResponse, status: number, body: unknown): void {
     res.writeHead(status, {
       ...SECURITY_HEADERS,
+      // A body left unread can't share the connection with the next request.
+      ...(status === 413 ? { Connection: "close" } : {}),
       "Content-Type": "application/json; charset=utf-8",
       "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
     });
@@ -549,27 +551,43 @@ function refusalText(error: unknown): string {
   return "Nothing was pressed.";
 }
 
-async function readJson(req: http.IncomingMessage): Promise<unknown> {
+function readJson(req: http.IncomingMessage): Promise<unknown> {
   const type = headerValue(req.headers["content-type"]) ?? "";
   if (!type.toLowerCase().startsWith("application/json")) {
-    throw new HttpError(415, "Send JSON.");
+    return Promise.reject(new HttpError(415, "Send JSON."));
   }
-  const chunks: Buffer[] = [];
-  let size = 0;
-  // Past the cap the rest is read and dropped rather than the stream torn
-  // down, so the 413 still reaches the client; `requestTimeout` bounds it.
-  for await (const chunk of req) {
-    size += (chunk as Buffer).length;
-    if (size <= MAX_BODY_BYTES) chunks.push(chunk as Buffer);
-    else if (size > MAX_DRAINED_BYTES) {
-      req.destroy();
-      throw new HttpError(413, "Too large.");
-    }
-  }
-  if (size > MAX_BODY_BYTES) throw new HttpError(413, "Too large.");
-  try {
-    return JSON.parse(Buffer.concat(chunks).toString("utf8"));
-  } catch {
-    throw new HttpError(400, "Send JSON.");
-  }
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    let settled = false;
+    const settle = (outcome: () => void) => {
+      if (settled) return;
+      settled = true;
+      req.off("data", onData);
+      outcome();
+    };
+    // Past the cap the rest is read and dropped, so the 413 still reaches the
+    // client; past the drain limit reading stops and the reply closes the
+    // connection. `requestTimeout` bounds the drain either way.
+    const onData = (chunk: Buffer) => {
+      size += chunk.length;
+      if (size <= MAX_BODY_BYTES) chunks.push(chunk);
+      else if (size > MAX_DRAINED_BYTES) {
+        req.pause();
+        settle(() => reject(new HttpError(413, "Too large.")));
+      }
+    };
+    req.on("data", onData);
+    req.once("error", (error) => settle(() => reject(error)));
+    req.once("end", () =>
+      settle(() => {
+        if (size > MAX_BODY_BYTES) return reject(new HttpError(413, "Too large."));
+        try {
+          resolve(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+        } catch {
+          reject(new HttpError(400, "Send JSON."));
+        }
+      })
+    );
+  });
 }
