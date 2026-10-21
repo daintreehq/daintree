@@ -50,6 +50,8 @@ import { WorktreesReconnectingBadge } from "./WorktreesReconnectingBadge";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { Server } from "@/components/icons";
 import { getViewHostId } from "@/hooks/useHostConnection";
+import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
+import { OtherHostsWorktreeGroup } from "./OtherHostsWorktreeGroup";
 import { useHostConnectionStore } from "@/store/hostConnectionStore";
 import { splitHostName } from "@/components/Hosts/hostModel";
 import { Button } from "@/components/ui/button";
@@ -2325,6 +2327,8 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
           />
         </div>
       </div>
+
+      <OtherHostsWorktreeGroup projectId={getViewWorkspaceId()} />
 
       <ErrorBoundary
         variant="component"

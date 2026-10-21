@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   HostAttentionEvent,
   HostMetricsEvent,
+  HostWorktreeEntry,
 } from "../../../../shared/types/ipc/hostMetrics.js";
 import type {
   HostConnectionState,
@@ -87,7 +88,14 @@ function harness(hosts: HostDescriptor[]) {
   const local = {
     listFleetTargets: vi.fn(async () => ({ targets: [], complete: true })),
     submitFleet: vi.fn(async () => {}),
-    listWorktrees: vi.fn(async () => []),
+    listWorktrees: vi.fn(async (): Promise<HostWorktreeEntry[]> => []),
+    worktreesHeard: null as (() => void) | null,
+    onWorktreesMaybeChanged(listener: () => void) {
+      local.worktreesHeard = listener;
+      return () => {
+        local.worktreesHeard = null;
+      };
+    },
   };
   const options: HostMetricsClientOptions = {
     manager: {
@@ -144,6 +152,7 @@ function harness(hosts: HostDescriptor[]) {
     local,
     ringSize: 3,
     fleetReconcileMs: 200,
+    worktreesChangedDelayMs: 5,
   };
   const client = new HostMetricsClient(options);
   return {
@@ -253,6 +262,56 @@ describe("HostMetricsClient", () => {
       },
     ]);
     h.client.dispose();
+  });
+
+  it("tells every view a host's worktree list changed, whether or not its notifications are on", async () => {
+    const h = harness([descriptor("quiet")]);
+    h.client.start();
+    const quiet = await openSessionPair(dir);
+    open.push(quiet.host, quiet.client);
+    h.openSession("quiet", quiet.client);
+    await quiet.host.call(MetricsLinkMethod.WORKTREES_CHANGED, null);
+    expect(h.emitted).toContainEqual({ type: "worktrees", hostId: "quiet" });
+    h.client.dispose();
+  });
+
+  it("follows this machine's worktree list only while another host exists", async () => {
+    const h = harness([]);
+    h.client.start();
+    expect(h.local.worktreesHeard).toBeNull();
+
+    h.setHosts([descriptor("a")]);
+    expect(h.local.worktreesHeard).not.toBeNull();
+    h.local.worktreesHeard?.();
+    await waitFor(() => h.emitted.some((event) => event.type === "worktrees"));
+    expect(h.emitted.filter((event) => event.type === "worktrees")).toEqual([
+      { type: "worktrees", hostId: "local" },
+    ]);
+
+    h.setHosts([]);
+    expect(h.local.worktreesHeard).toBeNull();
+    h.client.dispose();
+  });
+
+  it("reads a host's worktrees from before observations as observing nothing, never idle", async () => {
+    const h = harness([descriptor("old")]);
+    h.hook.call = async () => [
+      {
+        projectId: "p1",
+        projectName: "app",
+        worktreeId: "/srv/app",
+        name: "app",
+        branch: "main",
+        path: "/srv/app",
+        isMainWorktree: true,
+        modifiedCount: null,
+        lastActivityAt: null,
+      },
+    ];
+    const entries = await h.client.listWorktrees({ hostId: "old" });
+    expect(entries).toEqual([
+      expect.objectContaining({ hostId: "old", worktreeId: "/srv/app", observed: null }),
+    ]);
   });
 
   it("holds a host's attention to its notice budget and shows its names as plain text", async () => {

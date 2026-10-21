@@ -3,16 +3,24 @@ import type {
   HostFleetTarget,
   HostFleetTargetList,
   HostWorktreeEntry,
+  HostWorktreeObservation,
 } from "../../../shared/types/ipc/hostMetrics.js";
+import type { FleetRunRow } from "../../../shared/types/ipc/fleet.js";
+import { FLEET_BANDS, bandForRun } from "../../../shared/utils/fleetBands.js";
 import { getAgentConfig } from "../../../shared/config/agentRegistry.js";
 import { LOCAL_HOST_ID } from "../../../shared/types/remoteHosts.js";
 import { getAgentAvailabilityStore } from "../../services/AgentAvailabilityStore.js";
 import { peekDriveLeaseService } from "../../services/DriveLeaseService.js";
 import { projectStore } from "../../services/ProjectStore.js";
+import { events } from "../../services/events.js";
 import { classifyRun } from "../../services/projectAgentCounts.js";
 import { AppError } from "../../utils/errorTypes.js";
 import { isSessionEndpoint } from "../projects/hostInstall.js";
-import { getPtyClient, getWorkspaceClientRef } from "../../window/serviceRefs.js";
+import {
+  getFleetSnapshotServiceRef,
+  getPtyClient,
+  getWorkspaceClientRef,
+} from "../../window/serviceRefs.js";
 import { FLEET_SUBMIT_RETENTION_MS } from "../../../shared/config/fleetSubmitRetention.js";
 import { openProjects } from "./hostSources.js";
 import {
@@ -265,10 +273,74 @@ async function submitNow(terminalId: string, text: string, caller: FleetCaller):
   pty.submit(terminalId, text);
 }
 
+function observationOf(
+  held: (HostWorktreeObservation & { runId: string }) | undefined
+): HostWorktreeObservation | null {
+  return held ? { band: held.band, agentState: held.agentState } : null;
+}
+
+function worktreeKey(projectId: string, worktreeId: string): string {
+  return `${projectId}\n${worktreeId}`;
+}
+
+/**
+ * The most urgent band among each worktree's agents, as this host's fleet
+ * placed them, keyed by project and worktree. Canopy's reading is left out:
+ * another machine is shown what this host observed, never an interpretation
+ * of it. Equal bands settle on the lowest run id, so the answer is stable.
+ */
+export function observeWorktrees(
+  runs: readonly FleetRunRow[]
+): Map<string, HostWorktreeObservation & { runId: string }> {
+  const out = new Map<string, HostWorktreeObservation & { runId: string }>();
+  for (const run of runs) {
+    if (!run.worktreeId) continue;
+    const { canopy: _canopy, ...observed } = run;
+    const band = bandForRun(observed);
+    const key = worktreeKey(run.workspaceId, run.worktreeId);
+    const held = out.get(key);
+    if (held) {
+      const rank = FLEET_BANDS.indexOf(band) - FLEET_BANDS.indexOf(held.band);
+      if (rank > 0 || (rank === 0 && run.runId >= held.runId)) continue;
+    }
+    out.set(key, { band, agentState: run.agentState ?? null, runId: run.runId });
+  }
+  return out;
+}
+
+/**
+ * Be told whenever this machine's worktree list may show something else: a
+ * worktree came, went or moved, an agent's state changed, or the fleet placed
+ * a run anew (parks, snoozes and hand-backs move bands with no state change).
+ */
+export function onLocalWorktreesMaybeChanged(listener: () => void): () => void {
+  let offFleet: (() => void) | null = null;
+  // The fleet service may start after this is installed, so it's followed once it exists.
+  const followFleet = (): void => {
+    offFleet ??= getFleetSnapshotServiceRef()?.subscribe(() => listener()) ?? null;
+  };
+  const heard = (): void => {
+    followFleet();
+    listener();
+  };
+  followFleet();
+  const offs = [
+    events.on("sys:worktree:update", heard),
+    events.on("sys:worktree:remove", heard),
+    events.on("agent:state-changed", heard),
+  ];
+  return () => {
+    for (const off of offs) off();
+    offFleet?.();
+  };
+}
+
 /** Every worktree of this host's open projects. */
 export async function listLocalWorktrees(): Promise<HostWorktreeEntry[]> {
   const client = getWorkspaceClientRef();
   if (!client) return [];
+  const runs = getFleetSnapshotServiceRef()?.getLastBroadcast()?.runs ?? [];
+  const observed = observeWorktrees(runs);
   const out: HostWorktreeEntry[] = [];
   for (const project of openProjects()) {
     let states;
@@ -290,6 +362,7 @@ export async function listLocalWorktrees(): Promise<HostWorktreeEntry[]> {
         modifiedCount: typeof state.modifiedCount === "number" ? state.modifiedCount : null,
         lastActivityAt:
           typeof state.lastActivityTimestamp === "number" ? state.lastActivityTimestamp : null,
+        observed: observationOf(observed.get(worktreeKey(project.id, state.id))),
       });
       if (out.length >= MAX_HOST_WORKTREES) return out;
     }

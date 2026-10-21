@@ -27,6 +27,8 @@ import {
   normalizeFleetOpId,
 } from "./linkMethods.js";
 import { HOST_METRICS_INTERVAL_MS } from "./sampler.js";
+import { WorktreeChangeWatch } from "./worktreeChanges.js";
+import { EmptyPayloadSchema } from "../host/linkMethods.js";
 import { connectionKey } from "../client/connection.js";
 import { admitHostNotice } from "../hybrid/hostNoticeBudget.js";
 import { displaySafeText } from "../../../shared/utils/displaySafeText.js";
@@ -70,8 +72,12 @@ export interface HostMetricsClientOptions {
       opId: string | null
     ): Promise<void>;
     listWorktrees(): Promise<HostWorktreeEntry[]>;
+    /** Told when this machine's worktree list may show something else. */
+    onWorktreesMaybeChanged?(listener: () => void): () => void;
   };
   ringSize?: number;
+  /** How long a burst of this machine's worktree changes is gathered; the default outside tests. */
+  worktreesChangedDelayMs?: number;
   /** How long a fleet submit whose answer was lost waits for its host to come back and say. */
   fleetReconcileMs?: number;
 }
@@ -121,6 +127,7 @@ export class HostMetricsClient {
   private readonly dialledForNotifications = new Set<HostId>();
   private readonly disposers: Array<() => void> = [];
   private stopLocal: (() => void) | null = null;
+  private stopLocalWorktrees: (() => void) | null = null;
   private readonly ringSize: number;
 
   constructor(private readonly options: HostMetricsClientOptions) {
@@ -139,6 +146,8 @@ export class HostMetricsClient {
     for (const dispose of this.disposers.splice(0)) dispose();
     this.stopLocal?.();
     this.stopLocal = null;
+    this.stopLocalWorktrees?.();
+    this.stopLocalWorktrees = null;
   }
 
   getSnapshots(): HostMetricsSnapshot[] {
@@ -317,6 +326,10 @@ export class HostMetricsClient {
       });
       return null;
     });
+    session.registerCallHandler(MetricsLinkMethod.WORKTREES_CHANGED, EmptyPayloadSchema, () => {
+      this.options.emit({ type: "worktrees", hostId });
+      return null;
+    });
   }
 
   /**
@@ -359,6 +372,24 @@ export class HostMetricsClient {
       this.stopLocal();
       this.stopLocal = null;
       this.rings.delete(LOCAL_HOST_ID);
+    }
+    // A window showing another host lists this machine's worktrees too.
+    const follow = this.options.local.onWorktreesMaybeChanged;
+    if (hosts.length > 0 && !this.stopLocalWorktrees && follow) {
+      const watch = new WorktreeChangeWatch({
+        list: () => this.options.local.listWorktrees(),
+        delayMs: this.options.worktreesChangedDelayMs,
+        active: () => true,
+        changed: () => this.options.emit({ type: "worktrees", hostId: LOCAL_HOST_ID }),
+      });
+      const off = follow(() => watch.poke());
+      this.stopLocalWorktrees = () => {
+        off();
+        watch.dispose();
+      };
+    } else if (hosts.length === 0 && this.stopLocalWorktrees) {
+      this.stopLocalWorktrees();
+      this.stopLocalWorktrees = null;
     }
   }
 }

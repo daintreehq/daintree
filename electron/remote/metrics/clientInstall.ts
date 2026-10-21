@@ -10,7 +10,12 @@ import { getWindowRegistry } from "../../window/windowRef.js";
 import { setHostAgentsSource } from "../client/initClient.js";
 import { registerRemoteService } from "../runtime.js";
 import { HostMetricsClient, type HostMetricsClientOptions } from "./client.js";
-import { listLocalFleetTargets, listLocalWorktrees, submitLocalFleet } from "./hostOps.js";
+import {
+  listLocalFleetTargets,
+  listLocalWorktrees,
+  onLocalWorktreesMaybeChanged,
+  submitLocalFleet,
+} from "./hostOps.js";
 import { getLocalSummaryLoop } from "./localLoop.js";
 
 declare module "../runtime.js" {
@@ -76,6 +81,7 @@ export function installHostMetricsClient(options: InstallHostMetricsClientOption
       listFleetTargets: listLocalFleetTargets,
       submitFleet: submitLocalFleet,
       listWorktrees: listLocalWorktrees,
+      onWorktreesMaybeChanged: onLocalWorktreesMaybeChanged,
     },
   });
   client.start();

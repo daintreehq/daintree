@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { FLEET_BANDS } from "../../../shared/utils/fleetBands.js";
 
 /** Bounds on what one host answers, so a busy host can't flood a Shell. */
 export const MAX_FLEET_TARGETS = 500;
@@ -19,6 +20,12 @@ export const MetricsLinkMethod = {
   SUBMIT_FLEET: "fleet.submit",
   /** Shell → Host: every worktree of the host's open projects. */
   LIST_WORKTREES: "host.list-worktrees",
+  /**
+   * Host → Shell: what `LIST_WORKTREES` would answer has changed. Carries
+   * nothing; a Shell showing this host's worktrees asks again. A Shell from
+   * before it existed refuses the call, which the host ignores.
+   */
+  WORKTREES_CHANGED: "host.worktrees-changed",
   /**
    * Shell → Host: what restarting the host would end (terminals by project,
    * running operations, other attached Shells). A host from before it existed
@@ -91,6 +98,12 @@ export const WorktreeListSchema = z
         isMainWorktree: z.boolean(),
         modifiedCount: z.number().int().min(0).nullable(),
         lastActivityAt: z.number().finite().nullable(),
+        // Absent from a host from before it was sent: no observation, not idle.
+        observed: z
+          .object({ band: z.enum(FLEET_BANDS), agentState: agentState.nullable() })
+          .strip()
+          .nullable()
+          .default(null),
       })
       .strip()
   )

@@ -152,7 +152,7 @@ describe("WorktreePlacementRow", () => {
     };
     expect(dispatch).toHaveBeenCalledWith(
       "project.openOnHost",
-      { hostId: "studio-02", projectId: "p1", worktree },
+      { hostId: "studio-02", projectId: "p1", worktree, newWindow: false },
       { source: "user" }
     );
     expect(currentHostSwitchRequest()).toMatchObject({ toHostId: "studio-02", worktree });
@@ -163,6 +163,31 @@ describe("WorktreePlacementRow", () => {
     );
     act(() => completeHostSwitchRequest(currentHostSwitchRequest()!.id));
     expect(onLeave).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves this window where it is on Cmd/Ctrl-click, opening the host in a new one", async () => {
+    render(
+      <WorktreePlacementRow
+        projectId="p1"
+        rootPath={ROOT}
+        getDraft={getDraft}
+        onLeave={vi.fn()}
+        onElsewhereChange={vi.fn()}
+      />
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Use studio-02" }));
+    await act(async () => {
+      // Both modifiers, so the platform's own one is held wherever this runs.
+      fireEvent.click(screen.getByTestId("worktree-placement-continue"), {
+        metaKey: true,
+        ctrlKey: true,
+      });
+    });
+    expect(dispatch).toHaveBeenCalledWith(
+      "project.openOnHost",
+      expect.objectContaining({ hostId: "studio-02", newWindow: true }),
+      { source: "user" }
+    );
   });
 
   it("stops blocking local Create once it leaves the dialog with another host chosen", () => {
