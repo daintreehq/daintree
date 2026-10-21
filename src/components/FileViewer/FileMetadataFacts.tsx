@@ -122,6 +122,14 @@ function factItems(
 const YIELD_ORDER = ["routine", "size", "lines", "language"] as const;
 type Yieldable = (typeof YIELD_ORDER)[number];
 
+function isYieldable(key: string): key is Yieldable {
+  return (YIELD_ORDER as readonly string[]).includes(key);
+}
+
+function isDropped(drop: ReadonlySet<Yieldable>, key: string): boolean {
+  return isYieldable(key) && drop.has(key);
+}
+
 /** Space kept between the lead run and the trailing routine pair. */
 const ROUTINE_MIN_GAP_PX = 16;
 
@@ -154,7 +162,7 @@ function useFittedFacts(leadKeys: string, hasRoutine: boolean) {
       const available = run.clientWidth;
 
       const total = (drop: ReadonlySet<Yieldable>) => {
-        const shown = keys.lead.filter((key) => !drop.has(key as Yieldable));
+        const shown = keys.lead.filter((key) => !isDropped(drop, key));
         let sum = 0;
         shown.forEach((key, index) => {
           sum += (lead.get(key) ?? 0) + (index > 0 ? separator + gap * 2 : 0);
@@ -229,7 +237,7 @@ export function FileMetadataFacts({
     routine.length > 0
   );
 
-  const visibleLead = lead.filter((item) => !hidden.has(item.key as Yieldable));
+  const visibleLead = lead.filter((item) => !isDropped(hidden, item.key));
   const firstVisible = visibleLead[0]?.key;
 
   return (
@@ -239,7 +247,7 @@ export function FileMetadataFacts({
       data-testid="file-metadata-facts"
     >
       {lead.map((item) => {
-        const gone = hidden.has(item.key as Yieldable);
+        const gone = isDropped(hidden, item.key);
         return (
           <span
             key={item.key}

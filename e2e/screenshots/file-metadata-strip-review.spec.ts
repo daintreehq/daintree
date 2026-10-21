@@ -106,8 +106,7 @@ async function open(page: Page, fixture: string, theme: string, width: number): 
   await expect(strip, `fixture "${fixture}" rendered no strip`).toBeVisible();
   await expect(page.locator(".cm-content").first()).toBeAttached();
   await page.evaluate(() => document.fonts.ready);
-  // eslint-disable-next-line playwright/no-wait-for-timeout -- settle: CodeMirror's first highlight pass and the toolbar's width fit land a frame or two after attach
-  await page.waitForTimeout(250);
+  await page.waitForTimeout(250); // e2e-wait: ok — CodeMirror's first highlight pass and the toolbar's width fit land a frame or two after attach
   return page.locator("[data-preview-shell]").first();
 }
 
