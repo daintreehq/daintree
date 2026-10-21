@@ -322,16 +322,14 @@ describe("TerminalAgentIndicator — glyph and tooltip", () => {
     expect(screen.queryByRole("status", { name: /agent state/i })).toBeNull();
   });
 
-  it("keeps the settled glyph while there is a session cost to explain", () => {
+  it("keeps the settled glyph while there is a session cost, and leaves the cost to the row", () => {
     mockTerminal = { id: "t1", sessionCost: 0.42, sessionTokens: 12_000 };
 
     render(<TerminalAgentIndicator id="t1" agentState="completed" />);
 
     expect(screen.getByRole("status", { name: "Agent state: finished" })).toBeTruthy();
-    const tooltip = screen.getByTestId("tooltip-content");
-    expect(tooltip.textContent).toContain("Cost: $0.42");
-    // The readout itself is metadata and lives in the header row, not here.
-    expect(screen.queryByText(/^\$0\.42/)).toBeNull();
+    // The header row's settled trace is the one place cost is disclosed.
+    expect(screen.getByTestId("tooltip-content").textContent).not.toContain("$0.42");
   });
 
   it("draws a seen hand-back as the white finished ring, with no chip around it", () => {

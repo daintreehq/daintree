@@ -28,6 +28,9 @@
  *   DAINTREE_SHOT_SWEEP        "0" skips the all-themes contact sheets (default on)
  *   DAINTREE_SHOT_ONLY         "grid" captures only the whole-grid scenes, "panes" only the
  *                              single-pane states (default both)
+ *   DAINTREE_SHOT_FIXTURES     comma-separated fixture names to limit the single-pane states
+ *                              to (default all); the interaction captures follow only the
+ *                              fixtures they need
  *
  * Hard rule, inherited from the sibling harnesses: never write a PNG that has not been
  * verified. Every capture asserts the state it means to show is on screen first, and
@@ -62,6 +65,15 @@ const SWEEP = process.env.DAINTREE_SHOT_SWEEP !== "0";
 const ONLY = process.env.DAINTREE_SHOT_ONLY ?? "";
 const SHOOT_GRID = ONLY !== "panes";
 const SHOOT_PANES = ONLY !== "grid";
+const ONLY_FIXTURES = (process.env.DAINTREE_SHOT_FIXTURES ?? "")
+  .split(",")
+  .map((f) => f.trim())
+  .filter(Boolean);
+const PANE_FIXTURES: FixtureName[] =
+  ONLY_FIXTURES.length > 0
+    ? FIXTURE_NAMES.filter((name) => ONLY_FIXTURES.includes(name))
+    : FIXTURE_NAMES;
+const wants = (name: FixtureName) => PANE_FIXTURES.includes(name);
 const ALL_THEMES = BUILT_IN_THEME_SOURCES.map((t) => t.id);
 
 // 2× so a 32px bar's glyphs, 2px stripe and 1px edges are judged at the size a Retina
@@ -281,12 +293,19 @@ async function proveState(page: Page, name: FixtureName, header: Locator): Promi
     case "hibernated":
       await expect(header.getByTestId("terminal-hibernated-badge")).toBeVisible({ timeout });
       break;
-    case "completed-cost":
-      await expect(header.getByText("$1.84")).toBeVisible({ timeout });
-      break;
     case "completed-no-changes":
-      await expect(header.getByText("Finished, no changes")).toBeVisible({ timeout });
+    case "completed-cost":
+    case "completed-cost-no-changes":
+    case "completed-cost-no-changes-wide":
+    case "completed-tokens-only":
+      await expect(header.getByTestId("terminal-settled-trace")).toBeVisible({ timeout });
       break;
+    case "exited-agent-cost":
+      await expect(header.getByTestId("terminal-settled-trace")).toBeVisible({ timeout });
+      await expect(header.getByText("[exit 1]")).toBeVisible({ timeout });
+      // An exited agent's header drops the task and paints the agent's name.
+      await expect(header.getByText("Claude", { exact: true })).toBeVisible({ timeout });
+      return;
     case "exited-plain":
       await expect(header.getByText("[exit 1]")).toBeVisible({ timeout });
       break;
@@ -445,7 +464,7 @@ test("panel header — states, interactions and themes", async ({ page }) => {
 
   // Every state, alone, in the review themes.
   for (const theme of SHOOT_PANES ? THEMES : []) {
-    for (const name of FIXTURE_NAMES) {
+    for (const name of PANE_FIXTURES) {
       const { pane, header } = await open(page, name, theme);
       await proveState(page, name, header);
       written.push(await snap(pane, `${name}--${theme}.png`));
@@ -458,7 +477,7 @@ test("panel header — states, interactions and themes", async ({ page }) => {
     const theme = THEMES[0]!;
 
     // Hover over the title bar reveals the "duplicate as tab" control.
-    {
+    if (wants("focused-working")) {
       const { pane, header } = await open(page, "focused-working", theme);
       await proveState(page, "focused-working", header);
       await header.getByText("fix flaky auth tests").hover();
@@ -481,7 +500,7 @@ test("panel header — states, interactions and themes", async ({ page }) => {
 
     // Keyboard focus on the title (rename affordance) and on the close button, through
     // real Tab presses so `:focus-visible` actually paints.
-    {
+    if (wants("focused-working")) {
       const { pane, header } = await open(page, "focused-working", theme);
       await proveState(page, "focused-working", header);
       const title = header.getByRole("button", { name: /Agent title/ });
@@ -510,7 +529,7 @@ test("panel header — states, interactions and themes", async ({ page }) => {
     }
 
     // Inline rename, started with F2 on the focused title.
-    {
+    if (wants("focused-working")) {
       const { pane, header } = await open(page, "focused-working", theme);
       await proveState(page, "focused-working", header);
       const title = header.getByRole("button", { name: /Agent title/ });
@@ -535,7 +554,7 @@ test("panel header — states, interactions and themes", async ({ page }) => {
 
     // The overflow menu. Restart has no in-menu state of its own: an idle shell restarts
     // at once and a working agent gets the app-level confirm dialog.
-    {
+    if (wants("focused-working")) {
       const { pane, header } = await open(page, "focused-working", theme);
       await proveState(page, "focused-working", header);
       await header.getByRole("button", { name: "More panel actions" }).click();
@@ -547,7 +566,7 @@ test("panel header — states, interactions and themes", async ({ page }) => {
     }
 
     // A tab under the cursor reveals its close control.
-    {
+    if (wants("tabs")) {
       const { pane, header } = await open(page, "tabs", theme);
       await proveState(page, "tabs", header);
       await header.getByRole("tab", { name: /write funnel tests/ }).hover();
@@ -556,7 +575,7 @@ test("panel header — states, interactions and themes", async ({ page }) => {
     }
 
     // Focus on a tab through real Tab presses — the ring inside the strip.
-    {
+    if (wants("tabs")) {
       const { pane, header } = await open(page, "tabs", theme);
       await proveState(page, "tabs", header);
       const strip = header.getByRole("tablist");
@@ -566,13 +585,53 @@ test("panel header — states, interactions and themes", async ({ page }) => {
     }
 
     // The hidden-tabs menu.
-    {
+    if (wants("tabs-overflow")) {
       const { pane, header } = await open(page, "tabs-overflow", theme);
       await proveState(page, "tabs-overflow", header);
       await header.getByTestId("panel-tabs-overflow").click();
       await expect(page.getByRole("menu")).toBeVisible();
       await page.waitForTimeout(200);
       written.push(await snapRegion(page, pane, 200, `tabs-overflow--${theme}--menu-open.png`));
+    }
+
+    // The settled-agent trace's tooltips — what the cost readout and the finished pill
+    // say when asked, by pointer.
+    const settledTips: FixtureName[] = [
+      "completed-cost",
+      "completed-no-changes",
+      "completed-cost-no-changes",
+      "exited-agent-cost",
+    ];
+    for (const name of settledTips) {
+      if (!wants(name)) continue;
+      const { pane, header } = await open(page, name, theme);
+      await proveState(page, name, header);
+      await header.getByTestId("terminal-settled-trace").hover();
+      // A readout with no tooltip is itself the finding, so absence is recorded in the
+      // file name rather than thrown.
+      const tip = page.locator("[data-radix-popper-content-wrapper]").first();
+      const opened = await tip
+        .waitFor({ state: "visible", timeout: 3_000 })
+        .then(() => true)
+        .catch(() => false);
+      await page.waitForTimeout(200);
+      written.push(
+        await snapRegion(page, pane, 90, `${name}--${theme}--hover${opened ? "" : "-no-tooltip"}.png`)
+      );
+    }
+
+    // The same disclosure by keyboard: Tab onto the trace chip, ring and tooltip.
+    if (wants("completed-cost-no-changes")) {
+      const { pane, header } = await open(page, "completed-cost-no-changes", theme);
+      await proveState(page, "completed-cost-no-changes", header);
+      await tabTo(page, header.getByTestId("terminal-settled-trace"), "the settled trace");
+      await expect(page.locator("[data-radix-popper-content-wrapper]").first()).toBeVisible({
+        timeout: 5_000,
+      });
+      await page.waitForTimeout(200);
+      written.push(
+        await snapRegion(page, pane, 120, `completed-cost-no-changes--${theme}--focus.png`)
+      );
     }
   }
 
@@ -597,7 +656,7 @@ test("panel header — states, interactions and themes", async ({ page }) => {
   const onDisk = readdirSync(OUT_DIR).filter((f) => f.endsWith(".png"));
   expect(onDisk.length).toBe(written.length);
   expect(onDisk.length).toBeGreaterThanOrEqual(
-    (SHOOT_PANES ? THEMES.length * FIXTURE_NAMES.length : 0) +
+    (SHOOT_PANES ? THEMES.length * PANE_FIXTURES.length : 0) +
       (SHOOT_GRID ? THEMES.length * GRID_SCENE_NAMES.length : 0)
   );
   console.log(`[panel-header-shots] ${onDisk.length} PNGs in ${OUT_DIR}`);

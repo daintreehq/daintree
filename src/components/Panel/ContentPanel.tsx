@@ -760,6 +760,7 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
         role={activeTab ? "tabpanel" : undefined}
         aria-labelledby={activeTab ? tabDomId(activeTab.id) : undefined}
         className="flex-1 min-h-0 relative flex flex-col"
+        data-pane-body=""
       >
         {children}
       </div>

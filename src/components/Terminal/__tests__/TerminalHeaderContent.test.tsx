@@ -116,17 +116,19 @@ describe("TerminalHeaderContent — settled-agent trace", () => {
     expect(badge.textContent).toContain("[exit 0]");
   });
 
-  it("keeps the error ink for a non-zero exit only", () => {
+  it("marks a non-zero exit as failed, in shape and in name, and only that", () => {
     mockTerminal = { id: "t1" };
 
     const { rerender } = render(<TerminalHeaderContent id="t1" isExited={true} exitCode={2} />);
-    expect(screen.getByRole("status").className).toContain("text-status-error");
+    expect(screen.getByRole("status").querySelector("svg")).not.toBeNull();
+    expect(screen.getByRole("status").getAttribute("aria-label")).toBe("[exit 2], failed");
 
     rerender(<TerminalHeaderContent id="t1" isExited={true} exitCode={0} />);
-    expect(screen.getByRole("status").className).not.toContain("text-status-error");
+    expect(screen.getByRole("status").querySelector("svg")).toBeNull();
+    expect(screen.getByRole("status").getAttribute("aria-label")).toBeNull();
 
     rerender(<TerminalHeaderContent id="t1" isExited={true} exitCode={null} />);
-    expect(screen.getByRole("status").className).not.toContain("text-status-error");
+    expect(screen.getByRole("status").querySelector("svg")).toBeNull();
   });
 
   it("reads [exited] rather than a dangling 'exit' when there is no code", () => {
@@ -144,7 +146,28 @@ describe("TerminalHeaderContent — settled-agent trace", () => {
 
     render(<TerminalHeaderContent id="t1" agentState="completed" />);
 
-    expect(screen.getByText(/\$0\.42/).textContent).toContain("12");
+    const trace = screen.getByTestId("terminal-settled-trace");
+    expect(trace.textContent).toContain("$0.42");
+    expect(trace.textContent).toContain("12k tokens");
+    expect(trace.getAttribute("aria-label")).toContain("12,000 tokens");
+  });
+
+  it("discloses every digit the summary printed, and never reads a paid run as free", () => {
+    mockTerminal = { id: "t1", sessionCost: 0.00001 };
+
+    render(<TerminalHeaderContent id="t1" agentState="completed" />);
+
+    const trace = screen.getByTestId("terminal-settled-trace");
+    expect(trace.textContent).toContain("<$0.01");
+    expect(trace.getAttribute("aria-label")).toContain("$0.00001 USD");
+  });
+
+  it("shows a token-only summary rather than dropping it", () => {
+    mockTerminal = { id: "t1", sessionTokens: 84_310 };
+
+    render(<TerminalHeaderContent id="t1" agentState="completed" />);
+
+    expect(screen.getByTestId("terminal-settled-trace").textContent).toContain("84k tokens");
   });
 
   it("renders no cost readout while the agent is still working", () => {
@@ -155,30 +178,32 @@ describe("TerminalHeaderContent — settled-agent trace", () => {
     expect(screen.queryByText(/\$0\.42/)).toBeNull();
   });
 
-  it("renders 'Finished, no changes' pill when completed with no file changes", () => {
+  it("says 'Nothing to commit' when completed with an observed clean worktree", () => {
     mockTerminal = { id: "t1" };
 
     render(<TerminalHeaderContent id="t1" agentState="completed" completedWithNoChanges={true} />);
 
-    const pill = screen.getByRole("status", { name: /no file changes/i });
-    expect(pill).toBeTruthy();
-    expect(pill.textContent).toContain("Finished, no changes");
+    const trace = screen.getByRole("status", { name: /nothing to commit/i });
+    expect(trace.textContent).toContain("Nothing to commit");
+    expect(trace.getAttribute("tabindex")).toBe("0");
   });
 
-  it("omits 'Finished, no changes' pill when completedWithNoChanges is false", () => {
+  it("renders no trace when there is neither a clean worktree nor a summary", () => {
     mockTerminal = { id: "t1" };
 
     render(<TerminalHeaderContent id="t1" agentState="completed" completedWithNoChanges={false} />);
 
-    expect(screen.queryByRole("status", { name: /no file changes/i })).toBeNull();
+    expect(screen.queryByTestId("terminal-settled-trace")).toBeNull();
   });
 
-  it("omits 'Finished, no changes' pill when sessionCost is present (cost readout wins)", () => {
+  it("keeps the clean-worktree fact beside the cost rather than dropping it", () => {
     mockTerminal = { id: "t1", sessionCost: 0.42 };
 
     render(<TerminalHeaderContent id="t1" agentState="completed" completedWithNoChanges={true} />);
 
-    expect(screen.queryByRole("status", { name: /no file changes/i })).toBeNull();
+    const trace = screen.getByRole("status", { name: /nothing to commit/i });
+    expect(trace.textContent).toContain("Nothing to commit");
+    expect(trace.textContent).toContain("$0.42");
   });
 });
 

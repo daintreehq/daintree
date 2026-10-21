@@ -31,6 +31,7 @@ import { ArtifactOverlay } from "./ArtifactOverlay";
 import { TerminalSearchBar } from "./TerminalSearchBar";
 import { TerminalScrollIndicator } from "./TerminalScrollIndicator";
 import { TerminalChipRow } from "./TerminalChipRow";
+import { EXITED_PANE_CLASS } from "./exitStatus";
 import { useGridScrollRoot } from "./GridScrollRootContext";
 import { useUnmountVisibilityCleanup } from "./useUnmountVisibilityCleanup";
 import { useTerminalVisibilityObserver } from "./useTerminalVisibilityObserver";
@@ -1233,14 +1234,17 @@ function TerminalPaneComponent({
   // `worktree.id` in WorktreeCard) over `cwd` so a user-initiated `cd` away
   // from the worktree root doesn't break the lookup.
   const reviewWorktreeId = worktreeId ?? cwd;
-  const changedFileCount = useWorktreeStore((s) =>
+  // Undefined when there is no git status on record (no worktree, or not yet
+  // polled): an unread status must never pass for a clean one.
+  const observedChangedFileCount = useWorktreeStore((s) =>
     reviewWorktreeId
-      ? (s.worktrees.get(reviewWorktreeId)?.worktreeChanges?.changedFileCount ?? 0)
-      : 0
+      ? s.worktrees.get(reviewWorktreeId)?.worktreeChanges?.changedFileCount
+      : undefined
   );
+  const changedFileCount = observedChangedFileCount ?? 0;
 
   const completedWithChanges = agentState === "completed" && changedFileCount > 0;
-  const completedWithNoChanges = agentState === "completed" && changedFileCount === 0;
+  const completedWithNoChanges = agentState === "completed" && observedChangedFileCount === 0;
 
   // Any review surface opening for this worktree dismisses the completion
   // banner: the user is already looking at the changes it was pointing at.
@@ -1446,7 +1450,7 @@ function TerminalPaneComponent({
       onAddTab={onAddTab}
       className={cn(
         "terminal-pane",
-        isExited && "opacity-75 grayscale",
+        isExited && EXITED_PANE_CLASS,
         isPinged &&
           allowPing &&
           (wasJustSelected ? "animate-terminal-ping-select" : "animate-terminal-ping")
