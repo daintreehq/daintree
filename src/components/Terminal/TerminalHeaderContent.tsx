@@ -367,7 +367,6 @@ export function TerminalHeaderContent({
     );
   };
 
-
   return (
     <>
       {/* Settled-agent trace leads the row per the runtime-signals tier table:

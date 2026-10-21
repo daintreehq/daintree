@@ -616,7 +616,12 @@ test("panel header — states, interactions and themes", async ({ page }) => {
         .catch(() => false);
       await page.waitForTimeout(200);
       written.push(
-        await snapRegion(page, pane, 90, `${name}--${theme}--hover${opened ? "" : "-no-tooltip"}.png`)
+        await snapRegion(
+          page,
+          pane,
+          90,
+          `${name}--${theme}--hover${opened ? "" : "-no-tooltip"}.png`
+        )
       );
     }
 
