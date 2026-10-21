@@ -374,7 +374,7 @@ describe("readCodexQuotaProfiles (#13686)", () => {
 
     it("folds a symlink to a preset home into that home's row", async () => {
       const link = path.join(root, "link");
-      symlinkSync(second, link);
+      symlinkSync(second, link, "junction");
       presets(
         { id: "a", name: "Work", env: { CODEX_HOME: second } },
         { id: "b", name: "Work alias", env: { CODEX_HOME: link } }
@@ -389,7 +389,7 @@ describe("readCodexQuotaProfiles (#13686)", () => {
 
     it("folds a symlink to the default home into the default row", async () => {
       const link = path.join(root, "default-link");
-      symlinkSync(defaultHome, link);
+      symlinkSync(defaultHome, link, "junction");
       presets({ id: "a", name: "Personal", env: { CODEX_HOME: link } });
       respondPerHome(() => 5);
       const profiles = await readCodexQuotaProfiles();
@@ -449,6 +449,64 @@ describe("readCodexQuotaProfiles (#13686)", () => {
       const profiles = await readCodexQuotaProfiles();
       expect(profiles).toHaveLength(2);
       expect(methods).toEqual(["account/rateLimits/read", "account/rateLimits/read"]);
+    });
+
+    it("keeps a quota that arrived when the session dies during the account read", async () => {
+      // The account read never answers; the transport's deadline is what ends it.
+      runSession.mockImplementation(async (run: (call: Call) => Promise<unknown>) => {
+        void run(async (method) => {
+          if (method === "account/rateLimits/read") {
+            return { rateLimits: { primary: FIVE_HOURS }, accountId: "ws-1" };
+          }
+          return new Promise(() => {});
+        });
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        throw new CodexAppServerError("timeout", "session deadline");
+      });
+      const result = await refreshCodexQuota();
+      expect(used(result)).toBe(42.4);
+    });
+
+    it("shows the freshest reading when two homes fold into one login", async () => {
+      presets({ id: "a", name: "Work", env: { CODEX_HOME: second } });
+      respondAs(() => ({ accountId: "ws-1", email: "me@example.com" }));
+      await readCodexQuota();
+      vi.useFakeTimers({ toFake: ["Date"] });
+      try {
+        vi.setSystemTime(Date.now() + 10_000);
+        runSession.mockImplementation(
+          async (run: (call: Call) => Promise<unknown>, options: { codexHome?: string } = {}) =>
+            run(async (method) => {
+              if (method === "account/read") {
+                return { account: { type: "chatgpt", email: "me@example.com" } };
+              }
+              const usedPercent = options.codexHome === second ? 99 : 1;
+              return {
+                rateLimits: { primary: { usedPercent, windowDurationMins: 300 } },
+                accountId: "ws-1",
+              };
+            })
+        );
+        const profiles = await readCodexQuotaProfiles();
+        expect(profiles.map((p) => [p.isDefault, p.presetNames, used(p.result)])).toEqual([
+          [true, ["Work"], 99],
+        ]);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("lists folded presets in preset order, not home order", async () => {
+      const link = path.join(root, "second-link");
+      symlinkSync(second, link, "junction");
+      presets(
+        { id: "a", name: "First", env: { CODEX_HOME: second } },
+        { id: "b", name: "Second", env: { CODEX_HOME: defaultHome } },
+        { id: "c", name: "Third", env: { CODEX_HOME: link } }
+      );
+      respondAs(() => ({ accountId: "ws-1", email: "me@example.com" }));
+      const profiles = await readCodexQuotaProfiles();
+      expect(profiles.map((p) => p.presetNames)).toEqual([["First", "Second", "Third"]]);
     });
 
     it("folds a cached reading too", async () => {

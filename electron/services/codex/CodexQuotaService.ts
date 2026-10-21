@@ -163,10 +163,14 @@ async function readAccountEmail(call: CodexAppServerCall): Promise<string | null
 
 /** `codexHome` undefined means main's own env, exactly as before presets were read. */
 async function fetchCodexQuota(codexHome: string | undefined): Promise<HomeReading> {
+  // Held outside the session: if the deadline lands during the optional account
+  // read, the quota that already arrived is still the answer.
+  let quota: { raw: unknown; fetchedAt: number } | null = null;
   try {
     const { raw, accountId, email } = await runCodexAppServerSession(
       async (call) => {
         const raw = await call<unknown>("account/rateLimits/read");
+        quota = { raw, fetchedAt: Date.now() };
         const accountId =
           raw && typeof raw === "object"
             ? nonEmptyString((raw as Record<string, unknown>).accountId)
@@ -183,6 +187,10 @@ async function fetchCodexQuota(codexHome: string | undefined): Promise<HomeReadi
       identity: result.status === "ok" && accountId && email ? { accountId, email } : null,
     };
   } catch (error) {
+    const answered = quota as { raw: unknown; fetchedAt: number } | null;
+    if (answered) {
+      return { result: normalizeCodexRateLimits(answered.raw, answered.fetchedAt), identity: null };
+    }
     return {
       result: { status: "unavailable", reason: toUnavailableReason(error), fetchedAt: Date.now() },
       identity: null,
@@ -247,6 +255,18 @@ interface CanonicalTarget extends CodexQuotaProfileTarget {
   homeKey: string;
 }
 
+type PresetLabels = Pick<CodexQuotaProfileTarget, "presetNames" | "presetOrder">;
+
+/** Adds `from`'s presets to `into`, keeping the order they have in the preset list. */
+function mergePresets(into: PresetLabels, from: PresetLabels): void {
+  const merged = [
+    ...into.presetNames.map((name, i) => ({ name, order: into.presetOrder[i]! })),
+    ...from.presetNames.map((name, i) => ({ name, order: from.presetOrder[i]! })),
+  ].sort((a, b) => a.order - b.order);
+  into.presetNames = merged.map((entry) => entry.name);
+  into.presetOrder = merged.map((entry) => entry.order);
+}
+
 /**
  * Folds the spellings of one directory — a symlink, `.Codex-2` beside
  * `.codex-2` on APFS — into the first target that names it. Folding into the
@@ -263,11 +283,11 @@ async function foldBySameDirectory(targets: CodexQuotaProfileTarget[]): Promise<
     const homeKey = await canonicalCodexHomeKey(target.home);
     const existing = byKey.get(homeKey);
     if (existing) {
-      existing.presetNames.push(...target.presetNames);
+      mergePresets(existing, target);
       existing.isDefault ||= target.isDefault;
       continue;
     }
-    const canonical: CanonicalTarget = { ...target, presetNames: [...target.presetNames], homeKey };
+    const canonical: CanonicalTarget = { ...target, homeKey };
     byKey.set(homeKey, canonical);
     folded.push(canonical);
   }
@@ -293,7 +313,7 @@ async function readProfiles(force: boolean): Promise<CodexQuotaProfile[]> {
   }
   const targets = await foldBySameDirectory(resolveCodexQuotaProfiles(codexSettings));
   const profiles: CodexQuotaProfile[] = [];
-  const byAccount = new Map<string, CodexQuotaProfile>();
+  const byAccount = new Map<string, { profile: CodexQuotaProfile; labels: PresetLabels }>();
   // One after another: each read already waits its turn in the queue, and
   // awaiting here keeps a long preset list from parking N reads on it at once.
   for (const target of targets) {
@@ -323,14 +343,25 @@ async function readProfiles(force: boolean): Promise<CodexQuotaProfile[]> {
     };
     // Two homes signed into one login are one row (#13702). It saves a row,
     // not a read: the identity only arrives with each home's reading.
+    // The row keeps the first home's place and key, but shows the freshest of
+    // the readings: one may be from the cache, the other just read.
     const accountKey = identity ? `${identity.accountId}\0${identity.email}` : null;
     const sameAccount = accountKey ? byAccount.get(accountKey) : undefined;
     if (sameAccount) {
-      sameAccount.presetNames.push(...profile.presetNames);
-      sameAccount.isDefault ||= profile.isDefault;
+      mergePresets(sameAccount.labels, target);
+      sameAccount.profile.presetNames = sameAccount.labels.presetNames;
+      sameAccount.profile.isDefault ||= profile.isDefault;
+      if (result.fetchedAt > sameAccount.profile.result.fetchedAt) {
+        sameAccount.profile.result = result;
+      }
       continue;
     }
-    if (accountKey) byAccount.set(accountKey, profile);
+    if (accountKey) {
+      byAccount.set(accountKey, {
+        profile,
+        labels: { presetNames: target.presetNames, presetOrder: target.presetOrder },
+      });
+    }
     profiles.push(profile);
   }
   return profiles;

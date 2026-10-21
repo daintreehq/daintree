@@ -17,6 +17,8 @@ export interface CodexQuotaProfileTarget {
   home: string;
   isDefault: boolean;
   presetNames: string[];
+  /** Each name's position in the preset list, so a later merge can keep preset order. */
+  presetOrder: number[];
   invalid?: CodexQuotaProfileHomeReason;
 }
 
@@ -75,14 +77,17 @@ export function resolveCodexQuotaProfiles(
   defaultHome: string = defaultCodexHome()
 ): CodexQuotaProfileTarget[] {
   const targets: CodexQuotaProfileTarget[] = [
-    { home: defaultHome, isDefault: true, presetNames: [] },
+    { home: defaultHome, isDefault: true, presetNames: [], presetOrder: [] },
   ];
   const byHome = new Map<string, CodexQuotaProfileTarget>([
     [homeIdentity(defaultHome), targets[0]!],
   ]);
   const invalidByRaw = new Map<string, CodexQuotaProfileTarget>();
 
-  for (const preset of getMergedPresets("codex", entry?.customPresets as AgentPreset[])) {
+  for (const [order, preset] of getMergedPresets(
+    "codex",
+    entry?.customPresets as AgentPreset[]
+  ).entries()) {
     const raw = presetCodexHome(preset);
     if (!raw) continue;
     if (!isFullyQualified(raw)) {
@@ -90,11 +95,13 @@ export function resolveCodexQuotaProfiles(
       const existing = invalidByRaw.get(raw);
       if (existing) {
         existing.presetNames.push(preset.name);
+        existing.presetOrder.push(order);
       } else {
         const target: CodexQuotaProfileTarget = {
           home: raw,
           isDefault: false,
           presetNames: [preset.name],
+          presetOrder: [order],
           invalid: "home-not-absolute",
         };
         invalidByRaw.set(raw, target);
@@ -109,9 +116,15 @@ export function resolveCodexQuotaProfiles(
     const existing = byHome.get(homeIdentity(home));
     if (existing) {
       existing.presetNames.push(preset.name);
+      existing.presetOrder.push(order);
       continue;
     }
-    const target: CodexQuotaProfileTarget = { home, isDefault: false, presetNames: [preset.name] };
+    const target: CodexQuotaProfileTarget = {
+      home,
+      isDefault: false,
+      presetNames: [preset.name],
+      presetOrder: [order],
+    };
     byHome.set(homeIdentity(home), target);
     targets.push(target);
   }
