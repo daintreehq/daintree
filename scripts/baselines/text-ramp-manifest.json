@@ -1,7 +1,7 @@
 {
   "generated": "2026-10-21",
-  "total": 26,
-  "files": 14,
+  "total": 24,
+  "files": 12,
   "occurrences": [
     {
       "file": "plugins/builtin/github/renderer/components/BulkCreateWorktreeDialog.tsx",
@@ -302,36 +302,6 @@
       "decision": "keep",
       "category": "icon-affordance",
       "evidence": "<Settings2> is an icon — the colour is an affordance, not prose"
-    },
-    {
-      "file": "src/components/Worktree/WorktreeCard/MainWorktreeSummaryRows.tsx",
-      "ordinal": 0,
-      "line": 29,
-      "start": 1040,
-      "end": 1061,
-      "token": "text-daintree-text/40",
-      "variants": "",
-      "step": 40,
-      "group": "src/components/Worktree/WorktreeCard/MainWorktreeSummaryRows.tsx#1016",
-      "branch": "",
-      "decision": "keep",
-      "category": "icon-affordance",
-      "evidence": "<CircleMinus> is an icon — the colour is an affordance, not prose"
-    },
-    {
-      "file": "src/components/Worktree/WorktreeCard/NonMainSecondaryRow.tsx",
-      "ordinal": 0,
-      "line": 221,
-      "start": 9471,
-      "end": 9492,
-      "token": "text-daintree-text/50",
-      "variants": "",
-      "step": 50,
-      "group": "src/components/Worktree/WorktreeCard/NonMainSecondaryRow.tsx#9442",
-      "branch": "",
-      "decision": "keep",
-      "category": "icon-affordance",
-      "evidence": "<FileText> is an icon — the colour is an affordance, not prose"
     },
     {
       "file": "src/components/Worktree/WorktreeCard/WorktreeActionsToolbar.tsx",
