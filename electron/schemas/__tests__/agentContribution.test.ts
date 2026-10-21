@@ -139,10 +139,25 @@ describe("AgentContributionSchema (issue #9560)", () => {
     it("requires exactly one {sessionId} arg in a session-id template", () => {
       expect(parses({ kind: "session-id", args: ["--resume"] })).toBe(false);
       expect(parses({ kind: "session-id", args: ["{sessionId}", "{sessionId}"] })).toBe(false);
+      expect(parses({ kind: "session-id", args: ["{sessionId}{sessionId}"] })).toBe(false);
     });
 
     it("rejects {sessionId} outside a session-id template's args", () => {
       expect(parses({ kind: "project-scoped", args: ["--session", "{sessionId}"] })).toBe(false);
+      expect(
+        parses({ kind: "project-scoped", args: ["--continue"], quitCommand: "/quit {sessionId}" })
+      ).toBe(false);
+      expect(
+        parses({ kind: "session-id", args: ["{sessionId}"], quitCommand: "/exit {sessionId}" })
+      ).toBe(false);
+      expect(
+        parses({
+          kind: "session-id",
+          args: ["{sessionId}"],
+          sessionIdPattern: "({sessionId})",
+          quitCommand: "/exit",
+        })
+      ).toBe(false);
       expect(
         parses({ kind: "session-id", args: ["{sessionId}"], resumeLatestArgs: ["{sessionId}"] })
       ).toBe(false);
@@ -150,7 +165,7 @@ describe("AgentContributionSchema (issue #9560)", () => {
 
     it("requires a sessionIdPattern to compile with exactly one capture group", () => {
       const withPattern = (sessionIdPattern: string) =>
-        parses({ kind: "session-id", args: ["{sessionId}"], sessionIdPattern });
+        parses({ kind: "session-id", args: ["{sessionId}"], sessionIdPattern, quitCommand: "/q" });
       expect(withPattern("id: ([\\w-]+)")).toBe(true);
       expect(withPattern("(?:resume|continue) (?<id>\\S+)(?=\\s)")).toBe(true);
       expect(withPattern("\\(literal\\) [(](\\S+)")).toBe(true);
@@ -160,6 +175,28 @@ describe("AgentContributionSchema (issue #9560)", () => {
       expect(withPattern(`(${"a".repeat(255)})`)).toBe(false);
     });
 
+    it("requires a quitCommand to provoke the hint a sessionIdPattern reads (#13687)", () => {
+      expect(
+        parses({ kind: "session-id", args: ["{sessionId}"], sessionIdPattern: "id: (\\S+)" })
+      ).toBe(false);
+      expect(parses({ kind: "session-id", args: ["{sessionId}"], resumeLatestArgs: ["-c"] })).toBe(
+        true
+      );
+    });
+
+    it("parses a resume block through the full manifest gate", () => {
+      const resume = { kind: "project-scoped", args: ["--continue"] };
+      const manifest = (capabilities: string[]) =>
+        manifestWith({
+          capabilities,
+          contributes: { agents: [{ ...VALID_AGENT, id: "pi", resume }] },
+        });
+      const parsed = getPluginManifestSchema("user").safeParse(manifest(["agent:register"]));
+      expect(parsed.success).toBe(true);
+      if (parsed.success) expect(parsed.data.contributes.agents[0]?.resume).toEqual(resume);
+      expect(getPluginManifestSchema("user").safeParse(manifest([])).success).toBe(false);
+    });
+
     it("holds args and quitCommand to the same rules as the launch args", () => {
       expect(parses({ kind: "session-id", args: ["{sessionId}"], quitCommand: "/exit\r" })).toBe(
         false
@@ -167,18 +204,18 @@ describe("AgentContributionSchema (issue #9560)", () => {
       expect(parses({ kind: "session-id", args: ["{sessionId}"], quitCommand: "" })).toBe(false);
       expect(parses({ kind: "project-scoped", args: ["--continue\n"] })).toBe(false);
       expect(parses({ kind: "project-scoped", args: [] })).toBe(false);
-      expect(
-        parses({ kind: "project-scoped", args: Array.from({ length: 21 }, () => "-x") })
-      ).toBe(false);
+      expect(parses({ kind: "project-scoped", args: Array.from({ length: 21 }, () => "-x") })).toBe(
+        false
+      );
     });
 
     it("rejects unknown resume fields (strict)", () => {
       expect(
         parses({ kind: "session-id", args: ["{sessionId}"], assignSessionIdArgs: ["--id"] })
       ).toBe(false);
-      expect(parses({ kind: "project-scoped", args: ["--continue"], sessionIdPattern: "(x)" })).toBe(
-        false
-      );
+      expect(
+        parses({ kind: "project-scoped", args: ["--continue"], sessionIdPattern: "(x)" })
+      ).toBe(false);
     });
   });
 

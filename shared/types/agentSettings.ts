@@ -1162,6 +1162,13 @@ export function buildResumeCommand(
   return parts.join(" ");
 }
 
+function containsSequence(haystack: readonly string[], needle: readonly string[]): boolean {
+  for (let i = 0; i + needle.length <= haystack.length; i++) {
+    if (needle.every((token, offset) => haystack[i + offset] === token)) return true;
+  }
+  return false;
+}
+
 /**
  * Builds a "resume the most recent session" launch command for agents whose
  * `session-id` resume config declares `resumeLatestArgs`, or whose resume is
@@ -1210,6 +1217,13 @@ export function buildResumeLatestCommand(
         parts.push(quoteAgentArg(flag));
       }
     }
+  }
+
+  // Custom flags that already carry the project-scoped form (Kiro users who
+  // launch with `chat --resume`) are the resume-latest launch as they stand;
+  // appending the args again would hand the CLI a second subcommand.
+  if (resume.kind === "project-scoped" && containsSequence(launchFlags ?? [], fallbackArgs)) {
+    return parts.join(" ");
   }
 
   for (const arg of fallbackArgs) {

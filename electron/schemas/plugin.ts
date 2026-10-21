@@ -1139,6 +1139,11 @@ const PluginAgentArgArraySchema = z.array(PluginAgentArgSchema).max(20);
 /** The placeholder a `session-id` resume template expands to the captured id. */
 const SESSION_ID_TOKEN = "{sessionId}";
 
+const PluginAgentQuitCommandSchema = PluginAgentArgSchema.min(1).refine(
+  (command) => !command.includes(SESSION_ID_TOKEN),
+  { message: `A quit command can't carry ${SESSION_ID_TOKEN}` }
+);
+
 const PluginAgentStaticArgArraySchema = PluginAgentArgArraySchema.refine(
   (args) => args.every((arg) => !arg.includes(SESSION_ID_TOKEN)),
   { message: `Only a session-id resume's args can carry ${SESSION_ID_TOKEN}` }
@@ -1167,25 +1172,39 @@ export const AgentResumeConfigSchema = z.discriminatedUnion("kind", [
   z
     .object({
       kind: z.literal("session-id"),
+      // One occurrence across the whole template, so the id is substituted
+      // exactly once whether the token is a whole arg or part of one.
       args: PluginAgentArgArraySchema.min(1).refine(
-        (args) => args.filter((arg) => arg.includes(SESSION_ID_TOKEN)).length === 1,
-        { message: `Exactly one session-id resume arg must contain ${SESSION_ID_TOKEN}` }
+        (args) => args.join("\0").split(SESSION_ID_TOKEN).length === 2,
+        { message: `A session-id resume's args must contain ${SESSION_ID_TOKEN} exactly once` }
       ),
       // Same bounds as a detection pattern, plus the single capture group the
       // teardown scrape reads the id from.
       sessionIdPattern: PluginDetectionPatternSchema.refine(
         (pattern) => countCaptureGroups(pattern) === 1,
         { message: "sessionIdPattern must have exactly one capture group" }
-      ).optional(),
-      quitCommand: PluginAgentArgSchema.min(1).optional(),
+      )
+        .refine((pattern) => !pattern.includes(SESSION_ID_TOKEN), {
+          message: `sessionIdPattern can't carry ${SESSION_ID_TOKEN}`,
+        })
+        .optional(),
+      quitCommand: PluginAgentQuitCommandSchema.optional(),
       resumeLatestArgs: PluginAgentStaticArgArraySchema.min(1).optional(),
     })
-    .strict(),
+    .strict()
+    // The pattern is read from what the agent prints after the quit command,
+    // so a pattern with nothing to provoke it would report an exact-id capture
+    // path that teardown can never run — and a bookmark would kill the pane
+    // for an id it was never going to get.
+    .refine((resume) => !resume.sessionIdPattern || resume.quitCommand !== undefined, {
+      message: "sessionIdPattern needs a quitCommand to trigger the agent's resume hint",
+      path: ["quitCommand"],
+    }),
   z
     .object({
       kind: z.literal("project-scoped"),
       args: PluginAgentStaticArgArraySchema.min(1),
-      quitCommand: PluginAgentArgSchema.min(1).optional(),
+      quitCommand: PluginAgentQuitCommandSchema.optional(),
     })
     .strict(),
 ]);

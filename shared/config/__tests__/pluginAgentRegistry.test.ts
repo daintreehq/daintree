@@ -128,7 +128,12 @@ describe("pluginAgentRegistry (issue #9560)", () => {
 
     it("expands a project-scoped resume in a mirrored (renderer/pty-host) snapshot", () => {
       registerPluginAgents("me.extra-agents", [
-        { ...ACME_AGENT, id: "pi", command: "pi", resume: { kind: "project-scoped", args: ["--continue"] } },
+        {
+          ...ACME_AGENT,
+          id: "pi",
+          command: "pi",
+          resume: { kind: "project-scoped", args: ["--continue"] },
+        },
       ]);
       const mirrored = structuredClone(getPluginAgentRegistry());
       clearPluginAgentRegistryForTests();

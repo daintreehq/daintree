@@ -1,5 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { Mock } from "vitest";
+import {
+  registerPluginAgents,
+  clearPluginAgentRegistryForTests,
+} from "@shared/config/pluginAgentRegistry";
 import type { TerminalState, BackendTerminalInfo } from "@shared/types/ipc/terminal";
 import type { WorktreeState } from "@shared/types";
 
@@ -1701,6 +1705,43 @@ describe("restorePanelsPhase — one resume-latest per agent+cwd (issue #11461)"
     await restorePanelsPhase([codexPanel("solo")], ctx);
 
     expect(allowanceById(ctx).get("solo")).toBe(true);
+  });
+
+  it("elects one pane per directory for a project-scoped agent, plugin or built-in (#13687)", async () => {
+    registerPluginAgents("me.extra-agents", [
+      {
+        id: "pi",
+        name: "Pi",
+        command: "pi",
+        color: "#3366ff",
+        iconId: "claude",
+        resume: { kind: "project-scoped", args: ["--continue"] },
+      },
+    ]);
+    try {
+      const ctx = makeContext();
+      const agentPanel = (id: string, agentId: string, lastActiveAt: number) =>
+        panel(id, { kind: "agent", launchAgentId: agentId, lastActiveAt });
+
+      await restorePanelsPhase(
+        [
+          agentPanel("pi-old", "pi", 1),
+          agentPanel("pi-new", "pi", 2),
+          agentPanel("kiro-a", "kiro", 2),
+          agentPanel("kiro-b", "kiro", 1),
+        ],
+        ctx
+      );
+
+      expect(Object.fromEntries(allowanceById(ctx))).toEqual({
+        "pi-old": false,
+        "pi-new": true,
+        "kiro-a": true,
+        "kiro-b": false,
+      });
+    } finally {
+      clearPluginAgentRegistryForTests();
+    }
   });
 
   it("scopes the slot per agent — different agents don't contend", async () => {

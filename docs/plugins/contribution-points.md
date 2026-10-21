@@ -1423,7 +1423,7 @@ Every other pattern array holds at most 50 entries, and each entry is 1–256 ch
 | --- | --- | --- |
 | `kind` | both | `session-id` for a CLI that resumes by an id it prints, `project-scoped` for one that resumes the latest session in the launch directory. |
 | `args` | both | Resume arguments, under the same rules as `args` above. In a `session-id` block exactly one entry contains `{sessionId}`, which is replaced by the captured id (it can be the whole entry or part of one, such as `--session={sessionId}`). No other field may contain it. |
-| `sessionIdPattern` | `session-id` | Regex matched against the output the agent prints after `quitCommand`. Exactly one capture group, which is the id. Same bounds as a detection pattern. Omit it when the agent prints no id: the pane then resumes only through `resumeLatestArgs`. |
+| `sessionIdPattern` | `session-id` | Regex matched against the output the agent prints after `quitCommand`. Exactly one capture group, which is the id. Same bounds as a detection pattern, and it needs a `quitCommand`. Omit it when the agent prints no id: the pane then resumes only through `resumeLatestArgs`. |
 | `quitCommand` | both | Text sent to the running agent at shutdown so it exits cleanly and prints its resume hint. Same rules as an `args` entry. |
 | `resumeLatestArgs` | `session-id` | Arguments that reopen the most recent session in the launch directory, used when no id was captured. |
 
