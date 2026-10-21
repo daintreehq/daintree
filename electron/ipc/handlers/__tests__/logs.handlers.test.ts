@@ -35,8 +35,14 @@ const utilsMock = vi.hoisted(() => {
   const registered: Array<{ channel: string; handler: (...a: unknown[]) => unknown }> = [];
   return {
     registered,
+    // The sender context handed to context-aware handlers; tests rebind it.
+    ctx: { webContentsId: 7, projectId: null as string | null },
     typedHandle: vi.fn((channel: string, handler: (...a: unknown[]) => unknown) => {
       registered.push({ channel, handler });
+      return () => {};
+    }),
+    typedHandleWithContext: vi.fn((channel: string, handler: (...a: unknown[]) => unknown) => {
+      registered.push({ channel, handler: (...a) => handler(utilsMock.ctx, ...a) });
       return () => {};
     }),
     broadcastToRenderer: vi.fn(),
@@ -45,6 +51,7 @@ const utilsMock = vi.hoisted(() => {
 
 vi.mock("../../utils.js", () => ({
   typedHandle: utilsMock.typedHandle,
+  typedHandleWithContext: utilsMock.typedHandleWithContext,
   broadcastToRenderer: utilsMock.broadcastToRenderer,
 }));
 
@@ -102,6 +109,7 @@ async function resetMocks() {
   vi.clearAllMocks();
   vi.resetModules();
   utilsMock.registered.length = 0;
+  utilsMock.ctx = { webContentsId: 7, projectId: null };
   loggerState.overrides = {};
   storeMock.get.mockReturnValue(undefined as unknown);
   ({ registerLogsHandlers } = await import("../logs.js"));
@@ -127,9 +135,18 @@ describe("logs:write-batch handler", () => {
       { level: "debug", message: "three" },
     ]);
 
-    expect(loggerMock.logInfo).toHaveBeenCalledWith("one", { source: "Renderer" });
-    expect(loggerMock.logWarn).toHaveBeenCalledWith("two", { source: "Renderer" });
-    expect(loggerMock.logDebug).toHaveBeenCalledWith("three", { source: "Renderer" });
+    expect(loggerMock.logInfo).toHaveBeenCalledWith("one", {
+      source: "Renderer",
+      webContentsId: 7,
+    });
+    expect(loggerMock.logWarn).toHaveBeenCalledWith("two", {
+      source: "Renderer",
+      webContentsId: 7,
+    });
+    expect(loggerMock.logDebug).toHaveBeenCalledWith("three", {
+      source: "Renderer",
+      webContentsId: 7,
+    });
   });
 
   it("routes error entries through logError with the serialized error context", async () => {
@@ -140,6 +157,7 @@ describe("logs:write-batch handler", () => {
     expect(loggerMock.logError).toHaveBeenCalledWith("boom", serializedError, {
       error: serializedError,
       source: "Renderer",
+      webContentsId: 7,
     });
   });
 
@@ -158,9 +176,64 @@ describe("logs:write-batch handler", () => {
       { level: "error", message: "must land" },
     ]);
 
-    expect(loggerMock.logInfo).toHaveBeenCalledWith("ok", { source: "Renderer" });
+    expect(loggerMock.logInfo).toHaveBeenCalledWith("ok", { source: "Renderer", webContentsId: 7 });
     expect(loggerMock.logError).toHaveBeenCalledWith("must land", undefined, {
       source: "Renderer",
+      webContentsId: 7,
+    });
+  });
+
+  it("tags the sending view's project, overriding identity the renderer supplied", async () => {
+    utilsMock.ctx = { webContentsId: 5, projectId: "proj-a" };
+    const handler = getHandler(CHANNELS.LOGS_WRITE_BATCH);
+    await handler([
+      {
+        level: "warn",
+        message: "stall",
+        context: { durationMs: 10080, webContentsId: 99, projectId: "proj-b" },
+      },
+    ]);
+
+    expect(loggerMock.logWarn).toHaveBeenCalledWith("stall", {
+      durationMs: 10080,
+      source: "Renderer",
+      webContentsId: 5,
+      projectId: "proj-a",
+    });
+  });
+});
+
+describe("logs:write handler", () => {
+  let cleanup: () => void;
+
+  beforeEach(async () => {
+    await resetMocks();
+    cleanup = registerLogsHandlers();
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("tags the entry with the sending view", async () => {
+    utilsMock.ctx = { webContentsId: 5, projectId: "proj-a" };
+    const handler = getHandler(CHANNELS.LOGS_WRITE);
+    await handler({ level: "warn", message: "Renderer long animation frame detected" });
+
+    expect(loggerMock.logWarn).toHaveBeenCalledWith("Renderer long animation frame detected", {
+      source: "Renderer",
+      webContentsId: 5,
+      projectId: "proj-a",
+    });
+  });
+
+  it("omits projectId for a sender with no project binding", async () => {
+    const handler = getHandler(CHANNELS.LOGS_WRITE);
+    await handler({ level: "info", message: "welcome" });
+
+    expect(loggerMock.logInfo).toHaveBeenCalledWith("welcome", {
+      source: "Renderer",
+      webContentsId: 7,
     });
   });
 });
@@ -307,6 +380,7 @@ describe("registerLogsHandlers — verbose toggle is session-only", () => {
     cleanup?.();
     loggerState.overrides = {};
     utilsMock.registered.length = 0;
+    utilsMock.ctx = { webContentsId: 7, projectId: null };
     storeMock.get.mockReturnValue({});
     register();
 

@@ -34,6 +34,12 @@ vi.mock("../performance", () => ({
     mockMarkRendererPerformance(mark, meta),
 }));
 
+const mockIsProjectViewCached = vi.fn(() => false);
+
+vi.mock("@/lib/viewCacheState", () => ({
+  isProjectViewCached: () => mockIsProjectViewCached(),
+}));
+
 import { logWarn } from "../logger";
 import { attributeLongFrameToPlugins, startLongTaskMonitor } from "../longTaskMonitor";
 import { createPluginViewMetrics, pluginViewMetrics } from "@/services/plugin/pluginViewMetrics";
@@ -71,6 +77,9 @@ type LoafFixture = {
   blockingDuration?: number;
   scripts?: ScriptFixture[];
   startTime?: number;
+  renderStart?: number;
+  styleAndLayoutStart?: number;
+  firstUIEventTimestamp?: number;
 };
 
 function makeLoafEntry(opts: LoafFixture): PerformanceLongAnimationFrameTiming {
@@ -80,9 +89,9 @@ function makeLoafEntry(opts: LoafFixture): PerformanceLongAnimationFrameTiming {
     startTime: opts.startTime ?? 0,
     duration: opts.duration,
     blockingDuration: opts.blockingDuration ?? Math.max(0, opts.duration - 50),
-    renderStart: 0,
-    styleAndLayoutStart: 0,
-    firstUIEventTimestamp: 0,
+    renderStart: opts.renderStart ?? 0,
+    styleAndLayoutStart: opts.styleAndLayoutStart ?? 0,
+    firstUIEventTimestamp: opts.firstUIEventTimestamp ?? 0,
     presentationTime: 0,
     paintTime: 0,
     scripts: (opts.scripts ?? []).map(makeScript),
@@ -111,6 +120,7 @@ describe("startLongTaskMonitor", () => {
     vi.mocked(logWarn).mockClear();
     mockIsRendererPerfCaptureEnabled.mockClear().mockReturnValue(false);
     mockMarkRendererPerformance.mockClear();
+    mockIsProjectViewCached.mockClear().mockReturnValue(false);
   });
 
   afterEach(() => {
@@ -219,10 +229,13 @@ describe("startLongTaskMonitor", () => {
       durationMs: 150,
       blockingDurationMs: 100,
       scriptCount: 1,
+      frameStartEpochMs: Number(performance.timeOrigin.toFixed(3)),
+      observerDelayMs: 5850,
       invoker: "BUTTON#go.onclick",
       invokerType: "event-listener",
       sourceURL: "https://app/bundle.js",
       sourceFunctionName: "handleGo",
+      viewCachedAtReport: false,
     });
   });
 
@@ -268,7 +281,65 @@ describe("startLongTaskMonitor", () => {
       durationMs: 150,
       blockingDurationMs: 80,
       scriptCount: 0,
+      frameStartEpochMs: Number(performance.timeOrigin.toFixed(3)),
+      observerDelayMs: 5850,
+      viewCachedAtReport: false,
     });
+  });
+
+  it("breaks an unattributed frame into phase offsets from its start", () => {
+    mockNow = 20_000;
+    startLongTaskMonitor(100);
+    emitLoafEntry({
+      startTime: 8000,
+      duration: 10080,
+      blockingDuration: 5576,
+      firstUIEventTimestamp: 8004.5,
+      renderStart: 18_020,
+      styleAndLayoutStart: 18_030.25,
+    });
+    expect(logWarn).toHaveBeenCalledWith("Renderer long animation frame detected", {
+      durationMs: 10080,
+      blockingDurationMs: 5576,
+      scriptCount: 0,
+      frameStartEpochMs: Number((performance.timeOrigin + 8000).toFixed(3)),
+      observerDelayMs: 1920,
+      firstUIEventOffsetMs: 4.5,
+      renderStartOffsetMs: 10_020,
+      styleAndLayoutStartOffsetMs: 10_030.25,
+      viewCachedAtReport: false,
+    });
+  });
+
+  it("keeps an input that arrived before the frame started as a negative offset", () => {
+    mockNow = 20_000;
+    startLongTaskMonitor(100);
+    emitLoafEntry({ startTime: 8000, duration: 300, firstUIEventTimestamp: 7990 });
+    expect(logWarn).toHaveBeenCalledWith(
+      "Renderer long animation frame detected",
+      expect.objectContaining({ firstUIEventOffsetMs: -10 })
+    );
+  });
+
+  it("leaves out phases the frame never reached", () => {
+    mockNow = 20_000;
+    startLongTaskMonitor(100);
+    emitLoafEntry({ startTime: 8000, duration: 300, renderStart: 8250 });
+    const context = vi.mocked(logWarn).mock.calls[0]?.[1];
+    expect(context).toMatchObject({ renderStartOffsetMs: 250 });
+    expect(context).not.toHaveProperty("styleAndLayoutStartOffsetMs");
+    expect(context).not.toHaveProperty("firstUIEventOffsetMs");
+  });
+
+  it("records whether the view was cached when the frame was reported", () => {
+    mockNow = 20_000;
+    mockIsProjectViewCached.mockReturnValue(true);
+    startLongTaskMonitor(100);
+    emitLoafEntry({ duration: 150 });
+    expect(logWarn).toHaveBeenCalledWith(
+      "Renderer long animation frame detected",
+      expect.objectContaining({ viewCachedAtReport: true })
+    );
   });
 
   it("rate-limits warnings to one per 10 seconds", () => {

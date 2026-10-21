@@ -1909,9 +1909,15 @@ describe("ProjectViewManager — frame confirmation before reveal (#12394)", () 
     // register it against the host the window mapping still names.
     expect(onViewReady).not.toHaveBeenCalled();
     expect(vi.mocked(notifyError)).toHaveBeenCalledWith(error, { source: "project-switch" });
-    expect(
-      vi.mocked(logWarn).mock.calls.filter(([e]) => e === "projectview.warmpaintgate.unpainted")
-    ).toHaveLength(1);
+    const unpainted = vi
+      .mocked(logWarn)
+      .mock.calls.filter(([e]) => e === "projectview.warmpaintgate.unpainted");
+    expect(unpainted).toHaveLength(1);
+    // Names the stalled renderer, so its own long-frame reports can be matched.
+    expect(unpainted[0]?.[1]).toMatchObject({
+      webContentsId: initialWc.id,
+      switchId: expect.any(String),
+    });
 
     initialWc.executeJavaScript.mockImplementation(() => Promise.resolve());
     const retry = manager.switchTo("proj-a", "/path/a");

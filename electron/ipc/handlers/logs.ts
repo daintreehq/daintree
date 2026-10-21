@@ -18,11 +18,11 @@ import {
   type LogLevel,
 } from "../../utils/logger.js";
 import type { FilterOptions as LogFilterOptions } from "../../services/LogBuffer.js";
-import { typedHandle, broadcastToRenderer } from "../utils.js";
+import { typedHandle, typedHandleWithContext, broadcastToRenderer } from "../utils.js";
 import { defineIpcNamespace, op } from "../define.js";
 import { store } from "../../store.js";
 import { AppError } from "../../utils/errorTypes.js";
-import type { HandlerDependencies } from "../types.js";
+import type { HandlerDependencies, IpcContext } from "../types.js";
 
 /**
  * When verbose is toggled on, the user's prior `"*"` wildcard (if any) is
@@ -171,13 +171,24 @@ export function registerLogsHandlers(
   };
   handlers.push(typedHandle(CHANNELS.LOGS_GET_VERBOSE, handleLogsGetVerbose));
 
-  const dispatchRendererLog = (entry: {
-    level: LogLevel;
-    message: string;
-    context?: Record<string, unknown>;
-  }): void => {
+  // Every project view logs through these channels, so the sender is tagged
+  // main-side: without it a renderer stall can't be pinned to a view (#13712).
+  // Main's tags go after the renderer's context so a view can't misreport itself.
+  const dispatchRendererLog = (
+    ctx: IpcContext,
+    entry: {
+      level: LogLevel;
+      message: string;
+      context?: Record<string, unknown>;
+    }
+  ): void => {
     const { level, message, context } = entry;
-    const contextWithSource = { ...context, source: "Renderer" };
+    const contextWithSource = {
+      ...context,
+      source: "Renderer",
+      webContentsId: ctx.webContentsId,
+      ...(ctx.projectId ? { projectId: ctx.projectId } : {}),
+    };
     switch (level) {
       case "debug":
         logDebug(message, contextWithSource);
@@ -194,14 +205,17 @@ export function registerLogsHandlers(
     }
   };
 
-  const handleLogsWrite = async (payload: {
-    level: LogLevel;
-    message: string;
-    context?: Record<string, unknown>;
-  }) => {
-    dispatchRendererLog(payload);
+  const handleLogsWrite = async (
+    ctx: IpcContext,
+    payload: {
+      level: LogLevel;
+      message: string;
+      context?: Record<string, unknown>;
+    }
+  ) => {
+    dispatchRendererLog(ctx, payload);
   };
-  handlers.push(typedHandle(CHANNELS.LOGS_WRITE, handleLogsWrite));
+  handlers.push(typedHandleWithContext(CHANNELS.LOGS_WRITE, handleLogsWrite));
 
   // Renderer-perf channels are codegen'd via defineIpcNamespace (new IPC
   // entries must not be hand-written into IpcInvokeMap — see the ratchet in
@@ -214,6 +228,7 @@ export function registerLogsHandlers(
       writeBatch: op(
         CHANNELS.LOGS_WRITE_BATCH,
         async (
+          ctx: IpcContext,
           entries: Array<{
             level: "debug" | "info" | "warn" | "error";
             message: string;
@@ -226,12 +241,13 @@ export function registerLogsHandlers(
             // the entries that follow it (e.g. a trailing error-level log).
             if (!entry || typeof entry !== "object") continue;
             try {
-              dispatchRendererLog(entry);
+              dispatchRendererLog(ctx, entry);
             } catch {
               // Drop the bad entry; keep draining the batch.
             }
           }
-        }
+        },
+        { withContext: true }
       ),
       getDefaultLevel: op(CHANNELS.LOGS_GET_DEFAULT_LEVEL, async (): Promise<string> => {
         return getDefaultLogLevel();
