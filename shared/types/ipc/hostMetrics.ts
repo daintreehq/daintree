@@ -1,5 +1,6 @@
 import type { AgentState } from "../agent.js";
 import type { HostId, HostMetricsSummary } from "../remoteHosts.js";
+import type { FleetBand } from "../../utils/fleetBands.js";
 
 export interface HostMetricsSnapshot {
   hostId: HostId;
@@ -27,8 +28,18 @@ export interface HostAttentionEvent {
   quiet: boolean;
 }
 
+/**
+ * Something a host's worktree list shows changed there (a worktree came or
+ * went, a branch moved, an agent's band changed). It carries nothing: a view
+ * showing that host's worktrees reads them again.
+ */
+export interface HostWorktreesChangedEvent {
+  type: "worktrees";
+  hostId: HostId;
+}
+
 export type HostMetricsEvent =
-  { type: "summary"; summary: HostMetricsSummary } | HostAttentionEvent;
+  { type: "summary"; summary: HostMetricsSummary } | HostAttentionEvent | HostWorktreesChangedEvent;
 
 /** An agent terminal on some host that a fleet broadcast can target. */
 export interface HostFleetTarget {
@@ -75,4 +86,15 @@ export interface HostWorktreeEntry {
   isMainWorktree: boolean;
   modifiedCount: number | null;
   lastActivityAt: number | null;
+  /**
+   * The most urgent band among the worktree's agents as the host's own fleet
+   * observed them, with that agent's state. Null when the host saw no agent
+   * there, or (a host from before this was sent) didn't say.
+   */
+  observed: HostWorktreeObservation | null;
+}
+
+export interface HostWorktreeObservation {
+  band: FleetBand;
+  agentState: AgentState | null;
 }

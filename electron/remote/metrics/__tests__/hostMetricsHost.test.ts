@@ -10,6 +10,8 @@ import {
   waitFor,
 } from "../../link/__tests__/linkTestUtils.js";
 import { AttentionPayloadSchema, MetricsLinkMethod } from "../linkMethods.js";
+import { EmptyPayloadSchema } from "../../host/linkMethods.js";
+import type { HostWorktreeEntry } from "../../../../shared/types/ipc/hostMetrics.js";
 import {
   ATTENTION_COOLDOWN_MS,
   installHostMetricsHostWith,
@@ -98,6 +100,7 @@ function deps(overrides: Partial<MetricsHostDeps> = {}): MetricsHostDeps & {
     listFleetTargets: async () => ({ targets: [], complete: true }),
     submitFleet: async () => {},
     listWorktrees: async () => [],
+    onWorktreesMaybeChanged: () => () => {},
     restartTerminals: async () => ({
       projects: [],
       complete: true,
@@ -243,6 +246,109 @@ describe("installHostMetricsHostWith", () => {
       ],
       complete: false,
     });
+    dispose();
+  });
+
+  it("tells every Shell once per burst of changes to what its worktree list shows", async () => {
+    const server = new FakeServer();
+    const entry: HostWorktreeEntry = {
+      hostId: "local",
+      projectId: "p1",
+      projectName: "app",
+      worktreeId: "/srv/app-feature",
+      name: "app-feature",
+      branch: "feature/a",
+      path: "/srv/app-feature",
+      isMainWorktree: false,
+      modifiedCount: 1,
+      lastActivityAt: null,
+      observed: { band: "running", agentState: "working" },
+    };
+    let current = [entry];
+    let poke: () => void = () => {};
+    const dispose = installHostMetricsHostWith(
+      server,
+      deps({
+        listWorktrees: async () => current,
+        onWorktreesMaybeChanged: (listener) => {
+          poke = listener;
+          return () => (poke = () => {});
+        },
+        worktreesChangedDelayMs: 5,
+      })
+    );
+    const a = await pair();
+    const b = await pair();
+    server.attach(a.host, "a");
+    server.attach(b.host, "b");
+    let heardA = 0;
+    let heardB = 0;
+    a.client.registerCallHandler(MetricsLinkMethod.WORKTREES_CHANGED, EmptyPayloadSchema, () => {
+      heardA++;
+      return null;
+    });
+    b.client.registerCallHandler(MetricsLinkMethod.WORKTREES_CHANGED, EmptyPayloadSchema, () => {
+      heardB++;
+      return null;
+    });
+
+    poke();
+    poke();
+    await waitFor(() => heardA === 1 && heardB === 1);
+
+    current = [{ ...entry, observed: { band: "needs-you", agentState: "waiting" } }];
+    poke();
+    await waitFor(() => heardA === 2 && heardB === 2);
+
+    dispose();
+  });
+
+  it("catches a list change no worktree event announced on the next sample", async () => {
+    const server = new FakeServer();
+    let tick: ((summary: HostMetricsSummary) => void) | null = null;
+    let current: HostWorktreeEntry[] = [];
+    const dispose = installHostMetricsHostWith(
+      server,
+      deps({
+        loop: {
+          subscribe: (listener) => {
+            tick = listener;
+            return () => (tick = null);
+          },
+          latest: () => null,
+        },
+        listWorktrees: async () => current,
+        worktreesChangedDelayMs: 5,
+      })
+    );
+    const p = await pair();
+    server.attach(p.host, "shell");
+    let heard = 0;
+    p.client.registerCallHandler(MetricsLinkMethod.WORKTREES_CHANGED, EmptyPayloadSchema, () => {
+      heard++;
+      return null;
+    });
+    tick!(summary(1));
+    await waitFor(() => heard === 1);
+
+    // A project opened: its worktrees arrive with no worktree event of their own.
+    current = [
+      {
+        hostId: "local",
+        projectId: "p2",
+        projectName: "other",
+        worktreeId: "/srv/other",
+        name: "other",
+        branch: "main",
+        path: "/srv/other",
+        isMainWorktree: true,
+        modifiedCount: null,
+        lastActivityAt: null,
+        observed: null,
+      },
+    ];
+    tick!(summary(2));
+    await waitFor(() => heard === 2);
     dispose();
   });
 

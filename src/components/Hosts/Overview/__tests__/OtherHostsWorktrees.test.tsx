@@ -54,6 +54,7 @@ const worktree: HostWorktreeEntry = {
   isMainWorktree: false,
   modifiedCount: 3,
   lastActivityAt: null,
+  observed: null,
 };
 
 const listWorktrees = vi.fn(async ({ hostId }: { hostId: string }) =>

@@ -51,16 +51,18 @@ async function openOnHostLikeTheAction(
   _id: unknown,
   args: unknown
 ): Promise<{ ok: boolean; result?: unknown }> {
-  const { hostId, projectId, worktree } = args as {
+  const { hostId, projectId, worktree, newWindow } = args as {
     hostId: string;
     projectId: string;
     worktree: unknown;
+    newWindow?: boolean;
   };
   const requestId = requestHostSwitch({
     toHostId: hostId,
     projectId,
     worktreePath: null,
     worktree: worktree as never,
+    newWindow,
   });
   return { ok: true, result: { requestId } };
 }
@@ -152,7 +154,7 @@ describe("WorktreePlacementRow", () => {
     };
     expect(dispatch).toHaveBeenCalledWith(
       "project.openOnHost",
-      { hostId: "studio-02", projectId: "p1", worktree },
+      { hostId: "studio-02", projectId: "p1", worktree, newWindow: false },
       { source: "user" }
     );
     expect(currentHostSwitchRequest()).toMatchObject({ toHostId: "studio-02", worktree });
@@ -161,6 +163,37 @@ describe("WorktreePlacementRow", () => {
     expect((screen.getByTestId("worktree-placement-continue") as HTMLButtonElement).disabled).toBe(
       true
     );
+    act(() => completeHostSwitchRequest(currentHostSwitchRequest()!.id));
+    expect(onLeave).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves this window where it is on Cmd/Ctrl-click, opening the host in a new one", async () => {
+    const onLeave = vi.fn();
+    render(
+      <WorktreePlacementRow
+        projectId="p1"
+        rootPath={ROOT}
+        getDraft={getDraft}
+        onLeave={onLeave}
+        onElsewhereChange={vi.fn()}
+      />
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Use studio-02" }));
+    await act(async () => {
+      // Both modifiers, so the platform's own one is held wherever this runs.
+      fireEvent.click(screen.getByTestId("worktree-placement-continue"), {
+        metaKey: true,
+        ctrlKey: true,
+      });
+    });
+    expect(dispatch).toHaveBeenCalledWith(
+      "project.openOnHost",
+      expect.objectContaining({ hostId: "studio-02", newWindow: true }),
+      { source: "user" }
+    );
+    expect(currentHostSwitchRequest()).toMatchObject({ toHostId: "studio-02", newWindow: true });
+    // Done once the worktree exists on the host, whichever window shows it.
+    expect(onLeave).not.toHaveBeenCalled();
     act(() => completeHostSwitchRequest(currentHostSwitchRequest()!.id));
     expect(onLeave).toHaveBeenCalledTimes(1);
   });

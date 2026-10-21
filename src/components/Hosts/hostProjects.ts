@@ -309,11 +309,13 @@ export function useHostProjectLists(
  * What each other host has of `projectId`, by repository identity (a remote
  * URL shared with it), asked of the Shell when the menu opens. Absent from
  * the map while it is being asked; `projects: null` when the host couldn't
- * be asked. A project that merely shares the name is never counted.
+ * be asked. A project that merely shares the name is never counted. A new
+ * `revision` asks again, for a caller that heard a host's projects change.
  */
 export function useProjectPresence(
   projectId: string,
-  hostIds: readonly HostId[]
+  hostIds: readonly HostId[],
+  revision = 0
 ): ReadonlyMap<HostId, HostProjectPresence> {
   const key = hostIds.join("\n");
   const [presence, setPresence] = useState<ReadonlyMap<HostId, HostProjectPresence>>(
@@ -337,7 +339,7 @@ export function useProjectPresence(
     return () => {
       cancelled = true;
     };
-  }, [projectId, key]);
+  }, [projectId, key, revision]);
   return presence;
 }
 

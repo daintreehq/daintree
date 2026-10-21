@@ -1040,6 +1040,7 @@ describe("remote session wiring", () => {
       listFleetTargets: async () => ({ targets: [], complete: true }),
       submitFleet: async () => {},
       listWorktrees: async () => [],
+      onWorktreesMaybeChanged: () => () => {},
       restartTerminals: async () => ({
         projects: [],
         complete: true,
