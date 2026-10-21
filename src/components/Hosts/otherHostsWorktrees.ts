@@ -10,6 +10,9 @@ import { buildHostMenuRows, clientPlatform } from "./hostModel";
 import { useProjectPresence } from "./hostProjects";
 import { isLive } from "./Overview/overviewModel";
 
+/** The least time between asking the other hosts again whether they have this project. */
+export const PRESENCE_RECHECK_MS = 3_000;
+
 export interface OtherHostWorktrees {
   hostId: HostId;
   hostName: string;
@@ -78,11 +81,30 @@ export function useOtherHostsWorktrees(projectId: string | null): OtherHostWorkt
     const api = window.electron?.hostMetrics;
     if (!api) return;
     const unmatched = new Set(unmatchedKey.split("\n"));
-    return api.onEvent((event) => {
-      if (event.type === "worktrees" && unmatched.has(event.hostId)) {
-        setPresenceRevision((revision) => revision + 1);
+    // Once at the first change, then at most once a window: a busy host must
+    // not restart the lookup faster than it can answer.
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let heldBack = false;
+    const settle = (): void => {
+      timer = null;
+      if (!heldBack) return;
+      heldBack = false;
+      setPresenceRevision((revision) => revision + 1);
+      timer = setTimeout(settle, PRESENCE_RECHECK_MS);
+    };
+    const off = api.onEvent((event) => {
+      if (event.type !== "worktrees" || !unmatched.has(event.hostId)) return;
+      if (timer !== null) {
+        heldBack = true;
+        return;
       }
+      setPresenceRevision((revision) => revision + 1);
+      timer = setTimeout(settle, PRESENCE_RECHECK_MS);
     });
+    return () => {
+      off();
+      if (timer !== null) clearTimeout(timer);
+    };
   }, [unmatchedKey]);
 
   useEffect(() => {

@@ -74,7 +74,7 @@ const locate = vi.fn(async () => presence);
 
 beforeEach(() => {
   switchToHost.mockClear();
-  listWorktrees.mockClear();
+  listWorktrees.mockReset().mockImplementation(async ({ hostId }) => lists[hostId] ?? []);
   locate.mockClear();
   eventListener = null;
   hostList.hosts = [host("linux", true), host("away", false)];
@@ -180,7 +180,7 @@ describe("OtherHostsWorktreeGroup", () => {
     presence = [
       { hostId: "linux", projects: [{ projectId: "moved-p", name: "helios", path: "/srv2" }] },
     ];
-    listWorktrees.mockRejectedValueOnce(new Error("link dropped"));
+    listWorktrees.mockRejectedValue(new Error("link dropped"));
     hostList.hosts = [host("linux", true)];
     rerender(<OtherHostsWorktreeGroup projectId={PROJECT} />);
     await waitFor(() => expect(locate).toHaveBeenCalledTimes(2));
