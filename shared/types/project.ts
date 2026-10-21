@@ -282,6 +282,8 @@ export interface PanelSnapshot {
   viewportDpr?: 1 | 2 | 3;
   /** Whether the dev-preview viewport is scaled to fit the available pane */
   viewportFit?: boolean;
+  /** Whether the dev preview shows the worktree's resource endpoint instead of running a command */
+  previewsResourceEndpoint?: boolean;
   /** Last captured dev-preview scroll position, paired with URL for stale-scroll prevention */
   devPreviewScrollPosition?: { url: string; scrollY: number };
   /** Absolute path of the file shown in a file panel */

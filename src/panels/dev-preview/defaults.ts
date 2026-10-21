@@ -22,5 +22,6 @@ export function createDevPreviewDefaults(
     viewportDpr: options.viewportDpr ?? 1,
     viewportFit: options.viewportFit ?? false,
     devPreviewScrollPosition: options.devPreviewScrollPosition,
+    ...(options.previewsResourceEndpoint && { previewsResourceEndpoint: true }),
   };
 }

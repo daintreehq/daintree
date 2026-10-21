@@ -794,6 +794,8 @@ export interface DevPreviewPanelData extends BasePanelData {
   viewportFit?: boolean;
   /** Last captured scroll position, paired with URL for stale-scroll prevention */
   devPreviewScrollPosition?: { url: string; scrollY: number };
+  /** Previews the worktree's resource environment endpoint instead of running devCommand */
+  previewsResourceEndpoint?: boolean;
 }
 
 /**

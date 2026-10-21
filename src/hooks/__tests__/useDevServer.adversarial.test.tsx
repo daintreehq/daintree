@@ -1730,4 +1730,74 @@ describe("useDevServer adversarial races", () => {
     });
     expect(result.current.status).toBe("running");
   });
+
+  describe("resource endpoint mode (#13688)", () => {
+    const endpointProps = {
+      panelId: "panel-1",
+      devCommand: "npm run dev",
+      cwd: "/repo",
+      worktreeId: "wt-1",
+    };
+
+    it("ensures the endpoint instead of the dev command", async () => {
+      renderHook(() =>
+        useDevServer({ ...endpointProps, endpoint: "http://box.example.ts.net:5173" })
+      );
+
+      await waitFor(() => expect(ensureMock).toHaveBeenCalledTimes(1));
+      expect(ensureMock.mock.calls[0][0]).toMatchObject({
+        devCommand: "",
+        endpoint: "http://box.example.ts.net:5173",
+      });
+    });
+
+    it("never falls back to the dev command while no endpoint is ready", async () => {
+      const { result } = renderHook(() => useDevServer({ ...endpointProps, endpoint: null }));
+
+      await waitFor(() => expect(getStateMock).toHaveBeenCalled());
+      await act(async () => {
+        await result.current.start();
+      });
+
+      expect(ensureMock).not.toHaveBeenCalled();
+      expect(result.current.status).toBe("error");
+      expect(result.current.error?.message).toContain("no ready endpoint");
+    });
+
+    it("restarts by cycling the resource, then connects to the endpoint status reported", async () => {
+      const refreshEndpoint = vi.fn(async () => "http://10.0.0.9:5173");
+      const { result } = renderHook(() =>
+        useDevServer({ ...endpointProps, endpoint: "http://10.0.0.8:5173", refreshEndpoint })
+      );
+      await waitFor(() => expect(ensureMock).toHaveBeenCalledTimes(1));
+
+      await act(async () => {
+        await result.current.restart();
+      });
+
+      expect(refreshEndpoint).toHaveBeenCalledTimes(1);
+      expect(restartMock).not.toHaveBeenCalled();
+      expect(ensureMock).toHaveBeenLastCalledWith(
+        expect.objectContaining({ endpoint: "http://10.0.0.9:5173", resumeUserStopped: true })
+      );
+    });
+
+    it("surfaces a failed resource step instead of reconnecting", async () => {
+      const refreshEndpoint = vi.fn(async () => {
+        throw new Error("Resume failed");
+      });
+      const { result } = renderHook(() =>
+        useDevServer({ ...endpointProps, endpoint: "http://10.0.0.8:5173", refreshEndpoint })
+      );
+      await waitFor(() => expect(ensureMock).toHaveBeenCalledTimes(1));
+
+      await act(async () => {
+        await result.current.restart();
+      });
+
+      expect(ensureMock).toHaveBeenCalledTimes(1);
+      expect(result.current.status).toBe("error");
+      expect(result.current.error?.message).toContain("Resume failed");
+    });
+  });
 });

@@ -14,7 +14,7 @@ import { getWorktreeSortDragId } from "../DragDrop/SortableWorktreeCard";
 import { GripVertical } from "lucide-react";
 import { CheckboxGlyph } from "@/components/ui/checkbox";
 import { useErrorStore, usePanelStore, type RetryAction } from "../../store";
-import type { PtyPanelData } from "@shared/types/panel";
+import { isDevPreviewPanel, type PtyPanelData } from "@shared/types/panel";
 import { useRecipeStore } from "../../store/recipeStore";
 import { useWorktreeSelectionStore } from "../../store/worktreeStore";
 import { suppressShiftClickTextSelection } from "@/utils/shiftClickSelection";
@@ -568,6 +568,35 @@ export function WorktreeCard({
       { worktreeId: worktree.id },
       { source: "user" }
     );
+
+  // One endpoint preview per worktree: a second click brings back the panel
+  // already showing it rather than stacking another (#13688).
+  const handlePreviewEndpoint = () => {
+    const store = usePanelStore.getState();
+    const existing = Object.values(store.panelsById).find(
+      (panel) =>
+        isDevPreviewPanel(panel) &&
+        panel.worktreeId === worktree.id &&
+        panel.previewsResourceEndpoint === true &&
+        !store.isInTrash(panel.id)
+    );
+    if (existing) {
+      if (existing.location === "dock") openDockTerminal(existing.id);
+      else setFocused(existing.id);
+      pingTerminal(existing.id);
+      return;
+    }
+    safeFireAndForget(
+      store.addPanel({
+        kind: "dev-preview",
+        title: "Endpoint preview",
+        cwd: worktree.path,
+        worktreeId: worktree.id,
+        previewsResourceEndpoint: true,
+      }),
+      { context: "Opening resource endpoint preview" }
+    );
+  };
 
   const handleCopyContextFull = () => {
     void copyContextWithFeedback(worktree.id, "context-menu", undefined, "worktree-card");
@@ -1485,6 +1514,7 @@ export function WorktreeCard({
                   resourceLastCheckedAt={worktree.resourceStatus?.lastCheckedAt}
                   devServerSession={devServerSession}
                   onCheckResourceStatus={hasStatusCommand ? handleResourceStatus : undefined}
+                  onPreviewEndpoint={handlePreviewEndpoint}
                   onCleanupWorktree={
                     chipState === "cleanup" && !isMainWorktree
                       ? () => setShowDeleteDialog(true)

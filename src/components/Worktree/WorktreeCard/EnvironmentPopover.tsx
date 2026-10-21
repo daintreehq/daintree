@@ -11,6 +11,7 @@ import {
   ExternalLink,
   Globe,
   Layers,
+  MonitorPlay,
   RefreshCw,
   Rocket,
   Server,
@@ -103,6 +104,8 @@ interface EnvironmentPopoverProps {
   resourceEndpoint: string | undefined;
   resourceLastCheckedAt: number | undefined;
   onCheckResourceStatus: (() => void | Promise<unknown>) | undefined;
+  /** Opens the endpoint in a dev preview panel; omitted where no panel can host it. */
+  onPreviewEndpoint?: () => void;
 }
 
 export function EnvironmentPopover({
@@ -117,6 +120,7 @@ export function EnvironmentPopover({
   resourceEndpoint,
   resourceLastCheckedAt,
   onCheckResourceStatus,
+  onPreviewEndpoint,
 }: EnvironmentPopoverProps) {
   const [open, setOpen] = useState(false);
   const [checkRequested, setCheckRequested] = useState(false);
@@ -331,6 +335,25 @@ export function EnvironmentPopover({
                     aria-label="Copy endpoint"
                     announcement="Endpoint copied"
                   />
+                  {onPreviewEndpoint && isOpenableUrl(resourceEndpoint) && (
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          variant="ghost"
+                          size="icon-xs"
+                          aria-label="Preview endpoint"
+                          className="[&_svg]:size-3.5"
+                          onClick={() => {
+                            setOpen(false);
+                            onPreviewEndpoint();
+                          }}
+                        >
+                          <MonitorPlay aria-hidden="true" />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent side="top">Preview endpoint</TooltipContent>
+                    </Tooltip>
+                  )}
                   {isOpenableUrl(resourceEndpoint) && (
                     <Tooltip>
                       <TooltipTrigger asChild>

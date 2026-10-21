@@ -2,7 +2,8 @@ import http from "node:http";
 import { createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import type { AddressInfo, Socket } from "node:net";
 import type { Duplex } from "node:stream";
-import { createProxyServer, type ProxyServer } from "httpxy";
+import { createProxyServer, type ProxyServer, type ProxyServerOptions } from "httpxy";
+import ipaddr from "ipaddr.js";
 import {
   DEV_PREVIEW_BOOTSTRAP_PATH,
   DEV_PREVIEW_PROXY_PORT,
@@ -17,6 +18,11 @@ import type {
   DevPreviewProxyFailureCause,
   DevPreviewUpstreamResolution,
 } from "../../shared/types/ipc/devPreview.js";
+import {
+  DEV_PREVIEW_PUBLIC_ADDRESS_CODE,
+  createPrivateNetworkLookup,
+  isPrivateNetworkAddress,
+} from "./DevPreviewEndpoint.js";
 
 // The proxy binds IPv4 loopback only — it should be reachable from this machine, nothing else.
 const PROXY_LISTEN_HOST = "127.0.0.1";
@@ -42,6 +48,9 @@ const ABSOLUTE_LOCATION_REGEX = /^(?:https?:)?\/\//i;
 // those redirects on the proxy origin; a literal origin comparison would let them
 // through and re-run the callback on the remount (#12297).
 const LOOPBACK_HOSTNAMES = new Set(["localhost", "127.0.0.1", "[::1]", "::1"]);
+
+const PUBLIC_ADDRESS_MESSAGE =
+  "The resource endpoint resolves to a public address. Previews only reach loopback, private network and tailnet addresses.";
 
 // "Open in real browser" handoff token (#9101). The token is HMAC-signed,
 // single-use, bound to its issuing panel, and expires fast — it only has to
@@ -136,6 +145,11 @@ export class DevPreviewProxyService {
       upstreamOrigin: string;
       upstreamProtocol: string;
       upstreamPort: string;
+      /**
+       * A resource endpoint's hostname. Its absolute redirects name that host rather
+       * than a loopback alias, so it is the one host matched instead.
+       */
+      endpointHost: string | null;
       /** The dev server's own port on a remote host, when the forward reaches it on another. */
       advertisedPort: string | null;
       proxyOrigin: URL;
@@ -210,7 +224,7 @@ export class DevPreviewProxyService {
       }
       if (!res) return;
       if (res instanceof http.ServerResponse) {
-        this.send502(res, "The dev server isn't responding.");
+        this.send502(res, this.upstreamFailureMessage(err));
       } else {
         res.destroy();
       }
@@ -320,30 +334,71 @@ export class DevPreviewProxyService {
       this.send502(res, "The dev server for this preview isn't running.");
       return;
     }
+    const dial = this.buildDialOptions(resolution, "http");
+    if (!dial) {
+      this.reportFailure(subdomain, "http", "upstream-error", DEV_PREVIEW_PUBLIC_ADDRESS_CODE);
+      this.send502(res, PUBLIC_ADDRESS_MESSAGE);
+      return;
+    }
     try {
-      // Dial https:// for a TLS dev server, http:// otherwise — httpxy picks https.request vs
-      // http.request from the target scheme. `secure: false` accepts the self-signed loopback
-      // cert (Vite/Next dev TLS); the upstream is always `localhost`, so this stays loopback-only
-      // and never disables verification for a remote host (#9974).
-      const scheme = resolution.isHttps ? "https" : "http";
-      const target = `${scheme}://${UPSTREAM_HOST}:${resolution.port}`;
-      this.rememberRequestOrigins(req, target, resolution.advertisedPort);
-      await this.proxy!.web(req, res, {
-        target,
-        ...(resolution.isHttps ? { secure: false } : {}),
-      });
+      this.rememberRequestOrigins(req, dial.target, resolution.advertisedPort, resolution.host);
+      await this.proxy!.web(req, res, dial);
     } catch (err) {
       const classified = this.classifyUpstreamError(err);
       this.reportFailure(subdomain, "http", classified.cause, classified.code);
-      this.send502(res, "The dev server isn't responding.");
+      this.send502(res, this.upstreamFailureMessage(err));
     }
+  }
+
+  /**
+   * The httpxy options for one dial, shared by the HTTP and WebSocket paths so both
+   * reach the upstream under the same policy. Null refuses the dial.
+   *
+   * A local session dials `localhost` with `secure: false`: the self-signed loopback
+   * cert (Vite/Next dev TLS) is acceptable because the upstream is this machine (#9974).
+   *
+   * A resource endpoint (#13688) dials its own host with verification left on, so an
+   * https endpoint is checked against its own identity, and with a lookup that drops
+   * public answers on the socket actually connected (DNS rebinding). httpxy builds the
+   * outgoing request *from* `ssl` and mutates it, so it must be a fresh object per dial;
+   * it is also the only way `lookup` reaches the request on both the HTTP and WS paths.
+   * Node skips `lookup` for a literal address, which is checked here instead.
+   */
+  private buildDialOptions(
+    resolution: Extract<RemoteUpstreamResolution, { kind: "ok" }>,
+    kind: "http" | "ws"
+  ): (ProxyServerOptions & { target: string }) | null {
+    // httpxy's isSSL check matches both `wss` and `https`; `wss` keeps an HMR upgrade on TLS.
+    const scheme = resolution.isHttps ? (kind === "ws" ? "wss" : "https") : "http";
+    const host = resolution.host;
+    if (!host || LOOPBACK_HOSTNAMES.has(host)) {
+      return {
+        target: `${scheme}://${UPSTREAM_HOST}:${resolution.port}`,
+        ...(resolution.isHttps ? { secure: false } : {}),
+      };
+    }
+    const isLiteral = ipaddr.isValid(host);
+    if (isLiteral && !isPrivateNetworkAddress(host)) return null;
+    const authority = isLiteral && host.includes(":") ? `[${host}]` : host;
+    return {
+      target: `${scheme}://${authority}:${resolution.port}`,
+      ssl: { lookup: createPrivateNetworkLookup() },
+    };
+  }
+
+  private upstreamFailureMessage(err: unknown): string {
+    return (err as NodeJS.ErrnoException | null | undefined)?.code ===
+      DEV_PREVIEW_PUBLIC_ADDRESS_CODE
+      ? PUBLIC_ADDRESS_MESSAGE
+      : "The dev server isn't responding.";
   }
 
   /** Snapshot the endpoints this request is being proxied between, for the response hook. */
   private rememberRequestOrigins(
     req: http.IncomingMessage,
     target: string,
-    advertisedPort?: number
+    advertisedPort?: number,
+    endpointHost?: string
   ): void {
     const host = req.headers.host;
     if (!host) return;
@@ -367,6 +422,7 @@ export class DevPreviewProxyService {
       upstreamOrigin: upstream.origin,
       upstreamProtocol: upstream.protocol,
       upstreamPort: upstream.port,
+      endpointHost: endpointHost && !LOOPBACK_HOSTNAMES.has(endpointHost) ? endpointHost : null,
       advertisedPort:
         advertisedPort !== undefined && String(advertisedPort) !== upstream.port
           ? String(advertisedPort)
@@ -406,7 +462,16 @@ export class DevPreviewProxyService {
     if (destination.port !== origins.upstreamPort && destination.port !== origins.advertisedPort) {
       return;
     }
-    if (!LOOPBACK_HOSTNAMES.has(destination.hostname.toLowerCase())) return;
+    const destinationHost = destination.hostname.toLowerCase().replace(/\.$/, "");
+    if (origins.endpointHost !== null) {
+      const bare =
+        destinationHost.startsWith("[") && destinationHost.endsWith("]")
+          ? destinationHost.slice(1, -1)
+          : destinationHost;
+      if (bare !== origins.endpointHost) return;
+    } else if (!LOOPBACK_HOSTNAMES.has(destinationHost)) {
+      return;
+    }
 
     // Retarget the parsed URL rather than rebuilding the string: `${pathname}${search}${hash}`
     // silently drops an explicitly empty fragment, and a `Location` ending in a bare `#`
@@ -446,22 +511,16 @@ export class DevPreviewProxyService {
       socket.destroy();
       return;
     }
+    const dial = this.buildDialOptions(resolution, "ws");
+    if (!dial) {
+      this.reportFailure(subdomain, "ws", "upstream-error", DEV_PREVIEW_PUBLIC_ADDRESS_CODE);
+      socket.destroy();
+      return;
+    }
     try {
       // The 'upgrade' event types the socket as Duplex; httpxy's ws() wants net.Socket, which
-      // is exactly the concrete type Node provides here. Use wss:// for a TLS dev server so
-      // HMR/WebSocket upgrades reach an HTTPS upstream instead of failing the handshake; httpxy's
-      // isSSL check matches both `wss` and `https`, and `secure: false` accepts the self-signed
-      // loopback cert (#9974).
-      const scheme = resolution.isHttps ? "wss" : "http";
-      await this.proxy!.ws(
-        req,
-        socket as Socket,
-        {
-          target: `${scheme}://${UPSTREAM_HOST}:${resolution.port}`,
-          ...(resolution.isHttps ? { secure: false } : {}),
-        },
-        head
-      );
+      // is exactly the concrete type Node provides here.
+      await this.proxy!.ws(req, socket as Socket, dial, head);
     } catch (err) {
       const classified = this.classifyUpstreamError(err);
       this.reportFailure(subdomain, "ws", classified.cause, classified.code);

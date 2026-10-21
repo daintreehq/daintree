@@ -16,6 +16,17 @@ export interface UseDevServerOptions {
   worktreeId?: string;
   env?: Record<string, string>;
   turbopackEnabled?: boolean;
+  /**
+   * Set (even to null) for a panel that previews the worktree's resource
+   * endpoint instead of running devCommand (#13688); null while no endpoint is
+   * ready. Undefined keeps the panel on its dev command.
+   */
+  endpoint?: string | null;
+  /**
+   * Endpoint panels only: cycles the resource and reports its fresh endpoint.
+   * Restart runs it first because neither pause nor resume refreshes it.
+   */
+  refreshEndpoint?: () => Promise<string | null>;
 }
 
 export interface UseDevServerState {
@@ -83,12 +94,18 @@ function serializeEnv(env?: Record<string, string>): string {
     .join("\u0001");
 }
 
+/** What the panel launches: its endpoint in endpoint mode, else its dev command. Empty means nothing. */
+function launchTarget(devCommand: string, endpoint: string | null | undefined): string {
+  return endpoint === undefined ? devCommand.trim() : (endpoint?.trim() ?? "");
+}
+
 function buildEnsureConfigKey(params: {
   projectId: string;
   panelId: string;
   cwd: string;
   worktreeId?: string;
   devCommand: string;
+  endpoint?: string | null;
   envSignature: string;
   turbopackEnabled?: boolean;
 }): string {
@@ -97,6 +114,7 @@ function buildEnsureConfigKey(params: {
     params.panelId,
     params.cwd,
     params.worktreeId ?? "",
+    params.endpoint === undefined ? "" : `endpoint:${params.endpoint ?? ""}`,
     params.devCommand.trim(),
     params.envSignature,
     (params.turbopackEnabled ?? true) ? "turbo:on" : "turbo:off",
@@ -110,6 +128,8 @@ export function useDevServer({
   worktreeId,
   env,
   turbopackEnabled,
+  endpoint,
+  refreshEndpoint,
 }: UseDevServerOptions): UseDevServerReturn {
   const currentProjectId = useProjectStore((state) => state.currentProject?.id ?? null);
   const [status, setStatus] = useState<DevPreviewStatus>("stopped");
@@ -157,6 +177,8 @@ export function useDevServer({
     cwd: string;
     worktreeId?: string;
     devCommand: string;
+    endpoint?: string | null;
+    refreshEndpoint?: () => Promise<string | null>;
     env?: Record<string, string>;
     turbopackEnabled?: boolean;
   }>({
@@ -165,6 +187,8 @@ export function useDevServer({
     cwd,
     worktreeId,
     devCommand,
+    endpoint,
+    refreshEndpoint,
     env,
     turbopackEnabled,
   });
@@ -177,6 +201,8 @@ export function useDevServer({
     cwd,
     worktreeId,
     devCommand,
+    endpoint,
+    refreshEndpoint,
     env,
     turbopackEnabled,
   };
@@ -251,8 +277,8 @@ export function useDevServer({
       const requestProjectId = latest.projectId;
       if (!requestProjectId) return;
 
-      const trimmedCommand = latest.devCommand.trim();
-      if (!trimmedCommand) return;
+      if (!launchTarget(latest.devCommand, latest.endpoint)) return;
+      const endpointMode = latest.endpoint !== undefined;
 
       const requestPanelId = latest.panelId;
       const requestVersion = requestVersionRef.current;
@@ -265,7 +291,8 @@ export function useDevServer({
           panelId: requestPanelId,
           projectId: requestProjectId,
           cwd: latest.cwd,
-          devCommand: latest.devCommand,
+          devCommand: endpointMode ? "" : latest.devCommand,
+          ...(endpointMode && latest.endpoint ? { endpoint: latest.endpoint.trim() } : {}),
           worktreeId: latest.worktreeId,
           env: latest.env,
           turbopackEnabled: latest.turbopackEnabled,
@@ -300,8 +327,14 @@ export function useDevServer({
       applyInvokeError(new Error("No active project"));
       return;
     }
-    if (!latest.devCommand.trim()) {
-      applyInvokeError(new Error("No dev command configured"));
+    if (!launchTarget(latest.devCommand, latest.endpoint)) {
+      applyInvokeError(
+        new Error(
+          latest.endpoint === undefined
+            ? "No dev command configured"
+            : "The resource environment has no ready endpoint"
+        )
+      );
       return;
     }
 
@@ -311,6 +344,7 @@ export function useDevServer({
       cwd: latest.cwd,
       worktreeId: latest.worktreeId,
       devCommand: latest.devCommand,
+      endpoint: latest.endpoint,
       envSignature: serializeEnv(latest.env),
       turbopackEnabled: latest.turbopackEnabled,
     });
@@ -347,6 +381,24 @@ export function useDevServer({
     const latest = latestContextRef.current;
     if (!latest.projectId) {
       applyInvokeError(new Error("No active project"));
+      return;
+    }
+
+    // A resource endpoint is restarted through the resource, and neither pause
+    // nor resume refreshes the endpoint: cycle it, take the fresh endpoint from
+    // its status, and reconnect to that (#13688).
+    if (latest.endpoint !== undefined && latest.refreshEndpoint) {
+      let fresh: string | null;
+      try {
+        fresh = await latest.refreshEndpoint();
+      } catch (err) {
+        applyInvokeError(err);
+        return;
+      }
+      if (!isMountedRef.current) return;
+      latestContextRef.current = { ...latestContextRef.current, endpoint: fresh };
+      persistedEnsureCache.delete(latest.panelId);
+      await start();
       return;
     }
 
@@ -387,7 +439,16 @@ export function useDevServer({
 
   useEffect(() => {
     requestVersionRef.current += 1;
-  }, [panelId, currentProjectId, cwd, worktreeId, devCommand, envSignature, turbopackEnabled]);
+  }, [
+    panelId,
+    currentProjectId,
+    cwd,
+    worktreeId,
+    devCommand,
+    endpoint,
+    envSignature,
+    turbopackEnabled,
+  ]);
 
   useEffect(() => {
     if (!currentProjectId) {
@@ -471,9 +532,11 @@ export function useDevServer({
     });
   }, [panelId, currentProjectId, applyState]);
 
+  const target = launchTarget(devCommand, endpoint);
+
   useEffect(() => {
     if (!currentProjectId) return;
-    if (devCommand.trim()) return;
+    if (target) return;
 
     const requestVersion = requestVersionRef.current;
     const requestProjectId = currentProjectId;
@@ -494,11 +557,11 @@ export function useDevServer({
           applyInvokeError(err);
         }
       });
-  }, [panelId, currentProjectId, devCommand, applyState, applyInvokeError, isRequestCurrent]);
+  }, [panelId, currentProjectId, target, applyState, applyInvokeError, isRequestCurrent]);
 
   useEffect(() => {
     if (!currentProjectId) return;
-    if (!devCommand.trim()) return;
+    if (!target) return;
     // Wait for the first getState() to resolve before auto-spawning so this
     // effect reconciles to the panel's real status before deciding to ensure(),
     // rather than firing on the synchronous mount with the stale "stopped"
@@ -514,6 +577,7 @@ export function useDevServer({
       cwd,
       worktreeId,
       devCommand,
+      endpoint,
       envSignature,
       turbopackEnabled,
     });
@@ -538,6 +602,8 @@ export function useDevServer({
     cwd,
     worktreeId,
     devCommand,
+    endpoint,
+    target,
     envSignature,
     turbopackEnabled,
     ensureLatestConfig,

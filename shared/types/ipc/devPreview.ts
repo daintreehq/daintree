@@ -18,6 +18,9 @@ export interface DevPreviewEnsureRequest {
   projectId: string;
   cwd: string;
   devCommand: string;
+  // A resource environment's `status` endpoint (#13688). When set, the session
+  // previews that server and runs no command; devCommand is ignored.
+  endpoint?: string;
   worktreeId?: string;
   env?: Record<string, string>;
   turbopackEnabled?: boolean;
@@ -162,8 +165,9 @@ export type DevPreviewProxyFailureCause =
 // What the proxy would dial for a subdomain right now. Splits the old
 // `{port,isHttps} | null` resolver result so a 502 can say WHY there is no
 // upstream instead of collapsing every miss into "not responding".
+// `host` is set only for a resource endpoint session; absent means this machine.
 export type DevPreviewUpstreamResolution =
-  | { kind: "ok"; port: number; isHttps: boolean }
+  | { kind: "ok"; port: number; isHttps: boolean; host?: string }
   | { kind: "not-running"; status: DevPreviewSessionStatus }
   | { kind: "unknown-subdomain" };
 

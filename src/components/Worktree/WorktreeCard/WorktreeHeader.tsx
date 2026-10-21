@@ -58,6 +58,7 @@ export interface WorktreeHeaderProps {
   resourceLastCheckedAt?: number;
   devServerSession?: DevPreviewSessionState;
   onCheckResourceStatus?: () => void | Promise<unknown>;
+  onPreviewEndpoint?: () => void;
   onCleanupWorktree?: () => void;
   badges: {
     onOpenIssue?: () => void;
@@ -99,6 +100,7 @@ export function WorktreeHeader({
   resourceLastCheckedAt,
   devServerSession,
   onCheckResourceStatus,
+  onPreviewEndpoint,
   onCleanupWorktree,
   badges,
   gitStateIndicator,
@@ -386,6 +388,7 @@ export function WorktreeHeader({
                 resourceEndpoint={resourceEndpoint}
                 resourceLastCheckedAt={resourceLastCheckedAt}
                 onCheckResourceStatus={onCheckResourceStatus}
+                onPreviewEndpoint={onPreviewEndpoint}
               />
             )}
             <DevServerIndicator session={devServerSession} />

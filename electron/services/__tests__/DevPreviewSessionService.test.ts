@@ -2193,3 +2193,107 @@ describe("DevPreviewSessionService — cross-worktree snapshot", () => {
     expect(session?.lastOutput).toBeUndefined();
   });
 });
+
+describe("DevPreviewSessionService resource endpoint sessions (#13688)", () => {
+  const endpointRequest = {
+    panelId: "panel-e",
+    projectId: "project-1",
+    cwd: "/repo",
+    devCommand: "",
+    worktreeId: "wt-e",
+    endpoint: "http://box.example.ts.net:5173",
+  };
+  const session = { panelId: "panel-e", projectId: "project-1" };
+  const subdomain = buildDevPreviewSubdomain("project-1", "panel-e");
+
+  let ptyClient: ReturnType<typeof createPtyClientMock>;
+  let service: DevPreviewSessionService;
+
+  beforeEach(() => {
+    ptyClient = createPtyClientMock();
+    service = new DevPreviewSessionService(ptyClient as unknown as PtyClient, vi.fn());
+    mockHttpResponse(200);
+  });
+
+  afterEach(() => {
+    service.dispose();
+    vi.restoreAllMocks();
+  });
+
+  it("runs without a terminal and resolves to the endpoint's host", async () => {
+    const state = await service.ensure(endpointRequest);
+
+    expect(state.status).toBe("running");
+    expect(state.url).toBe(endpointRequest.endpoint);
+    expect(state.terminalId).toBeNull();
+    expect(ptyClient.spawn).not.toHaveBeenCalled();
+    expect(service.resolveUpstream(subdomain)).toEqual({
+      kind: "ok",
+      port: 5173,
+      isHttps: false,
+      host: "box.example.ts.net",
+    });
+  });
+
+  it("lands an error instead of a session for a public or malformed endpoint", async () => {
+    const publicState = await service.ensure({ ...endpointRequest, endpoint: "http://8.8.8.8" });
+    expect(publicState.status).toBe("error");
+    expect(publicState.error?.message).toContain("public address");
+    expect(service.resolveUpstream(subdomain)).toEqual({ kind: "not-running", status: "error" });
+
+    const badState = await service.ensure({ ...endpointRequest, endpoint: "ftp://10.0.0.2" });
+    expect(badState.status).toBe("error");
+    expect(ptyClient.spawn).not.toHaveBeenCalled();
+  });
+
+  it("follows a changed endpoint and stops resolving once stopped", async () => {
+    await service.ensure(endpointRequest);
+    await service.ensure({ ...endpointRequest, endpoint: "https://10.0.0.7:8443" });
+    expect(service.resolveUpstream(subdomain)).toEqual({
+      kind: "ok",
+      port: 8443,
+      isHttps: true,
+      host: "10.0.0.7",
+    });
+
+    await service.stop(session);
+    expect(service.resolveUpstream(subdomain)).toEqual({ kind: "not-running", status: "stopped" });
+  });
+
+  it("reconnects on restart, clear cache and reinstall without spawning anything", async () => {
+    await service.ensure(endpointRequest);
+
+    for (const state of [
+      await service.restart(session),
+      await service.restartAndClearCache(session),
+      await service.reinstallAndRestart(session),
+      await service.restartByWorktree("wt-e"),
+    ]) {
+      expect(state.status).toBe("running");
+      expect(state.url).toBe(endpointRequest.endpoint);
+    }
+    expect(ptyClient.spawn).not.toHaveBeenCalled();
+  });
+
+  it("stops a previous dev command's terminal when the panel switches to the endpoint", async () => {
+    vi.spyOn(portAllocator, "waitForPortFree").mockResolvedValue(true);
+    const local = await service.ensure({
+      ...endpointRequest,
+      devCommand: "npm run dev",
+      endpoint: undefined,
+    });
+    expect(local.terminalId).toBeTruthy();
+
+    const state = await service.ensure(endpointRequest);
+
+    expect(ptyClient.kill).toHaveBeenCalledWith(local.terminalId, expect.anything());
+    expect(state.status).toBe("running");
+    expect(state.terminalId).toBeNull();
+    expect(service.resolveUpstream(subdomain)).toMatchObject({ host: "box.example.ts.net" });
+  });
+
+  it("leaves endpoint sessions out of the restore manifest", async () => {
+    await service.ensure(endpointRequest);
+    expect(service.captureManifest()).toEqual([]);
+  });
+});

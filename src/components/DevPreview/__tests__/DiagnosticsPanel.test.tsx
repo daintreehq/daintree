@@ -234,4 +234,13 @@ describe("describeUpstream", () => {
     );
     expect(describeUpstream({ kind: "unknown-subdomain" })).toContain("not registered");
   });
+
+  it("names a resource endpoint's own host rather than localhost", () => {
+    expect(
+      describeUpstream({ kind: "ok", port: 5173, isHttps: false, host: "box.example.ts.net" })
+    ).toBe("box.example.ts.net:5173");
+    expect(describeUpstream({ kind: "ok", port: 3000, isHttps: false, host: "fd7a::1" })).toBe(
+      "[fd7a::1]:3000"
+    );
+  });
 });
