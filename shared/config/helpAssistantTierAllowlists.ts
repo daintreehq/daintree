@@ -131,6 +131,13 @@ export const CORE_TIER_TOOLS = [
   // Read-only. How much usage is left lives only in each CLI's own view, and
   // the command that opens it is only typed after this confirms it exists.
   "slashCommands.list",
+  // Runs any command the assistant names, in a project root or worktree: the
+  // shell a hub lacks on a host it reaches over a relay (#13495), which the
+  // runbooks verify and sync with. Here rather than in `full` because this
+  // tier already reaches a shell — `terminal.sendCommand` locally, any
+  // launched agent on a host — so leaving it out only cost the audit and the
+  // exit code. Reserved to the assistant below, and off the external list.
+  "project.runCommand",
 
   "help.displayImage",
   // One assistant finding and starting another (#13496), and this machine's
@@ -202,10 +209,6 @@ export const FULL_TIER_ADDONS = [
   "project.detectRunners",
   // Runs a project-declared command as a real child process.
   "project.runCheck",
-  // Runs any command the assistant names, in a project root or worktree: the
-  // shell a hub lacks on a host it reaches over a relay (#13495). Reserved to
-  // the assistant below, and off the external list.
-  "project.runCommand",
 
   "git.getProjectPulse",
   "forge.getPR",

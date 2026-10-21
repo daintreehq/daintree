@@ -5,6 +5,7 @@ import { type McpTier, minimumPermittingTier } from "./shared.js";
 import {
   buildAnnotations,
   buildToolOutputSchema,
+  callerGatedMinimumTier,
   shouldExposeTool,
   UNBOUND_SESSION_SURFACE,
   type SessionSurfacePolicy,
@@ -52,7 +53,9 @@ export const MCP_SURFACE_MANIFEST_VERSION = 3;
  * In-app sessions get the real minimum, on the surface their origin is
  * admitted against. It is degenerate at `core` (where everything reachable is
  * core by definition) and informative above it, where it says which tools
- * would survive a demotion.
+ * would survive a demotion. A tool that answers its caller rather than a tier
+ * list takes its rung from `callerGatedMinimumTier`, since a relay's origin
+ * places it on no list.
  *
  * The `?? tier` fallback is unreachable today and safe if it ever is not:
  * reaching here means `shouldExposeTool` already returned true, so the id is in
@@ -67,7 +70,9 @@ function resolveToolTier(
   rendererOwnedOrigin: boolean
 ): McpSurfaceTool["tier"] {
   if (tier === "external") return "external";
-  return minimumPermittingTier(entry.id, rendererOwnedOrigin) ?? tier;
+  return (
+    callerGatedMinimumTier(entry.id) ?? minimumPermittingTier(entry.id, rendererOwnedOrigin) ?? tier
+  );
 }
 
 /**
