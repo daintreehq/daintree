@@ -386,7 +386,7 @@ describe("CanopyRow", () => {
     ]);
   });
 
-  it("leads the meta line without a dot when the row is titled after where it runs", () => {
+  it("leads the meta line with the project when the row is titled after it", () => {
     const { container } = renderRow(
       itemFor(
         "finished",
@@ -394,7 +394,7 @@ describe("CanopyRow", () => {
         { title: "Claude", cwd: "/Users/dev/app" }
       )
     );
-    expect(metaParts(container)).toEqual(["Looks done", "·Reported: committed"]);
+    expect(metaParts(container)).toEqual(["🦊", "app", "·Looks done", "·Reported: committed"]);
   });
 
   it("rings a waiting agent that is asking a question with a question mark", () => {
@@ -598,14 +598,15 @@ describe("CanopyRow", () => {
     expect(container.textContent).toContain("app");
   });
 
-  it("drops the emoji with the name when the row is titled after its project", () => {
+  it("keeps the project line on a row titled after its project", () => {
     // A fresh session with no task yet and its cwd at the project root: the
-    // title falls back to the project name, so the footer repeats neither.
+    // title falls back to the project name, and the footer still says where.
     const { container } = renderRow(
       itemFor("idle", { task: null }, { title: "Claude", cwd: "/Users/dev/app" })
     );
-    expect(container.textContent).toContain("app");
-    expect(container.textContent).not.toContain("🦊");
+    const meta = container.querySelector("[data-canopy-meta]");
+    expect(meta?.textContent).toContain("🦊");
+    expect(meta?.textContent).toContain("app");
   });
 
   it("says in words when a working agent has gone quiet, which the spinner shows only by hue", () => {

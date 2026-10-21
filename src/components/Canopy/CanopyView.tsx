@@ -1647,8 +1647,6 @@ function CanopyInbox({
     );
   };
   const unreadCount = inbox.inbox.filter((item) => item.unread).length;
-  // A project's name on every row says nothing while every row is in it.
-  const manyProjects = new Set(items.map((item) => item.workspaceId)).size > 1;
 
   // Another host the panel can't read right now: why, in the host menu's own
   // words, with nothing of another host's put in its place.
@@ -1943,7 +1941,6 @@ function CanopyInbox({
                             reserveDetail
                             tabbable={tabStop(listed, item, index)}
                             unread={item.unread}
-                            showProject={manyProjects}
                             nowMs={nowMs}
                             asideLabel={
                               replied !== null ? `Replied ${agoPhrase(replied, nowMs)}` : null
@@ -1992,7 +1989,6 @@ function CanopyInbox({
                               reserveDetail={false}
                               tabbable={tabStop(inbox.archived, item, index)}
                               unread={false}
-                              showProject={manyProjects}
                               compact
                               nowMs={nowMs}
                               asideLabel={
