@@ -384,7 +384,7 @@ function SubagentDetail({
           ref={headingRef}
           id={headingId}
           tabIndex={-1}
-          className="text-sm font-medium text-text-primary break-words outline-hidden"
+          className="rounded-[var(--radius-xs)] text-sm font-medium text-text-primary break-words outline-hidden focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary"
         >
           {subagentFullTitle(subagent)}
         </h3>
@@ -508,7 +508,7 @@ function moveRowFocus(event: KeyboardEvent<HTMLUListElement>) {
     event.currentTarget.querySelectorAll<HTMLButtonElement>("[data-subagent-row]")
   );
   if (rows.length === 0) return;
-  const current = rows.indexOf(document.activeElement as HTMLButtonElement);
+  const current = rows.findIndex((row) => row === document.activeElement);
   const next =
     event.key === "Home"
       ? 0
