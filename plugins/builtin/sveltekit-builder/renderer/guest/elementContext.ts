@@ -135,7 +135,12 @@ function step(node: Element): string {
     .map((name) => "." + escapeIdent(name))
     .join("");
   let part = tag + classes;
-  const parent = node.parentElement;
+  // A shadow root's top-level children have the root, not an element, above them.
+  const parent: ParentNode | null =
+    node.parentElement ??
+    (typeof ShadowRoot !== "undefined" && node.parentNode instanceof ShadowRoot
+      ? node.parentNode
+      : null);
   if (parent !== null) {
     const same = Array.from(parent.children).filter((child) => child.tagName === node.tagName);
     if (same.length > 1) part += `:nth-of-type(${same.indexOf(node) + 1})`;
@@ -239,19 +244,33 @@ function holdsUserInput(node: Element): boolean {
   return node.closest('[contenteditable]:not([contenteditable="false"])') !== null;
 }
 
-/** A URL's path, without the userinfo, query values or fragment that carry tokens. */
+/**
+ * Longest raw value redaction looks at. Anything longer is cut first, so the
+ * work a hostile attribute can cause is bounded by this, not by the page.
+ */
+const MAX_RAW_VALUE = MAX_ATTRIBUTE * 2;
+
+/**
+ * A URL — or a `srcset` list of them — without userinfo or the values of its
+ * parameters, wherever they sit: the query, or a fragment a client-side router
+ * reads its own query from. Keys, paths and descriptors stay; they say which
+ * page and which image.
+ */
 function redactUrlValue(value: string): string {
-  if (/^\s*data:/i.test(value) || /\bdata:[^,\s]*,/i.test(value)) return "data:…";
-  if (value.trimStart().startsWith("#")) return value;
-  return value
-    .replace(/\/\/[^/?#@\s]*@/g, "//")
-    .replace(/#.*$/s, "")
-    .replace(/([?&][^=&#\s]*)=[^&#\s]*/g, "$1=");
+  const raw = value.slice(0, MAX_RAW_VALUE);
+  if (/data:/i.test(raw)) return "data:…";
+  return raw.replace(/\/\/[^/?#@\s]*@/g, "//").replace(/([?&#][^=&#\s,]*)=[^&#\s,]*/g, "$1=");
 }
 
-/** A CSS value with every `url(…)` emptied: an embedded payload or a tokened address. */
+/**
+ * A CSS value that could hold an address — any `url`, however spelled, or an
+ * escape that could spell one — is withheld whole. Tokenising CSS to keep the
+ * rest isn't worth the ways a quoted parenthesis or an escaped name gets past
+ * a pattern.
+ */
 function redactCssUrls(value: string): string {
-  return value.replace(/url\((?:[^()]|\([^)]*\))*\)/gi, "url(…)");
+  const raw = value.slice(0, MAX_RAW_VALUE);
+  return /url|image-set|\\/i.test(raw) ? "url(…)" : raw;
 }
 
 function attributeValue(node: Element, name: string, value: string): string | null {
@@ -266,7 +285,7 @@ function attributeValue(node: Element, name: string, value: string): string | nu
   if (lower === "href" || lower === "src" || lower === "srcset") {
     return clamp(redactUrlValue(value), MAX_ATTRIBUTE);
   }
-  if (/^\s*data:/i.test(value)) return "data:…";
+  if (/^\s*data:/i.test(value.slice(0, MAX_RAW_VALUE))) return "data:…";
   return clamp(value, MAX_ATTRIBUTE);
 }
 

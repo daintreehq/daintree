@@ -2097,7 +2097,15 @@ export class InspectorController implements DevPreviewToolSession {
       return;
     }
     const described = this.pageSelectionOf(binding.panelId, selection.epoch, page, observed.nodes);
-    this.capturePicture(described, observed.nodes);
+    // The boxes were measured at the click, and the page may have scrolled or
+    // reflowed since: a picture taken now could frame something else.
+    this.keepPicture(
+      described.selectionId,
+      Promise.resolve({
+        status: "omitted",
+        reason: "it was picked before the worktree search finished; select it again to attach one",
+      })
+    );
     this.patchState({ selection: { ...selection, page: described } });
   }
 
@@ -2179,7 +2187,11 @@ export class InspectorController implements DevPreviewToolSession {
       });
       picture = Promise.race([taken, deadline]).finally(() => clearTimeout(timer));
     }
-    this.captures.set(selection.selectionId, picture);
+    this.keepPicture(selection.selectionId, picture);
+  }
+
+  private keepPicture(selectionId: string, picture: Promise<PageScreenshot>): void {
+    this.captures.set(selectionId, picture);
     while (this.captures.size > CAPTURES_KEPT) {
       const oldest = this.captures.keys().next();
       if (oldest.done === true) break;

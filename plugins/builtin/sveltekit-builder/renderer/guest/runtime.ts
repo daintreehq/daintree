@@ -1372,9 +1372,7 @@ export function createSiteBuilderGuest(
   }
 
   function domChildren(node: Element): Element[] {
-    return Array.from(node.children)
-      .filter((child) => !isOverlay(child))
-      .slice(0, MAX_NODES);
+    return Array.from(node.children).filter((child) => !isOverlay(child));
   }
 
   function mappedChildren(node: Element): Element[] {
@@ -1610,6 +1608,7 @@ export function createSiteBuilderGuest(
         ? mappedChildren(nearestMapped(parent) ?? parent)
         : domChildren(parent);
       const index = siblings.indexOf(current);
+      if (index < 0) return;
       const next = siblings[index + (keyboard.key === "ArrowRight" ? 1 : -1)];
       if (next !== undefined) selectOnly(next, "element", null);
     }

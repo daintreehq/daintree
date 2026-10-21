@@ -119,7 +119,35 @@ describe("the guest's element context", () => {
     expect(markup).not.toContain("n0nce");
     expect(markup).not.toContain("pw@");
     expect(markup).toContain('data-token="…"');
-    expect(markup).toContain('href="https://example.com/reset?token=&amp;step="');
+    expect(markup).toContain('href="https://example.com/reset?token=&amp;step=#access="');
+  });
+
+  it("redacts a client-side router's query, and keeps every candidate of a srcset", () => {
+    mountHtml(
+      '<div id="f"><a href="#/reset?token=s3cret">Reset</a><img srcset="sprite.svg#icon 1x, photo.png?sig=s3cret 2x"></div>'
+    );
+    const { markup } = markupFor(byId("f"));
+    expect(markup).not.toContain("s3cret");
+    expect(markup).toContain('href="#/reset?token="');
+    expect(markup).toContain('srcset="sprite.svg#icon 1x, photo.png?sig= 2x"');
+  });
+
+  it("withholds a style that could spell an address, however it is written", () => {
+    mountHtml(
+      [
+        '<div id="f">',
+        '<span style="background: url(&quot;https://cdn.example/a)icon.png?token=s3cret&quot;)">a</span>',
+        '<span style="background: u\\72l(https://cdn.example/?token=s3cret)">b</span>',
+        "</div>",
+      ].join("")
+    );
+    expect(markupFor(byId("f")).markup).not.toContain("s3cret");
+  });
+
+  it("bounds the work a hostile attribute can cause, not just the output", () => {
+    mountHtml(`<a id="a" href="/x${"?".repeat(200_000)}">x</a>`);
+    const { markup } = markupFor(byId("a"));
+    expect(markup.length).toBeLessThan(400);
   });
 
   it("treats an SVG's script and style as payloads, as HTML's are", () => {
@@ -129,26 +157,33 @@ describe("the guest's element context", () => {
     expect(markupFor(byId("s")).markup).not.toContain("s3cret");
   });
 
-  it("names the selected node itself inside a shadow root, not a light-DOM lookalike", () => {
-    mountHtml('<button class="cta">Outside</button><div id="host"></div>');
+  it("finds a node inside a shadow root by the tree it is actually in", () => {
+    // A document query can't see into the root at all, so it never calls
+    // anything unique and the selector used to run on to its depth limit.
+    mountHtml('<div id="host"></div>');
     const shadow = byId("host").attachShadow({ mode: "open" });
-    shadow.innerHTML = '<section><button class="cta">Inside</button></section>';
-    const inside = shadow.querySelector("button")!;
-    const selector = selectorFor(inside);
-    expect(shadow.querySelector(selector)).toBe(inside);
+    shadow.innerHTML =
+      '<section><button class="cta">One</button></section><section><button class="cta">Two</button></section>';
+    const second = shadow.querySelectorAll("button")[1]!;
+    const selector = selectorFor(second);
+    expect(selector).toBe("section:nth-of-type(2) > button.cta");
+    expect(shadow.querySelector(selector)).toBe(second);
   });
 
   it("drops whole leading steps to fit a long selector, never cutting one in half", () => {
-    const long = "a".repeat(39);
-    let html = "<p>x</p>";
-    for (let depth = 0; depth < 8; depth += 1) {
-      html = `<div class="${long}${depth} ${long}x${depth}">${html}</div><div class="${long}${depth} ${long}x${depth}"></div>`;
+    // Two identical trees deeper than the selector walks: no chain of eight
+    // steps names one leaf, and eight steps of long classes run past the cap.
+    const long = "a".repeat(38);
+    let tree = "<p>x</p>";
+    for (let depth = 0; depth < 10; depth += 1) {
+      tree = `<div class="${long}b${depth} ${long}c${depth}">${tree}</div>`;
     }
-    mountHtml(html);
+    mountHtml(tree + tree);
     const selector = selectorFor(document.querySelector("p")!);
     expect(selector.length).toBeLessThanOrEqual(GUEST_CONTEXT_LIMITS.selector);
     expect(selector).not.toContain("…");
-    expect(() => document.querySelectorAll(selector)).not.toThrow();
+    expect(selector.split(" > ").length).toBeGreaterThan(1);
+    expect(document.querySelectorAll(selector).length).toBeGreaterThan(0);
   });
 
   it("cuts the markup at its ceiling and says it did", () => {

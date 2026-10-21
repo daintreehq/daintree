@@ -1814,4 +1814,13 @@ describe("a page with no Svelte metadata", () => {
     key("ArrowDown");
     expect(lastSelection()[0]?.label).toBe("ul");
   });
+
+  it("walks past the selection limit along a long list", () => {
+    const items = Array.from({ length: 40 }, (_, index) => `<li id="i${index}">${index}</li>`);
+    document.body.innerHTML = `<ul>${items.join("")}</ul>`;
+    install("select");
+    click(document.getElementById("i33")!);
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+    expect(lastSelection()[0]?.label).toBe("li#i34");
+  });
 });

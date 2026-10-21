@@ -2990,7 +2990,9 @@ describe("a worktree with no SvelteKit app", () => {
 
     await act(async () => answer({ status: "no-app", scanComplete: true }));
     await screen.findByRole("textbox", { name: "Request for the agent" });
-    expect(host.captureElement).toHaveBeenCalledTimes(1);
+    // The boxes are from the click, and the page may have moved since: no
+    // picture is taken of whatever sits there now.
+    expect(host.captureElement).not.toHaveBeenCalled();
   });
 
   it("doesn't say the page's components went untraced where there is nothing to trace", async () => {
