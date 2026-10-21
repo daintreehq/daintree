@@ -38,6 +38,7 @@ import type { HostReadiness, RemoteHostManager } from "./RemoteHostManager.js";
 import type { SenderLookup } from "./RemoteRouter.js";
 import type { WindowHostBinding } from "./WindowHostBinding.js";
 import { DetachedViewRegistry } from "./reconnect/DetachedViewRegistry.js";
+import type { SwitchRequestOptions } from "../../window/ProjectViewManagerTypes.js";
 
 /** What the client needs from the window layer, kept narrow so it can be faked in tests. */
 export interface WindowControl {
@@ -52,12 +53,14 @@ export interface WindowControl {
     hostId: HostId,
     projectId: string,
     projectPath: string,
-    focusIntent?: ProjectFocusOnActivateIntent
+    focusIntent?: ProjectFocusOnActivateIntent,
+    request?: SwitchRequestOptions
   ): Promise<void>;
   openLocalProject(
     windowId: number,
     projectId: string,
-    focusIntent?: ProjectFocusOnActivateIntent
+    focusIntent?: ProjectFocusOnActivateIntent,
+    request?: SwitchRequestOptions
   ): Promise<void>;
   /**
    * The local project to return a window to when it switches back to this
@@ -665,7 +668,11 @@ export class RemoteHostsClient {
     ctx: IpcContext,
     payload: SwitchWindowHostPayload
   ): Promise<SwitchWindowHostResult> {
-    return this.switchWindow(this.windowOf(ctx), payload);
+    // The asking renderer hears a failure itself, so main can stay quiet about
+    // a cancelled switch that rolled back to it.
+    return this.switchWindow(this.windowOf(ctx), payload, undefined, {
+      requesterWebContentsId: ctx.webContentsId,
+    });
   }
 
   private async switchWindow(
@@ -677,7 +684,10 @@ export class RemoteHostsClient {
      * from a host going away, is never held at memory pressure: there is no
      * request to decline, and the window has to land somewhere.
      */
-    { exempt = false }: { exempt?: boolean } = {}
+    {
+      exempt = false,
+      requesterWebContentsId,
+    }: { exempt?: boolean; requesterWebContentsId?: number } = {}
   ): Promise<SwitchWindowHostResult> {
     const hostId = hostIdOf(payload);
     const newWindow = payload.newWindow === true;
@@ -776,7 +786,8 @@ export class RemoteHostsClient {
         commitPending,
         (name) => void (pendingProjectName = name),
         exempt,
-        focusIntent
+        focusIntent,
+        requesterWebContentsId
       );
       // A window is showing that host now: it's the one the switcher offers first.
       // Not `window-opened`: that window stays on this machine offering the
@@ -807,7 +818,8 @@ export class RemoteHostsClient {
     commit: () => void,
     nameProject: (name: string | null) => void,
     exempt: boolean,
-    focusIntent?: ProjectFocusOnActivateIntent
+    focusIntent?: ProjectFocusOnActivateIntent,
+    requesterWebContentsId?: number
   ): Promise<SwitchWindowHostResult> {
     let projectId = requestedProjectId;
     const remote = !isLocalHostId(hostId);
@@ -983,7 +995,16 @@ export class RemoteHostsClient {
     const targetProjectId = projectId;
     const targetPath = projectPath;
     // Passed only when there is one, so a plain switch opens as it always has.
-    const focusArg: [] | [ProjectFocusOnActivateIntent] = focusIntent ? [focusIntent] : [];
+    // A new window is not the one that asked, so it never reports for the requester.
+    const openArgs:
+      | []
+      | [ProjectFocusOnActivateIntent]
+      | [ProjectFocusOnActivateIntent | undefined, SwitchRequestOptions] =
+      requesterWebContentsId !== undefined && !newWindow
+        ? [focusIntent, { requesterWebContentsId }]
+        : focusIntent
+          ? [focusIntent]
+          : [];
     let releaseClaim: () => void = () => {};
     const switching = this.inSwitchTurn(windowId, async (): Promise<SwitchWindowHostResult> => {
       // Checked again in turn: a newer request may have arrived while this
@@ -1071,7 +1092,7 @@ export class RemoteHostsClient {
 
       try {
         if (!remote) {
-          await this.options.windows.openLocalProject(windowId, targetProjectId, ...focusArg);
+          await this.options.windows.openLocalProject(windowId, targetProjectId, ...openArgs);
           return { outcome: "switched", hostId: LOCAL_HOST_ID, projectId: targetProjectId };
         }
         // Set above for every remote switch that names a project; never open a pathless view.
@@ -1089,7 +1110,7 @@ export class RemoteHostsClient {
           hostId,
           targetProjectId,
           targetPath,
-          ...focusArg
+          ...openArgs
         );
       } catch (error) {
         // The view didn't move, so neither does the binding: they never name
