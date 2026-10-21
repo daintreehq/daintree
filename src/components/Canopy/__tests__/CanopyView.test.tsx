@@ -831,6 +831,19 @@ describe("CanopyView", () => {
     expect(document.activeElement).toBe(first);
   });
 
+  it("names the project on every row, though every run is in the same one", async () => {
+    installElectron();
+    const { container } = render(<CanopyView />);
+    await frames();
+    const rows = cards(container);
+    expect(rows.length).toBeGreaterThan(1);
+    for (const row of rows) {
+      const meta = row.querySelector("[data-canopy-meta]");
+      expect(meta?.textContent).toContain("🌳");
+      expect(meta?.textContent).toContain("app");
+    }
+  });
+
   it("says above the pane which project and branch the selected agent is in", async () => {
     const canopy = installElectron();
     render(<CanopyView />);

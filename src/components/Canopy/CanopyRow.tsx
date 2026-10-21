@@ -151,8 +151,6 @@ interface CanopyRowProps {
   unread: boolean;
   /** Archived rows: subject and status only. */
   compact?: boolean;
-  /** Name the project beside the worktree: off while every row is in one project. */
-  showProject?: boolean;
   /** The panel's clock, for how long a busy run has gone unseen. */
   nowMs: number;
   /** The row its group's Tab stop lands on: the selected row, else the group's first. */
@@ -188,7 +186,6 @@ export function CanopyRow({
   isSelected,
   unread,
   compact = false,
-  showProject = true,
   nowMs,
   tabbable,
   reserveDetail,
@@ -220,8 +217,9 @@ export function CanopyRow({
   // beyond the ask: the rest of a recap or report, the agent's last words.
   const glanceText =
     !compact && summary === null && card?.stage !== "described" ? glanceDetail(item, status) : null;
-  // Where it runs, unless the row is already named after it.
-  const project = showProject && subject !== item.workspace.name ? item.workspace.name : null;
+  // Where it runs, on every row: the bottom line always says which project,
+  // even on a row titled after it or a list that is all one project.
+  const project = item.workspace.name || null;
   const worktree = row.worktreeLabel !== subject ? row.worktreeLabel : null;
   const where = [project, worktree].filter(Boolean).join(" · ");
   // A first read in flight, with no words yet: in the ask's place, or under a
@@ -574,9 +572,8 @@ export function CanopyRow({
           className="flex h-4 min-w-0 flex-wrap items-center overflow-hidden text-xs leading-4 whitespace-nowrap text-text-secondary"
         >
           <span className="h-4 w-0" />
-          {/* The emoji leads a place, never stands for one: a row titled after
-              its project drops the name here, and its emoji goes with it. */}
-          {item.workspace.emoji && where !== "" && (
+          {/* The emoji leads the project's name, never stands for one. */}
+          {item.workspace.emoji && project !== null && (
             <span className="mr-1.5 shrink-0 leading-none select-none">{item.workspace.emoji}</span>
           )}
           {/* Where it runs is how a row is told apart: the project keeps its
