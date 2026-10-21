@@ -22,7 +22,7 @@ import {
   PALETTE_SECTION_LABEL_CLASS,
   ROW_MENU_TARGET_CLASS,
 } from "@/components/ui/paletteRowStyles";
-import { getWorktreeBranchLabel, getWorktreeHeadline } from "@/lib/worktreeHeadline";
+import { branchTitle, getWorktreeBranchLabel, getWorktreeHeadline } from "@/lib/worktreeHeadline";
 import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
 import { getPrStateColor, getPrStateGlyph } from "@/lib/prStateGlyph";
 import { getCIStatusVisual } from "@/lib/worktreeCIStatus";
@@ -290,11 +290,7 @@ export function WorktreeOverviewRow({
       ? (headline.title ?? branchLabel)
       : worktree.isMainWorktree
         ? worktree.name
-        : // Everything after the type prefix, not just the last segment:
-          // feature/ui/login and feature/api/login must not both read "login".
-          branchLabel.includes("/")
-          ? branchLabel.slice(branchLabel.indexOf("/") + 1)
-          : branchLabel;
+        : branchTitle(branchLabel);
   // The sidebar card's headline glyph: the sprout for main, the issue mark for
   // an issue's worktree, the PR glyph for one made from a PR, and the branch
   // for a bare branch — whose name then IS the title, set in mono as the

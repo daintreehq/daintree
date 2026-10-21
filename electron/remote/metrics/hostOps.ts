@@ -4,6 +4,7 @@ import type {
   HostFleetTargetList,
   HostWorktreeEntry,
   HostWorktreeObservation,
+  HostWorktreeRun,
 } from "../../../shared/types/ipc/hostMetrics.js";
 import type { FleetRunRow } from "../../../shared/types/ipc/fleet.js";
 import { FLEET_BANDS, bandForRun } from "../../../shared/utils/fleetBands.js";
@@ -29,6 +30,7 @@ import {
   MAX_HOST_WORKTREES,
   MAX_RESTART_IDS,
   MAX_RESTART_PROJECTS,
+  MAX_WORKTREE_RUNS,
   normalizeFleetOpId,
 } from "./linkMethods.js";
 import type { LocalRestartTerminals } from "./hostMetricsHost.js";
@@ -273,10 +275,8 @@ async function submitNow(terminalId: string, text: string, caller: FleetCaller):
   pty.submit(terminalId, text);
 }
 
-function observationOf(
-  held: (HostWorktreeObservation & { runId: string }) | undefined
-): HostWorktreeObservation | null {
-  return held ? { band: held.band, agentState: held.agentState } : null;
+function observationOf(run: HostWorktreeRun | undefined): HostWorktreeObservation | null {
+  return run ? { band: run.band, agentState: run.agentState } : null;
 }
 
 function worktreeKey(projectId: string, worktreeId: string): string {
@@ -284,26 +284,31 @@ function worktreeKey(projectId: string, worktreeId: string): string {
 }
 
 /**
- * The most urgent band among each worktree's agents, as this host's fleet
- * placed them, keyed by project and worktree. Canopy's reading is left out:
- * another machine is shown what this host observed, never an interpretation
- * of it. Equal bands settle on the lowest run id, so the answer is stable.
+ * Every agent in each worktree as this host's fleet placed it, most urgent
+ * first, keyed by project and worktree. Canopy's reading is left out: another
+ * machine is shown what this host observed, never an interpretation of it.
+ * Equal bands settle on the lowest run id, so the order is stable.
  */
-export function observeWorktrees(
-  runs: readonly FleetRunRow[]
-): Map<string, HostWorktreeObservation & { runId: string }> {
-  const out = new Map<string, HostWorktreeObservation & { runId: string }>();
+export function observeWorktreeRuns(runs: readonly FleetRunRow[]): Map<string, HostWorktreeRun[]> {
+  const out = new Map<string, HostWorktreeRun[]>();
   for (const run of runs) {
     if (!run.worktreeId) continue;
     const { canopy: _canopy, ...observed } = run;
-    const band = bandForRun(observed);
     const key = worktreeKey(run.workspaceId, run.worktreeId);
-    const held = out.get(key);
-    if (held) {
-      const rank = FLEET_BANDS.indexOf(band) - FLEET_BANDS.indexOf(held.band);
-      if (rank > 0 || (rank === 0 && run.runId >= held.runId)) continue;
-    }
-    out.set(key, { band, agentState: run.agentState ?? null, runId: run.runId });
+    const held = out.get(key) ?? [];
+    held.push({
+      terminalId: run.runId,
+      band: bandForRun(observed),
+      agentState: run.agentState ?? null,
+    });
+    out.set(key, held);
+  }
+  for (const held of out.values()) {
+    held.sort(
+      (a, b) =>
+        FLEET_BANDS.indexOf(a.band) - FLEET_BANDS.indexOf(b.band) ||
+        (a.terminalId < b.terminalId ? -1 : a.terminalId > b.terminalId ? 1 : 0)
+    );
   }
   return out;
 }
@@ -340,7 +345,7 @@ export async function listLocalWorktrees(): Promise<HostWorktreeEntry[]> {
   const client = getWorkspaceClientRef();
   if (!client) return [];
   const runs = getFleetSnapshotServiceRef()?.getLastBroadcast()?.runs ?? [];
-  const observed = observeWorktrees(runs);
+  const observed = observeWorktreeRuns(runs);
   const out: HostWorktreeEntry[] = [];
   for (const project of openProjects()) {
     let states;
@@ -350,6 +355,7 @@ export async function listLocalWorktrees(): Promise<HostWorktreeEntry[]> {
       continue;
     }
     for (const state of states) {
+      const held = observed.get(worktreeKey(project.id, state.id)) ?? [];
       out.push({
         hostId: LOCAL_HOST_ID,
         projectId: project.id,
@@ -362,7 +368,8 @@ export async function listLocalWorktrees(): Promise<HostWorktreeEntry[]> {
         modifiedCount: typeof state.modifiedCount === "number" ? state.modifiedCount : null,
         lastActivityAt:
           typeof state.lastActivityTimestamp === "number" ? state.lastActivityTimestamp : null,
-        observed: observationOf(observed.get(worktreeKey(project.id, state.id))),
+        observed: observationOf(held[0]),
+        runs: held.slice(0, MAX_WORKTREE_RUNS),
       });
       if (out.length >= MAX_HOST_WORKTREES) return out;
     }

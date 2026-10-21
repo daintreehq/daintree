@@ -45,6 +45,15 @@ export function getWorktreeBranchLabel(worktree: Worktree | WorktreeState): stri
 }
 
 /**
+ * A branch named without its type prefix: everything after the first slash,
+ * not just the last segment, so feature/ui/login and feature/api/login do not
+ * both read "login".
+ */
+export function branchTitle(branch: string): string {
+  return branch.includes("/") ? branch.slice(branch.indexOf("/") + 1) : branch;
+}
+
+/**
  * Main sitting on a standard branch, where the row names the project rather
  * than the branch — `main` on `main` says nothing the row does not already.
  */

@@ -67,6 +67,19 @@ describe("WorktreeChangeWatch", () => {
     watch.poke();
     await vi.advanceTimersByTimeAsync(10);
     expect(changed).toHaveBeenCalledTimes(2);
+    // A second agent behind the same top band is something the sidebar counts.
+    current = [
+      {
+        ...current[0]!,
+        runs: [
+          { terminalId: "t1", band: "blocked", agentState: "waiting" },
+          { terminalId: "t2", band: "running", agentState: "working" },
+        ],
+      },
+    ];
+    watch.poke();
+    await vi.advanceTimersByTimeAsync(10);
+    expect(changed).toHaveBeenCalledTimes(3);
     watch.dispose();
     vi.useRealTimers();
   });

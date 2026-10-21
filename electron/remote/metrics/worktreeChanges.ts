@@ -21,6 +21,9 @@ export function worktreesSignature(entries: readonly HostWorktreeEntry[]): strin
         entry.isMainWorktree ? "main" : "",
         entry.observed?.band ?? "",
         entry.observed?.agentState ?? "",
+        (entry.runs ?? [])
+          .map((run) => `${run.terminalId}:${run.band}:${run.agentState ?? ""}`)
+          .join(","),
       ].join("\t")
     )
     .join("\n");

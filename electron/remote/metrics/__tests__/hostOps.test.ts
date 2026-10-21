@@ -29,7 +29,7 @@ import {
   FleetSubmitLedger,
   callerDrives,
   listLocalFleetTargets,
-  observeWorktrees,
+  observeWorktreeRuns,
   submitLocalFleet,
 } from "../hostOps.js";
 import type { FleetRunRow } from "../../../../shared/types/ipc/fleet.js";
@@ -201,46 +201,59 @@ describe("fleet target listing", () => {
   });
 });
 
-describe("observeWorktrees", () => {
+describe("observeWorktreeRuns", () => {
   function run(overrides: Partial<FleetRunRow>): FleetRunRow {
     return { runId: "t1", workspaceId: "p1", spawnedAt: 0, cwd: "/repo", ...overrides };
   }
 
-  it("holds the most urgent band among a worktree's agents, with that agent's state", () => {
-    const seen = observeWorktrees([
+  it("lists a worktree's agents most urgent first, each with its terminal and state", () => {
+    const seen = observeWorktreeRuns([
       run({ runId: "t1", worktreeId: "/repo/a", agentState: "working" }),
       run({ runId: "t2", worktreeId: "/repo/a", agentState: "waiting", waitingReason: "question" }),
       run({ runId: "t3", worktreeId: "/repo/b", agentState: "working" }),
     ]);
-    expect(seen.get("p1\n/repo/a")).toMatchObject({ band: "needs-you", agentState: "waiting" });
-    expect(seen.get("p1\n/repo/b")).toMatchObject({ band: "running", agentState: "working" });
+    expect(seen.get("p1\n/repo/a")).toEqual([
+      { terminalId: "t2", band: "needs-you", agentState: "waiting" },
+      { terminalId: "t1", band: "running", agentState: "working" },
+    ]);
+    expect(seen.get("p1\n/repo/b")).toEqual([
+      { terminalId: "t3", band: "running", agentState: "working" },
+    ]);
   });
 
   it("keys by project as well as worktree, and skips runs with no worktree", () => {
-    const seen = observeWorktrees([
+    const seen = observeWorktreeRuns([
       run({ runId: "t1", workspaceId: "p1", worktreeId: "/same", agentState: "working" }),
       run({ runId: "t2", workspaceId: "p2", worktreeId: "/same", agentState: "waiting" }),
       run({ runId: "t3", agentState: "waiting" }),
     ]);
     expect([...seen.keys()].sort()).toEqual(["p1\n/same", "p2\n/same"]);
-    expect(seen.get("p1\n/same")?.band).toBe("running");
+    expect(seen.get("p1\n/same")?.[0]?.band).toBe("running");
   });
 
   it("settles equal bands on the lowest run id, whatever order they arrive in", () => {
     const a = run({ runId: "t9", worktreeId: "/w", agentState: "working" });
     const b = run({ runId: "t2", worktreeId: "/w", agentState: "directing" });
-    expect(observeWorktrees([a, b]).get("p1\n/w")?.agentState).toBe("directing");
-    expect(observeWorktrees([b, a]).get("p1\n/w")?.agentState).toBe("directing");
+    expect(
+      observeWorktreeRuns([a, b])
+        .get("p1\n/w")
+        ?.map((r) => r.terminalId)
+    ).toEqual(["t2", "t9"]);
+    expect(
+      observeWorktreeRuns([b, a])
+        .get("p1\n/w")
+        ?.map((r) => r.terminalId)
+    ).toEqual(["t2", "t9"]);
   });
 
   it("leaves Canopy's reading out: another machine sees what the host observed", () => {
-    const seen = observeWorktrees([
+    const seen = observeWorktreeRuns([
       run({
         worktreeId: "/w",
         agentState: "completed",
         canopy: { kind: "asked", quote: "Ship it?", readAt: 0 },
       }),
     ]);
-    expect(seen.get("p1\n/w")?.band).toBe("idle");
+    expect(seen.get("p1\n/w")?.[0]?.band).toBe("idle");
   });
 });

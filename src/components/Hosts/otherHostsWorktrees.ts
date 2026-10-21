@@ -1,12 +1,12 @@
 import { useEffect, useState } from "react";
 import type { HostWorktreeEntry } from "@shared/types/ipc/hostMetrics";
-import { LOCAL_HOST_ID, type HostId } from "@shared/types/remoteHosts";
+import { LOCAL_HOST_ID, type HostId, type HostPlatform } from "@shared/types/remoteHosts";
 import { isScratchWorkspaceId } from "@shared/utils/workspaceIds";
 import { getViewHostId } from "@/hooks/useHostConnection";
 import { isRemoteShellSupported } from "@/lib/remoteHosts";
 import { logWarn } from "@/utils/logger";
 import { hasRemoteHosts, useHostList } from "./hostList";
-import { buildHostMenuRows, clientPlatform } from "./hostModel";
+import { buildHostMenuRows, clientPlatform, describeHostMenuState } from "./hostModel";
 import { useProjectPresence } from "./hostProjects";
 import { isLive } from "./Overview/overviewModel";
 
@@ -16,7 +16,18 @@ export const PRESENCE_RECHECK_MS = 3_000;
 export interface OtherHostWorktrees {
   hostId: HostId;
   hostName: string;
-  entries: readonly HostWorktreeEntry[];
+  platform: HostPlatform | null;
+  /** This project's ids on that host: more than one when it has several checkouts. */
+  projectIds: readonly string[];
+  /** Null until the host's first list lands, and while it isn't connected. */
+  entries: readonly HostWorktreeEntry[] | null;
+  /** The link's own words while the host isn't connected ("Not connected"); null while it is. */
+  away: string | null;
+}
+
+interface Remembered {
+  projectId: string | null;
+  hosts: ReadonlyMap<HostId, readonly string[]>;
 }
 
 /** "hostId\tprojectId,projectId" per matched host, so an effect re-runs only when a match moves. */
@@ -35,11 +46,13 @@ function parseMatchKey(key: string): Map<HostId, ReadonlySet<string>> {
 }
 
 /**
- * This project's worktrees on every other connected host, matched by
- * repository identity (a shared remote URL, as `project.openOnHost` matches),
- * with the band each host observed. Read when a host matches and again each
- * time that host says its list changed; a failed read keeps what was shown.
- * Empty until some other host has this project.
+ * Every other host that has this project, in the host menu's order, with its
+ * worktrees and the agents each host observed in them. Matched by repository
+ * identity (a shared remote URL, as `project.openOnHost` matches); read when a
+ * host matches and again each time that host says its list changed; a failed
+ * read keeps what was shown. A host that drops its link keeps its place, in
+ * the link's own words, until a connected answer says it no longer has the
+ * project. Empty until some other host has this project.
  */
 export function useOtherHostsWorktrees(projectId: string | null): OtherHostWorktrees[] {
   const hostList = useHostList();
@@ -51,13 +64,14 @@ export function useOtherHostsWorktrees(projectId: string | null): OtherHostWorkt
     !isScratchWorkspaceId(projectId) &&
     isRemoteShellSupported() &&
     hasRemoteHosts(hostList);
-  const rows = enabled
+  const others = enabled
     ? buildHostMenuRows(hostList.hosts, {
         localPlatform: clientPlatform(),
         currentHostId: getViewHostId() ?? LOCAL_HOST_ID,
         localSummary: hostList.localSummary,
-      }).filter((row) => !row.isCurrent && isLive(row))
+      }).filter((row) => !row.isCurrent)
     : [];
+  const rows = others.filter(isLive);
   const hostIds = rows.map((row) => row.hostId);
   // Bumped when a host with no match says its list changed: it may have this project now.
   const [presenceRevision, setPresenceRevision] = useState(0);
@@ -75,6 +89,29 @@ export function useOtherHostsWorktrees(projectId: string | null): OtherHostWorkt
   }
   const key = matchKey(matches);
   const unmatchedKey = hostIds.filter((hostId) => !matches.has(hostId)).join("\n");
+  // Only a connected answer of "none" forgets a host; one that couldn't be asked keeps its place.
+  const absentKey = hostIds
+    .filter((hostId) => presence.get(hostId)?.projects?.length === 0)
+    .join("\n");
+
+  const [remembered, setRemembered] = useState<Remembered>(() => ({
+    projectId,
+    hosts: new Map(),
+  }));
+  useEffect(() => {
+    const matched = parseMatchKey(key);
+    const absent = absentKey === "" ? [] : absentKey.split("\n");
+    setRemembered((previous) => {
+      const same = previous.projectId === projectId;
+      const hosts = new Map(same ? previous.hosts : []);
+      for (const [hostId, ids] of matched) hosts.set(hostId, [...ids]);
+      for (const hostId of absent) hosts.delete(hostId);
+      if (same && matchKey(hosts) === matchKey(previous.hosts)) return previous;
+      return { projectId, hosts };
+    });
+  }, [projectId, key, absentKey]);
+  const known =
+    remembered.projectId === projectId ? remembered.hosts : new Map<HostId, readonly string[]>();
 
   useEffect(() => {
     if (unmatchedKey === "") return;
@@ -142,16 +179,27 @@ export function useOtherHostsWorktrees(projectId: string | null): OtherHostWorkt
   }, [key]);
 
   const out: OtherHostWorktrees[] = [];
-  for (const row of rows) {
-    const projectIds = matches.get(row.hostId);
+  for (const row of others) {
+    const live = isLive(row);
+    // A connected host waiting on its answer keeps the place it had.
+    const projectIds =
+      matches.get(row.hostId) ??
+      (live && presence.get(row.hostId)?.projects?.length === 0
+        ? undefined
+        : known.get(row.hostId));
     if (!projectIds) continue;
     // A read from before the host matched another project never shows under this one.
-    const entries = (lists.get(row.hostId) ?? []).filter((entry) =>
-      projectIds.includes(entry.projectId)
-    );
-    if (entries.length > 0) {
-      out.push({ hostId: row.hostId, hostName: row.name, entries });
-    }
+    const read = lists.get(row.hostId);
+    const entries =
+      live && read ? read.filter((entry) => projectIds.includes(entry.projectId)) : null;
+    out.push({
+      hostId: row.hostId,
+      hostName: row.name,
+      platform: row.platform,
+      projectIds,
+      entries,
+      away: live ? null : (describeHostMenuState(row).state ?? "Not connected"),
+    });
   }
   return out;
 }
