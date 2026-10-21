@@ -1,5 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { Mock } from "vitest";
+import {
+  registerPluginAgents,
+  clearPluginAgentRegistryForTests,
+} from "@shared/config/pluginAgentRegistry";
 import type { TerminalState, BackendTerminalInfo } from "@shared/types/ipc/terminal";
 import type { WorktreeState } from "@shared/types";
 
@@ -1703,6 +1707,43 @@ describe("restorePanelsPhase — one resume-latest per agent+cwd (issue #11461)"
     expect(allowanceById(ctx).get("solo")).toBe(true);
   });
 
+  it("elects one pane per directory for a project-scoped agent, plugin or built-in (#13687)", async () => {
+    registerPluginAgents("me.extra-agents", [
+      {
+        id: "pi",
+        name: "Pi",
+        command: "pi",
+        color: "#3366ff",
+        iconId: "claude",
+        resume: { kind: "project-scoped", args: ["--continue"] },
+      },
+    ]);
+    try {
+      const ctx = makeContext();
+      const agentPanel = (id: string, agentId: string, lastActiveAt: number) =>
+        panel(id, { kind: "agent", launchAgentId: agentId, lastActiveAt });
+
+      await restorePanelsPhase(
+        [
+          agentPanel("pi-old", "pi", 1),
+          agentPanel("pi-new", "pi", 2),
+          agentPanel("kiro-a", "kiro", 2),
+          agentPanel("kiro-b", "kiro", 1),
+        ],
+        ctx
+      );
+
+      expect(Object.fromEntries(allowanceById(ctx))).toEqual({
+        "pi-old": false,
+        "pi-new": true,
+        "kiro-a": true,
+        "kiro-b": false,
+      });
+    } finally {
+      clearPluginAgentRegistryForTests();
+    }
+  });
+
   it("scopes the slot per agent — different agents don't contend", async () => {
     const ctx = makeContext();
 
@@ -2681,5 +2722,63 @@ describe("restorePanelsPhase — portable plugin kinds (#12280)", () => {
         kind: expect.stringMatching(/^project:.*\/acme\.dashboard\/overview$/),
       })
     );
+  });
+});
+
+describe("restorePanelsPhase — parked panels (#13661)", () => {
+  it("re-parks a saved background panel whose PTY survived, with its restore target", async () => {
+    const ctx = makeContext();
+    ctx.backendTerminalMap.set("bg", backend("bg"));
+
+    await restorePanelsPhase(
+      [panel("bg", { location: "background", backgroundRestoreLocation: "dock" })],
+      ctx
+    );
+
+    // Matched to its saved row, so it is never re-adopted as a grid orphan.
+    expect(ctx.addPanel).toHaveBeenCalledTimes(1);
+    expect(ctx.addPanel.mock.calls[0]![0]).toMatchObject({
+      existingId: "bg",
+      location: "background",
+      backgroundRestoreLocation: "dock",
+    });
+    expect(ctx.backendTerminalMap.has("bg")).toBe(false);
+  });
+
+  it("re-parks a respawned background panel, defaulting its restore target to the grid", async () => {
+    reconnectWithTimeoutMock.mockResolvedValue({ status: "not_found" });
+    const ctx = makeContext();
+
+    await restorePanelsPhase(
+      [panel("bg", { kind: "agent", launchAgentId: "claude", location: "background" })],
+      ctx
+    );
+
+    expect(ctx.addPanel).toHaveBeenCalledTimes(1);
+    expect(ctx.addPanel.mock.calls[0]![0]).toMatchObject({
+      requestedId: "bg",
+      location: "background",
+      backgroundRestoreLocation: "grid",
+    });
+  });
+
+  it("brings a parked non-PTY panel back visible, since nothing is left running", async () => {
+    const ctx = makeContext();
+
+    await restorePanelsPhase([panel("b1", { kind: "browser", location: "background" })], ctx);
+
+    expect(ctx.addPanel).toHaveBeenCalledTimes(1);
+    expect(ctx.addPanel.mock.calls[0]![0]).not.toMatchObject({ location: "background" });
+    expect(ctx.addPanel.mock.calls[0]![0]).not.toHaveProperty("backgroundRestoreLocation");
+  });
+
+  it("leaves a grid panel's placement to the builder", async () => {
+    const ctx = makeContext();
+    ctx.backendTerminalMap.set("g", backend("g"));
+
+    await restorePanelsPhase([panel("g", { location: "grid" })], ctx);
+
+    expect(ctx.addPanel.mock.calls[0]![0]).toMatchObject({ location: "grid" });
+    expect(ctx.addPanel.mock.calls[0]![0]).not.toHaveProperty("backgroundRestoreLocation");
   });
 });

@@ -22,6 +22,17 @@ export interface NotificationAction {
   successLabel?: string;
 }
 
+/**
+ * A task the toast is tracking. Rendered as a thin bar below the message and
+ * outside the live region, so ticks update the bar's value without
+ * re-announcing the toast. `value: null` is an unmeasured start.
+ */
+export interface NotificationProgress {
+  value: number | null;
+  /** The progressbar's accessible name. */
+  label: string;
+}
+
 export interface Notification {
   id: string;
   type: NotificationType;
@@ -69,6 +80,7 @@ export interface Notification {
    * collapses and surface as a count badge in the toast UI.
    */
   count?: number;
+  progress?: NotificationProgress;
   /**
    * Fires exactly once when the user closes the toast via the close button
    * (or an action button). Does NOT fire on MAX_VISIBLE_TOASTS eviction or on
@@ -235,6 +247,9 @@ export const useNotificationStore = create<NotificationStore>((set) => ({
                     duration: notification.duration ?? n.duration,
                     action: actionResolved,
                     actions: actionsResolved,
+                    // Key-presence, like `action`: a stage that drops its bar
+                    // clears it with an explicit `progress: undefined`.
+                    progress: "progress" in notification ? notification.progress : n.progress,
                     onDismiss: notification.onDismiss ?? n.onDismiss,
                     historyEntryId: notification.historyEntryId ?? n.historyEntryId,
                     count: (n.count ?? 1) + 1,

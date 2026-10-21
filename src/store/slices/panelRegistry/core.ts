@@ -80,6 +80,18 @@ function applyBatchFlush(set: Set, token: HydrationBatchToken | null): void {
   commitPendingIds(set, pendingIds);
 }
 
+/**
+ * A move out of the background is a restore by another route: the parked
+ * entry has to go with it, or trash/undo and the background list keep reading
+ * a restore target for a panel that is already on screen. Null when absent.
+ */
+function dropBackgroundEntry<T>(entries: Map<string, T>, id: string): Map<string, T> | null {
+  if (!entries.has(id)) return null;
+  const next = new Map(entries);
+  next.delete(id);
+  return next;
+}
+
 export const createCorePanelActions = (
   set: Set,
   get: Get,
@@ -496,15 +508,16 @@ export const createCorePanelActions = (
     return get().panelsById[id];
   },
 
-  moveTerminalToDock: (id) => {
+  moveTerminalToDock: (id, options) => {
     // Overlay panels (the Daintree Assistant) self-manage their placement and
     // must never be relocated into the dock by a layout action (#9699).
     // Dialog panels are owned by their modal host on the same grounds.
     const dockSourceLocation = get().panelsById[id]?.location;
     if (dockSourceLocation === "overlay" || dockSourceLocation === "dialog") return;
 
-    // Check if panel is in a group - if so, move the entire group
-    const group = get().getPanelGroup(id);
+    // Check if panel is in a group - if so, move the entire group, unless the
+    // caller placed this one panel (`moveGroup: false`), which detaches it.
+    const group = options?.moveGroup === false ? undefined : get().getPanelGroup(id);
     if (group) {
       get().moveTabGroupToLocation(group.id, "dock");
       return;
@@ -535,9 +548,11 @@ export const createCorePanelActions = (
       if (groupPrune.changed) {
         saveTabGroups(groupPrune.tabGroups);
       }
+      const unparked = dropBackgroundEntry(state.backgroundedTerminals, id);
       return {
         panelsById: newById,
         ...(groupPrune.changed && { tabGroups: groupPrune.tabGroups }),
+        ...(unparked && { backgroundedTerminals: unparked }),
       };
     });
 
@@ -547,7 +562,7 @@ export const createCorePanelActions = (
     }
   },
 
-  moveTerminalToGrid: (id) => {
+  moveTerminalToGrid: (id, options) => {
     // Overlay panels (the Daintree Assistant) self-manage their placement and
     // must never be relocated into the grid by a layout action (#9699).
     // Dialog panels are ephemeral and uncounted, so promoting one is an
@@ -556,8 +571,9 @@ export const createCorePanelActions = (
     const gridSourceLocation = get().panelsById[id]?.location;
     if (gridSourceLocation === "overlay" || gridSourceLocation === "dialog") return false;
 
-    // Check if panel is in a group - if so, move the entire group
-    const group = get().getPanelGroup(id);
+    // Check if panel is in a group - if so, move the entire group, unless the
+    // caller placed this one panel (`moveGroup: false`), which detaches it.
+    const group = options?.moveGroup === false ? undefined : get().getPanelGroup(id);
     if (group) {
       return get().moveTabGroupToLocation(group.id, "grid");
     }
@@ -604,8 +620,10 @@ export const createCorePanelActions = (
       if (groupPrune.changed) {
         saveTabGroups(groupPrune.tabGroups);
       }
+      const unparked = dropBackgroundEntry(state.backgroundedTerminals, id);
       return {
         panelsById: newById,
+        ...(unparked && { backgroundedTerminals: unparked }),
         ...(adoptedWorktreeId !== null && {
           panelIdsByWorktreeId: transferBetweenWorktreeIndex(
             state.panelIdsByWorktreeId,

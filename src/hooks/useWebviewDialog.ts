@@ -72,23 +72,33 @@ export function useWebviewDialog(
     };
   }, [restoreFocus]);
 
-  // Register panel with main process when webview is ready
+  // Register panel with main process when webview is ready, and again on every
+  // dom-ready after that: any DOM move of the <webview> (dock popover, grid
+  // reorder) replaces its guest under the same element while isWebviewReady
+  // stays true, and main gates Cmd+W, find and reload on the registration (#13634).
   useEffect(() => {
     if (!webviewElement || !isWebviewReady) return;
-    try {
-      const webContentsId = webviewElement.getWebContentsId();
-      window.electron.webview.registerPanel(webContentsId, panelId, kind).catch((err) => {
-        // Registration failed — dialogs will fall back to native. Surface at
-        // warn (not error) since native fallback is a working UX, not broken.
-        logWarn("Webview dialog registration failed", {
-          panelId,
-          error: formatErrorMessage(err, "Panel registration failed"),
+    const register = () => {
+      try {
+        const webContentsId = webviewElement.getWebContentsId();
+        window.electron.webview.registerPanel(webContentsId, panelId, kind).catch((err) => {
+          // Registration failed — dialogs will fall back to native. Surface at
+          // warn (not error) since native fallback is a working UX, not broken.
+          logWarn("Webview dialog registration failed", {
+            panelId,
+            error: formatErrorMessage(err, "Panel registration failed"),
+          });
         });
-      });
-    } catch {
-      // Intentional: getWebContentsId() throws when the webview isn't attached
-      // yet — the next ready cycle re-runs this effect.
-    }
+      } catch {
+        // Intentional: getWebContentsId() throws when the webview isn't attached
+        // yet — the next dom-ready or ready cycle retries.
+      }
+    };
+    register();
+    webviewElement.addEventListener("dom-ready", register);
+    return () => {
+      webviewElement.removeEventListener("dom-ready", register);
+    };
   }, [panelId, webviewElement, isWebviewReady, kind]);
 
   // Subscribe to dialog requests for this panel

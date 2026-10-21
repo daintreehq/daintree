@@ -353,6 +353,18 @@ describe("terminal.getStatus with no frontend", () => {
       expect(readTerminalStatus).not.toHaveBeenCalled();
     });
 
+    it("refuses a fleet whose saved panels couldn't be read, rather than reporting it short", async () => {
+      const { deps, readTerminalStatus } = fleet();
+      deps.getProjectState = async () => {
+        throw new Error("state kept changing");
+      };
+
+      const result = await executeViewlessAction(request("terminal.getStatus", {}), deps);
+
+      expect(result).toMatchObject({ ok: false, error: { code: "EXECUTION_ERROR" } });
+      expect(readTerminalStatus).not.toHaveBeenCalled();
+    });
+
     it("refuses a fleet whose project inventory went unanswered", async () => {
       const { deps, readTerminalStatus } = fleet();
       const pty = deps.getPtyReader()!;

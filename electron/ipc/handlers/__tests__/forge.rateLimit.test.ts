@@ -50,6 +50,7 @@ const fakeImpl = vi.hoisted(() => ({
   repoStats: { getRepoStats: vi.fn() },
   issueComments: { listIssueComments: vi.fn() },
   checks: { getChecks: vi.fn() },
+  avatars: { resolveAuthorAvatar: vi.fn() },
   reviews: {
     getReviewThreads: vi.fn(),
     approvePR: vi.fn(),
@@ -106,7 +107,11 @@ vi.mock("../../../utils/openExternal.js", () => ({
 vi.mock("../forgeResolution.js", () => ({
   resolveForCwd: resolveForCwdMock,
   getImplForNamespace: () => fakeImpl,
+  getIssueImplForNamespace: () => fakeImpl,
   getImplForNamespaceActivating: () => Promise.resolve(fakeImpl),
+  stampIssueProvider: (_context: unknown, issue: unknown) => issue,
+  stampIssuePageProvider: (_context: unknown, page: unknown) => page,
+  resolveIssueOverrideForCwd: async () => null,
 }));
 
 vi.mock("../../../store.js", () => ({
@@ -517,6 +522,12 @@ describe("forge handlers — rate limiting", () => {
       maxCalls: number;
       /** Rate-limit window — defaults to 10s; the avatar/diagnostics probes use 60s. */
       windowMs?: number;
+      /**
+       * The avatar probe resolves the provider before admission so concurrent
+       * identical lookups can share one slot (#13598); its guard still sits in
+       * front of the provider call itself.
+       */
+      admitsAfterResolution?: true;
       invoke: (handler: (...args: unknown[]) => Promise<unknown>) => Promise<unknown>;
     };
 
@@ -723,6 +734,7 @@ describe("forge handlers — rate limiting", () => {
         channel: CHANNELS.FORGE_RESOLVE_AUTHOR_AVATAR,
         maxCalls: 30,
         windowMs: 60_000,
+        admitsAfterResolution: true,
         invoke: (h) => h({}, { cwd, email: "dev@fake.test" }),
       },
       {
@@ -750,7 +762,7 @@ describe("forge handlers — rate limiting", () => {
       }
     );
 
-    it.each(specs)(
+    it.each(specs.filter((spec) => !spec.admitsAfterResolution))(
       "$channel rejects before any provider work when the guard throws",
       async ({ channel, invoke }) => {
         checkRateLimitMock.mockImplementationOnce(() => {
@@ -760,6 +772,19 @@ describe("forge handlers — rate limiting", () => {
 
         await expect(invoke(handler)).rejects.toThrow("Rate limit exceeded");
         expect(resolveForCwdMock).not.toHaveBeenCalled();
+      }
+    );
+
+    it.each(specs.filter((spec) => spec.admitsAfterResolution))(
+      "$channel rejects before the provider lookup when the guard throws",
+      async ({ channel, invoke }) => {
+        checkRateLimitMock.mockImplementationOnce(() => {
+          throw new Error("Rate limit exceeded");
+        });
+        const handler = getInvokeHandler(channel);
+
+        await expect(invoke(handler)).rejects.toThrow("Rate limit exceeded");
+        expect(fakeImpl.avatars.resolveAuthorAvatar).not.toHaveBeenCalled();
       }
     );
   });

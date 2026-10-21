@@ -1,3 +1,4 @@
+import dns from "node:dns";
 import http from "node:http";
 import https from "node:https";
 import type { AddressInfo } from "node:net";
@@ -448,6 +449,69 @@ describe("DevPreviewProxyService", () => {
         client.on("close", () => reject(new Error("closed")));
       })
     ).rejects.toBeTruthy();
+  });
+
+  it("answers a malformed request target or Host with 400 and keeps serving", async () => {
+    upstream = http.createServer((_req, res) => {
+      res.writeHead(200, { "Content-Type": "text/plain" });
+      res.end("hello from upstream");
+    });
+    const upstreamPort = await listen(upstream);
+
+    proxy = new DevPreviewProxyService((sub) =>
+      sub === "dp-test" ? { port: upstreamPort, isHttps: false } : null
+    );
+    const proxyPort = await proxy.start();
+
+    expect((await request(proxyPort, `dp-test.localhost:${proxyPort}`, "//[")).status).toBe(400);
+    expect((await request(proxyPort, `dp-test.localhost:${proxyPort}`, "http://[/x")).status).toBe(
+      400
+    );
+    expect((await request(proxyPort, "[", "/")).status).toBe(400);
+
+    const res = await request(proxyPort, `dp-test.localhost:${proxyPort}`);
+    expect(res.status).toBe(200);
+    expect(res.body).toBe("hello from upstream");
+  });
+
+  it("answers a malformed WebSocket upgrade target with 400 instead of forwarding it", async () => {
+    let upstreamConnections = 0;
+    wss = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+    await new Promise<void>((resolve) => wss!.on("listening", resolve));
+    const upstreamPort = (wss.address() as AddressInfo).port;
+    wss.on("connection", () => upstreamConnections++);
+
+    proxy = new DevPreviewProxyService(() => ({ port: upstreamPort, isHttps: false }));
+    const proxyPort = await proxy.start();
+
+    const status = await new Promise<number>((resolve, reject) => {
+      const req = http.request({
+        host: "127.0.0.1",
+        port: proxyPort,
+        path: "//[",
+        agent: false,
+        headers: {
+          host: `dp-test.localhost:${proxyPort}`,
+          connection: "Upgrade",
+          upgrade: "websocket",
+          "sec-websocket-version": "13",
+          "sec-websocket-key": "dGhlIHNhbXBsZSBub25jZQ==",
+        },
+      });
+      req.on("response", (res) => {
+        res.resume();
+        resolve(res.statusCode ?? 0);
+      });
+      req.on("upgrade", (_res, socket) => {
+        socket.destroy();
+        reject(new Error("unexpected upgrade"));
+      });
+      req.on("error", reject);
+      req.end();
+    });
+
+    expect(status).toBe(400);
+    expect(upstreamConnections).toBe(0);
   });
 
   it("stops accepting connections after dispose", async () => {
@@ -1005,6 +1069,49 @@ describe("DevPreviewProxyService", () => {
       );
     });
 
+    it("502s with provenance and reports upstream-error when the local resolver throws (#13550)", async () => {
+      const onDiagnostic = vi.fn<(event: DevPreviewProxyDiagnostic) => void>();
+      proxy = new DevPreviewProxyService(() => {
+        throw new Error("Resolver unavailable");
+      }, onDiagnostic);
+      const proxyPort = await proxy.start();
+
+      const res = await request(proxyPort, `dp-test.localhost:${proxyPort}`);
+
+      expect(res.status).toBe(502);
+      expect(res.statusText).toBe(DEV_PREVIEW_PROXY_STATUS_TEXT);
+      expect(onDiagnostic).toHaveBeenCalledTimes(1);
+      expect(onDiagnostic).toHaveBeenCalledWith({
+        subdomain: "dp-test",
+        kind: "http",
+        cause: "upstream-error",
+      });
+    });
+
+    it("destroys the upgrade socket and reports when the local resolver throws (#13550)", async () => {
+      const onDiagnostic = vi.fn<(event: DevPreviewProxyDiagnostic) => void>();
+      proxy = new DevPreviewProxyService(() => {
+        throw new Error("Resolver unavailable");
+      }, onDiagnostic);
+      const proxyPort = await proxy.start();
+
+      const client = new WebSocket(`ws://127.0.0.1:${proxyPort}/`, {
+        headers: { host: `dp-test.localhost:${proxyPort}` },
+      });
+      let opened = false;
+      client.on("open", () => (opened = true));
+      client.on("error", () => {});
+      await new Promise<void>((resolve) => client.on("close", () => resolve()));
+
+      expect(opened).toBe(false);
+      expect(onDiagnostic).toHaveBeenCalledTimes(1);
+      expect(onDiagnostic).toHaveBeenCalledWith({
+        subdomain: "dp-test",
+        kind: "ws",
+        cause: "upstream-error",
+      });
+    });
+
     it("never lets a throwing diagnostics listener break proxying", async () => {
       upstream = http.createServer((_req, res) => {
         res.writeHead(200);
@@ -1105,5 +1212,249 @@ describe("DevPreviewProxyService remote upstream fallback", () => {
     const failed = await request(proxyPort, `dp-broken.localhost:${proxyPort}`);
     expect(failed.status).toBe(502);
     expect(failed.body).toContain("No dev server is registered");
+  });
+
+  it("falls back to the local miss when the remote resolver throws synchronously (#13550)", async () => {
+    const onDiagnostic = vi.fn<(event: DevPreviewProxyDiagnostic) => void>();
+    proxy = new DevPreviewProxyService(
+      () => null,
+      onDiagnostic,
+      () => {
+        throw new Error("link down");
+      }
+    );
+    const proxyPort = await proxy.start();
+
+    const res = await request(proxyPort, `dp-broken.localhost:${proxyPort}`);
+    expect(res.status).toBe(502);
+    expect(res.statusText).toBe(DEV_PREVIEW_PROXY_STATUS_TEXT);
+    expect(res.body).toContain("No dev server is registered");
+    expect(onDiagnostic).toHaveBeenCalledTimes(1);
+    expect(onDiagnostic).toHaveBeenCalledWith(
+      expect.objectContaining({ subdomain: "dp-broken", kind: "http", cause: "no-session" })
+    );
+  });
+
+  it("closes the upgrade socket on a local miss when the remote resolver throws synchronously (#13550)", async () => {
+    const onDiagnostic = vi.fn<(event: DevPreviewProxyDiagnostic) => void>();
+    proxy = new DevPreviewProxyService(
+      () => null,
+      onDiagnostic,
+      () => {
+        throw new Error("link down");
+      }
+    );
+    const proxyPort = await proxy.start();
+
+    const client = new WebSocket(`ws://127.0.0.1:${proxyPort}/`, {
+      headers: { host: `dp-broken.localhost:${proxyPort}` },
+    });
+    let opened = false;
+    client.on("open", () => (opened = true));
+    client.on("error", () => {});
+    await new Promise<void>((resolve) => client.on("close", () => resolve()));
+
+    expect(opened).toBe(false);
+    expect(onDiagnostic).toHaveBeenCalledTimes(1);
+    expect(onDiagnostic).toHaveBeenCalledWith(
+      expect.objectContaining({ subdomain: "dp-broken", kind: "ws", cause: "no-session" })
+    );
+  });
+});
+
+describe("DevPreviewProxyService resource endpoint upstreams (#13688)", () => {
+  // Node won't resolve a made-up name, so the endpoint's hostname is answered here. Every
+  // other name goes to the real resolver; the tests' own sockets all use literals.
+  const ENDPOINT_HOST = "box.example.ts.net";
+  let answers: dns.LookupAddress[] = [];
+  let proxy: DevPreviewProxyService | null = null;
+  let upstream: http.Server | null = null;
+  let tlsUpstream: https.Server | null = null;
+  let wss: WebSocketServer | null = null;
+
+  function stubEndpointDns(): void {
+    const realLookup = dns.lookup;
+    vi.spyOn(dns, "lookup").mockImplementation(((
+      host: string,
+      options: dns.LookupOptions,
+      callback: (...args: unknown[]) => void
+    ) => {
+      if (host !== ENDPOINT_HOST) {
+        return (realLookup as (...args: unknown[]) => void)(host, options, callback);
+      }
+      if (options?.all) callback(null, answers);
+      else callback(null, answers[0]?.address, answers[0]?.family);
+    }) as unknown as typeof dns.lookup);
+  }
+
+  function endpointProxy(port: number, isHttps = false, host = ENDPOINT_HOST) {
+    const diagnostics: DevPreviewProxyDiagnostic[] = [];
+    proxy = new DevPreviewProxyService(
+      (sub) => (sub === "dp-test" ? { kind: "ok", port, isHttps, host } : null),
+      (event) => diagnostics.push(event)
+    );
+    return diagnostics;
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    proxy?.dispose();
+    proxy = null;
+    upstream?.close();
+    upstream = null;
+    tlsUpstream?.close();
+    tlsUpstream = null;
+    wss?.close();
+    wss = null;
+  });
+
+  it("dials the endpoint's own host and sends its authority as Host", async () => {
+    stubEndpointDns();
+    answers = [{ address: "127.0.0.1", family: 4 }];
+    let seenHost: string | undefined;
+    upstream = http.createServer((req, res) => {
+      seenHost = req.headers.host;
+      res.end("hello from the box");
+    });
+    const upstreamPort = await listen(upstream);
+    endpointProxy(upstreamPort);
+    const proxyPort = await proxy!.start();
+
+    const res = await request(proxyPort, `dp-test.localhost:${proxyPort}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toBe("hello from the box");
+    expect(seenHost).toBe(`${ENDPOINT_HOST}:${upstreamPort}`);
+  });
+
+  it("refuses a name that resolves only to a public address, on the socket it dials", async () => {
+    stubEndpointDns();
+    answers = [{ address: "93.184.216.34", family: 4 }];
+    let reached = false;
+    upstream = http.createServer((_req, res) => {
+      reached = true;
+      res.end("should not be reached");
+    });
+    const upstreamPort = await listen(upstream);
+    const diagnostics = endpointProxy(upstreamPort);
+    const proxyPort = await proxy!.start();
+
+    const res = await request(proxyPort, `dp-test.localhost:${proxyPort}`);
+
+    expect(res.status).toBe(502);
+    expect(res.statusText).toBe(DEV_PREVIEW_PROXY_STATUS_TEXT);
+    expect(res.body).toContain("public address");
+    expect(reached).toBe(false);
+    expect(diagnostics).toContainEqual(
+      expect.objectContaining({ kind: "http", code: "EDAINTREE_PUBLIC_ADDRESS" })
+    );
+  });
+
+  it("refuses a public literal without dialing it", async () => {
+    const diagnostics = endpointProxy(80, false, "93.184.216.34");
+    const proxyPort = await proxy!.start();
+
+    const res = await request(proxyPort, `dp-test.localhost:${proxyPort}`);
+
+    expect(res.status).toBe(502);
+    expect(res.body).toContain("public address");
+    expect(diagnostics).toContainEqual(
+      expect.objectContaining({ kind: "http", code: "EDAINTREE_PUBLIC_ADDRESS" })
+    );
+  });
+
+  it("verifies an https endpoint against its own name instead of accepting any cert", async () => {
+    stubEndpointDns();
+    answers = [{ address: "127.0.0.1", family: 4 }];
+    let reached = false;
+    // The fixture cert names `localhost`, not the endpoint, and is self-signed: a loopback
+    // session accepts it (#9974), an endpoint must not.
+    tlsUpstream = https.createServer({ cert: TLS_CERT, key: TLS_KEY }, (_req, res) => {
+      reached = true;
+      res.end("should not be trusted");
+    });
+    const upstreamPort = await listenTls(tlsUpstream);
+    const diagnostics = endpointProxy(upstreamPort, true);
+    const proxyPort = await proxy!.start();
+
+    const res = await request(proxyPort, `dp-test.localhost:${proxyPort}`);
+
+    expect(res.status).toBe(502);
+    expect(reached).toBe(false);
+    expect(diagnostics).toContainEqual(expect.objectContaining({ cause: "upstream-error" }));
+  });
+
+  it("forwards a WebSocket upgrade to the endpoint through the same lookup", async () => {
+    stubEndpointDns();
+    answers = [{ address: "127.0.0.1", family: 4 }];
+    let seenHost: string | undefined;
+    upstream = http.createServer();
+    const upstreamPort = await listen(upstream);
+    wss = new WebSocketServer({ server: upstream });
+    wss.on("connection", (socket, req) => {
+      seenHost = req.headers.host;
+      socket.on("message", (msg) => socket.send(`echo:${msg}`));
+    });
+    endpointProxy(upstreamPort);
+    const proxyPort = await proxy!.start();
+
+    const client = new WebSocket(`ws://127.0.0.1:${proxyPort}/`, {
+      headers: { host: `dp-test.localhost:${proxyPort}` },
+    });
+    const reply = await new Promise<string>((resolve, reject) => {
+      client.on("open", () => client.send("ping"));
+      client.on("message", (data) => resolve(data.toString()));
+      client.on("error", reject);
+    });
+    client.close();
+
+    expect(reply).toBe("echo:ping");
+    expect(seenHost).toBe(`${ENDPOINT_HOST}:${upstreamPort}`);
+  });
+
+  it("destroys a WebSocket upgrade to a name that rebinds to a public address", async () => {
+    stubEndpointDns();
+    answers = [{ address: "93.184.216.34", family: 4 }];
+    upstream = http.createServer();
+    const upstreamPort = await listen(upstream);
+    const diagnostics = endpointProxy(upstreamPort);
+    const proxyPort = await proxy!.start();
+
+    const client = new WebSocket(`ws://127.0.0.1:${proxyPort}/`, {
+      headers: { host: `dp-test.localhost:${proxyPort}` },
+    });
+    await new Promise<void>((resolve) => {
+      client.on("error", () => resolve());
+      client.on("close", () => resolve());
+    });
+
+    expect(diagnostics).toContainEqual(
+      expect.objectContaining({ kind: "ws", code: "EDAINTREE_PUBLIC_ADDRESS" })
+    );
+  });
+
+  it("keeps the endpoint's own absolute redirects on the preview origin, and only those", async () => {
+    stubEndpointDns();
+    answers = [{ address: "127.0.0.1", family: 4 }];
+    let port = 0;
+    upstream = http.createServer((req, res) => {
+      const location =
+        req.url === "/self"
+          ? `http://${ENDPOINT_HOST}:${port}/landed?x=1`
+          : `http://localhost:${port}/landed`;
+      res.writeHead(302, { Location: location });
+      res.end();
+    });
+    port = await listen(upstream);
+    endpointProxy(port);
+    const proxyPort = await proxy!.start();
+    const host = `dp-test.localhost:${proxyPort}`;
+
+    const self = await request(proxyPort, host, "/self");
+    expect(self.headers.location).toBe(`http://${host}/landed?x=1`);
+
+    // A loopback alias names this machine, not the endpoint's box: pass it through.
+    const loopback = await request(proxyPort, host, "/loopback");
+    expect(loopback.headers.location).toBe(`http://localhost:${port}/landed`);
   });
 });

@@ -1,8 +1,11 @@
 import path from "path";
 import fs from "fs/promises";
+import type { Dirent } from "fs";
+import { performance } from "perf_hooks";
 import { createHash } from "crypto";
 import { TimeoutError, withTimeout } from "../utils/withTimeout.js";
 import { FILE_PREVIEW_MAX_BYTES } from "../utils/fileLimits.js";
+import { readBoundedFromHandle } from "../utils/boundedRead.js";
 import { isPathInside } from "../../shared/utils/path.js";
 
 /**
@@ -45,6 +48,26 @@ const FS_CONCURRENCY = 4;
 export type PathFingerprint = string | null;
 
 /**
+ * How many entries are hashed between checks of the time budget, and how much
+ * main-thread time one uninterrupted stretch of hashing may take before it
+ * yields. Checking the clock per block rather than per entry keeps the check
+ * itself off the hot path; a directory narrower than one block never reaches a
+ * checkpoint, so the common case never yields.
+ */
+const DIGEST_CHECK_INTERVAL = 512;
+const DIGEST_SLICE_BUDGET_MS = 4;
+
+/** Murmur3's 32-bit finaliser, so near-identical names land far apart. */
+function fmix32(value: number): number {
+  value ^= value >>> 16;
+  value = Math.imul(value, 0x85ebca6b);
+  value ^= value >>> 13;
+  value = Math.imul(value, 0xc2b2ae35);
+  value ^= value >>> 16;
+  return value >>> 0;
+}
+
+/**
  * An order-independent digest of a directory's entries.
  *
  * XOR and modular addition are both commutative, so folding each entry's own
@@ -55,18 +78,58 @@ export type PathFingerprint = string | null;
  * alongside it means two sets would have to collide under both folds at once.
  * This is cache invalidation, not authentication: a collision costs a missed
  * refresh, so incidental strength is enough and an adversary is not in scope.
+ *
+ * Each entry is hashed as two independent 32-bit lanes — FNV-1a, and a
+ * differently seeded multiply-shift using MurmurHash2's multiplier — over every
+ * UTF-16 code unit of its name, plus its length and whether it is a directory.
+ * Both are finalised with `fmix32`; the pair is XOR-folded per lane and summed
+ * as one wrapping 64-bit value with an explicit carry. Plain integer arithmetic
+ * rather than a SHA-1 `Hash`, digest buffer and BigInt per entry: an unchanged
+ * poll of a wide directory used to allocate all three for every child, every
+ * couple of seconds, on the main thread (#13604).
+ *
+ * Long listings yield to the event loop every {@link DIGEST_SLICE_BUDGET_MS}.
+ * The listing was captured by one `readdir`, so yielding only delays the answer
+ * for it; it never mixes two enumerations.
  */
-function digestEntries(entries: string[]): string {
-  const accumulator = Buffer.alloc(20);
-  let sum = 0n;
-  for (const entry of entries) {
-    const digest = createHash("sha1").update(entry).digest();
-    for (let index = 0; index < accumulator.length; index++) {
-      accumulator[index] ^= digest[index] as number;
+async function digestEntries(entries: readonly Dirent[]): Promise<string> {
+  let xorLo = 0;
+  let xorHi = 0;
+  let sumLo = 0;
+  let sumHi = 0;
+  let sliceStart = performance.now();
+  for (let index = 0; index < entries.length; index++) {
+    const entry = entries[index] as Dirent;
+    const name = entry.name;
+    const kind = entry.isDirectory() ? 1 : 2;
+    let laneA = Math.imul(0x811c9dc5 ^ kind, 0x01000193);
+    let laneB = Math.imul(0x9e3779b9 ^ kind, 0x5bd1e995);
+    for (let offset = 0; offset < name.length; offset++) {
+      const unit = name.charCodeAt(offset);
+      laneA = Math.imul(laneA ^ unit, 0x01000193);
+      laneB = Math.imul(laneB ^ unit, 0x5bd1e995);
+      laneB ^= laneB >>> 15;
     }
-    sum = (sum + digest.readBigUInt64BE(0)) & 0xffffffffffffffffn;
+    const lo = fmix32(laneA ^ name.length);
+    const hi = fmix32(laneB ^ name.length);
+    xorLo ^= lo;
+    xorHi ^= hi;
+    const low = sumLo + lo;
+    sumLo = low >>> 0;
+    sumHi = (sumHi + hi + (low > 0xffffffff ? 1 : 0)) >>> 0;
+
+    if ((index + 1) % DIGEST_CHECK_INTERVAL === 0 && index + 1 < entries.length) {
+      if (performance.now() - sliceStart >= DIGEST_SLICE_BUDGET_MS) {
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        sliceStart = performance.now();
+      }
+    }
   }
-  return `${accumulator.toString("hex").slice(0, 16)}.${sum.toString(16)}`;
+  return `${hex32(xorHi)}${hex32(xorLo)}.${hex32(sumHi)}${hex32(sumLo)}`;
+}
+
+function hex32(value: number): string {
+  return (value >>> 0).toString(16).padStart(8, "0");
 }
 
 /**
@@ -91,8 +154,7 @@ async function fingerprintDirectory(target: string, mtime: bigint): Promise<Path
     FS_TIMEOUT_MS,
     `readdir timed out: ${target}`
   );
-  const names = entries.map((entry) => `${entry.name}/${entry.isDirectory() ? "d" : "f"}`);
-  return `d:${mtime}:${entries.length}:${digestEntries(names)}`;
+  return `d:${mtime}:${entries.length}:${await digestEntries(entries)}`;
 }
 
 /**
@@ -107,11 +169,32 @@ async function fingerprintDirectory(target: string, mtime: bigint): Promise<Path
 async function digestPreviewableFile(target: string, size: bigint): Promise<string> {
   if (size > BigInt(FILE_PREVIEW_MAX_BYTES)) return "-";
   const contents = await withTimeout(
-    fs.readFile(target),
+    readPreviewableFile(target, Number(size)),
     FS_TIMEOUT_MS,
     `read timed out: ${target}`
   );
+  // Grown past the ceiling since the stat: no more renderable than one that
+  // was already over it.
+  if (contents === null) return "-";
   return createHash("sha1").update(contents).digest("hex").slice(0, 16);
+}
+
+/**
+ * At most the preview ceiling's worth of `target`, or `null` past it. The
+ * handle closes when the read settles even if `withTimeout` gave up first.
+ */
+async function readPreviewableFile(target: string, sizeHint: number): Promise<Buffer | null> {
+  // O_NONBLOCK so a FIFO swapped in after the stat can't hang the open, and
+  // O_NOFOLLOW so a link swapped in can't point the digest outside the root.
+  const handle = await fs.open(
+    target,
+    fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0)
+  );
+  try {
+    return await readBoundedFromHandle(handle, sizeHint, FILE_PREVIEW_MAX_BYTES);
+  } finally {
+    await handle.close().catch(() => {});
+  }
 }
 
 /**

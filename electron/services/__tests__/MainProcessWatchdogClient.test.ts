@@ -137,6 +137,49 @@ describe("MainProcessWatchdogClient", () => {
     expect(pings).toHaveLength(4);
   });
 
+  describe("memory pressure on pings (#13528)", () => {
+    const pingPressure = () =>
+      mockChild.postMessage.mock.calls
+        .map(([msg]) => msg as { type?: string; memoryPressure?: boolean | null })
+        .filter((msg) => msg.type === "ping")
+        .map((msg) => msg.memoryPressure);
+
+    it("carries main's latest reading on every ping, and none before the first or once stale", async () => {
+      const pressure = await import("../watchdogMemoryPressure.js");
+      new WatchdogClient({ mainPid: 1 });
+      expect(pingPressure()).toEqual([null]);
+
+      pressure.recordWatchdogMemoryPressure(true);
+      vi.advanceTimersByTime(5000);
+      expect(pingPressure().at(-1)).toBe(true);
+
+      pressure.recordWatchdogMemoryPressure(false);
+      vi.advanceTimersByTime(5000);
+      expect(pingPressure().at(-1)).toBe(false);
+
+      // Repeated pings never refresh the reading itself.
+      vi.advanceTimersByTime(pressure.WATCHDOG_PRESSURE_STALE_MS);
+      expect(pingPressure().at(-1)).toBeNull();
+    });
+
+    it("reports a reading taken before the watchdog started on its arming ping", async () => {
+      const pressure = await import("../watchdogMemoryPressure.js");
+      pressure.recordWatchdogMemoryPressure(true);
+      new WatchdogClient({ mainPid: 1 });
+      expect(pingPressure()).toEqual([true]);
+    });
+
+    it("drops pressure from the next ping once main reads the machine as clear", async () => {
+      const pressure = await import("../watchdogMemoryPressure.js");
+      pressure.recordWatchdogMemoryPressure(true);
+      const client = new WatchdogClient({ mainPid: 1 });
+      client.pause();
+      pressure.recordWatchdogMemoryPressure(false);
+      client.resume();
+      expect(pingPressure()).toEqual([true, false]);
+    });
+  });
+
   it("pause() stops the ping interval and posts {type: 'sleep'}", () => {
     const client = new WatchdogClient({ mainPid: 4242 });
     mockChild.postMessage.mockClear();

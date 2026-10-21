@@ -10,11 +10,14 @@ import { FilterChip } from "../FilterChip";
 import { readIndexCss } from "@/__tests__/support/hostCss";
 
 describe("buttonVariants", () => {
-  it("uses specific transition instead of transition-all", () => {
-    const classes = buttonVariants();
-    expect(classes).not.toContain("transition-all");
-    // Should contain the base "transition" utility (word boundary check)
-    expect(classes).toMatch(/(?:^|\s)transition(?:\s|$)/);
+  it("transitions paint only, so the press scale snaps both ways", () => {
+    const transitions = buttonVariants()
+      .split(/\s+/)
+      .filter((token) => /^transition(?:-|$)/.test(token));
+    expect(transitions).toHaveLength(1);
+    expect(transitions[0]).toMatch(/^transition-\[[a-z,-]+\]$/);
+    expect(transitions[0]).toContain("background-color");
+    expect(transitions[0]).not.toMatch(/scale|transform|translate|rotate|all/);
   });
 });
 

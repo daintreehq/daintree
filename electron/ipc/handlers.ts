@@ -83,6 +83,7 @@ import { registerWebviewNavigationHandlers } from "./handlers/webviewNavigation.
 import { registerWebviewCaptureHandlers } from "./handlers/webviewCapture.js";
 import { registerRemoteHostsHandlers } from "./handlers/remoteHosts.js";
 import { registerHostModeHandlers } from "./handlers/hostMode.js";
+import { registerDeviceAnswerHandlers } from "./handlers/deviceAnswer.js";
 import { registerDriveLeaseHandlers } from "./handlers/driveLease.js";
 import { registerOperationsHandlers } from "./handlers/operations.js";
 import { registerHostFilesHandlers } from "./handlers/hostFiles.js";
@@ -100,6 +101,7 @@ import { registerWebviewEmulationHandlers } from "./handlers/webviewEmulation.js
 import { registerDiagnosticsHandlers } from "./handlers/diagnostics.js";
 import { registerResourceProfileHandlers } from "./handlers/resourceProfile.js";
 import { registerWhySlowHandlers } from "./handlers/whySlow.js";
+import { registerMemoryPressureHandlers } from "./handlers/memoryPressure.js";
 import { registerPerfHandlers } from "./handlers/perf.js";
 
 import { registerAccessibilityHandlers } from "./handlers/accessibility.js";
@@ -253,6 +255,7 @@ export function registerIpcHandlers(deps: HandlerDependencies): () => void {
     register(() => registerDiagnosticsHandlers(deps));
     register(() => registerResourceProfileHandlers(deps));
     register(() => registerWhySlowHandlers(deps));
+    register(() => registerMemoryPressureHandlers(deps));
 
     register(() => registerAccessibilityHandlers());
     register(() => registerDemoHandlers(deps));
@@ -278,6 +281,7 @@ export function registerIpcHandlers(deps: HandlerDependencies): () => void {
     if (isEitherRemoteRoleSupported()) {
       register(() => registerRemoteHostsHandlers());
       register(() => registerHostModeHandlers());
+      register(() => registerDeviceAnswerHandlers());
       register(() => registerDriveLeaseHandlers());
       register(() => registerOperationsHandlers());
       register(() => registerHostFilesHandlers());

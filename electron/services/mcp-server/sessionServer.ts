@@ -214,7 +214,7 @@ const PROJECT_RUN_CHECK_TOOL = "project.runCheck";
 const PROJECT_RUN_COMMAND_TOOL = "project.runCommand";
 
 const PROJECT_RUN_COMMAND_REFUSAL =
-  "project.runCommand is only available to Daintree's own assistant at the full tier.";
+  "project.runCommand is only available to Daintree's own assistant.";
 const ASSISTANT_CONTROL_REFUSAL = "Only a Daintree Assistant can find or start assistants.";
 const TERMINAL_GET_STATUS_TOOL = "terminal.getStatus";
 const TERMINAL_READ_LAST_MESSAGE_OWNED_TOOL = "terminal.readLastMessageOwned";
@@ -415,6 +415,20 @@ const OWNED_RESOURCE_TOOLS: Record<string, OwnedResourceTool> = {
     releasesOwnership: false,
     acceptsAdoption: true,
     reveals: true,
+  },
+  // Where an owned panel sits, without moving the user (#13662). It delegates
+  // to itself: the renderer definition is the focus-free placement, and the
+  // generic placements it would otherwise wrap open the dock popover or take
+  // focus. Only the destination is forwarded. Placing is not a claim the panel
+  // stopped existing, so the record stays.
+  "terminal.placeOwned": {
+    resourceKind: "terminal",
+    executor: "renderer",
+    delegateTo: "terminal.placeOwned",
+    idArg: "terminalId",
+    forwardArgs: ["location"],
+    releasesOwnership: false,
+    acceptsAdoption: true,
   },
   // Keeps its record for the same reason the reveal above does: interrupting a
   // turn is not a claim the panel stopped existing, and dropping the record
@@ -1951,7 +1965,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             for (const id of HOST_CONTROL_TOOL_IDS) permittedActionIds.delete(id);
           }
           // A grant never makes the command runner callable, so it never makes it findable;
-          // a relayed full-tier session that may run it finds it, whatever its tier list says.
+          // a relayed session that may run it finds it, whatever its tier list says.
           if (commandRunnerCaller) permittedActionIds.add(PROJECT_RUN_COMMAND_TOOL);
           else permittedActionIds.delete(PROJECT_RUN_COMMAND_TOOL);
           // Likewise the assistant tools, for exactly the assistants that may call them (#13496).
@@ -4011,8 +4025,8 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         // as project.runCheck (#13495). Its caller was admitted above by
         // `mayRunProjectCommand`, and is asked again here so no future path
         // into this branch can skip it. Never `danger: "confirm"`: the same
-        // assistant already reaches a shell through `terminal.new` and
-        // `terminal.sendCommand`. A call relayed from another machine
+        // assistant already reaches a shell through a terminal or an agent it
+        // drives. A call relayed from another machine
         // (#13493) is a write under the drive rule, as a check is, since no
         // IPC channel's lease policy covers it: asked now, and again right
         // before the spawn.

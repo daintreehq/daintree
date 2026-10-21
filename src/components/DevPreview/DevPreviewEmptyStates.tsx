@@ -43,6 +43,9 @@ interface DevPreviewEmptyStatesProps {
   isAutoDetecting: boolean;
   attemptingCommand: string | null;
   isSettingsLoading: boolean;
+  /** Set when the project's settings never loaded, so whether a command is configured is unknown. */
+  settingsLoadError: string | null;
+  handleRetrySettingsLoad: () => void;
   handleAutoDetect: (candidateCommand?: string) => Promise<boolean>;
   autoDetectFailedCommand: string | null;
   candidates: RunCommand[];
@@ -55,6 +58,13 @@ interface DevPreviewEmptyStatesProps {
   isSavingCommand: boolean;
   saveCommandFailed: boolean;
   devCommand: string;
+  /**
+   * A resource endpoint panel's endpoint (#13688): null until the environment's
+   * status reports one. Undefined for a panel that runs its dev command.
+   */
+  endpoint?: string | null;
+  /** Endpoint panels: asks the environment where its server is. */
+  onCheckEndpoint?: () => void;
   handleStartFromRestored: () => void;
   hasBeenVisible: boolean;
   isEvicted: boolean;
@@ -151,6 +161,8 @@ export function DevPreviewEmptyStates({
   isAutoDetecting,
   attemptingCommand,
   isSettingsLoading,
+  settingsLoadError,
+  handleRetrySettingsLoad,
   handleAutoDetect,
   autoDetectFailedCommand,
   candidates,
@@ -163,6 +175,8 @@ export function DevPreviewEmptyStates({
   isSavingCommand,
   saveCommandFailed,
   devCommand,
+  endpoint,
+  onCheckEndpoint,
   handleStartFromRestored,
   hasBeenVisible,
   isEvicted,
@@ -375,7 +389,57 @@ export function DevPreviewEmptyStates({
       );
     }
 
+    if (status === "stopped" && endpoint !== undefined) {
+      if (!showStoppedPrompt) {
+        return <div className="absolute inset-0 bg-surface-canvas" />;
+      }
+      if (endpoint === null) {
+        return (
+          <PaneState
+            title="Check the environment's status"
+            description="It hasn't reported an endpoint yet. Once its server is up, a status check finds it."
+          >
+            {onCheckEndpoint && (
+              <Button onClick={onCheckEndpoint} variant="contrast">
+                <RefreshCw />
+                Check status
+              </Button>
+            )}
+          </PaneState>
+        );
+      }
+      return (
+        <PaneState
+          title="Connect to the endpoint"
+          description="The preview isn't connected. Connect to show the environment's server here."
+        >
+          <CommandChip command={endpoint} />
+          <Button onClick={handleRetry} variant="contrast">
+            <Play />
+            Connect
+          </Button>
+        </PaneState>
+      );
+    }
+
     if (status === "stopped") {
+      if (!devCommand && settingsLoadError) {
+        return (
+          <PaneState
+            live="alert"
+            icon={<XCircle className="text-status-error" />}
+            title="Couldn't load project settings"
+            description={settingsLoadError}
+          >
+            <PaneStateActions>
+              <Button onClick={handleRetrySettingsLoad} variant="subtle" size="sm">
+                <RefreshCw />
+                Retry
+              </Button>
+            </PaneStateActions>
+          </PaneState>
+        );
+      }
       if (!showStoppedPrompt || !devCommand) {
         return <div className="absolute inset-0 bg-surface-canvas" />;
       }

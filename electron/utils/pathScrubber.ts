@@ -37,5 +37,12 @@ export function sanitizePath(str: string): string {
       .replace(/([A-Za-z]:\\\\Users\\\\)[^\\"]+/gi, "$1USER")
       .replace(/([A-Za-z]:\\Users\\)[^\\"]+/gi, "$1USER")
       .replace(/([A-Za-z]:\/Users\/)[^/"\\]+/gi, "$1USER")
+      // Dash-encoded home directories, as Claude Code names its per-project
+      // dirs (`-Users-alice-proj`, `-home-alice-proj`, `C--Users-alice-proj`).
+      // The username can itself contain dashes and nothing marks where it
+      // ends, so the whole slug is redacted. The slug alphabet is bounded so
+      // trailing `;exit=1` or `)` text survives.
+      .replace(/(^|[/\\\s"'`=:([,;])-(Users|home)-[A-Za-z0-9._-]+/g, "$1-$2-USER")
+      .replace(/\b([A-Za-z]--)(Users)-[A-Za-z0-9._-]+/gi, "$1$2-USER")
   );
 }

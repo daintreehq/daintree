@@ -142,6 +142,8 @@ describe("PluginLogsSection", () => {
         lines={[{ ts: 1_700_000_000_000, level: "error", message: "activate failed" }]}
         loading={false}
         error={null}
+        readAt={null}
+        hasLogged
         refresh={noop}
       />
     );
@@ -150,19 +152,46 @@ describe("PluginLogsSection", () => {
 
   it("explains a missing buffer rather than showing it as empty", async () => {
     const { PluginLogsSection } = await load();
-    render(<PluginLogsSection lines={null} loading={false} error={null} refresh={noop} />);
+    render(
+      <PluginLogsSection
+        lines={null}
+        loading={false}
+        error={null}
+        readAt={null}
+        hasLogged
+        refresh={noop}
+      />
+    );
     expect(screen.getByText(/isn't running/)).toBeTruthy();
   });
 
   it("explains an emptied buffer, which a reload produces while the tab is open", async () => {
     const { PluginLogsSection } = await load();
-    render(<PluginLogsSection lines={[]} loading={false} error={null} refresh={noop} />);
-    expect(screen.getByText(/buffer is empty/)).toBeTruthy();
+    render(
+      <PluginLogsSection
+        lines={[]}
+        loading={false}
+        error={null}
+        readAt={null}
+        hasLogged
+        refresh={noop}
+      />
+    );
+    expect(screen.getByText(/since the plugin last reloaded/)).toBeTruthy();
   });
 
   it("shows a read failure instead of an empty state", async () => {
     const { PluginLogsSection } = await load();
-    render(<PluginLogsSection lines={null} loading={false} error="IPC gone" refresh={noop} />);
+    render(
+      <PluginLogsSection
+        lines={null}
+        loading={false}
+        error="IPC gone"
+        readAt={null}
+        hasLogged
+        refresh={noop}
+      />
+    );
     expect(screen.getByText("IPC gone")).toBeTruthy();
     expect(screen.queryByText(/isn't running/)).toBeNull();
   });
@@ -171,12 +200,28 @@ describe("PluginLogsSection", () => {
     const refresh = vi.fn();
     const { PluginLogsSection } = await load();
     const { rerender } = render(
-      <PluginLogsSection lines={[]} loading={false} error={null} refresh={refresh} />
+      <PluginLogsSection
+        lines={[]}
+        loading={false}
+        error={null}
+        readAt={null}
+        hasLogged
+        refresh={refresh}
+      />
     );
     fireEvent.click(screen.getByRole("button", { name: /refresh/i }));
     expect(refresh).toHaveBeenCalledOnce();
 
-    rerender(<PluginLogsSection lines={[]} loading={true} error={null} refresh={refresh} />);
+    rerender(
+      <PluginLogsSection
+        lines={[]}
+        loading={true}
+        error={null}
+        readAt={null}
+        hasLogged
+        refresh={refresh}
+      />
+    );
     // Busy, not natively disabled: the button keeps keyboard focus, and its
     // own guard refuses the second read.
     const button = screen.getByRole("button", { name: /refresh/i });

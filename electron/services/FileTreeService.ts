@@ -12,22 +12,13 @@ import type { FileTreeNode, FileTreeSymlink } from "../../shared/types/ipc.js";
 // collator construction is costly.
 const NAME_COLLATOR = new Intl.Collator(undefined, { numeric: true });
 
-const _baseRealpathCache = new Map<string, Promise<string>>();
-
-export function _resetBaseRealpathCacheForTests(): void {
-  _baseRealpathCache.clear();
-}
-
-function _getBaseRealpath(resolvedBasePath: string): Promise<string> {
-  const cached = _baseRealpathCache.get(resolvedBasePath);
-  if (cached) return cached;
-  const promise = fs.realpath(resolvedBasePath).catch((_err) => {
-    _baseRealpathCache.delete(resolvedBasePath);
-    return resolvedBasePath;
-  });
-  _baseRealpathCache.set(resolvedBasePath, promise);
-  return promise;
-}
+// How many entries of one listing read their metadata at once. Unbounded, a
+// 10,000-entry directory queued 10,000 `lstat`s ahead of every other fs call
+// in the process (#13600); serial was the bottleneck #7140 removed. Sixteen
+// sits above libuv's default four threads, so the pool stays fed, while
+// capping how much backlog one wide folder can queue in front of other work.
+// A slot covers an entry's whole read, symlink resolution included.
+export const FILE_TREE_METADATA_CONCURRENCY = 16;
 
 /**
  * Whether `candidate` sits at or under `root`, both already canonical.
@@ -197,7 +188,10 @@ export class FileTreeService {
     }
 
     const normalizedDirPath = path.normalize(dirPath);
-    const normalizedForCheck = normalizedDirPath.replace(/\\/g, "/");
+    // A backslash is a separator only on Windows; elsewhere it is a filename
+    // byte, and rewriting it would open a different folder (#13562).
+    const normalizedForCheck =
+      path.sep === "\\" ? normalizedDirPath.replace(/\\/g, "/") : normalizedDirPath;
     if (
       normalizedForCheck === ".." ||
       normalizedForCheck.startsWith("../") ||
@@ -215,8 +209,13 @@ export class FileTreeService {
     }
 
     try {
-      const resolvedBaseRealPath = await _getBaseRealpath(resolvedBasePath);
-      const targetRealPath = await fs.realpath(targetPath).catch(() => targetPath);
+      // Resolved on every call, never cached: a symlinked project root can be
+      // retargeted while the app runs, and a stale canonical base would reject
+      // every listing under the new target (#13561).
+      const [resolvedBaseRealPath, targetRealPath] = await Promise.all([
+        fs.realpath(resolvedBasePath).catch(() => resolvedBasePath),
+        fs.realpath(targetPath).catch(() => targetPath),
+      ]);
       // Still the guard that makes an out-of-root link non-expandable: the
       // listing leaves such a node `isDirectory: false` so the renderer never
       // asks, but this is what holds if something asks anyway.
@@ -233,33 +232,47 @@ export class FileTreeService {
 
       const toGitPath = (p: string) => p.split(path.sep).join("/");
 
-      const statResults = await Promise.all(
-        entries.map(async (entry) => {
-          const relativePath = path.join(relativeDirPath, entry.name);
-          const gitRelativePath = toGitPath(relativePath);
+      const readEntry = async (entry: (typeof entries)[number]) => {
+        const relativePath = path.join(relativeDirPath, entry.name);
+        const gitRelativePath = toGitPath(relativePath);
 
-          const absolutePath = path.join(resolvedBasePath, relativePath);
-          try {
-            const fileStat = await fs.lstat(absolutePath);
-            // The `Dirent` already said this is a link; `lstat` is asked again
-            // rather than trusted from the dirent because it is the same call
-            // every other entry makes and it re-confirms the entry still
-            // exists. A link deleted between `readdir` and here fails the
-            // `readlink` below and drops out exactly like any other race.
-            if (!fileStat.isSymbolicLink()) {
-              return { fileStat, name: entry.name, gitRelativePath };
-            }
-            const { symlink, targetStat } = await describeSymlink(
-              absolutePath,
-              targetRealPath,
-              resolvedBasePath,
-              resolvedBaseRealPath
-            );
-            return { fileStat, name: entry.name, gitRelativePath, symlink, targetStat };
-          } catch {
-            return null;
+        const absolutePath = path.join(resolvedBasePath, relativePath);
+        try {
+          const fileStat = await fs.lstat(absolutePath);
+          // The `Dirent` already said this is a link; `lstat` is asked again
+          // rather than trusted from the dirent because it is the same call
+          // every other entry makes and it re-confirms the entry still
+          // exists. A link deleted between `readdir` and here fails the
+          // `readlink` below and drops out exactly like any other race.
+          if (!fileStat.isSymbolicLink()) {
+            return { fileStat, name: entry.name, gitRelativePath };
           }
-        })
+          const { symlink, targetStat } = await describeSymlink(
+            absolutePath,
+            targetRealPath,
+            resolvedBasePath,
+            resolvedBaseRealPath
+          );
+          return { fileStat, name: entry.name, gitRelativePath, symlink, targetStat };
+        } catch {
+          return null;
+        }
+      };
+
+      // Pull-based rather than `entries.map` behind a limiter, which would
+      // still allocate a pending promise per entry up front.
+      const statResults: Array<Awaited<ReturnType<typeof readEntry>>> = new Array(entries.length);
+      let next = 0;
+      await Promise.all(
+        Array.from(
+          { length: Math.min(FILE_TREE_METADATA_CONCURRENCY, entries.length) },
+          async () => {
+            while (next < entries.length) {
+              const index = next++;
+              statResults[index] = await readEntry(entries[index]);
+            }
+          }
+        )
       );
 
       const nodes: FileTreeNode[] = [];

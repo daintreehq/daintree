@@ -168,4 +168,56 @@ describe("HostMetricsSampler", () => {
     const summary = await new HostMetricsSampler(sources({ agents: async () => null })).sample();
     expect(summary.agentsObserved).toBeNull();
   });
+
+  it("reads agents, projects and driver from one sample's readers when the sources scope them", async () => {
+    let begun = 0;
+    const scopedDriver = { shellId: "shell-scoped", acquiredAt: 7 } as never;
+    const unscoped = () => {
+      throw new Error("unscoped");
+    };
+    const summary = await new HostMetricsSampler(
+      sources({
+        agents: unscoped,
+        projects: unscoped,
+        driver: unscoped,
+        beginSample: () => {
+          begun += 1;
+          return {
+            agents: async () => ({ working: 5, waiting: 0, idle: 0 }),
+            projects: async () => ({ projectCount: 1, worktreeCount: 2 }),
+            driver: () => scopedDriver,
+          };
+        },
+      })
+    ).sample();
+    expect(begun).toBe(1);
+    expect(summary).toMatchObject({
+      agentsObserved: { working: 5, waiting: 0, idle: 0 },
+      projectCount: 1,
+      worktreeCount: 2,
+      driver: scopedDriver,
+    });
+  });
+
+  it("reports a sample's failed scoped readers as unknown, keeping the rest", async () => {
+    const failed = () => {
+      throw new Error("db locked");
+    };
+    const summary = await new HostMetricsSampler(
+      sources({
+        beginSample: () => ({
+          agents: async () => failed(),
+          projects: async () => failed(),
+          driver: failed,
+        }),
+      })
+    ).sample();
+    expect(summary).toMatchObject({
+      agentsObserved: null,
+      projectCount: null,
+      worktreeCount: null,
+      driver: null,
+      agentClis: [{ agentId: "claude", version: "2.1.0" }],
+    });
+  });
 });

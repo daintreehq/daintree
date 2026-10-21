@@ -1,5 +1,7 @@
+import { useState } from "react";
 import type { WorktreeState } from "@/types";
 import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
 import { ChevronRight, MoreHorizontal, Trash2 } from "lucide-react";
 import {
   WorktreeMenuItems,
@@ -39,7 +41,6 @@ export const DROPDOWN_COMPONENTS: WorktreeMenuComponents = {
 
 interface WorktreeActionsToolbarProps {
   isCollapsed: boolean;
-  isActive: boolean;
   onCleanupWorktree?: () => void;
   canCollapse: boolean;
   onToggleCollapse?: (e: React.MouseEvent) => void;
@@ -48,6 +49,15 @@ interface WorktreeActionsToolbarProps {
   worktree: WorktreeState;
   isPinned: boolean;
 }
+
+type ToolbarButtonKey = "delete" | "collapse" | "more";
+
+// Every card shows the same three buttons in the same ink, active or not,
+// expanded or collapsed. They used to fade to half opacity on inactive cards,
+// which put enabled controls under 3:1 on every theme and left collapsed cards
+// (which skipped the fade) brighter than their own titles. `sidebar-action-button`
+// keeps the themes' sidebar hover fill.
+const TOOLBAR_BUTTON_CLASS = "sidebar-action-button shrink-0 [&_svg]:size-3.5";
 
 // APG toolbar keyboard support: arrow keys move focus between the toolbar's
 // buttons (wrapping), Home/End jump to the ends. Handled only while focus is
@@ -77,7 +87,6 @@ function handleToolbarKeyDown(e: React.KeyboardEvent<HTMLDivElement>) {
 
 export function WorktreeActionsToolbar({
   isCollapsed,
-  isActive,
   onCleanupWorktree,
   canCollapse,
   onToggleCollapse,
@@ -86,6 +95,20 @@ export function WorktreeActionsToolbar({
   worktree,
   isPinned,
 }: WorktreeActionsToolbarProps) {
+  // One Tab stop per toolbar (APG roving tabindex): the button focused last
+  // keeps it, falling back to the first one rendered when that button is gone.
+  const [lastFocused, setLastFocused] = useState<ToolbarButtonKey | null>(null);
+  const rendered: ToolbarButtonKey[] = [
+    ...(onCleanupWorktree ? (["delete"] as const) : []),
+    ...(canCollapse ? (["collapse"] as const) : []),
+    "more",
+  ];
+  const tabStop = lastFocused && rendered.includes(lastFocused) ? lastFocused : rendered[0];
+  const rovingProps = (key: ToolbarButtonKey) => ({
+    tabIndex: key === tabStop ? 0 : -1,
+    onFocus: () => setLastFocused(key),
+  });
+
   return (
     <div
       data-testid="worktree-actions-wrapper"
@@ -93,31 +116,31 @@ export function WorktreeActionsToolbar({
       role="toolbar"
       aria-label="Worktree actions"
       onKeyDown={handleToolbarKeyDown}
-      className={cn(
-        "flex items-center gap-0.5 shrink-0 transition-opacity duration-150",
-        isCollapsed
-          ? "opacity-100"
-          : isActive
-            ? "opacity-100"
-            : "opacity-50 delay-0 group-hover/card:opacity-100 group-hover/card:delay-75 group-has-[:focus-visible]/card:opacity-100 group-has-[:focus-visible]/card:delay-0 group-has-[[data-state=open]]/card:opacity-100 group-has-[[data-state=open]]/card:delay-0"
-      )}
+      className="flex shrink-0 items-center gap-0.5"
     >
       {onCleanupWorktree && (
         <Tooltip>
           <TooltipTrigger asChild>
-            <button
-              type="button"
+            <Button
+              variant="ghost"
+              size="icon-xs"
               onClick={(e) => {
                 e.stopPropagation();
                 onCleanupWorktree();
               }}
               data-no-dnd
-              className="sidebar-action-button rounded-[var(--radius-md)] p-1.5 text-text-secondary transition-colors hover:text-status-error focus-visible:text-status-error focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
+              {...rovingProps("delete")}
+              // Sidebar chrome stays neutral at rest; the red belongs to
+              // pointing at it, focusing it, and the confirm.
+              className={cn(
+                TOOLBAR_BUTTON_CLASS,
+                "hover:text-status-error focus-visible:text-status-error"
+              )}
               aria-label="Delete worktree"
               data-testid="worktree-cleanup-button"
             >
-              <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
-            </button>
+              <Trash2 aria-hidden="true" />
+            </Button>
           </TooltipTrigger>
           <TooltipContent side="top">Delete worktree</TooltipContent>
         </Tooltip>
@@ -125,11 +148,13 @@ export function WorktreeActionsToolbar({
       {canCollapse && (
         <Tooltip>
           <TooltipTrigger asChild>
-            <button
-              type="button"
+            <Button
+              variant="ghost"
+              size="icon-xs"
               onClick={onToggleCollapse}
               data-no-dnd
-              className="sidebar-action-button rounded-[var(--radius-md)] p-1.5 text-daintree-text/60 hover:text-text-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
+              {...rovingProps("collapse")}
+              className={TOOLBAR_BUTTON_CLASS}
               aria-expanded={!isCollapsed}
               aria-controls={isCollapsed ? undefined : contentId}
               aria-label={isCollapsed ? "Expand card" : "Collapse card"}
@@ -137,12 +162,12 @@ export function WorktreeActionsToolbar({
               <ChevronRight
                 data-animated-chevron
                 className={cn(
-                  "w-3.5 h-3.5 transition-transform duration-150 ease-out",
+                  "transition-transform duration-150 ease-out",
                   isCollapsed ? "rotate-0" : "rotate-90"
                 )}
                 aria-hidden="true"
               />
-            </button>
+            </Button>
           </TooltipTrigger>
           <TooltipContent side="top">
             {isCollapsed ? "Expand card" : "Collapse card"}
@@ -153,15 +178,18 @@ export function WorktreeActionsToolbar({
         <Tooltip>
           <TooltipTrigger asChild>
             <DropdownMenuTrigger asChild>
-              <button
+              <Button
+                variant="ghost"
+                size="icon-xs"
                 onClick={(e) => e.stopPropagation()}
                 data-no-dnd
-                className="sidebar-action-button rounded-[var(--radius-md)] p-1.5 text-daintree-text/60 hover:text-text-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
+                {...rovingProps("more")}
+                className={TOOLBAR_BUTTON_CLASS}
                 aria-label="More actions"
                 data-testid="worktree-actions-menu"
               >
-                <MoreHorizontal className="w-3.5 h-3.5" />
-              </button>
+                <MoreHorizontal aria-hidden="true" />
+              </Button>
             </DropdownMenuTrigger>
           </TooltipTrigger>
           <TooltipContent side="top">More actions</TooltipContent>

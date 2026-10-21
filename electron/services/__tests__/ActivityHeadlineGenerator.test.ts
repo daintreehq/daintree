@@ -38,6 +38,18 @@ describe("ActivityHeadlineGenerator", () => {
     expect(result.headline).toBe("Building project");
   });
 
+  it.each([
+    ["yarn run test", "Running tests"],
+    ["yarn run build", "Building project"],
+    ["yarn run dev", "Starting dev server"],
+    ["yarn test", "Running tests"],
+    ["yarn dev", "Starting dev server"],
+  ])("classifies yarn script command %s", (lastCommand, headline) => {
+    const result = generator.generate({ terminalId: "term-yarn", activity: "busy", lastCommand });
+
+    expect(result.headline).toBe(headline);
+  });
+
   it("classifies npx commands when wrapper options are present", () => {
     const result = generator.generate({
       terminalId: "term-4",

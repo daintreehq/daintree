@@ -205,9 +205,8 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         },
         location: {
           type: "string",
-          enum: ["grid", "dock", "overlay"],
-          description:
-            '"grid" main grid (default), "dock" sidebar dock, "overlay" floating overlay.',
+          enum: ["grid", "dock", "overlay", "background"],
+          description: 'Default "grid". "background" runs it unmounted until restored.',
         },
         cwd: {
           description:
@@ -347,7 +346,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           anyOf: [
             {
               type: "string",
-              enum: ["grid", "dock"],
+              enum: ["grid", "dock", "background"],
             },
             {
               type: "null",
@@ -1987,6 +1986,59 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     name: "terminal.new",
     requiresArgs: false,
     title: "New terminal",
+  },
+  {
+    band: "reversible",
+    category: "terminal",
+    danger: "safe",
+    description:
+      "Move a panel this session created or was handed to the background, dock or grid; its process keeps running. Never takes focus or moves the user. Other panels are refused.",
+    enabled: true,
+    id: "terminal.placeOwned",
+    inputSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        terminalId: {
+          type: "string",
+          minLength: 1,
+          description: "Panel `id` this session created or was handed.",
+        },
+        location: {
+          type: "string",
+          enum: ["grid", "dock", "background"],
+          description: "Where to put it.",
+        },
+      },
+      required: ["terminalId", "location"],
+      additionalProperties: false,
+    },
+    keywords: ["background", "park", "dock", "restore", "owned"],
+    kind: "command",
+    name: "terminal.placeOwned",
+    outputSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        location: {
+          anyOf: [
+            {
+              type: "string",
+              enum: ["grid", "dock", "background"],
+            },
+            {
+              type: "null",
+            },
+          ],
+          description:
+            "Where the panel is now. Null means nothing was targeted (no panel named and none focused).",
+        },
+      },
+      required: ["location"],
+      additionalProperties: false,
+    },
+    requiresArgs: true,
+    title: "Place owned terminal",
   },
   {
     band: "reversible",

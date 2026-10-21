@@ -35,12 +35,14 @@ import { completeLocalProjectActivation } from "../../window/localProjectActivat
 import {
   claimProjectActivation,
   findOtherProjectOwner,
+  hasReusableProjectView,
   redirectToProjectOwner,
   releaseCachedOwner,
   revealWindow,
   type ProjectOwner,
 } from "../../window/projectOwnership.js";
 import { hasPendingActivation } from "../../window/projectActivationClaims.js";
+import { confirmColdOpenAtMemoryPressure } from "../../services/projectOpenMemoryPressure.js";
 import { activateScratchInWindow } from "../../ipc/handlers/scratch/activation.js";
 import {
   getPtyClient,
@@ -329,13 +331,19 @@ function createWindowControl(hooks: RemoteHostsClientHooks): WindowControl {
       }
       return windowOpener();
     },
-    openRemoteProject(windowId, hostId, projectId, projectPath, focusIntent) {
+    openRemoteProject(windowId, hostId, projectId, projectPath, focusIntent, request) {
       return inTurn(windowId, async () => {
         const pvm = managerFor(windowId);
         const from = pvm.getActiveProjectId();
         // Before the swap, as a local switch records it: the view consumes it on activation.
         if (focusIntent) pvm.setPendingFocusIntent(toHostScopedKey(hostId, projectId), focusIntent);
-        const { view, isNew } = await pvm.switchToHostProject(hostId, projectId, projectPath);
+        const { view, isNew } = await pvm.switchToHostProject(
+          hostId,
+          projectId,
+          projectPath,
+          undefined,
+          request
+        );
         recordWindowSwitch(windowId, from, toHostScopedKey(hostId, projectId));
         // The title names the place: "<project> — <host>".
         refreshWindowTitles();
@@ -343,7 +351,7 @@ function createWindowControl(hooks: RemoteHostsClientHooks): WindowControl {
         if (wc && !wc.isDestroyed()) hooks.onRemoteViewActivated?.(windowId, wc, isNew);
       });
     },
-    async openLocalProject(windowId, projectId, focusIntent) {
+    async openLocalProject(windowId, projectId, focusIntent, request) {
       // A scratch is a workspace a view shows like a project, with no project row.
       const scratch = isScratchWorkspaceId(projectId)
         ? scratchStore.getScratchById(projectId)
@@ -357,7 +365,12 @@ function createWindowControl(hooks: RemoteHostsClientHooks): WindowControl {
         const pvm = managerFor(windowId);
         const from = pvm.getActiveProjectId();
         if (focusIntent) pvm.setPendingFocusIntent(workspace.id, focusIntent);
-        const { view, isNew } = await pvm.switchTo(workspace.id, workspace.path);
+        const { view, isNew } = await pvm.switchTo(
+          workspace.id,
+          workspace.path,
+          undefined,
+          request
+        );
         recordWindowSwitch(windowId, from, workspace.id);
         const registry = getWindowRegistry();
         const win = registry?.getByWindowId(windowId)?.browserWindow;
@@ -423,6 +436,27 @@ function createWindowControl(hooks: RemoteHostsClientHooks): WindowControl {
       // A scratch has no project row to hand over: its window comes forward.
       revealWindow(owner.context.browserWindow);
       return owner.context.windowId;
+    },
+    admitProjectOpen({ windowId, askingWindowId, hostId, projectId, projectName, signal }) {
+      const registry = getWindowRegistry();
+      if (windowId !== null) {
+        const key = isLocalHostId(hostId) ? projectId : toHostScopedKey(hostId, projectId);
+        // A view the window can show as it is starts nothing.
+        const pvm = registry?.getByWindowId(windowId)?.services.projectViewManager;
+        if (hasReusableProjectView(pvm, key)) return Promise.resolve(true);
+      }
+      const parentId = windowId ?? askingWindowId;
+      const answer = confirmColdOpenAtMemoryPressure({
+        projectId,
+        projectName:
+          projectName ??
+          projectStore.getProjectById(projectId)?.name ??
+          scratchStore.getScratchById(projectId)?.name ??
+          projectId,
+        parent: parentId === null ? null : registry?.getByWindowId(parentId)?.browserWindow,
+        signal,
+      });
+      return answer.then((choice) => choice !== "cancel");
     },
     revealWindow(windowId) {
       const ctx = getWindowRegistry()?.getByWindowId(windowId);

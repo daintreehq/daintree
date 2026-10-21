@@ -69,12 +69,16 @@ function hermeticClient(repo: string) {
   // simple-git blocks `GIT_CONFIG_*` on a client environment by default, which
   // is right for the app and exactly backwards for a fixture whose whole point
   // is to be isolated from the developer's config. Opted out here only.
-  return simpleGit(repo, { unsafe: { allowUnsafeConfigPaths: true } }).env({
+  const env = {
     PATH: process.env.PATH ?? "",
     GIT_CONFIG_GLOBAL: "/dev/null",
     GIT_CONFIG_SYSTEM: "/dev/null",
     GIT_TERMINAL_PROMPT: "0",
-  });
+  };
+  return simpleGit(repo, {
+    allowEnvironment: Object.keys(env),
+    unsafe: { allowUnsafeConfigPaths: true },
+  }).env(env);
 }
 
 function resolve(repo: string, branch = "topic") {

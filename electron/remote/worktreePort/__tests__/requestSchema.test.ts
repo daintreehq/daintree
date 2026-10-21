@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { checkRemoteWorktreePortRequest } from "../requestSchema.js";
+import { checkRemoteWorktreePortRequest, requiresDriving } from "../requestSchema.js";
 
 const ROOT = "/repos/project-a";
 
@@ -61,5 +61,46 @@ describe("remote create-worktree options", () => {
   ])("refuses %s", (_label, override) => {
     const result = create({ baseBranch: "main", newBranch: "x", path: "/tmp/x", ...override });
     expect(result).toEqual({ ok: false, id: "c-1", error: "Invalid payload for create-worktree" });
+  });
+});
+
+describe("remote attachment-action", () => {
+  function attachment(payload: unknown) {
+    return checkRemoteWorktreePortRequest(
+      { id: "a-1", action: "attachment-action", payload },
+      ROOT
+    );
+  }
+
+  it("forwards a well-formed request", () => {
+    const payload = {
+      worktreeId: "/repos/project-a-x",
+      name: "tunnel",
+      action: "attach",
+      expectedHolderWorktreeId: null,
+    };
+    expect(attachment(payload)).toEqual({
+      ok: true,
+      request: { id: "a-1", action: "attachment-action", payload },
+    });
+  });
+
+  it.each([
+    ["an unknown action", { worktreeId: "/w", name: "tunnel", action: "steal" }],
+    ["an empty name", { worktreeId: "/w", name: "", action: "attach" }],
+    ["a missing worktree", { name: "tunnel", action: "attach" }],
+  ])("refuses %s", (_label, payload) => {
+    expect(attachment(payload).ok).toBe(false);
+  });
+
+  it("needs the lease to move or detach, but not to check status", () => {
+    const drives = (action: string) =>
+      requiresDriving({
+        action: "attachment-action",
+        payload: { worktreeId: "/w", name: "tunnel", action },
+      });
+    expect(drives("attach")).toBe(true);
+    expect(drives("detach")).toBe(true);
+    expect(drives("status")).toBe(false);
   });
 });

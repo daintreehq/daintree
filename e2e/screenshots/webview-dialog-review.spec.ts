@@ -35,6 +35,7 @@
  *   DAINTREE_SHOT_THEME    optional theme id (default: the app default)
  *   DAINTREE_SHOT_TAG      optional suffix so rounds sit side by side
  *   DAINTREE_SHOT_ONLY     comma-separated step filter (see step names below)
+ *   DESIGN_CAPTURE_DIR     optional output directory outside the repo
  *
  * Output: artifacts/webview-dialog-shots/<NN-slug>[-tag].png (gitignored).
  */
@@ -57,7 +58,9 @@ const ENABLED = !!process.env.DAINTREE_SHOT_WEBVIEW;
 const THEME = process.env.DAINTREE_SHOT_THEME ?? "";
 const TAG = process.env.DAINTREE_SHOT_TAG ? `-${process.env.DAINTREE_SHOT_TAG}` : "";
 const SCALE = process.env.DAINTREE_SCREENSHOT_SCALE ?? "2";
-const OUTPUT_DIR = path.resolve(process.cwd(), "artifacts", "webview-dialog-shots");
+const OUTPUT_DIR = process.env.DESIGN_CAPTURE_DIR
+  ? path.resolve(process.env.DESIGN_CAPTURE_DIR)
+  : path.resolve(process.cwd(), "artifacts", "webview-dialog-shots");
 
 const POLISH_CSS = `
   ::-webkit-scrollbar { display: none !important; width: 0 !important; height: 0 !important; }
@@ -398,6 +401,25 @@ test("contained webview dialog review — alert, confirm and prompt over a brows
       await showPage("alert-short");
       await raise("alert", "Changes saved.", "", null);
       await snap(page, "32-alert-no-origin-card", dialog);
+      captured += 1;
+    });
+
+    // A queued request is promoted into the same mounted card, so the second of two
+    // overflowing messages must open at its own top, not at the first one's offset.
+    await step("queue-scroll", async () => {
+      await showPage("alert-long");
+      const tall = Array.from({ length: 10 }, (_, i) => `${i + 1}. ${LONG_MESSAGE}`).join("\n\n");
+      await raise("alert", tall);
+      const scroller = dialog
+        .locator('[id="' + (await dialog.getAttribute("aria-describedby")) + '"]')
+        .locator("xpath=ancestor::*[contains(@class,'overflow')][1]");
+      await scroller.evaluate((el) => {
+        el.scrollTop = el.scrollHeight;
+      });
+      await raise("alert", `Second request.\n\n${tall}`);
+      await dialog.locator("button").last().click();
+      await settle(page, 400);
+      await snap(page, "33-alert-queued-overflow-card", dialog);
       captured += 1;
     });
 

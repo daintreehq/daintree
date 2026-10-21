@@ -50,6 +50,12 @@ import {
   transferBetweenWorktreeIndex,
 } from "./worktreeIndex";
 import { agentLifecycleLedger } from "@/services/terminal/lifecycleLedger";
+import {
+  clearPanelMemoryPressureMark,
+  holdForMemoryPressure,
+  isMemoryPressureCritical,
+  panelHoldKey,
+} from "@/store/memoryPressureWaitStore";
 import { computeEnvProvenance } from "@shared/utils/agentLifecycleLedger";
 import { mergeTerminalLaunchEnv } from "@shared/utils/terminalLaunchOptions";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
@@ -75,6 +81,68 @@ async function resolveProjectStore() {
  * bucket order is not guaranteed to be flat order projected by worktree, and
  * reusing one structure's answer in the other would misplace the copy.
  */
+type RegistryState = ReturnType<PanelRegistryStoreApi["getState"]>;
+
+/**
+ * Restore target recorded on a panel born parked. A replayed hydration keeps
+ * the entry already in the map (see `commitParked`), so the record follows it
+ * and the save made inside the commit writes the target a restore will use.
+ */
+function parkedRestoreTarget(
+  state: RegistryState,
+  id: string,
+  options: { backgroundRestoreLocation?: "grid" | "dock" }
+): "grid" | "dock" {
+  return (
+    state.backgroundedTerminals.get(id)?.originalLocation ??
+    options.backgroundRestoreLocation ??
+    "grid"
+  );
+}
+
+/**
+ * Wraps a commit so a panel born parked lands with its restore entry in the
+ * same `set()`: `restoreBackgroundTerminal` reads only `backgroundedTerminals`,
+ * and an entry written a commit later leaves a window where the panel is
+ * parked with no way back. A replayed hydration keeps the entry already there,
+ * which may carry tab-group metadata the snapshot never had, and the panel's
+ * restore target is aligned to it.
+ */
+function commitParked(
+  set: PanelRegistryStoreApi["setState"],
+  panel: { id: string; location?: string; backgroundRestoreLocation?: "grid" | "dock" }
+) {
+  return (updater: (state: RegistryState) => Partial<RegistryState> | RegistryState): void => {
+    set((state) => {
+      const patch = updater(state);
+      if (patch === state || panel.location !== "background") return patch;
+      const current = patch.backgroundedTerminals ?? state.backgroundedTerminals;
+      const kept = current.get(panel.id);
+      if (kept) {
+        // The panel's field is what the next save writes, so it follows the
+        // entry that is kept rather than the snapshot's.
+        const committed = patch.panelsById?.[panel.id];
+        if (!committed || committed.backgroundRestoreLocation === kept.originalLocation) {
+          return patch;
+        }
+        return {
+          ...patch,
+          panelsById: {
+            ...patch.panelsById,
+            [panel.id]: { ...committed, backgroundRestoreLocation: kept.originalLocation },
+          },
+        };
+      }
+      const backgroundedTerminals = new Map(current);
+      backgroundedTerminals.set(panel.id, {
+        id: panel.id,
+        originalLocation: panel.backgroundRestoreLocation ?? "grid",
+      });
+      return { ...patch, backgroundedTerminals };
+    });
+  };
+}
+
 function earliestIndexOf(order: readonly string[], ids: readonly string[]): number {
   let earliest = -1;
   for (const id of ids) {
@@ -410,7 +478,10 @@ export const createAddPanelActions = (
       // mis-backgrounded (#10512).
       const isInActiveWorktree =
         activeWorktreeId === null || (effectiveWorktreeId ?? null) === (activeWorktreeId ?? null);
-      const shouldBackground = location === "dock" || (location === "grid" && !isInActiveWorktree);
+      const shouldBackground =
+        location === "dock" ||
+        location === "background" ||
+        (location === "grid" && !isInActiveWorktree);
       const runtimeStatus: TerminalRuntimeStatus = shouldBackground ? "background" : "running";
 
       const kindConfig = getPanelKindConfig(requestedKind);
@@ -442,6 +513,9 @@ export const createAddPanelActions = (
         ...(options.titleMode && { titleMode: options.titleMode }),
         worktreeId: effectiveWorktreeId,
         location,
+        ...(location === "background" && {
+          backgroundRestoreLocation: parkedRestoreTarget(get(), id, options),
+        }),
         isVisible: location === "grid",
         runtimeStatus,
         extensionState: options.extensionState,
@@ -462,7 +536,10 @@ export const createAddPanelActions = (
       if (isHydrationBatchActive()) {
         // Batched path: commit `panelsById` immediately (event listeners can find
         // the panel by id) and defer the `panelIds` append + persist to flush.
-        set((state) => {
+        commitParked(
+          set,
+          terminal
+        )((state) => {
           const existing = state.panelsById[id];
           if (existing) {
             logDebug("[TerminalStore] Panel already exists, updating instead of adding", { id });
@@ -492,7 +569,10 @@ export const createAddPanelActions = (
         const popoverSuppressed =
           options.focusPolicy === "preserve" ||
           !resolvePanelKindPolicy(requestedKind).dockPopoverOnSpawn;
-        set((state) => {
+        commitParked(
+          set,
+          terminal
+        )((state) => {
           const existing = state.panelsById[id];
           if (existing) {
             logDebug("[TerminalStore] Panel already exists, updating instead of adding", { id });
@@ -585,7 +665,10 @@ export const createAddPanelActions = (
     // tiers once the worktree is set.
     const isInActiveWorktree =
       activeWorktreeId === null || (options.worktreeId ?? null) === (activeWorktreeId ?? null);
-    const shouldBackground = location === "dock" || (location === "grid" && !isInActiveWorktree);
+    const shouldBackground =
+      location === "dock" ||
+      location === "background" ||
+      (location === "grid" && !isInActiveWorktree);
     const runtimeStatus: TerminalRuntimeStatus = shouldBackground ? "background" : "running";
 
     // Capture the owning workspace synchronously before any async work to avoid race
@@ -749,6 +832,9 @@ export const createAddPanelActions = (
       waitingReason,
       lastStateChange,
       location,
+      ...(location === "background" && {
+        backgroundRestoreLocation: parkedRestoreTarget(get(), id, options),
+      }),
       command: options.command,
       // Initialize grid terminals as visible to avoid initial under-throttling
       // IntersectionObserver will update this once mounted
@@ -826,7 +912,10 @@ export const createAddPanelActions = (
     // only persists when ids were added — would never write the new record.
     if (isHydrationBatchActive() && !options.replacesRestoreRecovery) {
       // Batched path: commit `panelsById` immediately; defer `panelIds` append.
-      set((state) => {
+      commitParked(
+        set,
+        terminal
+      )((state) => {
         const existing = state.panelsById[id];
         const existingPty = existing && isPtyPanel(existing) ? existing : undefined;
         const preservedTerminal: CarrierPanel =
@@ -894,7 +983,10 @@ export const createAddPanelActions = (
       const ptyPopoverSuppressed =
         options.focusPolicy === "preserve" ||
         !resolvePanelKindPolicy(requestedKind).dockPopoverOnSpawn;
-      set((state) => {
+      commitParked(
+        set,
+        terminal
+      )((state) => {
         const existing = state.panelsById[id];
         if (existing) {
           // Update existing terminal in place (reconnection case or double hydration)
@@ -1114,6 +1206,7 @@ export const createAddPanelActions = (
       const currentActiveWorktreeId = getWorktreeSelectionSnapshot()?.activeWorktreeId ?? null;
       const isDockOrInactive =
         location === "dock" ||
+        location === "background" ||
         (currentActiveWorktreeId !== null &&
           (options.worktreeId ?? null) !== (currentActiveWorktreeId ?? null));
 
@@ -1214,24 +1307,68 @@ export const createAddPanelActions = (
     }
 
     const shouldWaitForVisibleAttach = location === "grid" && isInActiveWorktree;
+    // An agent pane waits out critical kernel memory pressure before it spawns
+    // (#13530), launches and restores alike. Not the assistant: it renders in
+    // its own surface, and asking it about memory is what the memory notice
+    // offers.
+    const holdsForMemoryPressure =
+      Boolean(launchAgentId) && location !== "overlay" && location !== "dialog";
+    const isStillStarting = (): boolean => {
+      const current = get().panelsById[id];
+      return (
+        Boolean(current && isPtyPanel(current) && current.spawnStatus === "spawning") &&
+        agentLifecycleLedger.isCurrent(id, launchGeneration)
+      );
+    };
 
     // The panel chrome is already committed. Realize backend PTY startup and
     // visible xterm.open() through a bounded queue so bulk recipes can add many
     // panels without making Chromium/xterm settle every terminal in the same
     // frame. spawnStatus remains "spawning" while queued, so TerminalPane shows
-    // lightweight chrome instead of mounting XtermAdapter.
+    // lightweight chrome instead of mounting XtermAdapter. Named so a launch
+    // held for memory pressure can queue itself again when it continues.
     terminalStartupQueue.enqueue(
-      async () => {
+      async function startPty(launchAnyway = false, resumed = false): Promise<void> {
+        if (resumed) clearPanelMemoryPressureMark(id);
         const _p0 = get().panelsById[id];
         if (!_p0 || !isPtyPanel(_p0) || _p0.spawnStatus !== "spawning") return;
         markRendererPerformance("agentlaunch.task-start", { id });
 
         try {
+          // Asked as each launch reaches the front, not when it was queued, so
+          // a restore that tips the machine into critical holds the rest of
+          // itself. Started before the env await so the round trips overlap.
+          const pressureCheck =
+            holdsForMemoryPressure && !launchAnyway ? isMemoryPressureCritical() : null;
           const mergedEnv = await spawnEnvPromise;
+          const pressureCritical = pressureCheck !== null && (await pressureCheck);
 
           markRendererPerformance("agentlaunch.env-ready", { id });
           const _p1 = get().panelsById[id];
           if (!_p1 || !isPtyPanel(_p1) || _p1.spawnStatus !== "spawning") return;
+
+          if (holdsForMemoryPressure) {
+            // The pressure round trip and a hold's wait are each long enough for
+            // a restart or replay to take this id over, so ownership is checked
+            // again before anything starts.
+            if (!isStillStarting()) return;
+            // Held outside the queue, so a waiting agent never stops the panes
+            // queued behind it from starting. A released hold queues one at a
+            // time, whatever its batch: pressure has only just eased. One that
+            // was closed while its release queued goes back to waiting.
+            if (pressureCritical || (resumed && _p1.location === "trash")) {
+              holdForMemoryPressure(panelHoldKey(id), {
+                panelId: id,
+                resume: (anyway) => terminalStartupQueue.enqueue(() => startPty(anyway, true)),
+                isStale: () => !isStillStarting(),
+                // A pane closed while it waited stays held in the trash, so an
+                // undo brings back the same waiting launch rather than one that
+                // started unseen.
+                isDeferred: () => get().panelsById[id]?.location === "trash",
+              });
+              return;
+            }
+          }
           const spawnWorktreeId = _p1.worktreeId;
 
           const commandToExecute = options.skipCommandExecution ? undefined : options.command;

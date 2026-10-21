@@ -148,7 +148,10 @@ export function registerDevServerActions(
 
       // Scratch-owned views have no project, and the dock/palette launcher used
       // to open a dev preview there via the workspace cwd fallback (#11673).
-      const devServerCommand = projectId ? await readDevServerCommand(projectId) : undefined;
+      // The command is optional here; the pane reports a settings read failure.
+      const devServerCommand = projectId
+        ? await readDevServerCommand(projectId).catch(() => undefined)
+        : undefined;
 
       const cwd = firstAbsolutePath(
         ctx.activeWorktreePath,

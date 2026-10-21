@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PtyPanelData } from "@shared/types/panel";
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
+import type { ActionContext } from "@shared/types/actions";
 
 const mocks = vi.hoisted(() => {
   const storage = new Map<string, string>();
@@ -256,6 +257,7 @@ function registerTerminalActions(actions: ActionRegistry, callbacks: ActionCallb
 const { registerPanelActions } = await import("../definitions/panelActions");
 const { registerWorktreeActions } = await import("../definitions/worktreeActions");
 const { usePanelStore } = await import("../../../store/panelStore");
+const { UnactionableTargetError } = await import("../unactionableTarget");
 const { useLayoutUndoStore } = await import("../../../store/layoutUndoStore");
 const { usePortalStore } = await import("../../../store/portalStore");
 const { useUIStore } = await import("../../../store/uiStore");
@@ -533,7 +535,10 @@ describe("terminal action hardening", () => {
       activeDockTerminalId: null,
     });
 
-    await moveToDock.run({ terminalId: "missing" }, {} as never);
+    // A miss is reported, not acknowledged (#13663), and still touches nothing.
+    await expect(moveToDock.run({ terminalId: "missing" }, {} as never)).rejects.toThrow(
+      /no panel with id "missing"/
+    );
 
     expect(usePanelStore.getState().focusedId).toBe("existing");
     expect(usePanelStore.getState().activeDockTerminalId).toBeNull();
@@ -1720,5 +1725,231 @@ describe("terminal.sendCommand handback (#12488)", () => {
     expect(mocks.terminalClient.submit.mock.calls).toEqual([
       ["agent", "status", stringField(result, "submissionToken")],
     ]);
+  });
+});
+
+const AGENT_CTX: ActionContext = { dispatchSource: "agent" };
+
+// An orchestrator parks the panels it owns and brings them back while the user
+// works elsewhere, so nothing about the user's focus may move (#13662). Main
+// has already checked ownership by the time `run()` executes.
+describe("terminal.placeOwned (#13662)", () => {
+  function seed(overrides: Record<string, unknown> = {}) {
+    usePanelStore.setState({
+      panelsById: {
+        owned: createTerminal({ id: "owned", location: "dock" }),
+        user: createTerminal({ id: "user" }),
+        userDock: createTerminal({ id: "userDock", location: "dock" }),
+      },
+      panelIds: ["owned", "user", "userDock"],
+      backgroundedTerminals: new Map(),
+      tabGroups: new Map(),
+      focusedId: "user",
+      previousFocusedId: "userDock",
+      activeDockTerminalId: "userDock",
+      maximizedId: null,
+      maximizeTarget: null,
+      ...overrides,
+    });
+  }
+
+  function userFocus() {
+    const { focusedId, previousFocusedId, activeDockTerminalId, maximizedId } =
+      usePanelStore.getState();
+    return { focusedId, previousFocusedId, activeDockTerminalId, maximizedId };
+  }
+
+  async function place(terminalId: string, location: string) {
+    const actions = buildRegistry(registerTerminalActions);
+    return actions.get("terminal.placeOwned")!().run({ terminalId, location }, AGENT_CTX);
+  }
+
+  it.each([
+    ["dock", "background"],
+    ["dock", "grid"],
+    ["grid", "dock"],
+    ["grid", "background"],
+  ])("moves a panel from the %s to the %s without touching the user's focus", async (from, to) => {
+    seed();
+    usePanelStore.setState({
+      panelsById: {
+        ...usePanelStore.getState().panelsById,
+        owned: createTerminal({ id: "owned", location: from }),
+      },
+    });
+    const before = userFocus();
+
+    const result = await place("owned", to);
+
+    expect(result).toEqual({ location: to });
+    expect(usePanelStore.getState().panelsById.owned?.location).toBe(to);
+    expect(userFocus()).toEqual(before);
+  });
+
+  it.each(["dock", "grid"])(
+    "brings a parked panel back to the %s without focusing it or keeping its background record",
+    async (to) => {
+      seed();
+      usePanelStore.getState().backgroundTerminal("owned");
+      expect(usePanelStore.getState().panelsById.owned?.location).toBe("background");
+      const before = userFocus();
+
+      const result = await place("owned", to);
+
+      expect(result).toEqual({ location: to });
+      expect(usePanelStore.getState().backgroundedTerminals.has("owned")).toBe(false);
+      expect(userFocus()).toEqual(before);
+    }
+  );
+
+  it("leaves a maximized panel maximized when another lands in the grid", async () => {
+    seed({ maximizedId: "user", maximizeTarget: { type: "panel", id: "user" } });
+
+    await place("owned", "grid");
+
+    expect(usePanelStore.getState().maximizedId).toBe("user");
+    expect(usePanelStore.getState().focusedId).toBe("user");
+  });
+
+  it("repairs focus only when the placed panel itself held it", async () => {
+    seed({ focusedId: "owned", activeDockTerminalId: "owned" });
+
+    await place("owned", "background");
+
+    const state = usePanelStore.getState();
+    expect(state.focusedId).not.toBe("owned");
+    expect(state.activeDockTerminalId).toBeNull();
+  });
+
+  it("moves only the named panel out of a tab group, never its neighbours", async () => {
+    seed({
+      panelsById: {
+        owned: createTerminal({ id: "owned" }),
+        user: createTerminal({ id: "user" }),
+        sibling: createTerminal({ id: "sibling" }),
+      },
+      panelIds: ["owned", "user", "sibling"],
+      tabGroups: new Map([
+        [
+          "g1",
+          {
+            id: "g1",
+            location: "grid",
+            worktreeId: "wt-1",
+            activeTabId: "owned",
+            panelIds: ["owned", "sibling"],
+          },
+        ],
+      ]),
+      activeDockTerminalId: null,
+      previousFocusedId: null,
+    });
+
+    await place("owned", "dock");
+
+    const state = usePanelStore.getState();
+    expect(state.panelsById.owned?.location).toBe("dock");
+    expect(state.panelsById.sibling?.location).toBe("grid");
+    expect([...state.tabGroups.values()].some((g) => g.panelIds.includes("owned"))).toBe(false);
+  });
+
+  function seedMaximizedGroup(members: string[], maximizedId: string) {
+    seed({
+      panelsById: Object.fromEntries(members.map((id) => [id, createTerminal({ id })])),
+      panelIds: members,
+      tabGroups: new Map([
+        [
+          "g1",
+          {
+            id: "g1",
+            location: "grid",
+            worktreeId: "wt-1",
+            activeTabId: "user",
+            panelIds: members,
+          },
+        ],
+      ]),
+      focusedId: "user",
+      previousFocusedId: null,
+      activeDockTerminalId: null,
+      maximizedId,
+      maximizeTarget: { type: "group", id: "g1" },
+    });
+  }
+
+  // Detaching one tab must not blank the grid by leaving the maximize aimed at
+  // a group that dissolved, nor end the user's maximize of the tabs that stay.
+  it.each(["dock", "background"])(
+    "keeps a maximized group maximized when an owned tab leaves it for the %s",
+    async (to) => {
+      seedMaximizedGroup(["owned", "user", "other"], "owned");
+
+      await place("owned", to);
+
+      const state = usePanelStore.getState();
+      expect(state.tabGroups.get("g1")?.panelIds).toEqual(["user", "other"]);
+      expect(state.maximizeTarget).toEqual({ type: "group", id: "g1" });
+      expect(state.maximizedId).toBe("user");
+    }
+  );
+
+  it.each(["dock", "background"])(
+    "downgrades to the surviving tab's maximize when leaving for the %s dissolves the group",
+    async (to) => {
+      seedMaximizedGroup(["owned", "user"], "user");
+
+      await place("owned", to);
+
+      const state = usePanelStore.getState();
+      expect(state.tabGroups.has("g1")).toBe(false);
+      expect(state.maximizedId).toBe("user");
+      expect(state.maximizeTarget).toEqual({ type: "panel", id: "user" });
+    }
+  );
+
+  it("answers ok without moving anything when the panel is already there", async () => {
+    seed();
+    const before = usePanelStore.getState().panelsById;
+
+    const result = await place("owned", "dock");
+
+    expect(result).toEqual({ location: "dock" });
+    expect(usePanelStore.getState().panelsById).toBe(before);
+  });
+
+  it.each(["missing", "constructor"])(
+    "refuses %s as a panel this view does not hold",
+    async (id) => {
+      seed();
+      await expect(place(id, "background")).rejects.toThrow(`no panel with id "${id}"`);
+    }
+  );
+
+  it("refuses a trashed panel rather than resurrecting it", async () => {
+    seed();
+    usePanelStore.setState({
+      panelsById: {
+        ...usePanelStore.getState().panelsById,
+        owned: createTerminal({ id: "owned", location: "trash" }),
+      },
+    });
+
+    // Not retriable: the same arguments can never succeed.
+    await expect(place("owned", "grid")).rejects.toBeInstanceOf(UnactionableTargetError);
+    await expect(place("owned", "grid")).rejects.toThrow(/is in the trash/);
+    expect(usePanelStore.getState().panelsById.owned?.location).toBe("trash");
+  });
+
+  it("refuses to dock a kind the dock can't render", async () => {
+    seed();
+    usePanelStore.setState({
+      panelsById: {
+        ...usePanelStore.getState().panelsById,
+        owned: createTerminal({ id: "owned", kind: "review", hasPty: false }),
+      },
+    });
+
+    await expect(place("owned", "dock")).rejects.toThrow(/dock cannot show/);
+    expect(usePanelStore.getState().panelsById.owned?.location).toBe("grid");
   });
 });

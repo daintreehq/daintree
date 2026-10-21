@@ -223,15 +223,15 @@ describe("useUpdateListener", () => {
     expect(notifyMock).toHaveBeenCalledWith(
       expect.objectContaining({
         type: "info",
-        title: "Update available",
-        message: "Version 2.5.0 is downloading…",
+        title: "Downloading update",
+        message: "Version 2.5.0",
         duration: 0,
         priority: "high",
       })
     );
   });
 
-  it("includes the manual-check hint in the inbox message", () => {
+  it("names the version in the inbox message, which has no progress bar", () => {
     renderHook(() => useUpdateListener());
 
     act(() => {
@@ -239,7 +239,8 @@ describe("useUpdateListener", () => {
     });
 
     const payload = notifyMock.mock.calls[0]![0];
-    expect(payload.inboxMessage).toContain("Check for Updates");
+    expect(payload.inboxMessage).toContain("2.5.0");
+    expect(payload.progress).toEqual(expect.objectContaining({ value: null }));
   });
 
   it("updates toast in-place with progress bar on download-progress", () => {
@@ -253,15 +254,12 @@ describe("useUpdateListener", () => {
       capturedProgress!({ percent: 42.7 });
     });
 
-    expect(updateNotificationMock).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.objectContaining({
-        title: "Downloading update",
-        inboxMessage: "Downloading update: 43%",
-      })
-    );
     const patch = updateNotificationMock.mock.calls[0]![1];
-    expect(typeof patch.message).not.toBe("string");
+    // The version stays on the card and only the bar moves, so the live
+    // region's text is identical tick to tick.
+    expect(patch.message).toBe("Version 2.5.0");
+    expect(patch).not.toHaveProperty("inboxMessage");
+    expect(patch.progress).toEqual(expect.objectContaining({ value: 42.7 }));
   });
 
   it("updates toast to downloaded state with restart action", () => {
@@ -280,7 +278,7 @@ describe("useUpdateListener", () => {
       expect.objectContaining({
         type: "success",
         title: "Update ready",
-        message: "Version 2.5.0 is ready to install.",
+        message: "Version 2.5.0",
         duration: 0,
         dismissed: false,
         action: expect.objectContaining({ label: "Restart to update" }),
@@ -404,7 +402,7 @@ describe("useUpdateListener", () => {
       expect.objectContaining({
         type: "success",
         title: "Update ready",
-        message: "Version 2.5.0 is ready to install.",
+        message: "Version 2.5.0",
         priority: "high",
         urgent: true,
         duration: 0,
@@ -613,7 +611,7 @@ describe("useUpdateListener", () => {
       await flushHydrate();
 
       expect(notifyMock).toHaveBeenCalledWith(
-        expect.objectContaining({ title: "Update available", action: undefined })
+        expect.objectContaining({ title: "Downloading update", action: undefined })
       );
     });
 
@@ -683,7 +681,7 @@ describe("useUpdateListener", () => {
       expect(notifyMock.mock.calls.length).toBe(notifyCallsAfterLiveEvent);
       expect(updateNotificationMock).not.toHaveBeenCalledWith(
         expect.anything(),
-        expect.objectContaining({ title: "Update available" })
+        expect.objectContaining({ title: "Downloading update" })
       );
     });
 

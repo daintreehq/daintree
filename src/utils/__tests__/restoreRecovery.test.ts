@@ -64,7 +64,7 @@ describe("sanitizeConversationCwd (#12434)", () => {
     expect(sanitizeConversationCwd("/repo")).toBe("/repo");
     expect(sanitizeConversationCwd("   ")).toBeUndefined();
     expect(sanitizeConversationCwd(42)).toBeUndefined();
-    expect(sanitizeConversationCwd("/repo")).toBeUndefined();
+    expect(sanitizeConversationCwd("/repo\x07")).toBeUndefined();
   });
 });
 

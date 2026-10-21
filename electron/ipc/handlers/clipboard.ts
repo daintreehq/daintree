@@ -19,6 +19,11 @@ const MAX_AGE_MS = 24 * 60 * 60 * 1000;
 // Cap the number of surviving clipboard images so a long session can't
 // accumulate temp PNGs without bound even when they're all under MAX_AGE_MS.
 const MAX_FILE_COUNT = 20;
+// Element captures from the dev preview land beside pasted images, where agents
+// can already read (#4048), under their own prefix and their own cap: one per
+// selection, so a run of clicks must not evict a screenshot the user pasted.
+const ELEMENT_CAPTURE_PREFIX = "element-";
+const MAX_ELEMENT_CAPTURE_COUNT = 40;
 // Reject oversized clipboard writes before any native API call. Binary
 // (Uint8Array) payloads skip the IPC envelope budget check (see
 // electron/setup/security.ts) because containsBinary() skips the JSON-size
@@ -57,6 +62,14 @@ function logCleanupRejections(results: PromiseSettledResult<unknown>[]): void {
 }
 
 export async function cleanupOldClipboardImages(now: number = Date.now()): Promise<void> {
+  await cleanupImages("clipboard-", MAX_FILE_COUNT, now);
+}
+
+export async function cleanupOldElementCaptures(now: number = Date.now()): Promise<void> {
+  await cleanupImages(ELEMENT_CAPTURE_PREFIX, MAX_ELEMENT_CAPTURE_COUNT, now);
+}
+
+async function cleanupImages(prefix: string, maxCount: number, now: number): Promise<void> {
   const dir = getClipboardDir();
   // Never sweep through a symlink, or a directory, someone else planted on the
   // shared temp name: the unlinks below would land in files that aren't ours.
@@ -82,8 +95,7 @@ export async function cleanupOldClipboardImages(now: number = Date.now()): Promi
   }
 
   const clipboardFiles = entries.filter(
-    (dirent) =>
-      dirent.isFile() && dirent.name.startsWith("clipboard-") && dirent.name.endsWith(".png")
+    (dirent) => dirent.isFile() && dirent.name.startsWith(prefix) && dirent.name.endsWith(".png")
   );
 
   // Pass 1 — stat every clipboard file; tolerate races where a file vanishes.
@@ -118,11 +130,11 @@ export async function cleanupOldClipboardImages(now: number = Date.now()): Promi
   logCleanupRejections(await Promise.allSettled(ageEvictions));
 
   // Pass 3 — count cap: if too many recent files survive, evict the oldest.
-  if (surviving.length > MAX_FILE_COUNT) {
+  if (surviving.length > maxCount) {
     // Tie-break by path so files sharing an mtime (coarse-resolution FSes)
     // evict in a deterministic order rather than relying on readdir order.
     surviving.sort((a, b) => a.mtimeMs - b.mtimeMs || a.filePath.localeCompare(b.filePath));
-    const toEvict = surviving.slice(0, surviving.length - MAX_FILE_COUNT);
+    const toEvict = surviving.slice(0, surviving.length - maxCount);
     logCleanupRejections(
       await Promise.allSettled(toEvict.map((entry) => fs.unlink(entry.filePath)))
     );
@@ -149,6 +161,19 @@ async function writeOwnerOnlyNewFile(filePath: string, data: Buffer): Promise<vo
 }
 
 // The options only steer a remote window's upload (see the clipboard split); a local save has none.
+/** Write an element capture where agents read pasted images from; returns its path. */
+export async function saveElementCapture(png: Buffer): Promise<string> {
+  const dir = getClipboardDir();
+  await ensureOwnerOnlyDir(dir);
+  const id = crypto.randomBytes(3).toString("hex");
+  const filePath = path.join(dir, `${ELEMENT_CAPTURE_PREFIX}${Date.now()}-${id}.png`);
+  await writeOwnerOnlyNewFile(filePath, png);
+  void cleanupOldElementCaptures().catch((err) => {
+    console.warn("[clipboard] Element capture cleanup failed unexpectedly:", err);
+  });
+  return filePath;
+}
+
 async function handleSaveImage(
   _options?: ClipboardSaveImageOptions
 ): Promise<{ filePath: string; thumbnailDataUrl: string }> {
@@ -373,7 +398,7 @@ export function registerClipboardHandlers(): () => void {
   // can reference it via --include-directories without errors (#4048)
   ensureOwnerOnlyDir(getClipboardDir()).then(
     () =>
-      cleanupOldClipboardImages().catch((err) => {
+      Promise.all([cleanupOldClipboardImages(), cleanupOldElementCaptures()]).catch((err) => {
         console.warn("[clipboard] Cleanup failed unexpectedly:", err);
       }),
     (err) => {

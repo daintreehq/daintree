@@ -9,6 +9,21 @@ import { panelKindIsDockable } from "@shared/config/panelKindRegistry";
 import { getGridLayoutSnapshot } from "@/components/Terminal/gridLayoutSnapshot";
 import { animatePanelMove } from "@/components/Panel/animatePanelMove";
 import { requireExplicitTerminalIdForAgentDispatch } from "./terminalTargetBinding";
+import {
+  PLACEMENT_DESTINATIONS,
+  PanelPlacementResultSchema,
+  assertPlacementAllowed,
+  confirmPlacement,
+  resolvePlacementTarget,
+  throwTerminalMiss,
+} from "./terminalPlacement";
+
+const PlaceOwnedArgsSchema = z
+  .object({
+    terminalId: z.string().min(1).describe("Panel `id` this session created or was handed."),
+    location: z.enum(PLACEMENT_DESTINATIONS).describe("Where to put it."),
+  })
+  .strict();
 export function registerTerminalLayoutActions(
   actions: ActionRegistry,
   callbacks: ActionCallbacks
@@ -17,38 +32,44 @@ export function registerTerminalLayoutActions(
     id: "terminal.moveToDock",
     title: "Move to dock",
     description:
-      "Move a terminal out of the main grid into the sidebar dock, keeping its process running. This rearranges what the user sees and is reversible by moving it back. Name the target explicitly — an automated caller cannot see what the user has focused.",
+      "Move a terminal out of the main grid into the sidebar dock, keeping its process running; a grouped panel takes its group along. Reversible. A panel not in this view, a kind the dock can't show, or one in the trash, background, an overlay or a dialog is refused. Name the target explicitly; the result names where it is now.",
     category: "terminal",
     kind: "command",
     danger: "safe",
     scope: "renderer",
     argsSchema: z.object({ terminalId: z.string().optional() }),
+    resultSchema: PanelPlacementResultSchema,
+    mcpOutputSchema: true,
     run: async (args: unknown, ctx) => {
       const { terminalId } = args as { terminalId?: string };
       requireExplicitTerminalIdForAgentDispatch("terminal.moveToDock", terminalId, ctx);
       const state = usePanelStore.getState();
-      const targetId = terminalId ?? state.focusedId;
-      if (targetId) {
-        const terminal = state.panelsById[targetId];
-        if (!terminal) {
-          return;
-        }
-        // Dock membership is capability-gated (PTY kinds + dockable non-PTY
-        // kinds like file panels). Reject the rest so they don't silently
-        // disappear into a dock slot that won't render them.
-        if (!panelKindIsDockable(terminal.kind ?? "terminal")) {
-          return;
-        }
-
-        useLayoutUndoStore.getState().pushLayoutSnapshot();
-
-        animatePanelMove(targetId, "minimize", () => state.moveTerminalToDock(targetId));
-
-        const moved = usePanelStore.getState().panelsById[targetId];
-        if (moved?.location === "dock") {
-          state.openDockTerminal(targetId);
-        }
+      if (terminalId !== undefined && !Object.hasOwn(state.panelsById, terminalId)) {
+        return throwTerminalMiss("terminal.moveToDock", terminalId);
       }
+      const targetId = resolvePlacementTarget(terminalId, state);
+      if (!targetId) return { location: null };
+      // Refused before the undo snapshot, so a move that never happens leaves
+      // no undo entry behind.
+      if (assertPlacementAllowed("terminal.moveToDock", targetId, "dock", state)) {
+        // Nothing to move, but the call still reveals it: a replayed dock or a
+        // named one reopens the popover the way a real move would.
+        state.openDockTerminal(targetId);
+        return { location: "dock" as const };
+      }
+
+      useLayoutUndoStore.getState().pushLayoutSnapshot();
+
+      animatePanelMove(targetId, "minimize", () => state.moveTerminalToDock(targetId));
+
+      const result = confirmPlacement(
+        "terminal.moveToDock",
+        targetId,
+        "dock",
+        usePanelStore.getState().panelsById[targetId]
+      );
+      state.openDockTerminal(targetId);
+      return result;
     },
   }));
 
@@ -56,25 +77,82 @@ export function registerTerminalLayoutActions(
     id: "terminal.moveToGrid",
     title: "Move to grid",
     description:
-      "Move a terminal from the sidebar dock back into the main grid, keeping its process running. This rearranges what the user sees and is reversible. Name the target explicitly — an automated caller cannot see what the user has focused.",
+      "Move a terminal from the sidebar dock back into the main grid, keeping its process running; a grouped panel takes its group along. Reversible. A panel not in this view, or one in the trash, background, an overlay or a dialog, is refused. Name the target explicitly; the result names where it is now.",
     category: "terminal",
     kind: "command",
     danger: "safe",
     scope: "renderer",
     argsSchema: z.object({ terminalId: z.string().optional() }),
+    resultSchema: PanelPlacementResultSchema,
+    mcpOutputSchema: true,
     run: async (args: unknown, ctx) => {
       const { terminalId } = args as { terminalId?: string };
       requireExplicitTerminalIdForAgentDispatch("terminal.moveToGrid", terminalId, ctx);
       const state = usePanelStore.getState();
-      const targetId = terminalId ?? state.focusedId;
-      if (targetId) {
-        const terminal = state.panelsById[targetId];
-        if (!terminal) {
-          return;
-        }
-        useLayoutUndoStore.getState().pushLayoutSnapshot();
-        animatePanelMove(targetId, "restore", () => state.moveTerminalToGrid(targetId));
+      if (terminalId !== undefined && !Object.hasOwn(state.panelsById, terminalId)) {
+        return throwTerminalMiss("terminal.moveToGrid", terminalId);
       }
+      const targetId = resolvePlacementTarget(terminalId, state);
+      if (!targetId) return { location: null };
+      // A trashed or backgrounded panel has its own restore path, which clears
+      // the bookkeeping a plain grid move would leave behind.
+      if (assertPlacementAllowed("terminal.moveToGrid", targetId, "grid", state)) {
+        return { location: "grid" as const };
+      }
+      useLayoutUndoStore.getState().pushLayoutSnapshot();
+      animatePanelMove(targetId, "restore", () => state.moveTerminalToGrid(targetId));
+      return confirmPlacement(
+        "terminal.moveToGrid",
+        targetId,
+        "grid",
+        usePanelStore.getState().panelsById[targetId]
+      );
+    },
+  }));
+
+  // The owned twin of the three placement actions, and the one an MCP session
+  // can reach (#13662). Main checks the ownership ledger, then dispatches this
+  // same id with only `terminalId` and `location` rebuilt from the call, so
+  // `run()` is the shipped placement rather than a throw: no unscoped action
+  // backs it that a session could otherwise reach. Plugins are denied it
+  // (`DENY_PLUGIN_DISPATCH_ACTION_IDS`), since nothing here asks who created
+  // the panel. It never takes focus or opens the dock popover —
+  // `terminal.revealOwned` stays the one owned tool that moves the user.
+  actions.set("terminal.placeOwned", () => ({
+    id: "terminal.placeOwned",
+    title: "Place owned terminal",
+    description:
+      "Move a panel this session created or was handed to the background, dock or grid; its process keeps running. Never takes focus or moves the user. Other panels are refused.",
+    category: "terminal",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    keywords: ["background", "park", "dock", "restore", "owned"],
+    palette: { mode: "hidden" },
+    denyPluginDispatch: true,
+    argsSchema: PlaceOwnedArgsSchema,
+    resultSchema: PanelPlacementResultSchema,
+    mcpOutputSchema: true,
+    run: async (args: unknown) => {
+      const { terminalId, location } = PlaceOwnedArgsSchema.parse(args);
+      const state = usePanelStore.getState();
+      if (!resolvePlacementTarget(terminalId, state)) {
+        return throwTerminalMiss("terminal.placeOwned", terminalId);
+      }
+      if (
+        assertPlacementAllowed("terminal.placeOwned", terminalId, location, state, {
+          detach: true,
+        })
+      ) {
+        return { location };
+      }
+      state.placeTerminal(terminalId, location);
+      return confirmPlacement(
+        "terminal.placeOwned",
+        terminalId,
+        location,
+        usePanelStore.getState().panelsById[terminalId]
+      );
     },
   }));
 

@@ -25,15 +25,19 @@ vi.mock("@/store/projectStore", () => ({
     selector({ currentProject: { id: "test-project" } }),
 }));
 
-vi.mock("@/hooks/useResolvedForgeProvider", () => ({
-  useResolvedForgeProvider: () => ({
-    entry: { pluginId: "test.forge", contribution: { id: "provider", name: "Test Forge" } },
-    providerId: provider.id,
-    resolvedVia: "hostname",
-    loading: false,
-    refresh: () => {},
-  }),
-}));
+vi.mock("@/hooks/useResolvedForgeProvider", () => {
+  const entry = { pluginId: "test.forge", contribution: { id: "provider", name: "Test Forge" } };
+  return {
+    useResolvedForgeProvider: () => ({
+      entry,
+      providerId: provider.id,
+      resolvedVia: "hostname",
+      issues: { entry, providerId: provider.id, resolvedVia: "code" },
+      loading: false,
+      refresh: () => {},
+    }),
+  };
+});
 
 import { usePRTooltip, useIssueTooltip, invalidateForgeTooltipCaches } from "../useForgeTooltip";
 

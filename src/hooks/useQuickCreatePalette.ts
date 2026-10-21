@@ -9,6 +9,8 @@ import { actionService } from "@/services/ActionService";
 import { getAutoAssign } from "@shared/types/project";
 import { detectPrefixFromIssue, buildBranchName } from "@/components/Worktree/branchPrefixUtils";
 import { generateBranchSlug } from "@/utils/textParsing";
+import { issueBranchName } from "@shared/utils/issueBranchName";
+import { linkProviderIssue } from "@/utils/linkProviderIssue";
 import { notify } from "@/lib/notify";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { logError } from "@/utils/logger";
@@ -124,9 +126,12 @@ export function useQuickCreatePalette(): UseQuickCreatePaletteReturn {
         return;
       }
 
+      // A provider-suggested name stands on its own, even for a title that
+      // slugs to nothing.
+      const suggestedBranch = issueBranchName(issue, "");
       const prefix = issue ? (detectPrefixFromIssue(issue) ?? "feature") : "feature";
       const slug = generateBranchSlug(issueTitle);
-      if (!slug) {
+      if (!slug && !suggestedBranch) {
         closeQuickCreate();
         palette.close();
         openCreateDialog(issue, { initialRecipeId: recipe.id });
@@ -134,7 +139,7 @@ export function useQuickCreatePalette(): UseQuickCreatePaletteReturn {
       }
 
       const issuePrefix = issueNumber ? `issue-${issueNumber}-` : "";
-      const branchName = buildBranchName(prefix, `${issuePrefix}${slug}`);
+      const branchName = suggestedBranch || buildBranchName(prefix, `${issuePrefix}${slug}`);
 
       // A shadowed row launches the winning recipe, so its auto-assign
       // preference has to come from that winner, not the losing row.
@@ -179,6 +184,7 @@ export function useQuickCreatePalette(): UseQuickCreatePaletteReturn {
 
             useWorktreeSelectionStore.getState().setPendingWorktree(createdWorktreeId);
             useWorktreeSelectionStore.getState().selectWorktree(createdWorktreeId);
+            linkProviderIssue(createdWorktreeId, issue);
 
             const assignMsg =
               wasAssigned && issueNumber ? ` · assigned #${issueNumber} to you` : "";

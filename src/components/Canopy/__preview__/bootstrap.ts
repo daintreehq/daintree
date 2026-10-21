@@ -34,7 +34,23 @@ function record(action: string, detail: unknown): Promise<void> {
   return Promise.resolve();
 }
 
+/** Resolves to nothing and doubles as its own unsubscribe, as the shim's answers do. */
+function inertAnswer(): unknown {
+  const settled = Promise.resolve(undefined);
+  return Object.assign(() => undefined, {
+    then: settled.then.bind(settled),
+    catch: settled.catch.bind(settled),
+    finally: settled.finally.bind(settled),
+  });
+}
+
 installPreviewShims({
+  // The view is never cached here. The shim's catch-all answer is truthy, which
+  // the panel would read as "cached" and close itself as it mounts.
+  app: new Proxy(
+    { isViewCached: () => false },
+    { get: (target, key) => (key in target ? Reflect.get(target, key) : () => inertAnswer()) }
+  ),
   // The live pane's real composer asks for the agent's slash commands; an empty
   // list is what a project without any answers.
   slashCommands: { list: () => Promise.resolve([]) },
@@ -96,6 +112,7 @@ installPreviewShims({
     },
     restoreReads: () => record("restoreReads", null),
     runBranch: (runId: string) => Promise.resolve(branches.get(runId) ?? null),
+    searchScreens: () => Promise.resolve([] as string[]),
     // Archive acts the way main does, so the Archived group can be captured.
     archive: (runId: string, target: { spawnedAt: number }) => {
       if (current) {

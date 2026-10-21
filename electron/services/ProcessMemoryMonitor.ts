@@ -7,11 +7,13 @@ import { app } from "electron";
 import { logDebug, logInfo, logWarn } from "../utils/logger.js";
 import { setAlignedInterval } from "../utils/setAlignedInterval.js";
 import { refreshAppMetricsSnapshot } from "../utils/appMetricsSnapshot.js";
+import { getMetricsMemorySource, getProcessMemoryMb } from "../utils/processMemory.js";
 import { getSystemSleepService } from "./SystemSleepService.js";
 import { getWritesSuppressed } from "./diskPressureState.js";
 import { getIsE2EFaultMode, getIsE2EMode } from "../setup/runtimeFlags.js";
 import { getSystemMemoryThresholds, readAvailableSystemMemoryMb } from "../utils/systemMemory.js";
 import type { TrimStateSummary } from "../../shared/types/pty-host.js";
+import type { RendererInputBlockingSnapshot } from "../../shared/types/ipc/system.js";
 import {
   KERNEL_PRESSURE_CRITICAL,
   KERNEL_PRESSURE_WARN,
@@ -29,8 +31,8 @@ const BROWSER_MEMORY_FRACTION = 300 / 8192;
 const TAB_MEMORY_FRACTION = 768 / 8192;
 const UTILITY_MEMORY_FRACTION = 500 / 8192;
 
-// Combined working-set ceiling across all monitored processes. Working-set
-// sums double-count shared library pages on macOS, so this is intentionally
+// Combined memory ceiling across all monitored processes. Per-process figures
+// double-count shared pages, so this is intentionally
 // generous — it is a pressure heuristic, not a precise private-footprint
 // budget. 25% of total RAM is enough headroom that the per-process thresholds
 // trip first under typical leak shapes while still catching fan-out cases
@@ -179,20 +181,20 @@ export interface MainProcessTrendSample {
   type: string;
   /** Epoch ms when this pid was first sampled in the current monitor lifetime. */
   startedAt: number;
-  /** Latest exponential moving average of working-set footprint, in MB. */
+  /** Latest exponential moving average of process memory, in MB. */
   emaMb: number;
   /** Bounded rolling EMA history (≤ BUCKET_WINDOW entries), in MB, oldest→newest. */
   emaHistoryMb: number[];
-  /** Most recent raw working-set sample, in MB. */
+  /** Most recent raw memory sample, in MB. */
   mb: number;
-  /** Largest raw working-set sample seen for this pid, in MB. */
+  /** Largest raw memory sample seen for this pid, in MB. */
   peakMb: number;
 }
 
 export interface ProcessTypePeakSample {
   type: string;
   /**
-   * Largest working set any single process of this type reached — not the
+   * Largest memory any single process of this type reached — not the
    * combined footprint of every process of the type.
    */
   peakMb: number;
@@ -216,7 +218,7 @@ export function getSessionPeakSnapshot(): ProcessTypePeakSample[] {
  * Bounded snapshot of the per-pid memory trend buffers for diagnostics export.
  * Returns deep copies — never the live history arrays — so a diagnostics read
  * can't race the 30s poll that mutates them. All values derive from
- * workingSetSize (the only cross-platform memory field; #8646).
+ * `getProcessMemoryMb` — physical footprint on macOS, working set elsewhere.
  */
 export function getTrendSnapshot(): MainProcessTrendSample[] {
   const out: MainProcessTrendSample[] = [];
@@ -295,19 +297,82 @@ export const RENDERER_ELU_HIGH_RATIO = 0.85;
  */
 export const RENDERER_ELU_HIGH_SAMPLE_COUNT = 6;
 
-export interface RendererEluSample {
+/**
+ * A view's long-animation-frame blocking over one sample window. Not event-loop
+ * utilisation: only the part of each frame past 50ms counts, so the ratio is a
+ * floor on how busy the view was and the longest frame says more about a stall.
+ */
+export interface RendererLoafSample {
   /** Total LoAF blockingDuration accumulated by the preload over the window, in ms. */
   blockingDurationMs: number;
   /** Wall-clock width of the sample window the preload measured against, in ms. */
   sampleWindowMs: number;
-  /** Derived ratio = blockingDurationMs / sampleWindowMs, clamped to [0, 1]. */
-  ratio: number;
+  /** blockingDurationMs / sampleWindowMs, clamped to [0, 1]. */
+  blockedRatio: number;
+  /** Longest single animation frame in the window; absent from renderers that predate it. */
+  longestFrameMs?: number;
+  /** Largest single-frame blockingDuration in the window. */
+  longestBlockingMs?: number;
   /** Wall-clock time the sample was recorded. */
   timestamp: number;
 }
 
-const eluSamples = new Map<number, RendererEluSample>();
+export interface RendererInputBlockingRecord {
+  snapshot: RendererInputBlockingSnapshot;
+  /** Main's wall clock when the view reported it. */
+  capturedAt: number;
+}
+
+export interface RendererLoafReport {
+  blockingDurationMs: number;
+  sampleWindowMs: number;
+  longestFrameMs?: number;
+  longestBlockingMs?: number;
+  inputBlocking?: RendererInputBlockingSnapshot;
+}
+
+const eluSamples = new Map<number, RendererLoafSample>();
 const eluHighStreak = new Map<number, number>();
+const inputBlockingRecords = new Map<number, RendererInputBlockingRecord>();
+const unresponsiveSince = new Map<number, number>();
+
+/**
+ * The snapshot fields that can each stop a click on their own. A modal or
+ * overlay claim being open is normal; it is listed so a stuck one shows up.
+ */
+function listInputBlockers(snapshot: RendererInputBlockingSnapshot): string[] {
+  const blockers: string[] = [];
+  if (snapshot.bodyPointerEvents === "none") blockers.push("body-pointer-events-none");
+  if (snapshot.rootInert) blockers.push("root-inert");
+  if (snapshot.inertCount > 0) blockers.push("inert-elements");
+  if (snapshot.modalCount > 0) blockers.push("modal");
+  if (snapshot.overlayClaims > 0) blockers.push("overlay-claim");
+  if (snapshot.dragging) blockers.push("dragging");
+  return blockers;
+}
+
+// The log is the only copy that outlives a restart, so each change in what
+// could be blocking clicks is written once, when the sample shows it.
+function recordInputBlocking(
+  webContentsId: number,
+  snapshot: RendererInputBlockingSnapshot,
+  now: number
+): void {
+  const previous = inputBlockingRecords.get(webContentsId);
+  inputBlockingRecords.set(webContentsId, { snapshot, capturedAt: now });
+  const blockers = listInputBlockers(snapshot);
+  const previousBlockers = previous ? listInputBlockers(previous.snapshot) : [];
+  if (blockers.join(",") === previousBlockers.join(",")) return;
+  logInfo("renderer-input-blockers-changed", {
+    webContentsId,
+    blockers,
+    bodyPointerEvents: snapshot.bodyPointerEvents,
+    inertCount: snapshot.inertCount,
+    modalCount: snapshot.modalCount,
+    overlayClaims: snapshot.overlayClaims,
+    centerHit: snapshot.centerHit,
+  });
+}
 
 /**
  * Called by the IPC handler when a renderer reports its accumulated long-
@@ -318,25 +383,27 @@ const eluHighStreak = new Map<number, number>();
  * continues incrementing past the threshold, but only the boundary crossing
  * is logged to avoid flooding.
  */
-export function recordEluSample(
-  webContentsId: number,
-  payload: { blockingDurationMs: number; sampleWindowMs: number }
-): void {
+export function recordEluSample(webContentsId: number, payload: RendererLoafReport): void {
   const { blockingDurationMs, sampleWindowMs } = payload;
   if (sampleWindowMs <= 0) return;
   const rawRatio = blockingDurationMs / sampleWindowMs;
   const ratio = rawRatio < 0 ? 0 : rawRatio > 1 ? 1 : rawRatio;
-  const stored: RendererEluSample = {
+  const now = Date.now();
+  const stored: RendererLoafSample = {
     blockingDurationMs,
     sampleWindowMs,
-    ratio,
-    timestamp: Date.now(),
+    blockedRatio: ratio,
+    timestamp: now,
   };
+  if (payload.longestFrameMs !== undefined) stored.longestFrameMs = payload.longestFrameMs;
+  if (payload.longestBlockingMs !== undefined) stored.longestBlockingMs = payload.longestBlockingMs;
   eluSamples.set(webContentsId, stored);
+  if (payload.inputBlocking) recordInputBlocking(webContentsId, payload.inputBlocking, now);
   logDebug("renderer-elu-sample", {
     webContentsId,
-    ratio: Math.round(ratio * 100) / 100,
+    blockedRatio: Math.round(ratio * 100) / 100,
     blockingDurationMs: Math.round(blockingDurationMs),
+    longestFrameMs: stored.longestFrameMs,
     sampleWindowMs,
   });
 
@@ -346,7 +413,7 @@ export function recordEluSample(
     if (next === RENDERER_ELU_HIGH_SAMPLE_COUNT) {
       logWarn("renderer-elu-sustained-high", {
         webContentsId,
-        ratio: Math.round(ratio * 100) / 100,
+        blockedRatio: Math.round(ratio * 100) / 100,
         consecutiveSamples: next,
         windowMs: sampleWindowMs * next,
       });
@@ -356,10 +423,43 @@ export function recordEluSample(
   }
 }
 
-/** Drop a renderer's last ELU sample and streak (call from view eviction). */
+/** Drop a renderer's last LoAF sample, streak and input state (call from view eviction). */
 export function forgetEluSample(webContentsId: number): void {
   eluSamples.delete(webContentsId);
   eluHighStreak.delete(webContentsId);
+  inputBlockingRecords.delete(webContentsId);
+  unresponsiveSince.delete(webContentsId);
+}
+
+/**
+ * Chromium's hang monitor fired for a project view: its renderer stopped
+ * handling input. Logged because a stalled renderer and a click-blocking
+ * overlay look the same to the person using it.
+ */
+export function noteRendererUnresponsive(webContentsId: number, projectId?: string): void {
+  if (unresponsiveSince.has(webContentsId)) return;
+  unresponsiveSince.set(webContentsId, Date.now());
+  logWarn("renderer-unresponsive", { webContentsId, projectId });
+}
+
+/**
+ * The renderer died: its hang ended without a recovery to log, and its input
+ * snapshot describes a document that no longer exists.
+ */
+export function forgetRendererDocumentState(webContentsId: number): void {
+  unresponsiveSince.delete(webContentsId);
+  inputBlockingRecords.delete(webContentsId);
+}
+
+export function noteRendererResponsive(webContentsId: number, projectId?: string): void {
+  const since = unresponsiveSince.get(webContentsId);
+  if (since === undefined) return;
+  unresponsiveSince.delete(webContentsId);
+  logInfo("renderer-responsive", {
+    webContentsId,
+    projectId,
+    unresponsiveForMs: Math.max(0, Date.now() - since),
+  });
 }
 
 /**
@@ -389,8 +489,18 @@ export function hasSustainedRendererSaturation(now = Date.now()): boolean {
 }
 
 /** Read-only view for diagnostics / tests. */
-export function getEluSamples(): ReadonlyMap<number, RendererEluSample> {
+export function getEluSamples(): ReadonlyMap<number, RendererLoafSample> {
   return eluSamples;
+}
+
+/** Read-only view for diagnostics / tests. */
+export function getInputBlockingRecords(): ReadonlyMap<number, RendererInputBlockingRecord> {
+  return inputBlockingRecords;
+}
+
+/** When each currently-unresponsive view's hang began, for diagnostics / tests. */
+export function getUnresponsiveSince(): ReadonlyMap<number, number> {
+  return unresponsiveSince;
 }
 
 /** Read-only view of per-view consecutive saturated-sample counts (tests). */
@@ -459,14 +569,6 @@ export interface MemoryPressureActions {
    * not measured and it never gates escalation.
    */
   releaseRendererMemory?: () => void;
-}
-
-// workingSetSize is the only memory field Electron guarantees on all three
-// platforms: privateBytes is Windows-only and reported as 0 (not undefined)
-// on macOS/Linux, which silently defeated the previous `privateBytes ??
-// workingSetSize` fallback.
-function getProcessMemoryMb(proc: Electron.ProcessMetric): number {
-  return proc.memory.workingSetSize / 1024;
 }
 
 /**
@@ -718,6 +820,7 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
               type: proc.type,
               mb: Math.round(mb),
               thresholdMb: Math.round(threshold),
+              source: getMetricsMemorySource(metrics),
             });
           }
         } else if (threshold !== undefined) {
@@ -808,9 +911,12 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
           state.bucketMin = Infinity;
         }
 
+        // Resident, not footprint: this hunts JS heap growth, and a footprint
+        // inflated by swap would write a heap snapshot every cooldown at
+        // exactly the moment the machine can least afford one.
         if (
           proc.type === "Browser" &&
-          mb > SNAPSHOT_THRESHOLD_MB &&
+          proc.memory.workingSetSize / 1024 > SNAPSHOT_THRESHOLD_MB &&
           !app.isPackaged &&
           !getIsE2EMode()
         ) {
@@ -838,7 +944,7 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
         }
       }
 
-      // Aggregate working-set check: fans-out of small processes can collectively
+      // Aggregate memory check: fans-out of small processes can collectively
       // exceed a safe footprint without any single one tripping its per-type
       // threshold. Feeds the same hasPressure signal so the existing tiered
       // mitigation pipeline handles the response — no separate log emission to

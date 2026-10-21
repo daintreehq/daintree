@@ -566,3 +566,60 @@ export function buildCanopyInbox(
   });
   return items;
 }
+
+/** The words of a search, each to be found somewhere on a run, ignoring case. */
+export function searchTerms(query: string): string[] {
+  return [
+    ...new Set(
+      query
+        .toLowerCase()
+        .split(/\s+/)
+        .filter((term) => term !== "")
+    ),
+  ];
+}
+
+/**
+ * Everything the panel can match a run on without its terminal: the names it
+ * goes by (project, title, worktree, agent) and the words written about it —
+ * the readers' and the screen's own at a glance — lowercased as one text.
+ */
+export function itemSearchText(item: CanopyItem): string {
+  const { row, card, glance } = item;
+  const run = row.run;
+  return [
+    item.workspace.name,
+    itemSubject(item),
+    row.title,
+    run.title,
+    run.lastObservedTitle,
+    row.worktreeLabel,
+    row.chrome.label,
+    card?.task,
+    card?.headline,
+    card?.summary,
+    card?.question,
+    card?.statusLine,
+    card?.activity,
+    card?.action,
+    card?.riskReason,
+    glance?.recap,
+    glance?.said,
+    glance?.doing,
+    glance?.action,
+  ]
+    .filter((text): text is string => typeof text === "string" && text !== "")
+    .join("\n")
+    .toLowerCase();
+}
+
+/**
+ * The words of a search a run's names and words don't hold: what is left for
+ * its terminal to answer. Each is matched as written, never by scattered
+ * letters, which across a paragraph would find a little of anything.
+ */
+export function unmatchedTerms(item: CanopyItem, terms: readonly string[]): string[] {
+  if (terms.length === 0) return [];
+  const text = itemSearchText(item);
+  return terms.filter((term) => !text.includes(term));
+}

@@ -1656,3 +1656,35 @@ describe("createWorktreeStore — topologyWatcherDark (#9908)", () => {
     expect(store.getState()).toBe(before);
   });
 });
+
+describe("createWorktreeStore — attachment-only updates", () => {
+  it("adopts an update that changes nothing but the worktree's attachments", () => {
+    const store = createWorktreeStore();
+    store.getState().applySnapshot([makeSnapshot("wt-1")], nextV());
+    const before = store.getState().worktrees;
+
+    const attachments = [
+      {
+        name: "tunnel",
+        heldHere: true,
+        holderWorktreeId: "wt-1",
+        hasStatusCommand: false,
+        lastResult: {
+          action: "attach" as const,
+          worktreeId: "wt-1",
+          state: "success" as const,
+          at: 1,
+        },
+      },
+    ];
+    store.getState().applyUpdate(makeSnapshot("wt-1", { attachments }), nextV());
+    expect(store.getState().worktrees).not.toBe(before);
+    expect(store.getState().worktrees.get("wt-1")?.attachments).toEqual(attachments);
+
+    const settled = store.getState().worktrees;
+    store
+      .getState()
+      .applyUpdate(makeSnapshot("wt-1", { attachments: structuredClone(attachments) }), nextV());
+    expect(store.getState().worktrees).toBe(settled);
+  });
+});

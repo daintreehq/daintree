@@ -4,6 +4,7 @@ import { isAbsolute, join as pathJoin } from "path";
 import { logWarn } from "./logger.js";
 import { Cache } from "./cache.js";
 import { resolveExecutableForSpawn } from "./windowsExecutable.js";
+import { getSanitizedProcessEnv } from "./gitEnv.js";
 
 // worktreePath → gitDir/commonDir is immutable for a live worktree and all
 // removal/switch paths invalidate explicitly via clearGitDirCache /
@@ -161,7 +162,7 @@ async function execGit(args: string[], cwd: string, timeout: number): Promise<st
         // "not a repository" from every other fatal, and a translated message
         // would silently fall through to the transient branch. Output is a
         // filesystem path either way, so the locale can't affect what we parse.
-        env: { ...process.env, LC_ALL: "C", LANG: "C" },
+        env: { ...getSanitizedProcessEnv(), LC_ALL: "C", LANG: "C" },
       },
       (error, stdout, stderr) => {
         if (error) {
@@ -175,15 +176,6 @@ async function execGit(args: string[], cwd: string, timeout: number): Promise<st
 }
 
 /**
- * `GIT_DIR` / `GIT_COMMON_DIR` inherited by the app relocate the repository for
- * every git it spawns, which reading the `.git` entry or refs directly cannot
- * see. Filesystem fast paths stand down while either is set.
- */
-export function hasGitLocationEnvOverride(): boolean {
-  return Boolean(process.env.GIT_DIR || process.env.GIT_COMMON_DIR);
-}
-
-/**
  * Resolve the git dir for `worktreePath` from the `.git` entry alone — a
  * directory (regular repo) or a `gitdir: <path>` pointer file (linked
  * worktree / submodule) — without a subprocess. Both shapes are sanity-checked
@@ -194,7 +186,6 @@ export function hasGitLocationEnvOverride(): boolean {
  * caller MUST fall back to `git rev-parse`, never treat null as "not a repo".
  */
 export async function resolveGitDirFromFs(worktreePath: string): Promise<string | null> {
-  if (hasGitLocationEnvOverride()) return null;
   const dotGit = pathJoin(worktreePath, ".git");
   try {
     const stat = await fsPromises.stat(dotGit);

@@ -49,23 +49,27 @@ vi.mock("@/hooks/useRepositoryStats", () => ({
   }),
 }));
 
-vi.mock("@/hooks/useResolvedForgeProvider", () => ({
-  useResolvedForgeProvider: () => ({
-    entry: {
-      pluginId: "daintree.github",
-      contribution: {
-        id: "github",
-        name: "GitHub",
-        matches: ["github.com"],
-        slots: { statsDropdown: "github.statsDropdown" },
-      },
+vi.mock("@/hooks/useResolvedForgeProvider", () => {
+  const entry = {
+    pluginId: "daintree.github",
+    contribution: {
+      id: "github",
+      name: "GitHub",
+      matches: ["github.com"],
+      slots: { statsDropdown: "github.statsDropdown" },
     },
-    providerId: "daintree.github.github",
-    resolvedVia: "hostname",
-    loading: false,
-    refresh: () => {},
-  }),
-}));
+  };
+  return {
+    useResolvedForgeProvider: () => ({
+      entry,
+      providerId: "daintree.github.github",
+      resolvedVia: "hostname",
+      issues: { entry, providerId: "daintree.github.github", resolvedVia: "code" },
+      loading: false,
+      refresh: () => {},
+    }),
+  };
+});
 
 // The provider must resolve a dropdown view: hover prefetch is gated on a
 // consumer existing for the warmed list (a slotless provider routes clicks to

@@ -33,6 +33,31 @@ export function useOverlayClaim(id: string, active: boolean): void {
 }
 
 /**
+ * Mirror the open claim count onto `<html data-overlay-claims>`. Claims live
+ * only in this store, out of reach of the preload's diagnostics snapshot, and
+ * a claim left open is one of the ways a view stops taking clicks. Subscribes
+ * outside React so a claim change never re-renders the app root.
+ */
+export function useOverlayClaimCountMarker(): void {
+  useEffect(() => {
+    const root = document.documentElement;
+    let written = 0;
+    const apply = (count: number) => {
+      if (count === written) return;
+      written = count;
+      if (count > 0) root.dataset.overlayClaims = String(count);
+      else delete root.dataset.overlayClaims;
+    };
+    apply(useUIStore.getState().overlayStack.length);
+    const unsubscribe = useUIStore.subscribe((state) => apply(state.overlayStack.length));
+    return () => {
+      unsubscribe();
+      delete root.dataset.overlayClaims;
+    };
+  }, []);
+}
+
+/**
  * Backwards-compatible wrapper for callers that do not have a natural stable
  * ID (for example, generic dialog base components that may be rendered
  * multiple times). Each instance gets its own `useId()` so claims from two

@@ -447,6 +447,55 @@ export type AgentResume =
     };
 
 /**
+ * The plain-data form of {@link AgentResume} a plugin manifest declares (#13687).
+ * A `session-id` template carries the literal `{sessionId}` placeholder in one
+ * of its args. Kept as data on {@link AgentConfig.resumeTemplate} because the
+ * plugin agent snapshot is structured-cloned into the renderer, pty-host and
+ * analysis worker, and a function would not survive the copy;
+ * {@link getEffectiveRegistry} expands it into `resume` in each process.
+ */
+export type AgentResumeTemplate =
+  | {
+      kind: "session-id";
+      args: string[];
+      sessionIdPattern?: string;
+      quitCommand?: string;
+      resumeLatestArgs?: string[];
+    }
+  | {
+      kind: "project-scoped";
+      args: string[];
+      quitCommand?: string;
+    };
+
+const SESSION_ID_PLACEHOLDER = "{sessionId}";
+
+function expandResumeTemplate(template: AgentResumeTemplate): AgentResume {
+  const args = [...template.args];
+  if (template.kind === "project-scoped") {
+    return {
+      kind: "project-scoped",
+      args: () => [...args],
+      ...(template.quitCommand ? { quitCommand: template.quitCommand } : {}),
+    };
+  }
+  const resumeLatestArgs = template.resumeLatestArgs ? [...template.resumeLatestArgs] : undefined;
+  return {
+    kind: "session-id",
+    // A replacer function, so `$&` or `$1` inside a captured id is inserted
+    // literally instead of being read as a replacement pattern.
+    args: (sessionId) => args.map((arg) => arg.replace(SESSION_ID_PLACEHOLDER, () => sessionId)),
+    ...(template.sessionIdPattern ? { sessionIdPattern: template.sessionIdPattern } : {}),
+    ...(resumeLatestArgs ? { resumeLatestArgs } : {}),
+    // The type wants a quit command on every non-escalating `session-id`
+    // resume. An empty one is the "nothing to send" case graceful shutdown
+    // already treats as `no-quit-signal`, so an agent without one skips the
+    // teardown scrape and still resumes by a known id or `resumeLatestArgs`.
+    quitCommand: template.quitCommand ?? "",
+  };
+}
+
+/**
  * How an agent's conversation history fares when its project folder is moved or
  * renamed (#11282, phase 5). Surfaced in the relocation preview so the user is
  * warned BEFORE a move when a conversation can't be resumed at the new path.
@@ -797,6 +846,12 @@ export interface AgentConfig {
    */
   resume?: AgentResume;
   /**
+   * A plugin agent's declared resume, as data (#13687). Never read directly:
+   * {@link getEffectiveRegistry} turns it into {@link resume} for the effective
+   * config, leaving the cloneable snapshot untouched.
+   */
+  resumeTemplate?: AgentResumeTemplate;
+  /**
    * How this agent's conversation history fares across a project-folder move
    * (#11282, phase 5). Read live by the relocation preview via
    * {@link resolveAgentContinuity}; unset ⇒ `unverified`, so an unclassified
@@ -997,6 +1052,26 @@ export function invalidateEffectiveRegistryCache(): void {
   cachedEffectiveRegistry = null;
 }
 
+/**
+ * Plugin entries with a declared {@link AgentConfig.resumeTemplate}, copied with
+ * the function-shaped `resume` every consumer reads. Runs once per snapshot in
+ * whichever process builds its effective registry, so the snapshot itself —
+ * the object that crosses process boundaries — stays plain data.
+ */
+function withExpandedResumeTemplates(
+  snapshot: Record<string, AgentConfig>
+): Record<string, AgentConfig> {
+  const entries = Object.entries(snapshot);
+  if (!entries.some(([, config]) => config.resumeTemplate)) return snapshot;
+  return Object.fromEntries(
+    entries.map(([id, config]) =>
+      config.resumeTemplate
+        ? [id, Object.freeze({ ...config, resume: expandResumeTemplate(config.resumeTemplate) })]
+        : [id, config]
+    )
+  );
+}
+
 export function getEffectiveRegistry(): Record<string, AgentConfig> {
   // Memoized: invalidated by `setUserRegistry` and whenever the plugin snapshot
   // reference changes (it is replaced wholesale on every plugin mutation).
@@ -1006,7 +1081,11 @@ export function getEffectiveRegistry(): Record<string, AgentConfig> {
     // Merge order is priority order (later spreads win): plugin agents are the
     // lowest tier (additive, never shadowing), user-registry overlays them, and
     // built-ins always win last so a plugin or user can never patch a built-in.
-    cachedEffectiveRegistry = { ...pluginSnapshot, ...userRegistry, ...AGENT_REGISTRY };
+    cachedEffectiveRegistry = {
+      ...withExpandedResumeTemplates(pluginSnapshot),
+      ...userRegistry,
+      ...AGENT_REGISTRY,
+    };
     cachedPluginSnapshot = pluginSnapshot;
   }
   return cachedEffectiveRegistry;

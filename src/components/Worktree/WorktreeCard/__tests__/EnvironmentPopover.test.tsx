@@ -266,4 +266,30 @@ describe("EnvironmentPopover content", () => {
     expect(time?.textContent).toMatch(/ago|just now/);
     expect(time?.getAttribute("dateTime")).toBeTruthy();
   });
+
+  it("offers the endpoint in the dev preview and closes itself once asked", () => {
+    const onPreviewEndpoint = vi.fn();
+    renderPopover({ resourceEndpoint: "http://box.example.ts.net:5173", onPreviewEndpoint });
+    openPopover();
+
+    fireEvent.click(screen.getByRole("button", { name: "Preview endpoint" }));
+
+    expect(onPreviewEndpoint).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("offers no preview for an endpoint that isn't an http(s) URL, or with nowhere to open it", () => {
+    const { unmount } = renderPopover({
+      resourceEndpoint: "ssh://box.example.ts.net",
+      onPreviewEndpoint: vi.fn(),
+    });
+    openPopover();
+    expect(screen.queryByRole("button", { name: "Preview endpoint" })).toBeNull();
+    unmount();
+
+    renderPopover({ resourceEndpoint: "http://box.example.ts.net:5173" });
+    openPopover();
+    expect(screen.queryByRole("button", { name: "Preview endpoint" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Open endpoint in browser" })).toBeTruthy();
+  });
 });

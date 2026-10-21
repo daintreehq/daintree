@@ -9,6 +9,7 @@ const gitClientMock = vi.hoisted(() => ({
   raw: vi.fn(),
   getRemotes: vi.fn(),
   revparse: vi.fn(),
+  outputHandler: vi.fn(),
 }));
 
 const createHardenedGitMock = vi.hoisted(() => vi.fn());
@@ -105,6 +106,56 @@ describe("GitService", () => {
 
     expect(diff).not.toBe("BINARY_FILE");
     expect(diff).toContain("diff --git");
+  });
+
+  describe.skipIf(process.platform === "win32")("new symlinks", () => {
+    it.each(["untracked", "added"] as const)(
+      "diffs a %s symlink as its link target, not the target's contents",
+      async (status) => {
+        await fs.writeFile(path.join(tempDir, "a.txt"), "committed a\n", "utf8");
+        await fs.symlink("a.txt", path.join(tempDir, "link.txt"));
+
+        const service = new GitService(tempDir);
+        const diff = await service.getFileDiff("link.txt", status);
+
+        expect(diff).toBe(
+          "diff --git a/link.txt b/link.txt\nnew file mode 120000\n--- /dev/null\n+++ b/link.txt\n@@ -0,0 +1,1 @@\n+a.txt\n\\ No newline at end of file"
+        );
+      }
+    );
+
+    it("diffs a broken symlink", async () => {
+      await fs.symlink("missing/target.txt", path.join(tempDir, "dangling"));
+
+      const service = new GitService(tempDir);
+      const diff = await service.getFileDiff("dangling", "untracked");
+
+      expect(diff).toContain("new file mode 120000");
+      expect(diff).toContain("\n+missing/target.txt\n");
+    });
+
+    it("does not size or binary-check a symlink by its target", async () => {
+      const big = Buffer.alloc(2 * 1024 * 1024, 0);
+      await fs.writeFile(path.join(tempDir, "big.bin"), big);
+      await fs.symlink("big.bin", path.join(tempDir, "big-link"));
+
+      const service = new GitService(tempDir);
+      const diff = await service.getFileDiff("big-link", "added");
+
+      expect(diff).toContain("new file mode 120000");
+      expect(diff).toContain("\n+big.bin\n");
+    });
+
+    it("does not binary-check a symlink by a small binary target", async () => {
+      await fs.writeFile(path.join(tempDir, "blob.bin"), Buffer.from([0x00, 0xff, 0x00]));
+      await fs.symlink("blob.bin", path.join(tempDir, "blob-link"));
+
+      const service = new GitService(tempDir);
+      const diff = await service.getFileDiff("blob-link", "untracked");
+
+      expect(diff).toContain("new file mode 120000");
+      expect(diff).toContain("\n+blob.bin\n");
+    });
   });
 
   it("returns the diff for a tracked file whose added lines quote the binary marker", async () => {
@@ -337,7 +388,7 @@ index 1a2b3c4..5d6e7f8 100644
     });
 
     it("returns file list for two-dot range", async () => {
-      gitClientMock.raw.mockResolvedValue("M\tsrc/app.ts\nA\tsrc/new.ts\n");
+      gitClientMock.raw.mockResolvedValue("M\0src/app.ts\0A\0src/new.ts\0");
 
       const service = new GitService(tempDir);
       const result = await service.compareWorktrees("main", "feature/test");
@@ -612,7 +663,7 @@ index 1a2b3c4..5d6e7f8 100644
   });
 
   it("passes --no-ext-diff to git.raw for cross-worktree file list", async () => {
-    gitClientMock.raw.mockResolvedValue("M\tsrc/app.ts\n");
+    gitClientMock.raw.mockResolvedValue("M\0src/app.ts\0");
 
     const service = new GitService(tempDir);
     await service.compareWorktrees("main", "feature/test");
@@ -745,14 +796,17 @@ describe("GitService.readFileAtHead", () => {
     expect(result).toEqual({ ok: true, content: Buffer.from("image-data"), version: BLOB_OID });
   });
 
-  it("converts backslash separators to git's forward-slash path", async () => {
-    gitClientMock.raw.mockResolvedValue(lsTreeRecord("assets/logo.png"));
+  // A backslash is a separator only on Windows; on Unix it is a filename byte
+  // and must reach git unchanged (#13562).
+  it("converts backslash separators to git's forward-slash path only on Windows", async () => {
+    const treePath = process.platform === "win32" ? "assets/logo.png" : "assets\\logo.png";
+    gitClientMock.raw.mockResolvedValue(lsTreeRecord(treePath));
     binaryCatFileMock.mockResolvedValue(Buffer.from("data"));
     const service = new GitService(tempDir);
 
     await service.readFileAtHead("assets\\logo.png", 1024);
 
-    expect(gitClientMock.raw).toHaveBeenCalledWith(lsTreeArgs("assets/logo.png"));
+    expect(gitClientMock.raw).toHaveBeenCalledWith(lsTreeArgs(treePath));
   });
 
   it("maps a file missing at HEAD (empty listing) to NOT_FOUND", async () => {
@@ -982,7 +1036,8 @@ describe("GitService.readPreviousFileVersion", () => {
     expect(beforeRead).not.toHaveBeenCalled();
   });
 
-  it("converts backslash separators to git's forward-slash path", async () => {
+  it("converts backslash separators to git's forward-slash path only on Windows", async () => {
+    const treePath = process.platform === "win32" ? "assets/logo.png" : "assets\\logo.png";
     mockRevList(`${DELETING_SHA}\n${PREVIOUS_SHA}\n`);
     binaryCatFileMock.mockResolvedValue(Buffer.from("data"));
     const service = new GitService(tempDir);
@@ -996,7 +1051,7 @@ describe("GitService.readPreviousFileVersion", () => {
       "--end-of-options",
       "HEAD",
       "--",
-      "assets/logo.png",
+      treePath,
     ]);
   });
 

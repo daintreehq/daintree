@@ -428,4 +428,29 @@ describe("useWebviewDialog focus lifecycle", () => {
 
     expect(document.activeElement).toBe(elsewhere);
   });
+
+  // A DOM move of a <webview> (dock popover, grid reorder) destroys its guest and
+  // attaches a new one under the same element, firing dom-ready again while
+  // isWebviewReady stays true. Main gates Cmd+W, find and reload on the
+  // registration, so the replacement guest must be registered too (#13634).
+  it("re-registers the panel when a replacement guest fires dom-ready", () => {
+    let guestId = 2;
+    const element = Object.assign(document.createElement("div"), {
+      getWebContentsId: () => guestId,
+    }) as unknown as Electron.WebviewTag;
+
+    const { unmount } = renderHook(() => useWebviewDialog("panel-1", element, true, "dev-preview"));
+    expect(registerPanel).toHaveBeenLastCalledWith(2, "panel-1", "dev-preview");
+
+    guestId = 3;
+    act(() => {
+      element.dispatchEvent(new Event("dom-ready"));
+    });
+    expect(registerPanel).toHaveBeenLastCalledWith(3, "panel-1", "dev-preview");
+
+    unmount();
+    registerPanel.mockClear();
+    element.dispatchEvent(new Event("dom-ready"));
+    expect(registerPanel).not.toHaveBeenCalled();
+  });
 });

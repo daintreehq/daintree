@@ -20,10 +20,10 @@ export interface GitGetFileDiffPayload {
  * A byte-bounded window over a file's diff (#11531).
  *
  * An oversized diff is readable by walking `nextOffset` rather than being refused
- * outright. `FILE_TOO_LARGE` survives only as a source-size backstop, for a file
- * past `GIT_FILE_DIFF_MAX_SOURCE_BYTES` whose diff cannot be materialized at all;
- * it, `BINARY_FILE`, and `NO_CHANGES` arrive verbatim in `content`, each marked by
- * `totalBytes: 0`.
+ * outright. `FILE_TOO_LARGE` survives only as a memory backstop, for a file past
+ * `GIT_FILE_DIFF_MAX_SOURCE_BYTES` or a patch past `GIT_FILE_DIFF_MAX_PATCH_BYTES`
+ * whose diff cannot be materialized at all; it, `BINARY_FILE`, and `NO_CHANGES`
+ * arrive verbatim in `content`, each marked by `totalBytes: 0`.
  */
 export interface GitFileDiffResult {
   /** Diff text for this window, or a `BINARY_FILE` / `NO_CHANGES` / `FILE_TOO_LARGE` sentinel. */

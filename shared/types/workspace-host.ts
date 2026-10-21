@@ -22,6 +22,7 @@ import type {
   WorktreeLifecyclePhaseResult,
   WorktreeResourceStatus,
   WslGitEligibility,
+  WorktreeAttachment,
   WorktreeTeardownPreview,
 } from "./worktree.js";
 import type { SubmoduleDeleteRisk } from "./submodule.js";
@@ -249,6 +250,16 @@ export interface WorktreeSnapshot {
    */
   workingTreeChangedDirs?: readonly string[] | null;
 
+  /**
+   * Monotonic epoch ms of the last moment this worktree's set of paths may have
+   * changed — a create, delete or rename, an ignore-rule or index write, or a
+   * gap in watcher coverage closing. A burst of in-place content edits advances
+   * `workingTreeChangedAt` but not this, which is what lets the file-search
+   * index survive active editing (#13595). Uncertainty always counts as a
+   * change. Volatile like `workingTreeChangedAt`; absent until the first one.
+   */
+  pathMembershipChangedAt?: number;
+
   /** True when this worktree's repo is in an auth-failed fetch state. */
   fetchAuthFailed?: boolean;
 
@@ -305,6 +316,9 @@ export interface WorktreeSnapshot {
 
   /** Repository-supplied commands are waiting for approval (mirrors `Worktree.lifecycleCommandsNeedApproval`). */
   lifecycleCommandsNeedApproval?: boolean;
+
+  /** The project's attachments, as seen from this worktree (mirrors `Worktree.attachments`). */
+  attachments?: WorktreeAttachment[];
 
   /** Worktree environment mode ("local" or an environment key from resourceEnvironments) */
   worktreeMode?: string;
@@ -364,6 +378,7 @@ export interface WorktreeTick {
   lastGitStatusCheckedAt?: number;
   workingTreeChangedAt?: number;
   workingTreeChangedDirs?: readonly string[] | null;
+  pathMembershipChangedAt?: number;
 }
 
 /** Monitor configuration for polling intervals */
@@ -828,7 +843,8 @@ export type WorkspaceHostEvent =
       settled: boolean;
       pending: WorkspaceHostDisposePending;
     }
-  | { type: "error"; error: string; requestId?: string }
+  // `fatal`: the host is about to exit because of this error.
+  | { type: "error"; error: string; requestId?: string; fatal?: boolean }
   // Project lifecycle responses
   | { type: "load-project-result"; requestId: string; success: boolean; error?: string }
   | { type: "sync-result"; requestId: string; success: boolean; error?: string }

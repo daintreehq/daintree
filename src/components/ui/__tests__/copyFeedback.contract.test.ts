@@ -47,6 +47,7 @@ const DIRECT_WRITERS: Record<string, string> = {
   // A toast's own copy action, which confirms through its `successLabel`.
   "src/hooks/useMainProcessToastListener.ts": "toast action",
   "src/hooks/useErrors.ts": "toast action",
+  "src/components/Worktree/WorktreeCard/notifyAttachmentFailure.ts": "toast action",
   // Actions are the MCP surface too; the UI that dispatches them confirms.
   "src/services/actions/definitions/browserActions.ts": "action",
   "src/services/actions/definitions/gitActions.ts": "action",

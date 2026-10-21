@@ -17,13 +17,18 @@ vi.mock("../../utils/systemMemory.js", () => ({
 import { execFile } from "node:child_process";
 import { logInfo, logWarn } from "../../utils/logger.js";
 import { readElectronSwapUsage, type SwapUsage } from "../../utils/systemMemory.js";
-import type { SystemMemoryPressurePayload } from "../../../shared/types/ipc/system.js";
+import type {
+  SystemMemoryPressurePayload,
+  SystemMemoryWorkloads,
+} from "../../../shared/types/ipc/system.js";
 import {
+  checkKernelPressureCritical,
   createDefaultSystemMemoryPressureMonitor,
   createSystemMemoryPressureMonitor,
   EPISODE_CLEAR_SAMPLES,
   EPISODE_OPEN_SAMPLES,
   FSEVENTSD_RSS_THRESHOLD_MB,
+  KERNEL_PRESSURE_PROBE_CACHE_MS,
   parseDarwinSwapUsage,
   parseFseventsdRssMb,
   parseKernelPressureLevel,
@@ -32,12 +37,25 @@ import {
   SWAP_PRESSURE_CONFIRM_SAMPLES,
   SWAP_PRESSURE_MIN_USED_MB,
   SWAP_USED_PERCENT_THRESHOLD,
+  summarizeSystemMemoryWorkloads,
+  WORKLOADS_READ_TIMEOUT_MS,
 } from "../SystemMemoryPressureMonitor.js";
+import type { CompositeMemorySnapshot } from "../../../shared/types/memoryAccounting.js";
 import {
   isSwapPressureConfirmed,
   recordSwapPressure,
   SWAP_PRESSURE_STALE_MS,
 } from "../systemSwapPressure.js";
+import {
+  isKernelPressureCritical,
+  recordKernelPressureLevel,
+  resetKernelPressureForTesting,
+} from "../systemKernelPressure.js";
+import {
+  readWatchdogMemoryPressure,
+  recordWatchdogMemoryPressure,
+  WATCHDOG_PRESSURE_STALE_MS,
+} from "../watchdogMemoryPressure.js";
 
 const SWAP_TOTAL_MB = 4096;
 const swapAt = (percent: number): SwapUsage => ({
@@ -53,7 +71,10 @@ function sequence(readings: Array<SwapUsage | null>, rest: SwapUsage): () => Swa
   return () => (i < readings.length ? readings[i++]! : rest);
 }
 
-function systemHealthRecords(mock: typeof logWarn | typeof logInfo, state: "over" | "recovered") {
+function systemHealthRecords(
+  mock: typeof logWarn | typeof logInfo,
+  state: "over" | "recovered" | "escalated"
+) {
   return vi
     .mocked(mock)
     .mock.calls.filter(
@@ -143,6 +164,8 @@ describe("createSystemMemoryPressureMonitor", () => {
     fseventsdRssMb?: () => number | null;
     kernelPressureLevel?: () => KernelPressureLevel | null;
     onSwapPressure?: (confirmed: boolean) => void;
+    onWatchdogPressure?: (elevated: boolean | null, sampledAt: number) => void;
+    readWorkloads?: () => Promise<SystemMemoryWorkloads | null>;
   }) {
     const readSwap = vi.fn(async () => opts.swap());
     const readFseventsdRssMb = vi.fn(async () => (opts.fseventsdRssMb ?? (() => 100))());
@@ -157,6 +180,8 @@ describe("createSystemMemoryPressureMonitor", () => {
       readKernelPressureLevel,
       publish,
       onSwapPressure: opts.onSwapPressure,
+      onWatchdogPressure: opts.onWatchdogPressure,
+      readWorkloads: opts.readWorkloads,
       now: () => now,
       wallNow: () => now,
     });
@@ -168,6 +193,99 @@ describe("createSystemMemoryPressureMonitor", () => {
     };
     return { monitor, readSwap, readFseventsdRssMb, readKernelPressureLevel, tick };
   }
+
+  describe("pressure reading for the main-process watchdog (#13528)", () => {
+    const BIG_SWAP_TOTAL_MB = 20 * 1024;
+    const bigSwapAt = (percent: number): SwapUsage => ({
+      usedMb: (BIG_SWAP_TOTAL_MB * percent) / 100,
+      totalMb: BIG_SWAP_TOTAL_MB,
+    });
+
+    async function verdictFor(opts: {
+      isDarwin?: boolean;
+      swap: SwapUsage | null;
+      kernelPressureLevel?: KernelPressureLevel | null;
+      fseventsdRssMb?: number;
+    }) {
+      const onWatchdogPressure = vi.fn();
+      const { tick } = makeMonitor({
+        isDarwin: opts.isDarwin,
+        swap: () => opts.swap,
+        kernelPressureLevel: () =>
+          opts.kernelPressureLevel === undefined ? 1 : opts.kernelPressureLevel,
+        fseventsdRssMb: () => opts.fseventsdRssMb ?? 100,
+        onWatchdogPressure,
+      });
+      await tick();
+      expect(onWatchdogPressure).toHaveBeenCalledTimes(1);
+      return onWatchdogPressure.mock.calls[0]![0] as boolean | null;
+    }
+
+    it("reads one kernel warning as elevated, with no confirmation run", async () => {
+      expect(await verdictFor({ swap: HEALTHY_SWAP, kernelPressureLevel: 2 })).toBe(true);
+      expect(await verdictFor({ swap: HEALTHY_SWAP, kernelPressureLevel: 4 })).toBe(true);
+    });
+
+    it("needs heavy swap on Darwin, where a single small swapfile reads nearly full", async () => {
+      expect(FULL_SWAP.usedMb).toBeLessThan(SWAP_PRESSURE_MIN_USED_MB);
+      expect(await verdictFor({ swap: FULL_SWAP })).toBe(false);
+      expect(await verdictFor({ swap: bigSwapAt(91) })).toBe(true);
+      expect(await verdictFor({ swap: bigSwapAt(50) })).toBe(false);
+      expect(await verdictFor({ isDarwin: false, swap: FULL_SWAP })).toBe(true);
+      expect(await verdictFor({ isDarwin: false, swap: swapAt(SWAP_USED_PERCENT_THRESHOLD) })).toBe(
+        false
+      );
+    });
+
+    it("clears only once every reading that applies came back, and ignores fseventsd", async () => {
+      expect(await verdictFor({ swap: HEALTHY_SWAP })).toBe(false);
+      expect(await verdictFor({ swap: HEALTHY_SWAP, kernelPressureLevel: null })).toBeNull();
+      expect(await verdictFor({ swap: null })).toBeNull();
+      expect(await verdictFor({ swap: null, kernelPressureLevel: 4 })).toBe(true);
+      expect(await verdictFor({ swap: bigSwapAt(91), kernelPressureLevel: null })).toBe(true);
+      expect(await verdictFor({ isDarwin: false, swap: null })).toBeNull();
+      expect(
+        await verdictFor({ swap: HEALTHY_SWAP, fseventsdRssMb: FSEVENTSD_RSS_THRESHOLD_MB * 2 })
+      ).toBe(false);
+    });
+
+    it("stamps the reading with the time the sample started, not when its probes finished", async () => {
+      const onWatchdogPressure = vi.fn();
+      const { tick } = makeMonitor({
+        swap: () => {
+          now += 4_000;
+          return HEALTHY_SWAP;
+        },
+        kernelPressureLevel: () => 2,
+        onWatchdogPressure,
+      });
+      const startedAt = now;
+      await tick();
+      expect(onWatchdogPressure).toHaveBeenCalledWith(true, startedAt);
+    });
+
+    it("reports every sample of a running monitor, each stamped with its own start", async () => {
+      const onWatchdogPressure = vi.fn();
+      const levels: Array<KernelPressureLevel | null> = [1, 2, null, 1];
+      let sampled = 0;
+      const { tick } = makeMonitor({
+        swap: () => HEALTHY_SWAP,
+        kernelPressureLevel: () => levels[sampled++] ?? null,
+        onWatchdogPressure,
+      });
+      const startedAt: number[] = [];
+      for (let i = 0; i < levels.length; i++) {
+        startedAt.push(now);
+        await tick();
+      }
+      expect(onWatchdogPressure.mock.calls).toEqual([
+        [false, startedAt[0]],
+        [true, startedAt[1]],
+        [null, startedAt[2]],
+        [false, startedAt[3]],
+      ]);
+    });
+  });
 
   describe("kernel-plus-swap pressure for cached-view reclaim (#13223)", () => {
     const BIG_SWAP_TOTAL_MB = 20 * 1024;
@@ -362,6 +480,8 @@ describe("createSystemMemoryPressureMonitor", () => {
       swapKind: "swap",
       fseventsdRssMb: null,
       kernelPressureLevel: null,
+      escalated: false,
+      workloads: null,
     });
 
     const records = systemHealthRecords(logWarn, "over");
@@ -417,7 +537,179 @@ describe("createSystemMemoryPressureMonitor", () => {
     const records = systemHealthRecords(logWarn, "over");
     expect(records).toHaveLength(5);
     expect(records[4]![1]).toEqual(expect.objectContaining({ kernelPressureLevel: 4 }));
-    expect(publish).toHaveBeenCalledTimes(1);
+  });
+
+  describe("escalation within an open episode (#13529)", () => {
+    it("publishes again on each higher kernel level, never on the way back down", async () => {
+      let level: KernelPressureLevel = 2;
+      const { tick } = makeMonitor({ swap: () => HEALTHY_SWAP, kernelPressureLevel: () => level });
+
+      await tick(EPISODE_OPEN_SAMPLES);
+      expect(publish).toHaveBeenCalledTimes(1);
+      expect(publish).toHaveBeenLastCalledWith(
+        expect.objectContaining({ kernelPressureLevel: "warn", escalated: false })
+      );
+
+      level = 4;
+      await tick(1);
+      expect(publish).toHaveBeenCalledTimes(2);
+      expect(publish).toHaveBeenLastCalledWith(
+        expect.objectContaining({ kernelPressureLevel: "critical", escalated: true })
+      );
+      expect(systemHealthRecords(logWarn, "escalated")).toHaveLength(1);
+
+      level = 2;
+      await tick(3);
+      level = 4;
+      await tick(3);
+      expect(publish).toHaveBeenCalledTimes(2);
+    });
+
+    it("publishes again when a threshold is newly crossed, and only once for it", async () => {
+      let fseventsd = 100;
+      let swap = FULL_SWAP;
+      const { tick } = makeMonitor({ swap: () => swap, fseventsdRssMb: () => fseventsd });
+
+      await tick(EPISODE_OPEN_SAMPLES);
+      fseventsd = FSEVENTSD_RSS_THRESHOLD_MB + 1;
+      await tick(1);
+      expect(publish).toHaveBeenCalledTimes(2);
+      expect(publish).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          swapUsedPercent: 91,
+          fseventsdRssMb: FSEVENTSD_RSS_THRESHOLD_MB + 1,
+          escalated: true,
+        })
+      );
+
+      // Swap easing and returning is the same threshold, not a new one.
+      swap = HEALTHY_SWAP;
+      await tick(1);
+      swap = FULL_SWAP;
+      await tick(3);
+      expect(publish).toHaveBeenCalledTimes(2);
+    });
+
+    it("keeps the episode's worst in every publish, and alternating readings cannot re-arm it", async () => {
+      let level: KernelPressureLevel = 4;
+      let fseventsd = 100;
+      const { tick } = makeMonitor({
+        swap: () => HEALTHY_SWAP,
+        kernelPressureLevel: () => level,
+        fseventsdRssMb: () => fseventsd,
+      });
+
+      await tick(EPISODE_OPEN_SAMPLES);
+      for (let i = 0; i < 40; i++) {
+        const even = i % 2 === 0;
+        level = even ? 2 : 4;
+        fseventsd = even ? FSEVENTSD_RSS_THRESHOLD_MB + 1 : 100;
+        await tick(1);
+      }
+
+      expect(publish.mock.calls.map(([p]) => [p.kernelPressureLevel, p.fseventsdRssMb])).toEqual([
+        ["critical", null],
+        ["critical", FSEVENTSD_RSS_THRESHOLD_MB + 1],
+      ]);
+    });
+
+    it("keeps a published cause whose reading failed on the escalating sample", async () => {
+      let swap: SwapUsage | null = FULL_SWAP;
+      let level: KernelPressureLevel = 1;
+      const { tick } = makeMonitor({
+        swap: () => swap,
+        kernelPressureLevel: () => level,
+      });
+
+      await tick(EPISODE_OPEN_SAMPLES);
+      swap = null;
+      level = 4;
+      await tick(1);
+      swap = FULL_SWAP;
+      await tick(3);
+
+      expect(publish).toHaveBeenCalledTimes(2);
+      expect(publish).toHaveBeenLastCalledWith(
+        expect.objectContaining({ swapUsedPercent: 91, kernelPressureLevel: "critical" })
+      );
+    });
+
+    it("starts the next episode from nothing after a recovery", async () => {
+      let level: KernelPressureLevel = 4;
+      const { tick } = makeMonitor({ swap: () => HEALTHY_SWAP, kernelPressureLevel: () => level });
+
+      await tick(EPISODE_OPEN_SAMPLES);
+      level = 1;
+      await tick(EPISODE_CLEAR_SAMPLES);
+      level = 2;
+      await tick(EPISODE_OPEN_SAMPLES);
+      level = 4;
+      await tick(1);
+
+      expect(
+        publish.mock.calls.map(([p]) => [p.status, p.kernelPressureLevel, p.escalated])
+      ).toEqual([
+        ["degraded", "critical", false],
+        ["normal", null, false],
+        ["degraded", "warn", false],
+        ["degraded", "critical", true],
+      ]);
+    });
+
+    it("attaches the workloads to each degraded publish but never to recovery", async () => {
+      const workloads: SystemMemoryWorkloads = {
+        appMemoryMb: 1800,
+        projects: [{ projectId: "p1", projectName: "App", terminalCount: 4, memoryMb: 9000 }],
+      };
+      const readWorkloads = vi.fn(async () => workloads);
+      let level: KernelPressureLevel = 2;
+      const { tick } = makeMonitor({
+        swap: () => HEALTHY_SWAP,
+        kernelPressureLevel: () => level,
+        readWorkloads,
+      });
+
+      await tick(EPISODE_OPEN_SAMPLES + 2);
+      expect(readWorkloads).toHaveBeenCalledTimes(1);
+      level = 4;
+      await tick(1);
+      level = 1;
+      await tick(EPISODE_CLEAR_SAMPLES);
+
+      expect(readWorkloads).toHaveBeenCalledTimes(2);
+      expect(publish.mock.calls.map(([p]) => p.workloads)).toEqual([workloads, workloads, null]);
+    });
+
+    it("publishes without workloads when reading them fails or stalls", async () => {
+      vi.useFakeTimers();
+      try {
+        let read: () => Promise<SystemMemoryWorkloads | null> = () =>
+          Promise.reject(new Error("pty host gone"));
+        let level: KernelPressureLevel = 2;
+        const { monitor } = makeMonitor({
+          swap: () => HEALTHY_SWAP,
+          kernelPressureLevel: () => level,
+          readWorkloads: () => read(),
+        });
+        for (let i = 0; i < EPISODE_OPEN_SAMPLES; i++) {
+          await monitor.sample();
+          now += SAMPLE_INTERVAL_MS;
+        }
+        expect(publish).toHaveBeenLastCalledWith(expect.objectContaining({ workloads: null }));
+
+        read = () => new Promise(() => {});
+        level = 4;
+        const pending = monitor.sample();
+        await vi.advanceTimersByTimeAsync(WORKLOADS_READ_TIMEOUT_MS);
+        await pending;
+        expect(publish).toHaveBeenCalledTimes(2);
+        expect(publish).toHaveBeenLastCalledWith(
+          expect.objectContaining({ kernelPressureLevel: "critical", workloads: null })
+        );
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 
   it("does not re-log when a failed reading interrupts an elevated run", async () => {
@@ -504,6 +796,8 @@ describe("createSystemMemoryPressureMonitor", () => {
       swapKind: "swap",
       fseventsdRssMb: rssMb,
       kernelPressureLevel: null,
+      escalated: false,
+      workloads: null,
     });
   });
 
@@ -517,6 +811,8 @@ describe("createSystemMemoryPressureMonitor", () => {
       swapKind: "swap",
       fseventsdRssMb: null,
       kernelPressureLevel: "warn",
+      escalated: false,
+      workloads: null,
     });
   });
 
@@ -574,6 +870,8 @@ describe("createSystemMemoryPressureMonitor", () => {
       swapKind: "swap",
       fseventsdRssMb: null,
       kernelPressureLevel: null,
+      escalated: false,
+      workloads: null,
     });
     expect(systemHealthRecords(logInfo, "recovered")).toHaveLength(1);
   });
@@ -761,6 +1059,42 @@ describe("createDefaultSystemMemoryPressureMonitor", () => {
   afterEach(() => {
     setPlatform(originalPlatform);
     vi.restoreAllMocks();
+    recordWatchdogMemoryPressure(false);
+  });
+
+  it("feeds the watchdog's pressure reading from each Darwin sample's kernel level", async () => {
+    setPlatform("darwin");
+    const kernelLevels = ["2\n", null, "1\n"];
+    let kernelReads = 0;
+    vi.mocked(execFile).mockImplementation(((
+      file: string,
+      args: string[],
+      _opts: unknown,
+      cb: (err: Error | null, stdout: string) => void
+    ) => {
+      if (file === "/usr/sbin/sysctl" && args.includes("kern.memorystatus_vm_pressure_level")) {
+        const level = kernelLevels[kernelReads++];
+        if (level == null) cb(Object.assign(new Error("spawn EAGAIN"), { code: "EAGAIN" }), "");
+        else cb(null, level);
+        return;
+      }
+      cb(
+        null,
+        file !== "/usr/sbin/sysctl"
+          ? "  1024 launchd\n"
+          : "total = 2048.00M  used = 64.00M  free = 1984.00M  (encrypted)"
+      );
+    }) as unknown as typeof execFile);
+    const monitor = createDefaultSystemMemoryPressureMonitor(vi.fn());
+
+    const readings: Array<boolean | null> = [];
+    for (let i = 0; i < kernelLevels.length; i++) {
+      await monitor.sample();
+      readings.push(readWatchdogMemoryPressure());
+      clock += SAMPLE_INTERVAL_MS;
+    }
+    // A failed kernel read leaves the elevated reading standing.
+    expect(readings).toEqual([true, true, false]);
   });
 
   it("probes Darwin with sysctl and an rss-first ucomm ps, and publishes what they show", async () => {
@@ -802,6 +1136,8 @@ describe("createDefaultSystemMemoryPressureMonitor", () => {
       swapKind: "swap",
       fseventsdRssMb: 36 * 1024,
       kernelPressureLevel: "critical",
+      escalated: false,
+      workloads: null,
     });
   });
 
@@ -847,6 +1183,8 @@ describe("createDefaultSystemMemoryPressureMonitor", () => {
       swapKind: "commit",
       fseventsdRssMb: null,
       kernelPressureLevel: null,
+      escalated: false,
+      workloads: null,
     });
   });
 });
@@ -866,5 +1204,227 @@ describe("systemSwapPressure", () => {
     expect(isSwapPressureConfirmed(1_000 + SWAP_PRESSURE_STALE_MS + 1)).toBe(false);
     recordSwapPressure(false, 2_000);
     expect(isSwapPressureConfirmed(2_000)).toBe(false);
+  });
+});
+
+describe("kernel critical pressure for launch admission (#13530)", () => {
+  const originalPlatform = process.platform;
+  let clock: number;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resetKernelPressureForTesting();
+    clock = 1_000_000;
+  });
+
+  afterEach(() => {
+    Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
+    vi.restoreAllMocks();
+    resetKernelPressureForTesting();
+  });
+
+  it("hands every sample's kernel level to the monitor's caller, failed readings included", async () => {
+    const levels: Array<KernelPressureLevel | null> = [];
+    const readings: Array<KernelPressureLevel | null> = [4, null, 2];
+    let sampleIndex = 0;
+    let now = 0;
+    const monitor = createSystemMemoryPressureMonitor({
+      isDarwin: true,
+      swapKind: "swap",
+      readSwap: async () => HEALTHY_SWAP,
+      readFseventsdRssMb: async () => 100,
+      readKernelPressureLevel: async () => {
+        const level = readings[sampleIndex++];
+        return level === undefined ? 1 : level;
+      },
+      publish: vi.fn(),
+      onKernelPressureLevel: (level) => levels.push(level),
+      now: () => now,
+      wallNow: () => now,
+    });
+    for (let i = 0; i < 3; i++) {
+      await monitor.sample();
+      now += SAMPLE_INTERVAL_MS;
+    }
+    expect(levels).toEqual([4, null, 2]);
+  });
+
+  it("feeds the default monitor's sysctl reading into the latch", async () => {
+    Object.defineProperty(process, "platform", { configurable: true, value: "darwin" });
+    vi.spyOn(performance, "now").mockImplementation(() => clock);
+    vi.mocked(execFile).mockImplementation(((
+      file: string,
+      args: string[],
+      _opts: unknown,
+      cb: (err: Error | null, stdout: string) => void
+    ) => {
+      cb(
+        null,
+        file !== "/usr/sbin/sysctl"
+          ? "  1024 launchd\n"
+          : args.includes("vm.swapusage")
+            ? "total = 2048.00M  used = 64.00M  free = 1984.00M  (encrypted)"
+            : "4\n"
+      );
+    }) as unknown as typeof execFile);
+
+    await createDefaultSystemMemoryPressureMonitor(vi.fn()).sample();
+
+    expect(isKernelPressureCritical()).toBe(true);
+  });
+
+  it("is false off Darwin without probing", async () => {
+    const readLevel = vi.fn(async (): Promise<KernelPressureLevel | null> => 4);
+    await expect(
+      checkKernelPressureCritical({ readLevel, isDarwin: false, now: () => clock })
+    ).resolves.toBe(false);
+    expect(readLevel).not.toHaveBeenCalled();
+  });
+
+  it("probes live and answers a burst from one reading", async () => {
+    const readLevel = vi.fn(async (): Promise<KernelPressureLevel | null> => 4);
+    const probe = { readLevel, isDarwin: true, now: () => clock };
+
+    const burst = await Promise.all([
+      checkKernelPressureCritical(probe),
+      checkKernelPressureCritical(probe),
+    ]);
+    clock += KERNEL_PRESSURE_PROBE_CACHE_MS - 1;
+    const cached = await checkKernelPressureCritical(probe);
+
+    expect([...burst, cached]).toEqual([true, true, true]);
+    expect(readLevel).toHaveBeenCalledTimes(1);
+  });
+
+  it("reads again once the last reading is older than the cache, and clears with the latch", async () => {
+    const levels: KernelPressureLevel[] = [4, 1, 1];
+    const readLevel = vi.fn(async (): Promise<KernelPressureLevel | null> => levels.shift() ?? 1);
+    const probe = { readLevel, isDarwin: true, now: () => clock };
+
+    const verdicts: boolean[] = [];
+    for (let i = 0; i < 3; i++) {
+      verdicts.push(await checkKernelPressureCritical(probe));
+      clock += KERNEL_PRESSURE_PROBE_CACHE_MS;
+    }
+
+    expect(verdicts).toEqual([true, true, false]);
+    expect(readLevel).toHaveBeenCalledTimes(3);
+  });
+
+  it("keeps the verdict it had when a probe fails, and never rejects", async () => {
+    recordKernelPressureLevel(4, clock);
+    clock += KERNEL_PRESSURE_PROBE_CACHE_MS;
+    const readLevel = vi.fn(async (): Promise<KernelPressureLevel | null> => {
+      throw new Error("spawn failed");
+    });
+
+    await expect(
+      checkKernelPressureCritical({ readLevel, isDarwin: true, now: () => clock })
+    ).resolves.toBe(true);
+  });
+});
+
+describe("watchdogMemoryPressure", () => {
+  afterEach(() => recordWatchdogMemoryPressure(false));
+
+  it("holds a reading until it goes stale, then has none; an undecided sample neither replaces nor refreshes it", () => {
+    recordWatchdogMemoryPressure(true, 1_000);
+    recordWatchdogMemoryPressure(null, 50_000);
+    expect(readWatchdogMemoryPressure(1_000 + WATCHDOG_PRESSURE_STALE_MS)).toBe(true);
+    expect(readWatchdogMemoryPressure(1_000 + WATCHDOG_PRESSURE_STALE_MS + 1)).toBeNull();
+    // Once dropped it stays dropped, whatever clock reads it next.
+    expect(readWatchdogMemoryPressure(1_000)).toBeNull();
+  });
+
+  it("reports a clear sample as clear, and has no reading once the clock steps back past one", () => {
+    recordWatchdogMemoryPressure(true, 20_000);
+    recordWatchdogMemoryPressure(false, 21_000);
+    expect(readWatchdogMemoryPressure(21_000)).toBe(false);
+
+    recordWatchdogMemoryPressure(true, 30_000);
+    expect(readWatchdogMemoryPressure(29_999)).toBeNull();
+    expect(readWatchdogMemoryPressure(30_000)).toBeNull();
+  });
+});
+
+describe("summarizeSystemMemoryWorkloads", () => {
+  function snapshot(overrides: {
+    electronAvailable?: boolean;
+    terminalsAvailable?: boolean;
+    stale?: boolean;
+    byProject?: Array<{ projectId: string | null; memoryMb: number; terminalCount?: number }>;
+  }): CompositeMemorySnapshot {
+    return {
+      timestamp: 0,
+      electron: {
+        available: overrides.electronAvailable ?? true,
+        totalWorkingSetMb: 1500,
+        memorySource: "footprint",
+        processCount: 6,
+        sampledAt: 0,
+      },
+      terminalWorkloads: {
+        available: overrides.terminalsAvailable ?? true,
+        stale: overrides.stale ?? false,
+        ageMs: 0,
+        sampledAt: 0,
+        totalMemoryMb: 0,
+        memorySource: "footprint",
+        processCount: 0,
+        terminalCount: 0,
+        byProject: (overrides.byProject ?? []).map((p) => ({
+          projectId: p.projectId,
+          terminalCount: p.terminalCount ?? 1,
+          processCount: 1,
+          memoryMb: p.memoryMb,
+          topProcesses: [],
+        })),
+      },
+    };
+  }
+  const names: Record<string, string> = { a: "Alpha", b: "Beta", c: "Gamma", d: "Delta" };
+  const resolve = (id: string) => names[id] ?? null;
+
+  it("keeps the heaviest projects, heaviest first, with their names", () => {
+    const result = summarizeSystemMemoryWorkloads(
+      snapshot({
+        byProject: [
+          { projectId: "a", memoryMb: 100 },
+          { projectId: "b", memoryMb: 9000, terminalCount: 5 },
+          { projectId: null, memoryMb: 400 },
+          { projectId: "c", memoryMb: 0 },
+          { projectId: "d", memoryMb: 2500 },
+          { projectId: "gone", memoryMb: 50 },
+        ],
+      }),
+      resolve
+    );
+    expect(result).toEqual({
+      appMemoryMb: 1500,
+      projects: [
+        { projectId: "b", projectName: "Beta", terminalCount: 5, memoryMb: 9000 },
+        { projectId: "d", projectName: "Delta", terminalCount: 1, memoryMb: 2500 },
+        { projectId: null, projectName: null, terminalCount: 1, memoryMb: 400 },
+      ],
+    });
+  });
+
+  it("leaves out a slice that failed or went stale rather than reporting zero", () => {
+    const projects = [{ projectId: "a", memoryMb: 100 }];
+    expect(
+      summarizeSystemMemoryWorkloads(
+        snapshot({ terminalsAvailable: false, byProject: projects }),
+        resolve
+      )
+    ).toEqual({ appMemoryMb: 1500, projects: [] });
+    expect(
+      summarizeSystemMemoryWorkloads(snapshot({ stale: true, byProject: projects }), resolve)
+    ).toEqual({ appMemoryMb: 1500, projects: [] });
+    expect(
+      summarizeSystemMemoryWorkloads(
+        snapshot({ electronAvailable: false, terminalsAvailable: false }),
+        resolve
+      )
+    ).toBeNull();
   });
 });

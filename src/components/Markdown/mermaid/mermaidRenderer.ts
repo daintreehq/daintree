@@ -21,9 +21,11 @@ export type MermaidRenderResult =
   /**
    * `transient` marks an outcome that says nothing about the diagram — the
    * theme moved under a queued job, nobody wanted it any more, or the chunk
-   * would not load — so it is neither cached nor shown.
+   * would not load — so it is neither cached nor shown. `undisplayable` marks
+   * source that parsed but whose drawing failed or did not survive
+   * sanitizing, which the author can't fix by correcting the syntax.
    */
-  | { ok: false; transient?: true };
+  | { ok: false; transient?: true; undisplayable?: true };
 
 export interface MermaidRenderRequest {
   result: Promise<MermaidRenderResult>;
@@ -79,18 +81,26 @@ const SECURE_KEYS = [
  * escapes, YAML line continuation). Mermaid's own `#nn;` entities are decoded
  * only in the finished SVG, after layout, so they can't assemble a URL in time.
  */
-const RESOURCE_SYNTAX = [
-  /[a-z][\w+.-]*:\/\//i,
-  /\/\/\S/,
-  /\\/,
+const RESOURCE_SYNTAX: ReadonlyArray<readonly [RegExp, MermaidRefusal]> = [
+  [/[a-z][\w+.-]*:\/\//i, "url"],
+  [/\/\/\S/, "url"],
+  [/\\/, "escape"],
   // Any tag but a line break. `<<interface>>` is Mermaid's stereotype syntax.
-  /(?<!<)<(?!<)\s*(?!br\s*\/?\s*>)[a-z!?/]/i,
-  /url\s*\(|image-set|@import/i,
-  /\bimg['"]?\s*:/i,
+  [/(?<!<)<(?!<)\s*(?!br\s*\/?\s*>)[a-z!?/]/i, "html"],
+  [/url\s*\(|image-set|@import/i, "css"],
+  [/\bimg['"]?\s*:/i, "url"],
 ];
 
-function requestsExternalResources(source: string): boolean {
-  return RESOURCE_SYNTAX.some((pattern) => pattern.test(source));
+/**
+ * Why a diagram is shown as source without ever reaching Mermaid. Each names a
+ * different fix for the author, so the fallback says which one applies.
+ */
+export type MermaidRefusal = "too-large" | "url" | "escape" | "html" | "css";
+
+/** The refusal `requestMermaidRender` applies before parsing, or null when the source goes to Mermaid. */
+export function mermaidRefusal(source: string): MermaidRefusal | null {
+  if (source.length > MERMAID_MAX_SOURCE_CHARS) return "too-large";
+  return RESOURCE_SYNTAX.find(([pattern]) => pattern.test(source))?.[1] ?? null;
 }
 
 const CHUNK_LOAD_MESSAGE =
@@ -108,6 +118,7 @@ function isChunkLoadError(error: unknown): boolean {
 
 const TRANSIENT: MermaidRenderResult = { ok: false, transient: true };
 const FAILED: MermaidRenderResult = { ok: false };
+const UNDISPLAYABLE: MermaidRenderResult = { ok: false, undisplayable: true };
 
 interface MermaidRuntime {
   mermaid: Mermaid;
@@ -244,15 +255,18 @@ async function renderNow(
     appliedThemeSignature = themeSignature;
   }
   const id = `${idStem}${++renderSequence}`;
+  let parsed = false;
   try {
     // Not `suppressErrors`: it folds a failed diagram chunk into the same
     // `false` as a syntax error, and only one of those deserves caching.
     await mermaid.parse(source);
+    parsed = true;
     const { svg } = await mermaid.render(id, source);
     const clean = sanitize(purify, svg);
-    return clean === null ? FAILED : { ok: true, svg: clean, templateId: id };
+    return clean === null ? UNDISPLAYABLE : { ok: true, svg: clean, templateId: id };
   } catch (error) {
-    return isChunkLoadError(error) ? TRANSIENT : FAILED;
+    if (isChunkLoadError(error)) return TRANSIENT;
+    return parsed ? UNDISPLAYABLE : FAILED;
   } finally {
     removeStrayRenderNodes(id);
   }
@@ -268,7 +282,7 @@ export function requestMermaidRender(source: string, themeSignature: string): Me
   const key = cacheKey(source, themeSignature);
   const cached = peekMermaidRender(source, themeSignature);
   if (cached !== undefined) return { result: Promise.resolve(cached), cancel: () => {} };
-  if (source.length > MERMAID_MAX_SOURCE_CHARS || requestsExternalResources(source)) {
+  if (mermaidRefusal(source) !== null) {
     return { result: Promise.resolve(FAILED), cancel: () => {} };
   }
 

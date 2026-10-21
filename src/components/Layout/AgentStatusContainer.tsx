@@ -1,10 +1,11 @@
 import { useState, useMemo, useCallback, useEffect, useId, type ComponentType } from "react";
-import { ChevronRight, OctagonX } from "lucide-react";
+import { ChevronRight, MailOpen, OctagonX } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
 import { useExitLaggedCount } from "@/hooks/useExitLaggedCount";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { handleDockEscapeKeyDown } from "./dockPopoverGuard";
 import { cn } from "@/lib/utils";
@@ -42,6 +43,7 @@ import {
   useDockPopoverFocusHandoff,
 } from "./dockStatusPill";
 import { pluralize } from "@/lib/pluralize";
+import { safeFireAndForget } from "@/utils/safeFireAndForget";
 
 /**
  * What sets one agent pill apart from another. Everything else — the triage
@@ -65,6 +67,11 @@ export interface AgentStatusConfig {
    * question wait Canopy read as not asking is still `question` underneath.
    */
   showReasons: boolean;
+  /**
+   * The row's hover action. A hand-back's natural dismissal is reading it, so
+   * Unread offers that and leaves Kill to the row's context menu.
+   */
+  rowAction: "kill" | "mark-read";
   /** Row order; groups take the place of their first member. */
   compare: (a: PtyPanelData, b: PtyPanelData) => number;
 }
@@ -351,6 +358,7 @@ export function AgentStatusContainer({
                             key={item.group.id}
                             kind={kind}
                             showReasons={config.showReasons}
+                            rowAction={config.rowAction}
                             group={item.group}
                             memberTerminals={item.memberTerminals}
                             worktreeNames={worktreeNames}
@@ -369,6 +377,7 @@ export function AgentStatusContainer({
                           key={item.terminal.id}
                           kind={kind}
                           showReasons={config.showReasons}
+                          rowAction={config.rowAction}
                           terminal={item.terminal}
                           groupId={item.groupId}
                           worktreeName={worktreeName}
@@ -401,6 +410,7 @@ export function AgentStatusContainer({
 interface AgentSingleItemProps {
   kind: AgentStatusConfig["kind"];
   showReasons: boolean;
+  rowAction: AgentStatusConfig["rowAction"];
   terminal: PtyPanelData;
   groupId: string | null;
   worktreeName: string | undefined;
@@ -418,6 +428,7 @@ const ROW_TARGET_CLASS =
 function AgentSingleItem({
   kind,
   showReasons,
+  rowAction,
   terminal,
   groupId,
   worktreeName,
@@ -436,9 +447,12 @@ function AgentSingleItem({
   const headline = showReasons ? terminal.activityHeadline : undefined;
   const context = [showWorktreeInline ? worktreeName : undefined, task].filter(Boolean).join(" · ");
   const ageId = useId();
+  // The arrows land on the row's button, never on its text, so a clipped title
+  // or context shows its full text while the row holds keyboard focus.
+  const [revealClipped, setRevealClipped] = useState(false);
 
   return (
-    // The activation target and the kill button are siblings, never nested:
+    // The activation target and the row action are siblings, never nested:
     // the wrapper only owns the shared hover surface and the reveal group.
     // Right-click is this row's panel, the same menu its dock chip or pane
     // header opens — never the popover's or the active panel's.
@@ -453,6 +467,8 @@ function AgentSingleItem({
           className={ROW_TARGET_CLASS}
           aria-label={`Focus ${title}${task ? `: ${task}` : ""}${worktreeName ? ` in ${worktreeName}` : ""}${reason ? ` — ${waitingHeadline(reason).toLowerCase()}` : ""}${headline ? ` — ${headline}` : ""}`}
           aria-describedby={terminal.lastStateChange != null ? ageId : undefined}
+          onFocus={(e) => setRevealClipped(e.currentTarget.matches(":focus-visible"))}
+          onBlur={() => setRevealClipped(false)}
         >
           <TerminalIcon
             kind={terminal.kind}
@@ -461,15 +477,36 @@ function AgentSingleItem({
           />
 
           <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
-            <span className="min-w-0 max-w-[65%] shrink-0 truncate text-xs font-medium text-text-primary">
-              {title}
-            </span>
-            {(context || headline) && (
-              <span className="min-w-0 truncate text-2xs text-text-secondary">
-                {context}
-                {context && headline && " · "}
-                {headline && <span className="italic">{headline}</span>}
+            {/* The name keeps its own width and the context takes what is
+                left; only a name long enough to crowd the context below 4rem
+                gives way, so a lone long title runs the full row. */}
+            <TruncatedTooltip
+              content={title}
+              focusable={false}
+              open={revealClipped || undefined}
+              onOpenChange={(open) => !open && setRevealClipped(false)}
+              side="top"
+              align="start"
+            >
+              <span className="min-w-0 truncate text-xs font-medium text-text-primary">
+                {title}
               </span>
+            </TruncatedTooltip>
+            {(context || headline) && (
+              <TruncatedTooltip
+                content={[context, headline].filter(Boolean).join(" · ")}
+                focusable={false}
+                open={revealClipped || undefined}
+                onOpenChange={(open) => !open && setRevealClipped(false)}
+                side="bottom"
+                align="start"
+              >
+                <span className="min-w-16 flex-1 basis-0 truncate text-xs text-text-secondary">
+                  {context}
+                  {context && headline && " · "}
+                  {headline && <span className="italic">{headline}</span>}
+                </span>
+              </TruncatedTooltip>
             )}
           </span>
 
@@ -504,21 +541,43 @@ function AgentSingleItem({
         </button>
 
         <div className="absolute inset-y-0 right-0.5 flex items-center pointer-events-none invisible opacity-0 transition-[opacity,visibility] duration-150 ease-out group-hover/row:visible group-hover/row:opacity-100 group-focus-within/row:visible group-focus-within/row:opacity-100">
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost-danger"
-                size="icon-sm"
-                className="pointer-events-auto transition-colors"
-                onClick={() => onKill(terminal.id)}
-                aria-label={`Kill ${title}${task ? `: ${task}` : ""}`}
-                data-testid={`${kind}-kill-button`}
-              >
-                <OctagonX aria-hidden="true" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">{`Kill ${title}`}</TooltipContent>
-          </Tooltip>
+          {rowAction === "mark-read" ? (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  className="pointer-events-auto transition-colors"
+                  onClick={() =>
+                    safeFireAndForget(window.electron.fleet.markRunRead(terminal.id), {
+                      context: "AgentStatusContainer markRunRead",
+                    })
+                  }
+                  aria-label={`Mark ${title}${task ? `: ${task}` : ""} as read`}
+                  data-testid={`${kind}-mark-read-button`}
+                >
+                  <MailOpen aria-hidden="true" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">Mark as read</TooltipContent>
+            </Tooltip>
+          ) : (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost-danger"
+                  size="icon-sm"
+                  className="pointer-events-auto transition-colors"
+                  onClick={() => onKill(terminal.id)}
+                  aria-label={`Kill ${title}${task ? `: ${task}` : ""}`}
+                  data-testid={`${kind}-kill-button`}
+                >
+                  <OctagonX aria-hidden="true" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">{`Kill ${title}`}</TooltipContent>
+            </Tooltip>
+          )}
         </div>
       </div>
     </TerminalContextMenu>
@@ -528,6 +587,7 @@ function AgentSingleItem({
 interface AgentGroupItemProps {
   kind: AgentStatusConfig["kind"];
   showReasons: boolean;
+  rowAction: AgentStatusConfig["rowAction"];
   group: TabGroup;
   memberTerminals: PtyPanelData[];
   worktreeNames: ReadonlyMap<string, string>;
@@ -539,6 +599,7 @@ interface AgentGroupItemProps {
 function AgentGroupItem({
   kind,
   showReasons,
+  rowAction,
   group,
   memberTerminals,
   worktreeNames,
@@ -577,7 +638,7 @@ function AgentGroupItem({
               {`Tab group (${tabCount} ${kind})`}
             </span>
             {groupWorktreeName && (
-              <span className="min-w-0 truncate text-2xs text-text-secondary">
+              <span className="min-w-0 truncate text-xs text-text-secondary">
                 {groupWorktreeName}
               </span>
             )}
@@ -600,6 +661,7 @@ function AgentGroupItem({
               key={terminal.id}
               kind={kind}
               showReasons={showReasons}
+              rowAction={rowAction}
               terminal={terminal}
               groupId={group.id}
               worktreeName={

@@ -31,6 +31,7 @@ import { ArtifactOverlay } from "./ArtifactOverlay";
 import { TerminalSearchBar } from "./TerminalSearchBar";
 import { TerminalScrollIndicator } from "./TerminalScrollIndicator";
 import { TerminalChipRow } from "./TerminalChipRow";
+import { EXITED_PANE_CLASS } from "./exitStatus";
 import { useGridScrollRoot } from "./GridScrollRootContext";
 import { useUnmountVisibilityCleanup } from "./useUnmountVisibilityCleanup";
 import { useTerminalVisibilityObserver } from "./useTerminalVisibilityObserver";
@@ -42,6 +43,7 @@ import {
   resumeFromAgentEndOffer,
 } from "@/services/terminal/agentEndRecovery";
 import { RestoreRecoveryGate } from "./RestoreRecoveryGate";
+import { MemoryPressureGate } from "./MemoryPressureGate";
 import { InlineStatusBanner } from "./InlineStatusBanner";
 import { PluginKindSetupStrip } from "@/components/Plugin/PluginSetupStrip";
 import { useForceResumeCycleWatchdog } from "@/hooks/terminal/useForceResumeCycleWatchdog";
@@ -65,6 +67,11 @@ import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { useIsDragging } from "@/components/DragDrop";
 import { MissingCliGate } from "./MissingCliGate";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
+import {
+  launchDespiteMemoryPressure,
+  panelHoldKey,
+  useMemoryPressureWaitStore,
+} from "@/store/memoryPressureWaitStore";
 import type { AgentCliDetail } from "@shared/types/ipc";
 import {
   useErrorStore,
@@ -564,6 +571,12 @@ function TerminalPaneComponent({
     eagerAttach,
     isHeldForRecovery,
   } = terminalState;
+  const isHeldForMemoryPressure = useMemoryPressureWaitStore(
+    (state) => state.heldPanelIds[id] === true
+  );
+  // Either hold replaces the terminal with a gate of its own, so focus, find
+  // and the composer all treat the two alike.
+  const isHeldPane = isHeldForRecovery || isHeldForMemoryPressure;
   // Keyboard navigation into a held pane lands on its recovery surface, which
   // has no terminal or input bar to take focus (#12434).
   const recoveryGateRef = useRef<HTMLDivElement>(null);
@@ -653,7 +666,7 @@ function TerminalPaneComponent({
         });
   const effectiveAgentId = isBuiltInAgentId(chrome.agentId) ? chrome.agentId : undefined;
   const showHybridInputBar =
-    !isHeldForRecovery &&
+    !isHeldPane &&
     shouldShowHybridInputBar({
       hasAgentIdentity: effectiveAgentId !== undefined,
       hybridInputEnabled,
@@ -850,7 +863,7 @@ function TerminalPaneComponent({
     const handleFindInPanel = () => {
       // A held pane has no terminal to search (#12434), and its query would
       // land in whichever search bar the document happens to hold.
-      if (!isFocused || isHeldForRecovery) return;
+      if (!isFocused || isHeldPane) return;
       setIsSearchOpen(true);
       requestAnimationFrame(() => {
         document.querySelector<HTMLInputElement>("[data-terminal-search-input]")?.focus();
@@ -859,7 +872,7 @@ function TerminalPaneComponent({
 
     window.addEventListener("daintree:find-in-panel", handleFindInPanel);
     return () => window.removeEventListener("daintree:find-in-panel", handleFindInPanel);
-  }, [isFocused, isHeldForRecovery]);
+  }, [isFocused, isHeldPane]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     // The Scratchpad is its own editor: its copy, Enter and Space are the
@@ -1112,7 +1125,7 @@ function TerminalPaneComponent({
     // Selection alone never pulls focus into a held pane — restore selects a
     // pane on boot, and a recovery surface grabbing the keyboard there is a
     // focus steal. Explicit navigation goes through the handler below.
-    if (!isFocused || isHeldForRecovery) return;
+    if (!isFocused || isHeldPane) return;
 
     // A click into the Scratchpad of an unfocused pane selects the pane; the
     // caret it just placed must stay where it is (#12835).
@@ -1155,7 +1168,7 @@ function TerminalPaneComponent({
   }, [
     id,
     isFocused,
-    isHeldForRecovery,
+    isHeldPane,
     showHybridInputBar,
     hybridInputEnabled,
     preferredTerminalFocusTarget,
@@ -1169,7 +1182,7 @@ function TerminalPaneComponent({
     // forcing the input; that's what the old model did, and tab switching
     // would otherwise yank focus out of xterm against the user's intent.
     return registerPanelFocusHandler(id, () => {
-      if (isHeldForRecovery) {
+      if (isHeldPane) {
         const gate = recoveryGateRef.current;
         if (!gate) return false;
         (gate.querySelector<HTMLElement>("button:not([disabled])") ?? gate).focus();
@@ -1201,13 +1214,7 @@ function TerminalPaneComponent({
       terminalInstanceService.focus(id);
       return containerRef.current?.contains(document.activeElement) ?? false;
     });
-  }, [
-    id,
-    isHeldForRecovery,
-    showHybridInputBar,
-    isHybridInputDisabledForFocus,
-    hybridInputEnabled,
-  ]);
+  }, [id, isHeldPane, showHybridInputBar, isHybridInputDisabledForFocus, hybridInputEnabled]);
 
   // Sync agent state to terminal service for scroll management
   useEffect(() => {
@@ -1227,14 +1234,17 @@ function TerminalPaneComponent({
   // `worktree.id` in WorktreeCard) over `cwd` so a user-initiated `cd` away
   // from the worktree root doesn't break the lookup.
   const reviewWorktreeId = worktreeId ?? cwd;
-  const changedFileCount = useWorktreeStore((s) =>
+  // Undefined when there is no git status on record (no worktree, or not yet
+  // polled): an unread status must never pass for a clean one.
+  const observedChangedFileCount = useWorktreeStore((s) =>
     reviewWorktreeId
-      ? (s.worktrees.get(reviewWorktreeId)?.worktreeChanges?.changedFileCount ?? 0)
-      : 0
+      ? s.worktrees.get(reviewWorktreeId)?.worktreeChanges?.changedFileCount
+      : undefined
   );
+  const changedFileCount = observedChangedFileCount ?? 0;
 
   const completedWithChanges = agentState === "completed" && changedFileCount > 0;
-  const completedWithNoChanges = agentState === "completed" && changedFileCount === 0;
+  const completedWithNoChanges = agentState === "completed" && observedChangedFileCount === 0;
 
   // Any review surface opening for this worktree dismisses the completion
   // banner: the user is already looking at the changes it was pointing at.
@@ -1440,7 +1450,7 @@ function TerminalPaneComponent({
       onAddTab={onAddTab}
       className={cn(
         "terminal-pane",
-        isExited && "opacity-75 grayscale",
+        isExited && EXITED_PANE_CLASS,
         isPinged &&
           allowPing &&
           (wasJustSelected ? "animate-terminal-ping-select" : "animate-terminal-ping")
@@ -1667,6 +1677,13 @@ function TerminalPaneComponent({
                   { source: "user" }
                 )
               }
+            />
+          ) : isHeldForMemoryPressure ? (
+            <MemoryPressureGate
+              containerRef={recoveryGateRef}
+              agentId={agentId}
+              onLaunchAnyway={() => launchDespiteMemoryPressure(panelHoldKey(id))}
+              onCancel={() => onClose(true)}
             />
           ) : spawnStatus === "spawning" && !eagerAttach ? (
             <TerminalStartupPlaceholder agentId={agentId} onCancel={() => onClose()} />

@@ -17,6 +17,7 @@ import type { AppErrorCode } from "../shared/types/appError.js";
 import type { PanelTitleMode } from "../shared/types/panel.js";
 import type { HostMemoryPauseSnapshot } from "../shared/types/pty-host.js";
 import type { TerminalKillOptions } from "../shared/types/terminal.js";
+import type { RendererInputBlockingSnapshot } from "../shared/types/ipc/system.js";
 import type {
   McpRuntimeSnapshot,
   McpGrantLifecyclePayload,
@@ -45,6 +46,7 @@ import {
 } from "./services/rpc/RequestResponseBroker.js";
 import { buildClipboardPreloadBindings } from "./ipc/handlers/clipboard.preload.js";
 import { buildDroppedFilePathsBinding } from "./utils/droppedFilePaths.js";
+import { captureInputBlockingSnapshot } from "./utils/inputBlockingSnapshot.js";
 import { buildGitFetchPreloadBindings } from "./ipc/handlers/gitFetch.preload.js";
 import {
   buildFilesTrashPreloadBindings,
@@ -82,6 +84,7 @@ import { buildSentryPreloadBindings } from "./ipc/handlers/sentry.preload.js";
 import { buildPrivacyPreloadBindings } from "./ipc/handlers/privacy.preload.js";
 import { buildRemoteHostsPreloadBindings } from "./ipc/handlers/remoteHosts.preload.js";
 import { buildHostModePreloadBindings } from "./ipc/handlers/hostMode.preload.js";
+import { buildDeviceAnswerPreloadBindings } from "./ipc/handlers/deviceAnswer.preload.js";
 import { buildDriveLeasePreloadBindings } from "./ipc/handlers/driveLease.preload.js";
 import { buildOperationsPreloadBindings } from "./ipc/handlers/operations.preload.js";
 import { buildHostFilesPreloadBindings } from "./ipc/handlers/hostFiles.preload.js";
@@ -109,6 +112,7 @@ import { buildSystemSleepPreloadBindings } from "./ipc/handlers/systemSleep.prel
 import { buildAppVersionInfoPreloadBindings } from "./ipc/handlers/appVersionInfo.preload.js";
 import { buildResourceProfilePreloadBindings } from "./ipc/handlers/resourceProfile.preload.js";
 import { buildWhySlowPreloadBindings } from "./ipc/handlers/whySlow.preload.js";
+import { buildMemoryPressurePreloadBindings } from "./ipc/handlers/memoryPressure.preload.js";
 import { buildOsDndPreloadBindings } from "./ipc/handlers/osDnd.preload.js";
 import { buildAgentCapabilitiesPreloadBindings } from "./ipc/handlers/agentCapabilities.preload.js";
 import { buildHelpAssistantPreloadBindings } from "./ipc/handlers/helpAssistant.preload.js";
@@ -217,6 +221,7 @@ import type {
   PluginDeepLinkIntent,
   PluginPanelBadge,
   PluginContextValue,
+  PluginWorktreeCardStatus,
   PluginFocusedPanel,
 } from "../shared/types/plugin.js";
 import type { PanelKindConfig } from "../shared/config/panelKindRegistry.js";
@@ -984,6 +989,8 @@ const _eventBusReplayable: ReadonlySet<keyof IpcEventBusMap> = new Set([
   "plugin:toolbar-badges-changed",
   // Same replay, landing before the keybinding hook subscribes its store (#13506).
   "plugin:context-keys-changed",
+  // Same replay, landing before the worktree cards mount their store (#13704).
+  "plugin:worktree-card-statuses-changed",
 ]);
 // Replayable events that accumulate instead of superseding. A double-clicked
 // `.dntr` archive (#11280) is one decision per file, so collapsing two
@@ -1001,13 +1008,16 @@ const _eventBusFifoReplay: ReadonlySet<keyof IpcEventBusMap> = new Set([
   "plugin:panel-menus-changed",
   "plugin:toolbar-badges-changed",
   "plugin:context-keys-changed",
+  "plugin:worktree-card-statuses-changed",
 ]);
 // FIFO events whose every payload is one plugin's whole map: a newer one for the
-// same plugin supersedes the buffered one.
+// same plugin supersedes the buffered one. A payload that also names a project
+// is one plugin's map for that project, so it supersedes only that project's.
 const _eventBusPerPluginLatest: ReadonlySet<keyof IpcEventBusMap> = new Set([
   "plugin:panel-menus-changed",
   "plugin:toolbar-badges-changed",
   "plugin:context-keys-changed",
+  "plugin:worktree-card-statuses-changed",
 ]);
 const _eventBusBuffered = new Map<keyof IpcEventBusMap, unknown[]>();
 
@@ -1029,9 +1039,12 @@ function _ensureEventBusWired(): void {
         // is worth keeping: a busy plugin during a slow boot replaces rather
         // than piles up.
         if (_eventBusPerPluginLatest.has(envelope.name)) {
-          const pluginId = (envelope.payload as { pluginId?: unknown } | null)?.pluginId;
+          type Keyed = { pluginId?: unknown; projectId?: unknown } | null;
+          const latest = envelope.payload as Keyed;
           prior = prior.filter(
-            (payload) => (payload as { pluginId?: unknown } | null)?.pluginId !== pluginId
+            (payload) =>
+              (payload as Keyed)?.pluginId !== latest?.pluginId ||
+              (payload as Keyed)?.projectId !== latest?.projectId
           );
         }
         prior.push(envelope.payload);
@@ -1963,6 +1976,8 @@ function buildElectronApi(): ElectronAPI {
       ...buildResourceProfilePreloadBindings(_unwrappingInvoke),
 
       ...buildWhySlowPreloadBindings(_unwrappingInvoke),
+
+      ...buildMemoryPressurePreloadBindings(_unwrappingInvoke),
     },
 
     // App State API
@@ -2137,6 +2152,7 @@ function buildElectronApi(): ElectronAPI {
         options?: {
           focusIntent?: import("../shared/types/ipc/project.js").ProjectFocusOnActivateIntent;
           trace?: import("../shared/types/ipc/project.js").ProjectSwitchTrace;
+          ignoreMemoryPressure?: boolean;
         }
       ) => _unwrappingInvoke(CHANNELS.PROJECT_SWITCH, projectId, outgoingState, options),
 
@@ -2201,7 +2217,10 @@ function buildElectronApi(): ElectronAPI {
       reopen: (
         projectId: string,
         outgoingState?: import("../shared/types/ipc/project.js").ProjectSwitchOutgoingState,
-        options?: { trace?: import("../shared/types/ipc/project.js").ProjectSwitchTrace }
+        options?: {
+          trace?: import("../shared/types/ipc/project.js").ProjectSwitchTrace;
+          ignoreMemoryPressure?: boolean;
+        }
       ) => _unwrappingInvoke(CHANNELS.PROJECT_REOPEN, projectId, outgoingState, options),
 
       getStats: (projectId: string) => _unwrappingInvoke(CHANNELS.PROJECT_GET_STATS, projectId),
@@ -2490,6 +2509,7 @@ function buildElectronApi(): ElectronAPI {
         branch?: string;
         skip?: number;
         limit?: number;
+        includeTotal?: boolean;
       }) => _unwrappingInvoke(CHANNELS.GIT_LIST_COMMITS, options),
 
       stageFile: (cwd: string, filePath: string) =>
@@ -3229,6 +3249,11 @@ function buildElectronApi(): ElectronAPI {
       onEvent: (callback: (event: IpcEventMap["host-mode:event"]) => void) =>
         _typedOn("host-mode:event", callback),
     },
+    deviceAnswer: {
+      ...buildDeviceAnswerPreloadBindings(_unwrappingInvoke),
+      onEvent: (callback: (event: IpcEventMap["device-answer:event"]) => void) =>
+        _typedOn("device-answer:event", callback),
+    },
     driveLease: {
       ...buildDriveLeasePreloadBindings(_unwrappingInvoke),
       onEvent: (callback: (event: IpcEventMap["drive-lease:event"]) => void) =>
@@ -3772,6 +3797,13 @@ function buildElectronApi(): ElectronAPI {
           keys: Record<string, PluginContextValue> | null;
         }) => void
       ) => _eventBusOn("plugin:context-keys-changed", callback),
+      onWorktreeCardStatusesChanged: (
+        callback: (payload: {
+          pluginId: string;
+          projectId: string;
+          statuses: Record<string, PluginWorktreeCardStatus>;
+        }) => void
+      ) => _eventBusOn("plugin:worktree-card-statuses-changed", callback),
       onPanelMenusChanged: (
         callback: (payload: {
           pluginId: string;
@@ -4040,13 +4072,13 @@ _eventBusOn("window:sample-blink-memory", ({ requestId }) => {
   }
 });
 
-// Renderer event-loop utilization sampler. The Node ELU API
-// (performance.eventLoopUtilization) is unavailable under sandbox: true, so we
-// observe the Web `long-animation-frame` PerformanceObserver and accumulate
-// `blockingDuration` between sample events. The preload runs on the same
-// renderer main thread as the page, so LoAF entries reflect the user-visible
-// JS thread saturation. blockingDuration is 0 for entries < 50ms by spec —
-// that's the intended noise floor for "long task" detection.
+// Renderer long-animation-frame sampler. This is not event-loop utilisation:
+// the Node ELU API is unavailable under sandbox: true and the web has none, so
+// we accumulate LoAF `blockingDuration` between sample events, plus the longest
+// single frame. The preload runs on the same renderer main thread as the page,
+// so LoAF entries reflect the user-visible JS thread saturation.
+// blockingDuration counts only the part of a frame past 50ms, so work in
+// shorter slices never shows — the ratio is a floor on how busy the view was.
 //
 // No startup suppression: ProcessMemoryMonitor's poll cadence is 30s, so any
 // LoAF replay from `buffered: true` is diluted across a full window before
@@ -4054,25 +4086,32 @@ _eventBusOn("window:sample-blink-memory", ({ requestId }) => {
 // side absorbs the residual cold-start noise.
 type LoAFEntry = PerformanceEntry & { blockingDuration?: number };
 let eluAccumulatedBlockingMs = 0;
+let eluLongestFrameMs = 0;
+let eluLongestBlockingMs = 0;
 let eluWindowStartMs =
   typeof performance !== "undefined" && typeof performance.now === "function"
     ? performance.now()
     : 0;
+let loafObserver: PerformanceObserver | null = null;
+const accumulateLoafEntries = (entries: PerformanceEntryList): void => {
+  for (const entry of entries as LoAFEntry[]) {
+    const blocking = entry.blockingDuration;
+    if (typeof blocking === "number" && blocking > 0) {
+      eluAccumulatedBlockingMs += blocking;
+      if (blocking > eluLongestBlockingMs) eluLongestBlockingMs = blocking;
+    }
+    if (entry.duration > eluLongestFrameMs) eluLongestFrameMs = entry.duration;
+  }
+};
 try {
   if (typeof PerformanceObserver === "function") {
-    const observer = new PerformanceObserver((list) => {
-      for (const entry of list.getEntries() as LoAFEntry[]) {
-        const blocking = entry.blockingDuration;
-        if (typeof blocking === "number" && blocking > 0) {
-          eluAccumulatedBlockingMs += blocking;
-        }
-      }
-    });
+    const observer = new PerformanceObserver((list) => accumulateLoafEntries(list.getEntries()));
     // long-animation-frame is in Chromium 123+. Older runtimes throw on
     // observe() — caught and ignored; the handler will report 0 blocking.
-    // The observer is intentionally not stored — it lives for the renderer's
-    // lifetime and never needs to be disconnected.
+    // The observer lives for the renderer's lifetime and is never disconnected;
+    // it is kept only so a sample can drain entries not yet delivered.
     observer.observe({ type: "long-animation-frame", buffered: true });
+    loafObserver = observer;
   }
 } catch {
   /* observer unavailable — sampler reports 0/window */
@@ -4083,15 +4122,33 @@ _eventBusOn("window:sample-renderer-elu", ({ requestId }) => {
       typeof performance !== "undefined" && typeof performance.now === "function"
         ? performance.now()
         : Date.now();
+    if (loafObserver) accumulateLoafEntries(loafObserver.takeRecords());
     const sampleWindowMs = Math.max(0, Math.round(now - eluWindowStartMs));
     const blockingDurationMs = Math.max(0, Math.round(eluAccumulatedBlockingMs));
+    const longestFrameMs = Math.max(0, Math.round(eluLongestFrameMs));
+    const longestBlockingMs = Math.max(0, Math.round(eluLongestBlockingMs));
     eluAccumulatedBlockingMs = 0;
+    eluLongestFrameMs = 0;
+    eluLongestBlockingMs = 0;
     eluWindowStartMs = now;
-    void ipcRenderer.invoke(CHANNELS.SYSTEM_REPORT_RENDERER_ELU, {
-      requestId,
-      blockingDurationMs,
-      sampleWindowMs,
-    });
+    let inputBlocking: RendererInputBlockingSnapshot | undefined;
+    try {
+      inputBlocking = captureInputBlockingSnapshot(document, window);
+    } catch {
+      /* the LoAF sample still goes out without it */
+    }
+    ipcRenderer
+      .invoke(CHANNELS.SYSTEM_REPORT_RENDERER_ELU, {
+        requestId,
+        blockingDurationMs,
+        sampleWindowMs,
+        longestFrameMs,
+        longestBlockingMs,
+        inputBlocking,
+      })
+      .catch(() => {
+        /* observability is best-effort */
+      });
   } catch {
     /* observability is best-effort */
   }

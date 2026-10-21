@@ -154,9 +154,10 @@ describe("agent.launch emits a manifest outputSchema (#11547)", () => {
   });
 
   it("does not advertise 'overlay' as a returnable location", () => {
-    // `location` accepts overlay as an *argument*, but the launcher collapses
-    // anything non-dock to "grid" before returning — advertising overlay in the
-    // output would promise a value structuredContent can never carry.
+    // `location` accepts overlay as an *argument*, but the launcher reports an
+    // overlay launch as "grid" — advertising overlay in the output would
+    // promise a value structuredContent can never carry. "background" is
+    // returnable: a parked launch reports it (#13661).
     const props = outputSchema(registerAll(), "agent.launch")!.properties as Record<
       string,
       { anyOf?: Array<{ enum?: string[] }> }
@@ -164,5 +165,6 @@ describe("agent.launch emits a manifest outputSchema (#11547)", () => {
     const enums = (props.location?.anyOf ?? []).flatMap((v) => v.enum ?? []);
     expect(enums).not.toContain("overlay");
     expect(enums).toContain("grid");
+    expect(enums).toContain("background");
   });
 });

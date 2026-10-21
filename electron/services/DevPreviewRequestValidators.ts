@@ -54,6 +54,9 @@ export function validateEnsureRequest(request: DevPreviewEnsureRequest): void {
   if (typeof request.devCommand !== "string") {
     throw new Error("devCommand must be a string");
   }
+  if (request.endpoint !== undefined && typeof request.endpoint !== "string") {
+    throw new Error("endpoint must be a string if provided");
+  }
   if (request.worktreeId !== undefined && typeof request.worktreeId !== "string") {
     throw new Error("worktreeId must be a string if provided");
   }

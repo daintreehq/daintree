@@ -13,7 +13,7 @@ Daintree is the **macro-orchestration layer** for this workflow. It handles the 
 
 The AI coding agent space has settled into clear layers. CLI agents (Claude Code, Gemini CLI, Codex, Aider) handle execution. Cloud platforms (Devin, Factory) handle long-running autonomous tasks in remote VMs. IDEs (Cursor, Windsurf, Zed) handle single-agent pair programming tied to one branch.
 
-Daintree occupies the space between these: a local desktop environment for supervising 3 to 10 concurrent CLI agents, each running in its own worktree, with the infrastructure and visibility that terminals can't provide. It's agent-agnostic, cross-platform, and entirely local-first. Your machine, your keys, your code.
+Daintree occupies the space between these: a local desktop environment for supervising 3 to 10 concurrent CLI agents, each running in its own worktree, with the infrastructure and visibility that terminals can't provide. It's agent-agnostic, cross-platform, and local-first: it runs on machines you control, and nothing leaves them without your consent. Your machine, your keys, your code.
 
 ## The inner loop, redefined
 
@@ -25,9 +25,11 @@ That's where Daintree fits. It's the local control plane for this new workflow.
 
 ## What we're building toward
 
-The core pillars are stable: panel grid, agent state intelligence, worktree orchestration, context injection, review workflows, dev server management. These aren't changing.
+The core pillars are stable: the panel grid, agent state and attention, fleet automation, worktree orchestration with per-worktree dev servers, getting context in and review out, and a calm visual identity. These aren't changing. `docs/feature-curation.md` holds the full list and the rubric for what doesn't get built.
 
 What's evolving is how deeply Daintree integrates with the agents it orchestrates. Through MCP (Model Context Protocol), Daintree exposes its action system as tools that agents can discover and invoke programmatically. An agent can request a worktree, read the state of sibling panels, wait on a peer to finish, or pull aggregated diffs, all without the developer manually bridging the gap. What a given caller sees is deliberately tiered rather than total: a third-party client gets a small, budgeted roster of the things only Daintree can do — terminal and agent orchestration, worktrees, recipes, live IDE context — on the reasoning that an agent sitting in a terminal already has its own `gh` and its own git. The in-app assistant reaches further. This bidirectional integration is Daintree's deepest technical moat.
+
+Two more layers have grown around the core. Plugins carry the surface that isn't orchestration: forge providers, Markdown editing, SvelteKit Tools, and project plugins that work as full applications with their own data and agent tools. Remote Hosts lets one window drive Daintree's whole backend on another Mac or Linux machine, so a fleet can outgrow one computer without leaving machines you control.
 
 The other frontier is resource governance. Running 5 to 10 agents, each with its own dev server and terminal, puts real pressure on a developer's machine. Daintree's adaptive resource profile system (Performance, Balanced, Efficiency) already throttles based on memory pressure, event loop lag, and battery state. As agent counts grow, this infrastructure becomes more important, not less.
 

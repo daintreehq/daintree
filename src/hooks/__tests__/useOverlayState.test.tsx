@@ -3,6 +3,7 @@ import { render, renderHook } from "@testing-library/react";
 import { describe, expect, it, beforeEach } from "vitest";
 import {
   useOverlayClaim,
+  useOverlayClaimCountMarker,
   useOverlayOpen,
   useOverlayState,
   useTopmostOverlay,
@@ -148,5 +149,34 @@ describe("useTopmostOverlay", () => {
     useUIStore.getState().removeOverlayClaim("a");
     rerender();
     expect(result.current).toBeUndefined();
+  });
+});
+
+describe("useOverlayClaimCountMarker", () => {
+  const marker = () => document.documentElement.dataset.overlayClaims;
+
+  it("mirrors the open claim count onto the root and drops it at zero", () => {
+    useUIStore.getState().addOverlayClaim("already-open");
+    const { unmount } = renderHook(() => useOverlayClaimCountMarker());
+    expect(marker()).toBe("1");
+
+    useUIStore.getState().addOverlayClaim("settings");
+    expect(marker()).toBe("2");
+
+    useUIStore.getState().removeOverlayClaim("settings");
+    useUIStore.getState().removeOverlayClaim("already-open");
+    expect(marker()).toBeUndefined();
+
+    unmount();
+  });
+
+  it("removes the marker and stops following the store on unmount", () => {
+    useUIStore.getState().addOverlayClaim("settings");
+    const { unmount } = renderHook(() => useOverlayClaimCountMarker());
+    unmount();
+    expect(marker()).toBeUndefined();
+
+    useUIStore.getState().addOverlayClaim("palette");
+    expect(marker()).toBeUndefined();
   });
 });

@@ -118,9 +118,12 @@ function parseValue(raw: string): { value: string; ok: boolean; reason?: string;
   }
 
   // Unquoted: strip inline comment starting at `#` preceded by whitespace.
+  // The whitespace before a leading `#` was trimmed away, so check `raw` for it.
+  const leadingWhitespace = /^\s/.test(raw);
   let end = trimmed.length;
   for (let i = 0; i < trimmed.length; i++) {
-    if (trimmed[i] === "#" && i > 0 && /\s/.test(trimmed[i - 1]!)) {
+    if (trimmed[i] !== "#") continue;
+    if (i === 0 ? leadingWhitespace : /\s/.test(trimmed[i - 1]!)) {
       end = i;
       break;
     }

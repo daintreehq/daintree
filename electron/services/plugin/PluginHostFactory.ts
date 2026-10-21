@@ -4,6 +4,7 @@ import path from "path";
 import { createHash, randomUUID } from "node:crypto";
 import { resilientAtomicWriteFile } from "../../utils/fs.js";
 import { runExclusive } from "../../utils/keyedMutex.js";
+import { readBoundedFromHandle } from "../../utils/boundedRead.js";
 import { watchShared } from "../FileObservationService.js";
 import { fileTreeService } from "../FileTreeService.js";
 import { clipboard, shell } from "electron";
@@ -55,12 +56,7 @@ import {
   type PluginStorageManager,
 } from "./PluginStorageManager.js";
 import { createListenerFailureState, invokeTrackedListener } from "./pluginCallbackUtils.js";
-import {
-  readBoundedFromHandle,
-  runReadFiles,
-  validateReadFilesCall,
-  type ReadOneOutcome,
-} from "./pluginFsReadFiles.js";
+import { runReadFiles, validateReadFilesCall, type ReadOneOutcome } from "./pluginFsReadFiles.js";
 import {
   MIN_PLUGIN_SUBSCRIPTION_DEBOUNCE_MS,
   WorktreeChangeTracker,
@@ -90,6 +86,7 @@ import { getPtyClient } from "../../window/serviceRefs.js";
 import {
   registerForgeProviderImpl,
   unregisterForgeProviderImpl,
+  validateForgeImplRoles,
 } from "../forgeProviderRegistry.js";
 import { buildStoredCredentials } from "../forge/forgeCredentialUtils.js";
 import {
@@ -135,7 +132,12 @@ import {
   applyPluginContextEntry,
   validatePluginContextEntry,
 } from "../../../shared/utils/pluginContextKeys.js";
+import {
+  sameWorktreeCardStatus,
+  validatePluginWorktreeCardStatus,
+} from "../../../shared/utils/pluginWorktreeCardStatus.js";
 import { makeForgeProviderId } from "../../../shared/utils/forgeProviderIds.js";
+import { forgeProviderRoles } from "../../../shared/utils/forgeProviderRoles.js";
 import {
   toPluginWorktreeSnapshot,
   toPluginWorktreeStatus,
@@ -217,6 +219,7 @@ import type {
   PluginGitCommitResult,
   PluginPanelBadge,
   PluginContextValue,
+  PluginWorktreeCardStatus,
   PluginHostBinding,
   PluginMcpCaller,
   PluginMcpToolDefinition,
@@ -562,6 +565,31 @@ export interface PluginHostFactoryDeps {
   pluginContextKeys: Map<string, Map<string, PluginContextValue>>;
   /** Publish one plugin's complete context-key map to the views entitled to it. */
   emitContextKeys: (pluginId: string) => void;
+  /**
+   * Worktree card statuses set via `host.setWorktreeCardStatus`, `pluginId →
+   * projectId → worktreeId → status`. Bucketed by project because an
+   * app-global plugin can mark worktrees in several projects over its life.
+   */
+  pluginWorktreeCardStatuses: Map<string, Map<string, Map<string, PluginWorktreeCardStatus>>>;
+  /** Publish one plugin's complete status map for one project to that project's views. */
+  emitWorktreeCardStatuses: (pluginId: string, projectId: string) => void;
+  /**
+   * Bumped whenever a plugin's statuses are cleared (unload, worker swap), so
+   * a call its previous generation left in flight lands on nothing.
+   */
+  worktreeCardStatusGeneration: (pluginId: string) => number;
+  /** Bumped on every worktree removal and project close. */
+  worktreeCardTargetRevision: () => number;
+  /**
+   * Whether the worktree was removed, or its project closed, after the call
+   * taken at `since` (or within the read-coalescing grace before it). A read
+   * that started before either can still name it.
+   */
+  isWorktreeCardTargetRetired: (
+    projectId: string,
+    worktreeId: string,
+    since: { revision: number; at: number }
+  ) => boolean;
   /** Runtime panel menus set via `host.setPanelMenuItems`, `pluginId → panelId → items`. */
   pluginPanelMenus: Map<string, Map<string, readonly PublishedPanelMenuItem[]>>;
   pluginFsWatchers: Map<string, Set<() => void>>;
@@ -1016,6 +1044,8 @@ export function createHost(
         : { status: "unavailable", reason: "plugin-unloaded" };
     }
   };
+
+  let worktreeCardStatusChain: Promise<void> = Promise.resolve();
 
   // Identity is derived once, here, from the id and binding this host was built
   // with. Deriving it host-side — through the canonical parser that owns the key
@@ -1983,12 +2013,27 @@ export function createHost(
       // walks descriptors first. Reject up front so the failure is loud.
       const contributionId = descriptor.id;
       const plugin = deps.plugins.get(pluginId);
-      const declared = plugin?.manifest.contributes.forgeProviders.some(
+      const declared = plugin?.manifest.contributes.forgeProviders.find(
         (c) => c.id === contributionId
       );
       if (!declared) {
         throw new Error(
           `Plugin "${pluginId}" registerForgeProvider: descriptor.id "${contributionId}" is not declared in contributes.forgeProviders`
+        );
+      }
+      // The manifest's roles route calls before any plugin code runs, so a
+      // descriptor may restate them but never claim one the manifest didn't.
+      const declaredRoles = forgeProviderRoles(declared);
+      const undeclaredRole = descriptor.roles?.find((role) => !declaredRoles.includes(role));
+      if (undeclaredRole) {
+        throw new Error(
+          `Plugin "${pluginId}" registerForgeProvider: descriptor for "${contributionId}" claims the "${undeclaredRole}" role, which contributes.forgeProviders does not declare`
+        );
+      }
+      const roleError = validateForgeImplRoles(declared, impl);
+      if (roleError) {
+        throw new Error(
+          `Plugin "${pluginId}" registerForgeProvider: impl for "${contributionId}" can't serve its declared roles (${declaredRoles.join(", ")}): ${roleError}`
         );
       }
 
@@ -2339,6 +2384,80 @@ export function createHost(
       flushPluginPushes();
       deps.emitContextKeys(pluginId);
       return Promise.resolve();
+    },
+    // NOT revoke-guarded, like setPanelBadge: a status follows state the
+    // plugin learns from its own subscriptions (#13704). The worktree must be
+    // one this host's own worktree read names, which is what keeps a project
+    // plugin on its own project's cards; an unavailable read refuses rather
+    // than guessing, and never prunes what is already shown.
+    setWorktreeCardStatus: (worktreeId, status) => {
+      if (!isBound()) return Promise.resolve();
+      const entry = validatePluginWorktreeCardStatus(worktreeId, status);
+      if (!entry.ok) {
+        // Reject (not sync throw): runtime-surface Promise method (#10617).
+        return Promise.reject(
+          new Error(`Plugin "${pluginId}" setWorktreeCardStatus: ${entry.error}`)
+        );
+      }
+      // Taken at the call, not when the queued run starts: a call the previous
+      // worker generation made must not land after that generation's clear.
+      const generation = deps.worktreeCardStatusGeneration(pluginId);
+      // Same for the worktree's lifecycle: a call queued behind another must
+      // not outlive a removal that happened while it waited.
+      const since = { revision: deps.worktreeCardTargetRevision(), at: Date.now() };
+      const run = async (): Promise<void> => {
+        const result = await getWorktreesResult();
+        if (!isBound() || deps.worktreeCardStatusGeneration(pluginId) !== generation) return;
+        if (result.status !== "ok") {
+          throw new Error(
+            `Plugin "${pluginId}" setWorktreeCardStatus: worktrees are unavailable (${result.reason})`
+          );
+        }
+        const target = result.worktrees.find(
+          (w) => w.id === entry.worktreeId || w.worktreeId === entry.worktreeId
+        );
+        if (!target) {
+          throw new Error(
+            `Plugin "${pluginId}" setWorktreeCardStatus: "${entry.worktreeId}" is not a worktree this plugin can see`
+          );
+        }
+        const projectId = result.projectId;
+        // The card is keyed by the snapshot's own id, whichever spelling the
+        // plugin passed.
+        const cardId = target.id;
+        if (deps.isWorktreeCardTargetRetired(projectId, cardId, since)) {
+          throw new Error(
+            `Plugin "${pluginId}" setWorktreeCardStatus: "${entry.worktreeId}" was removed`
+          );
+        }
+        let byProject = deps.pluginWorktreeCardStatuses.get(pluginId);
+        let statuses = byProject?.get(projectId);
+        if (entry.status === null) {
+          if (!statuses?.delete(cardId)) return;
+          if (statuses.size === 0) byProject!.delete(projectId);
+          if (byProject!.size === 0) deps.pluginWorktreeCardStatuses.delete(pluginId);
+        } else {
+          if (sameWorktreeCardStatus(statuses?.get(cardId), entry.status)) return;
+          if (!byProject) {
+            byProject = new Map();
+            deps.pluginWorktreeCardStatuses.set(pluginId, byProject);
+          }
+          if (!statuses) {
+            statuses = new Map();
+            byProject.set(projectId, statuses);
+          }
+          statuses.set(cardId, entry.status);
+        }
+        // Deliver this plugin's queued pushes first, as every direct send does.
+        flushPluginPushes();
+        deps.emitWorktreeCardStatuses(pluginId, projectId);
+      };
+      // Serialized, so a set followed by a clear can never land in the other
+      // order because the reads behind them resolved out of order. A rejected
+      // call does not poison the ones queued behind it.
+      const next = worktreeCardStatusChain.then(run);
+      worktreeCardStatusChain = next.catch(() => {});
+      return next;
     },
     // NOT revoke-guarded, like setPanelBadge: a plugin republishes its menu
     // from lifecycle callbacks and its own state changes (#13213). Ownership is

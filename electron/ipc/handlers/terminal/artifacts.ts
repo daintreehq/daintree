@@ -11,6 +11,7 @@ import { defineIpcNamespace, op } from "../../define.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 import { AppError } from "../../../utils/errorTypes.js";
 import { resolveExecutableForSpawn } from "../../../utils/windowsExecutable.js";
+import { getSanitizedProcessEnv } from "../../../utils/gitEnv.js";
 import { applyPatchToleratingTransportCrlf, parsePatchModifiedFiles } from "./patchText.js";
 import type {
   SaveArtifactOptions,
@@ -164,16 +165,23 @@ export function registerArtifactHandlers(deps: HandlerDependencies): () => void 
       });
     }
 
-    const tmpPatchPath = path.join(os.tmpdir(), `daintree-patch-${Date.now()}.patch`);
-    await fs.writeFile(tmpPatchPath, patchContent, "utf-8");
+    // mkdtemp reserves the directory atomically, so concurrent requests never
+    // share (or delete) each other's patch file.
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-patch-"));
+    const tmpPatchPath = path.join(tmpDir, "patch.patch");
 
     try {
+      await fs.writeFile(tmpPatchPath, patchContent, "utf-8");
       const { execa } = await import("execa");
       try {
         await applyPatchToleratingTransportCrlf(patchContent, async (content) => {
           if (content !== patchContent) await fs.writeFile(tmpPatchPath, content, "utf-8");
+          // execa merges process.env back in unless extendEnv is off, which
+          // would restore an inherited GIT_DIR or GIT_INDEX_FILE.
           await execa(await resolveExecutableForSpawn("git"), ["apply", tmpPatchPath], {
             cwd: resolvedCwd,
+            env: getSanitizedProcessEnv(),
+            extendEnv: false,
           });
         });
       } catch (error) {
@@ -189,7 +197,7 @@ export function registerArtifactHandlers(deps: HandlerDependencies): () => void 
 
       return { modifiedFiles: parsePatchModifiedFiles(patchContent) };
     } finally {
-      await fs.unlink(tmpPatchPath).catch(() => {});
+      await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
     }
   };
   const namespace = defineIpcNamespace({

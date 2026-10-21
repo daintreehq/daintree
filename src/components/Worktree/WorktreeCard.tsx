@@ -14,7 +14,7 @@ import { getWorktreeSortDragId } from "../DragDrop/SortableWorktreeCard";
 import { GripVertical } from "lucide-react";
 import { CheckboxGlyph } from "@/components/ui/checkbox";
 import { useErrorStore, usePanelStore, type RetryAction } from "../../store";
-import type { PtyPanelData } from "@shared/types/panel";
+import { isDevPreviewPanel, type PtyPanelData } from "@shared/types/panel";
 import { useRecipeStore } from "../../store/recipeStore";
 import { useWorktreeSelectionStore } from "../../store/worktreeStore";
 import { suppressShiftClickTextSelection } from "@/utils/shiftClickSelection";
@@ -37,9 +37,14 @@ import { humanizeAppError } from "@shared/utils/errorMessage";
 import { getGitRecoveryAction } from "@shared/utils/gitOperationErrors";
 import { isClientGitError } from "@/utils/clientGitError";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
+import { issueAttachPayload } from "@/utils/linkProviderIssue";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { cn } from "../../lib/utils";
-import { copyableBranchName, isExternalWorktree } from "@/lib/worktreeFilters";
+import {
+  copyableBranchName,
+  isExternalWorktree,
+  isLiveDevServerStatus,
+} from "@/lib/worktreeFilters";
 import { getWorktreeHeadline } from "@/lib/worktreeHeadline";
 import { getAgentConfig, getAgentIds } from "@/config/agents";
 import { getAgentSettingsEntry } from "@/types";
@@ -56,13 +61,11 @@ import {
   WorktreeIssueErrorBanner,
 } from "./WorktreeCard/WorktreeDetailsSection";
 import { WorktreeDialogs } from "./WorktreeCard/WorktreeDialogs";
+import { notifyAttachmentFailure } from "./WorktreeCard/notifyAttachmentFailure";
 import { WorktreeHeader } from "./WorktreeCard/WorktreeHeader";
 import { WorktreeTerminalSection } from "./WorktreeCard/WorktreeTerminalSection";
 import { WslGitBanner } from "./WorktreeCard/WslGitBanner";
-import {
-  MainWorktreeSummaryRows,
-  type AggregateCounts,
-} from "./WorktreeCard/MainWorktreeSummaryRows";
+import type { AggregateCounts } from "./WorktreeCard/aggregateCounts";
 import { useInputReceiptKey } from "./WorktreeCard/hooks/useInputReceiptKey";
 import { useWorktreeActions } from "./WorktreeCard/hooks/useWorktreeActions";
 import { copyContextWithFeedback } from "@/hooks/useWorktreeActions";
@@ -127,7 +130,6 @@ export interface WorktreeCardProps {
   onMoveDown?: () => void;
   canMoveUp?: boolean;
   canMoveDown?: boolean;
-  projectHealth?: import("@shared/types/ipc/forge").ForgeProjectHealthPayload | null;
   /**
    * Multi-select state (grid variant only). When provided, modifier-clicks
    * (Ctrl/Cmd/Shift) route through `onToggleSelect` instead of `onSelect`
@@ -161,7 +163,6 @@ export function WorktreeCard({
   onMoveDown,
   canMoveUp,
   canMoveDown,
-  projectHealth,
   isSelected = false,
   onToggleSelect,
 }: WorktreeCardProps) {
@@ -468,6 +469,7 @@ export function WorktreeCard({
     handleTerminateAll,
     handleClearHistory,
     handleResourceTeardown,
+    confirmAttachmentMove,
   } = useWorktreeActions({
     worktree,
     teardownCommands,
@@ -562,12 +564,69 @@ export function WorktreeCard({
     );
   };
 
+  const runAttachmentAction = (
+    name: string,
+    action: "attach" | "detach" | "status",
+    expectedHolderWorktreeId?: string | null
+  ) => {
+    worktreeClient
+      .attachmentAction(worktree.id, name, action, expectedHolderWorktreeId)
+      .catch((err: unknown) => notifyAttachmentFailure(err, name, action, worktree.id));
+  };
+
+  const handleAttachmentAction = (name: string, action: "attach" | "detach" | "status") => {
+    if (action !== "attach") {
+      runAttachmentAction(name, action);
+      return;
+    }
+    // The holder this card shows travels with the request, so the host refuses
+    // it if the attachment moved in the meantime rather than detaching someone
+    // the user never confirmed moving it away from.
+    const holderId = worktree.attachments?.find((a) => a.name === name)?.holderWorktreeId ?? null;
+    if (holderId && holderId !== worktree.id) {
+      const holder = getCurrentViewStore().getState().worktrees.get(holderId);
+      const fromLabel = holder?.branch ?? holder?.name ?? holderId;
+      confirmAttachmentMove(name, fromLabel, () => runAttachmentAction(name, action, holderId));
+      return;
+    }
+    runAttachmentAction(name, action, holderId);
+  };
+
   const handleResourceStatus = () =>
     actionService.dispatch(
       "worktree.resource.status",
       { worktreeId: worktree.id },
       { source: "user" }
     );
+
+  // One endpoint preview per worktree: a second click brings back the panel
+  // already showing it rather than stacking another (#13688).
+  const handlePreviewEndpoint = () => {
+    const store = usePanelStore.getState();
+    const existing = Object.values(store.panelsById).find(
+      (panel) =>
+        isDevPreviewPanel(panel) &&
+        panel.worktreeId === worktree.id &&
+        panel.previewsResourceEndpoint === true &&
+        !store.isInTrash(panel.id)
+    );
+    if (existing) {
+      // Activation, not bare focus: it leaves a maximize that would hide the panel.
+      store.activateTerminal(existing.id);
+      pingTerminal(existing.id);
+      return;
+    }
+    safeFireAndForget(
+      store.addPanel({
+        kind: "dev-preview",
+        title: "Endpoint preview",
+        cwd: worktree.path,
+        worktreeId: worktree.id,
+        previewsResourceEndpoint: true,
+      }),
+      { context: "Opening resource endpoint preview" }
+    );
+  };
 
   const handleCopyContextFull = () => {
     void copyContextWithFeedback(worktree.id, "context-menu", undefined, "worktree-card");
@@ -658,11 +717,7 @@ export function WorktreeCard({
   // the Electron-store write lands, replays a mutation that was in flight when
   // the host crashed, and surfaces failures via `WorktreeIssueErrorBanner`.
   const handleAttachIssue = (issue: Issue) => {
-    getCurrentViewStore().getState().startAttachIssue({
-      worktreeId: worktree.id,
-      issueNumber: issue.number,
-      issueTitle: issue.title,
-    });
+    getCurrentViewStore().getState().startAttachIssue(issueAttachPayload(worktree.id, issue));
   };
 
   const handleDetachIssue = () => {
@@ -1026,6 +1081,8 @@ export function WorktreeCard({
     onResourceConnect: worktree.resourceConnectCommand ? handleResourceConnect : undefined,
     onResourceStatus: hasStatusCommand ? handleResourceStatus : undefined,
     onResourceTeardown: hasTeardownCommand ? handleResourceTeardown : undefined,
+    attachments: worktree.attachments,
+    onAttachmentAction: handleAttachmentAction,
     devServerState,
     onStartDevServer: handleStartDevServer,
     onStopDevServer: handleStopDevServer,
@@ -1255,6 +1312,7 @@ export function WorktreeCard({
               aria-describedby={selectButtonDescribedBy(worktree.id, {
                 lifecycle: chipState !== null,
                 alarm: !!effectiveIsCollapsed,
+                devServer: !!devServerSession && isLiveDevServerStatus(devServerSession.status),
                 external: isExternal,
               })}
               onFocus={handleSelectFocus}
@@ -1485,6 +1543,8 @@ export function WorktreeCard({
                   resourceLastCheckedAt={worktree.resourceStatus?.lastCheckedAt}
                   devServerSession={devServerSession}
                   onCheckResourceStatus={hasStatusCommand ? handleResourceStatus : undefined}
+                  onPreviewEndpoint={handlePreviewEndpoint}
+                  onAttachmentAction={handleAttachmentAction}
                   onCleanupWorktree={
                     chipState === "cleanup" && !isMainWorktree
                       ? () => setShowDeleteDialog(true)
@@ -1523,8 +1583,6 @@ export function WorktreeCard({
                       wslGitEligible={worktree.wslGitEligible}
                     />
                   )}
-                  {isMainWorktree && <MainWorktreeSummaryRows health={projectHealth ?? null} />}
-
                   <WorktreeDetailsSection
                     variant={variant}
                     worktree={worktree}

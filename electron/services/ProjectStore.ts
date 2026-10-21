@@ -1951,11 +1951,12 @@ export class ProjectStore {
     // interleave with concurrent add/update/delete on the same project — the
     // reconcile-vs-CRUD TOCTOU a per-method queue would otherwise leave open.
     // The collision list is captured via this closure and returned after the
-    // queued promise resolves. The updater calls only unqueued fileStore reads
-    // (getRecipes) and in-repo writes (writeInRepoRecipe), never a queued
-    // fileStore mutator, so it cannot self-deadlock behind its own turn.
+    // queued promise resolves. The updater reads the fileStore only through the
+    // unqueued reader the turn hands it and writes only in-repo files
+    // (writeInRepoRecipe), never a queued fileStore method, so it cannot
+    // self-deadlock behind its own turn.
     const collisions: RecipeNameCollision[] = [];
-    await this.fileStore.enqueueRecipesUpdate(projectId, async () => {
+    await this.fileStore.enqueueRecipesUpdate(projectId, async (readFileStoreRecipes) => {
       // Go through the cache-aware wrapper so the hash map is populated as a
       // side effect — otherwise the first renderer-driven edit after a project
       // load races the unrelated `getInRepoRecipes` call to populate the cache
@@ -1968,7 +1969,7 @@ export class ProjectStore {
         dirExists,
         scanComplete,
       } = await this.readInRepoRecipesWithMeta(projectPath);
-      const fileStoreRecipes = await this.fileStore.getRecipes(projectId);
+      const fileStoreRecipes = await readFileStoreRecipes();
 
       // #11347: When the in-repo recipe directory is absent (e.g. the user checked
       // out a branch or commit that predates `.daintree/recipes/`), or the scan of

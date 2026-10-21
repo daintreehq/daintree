@@ -140,6 +140,8 @@ function DevEmpty({
       isAutoDetecting={false}
       attemptingCommand={null}
       isSettingsLoading={false}
+      settingsLoadError={null}
+      handleRetrySettingsLoad={() => {}}
       handleAutoDetect={async () => true}
       autoDetectFailedCommand={null}
       candidates={[]}

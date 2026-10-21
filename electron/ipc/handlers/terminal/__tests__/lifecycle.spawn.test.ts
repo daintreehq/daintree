@@ -24,6 +24,14 @@ vi.mock("electron", () => ({
   },
 }));
 
+// The external electron-store dependency bypasses Vitest's Electron mock.
+vi.mock("../../../../store.js", () => ({
+  store: {
+    get: vi.fn(),
+    set: vi.fn(),
+  },
+}));
+
 const { mockGetCurrentProject, mockGetProjectById, mockGetProjectSettings } = vi.hoisted(() => ({
   mockGetCurrentProject: vi.fn(),
   mockGetProjectById: vi.fn(),
@@ -188,7 +196,7 @@ const {
   mockRegisterPaneWorkspaceBinding,
   mockSetPaneWorkspaceBindingResolver,
   mockSetPaneOwnershipPrincipalResolver,
-  mockRevokeOwnershipPrincipal,
+  mockRevokePaneBearer,
   mockGetOwnershipPrincipalForToken,
   mockSetOwnershipPrincipalRevokedListener,
   mockSetPaneTerminalResolver,
@@ -204,7 +212,7 @@ const {
   mockSetPaneWorkspaceBindingResolver: vi.fn(),
   mockSetPaneOwnershipPrincipalResolver:
     vi.fn<(resolver: ((token: string) => string | null) | null) => void>(),
-  mockRevokeOwnershipPrincipal: vi.fn<(principal: string) => void>(),
+  mockRevokePaneBearer: vi.fn<(principal: string) => void>(),
   mockGetOwnershipPrincipalForToken: vi.fn<(token: string) => string | null>(),
   mockSetOwnershipPrincipalRevokedListener:
     vi.fn<(listener: ((principal: string) => void) | null) => void>(),
@@ -282,7 +290,7 @@ vi.mock("../../../../services/McpServerService.js", () => ({
       mockSetPaneOwnershipPrincipalResolver(resolver),
     setPaneTerminalResolver: (resolver: ((token: string) => string | null) | null) =>
       mockSetPaneTerminalResolver(resolver),
-    revokeOwnershipPrincipal: (principal: string) => mockRevokeOwnershipPrincipal(principal),
+    revokePaneBearer: (principal: string) => mockRevokePaneBearer(principal),
   },
 }));
 
@@ -517,6 +525,28 @@ describe("terminal spawn handler - projectId resolution", () => {
     expect(mockGetProjectSettings).toHaveBeenCalledWith("project-a-id");
     const spawnArgs = ptyClient.spawn.mock.calls[0][1];
     expect(spawnArgs.shell).toBe("/bin/bash");
+  });
+
+  it("still spawns a plain shell when the project's settings can't be read", async () => {
+    mockGetProjectById.mockReturnValue(projectA);
+    mockGetProjectSettings.mockRejectedValue(
+      Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" })
+    );
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const deps = { ptyClient } as unknown as HandlerDependencies;
+    registerTerminalLifecycleHandlers(deps);
+
+    const handler = getSpawnHandler();
+    await handler({} as Electron.IpcMainInvokeEvent, {
+      projectId: "project-a-id",
+      cols: 80,
+      rows: 24,
+    });
+    warnSpy.mockRestore();
+
+    expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
+    expect(ptyClient.spawn.mock.calls[0][1].shell).not.toBe("/bin/bash");
   });
 });
 
@@ -2541,7 +2571,7 @@ describe("terminal spawn handler - Claude pane launch-workspace binding (#12486)
     expect(resolver!("pane-token")).toBe("principal-1");
     expect(mockGetOwnershipPrincipalForToken).toHaveBeenCalledWith("pane-token");
     listener!("principal-1");
-    expect(mockRevokeOwnershipPrincipal).toHaveBeenCalledWith("principal-1");
+    expect(mockRevokePaneBearer).toHaveBeenCalledWith("principal-1");
   });
 
   it("wires the pane bearer's own terminal before the PTY starts (#12491)", async () => {

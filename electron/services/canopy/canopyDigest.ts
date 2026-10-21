@@ -1,4 +1,4 @@
-import { redactSecrets } from "./canopyScreen.js";
+import { redactSecrets } from "../redactSecrets.js";
 
 /**
  * What an agent's history says above the screen: the requests the user typed,

@@ -6,6 +6,7 @@ import type {
   WorktreeLifecyclePhaseResult,
   WorktreeResourceStatus,
   WslGitEligibility,
+  WorktreeAttachment,
 } from "../../shared/types/worktree.js";
 import type { CIStatusState } from "../../shared/types/forge.js";
 import type { WorktreeSnapshot } from "../../shared/types/workspace-host.js";
@@ -54,6 +55,7 @@ export interface SnapshotBuilderHost {
   readonly hasTeardownCommand: boolean;
   readonly hasProvisionCommand: boolean;
   readonly lifecycleCommandsNeedApproval: boolean | undefined;
+  readonly attachments?: WorktreeAttachment[];
   readonly worktreeMode: string;
   readonly worktreeEnvironmentLabel: string | undefined;
   readonly hasPlanFile: boolean;
@@ -71,6 +73,7 @@ export interface SnapshotBuilderHost {
   readonly lastGitStatusCheckedAt: number;
   readonly workingTreeChangedAt: number;
   readonly workingTreeChangedDirs: readonly string[] | null | undefined;
+  readonly pathMembershipChangedAt: number;
   readonly fetchAuthFailed: boolean;
   readonly fetchNetworkFailed: boolean;
   readonly hasRemote: boolean | undefined;
@@ -179,6 +182,7 @@ export class SnapshotBuilder {
       // Only `true` is load-bearing; "checked, nothing waiting" and "not
       // checked yet" both mean there is nothing to review.
       lifecycleCommandsNeedApproval: this.host.lifecycleCommandsNeedApproval || undefined,
+      attachments: this.host.attachments,
       worktreeMode: this.host.worktreeMode !== "local" ? this.host.worktreeMode : undefined,
       worktreeEnvironmentLabel: this.host.worktreeEnvironmentLabel,
       hasPlanFile: this.host.hasPlanFile || undefined,
@@ -205,6 +209,7 @@ export class SnapshotBuilder {
       workingTreeChangedDirs: this.host.workingTreeChangedAt
         ? this.host.workingTreeChangedDirs
         : undefined,
+      pathMembershipChangedAt: this.host.pathMembershipChangedAt || undefined,
       fetchAuthFailed: this.host.fetchAuthFailed || undefined,
       fetchNetworkFailed: this.host.fetchNetworkFailed || undefined,
       // Verbatim: `false` is the answer that matters, so it must survive.

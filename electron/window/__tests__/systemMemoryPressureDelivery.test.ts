@@ -26,6 +26,8 @@ const DEGRADED: SystemMemoryPressurePayload = {
   swapKind: "swap",
   fseventsdRssMb: null,
   kernelPressureLevel: null,
+  escalated: false,
+  workloads: null,
 };
 const NORMAL: SystemMemoryPressurePayload = {
   status: "normal",
@@ -33,6 +35,8 @@ const NORMAL: SystemMemoryPressurePayload = {
   swapKind: "swap",
   fseventsdRssMb: null,
   kernelPressureLevel: null,
+  escalated: false,
+  workloads: null,
 };
 
 interface FakeWebContents {
@@ -179,6 +183,27 @@ describe("systemMemoryPressureDelivery", () => {
     publishSystemMemoryPressure(DEGRADED, [win]);
 
     expect(view.send).toHaveBeenCalledTimes(2);
+  });
+
+  it("sends an escalation to the visible view that already has the opening edge (#13529)", () => {
+    const view = makeWebContents();
+    const win = makeWindow(1, view);
+    const escalated: SystemMemoryPressurePayload = {
+      ...DEGRADED,
+      kernelPressureLevel: "critical",
+      escalated: true,
+    };
+
+    publishSystemMemoryPressure(DEGRADED, [win]);
+    publishSystemMemoryPressure(escalated, [win]);
+    // A view loading later gets the latest publish, not the opening one.
+    const late = makeWebContents();
+    deliverOpenSystemMemoryPressure(makeWindow(2, late), late.wc);
+
+    expect(view.send).toHaveBeenCalledTimes(2);
+    expect(view.send).toHaveBeenLastCalledWith(...pushed(escalated));
+    expect(late.send).toHaveBeenCalledWith(...pushed(escalated));
+    expect(getOpenSystemMemoryPressure()).toEqual(escalated);
   });
 
   it("retries a window whose send threw", () => {

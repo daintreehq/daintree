@@ -9,10 +9,12 @@ export interface MemoryThresholds {
 // Fixed-MB floor used when total RAM is unknown (hardware probe failed). Matches
 // the historical absolute thresholds so behaviour degrades gracefully.
 export const FALLBACK_THRESHOLDS: MemoryThresholds = { elevated: 500, critical: 800 };
-// Fractions of total RAM. The badge sums working-set across Daintree's Electron
-// processes (renderers double-count shared pages on macOS), so this is a
-// generous pressure heuristic — calibrated near ProcessMemoryMonitor's 25%
-// aggregate ceiling, not a precise budget.
+// Fractions of total RAM, compared against main's pressure figure: memory summed
+// across Daintree's Electron processes (footprint on macOS, working set
+// elsewhere; shared pages double-count) with the GPU process at its resident
+// size, since its footprint is mostly graphics memory (#13637). A generous
+// pressure heuristic calibrated near ProcessMemoryMonitor's 25% aggregate
+// ceiling, not a precise budget.
 const ELEVATED_RAM_FRACTION = 0.2;
 const CRITICAL_RAM_FRACTION = 0.33;
 export const TREND_DEADBAND_MB_PER_MIN = 3;

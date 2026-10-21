@@ -5,7 +5,7 @@ import { ipcMain, BrowserWindow } from "electron";
 import { openWithDefaultApp } from "../utils/openPath.js";
 import { CHANNELS } from "./channels.js";
 import { getLogFilePath, logError as logErrorUtil } from "../utils/logger.js";
-import { broadcastToRenderer, typedHandle } from "./utils.js";
+import { broadcastToRenderer, broadcastToVisibleRenderersOrAll, typedHandle } from "./utils.js";
 import { getErrorDetails, getRetryability, getUserMessage } from "../utils/errorTypes.js";
 import { classifyError } from "../utils/errorClassification.js";
 import { store } from "../store.js";
@@ -250,7 +250,7 @@ class ErrorService {
       return;
     }
 
-    broadcastToRenderer(CHANNELS.ERROR_NOTIFY, error);
+    broadcastToVisibleRenderersOrAll(CHANNELS.ERROR_NOTIFY, error);
   }
 
   notifyError(error: unknown, options: Parameters<typeof createErrorRecord>[1] = {}) {
@@ -284,7 +284,7 @@ class ErrorService {
       const errors = this.pendingQueue.splice(0);
       for (const error of errors) {
         try {
-          broadcastToRenderer(CHANNELS.ERROR_NOTIFY, error);
+          broadcastToVisibleRenderersOrAll(CHANNELS.ERROR_NOTIFY, error);
         } catch {
           // Window may have been destroyed mid-flush; re-buffer remaining
         }

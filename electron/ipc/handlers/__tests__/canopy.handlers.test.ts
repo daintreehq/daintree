@@ -128,6 +128,7 @@ import { activeTerminalWatches } from "../canopyTerminalWatch.js";
 import { getIpcDispatcher } from "../../dispatcher.js";
 import type { ClientEndpoint } from "../../endpoint.js";
 import { CHANNELS } from "../../channels.js";
+import { readPluginTerminalScreen } from "../../../services/plugin/pluginTerminalScreenRead.js";
 
 type Handler = (event: Electron.IpcMainInvokeEvent, ...args: unknown[]) => Promise<unknown>;
 
@@ -223,6 +224,45 @@ describe("canopy IPC", () => {
     expect(gitBranch).not.toHaveBeenCalled();
   });
 
+  it("searches only the terminals the fleet holds, answering with ids alone", async () => {
+    state.runs = [
+      { runId: "run-1", spawnedAt: 100 },
+      { runId: "run-2", spawnedAt: 100 },
+    ];
+    state.screen = "Error: ECONNRESET at fetch";
+    vi.mocked(readPluginTerminalScreen).mockClear();
+    const sender = fakeSender(5);
+    const found = await invoke(CANOPY_METHOD_CHANNELS.searchScreens, sender, [
+      { runId: "run-1", spawnedAt: 100, terms: ["econnreset"] },
+      // Another incarnation of a run the fleet holds, and a run it doesn't.
+      { runId: "run-2", spawnedAt: 99, terms: ["econnreset"] },
+      { runId: "run-3", spawnedAt: 100, terms: ["econnreset"] },
+    ]);
+    expect(found).toEqual(["run-1"]);
+    expect(vi.mocked(readPluginTerminalScreen).mock.calls.map((call) => call[1])).toEqual([
+      "run-1",
+    ]);
+    // Nothing read for a search goes to the Canopy service.
+    expect(fetch).not.toHaveBeenCalled();
+    expect(canopyBackend.classifyWithCanopy).not.toHaveBeenCalled();
+    expect(canopyBackend.describeWithCanopy).not.toHaveBeenCalled();
+  });
+
+  it("refuses a search with no words, or words past its bounds", async () => {
+    state.runs = [{ runId: "run-1", spawnedAt: 100 }];
+    vi.mocked(readPluginTerminalScreen).mockClear();
+    const sender = fakeSender(5);
+    for (const terms of [[], [""], ["x".repeat(201)], Array.from({ length: 17 }, () => "x")]) {
+      const result = await outcome(
+        invoke(CANOPY_METHOD_CHANNELS.searchScreens, sender, [
+          { runId: "run-1", spawnedAt: 100, terms },
+        ])
+      );
+      expect(result.ok).toBe(false);
+    }
+    expect(vi.mocked(readPluginTerminalScreen)).not.toHaveBeenCalled();
+  });
+
   it("reads no branch while Canopy is off, or for an id that isn't one", async () => {
     state.runs = [{ runId: "run-1", spawnedAt: 100, cwd: "/repo" }];
     const sender = fakeSender(5);
@@ -279,6 +319,7 @@ describe("canopy IPC", () => {
     ["markAllRead", [[{ runId: "run-1", spawnedAt: 100, turn: 0 }]]],
     ["restoreReads", [[]]],
     ["runBranch", ["run-1", { spawnedAt: 100 }]],
+    ["searchScreens", [[{ runId: "run-1", spawnedAt: 100, terms: ["error"] }]]],
   ] as const)("refuses %s until Canopy is turned on, touching nothing", async (name, args) => {
     state.mode = "unset";
     const channel = CANOPY_METHOD_CHANNELS[name as keyof typeof CANOPY_METHOD_CHANNELS];

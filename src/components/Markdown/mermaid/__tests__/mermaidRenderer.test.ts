@@ -211,13 +211,13 @@ describe("requestMermaidRender", () => {
 
     const result = await render("graph TD; A-->B");
 
-    expect(result).toEqual({ ok: false });
+    expect(result).toEqual({ ok: false, undisplayable: true });
     expect(document.body.children).toHaveLength(0);
   });
 
   it("falls back when sanitizing leaves no svg", async () => {
     mermaidMock.render.mockResolvedValue({ svg: "<div>not svg</div>" });
-    expect(await render("graph TD; A-->B")).toEqual({ ok: false });
+    expect(await render("graph TD; A-->B")).toEqual({ ok: false, undisplayable: true });
   });
 
   it("never loads mermaid for a source over the size cap", async () => {
@@ -266,7 +266,7 @@ describe("requestMermaidRender", () => {
   it("keeps going after one diagram fails", async () => {
     mermaidMock.render.mockRejectedValueOnce(new Error("boom"));
     const [bad, good] = await Promise.all([render("graph TD; bad"), render("graph TD; good")]);
-    expect(bad).toEqual({ ok: false });
+    expect(bad).toEqual({ ok: false, undisplayable: true });
     expect(good.ok).toBe(true);
   });
 });

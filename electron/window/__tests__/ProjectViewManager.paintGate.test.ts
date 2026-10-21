@@ -161,6 +161,9 @@ vi.mock("../../services/CrashRecoveryService.js", () => ({
 vi.mock("../../services/ProcessMemoryMonitor.js", () => ({
   forgetBlinkSample: vi.fn(),
   forgetEluSample: vi.fn(),
+  noteRendererUnresponsive: vi.fn(),
+  noteRendererResponsive: vi.fn(),
+  forgetRendererDocumentState: vi.fn(),
 }));
 
 vi.mock("../../ipc/errorHandlers.js", () => ({
@@ -224,6 +227,8 @@ import { CHANNELS } from "../../ipc/channels.js";
 import { injectSkeletonCss } from "../skeletonCss.js";
 import { projectStore } from "../../services/ProjectStore.js";
 import { formatCancelledSwitchMessage } from "../projectSwitchCancelledError.js";
+import { forgetRemoteWorkspaceTitles, rememberRemoteWorkspaceTitle } from "../windowTitle.js";
+import { toHostScopedKey } from "../../../shared/types/remoteHosts.js";
 import {
   publishSystemMemoryPressure,
   resetSystemMemoryPressureDeliveryForTesting,
@@ -1254,6 +1259,47 @@ describe("ProjectViewManager — paint gate (cold-start visible swap)", () => {
     expect(win.contentView.removeChildView).toHaveBeenCalledTimes(1);
   });
 
+  it("hands a revived cached view the memory publish it missed while hidden (#13529)", async () => {
+    const incomingWc = createMockWebContents();
+    wcQueue.push(incomingWc);
+    const firstSwitch = manager.switchTo("proj-b", "/path/b");
+    await Promise.resolve();
+    await Promise.resolve();
+    manager.signalViewPainted(incomingWc.id);
+    await firstSwitch;
+
+    // Published while A sat in the cache, so only B's window view was sent it.
+    const escalation = {
+      status: "degraded",
+      swapUsedPercent: null,
+      swapKind: "swap",
+      fseventsdRssMb: null,
+      kernelPressureLevel: "critical",
+      escalated: true,
+      workloads: null,
+    } as const;
+    publishSystemMemoryPressure(escalation, []);
+    initialWc.send.mockClear();
+    try {
+      const pressureSends = () =>
+        initialWc.send.mock.calls.filter(
+          ([channel, envelope]) =>
+            channel === CHANNELS.EVENTS_PUSH &&
+            (envelope as { name?: string }).name === "system:memory-pressure"
+        );
+      const switchBack = manager.switchTo("proj-a", "/path/a");
+      for (let i = 0; i < 6; i++) await Promise.resolve();
+      manager.signalWarmViewPainted(initialWc.id);
+      await switchBack;
+
+      expect(pressureSends()).toEqual([
+        [CHANNELS.EVENTS_PUSH, { name: "system:memory-pressure", payload: escalation }],
+      ]);
+    } finally {
+      resetSystemMemoryPressureDeliveryForTesting();
+    }
+  });
+
   it("does not send the warm wake trigger on a cold switch", async () => {
     const incomingWc = createMockWebContents();
     wcQueue.push(incomingWc);
@@ -1865,9 +1911,15 @@ describe("ProjectViewManager — frame confirmation before reveal (#12394)", () 
     // register it against the host the window mapping still names.
     expect(onViewReady).not.toHaveBeenCalled();
     expect(vi.mocked(notifyError)).toHaveBeenCalledWith(error, { source: "project-switch" });
-    expect(
-      vi.mocked(logWarn).mock.calls.filter(([e]) => e === "projectview.warmpaintgate.unpainted")
-    ).toHaveLength(1);
+    const unpainted = vi
+      .mocked(logWarn)
+      .mock.calls.filter(([e]) => e === "projectview.warmpaintgate.unpainted");
+    expect(unpainted).toHaveLength(1);
+    // Names the stalled renderer, so its own long-frame reports can be matched.
+    expect(unpainted[0]?.[1]).toMatchObject({
+      webContentsId: initialWc.id,
+      switchId: expect.any(String),
+    });
 
     initialWc.executeJavaScript.mockImplementation(() => Promise.resolve());
     const retry = manager.switchTo("proj-a", "/path/a");
@@ -1906,6 +1958,37 @@ describe("ProjectViewManager — frame confirmation before reveal (#12394)", () 
     }
   });
 
+  it("leaves a cancelled switch away from a host's project to that view, named as its title is (#13713)", async () => {
+    const hostWc = createMockWebContents();
+    wcQueue.push(hostWc);
+    const opened = manager.switchToHostProject("studio-02", "944e00f5", "/srv/daintree");
+    await vi.advanceTimersByTimeAsync(0);
+    manager.signalSkeletonPainted(hostWc.id);
+    await vi.advanceTimersByTimeAsync(0);
+    await opened;
+    vi.mocked(logWarn).mockClear();
+    holdFrames(initialWc);
+    rememberRemoteWorkspaceTitle(toHostScopedKey("studio-02", "944e00f5"), "daintree", "studio-02");
+    try {
+      const rejected = expectRejection(
+        manager.switchTo("proj-a", "/path/a", undefined, { requesterWebContentsId: hostWc.id })
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      manager.signalWarmViewPainted(initialWc.id);
+      await vi.advanceTimersByTimeAsync(PAINT_HARD_MS);
+
+      const error = await rejected;
+      expect((error as { userMessage?: string }).userMessage).toBe(
+        formatCancelledSwitchMessage("daintree — studio-02", null)
+      );
+      expect(manager.getActiveProjectId()).toBe(toHostScopedKey("studio-02", "944e00f5"));
+      expect(attachedWebContents()).toEqual([hostWc]);
+      expect(vi.mocked(notifyError)).not.toHaveBeenCalled();
+    } finally {
+      forgetRemoteWorkspaceTitles("studio-02");
+    }
+  });
+
   it("notes an open system memory episode in a cancelled warm switch's copy", async () => {
     const bWc = await switchToColdB();
     holdFrames(initialWc);
@@ -1915,6 +1998,8 @@ describe("ProjectViewManager — frame confirmation before reveal (#12394)", () 
       swapKind: "swap",
       fseventsdRssMb: null,
       kernelPressureLevel: "warn",
+      escalated: false,
+      workloads: null,
     } as const;
     publishSystemMemoryPressure(episode, []);
     try {

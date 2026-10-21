@@ -112,6 +112,8 @@ export interface TerminalState {
   worktreeGitDir?: string;
   /** Location in the UI - grid or dock */
   location?: PanelLocation;
+  /** Restore target of a parked panel; written only with `location: "background"`. */
+  backgroundRestoreLocation?: "grid" | "dock";
   /** Command to execute after shell starts (e.g., 'claude' for AI agents) */
   command?: string;
   isInputLocked?: boolean;

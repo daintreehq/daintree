@@ -11,10 +11,10 @@ vi.mock("@/store", () => ({
 import { usePanelStore } from "@/store";
 import { useWebviewThrottle } from "../useWebviewThrottle";
 
-function makeWebviewEl(webContentsId = 1) {
-  return {
-    getWebContentsId: vi.fn(() => webContentsId),
-  } as unknown as Electron.WebviewTag;
+function makeWebviewEl(webContentsId = 1, getId: () => number = () => webContentsId) {
+  return Object.assign(new EventTarget(), {
+    getWebContentsId: vi.fn(getId),
+  }) as unknown as Electron.WebviewTag;
 }
 
 describe("useWebviewThrottle", () => {
@@ -52,6 +52,42 @@ describe("useWebviewThrottle", () => {
     });
 
     expect(setLifecycleStateMock).toHaveBeenCalledWith(1, true);
+  });
+
+  // Moving a docked panel's wrapper replaces its guest, which starts unfrozen
+  // and must be frozen again once it is ready (#13634).
+  it("re-freezes a replacement guest after its dom-ready", () => {
+    mockStore("other-panel");
+    let guestId = 1;
+    const webviewEl = makeWebviewEl(1, () => guestId);
+
+    renderHook(() => useWebviewThrottle("panel-1", "dock", webviewEl, true));
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+    expect(setLifecycleStateMock).toHaveBeenLastCalledWith(1, true);
+
+    guestId = 2;
+    act(() => {
+      webviewEl.dispatchEvent(new Event("dom-ready"));
+    });
+    expect(setLifecycleStateMock).toHaveBeenCalledTimes(1);
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+    expect(setLifecycleStateMock).toHaveBeenLastCalledWith(2, true);
+  });
+
+  it("does not freeze on dom-ready while the panel is visible", () => {
+    mockStore(null);
+    const webviewEl = makeWebviewEl();
+
+    renderHook(() => useWebviewThrottle("panel-1", "grid", webviewEl, true));
+    act(() => {
+      webviewEl.dispatchEvent(new Event("dom-ready"));
+      vi.advanceTimersByTime(500);
+    });
+    expect(setLifecycleStateMock).not.toHaveBeenCalledWith(expect.anything(), true);
   });
 
   it("unfreezes immediately when panel moves to grid", () => {

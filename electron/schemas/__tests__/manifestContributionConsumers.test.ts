@@ -693,6 +693,14 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       consumers: [{ file: FORGE_REGISTRY, symbol: "hostnameMatchesAny" }],
       note: "Matched against a repo host to route to the provider.",
     },
+    roles: {
+      mode: "verbatim",
+      consumers: [
+        { file: "electron/services/forgeProviderResolver.ts", symbol: "forgeProviderServesRole" },
+        { file: FORGE_REGISTRY, symbol: "validateForgeImplRoles" },
+      ],
+      note: "Gates which role (issues, code) the resolver may pick the provider for, and what its impl must implement.",
+    },
     kind: {
       mode: "verbatim",
       consumers: [{ file: CODE_FORGE_TAB, symbol: "CodeForgeSettingsTab (kind === 'local')" }],
@@ -845,6 +853,14 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       mode: "verbatim",
       consumers: [{ file: AGENT_REGISTRY, symbol: "toPluginAgentConfig" }],
       note: "Copied into the runtime agent config detection block (see agents.detection).",
+    },
+    resume: {
+      mode: "derived-input",
+      consumers: [
+        { file: AGENT_REGISTRY, symbol: "contributionToAgentConfig" },
+        { file: "shared/config/agentRegistry.ts", symbol: "expandResumeTemplate" },
+      ],
+      note: "Kept as data on resumeTemplate across the snapshot broadcast, then expanded into the function-shaped resume in each process's effective registry.",
     },
   },
   processTools: {

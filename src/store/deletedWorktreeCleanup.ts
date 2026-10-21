@@ -16,6 +16,20 @@ import { pluralize } from "@/lib/pluralize";
 export const DELETED_WORKTREE_SWEEP_INTERVAL_MS = 1000;
 
 /**
+ * Unobserved time spends the countdown this many times slower than watched
+ * time (#13538): the 60s default takes 5 minutes with the project cached or
+ * the window hidden. Slowed rather than paused, because agents create and
+ * delete worktrees on hosts nobody is looking at, and a paused countdown left
+ * every one of those rows waiting out its full window on the user's return.
+ */
+export const DELETED_WORKTREE_UNOBSERVED_SLOWDOWN = 5;
+
+/** Countdown an unobserved stretch spends; the rest is credited back. */
+function unobservedSpendMs(unobservedMs: number): number {
+  return Math.floor(unobservedMs / DELETED_WORKTREE_UNOBSERVED_SLOWDOWN);
+}
+
+/**
  * How long a hold may keep a row open before the countdown resumes anyway.
  * Two tiers, because the reasons differ by an order of magnitude in how long
  * they can legitimately last (#11259):
@@ -26,8 +40,11 @@ export const DELETED_WORKTREE_SWEEP_INTERVAL_MS = 1000;
  *   hatch is expensive here: trash holds a terminal for only TRASH_TTL_MS
  *   (20s) before killing the PTY, so force-trashing a live agent is closer to
  *   termination than to a reversible undo.
- * Both are measured across one continuous hold, in observed time — see
- * `holdStartedAt`, which is credited for unobserved gaps like any deadline.
+ * Both are measured across one continuous hold, in observed time only — see
+ * `holdStartedAt`, which is credited every unobserved gap in full. Deliberately
+ * not slowed like the deadline: a cap is leak recovery, and the sweep cannot
+ * see whether a working agent is still working while the view is away, so
+ * spending the cap there would force-trash live agents on the user's return.
  */
 export const DELETED_WORKTREE_TRANSIENT_HOLD_CAP_MS = 5 * 60_000;
 export const DELETED_WORKTREE_AGENT_HOLD_CAP_MS = 60 * 60_000;
@@ -46,16 +63,21 @@ function holdCapMs(reason: DeletedWorktreeHoldReason): number {
  * worktree cleanup would leave ghost rows pinned in the sidebar forever.
  *
  * The row is a rescue surface: its visible countdown is the user's window to
- * drag surviving terminals somewhere else. So the countdown measures time the
- * user could actually have *seen* it, not wall time (#11259):
- * - The row is recorded unarmed; this sweep arms it, so a project cached at
- *   deletion time is never charged for the hours it spent frozen before the
- *   countdown could be shown at all.
+ * drag surviving terminals somewhere else. So the countdown runs in real time
+ * only while the user could actually have *seen* it (#11259), and at a fifth
+ * of that speed while they could not (#13538):
  * - The sweep refuses to run at all while the view is cached or the window is
- *   hidden, and any gap it then finds on the way back is credited to every
- *   armed deadline instead of spent. Every sweep still spends at least one
- *   interval, so the countdown is strictly monotonic — neither project
- *   switching nor a stalled renderer can hold a row open indefinitely.
+ *   hidden, so nothing is trashed where nobody could see it happen. The gap it
+ *   then finds on the way back is spent at the slowed rate, and a row whose
+ *   slowed countdown ran out in that time is cleaned up on that first sweep
+ *   rather than granted a fresh window.
+ * - The row is recorded unarmed and this sweep arms it, charging the slowed
+ *   rate for however much of the gap the row existed for — a burst of rows
+ *   deleted on a host nobody is watching does not each start a full window
+ *   when the user comes back.
+ * - Every sweep still spends at least one interval, so the countdown is
+ *   strictly monotonic — neither project switching nor a stalled renderer can
+ *   hold a row open indefinitely.
  *
  * It holds the countdown (pinned at its current remaining, not reset to full)
  * only while firing would actively break something:
@@ -186,10 +208,17 @@ const heldRemaining = new Map<string, RemainingSnapshot>();
 // again.
 const holdStartedAt = new Map<string, number>();
 
+// When cleanup was last switched on from Never. A row first armed after that
+// is charged from no earlier than this, so time the countdown was switched off
+// is never spent. Stamped by a preference subscription rather than by the
+// sweep, which does not run while cached and would miss a toggle made from
+// another project's settings.
+let cleanupEnabledAt: number | null = null;
+
 /**
  * When the last sweep actually ran. The gap to the next one is time nobody
- * could have watched the countdown, and it is credited back to every armed row
- * rather than spent.
+ * could have watched the countdown, and every armed row spends it at the
+ * slowed rate rather than in real time.
  *
  * This is measured rather than driven off lifecycle edges on purpose: an edge
  * you miss is a row that thaws already expired, and there are several ways to
@@ -217,14 +246,16 @@ function forgetAllRows(): void {
 export function resetDeletedWorktreeCleanupState(): void {
   forgetAllRows();
   lastSweepAt = null;
+  cleanupEnabledAt = null;
 }
 
 /**
  * The interval does not run while there are no rows, so nothing advances
  * `lastSweepAt` across that stretch. Stamp it wherever an idle sweep would
  * have: at any moment the view was observable. Left alone while cached or
- * hidden, so a row that arrives then is still credited the unobserved time —
- * possibly more of it than before, which only ever defers a deadline.
+ * hidden, so the stretch stays in the gap and is charged at the slowed rate. A
+ * fresh row is only ever charged from its own `deletedAt`, so a stale stamp
+ * cannot bill it for time from before it existed.
  */
 function markIdleObservation(deps: SweepDeps = DEFAULT_DEPS): void {
   if (deps.isViewCached() || deps.isViewHidden()) return;
@@ -303,7 +334,8 @@ export function sweepDeletedWorktreeCleanup(deps: SweepDeps = DEFAULT_DEPS): voi
   // window and trash the row where nobody could see it happen.
   //
   // Returning BEFORE `lastSweepAt` is updated is what makes this safe: the
-  // whole guarded stretch stays in the gap, so the first sweep back credits it.
+  // whole guarded stretch stays in the gap, so the first sweep back charges it
+  // at the slowed rate.
   // Guarded in the body rather than only by stopping the interval, because
   // clearing an interval cannot retract a callback the event loop has already
   // picked up, and the visibility listener reaches this too.
@@ -327,21 +359,30 @@ export function sweepDeletedWorktreeCleanup(deps: SweepDeps = DEFAULT_DEPS): voi
     sinceLastSweep > deps.maxObservedGapMs
       ? sinceLastSweep - DELETED_WORKTREE_SWEEP_INTERVAL_MS
       : 0;
+  const previousSweepAt = lastSweepAt;
   lastSweepAt = now;
   if (unobservedMs > 0) {
-    // A hold's cap counts observed time too — otherwise a project left cached
+    // A hold's cap counts observed time only, and is credited the whole gap
+    // rather than the deadline's slowed share — otherwise a project left cached
     // overnight comes back with its agent's protection already spent.
     for (const [id, startedAt] of holdStartedAt) {
       holdStartedAt.set(id, startedAt + unobservedMs);
     }
   }
   const ttlSeconds = usePreferencesStore.getState().deletedWorktreeCleanupSeconds;
+  // Cleanup went off and back on with no sweep in between to disarm anything,
+  // so a deadline still standing was spending through time it was switched off.
+  const reEnabledSinceLastSweep =
+    cleanupEnabledAt !== null && previousSweepAt !== null && cleanupEnabledAt > previousSweepAt;
 
   for (const entry of deletedWorktrees.values()) {
     // An unarmed entry is a fresh (or re-recorded) row — any stale state from a
     // previous row under the same id must not leak into its countdown.
     if (entry.expiresAt === null) forgetRow(entry.id);
     else if (firedIds.has(entry.id)) continue;
+    // Disarmed in effect, so it re-arms like a fresh row from the enable time.
+    const staleArm = entry.expiresAt !== null && reEnabledSinceLastSweep;
+    if (staleArm) forgetRow(entry.id);
 
     if (ttlSeconds === 0) {
       if (entry.expiresAt !== null || entry.holdReason !== null) {
@@ -364,13 +405,25 @@ export function sweepDeletedWorktreeCleanup(deps: SweepDeps = DEFAULT_DEPS): voi
 
     // Resolve this row's deadline before any hold or expiry decision.
     let expiresAt: number;
-    if (entry.expiresAt === null || ttlChanged) {
-      // Fresh row, or one whose TTL just changed: a full window from now.
+    if (ttlChanged) {
+      // The TTL just changed: a full window of the new one from now.
       expiresAt = now + ttlMs;
+    } else if (entry.expiresAt === null || staleArm) {
+      // Fresh row. Charge the slowed rate for the part of the gap it existed
+      // with cleanup on — measured from `deletedAt` or the moment cleanup was
+      // switched back on, never earlier, and with no sweep on record that is
+      // the only start there is. Same threshold and the same one-interval
+      // allowance as the shared gap, so a row recorded between two ordinary
+      // ticks is armed at a full window.
+      const rowGapMs =
+        now - Math.max(entry.deletedAt, previousSweepAt ?? entry.deletedAt, cleanupEnabledAt ?? 0);
+      const rowUnobservedMs =
+        rowGapMs > deps.maxObservedGapMs ? rowGapMs - DELETED_WORKTREE_SWEEP_INTERVAL_MS : 0;
+      expiresAt = now + ttlMs - unobservedSpendMs(rowUnobservedMs);
     } else {
-      // Push the deadline out by whatever went unobserved, so the countdown
-      // only ever spends time the row was actually on screen.
-      expiresAt = entry.expiresAt + unobservedMs;
+      // Push the deadline out by the unobserved gap minus its slowed share, so
+      // watched time spends in real time and unwatched time at a fifth of it.
+      expiresAt = entry.expiresAt + unobservedMs - unobservedSpendMs(unobservedMs);
     }
 
     const reasons = activeHoldReasons(entry.id, deps);
@@ -493,6 +546,15 @@ export function startDeletedWorktreeCleanup(): () => void {
     if (phase === "revealed") sweepDeletedWorktreeCleanup();
   });
 
+  const offCleanupPreference = usePreferencesStore.subscribe((state, prevState) => {
+    if (
+      prevState.deletedWorktreeCleanupSeconds === 0 &&
+      state.deletedWorktreeCleanupSeconds !== 0
+    ) {
+      cleanupEnabledAt = DEFAULT_DEPS.now();
+    }
+  });
+
   const offRows = useWorktreeSelectionStore.subscribe((state, prevState) => {
     if (state.deletedWorktrees === prevState.deletedWorktrees) return;
     if (state.deletedWorktrees.size > 0) {
@@ -513,6 +575,7 @@ export function startDeletedWorktreeCleanup(): () => void {
   return () => {
     stopSweeping();
     offRows();
+    offCleanupPreference();
     offViewLifecycle();
     document.removeEventListener("visibilitychange", onVisibilityChange);
   };

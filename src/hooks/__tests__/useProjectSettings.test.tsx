@@ -102,4 +102,29 @@ describe("useProjectSettings", () => {
     expect(saveSettingsMock).toHaveBeenCalledWith("project-other", { runCommands: [cmdA] });
     expect(result.current.detectedRunners).toEqual([cmdB]);
   });
+
+  it("exposes no settings for another project whose load failed, until a retry succeeds", async () => {
+    const saved: ProjectSettings = {
+      runCommands: [{ id: "t", name: "test", command: "npm test" }],
+      excludedPaths: ["generated"],
+    };
+    getSettingsMock
+      .mockRejectedValueOnce(new Error("EACCES: permission denied"))
+      .mockResolvedValueOnce(saved);
+    detectRunnersMock.mockResolvedValue([]);
+
+    const { result } = renderHook(() => useProjectSettings("project-other"));
+
+    await waitFor(() => {
+      expect(result.current.error).toBe("EACCES: permission denied");
+    });
+    expect(result.current.settings).toBeNull();
+
+    await act(async () => {
+      await result.current.refresh();
+    });
+
+    expect(result.current.settings).toEqual(saved);
+    expect(result.current.error).toBeNull();
+  });
 });

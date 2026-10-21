@@ -237,7 +237,7 @@ describe("WorktreeHeader issue title headline", () => {
     });
 
     expect(screen.queryByRole("button", { name: /Open issue/ })).toBeNull();
-    expect(screen.getByText(/my-branch/)).toBeDefined();
+    expect(screen.getByText("feature/my-branch")).toBeDefined();
   });
 
   it("shows branch label in secondary row when issue title is headline", () => {
@@ -251,7 +251,7 @@ describe("WorktreeHeader issue title headline", () => {
     });
 
     expect(screen.getByText("Fix the thing")).toBeDefined();
-    expect(screen.getByText(/fix-the-thing/)).toBeDefined();
+    expect(screen.getByText("feature/fix-the-thing")).toBeDefined();
   });
 
   it("does not show duplicate issue badge in lower row when issue is headline", () => {
@@ -297,7 +297,7 @@ describe("WorktreeHeader issue title headline", () => {
     });
 
     // Branch name should be the primary headline (no headline-level issue button)
-    expect(screen.getByText(/something/)).toBeDefined();
+    expect(screen.getByText("feature/something")).toBeDefined();
     // Issue badge should still appear in secondary row with #100 fallback
     const issueButton = screen.getByRole("button", { name: /Open issue #100/ });
     expect(issueButton).toBeDefined();
@@ -381,7 +381,7 @@ describe("WorktreeHeader primary worktree standard branch layout", () => {
       branchLabel: "feature/test",
     });
     expect(screen.queryByTestId("primary-worktree-project-name")).toBeNull();
-    expect(screen.getByText(/test/)).toBeDefined();
+    expect(screen.getByText("feature/test")).toBeDefined();
   });
 
   it("uses issue title as headline even when isMainOnStandardBranch if issue exists", () => {
@@ -424,7 +424,7 @@ describe("WorktreeHeader plan file badge", () => {
       badges: { onOpenPlan },
     });
 
-    const planButton = screen.getByRole("button", { name: /View agent plan file/ });
+    const planButton = screen.getByRole("button", { name: /plan file/ });
     expect(planButton).toBeDefined();
     expect(screen.getByText("TODO.md")).toBeDefined();
   });
@@ -436,7 +436,7 @@ describe("WorktreeHeader plan file badge", () => {
       badges: { onOpenPlan },
     });
 
-    expect(screen.queryByRole("button", { name: /View agent plan file/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /plan file/ })).toBeNull();
   });
 
   it("does not render plan badge when hasPlanFile is true but onOpenPlan is not provided", () => {
@@ -445,7 +445,7 @@ describe("WorktreeHeader plan file badge", () => {
       badges: {},
     });
 
-    expect(screen.queryByRole("button", { name: /View agent plan file/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /plan file/ })).toBeNull();
   });
 });
 
@@ -536,7 +536,7 @@ describe("WorktreeHeader click bubbling", () => {
       isActive: false,
     });
 
-    const planButton = screen.getByRole("button", { name: /View agent plan file/ });
+    const planButton = screen.getByRole("button", { name: /plan file/ });
     fireEvent.click(planButton);
     expect(onOpenPlan).not.toHaveBeenCalled();
     expect(onParentClick).toHaveBeenCalledOnce();
@@ -550,7 +550,7 @@ describe("WorktreeHeader click bubbling", () => {
       isActive: true,
     });
 
-    const planButton = screen.getByRole("button", { name: /View agent plan file/ });
+    const planButton = screen.getByRole("button", { name: /plan file/ });
     fireEvent.click(planButton);
     expect(onOpenPlan).toHaveBeenCalledOnce();
     expect(onParentClick).toHaveBeenCalledOnce();
@@ -574,10 +574,15 @@ describe("WorktreeHeader click bubbling", () => {
 
     const issueButton = screen.getByRole("button", { name: /Open issue #42/ });
     const prButton = screen.getByRole("button", { name: /pull request #101/ });
-    const planButton = screen.getByRole("button", { name: /View agent plan file/ });
+    const planButton = screen.getByRole("button", { name: /plan file/ });
     expect(issueButton.getAttribute("aria-disabled")).toBe("true");
     expect(prButton.getAttribute("aria-disabled")).toBe("true");
-    expect(planButton.getAttribute("aria-disabled")).toBe("true");
+    // The plan row's first click selects the card rather than being refused,
+    // so it says so in its name instead of announcing itself disabled.
+    expect(planButton.getAttribute("aria-disabled")).toBeNull();
+    expect(planButton.getAttribute("aria-label")).toBe(
+      "Select worktree, then open plan file TODO.md"
+    );
   });
 
   it("active badges do not have aria-disabled attribute", () => {
@@ -598,7 +603,7 @@ describe("WorktreeHeader click bubbling", () => {
 
     const issueButton = screen.getByRole("button", { name: /Open issue #42/ });
     const prButton = screen.getByRole("button", { name: /pull request #101/ });
-    const planButton = screen.getByRole("button", { name: /View agent plan file/ });
+    const planButton = screen.getByRole("button", { name: /plan file/ });
     expect(issueButton.getAttribute("aria-disabled")).toBeNull();
     expect(prButton.getAttribute("aria-disabled")).toBeNull();
     expect(planButton.getAttribute("aria-disabled")).toBeNull();
@@ -768,33 +773,17 @@ describe("WorktreeHeader cleanup button", () => {
     expect(screen.queryByTestId("worktree-cleanup-button")).toBeNull();
   });
 
-  it("dims the cleanup button alongside other actions on inactive, non-collapsed cards", () => {
-    renderHeader({ onCleanupWorktree: vi.fn(), isActive: false, isCollapsed: false });
-    const button = screen.getByTestId("worktree-cleanup-button");
+  it.each([
+    { isActive: false, isCollapsed: false },
+    { isActive: false, isCollapsed: true },
+    { isActive: true, isCollapsed: false },
+  ])("draws the toolbar at full strength (active=$isActive, collapsed=$isCollapsed)", (state) => {
+    renderHeader({ onCleanupWorktree: vi.fn(), ...state });
     const wrapper = screen.getByTestId("worktree-actions-wrapper");
-    // The wrapper persists at reduced opacity so keyboard and touch users can reach it,
-    // and reveals fully on group hover/focus or when a contained menu opens.
-    expect(wrapper.className).toContain("opacity-50");
-    expect(wrapper.className).not.toContain("pointer-events-none");
-    expect(wrapper.className).toContain("group-hover/card:opacity-100");
-    expect(wrapper.className).toContain("group-has-[:focus-visible]/card:opacity-100");
-    expect(wrapper.className).toContain("group-has-[[data-state=open]]/card:opacity-100");
-    // The cleanup button inherits visibility through the wrapper, not its own classes.
-    expect(wrapper.contains(button)).toBe(true);
-  });
-
-  it("shows the cleanup button on active cards", () => {
-    renderHeader({ onCleanupWorktree: vi.fn(), isActive: true, isCollapsed: false });
-    const wrapper = screen.getByTestId("worktree-actions-wrapper");
-    expect(wrapper.className).toContain("opacity-100");
-    expect(wrapper.className).not.toContain("opacity-0");
-  });
-
-  it("shows the cleanup button on collapsed cards", () => {
-    renderHeader({ onCleanupWorktree: vi.fn(), isActive: false, isCollapsed: true });
-    const wrapper = screen.getByTestId("worktree-actions-wrapper");
-    expect(wrapper.className).toContain("opacity-100");
-    expect(wrapper.className).not.toContain("opacity-0");
+    // A faded toolbar put enabled controls under 3:1; the buttons' own ink
+    // is the only rest treatment, the same on every card.
+    expect(wrapper.className).not.toMatch(/(^|\s)opacity-/);
+    expect(wrapper.contains(screen.getByTestId("worktree-cleanup-button"))).toBe(true);
   });
 
   it("renders the cleanup button as the first action in the wrapper", () => {
@@ -1448,7 +1437,7 @@ describe("WorktreeHeader custom title (#13409)", () => {
     const issueButtons = container.querySelectorAll('button[aria-label*="Open issue"]');
     expect(issueButtons.length).toBe(1);
     expect(issueButtons[0]!.getAttribute("aria-label")).toBe("Open issue #100: Fix the thing");
-    expect(screen.getByText(/fix-the-thing/)).toBeDefined();
+    expect(screen.getByText("feature/fix-the-thing")).toBeDefined();
   });
 
   it("keeps PR provenance from sourcePrNumber: the PR moves down with its title, then the issue", () => {
@@ -1491,7 +1480,7 @@ describe("WorktreeHeader custom title (#13409)", () => {
     renderHeader({ branchLabel: "feature/test", customTitle: "Spike" });
 
     expect(screen.getByTestId("worktree-custom-title").textContent).toBe("Spike");
-    expect(screen.getByText(/test/)).toBeDefined();
+    expect(screen.getByText("feature/test")).toBeDefined();
   });
 
   it("replaces the project name on main but keeps main's branch row", () => {

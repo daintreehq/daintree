@@ -597,6 +597,7 @@ describe("ReviewHub", () => {
       expect(listCommitsMock).toHaveBeenCalledWith({
         cwd: WORKTREE_PATH,
         limit: 8,
+        includeTotal: false,
       });
 
       // After fetch, the textarea should show the most recent commit message

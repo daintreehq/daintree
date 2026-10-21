@@ -25,6 +25,7 @@ import { cn } from "@/lib/utils";
 import { avatarUrlAtSize } from "@/components/ui/Avatar";
 import { worktreeClient, forgeClient, agentSettingsClient, systemClient } from "@/clients";
 import { patchIssueAssigneeCache } from "@/lib/forgeResourceCache";
+import { linkProviderIssue } from "@/utils/linkProviderIssue";
 import { logError } from "@/utils/logger";
 import { resolveIssuePrequeries } from "./bulkCreatePrequery";
 import { notify } from "@/lib/notify";
@@ -735,6 +736,9 @@ export function BulkCreateWorktreeDialog({
                   // `getAvailableBranch` reserves nothing, so a bulk run racing
                   // itself can have the host suffix past the candidate.
                   resolvedBranch = created.branch;
+                  if (planned.mode === "issue" && "assignees" in planned.item) {
+                    linkProviderIssue(created.worktreeId, planned.item);
+                  }
                 }
 
                 tracking.set(itemNumber, {

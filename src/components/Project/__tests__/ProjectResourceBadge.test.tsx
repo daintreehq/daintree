@@ -744,6 +744,22 @@ describe("ProjectResourceBadge — visibility- and cache-aware polling", () => {
     expect(trigger?.textContent ?? "").not.toContain("High app memory");
   });
 
+  it("warns on the pressure figure, not a total swollen by GPU footprint (#13637)", async () => {
+    mockGetAll.mockResolvedValue([makeProject({ id: "p1", name: "Proj One" })]);
+    statsStoreState.stats = { p1: { processCount: 1 } };
+    mockGetHardwareInfo.mockResolvedValue({ totalMemoryBytes: 16 * 1024 ** 3, logicalCpuCount: 8 });
+    mockGetAppMetrics.mockResolvedValue({ totalMemoryMB: 9_000, pressureMemoryMB: 600 });
+
+    const { container } = render(<ProjectResourceBadge />);
+    await flush();
+    expect(container.textContent ?? "").not.toContain("High app memory");
+
+    mockGetAppMetrics.mockResolvedValue({ totalMemoryMB: 9_000, pressureMemoryMB: 6_000 });
+    await advance(10_000);
+
+    expect(container.textContent ?? "").toContain("High app memory");
+  });
+
   it("removes visibility listener on unmount", () => {
     const { unmount } = render(<ProjectResourceBadge />);
     expect(visibilityListeners.length).toBeGreaterThan(0);

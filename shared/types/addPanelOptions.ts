@@ -39,6 +39,11 @@ export interface AddPanelOptionsBase {
   cwd?: string;
   location?: PanelLocation;
   /**
+   * Restore target for a panel created with `location: "background"`
+   * (default grid). Ignored for any other location.
+   */
+  backgroundRestoreLocation?: "grid" | "dock";
+  /**
    * Opt-in placement hint: land the new panel immediately after this one
    * instead of at the end. Resolved against live store state at commit time,
    * never precomputed as a numeric index — `addPanel` has async gaps (agent
@@ -315,6 +320,8 @@ export interface DevPreviewPanelOptions extends AddPanelOptionsBase {
   viewportDpr?: 1 | 2 | 3;
   /** Whether the viewport is scaled to fit the available pane */
   viewportFit?: boolean;
+  /** Preview the worktree's resource environment endpoint instead of running devCommand */
+  previewsResourceEndpoint?: boolean;
   /** Last captured scroll position, paired with URL for stale-scroll prevention */
   devPreviewScrollPosition?: { url: string; scrollY: number };
 }

@@ -72,7 +72,9 @@ The `affordance` inventory category is gone, and so is `button.tsx`'s `ghost-suc
 
 A process that is running right now keeps its green, but it belongs on `activity-working` (or its alias `state-working`), not `status-success`. The two resolve to adjacent hues in every built-in theme, so this is a semantic move rather than a visible one: "in flight" stops being spelled the same way as "succeeded". It also takes those sites out of the guard entirely, which is the point — a running server is not a success, and the inventory should not have to pretend otherwise.
 
-`projectRowStatus`'s `running` tone, the MCP server's running dot, the dev-server indicator and the assistant's live-session mark all moved this way.
+`projectRowStatus`'s `running` tone, the MCP server's running dot and the assistant's live-session mark all moved this way.
+
+The worktree card's dev-server indicator went one step further. It renders only while a server is live, so the mark's presence already says running, and a green globe at rest sat beside the agent's green working spinner in the same header. It is neutral while running and keeps `activity-working` only while the server is starting or installing, the same pulse the environment and attachment marks beside it use.
 
 ## The non-colour channel
 

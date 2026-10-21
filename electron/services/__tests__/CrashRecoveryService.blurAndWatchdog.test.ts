@@ -622,6 +622,7 @@ describe("CrashRecoveryService", () => {
       expect(pending).not.toBeNull();
       // The bug: this used to be T0 + DEAD_MS (relaunch time).
       expect(pending!.entry.timestamp).toBe(heartbeat);
+      expect(pending!.entry.timestampSource).toBe("heartbeat");
       expect(pending!.entry.sessionDurationMs).toBe(heartbeat - T0);
     });
 
@@ -645,6 +646,7 @@ describe("CrashRecoveryService", () => {
       const pending = svc.getPendingCrash();
       expect(pending).not.toBeNull();
       expect(pending!.entry.timestamp).toBe(killedAt);
+      expect(pending!.entry.timestampSource).toBe("watchdog");
       expect(pending!.entry.sessionDurationMs).toBe(killedAt - T0);
       expect(pending!.entry.cause).toBe("watchdog-deadlock");
     });
@@ -666,6 +668,7 @@ describe("CrashRecoveryService", () => {
       const pending = svc.getPendingCrash();
       expect(pending).not.toBeNull();
       expect(pending!.entry.timestamp).toBe(suspendStart);
+      expect(pending!.entry.timestampSource).toBe("suspend");
       expect(pending!.entry.crashCause).toBe("suspended-then-lost");
     });
 
@@ -689,6 +692,7 @@ describe("CrashRecoveryService", () => {
       const pending = svc.getPendingCrash();
       expect(pending).not.toBeNull();
       expect(pending!.entry.timestamp).toBe(capturedAt);
+      expect(pending!.entry.timestampSource).toBe("backup");
     });
 
     it("clamps a heartbeat in the future down to the relaunch time", () => {

@@ -9,6 +9,7 @@ import type {
 } from "../../shared/types/processes.js";
 import type { PluginProcessInfo } from "../../shared/types/ipc/pluginProcess.js";
 import type { WorkerResourceSnapshot } from "../../shared/types/workerGovernance.js";
+import { getProcessMemoryKb } from "../utils/processMemory.js";
 
 export interface ProcessInventoryDeps {
   getHostInventory: (extraPids: readonly number[]) => Promise<{
@@ -32,8 +33,7 @@ function workerSample(metric: Electron.ProcessMetric | undefined): ProcessTreeSa
   if (!metric) return null;
   return {
     cpuPercent: metric.cpu.percentCPUUsage,
-    // Electron reports KB; workingSetSize is the one field on every platform.
-    memoryKb: metric.memory.workingSetSize,
+    memoryKb: getProcessMemoryKb(metric),
     processCount: 1,
     members: [],
   };

@@ -375,4 +375,160 @@ describe("useFindInPage", () => {
 
     expect(webview.findInPage).toHaveBeenCalledWith("test", { findNext: false, matchCase: true });
   });
+
+  it("resumes an open query when the webview becomes ready", () => {
+    const webview = createMockWebview();
+    const { result, rerender } = renderHook(
+      ({ ready }) => useFindInPage("panel-1", webview, ready, true),
+      { initialProps: { ready: false } }
+    );
+
+    act(() => result.current.open());
+    act(() => result.current.setQuery("hello"));
+    expect(webview.findInPage).not.toHaveBeenCalled();
+
+    rerender({ ready: true });
+
+    expect(webview.findInPage).toHaveBeenCalledTimes(1);
+    expect(webview.findInPage).toHaveBeenCalledWith("hello", { findNext: false, matchCase: false });
+  });
+
+  it("resumes an open query on a replacement webview and drops the old match state", () => {
+    const webviewA = createMockWebview();
+    webviewA.findInPage.mockReturnValue(7);
+    const webviewB = createMockWebview();
+    webviewB.findInPage.mockReturnValue(3);
+    const { result, rerender } = renderHook(
+      ({ webview }) => useFindInPage("panel-1", webview, true, true),
+      { initialProps: { webview: webviewA } }
+    );
+
+    act(() => result.current.open());
+    act(() => result.current.setQuery("hello"));
+    act(() => result.current.toggleMatchCase());
+    act(() => {
+      webviewA._emit("found-in-page", {
+        result: { requestId: 7, activeMatchOrdinal: 2, matches: 4, finalUpdate: true },
+      });
+    });
+    expect(result.current.matchCount).toBe(4);
+
+    rerender({ webview: webviewB });
+
+    expect(webviewB.findInPage).toHaveBeenCalledTimes(1);
+    expect(webviewB.findInPage).toHaveBeenCalledWith("hello", { findNext: false, matchCase: true });
+    expect(result.current.activeMatch).toBe(0);
+    expect(result.current.matchCount).toBe(0);
+
+    act(() => {
+      webviewB._emit("found-in-page", {
+        result: { requestId: 7, activeMatchOrdinal: 1, matches: 9, finalUpdate: true },
+      });
+    });
+    expect(result.current.matchCount).toBe(0);
+
+    act(() => {
+      webviewB._emit("found-in-page", {
+        result: { requestId: 3, activeMatchOrdinal: 1, matches: 2, finalUpdate: true },
+      });
+    });
+    expect(result.current.matchCount).toBe(2);
+  });
+
+  it("does not resume when the find bar is closed or the query is empty", () => {
+    const webview = createMockWebview();
+    const { result, rerender } = renderHook(
+      ({ ready }) => useFindInPage("panel-1", webview, ready, true),
+      { initialProps: { ready: false } }
+    );
+
+    rerender({ ready: true });
+    expect(webview.findInPage).not.toHaveBeenCalled();
+
+    rerender({ ready: false });
+    act(() => result.current.open());
+    rerender({ ready: true });
+    expect(webview.findInPage).not.toHaveBeenCalled();
+  });
+
+  it("does not resume while an IME composition is in progress", () => {
+    const webview = createMockWebview();
+    const { result, rerender } = renderHook(
+      ({ ready }) => useFindInPage("panel-1", webview, ready, true),
+      { initialProps: { ready: false } }
+    );
+
+    act(() => result.current.open());
+    act(() => result.current.setQuery("hello"));
+    result.current.isComposingRef.current = true;
+
+    rerender({ ready: true });
+    expect(webview.findInPage).not.toHaveBeenCalled();
+  });
+
+  it("does not re-issue a find from the resume path when typing or toggling matchCase", () => {
+    const webview = createMockWebview();
+    const { result } = renderHook(() => useFindInPage("panel-1", webview, true, true));
+
+    act(() => result.current.open());
+    act(() => result.current.setQuery("h"));
+    act(() => result.current.setQuery("he"));
+    act(() => result.current.toggleMatchCase());
+
+    expect(webview.findInPage).toHaveBeenCalledTimes(3);
+  });
+
+  it("resumes with the latest query and matchCase set while unready", () => {
+    const webview = createMockWebview();
+    const { result, rerender } = renderHook(
+      ({ ready }) => useFindInPage("panel-1", webview, ready, true),
+      { initialProps: { ready: false } }
+    );
+
+    act(() => result.current.open());
+    act(() => result.current.setQuery("h"));
+    act(() => result.current.setQuery("hello"));
+    act(() => result.current.toggleMatchCase());
+
+    rerender({ ready: true });
+
+    expect(webview.findInPage).toHaveBeenCalledTimes(1);
+    expect(webview.findInPage).toHaveBeenCalledWith("hello", { findNext: false, matchCase: true });
+  });
+
+  it("clears stale results when readiness drops and resumes once when it returns", () => {
+    const webview = createMockWebview();
+    webview.findInPage.mockReturnValueOnce(1).mockReturnValueOnce(2);
+    const { result, rerender } = renderHook(
+      ({ ready }) => useFindInPage("panel-1", webview, ready, true),
+      { initialProps: { ready: true } }
+    );
+
+    act(() => result.current.open());
+    act(() => result.current.setQuery("hello"));
+    act(() => {
+      webview._emit("found-in-page", {
+        result: { requestId: 1, activeMatchOrdinal: 1, matches: 3, finalUpdate: true },
+      });
+    });
+    expect(result.current.matchCount).toBe(3);
+
+    rerender({ ready: false });
+    expect(result.current.matchCount).toBe(0);
+    act(() => {
+      webview._emit("found-in-page", {
+        result: { requestId: 1, activeMatchOrdinal: 1, matches: 3, finalUpdate: true },
+      });
+    });
+    expect(result.current.matchCount).toBe(0);
+
+    rerender({ ready: true });
+    expect(webview.findInPage).toHaveBeenCalledTimes(2);
+    act(() => {
+      webview._emit("found-in-page", {
+        result: { requestId: 2, activeMatchOrdinal: 1, matches: 5, finalUpdate: true },
+      });
+    });
+    expect(result.current.matchCount).toBe(5);
+  });
 });

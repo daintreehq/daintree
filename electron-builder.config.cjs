@@ -17,6 +17,7 @@ const RUNTIME_NODE_MODULE_ROOTS = [
   "better-sqlite3",
   "win-job-object",
   "posix-pty-reaper",
+  "mac-phys-footprint",
   "copytree",
   "onnxruntime-node",
   "avr-vad",
@@ -103,6 +104,10 @@ function baseFiles() {
     "!demo/**",
     "!node_modules/node-pty/bin",
     "!node_modules/node-pty/prebuilds",
+    // @electron/rebuild copies every built .node into bin/<platform>-<arch>-<abi>;
+    // the shim only loads build/Release, and the copy is the same Mach-O in
+    // both universal slices, which @electron/universal rejects.
+    "!node_modules/mac-phys-footprint/bin",
     "!node_modules/ffmpeg-static/**/*",
     // Sample plugins are an e2e harness fixture (#9286) — sideloaded only
     // when `DAINTREE_E2E_SIDELOAD_PLUGIN_DIR` is set, which is constant-
@@ -168,6 +173,7 @@ module.exports = async function () {
       "node_modules/better-sqlite3/**/*",
       "node_modules/win-job-object/**/*",
       "node_modules/posix-pty-reaper/**/*",
+      "node_modules/mac-phys-footprint/**/*",
       // onnxruntime-node ships per-platform native binaries (.node/.dll/.dylib/
       // .so) for the Silero VAD side-chain (#9177) — they require real
       // filesystem access for the N-API load and cannot live inside the ASAR.
@@ -250,7 +256,7 @@ module.exports = async function () {
       // merge input from a package that ships.
       files: [...baseFiles(), "!node_modules/better-sqlite3/prebuilds/{linux,linuxmusl,win32}-*.node"],
       x64ArchFiles:
-        "Contents/Resources/app.asar.unpacked/node_modules/{node-pty/build/Release/**,better-sqlite3/prebuilds/darwin-*.node,win-job-object/bin/**,posix-pty-reaper/build/Release/**,onnxruntime-node/bin/**,@parcel/watcher-darwin-*/watcher.node,@parcel/watcher/bin/darwin-*/watcher.node}",
+        "Contents/Resources/app.asar.unpacked/node_modules/{node-pty/build/Release/**,better-sqlite3/prebuilds/darwin-*.node,win-job-object/bin/**,posix-pty-reaper/build/Release/**,mac-phys-footprint/build/Release/**,onnxruntime-node/bin/**,@parcel/watcher-darwin-*/watcher.node,@parcel/watcher/bin/darwin-*/watcher.node}",
       forceCodeSigning: true,
       notarize: false,
       binaries: [

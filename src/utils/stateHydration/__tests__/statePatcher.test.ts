@@ -78,6 +78,7 @@ const {
   buildArgsForOrphanedTerminal,
   inferWorktreeIdFromCwd,
 } = await import("../statePatcher");
+const { parkIfSavedInBackground } = await import("../backgroundParking");
 type SavedTerminalData = import("../statePatcher").SavedTerminalData;
 type AddTerminalArgs = import("../statePatcher").AddTerminalArgs;
 
@@ -3944,5 +3945,73 @@ describe("scratchpad restore (#12835)", () => {
       "/p"
     );
     expect(result.scratchpad).toBeUndefined();
+  });
+});
+
+describe("parkIfSavedInBackground (#13661)", () => {
+  function backendArgs(saved: SavedTerminalData): AddTerminalArgs {
+    return buildArgsForBackendTerminal({ id: saved.id, cwd: "/p", title: "T" }, saved, "/p");
+  }
+
+  it("re-parks a saved background panel with its recorded restore target", () => {
+    const saved: SavedTerminalData = {
+      id: "t1",
+      location: "background",
+      backgroundRestoreLocation: "dock",
+    };
+    const args = backendArgs(saved);
+
+    parkIfSavedInBackground(args, saved);
+
+    expect(args.location).toBe("background");
+    expect(args.backgroundRestoreLocation).toBe("dock");
+  });
+
+  it("falls back to a grid restore target when none (or an unknown one) was saved", () => {
+    for (const backgroundRestoreLocation of [undefined, "overlay"]) {
+      const saved: SavedTerminalData = {
+        id: "t1",
+        location: "background",
+        backgroundRestoreLocation,
+      };
+      const args = backendArgs(saved);
+
+      parkIfSavedInBackground(args, saved);
+
+      expect(args.location).toBe("background");
+      expect(args.backgroundRestoreLocation).toBe("grid");
+    }
+  });
+
+  it("leaves a panel saved on the grid or dock where the builder placed it", () => {
+    for (const location of ["grid", "dock"]) {
+      const saved: SavedTerminalData = { id: "t1", location, backgroundRestoreLocation: "dock" };
+      const args = backendArgs(saved);
+
+      parkIfSavedInBackground(args, saved);
+
+      expect(args.location).toBe(location);
+      expect(args.backgroundRestoreLocation).toBeUndefined();
+    }
+  });
+});
+
+describe("buildArgsForNonPtyRecreation with a parked panel (#13661)", () => {
+  it("returns a parked panel to the dock it was parked from", () => {
+    const args = buildArgsForNonPtyRecreation(
+      { id: "b1", location: "background", backgroundRestoreLocation: "dock" },
+      "browser",
+      "/p"
+    );
+    expect(args.location).toBe("dock");
+  });
+
+  it("returns a parked panel with no recorded target to the grid", () => {
+    const args = buildArgsForNonPtyRecreation(
+      { id: "b1", location: "background" },
+      "browser",
+      "/p"
+    );
+    expect(args.location).toBe("grid");
   });
 });

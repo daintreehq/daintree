@@ -7,10 +7,11 @@ import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { systemClient } from "@/clients/systemClient";
 import { logError } from "@/utils/logger";
 import { isProjectViewCached, subscribeProjectViewLifecycle } from "@/lib/viewCacheState";
-import type { WhySlowSnapshot } from "@shared/types/whySlow";
+import type { WhySlowSnapshot, WhySlowTerminalWorkloadProject } from "@shared/types/whySlow";
 import type { HostMemoryPauseSnapshot } from "@shared/types/pty-host";
 import { HOST_MEMORY_PAUSE_COPY } from "@/lib/hostMemoryPauseCopy";
 import { useHostMemoryPauseStore } from "@/store/hostMemoryPauseStore";
+import { useProjectStore } from "@/store/projectStore";
 import { MetricTile, type MetricTone } from "./MetricTile";
 import { DiagnosticsNotice } from "./DiagnosticsNotice";
 import { pluralize } from "@/lib/pluralize";
@@ -614,6 +615,9 @@ export function WhySlowContent({ className }: WhySlowContentProps) {
                     value={workloadsHaveData ? String(memoryWorkloads.terminalCount) : "—"}
                   />
                 </div>
+                {workloadsHaveData && memoryWorkloads.topProjects.length > 0 ? (
+                  <TopWorkloadProjects projects={memoryWorkloads.topProjects} />
+                ) : null}
                 {!memoryWorkloads.available || memoryWorkloads.stale ? (
                   <div className="flex flex-wrap gap-1.5">
                     {!memoryWorkloads.available ? (
@@ -847,6 +851,36 @@ function WhySlowSkeleton() {
         </div>
       ))}
     </Skeleton>
+  );
+}
+
+/**
+ * Which projects' terminals hold the most memory (#13529) — the breakdown the
+ * high-memory notice points at. Figures as measured; nothing here is a cause.
+ */
+function TopWorkloadProjects({ projects }: { projects: WhySlowTerminalWorkloadProject[] }) {
+  const knownProjects = useProjectStore((s) => s.projects);
+  return (
+    <ul data-testid="why-slow-top-projects" className="flex flex-col gap-0.5">
+      {projects.map((project) => {
+        const name =
+          project.projectId === null
+            ? "Outside any project"
+            : (knownProjects.find((p) => p.id === project.projectId)?.name ?? "Unknown project");
+        return (
+          <li
+            key={project.projectId ?? "unassigned"}
+            className="flex items-baseline justify-between gap-3 text-xs"
+          >
+            <span className="min-w-0 truncate text-text-primary">{name}</span>
+            <span className="shrink-0 tabular-nums text-text-secondary">
+              {formatBytes(project.memoryMb * 1024 * 1024)} ·{" "}
+              {pluralize(project.terminalCount, "terminal")}
+            </span>
+          </li>
+        );
+      })}
+    </ul>
   );
 }
 

@@ -287,6 +287,7 @@ const HOSTS_TAB = {
     "remote",
     "ssh",
     "tailscale",
+    "netbird",
     "linux",
     "mac",
     "server",
@@ -308,6 +309,13 @@ const HOSTS_TAB = {
       title: "Allow this machine to be a host",
       description: "Let Daintree on your other machines open this one's projects over SSH",
       keywords: ["host mode", "start at login", "socket", "keychain", "attached machines"],
+    },
+    {
+      id: "device-answer",
+      section: "Answer from another device",
+      title: "Allow paired devices to answer",
+      description: "Pick the options waiting agents show from a phone or another computer",
+      keywords: ["phone", "mobile", "remote", "pair", "tailscale", "away", "answer"],
     },
   ],
 } as const satisfies LazySettingsTabEntry;

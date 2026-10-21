@@ -30,13 +30,19 @@ vi.mock("../../../store.js", () => ({
   auditLogsStore: { get: vi.fn(() => []), set: vi.fn() },
 }));
 
-const registryMock = vi.hoisted(() => ({
-  getRegisteredForgeProviders: vi.fn<() => ForgeProviderEntry[]>(() => []),
-  getForgeProviderImpl: vi.fn<(id: string) => unknown>(() => undefined),
-  // Consulted by remote selection (#11408) to decide whether a URL is
-  // parseable. Default "yes" keeps these tests about provider resolution.
-  listMatchingProviders: vi.fn<(remoteUrl: string) => unknown[]>(() => [{}]),
-}));
+const registryMock = vi.hoisted(() => {
+  const getForgeProviderImpl = vi.fn<(id: string) => unknown>(() => undefined);
+  return {
+    getRegisteredForgeProviders: vi.fn<() => ForgeProviderEntry[]>(() => []),
+    getForgeProviderImpl,
+    // Credential paths take the role-agnostic lookup; these tests bind a full
+    // provider, which both lookups return.
+    getForgeProviderBaseImpl: (id: string) => getForgeProviderImpl(id),
+    // Consulted by remote selection (#11408) to decide whether a URL is
+    // parseable. Default "yes" keeps these tests about provider resolution.
+    listMatchingProviders: vi.fn<(remoteUrl: string) => unknown[]>(() => [{}]),
+  };
+});
 
 vi.mock("../../../services/forgeProviderRegistry.js", () => registryMock);
 
@@ -304,6 +310,7 @@ describe("registerForgeSettingsHandlers", () => {
       remoteUrl: "https://github.com/owner/repo.git",
       forgeProviderOverride: null,
       globalDefaultProviderId: null,
+      issueProviderOverride: null,
     });
   });
 
@@ -323,6 +330,7 @@ describe("registerForgeSettingsHandlers", () => {
       remoteUrl: "git@gitea.example.com:owner/repo.git",
       forgeProviderOverride: null,
       globalDefaultProviderId: null,
+      issueProviderOverride: null,
     });
     expect(gitServiceMock.getRemoteUrl).not.toHaveBeenCalled();
   });
@@ -340,6 +348,7 @@ describe("registerForgeSettingsHandlers", () => {
       remoteUrl: "https://github.com/owner/repo.git",
       forgeProviderOverride: null,
       globalDefaultProviderId: null,
+      issueProviderOverride: null,
     });
   });
 
@@ -360,6 +369,36 @@ describe("registerForgeSettingsHandlers", () => {
     expect(resolverMock.resolveForgeProvider).toHaveBeenCalledWith(
       expect.objectContaining({ remoteUrl: "https://github.com/acme/canonical.git" })
     );
+  });
+
+  it("resolveProvider still answers for a bound issues provider when the code remote is gone (#13700)", async () => {
+    projectStoreMock.getProjectSettings.mockResolvedValue({
+      forgeRemote: "upstream",
+      issueProviderOverride: "acme.tracker.tracker",
+    });
+    gitServiceMock.listRemotes.mockResolvedValue([
+      { name: "origin", fetchUrl: "https://github.com/me/fork.git" },
+    ]);
+    const tracker: ForgeProviderEntry = {
+      pluginId: "acme.tracker",
+      contribution: { id: "tracker", name: "Tracker", matches: [], roles: ["issues"] },
+    };
+    const resolved: ResolvedForgeProvider = {
+      entry: null,
+      resolvedVia: null,
+      issues: { entry: tracker, resolvedVia: "override" },
+    };
+    resolverMock.resolveForgeProvider.mockReturnValueOnce(resolved);
+    registerForgeSettingsHandlers();
+    const resolveProvider = findHandler("forge:resolve-provider");
+
+    await expect(resolveProvider(null, "project-1")).resolves.toEqual(resolved);
+    expect(resolverMock.resolveForgeProvider).toHaveBeenCalledWith({
+      remoteUrl: null,
+      forgeProviderOverride: null,
+      globalDefaultProviderId: null,
+      issueProviderOverride: "acme.tracker.tracker",
+    });
   });
 
   it("resolveProvider still honours an explicitly passed remoteUrl over the setting (#11408)", async () => {

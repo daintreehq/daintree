@@ -194,6 +194,40 @@ describe("useSharedPollTick", () => {
     expect(callback).toHaveBeenCalledTimes(1);
     expect(sharedPollTickerCount()).toBe(0);
     expect(vi.getTimerCount()).toBe(0);
+    act(() => {
+      vi.advanceTimersByTime(10_000);
+    });
+    expect(callback).toHaveBeenCalledTimes(1);
+  });
+
+  it("stays stopped when a subscriber hides the view again during a visibility restore", () => {
+    let hideOnTick = false;
+    const callback = vi.fn(() => {
+      if (!hideOnTick) return;
+      hideOnTick = false;
+      visibilityState = "hidden";
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    const { unmount } = renderHook(() => useSharedPollTick(callback, 2_000));
+
+    setVisibility("hidden");
+    hideOnTick = true;
+    setVisibility("visible");
+
+    expect(callback).toHaveBeenCalledTimes(1);
+    expect(sharedPollTickerCount()).toBe(1);
+    expect(vi.getTimerCount()).toBe(0);
+    act(() => {
+      vi.advanceTimersByTime(10_000);
+    });
+    expect(callback).toHaveBeenCalledTimes(1);
+
+    setVisibility("visible");
+    expect(callback).toHaveBeenCalledTimes(2);
+    expect(vi.getTimerCount()).toBe(1);
+
+    unmount();
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("does not call a subscriber released by an earlier subscriber in the same tick", () => {
@@ -386,6 +420,28 @@ describe("useSharedPollTick", () => {
 
       unmount();
       expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it("stays stopped when a subscriber caches the view again during activation", () => {
+      latchedCached = true;
+      const callback = vi.fn();
+      callback.mockImplementationOnce(() => emit(handlers.cached));
+      const { unmount } = renderHook(() => useSharedPollTick(callback, 2_000));
+
+      emit(handlers.warm);
+      expect(callback).toHaveBeenCalledTimes(1);
+      expect(sharedPollTickerCount()).toBe(1);
+      expect(vi.getTimerCount()).toBe(0);
+      act(() => {
+        vi.advanceTimersByTime(10_000);
+      });
+      expect(callback).toHaveBeenCalledTimes(1);
+
+      emit(handlers.warm);
+      expect(callback).toHaveBeenCalledTimes(2);
+      expect(vi.getTimerCount()).toBe(1);
+
+      unmount();
     });
 
     it("stays stopped when the window is restored underneath a cached view", () => {

@@ -1,5 +1,6 @@
 /// <reference lib="dom" />
 import type { GuestEvent, GuestNodeObservation } from "../../shared/protocol.js";
+import { elementContextOf } from "./elementContext.js";
 import type {
   GuestBootstrapConfig,
   GuestMode,
@@ -1202,7 +1203,11 @@ export function createSiteBuilderGuest(
     // `documentReady` follows it. The host resolves and describes a selection
     // against the page it last heard about; bring that up to date first.
     if (pageMoved()) emitDocumentReady();
-    const nodes = selection.map((entry) => observe(entry.hit));
+    const nodes = selection.map((entry) => {
+      const observed = observe(entry.hit);
+      const context = elementContextOf(targetOf(entry.hit).target);
+      return context === null ? observed : { ...observed, context };
+    });
     const primary = selection[0];
     const identity =
       selectionScope === "component" && selectedFrame !== null && primary !== undefined
@@ -1213,10 +1218,35 @@ export function createSiteBuilderGuest(
         ? { scope: "component" as const, component: identity }
         : {};
     if (send({ type: "selectionChanged", nodes, cause, ...scopeField })) return true;
-    const trimmed = nodes.map((node) => ({ ...node, ancestry: node.ancestry.slice(0, 4) }));
-    if (send({ type: "selectionChanged", nodes: trimmed, cause, ...scopeField })) {
-      issue("capacity", "ancestry shortened to fit the selection into one envelope");
-      return true;
+    // What to give up first depends on what the page is. Where Svelte stamped
+    // the nodes, the host traces source by their ancestry and can do without
+    // the page's own description of them; anywhere else the ancestry is empty
+    // and the description is all an agent will be told.
+    const stamped = nodes.some((node) => node.loc !== null);
+    const bare = (from: GuestNodeObservation[]) =>
+      from.map(({ context: _context, ...node }) => node);
+    const shortened = (from: GuestNodeObservation[]) =>
+      from.map((node) => ({ ...node, ancestry: node.ancestry.slice(0, 4) }));
+    const fallbacks: Array<[GuestNodeObservation[], string]> = stamped
+      ? [
+          [
+            bare(nodes),
+            "element markup and styles left out to fit the selection into one envelope",
+          ],
+          [shortened(bare(nodes)), "ancestry shortened to fit the selection into one envelope"],
+        ]
+      : [
+          [shortened(nodes), "ancestry shortened to fit the selection into one envelope"],
+          [
+            shortened(bare(nodes)),
+            "element markup and styles left out to fit the selection into one envelope",
+          ],
+        ];
+    for (const [attempt, detail] of fallbacks) {
+      if (send({ type: "selectionChanged", nodes: attempt, cause, ...scopeField })) {
+        issue("capacity", detail);
+        return true;
+      }
     }
     return false;
   }
@@ -1328,6 +1358,21 @@ export function createSiteBuilderGuest(
       issue("capacity", "selection left unchanged: the observation did not fit one envelope");
     }
     schedulePaint();
+  }
+
+  /**
+   * The plain DOM walk, for an element no Svelte stamp stands over — any
+   * other framework's page, or markup a Svelte page didn't compile. The walk
+   * stops at the body: the document's own frame is nothing to point an agent at.
+   */
+  function domParent(node: Element): Element | null {
+    const parent = parentOf(node);
+    if (parent === null || parent.tagName === "BODY" || parent.tagName === "HTML") return null;
+    return parent;
+  }
+
+  function domChildren(node: Element): Element[] {
+    return Array.from(node.children).filter((child) => !isOverlay(child));
   }
 
   function mappedChildren(node: Element): Element[] {
@@ -1527,6 +1572,7 @@ export function createSiteBuilderGuest(
     const plain = !keyboard.altKey && !keyboard.ctrlKey && !keyboard.metaKey && !keyboard.shiftKey;
     if (!plain && !(onlyAlt && keyboard.key === "ArrowUp")) return;
     const current = primary.target;
+    const traced = nearestMapped(current) !== null;
     if (keyboard.key === "ArrowUp" && keyboard.altKey) {
       suppress(event);
       const frames = componentFrames(current);
@@ -1544,13 +1590,13 @@ export function createSiteBuilderGuest(
     }
     if (keyboard.key === "ArrowUp") {
       suppress(event);
-      const parent = nearestMapped(parentOf(current));
+      const parent = traced ? nearestMapped(parentOf(current)) : domParent(current);
       if (parent !== null) selectOnly(parent, "element", null);
       return;
     }
     if (keyboard.key === "ArrowDown") {
       suppress(event);
-      const child = mappedChildren(current)[0];
+      const child = (traced ? mappedChildren(current) : domChildren(current))[0];
       if (child !== undefined) selectOnly(child, "element", null);
       return;
     }
@@ -1558,8 +1604,11 @@ export function createSiteBuilderGuest(
       const parent = parentOf(current);
       if (parent === null) return;
       suppress(event);
-      const siblings = mappedChildren(nearestMapped(parent) ?? parent);
+      const siblings = traced
+        ? mappedChildren(nearestMapped(parent) ?? parent)
+        : domChildren(parent);
       const index = siblings.indexOf(current);
+      if (index < 0) return;
       const next = siblings[index + (keyboard.key === "ArrowRight" ? 1 : -1)];
       if (next !== undefined) selectOnly(next, "element", null);
     }

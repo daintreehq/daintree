@@ -5,7 +5,7 @@ import type { WorktreeSnapshot } from "../../../shared/types/workspace-host.js";
 /** The snapshot fields this decision reads. Narrow on purpose — see the class. */
 export type FileSearchInvalidationSnapshot = Pick<
   WorktreeSnapshot,
-  "path" | "workingTreeChangedAt" | "generation" | "isCurrent"
+  "path" | "pathMembershipChangedAt" | "generation" | "isCurrent"
 >;
 
 /**
@@ -31,12 +31,14 @@ interface CoverageRecord {
  * Turns the workspace host's worktree stream into file-search cache
  * invalidations (#12240).
  *
- * The host already knows when a worktree's files changed — `GitFileWatcher`'s
- * debounced flush drives `WorktreeMonitor.handleWorktreeFilesChanged`, which
- * advances `workingTreeChangedAt` — and that timestamp rides across the
- * utility-process boundary on the ordinary `worktree-update` snapshot. Nothing
- * read it for the file-search cache, so the index's freshness rested entirely
- * on its TTL and a pause in the picker cost a full cold rebuild.
+ * The host already knows when a worktree's path set may have changed —
+ * `GitFileWatcher` classifies each debounced flush, its git-internal writes and
+ * its watcher re-arms, and `WorktreeMonitor` turns those into
+ * `pathMembershipChangedAt` — and that timestamp rides across the
+ * utility-process boundary on the ordinary `worktree-update` snapshot. The
+ * index is a list of paths, so an in-place edit, which advances only
+ * `workingTreeChangedAt`, leaves it warm (#13595); anything the host cannot
+ * prove was content-only advances the membership stamp instead.
  *
  * A flush is not the only thing that invalidates, because the flush stream has
  * gaps. `WatcherController` arms the recursive worktree watch only for ELEVATED
@@ -81,7 +83,7 @@ export class FileSearchCacheInvalidator {
    * A snapshot arrived. Drop the worktree's indexes when either the file system
    * is known to have moved, or our knowledge of it has a hole:
    *
-   * - **The watcher flushed** — `workingTreeChangedAt` differs from the last
+   * - **The path set may have moved** — `pathMembershipChangedAt` differs from the last
    *   value this producer reported. Compared for difference rather than for
    *   advance: the stamp is `Math.max(Date.now(), prev + 1)` per monitor, so a
    *   monitor restarted behind a backwards clock step reports a lower number,
@@ -98,13 +100,11 @@ export class FileSearchCacheInvalidator {
    *   not having been watching.
    *
    * Only `isCurrent` is observable here; `_agentActive` is the other half of
-   * elevation and is not on the snapshot. That leaves one known gap: a worktree
-   * that gains coverage purely by an agent starting in it, without being
-   * selected, is not dropped at that moment — an external write made while it
-   * was uncovered stays hidden until the agent's own first write flushes, or the
-   * TTL lapses. Closing it properly needs the host to report when recursive
-   * watching is (re)established, which is a snapshot field that does not exist
-   * yet; the absolute TTL bounds it to five minutes in the meantime.
+   * elevation and is not on the snapshot. A worktree that gains coverage purely
+   * by an agent starting in it is still covered: the recursive watch going live
+   * advances `pathMembershipChangedAt` itself, which matters now that the
+   * agent's first write is no longer guaranteed to — an in-place edit leaves the
+   * membership stamp alone.
    */
   handleWorktreeUpdate(
     worktree: FileSearchInvalidationSnapshot,
@@ -126,8 +126,8 @@ export class FileSearchCacheInvalidator {
     const key = FileSearchCacheInvalidator.key(projectPath, worktreePath);
 
     const changedAt =
-      typeof worktree.workingTreeChangedAt === "number" && worktree.workingTreeChangedAt > 0
-        ? worktree.workingTreeChangedAt
+      typeof worktree.pathMembershipChangedAt === "number" && worktree.pathMembershipChangedAt > 0
+        ? worktree.pathMembershipChangedAt
         : 0;
     const isCurrent = worktree.isCurrent === true;
 

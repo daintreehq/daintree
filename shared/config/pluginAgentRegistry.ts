@@ -88,10 +88,12 @@ function contributionToAgentConfig(
 ): AgentConfig {
   // Surface the launch-relevant fields plus the optional output-pattern
   // `detection` block (#10587) so a contributed agent can drive the
-  // working/waiting/completed UI. Mapped explicitly (not spread) so no other
-  // contribution field can leak onto the resolved config. `detection` is
-  // forwarded only when present, keeping the field absent for the common
-  // launch-only case.
+  // working/waiting/completed UI, and the optional `resume` block (#13687) as
+  // the data-only `resumeTemplate` — this config is broadcast to other
+  // processes, so it must never carry the function-shaped `resume`. Mapped
+  // explicitly (not spread) so no other contribution field can leak onto the
+  // resolved config. Optional blocks are forwarded only when present, keeping
+  // the fields absent for the common launch-only case.
   return {
     id: contribution.id,
     name: contribution.name,
@@ -101,6 +103,7 @@ function contributionToAgentConfig(
     iconId: contribution.iconId,
     supportsContextInjection: contribution.supportsContextInjection ?? false,
     ...(contribution.detection ? { detection: contribution.detection } : {}),
+    ...(contribution.resume ? { resumeTemplate: contribution.resume } : {}),
   };
 }
 

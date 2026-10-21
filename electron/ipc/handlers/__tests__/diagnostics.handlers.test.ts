@@ -226,6 +226,10 @@ vi.mock("../../../services/ProjectStore.js", () => ({
 import { registerDiagnosticsHandlers } from "../diagnostics.js";
 import type { DiagnosticsReviewPayload } from "../../../../shared/types/ipc/system.js";
 import { resetAppMetricsSnapshotForTesting } from "../../../utils/appMetricsSnapshot.js";
+import {
+  resetPhysFootprintReaderForTesting,
+  setPhysFootprintReaderForTesting,
+} from "../../../utils/processMemory.js";
 
 function getHandlerFn(channelName: string): (...args: unknown[]) => unknown {
   const call = ipcMainMock.handle.mock.calls.find((c: unknown[]) => c[0] === channelName);
@@ -493,6 +497,45 @@ describe("registerDiagnosticsHandlers", () => {
       // sum to 0 here — that's the regression this guards.
       expect(result.totalMemoryMB).toBe(290);
       expect(result.unavailable).toBeUndefined();
+    });
+
+    it("reports the GPU process at its resident size in the pressure figure only (#13637)", () => {
+      appMock.getAppMetrics.mockImplementationOnce(() => [
+        {
+          pid: 1,
+          type: "GPU",
+          name: "GPU",
+          memory: { privateBytes: 0, workingSetSize: 205 * 1024 },
+          cpu: { percentCPUUsage: 1 },
+        },
+        {
+          pid: 2,
+          type: "Browser",
+          name: "Browser",
+          memory: { privateBytes: 0, workingSetSize: 300 * 1024 },
+          cpu: { percentCPUUsage: 1 },
+        },
+      ]);
+      const footprintMb = new Map([
+        [1, 3328],
+        [2, 400],
+      ]);
+      setPhysFootprintReaderForTesting({
+        readPhysFootprints: (pids: number[]) =>
+          pids.map((pid) => (footprintMb.get(pid) ?? 0) * 1024 * 1024),
+        isAvailable: () => true,
+        getLoadError: () => null,
+      });
+      try {
+        registerDiagnosticsHandlers(deps);
+        const handler = getHandlerFn("system:get-app-metrics");
+        const result = handler() as { totalMemoryMB: number; pressureMemoryMB?: number };
+
+        expect(result.totalMemoryMB).toBe(3728);
+        expect(result.pressureMemoryMB).toBe(605);
+      } finally {
+        resetPhysFootprintReaderForTesting();
+      }
     });
 
     it("flags unavailable instead of returning a misleading 0 on error", () => {
@@ -781,6 +824,82 @@ describe("registerDiagnosticsHandlers", () => {
       expect(names).not.toContain("other.log");
     });
 
+    it("keeps the newest fatal crash when it is older than the window (#13527)", async () => {
+      // Relaunch first, export later: the crash that ended the last session
+      // predates a short window but is the record the bundle exists to carry.
+      await saveBundle(true, 8000);
+
+      const names = appendedNames().filter((n) => n.startsWith("crashes/"));
+      expect(names).toEqual(["crashes/crash-7000-c.json"]);
+      expect(appendedContent("crashes/crash-7000-c.json")).not.toContain("secret prompt");
+    });
+
+    it("keeps the newest fatal crash when newer renderer deaths fill the cap", async () => {
+      const goneFiles = Array.from({ length: 25 }, (_, i) => `renderer-gone-${10_000 + i}-x.json`);
+      readdirMock.mockImplementation((dir: string) =>
+        Promise.resolve(
+          path.normalize(dir) === crashesDir
+            ? ["crash-1000-a.json", "crash-2000-b.json", ...goneFiles]
+            : []
+        )
+      );
+      readFileMock.mockImplementation((p: string) => {
+        const timestamp = Number(path.basename(p).match(/-(\d+)-/)![1]);
+        return Promise.resolve(JSON.stringify({ timestamp }));
+      });
+
+      await saveBundle(true, 5000);
+
+      const names = appendedNames().filter((n) => n.startsWith("crashes/"));
+      expect(names).toHaveLength(20);
+      expect(names).toContain("crashes/crash-2000-b.json");
+      expect(names).not.toContain("crashes/crash-1000-a.json");
+      // The anchor displaces the oldest in-window record, never a newer one.
+      expect(names).toContain("crashes/renderer-gone-10024-x.json");
+      expect(names).not.toContain("crashes/renderer-gone-10005-x.json");
+      expect(names.at(-1)).toBe("crashes/crash-2000-b.json");
+    });
+
+    it("keeps the newest fatal crash past the cap when the bundle has no window", async () => {
+      const goneFiles = Array.from({ length: 25 }, (_, i) => `renderer-gone-${10_000 + i}-x.json`);
+      readdirMock.mockImplementation((dir: string) =>
+        Promise.resolve(
+          path.normalize(dir) === crashesDir ? ["crash-2000-b.json", ...goneFiles] : []
+        )
+      );
+      readFileMock.mockImplementation((p: string) => {
+        const timestamp = Number(path.basename(p).match(/-(\d+)-/)![1]);
+        return Promise.resolve(JSON.stringify({ timestamp }));
+      });
+
+      await saveBundle(true, null);
+
+      const names = appendedNames().filter((n) => n.startsWith("crashes/"));
+      expect(names).toHaveLength(20);
+      expect(names.at(-1)).toBe("crashes/crash-2000-b.json");
+      expect(names[0]).toBe("crashes/renderer-gone-10024-x.json");
+    });
+
+    it("never picks a record with a non-finite timestamp as the newest crash", async () => {
+      readdirMock.mockImplementation((dir: string) =>
+        Promise.resolve(
+          path.normalize(dir) === crashesDir ? ["crash-1-overflow.json", "crash-2000-b.json"] : []
+        )
+      );
+      readFileMock.mockImplementation((p: string) =>
+        Promise.resolve(
+          path.basename(p) === "crash-1-overflow.json"
+            ? '{"timestamp": 1e309}'
+            : '{"timestamp": 2000}'
+        )
+      );
+
+      await saveBundle(true, 5000);
+
+      const names = appendedNames().filter((n) => n.startsWith("crashes/"));
+      expect(names).toEqual(["crashes/crash-2000-b.json"]);
+    });
+
     it("drops breadcrumb args and applies replacements to crash records", async () => {
       await saveBundle(true, null);
 
@@ -885,6 +1004,57 @@ describe("registerDiagnosticsHandlers", () => {
       handler(makeEvent(42), { requestId: "x", blockingDurationMs: 500 });
 
       expect(recordEluSampleMock).not.toHaveBeenCalled();
+    });
+
+    it("forwards the longest frame and a validated input-blocking snapshot", () => {
+      registerDiagnosticsHandlers(deps);
+      const handler = getHandlerFn("system:report-renderer-elu");
+      const snapshot = {
+        bodyPointerEvents: "none",
+        rootInert: false,
+        inertCount: 0,
+        scrollLocked: true,
+        modalCount: 1,
+        overlayClaims: 1,
+        dragging: false,
+        visibility: "visible",
+        focused: true,
+        centerHit: { tag: "html", coversViewport: true },
+      };
+      handler(makeEvent(42), {
+        requestId: "elu-1",
+        blockingDurationMs: 4800,
+        sampleWindowMs: 31_000,
+        longestFrameMs: 4850,
+        longestBlockingMs: 4800,
+        inputBlocking: { ...snapshot, innerText: "terminal output" },
+      });
+
+      expect(recordEluSampleMock).toHaveBeenCalledWith(42, {
+        blockingDurationMs: 4800,
+        sampleWindowMs: 31_000,
+        longestFrameMs: 4850,
+        longestBlockingMs: 4800,
+        inputBlocking: snapshot,
+      });
+    });
+
+    it("keeps the LoAF sample but drops malformed peaks and snapshots", () => {
+      registerDiagnosticsHandlers(deps);
+      const handler = getHandlerFn("system:report-renderer-elu");
+      handler(makeEvent(42), {
+        requestId: "elu-1",
+        blockingDurationMs: 800,
+        sampleWindowMs: 1000,
+        longestFrameMs: Number.POSITIVE_INFINITY,
+        longestBlockingMs: -5,
+        inputBlocking: { bodyPointerEvents: "none" },
+      });
+
+      expect(recordEluSampleMock).toHaveBeenCalledWith(42, {
+        blockingDurationMs: 800,
+        sampleWindowMs: 1000,
+      });
     });
 
     it("drops late replies from destroyed senders", () => {

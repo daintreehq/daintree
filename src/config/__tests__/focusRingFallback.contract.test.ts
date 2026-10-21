@@ -616,6 +616,12 @@ const ALLOWLIST: FocusRingAllowlistEntry[] = [
     reason:
       "Parent shows focus: the output well wrapper carries `has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-accent-primary`; the scroller has no vertical padding of its own, so a ring on it would sit inside the wrapper's border.",
   },
+  {
+    file: "src/components/Worktree/WorktreeCard/WorktreeAttachmentChips.tsx",
+    fragment: "leading-relaxed text-text-primary outline-hidden",
+    reason:
+      "Parent shows focus: the attachment output well wrapper carries `has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-accent-primary`, the same well as EnvironmentPopover's; a ring on the scroller would sit inside the wrapper's border.",
+  },
 
   // ── Pre-existing focus-ring gaps surfaced by #8940 ───────────────────
   // The new contract surfaced these standalone interactive elements that

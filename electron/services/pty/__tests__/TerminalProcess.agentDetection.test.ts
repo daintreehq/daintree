@@ -98,7 +98,7 @@ function createMutableDescendantCache(): {
       comm: "node",
       command: "node /tmp/runtime.js",
       cpuPercent: 0,
-      rssKb: 0,
+      memoryKb: 0,
     }))
   );
   return {

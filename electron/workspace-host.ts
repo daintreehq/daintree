@@ -233,6 +233,21 @@ async function handleWorktreePortRequest(
         break;
       }
 
+      case "attachment-action": {
+        const actionResult = await workspaceService.runAttachmentAction(
+          msg.payload.worktreeId,
+          msg.payload.name,
+          msg.payload.action,
+          msg.payload.expectedHolderWorktreeId
+        );
+        if (!actionResult.success) {
+          rPort.postMessage({ id, error: actionResult.error ?? "Attachment action failed" });
+          return;
+        }
+        result = { ok: true };
+        break;
+      }
+
       case "run-lifecycle-setup": {
         await workspaceService.retryLifecycleSetup(msg.payload.worktreeId);
         result = { ok: true };
@@ -369,7 +384,7 @@ function attachWorktreePort(newPort: MessagePort): void {
 process.on("uncaughtException", (err) => {
   console.error("[WorkspaceHost] Uncaught Exception:", err);
   try {
-    sendEvent({ type: "error", error: err.message });
+    sendEvent({ type: "error", error: err.message, fatal: true });
   } catch {
     // ignore
   }
@@ -384,6 +399,7 @@ process.on("unhandledRejection", (reason) => {
     sendEvent({
       type: "error",
       error: formatErrorMessage(reason, "Unhandled rejection in workspace host"),
+      fatal: true,
     });
   } catch {
     // ignore

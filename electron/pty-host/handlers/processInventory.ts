@@ -108,7 +108,7 @@ export function listClosedTerminalProcesses(ctx: HostContext): HostClosedTermina
       pid: survivor.pid,
       startTime: survivor.startTime,
       comm: proc ? path.basename(proc.comm) || proc.comm : "",
-      memoryKb: proc ? proc.rssKb : null,
+      memoryKb: proc ? proc.memoryKb : null,
       cpuPercent: proc ? proc.cpuPercent : null,
       origin: survivor.origin,
       closedAt: survivor.closedAtMs,

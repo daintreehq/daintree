@@ -2,7 +2,17 @@ import { execFile } from "node:child_process";
 import { logDebug, logInfo, logWarn } from "../utils/logger.js";
 import { readElectronSwapUsage, type SwapUsage } from "../utils/systemMemory.js";
 import { recordSwapPressure, SWAP_PRESSURE_STALE_MS } from "./systemSwapPressure.js";
-import type { SystemMemoryPressurePayload } from "../../shared/types/ipc/system.js";
+import {
+  getLastKernelPressureReadingAt,
+  isKernelPressureCritical,
+  recordKernelPressureLevel,
+} from "./systemKernelPressure.js";
+import { recordWatchdogMemoryPressure } from "./watchdogMemoryPressure.js";
+import type {
+  SystemMemoryPressurePayload,
+  SystemMemoryWorkloads,
+} from "../../shared/types/ipc/system.js";
+import type { CompositeMemorySnapshot } from "../../shared/types/memoryAccounting.js";
 
 /**
  * Floor between samples. Sampling rides the app-metrics poll (30s, stretched
@@ -33,6 +43,14 @@ export const EPISODE_OPEN_SAMPLES = 3;
  * few minutes.
  */
 export const EPISODE_CLEAR_SAMPLES = 3;
+/**
+ * Longest a publish waits on {@link SystemMemoryPressureMonitorDeps.readWorkloads}
+ * before going out without it: a pty host stalled by the same pressure must
+ * not hold back the warning.
+ */
+export const WORKLOADS_READ_TIMEOUT_MS = 2_000;
+/** Projects a published payload names, heaviest first. */
+export const MAX_PUBLISHED_WORKLOADS = 3;
 
 const PROBE_TIMEOUT_MS = 5_000;
 const SYSCTL_MAX_BUFFER = 64 * 1024;
@@ -72,6 +90,11 @@ export interface SystemMemoryPressureMonitorDeps {
   readKernelPressureLevel: () => Promise<KernelPressureLevel | null>;
   publish: (payload: SystemMemoryPressurePayload) => void;
   /**
+   * What Daintree is hosting, read only when a `degraded` payload is about to
+   * be published. Null, or a rejection, publishes without it.
+   */
+  readWorkloads?: () => Promise<SystemMemoryWorkloads | null>;
+  /**
    * Called with every sample's verdict on kernel-plus-swap pressure — kernel
    * warning or worse while swap is both over {@link SWAP_USED_PERCENT_THRESHOLD}
    * and {@link SWAP_PRESSURE_MIN_USED_MB}, for
@@ -79,6 +102,18 @@ export interface SystemMemoryPressureMonitorDeps {
    * alone never qualifies: since #12815 a warning only asks renderers to trim.
    */
   onSwapPressure?: (confirmed: boolean) => void;
+  /** Called with every sample's kernel level, null when it was not read. */
+  onKernelPressureLevel?: (level: KernelPressureLevel | null) => void;
+  /**
+   * Called with every sample's verdict for the main-process watchdog (#13528):
+   * true on a kernel warning or worse, or swap over
+   * {@link SWAP_USED_PERCENT_THRESHOLD} (and on Darwin, whose swap is dynamic,
+   * over {@link SWAP_PRESSURE_MIN_USED_MB} too); false when every reading that
+   * applies came back below; null when a failed reading leaves it undecided.
+   * No confirmation run: one sample is enough to lengthen the watchdog's
+   * deadline. `sampledAt` is the wall-clock start of the sample.
+   */
+  onWatchdogPressure?: (elevated: boolean | null, sampledAt: number) => void;
   now?: () => number;
   /**
    * Wall clock for the swap-pressure run. The monotonic `now` stops while the
@@ -197,7 +232,9 @@ function mergeOverCauses(seen: OverCauses | null, observed: OverCauses): OverCau
  * follows only when the episode opens or which thresholds are crossed (or the
  * kernel level) changes — never merely because the figures moved (#12888). An
  * episode opens after {@link EPISODE_OPEN_SAMPLES} consecutive over-threshold
- * samples and is published exactly once; it closes, with one recovery record
+ * samples and is published; it is published again each time it worsens — a
+ * higher kernel level or a threshold newly crossed (#13529) — never when it
+ * eases or merely moves, so an episode publishes at most a few times; it closes, with one recovery record
  * and one publish, after {@link EPISODE_CLEAR_SAMPLES} consecutive fully
  * observed clear samples. A
  * sample with a failed reading breaks both runs — a missing measurement can
@@ -223,6 +260,18 @@ export function createSystemMemoryPressureMonitor(
    * keeps the previous value rather than reading as a change.
    */
   let seenCauses: OverCauses | null = null;
+  /**
+   * The worst the episode has published: each threshold's figure from the
+   * publish that first reported it, or a later one, and the highest kernel
+   * level; null while no episode is open. Never lowered within an episode, so
+   * each cause escalates at most once and readings that alternate cannot
+   * republish every sample.
+   */
+  let published: {
+    swapUsedPercent: number | null;
+    fseventsdRssMb: number | null;
+    kernelPressureLevel: KernelPressureLevel | null;
+  } | null = null;
   const wallNow = deps.wallNow ?? (() => Date.now());
   let swapPressureStreak = 0;
   let swapPressureConfirmed = false;
@@ -270,7 +319,11 @@ export function createSystemMemoryPressureMonitor(
     deps.onSwapPressure?.(confirmed);
   }
 
-  function record(sample: SystemMemorySample, startedAt: number): void {
+  /** The payload this sample publishes, if any; the caller attaches workloads. */
+  function record(
+    sample: SystemMemorySample,
+    startedAt: number
+  ): Omit<SystemMemoryPressurePayload, "workloads"> | null {
     const { swap, fseventsdRssMb, kernelPressureLevel } = sample;
     const swapUsedPercent =
       swap === null ? null : swap.totalMb > 0 ? (swap.usedMb / swap.totalMb) * 100 : 0;
@@ -278,6 +331,15 @@ export function createSystemMemoryPressureMonitor(
     const fseventsdOver = fseventsdRssMb !== null && fseventsdRssMb > FSEVENTSD_RSS_THRESHOLD_MB;
     const kernelOver = kernelPressureLevel !== null && kernelPressureLevel >= KERNEL_PRESSURE_WARN;
     recordSwapPressureSample(sample, swapUsedPercent, startedAt);
+    if (deps.onWatchdogPressure) {
+      const heavySwap =
+        swapOver && swap !== null && (!deps.isDarwin || swap.usedMb >= SWAP_PRESSURE_MIN_USED_MB);
+      const observedAll = swap !== null && (!deps.isDarwin || kernelPressureLevel !== null);
+      deps.onWatchdogPressure(
+        kernelOver || heavySwap ? true : observedAll ? false : null,
+        startedAt
+      );
+    }
     const figures = {
       swapUsedPercent: swapUsedPercent === null ? null : Math.round(swapUsedPercent),
       swapUsedMb: swap === null ? null : Math.round(swap.usedMb),
@@ -303,17 +365,39 @@ export function createSystemMemoryPressureMonitor(
       if (episodeOpening || causeChanged) {
         logWarn("system-health", { state: "over", ...figures, consecutiveSamples: overStreak });
       }
-      if (episodeOpening) {
-        episodeOpen = true;
-        deps.publish({
-          status: "degraded",
-          swapUsedPercent: swapOver ? figures.swapUsedPercent : null,
-          swapKind: deps.swapKind,
-          fseventsdRssMb: fseventsdOver ? figures.fseventsdRssMb : null,
-          kernelPressureLevel: describeKernelPressureLevel(kernelPressureLevel),
-        });
-      }
-      return;
+      // A threshold the episode hasn't published yet, or a higher kernel
+      // level. Sampling is at least a minute apart and the episode is already
+      // confirmed, so it publishes at once.
+      const escalating =
+        published !== null &&
+        ((swapOver && published.swapUsedPercent === null) ||
+          (fseventsdOver && published.fseventsdRssMb === null) ||
+          (kernelPressureLevel !== null &&
+            kernelPressureLevel > (published.kernelPressureLevel ?? 1)));
+      if (!episodeOpening && !escalating) return null;
+      if (escalating) logWarn("system-health", { state: "escalated", ...figures });
+      episodeOpen = true;
+      // The worst of the episode so far: a cause stays named once published,
+      // whether its latest reading eased or failed.
+      const publishedLevel = published?.kernelPressureLevel ?? null;
+      published = {
+        swapUsedPercent: swapOver ? figures.swapUsedPercent : (published?.swapUsedPercent ?? null),
+        fseventsdRssMb: fseventsdOver
+          ? figures.fseventsdRssMb
+          : (published?.fseventsdRssMb ?? null),
+        kernelPressureLevel:
+          kernelPressureLevel !== null && kernelPressureLevel > (publishedLevel ?? 1)
+            ? kernelPressureLevel
+            : publishedLevel,
+      };
+      return {
+        status: "degraded",
+        swapUsedPercent: published.swapUsedPercent,
+        swapKind: deps.swapKind,
+        fseventsdRssMb: published.fseventsdRssMb,
+        kernelPressureLevel: describeKernelPressureLevel(published.kernelPressureLevel),
+        escalated: escalating,
+      };
     }
 
     const fullyObserved =
@@ -325,12 +409,12 @@ export function createSystemMemoryPressureMonitor(
       overStreak = 0;
       clearStreak = 0;
       logDebug("system-health-sample-incomplete", figures);
-      return;
+      return null;
     }
 
     overStreak = 0;
     clearStreak++;
-    if (!elevated || clearStreak < EPISODE_CLEAR_SAMPLES) return;
+    if (!elevated || clearStreak < EPISODE_CLEAR_SAMPLES) return null;
 
     logInfo("system-health", { state: "recovered", ...figures });
     const wasOpen = episodeOpen;
@@ -338,14 +422,33 @@ export function createSystemMemoryPressureMonitor(
     episodeOpen = false;
     clearStreak = 0;
     seenCauses = null;
-    if (wasOpen) {
-      deps.publish({
-        status: "normal",
-        swapUsedPercent: null,
-        swapKind: deps.swapKind,
-        fseventsdRssMb: null,
-        kernelPressureLevel: null,
-      });
+    published = null;
+    if (!wasOpen) return null;
+    return {
+      status: "normal",
+      swapUsedPercent: null,
+      swapKind: deps.swapKind,
+      fseventsdRssMb: null,
+      kernelPressureLevel: null,
+      escalated: false,
+    };
+  }
+
+  async function readWorkloads(): Promise<SystemMemoryWorkloads | null> {
+    const read = deps.readWorkloads;
+    if (!read) return null;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        Promise.resolve().then(read),
+        new Promise<null>((resolve) => {
+          timer = setTimeout(() => resolve(null), WORKLOADS_READ_TIMEOUT_MS);
+        }),
+      ]);
+    } catch {
+      return null;
+    } finally {
+      clearTimeout(timer);
     }
   }
 
@@ -356,7 +459,12 @@ export function createSystemMemoryPressureMonitor(
       deps.isDarwin ? deps.readFseventsdRssMb().catch(() => null) : Promise.resolve(null),
       deps.isDarwin ? deps.readKernelPressureLevel().catch(() => null) : Promise.resolve(null),
     ]);
-    record({ swap, fseventsdRssMb, kernelPressureLevel }, startedAt);
+    deps.onKernelPressureLevel?.(kernelPressureLevel);
+    const payload = record({ swap, fseventsdRssMb, kernelPressureLevel }, startedAt);
+    if (!payload) return;
+    // Samples are serialised, so a recovery can never overtake this read.
+    const workloads = payload.status === "degraded" ? await readWorkloads() : null;
+    deps.publish({ ...payload, workloads });
   }
 
   return {
@@ -416,6 +524,82 @@ export async function readDarwinKernelPressureLevel(): Promise<KernelPressureLev
 }
 
 /**
+ * Longest a kernel reading answers {@link checkKernelPressureCritical} before
+ * it probes again. A recipe or a session restore asks once per agent in a
+ * burst; one sysctl covers all of them.
+ */
+export const KERNEL_PRESSURE_PROBE_CACHE_MS = 3_000;
+
+let kernelProbeInFlight: Promise<boolean> | null = null;
+
+/**
+ * Whether the kernel reports critical memory pressure now (#13530), read live
+ * rather than from the monitor's last sample, which can be minutes old. A
+ * failed probe leaves the verdict as it was. Always false off Darwin, where
+ * there is no kernel level to read. Never rejects.
+ */
+export function checkKernelPressureCritical(
+  probe: {
+    readLevel?: () => Promise<KernelPressureLevel | null>;
+    isDarwin?: boolean;
+    now?: () => number;
+  } = {}
+): Promise<boolean> {
+  const {
+    readLevel = readDarwinKernelPressureLevel,
+    isDarwin = process.platform === "darwin",
+    now = Date.now,
+  } = probe;
+  if (!isDarwin) return Promise.resolve(false);
+  const lastReadingAt = getLastKernelPressureReadingAt();
+  const ageMs = lastReadingAt === null ? null : now() - lastReadingAt;
+  if (ageMs !== null && ageMs >= 0 && ageMs < KERNEL_PRESSURE_PROBE_CACHE_MS) {
+    return Promise.resolve(isKernelPressureCritical(now()));
+  }
+  if (kernelProbeInFlight) return kernelProbeInFlight;
+  const pending = readLevel()
+    .catch(() => null)
+    .then((level) => {
+      recordKernelPressureLevel(level, now());
+      return isKernelPressureCritical(now());
+    })
+    .finally(() => {
+      kernelProbeInFlight = null;
+    });
+  kernelProbeInFlight = pending;
+  return pending;
+}
+
+/**
+ * The heaviest projects' terminal trees and Daintree's own processes, from the
+ * composite snapshot. Figures only: a slice that failed is left out rather
+ * than reported as zero, and a stale terminal sweep is left out too, since it
+ * could name a project whose terminals have since closed.
+ */
+export function summarizeSystemMemoryWorkloads(
+  snapshot: CompositeMemorySnapshot,
+  resolveProjectName: (projectId: string) => string | null
+): SystemMemoryWorkloads | null {
+  const appMemoryMb = snapshot.electron.available ? snapshot.electron.totalWorkingSetMb : null;
+  const terminals = snapshot.terminalWorkloads;
+  const projects =
+    terminals.available && !terminals.stale
+      ? terminals.byProject
+          .filter((p) => p.memoryMb > 0)
+          .sort((a, b) => b.memoryMb - a.memoryMb)
+          .slice(0, MAX_PUBLISHED_WORKLOADS)
+          .map((p) => ({
+            projectId: p.projectId,
+            projectName: p.projectId === null ? null : resolveProjectName(p.projectId),
+            terminalCount: p.terminalCount,
+            memoryMb: p.memoryMb,
+          }))
+      : [];
+  if (appMemoryMb === null && projects.length === 0) return null;
+  return { appMemoryMb, projects };
+}
+
+/**
  * The production probes. Windows and Linux read swap from the Electron memory
  * call the other memory monitors already make, so they spawn nothing; Darwin
  * has no swap figure there and spawns `sysctl` plus a narrow `ps` per sample.
@@ -423,7 +607,8 @@ export async function readDarwinKernelPressureLevel(): Promise<KernelPressureLev
  * process and runs only while terminals do.
  */
 export function createDefaultSystemMemoryPressureMonitor(
-  publish: SystemMemoryPressureMonitorDeps["publish"]
+  publish: SystemMemoryPressureMonitorDeps["publish"],
+  readWorkloads?: SystemMemoryPressureMonitorDeps["readWorkloads"]
 ): SystemMemoryPressureMonitor {
   const isDarwin = process.platform === "darwin";
   return createSystemMemoryPressureMonitor({
@@ -439,6 +624,9 @@ export function createDefaultSystemMemoryPressureMonitor(
       parseFseventsdRssMb(await execText("/bin/ps", ["-axo", "rss=,ucomm="], PS_MAX_BUFFER)),
     readKernelPressureLevel: readDarwinKernelPressureLevel,
     publish,
+    readWorkloads,
     onSwapPressure: (confirmed) => recordSwapPressure(confirmed),
+    onKernelPressureLevel: (level) => recordKernelPressureLevel(level),
+    onWatchdogPressure: (elevated, sampledAt) => recordWatchdogMemoryPressure(elevated, sampledAt),
   });
 }

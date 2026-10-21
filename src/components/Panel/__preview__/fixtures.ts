@@ -50,6 +50,8 @@ export interface PanelHeaderFixture {
   prefs?: { showGridAgentHighlights?: boolean };
   /** Two worktrees in the view store makes the branch badge appear; this names the pane's. */
   branch?: string;
+  /** Seeds `rateLimitObservationStore` — the pane printed a rate-limit banner this long ago. */
+  rateLimitSeenMinutesAgo?: number;
   /** Other grid panes seeded into the store — what Zen mode's background stats count. */
   background?: Array<{ agentState?: AgentState }>;
   tabs?: Array<{
@@ -180,6 +182,47 @@ export const FIXTURES = {
     agentState: "completed",
     isFocused: false,
     completedWithNoChanges: true,
+  },
+  "completed-cost-no-changes": {
+    what: "agent finished with a cost on record and an untouched tree — both settled facts at once",
+    kind: "terminal",
+    title: "Claude: fix flaky auth tests",
+    agentId: "claude",
+    agentState: "completed",
+    isFocused: false,
+    completedWithNoChanges: true,
+    panel: { sessionCost: 0.42, sessionTokens: 12_000 },
+  },
+  "completed-cost-no-changes-wide": {
+    what: "the same two settled facts in a wide pane — room for the token count as well",
+    kind: "terminal",
+    title: "Claude: fix flaky auth tests",
+    agentId: "claude",
+    agentState: "completed",
+    isFocused: false,
+    width: 900,
+    completedWithNoChanges: true,
+    panel: { sessionCost: 0.42, sessionTokens: 12_000 },
+  },
+  "completed-tokens-only": {
+    what: "agent finished and its summary reported tokens but no cost — Codex and Gemini do this",
+    kind: "terminal",
+    title: "Codex: write funnel tests",
+    agentId: "codex",
+    agentState: "completed",
+    isFocused: false,
+    panel: { sessionTokens: 84_310 },
+  },
+  "exited-agent-cost": {
+    what: "agent process exited non-zero after reporting a cost — the cost readout beside the exit badge",
+    kind: "terminal",
+    title: "Claude: fix flaky auth tests",
+    agentId: "claude",
+    agentState: "exited",
+    isFocused: false,
+    isExited: true,
+    exitCode: 1,
+    panel: { sessionCost: 0.42, sessionTokens: 12_000 },
   },
   "exited-plain": {
     what: "a plain shell that exited non-zero — exit code badge, no agent chrome",
@@ -319,6 +362,26 @@ export const FIXTURES = {
     title: "localhost:5173",
     isFocused: true,
     body: "browser",
+  },
+  "rate-limited": {
+    what: "the agent printed a rate-limit banner three minutes ago — the header's rate-limit chip",
+    kind: "terminal",
+    title: "Claude: fix flaky auth tests",
+    agentId: "claude",
+    agentState: "waiting",
+    isFocused: false,
+    rateLimitSeenMinutesAgo: 3,
+  },
+  "rate-limited-narrow": {
+    what: "the rate-limit chip in a 320px pane beside a branch badge, where the row runs out of room",
+    width: 320,
+    kind: "terminal",
+    title: "Codex: write funnel tests",
+    agentId: "codex",
+    agentState: "waiting",
+    isFocused: true,
+    branch: "feature/funnel-tests",
+    rateLimitSeenMinutesAgo: 12,
   },
   "plugin-missing": {
     what: "a plugin panel whose kind is gone — the placeholder body under an ordinary header",

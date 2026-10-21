@@ -1066,6 +1066,64 @@ describe("McpServerService", () => {
     }
   });
 
+  it("keeps a pane bearer's Streamable HTTP session through idle time and wake, and reaps the rest (#13635)", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const { window } = createMockWindow({
+        getManifest: () => [
+          createManifestEntry({
+            id: "actions.list" as ActionId,
+            title: "List Actions",
+            description: "Read the action registry",
+            kind: "query",
+          }),
+        ],
+      });
+      paneTokenTiers.set("pane-token", "full");
+      service.setPaneOwnershipPrincipalResolver((token) =>
+        token === "pane-token" ? "principal-pane" : null
+      );
+      service.setPaneTerminalResolver((token) => (token === "pane-token" ? "terminal-pane" : null));
+      await service.start(window);
+      const port = service.currentPort!;
+      const httpSessions = (service as unknown as { _httpSessions: Map<string, unknown> })
+        ._httpSessions;
+
+      const pane = await connectHttpClient(port, { Authorization: "Bearer pane-token" });
+      httpTransports.push(pane.transport);
+      const apiKey = await connectHttpClient(port);
+      httpTransports.push(apiKey.transport);
+      // Claude panes reach the server over SSE, so the pane lifetime covers it too.
+      const paneSse = await connectClient(port, { Authorization: "Bearer pane-token" });
+      transports.push(paneSse.transport);
+      const paneSessionId = pane.transport.sessionId!;
+      const apiKeySessionId = apiKey.transport.sessionId!;
+
+      vi.advanceTimersByTime(30 * 60 * 1000 + 1);
+      expect(httpSessions.has(apiKeySessionId)).toBe(false);
+      expect(httpSessions.has(paneSessionId)).toBe(true);
+      expect(service._sessions.size).toBe(1);
+
+      // The wake path reaps by awake time on its own, so it must spare the pane too.
+      (
+        service as unknown as { sessionStore: { recomputeIdleTimers: () => void } }
+      ).sessionStore.recomputeIdleTimers();
+      expect(httpSessions.has(paneSessionId)).toBe(true);
+
+      const tools = await pane.client.listTools();
+      expect(tools.tools.map((tool) => tool.name)).toContain("actions.list");
+      vi.advanceTimersByTime(30 * 60 * 1000 + 1);
+      expect(httpSessions.has(paneSessionId)).toBe(true);
+
+      // With no reaper, revoking the pane's bearer is what ends its session.
+      service.revokePaneBearer("principal-pane");
+      expect(httpSessions.has(paneSessionId)).toBe(false);
+      expect(service._sessions.size).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps the SSE transport functional after Streamable HTTP is in use", async () => {
     const { window } = createMockWindow({
       getManifest: () => [

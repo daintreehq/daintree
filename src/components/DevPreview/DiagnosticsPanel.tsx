@@ -175,10 +175,15 @@ export function describeDiagnosticEvent(event: DevPreviewDiagnosticEvent): {
   }
 }
 
+function formatUpstreamHost(host: string | undefined): string {
+  if (!host) return "localhost";
+  return host.includes(":") ? `[${host}]` : host;
+}
+
 export function describeUpstream(upstream: DevPreviewUpstreamResolution): string {
   switch (upstream.kind) {
     case "ok":
-      return `localhost:${upstream.port}${upstream.isHttps ? " (https)" : ""}`;
+      return `${formatUpstreamHost(upstream.host)}:${upstream.port}${upstream.isHttps ? " (https)" : ""}`;
     case "not-running":
       return `none — server ${upstream.status}`;
     case "unknown-subdomain":

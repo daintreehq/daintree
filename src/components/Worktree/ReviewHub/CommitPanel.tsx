@@ -287,7 +287,11 @@ export function CommitPanel({
     }
     isFetchingHistoryRef.current = true;
     try {
-      const result = await window.electron.git.listCommits({ cwd: worktreePath, limit: 8 });
+      const result = await window.electron.git.listCommits({
+        cwd: worktreePath,
+        limit: 8,
+        includeTotal: false,
+      });
       historyMessagesRef.current = result.items
         .map((c) => (c.body?.trim() ? `${c.message}\n\n${c.body.trim()}` : c.message))
         .filter((m) => m.length > 0);

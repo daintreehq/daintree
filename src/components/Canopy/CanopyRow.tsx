@@ -149,10 +149,8 @@ interface CanopyRowProps {
   isSelected: boolean;
   /** The run did something the user hasn't seen since they last looked, or they marked it unread. */
   unread: boolean;
-  /** Archived rows: subject and status only. */
+  /** Archived rows: no summary lines, but still where they run. */
   compact?: boolean;
-  /** Name the project beside the worktree: off while every row is in one project. */
-  showProject?: boolean;
   /** The panel's clock, for how long a busy run has gone unseen. */
   nowMs: number;
   /** The row its group's Tab stop lands on: the selected row, else the group's first. */
@@ -176,8 +174,8 @@ interface CanopyRowProps {
 /**
  * One agent in the inbox. A leading column holds what Daintree observed — its
  * state, whose agent, and the clock for that state; beside it, the task it is
- * carrying out, what it needs from you, the summary, and the project (by its
- * emoji) and worktree it runs in. An unread run carries a dot in the gutter and
+ * carrying out, what it needs from you, the summary, and, always on its bottom
+ * line, the project (its emoji and name) and worktree it runs in. An unread run carries a dot in the gutter and
  * a heavier name. The list's order is its priority; the row shows why it ranks
  * there in words, never as a score — on screen or read aloud. A click opens its
  * terminal beside the list.
@@ -188,7 +186,6 @@ export function CanopyRow({
   isSelected,
   unread,
   compact = false,
-  showProject = true,
   nowMs,
   tabbable,
   reserveDetail,
@@ -220,8 +217,9 @@ export function CanopyRow({
   // beyond the ask: the rest of a recap or report, the agent's last words.
   const glanceText =
     !compact && summary === null && card?.stage !== "described" ? glanceDetail(item, status) : null;
-  // Where it runs, unless the row is already named after it.
-  const project = showProject && subject !== item.workspace.name ? item.workspace.name : null;
+  // Where it runs, on every row: the bottom line always says which project,
+  // even on a row titled after it or a list that is all one project.
+  const project = item.workspace.name || null;
   const worktree = row.worktreeLabel !== subject ? row.worktreeLabel : null;
   const where = [project, worktree].filter(Boolean).join(" · ");
   // A first read in flight, with no words yet: in the ask's place, or under a
@@ -574,8 +572,7 @@ export function CanopyRow({
           className="flex h-4 min-w-0 flex-wrap items-center overflow-hidden text-xs leading-4 whitespace-nowrap text-text-secondary"
         >
           <span className="h-4 w-0" />
-          {/* The emoji leads a place, never stands for one: a row titled after
-              its project drops the name here, and its emoji goes with it. */}
+          {/* The emoji leads a place, never stands for one. */}
           {item.workspace.emoji && where !== "" && (
             <span className="mr-1.5 shrink-0 leading-none select-none">{item.workspace.emoji}</span>
           )}

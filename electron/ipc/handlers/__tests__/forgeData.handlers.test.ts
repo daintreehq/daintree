@@ -45,9 +45,26 @@ const fakeImpl = vi.hoisted(
 const repoRef: RepoRef = { host: "fake.test", owner: "acme", repo: "widgets", rawData: null };
 
 const resolveForCwdMock = vi.hoisted(() => vi.fn());
+const resolveIssueOverrideForCwdMock = vi.hoisted(() => vi.fn(async () => null as unknown));
 
 vi.mock("../forgeResolution.js", () => ({
   resolveForCwd: resolveForCwdMock,
+  resolveIssueOverrideForCwd: resolveIssueOverrideForCwdMock,
+  // Mirrors the real stamps: only an issues-override context marks its issues.
+  stampIssueProvider: (
+    context: { viaIssueOverride?: boolean; namespaceId: string },
+    issue: object | null
+  ) => (context.viaIssueOverride && issue ? { ...issue, providerId: context.namespaceId } : issue),
+  stampIssuePageProvider: (
+    context: { viaIssueOverride?: boolean; namespaceId: string },
+    page: { items: object[] }
+  ) =>
+    context.viaIssueOverride
+      ? {
+          ...page,
+          items: page.items.map((issue) => ({ ...issue, providerId: context.namespaceId })),
+        }
+      : page,
 }));
 
 // Default to "exists" so the existing stats tests reach the resolution path;
@@ -76,6 +93,18 @@ const storeMock = vi.hoisted(() => {
 vi.mock("../../../store.js", () => ({
   store: storeMock,
   auditLogsStore: { get: vi.fn(() => []), set: vi.fn() },
+}));
+
+const projectStoreMock = vi.hoisted(() => ({
+  saveRepoStats: vi.fn(),
+  getProjectByPath: vi.fn(async () => null),
+}));
+
+vi.mock("../../../services/ProjectStore.js", () => ({ projectStore: projectStoreMock }));
+
+vi.mock("../../../utils/git.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../utils/git.js")>()),
+  getCommitCount: vi.fn(async () => 12),
 }));
 
 import { registerForgeDataHandlers } from "../forgeData.js";
@@ -145,7 +174,7 @@ describe("registerForgeDataHandlers", () => {
       opts: { state: "open" },
     });
 
-    expect(resolveForCwdMock).toHaveBeenCalledWith("/repo");
+    expect(resolveForCwdMock).toHaveBeenCalledWith("/repo", "issues");
     expect(fakeImpl.listIssues).toHaveBeenCalledWith(repoRef, { state: "open" });
     expect(result).toEqual(page);
   });
@@ -1158,5 +1187,316 @@ describe("registerForgeDataHandlers", () => {
       expect(result).toEqual([{ number: 2, status: "found", pr: makePR(2) }]);
       expect(findPRsByNumbers).toHaveBeenCalledWith(repoRef, [2]);
     });
+  });
+});
+
+describe("issues bound to a separate provider (#13700)", () => {
+  const trackerRef: RepoRef = { host: "tracker.invalid", owner: "ENG", repo: "ENG", rawData: null };
+
+  function codeImplWithStats() {
+    return {
+      ...fakeImpl,
+      repoStats: {
+        getRepoStats: vi.fn(async () => ({
+          counts: { issueCount: 99, prCount: 4, lastUpdated: 1 },
+          // A cache hit persists like a network read but skips the renderer
+          // broadcast, which needs a real window registry.
+          source: "memory-cache" as const,
+          issues: { items: [makeIssue(1)], nextCursor: null, hasMore: false },
+          prs: { items: [], nextCursor: null, hasMore: false },
+        })),
+      },
+    };
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    _resetRateLimitQueuesForTest();
+    resolveIssueOverrideForCwdMock.mockResolvedValue(null);
+  });
+
+  it("stamps listed issues with the issues provider when its override served them", async () => {
+    const tracker = {
+      listIssues: vi.fn(async () => ({ items: [makeIssue(42)], nextCursor: null, hasMore: false })),
+    };
+    resolveForCwdMock.mockResolvedValue({
+      namespaceId: "acme.tracker.tracker",
+      repoRef: trackerRef,
+      impl: tracker,
+      viaIssueOverride: true,
+    });
+    registerForgeDataHandlers();
+
+    const page = (await findHandler("forge:list-issues")(null, { cwd: "/repo" })) as Page<Issue>;
+
+    expect(tracker.listIssues).toHaveBeenCalledWith(trackerRef, {});
+    expect(page.items[0]).toMatchObject({ number: 42, providerId: "acme.tracker.tracker" });
+  });
+
+  it("takes the issue count from the issues provider and keeps PRs from the code forge", async () => {
+    const code = codeImplWithStats();
+    resolveForCwdMock.mockResolvedValue({ namespaceId: "fake.provider", repoRef, impl: code });
+    const trackerList = vi.fn(async () => ({
+      items: [],
+      nextCursor: null,
+      hasMore: true,
+      totalCount: 7,
+    }));
+    resolveIssueOverrideForCwdMock.mockResolvedValue({
+      namespaceId: "acme.tracker.tracker",
+      repoRef: trackerRef,
+      impl: { listIssues: trackerList },
+      viaIssueOverride: true,
+    });
+    registerForgeDataHandlers();
+
+    const stats = await findHandler("forge:get-repo-stats")(null, { cwd: "/repo" });
+
+    expect(stats).toMatchObject({ issueCount: 7, prCount: 4, commitCount: 12 });
+    expect(trackerList).toHaveBeenCalledWith(trackerRef, {
+      state: "open",
+      perPage: 1,
+      bypassCache: false,
+    });
+    // Persisted counts carry the issues provider's count, not the code forge's 99.
+    expect(projectStoreMock.saveRepoStats).toHaveBeenCalledWith(
+      "/repo",
+      expect.objectContaining({ forge: expect.objectContaining({ issueCount: 7, prCount: 4 }) })
+    );
+  });
+
+  it("reports an unknown issue count, never the code forge's, when the issues provider fails", async () => {
+    resolveForCwdMock.mockResolvedValue({
+      namespaceId: "fake.provider",
+      repoRef,
+      impl: codeImplWithStats(),
+    });
+    resolveIssueOverrideForCwdMock.mockRejectedValue(new Error("issues provider unavailable"));
+    registerForgeDataHandlers();
+
+    const stats = await findHandler("forge:get-repo-stats")(null, { cwd: "/repo" });
+
+    expect(stats).toMatchObject({ issueCount: null, prCount: 4 });
+    // A failed read must not overwrite the stored counts.
+    expect(projectStoreMock.saveRepoStats).toHaveBeenCalledWith(
+      "/repo",
+      expect.not.objectContaining({ forge: expect.anything() })
+    );
+  });
+
+  it("skips cold-start hydration from the code forge's cached issue page", async () => {
+    const getFirstPageCache = vi.fn(async () => ({
+      issues: { items: [makeIssue(1)], nextCursor: null, hasMore: false },
+      prs: { items: [], nextCursor: null, hasMore: false },
+      lastUpdated: 1,
+    }));
+    resolveForCwdMock.mockResolvedValue({
+      namespaceId: "fake.provider",
+      repoRef: { ...repoRef, projectPath: "/repo" },
+      impl: { ...fakeImpl, repoStats: { getRepoStats: vi.fn(), getFirstPageCache } },
+    });
+    resolveIssueOverrideForCwdMock.mockResolvedValue({
+      namespaceId: "acme.tracker.tracker",
+      repoRef: trackerRef,
+      impl: {},
+      viaIssueOverride: true,
+    });
+    registerForgeDataHandlers();
+
+    const cached = await findHandler("forge:get-first-page-cache")(null, { cwd: "/repo" });
+
+    expect(cached).toBeNull();
+    expect(getFirstPageCache).not.toHaveBeenCalled();
+    // Reuses the root the code context already found.
+    expect(resolveIssueOverrideForCwdMock).toHaveBeenCalledWith("/repo", "/repo");
+  });
+
+  it("holds the blend back from persistence when the tracker's own count is stale", async () => {
+    resolveForCwdMock.mockResolvedValue({
+      namespaceId: "fake.provider",
+      repoRef,
+      impl: codeImplWithStats(),
+    });
+    resolveIssueOverrideForCwdMock.mockResolvedValue({
+      namespaceId: "acme.tracker.tracker",
+      repoRef: trackerRef,
+      impl: {
+        listIssues: vi.fn(),
+        repoStats: {
+          getRepoStats: vi.fn(async () => ({
+            counts: { issueCount: 3, prCount: null, stale: true },
+            source: "disk" as const,
+          })),
+        },
+      },
+      viaIssueOverride: true,
+    });
+    registerForgeDataHandlers();
+
+    const stats = await findHandler("forge:get-repo-stats")(null, { cwd: "/repo" });
+
+    expect(stats).toMatchObject({ issueCount: 3, prCount: 4 });
+    expect(projectStoreMock.saveRepoStats).toHaveBeenCalledWith(
+      "/repo",
+      expect.not.objectContaining({ forge: expect.anything() })
+    );
+  });
+
+  it("leaves the single-provider stats path untouched with no issues provider bound", async () => {
+    resolveForCwdMock.mockResolvedValue({
+      namespaceId: "fake.provider",
+      repoRef,
+      impl: codeImplWithStats(),
+    });
+    registerForgeDataHandlers();
+
+    const stats = await findHandler("forge:get-repo-stats")(null, { cwd: "/repo" });
+
+    expect(stats).toMatchObject({ issueCount: 99, prCount: 4 });
+  });
+});
+
+describe("forge:resolve-author-avatar coalescing (#13598)", () => {
+  function deferred<T>() {
+    let resolve!: (value: T) => void;
+    let reject!: (err: unknown) => void;
+    const promise = new Promise<T>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    return { promise, resolve, reject };
+  }
+
+  let generation: number;
+  let resolveAuthorAvatar: ReturnType<typeof vi.fn>;
+
+  function useAvatarImpl(opts: { namespaceId?: string; host?: string; withGeneration?: boolean }) {
+    const avatars: Record<string, unknown> = { resolveAuthorAvatar };
+    if (opts.withGeneration !== false) avatars.getCacheGeneration = () => generation;
+    resolveForCwdMock.mockResolvedValue({
+      namespaceId: opts.namespaceId ?? "fake.provider",
+      repoRef: { ...repoRef, host: opts.host ?? repoRef.host },
+      impl: { ...fakeImpl, avatars } as unknown as ForgeProviderImpl,
+    });
+  }
+
+  function resolveAvatar(email: string, cwd = "/repo"): Promise<unknown> {
+    return Promise.resolve(findHandler("forge:resolve-author-avatar")(null, { cwd, email }));
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    _resetRateLimitQueuesForTest();
+    generation = 0;
+    resolveAuthorAvatar = vi.fn();
+    useAvatarImpl({});
+    registerForgeDataHandlers();
+  });
+
+  it("shares one provider lookup and one rate-limit slot across concurrent identical reads", async () => {
+    const pending = deferred<string | null>();
+    resolveAuthorAvatar.mockReturnValue(pending.promise);
+
+    const results = Array.from({ length: 20 }, (_, i) =>
+      resolveAvatar(i % 2 ? " Dev@Example.com " : "dev@example.com", `/repo/wt-${i}`)
+    );
+    await vi.waitFor(() => expect(resolveAuthorAvatar).toHaveBeenCalledTimes(1));
+    pending.resolve("https://avatars.test/dev.png");
+
+    expect(await Promise.all(results)).toEqual(
+      Array.from({ length: 20 }, () => "https://avatars.test/dev.png")
+    );
+    expect(resolveAuthorAvatar).toHaveBeenCalledTimes(1);
+    expect(resolveAuthorAvatar).toHaveBeenCalledWith("dev@example.com");
+
+    // Only the one admitted lookup spent quota: 29 distinct emails still fit
+    // the 30/min budget, and the 30th distinct one is refused.
+    resolveAuthorAvatar.mockResolvedValue(null);
+    for (let i = 0; i < 29; i++) await resolveAvatar(`user-${i}@example.com`);
+    await expect(resolveAvatar("one-too-many@example.com")).rejects.toThrow();
+  });
+
+  it("hands a rate-limit rejection to every joiner and lets the same author retry later", async () => {
+    resolveAuthorAvatar.mockResolvedValue(null);
+    for (let i = 0; i < 30; i++) await resolveAvatar(`filler-${i}@example.com`);
+    resolveAuthorAvatar.mockClear();
+
+    const reads = Array.from({ length: 5 }, () => resolveAvatar("dev@example.com"));
+    const settled = await Promise.allSettled(reads);
+    expect(settled.every((r) => r.status === "rejected")).toBe(true);
+    expect(resolveAuthorAvatar).not.toHaveBeenCalled();
+
+    _resetRateLimitQueuesForTest();
+    resolveAuthorAvatar.mockResolvedValue("https://avatars.test/dev.png");
+    expect(await resolveAvatar("dev@example.com")).toBe("https://avatars.test/dev.png");
+  });
+
+  it("does not hold a settled result, so the next read reaches the provider again", async () => {
+    resolveAuthorAvatar.mockResolvedValue(null);
+    expect(await resolveAvatar("dev@example.com")).toBeNull();
+    expect(await resolveAvatar("dev@example.com")).toBeNull();
+    expect(resolveAuthorAvatar).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps distinct emails, hosts, providers and credential generations in separate flights", async () => {
+    const pending = deferred<string | null>();
+    resolveAuthorAvatar.mockReturnValue(pending.promise);
+
+    const reads = [resolveAvatar("a@example.com"), resolveAvatar("b@example.com")];
+    await vi.waitFor(() => expect(resolveAuthorAvatar).toHaveBeenCalledTimes(2));
+
+    useAvatarImpl({ host: "other.test" });
+    reads.push(resolveAvatar("a@example.com"));
+    await vi.waitFor(() => expect(resolveAuthorAvatar).toHaveBeenCalledTimes(3));
+
+    useAvatarImpl({ namespaceId: "other.provider" });
+    reads.push(resolveAvatar("a@example.com"));
+    await vi.waitFor(() => expect(resolveAuthorAvatar).toHaveBeenCalledTimes(4));
+
+    // A credential change mid-flight: later readers must not join the lookup
+    // started under the previous credential.
+    useAvatarImpl({});
+    generation = 1;
+    reads.push(resolveAvatar("a@example.com"));
+    await vi.waitFor(() => expect(resolveAuthorAvatar).toHaveBeenCalledTimes(5));
+
+    pending.resolve(null);
+    await Promise.all(reads);
+  });
+
+  it("does not coalesce a provider that exposes no cache generation", async () => {
+    useAvatarImpl({ withGeneration: false });
+    const pending = deferred<string | null>();
+    resolveAuthorAvatar.mockReturnValue(pending.promise);
+
+    const reads = [resolveAvatar("dev@example.com"), resolveAvatar("dev@example.com")];
+    await vi.waitFor(() => expect(resolveAuthorAvatar).toHaveBeenCalledTimes(2));
+    pending.resolve(null);
+    await Promise.all(reads);
+  });
+
+  it("hands a provider failure to every joiner as null, then retries on the next read", async () => {
+    const pending = deferred<string | null>();
+    resolveAuthorAvatar.mockReturnValueOnce(pending.promise);
+
+    const reads = [resolveAvatar("dev@example.com"), resolveAvatar("dev@example.com")];
+    await vi.waitFor(() => expect(resolveAuthorAvatar).toHaveBeenCalledTimes(1));
+    pending.reject(new Error("network down"));
+    expect(await Promise.all(reads)).toEqual([null, null]);
+
+    resolveAuthorAvatar.mockResolvedValueOnce("https://avatars.test/dev.png");
+    expect(await resolveAvatar("dev@example.com")).toBe("https://avatars.test/dev.png");
+    expect(resolveAuthorAvatar).toHaveBeenCalledTimes(2);
+  });
+
+  it("returns null without spending quota for invalid input or an avatar-less provider", async () => {
+    expect(await resolveAvatar("   ")).toBeNull();
+    resolveForCwdMock.mockResolvedValue({
+      namespaceId: "fake.provider",
+      repoRef,
+      impl: fakeImpl as unknown as ForgeProviderImpl,
+    });
+    for (let i = 0; i < 40; i++) expect(await resolveAvatar(`u${i}@example.com`)).toBeNull();
+    expect(resolveForCwdMock).toHaveBeenCalled();
   });
 });

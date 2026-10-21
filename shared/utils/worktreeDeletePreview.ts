@@ -1,6 +1,6 @@
 import type { FileChangeDetail } from "../types/git.js";
 import type { SubmoduleDeleteRisk, SubmoduleEntry } from "../types/submodule.js";
-import type { WorktreeTeardownPreview } from "../types/worktree.js";
+import type { WorktreeTeardownPhasePreview, WorktreeTeardownPreview } from "../types/worktree.js";
 import { MCP_PREVIEW_CAUTION_PREFIX } from "./mcpPreviewLines.js";
 import { pluralize } from "./pluralize.js";
 
@@ -512,6 +512,12 @@ export function groupAtRiskCommits(risk: SubmoduleDeleteRisk | null): SubmoduleC
   }));
 }
 
+/** How the delete-confirm surfaces name one teardown phase. */
+export function teardownPhaseNoun(phase: WorktreeTeardownPhasePreview): string {
+  if (phase.phase === "attachment-detach") return `Detach of "${phase.attachment ?? ""}"`;
+  return phase.phase === "resource-teardown" ? "Resource teardown" : "Project teardown";
+}
+
 /**
  * The teardown half of the MCP preview — the same disclosure the local dialog
  * makes, because a delete an agent requested runs the same teardown.
@@ -526,7 +532,7 @@ export function formatTeardownPreviewLines(
   }
   const lines: string[] = [];
   for (const phase of teardown?.phases ?? []) {
-    const noun = phase.phase === "resource-teardown" ? "Resource teardown" : "Project teardown";
+    const noun = teardownPhaseNoun(phase);
     if (!phase.approved) {
       lines.push(`${noun} will be skipped — its commands haven't been approved for this project.`);
       continue;

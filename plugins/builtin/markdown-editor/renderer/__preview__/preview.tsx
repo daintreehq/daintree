@@ -58,7 +58,11 @@ function Preview() {
         <FileViewerToolbar.Root label="File viewer controls">
           <FileViewerToolbar.Path path="docs/releases/release-plan.md" />
         </FileViewerToolbar.Root>
-        <MarkdownEditorStatusBar {...fixture.props} onSave={() => {}} />
+        <MarkdownEditorStatusBar
+          {...fixture.props}
+          filePath="docs/releases/release-plan.md"
+          onSave={() => {}}
+        />
         {/* An empty file has an empty buffer: a capture showing 0 lines over a
             populated body would be a picture of a state that cannot happen. */}
         <pre

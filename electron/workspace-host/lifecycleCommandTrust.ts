@@ -87,11 +87,21 @@ function pushResourceGroups(
   }
 }
 
+/** What a project attachment runs. Everything in it is a command. */
+interface AttachmentCommands {
+  attach: string[];
+  detach: string[];
+  status?: string;
+}
+
+const ATTACHMENT_COMMAND_FIELDS = ["attach", "detach", "status"] as const;
+
 export function lifecycleConfigCommandGroups(config: {
   setup?: string[];
   teardown?: string[];
   resource?: ResourceCommands;
   resources?: Record<string, ResourceCommands>;
+  attachments?: Record<string, AttachmentCommands>;
 }): LifecycleCommandReviewGroup[] {
   const groups: LifecycleCommandReviewGroup[] = [];
   const setup = nonEmpty(config.setup);
@@ -102,6 +112,14 @@ export function lifecycleConfigCommandGroups(config: {
   // Object order is kept: the "first environment" fallback makes it meaningful.
   for (const [name, resource] of Object.entries(config.resources ?? {})) {
     pushResourceGroups(groups, `Resource "${name}"`, resource);
+  }
+  // Appended after every existing group, so a config that declares no
+  // attachments keeps the fingerprint it was approved under.
+  for (const [name, attachment] of Object.entries(config.attachments ?? {})) {
+    for (const field of ATTACHMENT_COMMAND_FIELDS) {
+      const commands = nonEmpty(attachment[field]);
+      if (commands.length > 0) groups.push({ label: `Attachment "${name}" ${field}`, commands });
+    }
   }
   return groups;
 }

@@ -417,6 +417,27 @@ describe("WorkspaceHostProcess", () => {
     host.dispose();
   });
 
+  it("keeps a fatal host error for the exit report of this host only", async () => {
+    const { WorkspaceHostProcess } = await loadModule();
+    const { fatalErrorNotes } = await import("../childProcessExitReport.js");
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const host = new WorkspaceHostProcess("/tmp/project", {
+      maxRestartAttempts: 3,
+      healthCheckIntervalMs: 30000,
+    } as any);
+    host.waitForReady().catch(() => {});
+
+    const child = mockChildren[0] as MockUtilityChild;
+    child.emit("message", { type: "error", error: "Serialization failed" });
+    expect(fatalErrorNotes.consume(serviceNameFor("/tmp/project"))).toBeUndefined();
+
+    child.emit("message", { type: "error", error: "block timeout reached", fatal: true });
+    expect(fatalErrorNotes.consume(serviceNameFor("/tmp/other"))).toBeUndefined();
+    expect(fatalErrorNotes.consume(serviceNameFor("/tmp/project"))).toBe("block timeout reached");
+
+    host.dispose();
+  });
+
   it("routes emfile-limit-reached as host-event (spontaneous event)", async () => {
     const { WorkspaceHostProcess } = await loadModule();
     const host = new WorkspaceHostProcess("/tmp/project", {

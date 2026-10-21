@@ -48,6 +48,7 @@ const PTY_FIELD_CLASSIFICATION = {
   title: false,
   titleMode: false,
   location: false,
+  backgroundRestoreLocation: false,
   worktreeId: false,
   isVisible: false,
   extensionState: false,
@@ -170,6 +171,7 @@ const BROWSER_FIELD_CLASSIFICATION = {
   title: false,
   titleMode: false,
   location: false,
+  backgroundRestoreLocation: false,
   worktreeId: false,
   isVisible: false,
   extensionState: false,
@@ -199,6 +201,7 @@ const DEV_PREVIEW_FIELD_CLASSIFICATION = {
   title: false,
   titleMode: false,
   location: false,
+  backgroundRestoreLocation: false,
   worktreeId: false,
   isVisible: false,
   extensionState: false,
@@ -219,6 +222,7 @@ const DEV_PREVIEW_FIELD_CLASSIFICATION = {
   viewportDpr: true,
   viewportFit: true,
   devPreviewScrollPosition: true,
+  previewsResourceEndpoint: true,
   // DevPreviewPanelData runtime-only fields
   devServerStatus: false,
   devServerPhaseLabel: false,
@@ -243,6 +247,7 @@ const FILE_FIELD_CLASSIFICATION = {
   title: false,
   titleMode: false,
   location: false,
+  backgroundRestoreLocation: false,
   worktreeId: false,
   isVisible: false,
   extensionState: false,
@@ -276,6 +281,7 @@ const DIFF_FIELD_CLASSIFICATION = {
   title: false,
   titleMode: false,
   location: false,
+  backgroundRestoreLocation: false,
   worktreeId: false,
   isVisible: false,
   extensionState: false,
@@ -310,6 +316,7 @@ const FILE_BROWSER_FIELD_CLASSIFICATION = {
   title: false,
   titleMode: false,
   location: false,
+  backgroundRestoreLocation: false,
   worktreeId: false,
   isVisible: false,
   extensionState: false,
@@ -460,6 +467,7 @@ const devPreviewFixture: DevPreviewSerializeInput = {
   viewportRotated: false,
   viewportDpr: 2,
   viewportFit: true,
+  previewsResourceEndpoint: true,
   exitBehavior: "keep",
   createdAt: 1_700_000_000_000,
 };
@@ -576,6 +584,7 @@ const savedDevPreview: SavedTerminalData = {
   viewportRotated: false,
   viewportDpr: 2,
   viewportFit: true,
+  previewsResourceEndpoint: true,
   exitBehavior: "keep",
   createdAt: 1_700_000_000_000,
 };
@@ -892,6 +901,7 @@ type PersistedDevPreviewFields =
   | "devPreviewConsoleOpen"
   | "devPreviewConsoleTab"
   | "devPreviewScrollPosition"
+  | "previewsResourceEndpoint"
   | "exitBehavior";
 
 const browserHistoryArb = fc.record({
@@ -956,6 +966,7 @@ const devPreviewArbSpec = {
     }
   ),
   devPreviewScrollPosition: fc.option(scrollPositionArb, { nil: undefined }),
+  previewsResourceEndpoint: fc.option(fc.boolean(), { nil: undefined }),
   exitBehavior: fc.option(exitBehaviorArb, { nil: undefined }),
 } satisfies { [K in PersistedDevPreviewFields]-?: fc.Arbitrary<DevPreviewData[K]> };
 
@@ -1060,6 +1071,10 @@ describe("panel serializer round-trip (property tests)", () => {
         expect(restored.devPreviewConsoleOpen).toBe(fields.devPreviewConsoleOpen);
         expect(restored.devPreviewConsoleTab).toBe(fields.devPreviewConsoleTab);
         expect(restored.devPreviewScrollPosition).toEqual(fields.devPreviewScrollPosition);
+        // Only an endpoint panel carries the flag; an ordinary one stays without it.
+        expect(restored.previewsResourceEndpoint).toBe(
+          fields.previewsResourceEndpoint || undefined
+        );
 
         // exitBehavior is NOT returned by getDeserializer("dev-preview"); the real
         // restore path adds it via buildArgsForNonPtyRecreation's base args before

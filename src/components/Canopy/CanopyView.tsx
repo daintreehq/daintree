@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useDeferredValue,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import type { KeyboardEvent } from "react";
 import { Keyboard, RefreshCw } from "lucide-react";
 import { formatWaitAge } from "@/lib/projectRowStatus";
@@ -12,10 +20,16 @@ import { actionService } from "@/services/ActionService";
 import { notify } from "@/lib/notify";
 import { latestUndoOnly, UNDO_TOAST_DURATION_MS } from "@/lib/undoToast";
 import { pluralize } from "@/lib/pluralize";
+import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { isMac } from "@/lib/platform";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { clientErrorCode } from "@/utils/clientAppError";
-import { CANOPY_URGENT_PRIORITY, type CanopyReadMark } from "@shared/types/ipc/canopy";
+import {
+  CANOPY_URGENT_PRIORITY,
+  type CanopyReadMark,
+  type CanopyScreenSearchTarget,
+} from "@shared/types/ipc/canopy";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { CANOPY_SEEN_HEARTBEAT_MS, canopyViewIsWatched, reportCanopySeen } from "@/lib/canopySeen";
 import {
@@ -30,6 +44,7 @@ import { AppDialog } from "@/components/ui/AppDialog";
 import { consumePaletteFocusRestoreSuppression } from "@/components/ui/paletteFocusRestore";
 import { Button } from "@/components/ui/button";
 import { KbdChord } from "@/components/ui/Kbd";
+import { SearchField } from "@/components/ui/SearchField";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -46,7 +61,9 @@ import {
   itemPriority,
   itemSubject,
   repliedAt,
+  searchTerms,
   splitInbox,
+  unmatchedTerms,
   type CanopyItem,
 } from "./canopyModel";
 import { CANOPY_REVEAL_MS, nextCanopyOrder } from "./canopyOrder";
@@ -85,6 +102,13 @@ const NO_HOSTS: readonly HostId[] = [];
 
 /** Ages are minute-grained, as in Pilot. */
 const AGE_TICK_MS = 30_000;
+
+/** How long the search waits on the typing before reading terminals for it. */
+const SCREEN_SEARCH_DEBOUNCE_MS = 150;
+/** The most runs, words and word length one search asks of the terminals: main's own caps. */
+const SCREEN_SEARCH_MAX_RUNS = 500;
+const SCREEN_SEARCH_MAX_TERMS = 16;
+const SCREEN_SEARCH_MAX_TERM_LENGTH = 200;
 
 /** "3m ago", or "just now" — never "just now ago". */
 function agoPhrase(sinceMs: number, nowMs: number): string {
@@ -413,6 +437,15 @@ function CanopyShortcuts() {
       ],
     },
     {
+      heading: "In the search",
+      rows: [
+        { keys: ["ArrowUp", "ArrowDown"], label: "Move" },
+        { keys: ["Enter"], label: "Go to terminal" },
+        { keys: ["Tab"], label: "Into the list, where the keys below act" },
+        { keys: ["Escape"], label: "Clear the search, then close" },
+      ],
+    },
+    {
       heading: "In the list",
       rows: [
         { keys: ["ArrowUp", "ArrowDown"], label: "Move" },
@@ -432,6 +465,7 @@ function CanopyShortcuts() {
         { keys: ["Alt+U"], label: "Mark all as read" },
         { keys: ["Z"], label: "Undo" },
         { keys: ["Shift+F10"], label: "More actions" },
+        { keys: ["/"], label: "Search" },
         { keys: ["Cmd+Backspace"], label: "Trash, pressed twice; Z takes it back" },
         { keys: ["Escape"], label: "Close" },
         ...(closeCombo ? [{ keys: [closeCombo], label: "Close Canopy" }] : []),
@@ -756,6 +790,79 @@ function CanopyInbox({
       .map(({ item }) => item);
   }, [baseItems, order]);
   const inbox = useMemo(() => splitInbox(items), [items]);
+  // The search the panel opens on: the runs whose names, words or terminal
+  // hold every word of it. Typed straight into, it never reaches a row's keys.
+  const [query, setQuery] = useState("");
+  const searchRef = useRef<HTMLInputElement>(null);
+  const appliedQuery = useDeferredValue(query);
+  const terms = useMemo(() => searchTerms(appliedQuery), [appliedQuery]);
+  const searching = terms.length > 0;
+  const searchKey = `${hostId ?? ""}|${terms.join(" ")}`;
+  // The words each run's names and words leave unfound, asked of its terminal
+  // on the host it runs on: only ids come back. A run with more words left
+  // than main takes is not asked, rather than the whole ask refused.
+  const screenTargets = useMemo(() => {
+    const targets: CanopyScreenSearchTarget[] = [];
+    if (terms.length === 0) return targets;
+    for (const item of items) {
+      const left = unmatchedTerms(item, terms);
+      if (
+        left.length === 0 ||
+        left.length > SCREEN_SEARCH_MAX_TERMS ||
+        left.some((term) => term.length > SCREEN_SEARCH_MAX_TERM_LENGTH)
+      ) {
+        continue;
+      }
+      targets.push({ runId: item.runId, spawnedAt: item.row.run.spawnedAt, terms: left });
+      if (targets.length === SCREEN_SEARCH_MAX_RUNS) break;
+    }
+    return targets;
+  }, [items, terms]);
+  // The ask as a value: a terminal's matches stand only for the very runs,
+  // incarnations and words they were found for, on the host that found them.
+  const screenAsk = useMemo(
+    () => (screenTargets.length === 0 ? null : `${hostId ?? ""}|${JSON.stringify(screenTargets)}`),
+    [screenTargets, hostId]
+  );
+  const screenTargetsRef = useRef(screenTargets);
+  useEffect(() => {
+    screenTargetsRef.current = screenTargets;
+  });
+  const [screenHits, setScreenHits] = useState<{
+    ask: string;
+    runIds: ReadonlySet<string>;
+  } | null>(null);
+  // Asked again as screens are read anew, since a terminal's words move on.
+  useEffect(() => {
+    if (!isOpen || screenAsk === null) return;
+    let live = true;
+    const timer = setTimeout(() => {
+      api.searchScreens(screenTargetsRef.current).then(
+        (runIds) => {
+          if (live) setScreenHits({ ask: screenAsk, runIds: new Set(runIds) });
+        },
+        // A host that can't search its screens still matches what the panel
+        // holds, and its search has still settled.
+        () => {
+          if (!live) return;
+          setScreenHits((hits) =>
+            hits?.ask === screenAsk ? hits : { ask: screenAsk, runIds: new Set() }
+          );
+        }
+      );
+    }, SCREEN_SEARCH_DEBOUNCE_MS);
+    return () => {
+      live = false;
+      clearTimeout(timer);
+    };
+  }, [isOpen, screenAsk, api, refreshedAt]);
+  const onScreen = screenHits !== null && screenHits.ask === screenAsk ? screenHits.runIds : null;
+  const shownInbox = useMemo(() => {
+    if (!searching) return inbox;
+    const matches = (item: CanopyItem) =>
+      onScreen?.has(item.runId) === true || unmatchedTerms(item, terms).length === 0;
+    return { inbox: inbox.inbox.filter(matches), archived: inbox.archived.filter(matches) };
+  }, [inbox, searching, onScreen, terms]);
   const unreadOnly = useCanopyStore((s) => s.unreadOnly);
   const setUnreadOnly = useCanopyStore((s) => s.setUnreadOnly);
   // A run read while the Unread filter is on stays listed until the filter is
@@ -777,16 +884,18 @@ function CanopyInbox({
   const listed = useMemo(
     () =>
       unreadOnly
-        ? inbox.inbox.filter((item) => item.unread || keptUnread.has(item.runId))
-        : inbox.inbox,
-    [unreadOnly, inbox, keptUnread]
+        ? shownInbox.inbox.filter((item) => item.unread || keptUnread.has(item.runId))
+        : shownInbox.inbox,
+    [unreadOnly, shownInbox, keptUnread]
   );
   const archivedExpanded = useCanopyStore((s) => s.archivedExpanded);
   const setArchivedExpanded = useCanopyStore((s) => s.setArchivedExpanded);
+  // A search finds archived runs too, shown under their bar without unfolding it for good.
+  const archivedShown = archivedExpanded || searching;
   // What the keyboard walks: the list, then the archived runs once they are shown.
   const visible = useMemo(
-    () => [...listed, ...(archivedExpanded ? inbox.archived : [])],
-    [listed, inbox, archivedExpanded]
+    () => [...listed, ...(archivedShown ? shownInbox.archived : [])],
+    [listed, shownInbox, archivedShown]
   );
   // What the open panel shows counts as seen: its urgent prompts leave the
   // toolbar badge. Runs another scope or the Unread filter hides stay on it.
@@ -807,12 +916,44 @@ function CanopyInbox({
     safeFireAndForget(api.setShown(shownKey === "" ? [] : shownKey.split(" ")));
   }, [shownKey, api, recoveries]);
   const listRef = useRef<HTMLDivElement>(null);
-  useListReorderMotion(listRef, listed.map((item) => item.runId).join(" "));
+  // A search narrows the list, and a terminal's matches landing widen it: neither is a move.
+  const filterKey = searching ? `${searchKey}|${[...(onScreen ?? [])].join(" ")}` : "";
+  useListReorderMotion(listRef, listed.map((item) => item.runId).join(" "), filterKey);
   // A list unmounted under the pointer never says the pointer left.
   const listShown = listed.length > 0;
   useEffect(() => {
     if (!listShown) setPointerInList(false);
   }, [listShown]);
+
+  // The search found runs, but only read ones the Unread filter hides: every
+  // place that says why the list is empty says that, not "no match".
+  const onlyReadMatch = searching && visible.length === 0 && shownInbox.inbox.length > 0;
+  // A search's outcome is said once, when it settles: the runs are in, the
+  // terminals have answered and the typing has stopped. Never per keystroke,
+  // and never again for a match a terminal adds later.
+  const searchSettled = fleet !== null && (screenAsk === null || onScreen !== null);
+  const outcome =
+    !searching || !searchSettled
+      ? null
+      : visible.length > 0
+        ? pluralize(visible.length, "match", "matches")
+        : onlyReadMatch
+          ? "No unread matches"
+          : "No matches";
+  const announceKey = `${searchKey}|${unreadOnly}`;
+  const announcedRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!searching) {
+      announcedRef.current = null;
+      return;
+    }
+    if (outcome === null || query !== appliedQuery || announcedRef.current === announceKey) return;
+    const timer = window.setTimeout(() => {
+      announcedRef.current = announceKey;
+      useAnnouncerStore.getState().announce(outcome, "polite");
+    }, UI_DOHERTY_THRESHOLD);
+    return () => window.clearTimeout(timer);
+  }, [searching, outcome, announceKey, query, appliedQuery]);
 
   const [focusedId, setFocusedId] = useState<string | null>(null);
   // Where the keyboard goes in the next agent's pane, for the run it was meant for.
@@ -824,10 +965,13 @@ function CanopyInbox({
   // Nothing is open until a run is chosen or landed on; before that the pane
   // shows the list's first run. A chosen run stays open when it moves into the
   // folded Archived group, so the pane never vanishes under the user's typing.
+  // While searching, only a match is ever open.
   const focusedItem =
     focusedIndex !== -1
       ? visible[focusedIndex]!
-      : (items.find((item) => item.runId === focusedId) ?? listed[0] ?? null);
+      : searching
+        ? (visible[0] ?? null)
+        : (items.find((item) => item.runId === focusedId) ?? listed[0] ?? null);
   const visibleRef = useRef<CanopyItem[]>([]);
   const selectedRef = useRef<string | null>(null);
   // An answer or a reply settles after the panel may have closed, and a new
@@ -895,6 +1039,13 @@ function CanopyInbox({
     [api]
   );
 
+  // The run selected, its row brought into view, the keyboard left where it is.
+  const selectNow = useCallback((runId: string) => {
+    setPaneFocus(null);
+    setFocusedId(runId);
+    document.getElementById(canopyCardDomId(runId))?.scrollIntoView({ block: "nearest" });
+  }, []);
+
   const focusCardNow = useCallback((runId: string) => {
     setPaneFocus(null);
     setFocusedId(runId);
@@ -936,9 +1087,10 @@ function CanopyInbox({
     };
   }, [shownRunId]);
 
-  // Land the keyboard on the top of the list on open. Two frames, so it lands
-  // after the palette's own first-tabbable focus rather than racing it, and
-  // cancelled on cleanup so a StrictMode replay schedules it afresh.
+  // Land the keyboard in the search on open, with the top of the list selected —
+  // at once when the search is there, so nothing typed goes astray. Otherwise
+  // two frames, so it lands after the palette's own first-tabbable focus rather
+  // than racing it, and cancelled on cleanup so a StrictMode replay schedules it afresh.
   const landedRef = useRef(false);
   // The user pressed something in the panel since it opened, header included:
   // where they put the keyboard stands, and the landing gives way to it.
@@ -963,26 +1115,38 @@ function CanopyInbox({
     if (!isOpen) {
       landedRef.current = false;
       setFocusedId(null);
+      setQuery("");
       return;
     }
     focusAfterCloseRef.current = null;
-    if (landedRef.current || listed.length === 0) return;
-    const target = listed[0]!.runId;
+    if (landedRef.current || items.length === 0) return;
+    const target = visible[0]?.runId ?? null;
+    const land = () => {
+      landedRef.current = true;
+      // The user got there first — clicked a row, a control or into a
+      // terminal while the frames were held back: their place stands.
+      if (touchedRef.current) return;
+      const search = searchRef.current;
+      if (search) {
+        if (target !== null) setFocusedId(target);
+        search.focus();
+      } else if (target !== null) {
+        focusCardNow(target);
+      }
+    };
+    if (searchRef.current) {
+      land();
+      return;
+    }
     let inner = 0;
     const outer = requestAnimationFrame(() => {
-      inner = requestAnimationFrame(() => {
-        landedRef.current = true;
-        // The user got there first — clicked a row, a control or into a
-        // terminal while the frames were held back: their place stands.
-        if (touchedRef.current) return;
-        focusCardNow(target);
-      });
+      inner = requestAnimationFrame(land);
     });
     return () => {
       cancelAnimationFrame(outer);
       cancelAnimationFrame(inner);
     };
-  }, [isOpen, listed, focusCardNow]);
+  }, [isOpen, items, visible, focusCardNow]);
 
   // The focused card left (trashed, answered into another section, exited):
   // put the keyboard on the card that took its place instead of dropping it on
@@ -1011,6 +1175,31 @@ function CanopyInbox({
         : visible[Math.min(lastIndexRef.current, visible.length - 1)]!;
     focusCardNow(target.runId);
   }, [focusedIndex, focusedId, visible, focusCardNow, paneFocus, items]);
+
+  // A new search selects its top match, as opening selects the top run; a
+  // match leaving under the same search gives its place to the next.
+  // A search with no match yet still owes its top match, should a terminal find one.
+  const searchedRef = useRef(appliedQuery);
+  const topOwedRef = useRef(false);
+  useEffect(() => {
+    if (!isOpen) {
+      searchedRef.current = "";
+      topOwedRef.current = false;
+      return;
+    }
+    if (searchedRef.current !== appliedQuery) {
+      searchedRef.current = appliedQuery;
+      const top = visible[0];
+      topOwedRef.current = top === undefined;
+      if (top) selectNow(top.runId);
+      else setFocusedId(null);
+      return;
+    }
+    if (!searching || focusedIndex !== -1 || visible.length === 0) return;
+    const index = topOwedRef.current ? 0 : Math.min(lastIndexRef.current, visible.length - 1);
+    topOwedRef.current = false;
+    selectNow(visible[index]!.runId);
+  }, [isOpen, appliedQuery, searching, focusedIndex, visible, selectNow]);
 
   // Select a run and take the keyboard into its pane — its composer or its
   // terminal — rather than onto its row.
@@ -1248,7 +1437,12 @@ function CanopyInbox({
         // its composer, as Send moves on in a mail queue. The answered one
         // leaves the queue when main's handled reading lands.
         const next = nextAfter(item.runId);
-        if (next && next.runId !== item.runId) openPaneNow(next.runId, "composer");
+        if (!next || next.runId === item.runId) return;
+        if (searchRef.current !== null && document.activeElement === searchRef.current) {
+          selectNow(next.runId);
+        } else {
+          openPaneNow(next.runId, "composer");
+        }
       },
       onArchive: (item) => {
         if (itemArchived(item)) {
@@ -1314,7 +1508,13 @@ function CanopyInbox({
               ) {
                 return;
               }
-              if (next && next.runId !== item.runId) focusCardNow(next.runId);
+              if (!next || next.runId === item.runId) return;
+              // Back in the search since: the selection moves on, the keyboard stays to type.
+              if (searchRef.current !== null && document.activeElement === searchRef.current) {
+                selectNow(next.runId);
+              } else {
+                focusCardNow(next.runId);
+              }
             },
             (error: unknown) => failToast("Couldn't answer", error, goTo(item))
           )
@@ -1374,6 +1574,7 @@ function CanopyInbox({
     close,
     readNow,
     focusCardNow,
+    selectNow,
     openPaneNow,
     nextAfter,
     reserveUndo,
@@ -1483,7 +1684,9 @@ function CanopyInbox({
         : visible[Math.min(visible.length - 1, Math.max(0, current + step))]!;
     if (next.runId === focusedItem?.runId) return;
     const focus = paneFocusOf(document.activeElement);
-    if (focus === null) focusCardNow(next.runId);
+    // From the search the selection moves and the keyboard stays to type.
+    if (event.target === searchRef.current) selectNow(next.runId);
+    else if (focus === null) focusCardNow(next.runId);
     else openPaneNow(next.runId, focus);
   };
 
@@ -1531,6 +1734,14 @@ function CanopyInbox({
       return;
     }
     if (event.metaKey || event.ctrlKey || event.altKey) return;
+    // Back to the search: "/" from any row, or up off the top of the list.
+    const search = searchRef.current;
+    if (search && (event.key === "/" || (event.key === "ArrowUp" && activeIndex === 0))) {
+      event.preventDefault();
+      search.focus();
+      if (event.key === "/") search.select();
+      return;
+    }
     let next: number | null = null;
     if (event.key === "ArrowDown" || event.key === "j") {
       next = Math.min(visible.length - 1, activeIndex + 1);
@@ -1565,6 +1776,48 @@ function CanopyInbox({
       return;
     }
     detailRef.current?.handleKey(event);
+  };
+
+  // The search keeps every plain key for its text; only the list's moves, Go to
+  // terminal and the modifier chords act from it, on the selected run. Tab takes
+  // the keyboard down to that run's row, where the one-key actions are.
+  const onSearchKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    // The IME owns the key: nothing of the search's or the panel's acts on it.
+    if (event.nativeEvent.isComposing || event.keyCode === 229) {
+      event.stopPropagation();
+      return;
+    }
+    const plain = !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey;
+    const selected = focusedIndex !== -1 ? visible[focusedIndex]! : (visible[0] ?? null);
+    if (plain && (event.key === "ArrowDown" || event.key === "ArrowUp")) {
+      event.preventDefault();
+      if (visible.length === 0) return;
+      const step = event.key === "ArrowDown" ? 1 : -1;
+      selectNow(visible[Math.min(visible.length - 1, Math.max(0, activeIndex + step))]!.runId);
+      return;
+    }
+    if (plain && event.key === "Enter") {
+      if (!selected) return;
+      event.preventDefault();
+      handlers.onOpen(selected);
+      return;
+    }
+    if (plain && event.key === "Tab") {
+      if (!selected) return;
+      event.preventDefault();
+      // The dialog's own Tab wrap must not take the keyboard on from the row.
+      event.stopPropagation();
+      focusCardNow(selected.runId);
+      return;
+    }
+    if ((event.metaKey || event.ctrlKey) && event.key === "Backspace") {
+      if (selected?.runId === focusedItem?.runId) detailRef.current?.handleKey(event);
+      return;
+    }
+    if (event.code === "KeyU" && event.altKey && !event.metaKey && !event.ctrlKey) {
+      event.preventDefault();
+      if (!event.repeat) markAllRead();
+    }
   };
 
   // Over the whole inbox, whatever the filter shows: a read approval still blocks its agent.
@@ -1647,8 +1900,9 @@ function CanopyInbox({
     );
   };
   const unreadCount = inbox.inbox.filter((item) => item.unread).length;
-  // A project's name on every row says nothing while every row is in it.
-  const manyProjects = new Set(items.map((item) => item.workspaceId)).size > 1;
+  // The section bar speaks for what the search shows; the header keeps the whole inbox.
+  const shownUnreadCount = shownInbox.inbox.filter((item) => item.unread).length;
+  const listedUnread = listed.some((item) => item.unread);
 
   // Another host the panel can't read right now: why, in the host menu's own
   // words, with nothing of another host's put in its place.
@@ -1758,7 +2012,7 @@ function CanopyInbox({
       // The panel lands on its first run itself, two frames in; the dialog's own
       // first-control focus would race it. With no rows to land on, the first
       // control takes focus instead of leaving it on whatever opened the panel.
-      initialFocus={listed.length > 0 ? "none" : "first"}
+      initialFocus={items.length > 0 && !hostOffer ? "none" : "first"}
       restoreFocusTo={() => focusAfterCloseRef.current ?? restoreOpener()}
       preferRestoreFocusTo
       backdrop={backdrop}
@@ -1873,6 +2127,37 @@ function CanopyInbox({
           // it, drawn as its pane.
           <div className="flex min-h-0 flex-1">
             <div className="canopy-inbox-column flex min-h-0 w-[28rem] shrink-0 flex-col self-stretch border-r border-border-default">
+              <div className="shrink-0 px-3 pt-3 pb-1">
+                <SearchField
+                  size="compact"
+                  focusedOnOpen
+                  inputRef={searchRef}
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                  onClear={() => setQuery("")}
+                  onKeyDown={onSearchKeyDown}
+                  placeholder="Search agents and their terminals"
+                  aria-label="Search agents"
+                  role="combobox"
+                  aria-expanded={visible.length > 0}
+                  aria-controls={
+                    [
+                      listed.length > 0 ? "canopy-inbox-list" : null,
+                      archivedShown && shownInbox.archived.length > 0 ? "canopy-archived" : null,
+                    ]
+                      .filter((id) => id !== null)
+                      .join(" ") || undefined
+                  }
+                  aria-autocomplete="list"
+                  aria-activedescendant={
+                    focusedItem && visible.includes(focusedItem)
+                      ? canopyCardDomId(focusedItem.runId)
+                      : undefined
+                  }
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+              </div>
               <div
                 className="canopy-inbox flex min-h-0 flex-1 flex-col overflow-y-auto select-none"
                 data-canopy-list=""
@@ -1886,7 +2171,9 @@ function CanopyInbox({
                   label="Inbox"
                   count={listed.length}
                   trailing={
-                    <span className="flex items-center gap-1">
+                    // The last button's padding hangs into the bar's own, so its
+                    // words end on the field's right edge and the rows' meters.
+                    <span className="-mr-2.5 flex items-center gap-1">
                       <Button
                         variant="ghost"
                         size="xs"
@@ -1894,14 +2181,16 @@ function CanopyInbox({
                         onClick={() => setUnreadOnly(!unreadOnly)}
                       >
                         Unread
-                        {unreadCount > 0 && <span className="tabular-nums">{unreadCount}</span>}
+                        {shownUnreadCount > 0 && (
+                          <span className="tabular-nums">{shownUnreadCount}</span>
+                        )}
                       </Button>
                       <Tooltip>
                         <TooltipTrigger asChild>
                           <Button
                             variant="ghost"
                             size="xs"
-                            disabled={unreadCount === 0}
+                            disabled={!listedUnread}
                             onClick={markAllRead}
                           >
                             Mark all read
@@ -1917,6 +2206,7 @@ function CanopyInbox({
                 {listed.length > 0 ? (
                   <div
                     ref={listRef}
+                    id="canopy-inbox-list"
                     role="listbox"
                     aria-labelledby="canopy-inbox-label"
                     // A mouse or pen resting over a row; a touch has no hover to hold for.
@@ -1943,7 +2233,6 @@ function CanopyInbox({
                             reserveDetail
                             tabbable={tabStop(listed, item, index)}
                             unread={item.unread}
-                            showProject={manyProjects}
                             nowMs={nowMs}
                             asideLabel={
                               replied !== null ? `Replied ${agoPhrase(replied, nowMs)}` : null
@@ -1957,42 +2246,53 @@ function CanopyInbox({
                       );
                     })}
                   </div>
-                ) : (
+                ) : searching &&
+                  shownInbox.inbox.length === 0 &&
+                  shownInbox.archived.length > 0 ? null : (
+                  // A search whose only matches are archived lets their bar below say so.
                   <p className="px-3 pb-3 text-xs text-text-secondary">
-                    {unreadOnly && inbox.inbox.length > 0
-                      ? "Nothing unread. Each agent shows here again when it does something new."
-                      : "Every agent is archived. Each comes back when it has something new to say."}
+                    {searching
+                      ? shownInbox.inbox.length > 0
+                        ? `Nothing unread matches “${appliedQuery.trim()}”.`
+                        : `Nothing matches “${appliedQuery.trim()}”.`
+                      : unreadOnly && inbox.inbox.length > 0
+                        ? "Nothing unread. Each agent shows here again when it does something new."
+                        : "Every agent is archived. Each comes back when it has something new to say."}
                   </p>
                 )}
-                {inbox.archived.length > 0 && (
+                {shownInbox.archived.length > 0 && (
                   <>
                     <SectionBar
                       id="canopy-archived-label"
                       label="Archived"
-                      count={inbox.archived.length}
-                      fold={{
-                        expanded: archivedExpanded,
-                        controls: "canopy-archived",
-                        onToggle: () => setArchivedExpanded(!archivedExpanded),
-                        onEnter: () => focusCardNow(inbox.archived[0]!.runId),
-                      }}
+                      count={shownInbox.archived.length}
+                      // A search shows its archived matches open; the fold is the user's again after.
+                      fold={
+                        searching
+                          ? undefined
+                          : {
+                              expanded: archivedExpanded,
+                              controls: "canopy-archived",
+                              onToggle: () => setArchivedExpanded(!archivedExpanded),
+                              onEnter: () => focusCardNow(shownInbox.archived[0]!.runId),
+                            }
+                      }
                     />
-                    {archivedExpanded && (
+                    {archivedShown && (
                       <div
                         id="canopy-archived"
                         role="listbox"
                         aria-labelledby="canopy-archived-label"
                       >
-                        {inbox.archived.map((item, index) => (
+                        {shownInbox.archived.map((item, index) => (
                           <CanopyRowMenu key={item.runId} item={item} {...rowMenu}>
                             <CanopyRow
                               item={item}
                               domId={canopyCardDomId(item.runId)}
                               isSelected={focusedItem?.runId === item.runId}
                               reserveDetail={false}
-                              tabbable={tabStop(inbox.archived, item, index)}
+                              tabbable={tabStop(shownInbox.archived, item, index)}
                               unread={false}
-                              showProject={manyProjects}
                               compact
                               nowMs={nowMs}
                               asideLabel={
@@ -2014,7 +2314,9 @@ function CanopyInbox({
               </div>
               <CanopyStatusBar link={canopy?.link} waiting={canopy?.waiting} />
             </div>
-            <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-surface-canvas px-2 pb-2">
+            {/* Inset on every side: the top one puts the place line level with the
+                search beside it, and the card's top with the Inbox bar's. */}
+            <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-surface-canvas p-2">
               {focusedItem && (
                 <CanopyPlace
                   item={focusedItem}
@@ -2047,7 +2349,21 @@ function CanopyInbox({
                 />
               ) : (
                 <div className="flex flex-1 flex-col items-center justify-center gap-1 text-center">
-                  {unreadOnly && inbox.inbox.length > 0 ? (
+                  {onlyReadMatch ? (
+                    <>
+                      <p className="text-sm text-text-primary">No unread agent matches</p>
+                      <p className="text-xs text-text-secondary">
+                        Turn off Unread to see every agent that matches.
+                      </p>
+                    </>
+                  ) : searching ? (
+                    <>
+                      <p className="text-sm text-text-primary">No agent matches</p>
+                      <p className="text-xs text-text-secondary">
+                        Try other words, or press Esc to clear the search.
+                      </p>
+                    </>
+                  ) : unreadOnly && inbox.inbox.length > 0 ? (
                     <>
                       <p className="text-sm text-text-primary">Nothing unread</p>
                       <p className="text-xs text-text-secondary">

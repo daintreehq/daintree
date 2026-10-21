@@ -147,4 +147,22 @@ describe("probeGitLfsAvailable", () => {
 
     await expect(probeGitLfsAvailable()).resolves.toBe(false);
   });
+
+  it("probes without inherited GIT_* variables, keeping the locale overrides", async () => {
+    vi.stubEnv("GIT_DIR", "/elsewhere/.git");
+    vi.stubEnv("GIT_EXEC_PATH", "/elsewhere/libexec");
+    try {
+      execFileMock.mockClear();
+      mockExecFile((cb) => cb(null, "git-lfs/3.4.0\n", ""));
+
+      await expect(probeGitLfsAvailable()).resolves.toBe(true);
+      const env = (execFileMock.mock.calls[0][2] as { env: NodeJS.ProcessEnv }).env;
+      expect(env.GIT_DIR).toBeUndefined();
+      expect(env.GIT_EXEC_PATH).toBeUndefined();
+      expect(env.LC_ALL).toBe("");
+      expect(env.LC_CTYPE).toEqual(expect.any(String));
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
 });

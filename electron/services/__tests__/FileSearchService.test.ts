@@ -178,6 +178,101 @@ describe("FileSearchService", () => {
     expect(result).toEqual(["a.ts", "src/", "README.md"]);
   });
 
+  describe("result limit consistency", () => {
+    // Git lists paths in byte order, which puts `appZ` ahead of `app_a`; the
+    // ranking breaks score ties by locale order, which puts `app_a` first. The
+    // tie that loses on locale order must not win just by arriving first.
+    const listing = "appZ.ts\0app_a.ts\0lib/app.ts\0src/apple.ts\0src/apply.ts\0";
+
+    async function searchAt(query: string, limits: number[]): Promise<string[][]> {
+      const dir = makeTempDir();
+      tempDirs.push(dir);
+      gitRepo(dir, listing);
+      const service = await createService();
+      const pages: string[][] = [];
+      for (const limit of limits) {
+        service.invalidate(dir);
+        pages.push(await service.search({ cwd: dir, query, limit }));
+      }
+      return pages;
+    }
+
+    it("keeps the earlier-collating file when a same-score tie arrives after the page is full", async () => {
+      const [one, two] = await searchAt("app", [1, 2]);
+
+      expect(two).toEqual(["app_a.ts", "appZ.ts"]);
+      expect(one).toEqual(["app_a.ts"]);
+    });
+
+    it("returns a prefix of the full ranking at every limit", async () => {
+      const limits = [1, 2, 3, 4, 5, 100];
+      const pages = await searchAt("app", limits);
+      const full = pages[pages.length - 1];
+
+      expect(full).toHaveLength(5);
+      limits.forEach((limit, i) => {
+        expect(pages[i]).toEqual(full.slice(0, limit));
+      });
+    });
+
+    it("ranks a narrowed search the same as a fresh one", async () => {
+      const dir = makeTempDir();
+      tempDirs.push(dir);
+      gitRepo(dir, listing);
+      const service = await createService();
+      await service.search({ cwd: dir, query: "ap", limit: 1 });
+      const narrowed = await service.search({ cwd: dir, query: "app", limit: 1 });
+
+      const [fresh] = await searchAt("app", [1]);
+      expect(narrowed).toEqual(fresh);
+      expect(narrowed).toEqual(["app_a.ts"]);
+    });
+
+    it("stays consistent across limits on a warm index", async () => {
+      const dir = makeTempDir();
+      tempDirs.push(dir);
+      gitRepo(dir, listing);
+      const service = await createService();
+
+      const one = await service.search({ cwd: dir, query: "app", limit: 1 });
+      const two = await service.search({ cwd: dir, query: "app", limit: 2 });
+      const again = await service.search({ cwd: dir, query: "app", limit: 1 });
+
+      expect(two).toEqual(["app_a.ts", "appZ.ts"]);
+      expect(one).toEqual(["app_a.ts"]);
+      expect(again).toEqual(one);
+      expect(gitClientMock.raw).toHaveBeenCalledTimes(1);
+    });
+
+    it("evicts the true worst entry after a replacement", async () => {
+      const dir = makeTempDir();
+      tempDirs.push(dir);
+      gitRepo(dir, "appZ.ts\0appY.ts\0app_b.ts\0app_a.ts\0");
+      const service = await createService();
+
+      await expect(service.search({ cwd: dir, query: "app", limit: 2 })).resolves.toEqual([
+        "app_a.ts",
+        "app_b.ts",
+      ]);
+    });
+
+    it("orders paths the collator calls equal the same way whichever arrives first", async () => {
+      const nfc = "app_é.ts";
+      const nfd = "app_é.ts";
+      const results: string[][] = [];
+      for (const order of [`${nfc}\0${nfd}\0`, `${nfd}\0${nfc}\0`]) {
+        const dir = makeTempDir();
+        tempDirs.push(dir);
+        gitRepo(dir, order);
+        const service = await createService();
+        results.push(await service.search({ cwd: dir, query: "app", limit: 1 }));
+        results.push(await service.search({ cwd: dir, query: "app", limit: 2 }));
+      }
+
+      expect(results).toEqual([[nfd], [nfd, nfc], [nfd], [nfd, nfc]]);
+    });
+  });
+
   describe("searchNaturalLanguage", () => {
     it("resolves 'hybrid input bar component' to HybridInputBar.tsx", async () => {
       const dir = makeTempDir();

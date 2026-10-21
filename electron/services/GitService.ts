@@ -1,8 +1,8 @@
 // eager-import-allow: performs sync fs existence checks while resolving git paths
 import type { SimpleGit, BranchSummary } from "simple-git";
 import { resolve, dirname, normalize, sep, isAbsolute } from "path";
-import { existsSync, realpathSync } from "fs";
-import { readFile, stat } from "fs/promises";
+import { existsSync } from "fs";
+import { lstat, readFile, readlink } from "fs/promises";
 import { logDebug, logError, logWarn } from "../utils/logger.js";
 import { newFileDiff } from "../utils/newFileDiff.js";
 import type { GitStatus, WorktreeChanges } from "../../shared/types/index.js";
@@ -10,12 +10,12 @@ import type { BranchInfo, CreateWorktreeOptions } from "../../shared/types/git.j
 import { WorktreeRemovedError, GitError, toGitOperationError } from "../utils/errorTypes.js";
 import type { CrossWorktreeDiffResult, CrossWorktreeFile } from "../../shared/types/ipc/git.js";
 import { createHardenedGit } from "../utils/hardenedGit.js";
+import { runWithCappedStdout } from "../utils/cappedGitOutput.js";
 import { validateBranchName } from "../../shared/utils/pathPattern.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { isMissingGitExecutableError } from "../../shared/utils/gitOperationErrors.js";
 import { isBinaryDiffOutput } from "../../shared/utils/gitDiffParsing.js";
-import { parseNumstat } from "../utils/git.js";
-import type { DiffStat } from "../utils/git.js";
+import { parseNameStatusZ, parseNumstatZ } from "../utils/git.js";
 import { branchRefName, readBranchCommitterDates } from "../utils/branchCommitterDates.js";
 
 function escapeRegex(str: string): string {
@@ -33,6 +33,10 @@ export interface HeadFileReadOptions {
   /** Called once the blob is known to need reading, just before its content is fetched. */
   beforeRead?: () => void;
 }
+
+// Preview ceiling for a single file's patch; larger ones come back as
+// FILE_TOO_LARGE without git's full output ever being held.
+const MAX_DIFF_PREVIEW_BYTES = 1024 * 1024;
 
 const OBJECT_ID_RE = /^([0-9a-f]{40}|[0-9a-f]{64})$/i;
 
@@ -314,8 +318,10 @@ export class GitService {
     // Git always uses forward slashes in diff output, even on Windows
     const gitPath = normalizedPath.replaceAll("\\", "/");
 
+    // lstat, not stat: a symlink's diff is its target path, so neither the
+    // size nor the readability of what it points at matters.
     try {
-      const stats = await stat(absolutePath);
+      const stats = await lstat(absolutePath);
       if (stats.size > 1024 * 1024) {
         return "FILE_TOO_LARGE";
       }
@@ -325,6 +331,10 @@ export class GitService {
 
     if (status === "untracked" || status === "added") {
       try {
+        if ((await lstat(absolutePath)).isSymbolicLink()) {
+          return newFileDiff(gitPath, await readlink(absolutePath), "120000");
+        }
+
         const buffer = await readFile(absolutePath);
 
         if (this.isBinaryBuffer(buffer)) {
@@ -344,9 +354,14 @@ export class GitService {
     try {
       // `--no-textconv` blocks user-defined diff drivers that would otherwise
       // execute arbitrary binaries via `.gitattributes` textconv mappings.
-      const diff = await (
-        await this.getGit()
-      ).diff(["HEAD", "--no-ext-diff", "--no-textconv", "--no-color", "--", normalizedPath]);
+      // Capped while git runs: a deleted or shortened file has no worktree
+      // size to gate on, and its patch can be as large as the HEAD blob.
+      const diff = await runWithCappedStdout(this.rootPath, MAX_DIFF_PREVIEW_BYTES, (git) =>
+        git.diff(["HEAD", "--no-ext-diff", "--no-textconv", "--no-color", "--", normalizedPath])
+      );
+      if (diff === null) {
+        return "FILE_TOO_LARGE";
+      }
 
       if (isBinaryDiffOutput(diff)) {
         return "BINARY_FILE";
@@ -356,7 +371,7 @@ export class GitService {
         return "NO_CHANGES";
       }
 
-      if (diff.length > 1024 * 1024) {
+      if (diff.length > MAX_DIFF_PREVIEW_BYTES) {
         return "FILE_TOO_LARGE";
       }
 
@@ -371,7 +386,8 @@ export class GitService {
   }
 
   // Reject absolute, NUL-byte, and traversal paths, and return the path in
-  // git object-spec form (forward slashes, even on Windows).
+  // git object-spec form (forward slashes, even on Windows). A backslash is a
+  // separator only on Windows; elsewhere it is a filename byte (#13562).
   private normalizeTreePath(filePath: string): string {
     if (isAbsolute(filePath)) {
       throw new Error("Absolute paths are not allowed");
@@ -380,13 +396,16 @@ export class GitService {
       throw new Error("Path contains null bytes");
     }
 
+    const backslashIsSeparator = sep === "\\";
     const normalizedPath = normalize(filePath);
-    const pathSegments = normalizedPath.split(/[\\/]+/).filter(Boolean);
+    const pathSegments = normalizedPath
+      .split(backslashIsSeparator ? /[\\/]+/ : /\/+/)
+      .filter(Boolean);
     if (pathSegments.includes("..") || normalizedPath.startsWith(sep)) {
       throw new Error("Path traversal detected");
     }
 
-    return normalizedPath.replaceAll("\\", "/");
+    return backslashIsSeparator ? normalizedPath.replaceAll("\\", "/") : normalizedPath;
   }
 
   // Size-probe then read a blob at `<rev>:<path>`. The rev prefix keeps the
@@ -611,23 +630,26 @@ export class GitService {
     if (filePath) {
       // Return the unified diff for a specific file
       try {
-        const diff = await (
-          await this.getGit()
-        ).raw([
-          "diff",
-          "--no-ext-diff",
-          "--no-textconv",
-          "--no-color",
-          // Pins the gitlink format against the user's `diff.submodule`, which
-          // would otherwise replace the patch with a commit summary or with the
-          // submodule's own files (#12309).
-          "--submodule=short",
-          ...(ignoreWhitespace ? ["--ignore-all-space"] : []),
-          "--end-of-options",
-          range,
-          "--",
-          filePath,
-        ]);
+        const diff = await runWithCappedStdout(this.rootPath, MAX_DIFF_PREVIEW_BYTES, (git) =>
+          git.raw([
+            "diff",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--no-color",
+            // Pins the gitlink format against the user's `diff.submodule`, which
+            // would otherwise replace the patch with a commit summary or with the
+            // submodule's own files (#12309).
+            "--submodule=short",
+            ...(ignoreWhitespace ? ["--ignore-all-space"] : []),
+            "--end-of-options",
+            range,
+            "--",
+            filePath,
+          ])
+        );
+        if (diff === null) {
+          return "FILE_TOO_LARGE";
+        }
 
         if (!diff.trim()) {
           return "NO_CHANGES";
@@ -637,7 +659,7 @@ export class GitService {
           return "BINARY_FILE";
         }
 
-        if (diff.length > 1024 * 1024) {
+        if (diff.length > MAX_DIFF_PREVIEW_BYTES) {
           return "FILE_TOO_LARGE";
         }
 
@@ -656,12 +678,16 @@ export class GitService {
     // Return the list of changed files with per-file churn (--numstat)
     try {
       const git = await this.getGit();
-      const [nameStatusOutput, numstatOutput, toplevel] = await Promise.all([
+      // `-z` turns off Git's C-quoting and line framing, so names with a
+      // trailing space, tab, quote or newline come back byte-exact and can be
+      // handed straight to the per-file diff above (#13572).
+      const [nameStatusOutput, numstatOutput] = await Promise.all([
         git.raw([
           "diff",
           "--no-ext-diff",
           "--no-textconv",
           "--name-status",
+          "-z",
           ...(ignoreWhitespace ? ["--ignore-all-space"] : []),
           "--end-of-options",
           range,
@@ -673,6 +699,7 @@ export class GitService {
             "--no-textconv",
             "--no-renames",
             "--numstat",
+            "-z",
             ...(ignoreWhitespace ? ["--ignore-all-space"] : []),
             "--end-of-options",
             range,
@@ -688,55 +715,29 @@ export class GitService {
             );
             return "";
           }),
-        git.revparse(["--show-toplevel"]),
       ]);
 
-      const gitRoot = realpathSync(toplevel.trim()).replace(/\\/g, "/");
-      const rootPrefix = gitRoot.endsWith("/") ? gitRoot : `${gitRoot}/`;
-
-      // Build relative-path-keyed numstat map from the numstat output
-      let numstatByRelPath = new Map<string, DiffStat>();
-      if (numstatOutput) {
-        const numstatByAbsPath = parseNumstat(numstatOutput, gitRoot);
-        numstatByRelPath = new Map<string, DiffStat>();
-        for (const [absPath, stats] of numstatByAbsPath) {
-          const normalized = absPath.replace(/\\/g, "/");
-          const relative = normalized.startsWith(rootPrefix)
-            ? normalized.slice(rootPrefix.length)
-            : normalized;
-          numstatByRelPath.set(relative, stats);
-        }
-      }
-
+      const numstatByRelPath = parseNumstatZ(numstatOutput);
       const files: CrossWorktreeFile[] = [];
 
-      for (const line of nameStatusOutput.split("\n")) {
-        const trimmed = line.trim();
-        if (!trimmed) continue;
+      for (const entry of parseNameStatusZ(nameStatusOutput)) {
+        const status = entry.status[0] as CrossWorktreeFile["status"];
 
-        const parts = trimmed.split(/\t/);
-        if (parts.length < 2) continue;
-
-        const statusRaw = parts[0];
-        const status = statusRaw[0] as CrossWorktreeFile["status"];
-
-        if (status === "R" || status === "C") {
-          const newPath = parts[2] ?? parts[1];
-          const oldPath = parts[1];
-          const insStats = numstatByRelPath.get(newPath);
-          const delStats = numstatByRelPath.get(oldPath);
+        if (entry.oldPath !== undefined) {
+          const insStats = numstatByRelPath.get(entry.path);
+          const delStats = numstatByRelPath.get(entry.oldPath);
           files.push({
             status,
-            path: newPath,
-            oldPath,
+            path: entry.path,
+            oldPath: entry.oldPath,
             insertions: insStats?.insertions ?? null,
             deletions: delStats?.deletions ?? null,
           });
         } else {
-          const stats = numstatByRelPath.get(parts[1]);
+          const stats = numstatByRelPath.get(entry.path);
           files.push({
             status,
-            path: parts[1],
+            path: entry.path,
             insertions: stats?.insertions ?? null,
             deletions: stats?.deletions ?? null,
           });

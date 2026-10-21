@@ -1,5 +1,6 @@
 import path from "path";
 import fs from "fs/promises";
+import { isUtf8 } from "node:buffer";
 import { CHANNELS } from "../channels.js";
 import { checkRateLimit, typedHandleWithContextValidated } from "../utils.js";
 import type { IpcContext } from "../types.js";
@@ -14,6 +15,7 @@ import {
 } from "../../schemas/ipc.js";
 import type { FileReadResult } from "../../../shared/types/ipc/files.js";
 import { AppError } from "../../utils/errorTypes.js";
+import { readBoundedFromHandle } from "../../utils/boundedRead.js";
 import { FILE_PREVIEW_MAX_BYTES } from "../../utils/fileLimits.js";
 
 // Git LFS pointer files are plain ASCII with a fixed v1 header. The spec caps
@@ -244,7 +246,18 @@ export function registerFilesHandlers(): () => void {
           context: { filePath, rootPath },
         });
       }
-      buffer = await fileHandle.readFile();
+      // The stat above is only a hint: a writer can grow the file after it, so
+      // the read itself holds the budget and never returns oversized text.
+      const read = await readBoundedFromHandle(fileHandle, opened.size, FILE_PREVIEW_MAX_BYTES);
+      if (read === null) {
+        throw new AppError({
+          code: "FILE_TOO_LARGE",
+          message: `File exceeds ${FILE_PREVIEW_MAX_BYTES} byte limit`,
+          userMessage: "This file is too large to preview.",
+          context: { filePath, limit: FILE_PREVIEW_MAX_BYTES },
+        });
+      }
+      buffer = read;
     } catch (error) {
       throw fsErrorToAppError(error, "Could not read file");
     } finally {
@@ -282,8 +295,12 @@ export function registerFilesHandlers(): () => void {
         ? (buildHtmlPreviewUrl(realRoot, realFile) ?? undefined)
         : undefined;
 
+    const hasBom =
+      buffer.length >= 3 && buffer[0] === 0xef && buffer[1] === 0xbb && buffer[2] === 0xbf;
     return {
       content: buffer.toString("utf-8"),
+      encoding: !isUtf8(buffer) ? "invalid" : hasBom ? "utf-8-bom" : "utf-8",
+      byteLength: buffer.length,
       htmlPreviewUrl,
       // A hard-linked file has more than one real path, and a directory watch
       // only reports the name it was written through.

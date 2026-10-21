@@ -28,7 +28,11 @@ import {
 export type ConsoleDrawerTab = "output" | "console" | "diagnostics";
 
 interface ConsoleDrawerProps {
-  terminalId: string;
+  /**
+   * The dev server's PTY, shown on the Output tab. Null for a preview with no
+   * process of its own (a resource endpoint, #13688): there is no Output tab.
+   */
+  terminalId: string | null;
   /** Panel ID — keys the guest-page console-capture store. */
   paneId: string;
   /** Project ID — required by the diagnostics IPC query. */
@@ -42,6 +46,8 @@ interface ConsoleDrawerProps {
   activeTab?: ConsoleDrawerTab;
   onTabChange?: (tab: ConsoleDrawerTab) => void;
   isRestarting?: boolean;
+  /** The restart in progress can be called off by Stop (an endpoint resource cycle). */
+  canStopWhileRestarting?: boolean;
   onReloadPreview?: () => void;
   onRestartDevServer?: () => void;
   onRequestRestartAndClearCache?: () => void;
@@ -110,6 +116,7 @@ export function ConsoleDrawer({
   activeTab: controlledActiveTab,
   onTabChange,
   isRestarting = false,
+  canStopWhileRestarting = false,
   onReloadPreview,
   onRestartDevServer,
   onRequestRestartAndClearCache,
@@ -121,7 +128,8 @@ export function ConsoleDrawer({
   const isOpen = controlledIsOpen ?? uncontrolledIsOpen;
 
   const [uncontrolledTab, setUncontrolledTab] = useState<ConsoleDrawerTab>("output");
-  const activeTab = controlledActiveTab ?? uncontrolledTab;
+  const requestedTab = controlledActiveTab ?? uncontrolledTab;
+  const activeTab = requestedTab === "output" && terminalId === null ? "console" : requestedTab;
 
   // The console keeps its filters, folds, open traces and scroll position
   // across a look at another tab, so it stays mounted once it has been shown.
@@ -164,7 +172,7 @@ export function ConsoleDrawer({
   const isOutputVisible = isPanelVisible && isOpen && activeTab === "output";
 
   useEffect(() => {
-    terminalInstanceService.setVisible(terminalId, isOutputVisible);
+    if (terminalId !== null) terminalInstanceService.setVisible(terminalId, isOutputVisible);
   }, [terminalId, isOutputVisible]);
 
   const getRefreshTier = useCallback(() => {
@@ -187,17 +195,18 @@ export function ConsoleDrawer({
       status === "installing" ||
       status === "running" ||
       status === "stopping");
-  const stopDisabled = isRestarting || status === "stopping";
+  const stopDisabled = (isRestarting && !canStopWhileRestarting) || status === "stopping";
   const statusClass = cn(
     "inline-flex min-h-8 items-center px-3 text-3xs font-semibold uppercase tracking-wide",
     (hasRestartControls || stopVisible) && "border-r border-overlay",
     statusLabel.textClass
   );
 
-  const drawerRegionId = `console-drawer-${terminalId}`;
-  const outputPanelId = `dev-preview-output-panel-${terminalId}`;
-  const consolePanelId = `dev-preview-console-panel-${terminalId}`;
-  const diagnosticsPanelId = `dev-preview-diagnostics-panel-${terminalId}`;
+  const idSuffix = terminalId ?? paneId;
+  const drawerRegionId = `console-drawer-${idSuffix}`;
+  const outputPanelId = `dev-preview-output-panel-${idSuffix}`;
+  const consolePanelId = `dev-preview-console-panel-${idSuffix}`;
+  const diagnosticsPanelId = `dev-preview-diagnostics-panel-${idSuffix}`;
   const panelIds: Record<ConsoleDrawerTab, string> = {
     output: outputPanelId,
     console: consolePanelId,
@@ -318,21 +327,28 @@ export function ConsoleDrawer({
                       <RotateCw data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
                       Restart dev server
                     </DropdownMenuItem>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuItem
-                      disabled={isRestarting || status === "installing"}
-                      onSelect={onRequestRestartAndClearCache}
-                    >
-                      <Eraser data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
-                      Restart and clear cache
-                    </DropdownMenuItem>
-                    <DropdownMenuItem
-                      disabled={isRestarting || status === "installing"}
-                      onSelect={onRequestReinstallAndRestart}
-                    >
-                      <Download data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
-                      Reinstall dependencies
-                    </DropdownMenuItem>
+                    {/* A resource endpoint has no local cache or dependencies to touch. */}
+                    {(onRequestRestartAndClearCache || onRequestReinstallAndRestart) && (
+                      <DropdownMenuSeparator />
+                    )}
+                    {onRequestRestartAndClearCache && (
+                      <DropdownMenuItem
+                        disabled={isRestarting || status === "installing"}
+                        onSelect={onRequestRestartAndClearCache}
+                      >
+                        <Eraser data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+                        Restart and clear cache
+                      </DropdownMenuItem>
+                    )}
+                    {onRequestReinstallAndRestart && (
+                      <DropdownMenuItem
+                        disabled={isRestarting || status === "installing"}
+                        onSelect={onRequestReinstallAndRestart}
+                      >
+                        <Download data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+                        Reinstall dependencies
+                      </DropdownMenuItem>
+                    )}
                   </DropdownMenuContent>
                 </DropdownMenu>
               </>
@@ -356,7 +372,7 @@ export function ConsoleDrawer({
           <div className="flex h-8 shrink-0 items-stretch border-b border-overlay bg-surface px-2">
             <UnderlineTabs
               tabs={[
-                { id: "output", label: "Output" },
+                ...(terminalId !== null ? [{ id: "output" as const, label: "Output" }] : []),
                 {
                   id: "console",
                   label: "Console",
@@ -381,20 +397,22 @@ export function ConsoleDrawer({
               hidden={activeTab !== "output"}
               className="absolute inset-0"
             >
-              <Suspense fallback={null}>
-                <XtermAdapter
-                  terminalId={terminalId}
-                  getRefreshTier={getRefreshTier}
-                  restoreOnAttach={true}
-                  // The console runs its own PTY inside this panel, so a drop
-                  // has to select the panel rather than the terminal it landed
-                  // in — `terminalId` names nothing the grid can select
-                  // (#11809). Without this the drop would move DOM focus here
-                  // while the selection stayed on whatever pane had it.
-                  onDropSelect={() => usePanelStore.getState().setFocused(paneId)}
-                  className="!rounded-none !px-0 !pt-0 !pb-0"
-                />
-              </Suspense>
+              {terminalId !== null && (
+                <Suspense fallback={null}>
+                  <XtermAdapter
+                    terminalId={terminalId}
+                    getRefreshTier={getRefreshTier}
+                    restoreOnAttach={true}
+                    // The console runs its own PTY inside this panel, so a drop
+                    // has to select the panel rather than the terminal it landed
+                    // in — `terminalId` names nothing the grid can select
+                    // (#11809). Without this the drop would move DOM focus here
+                    // while the selection stayed on whatever pane had it.
+                    onDropSelect={() => usePanelStore.getState().setFocused(paneId)}
+                    className="!rounded-none !px-0 !pt-0 !pb-0"
+                  />
+                </Suspense>
+              )}
             </div>
             {/* The panels stay in the tree so every tab's aria-controls resolves;
                 only their content mounts on demand. */}

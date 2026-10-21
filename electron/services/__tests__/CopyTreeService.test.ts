@@ -18,7 +18,6 @@ vi.mock("copytree", () => ({
 }));
 
 import { copyTreeService, _resetConfigCacheForTests } from "../CopyTreeService.js";
-import { _resetBaseRealpathCacheForTests } from "../FileTreeService.js";
 
 describe("CopyTreeService", () => {
   let tempDir: string;
@@ -1393,7 +1392,6 @@ describe("CopyTreeService.getFileTree", () => {
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-context-tree-"));
     vi.clearAllMocks();
     _resetConfigCacheForTests();
-    _resetBaseRealpathCacheForTests();
     configCreateMock.mockResolvedValue({ isDefaultsLoaded: true, set: vi.fn() });
     copyMock.mockResolvedValue(dryRunResult([]));
   });

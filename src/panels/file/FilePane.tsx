@@ -13,7 +13,7 @@ import type { FileViewMode } from "@shared/types/panel";
 import { isFilePanel } from "@shared/types/panel";
 import type { GitStatus } from "@shared/types/git";
 import { normalize, resolveWorktreePathScope, toWorktreeRelative } from "@shared/utils/path";
-import type { FileReadErrorCode } from "@shared/types/ipc/files";
+import type { FileReadErrorCode, FileTextEncoding } from "@shared/types/ipc/files";
 import type { BuiltInRuntimeActionId } from "@shared/config/actionIds";
 import type { BasePanelProps } from "@/components/Panel/ContentPanel";
 import { ContentPanel } from "@/components/Panel/ContentPanel";
@@ -41,10 +41,7 @@ import {
 import { HtmlViewer } from "@/components/Html/HtmlViewer";
 import { isHtmlFilePath } from "@/components/Html/isHtmlFile";
 import { CodeViewer, type CodeViewerHandle } from "@/components/FileViewer/CodeViewer";
-import {
-  FILE_METADATA_RUN_CLASS,
-  FILE_METADATA_STRIP_CLASS,
-} from "@/components/FileViewer/fileMetadataStrip";
+import { FileSourceMetadataStrip } from "@/components/FileViewer/FileSourceMetadataStrip";
 import { FileViewerToolbar, TOOLBAR_ICON_CLASS } from "@/components/FileViewer/FileViewerToolbar";
 import { revealCopy, type RevealCopy } from "@/components/FileViewer/revealCopy";
 import { FileImagePreview } from "@/components/FileViewer/FileImagePreview";
@@ -63,7 +60,6 @@ import {
   UNSUPPORTED_VIDEO_MESSAGE,
 } from "@/components/FileViewer/filePreviewKinds";
 import { sanitizeSvg } from "@shared/utils/svgSanitizer";
-import { formatBytes } from "@/lib/formatBytes";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { useDiffContent } from "@/panels/diff/useDiffContent";
 import type { DiffSubject } from "@/panels/diff/diffContentCache";
@@ -89,7 +85,6 @@ import { useProjectViewRevealed } from "@/hooks/useProjectViewRevealed";
 import { useFileEditor } from "@/registry/fileEditorRegistry";
 import { FileEditorBanner } from "@/components/FileViewer/FileEditorBanner";
 import { useFileDocumentDraftText, useFileDocumentFlags } from "@/store/fileDocumentStore";
-import { pluralize } from "@/lib/pluralize";
 import { FilePanePicker } from "./FilePanePicker";
 import { useFileRowMenuItems } from "@/hooks/useFileRowMenuItems";
 import { FileContentContextMenu } from "@/components/FileViewer/FileContentContextMenu";
@@ -592,13 +587,20 @@ export function FilePane({
   // the spin against the wrong signal. Drives the shared SpinningIcon.
   const [refreshingMode, setRefreshingMode] = useState<FileViewMode | null>(null);
 
-  const metadata = useMemo(() => {
-    if (loadState !== "loaded" || content === null) return null;
-    return {
-      lineCount: content.split("\n").length,
-      sizeLabel: formatBytes(contentBytes),
-    };
-  }, [loadState, content, contentBytes]);
+  // What `files:read` observed about the bytes behind `content` — set with it,
+  // so the strip never pairs one read's text with another read's encoding.
+  const [byteFacts, setByteFacts] = useState<{
+    encoding?: FileTextEncoding;
+    byteLength?: number;
+  }>({});
+  // The strip names a BOM, so the source view needn't draw it: CodeMirror
+  // paints U+FEFF as a special-character dot ahead of the first token, the
+  // one mark the editor's own decode already strips. Display only — copying
+  // the file still copies its bytes.
+  const sourceText =
+    content !== null && byteFacts.encoding === "utf-8-bom" && content.charCodeAt(0) === 0xfeff
+      ? content.slice(1)
+      : content;
   const requestRef = useRef(0);
   const markdownViewerRef = useRef<MarkdownViewerHandle>(null);
   const codeViewerRef = useRef<CodeViewerHandle>(null);
@@ -740,72 +742,85 @@ export function FilePane({
           rootPath: effectiveRootPath,
           htmlPreview: isHtmlFilePath(filePath),
         })
-        .then(({ content: fileContent, htmlPreviewUrl: previewUrl, pathIsCanonical }) => {
-          if (requestRef.current !== requestId) return;
-          setCanonicalFilePath(pathIsCanonical === true ? filePath : null);
-          // SVG is text on disk but a picture on screen: sanitize before it can
-          // be inlined, and surface a sanitizer rejection as a load error
-          // rather than silently rendering nothing.
-          if (isSvgFilePath(filePath)) {
-            const sanitized = sanitizeSvg(fileContent);
-            if (sanitized.ok) {
-              setSanitizedSvg(sanitized.svg);
-              setContent(null);
-              setLoadState("svg");
-              setErrorCode(null);
-              setErrorMessage(null);
-              lastGoodStateRef.current = "svg";
-            } else if (silent && lastGoodStateRef.current !== null) {
-              // Still a failed read, however the pane looks: keep taking every
-              // tick until one lands.
-              setCanonicalFilePath(null);
-              // A background pass catching a half-written file mid-save reads
-              // as a sanitizer rejection, so keep the last good drawing rather
-              // than replacing it — the same bargain the text path's transient
-              // -failure guard below makes.
-              setLoadState(lastGoodStateRef.current);
-            } else {
-              // The file read fine; its contents just aren't safe to inline.
-              setErrorCode("INVALID_PATH");
-              setErrorMessage(sanitized.error);
-              setLoadState("error");
+        .then(
+          ({
+            content: fileContent,
+            htmlPreviewUrl: previewUrl,
+            pathIsCanonical,
+            encoding,
+            byteLength,
+          }) => {
+            if (requestRef.current !== requestId) return;
+            setCanonicalFilePath(pathIsCanonical === true ? filePath : null);
+            // SVG is text on disk but a picture on screen: sanitize before it can
+            // be inlined, and surface a sanitizer rejection as a load error
+            // rather than silently rendering nothing.
+            if (isSvgFilePath(filePath)) {
+              const sanitized = sanitizeSvg(fileContent);
+              if (sanitized.ok) {
+                setSanitizedSvg(sanitized.svg);
+                setContent(null);
+                setLoadState("svg");
+                setErrorCode(null);
+                setErrorMessage(null);
+                lastGoodStateRef.current = "svg";
+              } else if (silent && lastGoodStateRef.current !== null) {
+                // Still a failed read, however the pane looks: keep taking every
+                // tick until one lands.
+                setCanonicalFilePath(null);
+                // A background pass catching a half-written file mid-save reads
+                // as a sanitizer rejection, so keep the last good drawing rather
+                // than replacing it — the same bargain the text path's transient
+                // -failure guard below makes.
+                setLoadState(lastGoodStateRef.current);
+              } else {
+                // The file read fine; its contents just aren't safe to inline.
+                setErrorCode("INVALID_PATH");
+                setErrorMessage(sanitized.error);
+                setLoadState("error");
+              }
+              return;
             }
-            return;
+            setSanitizedSvg(null);
+            const bytesChanged = lastContentRef.current !== fileContent;
+            lastContentRef.current = fileContent;
+            setContent((previous) => (previous === fileContent ? previous : fileContent));
+            setByteFacts((previous) =>
+              previous.encoding === encoding && previous.byteLength === byteLength
+                ? previous
+                : { encoding, byteLength }
+            );
+            setHtmlPreviewUrl(previewUrl ?? null);
+            // Re-navigate the preview frame so a rewritten report — or an unchanged
+            // entry file whose relative asset changed — reflects the latest bytes.
+            // The nonce is the sandboxed frame's only src input, so an ambient
+            // pass only bumps it when the bytes actually moved: otherwise every
+            // worktree tick, most of them writes to unrelated files, would throw
+            // away the rendered page's scroll and in-page JS state. Foreground
+            // loads (open, toolbar Refresh, returning to this project) stay
+            // unconditional — an entry file whose relative asset was rewritten
+            // while the project sat cached reads as unchanged bytes, so the
+            // bytes-changed gate is exactly what would leave it stale.
+            // reloadNonce isn't a loadFile dep, so neither can re-trigger the
+            // load.
+            //
+            // Markdown opts out of the bytes-changed gate: an image embedded in the
+            // document is precisely the "unchanged file whose asset changed" case,
+            // and bytesChanged only ever sees the markdown text (#11587). Bumping
+            // freely is safe here because for a markdown file the nonce reaches
+            // nothing but MarkdownViewer's cacheBust — the frame this rule protects
+            // needs isHtml, and the media previews need their own loadStates — and
+            // a changed image src reloads in place rather than remounting, so there
+            // is no scroll or playback position to lose.
+            if (forceSurfaceReload || bytesChanged || isMarkdownFilePath(filePath)) {
+              setReloadNonce((nonce) => nonce + 1);
+            }
+            setLoadState("loaded");
+            setErrorCode(null);
+            setErrorMessage(null);
+            lastGoodStateRef.current = "loaded";
           }
-          setSanitizedSvg(null);
-          const bytesChanged = lastContentRef.current !== fileContent;
-          lastContentRef.current = fileContent;
-          setContent((previous) => (previous === fileContent ? previous : fileContent));
-          setHtmlPreviewUrl(previewUrl ?? null);
-          // Re-navigate the preview frame so a rewritten report — or an unchanged
-          // entry file whose relative asset changed — reflects the latest bytes.
-          // The nonce is the sandboxed frame's only src input, so an ambient
-          // pass only bumps it when the bytes actually moved: otherwise every
-          // worktree tick, most of them writes to unrelated files, would throw
-          // away the rendered page's scroll and in-page JS state. Foreground
-          // loads (open, toolbar Refresh, returning to this project) stay
-          // unconditional — an entry file whose relative asset was rewritten
-          // while the project sat cached reads as unchanged bytes, so the
-          // bytes-changed gate is exactly what would leave it stale.
-          // reloadNonce isn't a loadFile dep, so neither can re-trigger the
-          // load.
-          //
-          // Markdown opts out of the bytes-changed gate: an image embedded in the
-          // document is precisely the "unchanged file whose asset changed" case,
-          // and bytesChanged only ever sees the markdown text (#11587). Bumping
-          // freely is safe here because for a markdown file the nonce reaches
-          // nothing but MarkdownViewer's cacheBust — the frame this rule protects
-          // needs isHtml, and the media previews need their own loadStates — and
-          // a changed image src reloads in place rather than remounting, so there
-          // is no scroll or playback position to lose.
-          if (forceSurfaceReload || bytesChanged || isMarkdownFilePath(filePath)) {
-            setReloadNonce((nonce) => nonce + 1);
-          }
-          setLoadState("loaded");
-          setErrorCode(null);
-          setErrorMessage(null);
-          lastGoodStateRef.current = "loaded";
-        })
+        )
         .catch((error: unknown) => {
           if (requestRef.current !== requestId) return;
           const code = isClientAppError(error) ? toFileReadErrorCode(error.code) : "INVALID_PATH";
@@ -1681,29 +1696,16 @@ export function FilePane({
                 {/* Source mode always carries the metadata bar, markdown included —
                   it describes the bytes on disk, which is exactly what source
                   mode shows. Rendered mode omits it (the document is the view). */}
-                {metadata && (
-                  <div data-testid="file-viewer-metadata" className={FILE_METADATA_STRIP_CLASS}>
-                    {/* The same inner run as the editor's strip, gap included:
-                      matching the row height is not enough on its own — with
-                      different item spacing the byte count still slides
-                      sideways when the mode toggles. */}
-                    <span className={FILE_METADATA_RUN_CLASS}>
-                      <span className="tabular-nums">{pluralize(metadata.lineCount, "line")}</span>
-                      <span aria-hidden="true" className="text-text-muted">
-                        ·
-                      </span>
-                      <span className="tabular-nums">{metadata.sizeLabel}</span>
-                      <span aria-hidden="true" className="text-text-muted">
-                        ·
-                      </span>
-                      <span>UTF-8</span>
-                    </span>
-                  </div>
-                )}
+                <FileSourceMetadataStrip
+                  content={content}
+                  filePath={filePath}
+                  encoding={byteFacts.encoding}
+                  byteLength={byteFacts.byteLength}
+                />
                 {isMarkdown ? (
                   <MarkdownViewer
                     ref={markdownViewerRef}
-                    content={content}
+                    content={sourceText ?? content}
                     filePath={filePath}
                     rootPath={effectiveRootPath}
                     viewMode="source"
@@ -1714,7 +1716,7 @@ export function FilePane({
                 ) : (
                   <CodeViewer
                     ref={codeViewerRef}
-                    content={content}
+                    content={sourceText ?? content}
                     filePath={filePath}
                     initialLine={panel?.initialLine}
                     className="flex-1"

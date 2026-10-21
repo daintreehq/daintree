@@ -946,6 +946,12 @@ interface AppDialogFooterProps {
    */
   leadingAction?: DialogAction;
   hint?: React.ReactNode;
+  /**
+   * `above` gives the hint its own full-width row over the actions, for a hint
+   * that names a recovery step and would otherwise wrap into a narrow column
+   * beside the buttons.
+   */
+  hintPlacement?: "inline" | "above";
 }
 
 AppDialog.Footer = function AppDialogFooter({
@@ -955,6 +961,7 @@ AppDialog.Footer = function AppDialogFooter({
   secondaryAction,
   leadingAction,
   hint,
+  hintPlacement = "inline",
 }: AppDialogFooterProps) {
   const context = useContext(AppDialogContext);
   const dialogVariant = context?.variant ?? "default";
@@ -981,6 +988,7 @@ AppDialog.Footer = function AppDialogFooter({
       className={cn(
         DIALOG_INSET,
         "py-4 border-t border-border-strong bg-surface-panel flex items-center gap-3 shrink-0",
+        hint && hintPlacement === "above" && "flex-wrap",
         hint || leadingAction ? "justify-between" : "justify-end",
         className
       )}
@@ -1015,7 +1023,10 @@ AppDialog.Footer = function AppDialogFooter({
       {hint && (
         <div
           id={hintId}
-          className="text-xs leading-[inherit] text-text-secondary flex min-w-0 flex-1 items-center gap-1"
+          className={cn(
+            "text-xs leading-[inherit] text-text-secondary flex min-w-0 flex-1 items-center gap-1",
+            hintPlacement === "above" && "basis-full"
+          )}
           data-testid="app-dialog-hint"
         >
           {hint}
@@ -1023,7 +1034,12 @@ AppDialog.Footer = function AppDialogFooter({
       )}
       {children}
       {!children && (
-        <div className="flex shrink-0 items-center gap-3">
+        <div
+          className={cn(
+            "flex shrink-0 items-center gap-3",
+            hint && hintPlacement === "above" && "ml-auto"
+          )}
+        >
           {secondaryAction && (
             <Button
               variant="ghost"
@@ -1036,10 +1052,7 @@ AppDialog.Footer = function AppDialogFooter({
                 secondaryAction.onClick();
               }}
               aria-disabled={secondaryAction.disabled || undefined}
-              className={cn(
-                "text-text-secondary hover:text-text-primary",
-                secondaryAction.disabled && ARIA_DISABLED_CLASSES
-              )}
+              className={secondaryAction.disabled ? ARIA_DISABLED_CLASSES : undefined}
               data-confirm-role="cancel"
             >
               {secondaryAction.icon}
@@ -1076,18 +1089,25 @@ AppDialog.Footer = function AppDialogFooter({
 interface AppDialogDescriptionProps {
   children: React.ReactNode;
   className?: string;
+  /**
+   * `div` when the description is more than one paragraph — a consequence, a
+   * `Callout` and an undo line — so the whole of it stays under the one id the
+   * dialog's `aria-describedby` points at.
+   */
+  as?: "p" | "div";
 }
 
 AppDialog.Description = function AppDialogDescription({
   children,
   className,
+  as: Element = "p",
 }: AppDialogDescriptionProps) {
   const context = useContext(AppDialogContext);
   const register = context?.registerDescription;
   useLayoutEffect(() => register?.(), [register]);
   return (
-    <p id={context?.descriptionId} className={cn("text-sm text-text-secondary", className)}>
+    <Element id={context?.descriptionId} className={cn("text-sm text-text-secondary", className)}>
       {children}
-    </p>
+    </Element>
   );
 };

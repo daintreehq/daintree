@@ -37,6 +37,7 @@ const broadcastToRendererMock = vi.hoisted(() => vi.fn());
 const ipcViewMocks = vi.hoisted(() => ({
   isWithheldFromView: vi.fn((_id: number, _channel: string, _args: unknown[]) => false),
   getProjectRendererTargets: vi.fn((_projectId: string): Array<{ id: number }> => []),
+  broadcastToProjectRenderers: vi.fn(),
 }));
 const projectStoreMock = vi.hoisted(() => ({
   getCurrentProject: vi.fn((): { id?: string; path: string } | null => null),
@@ -89,7 +90,8 @@ vi.mock("../../ipc/utils.js", () => ({
   isWithheldFromView: (id: number, channel: string, args: unknown[]) =>
     ipcViewMocks.isWithheldFromView(id, channel, args),
   // A project plugin's settings writes are announced to its own project only.
-  broadcastToProjectRenderers: vi.fn(),
+  broadcastToProjectRenderers: (projectId: string, channel: string, ...args: unknown[]) =>
+    ipcViewMocks.broadcastToProjectRenderers(projectId, channel, ...args),
   // No project views unless a test says so: a project plugin's replay has nowhere to go.
   getProjectRendererTargets: (projectId: string) =>
     ipcViewMocks.getProjectRendererTargets(projectId),
@@ -550,6 +552,28 @@ describe("createHost — settings", () => {
     await host.settings.set("token", "v1");
     expect(cb).toHaveBeenCalledTimes(1);
     expect(cb).toHaveBeenCalledWith("v1");
+  });
+
+  it("onDidChange delivers a non-finite number as the null a read returns", async () => {
+    const { service } = await setupSettingsService("acme.settings-nonfinite");
+    const { host } = createSettingsHost(service, "acme.settings-nonfinite");
+    const cb = vi.fn();
+    await host.settings.onDidChange("count", cb);
+    await host.settings.set("count", Infinity);
+    expect(cb).toHaveBeenCalledWith(null);
+    expect(await host.settings.get("count")).toBeNull();
+  });
+
+  it("onDidChange delivers a secret's non-string value as passed", async () => {
+    safeStorageMock.state.available = true;
+    const pluginId = "acme.settings-secret-raw";
+    const { service } = await setupSettingsService(pluginId, [{ id: "token", type: "secret" }]);
+    const { host } = createSettingsHost(service, pluginId);
+    const cb = vi.fn();
+    await host.settings.onDidChange("token", cb);
+    await host.settings.set("token", NaN);
+    expect(cb).toHaveBeenCalledWith(NaN);
+    expect(await host.settings.get("token")).toBe("null");
   });
 
   it("onDidChange does not fire for a no-op write", async () => {
@@ -1050,6 +1074,259 @@ describe("dev-mode hot reload (#9304)", () => {
     clearPriorRegistrations();
 
     expect(service.listPluginActions().some((a) => a.id === "acme.dev.do-thing")).toBe(true);
+  });
+});
+
+describe("worktree card statuses (#13704)", () => {
+  type Status = { label: string; tooltip?: string };
+  type Statuses = Map<string, Map<string, Map<string, Status>>>;
+  const statusesOf = (service: PluginService): Statuses =>
+    (service as unknown as { pluginWorktreeCardStatuses: Statuses }).pluginWorktreeCardStatuses;
+  const statusEvents = () =>
+    ipcViewMocks.broadcastToProjectRenderers.mock.calls
+      .map((call) => ({
+        to: call[0],
+        ...(call[2] as { name: string; payload: unknown }),
+      }))
+      .filter((event) => event.name === "plugin:worktree-card-statuses-changed");
+
+  beforeEach(() => {
+    devWorkerMock.instances.length = 0;
+    devWorkerMock.bridges.length = 0;
+  });
+  afterEach(() => {
+    ipcViewMocks.getProjectRendererTargets.mockImplementation(() => []);
+  });
+
+  async function writeDevPlugin(name: string, pluginName: string): Promise<void> {
+    const dir = path.join(tmpDir, name);
+    await fs.mkdir(path.join(dir, "dist"), { recursive: true });
+    await fs.writeFile(
+      path.join(dir, "plugin.json"),
+      JSON.stringify({ name: pluginName, version: "1.0.0", main: "dist/index.js" })
+    );
+    await fs.writeFile(path.join(dir, "dist", "index.js"), "export function activate() {}");
+    await fs.writeFile(path.join(dir, ".dev-marker"), "");
+  }
+
+  it("pushSnapshotTo() replays only the buckets for the view's own project", async () => {
+    const service = new PluginService(tmpDir);
+    await service.activateStartupFinishedPlugins();
+    statusesOf(service).set(
+      "acme.global",
+      new Map([
+        ["proj-a", new Map([["/a/wt", { label: "up" }]])],
+        ["proj-b", new Map([["/b/wt", { label: "down" }]])],
+      ])
+    );
+    statusesOf(service).set(
+      "project__proj-b__acme.local",
+      new Map([["proj-b", new Map([["/b/wt", { label: "b only" }]])]])
+    );
+    ipcViewMocks.getProjectRendererTargets.mockImplementation((projectId) =>
+      projectId === "proj-a" ? [{ id: 4250 }] : []
+    );
+    const send = vi.fn();
+    const wc = { id: 4250, send, isDestroyed: () => false } as unknown as Electron.WebContents;
+
+    await service.pushSnapshotTo(wc);
+
+    const replayed = send.mock.calls
+      .map((c) => c[1] as { name?: string; payload?: unknown })
+      .filter((event) => event.name === "plugin:worktree-card-statuses-changed");
+    expect(replayed).toEqual([
+      {
+        name: "plugin:worktree-card-statuses-changed",
+        payload: {
+          pluginId: "acme.global",
+          projectId: "proj-a",
+          statuses: { "/a/wt": { label: "up" } },
+        },
+      },
+    ]);
+  });
+
+  it("withholds replayed statuses from a local view bound to a remote host", async () => {
+    const service = new PluginService(tmpDir);
+    await service.activateStartupFinishedPlugins();
+    statusesOf(service).set(
+      "acme.global",
+      new Map([["proj-a", new Map([["/a/wt", { label: "up" }]])]])
+    );
+    ipcViewMocks.getProjectRendererTargets.mockImplementation(() => [{ id: 4251 }]);
+    ipcViewMocks.isWithheldFromView.mockImplementation((id) => id === 4251);
+    const send = vi.fn();
+    const wc = { id: 4251, send, isDestroyed: () => false } as unknown as Electron.WebContents;
+
+    try {
+      await service.pushSnapshotTo(wc);
+    } finally {
+      ipcViewMocks.isWithheldFromView.mockImplementation(() => false);
+    }
+
+    const replayed = send.mock.calls
+      .map((c) => c[1] as { name?: string })
+      .filter((event) => event.name === "plugin:worktree-card-statuses-changed");
+    expect(replayed).toEqual([]);
+  });
+
+  it("remembers removals and closes, so a setter whose read predates them is refused", async () => {
+    const service = new PluginService(tmpDir);
+    await service.activateStartupFinishedPlugins();
+    const handlers = new Map<string, (payload: unknown) => void>();
+    service.setWorkspaceClient({
+      on: (event: string, handler: (payload: unknown) => void) => handlers.set(event, handler),
+      off: () => {},
+    } as never);
+    type Since = { revision: number; at: number };
+    const internals = service as unknown as {
+      worktreeCardTargetRevision: number;
+      isWorktreeCardTargetRetired: (p: string, w: string, s: Since) => boolean;
+    };
+    const retired = (projectId: string, worktreeId: string, since: Since) =>
+      internals.isWorktreeCardTargetRetired(projectId, worktreeId, since);
+
+    // A call made before the removal, however long its read then took.
+    const before = { revision: internals.worktreeCardTargetRevision, at: Date.now() - 60_000 };
+    expect(retired("proj-a", "/a/gone", before)).toBe(false);
+    handlers.get("worktree-removed")!({ worktreeId: "/a/gone", projectPath: "/a" });
+    expect(retired("proj-a", "/a/gone", before)).toBe(true);
+    expect(retired("proj-a", "/a/other", before)).toBe(false);
+
+    // A call made just after it can still be answered by a coalesced read.
+    const justAfter = { revision: internals.worktreeCardTargetRevision, at: Date.now() };
+    expect(retired("proj-a", "/a/gone", justAfter)).toBe(true);
+    // One made once the worktree exists again, past that grace, is about the new one.
+    const recreated = { revision: internals.worktreeCardTargetRevision, at: Date.now() + 5_000 };
+    expect(retired("proj-a", "/a/gone", recreated)).toBe(false);
+
+    await service.onProjectClosed("proj-b");
+    expect(retired("proj-b", "/b/any", before)).toBe(true);
+    expect(
+      retired("proj-b", "/b/any", { ...recreated, revision: internals.worktreeCardTargetRevision })
+    ).toBe(false);
+    service.dispose();
+  });
+
+  it("clears every project a plugin marked when it unloads", async () => {
+    await writeDevPlugin("dev-status", "acme.status");
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+    await service.activatePlugin("acme.status");
+    statusesOf(service).set(
+      "acme.status",
+      new Map([
+        ["proj-a", new Map([["/a/wt", { label: "up" }]])],
+        ["proj-b", new Map([["/b/wt", { label: "up" }]])],
+      ])
+    );
+    ipcViewMocks.broadcastToProjectRenderers.mockClear();
+
+    service.unloadPlugin("acme.status");
+
+    expect(statusesOf(service).has("acme.status")).toBe(false);
+    expect(statusEvents()).toEqual([
+      expect.objectContaining({
+        to: "proj-a",
+        payload: { pluginId: "acme.status", projectId: "proj-a", statuses: {} },
+      }),
+      expect.objectContaining({
+        to: "proj-b",
+        payload: { pluginId: "acme.status", projectId: "proj-b", statuses: {} },
+      }),
+    ]);
+  });
+
+  it("clears a plugin's statuses when its worker is replaced", async () => {
+    await writeDevPlugin("dev-status-reload", "acme.status-reload");
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+    await service.activatePlugin("acme.status-reload");
+    statusesOf(service).set(
+      "acme.status-reload",
+      new Map([["proj-a", new Map([["/a/wt", { label: "up" }]])]])
+    );
+    ipcViewMocks.broadcastToProjectRenderers.mockClear();
+
+    (
+      devWorkerMock.bridges[0].deps as unknown as { clearPriorRegistrations: () => void }
+    ).clearPriorRegistrations();
+
+    expect(statusesOf(service).size).toBe(0);
+    expect(statusEvents().map((event) => event.payload)).toEqual([
+      { pluginId: "acme.status-reload", projectId: "proj-a", statuses: {} },
+    ]);
+    const generation = (
+      service as unknown as { worktreeCardStatusGenerations: Map<string, number> }
+    ).worktreeCardStatusGenerations.get("acme.status-reload");
+    expect(generation).toBe(1);
+  });
+
+  it("clears every plugin's statuses on a closed project and leaves other projects alone", async () => {
+    const service = new PluginService(tmpDir);
+    await service.activateStartupFinishedPlugins();
+    statusesOf(service).set(
+      "acme.global",
+      new Map([
+        ["proj-a", new Map([["/a/wt", { label: "up" }]])],
+        ["proj-b", new Map([["/b/wt", { label: "up" }]])],
+      ])
+    );
+    ipcViewMocks.broadcastToProjectRenderers.mockClear();
+
+    await service.onProjectClosed("proj-a");
+
+    expect([...statusesOf(service).get("acme.global")!.keys()]).toEqual(["proj-b"]);
+    expect(statusEvents().map((event) => event.payload)).toEqual([
+      { pluginId: "acme.global", projectId: "proj-a", statuses: {} },
+    ]);
+  });
+
+  it("prunes a removed worktree from every plugin, and only that worktree", async () => {
+    const service = new PluginService(tmpDir);
+    await service.activateStartupFinishedPlugins();
+    const handlers = new Map<string, Set<(payload: unknown) => void>>();
+    const client = {
+      on: vi.fn((event: string, handler: (payload: unknown) => void) => {
+        if (!handlers.has(event)) handlers.set(event, new Set());
+        handlers.get(event)!.add(handler);
+      }),
+      off: vi.fn((event: string, handler: (payload: unknown) => void) => {
+        handlers.get(event)?.delete(handler);
+      }),
+    };
+    service.setWorkspaceClient(client as never);
+    statusesOf(service).set(
+      "acme.one",
+      new Map([
+        [
+          "proj-a",
+          new Map([
+            ["/a/gone", { label: "x" }],
+            ["/a/kept", { label: "y" }],
+          ]),
+        ],
+      ])
+    );
+    statusesOf(service).set(
+      "acme.two",
+      new Map([["proj-a", new Map([["/a/gone", { label: "z" }]])]])
+    );
+    ipcViewMocks.broadcastToProjectRenderers.mockClear();
+
+    for (const handler of handlers.get("worktree-removed") ?? []) {
+      handler({ worktreeId: "/a/gone", projectPath: "/a" });
+    }
+
+    expect(statusesOf(service).get("acme.one")?.get("proj-a")?.has("/a/kept")).toBe(true);
+    expect(statusesOf(service).has("acme.two")).toBe(false);
+    expect(statusEvents().map((event) => event.payload)).toEqual([
+      { pluginId: "acme.one", projectId: "proj-a", statuses: { "/a/kept": { label: "y" } } },
+      { pluginId: "acme.two", projectId: "proj-a", statuses: {} },
+    ]);
+
+    service.dispose();
+    expect(handlers.get("worktree-removed")?.size ?? 0).toBe(0);
   });
 });
 

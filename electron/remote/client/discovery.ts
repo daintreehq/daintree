@@ -1,3 +1,4 @@
+import dns from "node:dns";
 import os from "node:os";
 import {
   isValidWslDistroName,
@@ -16,12 +17,12 @@ import { displaySafeText } from "../../../shared/utils/displaySafeText.js";
 import { listWslDistros, type WslDistroEntry } from "../../utils/wsl.js";
 
 /**
- * Finding machines to add: tailnet peers from `tailscale status --json`, and
- * hosts advertising `_daintree._tcp` (Host mode on) or `_ssh._tcp` (a Mac with
+ * Finding machines to add: tailnet peers from `tailscale status --json`,
+ * NetBird peers from `netbird status --json`, and hosts advertising `_daintree._tcp` (Host mode on) or `_ssh._tcp` (a Mac with
  * Remote Login, a Linux box running avahi's ssh service) on the LAN (dns-sd on
  * macOS, avahi on Linux). Discovery only says a machine answered; whether Daintree runs there
  * is learned by probing it. Every machine found is reached over ssh (a
- * tailnet name, a LAN address). Every source is optional: a missing tool is an
+ * tailnet or NetBird name, a LAN address). Every source is optional: a missing tool is an
  * empty list, never an error.
  */
 
@@ -38,10 +39,20 @@ export const TAILSCALE_CANDIDATES = [
   "/opt/homebrew/bin/tailscale",
 ];
 
+/** The CLI on PATH first, then where each platform's installer puts it. */
+export const NETBIRD_CANDIDATES = [
+  "netbird",
+  "/usr/local/bin/netbird",
+  "/opt/homebrew/bin/netbird",
+  "/usr/bin/netbird",
+  "/Applications/NetBird.app/Contents/MacOS/netbird",
+  "C:\\Program Files\\NetBird\\netbird.exe",
+];
+
 export interface DiscoveryCandidate {
   name: string;
   sshTarget: string;
-  source: "tailscale" | "bonjour";
+  source: "tailscale" | "netbird" | "bonjour";
   platform: HostPlatform | null;
   online: boolean;
   /**
@@ -111,6 +122,61 @@ export function parseTailscaleStatus(text: string): DiscoveryCandidate[] {
       platform,
       online: true,
       aliases: dnsName ? [dnsName, ...ips] : ips,
+    });
+  }
+  return out;
+}
+
+function netbirdFqdn(value: unknown): string {
+  return typeof value === "string" ? stripDot(value.trim()).toLowerCase() : "";
+}
+
+/** The local address carries its prefix (`100.92.0.1/16`); strip one on a peer too. */
+function netbirdIpOf(value: unknown): string {
+  return typeof value === "string" ? (value.split("/")[0] ?? "").trim() : "";
+}
+
+/**
+ * NetBird peers from `peers.details`, whatever their status: an `Idle` peer is
+ * often a reachable lazy connection that has seen no traffic yet, so the ssh
+ * probe decides reachability. NetBird reports no OS, so the platform is learned
+ * by probing. The target is the peer's NetBird name; {@link discoverNetbird}
+ * swaps in its IP when this client can't resolve that name.
+ */
+export function parseNetbirdStatus(text: string): DiscoveryCandidate[] {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch {
+    return [];
+  }
+  if (!raw || typeof raw !== "object") return [];
+  const top = raw as Record<string, unknown>;
+  const peerField = top.peers;
+  const details =
+    peerField && typeof peerField === "object"
+      ? (peerField as { details?: unknown }).details
+      : undefined;
+  if (!Array.isArray(details)) return [];
+  // This machine's own name and address sit at the top level; never offer them.
+  const self = new Set([netbirdFqdn(top.fqdn), netbirdIpOf(top.netbirdIp)].filter(Boolean));
+  const out: DiscoveryCandidate[] = [];
+  for (const entry of details) {
+    if (!entry || typeof entry !== "object") continue;
+    const peer = entry as Record<string, unknown>;
+    const fqdn = netbirdFqdn(peer.fqdn);
+    const ip = netbirdIpOf(peer.netbirdIp);
+    if ((fqdn && self.has(fqdn)) || (ip && self.has(ip))) continue;
+    const names = [fqdn, ip].filter((value) => value && isValidSshTarget(value));
+    const target = names[0];
+    if (!target) continue;
+    out.push({
+      name: isIpAddress(target) ? target : target.split(".")[0] || target,
+      sshTarget: target,
+      source: "netbird",
+      platform: null,
+      online: typeof peer.status === "string" && peer.status.toLowerCase() === "connected",
+      aliases: names,
     });
   }
   return out;
@@ -227,6 +293,8 @@ export interface DiscoverDeps {
   browseMs?: number;
   /** This machine's own mDNS names, so its own adverts aren't offered; read from the system unless given. */
   localHostNames?: readonly string[];
+  /** Whether this machine can resolve a name; the system resolver with a short deadline unless given. */
+  resolves?: (name: string) => Promise<boolean>;
   signal?: AbortSignal;
 }
 
@@ -239,6 +307,83 @@ async function discoverTailscale(deps: DiscoverDeps): Promise<DiscoveryCandidate
     if (result.spawnError !== null) continue;
     // A stopped or logged-out tailscale still prints JSON, with no peers online.
     return parseTailscaleStatus(result.stdout);
+  }
+  return [];
+}
+
+const RESOLVE_DEADLINE_MS = 1_500;
+/** getaddrinfo shares libuv's small threadpool with file I/O, so a big mesh resolves a few at a time. */
+const RESOLVE_CONCURRENCY = 4;
+/** Past this, peers still waiting are reached by IP rather than holding up the list. */
+const RESOLVE_BUDGET_MS = 3_000;
+
+/**
+ * getaddrinfo, as ssh itself resolves, so NetBird's own DNS routing and
+ * /etc/hosts count. A lookup can't be cancelled, so a slow one is abandoned.
+ */
+async function resolvesBySystem(name: string): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<boolean>((resolve) => {
+    timer = setTimeout(() => resolve(false), RESOLVE_DEADLINE_MS);
+  });
+  try {
+    return await Promise.race([
+      dns.promises.lookup(name).then(
+        () => true,
+        () => false
+      ),
+      deadline,
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * A peer's name comes from the management server even when NetBird DNS is off
+ * on this client, so each name is checked here; one that doesn't resolve is
+ * replaced by the peer's IP, which always routes, or the peer is dropped.
+ */
+async function withReachableTargets(
+  peers: DiscoveryCandidate[],
+  resolves: (name: string) => Promise<boolean>,
+  signal: AbortSignal | undefined
+): Promise<DiscoveryCandidate[]> {
+  const startedAt = Date.now();
+  const out: Array<DiscoveryCandidate | null> = [...peers];
+  let next = 0;
+  const worker = async () => {
+    while (next < out.length) {
+      const index = next++;
+      const peer = out[index]!;
+      if (isIpAddress(peer.sshTarget)) continue;
+      const ok =
+        !signal?.aborted &&
+        Date.now() - startedAt < RESOLVE_BUDGET_MS &&
+        (await resolves(peer.sshTarget).catch(() => false));
+      if (ok) continue;
+      const ip = peer.aliases?.find(isIpAddress);
+      out[index] = ip ? { ...peer, sshTarget: ip } : null;
+    }
+  };
+  await Promise.all(Array.from({ length: RESOLVE_CONCURRENCY }, worker));
+  return out.filter((peer): peer is DiscoveryCandidate => peer !== null);
+}
+
+async function discoverNetbird(deps: DiscoverDeps): Promise<DiscoveryCandidate[]> {
+  for (const command of NETBIRD_CANDIDATES) {
+    const result = await deps.run(command, ["status", "--json"], {
+      timeoutMs: 8_000,
+      signal: deps.signal,
+    });
+    if (result.spawnError !== null) continue;
+    // A stopped daemon exits non-zero with no JSON; a logged-out one lists no peers.
+    if (result.code !== 0) return [];
+    return withReachableTargets(
+      parseNetbirdStatus(result.stdout),
+      deps.resolves ?? resolvesBySystem,
+      deps.signal
+    );
   }
   return [];
 }
@@ -322,8 +467,8 @@ function isIpAddress(value: string): boolean {
 export const machineKey = sshMachineKey;
 
 /**
- * Tailnet peers first (their names work from anywhere on the tailnet), then
- * LAN hosts. One machine seen by both sources is merged only when a source
+ * Mesh peers first (Tailscale, then NetBird: their names work from anywhere
+ * on the mesh), then LAN hosts. One machine seen by both sources is merged only when a source
  * vouches for a shared name or address; otherwise both rows are shown.
  * Manual entry is the dialog's own field.
  */
@@ -334,8 +479,9 @@ export async function discoverHosts(deps: DiscoverDeps): Promise<DiscoveredHost[
       : deps.platform === "linux"
         ? discoverBonjourLinux(deps)
         : Promise.resolve([]);
-  const [tailnet, lan, selfNames] = await Promise.all([
+  const [tailnet, netbird, lan, selfNames] = await Promise.all([
     discoverTailscale(deps).catch(() => []),
+    discoverNetbird(deps).catch(() => []),
     bonjour.catch(() => []),
     deps.localHostNames
       ? Promise.resolve(deps.localHostNames)
@@ -349,7 +495,7 @@ export async function discoverHosts(deps: DiscoverDeps): Promise<DiscoveredHost[
   const self = new Set(selfNames.map(machineKey));
   const seen = new Set<string>();
   const out: DiscoveredHost[] = [];
-  for (const candidate of [...tailnet, ...lan]) {
+  for (const candidate of [...tailnet, ...netbird, ...lan]) {
     if (candidate.source === "bonjour" && self.has(machineKey(candidate.sshTarget))) continue;
     const keys = [candidate.sshTarget, ...(candidate.aliases ?? [])].map(machineKey);
     if (keys.some((key) => seen.has(key))) continue;

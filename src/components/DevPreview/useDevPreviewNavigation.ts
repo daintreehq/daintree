@@ -153,8 +153,8 @@ export function useDevPreviewNavigation({
   // can never accept a URL the hook would reject (or vice versa). It is idempotent:
   // re-normalizing an already-approved proxy URL returns it unchanged (#12297).
   const validateUrl = useCallback(
-    (rawUrl: string): NormalizeResult => normalizeDevPreviewUrl(rawUrl, proxyOrigin),
-    [proxyOrigin]
+    (rawUrl: string): NormalizeResult => normalizeDevPreviewUrl(rawUrl, proxyOrigin, devServerUrl),
+    [proxyOrigin, devServerUrl]
   );
 
   // Every explicit navigation action hands the retry budget back. A load start no

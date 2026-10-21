@@ -1,5 +1,6 @@
 import nodeModule from "node:module";
 import type {
+  AnyForgeProviderImpl,
   ForgeProviderContribution,
   ForgeProviderImpl,
   ForgeTokenHealthState,
@@ -294,13 +295,13 @@ export interface ForgeModules {
   registerForgeProviderImpl: (
     pluginId: string,
     contributionId: string,
-    impl: ForgeProviderImpl
+    impl: AnyForgeProviderImpl
   ) => void;
   unregisterForgeProviderImpls: (pluginId: string) => void;
   clearForgeProviderImplRegistry: () => void;
   getForgeProviderImpl: (namespacedId: string) => ForgeProviderImpl | undefined;
   hasActivatedForgeProvider: () => boolean;
-  getForgeProviderImplEntries: () => Array<[string, ForgeProviderImpl]>;
+  getForgeProviderImplEntries: () => Array<[string, AnyForgeProviderImpl]>;
   getRegisteredForgeProviders: () => RegisteredForgeProvider[];
   listForgeProviderMatchers: () => ForgeProviderMatcher[];
   listMatchingProviders: (remoteUrl: string) => RegisteredForgeProvider[];
@@ -309,6 +310,7 @@ export interface ForgeModules {
     remoteUrl: string | null | undefined;
     forgeProviderOverride: string | null | undefined;
     globalDefaultProviderId: string | null | undefined;
+    issueProviderOverride?: string | null;
   }) => ResolvedForgeProvider;
   matchProviderForRemoteUrl: (
     remoteUrl: string,

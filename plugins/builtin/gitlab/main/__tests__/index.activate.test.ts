@@ -174,4 +174,28 @@ describe("gitlab plugin activate", () => {
     expect(authMock.setMemoryToken).toHaveBeenCalledWith(null);
     expect(order).toEqual(["token", "reader"]);
   });
+
+  it("invalidates caches as soon as the instance URL changes, and again once it is re-read", async () => {
+    const host = makeHost();
+    let onInstanceChange: () => void = () => {};
+    vi.mocked(host.settings.onDidChange).mockImplementation(((_key: string, cb: () => void) => {
+      onInstanceChange = cb;
+      return Promise.resolve(vi.fn());
+    }) as never);
+    await activate(host);
+    readOpsMock.clearGitLabCaches.mockClear();
+
+    let finishRefresh: (url: string) => void = () => {};
+    authMock.getInstanceUrl.mockReturnValueOnce(
+      new Promise<string>((res) => {
+        finishRefresh = res;
+      })
+    );
+    onInstanceChange();
+    expect(readOpsMock.clearGitLabCaches).toHaveBeenCalledTimes(1);
+
+    finishRefresh("https://gitlab.internal.example");
+    await vi.waitFor(() => expect(readOpsMock.clearGitLabCaches).toHaveBeenCalledTimes(2));
+    expect(authMock.clearValidatedUserInfo).toHaveBeenCalled();
+  });
 });

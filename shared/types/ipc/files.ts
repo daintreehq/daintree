@@ -43,8 +43,20 @@ export type FileReadErrorCode = _AssertSubset<
   | "PERMISSION"
 >;
 
+/**
+ * What the bytes on disk were, observed before decoding. `content` is always
+ * decoded as UTF-8, so a BOM survives as U+FEFF and invalid sequences become
+ * U+FFFD — neither of which the renderer can tell apart from text that really
+ * contains those characters.
+ */
+export type FileTextEncoding = "utf-8" | "utf-8-bom" | "invalid";
+
 export interface FileReadResult {
   content: string;
+  /** Observed from the raw bytes; absent from an older main. */
+  encoding?: FileTextEncoding;
+  /** The file's length in bytes as read, before decoding; absent from an older main. */
+  byteLength?: number;
   /**
    * `daintree-html://<token>/<relpath>` URL for a sandboxed iframe preview,
    * present only when the read was requested with `htmlPreview` and the file is

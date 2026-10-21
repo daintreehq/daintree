@@ -256,6 +256,7 @@ const BUILT_IN_DESERIALIZERS = {
       viewportRotated: saved.viewportRotated === true,
       viewportDpr: saved.viewportDpr === 2 || saved.viewportDpr === 3 ? saved.viewportDpr : 1,
       viewportFit: saved.viewportFit === true,
+      ...(saved.previewsResourceEndpoint === true && { previewsResourceEndpoint: true }),
       devPreviewScrollPosition: saved.devPreviewScrollPosition,
       createdAt: saved.createdAt,
     };

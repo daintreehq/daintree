@@ -165,20 +165,25 @@ const PROJECT_RUN_COMMAND_TOOL = "project.runCommand";
 
 /**
  * `project.runCommand` runs whatever command it is given, so it answers to its
- * caller, not its tier alone (#13495): Daintree's own assistant at the full
- * tier. That includes another machine's own assistant reaching this host at
- * the full tier through its Shell's `host.call` (#13501): a relay is only
- * ever offered to that Shell's assistant in one of its own windows, already
- * reaches a shell here through `terminal.new` and `terminal.sendCommand`, and
- * is held to the drive rule like any change it makes. Never a worker pane, an
- * api-key client or a core session, and no grant widens that. Discovery and
- * admission ask this same question.
+ * caller, not its tier alone (#13495): Daintree's own assistant, at either
+ * in-app tier. That includes another machine's own assistant reaching this
+ * host through its Shell's `host.call` (#13501): a relay is only ever offered
+ * to that Shell's assistant in one of its own windows, and is held to the
+ * drive rule like any change it makes. Not gated on `full`, because the same
+ * caller already reaches a shell at `core` — unscoped `terminal.sendCommand`
+ * here, and any agent it launches on a host — so withholding the runner kept
+ * the capability and lost only its audit and structured result. Never a worker
+ * pane or an api-key client, and no grant widens that. Discovery and admission
+ * ask this same question.
  */
 export function mayRunProjectCommand(
   tier: string | null,
   session: Pick<SessionSurfacePolicy, "rendererOwnedOrigin" | "relay">
 ): boolean {
-  return tier === "full" && (session.rendererOwnedOrigin === true || session.relay === true);
+  return (
+    (tier === "core" || tier === "full") &&
+    (session.rendererOwnedOrigin === true || session.relay === true)
+  );
 }
 
 /**
@@ -193,6 +198,18 @@ export function mayControlAssistants(
   session: Pick<SessionSurfacePolicy, "assistantCaller">
 ): boolean {
   return (tier === "core" || tier === "full") && session.assistantCaller === true;
+}
+
+/**
+ * The lowest rung a tool that answers its caller is reachable from, for a
+ * caller already admitted to it: the command runner and the assistant tools
+ * both answer at either in-app tier, so `core`. Null for every other tool,
+ * which the tier lists place. A relay's origin is `external`, so the
+ * origin-aware lookup finds no rung for these and would fall back to the
+ * caller's own tier.
+ */
+export function callerGatedMinimumTier(id: string): "core" | null {
+  return id === PROJECT_RUN_COMMAND_TOOL || ASSISTANT_CONTROL_TOOL_IDS.has(id) ? "core" : null;
 }
 
 /** This machine's own assistant-panel tools, which mean nothing to another machine's assistant. */
@@ -701,18 +718,17 @@ export function buildTargetPolicy(
   const commandRunner =
     id === PROJECT_RUN_COMMAND_TOOL ? mayRunProjectCommand(snapshot.tier, snapshot) : undefined;
   // So do the assistant tools, for an assistant whose relayed calls hold no ladder tier to place them on.
+  // Both are reachable from `core`, so that is the rung either reports.
   const assistantTool =
     ASSISTANT_CONTROL_TOOL_IDS.has(id) && snapshot.assistantControl === true ? true : undefined;
   const minimumTier: McpTargetTier | null =
-    commandRunner === true
-      ? "full"
-      : assistantTool === true
-        ? "core"
-        : snapshot.tier === "external"
-          ? TIER_ALLOWLISTS.external.has(id)
-            ? "external"
-            : null
-          : minimumPermittingTier(id, snapshot.rendererOwnedOrigin === true);
+    commandRunner === true || assistantTool === true
+      ? "core"
+      : snapshot.tier === "external"
+        ? TIER_ALLOWLISTS.external.has(id)
+          ? "external"
+          : null
+        : minimumPermittingTier(id, snapshot.rendererOwnedOrigin === true);
   // A ladder target with no permitting tier cannot be described honestly, and
   // cannot legitimately be granted either: both issuance paths refuse a tool
   // `minimumPermittingTier` does not place. Fail closed.

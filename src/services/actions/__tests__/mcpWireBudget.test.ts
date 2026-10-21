@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { beforeAll, describe, it, expect } from "vitest";
 import { findWireStrippedKeywords } from "@shared/utils/mcpWireSchema";
 import { HELP_TIER_CUMULATIVE } from "@shared/config/helpAssistantTierAllowlists";
 import {
@@ -155,6 +155,12 @@ async function surface(): Promise<WireTool[]> {
   cached ??= await measureWireSurface();
   return cached;
 }
+
+// The first measurement cold-loads every action definition, which alone can run
+// past a test's 15s budget on a slow CI runner; pay it once here instead.
+beforeAll(async () => {
+  await surface();
+}, 120_000);
 
 /** Every property description above the one-clause target, allowlist applied. */
 async function propertiesOverTarget(): Promise<Array<{ id: string; path: string; bytes: number }>> {
@@ -550,7 +556,10 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // though only an assistant ever reads another assistant's screen. Trimmed
   // to its source, text and truncation before measuring; the `generation`
   // argument on the owned send is withheld from external clients.
-  const MAX_EXTERNAL_PAYLOAD_BYTES = 54_700;
+  // 54_700 → 55_500 for #13662's `terminal.placeOwned`: one owned tool for
+  // parking a panel and bringing it back, with the three-field receipt its
+  // output schema advertises so a caller can tell a move from a no-op.
+  const MAX_EXTERNAL_PAYLOAD_BYTES = 55_500;
   // 190_000 → 192_700 for the same 2_048 B the external half above pays for.
   // Every byte #11909 spends sits on an externally advertised tool, so both
   // totals moved by the identical amount. Only this one needed the ratchet
@@ -785,7 +794,9 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // `agent.readQuota`, the `generation` on both sends and the `observed`
   // reply arm, with `host.list` naming each controlled host's projects
   // instead of its lanes.
-  const MAX_COHORT_PAYLOAD_BYTES = 129_000;
+  // 129_000 → 129_800 for #13662's `terminal.placeOwned`, the same cost the
+  // external ceiling above pays; it carries no unscoped twin to remove.
+  const MAX_COHORT_PAYLOAD_BYTES = 129_800;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 

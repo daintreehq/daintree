@@ -38,6 +38,13 @@ describe("buildRequiredMarkers", () => {
     }
   );
 
+  it("requires mac-phys-footprint on macOS only", () => {
+    const marker = "[SMOKE] CHECK: mac-phys-footprint native module";
+    expect(buildRequiredMarkers("darwin")).toContain(marker);
+    expect(buildRequiredMarkers("linux")).not.toContain(marker);
+    expect(buildRequiredMarkers("win32")).not.toContain(marker);
+  });
+
   it("emits no platform-specific reaper marker for unknown platforms", () => {
     const markers = buildRequiredMarkers("aix");
     expect(markers).not.toContain("[SMOKE] CHECK: win-job-object native module");

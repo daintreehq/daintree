@@ -1,6 +1,7 @@
 import { Fragment } from "react";
 import type * as React from "react";
 import type { WorktreeState } from "../../types";
+import type { WorktreeAttachment } from "@shared/types/worktree";
 import {
   ContextMenuItem,
   ContextMenuLabel,
@@ -57,6 +58,7 @@ import {
 } from "lucide-react";
 import {
   ArrowUpDown,
+  Cable,
   CircleDot,
   CirclePause,
   FolderOpen,
@@ -68,6 +70,7 @@ import {
   Plus,
   ServerCog,
   Tag,
+  Unplug,
   Workflow,
 } from "@/components/icons";
 import {
@@ -248,6 +251,9 @@ export interface WorktreeMenuItemsProps {
   onResourceConnect?: () => void;
   onResourceStatus?: () => void;
   onResourceTeardown?: () => void;
+  attachments?: readonly WorktreeAttachment[];
+  /** `attach` on an attachment another worktree holds is a move; the card confirms it. */
+  onAttachmentAction?: (name: string, action: "attach" | "detach" | "status") => void;
   devServerState?: WorktreeDevServerMenuState;
   onStartDevServer?: (worktreeId: string) => void;
   onStopDevServer?: (worktreeId: string) => void;
@@ -351,6 +357,8 @@ export function WorktreeMenuItems({
   onResourceConnect,
   onResourceStatus,
   onResourceTeardown,
+  attachments,
+  onAttachmentAction,
   devServerState = "none",
   onStartDevServer,
   onStopDevServer,
@@ -1005,7 +1013,50 @@ export function WorktreeMenuItems({
     );
 
   const hasEnvironmentSection = environmentRows.length > 0 || Boolean(teardownRow);
-  const runtimeSub = (devServerRows.length > 0 || hasEnvironmentSection) && (
+
+  // Moving is only ever this explicit row — never the active worktree changing.
+  const attachmentRows =
+    worktree && onAttachmentAction
+      ? (attachments ?? []).flatMap((attachment) =>
+          attachment.heldHere
+            ? [
+                attachment.hasStatusCommand && (
+                  <C.Item
+                    key={`${attachment.name}:status`}
+                    disabled={!!attachment.busy}
+                    onSelect={() => onAttachmentAction(attachment.name, "status")}
+                  >
+                    <Activity className={ICON} />
+                    Check {attachment.name} status
+                  </C.Item>
+                ),
+                <C.Item
+                  key={`${attachment.name}:detach`}
+                  disabled={!!attachment.busy}
+                  onSelect={() => onAttachmentAction(attachment.name, "detach")}
+                >
+                  <Unplug className={ICON} />
+                  Detach {attachment.name}
+                </C.Item>,
+              ].filter(Boolean)
+            : [
+                <C.Item
+                  key={`${attachment.name}:attach`}
+                  disabled={!!attachment.busy}
+                  onSelect={() => onAttachmentAction(attachment.name, "attach")}
+                >
+                  <Cable className={ICON} />
+                  {attachment.holderWorktreeId
+                    ? `Move ${attachment.name} here…`
+                    : `Attach ${attachment.name} here`}
+                </C.Item>,
+              ]
+        )
+      : [];
+
+  const runtimeSub = (devServerRows.length > 0 ||
+    hasEnvironmentSection ||
+    attachmentRows.length > 0) && (
     <C.Sub key="runtime">
       <C.SubTrigger>
         <ServerCog className={ICON} />
@@ -1024,6 +1075,12 @@ export function WorktreeMenuItems({
             {environmentRows}
             {teardownRow && environmentRows.length > 0 && <C.Separator />}
             {teardownRow}
+          </>
+        )}
+        {attachmentRows.length > 0 && (
+          <>
+            <C.Label>Attachments</C.Label>
+            {attachmentRows}
           </>
         )}
       </C.SubContent>

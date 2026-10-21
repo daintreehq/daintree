@@ -241,7 +241,7 @@ export const SECTION_LABELS: Record<string, string> = {
   lifecycleLedger: "Terminal lifecycle events",
   mcpAudit: "MCP audit summary",
   projectViews: "Project views",
-  rendererMemory: "Window memory",
+  rendererMemory: "Window memory and responsiveness",
   memoryTrends: "Memory trends",
   memoryAttribution: "Memory by project",
   resourceState: "Resource limits",

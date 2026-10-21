@@ -1,8 +1,11 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { act, cleanup, renderHook } from "@testing-library/react";
 import {
   acquireHelpSessionController,
   releaseHelpSessionController,
+  useHelpSessionController,
+  __hasHelpSessionControllerForTests,
   __resetHelpSessionControllersForTests,
 } from "../helpSessionControllerRegistry";
 
@@ -21,6 +24,8 @@ vi.mock("@/clients/projectClient", () => ({ projectClient: {} }));
 vi.mock("@/lib/notify", () => ({ notify: vi.fn() }));
 
 afterEach(() => {
+  // Unmount first: a still-mounted holder would re-mint on the reset's notify.
+  cleanup();
   __resetHelpSessionControllersForTests();
 });
 
@@ -62,5 +67,97 @@ describe("helpSessionControllerRegistry", () => {
 
   it("releasing an unknown lane is a no-op", () => {
     expect(() => releaseHelpSessionController(2)).not.toThrow();
+  });
+});
+
+/**
+ * #13544. A component holding a lane's controller across renders must follow a
+ * release. In the build the React Compiler memoizes a render-time acquire on the
+ * slot alone, so the component only sees a new controller if the release itself
+ * re-renders it — which is exactly what `renderHook` isolates here: nothing else
+ * re-renders the hook.
+ */
+describe("useHelpSessionController", () => {
+  it("keeps the registered controller across re-renders", () => {
+    const { result, rerender } = renderHook(({ slot }) => useHelpSessionController(slot), {
+      initialProps: { slot: 0 },
+    });
+    const first = result.current;
+
+    rerender({ slot: 0 });
+
+    expect(result.current).toBe(first);
+    expect(acquireHelpSessionController(0)).toBe(first);
+  });
+
+  it("moves to the fresh controller once its lane is released and the slot reused", () => {
+    // Closing the only tab releases slot 0 and recreates it empty. The holder
+    // must not keep the stopped instance while call-time acquires (Restart
+    // conversation) mint an unsynced second one — that pair is what showed
+    // "still loading" on a loaded workspace.
+    const { result } = renderHook(() => useHelpSessionController(0));
+    const stale = result.current;
+    const stopSpy = vi.spyOn(stale, "stop");
+
+    act(() => {
+      releaseHelpSessionController(0);
+    });
+
+    expect(stopSpy).toHaveBeenCalledTimes(1);
+    expect(result.current).not.toBe(stale);
+    expect(result.current.slot).toBe(0);
+    expect(acquireHelpSessionController(0)).toBe(result.current);
+  });
+
+  it("ignores the release of another lane", () => {
+    const { result } = renderHook(() => useHelpSessionController(0));
+    const laneZero = result.current;
+    acquireHelpSessionController(1);
+
+    act(() => {
+      releaseHelpSessionController(1);
+    });
+
+    expect(result.current).toBe(laneZero);
+  });
+
+  it("follows a slot change to that lane's controller", () => {
+    const laneOne = acquireHelpSessionController(1);
+    const { result, rerender } = renderHook(({ slot }) => useHelpSessionController(slot), {
+      initialProps: { slot: 0 },
+    });
+
+    rerender({ slot: 1 });
+
+    expect(result.current).toBe(laneOne);
+  });
+
+  it("hands every holder of a released lane the same replacement", () => {
+    const first = renderHook(() => useHelpSessionController(0));
+    const second = renderHook(() => useHelpSessionController(0));
+    const stale = first.result.current;
+
+    act(() => {
+      releaseHelpSessionController(0);
+    });
+
+    expect(first.result.current).not.toBe(stale);
+    expect(second.result.current).toBe(first.result.current);
+  });
+
+  it("leaves nothing behind for a lane that is closed outright", () => {
+    // React reads the snapshot synchronously inside the release notification,
+    // while the lane is still mounted. A snapshot that acquired would re-mint
+    // the controller there, and the lane unmounting a moment later would strand
+    // it in the registry for good.
+    const lane = renderHook(() => useHelpSessionController(3));
+    expect(__hasHelpSessionControllerForTests(3)).toBe(true);
+
+    act(() => {
+      releaseHelpSessionController(3);
+      lane.unmount();
+    });
+
+    expect(__hasHelpSessionControllerForTests(3)).toBe(false);
   });
 });

@@ -36,6 +36,17 @@ describe("WorktreeEmitGate", () => {
     });
   });
 
+  it("sends a membership-only change as a tick that carries the stamp (#13595)", () => {
+    const gate = new WorktreeEmitGate();
+    const monitor = {};
+    gate.next(monitor, snap({ pathMembershipChangedAt: 4 }));
+
+    expect(gate.next(monitor, snap({ pathMembershipChangedAt: 9 }))).toMatchObject({
+      worktreeId: "/repo/wt",
+      pathMembershipChangedAt: 9,
+    });
+  });
+
   it("sends a content change whole and compares later ticks against it", () => {
     const gate = new WorktreeEmitGate();
     const monitor = {};

@@ -4,7 +4,7 @@ import {
   getForgeProviderImplEntries,
   onForgeProviderRegistryChanged,
 } from "./forgeProviderRegistry.js";
-import type { ForgeProviderImpl } from "../../shared/types/forge.js";
+import type { ForgeProviderBaseImpl } from "../../shared/types/forge.js";
 import type {
   ForgeRateLimitChangedPayload,
   ForgeTokenHealthChangedPayload,
@@ -19,7 +19,7 @@ import type {
  */
 
 interface RelayEntry {
-  impl: ForgeProviderImpl;
+  impl: ForgeProviderBaseImpl;
   disposers: Array<() => void>;
 }
 
@@ -50,7 +50,7 @@ function disposeEntry(entry: RelayEntry): void {
   }
 }
 
-function subscribeProvider(providerId: string, impl: ForgeProviderImpl): RelayEntry | null {
+function subscribeProvider(providerId: string, impl: ForgeProviderBaseImpl): RelayEntry | null {
   const health = impl.healthEvents;
   if (!health) return null;
   const disposers: Array<() => void> = [];
@@ -68,7 +68,7 @@ function subscribeProvider(providerId: string, impl: ForgeProviderImpl): RelayEn
 
 function subscribeHealthEvents(
   providerId: string,
-  health: NonNullable<ForgeProviderImpl["healthEvents"]>,
+  health: NonNullable<ForgeProviderBaseImpl["healthEvents"]>,
   disposers: Array<() => void>
 ): void {
   disposers.push(

@@ -88,6 +88,7 @@ export type {
   PluginNotifyResult,
   PluginPanelBadge,
   PluginContextValue,
+  PluginWorktreeCardStatus,
   PluginPanelBadgeColor,
   PluginPanelToolbarItemState,
   PluginQuickPickItem,
@@ -244,6 +245,11 @@ export {
 
 export type {
   ForgeProviderImpl,
+  ForgeProviderBaseImpl,
+  ForgeIssueProviderImpl,
+  ForgeCodeProviderImpl,
+  AnyForgeProviderImpl,
+  ForgeProviderRole,
   ForgeProviderDescriptor,
   ForgeProviderContribution,
   ForgeProviderKind,

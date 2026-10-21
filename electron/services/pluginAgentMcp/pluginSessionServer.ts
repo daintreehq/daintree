@@ -42,7 +42,7 @@ export interface PluginSessionServerOptions {
   serverName: string;
   /** Frozen provenance from the session's grant. Never the bearer. */
   caller: PluginMcpCaller;
-  /** Aborts when the session closes — revocation, idle expiry, DELETE, listener stop. */
+  /** Aborts when the session closes — revocation, DELETE, the session cap, listener stop. */
   sessionSignal: AbortSignal;
   /** Workers activate lazily and register their rosters inside `activate()`. */
   activatePlugin: (pluginInstanceId: string) => Promise<void>;

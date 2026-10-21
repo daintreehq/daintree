@@ -6,8 +6,8 @@ import type {
   FileDecorationProviderDescriptor,
   FileDecorationProviderImpl,
   ForgeProviderContribution,
+  AnyForgeProviderImpl,
   ForgeProviderDescriptor,
-  ForgeProviderImpl,
   NormalizedPRState,
   ResourceRef,
 } from "./forge.js";
@@ -19,7 +19,7 @@ import type {
   PluginCanDispatchResult,
 } from "./actions.js";
 import type { AgentState, WaitingReason } from "./agent.js";
-import type { AgentDetectionConfig } from "../config/agentRegistry.js";
+import type { AgentDetectionConfig, AgentResumeTemplate } from "../config/agentRegistry.js";
 import type { z } from "zod";
 
 /**
@@ -226,6 +226,22 @@ export type PluginPanelBadge =
 
 /** Max length of a {@link PluginPanelBadge} `label` text, enforced host-side. */
 export const PLUGIN_PANEL_BADGE_LABEL_MAX = 6;
+
+/**
+ * A short status a plugin shows on one worktree's card via
+ * {@link PluginHostApi.setWorktreeCardStatus} (#13704): a one-line `label`
+ * drawn as quiet metadata, and an optional `tooltip` with the detail.
+ */
+export interface PluginWorktreeCardStatus {
+  label: string;
+  tooltip?: string;
+}
+
+/** Max length of a {@link PluginWorktreeCardStatus} `label`, enforced host-side. */
+export const PLUGIN_WORKTREE_CARD_STATUS_LABEL_MAX = 32;
+
+/** Max length of a {@link PluginWorktreeCardStatus} `tooltip`, enforced host-side. */
+export const PLUGIN_WORKTREE_CARD_STATUS_TOOLTIP_MAX = 512;
 
 /** Value a plugin publishes to `when` clauses via {@link PluginHostApi.setContext}. */
 export type PluginContextValue = boolean | string;
@@ -1337,7 +1353,8 @@ export interface PluginManifestScopes {
  *
  * Plugin agents launch as named, untracked terminals: the schema surfaces
  * `id`, `name`, `command`, `args`, `color`, `iconId`,
- * `supportsContextInjection`, and an optional `detection` block. The
+ * `supportsContextInjection`, an optional `resume` block (#13687), and an
+ * optional `detection` block. The
  * `detection` field (#10587) lets a contributed agent describe its
  * working/waiting/completed output patterns so it participates in the
  * agent-state UI like a built-in — output-volume state already works from the
@@ -1360,6 +1377,12 @@ export interface PluginAgentContribution {
    * boundary (Daintree never modifies the agent's own config).
    */
   detection?: AgentDetectionConfig;
+  /**
+   * Optional session resume (#13687): `session-id` with a `{sessionId}` args
+   * template, or `project-scoped` static args. Plain data, expanded where a
+   * resume command is built. Plugin agents never claim a `continuity` tier.
+   */
+  resume?: AgentResumeTemplate;
 }
 
 /**
@@ -4501,8 +4524,12 @@ export interface PluginActivationApi {
    */
   broadcastToRenderer(channel: string, payload: unknown): Promise<void>;
   /**
-   * Bind a runtime {@link ForgeProviderImpl} to the descriptor declared in
-   * `contributes.forgeProviders`. The descriptor's `id` is namespaced to the
+   * Bind a runtime forge provider implementation to the descriptor declared in
+   * `contributes.forgeProviders`. A provider serving both roles (the default)
+   * passes a full `ForgeProviderImpl`; one whose manifest declares
+   * `roles: ["issues"]` passes a `ForgeIssueProviderImpl`, which must include
+   * `resolveIssueRepo`. An implementation missing a member its declared roles
+   * require is rejected. The descriptor's `id` is namespaced to the
    * plugin at runtime as `{pluginId}.{descriptor.id}`. Returns a disposer that
    * unbinds the single implementation; all bindings are automatically removed
    * when the plugin is unloaded. Must be called during `activate()` — the
@@ -4520,7 +4547,7 @@ export interface PluginActivationApi {
    */
   registerForgeProvider(
     descriptor: ForgeProviderDescriptor,
-    impl: ForgeProviderImpl
+    impl: AnyForgeProviderImpl
   ): Promise<() => void>;
   /**
    * Bind a runtime {@link FileDecorationProviderImpl} to a descriptor declared
@@ -5126,6 +5153,28 @@ export interface PluginHostApi extends PluginActivationApi {
    * unloaded.
    */
   setContext(key: string, value: PluginContextValue | null): Promise<void>;
+  /**
+   * Show (or clear) this plugin's status on one worktree's card — a short
+   * one-line `label` with an optional `tooltip` for the detail. Pass `null` to
+   * clear it. A plugin holds one status per worktree, so a second call
+   * replaces the first; every plugin that marks a card gets its own chip,
+   * named after the plugin, so several plugins never hide each other.
+   *
+   * `worktreeId` is a worktree this host can see right now: the `id` (or
+   * `worktreeId`) of an entry in {@link getWorktreesResult}. A project plugin
+   * only ever reaches its own project's worktrees. The call rejects when the
+   * id is not one of them, when the host has no worktree answer yet, or when
+   * the label is empty, multi-line or longer than
+   * {@link PLUGIN_WORKTREE_CARD_STATUS_LABEL_MAX} characters, or the tooltip
+   * longer than {@link PLUGIN_WORKTREE_CARD_STATUS_TOOLTIP_MAX}.
+   *
+   * Statuses are not persisted. They are cleared when the worktree is
+   * removed, when its project closes, and when the plugin unloads or its
+   * worker is replaced, so republish them after a restart. Like
+   * {@link setPanelBadge} this is NOT revoke-guarded and becomes a silent
+   * no-op once the plugin is unloaded.
+   */
+  setWorktreeCardStatus(worktreeId: string, status: PluginWorktreeCardStatus | null): Promise<void>;
   /**
    * Publish the contextual actions the ⋯ and right-click menus of one of this
    * plugin's own panels offer right now — the backend-side twin of the view's

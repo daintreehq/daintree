@@ -3,7 +3,7 @@ import type {
   AgentSubagentTranscriptResult,
   CodexFolderSessionsResult,
 } from "@shared/types/ipc/agentSubagents";
-import type { CodexQuotaResult } from "@shared/types/ipc/agentQuota";
+import type { CodexQuotaProfile } from "@shared/types/ipc/agentQuota";
 
 /**
  * @example
@@ -45,13 +45,16 @@ export const codexClient = {
     return window.electron.codex.findSessions(payload);
   },
 
-  /** Codex account quota for main's own profile (#12797). Never rejects on a failed read. */
-  readQuota: (): Promise<CodexQuotaResult> => {
+  /**
+   * Codex account quota for main's own profile and each distinct `CODEX_HOME`
+   * a Codex preset sets (#12797, #13686). Never rejects on a failed read.
+   */
+  readQuota: (): Promise<CodexQuotaProfile[]> => {
     return window.electron.codex.readQuota();
   },
 
   /** The same read past main's cache, for an explicit Retry. */
-  refreshQuota: (): Promise<CodexQuotaResult> => {
+  refreshQuota: (): Promise<CodexQuotaProfile[]> => {
     return window.electron.codex.refreshQuota();
   },
 } as const;

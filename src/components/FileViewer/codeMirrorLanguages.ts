@@ -963,3 +963,13 @@ export const CODEMIRROR_LANGUAGES: readonly LanguageDescription[] = [
     },
   }),
 ];
+
+/**
+ * The grammar the viewer highlights a file with, picked from its name alone.
+ * The metadata strip names the same match, so what it says the file is and
+ * what the colours show can't disagree.
+ */
+export function matchCodeMirrorLanguage(filePath: string): LanguageDescription | null {
+  const basename = filePath.split(/[/\\]/).filter(Boolean).pop() ?? filePath;
+  return LanguageDescription.matchFilename(CODEMIRROR_LANGUAGES, basename);
+}

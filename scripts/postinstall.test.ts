@@ -103,13 +103,18 @@ describe("postinstall", () => {
     restoreMocks();
   });
 
-  it("should rebuild the three project native modules and skip better-sqlite3", async () => {
+  it("should rebuild the four project native modules and skip better-sqlite3", async () => {
     await runPostinstall();
 
     // better-sqlite3 (v13+, N-API) loads from its packaged prebuilds and is
     // deliberately absent — an @electron/rebuild pass would be a no-op.
-    expect(mockRebuild).toHaveBeenCalledTimes(3);
-    expect(rebuiltModules()).toEqual(["node-pty", "win-job-object", "posix-pty-reaper"]);
+    expect(mockRebuild).toHaveBeenCalledTimes(4);
+    expect(rebuiltModules()).toEqual([
+      "node-pty",
+      "win-job-object",
+      "posix-pty-reaper",
+      "mac-phys-footprint",
+    ]);
   });
 
   it("should pass electronVersion and buildPath to every rebuild call", async () => {
@@ -147,7 +152,7 @@ describe("postinstall", () => {
 
     await runPostinstall();
 
-    expect(mockRebuild).toHaveBeenCalledTimes(3);
+    expect(mockRebuild).toHaveBeenCalledTimes(4);
     expect(process.exitCode).toBe(1);
     expect(consoleErrorSpy).toHaveBeenCalled();
   });
@@ -158,7 +163,7 @@ describe("postinstall", () => {
 
     await runPostinstall();
 
-    expect(mockRebuild).toHaveBeenCalledTimes(3);
+    expect(mockRebuild).toHaveBeenCalledTimes(4);
     expect(process.exitCode).toBe(1);
 
     const errorCalls = consoleErrorSpy.mock.calls.flat().join(" ");
@@ -183,7 +188,7 @@ describe("postinstall", () => {
 
     await runPostinstall();
 
-    expect(mockRebuild).toHaveBeenCalledTimes(3);
+    expect(mockRebuild).toHaveBeenCalledTimes(4);
     expect(process.exitCode).toBe(1);
 
     const errorCalls = consoleErrorSpy.mock.calls.flat().join(" ");
@@ -212,7 +217,7 @@ describe("postinstall", () => {
     await runPostinstall();
 
     expect(mockWriteFileSync).not.toHaveBeenCalled();
-    expect(mockRebuild).toHaveBeenCalledTimes(3);
+    expect(mockRebuild).toHaveBeenCalledTimes(4);
     expect(process.exitCode).toBeUndefined();
   });
 
@@ -222,7 +227,12 @@ describe("postinstall", () => {
     await runPostinstall();
 
     expect(mockWriteFileSync).not.toHaveBeenCalled();
-    expect(rebuiltModules()).toEqual(["node-pty", "win-job-object", "posix-pty-reaper"]);
+    expect(rebuiltModules()).toEqual([
+      "node-pty",
+      "win-job-object",
+      "posix-pty-reaper",
+      "mac-phys-footprint",
+    ]);
     expect(mockExecSync).toHaveBeenCalledTimes(1);
     expect(process.exitCode).toBe(1);
 
@@ -238,7 +248,7 @@ describe("postinstall", () => {
 
     await runPostinstall();
 
-    expect(mockRebuild).toHaveBeenCalledTimes(3);
+    expect(mockRebuild).toHaveBeenCalledTimes(4);
     expect(process.exitCode).toBe(1);
 
     const errorCalls = consoleErrorSpy.mock.calls.flat().join(" ");
@@ -252,7 +262,7 @@ describe("postinstall", () => {
 
     await runPostinstall();
 
-    expect(mockRebuild).toHaveBeenCalledTimes(3);
+    expect(mockRebuild).toHaveBeenCalledTimes(4);
     expect(process.exitCode).toBe(1);
 
     const errorCalls = consoleErrorSpy.mock.calls.flat().join(" ");
@@ -303,7 +313,12 @@ describe("postinstall", () => {
     await runPostinstall();
 
     expect(mockWriteFileSync).not.toHaveBeenCalled();
-    expect(rebuiltModules()).toEqual(["node-pty", "win-job-object", "posix-pty-reaper"]);
+    expect(rebuiltModules()).toEqual([
+      "node-pty",
+      "win-job-object",
+      "posix-pty-reaper",
+      "mac-phys-footprint",
+    ]);
     expect(process.exitCode).toBe(1);
 
     const errorCalls = consoleErrorSpy.mock.calls.flat().join(" ");

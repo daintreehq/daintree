@@ -134,6 +134,10 @@ export async function activate(host: PluginHostApi): Promise<() => void> {
   // against the old origin. Subscribing must happen during activate().
   const disposeSettings = await host.settings
     .onDidChange<string>("instanceUrl", () => {
+      // Bump the generation now as well, so no caller joins a lookup started
+      // against the previous instance while the refresh below is pending; the
+      // second clear drops whatever was fetched during that refresh.
+      clearGitLabCaches();
       void getInstanceUrl()
         .catch(() => undefined)
         // Everything cached — tooltips, stats, avatars, the validated identity

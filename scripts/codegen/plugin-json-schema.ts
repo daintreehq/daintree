@@ -57,6 +57,7 @@ const UNENCODED_RULES = [
   "The reserved daintree.* publisher namespace is accepted only for built-in plugins.",
   "previewTools and guestAdapters are accepted only for built-in plugins, each id must be namespaced under the plugin's own name, and a preview tool's guestAdapter must name an adapter the same manifest declares.",
   "A command id may not collide with a built-in action id, and some built-in ids refuse plugin dispatch outright.",
+  "An agent's session-id resume must use {sessionId} exactly once across its args, and nowhere else; a project-scoped resume's args may not contain it. A sessionIdPattern must compile as a JavaScript regular expression with exactly one capture group.",
   "A tour's panelKind must name a declared panel; its chapter ids must be unique; every cue and caption must fall inside its chapter's duration; and a remote chapter audioUrl must be https on a host listed in that tour's audioHosts.",
 ];
 

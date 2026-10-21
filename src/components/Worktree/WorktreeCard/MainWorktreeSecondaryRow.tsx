@@ -4,7 +4,7 @@ import { BranchLabel } from "../BranchLabel";
 import { UpstreamSyncBadge } from "./UpstreamSyncBadge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip";
 import { FolderGit2 } from "lucide-react";
-import type { AggregateCounts } from "./MainWorktreeSummaryRows";
+import type { AggregateCounts } from "./aggregateCounts";
 import { pluralize } from "@/lib/pluralize";
 import { bucketCountPhrase } from "@/lib/agentStateVocabulary";
 
@@ -41,12 +41,7 @@ export function MainWorktreeSecondaryRow({
     // px-1 for the same reason as NonMainSecondaryRow — the main card's meta
     // line is the same tier and has to sit on the same x.
     <div className="flex items-center gap-2 mt-2.5 px-1" data-testid="main-worktree-meta-row">
-      <BranchLabel
-        label={branchLabel}
-        isActive={isActive}
-        isMuted={isMuted}
-        isMainWorktree={false}
-      />
+      <BranchLabel label={branchLabel} isActive={isActive} isMuted={isMuted} />
       {/* Always mounted: the badge decides whether it has anything to say, and
           a failed fetch is worth saying even with no counts — an
           empty line beside the branch otherwise reads as "in sync". */}

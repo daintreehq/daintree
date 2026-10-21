@@ -8,10 +8,11 @@ const storeMock = vi.hoisted(() => ({
   }),
 }));
 
-// getProjectById is consulted THREE times per close: the pre-revoke re-check,
-// the post-revoke re-check (both must see a still-eligible background project),
-// and the post-close PROJECT_UPDATED broadcast. Default it to a background
-// project idle well past the threshold.
+// getProjectById is consulted on every eligibility re-check in a close (before
+// and after the revoke, after the post-revoke snapshot, after the kill — all must
+// see a still-eligible background project) and once more for the post-close
+// PROJECT_UPDATED broadcast. Default it to a background project idle well past
+// the threshold.
 const projectStoreMock = vi.hoisted(() => ({
   getCurrentProjectId: vi.fn<() => string | null>(() => null),
   getAllProjects: vi.fn<() => Array<Record<string, unknown>>>(() => []),
@@ -840,6 +841,166 @@ describe("IdleBackgroundAutoCloseService", () => {
       const service = makeService();
       await runCheck(service);
       expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
+    });
+
+    describe("activation during the final awaits (#13570)", () => {
+      let activated = false;
+
+      function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+        let resolve!: (value: T) => void;
+        const promise = new Promise<T>((r) => {
+          resolve = r;
+        });
+        return { promise, resolve };
+      }
+
+      /** What a window switch does: PVM reports it, the row flips, lastOpened bumps. */
+      function activate(): void {
+        activated = true;
+        projectStoreMock.getProjectById.mockImplementation((id) => ({
+          id,
+          name: id,
+          path: `/projects/${id}`,
+          status: "active",
+          lastOpened: Date.now(),
+        }));
+      }
+
+      function makeActivatableService(): IdleBackgroundAutoCloseService {
+        activated = false;
+        const service = makeService();
+        service.setProjectViewManagersProvider(() => (activated ? [makePvm("proj-1")] : []));
+        return service;
+      }
+
+      function expectSurvived(): void {
+        expect(evictProjectRendererMock).not.toHaveBeenCalled();
+        expect(workspaceClientMock.evictProject).not.toHaveBeenCalled();
+        expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
+        expect(pluginLifecycleMock.notifyProjectPluginsClosed).not.toHaveBeenCalled();
+        expect(broadcastToRendererMock).not.toHaveBeenCalled();
+      }
+
+      it("survives when activated while the post-revoke terminal snapshot is in flight", async () => {
+        enable();
+        projectStoreMock.getAllProjects.mockReturnValue([makeIdleProject("proj-1")]);
+        const postRevoke = deferred<unknown[]>();
+        ptyClientMock.getAllTerminalsAsync
+          .mockResolvedValueOnce([])
+          .mockResolvedValueOnce([])
+          .mockReturnValueOnce(postRevoke.promise);
+        const service = makeActivatableService();
+
+        const sweep = runCheck(service);
+        await vi.waitFor(() => expect(ptyClientMock.getAllTerminalsAsync).toHaveBeenCalledTimes(3));
+        activate();
+        postRevoke.resolve([]);
+        await sweep;
+
+        expect(ptyClientMock.gracefulKillByProject).not.toHaveBeenCalled();
+        expectSurvived();
+      });
+
+      it("survives when activated while the graceful kill is in flight, keeping the hibernation markers", async () => {
+        enable();
+        projectStoreMock.getAllProjects.mockReturnValue([makeIdleProject("proj-1")]);
+        const kill = deferred<Array<{ id: string }>>();
+        ptyClientMock.gracefulKillByProject.mockReturnValueOnce(kill.promise);
+        const service = makeActivatableService();
+
+        const sweep = runCheck(service);
+        await vi.waitFor(() =>
+          expect(ptyClientMock.gracefulKillByProject).toHaveBeenCalledTimes(1)
+        );
+        activate();
+        kill.resolve([{ id: "t-killed" }]);
+        await sweep;
+
+        // The PTY is already gone, so its marker still lets the reopen restore it.
+        expect(writeHibernatedMarkerMock).toHaveBeenCalledWith("t-killed");
+        expectSurvived();
+      });
+
+      it("survives a lastOpened bump during the kill even before the row leaves background", async () => {
+        enable();
+        projectStoreMock.getAllProjects.mockReturnValue([makeIdleProject("proj-1")]);
+        const kill = deferred<Array<{ id: string }>>();
+        ptyClientMock.gracefulKillByProject.mockReturnValueOnce(kill.promise);
+        const service = makeActivatableService();
+
+        const sweep = runCheck(service);
+        await vi.waitFor(() =>
+          expect(ptyClientMock.gracefulKillByProject).toHaveBeenCalledTimes(1)
+        );
+        projectStoreMock.getProjectById.mockImplementation((id) => ({
+          id,
+          name: id,
+          path: `/projects/${id}`,
+          status: "background",
+          lastOpened: Date.now(),
+        }));
+        kill.resolve([]);
+        await sweep;
+
+        expectSurvived();
+      });
+
+      it("survives when only a window reports it active after the kill", async () => {
+        enable();
+        projectStoreMock.getAllProjects.mockReturnValue([makeIdleProject("proj-1")]);
+        const kill = deferred<Array<{ id: string }>>();
+        ptyClientMock.gracefulKillByProject.mockReturnValueOnce(kill.promise);
+        const service = makeActivatableService();
+
+        const sweep = runCheck(service);
+        await vi.waitFor(() =>
+          expect(ptyClientMock.gracefulKillByProject).toHaveBeenCalledTimes(1)
+        );
+        activated = true;
+        kill.resolve([]);
+        await sweep;
+
+        expectSurvived();
+      });
+
+      it("stops short of closing when auto-close is disabled during the kill", async () => {
+        enable();
+        projectStoreMock.getAllProjects.mockReturnValue([makeIdleProject("proj-1")]);
+        const kill = deferred<Array<{ id: string }>>();
+        ptyClientMock.gracefulKillByProject.mockReturnValueOnce(kill.promise);
+        const service = makeActivatableService();
+
+        const sweep = runCheck(service);
+        await vi.waitFor(() =>
+          expect(ptyClientMock.gracefulKillByProject).toHaveBeenCalledTimes(1)
+        );
+        storeBacking.idleBackgroundAutoClose = { enabled: false, thresholdMinutes: 15 };
+        kill.resolve([{ id: "t-killed" }]);
+        await sweep;
+
+        expect(writeHibernatedMarkerMock).toHaveBeenCalledWith("t-killed");
+        expectSurvived();
+      });
+
+      it("never starts the capture-revoke when activated during the first teardown snapshot", async () => {
+        enable();
+        projectStoreMock.getAllProjects.mockReturnValue([makeIdleProject("proj-1")]);
+        const firstRead = deferred<unknown[]>();
+        ptyClientMock.getAllTerminalsAsync
+          .mockResolvedValueOnce([])
+          .mockReturnValueOnce(firstRead.promise);
+        const service = makeActivatableService();
+
+        const sweep = runCheck(service);
+        await vi.waitFor(() => expect(ptyClientMock.getAllTerminalsAsync).toHaveBeenCalledTimes(2));
+        activate();
+        firstRead.resolve([]);
+        await sweep;
+
+        expect(helpSessionServiceMock.revokeByProjectId).not.toHaveBeenCalled();
+        expect(ptyClientMock.gracefulKillByProject).not.toHaveBeenCalled();
+        expectSurvived();
+      });
     });
   });
 

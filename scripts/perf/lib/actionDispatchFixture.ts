@@ -806,7 +806,7 @@ export interface KeybindingHarness {
 
 /** Identity of a binding as the resolver scans it: action, combo and scope. */
 function bindingKey(binding: KeybindingRow): string {
-  return `${binding.actionId} ${binding.combo} ${binding.scope}`;
+  return `${binding.actionId}\x00${binding.combo}\x00${binding.scope}`;
 }
 
 /**

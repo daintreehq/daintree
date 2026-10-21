@@ -184,7 +184,7 @@ describe("TerminalHandOverDialog", () => {
       />
     );
 
-    expect(screen.getByText("Hand 'Worker' to 'Coordinator'?")).toBeTruthy();
+    expect(document.body.textContent).toContain("Hand over Worker to Coordinator?");
     expect(document.body.textContent).toContain("Daintree doesn't filter what it sends");
     expect(document.body.textContent).toContain("can't close the terminal");
   });
@@ -230,7 +230,9 @@ describe("TerminalHandOverDialog", () => {
     fireEvent.click(screen.getByRole("button", { name: "Hand over terminal" }));
 
     await waitFor(() =>
-      expect(document.body.textContent).toContain("Already handed to Reviewer. Take it back first.")
+      expect(document.body.textContent).toContain(
+        "Already handed to Reviewer. Choose “Take back from Reviewer” in the terminal menu first."
+      )
     );
     expect(onClose).not.toHaveBeenCalled();
     // Nothing about asking again would change the answer, so it can't be sent.

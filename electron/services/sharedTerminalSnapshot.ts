@@ -38,15 +38,16 @@ function isFresh(sentAt: number, now: number): boolean {
 
 /**
  * One `get-all-terminals` fan-out shared by the background pollers
- * (`ProjectStatsService`, `FleetSnapshotService`), which used to each fan out
- * on the same aligned 5s tick and again 200ms after every agent transition.
+ * (`ProjectStatsService`, `FleetSnapshotService`, the host summary), which used
+ * to each fan out on the same aligned 5s tick and again 200ms after every agent
+ * transition.
  *
  * Age is measured from when a request was SENT, for settled and in-flight
  * reads alike: a request held up by a slow shard is as old as it was when it
  * left, so a later poll starts its own rather than inheriting a stale sample.
  *
- * Only for callers that tolerate a read up to {@link SNAPSHOT_TTL_MS} old and
- * that invalidate on the events they react to. Anything reading straight after
+ * Only for callers that tolerate a read up to {@link SNAPSHOT_TTL_MS} old, and
+ * that invalidate on the events they react to, if they react to any. Anything reading straight after
  * a mutation it made itself must call `getAllTerminalsWithCompletenessAsync`
  * directly — joining a request that left before the mutation would hand it the
  * pre-mutation world.

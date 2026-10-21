@@ -9,7 +9,13 @@ import {
 export async function resolveWorktreePattern(rootPath: string): Promise<string> {
   const project = await projectStore.getProjectByPath(rootPath);
   if (project) {
-    const settings = await projectStore.getProjectSettings(project.id);
+    const settings = await projectStore.getProjectSettings(project.id).catch((error: unknown) => {
+      console.warn(
+        "[worktreePattern] Couldn't read project settings; using the global pattern:",
+        error
+      );
+      return null;
+    });
     if (settings?.worktreePathPattern) {
       const validation = validatePathPattern(settings.worktreePathPattern);
       if (validation.valid) {

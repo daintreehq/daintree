@@ -148,6 +148,10 @@ function installElectron(
     ),
     restoreReads: vi.fn(async (_restores: unknown[]) => {}),
     runBranch: vi.fn((runId: string, _target: { spawnedAt: number }) => branchOf(runId)),
+    searchScreens: vi.fn(
+      async (_targets: Array<{ runId: string; spawnedAt: number; terms: string[] }>) =>
+        [] as string[]
+    ),
     captureBackdrop: vi.fn(async () => null),
     rename: vi.fn(async (_runId: string, _target: { spawnedAt: number }, _title: string) => {}),
     setMode: vi.fn(async (mode: CanopySnapshot["mode"], _expectRevision?: number) => ({
@@ -282,11 +286,185 @@ function cards(container: HTMLElement) {
   return [...container.ownerDocument.querySelectorAll<HTMLElement>("[data-canopy-card]")];
 }
 
+function searchInput() {
+  return document.querySelector<HTMLInputElement>(
+    "[data-testid=canopy-dialog] input[role=combobox]"
+  )!;
+}
+
+function selectedRun(container: HTMLElement) {
+  return cards(container)
+    .find((card) => card.getAttribute("aria-selected") === "true")
+    ?.id.replace(/^canopy-card-/, "");
+}
+
+/** Past the panel's wait on the typing before it reads terminals for a search. */
+const SCREEN_SEARCH_SETTLE_MS = 250;
+
+async function screenSearchSettled() {
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, SCREEN_SEARCH_SETTLE_MS));
+  });
+}
+
+async function search(value: string) {
+  await act(async () => {
+    fireEvent.change(searchInput(), { target: { value } });
+  });
+}
+
 function terminalInput(container: HTMLElement) {
   return container.ownerDocument.querySelector<HTMLTextAreaElement>(
     "[data-canopy-terminal] textarea"
   )!;
 }
+
+describe("CanopyView search", () => {
+  it("keeps every plain key typed into the search from acting on an agent", async () => {
+    const snapshot = {
+      ...canopySnapshot,
+      cards: [
+        {
+          ...stuckCard("waiting"),
+          category: "approval" as const,
+          wordsCategory: "approval" as const,
+          question: "Do you want to proceed?",
+          options: ["Yes", "No"],
+          risk: "none" as const,
+        },
+      ],
+      reads: [unreadMark("waiting", 2)],
+    };
+    useCanopyStore.setState({ snapshot });
+    const canopy = installElectron(snapshot);
+    const answer = vi.fn(async () => {});
+    Object.assign(canopy, { answer });
+    const { container } = render(<CanopyView />);
+    await frames();
+    const input = searchInput();
+    expect(selectedRun(container)).toBe("waiting");
+    for (const key of ["1", "2", "y", "Y", "r", "e", "u", "z", "j", "k"]) {
+      fireEvent.keyDown(input, { key });
+    }
+    expect(canopy.archive).not.toHaveBeenCalled();
+    expect(canopy.setRead).not.toHaveBeenCalled();
+    expect(canopy.trash).not.toHaveBeenCalled();
+    expect(dispatchMock).not.toHaveBeenCalled();
+    expect(answer).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(input);
+
+    // The same key on the row answers: the search alone held it back.
+    fireEvent.keyDown(input, { key: "Tab" });
+    await act(async () => {
+      fireEvent.keyDown(document.activeElement!, { key: "y" });
+    });
+    expect(answer).toHaveBeenCalled();
+  });
+
+  it("narrows the list to the runs a query names, selecting the top match", async () => {
+    const snapshot = { ...canopySnapshot, cards: [stuckCard("working")] };
+    useCanopyStore.setState({ snapshot });
+    installElectron(snapshot);
+    const { container } = render(<CanopyView />);
+    await frames();
+    expect(cards(container)).toHaveLength(3);
+
+    await search("FAILING install");
+    expect(cards(container).map((card) => card.id)).toEqual(["canopy-card-working"]);
+    expect(selectedRun(container)).toBe("working");
+    expect(liveRun(container)).toBe("working");
+
+    await search("failing nowhere");
+    expect(cards(container)).toHaveLength(0);
+    expect(document.body.textContent).toContain("No agent matches");
+
+    // Escape clears the search before it closes anything.
+    await act(async () => {
+      fireEvent.keyDown(searchInput(), { key: "Escape" });
+    });
+    expect(searchInput().value).toBe("");
+    expect(useCanopyStore.getState().isOpen).toBe(true);
+    expect(cards(container)).toHaveLength(3);
+  });
+
+  it("asks main only for the words a run doesn't hold, and lists what its terminal does", async () => {
+    const canopy = installElectron();
+    canopy.searchScreens.mockImplementation(async (targets) =>
+      targets.filter((target) => target.runId === "asking").map((target) => target.runId)
+    );
+    const { container } = render(<CanopyView />);
+    await frames();
+
+    await search("app segfault");
+    // Not on every keystroke: the terminals are read once the typing rests.
+    expect(canopy.searchScreens).not.toHaveBeenCalled();
+    expect(cards(container)).toHaveLength(0);
+    await screenSearchSettled();
+    expect(canopy.searchScreens).toHaveBeenCalledTimes(1);
+    const targets = canopy.searchScreens.mock.calls[0]![0];
+    // "app" is every run's project: only the word nothing on them holds is asked.
+    expect(targets.map((target) => target.terms)).toEqual([
+      ["segfault"],
+      ["segfault"],
+      ["segfault"],
+    ]);
+    expect(cards(container).map((card) => card.id)).toEqual(["canopy-card-asking"]);
+    expect(selectedRun(container)).toBe("asking");
+  });
+
+  it("selects the top terminal match, wherever the selection was before", async () => {
+    const canopy = installElectron();
+    canopy.searchScreens.mockImplementation(async (targets) =>
+      targets.map((target) => target.runId).filter((runId) => runId !== "waiting")
+    );
+    const { container } = render(<CanopyView />);
+    await frames();
+    const input = searchInput();
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    expect(selectedRun(container)).toBe(cards(container)[2]!.id.replace(/^canopy-card-/, ""));
+
+    await search("segfault");
+    await screenSearchSettled();
+    const shown = cards(container);
+    expect(shown).toHaveLength(2);
+    expect(selectedRun(container)).toBe(shown[0]!.id.replace(/^canopy-card-/, ""));
+  });
+
+  it("asks nothing of a terminal for words past what main takes", async () => {
+    const canopy = installElectron();
+    const { container } = render(<CanopyView />);
+    await frames();
+    await search(Array.from({ length: 17 }, (_, index) => `word${index}`).join(" "));
+    await screenSearchSettled();
+    expect(canopy.searchScreens).not.toHaveBeenCalled();
+    expect(cards(container)).toHaveLength(0);
+  });
+
+  it("comes back to the search with / from a row", async () => {
+    installElectron();
+    const { container } = render(<CanopyView />);
+    await frames();
+    const input = searchInput();
+    fireEvent.keyDown(input, { key: "Tab" });
+    const row = cards(container)[0]!;
+    expect(document.activeElement).toBe(row);
+    fireEvent.keyDown(row, { key: "/" });
+    expect(document.activeElement).toBe(input);
+  });
+
+  it("starts each opening with an empty search", async () => {
+    installElectron();
+    const { container } = render(<CanopyView />);
+    await frames();
+    await search("waiting");
+    act(() => useCanopyStore.getState().close());
+    act(() => useCanopyStore.setState({ isOpen: true }));
+    await frames();
+    expect(searchInput().value).toBe("");
+    expect(cards(container)).toHaveLength(3);
+  });
+});
 
 describe("CanopyView", () => {
   it("reads nothing until the user turns it on, showing a demo and what it sends", async () => {
@@ -818,17 +996,47 @@ describe("CanopyView", () => {
     act(() => useCanopyStore.getState().setScope("all"));
   });
 
-  it("lands on the most urgent card and moves between cards with the arrows", async () => {
+  it("lands in the search with the most urgent card selected, the arrows moving it", async () => {
     installElectron();
     const { container } = render(<CanopyView />);
     await frames();
     const [first, second] = cards(container);
-    expect(document.activeElement).toBe(first);
+    const input = searchInput();
+    expect(document.activeElement).toBe(input);
+    expect(first!.getAttribute("aria-selected")).toBe("true");
+    expect(input.getAttribute("aria-activedescendant")).toBe(first!.id);
 
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(input);
+    expect(second!.getAttribute("aria-selected")).toBe("true");
+    expect(input.getAttribute("aria-activedescendant")).toBe(second!.id);
+    expect(liveRun(container)).toBe(second!.getAttribute("id")!.replace(/^canopy-card-/, ""));
+    fireEvent.keyDown(input, { key: "ArrowUp" });
+    expect(first!.getAttribute("aria-selected")).toBe("true");
+
+    // Tab takes the keyboard down to the selected row, where the arrows move it.
+    fireEvent.keyDown(input, { key: "Tab" });
+    expect(document.activeElement).toBe(first);
     fireEvent.keyDown(first!, { key: "ArrowDown" });
     expect(document.activeElement).toBe(second);
     fireEvent.keyDown(second!, { key: "ArrowUp" });
     expect(document.activeElement).toBe(first);
+    // Up off the top of the list is back in the search.
+    fireEvent.keyDown(first!, { key: "ArrowUp" });
+    expect(document.activeElement).toBe(input);
+  });
+
+  it("names the project on every row, though every run is in the same one", async () => {
+    installElectron();
+    const { container } = render(<CanopyView />);
+    await frames();
+    const rows = cards(container);
+    expect(rows.length).toBeGreaterThan(1);
+    for (const row of rows) {
+      const meta = row.querySelector("[data-canopy-meta]");
+      expect(meta?.textContent).toContain("🌳");
+      expect(meta?.textContent).toContain("app");
+    }
   });
 
   it("says above the pane which project and branch the selected agent is in", async () => {
@@ -1275,6 +1483,8 @@ describe("CanopyView", () => {
     canopy.trash.mockResolvedValue(7);
     const { container } = render(<CanopyView />);
     await frames();
+    // Down from the search to the row, where Z undoes once the row is gone.
+    fireEvent.keyDown(searchInput(), { key: "Tab" });
     fireEvent.keyDown(cards(container)[0]!, { key: "Backspace", metaKey: true, ctrlKey: true });
     // The first press only arms it.
     expect(canopy.trash).not.toHaveBeenCalled();

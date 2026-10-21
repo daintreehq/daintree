@@ -16,6 +16,7 @@ import { getRendererTerminalDiagnosticsSamples } from "./RendererTerminalDiagnos
 import type { HandlerDependencies } from "../ipc/types.js";
 import { cliSpawnTarget } from "../utils/windowsCliSpawn.js";
 import { findWindowsCommand } from "../utils/windowsExecutable.js";
+import { getSanitizedProcessEnv } from "../utils/gitEnv.js";
 import type {
   WhySlowFocusThrottleSnapshot,
   WhySlowMemorySnapshot,
@@ -156,14 +157,15 @@ function truncateDeep(value: unknown): unknown {
 async function runCommand(
   cmd: string,
   args: string[],
-  timeoutMs = SECTION_TIMEOUT_MS
+  timeoutMs = SECTION_TIMEOUT_MS,
+  baseEnv: NodeJS.ProcessEnv = process.env
 ): Promise<string | null> {
   try {
     const target = await cliSpawnTarget(cmd, args);
     const { stdout } = await execFileAsync(target.command, target.args, {
       encoding: "utf8",
       timeout: timeoutMs,
-      env: { ...process.env, ...target.env },
+      env: { ...baseEnv, ...target.env },
       windowsHide: true,
       windowsVerbatimArguments: target.windowsVerbatimArguments,
     });
@@ -352,7 +354,12 @@ async function collectTools() {
       if (!path) return { tool, available: false, path: null, version: null };
 
       // The file just found, so the version probe does not search PATH again.
-      const version = await runCommand(isWindows ? path : tool, ["--version"], 3000);
+      const version = await runCommand(
+        isWindows ? path : tool,
+        ["--version"],
+        3000,
+        tool === "git" ? getSanitizedProcessEnv() : process.env
+      );
       return {
         tool,
         available: true,
@@ -373,10 +380,18 @@ async function collectTools() {
   );
 }
 
+// Reports what Daintree's own git sees, so inherited GIT_DIR/GIT_CONFIG_* are
+// dropped here as they are for every other git the app runs.
 async function collectGit() {
   const result: Record<string, unknown> = {};
+  const env = getSanitizedProcessEnv();
 
-  const configOutput = await runCommand("git", ["config", "--list", "--show-origin"]);
+  const configOutput = await runCommand(
+    "git",
+    ["config", "--list", "--show-origin"],
+    SECTION_TIMEOUT_MS,
+    env
+  );
   if (configOutput) {
     const lines = configOutput.split("\n").filter(Boolean);
     const safeConfig: string[] = [];
@@ -397,7 +412,7 @@ async function collectGit() {
     result.config = { error: "Failed to get git config" };
   }
 
-  const remoteOutput = await runCommand("git", ["remote", "-v"]);
+  const remoteOutput = await runCommand("git", ["remote", "-v"], SECTION_TIMEOUT_MS, env);
   if (remoteOutput) {
     result.remotes = remoteOutput
       .split("\n")
@@ -405,7 +420,7 @@ async function collectGit() {
       .map((line) => sanitizeString(line));
   }
 
-  const versionOutput = await runCommand("git", ["--version"]);
+  const versionOutput = await runCommand("git", ["--version"], SECTION_TIMEOUT_MS, env);
   result.version = versionOutput;
 
   return result;
@@ -601,12 +616,19 @@ async function collectProjectViews(deps: HandlerDependencies) {
   }
 }
 
-// Per-renderer Blink heap and event-loop-utilization samples, keyed by
-// webContentsId. Already-collected module-level maps — no new sampling loop.
-// Cross-reference webContentsId with `projectViews` to attribute to a project.
+// Per-renderer Blink heap, long-animation-frame blocking and input-blocking
+// state, keyed by webContentsId. Already-collected module-level maps — no new
+// sampling loop, and nothing asks the renderer, which may be the thing that
+// stopped answering. Cross-reference webContentsId with `projectViews` to
+// attribute to a project. `loafBlocking.blockedRatio` is a floor on how busy a
+// view was, not event-loop utilisation; `longestFrameMs` shows a stall better.
+// An `inputBlocking` entry whose `ageMs` is well past the 30 s sample cadence
+// for an active view means the view stopped answering samples.
 async function collectRendererMemory() {
   try {
-    const { getBlinkSamples, getEluSamples } = await import("./ProcessMemoryMonitor.js");
+    const { getBlinkSamples, getEluSamples, getInputBlockingRecords, getUnresponsiveSince } =
+      await import("./ProcessMemoryMonitor.js");
+    const now = Date.now();
     const blink = Array.from(getBlinkSamples().entries()).map(([webContentsId, s]) => ({
       webContentsId,
       // Electron's BlinkMemoryInfo reports KB, not bytes.
@@ -614,14 +636,32 @@ async function collectRendererMemory() {
       totalKb: s.total,
       timestamp: s.timestamp,
     }));
-    const elu = Array.from(getEluSamples().entries()).map(([webContentsId, s]) => ({
+    const loafBlocking = Array.from(getEluSamples().entries()).map(([webContentsId, s]) => ({
       webContentsId,
       blockingDurationMs: Math.round(s.blockingDurationMs),
       sampleWindowMs: s.sampleWindowMs,
-      ratio: Math.round(s.ratio * 100) / 100,
+      blockedRatio: Math.round(s.blockedRatio * 100) / 100,
+      longestFrameMs: s.longestFrameMs,
+      longestBlockingMs: s.longestBlockingMs,
       timestamp: s.timestamp,
     }));
-    return { blink, elu };
+    const records = getInputBlockingRecords();
+    const hangs = getUnresponsiveSince();
+    const inputBlocking = Array.from(new Set([...records.keys(), ...hangs.keys()])).map(
+      (webContentsId) => {
+        const record = records.get(webContentsId);
+        const hangStartedAt = hangs.get(webContentsId);
+        return {
+          webContentsId,
+          capturedAt: record?.capturedAt ?? null,
+          ageMs: record ? Math.max(0, now - record.capturedAt) : null,
+          unresponsiveSince: hangStartedAt ?? null,
+          unresponsiveForMs: hangStartedAt === undefined ? null : Math.max(0, now - hangStartedAt),
+          snapshot: record?.snapshot ?? null,
+        };
+      }
+    );
+    return { blink, loafBlocking, inputBlocking };
   } catch {
     return { error: "Failed to collect renderer memory" };
   }
@@ -847,11 +887,13 @@ async function collectWhySlowMemory(ptyClient?: PtyClient): Promise<WhySlowMemor
       }));
     return {
       appMemoryMb: snapshot.electron.available ? snapshot.electron.totalWorkingSetMb : null,
+      appMemorySource: snapshot.electron.memorySource,
       terminalWorkloads: {
         available: workloads.available,
         stale: workloads.stale,
         ageMs: workloads.ageMs,
         totalMemoryMb: workloads.totalMemoryMb,
+        memorySource: workloads.memorySource,
         processCount: workloads.processCount,
         terminalCount: workloads.terminalCount,
         topProjects,

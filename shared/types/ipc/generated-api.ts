@@ -86,6 +86,9 @@ export interface GeneratedElectronAPI {
     runBranch(
       ...args: IpcInvokeMap["canopy:run-branch"]["args"]
     ): Promise<IpcInvokeMap["canopy:run-branch"]["result"]>;
+    searchScreens(
+      ...args: IpcInvokeMap["canopy:search-screens"]["args"]
+    ): Promise<IpcInvokeMap["canopy:search-screens"]["result"]>;
     setActive(
       ...args: IpcInvokeMap["canopy:set-active"]["args"]
     ): Promise<IpcInvokeMap["canopy:set-active"]["result"]>;
@@ -230,6 +233,23 @@ export interface GeneratedElectronAPI {
     getRecords(
       ...args: IpcInvokeMap["copy-tree-history:get-records"]["args"]
     ): Promise<IpcInvokeMap["copy-tree-history:get-records"]["result"]>;
+  };
+  deviceAnswer: {
+    cancelPairingCode(
+      ...args: IpcInvokeMap["device-answer:cancel-pairing-code"]["args"]
+    ): Promise<IpcInvokeMap["device-answer:cancel-pairing-code"]["result"]>;
+    createPairingCode(
+      ...args: IpcInvokeMap["device-answer:create-pairing-code"]["args"]
+    ): Promise<IpcInvokeMap["device-answer:create-pairing-code"]["result"]>;
+    getStatus(
+      ...args: IpcInvokeMap["device-answer:get-status"]["args"]
+    ): Promise<IpcInvokeMap["device-answer:get-status"]["result"]>;
+    revokeDevice(
+      ...args: IpcInvokeMap["device-answer:revoke-device"]["args"]
+    ): Promise<IpcInvokeMap["device-answer:revoke-device"]["result"]>;
+    setEnabled(
+      ...args: IpcInvokeMap["device-answer:set-enabled"]["args"]
+    ): Promise<IpcInvokeMap["device-answer:set-enabled"]["result"]>;
   };
   devPreview: {
     ensure(
@@ -1340,6 +1360,9 @@ export interface GeneratedElectronAPI {
     getWhySlowSnapshot(
       ...args: IpcInvokeMap["system:get-why-slow-snapshot"]["args"]
     ): Promise<IpcInvokeMap["system:get-why-slow-snapshot"]["result"]>;
+    isMemoryPressureCritical(
+      ...args: IpcInvokeMap["system:is-memory-pressure-critical"]["args"]
+    ): Promise<IpcInvokeMap["system:is-memory-pressure-critical"]["result"]>;
     reportTerminalRendererDiagnostics(
       ...args: IpcInvokeMap["system:report-terminal-renderer-diagnostics"]["args"]
     ): Promise<IpcInvokeMap["system:report-terminal-renderer-diagnostics"]["result"]>;
@@ -1356,6 +1379,9 @@ export interface GeneratedElectronAPI {
     ): Promise<IpcInvokeMap["system-sleep:reset"]["result"]>;
   };
   webview: {
+    captureElement(
+      ...args: IpcInvokeMap["webview:capture-element"]["args"]
+    ): Promise<IpcInvokeMap["webview:capture-element"]["result"]>;
     captureScreenshot(
       ...args: IpcInvokeMap["webview:capture-screenshot"]["args"]
     ): Promise<IpcInvokeMap["webview:capture-screenshot"]["result"]>;

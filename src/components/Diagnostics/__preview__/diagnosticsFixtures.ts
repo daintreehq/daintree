@@ -213,6 +213,71 @@ export const LOGS: LogEntry[] = (() => {
 
 export const LOG_SOURCES = SOURCES;
 
+/**
+ * One of each row shape the log list draws, short enough to fit a tall dock:
+ * a message long enough to wrap, a row with no source, a collapsed burst, and
+ * an expanded row whose context is long enough to scroll.
+ */
+export const LOG_ROWS: LogEntry[] = [
+  {
+    id: "row-debug",
+    timestamp: at(95),
+    level: "debug",
+    source: "workspace-host",
+    message: "Polling worktree status every 5000ms",
+  },
+  {
+    id: "row-info",
+    timestamp: at(90),
+    level: "info",
+    source: "mcp-server",
+    message: "MCP listener started on 127.0.0.1:47219",
+    context: { port: 47219, tier: "workspace", sessions: 2 },
+  },
+  {
+    id: "row-nosource",
+    timestamp: at(80),
+    level: "info",
+    message: "Window focused after 4m idle",
+  },
+  {
+    id: "row-wrap",
+    timestamp: at(70),
+    level: "warn",
+    source: "pty-host",
+    message:
+      "Backpressure: paused term-9c1e (1.2 MB queued) because the renderer stopped acknowledging output for 3200ms while the window was occluded; resuming once the queue drains below 256 KB",
+    context: { terminalId: "term-9c1e", queuedBytes: 1258291 },
+  },
+  {
+    id: "row-expanded",
+    timestamp: at(60),
+    level: "error",
+    source: "git",
+    message: "git fetch failed: could not read Username for 'https://github.com'",
+    context: {
+      exitCode: 128,
+      command: "git fetch --prune origin",
+      cwd: "/Users/dev/acme/.worktrees/feature-payments-v2",
+      stderr: "fatal: could not read Username for 'https://github.com': terminal prompts disabled",
+    },
+  },
+  ...Array.from({ length: 12 }, (_, i): LogEntry => ({
+    id: `row-burst-${i}`,
+    timestamp: at(30 - i),
+    level: "warn",
+    source: "renderer",
+    message: "ResizeObserver loop completed with undelivered notifications",
+  })),
+  {
+    id: "row-tail",
+    timestamp: at(5),
+    level: "info",
+    source: "plugins",
+    message: "Activated plugin github (builtin) in 42ms",
+  },
+];
+
 const EVENT_TYPES: Array<[string, EventRecord["category"], Record<string, unknown>]> = [
   [
     "agent:state-changed",
@@ -414,11 +479,13 @@ function snapshot(overrides: Partial<WhySlowSnapshot> = {}): WhySlowSnapshot {
     workers: { subsystemCount: 3, aliveWorkerCount: 3, totalQueueDepth: 0, degraded: [] },
     memory: {
       appMemoryMb: 612,
+      appMemorySource: "footprint",
       terminalWorkloads: {
         available: true,
         stale: false,
         ageMs: 4000,
         totalMemoryMb: 1840,
+        memorySource: "footprint",
         processCount: 23,
         terminalCount: 6,
         topProjects: [],
@@ -489,11 +556,13 @@ export const WHY_SLOW_PRESSURE = snapshot({
   },
   memory: {
     appMemoryMb: 3120,
+    appMemorySource: "footprint",
     terminalWorkloads: {
       available: true,
       stale: true,
       ageMs: 95_000,
       totalMemoryMb: 9310,
+      memorySource: "footprint",
       processCount: 142,
       terminalCount: 17,
       topProjects: [],
@@ -547,6 +616,12 @@ export const DIAGNOSTICS_FIXTURES: Record<string, DiagnosticsFixture> = {
     what: "filter matches nothing",
     logs: LOGS,
     logFilters: { search: "kubernetes" },
+  },
+  "logs-rows": {
+    tab: "logs",
+    what: "one of each row shape, one expanded",
+    logs: LOG_ROWS,
+    expandLogId: "row-expanded",
   },
   "events-empty": { tab: "events", what: "no events", events: [] },
   "events-populated": {

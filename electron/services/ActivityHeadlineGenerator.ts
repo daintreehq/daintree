@@ -23,14 +23,17 @@ const COMMAND_PATTERNS: Array<{ pattern: RegExp; headline: string }> = [
     headline: "Installing dependencies",
   },
   {
-    pattern: /^npm\s+test|^yarn\s+test|^pnpm\s+test|^jest|^vitest|^mocha/i,
+    pattern: /^npm\s+test|^yarn\s+(?:run\s+)?test|^pnpm\s+test|^jest|^vitest|^mocha/i,
     headline: "Running tests",
   },
   {
-    pattern: /^npm\s+run\s+build|^yarn\s+build|^pnpm\s+build|^vite\s+build|^webpack/i,
+    pattern: /^npm\s+run\s+build|^yarn\s+(?:run\s+)?build|^pnpm\s+build|^vite\s+build|^webpack/i,
     headline: "Building project",
   },
-  { pattern: /^npm\s+run\s+dev|^yarn\s+dev|^pnpm\s+dev|^vite/i, headline: "Starting dev server" },
+  {
+    pattern: /^npm\s+run\s+dev|^yarn\s+(?:run\s+)?dev|^pnpm\s+dev|^vite/i,
+    headline: "Starting dev server",
+  },
   { pattern: /^npm\s+run\s+lint|^eslint|^prettier/i, headline: "Running linter" },
   { pattern: /^git\s+clone/i, headline: "Cloning repository" },
   { pattern: /^git\s+push/i, headline: "Pushing changes" },

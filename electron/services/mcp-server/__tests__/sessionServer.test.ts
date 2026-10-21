@@ -1858,26 +1858,29 @@ describe("project.runCommand short-circuit (#13495)", () => {
     });
   }
 
-  it("runs in main for Daintree's own assistant at the full tier", async () => {
-    const handleProjectRunCommand = vi.fn().mockResolvedValue(ranResult);
-    const dispatchAction = vi.fn();
-    const result = await call(
-      fakeDeps({
-        sessionStore: storeWithOrigin("full", "help"),
-        handleProjectRunCommand,
-        dispatchAction,
-      })
-    );
+  it.each(["core", "full"] as const)(
+    "runs in main for Daintree's own assistant at the %s tier",
+    async (tier) => {
+      const handleProjectRunCommand = vi.fn().mockResolvedValue(ranResult);
+      const dispatchAction = vi.fn();
+      const result = await call(
+        fakeDeps({
+          sessionStore: storeWithOrigin(tier, "help"),
+          handleProjectRunCommand,
+          dispatchAction,
+        })
+      );
 
-    expect(dispatchAction).not.toHaveBeenCalled();
-    expect(handleProjectRunCommand.mock.calls[0]?.[0]).toEqual({
-      projectId: "proj-1",
-      command: "git status",
-    });
-    expect(handleProjectRunCommand.mock.calls[0]?.[1]).toBeInstanceOf(AbortSignal);
-    expect(result.isError).not.toBe(true);
-    expect(result.structuredContent).toEqual(ranResult);
-  });
+      expect(dispatchAction).not.toHaveBeenCalled();
+      expect(handleProjectRunCommand.mock.calls[0]?.[0]).toEqual({
+        projectId: "proj-1",
+        command: "git status",
+      });
+      expect(handleProjectRunCommand.mock.calls[0]?.[1]).toBeInstanceOf(AbortSignal);
+      expect(result.isError).not.toBe(true);
+      expect(result.structuredContent).toEqual(ranResult);
+    }
+  );
 
   it("returns a non-zero exit as a result, not a tool error", async () => {
     const handleProjectRunCommand = vi
@@ -1901,19 +1904,23 @@ describe("project.runCommand short-circuit (#13495)", () => {
     expect(handleProjectRunCommand).not.toHaveBeenCalled();
   });
 
-  it("refuses the assistant at the core tier even when a grant admits the call", async () => {
+  // A pane's grant is reachable and its tier is an approval line (#12692), so
+  // this is the caller a grant or an ask would most plausibly let through.
+  it("refuses a worker pane even when a grant admits the call, and never asks", async () => {
     const handleProjectRunCommand = vi.fn().mockResolvedValue(ranResult);
-    const sessionStore = storeWithOrigin("core", "help");
+    const requestApproval = vi.fn();
+    const sessionStore = storeWithOrigin("core", "external");
     sessionStore.grantCache.issueGrant("session-run-command", "project.runCommand");
-    const result = await call(fakeDeps({ sessionStore, handleProjectRunCommand }));
+    const result = await call(fakeDeps({ sessionStore, handleProjectRunCommand, requestApproval }));
 
     expect(toolErrorPayload(result).code).toBe(TIER_NOT_PERMITTED_CODE);
+    expect(requestApproval).not.toHaveBeenCalled();
     expect(handleProjectRunCommand).not.toHaveBeenCalled();
   });
 
   it("spends no grant's use on a caller it refuses", async () => {
     const handleProjectRunCommand = vi.fn().mockResolvedValue(ranResult);
-    const sessionStore = storeWithOrigin("core", "help");
+    const sessionStore = storeWithOrigin("core", "external");
     sessionStore.grantCache.issueGrant("session-run-command", "project.runCommand");
     sessionStore.grantCache.issueNativeGrant({
       sessionId: "session-run-command",
@@ -8005,6 +8012,7 @@ describe("session-scoped resource ownership (#11909)", () => {
       makeManifestEntry("terminal.new"),
       { ...makeManifestEntry("terminal.closeOwned"), kind: "command", danger: "safe" as const },
       { ...makeManifestEntry("terminal.revealOwned"), kind: "command", danger: "safe" as const },
+      { ...makeManifestEntry("terminal.placeOwned"), kind: "command", danger: "safe" as const },
       {
         ...makeManifestEntry("terminal.interruptOwned"),
         kind: "command",
@@ -8574,6 +8582,92 @@ describe("session-scoped resource ownership (#11909)", () => {
       expect(dispatchAction).not.toHaveBeenCalled();
     });
   });
+  describe("terminal.placeOwned (#13662)", () => {
+    const PLACE_RESULT = { terminalId: "terminal-1", location: "background", transitioned: true };
+
+    function placeHarness(sessionId: string) {
+      const h = harness(sessionId, {
+        "terminal.placeOwned": { result: { ok: true, result: PLACE_RESULT } },
+      });
+      h.store.resourceOwnership.record(sessionId, [{ kind: "terminal", id: "terminal-1" }]);
+      return h;
+    }
+
+    // The renderer definition is the placement itself, so the gate dispatches
+    // the same id back — with only the id and destination, so nothing the
+    // caller adds (a focus flag, a confirmation) reaches it.
+    it("dispatches itself with only the id and destination", async () => {
+      const { server, dispatchAction } = placeHarness("s-place");
+
+      const result = await callTool(server, {
+        name: "terminal.placeOwned",
+        arguments: { terminalId: "terminal-1", location: "background", focus: true },
+      });
+
+      expect(result.isError).toBeUndefined();
+      expect(dispatchAction).toHaveBeenCalledWith(
+        "terminal.placeOwned",
+        { terminalId: "terminal-1", location: "background" },
+        expect.anything()
+      );
+      expect(payloadOf<{ location: string }>(result).location).toBe("background");
+    });
+
+    it("refuses a panel the session did not create, without dispatching", async () => {
+      const { store, server, dispatchAction } = placeHarness("s-place-foreign");
+      store.resourceOwnership.record("other-session", [
+        { kind: "terminal", id: "terminal-theirs" },
+      ]);
+
+      const result = await callTool(server, {
+        name: "terminal.placeOwned",
+        arguments: { terminalId: "terminal-theirs", location: "background" },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(errorText(result)).toContain("RESOURCE_NOT_OWNED");
+      expect(dispatchAction).not.toHaveBeenCalled();
+    });
+
+    // Parking a seat is not the end of it: the session brings it back later,
+    // so each identical call must reach the renderer rather than being served
+    // from a dedup entry, and the record has to survive the placement.
+    it("redispatches an identical placement and keeps ownership", async () => {
+      const { store, server, dispatchAction } = placeHarness("s-place-twice");
+      const args = {
+        name: "terminal.placeOwned",
+        arguments: { terminalId: "terminal-1", location: "background" },
+      };
+
+      const first = await callTool(server, args);
+      const second = await callTool(server, args);
+
+      expect(first.isError).toBeUndefined();
+      expect(second.isError).toBeUndefined();
+      expect(
+        dispatchAction.mock.calls.filter((c: unknown[]) => c[0] === "terminal.placeOwned")
+      ).toHaveLength(2);
+      expect(store.resourceOwnership.owns("s-place-twice", "terminal", "terminal-1")).toBe(true);
+    });
+
+    // A placement receipt names no closed panels, so it cannot show on its own
+    // that the entry keeps its record; a receipt shaped like a close would
+    // release it under `releasesOwnership: true`.
+    it("keeps the record even when the result looks like a close", async () => {
+      const { store, server } = harness("s-place-release", {
+        "terminal.placeOwned": { result: { ok: true, result: { closedIds: ["terminal-1"] } } },
+      });
+      store.resourceOwnership.record("s-place-release", [{ kind: "terminal", id: "terminal-1" }]);
+
+      await callTool(server, {
+        name: "terminal.placeOwned",
+        arguments: { terminalId: "terminal-1", location: "grid" },
+      });
+
+      expect(store.resourceOwnership.owns("s-place-release", "terminal", "terminal-1")).toBe(true);
+    });
+  });
+
   describe("terminal.readLastMessageOwned (#12479)", () => {
     const READ_RESULT: AgentLastMessageResult = {
       status: "ok",
@@ -10546,6 +10640,7 @@ describe("session-scoped resource ownership (#11909)", () => {
         ["terminal.interruptOwned", {}],
         ["terminal.injectOwned", {}],
         ["terminal.revealOwned", {}],
+        ["terminal.placeOwned", { location: "dock" }],
         ["terminal.readLastMessageOwned", {}],
       ])("names the grant path when %s refuses a pane", async (name, extra) => {
         const store = makeStore();
@@ -12315,6 +12410,7 @@ describe("session-scoped ownership note for api-key callers (#12987)", () => {
     return [
       owned("terminal.closeOwned"),
       owned("terminal.revealOwned"),
+      owned("terminal.placeOwned"),
       owned("terminal.interruptOwned"),
       owned("terminal.sendCommandOwned"),
       owned("terminal.injectOwned"),
@@ -12398,6 +12494,7 @@ describe("session-scoped ownership note for api-key callers (#12987)", () => {
   const OWNED_CALLS: Array<[string, Record<string, unknown>]> = [
     ["terminal.closeOwned", { terminalId: "t-users" }],
     ["terminal.revealOwned", { terminalId: "t-users" }],
+    ["terminal.placeOwned", { terminalId: "t-users", location: "background" }],
     ["terminal.interruptOwned", { terminalId: "t-users" }],
     ["terminal.sendCommandOwned", { terminalId: "t-users", command: "1" }],
     ["terminal.injectOwned", { terminalId: "t-users" }],

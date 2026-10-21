@@ -92,6 +92,38 @@ describe("parseEnvPaste", () => {
     expect(pairs).toEqual([{ key: "FOO", value: "bar#notcomment" }]);
   });
 
+  it("treats a whitespace-separated comment after = as an empty value", () => {
+    const { pairs, errors } = parseEnvPaste(
+      "EMPTY= # explanatory comment\nTABBED=\t# tabbed\nBARE=  #\n  export EXPORTED = \t# note"
+    );
+    expect(errors).toEqual([]);
+    expect(pairs).toEqual([
+      { key: "EMPTY", value: "" },
+      { key: "TABBED", value: "" },
+      { key: "BARE", value: "" },
+      { key: "EXPORTED", value: "" },
+    ]);
+  });
+
+  it("keeps a # directly after = as part of the value", () => {
+    const { pairs, errors } = parseEnvPaste("COLOR=#fff\nNEXT= #fff # note");
+    expect(errors).toEqual([]);
+    expect(pairs).toEqual([
+      { key: "COLOR", value: "#fff" },
+      { key: "NEXT", value: "" },
+    ]);
+  });
+
+  it("keeps a leading # inside quoted values", () => {
+    const { pairs, errors } = parseEnvPaste('DQ="#hash"\nSQ=\'#hash\'\nPADDED= "#hash" # note');
+    expect(errors).toEqual([]);
+    expect(pairs).toEqual([
+      { key: "DQ", value: "#hash" },
+      { key: "SQ", value: "#hash" },
+      { key: "PADDED", value: "#hash" },
+    ]);
+  });
+
   it("does not strip inline comment from quoted values", () => {
     const { pairs, errors } = parseEnvPaste('FOO="bar # not a comment"');
     expect(errors).toEqual([]);

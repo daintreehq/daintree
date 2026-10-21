@@ -451,17 +451,22 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     ];
     result: void;
   };
-  // Renderer reports event-loop utilization (LoAF blockingDuration accumulated
-  // since the prior sample) to ProcessMemoryMonitor. The webContents id is
-  // taken from event.sender on the handler side. `blockingDurationMs` is
-  // sub-window blocking time (>=50ms LoAF events only); main derives the
-  // ratio against `sampleWindowMs`.
+  // Renderer reports long-animation-frame blocking (LoAF blockingDuration
+  // accumulated since the prior sample) to ProcessMemoryMonitor. Not event-loop
+  // utilisation, despite the channel name: `blockingDurationMs` counts only the
+  // part of each frame past 50ms; main derives the ratio against
+  // `sampleWindowMs`. The longest frame and the DOM input-blocking snapshot are
+  // optional so a renderer built before them still reports. The webContents id
+  // is taken from event.sender on the handler side.
   "system:report-renderer-elu": {
     args: [
       payload: {
         requestId: string;
         blockingDurationMs: number;
         sampleWindowMs: number;
+        longestFrameMs?: number;
+        longestBlockingMs?: number;
+        inputBlocking?: import("./system.js").RendererInputBlockingSnapshot;
       },
     ];
     result: void;
@@ -659,7 +664,11 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     args: [
       projectId: string,
       outgoingState?: ProjectSwitchOutgoingState,
-      options?: { focusIntent?: ProjectFocusOnActivateIntent; trace?: ProjectSwitchTrace },
+      options?: {
+        focusIntent?: ProjectFocusOnActivateIntent;
+        trace?: ProjectSwitchTrace;
+        ignoreMemoryPressure?: boolean;
+      },
     ];
     result: ProjectSwitchResult;
   };
@@ -691,7 +700,7 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     args: [
       projectId: string,
       outgoingState?: ProjectSwitchOutgoingState,
-      options?: { trace?: ProjectSwitchTrace },
+      options?: { trace?: ProjectSwitchTrace; ignoreMemoryPressure?: boolean },
     ];
     result: ProjectSwitchResult;
   };
@@ -1427,6 +1436,7 @@ export interface IpcEventMap {
   // Remote Hosts namespaces: one push channel each, carrying a discriminated union.
   "remote-hosts:event": import("./remoteHosts.js").RemoteHostsEvent;
   "host-mode:event": import("./hostMode.js").HostModeEvent;
+  "device-answer:event": import("./deviceAnswer.js").DeviceAnswerEvent;
   "drive-lease:event": import("./driveLease.js").DriveLeaseEvent;
   "operations:event": import("./operations.js").OperationsEvent;
   "file-transfer:event": import("./fileTransfer.js").FileTransferEvent;
@@ -2119,6 +2129,16 @@ export interface IpcEventMap {
     keys: Record<string, import("../plugin.js").PluginContextValue> | null;
   };
 
+  // A plugin's worktree card statuses in one project changed (main → renderer,
+  // #13704). Carries the plugin's COMPLETE map for that project (worktreeId →
+  // status), never a delta; an empty `statuses` clears them, which is also how
+  // an unload, a worker swap or a project close is sent.
+  "plugin:worktree-card-statuses-changed": {
+    pluginId: string;
+    projectId: string;
+    statuses: Record<string, import("../plugin.js").PluginWorktreeCardStatus>;
+  };
+
   // A plugin's runtime panel menus changed (main → renderer, #13213). Carries
   // the plugin's COMPLETE current map (panelId → items), never a delta; an
   // empty `menus` clears the plugin's lists, which is also how an unload or a
@@ -2347,6 +2367,8 @@ export type IpcEventBusMap = Pick<
   | "plugin:toolbar-badges-changed"
   // Plugin `when`-clause context keys (project-scoped for a project instance)
   | "plugin:context-keys-changed"
+  // Plugin worktree card statuses (always scoped to the status's own project)
+  | "plugin:worktree-card-statuses-changed"
   // Plugin runtime panel menus (project-scoped for a project instance)
   | "plugin:panel-menus-changed"
   // Plugin action handlers in flight (project-scoped for a project instance)

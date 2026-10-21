@@ -199,7 +199,7 @@ function survivor(pid: number, startTime = `start-${pid}`): ClosedLineageSurvivo
 
 function makeClosedCtx(
   survivors: ClosedLineageSurvivor[] | null,
-  procs: Record<number, { comm: string; rssKb: number; cpuPercent: number }> = {}
+  procs: Record<number, { comm: string; memoryKb: number; cpuPercent: number }> = {}
 ) {
   const getClosedSurvivors = vi.fn((_graceMs?: number) => survivors ?? []);
   const ctx = {
@@ -222,7 +222,7 @@ describe("closed-terminal processes in the host inventory (#13174)", () => {
 
   it("joins each survivor with the census by basename and memory, never a command line", () => {
     const { ctx } = makeClosedCtx([survivor(201), survivor(202)], {
-      201: { comm: "/usr/local/bin/node", rssKb: 4096, cpuPercent: 3 },
+      201: { comm: "/usr/local/bin/node", memoryKb: 4096, cpuPercent: 3 },
     });
 
     expect(listClosedTerminalProcesses(ctx)).toEqual([

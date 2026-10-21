@@ -103,3 +103,35 @@ describe("ForgeProviderContributionSchema (issue #10471)", () => {
     );
   });
 });
+
+describe("ForgeProviderContributionSchema roles (#13700)", () => {
+  const parse = (extra: Record<string, unknown>) =>
+    ForgeProviderContributionSchema.safeParse({ ...base, ...extra });
+
+  it("accepts an issues-only provider with no hostnames", () => {
+    expect(parse({ roles: ["issues"], matches: [] }).success).toBe(true);
+  });
+
+  it("accepts both roles declared explicitly, in either order", () => {
+    expect(parse({ roles: ["issues", "code"] }).success).toBe(true);
+    expect(parse({ roles: ["code", "issues"] }).success).toBe(true);
+  });
+
+  it("still requires a hostname from a provider that serves code", () => {
+    expect(parse({ roles: ["issues", "code"], matches: [] }).success).toBe(false);
+  });
+
+  it("rejects hostnames on an issues-only provider, which hostname routing never serves", () => {
+    expect(parse({ roles: ["issues"], matches: ["linear.app"] }).success).toBe(false);
+  });
+
+  it("rejects a code-only provider", () => {
+    expect(parse({ roles: ["code"] }).success).toBe(false);
+  });
+
+  it("rejects an empty, repeated or unknown role", () => {
+    expect(parse({ roles: [] }).success).toBe(false);
+    expect(parse({ roles: ["issues", "issues"], matches: [] }).success).toBe(false);
+    expect(parse({ roles: ["wiki"] }).success).toBe(false);
+  });
+});

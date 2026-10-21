@@ -233,6 +233,29 @@ function sortedFilesFor(entry: FileListCacheEntry): string[] {
   return entry.sortedFiles;
 }
 
+interface ScoredMatch {
+  file: string;
+  score: number;
+}
+
+// The one total order used both to admit candidates and to sort survivors, so
+// every limit returns a prefix of the same ranking. The raw-string fallback
+// covers canonically equivalent paths the collator calls equal.
+function compareMatches(a: ScoredMatch, b: ScoredMatch): number {
+  if (a.score !== b.score) return a.score - b.score;
+  const byLocale = getPathCollator().compare(a.file, b.file);
+  if (byLocale !== 0) return byLocale;
+  return a.file < b.file ? -1 : a.file > b.file ? 1 : 0;
+}
+
+function findWorstIdx(best: ScoredMatch[]): number {
+  let worstIdx = 0;
+  for (let i = 1; i < best.length; i++) {
+    if (compareMatches(best[i], best[worstIdx]) > 0) worstIdx = i;
+  }
+  return worstIdx;
+}
+
 function pickTopMatches(entry: FileListCacheEntry, query: string, limit: number): string[] {
   const queryLower = normalizeQuery(query).toLowerCase();
   const normalizedQuery = queryLower.endsWith("/") ? queryLower.slice(0, -1) : queryLower;
@@ -242,7 +265,7 @@ function pickTopMatches(entry: FileListCacheEntry, query: string, limit: number)
     return sortedFilesFor(entry).slice(0, effectiveLimit);
   }
 
-  const best: Array<{ file: string; score: number }> = [];
+  const best: ScoredMatch[] = [];
   const matchingCandidates: number[] = [];
   const previousCandidates = entry.lastSearchCandidates;
   const canNarrowPrevious =
@@ -251,7 +274,6 @@ function pickTopMatches(entry: FileListCacheEntry, query: string, limit: number)
     normalizedQuery.startsWith(entry.lastSearchQuery);
   const candidates = canNarrowPrevious ? previousCandidates : undefined;
   let worstIdx = -1;
-  let worstScore = -Infinity;
 
   const candidateCount = candidates?.length ?? entry.files.length;
   for (let candidateIdx = 0; candidateIdx < candidateCount; candidateIdx++) {
@@ -265,32 +287,23 @@ function pickTopMatches(entry: FileListCacheEntry, query: string, limit: number)
     if (score === null) continue;
     matchingCandidates.push(fileIdx);
 
+    const match = { file, score };
     if (best.length < effectiveLimit) {
-      best.push({ file, score });
-      if (score > worstScore) {
-        worstScore = score;
+      best.push(match);
+      if (worstIdx === -1 || compareMatches(match, best[worstIdx]) > 0) {
         worstIdx = best.length - 1;
       }
       continue;
     }
 
-    if (score >= worstScore) continue;
-    best[worstIdx] = { file, score };
-
-    worstScore = -Infinity;
-    worstIdx = -1;
-    for (let i = 0; i < best.length; i++) {
-      if (best[i].score > worstScore) {
-        worstScore = best[i].score;
-        worstIdx = i;
-      }
-    }
+    if (compareMatches(match, best[worstIdx]) >= 0) continue;
+    best[worstIdx] = match;
+    worstIdx = findWorstIdx(best);
   }
 
   entry.lastSearchQuery = normalizedQuery;
   entry.lastSearchCandidates = matchingCandidates;
-  const collator = getPathCollator();
-  best.sort((a, b) => a.score - b.score || collator.compare(a.file, b.file));
+  best.sort(compareMatches);
   return best.map((m) => m.file);
 }
 

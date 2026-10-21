@@ -1,0 +1,16 @@
+{
+  "name": "mac-phys-footprint",
+  "version": "0.0.0",
+  "private": true,
+  "description": "macOS physical-footprint reader for process memory accounting (#13526)",
+  "main": "index.cjs",
+  "gypfile": true,
+  "os": [
+    "win32",
+    "darwin",
+    "linux"
+  ],
+  "dependencies": {
+    "node-addon-api": "^8.8.0"
+  }
+}

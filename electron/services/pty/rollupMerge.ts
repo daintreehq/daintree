@@ -17,7 +17,8 @@ import type {
  * shards — the by-key merge below is defensive (and collapses the null-project
  * row if it ever appears on more than one shard). `available` is a global
  * claim ("the process table was read"), so one failed shard marks the merged
- * rollup unavailable rather than silently under-reporting.
+ * rollup unavailable rather than silently under-reporting. Likewise the merged
+ * figure is only footprint when every shard's is.
  */
 export function mergeMemoryRollups(rollups: MemoryRollup[]): MemoryRollup {
   const byKey = new Map<string | null, MemoryRollupProject>();
@@ -39,6 +40,7 @@ export function mergeMemoryRollups(rollups: MemoryRollup[]): MemoryRollup {
   return {
     byProject: [...byKey.values()],
     totalMemoryKb: rollups.reduce((sum, r) => sum + r.totalMemoryKb, 0),
+    memorySource: rollups.every((r) => r.memorySource === "footprint") ? "footprint" : "resident",
     totalProcessCount: rollups.reduce((sum, r) => sum + r.totalProcessCount, 0),
     terminalCount: rollups.reduce((sum, r) => sum + r.terminalCount, 0),
     available: rollups.every((r) => r.available),

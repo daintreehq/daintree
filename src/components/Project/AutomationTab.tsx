@@ -471,7 +471,7 @@ export function AutomationTab({
           />
           <SettingsInput
             label="Shell arguments"
-            description="Space-separated"
+            description="Space-separated; quote arguments that contain spaces"
             layout="inline"
             {...overrideInputProps(
               terminalShellArgs,

@@ -23,6 +23,7 @@ const renderer = vi.hoisted(() => ({
 
 vi.mock("../mermaidRenderer", () => ({
   MERMAID_MAX_SOURCE_CHARS: 50_000,
+  mermaidRefusal: (source: string) => (source.includes("https://") ? "url" : null),
   peekMermaidRender: (source: string) => renderer.cached.get(source),
   requestMermaidRender: (source: string, themeSignature: string) => ({
     result: new Promise<MermaidRenderResult>((resolve) => {
@@ -91,7 +92,9 @@ describe("mermaid fences in rendered Markdown", () => {
     const block = container.querySelector(".markdown-mermaid");
     expect(block?.getAttribute("data-mermaid-state")).toBe("failed");
     expect(block?.querySelector("pre code")?.textContent).toBe(DIAGRAM);
-    expect(block?.querySelector("svg")).toBeNull();
+    // The failure note carries a status glyph svg, so look for the diagram itself.
+    expect(block?.querySelector(".markdown-mermaid__diagram")).toBeNull();
+    expect(block?.querySelector("svg text")).toBeNull();
   });
 
   it("leaves other fences as highlighted code", () => {
@@ -161,12 +164,36 @@ describe("mermaid fences in rendered Markdown", () => {
     expect(renderer.cancelled).toContain(DIAGRAM);
   });
 
-  it("ignores a transient outcome and keeps waiting", async () => {
+  it("says the renderer couldn't load instead of waiting for good, and retries on request", async () => {
     const { container } = renderDoc();
     await settle({ ok: false, transient: true });
-    expect(container.querySelector(".markdown-mermaid")?.getAttribute("data-mermaid-state")).toBe(
-      "pending"
+    const block = container.querySelector(".markdown-mermaid");
+    expect(block?.getAttribute("data-mermaid-state")).toBe("failed");
+    expect(block?.querySelector("pre code")?.textContent).toBe(DIAGRAM);
+    const retry = Array.from(block?.querySelectorAll("button") ?? []).find(
+      (button) => button.textContent === "Retry"
     );
+    expect(retry).toBeDefined();
+    act(() => retry!.click());
+    expect(document.activeElement).toBe(block);
+    expect(block?.getAttribute("data-mermaid-state")).toBe("pending");
+    expect(renderer.pending.map((request) => request.source)).toEqual([DIAGRAM]);
+    await settle(RENDERED);
+    expect(block?.getAttribute("data-mermaid-state")).toBe("rendered");
+  });
+
+  it("names why a refused diagram shows as source, apart from a syntax error", async () => {
+    const refused = 'graph TD\n  click A "https://example.com"';
+    const { container } = renderDoc(
+      ["```mermaid", DIAGRAM, "```", "", "```mermaid", refused, "```"].join("\n")
+    );
+    await settle({ ok: false });
+    const notes = Array.from(container.querySelectorAll(".markdown-mermaid__note")).map(
+      (note) => note.textContent
+    );
+    expect(notes).toHaveLength(2);
+    expect(notes[0]).not.toBe(notes[1]);
+    expect(container.querySelectorAll('[role="status"] svg')).toHaveLength(2);
   });
 
   it("releases its render request on unmount", () => {

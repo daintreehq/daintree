@@ -59,7 +59,7 @@ describe("DiagnosticCopyButton", () => {
   });
 
   it("sanitizes escape sequences from path before display", () => {
-    render(<DiagnosticCopyButton diagnostics={{ path: "[31m/bad/path" }} />);
+    render(<DiagnosticCopyButton diagnostics={{ path: "\x1b[31m/bad/path" }} />);
     expect(screen.getByTestId("diagnostic-payload").textContent).toBe("path=/bad/path");
   });
 

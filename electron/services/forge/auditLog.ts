@@ -298,7 +298,7 @@ export class ForgeAuditService {
 
   /** Group key isolates a provider's method baseline from other providers. */
   private groupKey(r: ForgeAuditRecord): string {
-    return `${r.providerId} ${r.methodName}`;
+    return `${r.providerId}\x00${r.methodName}`;
   }
 
   private computeLatencyDrift(records: readonly ForgeAuditRecord[]): ForgeAnomalySignal[] {

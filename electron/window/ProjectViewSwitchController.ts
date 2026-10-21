@@ -38,6 +38,7 @@ import {
 import { notifyProjectPluginsOpened } from "./projectPluginLifecycle.js";
 import { createCancelledSwitchError, reportSwitchFailure } from "./projectSwitchCancelledError.js";
 import { setupViewHandlers } from "./ProjectViewHandlers.js";
+import { deliverOpenSystemMemoryPressure } from "./systemMemoryPressureDelivery.js";
 import { evictStaleViews } from "./ProjectViewEvictionController.js";
 import type { ProjectViewManager } from "./ProjectViewManager.js";
 import type { SwitchRequestOptions, ViewEntry } from "./ProjectViewManagerTypes.js";
@@ -195,6 +196,9 @@ export async function performSwitch(
     // eviction → return cycle.
     const evictedAt = host.evictionTimestamps.get(projectId);
     const warmStart = performance.now();
+    // Names the incoming renderer and this attempt on every warm-gate outcome,
+    // so a failure, its retry, and that view's own long-frame reports line up.
+    const warmIds = { webContentsId: cached.view.webContents.id, switchId: switchTrace.switchId };
 
     if (outgoingView) {
       // Warm anti-flash bridge (#9679): the cached view was detached + frozen
@@ -237,6 +241,7 @@ export async function performSwitch(
         () => {
           logWarn("projectview.warmpaintgate.softtimeout", {
             projectId,
+            ...warmIds,
             waitedMs: warmSoftMs,
           });
         },
@@ -285,6 +290,7 @@ export async function performSwitch(
       if (gateResult === "hard-timeout") {
         logWarn("projectview.warmpaintgate.hardtimeout", {
           projectId,
+          ...warmIds,
           waitedMs: warmHardMs,
         });
       }
@@ -292,6 +298,7 @@ export async function performSwitch(
         const waitedMs = Math.round(performance.now() - warmStart);
         logWarn("projectview.warmpaintgate.unpainted", {
           projectId,
+          ...warmIds,
           waitedMs,
           rendererGone: cachedRendererGone,
           rollbackProjectId: previousProjectId,
@@ -366,6 +373,7 @@ export async function performSwitch(
     }
     logInfo("projectview.warm-swap", {
       projectId,
+      ...warmIds,
       visibleMs,
     });
     // Re-assert focus after the bridge teardown — detaching the outgoing view
@@ -385,6 +393,10 @@ export async function performSwitch(
         cached.view.webContents.send(CHANNELS.APP_VIEW_REVEALED, {
           switchId: switchTrace.switchId,
         });
+        // A cached view misses every memory publish made while it was hidden,
+        // escalations included (#13529); the delivery latch skips one that
+        // already has the latest.
+        deliverOpenSystemMemoryPressure(host.win, cached.view.webContents);
       }
     }
     const cachedIntent = consumePendingFocusIntent(host, projectId);

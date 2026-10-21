@@ -62,20 +62,25 @@ describe("resolveGitDir — filesystem path", () => {
     expect(result).toBe(path.join(repo, ".git"));
   });
 
-  describe("with the repository relocated through the environment", () => {
+  describe("with a repository location inherited through the environment", () => {
     afterEach(() => {
       vi.unstubAllEnvs();
     });
 
-    it.each(["GIT_DIR", "GIT_COMMON_DIR"])("defers to rev-parse while %s is set", async (key) => {
-      vi.stubEnv(key, path.join(linked, "elsewhere.git"));
-      const revparse = vi.fn().mockResolvedValue("/relocated.git\n");
+    // Every git the app spawns drops these, so the `.git` entry is the answer
+    // rev-parse would give.
+    it.each(["GIT_DIR", "GIT_COMMON_DIR"])(
+      "still reads the filesystem while %s is set",
+      async (key) => {
+        vi.stubEnv(key, path.join(linked, "elsewhere.git"));
+        const revparse = vi.fn();
 
-      const result = await resolveGitDir({ revparse } as never, repo);
+        const result = await resolveGitDir({ revparse } as never, repo);
 
-      expect(revparse).toHaveBeenCalledWith(["--git-dir"]);
-      expect(result).toBe("/relocated.git");
-    });
+        expect(revparse).not.toHaveBeenCalled();
+        expect(result).toBe(path.join(repo, ".git"));
+      }
+    );
   });
 
   it("defers a relative gitfile under a symlinked path to rev-parse", async () => {

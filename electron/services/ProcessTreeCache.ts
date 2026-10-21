@@ -1,6 +1,8 @@
 import { execFile, type ExecFileOptionsWithStringEncoding } from "child_process";
 import os from "node:os";
 import { logDebug } from "../utils/logger.js";
+import { readPhysFootprintsKb } from "../utils/processMemory.js";
+import type { MemorySource } from "../../shared/types/memoryAccounting.js";
 import { WindowsProcessCensus } from "./WindowsProcessCensus.js";
 
 function execProbe(
@@ -52,7 +54,12 @@ export interface ProcessInfo {
   comm: string;
   command: string;
   cpuPercent: number; // CPU usage percentage (0-100)
-  rssKb: number; // Resident Set Size in KB
+  /**
+   * Memory in KB: physical footprint on macOS (compressed and swapped pages
+   * included), resident set elsewhere — and on macOS for a process whose
+   * footprint couldn't be read (another user's, or exited since `ps` listed it).
+   */
+  memoryKb: number;
   /**
    * OS-reported process start time, when the platform census carries one.
    * Populated on Windows (`CreationDate` is already fetched for CPU deltas);
@@ -123,6 +130,7 @@ export class ProcessTreeCache {
   private censusHelper: WindowsProcessCensus | null = null;
   private censusIdleRetireTimer: NodeJS.Timeout | null = null;
   private censusHelperRssKb: number | null = null;
+  private memorySource: MemorySource = "resident";
 
   constructor(private pollIntervalMs: number = 2500) {
     this.currentIntervalMs = pollIntervalMs;
@@ -399,6 +407,8 @@ export class ProcessTreeCache {
       }
     }
 
+    if (process.platform === "darwin") this.applyPhysFootprints(newCache);
+
     const changed = this.hasOwnedTreeChanged(newChildrenMap);
 
     this.cache = newCache;
@@ -410,6 +420,22 @@ export class ProcessTreeCache {
     }
 
     return changed;
+  }
+
+  /**
+   * `ps` RSS drops every compressed and swapped page, so under memory pressure
+   * it reads an order of magnitude low (#13526). One batched footprint read per
+   * census replaces it wherever the kernel will say; it never execs, so it
+   * stays cheap at exactly the moments the `ps` probe itself times out.
+   */
+  private applyPhysFootprints(census: Map<number, ProcessInfo>): void {
+    const kbByPid = readPhysFootprintsKb([...census.keys()]);
+    this.memorySource = kbByPid ? "footprint" : "resident";
+    if (!kbByPid) return;
+    for (const [pid, info] of census) {
+      const kb = kbByPid.get(pid);
+      if (kb !== undefined) info.memoryKb = kb;
+    }
   }
 
   private parseUnixLine(line: string): ProcessInfo | null {
@@ -426,7 +452,7 @@ export class ProcessTreeCache {
     const pid = parseInt(match[1], 10);
     const ppid = parseInt(match[2], 10);
     const cpuPercent = parseFloat(match[3]) || 0;
-    const rssKb = parseInt(match[4], 10) || 0;
+    const memoryKb = parseInt(match[4], 10) || 0;
     // Regex captures are V8 sliced strings that pin the entire multi-MB ps
     // stdout in memory for as long as the cache retains them. Buffer.from()
     // round-trip is the only idiom that forces a flat copy — String(),
@@ -439,7 +465,7 @@ export class ProcessTreeCache {
       return null;
     }
 
-    return { pid, ppid, comm, command, cpuPercent, rssKb };
+    return { pid, ppid, comm, command, cpuPercent, memoryKb };
   }
 
   private async refreshWindows(): Promise<boolean> {
@@ -546,7 +572,7 @@ export class ProcessTreeCache {
 
       // WorkingSetSize is in bytes; convert to KB
       const workingSetBytes = Number(p.WorkingSetSize ?? "0");
-      const rssKb = Math.floor(workingSetBytes / 1024);
+      const memoryKb = Math.floor(workingSetBytes / 1024);
 
       newCache.set(pid, {
         pid,
@@ -554,7 +580,7 @@ export class ProcessTreeCache {
         comm: name,
         command,
         cpuPercent,
-        rssKb,
+        memoryKb,
         // Already fetched for the CPU-delta snapshot key above, so the lineage
         // ledger gets its pid-reuse anchor on Windows for free.
         ...(typeof p?.CreationDate === "string" && p.CreationDate
@@ -745,7 +771,7 @@ export class ProcessTreeCache {
    * Get aggregated resource summary for a process tree.
    * Includes the root process and all descendants.
    * Breakdown is capped at 10 entries sorted by CPU descending, always keeping
-   * the largest resident process.
+   * the largest-memory process.
    */
   getTreeResourceSummary(rootPid: number): {
     cpuPercent: number;
@@ -757,13 +783,13 @@ export class ProcessTreeCache {
     if (!rootProcess) return null;
 
     let totalCpu = rootProcess.cpuPercent;
-    let totalMemory = rootProcess.rssKb;
+    let totalMemory = rootProcess.memoryKb;
     const breakdown: Array<{ pid: number; comm: string; cpuPercent: number; memoryKb: number }> = [
       {
         pid: rootProcess.pid,
         comm: rootProcess.comm,
         cpuPercent: rootProcess.cpuPercent,
-        memoryKb: rootProcess.rssKb,
+        memoryKb: rootProcess.memoryKb,
       },
     ];
 
@@ -778,19 +804,19 @@ export class ProcessTreeCache {
       const proc = this.cache.get(pid);
       if (proc) {
         totalCpu += proc.cpuPercent;
-        totalMemory += proc.rssKb;
+        totalMemory += proc.memoryKb;
         breakdown.push({
           pid: proc.pid,
           comm: proc.comm,
           cpuPercent: proc.cpuPercent,
-          memoryKb: proc.rssKb,
+          memoryKb: proc.memoryKb,
         });
         queue.push(...this.getChildPids(pid));
       }
     }
 
-    // Sort by CPU descending, cap at 10 — but never cap away the largest
-    // resident process: a quiet language server holding gigabytes is exactly
+    // Sort by CPU descending, cap at 10 — but never cap away the heaviest
+    // process: a quiet language server holding gigabytes is exactly
     // the row a memory-red badge needs to name.
     breakdown.sort((a, b) => b.cpuPercent - a.cpuPercent);
     const shown = breakdown.slice(0, BREAKDOWN_LIMIT);
@@ -805,14 +831,14 @@ export class ProcessTreeCache {
   }
 
   /**
-   * Aggregate resident memory across a set of labeled process subtrees.
+   * Aggregate memory across a set of labeled process subtrees.
    *
-   * Each root contributes its own RSS plus that of every descendant. PIDs are
-   * deduplicated within a key (so nested or overlapping subtrees sharing a
+   * Each root contributes its own memory plus that of every descendant. PIDs
+   * are deduplicated within a key (so nested or overlapping subtrees sharing a
    * project aren't summed twice) and globally (so the grand total never
-   * double-counts a process reachable from two roots). RSS still counts
-   * shared/copy-on-write pages, so these sums are a generous pressure
-   * heuristic, not a unique-footprint measurement.
+   * double-counts a process reachable from two roots). Per-process figures
+   * still count shared pages, so these sums are a generous pressure heuristic,
+   * not a unique-footprint measurement.
    */
   aggregateSubtreeMemory(
     roots: Array<{ key: string; rootPid: number }>,
@@ -852,13 +878,13 @@ export class ProcessTreeCache {
         if (!proc) continue;
         if (!bucket.seen.has(pid)) {
           bucket.seen.add(pid);
-          bucket.memoryKb += proc.rssKb;
+          bucket.memoryKb += proc.memoryKb;
           bucket.processCount += 1;
           bucket.procs.push(proc);
         }
         if (!globalSeen.has(pid)) {
           globalSeen.add(pid);
-          totalMemoryKb += proc.rssKb;
+          totalMemoryKb += proc.memoryKb;
           totalProcessCount += 1;
         }
       }
@@ -876,7 +902,7 @@ export class ProcessTreeCache {
       // Expose only comm (the process basename), never `command` — the full
       // command line can carry paths, tokens, and branch names.
       const topProcesses = [...bucket.procs]
-        .sort((a, b) => b.rssKb - a.rssKb)
+        .sort((a, b) => b.memoryKb - a.memoryKb)
         .slice(0, topPerKey)
         .map((p) => ({
           pid: p.pid,
@@ -886,7 +912,7 @@ export class ProcessTreeCache {
           // consumer's label.
           comm: executableBasename(p.comm),
           cpuPercent: p.cpuPercent,
-          memoryKb: p.rssKb,
+          memoryKb: p.memoryKb,
         }));
       byKey[key] = { memoryKb: bucket.memoryKb, processCount: bucket.processCount, topProcesses };
     }
@@ -896,6 +922,11 @@ export class ProcessTreeCache {
 
   getLastRefreshTime(): number {
     return this.lastRefreshTime;
+  }
+
+  /** What `memoryKb` measures as of the last successful census. */
+  getMemorySource(): MemorySource {
+    return this.memorySource;
   }
 
   getLastError(): Error | null {

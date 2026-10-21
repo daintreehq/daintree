@@ -1,15 +1,18 @@
-import { useEffect, useRef, useState } from "react";
-import { Callout } from "@/components/ui/Callout";
-import { Terminal, ExternalLink, KeyRound, RefreshCw } from "lucide-react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { ExternalLink, KeyRound, RefreshCw, Settings2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { PaneState, PaneStateActions } from "@/components/ui/PaneState";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { CopyableCommand } from "@/components/Setup/CopyableCommand";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
+import { systemClient } from "@/clients/systemClient";
 import { getAgentConfig } from "@/config/agents";
 import { isHostLinux, isHostMac } from "@/hooks/useHostPlatform";
+import { cn } from "@/lib/utils";
+import { SEVERITY_VISUAL, type StatusSeverity } from "@/lib/statusSeverity";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { isAgentLaunchable } from "@shared/utils/agentAvailability";
-import type { AgentCliDetail, AgentAvailabilityState } from "@shared/types/ipc";
+import type { AgentCliDetail } from "@shared/types/ipc";
 import type { AgentInstallBlock } from "@shared/config/agentRegistry";
 
 // The CLI installs on the project's host, so its instructions follow that machine.
@@ -25,76 +28,106 @@ function getOsLabel(): string {
   return "Windows";
 }
 
-function StateBanner({ state, detail }: { state: AgentAvailabilityState; detail: AgentCliDetail }) {
-  if (state === "ready") {
-    return (
-      <Callout severity="success" title="CLI is now available">
-        <p>The agent binary was detected. Re-check to continue the launch.</p>
-      </Callout>
-    );
-  }
+interface GateCopy {
+  icon: ReactNode;
+  title: string;
+  description: ReactNode;
+}
 
-  // Launchable by design — the CLI prompts for sign-in itself — so this is
-  // reachable only when a re-check lands here mid-flight or a probe reports it
-  // defensively. Without its own branch it fell through to "blocked", which
-  // sends the user hunting through endpoint security for a sign-in prompt.
-  if (state === "unauthenticated") {
-    return (
-      <Callout severity="neutral" icon={KeyRound} title="Sign-in not detected">
-        <p>
-          The CLI is available but no signed-in session was found. Re-check to continue — the CLI
-          prompts for sign-in on its first run.
-        </p>
-      </Callout>
-    );
-  }
+function severityIcon(severity: StatusSeverity): ReactNode {
+  const { Icon, toneClass } = SEVERITY_VISUAL[severity];
+  return <Icon className={toneClass} />;
+}
 
-  if (state === "missing") {
-    return (
-      <Callout severity="warning" title="CLI binary not found">
-        <p>{detail.message ?? "The agent executable was not detected on your system."}</p>
-        {detail.resolvedPath && (
-          <p className="mt-1 font-mono select-text">Last known path: {detail.resolvedPath}</p>
-        )}
-      </Callout>
-    );
-  }
+// Each title names what the probe observed for this agent, not a cause: a denied
+// exec is reported as denied, never as "blocked by security software", which
+// would send the user into endpoint settings on a guess.
+function getGateCopy(agentName: string, detail: AgentCliDetail): GateCopy {
+  // Paths and probe messages are unbroken tokens that would push a narrow pane
+  // sideways, so the description may break anywhere inside them.
+  const path = detail.resolvedPath ? (
+    <span className="font-mono text-xs select-text">{detail.resolvedPath}</span>
+  ) : null;
+  const lastPath = path ? <span className="mt-1 block">Last found at {path}</span> : null;
 
-  if (state === "installed") {
-    const isWsl = detail.via === "wsl";
-    return (
-      <Callout
-        severity="warning"
-        title={isWsl ? "Detected in WSL" : "CLI installed but not directly launchable"}
-      >
-        <p>
-          {isWsl
-            ? `Found in WSL (${detail.wslDistro ?? "unknown distro"}) — only host binaries can be launched directly. Install a native binary or use "Run anyway" if you have a wrapper.`
-            : (detail.message ?? "The binary is installed but can't be launched directly.")}
-        </p>
-      </Callout>
-    );
+  switch (detail.state) {
+    case "ready":
+      return {
+        icon: severityIcon("success"),
+        title: `${agentName} CLI is available`,
+        description: `Continue to start ${agentName} in this pane.`,
+      };
+    // Launchable by design — the CLI prompts for sign-in itself — so this is
+    // reachable only when a re-check lands here mid-flight or a probe reports it
+    // defensively. Without its own branch it fell through to "blocked", which
+    // sends the user hunting through endpoint security for a sign-in prompt.
+    case "unauthenticated":
+      return {
+        icon: <KeyRound className="text-text-secondary" />,
+        title: `${agentName} sign-in not detected`,
+        description: "The CLI is available. It asks you to sign in the first time it starts.",
+      };
+    case "missing":
+      return {
+        icon: severityIcon("warning"),
+        title: `${agentName} CLI not found`,
+        description: (
+          <span className="wrap-anywhere">
+            {detail.message ?? `No ${agentName} executable was found on this machine.`}
+            {lastPath}
+          </span>
+        ),
+      };
+    case "installed":
+      if (detail.via === "wsl") {
+        return {
+          icon: severityIcon("warning"),
+          title: `${agentName} found only in WSL`,
+          description: `Found in ${detail.wslDistro ?? "a WSL distro"}, but only binaries on this machine can be launched directly. Install it natively, or run it anyway if you use a wrapper.`,
+        };
+      }
+      return {
+        icon: severityIcon("warning"),
+        title: `${agentName} can't be launched directly`,
+        description: (
+          <span className="wrap-anywhere">
+            {detail.message ??
+              (path ? (
+                <>Found {path}, but it can't be launched directly.</>
+              ) : (
+                "The CLI is installed but can't be launched directly."
+              ))}{" "}
+            Point Daintree at the executable in agent settings.
+          </span>
+        ),
+      };
+    default:
+      return {
+        icon: severityIcon("error"),
+        title: `Running ${agentName} was denied`,
+        description: (
+          <span className="wrap-anywhere">
+            {detail.message ??
+              (path ? (
+                <>The system refused to run {path}.</>
+              ) : (
+                "The executable exists, but the system refused to run it."
+              ))}{" "}
+            If it runs from your own terminal, security software may be stopping Daintree.
+          </span>
+        ),
+      };
   }
-
-  // blocked
-  return (
-    <Callout severity="error" title="Blocked by security software">
-      <p>{detail.message ?? "The binary exists but execution was denied."}</p>
-      <p className="mt-1">Check your endpoint security settings or add an allowlist entry.</p>
-    </Callout>
-  );
 }
 
 function InstallCommands({ blocks }: { blocks: AgentInstallBlock[] }) {
   return (
     <div className="space-y-3">
       {blocks.map((block, i) => (
-        <div key={i}>
-          {block.label && (
-            <p className="text-xs font-medium text-text-secondary mb-1.5">{block.label}</p>
-          )}
+        <div key={i} className="space-y-1.5">
+          {block.label && <p className="text-xs text-text-secondary">{block.label}</p>}
           {block.steps && (
-            <ol className="list-decimal list-inside space-y-1 mb-2">
+            <ol className="list-decimal space-y-1 pl-4">
               {block.steps.map((step, j) => (
                 <li key={j} className="text-xs text-text-secondary">
                   {step}
@@ -105,12 +138,12 @@ function InstallCommands({ blocks }: { blocks: AgentInstallBlock[] }) {
           {block.commands && (
             <div className="space-y-1.5">
               {block.commands.map((cmd) => (
-                <CopyableCommand key={cmd} command={cmd} />
+                <CopyableCommand key={cmd} command={cmd} wrap />
               ))}
             </div>
           )}
           {block.notes && (
-            <div className="mt-2 space-y-0.5">
+            <div className="space-y-0.5">
               {block.notes.map((note, j) => (
                 <p key={j} className="text-xs text-text-secondary">
                   {note}
@@ -152,6 +185,7 @@ export function MissingCliGate({
   const refresh = useCliAvailabilityStore((s) => s.refresh);
   const isRefreshing = useCliAvailabilityStore((s) => s.isRefreshing);
   const [refreshFailed, setRefreshFailed] = useState(false);
+  const [checkedWithoutChange, setCheckedWithoutChange] = useState(false);
 
   // The probe outlives the panel: closing the gate mid-re-check must not
   // relaunch an agent into a pane that no longer exists.
@@ -173,6 +207,7 @@ export function MissingCliGate({
     if (probeInFlightRef.current) return;
     probeInFlightRef.current = true;
     setRefreshFailed(false);
+    setCheckedWithoutChange(false);
     try {
       // `force` skips the passive throttle window — this is an explicit gesture,
       // and a user who just installed the CLI is exactly who the window blocks.
@@ -191,6 +226,8 @@ export function MissingCliGate({
     const availability = useCliAvailabilityStore.getState().availability;
     if (isAgentLaunchable(availability[agentId])) {
       onAvailabilityReady();
+    } else {
+      setCheckedWithoutChange(true);
     }
   };
 
@@ -199,95 +236,144 @@ export function MissingCliGate({
   const troubleshooting = agentConfig?.install?.troubleshooting;
   const docsUrl = agentConfig?.install?.docsUrl;
 
+  const copy = getGateCopy(agentName, detail);
+  const launchable = isAgentLaunchable(state);
+  const isWsl = state === "installed" && detail.via === "wsl";
+  // WSL needs the same native install as a missing CLI; a wrapper or a denied
+  // exec is not fixed by installing again.
+  const showInstall = (state === "missing" || isWsl) && !!installBlocks?.length;
+  const showTroubleshooting = state === "missing" && !!troubleshooting?.length;
+  // Install docs answer a CLI that isn't usable yet; once it is, they're noise.
+  const showDocs = !!docsUrl && !launchable;
+  // A wrapper is repaired by pointing settings at the real executable; every
+  // other state is repaired outside Daintree and confirmed by checking again.
+  const settingsIsPrimary = state === "installed" && !isWsl;
+
+  const checkLabel = launchable ? "Continue launch" : "Check again";
+  const checkButton = (
+    <Button
+      size="sm"
+      variant={settingsIsPrimary ? "ghost" : "contrast"}
+      className={cn(isRefreshing && "cursor-default")}
+      onClick={() => {
+        if (!isRefreshing) void handleRefresh();
+      }}
+      aria-busy={isRefreshing || undefined}
+      aria-disabled={isRefreshing || undefined}
+    >
+      {/* Continuing is not a refresh, so it wears no retry glyph at rest — only
+          the spinner while its confirming probe runs. */}
+      {(!launchable || isRefreshing) && (
+        <SpinningIcon icon={RefreshCw} active={isRefreshing} size={14} />
+      )}
+      {checkLabel}
+    </Button>
+  );
+
+  // The one live region for check results: it is mounted before any check
+  // starts, so a failure is announced reliably, and the banner beside it stays
+  // silent rather than announcing the same failure twice.
+  const status = isRefreshing
+    ? `Checking for ${agentName}…`
+    : refreshFailed
+      ? null
+      : checkedWithoutChange
+        ? `Checked again — ${agentName} still can't be launched`
+        : "";
+
   return (
-    // `my-auto` on the child rather than `justify-center` on the scrollport:
-    // `justify-content: center` distributes overflow to BOTH ends, so once the
-    // install blocks and troubleshooting list outgrow a short pane the agent
-    // name and "Setup required" spill above the scroll origin and cannot be
-    // scrolled back to. Auto margins collapse to zero when there is no free
-    // space, so the same centring degrades to top alignment instead.
-    <div className="flex-1 min-h-0 bg-surface-canvas flex flex-col items-center overflow-auto">
-      <div className="my-auto w-full max-w-lg space-y-4 px-6 py-8">
-        <div className="flex items-center gap-2.5">
-          <div className="w-8 h-8 rounded-[var(--radius-md)] bg-overlay-subtle border border-border-default flex items-center justify-center">
-            <Terminal className="w-4 h-4 text-daintree-text/40" />
-          </div>
-          <div>
-            <h2 className="text-sm font-semibold">{agentName}</h2>
-            <p className="text-xs text-text-secondary">
-              {isAgentLaunchable(state)
-                ? "Ready to continue launch"
-                : "Setup required before launch"}
-            </p>
-          </div>
-        </div>
-
-        <StateBanner state={state} detail={detail} />
-
-        {state === "missing" && installBlocks && installBlocks.length > 0 && (
-          <div className="space-y-2">
-            <p className="text-xs font-medium text-text-secondary">Install on {getOsLabel()}</p>
-            <InstallCommands blocks={installBlocks} />
+    <div className="relative flex-1 min-h-0 min-w-0">
+      <PaneState icon={copy.icon} title={copy.title} description={copy.description}>
+        {(showInstall || showDocs || refreshFailed) && (
+          <div className="w-full max-w-md min-w-0 space-y-4 text-left">
+            {showInstall && installBlocks && (
+              <section aria-label={`Install on ${getOsLabel()}`} className="space-y-2">
+                <div>
+                  <p className="text-sm font-medium text-text-primary">Install on {getOsLabel()}</p>
+                  <p className="text-xs text-text-secondary">
+                    Run one of these in your terminal, then check again.
+                  </p>
+                </div>
+                <InstallCommands blocks={installBlocks} />
+              </section>
+            )}
+            {/* Beside the commands it belongs to; alone, it centres under the
+                description like the rest of the pane state. */}
+            {showDocs && docsUrl && (
+              <div className={cn(!showInstall && "text-center")}>
+                <Button
+                  variant="link"
+                  size="inline"
+                  className="text-xs"
+                  onClick={() => void systemClient.openExternal(docsUrl)}
+                >
+                  {agentName} install docs
+                  <ExternalLink aria-hidden="true" />
+                </Button>
+              </div>
+            )}
+            {refreshFailed && (
+              <InlineStatusBanner
+                severity="error"
+                inset
+                role="status"
+                ariaLive="off"
+                title="Couldn't check again"
+                description="The availability check didn't finish, so the result above is from the last check that did."
+              />
+            )}
           </div>
         )}
 
-        {state === "missing" && troubleshooting && troubleshooting.length > 0 && (
-          <div className="space-y-1.5">
-            <p className="text-xs font-medium text-text-secondary">Troubleshooting</p>
-            <ul className="list-disc list-inside space-y-0.5">
+        <PaneStateActions>
+          {!launchable && (
+            <Button size="sm" variant="ghost" onClick={onRunAnyway}>
+              Run anyway
+            </Button>
+          )}
+          {settingsIsPrimary ? (
+            <>
+              {checkButton}
+              <Button size="sm" variant="contrast" onClick={onOpenAgentSettings}>
+                <Settings2 aria-hidden="true" />
+                Agent settings
+              </Button>
+            </>
+          ) : (
+            <>
+              <Button size="sm" variant="ghost" onClick={onOpenAgentSettings}>
+                <Settings2 aria-hidden="true" />
+                Agent settings
+              </Button>
+              {checkButton}
+            </>
+          )}
+        </PaneStateActions>
+
+        {/* Its line is reserved even while empty, so a check starting or settling
+            never re-centres the block under the pointer that just pressed it. */}
+        <p role="status" className="min-h-4 text-center text-xs text-text-secondary">
+          {status}
+          {refreshFailed && (
+            <span className="sr-only">
+              Couldn't check again. The availability check didn't finish.
+            </span>
+          )}
+        </p>
+
+        {showTroubleshooting && troubleshooting && (
+          <section aria-label="Troubleshooting" className="w-full max-w-md min-w-0 space-y-1.5">
+            <p className="text-xs font-medium text-text-secondary">Still not found?</p>
+            <ul className="list-disc space-y-0.5 pl-4">
               {troubleshooting.map((tip, i) => (
                 <li key={i} className="text-xs text-text-secondary">
                   {tip}
                 </li>
               ))}
             </ul>
-          </div>
+          </section>
         )}
-
-        {refreshFailed && (
-          <InlineStatusBanner
-            severity="error"
-            inset
-            title="Couldn't re-check the CLI"
-            description="The availability probe didn't finish. Try again, or run the agent anyway if you know the binary works."
-          />
-        )}
-
-        <div className="flex flex-wrap items-center gap-2 pt-1">
-          {docsUrl && (
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => window.electron.system.openExternal(docsUrl)}
-            >
-              <ExternalLink aria-hidden="true" />
-              Docs
-            </Button>
-          )}
-          {/* `ml-auto` right-aligns the recovery group whether or not Docs
-              renders, so the row needs no state-dependent justification. */}
-          <div className="flex flex-wrap items-center gap-2 ml-auto">
-            <Button size="sm" variant="ghost" onClick={onOpenAgentSettings}>
-              Agent settings
-            </Button>
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => {
-                if (!isRefreshing) void handleRefresh();
-              }}
-              aria-busy={isRefreshing || undefined}
-              aria-disabled={isRefreshing || undefined}
-            >
-              <SpinningIcon icon={RefreshCw} active={isRefreshing} size={14} />
-              Re-check
-            </Button>
-            <Button size="sm" variant="outline" onClick={onRunAnyway}>
-              Run anyway
-            </Button>
-          </div>
-        </div>
-      </div>
+      </PaneState>
     </div>
   );
 }

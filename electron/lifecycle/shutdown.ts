@@ -358,6 +358,22 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
     );
   }
 
+  // Paired devices stop answering before any terminal is captured or killed,
+  // so no key lands in one the graceful kill is talking to. A listener that
+  // was never started costs one small import.
+  await settleWithin(
+    (async () => {
+      try {
+        const { stopDeviceAnswer } = await import("../services/deviceAnswer/index.js");
+        await stopDeviceAnswer();
+      } catch (err) {
+        console.warn("[MAIN] Answer from another device stop failed:", err);
+      }
+    })(),
+    REMOTE_HOSTS_STOP_BUDGET_MS,
+    "device answer stop"
+  );
+
   const ptyClient = deps.getPtyClient();
   const workspaceClient = deps.getWorkspaceClient();
   const gracefulShutdownPromise = (async () => {

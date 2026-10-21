@@ -67,6 +67,7 @@ function makeHost() {
     setPanelBadge: vi.fn(async () => {}),
     setToolbarButtonBadge: vi.fn(async () => {}),
     setContext: vi.fn(async () => {}),
+    setWorktreeCardStatus: vi.fn(async () => {}),
     setPanelMenuItems: vi.fn(async () => {}),
     showToast: vi.fn(async () => {}),
     notify: vi.fn(async (_options: unknown) => ({ id: "n-1" })),
@@ -408,6 +409,38 @@ describe("PluginDevWorkerMainBridge", () => {
       (m) => m.type === "host-result" && m.requestId === "c-sc-cap"
     );
     expect(refused).toMatchObject({ ok: false, error: expect.stringMatching(/at most 32 keys/) });
+  });
+
+  it("relays setWorktreeCardStatus as a call and returns the host's rejection (#13704)", async () => {
+    const { host, workerHost } = makeBridge();
+    workerHost.emit("worker-message", {
+      type: "host-call",
+      requestId: "c-ws",
+      method: "setWorktreeCardStatus",
+      params: { worktreeId: "/repo/wt", status: { label: "up" } },
+    });
+    await flush();
+    expect(host.setWorktreeCardStatus).toHaveBeenCalledWith("/repo/wt", { label: "up" });
+    const ok = workerHost.sent.find((m) => m.type === "host-result" && m.requestId === "c-ws");
+    expect(ok).toMatchObject({ ok: true });
+
+    host.setWorktreeCardStatus.mockRejectedValueOnce(
+      new Error('setWorktreeCardStatus: "/other" is not a worktree this plugin can see')
+    );
+    workerHost.emit("worker-message", {
+      type: "host-call",
+      requestId: "c-ws-foreign",
+      method: "setWorktreeCardStatus",
+      params: { worktreeId: "/other", status: null },
+    });
+    await flush();
+    const refused = workerHost.sent.find(
+      (m) => m.type === "host-result" && m.requestId === "c-ws-foreign"
+    );
+    expect(refused).toMatchObject({
+      ok: false,
+      error: expect.stringMatching(/not a worktree this plugin can see/),
+    });
   });
 
   it("relays restartWorker and returns the host's answer (#13410)", async () => {

@@ -23,6 +23,7 @@ export class ProjectSettingsManager {
   });
   // Writes to one project's settings run one at a time, so an update to a
   // single field reads a file no other write is halfway through replacing.
+  // Uncached reads take a turn here too, because a read may quarantine the file.
   private readonly writeQueues = new Map<string, Promise<void>>();
   private readonly projectsBeingWritten = new Set<string>();
   // Bumped as each write starts and ends: a read that overlapped a write may
@@ -64,13 +65,32 @@ export class ProjectSettingsManager {
     };
   }
 
+  /**
+   * Reads take a turn in the project's write queue unless it is idle and the
+   * cache is warm: an unreadable file is quarantined by rename, so a read
+   * holding bytes from before a queued save would otherwise move the newly
+   * saved file aside, and a cached copy predates any save still waiting to run.
+   */
   async getProjectSettings(projectId: string): Promise<ProjectSettings> {
+    if (!this.writeQueues.has(projectId)) {
+      const cached = this.settingsCache.get(projectId);
+      if (cached) return cached;
+    }
+    return this.enqueue(projectId, () => this.readProjectSettings(projectId));
+  }
+
+  /**
+   * Unqueued read, for code already inside a {@link serializeWrite} turn for
+   * this project, where the queued {@link getProjectSettings} would wait behind
+   * the turn awaiting it.
+   */
+  private async readProjectSettings(projectId: string): Promise<ProjectSettings> {
     const cached = this.settingsCache.get(projectId);
     if (cached) return cached;
     const generation = this.writeGenerations.get(projectId) ?? 0;
 
     const filePath = settingsFilePath(this.projectsConfigDir, projectId);
-    if (!filePath || !existsSync(filePath)) {
+    if (!filePath) {
       this.notificationOverridesCache.delete(projectId);
       return { runCommands: [] };
     }
@@ -86,19 +106,13 @@ export class ProjectSettingsManager {
         console.error(`[ProjectSettingsManager] Failed to parse settings for ${projectId}:`, error);
         const quarantinedPath = await this.quarantine(filePath, "corrupted");
         void this.broadcastCorruption(quarantinedPath);
-      } else {
-        const code =
-          error && typeof error === "object" && "code" in error
-            ? (error as NodeJS.ErrnoException).code
-            : undefined;
-        if (code !== "ENOENT") {
-          console.error(
-            `[ProjectSettingsManager] Failed to load settings for ${projectId}:`,
-            error
-          );
-        }
+        return { runCommands: [] };
       }
-      return { runCommands: [] };
+      if (isMissingFileError(error)) return { runCommands: [] };
+      // The file is there but couldn't be read. Defaults here would become the
+      // draft the next save writes over it, so the read fails instead.
+      console.error(`[ProjectSettingsManager] Failed to load settings for ${projectId}:`, error);
+      throw error;
     }
 
     const decoded = decode(parsed);
@@ -183,8 +197,7 @@ export class ProjectSettingsManager {
       this.writeGenerations.set(projectId, (this.writeGenerations.get(projectId) ?? 0) + 1);
       this.settingsCache.invalidate(projectId);
     };
-    const previous = this.writeQueues.get(projectId) ?? Promise.resolve();
-    const result = previous.then(async () => {
+    return this.enqueue(projectId, async () => {
       this.projectsBeingWritten.add(projectId);
       bumpGeneration();
       try {
@@ -194,6 +207,11 @@ export class ProjectSettingsManager {
         bumpGeneration();
       }
     });
+  }
+
+  private enqueue<T>(projectId: string, task: () => Promise<T>): Promise<T> {
+    const previous = this.writeQueues.get(projectId) ?? Promise.resolve();
+    const result = previous.then(task);
     const settled = result.then(
       () => undefined,
       () => undefined
@@ -212,7 +230,7 @@ export class ProjectSettingsManager {
    */
   async addBrowserAllowedHost(projectId: string, hostname: string): Promise<string[]> {
     return this.serializeWrite(projectId, async () => {
-      const settings = await this.getProjectSettings(projectId);
+      const settings = await this.readProjectSettings(projectId);
       const hosts = settings.browserAllowedHosts ?? [];
       if (hosts.some((host) => host.toLowerCase() === hostname)) return hosts;
       const next = [...hosts, hostname];
@@ -291,13 +309,21 @@ export class ProjectSettingsManager {
   private async readSavedBrowserAllowedHosts(projectId: string): Promise<string[] | undefined> {
     const filePath = settingsFilePath(this.projectsConfigDir, projectId);
     if (!filePath) return undefined;
+    let content: string;
     try {
-      const content = await fs.readFile(filePath, "utf-8");
+      content = await fs.readFile(filePath, "utf-8");
+    } catch (error) {
+      // An existing file that can't be read may hold settings the save would
+      // erase, so the save fails rather than replace it unseen.
+      if (isMissingFileError(error)) return undefined;
+      throw error;
+    }
+    try {
       const stripped = content.startsWith(UTF8_BOM) ? content.slice(UTF8_BOM.length) : content;
       const decoded = decode(JSON.parse(stripped));
       return decoded.ok ? decoded.settings.browserAllowedHosts : undefined;
     } catch {
-      // Missing or unreadable: there is no saved list for the save to keep.
+      // Unparseable: there is no saved list for the save to keep.
       return undefined;
     }
   }
@@ -380,8 +406,6 @@ export class ProjectSettingsManager {
       turbopackEnabled:
         typeof settings.turbopackEnabled === "boolean" ? settings.turbopackEnabled : undefined,
     };
-
-    this.notificationOverridesCache.set(projectId, runtimeSettings.notificationOverrides);
 
     if (settings.projectIconSvg) {
       const sanitizeResult = sanitizeSvg(settings.projectIconSvg);
@@ -471,6 +495,10 @@ export class ProjectSettingsManager {
       }
     }
 
+    // Published only once the write lands, so a failed save leaves the last
+    // saved overrides in effect.
+    this.notificationOverridesCache.set(projectId, runtimeSettings.notificationOverrides);
+
     // Invalidate after durable write succeeds. Dynamic import avoids
     // expanding the static module graph for tests that mock ProjectStore.
     const { commandService } = await import("./CommandService.js");
@@ -483,8 +511,12 @@ export class ProjectSettingsManager {
     const unique = [...new Set(projectIds)];
     const results = await Promise.all(
       unique.map(async (id) => {
-        const settings = await this.getProjectSettings(id);
-        return { id, overrides: settings.notificationOverrides };
+        try {
+          const settings = await this.getProjectSettings(id);
+          return { id, overrides: settings.notificationOverrides };
+        } catch {
+          return { id, overrides: undefined };
+        }
       })
     );
     const record: Record<string, Partial<NotificationSettings>> = {};
@@ -505,4 +537,8 @@ export class ProjectSettingsManager {
     this.settingsCache.invalidate(oldId);
     projectEnvSecureStorage.migrateAllForProject(oldId, newId);
   }
+}
+
+function isMissingFileError(error: unknown): boolean {
+  return !!error && typeof error === "object" && (error as NodeJS.ErrnoException).code === "ENOENT";
 }

@@ -17,6 +17,8 @@ vi.mock("../../../store.js", () => ({ store: storeMock }));
 
 const registryMock = vi.hoisted(() => ({
   getForgeProviderImpl: vi.fn<(id: string) => unknown>(() => undefined),
+  getForgeIssueProviderImpl: vi.fn<(id: string) => unknown>(() => undefined),
+  getForgeProviderBaseImpl: vi.fn<(id: string) => unknown>(() => undefined),
   // Remote selection asks the registry whether a URL is parseable at all
   // (#11408). Default: every remote is supported, so selection falls through
   // to name preference and these tests stay about provider resolution.
@@ -63,8 +65,14 @@ vi.mock("../../../services/PluginService.js", () => ({ pluginService: pluginServ
 import {
   resolveForCwd,
   resolveForgeRemoteNameForCwd,
+  resolveIssueOverrideForCwd,
   resolvePRHeadRefspecForCwd,
+  stampIssueProvider,
 } from "../forgeResolution.js";
+import {
+  makeIssuesOnlyProvider,
+  makeTrackerIssue,
+} from "../../../services/__tests__/fixtures/issuesOnlyForgeProvider.js";
 
 const giteaEntry: ForgeProviderEntry = {
   pluginId: "acme",
@@ -789,5 +797,128 @@ describe("resolvePRHeadRefspecForCwd", () => {
     withProvider({ buildPRHeadRefspec: vi.fn(() => value) });
 
     await expect(resolvePRHeadRefspecForCwd("/repo", 42, "feature/x")).resolves.toBeUndefined();
+  });
+});
+
+describe("resolveForCwd — issues role (#13700)", () => {
+  const trackerEntry: ForgeProviderEntry = {
+    pluginId: "acme.tracker",
+    contribution: { id: "tracker", name: "Tracker", matches: [], roles: ["issues"] },
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    gitServiceCacheMock.getGitService.mockReturnValue(gitServiceMock);
+    gitServiceMock.listWorktrees.mockResolvedValue([
+      { path: "/repo", branch: "main", bare: false, isMainWorktree: true },
+    ]);
+    gitServiceMock.getRemoteUrl.mockResolvedValue("https://gitea.example.com/owner/repo.git");
+    gitServiceMock.listRemotes.mockResolvedValue([
+      { name: "origin", fetchUrl: "https://gitea.example.com/owner/repo.git" },
+    ]);
+    projectStoreMock.getProjectByPath.mockImplementation(async (p: string) =>
+      p === "/repo" ? { id: "project-1", path: "/repo" } : null
+    );
+    projectStoreMock.getProjectSettings.mockResolvedValue({
+      runCommands: [],
+      issueProviderOverride: "acme.tracker.tracker",
+    });
+    registryMock.listMatchingProviders.mockReturnValue([{}]);
+    resolverMock.resolveForgeProvider.mockImplementation((inputs) =>
+      inputs.issueProviderOverride === "acme.tracker.tracker"
+        ? {
+            entry: null,
+            resolvedVia: null,
+            issues: { entry: trackerEntry, resolvedVia: "override" },
+          }
+        : { entry: giteaEntry, resolvedVia: "hostname" }
+    );
+  });
+
+  it("builds the repository reference from the provider, never reading the remote", async () => {
+    const tracker = makeIssuesOnlyProvider();
+    const resolveIssueRepo = vi.spyOn(tracker, "resolveIssueRepo");
+    registryMock.getForgeIssueProviderImpl.mockReturnValue(tracker);
+
+    const context = await resolveForCwd("/repo", "issues");
+
+    expect(resolveIssueRepo).toHaveBeenCalledWith("/repo");
+    expect(gitServiceMock.listRemotes).not.toHaveBeenCalled();
+    expect(gitServiceMock.getRemoteUrl).not.toHaveBeenCalled();
+    expect(context).toMatchObject({
+      namespaceId: "acme.tracker.tracker",
+      providerId: "tracker",
+      repoRef: { owner: "ENG", projectPath: "/repo" },
+      viaIssueOverride: true,
+    });
+    expect(context.impl).toBe(tracker);
+  });
+
+  it("leaves the code role on the code forge while issues are bound elsewhere", async () => {
+    const parseRemote = vi.fn(() => ({ host: "gitea.example.com", owner: "o", repo: "r" }));
+    registryMock.getForgeProviderImpl.mockReturnValue({ parseRemote });
+
+    const context = await resolveForCwd("/repo");
+
+    expect(context.namespaceId).toBe("acme.gitea");
+    expect(parseRemote).toHaveBeenCalledWith("https://gitea.example.com/owner/repo.git");
+  });
+
+  it("serves issues from the code forge, unstamped, when no issues override is set", async () => {
+    projectStoreMock.getProjectSettings.mockResolvedValue({ runCommands: [] });
+    registryMock.getForgeProviderImpl.mockReturnValue({
+      parseRemote: vi.fn(() => ({ host: "gitea.example.com", owner: "o", repo: "r" })),
+    });
+
+    const context = await resolveForCwd("/repo", "issues");
+
+    expect(context.namespaceId).toBe("acme.gitea");
+    expect(context.viaIssueOverride).toBe(false);
+    const issue = makeTrackerIssue(7, "Thing");
+    expect(stampIssueProvider(context, issue)).toBe(issue);
+    await expect(resolveIssueOverrideForCwd("/repo")).resolves.toBeNull();
+  });
+
+  it("fails closed when the issues override names no usable provider", async () => {
+    resolverMock.resolveForgeProvider.mockReturnValue({
+      entry: giteaEntry,
+      resolvedVia: "hostname",
+      issues: { entry: null, resolvedVia: null },
+    });
+
+    await expect(resolveForCwd("/repo", "issues")).rejects.toThrow(
+      "This project's issues provider isn't available"
+    );
+  });
+
+  it("activates a lazy issues provider before giving up on it", async () => {
+    const tracker = makeIssuesOnlyProvider();
+    registryMock.getForgeIssueProviderImpl.mockReturnValueOnce(undefined).mockReturnValue(tracker);
+
+    await resolveForCwd("/repo", "issues");
+
+    expect(pluginServiceMock.activatePluginForForgeProvider).toHaveBeenCalledWith(
+      "acme.tracker.tracker"
+    );
+  });
+
+  it("asks for setup when the provider can't build a reference for this project yet", async () => {
+    const tracker = makeIssuesOnlyProvider();
+    vi.spyOn(tracker, "resolveIssueRepo").mockResolvedValue(null);
+    registryMock.getForgeIssueProviderImpl.mockReturnValue(tracker);
+
+    await expect(resolveForCwd("/repo", "issues")).rejects.toThrow(
+      "Tracker isn't set up for this project yet"
+    );
+  });
+
+  it("stamps issues it served with the provider's canonical id", async () => {
+    registryMock.getForgeIssueProviderImpl.mockReturnValue(makeIssuesOnlyProvider());
+    const context = await resolveForCwd("/repo", "issues");
+    expect(stampIssueProvider(context, makeTrackerIssue(42, "Fix login"))).toMatchObject({
+      number: 42,
+      key: "ENG-42",
+      providerId: "acme.tracker.tracker",
+    });
   });
 });

@@ -117,6 +117,56 @@ describe("enqueueBackgroundRestores", () => {
     expect(fake.calls).toEqual(["a", "b"]);
   });
 
+  it("refreshes admission readings before each project, not once per pass (#13530)", async () => {
+    const fake = createFakeManager();
+    let releaseRefresh: () => void = () => {};
+    const refreshAdmission = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseRefresh = resolve;
+        })
+    );
+    enqueueBackgroundRestores(job({ getManager: () => fake.manager, refreshAdmission }));
+    await tick();
+
+    // The restore waits on the fresh reading rather than racing it.
+    expect(refreshAdmission).toHaveBeenCalledTimes(1);
+    expect(fake.calls).toEqual([]);
+    releaseRefresh();
+    await tick();
+    expect(fake.calls).toEqual(["a"]);
+
+    fake.settle();
+    await tick();
+    expect(refreshAdmission).toHaveBeenCalledTimes(2);
+    expect(fake.calls).toEqual(["a"]);
+    releaseRefresh();
+    await tick();
+    expect(fake.calls).toEqual(["a", "b"]);
+  });
+
+  it("starts nothing once a quit lands while it was reading", async () => {
+    // The quit has no restore in flight to abort, so the queue itself has to
+    // notice it after the reading, or it boots a project — and respawns its
+    // agents — behind the shutdown's kill sweep.
+    const fake = createFakeManager();
+    let releaseRefresh: () => void = () => {};
+    const refreshAdmission = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseRefresh = resolve;
+        })
+    );
+    enqueueBackgroundRestores(job({ getManager: () => fake.manager, refreshAdmission }));
+    await tick();
+
+    cancelBackgroundRestores();
+    releaseRefresh();
+    await tick();
+
+    expect(fake.calls).toEqual([]);
+  });
+
   it("finishes one window's projects before starting the next window's", async () => {
     const first = createFakeManager();
     const second = createFakeManager();

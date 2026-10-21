@@ -33,6 +33,11 @@ export interface DevPreviewConsoleCapture {
    */
   hmrDead: boolean;
   resetHmrDead: () => void;
+  /**
+   * The guest webContents capture is bound to, for lazy object inspection.
+   * Follows guest replacement, so it can change while the webview stays ready.
+   */
+  guestWebContentsId: number | undefined;
 }
 
 /**
@@ -63,6 +68,31 @@ export function useDevPreviewConsoleCapture(
   // generation failures from resurrecting the banner over a healthy reload.
   const currentGenerationRef = useRef(0);
   const activeCaptureTokenRef = useRef<symbol | null>(null);
+  const capturedWebContentsIdRef = useRef<number | null>(null);
+  const [capturedWebContentsId, setCapturedWebContentsId] = useState<number | null>(null);
+  const [guestRevision, setGuestRevision] = useState(0);
+
+  // A DOM move of the <webview> replaces its guest under the same element and
+  // fires dom-ready again while isWebviewReady stays true. Capture is bound to
+  // a webContents id, so restart it on the replacement guest (#13634).
+  useEffect(() => {
+    if (!webviewElement) return;
+    const handleDomReady = () => {
+      let webContentsId: number;
+      try {
+        webContentsId = webviewElement.getWebContentsId();
+      } catch {
+        return;
+      }
+      if (webContentsId !== capturedWebContentsIdRef.current) {
+        setGuestRevision((revision) => revision + 1);
+      }
+    };
+    webviewElement.addEventListener("dom-ready", handleDomReady);
+    return () => {
+      webviewElement.removeEventListener("dom-ready", handleDomReady);
+    };
+  }, [webviewElement]);
 
   useEffect(() => {
     if (!webviewElement || isEvicted) return;
@@ -73,6 +103,13 @@ export function useDevPreviewConsoleCapture(
     } catch {
       // WebContents not attached yet — the next ready/evicted transition retries.
       return;
+    }
+    if (capturedWebContentsIdRef.current !== webContentsId) {
+      // Main numbers navigation generations per guest, so a replacement guest
+      // starts over and its failures must not be gated by the old guest's count.
+      currentGenerationRef.current = 0;
+      capturedWebContentsIdRef.current = webContentsId;
+      setCapturedWebContentsId(webContentsId);
     }
 
     // The main-process capture handler rejects unregistered guest webContents
@@ -131,7 +168,7 @@ export function useDevPreviewConsoleCapture(
         });
       safeFireAndForget(stopped, { context: "Stopping dev-preview console capture" });
     };
-  }, [paneId, webviewElement, isWebviewReady, isEvicted]);
+  }, [paneId, webviewElement, isWebviewReady, isEvicted, guestRevision]);
 
   // Drop this pane's buffered rows + counts only when the panel is gone for
   // good. Unmount alone is not deletion: a DevPreview panel in a grid tab
@@ -147,5 +184,10 @@ export function useDevPreviewConsoleCapture(
     };
   }, [paneId]);
 
-  return { hmrDead, resetHmrDead };
+  const guestWebContentsId =
+    isWebviewReady && !isEvicted && capturedWebContentsId !== null
+      ? capturedWebContentsId
+      : undefined;
+
+  return { hmrDead, resetHmrDead, guestWebContentsId };
 }

@@ -19,10 +19,33 @@ const dialogService = vi.hoisted(() => ({
   getWebContentsId: vi.fn<(panelId: string) => number | undefined>(),
 }));
 
+/** The bitmap a capture decodes to at scale one, and the crops taken from it. */
+const bitmap = vi.hoisted(() => ({
+  size: { width: 1600, height: 1200 },
+  crops: [] as Array<{ x: number; y: number; width: number; height: number }>,
+}));
+const saved = vi.hoisted(() => ({ calls: [] as Buffer[] }));
+
 vi.mock("electron", () => ({
   webContents: {
     fromId: vi.fn((webContentsId: number) => guestRegistry.get(webContentsId)),
   },
+  nativeImage: {
+    createFromBuffer: vi.fn(() => ({
+      getSize: () => bitmap.size,
+      crop: (rect: { x: number; y: number; width: number; height: number }) => {
+        bitmap.crops.push(rect);
+        return { isEmpty: () => false, toPNG: () => Buffer.from("CROPPED") };
+      },
+    })),
+  },
+}));
+
+vi.mock("../clipboard.js", () => ({
+  saveElementCapture: vi.fn(async (png: Buffer) => {
+    saved.calls.push(png);
+    return "/tmp/daintree-clipboard/element-1.png";
+  }),
 }));
 
 vi.mock("../../../services/WebviewDialogService.js", () => ({
@@ -241,5 +264,136 @@ describe("webviewCapture handler", () => {
     } finally {
       dispose();
     }
+  });
+});
+
+describe("webviewCapture element crop", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    guestRegistry.clear();
+    dialogService.getWebContentsId.mockReset();
+    bitmap.size = { width: 1600, height: 1200 };
+    bitmap.crops.length = 0;
+    saved.calls.length = 0;
+  });
+
+  async function getElementCapture() {
+    const { webviewCaptureNamespace } = await import("../webviewCapture.js");
+    const handler = webviewCaptureNamespace.ops.captureElement.handler as (
+      ctx: { webContentsId: number },
+      panelId: string,
+      request: unknown
+    ) => Promise<unknown>;
+    return (request: unknown, sender = SENDER_VIEW) =>
+      handler({ webContentsId: sender }, "panel-a", request);
+  }
+
+  it("crops to the element and a margin, scaled from the page's CSS pixels to the bitmap's", async () => {
+    dialogService.getWebContentsId.mockReturnValue(7);
+    guestRegistry.set(7, makeGuest());
+    const capture = await getElementCapture();
+
+    // An 800px-wide page drawn into a 1600px bitmap: zoom and device scale
+    // together make two bitmap pixels per CSS pixel, whatever each one is.
+    const result = await capture({
+      rect: { x: 40, y: 80, width: 120, height: 40 },
+      viewportWidth: 800,
+      viewportHeight: 600,
+    });
+
+    expect(bitmap.crops).toEqual([{ x: 64, y: 144, width: 272, height: 112 }]);
+    expect(saved.calls).toEqual([Buffer.from("CROPPED")]);
+    expect(result).toEqual({
+      status: "saved",
+      filePath: "/tmp/daintree-clipboard/element-1.png",
+      width: 272,
+      height: 112,
+    });
+  });
+
+  it("clamps a box running past the page's edge to what is on screen", async () => {
+    dialogService.getWebContentsId.mockReturnValue(7);
+    guestRegistry.set(7, makeGuest());
+    const capture = await getElementCapture();
+
+    await capture({
+      rect: { x: -50, y: 560, width: 200, height: 100 },
+      viewportWidth: 800,
+      viewportHeight: 600,
+    });
+    expect(bitmap.crops).toEqual([{ x: 0, y: 1104, width: 316, height: 96 }]);
+  });
+
+  it("has no picture of an element scrolled out of view, rather than an empty one", async () => {
+    dialogService.getWebContentsId.mockReturnValue(7);
+    guestRegistry.set(7, makeGuest());
+    const capture = await getElementCapture();
+
+    expect(
+      await capture({
+        rect: { x: 10, y: 2_000, width: 50, height: 50 },
+        viewportWidth: 800,
+        viewportHeight: 600,
+      })
+    ).toEqual({ status: "offscreen" });
+    expect(bitmap.crops).toEqual([]);
+    expect(saved.calls).toEqual([]);
+  });
+
+  it("crops nothing from a page resized since the box was measured", async () => {
+    dialogService.getWebContentsId.mockReturnValue(7);
+    guestRegistry.set(7, makeGuest());
+    // A drawer opened beside the page: the frame is narrower than the viewport
+    // the guest measured, so the box would frame the wrong part of it.
+    bitmap.size = { width: 1088, height: 1200 };
+    const capture = await getElementCapture();
+
+    expect(
+      await capture({
+        rect: { x: 40, y: 80, width: 120, height: 40 },
+        viewportWidth: 800,
+        viewportHeight: 600,
+      })
+    ).toEqual({ status: "resized" });
+    expect(bitmap.crops).toEqual([]);
+    expect(saved.calls).toEqual([]);
+  });
+
+  it("refuses a request it can't measure, without capturing anything", async () => {
+    const capturePage = vi.fn(async () => makeImage());
+    dialogService.getWebContentsId.mockReturnValue(7);
+    guestRegistry.set(7, makeGuest({ capturePage }));
+    const capture = await getElementCapture();
+
+    for (const request of [
+      null,
+      { rect: { x: 0, y: 0, width: 10, height: 10 }, viewportWidth: 0, viewportHeight: 600 },
+      { rect: { x: 0, y: 0, width: 10, height: 10 }, viewportWidth: 800 },
+      {
+        rect: { x: Number.NaN, y: 0, width: 10, height: 10 },
+        viewportWidth: 800,
+        viewportHeight: 600,
+      },
+      { rect: { x: 0, y: 0, width: -1, height: 10 }, viewportWidth: 800, viewportHeight: 600 },
+      { viewportWidth: 800, viewportHeight: 600 },
+    ]) {
+      await expect(capture(request)).rejects.toMatchObject({ code: "VALIDATION" });
+    }
+    expect(capturePage).not.toHaveBeenCalled();
+  });
+
+  it("refuses a panel another view embeds, as the viewport capture does", async () => {
+    const capturePage = vi.fn(async () => makeImage());
+    dialogService.getWebContentsId.mockReturnValue(7);
+    guestRegistry.set(7, makeGuest({ capturePage }));
+    const capture = await getElementCapture();
+
+    await expect(
+      capture(
+        { rect: { x: 0, y: 0, width: 10, height: 10 }, viewportWidth: 800, viewportHeight: 600 },
+        SENDER_VIEW + 1
+      )
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    expect(capturePage).not.toHaveBeenCalled();
   });
 });

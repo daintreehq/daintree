@@ -13,6 +13,7 @@ import type {
 import type { PendingUpdateInstallStage } from "./utils/updateInstallStages.js";
 import type { TerminalConfig } from "../shared/types/ipc/config.js";
 import type { HostDescriptor } from "../shared/types/remoteHosts.js";
+import type { DeviceAnswerSettings } from "../shared/types/ipc/deviceAnswer.js";
 import type { IssueAssociation } from "../shared/types/ipc/worktree.js";
 import type { InstalledPluginRecord } from "../shared/types/plugin.js";
 import type { ErrorRecord } from "../shared/types/ipc/errors.js";
@@ -738,6 +739,13 @@ export interface StoreSchema {
   };
   /** This machine as a host: whether it listens for Shells and starts at login. */
   hostMode?: { enabled: boolean; startAtLogin: boolean; advertise?: boolean };
+  /**
+   * Answer from another device: whether its page is served, where, the
+   * devices paired to it (token digests only, never the tokens) and the
+   * answers they gave. Additive key with no numbered migration; entries are
+   * validated on load.
+   */
+  deviceAnswer?: DeviceAnswerSettings;
   /** Client-side behaviour while a window is attached to a remote host. */
   remoteHostsPreferences?: { interceptCtrlVImages: boolean };
   /**

@@ -65,6 +65,11 @@ interface AggregateStats {
   /** Last measured app memory, or null before the first successful read. */
   totalMemoryMB: number | null;
   /**
+   * The figure the warning thresholds compare, read alongside `totalMemoryMB`:
+   * the GPU process at its resident size rather than its graphics footprint.
+   */
+  pressureMemoryMB: number | null;
+  /**
    * Whether `totalMemoryMB` is recent enough to act on. A failed read keeps the
    * last figure but, once it is older than a few polls, the figure stops
    * counting: no warning, and "Unavailable" in the popover.
@@ -425,6 +430,7 @@ export function ProjectResourceBadge({
   const [stats, setStats] = useState<AggregateStats>({
     runningProjects: 0,
     totalMemoryMB: null,
+    pressureMemoryMB: null,
     memoryFresh: false,
     memorySampledAt: null,
     projects: [],
@@ -481,8 +487,8 @@ export function ProjectResourceBadge({
   // The warning reads the same fresh-or-nothing figure the popover shows, so a
   // stalled read can neither raise it nor hold it up.
   const memoryState =
-    stats.memoryFresh && stats.totalMemoryMB !== null
-      ? getMemoryState(stats.totalMemoryMB, thresholds)
+    stats.memoryFresh && stats.pressureMemoryMB !== null
+      ? getMemoryState(stats.pressureMemoryMB, thresholds)
       : "normal";
   const trend = getTrendDirection(samples, SAMPLES_PER_MIN);
   const projectNames = useMemo(
@@ -513,6 +519,10 @@ export function ProjectResourceBadge({
       // could read its own processes.
       const appMetrics = settled(metricsResult, "app metrics");
       const memoryMB = appMetrics && !appMetrics.unavailable ? appMetrics.totalMemoryMB : null;
+      const pressureMB =
+        appMetrics && !appMetrics.unavailable
+          ? (appMetrics.pressureMemoryMB ?? appMetrics.totalMemoryMB)
+          : null;
 
       const currentStats = useProjectStatsStore.getState().stats;
       let running = 0;
@@ -529,6 +539,7 @@ export function ProjectResourceBadge({
         nextSamples,
         runningProjects: running,
         totalMemoryMB: memoryMB,
+        pressureMemoryMB: pressureMB,
         projects: projects.map((p: Project) => ({ id: p.id, name: p.name })),
       };
     } catch (error) {
@@ -603,6 +614,7 @@ export function ProjectResourceBadge({
           return {
             runningProjects: result.runningProjects,
             totalMemoryMB: result.totalMemoryMB ?? prev.totalMemoryMB,
+            pressureMemoryMB: result.pressureMemoryMB ?? prev.pressureMemoryMB,
             memorySampledAt: sampledAt,
             memoryFresh: sampledAt !== null && now - sampledAt <= APP_MEMORY_FRESH_MS,
             projects: result.projects,
@@ -822,8 +834,10 @@ export function ProjectResourceBadge({
     : stats.memoryFresh
       ? stats.totalMemoryMB
       : null;
-  const popoverMemoryState =
-    appMemoryMB === null ? "normal" : getMemoryState(appMemoryMB, thresholds);
+  // The total above counts the GPU process's graphics footprint, which the
+  // thresholds were never tuned for (#13637), so the warning follows the
+  // badge's own pressure reading rather than that total.
+  const popoverMemoryState = memoryState;
 
   const { shown: shownWorkloads, note: workloadNote } = pickWorkloads(
     memorySnapshot?.terminalWorkloads ?? null,

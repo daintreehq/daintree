@@ -11,6 +11,7 @@ import {
   type EnvVar,
 } from "@/components/Project/projectSettingsDirty";
 import { validatePathPattern } from "@shared/utils/pathPattern";
+import { formatShellArgs, parseShellArgs } from "@shared/utils/shellArgs";
 import type { RunCommand, CopyTreeSettings } from "@/types";
 import type {
   DaintreeMcpTier,
@@ -73,6 +74,7 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
   );
   const [forgeRemote, setForgeRemote] = useState<string | undefined>(undefined);
   const [forgeProviderOverride, setForgeProviderOverride] = useState<string | null>(null);
+  const [issueProviderOverride, setIssueProviderOverride] = useState<string | null>(null);
   const [resourceEnvironments, setResourceEnvironments] = useState<
     Record<string, ResourceEnvironment> | undefined
   >(undefined);
@@ -107,8 +109,10 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
   const currentTerminalSettings = useMemo((): ProjectTerminalSettings | undefined => {
     const result: ProjectTerminalSettings = {};
     if (terminalShell !== undefined && terminalShell.trim()) result.shell = terminalShell.trim();
-    if (terminalShellArgs !== undefined && terminalShellArgs.trim())
-      result.shellArgs = terminalShellArgs.trim().split(/\s+/);
+    if (terminalShellArgs !== undefined) {
+      const shellArgs = parseShellArgs(terminalShellArgs);
+      if (shellArgs.length > 0) result.shellArgs = shellArgs;
+    }
     if (terminalDefaultCwd !== undefined && terminalDefaultCwd.trim())
       result.defaultWorkingDirectory = terminalDefaultCwd.trim();
     if (terminalScrollback !== undefined && terminalScrollback.trim()) {
@@ -152,7 +156,8 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
       turbopackEnabled,
       daintreeMcpTier,
       forgeProviderOverride,
-      daintreeMcpSkipConfirmations
+      daintreeMcpSkipConfirmations,
+      issueProviderOverride
     );
   }, [
     projectName,
@@ -181,6 +186,7 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
     daintreeMcpTier,
     forgeProviderOverride,
     daintreeMcpSkipConfirmations,
+    issueProviderOverride,
   ]);
   // Layout effect, not passive: callers such as EnvironmentVariablesEditor push
   // new values and invoke flush() in the same tick, and flush() reads this ref
@@ -223,6 +229,7 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
       setNotificationOverrides({});
       setForgeRemote(undefined);
       setForgeProviderOverride(null);
+      setIssueProviderOverride(null);
       setResourceEnvironments(undefined);
       setActiveResourceEnvironment(undefined);
       setDefaultWorktreeMode(undefined);
@@ -258,6 +265,7 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
     const initialNotificationOverrides = projectSettings.notificationOverrides ?? {};
     const initialForgeRemote = projectSettings.forgeRemote;
     const initialForgeProviderOverride = projectSettings.forgeProviderOverride ?? null;
+    const initialIssueProviderOverride = projectSettings.issueProviderOverride ?? null;
     // resourceEnvironment → resourceEnvironments migration is owned by the
     // main-process codec (electron/services/projectSettingsCodec.ts), so by
     // the time settings reach the renderer they are already canonical.
@@ -295,7 +303,9 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
     setWorktreePathPattern(initialWorktreePathPattern);
     setTerminalShell(initialTerminalSettings?.shell);
     setTerminalShellArgs(
-      initialTerminalSettings?.shellArgs ? initialTerminalSettings.shellArgs.join(" ") : undefined
+      initialTerminalSettings?.shellArgs
+        ? formatShellArgs(initialTerminalSettings.shellArgs)
+        : undefined
     );
     setTerminalDefaultCwd(initialTerminalSettings?.defaultWorkingDirectory);
     setTerminalScrollback(
@@ -306,6 +316,7 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
     setNotificationOverrides(initialNotificationOverrides);
     setForgeRemote(initialForgeRemote);
     setForgeProviderOverride(initialForgeProviderOverride);
+    setIssueProviderOverride(initialIssueProviderOverride);
     setResourceEnvironments(initialResourceEnvironments);
     setActiveResourceEnvironment(initialActiveResourceEnvironment);
     setDefaultWorktreeMode(initialDefaultWorktreeMode);
@@ -335,7 +346,8 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
       initialTurbopackEnabled,
       initialDaintreeMcpTier,
       initialForgeProviderOverride,
-      initialDaintreeMcpSkipConfirmations
+      initialDaintreeMcpSkipConfirmations,
+      initialIssueProviderOverride
     );
     setProjectIsInitialized(true);
   }, [projectSettings, isOpen, projectIsInitialized, currentProject, projectIsLoading, projectId]);
@@ -432,6 +444,7 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
           effectivePrefixMode === "custom" ? sanitizedBranchPrefixCustom : undefined,
         forgeRemote: forgeRemote || undefined,
         forgeProviderOverride: forgeProviderOverride ?? undefined,
+        issueProviderOverride: issueProviderOverride ?? undefined,
         worktreePathPattern: sanitizedWorktreePathPattern,
         terminalSettings: currentTerminalSettings,
         notificationOverrides:
@@ -549,6 +562,8 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
     setForgeRemote,
     forgeProviderOverride,
     setForgeProviderOverride,
+    issueProviderOverride,
+    setIssueProviderOverride,
     resourceEnvironments,
     setResourceEnvironments,
     activeResourceEnvironment,

@@ -467,6 +467,8 @@ export interface GitCommitListOptions {
   branch?: string;
   skip?: number;
   limit?: number;
+  /** Omitted counts as true. `false` skips the revision count and reports `total: 0`. */
+  includeTotal?: boolean;
 }
 
 /** Git commit list response */

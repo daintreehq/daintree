@@ -12,9 +12,7 @@ import {
   AlertTriangle,
   ChevronRight,
   FolderCode,
-  FolderSearch,
   FolderTree,
-  FolderX,
   MousePointer2,
   PanelRightClose,
   PanelRightOpen,
@@ -236,11 +234,11 @@ export function SiteBuilderToolbar(props: DevPreviewToolSurfaceProps<InspectorCo
       <div
         ref={stripRef}
         role="toolbar"
-        aria-label="SvelteKit Tools"
+        aria-label="Element Picker"
         onKeyDown={onStripKeyDown}
         className="flex h-8 shrink-0 items-center gap-2 border-b border-overlay bg-surface px-2"
       >
-        <WaitingRow label="Starting SvelteKit Tools" />
+        <WaitingRow label="Starting the Element Picker" />
       </div>
     );
   }
@@ -249,7 +247,7 @@ export function SiteBuilderToolbar(props: DevPreviewToolSurfaceProps<InspectorCo
     <div
       ref={stripRef}
       role="toolbar"
-      aria-label="SvelteKit Tools"
+      aria-label="Element Picker"
       onKeyDown={onStripKeyDown}
       className="@container/strip flex h-8 shrink-0 items-center gap-2 border-b border-overlay bg-surface px-2"
     >
@@ -274,8 +272,8 @@ export function SiteBuilderToolbar(props: DevPreviewToolSurfaceProps<InspectorCo
       </div>
       <DrawerToggle panelId={props.panelId} expanded={hasDetails && !drawerCollapsed} />
       <DismissButton
-        aria-label="Close SvelteKit Tools"
-        tooltip="Close SvelteKit Tools"
+        aria-label="Close Element Picker"
+        tooltip="Close Element Picker"
         onClick={props.onClose}
       />
     </div>
@@ -468,15 +466,6 @@ function StripStatus({
     if (workspace.status === "ambiguous") {
       return <StripMessage icon={FolderTree}>Choose which app this preview shows</StripMessage>;
     }
-    if (workspace.status === "no-app") {
-      // A walk that ran out of budget looked at part of the worktree, so it
-      // cannot say the app is absent — only that it did not reach one.
-      return workspace.scanComplete ? (
-        <StripMessage icon={FolderX}>No SvelteKit app in this worktree</StripMessage>
-      ) : (
-        <StripMessage icon={FolderSearch}>No app found before the search stopped</StripMessage>
-      );
-    }
     if (workspace.status === "failed") {
       return (
         <StripMessage icon={AlertTriangle} tone="warning" title={workspace.message}>
@@ -585,7 +574,7 @@ export function SiteBuilderDrawer(props: DevPreviewToolSurfaceProps<InspectorCon
   return (
     <aside
       ref={drawerRef}
-      aria-label="SvelteKit Tools details"
+      aria-label="Element Picker details"
       // Width, resizing, the narrow-pane policy and the `@container/drawer` the
       // rows below answer to all belong to the host's drawer chrome
       // (`src/components/DevPreview/DevPreviewToolDrawerChrome.tsx`); this fills
@@ -643,8 +632,9 @@ export function SiteBuilderDrawer(props: DevPreviewToolSurfaceProps<InspectorCon
           a 360px panel doing it; a disclosure would have let the user fold away
           the only thing here. `aria-label` on the composer keeps the grouping
           for assistive technology without drawing one. */}
-        {state.workspace.status === "ready" &&
+        {(state.workspace.status === "ready" || state.workspace.status === "no-app") &&
         (selection.status === "ready" ||
+          (selection.status === "observed" && selection.page !== null) ||
           composer.draft.trim() !== "" ||
           composer.deliveries.length > 0) ? (
           <AgentComposer
@@ -672,7 +662,11 @@ function workspaceNeedsAttention(state: InspectorState): boolean {
   // the builder does, so their absence is not a gap the user can do anything
   // about, and saying so was a warning about a road that isn't there.
   if (workspace.status === "ready") return workspace.appRoots.length > 1;
-  return workspace.status !== "idle" && workspace.status !== "opening";
+  // No SvelteKit app is the ordinary case for every other framework: the
+  // picker works there, and saying so is not worth opening the drawer for.
+  return (
+    workspace.status !== "idle" && workspace.status !== "opening" && workspace.status !== "no-app"
+  );
 }
 
 function WorkspaceStatus({
@@ -723,22 +717,19 @@ function SiteSourceBody({
       // nothing, and a walk that stopped at its budget having found nothing
       // yet. Only the first is evidence the app is not there.
       return workspace.scanComplete ? (
-        <InspectorNotice
-          tone="info"
-          title="Preview only — no SvelteKit app found"
-          density="compact"
-        >
-          You can select in the preview, but there's no SvelteKit source in this worktree to trace
-          it to.
+        <InspectorNotice tone="info" title="Source not traced" density="compact">
+          There's no SvelteKit app in this worktree to trace elements to, so a request carries the
+          element's selector, markup, styles and a screenshot instead.
         </InspectorNotice>
       ) : (
         <InspectorNotice
           tone="info"
-          title="Preview only — the search stopped early"
+          title="Source not traced — the search stopped early"
           density="compact"
         >
           This worktree was too large to search all of it, and no SvelteKit app turned up in the
-          part that was. You can still select in the preview.
+          part that was. A request carries the element's selector, markup, styles and a screenshot
+          instead.
         </InspectorNotice>
       );
     case "ambiguous":
@@ -977,8 +968,18 @@ function SelectionBody({ state }: { state: InspectorState }) {
     case "observed":
       return (
         <section aria-label="Selected element" className="flex flex-col gap-1">
-          <p className="truncate text-sm text-text-primary">{selection.node.label}</p>
-          <p className="text-xs text-text-secondary">This element couldn't be traced to source</p>
+          <p className="truncate text-sm text-text-primary">
+            {selection.nodeCount > 1
+              ? `${selection.node.label} and ${selection.nodeCount - 1} more`
+              : selection.node.label}
+          </p>
+          {selection.page !== null ? (
+            <p className="truncate font-mono text-3xs text-text-secondary">
+              {selection.page.nodes[0]?.context?.selector ?? "Source not traced"}
+            </p>
+          ) : (
+            <p className="text-xs text-text-secondary">This element couldn't be traced to source</p>
+          )}
         </section>
       );
     case "settling":

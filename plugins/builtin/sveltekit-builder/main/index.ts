@@ -156,13 +156,23 @@ export async function activate(host: BuiltinPluginHostApi): Promise<() => void> 
   await host.registerAction(
     {
       id: TOGGLE_BUILDER_ACTION_ID,
-      title: "Toggle SvelteKit Tools",
+      title: "Toggle Element Picker",
       description:
-        "Switch SvelteKit Tools on or off in this worktree's dev preview, opening the preview if none is running.",
+        "Switch the Element Picker on or off in this worktree's dev preview, opening the preview if none is running.",
       category: "panels",
       kind: "command",
       danger: "safe",
-      keywords: ["svelte", "sveltekit", "tools", "inspect", "inspector", "preview", "agent"],
+      keywords: [
+        "element",
+        "picker",
+        "select",
+        "svelte",
+        "sveltekit",
+        "inspect",
+        "inspector",
+        "preview",
+        "agent",
+      ],
       // Toggling a preview tool exercises none of the plugin's capabilities, so
       // it asks for none: the host elevates a command to a confirm prompt from
       // what it requires, and a dialog on every run of the command is not that.

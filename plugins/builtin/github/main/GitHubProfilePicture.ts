@@ -92,8 +92,12 @@ async function fetchAvatarByEmail(email: string, signal?: AbortSignal): Promise<
 }
 
 async function resolveByEmail(email: string, signal?: AbortSignal): Promise<string | null> {
-  const key = normalizeEmail(email);
-  if (key.length === 0) return null;
+  const normalized = normalizeEmail(email);
+  if (normalized.length === 0) return null;
+  // The token version scopes both maps, so a caller after a token change never
+  // joins a lookup started under the previous credential, and that lookup's
+  // late result lands under its own (now unreachable) key.
+  const key = `${GitHubAuth.getTokenVersion()}:${normalized}`;
 
   const cached = avatarCache.get(key);
   if (cached !== undefined) return cached;
@@ -101,7 +105,7 @@ async function resolveByEmail(email: string, signal?: AbortSignal): Promise<stri
   const pending = inflight.get(key);
   if (pending) return pending;
 
-  const request = fetchAvatarByEmail(key, signal)
+  const request: Promise<string | null> = fetchAvatarByEmail(normalized, signal)
     .then((outcome) => {
       // A genuine outcome means the HTTP call completed — cache it regardless
       // of the initiating caller's signal. The singleflight promise is shared
@@ -115,7 +119,7 @@ async function resolveByEmail(email: string, signal?: AbortSignal): Promise<stri
     })
     .finally(() => {
       // Drop the entry so a failed/aborted/transient lookup is retryable.
-      inflight.delete(key);
+      if (inflight.get(key) === request) inflight.delete(key);
     });
 
   inflight.set(key, request);
@@ -135,6 +139,11 @@ export const gitHubProfilePictureProvider: ProfilePictureProvider = {
  */
 export function resolveAuthorAvatar(email: string): Promise<string | null> {
   return resolveByEmail(email);
+}
+
+/** Generation for the host's IPC-side coalescing — see `AvatarCapability`. */
+export function getAuthorAvatarGeneration(): number {
+  return GitHubAuth.getTokenVersion();
 }
 
 /** Test-only — reset the module-level caches between unit tests. */

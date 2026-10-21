@@ -80,6 +80,9 @@ vi.mock("electron", () => {
 vi.mock("../../services/ProcessMemoryMonitor.js", () => ({
   forgetBlinkSample: vi.fn(),
   forgetEluSample: vi.fn(),
+  noteRendererUnresponsive: vi.fn(),
+  noteRendererResponsive: vi.fn(),
+  forgetRendererDocumentState: vi.fn(),
 }));
 
 vi.mock("../webContentsRegistry.js", () => ({
@@ -243,11 +246,19 @@ import {
 } from "../../utils/webContentsLifecycle.js";
 import { resetAppMetricsSnapshotForTesting } from "../../utils/appMetricsSnapshot.js";
 import {
+  resetPhysFootprintReaderForTesting,
+  setPhysFootprintReaderForTesting,
+} from "../../utils/processMemory.js";
+import {
   MIN_CRITICAL_PRESSURE_EVICTION_AGE_MS,
   MIN_PRESSURE_EVICTION_AGE_MS,
   backgroundRestoreCapacity,
 } from "../ProjectViewEvictionController.js";
 import { recordSwapPressure, SWAP_PRESSURE_STALE_MS } from "../../services/systemSwapPressure.js";
+import {
+  recordKernelPressureLevel,
+  resetKernelPressureForTesting,
+} from "../../services/systemKernelPressure.js";
 import { toHostScopedKey } from "../../../shared/types/remoteHosts.js";
 
 // The shared snapshot is module-level state; without a reset, a test could be
@@ -1763,6 +1774,8 @@ describe("ProjectViewManager — telemetry", () => {
     expect(revivalCalls.length).toBe(0);
     expect(warmSwapCalls[0][1]).toMatchObject({
       projectId: "proj-a",
+      webContentsId: wcA.id,
+      switchId: expect.any(String),
       visibleMs: expect.any(Number),
     });
     expect((warmSwapCalls[0][1] as { visibleMs: number }).visibleMs).toBeGreaterThanOrEqual(0);
@@ -2184,6 +2197,8 @@ describe("ProjectViewManager — listener cleanup", () => {
     "before-input-event",
     "did-finish-load",
     "render-process-gone",
+    "unresponsive",
+    "responsive",
   ] as const;
 
   let win: ReturnType<typeof createMockWindow>;
@@ -3581,7 +3596,48 @@ describe("ProjectViewManager — graduated memory reclaim (#11469)", () => {
       expect(mgr.softPressureBackoffLatched).toBe(false);
     });
 
-    it("scales the gain it needs with the footprint it destroyed", async () => {
+    it("logs a view's footprint but expects a gain from its resident memory", async () => {
+      // A cached renderer mostly swapped out: 2000 MB footprint, 800 MB
+      // resident. Freeing the swapped share never shows up as available RAM,
+      // so the verdict must not demand a quarter of the footprint (#13526).
+      setPhysFootprintReaderForTesting({
+        readPhysFootprints: (pids) => pids.map(() => 2_000 * 1024 * 1024),
+        isAvailable: () => true,
+        getLoadError: () => null,
+      });
+      try {
+        setAvailableMb(2500);
+        const mgr = await seedFiveViews();
+        const pidA = mgr
+          .getAllViews()
+          .find((v) => v.projectId === "proj-a")!
+          .view.webContents.getOSProcessId() as number;
+        mockGetAppMetrics.mockReturnValue([
+          { pid: pidA, memory: { workingSetSize: 800 * 1024, privateBytes: 0 } },
+        ] as unknown as Electron.ProcessMetric[]);
+        resetAppMetricsSnapshotForTesting();
+        setAvailableMb(1200);
+        armPressureLadder(mgr);
+        tickPressureCheck(mgr);
+        expect(logged("projectview.eviction")[0]).toMatchObject({
+          projectId: "proj-a",
+          memoryKb: 2_000 * 1024,
+        });
+
+        setAvailableMb(1450);
+        tickPressureCheck(mgr);
+        expect(logged("projectview.pressure-eviction-outcome")[0]).toMatchObject({
+          outcome: "productive",
+          gainMb: 250,
+          requiredGainMb: 200,
+          evictedResidentMb: 800,
+        });
+      } finally {
+        resetPhysFootprintReaderForTesting();
+      }
+    });
+
+    it("scales the gain it needs with the resident memory it destroyed", async () => {
       setAvailableMb(2500);
       const mgr = await seedFiveViews();
       const pidA = mgr
@@ -3604,7 +3660,7 @@ describe("ProjectViewManager — graduated memory reclaim (#11469)", () => {
         outcome: "unproductive",
         gainMb: 100,
         requiredGainMb: 200,
-        evictedFootprintMb: 800,
+        evictedResidentMb: 800,
       });
     });
 
@@ -3854,6 +3910,22 @@ describe("ProjectViewManager — graduated memory reclaim (#11469)", () => {
       expect(backgroundRestoreCapacity(mgr)).toBe("available");
       recordSwapPressure(true);
       expect(backgroundRestoreCapacity(mgr)).toBe("pressure");
+    });
+
+    it("refuses a background restore at critical kernel pressure alone (#13530)", async () => {
+      setAvailableMb(6000);
+      const mgr = makeManager(5);
+      mgr.setMemoryPressurePolicy(BAND);
+      await seedThreeViews(mgr);
+      try {
+        recordKernelPressureLevel(4);
+        expect(backgroundRestoreCapacity(mgr)).toBe("pressure");
+        recordKernelPressureLevel(1);
+        recordKernelPressureLevel(1);
+        expect(backgroundRestoreCapacity(mgr)).toBe("available");
+      } finally {
+        resetKernelPressureForTesting();
+      }
     });
   });
 });

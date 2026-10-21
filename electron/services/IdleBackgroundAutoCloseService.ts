@@ -449,6 +449,21 @@ export class IdleBackgroundAutoCloseService {
   }
 
   /**
+   * The fresh row if the project is still a reclaim candidate: auto-close still
+   * enabled, the row still `background` and idle past the threshold, and not
+   * foreground in any window. Synchronous, so callers can fence a write on it.
+   */
+  private readEligibleProject(projectId: string, now: number, thresholdMs: number) {
+    if (!this.getConfig().enabled) return null;
+    const fresh = projectStore.getProjectById(projectId);
+    if (!fresh || fresh.status !== "background") return null;
+    if (!fresh.lastOpened || fresh.lastOpened <= 0) return null;
+    if (now - fresh.lastOpened < thresholdMs) return null;
+    if (this.collectActiveProjectIds().has(projectId)) return null;
+    return fresh;
+  }
+
+  /**
    * Tear down a single background project — the same reclamation sequence as the
    * manual `project:free-memory` action (#10829): graceful session-preserving
    * PTY kill, cached renderer eviction, workspace-host eviction, then mark
@@ -466,23 +481,17 @@ export class IdleBackgroundAutoCloseService {
     // to `now-1` and flips its status — or spawned a terminal in it (TOCTOU). Re-
     // read the project row and the live registry, and bail if anything now
     // disqualifies it. Also re-check `enabled` so a toggle-off mid-sweep halts.
-    if (!this.getConfig().enabled) return null;
-
-    const fresh = projectStore.getProjectById(projectId);
+    const fresh = this.readEligibleProject(projectId, now, thresholdMs);
     if (!fresh) return null;
-    if (fresh.status !== "background") return null;
-    if (!fresh.lastOpened || fresh.lastOpened <= 0) return null;
-    if (now - fresh.lastOpened < thresholdMs) return null;
-    if (this.collectActiveProjectIds().has(projectId)) return null;
 
     const liveTerminals = await this.readTerminals();
     // Re-read `enabled` after the await too: `stop()` nulls the client, and
     // without this a toggle-off landing mid-request would sail past every
     // remaining guard on an empty snapshot and tear the project down anyway.
-    if (!liveTerminals || !this.getConfig().enabled) return null;
+    if (!liveTerminals) return null;
+    const project = this.readEligibleProject(projectId, now, thresholdMs);
+    if (!project) return null;
     if (this.blockingReason(projectId, liveTerminals)) return null;
-
-    const project = fresh;
 
     // The gate above floors a live assistant, so this revoke settles whatever
     // non-live session records the project has left: one whose terminal exited
@@ -504,11 +513,12 @@ export class IdleBackgroundAutoCloseService {
     // teardown; bailing here is safe because the revoke above already persisted
     // the assistant's pending-hibernation entry, so a reopened panel still
     // resumes.
-    if (this.collectActiveProjectIds().has(projectId)) return null;
-    const refreshed = projectStore.getProjectById(projectId);
-    if (!refreshed || refreshed.status !== "background") return null;
+    if (!this.readEligibleProject(projectId, now, thresholdMs)) return null;
     const postRevokeTerminals = await this.readTerminals();
-    if (!postRevokeTerminals || !this.getConfig().enabled) return null;
+    // The snapshot is itself an await, so a window can activate the project
+    // while it is in flight (#13570) — the row and active set need re-reading.
+    if (!postRevokeTerminals) return null;
+    if (!this.readEligibleProject(projectId, now, thresholdMs)) return null;
     if (this.blockingReason(projectId, postRevokeTerminals)) return null;
 
     // Graceful, session-preserving kill — scrollback survives via hibernation
@@ -520,6 +530,19 @@ export class IdleBackgroundAutoCloseService {
       })) ?? [];
     for (const result of results) {
       writeHibernatedMarker(result.id);
+    }
+
+    // The kill is the slowest await of all. A project a window activated (or a
+    // toggle-off) meanwhile keeps its markers (its PTYs are gone either way, and the markers
+    // let the panels restore) but must not be evicted, marked closed, or have
+    // its plugins unloaded under it (#13570). Nothing awaits between this
+    // check and the status write below, so activation cannot slip in between.
+    if (!this.readEligibleProject(projectId, now, thresholdMs)) {
+      logInfo("idle-background-auto-close-ineligible-after-kill", {
+        projectId,
+        terminalsKilled: results.length,
+      });
+      return null;
     }
 
     // Tear down the cached WebContentsView across every window (guarded inside

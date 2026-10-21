@@ -818,6 +818,27 @@ if (isSmokeTest) {
       console.error("[SMOKE] WARN — posix-pty-reaper load failed:", (err as Error).message);
     }
   }
+
+  // macOS memory readings (#13526): without this addon every figure falls back
+  // to resident size and misses compressed and swapped memory. Same WARN-level
+  // presence check as the reapers; the packaged smoke run requires the marker.
+  if (process.platform === "darwin") {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const footprint = require("mac-phys-footprint") as {
+        isAvailable: () => boolean;
+        getLoadError: () => unknown;
+      };
+      if (footprint.isAvailable()) {
+        console.error("[SMOKE] CHECK: mac-phys-footprint native module — OK");
+      } else {
+        const msg = formatErrorMessage(footprint.getLoadError(), "unknown error");
+        console.error(`[SMOKE] WARN — mac-phys-footprint unavailable: ${msg}`);
+      }
+    } catch (err) {
+      console.error("[SMOKE] WARN — mac-phys-footprint load failed:", (err as Error).message);
+    }
+  }
 }
 
 // macOS `open-file` handler (#9293) — fires when the user double-clicks a

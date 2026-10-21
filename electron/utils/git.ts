@@ -8,7 +8,7 @@ import { logWarn, logError } from "./logger.js";
 import { Cache } from "./cache.js";
 import { createHardenedGit, createWslHardenedGit } from "./hardenedGit.js";
 import type { WslGitInvocation } from "./hardenedGit.js";
-import { getGitDir, hasGitLocationEnvOverride } from "./gitUtils.js";
+import { getGitDir } from "./gitUtils.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 
 const GIT_WORKTREE_CHANGES_CACHE = new Cache<string, WorktreeChanges>({
@@ -273,6 +273,70 @@ export function parseNumstat(diffOutput: string, gitRoot: string): Map<string, D
   return stats;
 }
 
+export interface NameStatusEntry {
+  status: string;
+  path: string;
+  oldPath?: string;
+}
+
+/**
+ * Parse `git diff --name-status -z`. Paths arrive as raw bytes with no
+ * C-quoting, so a trailing space, tab, quote or newline in a name survives
+ * exactly; renames and copies carry two path fields.
+ */
+export function parseNameStatusZ(output: string): NameStatusEntry[] {
+  // Every field is NUL-terminated, so the last split element is the
+  // unterminated remainder of a truncated read and never a whole field.
+  const fields = output.split("\0").slice(0, -1);
+  const entries: NameStatusEntry[] = [];
+  let i = 0;
+  while (i < fields.length) {
+    const status = fields[i++];
+    if (!status) continue;
+    if (status[0] === "R" || status[0] === "C") {
+      const oldPath = fields[i++];
+      const path = fields[i++];
+      if (!oldPath || !path) break;
+      entries.push({ status, path, oldPath });
+    } else {
+      const path = fields[i++];
+      if (!path) break;
+      entries.push({ status, path });
+    }
+  }
+  return entries;
+}
+
+/**
+ * Parse `git diff --numstat -z` into a map keyed by the exact repo-relative
+ * path. A rename record leaves the path field empty and follows it with the
+ * old and new paths; its churn is keyed under the new path.
+ */
+export function parseNumstatZ(output: string): Map<string, DiffStat> {
+  const fields = output.split("\0").slice(0, -1);
+  const stats = new Map<string, DiffStat>();
+  const toCount = (raw: string) => (/^\d+$/.test(raw) ? Number.parseInt(raw, 10) : null);
+  let i = 0;
+  while (i < fields.length) {
+    const record = fields[i++];
+    if (!record) continue;
+    const firstTab = record.indexOf("\t");
+    const secondTab = firstTab === -1 ? -1 : record.indexOf("\t", firstTab + 1);
+    if (secondTab === -1) continue;
+    let path = record.slice(secondTab + 1);
+    if (path === "") {
+      const oldPath = fields[i++];
+      path = fields[i++] ?? "";
+      if (!oldPath || !path) break;
+    }
+    stats.set(path, {
+      insertions: toCount(record.slice(0, firstTab)),
+      deletions: toCount(record.slice(firstTab + 1, secondTab)),
+    });
+  }
+  return stats;
+}
+
 /**
  * Commit count on the checked-out branch.
  *
@@ -322,6 +386,8 @@ export interface ListCommitsOptions {
   branch?: string;
   skip?: number;
   limit?: number;
+  /** Omitted counts as true. `false` skips the revision count and reports `total: 0`. */
+  includeTotal?: boolean;
 }
 
 export interface ListCommitsResult {
@@ -359,13 +425,18 @@ function parseCommitOutput(output: string): CommitInfo[] {
 }
 
 export async function listCommits(options: ListCommitsOptions): Promise<ListCommitsResult> {
-  const { cwd, search, branch, skip = 0, limit = 30 } = options;
+  const { cwd, search, branch, skip = 0, limit = 30, includeTotal = true } = options;
 
   try {
     const git = await createHardenedGit(cwd);
 
-    const totalCountStr = await git.raw(["rev-list", "--count", branch || "HEAD"]);
-    const total = parseInt(totalCountStr.trim(), 10);
+    // The count walks the whole history and ignores `search`, so callers that
+    // only page (`hasMore` comes from the limit + 1 peek) opt out of it.
+    let total = 0;
+    if (includeTotal) {
+      const totalCountStr = await git.raw(["rev-list", "--count", branch || "HEAD"]);
+      total = parseInt(totalCountStr.trim(), 10);
+    }
 
     // `--grep` only matches commit-message text, so a hash-prefix query returns
     // nothing. On the first page, additionally resolve hash-like queries directly
@@ -395,6 +466,9 @@ export async function listCommits(options: ListCommitsOptions): Promise<ListComm
     if (branch) {
       logOptions.push(branch);
     }
+    // Without the separator, an unknown branch that names a worktree path is
+    // read as a pathspec and returns HEAD history filtered to that path.
+    logOptions.push("--");
 
     const output = await git.raw(logOptions);
     const msgCommits = parseCommitOutput(output);
@@ -572,7 +646,6 @@ async function resolveHeadOidFromFs(cwd: string): Promise<string | null> {
 
 /** {@link resolveHeadOidFromFs} for a caller that has already resolved the git dir. */
 export async function resolveHeadOidFromGitDir(gitDir: string): Promise<string | null> {
-  if (hasGitLocationEnvOverride()) return null;
   let head: string;
   try {
     head = (await fs.readFile(resolve(gitDir, "HEAD"), "utf-8")).trim();

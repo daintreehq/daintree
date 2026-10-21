@@ -11,7 +11,7 @@ vi.mock("electron", () => ({
 }));
 
 type FileHandleLike = {
-  readFile: ReturnType<typeof vi.fn>;
+  read: ReturnType<typeof vi.fn>;
   close: ReturnType<typeof vi.fn>;
   stat?: ReturnType<typeof vi.fn>;
 };
@@ -87,10 +87,33 @@ function getReadHandler() {
   return entry[1] as (event: unknown, payload: unknown) => Promise<FileReadResult>;
 }
 
+/**
+ * `FileHandle.read` over `content`, from the descriptor's offset. `rewind()`
+ * puts the offset back to 0, as reopening the file would. `requested` tallies
+ * how many bytes were asked for, which bounds what the reader transferred.
+ */
+function readsFrom(content: Buffer) {
+  let offset = 0;
+  const read = vi.fn(async (buffer: Buffer, at: number, length: number) => {
+    read.requested += length;
+    const n = Math.max(0, Math.min(length, content.length - offset));
+    content.copy(buffer, at, offset, offset + n);
+    offset += n;
+    return { bytesRead: n, buffer };
+  }) as ReturnType<typeof vi.fn> & { requested: number; rewind: () => void };
+  read.requested = 0;
+  read.rewind = () => {
+    offset = 0;
+  };
+  return read;
+}
+
 function makeFileHandle(buffer: Buffer): FileHandleLike {
+  const read = readsFrom(buffer);
   return {
-    readFile: vi.fn().mockResolvedValue(buffer),
-    close: vi.fn().mockResolvedValue(undefined),
+    read,
+    // Closing ends the pass, so a handle the test hands out again reads from 0.
+    close: vi.fn(async () => read.rewind()),
     // The same file the real path's stat named (the stat mocks carry no inode).
     stat: vi.fn().mockResolvedValue({
       isFile: () => true,
@@ -159,6 +182,8 @@ describe("files:read handler", () => {
 
       await expect(getReadHandler()(remote, { path: file, rootPath: root })).resolves.toEqual({
         content: "hello\n",
+        encoding: "utf-8",
+        byteLength: 6,
         pathIsCanonical: true,
       });
       expect(holdsRoot).toHaveBeenCalledWith("proj-1", root);
@@ -196,7 +221,12 @@ describe("files:read handler", () => {
       registerFilesHandlers();
       await expect(
         getReadHandler()({ endpoint: { kind: "local-view" } }, { path: file, rootPath: root })
-      ).resolves.toEqual({ content: "hello\n", pathIsCanonical: true });
+      ).resolves.toEqual({
+        content: "hello\n",
+        encoding: "utf-8",
+        byteLength: 6,
+        pathIsCanonical: true,
+      });
       expect(holdsRoot).not.toHaveBeenCalled();
     });
   });
@@ -220,7 +250,12 @@ describe("files:read handler", () => {
 
     const result = await getReadHandler()({}, { path: file, rootPath: root });
 
-    expect(result).toEqual({ content: "hello world\n", pathIsCanonical: true });
+    expect(result).toEqual({
+      content: "hello world\n",
+      encoding: "utf-8",
+      byteLength: 12,
+      pathIsCanonical: true,
+    });
   });
 
   it("does not call a hard-linked file canonical", async () => {
@@ -353,12 +388,12 @@ describe("files:read handler", () => {
     ]) {
       const handle = {
         stat: vi.fn().mockResolvedValue(opened),
-        readFile: vi.fn().mockResolvedValue(Buffer.from("secret")),
+        read: readsFrom(Buffer.from("secret")),
         close: vi.fn().mockResolvedValue(undefined),
       };
       fsMock.open.mockResolvedValue(handle);
       await expect(getReadHandler()({}, { path: file, rootPath: root })).rejects.toBeDefined();
-      expect(handle.readFile).not.toHaveBeenCalled();
+      expect(handle.read).not.toHaveBeenCalled();
       expect(handle.close).toHaveBeenCalled();
     }
     const flags = fsMock.open.mock.calls.at(-1)![1];
@@ -370,7 +405,7 @@ describe("files:read handler", () => {
     registerFilesHandlers();
     fsMock.open.mockResolvedValue({
       stat: vi.fn().mockResolvedValue({ isFile: () => false, isDirectory: () => true, size: 0 }),
-      readFile: vi.fn(),
+      read: vi.fn(),
       close: vi.fn().mockResolvedValue(undefined),
     });
     await expect(getReadHandler()({}, { path: file, rootPath: root })).rejects.toMatchObject({
@@ -378,11 +413,11 @@ describe("files:read handler", () => {
     });
   });
 
-  it("closes the file handle even when readFile rejects", async () => {
+  it("closes the file handle even when the read rejects", async () => {
     fsMock.stat.mockResolvedValue({ size: 100 });
     const handle = {
       stat: vi.fn().mockResolvedValue({ isFile: () => true, isDirectory: () => false, size: 100 }),
-      readFile: vi
+      read: vi
         .fn()
         .mockRejectedValue(Object.assign(new Error("file disappeared"), { code: "ENOENT" })),
       close: vi.fn().mockResolvedValue(undefined),
@@ -408,14 +443,14 @@ describe("files:read handler", () => {
     });
   });
 
-  it("throws AppError(NOT_A_FILE) when readFile raises EISDIR on a directory", async () => {
+  it("throws AppError(NOT_A_FILE) when the read raises EISDIR on a directory", async () => {
     // A submodule gitlink's path is a directory, and the generic fallback
     // reported that as "Invalid file path" with a Retry that could never
     // succeed (#12309).
     fsMock.stat.mockResolvedValue({ size: 128 });
     const handle = {
       stat: vi.fn().mockResolvedValue({ isFile: () => true, isDirectory: () => false, size: 100 }),
-      readFile: vi
+      read: vi
         .fn()
         .mockRejectedValue(Object.assign(new Error("illegal operation"), { code: "EISDIR" })),
       close: vi.fn().mockResolvedValue(undefined),
@@ -429,11 +464,11 @@ describe("files:read handler", () => {
     });
   });
 
-  it("throws AppError(PERMISSION) when readFile raises EACCES", async () => {
+  it("throws AppError(PERMISSION) when the read raises EACCES", async () => {
     fsMock.stat.mockResolvedValue({ size: 100 });
     const handle = {
       stat: vi.fn().mockResolvedValue({ isFile: () => true, isDirectory: () => false, size: 100 }),
-      readFile: vi
+      read: vi
         .fn()
         .mockRejectedValue(Object.assign(new Error("permission denied"), { code: "EACCES" })),
       close: vi.fn().mockResolvedValue(undefined),
@@ -511,14 +546,19 @@ describe("files:read handler", () => {
 
     // Readable through the link, but the watcher names writes under the real
     // path, so the renderer must not scope its re-reads by this one.
-    expect(result).toEqual({ content: "ok", pathIsCanonical: false });
+    expect(result).toEqual({
+      content: "ok",
+      encoding: "utf-8",
+      byteLength: 2,
+      pathIsCanonical: false,
+    });
   });
 
-  it("returns the readFile error (not the close error) when both reject", async () => {
+  it("returns the read error (not the close error) when both reject", async () => {
     fsMock.stat.mockResolvedValue({ size: 100 });
     const handle = {
       stat: vi.fn().mockResolvedValue({ isFile: () => true, isDirectory: () => false, size: 100 }),
-      readFile: vi
+      read: vi
         .fn()
         .mockRejectedValue(Object.assign(new Error("file disappeared"), { code: "ENOENT" })),
       close: vi.fn().mockRejectedValue(Object.assign(new Error("bad fd"), { code: "EBADF" })),
@@ -551,6 +591,40 @@ describe("files:read handler", () => {
       name: "AppError",
       code: "FILE_TOO_LARGE",
     });
+  });
+
+  it("never reads past the limit when the file grows after the descriptor stat", async () => {
+    const limit = 512 * 1024;
+    fsMock.stat.mockResolvedValue({ size: 10 });
+    const read = readsFrom(Buffer.alloc(limit * 8, 0x61));
+    const handle = {
+      read,
+      close: vi.fn().mockResolvedValue(undefined),
+      stat: vi.fn().mockResolvedValue({ isFile: () => true, isDirectory: () => false, size: 10 }),
+    };
+    fsMock.open.mockResolvedValue(handle);
+    registerFilesHandlers();
+
+    await expect(getReadHandler()({}, { path: file, rootPath: root })).rejects.toMatchObject({
+      name: "AppError",
+      code: "FILE_TOO_LARGE",
+    });
+    expect(read.requested).toBeLessThanOrEqual(limit + 1);
+    expect(handle.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns content that grew after the stat but stays within the limit", async () => {
+    fsMock.stat.mockResolvedValue({ size: 2 });
+    const handle = {
+      read: readsFrom(Buffer.from("grown content")),
+      close: vi.fn().mockResolvedValue(undefined),
+      stat: vi.fn().mockResolvedValue({ isFile: () => true, isDirectory: () => false, size: 2 }),
+    };
+    fsMock.open.mockResolvedValue(handle);
+    registerFilesHandlers();
+
+    const result = await getReadHandler()({}, { path: file, rootPath: root });
+    expect(result.content).toBe("grown content");
   });
 
   describe("schema validation", () => {

@@ -160,6 +160,7 @@ function fakeDeps(overrides?: Partial<HttpLifecycleDeps>): HttpLifecycleDeps {
       getTier: vi.fn(() => "core" as const),
       createIdleTimer: vi.fn(() => setTimeout(() => {}, 1_000_000)),
       createHttpIdleTimer: vi.fn(() => setTimeout(() => {}, 1_000_000)),
+      armIdleTimer: vi.fn(() => setTimeout(() => {}, 1_000_000)),
       resetIdleTimer: vi.fn(),
       resetHttpIdleTimer: vi.fn(),
       armTierElevationTimer: vi.fn(),

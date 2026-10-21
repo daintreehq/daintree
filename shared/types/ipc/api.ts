@@ -236,6 +236,9 @@ export interface ElectronAPI extends GeneratedElectronAPI {
   hostMode: GeneratedElectronAPI["hostMode"] & {
     onEvent(callback: (event: import("./hostMode.js").HostModeEvent) => void): () => void;
   };
+  deviceAnswer: GeneratedElectronAPI["deviceAnswer"] & {
+    onEvent(callback: (event: import("./deviceAnswer.js").DeviceAnswerEvent) => void): () => void;
+  };
   driveLease: GeneratedElectronAPI["driveLease"] & {
     onEvent(callback: (event: import("./driveLease.js").DriveLeaseEvent) => void): () => void;
   };
@@ -706,6 +709,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       options?: {
         focusIntent?: import("./project.js").ProjectFocusOnActivateIntent;
         trace?: import("./project.js").ProjectSwitchTrace;
+        ignoreMemoryPressure?: boolean;
       }
     ): Promise<ProjectSwitchResult>;
     /**
@@ -766,7 +770,10 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     reopen(
       projectId: string,
       outgoingState?: ProjectSwitchOutgoingState,
-      options?: { trace?: import("./project.js").ProjectSwitchTrace }
+      options?: {
+        trace?: import("./project.js").ProjectSwitchTrace;
+        ignoreMemoryPressure?: boolean;
+      }
     ): Promise<ProjectSwitchResult>;
     getStats(projectId: string): Promise<ProjectStats>;
     getBulkStats(projectIds: string[]): Promise<BulkProjectStats>;
@@ -1083,6 +1090,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       branch?: string;
       skip?: number;
       limit?: number;
+      includeTotal?: boolean;
     }): Promise<import("../git.js").GitCommitListResponse>;
     stageFile(cwd: string, filePath: string): Promise<void>;
     unstageFile(cwd: string, filePath: string): Promise<void>;
@@ -1327,6 +1335,24 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       panelId: string,
       options?: { forHost?: boolean }
     ): Promise<{ pngBase64: string; width: number; height: number }>;
+    /**
+     * Capture the panel's page cropped to one box, given in the page's CSS
+     * pixels against its own viewport size, and save it where agents read
+     * pasted images. `offscreen` when the box shows nothing on screen,
+     * `resized` when the page no longer has the size the box was measured at.
+     */
+    captureElement(
+      panelId: string,
+      request: {
+        rect: { x: number; y: number; width: number; height: number };
+        viewportWidth: number;
+        viewportHeight: number;
+      }
+    ): Promise<
+      | { status: "saved"; filePath: string; width: number; height: number }
+      | { status: "offscreen" }
+      | { status: "resized" }
+    >;
     /** Read Chromium navigation history for the webview */
     getNavigationHistory(
       webContentsId: number
@@ -2430,6 +2456,18 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       callback: (payload: {
         pluginId: string;
         keys: Record<string, import("../plugin.js").PluginContextValue> | null;
+      }) => void
+    ): () => void;
+    /**
+     * Subscribe to plugin worktree card statuses (#13704). The callback fires
+     * with one plugin's COMPLETE map for one project (worktreeId → status); an
+     * empty map clears that plugin's statuses there. Returns a cleanup.
+     */
+    onWorktreeCardStatusesChanged(
+      callback: (payload: {
+        pluginId: string;
+        projectId: string;
+        statuses: Record<string, import("../plugin.js").PluginWorktreeCardStatus>;
       }) => void
     ): () => void;
     /**

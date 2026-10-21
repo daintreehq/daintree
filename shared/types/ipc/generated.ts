@@ -144,6 +144,7 @@ export interface GeneratedIpcInvokeMap {
         | "canopy:reread"
         | "canopy:restore-reads"
         | "canopy:run-branch"
+        | "canopy:search-screens"
         | "canopy:set-active"
         | "canopy:set-mode"
         | "canopy:set-read"
@@ -164,6 +165,7 @@ export interface GeneratedIpcInvokeMap {
       | string
       | number
       | void
+      | string[]
       | import("./canopy.js").CanopyReadMark
       | import("./canopy.js").CanopySnapshot
       | import("./canopy.js").CanopyReadMark[]
@@ -230,6 +232,10 @@ export interface GeneratedIpcInvokeMap {
   "canopy:run-branch": {
     args: [runId: string, target: import("./canopy.js").CanopyTarget];
     result: string | null;
+  };
+  "canopy:search-screens": {
+    args: [targets: import("./canopy.js").CanopyScreenSearchTarget[]];
+    result: string[];
   };
   "canopy:set-active": {
     args: [active: boolean];
@@ -346,7 +352,7 @@ export interface GeneratedIpcInvokeMap {
   };
   "codex:read-quota": {
     args: [];
-    result: import("./agentQuota.js").CodexQuotaResult;
+    result: import("./agentQuota.js").CodexQuotaProfile[];
   };
   "codex:read-subagent-transcript": {
     args: [__0: { terminalId: string; subagentId: string }];
@@ -354,7 +360,7 @@ export interface GeneratedIpcInvokeMap {
   };
   "codex:refresh-quota": {
     args: [];
-    result: import("./agentQuota.js").CodexQuotaResult;
+    result: import("./agentQuota.js").CodexQuotaProfile[];
   };
   "codex:resolve-resume-latest-session": {
     args: [__0: { cwd: string }];
@@ -551,6 +557,26 @@ export interface GeneratedIpcInvokeMap {
   "dev-preview:stop-dev-server-by-worktree": {
     args: [request: import("./devPreview.js").DevPreviewStopDevServerByWorktreeRequest];
     result: import("./devPreview.js").DevPreviewSessionState;
+  };
+  "device-answer:cancel-pairing-code": {
+    args: [];
+    result: import("./deviceAnswer.js").DeviceAnswerStatus;
+  };
+  "device-answer:create-pairing-code": {
+    args: [];
+    result: import("./deviceAnswer.js").DeviceAnswerStatus;
+  };
+  "device-answer:get-status": {
+    args: [];
+    result: import("./deviceAnswer.js").DeviceAnswerStatus;
+  };
+  "device-answer:revoke-device": {
+    args: [deviceId: string];
+    result: import("./deviceAnswer.js").DeviceAnswerStatus;
+  };
+  "device-answer:set-enabled": {
+    args: [payload: import("./deviceAnswer.js").SetDeviceAnswerPayload];
+    result: import("./deviceAnswer.js").DeviceAnswerStatus;
   };
   "diff-media:read-file-versions": {
     args: [payload: import("./diffMedia.js").DiffMediaReadFileVersionsPayload];
@@ -2370,6 +2396,10 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("../whySlow.js").WhySlowSnapshot;
   };
+  "system:is-memory-pressure-critical": {
+    args: [];
+    result: boolean;
+  };
   "system:report-terminal-renderer-diagnostics": {
     args: [
       payload: {
@@ -2636,6 +2666,20 @@ export interface GeneratedIpcInvokeMap {
   "watchdog:restart": {
     args: [];
     result: void;
+  };
+  "webview:capture-element": {
+    args: [
+      panelId: string,
+      request: {
+        rect: { x: number; y: number; width: number; height: number };
+        viewportWidth: number;
+        viewportHeight: number;
+      },
+    ];
+    result:
+      | { status: "saved"; filePath: string; width: number; height: number }
+      | { status: "offscreen" }
+      | { status: "resized" };
   };
   "webview:capture-screenshot": {
     args: [panelId: string, options?: { forHost?: boolean | undefined } | undefined];

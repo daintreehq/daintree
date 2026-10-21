@@ -133,7 +133,11 @@ async function readProjectPanelsReporting(
     return pty.getAllTerminalsAsync();
   };
   const [state, all, owned] = await Promise.all([
-    deps.getProjectState(project.id).catch(() => null),
+    // A rejected read means the saved panels are unknown, not absent.
+    deps.getProjectState(project.id).catch(() => {
+      complete = false;
+      return null;
+    }),
     readAll().catch(() => {
       complete = false;
       return [];
@@ -374,7 +378,7 @@ export async function runTerminalGetStatus(
   if (!complete) {
     return failure(
       "EXECUTION_ERROR",
-      "The terminal backend didn't list every terminal, so this project's fleet can't be told right now. Retry shortly, or name the terminals in `terminalIds`."
+      "This project's terminals couldn't all be listed, so its fleet can't be told right now. Retry shortly, or name the terminals in `terminalIds`."
     );
   }
   const ids = panels

@@ -11,6 +11,7 @@ import { ControlKind, type LinkClientInfo } from "../link/messages.js";
 import type { LinkSession } from "../link/session.js";
 import { EmptyPayloadSchema } from "../host/linkMethods.js";
 import type { FleetCaller } from "./hostOps.js";
+import { WorktreeChangeWatch } from "./worktreeChanges.js";
 import {
   MAX_RESTART_SHELLS,
   MetricsLinkMethod,
@@ -46,6 +47,14 @@ export interface MetricsHostDeps {
   listWorktrees(): Promise<HostWorktreeEntry[]>;
   /** This host's terminals and running operations: what a restart would end here. */
   restartTerminals(): Promise<LocalRestartTerminals>;
+  /**
+   * Told when something the worktree list shows may have changed: a worktree
+   * came, went or moved branch, or an agent's state did. Called freely; the
+   * list is read again and compared before any Shell hears about it.
+   */
+  onWorktreesMaybeChanged(listener: () => void): () => void;
+  /** How long a burst of those is gathered; the default outside tests. */
+  worktreesChangedDelayMs?: number;
   /** Told when one of this host's agents goes from working to waiting. */
   onAgentWaiting(listener: (payload: WaitingEvent) => void): () => void;
   /** This host's own notification settings: its policy decides, not the Shell's window. */
@@ -165,6 +174,22 @@ export function installHostMetricsHostWith(
     ensureLoop();
   });
 
+  // Read only while some Shell is attached, and told only when what it shows moved.
+  const worktrees = new WorktreeChangeWatch({
+    list: deps.listWorktrees,
+    delayMs: deps.worktreesChangedDelayMs,
+    active: () => server.sessions.some((ctx) => ctx.session.isOpen),
+    changed: () => {
+      for (const ctx of server.sessions) {
+        if (!ctx.session.isOpen) continue;
+        ctx.session.call(MetricsLinkMethod.WORKTREES_CHANGED, null).catch(() => {
+          // A Shell that can't take it now reads the list when it next shows it.
+        });
+      }
+    },
+  });
+  const offWorktrees = deps.onWorktreesMaybeChanged(() => worktrees.poke());
+
   // Sample only while some Shell is attached; the loop stops itself when the last one leaves.
   let offLoop: (() => void) | null = null;
   const stopLoop = (): void => {
@@ -180,6 +205,9 @@ export function installHostMetricsHostWith(
         return;
       }
       for (const ctx of sessions) postSummary(ctx.session, summary);
+      // A project closed or removed fires none of the worktree events; the
+      // sample tick catches it, and the signature keeps it from saying more.
+      worktrees.poke();
     });
   };
   if (server.sessions.length > 0) ensureLoop();
@@ -215,6 +243,8 @@ export function installHostMetricsHostWith(
     offSession();
     stopLoop();
     offWaiting();
+    offWorktrees();
+    worktrees.dispose();
   };
 }
 
@@ -235,6 +265,7 @@ export async function installHostMetricsHost(server: MetricsSessionSource): Prom
     submitFleet: ops.submitLocalFleet,
     listWorktrees: ops.listLocalWorktrees,
     restartTerminals: ops.listLocalRestartTerminals,
+    onWorktreesMaybeChanged: ops.onLocalWorktreesMaybeChanged,
     onAgentWaiting(listener) {
       return events.on("agent:state-changed", (payload) => {
         if (payload.state !== "waiting") return;

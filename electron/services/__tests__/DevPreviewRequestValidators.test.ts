@@ -153,6 +153,15 @@ describe("validateEnsureRequest", () => {
     ).toThrow("devCommand must be a string");
   });
 
+  it("accepts an endpoint string and rejects any other endpoint type", () => {
+    expect(() =>
+      validateEnsureRequest({ ...valid, devCommand: "", endpoint: "http://10.0.0.2:5173" })
+    ).not.toThrow();
+    expect(() =>
+      validateEnsureRequest({ ...valid, endpoint: 5173 } as unknown as DevPreviewEnsureRequest)
+    ).toThrow("endpoint must be a string if provided");
+  });
+
   it("throws for invalid worktreeId type", () => {
     expect(() =>
       validateEnsureRequest({ ...valid, worktreeId: 123 } as unknown as DevPreviewEnsureRequest)

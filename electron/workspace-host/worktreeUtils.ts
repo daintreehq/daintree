@@ -11,6 +11,7 @@ import {
 } from "path";
 import { getGitDir } from "../utils/gitUtils.js";
 import { getGitLocaleEnv } from "../utils/hardenedGit.js";
+import { getSanitizedProcessEnv } from "../utils/gitEnv.js";
 import { resolveExecutableForSpawn } from "../utils/windowsExecutable.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { NOTE_PATH } from "./types.js";
@@ -50,7 +51,7 @@ export async function probeGitLfsAvailable(): Promise<boolean> {
       {
         timeout: LFS_PROBE_TIMEOUT_MS,
         windowsHide: true,
-        env: { ...process.env, ...getGitLocaleEnv(), LC_ALL: "" },
+        env: { ...getSanitizedProcessEnv(), ...getGitLocaleEnv(), LC_ALL: "" },
       },
       (err, stdout) => {
         if (err) {

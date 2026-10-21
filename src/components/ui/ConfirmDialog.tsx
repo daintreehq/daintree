@@ -113,6 +113,8 @@ type ConfirmDialogBaseProps = {
    * erroneous-approval rates, so state the condition, not the seconds.
    */
   hint?: React.ReactNode;
+  /** Forwarded to {@link AppDialog.Footer.hintPlacement}. */
+  hintPlacement?: "inline" | "above";
   /**
    * Forwarded to {@link AppDialog.hasPreview}: set to true when the dialog
    * body contains scrollable preview content (commit lists, directory tables).
@@ -178,6 +180,7 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
     hasPreview = false,
     size = "sm",
     hint,
+    hintPlacement,
     bodyResetKey,
     compactBodyShadow,
   } = props;
@@ -334,6 +337,7 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
         // An unmatched gate is the one reason for a disabled primary the caller
         // can't see, since the typed value lives here.
         hint={hint ?? (hasTypedNameGate && !isTypedMatched ? TYPED_GATE_HINT : undefined)}
+        hintPlacement={hintPlacement}
         secondaryAction={{
           label: cancelLabel,
           onClick: handleClose,

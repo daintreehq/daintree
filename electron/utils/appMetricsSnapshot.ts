@@ -1,4 +1,5 @@
 import { app } from "electron";
+import { attachPhysFootprints } from "./processMemory.js";
 
 /**
  * Shared snapshot for `app.getAppMetrics()` — a synchronous full-process-table
@@ -13,6 +14,9 @@ import { app } from "electron";
  * use {@link refreshAppMetricsSnapshot} instead. Throws from
  * `app.getAppMetrics()` propagate to the caller (every call site already
  * guards) and are never cached.
+ *
+ * Every sweep also reads each process's macOS physical footprint in one batch,
+ * which consumers pick up through `getProcessMemoryKb` (#13526).
  */
 const SNAPSHOT_TTL_MS = 5_000;
 
@@ -34,6 +38,7 @@ export function getAppMetricsSnapshot(
 /** Force a fresh sweep and prime the cache for read-through consumers. */
 export function refreshAppMetricsSnapshot(): Electron.ProcessMetric[] {
   const metrics = app.getAppMetrics();
+  attachPhysFootprints(metrics);
   cachedMetrics = metrics;
   cachedAt = Date.now();
   return metrics;

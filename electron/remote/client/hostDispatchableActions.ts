@@ -35,7 +35,8 @@
  * assistant reaches the host's own assistants through them while it drives
  * the project), `host.list` (a host can be a Shell to hosts of its own), the
  * reads and owned twins that act after a host-side check — and their
- * definitions here only throw.
+ * definitions here only throw, apart from `terminal.placeOwned`'s, which the
+ * host's gate dispatches to its own view once ownership is checked.
  * They are listed because this list is also the manifest a host is shown: an
  * id left off it is a tool the host's session loses whenever a Shell drives
  * the project, though the host could still answer it (#13350). Listing one
@@ -95,6 +96,7 @@ export const HOST_DISPATCHABLE_ACTION_IDS: ReadonlySet<string> = new Set([
   "terminal.moveToWorktree",
   "terminal.new",
   "terminal.notifyWhenIdle",
+  "terminal.placeOwned",
   "terminal.readLastMessageOwned",
   "terminal.registerWatch",
   "terminal.rename",

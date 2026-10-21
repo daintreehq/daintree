@@ -9,6 +9,9 @@ import {
   resolveForCwd,
   getImplForNamespace,
   getImplForNamespaceActivating,
+  getIssueImplForNamespace,
+  stampIssueProvider,
+  type ResolvedForgeContext,
 } from "./forgeResolution.js";
 import { auditForgeCall, summarizeForgeArgs } from "../../services/forge/forgeAuditService.js";
 import type {
@@ -79,8 +82,8 @@ async function handleForgeUnassignIssue(payload: {
   if (typeof payload.username !== "string" || !trimmedUsername) {
     throw new Error("Invalid username");
   }
-  const { namespaceId, repoRef } = await resolveForCwd(payload.cwd);
-  const impl = getImplForNamespace(namespaceId);
+  const { namespaceId, repoRef } = await resolveForCwd(payload.cwd, "issues");
+  const impl = getIssueImplForNamespace(namespaceId);
   return auditForgeCall(
     {
       providerId: namespaceId,
@@ -347,8 +350,9 @@ async function handleForgeCreateIssue(payload: {
   ) {
     throw new Error("Invalid labels");
   }
-  const { namespaceId, repoRef } = await resolveForCwd(payload.cwd);
-  const impl = getImplForNamespace(namespaceId);
+  const context = await resolveForCwd(payload.cwd, "issues");
+  const { namespaceId, repoRef } = context;
+  const impl = getIssueImplForNamespace(namespaceId);
   return auditForgeCall(
     {
       providerId: namespaceId,
@@ -357,7 +361,7 @@ async function handleForgeCreateIssue(payload: {
       repoName: repoRef.repo,
       argsSummary: summarizeForgeArgs("createIssue", input),
     },
-    () => impl.createIssue(repoRef, input)
+    async () => stampIssueProvider(context, await impl.createIssue(repoRef, input))
   );
 }
 
@@ -376,8 +380,9 @@ async function handleForgeCloseIssue(payload: {
   ) {
     throw new Error("Invalid state reason");
   }
-  const { namespaceId, repoRef } = await resolveForCwd(payload.cwd);
-  const impl = getImplForNamespace(namespaceId);
+  const context = await resolveForCwd(payload.cwd, "issues");
+  const { namespaceId, repoRef } = context;
+  const impl = getIssueImplForNamespace(namespaceId);
   return auditForgeCall(
     {
       providerId: namespaceId,
@@ -386,7 +391,8 @@ async function handleForgeCloseIssue(payload: {
       repoName: repoRef.repo,
       argsSummary: summarizeForgeArgs("closeIssue", issueNumber),
     },
-    () => impl.closeIssue(repoRef, issueNumber, payload.stateReason)
+    async () =>
+      stampIssueProvider(context, await impl.closeIssue(repoRef, issueNumber, payload.stateReason))
   );
 }
 
@@ -396,8 +402,9 @@ async function handleForgeReopenIssue(payload: {
 }): Promise<Issue> {
   checkRateLimit(CHANNELS.FORGE_REOPEN_ISSUE, 5, 10_000);
   const { issueNumber } = validateIssueWritePayload(payload);
-  const { namespaceId, repoRef } = await resolveForCwd(payload.cwd);
-  const impl = getImplForNamespace(namespaceId);
+  const context = await resolveForCwd(payload.cwd, "issues");
+  const { namespaceId, repoRef } = context;
+  const impl = getIssueImplForNamespace(namespaceId);
   return auditForgeCall(
     {
       providerId: namespaceId,
@@ -406,7 +413,7 @@ async function handleForgeReopenIssue(payload: {
       repoName: repoRef.repo,
       argsSummary: summarizeForgeArgs("reopenIssue", issueNumber),
     },
-    () => impl.reopenIssue(repoRef, issueNumber)
+    async () => stampIssueProvider(context, await impl.reopenIssue(repoRef, issueNumber))
   );
 }
 
@@ -433,8 +440,9 @@ async function handleForgeEditIssue(payload: {
   if (input.title === undefined && input.body === undefined) {
     throw new Error("Provide a title or body to edit");
   }
-  const { namespaceId, repoRef } = await resolveForCwd(payload.cwd);
-  const impl = getImplForNamespace(namespaceId);
+  const context = await resolveForCwd(payload.cwd, "issues");
+  const { namespaceId, repoRef } = context;
+  const impl = getIssueImplForNamespace(namespaceId);
   return auditForgeCall(
     {
       providerId: namespaceId,
@@ -447,7 +455,7 @@ async function handleForgeEditIssue(payload: {
         hasBody: input.body !== undefined,
       }),
     },
-    () => impl.editIssue(repoRef, issueNumber, input)
+    async () => stampIssueProvider(context, await impl.editIssue(repoRef, issueNumber, input))
   );
 }
 
@@ -461,8 +469,8 @@ async function handleForgeAddIssueComment(payload: {
   if (typeof payload.body !== "string" || !payload.body.trim()) {
     throw new Error("Comment body is required");
   }
-  const { namespaceId, repoRef } = await resolveForCwd(payload.cwd);
-  const impl = getImplForNamespace(namespaceId);
+  const { namespaceId, repoRef } = await resolveForCwd(payload.cwd, "issues");
+  const impl = getIssueImplForNamespace(namespaceId);
   return auditForgeCall(
     {
       providerId: namespaceId,
@@ -489,8 +497,8 @@ async function handleForgeAddIssueLabel(payload: {
   if (typeof payload.label !== "string" || !label) {
     throw new Error("Label name is required");
   }
-  const { namespaceId, repoRef } = await resolveForCwd(payload.cwd);
-  const impl = getImplForNamespace(namespaceId);
+  const { namespaceId, repoRef } = await resolveForCwd(payload.cwd, "issues");
+  const impl = getIssueImplForNamespace(namespaceId);
   return auditForgeCall(
     {
       providerId: namespaceId,
@@ -514,8 +522,8 @@ async function handleForgeRemoveIssueLabel(payload: {
   if (typeof payload.label !== "string" || !label) {
     throw new Error("Label name is required");
   }
-  const { namespaceId, repoRef } = await resolveForCwd(payload.cwd);
-  const impl = getImplForNamespace(namespaceId);
+  const { namespaceId, repoRef } = await resolveForCwd(payload.cwd, "issues");
+  const impl = getIssueImplForNamespace(namespaceId);
   return auditForgeCall(
     {
       providerId: namespaceId,
@@ -552,7 +560,7 @@ export const forgeOpenPRNamespace = defineIpcNamespace({
 // capability, and only a URL the host would actually open counts as having it:
 // the read answers `null` otherwise so the toolbar leaves "View repository" out,
 // and the open rejects instead of offering a click that goes nowhere.
-function repoUrlFor({ impl, repoRef }: Awaited<ReturnType<typeof resolveForCwd>>): string | null {
+function repoUrlFor({ impl, repoRef }: ResolvedForgeContext): string | null {
   // Truthiness, never `in`: a capability explicitly set to `undefined` still
   // satisfies `in` and would be called as a non-function.
   if (!impl.buildRepoUrl) return null;
@@ -848,8 +856,8 @@ export function registerForgeHandlers(): () => void {
       CHANNELS.FORGE_OPEN_ISSUES,
       async (ctx, cwd: string, query?: string, state?: string) => {
         checkRateLimit(CHANNELS.FORGE_OPEN_ISSUES, 20, 10_000);
-        const { namespaceId, repoRef } = await resolveForCwd(cwd);
-        const impl = getImplForNamespace(namespaceId);
+        const { namespaceId, repoRef } = await resolveForCwd(cwd, "issues");
+        const impl = getIssueImplForNamespace(namespaceId);
         const url = impl.buildIssuesUrl(repoRef, { query, state });
         return openForCaller(ctx, url);
       }
@@ -903,8 +911,8 @@ export function registerForgeHandlers(): () => void {
         ) {
           throw new Error("Invalid issue number");
         }
-        const { namespaceId, repoRef } = await resolveForCwd(payload.cwd);
-        const impl = getImplForNamespace(namespaceId);
+        const { namespaceId, repoRef } = await resolveForCwd(payload.cwd, "issues");
+        const impl = getIssueImplForNamespace(namespaceId);
         const url = impl.buildIssueUrl(repoRef, payload.issueNumber);
         return openForCaller(ctx, url);
       }
@@ -933,8 +941,8 @@ export function registerForgeHandlers(): () => void {
         ) {
           throw new Error("Invalid issue number");
         }
-        const { namespaceId, repoRef } = await resolveForCwd(payload.cwd);
-        const impl = getImplForNamespace(namespaceId);
+        const { namespaceId, repoRef } = await resolveForCwd(payload.cwd, "issues");
+        const impl = getIssueImplForNamespace(namespaceId);
         return impl.buildIssueUrl(repoRef, payload.issueNumber);
       }
     )
@@ -962,8 +970,8 @@ export function registerForgeHandlers(): () => void {
         if (typeof payload.username !== "string" || !trimmedUsername) {
           throw new Error("Invalid username");
         }
-        const { namespaceId, repoRef } = await resolveForCwd(payload.cwd);
-        const impl = getImplForNamespace(namespaceId);
+        const { namespaceId, repoRef } = await resolveForCwd(payload.cwd, "issues");
+        const impl = getIssueImplForNamespace(namespaceId);
         return auditForgeCall(
           {
             providerId: namespaceId,

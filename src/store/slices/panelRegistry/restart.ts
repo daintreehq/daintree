@@ -67,6 +67,7 @@ import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { isClientAppError } from "@/utils/clientAppError";
 import { transferBetweenWorktreeIndex } from "./worktreeIndex";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
+import { useMemoryPressureWaitStore } from "@/store/memoryPressureWaitStore";
 import {
   getCurrentLaunchCliDetail,
   resolveAgentLaunchBaseCommand,
@@ -296,6 +297,13 @@ export const createRestartActions = (
     // the user (#12434). The pane's own actions launch it.
     if (terminal.restoreRecovery) {
       logWarn("[TerminalStore] Cannot restart a pane held for recovery", { id });
+      return;
+    }
+
+    // Nor one held for memory pressure (#13530): nothing has started yet, and
+    // its gate is where it starts now or carries on waiting.
+    if (useMemoryPressureWaitStore.getState().heldPanelIds[id] === true) {
+      logWarn("[TerminalStore] Cannot restart a pane held for memory pressure", { id });
       return;
     }
 

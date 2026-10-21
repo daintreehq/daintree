@@ -71,6 +71,7 @@ const agentVisibleProjectSettingsShape: Record<AgentVisibleProjectSettingsKey, z
   branchPrefixCustom: z.string().optional(),
   forgeRemote: z.string().optional(),
   forgeProviderOverride: z.string().nullable().optional(),
+  issueProviderOverride: z.string().nullable().optional(),
   worktreePathPattern: z.string().optional(),
   terminalSettings: z
     .object({

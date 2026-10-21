@@ -215,6 +215,50 @@ describe("PrivacyDataTab", () => {
     }
   });
 
+  it("names every breadcrumb kind sent with crash reports", async () => {
+    render(<PrivacyDataTab activeSubtab="telemetry" onSubtabChange={vi.fn()} />, {
+      wrapper: TooltipProvider,
+    });
+
+    const disclosure = await waitFor(() =>
+      screen.getByRole("group", { name: /What's collected at each level/i })
+    );
+    const text = disclosure.textContent ?? "";
+    for (const kind of [
+      /main and renderer processes/i,
+      /lifecycle/i,
+      /console logs/i,
+      /network requests/i,
+      /child-process/i,
+      /navigation/i,
+      /clicks/i,
+      /earlier error reports/i,
+    ]) {
+      expect(text).toMatch(kind);
+    }
+    expect(text).toMatch(/reduced to their origin/i);
+    expect(text).toMatch(/email addresses/i);
+  });
+
+  it("discloses the location Sentry derives from the connection's IP address", async () => {
+    // The client never sends an IP (#13540), but Sentry's ingestion still looks up
+    // city and country from the connection, for crash reports and analytics alike.
+    render(<PrivacyDataTab activeSubtab="telemetry" onSubtabChange={vi.fn()} />, {
+      wrapper: TooltipProvider,
+    });
+
+    const disclosure = await waitFor(() =>
+      screen.getByRole("group", { name: /What's collected at each level/i })
+    );
+    const levels = Array.from(disclosure.querySelectorAll("dd"), (dd) => dd.textContent ?? "");
+    expect(levels).toHaveLength(3);
+    const [off, errors, full] = levels;
+    expect(off).not.toMatch(/location/i);
+    expect(errors).toMatch(/approximate location \(city and country\)/i);
+    expect(errors).toMatch(/IP address itself isn't stored/i);
+    expect(full).toMatch(/same approximate location/i);
+  });
+
   it("does not render telemetry disclosure on the storage subtab", async () => {
     render(<PrivacyDataTab activeSubtab="storage" onSubtabChange={vi.fn()} />, {
       wrapper: TooltipProvider,

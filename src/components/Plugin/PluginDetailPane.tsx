@@ -535,8 +535,10 @@ export function PluginDetailPane({
     // it surfaces subprocess health and restart, which is meaningless otherwise.
     ...(hasMcpServers ? [{ id: "mcp-servers", label: "MCP servers" }] : []),
     // Same rule, applied to the log buffer: a plugin that has logged nothing
-    // offers no Logs tab rather than an empty one (#12214).
-    ...(logs.lines && logs.lines.length > 0 ? [{ id: "logs", label: "Logs" }] : []),
+    // offers no Logs tab rather than an empty one (#12214). Once earned it
+    // stays, so a refresh that finds the buffer cleared or the plugin stopped
+    // says so in place instead of throwing the author back to Overview.
+    ...(logs.hasLogged ? [{ id: "logs", label: "Logs" }] : []),
     // Earned the same way: no tab until main has measured something.
     ...(perfSnapshot ? [{ id: "performance", label: "Performance" }] : []),
     ...(hasViewPanels ? [{ id: "styles", label: "Styles" }] : []),

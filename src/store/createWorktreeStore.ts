@@ -2214,6 +2214,7 @@ function snapshotsEqual(a: WorktreeSnapshot, b: WorktreeSnapshot): boolean {
     a.isDetached === b.isDetached &&
     a.head === b.head &&
     resourceStatusEqual(a.resourceStatus, b.resourceStatus) &&
+    attachmentsEqual(a.attachments, b.attachments) &&
     worktreeChangesEqual(a.worktreeChanges, b.worktreeChanges) &&
     lifecycleStatusEqual(a.lifecycleStatus, b.lifecycleStatus) &&
     setupStatusEqual(a.setupStatus, b.setupStatus) &&
@@ -2238,6 +2239,16 @@ function resourceStatusEqual(
     a.resumedAt === b.resumedAt &&
     a.pausedAt === b.pausedAt
   );
+}
+
+function attachmentsEqual(
+  a: WorktreeSnapshot["attachments"],
+  b: WorktreeSnapshot["attachments"]
+): boolean {
+  if (a === b) return true;
+  if (a == null || b == null || a.length !== b.length) return false;
+  // Small, flat and host-built in a fixed key order, so its JSON is its value.
+  return JSON.stringify(a) === JSON.stringify(b);
 }
 
 function worktreeChangesEqual(

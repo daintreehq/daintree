@@ -174,7 +174,7 @@ function MissingCliScene() {
   return (
     <Scene>
       <Specimen label="MissingCliGate · missing" width={560}>
-        <div className="flex flex-col rounded-[var(--radius-md)] border border-border-default">
+        <div className="flex h-[480px] flex-col rounded-[var(--radius-md)] border border-border-default">
           <MissingCliGate
             agentId="claude"
             detail={{
@@ -189,7 +189,7 @@ function MissingCliScene() {
         </div>
       </Specimen>
       <Specimen label="MissingCliGate · installed (not launchable)" width={560}>
-        <div className="flex flex-col rounded-[var(--radius-md)] border border-border-default">
+        <div className="flex h-[480px] flex-col rounded-[var(--radius-md)] border border-border-default">
           <MissingCliGate
             agentId="codex"
             detail={{
@@ -206,7 +206,7 @@ function MissingCliScene() {
         </div>
       </Specimen>
       <Specimen label="MissingCliGate · blocked" width={560}>
-        <div className="flex flex-col rounded-[var(--radius-md)] border border-border-default">
+        <div className="flex h-[480px] flex-col rounded-[var(--radius-md)] border border-border-default">
           <MissingCliGate
             agentId="gemini"
             detail={{
@@ -222,7 +222,7 @@ function MissingCliScene() {
         </div>
       </Specimen>
       <Specimen label="MissingCliGate · ready" width={560}>
-        <div className="flex flex-col rounded-[var(--radius-md)] border border-border-default">
+        <div className="flex h-[480px] flex-col rounded-[var(--radius-md)] border border-border-default">
           <MissingCliGate
             agentId="claude"
             detail={{ state: "ready", resolvedPath: "/Users/you/.local/bin/claude", via: "which" }}
@@ -233,7 +233,7 @@ function MissingCliScene() {
         </div>
       </Specimen>
       <Specimen label="MissingCliGate · unauthenticated" width={560}>
-        <div className="flex flex-col rounded-[var(--radius-md)] border border-border-default">
+        <div className="flex h-[480px] flex-col rounded-[var(--radius-md)] border border-border-default">
           <MissingCliGate
             agentId="codex"
             detail={{
@@ -248,7 +248,7 @@ function MissingCliScene() {
         </div>
       </Specimen>
       <Specimen label="MissingCliGate · re-check failed" width={560} id="recheck-failed">
-        <div className="flex flex-col rounded-[var(--radius-md)] border border-border-default">
+        <div className="flex h-[480px] flex-col rounded-[var(--radius-md)] border border-border-default">
           <MissingCliGate
             agentId="gemini"
             detail={{
@@ -385,6 +385,8 @@ function PluginErrorsScene() {
           lines={null}
           loading={false}
           error="Couldn't read this plugin's log buffer: plugin host is restarting"
+          readAt={null}
+          hasLogged
           refresh={noop}
         />
       </Specimen>

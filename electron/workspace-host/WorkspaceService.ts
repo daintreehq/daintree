@@ -13,11 +13,17 @@ import {
 import { sliceUtf8Bytes } from "../../shared/utils/boundedOutput.js";
 import {
   GIT_FILE_DIFF_MAX_BYTES,
+  GIT_FILE_DIFF_MAX_PATCH_BYTES,
   GIT_FILE_DIFF_MAX_SOURCE_BYTES,
 } from "../../shared/config/gitReadLimits.js";
 import { settingsFilePath } from "../services/projectStorePaths.js";
 import { SimpleGit, BranchSummary } from "simple-git";
-import { createHardenedGit, createAuthenticatedGit } from "../utils/hardenedGit.js";
+import {
+  createAuthenticatedGit,
+  createBoundRepositoryGit,
+  createHardenedGit,
+} from "../utils/hardenedGit.js";
+import { runWithCappedStdout } from "../utils/cappedGitOutput.js";
 import { readRemotesWithStatus } from "../utils/baseCompareRef.js";
 import { createRemoteInventoryReader } from "./remoteInventory.js";
 import { copyWorktreeIncludeFiles } from "./worktreeInclude.js";
@@ -29,7 +35,7 @@ import {
   getGitRecoveryHint,
 } from "../../shared/utils/gitOperationErrors.js";
 import { logError, logWarn } from "../utils/logger.js";
-import { newFileDiff } from "../utils/newFileDiff.js";
+import { newFileDiff, type NewFileMode } from "../utils/newFileDiff.js";
 import { isBinaryDiffOutput } from "../../shared/utils/gitDiffParsing.js";
 import type {
   LifecycleCommandReview,
@@ -178,6 +184,11 @@ import {
 import { resolveForgeRemote } from "../../shared/utils/forgeRemoteSelection.js";
 import { applyResourceConfigToMonitor } from "./resourceConfigHelpers.js";
 import { ResourceActionExecutor } from "./ResourceActionExecutor.js";
+import { AttachmentService, type AttachmentActionResult } from "./AttachmentService.js";
+import {
+  FileProjectAttachmentStore,
+  resolveProjectAttachmentsDir,
+} from "./projectAttachmentStore.js";
 import { TopologyWatcher, type TopologyWatcherHost } from "./TopologyWatcher.js";
 
 function normalizePathKeyForPrefix(value: string): string {
@@ -452,8 +463,9 @@ function samePath(a: string, b: string): boolean {
 }
 
 /**
- * The bytes an untracked or added file contributes to its diff, as git would
- * show them: a symlink is its target path, never what it points at, and a
+ * The bytes an untracked or added file contributes to its diff, and the mode
+ * git records it with, as git would show them: a symlink is its target path
+ * (mode 120000), never what it points at, and a
  * file reached through a linked folder (a path git itself never lists) is
  * refused. The caller names the path and its status, so neither may turn a
  * diff into a read of something outside the worktree.
@@ -462,7 +474,7 @@ async function readWorktreeFileForDiff(
   cwd: string,
   absolutePath: string,
   readFile: (file: string) => Promise<Buffer>
-): Promise<Buffer> {
+): Promise<{ bytes: Buffer; mode: NewFileMode }> {
   const { lstat, open, readlink, realpath } = await import("fs/promises");
   const { constants } = await import("fs");
   const { dirname, isAbsolute, relative } = await import("path");
@@ -478,8 +490,10 @@ async function readWorktreeFileForDiff(
   };
   await contained();
   const stats = await lstat(absolutePath);
-  if (stats.isSymbolicLink()) return Buffer.from(await readlink(absolutePath), "utf-8");
-  if (stats.isDirectory()) return readFile(absolutePath);
+  if (stats.isSymbolicLink()) {
+    return { bytes: Buffer.from(await readlink(absolutePath), "utf-8"), mode: "120000" };
+  }
+  if (stats.isDirectory()) return { bytes: await readFile(absolutePath), mode: "100644" };
   // The last step can't be a link (it would refuse to open), the descriptor
   // must be the file the contained path still names, and its folder must
   // still be inside: what was read is what was checked.
@@ -491,7 +505,7 @@ async function readWorktreeFileForDiff(
     const opened = await handle.stat();
     if (!opened.isFile() || opened.ino !== stats.ino || opened.dev !== stats.dev) outside();
     await contained();
-    return await handle.readFile();
+    return { bytes: await handle.readFile(), mode: "100644" };
   } finally {
     await handle.close().catch(() => {});
   }
@@ -643,6 +657,7 @@ export class WorkspaceService {
   private fetchCoordinator: RepoFetchCoordinator;
   private _shutdownController = new AbortController();
   readonly resourceActionExecutor: ResourceActionExecutor;
+  readonly attachmentService: AttachmentService;
   /** Session-scoped guard so we notify the user about each Linux inotify
    *  limit only once, even if many worktrees hit it concurrently. */
   private readonly inotifyLimitsNotified = new Set<InotifyLimit>();
@@ -1042,6 +1057,18 @@ export class WorkspaceService {
       lifecycleService: this.lifecycleService,
     });
 
+    this.attachmentService = new AttachmentService(
+      {
+        getProjectRootPath: () => this.projectRootPath,
+        getMonitor: (id) => this.monitors.get(id),
+        getMonitors: () => this.monitors.values(),
+        getProjectEnvVars: () => this.projectEnvVars,
+        emitUpdate: (monitor) => this.emitUpdate(monitor),
+        lifecycleService: this.lifecycleService,
+      },
+      new FileProjectAttachmentStore(resolveProjectAttachmentsDir(process.env.DAINTREE_USER_DATA))
+    );
+
     // The host is a thin live-getter view onto WorkspaceService state.
     // Aliasing `this` keeps the getter syntax compact (object-literal
     // getters can't be arrow functions, and we need a fresh read on each
@@ -1163,6 +1190,10 @@ export class WorkspaceService {
       const rawWorktrees = await this.listService.list();
       const worktrees = await this.listService.mapToWorktrees(rawWorktrees);
       this.statusTiming.markEnumerated();
+
+      // Before the sync, so the holders it reconciles against are this
+      // project's and every monitor it creates starts with its attachments.
+      await this.attachmentService.load(projectRootPath);
 
       await this.syncMonitors(worktrees, this.activeWorktreeId, this.mainBranch, undefined, true);
 
@@ -1303,6 +1334,11 @@ export class WorkspaceService {
         this.removeMonitor(id);
       }
     }
+    // A holder can be gone without ever having had a monitor here (removed
+    // while the app was closed). The list is as authoritative for it as it is
+    // for the monitors just removed.
+    this.attachmentService.reconcile(currentIds);
+    void this.attachmentService.refreshDeclarations();
 
     // Create or update monitors. The watcher-budget reconciliation runs in a
     // finally so a mid-loop throw (e.g. a failed stat/note-file write in
@@ -1588,6 +1624,7 @@ export class WorkspaceService {
     }
 
     this.resourceActionExecutor.cleanupResourceActionState(id);
+    this.attachmentService.handleWorktreeRemoved(id);
     monitor.stop();
     this.monitors.delete(id);
     this.emitGate.forget(monitor);
@@ -1932,6 +1969,7 @@ export class WorkspaceService {
 
     monitor.setIssueNumber(issueNumber ?? undefined);
     monitor.setCreatedAt(createdAt);
+    monitor.setAttachments(this.attachmentService.projectionFor(wt.id));
 
     // Withhold the watcher budget from a new *background* monitor before it
     // starts so start() never arms a watcher we may be about to evict — this
@@ -2405,9 +2443,9 @@ export class WorkspaceService {
       const git = await createHardenedGit(cwd);
       const remotes = await git.getRemotes(true);
       const signature = remotes
-        .map((remote) => `${remote.name} ${remote.refs?.fetch ?? ""}`)
+        .map((remote) => `${remote.name}\x00${remote.refs?.fetch ?? ""}`)
         .sort()
-        .join("");
+        .join("\x01");
       // Selection honours the project's `forgeRemote` setting (#11408). The
       // signature above deliberately still covers ALL remotes: it answers "did
       // the remote table change", independent of which entry we route through.
@@ -3115,7 +3153,9 @@ export class WorkspaceService {
     if (!monitor) return null;
     const ctx = this.getLifecycleContext();
     if (!ctx) return { phases: [] };
-    return this.lifecycleService.previewLifecycleTeardown(monitor, ctx);
+    const attachmentPhases = await this.attachmentService.previewDetachForDelete(monitor);
+    const teardown = await this.lifecycleService.previewLifecycleTeardown(monitor, ctx);
+    return { phases: [...attachmentPhases, ...teardown.phases] };
   }
 
   async getSubmoduleDeleteRisk(worktreeId: string): Promise<SubmoduleDeleteRisk | null> {
@@ -4426,6 +4466,8 @@ export class WorkspaceService {
     monitor: WorktreeMonitor,
     force: boolean
   ): Promise<void> {
+    // First, while the worktree's own stack is still up for its detach to talk to.
+    await this.attachmentService.detachForDelete(worktreeId);
     const ctx = this.getLifecycleContext();
     if (!ctx) {
       return;
@@ -4482,6 +4524,9 @@ export class WorkspaceService {
     // Hoisted so the catch can clear the pending entry even though `monitor`
     // is block-scoped to the try.
     let pendingDeleteKey: string | null = null;
+    // Set once the attachment detaches have run, so a failure releases the
+    // hold they took on the worktree — and only then.
+    let attachmentsReserved = false;
     try {
       markHostPerformance("wtdelete.host-start", { worktreeId });
       const monitor = this.monitors.get(worktreeId);
@@ -4570,6 +4615,7 @@ export class WorkspaceService {
         this.setActiveWorktree(`${requestId}-auto-switch`, mainWorktreeId);
       }
 
+      attachmentsReserved = true;
       await this.runLifecycleTeardown(worktreeId, monitor, force);
 
       // Mark the metadata-subdir basename pending so the watcher event our own
@@ -4727,6 +4773,9 @@ export class WorkspaceService {
       // Delete failed — drop any pending entry so a real external change to
       // that name isn't masked, and cancel its safety valve.
       if (pendingDeleteKey) this.topologyWatcher.clearPending(pendingDeleteKey);
+      // The worktree is still here, so attaching to it is allowed again — but
+      // only this delete's hold is released; a concurrent one keeps its own.
+      if (attachmentsReserved) this.attachmentService.endDelete(worktreeId);
       // The only durable record of a delete failure. The renderer surfaces it
       // on the card, but a branch-delete failure arrives after the card is
       // already gone — so without this the error survives nowhere on disk.
@@ -5223,7 +5272,7 @@ export class WorkspaceService {
     storeGitDir: string
   ): Promise<SubmoduleAtRiskCommit[] | null> {
     try {
-      const git = await createHardenedGit(storeGitDir, this._shutdownController.signal);
+      const git = await createBoundRepositoryGit(storeGitDir, this._shutdownController.signal);
       const output = await withTimeout(
         git.raw([
           "--git-dir",
@@ -5486,14 +5535,15 @@ export class WorkspaceService {
         sendWindow(bytes);
       };
 
-      // Bounds peak memory: both branches materialize a full result before
-      // windowing — the untracked one inlines the file, and git buffers a
-      // tracked file's entire diff. The ceiling is 16x the 1MB cliff it
+      // Bounds peak memory for the untracked branch, which inlines the file,
+      // and refuses a tracked file early; the tracked patch itself is capped
+      // while git writes it, below. The ceiling is 16x the 1MB cliff it
       // replaced, so the "large file, small diff" case that the old gate
-      // wrongly refused now succeeds (#11531).
+      // wrongly refused now succeeds (#11531). lstat, not stat: a symlink's
+      // diff is its target path, whatever size the file it points at is.
       try {
-        const { stat } = await import("fs/promises");
-        const stats = await stat(absolutePath);
+        const { lstat } = await import("fs/promises");
+        const stats = await lstat(absolutePath);
         if (stats.size > GIT_FILE_DIFF_MAX_SOURCE_BYTES) {
           sendSentinel("FILE_TOO_LARGE");
           return;
@@ -5521,15 +5571,16 @@ export class WorkspaceService {
         // Only for `added`: an untracked directory has no index entry, so the
         // tracked diff would come back empty and report NO_CHANGES — which
         // claims something the request cannot know.
-        let buffer: Buffer | null = null;
+        let entry: { bytes: Buffer; mode: NewFileMode } | null = null;
         try {
-          buffer = await readWorktreeFileForDiff(cwd, absolutePath, readFile);
+          entry = await readWorktreeFileForDiff(cwd, absolutePath, readFile);
         } catch (error) {
           const isDirectory = (error as NodeJS.ErrnoException).code === "EISDIR";
           if (!isDirectory || status !== "added") throw error;
         }
 
-        if (buffer !== null) {
+        if (entry !== null) {
+          const buffer = entry.bytes;
           let isBinary = false;
           const checkLength = Math.min(buffer.length, 8192);
           for (let i = 0; i < checkLength; i++) {
@@ -5544,7 +5595,7 @@ export class WorkspaceService {
             return;
           }
 
-          const diff = newFileDiff(gitPath, buffer.toString("utf-8"));
+          const diff = newFileDiff(gitPath, buffer.toString("utf-8"), entry.mode);
 
           serve(diff, fileKey, freshness);
           return;
@@ -5564,19 +5615,27 @@ export class WorkspaceService {
       // diff at all, and `diff` emits patches for files INSIDE the submodule
       // under their own paths — neither of which this pane can render or
       // recognise as a gitlink (#12309).
-      const diff = await git.diff([
-        // Pinned to the commit the freshness key was taken against, so a HEAD
-        // that moves away and back mid-diff cannot pass off a patch against
-        // the other commit as fresh.
-        freshness?.head ?? "HEAD",
-        "--no-ext-diff",
-        "--no-textconv",
-        "--no-color",
-        "--submodule=short",
-        ...(ignoreWhitespace ? ["--ignore-all-space"] : []),
-        "--",
-        normalizedPath,
-      ]);
+      // Capped while git runs, since the stat gate above fails open for a
+      // deleted file and never sees the HEAD blob.
+      const diff = await runWithCappedStdout(cwd, GIT_FILE_DIFF_MAX_PATCH_BYTES, (capped) =>
+        capped.diff([
+          // Pinned to the commit the freshness key was taken against, so a HEAD
+          // that moves away and back mid-diff cannot pass off a patch against
+          // the other commit as fresh.
+          freshness?.head ?? "HEAD",
+          "--no-ext-diff",
+          "--no-textconv",
+          "--no-color",
+          "--submodule=short",
+          ...(ignoreWhitespace ? ["--ignore-all-space"] : []),
+          "--",
+          normalizedPath,
+        ])
+      );
+      if (diff === null) {
+        sendSentinel("FILE_TOO_LARGE");
+        return;
+      }
 
       if (isBinaryDiffOutput(diff)) {
         sendSentinel("BINARY_FILE");
@@ -6169,6 +6228,15 @@ export class WorkspaceService {
     );
   }
 
+  runAttachmentAction(
+    worktreeId: string,
+    name: string,
+    action: "attach" | "detach" | "status",
+    expectedHolderWorktreeId?: string | null
+  ): Promise<AttachmentActionResult> {
+    return this.attachmentService.run(worktreeId, name, action, expectedHolderWorktreeId);
+  }
+
   async hasResourceConfig(rootPath: string): Promise<boolean> {
     if (!this.projectRootPath) {
       return false;
@@ -6218,6 +6286,7 @@ export class WorkspaceService {
     this.prService.cleanup();
     this.deferredCredentialUpdates.clear();
     this.resourceActionExecutor.dispose();
+    this.attachmentService.dispose();
     for (const monitor of this.monitors.values()) {
       monitor.stop();
     }

@@ -174,9 +174,11 @@ const createProjectSettingsStore: StateCreator<ProjectSettingsState & ProjectSet
         return;
       }
 
+      // Nothing was loaded, so there is no draft: defaults on screen would be
+      // saved over the settings the read couldn't reach.
       set({
         error,
-        settings: applyPatchesAwaitingLoad(projectId, { runCommands: [] }, revisionAtStart),
+        settings: null,
         detectedRunners: [],
         allDetectedRunners: [],
         isLoading: false,

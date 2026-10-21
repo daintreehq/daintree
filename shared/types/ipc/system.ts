@@ -39,11 +39,31 @@ export interface SystemWakePayload {
   timestamp: number;
 }
 
+/** One project's terminals and everything they spawned, as last measured. */
+export interface SystemMemoryWorkload {
+  /** Null for terminals no project owns. */
+  projectId: string | null;
+  /** The project's name when main could resolve it. */
+  projectName: string | null;
+  terminalCount: number;
+  memoryMb: number;
+}
+
+/** Memory Daintree itself hosts, measured when the payload was published. */
+export interface SystemMemoryWorkloads {
+  /** Daintree's own Electron processes; null when that sweep failed. */
+  appMemoryMb: number | null;
+  /** Heaviest first, at most a handful; empty when the terminal sweep failed. */
+  projects: SystemMemoryWorkload[];
+}
+
 /**
- * Pushed on the two edges of a sustained system-memory episode: `degraded` once
- * when it opens, `normal` once when it clears. Observations only — each figure
- * is non-null only when that measurement was over its threshold on the sample
- * that opened the episode, and both are null on `normal`.
+ * Pushed on the edges of a sustained system-memory episode: `degraded` when it
+ * opens and again each time it worsens (#13529), `normal` once when it clears.
+ * Observations only — the worst of the episode so far: each figure is non-null
+ * once that measurement has been published over its threshold, carrying its
+ * latest over-threshold value, and the kernel level is the highest published;
+ * all are null on `normal`.
  */
 export interface SystemMemoryPressurePayload {
   status: "degraded" | "normal";
@@ -54,6 +74,10 @@ export interface SystemMemoryPressurePayload {
   fseventsdRssMb: number | null;
   /** The level `kern.memorystatus_vm_pressure_level` reported. Darwin only. */
   kernelPressureLevel: "warn" | "critical" | null;
+  /** True on a publish after the first in the episode, each one worse than the last. */
+  escalated: boolean;
+  /** What Daintree was hosting at the time; null on `normal` or when nothing could be read. */
+  workloads: SystemMemoryWorkloads | null;
 }
 
 /**
@@ -279,8 +303,17 @@ export interface HardwareInfo {
 
 /** Summary of real app memory metrics from app.getAppMetrics() */
 export interface AppMetricsSummary {
-  /** Aggregate working-set across Daintree's Electron processes, in MB. 0 when unavailable. */
+  /**
+   * Aggregate memory across Daintree's Electron processes, in MB: physical
+   * footprint on macOS, working set elsewhere. 0 when unavailable.
+   */
   totalMemoryMB: number;
+  /**
+   * The same aggregate with the GPU process at its resident size, which is what
+   * the badge's warning thresholds compare against: its footprint is mostly
+   * graphics memory (#13637). When absent, readers fall back to the total.
+   */
+  pressureMemoryMB?: number;
   /** Set when the metric could not be read; the renderer should suppress the value rather than show 0. */
   unavailable?: true;
 }
@@ -396,6 +429,40 @@ export type RendererCpuProfileStopResult =
       reason: "not-recording" | "already-stopping" | "devtools-detached" | "save-failed";
       message?: string;
     };
+
+/**
+ * What a project view's DOM showed about whether clicks could land, read by
+ * the preload each time the view answers a LoAF sample. Elements are named by
+ * tag and role only; nothing reads text, values or classes.
+ */
+export interface RendererInputBlockingSnapshot {
+  /**
+   * Computed `pointer-events` of `<body>` — "auto", "none" (a modal Radix
+   * layer sets it), "other", or "" when there was no body.
+   */
+  bodyPointerEvents: string;
+  /** `inert` on `<html>` or `<body>`. */
+  rootInert: boolean;
+  inertCount: number;
+  /** `body[data-scroll-locked]`, set by react-remove-scroll under a modal layer. */
+  scrollLocked: boolean;
+  /** `[aria-modal="true"]` elements plus native modal `<dialog>`s. */
+  modalCount: number;
+  /** Overlay claims open in the view's UI store, mirrored onto `<html>`. */
+  overlayClaims: number;
+  /** `html[data-dragging]`, stamped for the length of a panel drag. */
+  dragging: boolean;
+  /** `document.visibilityState`, or "other". */
+  visibility: string;
+  focused: boolean;
+  /**
+   * What `elementFromPoint` returned at the viewport centre: an observation,
+   * not proof of what a click there would reach. `tag` is a standard tag name,
+   * "custom-element" or "other"; `role` appears only for layer roles such as
+   * "dialog". `coversViewport` is whether the element spans 90% of the viewport.
+   */
+  centerHit: { tag: string; role?: string; coversViewport: boolean } | null;
+}
 
 /**
  * Payload for starting an install job. Either an agent CLI (resolved through

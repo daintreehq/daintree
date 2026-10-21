@@ -10,6 +10,7 @@ import { projectStore } from "./ProjectStore.js";
 import { getAppWebContents } from "../window/webContentsRegistry.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { resolveExecutableForSpawn } from "../utils/windowsExecutable.js";
+import { getSanitizedProcessEnv } from "../utils/gitEnv.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -56,7 +57,10 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: s
 async function runGitSmokeCommand(args: string[], cwd: string): Promise<void> {
   try {
     await withTimeout(
-      execFileAsync(await resolveExecutableForSpawn("git"), args, { cwd }),
+      execFileAsync(await resolveExecutableForSpawn("git"), args, {
+        cwd,
+        env: getSanitizedProcessEnv(),
+      }),
       SMOKE_GIT_TIMEOUT_MS,
       `[SMOKE] git ${args.join(" ")} timed out`
     );

@@ -38,7 +38,7 @@ import {
   validateCwd,
   createHardenedGit,
   createAuthenticatedGit,
-  buildContinueEnv,
+  createContinueGit,
 } from "../../utils/hardenedGit.js";
 import {
   getPerFileDiffStats,
@@ -53,13 +53,17 @@ import { store } from "../../store.js";
 import { getSoundService } from "../../services/getSoundService.js";
 import type * as SoundServiceModule from "../../services/SoundService.js";
 import { detectRepoOperationState, resolveGitDir } from "../../services/git/repoOperationState.js";
-import { parsePorcelainV2Conflicts } from "../../services/git/porcelainConflicts.js";
+import {
+  parsePorcelainV2Conflicts,
+  PORCELAIN_V2_CONFLICT_ARGS,
+} from "../../services/git/porcelainConflicts.js";
 import {
   STAGED_FILE_SIZE_CAP,
   scanStagedFilesForConflictMarkers,
 } from "../../services/git/conflictMarkerScan.js";
 import { shouldPlayUiFeedbackSound } from "../../utils/uiFeedbackSound.js";
 import { resolveExecutableForSpawn } from "../../utils/windowsExecutable.js";
+import { getSanitizedProcessEnv } from "../../utils/gitEnv.js";
 
 type SoundId = keyof typeof SoundServiceModule.SOUND_FILES;
 
@@ -1645,7 +1649,7 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
     let conflictedFiles: ConflictedFileEntry[] = [];
     if (conflicted.length > 0) {
       try {
-        const porcelain = await git.raw(["-c", "core.quotepath=false", "status", "--porcelain=v2"]);
+        const porcelain = await git.raw(PORCELAIN_V2_CONFLICT_ARGS);
         conflictedFiles = parsePorcelainV2Conflicts(porcelain);
       } catch {
         // Fall back to the simple-git path list without XY labels.
@@ -1723,11 +1727,11 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
     checkRateLimit(CHANNELS.GIT_CONTINUE_REPOSITORY_OPERATION, 5, 10_000);
     validateCwd(cwd);
 
-    // One .env() call only: simple-git's .env() replaces the spawn env
-    // wholesale, so re-stating the full hardened env (plus editor suppression)
-    // via buildContinueEnv is the only way to keep createHardenedGit's
-    // hardening intact on the continue path (#7058, #10786).
-    const git = (await createHardenedGit(cwd)).env(buildContinueEnv());
+    // The continue profile carries the hardened env plus editor suppression in
+    // the one env it is built with: a later .env() would replace the hardening
+    // wholesale (#7058, #10786), and the plain hardened profile is not allowed
+    // GIT_EDITOR at all.
+    const git = await createContinueGit(cwd);
     const gitDir = await resolveGitDir(git, cwd);
     const { state } = await detectRepoOperationState(gitDir, false);
 
@@ -1925,11 +1929,14 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
     // expected for first-time users and must not propagate as an error.
     let alreadyConfigured = false;
     const git = await resolveExecutableForSpawn("git");
+    // Without an inherited GIT_CONFIG_GLOBAL, so the exception lands in the
+    // global config the hardened profiles read.
+    const env = { ...getSanitizedProcessEnv(), LC_ALL: "C" };
     try {
       const { stdout } = await execFileAsync(
         git,
         ["config", "--global", "--get-all", "safe.directory"],
-        { env: { ...process.env, LC_ALL: "C" }, windowsHide: true }
+        { env, windowsHide: true }
       );
       const entries = stdout
         .split("\n")
@@ -1951,7 +1958,7 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
 
     if (!alreadyConfigured) {
       await execFileAsync(git, ["config", "--global", "--add", "safe.directory", normalized], {
-        env: { ...process.env, LC_ALL: "C" },
+        env,
         windowsHide: true,
       });
     }

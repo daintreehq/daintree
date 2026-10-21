@@ -4,7 +4,8 @@ import { Plug } from "@/components/icons";
 import { usePanelStore } from "@/store";
 import { useTerminalAdoptionStore } from "@/store/terminalAdoptionStore";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
-import type { RestoreFocusTarget } from "@/components/ui/AppDialog";
+import { AppDialog, type RestoreFocusTarget } from "@/components/ui/AppDialog";
+import { Callout } from "@/components/ui/Callout";
 import {
   ContextMenuItem,
   ContextMenuSub,
@@ -17,7 +18,11 @@ import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { getTerminalDisplayTitle } from "@/utils/terminalTitleDisplay";
 import type { TerminalAdoptionRefusal } from "@shared/types/ipc/mcpServer";
 import { cn } from "@/lib/utils";
-import { HEADER_CHIP_CLASS, HEADER_CHIP_SURFACE } from "./terminalHeaderChip";
+import {
+  HEADER_CHIP_CLASS,
+  HEADER_CHIP_FOCUS_CLASS,
+  HEADER_CHIP_SURFACE,
+} from "./terminalHeaderChip";
 
 const ICON_CLASS = "w-3.5 h-3.5 mr-2 shrink-0";
 
@@ -157,8 +162,8 @@ function refusalMessage(
       return "The agent that launched this terminal already drives it.";
     case "already-handed":
       return holderName
-        ? `Already handed to ${holderName}. Take it back first.`
-        : "Already handed to another pane. Take it back first.";
+        ? `Already handed to ${holderName}. Choose “Take back from ${holderName}” in the terminal menu first.`
+        : "Already handed to another pane. Choose “Take back control” in the terminal menu first.";
   }
 }
 
@@ -178,8 +183,10 @@ export function TerminalHandOverDialog({
   /** Where focus goes when the dialog closes — the pane the menu opened on. */
   restoreFocusTo?: RestoreFocusTarget;
 }) {
-  const terminalName = usePaneName(terminalId) ?? "this terminal";
-  const orchestratorName = usePaneName(orchestratorPaneId) ?? "the orchestrator";
+  const terminalPaneName = usePaneName(terminalId);
+  const orchestratorPaneName = usePaneName(orchestratorPaneId);
+  const terminalName = terminalPaneName ?? "this terminal";
+  const orchestratorName = orchestratorPaneName ?? "the orchestrator";
   // Why the hand-over didn't happen. Shown beside the action row, where the
   // user is looking, and the primary action stays disabled: nothing about a
   // retry would change the answer.
@@ -217,44 +224,86 @@ export function TerminalHandOverDialog({
     <ConfirmDialog
       isOpen
       onClose={onClose}
-      title={`Hand '${terminalName}' to '${orchestratorName}'?`}
-      description={`${orchestratorName} will be able to type into this terminal and submit it, interrupt it, bring it on screen and read its last message, as if it had launched it. Daintree doesn't filter what it sends: answering a prompt with 1 can approve a push. It can't close the terminal, and you can take it back from this menu at any time.`}
+      title={
+        // One inline run: the title row is a flex box, which would space every
+        // fragment of the sentence apart.
+        <span className="min-w-0 break-words">
+          <span className="font-normal">Hand over </span>
+          <PaneName name={terminalPaneName} fallback="this terminal" />
+          <span className="font-normal"> to </span>
+          <PaneName name={orchestratorPaneName} fallback="the orchestrator" />
+          <span className="font-normal">?</span>
+        </span>
+      }
       confirmLabel="Hand over terminal"
       variant="destructive"
       onConfirm={handleConfirm}
       restoreFocusTo={restoreFocusTo}
       isConfirmLoading={isSubmitting}
       confirmDisabled={refusal !== null}
+      hintPlacement="above"
       hint={
         refusal !== null ? (
-          <span className="min-w-0 leading-tight" role="status">
+          <span className="min-w-0 leading-snug" role="status">
             {refusal.reason === "failed"
               ? "Couldn't hand the terminal over. Close this and try again."
               : refusalMessage(refusal.reason, orchestratorName, holderName)}
           </span>
         ) : undefined
       }
-    />
+    >
+      {/* One description, so the warning and the way back are announced with
+          the consequence rather than left for a screen reader to find. */}
+      <AppDialog.Description as="div" className="space-y-3">
+        <p>
+          {orchestratorPaneName ?? "The orchestrator"} can type and press Enter in this terminal,
+          interrupt it, bring it on screen and read its last message.
+        </p>
+        <Callout severity="warning" title="It can approve actions for you" className="text-sm">
+          Daintree doesn&apos;t filter what it sends. Answering an approval prompt with 1 can
+          approve a git push.
+        </Callout>
+        <p>It can&apos;t close the terminal. Take it back any time from the terminal menu.</p>
+      </AppDialog.Description>
+    </ConfirmDialog>
   );
+}
+
+/**
+ * A pane's own title inside the dialog's title. The names carry the title's
+ * weight and the words around them drop to normal, which marks where a name
+ * like `npm run dev` begins and ends without quoting it.
+ */
+function PaneName({ name, fallback }: { name: string | null; fallback: string }) {
+  if (name === null) return <span className="font-normal">{fallback}</span>;
+  return <bdi>{name}</bdi>;
 }
 
 /**
  * Ambient header pill on a handed-over terminal, naming the pane driving it.
  * A status signal, not an accent: the same neutral chip the hibernated badge
- * uses, and silent to screen readers until focused, like the rest of the row.
+ * uses, focusable so the tooltip's way back reaches keyboard users, and silent
+ * to screen readers until focused, like the rest of the row.
  */
 export function TerminalDrivenByBadge({ terminalId }: { terminalId: string }) {
   const adoption = useTerminalAdoptionStore((s) => s.adoptionsByTerminalId[terminalId]);
   const driverName = usePaneName(adoption?.orchestratorPaneId);
   if (adoption === undefined) return null;
   const label = driverName ? `Driven by ${driverName}` : "Driven by an orchestrator";
+  const takeBackLabel = driverName ? `Take back from ${driverName}` : "Take back control";
   return (
     <Tooltip>
       <TooltipTrigger asChild>
         <div
-          className={cn(HEADER_CHIP_CLASS, HEADER_CHIP_SURFACE, "min-w-0 max-w-[14rem] shrink")}
+          className={cn(
+            HEADER_CHIP_CLASS,
+            HEADER_CHIP_SURFACE,
+            HEADER_CHIP_FOCUS_CLASS,
+            "min-w-0 max-w-[14rem] shrink"
+          )}
           role="status"
           aria-live="off"
+          tabIndex={0}
           data-testid="terminal-driven-by-badge"
         >
           <Plug className="w-3 h-3 shrink-0" aria-hidden="true" />
@@ -262,9 +311,10 @@ export function TerminalDrivenByBadge({ terminalId }: { terminalId: string }) {
         </div>
       </TooltipTrigger>
       <TooltipContent side="bottom" className="max-w-xs">
-        <div className="flex flex-col gap-0.5">
+        <div className="flex min-w-0 flex-col gap-0.5 break-words">
           <span className="font-medium">{label}</span>
-          <span>It can type into this terminal. Take it back from the terminal menu.</span>
+          <span>It can type and press Enter here, including at approval prompts.</span>
+          <span className="mt-0.5 text-text-secondary">Terminal menu → {takeBackLabel}</span>
         </div>
       </TooltipContent>
     </Tooltip>

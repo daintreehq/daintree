@@ -108,6 +108,8 @@ describe("layoutUndoStore", () => {
       tabGroups: new Map(),
       focusedId: null,
       maximizedId: null,
+      maximizeTarget: null,
+      preMaximizeLayout: null,
       activeDockTerminalId: null,
     });
     useLayoutConfigStore.setState({ gridDimensions: null });
@@ -437,6 +439,216 @@ describe("layoutUndoStore", () => {
     expect(allTerminals[0]!.location).toBe("grid");
     expect(allTerminals[1]!.id).toBe("t2");
     expect(allTerminals[1]!.location).toBe("dock");
+  });
+
+  describe("panels excluded from layout history (#13560)", () => {
+    const excludedCases: Array<[string, Partial<PtyPanelData>]> = [
+      ["trashed", { location: "trash", worktreeId: "w1" }],
+      ["dialog", { location: "dialog", worktreeId: "w1" }],
+      ["excludeFromPersistence", { location: "grid", excludeFromPersistence: true }],
+    ];
+
+    it.each(excludedCases)("undo and redo keep an untouched %s panel", (_label, overrides) => {
+      const normal = makeTerminal({ id: "normal", location: "grid" });
+      const excluded = makeTerminal({ id: "excluded", ...overrides });
+      seedTerminals([normal, excluded]);
+
+      useLayoutUndoStore.getState().pushLayoutSnapshot();
+      setTerminals([{ ...normal, location: "dock" }, excluded]);
+
+      useLayoutUndoStore.getState().undo();
+
+      let state = usePanelStore.getState();
+      expect(state.panelsById["normal"]!.location).toBe("grid");
+      expect(state.panelsById["excluded"]).toEqual(excluded);
+      expect(state.panelIds).toEqual(["normal", "excluded"]);
+
+      useLayoutUndoStore.getState().redo();
+
+      state = usePanelStore.getState();
+      expect(state.panelsById["normal"]!.location).toBe("dock");
+      expect(state.panelsById["excluded"]).toEqual(excluded);
+      expect(state.panelIds).toEqual(["normal", "excluded"]);
+    });
+
+    it("keeps a trashed panel's worktree index entry across undo", () => {
+      const normal = makeTerminal({ id: "normal", location: "grid", worktreeId: "w1" });
+      const trashed = makeTerminal({ id: "trashed", location: "trash", worktreeId: "w1" });
+      seedTerminals([normal, trashed]);
+
+      useLayoutUndoStore.getState().pushLayoutSnapshot();
+      setTerminals([{ ...normal, location: "dock" }, trashed]);
+      useLayoutUndoStore.getState().undo();
+
+      expect(usePanelStore.getState().panelIdsByWorktreeId["w1"]).toEqual(["normal", "trashed"]);
+    });
+
+    it("does not un-trash a panel captured in the snapshot and trashed afterwards", () => {
+      const normal = makeTerminal({ id: "normal", location: "grid" });
+      const later = makeTerminal({ id: "later", location: "dock" });
+      seedTerminals([normal, later]);
+
+      useLayoutUndoStore.getState().pushLayoutSnapshot();
+      setTerminals([
+        { ...normal, location: "dock" },
+        { ...later, location: "trash" },
+      ]);
+      useLayoutUndoStore.getState().undo();
+
+      const state = usePanelStore.getState();
+      expect(state.panelsById["normal"]!.location).toBe("grid");
+      expect(state.panelsById["later"]!.location).toBe("trash");
+      expect(state.panelIds).toEqual(["normal", "later"]);
+    });
+
+    it("drops a since-trashed member from a restored group and clears pointers to it", () => {
+      const a = makeTerminal({ id: "a", location: "grid" });
+      const b = makeTerminal({ id: "b", location: "grid" });
+      const c = makeTerminal({ id: "c", location: "grid" });
+      seedTerminals([a, b, c]);
+      const group: TabGroup = {
+        id: "g1",
+        location: "grid",
+        panelIds: ["a", "b", "c"],
+        activeTabId: "b",
+      };
+      usePanelStore.setState({
+        tabGroups: new Map([["g1", group]]),
+        focusedId: "b",
+        maximizedId: "b",
+      });
+
+      useLayoutUndoStore.getState().pushLayoutSnapshot();
+      setTerminals([a, { ...b, location: "trash" }, { ...c, location: "dock" }]);
+      usePanelStore.setState({ tabGroups: new Map(), focusedId: "a", maximizedId: null });
+      useLayoutUndoStore.getState().undo();
+
+      const state = usePanelStore.getState();
+      expect(state.panelsById["b"]!.location).toBe("trash");
+      expect(state.panelsById["c"]!.location).toBe("grid");
+      const restored = state.tabGroups.get("g1");
+      expect(restored?.panelIds).toEqual(["a", "c"]);
+      expect(restored?.activeTabId).toBe("a");
+      expect(state.focusedId).toBeNull();
+      expect(state.maximizedId).toBeNull();
+    });
+
+    it("deletes a restored group left with a single layout member", () => {
+      const a = makeTerminal({ id: "a", location: "grid" });
+      const b = makeTerminal({ id: "b", location: "grid" });
+      seedTerminals([a, b]);
+      usePanelStore.setState({
+        tabGroups: new Map([
+          ["g1", { id: "g1", location: "grid", panelIds: ["a", "b"], activeTabId: "a" }],
+        ]),
+      });
+
+      useLayoutUndoStore.getState().pushLayoutSnapshot();
+      setTerminals([a, { ...b, location: "dialog" }]);
+      usePanelStore.setState({ tabGroups: new Map() });
+      useLayoutUndoStore.getState().undo();
+
+      const state = usePanelStore.getState();
+      expect(state.tabGroups.has("g1")).toBe(false);
+      expect(state.panelsById["b"]!.location).toBe("dialog");
+    });
+
+    it("clears the whole maximize state when the snapshot's maximized panel is now trashed", () => {
+      const a = makeTerminal({ id: "a", location: "grid" });
+      const b = makeTerminal({ id: "b", location: "grid" });
+      seedTerminals([a, b]);
+      usePanelStore.setState({ maximizedId: "a" });
+
+      useLayoutUndoStore.getState().pushLayoutSnapshot();
+      setTerminals([{ ...a, location: "trash" }, b]);
+      usePanelStore.setState({
+        maximizedId: "b",
+        maximizeTarget: { type: "panel", id: "b" },
+        preMaximizeLayout: { gridCols: 2, gridItemCount: 2, worktreeId: undefined },
+      });
+      useLayoutUndoStore.getState().undo();
+
+      const state = usePanelStore.getState();
+      expect(state.maximizedId).toBeNull();
+      expect(state.maximizeTarget).toBeNull();
+      expect(state.preMaximizeLayout).toBeNull();
+    });
+
+    it("keeps the live maximize target so redo can return to fullscreen", () => {
+      const a = makeTerminal({ id: "a", location: "grid" });
+      const b = makeTerminal({ id: "b", location: "grid" });
+      seedTerminals([a, b]);
+
+      useLayoutUndoStore.getState().pushLayoutSnapshot();
+      setTerminals([{ ...a, location: "dock" }, b]);
+      usePanelStore.setState({
+        maximizedId: "b",
+        maximizeTarget: { type: "panel", id: "b" },
+      });
+
+      useLayoutUndoStore.getState().undo();
+      useLayoutUndoStore.getState().redo();
+
+      const state = usePanelStore.getState();
+      expect(state.maximizedId).toBe("b");
+      expect(state.maximizeTarget).toEqual({ type: "panel", id: "b" });
+    });
+
+    it("keeps a retained pre-maximize layout when nothing was maximized", () => {
+      const a = makeTerminal({ id: "a", location: "grid" });
+      const b = makeTerminal({ id: "b", location: "grid" });
+      seedTerminals([a, b]);
+      const retained = { gridCols: 2, gridItemCount: 2, worktreeId: undefined };
+      usePanelStore.setState({ preMaximizeLayout: retained });
+
+      useLayoutUndoStore.getState().pushLayoutSnapshot();
+      setTerminals([b, a]);
+      useLayoutUndoStore.getState().undo();
+
+      expect(usePanelStore.getState().preMaximizeLayout).toEqual(retained);
+    });
+
+    it("drops a closed ephemeral panel from restored groups and focus", () => {
+      const a = makeTerminal({ id: "a", location: "grid" });
+      const b = makeTerminal({ id: "b", location: "grid" });
+      const e = makeTerminal({ id: "e", location: "grid", excludeFromPersistence: true });
+      seedTerminals([a, b, e]);
+      usePanelStore.setState({
+        tabGroups: new Map([
+          ["g1", { id: "g1", location: "grid", panelIds: ["a", "e"], activeTabId: "e" }],
+        ]),
+        focusedId: "e",
+      });
+
+      useLayoutUndoStore.getState().pushLayoutSnapshot();
+      setTerminals([a, { ...b, location: "dock" }]);
+      usePanelStore.setState({ tabGroups: new Map() });
+      useLayoutUndoStore.getState().undo();
+
+      const state = usePanelStore.getState();
+      expect(state.panelsById["e"]).toBeUndefined();
+      expect(state.tabGroups.has("g1")).toBe(false);
+      expect(state.focusedId).toBeNull();
+      expect(state.panelsById["b"]!.location).toBe("grid");
+    });
+
+    it("keeps a panel trashed between undo and redo in the trash", () => {
+      const a = makeTerminal({ id: "a", location: "grid" });
+      const b = makeTerminal({ id: "b", location: "grid" });
+      seedTerminals([a, b]);
+
+      useLayoutUndoStore.getState().pushLayoutSnapshot();
+      setTerminals([{ ...a, location: "dock" }, b]);
+      useLayoutUndoStore.getState().undo();
+
+      setTerminals([a, { ...b, location: "trash" }]);
+      useLayoutUndoStore.getState().redo();
+
+      const state = usePanelStore.getState();
+      expect(state.panelsById["a"]!.location).toBe("dock");
+      expect(state.panelsById["b"]!.location).toBe("trash");
+      expect(state.panelIds).toEqual(["a", "b"]);
+    });
   });
 
   // Scrollable panel grid (#8805): undo no longer clamps panels to the

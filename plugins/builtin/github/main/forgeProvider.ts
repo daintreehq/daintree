@@ -41,7 +41,7 @@ import type { RepoStatsAndPageResult } from "./GitHubStats.js";
 import { getProjectHealthForContext } from "./GitHubHealth.js";
 import { getIssueTooltipForContext } from "./GitHubIssues.js";
 import { getPRTooltipForContext } from "./GitHubPRs.js";
-import { resolveAuthorAvatar } from "./GitHubProfilePicture.js";
+import { getAuthorAvatarGeneration, resolveAuthorAvatar } from "./GitHubProfilePicture.js";
 import { gitHubTokenHealthService } from "./GitHubTokenHealthService.js";
 import { fetchRateLimitDetails } from "./GitHubRateLimitApi.js";
 import { toRateLimitInfo } from "./rateLimitUtils.js";
@@ -238,6 +238,7 @@ const projectHealthCapability: ProjectHealthCapability = {
 
 const avatarCapability: AvatarCapability = {
   resolveAuthorAvatar: (email: string) => resolveAuthorAvatar(email),
+  getCacheGeneration: getAuthorAvatarGeneration,
 };
 
 function toForgeTokenHealthState(state: GitHubTokenHealthPayload): ForgeTokenHealthState {

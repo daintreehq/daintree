@@ -121,23 +121,18 @@ describe("WorktreeCard focused sub-line (issue #7699)", () => {
   });
 });
 
-// Issue #8099 — polish four interaction-fidelity gaps in the worktree row:
-// (1) toolbar reveal switches from :focus-within to :focus-visible so mousedown
-// no longer triggers a pre-click flash; (2) terminal sub-row drag handle stays
-// visible-but-dimmed instead of opacity-0 at rest; (3) ring-2 focus rings on
-// resource buttons and Review & Commit migrate to outline-based vocabulary for
-// forced-colors survival; (4) toolbar hover-reveal adds a 75ms delay (keyboard
-// focus bypasses) to filter fast cursor sweeps across many rows.
+// Issue #8099 — polish interaction-fidelity gaps in the worktree row:
+// (1) terminal sub-row drag handle reveal; (2) ring-2 focus rings on resource
+// buttons and Review & Commit migrate to outline-based vocabulary for
+// forced-colors survival. #8099 also gave the toolbar a delayed hover/focus
+// reveal from half opacity; that fade has since been removed (it put enabled
+// controls under 3:1), so the toolbar has no reveal for a mousedown to flash.
 describe("WorktreeCard row affordances polish (issue #8099)", () => {
-  it("toolbar reveal uses focus-visible (not focus-within) so mousedown does not flash", () => {
-    expect(toolbarSource).toContain("group-has-[:focus-visible]/card:opacity-100");
-    expect(toolbarSource).not.toContain("group-focus-within/card:opacity-100");
-  });
-
-  it("toolbar hover reveal is delayed 75ms but keyboard focus bypasses the delay", () => {
-    expect(toolbarSource).toContain("group-hover/card:delay-75");
-    expect(toolbarSource).toContain("group-has-[:focus-visible]/card:delay-0");
-    expect(toolbarSource).toContain("group-has-[[data-state=open]]/card:delay-0");
+  it("toolbar draws at full strength with no hover or focus reveal", () => {
+    expect(toolbarSource).not.toMatch(
+      /group-(hover|focus-within|has-\[[^\]]*\])\/card:(opacity|delay)-/
+    );
+    expect(toolbarSource).not.toMatch(/(^|[\s"])opacity-50/);
   });
 
   it("session-row grip reveals the way the card's own grip does", () => {

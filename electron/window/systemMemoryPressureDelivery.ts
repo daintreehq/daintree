@@ -44,9 +44,10 @@ function deliver(win: BrowserWindow, wc: WebContents, viewReady: boolean): void 
 }
 
 /**
- * Routes a system-memory episode edge (#12462). The opening edge goes once to
- * each window's visible view — a view that is mid-load, one opened later in
- * the episode, or one that reloaded and lost the notice, gets it from
+ * Routes a system-memory episode edge (#12462). The opening edge, and each
+ * escalation after it (#13529), goes once to each window's visible view — a
+ * view that is mid-load, one opened later in the episode, or one that reloaded
+ * and lost the notice, gets the latest from
  * {@link deliverOpenSystemMemoryPressure} when it finishes loading. The closing
  * edge reaches every view, cached ones included, so whichever view is showing the notice can clear it.
  */
@@ -66,7 +67,7 @@ export function publishSystemMemoryPressure(
   }
 }
 
-/** The episode now open, as published at its opening edge; null when none is. */
+/** The episode now open, as last published; null when none is. */
 export function getOpenSystemMemoryPressure(): SystemMemoryPressurePayload | null {
   return openEpisode;
 }

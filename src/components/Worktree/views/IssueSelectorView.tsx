@@ -26,10 +26,11 @@ export function IssueLinkerView({
   onSelectIssue,
   disabled,
 }: IssueLinkerViewProps) {
-  // Resolve the issue-selector view from the active provider's slot so any
-  // registered forge provider can contribute it.
+  // Resolve the issue-selector view from the issues provider's slot so any
+  // registered forge provider can contribute it — the code forge's unless the
+  // project binds its issues elsewhere.
   const projectId = useProjectStore((s) => s.currentProject?.id ?? null);
-  const { entry } = useResolvedForgeProvider(projectId);
+  const { entry } = useResolvedForgeProvider(projectId).issues;
   const IssueSelector = useBuiltinView<ForgeIssueSelectorProps>(
     entry?.contribution.slots?.issueSelector ?? ""
   );

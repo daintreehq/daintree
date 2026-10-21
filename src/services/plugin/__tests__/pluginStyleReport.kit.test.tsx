@@ -42,6 +42,8 @@ function installHostStyles(): void {
     ".border-divider { border-color: var(--border-divider); }",
     // index.css's gated skeleton pulse, which a loading ImageViewer draws.
     ".animate-pulse-delayed { animation: none; }",
+    // reduced-motion.css's gated press-snap reset, which every kit Button carries.
+    ".press-scale { scale: none !important; }",
     // A host class that styles only inside host chrome; a plugin class of the
     // same name elsewhere is not styled by it.
     ".host-toolbar .status { color: red; } .status.host-only::before { content: ''; }",

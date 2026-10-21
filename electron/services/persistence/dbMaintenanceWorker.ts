@@ -8,6 +8,12 @@
 import Database from "better-sqlite3";
 import { parentPort, workerData } from "node:worker_threads";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
+import {
+  applyRingDelta,
+  prepareRingStatements,
+  replaceRing,
+  type RingStatements,
+} from "./auditRingSql.js";
 import type {
   DbProbeResult,
   DbWorkerData,
@@ -39,27 +45,22 @@ sqlite.pragma("cache_size = -65536");
 sqlite.pragma("journal_size_limit = 5242880");
 sqlite.pragma("foreign_keys = ON");
 
-interface RingStatements {
-  insert: Database.Statement;
-  trim: Database.Statement;
-  clear: Database.Statement;
-}
-
 let ringStatements: RingStatements | null = null;
 
-// Mirrors AuditRingStore's SQL exactly — the worker is an alternate executor
-// for the same audit_rings table, not a second schema owner.
 function getRingStatements(): RingStatements {
   if (!ringStatements) {
-    ringStatements = {
-      insert: sqlite.prepare("INSERT INTO audit_rings (ring, record, created_at) VALUES (?, ?, ?)"),
-      trim: sqlite.prepare(
-        "DELETE FROM audit_rings WHERE ring = ? AND id NOT IN (SELECT id FROM audit_rings WHERE ring = ? ORDER BY id DESC LIMIT ?)"
-      ),
-      clear: sqlite.prepare("DELETE FROM audit_rings WHERE ring = ?"),
-    };
+    ringStatements = prepareRingStatements(sqlite);
   }
   return ringStatements;
+}
+
+// Write-fence check, run INSIDE the immediate transaction: BEGIN IMMEDIATE
+// holds the write lock and sees the latest committed snapshot, so a fence bump
+// main committed before its fallback write is always visible here — a stale
+// queued write can never clobber newer main-thread data. SQLite's writer
+// serialization makes this atomic.
+function fenceMatches(fence: number): boolean {
+  return Number(sqlite.pragma("user_version", { simple: true })) === fence;
 }
 
 // Full quick_check against an arbitrary file on its own short-lived readonly
@@ -101,32 +102,24 @@ function execute(request: DbWorkerRequest): unknown {
       return sqlite.pragma("quick_check", { simple: true });
     case "probePath":
       return probePath(request.dbPath);
-    case "ringWriteAll": {
-      const { ring, records, maxRecords, fence } = request;
-      const { insert, trim, clear } = getRingStatements();
-      const now = Date.now();
-      let applied = false;
-      sqlite
-        .transaction(() => {
-          // Write-fence check INSIDE the immediate transaction: BEGIN IMMEDIATE
-          // holds the write lock and sees the latest committed snapshot, so a
-          // fence bump main committed before its fallback write is always
-          // visible here — a stale queued snapshot can never clobber newer
-          // main-thread data. SQLite's writer serialization makes this atomic.
-          const epoch = Number(sqlite.pragma("user_version", { simple: true }));
-          if (epoch !== fence) return;
-          clear.run(ring);
-          for (const record of records) {
-            insert.run(ring, record, now);
-          }
-          if (maxRecords > 0) {
-            trim.run(ring, ring, maxRecords);
-          }
-          applied = true;
-        })
-        .immediate();
-      return applied;
-    }
+    case "ringWriteAll":
+      return replaceRing(
+        sqlite,
+        getRingStatements(),
+        request.ring,
+        request.rows,
+        request.maxRecords,
+        () => fenceMatches(request.fence)
+      );
+    case "ringApply":
+      return applyRingDelta(
+        sqlite,
+        getRingStatements(),
+        request.ring,
+        request.upserts,
+        request.deletes,
+        () => fenceMatches(request.fence)
+      );
     case "close":
       sqlite.close();
       return null;

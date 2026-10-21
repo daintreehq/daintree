@@ -305,20 +305,27 @@ export function useHostProjectLists(
   return lists;
 }
 
+const NO_PRESENCE: ReadonlyMap<HostId, HostProjectPresence> = new Map();
+
 /**
  * What each other host has of `projectId`, by repository identity (a remote
  * URL shared with it), asked of the Shell when the menu opens. Absent from
  * the map while it is being asked; `projects: null` when the host couldn't
- * be asked. A project that merely shares the name is never counted.
+ * be asked. A project that merely shares the name is never counted. A new
+ * `revision` asks again, for a caller that heard a host's projects change.
  */
 export function useProjectPresence(
   projectId: string,
-  hostIds: readonly HostId[]
+  hostIds: readonly HostId[],
+  revision = 0
 ): ReadonlyMap<HostId, HostProjectPresence> {
   const key = hostIds.join("\n");
-  const [presence, setPresence] = useState<ReadonlyMap<HostId, HostProjectPresence>>(
-    () => new Map()
-  );
+  // Answers carry the project they were asked about: one asked about the
+  // previous project never stands in for this one while its own is out.
+  const [answered, setAnswered] = useState<{
+    projectId: string;
+    presence: ReadonlyMap<HostId, HostProjectPresence>;
+  }>(() => ({ projectId, presence: new Map() }));
   useEffect(() => {
     const ids = key === "" ? [] : key.split("\n");
     const locate = window.electron?.hostSwitch?.locate;
@@ -326,19 +333,25 @@ export function useProjectPresence(
     let cancelled = false;
     locate({ fromHostId: getViewHostId() ?? LOCAL_HOST_ID, projectId, toHostIds: ids })
       .then((answers) => {
-        if (!cancelled) setPresence(new Map(answers.map((answer) => [answer.hostId, answer])));
+        if (cancelled) return;
+        setAnswered({
+          projectId,
+          presence: new Map(answers.map((answer) => [answer.hostId, answer])),
+        });
       })
       .catch((error: unknown) => {
         logWarn("[Hosts] Couldn't ask other hosts for this project", { error });
-        if (!cancelled) {
-          setPresence(new Map(ids.map((hostId) => [hostId, { hostId, projects: null }])));
-        }
+        if (cancelled) return;
+        setAnswered({
+          projectId,
+          presence: new Map(ids.map((hostId) => [hostId, { hostId, projects: null }])),
+        });
       });
     return () => {
       cancelled = true;
     };
-  }, [projectId, key]);
-  return presence;
+  }, [projectId, key, revision]);
+  return answered.projectId === projectId ? answered.presence : NO_PRESENCE;
 }
 
 export function _resetHostProjectsForTesting(): void {

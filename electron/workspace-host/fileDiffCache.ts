@@ -24,17 +24,6 @@ const MAX_ENTRIES = 4;
 const MAX_TOTAL_BYTES = 64 * 1024 * 1024;
 const IDLE_TTL_MS = 90_000;
 
-// Relocate the repository or index for every git we spawn, out of sight of
-// the paths the probe stats.
-const GIT_LOCATION_ENV_KEYS = [
-  "GIT_DIR",
-  "GIT_COMMON_DIR",
-  "GIT_INDEX_FILE",
-  "GIT_WORK_TREE",
-  "GIT_OBJECT_DIRECTORY",
-  "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-];
-
 interface Entry {
   freshness: string;
   bytes: Uint8Array;
@@ -78,9 +67,13 @@ export class FileDiffCache {
     return [source, cwd, gitPath, status, String(ignoreWhitespace)].join("\u0000");
   }
 
-  /** Freshness of a diff built from the worktree file alone (untracked/added). */
+  /**
+   * Freshness of a diff built from the worktree file alone (untracked/added).
+   * Not followed: a symlink's patch is its target string, and retargeting it
+   * replaces the link entry itself.
+   */
   static fileFreshness(absolutePath: string): Promise<string | null> {
-    return statKey(absolutePath);
+    return statKey(absolutePath, false);
   }
 
   /**
@@ -94,8 +87,6 @@ export class FileDiffCache {
     gitPath: string,
     absolutePath: string
   ): Promise<GitDiffFreshness | null> {
-    if (GIT_LOCATION_ENV_KEYS.some((key) => process.env[key])) return null;
-
     // A symlink's patch is its target string, which a stat that follows it
     // cannot see; a directory is a gitlink or a subtree whose content no stat
     // of its own reflects.

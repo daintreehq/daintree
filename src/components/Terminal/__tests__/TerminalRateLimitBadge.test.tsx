@@ -43,7 +43,7 @@ describe("TerminalRateLimitBadge (#12797)", () => {
 
     const badges = screen.queryAllByTestId("terminal-rate-limit-badge");
     expect(badges).toHaveLength(1);
-    expect(badges[0]?.textContent).toBe("Rate limit seen");
+    expect(badges[0]?.textContent).toBe("Rate limit reported");
   });
 
   it("disappears once the retention window has passed", () => {

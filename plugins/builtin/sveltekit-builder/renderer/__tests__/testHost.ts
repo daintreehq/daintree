@@ -228,8 +228,26 @@ export function createFakeHost() {
       subscribe(channel, callback)
   );
 
+  /** The host's element crop: a picture saved where agents read pasted images. */
+  const captureElement = vi.fn(
+    async (
+      _panelId: string,
+      _request: { rect: { x: number; y: number; width: number; height: number } }
+    ): Promise<
+      | { status: "saved"; filePath: string; width: number; height: number }
+      | { status: "offscreen" }
+      | { status: "resized" }
+    > => ({
+      status: "saved",
+      filePath: "/tmp/daintree-clipboard/element-1.png",
+      width: 120,
+      height: 40,
+    })
+  );
+
   const host = {
     sitePreview,
+    captureElement,
     diskRevisions,
     reselectFinds: true,
     /** The chain main resolves for the fixture element, innermost first; null for the fixture's own. */
@@ -320,6 +338,7 @@ export function createFakeHost() {
       (window as unknown as { electron: unknown }).electron = {
         sitePreview,
         plugin: { invoke, on, onPanel },
+        webview: { captureElement },
       };
       return () => {
         (window as unknown as { electron: unknown }).electron = previous;

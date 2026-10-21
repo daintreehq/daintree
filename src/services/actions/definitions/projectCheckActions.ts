@@ -93,11 +93,12 @@ export function registerProjectCheckActions(
 
   // Manifest-only, like `project.runCheck`, and executed in main (#13495). It
   // is the shell a hub assistant lacks on a host it reaches over a relay, so
-  // main answers it only for Daintree's own full-tier assistants, whatever
-  // tier or grant another caller holds. `safe` rather than `confirm` because
-  // the same callers already reach a shell through `terminal.new` and
-  // `terminal.sendCommand`; a dialog per `git status` would only make the
-  // verify step unusable, not the capability any narrower.
+  // main answers it only for Daintree's own assistants, at either in-app
+  // tier, whatever tier or grant another caller holds. `safe` rather than
+  // `confirm` because the same callers already reach a shell, through
+  // `terminal.sendCommand` here or an agent they launch on a host; a dialog
+  // per `git status` would only make the verify step unusable, not the
+  // capability any narrower.
   actions.set("project.runCommand", () =>
     defineAction({
       id: "project.runCommand",

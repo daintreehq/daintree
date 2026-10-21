@@ -8,11 +8,15 @@ import { BranchLabel } from "../BranchLabel";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { Sprout, Pin, BellOff } from "lucide-react";
 import { FolderOutput } from "@/components/icons";
-import type { AggregateCounts } from "./MainWorktreeSummaryRows";
+import type { AggregateCounts } from "./aggregateCounts";
 import { IssueBadge } from "./IssueBadge";
 import { PRBadge } from "./PRBadge";
 import { EnvironmentPopover } from "./EnvironmentPopover";
+import { WorktreeAttachmentChips } from "./WorktreeAttachmentChips";
+import { visibleAttachmentChips } from "./attachmentState";
+import { WorktreePluginStatusChips, useWorktreePluginStatuses } from "./WorktreePluginStatusChips";
 import { DevServerIndicator } from "./DevServerIndicator";
+import { devServerSummaryText, summarizeDevServer } from "@/lib/devServerPresentation";
 import { CollapsedSessionIndicators } from "./CollapsedSessionIndicators";
 import { CollapsedAlarmPill, collapsedAlarmDescriptionId } from "./CollapsedAlarmPill";
 import { worktreeRowDescriptionId } from "./rowDescriptions";
@@ -58,6 +62,8 @@ export interface WorktreeHeaderProps {
   resourceLastCheckedAt?: number;
   devServerSession?: DevPreviewSessionState;
   onCheckResourceStatus?: () => void | Promise<unknown>;
+  onPreviewEndpoint?: () => void;
+  onAttachmentAction?: (name: string, action: "detach" | "status") => void;
   onCleanupWorktree?: () => void;
   badges: {
     onOpenIssue?: () => void;
@@ -99,6 +105,8 @@ export function WorktreeHeader({
   resourceLastCheckedAt,
   devServerSession,
   onCheckResourceStatus,
+  onPreviewEndpoint,
+  onAttachmentAction,
   onCleanupWorktree,
   badges,
   gitStateIndicator,
@@ -121,6 +129,11 @@ export function WorktreeHeader({
     headline.kind === "pr" || headline.kind === "issue" ? headline.title : undefined;
   const hasPlanFile = Boolean(worktree.hasPlanFile);
   const hasDevServerSignal = !!devServerSession && isLiveDevServerStatus(devServerSession.status);
+  const devServerSummary = devServerSession ? summarizeDevServer(devServerSession) : null;
+  const devServerDescription = devServerSummary ? devServerSummaryText(devServerSummary) : null;
+  const hasAttachmentChips =
+    !!onAttachmentAction && visibleAttachmentChips(worktree.attachments).length > 0;
+  const pluginStatuses = useWorktreePluginStatuses(worktree.id);
   const underlineOnHover = variant !== "sidebar" || isActive;
   // `hasBaseName` is the whole mount rule for the base line: the workspace-host
   // sets it only for a non-main worktree on a branch whose base it resolved, so
@@ -288,12 +301,7 @@ export function WorktreeHeader({
               </span>
             </TruncatedTooltip>
           ) : (
-            <BranchLabel
-              label={branchLabel}
-              isActive={isActive}
-              isMuted={isMuted}
-              isMainWorktree={isMainOnStandardBranch ?? isMainWorktree}
-            />
+            <BranchLabel label={branchLabel} isActive={isActive} isMuted={isMuted} />
           )}
           {gitStateIndicator && (
             <span
@@ -323,7 +331,8 @@ export function WorktreeHeader({
           resourceStatusLabel ||
           isLifecycleRunning ||
           onCheckResourceStatus ||
-          hasDevServerSignal) && (
+          hasDevServerSignal ||
+          hasAttachmentChips) && (
           <div className="flex items-center gap-2 shrink-0">
             {isPinned && !isMainWorktree && (
               <Pin
@@ -386,9 +395,22 @@ export function WorktreeHeader({
                 resourceEndpoint={resourceEndpoint}
                 resourceLastCheckedAt={resourceLastCheckedAt}
                 onCheckResourceStatus={onCheckResourceStatus}
+                onPreviewEndpoint={onPreviewEndpoint}
+              />
+            )}
+            {hasAttachmentChips && onAttachmentAction && (
+              <WorktreeAttachmentChips
+                attachments={worktree.attachments}
+                onAction={onAttachmentAction}
               />
             )}
             <DevServerIndicator session={devServerSession} />
+            {hasDevServerSignal && variant === "sidebar" && devServerDescription && (
+              // For the card's select button to be described by; see rowDescriptions.
+              <span id={worktreeRowDescriptionId(worktree.id, "devServer")} hidden>
+                {devServerDescription}
+              </span>
+            )}
           </div>
         )}
 
@@ -401,7 +423,6 @@ export function WorktreeHeader({
 
         <WorktreeActionsToolbar
           isCollapsed={isCollapsed ?? false}
-          isActive={isActive}
           onCleanupWorktree={onCleanupWorktree}
           canCollapse={canCollapse ?? false}
           onToggleCollapse={onToggleCollapse}
@@ -457,6 +478,14 @@ export function WorktreeHeader({
             badges={badges}
           />
         )}
+
+      {/* Its own wrapping row, so any number of plugins can mark a card
+          without squeezing the headline out of the row above. */}
+      {!isCollapsed && pluginStatuses.length > 0 && (
+        <div className="mt-1.5 flex flex-wrap items-center gap-1 px-1">
+          <WorktreePluginStatusChips statuses={pluginStatuses} />
+        </div>
+      )}
     </div>
   );
 }

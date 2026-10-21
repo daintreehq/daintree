@@ -75,7 +75,13 @@ export class DbWorkerClient {
   private degraded = false;
   private shuttingDown = false;
   private fenceEpoch: number | null = null;
+  // Per-ring count of synchronous writes, bumped only by fence() — never by the
+  // failure or shutdown fence advances, whose fallbacks must still replay.
+  private readonly ringSupersedes = new Map<string, number>();
   private lastRequestAt: number | null = null;
+  // Sticky: once a fence advance has failed, a stale worker write may land at
+  // any later point, so nothing may assume the DB holds what it last wrote.
+  private fenceFailed = false;
 
   constructor(deps: Partial<DbWorkerClientDeps> = {}) {
     this.deps = { ...defaultDeps, ...deps };
@@ -84,15 +90,32 @@ export class DbWorkerClient {
   /**
    * Run `op` on the worker thread; on any failure (kill switch, DB not open
    * yet, spawn failure, worker crash, timeout) run `fallback` synchronously on
-   * the main thread instead — the pre-worker behavior.
+   * the main thread instead — the pre-worker behavior. A ring write fenced by
+   * a newer synchronous write while in flight resolves `undefined` without
+   * its fallback: the stale snapshot would overwrite the newer durable one.
    */
   async run<T>(op: DbWorkerOp, fallback: () => T): Promise<T> {
+    const ring = op.op === "ringWriteAll" || op.op === "ringApply" ? op.ring : null;
     if (!this.canUseWorker()) {
+      // A main-only ring write is as new as a synchronous one — e.g. after a
+      // timed-out shutdown drain, an older write may still be pending and its
+      // fallback must not land on top of this snapshot. The DB fence only
+      // needs to move while requests are pending; a degraded client's wedged
+      // worker has none left, so its writes skip the pragma.
+      if (ring !== null) {
+        this.supersede(ring);
+        if (this.pending.size > 0) this.advanceFence();
+      }
       return fallback();
     }
+    const generation = ring === null ? 0 : this.supersedeCount(ring);
     try {
       return (await this.request(op)) as T;
     } catch (error) {
+      if (ring !== null && generation !== this.supersedeCount(ring)) {
+        console.warn(`[DbWorker] "${op.op}" failed after being superseded — dropped:`, error);
+        return undefined as T;
+      }
       console.warn(`[DbWorker] "${op.op}" failed — running on main thread:`, error);
       return fallback();
     }
@@ -102,13 +125,28 @@ export class DbWorkerClient {
    * Advance the DB-level write fence when a synchronous main-thread ring write
    * is about to run while a worker exists. Any ring write already queued on the
    * worker was stamped with the previous epoch and will no-op, so an older
-   * snapshot can never land after the newer synchronous one. Collateral: queued
-   * snapshots for OTHER rings are dropped too — harmless, since every write is
-   * a full snapshot and the owner's next flush rewrites it.
+   * write can never land after the newer synchronous one. Collateral: queued
+   * writes for OTHER rings are dropped too — they resolve `false` and
+   * AuditRingStore re-sends that ring as a full replacement. On the failure
+   * path the supersede is scoped to `ring`: only that ring's in-flight writes
+   * skip their main-thread fallbacks, so other rings' snapshots still land.
    */
-  fence(): void {
-    if (this.worker === null && this.pending.size === 0) return;
-    this.advanceFence();
+  fence(ring: string): boolean {
+    this.supersede(ring);
+    return this.advanceFenceIfLive();
+  }
+
+  /** False once any fence advance has failed this session. */
+  isFenceIntact(): boolean {
+    return !this.fenceFailed;
+  }
+
+  private supersede(ring: string): void {
+    this.ringSupersedes.set(ring, this.supersedeCount(ring) + 1);
+  }
+
+  private supersedeCount(ring: string): number {
+    return this.ringSupersedes.get(ring) ?? 0;
   }
 
   /**
@@ -137,7 +175,7 @@ export class DbWorkerClient {
       } catch {
         // Worker already gone — nothing left to drain.
       }
-      this.fence();
+      this.advanceFenceIfLive();
     }
   }
 
@@ -243,6 +281,12 @@ export class DbWorkerClient {
     this.failAllPending(new Error(`db worker unavailable: ${reason}`));
   }
 
+  /** False only when a live worker may still hold writes the fence failed to exclude. */
+  private advanceFenceIfLive(): boolean {
+    if (this.worker === null && this.pending.size === 0) return true;
+    return this.advanceFence();
+  }
+
   private failAllPending(error: Error): void {
     if (this.pending.size === 0) return;
     this.advanceFence();
@@ -261,15 +305,18 @@ export class DbWorkerClient {
    * serialization guarantees that once the bump commits, every still-queued
    * ring write no-ops.
    */
-  private advanceFence(): void {
+  private advanceFence(): boolean {
     const db = this.deps.getMainSqlite();
-    if (!db) return;
+    if (!db) return false;
     try {
       const next = this.currentFence() + 1;
       db.pragma(`user_version = ${next}`);
       this.fenceEpoch = next;
+      return true;
     } catch (error) {
       console.warn("[DbWorker] Failed to advance write fence:", error);
+      this.fenceFailed = true;
+      return false;
     }
   }
 
@@ -298,10 +345,21 @@ export function runDbWork<T>(op: DbWorkerOp, fallback: () => T): Promise<T> {
 
 /**
  * Fence any queued worker ring writes before a synchronous main-thread write.
- * No-ops when the client (and thus the worker) was never created.
+ * No-ops when the client (and thus the worker) was never created. Returns
+ * false when the fence could not be advanced, so a queued write may still land
+ * after the caller's write.
  */
-export function fenceDbWorkerWrites(): void {
-  instance?.fence();
+export function fenceDbWorkerWrites(ring: string): boolean {
+  return instance?.fence(ring) ?? true;
+}
+
+/**
+ * Whether every write fence so far has advanced. While true, a write the
+ * caller saw acknowledged is still what the DB holds; once false, a stale
+ * queued write may have landed (or may still land) on top of it.
+ */
+export function isDbWorkerFenceIntact(): boolean {
+  return instance?.isFenceIntact() ?? true;
 }
 
 export async function shutdownDbWorker(): Promise<void> {

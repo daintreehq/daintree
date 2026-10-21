@@ -146,12 +146,18 @@ describe("WorkspaceHostEventRouter", () => {
       emit.mockClear();
       fileSearchCacheInvalidatorMock.handleWorktreeUpdate.mockClear();
 
-      router.routeHostEvent(entry, tickEvent({ workingTreeChangedAt: 20, timestamp: 99 }));
+      router.routeHostEvent(
+        entry,
+        tickEvent({ workingTreeChangedAt: 20, pathMembershipChangedAt: 15, timestamp: 99 })
+      );
 
+      // The membership stamp is what the invalidator reads, so a tick must not
+      // lose it on the way through (#13595).
       const expected = expect.objectContaining({
         id: "wt-1",
         modifiedCount: 4,
         workingTreeChangedAt: 20,
+        pathMembershipChangedAt: 15,
         timestamp: 99,
       });
       expect(emit).toHaveBeenCalledWith("worktree-update", {
@@ -251,7 +257,7 @@ describe("WorkspaceHostEventRouter", () => {
 
   describe("file-search cache invalidation", () => {
     it("hands every worktree-update snapshot to the invalidator", () => {
-      // The router does not decide; it delivers. The `workingTreeChangedAt`
+      // The router does not decide; it delivers. The `pathMembershipChangedAt`
       // comparison that keeps a branch or PR-state snapshot from costing a
       // rebuild lives in FileSearchCacheInvalidator and is tested there.
       const entry = makeEntry();

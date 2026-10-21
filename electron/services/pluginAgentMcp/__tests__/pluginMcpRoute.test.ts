@@ -243,14 +243,62 @@ function holdInitialize(token: string): HeldRequest {
   };
 }
 
-/** Every slot of the credential is free: exactly the cap is admitted, then 429. */
+/**
+ * An `initialize` over a bare socket, read to the end, answering the new
+ * session's id. Touches no timer of its own, so it still works with the clock
+ * faked.
+ */
+function initializeRaw(token: string): Promise<string> {
+  const body = JSON.stringify(INIT_BODY);
+  return new Promise((resolve, reject) => {
+    const request = http.request(routeUrl(), {
+      method: "POST",
+      agent: false,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+        Accept: "application/json, text/event-stream",
+        "Content-Length": Buffer.byteLength(body),
+      },
+    });
+    request.on("error", reject);
+    request.on("response", (response) => {
+      response.on("error", reject);
+      response.resume();
+      response.on("end", () => {
+        const sessionId = response.headers["mcp-session-id"];
+        if (response.statusCode === 200 && typeof sessionId === "string") resolve(sessionId);
+        else reject(new Error(`initialize answered ${response.statusCode}`));
+      });
+    });
+    request.end(body);
+  });
+}
+
+/** Open a session over `fetch`, answering its id. */
+async function openSession(token: string): Promise<string> {
+  const response = await rawRequest({ token });
+  expect(response.status).toBe(200);
+  await response.body?.cancel();
+  const sessionId = response.headers.get("mcp-session-id");
+  expect(sessionId).toBeTruthy();
+  return sessionId!;
+}
+
+const LIST_BODY = { jsonrpc: "2.0", id: 2, method: "tools/list", params: {} };
+
+function listTools(token: string, sessionId: string): Promise<Response> {
+  return rawRequest({ token, body: LIST_BODY, headers: { "mcp-session-id": sessionId } });
+}
+
+/**
+ * Every slot of the credential is free: a cap's worth of handshakes all become
+ * sessions. A slot still held would make the last one retire an earlier one.
+ */
 async function expectFullCapacity(token: string): Promise<void> {
-  for (let i = 0; i < MAX_PLUGIN_MCP_SESSIONS_PER_CREDENTIAL; i++) {
-    const response = await rawRequest({ token });
-    expect(response.status).toBe(200);
-    await response.body?.cancel();
-  }
-  expect((await rawRequest({ token })).status).toBe(429);
+  const before = route.sessionCount;
+  for (let i = 0; i < MAX_PLUGIN_MCP_SESSIONS_PER_CREDENTIAL; i++) await openSession(token);
+  expect(route.sessionCount).toBe(before + MAX_PLUGIN_MCP_SESSIONS_PER_CREDENTIAL);
 }
 
 function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
@@ -807,22 +855,53 @@ describe("PluginMcpRoute", () => {
     expect(response.status).toBe(400);
   });
 
-  it("caps the sessions one credential may hold open", async () => {
+  it("retires the credential's least recently used session to open one past the cap", async () => {
     const { token } = issue();
+    const { token: otherToken } = issue({ terminalId: "term-2" });
+    const opened: string[] = [];
     for (let i = 0; i < MAX_PLUGIN_MCP_SESSIONS_PER_CREDENTIAL; i++) {
-      const response = await rawRequest({ token });
+      opened.push(await openSession(token));
+    }
+    const otherSession = await openSession(otherToken);
+
+    // Using the oldest session leaves the second as the least recently used.
+    const touched = await listTools(token, opened[0]);
+    expect(touched.status).toBe(200);
+    await touched.text();
+
+    logMock.info.mockClear();
+    const replacement = await openSession(token);
+    expect(route.sessionCount).toBe(MAX_PLUGIN_MCP_SESSIONS_PER_CREDENTIAL + 1);
+    // The retirement is logged by credential, never by bearer or session id.
+    expect(logMock.info).toHaveBeenCalledTimes(1);
+    const logged = JSON.stringify(logMock.info.mock.calls);
+    for (const secret of [token, replacement, ...opened]) expect(logged).not.toContain(secret);
+
+    const retired = await listTools(token, opened[1]);
+    const unknown = await listTools(token, "00000000-0000-4000-8000-000000000000");
+    expect(retired.status).toBe(404);
+    expect(await retired.text()).toBe(await unknown.text());
+
+    for (const [owner, sessionId] of [
+      [token, opened[0]],
+      [token, replacement],
+      [otherToken, otherSession],
+    ]) {
+      const response = await listTools(owner, sessionId);
       expect(response.status).toBe(200);
-      await response.body?.cancel();
+      expect(await response.text()).toContain("lookup");
     }
 
-    const refused = await rawRequest({ token });
-    expect(refused.status).toBe(429);
-    expect(route.sessionCount).toBe(MAX_PLUGIN_MCP_SESSIONS_PER_CREDENTIAL);
-
-    // Another credential is unaffected.
-    const other = await rawRequest({ token: issue({ terminalId: "term-2" }).token });
-    expect(other.status).toBe(200);
-    await other.body?.cancel();
+    // Only a POST opens a session, so nothing else displaces one.
+    for (const method of ["GET", "DELETE"]) {
+      const refused = await rawRequest({ token, method });
+      expect(refused.status).toBe(429);
+      await refused.body?.cancel();
+    }
+    expect(route.sessionCount).toBe(MAX_PLUGIN_MCP_SESSIONS_PER_CREDENTIAL + 1);
+    const stillOpen = await listTools(token, opened[2]);
+    expect(stillOpen.status).toBe(200);
+    await stillOpen.text();
   });
 
   it("counts handshakes admitted concurrently against the cap", async () => {
@@ -868,14 +947,17 @@ describe("PluginMcpRoute", () => {
     await waitFor(() => listener.inFlight() === MAX_PLUGIN_MCP_SESSIONS_PER_CREDENTIAL);
     expect(route.sessionCount).toBe(0);
 
+    // Nothing established to retire, so the cap holds.
     const refused = await rawRequest({ token });
     expect(refused.status).toBe(429);
 
-    // One initialised plus seven still arriving is still the whole cap.
+    // One initialised plus seven still arriving: the initialised one makes
+    // room, and the handshakes are left alone.
     held[0].finish();
     expect(await held[0].outcome).toBe(200);
     expect(route.sessionCount).toBe(1);
-    expect((await rawRequest({ token })).status).toBe(429);
+    await openSession(token);
+    expect(route.sessionCount).toBe(1);
 
     for (const request of held.slice(1)) request.finish();
     expect(await Promise.all(held.map((request) => request.outcome))).toEqual(
@@ -1113,16 +1195,25 @@ describe("PluginMcpRoute", () => {
     await waitFor(() => route.sessionCount === 0);
   });
 
-  it("reaps an idle session", async () => {
-    route.dispose();
-    await listener.close();
-    route = makeRoute({ idleTimeoutMs: 250 });
-    listener = await startListener(route);
-
+  it("keeps an idle session for as long as its credential is live", async () => {
     const { token } = issue();
-    await connect(token);
+    // Faked before the session exists, so any timer it arms runs on this clock.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    let sessionId: string;
+    try {
+      sessionId = await initializeRaw(token);
+      vi.advanceTimersByTime(6 * 60 * 60 * 1000);
+    } finally {
+      vi.useRealTimers();
+    }
     expect(route.sessionCount).toBe(1);
-    await waitFor(() => route.sessionCount === 0);
+
+    const listed = await listTools(token, sessionId);
+    expect(listed.status).toBe(200);
+    expect(await listed.text()).toContain("lookup");
+
+    pluginMcpGrantRegistry.revokeTerminal("term-1");
+    expect(route.sessionCount).toBe(0);
   });
 
   it("closes every session and aborts in-flight calls on closeAllSessions", async () => {

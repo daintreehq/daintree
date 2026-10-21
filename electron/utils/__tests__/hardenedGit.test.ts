@@ -56,6 +56,8 @@ import {
   createAuthenticatedGit,
   createBackgroundFetchGit,
   createWslHardenedGit,
+  createContinueGit,
+  createBoundRepositoryGit,
   getGitLocaleEnv,
   buildHardenedGitEnv,
   buildContinueEnv,
@@ -101,8 +103,27 @@ const PINNED_CONFIG_UNSAFE_FLAGS = {
   allowUnsafeSshCommand: true,
   allowUnsafeGitProxy: true,
   allowUnsafeHooksPath: true,
-  allowUnsafeEditor: true,
 };
+
+/**
+ * Every git-family key an instance's env carries must be named in its
+ * `allowEnvironment`, or simple-git refuses the spawn outright.
+ */
+function expectEnvFullyAllowed(callIndex = 0): void {
+  const options = (simpleGit as ReturnType<typeof vi.fn>).mock.calls[callIndex][0];
+  const env = mockGitInstance.env.mock.calls[callIndex][0] as NodeJS.ProcessEnv;
+  const allowed = new Set(
+    (options.allowEnvironment as string[]).map((key) => key.trim().toLowerCase())
+  );
+  const guarded = Object.keys(env).filter((key) => {
+    const name = key.trim().toLowerCase();
+    return (
+      name.startsWith("git_") ||
+      ["editor", "pager", "prefix", "ssh_askpass", "visual"].includes(name)
+    );
+  });
+  expect(guarded.filter((key) => !allowed.has(key.trim().toLowerCase()))).toEqual([]);
+}
 
 /** A spaced default-install location, which simple-git's binary rule refuses. */
 const SPACED_GIT_DIR = path.join("Program Files", "Git", "cmd");
@@ -349,12 +370,23 @@ describe("createHardenedGit", () => {
       "GIT_CONFIG_COUNT",
       "GIT_CONFIG_KEY_0",
       "GIT_CONFIG_VALUE_0",
+      "GIT_CONFIG_PARAMETERS",
+      "git_config_parameters",
       "GIT_PAGER",
       "GIT_SSH",
       "GIT_SSH_COMMAND",
       "PAGER",
       "PREFIX",
       "SSH_ASKPASS",
+      "VISUAL",
+      "Visual",
+      // Not execution vectors, but they redirect or reconfigure git, and
+      // simple-git refuses any GIT_ key the instance was not built to allow.
+      "GIT_DIR",
+      "GIT_WORK_TREE",
+      "GIT_INDEX_FILE",
+      "GIT_TRACE",
+      "GIT_GLOB_PATHSPECS",
     ];
     const originals = new Map(envKeys.map((key) => [key, process.env[key]]));
     for (const key of envKeys) {
@@ -414,6 +446,81 @@ describe("createHardenedGit", () => {
     } finally {
       if (origAskpass !== undefined) process.env.GIT_ASKPASS = origAskpass;
     }
+  });
+});
+
+describe("profile environments under simple-git's guard", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it.each([
+    ["hardened", () => createHardenedGit("/test/repo", undefined, "linux")],
+    ["continue", () => createContinueGit("/test/repo", undefined, "linux")],
+    ["bound repository", () => createBoundRepositoryGit("/test/repo", undefined, "linux")],
+    ["authenticated", () => createAuthenticatedGit("/test/repo", { platform: "linux" })],
+    [
+      "background fetch",
+      () =>
+        createBackgroundFetchGit("/test/repo", {
+          signal: new AbortController().signal,
+          platform: "linux",
+        }),
+    ],
+  ])("allows every git variable the %s profile hands git", async (_name, create) => {
+    vi.stubEnv("GIT_AUTHOR_NAME", "Inherited Author");
+    try {
+      await create();
+      expectEnvFullyAllowed();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("keeps the inherited variables that label commits, pick TLS credentials or skip LFS", async () => {
+    const kept = {
+      GIT_COMMITTER_EMAIL: "me@example.com",
+      GIT_SSL_CAINFO: "/etc/ca.pem",
+      GIT_SSL_CERT: "/etc/client.pem",
+      GIT_LFS_SKIP_SMUDGE: "1",
+    };
+    for (const [key, value] of Object.entries(kept)) vi.stubEnv(key, value);
+    try {
+      await createHardenedGit("/test/repo", undefined, "linux");
+
+      expect(mockGitInstance.env.mock.calls[0][0]).toMatchObject(kept);
+      expectEnvFullyAllowed();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("grants the editor category to the continue profile alone", async () => {
+    await createHardenedGit("/test/repo", undefined, "linux");
+    await createContinueGit("/test/repo", undefined, "linux");
+
+    const calls = (simpleGit as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls[0][0].unsafe.allowUnsafeEditor).toBeUndefined();
+    expect(calls[1][0].unsafe).toEqual({ ...PINNED_CONFIG_UNSAFE_FLAGS, allowUnsafeEditor: true });
+    expect(mockGitInstance.env.mock.calls[1][0]).toMatchObject({
+      GIT_EDITOR: "true",
+      GIT_MERGE_AUTOEDIT: "no",
+      GIT_LITERAL_PATHSPECS: "1",
+      GIT_TERMINAL_PROMPT: "0",
+    });
+  });
+
+  it("grants explicit repository binding to the bound profile alone", async () => {
+    await createHardenedGit("/test/repo", undefined, "linux");
+    await createBoundRepositoryGit("/test/repo", undefined, "linux");
+
+    const calls = (simpleGit as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls[0][0].unsafe.allowUnsafeConfigPaths).toBeUndefined();
+    expect(calls[1][0].unsafe).toEqual({
+      ...PINNED_CONFIG_UNSAFE_FLAGS,
+      allowUnsafeConfigPaths: true,
+    });
+    expect(calls[1][0].config).toEqual(calls[0][0].config);
   });
 });
 
@@ -659,25 +766,43 @@ describe("createBackgroundFetchGit", () => {
       platform: "darwin",
     });
 
-    // Last env() call wins — the POSIX askpass override is applied second.
-    const lastEnv = mockGitInstance.env.mock.calls[mockGitInstance.env.mock.calls.length - 1][0];
-    expect(lastEnv.GIT_ASKPASS).toBe("true");
-    expect(lastEnv.GIT_TERMINAL_PROMPT).toBe("0");
-    expect(lastEnv.GIT_OPTIONAL_LOCKS).toBe("0");
+    const env = mockGitInstance.env.mock.calls[0][0];
+    expect(env.GIT_ASKPASS).toBe("true");
+    expect(env.GIT_TERMINAL_PROMPT).toBe("0");
+    expect(env.GIT_OPTIONAL_LOCKS).toBe("0");
+    expect(env.GCM_INTERACTIVE).toBe("Never");
+    expectEnvFullyAllowed();
   });
 
-  it("re-states GIT_OPTIONAL_LOCKS and GCM_INTERACTIVE in the POSIX second .env() call", async () => {
-    const controller = new AbortController();
+  // A second .env() would replace the authenticated hardening wholesale, and
+  // would be refused for any GIT_ key the instance was not built to allow.
+  it("applies its whole env in one .env() call", async () => {
     await createBackgroundFetchGit("/test/repo", {
-      signal: controller.signal,
+      signal: new AbortController().signal,
       platform: "darwin",
     });
 
-    // The second .env() replaces (not merges) the first call's env, so the
-    // hardening flags from createAuthenticatedGit must be re-asserted here.
-    const lastEnv = mockGitInstance.env.mock.calls[mockGitInstance.env.mock.calls.length - 1][0];
-    expect(lastEnv.GIT_OPTIONAL_LOCKS).toBe("0");
-    expect(lastEnv.GCM_INTERACTIVE).toBe("Never");
+    expect(mockGitInstance.env.mock.calls).toHaveLength(1);
+  });
+
+  it("strips inherited VISUAL and GIT_CONFIG_PARAMETERS", async () => {
+    const inherited = ["VISUAL", "GIT_CONFIG_PARAMETERS"];
+    const originals = new Map(inherited.map((key) => [key, process.env[key]]));
+    for (const key of inherited) process.env[key] = "inherited-unsafe-value";
+    try {
+      await createBackgroundFetchGit("/test/repo", {
+        signal: new AbortController().signal,
+        platform: "darwin",
+      });
+
+      const env = mockGitInstance.env.mock.calls[0][0];
+      for (const key of inherited) expect(env[key]).toBeUndefined();
+    } finally {
+      for (const [key, value] of originals) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
   });
 
   it("does not set GIT_ASKPASS on Windows (no `true` binary on PATH)", async () => {
@@ -689,8 +814,6 @@ describe("createBackgroundFetchGit", () => {
       })
     );
 
-    // The base authenticated env() call doesn't set GIT_ASKPASS, and the
-    // POSIX-only override is skipped. Only one env() call should happen.
     expect(mockGitInstance.env.mock.calls).toHaveLength(1);
     const env = mockGitInstance.env.mock.calls[0][0];
     expect(env.GIT_ASKPASS).toBeUndefined();
@@ -905,6 +1028,34 @@ describe("createWslHardenedGit", () => {
     expect(envArg.GIT_OPTIONAL_LOCKS).toBe("0");
   });
 
+  // wsl.exe drops every variable WSLENV does not name, and it is the Linux git
+  // that refuses an abbreviated option, so simple-git's flag has to cross too.
+  it("forwards the pathspec and abbreviation flags into the distro exactly once", async () => {
+    vi.stubEnv(
+      "WSLENV",
+      "USERPROFILE/p:GIT_LITERAL_PATHSPECS/u:GIT_TEST_DISALLOW_ABBREVIATED_OPTIONS"
+    );
+    try {
+      await createWslHardenedGit({
+        distro: "Ubuntu",
+        uncPath: "\\\\wsl$\\Ubuntu\\home\\user\\proj",
+        posixPath: "/home/user/proj",
+      });
+
+      const entries = String(mockGitInstance.env.mock.calls[0][0].WSLENV).split(":");
+      expect(entries.sort()).toEqual(
+        [
+          "GIT_LITERAL_PATHSPECS/u",
+          "GIT_TEST_DISALLOW_ABBREVIATED_OPTIONS/u",
+          "USERPROFILE/p",
+        ].sort()
+      );
+      expectEnvFullyAllowed();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("applies the same env hardening as createHardenedGit (Linux git inside WSL)", async () => {
     await createWslHardenedGit({
       distro: "Ubuntu",
@@ -951,7 +1102,6 @@ describe("createWslHardenedGit", () => {
       allowUnsafeSshCommand: true,
       allowUnsafeGitProxy: true,
       allowUnsafeHooksPath: true,
-      allowUnsafeEditor: true,
     });
   });
 });
@@ -1331,14 +1481,23 @@ describe("buildContinueEnv", () => {
       GIT_CONFIG_COUNT: "1",
       GIT_CONFIG_KEY_0: "core.editor",
       GIT_CONFIG_VALUE_0: "/tmp/evil/editor",
+      GIT_CONFIG_PARAMETERS: "'core.editor'='/tmp/evil/editor'",
+      VISUAL: "/tmp/evil/visual",
     };
+    const originals = new Map(Object.keys(blocked).map((key) => [key, process.env[key]]));
     Object.assign(process.env, blocked);
-    const env = buildContinueEnv("linux");
-    for (const key of Object.keys(blocked)) {
-      expect(env[key]).toBeUndefined();
+    try {
+      const env = buildContinueEnv("linux");
+      for (const key of Object.keys(blocked)) {
+        expect(env[key]).toBeUndefined();
+      }
+      expect(env.GIT_EDITOR).toBe("true");
+    } finally {
+      for (const [key, value] of originals) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
     }
-    // Cleanup beyond the describe-level saved keys.
-    for (const key of Object.keys(blocked)) delete process.env[key];
   });
 
   it("does not set GIT_ASKPASS on win32 but still suppresses the editor", async () => {

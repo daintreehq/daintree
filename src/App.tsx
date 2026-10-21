@@ -14,6 +14,7 @@ import {
   useMenuActions,
   useErrors,
   useReEntrySummary,
+  useOverlayClaimCountMarker,
 } from "./hooks";
 import type { ProjectCreationIdentity } from "@shared/types";
 import { useActionRegistry } from "./hooks/useActionRegistry";
@@ -125,6 +126,7 @@ function AppInner() {
   useUnloadCleanup();
   useResourceProfile();
   usePowerSavingMotion();
+  useOverlayClaimCountMarker();
 
   useE2EBridges();
 

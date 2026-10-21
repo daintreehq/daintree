@@ -6,6 +6,7 @@ import {
   type NotificationType,
   type NotificationAction,
   type NotificationPlacement,
+  type NotificationProgress,
 } from "@/store/notificationStore";
 import {
   useNotificationHistoryStore,
@@ -260,6 +261,7 @@ interface NotifyPayloadBase {
   action?: NotificationAction;
   actions?: NotificationAction[];
   placement?: NotificationPlacement;
+  progress?: NotificationProgress;
   /**
    * Controls routing:
    * - "high" (default): toast when focused, history only when blurred
@@ -1199,6 +1201,11 @@ export function notify(payload: NotifyPayload): string {
         if (coalesce.buildAction) {
           patch.actions = undefined;
         }
+        // Key-presence, as in the store's correlation collapse: a later payload
+        // moves the bar, and an explicit `progress: undefined` removes it.
+        if ("progress" in payload) {
+          patch.progress = payload.progress;
+        }
         // Clear context on coalesce: the combined toast now represents multiple
         // events which may originate from different subjects. A contextual
         // affordance like "Mute project notifications" or "Go to source" would
@@ -1377,7 +1384,7 @@ setPermanentFallbackHandler(() => {
     type: "warning",
     title: "Settings won't be saved",
     message:
-      "Couldn't write to local storage, so changes made this session won't persist after restart.",
+      "Couldn't access local storage, so changes made this session won't persist after restart.",
     // settings is a passive eventKind (→ priority "low" / inbox-only); a
     // storage-failure warning must surface as a toast, so pin it high.
     priority: "high",

@@ -28,7 +28,7 @@ function snapshot(
 ): FileSearchInvalidationSnapshot {
   return {
     path: WORKTREE,
-    workingTreeChangedAt: 1_000,
+    pathMembershipChangedAt: 1_000,
     generation: 1,
     isCurrent: true,
     ...overrides,
@@ -82,7 +82,7 @@ describe("FileSearchCacheInvalidator", () => {
       const invalidator = makeInvalidator();
       seed(invalidator);
 
-      invalidator.handleWorktreeUpdate(snapshot({ workingTreeChangedAt: 1_001 }), source());
+      invalidator.handleWorktreeUpdate(snapshot({ pathMembershipChangedAt: 1_001 }), source());
 
       expect(invalidateUnder).toHaveBeenCalledExactlyOnceWith(WORKTREE);
     });
@@ -92,9 +92,9 @@ describe("FileSearchCacheInvalidator", () => {
       // monitor behind a backwards clock step reports a lower number. An
       // advance-only test would strand that worktree's index.
       const invalidator = makeInvalidator();
-      seed(invalidator, { workingTreeChangedAt: 9_000 });
+      seed(invalidator, { pathMembershipChangedAt: 9_000 });
 
-      invalidator.handleWorktreeUpdate(snapshot({ workingTreeChangedAt: 4_000 }), source());
+      invalidator.handleWorktreeUpdate(snapshot({ pathMembershipChangedAt: 4_000 }), source());
 
       expect(invalidateUnder).toHaveBeenCalledWith(WORKTREE);
     });
@@ -105,7 +105,7 @@ describe("FileSearchCacheInvalidator", () => {
       // then preserve a listing taken before the watcher existed.
       const invalidator = makeInvalidator();
 
-      invalidator.handleWorktreeUpdate(snapshot({ workingTreeChangedAt: 0 }), source());
+      invalidator.handleWorktreeUpdate(snapshot({ pathMembershipChangedAt: 0 }), source());
 
       expect(invalidateUnder).toHaveBeenCalledExactlyOnceWith(WORKTREE);
     });
@@ -115,10 +115,10 @@ describe("FileSearchCacheInvalidator", () => {
       // worktree on the git-only watch reports it forever, and dropping on every
       // one of those would defeat the cache entirely.
       const invalidator = makeInvalidator();
-      seed(invalidator, { workingTreeChangedAt: 0 });
+      seed(invalidator, { pathMembershipChangedAt: 0 });
 
-      invalidator.handleWorktreeUpdate(snapshot({ workingTreeChangedAt: 0 }), source());
-      invalidator.handleWorktreeUpdate(snapshot({ workingTreeChangedAt: undefined }), source());
+      invalidator.handleWorktreeUpdate(snapshot({ pathMembershipChangedAt: 0 }), source());
+      invalidator.handleWorktreeUpdate(snapshot({ pathMembershipChangedAt: undefined }), source());
 
       expect(invalidateUnder).not.toHaveBeenCalled();
     });
@@ -144,6 +144,50 @@ describe("FileSearchCacheInvalidator", () => {
     });
   });
 
+  describe("content-only edits (#13595)", () => {
+    /** A full snapshot carrying both stamps, as `SnapshotBuilder` serialises them. */
+    const edited = (at: number, membership = 1_000): FileSearchInvalidationSnapshot =>
+      Object.assign(snapshot({ pathMembershipChangedAt: membership }), {
+        workingTreeChangedAt: at,
+      });
+
+    it("keeps the index across repeated in-place saves", () => {
+      // An agent saving one tracked file over and over: every flush advances
+      // the raw-filesystem stamp, none moves the path set, and each reload
+      // would rebuild the same list.
+      const invalidator = makeInvalidator();
+      invalidator.handleWorktreeUpdate(edited(5_000), source());
+      invalidateUnder.mockClear();
+
+      for (let save = 1; save <= 5; save++) {
+        invalidator.handleWorktreeUpdate(edited(5_000 + save), source());
+      }
+
+      expect(invalidateUnder).not.toHaveBeenCalled();
+    });
+
+    it("still drops when a save in the stream also moved membership", () => {
+      const invalidator = makeInvalidator();
+      seed(invalidator);
+
+      invalidator.handleWorktreeUpdate(edited(2_000), source());
+      invalidator.handleWorktreeUpdate(edited(2_001, 1_001), source());
+      invalidator.handleWorktreeUpdate(edited(2_002, 1_001), source());
+
+      expect(invalidateUnder).toHaveBeenCalledExactlyOnceWith(WORKTREE);
+    });
+
+    it("still drops on a monitor rebuild and on a switch back, with membership unchanged", () => {
+      const invalidator = makeInvalidator();
+      seed(invalidator, { isCurrent: false });
+
+      invalidator.handleWorktreeUpdate(snapshot({ generation: 2, isCurrent: false }), source());
+      invalidator.handleWorktreeUpdate(snapshot({ generation: 2, isCurrent: true }), source());
+
+      expect(invalidateUnder).toHaveBeenCalledTimes(2);
+    });
+  });
+
   describe("gaps in watcher coverage", () => {
     it("drops when the host restarts", () => {
       // A new epoch means the workspace host went down. Its fresh monitor's
@@ -163,7 +207,7 @@ describe("FileSearchCacheInvalidator", () => {
       // survive on a stale record until the TTL lapsed.
       const invalidator = makeInvalidator();
       seed(invalidator, { path: WORKTREE });
-      seed(invalidator, { path: SIBLING_TREE, workingTreeChangedAt: 2_000 });
+      seed(invalidator, { path: SIBLING_TREE, pathMembershipChangedAt: 2_000 });
 
       invalidator.handleWorktreeUpdate(
         snapshot({ path: WORKTREE }),
@@ -231,13 +275,13 @@ describe("FileSearchCacheInvalidator", () => {
       const hostA = source({ projectPath: PROJECT });
       const hostB = source({ projectPath: OTHER_PROJECT });
 
-      invalidator.handleWorktreeUpdate(snapshot({ workingTreeChangedAt: 1_000 }), hostA);
-      invalidator.handleWorktreeUpdate(snapshot({ workingTreeChangedAt: 1_001 }), hostB);
+      invalidator.handleWorktreeUpdate(snapshot({ pathMembershipChangedAt: 1_000 }), hostA);
+      invalidator.handleWorktreeUpdate(snapshot({ pathMembershipChangedAt: 1_001 }), hostB);
       invalidateUnder.mockClear();
 
       for (let i = 0; i < 5; i += 1) {
-        invalidator.handleWorktreeUpdate(snapshot({ workingTreeChangedAt: 1_000 }), hostA);
-        invalidator.handleWorktreeUpdate(snapshot({ workingTreeChangedAt: 1_001 }), hostB);
+        invalidator.handleWorktreeUpdate(snapshot({ pathMembershipChangedAt: 1_000 }), hostA);
+        invalidator.handleWorktreeUpdate(snapshot({ pathMembershipChangedAt: 1_001 }), hostB);
       }
 
       expect(invalidateUnder).not.toHaveBeenCalled();
@@ -246,9 +290,9 @@ describe("FileSearchCacheInvalidator", () => {
     it("still drops when either producer reports a real change", () => {
       const invalidator = makeInvalidator();
       const hostB = source({ projectPath: OTHER_PROJECT });
-      seed(invalidator, { workingTreeChangedAt: 1_001 }, { projectPath: OTHER_PROJECT });
+      seed(invalidator, { pathMembershipChangedAt: 1_001 }, { projectPath: OTHER_PROJECT });
 
-      invalidator.handleWorktreeUpdate(snapshot({ workingTreeChangedAt: 1_002 }), hostB);
+      invalidator.handleWorktreeUpdate(snapshot({ pathMembershipChangedAt: 1_002 }), hostB);
 
       expect(invalidateUnder).toHaveBeenCalledWith(WORKTREE);
     });
@@ -265,8 +309,8 @@ describe("FileSearchCacheInvalidator", () => {
 
     it("forgets the path under every producer, so a recreation is not a continuation", () => {
       const invalidator = makeInvalidator();
-      seed(invalidator, { workingTreeChangedAt: 7_000 });
-      seed(invalidator, { workingTreeChangedAt: 7_000 }, { projectPath: OTHER_PROJECT });
+      seed(invalidator, { pathMembershipChangedAt: 7_000 });
+      seed(invalidator, { pathMembershipChangedAt: 7_000 }, { projectPath: OTHER_PROJECT });
 
       invalidator.handleWorktreeRemoved(WORKTREE);
       invalidateUnder.mockClear();
@@ -274,7 +318,7 @@ describe("FileSearchCacheInvalidator", () => {
       // A worktree recreated at the same location gets a fresh monitor. With a
       // retained record its stamp could equal the old one and suppress the first
       // real change after the re-add.
-      invalidator.handleWorktreeUpdate(snapshot({ workingTreeChangedAt: 7_000 }), source());
+      invalidator.handleWorktreeUpdate(snapshot({ pathMembershipChangedAt: 7_000 }), source());
 
       expect(invalidateUnder).toHaveBeenCalledWith(WORKTREE);
     });
@@ -286,7 +330,7 @@ describe("FileSearchCacheInvalidator", () => {
       // ancestry test would leave exactly the trees the user works in behind.
       const invalidator = makeInvalidator();
       seed(invalidator, { path: WORKTREE });
-      seed(invalidator, { path: SIBLING_TREE, workingTreeChangedAt: 2_000 });
+      seed(invalidator, { path: SIBLING_TREE, pathMembershipChangedAt: 2_000 });
 
       invalidator.handleProjectClosed(PROJECT);
 

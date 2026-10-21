@@ -23,8 +23,11 @@ export const FILE_METADATA_STRIP_CLASS =
  * toggle, but only matching the item spacing stops the byte count sliding
  * sideways under the cursor at the same moment.
  *
- * `min-w-0 flex-1 truncate` is the priority rule — under width pressure the
- * reference metadata is what yields, because a clipped byte count costs less
- * than a clipped answer to "are my edits safe?".
+ * `min-w-0 flex-1` is the priority rule — under width pressure the reference
+ * metadata is what yields, because a dropped byte count costs less than a
+ * clipped answer to "are my edits safe?". How it yields — whole facts, in a
+ * fixed order, never mid-word — is `FileMetadataFacts`'s job; the clip here
+ * is only the backstop below the narrowest width that plan covers.
  */
-export const FILE_METADATA_RUN_CLASS = "flex min-w-0 flex-1 items-center gap-1.5 truncate";
+export const FILE_METADATA_RUN_CLASS =
+  "flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden whitespace-nowrap";

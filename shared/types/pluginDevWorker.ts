@@ -32,6 +32,7 @@ import type {
   PluginProcessMode,
   PluginPanelBadge,
   PluginContextValue,
+  PluginWorktreeCardStatus,
   PanelMenuItemContribution,
   BuiltInPluginCapability,
   PluginFsWriteOptions,
@@ -66,6 +67,9 @@ export type PluginHostCallMethod =
   // A call, not a notify like the badges: main owns the per-plugin key cap,
   // and its rejection has to reach the plugin's `await` (#13506).
   | "setContext"
+  // A call for the same reason: whether the worktree is one this plugin may
+  // reach is main's answer, and its refusal has to reach the caller (#13704).
+  | "setWorktreeCardStatus"
   | "actions.list"
   | "actions.get"
   | "settings.get"
@@ -442,6 +446,12 @@ export interface SetToolbarButtonBadgeParams {
 export interface SetContextParams {
   key: string;
   value: PluginContextValue | null;
+}
+
+/** Params for `setWorktreeCardStatus` (`host-call`). `null` clears the status. */
+export interface SetWorktreeCardStatusParams {
+  worktreeId: string;
+  status: PluginWorktreeCardStatus | null;
 }
 
 /** Params for `setPanelMenuItems` (`host-notify`). `null` clears the list. */

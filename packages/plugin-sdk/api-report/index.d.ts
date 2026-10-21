@@ -346,6 +346,27 @@ interface Issue {
     freshnessToken?: string;
     /** `true` when unchanged since `ifNotChangedSince`; see {@link FetchOptions}. */
     notModified?: boolean;
+    /**
+     * The provider's own stable id for the issue (Linear's UUID), when `number`
+     * is only a display-scoped counter that can change (an issue moved between
+     * teams is renumbered). Stored on explicit worktree links as provenance.
+     */
+    id?: string;
+    /** Display identifier when the provider has one beyond `#number` (`"ENG-123"`). */
+    key?: string;
+    /**
+     * Complete branch name the provider suggests for work on this issue. Used
+     * verbatim when present — no `feature/` or username prefix is added — so a
+     * tracker that links branches by naming convention recognises it.
+     */
+    branchName?: string;
+    /**
+     * Canonical id of the provider that served this issue. Host-stamped, and only
+     * when the project's issues come from a provider other than its code forge:
+     * the stamp is what tells creation flows to persist an explicit link, since
+     * the number alone would otherwise be read back as a code-forge issue.
+     */
+    providerId?: string;
     rawData: unknown;
 }
 /**
@@ -893,6 +914,13 @@ interface ProjectHealthCapability {
  */
 interface AvatarCapability {
     resolveAuthorAvatar(email: string): Promise<string | null>;
+    /**
+     * Synchronous counter that changes whenever a credential or instance change
+     * invalidates earlier lookups. When present, the host shares one in-flight
+     * lookup between concurrent callers for the same author within a generation;
+     * without it every call reaches the provider on its own.
+     */
+    getCacheGeneration?(): number;
 }
 /** A single named rate-limit bucket as reported by the provider. */
 interface RateLimitBucket {
@@ -1089,25 +1117,124 @@ interface CredentialImportCapability {
     commit(expected: CredentialImportExpected, signal?: AbortSignal): Promise<CredentialImportCandidate | CredentialImportUnavailable>;
 }
 /**
- * Runtime contract a forge plugin implements and registers via
- * `host.registerForgeProvider`. Every provider implements the base methods;
- * optional capabilities are sibling fields the host probes at runtime.
- * Adding a new capability adds a sibling field — the base interface never
- * changes.
- *
- * Capability presence check: use a truthiness/`!= null` guard
- * (`if (provider.reviews)`), NOT the `in` operator. An optional property
- * explicitly set to `undefined` still satisfies `"reviews" in provider`,
- * so `in` would falsely report the capability as available.
+ * Which half of a project's forge work a provider serves (#13700). `"code"` is
+ * PRs, CI, repository stats, clone and everything addressed through the git
+ * remote; `"issues"` is issue reads, writes and the issue picker. A project
+ * binds one provider per role — never two for the same role.
  */
-interface ForgeProviderImpl {
+type ForgeProviderRole = "issues" | "code";
+/** Members every provider implements, whichever roles it serves. */
+interface ForgeProviderBaseImpl {
     getCredentials(): Promise<Credentials | null>;
     setCredentials?(credentials: Credentials | null): void;
     validateCredentials(): Promise<AuthValidation>;
-    parseRemote(url: string): RepoRef | null;
+    /**
+     * Validate a single freshly-entered credential value at save time. The host
+     * passes exactly one string — the primary of the provider's declared
+     * {@link ForgeProviderContribution.credentialFields} (see that field for the
+     * primary-selection rule), never the full multi-field record. This signature
+     * is frozen at 1.0: a provider needing more than one value to authenticate
+     * (e.g. self-hosted forge wanting base URL + token) reads its other fields
+     * from its own settings (`settingsScopeRef`) and validates the assembled
+     * credential through {@link validateCredentials} instead, which runs against
+     * the provider's stored state rather than a host-supplied argument.
+     */
+    validateToken(token: string): Promise<AuthValidation>;
+    getRateLimit?(): Promise<RateLimitInfo>;
+    batchLookups?: BatchLookupCapability;
+    identity?: IdentityCapability;
+    /**
+     * An issues-only provider may implement this too and report `prCount: null`;
+     * the host reads only the issue side of an issues provider's snapshot.
+     */
+    repoStats?: RepoStatsCapability;
+    healthEvents?: HealthEventsCapability;
+    credentialImport?: CredentialImportCapability;
+}
+/** The issues role. See {@link ForgeProviderRole}. */
+interface ForgeIssueProviderImpl extends ForgeProviderBaseImpl {
+    /**
+     * Build the {@link RepoRef} this provider's issue calls take for a project,
+     * from the provider's own project-scoped settings (a tracker's team or
+     * workspace). Required for a provider whose manifest declares only
+     * `roles: ["issues"]`: it has no git remote to parse, and the host never
+     * hands it the code forge's remote. Return `null` when the project isn't
+     * configured yet. A provider that also serves code may omit it, and is then
+     * addressed through {@link ForgeCodeProviderImpl.parseRemote} as before.
+     *
+     * The host treats `owner`, `repo` and `rawData` as opaque and stamps
+     * `projectPath` on the result.
+     */
+    resolveIssueRepo?(projectPath: string): Promise<RepoRef | null>;
     listIssues(repo: RepoRef, opts: ListOptions): Promise<Page<Issue>>;
-    listPRs(repo: RepoRef, opts: ListOptions): Promise<Page<PR>>;
     getIssue(repo: RepoRef, number: number, options?: FetchOptions): Promise<Issue | null>;
+    buildIssueUrl(repo: RepoRef, number: number): string;
+    buildIssuesUrl(repo: RepoRef, options?: {
+        query?: string;
+        state?: string;
+    }): string;
+    /**
+     * Create a new issue and return the normalized {@link Issue}. Providers that
+     * can't create issues throw `"Not supported"`, matching the assignment
+     * convention. The host clears its issue caches after a successful create so
+     * the new issue shows up in subsequent {@link listIssues} calls.
+     */
+    createIssue(repo: RepoRef, input: CreateIssueInput): Promise<Issue>;
+    /**
+     * Assign an issue, returning the issue's resulting assignee list. Forges may
+     * silently drop an assignee the account can't take (GitHub ignores users
+     * without push access), so the returned list — not the requested username —
+     * is what actually landed.
+     */
+    assignIssue(repo: RepoRef, issueNumber: number, username: string): Promise<ForgeUser[]>;
+    /** Remove an assignment, returning the issue's resulting assignee list. */
+    unassignIssue(repo: RepoRef, issueNumber: number, username: string): Promise<ForgeUser[]>;
+    /**
+     * Close an open issue, returning the updated {@link Issue}. The optional
+     * `stateReason` lets the caller record why (GitHub: `completed` /
+     * `not_planned`); providers that don't model a reason ignore it. The host
+     * clears its issue caches after a successful close.
+     */
+    closeIssue(repo: RepoRef, issueNumber: number, stateReason?: IssueCloseReason): Promise<Issue>;
+    /**
+     * Reopen a closed issue, returning the updated {@link Issue}. The host clears
+     * its issue caches after a successful reopen.
+     */
+    reopenIssue(repo: RepoRef, issueNumber: number): Promise<Issue>;
+    /**
+     * Edit an issue's title and/or body, returning the updated {@link Issue}. At
+     * least one field of `input` must be present. The host clears its issue
+     * caches after a successful edit.
+     */
+    editIssue(repo: RepoRef, issueNumber: number, input: EditIssueInput): Promise<Issue>;
+    /**
+     * Add a comment to an issue, returning the created {@link IssueComment}.
+     */
+    addIssueComment(repo: RepoRef, issueNumber: number, body: string): Promise<IssueComment>;
+    /**
+     * Add a single label (by name) to an issue, returning the issue's full label
+     * set after the add. Additive — existing labels are preserved. The host
+     * clears its issue caches after a successful add.
+     */
+    addIssueLabel(repo: RepoRef, issueNumber: number, label: string): Promise<ForgeLabel[]>;
+    /**
+     * Remove a single label (by name) from an issue, returning the issue's
+     * remaining label set. Throws when the label isn't present on the issue. The
+     * host clears its issue caches after a successful remove.
+     */
+    removeIssueLabel(repo: RepoRef, issueNumber: number, label: string): Promise<ForgeLabel[]>;
+    issueComments?: IssueCommentCapability;
+    projectBoards?: ProjectBoardCapability;
+    milestones?: MilestoneCapability;
+    tooltips?: Pick<TooltipCapability, "getIssueTooltip">;
+}
+/**
+ * The code role: everything addressed through the git remote. See
+ * {@link ForgeProviderRole}.
+ */
+interface ForgeCodeProviderImpl extends ForgeProviderBaseImpl {
+    parseRemote(url: string): RepoRef | null;
+    listPRs(repo: RepoRef, opts: ListOptions): Promise<Page<PR>>;
     getPR(repo: RepoRef, number: number, options?: FetchOptions): Promise<PR | null>;
     findPRByBranch(repo: RepoRef, branchName: string): Promise<PR | null>;
     /**
@@ -1123,12 +1250,7 @@ interface ForgeProviderImpl {
     findPRsByBranches?(repo: RepoRef, branches: string[]): Promise<Map<string, PR | null>>;
     getCIStatus(repo: RepoRef, prNumber: number, options?: FetchOptions): Promise<CIStatus | null>;
     getRepoMetadata(repo: RepoRef, options?: FetchOptions): Promise<RepoMetadata>;
-    buildIssueUrl(repo: RepoRef, number: number): string;
     buildPRUrl(repo: RepoRef, number: number): string;
-    buildIssuesUrl(repo: RepoRef, options?: {
-        query?: string;
-        state?: string;
-    }): string;
     buildPRsUrl(repo: RepoRef, options?: {
         query?: string;
         state?: string;
@@ -1188,22 +1310,6 @@ interface ForgeProviderImpl {
      */
     buildPRHeadRefspec?(prNumber: number, headRefName: string): string | null;
     /**
-     * Create a new issue and return the normalized {@link Issue}. Providers that
-     * can't create issues throw `"Not supported"`, matching the assignment
-     * convention. The host clears its issue caches after a successful create so
-     * the new issue shows up in subsequent {@link listIssues} calls.
-     */
-    createIssue(repo: RepoRef, input: CreateIssueInput): Promise<Issue>;
-    /**
-     * Assign an issue, returning the issue's resulting assignee list. Forges may
-     * silently drop an assignee the account can't take (GitHub ignores users
-     * without push access), so the returned list — not the requested username —
-     * is what actually landed.
-     */
-    assignIssue(repo: RepoRef, issueNumber: number, username: string): Promise<ForgeUser[]>;
-    /** Remove an assignment, returning the issue's resulting assignee list. */
-    unassignIssue(repo: RepoRef, issueNumber: number, username: string): Promise<ForgeUser[]>;
-    /**
      * Open a new pull request from `input.head` into `input.base` and return the
      * normalized {@link PR}. Providers that can't create PRs throw
      * `"Not supported"`. The host clears its PR caches after a successful create
@@ -1232,53 +1338,6 @@ interface ForgeProviderImpl {
      * normalized {@link PR}.
      */
     editPR(repo: RepoRef, prNumber: number, input: EditPRInput): Promise<PR>;
-    /**
-     * Close an open issue, returning the updated {@link Issue}. The optional
-     * `stateReason` lets the caller record why (GitHub: `completed` /
-     * `not_planned`); providers that don't model a reason ignore it. The host
-     * clears its issue caches after a successful close.
-     */
-    closeIssue(repo: RepoRef, issueNumber: number, stateReason?: IssueCloseReason): Promise<Issue>;
-    /**
-     * Reopen a closed issue, returning the updated {@link Issue}. The host clears
-     * its issue caches after a successful reopen.
-     */
-    reopenIssue(repo: RepoRef, issueNumber: number): Promise<Issue>;
-    /**
-     * Edit an issue's title and/or body, returning the updated {@link Issue}. At
-     * least one field of `input` must be present. The host clears its issue
-     * caches after a successful edit.
-     */
-    editIssue(repo: RepoRef, issueNumber: number, input: EditIssueInput): Promise<Issue>;
-    /**
-     * Add a comment to an issue, returning the created {@link IssueComment}.
-     */
-    addIssueComment(repo: RepoRef, issueNumber: number, body: string): Promise<IssueComment>;
-    /**
-     * Add a single label (by name) to an issue, returning the issue's full label
-     * set after the add. Additive — existing labels are preserved. The host
-     * clears its issue caches after a successful add.
-     */
-    addIssueLabel(repo: RepoRef, issueNumber: number, label: string): Promise<ForgeLabel[]>;
-    /**
-     * Remove a single label (by name) from an issue, returning the issue's
-     * remaining label set. Throws when the label isn't present on the issue. The
-     * host clears its issue caches after a successful remove.
-     */
-    removeIssueLabel(repo: RepoRef, issueNumber: number, label: string): Promise<ForgeLabel[]>;
-    /**
-     * Validate a single freshly-entered credential value at save time. The host
-     * passes exactly one string — the primary of the provider's declared
-     * {@link ForgeProviderContribution.credentialFields} (see that field for the
-     * primary-selection rule), never the full multi-field record. This signature
-     * is frozen at 1.0: a provider needing more than one value to authenticate
-     * (e.g. self-hosted forge wanting base URL + token) reads its other fields
-     * from its own settings (`settingsScopeRef`) and validates the assembled
-     * credential through {@link validateCredentials} instead, which runs against
-     * the provider's stored state rather than a host-supplied argument.
-     */
-    validateToken(token: string): Promise<AuthValidation>;
-    getRateLimit?(): Promise<RateLimitInfo>;
     clearPullRequestCaches?(): void | Promise<void>;
     /**
      * Optional. Capture a cheap, opaque freshness token for the repo's overall
@@ -1312,22 +1371,34 @@ interface ForgeProviderImpl {
      */
     classifyPushError?(stderr: string): PushErrorClassification | null;
     reviews?: ReviewCapability;
-    issueComments?: IssueCommentCapability;
     checks?: ChecksCapability;
     approvals?: ApprovalCapability;
     releases?: ReleaseCapability;
-    projectBoards?: ProjectBoardCapability;
-    milestones?: MilestoneCapability;
-    batchLookups?: BatchLookupCapability;
-    identity?: IdentityCapability;
-    tooltips?: TooltipCapability;
-    repoStats?: RepoStatsCapability;
+    tooltips?: Pick<TooltipCapability, "getPRTooltip">;
     projectHealth?: ProjectHealthCapability;
     avatars?: AvatarCapability;
-    healthEvents?: HealthEventsCapability;
     clone?: CloneCapability;
-    credentialImport?: CredentialImportCapability;
 }
+/**
+ * Runtime contract a forge plugin implements and registers via
+ * `host.registerForgeProvider` — a provider serving both roles, which is every
+ * provider whose manifest omits `roles`. Every provider implements the base
+ * methods; optional capabilities are sibling fields the host probes at
+ * runtime. Adding a new capability adds a sibling field — the base interface
+ * never changes.
+ *
+ * Capability presence check: use a truthiness/`!= null` guard
+ * (`if (provider.reviews)`), NOT the `in` operator. An optional property
+ * explicitly set to `undefined` still satisfies `"reviews" in provider`,
+ * so `in` would falsely report the capability as available.
+ */
+type ForgeProviderImpl = ForgeIssueProviderImpl & ForgeCodeProviderImpl;
+/**
+ * What `host.registerForgeProvider` accepts: a full provider, or one serving a
+ * single role. The manifest's `roles` decides which, and the host checks the
+ * implementation against it at registration.
+ */
+type AnyForgeProviderImpl = ForgeProviderImpl | ForgeIssueProviderImpl | ForgeCodeProviderImpl;
 /**
  * Suggested capability vocabulary surfaced in the manifest's `capabilities`
  * array. Frozen at 1.0 as informational only: the host never interprets these
@@ -1405,8 +1476,23 @@ interface ForgeProviderContribution {
      * remote URL hostname and each pattern. Glob, wildcard, suffix, and
      * regular-expression patterns are not supported — list every distinct
      * hostname your forge serves as a separate entry.
+     *
+     * Hostname matching routes the code role only. A provider declaring
+     * `roles: ["issues"]` has no git remote and passes `[]`; one serving code
+     * must list at least one hostname.
      */
     matches: string[];
+    /**
+     * Which roles the provider serves (#13700). Omitted means both, which is
+     * every provider written before roles existed. An issues-only provider
+     * (`["issues"]`) is never picked by hostname, default or code override, and
+     * is never asked for PRs, CI, repository data or clone — a project binds it
+     * through its issues-provider setting while the code forge keeps the rest.
+     * It implements {@link ForgeIssueProviderImpl} only, and must provide
+     * `resolveIssueRepo`. The host enforces this at registration: a runtime
+     * descriptor cannot widen what the manifest declares.
+     */
+    roles?: ForgeProviderRole[];
     /**
      * Informational capability hints; the host never interprets these and no
      * behavior is derived from them (display only). See {@link ForgeCapabilityHint}.
@@ -1464,6 +1550,8 @@ interface ForgeProviderDescriptor {
     id: string;
     name?: string;
     matches?: string[];
+    /** See {@link ForgeProviderContribution.roles}. */
+    roles?: ForgeProviderRole[];
     /** See {@link ForgeProviderContribution.kind}. */
     kind?: ForgeProviderKind;
     capabilities?: ForgeCapabilityHint[];
@@ -1559,7 +1647,7 @@ type WorktreeSwitchIndex = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9;
 type WorktreeSwitchAction = `worktree.switch${WorktreeSwitchIndex}`;
 type BuiltInKeyAction = "nav.up" | "nav.down" | "nav.left" | "nav.right" | "nav.pageUp" | "nav.pageDown" | "nav.home" | "nav.end" | "nav.expand" | "nav.collapse" | "nav.primary" | "nav.toggleSidebar" | "nav.toggleFocusMode" | "nav.quickSwitcher" | "nav.focusRegion.next" | "nav.focusRegion.prev" | "file.open" | "file.copyPath" | "file.copyTree" | "ui.refresh" | "ui.escape" | "git.commit" | "git.push" | "git.stageAll" | "git.toggle" | "worktree.next" | "worktree.previous" | "worktree.panel" | WorktreeSwitchAction | "worktree.up" | "worktree.down" | "worktree.upVim" | "worktree.downVim" | "worktree.home" | "worktree.end" | "worktree.select" | "worktree.selectSpace" | "worktree.copyTree" | "worktree.openChanges" | "worktree.openEditor" | "worktree.openFileBrowser" | "worktree.openFileBrowserPanel" | "worktree.openPalette" | "worktree.createDialog.open" | "worktree.overview" | "worktree.sessions.minimizeAll" | "worktree.sessions.maximizeAll" | "worktree.sessions.restartAll" | "worktree.sessions.endAll" | "worktree.sessions.closeCompleted" | "worktree.sessions.trashAll" | "worktree.sessions.resetRenderers" | "tab.next" | "tab.previous" | "terminal.close" | "terminal.closeAll" | "terminal.killAll" | "terminal.restartAll" | "terminal.toggleDock" | "terminal.toggleDockAll" | "terminal.new" | "terminal.reopenLast" | "terminal.resumeSessions" | "terminal.maximize" | "terminal.inject" | "terminal.focusNext" | "terminal.focusPrevious" | "terminal.focusAlternate" | "terminal.focusUp" | "terminal.focusDown" | "terminal.focusLeft" | "terminal.focusRight" | "terminal.focusDock" | "terminal.focusIndex1" | "terminal.focusIndex2" | "terminal.focusIndex3" | "terminal.focusIndex4" | "terminal.focusIndex5" | "terminal.focusIndex6" | "terminal.focusIndex7" | "terminal.focusIndex8" | "terminal.focusIndex9" | "terminal.moveLeft" | "terminal.moveRight" | "terminal.moveUp" | "terminal.moveDown" | "terminal.moveToDock" | "terminal.moveToGrid" | "terminal.watch" | "terminal.duplicate" | "terminal.background" | "terminal.contextMenu" | "terminal.stashInput" | "terminal.popStash" | "terminal.scrollToLastActivity" | "terminal.sendToAgent" | "terminal.bulkCommand" | "terminal.armDefault" | "terminal.disarmAll" | "terminal.kill" | "terminal.restart" | "terminal.forceResume" | "terminal.redraw" | "terminal.rename" | "fleet.accept" | "fleet.reject" | "fleet.interrupt" | "fleet.restart" | "fleet.kill" | "fleet.trash" | "fleet.armFocused" | "fleet.armAll" | "agent.palette" | AgentKeyAction | "agent.terminal" | "agent.browser" | "agent.focusNextWaiting" | "agent.focusNextWaitingGlobal" | "agent.focusNextWorking" | "agent.focusNextAgent" | "agent.focusPreviousAgent" | "dock.focusNextWaiting" | "find.inFocusedPanel" | "window.zoomIn" | "window.zoomOut" | "window.zoomReset" | "panel.palette" | "panel.toggleDiagnostics" | "panel.togglePortal" | "panel.diagnosticsLogs" | "panel.diagnosticsEvents" | "panel.diagnosticsMessages" | "notifications.toggle" | "portal.newTab" | "portal.closeTab" | "portal.nextTab" | "portal.prevTab" | "devPreview.reloadPreview" | "action.palette" | "action.palette.open" | "action.repeatLast" | "pilot.toggle" | "pilot.openProject" | "canopy.toggle" | "project.switcherPalette" | "project.mruCycleOlder" | "project.openInNewWindow" | "host.switch" | "help.shortcuts" | "help.shortcutsAlt" | "help.launchAgent" | "help.togglePanel" | "app.settings" | "app.theme.toggle" | "app.theme.pick" | "voiceInput.toggle" | "voiceInput.toggleAssistant" | "voiceInput.togglePause" | "voiceInput.lockTarget" | "voiceInput.unlockTarget" | "voiceInput.recallRecentTarget" | "layout.undo" | "layout.redo" | "app.newWindow" | "app.quit" | "app.forceQuit" | "modal.close";
 
-declare const BUILT_IN_ACTION_IDS: readonly ["terminal.list", "terminal.getOutput", "terminal.getStatus", "terminal.sendCommand", "terminal.sendCommandOwned", "terminal.sendCommandMany", "terminal.closeMany", "terminal.waitUntilIdle", "terminal.waitUntilIdleBatch", "terminal.readLastMessageOwned", "terminal.resumeSessions", "terminal.notifyWhenIdle", "terminal.setClientMetadata", "panel.list", "panel.focus", "panel.focusIndex", "panel.openPluginPanel", "panel.palette", "panel.gridLayout.setStrategy", "panel.gridLayout.setValue", "worktree.list", "worktree.getCurrent", "worktree.refresh", "worktree.reconcileTopology", "worktree.refreshPullRequests", "worktree.restartService", "worktree.retryProjectLoad", "worktree.setActive", "worktree.create", "worktree.delete", "worktree.deleteOwned", "worktree.listBranches", "worktree.getDefaultPath", "worktree.reveal", "worktree.openIssue", "worktree.openPR", "worktree.copyContext", "worktree.inject", "worktree.getAvailableBranch", "worktree.waitUntilReady", "worktree.waitForPullRequest", "worktree.createWithRecipe", "worktree.compareDiff", "worktree.reviewReadiness", "worktree.switchIndex", "worktree.quickCreate", "worktree.createDialog.open", "worktree.select", "worktree.copyTree", "worktree.openEditor", "worktree.openReviewHub", "worktree.openFileBrowser", "worktree.openFileBrowserPanel", "worktree.openChanges", "worktree.overview.open", "worktree.overview.close", "worktree.setLabelColor", "worktree.setCustomTitle", "worktree.resource.provision", "worktree.resource.teardown", "worktree.resource.resume", "worktree.resource.pause", "worktree.resource.status", "worktree.resource.connect", "worktree.resource.config.get", "worktree.resource.config.set", "worktree.lifecycle.retrySetup", "worktree.sessions.minimizeAll", "worktree.sessions.maximizeAll", "worktree.sessions.restartAll", "worktree.sessions.resetRenderers", "worktree.sessions.closeCompleted", "worktree.sessions.trashAll", "worktree.sessions.endAll", "worktree.sessions.clearHistory", "worktree.bulk.closeSessions", "worktree.bulk.remove", "workflow.startWorkOnIssue", "workflow.prepBranchForReview", "workflow.focusNextAttention", "system.openExternal", "system.openPath", "system.checkCommand", "system.checkDirectory", "system.getHomeDir", "system.getResourceProfileSnapshot", "cliAvailability.get", "cliAvailability.refresh", "sessionRestore.getConfig", "sessionRestore.updateConfig", "windowOpening.getConfig", "windowOpening.updateConfig", "hibernation.getConfig", "hibernation.updateConfig", "idleTerminalNotify.getConfig", "idleTerminalNotify.updateConfig", "idleTerminalNotify.closeProject", "idleTerminalNotify.muteProject", "idleBackgroundAutoClose.getConfig", "idleBackgroundAutoClose.updateConfig", "agentSettings.get", "agentSettings.set", "agentSettings.reset", "keybinding.getOverrides", "keybinding.setOverride", "keybinding.removeOverride", "keybinding.resetAll", "terminalConfig.get", "terminalConfig.setScrollback", "terminalConfig.setPerformanceMode", "terminalConfig.setFontSize", "terminalConfig.setFontFamily", "terminalConfig.setHybridInputEnabled", "terminalConfig.setHybridInputAutoFocus", "terminalConfig.setScreenReaderMode", "terminalConfig.setCachedProjectViews", "worktreeConfig.get", "worktreeConfig.setPattern", "files.search", "file.view", "file.read", "file.openDiff", "file.openInEditor", "file.openInBrowser", "file.openImageViewer", "file.showItemInFolder", "file.trash", "file.openPanel", "slashCommands.list", "skills.search", "skills.load", "artifact.saveToFile", "artifact.applyPatch", "copyTree.generate", "copyTree.generateAndCopyFile", "copyTree.injectToTerminal", "copyTree.isAvailable", "copyTree.cancel", "copyTree.getFileTree", "git.getProjectPulse", "git.getFileDiff", "git.listCommits", "git.stageFile", "git.unstageFile", "git.discardFileChanges", "git.stageAll", "git.unstageAll", "git.commit", "git.push", "git.pullRebase", "git.fetch", "git.rebaseOntoBase", "git.mergeBaseIntoBranch", "git.abortRepositoryOperation", "git.continueRepositoryOperation", "git.forcePushWithLease", "git.markSafeDirectory", "git.getStagingStatus", "preferences.showProjectPulse.set", "preferences.showDeveloperTools.set", "preferences.showGridAgentHighlights.set", "preferences.showDockAgentHighlights.set", "preferences.showAgentTaskTitles.set", "preferences.reduceAnimations.set", "window.toggleFullscreen", "window.reload", "window.forceReload", "window.toggleDevTools", "window.zoomIn", "window.zoomOut", "window.zoomReset", "window.close", "forge.openIssues", "forge.openPRs", "forge.openCommits", "forge.openRepo", "forge.openIssue", "forge.openPR", "forge.assignIssue", "forge.unassignIssue", "forge.approvePR", "forge.requestChanges", "forge.dismissReview", "forge.requestReviewers", "forge.createIssue", "forge.closeIssue", "forge.reopenIssue", "forge.editIssue", "forge.addIssueComment", "forge.addIssueLabel", "forge.removeIssueLabel", "forge.validateToken", "forge.getRepoStats", "forge.listIssues", "forge.listPRs", "forge.getIssue", "forge.listIssueComments", "forge.getChecks", "forge.getPR", "forge.getPRs", "forge.getCIStatus", "forge.createPR", "forge.closePR", "forge.reopenPR", "forge.mergePR", "forge.convertPRToDraft", "forge.markPRReadyForReview", "forge.commentOnPR", "forge.editPR", "pilot.toggle", "pilot.openProject", "pilot.openRun", "canopy.toggle", "canopy.markAllRead", "project.getAll", "project.getCurrent", "project.add", "project.openInNewWindow", "project.switch", "project.update", "project.remove", "project.archive", "project.unarchive", "project.setGroup", "project.listGroups", "project.createGroup", "project.close", "project.closeActive", "project.openDialog", "project.getSettings", "project.saveSettings", "project.muteNotifications", "project.silenceNotificationKind", "project.detectRunners", "project.runCheck", "project.runCommand", "workspace.list", "plugin.validate", "plugin.diagnostics", "plugin.reloadProject", "plugin.reloadPanel", "plugin.capturePanel", "plugin.reloadWindow", "plugin.openSettings", "plugin.backupDatabases", "project.getStats", "project.settings.open", "project.cloneRepo", "host.switch", "host.add", "host.overview.open", "project.openOnHost", "host.forwardPort", "app.pluginManager", "app.reloadConfig", "app.exportConfig", "app.importConfig", "app.developerMode.set", "app.theme.pick", "app.theme.toggle", "app.theme.browser.open", "logs.openFile", "logs.clear", "logs.setVerbose", "logs.getVerbose", "logs.getAll", "logs.getSources", "logs.setLogLevel", "logs.getLevelOverrides", "logs.setLevelOverrides", "logs.clearLevelOverrides", "logs.getRegistry", "diagnostics.openReview", "diagnostics.openWhySlow", "errors.clearAll", "errors.openLogs", "errors.recent", "notifications.recent", "notifications.toggle", "eventInspector.getEvents", "eventInspector.getFiltered", "eventInspector.subscribe", "eventInspector.unsubscribe", "eventInspector.clear", "telemetry.togglePreview", "telemetry.clearPreview", "recipe.run", "recipe.list", "recipe.editor.open", "recipe.editor.openFromLayout", "recipe.manager.open", "recipe.saveToRepo", "recipe.delete", "agent.launch", "agent.launchMany", "agent.terminal", "agent.focusNextWaiting", "agent.focusNextWorking", "agent.focusNextAgent", "agent.focusPreviousAgent", "agent.getState", "agent.listToolbar", "agent.listAvailable", "agent.listPresets", "agent.listModels", "agentSessionHistory.list", "agentSessionHistory.resume", "session.bookmarkAndClose", "session.bookmark.promote", "session.bookmark.rename", "session.bookmark.delete", "session.bookmarks.list", "app.settings.openTab", "action.palette.open", "action.repeatLast", "actions.list", "actions.getContext", "actions.persistedStores", "actions.search", "actions.getSchema", "mcp.surface", "terminal.restart", "terminal.redraw", "terminal.forceResume", "terminal.toggleInputLock", "terminal.viewInfo", "terminal.restartService", "watchdog.restart", "terminal.new", "terminal.moveToDock", "terminal.moveToGrid", "terminal.toggleDock", "terminal.toggleDockAll", "terminal.toggleMaximize", "terminal.duplicate", "terminal.rename", "terminal.close", "terminal.closeOwned", "terminal.revealOwned", "terminal.trash", "terminal.kill", "terminal.killBatch", "terminal.closeAll", "terminal.killAll", "terminal.moveToWorktree", "terminal.moveToNewWorktree", "terminal.watch", "terminal.gridLayout.setStrategy", "terminal.gridLayout.setValue", "terminal.copy", "terminal.paste", "terminal.copyLink", "terminal.contextMenu", "terminal.sendToAgent", "terminal.inject", "terminal.injectOwned", "terminal.bulkCommand", "terminal.interrupt", "terminal.interruptOwned", "terminal.sendKeys", "terminal.sendKeysOwned", "terminal.stashInput", "terminal.popStash", "terminal.arm", "terminal.disarm", "terminal.disarmAll", "terminal.armByState", "terminal.armAll", "terminal.armDefault", "terminal.openWorktreeEditor", "terminal.openWorktreeIssue", "terminal.openWorktreePR", "terminal.info.open", "terminal.info.get", "browser.reload", "browser.navigate", "browser.openUrl", "browser.back", "browser.forward", "browser.openExternal", "browser.copyUrl", "browser.setZoomLevel", "browser.captureScreenshot", "browser.toggleConsole", "browser.clearConsole", "browser.getConsoleMessages", "browser.toggleDevTools", "browser.hardReload", "nav.toggleFocusMode", "nav.quickSwitcher", "find.inFocusedPanel", "portal.toggle", "portal.closeTab", "portal.nextTab", "portal.prevTab", "portal.newTab", "portal.closeAllTabs", "portal.activateTab", "portal.openLaunchpad", "portal.openUrl", "portal.goBack", "portal.goForward", "portal.reload", "portal.copyUrl", "portal.openExternal", "portal.duplicateTab", "portal.reloadTab", "portal.copyTabUrl", "portal.openTabExternal", "portal.closeOthers", "portal.closeToRight", "portal.resetWidth", "portal.width.set", "portal.setDefaultNewTab", "portal.links.add", "portal.links.remove", "portal.links.update", "portal.links.toggle", "portal.links.reorder", "portal.tabs.reorder", "portal.listTabs", "portal.toggleDevDashboard", "help.gettingStarted.show", "help.tour.show", "help.displayImage", "help.openCommandsFolder", "help.newSessionWithAgent", "help.resumePastSession", "assistant.list", "assistant.start", "agent.readQuota", "host.list", "host.call", "ui.sidebar.resetWidth", "devServer.start", "devPreview.stop", "devPreview.toggleTool", "devPreview.reloadPreview", "devPreview.restart", "devPreview.restartAndClearCache", "devPreview.reinstallAndRestart", "devPreview.promoteToPortal", "env.global.get", "env.global.set", "env.project.get", "env.project.set", "fleet.accept", "fleet.reject", "fleet.interrupt", "fleet.restart", "fleet.kill", "fleet.trash", "fleet.armAll", "fleet.armFocused", "fleet.scope.enter", "fleet.scope.exit", "fleet.armMatchingFilter", "fleet.retryFailures", "fleet.saveNamedFleet", "fleet.recallNamedFleet", "fleet.deleteNamedFleet", "fleet.getRunStatus"];
+declare const BUILT_IN_ACTION_IDS: readonly ["terminal.list", "terminal.getOutput", "terminal.getStatus", "terminal.sendCommand", "terminal.sendCommandOwned", "terminal.sendCommandMany", "terminal.closeMany", "terminal.waitUntilIdle", "terminal.waitUntilIdleBatch", "terminal.readLastMessageOwned", "terminal.resumeSessions", "terminal.notifyWhenIdle", "terminal.setClientMetadata", "panel.list", "panel.focus", "panel.focusIndex", "panel.openPluginPanel", "panel.palette", "panel.gridLayout.setStrategy", "panel.gridLayout.setValue", "worktree.list", "worktree.getCurrent", "worktree.refresh", "worktree.reconcileTopology", "worktree.refreshPullRequests", "worktree.restartService", "worktree.retryProjectLoad", "worktree.setActive", "worktree.create", "worktree.delete", "worktree.deleteOwned", "worktree.listBranches", "worktree.getDefaultPath", "worktree.reveal", "worktree.openIssue", "worktree.openPR", "worktree.copyContext", "worktree.inject", "worktree.getAvailableBranch", "worktree.waitUntilReady", "worktree.waitForPullRequest", "worktree.createWithRecipe", "worktree.compareDiff", "worktree.reviewReadiness", "worktree.switchIndex", "worktree.quickCreate", "worktree.createDialog.open", "worktree.select", "worktree.copyTree", "worktree.openEditor", "worktree.openReviewHub", "worktree.openFileBrowser", "worktree.openFileBrowserPanel", "worktree.openChanges", "worktree.overview.open", "worktree.overview.close", "worktree.setLabelColor", "worktree.setCustomTitle", "worktree.resource.provision", "worktree.resource.teardown", "worktree.resource.resume", "worktree.resource.pause", "worktree.resource.status", "worktree.resource.connect", "worktree.resource.config.get", "worktree.resource.config.set", "worktree.lifecycle.retrySetup", "worktree.sessions.minimizeAll", "worktree.sessions.maximizeAll", "worktree.sessions.restartAll", "worktree.sessions.resetRenderers", "worktree.sessions.closeCompleted", "worktree.sessions.trashAll", "worktree.sessions.endAll", "worktree.sessions.clearHistory", "worktree.bulk.closeSessions", "worktree.bulk.remove", "workflow.startWorkOnIssue", "workflow.prepBranchForReview", "workflow.focusNextAttention", "system.openExternal", "system.openPath", "system.checkCommand", "system.checkDirectory", "system.getHomeDir", "system.getResourceProfileSnapshot", "cliAvailability.get", "cliAvailability.refresh", "sessionRestore.getConfig", "sessionRestore.updateConfig", "windowOpening.getConfig", "windowOpening.updateConfig", "hibernation.getConfig", "hibernation.updateConfig", "idleTerminalNotify.getConfig", "idleTerminalNotify.updateConfig", "idleTerminalNotify.closeProject", "idleTerminalNotify.muteProject", "idleBackgroundAutoClose.getConfig", "idleBackgroundAutoClose.updateConfig", "agentSettings.get", "agentSettings.set", "agentSettings.reset", "keybinding.getOverrides", "keybinding.setOverride", "keybinding.removeOverride", "keybinding.resetAll", "terminalConfig.get", "terminalConfig.setScrollback", "terminalConfig.setPerformanceMode", "terminalConfig.setFontSize", "terminalConfig.setFontFamily", "terminalConfig.setHybridInputEnabled", "terminalConfig.setHybridInputAutoFocus", "terminalConfig.setScreenReaderMode", "terminalConfig.setCachedProjectViews", "worktreeConfig.get", "worktreeConfig.setPattern", "files.search", "file.view", "file.read", "file.openDiff", "file.openInEditor", "file.openInBrowser", "file.openImageViewer", "file.showItemInFolder", "file.trash", "file.openPanel", "slashCommands.list", "skills.search", "skills.load", "artifact.saveToFile", "artifact.applyPatch", "copyTree.generate", "copyTree.generateAndCopyFile", "copyTree.injectToTerminal", "copyTree.isAvailable", "copyTree.cancel", "copyTree.getFileTree", "git.getProjectPulse", "git.getFileDiff", "git.listCommits", "git.stageFile", "git.unstageFile", "git.discardFileChanges", "git.stageAll", "git.unstageAll", "git.commit", "git.push", "git.pullRebase", "git.fetch", "git.rebaseOntoBase", "git.mergeBaseIntoBranch", "git.abortRepositoryOperation", "git.continueRepositoryOperation", "git.forcePushWithLease", "git.markSafeDirectory", "git.getStagingStatus", "preferences.showProjectPulse.set", "preferences.showDeveloperTools.set", "preferences.showGridAgentHighlights.set", "preferences.showDockAgentHighlights.set", "preferences.showAgentTaskTitles.set", "preferences.reduceAnimations.set", "window.toggleFullscreen", "window.reload", "window.forceReload", "window.toggleDevTools", "window.zoomIn", "window.zoomOut", "window.zoomReset", "window.close", "forge.openIssues", "forge.openPRs", "forge.openCommits", "forge.openRepo", "forge.openIssue", "forge.openPR", "forge.assignIssue", "forge.unassignIssue", "forge.approvePR", "forge.requestChanges", "forge.dismissReview", "forge.requestReviewers", "forge.createIssue", "forge.closeIssue", "forge.reopenIssue", "forge.editIssue", "forge.addIssueComment", "forge.addIssueLabel", "forge.removeIssueLabel", "forge.validateToken", "forge.getRepoStats", "forge.listIssues", "forge.listPRs", "forge.getIssue", "forge.listIssueComments", "forge.getChecks", "forge.getPR", "forge.getPRs", "forge.getCIStatus", "forge.createPR", "forge.closePR", "forge.reopenPR", "forge.mergePR", "forge.convertPRToDraft", "forge.markPRReadyForReview", "forge.commentOnPR", "forge.editPR", "pilot.toggle", "pilot.openProject", "pilot.openRun", "canopy.toggle", "canopy.markAllRead", "project.getAll", "project.getCurrent", "project.add", "project.openInNewWindow", "project.switch", "project.update", "project.remove", "project.archive", "project.unarchive", "project.setGroup", "project.listGroups", "project.createGroup", "project.close", "project.closeActive", "project.openDialog", "project.getSettings", "project.saveSettings", "project.muteNotifications", "project.silenceNotificationKind", "project.detectRunners", "project.runCheck", "project.runCommand", "workspace.list", "plugin.validate", "plugin.diagnostics", "plugin.reloadProject", "plugin.reloadPanel", "plugin.capturePanel", "plugin.reloadWindow", "plugin.openSettings", "plugin.backupDatabases", "project.getStats", "project.settings.open", "project.cloneRepo", "host.switch", "host.add", "host.overview.open", "project.openOnHost", "host.forwardPort", "app.pluginManager", "app.reloadConfig", "app.exportConfig", "app.importConfig", "app.developerMode.set", "app.theme.pick", "app.theme.toggle", "app.theme.browser.open", "logs.openFile", "logs.clear", "logs.setVerbose", "logs.getVerbose", "logs.getAll", "logs.getSources", "logs.setLogLevel", "logs.getLevelOverrides", "logs.setLevelOverrides", "logs.clearLevelOverrides", "logs.getRegistry", "diagnostics.openReview", "diagnostics.openWhySlow", "errors.clearAll", "errors.openLogs", "errors.recent", "notifications.recent", "notifications.toggle", "eventInspector.getEvents", "eventInspector.getFiltered", "eventInspector.subscribe", "eventInspector.unsubscribe", "eventInspector.clear", "telemetry.togglePreview", "telemetry.clearPreview", "recipe.run", "recipe.list", "recipe.editor.open", "recipe.editor.openFromLayout", "recipe.manager.open", "recipe.saveToRepo", "recipe.delete", "agent.launch", "agent.launchMany", "agent.terminal", "agent.focusNextWaiting", "agent.focusNextWorking", "agent.focusNextAgent", "agent.focusPreviousAgent", "agent.getState", "agent.listToolbar", "agent.listAvailable", "agent.listPresets", "agent.listModels", "agentSessionHistory.list", "agentSessionHistory.resume", "session.bookmarkAndClose", "session.bookmark.promote", "session.bookmark.rename", "session.bookmark.delete", "session.bookmarks.list", "app.settings.openTab", "action.palette.open", "action.repeatLast", "actions.list", "actions.getContext", "actions.persistedStores", "actions.search", "actions.getSchema", "mcp.surface", "terminal.restart", "terminal.redraw", "terminal.forceResume", "terminal.toggleInputLock", "terminal.viewInfo", "terminal.restartService", "watchdog.restart", "terminal.new", "terminal.moveToDock", "terminal.moveToGrid", "terminal.toggleDock", "terminal.toggleDockAll", "terminal.toggleMaximize", "terminal.duplicate", "terminal.rename", "terminal.close", "terminal.closeOwned", "terminal.revealOwned", "terminal.placeOwned", "terminal.trash", "terminal.kill", "terminal.killBatch", "terminal.closeAll", "terminal.killAll", "terminal.moveToWorktree", "terminal.moveToNewWorktree", "terminal.watch", "terminal.gridLayout.setStrategy", "terminal.gridLayout.setValue", "terminal.copy", "terminal.paste", "terminal.copyLink", "terminal.contextMenu", "terminal.sendToAgent", "terminal.inject", "terminal.injectOwned", "terminal.bulkCommand", "terminal.interrupt", "terminal.interruptOwned", "terminal.sendKeys", "terminal.sendKeysOwned", "terminal.stashInput", "terminal.popStash", "terminal.arm", "terminal.disarm", "terminal.disarmAll", "terminal.armByState", "terminal.armAll", "terminal.armDefault", "terminal.openWorktreeEditor", "terminal.openWorktreeIssue", "terminal.openWorktreePR", "terminal.info.open", "terminal.info.get", "browser.reload", "browser.navigate", "browser.openUrl", "browser.back", "browser.forward", "browser.openExternal", "browser.copyUrl", "browser.setZoomLevel", "browser.captureScreenshot", "browser.toggleConsole", "browser.clearConsole", "browser.getConsoleMessages", "browser.toggleDevTools", "browser.hardReload", "nav.toggleFocusMode", "nav.quickSwitcher", "find.inFocusedPanel", "portal.toggle", "portal.closeTab", "portal.nextTab", "portal.prevTab", "portal.newTab", "portal.closeAllTabs", "portal.activateTab", "portal.openLaunchpad", "portal.openUrl", "portal.goBack", "portal.goForward", "portal.reload", "portal.copyUrl", "portal.openExternal", "portal.duplicateTab", "portal.reloadTab", "portal.copyTabUrl", "portal.openTabExternal", "portal.closeOthers", "portal.closeToRight", "portal.resetWidth", "portal.width.set", "portal.setDefaultNewTab", "portal.links.add", "portal.links.remove", "portal.links.update", "portal.links.toggle", "portal.links.reorder", "portal.tabs.reorder", "portal.listTabs", "portal.toggleDevDashboard", "help.gettingStarted.show", "help.tour.show", "help.displayImage", "help.openCommandsFolder", "help.newSessionWithAgent", "help.resumePastSession", "assistant.list", "assistant.start", "agent.readQuota", "host.list", "host.call", "ui.sidebar.resetWidth", "devServer.start", "devPreview.stop", "devPreview.toggleTool", "devPreview.reloadPreview", "devPreview.restart", "devPreview.restartAndClearCache", "devPreview.reinstallAndRestart", "devPreview.promoteToPortal", "env.global.get", "env.global.set", "env.project.get", "env.project.set", "fleet.accept", "fleet.reject", "fleet.interrupt", "fleet.restart", "fleet.kill", "fleet.trash", "fleet.armAll", "fleet.armFocused", "fleet.scope.enter", "fleet.scope.exit", "fleet.armMatchingFilter", "fleet.retryFailures", "fleet.saveNamedFleet", "fleet.recallNamedFleet", "fleet.deleteNamedFleet", "fleet.getRunStatus"];
 type BuiltInRuntimeActionId = (typeof BUILT_IN_ACTION_IDS)[number];
 
 type ActionKind = "command" | "query";
@@ -1784,6 +1872,25 @@ interface AgentDetectionConfig {
         waiting: string[];
     };
 }
+/**
+ * The plain-data form of {@link AgentResume} a plugin manifest declares (#13687).
+ * A `session-id` template carries the literal `{sessionId}` placeholder in one
+ * of its args. Kept as data on {@link AgentConfig.resumeTemplate} because the
+ * plugin agent snapshot is structured-cloned into the renderer, pty-host and
+ * analysis worker, and a function would not survive the copy;
+ * {@link getEffectiveRegistry} expands it into `resume` in each process.
+ */
+type AgentResumeTemplate = {
+    kind: "session-id";
+    args: string[];
+    sessionIdPattern?: string;
+    quitCommand?: string;
+    resumeLatestArgs?: string[];
+} | {
+    kind: "project-scoped";
+    args: string[];
+    quitCommand?: string;
+};
 
 /**
  * One `contributes.fileEditors` entry (#12323). Declares that the plugin's
@@ -1965,6 +2072,15 @@ type PluginPanelBadge = {
     color?: PluginPanelBadgeColor;
     tooltip?: string;
 };
+/**
+ * A short status a plugin shows on one worktree's card via
+ * {@link PluginHostApi.setWorktreeCardStatus} (#13704): a one-line `label`
+ * drawn as quiet metadata, and an optional `tooltip` with the detail.
+ */
+interface PluginWorktreeCardStatus {
+    label: string;
+    tooltip?: string;
+}
 /** Value a plugin publishes to `when` clauses via {@link PluginHostApi.setContext}. */
 type PluginContextValue = boolean | string;
 type MenuItemLocation = "terminal" | "file" | "view" | "help";
@@ -2774,7 +2890,8 @@ interface PluginManifestScopes {
  *
  * Plugin agents launch as named, untracked terminals: the schema surfaces
  * `id`, `name`, `command`, `args`, `color`, `iconId`,
- * `supportsContextInjection`, and an optional `detection` block. The
+ * `supportsContextInjection`, an optional `resume` block (#13687), and an
+ * optional `detection` block. The
  * `detection` field (#10587) lets a contributed agent describe its
  * working/waiting/completed output patterns so it participates in the
  * agent-state UI like a built-in — output-volume state already works from the
@@ -2797,6 +2914,12 @@ interface PluginAgentContribution {
      * boundary (Daintree never modifies the agent's own config).
      */
     detection?: AgentDetectionConfig;
+    /**
+     * Optional session resume (#13687): `session-id` with a `{sessionId}` args
+     * template, or `project-scoped` static args. Plain data, expanded where a
+     * resume command is built. Plugin agents never claim a `continuity` tier.
+     */
+    resume?: AgentResumeTemplate;
 }
 /**
  * A plugin-contributed terminal process detection (#11613). Maps one command
@@ -5179,8 +5302,12 @@ interface PluginActivationApi {
      */
     broadcastToRenderer(channel: string, payload: unknown): Promise<void>;
     /**
-     * Bind a runtime {@link ForgeProviderImpl} to the descriptor declared in
-     * `contributes.forgeProviders`. The descriptor's `id` is namespaced to the
+     * Bind a runtime forge provider implementation to the descriptor declared in
+     * `contributes.forgeProviders`. A provider serving both roles (the default)
+     * passes a full `ForgeProviderImpl`; one whose manifest declares
+     * `roles: ["issues"]` passes a `ForgeIssueProviderImpl`, which must include
+     * `resolveIssueRepo`. An implementation missing a member its declared roles
+     * require is rejected. The descriptor's `id` is namespaced to the
      * plugin at runtime as `{pluginId}.{descriptor.id}`. Returns a disposer that
      * unbinds the single implementation; all bindings are automatically removed
      * when the plugin is unloaded. Must be called during `activate()` — the
@@ -5196,7 +5323,7 @@ interface PluginActivationApi {
      * @throws {Error} If called after activation resolves or times out — the host
      *   is revoked and registration is rejected.
      */
-    registerForgeProvider(descriptor: ForgeProviderDescriptor, impl: ForgeProviderImpl): Promise<() => void>;
+    registerForgeProvider(descriptor: ForgeProviderDescriptor, impl: AnyForgeProviderImpl): Promise<() => void>;
     /**
      * Bind a runtime {@link FileDecorationProviderImpl} to a descriptor declared
      * in `contributes.fileDecorationProviders`. The descriptor's `id` is
@@ -5773,6 +5900,28 @@ interface PluginHostApi extends PluginActivationApi {
      * unloaded.
      */
     setContext(key: string, value: PluginContextValue | null): Promise<void>;
+    /**
+     * Show (or clear) this plugin's status on one worktree's card — a short
+     * one-line `label` with an optional `tooltip` for the detail. Pass `null` to
+     * clear it. A plugin holds one status per worktree, so a second call
+     * replaces the first; every plugin that marks a card gets its own chip,
+     * named after the plugin, so several plugins never hide each other.
+     *
+     * `worktreeId` is a worktree this host can see right now: the `id` (or
+     * `worktreeId`) of an entry in {@link getWorktreesResult}. A project plugin
+     * only ever reaches its own project's worktrees. The call rejects when the
+     * id is not one of them, when the host has no worktree answer yet, or when
+     * the label is empty, multi-line or longer than
+     * {@link PLUGIN_WORKTREE_CARD_STATUS_LABEL_MAX} characters, or the tooltip
+     * longer than {@link PLUGIN_WORKTREE_CARD_STATUS_TOOLTIP_MAX}.
+     *
+     * Statuses are not persisted. They are cleared when the worktree is
+     * removed, when its project closes, and when the plugin unloads or its
+     * worker is replaced, so republish them after a restart. Like
+     * {@link setPanelBadge} this is NOT revoke-guarded and becomes a silent
+     * no-op once the plugin is unloaded.
+     */
+    setWorktreeCardStatus(worktreeId: string, status: PluginWorktreeCardStatus | null): Promise<void>;
     /**
      * Publish the contextual actions the ⋯ and right-click menus of one of this
      * plugin's own panels offer right now — the backend-side twin of the view's
@@ -6390,4 +6539,4 @@ declare function syncedCollectionSnapshotChannel(channel: string): string;
  */
 declare function createSyncedCollection<T>(host: SyncedCollectionHost, channel: string, options: SyncedCollectionOptions<T>): Promise<SyncedCollection<T>>;
 
-export { AGENT_CONTEXT_DRAG_MIME, AGENT_CONTEXT_MAX_SOURCE_LABEL_LENGTH, AGENT_CONTEXT_MAX_TEXT_LENGTH, AGENT_CONTEXT_MAX_TITLE_LENGTH, type ActionDanger, type ActionDispatchError, type ActionDispatchResult, type ActionDispatchSuccess, type ActionError, type ActionErrorCode, type ActionExample, type ActionHandler, type ActionId, type ActionKind, type AgentContextDataTransfer, type AgentContextDragPayload, type AgentState, type AuthValidation, type BuiltInActionId, type BuiltInPluginCapability, type CIStatus, type CheckRun, type CheckRunConclusion, type CheckRunStatus, type ChecksCapability, type ContextMenuContribution, type ContextMenuLocation, type CreateIssueInput, type CredentialImportCandidate, type CredentialImportCapability, type CredentialImportExpected, type CredentialImportFailureReason, type CredentialImportPreview, type CredentialImportUnavailable, type Credentials, type FetchOptions, type FileDecoration, type FileDecorationContribution, type FileDecorationProviderDescriptor, type FileDecorationProviderImpl, type FileEditorContribution, type ForgeLabel, type ForgeProviderContribution, type ForgeProviderDescriptor, type ForgeProviderImpl, type ForgeProviderKind, type ForgeUser, type Issue, type KeybindingContribution, type ListOptions, type McpServerContribution, type MenuItemContribution, type MenuItemLocation, type NormalizedIssueState, type NormalizedPRState, PLUGIN_PROCESS_STREAM_CHANNEL, PLUGIN_STYLE_ROOT_ATTRIBUTE, type PR, type Page, type PanelContribution, type PanelMenuItemContribution, type PanelReloadResult, type PanelViewProps, type PluginActionContribution, type PluginActionManifestEntry, type PluginActivate, type PluginActivationApi, type PluginAgentMcpContribution, type PluginAgentPane, type PluginAgentRun, type PluginAgentSnapshot, type PluginAgentsApi, type PluginAllAgentsSnapshot, type PluginAuthor, type PluginCanDispatchResult, type PluginCapability, type PluginChannelSchema, type PluginClipboardApi, type PluginConfirmOptions, type PluginContextValue, type PluginDatabase, type PluginDatabaseApi, type PluginDatabaseBackupResult, type PluginDatabaseChangeEvent, type PluginDatabaseColumn, type PluginDatabaseContribution, type PluginDatabaseLocation, type PluginDatabaseLocationKind, type PluginDatabaseOpenOptions, type PluginDatabaseParams, type PluginDatabaseQueryContribution, type PluginDatabaseQueryParam, type PluginDatabaseQueryParamFormat, type PluginDatabaseQueryParamType, type PluginDatabaseRunResult, type PluginDatabaseStatements, type PluginDispatchOptions, type PluginDocumentsApi, type PluginDuplexProcessHandle, type PluginDuplexProcessSpawnOptions, type PluginFocusedPanel, type PluginFocusedPanelKind, type PluginFsApi, type PluginFsDirEntry, type PluginFsReadFilesEncoding, type PluginFsReadFilesEntry, type PluginFsReadFilesErrorCode, type PluginFsReadFilesOptions, type PluginFsReadWithRevisionResult, type PluginFsScope, type PluginFsStat, type PluginFsWalkEntry, type PluginFsWalkOptions, type PluginFsWalkResult, type PluginFsWatchOptions, type PluginGitApi, type PluginGitCommitOptions, type PluginGitCommitResult, type PluginGitStatus, type PluginGitStatusFile, type PluginHandlerOptions, type PluginHostActionsApi, type PluginHostApi, type PluginHostCallOptions, type PluginHostSubscriptionOptions, type PluginIdentity, type PluginInputBoxOptions, type PluginInvokeOrigin, type PluginIpcContext, type PluginIpcHandler, type PluginLocalSocketScope, type PluginLogger, type PluginManifest, type PluginManifestScopes, type PluginMcpApi, type PluginMcpCaller, type PluginMcpJsonSchema, type PluginMcpToolAnnotations, type PluginMcpToolDefinition, type PluginNetworkScope, type PluginNotifyAction, type PluginNotifyOptions, type PluginNotifyResult, type PluginPanelBadge, type PluginPanelBadgeColor, type PluginPanelLifecycleEvent, type PluginPanelLifecyclePhase, type PluginPanelToolbarItemState, type PluginPdfMargins, type PluginPdfPageSize, type PluginProcessApi, type PluginProcessDataChunk, type PluginProcessHandle, type PluginProcessMode, type PluginProcessSpawnOptions, type PluginProcessStreamEvent, type PluginPromptCallOptions, type PluginPtyProcessHandle, type PluginPtyProcessSpawnOptions, type PluginQuickPickItem, type PluginQuickPickOptions, type PluginRenderPdfOptions, type PluginRenderPdfResult, type PluginSendToAgentOptions, type PluginSendToAgentRefusalReason, type PluginSendToAgentResult, type PluginSettingsScope, type PluginStorageScope, type PluginSystemApi, type PluginSystemWakeEvent, type PluginTerminalReadScreenOptions, type PluginTerminalScreenResult, type PluginTerminalsApi, type PluginToastOptions, type PluginTypedIpcHandler, type PluginWorktreeFileState, type PluginWorktreeLinked, type PluginWorktreeLinkedIssue, type PluginWorktreeLinkedPR, type PluginWorktreeSnapshot, type PluginWorktreeStatus, type PluginWorktreeStatusFile, type PluginWorktreesChange, type PluginWorktreesResult, type PluginWorktreesUnavailableReason, type RateLimitInfo, type RepoMetadata, type RepoRef, type ResourceRef, type SettingDefinition, type SettingFieldType, type SettingsApi, type StorageApi, type SyncedCollection, type SyncedCollectionDelta, type SyncedCollectionHost, type SyncedCollectionOptions, type SyncedCollectionSnapshot, type ToolbarButtonContribution, type ViewContribution, type ViewLocation, type WaitingReason, type WorkerRestartResult, createSyncedCollection, encodeAgentContextDragPayload, localAuthStubs, setAgentContextDragData, syncedCollectionSnapshotChannel };
+export { AGENT_CONTEXT_DRAG_MIME, AGENT_CONTEXT_MAX_SOURCE_LABEL_LENGTH, AGENT_CONTEXT_MAX_TEXT_LENGTH, AGENT_CONTEXT_MAX_TITLE_LENGTH, type ActionDanger, type ActionDispatchError, type ActionDispatchResult, type ActionDispatchSuccess, type ActionError, type ActionErrorCode, type ActionExample, type ActionHandler, type ActionId, type ActionKind, type AgentContextDataTransfer, type AgentContextDragPayload, type AgentState, type AnyForgeProviderImpl, type AuthValidation, type BuiltInActionId, type BuiltInPluginCapability, type CIStatus, type CheckRun, type CheckRunConclusion, type CheckRunStatus, type ChecksCapability, type ContextMenuContribution, type ContextMenuLocation, type CreateIssueInput, type CredentialImportCandidate, type CredentialImportCapability, type CredentialImportExpected, type CredentialImportFailureReason, type CredentialImportPreview, type CredentialImportUnavailable, type Credentials, type FetchOptions, type FileDecoration, type FileDecorationContribution, type FileDecorationProviderDescriptor, type FileDecorationProviderImpl, type FileEditorContribution, type ForgeCodeProviderImpl, type ForgeIssueProviderImpl, type ForgeLabel, type ForgeProviderBaseImpl, type ForgeProviderContribution, type ForgeProviderDescriptor, type ForgeProviderImpl, type ForgeProviderKind, type ForgeProviderRole, type ForgeUser, type Issue, type KeybindingContribution, type ListOptions, type McpServerContribution, type MenuItemContribution, type MenuItemLocation, type NormalizedIssueState, type NormalizedPRState, PLUGIN_PROCESS_STREAM_CHANNEL, PLUGIN_STYLE_ROOT_ATTRIBUTE, type PR, type Page, type PanelContribution, type PanelMenuItemContribution, type PanelReloadResult, type PanelViewProps, type PluginActionContribution, type PluginActionManifestEntry, type PluginActivate, type PluginActivationApi, type PluginAgentMcpContribution, type PluginAgentPane, type PluginAgentRun, type PluginAgentSnapshot, type PluginAgentsApi, type PluginAllAgentsSnapshot, type PluginAuthor, type PluginCanDispatchResult, type PluginCapability, type PluginChannelSchema, type PluginClipboardApi, type PluginConfirmOptions, type PluginContextValue, type PluginDatabase, type PluginDatabaseApi, type PluginDatabaseBackupResult, type PluginDatabaseChangeEvent, type PluginDatabaseColumn, type PluginDatabaseContribution, type PluginDatabaseLocation, type PluginDatabaseLocationKind, type PluginDatabaseOpenOptions, type PluginDatabaseParams, type PluginDatabaseQueryContribution, type PluginDatabaseQueryParam, type PluginDatabaseQueryParamFormat, type PluginDatabaseQueryParamType, type PluginDatabaseRunResult, type PluginDatabaseStatements, type PluginDispatchOptions, type PluginDocumentsApi, type PluginDuplexProcessHandle, type PluginDuplexProcessSpawnOptions, type PluginFocusedPanel, type PluginFocusedPanelKind, type PluginFsApi, type PluginFsDirEntry, type PluginFsReadFilesEncoding, type PluginFsReadFilesEntry, type PluginFsReadFilesErrorCode, type PluginFsReadFilesOptions, type PluginFsReadWithRevisionResult, type PluginFsScope, type PluginFsStat, type PluginFsWalkEntry, type PluginFsWalkOptions, type PluginFsWalkResult, type PluginFsWatchOptions, type PluginGitApi, type PluginGitCommitOptions, type PluginGitCommitResult, type PluginGitStatus, type PluginGitStatusFile, type PluginHandlerOptions, type PluginHostActionsApi, type PluginHostApi, type PluginHostCallOptions, type PluginHostSubscriptionOptions, type PluginIdentity, type PluginInputBoxOptions, type PluginInvokeOrigin, type PluginIpcContext, type PluginIpcHandler, type PluginLocalSocketScope, type PluginLogger, type PluginManifest, type PluginManifestScopes, type PluginMcpApi, type PluginMcpCaller, type PluginMcpJsonSchema, type PluginMcpToolAnnotations, type PluginMcpToolDefinition, type PluginNetworkScope, type PluginNotifyAction, type PluginNotifyOptions, type PluginNotifyResult, type PluginPanelBadge, type PluginPanelBadgeColor, type PluginPanelLifecycleEvent, type PluginPanelLifecyclePhase, type PluginPanelToolbarItemState, type PluginPdfMargins, type PluginPdfPageSize, type PluginProcessApi, type PluginProcessDataChunk, type PluginProcessHandle, type PluginProcessMode, type PluginProcessSpawnOptions, type PluginProcessStreamEvent, type PluginPromptCallOptions, type PluginPtyProcessHandle, type PluginPtyProcessSpawnOptions, type PluginQuickPickItem, type PluginQuickPickOptions, type PluginRenderPdfOptions, type PluginRenderPdfResult, type PluginSendToAgentOptions, type PluginSendToAgentRefusalReason, type PluginSendToAgentResult, type PluginSettingsScope, type PluginStorageScope, type PluginSystemApi, type PluginSystemWakeEvent, type PluginTerminalReadScreenOptions, type PluginTerminalScreenResult, type PluginTerminalsApi, type PluginToastOptions, type PluginTypedIpcHandler, type PluginWorktreeCardStatus, type PluginWorktreeFileState, type PluginWorktreeLinked, type PluginWorktreeLinkedIssue, type PluginWorktreeLinkedPR, type PluginWorktreeSnapshot, type PluginWorktreeStatus, type PluginWorktreeStatusFile, type PluginWorktreesChange, type PluginWorktreesResult, type PluginWorktreesUnavailableReason, type RateLimitInfo, type RepoMetadata, type RepoRef, type ResourceRef, type SettingDefinition, type SettingFieldType, type SettingsApi, type StorageApi, type SyncedCollection, type SyncedCollectionDelta, type SyncedCollectionHost, type SyncedCollectionOptions, type SyncedCollectionSnapshot, type ToolbarButtonContribution, type ViewContribution, type ViewLocation, type WaitingReason, type WorkerRestartResult, createSyncedCollection, encodeAgentContextDragPayload, localAuthStubs, setAgentContextDragData, syncedCollectionSnapshotChannel };

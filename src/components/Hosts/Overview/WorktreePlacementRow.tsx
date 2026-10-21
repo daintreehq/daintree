@@ -18,6 +18,7 @@ import { useHostMetricsStore, type HostMetricsHistory } from "@/store/hostMetric
 import { logWarn } from "@/utils/logger";
 import { hasRemoteHosts, useHostList } from "../hostList";
 import { buildHostMenuRows, clientPlatform, type HostMenuRow } from "../hostModel";
+import { isNewWindowClick } from "../hostSwitching";
 import { startHostMetricsFeed } from "./hostMetricsFeed";
 import { isLive, rankPlacement, type PlacementChoice } from "./overviewModel";
 
@@ -123,7 +124,8 @@ export function WorktreePlacementRow({
 
   // The dialog stays open until the worktree exists on the host: closing
   // first would leave a failed or abandoned handoff with nothing to retry from.
-  const continueOnHost = async () => {
+  // Cmd/Ctrl-click leaves this window on its own host and opens the project in a new one.
+  const continueOnHost = async (newWindow: boolean) => {
     if (!projectId || handoff.status === "pending") return;
     const draft = getDraft();
     if (!draft) return;
@@ -131,7 +133,12 @@ export function WorktreePlacementRow({
     setHandoff({ status: "pending" });
     const result = await actionService.dispatch(
       "project.openOnHost",
-      { hostId: target.hostId, projectId, worktree: toPlacedWorktree(draft, rootPath) },
+      {
+        hostId: target.hostId,
+        projectId,
+        worktree: toPlacedWorktree(draft, rootPath),
+        newWindow,
+      },
       { source: "user" }
     );
     const payload: unknown = result.ok ? result.result : undefined;
@@ -219,7 +226,7 @@ export function WorktreePlacementRow({
           <Button
             variant="outline"
             size="sm"
-            onClick={() => void continueOnHost()}
+            onClick={(event) => void continueOnHost(isNewWindowClick(event))}
             disabled={!projectId || handoff.status === "pending"}
             data-testid="worktree-placement-continue"
           >

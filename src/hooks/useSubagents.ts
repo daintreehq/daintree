@@ -52,6 +52,12 @@ export interface UseSubagentsResult {
    * holds the last list that did answer. Cleared by the next lookup that does.
    */
   refreshError: AgentSubagentUnavailableReason | null;
+  /**
+   * When a lookup last answered with a list. A failed refresh leaves it where
+   * it was, so it says how old the list on screen is, which a child's own
+   * `updatedAt` cannot.
+   */
+  checkedAt: number | null;
 }
 
 /**
@@ -84,6 +90,16 @@ interface CachedLookup {
 }
 
 const lookupCache = new Map<string, CachedLookup>();
+
+/** A cached lookup that failed still holds the older list, so it is no check of it. */
+function fromCache(key: string, cached: CachedLookup) {
+  return {
+    key,
+    result: cached.result,
+    refreshError: cached.refreshError,
+    checkedAt: cached.refreshError ? undefined : cached.at,
+  };
+}
 /**
  * Requests in flight, shared across hook instances. The promise rather than a
  * flag, so an instance that mounts while another's lookup is running — a
@@ -152,9 +168,10 @@ export function useSubagents(
     key: string;
     result: AgentSubagentsResult;
     refreshError?: AgentSubagentUnavailableReason;
+    checkedAt?: number;
   } | null>(() => {
     const cached = lookupCache.get(key);
-    return cached ? { key, result: cached.result, refreshError: cached.refreshError } : null;
+    return cached ? fromCache(key, cached) : null;
   });
   const [isLoading, setIsLoading] = useState(false);
   const mountedRef = useRef(true);
@@ -191,9 +208,14 @@ export function useSubagents(
             current?.key === key &&
             current.result.status === "ok"
           ) {
-            return { key, result: current.result, refreshError: next.reason };
+            return {
+              key,
+              result: current.result,
+              refreshError: next.reason,
+              checkedAt: current.checkedAt,
+            };
           }
-          return { key, result: next };
+          return { key, result: next, checkedAt: Date.now() };
         });
       };
       const follow = (request: Promise<AgentSubagentsResult>) => {
@@ -218,7 +240,7 @@ export function useSubagents(
       if (!force && cached && now - cached.at < automaticFloor(provider)) {
         // Still fresh: adopt it so a remount inside the window shows the same
         // list it had before, without spawning anything.
-        setEntry({ key, result: cached.result, refreshError: cached.refreshError });
+        setEntry(fromCache(key, cached));
         return;
       }
       const adapter = SUBAGENT_PROVIDERS[provider];
@@ -305,6 +327,7 @@ export function useSubagents(
     isLoading,
     refresh,
     refreshError: current?.refreshError ?? null,
+    checkedAt: current?.checkedAt ?? null,
   };
 }
 

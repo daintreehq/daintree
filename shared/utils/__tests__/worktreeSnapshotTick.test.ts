@@ -30,6 +30,7 @@ function makeSnapshot(extra: Partial<WorktreeSnapshot> = {}): WorktreeSnapshot {
     lastGitStatusCheckedAt: 1,
     workingTreeChangedAt: 1,
     workingTreeChangedDirs: ["src"],
+    pathMembershipChangedAt: 1,
     ...extra,
   } as WorktreeSnapshot;
 }
@@ -41,6 +42,7 @@ describe("worktreeSnapshotContentEqual", () => {
       lastGitStatusCheckedAt: 2,
       workingTreeChangedAt: 2,
       workingTreeChangedDirs: null,
+      pathMembershipChangedAt: 2,
     });
     expect(worktreeSnapshotContentEqual(makeSnapshot(), next)).toBe(true);
   });
@@ -114,6 +116,7 @@ describe("worktree ticks", () => {
       lastGitStatusCheckedAt: 8,
       workingTreeChangedAt: 7,
       workingTreeChangedDirs: [],
+      pathMembershipChangedAt: 6,
     });
     expect(applyWorktreeTick(base, structuredClone(toWorktreeTick(next)))).toEqual(next);
   });
@@ -123,10 +126,12 @@ describe("worktree ticks", () => {
     const next = makeSnapshot({
       workingTreeChangedAt: undefined,
       workingTreeChangedDirs: undefined,
+      pathMembershipChangedAt: undefined,
     });
     const rebuilt = applyWorktreeTick(base, toWorktreeTick(next));
     expect(rebuilt.workingTreeChangedAt).toBeUndefined();
     expect(rebuilt.workingTreeChangedDirs).toBeUndefined();
+    expect(rebuilt.pathMembershipChangedAt).toBeUndefined();
   });
 
   it("match only the incarnation they were cut from", () => {

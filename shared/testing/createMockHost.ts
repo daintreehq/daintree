@@ -27,6 +27,7 @@ import { pluginFocusedPanelEquals, toPluginFocusedPanel } from "../utils/pluginF
 import { toRuntimePanelKindId } from "../config/panelKindRegistry.js";
 import { normalizePanelMenuItems } from "../utils/pluginPanelMenuItems.js";
 import { applyPluginContextEntry, validatePluginContextEntry } from "../utils/pluginContextKeys.js";
+import { validatePluginWorktreeCardStatus } from "../utils/pluginWorktreeCardStatus.js";
 import {
   PLUGIN_INVOKE_MAX_RESULT_BYTES,
   PLUGIN_SUBSCRIPTION_DEFAULT_DEBOUNCE_MS,
@@ -44,7 +45,7 @@ import type {
   FileDecorationProviderDescriptor,
   FileDecorationProviderImpl,
   ForgeProviderDescriptor,
-  ForgeProviderImpl,
+  AnyForgeProviderImpl,
 } from "../types/forge.js";
 import type { NotificationType } from "../types/notification.js";
 import type {
@@ -101,6 +102,7 @@ import type {
   PluginGitCommitResult,
   PluginPanelBadge,
   PluginContextValue,
+  PluginWorktreeCardStatus,
   SettingDefinition,
   SettingsApi,
   StorageApi,
@@ -180,7 +182,7 @@ export interface ReadScreenRecord {
 
 export interface RegisteredForgeProviderRecord {
   descriptor: ForgeProviderDescriptor;
-  impl: ForgeProviderImpl;
+  impl: AnyForgeProviderImpl;
 }
 
 export interface RegisteredFileDecorationProviderRecord {
@@ -213,6 +215,15 @@ export interface SetToolbarButtonBadgeRecord {
 export interface SetContextRecord {
   key: string;
   value: PluginContextValue | null;
+}
+
+/**
+ * Captured `host.setWorktreeCardStatus(worktreeId, status)` calls, as the host
+ * stores them (`worktreeId` is the snapshot's `id`). `null` clears.
+ */
+export interface SetWorktreeCardStatusRecord {
+  worktreeId: string;
+  status: PluginWorktreeCardStatus | null;
 }
 
 /** Captured `host.setPanelBadge(panelId, badge)` calls. `null` clears. */
@@ -297,6 +308,10 @@ export interface MockHostState {
    * its `when` clauses would read under `{publisher.name}.{key}`.
    */
   readonly contextKeys: ReadonlyMap<string, PluginContextValue>;
+  /** Accepted `host.setWorktreeCardStatus` calls, in order. */
+  readonly setWorktreeCardStatusCalls: ReadonlyArray<SetWorktreeCardStatusRecord>;
+  /** The card statuses this plugin shows right now, keyed by worktree `id`. */
+  readonly worktreeCardStatuses: ReadonlyMap<string, PluginWorktreeCardStatus>;
   readonly setPanelMenuItemsCalls: ReadonlyArray<SetPanelMenuItemsRecord>;
   /**
    * Panel ids passed to `host.reloadPanel(panelId)`, in order (#12610). Only
@@ -1005,6 +1020,8 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
   const setToolbarButtonBadgeCalls: SetToolbarButtonBadgeRecord[] = [];
   const setContextCalls: SetContextRecord[] = [];
   const contextKeys = new Map<string, PluginContextValue>();
+  const setWorktreeCardStatusCalls: SetWorktreeCardStatusRecord[] = [];
+  const worktreeCardStatuses = new Map<string, PluginWorktreeCardStatus>();
   const setPanelMenuItemsCalls: SetPanelMenuItemsRecord[] = [];
   const reloadPanelCalls: string[] = [];
   const restartWorkerCalls: WorkerRestartResult[] = [];
@@ -2131,6 +2148,31 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
       setContextCalls.push({ key: entry.key, value: entry.value });
       return Promise.resolve();
     },
+    async setWorktreeCardStatus(worktreeId, status) {
+      // The host's own validator and worktree check, against whatever
+      // `getWorktreesResult()` answers right now.
+      const entry = validatePluginWorktreeCardStatus(worktreeId, status);
+      if (!entry.ok) throw new Error(`setWorktreeCardStatus: ${entry.error}`);
+      const result: PluginWorktreesResult = worktreesResult ?? {
+        status: "ok",
+        projectId: "test-project",
+        worktrees,
+      };
+      if (result.status !== "ok") {
+        throw new Error(`setWorktreeCardStatus: worktrees are unavailable (${result.reason})`);
+      }
+      const target = result.worktrees.find(
+        (w) => w.id === entry.worktreeId || w.worktreeId === entry.worktreeId
+      );
+      if (!target) {
+        throw new Error(
+          `setWorktreeCardStatus: "${entry.worktreeId}" is not a worktree this plugin can see`
+        );
+      }
+      if (entry.status === null) worktreeCardStatuses.delete(target.id);
+      else worktreeCardStatuses.set(target.id, entry.status);
+      setWorktreeCardStatusCalls.push({ worktreeId: target.id, status: entry.status });
+    },
     setPanelMenuItems(panelId, items) {
       // Vetted by the host's own normalizer, so a list the real host refuses
       // rejects here too.
@@ -2782,6 +2824,8 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
     setToolbarButtonBadgeCalls,
     setContextCalls,
     contextKeys,
+    setWorktreeCardStatusCalls,
+    worktreeCardStatuses,
     setPanelMenuItemsCalls,
     reloadPanelCalls,
     restartWorkerCalls,

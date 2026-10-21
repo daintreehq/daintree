@@ -1,3 +1,5 @@
+import type { RingRow } from "./auditRingSql.js";
+
 export interface DbWorkerData {
   dbPath: string;
 }
@@ -18,7 +20,10 @@ export type DbWorkerOp =
   // connection) — used to verify a freshly written backup before it replaces
   // the last known-good one. Resolves true only on an exact "ok".
   | { op: "probePath"; dbPath: string }
-  | { op: "ringWriteAll"; ring: string; records: string[]; maxRecords: number }
+  // Atomic full replacement of a ring (first write, recovery, reordering).
+  | { op: "ringWriteAll"; ring: string; rows: RingRow[]; maxRecords: number }
+  // Keyed delta against the ring's last acknowledged contents.
+  | { op: "ringApply"; ring: string; upserts: RingRow[]; deletes: string[] }
   | { op: "close" };
 
 // `fence` is the write-fence epoch (PRAGMA user_version — unused elsewhere in

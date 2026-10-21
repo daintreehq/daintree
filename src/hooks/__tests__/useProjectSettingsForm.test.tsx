@@ -758,6 +758,63 @@ describe("useProjectSettingsForm", () => {
     vi.useRealTimers();
   });
 
+  it("preserves untouched shell argument boundaries and empty arguments on save", async () => {
+    vi.useFakeTimers();
+    const shellArgs = ["-c", "printf hello", "", "two words"];
+    const { result, rerender } = renderHook(
+      ({ isOpen }: { isOpen: boolean; tick: number }) =>
+        useProjectSettingsForm({ projectId: "proj-1", isOpen }),
+      { initialProps: { isOpen: false, tick: 0 } }
+    );
+    rerender({ isOpen: true, tick: 1 });
+    mockSettings.value = { ...baseSettings, terminalSettings: { shellArgs } };
+    rerender({ isOpen: true, tick: 2 });
+    await act(async () => {
+      await vi.runAllTimersAsync();
+    });
+
+    await act(async () => {
+      await result.current.saveNow();
+    });
+
+    expect(mockSaveSettings).toHaveBeenCalled();
+    const lastCall = mockSaveSettings.mock.calls.at(-1)![0];
+    expect(lastCall.terminalSettings.shellArgs).toEqual(shellArgs);
+    vi.useRealTimers();
+  });
+
+  it("parses quoted shell arguments typed into the field", async () => {
+    vi.useFakeTimers();
+    const { result, rerender } = renderHook(
+      ({ isOpen }: { isOpen: boolean; tick: number }) =>
+        useProjectSettingsForm({ projectId: "proj-1", isOpen }),
+      { initialProps: { isOpen: false, tick: 0 } }
+    );
+    rerender({ isOpen: true, tick: 1 });
+    mockSettings.value = baseSettings;
+    rerender({ isOpen: true, tick: 2 });
+    await act(async () => {
+      await vi.runAllTimersAsync();
+    });
+
+    act(() => {
+      result.current.setTerminalShellArgs(`-c "printf hello" '' C:\\tools\\bin`);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(600);
+    });
+
+    expect(mockSaveSettings).toHaveBeenCalled();
+    const lastCall = mockSaveSettings.mock.calls.at(-1)![0];
+    expect(lastCall.terminalSettings.shellArgs).toEqual([
+      "-c",
+      "printf hello",
+      "",
+      "C:\\tools\\bin",
+    ]);
+    vi.useRealTimers();
+  });
+
   it("filters invalid env var keys on save", async () => {
     vi.useFakeTimers();
     const { result, rerender } = renderHook(

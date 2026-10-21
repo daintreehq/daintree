@@ -1149,11 +1149,24 @@ describe("agent dispatch target binding (#11532)", () => {
     options: { focusedId?: string | null; focusedPanel?: Record<string, unknown> } = {}
   ) {
     const focusedId = options.focusedId === undefined ? "focused-panel" : options.focusedId;
+    const panelsById: Record<string, Record<string, unknown>> = {
+      "focused-panel": {
+        id: "focused-panel",
+        location: "grid",
+        ...(options.focusedPanel ?? {}),
+      },
+      "explicit-panel": { id: "explicit-panel", location: "grid" },
+    };
     const store = {
       trashPanel: vi.fn(),
       removePanel: vi.fn(),
       restartTerminal: vi.fn(),
-      backgroundTerminal: vi.fn(),
+      // Commits like the real mover: terminal.background reads the landed
+      // location back and fails a move that left the panel where it was.
+      backgroundTerminal: vi.fn((id: string) => {
+        const panel = panelsById[id];
+        if (panel) panel.location = "background";
+      }),
       backgroundPanelGroup: vi.fn(),
       getPanelGroup: vi.fn(() => undefined),
       updateTitle: vi.fn(),
@@ -1167,14 +1180,7 @@ describe("agent dispatch target binding (#11532)", () => {
       // the first visible panel, so listing the focused one first would let its
       // interactive assertion pass even with the focusedId leg removed.
       panelIds: ["explicit-panel", "focused-panel"],
-      panelsById: {
-        "focused-panel": {
-          id: "focused-panel",
-          location: "grid",
-          ...(options.focusedPanel ?? {}),
-        },
-        "explicit-panel": { id: "explicit-panel", location: "grid" },
-      },
+      panelsById,
       watchedPanels: new Set<string>(),
       ...store,
     }));

@@ -42,6 +42,12 @@ export interface SearchFieldProps extends Omit<
   icon?: React.ReactNode;
   /** Marks the query itself as unusable (an invalid pattern). */
   invalid?: boolean;
+  /**
+   * The surface opens with the keyboard in this field (Canopy's inbox), so its
+   * focus is its everyday look: focus only firms the hairline, rather than
+   * lifting the field above the content it filters.
+   */
+  focusedOnOpen?: boolean;
 }
 
 /**
@@ -72,6 +78,7 @@ export function SearchField({
   trailing,
   icon,
   invalid = false,
+  focusedOnOpen = false,
   className,
   value,
   ...inputProps
@@ -137,6 +144,7 @@ export function SearchField({
       {...fieldProps}
       data-size={size}
       data-invalid={invalid ? "true" : undefined}
+      data-focused-on-open={focusedOnOpen ? "true" : undefined}
       className={cn("search-field", fieldClassName)}
       style={fieldStyle}
       onPointerDown={handlePointerDown}

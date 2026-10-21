@@ -148,13 +148,48 @@ describe("GlobalFileStore adversarial", () => {
     expect(utilsMock.resilientRename).not.toHaveBeenCalled();
   });
 
-  it("quarantine rename failure is soft — getRecipes still returns []", async () => {
-    fsMock.readFile.mockResolvedValue("bad json");
-    utilsMock.resilientRename.mockRejectedValueOnce(new Error("EBUSY"));
+  it.each([
+    ["malformed JSON", "bad json"],
+    ["non-array JSON", JSON.stringify({ notAnArray: true })],
+  ])("quarantine rename failure on %s throws instead of returning []", async (_label, payload) => {
+    fsMock.readFile.mockResolvedValue(payload);
+    utilsMock.resilientRename.mockRejectedValueOnce(
+      Object.assign(new Error("EBUSY"), { code: "EBUSY" })
+    );
 
-    const result = await store.getRecipes();
-    expect(result).toEqual([]);
+    await expect(store.getRecipes()).rejects.toThrow(/could not be moved aside/);
     expect(utilsMock.resilientRename).toHaveBeenCalledWith(RECIPES_FILE, expect.any(String));
+  });
+
+  it("mutators abort without overwriting a file that could not be quarantined", async () => {
+    fsMock.readFile.mockResolvedValue("bad json");
+    utilsMock.resilientRename.mockRejectedValue(
+      Object.assign(new Error("EBUSY"), { code: "EBUSY" })
+    );
+
+    await expect(
+      store.addRecipe({ id: "r1", name: "test", terminals: [], createdAt: 1000 } as never)
+    ).rejects.toThrow(/could not be moved aside/);
+    await expect(store.updateRecipe("r1", { name: "x" })).rejects.toThrow(
+      /could not be moved aside/
+    );
+    await expect(store.deleteRecipe("r1")).rejects.toThrow(/could not be moved aside/);
+    await expect(store.transformRecipes((recipes) => recipes)).rejects.toThrow(
+      /could not be moved aside/
+    );
+    expect(utilsMock.resilientAtomicWriteFile).not.toHaveBeenCalled();
+  });
+
+  it("a successful quarantine still yields [] and lets the next mutation write", async () => {
+    fsMock.readFile
+      .mockResolvedValueOnce("bad json")
+      .mockRejectedValue(Object.assign(new Error("ENOENT"), { code: "ENOENT" }));
+
+    await store.addRecipe({ id: "r1", name: "test", terminals: [], createdAt: 1000 } as never);
+
+    expect(utilsMock.resilientRename).toHaveBeenCalledTimes(1);
+    const write = utilsMock.resilientAtomicWriteFile.mock.calls[0];
+    expect(JSON.parse(write[1] as string).map((r: { id: string }) => r.id)).toEqual(["r1"]);
   });
 
   it("non-ENOENT read errors throw and are NOT quarantined (transient failure != corruption)", async () => {
@@ -308,5 +343,67 @@ describe("GlobalFileStore write serialization", () => {
     const result = await store.getRecipes();
     expect(result.map((r) => r.id).sort()).toEqual(["g1", "g2"]);
     expect(result.find((r) => r.id === "g1")?.name).toBe("g1");
+  });
+});
+
+describe("GlobalFileStore recipe reads that quarantine (#13553)", () => {
+  let store: GlobalFileStore;
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    store = new GlobalFileStore(CONFIG_DIR);
+    fsMock.mkdir.mockResolvedValue(undefined);
+  });
+
+  const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+  it("a paused quarantining read cannot move aside a recipe saved behind it", async () => {
+    const box = installDiskModel();
+    box.content = "{ not json";
+    const quarantined: string[] = [];
+    const releases: Array<() => void> = [];
+    // Each rename waits on its own gate, then moves whatever is live at the path.
+    utilsMock.resilientRename.mockImplementation(async () => {
+      await new Promise<void>((resolve) => releases.push(resolve));
+      if (box.content === null) {
+        throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+      }
+      quarantined.push(box.content);
+      box.content = null;
+    });
+
+    const first = store.getRecipes();
+    await flush();
+    expect(releases).toHaveLength(1);
+
+    const add = store.addRecipe(recipe("kept"));
+    const second = store.getRecipes();
+    await flush();
+    expect(releases).toHaveLength(1);
+
+    releases[0]();
+    await expect(first).resolves.toEqual([]);
+    await add;
+    expect((await second).map((r) => r.id)).toEqual(["kept"]);
+
+    expect(quarantined).toEqual(["{ not json"]);
+    expect((JSON.parse(box.content as string) as TerminalRecipe[]).map((r) => r.id)).toEqual([
+      "kept",
+    ]);
+  });
+
+  it("every mutator over a damaged file completes instead of waiting on itself", async () => {
+    const box = installDiskModel();
+    box.content = "{ not json";
+    utilsMock.resilientRename.mockImplementation(async () => {
+      box.content = null;
+    });
+
+    await store.addRecipe(recipe("a"));
+    await store.updateRecipe("a", { name: "renamed" });
+    await store.transformRecipes((recipes) => [...recipes, recipe("b")]);
+    await store.deleteRecipe("b");
+
+    expect(await store.getRecipes()).toEqual([{ ...recipe("a"), name: "renamed" }]);
   });
 });

@@ -74,7 +74,8 @@ export function toDevServerAddress(
  */
 export function normalizeDevPreviewUrl(
   rawUrl: string,
-  proxyOrigin: string | null | undefined
+  proxyOrigin: string | null | undefined,
+  devServerUrl?: string | null
 ): NormalizeResult {
   // Extended mode (empty allow-list) parses `*.localhost` instead of erroring on it;
   // the allow-list below, not this call, is what authorizes the result.
@@ -94,6 +95,14 @@ export function normalizeDevPreviewUrl(
 
   if (proxy && parsed.origin === proxy.origin) {
     return { url: normalized.url };
+  }
+
+  // The address bar shows routes on the server actually serving them, which for a
+  // resource endpoint (#13688) is not loopback. That one origin is this panel's own
+  // upstream, so a route typed on it is retargeted onto the proxy like loopback is.
+  const upstream = devServerUrl ? parseOrNull(devServerUrl) : null;
+  if (proxy && upstream && parsed.origin === upstream.origin) {
+    return { url: graftRouteOntoOrigin(proxy, parsed) };
   }
 
   return { error: `Only localhost addresses open here, not ${parsed.hostname}` };

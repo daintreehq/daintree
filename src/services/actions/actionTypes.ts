@@ -64,7 +64,7 @@ export interface ActionCallbacks {
   onLaunchAgent: (
     agentId: string,
     options?: {
-      location?: "grid" | "dock" | "overlay";
+      location?: "grid" | "dock" | "overlay" | "background";
       cwd?: string;
       worktreeId?: string;
       prompt?: string;
@@ -87,7 +87,7 @@ export interface ActionCallbacks {
     }
   ) => Promise<{
     terminalId: string;
-    location: "grid" | "dock";
+    location: "grid" | "dock" | "background";
     /** Present only when Daintree opened a setup diagnostic instead of spawning a PTY. */
     spawnStatus?: "missing-cli";
     /**

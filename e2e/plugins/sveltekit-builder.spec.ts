@@ -13,7 +13,7 @@ import { installSiteAgent } from "./helpers/siteAgent";
 
 const PLUGIN_ID = "daintree.sveltekit-builder";
 const TOGGLE_ACTION = `${PLUGIN_ID}.toggle-builder`;
-const TOGGLE_TITLE = "Toggle SvelteKit Tools";
+const TOGGLE_TITLE = "Toggle Element Picker";
 const AGENT_CLASSES = "bg-indigo-600 text-white";
 
 // A cold Vite start compiles SvelteKit and Tailwind before the first byte.
@@ -161,7 +161,7 @@ async function selectInPreview(page: Page, selector: string): Promise<void> {
 function inspector(page: Page) {
   return page
     .locator(SEL.panel.gridPanel)
-    .filter({ has: page.getByRole("toolbar", { name: "SvelteKit Tools" }) });
+    .filter({ has: page.getByRole("toolbar", { name: "Element Picker" }) });
 }
 
 /**
@@ -280,7 +280,7 @@ test.describe.serial("Plugin: SvelteKit Tools", () => {
 
     // Toggling a tool uses none of the plugin's capabilities, so no confirm.
     await expect(window.getByRole("dialog", { name: `Run '${TOGGLE_TITLE}'?` })).toHaveCount(0);
-    const strip = window.getByRole("toolbar", { name: "SvelteKit Tools" });
+    const strip = window.getByRole("toolbar", { name: "Element Picker" });
     await expect(strip).toBeVisible({ timeout: PLUGIN_TIMEOUT });
     await expect(window.locator("webview")).toBeAttached({ timeout: DEV_SERVER_TIMEOUT });
     await expect(strip.getByText("Click an element to ask an agent about it")).toBeVisible({
@@ -290,11 +290,11 @@ test.describe.serial("Plugin: SvelteKit Tools", () => {
 
   test("the dev preview's own toolbar button toggles SvelteKit Tools", async () => {
     const { window } = ctx;
-    const strip = window.getByRole("toolbar", { name: "SvelteKit Tools" });
-    await strip.getByRole("button", { name: "Close SvelteKit Tools" }).click();
+    const strip = window.getByRole("toolbar", { name: "Element Picker" });
+    await strip.getByRole("button", { name: "Close Element Picker" }).click();
     await expect(strip).toHaveCount(0);
 
-    const toggle = window.getByRole("button", { name: "SvelteKit Tools", exact: true });
+    const toggle = window.getByRole("button", { name: "Element Picker", exact: true });
     await expect(toggle).toHaveAttribute("aria-pressed", "false", { timeout: PLUGIN_TIMEOUT });
     await toggle.click();
     await expect(toggle).toHaveAttribute("aria-pressed", "true");
@@ -312,11 +312,11 @@ test.describe.serial("Plugin: SvelteKit Tools", () => {
     const panel = inspector(window);
     await selectInPreview(window, "h1");
 
-    const details = window.getByRole("complementary", { name: "SvelteKit Tools details" });
+    const details = window.getByRole("complementary", { name: "Element Picker details" });
     await expect(details).toBeVisible();
     // With the drawer open the strip names the element and the drawer's
     // identity block owns the source location.
-    await expect(window.getByRole("toolbar", { name: "SvelteKit Tools" })).toContainText("h1");
+    await expect(window.getByRole("toolbar", { name: "Element Picker" })).toContainText("h1");
     await expect(details.getByRole("region", { name: "Selected element" })).toContainText(
       `${PAGE_FILE}:2`
     );
@@ -327,9 +327,9 @@ test.describe.serial("Plugin: SvelteKit Tools", () => {
 
   test("Option+Up selects the component that drew an element", async () => {
     const { window } = ctx;
-    const strip = window.getByRole("toolbar", { name: "SvelteKit Tools" });
+    const strip = window.getByRole("toolbar", { name: "Element Picker" });
     const identity = window
-      .getByRole("complementary", { name: "SvelteKit Tools details" })
+      .getByRole("complementary", { name: "Element Picker details" })
       .getByRole("region", { name: "Selected element" });
     await clickInPreview(ctx, "article h2");
     await expect(identity).toContainText(`${CARD_FILE}:6`, { timeout: PLUGIN_TIMEOUT });
@@ -339,7 +339,7 @@ test.describe.serial("Plugin: SvelteKit Tools", () => {
     await expect(strip.getByText("Component", { exact: true })).toBeVisible();
     // The request's scope follows the pick: the composer's About control.
     const scope = window
-      .getByRole("complementary", { name: "SvelteKit Tools details" })
+      .getByRole("complementary", { name: "Element Picker details" })
       .getByRole("radio", { name: "FeatureCard", exact: true });
     await expect(scope).toHaveAttribute("aria-checked", "true");
     await window.screenshot({ path: test.info().outputPath("component-selected.png") });
@@ -352,7 +352,7 @@ test.describe.serial("Plugin: SvelteKit Tools", () => {
   test("a new Claude session restyles the selected component on the live page", async () => {
     const { window, app } = ctx;
     const panel = inspector(window);
-    const strip = window.getByRole("toolbar", { name: "SvelteKit Tools" });
+    const strip = window.getByRole("toolbar", { name: "Element Picker" });
     // Every card's computed background, or null when the page isn't there to ask.
     const cardBackgrounds = () =>
       inPreview<string[]>(
@@ -366,7 +366,7 @@ test.describe.serial("Plugin: SvelteKit Tools", () => {
     // the page has settled is dropped with the node it named, so pick until it
     // sticks.
     const identity = window
-      .getByRole("complementary", { name: "SvelteKit Tools details" })
+      .getByRole("complementary", { name: "Element Picker details" })
       .getByRole("region", { name: "Selected element" });
     await expect(async () => {
       await clickInPreview(ctx, "article h2");
@@ -450,7 +450,7 @@ test.describe.serial("Plugin: SvelteKit Tools", () => {
   test("the selection survives the agent's edit, ready for the next request", async () => {
     const { window } = ctx;
     const panel = inspector(window);
-    const strip = window.getByRole("toolbar", { name: "SvelteKit Tools" });
+    const strip = window.getByRole("toolbar", { name: "Element Picker" });
     // The edit replaced every node the selection named and changed the bytes it
     // was proved against. The builder asks the page for it again by itself, so
     // a follow-up is sendable without another click: Send arms only for a
@@ -526,7 +526,7 @@ test.describe.serial("Plugin: SvelteKit Tools", () => {
 
   test("the label follows the pointer, and Deselect clears the selection", async () => {
     const { window, app } = ctx;
-    const strip = window.getByRole("toolbar", { name: "SvelteKit Tools" });
+    const strip = window.getByRole("toolbar", { name: "Element Picker" });
     await selectInPreview(window, "h1");
     // What the page script has drawn, read through its own handle: how many
     // labels and selection outlines, and whether a label lies over the heading.
@@ -563,7 +563,7 @@ test.describe.serial("Plugin: SvelteKit Tools", () => {
     await expect(strip.getByText("Click an element to ask an agent about it")).toBeVisible();
     await expect(
       window
-        .getByRole("complementary", { name: "SvelteKit Tools details" })
+        .getByRole("complementary", { name: "Element Picker details" })
         .getByRole("region", { name: "Selected element" })
     ).toHaveCount(0);
     // Deselecting takes the outline too, which was all that was left.

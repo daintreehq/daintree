@@ -3,10 +3,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { UPLOAD_REFUSE_BYTES } from "../../../shared/types/remoteHosts.js";
 import { AppError } from "../../utils/errorTypes.js";
-import { BULK_CHUNK_BYTES } from "../link/frames.js";
 import type { TransferBeginMessage } from "../link/messages.js";
 import type { LinkSession } from "../link/session.js";
 import type { TransferSink } from "../link/transfer.js";
+import { copyInto, NEW_FILE_FLAGS } from "./exclusiveCopy.js";
 import { componentsBelow, openDirectoryBeneath, type HeldDirectory } from "./hostContainment.js";
 import type { HostFileEndpoint } from "./HostFileService.js";
 import { HostInbox, sanitizeInboxName } from "./hostInbox.js";
@@ -87,6 +87,8 @@ interface OperationRecord {
   /** The prepare token while `prepared`, and the link it was issued on. */
   pendingToken: string | null;
   pendingIn: SessionUploads | null;
+  /** The link whose upload slot this prepare holds until it is ready or forgotten. */
+  reservedIn: SessionUploads | null;
   hostPath: string | null;
   bytes: number;
   expiresAt: number;
@@ -133,6 +135,8 @@ interface SessionUploads {
   session: LinkSession;
   endpoints: Map<string, HostFileEndpoint>;
   pending: Map<string, PendingUpload>;
+  /** Prepares still checking their destination: they count toward the limit too. */
+  preparing: Set<OperationRecord>;
   unregister: Array<() => void>;
 }
 
@@ -167,33 +171,6 @@ function notInProject(): AppError {
   });
 }
 
-async function copyInto(
-  source: Awaited<ReturnType<typeof fs.open>>,
-  target: Awaited<ReturnType<typeof fs.open>>
-): Promise<number> {
-  const buf = Buffer.allocUnsafe(BULK_CHUNK_BYTES);
-  let position = 0;
-  for (;;) {
-    const { bytesRead } = await source.read(buf, 0, buf.byteLength, position);
-    if (bytesRead === 0) break;
-    for (let offset = 0; offset < bytesRead;) {
-      const { bytesWritten } = await target.write(
-        buf,
-        offset,
-        bytesRead - offset,
-        position + offset
-      );
-      if (bytesWritten <= 0) throw new Error("The file could not be written");
-      offset += bytesWritten;
-    }
-    position += bytesRead;
-  }
-  await target.sync();
-  return position;
-}
-
-const NEW_FILE_FLAGS =
-  fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW;
 /** Files added to a project are ordinary repository files, not private temp data. */
 const PROJECT_FILE_MODE = 0o644;
 
@@ -284,7 +261,7 @@ export class HostUploadService {
     for (const subscription of this.subscriptions.values()) subscription.dispose();
     this.subscriptions.clear();
     this.replaceGrants.clear();
-    for (const record of this.operations.values()) record.settle();
+    for (const [key, record] of this.operations) this.forgetOperation(key, record);
     this.operations.clear();
   }
 
@@ -295,6 +272,7 @@ export class HostUploadService {
       session,
       endpoints: new Map(),
       pending: new Map(),
+      preparing: new Set(),
       unregister: [],
     };
     created.unregister.push(
@@ -408,6 +386,8 @@ export class HostUploadService {
 
   private forgetOperation(key: string, record: OperationRecord): void {
     if (this.operations.get(key) === record) this.operations.delete(key);
+    record.reservedIn?.preparing.delete(record);
+    record.reservedIn = null;
     record.settle();
   }
 
@@ -531,6 +511,7 @@ export class HostUploadService {
       state: "preparing",
       pendingToken: null,
       pendingIn: null,
+      reservedIn: null,
       hostPath: null,
       bytes: 0,
       // A prepare stuck on the filesystem must not hold the id forever.
@@ -562,11 +543,16 @@ export class HostUploadService {
       return { status: "refused", reason: "too-large" };
     }
     this.expirePending(uploads);
+    // Reserved in the same turn as the check, before any await: concurrent
+    // prepares can't all pass it while their filesystem checks run.
     if (
-      uploads.pending.size >= (this.options.maxPendingPerSession ?? DEFAULT_MAX_PENDING_PER_SESSION)
+      uploads.pending.size + uploads.preparing.size >=
+      (this.options.maxPendingPerSession ?? DEFAULT_MAX_PENDING_PER_SESSION)
     ) {
       return { status: "refused", reason: "busy" };
     }
+    uploads.preparing.add(record);
+    record.reservedIn = uploads;
 
     let destination: PreparedDestination;
     if (payload.destination.kind === "inbox") {
@@ -662,6 +648,8 @@ export class HostUploadService {
     if (this.operations.get(opKey) !== record) return { status: "refused", reason: "busy" };
     this.admit(uploads, payload.endpointId);
     const token = crypto.randomBytes(16).toString("hex");
+    uploads.preparing.delete(record);
+    record.reservedIn = null;
     record.state = "prepared";
     record.expiresAt = Date.now() + this.abandonAfterMs();
     record.pendingToken = token;

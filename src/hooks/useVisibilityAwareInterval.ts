@@ -24,6 +24,7 @@ export function useVisibilityAwareInterval(
     if (!enabled) return;
 
     let id: ReturnType<typeof setInterval> | null = null;
+    let disposed = false;
     const tick = () => savedCallback.current();
 
     const start = () => {
@@ -38,6 +39,9 @@ export function useVisibilityAwareInterval(
     const unsubscribe = subscribeProjectViewObservability((observable) => {
       if (observable) {
         tick();
+        // The catch-up tick runs synchronously and may unmount the owner or
+        // hide the view again; either way the restore no longer holds.
+        if (disposed || !isProjectViewObservable()) return;
         start();
       } else {
         stop();
@@ -46,6 +50,7 @@ export function useVisibilityAwareInterval(
     if (isProjectViewObservable()) start();
 
     return () => {
+      disposed = true;
       stop();
       unsubscribe();
     };

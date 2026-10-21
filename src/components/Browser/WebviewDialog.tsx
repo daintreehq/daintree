@@ -1,9 +1,8 @@
 import { useState, useEffect, useRef, useCallback, useId, type CSSProperties } from "react";
 import { Globe } from "lucide-react";
 import { AccessibilityAnnouncer } from "@/components/Accessibility/AccessibilityAnnouncer";
-import { Button } from "@/components/ui/button";
-import { ScrollShadow } from "@/components/ui/ScrollShadow";
-import { SurfaceHeader } from "@/components/ui/SurfaceHeader";
+import { AppDialog } from "@/components/ui/AppDialog";
+import { SurfaceHeaderTitle } from "@/components/ui/SurfaceHeader";
 import { FIELD_INPUT } from "@/components/Worktree/views/WorktreeFormLayout";
 import { useAnimatedPresence } from "@/hooks/useAnimatedPresence";
 import {
@@ -87,7 +86,6 @@ export function WebviewDialog({ dialog, onRespond }: WebviewDialogProps) {
   });
   const [inputValue, setInputValue] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
-  const okRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const titleId = useId();
   const messageId = useId();
@@ -107,7 +105,7 @@ export function WebviewDialog({ dialog, onRespond }: WebviewDialogProps) {
         inputRef.current?.focus();
         inputRef.current?.select();
       } else {
-        okRef.current?.focus();
+        panelRef.current?.querySelector<HTMLElement>('[data-confirm-role="confirm"]')?.focus();
       }
     });
   }, [dialog]);
@@ -231,45 +229,50 @@ export function WebviewDialog({ dialog, onRespond }: WebviewDialogProps) {
         data-visible={isVisible}
         style={isVisible ? CARD_STYLE : CARD_EXIT_STYLE}
       >
-        {/* The only line on this surface Daintree wrote. Everything below it is the
-            page's. Carries no focusable control on purpose: adding one would change the
-            Tab order and the initial-focus target the dialog's contract depends on. */}
-        <SurfaceHeader className="px-4 py-2.5 gap-2 justify-start">
-          <Globe className="h-3.5 w-3.5 shrink-0 text-text-secondary" aria-hidden="true" />
+        {/* The only line on this surface Daintree wrote, so it carries the dialog's title
+            weight and everything below it reads as the page's. Carries no focusable
+            control on purpose: adding one would change the Tab order and the
+            initial-focus target the dialog's contract depends on. */}
+        <AppDialog.Header className="justify-start">
           {/* Deliberately not `truncate`: `text-overflow: ellipsis` clips from the right,
               the direction `clipOriginTail` exists to avoid. This card is narrower than
               the 64-char JS threshold, so a 40-63 char host would clear the clip and then
               be cut by CSS into `bank.com…` — the endorsement-reading spoof. Wrapping
               keeps the identifying tail visible at any pane width; a character budget
               tuned to one width cannot. */}
-          <p id={titleId} className="text-xs text-text-secondary min-w-0">
-            {view.origin ? (
-              <>
-                Message from{" "}
-                <span className="font-mono text-text-primary break-all">{view.origin}</span>
-              </>
-            ) : (
-              "Message from this page"
-            )}
-          </p>
-        </SurfaceHeader>
+          <SurfaceHeaderTitle
+            id={titleId}
+            className="items-start"
+            icon={
+              <Globe className="mt-1.5 size-4 shrink-0 text-text-secondary" aria-hidden="true" />
+            }
+          >
+            {/* One flex item, so the words and the host wrap as a sentence rather than
+                as separate columns. */}
+            <span className="min-w-0">
+              {view.origin ? (
+                <>
+                  Message from <span className="font-mono break-all">{view.origin}</span>
+                </>
+              ) : (
+                "Message from this page"
+              )}
+            </span>
+          </SurfaceHeaderTitle>
+        </AppDialog.Header>
 
         {/* Scrolls rather than growing: a page picks this text, and an unbounded card in a
             short pane pushes its own action row out of reach. The edge fades matter here
             beyond tidiness — without them a page can put agreeable text in view and leave
-            what it is actually asking for below the fold. */}
-        <ScrollShadow className="flex-1 min-h-0" scrollClassName="px-4 py-3.5">
+            what it is actually asking for below the fold. Keyed on the request: a queued
+            dialog is promoted into this same mounted card, and without the reset it
+            would open at the last one's scroll offset, past its own opening line. */}
+        <AppDialog.Body resetScrollKey={view.dialogId}>
           {/* One stable element child: `useVerticalScrollShadows` observes only
               `firstElementChild`, so letting the prompt field come and go as a sibling
               would leave the observer watching a box whose height never changes. */}
           <div>
-            <p
-              id={messageId}
-              // /80 is the app's weight for third-party prose (see PluginMcpConfirmDialog).
-              // At full strength the page outranked Daintree's own dialog copy, which sits
-              // at /70.
-              className="text-sm text-text-primary whitespace-pre-wrap break-words"
-            >
+            <p id={messageId} className="text-sm text-text-primary whitespace-pre-wrap break-words">
               {view.message}
             </p>
 
@@ -289,28 +292,21 @@ export function WebviewDialog({ dialog, onRespond }: WebviewDialogProps) {
                   onChange={(e) => setInputValue(e.target.value)}
                   onKeyDown={handleInputKeyDown}
                   aria-describedby={messageId}
-                  className={`${FIELD_INPUT} mt-3`}
+                  className={`${FIELD_INPUT} mt-4`}
                 />
               </>
             )}
           </div>
-        </ScrollShadow>
+        </AppDialog.Body>
 
-        <div className="px-4 py-3 border-t border-border-strong bg-surface-panel flex items-center justify-end gap-2 shrink-0">
-          {view.type !== "alert" && (
-            <Button
-              variant="ghost"
-              onClick={handleCancel}
-              className="text-text-secondary hover:text-text-primary"
-              data-confirm-role="cancel"
-            >
-              Cancel
-            </Button>
-          )}
-          <Button ref={okRef} variant="contrast" onClick={handleOk} data-confirm-role="confirm">
-            OK
-          </Button>
-        </div>
+        {/* OK and Cancel, not verbs: the page names no action, and a label Daintree
+            guessed from its text would be Daintree vouching for what the page meant. */}
+        <AppDialog.Footer
+          secondaryAction={
+            view.type === "alert" ? undefined : { label: "Cancel", onClick: handleCancel }
+          }
+          primaryAction={{ label: "OK", onClick: handleOk }}
+        />
 
         {/* Co-located so store-dispatched announcements reach VoiceOver while
             this aria-modal subtree holds focus (Chromium 354736464). */}

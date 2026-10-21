@@ -247,11 +247,13 @@ const scratchSwitch: HybridSplit = async ({ hostId, webContentsId, args, remote 
   const key = toHostScopedKey(hostId, scratch.id);
   const pvm = projectViewManagerOf(webContentsId);
   if (options.focusIntent) pvm?.setPendingFocusIntent(key, options.focusIntent);
-  const shown = await client.switchWindowHost(senderContext(webContentsId), {
-    hostId,
-    projectId: scratch.id,
-    newWindow: false,
-  });
+  // A scratch switch's callers word its failure themselves, as a local one's
+  // do, so main keeps reporting a cancelled one.
+  const shown = await client.switchWindowHost(
+    senderContext(webContentsId),
+    { hostId, projectId: scratch.id, newWindow: false },
+    { requesterReports: false }
+  );
   // Another window had it and came forward, or a newer navigation here won:
   // the asking view still shows what it showed, so it must not adopt the scratch.
   if (shown.outcome !== "switched") return null;

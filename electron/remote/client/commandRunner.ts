@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 
 /**
- * Runs a local program (ssh, scp, tailscale, dns-sd, ditto) with bounded
+ * Runs a local program (ssh, scp, tailscale, netbird, dns-sd, ditto) with bounded
  * output and a deadline. Everything that probes, discovers or installs takes
  * one of these so tests can replay recorded output with no network.
  */

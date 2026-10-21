@@ -144,6 +144,7 @@ function makeManaged(fixture: ManagedFixture): ManagedTerminal {
     searchAddon: {} as ManagedTerminal["searchAddon"],
     fileLinksDisposable: null,
     imageLinksDisposable: null,
+    commandLinksDisposable: null,
     webLinksAddon: null,
     hoveredLink: null,
   } as ManagedTerminal;

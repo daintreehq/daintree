@@ -9,6 +9,7 @@ import {
   DELETED_WORKTREE_AGENT_HOLD_CAP_MS,
   DELETED_WORKTREE_SWEEP_INTERVAL_MS,
   DELETED_WORKTREE_TRANSIENT_HOLD_CAP_MS,
+  DELETED_WORKTREE_UNOBSERVED_SLOWDOWN,
   resetDeletedWorktreeCleanupState,
   sweepDeletedWorktreeCleanup,
 } from "../deletedWorktreeCleanup";
@@ -33,7 +34,7 @@ function makeDeps(
     isViewHidden: () => false,
     // These cases step time coarsely to describe the state machine, so every
     // gap is declared observed — the row was on screen the whole time. The
-    // unobserved-gap credit has its own cases below and in the lifecycle suite.
+    // slowed unobserved rate has its own cases below and in the lifecycle suite.
     maxObservedGapMs: Number.POSITIVE_INFINITY,
     ...overrides,
   };
@@ -44,7 +45,7 @@ function addRow(overrides: Partial<DeletedWorktree> = {}): void {
     id: "wt-1",
     title: "feature/x",
     path: "/repo/x",
-    deletedAt: 0,
+    deletedAt: NOW,
     expiresAt: null,
     holdReason: null,
     pinnedBeforeWorktreeId: null,
@@ -80,6 +81,16 @@ function armAndAdvance(consumedMs: number): number {
 }
 
 const TTL_MS = 60_000;
+
+const OBSERVED = { maxObservedGapMs: DELETED_WORKTREE_SWEEP_INTERVAL_MS * 2 };
+
+/** What an unobserved gap of `gapMs` spends: one interval in full, the rest slowed. */
+function spentAcrossGap(gapMs: number): number {
+  return (
+    DELETED_WORKTREE_SWEEP_INTERVAL_MS +
+    Math.floor((gapMs - DELETED_WORKTREE_SWEEP_INTERVAL_MS) / DELETED_WORKTREE_UNOBSERVED_SLOWDOWN)
+  );
+}
 
 function setPanels(
   entries: Array<{
@@ -633,19 +644,152 @@ describe("sweepDeletedWorktreeCleanup", () => {
     expect(getHoldReason()).toBe("drag");
   });
 
-  it("credits a gap between sweeps back to the deadline instead of spending it", () => {
+  it("spends a gap between sweeps at a fifth of real time", () => {
     // The sweep runs at 1 Hz, so a gap this large means it did not run at all:
     // the view was cached, the window was hidden, or the machine slept. None
-    // of that is time the user could have watched the countdown in.
-    const observed = { maxObservedGapMs: DELETED_WORKTREE_SWEEP_INTERVAL_MS * 2 };
+    // of that is time the user could have watched the countdown in, so it
+    // spends slowly — but it does spend.
+    const gapMs = 4 * 60_000;
     addRow();
-    sweepDeletedWorktreeCleanup(makeDeps({ ...observed }));
-    const at = NOW + 30 * 60_000;
-    sweepDeletedWorktreeCleanup(makeDeps({ ...observed, now: () => at }));
+    sweepDeletedWorktreeCleanup(makeDeps({ ...OBSERVED }));
+    const at = NOW + gapMs;
+    sweepDeletedWorktreeCleanup(makeDeps({ ...OBSERVED, now: () => at }));
 
     expect(bulkTrashByWorktree).not.toHaveBeenCalled();
-    // All but the one interval every sweep always spends.
-    expect(getRemainingAt(at)).toBe(TTL_MS - DELETED_WORKTREE_SWEEP_INTERVAL_MS);
+    // Four minutes away takes under 49s off a 60s countdown, not all of it.
+    expect(getRemainingAt(at)).toBe(TTL_MS - spentAcrossGap(gapMs));
+    expect(getRemainingAt(at)).toBeGreaterThan(0);
+  });
+
+  it("spends observed and unobserved time at their own rates on one row (#13538)", () => {
+    // The issue's own example: 20s on screen leaves 40s, which then takes
+    // about 200s unobserved — 196s, since the return sweep spends its first
+    // interval in full.
+    addRow();
+    sweepDeletedWorktreeCleanup(makeDeps({ ...OBSERVED }));
+    let at = NOW;
+    for (let tick = 0; tick < 20; tick++) {
+      at += DELETED_WORKTREE_SWEEP_INTERVAL_MS;
+      sweepDeletedWorktreeCleanup(makeDeps({ ...OBSERVED, now: () => at }));
+    }
+    expect(getRemainingAt(at)).toBe(40_000);
+
+    // Hidden ticks are refused, so nothing fires behind the window…
+    let hiddenAt = at;
+    for (let tick = 0; tick < 199; tick++) {
+      hiddenAt += DELETED_WORKTREE_SWEEP_INTERVAL_MS;
+      sweepDeletedWorktreeCleanup(
+        makeDeps({ ...OBSERVED, now: () => hiddenAt, isViewHidden: () => true })
+      );
+    }
+    expect(bulkTrashByWorktree).not.toHaveBeenCalled();
+
+    // …and 200s away has run the 40s out, cleaned up on the first sweep back.
+    hiddenAt += DELETED_WORKTREE_SWEEP_INTERVAL_MS;
+    sweepDeletedWorktreeCleanup(makeDeps({ ...OBSERVED, now: () => hiddenAt }));
+    expect(bulkTrashByWorktree).toHaveBeenCalledTimes(1);
+  });
+
+  it("scales the slowed rate with the configured TTL", () => {
+    // 30s becomes 2.5 minutes unobserved, not a fixed allowance. The return
+    // sweep's one full interval brings it in by a few seconds.
+    usePreferencesStore.setState({ deletedWorktreeCleanupSeconds: 30 });
+    addRow();
+    sweepDeletedWorktreeCleanup(makeDeps({ ...OBSERVED }));
+    const short = NOW + 140_000;
+    sweepDeletedWorktreeCleanup(makeDeps({ ...OBSERVED, now: () => short }));
+    expect(bulkTrashByWorktree).not.toHaveBeenCalled();
+    expect(getRemainingAt(short)).toBe(30_000 - spentAcrossGap(140_000));
+
+    resetDeletedWorktreeCleanupState();
+    useWorktreeSelectionStore.getState().reset();
+    addRow();
+    sweepDeletedWorktreeCleanup(makeDeps({ ...OBSERVED }));
+    const full = NOW + 150_000;
+    sweepDeletedWorktreeCleanup(makeDeps({ ...OBSERVED, now: () => full }));
+    expect(bulkTrashByWorktree).toHaveBeenCalledTimes(1);
+  });
+
+  it("charges a row recorded while unobserved for the part of the gap it existed", () => {
+    // Rows are recorded unarmed, so without this a burst deleted on a host
+    // nobody was watching would each start a full window on the user's return.
+    sweepDeletedWorktreeCleanup(makeDeps({ ...OBSERVED }));
+    const recordedAt = NOW + 60_000;
+    addRow({ deletedAt: recordedAt });
+    const gapMs = 2 * 60_000;
+    const at = recordedAt + gapMs;
+    sweepDeletedWorktreeCleanup(makeDeps({ ...OBSERVED, now: () => at }));
+
+    // Billed from `deletedAt`, never from the earlier sweep before it existed.
+    expect(getRemainingAt(at)).toBe(
+      TTL_MS + DELETED_WORKTREE_SWEEP_INTERVAL_MS - spentAcrossGap(gapMs)
+    );
+  });
+
+  it("charges a row recorded before any sweep from its deletedAt", () => {
+    addRow({ deletedAt: NOW });
+    const gapMs = 2 * 60_000;
+    const at = NOW + gapMs;
+    sweepDeletedWorktreeCleanup(makeDeps({ ...OBSERVED, now: () => at }));
+
+    expect(getRemainingAt(at)).toBe(
+      TTL_MS + DELETED_WORKTREE_SWEEP_INTERVAL_MS - spentAcrossGap(gapMs)
+    );
+  });
+
+  it("arms a row recorded between two ordinary ticks at a full window", () => {
+    sweepDeletedWorktreeCleanup(makeDeps({ ...OBSERVED }));
+    addRow({ deletedAt: NOW + 400 });
+    const at = NOW + DELETED_WORKTREE_SWEEP_INTERVAL_MS;
+    sweepDeletedWorktreeCleanup(makeDeps({ ...OBSERVED, now: () => at }));
+
+    expect(getRemainingAt(at)).toBe(TTL_MS);
+  });
+
+  it("holds a fresh aged row whose agent is still working instead of trashing it", () => {
+    // Arrived while unobserved and long since out of slowed window, but the
+    // agent is still working: the hold wins, pinned at nothing left rather
+    // than a fresh window, and the row goes once the agent stops.
+    setPanels([{ id: "t1", worktreeId: "wt-1", agentState: "working" }]);
+    usePanelStore.setState({ bulkTrashByWorktree });
+    sweepDeletedWorktreeCleanup(makeDeps({ ...OBSERVED }));
+    addRow({ deletedAt: NOW });
+    const at = NOW + 10 * 60_000;
+    sweepDeletedWorktreeCleanup(makeDeps({ ...OBSERVED, now: () => at }));
+
+    expect(getHoldReason()).toBe("agent");
+    expect(getRemainingAt(at)).toBe(0);
+    expect(bulkTrashByWorktree).not.toHaveBeenCalled();
+
+    setPanels([{ id: "t1", worktreeId: "wt-1", agentState: "idle" }]);
+    usePanelStore.setState({ bulkTrashByWorktree });
+    const after = at + DELETED_WORKTREE_SWEEP_INTERVAL_MS;
+    sweepDeletedWorktreeCleanup(makeDeps({ ...OBSERVED, now: () => after }));
+    expect(bulkTrashByWorktree).toHaveBeenCalledTimes(1);
+  });
+
+  it("cleans up a burst that ran out while unobserved with one inbox entry", () => {
+    setPanels([
+      { id: "t1", worktreeId: "wt-1" },
+      { id: "t2", worktreeId: "wt-2" },
+      { id: "t3", worktreeId: "wt-3" },
+    ]);
+    usePanelStore.setState({ bulkTrashByWorktree });
+    sweepDeletedWorktreeCleanup(makeDeps({ ...OBSERVED }));
+    addRow({ deletedAt: NOW + 1_000 });
+    addRow({ id: "wt-2", title: "feature/y", path: "/repo/y", deletedAt: NOW + 2_000 });
+    addRow({ id: "wt-3", title: "feature/z", path: "/repo/z", deletedAt: NOW + 3_000 });
+
+    // Well past five minutes away: no row gets a fresh window on return.
+    const at = NOW + 10 * 60_000;
+    sweepDeletedWorktreeCleanup(makeDeps({ ...OBSERVED, now: () => at }));
+
+    expect(bulkTrashByWorktree).toHaveBeenCalledTimes(3);
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(notify).mock.calls[0]?.[0]).toMatchObject({
+      title: "Deleted worktrees cleaned up",
+      priority: "low",
+    });
   });
 
   it("neither spends nor trashes while the window is hidden", () => {
@@ -663,24 +807,23 @@ describe("sweepDeletedWorktreeCleanup", () => {
     expect(useWorktreeSelectionStore.getState().deletedWorktrees).toBe(before);
   });
 
-  it("credits the hidden stretch once the window comes back", () => {
-    const observed = { maxObservedGapMs: DELETED_WORKTREE_SWEEP_INTERVAL_MS * 2 };
+  it("spends the hidden stretch at the slowed rate once the window comes back", () => {
     addRow();
-    sweepDeletedWorktreeCleanup(makeDeps({ ...observed }));
+    sweepDeletedWorktreeCleanup(makeDeps({ ...OBSERVED }));
 
     // Ticks keep arriving at 1 Hz while hidden and are all refused, so the
-    // whole stretch stays in the gap for the first visible sweep to credit.
+    // whole stretch stays in the gap for the first visible sweep to charge.
     let at = NOW;
     for (let tick = 0; tick < 120; tick++) {
       at += DELETED_WORKTREE_SWEEP_INTERVAL_MS;
       sweepDeletedWorktreeCleanup(
-        makeDeps({ ...observed, now: () => at, isViewHidden: () => true })
+        makeDeps({ ...OBSERVED, now: () => at, isViewHidden: () => true })
       );
     }
-    sweepDeletedWorktreeCleanup(makeDeps({ ...observed, now: () => at }));
+    sweepDeletedWorktreeCleanup(makeDeps({ ...OBSERVED, now: () => at }));
 
     expect(bulkTrashByWorktree).not.toHaveBeenCalled();
-    expect(getRemainingAt(at)).toBe(TTL_MS - DELETED_WORKTREE_SWEEP_INTERVAL_MS);
+    expect(getRemainingAt(at)).toBe(TTL_MS - spentAcrossGap(120_000));
   });
 
   it("keeps spending the countdown when every gap sits just over the threshold", () => {
@@ -725,9 +868,13 @@ describe("sweepDeletedWorktreeCleanup", () => {
     sweepDeletedWorktreeCleanup(makeDeps({ ...observed }));
     expect(getHoldReason()).toBe("agent");
 
-    // Cached for longer than the agent cap. If the cap counted that, the row
-    // would wake with its protection already gone and trash a working agent.
-    const at = NOW + DELETED_WORKTREE_AGENT_HOLD_CAP_MS + 60_000;
+    // Cached for longer than the agent cap. If the cap counted that — even at
+    // the deadline's slowed rate — the row would wake with its protection
+    // already gone and trash a working agent the sweep could not see.
+    // Longer than the cap even at the slowed rate, so a cap charged a fifth of
+    // the gap would be caught too.
+    const at =
+      NOW + DELETED_WORKTREE_AGENT_HOLD_CAP_MS * DELETED_WORKTREE_UNOBSERVED_SLOWDOWN + 60_000;
     sweepDeletedWorktreeCleanup(makeDeps({ ...observed, now: () => at }));
 
     expect(getHoldReason()).toBe("agent");

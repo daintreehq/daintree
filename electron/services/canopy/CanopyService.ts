@@ -20,11 +20,11 @@ import {
 import {
   isSecretPrompt,
   prepareScreen,
-  redactSecrets,
   sameScreenTail,
   scrolledSince,
   type PreparedScreen,
 } from "./canopyScreen.js";
+import { redactSecrets } from "../redactSecrets.js";
 import {
   CanopyProviderError,
   combinePriority,
@@ -82,9 +82,11 @@ export const CANOPY_REJUDGE_AFTER_MS = 60_000;
  */
 export const CANOPY_PROGRESS_DESCRIBE_MS = 15_000;
 /**
- * The least time between two reads of a run whose screen keeps changing while
- * Daintree sees it in the same state: what the user sees holds still between
- * reads, and a busy agent's output is not sent on every poll.
+ * The least time between two reads, with a panel showing it, of a run at work
+ * whose screen keeps changing while Daintree sees it in the same state: what
+ * the user sees holds still between reads, and a busy agent's output is not
+ * sent on every poll. With no panel showing it, such a run is not read at all
+ * while its working line shows (see `heldRead`).
  */
 export const CANOPY_REREAD_MS = 10_000;
 /**
@@ -107,10 +109,23 @@ export const CANOPY_STATE_CHANGE_SCAN_MS = 400;
  * A classifier-only read is the service's light request (`/v1/classify`, its
  * own lane on the workers, ~50 ms of work).
  * An observed state change still scans within a second, so this is the net
- * for the waits Daintree's own state misses.
+ * for the waits Daintree's own state misses. It is also each run's own pace:
+ * a scan another run's state change set going sends a run no sooner than this
+ * after its last read, unless Daintree saw that run change state too.
  */
 export const CANOPY_BACKGROUND_POLL_MS = 15_000;
+/**
+ * How long after an agent stops every move of its screen is read: the stop
+ * itself, the recap Claude Code draws a minute later, one dialog answered and
+ * the next drawn. Past it, a stopped agent's redraws — one row changed in
+ * place, a status line's clock or a footer, each flipping Daintree's state for
+ * a moment without the agent saying anything — are not read until it works,
+ * changes state or is answered. Anything more drawn is read as ever.
+ */
+export const CANOPY_SETTLE_MS = 120_000;
 
+/** How much sooner than a whole pace a regular poll may come round to a run, its screens read faster. */
+const BACKGROUND_PACE_SLACK_MS = 1_000;
 /** How many of the latest reads of each kind the status bar's mean time is taken over. */
 const LINK_TIMES_KEPT = 10;
 /** How long a resize of a run not read yet is kept: past its redraw and the blank after it. */
@@ -323,6 +338,18 @@ interface RunEntry {
   retryAt: number;
   /** When the classifier last read this screen (epoch ms), 0 before it has. */
   readAt: number;
+  /** When the last read was sent (epoch ms), 0 before one was: what the watch's pace counts from. */
+  sentAt: number;
+  /** The rows of the screen last sent to be read, for telling a redraw from anything drawn since. */
+  readLines: string[] | null;
+  /**
+   * When Daintree last saw the run's work end — work that held past a flicker
+   * — or, before that, when Canopy first saw the run or began reading again
+   * (epoch ms): what `CANOPY_SETTLE_MS` counts from.
+   */
+  stoppedAt: number;
+  /** The last scan found the run at work, past a flicker: a scan finding it otherwise saw its work end. */
+  seenAtWork: boolean;
   /** What Daintree observed of the run at that read (`observedKey`). */
   readState: string;
   /**
@@ -414,12 +441,13 @@ interface RunEntry {
 /**
  * Keeps one card per agent run, rebuilt only when that run's screen changes.
  *
- * Every changed screen goes to the classifier; only runs that need the user (or
- * that the classifier is unsure about) go on to the describer, which is the
- * expensive call. With a panel open every screen is watched closely and
- * described; with none open, changed screens go to the classifier alone, every
- * `backgroundPollMs` and on observed state changes, so an agent asking
- * something is still noticed.
+ * A changed screen goes to the classifier unless nothing on it can be new — an
+ * agent visibly at work, or one long stopped whose screen only redrew (see
+ * `heldRead`); only runs that need the user (or that the classifier is unsure
+ * about) go on to the describer, which is the expensive call. With a panel
+ * open every screen is watched closely and described; with none open, changed
+ * screens go to the classifier alone, every `backgroundPollMs` and on observed
+ * state changes, so an agent asking something is still noticed.
  */
 export class CanopyService {
   private readonly entries = new Map<string, RunEntry>();
@@ -577,6 +605,7 @@ export class CanopyService {
         entry.readKey = null;
         entry.contentHash = null;
         entry.print = null;
+        entry.readLines = null;
         entry.glance = null;
         entry.note = null;
         entry.taskRequest = null;
@@ -608,6 +637,13 @@ export class CanopyService {
       this.earlyResizes.clear();
     }
     this.scheduleBroadcast();
+    if (this.isRunning && !wasRunning) {
+      // Reading again from nothing: every run settles anew from now.
+      for (const entry of this.entries.values()) {
+        entry.stoppedAt = this.now();
+        entry.seenAtWork = false;
+      }
+    }
     if (this.watching && !wasRunning) void this.scan();
   }
 
@@ -934,6 +970,9 @@ export class CanopyService {
   noteInput(runId: string, answer: TerminalAnswer): void {
     if (this.disposed) return;
     const entry = this.entries.get(runId);
+    // An answer reopens a stopped run's settling: the next dialog it draws can
+    // follow without Daintree seeing work that held in between.
+    if (entry) entry.stoppedAt = this.now();
     const card = entry?.card;
     // Only a run waiting on the user: a message to a working agent leaves its
     // card as the readers wrote it.
@@ -997,7 +1036,7 @@ export class CanopyService {
     }
     let entry = this.entries.get(runId);
     if (!entry || entry.spawnedAt !== spawnedAt) {
-      entry = newEntry(spawnedAt);
+      entry = newEntry(spawnedAt, this.now());
       this.entries.set(runId, entry);
     }
     entry.disposition = {
@@ -1047,7 +1086,7 @@ export class CanopyService {
     if (!run || (spawnedAt !== undefined && run.spawnedAt !== spawnedAt)) return null;
     let entry = this.entries.get(runId);
     if (!entry || entry.spawnedAt !== run.spawnedAt) {
-      entry = newEntry(run.spawnedAt);
+      entry = newEntry(run.spawnedAt, this.now());
       this.entries.set(runId, entry);
     }
     return entry;
@@ -1241,6 +1280,8 @@ export class CanopyService {
         input: { ...waiting.input, screen: screen.text, lines: screen.lines },
       };
     }
+    // A redraw since is told from this drawing of the screen that was read.
+    if (entry.hash?.startsWith(`${screen.hash}:`)) entry.readLines = screen.lines;
     entry.contentHash = screen.hash;
     entry.print = print;
     entry.redrawn = true;
@@ -1307,6 +1348,10 @@ export class CanopyService {
       if (workEnded) {
         entry.asking = false;
         entry.announced = null;
+      }
+      // A stop after work, or after work this entry was made too late to time.
+      if (workEnded || (!isBusy(run) && startedAt === null && this.wasBusy.get(id) === true)) {
+        entry.stoppedAt = now;
       }
       // Work since the user put the run aside: whatever it stops on next is
       // the agent saying something new. After a reply any start counts — it is
@@ -1496,9 +1541,16 @@ export class CanopyService {
           }
           const existing = this.entries.get(run.runId);
           const entry =
-            existing && existing.spawnedAt === run.spawnedAt ? existing : newEntry(run.spawnedAt);
+            existing && existing.spawnedAt === run.spawnedAt
+              ? existing
+              : newEntry(run.spawnedAt, this.now());
           this.entries.set(run.runId, entry);
           entry.cleared = false;
+          // A stop the fleet's own callbacks can't time — the run was first
+          // seen at work, or no busy change reached them — as the scans saw it.
+          const atWork = isBusy(run) && !flickering(run, this.now());
+          if (entry.seenAtWork && !atWork) entry.stoppedAt = this.now();
+          entry.seenAtWork = atWork;
           if (entry.contentHash !== screen.hash) {
             entry.contentChangedAt = this.now();
             entry.print = reflowPrint(screen.text);
@@ -1550,13 +1602,18 @@ export class CanopyService {
             // Unchanged, but time is part of a working agent's reading: one on
             // the same step for minutes may be stuck rather than busy, so its
             // screen is judged again, as the same prompt. A waiting or idle run
-            // whose screen has not moved has nothing new to say.
+            // whose screen has not moved has nothing new to say. Only for a
+            // panel showing it: stuck pages no one, a still screen is marked
+            // stalled without a reading, and the open reads busy runs afresh.
             if (
               isBusy(run) &&
               !entry.pending &&
               entry.card !== null &&
+              this.active &&
+              this.inScope(run) &&
               this.now() - entry.readAt >= CANOPY_REJUDGE_AFTER_MS
             ) {
+              entry.sentAt = this.now();
               passes.push(this.pass(run, entry, epoch, screen, readMark, true));
             }
             return;
@@ -1568,22 +1625,17 @@ export class CanopyService {
             this.refreshActivity(entry, screen, run);
             return;
           }
-          // A busy run read lately, that Daintree still sees as it did then
-          // and whose screen still shows it at work: its next screen waits for
-          // the floor. An agent that stops — its working line gone, a dialog in
-          // its place — is read at once, before Daintree's own state catches
-          // up, as is an answer setting it working, and everything after
-          // Refresh. A waiting run is read at once whenever its screen moves:
-          // a dialog replaced by another must never wear the last one's command
-          // and choices.
-          if (
-            !force &&
-            isBusy(run) &&
-            showsWork(screen) &&
-            entry.card !== null &&
-            entry.readState === observedKey(run) &&
-            this.now() - entry.readAt < this.rereadMs
-          ) {
+          // A moved screen with nothing in it yet worth a request (see
+          // `heldRead`) is left for a later scan; what the row shows of it at
+          // a glance is current meanwhile. Everything after Refresh is read.
+          const waits = force || entry.card === null ? null : this.heldRead(run, entry, screen);
+          if (waits !== null) {
+            // Words owed on open are written from the read they were owed for
+            // only while it is still the screen shown, a redraw aside.
+            if (waits === "held" && entry.wordsWaiting?.screen.hash !== screen.hash) {
+              entry.wordsWaiting = null;
+            }
+            this.keepWhatShows(entry, screen);
             this.refreshActivity(entry, screen, run);
             return;
           }
@@ -1654,6 +1706,8 @@ export class CanopyService {
           entry.seq++;
           this.supersedeCard(entry);
           if (moved) this.markMoved(entry);
+          entry.sentAt = this.now();
+          entry.readLines = screen.lines;
           passes.push(this.pass(run, entry, epoch, screen, readMark));
         })
       )
@@ -1673,6 +1727,78 @@ export class CanopyService {
     if (epoch === this.epoch && passes.length > 0 && this.cardJobs.size === 0) {
       this.refreshedAt = this.now();
     }
+  }
+
+  /**
+   * Why a run's moved screen waits rather than going to the service now; null
+   * when it goes. A run whose last read failed or was given up (no `hash`), or
+   * that Daintree saw settle into another state — a stop, a start that held, a
+   * new kind of wait — is always read. Otherwise:
+   * - a run at work whose screen shows its working line has nothing a reading
+   *   would add with no panel showing it — a reading of such a screen has
+   *   never said anything but working — and is read at most every `rereadMs`
+   *   with one; once the line goes, a dialog may be in its place, and it is
+   *   read before Daintree's state catches up;
+   * - a run stopped longer than `CANOPY_SETTLE_MS` whose screen only redrew one
+   *   row in place since its last read — a status line's clock, a footer — is
+   *   "redrawn", and not read until it works, changes state, is answered, or
+   *   draws anything more;
+   * - with no panel showing it, no run is read more often than the watch's
+   *   pace, however many other runs' state changes start a scan.
+   */
+  private heldRead(
+    run: FleetRunRow,
+    entry: RunEntry,
+    screen: PreparedScreen
+  ): "redrawn" | "held" | null {
+    if (entry.hash === null) return null;
+    const now = this.now();
+    const atWork = isBusy(run) && !flickering(run, now);
+    if (entry.readState !== observedKey(run) && (atWork || !isBusy(run))) return null;
+    const shown = this.active && this.inScope(run);
+    if (atWork && showsWork(screen)) {
+      return !shown || now - entry.readAt < this.rereadMs ? "held" : null;
+    }
+    if (
+      !atWork &&
+      now - entry.stoppedAt >= CANOPY_SETTLE_MS &&
+      onlyRedrawn(entry.readLines, screen.lines)
+    ) {
+      return "redrawn";
+    }
+    // Timed from when the last read was sent, so a regular poll a whole pace
+    // later, its screens read a little sooner or later, is never the one held.
+    return !shown && now - entry.sentAt < this.backgroundPollMs - BACKGROUND_PACE_SLACK_MS
+      ? "held"
+      : null;
+  }
+
+  /**
+   * A held screen's card offers only the prompt and the choices still drawn on
+   * it: a dialog that moved on must never wear the last one's.
+   */
+  private keepWhatShows(entry: RunEntry, screen: PreparedScreen): void {
+    const card = entry.card;
+    if (card === null || (card.question === null && card.options.length === 0)) return;
+    const question =
+      card.question !== null && onScreen(card.question, screen.text) !== null
+        ? card.question
+        : null;
+    const options = optionsInScreenOrder(card.options, screen.text);
+    if (
+      question === card.question &&
+      options.length === card.options.length &&
+      options.every((option, i) => option === card.options[i])
+    ) {
+      return;
+    }
+    entry.card = {
+      ...card,
+      question,
+      options,
+      secretPrompt: question !== null && card.secretPrompt,
+    };
+    this.scheduleBroadcast();
   }
 
   private isLive(run: FleetRunRow): boolean {
@@ -2349,6 +2475,7 @@ export class CanopyService {
     entry.contentHash = screen.hash;
     entry.contentChangedAt = this.now();
     entry.print = null;
+    entry.readLines = null;
     entry.redrawn = false;
     entry.redrawnFrom = null;
     entry.hash = null;
@@ -2679,7 +2806,7 @@ function sameLineCut(a: string | null, b: string | null): boolean {
   return bare(a).startsWith(bare(b)) || bare(b).startsWith(bare(a));
 }
 
-function newEntry(spawnedAt: number): RunEntry {
+function newEntry(spawnedAt: number, now: number): RunEntry {
   return {
     spawnedAt,
     hash: null,
@@ -2702,6 +2829,10 @@ function newEntry(spawnedAt: number): RunEntry {
     failures: 0,
     retryAt: 0,
     readAt: 0,
+    sentAt: 0,
+    readLines: null,
+    stoppedAt: now,
+    seenAtWork: false,
     readState: "",
     failure: null,
     describedAt: 0,
@@ -2838,12 +2969,49 @@ function stateCaughtUp(card: CanopyCard, run: FleetRunRow): boolean {
   return then !== undefined && observedCaughtUp(card.category, then, run, card.observedAt);
 }
 
-/** A busy agent's working line, as Claude Code, Codex and Gemini draw it under their output. */
-const WORKING_LINE = /esc to interrupt|\(esc to cancel, \d/i;
+/**
+ * A busy agent's working line, as each CLI draws it under its output: Codex's
+ * "esc to interrupt", Gemini's "(esc to cancel, 4s)" or "(4s, esc to cancel)",
+ * and Claude Code's spinner, which stopped printing "esc to interrupt": one
+ * word trailing off in "…" ("✽ Nesting…"), or its words then the timer
+ * ("· Adding a test… (32s · ↓ 3.2k tokens)"). A finished turn's "✻ Crunched
+ * for 9m 33s" has no "…", and a list item ending in one has no timer.
+ */
+const WORKING_LINE =
+  /esc to interrupt|\(esc to cancel, \d|\(\d+s,?\s*esc to cancel|^[·✢✳✶✻✽✺*]\s+(?:\p{L}+…|\S.*…\s*\(\d+[smh]\b[^()]*\))$/iu;
+/** An ask drawn below a working line that still shows: Codex's queued question. */
+const ASKING_LINE = /shift\+← to answer|^\?\s*\d+ questions?$/i;
 
-/** The bottom of the screen still shows the agent at work. */
+/** The bottom of the screen still shows the agent at work, and asking nothing. */
 function showsWork(screen: PreparedScreen): boolean {
-  return screen.lines.slice(-6).some((line) => WORKING_LINE.test(line));
+  const tail = screen.lines.slice(-6);
+  return (
+    tail.some((line) => WORKING_LINE.test(line)) && !tail.some((line) => ASKING_LINE.test(line))
+  );
+}
+
+/**
+ * The run's busy state began too lately to have held past a flicker: output
+ * alone — a status line redrawn — flips Daintree's state to working for a
+ * moment, and such a start is still the stop it broke into. A time from the
+ * future, or none that can be read, is never a flicker.
+ */
+function flickering(run: FleetRunRow, now: number): boolean {
+  const held = run.since === undefined ? Number.NaN : now - run.since;
+  return held >= 0 && held < CANOPY_TURN_HOLD_MS;
+}
+
+/**
+ * `after` is `before` with at most one row changed in place: a redraw — a
+ * status line's clock, a footer — rather than anything new drawn.
+ */
+function onlyRedrawn(before: readonly string[] | null, after: readonly string[]): boolean {
+  if (before === null || before.length !== after.length) return false;
+  let changed = 0;
+  for (let i = 0; i < after.length; i++) {
+    if (before[i] !== after[i] && ++changed > 1) return false;
+  }
+  return true;
 }
 
 /** What Daintree observes of a run, as far as reading it goes: its state and why it waits. */

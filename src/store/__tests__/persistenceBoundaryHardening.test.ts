@@ -864,6 +864,119 @@ describe("persistence boundary hardening", () => {
     }
   });
 
+  function installOnceThrowingReadStorage(saved: string): Map<string, string> {
+    const backing = new Map<string, string>([["read-fail-key", saved]]);
+    let readFailed = false;
+    installLocalStorage(
+      createStorageMock({
+        getItem: (key) => {
+          if (!readFailed) {
+            readFailed = true;
+            throw new Error("SecurityError");
+          }
+          return backing.get(key) ?? null;
+        },
+        setItem: (key, value) => {
+          backing.set(key, value);
+        },
+        removeItem: (key) => {
+          backing.delete(key);
+        },
+      })
+    );
+    return backing;
+  }
+
+  it("notifies when a read error forces createSafeJSONStorage into memory-only persistence (#13590)", async () => {
+    const saved = JSON.stringify({ state: { value: 1 }, version: 1 });
+    const backing = installOnceThrowingReadStorage(saved);
+    const notifySpy = vi.fn();
+
+    const { createSafeJSONStorage, setPermanentFallbackHandler } =
+      await import("../persistence/safeStorage");
+    setPermanentFallbackHandler(notifySpy);
+    try {
+      const storage = createSafeJSONStorage<{ value: number }>();
+      expect(storage.getItem("read-fail-key")).toBeNull();
+      expect(notifySpy).toHaveBeenCalledTimes(1);
+
+      storage.setItem("read-fail-key", { state: { value: 2 }, version: 1 });
+      storage.setItem("read-fail-key", { state: { value: 3 }, version: 1 });
+
+      expect(storage.getItem("read-fail-key")).toEqual({ state: { value: 3 }, version: 1 });
+      expect(backing.get("read-fail-key")).toBe(saved);
+      expect(notifySpy).toHaveBeenCalledTimes(1);
+    } finally {
+      setPermanentFallbackHandler(null);
+    }
+  });
+
+  it("notifies when a read error forces createDebouncedSafeJSONStorage into memory-only persistence (#13590)", async () => {
+    vi.useFakeTimers();
+    const saved = JSON.stringify({ state: { value: 1 }, version: 1 });
+    const backing = installOnceThrowingReadStorage(saved);
+    const notifySpy = vi.fn();
+
+    const { createDebouncedSafeJSONStorage, setPermanentFallbackHandler } =
+      await import("../persistence/safeStorage");
+    setPermanentFallbackHandler(notifySpy);
+    try {
+      const storage = createDebouncedSafeJSONStorage<{ value: number }>(300);
+      expect(storage.getItem("read-fail-key")).toBeNull();
+
+      storage.setItem("read-fail-key", { state: { value: 2 }, version: 1 });
+      vi.advanceTimersByTime(300);
+
+      expect(backing.get("read-fail-key")).toBe(saved);
+      expect(notifySpy).toHaveBeenCalledTimes(1);
+    } finally {
+      setPermanentFallbackHandler(null);
+      vi.useRealTimers();
+    }
+  });
+
+  it("delivers fallback notices raised before any handler was registered, once (#13590)", async () => {
+    let readFailed = false;
+    installLocalStorage(
+      createStorageMock({
+        getItem: () => {
+          if (!readFailed) {
+            readFailed = true;
+            throw new Error("SecurityError");
+          }
+          return null;
+        },
+        setItem: () => {
+          throw new Error("SecurityError");
+        },
+      })
+    );
+    const notifySpy = vi.fn();
+
+    const { createSafeJSONStorage, setPermanentFallbackHandler } =
+      await import("../persistence/safeStorage");
+    try {
+      // Stores hydrate at module eval, before notify.ts registers its handler.
+      const readFailure = createSafeJSONStorage<{ value: number }>();
+      expect(readFailure.getItem("read-fail-key")).toBeNull();
+      const writeFailure = createSafeJSONStorage<{ value: number }>();
+      writeFailure.setItem("write-fail-key", { state: { value: 1 }, version: 1 });
+
+      setPermanentFallbackHandler(null);
+      expect(notifySpy).not.toHaveBeenCalled();
+
+      setPermanentFallbackHandler(notifySpy);
+      expect(notifySpy).toHaveBeenCalledTimes(1);
+
+      readFailure.setItem("read-fail-key", { state: { value: 2 }, version: 1 });
+      writeFailure.setItem("write-fail-key", { state: { value: 2 }, version: 1 });
+      setPermanentFallbackHandler(notifySpy);
+      expect(notifySpy).toHaveBeenCalledTimes(1);
+    } finally {
+      setPermanentFallbackHandler(null);
+    }
+  });
+
   it("preferencesStore clamps a corrupt closed-set field at the current version via merge", async () => {
     installLocalStorage(
       createStorageMock({
@@ -1123,6 +1236,399 @@ describe("persistence boundary hardening", () => {
       expect(backing.get("rm-key.__bak")).toBeUndefined();
 
       vi.useRealTimers();
+    });
+
+    it("skips an identical snapshot after it has already flushed (#13601)", async () => {
+      const backing = new Map<string, string>();
+      const setItem = vi.fn((key: string, value: string) => {
+        backing.set(key, value);
+      });
+      installLocalStorage(
+        createStorageMock({
+          getItem: (key) => backing.get(key) ?? null,
+          setItem,
+        })
+      );
+      vi.useFakeTimers();
+      try {
+        const { createDebouncedSafeJSONStorage } = await import("../persistence/safeStorage");
+        const storage = createDebouncedSafeJSONStorage<{ value: number }>(300);
+
+        for (let i = 0; i < 5; i += 1) {
+          storage.setItem("k", { state: { value: 1 }, version: 1 });
+          vi.advanceTimersByTime(300);
+        }
+        // One primary + one backup, matching the plain adapter.
+        expect(setItem).toHaveBeenCalledTimes(2);
+
+        // A changed snapshot still lands, and so does a later revert.
+        storage.setItem("k", { state: { value: 2 }, version: 1 });
+        vi.advanceTimersByTime(300);
+        storage.setItem("k", { state: { value: 1 }, version: 1 });
+        vi.advanceTimersByTime(300);
+        expect(setItem.mock.calls.filter(([key]) => key === "k")).toHaveLength(3);
+        expect(backing.get("k")).toBe(JSON.stringify({ state: { value: 1 }, version: 1 }));
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("retries an identical snapshot after a quota failure (#13601)", async () => {
+      const backing = new Map<string, string>();
+      let quota = true;
+      const setItem = vi.fn((key: string, value: string) => {
+        if (key === "q" && quota) throw new DOMException("Quota exceeded", "QuotaExceededError");
+        backing.set(key, value);
+      });
+      installLocalStorage(
+        createStorageMock({
+          getItem: (key) => backing.get(key) ?? null,
+          setItem,
+        })
+      );
+      vi.useFakeTimers();
+      try {
+        const { createDebouncedSafeJSONStorage } = await import("../persistence/safeStorage");
+        const storage = createDebouncedSafeJSONStorage<{ value: number }>(300);
+
+        storage.setItem("q", { state: { value: 1 }, version: 1 });
+        vi.advanceTimersByTime(300);
+        expect(backing.get("q")).toBeUndefined();
+
+        quota = false;
+        storage.setItem("q", { state: { value: 1 }, version: 1 });
+        vi.advanceTimersByTime(300);
+        expect(backing.get("q")).toBe(JSON.stringify({ state: { value: 1 }, version: 1 }));
+        expect(backing.get("q.__bak")).toBe(backing.get("q"));
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("rewrites an identical snapshot after removeItem clears the key (#13601)", async () => {
+      const backing = new Map<string, string>();
+      installLocalStorage(
+        createStorageMock({
+          getItem: (key) => backing.get(key) ?? null,
+          setItem: (key, value) => {
+            backing.set(key, value);
+          },
+          removeItem: (key) => {
+            backing.delete(key);
+          },
+        })
+      );
+      vi.useFakeTimers();
+      try {
+        const { createDebouncedSafeJSONStorage } = await import("../persistence/safeStorage");
+        const storage = createDebouncedSafeJSONStorage<{ value: number }>(300);
+        const snapshot = { state: { value: 1 }, version: 1 };
+
+        storage.setItem("r", snapshot);
+        vi.advanceTimersByTime(300);
+        storage.removeItem("r");
+        storage.setItem("r", snapshot);
+        vi.advanceTimersByTime(300);
+
+        expect(backing.get("r")).toBe(JSON.stringify(snapshot));
+        expect(backing.get("r.__bak")).toBe(JSON.stringify(snapshot));
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("does not land a superseded pending value when the queue reverts to the flushed snapshot (#13601)", async () => {
+      const backing = new Map<string, string>();
+      installLocalStorage(
+        createStorageMock({
+          getItem: (key) => backing.get(key) ?? null,
+          setItem: (key, value) => {
+            backing.set(key, value);
+          },
+        })
+      );
+      vi.useFakeTimers();
+      try {
+        const { createDebouncedSafeJSONStorage } = await import("../persistence/safeStorage");
+        const storage = createDebouncedSafeJSONStorage<{ value: number }>(300);
+        const a = { state: { value: 1 }, version: 1 };
+
+        storage.setItem("p", a);
+        vi.advanceTimersByTime(300);
+        storage.setItem("p", { state: { value: 2 }, version: 1 });
+        storage.setItem("p", a);
+        vi.advanceTimersByTime(300);
+
+        expect(backing.get("p")).toBe(JSON.stringify(a));
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("a read-triggered flush disarms its timer so a later enqueue keeps its own window (#13601)", async () => {
+      const setItem = vi.fn();
+      installLocalStorage(createStorageMock({ setItem }));
+      vi.useFakeTimers();
+      try {
+        const { createDebouncedSafeJSONStorage } = await import("../persistence/safeStorage");
+        const storage = createDebouncedSafeJSONStorage<{ value: number }>(300);
+
+        storage.setItem("t", { state: { value: 1 }, version: 1 });
+        vi.advanceTimersByTime(200);
+        void storage.getItem("t");
+        storage.setItem("t", { state: { value: 2 }, version: 1 });
+        // Past the first enqueue's deadline, inside the second's.
+        vi.advanceTimersByTime(150);
+        expect(setItem.mock.calls.filter(([key]) => key === "t")).toHaveLength(1);
+
+        vi.advanceTimersByTime(150);
+        expect(setItem.mock.calls.filter(([key]) => key === "t")).toHaveLength(2);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("mergeOnWrite keeps flushing until a repeated snapshot reaches a fixed point (#13601)", async () => {
+      const backing = new Map<string, string>();
+      installLocalStorage({
+        getItem: (key) => backing.get(key) ?? null,
+        setItem: (key, value) => {
+          backing.set(key, value);
+        },
+        removeItem: (key) => {
+          backing.delete(key);
+        },
+      });
+      vi.useFakeTimers();
+      try {
+        const { createDebouncedSafeJSONStorage } = await import("../persistence/safeStorage");
+
+        type Order = { order: string };
+        const mergeOrder: PersistWriteMerge<Order> = ({ baseline, onDisk, incoming }) => {
+          if (!onDisk) return incoming;
+          if (baseline && baseline.version !== incoming.version) {
+            return { version: incoming.version, state: onDisk.state };
+          }
+          return incoming;
+        };
+        const KEY = "merge-debounced-fixed-point";
+        backing.set(KEY, JSON.stringify({ state: { order: "old" }, version: 1 }));
+
+        const view = createDebouncedSafeJSONStorage<Order>(300, { mergeOnWrite: mergeOrder });
+        void view.getItem(KEY);
+        view.setItem(KEY, { state: { order: "mine" }, version: 2 });
+        vi.advanceTimersByTime(300);
+        expect(JSON.parse(backing.get(KEY)!).state.order).toBe("old");
+        view.setItem(KEY, { state: { order: "mine" }, version: 2 });
+        vi.advanceTimersByTime(300);
+        expect(JSON.parse(backing.get(KEY)!).state.order).toBe("mine");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("repopulates the memory fallback with a snapshot it last wrote durably (#13601)", async () => {
+      const backing = new Map<string, string>();
+      let readsThrow = false;
+      installLocalStorage(
+        createStorageMock({
+          getItem: (key) => {
+            if (readsThrow) throw new Error("storage gone");
+            return backing.get(key) ?? null;
+          },
+          setItem: (key, value) => {
+            backing.set(key, value);
+          },
+        })
+      );
+      vi.useFakeTimers();
+      const { createDebouncedSafeJSONStorage, setPermanentFallbackHandler } =
+        await import("../persistence/safeStorage");
+      setPermanentFallbackHandler(() => {});
+      try {
+        const storage = createDebouncedSafeJSONStorage<{ value: number }>(300);
+        const snapshot = { state: { value: 1 }, version: 1 };
+
+        storage.setItem("m", snapshot);
+        vi.advanceTimersByTime(300);
+        readsThrow = true;
+        expect(storage.getItem("other")).toBeNull(); // forces the memory fallback
+
+        storage.setItem("m", snapshot);
+        vi.advanceTimersByTime(300);
+        expect(storage.getItem("m")).toEqual(snapshot);
+      } finally {
+        setPermanentFallbackHandler(null);
+        vi.useRealTimers();
+      }
+    });
+
+    describe("mergeOnWrite edges (#13601)", () => {
+      type Sessions = { sessions: Record<string, { v: string }> };
+      const KEY = "merge-debounced-edges";
+      const val = (sessions: Sessions["sessions"]) => ({ state: { sessions }, version: 1 });
+
+      async function setup(primaryQuota: () => boolean) {
+        const backing = new Map<string, string>();
+        installLocalStorage({
+          getItem: (key) => backing.get(key) ?? null,
+          setItem: (key, value) => {
+            if (key === KEY && primaryQuota()) {
+              throw new DOMException("Quota exceeded", "QuotaExceededError");
+            }
+            backing.set(key, value);
+          },
+          removeItem: (key) => {
+            backing.delete(key);
+          },
+        });
+        const { createDebouncedSafeJSONStorage } = await import("../persistence/safeStorage");
+        const { mergeRecordByWriterDelta } = await import("../persistence/persistWriteMerge");
+        const mergeSessions: PersistWriteMerge<Sessions> = ({ baseline, onDisk, incoming }) => {
+          if (!onDisk) return incoming;
+          return {
+            version: incoming.version,
+            state: {
+              sessions: mergeRecordByWriterDelta(
+                baseline?.state.sessions ?? {},
+                incoming.state.sessions,
+                onDisk.state.sessions ?? {}
+              ),
+            },
+          };
+        };
+        const view = createDebouncedSafeJSONStorage<Sessions>(300, {
+          mergeOnWrite: mergeSessions,
+        });
+        const diskSessions = () => {
+          const parsed: { state: Sessions } | null = JSON.parse(backing.get(KEY) ?? "null");
+          return parsed?.state.sessions;
+        };
+        const flushOnce = (sessions: Sessions["sessions"]) => {
+          view.setItem(KEY, val(sessions));
+          vi.advanceTimersByTime(300);
+        };
+        return { backing, view, diskSessions, flushOnce };
+      }
+
+      it("keeps the baseline across a quota failure so the retried deletion still applies", async () => {
+        vi.useFakeTimers();
+        try {
+          let quota = false;
+          const { backing, view, diskSessions, flushOnce } = await setup(() => quota);
+          backing.set(KEY, JSON.stringify(val({ a: { v: "a" } })));
+          void view.getItem(KEY); // baseline { a }
+
+          quota = true;
+          flushOnce({});
+          expect(diskSessions()).toEqual({ a: { v: "a" } });
+
+          quota = false;
+          backing.set(KEY, JSON.stringify(val({ a: { v: "a" }, b: { v: "b" } })));
+          flushOnce({});
+          expect(diskSessions()).toEqual({ b: { v: "b" } });
+          expect(backing.get(`${KEY}.__bak`)).toBe(backing.get(KEY));
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      it("a read resets the fixed point so the next flush merges against the new baseline", async () => {
+        vi.useFakeTimers();
+        try {
+          const { backing, view, diskSessions, flushOnce } = await setup(() => false);
+          void view.getItem(KEY);
+          flushOnce({ a: { v: "a" } });
+          backing.set(KEY, JSON.stringify(val({ a: { v: "a" }, b: { v: "b" } })));
+          for (let i = 0; i < 4; i += 1) flushOnce({ a: { v: "a" } });
+          expect(diskSessions()).toEqual({ a: { v: "a" }, b: { v: "b" } });
+
+          // Hydrating takes `b` into the baseline; an unchanged snapshot without
+          // it is now a deletion of `b` and must not be skipped as settled.
+          void view.getItem(KEY);
+          flushOnce({ a: { v: "a" } });
+          expect(diskSessions()).toEqual({ a: { v: "a" } });
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+    });
+
+    it("mergeOnWrite settles repeated flushes yet still reconciles sibling writes and deletions (#13601)", async () => {
+      const backing = new Map<string, string>();
+      let primaryWrites = 0;
+      installLocalStorage({
+        getItem: (key) => backing.get(key) ?? null,
+        setItem: (key, value) => {
+          if (!key.endsWith(".__bak")) primaryWrites += 1;
+          backing.set(key, value);
+        },
+        removeItem: (key) => {
+          backing.delete(key);
+        },
+      });
+      vi.useFakeTimers();
+      try {
+        const { createDebouncedSafeJSONStorage } = await import("../persistence/safeStorage");
+        const { mergeRecordByWriterDelta } = await import("../persistence/persistWriteMerge");
+
+        type Sessions = { sessions: Record<string, { v: string }> };
+        const mergeSessions: PersistWriteMerge<Sessions> = ({ baseline, onDisk, incoming }) => {
+          if (!onDisk) return incoming;
+          return {
+            version: incoming.version,
+            state: {
+              sessions: mergeRecordByWriterDelta(
+                baseline?.state.sessions ?? {},
+                incoming.state.sessions,
+                onDisk.state.sessions ?? {}
+              ),
+            },
+          };
+        };
+        const KEY = "merge-debounced-settle";
+        const val = (sessions: Sessions["sessions"]) => ({ state: { sessions }, version: 1 });
+        const diskSessions = () => {
+          const parsed: { state: Sessions } | null = JSON.parse(backing.get(KEY) ?? "null");
+          return parsed?.state.sessions;
+        };
+        const flushOnce = (sessions: Sessions["sessions"]) => {
+          viewA.setItem(KEY, val(sessions));
+          vi.advanceTimersByTime(300);
+        };
+
+        const viewA = createDebouncedSafeJSONStorage<Sessions>(300, {
+          mergeOnWrite: mergeSessions,
+        });
+        void viewA.getItem(KEY);
+        for (let i = 0; i < 6; i += 1) flushOnce({ a: { v: "a" } });
+        // Same fixed-point schedule as the plain adapter: the first write, one
+        // more that reorders keys, one that proves the fixed point, then skips.
+        expect(primaryWrites).toBe(3);
+
+        // A sibling adds `b`: the unchanged snapshot must merge and keep it.
+        backing.set(KEY, JSON.stringify(val({ a: { v: "a" }, b: { v: "b" } })));
+        flushOnce({ a: { v: "a" } });
+        expect(primaryWrites).toBe(4);
+        expect(diskSessions()).toEqual({ a: { v: "a" }, b: { v: "b" } });
+
+        // A sibling deletes `a`: the unchanged snapshot must not resurrect it.
+        backing.set(KEY, JSON.stringify(val({ b: { v: "b" } })));
+        flushOnce({ a: { v: "a" } });
+        expect(diskSessions()).toEqual({ b: { v: "b" } });
+
+        // Settled again, a lost backup defeats the skip and is repaired.
+        for (let i = 0; i < 4; i += 1) flushOnce({ a: { v: "a" } });
+        const settled = primaryWrites;
+        flushOnce({ a: { v: "a" } });
+        expect(primaryWrites).toBe(settled);
+        backing.delete(`${KEY}.__bak`);
+        flushOnce({ a: { v: "a" } });
+        expect(primaryWrites).toBe(settled + 1);
+        expect(backing.get(`${KEY}.__bak`)).toBe(backing.get(KEY));
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it("writes the backup on a getItem-triggered flush, not just the timer path", async () => {

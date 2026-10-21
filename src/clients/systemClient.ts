@@ -91,6 +91,10 @@ export const systemClient = {
     return window.electron.system.getMemorySnapshot();
   },
 
+  isMemoryPressureCritical: (): Promise<boolean> => {
+    return window.electron.system.isMemoryPressureCritical();
+  },
+
   getTmpDir: (): Promise<string> => {
     if (cachedTmpDir !== null) return Promise.resolve(cachedTmpDir);
     if (tmpDirInflight) return tmpDirInflight;

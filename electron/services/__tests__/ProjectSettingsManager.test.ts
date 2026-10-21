@@ -5,6 +5,12 @@ import path from "path";
 import { ProjectSettingsManager } from "../ProjectSettingsManager.js";
 import { generateProjectId } from "../projectStorePaths.js";
 import { PROJECT_SETTINGS_SCHEMA_VERSION } from "../projectSettingsCodec.js";
+import { resilientAtomicWriteFile } from "../../utils/fs.js";
+
+vi.mock("../../utils/fs.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../utils/fs.js")>();
+  return { ...actual, resilientAtomicWriteFile: vi.fn(actual.resilientAtomicWriteFile) };
+});
 
 vi.mock("../CommandService.js", () => ({
   commandService: {
@@ -245,7 +251,7 @@ describe("ProjectSettingsManager caching", () => {
     expect(dirEntries.some((name) => name.includes(".corrupted."))).toBe(false);
   });
 
-  it("does not quarantine the settings file on transient (non-SyntaxError) read failures", async () => {
+  it("treats an ENOENT read as a missing file, without quarantine", async () => {
     const settingsPath = path.join(tempDir, projectId, "settings.json");
     await fs.writeFile(
       settingsPath,
@@ -294,16 +300,19 @@ describe("ProjectSettingsManager caching", () => {
     }
   );
 
-  it("does not quarantine on permission errors and surfaces them via console.error", async () => {
+  it("rejects a permission error without quarantining, and recovers on the next read", async () => {
     const settingsPath = path.join(tempDir, projectId, "settings.json");
-    await fs.writeFile(settingsPath, JSON.stringify({ runCommands: [] }), "utf-8");
+    await fs.writeFile(
+      settingsPath,
+      JSON.stringify({ runCommands: [{ id: "npm-dev", name: "dev", command: "npm run dev" }] }),
+      "utf-8"
+    );
 
     const eacces = Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
     const readSpy = vi.spyOn(fs, "readFile").mockRejectedValueOnce(eacces);
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
-    const result = await manager.getProjectSettings(projectId);
-    expect(result).toEqual({ runCommands: [] });
+    await expect(manager.getProjectSettings(projectId)).rejects.toBe(eacces);
     expect(errorSpy).toHaveBeenCalledTimes(1);
 
     readSpy.mockRestore();
@@ -312,7 +321,128 @@ describe("ProjectSettingsManager caching", () => {
     const dirEntries = await fs.readdir(path.join(tempDir, projectId));
     expect(dirEntries).toContain("settings.json");
     expect(dirEntries.some((name) => name.includes(".corrupted."))).toBe(false);
+    expect(broadcastSpy).not.toHaveBeenCalled();
+
+    const recovered = await manager.getProjectSettings(projectId);
+    expect(recovered.runCommands).toHaveLength(1);
   });
+
+  it("refuses a save over a file it can't read, even with the settings cached", async () => {
+    const settingsPath = path.join(tempDir, projectId, "settings.json");
+    const original = JSON.stringify({
+      runCommands: [{ id: "npm-test", name: "test", command: "npm test" }],
+      excludedPaths: ["generated"],
+    });
+    await fs.writeFile(settingsPath, original, "utf-8");
+    await manager.getProjectSettings(projectId);
+
+    const eio = Object.assign(new Error("EIO: i/o error"), { code: "EIO" });
+    const readSpy = vi.spyOn(fs, "readFile").mockRejectedValueOnce(eio);
+
+    await expect(manager.saveProjectSettings(projectId, { runCommands: [] })).rejects.toBe(eio);
+    readSpy.mockRestore();
+
+    expect(await fs.readFile(settingsPath, "utf-8")).toBe(original);
+  });
+
+  it("still saves when there is no settings file yet", async () => {
+    await manager.saveProjectSettings(projectId, { runCommands: [], excludedPaths: ["dist"] });
+
+    const loaded = await manager.getProjectSettings(projectId);
+    expect(loaded.excludedPaths).toEqual(["dist"]);
+  });
+
+  it("refuses to approve a browser host over a file it can't read", async () => {
+    const settingsPath = path.join(tempDir, projectId, "settings.json");
+    const original = JSON.stringify({
+      runCommands: [{ id: "npm-test", name: "test", command: "npm test" }],
+      browserAllowedHosts: ["example.com"],
+    });
+    await fs.writeFile(settingsPath, original, "utf-8");
+
+    const eacces = Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
+    const readSpy = vi.spyOn(fs, "readFile").mockRejectedValueOnce(eacces);
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await expect(manager.addBrowserAllowedHost(projectId, "localhost")).rejects.toBe(eacces);
+    readSpy.mockRestore();
+    errorSpy.mockRestore();
+
+    expect(await fs.readFile(settingsPath, "utf-8")).toBe(original);
+    await expect(manager.addBrowserAllowedHost(projectId, "localhost")).resolves.toEqual([
+      "example.com",
+      "localhost",
+    ]);
+  });
+
+  it("keeps other projects' notification overrides when one project's settings can't be read", async () => {
+    const otherId = generateProjectId("/test/other");
+    await fs.mkdir(path.join(tempDir, otherId), { recursive: true });
+    await fs.writeFile(
+      path.join(tempDir, otherId, "settings.json"),
+      JSON.stringify({ runCommands: [], notificationOverrides: { soundEnabled: true } }),
+      "utf-8"
+    );
+    await fs.writeFile(
+      path.join(tempDir, projectId, "settings.json"),
+      JSON.stringify({ runCommands: [], notificationOverrides: { soundEnabled: false } }),
+      "utf-8"
+    );
+
+    const realReadFile = fs.readFile;
+    const readSpy = vi
+      .spyOn(fs, "readFile")
+      .mockImplementation(((
+        file: Parameters<typeof fs.readFile>[0],
+        options?: Parameters<typeof fs.readFile>[1]
+      ) =>
+        String(file).includes(projectId)
+          ? Promise.reject(Object.assign(new Error("EIO: i/o error"), { code: "EIO" }))
+          : realReadFile(file, options)) as typeof fs.readFile);
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const overrides = await manager.getProjectNotificationOverrides([projectId, otherId]);
+    readSpy.mockRestore();
+    errorSpy.mockRestore();
+
+    expect(overrides).toEqual({ [otherId]: { soundEnabled: true } });
+  });
+
+  it.each(["EACCES", "EIO"])(
+    "does not let a %s read failure turn into a save that erases the existing file",
+    async (code) => {
+      const settingsPath = path.join(tempDir, projectId, "settings.json");
+      await fs.writeFile(
+        settingsPath,
+        JSON.stringify({
+          runCommands: [{ id: "npm-test", name: "test", command: "npm test" }],
+          excludedPaths: ["generated"],
+        }),
+        "utf-8"
+      );
+
+      const failure = Object.assign(new Error(`${code}: read failed`), { code });
+      const readSpy = vi.spyOn(fs, "readFile").mockRejectedValueOnce(failure);
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+      let draft: Awaited<ReturnType<typeof manager.getProjectSettings>> | undefined;
+      try {
+        draft = await manager.getProjectSettings(projectId);
+      } catch {
+        draft = undefined;
+      }
+      readSpy.mockRestore();
+      errorSpy.mockRestore();
+
+      if (draft) {
+        await manager.saveProjectSettings(projectId, { ...draft, devServerCommand: "npm run dev" });
+      }
+
+      const onDisk = JSON.parse(await fs.readFile(settingsPath, "utf-8"));
+      expect(onDisk.runCommands).toEqual([{ id: "npm-test", name: "test", command: "npm test" }]);
+      expect(onDisk.excludedPaths).toEqual(["generated"]);
+    }
+  );
 
   it("preserves a blank secure env value through resolution rather than treating it as unresolved", async () => {
     const { projectEnvSecureStorage } = await import("../ProjectEnvSecureStorage.js");
@@ -400,6 +530,161 @@ describe("ProjectSettingsManager caching", () => {
     await Promise.all([save, overlapping]);
 
     expect((await manager.getProjectSettings(projectId)).devServerCommand).toBe("pnpm dev");
+  });
+
+  it("a read holding damaged bytes cannot quarantine a save that lands behind it (#13553)", async () => {
+    const settingsPath = path.join(tempDir, projectId, "settings.json");
+    await fs.writeFile(settingsPath, "{broken", "utf-8");
+
+    const realReadFile = fs.readFile.bind(fs) as (p: string, enc: string) => Promise<string>;
+    let readStarted!: () => void;
+    const started = new Promise<void>((resolve) => (readStarted = resolve));
+    let releaseRead!: () => void;
+    const gate = new Promise<void>((resolve) => (releaseRead = resolve));
+    let saveEntered!: () => void;
+    const entered = new Promise<void>((resolve) => (saveEntered = resolve));
+    let calls = 0;
+    // The first read holds the damaged bytes until released; any later read is
+    // the save starting its turn (it reads the saved allow-list first).
+    const readSpy = vi.spyOn(fs, "readFile").mockImplementation((async (
+      file: string,
+      encoding: string
+    ) => {
+      calls += 1;
+      if (calls === 1) {
+        const content = await realReadFile(file, encoding);
+        readStarted();
+        await gate;
+        return content;
+      }
+      saveEntered();
+      return realReadFile(file, encoding);
+    }) as unknown as typeof fs.readFile);
+
+    let read: Promise<unknown> = Promise.resolve();
+    let save: Promise<unknown> = Promise.resolve();
+    try {
+      read = manager.getProjectSettings(projectId);
+      await started;
+      save = manager.saveProjectSettings(projectId, {
+        runCommands: [],
+        devServerCommand: "npm run dev",
+      });
+      const saveRanFirst = await Promise.race([
+        entered.then(() => true),
+        new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 50)),
+      ]);
+      expect(saveRanFirst).toBe(false);
+    } finally {
+      releaseRead();
+      await Promise.allSettled([read, save]);
+      readSpy.mockRestore();
+    }
+    await expect(save).resolves.toBeUndefined();
+
+    const fresh = new ProjectSettingsManager(tempDir, createMockStore());
+    expect((await fresh.getProjectSettings(projectId)).devServerCommand).toBe("npm run dev");
+    const quarantined = (await fs.readdir(path.join(tempDir, projectId))).filter((name) =>
+      name.startsWith("settings.json.corrupted.")
+    );
+    expect(quarantined).toHaveLength(1);
+    expect(await fs.readFile(path.join(tempDir, projectId, quarantined[0]), "utf-8")).toBe(
+      "{broken"
+    );
+  });
+
+  it("a warm cache does not answer for a save that is queued but not yet written", async () => {
+    await manager.saveProjectSettings(projectId, {
+      runCommands: [],
+      devServerCommand: "npm start",
+    });
+    expect((await manager.getProjectSettings(projectId)).devServerCommand).toBe("npm start");
+
+    const save = manager.saveProjectSettings(projectId, {
+      runCommands: [],
+      devServerCommand: "pnpm dev",
+    });
+    const read = manager.getProjectSettings(projectId);
+
+    expect((await read).devServerCommand).toBe("pnpm dev");
+    await save;
+  });
+
+  it("adds a host over a damaged settings file without waiting on itself", async () => {
+    await fs.writeFile(path.join(tempDir, projectId, "settings.json"), "{broken", "utf-8");
+
+    await expect(manager.addBrowserAllowedHost(projectId, "example.com")).resolves.toEqual([
+      "example.com",
+    ]);
+  });
+
+  describe("notification overrides after a failed save", () => {
+    const enospc = () =>
+      Object.assign(new Error("ENOSPC: no space left on device"), {
+        code: "ENOSPC",
+      });
+
+    beforeEach(() => {
+      vi.spyOn(console, "error").mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it.each([
+      { saved: false, rejected: true },
+      { saved: true, rejected: false },
+    ])(
+      "keeps completedEnabled=$saved in effect when saving $rejected fails",
+      async ({ saved, rejected }) => {
+        await manager.saveProjectSettings(projectId, {
+          runCommands: [],
+          notificationOverrides: { completedEnabled: saved },
+        });
+        await manager.getProjectSettings(projectId);
+
+        vi.mocked(resilientAtomicWriteFile).mockRejectedValueOnce(enospc());
+        await expect(
+          manager.saveProjectSettings(projectId, {
+            runCommands: [],
+            notificationOverrides: { completedEnabled: rejected },
+          })
+        ).rejects.toThrow("ENOSPC");
+
+        const onDisk = await new ProjectSettingsManager(
+          tempDir,
+          createMockStore()
+        ).getProjectSettings(projectId);
+        expect(onDisk.notificationOverrides?.completedEnabled).toBe(saved);
+        expect(manager.getEffectiveNotificationSettings(projectId).completedEnabled).toBe(saved);
+      }
+    );
+
+    it("keeps the global settings when the first save of a project fails", async () => {
+      vi.mocked(resilientAtomicWriteFile).mockRejectedValueOnce(enospc());
+      await expect(
+        manager.saveProjectSettings(projectId, {
+          runCommands: [],
+          notificationOverrides: { completedEnabled: false },
+        })
+      ).rejects.toThrow("ENOSPC");
+
+      expect(manager.getEffectiveNotificationSettings(projectId).completedEnabled).toBe(true);
+    });
+
+    it("publishes the overrides once a save lands after the directory is recreated", async () => {
+      await fs.rm(path.join(tempDir, projectId), { recursive: true, force: true });
+      vi.mocked(resilientAtomicWriteFile).mockClear();
+
+      await manager.saveProjectSettings(projectId, {
+        runCommands: [],
+        notificationOverrides: { completedEnabled: false },
+      });
+
+      expect(resilientAtomicWriteFile).toHaveBeenCalledTimes(2);
+      expect(manager.getEffectiveNotificationSettings(projectId).completedEnabled).toBe(false);
+    });
   });
 
   describe("addBrowserAllowedHost", () => {

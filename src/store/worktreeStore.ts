@@ -120,8 +120,9 @@ export interface DeletedWorktree {
    * holds, and fires it — nothing else writes this.
    *
    * A row is recorded UNARMED and the sweep arms it on its first tick with the
-   * view awake, so a project cached at deletion time is never charged for the
-   * wall time it spent frozen (#11259).
+   * view awake, charging any time since `deletedAt` the view spent cached or
+   * hidden at the slowed unobserved rate rather than in real time (#11259,
+   * #13538).
    */
   expiresAt: number | null;
   /**
@@ -203,9 +204,9 @@ export function createDeletedWorktreeRecord(
     ...(metadata?.gitDir ? { gitDir: metadata.gitDir } : {}),
     deletedAt: Date.now(),
     // Recorded UNARMED: the sweep arms it on its first tick with the view
-    // awake, and only ever advances across awake seconds. A wall-clock
-    // deadline stamped here would come back already spent for a project that
-    // was cached at deletion time, with no window to rescue anything (#11259).
+    // awake, charging unobserved time at the slowed rate. A wall-clock
+    // deadline stamped here would spend that time in real time instead, and
+    // the sweep cannot write deadlines for a view nobody can see (#11259).
     expiresAt: null,
     holdReason: null,
     pinnedBeforeWorktreeId: getPinnedDeletedWorktreeAnchorId(worktreeId),
@@ -979,8 +980,14 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
     const lastFocusedTerminalId = get().lastFocusedTerminalByWorktree.get(id);
     if (lastFocusedTerminalId) {
       const terminal = usePanelStore.getState().panelsById[lastFocusedTerminalId];
-      // Validate terminal still exists, belongs to this worktree, and isn't in trash
-      if (terminal && terminal.worktreeId === id && terminal.location !== "trash") {
+      // Validate terminal still exists, belongs to this worktree, and isn't in
+      // trash or parked — focusing a parked panel would restore it unasked.
+      if (
+        terminal &&
+        terminal.worktreeId === id &&
+        terminal.location !== "trash" &&
+        terminal.location !== "background"
+      ) {
         usePanelStore.getState().setFocused(lastFocusedTerminalId);
       }
     }
@@ -1591,18 +1598,20 @@ function applyWorktreeTerminalPolicy(
     const isInActiveWorktree = (terminal.worktreeId ?? null) === (targetWorktreeId ?? null);
 
     const location = terminal.location ?? "grid";
-    const isDockOrTrash = location === "dock" || location === "trash";
+    // A parked panel stays quiet whichever worktree is selected: only a restore
+    // brings it back on screen.
+    const isOffGrid = location === "dock" || location === "trash" || location === "background";
 
     // Let DockedTerminalItem manage open/closed dock policy, but if the active dock
     // terminal is not in the active worktree, force it to BACKGROUND.
-    if (terminal.id === activeDockTerminalId && isDockOrTrash && isInActiveWorktree) {
+    if (terminal.id === activeDockTerminalId && isOffGrid && isInActiveWorktree) {
       continue;
     }
 
-    const isArmedInFleetScope = armedIds?.has(terminal.id) && !isDockOrTrash;
+    const isArmedInFleetScope = armedIds?.has(terminal.id) && !isOffGrid;
 
     const targetTier =
-      isArmedInFleetScope || (isInActiveWorktree && !isDockOrTrash)
+      isArmedInFleetScope || (isInActiveWorktree && !isOffGrid)
         ? TerminalRefreshTier.VISIBLE
         : TerminalRefreshTier.BACKGROUND;
 

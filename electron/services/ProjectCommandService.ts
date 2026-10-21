@@ -62,7 +62,16 @@ const liveDeps: ProjectCommandServiceDeps = {
     ]);
     return {
       global: store.get("globalEnvironmentVariables") ?? {},
-      project: (await projectStore.getProjectSettings(projectId))?.environmentVariables ?? {},
+      project:
+        (
+          await projectStore.getProjectSettings(projectId).catch((error: unknown) => {
+            console.warn(
+              "[ProjectCommandService] Couldn't read project settings; running without project env:",
+              error
+            );
+            return null;
+          })
+        )?.environmentVariables ?? {},
     };
   },
 };

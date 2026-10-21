@@ -4,7 +4,7 @@
  * in for the shell a hub assistant has no access to over a relay.
  *
  * `project.runCheck` stays the tool for a project's own declared runners. This
- * one takes a command, so it is held to Daintree's own full-tier assistants;
+ * one takes a command, so it is held to Daintree's own assistants;
  * the restriction lives where the call is answered, not in this type.
  */
 

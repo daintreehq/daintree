@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { CreateWorktreeOptions } from "../../../shared/types/git.js";
 import type {
   WorktreePortAction,
+  WorktreePortAttachmentAction,
   WorktreePortResourceAction,
 } from "../../../shared/types/worktree-port.js";
 
@@ -57,6 +58,12 @@ const RESOURCE_ACTIONS = [
   "status",
 ] as const satisfies readonly WorktreePortResourceAction[];
 
+const ATTACHMENT_ACTIONS = [
+  "attach",
+  "detach",
+  "status",
+] as const satisfies readonly WorktreePortAttachmentAction[];
+
 const PAYLOAD_SCHEMAS = {
   "get-all-states": optionalEmpty,
   "set-active": z.object({ worktreeId, origin: z.string().max(256).optional() }),
@@ -78,6 +85,12 @@ const PAYLOAD_SCHEMAS = {
   "refresh-prs": optionalEmpty,
   "reconcile-topology": z.object({ force: z.boolean().optional() }).optional(),
   "resource-action": z.object({ worktreeId, action: z.enum(RESOURCE_ACTIONS) }),
+  "attachment-action": z.object({
+    worktreeId,
+    name: z.string().min(1).max(256),
+    action: z.enum(ATTACHMENT_ACTIONS),
+    expectedHolderWorktreeId: worktreeId.nullable().optional(),
+  }),
   "run-lifecycle-setup": z.object({ worktreeId }),
   "get-lifecycle-command-approval": z.object({ worktreeId }),
   "approve-lifecycle-commands": z.object({ worktreeId, fingerprint: z.string().min(1).max(512) }),
@@ -118,7 +131,7 @@ export function requiresDriving(request: {
   action: WorktreePortAction;
   payload: unknown;
 }): boolean {
-  if (request.action === "resource-action") {
+  if (request.action === "resource-action" || request.action === "attachment-action") {
     return (request.payload as { action?: unknown } | undefined)?.action !== "status";
   }
   return WORKTREE_DRIVER_ACTIONS.has(request.action);

@@ -1,11 +1,18 @@
+/** Git's regular-file and symlink modes; a symlink's content is its target path. */
+export type NewFileMode = "100644" | "120000";
+
 /**
  * The diff git would print for a file that is all new: one added line per
  * line, a trailing newline ending the last line rather than starting another,
  * and git's marker when the file doesn't end in one.
  */
-export function newFileDiff(gitPath: string, content: string): string {
+export function newFileDiff(
+  gitPath: string,
+  content: string,
+  mode: NewFileMode = "100644"
+): string {
   const header = `diff --git a/${gitPath} b/${gitPath}
-new file mode 100644
+new file mode ${mode}
 --- /dev/null
 +++ b/${gitPath}`;
   // An empty file keeps the single empty added line it has always shown.
