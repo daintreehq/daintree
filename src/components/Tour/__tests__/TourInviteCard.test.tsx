@@ -89,15 +89,18 @@ describe("TourInviteCard", () => {
   it("dismisses permanently and says where the tour lives, then goes", async () => {
     setup(tour());
     render(<TourInviteCard />);
-    const notNow = await screen.findByRole("button", { name: "Not now" });
+    const notNow = await screen.findByRole("button", { name: "Don't show again" });
     vi.useFakeTimers();
     fireEvent.click(notNow);
     expect(dismissInvite).toHaveBeenCalledTimes(1);
     expect(dismissInvite).toHaveBeenCalledWith(DAINTREE_TOUR_ID);
-    expect(screen.getByRole("status").textContent).toContain("Help › Daintree Tour");
-    act(() => {
-      vi.advanceTimersByTime(5000);
-    });
+    expect(screen.getByRole("status").textContent).toContain("Help, Daintree Tour");
+    // Card out, note held, note out: each phase arms the next.
+    for (const ms of [200, 9000, 200]) {
+      act(() => {
+        vi.advanceTimersByTime(ms);
+      });
+    }
     expect(screen.queryByRole("status")).toBeNull();
   });
 

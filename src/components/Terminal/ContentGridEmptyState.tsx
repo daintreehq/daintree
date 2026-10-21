@@ -519,6 +519,11 @@ export function ContentGridEmptyState({
                 section only while the tour is on offer, so there's no gap. */}
             {hasLaunchTarget && (
               <TourInviteCard
+                focusAfterDismiss={(options) =>
+                  containerRef.current
+                    ?.querySelector<HTMLElement>("[data-launcher-anchor]")
+                    ?.focus(options)
+                }
                 className={cn(
                   "mt-6 flex w-full justify-center",
                   LAUNCHER_MEASURE,

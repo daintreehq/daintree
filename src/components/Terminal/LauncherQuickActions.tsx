@@ -112,6 +112,7 @@ function PaletteSearchButton() {
       // identify it; the old `border-strong` edge was weight the quiet rest of
       // the family does not carry.
       data-size="palette"
+      data-launcher-anchor
       className="search-field press-scale w-full py-3 [--search-field-bg:var(--theme-overlay-medium)] active:scale-[0.98] active:duration-[1ms]"
     >
       <Search className="search-field-icon" aria-hidden="true" />
