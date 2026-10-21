@@ -59,7 +59,7 @@ describe("DevServerIndicator", () => {
     const el = screen.getByTestId("dev-server-indicator");
     expect(el.getAttribute("data-dev-server-status")).toBe("running");
     expect(el.textContent).toContain(":5173");
-    expect(el.getAttribute("aria-label")).toBe("Dev server running at http://localhost:5173");
+    expect(el.getAttribute("aria-label")).toBe("Dev server running: http://localhost:5173");
   });
 
   it("renders a running indicator without port text when the URL has no port", () => {
@@ -69,11 +69,27 @@ describe("DevServerIndicator", () => {
     expect(el.textContent).not.toContain(":");
   });
 
-  it("renders an error indicator", () => {
-    renderIndicator(makeSession("error", { error: { type: "unknown", message: "boom" } }));
+  it("renders an error indicator with a visible word and a summarised reason", () => {
+    renderIndicator(
+      makeSession("error", {
+        error: { type: "unknown", message: "Failed to start dev server: spawn /abs/pnpm ENOENT" },
+      })
+    );
     const el = screen.getByTestId("dev-server-indicator");
     expect(el.getAttribute("data-dev-server-status")).toBe("error");
-    expect(el.getAttribute("aria-label")).toBe("Dev server error");
+    expect(el.textContent).toContain("Failed");
+    expect(el.getAttribute("aria-label")).toBe("Dev server failed: Stopped with an error");
+    expect(el.getAttribute("aria-label")).not.toContain("ENOENT");
+  });
+
+  it("names the port a conflicting dev server wanted", () => {
+    renderIndicator(
+      makeSession("error", {
+        error: { type: "port-conflict", port: "5173", message: "Port 5173 is already in use." },
+      })
+    );
+    const el = screen.getByTestId("dev-server-indicator");
+    expect(el.getAttribute("aria-label")).toBe("Dev server failed: Port 5173 is already in use");
   });
 
   it("defers the starting spinner until the Doherty threshold elapses", () => {

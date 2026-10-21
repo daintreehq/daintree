@@ -16,6 +16,7 @@ import { WorktreeAttachmentChips } from "./WorktreeAttachmentChips";
 import { visibleAttachmentChips } from "./attachmentState";
 import { WorktreePluginStatusChips, useWorktreePluginStatuses } from "./WorktreePluginStatusChips";
 import { DevServerIndicator } from "./DevServerIndicator";
+import { devServerSummaryText, summarizeDevServer } from "@/lib/devServerPresentation";
 import { CollapsedSessionIndicators } from "./CollapsedSessionIndicators";
 import { CollapsedAlarmPill, collapsedAlarmDescriptionId } from "./CollapsedAlarmPill";
 import { worktreeRowDescriptionId } from "./rowDescriptions";
@@ -128,6 +129,8 @@ export function WorktreeHeader({
     headline.kind === "pr" || headline.kind === "issue" ? headline.title : undefined;
   const hasPlanFile = Boolean(worktree.hasPlanFile);
   const hasDevServerSignal = !!devServerSession && isLiveDevServerStatus(devServerSession.status);
+  const devServerSummary = devServerSession ? summarizeDevServer(devServerSession) : null;
+  const devServerDescription = devServerSummary ? devServerSummaryText(devServerSummary) : null;
   const hasAttachmentChips =
     !!onAttachmentAction && visibleAttachmentChips(worktree.attachments).length > 0;
   const pluginStatuses = useWorktreePluginStatuses(worktree.id);
@@ -407,6 +410,12 @@ export function WorktreeHeader({
               />
             )}
             <DevServerIndicator session={devServerSession} />
+            {hasDevServerSignal && variant === "sidebar" && devServerDescription && (
+              // For the card's select button to be described by; see rowDescriptions.
+              <span id={worktreeRowDescriptionId(worktree.id, "devServer")} hidden>
+                {devServerDescription}
+              </span>
+            )}
           </div>
         )}
 

@@ -1,11 +1,12 @@
 /**
  * The marks on a sidebar row that are pictures rather than controls — the
- * lifecycle tick, the collapsed alarm, the external-worktree icon — are not
- * focusable, so a keyboard user never lands on them. They land on the card's
- * select button instead, and that button is described by each mark's words.
+ * lifecycle tick, the collapsed alarm, the dev-server mark, the external-worktree
+ * icon — are not focusable, so a keyboard user never lands on them. They land on
+ * the card's select button instead, and that button is described by each mark's
+ * words.
  * Every mark renders a hidden node under one of these ids for it to point at.
  */
-export type RowDescriptionPart = "lifecycle" | "alarm" | "external";
+export type RowDescriptionPart = "lifecycle" | "alarm" | "devServer" | "external";
 
 /**
  * Worktree ids are paths, and a path can hold a space, which would split one
@@ -26,7 +27,9 @@ export function selectButtonDescribedBy(
   worktreeId: string,
   mounted: Record<RowDescriptionPart, boolean>
 ): string | undefined {
-  const parts = (["lifecycle", "alarm", "external"] as const).filter((part) => mounted[part]);
+  const parts = (["lifecycle", "alarm", "devServer", "external"] as const).filter(
+    (part) => mounted[part]
+  );
   if (parts.length === 0) return undefined;
   return parts.map((part) => worktreeRowDescriptionId(worktreeId, part)).join(" ");
 }
