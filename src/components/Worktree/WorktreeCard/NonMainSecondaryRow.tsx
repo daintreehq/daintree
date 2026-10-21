@@ -4,6 +4,7 @@ import { UpstreamSyncBadge } from "./UpstreamSyncBadge";
 import { IssueBadge } from "./IssueBadge";
 import { PRBadge } from "./PRBadge";
 import { FileText } from "lucide-react";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { WorktreeState } from "@/types";
 import { usePRCircuitBreakerStore } from "@/store/prCircuitBreakerStore";
 import { computeAlarmTier } from "@/lib/worktreeAlarmTier";
@@ -63,6 +64,7 @@ export function NonMainSecondaryRow({
       ? (worktree.issueTitle ?? worktree.branchDerivedTitle)
       : undefined;
   const sourcePrNumber = worktree.sourcePrNumber;
+  const planFileName = worktree.planFilePath ?? "Plan";
   const prDetectionPaused = usePRCircuitBreakerStore((s) => s.tripped);
   // Suppress the subordinate PR badge when the PR is already the headline
   // (PR-originated worktrees, #8888) — the linked issue takes the secondary row.
@@ -203,21 +205,59 @@ export function NonMainSecondaryRow({
       {upstreamFirst ? upstreamBadge : prBadge}
       {upstreamFirst ? prBadge : upstreamBadge}
       {hasPlanFile && badges.onOpenPlan && (
-        <button
-          type="button"
-          onClick={() => {
-            if (isActive) badges.onOpenPlan?.();
-          }}
-          data-no-dnd
-          className="flex items-center gap-1 text-xs text-left cursor-pointer transition-colors text-text-secondary hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
-          aria-disabled={!isActive || undefined}
-          aria-label="View agent plan file"
-        >
-          <FileText className="w-3 h-3 shrink-0 text-daintree-text/50" aria-hidden="true" />
-          <span className={cn("font-mono", underlineOnHover && "hover:underline")}>
-            {worktree.planFilePath ?? "Plan"}
-          </span>
-        </button>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            {/* Drawn on the branch line's grid: the same 14px glyph column and
+                gap, so the filename starts where the branch name does, and the
+                same 2xs mono, so the least important line in the stack is not
+                its largest. w-fit keeps the hit target and the focus ring on
+                the filename rather than the whole card width. The ring is the
+                inset recipe drawn on padding that a matching negative margin
+                cancels, so it clears the content without moving the rail; the
+                top pad is only the ring's width, so it clears the sync line
+                above. */}
+            <button
+              type="button"
+              onClick={() => {
+                if (isActive) badges.onOpenPlan?.();
+              }}
+              data-no-dnd
+              className="group flex items-center gap-1.5 w-fit max-w-full min-w-0 -mx-1.5 px-1.5 -mt-0.5 pt-0.5 -mb-1.5 pb-1.5 text-left cursor-pointer rounded-[var(--radius-sm)] focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
+              // Not aria-disabled on an unselected card: the click is not
+              // refused, it selects the card, so the name says that instead.
+              aria-label={
+                isActive
+                  ? `Open plan file ${planFileName}`
+                  : `Select worktree, then open plan file ${planFileName}`
+              }
+            >
+              <FileText
+                className="w-3.5 h-3.5 shrink-0 text-text-secondary"
+                strokeWidth={2.5}
+                aria-hidden="true"
+              />
+              <span
+                className={cn(
+                  // Secondary even on a muted card: the row still operates
+                  // there, and text-muted has no dark-theme contrast floor.
+                  "truncate font-mono text-2xs font-medium text-text-secondary transition-colors duration-150",
+                  // Only a card that opens the file on this click answers the
+                  // hover; an unselected card's first click selects the card.
+                  isActive && "group-hover:text-text-primary",
+                  underlineOnHover && "group-hover:underline"
+                )}
+              >
+                {planFileName}
+              </span>
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="right" className="text-xs">
+            <div>Open {planFileName} in the file viewer</div>
+            <div className="text-text-secondary">
+              {isActive ? "Plan file in this worktree" : "Select the worktree first"}
+            </div>
+          </TooltipContent>
+        </Tooltip>
       )}
     </div>
   );
