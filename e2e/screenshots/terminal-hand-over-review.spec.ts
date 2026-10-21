@@ -149,7 +149,6 @@ async function capture(page: Page, state: State, theme: string, file: string): P
   }
 
   const pane = page.locator("[data-preview-pane]");
-  const header = pane.locator('[data-testid="panel-header-content"]').locator("xpath=..");
   const chip = page.locator('[data-testid="terminal-driven-by-badge"]');
   await expect(chip).toContainText(/Driven by Claude/);
   if (state === "chip") {
