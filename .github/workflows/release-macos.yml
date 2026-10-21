@@ -209,11 +209,23 @@ jobs:
               echo "::error::Missing expected macOS app bundle: $app"
               exit 1
             fi
-            echo "--- stapler validate (offline ticket): $app"
-            xcrun stapler validate "$app"
+            echo "--- stapler validate (stapled ticket): $app"
+            # validate fetches the current ticket from Apple's CloudKit, which
+            # drops runner connections ("The network connection was lost", exit 68).
+            for attempt in 1 2 3; do
+              if xcrun stapler validate "$app"; then
+                break
+              fi
+              if [[ $attempt -eq 3 ]]; then
+                echo "::error::stapler validate failed after retries: $app"
+                exit 1
+              fi
+              echo "::warning::stapler validate attempt $attempt failed; retrying in 15s"
+              sleep 15
+            done
             echo "--- codesign --check-notarization (online Apple ack): $app"
-            # stapler validate only confirms a locally-attached ticket; this asks
-            # Apple's notary service whether the notarization is still acknowledged.
+            # stapler validate checks the stapled ticket; this asks Apple's
+            # notary service whether the notarization is still acknowledged.
             # Retry transient network failures, but treat exit 3 (valid signature,
             # not acknowledged) as a definitive revocation — never retry it.
             notary_exit=0

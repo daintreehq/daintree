@@ -6,6 +6,7 @@ const { resignHelpers } = require("./resign-helpers-macos.cjs");
 
 const NOTARIZATION_STATE_FILE = ".notarization-state.json";
 const WAIT_TIMEOUT_SECONDS = 1800;
+const STAPLE_RETRY_DELAYS_MS = [15000, 30000, 60000];
 
 function readState(outDir) {
   const statePath = path.join(outDir, NOTARIZATION_STATE_FILE);
@@ -201,13 +202,27 @@ async function submitAndWait(state, archKey, appPath, appName, outDir) {
 }
 
 async function stapleApp(appPath, appName, archKey) {
-  console.log(`[notarize-macos] Stapling ${appPath}`);
-  try {
-    execFileSync("xcrun", ["stapler", "staple", appPath], { encoding: "utf-8", timeout: 120000 });
-  } catch (err) {
-    throw new Error(
-      `[notarize-macos] Stapling failed for ${appPath}: ${err.stderr || err.message}`
-    );
+  // stapler fetches the issued ticket from Apple's CloudKit, which drops CI
+  // runner connections often enough to fail a release on its own; the ticket
+  // already exists, so a retry is safe.
+  for (let attempt = 0; ; attempt++) {
+    console.log(`[notarize-macos] Stapling ${appPath}`);
+    try {
+      execFileSync("xcrun", ["stapler", "staple", appPath], { encoding: "utf-8", timeout: 120000 });
+      break;
+    } catch (err) {
+      // stapler reports its failures on stdout; the message carries stderr and
+      // any spawn timeout.
+      const detail = [err.message, err.stdout].filter(Boolean).join("\n").trim();
+      if (attempt >= STAPLE_RETRY_DELAYS_MS.length) {
+        throw new Error(`[notarize-macos] Stapling failed for ${appPath}: ${detail}`);
+      }
+      const delayMs = STAPLE_RETRY_DELAYS_MS[attempt];
+      console.warn(
+        `[notarize-macos] Stapling attempt ${attempt + 1} failed, retrying in ${delayMs / 1000}s: ${detail}`
+      );
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
   }
   console.log(`[notarize-macos] Complete — ${appName} notarized and stapled (arch ${archKey})`);
 }
