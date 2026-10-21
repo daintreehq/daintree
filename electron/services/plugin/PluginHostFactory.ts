@@ -573,6 +573,16 @@ export interface PluginHostFactoryDeps {
   pluginWorktreeCardStatuses: Map<string, Map<string, Map<string, PluginWorktreeCardStatus>>>;
   /** Publish one plugin's complete status map for one project to that project's views. */
   emitWorktreeCardStatuses: (pluginId: string, projectId: string) => void;
+  /**
+   * Bumped whenever a plugin's statuses are cleared (unload, worker swap), so
+   * a call its previous generation left in flight lands on nothing.
+   */
+  worktreeCardStatusGeneration: (pluginId: string) => number;
+  /**
+   * Whether the worktree was removed, or its project closed, since `since`
+   * (epoch ms). A read that started before either can still name it.
+   */
+  isWorktreeCardTargetRetired: (projectId: string, worktreeId: string, since: number) => boolean;
   /** Runtime panel menus set via `host.setPanelMenuItems`, `pluginId → panelId → items`. */
   pluginPanelMenus: Map<string, Map<string, readonly PublishedPanelMenuItem[]>>;
   pluginFsWatchers: Map<string, Set<() => void>>;
@@ -2382,9 +2392,13 @@ export function createHost(
           new Error(`Plugin "${pluginId}" setWorktreeCardStatus: ${entry.error}`)
         );
       }
+      // Taken at the call, not when the queued run starts: a call the previous
+      // worker generation made must not land after that generation's clear.
+      const generation = deps.worktreeCardStatusGeneration(pluginId);
       const run = async (): Promise<void> => {
+        const startedAt = Date.now();
         const result = await getWorktreesResult();
-        if (!isBound()) return;
+        if (!isBound() || deps.worktreeCardStatusGeneration(pluginId) !== generation) return;
         if (result.status !== "ok") {
           throw new Error(
             `Plugin "${pluginId}" setWorktreeCardStatus: worktrees are unavailable (${result.reason})`
@@ -2402,6 +2416,11 @@ export function createHost(
         // The card is keyed by the snapshot's own id, whichever spelling the
         // plugin passed.
         const cardId = target.id;
+        if (deps.isWorktreeCardTargetRetired(projectId, cardId, startedAt)) {
+          throw new Error(
+            `Plugin "${pluginId}" setWorktreeCardStatus: "${entry.worktreeId}" was removed`
+          );
+        }
         let byProject = deps.pluginWorktreeCardStatuses.get(pluginId);
         let statuses = byProject?.get(projectId);
         if (entry.status === null) {

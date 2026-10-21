@@ -372,6 +372,14 @@ const COMMAND_HANDLER_EXTENSIONS = [".js", ".mjs"] as const;
  * the file's contents are not read.
  */
 const DEV_MARKER_FILENAME = ".dev-marker";
+/**
+ * How far before a card-status call a removal or project close still refuses
+ * it: wider than the workspace client's 150ms read coalescing, which can hand
+ * a just-started read a result taken before the removal.
+ */
+const WORKTREE_CARD_READ_COALESCE_GRACE_MS = 1_000;
+/** How long a removal or project close is remembered for that check. */
+const WORKTREE_CARD_TARGET_RETIRE_MS = 30_000;
 
 /**
  * Why this dev plugin's manifest cannot be adopted right now, or `null` when it
@@ -779,6 +787,14 @@ export class PluginService {
     string,
     Map<string, Map<string, PluginWorktreeCardStatus>>
   >();
+  /** Bumped per plugin on each clear of its statuses; see `worktreeCardStatusGeneration`. */
+  private worktreeCardStatusGenerations = new Map<string, number>();
+  /**
+   * When each worktree was removed (`w:{id}`) or project closed (`p:{id}`), so
+   * a setter whose worktree read was already in flight — or answered from the
+   * workspace client's short read coalescing — cannot put a status back.
+   */
+  private retiredWorktreeCardTargets = new Map<string, number>();
   /**
    * Runtime panel menus set via `host.setPanelMenuItems`, keyed `pluginId →
    * panelId → items` (#13213). Held here for the same reason as
@@ -950,6 +966,7 @@ export class PluginService {
    * or unavailable worktree read never does.
    */
   private readonly onWorktreeRemovedForCardStatuses = (payload: { worktreeId: string }): void => {
+    this.retireWorktreeCardTarget(`w:${payload.worktreeId}`);
     for (const [pluginId, byProject] of [...this.pluginWorktreeCardStatuses]) {
       for (const [projectId, statuses] of [...byProject]) {
         if (!statuses.delete(payload.worktreeId)) continue;
@@ -3874,6 +3891,10 @@ export class PluginService {
       pluginWorktreeCardStatuses: this.pluginWorktreeCardStatuses,
       emitWorktreeCardStatuses: (pluginId, projectId) =>
         this.emitWorktreeCardStatuses(pluginId, projectId),
+      worktreeCardStatusGeneration: (pluginId) =>
+        this.worktreeCardStatusGenerations.get(pluginId) ?? 0,
+      isWorktreeCardTargetRetired: (projectId, worktreeId, since) =>
+        this.isWorktreeCardTargetRetired(projectId, worktreeId, since),
       pluginPanelMenus: this.pluginPanelMenus,
       pluginFsWatchers: this.pluginFsWatchers,
       broadcaster: this.broadcaster,
@@ -5624,8 +5645,32 @@ export class PluginService {
     return Object.fromEntries(statuses);
   }
 
+  private retireWorktreeCardTarget(key: string): void {
+    const now = Date.now();
+    for (const [retired, at] of this.retiredWorktreeCardTargets) {
+      if (now - at > WORKTREE_CARD_TARGET_RETIRE_MS) this.retiredWorktreeCardTargets.delete(retired);
+    }
+    this.retiredWorktreeCardTargets.set(key, now);
+  }
+
+  private isWorktreeCardTargetRetired(projectId: string, worktreeId: string, since: number): boolean {
+    // A grace before `since` covers a read answered from a coalesced result
+    // that predates the call itself.
+    const cutoff = since - WORKTREE_CARD_READ_COALESCE_GRACE_MS;
+    const worktreeAt = this.retiredWorktreeCardTargets.get(`w:${worktreeId}`);
+    const projectAt = this.retiredWorktreeCardTargets.get(`p:${projectId}`);
+    return (
+      (worktreeAt !== undefined && worktreeAt >= cutoff) ||
+      (projectAt !== undefined && projectAt >= cutoff)
+    );
+  }
+
   /** Drop a plugin's card statuses everywhere, clearing each project's views. */
   private clearPluginWorktreeCardStatuses(pluginId: string): void {
+    this.worktreeCardStatusGenerations.set(
+      pluginId,
+      (this.worktreeCardStatusGenerations.get(pluginId) ?? 0) + 1
+    );
     const byProject = this.pluginWorktreeCardStatuses.get(pluginId);
     if (!byProject) return;
     this.pluginWorktreeCardStatuses.delete(pluginId);
@@ -6057,6 +6102,7 @@ export class PluginService {
     );
     // Every plugin's statuses on the closed project's cards, app-global ones
     // included: they described worktrees nobody is looking at any more.
+    this.retireWorktreeCardTarget(`p:${projectId}`);
     for (const [pluginId, byProject] of [...this.pluginWorktreeCardStatuses]) {
       if (!byProject.delete(projectId)) continue;
       if (byProject.size === 0) this.pluginWorktreeCardStatuses.delete(pluginId);
@@ -7859,17 +7905,26 @@ export class PluginService {
       }
     }
     for (const [pluginId, byProject] of this.pluginWorktreeCardStatuses) {
-      for (const projectId of byProject.keys()) {
-        if (!inView(projectId)) continue;
+      for (const statusProjectId of byProject.keys()) {
+        if (!inView(statusProjectId)) continue;
+        const envelope = {
+          name: "plugin:worktree-card-statuses-changed",
+          payload: {
+            pluginId,
+            projectId: statusProjectId,
+            statuses: this.serializePluginWorktreeCardStatuses(pluginId, statusProjectId),
+          },
+        };
+        // Withheld from a local view bound to a remote host, like the context
+        // keys: this machine's statuses are not about the cards it shows.
+        if (
+          projectId === undefined &&
+          isWithheldFromView(webContents.id, CHANNELS.EVENTS_PUSH, [envelope])
+        ) {
+          continue;
+        }
         try {
-          webContents.send(CHANNELS.EVENTS_PUSH, {
-            name: "plugin:worktree-card-statuses-changed",
-            payload: {
-              pluginId,
-              projectId,
-              statuses: this.serializePluginWorktreeCardStatuses(pluginId, projectId),
-            },
-          });
+          webContents.send(CHANNELS.EVENTS_PUSH, envelope);
         } catch {
           // Silently ignore send failures during window initialization/disposal.
         }

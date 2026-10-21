@@ -439,6 +439,17 @@ describe("createMockHost", () => {
     ]);
   });
 
+  it("setWorktreeCardStatus keys a status by the snapshot id, whichever id is passed (#13704)", async () => {
+    const host = createMockHost({
+      worktrees: [{ ...sampleSnapshot, id: "/tmp/repo", worktreeId: "wt-stable" }],
+    });
+    await host.setWorktreeCardStatus("wt-stable", { label: "up" });
+    expect([...host.worktreeCardStatuses.keys()]).toEqual(["/tmp/repo"]);
+    expect(host.setWorktreeCardStatusCalls).toEqual([
+      { worktreeId: "/tmp/repo", status: { label: "up" } },
+    ]);
+  });
+
   it("setWorktreeCardStatus rejects what the real host rejects, recording nothing (#13704)", async () => {
     const host = createMockHost({ worktrees: [sampleSnapshot] });
     await expect(host.setWorktreeCardStatus("wt-9", { label: "x" })).rejects.toThrow(

@@ -270,6 +270,8 @@ function makeHostDeps(): PluginHostFactoryDeps {
     emitToolbarBadges: () => {},
     pluginWorktreeCardStatuses: new Map(),
     emitWorktreeCardStatuses: () => {},
+    worktreeCardStatusGeneration: () => 0,
+    isWorktreeCardTargetRetired: () => false,
     pluginPanelMenus: new Map(),
     pluginFsWatchers: new Map(),
     broadcaster: { schedulePluginActionsBroadcast: vi.fn() },

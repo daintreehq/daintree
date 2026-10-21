@@ -1073,7 +1073,7 @@ if (result.status === "ok") {
 
 `label` is one line of 1–32 characters after trimming (`PLUGIN_WORKTREE_CARD_STATUS_LABEL_MAX`). The optional `tooltip` is plain text of up to 512 characters (`PLUGIN_WORKTREE_CARD_STATUS_TOOLTIP_MAX`) and may span lines. Any other field rejects. Both render as text, never markup, and neither takes a colour: the card's accent belongs to agent state, so a plugin status always reads as secondary metadata.
 
-Every plugin that marks a card gets its own chip, named after the plugin in its tooltip and accessible name, so two plugins never hide each other. Each chip is focusable, and its tooltip opens on keyboard focus as well as hover.
+Statuses sit in their own row under an expanded card's header, one chip per plugin, named after the plugin in its tooltip and accessible name, so two plugins never hide each other; the row wraps rather than crowding the card. A collapsed card leaves them out. Each chip is focusable, and its tooltip opens on keyboard focus as well as hover.
 
 Statuses are not persisted. They are cleared when the worktree is removed, when its project closes, and when your plugin unloads or its worker is replaced, so republish them after a restart, for example from `onDidChangeWorktrees`. Not revoke-guarded, and a silent no-op once the plugin unloads. `createMockHost` applies the same checks against its seeded worktrees, records accepted calls in `setWorktreeCardStatusCalls`, and holds the current statuses in `worktreeCardStatuses`.
 

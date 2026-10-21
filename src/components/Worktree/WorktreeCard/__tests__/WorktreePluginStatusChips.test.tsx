@@ -92,6 +92,21 @@ describe("WorktreePluginStatusChips", () => {
     expect(tooltip.textContent).toContain("api: running\ndb: running");
   });
 
+  it("keeps a press on a chip from reaching the card", () => {
+    const onCardClick = vi.fn();
+    render(
+      <TooltipProvider delayDuration={0}>
+        <div onClick={onCardClick}>
+          <WorktreePluginStatusChips
+            statuses={[{ pluginId: "acme.x", status: { label: "up" } }]}
+          />
+        </div>
+      </TooltipProvider>
+    );
+    fireEvent.click(screen.getByRole("button"));
+    expect(onCardClick).not.toHaveBeenCalled();
+  });
+
   it("renders a label as text, never as markup", () => {
     renderChips([{ pluginId: "acme.x", status: { label: "<b>bold</b>" } }]);
     expect(screen.getByRole("button").textContent).toBe("<b>bold</b>");

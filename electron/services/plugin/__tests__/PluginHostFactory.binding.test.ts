@@ -144,6 +144,8 @@ function makeHarness(): Harness {
     emitToolbarBadges: () => {},
     pluginWorktreeCardStatuses: new Map(),
     emitWorktreeCardStatuses: () => {},
+    worktreeCardStatusGeneration: () => 0,
+    isWorktreeCardTargetRetired: () => false,
     pluginPanelMenus: new Map(),
     pluginFsWatchers: new Map(),
     broadcaster: { schedulePluginActionsBroadcast: vi.fn() },
@@ -1949,6 +1951,8 @@ describe("createHost setWorktreeCardStatus", () => {
     const emitted = vi.fn();
     h.deps.pluginWorktreeCardStatuses = new Map();
     h.deps.emitWorktreeCardStatuses = emitted;
+    h.deps.worktreeCardStatusGeneration = () => 0;
+    h.deps.isWorktreeCardTargetRetired = () => false;
     return emitted;
   }
 
@@ -2092,7 +2096,7 @@ describe("createHost setWorktreeCardStatus", () => {
     expect(h.deps.pluginWorktreeCardStatuses.get(PLUGIN_ID)?.get(PROJECT_A)?.size).toBe(1);
   });
 
-  it("does nothing for a stale host after a same-id reload", async () => {
+  it("does nothing when a same-id reload lands while the read is in flight", async () => {
     const h = makeHarness();
     const emitted = withEmitter(h);
     let release: (value: PluginWorktreeSnapshotFetchResult) => void = () => {};
@@ -2104,10 +2108,57 @@ describe("createHost setWorktreeCardStatus", () => {
     const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
 
     const pending = host.setWorktreeCardStatus("wt-a", { label: "late" });
+    await flush();
+    expect(h.projectFetch).toHaveBeenCalledTimes(1);
     h.plugins.set(PLUGIN_ID, fakePlugin());
     release(okFetch([worktree({ id: "wt-a" })]));
 
     await expect(pending).resolves.toBeUndefined();
+    expect(h.deps.pluginWorktreeCardStatuses.size).toBe(0);
+    expect(emitted).not.toHaveBeenCalled();
+  });
+
+  it("drops a call its worker generation made once that generation was cleared", async () => {
+    const h = makeHarness();
+    const emitted = withEmitter(h);
+    let generation = 0;
+    h.deps.worktreeCardStatusGeneration = () => generation;
+    let release: (value: PluginWorktreeSnapshotFetchResult) => void = () => {};
+    h.projectFetch.mockReturnValueOnce(
+      new Promise<PluginWorktreeSnapshotFetchResult>((resolve) => {
+        release = resolve;
+      })
+    );
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+
+    const stale = host.setWorktreeCardStatus("wt-a", { label: "old worker" });
+    await flush();
+    // The worker is replaced: the same plugin entry stays loaded.
+    generation = 1;
+    release(okFetch([worktree({ id: "wt-a" })]));
+    await expect(stale).resolves.toBeUndefined();
+    expect(h.deps.pluginWorktreeCardStatuses.size).toBe(0);
+    expect(emitted).not.toHaveBeenCalled();
+
+    h.projectFetch.mockResolvedValue(okFetch([worktree({ id: "wt-a" })]));
+    await host.setWorktreeCardStatus("wt-a", { label: "new worker" });
+    expect(emitted).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses a worktree removed or closed while its read was in flight", async () => {
+    const h = makeHarness();
+    const emitted = withEmitter(h);
+    const retired = vi.fn((_projectId: string, _worktreeId: string, _since: number) => true);
+    h.deps.isWorktreeCardTargetRetired = retired;
+    h.projectFetch.mockResolvedValue(okFetch([worktree({ id: "wt-a" })]));
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+
+    const before = Date.now();
+    await expect(host.setWorktreeCardStatus("wt-a", { label: "x" })).rejects.toThrow(
+      /"wt-a" was removed/
+    );
+    expect(retired).toHaveBeenCalledWith(PROJECT_A, "wt-a", expect.any(Number));
+    expect(retired.mock.calls[0][2]).toBeGreaterThanOrEqual(before);
     expect(h.deps.pluginWorktreeCardStatuses.size).toBe(0);
     expect(emitted).not.toHaveBeenCalled();
   });

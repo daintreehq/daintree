@@ -21,12 +21,14 @@ function PluginStatusChip({
     <Tooltip>
       <TooltipTrigger asChild>
         {/* A button so the status is reachable by keyboard and its tooltip
-            opens on focus; it does nothing else. */}
+            opens on focus; it does nothing else, so a press (or Enter/Space,
+            which click it) must not reach the card and select the worktree. */}
         <button
           type="button"
           data-no-dnd
           aria-label={`${name}: ${status.label}`}
-          className="-my-[5px] inline-flex h-6 min-w-0 max-w-28 shrink items-center rounded-[var(--radius-sm)] px-1 text-xs text-text-secondary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
+          onClick={(event) => event.stopPropagation()}
+          className="inline-flex h-6 min-w-0 max-w-full items-center rounded-[var(--radius-sm)] px-1 text-xs text-text-secondary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
         >
           <span className="min-w-0 truncate">{status.label}</span>
         </button>

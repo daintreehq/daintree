@@ -1142,6 +1142,58 @@ describe("worktree card statuses (#13704)", () => {
     ]);
   });
 
+  it("withholds replayed statuses from a local view bound to a remote host", async () => {
+    const service = new PluginService(tmpDir);
+    await service.activateStartupFinishedPlugins();
+    statusesOf(service).set(
+      "acme.global",
+      new Map([["proj-a", new Map([["/a/wt", { label: "up" }]])]])
+    );
+    ipcViewMocks.getProjectRendererTargets.mockImplementation(() => [{ id: 4251 }]);
+    ipcViewMocks.isWithheldFromView.mockImplementation((id) => id === 4251);
+    const send = vi.fn();
+    const wc = { id: 4251, send, isDestroyed: () => false } as unknown as Electron.WebContents;
+
+    try {
+      await service.pushSnapshotTo(wc);
+    } finally {
+      ipcViewMocks.isWithheldFromView.mockImplementation(() => false);
+    }
+
+    const replayed = send.mock.calls
+      .map((c) => c[1] as { name?: string })
+      .filter((event) => event.name === "plugin:worktree-card-statuses-changed");
+    expect(replayed).toEqual([]);
+  });
+
+  it("remembers removals and closes, so a setter whose read predates them is refused", async () => {
+    const service = new PluginService(tmpDir);
+    await service.activateStartupFinishedPlugins();
+    const handlers = new Map<string, (payload: unknown) => void>();
+    service.setWorkspaceClient({
+      on: (event: string, handler: (payload: unknown) => void) => handlers.set(event, handler),
+      off: () => {},
+    } as never);
+    const retired = (projectId: string, worktreeId: string, since: number) =>
+      (
+        service as unknown as {
+          isWorktreeCardTargetRetired: (p: string, w: string, s: number) => boolean;
+        }
+      ).isWorktreeCardTargetRetired(projectId, worktreeId, since);
+
+    const startedAt = Date.now();
+    expect(retired("proj-a", "/a/gone", startedAt)).toBe(false);
+    handlers.get("worktree-removed")!({ worktreeId: "/a/gone", projectPath: "/a" });
+    expect(retired("proj-a", "/a/gone", startedAt)).toBe(true);
+    expect(retired("proj-a", "/a/other", startedAt)).toBe(false);
+    // A call that started well after the removal names a new worktree there.
+    expect(retired("proj-a", "/a/gone", Date.now() + 5_000)).toBe(false);
+
+    await service.onProjectClosed("proj-b");
+    expect(retired("proj-b", "/b/any", startedAt)).toBe(true);
+    service.dispose();
+  });
+
   it("clears every project a plugin marked when it unloads", async () => {
     await writeDevPlugin("dev-status", "acme.status");
     const service = new PluginService(tmpDir);
@@ -1190,6 +1242,10 @@ describe("worktree card statuses (#13704)", () => {
     expect(statusEvents().map((event) => event.payload)).toEqual([
       { pluginId: "acme.status-reload", projectId: "proj-a", statuses: {} },
     ]);
+    const generation = (
+      service as unknown as { worktreeCardStatusGenerations: Map<string, number> }
+    ).worktreeCardStatusGenerations.get("acme.status-reload");
+    expect(generation).toBe(1);
   });
 
   it("clears every plugin's statuses on a closed project and leaves other projects alone", async () => {

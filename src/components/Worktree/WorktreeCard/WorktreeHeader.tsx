@@ -334,8 +334,7 @@ export function WorktreeHeader({
           isLifecycleRunning ||
           onCheckResourceStatus ||
           hasDevServerSignal ||
-          hasAttachmentChips ||
-          pluginStatuses.length > 0) && (
+          hasAttachmentChips) && (
           <div className="flex items-center gap-2 shrink-0">
             {isPinned && !isMainWorktree && (
               <Pin
@@ -407,7 +406,6 @@ export function WorktreeHeader({
                 onAction={onAttachmentAction}
               />
             )}
-            <WorktreePluginStatusChips statuses={pluginStatuses} />
             <DevServerIndicator session={devServerSession} />
           </div>
         )}
@@ -477,6 +475,14 @@ export function WorktreeHeader({
             badges={badges}
           />
         )}
+
+      {/* Its own wrapping row, so any number of plugins can mark a card
+          without squeezing the headline out of the row above. */}
+      {!isCollapsed && pluginStatuses.length > 0 && (
+        <div className="mt-1.5 flex flex-wrap items-center gap-1 px-1">
+          <WorktreePluginStatusChips statuses={pluginStatuses} />
+        </div>
+      )}
     </div>
   );
 }
