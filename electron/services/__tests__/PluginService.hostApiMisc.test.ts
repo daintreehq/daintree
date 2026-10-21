@@ -971,16 +971,20 @@ describe("Plugin worktree host API", () => {
 
   it("onDidChangeWorktrees disposer stops both update and remove subscriptions", async () => {
     const { host, client, revoke } = await setup([mkSnap({ id: "a", isCurrent: true })]);
+    // The service keeps a `worktree-removed` listener of its own (card
+    // statuses, #13704); only this plugin's subscriptions are counted.
+    const updateBefore = client.listenerCount("worktree-update");
+    const removedBefore = client.listenerCount("worktree-removed");
 
     const cb = vi.fn();
     const dispose = await host.onDidChangeWorktrees(cb);
     revoke();
-    expect(client.listenerCount("worktree-update")).toBe(1);
-    expect(client.listenerCount("worktree-removed")).toBe(1);
+    expect(client.listenerCount("worktree-update")).toBe(updateBefore + 1);
+    expect(client.listenerCount("worktree-removed")).toBe(removedBefore + 1);
 
     dispose();
-    expect(client.listenerCount("worktree-update")).toBe(0);
-    expect(client.listenerCount("worktree-removed")).toBe(0);
+    expect(client.listenerCount("worktree-update")).toBe(updateBefore);
+    expect(client.listenerCount("worktree-removed")).toBe(removedBefore);
   });
 
   it("plugin snapshot exposes exactly the documented allowlist fields", async () => {

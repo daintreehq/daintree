@@ -33,7 +33,7 @@ function PluginStatusChip({
           <span className="min-w-0 truncate">{status.label}</span>
         </button>
       </TooltipTrigger>
-      <TooltipContent side="top" className="max-w-80">
+      <TooltipContent side="top">
         <div className="flex flex-col gap-1">
           <span>{`${name} · ${status.label}`}</span>
           {status.tooltip && (
