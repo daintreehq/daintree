@@ -145,6 +145,18 @@ describe("listWaitingRuns", () => {
     expect(runs[0]!.screen).not.toContain("MIIEvQIBADANBgkqhkiG9w0BAQEFAASC");
   });
 
+  it("offers no options when redacting lengthens one past what an answer may carry", async () => {
+    const long = `${"x".repeat(181)} password=abc`;
+    screens.set("a", ["❯ 1. Yes", `  2. ${long}`, "", " Esc to cancel"].join("\n"));
+    const runs = await listWaitingRuns({
+      fleet: () => snapshot([row({ runId: "a", agentState: "waiting" })]),
+      pty: () => ptyAt(100),
+      projectName: () => null,
+    });
+    expect(runs[0]!.choices).toEqual([]);
+    expect(runs[0]!.screen).toContain("password=[redacted]");
+  });
+
   it("lists nothing when the fleet has no snapshot yet", async () => {
     expect(
       await listWaitingRuns({ fleet: () => null, pty: () => null, projectName: () => null })

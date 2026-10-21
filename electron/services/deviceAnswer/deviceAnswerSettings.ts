@@ -4,6 +4,7 @@ import type {
   PairedDeviceRecord,
 } from "../../../shared/types/ipc/deviceAnswer.js";
 import { normalizeTailnetHost } from "./deviceAuth.js";
+import { redactSecrets } from "../redactSecrets.js";
 
 export const DEFAULT_DEVICE_ANSWER_PORT = 7421;
 export const MAX_PAIRED_DEVICES = 10;
@@ -55,6 +56,12 @@ export function sanitizeDeviceAnswerSettings(raw: unknown): DeviceAnswerSettings
             (a.outcome === "answered" || a.outcome === "refused")
         )
         .slice(0, MAX_AUDIT_ENTRIES)
+        // Entries recorded before labels were redacted can still hold a secret.
+        .map((a) => ({
+          ...a,
+          label: redactSecrets(a.label),
+          ...(typeof a.reason === "string" ? { reason: redactSecrets(a.reason) } : {}),
+        }))
     : [];
   return {
     enabled: value.enabled === true,

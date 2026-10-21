@@ -3,7 +3,7 @@ import type { AgentState, WaitingReason } from "../../../shared/types/agent.js";
 import type { FleetRunRow, FleetSnapshot } from "../../../shared/types/ipc/fleet.js";
 import { readPluginTerminalScreen } from "../plugin/pluginTerminalScreenRead.js";
 import { redactSecrets } from "../redactSecrets.js";
-import { ANSWER_SCREEN_LINES, type AnswerPtyClient } from "../terminalAnswer.js";
+import { ANSWER_SCREEN_LINES, isAnswerLabel, type AnswerPtyClient } from "../terminalAnswer.js";
 
 /** Runs a page lists at once; screens are read for each on every poll. */
 export const MAX_LISTED_RUNS = 20;
@@ -82,13 +82,22 @@ export async function listWaitingRuns(deps: DeviceAnswerRunsDeps): Promise<Waiti
         screen: screen === null ? null : redactSecrets(screen),
         // Parsed from the raw screen, since redacting can swallow rows of the
         // dialog; the device answers with these labels as sent.
-        choices: screen === null ? [] : listChoices(screen, redactSecrets),
+        choices: screen === null ? [] : answerableChoices(screen),
       };
     })
   );
   // A run that moved on while its screen was read isn't listed on an old word.
   const after = deps.fleet();
   return views.filter((view) => isRunStillWaiting(after, view.runId, view.spawnedAt));
+}
+
+/**
+ * The options as the device is sent them, or none when one couldn't be sent
+ * back: redacting can lengthen a label past what an answer may carry.
+ */
+function answerableChoices(screen: string): string[] {
+  const choices = listChoices(screen, redactSecrets);
+  return choices.every(isAnswerLabel) ? choices : [];
 }
 
 /**
