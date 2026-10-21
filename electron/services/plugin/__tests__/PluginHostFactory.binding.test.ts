@@ -145,6 +145,7 @@ function makeHarness(): Harness {
     pluginWorktreeCardStatuses: new Map(),
     emitWorktreeCardStatuses: () => {},
     worktreeCardStatusGeneration: () => 0,
+    worktreeCardTargetRevision: () => 0,
     isWorktreeCardTargetRetired: () => false,
     pluginPanelMenus: new Map(),
     pluginFsWatchers: new Map(),
@@ -1952,6 +1953,7 @@ describe("createHost setWorktreeCardStatus", () => {
     h.deps.pluginWorktreeCardStatuses = new Map();
     h.deps.emitWorktreeCardStatuses = emitted;
     h.deps.worktreeCardStatusGeneration = () => 0;
+    h.deps.worktreeCardTargetRevision = () => 0;
     h.deps.isWorktreeCardTargetRetired = () => false;
     return emitted;
   }
@@ -2148,19 +2150,50 @@ describe("createHost setWorktreeCardStatus", () => {
   it("refuses a worktree removed or closed while its read was in flight", async () => {
     const h = makeHarness();
     const emitted = withEmitter(h);
-    const retired = vi.fn((_projectId: string, _worktreeId: string, _since: number) => true);
+    const retired = vi.fn(
+      (_projectId: string, _worktreeId: string, _since: { revision: number; at: number }) => true
+    );
     h.deps.isWorktreeCardTargetRetired = retired;
     h.projectFetch.mockResolvedValue(okFetch([worktree({ id: "wt-a" })]));
     const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
 
-    const before = Date.now();
     await expect(host.setWorktreeCardStatus("wt-a", { label: "x" })).rejects.toThrow(
       /"wt-a" was removed/
     );
-    expect(retired).toHaveBeenCalledWith(PROJECT_A, "wt-a", expect.any(Number));
-    expect(retired.mock.calls[0][2]).toBeGreaterThanOrEqual(before);
+    expect(retired).toHaveBeenCalledWith(PROJECT_A, "wt-a", expect.objectContaining({ revision: 0 }));
     expect(h.deps.pluginWorktreeCardStatuses.size).toBe(0);
     expect(emitted).not.toHaveBeenCalled();
+  });
+
+  it("checks a queued call against the lifecycle revision from when it was made", async () => {
+    const h = makeHarness();
+    withEmitter(h);
+    let revision = 3;
+    h.deps.worktreeCardTargetRevision = () => revision;
+    const retired = vi.fn(
+      (_projectId: string, _worktreeId: string, _since: { revision: number; at: number }) => false
+    );
+    h.deps.isWorktreeCardTargetRetired = retired;
+    let release: (value: PluginWorktreeSnapshotFetchResult) => void = () => {};
+    h.projectFetch.mockReturnValueOnce(
+      new Promise<PluginWorktreeSnapshotFetchResult>((resolve) => {
+        release = resolve;
+      })
+    );
+    h.projectFetch.mockResolvedValue(okFetch([worktree({ id: "wt-a" }), worktree({ id: "wt-b" })]));
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+
+    const first = host.setWorktreeCardStatus("wt-a", { label: "a" });
+    const queued = host.setWorktreeCardStatus("wt-b", { label: "b" });
+    // A removal lands while the queued call waits behind the first.
+    revision = 4;
+    release(okFetch([worktree({ id: "wt-a" }), worktree({ id: "wt-b" })]));
+    await Promise.all([first, queued]);
+
+    expect(retired.mock.calls.map((call) => [call[1], call[2].revision])).toEqual([
+      ["wt-a", 3],
+      ["wt-b", 3],
+    ]);
   });
 
   it("files an unbound plugin's status under the project its read named", async () => {

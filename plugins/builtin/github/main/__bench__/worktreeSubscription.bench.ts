@@ -178,6 +178,7 @@ async function runScenario(): Promise<Metrics> {
     pluginWorktreeCardStatuses: new Map(),
     emitWorktreeCardStatuses: () => {},
     worktreeCardStatusGeneration: () => 0,
+    worktreeCardTargetRevision: () => 0,
     isWorktreeCardTargetRetired: () => false,
     pluginFsWatchers: new Map(),
     broadcaster: { schedulePluginActionsBroadcast: () => {} },

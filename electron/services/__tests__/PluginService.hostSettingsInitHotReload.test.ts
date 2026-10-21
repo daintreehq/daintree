@@ -1174,23 +1174,31 @@ describe("worktree card statuses (#13704)", () => {
       on: (event: string, handler: (payload: unknown) => void) => handlers.set(event, handler),
       off: () => {},
     } as never);
-    const retired = (projectId: string, worktreeId: string, since: number) =>
-      (
-        service as unknown as {
-          isWorktreeCardTargetRetired: (p: string, w: string, s: number) => boolean;
-        }
-      ).isWorktreeCardTargetRetired(projectId, worktreeId, since);
+    type Since = { revision: number; at: number };
+    const internals = service as unknown as {
+      worktreeCardTargetRevision: number;
+      isWorktreeCardTargetRetired: (p: string, w: string, s: Since) => boolean;
+    };
+    const retired = (projectId: string, worktreeId: string, since: Since) =>
+      internals.isWorktreeCardTargetRetired(projectId, worktreeId, since);
 
-    const startedAt = Date.now();
-    expect(retired("proj-a", "/a/gone", startedAt)).toBe(false);
+    // A call made before the removal, however long its read then took.
+    const before = { revision: internals.worktreeCardTargetRevision, at: Date.now() - 60_000 };
+    expect(retired("proj-a", "/a/gone", before)).toBe(false);
     handlers.get("worktree-removed")!({ worktreeId: "/a/gone", projectPath: "/a" });
-    expect(retired("proj-a", "/a/gone", startedAt)).toBe(true);
-    expect(retired("proj-a", "/a/other", startedAt)).toBe(false);
-    // A call that started well after the removal names a new worktree there.
-    expect(retired("proj-a", "/a/gone", Date.now() + 5_000)).toBe(false);
+    expect(retired("proj-a", "/a/gone", before)).toBe(true);
+    expect(retired("proj-a", "/a/other", before)).toBe(false);
+
+    // A call made just after it can still be answered by a coalesced read.
+    const justAfter = { revision: internals.worktreeCardTargetRevision, at: Date.now() };
+    expect(retired("proj-a", "/a/gone", justAfter)).toBe(true);
+    // One made once the worktree exists again, past that grace, is about the new one.
+    const recreated = { revision: internals.worktreeCardTargetRevision, at: Date.now() + 5_000 };
+    expect(retired("proj-a", "/a/gone", recreated)).toBe(false);
 
     await service.onProjectClosed("proj-b");
-    expect(retired("proj-b", "/b/any", startedAt)).toBe(true);
+    expect(retired("proj-b", "/b/any", before)).toBe(true);
+    expect(retired("proj-b", "/b/any", { ...recreated, revision: internals.worktreeCardTargetRevision })).toBe(false);
     service.dispose();
   });
 

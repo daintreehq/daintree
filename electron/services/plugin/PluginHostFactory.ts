@@ -578,11 +578,18 @@ export interface PluginHostFactoryDeps {
    * a call its previous generation left in flight lands on nothing.
    */
   worktreeCardStatusGeneration: (pluginId: string) => number;
+  /** Bumped on every worktree removal and project close. */
+  worktreeCardTargetRevision: () => number;
   /**
-   * Whether the worktree was removed, or its project closed, since `since`
-   * (epoch ms). A read that started before either can still name it.
+   * Whether the worktree was removed, or its project closed, after the call
+   * taken at `since` (or within the read-coalescing grace before it). A read
+   * that started before either can still name it.
    */
-  isWorktreeCardTargetRetired: (projectId: string, worktreeId: string, since: number) => boolean;
+  isWorktreeCardTargetRetired: (
+    projectId: string,
+    worktreeId: string,
+    since: { revision: number; at: number }
+  ) => boolean;
   /** Runtime panel menus set via `host.setPanelMenuItems`, `pluginId → panelId → items`. */
   pluginPanelMenus: Map<string, Map<string, readonly PublishedPanelMenuItem[]>>;
   pluginFsWatchers: Map<string, Set<() => void>>;
@@ -2395,8 +2402,10 @@ export function createHost(
       // Taken at the call, not when the queued run starts: a call the previous
       // worker generation made must not land after that generation's clear.
       const generation = deps.worktreeCardStatusGeneration(pluginId);
+      // Same for the worktree's lifecycle: a call queued behind another must
+      // not outlive a removal that happened while it waited.
+      const since = { revision: deps.worktreeCardTargetRevision(), at: Date.now() };
       const run = async (): Promise<void> => {
-        const startedAt = Date.now();
         const result = await getWorktreesResult();
         if (!isBound() || deps.worktreeCardStatusGeneration(pluginId) !== generation) return;
         if (result.status !== "ok") {
@@ -2416,7 +2425,7 @@ export function createHost(
         // The card is keyed by the snapshot's own id, whichever spelling the
         // plugin passed.
         const cardId = target.id;
-        if (deps.isWorktreeCardTargetRetired(projectId, cardId, startedAt)) {
+        if (deps.isWorktreeCardTargetRetired(projectId, cardId, since)) {
           throw new Error(
             `Plugin "${pluginId}" setWorktreeCardStatus: "${entry.worktreeId}" was removed`
           );

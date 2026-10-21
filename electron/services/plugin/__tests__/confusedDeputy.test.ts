@@ -271,6 +271,7 @@ function makeHostDeps(): PluginHostFactoryDeps {
     pluginWorktreeCardStatuses: new Map(),
     emitWorktreeCardStatuses: () => {},
     worktreeCardStatusGeneration: () => 0,
+    worktreeCardTargetRevision: () => 0,
     isWorktreeCardTargetRetired: () => false,
     pluginPanelMenus: new Map(),
     pluginFsWatchers: new Map(),

@@ -373,13 +373,17 @@ const COMMAND_HANDLER_EXTENSIONS = [".js", ".mjs"] as const;
  */
 const DEV_MARKER_FILENAME = ".dev-marker";
 /**
- * How far before a card-status call a removal or project close still refuses
- * it: wider than the workspace client's 150ms read coalescing, which can hand
- * a just-started read a result taken before the removal.
+ * How long before a card-status call a removal or project close still refuses
+ * it: wider than the workspace client's 150ms read coalescing, which can answer
+ * a call made just after a removal with a result taken before it, and far
+ * shorter than it takes to create a worktree again at the same path.
  */
-const WORKTREE_CARD_READ_COALESCE_GRACE_MS = 1_000;
-/** How long a removal or project close is remembered for that check. */
-const WORKTREE_CARD_TARGET_RETIRE_MS = 30_000;
+const WORKTREE_CARD_READ_COALESCE_GRACE_MS = 250;
+/**
+ * How long a removal or project close is remembered: past any call still
+ * queued or in flight from before it, which the host-call deadline bounds.
+ */
+const WORKTREE_CARD_TARGET_RETIRE_MS = 5 * 60_000;
 
 /**
  * Why this dev plugin's manifest cannot be adopted right now, or `null` when it
@@ -794,7 +798,9 @@ export class PluginService {
    * a setter whose worktree read was already in flight — or answered from the
    * workspace client's short read coalescing — cannot put a status back.
    */
-  private retiredWorktreeCardTargets = new Map<string, number>();
+  private retiredWorktreeCardTargets = new Map<string, { revision: number; at: number }>();
+  /** Bumped on every removal or close recorded in {@link retiredWorktreeCardTargets}. */
+  private worktreeCardTargetRevision = 0;
   /**
    * Runtime panel menus set via `host.setPanelMenuItems`, keyed `pluginId →
    * panelId → items` (#13213). Held here for the same reason as
@@ -3893,6 +3899,7 @@ export class PluginService {
         this.emitWorktreeCardStatuses(pluginId, projectId),
       worktreeCardStatusGeneration: (pluginId) =>
         this.worktreeCardStatusGenerations.get(pluginId) ?? 0,
+      worktreeCardTargetRevision: () => this.worktreeCardTargetRevision,
       isWorktreeCardTargetRetired: (projectId, worktreeId, since) =>
         this.isWorktreeCardTargetRetired(projectId, worktreeId, since),
       pluginPanelMenus: this.pluginPanelMenus,
@@ -5647,22 +5654,32 @@ export class PluginService {
 
   private retireWorktreeCardTarget(key: string): void {
     const now = Date.now();
-    for (const [retired, at] of this.retiredWorktreeCardTargets) {
+    for (const [retired, { at }] of this.retiredWorktreeCardTargets) {
       if (now - at > WORKTREE_CARD_TARGET_RETIRE_MS) this.retiredWorktreeCardTargets.delete(retired);
     }
-    this.retiredWorktreeCardTargets.set(key, now);
+    this.retiredWorktreeCardTargets.set(key, { revision: ++this.worktreeCardTargetRevision, at: now });
   }
 
-  private isWorktreeCardTargetRetired(projectId: string, worktreeId: string, since: number): boolean {
-    // A grace before `since` covers a read answered from a coalesced result
-    // that predates the call itself.
-    const cutoff = since - WORKTREE_CARD_READ_COALESCE_GRACE_MS;
-    const worktreeAt = this.retiredWorktreeCardTargets.get(`w:${worktreeId}`);
-    const projectAt = this.retiredWorktreeCardTargets.get(`p:${projectId}`);
-    return (
-      (worktreeAt !== undefined && worktreeAt >= cutoff) ||
-      (projectAt !== undefined && projectAt >= cutoff)
-    );
+  /**
+   * Whether the worktree was removed, or its project closed, after a call was
+   * made (`since.revision`, taken at the call) — or just before it, within the
+   * read-coalescing grace. A call made once the worktree exists again, past
+   * that grace, is about the new one and goes through.
+   */
+  private isWorktreeCardTargetRetired(
+    projectId: string,
+    worktreeId: string,
+    since: { revision: number; at: number }
+  ): boolean {
+    const spans = (key: string): boolean => {
+      const retired = this.retiredWorktreeCardTargets.get(key);
+      if (!retired) return false;
+      return (
+        retired.revision > since.revision ||
+        retired.at >= since.at - WORKTREE_CARD_READ_COALESCE_GRACE_MS
+      );
+    };
+    return spans(`w:${worktreeId}`) || spans(`p:${projectId}`);
   }
 
   /** Drop a plugin's card statuses everywhere, clearing each project's views. */
