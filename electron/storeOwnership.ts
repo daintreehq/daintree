@@ -98,6 +98,8 @@ export const STORE_KEY_OWNERSHIP = {
   devPreviewUserStopped: "host",
   remoteHosts: "device",
   hostMode: "device",
+  // This machine's own listener and the devices paired to it.
+  deviceAnswer: "device",
   remoteHostsPreferences: "device",
   // What this machine lets a host's plugins do with its clipboard.
   remoteHostPluginClipboardGrants: "device",

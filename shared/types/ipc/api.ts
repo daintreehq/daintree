@@ -236,6 +236,9 @@ export interface ElectronAPI extends GeneratedElectronAPI {
   hostMode: GeneratedElectronAPI["hostMode"] & {
     onEvent(callback: (event: import("./hostMode.js").HostModeEvent) => void): () => void;
   };
+  deviceAnswer: GeneratedElectronAPI["deviceAnswer"] & {
+    onEvent(callback: (event: import("./deviceAnswer.js").DeviceAnswerEvent) => void): () => void;
+  };
   driveLease: GeneratedElectronAPI["driveLease"] & {
     onEvent(callback: (event: import("./driveLease.js").DriveLeaseEvent) => void): () => void;
   };

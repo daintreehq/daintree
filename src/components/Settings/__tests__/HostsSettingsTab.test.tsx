@@ -38,6 +38,7 @@ function entry(id: string, name: string): HostListEntry {
 let listeners: Array<(event: RemoteHostsEvent) => void>;
 let remoteHosts: Record<string, ReturnType<typeof vi.fn>>;
 let hostMode: Record<string, ReturnType<typeof vi.fn>>;
+let deviceAnswer: Record<string, ReturnType<typeof vi.fn>>;
 
 beforeEach(() => {
   listeners = [];
@@ -70,8 +71,21 @@ beforeEach(() => {
     })),
     onEvent: vi.fn(() => () => {}),
   };
+  deviceAnswer = {
+    getStatus: vi.fn(async () => ({
+      enabled: false,
+      listening: false,
+      port: 7421,
+      tailnetHost: null,
+      error: null,
+      pairing: null,
+      devices: [],
+      recentAnswers: [],
+    })),
+    onEvent: vi.fn(() => () => {}),
+  };
   Object.defineProperty(window, "electron", {
-    value: { remoteHosts, hostMode },
+    value: { remoteHosts, hostMode, deviceAnswer },
     configurable: true,
     writable: true,
   });
@@ -96,7 +110,7 @@ describe("HostsSettingsTab", () => {
     expect(screen.getByRole("button", { name: "Add host" })).toBeTruthy();
   });
 
-  it("gives the hosts list and this machine's Host mode their own sections", async () => {
+  it("gives the hosts list, Host mode and answering from another device their own sections", async () => {
     const { container } = render(
       <TooltipProvider>
         <HostsSettingsTab />
@@ -106,7 +120,11 @@ describe("HostsSettingsTab", () => {
     const headings = [...container.querySelectorAll("[data-settings-section-title]")].map(
       (heading) => heading.textContent
     );
-    expect(headings).toEqual(["Remote hosts", "This machine as a host"]);
+    expect(headings).toEqual([
+      "Remote hosts",
+      "This machine as a host",
+      "Answer from another device",
+    ]);
     // Search results scroll to these.
     expect(container.querySelector("#hosts-list")).not.toBeNull();
     expect(container.querySelector("#host-mode")).not.toBeNull();

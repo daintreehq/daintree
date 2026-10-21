@@ -1436,6 +1436,7 @@ export interface IpcEventMap {
   // Remote Hosts namespaces: one push channel each, carrying a discriminated union.
   "remote-hosts:event": import("./remoteHosts.js").RemoteHostsEvent;
   "host-mode:event": import("./hostMode.js").HostModeEvent;
+  "device-answer:event": import("./deviceAnswer.js").DeviceAnswerEvent;
   "drive-lease:event": import("./driveLease.js").DriveLeaseEvent;
   "operations:event": import("./operations.js").OperationsEvent;
   "file-transfer:event": import("./fileTransfer.js").FileTransferEvent;

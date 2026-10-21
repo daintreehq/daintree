@@ -1352,6 +1352,12 @@ export const CHANNELS = {
   HOST_MODE_SET_ENABLED: "host-mode:set-enabled",
   HOST_MODE_RUN_KEYCHAIN_PREFLIGHT: "host-mode:run-keychain-preflight",
   HOST_MODE_EVENT: "host-mode:event",
+  DEVICE_ANSWER_GET_STATUS: "device-answer:get-status",
+  DEVICE_ANSWER_SET_ENABLED: "device-answer:set-enabled",
+  DEVICE_ANSWER_CREATE_PAIRING_CODE: "device-answer:create-pairing-code",
+  DEVICE_ANSWER_CANCEL_PAIRING_CODE: "device-answer:cancel-pairing-code",
+  DEVICE_ANSWER_REVOKE_DEVICE: "device-answer:revoke-device",
+  DEVICE_ANSWER_EVENT: "device-answer:event",
 
   // Remote Hosts: driveLease (host).
   DRIVE_LEASE_GET: "drive-lease:get",
