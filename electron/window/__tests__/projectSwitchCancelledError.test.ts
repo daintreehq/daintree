@@ -17,6 +17,8 @@ vi.mock("../systemMemoryPressureDelivery.js", () => ({
 import { notifyError } from "../../ipc/errorHandlers.js";
 import { projectStore } from "../../services/ProjectStore.js";
 import { AppError } from "../../utils/errorTypes.js";
+import { toHostScopedKey } from "../../../shared/types/remoteHosts.js";
+import { forgetRemoteWorkspaceTitles, rememberRemoteWorkspaceTitle } from "../windowTitle.js";
 import {
   createCancelledSwitchError,
   formatCancelledSwitchMessage,
@@ -95,6 +97,22 @@ describe("createCancelledSwitchError", () => {
 
     vi.mocked(projectStore.getProjectById).mockReturnValueOnce({ name: "   " } as never);
     expect(cancelledError().userMessage).toBe(formatCancelledSwitchMessage(null, null));
+  });
+
+  it("names a host's project the way its window title does", () => {
+    const key = toHostScopedKey("studio-02", "944e00f5");
+    rememberRemoteWorkspaceTitle(key, "daintree", "studio-02");
+    try {
+      const error = createCancelledSwitchError({
+        message: "View never painted",
+        context: {},
+        previousProjectId: key,
+      });
+      expect(error.userMessage).toBe(formatCancelledSwitchMessage("daintree — studio-02", null));
+      expect(projectStore.getProjectById).not.toHaveBeenCalled();
+    } finally {
+      forgetRemoteWorkspaceTitles("studio-02");
+    }
   });
 
   it("skips the lookup when there was no previous project", () => {

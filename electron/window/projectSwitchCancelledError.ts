@@ -4,6 +4,7 @@ import { notifyError } from "../ipc/errorHandlers.js";
 import { projectStore } from "../services/ProjectStore.js";
 import { AppError } from "../utils/errorTypes.js";
 import { getOpenSystemMemoryPressure } from "./systemMemoryPressureDelivery.js";
+import { remoteWorkspaceName } from "./windowTitle.js";
 
 /**
  * Switches the paint gate rolled back (#13035). Their `message` stays technical
@@ -26,8 +27,11 @@ export function formatCancelledSwitchMessage(
   return pressure ? `${outcome} Daintree is also reporting high system memory use.` : outcome;
 }
 
+// A host's project is keyed by its host-scoped key, which no local project row has.
 function lookUpProjectName(projectId: string | null): string | null {
   if (!projectId) return null;
+  const remote = remoteWorkspaceName(projectId);
+  if (remote) return remote;
   try {
     return projectStore.getProjectById(projectId)?.name?.trim() || null;
   } catch {

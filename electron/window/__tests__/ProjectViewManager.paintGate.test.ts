@@ -227,6 +227,8 @@ import { CHANNELS } from "../../ipc/channels.js";
 import { injectSkeletonCss } from "../skeletonCss.js";
 import { projectStore } from "../../services/ProjectStore.js";
 import { formatCancelledSwitchMessage } from "../projectSwitchCancelledError.js";
+import { forgetRemoteWorkspaceTitles, rememberRemoteWorkspaceTitle } from "../windowTitle.js";
+import { toHostScopedKey } from "../../../shared/types/remoteHosts.js";
 import {
   publishSystemMemoryPressure,
   resetSystemMemoryPressureDeliveryForTesting,
@@ -1953,6 +1955,37 @@ describe("ProjectViewManager — frame confirmation before reveal (#12394)", () 
       expect(vi.mocked(notifyError)).not.toHaveBeenCalled();
     } finally {
       vi.mocked(projectStore.getProjectById).mockImplementation(() => null);
+    }
+  });
+
+  it("leaves a cancelled switch away from a host's project to that view, named as its title is (#13713)", async () => {
+    const hostWc = createMockWebContents();
+    wcQueue.push(hostWc);
+    const opened = manager.switchToHostProject("studio-02", "944e00f5", "/srv/daintree");
+    await vi.advanceTimersByTimeAsync(0);
+    manager.signalSkeletonPainted(hostWc.id);
+    await vi.advanceTimersByTimeAsync(0);
+    await opened;
+    vi.mocked(logWarn).mockClear();
+    holdFrames(initialWc);
+    rememberRemoteWorkspaceTitle(toHostScopedKey("studio-02", "944e00f5"), "daintree", "studio-02");
+    try {
+      const rejected = expectRejection(
+        manager.switchTo("proj-a", "/path/a", undefined, { requesterWebContentsId: hostWc.id })
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      manager.signalWarmViewPainted(initialWc.id);
+      await vi.advanceTimersByTimeAsync(PAINT_HARD_MS);
+
+      const error = await rejected;
+      expect((error as { userMessage?: string }).userMessage).toBe(
+        formatCancelledSwitchMessage("daintree — studio-02", null)
+      );
+      expect(manager.getActiveProjectId()).toBe(toHostScopedKey("studio-02", "944e00f5"));
+      expect(attachedWebContents()).toEqual([hostWc]);
+      expect(vi.mocked(notifyError)).not.toHaveBeenCalled();
+    } finally {
+      forgetRemoteWorkspaceTitles("studio-02");
     }
   });
 

@@ -83,10 +83,18 @@ export function forgetRemoteWorkspaceTitles(hostId: HostId): void {
   }
 }
 
+/** A host-scoped view's name as its window title shows it; null for any other key. */
+export function remoteWorkspaceName(key: string): string | null {
+  const remote = remoteWorkspaceTitles.get(key);
+  return remote
+    ? `${remote.projectName} — ${remoteHostName(remote.hostId) ?? remote.hostId}`
+    : null;
+}
+
 function openProjectName(projectId: string | null, lookup: ProjectTitleLookup): string | null {
   if (!projectId) return null;
-  const remote = remoteWorkspaceTitles.get(projectId);
-  if (remote) return `${remote.projectName} — ${remoteHostName(remote.hostId) ?? remote.hostId}`;
+  const remote = remoteWorkspaceName(projectId);
+  if (remote) return remote;
   const project = lookup(projectId);
   if (!project || project.status === "closed") return null;
   return project.name ?? null;

@@ -664,9 +664,10 @@ export class ProjectViewManager {
     hostId: HostId,
     projectId: string,
     projectPath: string,
-    trace?: ProjectSwitchTrace
+    trace?: ProjectSwitchTrace,
+    request?: SwitchRequestOptions
   ): Promise<{ view: WebContentsView; isNew: boolean }> {
-    return this.switchTo(toHostScopedKey(hostId, projectId), projectPath, trace);
+    return this.switchTo(toHostScopedKey(hostId, projectId), projectPath, trace, request);
   }
 
   /**

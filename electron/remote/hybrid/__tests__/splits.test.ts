@@ -614,7 +614,9 @@ describe("scratch switch", () => {
     expect(mocks.pvm.setPendingFocusIntent).toHaveBeenCalledWith("studio:s1", focusIntent);
     expect(mocks.client.switchWindowHost).toHaveBeenCalledWith(
       expect.objectContaining({ webContentsId: REMOTE_SENDER }),
-      { hostId: "studio", projectId: "s1", newWindow: false }
+      { hostId: "studio", projectId: "s1", newWindow: false },
+      // Its callers word a failure themselves, so main keeps the report.
+      { requesterReports: false }
     );
     expect(mocks.viewSend).toHaveBeenCalledWith(CHANNELS.SCRATCH_ON_SWITCH, {
       scratch,

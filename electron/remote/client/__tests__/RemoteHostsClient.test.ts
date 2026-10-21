@@ -219,7 +219,14 @@ describe("RemoteHostsClient", () => {
 
     expect(installRouter).toHaveBeenCalledWith(router);
     expect(bindings.get(1)).toBe("studio-01");
-    expect(windows.openRemoteProject).toHaveBeenCalledWith(1, "studio-01", "proj-1", "/srv/proj-1");
+    expect(windows.openRemoteProject).toHaveBeenCalledWith(
+      1,
+      "studio-01",
+      "proj-1",
+      "/srv/proj-1",
+      undefined,
+      { requesterWebContentsId: 5 }
+    );
     // The picker in that window now routes to the host; a remote view reports its host.
     expect(router.hostForSender(5)).toBe("studio-01");
     keys.set(6, "studio-01:proj-1");
@@ -250,7 +257,8 @@ describe("RemoteHostsClient", () => {
       "studio-01",
       "proj-1",
       "/srv/proj-1",
-      focusIntent
+      focusIntent,
+      { requesterWebContentsId: 5 }
     );
 
     await client.switchWindowHost(ctxFor(5, 1), {
@@ -259,7 +267,9 @@ describe("RemoteHostsClient", () => {
       projectId: "proj-local",
       focusIntent,
     });
-    expect(windows.openLocalProject).toHaveBeenCalledWith(1, "proj-local", focusIntent);
+    expect(windows.openLocalProject).toHaveBeenCalledWith(1, "proj-local", focusIntent, {
+      requesterWebContentsId: 5,
+    });
 
     // A new window opened on the project takes it too.
     await client.switchWindowHost(ctxFor(5, 1), {
@@ -274,6 +284,58 @@ describe("RemoteHostsClient", () => {
       "proj-2",
       "/srv/proj-2",
       focusIntent
+    );
+  });
+
+  it("names the asking renderer as the switch's requester, in its own window only", async () => {
+    await client.switchWindowHost(ctxFor(5, 1), {
+      hostId: "studio-01",
+      newWindow: false,
+      projectId: "proj-1",
+    });
+    expect(windows.openRemoteProject).toHaveBeenLastCalledWith(
+      1,
+      "studio-01",
+      "proj-1",
+      "/srv/proj-1",
+      undefined,
+      { requesterWebContentsId: 5 }
+    );
+
+    // Away from a host view: the view the rollback restores is the one that asked.
+    await client.switchWindowHost(ctxFor(9, 1), {
+      hostId: "local",
+      newWindow: false,
+      projectId: "proj-local",
+    });
+    expect(windows.openLocalProject).toHaveBeenLastCalledWith(1, "proj-local", undefined, {
+      requesterWebContentsId: 9,
+    });
+
+    // A caller that words the failure itself leaves the report to main.
+    await client.switchWindowHost(
+      ctxFor(5, 1),
+      { hostId: "studio-01", newWindow: false, projectId: "proj-1" },
+      { requesterReports: false }
+    );
+    expect(windows.openRemoteProject).toHaveBeenLastCalledWith(
+      1,
+      "studio-01",
+      "proj-1",
+      "/srv/proj-1"
+    );
+
+    // A new window has no view of the asker's to roll back to.
+    await client.switchWindowHost(ctxFor(5, 1), {
+      hostId: "studio-01",
+      newWindow: true,
+      projectId: "proj-2",
+    });
+    expect(windows.openRemoteProject).toHaveBeenLastCalledWith(
+      7,
+      "studio-01",
+      "proj-2",
+      "/srv/proj-2"
     );
   });
 
@@ -650,7 +712,14 @@ describe("RemoteHostsClient", () => {
     releaseSlow("ready");
     await expect(slow).resolves.toEqual({ outcome: "superseded", hostId: "studio-01" });
     expect(windows.openRemoteProject).toHaveBeenCalledTimes(1);
-    expect(windows.openRemoteProject).toHaveBeenCalledWith(1, "studio-02", "proj-2", "/srv/proj-2");
+    expect(windows.openRemoteProject).toHaveBeenCalledWith(
+      1,
+      "studio-02",
+      "proj-2",
+      "/srv/proj-2",
+      undefined,
+      { requesterWebContentsId: 5 }
+    );
     expect(bindings.get(1)).toBe("studio-02");
   });
 
@@ -664,7 +733,9 @@ describe("RemoteHostsClient", () => {
         1,
         "studio-01",
         "proj-2",
-        "/srv/proj-2"
+        "/srv/proj-2",
+        undefined,
+        { requesterWebContentsId: 5 }
       );
       expect(bindings.get(1)).toBe("studio-01");
       expect(manager.get("studio-01")!.noteActiveProject).toHaveBeenCalledWith("proj-2");
@@ -922,7 +993,9 @@ describe("RemoteHostsClient", () => {
         client.switchWindowHost(ctxFor(5, 1), { hostId: "local", newWindow: false })
       ).resolves.toEqual({ outcome: "switched", hostId: "local", projectId: "local-a" });
       expect(windows.lastLocalProjectId).toHaveBeenLastCalledWith(1);
-      expect(windows.openLocalProject).toHaveBeenCalledWith(1, "local-a");
+      expect(windows.openLocalProject).toHaveBeenCalledWith(1, "local-a", undefined, {
+        requesterWebContentsId: 5,
+      });
       expect(bindings.get(1)).toBe("local");
 
       await expect(
@@ -990,7 +1063,9 @@ describe("RemoteHostsClient", () => {
       projectId: "abc",
     });
     expect(bindings.get(1)).toBe("local");
-    expect(windows.openLocalProject).toHaveBeenCalledWith(1, "abc");
+    expect(windows.openLocalProject).toHaveBeenCalledWith(1, "abc", undefined, {
+      requesterWebContentsId: 5,
+    });
   });
 
   it("brings a window on a host back to this machine to show a local project", async () => {
@@ -1107,7 +1182,9 @@ describe("RemoteHostsClient", () => {
 
       await expect(first).resolves.toEqual({ outcome: "superseded", hostId: "local" });
       expect(signal!.aborted).toBe(true);
-      expect(windows.openLocalProject).toHaveBeenCalledExactlyOnceWith(1, "def");
+      expect(windows.openLocalProject).toHaveBeenCalledExactlyOnceWith(1, "def", undefined, {
+        requesterWebContentsId: 5,
+      });
     });
 
     it("leaves an existing window on its host and view when a switch is declined", async () => {
@@ -1152,7 +1229,9 @@ describe("RemoteHostsClient", () => {
         1,
         "studio-01",
         "proj-1",
-        "/srv/proj-1"
+        "/srv/proj-1",
+        undefined,
+        { requesterWebContentsId: 5 }
       );
     });
 
@@ -1250,7 +1329,14 @@ describe("RemoteHostsClient", () => {
     ).resolves.toEqual({ outcome: "switched", hostId: "studio-01", projectId: "proj-1" });
     expect(windows.releaseCachedProject).toHaveBeenCalledWith("studio-01", "proj-1", 1, "proj-1");
     expect(windows.openRemoteProject).toHaveBeenCalledTimes(1);
-    expect(windows.openRemoteProject).toHaveBeenCalledWith(1, "studio-01", "proj-1", "/srv/proj-1");
+    expect(windows.openRemoteProject).toHaveBeenCalledWith(
+      1,
+      "studio-01",
+      "proj-1",
+      "/srv/proj-1",
+      undefined,
+      { requesterWebContentsId: 5 }
+    );
     expect(bindings.get(1)).toBe("studio-01");
     expect(bindings.get(2)).toBe("local");
     expect(windows.revealWindow).not.toHaveBeenCalled();
@@ -1494,7 +1580,9 @@ describe("RemoteHostsClient", () => {
       1,
       "studio-02",
       "proj-2",
-      "/srv/proj-2"
+      "/srv/proj-2",
+      undefined,
+      { requesterWebContentsId: 5 }
     );
   });
 
