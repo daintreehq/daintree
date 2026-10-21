@@ -5174,10 +5174,7 @@ export interface PluginHostApi extends PluginActivationApi {
    * {@link setPanelBadge} this is NOT revoke-guarded and becomes a silent
    * no-op once the plugin is unloaded.
    */
-  setWorktreeCardStatus(
-    worktreeId: string,
-    status: PluginWorktreeCardStatus | null
-  ): Promise<void>;
+  setWorktreeCardStatus(worktreeId: string, status: PluginWorktreeCardStatus | null): Promise<void>;
   /**
    * Publish the contextual actions the ⋯ and right-click menus of one of this
    * plugin's own panels offer right now — the backend-side twin of the view's

@@ -1488,7 +1488,8 @@ describe("PluginDevWorkerHostProxy setWorktreeCardStatus (#13704)", () => {
       type: "host-result",
       requestId: call.requestId,
       ok: false,
-      error: 'Plugin "acme" setWorktreeCardStatus: "/other/wt" is not a worktree this plugin can see',
+      error:
+        'Plugin "acme" setWorktreeCardStatus: "/other/wt" is not a worktree this plugin can see',
     });
     await expect(promise).rejects.toThrow(/is not a worktree this plugin can see/);
   });

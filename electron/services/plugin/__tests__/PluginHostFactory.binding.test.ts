@@ -2160,7 +2160,11 @@ describe("createHost setWorktreeCardStatus", () => {
     await expect(host.setWorktreeCardStatus("wt-a", { label: "x" })).rejects.toThrow(
       /"wt-a" was removed/
     );
-    expect(retired).toHaveBeenCalledWith(PROJECT_A, "wt-a", expect.objectContaining({ revision: 0 }));
+    expect(retired).toHaveBeenCalledWith(
+      PROJECT_A,
+      "wt-a",
+      expect.objectContaining({ revision: 0 })
+    );
     expect(h.deps.pluginWorktreeCardStatuses.size).toBe(0);
     expect(emitted).not.toHaveBeenCalled();
   });

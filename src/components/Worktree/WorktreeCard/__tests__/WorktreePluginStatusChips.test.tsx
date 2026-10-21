@@ -30,13 +30,16 @@ beforeAll(() => {
   }
 });
 
+const onWorktreeCardStatusesChanged = vi.fn(() => () => {});
+
 beforeEach(() => {
   _resetPluginWorktreeCardStatusStoreForTest();
+  onWorktreeCardStatusesChanged.mockClear();
   usePluginRuntimeStore.setState({ pluginMetaById: new Map() });
-  useProjectStore.setState({ currentProject: { id: "proj-a" } as never });
-  Reflect.set(window, "electron", {
-    plugin: { onWorktreeCardStatusesChanged: vi.fn(() => () => {}) },
+  useProjectStore.setState({
+    currentProject: { id: "proj-a", name: "App", path: "/work/app", emoji: "", lastOpened: 0 },
   });
+  Reflect.set(window, "electron", { plugin: { onWorktreeCardStatusesChanged } });
 });
 
 function renderChips(statuses: Parameters<typeof WorktreePluginStatusChips>[0]["statuses"]) {
@@ -97,9 +100,7 @@ describe("WorktreePluginStatusChips", () => {
     render(
       <TooltipProvider delayDuration={0}>
         <div onClick={onCardClick}>
-          <WorktreePluginStatusChips
-            statuses={[{ pluginId: "acme.x", status: { label: "up" } }]}
-          />
+          <WorktreePluginStatusChips statuses={[{ pluginId: "acme.x", status: { label: "up" } }]} />
         </div>
       </TooltipProvider>
     );
@@ -134,10 +135,7 @@ describe("useWorktreePluginStatuses", () => {
     const { result } = renderHook(() => useWorktreePluginStatuses("/wt"));
 
     expect(result.current.map((entry) => entry.status.label)).toEqual(["a", "z"]);
-    const bridge = (
-      window as unknown as { electron: { plugin: { onWorktreeCardStatusesChanged: unknown } } }
-    ).electron.plugin.onWorktreeCardStatusesChanged;
-    expect(bridge).toHaveBeenCalledTimes(1);
+    expect(onWorktreeCardStatusesChanged).toHaveBeenCalledTimes(1);
   });
 
   it("answers nothing with no current project", () => {

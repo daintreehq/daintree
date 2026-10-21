@@ -5655,9 +5655,13 @@ export class PluginService {
   private retireWorktreeCardTarget(key: string): void {
     const now = Date.now();
     for (const [retired, { at }] of this.retiredWorktreeCardTargets) {
-      if (now - at > WORKTREE_CARD_TARGET_RETIRE_MS) this.retiredWorktreeCardTargets.delete(retired);
+      if (now - at > WORKTREE_CARD_TARGET_RETIRE_MS)
+        this.retiredWorktreeCardTargets.delete(retired);
     }
-    this.retiredWorktreeCardTargets.set(key, { revision: ++this.worktreeCardTargetRevision, at: now });
+    this.retiredWorktreeCardTargets.set(key, {
+      revision: ++this.worktreeCardTargetRevision,
+      at: now,
+    });
   }
 
   /**

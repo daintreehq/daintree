@@ -1137,7 +1137,11 @@ describe("worktree card statuses (#13704)", () => {
     expect(replayed).toEqual([
       {
         name: "plugin:worktree-card-statuses-changed",
-        payload: { pluginId: "acme.global", projectId: "proj-a", statuses: { "/a/wt": { label: "up" } } },
+        payload: {
+          pluginId: "acme.global",
+          projectId: "proj-a",
+          statuses: { "/a/wt": { label: "up" } },
+        },
       },
     ]);
   });
@@ -1198,7 +1202,9 @@ describe("worktree card statuses (#13704)", () => {
 
     await service.onProjectClosed("proj-b");
     expect(retired("proj-b", "/b/any", before)).toBe(true);
-    expect(retired("proj-b", "/b/any", { ...recreated, revision: internals.worktreeCardTargetRevision })).toBe(false);
+    expect(
+      retired("proj-b", "/b/any", { ...recreated, revision: internals.worktreeCardTargetRevision })
+    ).toBe(false);
     service.dispose();
   });
 
@@ -1302,7 +1308,10 @@ describe("worktree card statuses (#13704)", () => {
         ],
       ])
     );
-    statusesOf(service).set("acme.two", new Map([["proj-a", new Map([["/a/gone", { label: "z" }]])]]));
+    statusesOf(service).set(
+      "acme.two",
+      new Map([["proj-a", new Map([["/a/gone", { label: "z" }]])]])
+    );
     ipcViewMocks.broadcastToProjectRenderers.mockClear();
 
     for (const handler of handlers.get("worktree-removed") ?? []) {

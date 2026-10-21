@@ -157,7 +157,11 @@ describe("preload event subscriptions", () => {
   it("replays each plugin's latest card statuses per project to a late subscriber (#13704)", () => {
     terminal.onExit(() => {})();
     const push = (payload: unknown) =>
-      ipcRenderer.emit("events:push", {}, { name: "plugin:worktree-card-statuses-changed", payload });
+      ipcRenderer.emit(
+        "events:push",
+        {},
+        { name: "plugin:worktree-card-statuses-changed", payload }
+      );
     push({ pluginId: "p1", projectId: "A", statuses: { "/a": { label: "up" } } });
     push({ pluginId: "p1", projectId: "B", statuses: { "/b": { label: "up" } } });
     push({ pluginId: "p2", projectId: "A", statuses: { "/a": { label: "x" } } });
