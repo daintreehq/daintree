@@ -7,6 +7,7 @@ import type { DeviceAnswerEvent } from "../../../shared/types/ipc/deviceAnswer.j
 import { peekDriveLeaseService } from "../DriveLeaseService.js";
 import { projectStore } from "../ProjectStore.js";
 import { scratchStore } from "../ScratchStore.js";
+import { planListedChoice } from "../../../shared/utils/terminalChoice.js";
 import { answerRefused, answerRunByLabel } from "../terminalAnswer.js";
 import { DeviceAnswerService, type DevicePrincipal } from "./DeviceAnswerService.js";
 import { sanitizeDeviceAnswerSettings } from "./deviceAnswerSettings.js";
@@ -68,6 +69,8 @@ export function createDeviceAnswerService(): DeviceAnswerService {
         runId,
         spawnedAt,
         label,
+        // Only an option of the list on screen now, never text near a composer.
+        plan: planListedChoice,
         stillAllowed: () => {
           const refusal = stillAllowed();
           if (refusal !== null) return refusal;

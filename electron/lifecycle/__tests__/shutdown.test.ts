@@ -110,6 +110,12 @@ vi.mock("../../services/McpServerService.js", () => ({
   mcpServerService: mcpServerMock,
 }));
 
+const deviceAnswerMock = vi.hoisted(() => ({
+  stopDeviceAnswer: vi.fn(() => Promise.resolve()),
+}));
+
+vi.mock("../../services/deviceAnswer/index.js", () => deviceAnswerMock);
+
 // The shutdown chain reaches this module through a dynamic import, so the export
 // is exposed behind a getter that can be armed to throw. Arming it makes the
 // chain's `const { drainRateLimitQueues } = await import(...)` statement itself
@@ -411,7 +417,7 @@ describe("registerShutdownHandler", () => {
     expect(crashRecoveryMock.cleanupOnExit).toHaveBeenCalled();
   });
 
-  it("stops Remote Hosts before any PTY is killed or disposed", async () => {
+  it("stops Remote Hosts and device answers before any PTY is killed or disposed", async () => {
     const order: string[] = [];
     const ptyClient = {
       gracefulKillByProject: vi.fn(async () => []),
@@ -428,6 +434,9 @@ describe("registerShutdownHandler", () => {
     const stopRemoteHosts = vi.fn(async () => {
       order.push("remote-stop");
     });
+    deviceAnswerMock.stopDeviceAnswer.mockImplementationOnce(async () => {
+      order.push("device-answer-stop");
+    });
     const { beforeQuitCb } = await setup({
       getPtyClient: vi.fn(() => ptyClient as never),
       stopRemoteHosts,
@@ -441,6 +450,8 @@ describe("registerShutdownHandler", () => {
 
     expect(stopRemoteHosts).toHaveBeenCalledOnce();
     expect(order[0]).toBe("remote-stop");
+    // Paired devices stop answering before any terminal is enumerated or killed.
+    expect(order[1]).toBe("device-answer-stop");
     expect(order).toContain("pty-dispose");
   });
 

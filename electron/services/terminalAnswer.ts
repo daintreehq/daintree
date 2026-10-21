@@ -1,4 +1,4 @@
-import { planChoice } from "../../shared/utils/terminalChoice.js";
+import { planChoice, type ChoicePlan } from "../../shared/utils/terminalChoice.js";
 import { AppError } from "../utils/errorTypes.js";
 import { readPluginTerminalScreen } from "./plugin/pluginTerminalScreenRead.js";
 import type { PtyClient } from "./PtyClient.js";
@@ -57,8 +57,14 @@ export async function answerRunByLabel(options: {
   spawnedAt: number;
   label: string;
   stillAllowed: () => string | null;
+  /**
+   * How the label becomes keys. Canopy's panel picks from options it was
+   * shown and keeps `planChoice`; a caller that must stay inside the list on
+   * screen passes `planListedChoice`.
+   */
+  plan?: (screen: string, label: string) => ChoicePlan;
 }): Promise<void> {
-  const { pty, runId, spawnedAt, label, stillAllowed } = options;
+  const { pty, runId, spawnedAt, label, stillAllowed, plan: planKeys = planChoice } = options;
   // One answer at a time per run: a second, planned from a screen the first
   // is still pressing keys into, would land its Enter on whatever dialog
   // comes next.
@@ -77,7 +83,7 @@ export async function answerRunByLabel(options: {
     if (screen.status !== "ok") {
       throw answerRefused("Couldn't read the terminal to find that option.");
     }
-    const plan = planChoice(screen.text, label);
+    const plan = planKeys(screen.text, label);
     if (!plan.ok) throw answerRefused(`${plan.reason} Nothing was pressed.`);
     for (const [index, key] of plan.keys.entries()) {
       if (index > 0) await new Promise((resolve) => setTimeout(resolve, ANSWER_KEY_GAP_MS));

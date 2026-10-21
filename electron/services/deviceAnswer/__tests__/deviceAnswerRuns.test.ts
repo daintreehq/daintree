@@ -12,6 +12,12 @@ vi.mock("../../plugin/pluginTerminalScreenRead.js", () => ({
 
 import type { FleetRunRow, FleetSnapshot } from "../../../../shared/types/ipc/fleet.js";
 import { isRunStillWaiting, listWaitingRuns } from "../deviceAnswerRuns.js";
+import type { AnswerPtyClient } from "../../terminalAnswer.js";
+
+/** A PTY whose terminals were all spawned at `spawnedAt`. */
+function ptyAt(spawnedAt: number): AnswerPtyClient {
+  return { getTerminalAsync: async () => ({ spawnedAt }) } as unknown as AnswerPtyClient;
+}
 
 function row(overrides: Partial<FleetRunRow>): FleetRunRow {
   return {
@@ -51,7 +57,7 @@ describe("listWaitingRuns", () => {
             park: {} as never,
           }),
         ]),
-      pty: () => null,
+      pty: () => ptyAt(100),
       projectName: (id) => (id === "ws-1" ? "daintree" : null),
     });
     expect(runs.map((r) => r.runId)).toEqual(["b", "a"]);
@@ -68,6 +74,28 @@ describe("listWaitingRuns", () => {
       project: "daintree",
       choices: ["Yes", "No"],
     });
+  });
+
+  it("shows no screen for an id respawned since the fleet row was taken", async () => {
+    screens.set("a", "❯ 1. Yes\n  2. No");
+    const runs = await listWaitingRuns({
+      fleet: () => snapshot([row({ runId: "a", agentState: "waiting", spawnedAt: 100 })]),
+      pty: () => ptyAt(200),
+      projectName: () => null,
+    });
+    expect(runs[0]).toMatchObject({ screen: null, choices: [] });
+  });
+
+  it("drops a run that stopped waiting while its screen was read", async () => {
+    screens.set("a", "❯ 1. Yes\n  2. No");
+    let reads = 0;
+    const runs = await listWaitingRuns({
+      fleet: () =>
+        snapshot([row({ runId: "a", agentState: reads++ === 0 ? "waiting" : "working" })]),
+      pty: () => ptyAt(100),
+      projectName: () => null,
+    });
+    expect(runs).toEqual([]);
   });
 
   it("lists nothing when the fleet has no snapshot yet", async () => {

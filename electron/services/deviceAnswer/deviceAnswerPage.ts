@@ -15,6 +15,10 @@ const SCRIPT = String.raw`
   let token = null;
   let timer = null;
   let busy = false;
+  let polling = false;
+  // Bumped when an answer starts: a list read before it is stale, and a card
+  // stays pressed-out until a list read after it replaces it.
+  let answerSeq = 0;
   try { token = localStorage.getItem(KEY); } catch {}
 
   const save = (value) => {
@@ -90,6 +94,7 @@ const SCRIPT = String.raw`
   const answer = async (run, label, card) => {
     if (busy) return;
     busy = true;
+    answerSeq += 1;
     for (const b of card.querySelectorAll("button")) b.disabled = true;
     const result = card.querySelector(".result");
     result.textContent = "Pressing…";
@@ -105,12 +110,17 @@ const SCRIPT = String.raw`
   };
 
   const poll = async () => {
+    if (polling) return;
     clearTimeout(timer);
     if (!token || document.visibilityState !== "visible") return;
     if (!busy) {
+      polling = true;
+      const seq = answerSeq;
       try {
         const r = await call("GET", "/api/waiting");
-        if (r.ok && r.data) {
+        if (busy || seq !== answerSeq) {
+          // An answer began while this was in flight; the next read shows its result.
+        } else if (r.ok && r.data) {
           $("status").textContent = "";
           render(r.data.runs);
         } else if (r.status !== 401) {
@@ -118,6 +128,8 @@ const SCRIPT = String.raw`
         }
       } catch {
         $("status").textContent = "Couldn't reach Daintree.";
+      } finally {
+        polling = false;
       }
     }
     if (token) timer = setTimeout(poll, POLL_MS);

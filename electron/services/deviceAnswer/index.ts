@@ -31,7 +31,9 @@ export async function startDeviceAnswerIfEnabled(): Promise<void> {
 
 /** Quit: close the listener and every connection on it. */
 export async function stopDeviceAnswer(): Promise<void> {
-  await service?.dispose();
+  // One still being made is waited for, so it can't start listening after quit.
+  const pending = service ?? (creating ? await creating.catch(() => null) : null);
+  await pending?.dispose();
 }
 
 /** @internal Tests only. */

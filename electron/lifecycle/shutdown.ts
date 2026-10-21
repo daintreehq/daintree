@@ -358,6 +358,22 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
     );
   }
 
+  // Paired devices stop answering before any terminal is captured or killed,
+  // so no key lands in one the graceful kill is talking to. A listener that
+  // was never started costs one small import.
+  await settleWithin(
+    (async () => {
+      try {
+        const { stopDeviceAnswer } = await import("../services/deviceAnswer/index.js");
+        await stopDeviceAnswer();
+      } catch (err) {
+        console.warn("[MAIN] Answer from another device stop failed:", err);
+      }
+    })(),
+    REMOTE_HOSTS_STOP_BUDGET_MS,
+    "device answer stop"
+  );
+
   const ptyClient = deps.getPtyClient();
   const workspaceClient = deps.getWorkspaceClient();
   const gracefulShutdownPromise = (async () => {
@@ -669,11 +685,6 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
         // and there is nothing to stop — skip silently.
         import("../services/McpServerService.js")
           .then(({ mcpServerService }) => mcpServerService.stop())
-          .catch(() => {}),
-        // Closes the device listener, if it was ever started, so no answer
-        // lands in a terminal the PTY host is tearing down.
-        import("../services/deviceAnswer/index.js")
-          .then(({ stopDeviceAnswer }) => stopDeviceAnswer())
           .catch(() => {}),
         // Flush any debounced plugin-audit records before exit — the flush
         // timer is unref'd, so the tail of a session would otherwise be lost.

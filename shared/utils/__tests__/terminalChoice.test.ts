@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { listChoices, planChoice } from "../terminalChoice.js";
+import { listChoices, planChoice, planListedChoice } from "../terminalChoice.js";
 
 describe("planChoice", () => {
   it("moves down past the highlighted default on Claude's trust dialog", () => {
@@ -158,5 +158,69 @@ describe("listChoices", () => {
   it("keeps a short label beside a longer one it prefixes, since each matches exactly", () => {
     const screen = ["❯ Yes", "  Yes, always", "  No"].join("\n");
     expect(listChoices(screen)).toEqual(["Yes", "Yes, always", "No"]);
+  });
+});
+
+describe("listChoices refuses what isn't the current list", () => {
+  it("doesn't take a quote above a numbered list for a list", () => {
+    const screen = ["> Summary", "  1. Keep files", "  2. Delete files"].join("\n");
+    expect(listChoices(screen)).toEqual([]);
+  });
+
+  it("offers nothing from an old dialog once the input box is back below it", () => {
+    const screen = ["  1. Yes", "❯ 2. No", "", "❯ "].join("\n");
+    expect(listChoices(screen)).toEqual([]);
+  });
+
+  it("offers nothing when the composer holds text", () => {
+    const screen = ["  1. Yes", "❯ 2. No", "", "› Write tests for the parser"].join("\n");
+    expect(listChoices(screen)).toEqual([]);
+  });
+
+  it("offers nothing while a newer list below has no highlight drawn yet", () => {
+    const screen = ["❯ 1. Yes", "  2. No", "", "  1. Allow", "  2. Deny"].join("\n");
+    expect(listChoices(screen)).toEqual([]);
+  });
+
+  it("refuses a numbered list that skips a number, and labels that repeat", () => {
+    expect(listChoices(["❯ 1. Yes", "  3. No"].join("\n"))).toEqual([]);
+    expect(listChoices(["❯ Yes", "  yes"].join("\n"))).toEqual([]);
+  });
+});
+
+describe("planListedChoice", () => {
+  it("moves within the lowest list, not toward an older highlight above it", () => {
+    const screen = ["❯ Old", "  Old alternative", "", "  A", "  B", "  C", "  D", "❯ E"].join("\n");
+    expect(listChoices(screen)).toEqual(["A", "B", "C", "D", "E"]);
+    expect(planListedChoice(screen, "A")).toEqual({
+      ok: true,
+      keys: ["Up", "Up", "Up", "Up", "Enter"],
+    });
+  });
+
+  it("matches an option row, never a description that repeats its label", () => {
+    const screen = ["❯ 1. Allow", "  2. Deny", "     Allow"].join("\n");
+    expect(planListedChoice(screen, "Allow")).toEqual({ ok: true, keys: ["Enter"] });
+    expect(planListedChoice(screen, "Deny")).toEqual({ ok: true, keys: ["Down", "Enter"] });
+  });
+
+  it("takes only a whole label, so text beside an empty composer presses nothing", () => {
+    expect(planListedChoice("Previous output\n❯ ", "Previous output")).toMatchObject({ ok: false });
+    const dialog = ["❯ 1. Yes", "  2. Yes, and don't ask again"].join("\n");
+    expect(planListedChoice(dialog, "Yes, and")).toMatchObject({ ok: false });
+  });
+
+  it("plans every listed label onto its own row", () => {
+    const screen = [
+      " ❯ 1. Yes",
+      "   2. Yes, and don't ask again for this command",
+      "   3. No, and tell Claude what to do differently (esc)",
+    ].join("\n");
+    const keys = listChoices(screen).map((label) => planListedChoice(screen, label));
+    expect(keys).toEqual([
+      { ok: true, keys: ["Enter"] },
+      { ok: true, keys: ["Down", "Enter"] },
+      { ok: true, keys: ["Down", "Down", "Enter"] },
+    ]);
   });
 });

@@ -61,19 +61,30 @@ export default function DeviceAnswerGroup() {
   const [hostDraft, setHostDraft] = useState<string | null>(null);
   const [removeTarget, setRemoveTarget] = useState<PairedDevice | null>(null);
 
+  // A draft is saved only while the feature is on and nothing else is in
+  // flight, and is dropped once main has taken it; a refused one stays so the
+  // error beneath reads against what was typed.
   const commitPort = () => {
-    if (portDraft === null) return;
+    if (portDraft === null || locked || !enabled) return;
     const next = Number(portDraft);
-    setPortDraft(null);
-    if (next === port) return;
-    void device.setEnabled({ enabled, port: next });
+    if (next === port) {
+      setPortDraft(null);
+      return;
+    }
+    void device.setEnabled({ enabled, port: next }).then((saved) => {
+      if (saved) setPortDraft(null);
+    });
   };
   const commitHost = () => {
-    if (hostDraft === null) return;
+    if (hostDraft === null || locked || !enabled) return;
     const next = hostDraft.trim();
-    setHostDraft(null);
-    if (next === (status?.tailnetHost ?? "")) return;
-    void device.setEnabled({ enabled, tailnetHost: next === "" ? null : next });
+    if (next === (status?.tailnetHost ?? "")) {
+      setHostDraft(null);
+      return;
+    }
+    void device.setEnabled({ enabled, tailnetHost: next === "" ? null : next }).then((saved) => {
+      if (saved) setHostDraft(null);
+    });
   };
 
   const tailnetHost = status?.tailnetHost ?? null;

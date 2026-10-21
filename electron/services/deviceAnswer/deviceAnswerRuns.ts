@@ -59,10 +59,9 @@ export async function listWaitingRuns(deps: DeviceAnswerRunsDeps): Promise<Waiti
     .sort((a, b) => (a.since ?? Infinity) - (b.since ?? Infinity))
     .slice(0, MAX_LISTED_RUNS);
   const pty = deps.pty();
-  return Promise.all(
+  const views = await Promise.all(
     rows.map(async (row): Promise<WaitingRunView> => {
-      const read = await readPluginTerminalScreen(pty, row.runId, null, ANSWER_SCREEN_LINES);
-      const screen = read.status === "ok" ? read.text : null;
+      const screen = await readScreenOf(pty, row);
       return {
         runId: row.runId,
         spawnedAt: row.spawnedAt,
@@ -79,4 +78,20 @@ export async function listWaitingRuns(deps: DeviceAnswerRunsDeps): Promise<Waiti
       };
     })
   );
+  // A run that moved on while its screen was read isn't listed on an old word.
+  const after = deps.fleet();
+  return views.filter((view) => isRunStillWaiting(after, view.runId, view.spawnedAt));
+}
+
+/**
+ * The run's screen, only if it is the very terminal the fleet row describes:
+ * an id respawned since the row was taken holds someone else's screen.
+ */
+async function readScreenOf(pty: AnswerPtyClient | null, row: FleetRunRow): Promise<string | null> {
+  if (!pty) return null;
+  const sameRun = async () => (await pty.getTerminalAsync(row.runId))?.spawnedAt === row.spawnedAt;
+  if (!(await sameRun())) return null;
+  const read = await readPluginTerminalScreen(pty, row.runId, null, ANSWER_SCREEN_LINES);
+  if (read.status !== "ok" || !(await sameRun())) return null;
+  return read.text;
 }

@@ -6,17 +6,6 @@ import { DeviceAnswerService, type DeviceAnswerServiceDeps } from "../DeviceAnsw
 import { defaultDeviceAnswerSettings } from "../deviceAnswerSettings.js";
 import type { WaitingRunView } from "../deviceAnswerRuns.js";
 
-async function freePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const probe = net.createServer();
-    probe.once("error", reject);
-    probe.listen(0, "127.0.0.1", () => {
-      const { port } = probe.address() as net.AddressInfo;
-      probe.close(() => resolve(port));
-    });
-  });
-}
-
 interface Reply {
   status: number;
   headers: http.IncomingHttpHeaders;
@@ -82,8 +71,12 @@ const RUN: WaitingRunView = {
 const services: DeviceAnswerService[] = [];
 
 async function setup(overrides: Partial<DeviceAnswerSettings> = {}) {
-  const port = await freePort();
-  let settings: DeviceAnswerSettings = { ...defaultDeviceAnswerSettings(), port, ...overrides };
+  // Port 0 binds whatever is free, so parallel workers never race for one.
+  let settings: DeviceAnswerSettings = {
+    ...defaultDeviceAnswerSettings(),
+    port: 0,
+    ...overrides,
+  };
   const answer = vi.fn<DeviceAnswerServiceDeps["answer"]>(async () => {});
   const listWaiting = vi.fn(async () => [RUN]);
   const onStatusChanged = vi.fn();
@@ -97,10 +90,15 @@ async function setup(overrides: Partial<DeviceAnswerSettings> = {}) {
     onStatusChanged,
   });
   services.push(service);
+  const port = (): number => {
+    const bound = service.boundPort;
+    if (bound === null) throw new Error("not listening");
+    return bound;
+  };
   const api = { "X-Daintree-Device": "1" };
   const pair = async (): Promise<string> => {
     const { pairing } = service.createPairingCode();
-    const reply = await request(port, "POST", "/api/pair", {
+    const reply = await request(port(), "POST", "/api/pair", {
       headers: api,
       body: { code: pairing!.code, deviceName: "Greg's phone" },
     });
@@ -127,20 +125,22 @@ describe("DeviceAnswerService", () => {
   it("listens on nothing until it is turned on, and stops listening when turned off", async () => {
     const { service, port } = await setup();
     await service.init();
-    await expect(request(port, "GET", "/")).rejects.toThrow();
+    expect(service.boundPort).toBeNull();
 
     const on = await service.setEnabled({ enabled: true });
     expect(on.listening).toBe(true);
-    expect((await request(port, "GET", "/")).status).toBe(200);
+    const bound = port();
+    expect((await request(bound, "GET", "/")).status).toBe(200);
 
     await service.setEnabled({ enabled: false });
-    await expect(request(port, "GET", "/")).rejects.toThrow();
+    expect(service.boundPort).toBeNull();
+    await expect(request(bound, "GET", "/")).rejects.toThrow();
   });
 
   it("serves the page with a script-hash CSP and no caching", async () => {
     const { service, port } = await setup();
     await service.setEnabled({ enabled: true });
-    const page = await request(port, "GET", "/");
+    const page = await request(port(), "GET", "/");
     expect(page.headers["content-security-policy"]).toMatch(/script-src 'sha256-[^']+'/);
     expect(page.headers["content-security-policy"]).not.toContain("unsafe-inline");
     expect(page.headers["cache-control"]).toBe("no-store");
@@ -150,34 +150,34 @@ describe("DeviceAnswerService", () => {
   it("refuses a Host it doesn't serve before anything else, the page included", async () => {
     const { service, port } = await setup();
     await service.setEnabled({ enabled: true });
-    const rebound = await request(port, "GET", "/", { headers: { Host: "attacker.example" } });
+    const rebound = await request(port(), "GET", "/", { headers: { Host: "attacker.example" } });
     expect(rebound.status).toBe(421);
 
     await service.setEnabled({ enabled: true, tailnetHost: "mac.tail1234.ts.net" });
-    const tailnet = await request(port, "GET", "/", { headers: { Host: "mac.tail1234.ts.net" } });
+    const tailnet = await request(port(), "GET", "/", { headers: { Host: "mac.tail1234.ts.net" } });
     expect(tailnet.status).toBe(200);
   });
 
   it("refuses API calls from another site or without the page's header", async () => {
     const { service, port, api } = await setup();
     await service.setEnabled({ enabled: true });
-    const crossSite = await request(port, "GET", "/api/waiting", {
+    const crossSite = await request(port(), "GET", "/api/waiting", {
       headers: { ...api, "Sec-Fetch-Site": "cross-site" },
     });
     expect(crossSite.status).toBe(403);
-    const foreignOrigin = await request(port, "POST", "/api/pair", {
+    const foreignOrigin = await request(port(), "POST", "/api/pair", {
       headers: { ...api, Origin: "http://evil.example" },
       body: { code: "x" },
     });
     expect(foreignOrigin.status).toBe(403);
-    const bare = await request(port, "GET", "/api/waiting");
+    const bare = await request(port(), "GET", "/api/waiting");
     expect(bare.status).toBe(403);
   });
 
   it("pairs a device with the open code, keeps only its token's digest, and lists waiting runs to it", async () => {
     const { service, port, api, pair, settings } = await setup();
     await service.setEnabled({ enabled: true });
-    expect((await request(port, "GET", "/api/waiting", { headers: api })).status).toBe(401);
+    expect((await request(port(), "GET", "/api/waiting", { headers: api })).status).toBe(401);
 
     const token = await pair();
     const [device] = settings().devices;
@@ -185,7 +185,7 @@ describe("DeviceAnswerService", () => {
     expect(JSON.stringify(settings())).not.toContain(token);
     expect(JSON.stringify(service.getStatus())).not.toContain(device!.tokenHash);
 
-    const waiting = await request(port, "GET", "/api/waiting", {
+    const waiting = await request(port(), "GET", "/api/waiting", {
       headers: { ...api, Authorization: `Bearer ${token}` },
     });
     expect(waiting.status).toBe(200);
@@ -196,13 +196,13 @@ describe("DeviceAnswerService", () => {
     const { service, port, api, pair } = await setup();
     await service.setEnabled({ enabled: true });
     service.createPairingCode();
-    const wrong = await request(port, "POST", "/api/pair", {
+    const wrong = await request(port(), "POST", "/api/pair", {
       headers: api,
       body: { code: "AAAA-AAAA", deviceName: "x" },
     });
     expect(wrong.status).toBe(403);
     await pair();
-    const reused = await request(port, "POST", "/api/pair", {
+    const reused = await request(port(), "POST", "/api/pair", {
       headers: api,
       body: { code: "AAAA-AAAA", deviceName: "x" },
     });
@@ -213,7 +213,7 @@ describe("DeviceAnswerService", () => {
     const { service, port, api, pair, answer, settings } = await setup();
     await service.setEnabled({ enabled: true });
     const token = await pair();
-    const reply = await request(port, "POST", "/api/answer", {
+    const reply = await request(port(), "POST", "/api/answer", {
       headers: { ...api, Authorization: `Bearer ${token}` },
       body: { runId: "run-1", spawnedAt: 100, label: "Yes", keys: ["Enter"] },
     });
@@ -239,7 +239,7 @@ describe("DeviceAnswerService", () => {
     answer.mockRejectedValueOnce({
       userMessage: "This project is being driven from another screen. Nothing was pressed.",
     });
-    const reply = await request(port, "POST", "/api/answer", {
+    const reply = await request(port(), "POST", "/api/answer", {
       headers: { ...api, Authorization: `Bearer ${token}` },
       body: { runId: "run-1", spawnedAt: 100, label: "Yes" },
     });
@@ -257,12 +257,12 @@ describe("DeviceAnswerService", () => {
       service.revokeDevice(settings().devices[0]!.id);
       refusalMidAnswer = stillAllowed();
     });
-    await request(port, "POST", "/api/answer", {
+    await request(port(), "POST", "/api/answer", {
       headers: { ...api, Authorization: `Bearer ${token}` },
       body: { runId: "run-1", spawnedAt: 100, label: "Yes" },
     });
     expect(refusalMidAnswer).toContain("removed");
-    const after = await request(port, "GET", "/api/waiting", {
+    const after = await request(port(), "GET", "/api/waiting", {
       headers: { ...api, Authorization: `Bearer ${token}` },
     });
     expect(after.status).toBe(401);
@@ -272,7 +272,7 @@ describe("DeviceAnswerService", () => {
     const { service, port, api, pair, settings } = await setup();
     await service.setEnabled({ enabled: true });
     const token = await pair();
-    const reply = await request(port, "POST", "/api/unpair", {
+    const reply = await request(port(), "POST", "/api/unpair", {
       headers: { ...api, Authorization: `Bearer ${token}` },
       body: {},
     });
@@ -281,16 +281,51 @@ describe("DeviceAnswerService", () => {
   });
 
   it("says why it isn't listening when the port is taken", async () => {
-    const { service, port } = await setup();
     const blocker = net.createServer();
-    await new Promise<void>((resolve) => blocker.listen(port, "127.0.0.1", () => resolve()));
+    await new Promise<void>((resolve) => blocker.listen(0, "127.0.0.1", () => resolve()));
+    const taken = (blocker.address() as net.AddressInfo).port;
     try {
+      const { service } = await setup({ port: taken });
       const status = await service.setEnabled({ enabled: true });
       expect(status.listening).toBe(false);
-      expect(status.error).toContain(String(port));
+      expect(status.error).toContain(String(taken));
     } finally {
       await new Promise<void>((resolve) => blocker.close(() => resolve()));
     }
+  });
+
+  it("stops an answer begun under a listener that has since been restarted", async () => {
+    const { service, port, api, pair, answer } = await setup();
+    await service.setEnabled({ enabled: true });
+    const token = await pair();
+    let refusal: string | null = null;
+    answer.mockImplementationOnce(async ({ stillAllowed }) => {
+      await service.setEnabled({ enabled: false });
+      await service.setEnabled({ enabled: true });
+      refusal = stillAllowed();
+    });
+    await request(port(), "POST", "/api/answer", {
+      headers: { ...api, Authorization: `Bearer ${token}` },
+      body: { runId: "run-1", spawnedAt: 100, label: "Yes" },
+    }).catch(() => null);
+    expect(refusal).toContain("turned off");
+  });
+
+  it("refuses an oversized body with a 413 the client receives", async () => {
+    const { service, port, api } = await setup();
+    await service.setEnabled({ enabled: true });
+    const reply = await request(port(), "POST", "/api/pair", {
+      headers: api,
+      body: { code: "x".repeat(20_000) },
+    });
+    expect(reply.status).toBe(413);
+  });
+
+  it("starts nothing once disposed", async () => {
+    const { service } = await setup({ enabled: true });
+    await service.dispose();
+    await service.init();
+    expect(service.boundPort).toBeNull();
   });
 
   it("won't open a pairing code while off, and refuses a port outside the range", async () => {

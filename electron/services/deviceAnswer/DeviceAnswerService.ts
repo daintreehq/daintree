@@ -23,6 +23,8 @@ import { MAX_AUDIT_ENTRIES, MAX_PAIRED_DEVICES, isValidPort } from "./deviceAnsw
 import type { WaitingRunView } from "./deviceAnswerRuns.js";
 
 const MAX_BODY_BYTES = 8 * 1024;
+/** How much of an oversized body is read off the socket before it is cut. */
+const MAX_DRAINED_BYTES = 256 * 1024;
 const MAX_DEVICE_NAME_LENGTH = 60;
 /** `lastSeenAt` is written at most this often per device, not on every poll. */
 const SEEN_WRITE_INTERVAL_MS = 60_000;
@@ -77,6 +79,16 @@ class HttpError extends Error {
 export class DeviceAnswerService {
   private server: http.Server | null = null;
   private listeningPort: number | null = null;
+  /** The port setting the listener was started for; 0 binds any free port. */
+  private configuredPort: number | null = null;
+  /**
+   * Bumped whenever a listener stops. An answer holds the one it began under,
+   * so one begun before an off, a restart or a port change never goes on
+   * pressing keys under the listener that replaced it.
+   */
+  private listenerGeneration = 0;
+  /** Quit has begun: nothing starts again and nothing more is pressed. */
+  private closed = false;
   private startError: string | null = null;
   private readonly pairing: PairingCodes;
   private pairingExpiryTimer: ReturnType<typeof setTimeout> | null = null;
@@ -169,6 +181,8 @@ export class DeviceAnswerService {
   }
 
   async dispose(): Promise<void> {
+    this.closed = true;
+    this.listenerGeneration += 1;
     this.cancelPairing();
     await this.queue(() => this.stopListener());
   }
@@ -180,11 +194,11 @@ export class DeviceAnswerService {
   private sync(): Promise<void> {
     return this.queue(async () => {
       const settings = this.deps.readSettings();
-      if (!settings.enabled) {
+      if (!settings.enabled || this.closed) {
         await this.stopListener();
         return;
       }
-      if (this.server !== null && this.listeningPort === settings.port) return;
+      if (this.server !== null && this.configuredPort === settings.port) return;
       await this.stopListener();
       await this.startListener(settings.port);
     });
@@ -224,6 +238,7 @@ export class DeviceAnswerService {
     });
     this.server = server;
     this.listeningPort = (server.address() as AddressInfo).port;
+    this.configuredPort = port;
     this.startError = null;
   }
 
@@ -231,6 +246,8 @@ export class DeviceAnswerService {
     const server = this.server;
     this.server = null;
     this.listeningPort = null;
+    this.configuredPort = null;
+    this.listenerGeneration += 1;
     this.startError = null;
     if (!server) return;
     await new Promise<void>((resolve) => {
@@ -446,6 +463,7 @@ export class DeviceAnswerService {
     ) {
       throw new HttpError(400, "That answer wasn't understood. Nothing was pressed.");
     }
+    const generation = this.listenerGeneration;
     try {
       await this.deps.answer({
         device,
@@ -453,7 +471,7 @@ export class DeviceAnswerService {
         spawnedAt,
         label,
         stillAllowed: () => {
-          if (this.server === null) {
+          if (this.closed || this.server === null || this.listenerGeneration !== generation) {
             return "Answering from another device was turned off. Nothing more was pressed.";
           }
           if (!this.isPaired(device.id)) {
@@ -538,11 +556,17 @@ async function readJson(req: http.IncomingMessage): Promise<unknown> {
   }
   const chunks: Buffer[] = [];
   let size = 0;
+  // Past the cap the rest is read and dropped rather than the stream torn
+  // down, so the 413 still reaches the client; `requestTimeout` bounds it.
   for await (const chunk of req) {
     size += (chunk as Buffer).length;
-    if (size > MAX_BODY_BYTES) throw new HttpError(413, "Too large.");
-    chunks.push(chunk as Buffer);
+    if (size <= MAX_BODY_BYTES) chunks.push(chunk as Buffer);
+    else if (size > MAX_DRAINED_BYTES) {
+      req.destroy();
+      throw new HttpError(413, "Too large.");
+    }
   }
+  if (size > MAX_BODY_BYTES) throw new HttpError(413, "Too large.");
   try {
     return JSON.parse(Buffer.concat(chunks).toString("utf8"));
   } catch {
