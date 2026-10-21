@@ -3,7 +3,6 @@ import { useShallow } from "zustand/react/shallow";
 import type { WorktreeState } from "../../types";
 import type { Issue } from "@shared/types/forge";
 import { logError } from "@/utils/logger";
-import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { useWorktreeTerminals } from "../../hooks/useWorktreeTerminals";
 
@@ -57,6 +56,7 @@ import {
   WorktreeIssueErrorBanner,
 } from "./WorktreeCard/WorktreeDetailsSection";
 import { WorktreeDialogs } from "./WorktreeCard/WorktreeDialogs";
+import { notifyAttachmentFailure } from "./WorktreeCard/notifyAttachmentFailure";
 import { WorktreeHeader } from "./WorktreeCard/WorktreeHeader";
 import { WorktreeTerminalSection } from "./WorktreeCard/WorktreeTerminalSection";
 import { WslGitBanner } from "./WorktreeCard/WslGitBanner";
@@ -95,11 +95,6 @@ const HOVER_REVALIDATE_DELAY = 150;
 const REVALIDATE_FRESHNESS_GATE = 10_000;
 const MAX_CONCURRENT_REVALIDATES = 3;
 const NO_WORKTREE_IDS: Set<string> = new Set();
-const ATTACHMENT_FAILURE_TITLE: Record<"attach" | "detach" | "status", string> = {
-  attach: "Attach failed",
-  detach: "Detach failed",
-  status: "Status check failed",
-};
 const inFlightRevalidates = new Set<string>();
 
 function isRevalidationAllowed(worktreeId: string): boolean {
@@ -576,23 +571,7 @@ export function WorktreeCard({
   ) => {
     worktreeClient
       .attachmentAction(worktree.id, name, action, expectedHolderWorktreeId)
-      .catch((err: unknown) => {
-        const message = formatErrorMessage(err, "The command failed.");
-        // eslint-disable-next-line no-restricted-syntax -- notify-event-kind: ok
-        notify({
-          type: "error",
-          priority: "high",
-          title: ATTACHMENT_FAILURE_TITLE[action],
-          message: `${name}: ${message}`,
-          context: { worktreeId: worktree.id },
-          action: {
-            label: "Copy details",
-            successLabel: "Copied",
-            // A failed clipboard write is non-critical.
-            onClick: () => navigator.clipboard.writeText(message).catch(() => {}),
-          },
-        });
-      });
+      .catch((err: unknown) => notifyAttachmentFailure(err, name, action, worktree.id));
   };
 
   const handleAttachmentAction = (name: string, action: "attach" | "detach" | "status") => {
