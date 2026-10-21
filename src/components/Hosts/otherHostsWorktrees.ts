@@ -55,10 +55,10 @@ export function useOtherHostsWorktrees(projectId: string | null): OtherHostWorkt
         localSummary: hostList.localSummary,
       }).filter((row) => !row.isCurrent && isLive(row))
     : [];
-  const presence = useProjectPresence(
-    projectId ?? "",
-    rows.map((row) => row.hostId)
-  );
+  const hostIds = rows.map((row) => row.hostId);
+  // Bumped when a host with no match says its list changed: it may have this project now.
+  const [presenceRevision, setPresenceRevision] = useState(0);
+  const presence = useProjectPresence(projectId ?? "", hostIds, presenceRevision);
 
   const matches = new Map<HostId, readonly string[]>();
   for (const row of rows) {
@@ -71,6 +71,19 @@ export function useOtherHostsWorktrees(projectId: string | null): OtherHostWorkt
     }
   }
   const key = matchKey(matches);
+  const unmatchedKey = hostIds.filter((hostId) => !matches.has(hostId)).join("\n");
+
+  useEffect(() => {
+    if (unmatchedKey === "") return;
+    const api = window.electron?.hostMetrics;
+    if (!api) return;
+    const unmatched = new Set(unmatchedKey.split("\n"));
+    return api.onEvent((event) => {
+      if (event.type === "worktrees" && unmatched.has(event.hostId)) {
+        setPresenceRevision((revision) => revision + 1);
+      }
+    });
+  }, [unmatchedKey]);
 
   useEffect(() => {
     const matched = parseMatchKey(key);
@@ -108,9 +121,13 @@ export function useOtherHostsWorktrees(projectId: string | null): OtherHostWorkt
 
   const out: OtherHostWorktrees[] = [];
   for (const row of rows) {
-    if (!matches.has(row.hostId)) continue;
-    const entries = lists.get(row.hostId);
-    if (entries && entries.length > 0) {
+    const projectIds = matches.get(row.hostId);
+    if (!projectIds) continue;
+    // A read from before the host matched another project never shows under this one.
+    const entries = (lists.get(row.hostId) ?? []).filter((entry) =>
+      projectIds.includes(entry.projectId)
+    );
+    if (entries.length > 0) {
       out.push({ hostId: row.hostId, hostName: row.name, entries });
     }
   }

@@ -154,6 +154,41 @@ describe("OtherHostsWorktreeGroup", () => {
     expect(container.textContent).toBe("");
   });
 
+  it("finds this project on a host that gains it later, when that host says its list changed", async () => {
+    presence = [{ hostId: "linux", projects: [] }];
+    render(<OtherHostsWorktreeGroup projectId={PROJECT} />);
+    await waitFor(() => expect(locate).toHaveBeenCalledTimes(1));
+
+    presence = [
+      { hostId: "linux", projects: [{ projectId: "remote-p", name: "helios", path: "/srv" }] },
+    ];
+    await act(async () => {
+      eventListener?.({ type: "worktrees", hostId: "linux" });
+    });
+    const rows = await screen.findAllByTestId("other-hosts-worktree-row");
+    expect(rows[0]!.textContent).toContain("feature/c");
+    expect(locate).toHaveBeenCalledTimes(2);
+  });
+
+  it("never shows a host's rows for a project it no longer matches", async () => {
+    const { rerender } = render(<OtherHostsWorktreeGroup projectId={PROJECT} />);
+    await screen.findAllByTestId("other-hosts-worktree-row");
+
+    // The host reconnects matching through another checkout, whose read fails.
+    hostList.hosts = [host("linux", false)];
+    rerender(<OtherHostsWorktreeGroup projectId={PROJECT} />);
+    presence = [
+      { hostId: "linux", projects: [{ projectId: "moved-p", name: "helios", path: "/srv2" }] },
+    ];
+    listWorktrees.mockRejectedValueOnce(new Error("link dropped"));
+    hostList.hosts = [host("linux", true)];
+    rerender(<OtherHostsWorktreeGroup projectId={PROJECT} />);
+    await waitFor(() => expect(locate).toHaveBeenCalledTimes(2));
+    await waitFor(() =>
+      expect(screen.queryAllByTestId("other-hosts-worktree-row")).toHaveLength(0)
+    );
+  });
+
   it("asks nothing without another host, or in a scratch view", () => {
     hostList.hosts = [];
     const { container, rerender } = render(<OtherHostsWorktreeGroup projectId={PROJECT} />);

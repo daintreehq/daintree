@@ -128,6 +128,7 @@ export class HostMetricsClient {
   private readonly disposers: Array<() => void> = [];
   private stopLocal: (() => void) | null = null;
   private stopLocalWorktrees: (() => void) | null = null;
+  private localWorktrees: WorktreeChangeWatch | null = null;
   private readonly ringSize: number;
 
   constructor(private readonly options: HostMetricsClientOptions) {
@@ -365,9 +366,11 @@ export class HostMetricsClient {
       }
     }
     if (hosts.length > 0 && !this.stopLocal && this.options.localLoop) {
-      this.stopLocal = this.options.localLoop.subscribe((summary) =>
-        this.record(LOCAL_HOST_ID, summary)
-      );
+      this.stopLocal = this.options.localLoop.subscribe((summary) => {
+        this.record(LOCAL_HOST_ID, summary);
+        // A project closed here fires no worktree event; the sample tick catches it.
+        this.localWorktrees?.poke();
+      });
     } else if (hosts.length === 0 && this.stopLocal) {
       this.stopLocal();
       this.stopLocal = null;
@@ -383,9 +386,11 @@ export class HostMetricsClient {
         changed: () => this.options.emit({ type: "worktrees", hostId: LOCAL_HOST_ID }),
       });
       const off = follow(() => watch.poke());
+      this.localWorktrees = watch;
       this.stopLocalWorktrees = () => {
         off();
         watch.dispose();
+        this.localWorktrees = null;
       };
     } else if (hosts.length === 0 && this.stopLocalWorktrees) {
       this.stopLocalWorktrees();

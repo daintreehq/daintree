@@ -174,6 +174,22 @@ export function installHostMetricsHostWith(
     ensureLoop();
   });
 
+  // Read only while some Shell is attached, and told only when what it shows moved.
+  const worktrees = new WorktreeChangeWatch({
+    list: deps.listWorktrees,
+    delayMs: deps.worktreesChangedDelayMs,
+    active: () => server.sessions.some((ctx) => ctx.session.isOpen),
+    changed: () => {
+      for (const ctx of server.sessions) {
+        if (!ctx.session.isOpen) continue;
+        ctx.session.call(MetricsLinkMethod.WORKTREES_CHANGED, null).catch(() => {
+          // A Shell that can't take it now reads the list when it next shows it.
+        });
+      }
+    },
+  });
+  const offWorktrees = deps.onWorktreesMaybeChanged(() => worktrees.poke());
+
   // Sample only while some Shell is attached; the loop stops itself when the last one leaves.
   let offLoop: (() => void) | null = null;
   const stopLoop = (): void => {
@@ -189,6 +205,9 @@ export function installHostMetricsHostWith(
         return;
       }
       for (const ctx of sessions) postSummary(ctx.session, summary);
+      // A project closed or removed fires none of the worktree events; the
+      // sample tick catches it, and the signature keeps it from saying more.
+      worktrees.poke();
     });
   };
   if (server.sessions.length > 0) ensureLoop();
@@ -219,22 +238,6 @@ export function installHostMetricsHostWith(
       });
     }
   });
-
-  // Read only while some Shell is attached, and told only when what it shows moved.
-  const worktrees = new WorktreeChangeWatch({
-    list: deps.listWorktrees,
-    delayMs: deps.worktreesChangedDelayMs,
-    active: () => server.sessions.some((ctx) => ctx.session.isOpen),
-    changed: () => {
-      for (const ctx of server.sessions) {
-        if (!ctx.session.isOpen) continue;
-        ctx.session.call(MetricsLinkMethod.WORKTREES_CHANGED, null).catch(() => {
-          // A Shell that can't take it now reads the list when it next shows it.
-        });
-      }
-    },
-  });
-  const offWorktrees = deps.onWorktreesMaybeChanged(() => worktrees.poke());
 
   return () => {
     offSession();

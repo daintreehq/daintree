@@ -249,7 +249,7 @@ describe("installHostMetricsHostWith", () => {
     dispose();
   });
 
-  it("tells every Shell once per change to what its worktree list shows", async () => {
+  it("tells every Shell once per burst of changes to what its worktree list shows", async () => {
     const server = new FakeServer();
     const entry: HostWorktreeEntry = {
       hostId: "local",
@@ -296,21 +296,60 @@ describe("installHostMetricsHostWith", () => {
     poke();
     await waitFor(() => heardA === 1 && heardB === 1);
 
-    // Only counts and activity moved: nothing a sidebar shows.
-    current = [{ ...entry, modifiedCount: 7, lastActivityAt: 123 }];
-    poke();
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    expect([heardA, heardB]).toEqual([1, 1]);
-
     current = [{ ...entry, observed: { band: "needs-you", agentState: "waiting" } }];
     poke();
     await waitFor(() => heardA === 2 && heardB === 2);
 
     dispose();
-    current = [];
-    poke();
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    expect([heardA, heardB]).toEqual([2, 2]);
+  });
+
+  it("catches a list change no worktree event announced on the next sample", async () => {
+    const server = new FakeServer();
+    let tick: ((summary: HostMetricsSummary) => void) | null = null;
+    let current: HostWorktreeEntry[] = [];
+    const dispose = installHostMetricsHostWith(
+      server,
+      deps({
+        loop: {
+          subscribe: (listener) => {
+            tick = listener;
+            return () => (tick = null);
+          },
+          latest: () => null,
+        },
+        listWorktrees: async () => current,
+        worktreesChangedDelayMs: 5,
+      })
+    );
+    const p = await pair();
+    server.attach(p.host, "shell");
+    let heard = 0;
+    p.client.registerCallHandler(MetricsLinkMethod.WORKTREES_CHANGED, EmptyPayloadSchema, () => {
+      heard++;
+      return null;
+    });
+    tick!(summary(1));
+    await waitFor(() => heard === 1);
+
+    // A project opened: its worktrees arrive with no worktree event of their own.
+    current = [
+      {
+        hostId: "local",
+        projectId: "p2",
+        projectName: "other",
+        worktreeId: "/srv/other",
+        name: "other",
+        branch: "main",
+        path: "/srv/other",
+        isMainWorktree: true,
+        modifiedCount: null,
+        lastActivityAt: null,
+        observed: null,
+      },
+    ];
+    tick!(summary(2));
+    await waitFor(() => heard === 2);
+    dispose();
   });
 
   it("announces a waiting agent to every Shell, once per cooldown", async () => {

@@ -51,16 +51,18 @@ async function openOnHostLikeTheAction(
   _id: unknown,
   args: unknown
 ): Promise<{ ok: boolean; result?: unknown }> {
-  const { hostId, projectId, worktree } = args as {
+  const { hostId, projectId, worktree, newWindow } = args as {
     hostId: string;
     projectId: string;
     worktree: unknown;
+    newWindow?: boolean;
   };
   const requestId = requestHostSwitch({
     toHostId: hostId,
     projectId,
     worktreePath: null,
     worktree: worktree as never,
+    newWindow,
   });
   return { ok: true, result: { requestId } };
 }
@@ -166,12 +168,13 @@ describe("WorktreePlacementRow", () => {
   });
 
   it("leaves this window where it is on Cmd/Ctrl-click, opening the host in a new one", async () => {
+    const onLeave = vi.fn();
     render(
       <WorktreePlacementRow
         projectId="p1"
         rootPath={ROOT}
         getDraft={getDraft}
-        onLeave={vi.fn()}
+        onLeave={onLeave}
         onElsewhereChange={vi.fn()}
       />
     );
@@ -188,6 +191,11 @@ describe("WorktreePlacementRow", () => {
       expect.objectContaining({ hostId: "studio-02", newWindow: true }),
       { source: "user" }
     );
+    expect(currentHostSwitchRequest()).toMatchObject({ toHostId: "studio-02", newWindow: true });
+    // Done once the worktree exists on the host, whichever window shows it.
+    expect(onLeave).not.toHaveBeenCalled();
+    act(() => completeHostSwitchRequest(currentHostSwitchRequest()!.id));
+    expect(onLeave).toHaveBeenCalledTimes(1);
   });
 
   it("stops blocking local Create once it leaves the dialog with another host chosen", () => {

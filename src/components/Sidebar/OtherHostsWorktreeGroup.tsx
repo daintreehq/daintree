@@ -75,7 +75,10 @@ export function OtherHostsWorktreeGroup({ projectId }: OtherHostsWorktreeGroupPr
                 <span aria-hidden="true" className="min-w-0 truncate text-text-primary">
                   {entry.branch ?? entry.name}
                 </span>
-                <span aria-hidden="true" className="ml-auto shrink-0 truncate text-text-secondary">
+                <span
+                  aria-hidden="true"
+                  className="ml-auto min-w-0 max-w-1/2 truncate text-text-secondary"
+                >
                   {[observedLabel(entry), host.hostName].filter(Boolean).join(" · ")}
                 </span>
               </button>
