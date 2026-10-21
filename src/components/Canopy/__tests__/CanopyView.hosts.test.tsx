@@ -236,6 +236,15 @@ function installElectron() {
   return canopy;
 }
 
+/** Past the panel's wait on the typing before it reads terminals for a search. */
+const SCREEN_SEARCH_SETTLE_MS = 250;
+
+async function screenSearchSettled() {
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, SCREEN_SEARCH_SETTLE_MS));
+  });
+}
+
 async function settle() {
   await act(async () => {
     for (let i = 0; i < 5; i++) await Promise.resolve();
@@ -340,9 +349,7 @@ describe("the Canopy host picker", () => {
     await act(async () => {
       fireEvent.change(input, { target: { value: "segfault" } });
     });
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 250));
-    });
+    await screenSearchSettled();
     const asked = state.invoke.mock.calls.filter((call) => call[1] === "canopy:search-screens");
     expect(asked).toHaveLength(1);
     expect(asked[0]![0]).toBe("studio");

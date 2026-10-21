@@ -103,8 +103,10 @@ const AGE_TICK_MS = 30_000;
 
 /** How long the search waits on the typing before reading terminals for it. */
 const SCREEN_SEARCH_DEBOUNCE_MS = 150;
-/** The most runs one search asks of the terminals: main's own cap on a batch. */
+/** The most runs, words and word length one search asks of the terminals: main's own caps. */
 const SCREEN_SEARCH_MAX_RUNS = 500;
+const SCREEN_SEARCH_MAX_TERMS = 16;
+const SCREEN_SEARCH_MAX_TERM_LENGTH = 200;
 
 /** "3m ago", or "just now" — never "just now ago". */
 function agoPhrase(sinceMs: number, nowMs: number): string {
@@ -795,30 +797,47 @@ function CanopyInbox({
   const searching = terms.length > 0;
   const searchKey = `${hostId ?? ""}|${terms.join(" ")}`;
   // The words each run's names and words leave unfound, asked of its terminal
-  // on the host it runs on: only ids come back.
-  const screenAsk = useMemo(() => {
-    if (terms.length === 0) return "";
+  // on the host it runs on: only ids come back. A run with more words left
+  // than main takes is not asked, rather than the whole ask refused.
+  const screenTargets = useMemo(() => {
     const targets: CanopyScreenSearchTarget[] = [];
+    if (terms.length === 0) return targets;
     for (const item of items) {
       const left = unmatchedTerms(item, terms);
-      if (left.length > 0) {
-        targets.push({ runId: item.runId, spawnedAt: item.row.run.spawnedAt, terms: left });
+      if (
+        left.length === 0 ||
+        left.length > SCREEN_SEARCH_MAX_TERMS ||
+        left.some((term) => term.length > SCREEN_SEARCH_MAX_TERM_LENGTH)
+      ) {
+        continue;
       }
+      targets.push({ runId: item.runId, spawnedAt: item.row.run.spawnedAt, terms: left });
+      if (targets.length === SCREEN_SEARCH_MAX_RUNS) break;
     }
-    return targets.length === 0 ? "" : JSON.stringify(targets.slice(0, SCREEN_SEARCH_MAX_RUNS));
+    return targets;
   }, [items, terms]);
+  // The ask as a value: a terminal's matches stand only for the very runs,
+  // incarnations and words they were found for, on the host that found them.
+  const screenAsk = useMemo(
+    () => (screenTargets.length === 0 ? null : `${hostId ?? ""}|${JSON.stringify(screenTargets)}`),
+    [screenTargets, hostId]
+  );
+  const screenTargetsRef = useRef(screenTargets);
+  useEffect(() => {
+    screenTargetsRef.current = screenTargets;
+  });
   const [screenHits, setScreenHits] = useState<{
-    key: string;
+    ask: string;
     runIds: ReadonlySet<string>;
   } | null>(null);
   // Asked again as screens are read anew, since a terminal's words move on.
   useEffect(() => {
-    if (!isOpen || screenAsk === "") return;
+    if (!isOpen || screenAsk === null) return;
     let live = true;
     const timer = setTimeout(() => {
-      api.searchScreens(JSON.parse(screenAsk) as CanopyScreenSearchTarget[]).then(
+      api.searchScreens(screenTargetsRef.current).then(
         (runIds) => {
-          if (live) setScreenHits({ key: searchKey, runIds: new Set(runIds) });
+          if (live) setScreenHits({ ask: screenAsk, runIds: new Set(runIds) });
         },
         // A host that can't search its screens still matches what the panel holds.
         () => undefined
@@ -828,14 +847,14 @@ function CanopyInbox({
       live = false;
       clearTimeout(timer);
     };
-  }, [isOpen, screenAsk, searchKey, api, refreshedAt]);
+  }, [isOpen, screenAsk, api, refreshedAt]);
+  const onScreen = screenHits !== null && screenHits.ask === screenAsk ? screenHits.runIds : null;
   const shownInbox = useMemo(() => {
     if (!searching) return inbox;
-    const onScreen = screenHits?.key === searchKey ? screenHits.runIds : null;
     const matches = (item: CanopyItem) =>
       onScreen?.has(item.runId) === true || unmatchedTerms(item, terms).length === 0;
     return { inbox: inbox.inbox.filter(matches), archived: inbox.archived.filter(matches) };
-  }, [inbox, searching, screenHits, searchKey, terms]);
+  }, [inbox, searching, onScreen, terms]);
   const unreadOnly = useCanopyStore((s) => s.unreadOnly);
   const setUnreadOnly = useCanopyStore((s) => s.setUnreadOnly);
   // A run read while the Unread filter is on stays listed until the filter is
@@ -890,9 +909,7 @@ function CanopyInbox({
   }, [shownKey, api, recoveries]);
   const listRef = useRef<HTMLDivElement>(null);
   // A search narrows the list, and a terminal's matches landing widen it: neither is a move.
-  const filterKey = searching
-    ? `${searchKey}|${screenHits?.key === searchKey ? [...screenHits.runIds].join(" ") : ""}`
-    : "";
+  const filterKey = searching ? `${searchKey}|${[...(onScreen ?? [])].join(" ")}` : "";
   useListReorderMotion(listRef, listed.map((item) => item.runId).join(" "), filterKey);
   // A list unmounted under the pointer never says the pointer left.
   const listShown = listed.length > 0;
@@ -1065,7 +1082,7 @@ function CanopyInbox({
     }
     focusAfterCloseRef.current = null;
     if (landedRef.current || items.length === 0) return;
-    const target = listed[0]?.runId ?? null;
+    const target = visible[0]?.runId ?? null;
     const land = () => {
       landedRef.current = true;
       // The user got there first — clicked a row, a control or into a
@@ -1091,7 +1108,7 @@ function CanopyInbox({
       cancelAnimationFrame(outer);
       cancelAnimationFrame(inner);
     };
-  }, [isOpen, items, listed, focusCardNow]);
+  }, [isOpen, items, visible, focusCardNow]);
 
   // The focused card left (trashed, answered into another section, exited):
   // put the keyboard on the card that took its place instead of dropping it on
@@ -1123,21 +1140,27 @@ function CanopyInbox({
 
   // A new search selects its top match, as opening selects the top run; a
   // match leaving under the same search gives its place to the next.
+  // A search with no match yet still owes its top match, should a terminal find one.
   const searchedRef = useRef(appliedQuery);
+  const topOwedRef = useRef(false);
   useEffect(() => {
     if (!isOpen) {
       searchedRef.current = "";
+      topOwedRef.current = false;
       return;
     }
     if (searchedRef.current !== appliedQuery) {
       searchedRef.current = appliedQuery;
       const top = visible[0];
+      topOwedRef.current = top === undefined;
       if (top) selectNow(top.runId);
       else setFocusedId(null);
       return;
     }
     if (!searching || focusedIndex !== -1 || visible.length === 0) return;
-    setFocusedId(visible[Math.min(lastIndexRef.current, visible.length - 1)]!.runId);
+    const index = topOwedRef.current ? 0 : Math.min(lastIndexRef.current, visible.length - 1);
+    topOwedRef.current = false;
+    selectNow(visible[index]!.runId);
   }, [isOpen, appliedQuery, searching, focusedIndex, visible, selectNow]);
 
   // Select a run and take the keyboard into its pane — its composer or its
@@ -1376,7 +1399,12 @@ function CanopyInbox({
         // its composer, as Send moves on in a mail queue. The answered one
         // leaves the queue when main's handled reading lands.
         const next = nextAfter(item.runId);
-        if (next && next.runId !== item.runId) openPaneNow(next.runId, "composer");
+        if (!next || next.runId === item.runId) return;
+        if (searchRef.current !== null && document.activeElement === searchRef.current) {
+          selectNow(next.runId);
+        } else {
+          openPaneNow(next.runId, "composer");
+        }
       },
       onArchive: (item) => {
         if (itemArchived(item)) {
@@ -1442,7 +1470,13 @@ function CanopyInbox({
               ) {
                 return;
               }
-              if (next && next.runId !== item.runId) focusCardNow(next.runId);
+              if (!next || next.runId === item.runId) return;
+              // Back in the search since: the selection moves on, the keyboard stays to type.
+              if (searchRef.current !== null && document.activeElement === searchRef.current) {
+                selectNow(next.runId);
+              } else {
+                focusCardNow(next.runId);
+              }
             },
             (error: unknown) => failToast("Couldn't answer", error, goTo(item))
           )
@@ -1502,6 +1536,7 @@ function CanopyInbox({
     close,
     readNow,
     focusCardNow,
+    selectNow,
     openPaneNow,
     nextAfter,
     reserveUndo,
@@ -1709,7 +1744,11 @@ function CanopyInbox({
   // terminal and the modifier chords act from it, on the selected run. Tab takes
   // the keyboard down to that run's row, where the one-key actions are.
   const onSearchKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
-    if (event.nativeEvent.isComposing || event.keyCode === 229) return;
+    // The IME owns the key: nothing of the search's or the panel's acts on it.
+    if (event.nativeEvent.isComposing || event.keyCode === 229) {
+      event.stopPropagation();
+      return;
+    }
     const plain = !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey;
     const selected = focusedIndex !== -1 ? visible[focusedIndex]! : (visible[0] ?? null);
     if (plain && (event.key === "ArrowDown" || event.key === "ArrowUp")) {
@@ -2059,7 +2098,7 @@ function CanopyInbox({
                   aria-label="Search agents"
                   role="combobox"
                   aria-expanded
-                  aria-controls="canopy-inbox-list"
+                  aria-controls="canopy-inbox-list canopy-archived"
                   aria-autocomplete="list"
                   aria-activedescendant={
                     focusedItem && visible.includes(focusedItem)

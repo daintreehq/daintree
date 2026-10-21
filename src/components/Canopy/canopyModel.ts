@@ -569,10 +569,14 @@ export function buildCanopyInbox(
 
 /** The words of a search, each to be found somewhere on a run, ignoring case. */
 export function searchTerms(query: string): string[] {
-  return query
-    .toLowerCase()
-    .split(/\s+/)
-    .filter((term) => term !== "");
+  return [
+    ...new Set(
+      query
+        .toLowerCase()
+        .split(/\s+/)
+        .filter((term) => term !== "")
+    ),
+  ];
 }
 
 /**

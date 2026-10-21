@@ -817,8 +817,9 @@ describe("unmatchedTerms", () => {
     )[0]!;
   const left = (query: string) => unmatchedTerms(item(), searchTerms(query));
 
-  it("asks nothing of a blank query", () => {
+  it("asks nothing of a blank query, and each word once", () => {
     expect(searchTerms("   ")).toEqual([]);
+    expect(searchTerms("Login login  LOGIN fix")).toEqual(["login", "fix"]);
     expect(left("")).toEqual([]);
   });
 

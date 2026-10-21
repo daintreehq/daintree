@@ -33,21 +33,36 @@ describe("searchScreens", () => {
     expect(found).toEqual(["b"]);
   });
 
-  it("reads a few screens at a time, never the whole inbox at once", async () => {
+  it("reads a run named twice once", async () => {
+    const read = vi.fn(async () => "ok");
+    const found = await searchScreens([target("a", ["ok"]), target("a", ["ok"])], read);
+    expect(found).toEqual(["a"]);
+    expect(read).toHaveBeenCalledTimes(1);
+  });
+
+  it("holds overlapping searches to the same few reads as one", async () => {
     let inFlight = 0;
     let most = 0;
-    const read = vi.fn(async () => {
+    const read = async () => {
       inFlight += 1;
       most = Math.max(most, inFlight);
       await new Promise((resolve) => setTimeout(resolve, 1));
       inFlight -= 1;
       return "match";
-    });
-    const targets = Array.from({ length: 20 }, (_, index) => target(`r${index}`, ["match"]));
-    const found = await searchScreens(targets, read);
-    expect(found).toHaveLength(20);
-    expect(read).toHaveBeenCalledTimes(20);
-    expect(most).toBeGreaterThan(1);
-    expect(most).toBeLessThan(20);
+    };
+    const batch = (prefix: string) =>
+      Array.from({ length: 20 }, (_, index) => target(`${prefix}${index}`, ["match"]));
+    await searchScreens(batch("one"), read);
+    const alone = most;
+    most = 0;
+    const [first, second] = await Promise.all([
+      searchScreens(batch("a"), read),
+      searchScreens(batch("b"), read),
+    ]);
+    expect(first).toHaveLength(20);
+    expect(second).toHaveLength(20);
+    expect(alone).toBeGreaterThan(1);
+    expect(alone).toBeLessThan(20);
+    expect(most).toBe(alone);
   });
 });

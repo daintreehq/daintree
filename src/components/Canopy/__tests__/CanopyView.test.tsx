@@ -298,6 +298,15 @@ function selectedRun(container: HTMLElement) {
     ?.id.replace(/^canopy-card-/, "");
 }
 
+/** Past the panel's wait on the typing before it reads terminals for a search. */
+const SCREEN_SEARCH_SETTLE_MS = 250;
+
+async function screenSearchSettled() {
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, SCREEN_SEARCH_SETTLE_MS));
+  });
+}
+
 async function search(value: string) {
   await act(async () => {
     fireEvent.change(searchInput(), { target: { value } });
@@ -387,9 +396,10 @@ describe("CanopyView search", () => {
     await frames();
 
     await search("app segfault");
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 250));
-    });
+    // Not on every keystroke: the terminals are read once the typing rests.
+    expect(canopy.searchScreens).not.toHaveBeenCalled();
+    expect(cards(container)).toHaveLength(0);
+    await screenSearchSettled();
     expect(canopy.searchScreens).toHaveBeenCalledTimes(1);
     const targets = canopy.searchScreens.mock.calls[0]![0];
     // "app" is every run's project: only the word nothing on them holds is asked.
@@ -400,6 +410,35 @@ describe("CanopyView search", () => {
     ]);
     expect(cards(container).map((card) => card.id)).toEqual(["canopy-card-asking"]);
     expect(selectedRun(container)).toBe("asking");
+  });
+
+  it("selects the top terminal match, wherever the selection was before", async () => {
+    const canopy = installElectron();
+    canopy.searchScreens.mockImplementation(async (targets) =>
+      targets.map((target) => target.runId).filter((runId) => runId !== "waiting")
+    );
+    const { container } = render(<CanopyView />);
+    await frames();
+    const input = searchInput();
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    expect(selectedRun(container)).toBe(cards(container)[2]!.id.replace(/^canopy-card-/, ""));
+
+    await search("segfault");
+    await screenSearchSettled();
+    const shown = cards(container);
+    expect(shown).toHaveLength(2);
+    expect(selectedRun(container)).toBe(shown[0]!.id.replace(/^canopy-card-/, ""));
+  });
+
+  it("asks nothing of a terminal for words past what main takes", async () => {
+    const canopy = installElectron();
+    const { container } = render(<CanopyView />);
+    await frames();
+    await search(Array.from({ length: 17 }, (_, index) => `word${index}`).join(" "));
+    await screenSearchSettled();
+    expect(canopy.searchScreens).not.toHaveBeenCalled();
+    expect(cards(container)).toHaveLength(0);
   });
 
   it("comes back to the search with / from a row", async () => {
