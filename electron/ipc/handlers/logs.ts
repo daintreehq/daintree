@@ -183,12 +183,14 @@ export function registerLogsHandlers(
     }
   ): void => {
     const { level, message, context } = entry;
-    const contextWithSource = {
+    const contextWithSource: Record<string, unknown> = {
       ...context,
       source: "Renderer",
       webContentsId: ctx.webContentsId,
-      ...(ctx.projectId ? { projectId: ctx.projectId } : {}),
     };
+    // An unbound sender must not keep a project id it supplied itself.
+    if (ctx.projectId) contextWithSource.projectId = ctx.projectId;
+    else delete contextWithSource.projectId;
     switch (level) {
       case "debug":
         logDebug(message, contextWithSource);

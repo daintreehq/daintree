@@ -227,9 +227,9 @@ describe("logs:write handler", () => {
     });
   });
 
-  it("omits projectId for a sender with no project binding", async () => {
+  it("drops a renderer-supplied projectId when the sender has no project binding", async () => {
     const handler = getHandler(CHANNELS.LOGS_WRITE);
-    await handler({ level: "info", message: "welcome" });
+    await handler({ level: "info", message: "welcome", context: { projectId: "proj-b" } });
 
     expect(loggerMock.logInfo).toHaveBeenCalledWith("welcome", {
       source: "Renderer",
