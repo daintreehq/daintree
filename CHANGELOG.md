@@ -1,5 +1,148 @@
 # Changelog
 
+## [0.46.0] - 2026-10-21
+
+Memory pressure stops taking agents down: the watchdog gives a stalled main process about 120 s instead of 15 s, macOS memory reads match Activity Monitor, and at critical pressure agent launches and cold project opens wait instead of piling on. Other hosts' copies of a project show beside local worktrees, Canopy opens into search, a paired device can answer a waiting agent, SvelteKit Tools becomes Element Picker for any framework, and a robustness sweep hardens git, settings persistence and crash reports.
+
+### Breaking Changes
+
+- Git run by Daintree no longer inherits `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, `GIT_TRACE`, `GIT_SSL_NO_VERIFY`, `GIT_HTTP_*`, `GIT_CONFIG_PARAMETERS` or `VISUAL` from the environment Daintree was launched in; identity and dates, TLS CA and client certs, LFS skip, `GIT_CONFIG_NOSYSTEM` and `GIT_CEILING_DIRECTORIES` still pass (#13556, #13551, #13669)
+
+### Features
+
+**Memory pressure**
+
+- At critical memory pressure on macOS, agent launches and restored agents wait in a "Waiting to start" pane, and cold project opens, new windows and host switches ask before loading; each goes ahead once pressure eases, or on Launch anyway / Open anyway (#13530, #13638)
+
+**Remote Hosts**
+
+- In a local project, the sidebar's "On other hosts" section lists each connected host with the same project, one row per host counting quiet, unread and working agents and naming the waiting or blocked ones; a click switches to that host and pane, and `Cmd+Click` (`Ctrl+Click` on Windows and Linux) opens a new window (#13683)
+- Add host discovers NetBird peers next to Tailscale and LAN, using the peer's name when it resolves and its NetBird IP otherwise (#13681)
+
+**Terminals and agents**
+
+- Settings › Hosts › "Answer from another device" (off by default): a paired phone or laptop, reached through your own `tailscale serve` or `ssh -L` (Daintree listens on 127.0.0.1 only), sees a waiting agent's screen with secrets redacted and picks one of its options; pairing is by one-time code, device tokens can be revoked and the last 50 answers are logged (#13684, #13701)
+- The `! <command>` suggestions Claude Code prints are clickable: a click opens a terminal in the agent's worktree and runs exactly that command; wrapped or ambiguous suggestions stay inert (#13679)
+- Codex account quota shows one row per distinct `CODEX_HOME`, the default plus each Codex preset that sets its own, and one login across several homes folds into one row (#13686, #13702)
+- A finished agent's cost, tokens and "Nothing to commit" share one header chip with exact values in its tooltip; Codex and Gemini token-only summaries now show, and a worktree with no git status no longer reads as clean (#13737)
+
+**Canopy**
+
+- Canopy opens with the keyboard in a search field and the top run selected: words narrow the inbox and archived runs by project, title, worktree, agent and Canopy's own words, then fall back to a local search of each terminal's screen and recent history; nothing leaves the machine, and Tab hands the keys to the selected row (#13696)
+
+**Dev preview**
+
+- SvelteKit Tools is now Element Picker and works on any framework's dev preview: a picked element sends its selector, a redacted markup excerpt, computed styles and optionally a cropped screenshot to the agent, and SvelteKit pages still trace to source; enable it in the Plugin Manager (#13685)
+- "Preview endpoint" in a worktree's environment popover opens its resource endpoint in the dev preview; only private addresses (loopback, RFC 1918, tailnet `100.64/10`, IPv6 ULA) are dialled, rechecked at connect time (#13688)
+
+**Worktrees and files**
+
+- Project attachments: a named resource (dev server, tunnel, simulator) declared under `attachments` in `.daintree/config.json` with attach, detach and status commands, held by one worktree at a time; attach, move, detach or check it from the card chip or Runtime › Attachments, and deleting the holder detaches it first (#13703)
+- The file viewer's Source strip leads with the highlighted language and reports the real encoding (UTF-8 with BOM, Not valid UTF-8) and line endings (CRLF, CR, Mixed) instead of always "UTF-8" (#13736)
+
+**MCP Server**
+
+- `agent.launch` takes `location: "background"`, starting the agent parked with its PTY running and never mounted (#13661)
+- `terminal.placeOwned` moves a panel the calling agent owns between background, dock and grid without taking focus, opening the dock popover or un-maximizing a neighbour (#13662)
+- `project.runCommand` moves from the Full tool set to Core, the default; only the Daintree Assistant can call it, locally or through `host.call` (#13715)
+
+**Plugins**
+
+- `host.setWorktreeCardStatus` shows a short status chip under an expanded worktree card's header, one per plugin, limited to the plugin's own project (#13704)
+- Plugin agents declare session resume with a `resume` block (`session-id` with an id pattern, or `project-scoped`) and resume after restart like built-in agents (#13687)
+- Forge plugins can declare an issues-only provider (`roles: ["issues"]`, no git remote needed), and Project settings › Code forge › "Issues provider" lets a project take its issues from it while PRs and CI stay with the code forge (#13700)
+
+### Bug Fixes
+
+**Memory and stability**
+
+- The watchdog waits about 120 s instead of 15 s before killing a stalled main process when memory is under pressure, its pings arrive late, or (Windows and Linux) under 5% of memory is free; the kill took the pty-host and every running agent with it (#13528, #13636)
+- On macOS, terminal and Daintree process memory is read as physical footprint, the figure Activity Monitor shows, instead of resident size; the GPU process is still scored and badged at its resident size (#13526, #13637)
+- The system memory notice escalates as pressure worsens and stays up through escalations, names Daintree's heaviest projects and its own memory, and "Show memory use" opens Why-slow with the top projects by terminal memory (#13529, #13639)
+- Long terminal lines with no newline, a remote link's reassembly buffer, GitLab caches and completion discovery no longer grow without bound, and diff and file previews stop at their byte budget while still reading (#13591, #13594, #13597, #13602, #13592, #13593)
+- Diagnostics bundles exported after a crash include the crash record, when it happened, and what was blocking input if a window went unresponsive (#13527)
+
+**Security and privacy**
+
+- Crash reports strip emails, URL paths and query strings, SSH remote owner/repo names and home-folder names before sending; Settings › Privacy & data lists every breadcrumb kind sent and discloses the approximate city and country Sentry derives from each report's IP (#13541, #13540)
+- Dev preview's browser sign-in only completes on its own callback; stray, forged or malformed local requests are refused without using up or cancelling the flow in progress (#13547, #13549, #13548)
+
+**Projects and settings**
+
+- An unreadable project settings file is no longer saved over with empty settings (dev preview shows "Couldn't load project settings" with Retry), recipe edits abort rather than overwrite an unreadable recipe, and reads wait for queued saves (#13574, #13552, #13553)
+- A slow project state read can no longer overwrite a newer save, and a failed settings save no longer leaves its notification overrides in effect (#13575, #13585)
+- Project settings › Automation › Shell arguments keep arguments with spaces and empty arguments across a save, and importing `.env` text treats `KEY= # comment` as an empty value (#13563, #13571)
+- Detected Yarn scripts run as `yarn run <script>`, and `devcontainer.json` with comments or trailing commas is read, with an array-form `postStartCommand` keeping its argument boundaries (#13567, #13569, #13568)
+- A local-storage read error warns that persistence is off instead of silently going memory-only (#13590)
+- A main-process error toasts and opens the Problems dock only in the project view you're looking at, instead of in every open project (#13711)
+- With "Close idle projects automatically" on, a project you return to while it's closing stays open and keeps its plugins (#13570)
+- The project switcher's Enter hint follows the modifiers actually held (#13584)
+
+**Git**
+
+- Branch comparison and the conflict panel keep file names with trailing spaces, tabs, quotes, backslashes or newlines exact, and on macOS and Linux a backslash in a file name is kept literally in the file tree and Git views (#13572, #13607, #13562)
+- Added and untracked symlinks diff as their link target, as git does; dangling links and links to large files no longer fail (#13573)
+- Committing a staged submodule add or update no longer fails the conflict-marker preflight (#13606)
+
+**Terminals and agents**
+
+- Agent panes keep Daintree's and plugins' MCP tools for the pane's whole life: Codex no longer loses them after 30 idle minutes, and a client at the 8-session cap retires its oldest session instead of getting a 429 (#13635, #13531)
+- Panels sent to the background stay there across a view reload, eviction and restart, and stay asleep on worktree switch (#13661)
+- Kiro panes resume their session on restore and restart (#13687)
+- The subagents popover is a list with a page per child showing status, role, model, and the task and reply as Markdown with Copy; a filter appears past 8 children, and Escape steps back (#13739)
+- The missing-CLI gate names what the probe saw ("Codex found only in WSL", "Running Gemini was denied") with one primary action per state, and wraps install commands instead of truncating them (#13728)
+- The rate-limit chip reads "Rate limit reported" and its tooltip says when it appeared and when it clears; the hand-over dialog puts its approval warning in its own callout, and the Driven by, Hibernated and rate-limit chips take keyboard focus (#13730, #13726)
+- Applied-patch results from the artifact overlay list only files the patch touched, and two applies can no longer overwrite each other's staged patch (#13582, #13576)
+- Restart conversation after closing the only Assistant tab starts a working session instead of failing with "Workspace state is still loading" (#13544)
+
+**Files, browser and dev preview**
+
+- The file browser keeps working after a symlinked project root is retargeted (#13561)
+- `Cmd+W` on a browser or dev preview pane that was moved to the dock or reordered closes the pane, not the window, and an open find in page resumes on the replaced page (#13634, #13565)
+- Overlapping dev preview starts share one port probe, and a request whose URL resolver throws gets a 502 instead of hanging (#13608, #13550)
+- Mermaid blocks say "Rendering diagram…" or why they failed, and a renderer that can't load offers Retry instead of staying pending (#13723)
+- In-app browser alert, confirm and prompt dialogs use the page's origin as the title and the standard dialog layout (#13721)
+- The Markdown text-size popover has a title and a "Reset to default · 14 px" button, the file tree options menu names the sort direction for the current key, and the hidden-dotfiles strip's Show is a real button (#13729, #13735, #13719)
+
+**Remote Hosts**
+
+- The prompt history palette in a remote project shows that project's prompts (#13587)
+- Downloads from a host to FAT, exFAT and some network shares fall back to a copy where hard links aren't supported (#13558)
+- A cancelled switch away from a host project is reported in the view you're still in, naming it, instead of as an app-wide error (#13713)
+
+**Worktrees**
+
+- The deleted-worktree cleanup countdown runs five times slower while the project isn't on screen, instead of pausing (#13538)
+- Branch labels draw at one size with lighter glyphs and new refactor, infra, deps and backup icons, and show the full branch in a tooltip only when part is hidden; the plan-file row matches the branch line (#13733, #13732)
+- Card Delete, Collapse and More buttons stay at full contrast on inactive cards and form one Tab stop, and the dev-server indicator reads `:port`, Starting or Installing, or Failed with a one-line reason (#13738, #13725)
+
+**Canopy**
+
+- Canopy rows always show their project line, also when the list holds one project or a row is titled after its project (#13697)
+
+**Toolbar, menus and panels**
+
+- Undo and redo of a layout change no longer delete trashed, dialog or non-persisted panels, or un-trash a panel closed since (#13560)
+- The update toast keeps "Version X" from download to restart with a stage title and a steady progress bar, and screen readers no longer hear every percent (#13731)
+- Diagnostics Logs rows sit in columns with the shared badges, plugin logs mark severity by glyph and open at the newest line, the dock's Unread popover offers Mark as read instead of Kill, and the tour invite reads "Don't show again" (#13722, #13724, #13734, #13727)
+
+**MCP Server and plugins**
+
+- `terminal.background`, `terminal.moveToDock` and `terminal.moveToGrid` fail an unknown or other-project id like `terminal.close`, refuse trashed, overlay and dialog panels, and return where the panel landed (#13663)
+- MCP calls not bound to a project go to the window that has focus, not the last one in focus history (#13667)
+- Plugin storage returns the same value before and after a reopen for top-level `NaN` and `Infinity` (stored as `null`) (#13588)
+
+### Performance
+
+- Commit history paging and search no longer count every revision per page (#13599)
+- The file-search index survives in-place saves, and very wide directories list and poll with bounded metadata reads and about 10x less main-thread hashing (#13595, #13600, #13604)
+- Concurrent commit-author avatar lookups share one forge request; providers opt in with `AvatarCapability.getCacheGeneration` (#13598)
+- With Canopy reading on, far fewer background reads go to `canopy.daintree.org`: working agents, settled agents redrawing one row and unchanged busy screens aren't re-sent, and Claude Code 2.x and Gemini spinners count as working (#13695)
+
+### Other Changes
+
+- MCP SDK, Mermaid and `concurrently` updated to clear npm audit advisories (#13555)
+
 ## [0.45.0] - 2026-10-19
 
 Assistant control across machines is rebuilt around `host.call`: the Daintree Assistant calls a remote host's own MCP tools directly and reaches other assistants through the ordinary terminal tools, replacing 0.44.0's inbox, and a host with no Daintree window open now runs the whole loop. Agent panes can be held on restart or resumed on focus, plugins gain actionable notifications, toolbar badges, context keys and dialog panels, and a design pass tidies file previews, the composer and the toolbar.
