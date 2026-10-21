@@ -1,7 +1,7 @@
 {
   "generated": "2026-10-21",
-  "total": 24,
-  "files": 12,
+  "total": 22,
+  "files": 11,
   "occurrences": [
     {
       "file": "plugins/builtin/github/renderer/components/BulkCreateWorktreeDialog.tsx",
@@ -302,36 +302,6 @@
       "decision": "keep",
       "category": "icon-affordance",
       "evidence": "<Settings2> is an icon — the colour is an affordance, not prose"
-    },
-    {
-      "file": "src/components/Worktree/WorktreeCard/WorktreeActionsToolbar.tsx",
-      "ordinal": 0,
-      "line": 132,
-      "start": 4550,
-      "end": 4571,
-      "token": "text-daintree-text/60",
-      "variants": "",
-      "step": 60,
-      "group": "src/components/Worktree/WorktreeCard/WorktreeActionsToolbar.tsx#4469",
-      "branch": "",
-      "decision": "keep",
-      "category": "icon-affordance",
-      "evidence": "<button> wraps only icons — the colour paints a glyph through currentColor"
-    },
-    {
-      "file": "src/components/Worktree/WorktreeCard/WorktreeActionsToolbar.tsx",
-      "ordinal": 1,
-      "line": 159,
-      "start": 5700,
-      "end": 5721,
-      "token": "text-daintree-text/60",
-      "variants": "",
-      "step": 60,
-      "group": "src/components/Worktree/WorktreeCard/WorktreeActionsToolbar.tsx#5617",
-      "branch": "",
-      "decision": "keep",
-      "category": "icon-affordance",
-      "evidence": "<button> wraps only icons — the colour paints a glyph through currentColor"
     },
     {
       "file": "src/config/__tests__/accentForeground.contract.test.ts",
