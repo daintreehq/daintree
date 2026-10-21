@@ -101,7 +101,10 @@ export function tailMatchesPattern(
  * under the session id `--last`. No agent mints an id that opens with a dash.
  */
 function isPlausibleSessionId(captured: string | undefined): captured is string {
-  return !!captured && !captured.startsWith("-");
+  // A plugin-declared pattern can be broad enough to swallow a line break or
+  // other control byte (#13687); no CLI id contains one, and it would ride into
+  // the resume command and the session journal.
+  return !!captured && !captured.startsWith("-") && !/\p{Cc}/u.test(captured);
 }
 
 /**
@@ -119,7 +122,8 @@ export function createSessionIdMatcher(patternSource: string | undefined): Sessi
   // Precedent: buildPatternConfig in terminalActivityPatterns.
   let pattern: RegExp;
   try {
-    pattern = new RegExp(patternSource, "g");
+    // `d` records where the capture itself ends, for the boundary check below.
+    pattern = new RegExp(patternSource, "gd");
   } catch {
     return null;
   }
@@ -151,7 +155,10 @@ export function createSessionIdMatcher(patternSource: string | undefined): Sessi
     // for one trailing character that confirms the token ended. A match that is
     // provisional is never traded for an older complete one: the newest hint is
     // the session the user is actually leaving.
-    if (options.boundary === "stream" && chosen.index + chosen[0].length >= text.length) {
+    // The capture can end past the match itself — a plugin pattern may capture
+    // inside a lookahead (`resume (?=(\S+))`) — so the later of the two decides.
+    const end = Math.max(chosen.index + chosen[0].length, chosen.indices?.[1]?.[1] ?? 0);
+    if (options.boundary === "stream" && end >= text.length) {
       return { kind: "needs-boundary" };
     }
     return { kind: "match", sessionId: chosen[1] };

@@ -149,6 +149,26 @@ describe("createSessionIdMatcher", () => {
     ).toEqual({ kind: "none" });
   });
 
+  it("rejects a capture spanning a line break from a broad plugin pattern (#13687)", () => {
+    const matcher = createSessionIdMatcher("--resume ([\\s\\S]+)");
+    if (!matcher) throw new Error("matcher must compile");
+    expect(matcher("hermes --resume abc\n$ ", { occurrence: "first", boundary: "eof" })).toEqual({
+      kind: "none",
+    });
+  });
+
+  it("waits for a boundary when the id is captured inside a lookahead (#13687)", () => {
+    const matcher = createSessionIdMatcher("resume (?=(\\S+))");
+    if (!matcher) throw new Error("matcher must compile");
+    expect(matcher("resume abc", { occurrence: "first", boundary: "stream" })).toEqual({
+      kind: "needs-boundary",
+    });
+    expect(matcher("resume abcdef\n", { occurrence: "first", boundary: "stream" })).toEqual({
+      kind: "match",
+      sessionId: "abcdef",
+    });
+  });
+
   it("still finds a real id when a flag echo follows it", () => {
     const raw = `codex resume ${ID}\n$ codex resume --last\n`;
     expect(match(raw, { occurrence: "last", boundary: "eof" })).toEqual({

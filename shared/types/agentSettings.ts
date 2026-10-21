@@ -1164,7 +1164,8 @@ export function buildResumeCommand(
 
 /**
  * Builds a "resume the most recent session" launch command for agents whose
- * `session-id` resume config declares `resumeLatestArgs`. Used as a fallback
+ * `session-id` resume config declares `resumeLatestArgs`, or whose resume is
+ * `project-scoped` (its args are already the latest-in-directory form). Used as a fallback
  * when the graceful-shutdown pattern-match capture loop failed to harvest a
  * session ID — instead of launching fresh and losing the user's context, the
  * CLI's own "continue last" flag picks up the prior conversation in the
@@ -1176,8 +1177,8 @@ export function buildResumeCommand(
  * positional values).
  *
  * @returns The resume-latest command string, or `undefined` if the agent
- *   has no resume config, isn't a `session-id` kind, or doesn't declare
- *   `resumeLatestArgs`.
+ *   has no resume config, or is a `session-id` agent without
+ *   `resumeLatestArgs`, or is a `rolling-history` / `named-target` agent.
  */
 export function buildResumeLatestCommand(
   agentId: string,
@@ -1187,8 +1188,16 @@ export function buildResumeLatestCommand(
   const agentConfig = getEffectiveAgentConfig(agentId);
   const resume = agentConfig?.resume;
   if (!agentConfig || !resume) return undefined;
-  if (resume.kind !== "session-id") return undefined;
-  const fallbackArgs = resume.resumeLatestArgs;
+  // A `project-scoped` resume IS the latest-in-directory form — it captures no
+  // id, so without this a restore had nothing to rebuild for it (#13687). It
+  // shares the restore election with `resumeLatestArgs`, so a second pane in
+  // the same directory starts fresh instead of reopening the same session.
+  const fallbackArgs =
+    resume.kind === "session-id"
+      ? resume.resumeLatestArgs
+      : resume.kind === "project-scoped"
+        ? resume.args()
+        : undefined;
   if (!fallbackArgs || fallbackArgs.length === 0) return undefined;
 
   const parts = [baseCommand ?? agentConfig.command];
