@@ -71,6 +71,9 @@ const EXEMPT: Record<string, string[]> = {
   "src/components/Worktree/WorktreeCard/WorktreeDetailsSection.tsx": [
     "mt-1.5 max-h-32 overflow-auto rounded-[var(--radius-md)] bg-status-error/5 p-2 font-mono text-2xs text-text-secondary whitespace-pre-wrap break-all select-text",
   ],
+  // The console's log-row wash behind a warning or error line's severity glyph:
+  // a row in a log, not a callout.
+  "src/components/Plugin/PluginLogsSection.tsx": ["bg-status-warning/5", "bg-status-danger/5"],
 };
 
 const TEXT_SIZE = /^text-(3xs|2xs|xs|sm|base)$/;

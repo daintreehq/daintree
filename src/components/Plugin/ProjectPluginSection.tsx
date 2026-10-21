@@ -311,7 +311,7 @@ export function ProjectPluginDetailPane({ plugin }: { plugin: ProjectPluginInfo 
         <PluginDatabasesSection databases={plugin.databases} origin="project" />
       )}
 
-      {logs.lines && logs.lines.length > 0 && (
+      {logs.hasLogged && (
         <div className="space-y-2">
           <h4 className={SECTION_LABEL_CLASS}>Logs</h4>
           <PluginLogsSection {...logs} />

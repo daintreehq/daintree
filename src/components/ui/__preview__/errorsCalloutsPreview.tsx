@@ -385,6 +385,8 @@ function PluginErrorsScene() {
           lines={null}
           loading={false}
           error="Couldn't read this plugin's log buffer: plugin host is restarting"
+          readAt={null}
+          hasLogged
           refresh={noop}
         />
       </Specimen>
