@@ -1067,7 +1067,10 @@ describe("McpServerService", () => {
   });
 
   it("keeps a pane bearer's Streamable HTTP session through idle time and wake, and reaps the rest (#13635)", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    // Real HTTP runs under these fake timers: with a frozen clock, requests on
+    // reused connections never left the macos-15 runner. Real time still moves
+    // the clock, and only advanceTimersByTime reaches the 30-minute idle deadline.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"], shouldAdvanceTime: true });
     try {
       const { window } = createMockWindow({
         getManifest: () => [
