@@ -64,11 +64,20 @@ export type ResourceConfig = z.infer<typeof ResourceConfigSchema>;
 
 const ResourcesConfigSchema = z.record(z.string(), ResourceConfigSchema);
 
+const AttachmentConfigSchema = z.object({
+  attach: z.array(z.string()).check(z.minLength(1)),
+  detach: z.array(z.string()).check(z.minLength(1)),
+  status: z.optional(z.string()),
+});
+
+export type AttachmentConfig = z.infer<typeof AttachmentConfigSchema>;
+
 const DaintreeLifecycleConfigSchema = z.object({
   setup: optionalStringArray,
   teardown: optionalStringArray,
   resource: z.optional(ResourceConfigSchema),
   resources: z.optional(ResourcesConfigSchema),
+  attachments: z.optional(z.record(z.string(), AttachmentConfigSchema)),
 });
 
 export type DaintreeLifecycleConfig = z.infer<typeof DaintreeLifecycleConfigSchema>;
@@ -251,6 +260,22 @@ export class WorktreeLifecycleService {
   }
 
   /**
+   * The project's attachments. They are shared by every worktree, so they come
+   * from the project root's config (or the user's own override of it), never
+   * from whichever copy a branch carries — every worktree must agree on what
+   * an attachment's detach is.
+   */
+  async resolveAttachments(projectRootPath: string): Promise<{
+    resolved: ResolvedLifecycleConfig;
+    attachments: Record<string, AttachmentConfig>;
+  } | null> {
+    const resolved = await this.resolveConfig(projectRootPath, projectRootPath);
+    const attachments = resolved?.config.attachments;
+    if (!resolved || !attachments || Object.keys(attachments).length === 0) return null;
+    return { resolved, attachments };
+  }
+
+  /**
    * Whether commands from this config may run. A config the user owns always
    * may; a repository config only when its exact commands were approved.
    */
@@ -319,6 +344,16 @@ export class WorktreeLifecycleService {
     const resolved = await this.resolveConfig(worktreePath, projectRootPath);
     const sources: LifecycleCommandSource[] = [];
     if (resolved) sources.push(describeConfigSource(resolved));
+    // Attachments run from the project root's config whichever card asks, so
+    // that file is reviewable from every card, not just the main worktree's.
+    // A branch's unchanged copy of it is the same approval and is listed once.
+    const attachmentSource = await this.resolveAttachments(projectRootPath);
+    if (attachmentSource) {
+      const source = describeConfigSource(attachmentSource.resolved);
+      if (!sources.some((existing) => existing.fingerprint === source.fingerprint)) {
+        sources.push(source);
+      }
+    }
     // Every settings-environment fallback is reached only when the config
     // resolves no resource block of its own, so a settings file shadowed by one
     // never runs and is not worth asking about. An empty `resources` resolves

@@ -204,6 +204,43 @@ export interface WorktreeResourceStatus {
 }
 
 /** Git worktree - multiple working trees on same repo */
+/**
+ * What Daintree saw when it last ran one of an attachment's commands, or when
+ * the worktree holding it disappeared. `removed` records that the holder went
+ * away without a detach Daintree could run, so nothing was observed to clean
+ * up after it.
+ */
+export interface ProjectAttachmentObservation {
+  action: "attach" | "detach" | "status" | "removed";
+  /** The worktree the command ran against (or the one that was removed). */
+  worktreeId: string;
+  state: "success" | "failed" | "timed-out" | "needs-approval";
+  output?: string;
+  error?: string;
+  at: number;
+}
+
+/**
+ * One project attachment as a worktree card sees it. Every worktree carries the
+ * project's full list so any of them can offer "Attach here"; only the holder
+ * has `heldHere`.
+ */
+export interface WorktreeAttachment {
+  name: string;
+  heldHere: boolean;
+  /** The worktree holding it, when one does. */
+  holderWorktreeId?: string;
+  hasStatusCommand: boolean;
+  /** A request for this attachment is queued or running, on any worktree. */
+  busy?: boolean;
+  /** The command running for this attachment against this worktree. */
+  running?: "attach" | "detach" | "status";
+  /** The last attach/detach/removal observed against this worktree. */
+  lastResult?: ProjectAttachmentObservation;
+  /** The holder's last status-command observation. */
+  status?: ProjectAttachmentObservation;
+}
+
 export interface Worktree {
   /** Stable identifier for this worktree (normalized absolute path) */
   id: string;
@@ -457,6 +494,9 @@ export interface Worktree {
    */
   lifecycleCommandsNeedApproval?: boolean;
 
+  /** The project's attachments, as seen from this worktree. Absent when none are declared. */
+  attachments?: WorktreeAttachment[];
+
   /** Worktree environment mode ("local" or an environment key from resourceEnvironments) */
   worktreeMode?: string;
 
@@ -574,7 +614,9 @@ export interface WorktreeListResult {
  * variable-substituted, so they read exactly as they will run.
  */
 export interface WorktreeTeardownPhasePreview {
-  phase: "resource-teardown" | "teardown";
+  phase: "attachment-detach" | "resource-teardown" | "teardown";
+  /** The attachment an `attachment-detach` phase releases. */
+  attachment?: string;
   commands: string[];
   /**
    * `false` when the commands come from a repository config the user has not

@@ -23,10 +23,12 @@ describe("resolveWorktreePortTimeout", () => {
   });
 
   it("delete-worktree timeout exceeds the host worst case", () => {
-    // Host runs resource-teardown (300s) + regular teardown (120s) sequentially.
-    // The renderer ceiling must exceed that sum so it never errors on a delete
-    // that is still completing successfully on the host.
-    const HOST_DELETE_WORST_CASE_MS = (300 + 120) * 1000;
+    // Host first waits out an attachment move already queued (detach 120s +
+    // attach 300s + status 60s), runs the held attachments' detaches (120s
+    // budget), then resource-teardown (300s) + regular teardown (120s), all
+    // sequentially. The renderer ceiling must exceed that sum so it never
+    // errors on a delete that is still completing successfully on the host.
+    const HOST_DELETE_WORST_CASE_MS = (120 + 300 + 60 + 120 + 300 + 120) * 1000;
     expect(resolveWorktreePortTimeout("delete-worktree")).toBeGreaterThan(
       HOST_DELETE_WORST_CASE_MS
     );

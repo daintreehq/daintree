@@ -43,6 +43,7 @@ export interface UseWorktreeActionsResult {
   handleTerminateAll: () => void;
   handleClearHistory: () => void;
   handleResourceTeardown: () => void;
+  confirmAttachmentMove: (name: string, fromLabel: string, onConfirm: () => void) => void;
 }
 
 export function useWorktreeActions({
@@ -214,6 +215,26 @@ export function useWorktreeActions({
     });
   }, [worktree.id, worktree.issueTitle, worktree.branch, worktree.name, teardownCommands, source]);
 
+  // A move is two commands on two worktrees, so the one confirmation names both
+  // (D2, bundled operations) — and moving a test device can mean reinstalling a
+  // build for minutes.
+  const confirmAttachmentMove = useCallback(
+    (name: string, fromLabel: string, onConfirm: () => void) => {
+      setConfirmDialog({
+        isOpen: true,
+        title: `Move '${name}' here?`,
+        description: `This runs ${name}'s detach command against '${fromLabel}', then its attach command against this worktree. If the detach fails, ${name} stays on '${fromLabel}'.`,
+        confirmLabel: "Move attachment",
+        variant: "default",
+        onConfirm: () => {
+          setConfirmDialog({ isOpen: false });
+          onConfirm();
+        },
+      });
+    },
+    []
+  );
+
   return {
     runningRecipeId,
     confirmDialog,
@@ -228,6 +249,7 @@ export function useWorktreeActions({
     handleTerminateAll,
     handleClearHistory,
     handleResourceTeardown,
+    confirmAttachmentMove,
     handleSelectAllAgents,
     handleSelectWaitingAgents,
     handleSelectWorkingAgents,

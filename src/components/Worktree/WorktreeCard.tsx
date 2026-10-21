@@ -56,6 +56,7 @@ import {
   WorktreeIssueErrorBanner,
 } from "./WorktreeCard/WorktreeDetailsSection";
 import { WorktreeDialogs } from "./WorktreeCard/WorktreeDialogs";
+import { notifyAttachmentFailure } from "./WorktreeCard/notifyAttachmentFailure";
 import { WorktreeHeader } from "./WorktreeCard/WorktreeHeader";
 import { WorktreeTerminalSection } from "./WorktreeCard/WorktreeTerminalSection";
 import { WslGitBanner } from "./WorktreeCard/WslGitBanner";
@@ -468,6 +469,7 @@ export function WorktreeCard({
     handleTerminateAll,
     handleClearHistory,
     handleResourceTeardown,
+    confirmAttachmentMove,
   } = useWorktreeActions({
     worktree,
     teardownCommands,
@@ -560,6 +562,34 @@ export function WorktreeCard({
       { worktreeId: worktree.id },
       { source: "user" }
     );
+  };
+
+  const runAttachmentAction = (
+    name: string,
+    action: "attach" | "detach" | "status",
+    expectedHolderWorktreeId?: string | null
+  ) => {
+    worktreeClient
+      .attachmentAction(worktree.id, name, action, expectedHolderWorktreeId)
+      .catch((err: unknown) => notifyAttachmentFailure(err, name, action, worktree.id));
+  };
+
+  const handleAttachmentAction = (name: string, action: "attach" | "detach" | "status") => {
+    if (action !== "attach") {
+      runAttachmentAction(name, action);
+      return;
+    }
+    // The holder this card shows travels with the request, so the host refuses
+    // it if the attachment moved in the meantime rather than detaching someone
+    // the user never confirmed moving it away from.
+    const holderId = worktree.attachments?.find((a) => a.name === name)?.holderWorktreeId ?? null;
+    if (holderId && holderId !== worktree.id) {
+      const holder = getCurrentViewStore().getState().worktrees.get(holderId);
+      const fromLabel = holder?.branch ?? holder?.name ?? holderId;
+      confirmAttachmentMove(name, fromLabel, () => runAttachmentAction(name, action, holderId));
+      return;
+    }
+    runAttachmentAction(name, action, holderId);
   };
 
   const handleResourceStatus = () =>
@@ -1055,6 +1085,8 @@ export function WorktreeCard({
     onResourceConnect: worktree.resourceConnectCommand ? handleResourceConnect : undefined,
     onResourceStatus: hasStatusCommand ? handleResourceStatus : undefined,
     onResourceTeardown: hasTeardownCommand ? handleResourceTeardown : undefined,
+    attachments: worktree.attachments,
+    onAttachmentAction: handleAttachmentAction,
     devServerState,
     onStartDevServer: handleStartDevServer,
     onStopDevServer: handleStopDevServer,
@@ -1515,6 +1547,7 @@ export function WorktreeCard({
                   devServerSession={devServerSession}
                   onCheckResourceStatus={hasStatusCommand ? handleResourceStatus : undefined}
                   onPreviewEndpoint={handlePreviewEndpoint}
+                  onAttachmentAction={handleAttachmentAction}
                   onCleanupWorktree={
                     chipState === "cleanup" && !isMainWorktree
                       ? () => setShowDeleteDialog(true)

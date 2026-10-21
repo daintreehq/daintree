@@ -184,6 +184,11 @@ import {
 import { resolveForgeRemote } from "../../shared/utils/forgeRemoteSelection.js";
 import { applyResourceConfigToMonitor } from "./resourceConfigHelpers.js";
 import { ResourceActionExecutor } from "./ResourceActionExecutor.js";
+import { AttachmentService, type AttachmentActionResult } from "./AttachmentService.js";
+import {
+  FileProjectAttachmentStore,
+  resolveProjectAttachmentsDir,
+} from "./projectAttachmentStore.js";
 import { TopologyWatcher, type TopologyWatcherHost } from "./TopologyWatcher.js";
 
 function normalizePathKeyForPrefix(value: string): string {
@@ -652,6 +657,7 @@ export class WorkspaceService {
   private fetchCoordinator: RepoFetchCoordinator;
   private _shutdownController = new AbortController();
   readonly resourceActionExecutor: ResourceActionExecutor;
+  readonly attachmentService: AttachmentService;
   /** Session-scoped guard so we notify the user about each Linux inotify
    *  limit only once, even if many worktrees hit it concurrently. */
   private readonly inotifyLimitsNotified = new Set<InotifyLimit>();
@@ -1051,6 +1057,18 @@ export class WorkspaceService {
       lifecycleService: this.lifecycleService,
     });
 
+    this.attachmentService = new AttachmentService(
+      {
+        getProjectRootPath: () => this.projectRootPath,
+        getMonitor: (id) => this.monitors.get(id),
+        getMonitors: () => this.monitors.values(),
+        getProjectEnvVars: () => this.projectEnvVars,
+        emitUpdate: (monitor) => this.emitUpdate(monitor),
+        lifecycleService: this.lifecycleService,
+      },
+      new FileProjectAttachmentStore(resolveProjectAttachmentsDir(process.env.DAINTREE_USER_DATA))
+    );
+
     // The host is a thin live-getter view onto WorkspaceService state.
     // Aliasing `this` keeps the getter syntax compact (object-literal
     // getters can't be arrow functions, and we need a fresh read on each
@@ -1172,6 +1190,10 @@ export class WorkspaceService {
       const rawWorktrees = await this.listService.list();
       const worktrees = await this.listService.mapToWorktrees(rawWorktrees);
       this.statusTiming.markEnumerated();
+
+      // Before the sync, so the holders it reconciles against are this
+      // project's and every monitor it creates starts with its attachments.
+      await this.attachmentService.load(projectRootPath);
 
       await this.syncMonitors(worktrees, this.activeWorktreeId, this.mainBranch, undefined, true);
 
@@ -1312,6 +1334,11 @@ export class WorkspaceService {
         this.removeMonitor(id);
       }
     }
+    // A holder can be gone without ever having had a monitor here (removed
+    // while the app was closed). The list is as authoritative for it as it is
+    // for the monitors just removed.
+    this.attachmentService.reconcile(currentIds);
+    void this.attachmentService.refreshDeclarations();
 
     // Create or update monitors. The watcher-budget reconciliation runs in a
     // finally so a mid-loop throw (e.g. a failed stat/note-file write in
@@ -1597,6 +1624,7 @@ export class WorkspaceService {
     }
 
     this.resourceActionExecutor.cleanupResourceActionState(id);
+    this.attachmentService.handleWorktreeRemoved(id);
     monitor.stop();
     this.monitors.delete(id);
     this.emitGate.forget(monitor);
@@ -1941,6 +1969,7 @@ export class WorkspaceService {
 
     monitor.setIssueNumber(issueNumber ?? undefined);
     monitor.setCreatedAt(createdAt);
+    monitor.setAttachments(this.attachmentService.projectionFor(wt.id));
 
     // Withhold the watcher budget from a new *background* monitor before it
     // starts so start() never arms a watcher we may be about to evict — this
@@ -3124,7 +3153,9 @@ export class WorkspaceService {
     if (!monitor) return null;
     const ctx = this.getLifecycleContext();
     if (!ctx) return { phases: [] };
-    return this.lifecycleService.previewLifecycleTeardown(monitor, ctx);
+    const attachmentPhases = await this.attachmentService.previewDetachForDelete(monitor);
+    const teardown = await this.lifecycleService.previewLifecycleTeardown(monitor, ctx);
+    return { phases: [...attachmentPhases, ...teardown.phases] };
   }
 
   async getSubmoduleDeleteRisk(worktreeId: string): Promise<SubmoduleDeleteRisk | null> {
@@ -4435,6 +4466,8 @@ export class WorkspaceService {
     monitor: WorktreeMonitor,
     force: boolean
   ): Promise<void> {
+    // First, while the worktree's own stack is still up for its detach to talk to.
+    await this.attachmentService.detachForDelete(worktreeId);
     const ctx = this.getLifecycleContext();
     if (!ctx) {
       return;
@@ -4491,6 +4524,9 @@ export class WorkspaceService {
     // Hoisted so the catch can clear the pending entry even though `monitor`
     // is block-scoped to the try.
     let pendingDeleteKey: string | null = null;
+    // Set once the attachment detaches have run, so a failure releases the
+    // hold they took on the worktree — and only then.
+    let attachmentsReserved = false;
     try {
       markHostPerformance("wtdelete.host-start", { worktreeId });
       const monitor = this.monitors.get(worktreeId);
@@ -4579,6 +4615,7 @@ export class WorkspaceService {
         this.setActiveWorktree(`${requestId}-auto-switch`, mainWorktreeId);
       }
 
+      attachmentsReserved = true;
       await this.runLifecycleTeardown(worktreeId, monitor, force);
 
       // Mark the metadata-subdir basename pending so the watcher event our own
@@ -4736,6 +4773,9 @@ export class WorkspaceService {
       // Delete failed — drop any pending entry so a real external change to
       // that name isn't masked, and cancel its safety valve.
       if (pendingDeleteKey) this.topologyWatcher.clearPending(pendingDeleteKey);
+      // The worktree is still here, so attaching to it is allowed again — but
+      // only this delete's hold is released; a concurrent one keeps its own.
+      if (attachmentsReserved) this.attachmentService.endDelete(worktreeId);
       // The only durable record of a delete failure. The renderer surfaces it
       // on the card, but a branch-delete failure arrives after the card is
       // already gone — so without this the error survives nowhere on disk.
@@ -6188,6 +6228,15 @@ export class WorkspaceService {
     );
   }
 
+  runAttachmentAction(
+    worktreeId: string,
+    name: string,
+    action: "attach" | "detach" | "status",
+    expectedHolderWorktreeId?: string | null
+  ): Promise<AttachmentActionResult> {
+    return this.attachmentService.run(worktreeId, name, action, expectedHolderWorktreeId);
+  }
+
   async hasResourceConfig(rootPath: string): Promise<boolean> {
     if (!this.projectRootPath) {
       return false;
@@ -6237,6 +6286,7 @@ export class WorkspaceService {
     this.prService.cleanup();
     this.deferredCredentialUpdates.clear();
     this.resourceActionExecutor.dispose();
+    this.attachmentService.dispose();
     for (const monitor of this.monitors.values()) {
       monitor.stop();
     }

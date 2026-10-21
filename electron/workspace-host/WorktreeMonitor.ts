@@ -288,6 +288,8 @@ export class WorktreeMonitor {
   // `undefined` until the host has checked, which is a different answer from
   // "checked, nothing waiting" — see `Worktree.lifecycleCommandsNeedApproval`.
   private _lifecycleCommandsNeedApproval: boolean | undefined;
+  // Written by AttachmentService; the project's attachments as this worktree sees them.
+  private _attachments: import("../../shared/types/worktree.js").WorktreeAttachment[] | undefined;
   private _worktreeMode: string = "local";
   private _worktreeEnvironmentLabel: string | undefined;
 
@@ -650,6 +652,9 @@ export class WorktreeMonitor {
       },
       get lifecycleCommandsNeedApproval() {
         return monitor._lifecycleCommandsNeedApproval;
+      },
+      get attachments() {
+        return monitor._attachments;
       },
       get worktreeMode() {
         return monitor._worktreeMode;
@@ -1416,6 +1421,16 @@ export class WorktreeMonitor {
 
   setLifecycleCommandsNeedApproval(needsApproval: boolean): void {
     this._lifecycleCommandsNeedApproval = needsApproval;
+  }
+
+  get attachments(): import("../../shared/types/worktree.js").WorktreeAttachment[] | undefined {
+    return this._attachments;
+  }
+
+  setAttachments(
+    attachments: import("../../shared/types/worktree.js").WorktreeAttachment[] | undefined
+  ): void {
+    this._attachments = attachments;
   }
 
   setResourceConnectCommand(cmd: string | undefined): void {

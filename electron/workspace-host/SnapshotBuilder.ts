@@ -6,6 +6,7 @@ import type {
   WorktreeLifecyclePhaseResult,
   WorktreeResourceStatus,
   WslGitEligibility,
+  WorktreeAttachment,
 } from "../../shared/types/worktree.js";
 import type { CIStatusState } from "../../shared/types/forge.js";
 import type { WorktreeSnapshot } from "../../shared/types/workspace-host.js";
@@ -54,6 +55,7 @@ export interface SnapshotBuilderHost {
   readonly hasTeardownCommand: boolean;
   readonly hasProvisionCommand: boolean;
   readonly lifecycleCommandsNeedApproval: boolean | undefined;
+  readonly attachments?: WorktreeAttachment[];
   readonly worktreeMode: string;
   readonly worktreeEnvironmentLabel: string | undefined;
   readonly hasPlanFile: boolean;
@@ -180,6 +182,7 @@ export class SnapshotBuilder {
       // Only `true` is load-bearing; "checked, nothing waiting" and "not
       // checked yet" both mean there is nothing to review.
       lifecycleCommandsNeedApproval: this.host.lifecycleCommandsNeedApproval || undefined,
+      attachments: this.host.attachments,
       worktreeMode: this.host.worktreeMode !== "local" ? this.host.worktreeMode : undefined,
       worktreeEnvironmentLabel: this.host.worktreeEnvironmentLabel,
       hasPlanFile: this.host.hasPlanFile || undefined,
