@@ -15,7 +15,10 @@ const serviceMock = vi.hoisted(() => ({
 
 vi.mock("electron", () => ({ ipcMain: ipcMainMock }));
 vi.mock("../../../services/codex/CodexSubagentService.js", () => serviceMock);
-const quotaMock = vi.hoisted(() => ({ readCodexQuota: vi.fn(), refreshCodexQuota: vi.fn() }));
+const quotaMock = vi.hoisted(() => ({
+  readCodexQuotaProfiles: vi.fn(),
+  refreshCodexQuotaProfiles: vi.fn(),
+}));
 vi.mock("../../../services/codex/CodexQuotaService.js", () => quotaMock);
 
 import { registerCodexHandlers } from "../codex.js";
@@ -134,20 +137,34 @@ describe("codex IPC handlers", () => {
   });
 
   describe("readQuota", () => {
-    it("returns the service's result unchanged (#12797)", async () => {
-      const result = { status: "unavailable", reason: "read-failed", fetchedAt: 1 };
-      quotaMock.readCodexQuota.mockResolvedValue(result);
+    const profiles = [
+      {
+        key: "k",
+        isDefault: true,
+        presetNames: [],
+        result: { status: "unavailable", reason: "read-failed", fetchedAt: 1 },
+      },
+    ];
 
-      expect(await getHandler(CHANNELS.CODEX_READ_QUOTA)(fakeEvent())).toBe(result);
-      expect(quotaMock.readCodexQuota).toHaveBeenCalledTimes(1);
+    it("returns every profile main resolved, unchanged (#12797, #13686)", async () => {
+      quotaMock.readCodexQuotaProfiles.mockResolvedValue(profiles);
+
+      expect(await getHandler(CHANNELS.CODEX_READ_QUOTA)(fakeEvent())).toBe(profiles);
+      expect(quotaMock.readCodexQuotaProfiles).toHaveBeenCalledTimes(1);
+    });
+
+    it("never passes a renderer payload through as a home", async () => {
+      quotaMock.readCodexQuotaProfiles.mockResolvedValue(profiles);
+
+      await getHandler(CHANNELS.CODEX_READ_QUOTA)(fakeEvent(), { codexHome: "/elsewhere" });
+      expect(quotaMock.readCodexQuotaProfiles).toHaveBeenCalledWith();
     });
 
     it("routes an explicit refresh past the cache", async () => {
-      const result = { status: "unavailable", reason: "timeout", fetchedAt: 2 };
-      quotaMock.refreshCodexQuota.mockResolvedValue(result);
+      quotaMock.refreshCodexQuotaProfiles.mockResolvedValue(profiles);
 
-      expect(await getHandler(CHANNELS.CODEX_REFRESH_QUOTA)(fakeEvent())).toBe(result);
-      expect(quotaMock.readCodexQuota).not.toHaveBeenCalled();
+      expect(await getHandler(CHANNELS.CODEX_REFRESH_QUOTA)(fakeEvent())).toBe(profiles);
+      expect(quotaMock.readCodexQuotaProfiles).not.toHaveBeenCalled();
     });
   });
 });

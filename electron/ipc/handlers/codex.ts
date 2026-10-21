@@ -6,7 +6,7 @@ import type {
   AgentSubagentTranscriptResult,
   CodexFolderSessionsResult,
 } from "../../../shared/types/ipc/agentSubagents.js";
-import type { CodexQuotaResult } from "../../../shared/types/ipc/agentQuota.js";
+import type { CodexQuotaProfile } from "../../../shared/types/ipc/agentQuota.js";
 
 // The renderer names a terminal, never a folder or a bare thread id. Main
 // resolves the cwd and the owning Codex thread from the pty-host record and
@@ -99,15 +99,17 @@ export const codexNamespace = defineIpcNamespace({
         return listCodexSessionsForCwd(cwd, codexHome);
       }
     ),
-    // Account-wide and argument-free: main's own Codex profile, never a pane's
-    // or Claude's (#12797).
-    readQuota: op(CODEX_METHOD_CHANNELS.readQuota, async (): Promise<CodexQuotaResult> => {
-      const { readCodexQuota } = await import("../../services/codex/CodexQuotaService.js");
-      return readCodexQuota();
+    // Argument-free: main enumerates the profiles from its own copy of the
+    // Codex presets, so the renderer can't name a home for the app-server to
+    // read (#13686). Never a pane's profile, never Claude's (#12797).
+    readQuota: op(CODEX_METHOD_CHANNELS.readQuota, async (): Promise<CodexQuotaProfile[]> => {
+      const { readCodexQuotaProfiles } = await import("../../services/codex/CodexQuotaService.js");
+      return readCodexQuotaProfiles();
     }),
-    refreshQuota: op(CODEX_METHOD_CHANNELS.refreshQuota, async (): Promise<CodexQuotaResult> => {
-      const { refreshCodexQuota } = await import("../../services/codex/CodexQuotaService.js");
-      return refreshCodexQuota();
+    refreshQuota: op(CODEX_METHOD_CHANNELS.refreshQuota, async (): Promise<CodexQuotaProfile[]> => {
+      const { refreshCodexQuotaProfiles } =
+        await import("../../services/codex/CodexQuotaService.js");
+      return refreshCodexQuotaProfiles();
     }),
   },
 });
