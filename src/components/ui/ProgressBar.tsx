@@ -40,6 +40,7 @@ export function ProgressBar({
     <div
       {...rootAttributes}
       role="progressbar"
+      data-progress-bar=""
       aria-label={label}
       aria-valuemin={0}
       aria-valuemax={safeMax}

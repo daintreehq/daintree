@@ -6,6 +6,7 @@ import {
   type NotificationType,
   type NotificationAction,
   type NotificationPlacement,
+  type NotificationProgress,
 } from "@/store/notificationStore";
 import {
   useNotificationHistoryStore,
@@ -260,6 +261,7 @@ interface NotifyPayloadBase {
   action?: NotificationAction;
   actions?: NotificationAction[];
   placement?: NotificationPlacement;
+  progress?: NotificationProgress;
   /**
    * Controls routing:
    * - "high" (default): toast when focused, history only when blurred
@@ -1198,6 +1200,11 @@ export function notify(payload: NotifyPayload): string {
         };
         if (coalesce.buildAction) {
           patch.actions = undefined;
+        }
+        // Key-presence, as in the store's correlation collapse: a later payload
+        // moves the bar, and an explicit `progress: undefined` removes it.
+        if ("progress" in payload) {
+          patch.progress = payload.progress;
         }
         // Clear context on coalesce: the combined toast now represents multiple
         // events which may originate from different subjects. A contextual

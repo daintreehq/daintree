@@ -28,9 +28,14 @@ import {
   formatNotificationCountGlyph,
 } from "@/components/Notifications/notificationCount";
 import { Spinner } from "@/components/ui/Spinner";
+import { ProgressBar } from "@/components/ui/ProgressBar";
 import { Button } from "@/components/ui/button";
 import { DismissButton } from "@/components/ui/DismissButton";
-import { useNotificationStore, type Notification } from "@/store/notificationStore";
+import {
+  useNotificationStore,
+  type Notification,
+  type NotificationProgress,
+} from "@/store/notificationStore";
 import { useNotificationHistoryStore } from "@/store/slices/notificationHistorySlice";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { useUIStore } from "@/store/uiStore";
@@ -100,6 +105,29 @@ function CountBadge({
       <span aria-hidden="true">{formatNotificationCountGlyph(count, "×")}</span>
       <span className="sr-only">{formatNotificationCountAriaLabel(count)}</span>
     </span>
+  );
+}
+
+function ToastProgress({ progress }: { progress: NotificationProgress }) {
+  // Producers can overshoot 100 on a last tick; one clamped value feeds the
+  // digits, the width and the ARIA range alike.
+  const pct =
+    progress.value != null && Number.isFinite(progress.value)
+      ? Math.min(100, Math.max(0, Math.round(progress.value)))
+      : null;
+  return (
+    // pl-7 aligns with the text column, like the action row. The row height and
+    // the percent slot are fixed — sized for "100%" — so neither the card nor
+    // the bar moves when the first tick lands or the last one widens the digits.
+    <div className="mt-1.5 pl-7 flex h-3 items-center gap-2">
+      <ProgressBar size="thin" label={progress.label} value={pct} className="min-w-0 flex-1" />
+      <span
+        aria-hidden="true"
+        className="w-9 shrink-0 text-right text-xs leading-none tabular-nums text-text-secondary"
+      >
+        {pct != null ? `${pct}%` : null}
+      </span>
+    </div>
   );
 }
 
@@ -510,6 +538,7 @@ function Toast({ notification, isTopmost }: { notification: Notification; isTopm
               </div>
             </div>
           </div>
+          {notification.progress ? <ToastProgress progress={notification.progress} /> : null}
           {(() => {
             const actions = [
               ...(notification.actions ?? []),
