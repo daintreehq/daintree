@@ -3,7 +3,7 @@ import { emergencyLogMainFatal } from "../utils/emergencyLog.js";
 import { getCrashRecoveryService } from "../services/CrashRecoveryService.js";
 import { getCrashLoopGuard } from "../services/CrashLoopGuardService.js";
 import { closeTelemetry } from "../services/TelemetryService.js";
-import { broadcastToRenderer } from "../ipc/utils.js";
+import { broadcastToVisibleRenderers } from "../ipc/utils.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { appendPendingError } from "../ipc/pendingErrorsStore.js";
 import type { ErrorRecord } from "../../shared/types/ipc/errors.js";
@@ -39,7 +39,7 @@ function buildFatalErrorRecord(kind: string, error: unknown): ErrorRecord {
 
 function notifyRenderer(appError: ErrorRecord): void {
   try {
-    broadcastToRenderer(CHANNELS.ERROR_NOTIFY, appError);
+    broadcastToVisibleRenderers(CHANNELS.ERROR_NOTIFY, appError);
   } catch {
     // best-effort only
   }

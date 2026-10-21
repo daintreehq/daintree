@@ -29,12 +29,16 @@ const storeMock = vi.hoisted(() => ({
 }));
 
 const allWindowsMock = vi.hoisted(() => vi.fn((): unknown[] => []));
+const webContentsFromIdMock = vi.hoisted(() => vi.fn((_id: number): unknown => undefined));
 
 vi.mock("electron", () => ({
   ipcMain: ipcMainMock,
   shell: shellMock,
   BrowserWindow: {
     getAllWindows: allWindowsMock,
+  },
+  webContents: {
+    fromId: webContentsFromIdMock,
   },
 }));
 
@@ -708,6 +712,73 @@ describe("errorHandlers", () => {
       ).rejects.toThrow("kaboom");
 
       expect(ptyClient.listenerCount("spawn-result")).toBe(0);
+    });
+  });
+
+  describe("project view delivery", () => {
+    function createMockViewWebContents(id: number) {
+      return {
+        id,
+        isDestroyed: () => false,
+        isLoading: () => false,
+        send: vi.fn(),
+        once: vi.fn(),
+        removeListener: vi.fn(),
+      };
+    }
+
+    async function registerViews() {
+      const registry = await import("../../window/webContentsRegistry.js");
+      const active = createMockViewWebContents(101);
+      const cached = createMockViewWebContents(102);
+      const byId = new Map<number, unknown>([
+        [active.id, active],
+        [cached.id, cached],
+      ]);
+      webContentsFromIdMock.mockImplementation((id: number) => byId.get(id));
+      registry.registerProjectView("project-a", active as never);
+      registry.registerProjectView("project-b", cached as never);
+      registry.registerCachedViewWebContents(cached as never);
+      return { registry, active, cached };
+    }
+
+    function notifyCalls(wc: { send: Mock }, channel: string) {
+      return wc.send.mock.calls.filter(([sent]: string[]) => sent === channel);
+    }
+
+    it("sends ERROR_NOTIFY only to the active view, not to cached project views", async () => {
+      const CHANNELS = await getChannels();
+      createMockWindow();
+      const { active, cached } = await registerViews();
+      registerErrorHandlers(null, null);
+
+      const retryHandler = getInvokeHandler(CHANNELS.ERROR_RETRY);
+      await retryHandler({} as never, undefined as never).catch(() => {});
+
+      expect(notifyCalls(active, CHANNELS.ERROR_NOTIFY)).toHaveLength(1);
+      expect(notifyCalls(cached, CHANNELS.ERROR_NOTIFY)).toHaveLength(0);
+    });
+
+    it("buffers errors while every project view is cached and delivers them on reactivation", async () => {
+      const CHANNELS = await getChannels();
+      createMockWindow();
+      const { registry, active, cached } = await registerViews();
+      registry.registerCachedViewWebContents(active as never);
+      registerErrorHandlers(null, null);
+
+      const retryHandler = getInvokeHandler(CHANNELS.ERROR_RETRY);
+      await retryHandler({} as never, undefined as never).catch(() => {});
+
+      expect(notifyCalls(active, CHANNELS.ERROR_NOTIFY)).toHaveLength(0);
+      expect(notifyCalls(cached, CHANNELS.ERROR_NOTIFY)).toHaveLength(0);
+
+      // Mirrors ProjectViewLifecycleController.activateView.
+      registry.registerAppView({ id: 1 } as never, { webContents: active } as never);
+      registry.unregisterCachedViewWebContents(active.id);
+      await Promise.resolve();
+
+      expect(notifyCalls(active, CHANNELS.ERROR_NOTIFY)).toHaveLength(1);
+      expect(notifyCalls(cached, CHANNELS.ERROR_NOTIFY)).toHaveLength(0);
     });
   });
 
