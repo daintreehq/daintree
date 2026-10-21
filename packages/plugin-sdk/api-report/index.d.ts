@@ -1791,6 +1791,25 @@ interface AgentDetectionConfig {
         waiting: string[];
     };
 }
+/**
+ * The plain-data form of {@link AgentResume} a plugin manifest declares (#13687).
+ * A `session-id` template carries the literal `{sessionId}` placeholder in one
+ * of its args. Kept as data on {@link AgentConfig.resumeTemplate} because the
+ * plugin agent snapshot is structured-cloned into the renderer, pty-host and
+ * analysis worker, and a function would not survive the copy;
+ * {@link getEffectiveRegistry} expands it into `resume` in each process.
+ */
+type AgentResumeTemplate = {
+    kind: "session-id";
+    args: string[];
+    sessionIdPattern?: string;
+    quitCommand?: string;
+    resumeLatestArgs?: string[];
+} | {
+    kind: "project-scoped";
+    args: string[];
+    quitCommand?: string;
+};
 
 /**
  * One `contributes.fileEditors` entry (#12323). Declares that the plugin's
@@ -2804,6 +2823,12 @@ interface PluginAgentContribution {
      * boundary (Daintree never modifies the agent's own config).
      */
     detection?: AgentDetectionConfig;
+    /**
+     * Optional session resume (#13687): `session-id` with a `{sessionId}` args
+     * template, or `project-scoped` static args. Plain data, expanded where a
+     * resume command is built. Plugin agents never claim a `continuity` tier.
+     */
+    resume?: AgentResumeTemplate;
 }
 /**
  * A plugin-contributed terminal process detection (#11613). Maps one command

@@ -26,6 +26,10 @@ import {
   agentClipboardDirectory,
 } from "../agentSettings.js";
 import { setUserRegistry } from "../../config/agentRegistry.js";
+import {
+  registerPluginAgents,
+  clearPluginAgentRegistryForTests,
+} from "../../config/pluginAgentRegistry.js";
 import { setAgentCommandDialectResolver } from "../../utils/shellEscape.js";
 import type { AgentConfig } from "../../config/agentRegistry.js";
 
@@ -159,12 +163,16 @@ describe("buildResumeLatestCommand", () => {
     expect(buildResumeLatestCommand("my-custom-agent")).toBeUndefined();
   });
 
-  it("returns undefined for agents whose resume kind is not session-id", () => {
-    // Kimi uses rolling-history; Kiro uses project-scoped. Neither has the
-    // session-id resumeLatestArgs surface — they already always launch with
-    // resume flags via their own resume.args() path.
+  it("returns undefined for a rolling-history agent", () => {
     expect(buildResumeLatestCommand("kimi")).toBeUndefined();
-    expect(buildResumeLatestCommand("kiro")).toBeUndefined();
+  });
+
+  it("uses a project-scoped agent's own args as its resume-latest form (#13687)", () => {
+    // Kiro captures no id, so without this a restore had nothing to rebuild.
+    expect(buildResumeLatestCommand("kiro")).toBe("kiro-cli chat --resume");
+    expect(buildResumeLatestCommand("kiro", ["--trust-all-tools"], "/opt/kiro")).toBe(
+      "/opt/kiro --trust-all-tools chat --resume"
+    );
   });
 
   it("returns undefined for session-id agents that don't declare resumeLatestArgs", () => {
@@ -1828,5 +1836,44 @@ describe("agentClipboardDirectory", () => {
     expect(
       buildLaunchCommandFromFlags("gemini", "gemini", [], { clipboardDirectory: dir })
     ).toContain(`--include-directories '/tmp/daintree-inbox'`);
+  });
+});
+
+describe("plugin-declared resume (#13687)", () => {
+  forcePosixPlatform();
+  afterEach(() => clearPluginAgentRegistryForTests());
+
+  const plugin = {
+    name: "Plugin",
+    color: "#3366ff",
+    iconId: "terminal",
+  };
+
+  it("builds an exact resume from a session-id template, quoting the id", () => {
+    registerPluginAgents("me.extra-agents", [
+      {
+        ...plugin,
+        id: "hermes",
+        command: "hermes",
+        resume: { kind: "session-id", args: ["--resume", "{sessionId}"], quitCommand: "/exit" },
+      },
+    ]);
+    expect(buildResumeCommand("hermes", "abc123")).toBe("hermes --resume abc123");
+    expect(buildResumeCommand("hermes", "it's")).toBe("hermes --resume 'it'\\''s'");
+    expect(buildResumeLatestCommand("hermes")).toBeUndefined();
+    expect(buildAssignedSessionIdArgs("hermes", "abc")).toBeUndefined();
+    expect(supportsSessionIdAssignment("hermes")).toBe(false);
+  });
+
+  it("builds a resume-latest command for a project-scoped plugin agent", () => {
+    registerPluginAgents("me.extra-agents", [
+      {
+        ...plugin,
+        id: "pi",
+        command: "pi",
+        resume: { kind: "project-scoped", args: ["--continue"] },
+      },
+    ]);
+    expect(buildResumeLatestCommand("pi")).toBe("pi --continue");
   });
 });

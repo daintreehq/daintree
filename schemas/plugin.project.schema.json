@@ -1135,6 +1135,80 @@
                   "primaryPatterns"
                 ],
                 "additionalProperties": false
+              },
+              "resume": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "const": "session-id"
+                      },
+                      "args": {
+                        "minItems": 1,
+                        "maxItems": 20,
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "maxLength": 256
+                        }
+                      },
+                      "sessionIdPattern": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 256
+                      },
+                      "quitCommand": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 256
+                      },
+                      "resumeLatestArgs": {
+                        "minItems": 1,
+                        "maxItems": 20,
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "maxLength": 256
+                        }
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "args"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "const": "project-scoped"
+                      },
+                      "args": {
+                        "minItems": 1,
+                        "maxItems": 20,
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "maxLength": 256
+                        }
+                      },
+                      "quitCommand": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 256
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "args"
+                    ],
+                    "additionalProperties": false
+                  }
+                ]
               }
             },
             "required": [

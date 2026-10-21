@@ -846,6 +846,14 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       consumers: [{ file: AGENT_REGISTRY, symbol: "toPluginAgentConfig" }],
       note: "Copied into the runtime agent config detection block (see agents.detection).",
     },
+    resume: {
+      mode: "derived-input",
+      consumers: [
+        { file: AGENT_REGISTRY, symbol: "contributionToAgentConfig" },
+        { file: "shared/config/agentRegistry.ts", symbol: "expandResumeTemplate" },
+      ],
+      note: "Kept as data on resumeTemplate across the snapshot broadcast, then expanded into the function-shaped resume in each process's effective registry.",
+    },
   },
   processTools: {
     command: {

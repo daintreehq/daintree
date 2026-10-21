@@ -1126,6 +1126,70 @@ export const AgentDetectionConfigSchema = z
   })
   .strict();
 
+/** One CLI argument a manifest hands to the agent: bounded, no line breaks or NUL. */
+const PluginAgentArgSchema = z
+  .string()
+  .max(256)
+  .refine((arg) => !/[\r\n\0]/.test(arg), {
+    message: "Args cannot contain control characters (\\r, \\n, \\0)",
+  });
+
+const PluginAgentArgArraySchema = z.array(PluginAgentArgSchema).max(20);
+
+/** The placeholder a `session-id` resume template expands to the captured id. */
+const SESSION_ID_TOKEN = "{sessionId}";
+
+const PluginAgentStaticArgArraySchema = PluginAgentArgArraySchema.refine(
+  (args) => args.every((arg) => !arg.includes(SESSION_ID_TOKEN)),
+  { message: `Only a session-id resume's args can carry ${SESSION_ID_TOKEN}` }
+);
+
+/** Count the capture groups in a regex source, or `null` when it doesn't compile. */
+function countCaptureGroups(source: string): number | null {
+  try {
+    // `|` makes the empty string match, and the match array then has one slot
+    // per capture group — named, nested and escaped forms all counted by the
+    // engine itself rather than by re-parsing the source here.
+    return (new RegExp(`${source}|`).exec("")?.length ?? 1) - 1;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Optional session resume for a contributed agent (#13687). Data only: the
+ * `{sessionId}` template stays a string all the way into every process that
+ * mirrors the plugin agent snapshot, and is expanded where a resume command is
+ * built (`getEffectiveRegistry`). Only the two kinds a plugin CLI has needed are
+ * exposed; `named-target` and launch-time id assignment wait for a real case.
+ */
+export const AgentResumeConfigSchema = z.discriminatedUnion("kind", [
+  z
+    .object({
+      kind: z.literal("session-id"),
+      args: PluginAgentArgArraySchema.min(1).refine(
+        (args) => args.filter((arg) => arg.includes(SESSION_ID_TOKEN)).length === 1,
+        { message: `Exactly one session-id resume arg must contain ${SESSION_ID_TOKEN}` }
+      ),
+      // Same bounds as a detection pattern, plus the single capture group the
+      // teardown scrape reads the id from.
+      sessionIdPattern: PluginDetectionPatternSchema.refine(
+        (pattern) => countCaptureGroups(pattern) === 1,
+        { message: "sessionIdPattern must have exactly one capture group" }
+      ).optional(),
+      quitCommand: PluginAgentArgSchema.min(1).optional(),
+      resumeLatestArgs: PluginAgentStaticArgArraySchema.min(1).optional(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("project-scoped"),
+      args: PluginAgentStaticArgArraySchema.min(1),
+      quitCommand: PluginAgentArgSchema.min(1).optional(),
+    })
+    .strict(),
+]);
+
 export const AgentContributionSchema = z
   .object({
     id: z
@@ -1141,21 +1205,12 @@ export const AgentContributionSchema = z
       message:
         "command must be a bare PATH binary name or a plugin-relative path starting with ./ (no absolute path, backslash, NUL, or .. segments)",
     }),
-    args: z
-      .array(
-        z
-          .string()
-          .max(256)
-          .refine((arg) => !/[\r\n\0]/.test(arg), {
-            message: "Args cannot contain control characters (\\r, \\n, \\0)",
-          })
-      )
-      .max(20)
-      .optional(),
+    args: PluginAgentArgArraySchema.optional(),
     color: z.string().regex(/^#[0-9A-Fa-f]{6}$/),
     iconId: z.string().min(1).max(64),
     supportsContextInjection: z.boolean().default(false),
     detection: AgentDetectionConfigSchema.optional(),
+    resume: AgentResumeConfigSchema.optional(),
   })
   .strict();
 

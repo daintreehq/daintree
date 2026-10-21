@@ -19,7 +19,7 @@ import type {
   PluginCanDispatchResult,
 } from "./actions.js";
 import type { AgentState, WaitingReason } from "./agent.js";
-import type { AgentDetectionConfig } from "../config/agentRegistry.js";
+import type { AgentDetectionConfig, AgentResumeTemplate } from "../config/agentRegistry.js";
 import type { z } from "zod";
 
 /**
@@ -1337,7 +1337,8 @@ export interface PluginManifestScopes {
  *
  * Plugin agents launch as named, untracked terminals: the schema surfaces
  * `id`, `name`, `command`, `args`, `color`, `iconId`,
- * `supportsContextInjection`, and an optional `detection` block. The
+ * `supportsContextInjection`, an optional `resume` block (#13687), and an
+ * optional `detection` block. The
  * `detection` field (#10587) lets a contributed agent describe its
  * working/waiting/completed output patterns so it participates in the
  * agent-state UI like a built-in — output-volume state already works from the
@@ -1360,6 +1361,12 @@ export interface PluginAgentContribution {
    * boundary (Daintree never modifies the agent's own config).
    */
   detection?: AgentDetectionConfig;
+  /**
+   * Optional session resume (#13687): `session-id` with a `{sessionId}` args
+   * template, or `project-scoped` static args. Plain data, expanded where a
+   * resume command is built. Plugin agents never claim a `continuity` tier.
+   */
+  resume?: AgentResumeTemplate;
 }
 
 /**

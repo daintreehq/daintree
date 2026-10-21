@@ -103,10 +103,83 @@ describe("AgentContributionSchema (issue #9560)", () => {
   });
 
   it("rejects unknown top-level fields (strict)", () => {
-    expect(
-      AgentContributionSchema.safeParse({ ...VALID_AGENT, resume: { kind: "rolling-history" } })
-        .success
-    ).toBe(false);
+    expect(AgentContributionSchema.safeParse({ ...VALID_AGENT, continuity: {} }).success).toBe(
+      false
+    );
+  });
+
+  describe("resume (#13687)", () => {
+    const parses = (resume: unknown) =>
+      AgentContributionSchema.safeParse({ ...VALID_AGENT, resume }).success;
+
+    it("accepts a session-id template with a one-group pattern and quit command", () => {
+      expect(
+        parses({
+          kind: "session-id",
+          args: ["--resume", "{sessionId}"],
+          sessionIdPattern: "hermes --resume (\\S+)",
+          quitCommand: "/exit",
+          resumeLatestArgs: ["--continue"],
+        })
+      ).toBe(true);
+      expect(parses({ kind: "session-id", args: ["--session={sessionId}"] })).toBe(true);
+    });
+
+    it("accepts a project-scoped resume with static args", () => {
+      expect(parses({ kind: "project-scoped", args: ["--continue"], quitCommand: "/quit" })).toBe(
+        true
+      );
+    });
+
+    it("rejects the kinds plugins can't declare", () => {
+      expect(parses({ kind: "rolling-history", args: ["--continue"] })).toBe(false);
+      expect(parses({ kind: "named-target", args: ["--plan"] })).toBe(false);
+    });
+
+    it("requires exactly one {sessionId} arg in a session-id template", () => {
+      expect(parses({ kind: "session-id", args: ["--resume"] })).toBe(false);
+      expect(parses({ kind: "session-id", args: ["{sessionId}", "{sessionId}"] })).toBe(false);
+    });
+
+    it("rejects {sessionId} outside a session-id template's args", () => {
+      expect(parses({ kind: "project-scoped", args: ["--session", "{sessionId}"] })).toBe(false);
+      expect(
+        parses({ kind: "session-id", args: ["{sessionId}"], resumeLatestArgs: ["{sessionId}"] })
+      ).toBe(false);
+    });
+
+    it("requires a sessionIdPattern to compile with exactly one capture group", () => {
+      const withPattern = (sessionIdPattern: string) =>
+        parses({ kind: "session-id", args: ["{sessionId}"], sessionIdPattern });
+      expect(withPattern("id: ([\\w-]+)")).toBe(true);
+      expect(withPattern("(?:resume|continue) (?<id>\\S+)(?=\\s)")).toBe(true);
+      expect(withPattern("\\(literal\\) [(](\\S+)")).toBe(true);
+      expect(withPattern("id: \\S+")).toBe(false);
+      expect(withPattern("(id): (\\S+)")).toBe(false);
+      expect(withPattern("(")).toBe(false);
+      expect(withPattern(`(${"a".repeat(255)})`)).toBe(false);
+    });
+
+    it("holds args and quitCommand to the same rules as the launch args", () => {
+      expect(parses({ kind: "session-id", args: ["{sessionId}"], quitCommand: "/exit\r" })).toBe(
+        false
+      );
+      expect(parses({ kind: "session-id", args: ["{sessionId}"], quitCommand: "" })).toBe(false);
+      expect(parses({ kind: "project-scoped", args: ["--continue\n"] })).toBe(false);
+      expect(parses({ kind: "project-scoped", args: [] })).toBe(false);
+      expect(
+        parses({ kind: "project-scoped", args: Array.from({ length: 21 }, () => "-x") })
+      ).toBe(false);
+    });
+
+    it("rejects unknown resume fields (strict)", () => {
+      expect(
+        parses({ kind: "session-id", args: ["{sessionId}"], assignSessionIdArgs: ["--id"] })
+      ).toBe(false);
+      expect(parses({ kind: "project-scoped", args: ["--continue"], sessionIdPattern: "(x)" })).toBe(
+        false
+      );
+    });
   });
 
   it("rejects a malformed color", () => {

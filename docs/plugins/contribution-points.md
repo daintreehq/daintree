@@ -1404,6 +1404,31 @@ A plugin agent is launchable and selectable as a named entry in the effective re
 
 Every other pattern array holds at most 50 entries, and each entry is 1–256 characters and must compile as a JavaScript regular expression.
 
+**Session resume** is supported (#13687). An optional `resume` block lets a restored or restarted pane reopen the agent's conversation instead of starting a new one. It's plain data, `strict`, and takes one of two kinds:
+
+```json
+"resume": {
+  "kind": "session-id",
+  "args": ["--resume", "{sessionId}"],
+  "sessionIdPattern": "Resume this session with:\\s+\\S+ --resume (\\S+)",
+  "quitCommand": "/exit"
+}
+```
+
+```json
+"resume": { "kind": "project-scoped", "args": ["--continue"] }
+```
+
+| Field | Kinds | Notes |
+| --- | --- | --- |
+| `kind` | both | `session-id` for a CLI that resumes by an id it prints, `project-scoped` for one that resumes the latest session in the launch directory. |
+| `args` | both | Resume arguments, under the same rules as `args` above. In a `session-id` block exactly one entry contains `{sessionId}`, which is replaced by the captured id (it can be the whole entry or part of one, such as `--session={sessionId}`). No other field may contain it. |
+| `sessionIdPattern` | `session-id` | Regex matched against the output the agent prints after `quitCommand`. Exactly one capture group, which is the id. Same bounds as a detection pattern. Omit it when the agent prints no id: the pane then resumes only through `resumeLatestArgs`. |
+| `quitCommand` | both | Text sent to the running agent at shutdown so it exits cleanly and prints its resume hint. Same rules as an `args` entry. |
+| `resumeLatestArgs` | `session-id` | Arguments that reopen the most recent session in the launch directory, used when no id was captured. |
+
+When a pane has no captured id, `project-scoped` args and `resumeLatestArgs` reopen the latest session in that directory. Only one pane per agent and directory gets that slot on restore; the others start fresh, so two panes never reopen the same conversation. A plugin agent's conversation is never described as surviving a project-folder move, whatever it declares.
+
 ## Process tools — _Shipped_
 
 Teaches Daintree to recognize a CLI running inside a terminal pane, so the tab shows the plugin's icon instead of the generic terminal glyph. Detection normally runs off a fixed built-in list (npm, Vite, Docker, …); this is how a plugin that ships or wraps its own CLI gets the same treatment. Inert declarative data — no capability required.

@@ -84,6 +84,69 @@ describe("pluginAgentRegistry (issue #9560)", () => {
     expect("detection" in (config as object)).toBe(false);
   });
 
+  describe("declared resume (#13687)", () => {
+    const HERMES: PluginAgentContribution = {
+      ...ACME_AGENT,
+      id: "hermes",
+      command: "hermes",
+      resume: {
+        kind: "session-id",
+        args: ["--resume", "{sessionId}"],
+        sessionIdPattern: "hermes --resume (\\S+)",
+        quitCommand: "/exit",
+      },
+    };
+
+    it("keeps the broadcast snapshot plain data that survives a structured clone", () => {
+      registerPluginAgents("me.extra-agents", [HERMES]);
+      const snapshot = getPluginAgentRegistry();
+      expect(snapshot.hermes?.resume).toBeUndefined();
+      const cloned = structuredClone(snapshot);
+      expect(cloned.hermes?.resumeTemplate).toEqual(HERMES.resume);
+    });
+
+    it("expands a session-id template into the effective config's resume", () => {
+      registerPluginAgents("me.extra-agents", [HERMES]);
+      const resume = getEffectiveAgentConfig("hermes")?.resume;
+      expect(resume?.kind).toBe("session-id");
+      if (resume?.kind !== "session-id") return;
+      expect(resume.args("abc-123")).toEqual(["--resume", "abc-123"]);
+      expect(resume.sessionIdPattern).toBe("hermes --resume (\\S+)");
+      expect(resume.quitCommand).toBe("/exit");
+      expect(resume.assignSessionIdArgs).toBeUndefined();
+      expect(getEffectiveAgentConfig("hermes")?.continuity).toBeUndefined();
+    });
+
+    it("inserts a captured id literally, never as a replacement pattern", () => {
+      registerPluginAgents("me.extra-agents", [
+        { ...HERMES, resume: { kind: "session-id", args: ["--session={sessionId}"] } },
+      ]);
+      const resume = getEffectiveAgentConfig("hermes")?.resume;
+      if (resume?.kind !== "session-id") throw new Error("expected session-id resume");
+      expect(resume.args("a$&b$1")).toEqual(["--session=a$&b$1"]);
+    });
+
+    it("expands a project-scoped resume in a mirrored (renderer/pty-host) snapshot", () => {
+      registerPluginAgents("me.extra-agents", [
+        { ...ACME_AGENT, id: "pi", command: "pi", resume: { kind: "project-scoped", args: ["--continue"] } },
+      ]);
+      const mirrored = structuredClone(getPluginAgentRegistry());
+      clearPluginAgentRegistryForTests();
+      setPluginAgentRegistry(mirrored);
+      const resume = getEffectiveAgentConfig("pi")?.resume;
+      expect(resume?.kind).toBe("project-scoped");
+      if (resume?.kind === "project-scoped") expect(resume.args()).toEqual(["--continue"]);
+    });
+
+    it("never lets a declared resume replace a built-in's", () => {
+      const builtIn = getEffectiveAgentConfig("claude")?.resume;
+      registerPluginAgents("me.extra-agents", [
+        { ...ACME_AGENT, id: "claude", resume: { kind: "project-scoped", args: ["--evil"] } },
+      ]);
+      expect(getEffectiveAgentConfig("claude")?.resume).toBe(builtIn);
+    });
+  });
+
   it("removes the agent on unregister", () => {
     registerPluginAgents("acme.plugin", [ACME_AGENT]);
     unregisterPluginAgents("acme.plugin");
