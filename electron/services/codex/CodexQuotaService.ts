@@ -12,8 +12,17 @@
 
 import { createHash } from "node:crypto";
 import { stat } from "node:fs/promises";
-import { CodexAppServerError, runCodexAppServerSession } from "./CodexAppServerClient.js";
-import { defaultCodexHome, resolveCodexQuotaProfiles } from "./CodexQuotaProfiles.js";
+import {
+  CodexAppServerError,
+  runCodexAppServerSession,
+  type CodexAppServerCall,
+} from "./CodexAppServerClient.js";
+import {
+  canonicalCodexHomeKey,
+  defaultCodexHome,
+  resolveCodexQuotaProfiles,
+  type CodexQuotaProfileTarget,
+} from "./CodexQuotaProfiles.js";
 import type { AgentSettingsEntry } from "../../../shared/types/agentSettings.js";
 import type {
   CodexQuotaProfile,
@@ -30,12 +39,27 @@ const CACHE_TTL_MS = 30_000;
  */
 const UNAVAILABLE_CACHE_TTL_MS = 5_000;
 
-interface HomeCacheEntry {
-  cached: CodexQuotaResult | null;
-  inFlight: Promise<CodexQuotaResult> | null;
+/**
+ * Who a reading belongs to (#13702). `accountId` is the ChatGPT workspace, which
+ * a Team shares, so it only identifies a login together with the email. Kept in
+ * memory beside the reading: never logged, never sent to the renderer.
+ */
+interface CodexAccountIdentity {
+  accountId: string;
+  email: string;
 }
 
-/** Keyed by canonical home, never by preset: presets sharing a home share a reading. */
+interface HomeReading {
+  result: CodexQuotaResult;
+  identity: CodexAccountIdentity | null;
+}
+
+interface HomeCacheEntry {
+  cached: HomeReading | null;
+  inFlight: Promise<HomeReading> | null;
+}
+
+/** Keyed by realpath'd home, never by preset: presets sharing a home share a reading. */
 let cacheByHome = new Map<string, HomeCacheEntry>();
 /**
  * Every quota read, whichever home and caller, runs one at a time behind this.
@@ -116,16 +140,53 @@ function enqueue<T>(job: () => Promise<T>): Promise<T> {
   return run;
 }
 
-/** `codexHome` undefined means main's own env, exactly as before presets were read. */
-async function fetchCodexQuota(codexHome: string | undefined): Promise<CodexQuotaResult> {
+function nonEmptyString(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+/**
+ * Best effort: a CLI without the method, or a login with no email (API key,
+ * Bedrock), just leaves the reading unfolded. `refreshToken` stays off, so the
+ * call never touches the network or rewrites the user's credentials.
+ */
+async function readAccountEmail(call: CodexAppServerCall): Promise<string | null> {
   try {
-    const raw = await runCodexAppServerSession(
-      (call) => call<unknown>("account/rateLimits/read"),
+    const raw = await call<unknown>("account/read", { refreshToken: false });
+    const account =
+      raw && typeof raw === "object" ? (raw as Record<string, unknown>).account : null;
+    if (!account || typeof account !== "object") return null;
+    return nonEmptyString((account as Record<string, unknown>).email);
+  } catch {
+    return null;
+  }
+}
+
+/** `codexHome` undefined means main's own env, exactly as before presets were read. */
+async function fetchCodexQuota(codexHome: string | undefined): Promise<HomeReading> {
+  try {
+    const { raw, accountId, email } = await runCodexAppServerSession(
+      async (call) => {
+        const raw = await call<unknown>("account/rateLimits/read");
+        const accountId =
+          raw && typeof raw === "object"
+            ? nonEmptyString((raw as Record<string, unknown>).accountId)
+            : null;
+        // Without a workspace id the email can't fold anything, so don't ask.
+        const email = accountId ? await readAccountEmail(call) : null;
+        return { raw, accountId, email };
+      },
       codexHome === undefined ? {} : { codexHome }
     );
-    return normalizeCodexRateLimits(raw, Date.now());
+    const result = normalizeCodexRateLimits(raw, Date.now());
+    return {
+      result,
+      identity: result.status === "ok" && accountId && email ? { accountId, email } : null,
+    };
   } catch (error) {
-    return { status: "unavailable", reason: toUnavailableReason(error), fetchedAt: Date.now() };
+    return {
+      result: { status: "unavailable", reason: toUnavailableReason(error), fetchedAt: Date.now() },
+      identity: null,
+    };
   }
 }
 
@@ -133,7 +194,7 @@ function readHome(
   home: string,
   codexHome: string | undefined,
   force: boolean
-): Promise<CodexQuotaResult> {
+): Promise<HomeReading> {
   let entry = cacheByHome.get(home);
   if (!entry) {
     entry = { cached: null, inFlight: null };
@@ -141,8 +202,8 @@ function readHome(
   }
   const { cached } = entry;
   if (!force && cached) {
-    const ttl = cached.status === "ok" ? CACHE_TTL_MS : UNAVAILABLE_CACHE_TTL_MS;
-    if (Date.now() - cached.fetchedAt < ttl) return Promise.resolve(cached);
+    const ttl = cached.result.status === "ok" ? CACHE_TTL_MS : UNAVAILABLE_CACHE_TTL_MS;
+    if (Date.now() - cached.result.fetchedAt < ttl) return Promise.resolve(cached);
   }
   // A refresh still joins a read already in flight rather than queueing a second.
   if (entry.inFlight) return entry.inFlight;
@@ -158,14 +219,19 @@ function readHome(
   return request;
 }
 
+async function readDefaultHome(force: boolean): Promise<CodexQuotaResult> {
+  const reading = await readHome(await canonicalCodexHomeKey(defaultCodexHome()), undefined, force);
+  return reading.result;
+}
+
 /** Never rejects: every failure is an `unavailable` result. Main's default profile only. */
 export function readCodexQuota(): Promise<CodexQuotaResult> {
-  return readHome(defaultCodexHome(), undefined, false);
+  return readDefaultHome(false);
 }
 
 /** Ask Codex now, past the cache — what a user's Retry means. */
 export function refreshCodexQuota(): Promise<CodexQuotaResult> {
-  return readHome(defaultCodexHome(), undefined, true);
+  return readDefaultHome(true);
 }
 
 async function isDirectory(home: string): Promise<boolean> {
@@ -174,6 +240,38 @@ async function isDirectory(home: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+interface CanonicalTarget extends CodexQuotaProfileTarget {
+  /** Realpath'd identity for a readable home; the raw value for an invalid one. */
+  homeKey: string;
+}
+
+/**
+ * Folds the spellings of one directory — a symlink, `.Codex-2` beside
+ * `.codex-2` on APFS — into the first target that names it. Folding into the
+ * default makes the merged row the default.
+ */
+async function foldBySameDirectory(targets: CodexQuotaProfileTarget[]): Promise<CanonicalTarget[]> {
+  const folded: CanonicalTarget[] = [];
+  const byKey = new Map<string, CanonicalTarget>();
+  for (const target of targets) {
+    if (target.invalid) {
+      folded.push({ ...target, homeKey: target.home });
+      continue;
+    }
+    const homeKey = await canonicalCodexHomeKey(target.home);
+    const existing = byKey.get(homeKey);
+    if (existing) {
+      existing.presetNames.push(...target.presetNames);
+      existing.isDefault ||= target.isDefault;
+      continue;
+    }
+    const canonical: CanonicalTarget = { ...target, presetNames: [...target.presetNames], homeKey };
+    byKey.set(homeKey, canonical);
+    folded.push(canonical);
+  }
+  return folded;
 }
 
 function profileKey(home: string, invalid: boolean): string {
@@ -193,32 +291,47 @@ async function readProfiles(force: boolean): Promise<CodexQuotaProfile[]> {
     // Unreadable settings still leave main's own profile to report.
     codexSettings = undefined;
   }
-  const targets = resolveCodexQuotaProfiles(codexSettings);
+  const targets = await foldBySameDirectory(resolveCodexQuotaProfiles(codexSettings));
   const profiles: CodexQuotaProfile[] = [];
+  const byAccount = new Map<string, CodexQuotaProfile>();
   // One after another: each read already waits its turn in the queue, and
   // awaiting here keeps a long preset list from parking N reads on it at once.
   for (const target of targets) {
     let result: CodexQuotaProfileResult;
+    let identity: CodexAccountIdentity | null = null;
     if (target.invalid) {
       result = { status: "unavailable", reason: target.invalid, fetchedAt: Date.now() };
     } else if (!target.isDefault && !(await isDirectory(target.home))) {
       // Never spawned against, never created: a home Codex hasn't made is not ours to make.
       result = { status: "unavailable", reason: "home-missing", fetchedAt: Date.now() };
     } else {
-      result = await readHome(
-        target.home,
+      const reading = await readHome(
+        target.homeKey,
         // The default keeps inheriting main's env rather than being pinned to
         // the path computed from it, so its reads are unchanged by this.
         target.isDefault ? undefined : target.home,
         force
       );
+      result = reading.result;
+      identity = reading.identity;
     }
-    profiles.push({
-      key: profileKey(target.home, target.invalid !== undefined),
+    const profile: CodexQuotaProfile = {
+      key: profileKey(target.homeKey, target.invalid !== undefined),
       isDefault: target.isDefault,
       presetNames: target.presetNames,
       result,
-    });
+    };
+    // Two homes signed into one login are one row (#13702). It saves a row,
+    // not a read: the identity only arrives with each home's reading.
+    const accountKey = identity ? `${identity.accountId}\0${identity.email}` : null;
+    const sameAccount = accountKey ? byAccount.get(accountKey) : undefined;
+    if (sameAccount) {
+      sameAccount.presetNames.push(...profile.presetNames);
+      sameAccount.isDefault ||= profile.isDefault;
+      continue;
+    }
+    if (accountKey) byAccount.set(accountKey, profile);
+    profiles.push(profile);
   }
   return profiles;
 }

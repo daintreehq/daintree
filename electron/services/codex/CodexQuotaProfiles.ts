@@ -4,6 +4,7 @@
  * the store read and the filesystem check.
  */
 
+import { realpath } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { AgentPreset } from "../../../shared/config/agentRegistry.js";
@@ -50,6 +51,21 @@ function homeIdentity(home: string): string {
 }
 
 /**
+ * The key one directory has however it's spelled (#13702). The promise
+ * `realpath` resolves symlinks and returns the on-disk case on a
+ * case-insensitive volume; the callback and sync forms keep the typed case.
+ * A home it can't resolve keeps the spelling-only key, as Codex's own store
+ * key falls back to the raw path.
+ */
+export async function canonicalCodexHomeKey(home: string): Promise<string> {
+  try {
+    return homeIdentity(await realpath(home));
+  } catch {
+    return homeIdentity(home);
+  }
+}
+
+/**
  * Only presets that name their own home get a profile. A preset without one
  * runs on the default, and listing every such preset under it would bury the
  * presets that actually switch account.
@@ -87,7 +103,8 @@ export function resolveCodexQuotaProfiles(
       continue;
     }
     // Normalises separators, dot segments and a trailing slash, so
-    // `/Users/me/.codex/` folds into the default row. Symlinks are left alone.
+    // `/Users/me/.codex/` folds into the default row. Symlinks and case on a
+    // case-insensitive volume are folded later, by the service's realpath.
     const home = path.resolve(raw);
     const existing = byHome.get(homeIdentity(home));
     if (existing) {
