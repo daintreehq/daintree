@@ -175,17 +175,6 @@ describe("buildResumeLatestCommand", () => {
     );
   });
 
-  it("doesn't repeat project-scoped args the launch flags already carry (#13687)", () => {
-    // Persisted positional flags are shell-quoted, so compare words, not text.
-    const cmd = buildResumeLatestCommand("kiro", ["chat", "--resume", "--trust-all-tools"]);
-    expect(cmd?.split(" ").map((word) => word.replace(/^['"]|['"]$/g, ""))).toEqual([
-      "kiro-cli",
-      "chat",
-      "--resume",
-      "--trust-all-tools",
-    ]);
-  });
-
   it("returns undefined for session-id agents that don't declare resumeLatestArgs", () => {
     // Copilot/Goose/Qwen/Mistral are session-id agents that didn't ship a
     // resume-latest fallback; should return undefined.

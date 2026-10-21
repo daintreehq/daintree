@@ -2800,7 +2800,8 @@ interface PluginManifestScopes {
  *
  * Plugin agents launch as named, untracked terminals: the schema surfaces
  * `id`, `name`, `command`, `args`, `color`, `iconId`,
- * `supportsContextInjection`, and an optional `detection` block. The
+ * `supportsContextInjection`, an optional `resume` block (#13687), and an
+ * optional `detection` block. The
  * `detection` field (#10587) lets a contributed agent describe its
  * working/waiting/completed output patterns so it participates in the
  * agent-state UI like a built-in — output-volume state already works from the
