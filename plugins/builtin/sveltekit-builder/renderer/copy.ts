@@ -30,7 +30,7 @@ export const DETACH_COPY: Record<SitePreviewDetachReason, string> = {
   "install-failed": "Couldn't start the inspector inside the preview",
   "debugger-detached": "Disconnected — DevTools may have taken over the preview",
   "guest-flooding": "Disconnected — the page sent too many invalid messages",
-  "owner-disabled": "Disconnected — the SvelteKit Tools plugin was switched off",
+  "owner-disabled": "Disconnected — the Element Picker plugin was switched off",
   // Unreachable in practice: the view this would be addressed to is the one
   // that went away. Present because the reason is part of the wire contract.
   "subscriber-destroyed": "Disconnected from the dev preview",
@@ -80,7 +80,7 @@ export function relativeTo(root: string | null, path: string): string {
  */
 export function wireFailureMessage(error: unknown, fallback: string): string {
   if (isSchemaError(error)) {
-    return "SvelteKit Tools and this version of Daintree disagree about the response format. Restarting the app usually clears it.";
+    return "The Element Picker and this version of Daintree disagree about the response format. Restarting the app usually clears it.";
   }
   return formatErrorMessage(error, fallback);
 }

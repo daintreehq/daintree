@@ -60,8 +60,8 @@ const ALL_THEMES = BUILT_IN_THEME_SOURCES.map((t) => t.id);
 test.use({ deviceScaleFactor: 2 });
 
 const FRAME = "[data-fixture]";
-const STRIP = '[role="toolbar"][aria-label="SvelteKit Tools"]';
-const DRAWER = '[aria-label="SvelteKit Tools details"]';
+const STRIP = '[role="toolbar"][aria-label="Element Picker"]';
+const DRAWER = '[aria-label="Element Picker details"]';
 const BREAKPOINT_PREFIX = "breakpoint--";
 
 let server: ViteDevServer | undefined;

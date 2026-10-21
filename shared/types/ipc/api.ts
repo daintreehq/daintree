@@ -1332,6 +1332,18 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       panelId: string,
       options?: { forHost?: boolean }
     ): Promise<{ pngBase64: string; width: number; height: number }>;
+    /**
+     * Capture the panel's page cropped to one box, given in the page's CSS
+     * pixels against its own `innerWidth`, and save it where agents read
+     * pasted images. Null when the box shows nothing on screen.
+     */
+    captureElement(
+      panelId: string,
+      request: {
+        rect: { x: number; y: number; width: number; height: number };
+        viewportWidth: number;
+      }
+    ): Promise<{ filePath: string; width: number; height: number } | null>;
     /** Read Chromium navigation history for the webview */
     getNavigationHistory(
       webContentsId: number

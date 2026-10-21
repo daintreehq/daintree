@@ -1764,3 +1764,33 @@ describe("a hostile page", () => {
     }
   });
 });
+
+describe("a page with no Svelte metadata", () => {
+  it("still selects what was clicked, and describes it in the page's own terms", () => {
+    document.body.innerHTML =
+      '<main id="app"><button class="cta" type="button">Start Pro</button></main>';
+    install("select");
+    const button = document.querySelector("button")!;
+    click(button);
+
+    const [node] = lastSelection();
+    expect(node?.loc).toBeNull();
+    expect(node?.label).toBe("button.cta");
+    expect(node?.context?.selector).toBe("button.cta");
+    expect(node?.context?.markup).toBe('<button class="cta" type="button">Start Pro</button>');
+  });
+
+  it("describes a hover by label alone: the markup and styles are read only for a selection", () => {
+    document.body.innerHTML = '<main id="app"><button class="cta">Start Pro</button></main>';
+    install("select");
+    document
+      .querySelector("button")!
+      .dispatchEvent(new MouseEvent("pointermove", { bubbles: true, composed: true }));
+
+    const hovers = events("hoverChanged");
+    expect(hovers.length).toBeGreaterThan(0);
+    for (const event of hovers) {
+      if (event.type === "hoverChanged") expect(event.node?.context).toBeUndefined();
+    }
+  });
+});

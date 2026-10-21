@@ -1,5 +1,6 @@
 /// <reference lib="dom" />
 import type { GuestEvent, GuestNodeObservation } from "../../shared/protocol.js";
+import { elementContextOf } from "./elementContext.js";
 import type {
   GuestBootstrapConfig,
   GuestMode,
@@ -1202,7 +1203,11 @@ export function createSiteBuilderGuest(
     // `documentReady` follows it. The host resolves and describes a selection
     // against the page it last heard about; bring that up to date first.
     if (pageMoved()) emitDocumentReady();
-    const nodes = selection.map((entry) => observe(entry.hit));
+    const nodes = selection.map((entry) => {
+      const observed = observe(entry.hit);
+      const context = elementContextOf(targetOf(entry.hit).target);
+      return context === null ? observed : { ...observed, context };
+    });
     const primary = selection[0];
     const identity =
       selectionScope === "component" && selectedFrame !== null && primary !== undefined
@@ -1216,6 +1221,16 @@ export function createSiteBuilderGuest(
     const trimmed = nodes.map((node) => ({ ...node, ancestry: node.ancestry.slice(0, 4) }));
     if (send({ type: "selectionChanged", nodes: trimmed, cause, ...scopeField })) {
       issue("capacity", "ancestry shortened to fit the selection into one envelope");
+      return true;
+    }
+    // The element context is a description the host can do without; the
+    // selection itself it cannot.
+    const bare = trimmed.map(({ context: _context, ...node }) => node);
+    if (send({ type: "selectionChanged", nodes: bare, cause, ...scopeField })) {
+      issue(
+        "capacity",
+        "element markup and styles left out to fit the selection into one envelope"
+      );
       return true;
     }
     return false;

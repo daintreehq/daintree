@@ -156,7 +156,7 @@ beforeEach(() => {
         PLUGIN_ID,
         {
           devMode: false,
-          displayName: "SvelteKit Tools",
+          displayName: "Element Picker",
           previewToolIds: new Set([BUILDER_TOOL_ID]),
         },
       ],
@@ -166,7 +166,7 @@ beforeEach(() => {
   registerDevPreviewTool({
     id: BUILDER_TOOL_ID,
     pluginId: PLUGIN_ID,
-    label: "SvelteKit Tools",
+    label: "Element Picker",
     Button: () => null,
     createSession: (toolContext) => createBuilderSession(toolContext),
   });
@@ -620,7 +620,7 @@ describe("selection identity", () => {
     // repeats it only while the drawer is not there to show it.
     const identity = screen.getByRole("region", { name: "Selected element" });
     expect(identity.textContent).toContain(`${FILE}:6`);
-    expect(screen.getByRole("toolbar", { name: "SvelteKit Tools" }).textContent).not.toContain(
+    expect(screen.getByRole("toolbar", { name: "Element Picker" }).textContent).not.toContain(
       `${FILE}:6`
     );
     // The trail names the components this element was reached through, and
@@ -686,7 +686,7 @@ describe("selection identity", () => {
     expect(identity.textContent).toContain("PricingCard");
     expect(identity.textContent).not.toContain("src/lib/Card.svelte");
     expect(identity.textContent).not.toContain(`${FILE}:6`);
-    const strip = screen.getByRole("toolbar", { name: "SvelteKit Tools" });
+    const strip = screen.getByRole("toolbar", { name: "Element Picker" });
     expect(strip.textContent).not.toContain(`${FILE}:6`);
 
     await act(async () => answer("src/lib/Card.svelte"));
@@ -1327,7 +1327,7 @@ describe("stale selections", () => {
     // re-select the proven element as a member of that invocation — by call
     // site, never by label, since two nested components can share a name.
     await mountSelected();
-    const strip = screen.getByRole("toolbar", { name: "SvelteKit Tools" });
+    const strip = screen.getByRole("toolbar", { name: "Element Picker" });
     const identity = screen.getByRole("region", { name: "Selected element" });
     for (const surface of [strip, identity]) {
       expect(within(surface).getByRole("button", { name: "PricingCard" })).toBeTruthy();
@@ -1406,7 +1406,7 @@ describe("stale selections", () => {
       },
     ];
     await mountSelected();
-    const strip = screen.getByRole("toolbar", { name: "SvelteKit Tools" });
+    const strip = screen.getByRole("toolbar", { name: "Element Picker" });
     const cards = within(strip).getAllByRole("button", { name: "Card" });
     expect(cards).toHaveLength(2);
     cards[0]!.focus();
@@ -1450,7 +1450,7 @@ describe("stale selections", () => {
     await mountBound();
     await act(async () => host.select(0, [OBSERVATION], "user", { ...site, name: "Tree" }));
     const identity = await screen.findByRole("region", { name: "Selected element" });
-    const strip = screen.getByRole("toolbar", { name: "SvelteKit Tools" });
+    const strip = screen.getByRole("toolbar", { name: "Element Picker" });
     for (const surface of [strip, identity]) {
       const trees = within(surface).getAllByText("Tree");
       expect(trees.length).toBeGreaterThan(0);
@@ -1463,7 +1463,7 @@ describe("stale selections", () => {
     await mountSelected();
     host.reselectFinds = false;
     const before = session().getSnapshot();
-    const strip = screen.getByRole("toolbar", { name: "SvelteKit Tools" });
+    const strip = screen.getByRole("toolbar", { name: "Element Picker" });
     fireEvent.click(within(strip).getByRole("button", { name: "PricingCard" }));
     await waitFor(() => expect(host.sitePreview.reselect).toHaveBeenCalledTimes(1));
     await act(async () => {});
@@ -1480,7 +1480,7 @@ describe("stale selections", () => {
     await mountSelected();
     fireEvent.click(screen.getByRole("radio", { name: "Browse" }));
     await waitFor(() => expect(session().getSnapshot().mode).toBe("browse"));
-    const strip = screen.getByRole("toolbar", { name: "SvelteKit Tools" });
+    const strip = screen.getByRole("toolbar", { name: "Element Picker" });
     expect(within(strip).getByRole("navigation", { name: "Breadcrumb" }).textContent).toContain(
       "PricingCard"
     );
@@ -2812,29 +2812,177 @@ describe("resolving skeleton", () => {
   });
 });
 
-describe("a worktree scan that did not finish", () => {
+describe("a worktree with no SvelteKit app", () => {
   /**
-   * Discovery stops at its budget, so "no app found" and "no app here" are
-   * different answers. The surfaces must not spend the second one on evidence
-   * that only supports the first.
+   * The ordinary case for every other framework: nothing to trace an element
+   * to, and the picker works all the same — the request carries what the page
+   * shows instead of a source location.
    */
-  async function mountWithNoApp(scanComplete: boolean) {
+  const PAGE_NODE = {
+    ...OBSERVATION,
+    loc: null,
+    locIndex: 0,
+    sameLocCount: 1,
+    tagName: "BUTTON",
+    label: "button.cta",
+    bounds: [{ x: 40, y: 80, width: 120, height: 40 }],
+    unmapped: true,
+    context: {
+      selector: "main > button.cta",
+      markup: '<button class="cta" type="button">Start Pro</button>',
+      styles: [
+        { property: "display", value: "inline-flex" },
+        { property: "padding", value: "8px 16px" },
+      ],
+    },
+  };
+
+  async function mountWithNoApp(scanComplete = true) {
     host.handlers.set(CHANNELS.workspaceOpen, () => ({ status: "no-app", scanComplete }));
     mount();
+    await waitFor(() => expect(host.sitePreview.bind).toHaveBeenCalled());
     await waitFor(() => expect(host.calls(CHANNELS.workspaceOpen).length).toBeGreaterThan(0));
+    await screen.findByRole("radio", { name: "Browse" });
+    await act(async () => host.documentReady(0));
   }
 
-  it("states the worktree has no app only when the walk actually finished", async () => {
-    await mountWithNoApp(true);
-    await screen.findByText("No SvelteKit app in this worktree");
+  /**
+   * An agent beside the preview. Each test names its own: delivery remembers,
+   * per terminal, that it just typed into one, and holds the next request
+   * until that agent has been seen at work.
+   */
+  function withAgent(terminalId: string) {
+    usePanelStore.setState({
+      panelIds: ["preview-1", terminalId],
+      panelsById: {
+        "preview-1": { id: "preview-1", kind: "dev-preview", location: "grid", worktreeId: "wt-1" },
+        [terminalId]: {
+          id: terminalId,
+          kind: "terminal",
+          location: "grid",
+          worktreeId: "wt-1",
+          hasPty: true,
+          title: "claude · react app",
+          launchAgentId: "claude",
+          detectedAgentId: "claude",
+          agentState: "waiting",
+        },
+      } as never,
+    });
+  }
+
+  async function recordSends() {
+    const { actionService } = await import("@/services/ActionService");
+    const sent: string[] = [];
+    vi.spyOn(actionService, "dispatch").mockImplementation((async (
+      id: string,
+      args: Record<string, unknown>
+    ) => {
+      switch (id) {
+        case "terminal.getStatus":
+          return {
+            ok: true,
+            result: {
+              terminals: [
+                {
+                  terminalId: (args.terminalIds as string[])[0],
+                  agentId: "claude",
+                  spawnedAt: 1_000,
+                  agentIncarnation: 0,
+                  agentState: "waiting",
+                  ...(args.submissionToken ? { submission: { phase: "pty_written" } } : {}),
+                },
+              ],
+            },
+          };
+        case "terminal.sendCommand":
+          sent.push(String(args.command));
+          return { ok: true, result: { submissionToken: `token-${sent.length}` } };
+        default:
+          return { ok: false, error: { message: `unexpected ${id}` } };
+      }
+    }) as never);
+    return sent;
+  }
+
+  it("invites a click rather than reporting a missing app", async () => {
+    await mountWithNoApp();
+    await screen.findByText("Click an element to ask an agent about it");
+    expect(text()).not.toContain("No SvelteKit app in this worktree");
   });
 
   it("says the search stopped rather than claiming the worktree has no app", async () => {
     await mountWithNoApp(false);
-    await screen.findByText("No app found before the search stopped");
-    expect(screen.queryByText("No SvelteKit app in this worktree")).toBe(null);
-    // The drawer must tell the same story as the strip.
-    expect(document.body.textContent).toContain("the search stopped early");
-    expect(document.body.textContent).not.toContain("no SvelteKit app found");
+    await act(async () => host.select(0, [PAGE_NODE]));
+    await waitFor(() => expect(text()).toContain("the search stopped early"));
+    expect(text()).not.toContain("There's no SvelteKit app in this worktree");
+  });
+
+  it("sends the element's selector, markup, styles and picture, saying the source is not traced", async () => {
+    withAgent("term-picked");
+    const sent = await recordSends();
+    await mountWithNoApp();
+    await act(async () => host.select(0, [PAGE_NODE]));
+
+    const request = await screen.findByRole("textbox", { name: "Request for the agent" });
+    expect(screen.getByRole("region", { name: "Selected element" }).textContent).toContain(
+      "main > button.cta"
+    );
+    // Taken when the element was picked, cropped to the box the page measured.
+    expect(host.captureElement).toHaveBeenCalledWith("preview-1", {
+      rect: { x: 40, y: 80, width: 120, height: 40 },
+      viewportWidth: 800,
+    });
+
+    fireEvent.change(request, { target: { value: "Make this bigger" } });
+    const send = () => screen.getByRole("button", { name: "Send to agent" }) as HTMLButtonElement;
+    await waitFor(() => expect(send().disabled).toBe(false));
+    fireEvent.click(send());
+
+    await waitFor(() => expect(sent).toHaveLength(1), { timeout: 4000 });
+    const prompt = sent[0]!;
+    expect(prompt).toContain("Make this bigger");
+    expect(prompt).toContain("- Source: not traced");
+    expect(prompt).toContain('- Selector: "main > button.cta"');
+    expect(prompt).toContain('\\"cta\\"');
+    expect(prompt).toContain('"display: inline-flex; padding: 8px 16px"');
+    expect(prompt).toContain("/tmp/daintree-clipboard/element-1.png");
+    // The page's address is redacted the way a traced selection's is.
+    expect(prompt).toContain('"http://localhost:5173/pricing?plan="');
+    // Nothing was asked of main: there is no source to trace it to.
+    expect(host.calls(CHANNELS.selectionResolve)).toEqual([]);
+  });
+
+  it("goes without a picture, and says why, when the element is off screen", async () => {
+    withAgent("term-offscreen");
+    const sent = await recordSends();
+    host.captureElement.mockResolvedValueOnce(null);
+    await mountWithNoApp();
+    await act(async () => host.select(0, [PAGE_NODE]));
+    const request = await screen.findByRole("textbox", { name: "Request for the agent" });
+    fireEvent.change(request, { target: { value: "Make this bigger" } });
+    const send = () => screen.getByRole("button", { name: "Send to agent" }) as HTMLButtonElement;
+    await waitFor(() => expect(send().disabled).toBe(false));
+    fireEvent.click(send());
+    await waitFor(() => expect(sent).toHaveLength(1), { timeout: 4000 });
+    expect(sent[0]).toContain(
+      "- Screenshot: not attached — the element is outside the visible page"
+    );
+  });
+
+  it("doesn't warn that the page has no Svelte metadata", async () => {
+    await mountWithNoApp();
+    await act(async () =>
+      host.pushPreview({
+        kind: "guest-event",
+        sessionId: "session-1",
+        panelId: "preview-1",
+        projectId: "p1",
+        documentEpoch: 0,
+        sequence: 2,
+        event: { type: "runtimeIssue", code: "no-svelte-meta", detail: "" },
+      })
+    );
+    expect(session().getSnapshot().issue).toBeNull();
   });
 });

@@ -2,6 +2,7 @@ import type { IpcInvokeMap } from "../../types/index.js";
 
 export const WEBVIEW_CAPTURE_METHOD_CHANNELS = {
   captureScreenshot: "webview:capture-screenshot",
+  captureElement: "webview:capture-element",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof WEBVIEW_CAPTURE_METHOD_CHANNELS;

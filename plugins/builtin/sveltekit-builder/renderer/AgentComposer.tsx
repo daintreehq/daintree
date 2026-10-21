@@ -40,7 +40,8 @@ import {
 import {
   MAX_INSTRUCTION_CHARS,
   buildAgentTaskPrompt,
-  scopesFor,
+  buildPageTaskPrompt,
+  scopesForSubject as scopesFor,
   matchScope,
   isAgentBusy,
   isUnresolvedScope,
@@ -61,6 +62,7 @@ import {
   type ComposerPin,
 } from "./composerMemory.js";
 import { deliverAgentRequest, forceAgentRequest, removeAgentRequest } from "./agentRequest.js";
+import { isPageSelection } from "./pageSelection.js";
 
 const STALE_SOURCE =
   "The source changed since you picked this — select it again in the page, then send";
@@ -73,11 +75,14 @@ function settlePinnedDefinitions(
   memoryKey: string,
   pin: ComposerPin
 ): void {
-  const lookup = `${memoryKey}\n${pin.selection.selectionId}`;
+  // A page selection cites no source, so there is nothing to look up.
+  if (isPageSelection(pin.selection)) return;
+  const selection = pin.selection;
+  const lookup = `${memoryKey}\n${selection.selectionId}`;
   if (pinnedLookups.has(lookup)) return;
   pinnedLookups.add(lookup);
   void controller
-    .lookupDefinitions(pin.selection, pin.picked)
+    .lookupDefinitions(selection, pin.picked)
     .then((resolved) => {
       if (resolved === null) return;
       const latest = readComposerMemory(memoryKey).pinned;
@@ -258,7 +263,18 @@ export function AgentComposer({
             definitions: selection.definitions,
             revisions: selection.revisions,
           }
-        : null,
+        : selection.status === "observed" && selection.page !== null
+          ? {
+              // The page's account of the element: one scope, and no file
+              // whose bytes could change under it.
+              selection: selection.page,
+              file: null,
+              scope: 0,
+              picked: null,
+              definitions: {},
+              revisions: {},
+            }
+          : null,
     [selection, worktreePath]
   );
   const [unpinnedScope, setUnpinnedScope] = useState<{ selectionId: string; scope: number } | null>(
@@ -416,7 +432,11 @@ export function AgentComposer({
         const now = resolve();
         if (now === "pending") return SUBJECT_UNSETTLED;
         if (after === "built" && builtFor !== now.about.selection.selectionId) return STALE_SOURCE;
-        if (!(await controller.sourcesUnchanged(now.about.selection, now.about.revisions))) {
+        const about = now.about.selection;
+        if (
+          !isPageSelection(about) &&
+          !(await controller.sourcesUnchanged(about, now.about.revisions))
+        ) {
           return STALE_SOURCE;
         }
         if (after !== "built") checked = now;
@@ -424,13 +444,22 @@ export function AgentComposer({
       },
       buildPrompt: async () => {
         const now = checked ?? { about: made, scope: madeScopes[made.scope] };
-        builtFor = now.about.selection.selectionId;
+        const about = now.about.selection;
+        builtFor = about.selectionId;
+        if (isPageSelection(about)) {
+          return buildPageTaskPrompt({
+            instruction,
+            selection: about,
+            worktreePath,
+            picture: await controller.pagePicture(about.selectionId),
+          });
+        }
         return buildAgentTaskPrompt({
           instruction,
-          selection: now.about.selection,
+          selection: about,
           file: now.about.file,
           worktreePath,
-          place: await controller.pagePlace(now.about.selection),
+          place: await controller.pagePlace(about),
           scope: now.scope,
         });
       },
@@ -476,11 +505,13 @@ export function AgentComposer({
   const openTerminal = (id: string) =>
     void actionService.dispatch("panel.focus", { panelId: id }, { source: "user" });
 
-  const definition = subject?.selection.nodes[0]?.definition ?? null;
+  const first = subject?.selection.nodes[0];
   const subjectLabel =
     activeScope?.kind === "component"
       ? activeScope.label
-      : subject?.selection.nodes[0]?.label || definition?.tagName || "element";
+      : first?.label ||
+        (first && "definition" in first ? first.definition?.tagName : first?.tagName) ||
+        "element";
   const retargetable =
     pinned !== null &&
     current !== null &&
