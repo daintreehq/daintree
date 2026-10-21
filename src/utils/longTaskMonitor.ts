@@ -3,6 +3,7 @@ import { isRendererPerfCaptureEnabled, markRendererPerformance, RENDERER_T0 } fr
 import { pluginViewMetrics, type PluginViewMetrics } from "@/services/plugin/pluginViewMetrics";
 import { PLUGIN_STYLE_OWNER_ATTRIBUTE } from "@/services/plugin/pluginStyleContract";
 import type { PluginLongFrameSource } from "@shared/types/pluginMetrics";
+import { isProjectViewCached } from "@/lib/viewCacheState";
 
 const STARTUP_SUPPRESSION_MS = 5_000;
 const WARN_RATE_LIMIT_MS = 10_000;
@@ -155,6 +156,34 @@ export function startPluginInputTracking(
   };
 }
 
+/**
+ * Where a frame's time went, as offsets from its start, and when it happened
+ * on the wall clock. A frame with no attributed script still says whether it
+ * sat before rendering began or got stuck in style and layout, and can be
+ * lined up against main's log timestamps (#13712). A zero timestamp means the
+ * phase never ran, so it is left out rather than reported as an offset.
+ */
+function frameTiming(
+  entry: PerformanceLongAnimationFrameTiming,
+  now: number
+): Record<string, number> {
+  const timing: Record<string, number> = {};
+  const put = (key: string, value: number) => {
+    if (Number.isFinite(value)) timing[key] = Number(value.toFixed(3));
+  };
+  const offset = (key: string, timestamp: number) => {
+    if (timestamp > 0) put(key, timestamp - entry.startTime);
+  };
+  put("frameStartEpochMs", performance.timeOrigin + entry.startTime);
+  // Entries are delivered in batches after the frame ends, so the log line's
+  // own timestamp can trail the frame by more than the frame itself.
+  put("observerDelayMs", now - (entry.startTime + entry.duration));
+  offset("firstUIEventOffsetMs", entry.firstUIEventTimestamp);
+  offset("renderStartOffsetMs", entry.renderStart);
+  offset("styleAndLayoutStartOffsetMs", entry.styleAndLayoutStart);
+  return timing;
+}
+
 export function startLongTaskMonitor(thresholdMs = 100): () => void {
   if (typeof window === "undefined") {
     return () => {};
@@ -191,6 +220,10 @@ export function startLongTaskMonitor(thresholdMs = 100): () => void {
             durationMs: Number(entry.duration.toFixed(3)),
             blockingDurationMs: Number(entry.blockingDuration.toFixed(3)),
             scriptCount: entry.scripts?.length ?? 0,
+            ...frameTiming(entry, now),
+            // Sampled when the entry is delivered, after the frame ended: a
+            // stall across a warm switch can report either side of it.
+            viewCachedAtReport: isProjectViewCached(),
             ...(topScript
               ? {
                   invoker: topScript.invoker,

@@ -1774,6 +1774,8 @@ describe("ProjectViewManager — telemetry", () => {
     expect(revivalCalls.length).toBe(0);
     expect(warmSwapCalls[0][1]).toMatchObject({
       projectId: "proj-a",
+      webContentsId: wcA.id,
+      switchId: expect.any(String),
       visibleMs: expect.any(Number),
     });
     expect((warmSwapCalls[0][1] as { visibleMs: number }).visibleMs).toBeGreaterThanOrEqual(0);

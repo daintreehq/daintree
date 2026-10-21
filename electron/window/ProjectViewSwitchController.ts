@@ -196,6 +196,9 @@ export async function performSwitch(
     // eviction → return cycle.
     const evictedAt = host.evictionTimestamps.get(projectId);
     const warmStart = performance.now();
+    // Names the incoming renderer and this attempt on every warm-gate outcome,
+    // so a failure, its retry, and that view's own long-frame reports line up.
+    const warmIds = { webContentsId: cached.view.webContents.id, switchId: switchTrace.switchId };
 
     if (outgoingView) {
       // Warm anti-flash bridge (#9679): the cached view was detached + frozen
@@ -238,6 +241,7 @@ export async function performSwitch(
         () => {
           logWarn("projectview.warmpaintgate.softtimeout", {
             projectId,
+            ...warmIds,
             waitedMs: warmSoftMs,
           });
         },
@@ -286,6 +290,7 @@ export async function performSwitch(
       if (gateResult === "hard-timeout") {
         logWarn("projectview.warmpaintgate.hardtimeout", {
           projectId,
+          ...warmIds,
           waitedMs: warmHardMs,
         });
       }
@@ -293,6 +298,7 @@ export async function performSwitch(
         const waitedMs = Math.round(performance.now() - warmStart);
         logWarn("projectview.warmpaintgate.unpainted", {
           projectId,
+          ...warmIds,
           waitedMs,
           rendererGone: cachedRendererGone,
           rollbackProjectId: previousProjectId,
@@ -367,6 +373,7 @@ export async function performSwitch(
     }
     logInfo("projectview.warm-swap", {
       projectId,
+      ...warmIds,
       visibleMs,
     });
     // Re-assert focus after the bridge teardown — detaching the outgoing view
