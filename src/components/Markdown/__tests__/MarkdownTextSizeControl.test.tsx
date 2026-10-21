@@ -14,13 +14,13 @@ vi.mock("@/components/ui/popover", () => ({
   PopoverContent: ({
     children,
     onKeyDown,
-    "aria-label": label,
+    "aria-labelledby": labelledBy,
   }: {
     children: ReactNode;
     onKeyDown?: (event: React.KeyboardEvent) => void;
-    "aria-label"?: string;
+    "aria-labelledby"?: string;
   }) => (
-    <div role="dialog" aria-label={label} onKeyDown={onKeyDown}>
+    <div role="dialog" aria-labelledby={labelledBy} onKeyDown={onKeyDown}>
       {children}
     </div>
   ),
