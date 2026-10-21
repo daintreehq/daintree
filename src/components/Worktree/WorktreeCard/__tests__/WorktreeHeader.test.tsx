@@ -773,33 +773,17 @@ describe("WorktreeHeader cleanup button", () => {
     expect(screen.queryByTestId("worktree-cleanup-button")).toBeNull();
   });
 
-  it("dims the cleanup button alongside other actions on inactive, non-collapsed cards", () => {
-    renderHeader({ onCleanupWorktree: vi.fn(), isActive: false, isCollapsed: false });
-    const button = screen.getByTestId("worktree-cleanup-button");
+  it.each([
+    { isActive: false, isCollapsed: false },
+    { isActive: false, isCollapsed: true },
+    { isActive: true, isCollapsed: false },
+  ])("draws the toolbar at full strength (active=$isActive, collapsed=$isCollapsed)", (state) => {
+    renderHeader({ onCleanupWorktree: vi.fn(), ...state });
     const wrapper = screen.getByTestId("worktree-actions-wrapper");
-    // The wrapper persists at reduced opacity so keyboard and touch users can reach it,
-    // and reveals fully on group hover/focus or when a contained menu opens.
-    expect(wrapper.className).toContain("opacity-50");
-    expect(wrapper.className).not.toContain("pointer-events-none");
-    expect(wrapper.className).toContain("group-hover/card:opacity-100");
-    expect(wrapper.className).toContain("group-has-[:focus-visible]/card:opacity-100");
-    expect(wrapper.className).toContain("group-has-[[data-state=open]]/card:opacity-100");
-    // The cleanup button inherits visibility through the wrapper, not its own classes.
-    expect(wrapper.contains(button)).toBe(true);
-  });
-
-  it("shows the cleanup button on active cards", () => {
-    renderHeader({ onCleanupWorktree: vi.fn(), isActive: true, isCollapsed: false });
-    const wrapper = screen.getByTestId("worktree-actions-wrapper");
-    expect(wrapper.className).toContain("opacity-100");
-    expect(wrapper.className).not.toContain("opacity-0");
-  });
-
-  it("shows the cleanup button on collapsed cards", () => {
-    renderHeader({ onCleanupWorktree: vi.fn(), isActive: false, isCollapsed: true });
-    const wrapper = screen.getByTestId("worktree-actions-wrapper");
-    expect(wrapper.className).toContain("opacity-100");
-    expect(wrapper.className).not.toContain("opacity-0");
+    // A faded toolbar put enabled controls under 3:1; the buttons' own ink
+    // is the only rest treatment, the same on every card.
+    expect(wrapper.className).not.toMatch(/(^|\s)opacity-/);
+    expect(wrapper.contains(screen.getByTestId("worktree-cleanup-button"))).toBe(true);
   });
 
   it("renders the cleanup button as the first action in the wrapper", () => {

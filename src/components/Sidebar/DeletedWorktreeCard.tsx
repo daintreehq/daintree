@@ -2,6 +2,7 @@ import { useCallback, useMemo, useState, type MouseEvent } from "react";
 import { formatPath } from "@/utils/textParsing";
 import { FolderX, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
 import { usePanelStore } from "@/store/panelStore";
 import {
   getDeletedWorktreeTerminalIds,
@@ -221,17 +222,18 @@ export function DeletedWorktreeCard({
             {showDismissAction && (
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <button
-                    type="button"
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
                     onClick={(e) => {
                       e.stopPropagation();
                       handleDismiss();
                     }}
-                    className="sidebar-action-button shrink-0 rounded-[var(--radius-md)] p-1.5 -my-1.5 text-text-secondary transition-colors hover:text-status-error focus-visible:text-status-error focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
+                    className="sidebar-action-button -my-1 shrink-0 hover:text-status-error focus-visible:text-status-error [&_svg]:size-3.5"
                     aria-label={closeLabel}
                   >
-                    <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
-                  </button>
+                    <Trash2 aria-hidden="true" />
+                  </Button>
                 </TooltipTrigger>
                 <TooltipContent side="top">{closeLabel}</TooltipContent>
               </Tooltip>

@@ -118,14 +118,8 @@ export function WorktreeCardPlaceholder({
               <BranchLabel label={pendingCreation.branch} isActive={false} />
             </div>
             <span className="shrink-0 text-xs text-text-secondary">{status}</span>
-            <button
-              type="button"
-              tabIndex={-1}
-              disabled
-              className="sidebar-action-button invisible w-0 overflow-hidden px-0 py-1.5"
-            >
-              <span className="block size-3.5" />
-            </button>
+            {/* Holds the row at a live card's height: its toolbar buttons are 24px. */}
+            <span className="block h-6 w-0 shrink-0" />
           </div>
         </div>
       </div>

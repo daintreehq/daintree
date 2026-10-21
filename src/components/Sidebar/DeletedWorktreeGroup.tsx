@@ -10,6 +10,7 @@ import {
 import { DRAG_GRIP_CLASS, DRAG_GRIP_ICON_CLASS } from "@/components/ui/dragGripStyles";
 import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
 import { usePanelStore } from "@/store/panelStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
 import { useVisibilityAwareInterval } from "@/hooks/useVisibilityAwareInterval";
@@ -224,14 +225,15 @@ export function DeletedWorktreeGroup({ worktrees, homeDir }: DeletedWorktreeGrou
         )}
         <Tooltip>
           <TooltipTrigger asChild>
-            <button
-              type="button"
+            <Button
+              variant="ghost"
+              size="icon-xs"
               onClick={handleClearAll}
-              className="sidebar-action-button shrink-0 rounded-[var(--radius-md)] p-1.5 -my-1.5 text-text-secondary transition-colors hover:text-status-error focus-visible:text-status-error focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
+              className="sidebar-action-button -my-1 shrink-0 hover:text-status-error focus-visible:text-status-error [&_svg]:size-3.5"
               aria-label={clearLabel}
             >
-              <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
-            </button>
+              <Trash2 aria-hidden="true" />
+            </Button>
           </TooltipTrigger>
           <TooltipContent side="top">{clearLabel}</TooltipContent>
         </Tooltip>
