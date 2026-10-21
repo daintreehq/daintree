@@ -558,7 +558,9 @@ export type DropdownMenuItemProps = React.ComponentPropsWithoutRef<
 /* Leading icons: mark the icon `data-menu-icon` and the text-only items in the
  * same menu pick up a matching gutter from the `[role="menu"]:has(...)` rule in
  * index.css — and lose it again when the icon-bearing items are filtered out.
- * `inset` is the static alternative for a menu whose shape never changes. */
+ * `inset` is the static alternative for a menu whose shape never changes.
+ * The radio and checkbox indicators sit at `left-2.5`, the row's own `px-2.5`,
+ * so a check and a leading icon land in one column when a menu mixes them. */
 const DropdownMenuItemBase = React.forwardRef<
   React.ElementRef<typeof DropdownMenuPrimitiveType.Item>,
   Omit<DropdownMenuItemProps, "keybinding">
@@ -662,12 +664,13 @@ DropdownMenuLabel.displayName = "DropdownMenuLabel";
  * disabled. Deliberately not `DropdownMenuShortcut`: a count is not a keybinding,
  * and rendering it in the shortcut's mono face reads as one. Non-mono, and
  * `aria-hidden` by default because the number belongs in the item's accessible
- * name (callers pass one), not as a second stray string after it. */
+ * name (callers pass one), not as a second stray string after it. Same `pl-4`
+ * gap as the shortcut column, so the two trailing slots sit off their labels alike. */
 const DropdownMenuMeta = ({ className, ...props }: React.HTMLAttributes<HTMLSpanElement>) => {
   return (
     <span
       aria-hidden="true"
-      className={cn("ml-auto pl-2 text-2xs text-text-secondary tabular-nums", className)}
+      className={cn("ml-auto pl-4 text-2xs text-text-secondary tabular-nums", className)}
       {...props}
     />
   );
@@ -708,7 +711,7 @@ const DropdownMenuRadioItem = React.forwardRef<
       {...props}
       onPointerMove={(event) => menuRowPointerMove(event, onPointerMove)}
     >
-      <span className="absolute left-2 flex h-3.5 w-3.5 items-center justify-center">
+      <span className="absolute left-2.5 flex h-3.5 w-3.5 items-center justify-center">
         <ItemIndicator>
           <Check className="h-3.5 w-3.5" aria-hidden="true" />
         </ItemIndicator>
@@ -742,7 +745,7 @@ const DropdownMenuCheckboxItem = React.forwardRef<
       {...props}
       onPointerMove={(event) => menuRowPointerMove(event, onPointerMove)}
     >
-      <span className="absolute left-2 flex h-3.5 w-3.5 items-center justify-center">
+      <span className="absolute left-2.5 flex h-3.5 w-3.5 items-center justify-center">
         <ItemIndicator>
           <Check className="h-3.5 w-3.5" aria-hidden="true" />
         </ItemIndicator>

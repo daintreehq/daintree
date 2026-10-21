@@ -142,7 +142,7 @@ describe("FileBrowserViewOptions sort menu", () => {
     const onSortChange = vi.fn();
     renderMenu({ sort: { key: "modified", direction: "asc" }, onSortChange });
 
-    fireEvent.click(screen.getByRole("menuitemradio", { name: "Descending" }));
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "Newest first" }));
 
     expect(onSortChange).toHaveBeenCalledWith({ key: "modified", direction: "desc" });
   });
@@ -154,7 +154,7 @@ describe("FileBrowserViewOptions sort menu", () => {
     const onSortChange = vi.fn();
     renderMenu({ sort: { key: "name", direction: "asc" }, onSortChange });
 
-    fireEvent.click(screen.getByRole("menuitemradio", { name: "Ascending" }));
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "A to Z" }));
 
     expect(onSortChange).toHaveBeenCalledWith({ key: "name", direction: "asc" });
   });
@@ -164,7 +164,7 @@ describe("FileBrowserViewOptions sort menu", () => {
 
     const names = screen.getAllByRole("menuitemradio").map((item) => item.textContent?.trim());
 
-    expect(names).toEqual(["Name", "Modified", "Size", "Type", "Ascending", "Descending"]);
+    expect(names).toEqual(["Name", "Modified", "Size", "Type", "A to Z", "Z to A"]);
   });
 });
 
