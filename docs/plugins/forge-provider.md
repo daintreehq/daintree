@@ -97,13 +97,25 @@ With no `credentialFields`, the page shows no form: it says the provider needs n
 
 Refs are checked for shape only (a non-empty string) when the manifest is parsed; a ref that resolves to nothing renders a neutral fallback. `plugins/builtin/github/plugin.json` fills all five, and `plugins/builtin/github/renderer/index.tsx` registers them.
 
+### Roles
+
+A provider serves two roles unless its manifest entry says otherwise: **code** (PRs, CI, repository data, clone — everything addressed through the git remote) and **issues** (issue reads and writes and the issue picker). An issue tracker with no code hosting declares `"roles": ["issues"]` and `"matches": []`:
+
+- It implements `ForgeIssueProviderImpl` rather than the full `ForgeProviderImpl` — no PR, CI or remote-parsing surface — and must provide `resolveIssueRepo(projectPath)`, which builds the `RepoRef` its issue calls take from its own project-scoped settings (a tracker's team, say). Return `null` while the project isn't set up yet. The host never hands it the code forge's remote.
+- It is never picked by hostname, by the global default or by a project's forge override. A project binds it through **Issues provider** in Project settings → Code forge, and the code forge keeps PRs and CI.
+- Set `Issue.branchName` when your tracker suggests a branch name; Daintree uses it verbatim for worktrees made from the issue, so a tracker that links branches by name sees the work. `Issue.id` (a stable id) and `Issue.key` (a display id such as `ENG-123`) are recorded on the worktree's link.
+
+The host checks the implementation against the declared roles at registration and rejects one that can't serve them. A code-only provider (`["code"]`) isn't supported yet.
+
 ### Provider resolution
 
-For each project the host picks one active provider (`electron/services/forgeProviderResolver.ts`):
+For each project the host picks one active code provider (`electron/services/forgeProviderResolver.ts`), from providers serving the code role:
 
 1. **Per-project override.** If the project names a provider, that provider wins whatever the remote's hostname, as long as it is registered. If it isn't, the project has no provider.
 2. **Global default.** Otherwise, if a global default is set, it wins when it is one of the providers whose `matches` contain the remote's hostname. If it isn't among them, the project has no provider.
 3. **First hostname match.** Otherwise the first provider whose `matches` contain the hostname.
+
+The issues role is the project's issues provider when one is set, otherwise the code provider.
 
 Because an override ignores hostnames, `parseRemote` can receive remote URLs from hosts that are not in your `matches` — a self-hosted GitLab instance whose hostname isn't listed is reached this way. Parse them on their merits and return `null` only for URLs you genuinely can't read.
 

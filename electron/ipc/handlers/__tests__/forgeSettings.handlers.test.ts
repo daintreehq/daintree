@@ -30,13 +30,19 @@ vi.mock("../../../store.js", () => ({
   auditLogsStore: { get: vi.fn(() => []), set: vi.fn() },
 }));
 
-const registryMock = vi.hoisted(() => ({
-  getRegisteredForgeProviders: vi.fn<() => ForgeProviderEntry[]>(() => []),
-  getForgeProviderImpl: vi.fn<(id: string) => unknown>(() => undefined),
-  // Consulted by remote selection (#11408) to decide whether a URL is
-  // parseable. Default "yes" keeps these tests about provider resolution.
-  listMatchingProviders: vi.fn<(remoteUrl: string) => unknown[]>(() => [{}]),
-}));
+const registryMock = vi.hoisted(() => {
+  const getForgeProviderImpl = vi.fn<(id: string) => unknown>(() => undefined);
+  return {
+    getRegisteredForgeProviders: vi.fn<() => ForgeProviderEntry[]>(() => []),
+    getForgeProviderImpl,
+    // Credential paths take the role-agnostic lookup; these tests bind a full
+    // provider, which both lookups return.
+    getForgeProviderBaseImpl: (id: string) => getForgeProviderImpl(id),
+    // Consulted by remote selection (#11408) to decide whether a URL is
+    // parseable. Default "yes" keeps these tests about provider resolution.
+    listMatchingProviders: vi.fn<(remoteUrl: string) => unknown[]>(() => [{}]),
+  };
+});
 
 vi.mock("../../../services/forgeProviderRegistry.js", () => registryMock);
 
@@ -304,6 +310,7 @@ describe("registerForgeSettingsHandlers", () => {
       remoteUrl: "https://github.com/owner/repo.git",
       forgeProviderOverride: null,
       globalDefaultProviderId: null,
+      issueProviderOverride: null,
     });
   });
 
@@ -323,6 +330,7 @@ describe("registerForgeSettingsHandlers", () => {
       remoteUrl: "git@gitea.example.com:owner/repo.git",
       forgeProviderOverride: null,
       globalDefaultProviderId: null,
+      issueProviderOverride: null,
     });
     expect(gitServiceMock.getRemoteUrl).not.toHaveBeenCalled();
   });
@@ -340,6 +348,7 @@ describe("registerForgeSettingsHandlers", () => {
       remoteUrl: "https://github.com/owner/repo.git",
       forgeProviderOverride: null,
       globalDefaultProviderId: null,
+      issueProviderOverride: null,
     });
   });
 

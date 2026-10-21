@@ -627,8 +627,11 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   );
   // Resolved reactively from the active provider's slot so the dialog drops
   // out (and back in) live with the owning plugin's enable state instead of
-  // holding a stale slot reference.
-  const { entry: forgeProviderEntry } = useResolvedForgeProvider(currentProject?.id ?? null);
+  // holding a stale slot reference. Issue mode lists issues, so it's the
+  // issues provider's dialog; PR mode stays with the code forge.
+  const resolvedForge = useResolvedForgeProvider(currentProject?.id ?? null);
+  const forgeProviderEntry =
+    bulkCreateDialog.mode === "issue" ? resolvedForge.issues.entry : resolvedForge.entry;
   const BulkCreateWorktreeDialog = useBuiltinView<ForgeBulkCreateWorktreeDialogProps>(
     forgeProviderEntry?.contribution.slots?.bulkCreateWorktreeDialog ?? ""
   );

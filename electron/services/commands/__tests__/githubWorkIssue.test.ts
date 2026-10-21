@@ -131,7 +131,7 @@ describe("githubWorkIssueCommand", () => {
     });
 
     expect(resolveForCwdMock).toHaveBeenCalledTimes(1);
-    expect(resolveForCwdMock).toHaveBeenCalledWith("/repo");
+    expect(resolveForCwdMock).toHaveBeenCalledWith("/repo", "issues");
     expect(getIssueMock).toHaveBeenCalledWith({ owner: "daintree", repo: "app" }, 55);
   });
 

@@ -17,6 +17,7 @@ import { useProjectStore } from "@/store";
 import { useDohertyGate } from "@/hooks";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { makeForgeProviderId } from "@shared/utils/forgeProviderIds";
+import { forgeProviderServesRole } from "@shared/utils/forgeProviderRoles";
 import { resolveForgeRemote } from "@shared/utils/forgeRemoteSelection";
 import { extractHostname, hostnameMatchesAny } from "@shared/utils/forgeHostnames";
 import { logError } from "@/utils/logger";
@@ -224,14 +225,18 @@ export function ForgeIntegrationsTab() {
         label: AUTO_DETECT_LABEL,
         description: "The first installed provider whose hostname matches the remote",
       },
-      ...providers.map((entry) => {
-        const matches = entry.contribution.matches.join(", ");
-        return {
-          value: makeForgeProviderId(entry.pluginId, entry.contribution.id),
-          label: entry.contribution.name,
-          description: matches ? `Matches: ${matches}` : undefined,
-        };
-      }),
+      // The default picks a code forge by hostname; an issues-only provider
+      // has no hostname and is bound per project instead.
+      ...providers
+        .filter((entry) => forgeProviderServesRole(entry.contribution, "code"))
+        .map((entry) => {
+          const matches = entry.contribution.matches.join(", ");
+          return {
+            value: makeForgeProviderId(entry.pluginId, entry.contribution.id),
+            label: entry.contribution.name,
+            description: matches ? `Matches: ${matches}` : undefined,
+          };
+        }),
     ];
     const storedId = settings.defaultProviderId;
     if (

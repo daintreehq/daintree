@@ -4,7 +4,7 @@ import { CHANNELS } from "../channels.js";
 import { store } from "../../store.js";
 import { checkRateLimit, typedHandle } from "../utils.js";
 import {
-  getForgeProviderImpl,
+  getForgeProviderBaseImpl,
   getRegisteredForgeProviders,
 } from "../../services/forgeProviderRegistry.js";
 import { resolveForgeProvider } from "../../services/forgeProviderResolver.js";
@@ -24,7 +24,7 @@ import type {
   CredentialImportExpected,
   CredentialImportFailureReason,
   CredentialImportUnavailable,
-  ForgeProviderImpl,
+  ForgeProviderBaseImpl,
 } from "../../../shared/types/forge.js";
 import { logWarn } from "../../utils/logger.js";
 import { raceAbort } from "../../utils/raceAbort.js";
@@ -148,7 +148,7 @@ async function syncWorkspaceDefaultProvider(): Promise<void> {
  * expected transport failures at debug; reaching here means the call itself
  * broke, which is a plugin bug worth seeing.
  */
-function refreshProviderTokenHealth(impl: ForgeProviderImpl, providerId: string): void {
+function refreshProviderTokenHealth(impl: ForgeProviderBaseImpl, providerId: string): void {
   const onFailed = (error: unknown) => {
     // Deliberately no provider error text: a plugin is free to interpolate the
     // credential it was just handed into its own message, and this buffer is
@@ -200,7 +200,7 @@ function toCredentialRecord(credentials: Record<string, unknown>): Record<string
  */
 export async function resolveCredentialProvider(
   providerId: string
-): Promise<ForgeProviderImpl | undefined> {
+): Promise<ForgeProviderBaseImpl | undefined> {
   await awaitPluginInit();
   return getImplForNamespaceActivating(providerId);
 }
@@ -389,6 +389,7 @@ export function registerForgeSettingsHandlers(): () => void {
           remoteUrl: effectiveRemoteUrl,
           forgeProviderOverride,
           globalDefaultProviderId,
+          issueProviderOverride: settings?.issueProviderOverride ?? null,
         });
       } catch (error) {
         console.warn(`[forgeSettings] resolve failed for ${projectId}:`, error);
@@ -455,7 +456,7 @@ export function registerForgeSettingsHandlers(): () => void {
       // Clear in-memory auth state on the live impl for symmetry with SET
       // (#9983). The impl may be unbound here — a user can clear a credential
       // without the provider plugin being active — so guard the lookup.
-      const impl = getForgeProviderImpl(providerId);
+      const impl = getForgeProviderBaseImpl(providerId);
       if (impl) {
         impl.setCredentials?.(null);
         // Re-probe even when nothing was stored under this id: the impl can

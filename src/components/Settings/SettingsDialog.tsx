@@ -1348,6 +1348,8 @@ function ProjectFormTabContent({
           onForgeRemoteChange={projectForm.setForgeRemote}
           forgeProviderOverride={projectForm.forgeProviderOverride}
           onForgeProviderOverrideChange={projectForm.setForgeProviderOverride}
+          issueProviderOverride={projectForm.issueProviderOverride}
+          onIssueProviderOverrideChange={projectForm.setIssueProviderOverride}
           projectPath={projectForm.currentProject?.path}
         />
       );

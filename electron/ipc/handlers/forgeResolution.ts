@@ -2,6 +2,8 @@
 import path from "node:path";
 import { store } from "../../store.js";
 import {
+  getForgeIssueProviderImpl,
+  getForgeProviderBaseImpl,
   getForgeProviderImpl,
   listMatchingProviders,
 } from "../../services/forgeProviderRegistry.js";
@@ -9,7 +11,14 @@ import { resolveForgeProvider } from "../../services/forgeProviderResolver.js";
 import { resolveForgeRemote } from "../../../shared/utils/forgeRemoteSelection.js";
 import { gitServiceCache } from "../../services/GitServiceCache.js";
 import { projectStore } from "../../services/ProjectStore.js";
-import type { ForgeProviderImpl, RepoRef } from "../../../shared/types/forge.js";
+import type {
+  ForgeIssueProviderImpl,
+  ForgeProviderBaseImpl,
+  ForgeProviderImpl,
+  Issue,
+  Page,
+  RepoRef,
+} from "../../../shared/types/forge.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import {
   makeForgeProviderId,
@@ -41,6 +50,24 @@ export interface ResolvedForgeContext {
   providerId: string;
   repoRef: RepoRef;
   impl: ForgeProviderImpl;
+}
+
+/**
+ * {@link resolveForCwd} for the issues role (#13700). Same shape, narrowed to
+ * the issue surface, because the provider may serve issues alone.
+ */
+export interface ResolvedForgeIssueContext {
+  namespaceId: string;
+  providerId: string;
+  repoRef: RepoRef;
+  impl: ForgeIssueProviderImpl;
+  /**
+   * True when the project's issues override picked this provider. Issue
+   * handlers then stamp {@link Issue.providerId} on what they return, so
+   * creation flows know to persist an explicit link: the bare number would
+   * otherwise be read back off the branch name as a code-forge issue.
+   */
+  viaIssueOverride: boolean;
 }
 
 /** The subset of `GitService` remote selection needs. */
@@ -159,6 +186,7 @@ async function readProjectForgeSettings(
 ): Promise<{
   forgeRemote: string | null;
   forgeProviderOverride: string | null;
+  issueProviderOverride: string | null;
   /** Repo root the settings were keyed on — what `repoRef.projectPath` stamps (#10563). */
   mainWorktreePath: string;
 }> {
@@ -186,6 +214,7 @@ async function readProjectForgeSettings(
   return {
     forgeRemote: settings?.forgeRemote ?? settings?.githubRemote ?? null,
     forgeProviderOverride: settings?.forgeProviderOverride ?? null,
+    issueProviderOverride: settings?.issueProviderOverride ?? null,
     mainWorktreePath,
   };
 }
@@ -310,7 +339,21 @@ export async function resolvePRHeadRefspecForCwd(
   return refspec;
 }
 
-export async function resolveForCwd(cwd: string): Promise<ResolvedForgeContext> {
+/**
+ * Resolve a cwd to the provider serving one role of its project's forge work.
+ * Omitted role is code — PRs, CI, repository data — and is the path every
+ * caller took before roles existed. `"issues"` serves the issue channels: with
+ * no `issueProviderOverride` set it is that same code path, byte for byte.
+ */
+export async function resolveForCwd(cwd: string): Promise<ResolvedForgeContext>;
+export async function resolveForCwd(
+  cwd: string,
+  role: "issues"
+): Promise<ResolvedForgeIssueContext>;
+export async function resolveForCwd(
+  cwd: string,
+  role?: "issues"
+): Promise<ResolvedForgeContext | ResolvedForgeIssueContext> {
   if (typeof cwd !== "string" || !cwd) {
     throw new Error("Invalid working directory");
   }
@@ -331,10 +374,14 @@ export async function resolveForCwd(cwd: string): Promise<ResolvedForgeContext> 
   // setting decides *which* remote we read, so the settings have to be in hand
   // first. Previously this block ran after an origin-only `getRemoteUrl`, which
   // is why the setting never reached the toolbar's data path.
-  const { forgeRemote, forgeProviderOverride, mainWorktreePath } = await readProjectForgeSettings(
-    gitService,
-    cwd
-  );
+  const { forgeRemote, forgeProviderOverride, issueProviderOverride, mainWorktreePath } =
+    await readProjectForgeSettings(gitService, cwd);
+
+  if (role === "issues" && issueProviderOverride) {
+    return resolveIssueOverride(issueProviderOverride, mainWorktreePath, () =>
+      resolveEffectiveRemoteUrl(gitService, cwd, forgeRemote, forgeProviderOverride)
+    );
+  }
 
   const remoteUrl = await resolveEffectiveRemoteUrl(
     gitService,
@@ -386,16 +433,136 @@ export async function resolveForCwd(cwd: string): Promise<ResolvedForgeContext> 
   // doesn't have to reconstruct it from `repo` (#10563). `mainWorktreePath` is
   // already the project root (resolved above for the ProjectStore lookup), which
   // matches the project-root path `PullRequestService` stamps on the RPC path.
-  return {
+  const context: ResolvedForgeContext = {
     namespaceId,
     providerId: resolved.entry.contribution.id,
     repoRef: { ...repoRef, projectPath: mainWorktreePath },
     impl,
   };
+  return role === "issues" ? { ...context, viaIssueOverride: false } : context;
+}
+
+/**
+ * The issues-role context when — and only when — the project's issues come
+ * from its issues override, for composite surfaces (repository stats) that
+ * blend both roles and must leave the single-provider path untouched. `null`
+ * means no override is set. Throws like {@link resolveForCwd} when an override
+ * is set but can't be served.
+ */
+export async function resolveIssueOverrideForCwd(
+  cwd: string
+): Promise<ResolvedForgeIssueContext | null> {
+  const gitService = gitServiceCache.getGitService(cwd);
+  if (!gitService) return null;
+  const { forgeRemote, forgeProviderOverride, issueProviderOverride, mainWorktreePath } =
+    await readProjectForgeSettings(gitService, cwd);
+  if (!issueProviderOverride) return null;
+  return resolveIssueOverride(issueProviderOverride, mainWorktreePath, () =>
+    resolveEffectiveRemoteUrl(gitService, cwd, forgeRemote, forgeProviderOverride)
+  );
+}
+
+/**
+ * Stamp {@link Issue.providerId} when the issues override served the issue —
+ * see {@link ResolvedForgeIssueContext.viaIssueOverride}. Unstamped otherwise,
+ * so a project without an issues provider returns exactly what it always did.
+ */
+export function stampIssueProvider<T extends Issue | null>(
+  context: ResolvedForgeIssueContext,
+  issue: T
+): T {
+  if (!context.viaIssueOverride || issue === null) return issue;
+  return { ...issue, providerId: context.namespaceId };
+}
+
+export function stampIssuePageProvider(
+  context: ResolvedForgeIssueContext,
+  page: Page<Issue>
+): Page<Issue> {
+  if (!context.viaIssueOverride) return page;
+  return { ...page, items: page.items.map((issue) => stampIssueProvider(context, issue)) };
+}
+
+/**
+ * The issues override's provider, resolved without a remote. The remote is
+ * read only for a full provider bound as the issues provider, which addresses
+ * issues through its remote parser exactly as it would as the code forge; an
+ * issues-only provider builds its own {@link RepoRef} and never sees the code
+ * forge's remote.
+ */
+async function resolveIssueOverride(
+  issueProviderOverride: string,
+  mainWorktreePath: string,
+  readRemoteUrl: () => Promise<string | null>
+): Promise<ResolvedForgeIssueContext> {
+  const { issues } = resolveForgeProvider({
+    remoteUrl: null,
+    forgeProviderOverride: null,
+    globalDefaultProviderId: null,
+    issueProviderOverride,
+  });
+  const entry = issues?.entry;
+  if (!entry) {
+    throw new Error(
+      "This project's issues provider isn't available. Enable it, or pick another in Project settings."
+    );
+  }
+
+  const namespaceId = makeForgeProviderId(entry.pluginId, entry.contribution.id);
+  let impl = getForgeIssueProviderImpl(namespaceId);
+  if (!impl) {
+    const pluginService = await getPluginService();
+    await pluginService.activatePluginForForgeProvider(namespaceId);
+    impl = getForgeIssueProviderImpl(namespaceId);
+  }
+  if (!impl) {
+    throw new Error(
+      `Forge provider "${entry.contribution.id}" not activated. Activate it in Settings.`
+    );
+  }
+
+  let repoRef: RepoRef | null;
+  if (impl.resolveIssueRepo) {
+    repoRef = await impl.resolveIssueRepo(mainWorktreePath);
+    if (!repoRef) {
+      throw new Error(
+        `${entry.contribution.name} isn't set up for this project yet. Finish its setup in Project settings.`
+      );
+    }
+  } else {
+    // Registration only lets an impl omit `resolveIssueRepo` when it serves
+    // code too, so the full lookup succeeds whenever this one did.
+    const fullImpl = getForgeProviderImpl(namespaceId);
+    const remoteUrl = await readRemoteUrl();
+    if (!fullImpl || !remoteUrl) {
+      throw new Error("No remote URL found for this repository");
+    }
+    repoRef = fullImpl.parseRemote(remoteUrl);
+    if (!repoRef) {
+      throw new Error("Could not parse repository identity from remote URL");
+    }
+  }
+
+  return {
+    namespaceId,
+    providerId: entry.contribution.id,
+    repoRef: { ...repoRef, projectPath: mainWorktreePath },
+    impl,
+    viaIssueOverride: true,
+  };
 }
 
 export function getImplForNamespace(namespaceId: string): ForgeProviderImpl {
   const impl = getForgeProviderImpl(namespaceId);
+  if (!impl) {
+    throw new Error(`Forge provider "${namespaceId}" not activated. Activate it in Settings.`);
+  }
+  return impl;
+}
+
+/** {@link getImplForNamespace} for the issues role — the namespace an issues-role {@link resolveForCwd} returned. */
+export function getIssueImplForNamespace(namespaceId: string): ForgeIssueProviderImpl {
+  const impl = getForgeIssueProviderImpl(namespaceId);
   if (!impl) {
     throw new Error(`Forge provider "${namespaceId}" not activated. Activate it in Settings.`);
   }
@@ -413,10 +580,10 @@ export function getImplForNamespace(namespaceId: string): ForgeProviderImpl {
  */
 export async function getImplForNamespaceActivating(
   namespaceId: string
-): Promise<ForgeProviderImpl | undefined> {
-  const existing = getForgeProviderImpl(namespaceId);
+): Promise<ForgeProviderBaseImpl | undefined> {
+  const existing = getForgeProviderBaseImpl(namespaceId);
   if (existing) return existing;
   const pluginService = await getPluginService();
   await pluginService.activatePluginForForgeProvider(namespaceId);
-  return getForgeProviderImpl(namespaceId);
+  return getForgeProviderBaseImpl(namespaceId);
 }

@@ -59,6 +59,8 @@ function renderCodeForgeTab(forgeRemote?: string) {
       onForgeRemoteChange={vi.fn()}
       forgeProviderOverride={null}
       onForgeProviderOverrideChange={vi.fn()}
+      issueProviderOverride={null}
+      onIssueProviderOverrideChange={vi.fn()}
       projectPath="/Users/test/Projects/sample"
     />
   );
@@ -150,5 +152,72 @@ describe("CodeForgeTab — live forge-provider refresh", () => {
 
     unmount();
     expect(provenanceCallbacks).toHaveLength(0);
+  });
+});
+
+describe("CodeForgeTab — issues provider (#13700)", () => {
+  const github = {
+    pluginId: "daintree.github",
+    contribution: { id: "github", name: "GitHub", matches: ["github.com"] },
+  };
+  const tracker = {
+    pluginId: "acme.tracker",
+    contribution: { id: "tracker", name: "Tracker", matches: [], roles: ["issues"] },
+  };
+
+  function renderWithIssues(issueProviderOverride: string | null, onChange = vi.fn()) {
+    const view = render(
+      <CodeForgeTab
+        forgeRemote={undefined}
+        onForgeRemoteChange={vi.fn()}
+        forgeProviderOverride={null}
+        onForgeProviderOverrideChange={vi.fn()}
+        issueProviderOverride={issueProviderOverride}
+        onIssueProviderOverrideChange={onChange}
+        projectPath="/Users/test/Projects/sample"
+      />
+    );
+    const select = (label: string) =>
+      view.container.querySelector(`select[aria-label="${label}"]`) as HTMLSelectElement | null;
+    return { ...view, select };
+  }
+
+  const optionValues = (select: HTMLSelectElement | null) =>
+    Array.from(select?.options ?? []).map((o) => o.value);
+
+  it("offers issues-capable providers for issues and keeps issues-only ones off the forge list", async () => {
+    getForgeProvidersMock.mockResolvedValue([github, tracker]);
+    const { select } = renderWithIssues(null);
+
+    await waitFor(() => expect(select("Issues provider")).not.toBeNull());
+    expect(optionValues(select("Issues provider"))).toEqual([
+      "__code__",
+      "daintree.github.github",
+      "acme.tracker.tracker",
+    ]);
+    expect(optionValues(select("Forge provider"))).toEqual(["__auto__", "daintree.github.github"]);
+  });
+
+  it("binds the picked provider and clears the binding on 'Use forge provider'", async () => {
+    getForgeProvidersMock.mockResolvedValue([github, tracker]);
+    const onChange = vi.fn();
+    const { select } = renderWithIssues("acme.tracker.tracker", onChange);
+
+    await waitFor(() => expect(select("Issues provider")?.value).toBe("acme.tracker.tracker"));
+    const issues = select("Issues provider")!;
+    act(() => {
+      issues.value = "__code__";
+      issues.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(onChange).toHaveBeenCalledWith(null);
+  });
+
+  it("keeps a saved issues provider that is no longer installed visible as unavailable", async () => {
+    getForgeProvidersMock.mockResolvedValue([github]);
+    const { select } = renderWithIssues("acme.tracker.tracker");
+
+    await waitFor(() => expect(select("Issues provider")?.value).toBe("acme.tracker.tracker"));
+    const selected = select("Issues provider")!.selectedOptions[0];
+    expect(selected?.textContent).toMatch(/unavailable/i);
   });
 });

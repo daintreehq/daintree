@@ -1,6 +1,9 @@
 import { CHANNELS } from "../../ipc/channels.js";
 import { broadcastToRenderer } from "../../ipc/utils.js";
-import { getForgeProviderImpl, onForgeProviderRegistryChanged } from "../forgeProviderRegistry.js";
+import {
+  getForgeProviderBaseImpl,
+  onForgeProviderRegistryChanged,
+} from "../forgeProviderRegistry.js";
 import { BUILTIN_GITHUB_PROVIDER_ID } from "../../../shared/utils/forgeProviderIds.js";
 import type { ForgeTokenHealthState, HealthEventsCapability } from "../../../shared/types/forge.js";
 import {
@@ -86,7 +89,7 @@ function createForgeTokenHealthSource(providerId: string): {
   onStateChange(listener: (payload: ForgeTokenHealthState) => void): () => void;
 } {
   const health = (): HealthEventsCapability | undefined =>
-    getForgeProviderImpl(providerId)?.healthEvents;
+    getForgeProviderBaseImpl(providerId)?.healthEvents;
   return {
     getState: () => health()?.getTokenHealth() ?? UNKNOWN_TOKEN_HEALTH,
     onStateChange(listener) {

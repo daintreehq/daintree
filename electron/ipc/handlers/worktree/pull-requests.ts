@@ -6,9 +6,28 @@ import type {
   AttachIssuePayload,
   DetachIssuePayload,
   IssueAssociation,
+  IssueProvenance,
 } from "../../../../shared/types/ipc/worktree.js";
 import type { PRServiceStatus } from "../../../../shared/types/workspace-host.js";
 import { defineIpcNamespace, op } from "../../define.js";
+
+const MAX_PROVENANCE_LENGTH = 256;
+
+/**
+ * Optional provenance fields, each kept only when it's a non-empty string of a
+ * sane length — an absent field is the legacy shape, never an error, so a
+ * malformed one drops rather than failing the attach.
+ */
+function readProvenance(payload: AttachIssuePayload): IssueProvenance {
+  const provenance: IssueProvenance = {};
+  for (const key of ["issueProviderId", "issueId", "issueKey"] as const) {
+    const value = payload[key];
+    if (typeof value === "string" && value.length > 0 && value.length <= MAX_PROVENANCE_LENGTH) {
+      provenance[key] = value;
+    }
+  }
+  return provenance;
+}
 
 export function registerWorktreePullRequestHandlers(deps: HandlerDependencies): () => void {
   const handleWorktreePRRefresh = async (): Promise<void> => {
@@ -45,6 +64,7 @@ export function registerWorktreePullRequestHandlers(deps: HandlerDependencies): 
     const association: IssueAssociation = {
       issueNumber,
       issueTitle,
+      ...readProvenance(payload),
     };
 
     const currentMap = store.get("worktreeIssueMap") ?? {};

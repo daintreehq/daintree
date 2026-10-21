@@ -15,7 +15,7 @@ vi.mock("../../../store.js", () => ({
 }));
 vi.mock("../../../services/forgeProviderRegistry.js", () => ({
   getRegisteredForgeProviders: () => state.providers,
-  getForgeProviderImpl: () =>
+  getForgeProviderBaseImpl: () =>
     state.bound ? { identity: { getCurrentUser: state.getCurrentUser } } : undefined,
 }));
 

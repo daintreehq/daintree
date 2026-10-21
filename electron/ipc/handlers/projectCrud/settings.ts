@@ -92,12 +92,18 @@ export function registerProjectSettingsHandlers(deps: HandlerDependencies = {}):
         });
       }
     }
-    if (remoteChanged) {
+    // The workspace host never resolves the issues role — its issue lookups are
+    // numbers read off branch names, which belong to the code forge — so this
+    // one only needs the renderer told.
+    const issueProviderOverrideChanged =
+      (settings.issueProviderOverride ?? null) !== (previousSettings.issueProviderOverride ?? null);
+    if (remoteChanged || providerOverrideChanged || issueProviderOverrideChanged) {
       // The renderer caches provider resolution per project and only drops it
       // on `forge:remote-changed` (#11155). That event is signature-gated on
       // `.git/config`, which a settings change never touches — so without this
       // broadcast the toolbar keeps resolving against the OLD remote until a
-      // reload, which is the bug this fix exists to close (#11408).
+      // reload, which is the bug this fix exists to close (#11408). A changed
+      // provider binding leaves the same cache just as stale (#13700).
       broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
         name: "forge:remote-changed",
         payload: { projectId },

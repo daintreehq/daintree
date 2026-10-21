@@ -86,6 +86,7 @@ import { getPtyClient } from "../../window/serviceRefs.js";
 import {
   registerForgeProviderImpl,
   unregisterForgeProviderImpl,
+  validateForgeImplRoles,
 } from "../forgeProviderRegistry.js";
 import { buildStoredCredentials } from "../forge/forgeCredentialUtils.js";
 import {
@@ -132,6 +133,7 @@ import {
   validatePluginContextEntry,
 } from "../../../shared/utils/pluginContextKeys.js";
 import { makeForgeProviderId } from "../../../shared/utils/forgeProviderIds.js";
+import { forgeProviderRoles } from "../../../shared/utils/forgeProviderRoles.js";
 import {
   toPluginWorktreeSnapshot,
   toPluginWorktreeStatus,
@@ -1979,12 +1981,27 @@ export function createHost(
       // walks descriptors first. Reject up front so the failure is loud.
       const contributionId = descriptor.id;
       const plugin = deps.plugins.get(pluginId);
-      const declared = plugin?.manifest.contributes.forgeProviders.some(
+      const declared = plugin?.manifest.contributes.forgeProviders.find(
         (c) => c.id === contributionId
       );
       if (!declared) {
         throw new Error(
           `Plugin "${pluginId}" registerForgeProvider: descriptor.id "${contributionId}" is not declared in contributes.forgeProviders`
+        );
+      }
+      // The manifest's roles route calls before any plugin code runs, so a
+      // descriptor may restate them but never claim one the manifest didn't.
+      const declaredRoles = forgeProviderRoles(declared);
+      const undeclaredRole = descriptor.roles?.find((role) => !declaredRoles.includes(role));
+      if (undeclaredRole) {
+        throw new Error(
+          `Plugin "${pluginId}" registerForgeProvider: descriptor for "${contributionId}" claims the "${undeclaredRole}" role, which contributes.forgeProviders does not declare`
+        );
+      }
+      const roleError = validateForgeImplRoles(declared, impl);
+      if (roleError) {
+        throw new Error(
+          `Plugin "${pluginId}" registerForgeProvider: impl for "${contributionId}" can't serve its declared roles (${declaredRoles.join(", ")}): ${roleError}`
         );
       }
 

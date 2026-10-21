@@ -693,6 +693,14 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       consumers: [{ file: FORGE_REGISTRY, symbol: "hostnameMatchesAny" }],
       note: "Matched against a repo host to route to the provider.",
     },
+    roles: {
+      mode: "verbatim",
+      consumers: [
+        { file: "electron/services/forgeProviderResolver.ts", symbol: "forgeProviderServesRole" },
+        { file: FORGE_REGISTRY, symbol: "validateForgeImplRoles" },
+      ],
+      note: "Gates which role (issues, code) the resolver may pick the provider for, and what its impl must implement.",
+    },
     kind: {
       mode: "verbatim",
       consumers: [{ file: CODE_FORGE_TAB, symbol: "CodeForgeSettingsTab (kind === 'local')" }],

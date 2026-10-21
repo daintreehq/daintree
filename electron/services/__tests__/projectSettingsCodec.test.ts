@@ -194,6 +194,28 @@ describe("decode", () => {
     expect(result.settings.forgeProviderOverride).toBeUndefined();
   });
 
+  it("normalizes issueProviderOverride like the forge override, keeping null as unset", () => {
+    const alias = decode({ runCommands: [], issueProviderOverride: "github" });
+    if (!alias.ok) throw new Error("expected ok");
+    expect(alias.settings.issueProviderOverride).toBe("daintree.github.github");
+
+    const unset = decode({ runCommands: [], issueProviderOverride: null });
+    if (!unset.ok) throw new Error("expected ok");
+    expect(unset.settings.issueProviderOverride).toBeNull();
+
+    const junk = decode({ runCommands: [], issueProviderOverride: 7 });
+    if (!junk.ok) throw new Error("expected ok");
+    expect(junk.settings.issueProviderOverride).toBeUndefined();
+  });
+
+  it("round-trips a third-party issueProviderOverride through the envelope", () => {
+    const first = decode({ runCommands: [], issueProviderOverride: "acme.tracker.tracker" });
+    if (!first.ok) throw new Error("expected ok");
+    const second = decode(JSON.parse(JSON.stringify(encodeEnvelope(first.settings))));
+    if (!second.ok) throw new Error("expected ok");
+    expect(second.settings.issueProviderOverride).toBe("acme.tracker.tracker");
+  });
+
   it("migrates legacy githubRemote to forgeRemote", () => {
     const result = decode({ runCommands: [], githubRemote: "upstream" });
     if (!result.ok) throw new Error("expected ok");

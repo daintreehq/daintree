@@ -44,7 +44,7 @@ import type {
   FileDecorationProviderDescriptor,
   FileDecorationProviderImpl,
   ForgeProviderDescriptor,
-  ForgeProviderImpl,
+  AnyForgeProviderImpl,
 } from "../types/forge.js";
 import type { NotificationType } from "../types/notification.js";
 import type {
@@ -180,7 +180,7 @@ export interface ReadScreenRecord {
 
 export interface RegisteredForgeProviderRecord {
   descriptor: ForgeProviderDescriptor;
-  impl: ForgeProviderImpl;
+  impl: AnyForgeProviderImpl;
 }
 
 export interface RegisteredFileDecorationProviderRecord {

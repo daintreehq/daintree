@@ -34,6 +34,7 @@ export interface ProjectSettingsSnapshot {
 
   forgeRemote: string | undefined;
   forgeProviderOverride: string | null;
+  issueProviderOverride: string | null;
   worktreePathPattern: string;
   terminalSettings: ProjectTerminalSettings | undefined;
   notificationOverrides: Partial<NotificationSettings> | undefined;
@@ -83,7 +84,8 @@ export function createProjectSettingsSnapshot(
   turbopackEnabled: boolean = true,
   daintreeMcpTier: DaintreeMcpTier = "off",
   forgeProviderOverride: string | null = null,
-  daintreeMcpSkipConfirmations: boolean = false
+  daintreeMcpSkipConfirmations: boolean = false,
+  issueProviderOverride: string | null = null
 ): ProjectSettingsSnapshot {
   const envVarRecord: Record<string, string> = {};
   const seenKeys = new Map<string, number>();
@@ -166,6 +168,7 @@ export function createProjectSettingsSnapshot(
     branchPrefixCustom: normalizedMode === "custom" ? trimmedCustom : "",
     forgeRemote,
     forgeProviderOverride,
+    issueProviderOverride,
     worktreePathPattern: worktreePathPattern.trim(),
     terminalSettings: normalizeTerminalSettings(terminalSettings),
     notificationOverrides: normalizeNotificationOverrides(notificationOverrides),
@@ -297,6 +300,7 @@ export function areSnapshotsEqual(a: ProjectSettingsSnapshot, b: ProjectSettings
 
   if (a.forgeRemote !== b.forgeRemote) return false;
   if (a.forgeProviderOverride !== b.forgeProviderOverride) return false;
+  if (a.issueProviderOverride !== b.issueProviderOverride) return false;
   if (a.worktreePathPattern !== b.worktreePathPattern) return false;
 
   // Terminal settings comparison

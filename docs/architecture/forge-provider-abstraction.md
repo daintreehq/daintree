@@ -335,7 +335,11 @@ Preferences → Forge Integrations:
 - Shows the matched provider for each remote (with only GitHub registered, that's "GitHub" or "No provider")
 - Per-provider section rendered by the plugin's own `settings` contribution (auth, etc.)
 
-Single-active-provider per project is the v1 design. Multi-tenancy (one project mirrored across multiple providers) is deferred and can be added later without changing the contribution point shape.
+A project binds one active provider per role (#13700). The **code** role — PRs, CI, repository stats, clone, everything addressed through the git remote — is the provider the precedence chain picks. The **issues** role — issue reads and writes, the issue picker, "Assign to me", the toolbar issue count — is that same provider unless the project's `issueProviderOverride` names another. That lets an issues-only tracker (a manifest declaring `roles: ["issues"]`, implementing `ForgeIssueProviderImpl` plus `resolveIssueRepo`) serve a project's issues while the code forge keeps the rest. The resolver returns both roles in one `ResolvedForgeProvider` (`entry` is code, `issues` is the issues role) so every surface reads the same answer, and an issues override that names nothing usable leaves the project with no issues provider rather than falling back to the code forge's.
+
+Two providers for the same role — one project mirrored across several forges — stays deferred and can be added later without changing the contribution point shape.
+
+Issue numbers read off branch names (`issue-42-*`) and stored links without provenance belong to the code forge, so the workspace host still resolves only the code role. A worktree made from an issues-provider issue gets an explicit link carrying `issueProviderId` (plus the provider's `issueId` and `issueKey` when it has them), and its branch takes the provider's suggested `Issue.branchName` when one is offered. Provider-qualified dispatch for those links (opening or refreshing them through the provider that made them after the binding changes) and provider-specific branch extraction are follow-ups.
 
 ## Capability Discovery in Components
 
@@ -372,7 +376,7 @@ Each step was a separate PR. The contract was allowed to evolve while GitHub was
 ## Non-Goals (For This Stage)
 
 - **Additional provider plugins.** GitLab, Gitea, Bitbucket, Forgejo all later work.
-- **Multi-active providers per project.** v1 picks the first matching provider.
+- **Multi-active providers per role.** A project has one code provider and one issues provider, which may be the same; v1 never mirrors a role across several.
 - **Git operations themselves.** Local git via `simple-git` and `node-pty` is unaffected. The forge layer sits on top of git; it doesn't replace git.
 - **Federation / ForgeFed actor URLs.** Pattern matching is hostname-based; ActivityPub actor matching is not in scope.
 - **A "forge auth" UI panel owned by the host.** Each plugin renders its own auth section.

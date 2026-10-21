@@ -1,7 +1,7 @@
 import type { HostForgeObservation } from "../../../shared/types/remoteHosts.js";
 import { makeForgeProviderId } from "../../../shared/utils/forgeProviderIds.js";
 import {
-  getForgeProviderImpl,
+  getForgeProviderBaseImpl,
   getRegisteredForgeProviders,
 } from "../../services/forgeProviderRegistry.js";
 import { store } from "../../store.js";
@@ -27,7 +27,7 @@ function hasSavedCredential(raw: string | undefined): boolean {
 }
 
 async function askAccount(providerId: string): Promise<string | null> {
-  const identity = getForgeProviderImpl(providerId)?.identity;
+  const identity = getForgeProviderBaseImpl(providerId)?.identity;
   if (!identity) return null;
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {

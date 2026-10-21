@@ -6,8 +6,8 @@ import type {
   FileDecorationProviderDescriptor,
   FileDecorationProviderImpl,
   ForgeProviderContribution,
+  AnyForgeProviderImpl,
   ForgeProviderDescriptor,
-  ForgeProviderImpl,
   NormalizedPRState,
   ResourceRef,
 } from "./forge.js";
@@ -4508,8 +4508,12 @@ export interface PluginActivationApi {
    */
   broadcastToRenderer(channel: string, payload: unknown): Promise<void>;
   /**
-   * Bind a runtime {@link ForgeProviderImpl} to the descriptor declared in
-   * `contributes.forgeProviders`. The descriptor's `id` is namespaced to the
+   * Bind a runtime forge provider implementation to the descriptor declared in
+   * `contributes.forgeProviders`. A provider serving both roles (the default)
+   * passes a full `ForgeProviderImpl`; one whose manifest declares
+   * `roles: ["issues"]` passes a `ForgeIssueProviderImpl`, which must include
+   * `resolveIssueRepo`. An implementation missing a member its declared roles
+   * require is rejected. The descriptor's `id` is namespaced to the
    * plugin at runtime as `{pluginId}.{descriptor.id}`. Returns a disposer that
    * unbinds the single implementation; all bindings are automatically removed
    * when the plugin is unloaded. Must be called during `activate()` — the
@@ -4527,7 +4531,7 @@ export interface PluginActivationApi {
    */
   registerForgeProvider(
     descriptor: ForgeProviderDescriptor,
-    impl: ForgeProviderImpl
+    impl: AnyForgeProviderImpl
   ): Promise<() => void>;
   /**
    * Bind a runtime {@link FileDecorationProviderImpl} to a descriptor declared

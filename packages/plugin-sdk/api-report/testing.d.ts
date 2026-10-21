@@ -485,6 +485,27 @@ interface Issue {
     freshnessToken?: string;
     /** `true` when unchanged since `ifNotChangedSince`; see {@link FetchOptions}. */
     notModified?: boolean;
+    /**
+     * The provider's own stable id for the issue (Linear's UUID), when `number`
+     * is only a display-scoped counter that can change (an issue moved between
+     * teams is renumbered). Stored on explicit worktree links as provenance.
+     */
+    id?: string;
+    /** Display identifier when the provider has one beyond `#number` (`"ENG-123"`). */
+    key?: string;
+    /**
+     * Complete branch name the provider suggests for work on this issue. Used
+     * verbatim when present — no `feature/` or username prefix is added — so a
+     * tracker that links branches by naming convention recognises it.
+     */
+    branchName?: string;
+    /**
+     * Canonical id of the provider that served this issue. Host-stamped, and only
+     * when the project's issues come from a provider other than its code forge:
+     * the stamp is what tells creation flows to persist an explicit link, since
+     * the number alone would otherwise be read back as a code-forge issue.
+     */
+    providerId?: string;
     rawData: unknown;
 }
 /**
@@ -1235,25 +1256,124 @@ interface CredentialImportCapability {
     commit(expected: CredentialImportExpected, signal?: AbortSignal): Promise<CredentialImportCandidate | CredentialImportUnavailable>;
 }
 /**
- * Runtime contract a forge plugin implements and registers via
- * `host.registerForgeProvider`. Every provider implements the base methods;
- * optional capabilities are sibling fields the host probes at runtime.
- * Adding a new capability adds a sibling field — the base interface never
- * changes.
- *
- * Capability presence check: use a truthiness/`!= null` guard
- * (`if (provider.reviews)`), NOT the `in` operator. An optional property
- * explicitly set to `undefined` still satisfies `"reviews" in provider`,
- * so `in` would falsely report the capability as available.
+ * Which half of a project's forge work a provider serves (#13700). `"code"` is
+ * PRs, CI, repository stats, clone and everything addressed through the git
+ * remote; `"issues"` is issue reads, writes and the issue picker. A project
+ * binds one provider per role — never two for the same role.
  */
-interface ForgeProviderImpl {
+type ForgeProviderRole = "issues" | "code";
+/** Members every provider implements, whichever roles it serves. */
+interface ForgeProviderBaseImpl {
     getCredentials(): Promise<Credentials | null>;
     setCredentials?(credentials: Credentials | null): void;
     validateCredentials(): Promise<AuthValidation>;
-    parseRemote(url: string): RepoRef | null;
+    /**
+     * Validate a single freshly-entered credential value at save time. The host
+     * passes exactly one string — the primary of the provider's declared
+     * {@link ForgeProviderContribution.credentialFields} (see that field for the
+     * primary-selection rule), never the full multi-field record. This signature
+     * is frozen at 1.0: a provider needing more than one value to authenticate
+     * (e.g. self-hosted forge wanting base URL + token) reads its other fields
+     * from its own settings (`settingsScopeRef`) and validates the assembled
+     * credential through {@link validateCredentials} instead, which runs against
+     * the provider's stored state rather than a host-supplied argument.
+     */
+    validateToken(token: string): Promise<AuthValidation>;
+    getRateLimit?(): Promise<RateLimitInfo>;
+    batchLookups?: BatchLookupCapability;
+    identity?: IdentityCapability;
+    /**
+     * An issues-only provider may implement this too and report `prCount: null`;
+     * the host reads only the issue side of an issues provider's snapshot.
+     */
+    repoStats?: RepoStatsCapability;
+    healthEvents?: HealthEventsCapability;
+    credentialImport?: CredentialImportCapability;
+}
+/** The issues role. See {@link ForgeProviderRole}. */
+interface ForgeIssueProviderImpl extends ForgeProviderBaseImpl {
+    /**
+     * Build the {@link RepoRef} this provider's issue calls take for a project,
+     * from the provider's own project-scoped settings (a tracker's team or
+     * workspace). Required for a provider whose manifest declares only
+     * `roles: ["issues"]`: it has no git remote to parse, and the host never
+     * hands it the code forge's remote. Return `null` when the project isn't
+     * configured yet. A provider that also serves code may omit it, and is then
+     * addressed through {@link ForgeCodeProviderImpl.parseRemote} as before.
+     *
+     * The host treats `owner`, `repo` and `rawData` as opaque and stamps
+     * `projectPath` on the result.
+     */
+    resolveIssueRepo?(projectPath: string): Promise<RepoRef | null>;
     listIssues(repo: RepoRef, opts: ListOptions): Promise<Page<Issue>>;
-    listPRs(repo: RepoRef, opts: ListOptions): Promise<Page<PR>>;
     getIssue(repo: RepoRef, number: number, options?: FetchOptions): Promise<Issue | null>;
+    buildIssueUrl(repo: RepoRef, number: number): string;
+    buildIssuesUrl(repo: RepoRef, options?: {
+        query?: string;
+        state?: string;
+    }): string;
+    /**
+     * Create a new issue and return the normalized {@link Issue}. Providers that
+     * can't create issues throw `"Not supported"`, matching the assignment
+     * convention. The host clears its issue caches after a successful create so
+     * the new issue shows up in subsequent {@link listIssues} calls.
+     */
+    createIssue(repo: RepoRef, input: CreateIssueInput): Promise<Issue>;
+    /**
+     * Assign an issue, returning the issue's resulting assignee list. Forges may
+     * silently drop an assignee the account can't take (GitHub ignores users
+     * without push access), so the returned list — not the requested username —
+     * is what actually landed.
+     */
+    assignIssue(repo: RepoRef, issueNumber: number, username: string): Promise<ForgeUser[]>;
+    /** Remove an assignment, returning the issue's resulting assignee list. */
+    unassignIssue(repo: RepoRef, issueNumber: number, username: string): Promise<ForgeUser[]>;
+    /**
+     * Close an open issue, returning the updated {@link Issue}. The optional
+     * `stateReason` lets the caller record why (GitHub: `completed` /
+     * `not_planned`); providers that don't model a reason ignore it. The host
+     * clears its issue caches after a successful close.
+     */
+    closeIssue(repo: RepoRef, issueNumber: number, stateReason?: IssueCloseReason): Promise<Issue>;
+    /**
+     * Reopen a closed issue, returning the updated {@link Issue}. The host clears
+     * its issue caches after a successful reopen.
+     */
+    reopenIssue(repo: RepoRef, issueNumber: number): Promise<Issue>;
+    /**
+     * Edit an issue's title and/or body, returning the updated {@link Issue}. At
+     * least one field of `input` must be present. The host clears its issue
+     * caches after a successful edit.
+     */
+    editIssue(repo: RepoRef, issueNumber: number, input: EditIssueInput): Promise<Issue>;
+    /**
+     * Add a comment to an issue, returning the created {@link IssueComment}.
+     */
+    addIssueComment(repo: RepoRef, issueNumber: number, body: string): Promise<IssueComment>;
+    /**
+     * Add a single label (by name) to an issue, returning the issue's full label
+     * set after the add. Additive — existing labels are preserved. The host
+     * clears its issue caches after a successful add.
+     */
+    addIssueLabel(repo: RepoRef, issueNumber: number, label: string): Promise<ForgeLabel[]>;
+    /**
+     * Remove a single label (by name) from an issue, returning the issue's
+     * remaining label set. Throws when the label isn't present on the issue. The
+     * host clears its issue caches after a successful remove.
+     */
+    removeIssueLabel(repo: RepoRef, issueNumber: number, label: string): Promise<ForgeLabel[]>;
+    issueComments?: IssueCommentCapability;
+    projectBoards?: ProjectBoardCapability;
+    milestones?: MilestoneCapability;
+    tooltips?: Pick<TooltipCapability, "getIssueTooltip">;
+}
+/**
+ * The code role: everything addressed through the git remote. See
+ * {@link ForgeProviderRole}.
+ */
+interface ForgeCodeProviderImpl extends ForgeProviderBaseImpl {
+    parseRemote(url: string): RepoRef | null;
+    listPRs(repo: RepoRef, opts: ListOptions): Promise<Page<PR>>;
     getPR(repo: RepoRef, number: number, options?: FetchOptions): Promise<PR | null>;
     findPRByBranch(repo: RepoRef, branchName: string): Promise<PR | null>;
     /**
@@ -1269,12 +1389,7 @@ interface ForgeProviderImpl {
     findPRsByBranches?(repo: RepoRef, branches: string[]): Promise<Map<string, PR | null>>;
     getCIStatus(repo: RepoRef, prNumber: number, options?: FetchOptions): Promise<CIStatus | null>;
     getRepoMetadata(repo: RepoRef, options?: FetchOptions): Promise<RepoMetadata>;
-    buildIssueUrl(repo: RepoRef, number: number): string;
     buildPRUrl(repo: RepoRef, number: number): string;
-    buildIssuesUrl(repo: RepoRef, options?: {
-        query?: string;
-        state?: string;
-    }): string;
     buildPRsUrl(repo: RepoRef, options?: {
         query?: string;
         state?: string;
@@ -1334,22 +1449,6 @@ interface ForgeProviderImpl {
      */
     buildPRHeadRefspec?(prNumber: number, headRefName: string): string | null;
     /**
-     * Create a new issue and return the normalized {@link Issue}. Providers that
-     * can't create issues throw `"Not supported"`, matching the assignment
-     * convention. The host clears its issue caches after a successful create so
-     * the new issue shows up in subsequent {@link listIssues} calls.
-     */
-    createIssue(repo: RepoRef, input: CreateIssueInput): Promise<Issue>;
-    /**
-     * Assign an issue, returning the issue's resulting assignee list. Forges may
-     * silently drop an assignee the account can't take (GitHub ignores users
-     * without push access), so the returned list — not the requested username —
-     * is what actually landed.
-     */
-    assignIssue(repo: RepoRef, issueNumber: number, username: string): Promise<ForgeUser[]>;
-    /** Remove an assignment, returning the issue's resulting assignee list. */
-    unassignIssue(repo: RepoRef, issueNumber: number, username: string): Promise<ForgeUser[]>;
-    /**
      * Open a new pull request from `input.head` into `input.base` and return the
      * normalized {@link PR}. Providers that can't create PRs throw
      * `"Not supported"`. The host clears its PR caches after a successful create
@@ -1378,53 +1477,6 @@ interface ForgeProviderImpl {
      * normalized {@link PR}.
      */
     editPR(repo: RepoRef, prNumber: number, input: EditPRInput): Promise<PR>;
-    /**
-     * Close an open issue, returning the updated {@link Issue}. The optional
-     * `stateReason` lets the caller record why (GitHub: `completed` /
-     * `not_planned`); providers that don't model a reason ignore it. The host
-     * clears its issue caches after a successful close.
-     */
-    closeIssue(repo: RepoRef, issueNumber: number, stateReason?: IssueCloseReason): Promise<Issue>;
-    /**
-     * Reopen a closed issue, returning the updated {@link Issue}. The host clears
-     * its issue caches after a successful reopen.
-     */
-    reopenIssue(repo: RepoRef, issueNumber: number): Promise<Issue>;
-    /**
-     * Edit an issue's title and/or body, returning the updated {@link Issue}. At
-     * least one field of `input` must be present. The host clears its issue
-     * caches after a successful edit.
-     */
-    editIssue(repo: RepoRef, issueNumber: number, input: EditIssueInput): Promise<Issue>;
-    /**
-     * Add a comment to an issue, returning the created {@link IssueComment}.
-     */
-    addIssueComment(repo: RepoRef, issueNumber: number, body: string): Promise<IssueComment>;
-    /**
-     * Add a single label (by name) to an issue, returning the issue's full label
-     * set after the add. Additive — existing labels are preserved. The host
-     * clears its issue caches after a successful add.
-     */
-    addIssueLabel(repo: RepoRef, issueNumber: number, label: string): Promise<ForgeLabel[]>;
-    /**
-     * Remove a single label (by name) from an issue, returning the issue's
-     * remaining label set. Throws when the label isn't present on the issue. The
-     * host clears its issue caches after a successful remove.
-     */
-    removeIssueLabel(repo: RepoRef, issueNumber: number, label: string): Promise<ForgeLabel[]>;
-    /**
-     * Validate a single freshly-entered credential value at save time. The host
-     * passes exactly one string — the primary of the provider's declared
-     * {@link ForgeProviderContribution.credentialFields} (see that field for the
-     * primary-selection rule), never the full multi-field record. This signature
-     * is frozen at 1.0: a provider needing more than one value to authenticate
-     * (e.g. self-hosted forge wanting base URL + token) reads its other fields
-     * from its own settings (`settingsScopeRef`) and validates the assembled
-     * credential through {@link validateCredentials} instead, which runs against
-     * the provider's stored state rather than a host-supplied argument.
-     */
-    validateToken(token: string): Promise<AuthValidation>;
-    getRateLimit?(): Promise<RateLimitInfo>;
     clearPullRequestCaches?(): void | Promise<void>;
     /**
      * Optional. Capture a cheap, opaque freshness token for the repo's overall
@@ -1458,22 +1510,34 @@ interface ForgeProviderImpl {
      */
     classifyPushError?(stderr: string): PushErrorClassification | null;
     reviews?: ReviewCapability;
-    issueComments?: IssueCommentCapability;
     checks?: ChecksCapability;
     approvals?: ApprovalCapability;
     releases?: ReleaseCapability;
-    projectBoards?: ProjectBoardCapability;
-    milestones?: MilestoneCapability;
-    batchLookups?: BatchLookupCapability;
-    identity?: IdentityCapability;
-    tooltips?: TooltipCapability;
-    repoStats?: RepoStatsCapability;
+    tooltips?: Pick<TooltipCapability, "getPRTooltip">;
     projectHealth?: ProjectHealthCapability;
     avatars?: AvatarCapability;
-    healthEvents?: HealthEventsCapability;
     clone?: CloneCapability;
-    credentialImport?: CredentialImportCapability;
 }
+/**
+ * Runtime contract a forge plugin implements and registers via
+ * `host.registerForgeProvider` — a provider serving both roles, which is every
+ * provider whose manifest omits `roles`. Every provider implements the base
+ * methods; optional capabilities are sibling fields the host probes at
+ * runtime. Adding a new capability adds a sibling field — the base interface
+ * never changes.
+ *
+ * Capability presence check: use a truthiness/`!= null` guard
+ * (`if (provider.reviews)`), NOT the `in` operator. An optional property
+ * explicitly set to `undefined` still satisfies `"reviews" in provider`,
+ * so `in` would falsely report the capability as available.
+ */
+type ForgeProviderImpl = ForgeIssueProviderImpl & ForgeCodeProviderImpl;
+/**
+ * What `host.registerForgeProvider` accepts: a full provider, or one serving a
+ * single role. The manifest's `roles` decides which, and the host checks the
+ * implementation against it at registration.
+ */
+type AnyForgeProviderImpl = ForgeProviderImpl | ForgeIssueProviderImpl | ForgeCodeProviderImpl;
 /**
  * Suggested capability vocabulary surfaced in the manifest's `capabilities`
  * array. Frozen at 1.0 as informational only: the host never interprets these
@@ -1515,6 +1579,8 @@ interface ForgeProviderDescriptor {
     id: string;
     name?: string;
     matches?: string[];
+    /** See {@link ForgeProviderContribution.roles}. */
+    roles?: ForgeProviderRole[];
     /** See {@link ForgeProviderContribution.kind}. */
     kind?: ForgeProviderKind;
     capabilities?: ForgeCapabilityHint[];
@@ -3932,8 +3998,12 @@ interface PluginActivationApi {
      */
     broadcastToRenderer(channel: string, payload: unknown): Promise<void>;
     /**
-     * Bind a runtime {@link ForgeProviderImpl} to the descriptor declared in
-     * `contributes.forgeProviders`. The descriptor's `id` is namespaced to the
+     * Bind a runtime forge provider implementation to the descriptor declared in
+     * `contributes.forgeProviders`. A provider serving both roles (the default)
+     * passes a full `ForgeProviderImpl`; one whose manifest declares
+     * `roles: ["issues"]` passes a `ForgeIssueProviderImpl`, which must include
+     * `resolveIssueRepo`. An implementation missing a member its declared roles
+     * require is rejected. The descriptor's `id` is namespaced to the
      * plugin at runtime as `{pluginId}.{descriptor.id}`. Returns a disposer that
      * unbinds the single implementation; all bindings are automatically removed
      * when the plugin is unloaded. Must be called during `activate()` — the
@@ -3949,7 +4019,7 @@ interface PluginActivationApi {
      * @throws {Error} If called after activation resolves or times out — the host
      *   is revoked and registration is rejected.
      */
-    registerForgeProvider(descriptor: ForgeProviderDescriptor, impl: ForgeProviderImpl): Promise<() => void>;
+    registerForgeProvider(descriptor: ForgeProviderDescriptor, impl: AnyForgeProviderImpl): Promise<() => void>;
     /**
      * Bind a runtime {@link FileDecorationProviderImpl} to a descriptor declared
      * in `contributes.fileDecorationProviders`. The descriptor's `id` is
@@ -4944,7 +5014,7 @@ interface ReadScreenRecord {
 }
 interface RegisteredForgeProviderRecord {
     descriptor: ForgeProviderDescriptor;
-    impl: ForgeProviderImpl;
+    impl: AnyForgeProviderImpl;
 }
 interface RegisteredFileDecorationProviderRecord {
     descriptor: FileDecorationProviderDescriptor;

@@ -23,6 +23,7 @@ import { auditForgeCall, summarizeForgeArgs } from "../forge/forgeAuditService.j
 import { getWorkspaceClient } from "../WorkspaceClient.js";
 import { GitService } from "../GitService.js";
 import { generateWorktreePath, validatePathPattern } from "../../../shared/utils/pathPattern.js";
+import { issueBranchName } from "../../../shared/utils/issueBranchName.js";
 import { resolveWorktreePattern } from "../../utils/worktreePattern.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 
@@ -39,6 +40,7 @@ interface IssueDetails {
   title: string;
   url: string;
   state: NormalizedIssueState;
+  branchName?: string;
 }
 
 /** Result data returned on success */
@@ -270,7 +272,7 @@ export const githubWorkIssueCommand: DaintreeCommand<GitHubWorkIssueArgs, GitHub
     // answer, matching the other forge command surfaces.
     let resolved;
     try {
-      resolved = await resolveForCwd(rootPath);
+      resolved = await resolveForCwd(rootPath, "issues");
     } catch (error) {
       // resolveForCwd throws distinct messages for "no remote", "no provider
       // registered", "provider not activated", etc. — preserve them rather than
@@ -315,6 +317,7 @@ export const githubWorkIssueCommand: DaintreeCommand<GitHubWorkIssueArgs, GitHub
         title: forgeIssue.title,
         url: forgeIssue.url,
         state: forgeIssue.state,
+        branchName: forgeIssue.branchName,
       };
     } catch (error) {
       if (error instanceof Error && error.name === "TimeoutError") {
@@ -349,7 +352,8 @@ export const githubWorkIssueCommand: DaintreeCommand<GitHubWorkIssueArgs, GitHub
     }
 
     // Generate or validate branch name
-    let branchName = customBranchName || generateBranchName(issue.number, issue.title);
+    let branchName =
+      customBranchName || issueBranchName(issue, generateBranchName(issue.number, issue.title));
 
     // Validate custom branch name if provided
     if (customBranchName) {
