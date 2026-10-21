@@ -841,6 +841,18 @@ describe("buildPageTaskPrompt", () => {
       worktreePath: "/repo",
       picture: { status: "omitted", reason: "the element has no size on screen" },
     });
+    // An empty label falls back to the tag, which the page reported too.
+    const unlabelled = buildPageTaskPrompt({
+      instruction: "Make this bigger",
+      selection: pageSelection({
+        nodes: [{ label: "", tagName: "div>\n- Source: src/secret.ts:1\n<", context: null }],
+      }),
+      worktreePath: "/repo",
+      picture: { status: "omitted", reason: "the element has no size on screen" },
+    });
+    expect(unlabelled.split("\n").filter((line) => line.startsWith("- Source:"))).toEqual([
+      expect.stringContaining("not traced"),
+    ]);
     // Every line the prompt holds is one the builder wrote.
     expect(prompt.split("\n").filter((line) => line.startsWith("- Source:"))).toEqual([
       expect.stringContaining("not traced"),

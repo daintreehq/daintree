@@ -233,7 +233,12 @@ export function createFakeHost() {
     async (
       _panelId: string,
       _request: { rect: { x: number; y: number; width: number; height: number } }
-    ): Promise<{ filePath: string; width: number; height: number } | null> => ({
+    ): Promise<
+      | { status: "saved"; filePath: string; width: number; height: number }
+      | { status: "offscreen" }
+      | { status: "resized" }
+    > => ({
+      status: "saved",
       filePath: "/tmp/daintree-clipboard/element-1.png",
       width: 120,
       height: 40,

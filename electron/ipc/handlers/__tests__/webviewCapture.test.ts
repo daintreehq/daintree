@@ -283,7 +283,7 @@ describe("webviewCapture element crop", () => {
       ctx: { webContentsId: number },
       panelId: string,
       request: unknown
-    ) => Promise<{ filePath: string; width: number; height: number } | null>;
+    ) => Promise<unknown>;
     return (request: unknown, sender = SENDER_VIEW) =>
       handler({ webContentsId: sender }, "panel-a", request);
   }
@@ -298,11 +298,13 @@ describe("webviewCapture element crop", () => {
     const result = await capture({
       rect: { x: 40, y: 80, width: 120, height: 40 },
       viewportWidth: 800,
+      viewportHeight: 600,
     });
 
     expect(bitmap.crops).toEqual([{ x: 64, y: 144, width: 272, height: 112 }]);
     expect(saved.calls).toEqual([Buffer.from("CROPPED")]);
     expect(result).toEqual({
+      status: "saved",
       filePath: "/tmp/daintree-clipboard/element-1.png",
       width: 272,
       height: 112,
@@ -314,7 +316,11 @@ describe("webviewCapture element crop", () => {
     guestRegistry.set(7, makeGuest());
     const capture = await getElementCapture();
 
-    await capture({ rect: { x: -50, y: 560, width: 200, height: 100 }, viewportWidth: 800 });
+    await capture({
+      rect: { x: -50, y: 560, width: 200, height: 100 },
+      viewportWidth: 800,
+      viewportHeight: 600,
+    });
     expect(bitmap.crops).toEqual([{ x: 0, y: 1104, width: 316, height: 96 }]);
   });
 
@@ -324,8 +330,31 @@ describe("webviewCapture element crop", () => {
     const capture = await getElementCapture();
 
     expect(
-      await capture({ rect: { x: 10, y: 2_000, width: 50, height: 50 }, viewportWidth: 800 })
-    ).toBeNull();
+      await capture({
+        rect: { x: 10, y: 2_000, width: 50, height: 50 },
+        viewportWidth: 800,
+        viewportHeight: 600,
+      })
+    ).toEqual({ status: "offscreen" });
+    expect(bitmap.crops).toEqual([]);
+    expect(saved.calls).toEqual([]);
+  });
+
+  it("crops nothing from a page resized since the box was measured", async () => {
+    dialogService.getWebContentsId.mockReturnValue(7);
+    guestRegistry.set(7, makeGuest());
+    // A drawer opened beside the page: the frame is narrower than the viewport
+    // the guest measured, so the box would frame the wrong part of it.
+    bitmap.size = { width: 1088, height: 1200 };
+    const capture = await getElementCapture();
+
+    expect(
+      await capture({
+        rect: { x: 40, y: 80, width: 120, height: 40 },
+        viewportWidth: 800,
+        viewportHeight: 600,
+      })
+    ).toEqual({ status: "resized" });
     expect(bitmap.crops).toEqual([]);
     expect(saved.calls).toEqual([]);
   });
@@ -338,10 +367,15 @@ describe("webviewCapture element crop", () => {
 
     for (const request of [
       null,
-      { rect: { x: 0, y: 0, width: 10, height: 10 }, viewportWidth: 0 },
-      { rect: { x: Number.NaN, y: 0, width: 10, height: 10 }, viewportWidth: 800 },
-      { rect: { x: 0, y: 0, width: -1, height: 10 }, viewportWidth: 800 },
-      { viewportWidth: 800 },
+      { rect: { x: 0, y: 0, width: 10, height: 10 }, viewportWidth: 0, viewportHeight: 600 },
+      { rect: { x: 0, y: 0, width: 10, height: 10 }, viewportWidth: 800 },
+      {
+        rect: { x: Number.NaN, y: 0, width: 10, height: 10 },
+        viewportWidth: 800,
+        viewportHeight: 600,
+      },
+      { rect: { x: 0, y: 0, width: -1, height: 10 }, viewportWidth: 800, viewportHeight: 600 },
+      { viewportWidth: 800, viewportHeight: 600 },
     ]) {
       await expect(capture(request)).rejects.toMatchObject({ code: "VALIDATION" });
     }
@@ -355,7 +389,10 @@ describe("webviewCapture element crop", () => {
     const capture = await getElementCapture();
 
     await expect(
-      capture({ rect: { x: 0, y: 0, width: 10, height: 10 }, viewportWidth: 800 }, SENDER_VIEW + 1)
+      capture(
+        { rect: { x: 0, y: 0, width: 10, height: 10 }, viewportWidth: 800, viewportHeight: 600 },
+        SENDER_VIEW + 1
+      )
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
     expect(capturePage).not.toHaveBeenCalled();
   });

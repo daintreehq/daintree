@@ -18,7 +18,10 @@ const MAX_SELECTOR_DEPTH = 8;
 const MAX_MARKUP_DEPTH = 2;
 const MAX_CHILDREN = 12;
 const MAX_ATTRIBUTE = 160;
+const MAX_ATTRIBUTES = 24;
 const MAX_TEXT = 80;
+/** Child nodes looked at per element, written or not: comments and whitespace cost a visit too. */
+const MAX_VISITS = 64;
 
 /**
  * Typography and colour are inherited, so a value the parent already has says
@@ -85,9 +88,17 @@ function clamp(text: string, max: number): string {
   return text.length <= max ? text : text.slice(0, Math.max(0, max - 1)) + "…";
 }
 
+/** HTML reports upper-case tag names and SVG keeps its own case; compared one way. */
+function nameOf(node: Element): string {
+  return node.tagName.toUpperCase();
+}
+
 function escapeIdent(value: string): string {
   if (typeof CSS !== "undefined" && typeof CSS.escape === "function") return CSS.escape(value);
-  return value.replace(/[^a-zA-Z0-9_-]/g, (char) => "\\" + char);
+  // CSSOM's identifier serialization, for the characters a page actually uses.
+  return value
+    .replace(/[^a-zA-Z0-9_-]/g, (char) => "\\" + char)
+    .replace(/^(-?)(\d)/, (_match, dash: string, digit: string) => `${dash}\\3${digit} `);
 }
 
 /**
@@ -103,9 +114,13 @@ function usableClass(name: string): boolean {
   return !(tail !== undefined && /\d/.test(tail));
 }
 
-function unique(document: Document, selector: string): boolean {
+type QueryRoot = Document | ShadowRoot;
+
+/** Whether `selector` finds this node and nothing else, in the tree the node is actually in. */
+function names(root: QueryRoot, selector: string, node: Element): boolean {
   try {
-    return document.querySelectorAll(selector).length === 1;
+    const found = root.querySelectorAll(selector);
+    return found.length === 1 && found[0] === node;
   } catch {
     return false;
   }
@@ -135,22 +150,33 @@ function step(node: Element): string {
  * render can make it match something else.
  */
 export function selectorFor(node: Element): string {
-  const document = node.ownerDocument;
+  const rootNode = node.getRootNode();
+  // Inside a shadow root the selector is relative to that root: a document
+  // query can't see the node at all, and would vouch for a light-DOM lookalike.
+  const root: QueryRoot =
+    typeof ShadowRoot !== "undefined" && rootNode instanceof ShadowRoot
+      ? rootNode
+      : node.ownerDocument;
   const parts: string[] = [];
   let current: Element | null = node;
   for (let depth = 0; current !== null && depth < MAX_SELECTOR_DEPTH; depth += 1) {
     const id = current.getAttribute("id");
     if (id !== null && id.length > 0 && id.length <= 80) {
       const anchor = "#" + escapeIdent(id);
-      if (unique(document, anchor)) {
+      if (names(root, anchor, current)) {
         parts.unshift(anchor);
         break;
       }
     }
     parts.unshift(step(current));
-    if (current.tagName === "BODY" || current.tagName === "HTML") break;
-    if (unique(document, parts.join(" > "))) break;
+    if (nameOf(current) === "BODY" || nameOf(current) === "HTML") break;
+    if (names(root, parts.join(" > "), node)) break;
     current = current.parentElement;
+  }
+  // Whole steps come off the front until it fits, never a cut through one:
+  // half a step is a selector that finds nothing, or something else.
+  while (parts.length > 1 && parts.join(" > ").length > GUEST_CONTEXT_LIMITS.selector) {
+    parts.shift();
   }
   return clamp(parts.join(" > "), GUEST_CONTEXT_LIMITS.selector);
 }
@@ -163,26 +189,99 @@ function escapeText(value: string): string {
   return value.replace(/&/g, "&amp;").replace(/</g, "&lt;");
 }
 
-/** What a field holds is the user's, not the page's design: it never leaves the page. */
+/**
+ * Attributes whose values describe the design: what the element is, what it
+ * says, how it is laid out. Any other value — a `data-token`, a CSRF meta's
+ * `content`, a nonce — may be the application's state or a credential, and
+ * is shown as present without being copied.
+ */
+const DESCRIPTIVE = new Set([
+  "id",
+  "class",
+  "role",
+  "type",
+  "name",
+  "for",
+  "href",
+  "src",
+  "srcset",
+  "alt",
+  "title",
+  "placeholder",
+  "style",
+  "width",
+  "height",
+  "disabled",
+  "hidden",
+  "tabindex",
+  "target",
+  "rel",
+  "lang",
+  "dir",
+  "colspan",
+  "rowspan",
+  "viewbox",
+  "fill",
+  "stroke",
+  "d",
+  "data-testid",
+  "data-state",
+]);
+
+/** What the user put into the page — typed, chosen, ticked — is theirs, never the page's design. */
+const USER_STATE = new Set(["value", "checked", "selected"]);
+
+/** Fields and editable regions: their content is whatever the user typed into them. */
 function holdsUserInput(node: Element): boolean {
-  return node.tagName === "INPUT" || node.tagName === "TEXTAREA" || node.tagName === "SELECT";
+  const name = nameOf(node);
+  if (name === "INPUT" || name === "TEXTAREA" || name === "SELECT" || name === "OPTION")
+    return true;
+  return node.closest('[contenteditable]:not([contenteditable="false"])') !== null;
+}
+
+/** A URL's path, without the userinfo, query values or fragment that carry tokens. */
+function redactUrlValue(value: string): string {
+  if (/^\s*data:/i.test(value) || /\bdata:[^,\s]*,/i.test(value)) return "data:…";
+  if (value.trimStart().startsWith("#")) return value;
+  return value
+    .replace(/\/\/[^/?#@\s]*@/g, "//")
+    .replace(/#.*$/s, "")
+    .replace(/([?&][^=&#\s]*)=[^&#\s]*/g, "$1=");
+}
+
+/** A CSS value with every `url(…)` emptied: an embedded payload or a tokened address. */
+function redactCssUrls(value: string): string {
+  return value.replace(/url\((?:[^()]|\([^)]*\))*\)/gi, "url(…)");
 }
 
 function attributeValue(node: Element, name: string, value: string): string | null {
+  const lower = name.toLowerCase();
   // Handlers are code, not design.
-  if (name.startsWith("on")) return null;
-  if (name === "value" && holdsUserInput(node)) return "[redacted]";
-  if (/^\s*data:/i.test(value) || /\bdata:[^,\s]*,/i.test(value)) return "data:…";
+  if (lower.startsWith("on")) return null;
+  if (USER_STATE.has(lower))
+    return holdsUserInput(node) ? "[redacted]" : clamp(value, MAX_ATTRIBUTE);
+  if (lower.startsWith("aria-")) return clamp(value, MAX_ATTRIBUTE);
+  if (!DESCRIPTIVE.has(lower)) return value === "" ? "" : "…";
+  if (lower === "style") return clamp(redactCssUrls(value), MAX_ATTRIBUTE);
+  if (lower === "href" || lower === "src" || lower === "srcset") {
+    return clamp(redactUrlValue(value), MAX_ATTRIBUTE);
+  }
+  if (/^\s*data:/i.test(value)) return "data:…";
   return clamp(value, MAX_ATTRIBUTE);
 }
 
 function openTag(node: Element): string {
   let tag = "<" + node.tagName.toLowerCase();
-  for (const attribute of Array.from(node.attributes)) {
+  const attributes = node.attributes;
+  const shown = Math.min(attributes.length, MAX_ATTRIBUTES);
+  for (let index = 0; index < shown; index += 1) {
+    const attribute = attributes[index];
+    if (attribute === undefined) continue;
     const value = attributeValue(node, attribute.name, attribute.value);
     if (value === null) continue;
     tag += value === "" ? ` ${attribute.name}` : ` ${attribute.name}="${escapeAttribute(value)}"`;
   }
+  if (attributes.length > shown) tag += " …";
   return tag + ">";
 }
 
@@ -202,27 +301,50 @@ const VOID = new Set([
   "WBR",
 ]);
 
-/** Children whose text is a payload, not content: said to be there, never copied. */
-const OPAQUE = new Set(["SCRIPT", "STYLE", "TEXTAREA", "TEMPLATE", "NOSCRIPT"]);
+/**
+ * Children whose text is a payload or the user's own, not content: said to be
+ * there, never copied. A select's options are what the user chose among.
+ */
+const OPAQUE = new Set(["SCRIPT", "STYLE", "TEXTAREA", "TEMPLATE", "NOSCRIPT", "SELECT"]);
 
-function writeMarkup(node: Element, depth: number, out: string[]): void {
-  out.push(openTag(node));
-  if (VOID.has(node.tagName)) return;
-  if (OPAQUE.has(node.tagName)) {
-    if (node.textContent !== null && node.textContent.length > 0) out.push("…");
+/** The excerpt so far, and how long it is: writing stops once it can't fit anything more. */
+interface Excerpt {
+  parts: string[];
+  length: number;
+}
+
+function write(out: Excerpt, text: string): void {
+  out.parts.push(text);
+  out.length += text.length;
+}
+
+function writeMarkup(node: Element, depth: number, out: Excerpt): void {
+  if (out.length > GUEST_CONTEXT_LIMITS.markup) return;
+  write(out, openTag(node));
+  const name = nameOf(node);
+  if (VOID.has(name)) return;
+  const editable = holdsUserInput(node);
+  if (OPAQUE.has(name) || editable) {
+    if (node.firstChild !== null) write(out, editable ? "[redacted]" : "…");
   } else if (depth >= MAX_MARKUP_DEPTH) {
-    if (node.childNodes.length > 0) out.push("…");
+    if (node.firstChild !== null) write(out, "…");
   } else {
     let written = 0;
-    for (const child of Array.from(node.childNodes)) {
-      if (written >= MAX_CHILDREN) {
-        out.push("…");
+    let visits = 0;
+    for (let child = node.firstChild; child !== null; child = child.nextSibling) {
+      visits += 1;
+      if (
+        written >= MAX_CHILDREN ||
+        visits > MAX_VISITS ||
+        out.length > GUEST_CONTEXT_LIMITS.markup
+      ) {
+        write(out, "…");
         break;
       }
       if (child.nodeType === 3) {
         const text = (child.textContent ?? "").replace(/\s+/g, " ").trim();
         if (text.length === 0) continue;
-        out.push(escapeText(clamp(text, MAX_TEXT)));
+        write(out, escapeText(clamp(text, MAX_TEXT)));
         written += 1;
       } else if (child.nodeType === 1) {
         writeMarkup(child as Element, depth + 1, out);
@@ -230,14 +352,14 @@ function writeMarkup(node: Element, depth: number, out: string[]): void {
       }
     }
   }
-  out.push(`</${node.tagName.toLowerCase()}>`);
+  write(out, `</${node.tagName.toLowerCase()}>`);
 }
 
 /** The element's markup two levels deep, with input values, payloads and handlers left out. */
 export function markupFor(node: Element): { markup: string; truncated: boolean } {
-  const out: string[] = [];
+  const out: Excerpt = { parts: [], length: 0 };
   writeMarkup(node, 0, out);
-  const markup = out.join("");
+  const markup = out.parts.join("");
   if (markup.length <= GUEST_CONTEXT_LIMITS.markup) return { markup, truncated: false };
   return { markup: markup.slice(0, GUEST_CONTEXT_LIMITS.markup - 1) + "…", truncated: true };
 }
@@ -261,7 +383,7 @@ export function stylesFor(node: Element): ElementContext["styles"] {
   const out: ElementContext["styles"] = [];
   const push = (property: string, value: string) => {
     if (out.length >= GUEST_CONTEXT_LIMITS.styles) return;
-    out.push({ property, value: clamp(value, GUEST_CONTEXT_LIMITS.value) });
+    out.push({ property, value: clamp(redactCssUrls(value), GUEST_CONTEXT_LIMITS.value) });
   };
   for (const [property, baseline] of OWN) {
     const value = style.getPropertyValue(property).trim();

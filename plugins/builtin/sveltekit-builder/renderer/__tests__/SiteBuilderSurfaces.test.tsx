@@ -44,6 +44,7 @@ import { usePanelStore } from "@/store/panelStore";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { whenPluginUiReady } from "@daintreehq/plugin-ui";
+import { __resetAgentRequestsForTests } from "@/services/agentRequests";
 import {
   FILE,
   OBSERVATION,
@@ -2837,6 +2838,11 @@ describe("a worktree with no SvelteKit app", () => {
     },
   };
 
+  afterEach(() => {
+    // Delivery remembers each terminal it typed into; these tests really send.
+    __resetAgentRequestsForTests();
+  });
+
   async function mountWithNoApp(scanComplete = true) {
     host.handlers.set(CHANNELS.workspaceOpen, () => ({ status: "no-app", scanComplete }));
     mount();
@@ -2932,6 +2938,7 @@ describe("a worktree with no SvelteKit app", () => {
     expect(host.captureElement).toHaveBeenCalledWith("preview-1", {
       rect: { x: 40, y: 80, width: 120, height: 40 },
       viewportWidth: 800,
+      viewportHeight: 600,
     });
 
     fireEvent.change(request, { target: { value: "Make this bigger" } });
@@ -2956,7 +2963,7 @@ describe("a worktree with no SvelteKit app", () => {
   it("goes without a picture, and says why, when the element is off screen", async () => {
     withAgent("term-offscreen");
     const sent = await recordSends();
-    host.captureElement.mockResolvedValueOnce(null);
+    host.captureElement.mockResolvedValueOnce({ status: "offscreen" });
     await mountWithNoApp();
     await act(async () => host.select(0, [PAGE_NODE]));
     const request = await screen.findByRole("textbox", { name: "Request for the agent" });
@@ -2968,6 +2975,38 @@ describe("a worktree with no SvelteKit app", () => {
     expect(sent[0]).toContain(
       "- Screenshot: not attached — the element is outside the visible page"
     );
+  });
+
+  it("makes a click from before the worktree search finished sendable once it has", async () => {
+    let answer: (result: unknown) => void = () => {};
+    host.handlers.set(CHANNELS.workspaceOpen, () => new Promise((resolve) => (answer = resolve)));
+    mount();
+    await waitFor(() => expect(host.sitePreview.bind).toHaveBeenCalled());
+    await screen.findByRole("radio", { name: "Browse" });
+    await act(async () => host.documentReady(0));
+    await act(async () => host.select(0, [PAGE_NODE]));
+    expect(screen.queryByRole("textbox", { name: "Request for the agent" })).toBeNull();
+    expect(host.captureElement).not.toHaveBeenCalled();
+
+    await act(async () => answer({ status: "no-app", scanComplete: true }));
+    await screen.findByRole("textbox", { name: "Request for the agent" });
+    expect(host.captureElement).toHaveBeenCalledTimes(1);
+  });
+
+  it("doesn't say the page's components went untraced where there is nothing to trace", async () => {
+    await mountWithNoApp();
+    await act(async () =>
+      host.pushPreview({
+        kind: "guest-event",
+        sessionId: "session-1",
+        panelId: "preview-1",
+        projectId: "p1",
+        documentEpoch: 0,
+        sequence: 2,
+        event: { type: "metadataProbed", locations: true, ancestry: false },
+      })
+    );
+    expect(session().getSnapshot().issue).toBeNull();
   });
 
   it("doesn't warn that the page has no Svelte metadata", async () => {

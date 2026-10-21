@@ -528,7 +528,11 @@ export function buildPageTaskPrompt(context: PageTaskContext): string {
     "- Source: not traced — the page doesn't say which file renders this; find it in the worktree from the selector and markup below"
   );
   selection.nodes.forEach((node, index) => {
-    const name = elementName(node.label, node.tagName, "element");
+    // The tag is the page's word here too — no source read it — so it is
+    // quoted like the label, never written as though Daintree had checked it.
+    const name = pageData(
+      node.label.trim() !== "" ? node.label : `<${node.tagName.toLowerCase()}>`
+    );
     lines.push(`- ${index === 0 ? "Selected element" : "Also selected"}: ${name}`);
     const context = node.context;
     if (context === null) {

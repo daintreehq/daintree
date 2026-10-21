@@ -239,13 +239,15 @@ describe("clipboard:save-image cleanup trigger", () => {
   });
 
   it("runs cleanup fire-and-forget after writing the image", async () => {
+    // Registration sweeps at startup — pasted images and element captures
+    // both — so only a sweep after the save proves the save started one.
+    await vi.waitFor(() => expect(vi.mocked(fsPromises.readdir).mock.calls.length).toBe(2));
+    vi.mocked(fsPromises.readdir).mockClear();
     const handler = getHandler("clipboard:save-image");
     await handler(fakeEvent);
 
     expect(writeHandle.writeFile).toHaveBeenCalled();
-    // cleanup reads the clipboard dir; startup also runs it once, so assert it
-    // ran again after the save (≥2 invocations total).
-    expect(vi.mocked(fsPromises.readdir).mock.calls.length).toBeGreaterThanOrEqual(2);
+    await vi.waitFor(() => expect(fsPromises.readdir).toHaveBeenCalledTimes(1));
   });
 
   it("verifies the clipboard dir as owner-only before every save", async () => {

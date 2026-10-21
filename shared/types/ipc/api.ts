@@ -1334,16 +1334,22 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     ): Promise<{ pngBase64: string; width: number; height: number }>;
     /**
      * Capture the panel's page cropped to one box, given in the page's CSS
-     * pixels against its own `innerWidth`, and save it where agents read
-     * pasted images. Null when the box shows nothing on screen.
+     * pixels against its own viewport size, and save it where agents read
+     * pasted images. `offscreen` when the box shows nothing on screen,
+     * `resized` when the page no longer has the size the box was measured at.
      */
     captureElement(
       panelId: string,
       request: {
         rect: { x: number; y: number; width: number; height: number };
         viewportWidth: number;
+        viewportHeight: number;
       }
-    ): Promise<{ filePath: string; width: number; height: number } | null>;
+    ): Promise<
+      | { status: "saved"; filePath: string; width: number; height: number }
+      | { status: "offscreen" }
+      | { status: "resized" }
+    >;
     /** Read Chromium navigation history for the webview */
     getNavigationHistory(
       webContentsId: number

@@ -1788,9 +1788,30 @@ describe("a page with no Svelte metadata", () => {
       .dispatchEvent(new MouseEvent("pointermove", { bubbles: true, composed: true }));
 
     const hovers = events("hoverChanged");
-    expect(hovers.length).toBeGreaterThan(0);
-    for (const event of hovers) {
-      if (event.type === "hoverChanged") expect(event.node?.context).toBeUndefined();
-    }
+    expect(hovers).toHaveLength(1);
+    const [hover] = hovers;
+    expect(hover?.type === "hoverChanged" ? hover.node?.label : null).toBe("button.cta");
+    expect(hover?.type === "hoverChanged" ? hover.node?.context : null).toBeUndefined();
+  });
+
+  it("walks the plain DOM with the arrow keys", () => {
+    document.body.innerHTML =
+      '<main id="app"><ul><li id="one">a</li><li id="two">b</li></ul></main>';
+    install("select");
+    click(document.getElementById("one")!);
+    const key = (name: string) =>
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: name, bubbles: true }));
+
+    key("ArrowRight");
+    expect(lastSelection()[0]?.label).toBe("li#two");
+    key("ArrowUp");
+    expect(lastSelection()[0]?.label).toBe("ul");
+    key("ArrowUp");
+    expect(lastSelection()[0]?.label).toBe("main#app");
+    // The body is the document's frame, not something to point an agent at.
+    key("ArrowUp");
+    expect(lastSelection()[0]?.label).toBe("main#app");
+    key("ArrowDown");
+    expect(lastSelection()[0]?.label).toBe("ul");
   });
 });

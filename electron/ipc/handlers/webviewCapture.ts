@@ -22,13 +22,17 @@ const MAX_CSS_EXTENT = 100_000;
 type ElementCaptureRequest = {
   /** The element's box in the page's viewport, in CSS pixels. */
   rect: { x: number; y: number; width: number; height: number };
-  /** The page's own `innerWidth` when the rect was measured. */
+  /** The page's own `innerWidth` and `innerHeight` when the rect was measured. */
   viewportWidth: number;
+  viewportHeight: number;
 };
+
+/** How far the captured frame's shape may drift from the measured viewport's: rounding, not a resize. */
+const VIEWPORT_ASPECT_TOLERANCE = 0.02;
 
 function validElementRequest(request: unknown): request is ElementCaptureRequest {
   if (typeof request !== "object" || request === null) return false;
-  const { rect, viewportWidth } = request as Partial<ElementCaptureRequest>;
+  const { rect, viewportWidth, viewportHeight } = request as Partial<ElementCaptureRequest>;
   const bounded = (value: unknown, min: number) =>
     typeof value === "number" &&
     Number.isFinite(value) &&
@@ -37,6 +41,7 @@ function validElementRequest(request: unknown): request is ElementCaptureRequest
   if (typeof rect !== "object" || rect === null) return false;
   return (
     bounded(viewportWidth, 1) &&
+    bounded(viewportHeight, 1) &&
     bounded(rect.x, -MAX_CSS_EXTENT) &&
     bounded(rect.y, -MAX_CSS_EXTENT) &&
     bounded(rect.width, 0) &&
@@ -178,8 +183,13 @@ export const webviewCaptureNamespace = defineIpcNamespace({
         request: {
           rect: { x: number; y: number; width: number; height: number };
           viewportWidth: number;
+          viewportHeight: number;
         }
-      ) => {
+      ): Promise<
+        | { status: "saved"; filePath: string; width: number; height: number }
+        | { status: "offscreen" }
+        | { status: "resized" }
+      > => {
         if (!validElementRequest(request)) {
           throw new AppError({
             code: "VALIDATION",
@@ -194,6 +204,14 @@ export const webviewCaptureNamespace = defineIpcNamespace({
         // assuming what either is.
         const bitmap = nativeImage.createFromBuffer(image.toPNG());
         const size = bitmap.getSize();
+        // A frame of another shape is a page that was resized after the box
+        // was measured — a drawer opening beside it, say — and the box no
+        // longer frames the element in it.
+        const measured = request.viewportWidth / request.viewportHeight;
+        const captured = size.width / Math.max(1, size.height);
+        if (Math.abs(captured - measured) / measured > VIEWPORT_ASPECT_TOLERANCE) {
+          return { status: "resized" };
+        }
         const scale = size.width / request.viewportWidth;
         const margin = ELEMENT_CROP_MARGIN * scale;
         const { rect } = request;
@@ -203,11 +221,11 @@ export const webviewCaptureNamespace = defineIpcNamespace({
         const bottom = Math.min(size.height, Math.ceil((rect.y + rect.height) * scale + margin));
         // Scrolled out of view, or too small to show anything: no picture,
         // which the caller says rather than attaching an empty one.
-        if (right - left < 2 || bottom - top < 2) return null;
+        if (right - left < 2 || bottom - top < 2) return { status: "offscreen" };
         const cropped = bitmap.crop({ x: left, y: top, width: right - left, height: bottom - top });
-        if (cropped.isEmpty()) return null;
+        if (cropped.isEmpty()) return { status: "offscreen" };
         const filePath = await saveElementCapture(cropped.toPNG());
-        return { filePath, width: right - left, height: bottom - top };
+        return { status: "saved", filePath, width: right - left, height: bottom - top };
       },
       { withContext: true }
     ),

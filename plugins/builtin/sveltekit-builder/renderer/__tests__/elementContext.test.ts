@@ -84,8 +84,77 @@ describe("the guest's element context", () => {
     expect(markup).toContain('src="data:…"');
   });
 
+  it("keeps what the user typed or chose out, wherever it lives", () => {
+    mountHtml(
+      [
+        '<div id="f">',
+        '<div contenteditable="true"><p>my private note</p></div>',
+        '<select><option selected value="acct-12345">Personal</option></select>',
+        '<input type="checkbox" checked>',
+        "</div>",
+      ].join("")
+    );
+    const { markup } = markupFor(byId("f"));
+    expect(markup).not.toContain("my private note");
+    expect(markup).not.toContain("acct-12345");
+    expect(markup).not.toContain("Personal");
+    expect(markup).toContain('checked="[redacted]"');
+    // Selecting inside the editable region is no way round it.
+    expect(markupFor(document.querySelector("[contenteditable] p")!).markup).not.toContain(
+      "my private note"
+    );
+  });
+
+  it("shows an attribute that may hold a credential without copying its value", () => {
+    mountHtml(
+      [
+        '<div id="f" data-token="s3cret-token" nonce="n0nce">',
+        '<a href="https://user:pw@example.com/reset?token=s3cret-token&amp;step=2#access=s3cret-token">Reset</a>',
+        '<span style="background: url(data:image/svg+xml,s3cret-token)">x</span>',
+        "</div>",
+      ].join("")
+    );
+    const { markup } = markupFor(byId("f"));
+    expect(markup).not.toContain("s3cret-token");
+    expect(markup).not.toContain("n0nce");
+    expect(markup).not.toContain("pw@");
+    expect(markup).toContain('data-token="…"');
+    expect(markup).toContain('href="https://example.com/reset?token=&amp;step="');
+  });
+
+  it("treats an SVG's script and style as payloads, as HTML's are", () => {
+    mountHtml(
+      '<svg id="s" xmlns="http://www.w3.org/2000/svg"><style>.a{}/* s3cret */</style><script>s3cret()</script><g/></svg>'
+    );
+    expect(markupFor(byId("s")).markup).not.toContain("s3cret");
+  });
+
+  it("names the selected node itself inside a shadow root, not a light-DOM lookalike", () => {
+    mountHtml('<button class="cta">Outside</button><div id="host"></div>');
+    const shadow = byId("host").attachShadow({ mode: "open" });
+    shadow.innerHTML = '<section><button class="cta">Inside</button></section>';
+    const inside = shadow.querySelector("button")!;
+    const selector = selectorFor(inside);
+    expect(shadow.querySelector(selector)).toBe(inside);
+  });
+
+  it("drops whole leading steps to fit a long selector, never cutting one in half", () => {
+    const long = "a".repeat(39);
+    let html = "<p>x</p>";
+    for (let depth = 0; depth < 8; depth += 1) {
+      html = `<div class="${long}${depth} ${long}x${depth}">${html}</div><div class="${long}${depth} ${long}x${depth}"></div>`;
+    }
+    mountHtml(html);
+    const selector = selectorFor(document.querySelector("p")!);
+    expect(selector.length).toBeLessThanOrEqual(GUEST_CONTEXT_LIMITS.selector);
+    expect(selector).not.toContain("…");
+    expect(() => document.querySelectorAll(selector)).not.toThrow();
+  });
+
   it("cuts the markup at its ceiling and says it did", () => {
-    const attributes = Array.from({ length: 6 }, (_, i) => `data-a${i}="${"v".repeat(150)}"`);
+    const attributes = ["title", "alt", "placeholder", "aria-label", "aria-description"].map(
+      (name) => `${name}="${"v".repeat(150)}"`
+    );
     const items = Array.from({ length: 12 }, () => `<li ${attributes.join(" ")}>item</li>`);
     mountHtml(`<ul id="list">${items.join("")}</ul>`);
     const { markup, truncated } = markupFor(byId("list"));
@@ -121,6 +190,25 @@ describe("the guest's element context", () => {
       stylesFor(child).map((entry) => [entry.property, entry.value])
     );
     expect(styles).toEqual({ display: "block", "font-size": "20px", margin: "12px" });
+  });
+
+  it("empties every url() in a computed value: an embedded payload or a tokened address", () => {
+    mountHtml('<div id="parent"><p id="child">Hi</p></div>');
+    computedStyles(
+      new Map<Element, Record<string, string>>([
+        [byId("parent"), {}],
+        [
+          byId("child"),
+          {
+            "background-image": 'url("data:image/svg+xml,s3cret")',
+            cursor: "url(https://cdn.example/c.png?sig=s3cret), auto",
+          },
+        ],
+      ])
+    );
+    const styles = stylesFor(byId("child"));
+    expect(JSON.stringify(styles)).not.toContain("s3cret");
+    expect(styles).toContainEqual({ property: "background-image", value: "url(…)" });
   });
 
   it("produces what the host's schema accepts, even for a hostile page", () => {
