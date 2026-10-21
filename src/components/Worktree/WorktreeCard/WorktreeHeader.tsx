@@ -423,7 +423,6 @@ export function WorktreeHeader({
 
         <WorktreeActionsToolbar
           isCollapsed={isCollapsed ?? false}
-          isActive={isActive}
           onCleanupWorktree={onCleanupWorktree}
           canCollapse={canCollapse ?? false}
           onToggleCollapse={onToggleCollapse}

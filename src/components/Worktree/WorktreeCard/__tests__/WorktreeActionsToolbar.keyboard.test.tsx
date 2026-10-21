@@ -55,7 +55,6 @@ function renderToolbar(isCollapsed = false) {
     <TooltipProvider delayDuration={0}>
       <WorktreeActionsToolbar
         isCollapsed={isCollapsed}
-        isActive={false}
         onCleanupWorktree={noop}
         canCollapse={true}
         onToggleCollapse={noop}
@@ -123,7 +122,6 @@ describe("WorktreeActionsToolbar keyboard navigation", () => {
         <div onKeyDown={outerKeyDown}>
           <WorktreeActionsToolbar
             isCollapsed={false}
-            isActive={false}
             onCleanupWorktree={noop}
             canCollapse={true}
             onToggleCollapse={noop}
@@ -152,7 +150,6 @@ describe("WorktreeActionsToolbar keyboard navigation", () => {
         <div onKeyDown={outerKeyDown}>
           <WorktreeActionsToolbar
             isCollapsed={false}
-            isActive={false}
             onCleanupWorktree={noop}
             canCollapse={true}
             onToggleCollapse={noop}

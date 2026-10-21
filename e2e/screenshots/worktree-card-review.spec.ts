@@ -869,6 +869,78 @@ test("sidebar worktree card review — states and themes", async () => {
       await toastFrame("89b-copy-path-error-toast", "Couldn't copy path");
     });
 
+    // 9c. The header toolbar at rest and under the pointer, on the active card
+    //     and on an inactive sibling. Rest versus hover only means anything as
+    //     a pair, so each card is shot twice with the same clip. The shots are
+    //     clipped from the page rather than taken off the element, because an
+    //     element shot scrolls the target into view and Chromium drops the
+    //     hover on the way.
+    const toolbarPair = async (prefix: string, rowLocator: Locator) => {
+      const card = rowLocator.locator(".sidebar-worktree-card").first();
+      const toolbar = rowLocator.locator("[data-worktree-row-toolbar]").first();
+      await card.scrollIntoViewIfNeeded();
+      await page.mouse.move(1600, 980);
+      await snapUnion(page, `${prefix}-rest`, [card], 8);
+      const box = await card.boundingBox();
+      if (!box) throw new Error(`"${prefix}": card has no box to hover`);
+      // The card's empty right-hand side under the title row: hovering the
+      // title itself opens the issue hover card over the toolbar.
+      await page.mouse.move(box.x + box.width - 24, box.y + 44);
+      await snapUnion(page, `${prefix}-card-hover`, [card], 8);
+      const remove = toolbar.locator('[aria-label="Delete worktree"]').first();
+      if (await remove.isVisible().catch(() => false)) {
+        await remove.hover();
+        await page.waitForTimeout(900);
+        await snapUnion(page, `${prefix}-delete-hover`, [toolbar], 56);
+      }
+      await page.mouse.move(1600, 980);
+    };
+
+    await step("toolbar-states", async () => {
+      await setSection(flagship, "details", false);
+      await setSection(quiet, "details", false);
+      const flagshipCard = flagship.locator(".sidebar-worktree-card").first();
+      if ((await flagshipCard.getAttribute("data-active")) !== "true") await flagshipCard.click();
+      await expect(flagshipCard, "flagship is not the active worktree").toHaveAttribute(
+        "data-active",
+        "true",
+        { timeout: T_LONG }
+      );
+      await toolbarPair("90-toolbar-active", flagship);
+      await toolbarPair("92-toolbar-inactive", quiet);
+      await page.mouse.move(1600, 980);
+      await snap(page, "94-sidebar-toolbars-rest", sidebar);
+      await setCardCollapsed(plain, true);
+      await toolbarPair("95-toolbar-collapsed", plain);
+      await setCardCollapsed(plain, false);
+    });
+
+    // 9d. The inactive card's toolbar, at rest and hovered, across a theme
+    //     sweep. Its resting ink is the thing most likely to collapse on a
+    //     single theme, light ones especially.
+    await step("toolbar-themes", async () => {
+      const themes = (
+        process.env.DAINTREE_SHOT_TOOLBAR_THEMES ??
+        "daintree,namib,redwoods,svalbard,bondi,hokkaido"
+      )
+        .split(",")
+        .map((t) => t.trim())
+        .filter(Boolean);
+      for (const theme of themes) {
+        await page.mouse.move(1600, 980);
+        await setAppTheme(page, theme);
+        await page.addStyleTag({ content: POLISH_CSS }).catch(() => {});
+        await dismissBlockingPalette(page);
+        const themedQuiet = row(page, WORKTREES.quiet.branch);
+        await expect(themedQuiet, `card missing after switching to ${theme}`).toBeVisible({
+          timeout: T_LONG,
+        });
+        await settle(page, 600);
+        await toolbarPair(`96-toolbar-theme-${theme}`, themedQuiet);
+      }
+      if (THEME) await setAppTheme(page, THEME);
+    });
+
     // 10. Sessions. Real PTYs in the flagship worktree so Active Sessions has
     //     agent identity, state and location to render — the densest row in
     //     the card and the one that shares a shell with Details.
