@@ -1745,10 +1745,9 @@ describe("useDevServer adversarial races", () => {
       );
 
       await waitFor(() => expect(ensureMock).toHaveBeenCalledTimes(1));
-      expect(ensureMock.mock.calls[0][0]).toMatchObject({
-        devCommand: "",
-        endpoint: "http://box.example.ts.net:5173",
-      });
+      expect(ensureMock).toHaveBeenCalledWith(
+        expect.objectContaining({ devCommand: "", endpoint: "http://box.example.ts.net:5173" })
+      );
     });
 
     it("never falls back to the dev command while no endpoint is ready", async () => {
@@ -1780,6 +1779,41 @@ describe("useDevServer adversarial races", () => {
       expect(ensureMock).toHaveBeenLastCalledWith(
         expect.objectContaining({ endpoint: "http://10.0.0.9:5173", resumeUserStopped: true })
       );
+    });
+
+    it("drops a restart's reconnect once Stop lands mid-cycle, and runs one cycle at a time", async () => {
+      let finishCycle: (endpoint: string) => void = () => {};
+      const refreshEndpoint = vi.fn(
+        () =>
+          new Promise<string | null>((resolve) => {
+            finishCycle = resolve;
+          })
+      );
+      const { result } = renderHook(() =>
+        useDevServer({ ...endpointProps, endpoint: "http://10.0.0.8:5173", refreshEndpoint })
+      );
+      await waitFor(() => expect(ensureMock).toHaveBeenCalledTimes(1));
+
+      let restarting!: Promise<void>;
+      act(() => {
+        restarting = result.current.restart();
+      });
+      await waitFor(() => expect(result.current.isRestarting).toBe(true));
+      await act(async () => {
+        await result.current.restart();
+      });
+      expect(refreshEndpoint).toHaveBeenCalledTimes(1);
+
+      act(() => {
+        result.current.stop();
+      });
+      await act(async () => {
+        finishCycle("http://10.0.0.9:5173");
+        await restarting;
+      });
+
+      expect(ensureMock).toHaveBeenCalledTimes(1);
+      expect(stopMock).toHaveBeenCalledTimes(1);
     });
 
     it("surfaces a failed resource step instead of reconnecting", async () => {

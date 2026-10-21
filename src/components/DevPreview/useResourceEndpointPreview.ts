@@ -16,6 +16,7 @@ export function useResourceEndpointPreview(
 ): {
   endpoint: string | null | undefined;
   refreshEndpoint: (() => Promise<string | null>) | undefined;
+  checkEndpoint: (() => void) | undefined;
 } {
   const reported = useWorktreeStoreOptional(
     useCallback(
@@ -47,7 +48,14 @@ export function useResourceEndpointPreview(
     return status.result?.status?.endpoint ?? null;
   }, [worktreeId]);
 
+  // A plain status check: the endpoint it reports lands in the worktree store,
+  // which re-ensures the panel. Failures notify from the action itself.
+  const checkEndpoint = useCallback(() => {
+    if (!worktreeId) return;
+    void actionService.dispatch("worktree.resource.status", { worktreeId }, { source: "user" });
+  }, [worktreeId]);
+
   return enabled
-    ? { endpoint: reported, refreshEndpoint }
-    : { endpoint: undefined, refreshEndpoint: undefined };
+    ? { endpoint: reported, refreshEndpoint, checkEndpoint }
+    : { endpoint: undefined, refreshEndpoint: undefined, checkEndpoint: undefined };
 }

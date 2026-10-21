@@ -169,6 +169,10 @@ export function useDevServer({
   const lastEnsureConfigRef = useRef<string>("");
   const pendingEnsureRef = useRef<{ configKey: string; resume: boolean } | null>(null);
   const userStoppedRef = useRef(false);
+  // Bumped by every endpoint restart and every Stop. A restart whose resource
+  // cycle finishes after its number moved on was superseded and must not connect.
+  const endpointCycleRef = useRef(0);
+  const endpointCyclingRef = useRef(false);
   const requestVersionRef = useRef(0);
 
   const latestContextRef = useRef<{
@@ -356,8 +360,12 @@ export function useDevServer({
     if (!latest.projectId) return;
     persistedEnsureCache.delete(latest.panelId);
     lastEnsureConfigRef.current = "";
-    // A Start queued behind an in-flight ensure must not resume after this Stop.
+    // A Start queued behind an in-flight ensure must not resume after this Stop,
+    // nor an endpoint restart still cycling its resource.
     pendingEnsureRef.current = null;
+    endpointCycleRef.current += 1;
+    endpointCyclingRef.current = false;
+    setIsRestarting(false);
     const requestVersion = requestVersionRef.current;
     const requestProjectId = latest.projectId;
     const requestPanelId = latest.panelId;
@@ -388,14 +396,23 @@ export function useDevServer({
     // nor resume refreshes the endpoint: cycle it, take the fresh endpoint from
     // its status, and reconnect to that (#13688).
     if (latest.endpoint !== undefined && latest.refreshEndpoint) {
+      if (endpointCyclingRef.current) return;
+      const cycle = ++endpointCycleRef.current;
+      endpointCyclingRef.current = true;
+      setIsRestarting(true);
       let fresh: string | null;
       try {
         fresh = await latest.refreshEndpoint();
       } catch (err) {
-        applyInvokeError(err);
+        if (cycle === endpointCycleRef.current) applyInvokeError(err);
         return;
+      } finally {
+        if (cycle === endpointCycleRef.current) {
+          endpointCyclingRef.current = false;
+          if (isMountedRef.current) setIsRestarting(false);
+        }
       }
-      if (!isMountedRef.current) return;
+      if (!isMountedRef.current || cycle !== endpointCycleRef.current) return;
       latestContextRef.current = { ...latestContextRef.current, endpoint: fresh };
       persistedEnsureCache.delete(latest.panelId);
       await start();
@@ -570,6 +587,9 @@ export function useDevServer({
     // whether by cold launch or live switch, brings its dev server back. A panel
     // the user stopped is not: Main refuses this (non-resume) ensure (#13169).
     if (!initialStateResolved) return;
+    // An endpoint restart is mid-cycle: the endpoint it reconnects to comes from its
+    // own fresh status check, not from whatever the store reported on the way.
+    if (endpointCyclingRef.current) return;
 
     const configKey = buildEnsureConfigKey({
       projectId: currentProjectId,

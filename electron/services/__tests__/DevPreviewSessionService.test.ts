@@ -2292,6 +2292,24 @@ describe("DevPreviewSessionService resource endpoint sessions (#13688)", () => {
     expect(service.resolveUpstream(subdomain)).toMatchObject({ host: "box.example.ts.net" });
   });
 
+  it("rewrites the manifest when a running dev command gives way to the endpoint", async () => {
+    vi.spyOn(portAllocator, "waitForPortFree").mockResolvedValue(true);
+    const persisted: DevPreviewManifestEntry[][] = [];
+    service.dispose();
+    service = new DevPreviewSessionService(
+      ptyClient as unknown as PtyClient,
+      vi.fn(),
+      [],
+      (entries) => persisted.push(entries)
+    );
+    await service.ensure({ ...endpointRequest, devCommand: "npm run dev", endpoint: undefined });
+    expect(persisted.at(-1)).toHaveLength(1);
+
+    await service.ensure(endpointRequest);
+
+    expect(persisted.at(-1)).toEqual([]);
+  });
+
   it("leaves endpoint sessions out of the restore manifest", async () => {
     await service.ensure(endpointRequest);
     expect(service.captureManifest()).toEqual([]);

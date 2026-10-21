@@ -38,7 +38,14 @@ export function installHostPortService(
     options.resolvePreview ??
     (async (subdomain: string) => {
       const { resolveLocalDevPreviewUpstream } = await import("../../ipc/handlers/devPreview.js");
-      return PreviewResolutionSchema.parse(resolveLocalDevPreviewUpstream(subdomain));
+      const resolution = resolveLocalDevPreviewUpstream(subdomain);
+      // A resource endpoint (#13688) lives on its own host, but the forward a client
+      // opens reaches only this machine's loopback port of the same number: answering
+      // with the port alone would preview whatever else listens there.
+      if (resolution.kind === "ok" && resolution.host !== undefined) {
+        return { kind: "not-running", status: "error" } satisfies PreviewResolution;
+      }
+      return PreviewResolutionSchema.parse(resolution);
     });
   const live = new Set<{ dispose(): void }>();
   let cached: { at: number; result: Promise<HostListeningPort[]> } | null = null;

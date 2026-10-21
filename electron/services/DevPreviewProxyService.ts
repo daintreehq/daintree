@@ -1,6 +1,7 @@
 import http from "node:http";
 import { createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import type { AddressInfo, Socket } from "node:net";
+import tls from "node:tls";
 import type { Duplex } from "node:stream";
 import { createProxyServer, type ProxyServer, type ProxyServerOptions } from "httpxy";
 import ipaddr from "ipaddr.js";
@@ -382,7 +383,13 @@ export class DevPreviewProxyService {
     const authority = isLiteral && host.includes(":") ? `[${host}]` : host;
     return {
       target: `${scheme}://${authority}:${resolution.port}`,
-      ssl: { lookup: createPrivateNetworkLookup() },
+      ssl: {
+        lookup: createPrivateNetworkLookup(),
+        // httpxy hands Node an IPv6 literal still bracketed, and Node checks the cert
+        // against that string, so a cert with the right IP SAN would never match.
+        checkServerIdentity: (hostname: string, cert: tls.PeerCertificate) =>
+          tls.checkServerIdentity(hostname.replace(/^\[(.*)\]$/, "$1"), cert),
+      },
     };
   }
 

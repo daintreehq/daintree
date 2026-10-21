@@ -1282,6 +1282,7 @@ export class DevPreviewSessionService {
         isRestarting: false,
         phaseLabel: undefined,
       });
+      this.persistManifest();
       return;
     }
     this.recordSessionDiagnostic(session, {
@@ -1298,6 +1299,10 @@ export class DevPreviewSessionService {
       forceKilled: undefined,
       phaseLabel: undefined,
     });
+    // A session that was already running its dev command never leaves RUNNING_STATES
+    // on the way here, so updateSession won't rewrite the manifest that still offers
+    // to relaunch that command after a crash.
+    this.persistManifest();
   }
 
   private getOrCreateSession(projectId: string, panelId: string): DevPreviewSession {

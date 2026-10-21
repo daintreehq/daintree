@@ -581,8 +581,8 @@ export function WorktreeCard({
         !store.isInTrash(panel.id)
     );
     if (existing) {
-      if (existing.location === "dock") openDockTerminal(existing.id);
-      else setFocused(existing.id);
+      // Activation, not bare focus: it leaves a maximize that would hide the panel.
+      store.activateTerminal(existing.id);
       pingTerminal(existing.id);
       return;
     }

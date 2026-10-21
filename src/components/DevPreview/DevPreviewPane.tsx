@@ -133,10 +133,11 @@ export function DevPreviewPane({
   });
   const devCommand =
     terminal?.devCommand?.trim() || projectSettings?.devServerCommand?.trim() || "";
-  const { endpoint, refreshEndpoint } = useResourceEndpointPreview(
-    worktreeId,
-    terminal?.previewsResourceEndpoint === true
-  );
+  const {
+    endpoint,
+    refreshEndpoint,
+    checkEndpoint: handleCheckEndpoint,
+  } = useResourceEndpointPreview(worktreeId, terminal?.previewsResourceEndpoint === true);
   const viewportPreset = terminal?.viewportPreset;
   const viewportRotated = terminal?.viewportRotated ?? false;
   const viewportDpr = terminal?.viewportDpr ?? 1;
@@ -1067,8 +1068,9 @@ export function DevPreviewPane({
                 commandInputError={commandInputError}
                 isSavingCommand={isSavingCommand}
                 saveCommandFailed={saveCommandFailed}
-                // An endpoint panel's start prompt names the endpoint it will connect to.
-                devCommand={endpoint !== undefined ? (endpoint ?? "") : devCommand}
+                devCommand={devCommand}
+                endpoint={endpoint}
+                onCheckEndpoint={handleCheckEndpoint}
                 handleStartFromRestored={handleStartFromRestored}
                 hasBeenVisible={hasBeenVisible}
                 isEvicted={isEvicted}
@@ -1116,8 +1118,12 @@ export function DevPreviewPane({
                     isRestarting={isRestarting}
                     onRestartDevServer={handleRestartDevServer}
                     onHardReload={handleHardReload}
-                    onRequestRestartAndClearCache={handleRequestRestartAndClearCache}
-                    onRequestReinstallAndRestart={handleRequestReinstallAndRestart}
+                    onRequestRestartAndClearCache={
+                      endpoint === undefined ? handleRequestRestartAndClearCache : undefined
+                    }
+                    onRequestReinstallAndRestart={
+                      endpoint === undefined ? handleRequestReinstallAndRestart : undefined
+                    }
                     onRetryWebviewLoad={handleRetryWebviewLoad}
                     currentUrl={currentUrl}
                     onOpenExternal={handleOpenExternal}

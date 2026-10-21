@@ -194,6 +194,17 @@ describe("normalizeDevPreviewUrl (#12297)", () => {
       });
     });
 
+    it("retargets a route typed on this panel's own resource endpoint (#13688)", () => {
+      const endpoint = "http://box.example.ts.net:5173/";
+      expect(
+        normalizeDevPreviewUrl("http://box.example.ts.net:5173/settings?tab=2", PROXY, endpoint)
+      ).toEqual({ url: `${PROXY}/settings?tab=2` });
+      // Another port on the same box is not this panel's upstream.
+      expect(
+        normalizeDevPreviewUrl("http://box.example.ts.net:6006/", PROXY, endpoint).error
+      ).toBeTruthy();
+    });
+
     it("retargets a raw upstream URL onto the proxy origin, preserving the whole route", () => {
       expect(normalizeDevPreviewUrl("http://localhost:5173/once?a=1#b", PROXY)).toEqual({
         url: `${PROXY}/once?a=1#b`,
