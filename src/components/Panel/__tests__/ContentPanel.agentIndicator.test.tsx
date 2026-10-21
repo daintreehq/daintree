@@ -213,10 +213,10 @@ describe("ContentPanel agent glyph placement", () => {
 
   it("hands the metadata row the lifecycle state, not the glyph's display state", () => {
     // The glyph folds `completed` into `waiting` on purpose (the CLI is still
-    // alive and idle). The row's settled trace — cost, "Finished, no changes" —
+    // alive and idle). The row's settled trace — cost, "Nothing to commit" —
     // keys off the lifecycle state and must still be reachable.
     render(panel({ agentState: "completed", completedWithNoChanges: true }));
-    expect(screen.queryByText("Finished, no changes")).not.toBeNull();
+    expect(screen.queryByText("Nothing to commit")).not.toBeNull();
   });
 
   it("names the body as the tab panel of the active tab in a tab group", () => {

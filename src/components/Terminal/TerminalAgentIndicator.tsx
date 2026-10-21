@@ -23,7 +23,6 @@ import { useShallow } from "zustand/react/shallow";
 import { useErrorStore } from "@/store/errorStore";
 import { useGlobalMinuteTicker } from "@/hooks/useGlobalMinuteTicker";
 import { formatElapsedDuration } from "@/utils/formatElapsedDuration";
-import { formatTokenCount } from "@/utils/formatTokenCount";
 import { formatTimeAgo } from "@/utils/timeAgo";
 import { describeExitStatus } from "./exitStatus";
 import { pluralize } from "@/lib/pluralize";
@@ -109,7 +108,6 @@ export function TerminalAgentIndicator({
     stateChangeConfidence,
     waitingReason,
     sessionCost,
-    sessionTokens,
   } = usePanelStore(
     useShallow((state) => {
       const t = state.panelsById[id];
@@ -122,7 +120,6 @@ export function TerminalAgentIndicator({
         stateChangeConfidence: pty?.stateChangeConfidence,
         waitingReason: pty?.waitingReason,
         sessionCost: pty?.sessionCost,
-        sessionTokens: pty?.sessionTokens,
       };
     })
   );
@@ -150,9 +147,9 @@ export function TerminalAgentIndicator({
   const shownState = resolveSessionPresentation(agentState, rawAgentState, waitingReason, handBack);
   const isHandBack = shownState !== agentState;
 
-  // A settled agent only keeps its glyph while there is a session cost to
-  // explain in the tooltip; without one the row's "Finished, no changes" pill
-  // is the only trace. A live agent drawn settled by its hand-back keeps it.
+  // A settled agent only keeps its glyph while a session cost is on record;
+  // without one the row's settled trace is the only mark. A live agent drawn
+  // settled by its hand-back keeps it.
   if (
     !isHandBack &&
     (agentState === "completed" || agentState === "exited") &&
@@ -228,12 +225,8 @@ export function TerminalAgentIndicator({
           {lastStateChange != null && lastStateChange > 0 && (
             <span className="text-text-secondary">Since: {formatTimeAgo(lastStateChange)}</span>
           )}
-          {sessionCost != null && (
-            <span className="text-text-secondary tabular-nums">
-              Cost: ${sessionCost.toFixed(2)}
-              {sessionTokens != null && ` · ${formatTokenCount(sessionTokens)} tokens`}
-            </span>
-          )}
+          {/* No cost line: the settled trace chip in the header row is the one
+              place a session's cost and tokens are disclosed, in full. */}
           {errorCount > 0 && (
             <span className="text-status-error">{pluralize(errorCount, "error")}</span>
           )}

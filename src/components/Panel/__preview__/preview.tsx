@@ -38,6 +38,7 @@ import {
 } from "./gridScenes";
 import { GRID_GAP_PX } from "@/lib/terminalLayout";
 import { TwoPaneSplitDivider, DIVIDER_WIDTH_PX } from "@/components/Terminal/TwoPaneSplitDivider";
+import { EXITED_PANE_CLASS } from "@/components/Terminal/exitStatus";
 import "@/index.css";
 
 /**
@@ -302,6 +303,7 @@ function Pane({ name }: { name: FixtureName }) {
           lastCommand={fixture.lastCommand}
           isExited={fixture.isExited}
           exitCode={fixture.exitCode}
+          className={fixture.isExited ? EXITED_PANE_CLASS : undefined}
           agentLaunchFlags={fixture.agentLaunchFlags}
           queueCount={fixture.queueCount}
           flowStatus={fixture.flowStatus}

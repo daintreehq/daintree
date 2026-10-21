@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Lock, Moon } from "lucide-react";
-import { DoneCircle, OctagonAlert, TriangleAlert } from "@/components/icons";
+import { OctagonAlert, TriangleAlert } from "@/components/icons";
 import type { AgentState, PanelKind } from "@/types";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -25,6 +25,7 @@ import { TerminalNotifyChip } from "./TerminalNotifyChip";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { describeExitStatus } from "./exitStatus";
 import { pluralize } from "@/lib/pluralize";
+import { SEVERITY_VISUAL } from "@/lib/statusSeverity";
 
 export interface TerminalHeaderContentProps {
   id: string;
@@ -36,9 +37,9 @@ export interface TerminalHeaderContentProps {
   exitCode?: number | null;
   queueCount?: number;
   /**
-   * True when the agent transitioned to `completed` and the worktree's
-   * changed-file count is zero. Drives the "Finished, no changes" pill
-   * so users get a quiet confirmation instead of the chip silently disappearing.
+   * True when the agent transitioned to `completed` and git status observed
+   * zero uncommitted changes in its worktree (never when the count is unknown).
+   * Leads the settled trace chip with "Nothing to commit".
    */
   completedWithNoChanges?: boolean;
   /**
@@ -47,6 +48,23 @@ export interface TerminalHeaderContentProps {
    */
   isHibernated?: boolean;
 }
+
+/**
+ * `$0.42` in the row; with `exact`, every digit the session summary printed
+ * (`$0.012345`), so the disclosure never rounds a small run down to `$0.00`.
+ */
+function formatSessionCost(cost: number, exact = false): string {
+  // A run that cost something never reads as free in the row.
+  if (!exact && cost > 0 && cost < 0.005) return "<$0.01";
+  return cost.toLocaleString("en-US", {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: exact ? 20 : 2,
+  });
+}
+
+const ExitMark = SEVERITY_VISUAL.error.Icon;
 
 function formatMemory(kb: number): string {
   if (kb >= 1048576) return `${(kb / 1048576).toFixed(1)}G`;
@@ -261,46 +279,92 @@ export function TerminalHeaderContent({
     isPlainTerminal && !agentState && activityStatus === "working" && !!lastCommand;
 
   // The agent state glyph itself is not here: PanelHeader keeps it in its own
-  // reserved box past the close button (TerminalAgentIndicator). This row only
-  // carries the settled agent's trace — a cost readout, or a quiet "finished,
-  // no changes" pill when there is no cost to show.
-  const renderSettledPill = () => {
+  // reserved box past the close button (TerminalAgentIndicator), where a
+  // finished agent reads as handed back. This row carries what the settled
+  // agent left behind, as one chip: an observed clean worktree, then the
+  // session summary's cost and tokens. Each part shows only when it was seen.
+  const renderSettledTrace = () => {
     if (agentState !== "completed" && agentState !== "exited") return null;
 
-    if (sessionCost != null) {
-      return (
-        <span
-          className="text-2xs text-text-secondary font-mono shrink-0"
-          style={{ fontVariantNumeric: "tabular-nums" }}
-        >
-          ${sessionCost.toFixed(2)}
-          {sessionTokens != null && ` · ${formatTokenCount(sessionTokens)}`}
-        </span>
-      );
-    }
+    const noChanges = agentState === "completed" && completedWithNoChanges;
+    const hasSummary = sessionCost != null || sessionTokens != null;
+    if (!noChanges && !hasSummary) return null;
 
-    // Zero-change confirmation: agent finished without touching the working
-    // tree. Show a quiet pill instead of letting the glyph vanish silently, so
-    // the user has a clear signal that the run ended cleanly.
-    if (agentState === "completed" && completedWithNoChanges) {
-      return (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <span
-              className={cn(HEADER_CHIP_CLASS, HEADER_CHIP_SURFACE)}
-              role="status"
-              aria-label="Agent finished with no file changes"
-            >
-              <DoneCircle className="w-3 h-3" aria-hidden="true" />
-              Finished, no changes
-            </span>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">No file changes since the agent started</TooltipContent>
-        </Tooltip>
-      );
-    }
+    const exactSummary = [
+      sessionCost != null && `${formatSessionCost(sessionCost, true)} USD`,
+      sessionTokens != null && `${sessionTokens.toLocaleString("en-US")} tokens`,
+    ].filter(Boolean);
+    const label = [
+      noChanges && "Agent finished, nothing to commit",
+      hasSummary && `session ${exactSummary.join(", ")}`,
+    ]
+      .filter(Boolean)
+      .join("; ");
 
-    return null;
+    return (
+      <Tooltip autoDismiss={false} disableHoverableContent={false}>
+        <TooltipTrigger asChild>
+          <span
+            className={cn(
+              HEADER_CHIP_CLASS,
+              HEADER_CHIP_SURFACE,
+              HEADER_CHIP_FOCUS_CLASS,
+              "min-w-0 max-w-[20rem] shrink tabular-nums"
+            )}
+            role="status"
+            aria-live="off"
+            aria-label={label.charAt(0).toUpperCase() + label.slice(1)}
+            tabIndex={0}
+            data-testid="terminal-settled-trace"
+          >
+            {/* Under width pressure the token count goes first, as a unit, then
+                the worktree phrase truncates; the cost never clips. The label
+                and tooltip carry every part in full. */}
+            {noChanges && (
+              <span className="min-w-0 truncate" aria-hidden="true">
+                Nothing to commit
+              </span>
+            )}
+            {sessionCost != null && (
+              <span className="shrink-0 whitespace-pre" aria-hidden="true">
+                {noChanges && "· "}
+                {formatSessionCost(sessionCost)}
+              </span>
+            )}
+            {sessionTokens != null && (
+              <span
+                className={cn(
+                  "shrink-0 whitespace-pre",
+                  (noChanges || isExited) && sessionCost != null && "@max-[640px]/header:hidden"
+                )}
+                aria-hidden="true"
+              >
+                {(noChanges || sessionCost != null) && "· "}
+                {formatTokenCount(sessionTokens)} tokens
+              </span>
+            )}
+          </span>
+        </TooltipTrigger>
+        <TooltipContent side="bottom" className="max-w-xs">
+          <div className="flex flex-col gap-1">
+            {noChanges && (
+              <div className="flex flex-col gap-0.5">
+                <span className="font-medium">Nothing to commit in this worktree</span>
+                <span className="text-text-secondary">
+                  From git status. Commits made during the run aren’t counted.
+                </span>
+              </div>
+            )}
+            {hasSummary && (
+              <div className="flex flex-col gap-0.5">
+                <span className="font-medium tabular-nums">{exactSummary.join(" · ")}</span>
+                <span className="text-text-secondary">From the agent’s session summary</span>
+              </div>
+            )}
+          </div>
+        </TooltipContent>
+      </Tooltip>
+    );
   };
 
   return (
@@ -310,21 +374,28 @@ export function TerminalHeaderContent({
           telemetry last. Transient flow and submit status sit outside this row,
           in TerminalStatusSlot's reserved box ahead of the window controls
           (#12374). */}
-      {renderSettledPill()}
+      {renderSettledTrace()}
 
       {/* Exit code badge — aria-live="off" overrides role="status"'s implicit
           polite live region. The global announcer in useAccessibilityAnnouncements
           routes the transition once with a pane-title prefix, avoiding competing
-          live regions across a multi-pane fleet (#9204). */}
+          live regions across a multi-pane fleet (#9204). Set at the row's 11px
+          step; a failure is marked in shape ahead of the reading, which keeps
+          secondary ink because the error hue on 11px text falls under 4.5:1 on
+          several light headers. */}
       {exitStatus && (
         <span
-          className={cn(
-            "text-xs font-mono tabular-nums",
-            exitStatus.failed ? "text-status-error" : "text-text-secondary"
-          )}
+          className="inline-flex shrink-0 items-center gap-1 text-2xs leading-4 font-mono tabular-nums text-text-secondary"
           role="status"
           aria-live="off"
+          aria-label={exitStatus.failed ? `${exitStatus.badge}, failed` : undefined}
         >
+          {exitStatus.failed && (
+            <ExitMark
+              className={cn("w-3 h-3 shrink-0", SEVERITY_VISUAL.error.toneClass)}
+              aria-hidden="true"
+            />
+          )}
           {exitStatus.badge}
         </span>
       )}
