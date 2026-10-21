@@ -1,28 +1,26 @@
 import { useEffect, useRef } from "react";
-import { ProgressBar } from "@/components/ui/ProgressBar";
 import { useNotificationStore, type NotificationAction } from "@/store/notificationStore";
+import {
+  useNotificationHistoryStore,
+  type NotificationHistoryAction,
+} from "@/store/slices/notificationHistorySlice";
 import { logError } from "@/utils/logger";
 import { notify } from "@/lib/notify";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { useDistributionStore } from "@/store/distributionStore";
 
-const AVAILABLE_HINT = 'Use "Check for Updates…" to check again.';
 const UPDATE_CORRELATION_ID = "app-update";
 const CHANGELOG_URL = "https://daintree.org/changelog";
 
 /** The stage of the update the user is currently being told about. */
 type UpdateStage = { version: string; downloaded: boolean };
 
-function DownloadProgress({ percent }: { percent: number }) {
-  // The updater can overshoot 100 on its last tick; one clamped value feeds the
-  // label, the width and the ARIA range alike.
-  const pct = Number.isFinite(percent) ? Math.min(100, Math.max(0, Math.round(percent))) : 0;
-  return (
-    <div className="space-y-1">
-      <span>{pct}% complete</span>
-      <ProgressBar label="Update download" value={pct} />
-    </div>
-  );
+// One card walks every stage: the title names the stage, the body is the
+// version and never changes, so the user always knows which release this is.
+const versionLine = (version: string) => `Version ${version}`;
+
+function downloadProgress(version: string, percent: number | null) {
+  return { value: percent, label: `Downloading version ${version}` };
 }
 
 function findLiveUpdateToastId(): string | null {
@@ -44,7 +42,7 @@ function restartAction() {
   };
 }
 
-function changelogAction(): NotificationAction {
+function changelogHistoryAction(): NotificationHistoryAction {
   // Site-wide changelog, not a per-version page: daintree.org anchors its
   // entries by date (#2026-09-07), which the updater's bare semver cannot
   // resolve, so there is nothing version-specific to deep-link to.
@@ -58,6 +56,12 @@ function changelogAction(): NotificationAction {
     // silently dropped, leaving history text with no way to act on it.
     actionId: "system.openExternal",
     actionArgs: { url: CHANGELOG_URL },
+  };
+}
+
+function changelogAction(): NotificationAction {
+  return {
+    ...changelogHistoryAction(),
     onClick: () => {
       const promise = window.electron?.system?.openExternal(CHANGELOG_URL);
       if (promise) {
@@ -73,12 +77,18 @@ function surfaceAvailable(version: string): void {
   // timer and increments the count badge.
   notify({
     type: "info",
-    title: "Update available",
-    message: `Version ${version} is downloading…`,
-    inboxMessage: `Version ${version} is downloading. ${AVAILABLE_HINT}`,
+    title: "Downloading update",
+    message: versionLine(version),
+    inboxMessage: `Version ${version} is downloading in the background.`,
     priority: "high",
     duration: 0,
     correlationId: UPDATE_CORRELATION_ID,
+    // Retires a stale "Update ready" row, so the inbox only ever holds the
+    // stage the update is actually in.
+    supersedeKey: UPDATE_CORRELATION_ID,
+    // The download starts with the announcement; the bar is unmeasured until
+    // the first progress tick.
+    progress: downloadProgress(version, null),
     // Explicit undefined: if a prior "Update ready" toast is live (stage
     // regression), clear its "Restart to update" action so the user does not
     // accidentally restart into a stale build while a newer one is still
@@ -97,20 +107,41 @@ function surfaceAvailable(version: string): void {
   });
 }
 
+const READY_INBOX_MESSAGE = (version: string) =>
+  `Version ${version} is downloaded. Restart Daintree whenever it suits you to install it.`;
+
 function surfaceDownloaded(version: string): void {
   const liveId = findLiveUpdateToastId();
   if (liveId) {
+    // Patching the toast in place bypasses notify(), so the inbox would keep
+    // saying "downloading" after the toast is gone. Write the stage there too,
+    // retiring the downloading row, and link the toast to the new row so a
+    // later stack eviction marks the right one unseen.
+    const historyEntryId = useNotificationHistoryStore.getState().addEntry({
+      type: "success",
+      title: "Update ready",
+      message: READY_INBOX_MESSAGE(version),
+      correlationId: UPDATE_CORRELATION_ID,
+      supersedeKey: UPDATE_CORRELATION_ID,
+      // Seen only if the window is focused to show the patched toast — the
+      // same focus gate notify() applies — so a blurred stage change stays
+      // unread instead of quietly clearing the badge.
+      seenAsToast: typeof document === "undefined" || document.hasFocus(),
+      actions: [changelogHistoryAction()],
+    });
     // Stage transition: clear the Available-stage onDismiss so dismissing the
     // "Update ready" toast does not start the 24h Available cooldown. The user
     // still needs to be re-reminded about the pending install.
     useNotificationStore.getState().updateNotification(liveId, {
       type: "success",
       title: "Update ready",
-      message: `Version ${version} is ready to install.`,
-      inboxMessage: `Version ${version} ready to install`,
+      message: versionLine(version),
+      inboxMessage: READY_INBOX_MESSAGE(version),
+      historyEntryId,
       duration: 0,
       dismissed: false,
       onDismiss: undefined,
+      progress: undefined,
       action: restartAction(),
       actions: [changelogAction()],
     });
@@ -126,12 +157,14 @@ function surfaceDownloaded(version: string): void {
   notify({
     type: "success",
     title: "Update ready",
-    message: `Version ${version} is ready to install.`,
-    inboxMessage: `Version ${version} ready to install`,
+    message: versionLine(version),
+    inboxMessage: READY_INBOX_MESSAGE(version),
     priority: "high",
     urgent: true,
     duration: 0,
     correlationId: UPDATE_CORRELATION_ID,
+    supersedeKey: UPDATE_CORRELATION_ID,
+    progress: undefined,
     action: restartAction(),
     actions: [changelogAction()],
   });
@@ -175,8 +208,12 @@ export function useUpdateListener(suppressToasts = false): void {
     // live toast via correlationId and regress it from "Update ready" (with its
     // restart action) back to "downloading…".
     let liveStateSeen = false;
+    // Progress ticks carry only a percent; the version comes from whichever
+    // stage last named it.
+    let knownVersion: string | null = null;
 
     const surface = (stage: UpdateStage) => {
+      knownVersion = stage.version;
       if (suppressRef.current) {
         // Never downgrade a pending "downloaded" to "available" — a follow-up
         // re-check (or a hydrate) during the startup quiet period must not roll
@@ -198,11 +235,14 @@ export function useUpdateListener(suppressToasts = false): void {
 
     const cleanupProgress = window.electron.update.onDownloadProgress((info) => {
       const liveId = findLiveUpdateToastId();
-      if (!liveId) return;
+      if (!liveId || !knownVersion) return;
+      // Only the bar moves: the title, body and live region stay put, so a
+      // screen reader hears the stage once rather than every tick.
       useNotificationStore.getState().updateNotification(liveId, {
+        type: "info",
         title: "Downloading update",
-        message: <DownloadProgress percent={info.percent} />,
-        inboxMessage: `Downloading update: ${Math.round(info.percent)}%`,
+        message: versionLine(knownVersion),
+        progress: downloadProgress(knownVersion, info.percent),
         // A download in flight means there is nothing ready to install, so the
         // restart button cannot be valid; the changelog link is dropped with it
         // to keep the downloading toast a pure progress readout rather than a

@@ -133,6 +133,19 @@
     forced-color-adjust: none;
   }
 
+  /* Every ProgressBar has the same problem: a translucent track and a token
+   * fill, both repainted as Canvas, so a download or clone bar was a faint
+   * stub with no end to measure it against. Same remedy as the trash meter. */
+  [data-progress-bar] {
+    outline: 1px solid CanvasText;
+    outline-offset: 0;
+  }
+
+  [data-progress-bar] > * {
+    background-color: CanvasText;
+    forced-color-adjust: none;
+  }
+
   /* The recorder's chord window is only a background, which forced colors
    * would repaint as the field's own Canvas. */
   [data-chord-window] {
