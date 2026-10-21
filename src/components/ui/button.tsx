@@ -5,8 +5,11 @@ import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "@/lib/utils";
 import { Spinner } from "@/components/ui/Spinner";
 
+// Every paint property `transition` covers except the spatial ones: `scale`
+// stays out so the press snaps back as well as in, and `press-scale` is what
+// removes it under reduced motion.
 const buttonVariants = cva(
-  "relative inline-flex items-center justify-center whitespace-nowrap rounded-[var(--radius-md)] font-medium cursor-pointer select-none transition duration-150 ease-out focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2 disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 active:scale-[0.98] active:duration-[1ms]",
+  "press-scale relative inline-flex items-center justify-center whitespace-nowrap rounded-[var(--radius-md)] font-medium cursor-pointer select-none transition-[color,background-color,border-color,outline-color,text-decoration-color,fill,stroke,opacity,box-shadow,filter,backdrop-filter] duration-150 ease-out focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2 disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 active:scale-[0.98] active:duration-[1ms]",
   {
     variants: {
       variant: {
