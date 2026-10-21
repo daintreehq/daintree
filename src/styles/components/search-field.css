@@ -102,7 +102,9 @@
     border-color: color-mix(in srgb, var(--theme-border-default) 70%, var(--theme-text-secondary));
   }
 
-  .search-field:where([data-focused-on-open="true"]):has(.search-field-input:focus-visible)::before {
+  .search-field:where([data-focused-on-open="true"]):has(
+      .search-field-input:focus-visible
+    )::before {
     opacity: 0;
   }
 

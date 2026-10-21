@@ -490,7 +490,9 @@ for (const theme of THEMES) {
     // says why it is empty rather than that nothing matched.
     await load(page, theme, "fleet", SEARCH_VIEWPORT);
     await landed(page);
-    await dialog(page).getByRole("button", { name: /^Unread/ }).click();
+    await dialog(page)
+      .getByRole("button", { name: /^Unread/ })
+      .click();
     await search(page).focus();
     await page.keyboard.type("Deploy");
     await expect(cards(page)).toHaveCount(0);
