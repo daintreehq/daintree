@@ -76,6 +76,20 @@ function ok(
   return { status: "ok", provider, parentId: "root", subagents };
 }
 
+/** The list's rows, in order. The list stays mounted under a child's page, so this reads it there too. */
+function rows(): HTMLButtonElement[] {
+  return Array.from(document.querySelectorAll<HTMLButtonElement>("[data-subagent-row]"));
+}
+
+/** Open a child's page from its row in the list. */
+async function openChild(name: string) {
+  await screen.findAllByText(name);
+  const row = rows().find((candidate) => candidate.textContent?.includes(name));
+  if (!row) throw new Error(`no row for ${name}`);
+  fireEvent.click(row);
+  return row;
+}
+
 /** The hook short-circuits unless `window.electron` exists, so stand one up. */
 function setElectronBridge(present: boolean) {
   if (present) Reflect.set(window, "electron", {});
@@ -137,7 +151,7 @@ describe("SubagentChip", () => {
     expect(screen.queryByRole("button", { name: /subagent/i })).toBeNull();
   });
 
-  it("loads a child's transcript once on expand, addressed to that child alone", async () => {
+  it("loads a child's transcript once when its page opens, addressed to that child alone", async () => {
     listSubagents.mockResolvedValue(ok([subagent(), subagent({ id: "child-2", label: "Kant" })]));
     readSubagentTranscript.mockResolvedValue({
       status: "ok",
@@ -147,17 +161,18 @@ describe("SubagentChip", () => {
     });
 
     render(<SubagentChip terminalId="t1" />);
-    fireEvent.click(await screen.findByText("Meitner"));
+    await openChild("Meitner");
 
     expect(await screen.findByText("All good")).toBeTruthy();
-    // Exactly the child that was expanded, and only once.
+    // Exactly the child that was opened, and only once.
     expect(readSubagentTranscript.mock.calls).toEqual([
       [{ terminalId: "t1", subagentId: "child-1" }],
     ]);
 
-    // Collapsing and reopening must not refetch a transcript we already hold.
-    fireEvent.click(screen.getByText("Meitner"));
-    fireEvent.click(screen.getByText("Meitner"));
+    // Going back and reopening must not refetch a transcript we already hold.
+    fireEvent.click(screen.getByRole("button", { name: "Back to Codex subagents" }));
+    await openChild("Meitner");
+    expect(await screen.findByText("All good")).toBeTruthy();
     await waitFor(() => expect(readSubagentTranscript).toHaveBeenCalledTimes(1));
   });
 
@@ -169,7 +184,7 @@ describe("SubagentChip", () => {
     });
 
     render(<SubagentChip terminalId="t1" />);
-    fireEvent.click(await screen.findByText("Meitner"));
+    await openChild("Meitner");
 
     const retry = await screen.findByRole("button", { name: "Retry" });
     readSubagentTranscript.mockResolvedValueOnce({
@@ -223,7 +238,7 @@ describe("SubagentChip", () => {
     });
     expect(chip.textContent).toBe("2");
     // The finished and the unaccounted-for are still one click away.
-    expect(screen.getAllByRole("button", { expanded: false })).toHaveLength(4);
+    expect(rows()).toHaveLength(4);
   });
 
   it("drops the number once no Claude child is running, and keeps the history reachable", async () => {
@@ -242,7 +257,7 @@ describe("SubagentChip", () => {
 
     const chip = await screen.findByRole("button", { name: "2 Claude subagents, none running" });
     expect(chip.textContent).toBe("");
-    expect(screen.getAllByRole("button", { expanded: false })).toHaveLength(2);
+    expect(rows()).toHaveLength(2);
   });
 
   it("follows a relaunch inside the same shell to the new session's children", async () => {
@@ -338,9 +353,9 @@ describe("SubagentChip", () => {
     });
 
     render(<SubagentChip terminalId="t1" />);
-    fireEvent.click(await screen.findByText("Meitner"));
+    await openChild("Meitner");
 
-    expect(await screen.findByText(/latest messages/i)).toBeTruthy();
+    expect(await screen.findByText(/earlier messages aren't shown/i)).toBeTruthy();
   });
 
   it("lists the children that need the user ahead of the rest, in provider order otherwise", async () => {
@@ -355,8 +370,7 @@ describe("SubagentChip", () => {
     render(<SubagentChip terminalId="t1" />);
     await screen.findByText("Asking");
 
-    const order = screen
-      .getAllByRole("button", { expanded: false })
+    const order = rows()
       .map((row) => row.textContent ?? "")
       .map((text) => ["Asking", "Broken", "Quiet one", "Quiet two"].find((n) => text.includes(n)));
     expect(order).toEqual(["Asking", "Broken", "Quiet one", "Quiet two"]);
@@ -399,7 +413,7 @@ describe("SubagentChip", () => {
     expect(screen.getByText("Meitner")).toBeTruthy();
   });
 
-  it("does not turn each open transcript into a landmark", async () => {
+  it("names a child's page by its own heading without adding a landmark", async () => {
     listSubagents.mockResolvedValue(ok([subagent(), subagent({ id: "child-2", label: "Kant" })]));
     readSubagentTranscript.mockResolvedValue({
       status: "ok",
@@ -408,21 +422,34 @@ describe("SubagentChip", () => {
       truncated: false,
     });
     render(<SubagentChip terminalId="t1" />);
-    fireEvent.click(await screen.findByText("Meitner"));
-    fireEvent.click(screen.getByText("Kant"));
+    await openChild("Meitner");
     await screen.findAllByText("All good");
 
     expect(screen.queryAllByRole("region")).toHaveLength(0);
-    // The disclosure still points at the panel it shows.
-    const row = screen.getByText("Meitner").closest("button")!;
-    expect(document.getElementById(row.getAttribute("aria-controls")!)).not.toBeNull();
+    expect(screen.getByRole("heading", { name: "Meitner" })).toBeTruthy();
+  });
+
+  it("moves focus to Back on the way in and to the originating row on the way out", async () => {
+    listSubagents.mockResolvedValue(ok([subagent(), subagent({ id: "child-2", label: "Kant" })]));
+    readSubagentTranscript.mockReturnValue(new Promise(() => {}));
+    render(<SubagentChip terminalId="t1" />);
+
+    const row = await openChild("Kant");
+    const back = await screen.findByRole("button", { name: "Back to Codex subagents" });
+    await waitFor(() => expect(document.activeElement).toBe(back));
+    // The list is still there under the page, so it comes back as it was left.
+    expect(row.closest("[hidden]")).not.toBeNull();
+
+    fireEvent.click(back, { detail: 0 });
+    await waitFor(() => expect(document.activeElement).toBe(row));
+    expect(row.closest("[hidden]")).toBeNull();
   });
 
   it("shows a retried transcript read in progress instead of leaving the error up", async () => {
     listSubagents.mockResolvedValue(ok([subagent()]));
     readSubagentTranscript.mockResolvedValueOnce({ status: "unavailable", reason: "timeout" });
     render(<SubagentChip terminalId="t1" />);
-    fireEvent.click(await screen.findByText("Meitner"));
+    await openChild("Meitner");
 
     const retry = await screen.findByRole("button", { name: "Retry" });
     readSubagentTranscript.mockReturnValueOnce(new Promise(() => {}));
@@ -432,11 +459,11 @@ describe("SubagentChip", () => {
     expect(await screen.findByText("Loading transcript")).toBeTruthy();
   });
 
-  it("hands focus back to the row when Retry takes itself away", async () => {
+  it("hands focus to the child's heading when Retry takes itself away", async () => {
     listSubagents.mockResolvedValue(ok([subagent()]));
     readSubagentTranscript.mockResolvedValueOnce({ status: "unavailable", reason: "timeout" });
     render(<SubagentChip terminalId="t1" />);
-    fireEvent.click(await screen.findByText("Meitner"));
+    await openChild("Meitner");
 
     const retry = await screen.findByRole("button", { name: "Retry" });
     readSubagentTranscript.mockReturnValueOnce(new Promise(() => {}));
@@ -444,7 +471,7 @@ describe("SubagentChip", () => {
     fireEvent.click(retry, { detail: 0 });
 
     await waitFor(() => expect(screen.queryByRole("button", { name: "Retry" })).toBeNull());
-    expect(document.activeElement).toBe(screen.getByText("Meitner").closest("button"));
+    expect(document.activeElement).toBe(screen.getByRole("heading", { name: "Meitner" }));
   });
 
   it("tells assistive technology when a refresh it asked for starts and finishes", async () => {

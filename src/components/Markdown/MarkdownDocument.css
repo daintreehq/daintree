@@ -397,3 +397,59 @@
 .markdown-document .markdown-mermaid__note-text {
   min-width: 0;
 }
+
+/* A message rather than a document: an agent's reply or prompt read inside a
+   popover or list. Its headings are section labels, not page titles, so the
+   ladder steps down to just above body size and loses the document rule under
+   h1/h2, and the block rhythm tightens to match a 12px reading size. Opt-in by
+   class, so every document surface is unchanged. */
+.markdown-document.markdown-message {
+  max-width: none;
+  margin-inline: 0;
+  overflow-wrap: break-word;
+}
+
+.markdown-message :where(h1, h2, h3, h4, h5, h6) {
+  margin-top: 1.25em;
+  margin-bottom: 0.5em;
+  line-height: 1.4;
+}
+
+.markdown-message :where(h1, h2) {
+  font-size: 1.15em;
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.markdown-message :where(h3, h4, h5, h6) {
+  font-size: 1em;
+}
+
+.markdown-message :where(p, ul, ol, blockquote) {
+  margin-top: 0.75em;
+  margin-bottom: 0.75em;
+}
+
+.markdown-message :where(li) {
+  margin-top: 0.25em;
+  margin-bottom: 0.25em;
+}
+
+.markdown-message :where(pre) {
+  margin-top: 0.75em;
+  margin-bottom: 0.75em;
+  padding: 0.6em 0.8em;
+}
+
+.markdown-message :where(hr) {
+  margin-top: 1.25em;
+  margin-bottom: 1.25em;
+}
+
+.markdown-message > :where(:first-child) {
+  margin-top: 0;
+}
+
+.markdown-message > :where(:last-child) {
+  margin-bottom: 0;
+}
