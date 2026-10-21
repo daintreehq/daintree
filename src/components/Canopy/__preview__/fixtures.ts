@@ -516,6 +516,8 @@ function snapshot(cards: CanopyCard[], now: number, extra: Partial<CanopySnapsho
     lastError: null,
     failedRuns: [],
     glances: [],
+    // The footer's readout, as the live service fills it.
+    link: { host: "canopy.daintree.org", inFlight: 0, classifyMs: 589, readMs: 2_300 },
     ...extra,
   } satisfies CanopySnapshot;
 }

@@ -61,7 +61,7 @@ setPreviewCanopyBranches(
 );
 useProjectStore.setState({ projects: projectsFor(FROZEN_NOW) });
 useFleetSnapshotStore.setState({ snapshot: scene.fleet });
-useCanopyStore.setState({ isOpen: true, snapshot: scene.canopy });
+useCanopyStore.setState({ isOpen: false, snapshot: scene.canopy });
 
 // The real composer reads the view's worktree store, as it does in the app.
 const worktreeStore = createWorktreeStore();
@@ -79,4 +79,7 @@ if (root) {
       </TooltipProvider>
     </StrictMode>
   );
+  // Opened once mounted, as the app opens it: a panel mounted already open
+  // lands its keyboard before the dialog's own focus handling has run.
+  requestAnimationFrame(() => useCanopyStore.setState({ isOpen: true }));
 }

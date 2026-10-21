@@ -91,6 +91,20 @@
     opacity: 1;
   }
 
+  /* A field the keyboard lands in whenever its surface opens: the lift above
+     would be its everyday look, a lit box over the content it filters. Focus
+     only firms the hairline, and the caret carries "type here". The edge moves
+     toward the field's own ink rather than to a border token, since a theme's
+     ladder doesn't promise `border-strong` reads firmer than the resting edge
+     (namib's is fainter). The contrast-mode indicators below still apply. */
+  .search-field[data-focused-on-open="true"]:has(.search-field-input:focus-visible) {
+    border-color: color-mix(in srgb, var(--theme-border-default) 70%, var(--theme-text-secondary));
+  }
+
+  .search-field[data-focused-on-open="true"]:has(.search-field-input:focus-visible)::before {
+    opacity: 0;
+  }
+
   /* Invalid wins over focus: the query is what needs attention. */
   .search-field[data-invalid="true"],
   .search-field[data-invalid="true"]:has(.search-field-input:focus-visible) {
@@ -214,6 +228,7 @@
     }
 
     .search-field:has(.search-field-input:focus-visible),
+    .search-field[data-focused-on-open="true"]:has(.search-field-input:focus-visible),
     button.search-field:focus-visible {
       border-color: var(--theme-text-primary);
       outline: 1px solid var(--theme-text-primary);
