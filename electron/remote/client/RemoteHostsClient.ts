@@ -997,10 +997,7 @@ export class RemoteHostsClient {
     const targetPath = projectPath;
     // Passed only when there is one, so a plain switch opens as it always has.
     // A new window is not the one that asked, so it never reports for the requester.
-    const openArgs:
-      | []
-      | [ProjectFocusOnActivateIntent]
-      | [ProjectFocusOnActivateIntent | undefined, SwitchRequestOptions] =
+    const openArgs: [focusIntent?: ProjectFocusOnActivateIntent, request?: SwitchRequestOptions] =
       requesterWebContentsId !== undefined && !newWindow
         ? [focusIntent, { requesterWebContentsId }]
         : focusIntent
