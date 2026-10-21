@@ -50,8 +50,6 @@ const stepAt = (value: MarkdownFontSize, delta: number): MarkdownFontSize | unde
   return MARKDOWN_FONT_SIZE_STEPS[index + delta];
 };
 
-const DEFAULT_LABEL = STEP_LABEL[DEFAULT_MARKDOWN_FONT_SIZE];
-
 /**
  * Ends of the ladder are announced, not removed. The native `disabled`
  * attribute drops focus the moment the attribute lands, so stepping up to the
@@ -210,7 +208,7 @@ export function MarkdownTextSizeControl({
           >
             <RotateCcw aria-hidden="true" />
             {/* The destination is the label, so nobody has to press it to find out. */}
-            Reset to default · {DEFAULT_LABEL} px
+            Reset to default · {STEP_LABEL[DEFAULT_MARKDOWN_FONT_SIZE]} px
           </Button>
         </div>
       </PopoverContent>
