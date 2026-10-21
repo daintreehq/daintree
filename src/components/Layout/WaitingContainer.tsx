@@ -12,6 +12,7 @@ const WAITING_CONFIG: AgentStatusConfig = {
   popoverLabel: "Waiting panels",
   heading: "Waiting for input",
   showReasons: true,
+  rowAction: "kill",
   // Triage order: approvals first, then error-blocked, then questions, then
   // plain prompts; longest-waiting first within each.
   compare: compareWaitingAttention,
