@@ -66,6 +66,8 @@ describe("notarize-macos", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    // Staple-failure tests install a persistent throwing implementation.
+    mockExecFileSync.mockReset();
     consoleLogSpy.mockImplementation(() => {});
     consoleWarnSpy.mockImplementation(() => {});
     delete process.env.DAINTREE_SKIP_NOTARIZATION;
@@ -262,24 +264,68 @@ describe("notarize-macos", () => {
       await expect(afterSign(createContext())).rejects.toThrow(/Notarization not accepted/);
     });
 
-    it("should throw when staple fails", async () => {
-      mockExecFileSync
-        .mockReturnValueOnce("") // ditto
-        .mockReturnValueOnce(JSON.stringify({ id: "sub-111", status: "In Progress" }))
-        .mockReturnValueOnce(JSON.stringify({ id: "sub-111", status: "Accepted" }));
+    it("should throw when staple keeps failing", async () => {
+      vi.useFakeTimers();
+      try {
+        mockExecFileSync
+          .mockReturnValueOnce("") // ditto
+          .mockReturnValueOnce(JSON.stringify({ id: "sub-111", status: "In Progress" }))
+          .mockReturnValueOnce(JSON.stringify({ id: "sub-111", status: "Accepted" }));
 
-      const err = new Error("staple error");
-      (err as any).stderr = "staple failed";
-      mockExecFileSync.mockImplementationOnce(() => {
-        throw err;
-      });
+        const err = new Error("staple error");
+        (err as any).stdout = "CloudKit query failed";
+        mockExecFileSync.mockImplementation(() => {
+          throw err;
+        });
 
-      await expect(afterSign(createContext())).rejects.toThrow(/Stapling failed/);
+        const rejected = expect(afterSign(createContext())).rejects.toThrow(
+          /Stapling failed[\s\S]*CloudKit query failed/
+        );
+        await vi.runAllTimersAsync();
+        await rejected;
 
-      // State should be left as "accepted" so recovery can staple-only
-      const tmpWrites = mockWriteFileSync.mock.calls.filter((c: any[]) => c[0].endsWith(".tmp"));
-      const lastWrite = JSON.parse(tmpWrites[tmpWrites.length - 1][1]);
-      expect(lastWrite["3"].status).toBe("accepted");
+        expect(
+          mockExecFileSync.mock.calls.filter((c: any[]) => c[1].includes("stapler")).length
+        ).toBeGreaterThan(1);
+
+        // State should be left as "accepted" so recovery can staple-only
+        const tmpWrites = mockWriteFileSync.mock.calls.filter((c: any[]) => c[0].endsWith(".tmp"));
+        const lastWrite = JSON.parse(tmpWrites[tmpWrites.length - 1][1]);
+        expect(lastWrite["3"].status).toBe("accepted");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("should staple after a transient stapler failure", async () => {
+      vi.useFakeTimers();
+      try {
+        mockExecFileSync
+          .mockReturnValueOnce("") // ditto
+          .mockReturnValueOnce(JSON.stringify({ id: "sub-222", status: "In Progress" }))
+          .mockReturnValueOnce(JSON.stringify({ id: "sub-222", status: "Accepted" }))
+          .mockImplementationOnce(() => {
+            throw Object.assign(new Error("staple error"), {
+              stdout: "The network connection was lost.",
+            });
+          })
+          .mockReturnValueOnce("stapled");
+
+        const stapleCalls = () =>
+          mockExecFileSync.mock.calls.filter((c: any[]) => c[1].includes("stapler")).length;
+        const done = afterSign(createContext());
+        await vi.advanceTimersByTimeAsync(0);
+        // The retry waits on a timer rather than firing straight away.
+        expect(stapleCalls()).toBe(1);
+        await Promise.all([done, vi.runAllTimersAsync()]);
+
+        expect(stapleCalls()).toBe(2);
+        const tmpWrites = mockWriteFileSync.mock.calls.filter((c: any[]) => c[0].endsWith(".tmp"));
+        const lastWrite = JSON.parse(tmpWrites[tmpWrites.length - 1][1]);
+        expect(lastWrite["3"].status).toBe("stapled");
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 
@@ -355,17 +401,28 @@ describe("notarize-macos", () => {
         })
       );
 
-      const err = new Error("staple error");
-      (err as any).stderr = "staple failed";
-      mockExecFileSync.mockImplementationOnce(() => {
-        throw err;
-      });
+      vi.useFakeTimers();
+      try {
+        const err = new Error("staple error");
+        (err as any).stderr = "staple failed";
+        mockExecFileSync.mockImplementation(() => {
+          throw err;
+        });
 
-      await expect(afterSign(createContext())).rejects.toThrow(/Stapling failed/);
+        const rejected = expect(afterSign(createContext())).rejects.toThrow(/Stapling failed/);
+        await vi.runAllTimersAsync();
+        await rejected;
 
-      // State should remain "accepted" for retry
-      const tmpWrites = mockWriteFileSync.mock.calls.filter((c: any[]) => c[0].endsWith(".tmp"));
-      expect(tmpWrites.length).toBe(0);
+        expect(
+          mockExecFileSync.mock.calls.filter((c: any[]) => c[1].includes("stapler")).length
+        ).toBeGreaterThan(1);
+
+        // State should remain "accepted" for retry
+        const tmpWrites = mockWriteFileSync.mock.calls.filter((c: any[]) => c[0].endsWith(".tmp"));
+        expect(tmpWrites.length).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 
