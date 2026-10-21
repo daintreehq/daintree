@@ -1,10 +1,11 @@
 import { useSyncExternalStore } from "react";
 import type { DeliveryState } from "@/services/agentRequests";
-import type { SiteSelection } from "../shared/model.js";
+import type { ComposerSubjectSelection } from "./pageSelection.js";
 import type { ComponentDefinitions, PickedComponent, SourceRevisions } from "./agentTask.js";
 
 export interface ComposerPin {
-  selection: SiteSelection;
+  /** A traced selection, or — where there is no source to trace — the page's account of one. */
+  selection: ComposerSubjectSelection;
   file: string | null;
   /** Index into the scopes for this selection: the element, or a component around it. */
   scope: number;

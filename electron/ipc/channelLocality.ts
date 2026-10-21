@@ -1031,6 +1031,7 @@ export const CHANNEL_LOCALITY = {
   "voice-input:validate-api-key": "shell",
   "watchdog:restart": "host",
   "webview:cancel-oauth-loopback": "shell",
+  "webview:capture-element": "shell",
   "webview:capture-screenshot": "shell",
   "webview:clear-console-capture": "shell",
   "webview:close-shortcut": "shell",

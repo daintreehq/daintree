@@ -33,7 +33,7 @@ const SiteBuilderDrawer = lazy(() =>
 registerDevPreviewTool({
   id: ENTRY_TOOL_ID,
   pluginId: ENTRY_PLUGIN_ID,
-  label: "SvelteKit Tools",
+  label: "Element Picker",
   Button: SiteBuilderButton,
   isAvailable: siteBuilderApplies,
   unavailableReason: SITE_BUILDER_UNAVAILABLE_REASON,

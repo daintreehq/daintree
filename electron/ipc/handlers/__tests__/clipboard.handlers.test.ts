@@ -90,7 +90,12 @@ import { ipcMain } from "electron";
 import * as fsPromises from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { registerClipboardHandlers } from "../clipboard.js";
+import {
+  cleanupOldClipboardImages,
+  cleanupOldElementCaptures,
+  registerClipboardHandlers,
+  saveElementCapture,
+} from "../clipboard.js";
 
 const CLIPBOARD_DIR = path.join(os.tmpdir(), "daintree-clipboard");
 
@@ -234,13 +239,15 @@ describe("clipboard:save-image cleanup trigger", () => {
   });
 
   it("runs cleanup fire-and-forget after writing the image", async () => {
+    // Registration sweeps at startup — pasted images and element captures
+    // both — so only a sweep after the save proves the save started one.
+    await vi.waitFor(() => expect(vi.mocked(fsPromises.readdir).mock.calls.length).toBe(2));
+    vi.mocked(fsPromises.readdir).mockClear();
     const handler = getHandler("clipboard:save-image");
     await handler(fakeEvent);
 
     expect(writeHandle.writeFile).toHaveBeenCalled();
-    // cleanup reads the clipboard dir; startup also runs it once, so assert it
-    // ran again after the save (≥2 invocations total).
-    expect(vi.mocked(fsPromises.readdir).mock.calls.length).toBeGreaterThanOrEqual(2);
+    await vi.waitFor(() => expect(fsPromises.readdir).toHaveBeenCalledTimes(1));
   });
 
   it("verifies the clipboard dir as owner-only before every save", async () => {
@@ -289,6 +296,68 @@ describe("clipboard:save-image cleanup trigger", () => {
       filePath: expect.any(String),
       thumbnailDataUrl: expect.stringContaining("data:image/png;base64,"),
     });
+  });
+});
+
+describe("element captures", () => {
+  const writeHandle = {
+    writeFile: vi.fn<(data: Buffer) => Promise<void>>(() => Promise.resolve()),
+    close: vi.fn<() => Promise<void>>(() => Promise.resolve()),
+  };
+
+  function files(names: string[]) {
+    vi.mocked(fsPromises.readdir).mockResolvedValue(
+      names.map((name) => ({ name, isFile: () => true })) as never
+    );
+    // Older by name order: each file is a second newer than the one before.
+    vi.mocked(fsPromises.stat).mockImplementation((async (filePath: string) => ({
+      mtimeMs: Date.now() - 60_000 + names.indexOf(path.basename(filePath)) * 1_000,
+    })) as never);
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    fsPromisesMock.open.mockResolvedValue(writeHandle);
+  });
+
+  afterEach(() => {
+    // The directory listings here would otherwise outlive the suite and feed
+    // every later handler's startup cleanup.
+    vi.mocked(fsPromises.readdir).mockResolvedValue([]);
+    vi.mocked(fsPromises.stat).mockReset();
+  });
+
+  it("are written beside pasted images, exclusively and owner-only", async () => {
+    vi.mocked(fsPromises.readdir).mockResolvedValue([]);
+    const filePath = await saveElementCapture(Buffer.from([0x89]));
+
+    expect(path.dirname(filePath)).toBe(CLIPBOARD_DIR);
+    expect(path.basename(filePath)).toMatch(/^element-\d+-abc123\.png$/);
+    expect(fsUtilsMock.ensureOwnerOnlyDir).toHaveBeenCalledWith(CLIPBOARD_DIR);
+    expect(fsPromisesMock.open).toHaveBeenCalledWith(filePath, 2 | 0x200 | 0x800 | 0x20000, 0o600);
+  });
+
+  it("are evicted under their own cap, never taking a pasted image with them", async () => {
+    const captures = Array.from({ length: 42 }, (_, index) => `element-${index}-a.png`);
+    const pasted = Array.from({ length: 5 }, (_, index) => `clipboard-${index}-a.png`);
+    files([...captures, ...pasted]);
+
+    await cleanupOldElementCaptures();
+
+    const removed = vi
+      .mocked(fsPromises.unlink)
+      .mock.calls.map(([file]) => path.basename(String(file)));
+    expect(removed).toEqual(["element-0-a.png", "element-1-a.png"]);
+  });
+
+  it("don't count against the pasted images' own cap", async () => {
+    const captures = Array.from({ length: 30 }, (_, index) => `element-${index}-a.png`);
+    const pasted = Array.from({ length: 20 }, (_, index) => `clipboard-${index}-a.png`);
+    files([...captures, ...pasted]);
+
+    await cleanupOldClipboardImages();
+
+    expect(fsPromises.unlink).not.toHaveBeenCalled();
   });
 });
 

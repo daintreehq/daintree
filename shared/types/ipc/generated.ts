@@ -2661,6 +2661,20 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: void;
   };
+  "webview:capture-element": {
+    args: [
+      panelId: string,
+      request: {
+        rect: { x: number; y: number; width: number; height: number };
+        viewportWidth: number;
+        viewportHeight: number;
+      },
+    ];
+    result:
+      | { status: "saved"; filePath: string; width: number; height: number }
+      | { status: "offscreen" }
+      | { status: "resized" };
+  };
   "webview:capture-screenshot": {
     args: [panelId: string, options?: { forHost?: boolean | undefined } | undefined];
     result: { pngBase64: string; width: number; height: number };

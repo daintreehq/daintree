@@ -108,6 +108,41 @@ export function singleLineLabel(label: string): string {
     .replace(/[\n\r\f\u0085\u2028\u2029]+/gu, " ");
 }
 
+/** Ceilings the guest builds to and the host enforces; the guest marks what it cut. */
+export const ELEMENT_CONTEXT_LIMITS = {
+  selector: 512,
+  markup: 2048,
+  styles: 40,
+  property: 64,
+  value: 256,
+} as const;
+
+/**
+ * An element as the page shows it: a selector that finds it, an excerpt of
+ * its markup with values and embedded payloads stripped, and the computed
+ * styles that say something about it. All of it is the page's to influence,
+ * so every surface quotes it as data.
+ */
+export const ElementContextSchema = z
+  .object({
+    selector: z.string().min(1).max(ELEMENT_CONTEXT_LIMITS.selector),
+    markup: z.string().max(ELEMENT_CONTEXT_LIMITS.markup),
+    /** The excerpt hit its ceiling and stops short of the element's real markup. */
+    markupTruncated: z.literal(true).optional(),
+    styles: z
+      .array(
+        z
+          .object({
+            property: z.string().min(1).max(ELEMENT_CONTEXT_LIMITS.property),
+            value: z.string().max(ELEMENT_CONTEXT_LIMITS.value),
+          })
+          .strict()
+      )
+      .max(ELEMENT_CONTEXT_LIMITS.styles),
+  })
+  .strict();
+export type ElementContext = z.infer<typeof ElementContextSchema>;
+
 export const GuestNodeObservationSchema = z
   .object({
     runtimeOccurrenceId: z.string().min(1).max(128),
@@ -175,6 +210,13 @@ export const GuestNodeObservationSchema = z
     bounds: z.array(RectSchema).max(32),
     /** True when the node sits inside `{@html}`, canvas, or a shadow root. */
     unmapped: z.boolean(),
+    /**
+     * What the element is in the page's own terms, for a page with no source
+     * to trace it to. Reported with a selection, never with a hover: it costs
+     * a computed-style read and a markup walk. Optional, so a runtime that
+     * predates it still speaks this protocol.
+     */
+    context: ElementContextSchema.optional(),
   })
   .strict();
 export type GuestNodeObservation = z.infer<typeof GuestNodeObservationSchema>;

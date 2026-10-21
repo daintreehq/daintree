@@ -1,8 +1,8 @@
 {
   "name": "daintree.sveltekit-builder",
   "version": "0.1.0",
-  "displayName": "SvelteKit Tools",
-  "description": "Work on your SvelteKit app from the live preview. Select elements, trace their source, and ask your coding agent to make changes.",
+  "displayName": "Element Picker",
+  "description": "Pick elements in your dev preview, whatever the framework, and ask your coding agent to change them. SvelteKit apps are traced to their source.",
   "tagline": "Point at your app. Ask your agent to change it.",
   "category": "workspace",
   "main": "main/index.js",
@@ -19,19 +19,29 @@
     "commands": [
       {
         "id": "toggle-builder",
-        "title": "Toggle SvelteKit Tools",
-        "description": "Switch SvelteKit Tools on or off in this worktree's dev preview, opening the preview if none is running.",
+        "title": "Toggle Element Picker",
+        "description": "Switch the Element Picker on or off in this worktree's dev preview, opening the preview if none is running.",
         "category": "panels",
         "kind": "command",
         "danger": "safe",
-        "keywords": ["svelte", "sveltekit", "tools", "inspect", "inspector", "preview", "agent"],
+        "keywords": [
+          "element",
+          "picker",
+          "select",
+          "svelte",
+          "sveltekit",
+          "inspect",
+          "inspector",
+          "preview",
+          "agent"
+        ],
         "requires": []
       }
     ],
     "previewTools": [
       {
         "id": "daintree.sveltekit-builder.builder",
-        "title": "SvelteKit Tools",
+        "title": "Element Picker",
         "iconId": "square-dashed-mouse-pointer",
         "guestAdapter": "daintree.sveltekit-builder.guest"
       }

@@ -71,6 +71,17 @@ export interface SiteGuestNodeObservation {
   label: string;
   bounds: SiteGuestRect[];
   unmapped: boolean;
+  /**
+   * The element as the page shows it — a selector, a markup excerpt and the
+   * computed styles that say something — reported with a selection only.
+   * Absent from older runtimes and from hovers.
+   */
+  context?: {
+    selector: string;
+    markup: string;
+    markupTruncated?: true;
+    styles: Array<{ property: string; value: string }>;
+  };
 }
 
 /**

@@ -23,6 +23,10 @@ import {
   type PagePlace,
 } from "./agentTask.js";
 import { forgetComposerMemories } from "./composerMemory.js";
+import { isRemoteWindow } from "@/hooks/useHostPlatform";
+import { redactUrl } from "../shared/redactUrl.js";
+import { singleLineLabel } from "../shared/protocol.js";
+import { unionBounds, type PageScreenshot, type PageSelection } from "./pageSelection.js";
 import { mismatchMessage, wireFailureMessage } from "./copy.js";
 import { usePanelStore } from "@/store/panelStore";
 import {
@@ -83,11 +87,30 @@ export interface SitePreviewApi {
   onEvent(callback: (payload: SitePreviewPushPayload) => void): () => void;
 }
 
+export interface ElementCaptureApi {
+  captureElement(
+    panelId: string,
+    request: {
+      rect: { x: number; y: number; width: number; height: number };
+      viewportWidth: number;
+      viewportHeight: number;
+    }
+  ): Promise<
+    | { status: "saved"; filePath: string; width: number; height: number }
+    | { status: "offscreen" }
+    | { status: "resized" }
+  >;
+}
+
 export interface InspectorDeps {
   sitePreview: SitePreviewApi;
   invoke(channel: string, args: unknown): Promise<unknown>;
   on(channel: string, callback: (payload: unknown) => void): () => void;
   now(): number;
+  /** Takes the picture a page selection carries; absent where the host offers none. */
+  capture?: ElementCaptureApi;
+  /** The window is attached to another machine, where a local picture's path means nothing. */
+  remoteWindow?: () => boolean;
 }
 
 export interface InspectorContext {
@@ -156,8 +179,19 @@ export type StaleReason = "document-changed" | "source-changed" | "preview-detac
 export type SelectionState =
   | { status: "none" }
   | { status: "resolving"; epoch: number; requestId: number }
-  /** Seen in the page, but no source identity can be resolved for it. */
-  | { status: "observed"; epoch: number; node: SiteGuestNodeObservation; nodeCount: number }
+  /**
+   * Seen in the page, but no source identity can be resolved for it. `page`
+   * is what an agent can still be told about it — the page's own account —
+   * when there is no source to trace it to at all; null while there may yet
+   * be (a workspace still opening, a page still loading).
+   */
+  | {
+      status: "observed";
+      epoch: number;
+      node: SiteGuestNodeObservation;
+      nodeCount: number;
+      page: PageSelection | null;
+    }
   | {
       status: "ready";
       selection: SiteSelection;
@@ -324,11 +358,17 @@ function routeFor(
 
 /** How long an agent request waits for the route files before going without them. */
 const PAGE_PLACE_TIMEOUT_MS = 3_000;
+/** How long a page selection's picture may take before the request goes without it. */
+const CAPTURE_TIMEOUT_MS = 5_000;
+/** Pictures kept for the selections a draft may still be about. */
+const CAPTURES_KEPT = 16;
 
 /** Page verdicts that a traced element disproves. */
 const MAPPING_ISSUES = new Set(["no-svelte-meta", "not-dev-build", "metadata-shape"]);
 /** Cleared by a selection whose page reported a component chain after all. */
 const ANCESTRY_ISSUE = "no-ancestry";
+/** Everything said about the page's Svelte metadata: news only where there is Svelte source. */
+const SOURCE_ISSUES = new Set([...MAPPING_ISSUES, ANCESTRY_ISSUE]);
 
 export interface InspectorState {
   binding: BindingState;
@@ -394,6 +434,8 @@ export function defaultInspectorDeps(previewPanelId: string): InspectorDeps {
     on: (channel, callback) =>
       window.electron.plugin.onPanel(PLUGIN_ID, channel, previewPanelId, callback),
     now: () => Date.now(),
+    capture: window.electron.webview,
+    remoteWindow: isRemoteWindow,
   };
 }
 
@@ -497,6 +539,15 @@ export class InspectorController implements DevPreviewToolSession {
   private recoveringWorkspace: string | null = null;
   private disposed = false;
   private warnedUnusableGuestEvent = false;
+  private pageSelectionCount = 0;
+  /**
+   * The nodes behind the current `observed` selection. One made while the
+   * workspace was still being looked for has no page account yet, and gets
+   * one if the answer turns out to be that there is no source to trace.
+   */
+  private lastObserved: { epoch: number; nodes: SiteGuestNodeObservation[] } | null = null;
+  /** Each page selection's picture, taken when it was made: oldest first, bounded. */
+  private readonly captures = new Map<string, Promise<PageScreenshot>>();
 
   constructor(
     panelId: string,
@@ -655,11 +706,15 @@ export class InspectorController implements DevPreviewToolSession {
           this.patchState({ workspace: { status: "ambiguous", appRoots: result.appRoots } });
           return;
         }
-        case "no-app":
+        case "no-app": {
+          const code = this.state.issue?.code;
           this.patchState({
             workspace: { status: "no-app", scanComplete: result.scanComplete ?? true },
+            ...(code !== undefined && SOURCE_ISSUES.has(code) ? { issue: null } : {}),
           });
+          this.describeObserved();
           return;
+        }
       }
     } catch (error) {
       if (request !== this.workspaceRequest) return;
@@ -1079,6 +1134,9 @@ export class InspectorController implements DevPreviewToolSession {
         );
         return;
       case "runtimeIssue":
+        // A page with no Svelte metadata is only news where there is Svelte
+        // source to trace it to; anywhere else it is every page there is.
+        if (MAPPING_ISSUES.has(event.code) && this.isSourceless()) return;
         this.patchState({
           issue: {
             severity: event.code === "internal" ? "error" : "warning",
@@ -1106,6 +1164,14 @@ export class InspectorController implements DevPreviewToolSession {
       case "metadataProbed": {
         const page = this.state.page;
         if (page === null || page.epoch !== epoch) return;
+        // What the page's metadata supports is recorded either way; what it
+        // lacks is only worth saying where there is source to trace.
+        if (this.isSourceless()) {
+          this.patchState({
+            page: { ...page, metadata: { locations: event.locations, ancestry: event.ancestry } },
+          });
+          return;
+        }
         const metadata = { locations: event.locations, ancestry: event.ancestry };
         const patch: Partial<InspectorState> = { page: { ...page, metadata } };
         // A page that hydrated late can be probed after the audit already
@@ -1267,7 +1333,19 @@ export class InspectorController implements DevPreviewToolSession {
     // an agent: the verdict is about which compiler proved the range, not about
     // what the drawer offers.
     if (workspace.status !== "ready" || binding.status !== "bound") {
-      refuse({ status: "observed", epoch, node: primary, nodeCount: nodes.length }, false);
+      if (!reproving) this.lastObserved = { epoch, nodes };
+      const described =
+        !reproving && this.isSourceless() && binding.status === "bound" && page?.epoch === epoch
+          ? this.pageSelectionOf(binding.panelId, epoch, page, nodes)
+          : null;
+      // The picture first: publishing the selection opens the drawer, which
+      // takes its width from the page and moves the element out of the box
+      // just measured.
+      if (described !== null) this.capturePicture(described, nodes);
+      refuse(
+        { status: "observed", epoch, node: primary, nodeCount: nodes.length, page: described },
+        false
+      );
       return;
     }
     if (!page || page.epoch !== epoch) {
@@ -1299,7 +1377,9 @@ export class InspectorController implements DevPreviewToolSession {
         routeId: page.routeId,
         url: page.url,
         viewport: page.viewport,
-        nodes,
+        // Main traces source; what the page says the element looks like is
+        // the renderer's to quote, and has no business in that payload.
+        nodes: nodes.map(({ context: _context, ...node }) => node),
       });
     } catch (error) {
       if (!this.isCurrentResolve(request, reproving)) return;
@@ -2000,6 +2080,133 @@ export class InspectorController implements DevPreviewToolSession {
     }
   }
 
+  /** Give the observed selection its page account, now that there is known to be no source. */
+  private describeObserved(): void {
+    const selection = this.state.selection;
+    const observed = this.lastObserved;
+    const page = this.state.page;
+    const binding = this.state.binding;
+    if (
+      selection.status !== "observed" ||
+      selection.page !== null ||
+      observed === null ||
+      observed.epoch !== selection.epoch ||
+      page?.epoch !== selection.epoch ||
+      binding.status !== "bound"
+    ) {
+      return;
+    }
+    const described = this.pageSelectionOf(binding.panelId, selection.epoch, page, observed.nodes);
+    // The boxes were measured at the click, and the page may have scrolled or
+    // reflowed since: a picture taken now could frame something else.
+    this.keepPicture(
+      described.selectionId,
+      Promise.resolve({
+        status: "omitted",
+        reason: "it was picked before the worktree search finished; select it again to attach one",
+      })
+    );
+    this.patchState({ selection: { ...selection, page: described } });
+  }
+
+  /** No source exists here to trace an element to: the page is all there is to describe. */
+  private isSourceless(): boolean {
+    const status = this.state.workspace.status;
+    return status === "no-app" || status === "no-worktree";
+  }
+
+  private pageSelectionOf(
+    previewPanelId: string,
+    epoch: number,
+    page: PageState,
+    nodes: SiteGuestNodeObservation[]
+  ): PageSelection {
+    this.pageSelectionCount += 1;
+    return {
+      kind: "page",
+      selectionId: `page:${epoch}:${this.pageSelectionCount}`,
+      previewPanelId,
+      documentEpoch: epoch,
+      displayedUrl: redactUrl(page.url),
+      viewport: page.viewport,
+      nodes: nodes.map((node) => ({
+        label: singleLineLabel(node.label),
+        tagName: node.tagName,
+        context: node.context ?? null,
+      })),
+      capturedAt: new Date(this.deps.now()).toISOString(),
+    };
+  }
+
+  /**
+   * The picture is taken now, while the page still shows what was clicked,
+   * not when a request is sent: by then the page may have scrolled, and the
+   * boxes the guest measured would frame something else.
+   */
+  private capturePicture(selection: PageSelection, nodes: SiteGuestNodeObservation[]): void {
+    const capture = this.deps.capture;
+    const omitted = (reason: string): Promise<PageScreenshot> =>
+      Promise.resolve({ status: "omitted", reason });
+    const rect = unionBounds(nodes.flatMap((node) => node.bounds));
+    let picture: Promise<PageScreenshot>;
+    if (capture === undefined) {
+      picture = omitted("this host can't capture the preview");
+    } else if (this.deps.remoteWindow?.() === true) {
+      picture = omitted("this window is attached to another machine");
+    } else if (rect === null) {
+      picture = omitted("the element has no size on screen");
+    } else {
+      const taken = capture
+        .captureElement(selection.previewPanelId, {
+          rect,
+          viewportWidth: selection.viewport.width,
+          viewportHeight: selection.viewport.height,
+        })
+        .then(
+          (result): PageScreenshot => {
+            switch (result.status) {
+              case "saved":
+                return { status: "attached", path: result.filePath };
+              case "offscreen":
+                return { status: "omitted", reason: "the element is outside the visible page" };
+              case "resized":
+                return {
+                  status: "omitted",
+                  reason: "the preview changed size before it could be captured",
+                };
+            }
+          },
+          (): PageScreenshot => ({ status: "omitted", reason: "the preview couldn't be captured" })
+        );
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const deadline = new Promise<PageScreenshot>((resolve) => {
+        timer = setTimeout(
+          () => resolve({ status: "omitted", reason: "capturing the preview took too long" }),
+          CAPTURE_TIMEOUT_MS
+        );
+      });
+      picture = Promise.race([taken, deadline]).finally(() => clearTimeout(timer));
+    }
+    this.keepPicture(selection.selectionId, picture);
+  }
+
+  private keepPicture(selectionId: string, picture: Promise<PageScreenshot>): void {
+    this.captures.set(selectionId, picture);
+    while (this.captures.size > CAPTURES_KEPT) {
+      const oldest = this.captures.keys().next();
+      if (oldest.done === true) break;
+      this.captures.delete(oldest.value);
+    }
+  }
+
+  /** The picture taken of a page selection, or why a request about it goes without one. */
+  pagePicture(selectionId: string): Promise<PageScreenshot> {
+    return (
+      this.captures.get(selectionId) ??
+      Promise.resolve({ status: "omitted", reason: "the selection is too old to have a picture" })
+    );
+  }
+
   dispose(): void {
     if (this.disposed) return;
     // The builder is really over for this preview: nothing typed or in flight
@@ -2036,7 +2243,8 @@ export function createBuilderSession(
   // The chunk can land after the host let this preview go. Disposing what we
   // would build here cancels agent requests and forgets composer drafts for the
   // whole panel — which by then may belong to the next session.
-  if (context.signal.aborted) throw new Error("SvelteKit Tools was switched off while it loaded");
+  if (context.signal.aborted)
+    throw new Error("The Element Picker was switched off while it loaded");
   const controller = new InspectorController(context.panelId, deps(context.panelId));
   controller.update(context);
   return controller;

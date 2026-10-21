@@ -1764,3 +1764,63 @@ describe("a hostile page", () => {
     }
   });
 });
+
+describe("a page with no Svelte metadata", () => {
+  it("still selects what was clicked, and describes it in the page's own terms", () => {
+    document.body.innerHTML =
+      '<main id="app"><button class="cta" type="button">Start Pro</button></main>';
+    install("select");
+    const button = document.querySelector("button")!;
+    click(button);
+
+    const [node] = lastSelection();
+    expect(node?.loc).toBeNull();
+    expect(node?.label).toBe("button.cta");
+    expect(node?.context?.selector).toBe("button.cta");
+    expect(node?.context?.markup).toBe('<button class="cta" type="button">Start Pro</button>');
+  });
+
+  it("describes a hover by label alone: the markup and styles are read only for a selection", () => {
+    document.body.innerHTML = '<main id="app"><button class="cta">Start Pro</button></main>';
+    install("select");
+    document
+      .querySelector("button")!
+      .dispatchEvent(new MouseEvent("pointermove", { bubbles: true, composed: true }));
+
+    const hovers = events("hoverChanged");
+    expect(hovers).toHaveLength(1);
+    const [hover] = hovers;
+    expect(hover?.type === "hoverChanged" ? hover.node?.label : null).toBe("button.cta");
+    expect(hover?.type === "hoverChanged" ? hover.node?.context : null).toBeUndefined();
+  });
+
+  it("walks the plain DOM with the arrow keys", () => {
+    document.body.innerHTML =
+      '<main id="app"><ul><li id="one">a</li><li id="two">b</li></ul></main>';
+    install("select");
+    click(document.getElementById("one")!);
+    const key = (name: string) =>
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: name, bubbles: true }));
+
+    key("ArrowRight");
+    expect(lastSelection()[0]?.label).toBe("li#two");
+    key("ArrowUp");
+    expect(lastSelection()[0]?.label).toBe("ul");
+    key("ArrowUp");
+    expect(lastSelection()[0]?.label).toBe("main#app");
+    // The body is the document's frame, not something to point an agent at.
+    key("ArrowUp");
+    expect(lastSelection()[0]?.label).toBe("main#app");
+    key("ArrowDown");
+    expect(lastSelection()[0]?.label).toBe("ul");
+  });
+
+  it("walks past the selection limit along a long list", () => {
+    const items = Array.from({ length: 40 }, (_, index) => `<li id="i${index}">${index}</li>`);
+    document.body.innerHTML = `<ul>${items.join("")}</ul>`;
+    install("select");
+    click(document.getElementById("i33")!);
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+    expect(lastSelection()[0]?.label).toBe("li#i34");
+  });
+});
