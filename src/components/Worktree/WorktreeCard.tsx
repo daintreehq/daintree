@@ -61,10 +61,7 @@ import { notifyAttachmentFailure } from "./WorktreeCard/notifyAttachmentFailure"
 import { WorktreeHeader } from "./WorktreeCard/WorktreeHeader";
 import { WorktreeTerminalSection } from "./WorktreeCard/WorktreeTerminalSection";
 import { WslGitBanner } from "./WorktreeCard/WslGitBanner";
-import {
-  MainWorktreeSummaryRows,
-  type AggregateCounts,
-} from "./WorktreeCard/MainWorktreeSummaryRows";
+import type { AggregateCounts } from "./WorktreeCard/aggregateCounts";
 import { useInputReceiptKey } from "./WorktreeCard/hooks/useInputReceiptKey";
 import { useWorktreeActions } from "./WorktreeCard/hooks/useWorktreeActions";
 import { copyContextWithFeedback } from "@/hooks/useWorktreeActions";
@@ -129,7 +126,6 @@ export interface WorktreeCardProps {
   onMoveDown?: () => void;
   canMoveUp?: boolean;
   canMoveDown?: boolean;
-  projectHealth?: import("@shared/types/ipc/forge").ForgeProjectHealthPayload | null;
   /**
    * Multi-select state (grid variant only). When provided, modifier-clicks
    * (Ctrl/Cmd/Shift) route through `onToggleSelect` instead of `onSelect`
@@ -163,7 +159,6 @@ export function WorktreeCard({
   onMoveDown,
   canMoveUp,
   canMoveDown,
-  projectHealth,
   isSelected = false,
   onToggleSelect,
 }: WorktreeCardProps) {
@@ -1583,8 +1578,6 @@ export function WorktreeCard({
                       wslGitEligible={worktree.wslGitEligible}
                     />
                   )}
-                  {isMainWorktree && <MainWorktreeSummaryRows health={projectHealth ?? null} />}
-
                   <WorktreeDetailsSection
                     variant={variant}
                     worktree={worktree}
