@@ -64,9 +64,13 @@ export class AttachmentService {
   // Every card disables its rows while one is outstanding, so nobody asks for
   // a move against a holder that is about to change.
   private pending = new Map<string, number>();
-  // Worktrees whose delete has started. Nothing may attach to one: its delete
-  // has already run the detaches it is going to run.
-  private deleting = new Set<string>();
+  // Worktrees whose delete has started, counted per delete in flight. Nothing
+  // may attach to one: its delete has already run the detaches it will run.
+  private deleting = new Map<string, number>();
+  // Settles once the current project's holders are read. Every operation waits
+  // on it: before then the records are empty, and an attach would skip the
+  // detach of a holder that simply hasn't been read yet.
+  private ready: Promise<void> = Promise.resolve();
   private queue = new PQueue({ concurrency: 1 });
   private abort = new AbortController();
   private loadedRoot: string | null = null;
@@ -83,6 +87,7 @@ export class AttachmentService {
     // A repeat load of the same project (prefetch, recovery) must not abort a
     // move halfway through or drop holders it has recorded since.
     if (this.loadedRoot === projectRootPath) {
+      await this.ready;
       await this.refreshDeclarations();
       return;
     }
@@ -92,13 +97,17 @@ export class AttachmentService {
     this.abort.abort();
     this.abort = new AbortController();
     this.running.clear();
+    this.pending.clear();
     this.deleting.clear();
     this.loadedRoot = projectRootPath;
     this.records = new Map();
     this.declarations = null;
-    const stored = await this.store.load(projectRootPath);
-    if (epoch !== this.epoch) return;
-    this.records = new Map(Object.entries(stored));
+    this.ready = (async () => {
+      const stored = await this.store.load(projectRootPath);
+      if (epoch !== this.epoch) return;
+      this.records = new Map(Object.entries(stored));
+    })();
+    await this.ready;
     await this.refreshDeclarations();
   }
 
@@ -158,6 +167,7 @@ export class AttachmentService {
     this.publishAll();
     return this.queue
       .add(async () => {
+        await this.ready;
         if (epoch !== this.epoch) return { success: false, error: "Aborted" };
         if (action === "attach") {
           return this.attach(worktreeId, name, epoch, expectedHolderWorktreeId);
@@ -167,10 +177,12 @@ export class AttachmentService {
       })
       .then((result) => result ?? { success: false, error: "Aborted" })
       .finally(() => {
+        // A reload cleared the counts this request added to.
+        if (epoch !== this.epoch) return;
         const left = (this.pending.get(name) ?? 1) - 1;
         if (left > 0) this.pending.set(name, left);
         else this.pending.delete(name);
-        if (epoch === this.epoch) this.publishAll();
+        this.publishAll();
       });
   }
 
@@ -185,64 +197,72 @@ export class AttachmentService {
    * Until {@link endDelete}, nothing may attach to the worktree.
    */
   async detachForDelete(worktreeId: string): Promise<void> {
-    this.deleting.add(worktreeId);
+    this.deleting.set(worktreeId, (this.deleting.get(worktreeId) ?? 0) + 1);
     const epoch = this.epoch;
-    await this.queue.add(async () => {
-      if (epoch !== this.epoch) return;
-      const held = [...this.records].filter(([, r]) => r.holderWorktreeId === worktreeId);
-      if (held.length === 0) return;
-      const monitor = this.ctx.getMonitor(worktreeId);
-      const declarations = await this.freshDeclarations(epoch);
-      if (epoch !== this.epoch) return;
-      const approved = declarations ? await this.isApproved(declarations) : false;
-      if (epoch !== this.epoch) return;
-      // One budget for every detach, so a delete's whole teardown stays under
-      // the delete-worktree port deadline however many attachments it holds.
-      const deadline = Date.now() + DELETE_DETACH_BUDGET_MS;
-      for (const [name, record] of held) {
-        const config = declarations?.attachments.get(name);
-        const remainingMs = deadline - Date.now();
-        let observation: ProjectAttachmentObservation;
-        if (!monitor || !config) {
-          observation = this.observe("detach", worktreeId, {
-            state: "failed",
-            error: config ? ATTACHMENT_HOLDER_REMOVED_ERROR : "Its declaration was removed.",
-          });
-        } else if (!approved) {
-          observation = this.observe("detach", worktreeId, {
-            state: "needs-approval",
-            error: LIFECYCLE_COMMANDS_NEED_APPROVAL_ERROR,
-          });
-        } else if (remainingMs <= 0) {
-          observation = this.observe("detach", worktreeId, {
-            state: "timed-out",
-            error: "The delete's time for detaching ran out before this one started.",
-          });
-        } else {
-          const result = await this.runTracked(
-            name,
-            "detach",
-            monitor,
-            config.detach,
-            Math.min(DELETE_DETACH_TIMEOUT_MS, remainingMs)
-          );
-          if (epoch !== this.epoch) return;
-          observation = this.observeResult("detach", worktreeId, result);
+    // Ahead of any queued request, so a delete waits at most for the one
+    // command already running — its port deadline is sized to that.
+    await this.queue.add(
+      async () => {
+        await this.ready;
+        if (epoch !== this.epoch) return;
+        const held = [...this.records].filter(([, r]) => r.holderWorktreeId === worktreeId);
+        if (held.length === 0) return;
+        const monitor = this.ctx.getMonitor(worktreeId);
+        const declarations = await this.freshDeclarations(epoch);
+        if (epoch !== this.epoch) return;
+        const approved = declarations ? await this.isApproved(declarations) : false;
+        if (epoch !== this.epoch) return;
+        // One budget for every detach, so a delete's whole teardown stays under
+        // the delete-worktree port deadline however many attachments it holds.
+        const deadline = Date.now() + DELETE_DETACH_BUDGET_MS;
+        for (const [name, record] of held) {
+          const config = declarations?.attachments.get(name);
+          const remainingMs = deadline - Date.now();
+          let observation: ProjectAttachmentObservation;
+          if (!monitor || !config) {
+            observation = this.observe("detach", worktreeId, {
+              state: "failed",
+              error: config ? ATTACHMENT_HOLDER_REMOVED_ERROR : "Its declaration was removed.",
+            });
+          } else if (!approved) {
+            observation = this.observe("detach", worktreeId, {
+              state: "needs-approval",
+              error: LIFECYCLE_COMMANDS_NEED_APPROVAL_ERROR,
+            });
+          } else if (remainingMs <= 0) {
+            observation = this.observe("detach", worktreeId, {
+              state: "timed-out",
+              error: "The delete's time for detaching ran out before this one started.",
+            });
+          } else {
+            const result = await this.runTracked(
+              name,
+              "detach",
+              monitor,
+              config.detach,
+              Math.min(DELETE_DETACH_TIMEOUT_MS, remainingMs)
+            );
+            if (epoch !== this.epoch) return;
+            observation = this.observeResult("detach", worktreeId, result);
+          }
+          record.lastResult = observation;
+          if (observation.state === "success") {
+            record.holderWorktreeId = null;
+            record.status = undefined;
+          }
         }
-        record.lastResult = observation;
-        if (observation.state === "success") {
-          record.holderWorktreeId = null;
-          record.status = undefined;
-        }
-      }
-      await this.persist(epoch);
-      this.publishAll();
-    });
+        await this.persist(epoch);
+        this.publishAll();
+      },
+      { priority: 1 }
+    );
   }
 
-  /** The delete of `worktreeId` finished, whether or not it removed it. */
+  /** A delete that ran {@link detachForDelete} failed and left the worktree in place. */
   endDelete(worktreeId: string): void {
-    this.deleting.delete(worktreeId);
+    const left = (this.deleting.get(worktreeId) ?? 1) - 1;
+    if (left > 0) this.deleting.set(worktreeId, left);
+    else this.deleting.delete(worktreeId);
   }
 
   /** The detach phases a delete of `monitor` would run, for its confirm surfaces. */
@@ -445,6 +465,9 @@ export class AttachmentService {
     const approved = await this.isApproved(declarations);
     if (epoch !== this.epoch) return undefined;
     if (!approved) return this.refuseUnapproved(holder, epoch);
+    if (this.ctx.getMonitor(worktreeId) !== holder || record.holderWorktreeId !== worktreeId) {
+      return { success: false, error: `"${name}" isn't attached here` };
+    }
 
     const result = await this.runTracked(name, "detach", holder, config.detach, DETACH_TIMEOUT_MS);
     if (epoch !== this.epoch) return undefined;

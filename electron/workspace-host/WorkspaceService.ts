@@ -4524,6 +4524,9 @@ export class WorkspaceService {
     // Hoisted so the catch can clear the pending entry even though `monitor`
     // is block-scoped to the try.
     let pendingDeleteKey: string | null = null;
+    // Set once the attachment detaches have run, so a failure releases the
+    // hold they took on the worktree — and only then.
+    let attachmentsReserved = false;
     try {
       markHostPerformance("wtdelete.host-start", { worktreeId });
       const monitor = this.monitors.get(worktreeId);
@@ -4612,6 +4615,7 @@ export class WorkspaceService {
         this.setActiveWorktree(`${requestId}-auto-switch`, mainWorktreeId);
       }
 
+      attachmentsReserved = true;
       await this.runLifecycleTeardown(worktreeId, monitor, force);
 
       // Mark the metadata-subdir basename pending so the watcher event our own
@@ -4769,8 +4773,9 @@ export class WorkspaceService {
       // Delete failed — drop any pending entry so a real external change to
       // that name isn't masked, and cancel its safety valve.
       if (pendingDeleteKey) this.topologyWatcher.clearPending(pendingDeleteKey);
-      // The worktree is still here, so attaching to it is allowed again.
-      this.attachmentService.endDelete(worktreeId);
+      // The worktree is still here, so attaching to it is allowed again — but
+      // only this delete's hold is released; a concurrent one keeps its own.
+      if (attachmentsReserved) this.attachmentService.endDelete(worktreeId);
       // The only durable record of a delete failure. The renderer surfaces it
       // on the card, but a branch-delete failure arrives after the card is
       // already gone — so without this the error survives nowhere on disk.

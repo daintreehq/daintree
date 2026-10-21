@@ -59,7 +59,9 @@ class MemoryStore implements ProjectAttachmentStore {
   constructor(initial: ProjectAttachmentRecords = {}) {
     this.saved = structuredClone(initial);
   }
+  loadGate: Promise<void> | null = null;
   async load(): Promise<ProjectAttachmentRecords> {
+    if (this.loadGate) await this.loadGate;
     return structuredClone(this.saved);
   }
   async save(_root: string, records: ProjectAttachmentRecords): Promise<void> {
@@ -394,6 +396,34 @@ describe("AttachmentService", () => {
     // A delete that failed leaves the worktree, which may then attach again.
     h.service.endDelete("/wt/b");
     expect((await h.service.run("/wt/b", "tunnel", "attach", null)).success).toBe(true);
+  });
+
+  it("keeps the delete guard while another delete of the same worktree is in flight", async () => {
+    const h = await createHarness();
+    await h.service.detachForDelete("/wt/b");
+    await h.service.detachForDelete("/wt/b");
+    h.service.endDelete("/wt/b");
+    expect((await h.service.run("/wt/b", "tunnel", "attach", null)).success).toBe(false);
+    h.service.endDelete("/wt/b");
+    expect((await h.service.run("/wt/b", "tunnel", "attach", null)).success).toBe(true);
+  });
+
+  it("waits for the stored holders before acting on a freshly loaded project", async () => {
+    const h = await createHarness();
+    h.store.saved = { tunnel: { holderWorktreeId: "/wt/a" } };
+    let release!: () => void;
+    h.store.loadGate = new Promise<void>((resolve) => (release = resolve));
+
+    const loading = h.service.load("/other-repo");
+    const attach = h.service.run("/wt/b", "tunnel", "attach", "/wt/a");
+    release();
+    await loading;
+
+    expect(await attach).toEqual({ success: true });
+    expect(h.ran.map((r) => `${r.command}@${r.cwd}`).slice(0, 2)).toEqual([
+      "tunnel down@/wt/a",
+      "tunnel up 'feature/b'@/wt/b",
+    ]);
   });
 
   it("refuses a move when the holder changed since the user asked", async () => {
