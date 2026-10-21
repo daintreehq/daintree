@@ -89,6 +89,7 @@ const PAYLOAD_SCHEMAS = {
     worktreeId,
     name: z.string().min(1).max(256),
     action: z.enum(ATTACHMENT_ACTIONS),
+    expectedHolderWorktreeId: worktreeId.nullable().optional(),
   }),
   "run-lifecycle-setup": z.object({ worktreeId }),
   "get-lifecycle-command-approval": z.object({ worktreeId }),

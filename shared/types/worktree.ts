@@ -231,6 +231,8 @@ export interface WorktreeAttachment {
   /** The worktree holding it, when one does. */
   holderWorktreeId?: string;
   hasStatusCommand: boolean;
+  /** A request for this attachment is queued or running, on any worktree. */
+  busy?: boolean;
   /** The command running for this attachment against this worktree. */
   running?: "attach" | "detach" | "status";
   /** The last attach/detach/removal observed against this worktree. */

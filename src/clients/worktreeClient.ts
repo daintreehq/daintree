@@ -254,9 +254,15 @@ export const worktreeClient = {
   attachmentAction: async (
     worktreeId: string,
     name: string,
-    action: "attach" | "detach" | "status"
+    action: "attach" | "detach" | "status",
+    expectedHolderWorktreeId?: string | null
   ): Promise<void> => {
-    await window.electron.worktreePort.request("attachment-action", { worktreeId, name, action });
+    await window.electron.worktreePort.request("attachment-action", {
+      worktreeId,
+      name,
+      action,
+      ...(expectedHolderWorktreeId !== undefined && { expectedHolderWorktreeId }),
+    });
   },
 
   retrySetup: async (worktreeId: string): Promise<void> => {

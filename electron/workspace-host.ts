@@ -237,7 +237,8 @@ async function handleWorktreePortRequest(
         const actionResult = await workspaceService.runAttachmentAction(
           msg.payload.worktreeId,
           msg.payload.name,
-          msg.payload.action
+          msg.payload.action,
+          msg.payload.expectedHolderWorktreeId
         );
         if (!actionResult.success) {
           rPort.postMessage({ id, error: actionResult.error ?? "Attachment action failed" });

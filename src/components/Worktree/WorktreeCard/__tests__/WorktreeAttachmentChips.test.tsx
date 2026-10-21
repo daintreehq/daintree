@@ -148,6 +148,25 @@ describe("WorktreeAttachmentChips", () => {
     expect(onAction).toHaveBeenLastCalledWith("tunnel", "detach");
   });
 
+  it("drops the names from the header once several chips share it, keeping them in the label", () => {
+    renderChips([
+      { ...base, heldHere: true, holderWorktreeId: "/wt/a" },
+      { ...base, name: "device", heldHere: true, holderWorktreeId: "/wt/a" },
+    ]);
+    const tunnel = screen.getByRole("button", { name: "tunnel attachment: Attached" });
+    const device = screen.getByRole("button", { name: "device attachment: Attached" });
+    expect(tunnel.textContent).toBe("");
+    expect(device.textContent).toBe("");
+  });
+
+  it("disables the holder's controls while a request for it is outstanding", () => {
+    renderChips([{ ...base, heldHere: true, holderWorktreeId: "/wt/a", busy: true }]);
+    fireEvent.click(screen.getByRole("button", { name: "tunnel attachment: Attached" }));
+    expect((screen.getByRole("button", { name: "Detach" }) as HTMLButtonElement).disabled).toBe(
+      true
+    );
+  });
+
   it("offers no controls on a worktree that does not hold it", () => {
     renderChips([
       {

@@ -1023,7 +1023,7 @@ export function WorktreeMenuItems({
                 attachment.hasStatusCommand && (
                   <C.Item
                     key={`${attachment.name}:status`}
-                    disabled={!!attachment.running}
+                    disabled={!!attachment.busy}
                     onSelect={() => onAttachmentAction(attachment.name, "status")}
                   >
                     <Activity className={ICON} />
@@ -1032,7 +1032,7 @@ export function WorktreeMenuItems({
                 ),
                 <C.Item
                   key={`${attachment.name}:detach`}
-                  disabled={!!attachment.running}
+                  disabled={!!attachment.busy}
                   onSelect={() => onAttachmentAction(attachment.name, "detach")}
                 >
                   <Unplug className={ICON} />
@@ -1042,7 +1042,7 @@ export function WorktreeMenuItems({
             : [
                 <C.Item
                   key={`${attachment.name}:attach`}
-                  disabled={!!attachment.running}
+                  disabled={!!attachment.busy}
                   onSelect={() => onAttachmentAction(attachment.name, "attach")}
                 >
                   <Cable className={ICON} />

@@ -127,9 +127,15 @@ export interface WorktreePortProtocol {
     result: { ok: true };
   };
   // Runs one project attachment's command against `worktreeId`. Rejects with
-  // the observed error when the command fails or was refused.
+  // the observed error when the command fails or was refused. An attach names
+  // the holder the user saw (`null` for none) and is refused if it changed.
   "attachment-action": {
-    payload: { worktreeId: string; name: string; action: WorktreePortAttachmentAction };
+    payload: {
+      worktreeId: string;
+      name: string;
+      action: WorktreePortAttachmentAction;
+      expectedHolderWorktreeId?: string | null;
+    };
     result: { ok: true };
   };
   "run-lifecycle-setup": {

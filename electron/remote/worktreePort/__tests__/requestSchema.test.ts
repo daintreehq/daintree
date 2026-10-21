@@ -73,7 +73,12 @@ describe("remote attachment-action", () => {
   }
 
   it("forwards a well-formed request", () => {
-    const payload = { worktreeId: "/repos/project-a-x", name: "tunnel", action: "attach" };
+    const payload = {
+      worktreeId: "/repos/project-a-x",
+      name: "tunnel",
+      action: "attach",
+      expectedHolderWorktreeId: null,
+    };
     expect(attachment(payload)).toEqual({
       ok: true,
       request: { id: "a-1", action: "attachment-action", payload },

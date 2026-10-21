@@ -4769,6 +4769,8 @@ export class WorkspaceService {
       // Delete failed — drop any pending entry so a real external change to
       // that name isn't masked, and cancel its safety valve.
       if (pendingDeleteKey) this.topologyWatcher.clearPending(pendingDeleteKey);
+      // The worktree is still here, so attaching to it is allowed again.
+      this.attachmentService.endDelete(worktreeId);
       // The only durable record of a delete failure. The renderer surfaces it
       // on the card, but a branch-delete failure arrives after the card is
       // already gone — so without this the error survives nowhere on disk.
@@ -6224,9 +6226,10 @@ export class WorkspaceService {
   runAttachmentAction(
     worktreeId: string,
     name: string,
-    action: "attach" | "detach" | "status"
+    action: "attach" | "detach" | "status",
+    expectedHolderWorktreeId?: string | null
   ): Promise<AttachmentActionResult> {
-    return this.attachmentService.run(worktreeId, name, action);
+    return this.attachmentService.run(worktreeId, name, action, expectedHolderWorktreeId);
   }
 
   async hasResourceConfig(rootPath: string): Promise<boolean> {

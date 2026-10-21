@@ -850,8 +850,8 @@ describe("useWorktreeBulkRemove — the queue no longer guillotines the batch (#
     // The regression: `PQueue({ timeout: 30_000 })` rejected `addAll` after 30s
     // while p-queue cancelled nothing, so the siblings kept running unobserved
     // behind a "Bulk remove aborted" toast. The delete transport's own deadline
-    // is 10 minutes (`WORKTREE_PORT_TIMEOUTS_MS["delete-worktree"]`), sized to
-    // the host's 7-minute teardown worst case — a renderer ceiling below that
+    // is 20 minutes (`WORKTREE_PORT_TIMEOUTS_MS["delete-worktree"]`), sized to
+    // the host's teardown worst case — a renderer ceiling below that
     // can only ever fire early.
     vi.useFakeTimers();
     worktreeClientMock.delete.mockImplementation(

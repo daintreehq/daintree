@@ -332,22 +332,42 @@ describe("AttachmentService", () => {
     expect(tunnelOn(h, "/wt/a")?.holderWorktreeId).toBeUndefined();
   });
 
-  it("detaches ahead of a delete and leaves it unattached even when the detach fails", async () => {
+  it("detaches ahead of a delete and releases it once the detach succeeded", async () => {
     const h = await createHarness();
     await h.service.run("/wt/a", "tunnel", "attach");
     h.ran.length = 0;
-    h.setScript(() => ({ success: false, error: "gone wrong" }));
 
     await h.service.detachForDelete("/wt/a");
 
     expect(h.ran.map((r) => [r.command, r.cwd])).toEqual([["tunnel down", "/wt/a"]]);
     expect(h.store.saved.tunnel).toMatchObject({
       holderWorktreeId: null,
-      lastResult: { action: "detach", state: "failed", worktreeId: "/wt/a" },
+      lastResult: { action: "detach", state: "success", worktreeId: "/wt/a" },
     });
   });
 
-  it("skips an unapproved detach on delete, records that, and still releases", async () => {
+  it("keeps a failed delete-detach on its holder until the worktree is actually removed", async () => {
+    const h = await createHarness();
+    await h.service.run("/wt/a", "tunnel", "attach");
+    h.setScript(() => ({ success: false, error: "gone wrong" }));
+
+    await h.service.detachForDelete("/wt/a");
+    // The delete can still fail and leave the worktree — and the resource — in place.
+    expect(h.store.saved.tunnel).toMatchObject({
+      holderWorktreeId: "/wt/a",
+      lastResult: { action: "detach", state: "failed", worktreeId: "/wt/a" },
+    });
+
+    h.monitors.delete("/wt/a");
+    h.service.handleWorktreeRemoved("/wt/a");
+    // Released, with the failed detach still the account of what happened.
+    expect(h.store.saved.tunnel).toMatchObject({
+      holderWorktreeId: null,
+      lastResult: { action: "detach", state: "failed", error: "gone wrong" },
+    });
+  });
+
+  it("skips an unapproved detach on delete and records that it did", async () => {
     const h = await createHarness();
     await h.service.run("/wt/a", "tunnel", "attach");
     h.ran.length = 0;
@@ -357,9 +377,93 @@ describe("AttachmentService", () => {
 
     expect(h.ran).toEqual([]);
     expect(h.store.saved.tunnel).toMatchObject({
-      holderWorktreeId: null,
+      holderWorktreeId: "/wt/a",
       lastResult: { action: "detach", state: "needs-approval" },
     });
+  });
+
+  it("refuses to attach to a worktree whose delete has started", async () => {
+    const h = await createHarness();
+    const deleting = h.service.detachForDelete("/wt/b");
+    const attach = h.service.run("/wt/b", "tunnel", "attach", null);
+    await deleting;
+
+    expect((await attach).success).toBe(false);
+    expect(h.ran).toEqual([]);
+
+    // A delete that failed leaves the worktree, which may then attach again.
+    h.service.endDelete("/wt/b");
+    expect((await h.service.run("/wt/b", "tunnel", "attach", null)).success).toBe(true);
+  });
+
+  it("refuses a move when the holder changed since the user asked", async () => {
+    const h = await createHarness();
+    await h.service.run("/wt/a", "tunnel", "attach", null);
+    h.ran.length = 0;
+
+    // The user saw nobody holding it; a move now would detach /wt/a unconfirmed.
+    const result = await h.service.run("/wt/b", "tunnel", "attach", null);
+
+    expect(result.success).toBe(false);
+    expect(h.ran).toEqual([]);
+    expect(tunnelOn(h, "/wt/a")?.heldHere).toBe(true);
+    expect((await h.service.run("/wt/b", "tunnel", "attach", "/wt/a")).success).toBe(true);
+  });
+
+  it("does not attach to a target removed while the old holder detaches", async () => {
+    const h = await createHarness();
+    await h.service.run("/wt/a", "tunnel", "attach");
+    h.ran.length = 0;
+    h.setScript((command) => {
+      if (command === "tunnel down") h.monitors.delete("/wt/b");
+      return {};
+    });
+
+    const result = await h.service.run("/wt/b", "tunnel", "attach");
+
+    expect(result.success).toBe(false);
+    expect(h.ran.map((r) => r.command)).toEqual(["tunnel down"]);
+    expect(h.store.saved.tunnel?.holderWorktreeId).toBeNull();
+  });
+
+  it("marks the attachment busy on every card while a request is outstanding", async () => {
+    const h = await createHarness();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    vi.mocked(h.service["ctx"].lifecycleService.runCommands).mockImplementationOnce(async () => {
+      await gate;
+      return { success: true, output: "" };
+    });
+
+    const pending = h.service.run("/wt/a", "tunnel", "attach");
+    // Busy from the moment it is asked for, before anything runs.
+    expect(tunnelOn(h, "/wt/b")?.busy).toBe(true);
+    await vi.waitFor(() => expect(tunnelOn(h, "/wt/a")?.running).toBe("attach"));
+    expect(tunnelOn(h, "/wt/a")?.busy).toBe(true);
+    expect(tunnelOn(h, "/wt/b")?.running).toBeUndefined();
+
+    release();
+    await pending;
+    expect(tunnelOn(h, "/wt/b")?.busy).toBeUndefined();
+  });
+
+  it("settles a queued request when the project is switched away under it", async () => {
+    const h = await createHarness();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    vi.mocked(h.service["ctx"].lifecycleService.runCommands).mockImplementationOnce(async () => {
+      await gate;
+      return { success: false, output: "", aborted: true, error: "Aborted" };
+    });
+
+    const first = h.service.run("/wt/a", "tunnel", "attach");
+    const queued = h.service.run("/wt/b", "tunnel", "status");
+    await vi.waitFor(() => expect(tunnelOn(h, "/wt/a")?.running).toBe("attach"));
+    await h.service.load("/other-repo");
+    release();
+
+    await expect(first).resolves.toMatchObject({ success: false });
+    await expect(queued).resolves.toMatchObject({ success: false });
   });
 
   it("previews the substituted detach a delete would run", async () => {

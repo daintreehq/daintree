@@ -18,10 +18,12 @@ export const DEFAULT_WORKTREE_PORT_TIMEOUT_MS = 10_000;
  *
  * Values must exceed the host-side worst case so the renderer is never the
  * limiting factor. As of writing:
- *   - delete-worktree: host runs each held attachment's detach (60s each,
- *     AttachmentService.detachForDelete), resource-teardown (300s, hardcoded
- *     in WorktreeLifecycleService.runTeardown) then regular teardown (120s),
- *     sequentially → 8 min worst case with one attachment. Renderer gets 10.
+ *   - delete-worktree: host runs the detach of each attachment the worktree
+ *     holds (2 min budget for all of them, AttachmentService.detachForDelete,
+ *     which can first wait out an attachment move already running: up to
+ *     8 min), then resource-teardown (300s, hardcoded in
+ *     WorktreeLifecycleService.runTeardown) then regular teardown (120s),
+ *     sequentially → 17 min worst case. Renderer gets 20 min headroom.
  *   - resource-action: per-action defaults are 300s
  *     (ResourceActionExecutor.DEFAULT_TIMEOUT_MS); user configs in
  *     `.daintree/config.json` may extend this without an enforced ceiling.
@@ -41,7 +43,7 @@ export const DEFAULT_WORKTREE_PORT_TIMEOUT_MS = 10_000;
  */
 export const WORKTREE_PORT_TIMEOUTS_MS: Partial<Record<WorktreePortAction, number>> = {
   "create-worktree": 5 * 60_000,
-  "delete-worktree": 10 * 60_000,
+  "delete-worktree": 20 * 60_000,
   "resource-action": 15 * 60_000,
   // A move runs the old holder's detach and then the new attach (a mobile
   // build install can take minutes), each bounded host-side.

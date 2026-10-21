@@ -569,40 +569,48 @@ export function WorktreeCard({
     );
   };
 
-  const runAttachmentAction = (name: string, action: "attach" | "detach" | "status") => {
-    worktreeClient.attachmentAction(worktree.id, name, action).catch((err: unknown) => {
-      const message = formatErrorMessage(err, "The command failed.");
-      // eslint-disable-next-line no-restricted-syntax -- notify-event-kind: ok
-      notify({
-        type: "error",
-        priority: "high",
-        title: ATTACHMENT_FAILURE_TITLE[action],
-        message: `${name}: ${message}`,
-        context: { worktreeId: worktree.id },
-        action: {
-          label: "Copy details",
-          successLabel: "Copied",
-          onClick: async () => {
-            try {
-              await navigator.clipboard.writeText(message);
-            } catch {
-              // clipboard write is non-critical
-            }
+  const runAttachmentAction = (
+    name: string,
+    action: "attach" | "detach" | "status",
+    expectedHolderWorktreeId?: string | null
+  ) => {
+    worktreeClient
+      .attachmentAction(worktree.id, name, action, expectedHolderWorktreeId)
+      .catch((err: unknown) => {
+        const message = formatErrorMessage(err, "The command failed.");
+        // eslint-disable-next-line no-restricted-syntax -- notify-event-kind: ok
+        notify({
+          type: "error",
+          priority: "high",
+          title: ATTACHMENT_FAILURE_TITLE[action],
+          message: `${name}: ${message}`,
+          context: { worktreeId: worktree.id },
+          action: {
+            label: "Copy details",
+            successLabel: "Copied",
+            // A failed clipboard write is non-critical.
+            onClick: () => navigator.clipboard.writeText(message).catch(() => {}),
           },
-        },
+        });
       });
-    });
   };
 
   const handleAttachmentAction = (name: string, action: "attach" | "detach" | "status") => {
-    const holderId = worktree.attachments?.find((a) => a.name === name)?.holderWorktreeId;
-    if (action === "attach" && holderId && holderId !== worktree.id) {
-      const holder = getCurrentViewStore().getState().worktrees.get(holderId);
-      const fromLabel = holder?.branch ?? holder?.name ?? holderId;
-      confirmAttachmentMove(name, fromLabel, () => runAttachmentAction(name, action));
+    if (action !== "attach") {
+      runAttachmentAction(name, action);
       return;
     }
-    runAttachmentAction(name, action);
+    // The holder this card shows travels with the request, so the host refuses
+    // it if the attachment moved in the meantime rather than detaching someone
+    // the user never confirmed moving it away from.
+    const holderId = worktree.attachments?.find((a) => a.name === name)?.holderWorktreeId ?? null;
+    if (holderId && holderId !== worktree.id) {
+      const holder = getCurrentViewStore().getState().worktrees.get(holderId);
+      const fromLabel = holder?.branch ?? holder?.name ?? holderId;
+      confirmAttachmentMove(name, fromLabel, () => runAttachmentAction(name, action, holderId));
+      return;
+    }
+    runAttachmentAction(name, action, holderId);
   };
 
   const handleResourceStatus = () =>

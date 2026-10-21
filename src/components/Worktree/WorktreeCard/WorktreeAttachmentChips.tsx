@@ -71,16 +71,19 @@ function ObservationBlock({
 function AttachmentChip({
   attachment,
   state,
+  showName,
   onAction,
 }: {
   attachment: WorktreeAttachment;
   state: AttachmentChipState;
+  /** Off when several chips share the header; the tooltip and label still name it. */
+  showName: boolean;
   onAction: WorktreeAttachmentChipsProps["onAction"];
 }) {
   const [open, setOpen] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
   const triggerLabel = `${attachment.name} attachment: ${state.label}`;
-  const busy = !!attachment.running;
+  const busy = !!attachment.busy;
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -106,7 +109,7 @@ function AttachmentChip({
                   aria-hidden="true"
                 />
               )}
-              <span className="min-w-0 truncate">{attachment.name}</span>
+              {showName && <span className="min-w-0 truncate">{attachment.name}</span>}
             </button>
           </PopoverTrigger>
         </TooltipTrigger>
@@ -186,6 +189,7 @@ export function WorktreeAttachmentChips({ attachments, onAction }: WorktreeAttac
           key={attachment.name}
           attachment={attachment}
           state={state}
+          showName={chips.length === 1}
           onAction={onAction}
         />
       ))}
