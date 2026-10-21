@@ -718,6 +718,24 @@ export function broadcastToVisibleRenderers(channel: string, ...args: unknown[])
 }
 
 /**
+ * Visible-only broadcast for one-off notices a renderer turns into its own
+ * per-view attention (error toasts, Problems-dock auto-open): one copy where
+ * the user is looking instead of one per open project (#13711). When no
+ * uncached renderer exists — a window whose views were all parked, mid
+ * teardown — it falls back to every renderer, so the notice is never dropped.
+ */
+export function broadcastToVisibleRenderersOrAll(channel: string, ...args: unknown[]): void {
+  const hasVisible = getAllAppWebContents().some(
+    (wc) => !wc.isDestroyed() && !isCachedViewWebContents(wc.id)
+  );
+  if (hasVisible) {
+    broadcastToVisibleRenderers(channel, ...args);
+  } else {
+    broadcastToRenderer(channel, ...args);
+  }
+}
+
+/**
  * Reply to the renderer that made this call. A remote endpoint has no window,
  * so its push goes through the endpoint; a local sender with no window still
  * gets nothing, as before.
