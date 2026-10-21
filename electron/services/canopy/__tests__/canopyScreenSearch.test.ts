@@ -1,0 +1,53 @@
+import { describe, expect, it, vi } from "vitest";
+import { searchScreens } from "../canopyScreenSearch.js";
+
+const target = (runId: string, terms: string[]) => ({ runId, spawnedAt: 1, terms });
+
+describe("searchScreens", () => {
+  it("returns the runs whose screen holds every term, ignoring case", async () => {
+    const screens: Record<string, string | null> = {
+      a: "npm ERR! ECONNRESET while fetching",
+      b: "All tests passed",
+      c: null,
+    };
+    const found = await searchScreens(
+      [target("a", ["econnreset", "fetching"]), target("b", ["econnreset"]), target("c", ["x"])],
+      async ({ runId }) => screens[runId] ?? null
+    );
+    expect(found).toEqual(["a"]);
+  });
+
+  it("needs all of a run's terms, not any", async () => {
+    const found = await searchScreens([target("a", ["passed", "failed"])], async () => "passed");
+    expect(found).toEqual([]);
+  });
+
+  it("treats a failed read as no match, and still answers for the rest", async () => {
+    const found = await searchScreens(
+      [target("a", ["ok"]), target("b", ["ok"])],
+      async ({ runId }) => {
+        if (runId === "a") throw new Error("gone");
+        return "ok";
+      }
+    );
+    expect(found).toEqual(["b"]);
+  });
+
+  it("reads a few screens at a time, never the whole inbox at once", async () => {
+    let inFlight = 0;
+    let most = 0;
+    const read = vi.fn(async () => {
+      inFlight += 1;
+      most = Math.max(most, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 1));
+      inFlight -= 1;
+      return "match";
+    });
+    const targets = Array.from({ length: 20 }, (_, index) => target(`r${index}`, ["match"]));
+    const found = await searchScreens(targets, read);
+    expect(found).toHaveLength(20);
+    expect(read).toHaveBeenCalledTimes(20);
+    expect(most).toBeGreaterThan(1);
+    expect(most).toBeLessThan(20);
+  });
+});

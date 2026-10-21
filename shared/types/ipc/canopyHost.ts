@@ -27,6 +27,7 @@ export const CANOPY_HOST_CHANNELS = [
   "canopy:set-scope",
   "canopy:set-shown",
   "canopy:run-branch",
+  "canopy:search-screens",
   "canopy:watch-terminal",
   "canopy:unwatch-terminal",
   "canopy:terminal-input",

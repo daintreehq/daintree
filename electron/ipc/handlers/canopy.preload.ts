@@ -19,6 +19,7 @@ export const CANOPY_METHOD_CHANNELS = {
   setScope: "canopy:set-scope",
   setShown: "canopy:set-shown",
   runBranch: "canopy:run-branch",
+  searchScreens: "canopy:search-screens",
   watchTerminal: "canopy:watch-terminal",
   unwatchTerminal: "canopy:unwatch-terminal",
   captureBackdrop: "canopy:capture-backdrop",

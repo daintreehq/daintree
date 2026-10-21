@@ -96,6 +96,7 @@ installPreviewShims({
     },
     restoreReads: () => record("restoreReads", null),
     runBranch: (runId: string) => Promise.resolve(branches.get(runId) ?? null),
+    searchScreens: () => Promise.resolve([] as string[]),
     // Archive acts the way main does, so the Archived group can be captured.
     archive: (runId: string, target: { spawnedAt: number }) => {
       if (current) {
