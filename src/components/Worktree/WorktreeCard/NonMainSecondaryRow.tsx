@@ -216,16 +216,18 @@ export function NonMainSecondaryRow({
                 gap, so the filename starts where the branch name does, and the
                 same 2xs mono, so the least important line in the stack is not
                 its largest. w-fit keeps the hit target and the focus ring on
-                the filename rather than the whole card width. The ring has no
-                top pad or offset so it clears the sync line above; its side
-                pad is cancelled by a margin, so the rail stays put. */}
+                the filename rather than the whole card width. The ring is the
+                inset recipe drawn on padding that a matching negative margin
+                cancels, so it clears the content without moving the rail; the
+                top pad is only the ring's width, so it clears the sync line
+                above. */}
             <button
               type="button"
               onClick={() => {
                 if (isActive) badges.onOpenPlan?.();
               }}
               data-no-dnd
-              className="group flex items-center gap-1.5 w-fit max-w-full min-w-0 -mx-1 px-1 -mb-1 pb-1 text-left cursor-pointer rounded-[var(--radius-sm)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-0 focus-visible:outline-accent-primary"
+              className="group flex items-center gap-1.5 w-fit max-w-full min-w-0 -mx-1.5 px-1.5 -mt-0.5 pt-0.5 -mb-1.5 pb-1.5 text-left cursor-pointer rounded-[var(--radius-sm)] focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
               // Not aria-disabled on an unselected card: the click is not
               // refused, it selects the card, so the name says that instead.
               aria-label={
