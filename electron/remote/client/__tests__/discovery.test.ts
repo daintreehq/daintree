@@ -14,6 +14,7 @@ import {
   parseAvahiBrowse,
   parseDnsSdBrowse,
   parseDnsSdLookup,
+  parseNetbirdStatus,
   parseTailscaleStatus,
 } from "../discovery.js";
 
@@ -31,6 +32,24 @@ const missing: CommandResult = {
   spawnError: "spawn ENOENT",
   timedOut: false,
 };
+
+const NETBIRD_STATUS = JSON.stringify({
+  fqdn: "greg-mbp.netbird.cloud",
+  netbirdIp: "100.92.0.1/16",
+  management: { connected: true },
+  peers: {
+    total: 4,
+    connected: 1,
+    details: [
+      { fqdn: "dev-vm.netbird.cloud.", netbirdIp: "100.92.0.5", status: "Connected" },
+      { fqdn: "lazy.netbird.cloud", netbirdIp: "100.92.0.6/16", status: "Idle" },
+      { fqdn: "", netbirdIp: "100.92.0.7", status: "Connecting" },
+      { fqdn: "bad name;rm", netbirdIp: "", status: "Connected" },
+      { fqdn: "Greg-MBP.netbird.cloud.", netbirdIp: "100.92.0.99", status: "Connected" },
+      { fqdn: "stale-name.netbird.cloud", netbirdIp: "100.92.0.1", status: "Idle" },
+    ],
+  },
+});
 
 const TAILSCALE_MAP = JSON.stringify({
   Version: "1.70.0",
@@ -420,6 +439,130 @@ describe("discoverHosts", () => {
     expect(avahiArgs.every((args) => args[0] === "-rptl")).toBe(true);
   });
 
+  it("reaches a NetBird peer by IP when its name doesn't resolve here, and matches known hosts by either", async () => {
+    const asked: string[] = [];
+    const run: CommandRunner = async (command) =>
+      command === "/usr/local/bin/netbird" ? ok(NETBIRD_STATUS) : missing;
+    const hosts = await discoverHosts({
+      run,
+      platform: "linux",
+      knownConnections: [{ kind: "ssh", target: "greg@100.92.0.6" }],
+      resolves: async (name) => {
+        asked.push(name);
+        return name === "dev-vm.netbird.cloud";
+      },
+    });
+    expect(
+      hosts.map((h) => [h.name, sshTargetOf(h.connection), h.source, h.platform, !!h.knownMachine])
+    ).toEqual([
+      ["dev-vm", "dev-vm.netbird.cloud", "netbird", null, false],
+      ["lazy", "100.92.0.6", "netbird", null, true],
+      ["100.92.0.7", "100.92.0.7", "netbird", null, false],
+    ]);
+    expect(asked.sort()).toEqual(["dev-vm.netbird.cloud", "lazy.netbird.cloud"]);
+  });
+
+  it("drops a peer whose name doesn't resolve and has no IP, and treats a failed lookup as unresolved", async () => {
+    const status = JSON.stringify({
+      peers: {
+        details: [
+          { fqdn: "no-ip.netbird.cloud", netbirdIp: "", status: "Connected" },
+          { fqdn: "flaky.netbird.cloud", netbirdIp: "100.92.0.8", status: "Connected" },
+        ],
+      },
+    });
+    const run: CommandRunner = async (command) => (command === "netbird" ? ok(status) : missing);
+    const hosts = await discoverHosts({
+      run,
+      platform: "linux",
+      knownConnections: [],
+      resolves: async (name) => {
+        if (name === "flaky.netbird.cloud") throw new Error("EAI_AGAIN");
+        return false;
+      },
+    });
+    expect(hosts.map((h) => sshTargetOf(h.connection))).toEqual(["100.92.0.8"]);
+  });
+
+  it("resolves a large mesh's names a few at a time", async () => {
+    const details = Array.from({ length: 12 }, (_, i) => ({
+      fqdn: `peer-${i}.netbird.cloud`,
+      netbirdIp: `100.92.1.${i + 1}`,
+      status: "Idle",
+    }));
+    const run: CommandRunner = async (command) =>
+      command === "netbird" ? ok(JSON.stringify({ peers: { details } })) : missing;
+    let inFlight = 0;
+    let peak = 0;
+    const hosts = await discoverHosts({
+      run,
+      platform: "linux",
+      knownConnections: [],
+      resolves: async () => {
+        inFlight++;
+        peak = Math.max(peak, inFlight);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        inFlight--;
+        return true;
+      },
+    });
+    expect(hosts).toHaveLength(12);
+    expect(hosts.every((h) => sshTargetOf(h.connection)?.endsWith(".netbird.cloud"))).toBe(true);
+    expect(peak).toBeGreaterThan(1);
+    expect(peak).toBeLessThanOrEqual(4);
+  });
+
+  it("lists no NetBird peers when the daemon is stopped, without trying another install", async () => {
+    const tried: string[] = [];
+    const run: CommandRunner = async (command) => {
+      tried.push(command);
+      if (command !== "netbird") return missing;
+      return {
+        code: 1,
+        stdout: "",
+        stderr: "Error: failed to connect to daemon",
+        spawnError: null,
+        timedOut: false,
+      };
+    };
+    const hosts = await discoverHosts({
+      run,
+      platform: "linux",
+      knownConnections: [],
+      resolves: async () => true,
+    });
+    expect(hosts).toEqual([]);
+    expect(tried.filter((command) => command.includes("netbird"))).toEqual(["netbird"]);
+  });
+
+  it("lists tailnet peers before NetBird ones, never merging them by a shared first label", async () => {
+    const tailnet = JSON.stringify({
+      Peer: [
+        {
+          HostName: "dev-vm",
+          DNSName: "dev-vm.ts.net.",
+          OS: "linux",
+          Online: true,
+          TailscaleIPs: ["100.64.0.5"],
+        },
+      ],
+    });
+    const run: CommandRunner = async (command) =>
+      command === "tailscale" ? ok(tailnet) : command === "netbird" ? ok(NETBIRD_STATUS) : missing;
+    const hosts = await discoverHosts({
+      run,
+      platform: "linux",
+      knownConnections: [],
+      resolves: async () => true,
+    });
+    expect(hosts.map((h) => [sshTargetOf(h.connection), h.source])).toEqual([
+      ["dev-vm.ts.net", "tailscale"],
+      ["dev-vm.netbird.cloud", "netbird"],
+      ["lazy.netbird.cloud", "netbird"],
+      ["100.92.0.7", "netbird"],
+    ]);
+  });
+
   it("falls back to the macOS app's bundled CLI and survives every tool being absent", async () => {
     const tried: string[] = [];
     const run: CommandRunner = async (command) => {
@@ -429,6 +572,43 @@ describe("discoverHosts", () => {
     expect(await discoverHosts({ run, platform: "linux", knownConnections: [] })).toEqual([]);
     expect(tried).toContain("/Applications/Tailscale.app/Contents/MacOS/Tailscale");
     expect(tried).toContain("avahi-browse");
+  });
+});
+
+describe("parseNetbirdStatus", () => {
+  it("lists every peer whatever its status, by name with its IP as an alias, never this machine", () => {
+    expect(parseNetbirdStatus(NETBIRD_STATUS)).toEqual([
+      {
+        name: "dev-vm",
+        sshTarget: "dev-vm.netbird.cloud",
+        source: "netbird",
+        platform: null,
+        online: true,
+        aliases: ["dev-vm.netbird.cloud", "100.92.0.5"],
+      },
+      {
+        name: "lazy",
+        sshTarget: "lazy.netbird.cloud",
+        source: "netbird",
+        platform: null,
+        online: false,
+        aliases: ["lazy.netbird.cloud", "100.92.0.6"],
+      },
+      {
+        name: "100.92.0.7",
+        sshTarget: "100.92.0.7",
+        source: "netbird",
+        platform: null,
+        online: false,
+        aliases: ["100.92.0.7"],
+      },
+    ]);
+  });
+
+  it("reads a logged-out client, a peerless mesh or stray text as no peers", () => {
+    expect(parseNetbirdStatus(JSON.stringify({ management: { connected: false } }))).toEqual([]);
+    expect(parseNetbirdStatus(JSON.stringify({ peers: { total: 0, details: null } }))).toEqual([]);
+    expect(parseNetbirdStatus("Error: failed to connect to daemon")).toEqual([]);
   });
 });
 

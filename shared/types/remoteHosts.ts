@@ -105,7 +105,7 @@ export function isBlockingMismatch(mismatch: HandshakeMismatch): boolean {
 }
 
 /** How a host was found. Discovery only proves reachability; `wsl` is a distro installed on this PC. */
-export type HostDiscoverySource = "tailscale" | "bonjour" | "manual" | "wsl";
+export type HostDiscoverySource = "tailscale" | "netbird" | "bonjour" | "manual" | "wsl";
 
 /**
  * How this client reaches a host. Each kind names the one command that gets a

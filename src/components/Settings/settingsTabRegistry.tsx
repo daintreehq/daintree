@@ -287,6 +287,7 @@ const HOSTS_TAB = {
     "remote",
     "ssh",
     "tailscale",
+    "netbird",
     "linux",
     "mac",
     "server",
