@@ -312,6 +312,22 @@ function useLineIds(lines: PluginDiagnosticsLogLine[]): number[] {
   return current.ids;
 }
 
+// Outside the component: the scroller arrives through a prop ref, and the
+// compiler bails on a component that writes to a prop's object.
+function restoreScroll(
+  el: HTMLOListElement,
+  anchor: { key: string; offset: number } | null,
+  pinned: boolean
+): void {
+  if (pinned) {
+    el.scrollTop = el.scrollHeight;
+    return;
+  }
+  if (!anchor) return;
+  const row = el.querySelector<HTMLElement>(`[data-line-key="${anchor.key}"]`);
+  if (row) el.scrollTop = row.offsetTop - anchor.offset;
+}
+
 function LogList({
   lines,
   listRef,
@@ -332,14 +348,7 @@ function LogList({
   useLayoutEffect(() => {
     const el = listRef.current;
     if (!el) return;
-    if (pinned) {
-      el.scrollTop = el.scrollHeight;
-      return;
-    }
-    const anchor = anchorRef.current;
-    if (!anchor) return;
-    const row = el.querySelector<HTMLElement>(`[data-line-key="${anchor.key}"]`);
-    if (row) el.scrollTop = row.offsetTop - anchor.offset;
+    restoreScroll(el, pinned ? null : anchorRef.current, pinned);
   }, [lines, pinned, listRef]);
 
   return (
