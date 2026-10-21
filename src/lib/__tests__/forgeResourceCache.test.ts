@@ -521,4 +521,11 @@ describe("discardCachedResources (#13700)", () => {
     expect(getCache(pr)).toEqual(entry);
     expect(getGeneration(issueA)).not.toBe(inFlightGeneration);
   });
+
+  it("fences a slot whose first fetch is still in flight", () => {
+    const pending = buildCacheKey("/a", "issue", "open", "created");
+    const claimed = nextGeneration(pending);
+    discardCachedResources("issue");
+    expect(getGeneration(pending)).not.toBe(claimed);
+  });
 });

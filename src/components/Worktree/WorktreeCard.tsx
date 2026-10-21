@@ -37,6 +37,7 @@ import { humanizeAppError } from "@shared/utils/errorMessage";
 import { getGitRecoveryAction } from "@shared/utils/gitOperationErrors";
 import { isClientGitError } from "@/utils/clientGitError";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
+import { issueAttachPayload } from "@/utils/linkProviderIssue";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { cn } from "../../lib/utils";
 import { copyableBranchName, isExternalWorktree } from "@/lib/worktreeFilters";
@@ -687,11 +688,7 @@ export function WorktreeCard({
   // the Electron-store write lands, replays a mutation that was in flight when
   // the host crashed, and surfaces failures via `WorktreeIssueErrorBanner`.
   const handleAttachIssue = (issue: Issue) => {
-    getCurrentViewStore().getState().startAttachIssue({
-      worktreeId: worktree.id,
-      issueNumber: issue.number,
-      issueTitle: issue.title,
-    });
+    getCurrentViewStore().getState().startAttachIssue(issueAttachPayload(worktree.id, issue));
   };
 
   const handleDetachIssue = () => {

@@ -497,16 +497,22 @@ async function handleForgeGetRepoStats(payload: {
   // and freshness, but its issue count and first page belong to a different
   // tracker — swap the count and drop the page so no surface shows them.
   const split = overrideIssues !== undefined;
+  // A blend is only as fresh as its staler half.
+  const overrideClean = !split || overrideIssues.clean;
   const snapshot = split
     ? {
         ...codeSnapshot,
-        counts: { ...codeSnapshot.counts, issueCount: overrideIssues.count },
+        counts: {
+          ...codeSnapshot.counts,
+          issueCount: overrideIssues.count,
+          // The renderer reads freshness off the result, so an issues count
+          // that isn't a fresh observation must not ride in as one.
+          ...(overrideClean ? {} : { stale: true }),
+        },
         issues: undefined,
         prs: undefined,
       }
     : codeSnapshot;
-  // A blend is only as fresh as its staler half.
-  const overrideClean = !split || overrideIssues.clean;
   const { count: commitCount, reliable: commitReliable } = await readCommitCount(cwd);
   const stats = buildForgeRepositoryStats(commitCount, snapshot.counts);
 

@@ -244,6 +244,11 @@ export {
 
 export type {
   ForgeProviderImpl,
+  ForgeProviderBaseImpl,
+  ForgeIssueProviderImpl,
+  ForgeCodeProviderImpl,
+  AnyForgeProviderImpl,
+  ForgeProviderRole,
   ForgeProviderDescriptor,
   ForgeProviderContribution,
   ForgeProviderKind,

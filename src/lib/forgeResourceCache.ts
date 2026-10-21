@@ -199,7 +199,11 @@ export function patchIssueAssigneeCache(
  */
 export function discardCachedResources(type: "issue" | "pr"): void {
   const marker = `:${type}:`;
-  for (const [key] of [...cache.entries()]) {
+  // Cached slots plus every slot a fetch has claimed: a slot whose first fetch
+  // is still in flight has a generation but no entry yet.
+  const keys = new Set<string>(generationMap.keys());
+  for (const [key] of cache.entries()) keys.add(key);
+  for (const key of keys) {
     if (!key.includes(marker)) continue;
     cache.delete(key);
     nextGeneration(key);

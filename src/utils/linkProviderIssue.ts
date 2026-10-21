@@ -1,10 +1,27 @@
 import type { Issue } from "@shared/types/forge";
+import type { AttachIssuePayload } from "@shared/types/ipc/worktree";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
+
+/**
+ * The attach payload for linking `issue` to a worktree, carrying the issue's
+ * provenance when an issues provider served it (#13700 — the host stamps
+ * `providerId` only then). Unstamped issues produce the legacy shape exactly.
+ */
+export function issueAttachPayload(worktreeId: string, issue: Issue): AttachIssuePayload {
+  return {
+    worktreeId,
+    issueNumber: issue.number,
+    issueTitle: issue.title,
+    ...(issue.providerId ? { issueProviderId: issue.providerId } : {}),
+    ...(issue.providerId && issue.id ? { issueId: issue.id } : {}),
+    ...(issue.providerId && issue.key ? { issueKey: issue.key } : {}),
+  };
+}
 
 /**
  * Persist an explicit link between a new worktree and the issue it was made
  * for, when that issue came from the project's issues provider rather than its
- * code forge (#13700 — the host stamps `providerId` only then).
+ * code forge.
  *
  * Without it the link rests on the branch name, which is read back as a code
  * forge number: a provider-suggested branch carries no `issue-N` to find, and
@@ -14,14 +31,5 @@ import { getCurrentViewStore } from "@/store/createWorktreeStore";
  */
 export function linkProviderIssue(worktreeId: string, issue: Issue | null | undefined): void {
   if (!issue?.providerId) return;
-  getCurrentViewStore()
-    .getState()
-    .startAttachIssue({
-      worktreeId,
-      issueNumber: issue.number,
-      issueTitle: issue.title,
-      issueProviderId: issue.providerId,
-      ...(issue.id ? { issueId: issue.id } : {}),
-      ...(issue.key ? { issueKey: issue.key } : {}),
-    });
+  getCurrentViewStore().getState().startAttachIssue(issueAttachPayload(worktreeId, issue));
 }
