@@ -108,7 +108,11 @@ describe("FileVideoPreview", () => {
     // grabbed the replacement, silently leaving the abandoned element loading.
     expect(first.hasAttribute("src")).toBe(false);
     expect(load).toHaveBeenCalledTimes(1);
-    expect(container.querySelector("video")!.getAttribute("src")).toBe(`${MEDIA_URL}&v=2`);
+    // The old node is released as soon as the re-probe clears the source; the
+    // replacement only mounts once that probe settles, so wait for it.
+    await waitFor(() =>
+      expect(container.querySelector("video")?.getAttribute("src")).toBe(`${MEDIA_URL}&v=2`)
+    );
   });
 
   it("releases the video element on unmount", async () => {
