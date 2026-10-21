@@ -22,18 +22,20 @@ import { PathSegments } from "@/components/ui/PathSegments";
  */
 const APPROVE_COOLDOWN_MS = 1_200;
 
-type Phase = "setup" | "teardown" | "resources";
+type Phase = "setup" | "teardown" | "resources" | "attachments";
 
 const PHASE_LABEL: Record<Phase, string> = {
   setup: "Setup",
   teardown: "Teardown",
   resources: "Resources",
+  attachments: "Attachments",
 };
 
 /** Labels are built host-side in `lifecycleCommandTrust.ts`; everything else is a resource field. */
 function phaseOf(group: LifecycleCommandReviewGroup): Phase {
   if (group.label === "Setup") return "setup";
   if (group.label === "Teardown") return "teardown";
+  if (group.label.startsWith("Attachment ")) return "attachments";
   return "resources";
 }
 
@@ -53,6 +55,17 @@ const RESOURCE_FIELD_TRIGGER: Record<string, string> = {
 
 function resourceTrigger(label: string): string | undefined {
   return RESOURCE_FIELD_TRIGGER[label.slice(label.lastIndexOf(" ") + 1)];
+}
+
+/** Attachments only ever run when someone asks, or when their holder is deleted. */
+const ATTACHMENT_FIELD_TRIGGER: Record<string, string> = {
+  attach: "Runs when you attach it to a worktree",
+  detach: "Runs when you move or detach it, and when its worktree is deleted",
+  status: "Runs after it attaches and when you check its status",
+};
+
+function attachmentTrigger(label: string): string | undefined {
+  return ATTACHMENT_FIELD_TRIGGER[label.slice(label.lastIndexOf(" ") + 1)];
 }
 
 /**
@@ -170,6 +183,7 @@ export function LifecycleCommandApprovalDialog({
     setup: setupAwaitingApproval ? undefined : "Runs when a worktree is created",
     teardown: "Runs when a worktree is deleted",
     resources: undefined,
+    attachments: undefined,
   };
 
   const nothingWaiting = review === null;
@@ -251,10 +265,14 @@ export function LifecycleCommandApprovalDialog({
                     {groups.map((group) => {
                       const runsNow = phase === "resources" ? runsNowLabel(group) : undefined;
                       const trigger =
-                        phase === "resources" ? resourceTrigger(group.label) : undefined;
+                        phase === "resources"
+                          ? resourceTrigger(group.label)
+                          : phase === "attachments"
+                            ? attachmentTrigger(group.label)
+                            : undefined;
                       return (
                         <div key={group.label} className="space-y-1">
-                          {phase === "resources" && (
+                          {(phase === "resources" || phase === "attachments") && (
                             <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                               <p className="text-xs font-medium text-text-primary">{group.label}</p>
                               {runsNow ? (

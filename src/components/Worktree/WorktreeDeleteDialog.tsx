@@ -24,6 +24,7 @@ import {
   submodulesFromPreviewError,
   settleWorktreeDeleteOutcome,
   summarizeWorktreeChanges,
+  teardownPhaseNoun,
   worktreeDeleteBlockedBy,
   worktreeDeleteContentRisk,
   PREVIEW_FILE_LIMIT,
@@ -680,9 +681,9 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
   // unapproved phase is skipped, which is a consequence too: whatever it was
   // meant to clean up (a remote environment, say) is left running.
   for (const phase of teardown?.phases ?? []) {
-    const noun = phase.phase === "resource-teardown" ? "Resource teardown" : "Project teardown";
+    const noun = teardownPhaseNoun(phase);
     consequences.push({
-      key: phase.phase,
+      key: phase.attachment ? `${phase.phase}:${phase.attachment}` : phase.phase,
       tone: "neutral",
       content: phase.approved ? (
         <>

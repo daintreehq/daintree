@@ -3,6 +3,7 @@ import { useShallow } from "zustand/react/shallow";
 import type { WorktreeState } from "../../types";
 import type { Issue } from "@shared/types/forge";
 import { logError } from "@/utils/logger";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { useWorktreeTerminals } from "../../hooks/useWorktreeTerminals";
 
@@ -94,6 +95,11 @@ const HOVER_REVALIDATE_DELAY = 150;
 const REVALIDATE_FRESHNESS_GATE = 10_000;
 const MAX_CONCURRENT_REVALIDATES = 3;
 const NO_WORKTREE_IDS: Set<string> = new Set();
+const ATTACHMENT_FAILURE_TITLE: Record<"attach" | "detach" | "status", string> = {
+  attach: "Attach failed",
+  detach: "Detach failed",
+  status: "Status check failed",
+};
 const inFlightRevalidates = new Set<string>();
 
 function isRevalidationAllowed(worktreeId: string): boolean {
@@ -468,6 +474,7 @@ export function WorktreeCard({
     handleTerminateAll,
     handleClearHistory,
     handleResourceTeardown,
+    confirmAttachmentMove,
   } = useWorktreeActions({
     worktree,
     teardownCommands,
@@ -560,6 +567,42 @@ export function WorktreeCard({
       { worktreeId: worktree.id },
       { source: "user" }
     );
+  };
+
+  const runAttachmentAction = (name: string, action: "attach" | "detach" | "status") => {
+    worktreeClient.attachmentAction(worktree.id, name, action).catch((err: unknown) => {
+      const message = formatErrorMessage(err, "The command failed.");
+      // eslint-disable-next-line no-restricted-syntax -- notify-event-kind: ok
+      notify({
+        type: "error",
+        priority: "high",
+        title: ATTACHMENT_FAILURE_TITLE[action],
+        message: `${name}: ${message}`,
+        context: { worktreeId: worktree.id },
+        action: {
+          label: "Copy details",
+          successLabel: "Copied",
+          onClick: async () => {
+            try {
+              await navigator.clipboard.writeText(message);
+            } catch {
+              // clipboard write is non-critical
+            }
+          },
+        },
+      });
+    });
+  };
+
+  const handleAttachmentAction = (name: string, action: "attach" | "detach" | "status") => {
+    const holderId = worktree.attachments?.find((a) => a.name === name)?.holderWorktreeId;
+    if (action === "attach" && holderId && holderId !== worktree.id) {
+      const holder = getCurrentViewStore().getState().worktrees.get(holderId);
+      const fromLabel = holder?.branch ?? holder?.name ?? holderId;
+      confirmAttachmentMove(name, fromLabel, () => runAttachmentAction(name, action));
+      return;
+    }
+    runAttachmentAction(name, action);
   };
 
   const handleResourceStatus = () =>
@@ -1055,6 +1098,8 @@ export function WorktreeCard({
     onResourceConnect: worktree.resourceConnectCommand ? handleResourceConnect : undefined,
     onResourceStatus: hasStatusCommand ? handleResourceStatus : undefined,
     onResourceTeardown: hasTeardownCommand ? handleResourceTeardown : undefined,
+    attachments: worktree.attachments,
+    onAttachmentAction: handleAttachmentAction,
     devServerState,
     onStartDevServer: handleStartDevServer,
     onStopDevServer: handleStopDevServer,
@@ -1515,6 +1560,7 @@ export function WorktreeCard({
                   devServerSession={devServerSession}
                   onCheckResourceStatus={hasStatusCommand ? handleResourceStatus : undefined}
                   onPreviewEndpoint={handlePreviewEndpoint}
+                  onAttachmentAction={handleAttachmentAction}
                   onCleanupWorktree={
                     chipState === "cleanup" && !isMainWorktree
                       ? () => setShowDeleteDialog(true)

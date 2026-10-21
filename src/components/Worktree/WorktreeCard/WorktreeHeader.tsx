@@ -12,6 +12,8 @@ import type { AggregateCounts } from "./MainWorktreeSummaryRows";
 import { IssueBadge } from "./IssueBadge";
 import { PRBadge } from "./PRBadge";
 import { EnvironmentPopover } from "./EnvironmentPopover";
+import { WorktreeAttachmentChips } from "./WorktreeAttachmentChips";
+import { visibleAttachmentChips } from "./attachmentState";
 import { DevServerIndicator } from "./DevServerIndicator";
 import { CollapsedSessionIndicators } from "./CollapsedSessionIndicators";
 import { CollapsedAlarmPill, collapsedAlarmDescriptionId } from "./CollapsedAlarmPill";
@@ -59,6 +61,7 @@ export interface WorktreeHeaderProps {
   devServerSession?: DevPreviewSessionState;
   onCheckResourceStatus?: () => void | Promise<unknown>;
   onPreviewEndpoint?: () => void;
+  onAttachmentAction?: (name: string, action: "detach" | "status") => void;
   onCleanupWorktree?: () => void;
   badges: {
     onOpenIssue?: () => void;
@@ -101,6 +104,7 @@ export function WorktreeHeader({
   devServerSession,
   onCheckResourceStatus,
   onPreviewEndpoint,
+  onAttachmentAction,
   onCleanupWorktree,
   badges,
   gitStateIndicator,
@@ -123,6 +127,8 @@ export function WorktreeHeader({
     headline.kind === "pr" || headline.kind === "issue" ? headline.title : undefined;
   const hasPlanFile = Boolean(worktree.hasPlanFile);
   const hasDevServerSignal = !!devServerSession && isLiveDevServerStatus(devServerSession.status);
+  const hasAttachmentChips =
+    !!onAttachmentAction && visibleAttachmentChips(worktree.attachments).length > 0;
   const underlineOnHover = variant !== "sidebar" || isActive;
   // `hasBaseName` is the whole mount rule for the base line: the workspace-host
   // sets it only for a non-main worktree on a branch whose base it resolved, so
@@ -325,7 +331,8 @@ export function WorktreeHeader({
           resourceStatusLabel ||
           isLifecycleRunning ||
           onCheckResourceStatus ||
-          hasDevServerSignal) && (
+          hasDevServerSignal ||
+          hasAttachmentChips) && (
           <div className="flex items-center gap-2 shrink-0">
             {isPinned && !isMainWorktree && (
               <Pin
@@ -389,6 +396,12 @@ export function WorktreeHeader({
                 resourceLastCheckedAt={resourceLastCheckedAt}
                 onCheckResourceStatus={onCheckResourceStatus}
                 onPreviewEndpoint={onPreviewEndpoint}
+              />
+            )}
+            {hasAttachmentChips && onAttachmentAction && (
+              <WorktreeAttachmentChips
+                attachments={worktree.attachments}
+                onAction={onAttachmentAction}
               />
             )}
             <DevServerIndicator session={devServerSession} />

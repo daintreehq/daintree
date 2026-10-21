@@ -22,6 +22,7 @@ export {
   BellDot, // watch alert / notify on completion
   BookDashed, // a Scratchpad's notes are temporary — kept only while its terminal is open; the dashed outline reads as a mode, not a warning
   Bot, // a commit author that is a bot account (a `[bot]` name) with no picture — shape says machine where initials would say person
+  Cable, // a project attachment — a resource the whole project shares (a tunnel, a test device) that one worktree holds at a time
   ChartNoAxesColumn, // frecency sort order ("Most used" — decayed access score)
   CheckCheck, // Canopy: the readers think an agent's task is done and Daintree sees it stopped — a suggestion to close it, distinct from the observed finished ring (DoneCircle)
   CircleArrowUp, // a CLI below the version Daintree needs, or a host whose build was refused — the same up-arrow-in-a-circle plugins show for an available update
@@ -79,6 +80,6 @@ export {
   Tag, // a worktree's colour label — the identity a user pins to a card, kept apart from Pin, which is its position
   Telescope, // Canopy: the long view out over every agent, read off its screen and laid out by what it needs from you — binoculars read clumsy at 16px, and both trees read as the notifications bell beside it
   TriangleAlert, // a setting failing validation, a pane's CPU or memory in its amber band, or a request the app refused (a file reference with no agent to take it) — a shape, not a hue, so it survives forced colors
-  Unplug, // taking a link back — a terminal from an agent pane, or this device's link to a host, which stops nothing there
+  Unplug, // taking a link back — a terminal from an agent pane, or this device's link to a host, which stops nothing there; also detaching a project attachment (Cable) from the worktree holding it
   Workflow, // terminal recipe / scripted command sequence
 } from "lucide-react";

@@ -22,6 +22,7 @@ import type {
   WorktreeLifecyclePhaseResult,
   WorktreeResourceStatus,
   WslGitEligibility,
+  WorktreeAttachment,
   WorktreeTeardownPreview,
 } from "./worktree.js";
 import type { SubmoduleDeleteRisk } from "./submodule.js";
@@ -315,6 +316,9 @@ export interface WorktreeSnapshot {
 
   /** Repository-supplied commands are waiting for approval (mirrors `Worktree.lifecycleCommandsNeedApproval`). */
   lifecycleCommandsNeedApproval?: boolean;
+
+  /** The project's attachments, as seen from this worktree (mirrors `Worktree.attachments`). */
+  attachments?: WorktreeAttachment[];
 
   /** Worktree environment mode ("local" or an environment key from resourceEnvironments) */
   worktreeMode?: string;

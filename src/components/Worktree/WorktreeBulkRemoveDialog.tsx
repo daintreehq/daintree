@@ -13,6 +13,7 @@ import {
   submoduleCommitsAreCapped,
   type SubmoduleCommitRow,
   type WorktreeChangeRow,
+  teardownPhaseNoun,
 } from "./worktreeDeletePreview";
 import {
   bulkRemoveAheadCount,
@@ -78,9 +79,10 @@ function TeardownBlock({
   return (
     <div className="space-y-1.5" data-testid="bulk-remove-teardown">
       {teardown.phases.map((phase) => {
-        const noun = phase.phase === "resource-teardown" ? "Resource teardown" : "Project teardown";
+        const noun = teardownPhaseNoun(phase);
+        const key = phase.attachment ? `${phase.phase}:${phase.attachment}` : phase.phase;
         return phase.approved ? (
-          <div key={phase.phase}>
+          <div key={key}>
             <p className="text-xs text-text-secondary">
               {noun} runs first — the delete continues if it fails
             </p>
@@ -96,7 +98,7 @@ function TeardownBlock({
             </ul>
           </div>
         ) : (
-          <p key={phase.phase} className="text-xs text-text-secondary">
+          <p key={key} className="text-xs text-text-secondary">
             {noun} is skipped — its commands haven&apos;t been approved
           </p>
         );

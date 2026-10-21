@@ -22,6 +22,9 @@ import type { SubmoduleDeleteRisk } from "./submodule.js";
 
 export type WorktreePortResourceAction = "provision" | "teardown" | "resume" | "pause" | "status";
 
+/** `attach` on a worktree that is not the holder moves the attachment there. */
+export type WorktreePortAttachmentAction = "attach" | "detach" | "status";
+
 export interface WorktreePortProtocol {
   "get-all-states": {
     payload: Record<string, never>;
@@ -121,6 +124,12 @@ export interface WorktreePortProtocol {
   };
   "resource-action": {
     payload: { worktreeId: string; action: WorktreePortResourceAction };
+    result: { ok: true };
+  };
+  // Runs one project attachment's command against `worktreeId`. Rejects with
+  // the observed error when the command fails or was refused.
+  "attachment-action": {
+    payload: { worktreeId: string; name: string; action: WorktreePortAttachmentAction };
     result: { ok: true };
   };
   "run-lifecycle-setup": {

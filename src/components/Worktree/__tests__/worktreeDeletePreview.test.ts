@@ -911,6 +911,23 @@ describe("delete-preview parity for the MCP confirm", () => {
       "Project teardown will run first (the delete continues if it fails):",
       "  docker compose down",
     ]);
+    expect(
+      formatTeardownPreviewLines({
+        phases: [
+          {
+            phase: "attachment-detach",
+            attachment: "tunnel",
+            commands: ["ngrok stop"],
+            approved: true,
+          },
+          { phase: "attachment-detach", attachment: "device", commands: ["x"], approved: false },
+        ],
+      })
+    ).toEqual([
+      'Detach of "tunnel" will run first (the delete continues if it fails):',
+      "  ngrok stop",
+      'Detach of "device" will be skipped — its commands haven\'t been approved for this project.',
+    ]);
     expect(formatTeardownPreviewLines("unreadable")[0]).toContain("Project teardown may also run");
     expect(formatTeardownPreviewLines({ phases: [] })).toEqual([]);
   });
