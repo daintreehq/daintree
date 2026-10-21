@@ -424,7 +424,7 @@ describe("WorktreeHeader plan file badge", () => {
       badges: { onOpenPlan },
     });
 
-    const planButton = screen.getByRole("button", { name: /View agent plan file/ });
+    const planButton = screen.getByRole("button", { name: /plan file/ });
     expect(planButton).toBeDefined();
     expect(screen.getByText("TODO.md")).toBeDefined();
   });
@@ -436,7 +436,7 @@ describe("WorktreeHeader plan file badge", () => {
       badges: { onOpenPlan },
     });
 
-    expect(screen.queryByRole("button", { name: /View agent plan file/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /plan file/ })).toBeNull();
   });
 
   it("does not render plan badge when hasPlanFile is true but onOpenPlan is not provided", () => {
@@ -445,7 +445,7 @@ describe("WorktreeHeader plan file badge", () => {
       badges: {},
     });
 
-    expect(screen.queryByRole("button", { name: /View agent plan file/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /plan file/ })).toBeNull();
   });
 });
 
@@ -536,7 +536,7 @@ describe("WorktreeHeader click bubbling", () => {
       isActive: false,
     });
 
-    const planButton = screen.getByRole("button", { name: /View agent plan file/ });
+    const planButton = screen.getByRole("button", { name: /plan file/ });
     fireEvent.click(planButton);
     expect(onOpenPlan).not.toHaveBeenCalled();
     expect(onParentClick).toHaveBeenCalledOnce();
@@ -550,7 +550,7 @@ describe("WorktreeHeader click bubbling", () => {
       isActive: true,
     });
 
-    const planButton = screen.getByRole("button", { name: /View agent plan file/ });
+    const planButton = screen.getByRole("button", { name: /plan file/ });
     fireEvent.click(planButton);
     expect(onOpenPlan).toHaveBeenCalledOnce();
     expect(onParentClick).toHaveBeenCalledOnce();
@@ -574,10 +574,15 @@ describe("WorktreeHeader click bubbling", () => {
 
     const issueButton = screen.getByRole("button", { name: /Open issue #42/ });
     const prButton = screen.getByRole("button", { name: /pull request #101/ });
-    const planButton = screen.getByRole("button", { name: /View agent plan file/ });
+    const planButton = screen.getByRole("button", { name: /plan file/ });
     expect(issueButton.getAttribute("aria-disabled")).toBe("true");
     expect(prButton.getAttribute("aria-disabled")).toBe("true");
-    expect(planButton.getAttribute("aria-disabled")).toBe("true");
+    // The plan row's first click selects the card rather than being refused,
+    // so it says so in its name instead of announcing itself disabled.
+    expect(planButton.getAttribute("aria-disabled")).toBeNull();
+    expect(planButton.getAttribute("aria-label")).toBe(
+      "Select worktree, then open plan file TODO.md"
+    );
   });
 
   it("active badges do not have aria-disabled attribute", () => {
@@ -598,7 +603,7 @@ describe("WorktreeHeader click bubbling", () => {
 
     const issueButton = screen.getByRole("button", { name: /Open issue #42/ });
     const prButton = screen.getByRole("button", { name: /pull request #101/ });
-    const planButton = screen.getByRole("button", { name: /View agent plan file/ });
+    const planButton = screen.getByRole("button", { name: /plan file/ });
     expect(issueButton.getAttribute("aria-disabled")).toBeNull();
     expect(prButton.getAttribute("aria-disabled")).toBeNull();
     expect(planButton.getAttribute("aria-disabled")).toBeNull();
