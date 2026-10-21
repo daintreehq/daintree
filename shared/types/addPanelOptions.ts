@@ -320,6 +320,8 @@ export interface DevPreviewPanelOptions extends AddPanelOptionsBase {
   viewportDpr?: 1 | 2 | 3;
   /** Whether the viewport is scaled to fit the available pane */
   viewportFit?: boolean;
+  /** Preview the worktree's resource environment endpoint instead of running devCommand */
+  previewsResourceEndpoint?: boolean;
   /** Last captured scroll position, paired with URL for stale-scroll prevention */
   devPreviewScrollPosition?: { url: string; scrollY: number };
 }

@@ -55,6 +55,7 @@ import { buildDevPreviewSubdomain } from "../../shared/utils/devPreviewProxy.js"
 import type { DevPreviewManifestEntry } from "./DevPreviewManifestService.js";
 import type { PtyClient } from "./PtyClient.js";
 import { UrlDetector } from "./UrlDetector.js";
+import { parsePreviewEndpoint } from "./DevPreviewEndpoint.js";
 import type {
   DevPreviewEnsureRequest,
   DevPreviewSessionRequest,
@@ -78,6 +79,12 @@ import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 interface DevPreviewSession extends DevPreviewSessionState {
   cwd: string;
   devCommand: string;
+  /**
+   * A resource environment's endpoint this session previews instead of running
+   * devCommand (#13688). No terminal, port or readiness probe: the server is
+   * owned by the resource's own lifecycle, so the session only says where it is.
+   */
+  endpoint: string | null;
   turbopackEnabled: boolean;
   env?: Record<string, string>;
   buffer: string;
@@ -264,6 +271,9 @@ export class DevPreviewSessionService {
     const entries: DevPreviewManifestEntry[] = [];
     for (const [key, session] of this.sessions) {
       if (!RUNNING_STATES.has(session.status)) continue;
+      // An endpoint session has no command to relaunch; its panel re-ensures with
+      // the worktree's current endpoint on mount.
+      if (session.endpoint !== null) continue;
       if (!session.devCommand.trim() || !session.cwd) continue;
       entries.push({
         panelId: session.panelId,
@@ -391,6 +401,12 @@ export class DevPreviewSessionService {
       if (!RUNNING_STATES.has(session.status)) {
         return { kind: "not-running", status: session.status };
       }
+      if (session.endpoint !== null) {
+        const parsed = parsePreviewEndpoint(session.endpoint);
+        if (!parsed.ok) return { kind: "not-running", status: session.status };
+        const { host, port, isHttps } = parsed.endpoint;
+        return { kind: "ok", port, isHttps, host };
+      }
       // Prefer the port AND scheme the dev server actually bound — UrlDetector overwrites
       // session.url when the server lands on a different port than the one allocated (a command
       // that ignores the injected PORT), and the URL carries the scheme (http vs https) so an
@@ -470,10 +486,12 @@ export class DevPreviewSessionService {
       const session = this.getOrCreateSession(request.projectId, request.panelId);
       const envChanged = !envEquals(session.env, request.env);
       const nextTurbopackEnabled = request.turbopackEnabled ?? true;
+      const nextEndpoint = request.endpoint?.trim() || null;
       const changedFields: string[] = [];
       if (session.cwd !== request.cwd) changedFields.push("cwd");
       if (session.worktreeId !== request.worktreeId) changedFields.push("worktreeId");
       if (session.devCommand !== request.devCommand) changedFields.push("devCommand");
+      if (session.endpoint !== nextEndpoint) changedFields.push("endpoint");
       if (session.turbopackEnabled !== nextTurbopackEnabled) changedFields.push("turbopackEnabled");
       if (envChanged) changedFields.push("env");
       const configChanged = changedFields.length > 0;
@@ -487,6 +505,7 @@ export class DevPreviewSessionService {
       const prevWorktreeId = session.worktreeId;
       session.worktreeId = request.worktreeId;
       session.devCommand = request.devCommand;
+      session.endpoint = nextEndpoint;
       session.turbopackEnabled = nextTurbopackEnabled;
       if (envChanged) {
         session.env = cloneEnv(request.env);
@@ -519,6 +538,12 @@ export class DevPreviewSessionService {
         // Broadcast so surfaces that hydrated before this session existed
         // (WorktreeCard after relaunch) see it and can offer Start.
         if (created || configChanged) this.updateSession(session, {});
+        return;
+      }
+
+      if (session.endpoint !== null) {
+        await this.connectEndpoint(session);
+        state = this.getSessionState(request.projectId, request.panelId);
         return;
       }
 
@@ -575,6 +600,12 @@ export class DevPreviewSessionService {
         // clears the guard so this attempt starts from a clean slate.
         resetCrashLoopGuard(session);
         this.clearUserStopped(key);
+
+        if (session.endpoint !== null) {
+          await this.connectEndpoint(session);
+          state = this.getSessionState(request.projectId, request.panelId);
+          return;
+        }
 
         const commandError = getInvalidCommandMessage(session.devCommand);
         if (commandError) {
@@ -633,6 +664,12 @@ export class DevPreviewSessionService {
 
       resetCrashLoopGuard(session);
       this.clearUserStopped(key);
+
+      // Nothing local to clear or reinstall for a server the resource owns.
+      if (session.endpoint !== null) {
+        await this.connectEndpoint(session);
+        return;
+      }
 
       const commandError = getInvalidCommandMessage(session.devCommand);
       if (commandError) {
@@ -699,6 +736,12 @@ export class DevPreviewSessionService {
 
       resetCrashLoopGuard(session);
       this.clearUserStopped(key);
+
+      // Nothing local to clear or reinstall for a server the resource owns.
+      if (session.endpoint !== null) {
+        await this.connectEndpoint(session);
+        return;
+      }
 
       const commandError = getInvalidCommandMessage(session.devCommand);
       if (commandError) {
@@ -1210,6 +1253,58 @@ export class DevPreviewSessionService {
     };
   }
 
+  /**
+   * Point an endpoint session at its server. There is nothing to launch: the
+   * resource's own resume/status already brought it up, so the session is
+   * running as soon as the endpoint is acceptable, and the proxy reports a dead
+   * one per request. A terminal left from a previous dev command is stopped.
+   */
+  private async connectEndpoint(session: DevPreviewSession): Promise<void> {
+    invalidatePendingLaunch(session);
+    resetCrashLoopGuard(session);
+    if (session.terminalId) {
+      const epoch = await this.stopSessionTerminal(session, "config-change");
+      if (this.relaunchSuperseded(session, epoch)) return;
+    }
+    releasePort(this.portRegistry, createSessionKey(session.projectId, session.panelId));
+    const parsed = parsePreviewEndpoint(session.endpoint ?? "");
+    if (!parsed.ok) {
+      this.recordSessionDiagnostic(session, {
+        type: "command-invalid",
+        message: capDiagnosticText(parsed.message),
+      });
+      this.updateSession(session, {
+        status: "error",
+        error: { type: "unknown", message: parsed.message },
+        url: null,
+        predictedUrl: null,
+        terminalId: null,
+        isRestarting: false,
+        phaseLabel: undefined,
+      });
+      this.persistManifest();
+      return;
+    }
+    this.recordSessionDiagnostic(session, {
+      type: "url-detected",
+      url: sanitizeDiagnosticUrl(session.endpoint ?? ""),
+    });
+    this.updateSession(session, {
+      status: "running",
+      url: session.endpoint,
+      predictedUrl: null,
+      error: null,
+      terminalId: null,
+      isRestarting: false,
+      forceKilled: undefined,
+      phaseLabel: undefined,
+    });
+    // A session that was already running its dev command never leaves RUNNING_STATES
+    // on the way here, so updateSession won't rewrite the manifest that still offers
+    // to relaunch that command after a crash.
+    this.persistManifest();
+  }
+
   private getOrCreateSession(projectId: string, panelId: string): DevPreviewSession {
     const key = createSessionKey(projectId, panelId);
     let session = this.sessions.get(key);
@@ -1236,6 +1331,7 @@ export class DevPreviewSessionService {
       phaseLabel: undefined,
       cwd: "",
       devCommand: "",
+      endpoint: null,
       turbopackEnabled: true,
       env: undefined,
       buffer: "",

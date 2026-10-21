@@ -88,6 +88,7 @@ export interface AddTerminalArgs extends AddPanelOptionsBase {
   viewportRotated?: boolean;
   viewportDpr?: 1 | 2 | 3;
   viewportFit?: boolean;
+  previewsResourceEndpoint?: boolean;
   devPreviewScrollPosition?: { url: string; scrollY: number };
   filePath?: string;
   fileViewMode?: FileViewMode;
@@ -146,6 +147,7 @@ export interface SavedTerminalData {
   viewportRotated?: boolean;
   viewportDpr?: 1 | 2 | 3;
   viewportFit?: boolean;
+  previewsResourceEndpoint?: boolean;
   devPreviewScrollPosition?: { url: string; scrollY: number };
   filePath?: string;
   /** Untrusted on-disk string — sanitized to FileViewMode at the deserializer boundary. */

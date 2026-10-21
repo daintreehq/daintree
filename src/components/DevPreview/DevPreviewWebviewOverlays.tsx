@@ -39,8 +39,9 @@ interface DevPreviewWebviewOverlaysProps {
   isRestarting: boolean;
   onRestartDevServer: () => void;
   onHardReload: () => void;
-  onRequestRestartAndClearCache: () => void;
-  onRequestReinstallAndRestart: () => void;
+  /** Omitted for a resource endpoint, which has no local cache or dependencies. */
+  onRequestRestartAndClearCache?: () => void;
+  onRequestReinstallAndRestart?: () => void;
   onRetryWebviewLoad: () => void;
   currentUrl: string;
   onOpenExternal: () => void;
@@ -180,15 +181,21 @@ export function DevPreviewWebviewOverlays({
                       <RotateCw data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
                       Restart dev server
                     </DropdownMenuItem>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuItem onSelect={onRequestRestartAndClearCache}>
-                      <Eraser data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
-                      Restart and clear cache
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onSelect={onRequestReinstallAndRestart}>
-                      <Download data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
-                      Reinstall dependencies
-                    </DropdownMenuItem>
+                    {(onRequestRestartAndClearCache || onRequestReinstallAndRestart) && (
+                      <DropdownMenuSeparator />
+                    )}
+                    {onRequestRestartAndClearCache && (
+                      <DropdownMenuItem onSelect={onRequestRestartAndClearCache}>
+                        <Eraser data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+                        Restart and clear cache
+                      </DropdownMenuItem>
+                    )}
+                    {onRequestReinstallAndRestart && (
+                      <DropdownMenuItem onSelect={onRequestReinstallAndRestart}>
+                        <Download data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+                        Reinstall dependencies
+                      </DropdownMenuItem>
+                    )}
                   </DropdownMenuContent>
                 </DropdownMenu>
               </div>

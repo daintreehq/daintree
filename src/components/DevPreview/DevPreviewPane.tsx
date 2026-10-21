@@ -18,6 +18,7 @@ import { useDevPreviewCommandConfig } from "./useDevPreviewCommandConfig";
 import { useDevPreviewScrollCapture } from "./useDevPreviewScrollCapture";
 import { useDevPreviewCrashRecovery } from "./useDevPreviewCrashRecovery";
 import { useDevPreviewViewport } from "./useDevPreviewViewport";
+import { useResourceEndpointPreview } from "./useResourceEndpointPreview";
 import { DevPreviewWebviewOverlays } from "./DevPreviewWebviewOverlays";
 import { useDevPreviewNavigation } from "./useDevPreviewNavigation";
 import { DevPreviewEmptyStates } from "./DevPreviewEmptyStates";
@@ -132,6 +133,11 @@ export function DevPreviewPane({
   });
   const devCommand =
     terminal?.devCommand?.trim() || projectSettings?.devServerCommand?.trim() || "";
+  const {
+    endpoint,
+    refreshEndpoint,
+    checkEndpoint: handleCheckEndpoint,
+  } = useResourceEndpointPreview(worktreeId, terminal?.previewsResourceEndpoint === true);
   const viewportPreset = terminal?.viewportPreset;
   const viewportRotated = terminal?.viewportRotated ?? false;
   const viewportDpr = terminal?.viewportDpr ?? 1;
@@ -150,6 +156,7 @@ export function DevPreviewPane({
     stuckTier,
     forceKilled,
     crashLoopStopped,
+    isCyclingEndpoint,
   } = useDevServer({
     panelId: id,
     devCommand,
@@ -157,6 +164,8 @@ export function DevPreviewPane({
     worktreeId,
     env: projectEnv,
     turbopackEnabled: projectSettings?.turbopackEnabled ?? true,
+    endpoint,
+    refreshEndpoint,
   });
 
   const { captureScrollViaCdp, invalidateScrollCaptures } = useDevPreviewScrollCapture({
@@ -283,7 +292,11 @@ export function DevPreviewPane({
   const canGoBack = history.past.length > 0;
   const canGoForward = history.future.length > 0;
   const isUnconfigured =
-    Boolean(currentProjectId) && !isSettingsLoading && projectSettings !== null && !devCommand;
+    Boolean(currentProjectId) &&
+    !isSettingsLoading &&
+    projectSettings !== null &&
+    !devCommand &&
+    endpoint === undefined;
 
   const {
     headerContent,
@@ -931,7 +944,7 @@ export function DevPreviewPane({
           isWebviewReady={isWebviewReady}
           isConsoleOpen={isConsoleOpen}
           canOpenExternal={Boolean(currentUrl)}
-          canToggleConsole={Boolean(consoleTerminalId)}
+          canToggleConsole={Boolean(consoleTerminalId) || endpoint !== undefined}
           viewportPreset={viewportPreset}
           viewportRotated={viewportRotated}
           viewportDpr={viewportDpr}
@@ -1057,6 +1070,8 @@ export function DevPreviewPane({
                 isSavingCommand={isSavingCommand}
                 saveCommandFailed={saveCommandFailed}
                 devCommand={devCommand}
+                endpoint={endpoint}
+                onCheckEndpoint={handleCheckEndpoint}
                 handleStartFromRestored={handleStartFromRestored}
                 hasBeenVisible={hasBeenVisible}
                 isEvicted={isEvicted}
@@ -1104,8 +1119,12 @@ export function DevPreviewPane({
                     isRestarting={isRestarting}
                     onRestartDevServer={handleRestartDevServer}
                     onHardReload={handleHardReload}
-                    onRequestRestartAndClearCache={handleRequestRestartAndClearCache}
-                    onRequestReinstallAndRestart={handleRequestReinstallAndRestart}
+                    onRequestRestartAndClearCache={
+                      endpoint === undefined ? handleRequestRestartAndClearCache : undefined
+                    }
+                    onRequestReinstallAndRestart={
+                      endpoint === undefined ? handleRequestReinstallAndRestart : undefined
+                    }
                     onRetryWebviewLoad={handleRetryWebviewLoad}
                     currentUrl={currentUrl}
                     onOpenExternal={handleOpenExternal}
@@ -1198,9 +1217,9 @@ export function DevPreviewPane({
             }}
           />
         )}
-        {consoleTerminalId && (
+        {(consoleTerminalId || endpoint !== undefined) && (
           <ConsoleDrawer
-            terminalId={consoleTerminalId}
+            terminalId={endpoint !== undefined ? null : consoleTerminalId}
             paneId={id}
             projectId={currentProjectId}
             webContentsId={guestWebContentsId}
@@ -1210,10 +1229,15 @@ export function DevPreviewPane({
             activeTab={activeConsoleTab}
             onTabChange={(tab) => setDevPreviewConsoleTab(id, tab)}
             isRestarting={isRestarting}
+            canStopWhileRestarting={isCyclingEndpoint}
             onReloadPreview={handleHardReload}
             onRestartDevServer={handleRestartDevServer}
-            onRequestRestartAndClearCache={handleRequestRestartAndClearCache}
-            onRequestReinstallAndRestart={handleRequestReinstallAndRestart}
+            onRequestRestartAndClearCache={
+              endpoint === undefined ? handleRequestRestartAndClearCache : undefined
+            }
+            onRequestReinstallAndRestart={
+              endpoint === undefined ? handleRequestReinstallAndRestart : undefined
+            }
             onStop={stop}
             isPanelVisible={!isParkedInDock}
           />

@@ -58,6 +58,13 @@ interface DevPreviewEmptyStatesProps {
   isSavingCommand: boolean;
   saveCommandFailed: boolean;
   devCommand: string;
+  /**
+   * A resource endpoint panel's endpoint (#13688): null until the environment's
+   * status reports one. Undefined for a panel that runs its dev command.
+   */
+  endpoint?: string | null;
+  /** Endpoint panels: asks the environment where its server is. */
+  onCheckEndpoint?: () => void;
   handleStartFromRestored: () => void;
   hasBeenVisible: boolean;
   isEvicted: boolean;
@@ -168,6 +175,8 @@ export function DevPreviewEmptyStates({
   isSavingCommand,
   saveCommandFailed,
   devCommand,
+  endpoint,
+  onCheckEndpoint,
   handleStartFromRestored,
   hasBeenVisible,
   isEvicted,
@@ -375,6 +384,39 @@ export function DevPreviewEmptyStates({
           <Button onClick={handleStartFromRestored} variant="contrast">
             <RotateCw />
             Restart dev server
+          </Button>
+        </PaneState>
+      );
+    }
+
+    if (status === "stopped" && endpoint !== undefined) {
+      if (!showStoppedPrompt) {
+        return <div className="absolute inset-0 bg-surface-canvas" />;
+      }
+      if (endpoint === null) {
+        return (
+          <PaneState
+            title="Check the environment's status"
+            description="It hasn't reported an endpoint yet. Once its server is up, a status check finds it."
+          >
+            {onCheckEndpoint && (
+              <Button onClick={onCheckEndpoint} variant="contrast">
+                <RefreshCw />
+                Check status
+              </Button>
+            )}
+          </PaneState>
+        );
+      }
+      return (
+        <PaneState
+          title="Connect to the endpoint"
+          description="The preview isn't connected. Connect to show the environment's server here."
+        >
+          <CommandChip command={endpoint} />
+          <Button onClick={handleRetry} variant="contrast">
+            <Play />
+            Connect
           </Button>
         </PaneState>
       );

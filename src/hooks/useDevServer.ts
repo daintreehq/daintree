@@ -16,6 +16,17 @@ export interface UseDevServerOptions {
   worktreeId?: string;
   env?: Record<string, string>;
   turbopackEnabled?: boolean;
+  /**
+   * Set (even to null) for a panel that previews the worktree's resource
+   * endpoint instead of running devCommand (#13688); null while no endpoint is
+   * ready. Undefined keeps the panel on its dev command.
+   */
+  endpoint?: string | null;
+  /**
+   * Endpoint panels only: cycles the resource and reports its fresh endpoint.
+   * Restart runs it first because neither pause nor resume refreshes it.
+   */
+  refreshEndpoint?: () => Promise<string | null>;
 }
 
 export interface UseDevServerState {
@@ -46,6 +57,11 @@ export interface UseDevServerReturn extends UseDevServerState {
    * recoverable banner; an explicit restart clears it.
    */
   crashLoopStopped?: boolean;
+  /**
+   * True while an endpoint restart is cycling its resource (#13688). Unlike a
+   * backend restart this one can still be called off, so Stop stays usable.
+   */
+  isCyclingEndpoint: boolean;
 }
 
 /**
@@ -83,12 +99,18 @@ function serializeEnv(env?: Record<string, string>): string {
     .join("\u0001");
 }
 
+/** What the panel launches: its endpoint in endpoint mode, else its dev command. Empty means nothing. */
+function launchTarget(devCommand: string, endpoint: string | null | undefined): string {
+  return endpoint === undefined ? devCommand.trim() : (endpoint?.trim() ?? "");
+}
+
 function buildEnsureConfigKey(params: {
   projectId: string;
   panelId: string;
   cwd: string;
   worktreeId?: string;
   devCommand: string;
+  endpoint?: string | null;
   envSignature: string;
   turbopackEnabled?: boolean;
 }): string {
@@ -97,6 +119,7 @@ function buildEnsureConfigKey(params: {
     params.panelId,
     params.cwd,
     params.worktreeId ?? "",
+    params.endpoint === undefined ? "" : `endpoint:${params.endpoint ?? ""}`,
     params.devCommand.trim(),
     params.envSignature,
     (params.turbopackEnabled ?? true) ? "turbo:on" : "turbo:off",
@@ -110,6 +133,8 @@ export function useDevServer({
   worktreeId,
   env,
   turbopackEnabled,
+  endpoint,
+  refreshEndpoint,
 }: UseDevServerOptions): UseDevServerReturn {
   const currentProjectId = useProjectStore((state) => state.currentProject?.id ?? null);
   const [status, setStatus] = useState<DevPreviewStatus>("stopped");
@@ -149,6 +174,11 @@ export function useDevServer({
   const lastEnsureConfigRef = useRef<string>("");
   const pendingEnsureRef = useRef<{ configKey: string; resume: boolean } | null>(null);
   const userStoppedRef = useRef(false);
+  // Bumped by every endpoint restart and every Stop. A restart whose resource
+  // cycle finishes after its number moved on was superseded and must not connect.
+  const endpointCycleRef = useRef(0);
+  const endpointCyclingRef = useRef(false);
+  const [isCyclingEndpoint, setIsCyclingEndpoint] = useState(false);
   const requestVersionRef = useRef(0);
 
   const latestContextRef = useRef<{
@@ -157,6 +187,8 @@ export function useDevServer({
     cwd: string;
     worktreeId?: string;
     devCommand: string;
+    endpoint?: string | null;
+    refreshEndpoint?: () => Promise<string | null>;
     env?: Record<string, string>;
     turbopackEnabled?: boolean;
   }>({
@@ -165,6 +197,8 @@ export function useDevServer({
     cwd,
     worktreeId,
     devCommand,
+    endpoint,
+    refreshEndpoint,
     env,
     turbopackEnabled,
   });
@@ -177,6 +211,8 @@ export function useDevServer({
     cwd,
     worktreeId,
     devCommand,
+    endpoint,
+    refreshEndpoint,
     env,
     turbopackEnabled,
   };
@@ -203,12 +239,19 @@ export function useDevServer({
       phaseLabel: state.phaseLabel,
     };
     userStoppedRef.current = state.userStopped === true;
+    // A Stop from outside this panel (palette, worktree menu) reaches it only as
+    // state; it still calls off an endpoint restart waiting on its resource.
+    if (userStoppedRef.current && endpointCyclingRef.current) {
+      endpointCycleRef.current += 1;
+      endpointCyclingRef.current = false;
+      setIsCyclingEndpoint(false);
+    }
     setStatus(state.status);
     setUrl(state.url);
     setTerminalId(state.terminalId);
     setError(state.error ?? null);
     setPhaseLabel(state.phaseLabel);
-    setIsRestarting(state.isRestarting);
+    setIsRestarting(state.isRestarting || endpointCyclingRef.current);
     setForceKilled(state.forceKilled);
     setCrashLoopStopped(state.crashLoopStopped);
   }, []);
@@ -251,8 +294,8 @@ export function useDevServer({
       const requestProjectId = latest.projectId;
       if (!requestProjectId) return;
 
-      const trimmedCommand = latest.devCommand.trim();
-      if (!trimmedCommand) return;
+      if (!launchTarget(latest.devCommand, latest.endpoint)) return;
+      const endpointMode = latest.endpoint !== undefined;
 
       const requestPanelId = latest.panelId;
       const requestVersion = requestVersionRef.current;
@@ -265,7 +308,8 @@ export function useDevServer({
           panelId: requestPanelId,
           projectId: requestProjectId,
           cwd: latest.cwd,
-          devCommand: latest.devCommand,
+          devCommand: endpointMode ? "" : latest.devCommand,
+          ...(endpointMode && latest.endpoint ? { endpoint: latest.endpoint.trim() } : {}),
           worktreeId: latest.worktreeId,
           env: latest.env,
           turbopackEnabled: latest.turbopackEnabled,
@@ -300,8 +344,14 @@ export function useDevServer({
       applyInvokeError(new Error("No active project"));
       return;
     }
-    if (!latest.devCommand.trim()) {
-      applyInvokeError(new Error("No dev command configured"));
+    if (!launchTarget(latest.devCommand, latest.endpoint)) {
+      applyInvokeError(
+        new Error(
+          latest.endpoint === undefined
+            ? "No dev command configured"
+            : "The resource environment has no ready endpoint"
+        )
+      );
       return;
     }
 
@@ -311,6 +361,7 @@ export function useDevServer({
       cwd: latest.cwd,
       worktreeId: latest.worktreeId,
       devCommand: latest.devCommand,
+      endpoint: latest.endpoint,
       envSignature: serializeEnv(latest.env),
       turbopackEnabled: latest.turbopackEnabled,
     });
@@ -322,8 +373,13 @@ export function useDevServer({
     if (!latest.projectId) return;
     persistedEnsureCache.delete(latest.panelId);
     lastEnsureConfigRef.current = "";
-    // A Start queued behind an in-flight ensure must not resume after this Stop.
+    // A Start queued behind an in-flight ensure must not resume after this Stop,
+    // nor an endpoint restart still cycling its resource.
     pendingEnsureRef.current = null;
+    endpointCycleRef.current += 1;
+    endpointCyclingRef.current = false;
+    setIsCyclingEndpoint(false);
+    setIsRestarting(false);
     const requestVersion = requestVersionRef.current;
     const requestProjectId = latest.projectId;
     const requestPanelId = latest.panelId;
@@ -347,6 +403,37 @@ export function useDevServer({
     const latest = latestContextRef.current;
     if (!latest.projectId) {
       applyInvokeError(new Error("No active project"));
+      return;
+    }
+
+    // A resource endpoint is restarted through the resource, and neither pause
+    // nor resume refreshes the endpoint: cycle it, take the fresh endpoint from
+    // its status, and reconnect to that (#13688).
+    if (latest.endpoint !== undefined && latest.refreshEndpoint) {
+      if (endpointCyclingRef.current) return;
+      const cycle = ++endpointCycleRef.current;
+      endpointCyclingRef.current = true;
+      setIsCyclingEndpoint(true);
+      setIsRestarting(true);
+      let fresh: string | null;
+      try {
+        fresh = await latest.refreshEndpoint();
+      } catch (err) {
+        if (cycle === endpointCycleRef.current) applyInvokeError(err);
+        return;
+      } finally {
+        if (cycle === endpointCycleRef.current) {
+          endpointCyclingRef.current = false;
+          if (isMountedRef.current) {
+            setIsCyclingEndpoint(false);
+            setIsRestarting(false);
+          }
+        }
+      }
+      if (!isMountedRef.current || cycle !== endpointCycleRef.current) return;
+      latestContextRef.current = { ...latestContextRef.current, endpoint: fresh };
+      persistedEnsureCache.delete(latest.panelId);
+      await start();
       return;
     }
 
@@ -387,7 +474,16 @@ export function useDevServer({
 
   useEffect(() => {
     requestVersionRef.current += 1;
-  }, [panelId, currentProjectId, cwd, worktreeId, devCommand, envSignature, turbopackEnabled]);
+  }, [
+    panelId,
+    currentProjectId,
+    cwd,
+    worktreeId,
+    devCommand,
+    endpoint,
+    envSignature,
+    turbopackEnabled,
+  ]);
 
   useEffect(() => {
     if (!currentProjectId) {
@@ -471,9 +567,11 @@ export function useDevServer({
     });
   }, [panelId, currentProjectId, applyState]);
 
+  const target = launchTarget(devCommand, endpoint);
+
   useEffect(() => {
     if (!currentProjectId) return;
-    if (devCommand.trim()) return;
+    if (target) return;
 
     const requestVersion = requestVersionRef.current;
     const requestProjectId = currentProjectId;
@@ -494,11 +592,11 @@ export function useDevServer({
           applyInvokeError(err);
         }
       });
-  }, [panelId, currentProjectId, devCommand, applyState, applyInvokeError, isRequestCurrent]);
+  }, [panelId, currentProjectId, target, applyState, applyInvokeError, isRequestCurrent]);
 
   useEffect(() => {
     if (!currentProjectId) return;
-    if (!devCommand.trim()) return;
+    if (!target) return;
     // Wait for the first getState() to resolve before auto-spawning so this
     // effect reconciles to the panel's real status before deciding to ensure(),
     // rather than firing on the synchronous mount with the stale "stopped"
@@ -507,6 +605,9 @@ export function useDevServer({
     // whether by cold launch or live switch, brings its dev server back. A panel
     // the user stopped is not: Main refuses this (non-resume) ensure (#13169).
     if (!initialStateResolved) return;
+    // An endpoint restart is mid-cycle: the endpoint it reconnects to comes from its
+    // own fresh status check, not from whatever the store reported on the way.
+    if (endpointCyclingRef.current) return;
 
     const configKey = buildEnsureConfigKey({
       projectId: currentProjectId,
@@ -514,6 +615,7 @@ export function useDevServer({
       cwd,
       worktreeId,
       devCommand,
+      endpoint,
       envSignature,
       turbopackEnabled,
     });
@@ -538,6 +640,8 @@ export function useDevServer({
     cwd,
     worktreeId,
     devCommand,
+    endpoint,
+    target,
     envSignature,
     turbopackEnabled,
     ensureLatestConfig,
@@ -618,5 +722,6 @@ export function useDevServer({
     stuckTier,
     forceKilled,
     crashLoopStopped,
+    isCyclingEndpoint,
   };
 }

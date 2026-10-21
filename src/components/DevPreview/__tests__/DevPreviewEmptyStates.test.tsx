@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { DevPreviewEmptyStates } from "../DevPreviewEmptyStates";
 import type { DevServerError } from "@shared/utils/devServerErrors";
@@ -449,4 +449,56 @@ describe("DevPreviewEmptyStates — parent gate parity", () => {
       expect(rendersNull).toBe(!expectedEmpty);
     });
   }
+
+  describe("resource endpoint panels (#13688)", () => {
+    // The stopped prompts wait out the Doherty gate before showing.
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    function passStoppedGate() {
+      act(() => {
+        vi.advanceTimersByTime(1000);
+      });
+    }
+
+    it("asks for a status check while no endpoint is reported, never offering the dev command", () => {
+      const onCheckEndpoint = vi.fn();
+      render(
+        <DevPreviewEmptyStates
+          {...baseProps({
+            status: "stopped",
+            devCommand: "npm run dev",
+            endpoint: null,
+            onCheckEndpoint,
+          })}
+        />
+      );
+      passStoppedGate();
+      fireEvent.click(screen.getByRole("button", { name: /check status/i }));
+      expect(onCheckEndpoint).toHaveBeenCalledTimes(1);
+      expect(screen.queryByText("npm run dev")).toBeNull();
+    });
+
+    it("offers to connect to a reported endpoint", () => {
+      const handleRetry = vi.fn();
+      render(
+        <DevPreviewEmptyStates
+          {...baseProps({
+            status: "stopped",
+            devCommand: "npm run dev",
+            endpoint: "http://box.example.ts.net:5173",
+            handleRetry,
+          })}
+        />
+      );
+      passStoppedGate();
+      expect(screen.getByText("http://box.example.ts.net:5173")).toBeTruthy();
+      fireEvent.click(screen.getByRole("button", { name: /connect/i }));
+      expect(handleRetry).toHaveBeenCalledTimes(1);
+    });
+  });
 });
