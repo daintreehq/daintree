@@ -18,7 +18,7 @@ export interface SubagentChipFixture {
   width: number;
   subagents: Array<Omit<AgentSubagent, "createdAt" | "updatedAt"> & { agoMs: number }>;
   /** `hang` never answers, so the in-flight state can be photographed. */
-  transcript: "ok" | "long" | "empty" | "unavailable" | "hang";
+  transcript: "ok" | "long" | "empty" | "unavailable" | "hang" | "markdown";
   /** Every list call after the first never answers — the popover's refreshing state. */
   hangRefresh?: boolean;
   /** Every list call after the first answers a timeout — the retained-list state. */
@@ -92,6 +92,22 @@ const CLAUDE_ONE: SubagentChipFixture["subagents"] = [
     agoMs: 3 * minute,
   },
 ];
+
+function ciFleet(size = 8): SubagentChipFixture["subagents"] {
+  const prs = Array.from({ length: size }, (_, index) =>
+    index < 8 ? [13728, 13727, 13729, 13726, 13719, 13724, 13721, 13716][index]! : 13700 - index
+  );
+  return prs.map((pr, index) => ({
+    id: `a${pr}`,
+    label: `CI fix PR #${pr}`,
+    role: "general-purpose",
+    preview: `You are a background CI fix agent on PR #${pr}. Read the failing job log, reproduce the failure locally, fix it, and push to the PR branch.`,
+    model: index === 0 ? "claude-sonnet-5" : null,
+    depth: 1,
+    status: index === 0 ? { type: "working" } : { type: "completed" },
+    agoMs: (index === 0 ? 0.2 : 24 + index * 3) * minute,
+  }));
+}
 
 function denseFleet(): SubagentChipFixture["subagents"] {
   const names = [
@@ -189,6 +205,36 @@ export const FIXTURES = {
     subagents: CLAUDE_ONE,
     transcript: "ok",
   },
+  "claude-ci-fleet": {
+    what: "Claude pane with eight CI-fix children, one still running (the owner's report)",
+    provider: "claude",
+    width: 560,
+    subagents: ciFleet(),
+    transcript: "markdown",
+  },
+  "claude-ci-fifty": {
+    what: "fifty Claude children — the list's cap, filterable",
+    provider: "claude",
+    width: 560,
+    subagents: ciFleet(50),
+    transcript: "markdown",
+  },
+  "codex-unknowns": {
+    what: "every unknown reason, and a failure with nothing waiting",
+    provider: "codex",
+    width: 560,
+    subagents: [
+      { ...CODEX_FLEET[3]! },
+      { ...CODEX_FLEET[4]! },
+      { ...CODEX_FLEET[0]!, id: "019a-stale", status: { type: "unknown", reason: "stale" } },
+      {
+        ...CODEX_FLEET[2]!,
+        id: "019a-odd",
+        status: { type: "unknown", reason: "unrecognized" },
+      },
+    ],
+    transcript: "ok",
+  },
   "codex-dense": {
     what: "fourteen children — the list scrolls",
     provider: "codex",
@@ -221,6 +267,43 @@ const LONG_REPLY = [
   "Suggested fix: flip the comparison, move rotation behind it, and assert `nonces.has(old) === false` in the test.",
 ].join("\n");
 
+const CI_TASK = [
+  "You are a background CI fix agent on PR #13728 (`design/markdown-text-size-popover`).",
+  "",
+  "## Context",
+  "",
+  "The `vitest (3/6)` shard failed on the last push. The branch only touches `src/components/Markdown/`.",
+  "",
+  "## Steps",
+  "",
+  "1. Read the failing job log with `gh run view --log-failed`.",
+  "2. Reproduce locally with `npm test -- <file>` — never the full suite.",
+  "3. Fix the cause, not the assertion.",
+  "4. Commit and push to the PR branch.",
+  "",
+  "## Rules",
+  "",
+  "- Never weaken a test or widen a baseline.",
+  "- If the failure is a known flake, say so and stop.",
+  "- Report the commands you ran and their real results.",
+].join("\n");
+
+const CI_REPLY = [
+  "Fixed and pushed `4f2c91e`.",
+  "",
+  "**Cause:** `MarkdownTextSizeControl.test.tsx` still asserted the old `text-sm` default after the popover moved the reading size to a preference.",
+  "",
+  "Ran:",
+  "",
+  "```",
+  "npm test -- src/components/Markdown/__tests__/MarkdownTextSizeControl.test.tsx",
+  "✓ 14 passed",
+  "```",
+  "",
+  "- Updated the default to read from `preferencesStore`",
+  "- No baseline changes",
+].join("\n");
+
 export function transcriptFor(
   fixture: SubagentChipFixture,
   subagentId: string
@@ -245,6 +328,16 @@ export function transcriptFor(
           { role: "reply", text: LONG_REPLY },
           { role: "task", text: "Also check the tests cover the inverted comparison." },
           { role: "reply", text: LONG_REPLY },
+        ],
+      };
+    case "markdown":
+      return {
+        status: "ok",
+        subagentId,
+        truncated: false,
+        messages: [
+          { role: "task", text: CI_TASK },
+          { role: "reply", text: CI_REPLY },
         ],
       };
     case "ok":

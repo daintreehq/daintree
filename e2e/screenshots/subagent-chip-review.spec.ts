@@ -54,7 +54,9 @@ type State =
   | "expanded"
   | "row-focus"
   | "refreshing"
-  | "refresh-failed";
+  | "refresh-failed"
+  | "back"
+  | "filter";
 
 /** Which states each fixture is photographed in. Mirrors `FIXTURES` in the preview. */
 const PLAN: Record<string, State[]> = {
@@ -66,9 +68,15 @@ const PLAN: Record<string, State[]> = {
   "codex-refreshing": ["refreshing"],
   "codex-refresh-failed": ["refresh-failed"],
   "claude-single": ["header", "open", "expanded"],
+  "claude-ci-fleet": ["open", "expanded", "back"],
+  "claude-ci-fifty": ["open", "filter"],
+  "codex-unknowns": ["open"],
   "codex-dense": ["open"],
   "codex-narrow": ["header", "open"],
 };
+
+/** Window widths other than the default, for fixtures about a cramped window. */
+const VIEWPORT_WIDTH: Record<string, number> = { "codex-narrow": 380 };
 
 /** Text the expanded row must show for each transcript mode before it is photographed. */
 const EXPANDED_MARKER: Record<string, RegExp> = {
@@ -78,6 +86,7 @@ const EXPANDED_MARKER: Record<string, RegExp> = {
   "codex-transcript-unavailable": /too long to respond/,
   "codex-transcript-loading": /Loading transcript/,
   "claude-single": /Found two problems/,
+  "claude-ci-fleet": /Fixed and pushed/,
 };
 
 test.use({ deviceScaleFactor: 2 });
@@ -101,7 +110,7 @@ test.afterAll(async () => {
 async function load(page: Page, fixture: string, theme: string): Promise<Locator> {
   await stubViteHmrClient(page);
   await page.mouse.move(0, 0);
-  await page.setViewportSize({ width: 820, height: 760 });
+  await page.setViewportSize({ width: VIEWPORT_WIDTH[fixture] ?? 820, height: 760 });
   await page.goto(`${baseURL}/subagent-chip-preview.html?theme=${theme}&fixture=${fixture}`);
   const pane = page.locator("[data-preview-pane]");
   await expect(pane, `${fixture}: no pane`).toBeVisible({ timeout: 20_000 });
@@ -177,6 +186,26 @@ async function capture(page: Page, fixture: string, state: State, theme: string)
       const content = await openPopover(page, chip);
       await content.locator("li button").first().click();
       await expect(content).toContainText(EXPANDED_MARKER[fixture]!, { timeout: 5_000 });
+      return shoot(page, [pane, content], file);
+    }
+    case "filter": {
+      const content = await openPopover(page, chip);
+      await content.getByRole("textbox", { name: "Filter subagents" }).fill("1371");
+      await expect(content).toContainText(/CI fix PR #13719/);
+      await expect(content).not.toContainText(/CI fix PR #13728/);
+      return shoot(page, [pane, content], file);
+    }
+    case "back": {
+      // Escape from a child's page steps back to the list, focus on the row it came from.
+      const content = await openPopover(page, chip);
+      await page.keyboard.press("Shift");
+      const first = content.locator("li button").first();
+      await first.focus();
+      await page.keyboard.press("Enter");
+      await expect(content).toContainText(EXPANDED_MARKER[fixture]!, { timeout: 5_000 });
+      await page.keyboard.press("Escape");
+      await expect(content).toBeVisible();
+      await expect(first).toBeFocused();
       return shoot(page, [pane, content], file);
     }
     case "row-focus": {

@@ -33,7 +33,8 @@ export function subagentStatusLabel(status: AgentSubagentStatus): string {
       return status.reason === "approval" ? "Waiting for approval" : "Waiting for input";
     case "unknown":
     default:
-      return status.reason === "not-loaded" ? "Not loaded" : "Unknown";
+      if (status.reason === "not-loaded") return "Not loaded";
+      return status.reason === "stale" ? "Unfinished step" : "Unrecognized record";
   }
 }
 
@@ -96,6 +97,40 @@ export function subagentSubtitle(subagent: AgentSubagent): string | null {
   // level down, so "Depth 1" is noise on every row.
   if (subagent.depth !== null && subagent.depth > 1) parts.push(`Depth ${subagent.depth}`);
   return parts.length > 0 ? parts.join(" · ") : null;
+}
+
+/**
+ * What a child's own page says about it beside its title: the kind of worker,
+ * the model and the depth, each only when recorded and not already the title.
+ * The task is left out because the transcript opens with it.
+ */
+export function subagentFacts(subagent: AgentSubagent): string[] {
+  const title = subagentTitle(subagent);
+  const role = firstLine(subagent.role);
+  const facts: string[] = [];
+  if (role && role !== title) facts.push(role);
+  if (subagent.model) facts.push(subagent.model);
+  if (subagent.depth !== null && subagent.depth > 1) facts.push(`Depth ${subagent.depth}`);
+  return facts;
+}
+
+/** The title in full, for the child's own page, where it has room to wrap. */
+export function subagentFullTitle(subagent: AgentSubagent): string {
+  return (
+    subagent.label?.trim() ||
+    firstLine(subagent.role) ||
+    firstLine(subagent.preview) ||
+    subagent.id.slice(0, 8)
+  );
+}
+
+/** What the filter field matches a child against: everything a row can show. */
+export function subagentMatches(subagent: AgentSubagent, query: string): boolean {
+  const needle = query.trim().toLowerCase();
+  if (!needle) return true;
+  return [subagent.label, subagent.role, subagent.preview, subagent.model]
+    .filter((value): value is string => !!value)
+    .some((value) => value.toLowerCase().includes(needle));
 }
 
 export function subagentUnavailableMessage(
