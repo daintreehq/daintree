@@ -1,6 +1,6 @@
 import type { MarkdownEditorStatusBarProps } from "../MarkdownEditorStatusBar";
 
-type FixtureProps = Omit<MarkdownEditorStatusBarProps, "onSave">;
+type FixtureProps = Omit<MarkdownEditorStatusBarProps, "onSave" | "filePath">;
 
 export interface StatusBarFixture {
   /** What this case is here to prove. */
@@ -13,7 +13,7 @@ const BASE: FixtureProps = {
   byteLength: 12_392,
   hasBom: false,
   eolLabel: "LF",
-  mixedEol: false,
+  lineEnding: "LF",
   dirty: false,
   saving: false,
   saveBlocked: false,
@@ -39,15 +39,15 @@ export const STATUS_BAR_FIXTURES: Record<string, StatusBarFixture> = {
   },
   "mixed-eol": {
     what: "the second metadata run, which competes with the first",
-    props: { ...BASE, dirty: true, mixedEol: true },
+    props: { ...BASE, dirty: true, lineEnding: "mixed" },
   },
   bom: {
     what: "the longest the left run ever gets",
-    props: { ...BASE, hasBom: true, eolLabel: "CRLF", mixedEol: true, dirty: true },
+    props: { ...BASE, hasBom: true, eolLabel: "CRLF", lineEnding: "mixed", dirty: true },
   },
   empty: {
     what: "a new file — every metric at its shortest",
-    props: { ...BASE, lineCount: 0, byteLength: 0 },
+    props: { ...BASE, lineCount: 0, byteLength: 0, lineEnding: null },
   },
 };
 

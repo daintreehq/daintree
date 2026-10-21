@@ -193,8 +193,9 @@ describe("MarkdownEditorView (#12323)", () => {
       size: 6,
     }));
     await renderReady();
-    expect(screen.getByTestId("markdown-editor-mixed-eol").textContent).toContain("CRLF");
-    expect(screen.getByTestId("markdown-editor-status").textContent).toContain("with BOM");
+    const status = screen.getByTestId("markdown-editor-status");
+    expect(status.querySelector('[data-fact="eol"]')?.textContent).toContain("Mixed line endings");
+    expect(status.textContent).toContain("with BOM");
   });
 
   it("a refused document says why and offers the external editor", async () => {

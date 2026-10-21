@@ -182,6 +182,8 @@ describe("files:read handler", () => {
 
       await expect(getReadHandler()(remote, { path: file, rootPath: root })).resolves.toEqual({
         content: "hello\n",
+        encoding: "utf-8",
+        byteLength: 6,
         pathIsCanonical: true,
       });
       expect(holdsRoot).toHaveBeenCalledWith("proj-1", root);
@@ -219,7 +221,12 @@ describe("files:read handler", () => {
       registerFilesHandlers();
       await expect(
         getReadHandler()({ endpoint: { kind: "local-view" } }, { path: file, rootPath: root })
-      ).resolves.toEqual({ content: "hello\n", pathIsCanonical: true });
+      ).resolves.toEqual({
+        content: "hello\n",
+        encoding: "utf-8",
+        byteLength: 6,
+        pathIsCanonical: true,
+      });
       expect(holdsRoot).not.toHaveBeenCalled();
     });
   });
@@ -243,7 +250,12 @@ describe("files:read handler", () => {
 
     const result = await getReadHandler()({}, { path: file, rootPath: root });
 
-    expect(result).toEqual({ content: "hello world\n", pathIsCanonical: true });
+    expect(result).toEqual({
+      content: "hello world\n",
+      encoding: "utf-8",
+      byteLength: 12,
+      pathIsCanonical: true,
+    });
   });
 
   it("does not call a hard-linked file canonical", async () => {
@@ -534,7 +546,12 @@ describe("files:read handler", () => {
 
     // Readable through the link, but the watcher names writes under the real
     // path, so the renderer must not scope its re-reads by this one.
-    expect(result).toEqual({ content: "ok", pathIsCanonical: false });
+    expect(result).toEqual({
+      content: "ok",
+      encoding: "utf-8",
+      byteLength: 2,
+      pathIsCanonical: false,
+    });
   });
 
   it("returns the read error (not the close error) when both reject", async () => {

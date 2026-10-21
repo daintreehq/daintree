@@ -10,14 +10,14 @@ import {
 import CodeMirror from "@uiw/react-codemirror";
 import { EditorView, Decoration, type DecorationSet, keymap } from "@codemirror/view";
 import { type Extension, StateEffect, StateField, EditorState } from "@codemirror/state";
-import { LanguageDescription, syntaxTree } from "@codemirror/language";
+import { syntaxTree } from "@codemirror/language";
 import { type SyntaxNode } from "@lezer/common";
 import { search, openSearchPanel, gotoLine } from "@codemirror/search";
 import { getDaintreeEditorTheme } from "./editorTheme";
 import { useActiveAppScheme } from "@/hooks/useActiveAppScheme";
 import { editorSearchHighlightTheme, editorSearchPanelTheme } from "./editorSearchTheme";
 import { createEditorSearchPanel } from "./editorSearchPanel";
-import { CODEMIRROR_LANGUAGES } from "./codeMirrorLanguages";
+import { matchCodeMirrorLanguage } from "./codeMirrorLanguages";
 import { cn } from "@/lib/utils";
 
 export interface CodeViewerHandle {
@@ -176,10 +176,7 @@ export const CodeViewer = forwardRef<CodeViewerHandle, CodeViewerProps>(function
     []
   );
 
-  const langName = useMemo(() => {
-    const basename = filePath.split(/[/\\]/).filter(Boolean).pop() ?? filePath;
-    return LanguageDescription.matchFilename(CODEMIRROR_LANGUAGES, basename)?.name ?? null;
-  }, [filePath]);
+  const langName = useMemo(() => matchCodeMirrorLanguage(filePath)?.name ?? null, [filePath]);
 
   const scopeTypes = useMemo(
     () => (langName ? (SCOPE_NODE_TYPES_BY_LANGUAGE[langName] ?? null) : null),
@@ -187,8 +184,7 @@ export const CodeViewer = forwardRef<CodeViewerHandle, CodeViewerProps>(function
   );
 
   useEffect(() => {
-    const basename = filePath.split(/[/\\]/).filter(Boolean).pop() ?? filePath;
-    const desc = LanguageDescription.matchFilename(CODEMIRROR_LANGUAGES, basename);
+    const desc = matchCodeMirrorLanguage(filePath);
     // Clear any previously-loaded extension so a failed lazy chunk fetch
     // doesn't leave the prior file's syntax highlighting on this file.
     setLangExtension(null);

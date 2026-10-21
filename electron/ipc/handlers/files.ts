@@ -1,5 +1,6 @@
 import path from "path";
 import fs from "fs/promises";
+import { isUtf8 } from "node:buffer";
 import { CHANNELS } from "../channels.js";
 import { checkRateLimit, typedHandleWithContextValidated } from "../utils.js";
 import type { IpcContext } from "../types.js";
@@ -294,8 +295,12 @@ export function registerFilesHandlers(): () => void {
         ? (buildHtmlPreviewUrl(realRoot, realFile) ?? undefined)
         : undefined;
 
+    const hasBom =
+      buffer.length >= 3 && buffer[0] === 0xef && buffer[1] === 0xbb && buffer[2] === 0xbf;
     return {
       content: buffer.toString("utf-8"),
+      encoding: !isUtf8(buffer) ? "invalid" : hasBom ? "utf-8-bom" : "utf-8",
+      byteLength: buffer.length,
       htmlPreviewUrl,
       // A hard-linked file has more than one real path, and a directory watch
       // only reports the name it was written through.

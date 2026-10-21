@@ -42,6 +42,7 @@ import {
   PANE_TOOLBAR_TEXT_BUTTON_CLASS,
 } from "@/components/ui/paneToolbarStyles";
 import { FILE_METADATA_STRIP_CLASS } from "@/components/FileViewer/fileMetadataStrip";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { ScrollShadow, ScrollShadowOverlay } from "@/components/ui/ScrollShadow";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useToolbarRoving } from "@/hooks/useToolbarRoving";
@@ -421,15 +422,6 @@ function KitPaneLayout({
   );
 }
 
-/** A dimmed dot between two facts. Hidden from AT, which reads the facts. */
-function StatusDot() {
-  return (
-    <span aria-hidden="true" className="text-text-muted">
-      ·
-    </span>
-  );
-}
-
 /** The facts a slot draws: text, numbers and elements, nested arrays flattened, empties dropped. */
 function statusFacts(value: unknown): unknown[] {
   const out: unknown[] = [];
@@ -458,7 +450,7 @@ function statusSlot(facts: unknown[], yields: boolean): ReactNode {
   });
   return facts.map((fact, index) => (
     <Fragment key={index}>
-      {index > 0 ? <StatusDot /> : null}
+      {index > 0 ? <FactSeparator /> : null}
       {typeof fact === "string" || typeof fact === "number" ? (
         <span className={yields && index === lastText ? "min-w-0 truncate" : "shrink-0"}>
           {fact}
