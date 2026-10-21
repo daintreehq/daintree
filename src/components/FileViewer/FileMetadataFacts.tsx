@@ -1,7 +1,7 @@
 import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { AlertTriangle } from "lucide-react";
 import type { FileTextEncoding } from "@shared/types/ipc/files";
-import { Tooltip } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { FactSeparator } from "@/components/ui/FactSeparator";
 import { formatBytes } from "@/lib/formatBytes";
 import { pluralize } from "@/lib/pluralize";
@@ -189,11 +189,14 @@ function useFittedFacts(leadKeys: string, hasRoutine: boolean) {
 function FactBody({ item }: { item: FactItem }): ReactNode {
   if (item.warning) {
     return (
-      <Tooltip side="top" content={item.warning}>
-        <span className="inline-flex items-center gap-1 text-status-warning">
-          <AlertTriangle aria-hidden="true" className="h-3 w-3 shrink-0" />
-          {item.label}
-        </span>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span className="inline-flex items-center gap-1 text-status-warning">
+            <AlertTriangle aria-hidden="true" className="h-3 w-3 shrink-0" />
+            {item.label}
+          </span>
+        </TooltipTrigger>
+        <TooltipContent side="top">{item.warning}</TooltipContent>
       </Tooltip>
     );
   }
@@ -254,10 +257,13 @@ export function FileMetadataFacts({
       {hidden.size > 0 && (
         <span className="inline-flex shrink-0 items-center gap-1.5">
           <FactSeparator />
-          <Tooltip side="top" content={everything}>
-            <span aria-hidden="true" data-testid="file-metadata-overflow">
-              …
-            </span>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span aria-hidden="true" data-testid="file-metadata-overflow">
+                …
+              </span>
+            </TooltipTrigger>
+            <TooltipContent side="top">{everything}</TooltipContent>
           </Tooltip>
         </span>
       )}
