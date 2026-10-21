@@ -11,6 +11,7 @@ import {
   CANOPY_POLL_MS,
   CANOPY_PROGRESS_DESCRIBE_MS,
   CANOPY_REJUDGE_AFTER_MS,
+  CANOPY_SETTLE_MS,
   CANOPY_STALL_MS,
   CANOPY_TRANSIENT_GRACE_MS,
   CANOPY_COLD_START_GRACE_MS,
@@ -3360,14 +3361,18 @@ describe("CanopyService", () => {
               };
 
     it("reads changed screens for the classifier alone while the panel is closed", async () => {
-      const h = await makeHarness({ backgroundPollMs: BG, classify: asking(0.97) });
+      const h = await makeHarness({
+        backgroundPollMs: BG,
+        classify: asking(0.97),
+        now: () => Date.now(),
+      });
       vi.useFakeTimers();
       try {
         // Closed under fake timers, so the background tick is one they drive.
         h.service.setActive(false);
         h.runs.push(run("a"), run("b", { agentState: "working" }));
         h.screens.set("a", APPROVAL_SCREEN);
-        h.screens.set("b", "• Editing store.ts (esc to interrupt)");
+        h.screens.set("b", "· Editing store.ts… (12s · ↓ 1.2k tokens)");
         await vi.advanceTimersByTimeAsync(BG);
         expect(h.classify).toHaveBeenCalledTimes(2);
         expect(h.describe).not.toHaveBeenCalled();
@@ -3376,7 +3381,13 @@ describe("CanopyService", () => {
         await vi.advanceTimersByTimeAsync(BG);
         expect(h.classify).toHaveBeenCalledTimes(2);
 
-        h.screens.set("b", "• Running the tests (esc to interrupt)");
+        // Still at work, its working line on screen: a reading would only say so again.
+        h.screens.set("b", "· Running the tests… (40s · ↓ 3.1k tokens)");
+        await vi.advanceTimersByTimeAsync(BG);
+        expect(h.classify).toHaveBeenCalledTimes(2);
+
+        // The line gone, something else may be on screen in its place.
+        h.screens.set("b", "⏺ Ran the tests\n  ⎿  12 passed");
         await vi.advanceTimersByTimeAsync(BG);
         expect(h.classify).toHaveBeenCalledTimes(3);
         expect(h.describe).not.toHaveBeenCalled();
@@ -3899,7 +3910,7 @@ describe("CanopyService", () => {
       expect(onAsk).toHaveBeenCalledTimes(1);
     });
 
-    it("re-judges a busy run in the background at the classifier's priority, its words due", async () => {
+    it("leaves a busy run's unchanged screen to a panel to judge again", async () => {
       let now = 1_000_000;
       const h = await makeHarness({ backgroundPollMs: 20_000, now: () => now });
       h.describe.mockImplementation(async (_input, says) => ({
@@ -3923,14 +3934,19 @@ describe("CanopyService", () => {
       await h.service.refresh();
       expect(h.service.getSnapshot().cards[0]!.priority).toBe(5);
 
+      expect(h.classify).toHaveBeenCalledTimes(1);
+
+      // Stuck pages no one: with no panel showing the run, its unchanged screen is not judged again.
       h.service.setActive(false);
       h.classify.mockImplementation(reading("working", 0.05, 0.9));
       now += CANOPY_REJUDGE_AFTER_MS + CANOPY_PROGRESS_DESCRIBE_MS;
       await h.service.refresh();
-      const card = h.service.getSnapshot().cards[0]!;
-      expect(card.priority).toBe(70);
-      expect(card.wordsFromEarlierRead).toBe(true);
-      expect(card.headline).toBe("Editing store.ts");
+      expect(h.classify).toHaveBeenCalledTimes(1);
+
+      h.service.setActive(true);
+      await h.service.refresh();
+      expect(h.classify).toHaveBeenCalledTimes(2);
+      expect(h.service.getSnapshot().cards[0]!.headline).toBe("Editing store.ts");
     });
   });
 });
@@ -4876,5 +4892,416 @@ describe("CanopyService refining attention", () => {
     h.screens.set("a", "• Ran npm test\n└ ok 14 tests");
     await h.service.refresh();
     await vi.waitFor(() => expect(h.service.getRefinement("a", 1)).toBeUndefined());
+  });
+});
+
+describe("CanopyService requests it leaves unsent", () => {
+  const BG = 20_000;
+  const QUESTION = "Which routes should get validation?";
+  const readsScreen = async (input: CanopyScreenInput): Promise<Reading> =>
+    /shift\+← to answer|\? 1 question/.test(input.screen)
+      ? { category: "question", confidence: 0.95, attention: 0.95, question: QUESTION }
+      : /…|esc to interrupt/.test(input.screen)
+        ? { category: "working", confidence: 0.95, attention: 0.1, question: null }
+        : input.screen.includes("proceed")
+          ? {
+              category: "approval",
+              confidence: 0.95,
+              attention: 0.95,
+              question: "Do you want to proceed?",
+            }
+          : { category: "finished", confidence: 0.9, attention: 0.7, question: null };
+  const stopped = (clock: string) =>
+    ["⏺ Done.", "", "✻ Worked for 9s · done", "", `~/repo · main · ${clock}`].join("\n");
+  const claudeAtWork = (step: string) =>
+    [
+      `⏺ ${step}`,
+      "",
+      "· Adding a test for the cache… (32s · ↓ 3.2k tokens)",
+      "  ⎿  ◼ Add a test",
+    ].join("\n");
+
+  it("holds a Claude Code spinner's screen to the floor like any working line", async () => {
+    let clock = 1_000_000;
+    const h = await makeHarness({ now: () => clock, rereadMs: 10_000, classify: readsScreen });
+    h.runs.push(run("a", { agentState: "working" }));
+    h.screens.set("a", claudeAtWork("Read src/a.ts"));
+    await h.service.scan();
+    h.screens.set("a", claudeAtWork("Read src/b.ts"));
+    clock += 3_000;
+    await h.service.scan();
+    expect(h.classify).toHaveBeenCalledTimes(1);
+    clock += 7_000;
+    await h.service.scan();
+    expect(h.classify).toHaveBeenCalledTimes(2);
+  });
+
+  it("doesn't take a list item ending in an ellipsis for a working line", async () => {
+    let clock = 1_000_000;
+    const h = await makeHarness({
+      now: () => clock,
+      backgroundPollMs: BG,
+      closed: true,
+      classify: readsScreen,
+    });
+    h.runs.push(run("a", { agentState: "working" }));
+    h.screens.set("a", claudeAtWork("Read src/a.ts"));
+    await h.service.scan();
+    // Finished, while Daintree's state still says working.
+    clock += BG;
+    h.screens.set("a", ["Next steps:", "* Wire up the remaining routes…", QUESTION].join("\n"));
+    await h.service.scan();
+    expect(h.classify).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(["? 1 question", "shift+← to answer"])(
+    "reads a question Codex asks under its working line (%s), panel closed",
+    async (marker) => {
+      let clock = 1_000_000;
+      const onAsk = vi.fn();
+      const h = await makeHarness({
+        now: () => clock,
+        backgroundPollMs: BG,
+        closed: true,
+        classify: readsScreen,
+        onAsk,
+      });
+      const working = ["• Read the server", QUESTION, "", "• Working (38s • esc to interrupt)"];
+      h.runs.push(run("a", { agentId: "codex", agentState: "working" }));
+      h.screens.set("a", working.join("\n"));
+      await h.service.scan();
+      clock += BG;
+      h.screens.set("a", [...working, "• Read the routes"].join("\n"));
+      await h.service.scan();
+      expect(h.classify).toHaveBeenCalledTimes(1);
+
+      clock += BG;
+      h.screens.set("a", [...working, "", "• Queued follow-up inputs", marker].join("\n"));
+      await h.service.scan();
+      expect(h.classify).toHaveBeenCalledTimes(2);
+      expect(h.service.getSnapshot().cards[0]!.category).toBe("question");
+      expect(onAsk).toHaveBeenCalledTimes(1);
+    }
+  );
+
+  it("reads a question Codex asks under its working line at once with the panel open", async () => {
+    let clock = 1_000_000;
+    const h = await makeHarness({ now: () => clock, rereadMs: 10_000, classify: readsScreen });
+    const working = ["• Read the server", QUESTION, "", "• Working (38s • esc to interrupt)"];
+    h.runs.push(run("a", { agentId: "codex", agentState: "working" }));
+    h.screens.set("a", working.join("\n"));
+    await h.service.scan();
+    clock += 1_000;
+    h.screens.set("a", [...working, "", "? 1 question", "shift+← to answer"].join("\n"));
+    await h.service.scan();
+    expect(h.classify).toHaveBeenCalledTimes(2);
+  });
+
+  it("stops reading a stopped run's redraws once it has settled, but for Refresh", async () => {
+    let clock = 1_000_000;
+    const h = await makeHarness({ now: () => clock, classify: readsScreen });
+    h.runs.push(run("a", { agentState: "waiting", waitingReason: "prompt" }));
+    h.screens.set("a", stopped("14:00"));
+    await h.service.scan();
+
+    // Settling: every move is read, up to its last moment.
+    clock += CANOPY_SETTLE_MS - 1;
+    h.screens.set("a", stopped("14:01"));
+    await h.service.scan();
+    expect(h.classify).toHaveBeenCalledTimes(2);
+
+    // Settled: only its status line moves, and nothing is sent.
+    clock += 1;
+    h.screens.set("a", stopped("14:02"));
+    await h.service.scan();
+    expect(h.classify).toHaveBeenCalledTimes(2);
+
+    await h.service.refresh();
+    expect(h.classify).toHaveBeenCalledTimes(3);
+  });
+
+  it("reads anything more than a redraw that a settled run draws, with no work or answer seen", async () => {
+    let clock = 1_000_000;
+    const onAsk = vi.fn();
+    const h = await makeHarness({ now: () => clock, classify: readsScreen, onAsk });
+    h.runs.push(run("a", { agentState: "waiting", waitingReason: "prompt" }));
+    h.screens.set("a", stopped("14:00"));
+    await h.service.scan();
+    clock += CANOPY_SETTLE_MS;
+    // A dialog Daintree's own state didn't name, drawn inside a flicker.
+    h.screens.set("a", APPROVAL_SCREEN);
+    await h.service.scan();
+    expect(h.classify).toHaveBeenCalledTimes(2);
+    expect(onAsk).toHaveBeenCalledTimes(1);
+  });
+
+  it("reads a settled run's redraw again once it is answered, or Daintree sees a new kind of wait", async () => {
+    let clock = 1_000_000;
+    const h = await makeHarness({ now: () => clock, classify: readsScreen });
+    h.runs.push(run("a", { agentState: "waiting", waitingReason: "prompt" }));
+    h.screens.set("a", stopped("14:00"));
+    await h.service.scan();
+    clock += CANOPY_SETTLE_MS;
+
+    // An answer reopens it: the next dialog can follow with no work seen in between.
+    h.service.noteInput("a", "submit");
+    h.screens.set("a", stopped("14:02"));
+    await h.service.scan();
+    expect(h.classify).toHaveBeenCalledTimes(2);
+
+    clock += CANOPY_SETTLE_MS;
+    h.runs[0] = run("a", { agentState: "waiting", waitingReason: "approval" });
+    await h.service.scan();
+    expect(h.classify).toHaveBeenCalledTimes(3);
+  });
+
+  it("gives a respawned terminal a settling of its own", async () => {
+    let clock = 1_000_000;
+    const h = await makeHarness({ now: () => clock, classify: readsScreen });
+    h.runs.push(run("a", { agentState: "waiting", waitingReason: "prompt" }));
+    h.screens.set("a", stopped("14:00"));
+    await h.service.scan();
+    clock += CANOPY_SETTLE_MS;
+    h.runs[0] = run("a", { spawnedAt: 2, agentState: "waiting", waitingReason: "prompt" });
+    h.screens.set("a", stopped("14:02"));
+    await h.service.scan();
+    h.screens.set("a", stopped("14:03"));
+    await h.service.scan();
+    expect(h.classify).toHaveBeenCalledTimes(3);
+  });
+
+  it("drops the choices a held screen no longer draws", async () => {
+    let clock = 1_000_000;
+    const h = await makeHarness({
+      now: () => clock,
+      classify: readsScreen,
+      describe: async (_input, says) => ({
+        category: says,
+        headline: "Approve running npm test",
+        summary: "Runs the unit suite.",
+        attentionScore: 92,
+        task: null,
+        risk: "none",
+        riskReason: null,
+        action: null,
+        progress: null,
+        tests: "unknown",
+        changes: "unknown",
+        question: "Do you want to proceed?",
+        options: ["Yes", "No, and tell Claude what to do differently"],
+      }),
+    });
+    h.runs.push(run("a", { agentState: "waiting", waitingReason: "approval" }));
+    h.screens.set("a", APPROVAL_SCREEN);
+    await h.service.refresh();
+    expect(h.service.getSnapshot().cards[0]!.options).toHaveLength(2);
+
+    clock += CANOPY_SETTLE_MS;
+    h.screens.set("a", APPROVAL_SCREEN.replace(/2\. No.*$/, "2. Skip this one"));
+    await h.service.scan();
+    expect(h.classify).toHaveBeenCalledTimes(1);
+    expect(h.service.getSnapshot().cards[0]!.options).toEqual(["Yes"]);
+  });
+
+  it("writes owed words from the screen the panel opens on, not one a held read moved past", async () => {
+    let clock = 1_000_000;
+    const h = await makeHarness({
+      now: () => clock,
+      backgroundPollMs: BG,
+      closed: true,
+      classify: readsScreen,
+    });
+    h.runs.push(run("a", { agentState: "waiting", waitingReason: "approval" }));
+    h.screens.set("a", APPROVAL_SCREEN);
+    await h.service.scan();
+    clock += 1_000;
+    h.screens.set("a", APPROVAL_SCREEN.replace("npm test", "rm -rf build"));
+    await h.service.scan();
+    expect(h.classify).toHaveBeenCalledTimes(1);
+
+    h.service.setActive(true);
+    await h.service.refresh();
+    expect(h.describe).toHaveBeenCalledTimes(1);
+    expect(h.describe.mock.calls[0]![0].screen).toContain("rm -rf build");
+  });
+
+  it("writes owed words from the read they were owed for across a redraw", async () => {
+    let clock = 1_000_000;
+    const h = await makeHarness({
+      now: () => clock,
+      backgroundPollMs: BG,
+      closed: true,
+      classify: readsScreen,
+    });
+    const dialog = (time: string) => `${APPROVAL_SCREEN}\n\n~/repo · main · ${time}`;
+    h.runs.push(run("a", { agentState: "waiting", waitingReason: "approval" }));
+    h.screens.set("a", dialog("14:00"));
+    await h.service.scan();
+    clock += CANOPY_SETTLE_MS;
+    h.screens.set("a", dialog("14:02"));
+    await h.service.scan();
+
+    // Opened, not refreshed: Refresh reads every screen afresh.
+    h.service.setActive(true);
+    await h.service.scan();
+    await vi.waitFor(() => expect(h.describe).toHaveBeenCalledTimes(1));
+    expect(h.classify).toHaveBeenCalledTimes(1);
+  });
+
+  it("reads nothing for a settled run's flicker of work, and reads work that holds", async () => {
+    let clock = 1_000_000;
+    const h = await makeHarness({
+      now: () => clock,
+      classify: readsScreen,
+      stateChangeScanMs: 60_000,
+    });
+    const set = (patch: Partial<FleetRunRow>) => {
+      h.runs[0] = run("a", { since: clock, ...patch });
+      h.service.onFleetChanged();
+    };
+    h.runs.push(run("a", { agentState: "waiting", waitingReason: "prompt", since: clock }));
+    h.screens.set("a", stopped("14:00"));
+    await h.service.scan();
+    clock += CANOPY_SETTLE_MS;
+
+    // Its status line redrawn: output alone flips Daintree's state to working for a moment.
+    set({ agentState: "working" });
+    h.screens.set("a", stopped("14:02"));
+    clock += 400;
+    await h.service.scan();
+    set({ agentState: "waiting", waitingReason: "prompt" });
+    await h.service.scan();
+    expect(h.classify).toHaveBeenCalledTimes(1);
+
+    set({ agentState: "working" });
+    clock += CANOPY_TURN_HOLD_MS;
+    h.screens.set("a", "⏺ Reading src/a.ts");
+    await h.service.scan();
+    expect(h.classify).toHaveBeenCalledTimes(2);
+  });
+
+  it("never takes a busy state timed in the future for a flicker", async () => {
+    let clock = 1_000_000;
+    const h = await makeHarness({
+      now: () => clock,
+      backgroundPollMs: BG,
+      closed: true,
+      classify: readsScreen,
+    });
+    h.runs.push(run("a", { agentState: "working", since: clock + 10 * CANOPY_SETTLE_MS }));
+    h.screens.set("a", stopped("14:00"));
+    await h.service.scan();
+    clock += CANOPY_SETTLE_MS;
+    h.screens.set("a", stopped("14:02"));
+    await h.service.scan();
+    expect(h.classify).toHaveBeenCalledTimes(2);
+  });
+
+  it("times the stop from the scans when the run was first seen at work", async () => {
+    let clock = 1_000_000;
+    const h = await makeHarness({
+      now: () => clock,
+      classify: readsScreen,
+      stateChangeScanMs: 60_000,
+    });
+    h.runs.push(run("a", { agentState: "working" }));
+    h.screens.set("a", "⏺ Editing src/a.ts");
+    await h.service.scan();
+    // Minutes of work no fleet change timed, then the stop.
+    clock += 5 * 60_000;
+    h.runs[0] = run("a", { agentState: "waiting", waitingReason: "prompt", since: clock });
+    h.service.onFleetChanged();
+    h.screens.set("a", stopped("14:00"));
+    await h.service.scan();
+    clock += 60_000;
+    h.screens.set("a", stopped("14:01"));
+    await h.service.scan();
+    expect(h.classify).toHaveBeenCalledTimes(3);
+  });
+
+  it("brings an archived run back on a new approval after work, by scans alone", async () => {
+    let clock = 1_000_000;
+    const onAsk = vi.fn();
+    const h = await makeHarness({
+      now: () => clock,
+      classify: readsScreen,
+      onAsk,
+      stateChangeScanMs: 60_000,
+    });
+    h.runs.push(run("a", { agentState: "waiting", waitingReason: "prompt", since: clock }));
+    h.screens.set("a", stopped("14:00"));
+    await h.service.scan();
+    h.service.archive("a", 1);
+    clock += CANOPY_SETTLE_MS;
+
+    h.runs[0] = run("a", { agentState: "working", since: clock });
+    h.service.onFleetChanged();
+    clock += CANOPY_TURN_HOLD_MS;
+    h.runs[0] = run("a", { agentState: "waiting", waitingReason: "prompt", since: clock });
+    h.service.onFleetChanged();
+    h.screens.set("a", APPROVAL_SCREEN);
+    await h.service.scan();
+    expect(h.service.getSnapshot().dispositions).toHaveLength(0);
+    expect(onAsk).toHaveBeenCalledTimes(1);
+  });
+
+  it("tries a failed read of a working screen again once its backoff is out, panel closed", async () => {
+    let clock = 1_000_000;
+    let failing = false;
+    const h = await makeHarness({
+      now: () => clock,
+      backgroundPollMs: BG,
+      closed: true,
+      classify: async (input) => {
+        if (failing) throw new CanopyProviderError("classifier", "HTTP 500");
+        return readsScreen(input);
+      },
+    });
+    h.runs.push(run("a", { agentState: "working" }));
+    h.screens.set("a", claudeAtWork("Read src/a.ts"));
+    await h.service.scan();
+    failing = true;
+    h.screens.set("a", claudeAtWork("Read src/b.ts"));
+    await h.service.refresh();
+    expect(h.classify).toHaveBeenCalledTimes(2);
+
+    failing = false;
+    clock += CANOPY_FAILURE_BACKOFF_MAX_MS * 2;
+    await h.service.scan();
+    expect(h.classify).toHaveBeenCalledTimes(3);
+  });
+
+  it("reads a run no faster than the watch's pace, panel closed, unless its own state changes", async () => {
+    let clock = 1_000_000;
+    const h = await makeHarness({
+      now: () => clock,
+      backgroundPollMs: BG,
+      closed: true,
+      // A read that takes its time: the pace counts from when it was sent.
+      classify: async (input) => {
+        clock += 2_000;
+        return readsScreen(input);
+      },
+    });
+    // At work under a CLI whose working line Canopy doesn't know: every change could be news.
+    h.runs.push(run("a", { agentId: "opencode", agentState: "working" }));
+    h.screens.set("a", "Compiling module 1");
+    const sent = clock;
+    await h.service.scan();
+    // Another run's state change starts the next scan.
+    clock = sent + BG / 2;
+    h.screens.set("a", "Compiling module 2");
+    await h.service.scan();
+    expect(h.classify).toHaveBeenCalledTimes(1);
+    // The regular poll, a whole pace after the read was sent.
+    clock = sent + BG;
+    await h.service.scan();
+    expect(h.classify).toHaveBeenCalledTimes(2);
+
+    h.runs[0] = run("a", { agentId: "opencode", agentState: "waiting", waitingReason: "prompt" });
+    h.screens.set("a", "Done.");
+    clock += 1_000;
+    await h.service.scan();
+    expect(h.classify).toHaveBeenCalledTimes(3);
   });
 });
