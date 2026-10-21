@@ -70,10 +70,13 @@ async function open(page: Page, theme: string): Promise<void> {
 }
 
 test.describe("hidden strip review", () => {
-  test.skip(!ENABLED, "set DAINTREE_SHOT_HIDDEN_STRIP=1 to capture");
-
   for (const theme of THEMES) {
     test(`hidden strip — ${theme}`, async ({ page }) => {
+      test.info().annotations.push({
+        type: "conditional-skip",
+        description: "DAINTREE_SHOT_HIDDEN_STRIP is required for the hidden strip capture",
+      });
+      test.skip(!ENABLED, "set DAINTREE_SHOT_HIDDEN_STRIP=1 to capture");
       await open(page, theme);
       const snap = makeSnap(OUT_DIR);
       const shot = (name: string) => page.locator(`[data-shot="${name}"]`);
@@ -93,7 +96,7 @@ test.describe("hidden strip review", () => {
       const focused = await showIn("default-focus").evaluate((el) => el.matches(":focus-visible"));
       if (!focused) throw new Error("Show button is not :focus-visible — refusing to write");
       await snap(shot("default-focus"), `${theme}--default-focus.png`);
-      await page.locator("body").evaluate((el) => (document.activeElement as HTMLElement)?.blur());
+      await page.locator("body").evaluate(() => (document.activeElement as HTMLElement)?.blur());
 
       await snap(shot("reference-image-footer"), `${theme}--reference-image-footer.png`);
     });
