@@ -1698,6 +1698,15 @@ type PluginPanelBadge = {
     color?: PluginPanelBadgeColor;
     tooltip?: string;
 };
+/**
+ * A short status a plugin shows on one worktree's card via
+ * {@link PluginHostApi.setWorktreeCardStatus} (#13704): a one-line `label`
+ * drawn as quiet metadata, and an optional `tooltip` with the detail.
+ */
+interface PluginWorktreeCardStatus {
+    label: string;
+    tooltip?: string;
+}
 /** Value a plugin publishes to `when` clauses via {@link PluginHostApi.setContext}. */
 type PluginContextValue = boolean | string;
 declare const BUILT_IN_PLUGIN_CAPABILITIES: readonly ["fs:project-read", "fs:project-write", "fs:user-data-read", "fs:user-data-write", "network:fetch", "agent:invoke", "agent:read", "agent:register", "agent:input", "terminal:read", "git:read", "git:write", "clipboard:read", "clipboard:write", "shell:exec", "socket:connect", "mcp:expose", "project:dispatch", "panel:focus-read", "notification:os"];
@@ -4597,6 +4606,28 @@ interface PluginHostApi extends PluginActivationApi {
      */
     setContext(key: string, value: PluginContextValue | null): Promise<void>;
     /**
+     * Show (or clear) this plugin's status on one worktree's card — a short
+     * one-line `label` with an optional `tooltip` for the detail. Pass `null` to
+     * clear it. A plugin holds one status per worktree, so a second call
+     * replaces the first; every plugin that marks a card gets its own chip,
+     * named after the plugin, so several plugins never hide each other.
+     *
+     * `worktreeId` is a worktree this host can see right now: the `id` (or
+     * `worktreeId`) of an entry in {@link getWorktreesResult}. A project plugin
+     * only ever reaches its own project's worktrees. The call rejects when the
+     * id is not one of them, when the host has no worktree answer yet, or when
+     * the label is empty, multi-line or longer than
+     * {@link PLUGIN_WORKTREE_CARD_STATUS_LABEL_MAX} characters, or the tooltip
+     * longer than {@link PLUGIN_WORKTREE_CARD_STATUS_TOOLTIP_MAX}.
+     *
+     * Statuses are not persisted. They are cleared when the worktree is
+     * removed, when its project closes, and when the plugin unloads or its
+     * worker is replaced, so republish them after a restart. Like
+     * {@link setPanelBadge} this is NOT revoke-guarded and becomes a silent
+     * no-op once the plugin is unloaded.
+     */
+    setWorktreeCardStatus(worktreeId: string, status: PluginWorktreeCardStatus | null): Promise<void>;
+    /**
      * Publish the contextual actions the ⋯ and right-click menus of one of this
      * plugin's own panels offer right now — the backend-side twin of the view's
      * `PanelViewProps.setMenuItems`, and the only way a PTY-backed panel (which
@@ -5043,6 +5074,14 @@ interface SetContextRecord {
     key: string;
     value: PluginContextValue | null;
 }
+/**
+ * Captured `host.setWorktreeCardStatus(worktreeId, status)` calls, as the host
+ * stores them (`worktreeId` is the snapshot's `id`). `null` clears.
+ */
+interface SetWorktreeCardStatusRecord {
+    worktreeId: string;
+    status: PluginWorktreeCardStatus | null;
+}
 /** Captured `host.setPanelBadge(panelId, badge)` calls. `null` clears. */
 interface SetPanelBadgeRecord {
     panelId: string;
@@ -5117,6 +5156,10 @@ interface MockHostState {
      * its `when` clauses would read under `{publisher.name}.{key}`.
      */
     readonly contextKeys: ReadonlyMap<string, PluginContextValue>;
+    /** Accepted `host.setWorktreeCardStatus` calls, in order. */
+    readonly setWorktreeCardStatusCalls: ReadonlyArray<SetWorktreeCardStatusRecord>;
+    /** The card statuses this plugin shows right now, keyed by worktree `id`. */
+    readonly worktreeCardStatuses: ReadonlyMap<string, PluginWorktreeCardStatus>;
     readonly setPanelMenuItemsCalls: ReadonlyArray<SetPanelMenuItemsRecord>;
     /**
      * Panel ids passed to `host.reloadPanel(panelId)`, in order (#12610). Only

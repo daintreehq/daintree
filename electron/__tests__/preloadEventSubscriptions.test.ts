@@ -45,6 +45,7 @@ interface TerminalBridge {
 
 interface PluginBridge {
   onToolbarBadgesChanged: (cb: (payload: unknown) => void) => () => void;
+  onWorktreeCardStatusesChanged: (cb: (payload: unknown) => void) => () => void;
 }
 
 const originalWindow = (globalThis as { window?: unknown }).window;
@@ -150,6 +151,30 @@ describe("preload event subscriptions", () => {
 
     push({ pluginId: "p1", badges: { needs: { kind: "dot" } } });
     expect(received).toHaveLength(3);
+    dispose();
+  });
+
+  it("replays each plugin's latest card statuses per project to a late subscriber (#13704)", () => {
+    terminal.onExit(() => {})();
+    const push = (payload: unknown) =>
+      ipcRenderer.emit(
+        "events:push",
+        {},
+        { name: "plugin:worktree-card-statuses-changed", payload }
+      );
+    push({ pluginId: "p1", projectId: "A", statuses: { "/a": { label: "up" } } });
+    push({ pluginId: "p1", projectId: "B", statuses: { "/b": { label: "up" } } });
+    push({ pluginId: "p2", projectId: "A", statuses: { "/a": { label: "x" } } });
+    push({ pluginId: "p1", projectId: "A", statuses: {} });
+
+    const received: unknown[] = [];
+    const dispose = plugin.onWorktreeCardStatusesChanged((payload) => received.push(payload));
+    // p1's clear in A supersedes its set there, and only there.
+    expect(received).toEqual([
+      { pluginId: "p1", projectId: "B", statuses: { "/b": { label: "up" } } },
+      { pluginId: "p2", projectId: "A", statuses: { "/a": { label: "x" } } },
+      { pluginId: "p1", projectId: "A", statuses: {} },
+    ]);
     dispose();
   });
 });

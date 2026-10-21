@@ -221,6 +221,7 @@ import type {
   PluginDeepLinkIntent,
   PluginPanelBadge,
   PluginContextValue,
+  PluginWorktreeCardStatus,
   PluginFocusedPanel,
 } from "../shared/types/plugin.js";
 import type { PanelKindConfig } from "../shared/config/panelKindRegistry.js";
@@ -988,6 +989,8 @@ const _eventBusReplayable: ReadonlySet<keyof IpcEventBusMap> = new Set([
   "plugin:toolbar-badges-changed",
   // Same replay, landing before the keybinding hook subscribes its store (#13506).
   "plugin:context-keys-changed",
+  // Same replay, landing before the worktree cards mount their store (#13704).
+  "plugin:worktree-card-statuses-changed",
 ]);
 // Replayable events that accumulate instead of superseding. A double-clicked
 // `.dntr` archive (#11280) is one decision per file, so collapsing two
@@ -1005,13 +1008,16 @@ const _eventBusFifoReplay: ReadonlySet<keyof IpcEventBusMap> = new Set([
   "plugin:panel-menus-changed",
   "plugin:toolbar-badges-changed",
   "plugin:context-keys-changed",
+  "plugin:worktree-card-statuses-changed",
 ]);
 // FIFO events whose every payload is one plugin's whole map: a newer one for the
-// same plugin supersedes the buffered one.
+// same plugin supersedes the buffered one. A payload that also names a project
+// is one plugin's map for that project, so it supersedes only that project's.
 const _eventBusPerPluginLatest: ReadonlySet<keyof IpcEventBusMap> = new Set([
   "plugin:panel-menus-changed",
   "plugin:toolbar-badges-changed",
   "plugin:context-keys-changed",
+  "plugin:worktree-card-statuses-changed",
 ]);
 const _eventBusBuffered = new Map<keyof IpcEventBusMap, unknown[]>();
 
@@ -1033,9 +1039,12 @@ function _ensureEventBusWired(): void {
         // is worth keeping: a busy plugin during a slow boot replaces rather
         // than piles up.
         if (_eventBusPerPluginLatest.has(envelope.name)) {
-          const pluginId = (envelope.payload as { pluginId?: unknown } | null)?.pluginId;
+          type Keyed = { pluginId?: unknown; projectId?: unknown } | null;
+          const latest = envelope.payload as Keyed;
           prior = prior.filter(
-            (payload) => (payload as { pluginId?: unknown } | null)?.pluginId !== pluginId
+            (payload) =>
+              (payload as Keyed)?.pluginId !== latest?.pluginId ||
+              (payload as Keyed)?.projectId !== latest?.projectId
           );
         }
         prior.push(envelope.payload);
@@ -3788,6 +3797,13 @@ function buildElectronApi(): ElectronAPI {
           keys: Record<string, PluginContextValue> | null;
         }) => void
       ) => _eventBusOn("plugin:context-keys-changed", callback),
+      onWorktreeCardStatusesChanged: (
+        callback: (payload: {
+          pluginId: string;
+          projectId: string;
+          statuses: Record<string, PluginWorktreeCardStatus>;
+        }) => void
+      ) => _eventBusOn("plugin:worktree-card-statuses-changed", callback),
       onPanelMenusChanged: (
         callback: (payload: {
           pluginId: string;

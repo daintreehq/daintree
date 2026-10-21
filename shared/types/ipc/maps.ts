@@ -2129,6 +2129,16 @@ export interface IpcEventMap {
     keys: Record<string, import("../plugin.js").PluginContextValue> | null;
   };
 
+  // A plugin's worktree card statuses in one project changed (main → renderer,
+  // #13704). Carries the plugin's COMPLETE map for that project (worktreeId →
+  // status), never a delta; an empty `statuses` clears them, which is also how
+  // an unload, a worker swap or a project close is sent.
+  "plugin:worktree-card-statuses-changed": {
+    pluginId: string;
+    projectId: string;
+    statuses: Record<string, import("../plugin.js").PluginWorktreeCardStatus>;
+  };
+
   // A plugin's runtime panel menus changed (main → renderer, #13213). Carries
   // the plugin's COMPLETE current map (panelId → items), never a delta; an
   // empty `menus` clears the plugin's lists, which is also how an unload or a
@@ -2357,6 +2367,8 @@ export type IpcEventBusMap = Pick<
   | "plugin:toolbar-badges-changed"
   // Plugin `when`-clause context keys (project-scoped for a project instance)
   | "plugin:context-keys-changed"
+  // Plugin worktree card statuses (always scoped to the status's own project)
+  | "plugin:worktree-card-statuses-changed"
   // Plugin runtime panel menus (project-scoped for a project instance)
   | "plugin:panel-menus-changed"
   // Plugin action handlers in flight (project-scoped for a project instance)

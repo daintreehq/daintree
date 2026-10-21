@@ -14,6 +14,7 @@ import { PRBadge } from "./PRBadge";
 import { EnvironmentPopover } from "./EnvironmentPopover";
 import { WorktreeAttachmentChips } from "./WorktreeAttachmentChips";
 import { visibleAttachmentChips } from "./attachmentState";
+import { WorktreePluginStatusChips, useWorktreePluginStatuses } from "./WorktreePluginStatusChips";
 import { DevServerIndicator } from "./DevServerIndicator";
 import { CollapsedSessionIndicators } from "./CollapsedSessionIndicators";
 import { CollapsedAlarmPill, collapsedAlarmDescriptionId } from "./CollapsedAlarmPill";
@@ -129,6 +130,7 @@ export function WorktreeHeader({
   const hasDevServerSignal = !!devServerSession && isLiveDevServerStatus(devServerSession.status);
   const hasAttachmentChips =
     !!onAttachmentAction && visibleAttachmentChips(worktree.attachments).length > 0;
+  const pluginStatuses = useWorktreePluginStatuses(worktree.id);
   const underlineOnHover = variant !== "sidebar" || isActive;
   // `hasBaseName` is the whole mount rule for the base line: the workspace-host
   // sets it only for a non-main worktree on a branch whose base it resolved, so
@@ -473,6 +475,14 @@ export function WorktreeHeader({
             badges={badges}
           />
         )}
+
+      {/* Its own wrapping row, so any number of plugins can mark a card
+          without squeezing the headline out of the row above. */}
+      {!isCollapsed && pluginStatuses.length > 0 && (
+        <div className="mt-1.5 flex flex-wrap items-center gap-1 px-1">
+          <WorktreePluginStatusChips statuses={pluginStatuses} />
+        </div>
+      )}
     </div>
   );
 }
