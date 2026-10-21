@@ -13,6 +13,7 @@ import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useFleetFailureStore } from "@/store/fleetFailureStore";
 import { usePluginContextMenuItemsStore } from "@/store/pluginContextMenuItemsStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
+import { useRateLimitObservationStore } from "@/store/rateLimitObservationStore";
 import { ContentPanel } from "../ContentPanel";
 import { PluginMissingPanel } from "../PluginMissingPanel";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
@@ -193,6 +194,13 @@ function seedGlobalStores(
     armedIds: ids((f) => f.armed),
     previewArmedIds: ids((f) => f.previewed),
   });
+  const observedAtByTerminalId: Record<string, number> = {};
+  for (const { id, fixture } of panes) {
+    if (fixture.rateLimitSeenMinutesAgo !== undefined) {
+      observedAtByTerminalId[id] = Date.now() - fixture.rateLimitSeenMinutesAgo * 60_000;
+    }
+  }
+  useRateLimitObservationStore.setState({ observedAtByTerminalId });
   const failed = [...ids((f) => f.fleetFailed)];
   if (failed.length > 0) {
     useFleetFailureStore.getState().recordFailure("git status", failed);

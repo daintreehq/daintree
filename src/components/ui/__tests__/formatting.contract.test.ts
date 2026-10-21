@@ -77,8 +77,7 @@ describe("formatting contract", () => {
       offenders(/(?<!\$)\{\s*format(TimeAgo|RelativeTime)\(/, {
         "src/components/Sidebar/WorktreesReconnectingBadge.tsx": "the age is tooltip content",
         "src/components/Terminal/TerminalAgentIndicator.tsx": "the age is tooltip content",
-        "src/components/Terminal/TerminalRateLimitBadge.tsx":
-          "the clock time is printed beside the age",
+        "src/components/Terminal/TerminalRateLimitBadge.tsx": "the age is tooltip content",
         "src/components/Layout/LocalCommitsDropdown.tsx":
           "the age is a tooltip trigger whose content is the full date",
       })

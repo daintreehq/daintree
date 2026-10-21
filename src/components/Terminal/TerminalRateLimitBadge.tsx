@@ -2,9 +2,11 @@ import { TriangleAlert } from "@/components/icons";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useGlobalMinuteClock } from "@/hooks/useGlobalMinuteTicker";
 import {
+  RATE_LIMIT_OBSERVATION_TTL_MS,
   isRateLimitObservationLive,
   useRateLimitObservationStore,
 } from "@/store/rateLimitObservationStore";
+import { formatRateLimitCountdownCoarse } from "@/components/Layout/RateLimitDetails";
 import { formatTimeAgo } from "@/utils/timeAgo";
 import { cn } from "@/lib/utils";
 import {
@@ -28,30 +30,40 @@ export function TerminalRateLimitBadge({ terminalId }: { terminalId: string }) {
 function RateLimitChip({ observedAt }: { observedAt: number }) {
   const now = useGlobalMinuteClock();
   if (!isRateLimitObservationLive(observedAt, now)) return null;
-  const time = new Date(observedAt).toLocaleTimeString(undefined, {
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+  // The body is guidance to read, not a hint, so it stays while hovered.
   return (
-    <Tooltip>
+    <Tooltip autoDismiss={false} disableHoverableContent={false}>
       <TooltipTrigger asChild>
         <div
-          className={cn(HEADER_CHIP_CLASS, HEADER_CHIP_SURFACE, HEADER_CHIP_FOCUS_CLASS)}
+          className={cn(
+            HEADER_CHIP_CLASS,
+            HEADER_CHIP_SURFACE,
+            HEADER_CHIP_FOCUS_CLASS,
+            "text-status-warning"
+          )}
           role="status"
           aria-live="off"
           tabIndex={0}
           data-testid="terminal-rate-limit-badge"
         >
           <TriangleAlert className="w-3 h-3 shrink-0" aria-hidden="true" />
-          Rate limit seen
+          {/* Warning ink stays on the glyph; the label needs the primary ramp to
+              hold 4.5:1 on the light themes. Yields first on a narrow header. */}
+          <span className="text-text-primary @max-[420px]/header:sr-only">Rate limit reported</span>
         </div>
       </TooltipTrigger>
       <TooltipContent side="bottom" className="max-w-xs">
         <div className="flex flex-col gap-0.5">
           <span className="font-medium">
-            Rate limit message at {time} ({formatTimeAgo(observedAt, now)})
+            Agent printed a rate-limit message {formatTimeAgo(observedAt, now)}
           </span>
-          <span>Seen in this pane&apos;s output, not read from the account.</span>
+          {/* The chip's own retention, never the provider's reset: nothing here
+              reads when the limit lifts, so the user is pointed at the message. */}
+          <span>Check that message for when the limit resets</span>
+          <span>
+            This chip clears in{" "}
+            {formatRateLimitCountdownCoarse(observedAt + RATE_LIMIT_OBSERVATION_TTL_MS - now)}
+          </span>
         </div>
       </TooltipContent>
     </Tooltip>

@@ -50,6 +50,8 @@ export interface PanelHeaderFixture {
   prefs?: { showGridAgentHighlights?: boolean };
   /** Two worktrees in the view store makes the branch badge appear; this names the pane's. */
   branch?: string;
+  /** Seeds `rateLimitObservationStore` — the pane printed a rate-limit banner this long ago. */
+  rateLimitSeenMinutesAgo?: number;
   /** Other grid panes seeded into the store — what Zen mode's background stats count. */
   background?: Array<{ agentState?: AgentState }>;
   tabs?: Array<{
@@ -319,6 +321,26 @@ export const FIXTURES = {
     title: "localhost:5173",
     isFocused: true,
     body: "browser",
+  },
+  "rate-limited": {
+    what: "the agent printed a rate-limit banner three minutes ago — the header's rate-limit chip",
+    kind: "terminal",
+    title: "Claude: fix flaky auth tests",
+    agentId: "claude",
+    agentState: "waiting",
+    isFocused: false,
+    rateLimitSeenMinutesAgo: 3,
+  },
+  "rate-limited-narrow": {
+    what: "the rate-limit chip in a 320px pane beside a branch badge, where the row runs out of room",
+    width: 320,
+    kind: "terminal",
+    title: "Codex: write funnel tests",
+    agentId: "codex",
+    agentState: "waiting",
+    isFocused: true,
+    branch: "feature/funnel-tests",
+    rateLimitSeenMinutesAgo: 12,
   },
   "plugin-missing": {
     what: "a plugin panel whose kind is gone — the placeholder body under an ordinary header",
