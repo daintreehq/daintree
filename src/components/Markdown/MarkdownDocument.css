@@ -327,29 +327,73 @@
   accent-color: var(--color-accent-primary);
 }
 
-/* Mermaid fences. A rendered diagram takes the fence's frame so the swap from
-   source to diagram doesn't restyle the block; the diagram's own colors come
-   from the theme via mermaidTheme.ts, not from here. Until it renders (or if
-   it never does), the fence is an ordinary <pre> and keeps the rules above. */
+/* Mermaid fences. The block owns the frame in every state — waiting, rendered,
+   failed — so the swap from source to diagram changes only its height: the
+   edge, fill, radius and inset stay where they were. The fill is the
+   diagram's, lighter than a plain fence's, so a diagram waiting or failed still
+   reads as one rather than as ordinary code. The diagram's own colors come from
+   the theme via mermaidTheme.ts, not from here.
+
+   The diagram's inset is the prose <pre>'s, converted to the document's em
+   (0.875em type × 0.857em/1.143em padding), so source and diagram start at the
+   same point at every reading size. */
 .markdown-document .markdown-mermaid {
   margin-block: 1.7142857em;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-lg);
+  background: color-mix(in oklab, var(--color-surface-sidebar) 30%, transparent);
 }
 
+/* Bounded, so the line under a long source stays in reach. The scroller takes
+   keyboard focus on its own in Chromium. */
 .markdown-document .markdown-mermaid > pre {
+  max-height: 40em;
+  overflow-y: auto;
   margin: 0;
+  border: 0;
+  border-radius: inherit;
+  background: transparent;
 }
 
 .markdown-document .markdown-mermaid__diagram {
   display: flex;
   justify-content: center;
   overflow-x: auto;
-  padding: 1rem;
-  border: 1px solid var(--color-border-default);
-  border-radius: var(--radius-lg);
-  background: color-mix(in oklab, var(--color-surface-sidebar) 30%, transparent);
+  padding: 0.75em 1em;
 }
 
 .markdown-document .markdown-mermaid__diagram > svg {
   max-width: 100%;
   height: auto;
+}
+
+/* The inline inset matches the source's (1em at the note's 0.857em type is the
+   <pre>'s 14px at the default reading size), so glyph and code share an edge. */
+.markdown-document .markdown-mermaid__note {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5em;
+  padding: 0.6em 1.1666667em;
+  border-top: 1px solid color-mix(in oklab, var(--color-border-default) 70%, transparent);
+  color: var(--color-text-secondary);
+  font-size: 0.8571429em;
+  line-height: 1.5;
+}
+
+/* Held back for the anti-flicker gate, then faded in, hairline and all.
+   Opacity only, so reduced motion keeps it (reduced-motion.css removes spatial
+   motion, not fades). */
+.markdown-document .markdown-mermaid__note--pending {
+  animation: skeleton-reveal var(--duration-150) ease-out var(--anti-flicker-delay) backwards;
+}
+
+.markdown-document .markdown-mermaid__note-glyph {
+  flex-shrink: 0;
+  width: 1.1666667em;
+  height: 1.1666667em;
+  margin-top: 0.1666667em;
+}
+
+.markdown-document .markdown-mermaid__note-text {
+  min-width: 0;
 }
