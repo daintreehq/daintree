@@ -123,9 +123,9 @@ describe("MissingCliGate", () => {
     cliStore.state.availability = {};
   });
 
-  it("shows 'CLI binary not found' for missing state", () => {
+  it("names the agent whose CLI wasn't found", () => {
     renderGate({ detail: detail({ state: "missing" }) });
-    expect(screen.getByText("CLI binary not found")).toBeTruthy();
+    expect(screen.getByText("Claude CLI not found")).toBeTruthy();
   });
 
   it("shows install commands for missing state on macOS", () => {
@@ -136,22 +136,28 @@ describe("MissingCliGate", () => {
 
   it("shows troubleshooting tips for missing state", () => {
     renderGate({ detail: detail({ state: "missing" }) });
-    expect(screen.getByText("Troubleshooting")).toBeTruthy();
+    expect(screen.getByText("Still not found?")).toBeTruthy();
     expect(screen.getByText("Restart Daintree after install")).toBeTruthy();
   });
 
   it("shows WSL message for installed state via wsl", () => {
     renderGate({ detail: detail({ state: "installed", via: "wsl", wslDistro: "Ubuntu" }) });
-    expect(screen.getByText("Detected in WSL")).toBeTruthy();
+    expect(screen.getByText("Claude found only in WSL")).toBeTruthy();
     expect(
-      screen.getByText(/Found in WSL \(Ubuntu\).*only host binaries can be launched directly/)
+      screen.getByText(
+        /Found in Ubuntu, but only binaries on this machine can be launched directly/
+      )
     ).toBeTruthy();
+    // A WSL-only CLI is fixed by a native install, so the host's steps show.
+    expect(screen.getByText("Install on macOS")).toBeTruthy();
   });
 
-  it("shows blocked message for blocked state", () => {
+  // A denied exec is reported as denied: naming security software as the cause
+  // would be a guess the probe never made.
+  it("reports a denied exec as denied, with the probe's own message", () => {
     renderGate({ detail: detail({ state: "blocked", message: "EACCES: permission denied" }) });
-    expect(screen.getByText("Blocked by security software")).toBeTruthy();
-    expect(screen.getByText("EACCES: permission denied")).toBeTruthy();
+    expect(screen.getByText("Running Claude was denied")).toBeTruthy();
+    expect(screen.getByText(/EACCES: permission denied/)).toBeTruthy();
   });
 
   it("calls onRunAnyway when 'Run anyway' button is clicked", () => {
@@ -162,18 +168,19 @@ describe("MissingCliGate", () => {
 
   it("shows docs link when docsUrl is present", () => {
     renderGate({ detail: detail({ state: "missing" }) });
-    expect(screen.getByText("Docs")).toBeTruthy();
+    expect(screen.getByText("Claude install docs")).toBeTruthy();
   });
 
   it("shows resolved path when present in detail", () => {
     renderGate({ detail: detail({ state: "missing", resolvedPath: "/usr/local/bin/claude" }) });
-    expect(screen.getByText("Last known path: /usr/local/bin/claude")).toBeTruthy();
+    expect(screen.getByText(/Last found at/)).toBeTruthy();
+    expect(screen.getByText("/usr/local/bin/claude")).toBeTruthy();
   });
 
   it("does not show install commands for installed state", () => {
     renderGate({ detail: detail({ state: "installed", via: "npm-global" }) });
     expect(screen.queryByText("Install on macOS")).toBeNull();
-    expect(screen.queryByText("Troubleshooting")).toBeNull();
+    expect(screen.queryByText("Still not found?")).toBeNull();
   });
 
   it("does not show install commands for blocked state", () => {
@@ -185,8 +192,8 @@ describe("MissingCliGate", () => {
   // user who only needs to sign in hunting through endpoint-security settings.
   it("distinguishes unauthenticated from blocked", () => {
     renderGate({ detail: detail({ state: "unauthenticated" }) });
-    expect(screen.getByText("Sign-in not detected")).toBeTruthy();
-    expect(screen.queryByText("Blocked by security software")).toBeNull();
+    expect(screen.getByText("Claude sign-in not detected")).toBeTruthy();
+    expect(screen.queryByText(/was denied/)).toBeNull();
   });
 
   it("routes to the agent's settings without making it the only way out", () => {
@@ -195,14 +202,14 @@ describe("MissingCliGate", () => {
     expect(onOpenAgentSettings).toHaveBeenCalledOnce();
     // Settings is demoted, not promoted: the recovery actions stay on the panel.
     expect(screen.getByText("Run anyway")).toBeTruthy();
-    expect(screen.getByText("Re-check")).toBeTruthy();
+    expect(screen.getByText("Check again")).toBeTruthy();
   });
 
   describe("re-check", () => {
     it("forces the probe past the passive throttle window", async () => {
       renderGate({ detail: detail({ state: "missing" }) });
       await act(async () => {
-        fireEvent.click(screen.getByText("Re-check"));
+        fireEvent.click(screen.getByText("Check again"));
       });
       // A user who just installed the CLI is exactly who the throttle blocks.
       expect(cliStore.state.refresh).toHaveBeenCalledWith(true);
@@ -217,7 +224,7 @@ describe("MissingCliGate", () => {
         const { onAvailabilityReady } = renderGate({ detail: detail({ state: "missing" }) });
 
         await act(async () => {
-          fireEvent.click(screen.getByText("Re-check"));
+          fireEvent.click(screen.getByText("Check again"));
         });
 
         await waitFor(() => expect(onAvailabilityReady).toHaveBeenCalledOnce());
@@ -233,12 +240,12 @@ describe("MissingCliGate", () => {
       });
 
       await act(async () => {
-        fireEvent.click(screen.getByText("Re-check"));
+        fireEvent.click(screen.getByText("Check again"));
       });
 
       expect(onAvailabilityReady).not.toHaveBeenCalled();
       expect(onRunAnyway).not.toHaveBeenCalled();
-      expect(screen.getByText("Re-check")).toBeTruthy();
+      expect(screen.getByText("Check again")).toBeTruthy();
     });
 
     it("surfaces a failed probe inline and keeps the recovery actions", async () => {
@@ -246,10 +253,10 @@ describe("MissingCliGate", () => {
       const { onAvailabilityReady } = renderGate({ detail: detail({ state: "missing" }) });
 
       await act(async () => {
-        fireEvent.click(screen.getByText("Re-check"));
+        fireEvent.click(screen.getByText("Check again"));
       });
 
-      await waitFor(() => expect(screen.getByText("Couldn't re-check the CLI")).toBeTruthy());
+      await waitFor(() => expect(screen.getByText("Couldn't check again")).toBeTruthy());
       expect(onAvailabilityReady).not.toHaveBeenCalled();
       expect(screen.getByText("Run anyway")).toBeTruthy();
     });
@@ -263,7 +270,7 @@ describe("MissingCliGate", () => {
       cliStore.state.isRefreshing = true;
       renderGate({ detail: detail({ state: "missing" }) });
 
-      const button = screen.getByText("Re-check").closest("button")!;
+      const button = screen.getByText("Check again").closest("button")!;
       expect(button.getAttribute("aria-busy")).toBe("true");
       expect(button.getAttribute("aria-disabled")).toBe("true");
       expect(button.disabled).toBe(false);
@@ -278,7 +285,7 @@ describe("MissingCliGate", () => {
         return Promise.resolve();
       });
       renderGate({ detail: detail({ state: "missing" }) });
-      const button = screen.getByText("Re-check").closest("button")!;
+      const button = screen.getByText("Check again").closest("button")!;
 
       await act(async () => {
         // `click()` bypasses the disabled attribute the way a stale render or a
@@ -303,7 +310,7 @@ describe("MissingCliGate", () => {
       );
       const { onAvailabilityReady, unmount } = renderGate({ detail: detail({ state: "missing" }) });
 
-      fireEvent.click(screen.getByText("Re-check"));
+      fireEvent.click(screen.getByText("Check again"));
       unmount();
       await act(async () => {
         settle?.();
