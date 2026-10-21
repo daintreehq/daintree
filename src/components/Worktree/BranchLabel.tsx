@@ -1,15 +1,15 @@
 import { useMemo, type ComponentType } from "react";
 import { cn } from "../../lib/utils";
-import { truncateBranchName } from "../../utils/textParsing";
 import { classifyBranch, type BranchTypeId } from "@shared/config/branchPrefixes";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
+import { useFittedBranchText } from "./useFittedBranchName";
 import { ClaudeIcon, CodexIcon, CopilotIcon, CursorIcon } from "@/components/icons/brands";
 import {
   Accessibility,
-  Archive,
+  Blocks,
   BookOpen,
-  Bot,
   Bug,
+  CircuitBoard,
   Construction,
   Database,
   Flame,
@@ -17,17 +17,17 @@ import {
   GitBranch,
   GitPullRequestArrow,
   Hammer,
+  HardDriveDownload,
   Infinity as InfinityIcon,
   Languages,
-  Layers,
   LifeBuoy,
   Microscope,
-  Package,
   Palette,
   PencilRuler,
+  Plug,
   Rocket,
-  Server,
   ShieldAlert,
+  Shuffle,
   Sparkle,
   Undo2,
   Wrench,
@@ -37,7 +37,6 @@ import {
 /** A glyph drawn beside a branch: a Lucide icon or a monochrome brand mark. */
 export type BranchGlyph = ComponentType<{
   className?: string;
-  strokeWidth?: number;
   "aria-hidden"?: boolean | "true" | "false";
 }>;
 
@@ -48,7 +47,7 @@ const BRANCH_TYPE_ICONS: Record<BranchTypeId, BranchGlyph> = {
   security: ShieldAlert,
   design: PencilRuler,
   experiment: Microscope,
-  refactor: Layers,
+  refactor: Shuffle,
   chore: Wrench,
   docs: BookOpen,
   test: FlaskConical,
@@ -58,18 +57,18 @@ const BRANCH_TYPE_ICONS: Record<BranchTypeId, BranchGlyph> = {
   revert: Undo2,
   ci: InfinityIcon,
   build: Hammer,
-  infra: Server,
-  deps: Package,
+  infra: CircuitBoard,
+  deps: Blocks,
   migration: Database,
   perf: Zap,
   style: Palette,
   i18n: Languages,
   a11y: Accessibility,
   wip: Construction,
-  backup: Archive,
+  backup: HardDriveDownload,
 };
 
-// Agents the roster already draws; any other agent namespace gets the generic bot.
+// Agents the roster already draws; any other agent namespace gets the app's agent glyph.
 const AGENT_NAMESPACE_ICONS = new Map<string, BranchGlyph>([
   ["claude", ClaudeIcon],
   ["codex", CodexIcon],
@@ -109,7 +108,7 @@ export function splitBranchType(label: string): BranchTypeParts {
   if (namespace?.kind === "agent") {
     return {
       displayName: namespace.displayName,
-      Icon: AGENT_NAMESPACE_ICONS.get(namespace.id) ?? Bot,
+      Icon: AGENT_NAMESPACE_ICONS.get(namespace.id) ?? Plug,
       prefix,
       rest,
     };
@@ -122,58 +121,61 @@ interface BranchLabelProps {
   label: string;
   isActive: boolean;
   isMuted?: boolean;
-  isMainWorktree?: boolean;
   className?: string;
 }
 
-export function BranchLabel({
-  label,
-  isActive,
-  isMuted,
-  isMainWorktree,
-  className,
-}: BranchLabelProps) {
-  const { displayName, Icon, rest } = useMemo(() => {
-    const parts = splitBranchType(label);
-    return { ...parts, rest: truncateBranchName(parts.rest, parts.displayName === null ? 40 : 36) };
-  }, [label]);
+/**
+ * One size and weight wherever a branch is drawn, headline or meta line, so a
+ * branch reads the same on every card. The prefix the glyph stands for and any
+ * cut are given back by the tooltip, which only opens when something is hidden,
+ * and by the sr-only full name, which is what assistive technology reads.
+ */
+export function BranchLabel({ label, isActive, isMuted, className }: BranchLabelProps) {
+  const { Icon, prefix, rest } = useMemo(() => splitBranchType(label), [label]);
+  const { shown, isCut, boxRef, sizerRef } = useFittedBranchText(rest);
+  const isHiding = prefix !== "" || isCut;
 
   return (
-    <Tooltip autoDismiss={false}>
-      <TooltipTrigger asChild>
-        <span className={cn("flex items-center gap-1.5 min-w-0 cursor-default", className)}>
-          {Icon && displayName && (
-            <span className="shrink-0 flex items-center" aria-label={displayName}>
-              <Icon
-                className={cn(
-                  "w-3.5 h-3.5 transition-colors duration-150",
-                  isMuted ? "text-text-muted" : "text-text-secondary"
-                )}
-                strokeWidth={2.5}
-                aria-hidden="true"
-              />
-            </span>
+    <TruncatedTooltip
+      content={label}
+      side="bottom"
+      contentClassName="[overflow-wrap:anywhere]"
+      isTruncated={isHiding}
+      focusable={false}
+    >
+      <span
+        data-branch-label=""
+        className={cn("flex items-center gap-1.5 min-w-0 cursor-default", className)}
+      >
+        {isHiding && <span className="sr-only">{label}</span>}
+        {Icon && <Icon className="w-3.5 h-3.5 shrink-0 text-text-secondary" aria-hidden="true" />}
+        {/* The cut name over the whole one: the box takes the whole name's
+            width, so it only narrows when the card does. */}
+        <span
+          ref={boxRef}
+          aria-hidden={isHiding || undefined}
+          className={cn(
+            "relative min-w-0 overflow-hidden whitespace-pre font-mono text-2xs transition-colors duration-150 ease-out",
+            isActive
+              ? "text-text-primary font-medium"
+              : isMuted
+                ? // Muted, not unreadable: `text-text-muted` has no dark contrast
+                  // floor, so the de-emphasis comes off the weight instead, as
+                  // the main card's project name does.
+                  "text-text-secondary font-normal"
+                : "text-text-secondary font-medium"
           )}
+        >
+          {/* Drawn from an attribute, so it sizes the box without being text. */}
           <span
-            className={cn(
-              "truncate font-mono transition-colors duration-150",
-              isMainWorktree
-                ? "text-sm leading-[inherit] font-bold tracking-wide"
-                : "text-2xs font-medium",
-              isActive
-                ? "text-text-primary/90"
-                : isMuted
-                  ? "text-text-muted"
-                  : "text-text-secondary"
-            )}
-          >
-            {rest}
-          </span>
+            ref={sizerRef}
+            data-text={rest}
+            className="invisible before:content-[attr(data-text)]"
+            aria-hidden="true"
+          />
+          <span className="absolute inset-y-0 left-0">{shown}</span>
         </span>
-      </TooltipTrigger>
-      <TooltipContent side="bottom">
-        {displayName ? `${displayName}: ${label}` : label}
-      </TooltipContent>
-    </Tooltip>
+      </span>
+    </TruncatedTooltip>
   );
 }

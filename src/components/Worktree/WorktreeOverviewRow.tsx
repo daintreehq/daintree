@@ -524,14 +524,7 @@ export function WorktreeOverviewRow({
               </div>
               <div className="mt-1 flex items-center gap-2 min-w-0 pl-6 text-2xs text-text-secondary">
                 {!isBranchTitled && (
-                  <BranchLabel
-                    label={branchLabel}
-                    isActive={isCurrent}
-                    // The row's headline already is the main worktree's name; its
-                    // branch sits on the detail line at detail size.
-                    isMainWorktree={false}
-                    className="min-w-0"
-                  />
+                  <BranchLabel label={branchLabel} isActive={isCurrent} className="min-w-0" />
                 )}
                 {showPr && PrIcon && (
                   <span

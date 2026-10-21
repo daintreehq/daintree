@@ -197,11 +197,7 @@ export function DeletedWorktreeGroup({ worktrees, homeDir }: DeletedWorktreeGrou
             aria-hidden="true"
           />
           <span className="flex min-w-0 flex-1 items-center gap-1.5">
-            <FolderX
-              className="w-3.5 h-3.5 shrink-0 text-text-secondary"
-              strokeWidth={2.5}
-              aria-hidden="true"
-            />
+            <FolderX className="w-3.5 h-3.5 shrink-0 text-text-secondary" aria-hidden="true" />
             {/* At a narrow sidebar the count gives way before the noun does:
                 "3 deleted wo…" names nothing. */}
             <span className="shrink-0 text-xs font-medium text-text-secondary transition-colors duration-150 group-hover/summary:text-text-primary">
