@@ -198,11 +198,7 @@ export function NonMainSecondaryRow({
           alarm tier — that ordering is about which alarm outranks which, not
           about outranking the branch name. */}
       {(hasDisplayTitle || hasCustomTitle) && (
-        <BranchLabel
-          label={branchLabel}
-          isActive={isActive}
-          isMuted={isMuted}
-        />
+        <BranchLabel label={branchLabel} isActive={isActive} isMuted={isMuted} />
       )}
       {upstreamFirst ? upstreamBadge : prBadge}
       {upstreamFirst ? prBadge : upstreamBadge}

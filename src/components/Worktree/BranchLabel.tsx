@@ -148,9 +148,7 @@ export function BranchLabel({ label, isActive, isMuted, className }: BranchLabel
         className={cn("flex items-center gap-1.5 min-w-0 cursor-default", className)}
       >
         {isHiding && <span className="sr-only">{label}</span>}
-        {Icon && (
-          <Icon className="w-3.5 h-3.5 shrink-0 text-text-secondary" aria-hidden="true" />
-        )}
+        {Icon && <Icon className="w-3.5 h-3.5 shrink-0 text-text-secondary" aria-hidden="true" />}
         {/* The cut name over the whole one: the box takes the whole name's
             width, so it only narrows when the card does. */}
         <span

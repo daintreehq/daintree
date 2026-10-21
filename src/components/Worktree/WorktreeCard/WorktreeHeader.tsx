@@ -301,11 +301,7 @@ export function WorktreeHeader({
               </span>
             </TruncatedTooltip>
           ) : (
-            <BranchLabel
-              label={branchLabel}
-              isActive={isActive}
-              isMuted={isMuted}
-            />
+            <BranchLabel label={branchLabel} isActive={isActive} isMuted={isMuted} />
           )}
           {gitStateIndicator && (
             <span

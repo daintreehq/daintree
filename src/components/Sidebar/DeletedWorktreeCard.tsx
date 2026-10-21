@@ -190,10 +190,7 @@ export function DeletedWorktreeCard({
             the branch-type icon's slot. */}
         <div className="flex items-center gap-2 min-h-[22px]">
           <span className="flex items-center gap-1.5 min-w-0 flex-1">
-            <FolderX
-              className="w-3.5 h-3.5 text-text-secondary shrink-0"
-              aria-hidden="true"
-            />
+            <FolderX className="w-3.5 h-3.5 text-text-secondary shrink-0" aria-hidden="true" />
             <TruncatedTooltip content={worktree.title}>
               <span className="truncate font-mono text-2xs font-medium text-text-secondary">
                 {worktree.title}

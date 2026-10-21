@@ -237,7 +237,7 @@ describe("WorktreeHeader issue title headline", () => {
     });
 
     expect(screen.queryByRole("button", { name: /Open issue/ })).toBeNull();
-    expect(screen.getByText(/my-branch/)).toBeDefined();
+    expect(screen.getByText("feature/my-branch")).toBeDefined();
   });
 
   it("shows branch label in secondary row when issue title is headline", () => {
@@ -251,7 +251,7 @@ describe("WorktreeHeader issue title headline", () => {
     });
 
     expect(screen.getByText("Fix the thing")).toBeDefined();
-    expect(screen.getByText(/fix-the-thing/)).toBeDefined();
+    expect(screen.getByText("feature/fix-the-thing")).toBeDefined();
   });
 
   it("does not show duplicate issue badge in lower row when issue is headline", () => {
@@ -297,7 +297,7 @@ describe("WorktreeHeader issue title headline", () => {
     });
 
     // Branch name should be the primary headline (no headline-level issue button)
-    expect(screen.getByText(/something/)).toBeDefined();
+    expect(screen.getByText("feature/something")).toBeDefined();
     // Issue badge should still appear in secondary row with #100 fallback
     const issueButton = screen.getByRole("button", { name: /Open issue #100/ });
     expect(issueButton).toBeDefined();
@@ -1448,7 +1448,7 @@ describe("WorktreeHeader custom title (#13409)", () => {
     const issueButtons = container.querySelectorAll('button[aria-label*="Open issue"]');
     expect(issueButtons.length).toBe(1);
     expect(issueButtons[0]!.getAttribute("aria-label")).toBe("Open issue #100: Fix the thing");
-    expect(screen.getByText(/fix-the-thing/)).toBeDefined();
+    expect(screen.getByText("feature/fix-the-thing")).toBeDefined();
   });
 
   it("keeps PR provenance from sourcePrNumber: the PR moves down with its title, then the issue", () => {
@@ -1491,7 +1491,7 @@ describe("WorktreeHeader custom title (#13409)", () => {
     renderHeader({ branchLabel: "feature/test", customTitle: "Spike" });
 
     expect(screen.getByTestId("worktree-custom-title").textContent).toBe("Spike");
-    expect(screen.getByText(/test/)).toBeDefined();
+    expect(screen.getByText("feature/test")).toBeDefined();
   });
 
   it("replaces the project name on main but keeps main's branch row", () => {

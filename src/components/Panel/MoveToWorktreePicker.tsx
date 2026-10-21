@@ -1,12 +1,4 @@
-import {
-  useCallback,
-  useDeferredValue,
-  useEffect,
-  useId,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { useCallback, useDeferredValue, useEffect, useId, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { Sprout } from "@/components/icons";
 import { AppPalettePopover } from "@/components/ui/AppPalettePopover";
@@ -509,9 +501,7 @@ function BranchName({
             it is a row's headline or its detail. */}
         {Icon && (
           <span className="flex size-3.5 shrink-0 items-center justify-center">
-            <Icon
-              className={cn("text-text-secondary", isHeadline ? "size-3.5" : "size-3")}
-            />
+            <Icon className={cn("text-text-secondary", isHeadline ? "size-3.5" : "size-3")} />
           </span>
         )}
         {/* Fills the line, so the room it measures is the line's, not the text's. */}
