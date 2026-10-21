@@ -413,6 +413,124 @@ test("file browser review — tree sidebar chrome", async () => {
         await settle(page, 400);
       });
 
+      /**
+       * The menu itself, close up: clipped to the trigger plus the portalled
+       * menu with a margin, so the rows are legible at review size rather than
+       * a few hundred pixels inside a full-window shot. One capture per state
+       * that changes what the menu says — each sort key relabels the direction
+       * rows, the dotfile count only appears while dotfiles are hidden, and
+       * Collapse all disables once nothing is expanded.
+       */
+      const openMenu = async (): Promise<Locator> => {
+        await viewOptions.click({ timeout: T_MEDIUM });
+        await settle(page, 500);
+        const menu = page.locator('[role="menu"]').last();
+        await menu.waitFor({ state: "visible", timeout: T_MEDIUM });
+        return menu;
+      };
+      const snapMenu = async (slug: string, menu: Locator): Promise<void> => {
+        await settle(page, 300);
+        const a = await viewOptions.boundingBox();
+        const b = await menu.boundingBox();
+        if (!a || !b) throw new Error(`${slug}: menu or trigger has no box`);
+        const pad = 24;
+        const x = Math.max(0, Math.min(a.x, b.x) - pad);
+        const y = Math.max(0, Math.min(a.y, b.y) - pad);
+        const right = Math.max(a.x + a.width, b.x + b.width) + pad;
+        const bottom = Math.max(a.y + a.height, b.y + b.height) + pad;
+        const file = path.join(OUTPUT_DIR, `${prefix}${slug}${TAG}.png`);
+        await page.screenshot({
+          path: file,
+          type: "png",
+          animations: "disabled",
+          caret: "hide",
+          clip: { x, y, width: right - x, height: bottom - y },
+        });
+      };
+      const pickRadio = async (name: RegExp): Promise<void> => {
+        await page.getByRole("menuitemradio", { name }).click({ timeout: T_MEDIUM });
+        await settle(page, 500);
+      };
+
+      await step("options-menu", async () => {
+        await resetRoot();
+        await setShowDotfiles(false);
+
+        let menu = await openMenu();
+        await snapMenu("a1-menu-name-asc", menu);
+        await pickRadio(/^modified$/i);
+
+        menu = await openMenu();
+        await pickRadio(/newest first|descending/i);
+        menu = await openMenu();
+        await snapMenu("a2-menu-modified-desc", menu);
+        await pickRadio(/^size$/i);
+
+        menu = await openMenu();
+        await snapMenu("a3-menu-size-desc", menu);
+        await pickRadio(/^type$/i);
+
+        menu = await openMenu();
+        await snapMenu("a4-menu-type-desc", menu);
+        await pickRadio(/^name$/i);
+        menu = await openMenu();
+        await pickRadio(/a to z|ascending/i);
+
+        // Nothing expanded and every dotfile showing: Collapse all disables
+        // and the dotfile row loses its count.
+        menu = await openMenu();
+        await page.locator('[data-testid="file-browser-collapse-all"]').click();
+        await settle(page, 500);
+        await setShowDotfiles(true);
+        menu = await openMenu();
+        await snapMenu("a5-menu-collapsed-dotfiles-shown", menu);
+        await page.keyboard.press("Escape");
+        await settle(page, 400);
+
+        // Keyboard entry: the focus ring on the first row is what a keyboard
+        // user lands on.
+        await viewOptions.focus();
+        await page.keyboard.press("Enter");
+        await settle(page, 500);
+        menu = page.locator('[role="menu"]').last();
+        await menu.waitFor({ state: "visible", timeout: T_MEDIUM });
+        await page.keyboard.press("ArrowDown");
+        await snapMenu("a6-menu-keyboard-focus", menu);
+        await page.keyboard.press("Escape");
+        await settle(page, 400);
+      });
+
+      // A second consumer of the shared menu rows: the worktree card's actions
+      // menu mixes leading icons with trailing meta, so a change to the check
+      // column or the meta gap shows up here too.
+      await step("worktree-actions-menu", async () => {
+        const trigger = page.locator('[data-testid="worktree-actions-menu"]').first();
+        await trigger.click({ timeout: T_MEDIUM });
+        await settle(page, 500);
+        await page.locator('[role="menu"]').last().waitFor({ state: "visible", timeout: T_MEDIUM });
+        // The Git submenu carries the meta: a fixture repo has no upstream, so
+        // "Pull and rebase" shows its "No upstream" reason.
+        await page.getByRole("menuitem", { name: /^git$/i }).hover();
+        await settle(page, 600);
+        const menus = page.locator('[role="menu"]');
+        if ((await menus.count()) < 2) throw new Error("Git submenu did not open");
+        const boxes = await Promise.all((await menus.all()).map((m) => m.boundingBox()));
+        const real = boxes.filter((b): b is NonNullable<typeof b> => b !== null);
+        const x = Math.max(0, Math.min(...real.map((b) => b.x)) - 24);
+        const y = Math.max(0, Math.min(...real.map((b) => b.y)) - 24);
+        const right = Math.max(...real.map((b) => b.x + b.width)) + 24;
+        const bottom = Math.max(...real.map((b) => b.y + b.height)) + 24;
+        await page.screenshot({
+          path: path.join(OUTPUT_DIR, `${prefix}b1-worktree-actions-menu${TAG}.png`),
+          type: "png",
+          animations: "disabled",
+          caret: "hide",
+          clip: { x, y, width: right - x, height: bottom - y },
+        });
+        await page.keyboard.press("Escape");
+        await settle(page, 400);
+      });
+
       await step("view-options-collapsed", async () => {
         // The other half of the ownership rule: with the tree column collapsed
         // the viewer's toolbar renders the same menu, so no layout is ever

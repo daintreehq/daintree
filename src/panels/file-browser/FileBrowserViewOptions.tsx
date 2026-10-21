@@ -25,6 +25,16 @@ const SORT_OPTIONS: ReadonlyArray<{ value: FileBrowserSortKey; label: string }> 
   { value: "type", label: "Type" },
 ];
 
+// What each direction does to the tree, worded for the key it applies to.
+// `asc` is A→Z for names and extensions, oldest first for dates, smallest
+// first for sizes (`compareByKey` in the SDK's fileTree).
+const DIRECTION_LABELS: Record<FileBrowserSortKey, { asc: string; desc: string }> = {
+  name: { asc: "A to Z", desc: "Z to A" },
+  modified: { asc: "Oldest first", desc: "Newest first" },
+  size: { asc: "Smallest first", desc: "Largest first" },
+  type: { asc: "A to Z", desc: "Z to A" },
+};
+
 function toSortKey(value: string, fallback: FileBrowserSortKey): FileBrowserSortKey {
   // Narrowed by lookup rather than asserted: the option list is already the
   // authority on which keys exist, so reading the key back off the matched
@@ -100,6 +110,7 @@ export function FileBrowserViewOptions({
   // It also kept a permanent "1 hidden by Settings" on the control in every git
   // repo, since `.git` is always on the junk list.
   const label = "File tree options";
+  const directionLabels = DIRECTION_LABELS[sort.key];
 
   // The tooltip that used to hang open here, and the accent ring the trigger
   // used to keep after a pointer dismissal, are both handled by the dropdown
@@ -127,7 +138,7 @@ export function FileBrowserViewOptions({
         </TooltipTrigger>
         <TooltipContent side="bottom">{label}</TooltipContent>
       </Tooltip>
-      <DropdownMenuContent align="end" className="min-w-[200px]">
+      <DropdownMenuContent align="end">
         {/* Key and direction are two labelled radio groups rather than one
             group that reverses when its active item is re-picked: the compact
             version hides the direction behind a gesture nothing announces —
@@ -151,23 +162,24 @@ export function FileBrowserViewOptions({
           ))}
         </DropdownMenuRadioGroup>
         <DropdownMenuSeparator />
-        <DropdownMenuLabel>Order</DropdownMenuLabel>
+        {/* No visible heading: the rows name the result for the current key,
+            which says more than "Order" did. Ascending stays the first row for
+            every key, so switching key never moves the check between rows. */}
         <DropdownMenuRadioGroup
-          aria-label="Order"
+          aria-label="Sort direction"
           value={sort.direction}
           onValueChange={(value) => {
             onSortChange({ ...sort, direction: value === "desc" ? "desc" : "asc" });
           }}
         >
-          <DropdownMenuRadioItem value="asc">Ascending</DropdownMenuRadioItem>
-          <DropdownMenuRadioItem value="desc">Descending</DropdownMenuRadioItem>
+          <DropdownMenuRadioItem value="asc">{directionLabels.asc}</DropdownMenuRadioItem>
+          <DropdownMenuRadioItem value="desc">{directionLabels.desc}</DropdownMenuRadioItem>
         </DropdownMenuRadioGroup>
         <DropdownMenuSeparator />
         {/* A static label carrying the positive sense, per the toggle-label
             rule: the checkbox state says whether they are shown, so the words
-            never have to change. The trailing count is the reason this row
-            beats the old dedicated button — it says what the filter is
-            actually doing right now, which a lit icon never did. */}
+            never have to change. The trailing count says what the filter is
+            doing right now, which a lit icon never did. */}
         <DropdownMenuCheckboxItem
           checked={!hideDotfiles}
           onCheckedChange={(checked) => {
@@ -180,45 +192,33 @@ export function FileBrowserViewOptions({
         >
           Show dotfiles
           {hiddenCounts.dotfiles > 0 && (
-            <DropdownMenuMeta>{hiddenCounts.dotfiles}</DropdownMenuMeta>
+            <DropdownMenuMeta>{hiddenCounts.dotfiles} hidden</DropdownMenuMeta>
           )}
         </DropdownMenuCheckboxItem>
-        <DropdownMenuSeparator />
-        {/* An action, not a view setting, so it sits under its own rule at the
-            bottom rather than among the things above it.
-
-            Demoted from a dedicated header button on purpose. The tree already
-            refreshes itself — the worktree watcher ticks it, and a 2s poll
-            covers roots no watcher owns — so a permanently visible Refresh
-            claimed a slot in a sub-300px header for something the user rarely
-            has to reach for. Still exactly one Refresh in every layout: this
-            menu is rendered by the tree header, or by the viewer's toolbar
+        {/* Refresh is demoted from a dedicated header button on purpose. The
+            tree already refreshes itself — the worktree watcher ticks it, and
+            a 2s poll covers roots no watcher owns — so a permanently visible
+            Refresh claimed a slot in a sub-300px header for something the user
+            rarely has to reach for. Still exactly one Refresh in every layout:
+            this menu is rendered by the tree header, or by the viewer's toolbar
             while the tree is collapsed away, never both (#11496, #11938). */}
-        {/* `inset` plus an absolutely-placed glyph at left-2 is exactly the
-            geometry the radio and checkbox items above use for their check
-            indicators, so this row's label lands on the same left edge as
-            theirs instead of sitting a few pixels out with its icon jammed
-            against the text. */}
         <DropdownMenuItem
-          inset
           disabled={!canCollapseAll}
           onSelect={onCollapseAll}
           data-testid="file-browser-collapse-all"
         >
-          <span className="absolute left-2 flex h-3.5 w-3.5 items-center justify-center">
-            <ChevronsDownUp className="h-3.5 w-3.5" aria-hidden="true" />
-          </span>
+          <ChevronsDownUp className="mr-2 h-3.5 w-3.5" aria-hidden="true" data-menu-icon />
           Collapse all
         </DropdownMenuItem>
-        <DropdownMenuItem inset onSelect={onRefresh} data-testid="file-browser-refresh">
-          <span className="absolute left-2 flex h-3.5 w-3.5 items-center justify-center">
-            <SpinningIcon
-              icon={RefreshCw}
-              active={isRefreshing}
-              className="h-3.5 w-3.5"
-              aria-hidden="true"
-            />
-          </span>
+        <DropdownMenuItem onSelect={onRefresh} data-testid="file-browser-refresh">
+          <SpinningIcon
+            icon={RefreshCw}
+            active={isRefreshing}
+            wrapperClassName="mr-2"
+            className="h-3.5 w-3.5"
+            aria-hidden="true"
+            data-menu-icon
+          />
           Refresh
         </DropdownMenuItem>
       </DropdownMenuContent>

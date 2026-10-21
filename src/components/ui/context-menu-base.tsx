@@ -544,7 +544,7 @@ const ContextMenuMeta = ({ className, ...props }: React.HTMLAttributes<HTMLSpanE
   return (
     <span
       aria-hidden="true"
-      className={cn("ml-auto pl-2 text-2xs text-text-secondary tabular-nums", className)}
+      className={cn("ml-auto pl-4 text-2xs text-text-secondary tabular-nums", className)}
       {...props}
     />
   );
@@ -574,7 +574,7 @@ const ContextMenuCheckboxItem = React.forwardRef<
       {...props}
       onPointerMove={(event) => menuRowPointerMove(event, onPointerMove)}
     >
-      <span className="absolute left-2 flex h-3.5 w-3.5 items-center justify-center">
+      <span className="absolute left-2.5 flex h-3.5 w-3.5 items-center justify-center">
         <ItemIndicator>
           <Check className="h-3.5 w-3.5" aria-hidden="true" />
         </ItemIndicator>
@@ -619,7 +619,7 @@ const ContextMenuRadioItem = React.forwardRef<
       {...props}
       onPointerMove={(event) => menuRowPointerMove(event, onPointerMove)}
     >
-      <span className="absolute left-2 flex h-3.5 w-3.5 items-center justify-center">
+      <span className="absolute left-2.5 flex h-3.5 w-3.5 items-center justify-center">
         <ItemIndicator>
           <Check className="h-3.5 w-3.5" aria-hidden="true" />
         </ItemIndicator>
