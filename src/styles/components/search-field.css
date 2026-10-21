@@ -96,12 +96,13 @@
      only firms the hairline, and the caret carries "type here". The edge moves
      toward the field's own ink rather than to a border token, since a theme's
      ladder doesn't promise `border-strong` reads firmer than the resting edge
-     (namib's is fainter). The contrast-mode indicators below still apply. */
-  .search-field[data-focused-on-open="true"]:has(.search-field-input:focus-visible) {
+     (namib's is fainter). `:where()` keeps it at plain focus's weight, so it wins
+     by order alone and invalid and the contrast-mode indicators below still beat it. */
+  .search-field:where([data-focused-on-open="true"]):has(.search-field-input:focus-visible) {
     border-color: color-mix(in srgb, var(--theme-border-default) 70%, var(--theme-text-secondary));
   }
 
-  .search-field[data-focused-on-open="true"]:has(.search-field-input:focus-visible)::before {
+  .search-field:where([data-focused-on-open="true"]):has(.search-field-input:focus-visible)::before {
     opacity: 0;
   }
 
@@ -228,7 +229,6 @@
     }
 
     .search-field:has(.search-field-input:focus-visible),
-    .search-field[data-focused-on-open="true"]:has(.search-field-input:focus-visible),
     button.search-field:focus-visible {
       border-color: var(--theme-text-primary);
       outline: 1px solid var(--theme-text-primary);

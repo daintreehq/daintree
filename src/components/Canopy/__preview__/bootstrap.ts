@@ -40,6 +40,7 @@ function inertAnswer(): unknown {
   return Object.assign(() => undefined, {
     then: settled.then.bind(settled),
     catch: settled.catch.bind(settled),
+    finally: settled.finally.bind(settled),
   });
 }
 

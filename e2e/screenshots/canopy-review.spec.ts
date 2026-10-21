@@ -455,6 +455,7 @@ for (const theme of THEMES) {
     await landed(page);
     await page.keyboard.type("kubernetes");
     await expect(cards(page)).toHaveCount(0);
+    await expect(dialog(page).getByText("Nothing matches “kubernetes”.")).toBeVisible();
     written.push(await snapColumn(page, `${theme}--s05-no-match.png`, "none"));
 
     // The keyboard on a row with the field empty: the field at rest.
@@ -493,6 +494,7 @@ for (const theme of THEMES) {
     await search(page).focus();
     await page.keyboard.type("Deploy");
     await expect(cards(page)).toHaveCount(0);
+    await expect(dialog(page).getByText("Nothing unread matches “Deploy”.")).toBeVisible();
     await expect(dialog(page).getByText("No unread agent matches")).toBeVisible();
     // The whole dialog, so the pane's own word on it shows beside the list.
     written.push(await snap(page, `${theme}--s09-unread-hides-match.png`, "none"));
@@ -502,6 +504,8 @@ for (const theme of THEMES) {
     await landed(page);
     await page.keyboard.type("kubernetes");
     await expect(cards(page)).toHaveCount(0);
+    await expect(dialog(page).getByText("Nothing matches “kubernetes”.")).toBeVisible();
+    await expect(dialog(page).getByText("No agent matches")).toBeVisible();
     written.push(await snap(page, `${theme}--s10-no-match-dialog.png`, "none"));
 
     const onDisk = readdirSync(OUT_DIR).filter((f) => f.startsWith(`${theme}--s`));

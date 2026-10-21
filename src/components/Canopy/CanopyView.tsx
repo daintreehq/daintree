@@ -841,8 +841,14 @@ function CanopyInbox({
         (runIds) => {
           if (live) setScreenHits({ ask: screenAsk, runIds: new Set(runIds) });
         },
-        // A host that can't search its screens still matches what the panel holds.
-        () => undefined
+        // A host that can't search its screens still matches what the panel
+        // holds, and its search has still settled.
+        () => {
+          if (!live) return;
+          setScreenHits((hits) =>
+            hits?.ask === screenAsk ? hits : { ask: screenAsk, runIds: new Set() }
+          );
+        }
       );
     }, SCREEN_SEARCH_DEBOUNCE_MS);
     return () => {
@@ -922,22 +928,32 @@ function CanopyInbox({
   // The search found runs, but only read ones the Unread filter hides: every
   // place that says why the list is empty says that, not "no match".
   const onlyReadMatch = searching && visible.length === 0 && shownInbox.inbox.length > 0;
-  // A search's outcome is said once it settles, never per keystroke or per
-  // match a terminal adds on the way.
-  const outcome = !searching
-    ? null
-    : visible.length > 0
-      ? pluralize(visible.length, "match", "matches")
-      : onlyReadMatch
-        ? "No unread matches"
-        : "No matches";
+  // A search's outcome is said once, when it settles: the runs are in, the
+  // terminals have answered and the typing has stopped. Never per keystroke,
+  // and never again for a match a terminal adds later.
+  const searchSettled = fleet !== null && (screenAsk === null || onScreen !== null);
+  const outcome =
+    !searching || !searchSettled
+      ? null
+      : visible.length > 0
+        ? pluralize(visible.length, "match", "matches")
+        : onlyReadMatch
+          ? "No unread matches"
+          : "No matches";
+  const announceKey = `${searchKey}|${unreadOnly}`;
+  const announcedRef = useRef<string | null>(null);
   useEffect(() => {
-    if (outcome === null) return;
+    if (!searching) {
+      announcedRef.current = null;
+      return;
+    }
+    if (outcome === null || query !== appliedQuery || announcedRef.current === announceKey) return;
     const timer = window.setTimeout(() => {
+      announcedRef.current = announceKey;
       useAnnouncerStore.getState().announce(outcome, "polite");
     }, UI_DOHERTY_THRESHOLD);
     return () => window.clearTimeout(timer);
-  }, [outcome, searchKey]);
+  }, [searching, outcome, announceKey, query, appliedQuery]);
 
   const [focusedId, setFocusedId] = useState<string | null>(null);
   // Where the keyboard goes in the next agent's pane, for the run it was meant for.
