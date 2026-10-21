@@ -3,7 +3,11 @@ import { DndContext } from "@dnd-kit/core";
 import type { PtyPanelData } from "@shared/types/panel";
 import type { WorktreeSnapshot, WorktreeState } from "@shared/types";
 import type { BrowserNavigationHistorySnapshot } from "@shared/types/browser";
-import type { MarkdownFontSize } from "@/store/preferencesStore";
+import {
+  DEFAULT_MARKDOWN_FONT_SIZE,
+  MARKDOWN_FONT_SIZE_STEPS,
+  type MarkdownFontSize,
+} from "@/store/preferencesStore";
 import { WorktreeStoreContext, WorktreeStoreProvider } from "@/contexts/WorktreeStoreContext";
 import { usePanelStore } from "@/store/panelStore";
 import { usePluginContextMenuItemsStore } from "@/store/pluginContextMenuItemsStore";
@@ -312,8 +316,16 @@ function FileBrowserOptionsScene() {
 
 // ---- markdown: text size ------------------------------------------------------------
 
+const isMarkdownFontSize = (value: string | null): value is MarkdownFontSize =>
+  MARKDOWN_FONT_SIZE_STEPS.some((step) => step === value);
+
 function MarkdownTextSizeScene() {
-  const [value, setValue] = useState<MarkdownFontSize>("sm");
+  // `?size=` opens on a rung other than the default, so the ends of the ladder
+  // and a live Reset can be photographed without stepping there first.
+  const requested = new URLSearchParams(window.location.search).get("size");
+  const [value, setValue] = useState<MarkdownFontSize>(
+    isMarkdownFontSize(requested) ? requested : DEFAULT_MARKDOWN_FONT_SIZE
+  );
   return (
     <Pane width={520} height={320}>
       <HeaderStrip title="README.md">

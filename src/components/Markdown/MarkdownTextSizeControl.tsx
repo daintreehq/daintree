@@ -1,8 +1,14 @@
-import { useCallback } from "react";
-import { ALargeSmall, Minus, Plus } from "lucide-react";
+import { useCallback, useId } from "react";
+import { ALargeSmall, Minus, Plus, RotateCcw } from "lucide-react";
 import { TOOLBAR_ICON_CLASS } from "@/components/FileViewer/FileViewerToolbar";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { ARIA_DISABLED_INERT_CLASSES } from "@/components/ui/ariaDisabled";
+import {
+  POPOVER_HEADER_CLASS,
+  POPOVER_HEADER_META_CLASS,
+  POPOVER_TITLE_CLASS,
+} from "@/components/ui/popoverHeader";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   DropdownMenuMeta,
@@ -44,17 +50,21 @@ const stepAt = (value: MarkdownFontSize, delta: number): MarkdownFontSize | unde
   return MARKDOWN_FONT_SIZE_STEPS[index + delta];
 };
 
+const DEFAULT_LABEL = STEP_LABEL[DEFAULT_MARKDOWN_FONT_SIZE];
+
 /**
  * Ends of the ladder are announced, not removed. The native `disabled`
  * attribute drops focus the moment the attribute lands, so stepping up to the
  * last rung would blur the very button that was just activated — and a focusout
  * inside a Radix popover is exactly what dismisses it. `aria-disabled` says the
- * same thing to a screen reader while the button stays where the user left it.
+ * same thing to a screen reader while the button stays where the user left it,
+ * and the shared inert classes draw it the way a natively disabled button looks:
+ * dimmed, with no hover fill inviting a click that does nothing.
  */
-const inertProps = (inert: boolean) => ({
-  "aria-disabled": inert || undefined,
-  className: inert ? "opacity-50" : undefined,
-});
+const inert = (isInert: boolean) => isInert || undefined;
+
+/** Inside the stepper's frame the ring is inset, so it never crosses the frame's edge. */
+const STEPPER_BUTTON_CLASS = cn(ARIA_DISABLED_INERT_CLASSES, "focus-visible:-outline-offset-2");
 
 export interface MarkdownTextSizeControlProps {
   value: MarkdownFontSize;
@@ -87,6 +97,8 @@ export function MarkdownTextSizeControl({
   const smaller = stepAt(value, -1);
   const larger = stepAt(value, 1);
   const label = STEP_LABEL[value];
+  const titleId = useId();
+  const scopeId = useId();
 
   // The stepper's own accelerators, live only while the popover is open. There
   // is no global combo to reach for: Cmd+= / Cmd+- / Cmd+0 are whole-window
@@ -131,60 +143,76 @@ export function MarkdownTextSizeControl({
       </Tooltip>
       <PopoverContent
         align="end"
-        className="w-auto p-2"
-        aria-label="Text size"
+        className="w-48 p-0"
+        aria-labelledby={titleId}
+        aria-describedby={scopeId}
         onKeyDown={handleKeyDown}
       >
-        <div className="flex items-center gap-1">
+        <div className={POPOVER_HEADER_CLASS}>
+          <span id={titleId} className={POPOVER_TITLE_CLASS}>
+            Text size
+          </span>
+          {/* The panel reflowing behind the popover shows the change is local
+              to this document; it cannot show that every other one follows. */}
+          <span id={scopeId} className={POPOVER_HEADER_META_CLASS}>
+            All Markdown files
+          </span>
+        </div>
+        <div className="flex flex-col gap-1.5 p-2">
+          {/* One framed control, so the readout reads as the stepper's value
+              rather than a label floating between two buttons. */}
+          <div className="flex items-center rounded-[var(--radius-md)] border border-border-default p-0.5">
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              aria-label="Decrease text size"
+              aria-disabled={inert(smaller === undefined)}
+              className={STEPPER_BUTTON_CLASS}
+              onClick={() => smaller && onValueChange(smaller)}
+              data-testid="markdown-text-size-decrease"
+            >
+              <Minus aria-hidden="true" />
+            </Button>
+            {/* A live region rather than a static readout: the popover stays open
+                across a run of adjustments, so the value has to announce itself
+                each time or the stepping is silent. */}
+            <output
+              aria-live="polite"
+              aria-atomic="true"
+              className="flex-1 text-center text-xs tabular-nums text-text-primary"
+              data-testid="markdown-text-size-value"
+            >
+              {label} px
+            </output>
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              aria-label="Increase text size"
+              aria-disabled={inert(larger === undefined)}
+              className={STEPPER_BUTTON_CLASS}
+              onClick={() => larger && onValueChange(larger)}
+              data-testid="markdown-text-size-increase"
+            >
+              <Plus aria-hidden="true" />
+            </Button>
+          </div>
           <Button
             variant="ghost"
-            size="icon-xs"
-            aria-label="Decrease text size"
-            {...inertProps(smaller === undefined)}
-            onClick={() => smaller && onValueChange(smaller)}
-            data-testid="markdown-text-size-decrease"
+            size="xs"
+            className={cn("w-full justify-center", ARIA_DISABLED_INERT_CLASSES)}
+            // Same reason as the steppers: Reset disables itself by succeeding,
+            // so a native `disabled` would blur the button under the pointer.
+            aria-disabled={inert(value === DEFAULT_MARKDOWN_FONT_SIZE)}
+            onClick={() =>
+              value !== DEFAULT_MARKDOWN_FONT_SIZE && onValueChange(DEFAULT_MARKDOWN_FONT_SIZE)
+            }
+            data-testid="markdown-text-size-reset"
           >
-            <Minus aria-hidden="true" />
-          </Button>
-          {/* A live region rather than a static readout: the popover stays open
-              across a run of adjustments, so the value has to announce itself
-              each time or the stepping is silent. */}
-          <output
-            aria-live="polite"
-            aria-atomic="true"
-            className="w-14 text-center text-xs tabular-nums text-text-primary"
-            data-testid="markdown-text-size-value"
-          >
-            {label} px
-          </output>
-          <Button
-            variant="ghost"
-            size="icon-xs"
-            aria-label="Increase text size"
-            {...inertProps(larger === undefined)}
-            onClick={() => larger && onValueChange(larger)}
-            data-testid="markdown-text-size-increase"
-          >
-            <Plus aria-hidden="true" />
+            <RotateCcw aria-hidden="true" />
+            {/* The destination is the label, so nobody has to press it to find out. */}
+            Reset to default · {DEFAULT_LABEL} px
           </Button>
         </div>
-        <Button
-          variant="ghost"
-          size="xs"
-          className={cn(
-            "mt-1 w-full justify-center",
-            value === DEFAULT_MARKDOWN_FONT_SIZE && "opacity-50"
-          )}
-          // Same reason as the steppers: Reset disables itself by succeeding,
-          // so a native `disabled` would blur the button under the pointer.
-          aria-disabled={value === DEFAULT_MARKDOWN_FONT_SIZE || undefined}
-          onClick={() =>
-            value !== DEFAULT_MARKDOWN_FONT_SIZE && onValueChange(DEFAULT_MARKDOWN_FONT_SIZE)
-          }
-          data-testid="markdown-text-size-reset"
-        >
-          Reset
-        </Button>
       </PopoverContent>
     </Popover>
   );
