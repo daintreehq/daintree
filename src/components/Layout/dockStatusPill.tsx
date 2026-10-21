@@ -154,6 +154,7 @@ function applyStop(list: HTMLElement, active: HTMLElement | undefined) {
  */
 function DockPopoverListNavigation({ listRef }: { listRef: React.RefObject<HTMLElement | null> }) {
   const activeControlRef = useRef<HTMLElement | undefined>(undefined);
+  const activeRowIndexRef = useRef(0);
   useEffect(() => {
     const list = listRef.current;
     if (!list) return;
@@ -172,10 +173,34 @@ function DockPopoverListNavigation({ listRef }: { listRef: React.RefObject<HTMLE
       if (!(event.target instanceof HTMLElement)) return;
       if (!event.target.closest(ROW_SELECTOR) || !list.contains(event.target)) return;
       activeControlRef.current = event.target;
+      activeRowIndexRef.current = rowsOf(list).indexOf(event.target.closest(ROW_SELECTOR)!);
       applyStop(list, event.target);
     };
+    // A row that leaves under focus (marked read, killed, drained) would drop
+    // focus on the body; it moves to the row that took its place instead, or
+    // the one above when the last row went.
+    const observer = new MutationObserver(() => {
+      const lost = activeControlRef.current;
+      if (!lost) return;
+      if (lost.isConnected) {
+        // Rows above it may have gone; keep the index it would recover to true.
+        const index = rowsOf(list).indexOf(lost.closest<HTMLElement>(ROW_SELECTOR)!);
+        if (index !== -1) activeRowIndexRef.current = index;
+        return;
+      }
+      const active = document.activeElement;
+      if (active && active !== document.body) return;
+      const rows = rowsOf(list);
+      const row = rows[Math.min(activeRowIndexRef.current, rows.length - 1)];
+      const target = row && targetOf(row);
+      if (target) target.focus();
+    });
     list.addEventListener("focusin", handleFocusIn);
-    return () => list.removeEventListener("focusin", handleFocusIn);
+    observer.observe(list, { childList: true, subtree: true });
+    return () => {
+      list.removeEventListener("focusin", handleFocusIn);
+      observer.disconnect();
+    };
   }, [listRef]);
   return null;
 }

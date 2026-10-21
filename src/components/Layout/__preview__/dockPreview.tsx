@@ -175,6 +175,15 @@ function trashedPane(id: string, title: string, worktreeId: string): PanelInstan
   return pane(id, title, { worktreeId, location: "trash" });
 }
 
+const SWEEP_TASKS = [
+  "Fix the flaky shutdown suite",
+  "Bump xterm to the next beta",
+  "Trim the renderer bundle",
+  "Port the toast tests to vitest 4",
+  "Audit the forge cache invalidation",
+  "Document the MCP tier allowlist",
+];
+
 const FIXTURES: Record<string, Fixture> = {
   rest: {
     what: "the reported state — three local chips, seven waiting project-wide, one in trash",
@@ -352,6 +361,83 @@ const FIXTURES: Record<string, Fixture> = {
         })
       ),
     ],
+  },
+  "unread-three-here": {
+    what: "three identical agents handed back in this worktree, no task titles",
+    panels: [
+      fromAgent(agent("h-1", "claude", { ...handedBack(1), location: "grid" })),
+      fromAgent(agent("h-2", "claude", { ...handedBack(3), location: "grid" })),
+      fromAgent(agent("h-3", "codex", { ...handedBack(7), location: "grid" })),
+    ],
+  },
+  "unread-long": {
+    what: "long user titles, long task titles and a long worktree name",
+    panels: [
+      fromAgent(
+        agent("h-1", "claude", {
+          ...handedBack(2),
+          location: "grid",
+          title: "Refactor the worktree dashboard's stale-branch sort order",
+          titleMode: "user",
+          lastObservedTitle: "Move stale-branch detection into the workspace host",
+        })
+      ),
+      fromAgent(
+        agent("e-1", "codex", {
+          ...handedBack(9),
+          worktreeId: "wt-12383",
+          location: "grid",
+          lastObservedTitle: "Stop menu rows showing keyboard focus on pointer hover",
+        })
+      ),
+      fromAgent(
+        agent("e-2", "gemini", {
+          ...handedBack(95),
+          worktreeId: "wt-thumbs",
+          location: "grid",
+          lastObservedTitle: "Generate thumbnails for the project switcher",
+        })
+      ),
+    ],
+  },
+  "unread-group": {
+    what: "a tab group with two hand-backs beside single rows",
+    panels: [
+      fromAgent(
+        agent("g-1", "claude", {
+          ...handedBack(3),
+          location: "dock",
+          lastObservedTitle: "Write the migration",
+        })
+      ),
+      fromAgent(agent("g-2", "codex", { ...handedBack(1), location: "dock" })),
+      fromAgent(agent("h-1", "gemini", { ...handedBack(5), location: "grid" })),
+      fromAgent(
+        agent("e-1", "claude", { ...handedBack(2), worktreeId: "wt-main", location: "grid" })
+      ),
+    ],
+    tabGroups: [
+      {
+        id: "g-unread",
+        panelIds: ["g-1", "g-2"],
+        activeTabId: "g-1",
+        location: "dock",
+        worktreeId: ACTIVE,
+      } as TabGroup,
+    ],
+  },
+  "unread-many": {
+    what: "eleven hand-backs across four worktrees — the list scrolls",
+    panels: Array.from({ length: 11 }, (_, i) =>
+      fromAgent(
+        agent(`m-${i}`, (["claude", "codex", "gemini"] as const)[i % 3]!, {
+          ...handedBack(i * 4 + 1),
+          worktreeId: WORKTREES[i % 4]!.id,
+          location: "grid",
+          ...(i % 2 === 0 ? { lastObservedTitle: SWEEP_TASKS[i / 2] } : {}),
+        })
+      )
+    ),
   },
   // The chip cues and the rail's scroll affordances — `dock-cues-review` flips
   // `activityStatus`/`agentState` through `window.__dockPreview` to catch them

@@ -19,10 +19,11 @@ const UNREAD_CONFIG: AgentStatusConfig = {
   label: "Unread",
   Icon: SESSION_ICONS.unread,
   iconClassName: SESSION_COLORS.unread,
-  tooltip: "Unread hand-backs",
-  popoverLabel: "Unread panels",
-  heading: "Unread hand-backs",
+  tooltip: "Unread agents",
+  popoverLabel: "Unread agents",
+  heading: "Unread agents",
   showReasons: false,
+  rowAction: "mark-read",
   compare: compareUnread,
 };
 
