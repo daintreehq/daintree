@@ -202,7 +202,6 @@ export function NonMainSecondaryRow({
           label={branchLabel}
           isActive={isActive}
           isMuted={isMuted}
-          isMainWorktree={false}
         />
       )}
       {upstreamFirst ? upstreamBadge : prBadge}

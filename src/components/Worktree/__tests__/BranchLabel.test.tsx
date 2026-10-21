@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { Bot, Bug, GitBranch, Sparkle } from "lucide-react";
+import { Bug, GitBranch, Plug, Sparkle } from "lucide-react";
 import { CodexIcon } from "@/components/icons/brands";
 import { BRANCH_TYPES } from "@shared/config/branchPrefixes";
 import { splitBranchType } from "../BranchLabel";
@@ -26,7 +26,7 @@ describe("splitBranchType", () => {
       Icon: CodexIcon,
       rest: "login",
     });
-    expect(splitBranchType("devin/login")).toMatchObject({ displayName: "Devin", Icon: Bot });
+    expect(splitBranchType("devin/login")).toMatchObject({ displayName: "Devin", Icon: Plug });
   });
 
   it("draws a type glyph beside a hyphenated name without cutting it", () => {

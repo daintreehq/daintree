@@ -305,7 +305,6 @@ export function WorktreeHeader({
               label={branchLabel}
               isActive={isActive}
               isMuted={isMuted}
-              isMainWorktree={isMainOnStandardBranch ?? isMainWorktree}
             />
           )}
           {gitStateIndicator && (

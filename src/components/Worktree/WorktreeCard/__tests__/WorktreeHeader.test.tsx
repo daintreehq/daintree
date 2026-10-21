@@ -381,7 +381,7 @@ describe("WorktreeHeader primary worktree standard branch layout", () => {
       branchLabel: "feature/test",
     });
     expect(screen.queryByTestId("primary-worktree-project-name")).toBeNull();
-    expect(screen.getByText(/test/)).toBeDefined();
+    expect(screen.getByText("feature/test")).toBeDefined();
   });
 
   it("uses issue title as headline even when isMainOnStandardBranch if issue exists", () => {

@@ -3,7 +3,6 @@ import {
   useDeferredValue,
   useEffect,
   useId,
-  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -17,6 +16,7 @@ import { Button } from "@/components/ui/button";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { splitBranchType, type BranchGlyph } from "@/components/Worktree/BranchLabel";
+import { useFittedBranchName } from "@/components/Worktree/useFittedBranchName";
 import { useIsDockPopoverChild } from "@/components/ui/DockPopoverChildContext";
 import { useSidebarWorktreeOrder } from "@/hooks/useSidebarWorktreeOrder";
 import { useTruncationDetection } from "@/hooks/useTruncationDetection";
@@ -468,94 +468,9 @@ function MoveToWorktreePickerBody({
   );
 }
 
-/** Shortest end of a branch that is kept whole, and the longest it may grow to reach a word. */
-const BRANCH_TAIL_MIN = 12;
-const BRANCH_TAIL_MAX = 20;
-
-/**
- * A branch name as the part that may give way and the end that never does.
- *
- * Branches cut from neighbouring issues share everything up to their last
- * words — `…-restart-on-idle-link-release`, `…-restart-on-endpoint-close-revoke`
- * — so an end-cut makes them identical. The kept end starts on a word, and is
- * the longest that fits the budget, so it reads as words rather than letters.
- */
-function splitBranchTail(name: string): { head: string; tail: string } {
-  const chars = Array.from(name);
-  if (chars.length <= BRANCH_TAIL_MAX + 4) return { head: name, tail: "" };
-  let keep = BRANCH_TAIL_MIN;
-  for (let i = chars.length - BRANCH_TAIL_MAX; i <= chars.length - BRANCH_TAIL_MIN; i++) {
-    if (/[-_/.]/.test(chars[i - 1]!) && !/[-_/.]/.test(chars[i]!)) {
-      keep = chars.length - i;
-      break;
-    }
-  }
-  return {
-    head: chars.slice(0, chars.length - keep).join(""),
-    tail: chars.slice(chars.length - keep).join(""),
-  };
-}
-
-let measureContext: CanvasRenderingContext2D | null = null;
-
-function measureText(text: string, font: string): number {
-  measureContext ??= document.createElement("canvas").getContext("2d");
-  if (!measureContext) return text.length * 7;
-  measureContext.font = font;
-  return measureContext.measureText(text).width;
-}
-
-/**
- * A branch the way the sidebar draws one, its type as a glyph and the rest in
- * mono, with its head fitted to the room its kept end leaves.
- *
- * Fitted in JS rather than left to `text-overflow`: a mono ellipsis lands on a
- * glyph boundary, so the head's box keeps up to a character of slack after it,
- * and `issue-13336-… exchange-history` reads as a branch with a space in it.
- * The fit is also what says whether the row needs its reveal.
- */
 function useFittedBranch(branch: string | null) {
   const { Icon, rest } = splitBranchType(branch ?? "");
-  const { head, tail } = splitBranchTail(rest);
-  const boxRef = useRef<HTMLSpanElement>(null);
-  const tailRef = useRef<HTMLSpanElement>(null);
-  const [shown, setShown] = useState(head);
-
-  useLayoutEffect(() => {
-    const box = boxRef.current;
-    if (!box) return;
-    let live = true;
-    const fit = () => {
-      if (!live) return;
-      const style = getComputedStyle(box);
-      const font = `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
-      const room = box.clientWidth - (tailRef.current?.offsetWidth ?? 0);
-      // Unmeasured (hidden, zero-width): the whole head, with CSS as the backstop.
-      if (room <= 0 || measureText(head, font) <= room) {
-        setShown(head);
-        return;
-      }
-      let lo = 0;
-      let hi = head.length - 1;
-      while (lo < hi) {
-        const mid = Math.ceil((lo + hi) / 2);
-        if (measureText(`${head.slice(0, mid)}…`, font) <= room) lo = mid;
-        else hi = mid - 1;
-      }
-      setShown(`${head.slice(0, lo)}…`);
-    };
-    fit();
-    // The first pass can measure the fallback face; the mono face is narrower.
-    void document.fonts?.ready.then(fit);
-    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(fit);
-    observer?.observe(box);
-    return () => {
-      live = false;
-      observer?.disconnect();
-    };
-  }, [head]);
-
-  return { Icon, head: shown, tail, isCut: shown !== head, boxRef, tailRef };
+  return { Icon, ...useFittedBranchName(rest) };
 }
 
 /**
@@ -596,7 +511,6 @@ function BranchName({
           <span className="flex size-3.5 shrink-0 items-center justify-center">
             <Icon
               className={cn("text-text-secondary", isHeadline ? "size-3.5" : "size-3")}
-              strokeWidth={2.5}
             />
           </span>
         )}

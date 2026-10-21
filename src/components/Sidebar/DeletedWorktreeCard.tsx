@@ -186,13 +186,12 @@ export function DeletedWorktreeCard({
           the whole row made its surviving sessions read as disabled. */}
       <div className="relative z-10 pl-4 pr-4 py-3">
         {/* Mirrors WorktreeHeader's title row: same row height, and the same
-            icon size/stroke/gap/typography as BranchLabel, with FolderX in
+            icon size/gap/typography as BranchLabel, with FolderX in
             the branch-type icon's slot. */}
         <div className="flex items-center gap-2 min-h-[22px]">
           <span className="flex items-center gap-1.5 min-w-0 flex-1">
             <FolderX
               className="w-3.5 h-3.5 text-text-secondary shrink-0"
-              strokeWidth={2.5}
               aria-hidden="true"
             />
             <TruncatedTooltip content={worktree.title}>

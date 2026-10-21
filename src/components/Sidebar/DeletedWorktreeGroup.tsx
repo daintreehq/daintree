@@ -199,7 +199,6 @@ export function DeletedWorktreeGroup({ worktrees, homeDir }: DeletedWorktreeGrou
           <span className="flex min-w-0 flex-1 items-center gap-1.5">
             <FolderX
               className="w-3.5 h-3.5 shrink-0 text-text-secondary"
-              strokeWidth={2.5}
               aria-hidden="true"
             />
             {/* At a narrow sidebar the count gives way before the noun does:
