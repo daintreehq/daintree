@@ -68,6 +68,11 @@ vi.mock("@/hooks/useResolvedForgeProvider", () => ({
     entry: providerState.entry,
     providerId: providerState.entry ? "daintree.github.github" : null,
     resolvedVia: providerState.entry ? "hostname" : null,
+    issues: {
+      entry: providerState.entry,
+      providerId: providerState.entry ? "daintree.github.github" : null,
+      resolvedVia: providerState.entry ? "code" : null,
+    },
     loading: false,
     refresh: () => {},
   }),

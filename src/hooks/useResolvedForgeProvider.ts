@@ -1,22 +1,45 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ForgeProviderEntry, ForgeProviderResolutionVia } from "@shared/types/forge";
+import type {
+  ForgeIssueProviderResolutionVia,
+  ForgeProviderEntry,
+  ForgeProviderResolutionVia,
+} from "@shared/types/forge";
 import { makeForgeProviderId } from "@shared/utils/forgeProviderIds";
+import { issuesSelection } from "@shared/utils/forgeProviderRoles";
 import { logError } from "@/utils/logger";
+import { discardCachedResources } from "@/lib/forgeResourceCache";
+
+export interface ResolvedForgeIssuesState {
+  /** Provider serving the project's issues, or `null` when none does. */
+  entry: ForgeProviderEntry | null;
+  /** Canonical `{pluginId}.{contributionId}` id, or `null` when unresolved. */
+  providerId: string | null;
+  resolvedVia: ForgeIssueProviderResolutionVia | null;
+}
 
 export interface ResolvedForgeProviderState {
-  /** Resolved provider entry, or `null` when no registered provider matches. */
+  /**
+   * The code forge — PRs, CI, repository stats — or `null` when no registered
+   * provider matches. Read {@link issues} for anything about issues: a project
+   * can bind its issues to a different provider (#13700).
+   */
   entry: ForgeProviderEntry | null;
   /** Canonical `{pluginId}.{contributionId}` id, or `null` when unresolved. */
   providerId: string | null;
   resolvedVia: ForgeProviderResolutionVia | null;
+  /** The issues role. Same as the code forge unless the project binds another. */
+  issues: ResolvedForgeIssuesState;
   /** False once the first resolution (cached or fresh) has landed. */
   loading: boolean;
 }
+
+const NO_ISSUES: ResolvedForgeIssuesState = { entry: null, providerId: null, resolvedVia: null };
 
 const UNRESOLVED: ResolvedForgeProviderState = {
   entry: null,
   providerId: null,
   resolvedVia: null,
+  issues: NO_ISSUES,
   loading: false,
 };
 
@@ -26,6 +49,11 @@ const UNRESOLVED: ResolvedForgeProviderState = {
 // entries for projects with no mounted hook, which would otherwise serve a
 // stale provider after an enable/disable while that project was unmounted.
 const resolutionCache = new Map<string, ResolvedForgeProviderState>();
+
+// Last issues provider each project resolved to. Unlike `resolutionCache` it
+// survives invalidation — an invalidation is exactly when the binding may have
+// changed, and the change is what tells cached issue rows to go.
+const lastIssuesProvider = new Map<string, string | null>();
 
 // Monotonic per-project resolve sequence: a slow older round-trip must not
 // overwrite the CACHE entry written by a newer (e.g. provenance-triggered)
@@ -86,8 +114,9 @@ function discardInFlightResolution(id: string): void {
 }
 
 /**
- * Resolve the active forge provider for a project through the host's
- * precedence chain (per-project override → global default → hostname match).
+ * Resolve the active forge providers for a project — the code forge through
+ * the host's precedence chain (per-project override → global default →
+ * hostname match), and the issues provider beside it, in one round-trip.
  * Re-resolves on plugin provenance changes (enable/disable/install), so the
  * answer drops to `null` live when the owning plugin is disabled. Provider-
  * agnostic by construction — consumers must key all behavior off the returned
@@ -112,13 +141,33 @@ export function useResolvedForgeProvider(
     try {
       const resolved = await resolveProviderOnce(id);
       const entry = resolved?.entry ?? null;
+      const issues = resolved ? issuesSelection(resolved) : null;
       const next: ResolvedForgeProviderState = {
         entry,
         providerId: entry ? makeForgeProviderId(entry.pluginId, entry.contribution.id) : null,
         resolvedVia: resolved?.resolvedVia ?? null,
+        issues: issues?.entry
+          ? {
+              entry: issues.entry,
+              providerId: makeForgeProviderId(issues.entry.pluginId, issues.entry.contribution.id),
+              resolvedVia: issues.resolvedVia,
+            }
+          : NO_ISSUES,
         loading: false,
       };
-      if (resolveSeq.get(id) === seq) resolutionCache.set(id, next);
+      if (resolveSeq.get(id) === seq) {
+        // Cached issue rows belong to whichever provider served them; once the
+        // project's issues come from somewhere else they're another tracker's.
+        const previousIssuesProvider = lastIssuesProvider.get(id);
+        if (
+          previousIssuesProvider !== undefined &&
+          previousIssuesProvider !== next.issues.providerId
+        ) {
+          discardCachedResources("issue");
+        }
+        lastIssuesProvider.set(id, next.issues.providerId);
+        resolutionCache.set(id, next);
+      }
       if (instanceSeqRef.current !== seq) return null;
       return next;
     } catch (err) {

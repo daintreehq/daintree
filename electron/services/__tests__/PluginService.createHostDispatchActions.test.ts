@@ -87,6 +87,8 @@ vi.mock("../forgeProviderRegistry.js", () => ({
   registerForgeProviders: vi.fn(),
   unregisterForgeProviders: vi.fn(),
   registerForgeProviderImpl: vi.fn(),
+  // Role checking has its own suite; these tests are about binding.
+  validateForgeImplRoles: vi.fn(() => null),
   unregisterForgeProviderImpl: vi.fn(),
   unregisterForgeProviderImpls: vi.fn(),
   getForgeProviderImpl: vi.fn(),

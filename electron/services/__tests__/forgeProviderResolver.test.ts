@@ -26,6 +26,21 @@ function makeProvider(
   return { pluginId, contribution };
 }
 
+/**
+ * The resolver's result with no issues override: the code entry serves issues
+ * too, so the issues half mirrors it.
+ */
+function resolvedTo(
+  entry: RegisteredForgeProvider | null,
+  resolvedVia: "override" | "default" | "hostname" | null
+) {
+  return {
+    entry,
+    resolvedVia,
+    issues: entry ? { entry, resolvedVia: "code" } : { entry: null, resolvedVia: null },
+  };
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   registryMock.getRegisteredForgeProviders.mockReturnValue([]);
@@ -43,7 +58,7 @@ describe("resolveForgeProvider", () => {
       forgeProviderOverride: "gitea",
       globalDefaultProviderId: null,
     });
-    expect(result).toEqual({ entry: gitea, resolvedVia: "override" });
+    expect(result).toEqual(resolvedTo(gitea, "override"));
     // Override path bypasses hostname matching entirely.
     expect(registryMock.listMatchingProviders).not.toHaveBeenCalled();
   });
@@ -58,7 +73,7 @@ describe("resolveForgeProvider", () => {
         forgeProviderOverride: "acme.gitea.gitea",
         globalDefaultProviderId: null,
       })
-    ).toEqual({ entry: gitea, resolvedVia: "override" });
+    ).toEqual(resolvedTo(gitea, "override"));
   });
 
   it("returns no-match when forgeProviderOverride names an unregistered provider (no fallthrough)", () => {
@@ -74,7 +89,7 @@ describe("resolveForgeProvider", () => {
         // are not consulted when an override names an unregistered provider.
         globalDefaultProviderId: "github",
       })
-    ).toEqual({ entry: null, resolvedVia: null });
+    ).toEqual(resolvedTo(null, null));
     expect(registryMock.listMatchingProviders).not.toHaveBeenCalled();
   });
 
@@ -88,7 +103,7 @@ describe("resolveForgeProvider", () => {
         forgeProviderOverride: undefined,
         globalDefaultProviderId: undefined,
       })
-    ).toEqual({ entry: github, resolvedVia: "hostname" });
+    ).toEqual(resolvedTo(github, "hostname"));
   });
 
   it("returns the global default when it matches one of the remote candidates", () => {
@@ -102,7 +117,7 @@ describe("resolveForgeProvider", () => {
         forgeProviderOverride: null,
         globalDefaultProviderId: "gh-enterprise",
       })
-    ).toEqual({ entry: enterprise, resolvedVia: "default" });
+    ).toEqual(resolvedTo(enterprise, "default"));
   });
 
   it("returns no-match when the global default is not a hostname match for the remote", () => {
@@ -119,7 +134,7 @@ describe("resolveForgeProvider", () => {
         forgeProviderOverride: null,
         globalDefaultProviderId: "gitea",
       })
-    ).toEqual({ entry: null, resolvedVia: null });
+    ).toEqual(resolvedTo(null, null));
   });
 
   it("accepts namespaced ids for the global default", () => {
@@ -132,7 +147,7 @@ describe("resolveForgeProvider", () => {
         forgeProviderOverride: null,
         globalDefaultProviderId: "builtin.github",
       })
-    ).toEqual({ entry: github, resolvedVia: "default" });
+    ).toEqual(resolvedTo(github, "default"));
   });
 
   it("returns the first hostname match when no override or default is set", () => {
@@ -146,7 +161,7 @@ describe("resolveForgeProvider", () => {
         forgeProviderOverride: null,
         globalDefaultProviderId: null,
       })
-    ).toEqual({ entry: github, resolvedVia: "hostname" });
+    ).toEqual(resolvedTo(github, "hostname"));
   });
 
   it("returns no-match when there are no hostname matches", () => {
@@ -157,7 +172,7 @@ describe("resolveForgeProvider", () => {
         forgeProviderOverride: null,
         globalDefaultProviderId: null,
       })
-    ).toEqual({ entry: null, resolvedVia: null });
+    ).toEqual(resolvedTo(null, null));
   });
 
   it("returns no-match when remoteUrl is null and no override is set", () => {
@@ -170,7 +185,7 @@ describe("resolveForgeProvider", () => {
         forgeProviderOverride: null,
         globalDefaultProviderId: null,
       })
-    ).toEqual({ entry: null, resolvedVia: null });
+    ).toEqual(resolvedTo(null, null));
     expect(registryMock.listMatchingProviders).not.toHaveBeenCalled();
   });
 
@@ -184,7 +199,7 @@ describe("resolveForgeProvider", () => {
         forgeProviderOverride: "gitea",
         globalDefaultProviderId: null,
       })
-    ).toEqual({ entry: gitea, resolvedVia: "override" });
+    ).toEqual(resolvedTo(gitea, "override"));
   });
 
   it("returns no-match when remoteUrl is empty and no override is set", () => {
@@ -197,7 +212,7 @@ describe("resolveForgeProvider", () => {
         forgeProviderOverride: null,
         globalDefaultProviderId: null,
       })
-    ).toEqual({ entry: null, resolvedVia: null });
+    ).toEqual(resolvedTo(null, null));
   });
 
   it("does no caching — registry is re-read on each call", () => {
@@ -216,5 +231,100 @@ describe("resolveForgeProvider", () => {
     });
 
     expect(registryMock.listMatchingProviders).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("resolveForgeProvider — roles (#13700)", () => {
+  function makeIssuesOnly(pluginId: string, id: string): RegisteredForgeProvider {
+    return { pluginId, contribution: { id, name: id, matches: [], roles: ["issues"] } };
+  }
+
+  it("serves issues from the issues override while the code forge keeps code", () => {
+    const github = makeProvider("daintree.github", "github", ["github.com"]);
+    const tracker = makeIssuesOnly("acme.tracker", "tracker");
+    registryMock.getRegisteredForgeProviders.mockReturnValue([github, tracker]);
+    registryMock.listMatchingProviders.mockReturnValue([github]);
+
+    expect(
+      resolveForgeProvider({
+        remoteUrl: "https://github.com/owner/repo.git",
+        forgeProviderOverride: null,
+        globalDefaultProviderId: null,
+        issueProviderOverride: "acme.tracker.tracker",
+      })
+    ).toEqual({
+      entry: github,
+      resolvedVia: "hostname",
+      issues: { entry: tracker, resolvedVia: "override" },
+    });
+  });
+
+  it("resolves the issues override with no remote and no code provider", () => {
+    const tracker = makeIssuesOnly("acme.tracker", "tracker");
+    registryMock.getRegisteredForgeProviders.mockReturnValue([tracker]);
+
+    expect(
+      resolveForgeProvider({
+        remoteUrl: null,
+        forgeProviderOverride: null,
+        globalDefaultProviderId: null,
+        issueProviderOverride: "acme.tracker.tracker",
+      })
+    ).toEqual({
+      entry: null,
+      resolvedVia: null,
+      issues: { entry: tracker, resolvedVia: "override" },
+    });
+  });
+
+  it("never falls back to the code forge's issues when the issues override names nothing", () => {
+    const github = makeProvider("daintree.github", "github", ["github.com"]);
+    registryMock.getRegisteredForgeProviders.mockReturnValue([github]);
+    registryMock.listMatchingProviders.mockReturnValue([github]);
+
+    const result = resolveForgeProvider({
+      remoteUrl: "https://github.com/owner/repo.git",
+      forgeProviderOverride: null,
+      globalDefaultProviderId: null,
+      issueProviderOverride: "acme.tracker.tracker",
+    });
+    expect(result.entry).toBe(github);
+    expect(result.issues).toEqual({ entry: null, resolvedVia: null });
+  });
+
+  it("never picks an issues-only provider for code — by override, default or hostname", () => {
+    const tracker: RegisteredForgeProvider = {
+      pluginId: "acme.tracker",
+      contribution: { id: "tracker", name: "tracker", matches: [], roles: ["issues"] },
+    };
+    registryMock.getRegisteredForgeProviders.mockReturnValue([tracker]);
+    // Even if a registry bug surfaced it as a hostname candidate.
+    registryMock.listMatchingProviders.mockReturnValue([tracker]);
+
+    for (const inputs of [
+      { forgeProviderOverride: "acme.tracker.tracker", globalDefaultProviderId: null },
+      { forgeProviderOverride: null, globalDefaultProviderId: "acme.tracker.tracker" },
+      { forgeProviderOverride: null, globalDefaultProviderId: null },
+    ]) {
+      const result = resolveForgeProvider({ remoteUrl: "https://github.com/o/r.git", ...inputs });
+      expect(result.entry).toBeNull();
+      expect(result.issues).toEqual({ entry: null, resolvedVia: null });
+    }
+  });
+
+  it("accepts a full provider as the issues override", () => {
+    const github = makeProvider("daintree.github", "github", ["github.com"]);
+    const gitlab = makeProvider("daintree.gitlab", "gitlab", ["gitlab.com"]);
+    registryMock.getRegisteredForgeProviders.mockReturnValue([github, gitlab]);
+    registryMock.listMatchingProviders.mockReturnValue([github]);
+
+    expect(
+      resolveForgeProvider({
+        remoteUrl: "https://github.com/owner/repo.git",
+        forgeProviderOverride: null,
+        globalDefaultProviderId: null,
+        issueProviderOverride: "daintree.gitlab.gitlab",
+      }).issues
+    ).toEqual({ entry: gitlab, resolvedVia: "override" });
   });
 });

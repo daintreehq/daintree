@@ -1,6 +1,7 @@
 import { detectPrefixFromIssue, buildBranchName } from "@/components/Worktree/branchPrefixUtils";
 import { generateBranchSlug } from "@/utils/textParsing";
 import type { Issue, PR } from "@shared/types/forge";
+import { issueBranchName } from "@shared/utils/issueBranchName";
 import { MAX_TERMINALS_PER_RECIPE_ADMISSION_BATCH } from "@shared/utils/recipeSanitizer";
 import type { PlannedWorktree } from "./bulkCreatePrequery";
 
@@ -132,7 +133,10 @@ export function planIssueWorktrees(
     const prefix = detectPrefixFromIssue(issue) ?? "feature";
     const slug = generateBranchSlug(issue.title);
     const issuePrefix = `issue-${issue.number}-`;
-    const branchName = buildBranchName(prefix, `${issuePrefix}${slug || "worktree"}`);
+    const branchName = issueBranchName(
+      issue,
+      buildBranchName(prefix, `${issuePrefix}${slug || "worktree"}`)
+    );
 
     return { item: issue, mode: "issue", branchName, prefix, skipped: false };
   });

@@ -34,9 +34,12 @@ const credentialStatusCache = new TtlCache<string, boolean>(16, CREDENTIAL_STATU
  * project; `missingCredential` drives the badges' "connect your forge" state
  * (the WCAG-relevant affordance the old `missingToken` flag provided).
  */
-function useForgeTooltipGate() {
+function useForgeTooltipGate(role: "issues" | "code") {
   const projectId = useProjectStore((s) => s.currentProject?.id ?? null);
-  const { entry, providerId } = useResolvedForgeProvider(projectId);
+  const resolved = useResolvedForgeProvider(projectId);
+  // Issue badges ask the issues provider, which a project may bind apart from
+  // the code forge (#13700) — and it has its own credential.
+  const { entry, providerId } = role === "issues" ? resolved.issues : resolved;
   const [hasCredential, setHasCredential] = useState<boolean | null>(() =>
     providerId ? (credentialStatusCache.get(providerId) ?? null) : null
   );
@@ -102,7 +105,7 @@ export function useIssueTooltip(cwd: string | undefined, issueNumber: number | u
   });
   const mountedRef = useRef(true);
   const { providerResolved, providerId, missingCredential, recheckCredential } =
-    useForgeTooltipGate();
+    useForgeTooltipGate("issues");
 
   useEffect(() => {
     mountedRef.current = true;
@@ -115,7 +118,7 @@ export function useIssueTooltip(cwd: string | undefined, issueNumber: number | u
     if (!cwd || !issueNumber || !providerResolved) return;
     if (missingCredential && !(await recheckCredential())) return;
 
-    const cacheKey = `${cwd}:${issueNumber}`;
+    const cacheKey = `${providerId ?? ""}:${cwd}:${issueNumber}`;
     const cached = issueCache.get(cacheKey);
     if (cached) {
       setState({ data: cached, loading: false, error: false });
@@ -179,7 +182,7 @@ export function useIssueTooltip(cwd: string | undefined, issueNumber: number | u
       if (!mountedRef.current || generation !== cacheGeneration) return;
       setState({ data: null, loading: false, error: true });
     }
-  }, [cwd, issueNumber, providerResolved, missingCredential, recheckCredential]);
+  }, [cwd, issueNumber, providerId, providerResolved, missingCredential, recheckCredential]);
 
   const reset = useCallback(() => {
     setState({ data: null, loading: false, error: false });
@@ -198,7 +201,7 @@ export function usePRTooltip(cwd: string | undefined, prNumber: number | undefin
   });
   const mountedRef = useRef(true);
   const { providerResolved, providerId, missingCredential, recheckCredential } =
-    useForgeTooltipGate();
+    useForgeTooltipGate("code");
 
   useEffect(() => {
     mountedRef.current = true;

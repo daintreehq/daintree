@@ -849,7 +849,11 @@ export const ForgeProviderContributionSchema = z
   .object({
     id: z.string().min(1).max(64).regex(SAFE_ID_PATTERN),
     name: z.string().min(1),
-    matches: z.array(z.string().min(1)).min(1),
+    matches: z.array(z.string().min(1)),
+    roles: z
+      .array(z.enum(["issues", "code"]))
+      .min(1)
+      .optional(),
     kind: z.enum(["local", "network"]).optional(),
     capabilities: z.array(z.string().min(1)).optional(),
     credentialFields: z.array(CredentialFieldSchema).optional(),
@@ -866,7 +870,45 @@ export const ForgeProviderContributionSchema = z
       .strict()
       .optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((contribution, ctx) => {
+    const roles = contribution.roles;
+    if (roles && new Set(roles).size !== roles.length) {
+      ctx.addIssue({ code: "custom", path: ["roles"], message: "roles must not repeat a role" });
+    }
+    // Code-only isn't routable yet: every code surface reads a full provider,
+    // and the workspace host fetches branch-linked issue titles from the code
+    // provider. Issues-only (#13700) and both are the supported shapes.
+    if (roles && !roles.includes("issues")) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["roles"],
+        message: 'roles must include "issues" — a code-only provider is not supported',
+      });
+    }
+    // Hostname matching routes the code role, so a provider serving code
+    // must be reachable through it; an issues-only provider has no remote.
+    const servesCode = !roles || roles.includes("code");
+    // ...and an issues-only provider must not be: hostnames route the code
+    // role, so a listed one would put it in the code forge's place.
+    if (!servesCode && contribution.matches.length > 0) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["matches"],
+        message: "matches must be empty for an issues-only provider",
+      });
+    }
+    if (servesCode && contribution.matches.length === 0) {
+      ctx.addIssue({
+        code: "too_small",
+        origin: "array",
+        minimum: 1,
+        inclusive: true,
+        path: ["matches"],
+        message: "matches must list at least one hostname for a provider that serves code",
+      });
+    }
+  });
 
 /**
  * `fileDecorationProviders` manifest entry. Declares which scopes a plugin's

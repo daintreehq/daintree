@@ -34,6 +34,7 @@ import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { isHostWindows } from "@/hooks/useHostPlatform";
 import { useResolvedForgeProvider } from "@/hooks/useResolvedForgeProvider";
+import { linkProviderIssue } from "@/utils/linkProviderIssue";
 import { useNewWorktreeProjectSettings } from "./hooks/useNewWorktreeProjectSettings";
 import { useBranchInput } from "./hooks/useBranchInput";
 import { useBranchValidation } from "./hooks/useBranchValidation";
@@ -212,7 +213,10 @@ export function NewWorktreeDialog({
   // A remembered or restored agent that is no longer launchable reads as "No
   // agent" rather than launching something the picker can't show.
   const firstAgent = agentOptions.find((a) => a.id === firstAgentId);
-  const { entry: forgeEntry } = useResolvedForgeProvider(currentProject?.id ?? null);
+  // Everything this dialog does with a forge — the issue picker, assigning the
+  // linked issue — is the issues role, which may not be the code forge.
+  const { issues: issueForge } = useResolvedForgeProvider(currentProject?.id ?? null);
+  const forgeEntry = issueForge.entry;
   const forgeName = forgeEntry?.contribution.name ?? "the forge";
 
   // Forge-agnostic viewer identity, resolved per-cwd via the active forge
@@ -823,6 +827,7 @@ export function NewWorktreeDialog({
         const { worktreeId } = actionResult.result as { worktreeId: string; branch: string };
         useWorktreeSelectionStore.getState().setPendingWorktree(worktreeId);
         useWorktreeSelectionStore.getState().selectWorktree(worktreeId);
+        linkProviderIssue(worktreeId, snapIssue);
 
         // Skip when the selected issue already lists the current user as an
         // assignee: the assign call would be a no-op and the resulting Undo

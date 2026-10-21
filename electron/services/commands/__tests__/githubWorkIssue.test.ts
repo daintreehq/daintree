@@ -64,6 +64,11 @@ vi.mock("../../../utils/worktreePattern.js", () => ({
   resolveWorktreePattern: resolveWorktreePatternMock,
 }));
 
+const persistIssueAssociationMock = vi.hoisted(() => vi.fn());
+vi.mock("../../worktreeIssueAssociations.js", () => ({
+  persistIssueAssociation: persistIssueAssociationMock,
+}));
+
 import { githubWorkIssueCommand } from "../githubWorkIssue.js";
 
 /** Build a minimal forge Issue with sensible defaults for tests. */
@@ -125,13 +130,56 @@ describe("githubWorkIssueCommand", () => {
     );
   });
 
+  it("uses an issues provider's branch name and records an explicit link (#13700)", async () => {
+    getIssueMock.mockResolvedValue(
+      makeIssue({
+        number: 123,
+        title: "Fix login",
+        id: "uuid-123",
+        key: "ENG-123",
+        branchName: "greg/eng-123-fix-login",
+      })
+    );
+    resolveForCwdMock.mockResolvedValue({
+      namespaceId: "acme.tracker.tracker",
+      providerId: "tracker",
+      repoRef: { owner: "ENG", repo: "ENG" },
+      impl: { getIssue: getIssueMock },
+      viaIssueOverride: true,
+    });
+    getWorkspaceClientMock.mockReturnValue({
+      isReady: vi.fn().mockReturnValue(true),
+      createWorktree: vi.fn().mockResolvedValue({ worktreeId: "wt-123" }),
+      setActiveWorktree: vi.fn().mockResolvedValue(undefined),
+    });
+
+    const result = await githubWorkIssueCommand.execute({ cwd: "/repo" } as never, {
+      issueNumber: 123,
+    });
+
+    expect(result.success).toBe(true);
+    expect(findAvailableBranchNameMock).toHaveBeenCalledWith("greg/eng-123-fix-login");
+    expect(persistIssueAssociationMock).toHaveBeenCalledWith("wt-123", {
+      issueNumber: 123,
+      issueTitle: "Fix login",
+      issueProviderId: "acme.tracker.tracker",
+      issueId: "uuid-123",
+      issueKey: "ENG-123",
+    });
+  });
+
+  it("records no explicit link for a code-forge issue", async () => {
+    await githubWorkIssueCommand.execute({ cwd: "/repo" } as never, { issueNumber: 55 });
+    expect(persistIssueAssociationMock).not.toHaveBeenCalled();
+  });
+
   it("resolves the forge provider against the repository root", async () => {
     await githubWorkIssueCommand.execute({ cwd: "/repo/sub" } as never, {
       issueNumber: 55,
     });
 
     expect(resolveForCwdMock).toHaveBeenCalledTimes(1);
-    expect(resolveForCwdMock).toHaveBeenCalledWith("/repo");
+    expect(resolveForCwdMock).toHaveBeenCalledWith("/repo", "issues");
     expect(getIssueMock).toHaveBeenCalledWith({ owner: "daintree", repo: "app" }, 55);
   });
 

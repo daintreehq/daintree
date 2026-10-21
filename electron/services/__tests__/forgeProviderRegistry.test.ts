@@ -8,6 +8,8 @@ import {
   clearForgeProviderImplRegistry,
   clearForgeProviderRegistry,
   getActiveProvider,
+  getForgeIssueProviderImpl,
+  getForgeProviderBaseImpl,
   getForgeProviderImpl,
   getRegisteredForgeProviders,
   listMatchingProviders,
@@ -17,7 +19,9 @@ import {
   unregisterForgeProviderImpl,
   unregisterForgeProviderImpls,
   unregisterForgeProviders,
+  validateForgeImplRoles,
 } from "../forgeProviderRegistry.js";
+import { makeIssuesOnlyProvider } from "./fixtures/issuesOnlyForgeProvider.js";
 
 beforeEach(() => {
   clearForgeProviderRegistry();
@@ -354,5 +358,94 @@ describe("forgeProviderRegistry — implementation registry", () => {
 
     unregisterForgeProviderImpls("acme");
     expect(getForgeProviderImpl("acme.github")).toBeUndefined();
+  });
+});
+
+describe("forgeProviderRegistry — roles (#13700)", () => {
+  it("serves an issues-only impl to the issues and base lookups, never the code lookup", () => {
+    const tracker = makeIssuesOnlyProvider();
+    registerForgeProviders("acme.tracker", [
+      makeContribution("tracker", [], { roles: ["issues"] }),
+    ]);
+    registerForgeProviderImpl("acme.tracker", "tracker", tracker);
+
+    expect(getForgeIssueProviderImpl("acme.tracker.tracker")).toBe(tracker);
+    expect(getForgeProviderBaseImpl("acme.tracker.tracker")).toBe(tracker);
+    expect(getForgeProviderImpl("acme.tracker.tracker")).toBeUndefined();
+  });
+
+  it("serves a full provider to every lookup", () => {
+    const github = makeImpl("github");
+    registerForgeProviders("daintree.github", [makeContribution("github", ["github.com"])]);
+    registerForgeProviderImpl("daintree.github", "github", github);
+
+    expect(getForgeProviderImpl("daintree.github.github")).toBe(github);
+    expect(getForgeIssueProviderImpl("daintree.github.github")).toBe(github);
+  });
+
+  it("never offers an issues-only provider as a hostname match", () => {
+    registerForgeProviders("acme.tracker", [
+      makeContribution("tracker", [], { roles: ["issues"] }),
+    ]);
+    expect(listMatchingProviders("https://github.com/o/r.git")).toEqual([]);
+  });
+
+  it("freezes the declared roles", () => {
+    registerForgeProviders("acme.tracker", [
+      makeContribution("tracker", [], { roles: ["issues"] }),
+    ]);
+    const [entry] = getRegisteredForgeProviders();
+    expect(Object.isFrozen(entry?.contribution.roles)).toBe(true);
+  });
+
+  describe("validateForgeImplRoles", () => {
+    it("accepts an issues-only impl that builds its own repository reference", () => {
+      expect(validateForgeImplRoles({ roles: ["issues"] }, makeIssuesOnlyProvider())).toBeNull();
+    });
+
+    it("rejects an issues-only impl without resolveIssueRepo", () => {
+      const { resolveIssueRepo: _omit, ...withoutRepo } = makeIssuesOnlyProvider();
+      expect(validateForgeImplRoles({ roles: ["issues"] }, withoutRepo)).toContain(
+        "resolveIssueRepo"
+      );
+    });
+
+    it("rejects an issues-only impl registered against a manifest that omits roles", () => {
+      // Omitted roles means both, so the PR surface is required.
+      expect(validateForgeImplRoles({}, makeIssuesOnlyProvider())).toMatch(/listPRs/);
+    });
+
+    it("accepts a full provider without resolveIssueRepo", () => {
+      const { resolveIssueRepo: _omit, ...issueSide } = makeIssuesOnlyProvider();
+      const full = {
+        ...issueSide,
+        ...makeImpl("github"),
+        buildPRsUrl: () => "",
+        buildCommitsUrl: () => "",
+        ...Object.fromEntries(
+          [
+            "createPR",
+            "closePR",
+            "reopenPR",
+            "mergePR",
+            "convertPRToDraft",
+            "markPRReadyForReview",
+            "commentOnPR",
+            "editPR",
+          ].map((name) => [name, async () => ({})])
+        ),
+      } as ForgeProviderImpl;
+      expect(validateForgeImplRoles({}, full)).toBeNull();
+      // Every required code method counts, not just the read path.
+      const { mergePR: _mergePR, ...withoutMerge } = full;
+      expect(validateForgeImplRoles({}, withoutMerge as ForgeProviderImpl)).toContain("mergePR");
+    });
+
+    it("never offers an issues-only contribution to hostname routing, even with hostnames", () => {
+      registerForgeProviders("acme.tracker", [
+        makeContribution("tracker", ["github.com"], { roles: ["issues"] }),
+      ]);
+      expect(listMatchingProviders("https://github.com/o/r.git")).toEqual([]);
+    });
   });
 });

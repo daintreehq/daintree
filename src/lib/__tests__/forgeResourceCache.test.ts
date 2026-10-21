@@ -8,6 +8,7 @@ import {
   markCountStale,
   mutateCacheEntries,
   patchIssueAssigneeCache,
+  discardCachedResources,
   _resetForTests,
 } from "../forgeResourceCache";
 import type { ForgeResourceCacheEntry } from "../forgeResourceCache";
@@ -496,5 +497,35 @@ describe("forgeResourceCache", () => {
 
       expect(loginsOn(key, 1)).toEqual(["ada"]);
     });
+  });
+});
+
+describe("discardCachedResources (#13700)", () => {
+  const entry = { items: [], nextCursor: null, hasMore: false, timestamp: 1 };
+
+  beforeEach(() => _resetForTests());
+
+  it("drops every slot of the type across projects and fences in-flight writes", () => {
+    const issueA = buildCacheKey("/a", "issue", "open", "created");
+    const issueB = buildCacheKey("/b", "issue", "closed", "created");
+    const pr = buildCacheKey("/a", "pr", "open", "created");
+    setCache(issueA, entry);
+    setCache(issueB, entry);
+    setCache(pr, entry);
+    const inFlightGeneration = getGeneration(issueA);
+
+    discardCachedResources("issue");
+
+    expect(getCache(issueA)).toBeUndefined();
+    expect(getCache(issueB)).toBeUndefined();
+    expect(getCache(pr)).toEqual(entry);
+    expect(getGeneration(issueA)).not.toBe(inFlightGeneration);
+  });
+
+  it("fences a slot whose first fetch is still in flight", () => {
+    const pending = buildCacheKey("/a", "issue", "open", "created");
+    const claimed = nextGeneration(pending);
+    discardCachedResources("issue");
+    expect(getGeneration(pending)).not.toBe(claimed);
   });
 });

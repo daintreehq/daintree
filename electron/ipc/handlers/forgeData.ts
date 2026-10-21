@@ -4,9 +4,15 @@ import path from "path";
 import { CHANNELS } from "../channels.js";
 import { broadcastToRenderer, checkRateLimit, typedHandle } from "../utils.js";
 import { defineIpcNamespace, op } from "../define.js";
-import { resolveForCwd, type ResolvedForgeContext } from "./forgeResolution.js";
+import {
+  resolveForCwd,
+  resolveIssueOverrideForCwd,
+  stampIssuePageProvider,
+  stampIssueProvider,
+  type ResolvedForgeContext,
+} from "./forgeResolution.js";
 import { auditForgeCall, summarizeForgeArgs } from "../../services/forge/forgeAuditService.js";
-import { getForgeProviderImpl } from "../../services/forgeProviderRegistry.js";
+import { getForgeProviderBaseImpl } from "../../services/forgeProviderRegistry.js";
 import { getCommitCount } from "../../utils/git.js";
 import { logWarn } from "../../utils/logger.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
@@ -121,6 +127,48 @@ async function persistRepoStats(
       cwd,
       error: formatErrorMessage(error, "unknown"),
     });
+  }
+}
+
+/**
+ * The open-issue count from a project's issues override (#13700), or
+ * `undefined` when none is set and the code provider's snapshot already
+ * carries the right count. An override that can't answer yields a `null`
+ * count — unknown, never the code forge's count, which would be another
+ * tracker's number under this provider's pill. `clean` is false for anything
+ * short of a fresh observation (a failure, or a stale, errored or disk-served
+ * answer), and gates persisting and broadcasting the blend exactly as the code
+ * snapshot's own freshness gates them.
+ */
+async function readIssueOverrideCount(
+  cwd: string,
+  mainWorktreePath: string | undefined,
+  bypassCache: boolean
+): Promise<{ count: number | null; clean: boolean } | undefined> {
+  let context: Awaited<ReturnType<typeof resolveIssueOverrideForCwd>>;
+  try {
+    context = await resolveIssueOverrideForCwd(cwd, mainWorktreePath);
+  } catch {
+    return { count: null, clean: false };
+  }
+  if (!context) return undefined;
+  const { impl, repoRef } = context;
+  try {
+    if (impl.repoStats) {
+      const snapshot = await impl.repoStats.getRepoStats(repoRef, { bypassCache });
+      return {
+        count: snapshot.counts.issueCount,
+        clean: !snapshot.counts.stale && !snapshot.counts.error && snapshot.source !== "disk",
+      };
+    }
+    // A page without a total can't be counted from its length — that's the
+    // page size, not the open-issue count.
+    const page = await impl.listIssues(repoRef, { state: "open", perPage: 1, bypassCache });
+    return page.totalCount === undefined
+      ? { count: null, clean: false }
+      : { count: page.totalCount, clean: true };
+  } catch {
+    return { count: null, clean: false };
   }
 }
 
@@ -260,7 +308,8 @@ export function registerForgeDataHandlers(): () => void {
         const cwd = requireCwd(payload.cwd);
         const opts = payload.opts ?? {};
         return coalesce(`${cwd}::listIssues::${listOptionsKey(opts)}`, async () => {
-          const { impl, repoRef, namespaceId } = await resolveForCwd(cwd);
+          const context = await resolveForCwd(cwd, "issues");
+          const { impl, repoRef, namespaceId } = context;
           return auditForgeCall(
             {
               providerId: namespaceId,
@@ -269,7 +318,7 @@ export function registerForgeDataHandlers(): () => void {
               repoName: repoRef.repo,
               argsSummary: summarizeForgeArgs("listIssues", opts),
             },
-            () => impl.listIssues(repoRef, opts)
+            async () => stampIssuePageProvider(context, await impl.listIssues(repoRef, opts))
           );
         });
       }
@@ -309,7 +358,8 @@ export function registerForgeDataHandlers(): () => void {
       const cwd = requireCwd(payload.cwd);
       const issueNumber = requirePositiveInt(payload.issueNumber, "issue number");
       return coalesce(`${cwd}::getIssue::${issueNumber}`, async () => {
-        const { impl, repoRef, namespaceId } = await resolveForCwd(cwd);
+        const context = await resolveForCwd(cwd, "issues");
+        const { impl, repoRef, namespaceId } = context;
         return auditForgeCall(
           {
             providerId: namespaceId,
@@ -318,7 +368,7 @@ export function registerForgeDataHandlers(): () => void {
             repoName: repoRef.repo,
             argsSummary: summarizeForgeArgs("getIssue", issueNumber),
           },
-          () => impl.getIssue(repoRef, issueNumber),
+          async () => stampIssueProvider(context, await impl.getIssue(repoRef, issueNumber)),
           (value) => (value === null ? "not-found" : "success")
         );
       });
@@ -381,7 +431,9 @@ export function registerForgeDataHandlers(): () => void {
         throw new Error("Invalid payload");
       }
       const cwd = requireCwd(payload.cwd);
-      const { impl } = await resolveForCwd(cwd);
+      // The viewer this answers for is the one "Assign to me" then assigns, so
+      // it must be the issues provider's account, not the code forge's.
+      const { impl } = await resolveForCwd(cwd, "issues");
       return impl.identity ? impl.identity.getCurrentUser() : null;
     })
   );
@@ -417,7 +469,7 @@ async function handleForgeGetRepoStats(payload: {
   if (!existsSync(cwd)) {
     return buildForgeRepositoryStats(0, { issueCount: null, prCount: null });
   }
-  let resolved: Awaited<ReturnType<typeof resolveForCwd>>;
+  let resolved: ResolvedForgeContext;
   try {
     resolved = await resolveForCwd(cwd);
   } catch {
@@ -436,13 +488,35 @@ async function handleForgeGetRepoStats(payload: {
   if (!impl.repoStats) {
     throw new Error("Provider does not support repository stats");
   }
-  const snapshot = await impl.repoStats.getRepoStats(repoRef, {
-    bypassCache: payload.bypassCache === true,
-  });
+  const bypassCache = payload.bypassCache === true;
+  const [codeSnapshot, overrideIssues] = await Promise.all([
+    impl.repoStats.getRepoStats(repoRef, { bypassCache }),
+    readIssueOverrideCount(cwd, repoRef.projectPath, bypassCache),
+  ]);
+  // With an issues provider bound, the code forge's snapshot still owns PRs
+  // and freshness, but its issue count and first page belong to a different
+  // tracker — swap the count and drop the page so no surface shows them.
+  const split = overrideIssues !== undefined;
+  // A blend is only as fresh as its staler half.
+  const overrideClean = !split || overrideIssues.clean;
+  const snapshot = split
+    ? {
+        ...codeSnapshot,
+        counts: {
+          ...codeSnapshot.counts,
+          issueCount: overrideIssues.count,
+          // The renderer reads freshness off the result, so an issues count
+          // that isn't a fresh observation must not ride in as one.
+          ...(overrideClean ? {} : { stale: true }),
+        },
+        issues: undefined,
+        prs: undefined,
+      }
+    : codeSnapshot;
   const { count: commitCount, reliable: commitReliable } = await readCommitCount(cwd);
   const stats = buildForgeRepositoryStats(commitCount, snapshot.counts);
 
-  const fresh = snapshot.source === "network" && !snapshot.counts.stale;
+  const fresh = snapshot.source === "network" && !snapshot.counts.stale && overrideClean;
 
   // Persist the counts behind this poll (issue #11078). A stale/errored result
   // is a fallback, not an observation — its forge counts never replace what is
@@ -455,7 +529,12 @@ async function handleForgeGetRepoStats(payload: {
   // optional on the contract — a provider that omits it would otherwise never
   // persist anything. Only an explicit disk fallback is excluded, since that is
   // the provider serving its own last-known values back to us.
-  const cleanForge = !snapshot.counts.stale && !snapshot.counts.error && snapshot.source !== "disk";
+  const cleanForge =
+    !snapshot.counts.stale &&
+    !snapshot.counts.error &&
+    snapshot.source !== "disk" &&
+    // An issues provider that couldn't answer is a failed read, not a zero.
+    overrideClean;
   await persistRepoStats(cwd, {
     ...(commitReliable ? { commitCount } : {}),
     ...(cleanForge
@@ -504,7 +583,12 @@ async function handleForgeGetFirstPageCache(payload: {
   // Cold-start hydration is best-effort — resolution or provider failure
   // means "no cache", never an error.
   try {
+    // The cached first page and counts are the code forge's, issues included.
+    // With an issues provider bound they'd seed the issue pill and dropdown
+    // from the wrong tracker, so skip cold-start hydration and let the live
+    // poll fill both in.
     const { impl, repoRef, namespaceId } = await resolveForCwd(payload.cwd);
+    if (await resolveIssueOverrideForCwd(payload.cwd, repoRef.projectPath)) return null;
     const snapshot = await impl.repoStats?.getFirstPageCache?.(repoRef);
     if (!snapshot) return null;
     // Blend in the host-computed commit count, exactly as the live-poll sibling
@@ -591,7 +675,7 @@ async function handleForgeGetIssueTooltip(payload: {
     return null;
   }
   try {
-    const { impl, repoRef } = await resolveForCwd(payload.cwd);
+    const { impl, repoRef } = await resolveForCwd(payload.cwd, "issues");
     return (await impl.tooltips?.getIssueTooltip(repoRef, payload.issueNumber)) ?? null;
   } catch {
     return null;
@@ -632,14 +716,15 @@ async function handleForgeGetIssuesByNumbers(payload: {
     (n): n is number => typeof n === "number" && Number.isInteger(n) && n > 0
   );
   if (numbers.length === 0) return [];
-  const { impl, repoRef } = await resolveForCwd(payload.cwd);
+  const context = await resolveForCwd(payload.cwd, "issues");
+  const { impl, repoRef } = context;
   const batch = impl.batchLookups;
   if (!batch?.findIssuesByNumbers) return [];
   const found = await batch.findIssuesByNumbers(repoRef, numbers);
   const result: Issue[] = [];
   for (const n of numbers) {
     const issue = found.get(n);
-    if (issue) result.push(issue);
+    if (issue) result.push(stampIssueProvider(context, issue));
   }
   return result;
 }
@@ -1005,7 +1090,7 @@ async function handleForgeListIssueComments(payload: {
   const cwd = requireCwd(payload.cwd);
   const issueNumber = requirePositiveInt(payload.issueNumber, "issue number");
   const opts = normalizeCommentListOptions(payload.opts);
-  const { impl, repoRef, namespaceId } = await resolveForCwd(cwd);
+  const { impl, repoRef, namespaceId } = await resolveForCwd(cwd, "issues");
   const capability = impl.issueComments;
   if (!capability) {
     throw new Error("The active forge provider does not support reading issue comments");
@@ -1077,7 +1162,7 @@ async function handleForgeGetTokenHealth(payload: {
   if (!payload || typeof payload !== "object") return null;
   const providerId = normalizeProviderId(payload.providerId);
   if (!providerId) return null;
-  const impl = getForgeProviderImpl(providerId);
+  const impl = getForgeProviderBaseImpl(providerId);
   return impl?.healthEvents?.getTokenHealth() ?? null;
 }
 

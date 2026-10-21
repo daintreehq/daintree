@@ -3,6 +3,7 @@ import type { Issue, PR } from "@shared/types/forge";
 import { parseBranchInput } from "../branchPrefixUtils";
 import { generateBranchSlug } from "@/utils/textParsing";
 import { detectPrefixFromIssue } from "../branchPrefixUtils";
+import { issueBranchName } from "@shared/utils/issueBranchName";
 
 export interface UseBranchInputResult {
   branchInput: string;
@@ -78,7 +79,12 @@ export function useBranchInput({
       const typePrefix = detectedPrefix || "feature";
       const baseName = `${typePrefix}/${suggestedSlug}`;
 
-      setBranchInput(configuredBranchPrefix ? `${configuredBranchPrefix}${baseName}` : baseName);
+      setBranchInput(
+        issueBranchName(
+          selectedIssue,
+          configuredBranchPrefix ? `${configuredBranchPrefix}${baseName}` : baseName
+        )
+      );
     }
   }, [selectedIssue, configuredBranchPrefix]);
 

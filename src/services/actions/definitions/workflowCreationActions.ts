@@ -15,6 +15,8 @@ import { notifyRecipeSpawnFailures } from "@/utils/recipeNotify";
 import { patchIssueAssigneeCache } from "@/lib/forgeResourceCache";
 import { logError } from "@/utils/logger";
 import { partialSuccessError, slugifyForBranch } from "./workflowHelpers";
+import { issueBranchName } from "@shared/utils/issueBranchName";
+import { linkProviderIssue } from "@/utils/linkProviderIssue";
 import { resolveAgentLaunchKind } from "@/utils/agentLaunchValidation";
 // The shared registry helper rather than `isRegisteredAgent` from
 // `@/config/agents`: identical result (that one is a one-line delegation to
@@ -603,7 +605,8 @@ export function registerWorkflowCreationActions(
         }
 
         const derivedBranch =
-          branchName ?? `feature/issue-${issue.number}-${slugifyForBranch(issue.title)}`;
+          branchName ??
+          issueBranchName(issue, `feature/issue-${issue.number}-${slugifyForBranch(issue.title)}`);
 
         let baseRef: string | undefined = baseBranch;
         if (!baseRef) {
@@ -646,6 +649,7 @@ export function registerWorkflowCreationActions(
           throw new Error("Failed to create worktree: no worktreeId returned from backend");
         }
         const { worktreeId } = created;
+        linkProviderIssue(worktreeId, issue);
 
         let recipeLaunched = false;
         let spawnedTerminalCount = 0;

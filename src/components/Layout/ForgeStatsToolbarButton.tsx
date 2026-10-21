@@ -144,6 +144,7 @@ export const ForgeStatsToolbarButton = memo(
       entry: providerEntry,
       providerId,
       loading: providerLoading,
+      issues: issuesProvider,
     } = useResolvedForgeProvider(currentProject?.id ?? null);
     const forgeMode = providerEntry !== null && providerId !== null;
     const providerName = providerEntry?.contribution.name ?? "forge";
@@ -176,6 +177,12 @@ export const ForgeStatsToolbarButton = memo(
     const DropdownView = useBuiltinView<ForgeStatsDropdownProps>(
       providerEntry?.contribution.slots?.statsDropdown ?? ""
     );
+    // The issues segment lists the issues provider's issues in that provider's
+    // own view — the code forge's unless the project binds another (#13700).
+    const IssuesDropdownView = useBuiltinView<ForgeStatsDropdownProps>(
+      issuesProvider.entry?.contribution.slots?.statsDropdown ?? ""
+    );
+    const issuesProviderId = issuesProvider.providerId;
 
     // Drives the tooltip aging copy ("updated 3m ago") without per-component
     // intervals — the ticker is shared, paused on hidden tabs, and tears down
@@ -1051,11 +1058,11 @@ export const ForgeStatsToolbarButton = memo(
             ariaDescribedBy={tokenCalloutOpen ? tokenCalloutId : undefined}
             tone={isTokenError ? "unavailable" : issueDisplayCount === 0 ? "quiet" : "default"}
             dropdownContent={
-              DropdownView && providerId ? (
-                <DropdownView
+              IssuesDropdownView && issuesProviderId ? (
+                <IssuesDropdownView
                   kind="issues"
                   projectPath={currentProject.path}
-                  providerId={providerId}
+                  providerId={issuesProviderId}
                   open={issuesOpen}
                   initialCount={stats?.issueCount}
                   onClose={() => {

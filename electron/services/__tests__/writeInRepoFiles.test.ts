@@ -147,6 +147,7 @@ describe("writeInRepoSettings", () => {
     forgeRemote: "upstream",
     githubRemote: "upstream",
     forgeProviderOverride: "github-com",
+    issueProviderOverride: "acme.tracker.tracker",
     fleetSavedScopes: [
       { kind: "predicate", id: "s1", name: "All", scope: "all", stateFilter: "all", createdAt: 1 },
     ],

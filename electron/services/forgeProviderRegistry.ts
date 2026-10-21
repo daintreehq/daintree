@@ -1,10 +1,14 @@
 import type {
+  AnyForgeProviderImpl,
+  ForgeIssueProviderImpl,
+  ForgeProviderBaseImpl,
   ForgeProviderContribution,
   ForgeProviderImpl,
   RegisteredForgeProvider,
   RepoRef,
 } from "../../shared/types/forge.js";
 import { makeForgeProviderId } from "../../shared/utils/forgeProviderIds.js";
+import { forgeProviderServesRole } from "../../shared/utils/forgeProviderRoles.js";
 import {
   extractHostname,
   hostnameMatchesAny,
@@ -86,7 +90,7 @@ const PLUGIN_FORGE_PROVIDERS = new Map<string, ForgeProviderContribution[]>();
  * callers must handle "descriptor present but impl not yet bound" by treating
  * an `undefined` result as absent.
  */
-const PLUGIN_FORGE_PROVIDER_IMPLS = new Map<string, ForgeProviderImpl>();
+const PLUGIN_FORGE_PROVIDER_IMPLS = new Map<string, AnyForgeProviderImpl>();
 
 export function registerForgeProviders(
   pluginId: string,
@@ -117,6 +121,9 @@ function freezeContribution(c: ForgeProviderContribution): ForgeProviderContribu
   if (c.viewRefs) {
     frozen.viewRefs = Object.freeze([...c.viewRefs]) as unknown as string[];
   }
+  if (c.roles) {
+    frozen.roles = Object.freeze([...c.roles]) as unknown as ForgeProviderContribution["roles"];
+  }
   return Object.freeze(frozen);
 }
 
@@ -143,7 +150,7 @@ export function clearForgeProviderRegistry(): void {
 export function registerForgeProviderImpl(
   pluginId: string,
   contributionId: string,
-  impl: ForgeProviderImpl
+  impl: AnyForgeProviderImpl
 ): void {
   if (typeof pluginId !== "string" || pluginId.length === 0) return;
   if (typeof contributionId !== "string" || contributionId.length === 0) return;
@@ -165,7 +172,7 @@ export function registerForgeProviderImpl(
 export function unregisterForgeProviderImpl(
   pluginId: string,
   contributionId: string,
-  expected?: ForgeProviderImpl
+  expected?: AnyForgeProviderImpl
 ): void {
   if (typeof pluginId !== "string" || pluginId.length === 0) return;
   if (typeof contributionId !== "string" || contributionId.length === 0) return;
@@ -197,15 +204,120 @@ export function unregisterForgeProviderImpls(pluginId: string): void {
 }
 
 /**
- * Look up a runtime impl by its canonical id (`{pluginId}.{contributionId}`).
- * Returns `undefined` when the descriptor is registered but the plugin's
- * `activate()` has not yet bound an impl, or after the plugin unloads.
- * Callers must treat `undefined` as "no impl currently available" and avoid
- * throwing.
+ * Look up a full (issues + code) runtime impl by its canonical id
+ * (`{pluginId}.{contributionId}`) — the code-role lookup every PR, CI and
+ * repository surface uses. Returns `undefined` when the descriptor is
+ * registered but the plugin's `activate()` has not yet bound an impl, after
+ * the plugin unloads, and for an issues-only provider, which has no code
+ * surface to serve. Callers must treat `undefined` as "no impl currently
+ * available" and avoid throwing.
  */
 export function getForgeProviderImpl(namespacedId: string): ForgeProviderImpl | undefined {
+  const impl = lookupImpl(namespacedId);
+  if (!impl) return undefined;
+  const contribution = findContribution(namespacedId);
+  if (contribution && !forgeProviderServesRole(contribution, "code")) return undefined;
+  // Registration checked this impl against its manifest roles, and a provider
+  // serving code serves both (`validateForgeImplRoles`).
+  return impl as ForgeProviderImpl;
+}
+
+/** The issues-role lookup: any bound impl whose manifest roles include issues. */
+export function getForgeIssueProviderImpl(
+  namespacedId: string
+): ForgeIssueProviderImpl | undefined {
+  const impl = lookupImpl(namespacedId);
+  if (!impl) return undefined;
+  const contribution = findContribution(namespacedId);
+  if (contribution && !forgeProviderServesRole(contribution, "issues")) return undefined;
+  return impl as ForgeIssueProviderImpl;
+}
+
+/**
+ * Role-agnostic lookup for what every provider implements — credentials,
+ * identity, health events. Credential save and token health must reach an
+ * issues-only provider too.
+ */
+export function getForgeProviderBaseImpl(namespacedId: string): ForgeProviderBaseImpl | undefined {
+  return lookupImpl(namespacedId);
+}
+
+function lookupImpl(namespacedId: string): AnyForgeProviderImpl | undefined {
   if (typeof namespacedId !== "string" || namespacedId.length === 0) return undefined;
   return PLUGIN_FORGE_PROVIDER_IMPLS.get(namespacedId);
+}
+
+function findContribution(namespacedId: string): ForgeProviderContribution | undefined {
+  for (const [pluginId, contributions] of PLUGIN_FORGE_PROVIDERS) {
+    for (const contribution of contributions) {
+      if (makeForgeProviderId(pluginId, contribution.id) === namespacedId) return contribution;
+    }
+  }
+  return undefined;
+}
+
+const ISSUE_ROLE_METHODS = [
+  "listIssues",
+  "getIssue",
+  "buildIssueUrl",
+  "buildIssuesUrl",
+  "createIssue",
+  "assignIssue",
+  "unassignIssue",
+  "closeIssue",
+  "reopenIssue",
+  "editIssue",
+  "addIssueComment",
+  "addIssueLabel",
+  "removeIssueLabel",
+] as const;
+
+const BASE_METHODS = ["getCredentials", "validateCredentials", "validateToken"] as const;
+
+const CODE_ROLE_METHODS = [
+  "parseRemote",
+  "listPRs",
+  "getPR",
+  "findPRByBranch",
+  "getCIStatus",
+  "getRepoMetadata",
+  "buildPRUrl",
+  "buildPRsUrl",
+  "buildCommitsUrl",
+  "createPR",
+  "closePR",
+  "reopenPR",
+  "mergePR",
+  "convertPRToDraft",
+  "markPRReadyForReview",
+  "commentOnPR",
+  "editPR",
+] as const;
+
+/**
+ * Check an impl against the roles its manifest entry declares, returning a
+ * human-readable reason when it can't serve them (or `null` when it can). The
+ * role lookups above cast on the strength of this check, so the host must run
+ * it before {@link registerForgeProviderImpl}.
+ *
+ * Checks every required method of each declared role (optional members and
+ * capabilities stay optional), so a provider registered against the wrong
+ * roles fails here rather than as a `not a function` deep inside a PR poll.
+ */
+export function validateForgeImplRoles(
+  contribution: Pick<ForgeProviderContribution, "roles">,
+  impl: AnyForgeProviderImpl
+): string | null {
+  const record = impl as unknown as Record<string, unknown>;
+  const required: string[] = [...BASE_METHODS];
+  const servesCode = forgeProviderServesRole(contribution, "code");
+  if (forgeProviderServesRole(contribution, "issues")) required.push(...ISSUE_ROLE_METHODS);
+  if (servesCode) required.push(...CODE_ROLE_METHODS);
+  // An issues-only provider has no remote for the host to parse, so it must
+  // build its own repository reference.
+  if (!servesCode) required.push("resolveIssueRepo");
+  const missing = required.filter((name) => typeof record[name] !== "function");
+  return missing.length > 0 ? `missing ${missing.join(", ")}` : null;
 }
 
 /**
@@ -229,7 +341,7 @@ export function clearForgeProviderImplRegistry(): void {
  * Snapshot of every bound impl keyed by canonical provider id. Used by the
  * provider-health relay to diff subscriptions on registry changes.
  */
-export function getForgeProviderImplEntries(): Array<[string, ForgeProviderImpl]> {
+export function getForgeProviderImplEntries(): Array<[string, AnyForgeProviderImpl]> {
   return [...PLUGIN_FORGE_PROVIDER_IMPLS.entries()];
 }
 
@@ -243,6 +355,8 @@ export function listForgeProviderMatchers(): ForgeProviderMatcher[] {
   const matchers: ForgeProviderMatcher[] = [];
   for (const [pluginId, contributions] of PLUGIN_FORGE_PROVIDERS) {
     for (const contribution of contributions) {
+      // Hostnames route the code role only (#13700).
+      if (!forgeProviderServesRole(contribution, "code")) continue;
       matchers.push({
         providerId: makeForgeProviderId(pluginId, contribution.id),
         hostnames: [...contribution.matches],
@@ -290,6 +404,9 @@ function listProvidersByHostname(hostname: string): RegisteredForgeProvider[] {
   const matches: RegisteredForgeProvider[] = [];
   for (const [pluginId, contributions] of PLUGIN_FORGE_PROVIDERS) {
     for (const contribution of contributions) {
+      // Hostname matching picks a code forge; an issues-only provider has no
+      // remote to match, whatever its manifest lists (#13700).
+      if (!forgeProviderServesRole(contribution, "code")) continue;
       if (hostnameMatchesAny(hostname, contribution.matches)) {
         matches.push({ pluginId, contribution });
       }

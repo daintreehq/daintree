@@ -45,9 +45,26 @@ const fakeImpl = vi.hoisted(
 const repoRef: RepoRef = { host: "fake.test", owner: "acme", repo: "widgets", rawData: null };
 
 const resolveForCwdMock = vi.hoisted(() => vi.fn());
+const resolveIssueOverrideForCwdMock = vi.hoisted(() => vi.fn(async () => null as unknown));
 
 vi.mock("../forgeResolution.js", () => ({
   resolveForCwd: resolveForCwdMock,
+  resolveIssueOverrideForCwd: resolveIssueOverrideForCwdMock,
+  // Mirrors the real stamps: only an issues-override context marks its issues.
+  stampIssueProvider: (
+    context: { viaIssueOverride?: boolean; namespaceId: string },
+    issue: object | null
+  ) => (context.viaIssueOverride && issue ? { ...issue, providerId: context.namespaceId } : issue),
+  stampIssuePageProvider: (
+    context: { viaIssueOverride?: boolean; namespaceId: string },
+    page: { items: object[] }
+  ) =>
+    context.viaIssueOverride
+      ? {
+          ...page,
+          items: page.items.map((issue) => ({ ...issue, providerId: context.namespaceId })),
+        }
+      : page,
 }));
 
 // Default to "exists" so the existing stats tests reach the resolution path;
@@ -76,6 +93,18 @@ const storeMock = vi.hoisted(() => {
 vi.mock("../../../store.js", () => ({
   store: storeMock,
   auditLogsStore: { get: vi.fn(() => []), set: vi.fn() },
+}));
+
+const projectStoreMock = vi.hoisted(() => ({
+  saveRepoStats: vi.fn(),
+  getProjectByPath: vi.fn(async () => null),
+}));
+
+vi.mock("../../../services/ProjectStore.js", () => ({ projectStore: projectStoreMock }));
+
+vi.mock("../../../utils/git.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../utils/git.js")>()),
+  getCommitCount: vi.fn(async () => 12),
 }));
 
 import { registerForgeDataHandlers } from "../forgeData.js";
@@ -145,7 +174,7 @@ describe("registerForgeDataHandlers", () => {
       opts: { state: "open" },
     });
 
-    expect(resolveForCwdMock).toHaveBeenCalledWith("/repo");
+    expect(resolveForCwdMock).toHaveBeenCalledWith("/repo", "issues");
     expect(fakeImpl.listIssues).toHaveBeenCalledWith(repoRef, { state: "open" });
     expect(result).toEqual(page);
   });
@@ -1158,6 +1187,172 @@ describe("registerForgeDataHandlers", () => {
       expect(result).toEqual([{ number: 2, status: "found", pr: makePR(2) }]);
       expect(findPRsByNumbers).toHaveBeenCalledWith(repoRef, [2]);
     });
+  });
+});
+
+describe("issues bound to a separate provider (#13700)", () => {
+  const trackerRef: RepoRef = { host: "tracker.invalid", owner: "ENG", repo: "ENG", rawData: null };
+
+  function codeImplWithStats() {
+    return {
+      ...fakeImpl,
+      repoStats: {
+        getRepoStats: vi.fn(async () => ({
+          counts: { issueCount: 99, prCount: 4, lastUpdated: 1 },
+          // A cache hit persists like a network read but skips the renderer
+          // broadcast, which needs a real window registry.
+          source: "memory-cache" as const,
+          issues: { items: [makeIssue(1)], nextCursor: null, hasMore: false },
+          prs: { items: [], nextCursor: null, hasMore: false },
+        })),
+      },
+    };
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    _resetRateLimitQueuesForTest();
+    resolveIssueOverrideForCwdMock.mockResolvedValue(null);
+  });
+
+  it("stamps listed issues with the issues provider when its override served them", async () => {
+    const tracker = {
+      listIssues: vi.fn(async () => ({ items: [makeIssue(42)], nextCursor: null, hasMore: false })),
+    };
+    resolveForCwdMock.mockResolvedValue({
+      namespaceId: "acme.tracker.tracker",
+      repoRef: trackerRef,
+      impl: tracker,
+      viaIssueOverride: true,
+    });
+    registerForgeDataHandlers();
+
+    const page = (await findHandler("forge:list-issues")(null, { cwd: "/repo" })) as Page<Issue>;
+
+    expect(tracker.listIssues).toHaveBeenCalledWith(trackerRef, {});
+    expect(page.items[0]).toMatchObject({ number: 42, providerId: "acme.tracker.tracker" });
+  });
+
+  it("takes the issue count from the issues provider and keeps PRs from the code forge", async () => {
+    const code = codeImplWithStats();
+    resolveForCwdMock.mockResolvedValue({ namespaceId: "fake.provider", repoRef, impl: code });
+    const trackerList = vi.fn(async () => ({
+      items: [],
+      nextCursor: null,
+      hasMore: true,
+      totalCount: 7,
+    }));
+    resolveIssueOverrideForCwdMock.mockResolvedValue({
+      namespaceId: "acme.tracker.tracker",
+      repoRef: trackerRef,
+      impl: { listIssues: trackerList },
+      viaIssueOverride: true,
+    });
+    registerForgeDataHandlers();
+
+    const stats = await findHandler("forge:get-repo-stats")(null, { cwd: "/repo" });
+
+    expect(stats).toMatchObject({ issueCount: 7, prCount: 4, commitCount: 12 });
+    expect(trackerList).toHaveBeenCalledWith(trackerRef, {
+      state: "open",
+      perPage: 1,
+      bypassCache: false,
+    });
+    // Persisted counts carry the issues provider's count, not the code forge's 99.
+    expect(projectStoreMock.saveRepoStats).toHaveBeenCalledWith(
+      "/repo",
+      expect.objectContaining({ forge: expect.objectContaining({ issueCount: 7, prCount: 4 }) })
+    );
+  });
+
+  it("reports an unknown issue count, never the code forge's, when the issues provider fails", async () => {
+    resolveForCwdMock.mockResolvedValue({
+      namespaceId: "fake.provider",
+      repoRef,
+      impl: codeImplWithStats(),
+    });
+    resolveIssueOverrideForCwdMock.mockRejectedValue(new Error("issues provider unavailable"));
+    registerForgeDataHandlers();
+
+    const stats = await findHandler("forge:get-repo-stats")(null, { cwd: "/repo" });
+
+    expect(stats).toMatchObject({ issueCount: null, prCount: 4 });
+    // A failed read must not overwrite the stored counts.
+    expect(projectStoreMock.saveRepoStats).toHaveBeenCalledWith(
+      "/repo",
+      expect.not.objectContaining({ forge: expect.anything() })
+    );
+  });
+
+  it("skips cold-start hydration from the code forge's cached issue page", async () => {
+    const getFirstPageCache = vi.fn(async () => ({
+      issues: { items: [makeIssue(1)], nextCursor: null, hasMore: false },
+      prs: { items: [], nextCursor: null, hasMore: false },
+      lastUpdated: 1,
+    }));
+    resolveForCwdMock.mockResolvedValue({
+      namespaceId: "fake.provider",
+      repoRef: { ...repoRef, projectPath: "/repo" },
+      impl: { ...fakeImpl, repoStats: { getRepoStats: vi.fn(), getFirstPageCache } },
+    });
+    resolveIssueOverrideForCwdMock.mockResolvedValue({
+      namespaceId: "acme.tracker.tracker",
+      repoRef: trackerRef,
+      impl: {},
+      viaIssueOverride: true,
+    });
+    registerForgeDataHandlers();
+
+    const cached = await findHandler("forge:get-first-page-cache")(null, { cwd: "/repo" });
+
+    expect(cached).toBeNull();
+    expect(getFirstPageCache).not.toHaveBeenCalled();
+    // Reuses the root the code context already found.
+    expect(resolveIssueOverrideForCwdMock).toHaveBeenCalledWith("/repo", "/repo");
+  });
+
+  it("holds the blend back from persistence when the tracker's own count is stale", async () => {
+    resolveForCwdMock.mockResolvedValue({
+      namespaceId: "fake.provider",
+      repoRef,
+      impl: codeImplWithStats(),
+    });
+    resolveIssueOverrideForCwdMock.mockResolvedValue({
+      namespaceId: "acme.tracker.tracker",
+      repoRef: trackerRef,
+      impl: {
+        listIssues: vi.fn(),
+        repoStats: {
+          getRepoStats: vi.fn(async () => ({
+            counts: { issueCount: 3, prCount: null, stale: true },
+            source: "disk" as const,
+          })),
+        },
+      },
+      viaIssueOverride: true,
+    });
+    registerForgeDataHandlers();
+
+    const stats = await findHandler("forge:get-repo-stats")(null, { cwd: "/repo" });
+
+    expect(stats).toMatchObject({ issueCount: 3, prCount: 4 });
+    expect(projectStoreMock.saveRepoStats).toHaveBeenCalledWith(
+      "/repo",
+      expect.not.objectContaining({ forge: expect.anything() })
+    );
+  });
+
+  it("leaves the single-provider stats path untouched with no issues provider bound", async () => {
+    resolveForCwdMock.mockResolvedValue({
+      namespaceId: "fake.provider",
+      repoRef,
+      impl: codeImplWithStats(),
+    });
+    registerForgeDataHandlers();
+
+    const stats = await findHandler("forge:get-repo-stats")(null, { cwd: "/repo" });
+
+    expect(stats).toMatchObject({ issueCount: 99, prCount: 4 });
   });
 });
 

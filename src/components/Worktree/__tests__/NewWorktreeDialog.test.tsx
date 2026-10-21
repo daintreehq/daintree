@@ -180,6 +180,10 @@ mockWorktreeDataMap.set("main-wt", {
   isMainWorktree: true,
 });
 
+// Links only issues an issues provider stamped; the dialog under test never
+// sees one, and the real helper would pull in the whole view store.
+vi.mock("@/utils/linkProviderIssue", () => ({ linkProviderIssue: vi.fn() }));
+
 vi.mock("@/hooks/useWorktreeStore", () => ({
   useWorktreeStore: (selector: (s: { worktrees: Map<string, unknown> }) => unknown) =>
     selector({ worktrees: mockWorktreeDataMap }),

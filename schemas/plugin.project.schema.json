@@ -723,11 +723,21 @@
                 "minLength": 1
               },
               "matches": {
-                "minItems": 1,
                 "type": "array",
                 "items": {
                   "type": "string",
                   "minLength": 1
+                }
+              },
+              "roles": {
+                "minItems": 1,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "issues",
+                    "code"
+                  ]
                 }
               },
               "kind": {

@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { makeForgeProviderId } from "@shared/utils/forgeProviderIds";
+import { forgeProviderServesRole } from "@shared/utils/forgeProviderRoles";
 import type { RemoteInfo } from "@shared/types/ipc/forge";
 import type { RegisteredForgeProvider } from "@shared/types/forge";
 import { Button } from "@/components/ui/button";
@@ -15,12 +16,15 @@ import type { SettingsSelectOption } from "@/components/Settings/SettingsSelect"
 
 // Radix Select reserves the empty string, so "auto-detect" needs its own value.
 const AUTO_DETECT = "__auto__";
+const USE_CODE_FORGE = "__code__";
 
 interface CodeForgeTabProps {
   forgeRemote: string | undefined;
   onForgeRemoteChange: (remote: string | undefined) => void;
   forgeProviderOverride: string | null;
   onForgeProviderOverrideChange: (providerId: string | null) => void;
+  issueProviderOverride: string | null;
+  onIssueProviderOverrideChange: (providerId: string | null) => void;
   projectPath: string | undefined;
 }
 
@@ -29,6 +33,8 @@ export function CodeForgeTab({
   onForgeRemoteChange,
   forgeProviderOverride,
   onForgeProviderOverrideChange,
+  issueProviderOverride,
+  onIssueProviderOverrideChange,
   projectPath,
 }: CodeForgeTabProps) {
   const [remotes, setRemotes] = useState<RemoteInfo[]>([]);
@@ -113,10 +119,21 @@ export function CodeForgeTab({
 
   const savedRemoteKnown = !forgeRemote || remotes.some((r) => r.name === forgeRemote);
 
+  // An issues-only provider has nothing to serve as the code forge, and a
+  // code-only one nothing to serve as the issues provider.
+  const codeProviders = providers.filter((p) => forgeProviderServesRole(p.contribution, "code"));
+  const issueProviders = providers.filter((p) => forgeProviderServesRole(p.contribution, "issues"));
+
   const savedProviderKnown =
     forgeProviderOverride === null ||
-    providers.some(
+    codeProviders.some(
       (p) => makeForgeProviderId(p.pluginId, p.contribution.id) === forgeProviderOverride
+    );
+
+  const savedIssueProviderKnown =
+    issueProviderOverride === null ||
+    issueProviders.some(
+      (p) => makeForgeProviderId(p.pluginId, p.contribution.id) === issueProviderOverride
     );
 
   const remoteOptions: SettingsSelectOption[] = [
@@ -132,7 +149,7 @@ export function CodeForgeTab({
 
   const providerOptions: SettingsSelectOption[] = [
     { value: AUTO_DETECT, label: "Auto-detect" },
-    ...providers.map((p) => ({
+    ...codeProviders.map((p) => ({
       value: makeForgeProviderId(p.pluginId, p.contribution.id),
       label: p.contribution.name,
     })),
@@ -141,10 +158,23 @@ export function CodeForgeTab({
       : []),
   ];
 
+  const issueProviderOptions: SettingsSelectOption[] = [
+    { value: USE_CODE_FORGE, label: "Use forge provider" },
+    ...issueProviders.map((p) => ({
+      value: makeForgeProviderId(p.pluginId, p.contribution.id),
+      label: p.contribution.name,
+    })),
+    ...(!savedIssueProviderKnown && issueProviderOverride !== null
+      ? [{ value: issueProviderOverride, label: `${issueProviderOverride} (unavailable)` }]
+      : []),
+  ];
+
   const remoteDescription =
     "Auto-detect prefers origin, then any other remote a forge provider recognizes";
   const providerDescription =
     "Overrides the default provider for this project. Auto-detect uses the default provider from global Code forge settings, then the remote's hostname";
+  const issueProviderDescription =
+    "Where this project's issues come from, such as an issue tracker paired with the forge. Pull requests and CI stay with the forge provider";
 
   return (
     <SettingsSection
@@ -230,6 +260,23 @@ export function CodeForgeTab({
             options={providerOptions}
             isModified={forgeProviderOverride !== null}
             onReset={() => onForgeProviderOverrideChange(null)}
+          />
+        )}
+
+        {/* Loading and error states are the provider row's; a second copy here
+            would repeat the same message and retry. */}
+        {!providersLoading && !providersError && (
+          <SettingsSelect
+            label="Issues provider"
+            description={issueProviderDescription}
+            controlWidth="wide"
+            value={issueProviderOverride ?? USE_CODE_FORGE}
+            onValueChange={(value) =>
+              onIssueProviderOverrideChange(value === USE_CODE_FORGE ? null : value)
+            }
+            options={issueProviderOptions}
+            isModified={issueProviderOverride !== null}
+            onReset={() => onIssueProviderOverrideChange(null)}
           />
         )}
       </SettingsGroup>

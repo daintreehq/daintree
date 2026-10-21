@@ -479,6 +479,7 @@ export function decode(raw: unknown): ProjectSettingsDecodeResult {
         : undefined;
     })(),
     forgeProviderOverride: decodeForgeProviderOverride(migrated.forgeProviderOverride),
+    issueProviderOverride: decodeForgeProviderOverride(migrated.issueProviderOverride),
     worktreePathPattern:
       typeof migrated.worktreePathPattern === "string" && migrated.worktreePathPattern.trim()
         ? migrated.worktreePathPattern.trim()
@@ -586,6 +587,7 @@ export const ProjectSettingsSaveSchema = z
     forgeRemote: z.string().optional(),
     githubRemote: z.string().optional(),
     forgeProviderOverride: z.union([z.string(), z.null()]).optional(),
+    issueProviderOverride: z.union([z.string(), z.null()]).optional(),
     worktreePathPattern: z.string().optional(),
     fleetSavedScopes: z.array(z.unknown()).optional(),
     terminalSettings: z.unknown().optional(),

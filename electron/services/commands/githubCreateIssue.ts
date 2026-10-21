@@ -155,7 +155,7 @@ export const githubCreateIssueCommand: DaintreeCommand<CreateIssueArgs, CreateIs
     // answer, matching the other forge command surfaces.
     let resolved;
     try {
-      resolved = await resolveForCwd(cwd);
+      resolved = await resolveForCwd(cwd, "issues");
     } catch (error) {
       const message = formatErrorMessage(error, "Failed to determine repository context");
       return {

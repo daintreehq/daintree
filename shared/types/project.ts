@@ -825,6 +825,15 @@ export interface ProjectSettings {
    * provider registered via the forge provider registry.
    */
   forgeProviderOverride?: string | null;
+  /**
+   * Provider serving this project's issues when it isn't the code forge
+   * (#13700) — an issues-only tracker paired with the forge that keeps PRs and
+   * CI. Canonical `{pluginId}.{contributionId}` id. `null` (or absent) = the
+   * code forge serves issues too. A set id that no longer names an enabled
+   * issues provider leaves the project with no issues provider rather than
+   * falling back to the code forge's.
+   */
+  issueProviderOverride?: string | null;
   /** Per-project worktree path pattern override (uses global default when unset) */
   worktreePathPattern?: string;
   /** Saved fleet scopes for quick arm/recall */
@@ -899,6 +908,7 @@ export const PROJECT_SETTINGS_SHAREABILITY = {
   forgeRemote: "local",
   githubRemote: "local",
   forgeProviderOverride: "local",
+  issueProviderOverride: "local",
   worktreePathPattern: "shareable",
   fleetSavedScopes: "local",
   terminalSettings: "shareable",
@@ -973,6 +983,7 @@ export const PROJECT_SETTINGS_AGENT_EXPOSURE = {
   forgeRemote: "exposed",
   githubRemote: "internal",
   forgeProviderOverride: "exposed",
+  issueProviderOverride: "exposed",
   worktreePathPattern: "exposed",
   fleetSavedScopes: "internal",
   terminalSettings: "exposed",
