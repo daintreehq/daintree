@@ -14,6 +14,7 @@ import { PRBadge } from "./PRBadge";
 import { EnvironmentPopover } from "./EnvironmentPopover";
 import { WorktreeAttachmentChips } from "./WorktreeAttachmentChips";
 import { visibleAttachmentChips } from "./attachmentState";
+import { WorktreePluginStatusChips, useWorktreePluginStatuses } from "./WorktreePluginStatusChips";
 import { DevServerIndicator } from "./DevServerIndicator";
 import { CollapsedSessionIndicators } from "./CollapsedSessionIndicators";
 import { CollapsedAlarmPill, collapsedAlarmDescriptionId } from "./CollapsedAlarmPill";
@@ -129,6 +130,7 @@ export function WorktreeHeader({
   const hasDevServerSignal = !!devServerSession && isLiveDevServerStatus(devServerSession.status);
   const hasAttachmentChips =
     !!onAttachmentAction && visibleAttachmentChips(worktree.attachments).length > 0;
+  const pluginStatuses = useWorktreePluginStatuses(worktree.id);
   const underlineOnHover = variant !== "sidebar" || isActive;
   // `hasBaseName` is the whole mount rule for the base line: the workspace-host
   // sets it only for a non-main worktree on a branch whose base it resolved, so
@@ -332,7 +334,8 @@ export function WorktreeHeader({
           isLifecycleRunning ||
           onCheckResourceStatus ||
           hasDevServerSignal ||
-          hasAttachmentChips) && (
+          hasAttachmentChips ||
+          pluginStatuses.length > 0) && (
           <div className="flex items-center gap-2 shrink-0">
             {isPinned && !isMainWorktree && (
               <Pin
@@ -404,6 +407,7 @@ export function WorktreeHeader({
                 onAction={onAttachmentAction}
               />
             )}
+            <WorktreePluginStatusChips statuses={pluginStatuses} />
             <DevServerIndicator session={devServerSession} />
           </div>
         )}

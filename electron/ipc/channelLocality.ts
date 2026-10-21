@@ -1153,6 +1153,7 @@ export const EVENT_LOCALITY: Readonly<Record<string, ChannelLocality>> = {
   "plugin:toolbar-badges-changed": "host",
   "plugin:toolbar-buttons-changed": "host",
   "plugin:tours-changed": "host",
+  "plugin:worktree-card-statuses-changed": "host",
   "resource:profile-changed": "host",
   "project-groups:update": "host",
   "run-history:update": "host",

@@ -227,6 +227,22 @@ export type PluginPanelBadge =
 /** Max length of a {@link PluginPanelBadge} `label` text, enforced host-side. */
 export const PLUGIN_PANEL_BADGE_LABEL_MAX = 6;
 
+/**
+ * A short status a plugin shows on one worktree's card via
+ * {@link PluginHostApi.setWorktreeCardStatus} (#13704): a one-line `label`
+ * drawn as quiet metadata, and an optional `tooltip` with the detail.
+ */
+export interface PluginWorktreeCardStatus {
+  label: string;
+  tooltip?: string;
+}
+
+/** Max length of a {@link PluginWorktreeCardStatus} `label`, enforced host-side. */
+export const PLUGIN_WORKTREE_CARD_STATUS_LABEL_MAX = 32;
+
+/** Max length of a {@link PluginWorktreeCardStatus} `tooltip`, enforced host-side. */
+export const PLUGIN_WORKTREE_CARD_STATUS_TOOLTIP_MAX = 512;
+
 /** Value a plugin publishes to `when` clauses via {@link PluginHostApi.setContext}. */
 export type PluginContextValue = boolean | string;
 
@@ -5137,6 +5153,31 @@ export interface PluginHostApi extends PluginActivationApi {
    * unloaded.
    */
   setContext(key: string, value: PluginContextValue | null): Promise<void>;
+  /**
+   * Show (or clear) this plugin's status on one worktree's card — a short
+   * one-line `label` with an optional `tooltip` for the detail. Pass `null` to
+   * clear it. A plugin holds one status per worktree, so a second call
+   * replaces the first; every plugin that marks a card gets its own chip,
+   * named after the plugin, so several plugins never hide each other.
+   *
+   * `worktreeId` is a worktree this host can see right now: the `id` (or
+   * `worktreeId`) of an entry in {@link getWorktreesResult}. A project plugin
+   * only ever reaches its own project's worktrees. The call rejects when the
+   * id is not one of them, when the host has no worktree answer yet, or when
+   * the label is empty, multi-line or longer than
+   * {@link PLUGIN_WORKTREE_CARD_STATUS_LABEL_MAX} characters, or the tooltip
+   * longer than {@link PLUGIN_WORKTREE_CARD_STATUS_TOOLTIP_MAX}.
+   *
+   * Statuses are not persisted. They are cleared when the worktree is
+   * removed, when its project closes, and when the plugin unloads or its
+   * worker is replaced, so republish them after a restart. Like
+   * {@link setPanelBadge} this is NOT revoke-guarded and becomes a silent
+   * no-op once the plugin is unloaded.
+   */
+  setWorktreeCardStatus(
+    worktreeId: string,
+    status: PluginWorktreeCardStatus | null
+  ): Promise<void>;
   /**
    * Publish the contextual actions the ⋯ and right-click menus of one of this
    * plugin's own panels offer right now — the backend-side twin of the view's

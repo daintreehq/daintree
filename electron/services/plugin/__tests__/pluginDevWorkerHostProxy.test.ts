@@ -1459,6 +1459,60 @@ describe("PluginDevWorkerHostProxy setContext (#13506)", () => {
   });
 });
 
+describe("PluginDevWorkerHostProxy setWorktreeCardStatus (#13704)", () => {
+  beforeEach(() => vi.clearAllMocks());
+  afterEach(() => vi.restoreAllMocks());
+
+  it("relays the vetted status as a call, normalizing a clear to null", async () => {
+    const { proxy, sent } = makeProxy();
+    const set = proxy.host.setWorktreeCardStatus("/repo/wt", { label: " up ", tooltip: "" });
+    const call = sent.find((m) => m.type === "host-call" && m.method === "setWorktreeCardStatus");
+    expect(call?.params).toEqual({ worktreeId: "/repo/wt", status: { label: "up" } });
+    resolveCall(proxy, sent, "setWorktreeCardStatus", undefined);
+    await expect(set).resolves.toBeUndefined();
+
+    const clear = proxy.host.setWorktreeCardStatus("/repo/wt", undefined as never);
+    const clears = sent.filter(
+      (m) => m.type === "host-call" && m.method === "setWorktreeCardStatus"
+    );
+    expect(clears.at(-1)?.params).toEqual({ worktreeId: "/repo/wt", status: null });
+    resolveCall(proxy, sent, "setWorktreeCardStatus", undefined);
+    await expect(clear).resolves.toBeUndefined();
+  });
+
+  it("passes main's foreign-worktree rejection back to the caller", async () => {
+    const { proxy, sent } = makeProxy();
+    const promise = proxy.host.setWorktreeCardStatus("/other/wt", { label: "x" });
+    const call = sent.find((m) => m.type === "host-call" && m.method === "setWorktreeCardStatus");
+    proxy.handleMessage({
+      type: "host-result",
+      requestId: call.requestId,
+      ok: false,
+      error: 'Plugin "acme" setWorktreeCardStatus: "/other/wt" is not a worktree this plugin can see',
+    });
+    await expect(promise).rejects.toThrow(/is not a worktree this plugin can see/);
+  });
+
+  it("rejects a bad id or status without crossing the port", async () => {
+    const { proxy, sent } = makeProxy();
+    await expect(proxy.host.setWorktreeCardStatus("", { label: "x" })).rejects.toThrow(
+      /setWorktreeCardStatus: worktreeId/
+    );
+    await expect(
+      proxy.host.setWorktreeCardStatus("/wt", { label: "x", color: "red" } as never)
+    ).rejects.toThrow(/setWorktreeCardStatus: status has an unsupported field/);
+    expect(sent.find((m) => m.type === "host-call")).toBeUndefined();
+  });
+
+  it("resolves once the proxy is disposed, like the in-process no-op after unload", async () => {
+    const { proxy } = makeProxy();
+    const promise = proxy.host.setWorktreeCardStatus("/wt", { label: "x" });
+    proxy.dispose();
+    await expect(promise).resolves.toBeUndefined();
+    await expect(proxy.host.setWorktreeCardStatus("", { label: "" })).resolves.toBeUndefined();
+  });
+});
+
 describe("PluginDevWorkerHostProxy invocation id", () => {
   it("stamps each host call with the invocation whose handler made it", async () => {
     const { proxy, sent } = makeProxy();

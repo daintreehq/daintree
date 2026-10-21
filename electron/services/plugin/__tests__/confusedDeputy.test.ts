@@ -268,6 +268,8 @@ function makeHostDeps(): PluginHostFactoryDeps {
     pluginBadges: new Map(),
     pluginToolbarBadges: new Map(),
     emitToolbarBadges: () => {},
+    pluginWorktreeCardStatuses: new Map(),
+    emitWorktreeCardStatuses: () => {},
     pluginPanelMenus: new Map(),
     pluginFsWatchers: new Map(),
     broadcaster: { schedulePluginActionsBroadcast: vi.fn() },

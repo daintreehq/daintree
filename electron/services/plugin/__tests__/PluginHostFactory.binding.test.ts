@@ -142,6 +142,8 @@ function makeHarness(): Harness {
     pluginBadges: new Map(),
     pluginToolbarBadges: new Map(),
     emitToolbarBadges: () => {},
+    pluginWorktreeCardStatuses: new Map(),
+    emitWorktreeCardStatuses: () => {},
     pluginPanelMenus: new Map(),
     pluginFsWatchers: new Map(),
     broadcaster: { schedulePluginActionsBroadcast: vi.fn() },
@@ -1939,5 +1941,186 @@ describe("createHost push rejections are metered", () => {
     expect(() => host.broadcastToRenderer("big", huge)).toThrow(/PLUGIN_PAYLOAD_TOO_LARGE/);
     expect(recordPushRejected).toHaveBeenCalledTimes(3);
     flushPluginPushes();
+  });
+});
+
+describe("createHost setWorktreeCardStatus", () => {
+  function withEmitter(h: Harness): ReturnType<typeof vi.fn> {
+    const emitted = vi.fn();
+    h.deps.pluginWorktreeCardStatuses = new Map();
+    h.deps.emitWorktreeCardStatuses = emitted;
+    return emitted;
+  }
+
+  it("puts a status on one of the bound project's cards and publishes that project", async () => {
+    const h = makeHarness();
+    const emitted = withEmitter(h);
+    h.projectFetch.mockResolvedValue(okFetch([worktree({ id: "wt-a" })]));
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+
+    await host.setWorktreeCardStatus("wt-a", { label: "2 containers", tooltip: "api, db" });
+
+    expect(h.deps.pluginWorktreeCardStatuses.get(PLUGIN_ID)?.get(PROJECT_A)?.get("wt-a")).toEqual({
+      label: "2 containers",
+      tooltip: "api, db",
+    });
+    expect(emitted).toHaveBeenCalledWith(PLUGIN_ID, PROJECT_A);
+    expect(h.ambientFetch).not.toHaveBeenCalled();
+  });
+
+  it("keys the card by the snapshot id when the plugin passes worktreeId", async () => {
+    const h = makeHarness();
+    withEmitter(h);
+    h.projectFetch.mockResolvedValue(
+      okFetch([worktree({ id: "/repos/alpha/wt", worktreeId: "wt-stable" } as never)])
+    );
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+
+    await host.setWorktreeCardStatus("wt-stable", { label: "up" });
+
+    expect([...h.deps.pluginWorktreeCardStatuses.get(PLUGIN_ID)!.get(PROJECT_A)!.keys()]).toEqual([
+      "/repos/alpha/wt",
+    ]);
+  });
+
+  it("rejects a worktree outside the bound project and stores nothing", async () => {
+    const h = makeHarness();
+    const emitted = withEmitter(h);
+    h.projectFetch.mockResolvedValue(okFetch([worktree({ id: "wt-a" })]));
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+
+    await expect(
+      host.setWorktreeCardStatus(path.join(ROOT_B, "feature"), { label: "x" })
+    ).rejects.toThrow(/not a worktree this plugin can see/);
+    expect(h.deps.pluginWorktreeCardStatuses.size).toBe(0);
+    expect(emitted).not.toHaveBeenCalled();
+  });
+
+  it("rejects when the read names another project, even for a matching id", async () => {
+    const h = makeHarness();
+    const emitted = withEmitter(h);
+    h.projectFetch.mockResolvedValue(okFetch([worktree({ id: "wt-b" })], "project-b"));
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+
+    await expect(host.setWorktreeCardStatus("wt-b", { label: "x" })).rejects.toThrow(
+      /unavailable \(project-unavailable\)/
+    );
+    expect(h.deps.pluginWorktreeCardStatuses.size).toBe(0);
+    expect(emitted).not.toHaveBeenCalled();
+  });
+
+  it("rejects while worktrees are unavailable, without pruning what is shown", async () => {
+    const h = makeHarness();
+    const emitted = withEmitter(h);
+    h.projectFetch.mockResolvedValue(okFetch([worktree({ id: "wt-a" })]));
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+    await host.setWorktreeCardStatus("wt-a", { label: "up" });
+    emitted.mockClear();
+
+    h.projectFetch.mockResolvedValue({ status: "unavailable", reason: "workspace-unavailable" });
+    await expect(host.setWorktreeCardStatus("wt-a", null)).rejects.toThrow(/unavailable/);
+
+    expect(h.deps.pluginWorktreeCardStatuses.get(PLUGIN_ID)?.get(PROJECT_A)?.size).toBe(1);
+    expect(emitted).not.toHaveBeenCalled();
+  });
+
+  it("rejects an invalid status before reading anything", async () => {
+    const h = makeHarness();
+    withEmitter(h);
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+
+    await expect(host.setWorktreeCardStatus("wt-a", { label: "" })).rejects.toThrow(
+      /setWorktreeCardStatus: status.label must not be empty/
+    );
+    expect(h.projectFetch).not.toHaveBeenCalled();
+  });
+
+  it("replaces, skips an identical republish, and clears down to nothing", async () => {
+    const h = makeHarness();
+    const emitted = withEmitter(h);
+    h.projectFetch.mockResolvedValue(okFetch([worktree({ id: "wt-a" })]));
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+
+    await host.setWorktreeCardStatus("wt-a", { label: "one" });
+    await host.setWorktreeCardStatus("wt-a", { label: "two" });
+    await host.setWorktreeCardStatus("wt-a", { label: "two" });
+    expect(emitted).toHaveBeenCalledTimes(2);
+    expect(h.deps.pluginWorktreeCardStatuses.get(PLUGIN_ID)?.get(PROJECT_A)?.get("wt-a")).toEqual({
+      label: "two",
+    });
+
+    await host.setWorktreeCardStatus("wt-a", null);
+    await host.setWorktreeCardStatus("wt-a", null);
+    expect(emitted).toHaveBeenCalledTimes(3);
+    expect(h.deps.pluginWorktreeCardStatuses.size).toBe(0);
+  });
+
+  it("lands calls in the order they were made when the reads resolve out of order", async () => {
+    const h = makeHarness();
+    withEmitter(h);
+    const releases: Array<() => void> = [];
+    h.projectFetch.mockImplementation(
+      () =>
+        new Promise<PluginWorktreeSnapshotFetchResult>((resolve) => {
+          releases.push(() => resolve(okFetch([worktree({ id: "wt-a" })])));
+        })
+    );
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+
+    const set = host.setWorktreeCardStatus("wt-a", { label: "busy" });
+    const clear = host.setWorktreeCardStatus("wt-a", null);
+    await flush();
+    // Serialized: the clear's read has not started while the set's is pending.
+    expect(releases).toHaveLength(1);
+    releases[0]();
+    await flush();
+    releases[1]();
+    await Promise.all([set, clear]);
+
+    expect(h.deps.pluginWorktreeCardStatuses.size).toBe(0);
+  });
+
+  it("keeps going after a rejected call", async () => {
+    const h = makeHarness();
+    withEmitter(h);
+    h.projectFetch.mockResolvedValue(okFetch([worktree({ id: "wt-a" })]));
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+
+    await expect(host.setWorktreeCardStatus("wt-nope", { label: "x" })).rejects.toThrow();
+    await host.setWorktreeCardStatus("wt-a", { label: "ok" });
+
+    expect(h.deps.pluginWorktreeCardStatuses.get(PLUGIN_ID)?.get(PROJECT_A)?.size).toBe(1);
+  });
+
+  it("does nothing for a stale host after a same-id reload", async () => {
+    const h = makeHarness();
+    const emitted = withEmitter(h);
+    let release: (value: PluginWorktreeSnapshotFetchResult) => void = () => {};
+    h.projectFetch.mockReturnValue(
+      new Promise<PluginWorktreeSnapshotFetchResult>((resolve) => {
+        release = resolve;
+      })
+    );
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+
+    const pending = host.setWorktreeCardStatus("wt-a", { label: "late" });
+    h.plugins.set(PLUGIN_ID, fakePlugin());
+    release(okFetch([worktree({ id: "wt-a" })]));
+
+    await expect(pending).resolves.toBeUndefined();
+    expect(h.deps.pluginWorktreeCardStatuses.size).toBe(0);
+    expect(emitted).not.toHaveBeenCalled();
+  });
+
+  it("files an unbound plugin's status under the project its read named", async () => {
+    const h = makeHarness();
+    const emitted = withEmitter(h);
+    h.ambientFetch.mockResolvedValue(okFetch([worktree({ id: "wt-focus" })], "project-focus"));
+    const { host } = createHost(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING);
+
+    await host.setWorktreeCardStatus("wt-focus", { label: "up" });
+
+    expect(emitted).toHaveBeenCalledWith(PLUGIN_ID, "project-focus");
+    expect(h.deps.pluginWorktreeCardStatuses.get(PLUGIN_ID)?.has("project-focus")).toBe(true);
   });
 });

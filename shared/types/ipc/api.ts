@@ -2459,6 +2459,18 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       }) => void
     ): () => void;
     /**
+     * Subscribe to plugin worktree card statuses (#13704). The callback fires
+     * with one plugin's COMPLETE map for one project (worktreeId → status); an
+     * empty map clears that plugin's statuses there. Returns a cleanup.
+     */
+    onWorktreeCardStatusesChanged(
+      callback: (payload: {
+        pluginId: string;
+        projectId: string;
+        statuses: Record<string, import("../plugin.js").PluginWorktreeCardStatus>;
+      }) => void
+    ): () => void;
+    /**
      * Subscribe to plugin runtime panel menus (#13213). The callback fires with
      * one plugin's COMPLETE current map (`panelId → items`); an empty map clears
      * that plugin's lists, as on unload. Returns a cleanup.

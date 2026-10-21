@@ -424,6 +424,36 @@ describe("createMockHost", () => {
     expect(host.setContextCalls).toHaveLength(recorded);
   });
 
+  it("records setWorktreeCardStatus calls against the seeded worktrees (#13704)", async () => {
+    const host = createMockHost({ worktrees: [sampleSnapshot, otherSnapshot] });
+    await host.setWorktreeCardStatus("wt-1", { label: " 2 containers ", tooltip: "api, db" });
+    await host.setWorktreeCardStatus("wt-2", { label: "stopped" });
+    await host.setWorktreeCardStatus("wt-2", null);
+    expect(host.setWorktreeCardStatusCalls).toEqual([
+      { worktreeId: "wt-1", status: { label: "2 containers", tooltip: "api, db" } },
+      { worktreeId: "wt-2", status: { label: "stopped" } },
+      { worktreeId: "wt-2", status: null },
+    ]);
+    expect([...host.worktreeCardStatuses]).toEqual([
+      ["wt-1", { label: "2 containers", tooltip: "api, db" }],
+    ]);
+  });
+
+  it("setWorktreeCardStatus rejects what the real host rejects, recording nothing (#13704)", async () => {
+    const host = createMockHost({ worktrees: [sampleSnapshot] });
+    await expect(host.setWorktreeCardStatus("wt-9", { label: "x" })).rejects.toThrow(
+      /"wt-9" is not a worktree this plugin can see/
+    );
+    await expect(host.setWorktreeCardStatus("wt-1", { label: "" })).rejects.toThrow(
+      /setWorktreeCardStatus: status.label/
+    );
+    host.simulateWorktreesResult({ status: "unavailable", reason: "workspace-unavailable" });
+    await expect(host.setWorktreeCardStatus("wt-1", { label: "x" })).rejects.toThrow(
+      /worktrees are unavailable/
+    );
+    expect(host.setWorktreeCardStatusCalls).toEqual([]);
+  });
+
   it("records setToolbarButtonBadge calls, normalizing a cleared badge to null (#13503)", async () => {
     const host = createMockHost();
     await host.setToolbarButtonBadge("needs", { kind: "label", text: "12", color: "warning" });

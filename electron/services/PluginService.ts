@@ -82,6 +82,7 @@ import type {
   PluginWorktreeStatus,
   PluginPanelBadge,
   PluginContextValue,
+  PluginWorktreeCardStatus,
   PluginRuntimeStatus,
   PluginWorkerStatus,
   PluginWorkerState,
@@ -768,6 +769,17 @@ export class PluginService {
    */
   private pluginContextKeys = new Map<string, Map<string, PluginContextValue>>();
   /**
+   * Worktree card statuses set via `host.setWorktreeCardStatus`, keyed
+   * `pluginId → projectId → worktreeId → status` (#13704). Every bucket is
+   * sent only to its own project's views — an app-global plugin included,
+   * since each status names the project its worktree was read from — and
+   * replayed to a cold-restored view through {@link pushSnapshotTo}.
+   */
+  private pluginWorktreeCardStatuses = new Map<
+    string,
+    Map<string, Map<string, PluginWorktreeCardStatus>>
+  >();
+  /**
    * Runtime panel menus set via `host.setPanelMenuItems`, keyed `pluginId →
    * panelId → items` (#13213). Held here for the same reason as
    * {@link pluginBadges}: a cold-restored view gets them back through
@@ -930,6 +942,22 @@ export class PluginService {
    */
   private readonly onWorktreeActivatedForCache = (): void => {
     this.storage.evictWorktreeScopedStores();
+  };
+  /**
+   * Drop every plugin's card status for a removed worktree (#13704), so a
+   * worktree later created at the same path starts bare. A worktree id is its
+   * path, so the id alone names it; only a positive removal prunes — an empty
+   * or unavailable worktree read never does.
+   */
+  private readonly onWorktreeRemovedForCardStatuses = (payload: { worktreeId: string }): void => {
+    for (const [pluginId, byProject] of [...this.pluginWorktreeCardStatuses]) {
+      for (const [projectId, statuses] of [...byProject]) {
+        if (!statuses.delete(payload.worktreeId)) continue;
+        if (statuses.size === 0) byProject.delete(projectId);
+        if (byProject.size === 0) this.pluginWorktreeCardStatuses.delete(pluginId);
+        this.emitWorktreeCardStatuses(pluginId, projectId);
+      }
+    }
   };
   /**
    * Event subscriptions registered during plugin `activate()` when the
@@ -1404,6 +1432,7 @@ export class PluginService {
       }
     }
     this.workspaceClient?.off("worktree-activated", this.onWorktreeActivatedForCache);
+    this.workspaceClient?.off("worktree-removed", this.onWorktreeRemovedForCardStatuses);
     this.disposeRegistrySubscriptions();
     // Settle the init gate so unit tests that tear down the service without
     // running activateStartupFinishedPlugins() don't hang IPC callers awaiting
@@ -1435,11 +1464,14 @@ export class PluginService {
     // subscription single even when called repeatedly with the same client.
     if (this.workspaceClient && this.workspaceClient !== client) {
       this.workspaceClient.off("worktree-activated", this.onWorktreeActivatedForCache);
+      this.workspaceClient.off("worktree-removed", this.onWorktreeRemovedForCardStatuses);
     }
     this.workspaceClient = client;
     if (client) {
       client.off("worktree-activated", this.onWorktreeActivatedForCache);
       client.on("worktree-activated", this.onWorktreeActivatedForCache);
+      client.off("worktree-removed", this.onWorktreeRemovedForCardStatuses);
+      client.on("worktree-removed", this.onWorktreeRemovedForCardStatuses);
     }
     if (client && this.pendingWorktreeSubs.length > 0) {
       const pending = this.pendingWorktreeSubs;
@@ -3096,6 +3128,7 @@ export class PluginService {
         this.clearPluginPanelMenus(pluginId);
         if (this.pluginToolbarBadges.delete(pluginId)) this.emitToolbarBadges(pluginId);
         this.resetPluginContextKeys(pluginId);
+        this.clearPluginWorktreeCardStatuses(pluginId);
       },
       // A protocol violation terminates the worker for good (#12276). Provenance
       // is already recorded by `onActivationResult`; this releases the runtime
@@ -3838,6 +3871,9 @@ export class PluginService {
       emitToolbarBadges: (pluginId) => this.emitToolbarBadges(pluginId),
       pluginContextKeys: this.pluginContextKeys,
       emitContextKeys: (pluginId) => this.emitContextKeys(pluginId),
+      pluginWorktreeCardStatuses: this.pluginWorktreeCardStatuses,
+      emitWorktreeCardStatuses: (pluginId, projectId) =>
+        this.emitWorktreeCardStatuses(pluginId, projectId),
       pluginPanelMenus: this.pluginPanelMenus,
       pluginFsWatchers: this.pluginFsWatchers,
       broadcaster: this.broadcaster,
@@ -5563,6 +5599,40 @@ export class PluginService {
   }
 
   /**
+   * Publish one plugin's complete card statuses for one project, to that
+   * project's views only. An empty map clears them.
+   */
+  private emitWorktreeCardStatuses(pluginId: string, projectId: string): void {
+    if (this.disposed) return;
+    broadcastToProjectRenderers(projectId, CHANNELS.EVENTS_PUSH, {
+      name: "plugin:worktree-card-statuses-changed" as const,
+      payload: {
+        pluginId,
+        projectId,
+        statuses: this.serializePluginWorktreeCardStatuses(pluginId, projectId),
+      },
+    });
+  }
+
+  /** One plugin's card statuses in one project (`worktreeId → status`), empty when none. */
+  private serializePluginWorktreeCardStatuses(
+    pluginId: string,
+    projectId: string
+  ): Record<string, PluginWorktreeCardStatus> {
+    const statuses = this.pluginWorktreeCardStatuses.get(pluginId)?.get(projectId);
+    if (!statuses || statuses.size === 0) return {};
+    return Object.fromEntries(statuses);
+  }
+
+  /** Drop a plugin's card statuses everywhere, clearing each project's views. */
+  private clearPluginWorktreeCardStatuses(pluginId: string): void {
+    const byProject = this.pluginWorktreeCardStatuses.get(pluginId);
+    if (!byProject) return;
+    this.pluginWorktreeCardStatuses.delete(pluginId);
+    for (const projectId of byProject.keys()) this.emitWorktreeCardStatuses(pluginId, projectId);
+  }
+
+  /**
    * Publish the complete set of `pluginId`'s context keys, scoped like
    * {@link emitToolbarBadges}. An empty map means the plugin holds none; `null`
    * means it no longer publishes at all (unloaded or its worker retired).
@@ -5985,6 +6055,13 @@ export class PluginService {
     pluginMcpGrantRegistry.revokeHeld(
       (instanceId) => projectIdFromPluginInstanceKey(instanceId) === projectId
     );
+    // Every plugin's statuses on the closed project's cards, app-global ones
+    // included: they described worktrees nobody is looking at any more.
+    for (const [pluginId, byProject] of [...this.pluginWorktreeCardStatuses]) {
+      if (!byProject.delete(projectId)) continue;
+      if (byProject.size === 0) this.pluginWorktreeCardStatuses.delete(pluginId);
+      this.emitWorktreeCardStatuses(pluginId, projectId);
+    }
     if (!this.projectPluginController) return;
     await this.projectPluginController.onProjectClosed(projectId);
     await this.pushSnapshotToProject(projectId);
@@ -6624,6 +6701,10 @@ export class PluginService {
     if (this.pluginContextKeys.delete(pluginId)) {
       runUnloadStep(pluginId, "clearContextKeys", () => this.emitContextKeys(pluginId));
     }
+
+    runUnloadStep(pluginId, "clearWorktreeCardStatuses", () =>
+      this.clearPluginWorktreeCardStatuses(pluginId)
+    );
 
     runUnloadStep(pluginId, "clearPanelMenus", () => this.clearPluginPanelMenus(pluginId));
 
@@ -7775,6 +7856,23 @@ export class PluginService {
         webContents.send(CHANNELS.EVENTS_PUSH, envelope);
       } catch {
         // Silently ignore send failures during window initialization/disposal.
+      }
+    }
+    for (const [pluginId, byProject] of this.pluginWorktreeCardStatuses) {
+      for (const projectId of byProject.keys()) {
+        if (!inView(projectId)) continue;
+        try {
+          webContents.send(CHANNELS.EVENTS_PUSH, {
+            name: "plugin:worktree-card-statuses-changed",
+            payload: {
+              pluginId,
+              projectId,
+              statuses: this.serializePluginWorktreeCardStatuses(pluginId, projectId),
+            },
+          });
+        } catch {
+          // Silently ignore send failures during window initialization/disposal.
+        }
       }
     }
     // Scoped like the running-action replay below: a project plugin's menus
