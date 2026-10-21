@@ -191,6 +191,27 @@ describe("runCodexAppServerSession", () => {
     ]);
   });
 
+  it("permits the account read alongside the quota read in one session (#13702)", async () => {
+    const result = await startSession(async (call) => {
+      const quota = call<{ tag: string }>("account/rateLimits/read");
+      await flush();
+      child.respondTo("account/rateLimits/read", { tag: "quota" });
+      await quota;
+      const account = call<{ tag: string }>("account/read");
+      await flush();
+      child.respondTo("account/read", { tag: "account" });
+      return { quota: await quota, account: await account };
+    });
+
+    expect(result).toEqual({ quota: { tag: "quota" }, account: { tag: "account" } });
+    expect(child.requests.map((entry) => entry.method)).toEqual([
+      "initialize",
+      "initialized",
+      "account/rateLimits/read",
+      "account/read",
+    ]);
+  });
+
   it("surfaces a JSON-RPC error as a protocol-error rejection", async () => {
     const error = await startSession(async (call) => {
       const pending = call("thread/list").then(

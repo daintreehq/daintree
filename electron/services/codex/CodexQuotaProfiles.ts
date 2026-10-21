@@ -4,6 +4,7 @@
  * the store read and the filesystem check.
  */
 
+import { realpath } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { AgentPreset } from "../../../shared/config/agentRegistry.js";
@@ -16,6 +17,8 @@ export interface CodexQuotaProfileTarget {
   home: string;
   isDefault: boolean;
   presetNames: string[];
+  /** Each name's position in the preset list, so a later merge can keep preset order. */
+  presetOrder: number[];
   invalid?: CodexQuotaProfileHomeReason;
 }
 
@@ -50,6 +53,21 @@ function homeIdentity(home: string): string {
 }
 
 /**
+ * The key one directory has however it's spelled (#13702). The promise
+ * `realpath` resolves symlinks and returns the on-disk case on a
+ * case-insensitive volume; the callback and sync forms keep the typed case.
+ * A home it can't resolve keeps the spelling-only key, as Codex's own store
+ * key falls back to the raw path.
+ */
+export async function canonicalCodexHomeKey(home: string): Promise<string> {
+  try {
+    return homeIdentity(await realpath(home));
+  } catch {
+    return homeIdentity(home);
+  }
+}
+
+/**
  * Only presets that name their own home get a profile. A preset without one
  * runs on the default, and listing every such preset under it would bury the
  * presets that actually switch account.
@@ -59,14 +77,17 @@ export function resolveCodexQuotaProfiles(
   defaultHome: string = defaultCodexHome()
 ): CodexQuotaProfileTarget[] {
   const targets: CodexQuotaProfileTarget[] = [
-    { home: defaultHome, isDefault: true, presetNames: [] },
+    { home: defaultHome, isDefault: true, presetNames: [], presetOrder: [] },
   ];
   const byHome = new Map<string, CodexQuotaProfileTarget>([
     [homeIdentity(defaultHome), targets[0]!],
   ]);
   const invalidByRaw = new Map<string, CodexQuotaProfileTarget>();
 
-  for (const preset of getMergedPresets("codex", entry?.customPresets as AgentPreset[])) {
+  for (const [order, preset] of getMergedPresets(
+    "codex",
+    entry?.customPresets as AgentPreset[]
+  ).entries()) {
     const raw = presetCodexHome(preset);
     if (!raw) continue;
     if (!isFullyQualified(raw)) {
@@ -74,11 +95,13 @@ export function resolveCodexQuotaProfiles(
       const existing = invalidByRaw.get(raw);
       if (existing) {
         existing.presetNames.push(preset.name);
+        existing.presetOrder.push(order);
       } else {
         const target: CodexQuotaProfileTarget = {
           home: raw,
           isDefault: false,
           presetNames: [preset.name],
+          presetOrder: [order],
           invalid: "home-not-absolute",
         };
         invalidByRaw.set(raw, target);
@@ -87,14 +110,21 @@ export function resolveCodexQuotaProfiles(
       continue;
     }
     // Normalises separators, dot segments and a trailing slash, so
-    // `/Users/me/.codex/` folds into the default row. Symlinks are left alone.
+    // `/Users/me/.codex/` folds into the default row. Symlinks and case on a
+    // case-insensitive volume are folded later, by the service's realpath.
     const home = path.resolve(raw);
     const existing = byHome.get(homeIdentity(home));
     if (existing) {
       existing.presetNames.push(preset.name);
+      existing.presetOrder.push(order);
       continue;
     }
-    const target: CodexQuotaProfileTarget = { home, isDefault: false, presetNames: [preset.name] };
+    const target: CodexQuotaProfileTarget = {
+      home,
+      isDefault: false,
+      presetNames: [preset.name],
+      presetOrder: [order],
+    };
     byHome.set(homeIdentity(home), target);
     targets.push(target);
   }

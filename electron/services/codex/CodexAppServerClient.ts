@@ -43,6 +43,7 @@ const ALLOWED_METHODS = Object.freeze([
   "thread/read",
   "thread/turns/list",
   "account/rateLimits/read",
+  "account/read",
 ] as const);
 
 export function isAllowedCodexAppServerMethod(method: string): boolean {

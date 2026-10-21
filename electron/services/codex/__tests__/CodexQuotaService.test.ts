@@ -14,7 +14,7 @@ vi.mock("../CodexAppServerClient.js", async () => {
   return { ...actual, runCodexAppServerSession: runSession };
 });
 
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { CodexAppServerError } from "../CodexAppServerClient.js";
@@ -339,6 +339,184 @@ describe("readCodexQuotaProfiles (#13686)", () => {
     expect(runSession).toHaveBeenCalledTimes(2);
     await refreshCodexQuotaProfiles();
     expect(runSession).toHaveBeenCalledTimes(4);
+  });
+
+  describe("one login, one row (#13702)", () => {
+    /** Each home answers with the workspace id and email given for it. */
+    function respondAs(
+      identityFor: (codexHome: string | undefined) => {
+        accountId?: string | null;
+        email?: string | null;
+        accountRead?: "throws";
+      }
+    ) {
+      const methods: string[] = [];
+      runSession.mockImplementation(
+        async (run: (call: Call) => Promise<unknown>, options: { codexHome?: string } = {}) =>
+          run(async (method) => {
+            methods.push(method);
+            const identity = identityFor(options.codexHome);
+            if (method === "account/rateLimits/read") {
+              return { rateLimits: { primary: FIVE_HOURS }, accountId: identity.accountId ?? null };
+            }
+            if (method === "account/read") {
+              if (identity.accountRead === "throws") throw new Error("method not found");
+              return {
+                account: { type: "chatgpt", email: identity.email ?? null, planType: "plus" },
+                requiresOpenaiAuth: true,
+              };
+            }
+            throw new Error(`unexpected ${method}`);
+          })
+      );
+      return methods;
+    }
+
+    it("folds a symlink to a preset home into that home's row", async () => {
+      const link = path.join(root, "link");
+      symlinkSync(second, link, "junction");
+      presets(
+        { id: "a", name: "Work", env: { CODEX_HOME: second } },
+        { id: "b", name: "Work alias", env: { CODEX_HOME: link } }
+      );
+      respondPerHome(() => 5);
+      const profiles = await readCodexQuotaProfiles();
+      expect(profiles.map((p) => p.presetNames)).toEqual([[], ["Work", "Work alias"]]);
+      expect(runSession).toHaveBeenCalledTimes(2);
+      // The first spelling is the one Codex is launched with, as a pane would.
+      expect(runSession.mock.calls[1]?.[1]).toEqual({ codexHome: second });
+    });
+
+    it("folds a symlink to the default home into the default row", async () => {
+      const link = path.join(root, "default-link");
+      symlinkSync(defaultHome, link, "junction");
+      presets({ id: "a", name: "Personal", env: { CODEX_HOME: link } });
+      respondPerHome(() => 5);
+      const profiles = await readCodexQuotaProfiles();
+      expect(profiles.map((p) => [p.isDefault, p.presetNames])).toEqual([[true, ["Personal"]]]);
+      expect(runSession).toHaveBeenCalledTimes(1);
+    });
+
+    it("folds a different-case spelling on a case-insensitive volume", async () => {
+      const upper = path.join(root, "SECOND");
+      const caseInsensitive = existsSync(upper);
+      presets(
+        { id: "a", name: "Work", env: { CODEX_HOME: second } },
+        { id: "b", name: "Work upper", env: { CODEX_HOME: upper } }
+      );
+      respondPerHome(() => 5);
+      const profiles = await readCodexQuotaProfiles();
+      expect(profiles.map((p) => p.presetNames)).toEqual(
+        caseInsensitive ? [[], ["Work", "Work upper"]] : [[], ["Work"], ["Work upper"]]
+      );
+    });
+
+    it("folds two homes signed into the same login, but still reads both", async () => {
+      presets({ id: "a", name: "Work", env: { CODEX_HOME: second } });
+      respondAs(() => ({ accountId: "ws-1", email: "me@example.com" }));
+      const profiles = await readCodexQuotaProfiles();
+      expect(profiles.map((p) => [p.isDefault, p.presetNames, p.result.status])).toEqual([
+        [true, ["Work"], "ok"],
+      ]);
+      expect(runSession).toHaveBeenCalledTimes(2);
+      // The identity stays in main.
+      expect(JSON.stringify(profiles)).not.toMatch(/ws-1|example\.com/);
+    });
+
+    it("keeps two users of one Team workspace apart", async () => {
+      presets({ id: "a", name: "Colleague", env: { CODEX_HOME: second } });
+      respondAs((home) => ({
+        accountId: "ws-team",
+        email: home === second ? "them@example.com" : "me@example.com",
+      }));
+      const profiles = await readCodexQuotaProfiles();
+      expect(profiles.map((p) => p.presetNames)).toEqual([[], ["Colleague"]]);
+    });
+
+    it("never folds on the workspace id alone", async () => {
+      presets({ id: "a", name: "Work", env: { CODEX_HOME: second } });
+      respondAs(() => ({ accountId: "ws-1", accountRead: "throws" }));
+      const profiles = await readCodexQuotaProfiles();
+      expect(profiles.map((p) => [p.presetNames, p.result.status])).toEqual([
+        [[], "ok"],
+        [["Work"], "ok"],
+      ]);
+    });
+
+    it("doesn't ask for the account when the reading names no workspace", async () => {
+      presets({ id: "a", name: "Work", env: { CODEX_HOME: second } });
+      const methods = respondAs(() => ({ accountId: null, email: "me@example.com" }));
+      const profiles = await readCodexQuotaProfiles();
+      expect(profiles).toHaveLength(2);
+      expect(methods).toEqual(["account/rateLimits/read", "account/rateLimits/read"]);
+    });
+
+    it("keeps a quota that arrived when the session dies during the account read", async () => {
+      // The account read never answers; the transport's deadline is what ends it.
+      runSession.mockImplementation(async (run: (call: Call) => Promise<unknown>) => {
+        void run(async (method) => {
+          if (method === "account/rateLimits/read") {
+            return { rateLimits: { primary: FIVE_HOURS }, accountId: "ws-1" };
+          }
+          return new Promise(() => {});
+        });
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        throw new CodexAppServerError("timeout", "session deadline");
+      });
+      const result = await refreshCodexQuota();
+      expect(used(result)).toBe(42.4);
+    });
+
+    it("shows the freshest reading when two homes fold into one login", async () => {
+      presets({ id: "a", name: "Work", env: { CODEX_HOME: second } });
+      respondAs(() => ({ accountId: "ws-1", email: "me@example.com" }));
+      await readCodexQuota();
+      vi.useFakeTimers({ toFake: ["Date"] });
+      try {
+        vi.setSystemTime(Date.now() + 10_000);
+        runSession.mockImplementation(
+          async (run: (call: Call) => Promise<unknown>, options: { codexHome?: string } = {}) =>
+            run(async (method) => {
+              if (method === "account/read") {
+                return { account: { type: "chatgpt", email: "me@example.com" } };
+              }
+              const usedPercent = options.codexHome === second ? 99 : 1;
+              return {
+                rateLimits: { primary: { usedPercent, windowDurationMins: 300 } },
+                accountId: "ws-1",
+              };
+            })
+        );
+        const profiles = await readCodexQuotaProfiles();
+        expect(profiles.map((p) => [p.isDefault, p.presetNames, used(p.result)])).toEqual([
+          [true, ["Work"], 99],
+        ]);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("lists folded presets in preset order, not home order", async () => {
+      const link = path.join(root, "second-link");
+      symlinkSync(second, link, "junction");
+      presets(
+        { id: "a", name: "First", env: { CODEX_HOME: second } },
+        { id: "b", name: "Second", env: { CODEX_HOME: defaultHome } },
+        { id: "c", name: "Third", env: { CODEX_HOME: link } }
+      );
+      respondAs(() => ({ accountId: "ws-1", email: "me@example.com" }));
+      const profiles = await readCodexQuotaProfiles();
+      expect(profiles.map((p) => p.presetNames)).toEqual([["First", "Second", "Third"]]);
+    });
+
+    it("folds a cached reading too", async () => {
+      presets({ id: "a", name: "Work", env: { CODEX_HOME: second } });
+      respondAs(() => ({ accountId: "ws-1", email: "me@example.com" }));
+      await readCodexQuotaProfiles();
+      const profiles = await readCodexQuotaProfiles();
+      expect(profiles.map((p) => p.presetNames)).toEqual([["Work"]]);
+      expect(runSession).toHaveBeenCalledTimes(2);
+    });
   });
 
   it("keeps going after one home's read fails", async () => {
