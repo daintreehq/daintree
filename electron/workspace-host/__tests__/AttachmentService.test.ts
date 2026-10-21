@@ -20,6 +20,8 @@ import {
 import type { WorktreeMonitor } from "../WorktreeMonitor.js";
 
 const ROOT = "/repo";
+const QUOTED_BRANCH_A = process.platform === "win32" ? '"feature/a"' : "'feature/a'";
+const QUOTED_BRANCH_B = process.platform === "win32" ? '"feature/b"' : "'feature/b'";
 
 interface FakeMonitor {
   id: string;
@@ -177,7 +179,7 @@ describe("AttachmentService", () => {
 
     expect(result).toEqual({ success: true });
     expect(h.ran.map((r) => [r.command, r.cwd])).toEqual([
-      ["tunnel up 'feature/a'", "/wt/a"],
+      [`tunnel up ${QUOTED_BRANCH_A}`, "/wt/a"],
       ["tunnel status", "/wt/a"],
     ]);
     expect(h.ran[0]!.env.DAINTREE_WORKTREE_PATH).toBe("/wt/a");
@@ -201,7 +203,7 @@ describe("AttachmentService", () => {
     expect(await h.service.run("/wt/b", "tunnel", "attach")).toEqual({ success: true });
     expect(h.ran.map((r) => [r.command, r.cwd])).toEqual([
       ["tunnel down", "/wt/a"],
-      ["tunnel up 'feature/b'", "/wt/b"],
+      [`tunnel up ${QUOTED_BRANCH_B}`, "/wt/b"],
       ["tunnel status", "/wt/b"],
     ]);
     expect(tunnelOn(h, "/wt/a")?.heldHere).toBe(false);
@@ -287,10 +289,10 @@ describe("AttachmentService", () => {
       h.service.run("/wt/b", "tunnel", "attach"),
     ]);
     expect(h.ran.map((r) => `${r.command}@${r.cwd}`)).toEqual([
-      "tunnel up 'feature/a'@/wt/a",
+      `tunnel up ${QUOTED_BRANCH_A}@/wt/a`,
       "tunnel status@/wt/a",
       "tunnel down@/wt/a",
-      "tunnel up 'feature/b'@/wt/b",
+      `tunnel up ${QUOTED_BRANCH_B}@/wt/b`,
       "tunnel status@/wt/b",
     ]);
   });
@@ -422,7 +424,7 @@ describe("AttachmentService", () => {
     expect(await attach).toEqual({ success: true });
     expect(h.ran.map((r) => `${r.command}@${r.cwd}`).slice(0, 2)).toEqual([
       "tunnel down@/wt/a",
-      "tunnel up 'feature/b'@/wt/b",
+      `tunnel up ${QUOTED_BRANCH_B}@/wt/b`,
     ]);
   });
 
@@ -509,7 +511,7 @@ describe("AttachmentService", () => {
       {
         phase: "attachment-detach",
         attachment: "tunnel",
-        commands: ["tunnel down 'feature/a'"],
+        commands: [`tunnel down ${QUOTED_BRANCH_A}`],
         approved: true,
       },
     ]);

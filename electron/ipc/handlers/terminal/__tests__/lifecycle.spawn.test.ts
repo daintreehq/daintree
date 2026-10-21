@@ -24,6 +24,14 @@ vi.mock("electron", () => ({
   },
 }));
 
+// The external electron-store dependency bypasses Vitest's Electron mock.
+vi.mock("../../../../store.js", () => ({
+  store: {
+    get: vi.fn(),
+    set: vi.fn(),
+  },
+}));
+
 const { mockGetCurrentProject, mockGetProjectById, mockGetProjectSettings } = vi.hoisted(() => ({
   mockGetCurrentProject: vi.fn(),
   mockGetProjectById: vi.fn(),
