@@ -68,6 +68,12 @@ const HOST_ROW_CLASS = cn(
   "@[15rem]/others:grid-cols-[1.375rem_minmax(0,1fr)_repeat(3,2rem)]"
 );
 
+/**
+ * An asking row sits one host row in, and keeps that much scroll margin so
+ * revealing or tabbing to it never parks it under its pinned host.
+ */
+const ASK_ROW_CLASS = "flex gap-2 pl-7.5 scroll-mt-6 @[15rem]/others:pl-8.5";
+
 /** Where each counted band's column starts, as literal classes for Tailwind to see. */
 const BAND_COLUMN: Record<RowBand, string> = {
   quiet: "col-start-3",
@@ -185,15 +191,19 @@ function useHiddenEdges(el: HTMLUListElement | null): HiddenEdges {
     const measure = () => {
       const top = el.scrollTop;
       const bottom = top + el.clientHeight;
+      // An asking row's host is pinned over the top of the scroll, so the
+      // first row's height of it is covered rather than in view.
+      const pinned =
+        el.querySelector<HTMLElement>("[data-other-hosts-row='host']")?.offsetHeight ?? 0;
       const above = tally();
       const below = tally();
       for (const row of el.querySelectorAll<HTMLElement>("[data-other-hosts-row]")) {
         // A row more than half past an edge is one the eye can't read.
+        const isHost = row.dataset.otherHostsRow === "host";
         const middle = row.offsetTop + row.offsetHeight / 2;
-        const side = middle < top ? above : middle > bottom ? below : null;
+        const side = middle < top + (isHost ? 0 : pinned) ? above : middle > bottom ? below : null;
         if (!side) continue;
         const asks = Number(row.dataset.asks ?? "0");
-        const isHost = row.dataset.otherHostsRow === "host";
         if (isHost) side.hosts += 1;
         else side.asking += asks;
         // Above, the nearest is the last one passed; below, the first one met.
@@ -252,13 +262,18 @@ function useHiddenEdges(el: HTMLUListElement | null): HiddenEdges {
  * pill is the pointer's shortcut and stays out of the accessibility tree.
  */
 function OverflowCue({ direction, past }: { direction: "above" | "below"; past: HiddenPast }) {
-  const count = past.asking > 0 ? past.asking : past.hosts;
-  const { isVisible, shouldRender } = useAnimatedPresence({ isOpen: count > 0 });
+  const live = past.asking > 0 ? past.asking : past.hosts;
+  const { isVisible, shouldRender } = useAnimatedPresence({ isOpen: live > 0 });
+  // Fading out, it keeps saying what it last said rather than "0".
+  const [lastShown, setLastShown] = useState<HiddenPast>(past);
+  if (live > 0 && !samePast(past, lastShown)) setLastShown(past);
+  const shown = live > 0 ? past : lastShown;
+  const count = shown.asking > 0 ? shown.asking : shown.hosts;
   if (!shouldRender) return null;
   const description =
-    past.asking > 0
-      ? `${pluralize(past.asking, "agent")} asking ${direction}`
-      : `${pluralize(past.hosts, "more host", "more hosts")} ${direction}`;
+    shown.asking > 0
+      ? `${pluralize(shown.asking, "agent")} asking ${direction}`
+      : `${pluralize(shown.hosts, "more host", "more hosts")} ${direction}`;
   const Chevron = direction === "above" ? ChevronUp : ChevronDown;
   return (
     <div
@@ -276,12 +291,12 @@ function OverflowCue({ direction, past }: { direction: "above" | "below"; past: 
             translateDirection={direction === "above" ? "up" : "down"}
             tabIndex={-1}
             onMouseDown={(e) => e.preventDefault()}
-            onClick={() => past.nearest?.scrollIntoView({ block: "nearest" })}
+            onClick={() => shown.nearest?.scrollIntoView({ block: "nearest" })}
             className="flex items-center gap-1.5 px-2.5 py-1"
           >
             <Chevron className="h-3 w-3" />
             <span className="font-medium tabular-nums">{count}</span>
-            {past.asking > 0 && (
+            {shown.asking > 0 && (
               <HollowCircle className={cn("h-3 w-3 shrink-0", STATE_COLORS.waiting)} />
             )}
           </ScrollPill>
@@ -404,7 +419,7 @@ export function OtherHostsWorktreeGroup({ projectId }: OtherHostsWorktreeGroupPr
                             data-asks="1"
                             aria-label={askDescription(ask, host.hostName)}
                             onClick={(event) => openAsk(host, ask, event)}
-                            className={cn(ROW_CLASS, "flex gap-2 pl-7.5 @[15rem]/others:pl-8.5")}
+                            className={cn(ROW_CLASS, ASK_ROW_CLASS)}
                           >
                             <GlyphSlot>
                               <PilotRunState
@@ -440,10 +455,7 @@ export function OtherHostsWorktreeGroup({ projectId }: OtherHostsWorktreeGroupPr
                             data-asks={hidden.length}
                             aria-label={`${hidden.length} more asking on ${host.hostName}`}
                             onClick={(event) => openAsk(host, hidden[0]!, event)}
-                            className={cn(
-                              ROW_CLASS,
-                              "flex gap-2 pl-7.5 text-text-secondary @[15rem]/others:pl-8.5"
-                            )}
+                            className={cn(ROW_CLASS, ASK_ROW_CLASS, "text-text-secondary")}
                           >
                             <GlyphSlot />
                             <span aria-hidden="true">{hidden.length} more</span>

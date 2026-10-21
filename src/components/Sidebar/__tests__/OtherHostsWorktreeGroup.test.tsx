@@ -271,7 +271,7 @@ describe("OtherHostsWorktreeGroup", () => {
       eventListener?.({ type: "worktrees", hostId: "linux" });
     });
     const asks = await screen.findAllByTestId("other-hosts-ask-row");
-    expect(asks[0]!.textContent).toContain("feature/c");
+    expect(asks[0]!.getAttribute("aria-label")).toBe("feature/c on name-linux, waiting (observed)");
     expect(locate).toHaveBeenCalledTimes(2);
   });
 
@@ -291,6 +291,31 @@ describe("OtherHostsWorktreeGroup", () => {
     await waitFor(() => expect(locate).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(countsShown(screen.getByTestId("other-hosts-host-row"))).toBe(""));
     expect(screen.queryAllByTestId("other-hosts-ask-row")).toHaveLength(0);
+  });
+
+  it("forgets a connected host that stops listing this project once it says it no longer has it", async () => {
+    render(<OtherHostsWorktreeGroup projectId={PROJECT} />);
+    await screen.findAllByTestId("other-hosts-ask-row");
+    expect(locate).toHaveBeenCalledTimes(1);
+
+    // The checkout is removed on the host: its list no longer has the project,
+    // and asked again, it says so.
+    lists.linux = [worktree("someone-else", "other/x")];
+    presence = [{ hostId: "linux", projects: [] }];
+    await act(async () => {
+      eventListener?.({ type: "worktrees", hostId: "linux" });
+    });
+    await waitFor(() => expect(screen.queryAllByTestId("other-hosts-host-row")).toHaveLength(0));
+    expect(locate).toHaveBeenCalledTimes(2);
+  });
+
+  it("never carries the last project's hosts over to a new one while its own answer is out", async () => {
+    const { rerender } = render(<OtherHostsWorktreeGroup projectId={PROJECT} />);
+    await screen.findAllByTestId("other-hosts-ask-row");
+
+    locate.mockImplementationOnce(() => new Promise<HostProjectPresence[]>(() => {}));
+    rerender(<OtherHostsWorktreeGroup projectId={"b".repeat(64)} />);
+    expect(screen.queryAllByTestId("other-hosts-host-row")).toHaveLength(0);
   });
 
   it("asks nothing without another host, or in a scratch view", () => {

@@ -152,6 +152,7 @@ export function useOtherHostsWorktrees(projectId: string | null): OtherHostWorkt
     let live = true;
     // Only the newest read for a host may land: a slow one never overwrites a later answer.
     const latest = new Map<HostId, number>();
+    const rechecked = new Map<HostId, number>();
     const read = (hostId: HostId): void => {
       const projectIds = matched.get(hostId);
       if (!projectIds) return;
@@ -163,6 +164,15 @@ export function useOtherHostsWorktrees(projectId: string | null): OtherHostWorkt
           if (!live || latest.get(hostId) !== seq) return;
           const mine = entries.filter((entry) => projectIds.has(entry.projectId));
           setLists((previous) => new Map(previous).set(hostId, mine));
+          // Nothing of this project listed: it may have closed there, or gone.
+          // Asking again is what lets a host that dropped it leave the list.
+          if (mine.length === 0) {
+            const now = Date.now();
+            if (now - (rechecked.get(hostId) ?? 0) >= PRESENCE_RECHECK_MS) {
+              rechecked.set(hostId, now);
+              setPresenceRevision((revision) => revision + 1);
+            }
+          }
         })
         .catch((error: unknown) => {
           logWarn("[Hosts] Couldn't list another host's worktrees", { hostId, error });

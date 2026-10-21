@@ -80,6 +80,19 @@ describe("WorktreeChangeWatch", () => {
     watch.poke();
     await vi.advanceTimersByTimeAsync(10);
     expect(changed).toHaveBeenCalledTimes(3);
+    // The top agent stays blocked while another starts asking: still news.
+    current = [
+      {
+        ...current[0]!,
+        runs: [
+          { terminalId: "t1", band: "blocked", agentState: "waiting" },
+          { terminalId: "t2", band: "needs-you", agentState: "waiting" },
+        ],
+      },
+    ];
+    watch.poke();
+    await vi.advanceTimersByTimeAsync(10);
+    expect(changed).toHaveBeenCalledTimes(4);
     watch.dispose();
     vi.useRealTimers();
   });
