@@ -338,9 +338,15 @@ export function TerminalHeaderContent({
         <Tooltip>
           <TooltipTrigger asChild>
             <div
-              className={cn(HEADER_CHIP_CLASS, HEADER_CHIP_SURFACE, "border-dashed")}
+              className={cn(
+                HEADER_CHIP_CLASS,
+                HEADER_CHIP_SURFACE,
+                HEADER_CHIP_FOCUS_CLASS,
+                "border-dashed"
+              )}
               role="status"
               aria-live="off"
+              tabIndex={0}
               data-testid="terminal-hibernated-badge"
             >
               <Moon className="w-3 h-3" aria-hidden="true" />

@@ -7,7 +7,11 @@ import {
 } from "@/store/rateLimitObservationStore";
 import { formatTimeAgo } from "@/utils/timeAgo";
 import { cn } from "@/lib/utils";
-import { HEADER_CHIP_CLASS, HEADER_CHIP_SURFACE } from "./terminalHeaderChip";
+import {
+  HEADER_CHIP_CLASS,
+  HEADER_CHIP_FOCUS_CLASS,
+  HEADER_CHIP_SURFACE,
+} from "./terminalHeaderChip";
 
 /**
  * Ambient header chip on a pane whose agent printed a rate-limit banner
@@ -32,9 +36,10 @@ function RateLimitChip({ observedAt }: { observedAt: number }) {
     <Tooltip>
       <TooltipTrigger asChild>
         <div
-          className={cn(HEADER_CHIP_CLASS, HEADER_CHIP_SURFACE)}
+          className={cn(HEADER_CHIP_CLASS, HEADER_CHIP_SURFACE, HEADER_CHIP_FOCUS_CLASS)}
           role="status"
           aria-live="off"
+          tabIndex={0}
           data-testid="terminal-rate-limit-badge"
         >
           <TriangleAlert className="w-3 h-3 shrink-0" aria-hidden="true" />
