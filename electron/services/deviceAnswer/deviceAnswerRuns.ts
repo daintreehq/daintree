@@ -2,12 +2,16 @@ import { listChoices } from "../../../shared/utils/terminalChoice.js";
 import type { AgentState, WaitingReason } from "../../../shared/types/agent.js";
 import type { FleetRunRow, FleetSnapshot } from "../../../shared/types/ipc/fleet.js";
 import { readPluginTerminalScreen } from "../plugin/pluginTerminalScreenRead.js";
+import { redactSecrets } from "../redactSecrets.js";
 import { ANSWER_SCREEN_LINES, type AnswerPtyClient } from "../terminalAnswer.js";
 
 /** Runs a page lists at once; screens are read for each on every poll. */
 export const MAX_LISTED_RUNS = 20;
 
-/** One waiting run as a paired device sees it: what Daintree observed, nothing more. */
+/**
+ * One waiting run as a paired device sees it: what Daintree observed, nothing
+ * more, with secrets redacted from every word of it before it leaves.
+ */
 export interface WaitingRunView {
   runId: string;
   spawnedAt: number;
@@ -62,19 +66,23 @@ export async function listWaitingRuns(deps: DeviceAnswerRunsDeps): Promise<Waiti
   const views = await Promise.all(
     rows.map(async (row): Promise<WaitingRunView> => {
       const screen = await readScreenOf(pty, row);
+      const title = row.title ?? row.lastObservedTitle ?? null;
       return {
         runId: row.runId,
         spawnedAt: row.spawnedAt,
         project: deps.projectName(row.workspaceId),
-        title: row.title ?? row.lastObservedTitle ?? null,
+        title: title === null ? null : redactSecrets(title),
         agentId: row.agentId ?? row.launchAgentId ?? null,
         agentState: row.agentState ?? "waiting",
         waitingReason: row.waitingReason ?? null,
         since: row.since ?? null,
         parked: row.park !== undefined,
         snoozed: row.snooze !== undefined,
-        screen,
-        choices: screen === null ? [] : listChoices(screen),
+        // The whole screen at once: a key block or quoted value spans rows.
+        screen: screen === null ? null : redactSecrets(screen),
+        // Parsed from the raw screen, since redacting can swallow rows of the
+        // dialog; the device answers with these labels as sent.
+        choices: screen === null ? [] : listChoices(screen, redactSecrets),
       };
     })
   );

@@ -1,7 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+const DIALOG = "❯ 1. Yes\n  2. No\n\n Esc to cancel";
+
 const state = {
   writes: [] as string[],
+  screen: DIALOG,
   fleetRuns: [] as Array<Record<string, unknown>>,
   lease: null as null | {
     isDriving: (projectId: string, endpoint: { endpointId: string; clientId: string }) => boolean;
@@ -31,7 +34,7 @@ vi.mock("../../DriveLeaseService.js", () => ({ peekDriveLeaseService: () => stat
 vi.mock("../../plugin/pluginTerminalScreenRead.js", () => ({
   readPluginTerminalScreen: async () => ({
     status: "ok",
-    text: "❯ 1. Yes\n  2. No\n\n Esc to cancel",
+    text: state.screen,
     lineCount: 2,
     truncated: false,
   }),
@@ -52,6 +55,7 @@ const device = { id: "dev-1", name: "Phone" };
 describe("createDeviceAnswerService answer", () => {
   beforeEach(() => {
     state.writes = [];
+    state.screen = DIALOG;
     state.fleetRuns = [{ runId: "run-1", spawnedAt: 100, agentState: "waiting" }];
     state.lease = null;
   });
@@ -99,6 +103,34 @@ describe("createDeviceAnswerService answer", () => {
         stillAllowed: () => null,
       })
     ).rejects.toMatchObject({ userMessage: expect.stringContaining("isn't waiting") });
+    expect(state.writes).toEqual([]);
+  });
+
+  it("presses the option a redacted label was shown for, and never one named by its secret", async () => {
+    state.screen = "❯ 1. Yes\n  2. Use token=abcdef123456\n  3. No\n\n Esc to cancel";
+    const press = (label: string) =>
+      wiredAnswer()({ device, runId: "run-1", spawnedAt: 100, label, stillAllowed: () => null });
+    await expect(press("Use token=abcdef123456")).rejects.toMatchObject({
+      userMessage: expect.stringContaining("Nothing was pressed"),
+    });
+    expect(state.writes).toEqual([]);
+    await press("Use token=[redacted]");
+    expect(state.writes).toEqual(["\x1b[B", "\r"]);
+  });
+
+  it("presses nothing when two options redact to the same label", async () => {
+    state.screen =
+      "❯ 1. Use token=abcdef123456\n  2. Use token=zyxwvu987654\n  3. No\n\n Esc to cancel";
+    const refused = wiredAnswer()({
+      device,
+      runId: "run-1",
+      spawnedAt: 100,
+      label: "Use token=[redacted]",
+      stillAllowed: () => null,
+    });
+    await expect(refused).rejects.toMatchObject({
+      userMessage: expect.not.stringMatching(/abcdef|zyxwvu/),
+    });
     expect(state.writes).toEqual([]);
   });
 });

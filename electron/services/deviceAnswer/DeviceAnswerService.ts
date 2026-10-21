@@ -18,6 +18,7 @@ import {
   newDeviceToken,
   normalizeTailnetHost,
 } from "./deviceAuth.js";
+import { redactSecrets } from "../redactSecrets.js";
 import { DEVICE_PAGE_CSP, DEVICE_PAGE_HTML } from "./deviceAnswerPage.js";
 import { MAX_AUDIT_ENTRIES, MAX_PAIRED_DEVICES, isValidPort } from "./deviceAnswerSettings.js";
 import type { WaitingRunView } from "./deviceAnswerRuns.js";
@@ -463,6 +464,9 @@ export class DeviceAnswerService {
     ) {
       throw new HttpError(400, "That answer wasn't understood. Nothing was pressed.");
     }
+    // A page from before redaction, or a hand-made request, can still send a
+    // label with a secret in it; the audit is kept on disk and shown in Settings.
+    const audited = redactSecrets(label);
     const generation = this.listenerGeneration;
     try {
       await this.deps.answer({
@@ -481,13 +485,13 @@ export class DeviceAnswerService {
         },
       });
     } catch (error) {
-      const reason = refusalText(error);
+      const reason = redactSecrets(refusalText(error));
       this.audit({
         at: now,
         deviceId: device.id,
         deviceName: device.name,
         runId,
-        label,
+        label: audited,
         outcome: "refused",
         reason,
       });
@@ -498,7 +502,7 @@ export class DeviceAnswerService {
       deviceId: device.id,
       deviceName: device.name,
       runId,
-      label,
+      label: audited,
       outcome: "answered",
     });
   }

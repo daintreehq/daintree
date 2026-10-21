@@ -98,6 +98,53 @@ describe("listWaitingRuns", () => {
     expect(runs).toEqual([]);
   });
 
+  it("redacts secrets from the screen, the title and each option before they leave", async () => {
+    screens.set(
+      "a",
+      [
+        "export OPENAI_API_KEY=abcdefgh12345",
+        "❯ 1. Yes",
+        "  2. Use token=abcdef123456",
+        "  3. No",
+        "",
+        " Esc to cancel",
+      ].join("\n")
+    );
+    const runs = await listWaitingRuns({
+      fleet: () =>
+        snapshot([row({ runId: "a", agentState: "waiting", title: "deploy password=hunter22" })]),
+      pty: () => ptyAt(100),
+      projectName: () => null,
+    });
+    expect(runs[0]).toMatchObject({
+      title: "deploy password=[redacted]",
+      choices: ["Yes", "Use token=[redacted]", "No"],
+    });
+    expect(runs[0]!.screen).toContain("OPENAI_API_KEY=[redacted]");
+    expect(JSON.stringify(runs)).not.toMatch(/abcdefgh12345|abcdef123456|hunter22/);
+  });
+
+  it("keeps the options of a dialog drawn under an unterminated key block", async () => {
+    screens.set(
+      "a",
+      [
+        "-----BEGIN PRIVATE KEY-----",
+        "MIIEvQIBADANBgkqhkiG9w0BAQEFAASC",
+        "❯ 1. Yes",
+        "  2. No",
+        "",
+        " Esc to cancel",
+      ].join("\n")
+    );
+    const runs = await listWaitingRuns({
+      fleet: () => snapshot([row({ runId: "a", agentState: "waiting" })]),
+      pty: () => ptyAt(100),
+      projectName: () => null,
+    });
+    expect(runs[0]!.choices).toEqual(["Yes", "No"]);
+    expect(runs[0]!.screen).not.toContain("MIIEvQIBADANBgkqhkiG9w0BAQEFAASC");
+  });
+
   it("lists nothing when the fleet has no snapshot yet", async () => {
     expect(
       await listWaitingRuns({ fleet: () => null, pty: () => null, projectName: () => null })

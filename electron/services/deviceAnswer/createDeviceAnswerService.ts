@@ -9,6 +9,7 @@ import { projectStore } from "../ProjectStore.js";
 import { scratchStore } from "../ScratchStore.js";
 import { planListedChoice } from "../../../shared/utils/terminalChoice.js";
 import { answerRefused, answerRunByLabel } from "../terminalAnswer.js";
+import { redactSecrets } from "../redactSecrets.js";
 import { DeviceAnswerService, type DevicePrincipal } from "./DeviceAnswerService.js";
 import { sanitizeDeviceAnswerSettings } from "./deviceAnswerSettings.js";
 import { isRunStillWaiting, listWaitingRuns } from "./deviceAnswerRuns.js";
@@ -69,8 +70,9 @@ export function createDeviceAnswerService(): DeviceAnswerService {
         runId,
         spawnedAt,
         label,
-        // Only an option of the list on screen now, never text near a composer.
-        plan: planListedChoice,
+        // Only an option of the list on screen now, never text near a composer,
+        // matched as the device was sent it and pressed from the list as drawn.
+        plan: (screen, wanted) => planListedChoice(screen, wanted, redactSecrets),
         stillAllowed: () => {
           const refusal = stillAllowed();
           if (refusal !== null) return refusal;

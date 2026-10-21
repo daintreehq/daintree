@@ -20,11 +20,11 @@ import {
 import {
   isSecretPrompt,
   prepareScreen,
-  redactSecrets,
   sameScreenTail,
   scrolledSince,
   type PreparedScreen,
 } from "./canopyScreen.js";
+import { redactSecrets } from "../redactSecrets.js";
 import {
   CanopyProviderError,
   combinePriority,
