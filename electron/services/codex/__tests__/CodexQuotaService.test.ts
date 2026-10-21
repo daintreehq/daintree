@@ -14,7 +14,7 @@ vi.mock("../CodexAppServerClient.js", async () => {
   return { ...actual, runCodexAppServerSession: runSession };
 });
 
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { CodexAppServerError } from "../CodexAppServerClient.js";
@@ -286,17 +286,46 @@ describe("readCodexQuotaProfiles (#13686)", () => {
 
   it("runs one read at a time across homes and callers", async () => {
     presets({ id: "second", name: "Second", env: { CODEX_HOME: second } });
-    let active = 0;
-    let peak = 0;
-    runSession.mockImplementation(async (run: (call: Call) => Promise<unknown>) => {
-      active++;
-      peak = Math.max(peak, active);
-      await new Promise((resolve) => setTimeout(resolve, 5));
-      active--;
-      return run(async () => ({ rateLimits: { primary: FIVE_HOURS } }));
-    });
-    await Promise.all([refreshCodexQuotaProfiles(), refreshCodexQuota()]);
-    expect(peak).toBe(1);
+    respondPerHome(() => 10);
+    await readCodexQuotaProfiles();
+
+    // Hold the second home's session open, then ask for the default past its
+    // cache: the queue, not the per-home join, is what must keep it waiting.
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const started: Array<string | undefined> = [];
+    runSession.mockImplementation(
+      async (run: (call: Call) => Promise<unknown>, options: { codexHome?: string } = {}) => {
+        started.push(options.codexHome);
+        if (options.codexHome === second) await gate;
+        return run(async () => ({ rateLimits: { primary: FIVE_HOURS } }));
+      }
+    );
+    const batch = refreshCodexQuotaProfiles();
+    await vi.waitFor(() => expect(started).toEqual([undefined, second]));
+    const lone = refreshCodexQuota();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(started).toEqual([undefined, second]);
+
+    release();
+    await Promise.all([batch, lone]);
+    expect(started).toEqual([undefined, second, undefined]);
+  });
+
+  it("treats a trailing space or a file as a different, unreadable home", async () => {
+    writeFileSync(path.join(root, "file"), "");
+    presets(
+      { id: "space", name: "Space", env: { CODEX_HOME: `${defaultHome} ` } },
+      { id: "file", name: "File", env: { CODEX_HOME: path.join(root, "file") } }
+    );
+    respondPerHome(() => 10);
+    const profiles = await readCodexQuotaProfiles();
+    expect(profiles.map((p) => [p.presetNames, used(p.result)])).toEqual([
+      [[], 10],
+      [["Space"], "unavailable"],
+      [["File"], "unavailable"],
+    ]);
+    expect(runSession).toHaveBeenCalledTimes(1);
   });
 
   it("caches per home, and a refresh re-reads every profile", async () => {

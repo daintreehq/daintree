@@ -21,7 +21,7 @@ const UNAVAILABLE_COPY: Record<CodexQuotaUnavailableReason | CodexQuotaProfileHo
     "unsupported-response": "Codex answered in a format Daintree doesn't read yet",
     "no-windows": "Codex didn't report any limit windows for this account",
     "home-missing":
-      "This preset's CODEX_HOME folder doesn't exist. Launch Codex with the preset once to sign in.",
+      "This preset's CODEX_HOME isn't a folder Daintree can open. Check the path, or launch Codex with the preset once to sign in.",
     "home-not-absolute":
       "This preset's CODEX_HOME isn't a full path. Codex doesn't expand ~, so write it out in full.",
   };

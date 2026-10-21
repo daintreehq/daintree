@@ -37,15 +37,22 @@ export function useCodexQuota(enabled: boolean): {
 } {
   const [profiles, setProfiles] = useState<CodexQuotaProfile[] | null>(null);
   const requestRef = useRef(0);
+  const pendingRef = useRef(false);
 
   const load = useCallback((read: () => Promise<CodexQuotaProfile[]>) => {
     const request = ++requestRef.current;
+    pendingRef.current = true;
+    const settled = () => {
+      if (request === requestRef.current) pendingRef.current = false;
+    };
     read().then(
       (next) => {
+        settled();
         if (request !== requestRef.current) return;
         setProfiles((previous) => mergeCodexQuotaProfiles(previous, next));
       },
       () => {
+        settled();
         if (request !== requestRef.current) return;
         // Main never rejects a read, so this is the IPC itself failing. What's
         // on screen stays; with nothing yet, the default profile says so.
@@ -64,16 +71,23 @@ export function useCodexQuota(enabled: boolean): {
     );
   }, []);
 
-  const poll = useCallback(() => load(codexClient.readQuota), [load]);
+  // Several profiles read one after another can outlast the poll interval; a
+  // poll that superseded the batch would discard it, and the next would do the
+  // same, so the section never filled in. Retry still supersedes.
+  const poll = useCallback(() => {
+    if (!pendingRef.current) load(codexClient.readQuota);
+  }, [load]);
   const refresh = useCallback(() => load(codexClient.refreshQuota), [load]);
 
   useEffect(() => {
     if (!enabled) return;
     poll();
     const requests = requestRef;
+    const pending = pendingRef;
     return () => {
       // Drop any answer still in flight: it belongs to a mount that's gone.
       requests.current++;
+      pending.current = false;
     };
   }, [enabled, poll]);
 

@@ -14,6 +14,7 @@ import { createHash } from "node:crypto";
 import { stat } from "node:fs/promises";
 import { CodexAppServerError, runCodexAppServerSession } from "./CodexAppServerClient.js";
 import { defaultCodexHome, resolveCodexQuotaProfiles } from "./CodexQuotaProfiles.js";
+import type { AgentSettingsEntry } from "../../../shared/types/agentSettings.js";
 import type {
   CodexQuotaProfile,
   CodexQuotaProfileResult,
@@ -183,9 +184,16 @@ function profileKey(home: string, invalid: boolean): string {
 }
 
 async function readProfiles(force: boolean): Promise<CodexQuotaProfile[]> {
-  // Lazy, like the handler's own import of this module: the store isn't needed until asked.
-  const { store } = await import("../../store.js");
-  const targets = resolveCodexQuotaProfiles(store.get("agentSettings")?.agents?.codex);
+  let codexSettings: AgentSettingsEntry | undefined;
+  try {
+    // Lazy, like the handler's own import of this module: the store isn't needed until asked.
+    const { store } = await import("../../store.js");
+    codexSettings = store.get("agentSettings")?.agents?.codex;
+  } catch {
+    // Unreadable settings still leave main's own profile to report.
+    codexSettings = undefined;
+  }
+  const targets = resolveCodexQuotaProfiles(codexSettings);
   const profiles: CodexQuotaProfile[] = [];
   // One after another: each read already waits its turn in the queue, and
   // awaiting here keeps a long preset list from parking N reads on it at once.
@@ -225,7 +233,7 @@ export function refreshCodexQuotaProfiles(): Promise<CodexQuotaProfile[]> {
   return readProfiles(true);
 }
 
+/** The queue is kept: a read still running from before the reset must still finish first. */
 export function resetCodexQuotaCacheForTests(): void {
   cacheByHome = new Map();
-  queueTail = Promise.resolve();
 }

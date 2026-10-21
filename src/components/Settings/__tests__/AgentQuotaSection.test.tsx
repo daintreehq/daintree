@@ -246,7 +246,28 @@ describe("AgentQuotaSection profiles (#13686)", () => {
 
     expect(meters()).toHaveLength(1);
     expect(screen.getByText("Quota unavailable")).toBeTruthy();
-    expect(document.body.textContent).toContain("CODEX_HOME folder doesn't exist");
+    expect(document.body.textContent).toContain("isn't a folder Daintree can open");
+  });
+
+  it("lets a batch that outlasts the poll interval finish instead of discarding it", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      let resolve!: (profiles: CodexQuotaProfile[]) => void;
+      readProfiles.mockReturnValueOnce(new Promise((r) => (resolve = r)));
+      render(<AgentQuotaSection agentId="codex" />);
+      await act(async () => {
+        vi.advanceTimersByTime(120_000);
+      });
+      expect(readProfiles).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        resolve([{ key: "a", isDefault: true, presetNames: [], result: reading(40) }]);
+      });
+      expect(meters().map((m) => m.getAttribute("aria-valuenow"))).toEqual(["40"]);
+    } finally {
+      cleanup();
+      vi.useRealTimers();
+    }
   });
 
   it("never carries a last good reading over to a different profile", async () => {

@@ -30,8 +30,23 @@ function presetCodexHome(preset: AgentPreset): string | undefined {
   const env = preset.env;
   if (!env) return undefined;
   const key = Object.keys(env).find((name) => name.toUpperCase() === "CODEX_HOME");
-  const value = key ? env[key]?.trim() : undefined;
-  return value ? value : undefined;
+  // Untrimmed: the pane gets the value verbatim, so `/Users/me/.codex ` is a
+  // different folder from the default, not a spelling of it.
+  return key && env[key] ? env[key] : undefined;
+}
+
+/**
+ * Windows' `path.isAbsolute` also accepts `\profiles\work`, which lands on
+ * whichever drive the process happens to be on: main's and a pane's can differ.
+ */
+function isFullyQualified(value: string): boolean {
+  if (process.platform !== "win32") return path.isAbsolute(value);
+  return /^[A-Za-z]:[\\/]/.test(value) || /^[\\/]{2}[^\\/]+[\\/][^\\/]+/.test(value);
+}
+
+// Windows paths are case-insensitive, so two spellings of one home share a row.
+function homeIdentity(home: string): string {
+  return process.platform === "win32" ? home.toLowerCase() : home;
 }
 
 /**
@@ -46,13 +61,15 @@ export function resolveCodexQuotaProfiles(
   const targets: CodexQuotaProfileTarget[] = [
     { home: defaultHome, isDefault: true, presetNames: [] },
   ];
-  const byHome = new Map<string, CodexQuotaProfileTarget>([[defaultHome, targets[0]!]]);
+  const byHome = new Map<string, CodexQuotaProfileTarget>([
+    [homeIdentity(defaultHome), targets[0]!],
+  ]);
   const invalidByRaw = new Map<string, CodexQuotaProfileTarget>();
 
   for (const preset of getMergedPresets("codex", entry?.customPresets as AgentPreset[])) {
     const raw = presetCodexHome(preset);
     if (!raw) continue;
-    if (!path.isAbsolute(raw)) {
+    if (!isFullyQualified(raw)) {
       // Never resolved against main's cwd: that would read a folder no pane uses.
       const existing = invalidByRaw.get(raw);
       if (existing) {
@@ -72,13 +89,13 @@ export function resolveCodexQuotaProfiles(
     // Normalises separators, dot segments and a trailing slash, so
     // `/Users/me/.codex/` folds into the default row. Symlinks are left alone.
     const home = path.resolve(raw);
-    const existing = byHome.get(home);
+    const existing = byHome.get(homeIdentity(home));
     if (existing) {
       existing.presetNames.push(preset.name);
       continue;
     }
     const target: CodexQuotaProfileTarget = { home, isDefault: false, presetNames: [preset.name] };
-    byHome.set(home, target);
+    byHome.set(homeIdentity(home), target);
     targets.push(target);
   }
 
