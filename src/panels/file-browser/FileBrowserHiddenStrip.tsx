@@ -1,3 +1,4 @@
+import { Button } from "@/components/ui/button";
 import { PANE_STATUS_FOOTER_CLASS } from "@/components/ui/paneToolbarStyles";
 import { cn } from "@/lib/utils";
 import type { HiddenRowCounts } from "./fileBrowserTree";
@@ -45,9 +46,11 @@ export function FileBrowserHiddenStrip({ counts, onShowDotfiles }: FileBrowserHi
       // view is doing, and `contentinfo` is reserved for a page-level footer.
       role="status"
       data-testid="file-browser-hidden-strip"
-      // `py-0`: the Show button carries the 24px target itself, so the strip
-      // adds no padding around it and stays at the shared strip height.
-      className={cn(PANE_STATUS_FOOTER_CLASS, "py-0")}
+      // `py-0.5` around a 20px button keeps the strip at the shared 24px
+      // height with the button clear of the divider above and the pane edge
+      // below. 20px meets WCAG 2.5.8 through its spacing exception: Show is
+      // the strip's only target, and a 24px circle on it stays inside the strip.
+      className={cn(PANE_STATUS_FOOTER_CLASS, "py-0.5")}
     >
       <span className="min-w-0 flex-1 truncate">
         <span className="tabular-nums">{counts.dotfiles}</span>
@@ -55,9 +58,12 @@ export function FileBrowserHiddenStrip({ counts, onShowDotfiles }: FileBrowserHi
       </span>
       {/* Verb-first and specific, so the button says what will happen rather
           than "Undo" or "Clear". Sentence case, no period, per the microcopy
-          rule for buttons. */}
-      <button
-        type="button"
+          rule for buttons. `subtle` is the same recovery's treatment in the
+          file browser's empty states, and a resting edge and fill are what
+          stop "Show" reading as the next word of the count. */}
+      <Button
+        variant="subtle"
+        size="xs"
         // Verb-noun where it matters. The visible word stays short because the
         // strip is only ~200px wide at the sidebar's minimum, and the object it
         // acts on is stated an inch to its left; but "Show" alone is ambiguous
@@ -65,10 +71,13 @@ export function FileBrowserHiddenStrip({ counts, onShowDotfiles }: FileBrowserHi
         // accessible name carries the full phrase.
         aria-label="Show dotfiles"
         onClick={onShowDotfiles}
-        className="inline-flex min-h-6 shrink-0 items-center rounded-lg px-1 text-text-secondary transition-colors duration-150 ease-out hover:text-text-primary"
+        // Edge and focus ring both drawn inside the box: the strip sits on the
+        // pane's bottom edge, where the pane's paint containment cuts off
+        // anything more than 2px outside the button.
+        className="h-5 shrink-0 ring-inset focus-visible:-outline-offset-2"
       >
         Show
-      </button>
+      </Button>
     </div>
   );
 }
