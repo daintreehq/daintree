@@ -40,7 +40,11 @@ import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { issueAttachPayload } from "@/utils/linkProviderIssue";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { cn } from "../../lib/utils";
-import { copyableBranchName, isExternalWorktree } from "@/lib/worktreeFilters";
+import {
+  copyableBranchName,
+  isExternalWorktree,
+  isLiveDevServerStatus,
+} from "@/lib/worktreeFilters";
 import { getWorktreeHeadline } from "@/lib/worktreeHeadline";
 import { getAgentConfig, getAgentIds } from "@/config/agents";
 import { getAgentSettingsEntry } from "@/types";
@@ -1313,6 +1317,7 @@ export function WorktreeCard({
               aria-describedby={selectButtonDescribedBy(worktree.id, {
                 lifecycle: chipState !== null,
                 alarm: !!effectiveIsCollapsed,
+                devServer: !!devServerSession && isLiveDevServerStatus(devServerSession.status),
                 external: isExternal,
               })}
               onFocus={handleSelectFocus}
