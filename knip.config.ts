@@ -93,6 +93,7 @@ const baseConfig: KnipConfig = {
     "src/components/HostSwitch/__preview__/hostSwitcher.tsx",
     "src/components/Markdown/__preview__/preview.tsx",
     "src/components/Markdown/__preview__/loadingPreview.tsx",
+    "src/components/Markdown/__preview__/mermaidPreview.tsx",
     "src/components/Panel/__preview__/moveToWorktreePicker.tsx",
     "src/services/plugin/__preview__/pluginPanelPreview.tsx",
     "src/components/Portal/__preview__/closeConfirmPreview.tsx",
