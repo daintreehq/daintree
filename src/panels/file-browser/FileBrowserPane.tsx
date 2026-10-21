@@ -1705,7 +1705,10 @@ export function FileBrowserPane({
                 PANE_STATUS_FOOTER_CLASS,
                 // `block`, not the strip's flex: `truncate` only ellipsizes a
                 // block container's own text.
-                "block truncate text-left transition-colors duration-150 ease-out hover:bg-overlay-subtle hover:text-text-primary"
+                "block truncate text-left transition-colors duration-150 ease-out hover:bg-overlay-subtle hover:text-text-primary",
+                // Inset, as for the strip above: an outset ring would be cut
+                // off at the pane's bottom edge.
+                "focus-visible:-outline-offset-2"
               )}
             >
               Reveal {selectedFileName}
