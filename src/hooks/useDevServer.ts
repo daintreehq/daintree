@@ -57,6 +57,11 @@ export interface UseDevServerReturn extends UseDevServerState {
    * recoverable banner; an explicit restart clears it.
    */
   crashLoopStopped?: boolean;
+  /**
+   * True while an endpoint restart is cycling its resource (#13688). Unlike a
+   * backend restart this one can still be called off, so Stop stays usable.
+   */
+  isCyclingEndpoint: boolean;
 }
 
 /**
@@ -173,6 +178,7 @@ export function useDevServer({
   // cycle finishes after its number moved on was superseded and must not connect.
   const endpointCycleRef = useRef(0);
   const endpointCyclingRef = useRef(false);
+  const [isCyclingEndpoint, setIsCyclingEndpoint] = useState(false);
   const requestVersionRef = useRef(0);
 
   const latestContextRef = useRef<{
@@ -233,12 +239,19 @@ export function useDevServer({
       phaseLabel: state.phaseLabel,
     };
     userStoppedRef.current = state.userStopped === true;
+    // A Stop from outside this panel (palette, worktree menu) reaches it only as
+    // state; it still calls off an endpoint restart waiting on its resource.
+    if (userStoppedRef.current && endpointCyclingRef.current) {
+      endpointCycleRef.current += 1;
+      endpointCyclingRef.current = false;
+      setIsCyclingEndpoint(false);
+    }
     setStatus(state.status);
     setUrl(state.url);
     setTerminalId(state.terminalId);
     setError(state.error ?? null);
     setPhaseLabel(state.phaseLabel);
-    setIsRestarting(state.isRestarting);
+    setIsRestarting(state.isRestarting || endpointCyclingRef.current);
     setForceKilled(state.forceKilled);
     setCrashLoopStopped(state.crashLoopStopped);
   }, []);
@@ -365,6 +378,7 @@ export function useDevServer({
     pendingEnsureRef.current = null;
     endpointCycleRef.current += 1;
     endpointCyclingRef.current = false;
+    setIsCyclingEndpoint(false);
     setIsRestarting(false);
     const requestVersion = requestVersionRef.current;
     const requestProjectId = latest.projectId;
@@ -399,6 +413,7 @@ export function useDevServer({
       if (endpointCyclingRef.current) return;
       const cycle = ++endpointCycleRef.current;
       endpointCyclingRef.current = true;
+      setIsCyclingEndpoint(true);
       setIsRestarting(true);
       let fresh: string | null;
       try {
@@ -409,7 +424,10 @@ export function useDevServer({
       } finally {
         if (cycle === endpointCycleRef.current) {
           endpointCyclingRef.current = false;
-          if (isMountedRef.current) setIsRestarting(false);
+          if (isMountedRef.current) {
+            setIsCyclingEndpoint(false);
+            setIsRestarting(false);
+          }
         }
       }
       if (!isMountedRef.current || cycle !== endpointCycleRef.current) return;
@@ -704,5 +722,6 @@ export function useDevServer({
     stuckTier,
     forceKilled,
     crashLoopStopped,
+    isCyclingEndpoint,
   };
 }

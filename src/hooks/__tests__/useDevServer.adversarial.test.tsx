@@ -1816,6 +1816,41 @@ describe("useDevServer adversarial races", () => {
       expect(stopMock).toHaveBeenCalledTimes(1);
     });
 
+    it("calls off a restart's reconnect when a Stop from elsewhere arrives as state", async () => {
+      let finishCycle: (endpoint: string) => void = () => {};
+      const refreshEndpoint = vi.fn(
+        () =>
+          new Promise<string | null>((resolve) => {
+            finishCycle = resolve;
+          })
+      );
+      let pushState: (payload: { state: DevPreviewSessionState }) => void = () => {};
+      onStateChangedMock.mockImplementation((listener: typeof pushState) => {
+        pushState = listener;
+        return vi.fn();
+      });
+      const { result } = renderHook(() =>
+        useDevServer({ ...endpointProps, endpoint: "http://10.0.0.8:5173", refreshEndpoint })
+      );
+      await waitFor(() => expect(ensureMock).toHaveBeenCalledTimes(1));
+
+      let restarting!: Promise<void>;
+      act(() => {
+        restarting = result.current.restart();
+      });
+      await waitFor(() => expect(result.current.isCyclingEndpoint).toBe(true));
+      act(() => {
+        pushState({ state: buildState({ status: "stopped", userStopped: true }) });
+      });
+      await act(async () => {
+        finishCycle("http://10.0.0.9:5173");
+        await restarting;
+      });
+
+      expect(ensureMock).toHaveBeenCalledTimes(1);
+      expect(result.current.isCyclingEndpoint).toBe(false);
+    });
+
     it("surfaces a failed resource step instead of reconnecting", async () => {
       const refreshEndpoint = vi.fn(async () => {
         throw new Error("Resume failed");

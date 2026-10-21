@@ -156,6 +156,7 @@ export function DevPreviewPane({
     stuckTier,
     forceKilled,
     crashLoopStopped,
+    isCyclingEndpoint,
   } = useDevServer({
     panelId: id,
     devCommand,
@@ -1228,6 +1229,7 @@ export function DevPreviewPane({
             activeTab={activeConsoleTab}
             onTabChange={(tab) => setDevPreviewConsoleTab(id, tab)}
             isRestarting={isRestarting}
+            canStopWhileRestarting={isCyclingEndpoint}
             onReloadPreview={handleHardReload}
             onRestartDevServer={handleRestartDevServer}
             onRequestRestartAndClearCache={

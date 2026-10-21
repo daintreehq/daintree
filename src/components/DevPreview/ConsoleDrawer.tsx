@@ -46,6 +46,8 @@ interface ConsoleDrawerProps {
   activeTab?: ConsoleDrawerTab;
   onTabChange?: (tab: ConsoleDrawerTab) => void;
   isRestarting?: boolean;
+  /** The restart in progress can be called off by Stop (an endpoint resource cycle). */
+  canStopWhileRestarting?: boolean;
   onReloadPreview?: () => void;
   onRestartDevServer?: () => void;
   onRequestRestartAndClearCache?: () => void;
@@ -114,6 +116,7 @@ export function ConsoleDrawer({
   activeTab: controlledActiveTab,
   onTabChange,
   isRestarting = false,
+  canStopWhileRestarting = false,
   onReloadPreview,
   onRestartDevServer,
   onRequestRestartAndClearCache,
@@ -192,7 +195,7 @@ export function ConsoleDrawer({
       status === "installing" ||
       status === "running" ||
       status === "stopping");
-  const stopDisabled = isRestarting || status === "stopping";
+  const stopDisabled = (isRestarting && !canStopWhileRestarting) || status === "stopping";
   const statusClass = cn(
     "inline-flex min-h-8 items-center px-3 text-3xs font-semibold uppercase tracking-wide",
     (hasRestartControls || stopVisible) && "border-r border-overlay",
