@@ -233,7 +233,7 @@ function TranscriptMessage({
           tabIndex={-1}
           inert={folded}
           className={cn(
-            "outline-hidden focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary rounded-[var(--radius-xs)]",
+            "rounded-[var(--radius-xs)] outline-hidden focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary",
             folded &&
               "max-h-36 overflow-hidden [mask-image:linear-gradient(to_bottom,black_55%,transparent)] contrast-more:[mask-image:none] forced-colors:[mask-image:none]"
           )}
