@@ -744,15 +744,52 @@ function writeCorpusPlugin(root: string, id: string, index: number, withForge: b
 
   writeFileSync(join(dir, "plugin.json"), JSON.stringify(manifest, null, 2), "utf8");
   // A forge provider's impl binds during `activate()`, never from the manifest
-  // — the descriptor/impl split PERF-225 exists to measure.
+  // — the descriptor/impl split PERF-225 exists to measure. The host checks the
+  // impl against its declared roles (both, here) before binding it, so every
+  // required method is present as a no-op.
+  const forgeMethods = [
+    "getCredentials",
+    "validateCredentials",
+    "validateToken",
+    "listIssues",
+    "getIssue",
+    "createIssue",
+    "assignIssue",
+    "unassignIssue",
+    "closeIssue",
+    "reopenIssue",
+    "editIssue",
+    "addIssueComment",
+    "addIssueLabel",
+    "removeIssueLabel",
+    "listPRs",
+    "getPR",
+    "findPRByBranch",
+    "getCIStatus",
+    "getRepoMetadata",
+    "createPR",
+    "closePR",
+    "reopenPR",
+    "mergePR",
+    "convertPRToDraft",
+    "markPRReadyForReview",
+    "commentOnPR",
+    "editPR",
+  ]
+    .map((name) => `      ${name}: async () => null,`)
+    .join("\n");
   const registerForge = withForge
     ? `  host.registerForgeProvider(
     { id: "prov", name: "Perf Forge" },
     {
+${forgeMethods}
       parseRemote: () => null,
       buildRepoUrl: () => "",
       buildIssueUrl: () => "",
-      buildPullUrl: () => "",
+      buildIssuesUrl: () => "",
+      buildPRUrl: () => "",
+      buildPRsUrl: () => "",
+      buildCommitsUrl: () => "",
       classifyPushError: () => "unknown",
     }
   );
