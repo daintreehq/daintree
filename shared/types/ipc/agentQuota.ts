@@ -43,3 +43,40 @@ export type CodexQuotaResult =
 
 /** A reading older than this is shown as stale rather than current. */
 export const CODEX_QUOTA_STALE_AFTER_MS = 2 * 60_000;
+
+/**
+ * Why a preset's own `CODEX_HOME` couldn't be read at all (#13686). Kept apart
+ * from {@link CODEX_QUOTA_UNAVAILABLE_REASONS} because only Settings reads
+ * preset profiles; the MCP quota tool reports main's default one and its
+ * schema doesn't carry these.
+ */
+export const CODEX_QUOTA_PROFILE_HOME_REASONS = [
+  /** The directory doesn't exist, or isn't a directory. */
+  "home-missing",
+  /**
+   * Relative or `~`-prefixed. Codex expands neither, and a relative path would
+   * resolve against whichever folder a pane happened to start in.
+   */
+  "home-not-absolute",
+] as const;
+
+export type CodexQuotaProfileHomeReason = (typeof CODEX_QUOTA_PROFILE_HOME_REASONS)[number];
+
+export type CodexQuotaProfileResult =
+  | CodexQuotaResult
+  | { status: "unavailable"; reason: CodexQuotaProfileHomeReason; fetchedAt: number };
+
+/**
+ * One Codex profile: a distinct `CODEX_HOME`, with the presets that launch
+ * into it. Profiles are told apart by home, never by preset, so two presets
+ * sharing a home share one reading. No path crosses to the renderer.
+ */
+export interface CodexQuotaProfile {
+  /** Opaque and stable for as long as the home doesn't change. */
+  key: string;
+  /** Main's own profile: what a launch with no preset `CODEX_HOME` uses. */
+  isDefault: boolean;
+  /** Names of the presets that set this home, in preset order. */
+  presetNames: string[];
+  result: CodexQuotaProfileResult;
+}

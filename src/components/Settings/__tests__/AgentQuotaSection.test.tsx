@@ -1,13 +1,26 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
-import type { CodexQuotaResult } from "@shared/types/ipc/agentQuota";
+import type { CodexQuotaProfile, CodexQuotaResult } from "@shared/types/ipc/agentQuota";
 
+// Most cases are about one profile's reading, so these answer with the default
+// profile alone; `readProfiles` takes over when a case needs several.
 const readQuota = vi.hoisted(() => vi.fn<() => Promise<CodexQuotaResult>>());
 const refreshQuota = vi.hoisted(() => vi.fn<() => Promise<CodexQuotaResult>>());
+const readProfiles = vi.hoisted(() => vi.fn<() => Promise<CodexQuotaProfile[]> | undefined>());
 const clock = vi.hoisted(() => ({ now: 0 }));
 
-vi.mock("@/clients/codexClient", () => ({ codexClient: { readQuota, refreshQuota } }));
+vi.mock("@/clients/codexClient", () => {
+  const alone = (result: CodexQuotaResult): CodexQuotaProfile[] => [
+    { key: "default", isDefault: true, presetNames: [], result },
+  ];
+  return {
+    codexClient: {
+      readQuota: () => readProfiles() ?? readQuota().then(alone),
+      refreshQuota: () => refreshQuota().then(alone),
+    },
+  };
+});
 vi.mock("@/hooks/useGlobalMinuteTicker", () => ({
   useGlobalMinuteClock: () => clock.now,
 }));
@@ -29,6 +42,7 @@ beforeEach(() => {
   clock.now = NOW;
   readQuota.mockReset();
   refreshQuota.mockReset();
+  readProfiles.mockReset();
 });
 
 afterEach(() => {
@@ -171,6 +185,120 @@ describe("AgentQuotaSection refresh (#12797)", () => {
       expect(meters().map((m) => m.getAttribute("aria-valuenow"))).toEqual(["60"]);
       expect(screen.getByText("Stale reading")).toBeTruthy();
       expect(screen.queryByText("Quota unavailable")).toBeNull();
+    } finally {
+      cleanup();
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("AgentQuotaSection profiles (#13686)", () => {
+  const reading = (usedPercent: number): CodexQuotaResult => ({
+    status: "ok",
+    planType: null,
+    fetchedAt: NOW,
+    windows: [{ usedPercent, windowDurationMins: 300, resetsAt: null }],
+  });
+
+  function labels() {
+    return Array.from(document.querySelectorAll('[role="meter"]')).map((m) =>
+      m.getAttribute("aria-label")
+    );
+  }
+
+  it("names one group per profile and scopes each meter to it", async () => {
+    readProfiles.mockResolvedValue([
+      { key: "a", isDefault: true, presetNames: ["Personal"], result: reading(10) },
+      { key: "b", isDefault: false, presetNames: ["Work", "Work review"], result: reading(80) },
+    ]);
+    await renderFor("codex");
+
+    expect(screen.getByText("Default profile · Personal")).toBeTruthy();
+    expect(screen.getByText("Work, Work review")).toBeTruthy();
+    expect(labels()).toEqual([
+      "Default profile · Personal 5-hour limit used",
+      "Work, Work review 5-hour limit used",
+    ]);
+    expect(document.body.textContent).toContain("for each CODEX_HOME your presets use");
+    expect(document.body.textContent).not.toContain("the signed-in account");
+  });
+
+  it("leaves a lone profile unnamed, as before presets were read", async () => {
+    readQuota.mockResolvedValue(reading(10));
+    await renderFor("codex");
+
+    expect(screen.queryByText("Default profile")).toBeNull();
+    expect(labels()).toEqual(["5-hour limit used"]);
+    expect(document.body.textContent).toContain("the signed-in account");
+  });
+
+  it("shows a preset's missing home beside the default's reading", async () => {
+    readProfiles.mockResolvedValue([
+      { key: "a", isDefault: true, presetNames: [], result: reading(10) },
+      {
+        key: "b",
+        isDefault: false,
+        presetNames: ["Second"],
+        result: { status: "unavailable", reason: "home-missing", fetchedAt: NOW },
+      },
+    ]);
+    await renderFor("codex");
+
+    expect(meters()).toHaveLength(1);
+    expect(screen.getByText("Quota unavailable")).toBeTruthy();
+    expect(document.body.textContent).toContain("isn't a folder Daintree can open");
+  });
+
+  it("lets a batch that outlasts the poll interval finish instead of discarding it", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      let resolve!: (profiles: CodexQuotaProfile[]) => void;
+      readProfiles.mockReturnValueOnce(new Promise((r) => (resolve = r)));
+      render(<AgentQuotaSection agentId="codex" />);
+      await act(async () => {
+        vi.advanceTimersByTime(120_000);
+      });
+      expect(readProfiles).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        resolve([{ key: "a", isDefault: true, presetNames: [], result: reading(40) }]);
+      });
+      expect(meters().map((m) => m.getAttribute("aria-valuenow"))).toEqual(["40"]);
+    } finally {
+      cleanup();
+      vi.useRealTimers();
+    }
+  });
+
+  it("never carries a last good reading over to a different profile", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      readProfiles.mockResolvedValueOnce([
+        { key: "a", isDefault: true, presetNames: [], result: reading(60) },
+      ]);
+      render(<AgentQuotaSection agentId="codex" />);
+      await act(async () => {});
+      readProfiles.mockResolvedValue([
+        {
+          key: "a",
+          isDefault: true,
+          presetNames: [],
+          result: { status: "unavailable", reason: "read-failed", fetchedAt: NOW },
+        },
+        {
+          key: "b",
+          isDefault: false,
+          presetNames: ["Second"],
+          result: { status: "unavailable", reason: "read-failed", fetchedAt: NOW },
+        },
+      ]);
+      await act(async () => {
+        vi.advanceTimersByTime(60_000);
+      });
+
+      // "a" keeps its reading; "b" never had one, so it says so.
+      expect(meters().map((m) => m.getAttribute("aria-valuenow"))).toEqual(["60"]);
+      expect(screen.getAllByText("Quota unavailable")).toHaveLength(1);
     } finally {
       cleanup();
       vi.useRealTimers();

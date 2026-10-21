@@ -6,18 +6,32 @@ import { useCodexQuota } from "@/hooks/useCodexQuota";
 import { useGlobalMinuteClock } from "@/hooks/useGlobalMinuteTicker";
 import {
   CODEX_QUOTA_STALE_AFTER_MS,
+  type CodexQuotaProfile,
+  type CodexQuotaProfileHomeReason,
   type CodexQuotaUnavailableReason,
   type CodexQuotaWindow,
 } from "@shared/types/ipc/agentQuota";
 
-const UNAVAILABLE_COPY: Record<CodexQuotaUnavailableReason, string> = {
-  "cli-missing": "Codex CLI isn't installed, so there's no quota to read",
-  timeout: "Codex didn't answer in time. Daintree will ask again shortly.",
-  "read-failed":
-    "Codex didn't return a quota. It only reports one when signed in with ChatGPT, not an API key.",
-  "unsupported-response": "Codex answered in a format Daintree doesn't read yet",
-  "no-windows": "Codex didn't report any limit windows for this account",
-};
+const UNAVAILABLE_COPY: Record<CodexQuotaUnavailableReason | CodexQuotaProfileHomeReason, string> =
+  {
+    "cli-missing": "Codex CLI isn't installed, so there's no quota to read",
+    timeout: "Codex didn't answer in time. Daintree will ask again shortly.",
+    "read-failed":
+      "Codex didn't return a quota. It only reports one when signed in with ChatGPT, not an API key.",
+    "unsupported-response": "Codex answered in a format Daintree doesn't read yet",
+    "no-windows": "Codex didn't report any limit windows for this account",
+    "home-missing":
+      "This preset's CODEX_HOME isn't a folder Daintree can open. Check the path, or launch Codex with the preset once to sign in.",
+    "home-not-absolute":
+      "This preset's CODEX_HOME isn't a full path. Codex doesn't expand ~, so write it out in full.",
+  };
+
+/** The group name once a section holds several profiles; a lone one goes unnamed. */
+export function profileLabel(profile: CodexQuotaProfile): string {
+  const names = profile.presetNames.join(", ");
+  if (!profile.isDefault) return names;
+  return names ? `Default profile · ${names}` : "Default profile";
+}
 
 export function windowLabel(windowDurationMins: number): string {
   if (windowDurationMins === 10080) return "Weekly limit";
@@ -49,12 +63,16 @@ function QuotaWindowRow({
   window,
   now,
   stale,
+  profile,
 }: {
   window: CodexQuotaWindow;
   now: number;
   stale: boolean;
+  /** Prefixes the meter's name once several profiles each have one of these. */
+  profile?: string;
 }) {
   const label = windowLabel(window.windowDurationMins);
+  const meterLabel = profile ? `${profile} ${label.toLowerCase()} used` : `${label} used`;
   const used = Math.round(window.usedPercent);
   // A reset that has passed means the reading describes a window that's over.
   // Showing 0% would be a guess, so the old figure stays, marked stale.
@@ -75,7 +93,7 @@ function QuotaWindowRow({
         <div className="flex w-52 items-center gap-2">
           <div
             role="meter"
-            aria-label={`${label} used`}
+            aria-label={meterLabel}
             aria-valuemin={0}
             aria-valuemax={100}
             aria-valuenow={used}
@@ -91,23 +109,21 @@ function QuotaWindowRow({
   );
 }
 
-function CodexQuota() {
-  const { result, refresh } = useCodexQuota(true);
-  const now = useGlobalMinuteClock();
-
-  // Settings renders chrome immediately and fills in on resolve: an empty group
-  // rather than a spinner, and never a meter before there's a number for it.
-  if (result === null) {
-    return (
-      <SettingsGroup>
-        <SettingsRow label="Checking…" />
-      </SettingsGroup>
-    );
-  }
-
+function CodexQuotaGroup({
+  profile,
+  label,
+  now,
+  refresh,
+}: {
+  profile: CodexQuotaProfile;
+  label?: string;
+  now: number;
+  refresh: () => void;
+}) {
+  const { result } = profile;
   if (result.status === "unavailable") {
     return (
-      <SettingsGroup>
+      <SettingsGroup label={label}>
         <SettingsRow
           label="Quota unavailable"
           description={UNAVAILABLE_COPY[result.reason]}
@@ -125,7 +141,7 @@ function CodexQuota() {
   const anyStale = stale || result.windows.some((window) => hasResetPassed(window, now));
   const checked = formatLastChecked(result.fetchedAt, now);
   return (
-    <SettingsGroup>
+    <SettingsGroup label={label}>
       {result.windows.map((window, index) => (
         // Index-qualified: nothing stops two windows reporting the same duration.
         <QuotaWindowRow
@@ -133,6 +149,7 @@ function CodexQuota() {
           window={window}
           now={now}
           stale={stale}
+          profile={label}
         />
       ))}
       <SettingsRow
@@ -143,22 +160,48 @@ function CodexQuota() {
   );
 }
 
+function CodexQuota() {
+  const { profiles, refresh } = useCodexQuota(true);
+  const now = useGlobalMinuteClock();
+  const several = profiles !== null && profiles.length > 1;
+
+  return (
+    <SettingsSection
+      title="Account quota"
+      description={
+        several
+          ? "Read from Codex for each CODEX_HOME your presets use, not from any one terminal"
+          : "Read from Codex for the signed-in account, not from any one terminal"
+      }
+    >
+      {profiles === null ? (
+        // Settings renders chrome immediately and fills in on resolve: an empty
+        // group rather than a spinner, and never a meter before there's a number.
+        <SettingsGroup>
+          <SettingsRow label="Checking…" />
+        </SettingsGroup>
+      ) : (
+        profiles.map((profile) => (
+          <CodexQuotaGroup
+            key={profile.key}
+            profile={profile}
+            label={several ? profileLabel(profile) : undefined}
+            now={now}
+            refresh={refresh}
+          />
+        ))
+      )}
+    </SettingsSection>
+  );
+}
+
 /**
  * Live account quota under the agent picker (#12797). Codex reports its own
- * through the app-server; Claude's is never read — its credentials and usage
+ * through the app-server, once per distinct `CODEX_HOME` (#13686); Claude's is never read — its credentials and usage
  * endpoints are off limits to other apps — so it says so beside "View usage".
  */
 export function AgentQuotaSection({ agentId }: { agentId: string }) {
-  if (agentId === "codex") {
-    return (
-      <SettingsSection
-        title="Account quota"
-        description="Read from Codex for the signed-in account, not from any one terminal"
-      >
-        <CodexQuota />
-      </SettingsSection>
-    );
-  }
+  if (agentId === "codex") return <CodexQuota />;
   if (agentId === "claude") {
     return (
       <SettingsSection title="Account quota">

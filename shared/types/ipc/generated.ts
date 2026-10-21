@@ -346,7 +346,7 @@ export interface GeneratedIpcInvokeMap {
   };
   "codex:read-quota": {
     args: [];
-    result: import("./agentQuota.js").CodexQuotaResult;
+    result: import("./agentQuota.js").CodexQuotaProfile[];
   };
   "codex:read-subagent-transcript": {
     args: [__0: { terminalId: string; subagentId: string }];
@@ -354,7 +354,7 @@ export interface GeneratedIpcInvokeMap {
   };
   "codex:refresh-quota": {
     args: [];
-    result: import("./agentQuota.js").CodexQuotaResult;
+    result: import("./agentQuota.js").CodexQuotaProfile[];
   };
   "codex:resolve-resume-latest-session": {
     args: [__0: { cwd: string }];

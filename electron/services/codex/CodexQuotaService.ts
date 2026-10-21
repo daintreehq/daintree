@@ -10,8 +10,14 @@
  * several open views share one process.
  */
 
+import { createHash } from "node:crypto";
+import { stat } from "node:fs/promises";
 import { CodexAppServerError, runCodexAppServerSession } from "./CodexAppServerClient.js";
+import { defaultCodexHome, resolveCodexQuotaProfiles } from "./CodexQuotaProfiles.js";
+import type { AgentSettingsEntry } from "../../../shared/types/agentSettings.js";
 import type {
+  CodexQuotaProfile,
+  CodexQuotaProfileResult,
   CodexQuotaResult,
   CodexQuotaUnavailableReason,
   CodexQuotaWindow,
@@ -24,9 +30,19 @@ const CACHE_TTL_MS = 30_000;
  */
 const UNAVAILABLE_CACHE_TTL_MS = 5_000;
 
-let cached: CodexQuotaResult | null = null;
-let inFlight: Promise<CodexQuotaResult> | null = null;
-let generation = 0;
+interface HomeCacheEntry {
+  cached: CodexQuotaResult | null;
+  inFlight: Promise<CodexQuotaResult> | null;
+}
+
+/** Keyed by canonical home, never by preset: presets sharing a home share a reading. */
+let cacheByHome = new Map<string, HomeCacheEntry>();
+/**
+ * Every quota read, whichever home and caller, runs one at a time behind this.
+ * The transport admits two sessions, and a fan-out across several presets
+ * would hold both and starve the rest of the app's Codex queries.
+ */
+let queueTail: Promise<unknown> = Promise.resolve();
 
 function toWindow(raw: unknown): CodexQuotaWindow | null {
   if (!raw || typeof raw !== "object") return null;
@@ -94,44 +110,130 @@ function toUnavailableReason(error: unknown): CodexQuotaUnavailableReason {
   return "read-failed";
 }
 
-async function fetchCodexQuota(): Promise<CodexQuotaResult> {
+function enqueue<T>(job: () => Promise<T>): Promise<T> {
+  const run = queueTail.then(job, job);
+  queueTail = run.catch(() => undefined);
+  return run;
+}
+
+/** `codexHome` undefined means main's own env, exactly as before presets were read. */
+async function fetchCodexQuota(codexHome: string | undefined): Promise<CodexQuotaResult> {
   try {
-    const raw = await runCodexAppServerSession((call) => call<unknown>("account/rateLimits/read"));
+    const raw = await runCodexAppServerSession(
+      (call) => call<unknown>("account/rateLimits/read"),
+      codexHome === undefined ? {} : { codexHome }
+    );
     return normalizeCodexRateLimits(raw, Date.now());
   } catch (error) {
     return { status: "unavailable", reason: toUnavailableReason(error), fetchedAt: Date.now() };
   }
 }
 
-/** Never rejects: every failure is an `unavailable` result. */
-export function readCodexQuota(): Promise<CodexQuotaResult> {
-  if (cached) {
+function readHome(
+  home: string,
+  codexHome: string | undefined,
+  force: boolean
+): Promise<CodexQuotaResult> {
+  let entry = cacheByHome.get(home);
+  if (!entry) {
+    entry = { cached: null, inFlight: null };
+    cacheByHome.set(home, entry);
+  }
+  const { cached } = entry;
+  if (!force && cached) {
     const ttl = cached.status === "ok" ? CACHE_TTL_MS : UNAVAILABLE_CACHE_TTL_MS;
     if (Date.now() - cached.fetchedAt < ttl) return Promise.resolve(cached);
   }
-  return refreshCodexQuota();
-}
-
-/**
- * Ask Codex now, past the cache — what a user's Retry means. Still joins a
- * read already in flight rather than starting a second session.
- */
-export function refreshCodexQuota(): Promise<CodexQuotaResult> {
-  if (inFlight) return inFlight;
-  const requestGeneration = generation;
-  const request = fetchCodexQuota().then((result) => {
-    if (requestGeneration === generation) cached = result;
+  // A refresh still joins a read already in flight rather than queueing a second.
+  if (entry.inFlight) return entry.inFlight;
+  const owner = entry;
+  const request = enqueue(() => fetchCodexQuota(codexHome)).then((result) => {
+    owner.cached = result;
     return result;
   });
-  inFlight = request;
+  owner.inFlight = request;
   void request.finally(() => {
-    if (inFlight === request) inFlight = null;
+    if (owner.inFlight === request) owner.inFlight = null;
   });
   return request;
 }
 
+/** Never rejects: every failure is an `unavailable` result. Main's default profile only. */
+export function readCodexQuota(): Promise<CodexQuotaResult> {
+  return readHome(defaultCodexHome(), undefined, false);
+}
+
+/** Ask Codex now, past the cache — what a user's Retry means. */
+export function refreshCodexQuota(): Promise<CodexQuotaResult> {
+  return readHome(defaultCodexHome(), undefined, true);
+}
+
+async function isDirectory(home: string): Promise<boolean> {
+  try {
+    return (await stat(home)).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+function profileKey(home: string, invalid: boolean): string {
+  return createHash("sha256")
+    .update(`${invalid ? "invalid" : "home"}\0${home}`)
+    .digest("hex")
+    .slice(0, 16);
+}
+
+async function readProfiles(force: boolean): Promise<CodexQuotaProfile[]> {
+  let codexSettings: AgentSettingsEntry | undefined;
+  try {
+    // Lazy, like the handler's own import of this module: the store isn't needed until asked.
+    const { store } = await import("../../store.js");
+    codexSettings = store.get("agentSettings")?.agents?.codex;
+  } catch {
+    // Unreadable settings still leave main's own profile to report.
+    codexSettings = undefined;
+  }
+  const targets = resolveCodexQuotaProfiles(codexSettings);
+  const profiles: CodexQuotaProfile[] = [];
+  // One after another: each read already waits its turn in the queue, and
+  // awaiting here keeps a long preset list from parking N reads on it at once.
+  for (const target of targets) {
+    let result: CodexQuotaProfileResult;
+    if (target.invalid) {
+      result = { status: "unavailable", reason: target.invalid, fetchedAt: Date.now() };
+    } else if (!target.isDefault && !(await isDirectory(target.home))) {
+      // Never spawned against, never created: a home Codex hasn't made is not ours to make.
+      result = { status: "unavailable", reason: "home-missing", fetchedAt: Date.now() };
+    } else {
+      result = await readHome(
+        target.home,
+        // The default keeps inheriting main's env rather than being pinned to
+        // the path computed from it, so its reads are unchanged by this.
+        target.isDefault ? undefined : target.home,
+        force
+      );
+    }
+    profiles.push({
+      key: profileKey(target.home, target.invalid !== undefined),
+      isDefault: target.isDefault,
+      presetNames: target.presetNames,
+      result,
+    });
+  }
+  return profiles;
+}
+
+/** Main's own profile plus every distinct home a Codex preset sets (#13686). Never rejects. */
+export function readCodexQuotaProfiles(): Promise<CodexQuotaProfile[]> {
+  return readProfiles(false);
+}
+
+/** Every profile past the cache, for an explicit Retry. */
+export function refreshCodexQuotaProfiles(): Promise<CodexQuotaProfile[]> {
+  return readProfiles(true);
+}
+
+/** The queue is kept: a read still running from before the reset must still finish first. */
 export function resetCodexQuotaCacheForTests(): void {
-  generation++;
-  cached = null;
-  inFlight = null;
+  cacheByHome = new Map();
 }
