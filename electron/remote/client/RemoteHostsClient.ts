@@ -666,12 +666,13 @@ export class RemoteHostsClient {
    */
   switchWindowHost(
     ctx: IpcContext,
-    payload: SwitchWindowHostPayload
+    payload: SwitchWindowHostPayload,
+    { requesterReports = true }: { requesterReports?: boolean } = {}
   ): Promise<SwitchWindowHostResult> {
-    // The asking renderer hears a failure itself, so main can stay quiet about
-    // a cancelled switch that rolled back to it.
+    // The asking renderer shows a failure's own words, so main can stay quiet
+    // about a cancelled switch that rolled back to it.
     return this.switchWindow(this.windowOf(ctx), payload, undefined, {
-      requesterWebContentsId: ctx.webContentsId,
+      requesterWebContentsId: requesterReports ? ctx.webContentsId : undefined,
     });
   }
 

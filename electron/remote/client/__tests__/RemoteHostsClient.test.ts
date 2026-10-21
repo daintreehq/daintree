@@ -312,6 +312,19 @@ describe("RemoteHostsClient", () => {
       requesterWebContentsId: 9,
     });
 
+    // A caller that words the failure itself leaves the report to main.
+    await client.switchWindowHost(
+      ctxFor(5, 1),
+      { hostId: "studio-01", newWindow: false, projectId: "proj-1" },
+      { requesterReports: false }
+    );
+    expect(windows.openRemoteProject).toHaveBeenLastCalledWith(
+      1,
+      "studio-01",
+      "proj-1",
+      "/srv/proj-1"
+    );
+
     // A new window has no view of the asker's to roll back to.
     await client.switchWindowHost(ctxFor(5, 1), {
       hostId: "studio-01",
