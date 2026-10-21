@@ -92,7 +92,9 @@ describe("mermaid fences in rendered Markdown", () => {
     const block = container.querySelector(".markdown-mermaid");
     expect(block?.getAttribute("data-mermaid-state")).toBe("failed");
     expect(block?.querySelector("pre code")?.textContent).toBe(DIAGRAM);
-    expect(block?.querySelector("svg")).toBeNull();
+    // The failure note carries a status glyph svg, so look for the diagram itself.
+    expect(block?.querySelector(".markdown-mermaid__diagram")).toBeNull();
+    expect(block?.querySelector("svg text")).toBeNull();
   });
 
   it("leaves other fences as highlighted code", () => {
