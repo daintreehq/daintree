@@ -108,7 +108,7 @@ export interface ContentPanelProps extends BasePanelProps {
   submitStatus?: "slow" | "stalled" | "failed";
   /**
    * True when the agent transitioned to `completed` and the worktree's
-   * changed-file count is zero. Drives the "Finished, no changes" pill
+   * changed-file count is zero. Leads the "Nothing to commit" settled trace
    * in the auto-constructed TerminalHeaderContent.
    */
   completedWithNoChanges?: boolean;
@@ -454,7 +454,7 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
           kind={kind}
           // The lifecycle state, not the glyph's display state: the display
           // state folds `completed` into `waiting` for the indicator, which
-          // would keep the row's settled trace (cost, "Finished, no changes")
+          // would keep the row's settled trace (cost, "Nothing to commit")
           // from ever rendering.
           agentState={agentState}
           activityStatus={activityStatus}
