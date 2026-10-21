@@ -86,6 +86,9 @@ export interface GeneratedElectronAPI {
     runBranch(
       ...args: IpcInvokeMap["canopy:run-branch"]["args"]
     ): Promise<IpcInvokeMap["canopy:run-branch"]["result"]>;
+    searchScreens(
+      ...args: IpcInvokeMap["canopy:search-screens"]["args"]
+    ): Promise<IpcInvokeMap["canopy:search-screens"]["result"]>;
     setActive(
       ...args: IpcInvokeMap["canopy:set-active"]["args"]
     ): Promise<IpcInvokeMap["canopy:set-active"]["result"]>;

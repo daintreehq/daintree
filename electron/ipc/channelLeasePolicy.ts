@@ -92,6 +92,7 @@ export const CHANNEL_LEASE_POLICY = {
   "canopy:restore-reads": "free",
   "canopy:restore-requested": "free",
   "canopy:run-branch": "free",
+  "canopy:search-screens": "free",
   "canopy:set-active": "free",
   "canopy:set-mode": "free",
   "canopy:set-read": "free",

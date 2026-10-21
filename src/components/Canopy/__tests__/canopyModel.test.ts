@@ -17,7 +17,9 @@ import {
   PERMISSION_FLOOR,
   QUIET_PRIORITY,
   shownPriority,
+  searchTerms,
   splitInbox,
+  unmatchedTerms,
   unseenLabelMs,
   type CanopyReadState,
 } from "../canopyModel";
@@ -799,5 +801,44 @@ describe("a run stalled behind its spinner", () => {
     );
     expect(itemNeedsAttention(stalled!)).toBe(true);
     expect(itemPriority(stalled!, NOW)).toBe(QUIET_PRIORITY);
+  });
+});
+
+describe("unmatchedTerms", () => {
+  const item = () =>
+    inbox(
+      [run("a", { title: "Fix login redirect", titleMode: "user" })],
+      [
+        card("a", {
+          summary: "The checkout tests stall on a missing fixture",
+          glance: { recap: null, said: "Waiting on the staging deploy", doing: null, action: null },
+        }),
+      ]
+    )[0]!;
+  const left = (query: string) => unmatchedTerms(item(), searchTerms(query));
+
+  it("asks nothing of a blank query, and each word once", () => {
+    expect(searchTerms("   ")).toEqual([]);
+    expect(searchTerms("Login login  LOGIN fix")).toEqual(["login", "fix"]);
+    expect(left("")).toEqual([]);
+  });
+
+  it("finds the project name and the run's title, ignoring case", () => {
+    expect(left("APP")).toEqual([]);
+    expect(left("login  Redirect")).toEqual([]);
+  });
+
+  it("finds the readers' words and the screen's glance as written", () => {
+    expect(left("missing fixture")).toEqual([]);
+    expect(left("staging")).toEqual([]);
+  });
+
+  it("leaves only the words nothing on the run holds, for its terminal", () => {
+    expect(left("login segfault staging")).toEqual(["segfault"]);
+  });
+
+  it("never matches by scattered letters", () => {
+    // Every letter of "cmtsf" appears in order in the summary, nowhere as written.
+    expect(left("cmtsf")).toEqual(["cmtsf"]);
   });
 });

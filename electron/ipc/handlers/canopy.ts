@@ -6,6 +6,7 @@ import type {
   CanopyReadMark,
   CanopyReadRestore,
   CanopyReadTarget,
+  CanopyScreenSearchTarget,
   CanopySnapshot,
   CanopyTarget,
   CanopyTier,
@@ -23,7 +24,8 @@ import {
 } from "../../services/canopy/canopyRefinementSource.js";
 import { getFleetSnapshotService, getRunHandBackService } from "./projectCrud/index.js";
 import { readPluginTerminalScreen } from "../../services/plugin/pluginTerminalScreenRead.js";
-import { CanopyService } from "../../services/canopy/CanopyService.js";
+import { CANOPY_HISTORY_ROWS, CanopyService } from "../../services/canopy/CanopyService.js";
+import { searchScreens } from "../../services/canopy/canopyScreenSearch.js";
 import { isCanopyMode, readCanopyMode } from "../../services/canopy/canopyMode.js";
 import {
   canopyServiceUrl,
@@ -339,6 +341,31 @@ function assertRunId(value: unknown): asserts value is string {
 const MAX_READ_BATCH = 500;
 /** Every run a panel can list, the whole fleet across projects: far above any real one. */
 const MAX_SHOWN_RUNS = 10_000;
+/** The words one search may look for on a terminal, and how long each may be. */
+const MAX_SEARCH_TERMS = 16;
+const MAX_SEARCH_TERM_LENGTH = 200;
+/** How much of a terminal a search reads: its screen and the history the describer reads. */
+const SEARCH_MAX_BYTES = 96 * 1024;
+
+function assertScreenSearchTarget(value: unknown): asserts value is CanopyScreenSearchTarget {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("Invalid run");
+  }
+  const target = value as Record<string, unknown>;
+  assertRunId(target.runId);
+  assertTarget(target);
+  const terms = target.terms;
+  if (
+    !Array.isArray(terms) ||
+    terms.length === 0 ||
+    terms.length > MAX_SEARCH_TERMS ||
+    !terms.every(
+      (term) => typeof term === "string" && term.length > 0 && term.length <= MAX_SEARCH_TERM_LENGTH
+    )
+  ) {
+    throw new Error("Invalid search");
+  }
+}
 
 function isTurn(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
@@ -1359,6 +1386,40 @@ export const canopyNamespace = defineIpcNamespace({
           ?.runs.find((entry) => entry.runId === runId && entry.spawnedAt === target.spawnedAt);
         if (!run?.cwd) return null;
         return getGitBranch(run.cwd);
+      }
+    ),
+
+    /**
+     * Which of these runs' terminals hold the words the panel's search asked
+     * them for. Matched here, on the machine the terminal runs on: only ids go
+     * back, and no screen read for a search goes anywhere else. Only runs the
+     * fleet holds in the same incarnation are read.
+     */
+    searchScreens: op(
+      CANOPY_METHOD_CHANNELS.searchScreens,
+      async (targets: CanopyScreenSearchTarget[]): Promise<string[]> => {
+        requireActivated();
+        checkRateLimit(CANOPY_METHOD_CHANNELS.searchScreens, 60, 10_000);
+        if (!Array.isArray(targets) || targets.length > MAX_READ_BATCH) {
+          throw new Error("Invalid runs");
+        }
+        for (const target of targets) assertScreenSearchTarget(target);
+        const runs = getFleetSnapshotService()?.getLastBroadcast()?.runs ?? [];
+        const live = new Set(runs.map((run) => `${run.runId}\u0000${run.spawnedAt}`));
+        const known = targets.filter((target) =>
+          live.has(`${target.runId}\u0000${target.spawnedAt}`)
+        );
+        return searchScreens(known, async (target) => {
+          const result = await readPluginTerminalScreen(
+            getPtyClient(),
+            target.runId,
+            null,
+            CANOPY_HISTORY_ROWS,
+            { scrollbackRows: CANOPY_HISTORY_ROWS, maxBytes: SEARCH_MAX_BYTES },
+            { dropGhostInput: true }
+          );
+          return result.status === "ok" ? result.text : null;
+        });
       }
     ),
 

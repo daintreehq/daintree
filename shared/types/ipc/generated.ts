@@ -144,6 +144,7 @@ export interface GeneratedIpcInvokeMap {
         | "canopy:reread"
         | "canopy:restore-reads"
         | "canopy:run-branch"
+        | "canopy:search-screens"
         | "canopy:set-active"
         | "canopy:set-mode"
         | "canopy:set-read"
@@ -164,6 +165,7 @@ export interface GeneratedIpcInvokeMap {
       | string
       | number
       | void
+      | string[]
       | import("./canopy.js").CanopyReadMark
       | import("./canopy.js").CanopySnapshot
       | import("./canopy.js").CanopyReadMark[]
@@ -230,6 +232,10 @@ export interface GeneratedIpcInvokeMap {
   "canopy:run-branch": {
     args: [runId: string, target: import("./canopy.js").CanopyTarget];
     result: string | null;
+  };
+  "canopy:search-screens": {
+    args: [targets: import("./canopy.js").CanopyScreenSearchTarget[]];
+    result: string[];
   };
   "canopy:set-active": {
     args: [active: boolean];

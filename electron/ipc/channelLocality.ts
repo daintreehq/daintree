@@ -125,6 +125,7 @@ export const CHANNEL_LOCALITY = {
   "canopy:restore-reads": "host",
   "canopy:restore-requested": "host",
   "canopy:run-branch": "host",
+  "canopy:search-screens": "host",
   "canopy:set-active": "host",
   "canopy:set-mode": "host",
   "canopy:set-read": "host",

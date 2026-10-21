@@ -440,3 +440,13 @@ export interface CanopySnapshot {
 export interface CanopyTarget {
   spawnedAt: number;
 }
+
+/**
+ * A run the panel's search asks about, with the words of the query nothing
+ * else on the run held: main looks for them on its terminal, which never
+ * leaves the machine it runs on.
+ */
+export interface CanopyScreenSearchTarget extends CanopyTarget {
+  runId: string;
+  terms: string[];
+}

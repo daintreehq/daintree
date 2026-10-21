@@ -282,6 +282,7 @@ export const CHANNELS = {
   CANOPY_NOTE_SENT: "canopy:note-sent",
   CANOPY_SET_SCOPE: "canopy:set-scope",
   CANOPY_RUN_BRANCH: "canopy:run-branch",
+  CANOPY_SEARCH_SCREENS: "canopy:search-screens",
   CANOPY_WATCH_TERMINAL: "canopy:watch-terminal",
   CANOPY_UNWATCH_TERMINAL: "canopy:unwatch-terminal",
   CANOPY_CAPTURE_BACKDROP: "canopy:capture-backdrop",
