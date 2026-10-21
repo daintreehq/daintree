@@ -1330,7 +1330,7 @@ function PrivacyStep({
     <section className="space-y-2">
       <SettingsSwitchCard
         title="Enable crash reporting"
-        subtitle="No file contents or credentials are ever sent"
+        subtitle="Sentry records an approximate location from your IP address. No file contents or credentials are ever sent."
         isEnabled={telemetryEnabled ?? false}
         onChange={() => onTelemetryChange(!(telemetryEnabled ?? false))}
       />

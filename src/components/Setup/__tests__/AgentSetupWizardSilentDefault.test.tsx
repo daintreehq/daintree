@@ -333,6 +333,11 @@ describe("AgentSetupWizard silent-default privacy notify", () => {
 
     const toggle = document.querySelector('button[role="switch"]') as HTMLButtonElement | null;
     expect(toggle, "privacy toggle should be present on the privacy step").not.toBeNull();
+    // Consent is only informed if the location Sentry derives is named beside the switch (#13540).
+    const descriptionId = toggle!.getAttribute("aria-describedby");
+    expect(document.getElementById(descriptionId ?? "")?.textContent).toMatch(
+      /approximate location/i
+    );
     await act(async () => {
       toggle!.click(); // enable crash reporting
     });

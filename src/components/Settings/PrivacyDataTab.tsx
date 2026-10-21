@@ -81,6 +81,7 @@ const TELEMETRY_DISCLOSURE: Array<{
       "App version, Node.js version, and build environment (production or development)",
       "Operating system name, version, and architecture",
       "Default runtime metadata provided by the Sentry Electron SDK (CPU, memory, GPU, locale, timezone, and similar vendor-supplied fields)",
+      "Approximate location (city and country), which Sentry looks up from your connection's IP address when a report arrives; the IP address itself isn't stored with the report",
       "Breadcrumbs of recent activity in the main and renderer processes preceding the crash: app, window, screen, power and update lifecycle events, console logs, network requests, child-process and utility-process exits and errors, app actions, page navigation, clicks and key presses on page elements, and earlier error reports",
       "Network request and navigation URLs reduced to their origin, with paths, query strings and fragments removed",
       "Email addresses, home-directory usernames and repository names in SSH remotes redacted from messages, breadcrumbs, and error details",
@@ -90,7 +91,7 @@ const TELEMETRY_DISCLOSURE: Array<{
     level: "full",
     title: "Full usage",
     summary:
-      "Crash reports and error details, plus anonymous usage analytics events, including those listed below. Each event carries its name, a timestamp, and event-specific properties — never file contents, prompts, or credentials. Analytics events recorded before you chose a level may be sent when you choose Full usage.",
+      "Crash reports and error details, plus anonymous usage analytics events, including those listed below. Each event carries its name, a timestamp, and event-specific properties — never file contents, prompts, or credentials. Analytics events go to Sentry too, which records the same approximate location for them as for crash reports. Analytics events recorded before you chose a level may be sent when you choose Full usage.",
     fields: [],
     events: ANALYTICS_EVENTS,
   },
