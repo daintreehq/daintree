@@ -1036,10 +1036,7 @@ AppDialog.Footer = function AppDialogFooter({
                 secondaryAction.onClick();
               }}
               aria-disabled={secondaryAction.disabled || undefined}
-              className={cn(
-                "text-text-secondary hover:text-text-primary",
-                secondaryAction.disabled && ARIA_DISABLED_CLASSES
-              )}
+              className={secondaryAction.disabled ? ARIA_DISABLED_CLASSES : undefined}
               data-confirm-role="cancel"
             >
               {secondaryAction.icon}
