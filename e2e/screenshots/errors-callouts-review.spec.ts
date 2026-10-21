@@ -180,14 +180,14 @@ const STATES: State[] = [
       const root = await scene(page, "missing-cli", theme);
       await root
         .locator('[data-specimen="recheck-failed"]')
-        .getByRole("button", { name: /re-check/i })
+        .getByRole("button", { name: /check again/i })
         .click();
       await mustShow(
         root,
-        "CLI binary not found",
-        "CLI installed but not directly launchable",
-        "Blocked by security software",
-        "Couldn't re-check the CLI"
+        "Claude CLI not found",
+        "Codex can't be launched directly",
+        "Running Gemini was denied",
+        "Couldn't check again"
       );
       await page.waitForTimeout(400);
       return root;

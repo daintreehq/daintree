@@ -450,18 +450,20 @@ export const SURFACE_FIXTURES: Record<string, Fixture> = {
     ),
   },
   "missing-cli-gate": {
-    what: "MissingCliGate for a missing Claude CLI — Docs / Agent settings / Check again",
+    what: "MissingCliGate for a missing Claude CLI — Run anyway / Agent settings / Check again",
     width: 640,
     seed: () => seedAgents(TO_INSTALL),
     render: () => (
       <Block caption="Terminal/MissingCliGate.tsx" surface="canvas">
-        <MissingCliGate
-          agentId="claude"
-          detail={{ state: "missing", resolvedPath: null, via: null }}
-          onRunAnyway={noop}
-          onAvailabilityReady={noop}
-          onOpenAgentSettings={noop}
-        />
+        <div className="flex h-[640px] flex-col">
+          <MissingCliGate
+            agentId="claude"
+            detail={{ state: "missing", resolvedPath: null, via: null }}
+            onRunAnyway={noop}
+            onAvailabilityReady={noop}
+            onOpenAgentSettings={noop}
+          />
+        </div>
       </Block>
     ),
   },
