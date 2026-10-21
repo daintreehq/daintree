@@ -7,6 +7,7 @@ import type {
 import { makeForgeProviderId } from "@shared/utils/forgeProviderIds";
 import { issuesSelection } from "@shared/utils/forgeProviderRoles";
 import { logError } from "@/utils/logger";
+import { discardCachedResources } from "@/lib/forgeResourceCache";
 
 export interface ResolvedForgeIssuesState {
   /** Provider serving the project's issues, or `null` when none does. */
@@ -48,6 +49,11 @@ const UNRESOLVED: ResolvedForgeProviderState = {
 // entries for projects with no mounted hook, which would otherwise serve a
 // stale provider after an enable/disable while that project was unmounted.
 const resolutionCache = new Map<string, ResolvedForgeProviderState>();
+
+// Last issues provider each project resolved to. Unlike `resolutionCache` it
+// survives invalidation — an invalidation is exactly when the binding may have
+// changed, and the change is what tells cached issue rows to go.
+const lastIssuesProvider = new Map<string, string | null>();
 
 // Monotonic per-project resolve sequence: a slow older round-trip must not
 // overwrite the CACHE entry written by a newer (e.g. provenance-triggered)
@@ -149,7 +155,19 @@ export function useResolvedForgeProvider(
           : NO_ISSUES,
         loading: false,
       };
-      if (resolveSeq.get(id) === seq) resolutionCache.set(id, next);
+      if (resolveSeq.get(id) === seq) {
+        // Cached issue rows belong to whichever provider served them; once the
+        // project's issues come from somewhere else they're another tracker's.
+        const previousIssuesProvider = lastIssuesProvider.get(id);
+        if (
+          previousIssuesProvider !== undefined &&
+          previousIssuesProvider !== next.issues.providerId
+        ) {
+          discardCachedResources("issue");
+        }
+        lastIssuesProvider.set(id, next.issues.providerId);
+        resolutionCache.set(id, next);
+      }
       if (instanceSeqRef.current !== seq) return null;
       return next;
     } catch (err) {

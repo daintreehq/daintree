@@ -889,6 +889,15 @@ export const ForgeProviderContributionSchema = z
     // Hostname matching routes the code role, so a provider serving code
     // must be reachable through it; an issues-only provider has no remote.
     const servesCode = !roles || roles.includes("code");
+    // ...and an issues-only provider must not be: hostnames route the code
+    // role, so a listed one would put it in the code forge's place.
+    if (!servesCode && contribution.matches.length > 0) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["matches"],
+        message: "matches must be empty for an issues-only provider",
+      });
+    }
     if (servesCode && contribution.matches.length === 0) {
       ctx.addIssue({
         code: "too_small",

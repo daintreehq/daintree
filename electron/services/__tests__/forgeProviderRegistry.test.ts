@@ -422,8 +422,30 @@ describe("forgeProviderRegistry — roles (#13700)", () => {
         ...makeImpl("github"),
         buildPRsUrl: () => "",
         buildCommitsUrl: () => "",
+        ...Object.fromEntries(
+          [
+            "createPR",
+            "closePR",
+            "reopenPR",
+            "mergePR",
+            "convertPRToDraft",
+            "markPRReadyForReview",
+            "commentOnPR",
+            "editPR",
+          ].map((name) => [name, async () => ({})])
+        ),
       } as ForgeProviderImpl;
       expect(validateForgeImplRoles({}, full)).toBeNull();
+      // Every required code method counts, not just the read path.
+      const { mergePR: _mergePR, ...withoutMerge } = full;
+      expect(validateForgeImplRoles({}, withoutMerge as ForgeProviderImpl)).toContain("mergePR");
+    });
+
+    it("never offers an issues-only contribution to hostname routing, even with hostnames", () => {
+      registerForgeProviders("acme.tracker", [
+        makeContribution("tracker", ["github.com"], { roles: ["issues"] }),
+      ]);
+      expect(listMatchingProviders("https://github.com/o/r.git")).toEqual([]);
     });
   });
 });

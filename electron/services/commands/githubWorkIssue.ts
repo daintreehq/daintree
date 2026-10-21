@@ -41,6 +41,8 @@ interface IssueDetails {
   url: string;
   state: NormalizedIssueState;
   branchName?: string;
+  id?: string;
+  key?: string;
 }
 
 /** Result data returned on success */
@@ -318,6 +320,8 @@ export const githubWorkIssueCommand: DaintreeCommand<GitHubWorkIssueArgs, GitHub
         url: forgeIssue.url,
         state: forgeIssue.state,
         branchName: forgeIssue.branchName,
+        id: forgeIssue.id,
+        key: forgeIssue.key,
       };
     } catch (error) {
       if (error instanceof Error && error.name === "TimeoutError") {
@@ -484,6 +488,26 @@ export const githubWorkIssueCommand: DaintreeCommand<GitHubWorkIssueArgs, GitHub
           message: `Failed to create worktree: ${message}`,
         },
       };
+    }
+
+    // An issues-provider issue has no `issue-N` branch for the link to rest on
+    // — or worse, a fallback one that reads back as the code forge's #N — so
+    // record it explicitly, as the renderer creation flows do (#13700).
+    if (resolved.viaIssueOverride) {
+      try {
+        const { persistIssueAssociation } = await import("../worktreeIssueAssociations.js");
+        persistIssueAssociation(worktreeId, {
+          issueNumber: issue.number,
+          issueTitle: issue.title,
+          issueProviderId: resolved.namespaceId,
+          ...(issue.id ? { issueId: issue.id } : {}),
+          ...(issue.key ? { issueKey: issue.key } : {}),
+        });
+      } catch (error) {
+        // The worktree exists either way; a lost link is recoverable by
+        // attaching the issue by hand.
+        console.warn("Failed to record the new worktree's issue link:", error);
+      }
     }
 
     // Switch to the new worktree

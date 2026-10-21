@@ -190,6 +190,22 @@ export function patchIssueAssigneeCache(
   });
 }
 
+/**
+ * Drop every cached slot of one resource type, across projects, and bump each
+ * slot's generation so a fetch already in flight can't write its rows back.
+ * For when the provider behind those rows changes (#13700): a project that
+ * binds its issues to another tracker must not show the old one's rows — or
+ * let the user pick one of them — while the new provider's first page loads.
+ */
+export function discardCachedResources(type: "issue" | "pr"): void {
+  const marker = `:${type}:`;
+  for (const [key] of [...cache.entries()]) {
+    if (!key.includes(marker)) continue;
+    cache.delete(key);
+    nextGeneration(key);
+  }
+}
+
 export function _resetForTests(): void {
   cache.clear();
   generationMap.clear();

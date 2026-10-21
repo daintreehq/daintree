@@ -362,6 +362,7 @@ export function registerForgeSettingsHandlers(): () => void {
 
         const settings = await projectStore.getProjectSettings(projectId).catch(() => null);
         const forgeProviderOverride = settings?.forgeProviderOverride ?? null;
+        const issueProviderOverride = settings?.issueProviderOverride ?? null;
 
         let effectiveRemoteUrl: string | null;
         if (typeof remoteUrl === "string" && remoteUrl.length > 0) {
@@ -375,12 +376,24 @@ export function registerForgeSettingsHandlers(): () => void {
           // origin-only lookup here hid issues and PRs on every fork or mirror
           // whose forge remote is named something else.
           const gitService = gitServiceCache.getGitService(project.path);
-          effectiveRemoteUrl = await resolveEffectiveRemoteUrl(
-            gitService,
-            project.path,
-            settings?.forgeRemote ?? settings?.githubRemote ?? null,
-            forgeProviderOverride
-          );
+          try {
+            effectiveRemoteUrl = await resolveEffectiveRemoteUrl(
+              gitService,
+              project.path,
+              settings?.forgeRemote ?? settings?.githubRemote ?? null,
+              forgeProviderOverride
+            );
+          } catch (error) {
+            // A stale code remote leaves no code provider, but a bound issues
+            // provider has no remote to go stale (#13700) — still answer for it.
+            if (!issueProviderOverride) throw error;
+            return resolveForgeProvider({
+              remoteUrl: null,
+              forgeProviderOverride: null,
+              globalDefaultProviderId: null,
+              issueProviderOverride,
+            });
+          }
         }
 
         const globalDefaultProviderId = readDefaultProviderId();
@@ -389,7 +402,7 @@ export function registerForgeSettingsHandlers(): () => void {
           remoteUrl: effectiveRemoteUrl,
           forgeProviderOverride,
           globalDefaultProviderId,
-          issueProviderOverride: settings?.issueProviderOverride ?? null,
+          issueProviderOverride,
         });
       } catch (error) {
         console.warn(`[forgeSettings] resolve failed for ${projectId}:`, error);

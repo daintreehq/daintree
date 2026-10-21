@@ -49,6 +49,7 @@ Object.defineProperty(window, "electron", {
 });
 
 import { useResolvedForgeProvider } from "../useResolvedForgeProvider";
+import { buildCacheKey, getCache, setCache } from "@/lib/forgeResourceCache";
 
 let projectSeq = 0;
 /** Fresh id per test so the hook's module-level cache/seq maps can't leak state. */
@@ -106,6 +107,29 @@ describe("useResolvedForgeProvider", () => {
     expect(result.current.providerId).toBe("daintree.github.github");
     expect(result.current.issues.resolvedVia).toBe("override");
     expect(resolveProviderMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops cached issue rows when the project's issues provider changes", async () => {
+    const tracker: ForgeProviderEntry = {
+      pluginId: "acme.tracker",
+      contribution: { id: "tracker", name: "Tracker", matches: [], roles: ["issues"] },
+    };
+    resolveProviderMock.mockResolvedValue({ entry: GITHUB_ENTRY, resolvedVia: "hostname" });
+    const projectId = nextProjectId();
+    const { result } = renderHook(() => useResolvedForgeProvider(projectId));
+    await waitFor(() => expect(result.current.issues.providerId).toBe("daintree.github.github"));
+
+    const key = buildCacheKey("/repo", "issue", "open", "created");
+    setCache(key, { items: [], nextCursor: null, hasMore: false, timestamp: Date.now() });
+    resolveProviderMock.mockResolvedValue({
+      entry: GITHUB_ENTRY,
+      resolvedVia: "hostname",
+      issues: { entry: tracker, resolvedVia: "override" },
+    });
+    act(() => fireRemoteChanged(projectId));
+
+    await waitFor(() => expect(result.current.issues.providerId).toBe("acme.tracker.tracker"));
+    expect(getCache(key)).toBeUndefined();
   });
 
   it("reports no issues provider when the bound one can't be served", async () => {

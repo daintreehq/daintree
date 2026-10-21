@@ -1285,6 +1285,16 @@ describe("issues bound to a separate provider (#13700)", () => {
   });
 
   it("skips cold-start hydration from the code forge's cached issue page", async () => {
+    const getFirstPageCache = vi.fn(async () => ({
+      issues: { items: [makeIssue(1)], nextCursor: null, hasMore: false },
+      prs: { items: [], nextCursor: null, hasMore: false },
+      lastUpdated: 1,
+    }));
+    resolveForCwdMock.mockResolvedValue({
+      namespaceId: "fake.provider",
+      repoRef: { ...repoRef, projectPath: "/repo" },
+      impl: { ...fakeImpl, repoStats: { getRepoStats: vi.fn(), getFirstPageCache } },
+    });
     resolveIssueOverrideForCwdMock.mockResolvedValue({
       namespaceId: "acme.tracker.tracker",
       repoRef: trackerRef,
@@ -1296,7 +1306,40 @@ describe("issues bound to a separate provider (#13700)", () => {
     const cached = await findHandler("forge:get-first-page-cache")(null, { cwd: "/repo" });
 
     expect(cached).toBeNull();
-    expect(resolveForCwdMock).not.toHaveBeenCalled();
+    expect(getFirstPageCache).not.toHaveBeenCalled();
+    // Reuses the root the code context already found.
+    expect(resolveIssueOverrideForCwdMock).toHaveBeenCalledWith("/repo", "/repo");
+  });
+
+  it("holds the blend back from persistence when the tracker's own count is stale", async () => {
+    resolveForCwdMock.mockResolvedValue({
+      namespaceId: "fake.provider",
+      repoRef,
+      impl: codeImplWithStats(),
+    });
+    resolveIssueOverrideForCwdMock.mockResolvedValue({
+      namespaceId: "acme.tracker.tracker",
+      repoRef: trackerRef,
+      impl: {
+        listIssues: vi.fn(),
+        repoStats: {
+          getRepoStats: vi.fn(async () => ({
+            counts: { issueCount: 3, prCount: null, stale: true },
+            source: "disk" as const,
+          })),
+        },
+      },
+      viaIssueOverride: true,
+    });
+    registerForgeDataHandlers();
+
+    const stats = await findHandler("forge:get-repo-stats")(null, { cwd: "/repo" });
+
+    expect(stats).toMatchObject({ issueCount: 3, prCount: 4 });
+    expect(projectStoreMock.saveRepoStats).toHaveBeenCalledWith(
+      "/repo",
+      expect.not.objectContaining({ forge: expect.anything() })
+    );
   });
 
   it("leaves the single-provider stats path untouched with no issues provider bound", async () => {

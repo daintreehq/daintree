@@ -133,32 +133,42 @@ async function persistRepoStats(
 /**
  * The open-issue count from a project's issues override (#13700), or
  * `undefined` when none is set and the code provider's snapshot already
- * carries the right count. An override that can't answer yields `null` —
- * unknown, never the code forge's count, which would be another tracker's
- * number under this provider's pill.
+ * carries the right count. An override that can't answer yields a `null`
+ * count — unknown, never the code forge's count, which would be another
+ * tracker's number under this provider's pill. `clean` is false for anything
+ * short of a fresh observation (a failure, or a stale, errored or disk-served
+ * answer), and gates persisting and broadcasting the blend exactly as the code
+ * snapshot's own freshness gates them.
  */
 async function readIssueOverrideCount(
   cwd: string,
+  mainWorktreePath: string | undefined,
   bypassCache: boolean
-): Promise<number | null | undefined> {
+): Promise<{ count: number | null; clean: boolean } | undefined> {
   let context: Awaited<ReturnType<typeof resolveIssueOverrideForCwd>>;
   try {
-    context = await resolveIssueOverrideForCwd(cwd);
+    context = await resolveIssueOverrideForCwd(cwd, mainWorktreePath);
   } catch {
-    return null;
+    return { count: null, clean: false };
   }
   if (!context) return undefined;
   const { impl, repoRef } = context;
   try {
     if (impl.repoStats) {
-      return (await impl.repoStats.getRepoStats(repoRef, { bypassCache })).counts.issueCount;
+      const snapshot = await impl.repoStats.getRepoStats(repoRef, { bypassCache });
+      return {
+        count: snapshot.counts.issueCount,
+        clean: !snapshot.counts.stale && !snapshot.counts.error && snapshot.source !== "disk",
+      };
     }
     // A page without a total can't be counted from its length — that's the
     // page size, not the open-issue count.
     const page = await impl.listIssues(repoRef, { state: "open", perPage: 1, bypassCache });
-    return page.totalCount ?? null;
+    return page.totalCount === undefined
+      ? { count: null, clean: false }
+      : { count: page.totalCount, clean: true };
   } catch {
-    return null;
+    return { count: null, clean: false };
   }
 }
 
@@ -479,26 +489,28 @@ async function handleForgeGetRepoStats(payload: {
     throw new Error("Provider does not support repository stats");
   }
   const bypassCache = payload.bypassCache === true;
-  const [codeSnapshot, overrideIssueCount] = await Promise.all([
+  const [codeSnapshot, overrideIssues] = await Promise.all([
     impl.repoStats.getRepoStats(repoRef, { bypassCache }),
-    readIssueOverrideCount(cwd, bypassCache),
+    readIssueOverrideCount(cwd, repoRef.projectPath, bypassCache),
   ]);
   // With an issues provider bound, the code forge's snapshot still owns PRs
   // and freshness, but its issue count and first page belong to a different
   // tracker — swap the count and drop the page so no surface shows them.
-  const split = overrideIssueCount !== undefined;
+  const split = overrideIssues !== undefined;
   const snapshot = split
     ? {
         ...codeSnapshot,
-        counts: { ...codeSnapshot.counts, issueCount: overrideIssueCount },
+        counts: { ...codeSnapshot.counts, issueCount: overrideIssues.count },
         issues: undefined,
         prs: undefined,
       }
     : codeSnapshot;
+  // A blend is only as fresh as its staler half.
+  const overrideClean = !split || overrideIssues.clean;
   const { count: commitCount, reliable: commitReliable } = await readCommitCount(cwd);
   const stats = buildForgeRepositoryStats(commitCount, snapshot.counts);
 
-  const fresh = snapshot.source === "network" && !snapshot.counts.stale;
+  const fresh = snapshot.source === "network" && !snapshot.counts.stale && overrideClean;
 
   // Persist the counts behind this poll (issue #11078). A stale/errored result
   // is a fallback, not an observation — its forge counts never replace what is
@@ -516,7 +528,7 @@ async function handleForgeGetRepoStats(payload: {
     !snapshot.counts.error &&
     snapshot.source !== "disk" &&
     // An issues provider that couldn't answer is a failed read, not a zero.
-    !(split && overrideIssueCount === null);
+    overrideClean;
   await persistRepoStats(cwd, {
     ...(commitReliable ? { commitCount } : {}),
     ...(cleanForge
@@ -569,8 +581,8 @@ async function handleForgeGetFirstPageCache(payload: {
     // With an issues provider bound they'd seed the issue pill and dropdown
     // from the wrong tracker, so skip cold-start hydration and let the live
     // poll fill both in.
-    if (await resolveIssueOverrideForCwd(payload.cwd)) return null;
     const { impl, repoRef, namespaceId } = await resolveForCwd(payload.cwd);
+    if (await resolveIssueOverrideForCwd(payload.cwd, repoRef.projectPath)) return null;
     const snapshot = await impl.repoStats?.getFirstPageCache?.(repoRef);
     if (!snapshot) return null;
     // Blend in the host-computed commit count, exactly as the live-poll sibling

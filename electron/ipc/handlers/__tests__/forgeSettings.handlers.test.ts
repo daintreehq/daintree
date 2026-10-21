@@ -371,6 +371,36 @@ describe("registerForgeSettingsHandlers", () => {
     );
   });
 
+  it("resolveProvider still answers for a bound issues provider when the code remote is gone (#13700)", async () => {
+    projectStoreMock.getProjectSettings.mockResolvedValue({
+      forgeRemote: "upstream",
+      issueProviderOverride: "acme.tracker.tracker",
+    });
+    gitServiceMock.listRemotes.mockResolvedValue([
+      { name: "origin", fetchUrl: "https://github.com/me/fork.git" },
+    ]);
+    const tracker: ForgeProviderEntry = {
+      pluginId: "acme.tracker",
+      contribution: { id: "tracker", name: "Tracker", matches: [], roles: ["issues"] },
+    };
+    const resolved: ResolvedForgeProvider = {
+      entry: null,
+      resolvedVia: null,
+      issues: { entry: tracker, resolvedVia: "override" },
+    };
+    resolverMock.resolveForgeProvider.mockReturnValueOnce(resolved);
+    registerForgeSettingsHandlers();
+    const resolveProvider = findHandler("forge:resolve-provider");
+
+    await expect(resolveProvider(null, "project-1")).resolves.toEqual(resolved);
+    expect(resolverMock.resolveForgeProvider).toHaveBeenCalledWith({
+      remoteUrl: null,
+      forgeProviderOverride: null,
+      globalDefaultProviderId: null,
+      issueProviderOverride: "acme.tracker.tracker",
+    });
+  });
+
   it("resolveProvider still honours an explicitly passed remoteUrl over the setting (#11408)", async () => {
     // The Settings routing panel probes each remote in turn — the project's
     // own selection must not override what the caller asked about.

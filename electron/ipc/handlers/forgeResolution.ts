@@ -195,6 +195,16 @@ async function readProjectForgeSettings(
     worktrees.find((wt) => wt.isMainWorktree)?.path ??
     (await gitService.getRepositoryRoot(cwd).catch(() => null)) ??
     cwd;
+  return readProjectForgeSettingsAt(mainWorktreePath);
+}
+
+/** {@link readProjectForgeSettings} for a caller that already knows the repo root. */
+async function readProjectForgeSettingsAt(mainWorktreePath: string): Promise<{
+  forgeRemote: string | null;
+  forgeProviderOverride: string | null;
+  issueProviderOverride: string | null;
+  mainWorktreePath: string;
+}> {
   const project = await projectStore.getProjectByPath(mainWorktreePath).catch(() => null);
   // A registered project whose settings we cannot read is NOT the same as an
   // unregistered path: the former may well have a `forgeRemote` we are about to
@@ -450,12 +460,19 @@ export async function resolveForCwd(
  * is set but can't be served.
  */
 export async function resolveIssueOverrideForCwd(
-  cwd: string
+  cwd: string,
+  /**
+   * The repo root when the caller already has it (a code-role context's
+   * `repoRef.projectPath`), which spares a `git worktree list` per call.
+   */
+  knownMainWorktreePath?: string
 ): Promise<ResolvedForgeIssueContext | null> {
   const gitService = gitServiceCache.getGitService(cwd);
   if (!gitService) return null;
   const { forgeRemote, forgeProviderOverride, issueProviderOverride, mainWorktreePath } =
-    await readProjectForgeSettings(gitService, cwd);
+    knownMainWorktreePath
+      ? await readProjectForgeSettingsAt(knownMainWorktreePath)
+      : await readProjectForgeSettings(gitService, cwd);
   if (!issueProviderOverride) return null;
   return resolveIssueOverride(issueProviderOverride, mainWorktreePath, () =>
     resolveEffectiveRemoteUrl(gitService, cwd, forgeRemote, forgeProviderOverride)

@@ -10,6 +10,7 @@ import type {
 } from "../../../../shared/types/ipc/worktree.js";
 import type { PRServiceStatus } from "../../../../shared/types/workspace-host.js";
 import { defineIpcNamespace, op } from "../../define.js";
+import { persistIssueAssociation } from "../../../services/worktreeIssueAssociations.js";
 
 const MAX_PROVENANCE_LENGTH = 256;
 
@@ -67,8 +68,7 @@ export function registerWorktreePullRequestHandlers(deps: HandlerDependencies): 
       ...readProvenance(payload),
     };
 
-    const currentMap = store.get("worktreeIssueMap") ?? {};
-    store.set("worktreeIssueMap", { ...currentMap, [worktreeId]: association });
+    persistIssueAssociation(worktreeId, association);
   };
 
   const handleWorktreeDetachIssue = async (payload: DetachIssuePayload): Promise<void> => {

@@ -272,6 +272,8 @@ const ISSUE_ROLE_METHODS = [
   "removeIssueLabel",
 ] as const;
 
+const BASE_METHODS = ["getCredentials", "validateCredentials", "validateToken"] as const;
+
 const CODE_ROLE_METHODS = [
   "parseRemote",
   "listPRs",
@@ -282,6 +284,14 @@ const CODE_ROLE_METHODS = [
   "buildPRUrl",
   "buildPRsUrl",
   "buildCommitsUrl",
+  "createPR",
+  "closePR",
+  "reopenPR",
+  "mergePR",
+  "convertPRToDraft",
+  "markPRReadyForReview",
+  "commentOnPR",
+  "editPR",
 ] as const;
 
 /**
@@ -290,17 +300,16 @@ const CODE_ROLE_METHODS = [
  * role lookups above cast on the strength of this check, so the host must run
  * it before {@link registerForgeProviderImpl}.
  *
- * Spot-checks the members a role's routing depends on rather than every
- * member — enough to catch a provider registered against the wrong roles,
- * which is the mistake that would otherwise surface as a `not a function` deep
- * inside a PR poll.
+ * Checks every required method of each declared role (optional members and
+ * capabilities stay optional), so a provider registered against the wrong
+ * roles fails here rather than as a `not a function` deep inside a PR poll.
  */
 export function validateForgeImplRoles(
   contribution: Pick<ForgeProviderContribution, "roles">,
   impl: AnyForgeProviderImpl
 ): string | null {
   const record = impl as unknown as Record<string, unknown>;
-  const required: string[] = [];
+  const required: string[] = [...BASE_METHODS];
   const servesCode = forgeProviderServesRole(contribution, "code");
   if (forgeProviderServesRole(contribution, "issues")) required.push(...ISSUE_ROLE_METHODS);
   if (servesCode) required.push(...CODE_ROLE_METHODS);
@@ -346,6 +355,8 @@ export function listForgeProviderMatchers(): ForgeProviderMatcher[] {
   const matchers: ForgeProviderMatcher[] = [];
   for (const [pluginId, contributions] of PLUGIN_FORGE_PROVIDERS) {
     for (const contribution of contributions) {
+      // Hostnames route the code role only (#13700).
+      if (!forgeProviderServesRole(contribution, "code")) continue;
       matchers.push({
         providerId: makeForgeProviderId(pluginId, contribution.id),
         hostnames: [...contribution.matches],
@@ -393,6 +404,9 @@ function listProvidersByHostname(hostname: string): RegisteredForgeProvider[] {
   const matches: RegisteredForgeProvider[] = [];
   for (const [pluginId, contributions] of PLUGIN_FORGE_PROVIDERS) {
     for (const contribution of contributions) {
+      // Hostname matching picks a code forge; an issues-only provider has no
+      // remote to match, whatever its manifest lists (#13700).
+      if (!forgeProviderServesRole(contribution, "code")) continue;
       if (hostnameMatchesAny(hostname, contribution.matches)) {
         matches.push({ pluginId, contribution });
       }

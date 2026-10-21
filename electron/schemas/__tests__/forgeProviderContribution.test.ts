@@ -121,6 +121,10 @@ describe("ForgeProviderContributionSchema roles (#13700)", () => {
     expect(parse({ roles: ["issues", "code"], matches: [] }).success).toBe(false);
   });
 
+  it("rejects hostnames on an issues-only provider, which hostname routing never serves", () => {
+    expect(parse({ roles: ["issues"], matches: ["linear.app"] }).success).toBe(false);
+  });
+
   it("rejects a code-only provider", () => {
     expect(parse({ roles: ["code"] }).success).toBe(false);
   });
