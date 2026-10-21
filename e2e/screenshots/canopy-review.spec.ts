@@ -86,6 +86,20 @@ function clearFrames(prefix: string): void {
 
 const dialog = (page: Page) => page.getByRole("dialog", { name: "Canopy" });
 const cards = (page: Page) => dialog(page).locator("[data-canopy-card]");
+const search = (page: Page) => dialog(page).getByRole("combobox", { name: "Search agents" });
+
+/**
+ * The panel opens with the keyboard in its search and the top run selected.
+ * The preview's dialog is replaced once after it opens, and the replaced one's
+ * focus restore lands on the new dialog rather than the search the app's own
+ * opening keeps; the harness puts the keyboard where the app's landing does.
+ */
+async function landed(page: Page): Promise<void> {
+  await page.waitForTimeout(1500);
+  await search(page).focus();
+  await expect(search(page)).toBeFocused();
+  await expect(cards(page).first()).toHaveAttribute("aria-selected", "true");
+}
 
 async function load(
   page: Page,
@@ -180,7 +194,7 @@ for (const theme of THEMES) {
 
     // The whole fleet in one ranked list, the most pressing run selected.
     await load(page, theme, "fleet");
-    await expect(cards(page).first()).toBeFocused();
+    await landed(page);
     written.push(await snap(page, `${theme}--01-fleet.png`, FLEET_CARDS));
 
     // The foot of the list: working agents ranked by how long they went unseen.
@@ -193,6 +207,8 @@ for (const theme of THEMES) {
 
     // Keyboard down the queue: the pane beside it follows the cursor.
     await load(page, theme, "fleet");
+    await landed(page);
+    await page.keyboard.press("Tab");
     await expect(cards(page).first()).toBeFocused();
     for (let i = 0; i < 2; i += 1) await page.keyboard.press("ArrowDown");
     await expect(cards(page).nth(2)).toBeFocused();
@@ -203,7 +219,7 @@ for (const theme of THEMES) {
 
     // Answer the first menu in its own live terminal, then start a reply on the question.
     await load(page, theme, "fleet");
-    await expect(cards(page).first()).toBeFocused();
+    await landed(page);
     await dialog(page).locator("[data-canopy-terminal] textarea").focus();
     await page.keyboard.press("1");
     await expect(page.locator("body")).toHaveAttribute("data-canopy-last", /"input"/);
@@ -228,7 +244,7 @@ for (const theme of THEMES) {
 
     // Nothing waiting on you: the working agents are the list, and it opens on the top one.
     await load(page, theme, "calm");
-    await expect(cards(page).first()).toBeFocused();
+    await landed(page);
     written.push(await snap(page, `${theme}--08-calm.png`, "some"));
 
     await load(page, theme, "empty");
@@ -248,7 +264,7 @@ for (const theme of THEMES) {
 
     // The panel's keys, one press away in the header rather than a standing footer.
     await load(page, theme, "fleet");
-    await expect(cards(page).first()).toBeFocused();
+    await landed(page);
     await dialog(page).getByRole("button", { name: "Keyboard shortcuts" }).click();
     await expect(page.getByText("In a reply or the terminal")).toBeVisible();
     written.push(await snap(page, `${theme}--12-shortcuts.png`, FLEET_CARDS));
@@ -302,10 +318,12 @@ for (const theme of THEMES) {
 
     // The list as it opens: the first row selected, every waiting row unread.
     await load(page, theme, "fleet", ROWS_VIEWPORT);
-    await expect(cards(page).first()).toBeFocused();
+    await landed(page);
     written.push(await snapList(page, `${theme}--r01-inbox.png`, FLEET_CARDS));
 
     // Keyboard down two rows: a focus ring on the third, the first two read.
+    await page.keyboard.press("Tab");
+    await expect(cards(page).first()).toBeFocused();
     await page.keyboard.press("ArrowDown");
     await page.keyboard.press("ArrowDown");
     await expect(cards(page).nth(2)).toBeFocused();
@@ -347,6 +365,8 @@ for (const theme of THEMES) {
     // E archives the selected run: it leaves the list for the Archived group,
     // and the cursor moves on to the next run.
     await load(page, theme, "fleet", ROWS_VIEWPORT);
+    await landed(page);
+    await page.keyboard.press("Tab");
     await expect(cards(page).first()).toBeFocused();
     await page.keyboard.press("e");
     await dialog(page)
@@ -359,6 +379,138 @@ for (const theme of THEMES) {
       .click();
 
     const onDisk = readdirSync(OUT_DIR).filter((f) => f.startsWith(`${theme}--r`));
+    expect(onDisk.sort()).toEqual(written.map((f) => path.basename(f)).sort());
+  });
+}
+
+/**
+ * The search at the top of the inbox: the field the panel opens into, and the
+ * column it filters, in every place the keyboard can be — in the field, on a
+ * row, in the pane — with and without a query. Cropped to the column and the
+ * header above it, with the pane's first strip beside it for context.
+ */
+const SEARCH_VIEWPORT = { width: 1280, height: 1000 };
+
+async function snapColumn(page: Page, file: string, expectCards: number | "none" | "some") {
+  const column = dialog(page).locator(".canopy-inbox-column");
+  const box = await column.boundingBox();
+  const panel = await dialog(page).boundingBox();
+  if (!box || !panel || box.width < 200 || box.height < 200) {
+    throw new Error(`${file}: column has no real box (${JSON.stringify(box)}) — refusing to write`);
+  }
+  if (expectCards === "none") await expect(cards(page)).toHaveCount(0);
+  else if (expectCards === "some") await expect(cards(page).first()).toBeVisible();
+  else await expect(cards(page)).toHaveCount(expectCards);
+  const out = path.join(OUT_DIR, file);
+  await page.screenshot({
+    path: out,
+    clip: {
+      x: box.x,
+      y: panel.y,
+      width: box.width + 200,
+      height: Math.min(box.y + box.height, panel.y + 720) - panel.y,
+    },
+  });
+  return out;
+}
+
+for (const theme of THEMES) {
+  test(`canopy search — ${theme}`, async ({ page }) => {
+    test.info().annotations.push({
+      type: "conditional-skip",
+      description: "DAINTREE_SHOT_CANOPY is required for the canopy search capture",
+    });
+    test.skip(!ENABLED, "set DAINTREE_SHOT_CANOPY=1 to run the capture");
+    test.setTimeout(240_000);
+    const written: string[] = [];
+    clearFrames(`${theme}--s`);
+
+    // As it opens: the keyboard in the search, the top run selected beneath it.
+    await load(page, theme, "fleet", SEARCH_VIEWPORT);
+    await landed(page);
+    written.push(await snapColumn(page, `${theme}--s01-open.png`, FLEET_CARDS));
+
+    // Arrows from the search move the selection; the caret stays to type.
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("ArrowDown");
+    await expect(search(page)).toBeFocused();
+    await expect(cards(page).nth(2)).toHaveAttribute("aria-selected", "true");
+    written.push(await snapColumn(page, `${theme}--s02-arrowed.png`, FLEET_CARDS));
+
+    // Typed into: the list narrows to the matches, the top one selected.
+    await load(page, theme, "fleet", SEARCH_VIEWPORT);
+    await landed(page);
+    await page.keyboard.type("plugin");
+    await expect(cards(page)).toHaveCount(2);
+    await expect(cards(page).first()).toHaveAttribute("aria-selected", "true");
+    written.push(await snapColumn(page, `${theme}--s03-typed.png`, 2));
+
+    // Tab hands the keyboard to the selected row; the query stays in the field.
+    await page.keyboard.press("Tab");
+    await expect(cards(page).first()).toBeFocused();
+    written.push(await snapColumn(page, `${theme}--s04-query-row-focus.png`, 2));
+
+    // Nothing matches.
+    await load(page, theme, "fleet", SEARCH_VIEWPORT);
+    await landed(page);
+    await page.keyboard.type("kubernetes");
+    await expect(cards(page)).toHaveCount(0);
+    await expect(dialog(page).getByText("Nothing matches “kubernetes”.")).toBeVisible();
+    written.push(await snapColumn(page, `${theme}--s05-no-match.png`, "none"));
+
+    // The keyboard on a row with the field empty: the field at rest.
+    await load(page, theme, "fleet", SEARCH_VIEWPORT);
+    await landed(page);
+    await page.keyboard.press("Tab");
+    await expect(cards(page).first()).toBeFocused();
+    written.push(await snapColumn(page, `${theme}--s06-row-focus.png`, FLEET_CARDS));
+
+    // The keyboard in the selected run's terminal: neither field nor row holds it.
+    await dialog(page).locator("[data-canopy-terminal] textarea").focus();
+    await expect(search(page)).not.toBeFocused();
+    written.push(await snapColumn(page, `${theme}--s07-pane-focus.png`, FLEET_CARDS));
+
+    // A search finds archived runs too, shown open under their bar.
+    await load(page, theme, "fleet", SEARCH_VIEWPORT);
+    await landed(page);
+    await page.keyboard.press("Tab");
+    await expect(cards(page).first()).toBeFocused();
+    const archivedTitle =
+      (await cards(page).first().locator("span.truncate.text-sm").first().textContent()) ?? "";
+    await page.keyboard.press("e");
+    await page.keyboard.press("/");
+    await expect(search(page)).toBeFocused();
+    const word = archivedTitle.split(/[\s,.:]+/).find((w) => w.length > 4) ?? "";
+    expect(word, "a word from the archived run's name").not.toBe("");
+    await page.keyboard.type(word);
+    await expect(dialog(page).locator("#canopy-archived [data-canopy-card]").first()).toBeVisible();
+    written.push(await snapColumn(page, `${theme}--s08-archived-match.png`, "some"));
+
+    // Unread on, and the search matches only a run already read: the list
+    // says why it is empty rather than that nothing matched.
+    await load(page, theme, "fleet", SEARCH_VIEWPORT);
+    await landed(page);
+    await dialog(page)
+      .getByRole("button", { name: /^Unread/ })
+      .click();
+    await search(page).focus();
+    await page.keyboard.type("Deploy");
+    await expect(cards(page)).toHaveCount(0);
+    await expect(dialog(page).getByText("Nothing unread matches “Deploy”.")).toBeVisible();
+    await expect(dialog(page).getByText("No unread agent matches")).toBeVisible();
+    // The whole dialog, so the pane's own word on it shows beside the list.
+    written.push(await snap(page, `${theme}--s09-unread-hides-match.png`, "none"));
+
+    // Nothing matches anywhere: the list's line and the pane's way out together.
+    await load(page, theme, "fleet", SEARCH_VIEWPORT);
+    await landed(page);
+    await page.keyboard.type("kubernetes");
+    await expect(cards(page)).toHaveCount(0);
+    await expect(dialog(page).getByText("Nothing matches “kubernetes”.")).toBeVisible();
+    await expect(dialog(page).getByText("No agent matches")).toBeVisible();
+    written.push(await snap(page, `${theme}--s10-no-match-dialog.png`, "none"));
+
+    const onDisk = readdirSync(OUT_DIR).filter((f) => f.startsWith(`${theme}--s`));
     expect(onDisk.sort()).toEqual(written.map((f) => path.basename(f)).sort());
   });
 }

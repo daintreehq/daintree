@@ -20,6 +20,8 @@ import { actionService } from "@/services/ActionService";
 import { notify } from "@/lib/notify";
 import { latestUndoOnly, UNDO_TOAST_DURATION_MS } from "@/lib/undoToast";
 import { pluralize } from "@/lib/pluralize";
+import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { isMac } from "@/lib/platform";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { clientErrorCode } from "@/utils/clientAppError";
@@ -839,8 +841,14 @@ function CanopyInbox({
         (runIds) => {
           if (live) setScreenHits({ ask: screenAsk, runIds: new Set(runIds) });
         },
-        // A host that can't search its screens still matches what the panel holds.
-        () => undefined
+        // A host that can't search its screens still matches what the panel
+        // holds, and its search has still settled.
+        () => {
+          if (!live) return;
+          setScreenHits((hits) =>
+            hits?.ask === screenAsk ? hits : { ask: screenAsk, runIds: new Set() }
+          );
+        }
       );
     }, SCREEN_SEARCH_DEBOUNCE_MS);
     return () => {
@@ -916,6 +924,36 @@ function CanopyInbox({
   useEffect(() => {
     if (!listShown) setPointerInList(false);
   }, [listShown]);
+
+  // The search found runs, but only read ones the Unread filter hides: every
+  // place that says why the list is empty says that, not "no match".
+  const onlyReadMatch = searching && visible.length === 0 && shownInbox.inbox.length > 0;
+  // A search's outcome is said once, when it settles: the runs are in, the
+  // terminals have answered and the typing has stopped. Never per keystroke,
+  // and never again for a match a terminal adds later.
+  const searchSettled = fleet !== null && (screenAsk === null || onScreen !== null);
+  const outcome =
+    !searching || !searchSettled
+      ? null
+      : visible.length > 0
+        ? pluralize(visible.length, "match", "matches")
+        : onlyReadMatch
+          ? "No unread matches"
+          : "No matches";
+  const announceKey = `${searchKey}|${unreadOnly}`;
+  const announcedRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!searching) {
+      announcedRef.current = null;
+      return;
+    }
+    if (outcome === null || query !== appliedQuery || announcedRef.current === announceKey) return;
+    const timer = window.setTimeout(() => {
+      announcedRef.current = announceKey;
+      useAnnouncerStore.getState().announce(outcome, "polite");
+    }, UI_DOHERTY_THRESHOLD);
+    return () => window.clearTimeout(timer);
+  }, [searching, outcome, announceKey, query, appliedQuery]);
 
   const [focusedId, setFocusedId] = useState<string | null>(null);
   // Where the keyboard goes in the next agent's pane, for the run it was meant for.
@@ -1862,6 +1900,9 @@ function CanopyInbox({
     );
   };
   const unreadCount = inbox.inbox.filter((item) => item.unread).length;
+  // The section bar speaks for what the search shows; the header keeps the whole inbox.
+  const shownUnreadCount = shownInbox.inbox.filter((item) => item.unread).length;
+  const listedUnread = listed.some((item) => item.unread);
 
   // Another host the panel can't read right now: why, in the host menu's own
   // words, with nothing of another host's put in its place.
@@ -2089,6 +2130,7 @@ function CanopyInbox({
               <div className="shrink-0 px-3 pt-3 pb-1">
                 <SearchField
                   size="compact"
+                  focusedOnOpen
                   inputRef={searchRef}
                   value={query}
                   onChange={(event) => setQuery(event.target.value)}
@@ -2097,8 +2139,15 @@ function CanopyInbox({
                   placeholder="Search agents and their terminals"
                   aria-label="Search agents"
                   role="combobox"
-                  aria-expanded
-                  aria-controls="canopy-inbox-list canopy-archived"
+                  aria-expanded={visible.length > 0}
+                  aria-controls={
+                    [
+                      listed.length > 0 ? "canopy-inbox-list" : null,
+                      archivedShown && shownInbox.archived.length > 0 ? "canopy-archived" : null,
+                    ]
+                      .filter((id) => id !== null)
+                      .join(" ") || undefined
+                  }
                   aria-autocomplete="list"
                   aria-activedescendant={
                     focusedItem && visible.includes(focusedItem)
@@ -2122,7 +2171,9 @@ function CanopyInbox({
                   label="Inbox"
                   count={listed.length}
                   trailing={
-                    <span className="flex items-center gap-1">
+                    // The last button's padding hangs into the bar's own, so its
+                    // words end on the field's right edge and the rows' meters.
+                    <span className="-mr-2.5 flex items-center gap-1">
                       <Button
                         variant="ghost"
                         size="xs"
@@ -2130,14 +2181,16 @@ function CanopyInbox({
                         onClick={() => setUnreadOnly(!unreadOnly)}
                       >
                         Unread
-                        {unreadCount > 0 && <span className="tabular-nums">{unreadCount}</span>}
+                        {shownUnreadCount > 0 && (
+                          <span className="tabular-nums">{shownUnreadCount}</span>
+                        )}
                       </Button>
                       <Tooltip>
                         <TooltipTrigger asChild>
                           <Button
                             variant="ghost"
                             size="xs"
-                            disabled={unreadCount === 0}
+                            disabled={!listedUnread}
                             onClick={markAllRead}
                           >
                             Mark all read
@@ -2193,10 +2246,15 @@ function CanopyInbox({
                       );
                     })}
                   </div>
-                ) : (
+                ) : searching &&
+                  shownInbox.inbox.length === 0 &&
+                  shownInbox.archived.length > 0 ? null : (
+                  // A search whose only matches are archived lets their bar below say so.
                   <p className="px-3 pb-3 text-xs text-text-secondary">
                     {searching
-                      ? `Nothing in the inbox matches “${appliedQuery.trim()}”.`
+                      ? shownInbox.inbox.length > 0
+                        ? `Nothing unread matches “${appliedQuery.trim()}”.`
+                        : `Nothing matches “${appliedQuery.trim()}”.`
                       : unreadOnly && inbox.inbox.length > 0
                         ? "Nothing unread. Each agent shows here again when it does something new."
                         : "Every agent is archived. Each comes back when it has something new to say."}
@@ -2256,7 +2314,9 @@ function CanopyInbox({
               </div>
               <CanopyStatusBar link={canopy?.link} waiting={canopy?.waiting} />
             </div>
-            <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-surface-canvas px-2 pb-2">
+            {/* Inset on every side: the top one puts the place line level with the
+                search beside it, and the card's top with the Inbox bar's. */}
+            <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-surface-canvas p-2">
               {focusedItem && (
                 <CanopyPlace
                   item={focusedItem}
@@ -2289,7 +2349,14 @@ function CanopyInbox({
                 />
               ) : (
                 <div className="flex flex-1 flex-col items-center justify-center gap-1 text-center">
-                  {searching ? (
+                  {onlyReadMatch ? (
+                    <>
+                      <p className="text-sm text-text-primary">No unread agent matches</p>
+                      <p className="text-xs text-text-secondary">
+                        Turn off Unread to see every agent that matches.
+                      </p>
+                    </>
+                  ) : searching ? (
                     <>
                       <p className="text-sm text-text-primary">No agent matches</p>
                       <p className="text-xs text-text-secondary">
