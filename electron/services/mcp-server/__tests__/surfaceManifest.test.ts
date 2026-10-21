@@ -162,6 +162,25 @@ describe("per-tool tier", () => {
     expect(result.tools.some((t) => t.tier === "core")).toBe(true);
   });
 
+  // A relay's origin is `external`, so these sit on no list its origin reads;
+  // falling back to its own tier would tell a `full` relay they need `full`,
+  // while its `actions.getSchema` and a `core` relay's admission say `core`.
+  it("reports the tools that answer their caller at `core` for a full relay", () => {
+    const ids = ["project.runCommand", "assistant.list"];
+    const result = buildSurfaceManifest(
+      ids.map((id) => entry({ id, kind: "command" })),
+      "full",
+      APP_VERSION,
+      { workspaceBound: true, relay: true, assistantCaller: true }
+    );
+
+    expect(result.tools.map((t) => t.id)).toEqual([...ids].sort());
+    for (const tool of result.tools) {
+      expect(NON_RENDERER_OWNED_TIER_ALLOWLISTS.full.has(tool.id)).toBe(false);
+      expect(tool.tier).toBe("core");
+    }
+  });
+
   it("reports `external` for every tool an external caller sees", () => {
     const result = buildSurfaceManifest(realisticManifest(), "external", APP_VERSION);
 

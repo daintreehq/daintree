@@ -2169,9 +2169,9 @@ describe("filterIntrospectionResultForSession", () => {
     // A manifest entry is only as well-formed as whatever built it, and
     // JSON.stringify throws on a cycle. Fail closed rather than letting it
     // escape the tool call as an exception.
-    // #13501: the command runner answers its caller, so a full-tier relay is
-    // described as its listing and its admission treat it.
-    it("describes the command runner for a full-tier relay, and nobody a relay can't be", () => {
+    // #13501: the command runner answers its caller, so a relay is described
+    // as its listing and its admission treat it, at either in-app tier.
+    it("describes the command runner for a relay or the assistant, and nobody else", () => {
       const runner = makeEntry({ id: "project.runCommand", kind: "command" });
       const relay = (tier: "core" | "full") =>
         buildTargetPolicy(runner, {
@@ -2181,14 +2181,28 @@ describe("filterIntrospectionResultForSession", () => {
           relay: true,
         });
 
-      expect(relay("full")).toMatchObject({ authorizedBy: "tier", minimumTier: "full" });
-      expect(relay("core")).toBeNull();
+      expect(relay("full")).toMatchObject({ authorizedBy: "tier", minimumTier: "core" });
+      expect(relay("core")).toMatchObject({ authorizedBy: "tier", minimumTier: "core" });
+      expect(
+        buildTargetPolicy(runner, { ...snap, tier: "core", rendererOwnedOrigin: true })
+      ).toMatchObject({ authorizedBy: "tier", minimumTier: "core" });
       expect(
         buildTargetPolicy(runner, { ...snap, tier: "full", rendererOwnedOrigin: false })
       ).toBeNull();
-      expect(shouldExposeTool(runner, "full", { workspaceBound: true, relay: true })).toBe(true);
-      expect(shouldExposeTool(runner, "core", { workspaceBound: true, relay: true })).toBe(false);
-      expect(shouldExposeTool(runner, "full", { workspaceBound: false })).toBe(false);
+      expect(
+        buildTargetPolicy(runner, { ...snap, tier: "external", rendererOwnedOrigin: false })
+      ).toBeNull();
+      for (const tier of ["core", "full"] as const) {
+        expect(shouldExposeTool(runner, tier, { workspaceBound: true, relay: true })).toBe(true);
+        expect(
+          shouldExposeTool(runner, tier, { workspaceBound: false, rendererOwnedOrigin: true })
+        ).toBe(true);
+        expect(shouldExposeTool(runner, tier, { workspaceBound: false })).toBe(false);
+        expect(shouldExposeTool(runner, tier, { workspaceBound: true, paneApproval: true })).toBe(
+          false
+        );
+      }
+      expect(shouldExposeTool(runner, "external", { workspaceBound: false })).toBe(false);
     });
 
     // #13496: the assistant tools answer their caller too, so a relayed

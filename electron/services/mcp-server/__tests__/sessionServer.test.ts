@@ -1858,26 +1858,29 @@ describe("project.runCommand short-circuit (#13495)", () => {
     });
   }
 
-  it("runs in main for Daintree's own assistant at the full tier", async () => {
-    const handleProjectRunCommand = vi.fn().mockResolvedValue(ranResult);
-    const dispatchAction = vi.fn();
-    const result = await call(
-      fakeDeps({
-        sessionStore: storeWithOrigin("full", "help"),
-        handleProjectRunCommand,
-        dispatchAction,
-      })
-    );
+  it.each(["core", "full"] as const)(
+    "runs in main for Daintree's own assistant at the %s tier",
+    async (tier) => {
+      const handleProjectRunCommand = vi.fn().mockResolvedValue(ranResult);
+      const dispatchAction = vi.fn();
+      const result = await call(
+        fakeDeps({
+          sessionStore: storeWithOrigin(tier, "help"),
+          handleProjectRunCommand,
+          dispatchAction,
+        })
+      );
 
-    expect(dispatchAction).not.toHaveBeenCalled();
-    expect(handleProjectRunCommand.mock.calls[0]?.[0]).toEqual({
-      projectId: "proj-1",
-      command: "git status",
-    });
-    expect(handleProjectRunCommand.mock.calls[0]?.[1]).toBeInstanceOf(AbortSignal);
-    expect(result.isError).not.toBe(true);
-    expect(result.structuredContent).toEqual(ranResult);
-  });
+      expect(dispatchAction).not.toHaveBeenCalled();
+      expect(handleProjectRunCommand.mock.calls[0]?.[0]).toEqual({
+        projectId: "proj-1",
+        command: "git status",
+      });
+      expect(handleProjectRunCommand.mock.calls[0]?.[1]).toBeInstanceOf(AbortSignal);
+      expect(result.isError).not.toBe(true);
+      expect(result.structuredContent).toEqual(ranResult);
+    }
+  );
 
   it("returns a non-zero exit as a result, not a tool error", async () => {
     const handleProjectRunCommand = vi
@@ -1901,19 +1904,23 @@ describe("project.runCommand short-circuit (#13495)", () => {
     expect(handleProjectRunCommand).not.toHaveBeenCalled();
   });
 
-  it("refuses the assistant at the core tier even when a grant admits the call", async () => {
+  // A pane's grant is reachable and its tier is an approval line (#12692), so
+  // this is the caller a grant or an ask would most plausibly let through.
+  it("refuses a worker pane even when a grant admits the call, and never asks", async () => {
     const handleProjectRunCommand = vi.fn().mockResolvedValue(ranResult);
-    const sessionStore = storeWithOrigin("core", "help");
+    const requestApproval = vi.fn();
+    const sessionStore = storeWithOrigin("core", "external");
     sessionStore.grantCache.issueGrant("session-run-command", "project.runCommand");
-    const result = await call(fakeDeps({ sessionStore, handleProjectRunCommand }));
+    const result = await call(fakeDeps({ sessionStore, handleProjectRunCommand, requestApproval }));
 
     expect(toolErrorPayload(result).code).toBe(TIER_NOT_PERMITTED_CODE);
+    expect(requestApproval).not.toHaveBeenCalled();
     expect(handleProjectRunCommand).not.toHaveBeenCalled();
   });
 
   it("spends no grant's use on a caller it refuses", async () => {
     const handleProjectRunCommand = vi.fn().mockResolvedValue(ranResult);
-    const sessionStore = storeWithOrigin("core", "help");
+    const sessionStore = storeWithOrigin("core", "external");
     sessionStore.grantCache.issueGrant("session-run-command", "project.runCommand");
     sessionStore.grantCache.issueNativeGrant({
       sessionId: "session-run-command",
