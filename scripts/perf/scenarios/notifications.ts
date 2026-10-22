@@ -1212,7 +1212,7 @@ export const notificationScenarios: PerfScenario[] = [
     id: "PERF-324",
     name: "Idle Terminal Sweep Decision",
     description:
-      "Four real check cycles of IdleTerminalNotificationService over 40 projects and 240 terminals, driven through start() so the 2-minute startup quiet window, the 5s initial check and the 5-minute cadence are the product's own. Every project carries a declared verdict and a reason — idle, on screen in some window, holding a working agent, recently active, terminal-less, PTY-less, activity-less, or muted — and the sweep is graded in both directions: the eligible projects must be broadcast and no other project may be. The throttle is then read back out of electron-store, cleared by real activity, and must notify again.",
+      "Four real check cycles of IdleTerminalNotificationService over 40 projects and 240 terminals, driven through start() so the 2-minute startup quiet window, the 5s initial check and the 5-minute cadence are the product's own. Every project carries a declared verdict and a reason — idle, on screen in some window, holding a working agent, recently active, terminal-less, PTY-less, freshly spawned, or muted — and the sweep is graded in both directions: the eligible projects must be broadcast and no other project may be. The throttle is then read back out of electron-store, cleared by real activity, and must notify again.",
     tier: "heavy",
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 3, ci: 5, nightly: 8 },
@@ -1300,11 +1300,11 @@ export const notificationScenarios: PerfScenario[] = [
         broadcasts += second.broadcastCount;
         spuriousMisses += gradeIdleSweep([], second.projectIds).spurious;
 
-        // Sweep 3 — the idle projects see real output, so they leave the
+        // Sweep 3 — the idle projects' screens change, so they leave the
         // eligible state and their throttle must be cleared rather than kept.
         rows.current = rows.current.map((row) =>
           corpus.expectedNotifiedIds.includes(row.projectId)
-            ? { ...row, lastOutputTime: clock.now() }
+            ? { ...row, lastOutputChangeAt: clock.now() }
             : row
         );
         await timedTick(IDLE_CHECK_INTERVAL_MS);
@@ -1319,7 +1319,7 @@ export const notificationScenarios: PerfScenario[] = [
         const staleAt = clock.now() - (IDLE_THRESHOLD_MINUTES + 5) * 60_000;
         rows.current = rows.current.map((row) =>
           corpus.expectedNotifiedIds.includes(row.projectId)
-            ? { ...row, lastInputTime: staleAt, lastOutputTime: staleAt }
+            ? { ...row, lastTypedInputAt: staleAt, lastOutputChangeAt: staleAt }
             : row
         );
         await timedTick(IDLE_CHECK_INTERVAL_MS);
