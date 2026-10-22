@@ -688,7 +688,8 @@ export const RecipeContributionTerminalSchema = z
 /**
  * `contributes.recipes` manifest entry (#11860). A recipe is a named
  * multi-terminal launch layout registered under `{pluginId}.{id}` and merged
- * into the recipe list as a plugin-owned tier available in every project.
+ * into the recipe list as a plugin-owned tier: in every project for an
+ * installed plugin, in its own project only for a `scope: "project"` one.
  *
  * Terminals are inline rather than a path to a shipped JSON file: the
  * install-time confirmation reads the manifest WITHOUT extracting the archive,
@@ -2125,11 +2126,11 @@ function reportReservedTourCueNames(raw: unknown, ctx: z.RefinementCtx): void {
  * The dividing line is {@link
  * ../services/plugin/PluginContributionBroadcaster.js}: the groups it filters by
  * owning plugin id (panels, commands/actions, toolbarButtons, keybindings,
- * contextMenus) reach only the owning project's views, and `settings` resolves
- * through the bound instance handle. Everything here registers into a registry
- * with no project axis — a single app menu, one agent roster mirrored into the
- * shared pty-host, one skill index behind the MCP server — so the contribution
- * is published app-wide no matter which project loaded it.
+ * contextMenus, recipes) reach only the owning project's views, and `settings`
+ * resolves through the bound instance handle. Everything here registers into a
+ * registry with no project axis — a single app menu, one agent roster mirrored
+ * into the shared pty-host, one skill index behind the MCP server — so the
+ * contribution is published app-wide no matter which project loaded it.
  *
  * Exported so tests enumerate the set instead of restating it, and so a group
  * that later grows a project axis is removed in exactly one place.
@@ -2146,10 +2147,6 @@ export const PROJECT_SCOPE_UNSCOPED_CONTRIBUTIONS = [
   [
     "skills",
     "contributed skills land in one app-wide index behind the built-in MCP server's skills.search/skills.load, which external agent sessions query with no project context to filter on.",
-  ],
-  [
-    "recipes",
-    "the plugin recipe registry is broadcast to every renderer unfiltered, so the recipe would appear in every project's launcher and empty state.",
   ],
   [
     "fileDecorationProviders",

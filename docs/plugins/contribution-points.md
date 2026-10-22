@@ -25,10 +25,10 @@ A plugin that declares `"scope": "project"` lives in a project's own repository 
 | `surfaces` | **Project scope only** — see [Surfaces](#surfaces--shipped-project-scope-only) |
 | `agentMcp` | Available — every credential for the plugin's server is minted per terminal and bound to one project, and a project plugin's server can only be granted to its own project |
 | `databases` | Available — a `"project"` database is a file in the repository, resolved against the bound project root; `"local"` stays in this machine's plugin data |
+| `recipes` | Available — only in the owning project's launcher, empty state and recipe manager, and gone while the plugin is switched off or its folder is untrusted. A terminal may use `terminal`, `dev-preview` or a built-in agent; `agents` is rejected below, so there is no plugin agent of its own to name |
 | `menuItems` | Rejected — the application menu is one OS-level menu shared by every window, with no per-project projection |
 | `agents` | Rejected — the agent roster is one app-wide registry mirrored into the shared pty-host, and launch identity outlives the project binding |
 | `skills` | Rejected — contributed skills land in one app-wide index behind the MCP server's `skills.search` / `skills.load`, which filter by no project |
-| `recipes` | Rejected — the plugin recipe registry is broadcast to every renderer unfiltered |
 | `fileDecorationProviders` | Rejected — decoration requests carry a resource path with no owning-project routing |
 | `processTools` | Rejected — detections are mirrored into the shared pty-host as one table for every terminal |
 | `mcpServers` | Rejected — the plugin-MCP IPC surface is app-global: servers are addressed by plugin and server id alone, and a tool call carries no project to check the contribution against. To serve tools to the project's agents, declare `agentMcp` instead |
@@ -1013,7 +1013,7 @@ The markdown file content is returned to the agent when it calls `skills.load`, 
 
 ## Recipes — _Shipped_
 
-Named multi-terminal launch layouts a plugin ships. A contributed recipe is registered under the qualified id `{pluginId}.{id}`, merged into the recipe list as a plugin-owned tier, and available in **every** project — a plugin that ships an agent can also ship a ready-made layout that runs it, with no per-project setup.
+Named multi-terminal launch layouts a plugin ships. A contributed recipe is registered under the qualified id `{pluginId}.{id}`, merged into the recipe list as a plugin-owned tier, and available in **every** project — a plugin that ships an agent can also ship a ready-made layout that runs it, with no per-project setup. A [project plugin](./project-local.md)'s recipes are the exception: they appear only in the project that owns the plugin, and come and go with its switch and its folder's trust.
 
 ```json
 {
@@ -1064,7 +1064,7 @@ Named multi-terminal launch layouts a plugin ships. A contributed recipe is regi
 
 **Content is immutable.** The plugin owns what its recipes run; edits and deletes are rejected, and a plugin update replaces them wholesale. To customise one, use **Save to repo** — that duplicates it into a user-owned team recipe you can edit freely, leaving the plugin's original in place.
 
-**Your own metadata survives.** Frecency (`lastUsedAt` / usage history), the empty-state pin, and `autoAssign` are yours, not the plugin's, so they live in a sidecar (`plugin-recipe-metadata.json` in the global config dir) keyed by qualified id. They persist across disable, reload, and plugin updates, and are purged only when you explicitly uninstall the plugin.
+**Your own metadata survives.** Frecency (`lastUsedAt` / usage history), the empty-state pin, and `autoAssign` are yours, not the plugin's, so they live in a sidecar (`plugin-recipe-metadata.json` in the global config dir) keyed by qualified id. They persist across disable, reload, and plugin updates, and are purged only when you explicitly uninstall the plugin. A project plugin's metadata is kept even while its project is closed, since nothing outside the repository can tell a closed project from a removed one.
 
 **Referencing your own agent.** A recipe terminal may name an agent id from the same plugin's `contributes.agents`. Ownership is resolved against the live registry, not the manifest: if another plugin already claimed that agent id, the terminal is dropped rather than silently launching someone else's agent.
 

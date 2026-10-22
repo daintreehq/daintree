@@ -160,7 +160,6 @@ const UNSCOPED_SAMPLES: Record<UnscopedGroup, unknown[]> = {
     { id: "acme-agent", name: "Acme", command: "acme", color: "#123456", iconId: "sparkles" },
   ],
   skills: [{ id: "skill", name: "Skill", path: "skills/skill.md" }],
-  recipes: [{ id: "boot", name: "Boot", terminals: [{ type: "shell" }] }],
   fileDecorationProviders: [{ id: "dec", scopes: ["file"] }],
   fileEditors: [{ id: "md", slot: "acme.editor", extensions: ["md"] }],
   processTools: [{ command: "acmetool", iconId: "sparkles" }],
@@ -181,9 +180,9 @@ const UNSCOPED_GROUPS = PROJECT_SCOPE_UNSCOPED_CONTRIBUTIONS.map(([group]) => gr
 
 /**
  * Every group here still broadcasts app-wide (`PluginContributionBroadcaster`
- * filters panels, actions, toolbar buttons, keybindings and context menus and
- * nothing else), so a project plugin declaring one publishes it to every
- * project. That was unreachable before project-local plugins existed; now it is
+ * filters panels, actions, toolbar buttons, keybindings, context menus and
+ * recipes and nothing else), so a project plugin declaring one publishes it to
+ * every project. That was unreachable before project-local plugins existed; now it is
  * a live leak, and the manifest gate is what turns it into a load-time error.
  */
 describe('structurally-global contributions under "scope": "project"', () => {
@@ -279,6 +278,7 @@ describe('structurally-global contributions under "scope": "project"', () => {
         keybindings: [{ actionId: "acme.project-plugin.go", combo: "Ctrl+Alt+G" }],
         contextMenus: [{ label: "Go", actionId: "acme.project-plugin.go", location: "terminal" }],
         settings: [{ id: "token", type: "string", label: "Token" }],
+        recipes: [{ id: "boot", name: "Boot", terminals: [{ type: "terminal" }] }],
       },
     });
     expect(result.success).toBe(true);

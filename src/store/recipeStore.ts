@@ -1,6 +1,7 @@
 import { create, type StateCreator } from "zustand";
 import type { TerminalRecipe, RecipeTerminal, RecipeTerminalType } from "@/types";
 import { isPluginRecipe } from "@shared/types/project";
+import { pluginManifestIdFromInstanceKey } from "@shared/types/plugin";
 import type { PluginRecipeMetadataPatch } from "@shared/types/project";
 import { usePanelStore } from "./panelStore";
 import { useToolbarPreferencesStore } from "./toolbarPreferencesStore";
@@ -632,7 +633,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
           continue;
         }
         throw new Error(
-          `"${recipe.name}" is provided by the ${recipe.origin.pluginId} plugin and can't be edited. Save it to the repo to make an editable copy.`
+          `"${recipe.name}" is provided by the ${pluginManifestIdFromInstanceKey(recipe.origin.pluginId)} plugin and can't be edited. Save it to the repo to make an editable copy.`
         );
       }
       if (Object.keys(patch).length === 0) return;
@@ -650,15 +651,31 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
         return next;
       };
 
-      const prevPlugin = get().pluginRecipes;
-      get().setPluginRecipes(prevPlugin.map((r) => (r.id === id ? applyPatch(r) : r)));
+      // A preference edit is an explicit user action, so a failed one rolls back
+      // and surfaces — unlike a frecency stamp, which fails silently. Only the
+      // fields this edit touched, on whatever the row is by then: a push that
+      // landed meanwhile (the plugin disabled, hidden, untrusted or reloaded) is
+      // newer than anything captured here and must not be undone (#13796).
+      const previous = get().pluginRecipes.find((r) => r.id === id);
+      const revertPatch = (target: TerminalRecipe): TerminalRecipe => {
+        const next = { ...target };
+        if (patch.showInEmptyState !== undefined) {
+          if (previous?.showInEmptyState === undefined) delete next.showInEmptyState;
+          else next.showInEmptyState = previous.showInEmptyState;
+        }
+        if (patch.autoAssign !== undefined) {
+          if (previous?.autoAssign === undefined) delete next.autoAssign;
+          else next.autoAssign = previous.autoAssign;
+        }
+        return next;
+      };
+
+      get().setPluginRecipes(get().pluginRecipes.map((r) => (r.id === id ? applyPatch(r) : r)));
       try {
         const persisted = await pluginRecipesClient.updateMetadata(id, patch);
         get().setPluginRecipes(get().pluginRecipes.map((r) => (r.id === id ? persisted : r)));
       } catch (error) {
-        // A preference edit is an explicit user action, so it rolls back and
-        // surfaces — unlike a frecency stamp, which fails silently.
-        get().setPluginRecipes(prevPlugin);
+        get().setPluginRecipes(get().pluginRecipes.map((r) => (r.id === id ? revertPatch(r) : r)));
         logError("Failed to persist plugin recipe preference", error);
         throw error;
       }
@@ -829,7 +846,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
     }
     if (isPluginRecipe(recipe)) {
       throw new Error(
-        `"${recipe.name}" is provided by the ${recipe.origin.pluginId} plugin. Disable or uninstall the plugin to remove it.`
+        `"${recipe.name}" is provided by the ${pluginManifestIdFromInstanceKey(recipe.origin.pluginId)} plugin. Disable or uninstall the plugin to remove it.`
       );
     }
 

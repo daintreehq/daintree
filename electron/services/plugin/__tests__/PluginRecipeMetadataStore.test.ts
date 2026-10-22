@@ -125,6 +125,35 @@ describe("PluginRecipeMetadataStore (#11860)", () => {
     ]);
   });
 
+  it("reconcile keeps an unopened project plugin's metadata but prunes a loaded one's dropped ids (#13796)", async () => {
+    // Project plugins load when their project opens, which is after the
+    // startup sweep, so their instance keys are never in the inventory.
+    const unopened = "project__proj-a__acme.local";
+    const loaded = "project__proj-b__acme.local";
+    await store.setUserOverrides(`${unopened}.boot`, unopened, "boot", {
+      showInEmptyState: true,
+    });
+    await store.recordUse(`${unopened}.boot`, unopened, "boot", 1);
+    await store.recordUse(`${loaded}.kept`, loaded, "kept", 1);
+    await store.recordUse(`${loaded}.gone`, loaded, "gone", 1);
+    // Not a project instance key: the prefix needs a non-empty project id.
+    await store.recordUse("project____acme.fake.x", "project____acme.fake", "x", 1);
+
+    const dropped = await store.reconcile({
+      installedPluginIds: new Set(),
+      knownQualifiedIdsByPlugin: new Map([[loaded, new Set([`${loaded}.kept`])]]),
+    });
+
+    expect(dropped).toBe(true);
+    const all = store.getAllSync();
+    expect(Object.keys(all).sort()).toEqual([`${unopened}.boot`, `${loaded}.kept`]);
+    expect(all[`${unopened}.boot`]).toMatchObject({
+      pluginId: unopened,
+      showInEmptyState: true,
+      lastUsedAt: 1,
+    });
+  });
+
   it("discards a record whose identity fields disagree with its key", async () => {
     await writeFile(
       metadataPath(),

@@ -37,7 +37,7 @@ const TARGETS: Target[] = [
     origin: "project",
     title: "Daintree project plugin manifest",
     intro:
-      'Manifest for a Daintree plugin committed into a project\'s .daintree/plugins/ directory. Such a plugin must declare "scope": "project", and ten contribution types available to installed plugins are refused here.',
+      'Manifest for a Daintree plugin committed into a project\'s .daintree/plugins/ directory. Such a plugin must declare "scope": "project", and nine contribution types available to installed plugins are refused here.',
   },
 ];
 
@@ -53,7 +53,7 @@ const UNENCODED_RULES = [
   'A "project" database needs "scope": "project" and the "fs:project-write" capability; path applies only to a "project" database.',
   'A database query\'s sql must be one statement: for a "read" query, one SELECT, WITH or VALUES statement with no INSERT, UPDATE, DELETE or REPLACE; for a "write" query, one INSERT, REPLACE, UPDATE or DELETE statement, optionally after WITH. Its named placeholders must match its params exactly, and positional (?) placeholders are refused. Query names must be unique across all of a plugin\'s databases, may not be database_schema or database_query, and number at most 16 in all; with any tools the plugin registers, at most 16 together.',
   'A secret setting (type "secret" or secret: true) may not declare a default, since it would ship in plugin.json.',
-  'Under project scope, menuItems, agents, skills, recipes, fileDecorationProviders, fileEditors, processTools, mcpServers, tours and forgeProviders are refused, and "scope": "project" is required.',
+  'Under project scope, menuItems, agents, skills, fileDecorationProviders, fileEditors, processTools, mcpServers, tours and forgeProviders are refused, and "scope": "project" is required.',
   "The reserved daintree.* publisher namespace is accepted only for built-in plugins.",
   "previewTools and guestAdapters are accepted only for built-in plugins, each id must be namespaced under the plugin's own name, and a preview tool's guestAdapter must name an adapter the same manifest declares.",
   "A command id may not collide with a built-in action id, and some built-in ids refuse plugin dispatch outright.",
