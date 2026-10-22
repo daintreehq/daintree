@@ -60,6 +60,13 @@ const HEARTBEAT_GAP_CEILING_MS = 360_000;
 const STATUS_INITIAL_DELAY_MIN_MS = 2_000;
 const STATUS_INITIAL_DELAY_MAX_MS = 5_000;
 
+// A monitor started without a git-status pass publishes `worktreeChanges:
+// null` ("Checking status…"), and a background worktree under a git-only
+// watcher otherwise waits a full 5-minute poll for its first real status
+// (#13749). Retries double from the deadline while the status stays null.
+const FIRST_STATUS_DEADLINE_MS = 5_000;
+const FIRST_STATUS_MAX_ATTEMPTS = 4;
+
 function randomBetween(minMs: number, maxMs: number): number {
   if (maxMs <= minMs) return minMs;
   return minMs + Math.floor(Math.random() * (maxMs - minMs));
@@ -256,6 +263,7 @@ export class WorktreeMonitor {
   // monitors so N monitors starting together don't fork git simultaneously.
   // Cleared by `clearTimers()` so `stop()` cancels the deferred poll.
   private initialStatusTimer: NodeJS.Timeout | null = null;
+  private firstStatusTimer: NodeJS.Timeout | null = null;
 
   // Extra state
   private _createdAt: number | undefined;
@@ -1687,6 +1695,35 @@ export class WorktreeMonitor {
 
     this.scheduleNextPoll();
     this.fetchScheduler.schedule(true);
+    this.armFirstStatusRecovery(FIRST_STATUS_DEADLINE_MS, 1);
+  }
+
+  /**
+   * Owe a placeholder snapshot its first real status. A bulk project load's
+   * refreshAll usually lands it first, in which case the pass is skipped. A
+   * suspended monitor's resume catch-up owes it instead, so a timer cleared by
+   * the suspend is not re-armed.
+   */
+  private armFirstStatusRecovery(delayMs: number, attempt: number): void {
+    if (this.firstStatusTimer) clearTimeout(this.firstStatusTimer);
+    this.firstStatusTimer = setTimeout(() => {
+      this.firstStatusTimer = null;
+      if (!this._isRunning || this.worktreeChanges !== null) return;
+      void this.queueStatusPassThenPoll(
+        () => true,
+        () => this.worktreeChanges === null
+      ).finally(() => {
+        if (
+          attempt < FIRST_STATUS_MAX_ATTEMPTS &&
+          this._isRunning &&
+          this.statusWorkAllowed &&
+          this.worktreeChanges === null
+        ) {
+          this.armFirstStatusRecovery(delayMs * 2, attempt + 1);
+        }
+      });
+    }, delayMs);
+    this.firstStatusTimer.unref?.();
   }
 
   stop(): void {
@@ -1956,6 +1993,10 @@ export class WorktreeMonitor {
       clearTimeout(this.initialStatusTimer);
       this.initialStatusTimer = null;
     }
+    if (this.firstStatusTimer) {
+      clearTimeout(this.firstStatusTimer);
+      this.firstStatusTimer = null;
+    }
     if (this.watcherController.currentMode === "recursive") {
       this.recursiveLostToPause = true;
     }
@@ -2109,6 +2150,10 @@ export class WorktreeMonitor {
       clearTimeout(this.initialStatusTimer);
       this.initialStatusTimer = null;
     }
+    if (this.firstStatusTimer) {
+      clearTimeout(this.firstStatusTimer);
+      this.firstStatusTimer = null;
+    }
     this.watcherController.clearRetryTimer();
     this.clearResourcePollTimer();
     this.fetchScheduler.clearTimer();
@@ -2198,10 +2243,13 @@ export class WorktreeMonitor {
    * N monitors waking or resuming together are serialized across its slots
    * instead of all forking git at once.
    */
-  private async queueStatusPassThenPoll(forceRefresh: () => boolean): Promise<void> {
+  private async queueStatusPassThenPoll(
+    forceRefresh: () => boolean,
+    stillNeeded: () => boolean = () => true
+  ): Promise<void> {
     const run = (): Promise<void> => {
       // Paused again while this sat in the queue — the next resume queues its own.
-      if (!this.statusWorkAllowed) return Promise.resolve();
+      if (!this.statusWorkAllowed || !stillNeeded()) return Promise.resolve();
       if (this._isUpdating) {
         // A pass that started before this request would make updateGitStatus
         // return early and drop it. Park it on the pending flag instead; the

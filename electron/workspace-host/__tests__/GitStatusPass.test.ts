@@ -533,6 +533,21 @@ describe("GitStatusPass", () => {
     expect(pass.lastActivityTimestamp).toBeNull();
   });
 
+  it("publishes the first status over a placeholder snapshot even when nothing reads as changed (#13749)", async () => {
+    // No commit metadata and no files: the state hash equals its seed and
+    // every other comparison matches the placeholder's defaults.
+    mockGetWorktreeChangesWithStats.mockResolvedValue(
+      makeChanges({ lastCommitMessage: undefined })
+    );
+    const { pass, host } = makePass();
+    host.hasInitialStatus = true;
+
+    await pass.run(false);
+
+    expect(host.worktreeChanges).not.toBeNull();
+    expect(host.emitUpdate).toHaveBeenCalled();
+  });
+
   it("ignores stale file metadata on a clean worktree", async () => {
     const commitTime = Date.now() - 120_000;
     mockGetWorktreeChangesWithStats.mockResolvedValue(

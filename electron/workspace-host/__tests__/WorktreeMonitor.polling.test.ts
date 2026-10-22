@@ -1704,6 +1704,92 @@ describe("WorktreeMonitor", () => {
     });
   });
 
+  describe("first status after startWithoutGitStatus (#13749)", () => {
+    const CLEAN_CHANGES = {
+      worktreeId: "/test/worktree",
+      rootPath: "/test",
+      changes: [],
+      changedFileCount: 0,
+      lastUpdated: Date.now(),
+      lastCommitMessage: "initial",
+    };
+    // A background worktree under a git-only watcher polls every 5 minutes,
+    // so the placeholder snapshot would sit on "Checking status…" that long.
+    const GIT_WATCH_CONFIG = { ...TEST_CONFIG, gitWatchEnabled: true };
+    const FIRST_STATUS_DEADLINE_MS = 5_000;
+
+    beforeEach(() => {
+      mockGitOnlyStartResult = true;
+    });
+
+    it("publishes a real status within the deadline without a manual refresh", async () => {
+      mockGetWorktreeChangesWithStats.mockResolvedValue(CLEAN_CHANGES);
+      const callbacks = makeCallbacks();
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, GIT_WATCH_CONFIG, callbacks, "main");
+
+      monitor.startWithoutGitStatus();
+      expect(monitor.getWorktreeChanges()).toBeNull();
+
+      await vi.advanceTimersByTimeAsync(FIRST_STATUS_DEADLINE_MS);
+
+      expect(mockGetWorktreeChangesWithStats).toHaveBeenCalledTimes(1);
+      expect(monitor.getWorktreeChanges()).not.toBeNull();
+      const lastSnapshot = vi.mocked(callbacks.onUpdate).mock.calls.at(-1)?.[0];
+      expect(lastSnapshot?.worktreeChanges).not.toBeNull();
+
+      monitor.stop();
+    });
+
+    it("skips the pass when a status already landed (bulk load's refreshAll)", async () => {
+      mockGetWorktreeChangesWithStats.mockResolvedValue(CLEAN_CHANGES);
+      const callbacks = makeCallbacks();
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, GIT_WATCH_CONFIG, callbacks, "main");
+
+      monitor.startWithoutGitStatus();
+      await monitor.updateGitStatus(true);
+      expect(mockGetWorktreeChangesWithStats).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(FIRST_STATUS_DEADLINE_MS);
+      expect(mockGetWorktreeChangesWithStats).toHaveBeenCalledTimes(1);
+
+      monitor.stop();
+    });
+
+    it("retries while the first status keeps failing, then stops once it lands", async () => {
+      mockGetWorktreeChangesWithStats
+        .mockRejectedValueOnce(new Error("fatal: not a git repository"))
+        .mockResolvedValue(CLEAN_CHANGES);
+      const callbacks = makeCallbacks();
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, GIT_WATCH_CONFIG, callbacks, "main");
+
+      monitor.startWithoutGitStatus();
+      await vi.advanceTimersByTimeAsync(FIRST_STATUS_DEADLINE_MS);
+      expect(mockGetWorktreeChangesWithStats).toHaveBeenCalledTimes(1);
+      expect(monitor.getWorktreeChanges()).toBeNull();
+
+      await vi.advanceTimersByTimeAsync(FIRST_STATUS_DEADLINE_MS * 2);
+      expect(mockGetWorktreeChangesWithStats).toHaveBeenCalledTimes(2);
+      expect(monitor.getWorktreeChanges()).not.toBeNull();
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(mockGetWorktreeChangesWithStats).toHaveBeenCalledTimes(2);
+
+      monitor.stop();
+    });
+
+    it("stop() before the deadline cancels the first-status pass", async () => {
+      mockGetWorktreeChangesWithStats.mockResolvedValue(CLEAN_CHANGES);
+      const callbacks = makeCallbacks();
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, GIT_WATCH_CONFIG, callbacks, "main");
+
+      monitor.startWithoutGitStatus();
+      monitor.stop();
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(mockGetWorktreeChangesWithStats).not.toHaveBeenCalled();
+    });
+  });
+
   describe("stat pre-check", () => {
     const CLEAN_CHANGES = {
       worktreeId: "/test/worktree",

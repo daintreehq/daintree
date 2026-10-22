@@ -285,6 +285,7 @@ export class GitStatusPass {
         !forceRefresh &&
         gitDir &&
         this.host.hasInitialStatus &&
+        this.host.worktreeChanges !== null &&
         (await this.statPrecheck.shouldSkip(
           gitDir,
           this.watcherController.currentMode === "recursive"
@@ -477,7 +478,9 @@ export class GitStatusPass {
         this.pollingStrategy.recordNoChange();
       }
 
-      if (!anythingChanged && !forceRefresh) {
+      // A placeholder snapshot (startWithoutGitStatus) seeds every comparison
+      // above, so "unchanged" can't be trusted until a status has published.
+      if (!anythingChanged && !forceRefresh && this.host.worktreeChanges !== null) {
         checkSucceeded = true;
         return;
       }
