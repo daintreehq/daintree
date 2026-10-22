@@ -1156,6 +1156,7 @@ export const EVENT_LOCALITY: Readonly<Record<string, ChannelLocality>> = {
   "plugin:recipes-changed": "host",
   "plugin:runtime-status-changed": "host",
   "plugin:toolbar-badges-changed": "host",
+  "plugin:toolbar-states-changed": "host",
   "plugin:toolbar-buttons-changed": "host",
   "plugin:tours-changed": "host",
   "plugin:hosted-views-changed": "host",

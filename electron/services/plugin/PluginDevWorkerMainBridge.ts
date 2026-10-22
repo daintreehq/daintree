@@ -45,6 +45,7 @@ import type {
   ReloadPanelParams,
   SetPanelBadgeParams,
   SetToolbarButtonBadgeParams,
+  SetToolbarButtonStateParams,
   SetContextParams,
   SetWorktreeCardStatusParams,
   SetPanelMenuItemsParams,
@@ -847,6 +848,11 @@ export class PluginDevWorkerMainBridge {
       case "setContext": {
         const p = params as SetContextParams;
         await this.host.setContext(p.key, p.value);
+        return undefined;
+      }
+      case "setToolbarButtonState": {
+        const p = params as SetToolbarButtonStateParams;
+        await this.host.setToolbarButtonState(p.buttonId, p.state);
         return undefined;
       }
       case "setWorktreeCardStatus": {

@@ -50,6 +50,7 @@ const HOST_CALL_METHODS = {
   reloadPanel: true,
   restartWorker: true,
   setContext: true,
+  setToolbarButtonState: true,
   setWorktreeCardStatus: true,
   "actions.list": true,
   "actions.get": true,

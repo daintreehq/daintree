@@ -66,6 +66,7 @@ function makeHost() {
     invalidateFileDecorations: vi.fn(),
     setPanelBadge: vi.fn(async () => {}),
     setToolbarButtonBadge: vi.fn(async () => {}),
+    setToolbarButtonState: vi.fn(async () => {}),
     setContext: vi.fn(async () => {}),
     setWorktreeCardStatus: vi.fn(async () => {}),
     setPanelMenuItems: vi.fn(async () => {}),
@@ -409,6 +410,37 @@ describe("PluginDevWorkerMainBridge", () => {
       (m) => m.type === "host-result" && m.requestId === "c-sc-cap"
     );
     expect(refused).toMatchObject({ ok: false, error: expect.stringMatching(/at most 32 keys/) });
+  });
+
+  it("relays setToolbarButtonState as a call and returns the host's rejection (#13785)", async () => {
+    const { host, workerHost } = makeBridge();
+    workerHost.emit("worker-message", {
+      type: "host-call",
+      requestId: "c-ts",
+      method: "setToolbarButtonState",
+      params: { buttonId: "sync", state: { pressed: true } },
+    });
+    await flush();
+    expect(host.setToolbarButtonState).toHaveBeenCalledWith("sync", { pressed: true });
+    const ok = workerHost.sent.find((m) => m.type === "host-result" && m.requestId === "c-ts");
+    expect(ok).toMatchObject({ ok: true });
+
+    host.setToolbarButtonState.mockRejectedValueOnce(
+      new Error(
+        "setToolbarButtonState: invalid state — disabledReason: a disabled button needs a disabledReason"
+      )
+    );
+    workerHost.emit("worker-message", {
+      type: "host-call",
+      requestId: "c-ts-bad",
+      method: "setToolbarButtonState",
+      params: { buttonId: "sync", state: { disabled: true } },
+    });
+    await flush();
+    const refused = workerHost.sent.find(
+      (m) => m.type === "host-result" && m.requestId === "c-ts-bad"
+    );
+    expect(refused).toMatchObject({ ok: false, error: expect.stringMatching(/disabledReason/) });
   });
 
   it("relays setWorktreeCardStatus as a call and returns the host's rejection (#13704)", async () => {

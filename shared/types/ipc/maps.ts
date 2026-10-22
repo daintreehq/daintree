@@ -2136,6 +2136,14 @@ export interface IpcEventMap {
     badges: Record<string, import("../plugin.js").PluginPanelBadge>;
   };
 
+  // A plugin's toolbar-button state changed (main → renderer, #13785). Carries
+  // the plugin's COMPLETE current map (manifest button id → state), never a
+  // delta; an empty `states` clears it, which is also how an unload is sent.
+  "plugin:toolbar-states-changed": {
+    pluginId: string;
+    states: Record<string, import("../plugin.js").PluginToolbarButtonRuntimeState>;
+  };
+
   // A plugin's `when`-clause context keys changed (main → renderer, #13506).
   // Carries the plugin's COMPLETE current map (key → value), never a delta. An
   // empty map means it holds no keys; `null` means it unloaded.
@@ -2382,6 +2390,8 @@ export type IpcEventBusMap = Pick<
   | "plugin:panel-badges-cleared"
   // Plugin toolbar-button badges (project-scoped for a project instance)
   | "plugin:toolbar-badges-changed"
+  // Plugin toolbar-button state (project-scoped for a project instance)
+  | "plugin:toolbar-states-changed"
   // Plugin `when`-clause context keys (project-scoped for a project instance)
   | "plugin:context-keys-changed"
   // Plugin worktree card statuses (always scoped to the status's own project)

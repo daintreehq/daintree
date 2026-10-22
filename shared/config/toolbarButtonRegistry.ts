@@ -7,6 +7,8 @@ export interface ToolbarButtonConfig {
   actionId: string;
   priority: ToolbarButtonPriority;
   pluginId: string;
+  /** Visibility clause, evaluated live against the renderer's chrome context. */
+  when?: string;
 }
 
 const TOOLBAR_BUTTON_REGISTRY: Record<string, ToolbarButtonConfig> = {};

@@ -554,6 +554,25 @@ Every contributed button is collected into the **plugin tray** — a single tool
 | `iconId` | yes | One of the shared plugin icon IDs listed in `shared/config/pluginIconIds.ts` — the same set panels use — or a [custom SVG](#custom-icons) inside your plugin (`"./icons/flutter.svg"`). An unrecognized ID falls back to a generic puzzle glyph; `daintree-plugin validate` warns about it. Agent brand IDs (e.g. `claude`) don't resolve here. |
 | `actionId` | yes | Fully-qualified action ID, including plugin namespace. Built-in actions (e.g. `terminal.new`) also work. |
 | `priority` | no | `1`–`5`, lower = earlier. Orders your buttons within your plugin's tray group. Default `3`. |
+| `when` | no | Context expression deciding whether the button shows, evaluated live. |
+
+### Showing a button only when it applies
+
+While a button's `when` is false it leaves both the plugin tray and the toolbar, and the overflow menu with them. Nothing about it is forgotten: a button the user promoted comes back in the slot they gave it as soon as the clause is true again. Settings → Toolbar still lists it, so the user can arrange it at any time.
+
+The clause sees the [project keys](#keybindings--shipped) (`isGitBacked`, `workspaceKind`, `activeSidebarView`, `presentation*`) and the keys plugins publish with [`host.setContext`](./host-api.md#setcontext), under each plugin's manifest name, and is re-evaluated whenever one of them changes. An identifier that names no key is false, and an expression that fails to parse hides the button. A `when` only decides whether the button shows: the action stays reachable from the palette and keybindings.
+
+```json
+{
+  "id": "sync",
+  "label": "Sync",
+  "iconId": "refresh-cw",
+  "actionId": "acme.notes.sync",
+  "when": "isGitBacked && acme.notes.signedIn"
+}
+```
+
+To show state on a button rather than hide it — a toggle that is on, a reason it can't run, work in progress — use [`host.setToolbarButtonState`](./host-api.md#settoolbarbuttonstate).
 
 ## Menu items — _Shipped_
 

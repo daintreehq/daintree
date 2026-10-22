@@ -17,6 +17,7 @@ import {
   PLUGIN_CATEGORY_IDS,
   PLUGIN_NOTIFY_MAX_ACTIONS,
   PLUGIN_PANEL_BADGE_LABEL_MAX,
+  PLUGIN_TOOLBAR_BUTTON_STATE_TEXT_MAX,
   PROJECT_SURFACE_SLOT_CATALOGUE,
   PROJECT_SURFACE_SLOTS,
 } from "../../shared/types/plugin.js";
@@ -220,6 +221,7 @@ export const ToolbarButtonContributionSchema = z
     priority: z
       .union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5)])
       .optional(),
+    when: z.string().min(1).optional(),
   })
   .strict();
 
@@ -1843,6 +1845,46 @@ export const PluginPanelBadgeSchema = z.discriminatedUnion("kind", [
     })
     .strict(),
 ]);
+
+const PluginToolbarButtonStateTextSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(PLUGIN_TOOLBAR_BUTTON_STATE_TEXT_MAX)
+  .optional();
+
+/**
+ * Validates a `host.setToolbarButtonState` state at the host boundary (#13785).
+ * A disabled button must say why, and a reason without `disabled` is a mistake
+ * rather than a no-op, so both are rejected. `null` (clear) is handled at the
+ * call site, not here.
+ */
+export const PluginToolbarButtonRuntimeStateSchema = z
+  .object({
+    pressed: z.boolean().optional(),
+    disabled: z.boolean().optional(),
+    disabledReason: PluginToolbarButtonStateTextSchema,
+    busy: z.boolean().optional(),
+    tooltip: PluginToolbarButtonStateTextSchema,
+    iconId: z.string().min(1).max(256).optional(),
+  })
+  .strict()
+  .superRefine((state, ctx) => {
+    if (state.disabled === true && state.disabledReason === undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["disabledReason"],
+        message: "a disabled button needs a disabledReason",
+      });
+    }
+    if (state.disabled !== true && state.disabledReason !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["disabledReason"],
+        message: "disabledReason is only valid with disabled: true",
+      });
+    }
+  });
 
 /**
  * One `contributes.settings` field declaration (#9301). `type` is optional

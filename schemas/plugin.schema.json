@@ -366,6 +366,10 @@
                     "const": 5
                   }
                 ]
+              },
+              "when": {
+                "type": "string",
+                "minLength": 1
               }
             },
             "required": [

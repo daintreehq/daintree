@@ -268,6 +268,8 @@ function makeHostDeps(): PluginHostFactoryDeps {
     pluginBadges: new Map(),
     pluginToolbarBadges: new Map(),
     emitToolbarBadges: () => {},
+    pluginToolbarStates: new Map(),
+    emitToolbarStates: () => {},
     pluginWorktreeCardStatuses: new Map(),
     emitWorktreeCardStatuses: () => {},
     worktreeCardStatusGeneration: () => 0,

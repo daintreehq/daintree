@@ -45,6 +45,7 @@ const HOST_CALL_DEADLINES = {
   reloadPanel: DEFAULT,
   restartWorker: DEFAULT,
   setContext: DEFAULT,
+  setToolbarButtonState: DEFAULT,
   setWorktreeCardStatus: DEFAULT,
   "actions.list": DEFAULT,
   "actions.get": DEFAULT,

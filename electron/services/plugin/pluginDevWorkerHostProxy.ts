@@ -90,6 +90,7 @@ import type {
   PluginAgentPane,
   PluginSendToAgentResult,
   PluginTerminalScreenResult,
+  PluginToolbarButtonRuntimeState,
 } from "../../../shared/types/plugin.js";
 import { withTimeout } from "../../utils/withTimeout.js";
 import { actionHandlerArityHint, appendHandlerHint } from "./pluginHandlerHints.js";
@@ -1258,6 +1259,52 @@ export class PluginDevWorkerHostProxy {
         }
         this.notify("setToolbarButtonBadge", { buttonId, badge: badge ?? null });
         return Promise.resolve();
+      },
+      // A call, not a notify: only main knows this plugin's buttons and
+      // validates the state, and that refusal has to reach the caller's
+      // `await`. Resolves once torn down, like setContext.
+      setToolbarButtonState: (buttonId, state) => {
+        if (this.disposed) return Promise.resolve();
+        if (typeof buttonId !== "string" || buttonId.length === 0) {
+          return Promise.reject(
+            new Error(
+              `Plugin "${this.pluginId}" setToolbarButtonState: buttonId must be a non-empty string`
+            )
+          );
+        }
+        // Every valid field is a boolean or a string, so a plain copy of the
+        // primitive fields is all main needs — and all the port can clone.
+        let copy: Record<string, string | boolean | number> | null = null;
+        if (state !== null && state !== undefined) {
+          if (typeof state !== "object") {
+            return Promise.reject(
+              new Error(
+                `Plugin "${this.pluginId}" setToolbarButtonState: invalid state — state must be an object`
+              )
+            );
+          }
+          copy = {};
+          for (const [key, value] of Object.entries(state)) {
+            if (value === undefined) continue;
+            if (
+              typeof value !== "string" &&
+              typeof value !== "boolean" &&
+              typeof value !== "number"
+            ) {
+              return Promise.reject(
+                new Error(
+                  `Plugin "${this.pluginId}" setToolbarButtonState: invalid state — ${key}: must be a boolean or a string`
+                )
+              );
+            }
+            copy[key] = value;
+          }
+        }
+        return this.callWithGrace<void>(
+          "setToolbarButtonState",
+          { buttonId, state: copy as PluginToolbarButtonRuntimeState | null },
+          undefined
+        );
       },
       // Vetted here with the host's own rules so a bad call rejects without a
       // round trip, then sent as a call so main's per-plugin key cap rejects

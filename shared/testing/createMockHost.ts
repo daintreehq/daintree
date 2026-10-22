@@ -101,6 +101,7 @@ import type {
   PluginSystemWakeEvent,
   PluginGitCommitResult,
   PluginPanelBadge,
+  PluginToolbarButtonRuntimeState,
   PluginContextValue,
   PluginWorktreeCardStatus,
   SettingDefinition,
@@ -211,6 +212,12 @@ export interface SetToolbarButtonBadgeRecord {
   badge: PluginPanelBadge | null;
 }
 
+/** Captured `host.setToolbarButtonState(buttonId, state)` calls. `null` clears. */
+export interface SetToolbarButtonStateRecord {
+  buttonId: string;
+  state: PluginToolbarButtonRuntimeState | null;
+}
+
 /** Captured `host.setContext(key, value)` calls. `null` clears. */
 export interface SetContextRecord {
   key: string;
@@ -301,6 +308,7 @@ export interface MockHostState {
   readonly invalidationCalls: ReadonlyArray<InvalidationRecord>;
   readonly setPanelBadgeCalls: ReadonlyArray<SetPanelBadgeRecord>;
   readonly setToolbarButtonBadgeCalls: ReadonlyArray<SetToolbarButtonBadgeRecord>;
+  readonly setToolbarButtonStateCalls: ReadonlyArray<SetToolbarButtonStateRecord>;
   /** Accepted `host.setContext` calls, in order. */
   readonly setContextCalls: ReadonlyArray<SetContextRecord>;
   /**
@@ -530,7 +538,7 @@ export interface CreateMockHostOptions {
   manifestSettings?: SettingDefinition[];
   /**
    * Opt-in `contributes.toolbarButtons[].id` list, so `setToolbarButtonBadge`
-   * rejects an id the plugin did not contribute, as the real host does. Omitted
+   * and `setToolbarButtonState` reject an id the plugin did not contribute, as the real host does. Omitted
    * by default (the mock has no manifest model), which accepts any non-empty id.
    */
   toolbarButtonIds?: readonly string[];
@@ -812,6 +820,55 @@ function validatePanelBadge(badge: PluginPanelBadge): void {
   throw new Error('setPanelBadge: invalid badge — kind: must be "dot" or "label"');
 }
 
+const TOOLBAR_STATE_BOOLEAN_KEYS = ["pressed", "disabled", "busy"] as const;
+const TOOLBAR_STATE_TEXT_KEYS = ["disabledReason", "tooltip"] as const;
+const TOOLBAR_STATE_KEYS: ReadonlySet<string> = new Set([
+  ...TOOLBAR_STATE_BOOLEAN_KEYS,
+  ...TOOLBAR_STATE_TEXT_KEYS,
+  "iconId",
+]);
+/** Mirrors `PLUGIN_TOOLBAR_BUTTON_STATE_TEXT_MAX` in `shared/types/plugin.ts`. */
+const MOCK_TOOLBAR_STATE_TEXT_MAX = 200;
+
+/** Mirror production's `PluginToolbarButtonRuntimeStateSchema` (#13785). */
+function validateToolbarButtonState(state: PluginToolbarButtonRuntimeState): void {
+  const fail = (message: string): never => {
+    throw new Error(`setToolbarButtonState: invalid state — ${message}`);
+  };
+  if (!state || typeof state !== "object") fail("state must be an object");
+  for (const key of Object.keys(state)) {
+    if (!TOOLBAR_STATE_KEYS.has(key)) fail(`${key}: unrecognized key`);
+  }
+  for (const key of TOOLBAR_STATE_BOOLEAN_KEYS) {
+    const value = (state as Record<string, unknown>)[key];
+    if (value !== undefined && typeof value !== "boolean") fail(`${key}: must be a boolean`);
+  }
+  for (const key of TOOLBAR_STATE_TEXT_KEYS) {
+    const value = (state as Record<string, unknown>)[key];
+    if (
+      value !== undefined &&
+      (typeof value !== "string" ||
+        value.trim().length < 1 ||
+        value.trim().length > MOCK_TOOLBAR_STATE_TEXT_MAX)
+    ) {
+      fail(`${key}: must be a non-empty string at most ${MOCK_TOOLBAR_STATE_TEXT_MAX} characters`);
+    }
+  }
+  const iconId = (state as { iconId?: unknown }).iconId;
+  if (
+    iconId !== undefined &&
+    (typeof iconId !== "string" || iconId.length < 1 || iconId.length > 256)
+  ) {
+    fail("iconId: must be a non-empty string at most 256 characters");
+  }
+  if (state.disabled === true && state.disabledReason === undefined) {
+    fail("disabledReason: a disabled button needs a disabledReason");
+  }
+  if (state.disabled !== true && state.disabledReason !== undefined) {
+    fail("disabledReason: disabledReason is only valid with disabled: true");
+  }
+}
+
 /** Production badge schemas are `.strict()`: reject any key outside the variant's set. */
 function rejectUnknownBadgeKeys(badge: object, allowed: ReadonlySet<string>): void {
   for (const key of Object.keys(badge)) {
@@ -1018,6 +1075,7 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
   const invalidationCalls: InvalidationRecord[] = [];
   const setPanelBadgeCalls: SetPanelBadgeRecord[] = [];
   const setToolbarButtonBadgeCalls: SetToolbarButtonBadgeRecord[] = [];
+  const setToolbarButtonStateCalls: SetToolbarButtonStateRecord[] = [];
   const setContextCalls: SetContextRecord[] = [];
   const contextKeys = new Map<string, PluginContextValue>();
   const setWorktreeCardStatusCalls: SetWorktreeCardStatusRecord[] = [];
@@ -2138,6 +2196,29 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
       setToolbarButtonBadgeCalls.push({ buttonId, badge: badge ?? null });
       return Promise.resolve();
     },
+    setToolbarButtonState(buttonId, state) {
+      if (typeof buttonId !== "string" || buttonId.length === 0) {
+        return Promise.reject(
+          new Error("setToolbarButtonState: buttonId must be a non-empty string")
+        );
+      }
+      if (options.toolbarButtonIds && !options.toolbarButtonIds.includes(buttonId)) {
+        return Promise.reject(
+          new Error(
+            `setToolbarButtonState: "${buttonId}" is not one of this plugin's contributes.toolbarButtons`
+          )
+        );
+      }
+      if (state !== null && state !== undefined) {
+        try {
+          validateToolbarButtonState(state);
+        } catch (err) {
+          return Promise.reject(err);
+        }
+      }
+      setToolbarButtonStateCalls.push({ buttonId, state: state ?? null });
+      return Promise.resolve();
+    },
     setContext(key, value) {
       // The host's own validator and cap, so a call the real host refuses
       // rejects here too.
@@ -2822,6 +2903,7 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
     invalidationCalls,
     setPanelBadgeCalls,
     setToolbarButtonBadgeCalls,
+    setToolbarButtonStateCalls,
     setContextCalls,
     contextKeys,
     setWorktreeCardStatusCalls,
