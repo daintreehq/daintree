@@ -261,9 +261,14 @@ describe("useSleepIdleProjects", () => {
     useProjectStatsStore.setState({
       stats: { a: entry(), b: entry({ processCount: 2 }), c: entry() },
     });
-    // A: an exited agent still reads `working`. B: the stats count two
-    // terminals but the host returned none for it, so its state is unknown.
-    terminals = [terminal("a", "working", { hasPty: false }), terminal("c", "waiting")];
+    // A: an exited agent still reads `working`, and a trashed one an approval.
+    // B: the stats count two terminals but the host returned none for it, so
+    // its state is unknown.
+    terminals = [
+      terminal("a", "working", { hasPty: false }),
+      terminal("a", "waiting", { waitingReason: "approval", isTrashed: true }),
+      terminal("c", "waiting"),
+    ];
     const { result } = renderHook(() => useSleepIdleProjects());
     await act(async () => {
       await result.current.openPreview();

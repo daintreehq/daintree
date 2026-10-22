@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { IPty } from "node-pty";
 import { TerminalProcess, type TerminalProcessCallbacks } from "../TerminalProcess.js";
+import { gracefulShutdown as runGracefulShutdown } from "../TerminalGracefulShutdown.js";
 import type { SpawnContext } from "../terminalSpawn.js";
 import {
   GRACEFUL_SHUTDOWN_BUFFER_SIZE,
@@ -8,6 +9,7 @@ import {
   GRACEFUL_SHUTDOWN_TIMEOUT_MS,
   IPC_HIGH_WATERMARK_PERCENT,
   IPC_MAX_QUEUE_BYTES,
+  type TerminalInfo,
 } from "../types.js";
 import { SUBMIT_ENTER_DELAY_MS, OUTPUT_SETTLE_MAX_WAIT_MS } from "../terminalInput.js";
 import { getAgentConfig } from "../../../../shared/config/agentRegistry.js";
@@ -567,8 +569,6 @@ describe("TerminalProcess.gracefulShutdown — agent waiting on an approval (#13
   });
 
   afterEach(() => {
-    // A resolved shutdown leaves a pending SIGKILL escalation against the mock's
-    // pid; never let a later timer advance fire it.
     vi.clearAllTimers();
     vi.useRealTimers();
   });
@@ -625,6 +625,79 @@ describe("TerminalProcess.gracefulShutdown — agent waiting on an approval (#13
       await expect(promise).resolves.toBe("composer-quit");
     }
   );
+
+  it("refuses before taking the input lock or opening a capture window", async () => {
+    // Taking the lock alone cancels queued input and drops pending submissions,
+    // so a refusal that came after it would still disturb the pane.
+    const acquireInputLock = vi.fn(() => () => {});
+    const enterCaptureMode = vi.fn(() => () => {});
+    const kill = vi.fn();
+    const terminalInfo = {
+      id: "t-host",
+      launchAgentId: "gemini",
+      agentState: "waiting",
+      waitingReason: "approval",
+    } as unknown as TerminalInfo;
+
+    await expect(
+      runGracefulShutdown({
+        terminalInfo,
+        isAgentLive: true,
+        acquireInputLock,
+        enterCaptureMode,
+        kill,
+      })
+    ).resolves.toBeNull();
+
+    expect(acquireInputLock).not.toHaveBeenCalled();
+    expect(enterCaptureMode).not.toHaveBeenCalled();
+    expect(kill).not.toHaveBeenCalled();
+  });
+
+  it("holds back the quit command when an approval is seen during the clear delay", async () => {
+    const handles = createMockPty();
+    const terminal = createAgentTerminal(handles, "copilot");
+
+    const promise = terminal.gracefulShutdown();
+    await Promise.resolve();
+    await Promise.resolve();
+    waitingOn(terminal, "approval");
+    await vi.advanceTimersByTimeAsync(GRACEFUL_SHUTDOWN_CLEAR_DELAY_MS);
+
+    await expect(promise).resolves.toBeNull();
+    expect(handles.writeMock.mock.calls.map(([data]) => data)).toEqual(["\x05\x15"]);
+    expect(terminal.getInfo().wasKilled).toBe(true);
+  });
+
+  it("holds back Enter when an approval is seen between the body and its submit", async () => {
+    const handles = createMockPty();
+    const terminal = createAgentTerminal(handles, "gemini");
+
+    const promise = terminal.gracefulShutdown();
+    await vi.advanceTimersByTimeAsync(GRACEFUL_SHUTDOWN_CLEAR_DELAY_MS);
+    waitingOn(terminal, "approval");
+    await vi.advanceTimersByTimeAsync(SUBMIT_ENTER_DELAY_MS);
+
+    await expect(promise).resolves.toBeNull();
+    expect(handles.writeMock.mock.calls.map(([data]) => data)).toEqual(["\x05\x15", "/quit"]);
+    expect(terminal.getInfo().wasKilled).toBe(true);
+  });
+
+  it("stops Codex's escalation when an approval is seen between presses", async () => {
+    const handles = createMockPty();
+    const terminal = createAgentTerminal(handles, "codex");
+
+    const promise = terminal.gracefulShutdown();
+    await Promise.resolve();
+    await Promise.resolve();
+    // Satisfy the first press's gate so the loop comes back for a second one.
+    handles.emitData("  Ctrl+C again to quit\n");
+    waitingOn(terminal, "approval");
+    await vi.advanceTimersByTimeAsync(CODEX_PER_PRESS_TIMEOUT_MS);
+
+    await expect(promise).resolves.toBeNull();
+    expect(handles.writeMock).toHaveBeenCalledTimes(1);
+  });
 
   it("ignores an approval reason left behind once the agent stopped waiting", async () => {
     const handles = createMockPty();

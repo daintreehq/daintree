@@ -61,8 +61,9 @@ export interface TerminalGracefulShutdownHost {
  * scrape never ran for.
  *
  * `awaiting-approval` is a scrape refused on purpose (#13842): the agent was
- * last seen showing an approval selector, where the quit bytes would be read
- * as the answer. A missing id there points at the prompt, not at the scrape.
+ * seen showing an approval selector, before the first write or between two,
+ * where the quit bytes would be read as the answer. A missing id there points
+ * at the prompt, not at the scrape.
  */
 export type GracefulShutdownOutcome =
   | "already-exited"
@@ -200,7 +201,11 @@ export async function gracefulShutdown(host: TerminalGracefulShutdownHost): Prom
   // restore, which is the cheaper mistake. Questions and errors leave the agent
   // at its composer, where the quit command is the ordinary way out. The
   // reason is only read while waiting: a record can keep a stale one after.
-  if (terminal.agentState === "waiting" && terminal.waitingReason === "approval") {
+  // Re-read between writes too, since detection can lag a selector already on
+  // screen.
+  const atApproval = (): boolean =>
+    terminal.agentState === "waiting" && terminal.waitingReason === "approval";
+  if (atApproval()) {
     logOutcome("awaiting-approval", false);
     return null;
   }
@@ -419,6 +424,10 @@ export async function gracefulShutdown(host: TerminalGracefulShutdownHost): Prom
             finish(null, "demoted-during-gated-signal");
             return;
           }
+          if (atApproval()) {
+            finish(null, "awaiting-approval");
+            return;
+          }
 
           // Armed BEFORE the write so a footer arriving in the same tick as the
           // press is still counted; `gateProbe` resets with it so only output
@@ -505,6 +514,10 @@ export async function gracefulShutdown(host: TerminalGracefulShutdownHost): Prom
           finish(null, "demoted-during-clear-delay");
           return;
         }
+        if (atApproval()) {
+          finish(null, "awaiting-approval");
+          return;
+        }
 
         try {
           if (shutdownKeySequence) {
@@ -528,6 +541,11 @@ export async function gracefulShutdown(host: TerminalGracefulShutdownHost): Prom
                 origOnData.dispose();
                 origOnExit.dispose();
                 finish(null, "demoted-during-submit-delay");
+                return;
+              }
+              // The body is typed but inert; it is the Enter that would answer.
+              if (atApproval()) {
+                finish(null, "awaiting-approval");
                 return;
               }
 

@@ -81,13 +81,7 @@ vi.mock("../../../../shared/config/agentRegistry.js", () => ({
     // The pattern is load-bearing: bookmarking gates on the id being
     // OBSERVABLE, not merely on the resume kind (#11851).
     if (id === "claude")
-      return {
-        resume: {
-          kind: "session-id",
-          sessionIdPattern: "claude --resume ([\\w-]+)",
-          assignSessionIdArgs: () => ["--session-id"],
-        },
-      };
+      return { resume: { kind: "session-id", sessionIdPattern: "claude --resume ([\\w-]+)" } };
     if (id === "rolling") return { resume: { kind: "rolling-history" } };
     if (id === "uncapturable") return { resume: { kind: "session-id" } };
     return undefined;
@@ -259,6 +253,7 @@ describe("prepareBookmark handler", () => {
     expect(ptyClient.gracefulKill).not.toHaveBeenCalled();
   });
 
+  // Rests on Claude's real config declaring `assignSessionIdArgs`.
   it("still bookmarks an approval wait whose id was assigned at launch", async () => {
     ptyClient.getTerminalAsync.mockResolvedValue({
       ...agentInfo,
@@ -267,13 +262,32 @@ describe("prepareBookmark handler", () => {
       waitingReason: "approval",
     });
     ptyClient.gracefulKill.mockResolvedValue("sess-assigned");
-    m.journalAgentSessionRecord.mockResolvedValue({ sessionId: "sess-assigned" });
+    const record = { sessionId: "sess-assigned" };
+    m.journalAgentSessionRecord.mockResolvedValue(record);
     register();
-    await handlerFor(CHANNELS.AGENT_SESSION_PREPARE_BOOKMARK)(
+    const result = await handlerFor(CHANNELS.AGENT_SESSION_PREPARE_BOOKMARK)(
       {},
       { terminalId: "term-1", label: "L" }
     );
     expect(ptyClient.gracefulKill).toHaveBeenCalledWith("term-1");
+    expect(result).toEqual({ record });
+  });
+
+  it("does not let an id assigned to the launched agent cover a different live one", async () => {
+    // The capture refuses a stored id once another agent took the pane over,
+    // so it would type nothing, kill, and come back empty.
+    ptyClient.getTerminalAsync.mockResolvedValue({
+      ...agentInfo,
+      detectedAgentId: "gemini",
+      agentSessionId: "sess-claude",
+      agentState: "waiting",
+      waitingReason: "approval",
+    });
+    register();
+    await expect(
+      handlerFor(CHANNELS.AGENT_SESSION_PREPARE_BOOKMARK)({}, { terminalId: "term-1", label: "L" })
+    ).rejects.toMatchObject({ code: "NOT_BOOKMARKABLE" });
+    expect(ptyClient.gracefulKill).not.toHaveBeenCalled();
   });
 
   it("rejects SESSION_CAPTURE_FAILED when no session id is captured", async () => {

@@ -1355,12 +1355,14 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     // The capture types nothing into an approval prompt (#13842), so an id the
     // agent would only print on quit can't be had there: the kill would discard
     // the decision it is waiting on and save nothing. An id assigned at launch
-    // needs no typing.
-    if (
-      info.agentState === "waiting" &&
-      info.waitingReason === "approval" &&
-      !(info.agentSessionId && supportsSessionIdAssignment(info.launchAgentId))
-    ) {
+    // needs no typing, but only while the launched agent is still the live one —
+    // the same test the capture applies before trusting it.
+    const liveAgentId = info.detectedAgentId ?? info.launchAgentId;
+    const hasAssignedId =
+      !!info.agentSessionId &&
+      liveAgentId === info.launchAgentId &&
+      supportsSessionIdAssignment(liveAgentId);
+    if (info.agentState === "waiting" && info.waitingReason === "approval" && !hasAssignedId) {
       throw new AppError({
         code: "NOT_BOOKMARKABLE",
         message: `Terminal ${terminalId} is waiting on an approval; answer it before bookmarking`,
