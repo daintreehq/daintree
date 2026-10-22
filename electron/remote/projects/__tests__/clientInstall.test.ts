@@ -89,6 +89,20 @@ describe("createHostSwitchService", () => {
   // one just closed must not dial it straight back (#13926).
   it("asks only connected hosts which have the project, and never dials one that isn't", async () => {
     const connectAndWait = vi.fn(async () => "ready" as never);
+    const studio3 = {
+      isOpen: true,
+      call: vi.fn(async () => [
+        {
+          projectId: "p3",
+          path: "/srv/daintree",
+          name: "daintree",
+          remotes: [{ name: "origin", url: "https://github.com/daintreehq/daintree.git" }],
+          source: "registered",
+          matchedBy: "remote-url",
+          lastOpenedAt: null,
+        },
+      ]),
+    };
     const service = createHostSwitchService({
       client: {
         connectAndWait,
@@ -101,7 +115,7 @@ describe("createHostSwitchService", () => {
             ] as never
         ),
       },
-      sessionFor: () => null,
+      sessionFor: (hostId) => (hostId === "studio-03" ? (studio3 as never) : null),
     });
     await expect(
       service.locate({ senderWebContentsId: 1 } as never, {
@@ -110,7 +124,10 @@ describe("createHostSwitchService", () => {
         toHostIds: ["studio-03", "studio-04"],
       })
     ).resolves.toEqual([
-      { hostId: "studio-03", projects: null },
+      {
+        hostId: "studio-03",
+        projects: [{ projectId: "p3", name: "daintree", path: "/srv/daintree" }],
+      },
       { hostId: "studio-04", projects: null },
     ]);
     expect(connectAndWait).not.toHaveBeenCalled();

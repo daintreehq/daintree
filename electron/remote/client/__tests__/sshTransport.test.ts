@@ -495,6 +495,37 @@ describe("SshTransport with an injected ssh", () => {
     for (const p of proxies) p.close();
   });
 
+  it("cancels the forward an attempt abandoned mid-request may have left on the master", async () => {
+    const calls: string[][] = [];
+    const abort = new AbortController();
+    const spawner: SshSpawner = (args) => {
+      calls.push(args);
+      const child = new FakeChild();
+      const command = args.at(-1)!;
+      if (command === PROBE_COMMAND) child.finish(0, "Darwin\n501\n/Users/g\n");
+      else if (command.startsWith("cat -- "))
+        child.finish(
+          0,
+          JSON.stringify({ version: 1, socketPath: DARWIN_SOCKET, token: "a".repeat(64), pid: 1 })
+        );
+      // The master takes the forward; its answer never reaches the abandoned attempt.
+      else if (args.includes("forward")) setImmediate(() => abort.abort());
+      else child.finish(0);
+      return child;
+    };
+    const transport = new SshTransport({
+      target: "studio",
+      clientDir: path.join(root, "c"),
+      spawn: spawner,
+    });
+    await expect(transport.open(abort.signal)).rejects.toThrow("Connection cancelled");
+    const forward = calls.find((args) => args.includes("forward"))!;
+    const cancel = calls.find((args) => args.includes("cancel"));
+    expect(cancel?.at(-3)).toBe(forward.at(-3));
+    // Nor does it start a dedicated forward for an attempt nobody is waiting on.
+    expect(calls.some((args) => args.includes("-N"))).toBe(false);
+  });
+
   it("reports ssh's own stderr when the host cannot be reached", async () => {
     const stderr = "ssh: connect to host studio port 22: Connection refused";
     const spawner: SshSpawner = () => {

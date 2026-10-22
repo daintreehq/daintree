@@ -669,12 +669,12 @@ describe("LinkClient host restart (#13392)", () => {
 
 describe("LinkClient retry during an attempt (#13926)", () => {
   it("leaves an attempt under way alone, and abandons it to start over when asked to restart", async () => {
-    // An ssh that never hears back from the host: it ends only when cancelled.
-    const signals: AbortSignal[] = [];
+    // An ssh that never hears back from the host: it ends when cancelled, or when the test fails it.
+    const attempts: Array<{ signal: AbortSignal; fail: (error: Error) => void }> = [];
     const transport: LinkTransport = {
       open(signal) {
-        signals.push(signal);
         return new Promise((_resolve, reject) => {
+          attempts.push({ signal, fail: reject });
           signal.addEventListener("abort", () =>
             reject(new TransportError("Connection cancelled", null))
           );
@@ -685,35 +685,49 @@ describe("LinkClient retry during an attempt (#13926)", () => {
       transport,
       handshake: TEST_HANDSHAKE,
       client: { clientId: "c", clientName: "n", platform: "linux" },
+      backoff: { initialMs: 1_000, jitter: 0 },
+      now: () => 0,
     });
     const seen: LinkClientState[] = [];
     client.onStateChange((state) => seen.push(state));
     client.start();
-    await waitFor(() => signals.length === 1);
+    await waitFor(() => attempts.length === 1);
 
     // Anything asking for the link while it dials doesn't cut a slow host off.
     client.retryNow();
     await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(signals).toHaveLength(1);
-    expect(signals[0]!.aborted).toBe(false);
+    expect(attempts).toHaveLength(1);
+    expect(attempts[0]!.signal.aborted).toBe(false);
 
     client.retryNow({ restart: true });
-    await waitFor(() => signals.length === 2);
-    expect(signals[0]!.aborted).toBe(true);
-    expect(signals[1]!.aborted).toBe(false);
+    client.retryNow({ restart: true });
+    await waitFor(() => attempts.length === 3);
+    expect(attempts.map((attempt) => attempt.signal.aborted)).toEqual([true, true, false]);
     await new Promise((resolve) => setTimeout(resolve, 20));
-    // Abandoning the attempt is not a failure: nothing reports the host unreachable.
-    expect(seen.map((state) => state.status)).toEqual(["connecting", "connecting"]);
-    expect(client.getState()).toEqual({ status: "connecting", attempt: 2 });
+    // Abandoning an attempt is not a failure: nothing reports the host unreachable.
+    expect(seen.map((state) => state.status)).toEqual(["connecting", "connecting", "connecting"]);
+    expect(client.getState()).toEqual({ status: "connecting", attempt: 3 });
+
+    // The first real failure backs off as a first failure: abandoned attempts didn't count.
+    const said = "ssh: connect to host studio port 22: Operation timed out";
+    attempts[2]!.fail(new TransportError("ssh failed", said));
+    await waitFor(() => client!.getState().status === "unreachable");
+    expect(client.getState()).toMatchObject({ detail: said, retryAt: 1_000 });
   });
 
   it("lets go of a connection abandoned mid-handshake, once, and dials afresh", async () => {
     const dir = await makeTempDir();
     const socketPath = path.join(dir, "h.sock");
-    // A host that accepts the socket and never answers HELLO.
+    // A host that reads HELLO and never answers it.
     const accepted: net.Socket[] = [];
+    let hellos = 0;
     const server = net.createServer((socket) => {
       accepted.push(socket);
+      const decoder = new FrameDecoder();
+      socket.on("data", (chunk: Buffer) => {
+        for (const frame of decoder.push(chunk)) if (frame.kind === ControlKind.HELLO) hellos++;
+      });
+      socket.on("error", () => {});
     });
     await new Promise<void>((resolve) => server.listen(socketPath, resolve));
     const direct = createDirectTransport({ socketPath, token: "t" });
@@ -742,11 +756,12 @@ describe("LinkClient retry during an attempt (#13926)", () => {
         quietAfterMs: 0,
       });
       client.start();
-      await waitFor(() => accepted.length === 1);
+      // Waiting on the host's answer to HELLO: past the transport, which the signal no longer reaches.
+      await waitFor(() => hellos === 1);
 
       client.retryNow({ restart: true });
-      await waitFor(() => accepted.length === 2);
-      await waitFor(() => disposes[0] === 1);
+      await waitFor(() => hellos === 2);
+      expect(disposes[0]).toBe(1);
       expect(client.getState()).toEqual({ status: "connecting", attempt: 2 });
 
       await client.stop();
@@ -756,8 +771,8 @@ describe("LinkClient retry during an attempt (#13926)", () => {
       expect(disposes).toEqual([1, 1]);
     } finally {
       await client?.stop();
-      server.close();
       for (const socket of accepted) socket.destroy();
+      server.close();
       await removeTempDir(dir);
     }
   });
