@@ -26,6 +26,7 @@ import { executableForSpawn } from "../../utils/windowsExecutable.js";
 import { getSanitizedProcessEnv } from "../../utils/gitEnv.js";
 import { createForgeObserver } from "./hostForges.js";
 import { nameLeases } from "../host/linkActivity.js";
+import { DriveLeaseHolderSchema } from "../link/schemas.js";
 import type { HostSampleSources, ObservedAgents, SampleReaders } from "./sampler.js";
 
 type ProjectInventory = ReturnType<typeof projectStore.getAllProjects>;
@@ -191,7 +192,11 @@ function currentDrivers(
   );
 }
 
-/** The most recent holder across this host's projects, when anyone drives one. */
+/**
+ * The most recent holder across this host's projects, when anyone drives one.
+ * One a Shell's schema would refuse (an id from a reservation file longer than
+ * the link carries) is passed over, or the whole summary would be.
+ */
 function currentDriver(
   projects: () => ProjectInventory = () => projectStore.getAllProjects()
 ): DriveLeaseHolder | null {
@@ -200,7 +205,8 @@ function currentDriver(
   let latest: DriveLeaseHolder | null = null;
   for (const project of projects()) {
     const holder = lease.getHolder(project.id);
-    if (holder && (!latest || holder.acquiredAt > latest.acquiredAt)) latest = holder;
+    if (!holder || !DriveLeaseHolderSchema.safeParse(holder).success) continue;
+    if (!latest || holder.acquiredAt > latest.acquiredAt) latest = holder;
   }
   return latest;
 }

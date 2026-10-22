@@ -78,7 +78,7 @@ const EndpointSchema = z.object({ endpointId: id, projectId: id.nullable() });
 const EndpointOpenSchema = EndpointSchema.extend({ openId: id.optional() });
 const EndpointCloseSchema = z.object({ endpointId: id });
 
-const DriveLeaseHolderSchema = z.object({
+export const DriveLeaseHolderSchema = z.object({
   leaseId: u32,
   tenureId: id.optional(),
   endpointId: id,

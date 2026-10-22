@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { DriveLeaseHolder } from "../../../../shared/types/remoteHosts.js";
 
 const workspace = vi.hoisted(() => ({
   client: null as null | { getAllStatesForProjectResultAsync: ReturnType<typeof vi.fn> },
@@ -51,9 +52,19 @@ vi.mock("../../../services/AgentAvailabilityStore.js", () => ({
   getAgentAvailabilityStore: () => ({ isHelpTerminal: () => false }),
 }));
 const lease = vi.hoisted(() => ({
-  holders: null as null | Record<string, { acquiredAt: number }>,
+  holders: null as null | Record<string, DriveLeaseHolder>,
   away: new Set<string>(),
 }));
+function holder(acquiredAt: number, clientId = `c${acquiredAt}`): DriveLeaseHolder {
+  return {
+    leaseId: acquiredAt,
+    endpointId: `s${acquiredAt}:e1`,
+    clientId,
+    clientName: "greg-mbp",
+    isHostLocal: false,
+    acquiredAt,
+  };
+}
 vi.mock("../../../services/DriveLeaseService.js", () => ({
   peekDriveLeaseService: () =>
     lease.holders
@@ -278,12 +289,12 @@ describe("one host-summary sample", () => {
   it("lists the projects once for its agents, projects and driver", async () => {
     store.projects = [...DEFAULT_PROJECTS, { id: "p3", path: "/p3", status: "closed" }];
     scratches.list = [{ id: "s1" }];
-    lease.holders = { p2: { acquiredAt: 5 }, p3: { acquiredAt: 9 } };
+    lease.holders = { p2: holder(5), p3: holder(9) };
     await expect(sampleOnce()).resolves.toEqual({
       agents: { working: 1, waiting: 0, idle: 0 },
       projects: { projectCount: 2, worktreeCount: null },
       // A closed project's lease still counts, as it did when each reader listed its own.
-      driver: { acquiredAt: 9 },
+      driver: holder(9),
     });
     expect(getAllProjects).toHaveBeenCalledTimes(1);
     // Every registered project and scratch, not only the open ones.
@@ -295,14 +306,6 @@ describe("one host-summary sample", () => {
       { id: "p1", path: "/p1", status: "active", name: "daintree" },
       { id: "p2", path: "/p2", status: "background", name: "site" },
     ];
-    const holder = (acquiredAt: number) => ({
-      leaseId: acquiredAt,
-      endpointId: `s${acquiredAt}:e1`,
-      clientId: `c${acquiredAt}`,
-      clientName: "greg-mbp",
-      isHostLocal: false,
-      acquiredAt,
-    });
     // A reservation for a project since removed isn't this host's to report.
     lease.holders = { p1: holder(5), p2: holder(9), gone: holder(12) };
     lease.away.add("p1");
@@ -313,6 +316,15 @@ describe("one host-summary sample", () => {
     ]);
     expect(readers.driver()).toEqual(holder(9));
     expect(getAllProjects).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes over a holder the link couldn't carry, rather than losing the whole summary", async () => {
+    const restored = holder(12, "c".repeat(256));
+    restored.endpointId = `restored:${restored.clientId}`;
+    lease.holders = { p1: holder(5), p2: restored };
+    const readers = createHostSampleSources().beginSample!();
+    expect(readers.driver()).toEqual(holder(5));
+    expect(readers.drivers!().map((driver) => driver.projectId)).toEqual(["p1"]);
   });
 
   it("lists them again next sample, so a change shows", async () => {
@@ -327,7 +339,7 @@ describe("one host-summary sample", () => {
   });
 
   it("is unknown everywhere the list was needed when the store fails, and asks once", async () => {
-    lease.holders = { p1: { acquiredAt: 1 } };
+    lease.holders = { p1: holder(1) };
     getAllProjects.mockImplementationOnce(() => {
       throw new Error("db locked");
     });
