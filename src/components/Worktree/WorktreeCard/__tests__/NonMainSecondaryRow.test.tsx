@@ -5,6 +5,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render } from "@testing-library/react";
 import type { ReactNode } from "react";
 import type { WorktreeChanges, WorktreeState } from "@/types";
+import type { CIStatus } from "@shared/types/forge";
 import { usePRCircuitBreakerStore } from "@/store/prCircuitBreakerStore";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
@@ -67,6 +68,9 @@ interface RenderOverrides {
   hasAuthFailedSignIn?: boolean;
   hasDisplayTitle?: boolean;
   isPrOriginated?: boolean;
+  hasCustomTitle?: boolean;
+  hasPlanFile?: boolean;
+  quietGit?: boolean;
 }
 
 function renderRow(overrides: RenderOverrides = {}) {
@@ -81,8 +85,10 @@ function renderRow(overrides: RenderOverrides = {}) {
         hasAuthFailedSignIn={overrides.hasAuthFailedSignIn ?? false}
         hasDisplayTitle={overrides.hasDisplayTitle ?? false}
         isPrOriginated={overrides.isPrOriginated ?? false}
-        hasPlanFile={false}
-        badges={{}}
+        hasCustomTitle={overrides.hasCustomTitle}
+        hasPlanFile={overrides.hasPlanFile ?? false}
+        quietGit={overrides.quietGit}
+        badges={{ onOpenPlan: vi.fn() }}
       />
     </TooltipProvider>
   );
@@ -336,5 +342,133 @@ describe("NonMainSecondaryRow — a fetch mounts the sync line even with nothing
   it("stays unmounted with nothing to say and nothing wrong", () => {
     renderRow({ worktree: { ...baseWorktree, baseBranchName: null } as WorktreeState });
     expect(upstreamBadgeProps).toHaveLength(0);
+  });
+});
+
+describe("NonMainSecondaryRow — quiet git detail (#13777)", () => {
+  const tracked: WorktreeChanges = {
+    worktreeId: "wt-1",
+    rootPath: "/repo",
+    changes: [],
+    changedFileCount: 0,
+    tracking: "origin/feature/test",
+  };
+  const failing: CIStatus = {
+    state: "failure",
+    total: 3,
+    passed: 2,
+    failed: 1,
+    pending: 0,
+    rawData: null,
+  };
+  const syncedWorktree: WorktreeState = {
+    ...baseWorktree,
+    baseBranchName: "develop",
+    aheadCount: 2,
+    behindCount: 0,
+    worktreeChanges: tracked,
+  };
+
+  function withPr(pr: Partial<NonNullable<NonNullable<WorktreeState["linked"]>["pr"]>>) {
+    return {
+      ...syncedWorktree,
+      linked: { ...syncedWorktree.linked!, pr: { ...syncedWorktree.linked!.pr!, ...pr } },
+    } as WorktreeState;
+  }
+
+  it("draws today's branch, issue, PR and sync lines when shown", () => {
+    const { queryByTestId, queryByText } = renderRow({
+      worktree: syncedWorktree,
+      hasDisplayTitle: true,
+      hasCustomTitle: true,
+    });
+
+    expect(queryByTestId("issue-badge")).not.toBeNull();
+    expect(queryByTestId("pr-badge")).not.toBeNull();
+    expect(queryByTestId("upstream-sync-badge")).not.toBeNull();
+    expect(queryByText("feature/test")).not.toBeNull();
+  });
+
+  it("drops the branch, issue, at-rest PR and in-sync line when quiet", () => {
+    const { queryByTestId, queryByText } = renderRow({
+      worktree: syncedWorktree,
+      hasDisplayTitle: true,
+      hasCustomTitle: true,
+      quietGit: true,
+    });
+
+    expect(queryByTestId("issue-badge")).toBeNull();
+    expect(queryByTestId("pr-badge")).toBeNull();
+    expect(queryByTestId("upstream-sync-badge")).toBeNull();
+    expect(queryByText("feature/test")).toBeNull();
+  });
+
+  it("keeps a failing PR when quiet", () => {
+    const { queryByTestId } = renderRow({
+      worktree: withPr({ ciStatus: failing }),
+      quietGit: true,
+    });
+
+    expect(queryByTestId("pr-badge")).not.toBeNull();
+  });
+
+  it("drops a PR whose head moved with no merge armed, which is no warning", () => {
+    const { queryByTestId } = renderRow({
+      worktree: withPr({ headMovedWhileArmed: true }),
+      quietGit: true,
+    });
+
+    expect(queryByTestId("pr-badge")).toBeNull();
+  });
+
+  it("keeps a PR whose head moved under an armed merge when quiet", () => {
+    const { queryByTestId } = renderRow({
+      worktree: withPr({
+        mergeIntent: { kind: "auto-merge", method: null, enabledAt: null },
+        headMovedWhileArmed: true,
+      }),
+      quietGit: true,
+    });
+
+    expect(queryByTestId("pr-badge")).not.toBeNull();
+  });
+
+  it("keeps the failing PR a custom title displaced when quiet", () => {
+    const { queryAllByTestId } = renderRow({
+      worktree: {
+        ...withPr({ ciStatus: failing }),
+        sourcePrNumber: 42,
+      } as WorktreeState,
+      isPrOriginated: true,
+      hasCustomTitle: true,
+      quietGit: true,
+    });
+
+    expect(queryAllByTestId("pr-badge")).toHaveLength(1);
+  });
+
+  it.each([
+    ["behind its upstream", { behindCount: 3 }, { hasUpstreamDelta: true }],
+    ["behind its base", { baseBehindCount: 4 }, { hasUpstreamDelta: true }],
+    ["after a failed fetch", { fetchNetworkFailed: true }, {}],
+    ["after a refused sign-in", { fetchAuthFailed: true }, { hasAuthFailedSignIn: true }],
+  ])("keeps the sync line %s when quiet", (_label, fields, overrides) => {
+    const { queryByTestId } = renderRow({
+      worktree: { ...syncedWorktree, ...fields } as WorktreeState,
+      quietGit: true,
+      ...overrides,
+    });
+
+    expect(queryByTestId("upstream-sync-badge")).not.toBeNull();
+  });
+
+  it("keeps the plan file, which is not git detail", () => {
+    const { container } = renderRow({
+      worktree: { ...syncedWorktree, planFilePath: "PLAN.md" } as WorktreeState,
+      hasPlanFile: true,
+      quietGit: true,
+    });
+
+    expect(container.textContent).toContain("PLAN.md");
   });
 });

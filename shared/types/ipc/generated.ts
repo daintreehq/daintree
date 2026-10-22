@@ -2050,7 +2050,7 @@ export interface GeneratedIpcInvokeMap {
     result: import("./projectPresentation.js").ProjectPresentationSnapshot | null;
   };
   "project-presentation:set-level": {
-    args: [feature: "forgeStats", level: "hidden" | "shown" | "demoted" | null];
+    args: [feature: "forgeStats" | "gitDetail", level: "hidden" | "shown" | "demoted" | null];
     result: import("./projectPresentation.js").ProjectPresentationSnapshot;
   };
   "project-relocation:apply": {

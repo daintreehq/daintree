@@ -33,6 +33,12 @@ export interface PresentationFeatureDefinition {
   /** The levels this feature supports, in the order the settings control shows them. */
   levels: readonly PresentationLevel[];
   /**
+   * What a level is called for this feature where the generic word misleads
+   * ("Quiet" git detail stays on the card, so it is not "demoted" anywhere).
+   * The level itself, and its `when` value, are unchanged.
+   */
+  levelWords?: Partial<Record<PresentationLevel, { label: string; verb: string }>>;
+  /**
    * The `when` clause key carrying the resolved level. A stable public API once
    * shipped. camelCase, like every built-in key, so it can never shadow a
    * plugin's keys, which sit under its lowercase manifest name.
@@ -56,6 +62,20 @@ export const PRESENTATION_FEATURES = {
     levels: PRESENTATION_LEVELS,
     contextKey: "presentationForgeStats",
     // A folder without a repository has no commits, issues or PRs to count.
+    defaultLevel: ({ gitBacked }) => (gitBacked ? "shown" : "hidden"),
+    requiresRepository: true,
+  },
+  gitDetail: {
+    label: "Git detail",
+    noun: "git detail",
+    description:
+      "The branch, pull request, issue and last-commit detail on worktree cards, and their git menu rows",
+    // No hidden level: quiet moves the detail into the card's expanded details
+    // and its menu's Git submenu, and nothing here should leave a card unable
+    // to say which branch it is on.
+    levels: ["shown", "demoted"],
+    levelWords: { demoted: { label: "Quiet", verb: "quieting" } },
+    contextKey: "presentationGitDetail",
     defaultLevel: ({ gitBacked }) => (gitBacked ? "shown" : "hidden"),
     requiresRepository: true,
   },

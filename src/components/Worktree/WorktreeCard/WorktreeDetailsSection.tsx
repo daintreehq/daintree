@@ -86,6 +86,15 @@ export interface WorktreeDetailsSectionProps {
   onDismissError: (id: string) => void;
   onRetryError: (id: string, action: RetryAction, args?: Record<string, unknown>) => Promise<void>;
   onOpenReviewHub?: () => void;
+  /**
+   * Set when the presentation profile quiets git detail (#13777): the branch,
+   * issue, PR and sync detail the header stopped drawing, shown at the top of
+   * the expanded panel. The resting row drops its last-activity chip, whose
+   * time and commit the panel's own last-active line already carries, and the
+   * Review Hub shortcut leaves the resting row for the menu's Git submenu
+   * unless the worktree is conflicted, where it is the way out.
+   */
+  quietGitDetail?: React.ReactNode;
   isLifecycleRunning?: boolean;
   lifecycleLabel?: string;
 
@@ -120,6 +129,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
     onDismissError,
     onRetryError,
     onOpenReviewHub,
+    quietGitDetail,
     reviewState,
     isLifecycleRunning,
     lifecycleLabel,
@@ -188,7 +198,10 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
   // A clean tree with unpushed commits still has a Review Hub next step —
   // push — so the opener stays visible; only the label shifts to match.
   const isUnpushedClean = reviewState === "unpushed-clean" && !hasChanges;
-  const showReviewHubButton = !!onOpenReviewHub && (hasChanges || isUnpushedClean);
+  const showReviewHubButton =
+    !!onOpenReviewHub &&
+    (hasChanges || isUnpushedClean) &&
+    (quietGitDetail === undefined || isConflicted);
   const reviewHubButtonLabel = isUnpushedClean ? "Review & push" : "Review & commit";
 
   const lifecycleState = worktree.lifecycleStatus?.state;
@@ -331,6 +344,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                     "max-h-52 overflow-y-auto px-3 pb-2.5"
               )}
             >
+              {quietGitDetail}
               <WorktreeDetails
                 variant={variant}
                 worktree={worktree}
@@ -559,15 +573,17 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                     </span>
                   )}
 
-                <WorktreeActivityChip
-                  lastCommitTimestampMs={worktree.worktreeChanges?.lastCommitTimestampMs}
-                  author={worktree.worktreeChanges?.lastCommitAuthor}
-                  commitMessage={worktree.worktreeChanges?.lastCommitMessage}
-                  commitBody={worktree.worktreeChanges?.lastCommitBody}
-                  commitSha={worktree.worktreeChanges?.headOid}
-                  forgeAvatarUrl={forgeAuthorAvatarUrl}
-                  lastActivityTimestamp={worktree.lastActivityTimestamp}
-                />
+                {quietGitDetail === undefined && (
+                  <WorktreeActivityChip
+                    lastCommitTimestampMs={worktree.worktreeChanges?.lastCommitTimestampMs}
+                    author={worktree.worktreeChanges?.lastCommitAuthor}
+                    commitMessage={worktree.worktreeChanges?.lastCommitMessage}
+                    commitBody={worktree.worktreeChanges?.lastCommitBody}
+                    commitSha={worktree.worktreeChanges?.headOid}
+                    forgeAvatarUrl={forgeAuthorAvatarUrl}
+                    lastActivityTimestamp={worktree.lastActivityTimestamp}
+                  />
+                )}
               </div>
 
               {showReviewHubButton && (

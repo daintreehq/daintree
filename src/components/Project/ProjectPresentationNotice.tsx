@@ -11,6 +11,7 @@ import {
 import {
   PRESENTATION_FEATURE_IDS,
   PRESENTATION_FEATURES,
+  type PresentationFeatureDefinition,
   type PresentationFeatureId,
   type PresentationLevel,
   type PresentationLevels,
@@ -37,7 +38,11 @@ export function suggestedChanges(
 /** "Forge stats hidden, …" */
 export function describeChanges(changes: readonly SuggestedChange[]): string {
   return changes
-    .map(({ feature, level }) => `${PRESENTATION_FEATURES[feature].label} ${level}`)
+    .map(({ feature, level }) => {
+      const definition: PresentationFeatureDefinition = PRESENTATION_FEATURES[feature];
+      const word = definition.levelWords?.[level]?.label.toLowerCase() ?? level;
+      return `${definition.label} ${word}`;
+    })
     .join(", ");
 }
 
@@ -50,7 +55,9 @@ const LEVEL_VERBS: Record<PresentationLevel, string> = {
 function noticeTitle(changes: readonly SuggestedChange[]): string {
   if (changes.length === 1) {
     const { feature, level } = changes[0]!;
-    return `This repository suggests ${LEVEL_VERBS[level]} ${PRESENTATION_FEATURES[feature].noun}`;
+    const definition: PresentationFeatureDefinition = PRESENTATION_FEATURES[feature];
+    const verb = definition.levelWords?.[level]?.verb ?? LEVEL_VERBS[level];
+    return `This repository suggests ${verb} ${definition.noun}`;
   }
   return "This repository suggests a different layout";
 }

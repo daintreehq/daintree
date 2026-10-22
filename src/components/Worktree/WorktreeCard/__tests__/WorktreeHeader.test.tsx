@@ -1510,3 +1510,120 @@ describe("WorktreeHeader custom title (#13409)", () => {
     expect(container.querySelectorAll('button[aria-label*="Open issue"]').length).toBe(0);
   });
 });
+
+describe("WorktreeHeader quiet git detail (#13777)", () => {
+  const issueWorktree: WorktreeState = {
+    ...baseWorktree,
+    issueNumber: 2907,
+    issueTitle: "Add terminal recipe editor coverage",
+    baseBranchName: "develop",
+    aheadCount: 1,
+    behindCount: 0,
+    ...prLinked(55),
+  };
+
+  function openHeadlineTooltip() {
+    fireEvent.focus(screen.getByTestId("worktree-custom-title"));
+    return screen.getByTestId("worktree-custom-title-tooltip").textContent ?? "";
+  }
+
+  it("keeps the issue title as the headline, without the issue mark or its button", () => {
+    renderHeader({ worktree: issueWorktree, quietGit: true, badges: { onOpenIssue: noop } });
+
+    expect(screen.getByTestId("worktree-custom-title").textContent).toBe(
+      "Add terminal recipe editor coverage"
+    );
+    expect(screen.queryByRole("button", { name: /Open issue/ })).toBeNull();
+    expect(screen.queryByText("feature/test")).toBeNull();
+  });
+
+  it("names the issue and branch the headline stopped drawing in its tooltip", () => {
+    renderHeader({ worktree: issueWorktree, quietGit: true });
+
+    const tooltip = openHeadlineTooltip();
+    expect(tooltip).toContain("Issue #2907");
+    expect(tooltip).toContain("feature/test");
+  });
+
+  it("drops an at-rest PR and the in-sync line from the stack under the headline", () => {
+    renderHeader({ worktree: issueWorktree, quietGit: true, badges: { onOpenPR: noop } });
+
+    expect(screen.queryByRole("button", { name: /pull request #55/ })).toBeNull();
+    expect(screen.queryByText("develop")).toBeNull();
+  });
+
+  function originatedFrom(
+    pr: Partial<NonNullable<NonNullable<WorktreeState["linked"]>["pr"]>>
+  ): WorktreeState {
+    const { linked } = prLinked(314);
+    return {
+      ...baseWorktree,
+      sourcePrNumber: 314,
+      linked: { ...linked, pr: { ...linked.pr, title: "Fix flaky terminal search", ...pr } },
+    };
+  }
+
+  it("quiets a PR headline that has nothing to warn about", () => {
+    renderHeader({ worktree: originatedFrom({}), quietGit: true, badges: { onOpenPR: noop } });
+
+    expect(screen.getByTestId("worktree-custom-title").textContent).toBe(
+      "Fix flaky terminal search"
+    );
+    expect(screen.queryByRole("button", { name: /pull request #314/ })).toBeNull();
+  });
+
+  it("keeps a failing PR headline as the badge, once", () => {
+    renderHeader({
+      worktree: originatedFrom({
+        ciStatus: { state: "failure", total: 2, passed: 1, failed: 1, pending: 0, rawData: null },
+      }),
+      quietGit: true,
+      badges: { onOpenPR: noop },
+    });
+
+    expect(screen.queryByTestId("worktree-custom-title")).toBeNull();
+    expect(screen.getAllByRole("button", { name: /pull request #314/ })).toHaveLength(1);
+  });
+
+  it("keeps the badge on a collapsed card whose head moved under an armed merge", () => {
+    // The collapsed alarm pill has no word for this, so the headline is the
+    // only place the warning can be.
+    renderHeader({
+      worktree: originatedFrom({
+        mergeIntent: { kind: "auto-merge", method: null, enabledAt: null },
+        headMovedWhileArmed: true,
+      }),
+      isCollapsed: true,
+      quietGit: true,
+      badges: { onOpenPR: noop },
+    });
+
+    expect(screen.queryByTestId("worktree-custom-title")).toBeNull();
+    expect(screen.getByTestId("pr-badge-merge-intent")).not.toBeNull();
+  });
+
+  it("leaves conflicts and other repository state in the title row", () => {
+    renderHeader({
+      worktree: issueWorktree,
+      quietGit: true,
+      gitStateIndicator: { kind: "merging", label: "Merging", tone: "warning" },
+    });
+
+    expect(screen.getByText("Merging")).not.toBeNull();
+  });
+
+  it("keeps the main card's agent counts but moves its branch into the name's tooltip", () => {
+    renderHeader({
+      worktree: { ...baseWorktree, isMainWorktree: true, name: "daintree-app", branch: "main" },
+      isMainWorktree: true,
+      isMainOnStandardBranch: true,
+      branchLabel: "main",
+      aggregateCounts: { worktrees: 3, working: 1, waiting: 0, finished: 0 },
+      quietGit: true,
+    });
+
+    expect(screen.queryByTestId("aggregate-worktree-row")).not.toBeNull();
+    expect(screen.getByTestId("main-worktree-meta-row").textContent).not.toContain("main");
+    expect(openHeadlineTooltip()).toContain("main");
+  });
+});

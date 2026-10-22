@@ -106,10 +106,22 @@ afterEach(() => {
 
 describe("suggestedChanges", () => {
   it("names only the features accepting would actually change", () => {
-    const changes = suggestedChanges({ forgeStats: "shown" }, { forgeStats: "hidden" });
+    const changes = suggestedChanges(
+      { forgeStats: "shown", gitDetail: "shown" },
+      { forgeStats: "hidden", gitDetail: "shown" }
+    );
     expect(changes).toEqual([{ feature: "forgeStats", level: "hidden" }]);
     expect(describeChanges(changes)).toBe("Forge stats hidden");
-    expect(suggestedChanges({ forgeStats: "hidden" }, { forgeStats: "hidden" })).toEqual([]);
+    expect(
+      suggestedChanges(
+        { forgeStats: "hidden", gitDetail: "shown" },
+        { forgeStats: "hidden", gitDetail: "shown" }
+      )
+    ).toEqual([]);
+  });
+
+  it("calls quiet git detail by its own name", () => {
+    expect(describeChanges([{ feature: "gitDetail", level: "demoted" }])).toBe("Git detail quiet");
   });
 });
 
@@ -120,6 +132,12 @@ describe("ProjectPresentationNotice", () => {
 
     adopt();
     expect(screen.getByText(QUESTION)).not.toBeNull();
+  });
+
+  it("asks about quieting git detail in the feature's own words", () => {
+    adopt({ suggestion: { levels: { gitDetail: "demoted" }, hash: HASH } });
+    renderNotice();
+    expect(screen.getByText("This repository suggests quieting git detail")).not.toBeNull();
   });
 
   it("asks nothing when the user already has what the repository suggests", () => {

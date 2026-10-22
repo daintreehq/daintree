@@ -27,7 +27,7 @@ import { WorktreeActionsToolbar } from "./WorktreeActionsToolbar";
 import { MainWorktreeSecondaryRow } from "./MainWorktreeSecondaryRow";
 import { NonMainSecondaryRow } from "./NonMainSecondaryRow";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { computeAlarmTier, formatAlarmDetail } from "@/lib/worktreeAlarmTier";
+import { computeAlarmTier, formatAlarmDetail, isPullRequestWarning } from "@/lib/worktreeAlarmTier";
 import { PathSegments } from "@/components/ui/PathSegments";
 
 export interface WorktreeHeaderProps {
@@ -75,6 +75,9 @@ export interface WorktreeHeaderProps {
 
   gitStateIndicator: GitStateIndicator | null;
 
+  /** The presentation profile quiets git detail (#13777); see `NonMainSecondaryRow`. */
+  quietGit?: boolean;
+
   menu: WorktreeMenuActions;
 }
 
@@ -113,6 +116,7 @@ export function WorktreeHeader({
   onCleanupWorktree,
   badges,
   gitStateIndicator,
+  quietGit = false,
   menu,
 }: WorktreeHeaderProps) {
   // The headline cascade lives in `getWorktreeHeadline` so the compact surfaces
@@ -224,6 +228,31 @@ export function WorktreeHeader({
     worktree.baseMatchesUpstream,
   ]);
 
+  // Quiet git detail (#13777) keeps the headline's words and moves the issue or
+  // PR mark and the branch into its tooltip. A cold PR headline with no title
+  // yet has no words to keep, so it stays the badge until the title arrives,
+  // and so does a PR headline that warns: on a collapsed card nothing else
+  // would show that its head moved under an armed merge.
+  const quietHeadlineTitle =
+    quietGit && !hasCustomTitle && !(isPrOriginated && isPullRequestWarning(worktree.linked?.pr))
+      ? displayTitle
+      : undefined;
+  // A custom title's displaced headline already carries the mark.
+  const quietDisplaced = [
+    hasCustomTitle
+      ? undefined
+      : headline.kind === "pr"
+        ? `Pull request #${headline.number}`
+        : headline.kind === "issue"
+          ? `Issue ${worktree.issueKey ?? `#${headline.number}`}`
+          : undefined,
+    headline.computedLabel,
+    branchLabel,
+  ].filter(
+    (line, i, lines): line is string =>
+      Boolean(line) && line !== quietHeadlineTitle && lines.indexOf(line) === i
+  );
+
   const { visibleStates, label: sessionAriaLabel } = useMemo(
     () =>
       sessionStates && sessionTotal
@@ -246,14 +275,23 @@ export function WorktreeHeader({
             <CustomTitleHeadline
               title={headline.customTitle!}
               displaced={
-                isCollapsed
-                  ? [headline.computedLabel!, branchLabel].filter(
-                      (line, i, lines) => line && lines.indexOf(line) === i
-                    )
-                  : isMainStandardLayout
-                    ? [worktree.name]
-                    : []
+                quietGit
+                  ? quietDisplaced
+                  : isCollapsed
+                    ? [headline.computedLabel!, branchLabel].filter(
+                        (line, i, lines) => line && lines.indexOf(line) === i
+                      )
+                    : isMainStandardLayout
+                      ? [worktree.name]
+                      : []
               }
+              isActive={isActive}
+              isMuted={isMuted}
+            />
+          ) : quietHeadlineTitle ? (
+            <CustomTitleHeadline
+              title={quietHeadlineTitle}
+              displaced={quietDisplaced}
               isActive={isActive}
               isMuted={isMuted}
             />
@@ -285,6 +323,13 @@ export function WorktreeHeader({
                 underlineOnHover={underlineOnHover}
               />
             )
+          ) : isMainStandardLayout && quietGit ? (
+            <CustomTitleHeadline
+              title={worktree.name}
+              displaced={[branchLabel]}
+              isActive={isActive}
+              isMuted={isMuted}
+            />
           ) : isMainStandardLayout ? (
             <TruncatedTooltip content={worktree.name}>
               <span
@@ -455,6 +500,7 @@ export function WorktreeHeader({
           fetchAuthFailed={Boolean(worktree.fetchAuthFailed)}
           fetchNetworkFailed={Boolean(worktree.fetchNetworkFailed)}
           aggregateCounts={aggregateCounts}
+          quietGit={quietGit}
         />
       )}
 
@@ -483,6 +529,7 @@ export function WorktreeHeader({
             hasCustomTitle={hasCustomTitle}
             isPrOriginated={isPrOriginated}
             hasPlanFile={hasPlanFile}
+            quietGit={quietGit}
             badges={badges}
           />
         )}

@@ -17,6 +17,8 @@ import {
   PRESENTATION_FEATURES,
   defaultPresentationLevel,
   isPresentationFeatureAvailable,
+  type PresentationFeatureDefinition,
+  type PresentationFeatureId,
   type PresentationLevel,
 } from "@shared/config/presentationProfile";
 
@@ -25,6 +27,11 @@ const LEVEL_LABELS: Record<PresentationLevel, string> = {
   demoted: "Demoted",
   hidden: "Hidden",
 };
+
+function levelLabel(feature: PresentationFeatureId, level: PresentationLevel): string {
+  const definition: PresentationFeatureDefinition = PRESENTATION_FEATURES[feature];
+  return definition.levelWords?.[level]?.label ?? LEVEL_LABELS[level];
+}
 
 /**
  * Project settings → General → Features (#13771): this project's presentation
@@ -85,10 +92,10 @@ export function PresentationFeaturesSection({ isOpen }: { isOpen: boolean }) {
               key={id}
               id={`project-feature-${id}`}
               label={feature.label}
-              description={`${feature.description} · Default: ${LEVEL_LABELS[fallback]}`}
+              description={`${feature.description} · Default: ${levelLabel(id, fallback)}`}
               options={feature.levels.map((level) => ({
                 value: level,
-                label: LEVEL_LABELS[level],
+                label: levelLabel(id, level),
               }))}
               value={resolved[id]}
               onChange={(level) => {

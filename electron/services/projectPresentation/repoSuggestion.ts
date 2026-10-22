@@ -15,7 +15,7 @@ import type { PresentationSuggestion } from "../../../shared/types/ipc/projectPr
  * `.daintree/presentation.json`:
  *
  * ```json
- * { "features": { "forgeStats": "hidden" } }
+ * { "features": { "forgeStats": "hidden", "gitDetail": "demoted" } }
  * ```
  *
  * A suggestion, never a setting: nothing here changes what the project shows

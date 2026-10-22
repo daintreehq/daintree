@@ -39,6 +39,8 @@ import { isClientGitError } from "@/utils/clientGitError";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { issueAttachPayload } from "@/utils/linkProviderIssue";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
+import { useResolvedPresentation } from "@/hooks/useResolvedPresentation";
+import { QuietGitDetails } from "./WorktreeCard/QuietGitDetails";
 import { cn } from "../../lib/utils";
 import {
   copyableBranchName,
@@ -293,6 +295,9 @@ export function WorktreeCard({
     [worktree.id]
   );
   const pluginItems = usePluginContextMenuItems("worktree", pluginMenuContext);
+  // Only an explicit quiet: a folder without a repository resolves to hidden,
+  // and its cards already have no git detail to move.
+  const quietGit = useResolvedPresentation().gitDetail === "demoted";
 
   // Border accent flash — fires once when the dominant *execution* state for
   // this card meaningfully changes. `directing` is excluded because it's
@@ -1090,6 +1095,7 @@ export function WorktreeCard({
     onStopDevServer: handleStopDevServer,
     onRestartDevServer: handleRestartDevServer,
     pluginItems,
+    quietGit,
   };
 
   const ariaStatusParts: string[] = [spineState];
@@ -1563,6 +1569,7 @@ export function WorktreeCard({
                     onOpenPlan: openPlanFileForThisWorktree,
                   }}
                   gitStateIndicator={gitStateIndicator}
+                  quietGit={quietGit}
                   menu={menuActions}
                 />
 
@@ -1608,6 +1615,17 @@ export function WorktreeCard({
                     onDismissError={dismissError}
                     onRetryError={handleErrorRetry}
                     onOpenReviewHub={openReviewHubForThisWorktree}
+                    quietGitDetail={
+                      quietGit ? (
+                        <QuietGitDetails
+                          worktree={worktree}
+                          branchLabel={branchLabel}
+                          isActive={isActive}
+                          onOpenIssue={worktree.issueNumber ? handleOpenIssueExternal : undefined}
+                          onOpenPR={worktree.linked?.pr ? handleOpenPRExternal : undefined}
+                        />
+                      ) : undefined
+                    }
                     isLifecycleRunning={isLifecycleRunning}
                     lifecycleLabel={lifecycleLabel}
                     isBeingDeleted={isBeingDeleted}

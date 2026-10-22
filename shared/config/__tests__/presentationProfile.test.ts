@@ -31,6 +31,10 @@ describe("presentation profile vocabulary", () => {
     expect(isPresentationFeatureId("__proto__")).toBe(false);
     expect(isLevelAllowed("forgeStats", "demoted")).toBe(true);
     expect(isLevelAllowed("forgeStats", "collapsed")).toBe(false);
+    // Git detail can be quieted but never hidden.
+    expect(isLevelAllowed("gitDetail", "demoted")).toBe(true);
+    expect(isLevelAllowed("gitDetail", "hidden")).toBe(false);
+    expect(parsePresentationLevels({ gitDetail: "hidden" })).toEqual({});
   });
 });
 
@@ -58,29 +62,40 @@ describe("resolvePresentation", () => {
   it("keeps today's behaviour as the defaults: a non-git folder hides forge stats", () => {
     expect(defaultPresentationLevel("forgeStats", { gitBacked: true })).toBe("shown");
     expect(defaultPresentationLevel("forgeStats", { gitBacked: false })).toBe("hidden");
-    expect(resolvePresentation({}, { gitBacked: true })).toEqual({ forgeStats: "shown" });
-    expect(resolvePresentation({}, { gitBacked: false })).toEqual({ forgeStats: "hidden" });
+    expect(resolvePresentation({}, { gitBacked: true })).toEqual({
+      forgeStats: "shown",
+      gitDetail: "shown",
+    });
+    expect(resolvePresentation({}, { gitBacked: false })).toEqual({
+      forgeStats: "hidden",
+      gitDetail: "hidden",
+    });
   });
 
   it("lets a set level win over the default", () => {
     expect(resolvePresentation({ forgeStats: "demoted" }, { gitBacked: true })).toEqual({
       forgeStats: "demoted",
+      gitDetail: "shown",
     });
   });
 
   it("hides a repository surface in a folder without one, whatever level is set", () => {
     // An explicit "shown" must not mount a pill that polls git in a non-repo.
     expect(isPresentationFeatureAvailable("forgeStats", { gitBacked: false })).toBe(false);
-    expect(resolvePresentation({ forgeStats: "shown" }, { gitBacked: false })).toEqual({
+    expect(
+      resolvePresentation({ forgeStats: "shown", gitDetail: "demoted" }, { gitBacked: false })
+    ).toEqual({
       forgeStats: "hidden",
+      gitDetail: "hidden",
     });
   });
 });
 
 describe("buildPresentationWhenContext", () => {
   it("publishes each resolved level under its feature's context key", () => {
-    expect(buildPresentationWhenContext({ forgeStats: "demoted" })).toEqual({
+    expect(buildPresentationWhenContext({ forgeStats: "demoted", gitDetail: "shown" })).toEqual({
       presentationForgeStats: "demoted",
+      presentationGitDetail: "shown",
     });
   });
 });
