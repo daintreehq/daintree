@@ -360,31 +360,34 @@ export function installHostMcpRelay(
 
   /**
    * Remembered, as running, from when it runs: a resend of one this host
-   * never ran arms nothing. Taken back once its call is refused.
+   * never ran arms nothing. Taken back if its call is refused, and only then
+   * does it count against the sender's bound, so a refusal crowds out nothing.
    */
   const startNoticeCall = (
     senderId: string,
     helpSessionId: string,
     callId: string
-  ): (() => NoticeCall) => {
+  ): ((refused: boolean) => void) => {
     let calls = noticeCalls.get(senderId);
     if (!calls) {
       calls = new Map();
       noticeCalls.set(senderId, calls);
     }
-    const held = calls;
-    const call = held.get(callId) ?? { helpSessionId, at: now(), running: 0 };
+    const call = calls.get(callId) ?? { helpSessionId, at: now(), running: 0 };
     call.running += 1;
-    held.delete(callId);
-    held.set(callId, call);
-    // As many as the Shell follows; one still running stays.
-    for (const [oldId, old] of held) {
-      if (held.size <= MAX_RELAY_NOTICE_STATUS_CALLS) break;
-      if (old.running === 0) held.delete(oldId);
-    }
-    return () => {
+    calls.delete(callId);
+    calls.set(callId, call);
+    return (refused) => {
       call.running -= 1;
-      return call;
+      const held = noticeCalls.get(senderId);
+      if (held === undefined) return;
+      if (refused && call.running === 0 && held.get(callId) === call) held.delete(callId);
+      // As many as the Shell follows; one still running stays.
+      for (const [oldId, old] of held) {
+        if (held.size <= MAX_RELAY_NOTICE_STATUS_CALLS) break;
+        if (old.running === 0) held.delete(oldId);
+      }
+      if (held.size === 0) noticeCalls.delete(senderId);
     };
   };
 
@@ -401,13 +404,8 @@ export function installHostMcpRelay(
       answer = await executeHeld(spec, payload);
       return answer;
     } finally {
-      const call = endNoticeCall?.();
       // Refused before it ran: it armed nothing, and its Shell forgets it too.
-      if (call !== undefined && call.running === 0 && answer?.status === "refused") {
-        const calls = noticeCalls.get(spec.senderId);
-        if (calls?.get(payload.callId) === call) calls.delete(payload.callId);
-        if (calls?.size === 0) noticeCalls.delete(spec.senderId);
-      }
+      endNoticeCall?.(answer?.status === "refused");
       release();
     }
   };

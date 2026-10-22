@@ -667,6 +667,20 @@ describe("installHostMcpRelay notices (#13500)", () => {
     relay.dispose();
   });
 
+  it("lets no refusal crowd out a call it holds, even with its records full", async () => {
+    const { links, relay } = harness([["link-1", "sender-a"]], {
+      hasProject: async (projectId) => projectId === "project-1",
+    });
+    for (let i = 0; i < MAX_RELAY_NOTICE_STATUS_CALLS; i++) {
+      await links[0]!.call({ ...notifyCall, callId: `call-${i}` });
+    }
+    await links[0]!.call({ ...notifyCall, callId: "refused", projectId: "nope" });
+    expect(await status(links[0]!, [{ helpSessionId: "help-1", callId: "call-0" }])).toEqual({
+      calls: [{ helpSessionId: "help-1", callId: "call-0", status: "settled" }],
+    });
+    relay.dispose();
+  });
+
   it("counts a notice that left for its Shell while it read the notice service as watched", async () => {
     let handOff: () => void = () => {};
     const { links, opened, relay } = harness([["link-1", "sender-a"]], {

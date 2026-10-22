@@ -30,6 +30,8 @@ interface Entry {
 interface SenderQueue {
   entries: Entry[];
   sending: boolean;
+  /** The batch out now: never crowded out, since the Shell may already have it. */
+  inFlight: ReadonlySet<Entry>;
   retryAt: number;
 }
 
@@ -89,7 +91,7 @@ export class RelayNoticeOutbox {
     const expiresAt = this.now() + this.ttlMs;
     let queue = this.queues.get(senderId);
     if (queue === undefined) {
-      queue = { entries: [], sending: false, retryAt: 0 };
+      queue = { entries: [], sending: false, inFlight: new Set(), retryAt: 0 };
       this.queues.set(senderId, queue);
     }
     for (const notice of notices) {
@@ -104,11 +106,11 @@ export class RelayNoticeOutbox {
         },
         expiresAt,
       });
-      if (queue.entries.length > MAX_RELAY_NOTICES_PER_SENDER) {
-        this.dropped(senderId, queue.entries.shift()!);
-      }
+      if (queue.entries.length > MAX_RELAY_NOTICES_PER_SENDER) this.evict(senderId, queue);
     }
-    while (this.waiting() > MAX_RELAY_NOTICES_TOTAL) this.dropOldest();
+    while (this.waiting() > MAX_RELAY_NOTICES_TOTAL && this.dropOldest()) {
+      // Each pass crowds out one; what is out now stays.
+    }
     this.flush(senderId);
   }
 
@@ -155,6 +157,7 @@ export class RelayNoticeOutbox {
     }
     const batch = queue.entries.slice(0, MAX_RELAY_NOTICES_PER_CALL);
     queue.sending = true;
+    queue.inFlight = new Set(batch);
     session
       .call(
         AssistantLinkMethod.RELAY_NOTICES,
@@ -171,6 +174,7 @@ export class RelayNoticeOutbox {
       )
       .finally(() => {
         queue.sending = false;
+        queue.inFlight = new Set();
         if (this.queues.get(senderId) === queue) this.flush(senderId);
       });
   }
@@ -188,23 +192,26 @@ export class RelayNoticeOutbox {
     return count;
   }
 
-  private dropOldest(): void {
-    let oldest: [string, SenderQueue] | null = null;
+  private dropOldest(): boolean {
+    let oldest: { senderId: string; queue: SenderQueue; entry: Entry } | null = null;
     for (const [senderId, queue] of this.queues) {
-      const head = queue.entries[0];
-      if (
-        head !== undefined &&
-        (oldest === null || head.expiresAt < oldest[1].entries[0]!.expiresAt)
-      ) {
-        oldest = [senderId, queue];
+      const entry = queue.entries.find((candidate) => !queue.inFlight.has(candidate));
+      if (entry !== undefined && (oldest === null || entry.expiresAt < oldest.entry.expiresAt)) {
+        oldest = { senderId, queue, entry };
       }
     }
-    if (oldest !== null) this.dropped(oldest[0], oldest[1].entries.shift()!);
+    if (oldest === null) return false;
+    this.evict(oldest.senderId, oldest.queue);
+    return true;
   }
 
-  private dropped(senderId: string, entry: Entry): void {
+  /** Crowd out a queue's oldest notice that isn't out now, telling who armed it. */
+  private evict(senderId: string, queue: SenderQueue): void {
+    const index = queue.entries.findIndex((entry) => !queue.inFlight.has(entry));
+    if (index < 0) return;
+    const [entry] = queue.entries.splice(index, 1);
     try {
-      this.deps.onDropped?.(senderId, [entry.notice]);
+      this.deps.onDropped?.(senderId, [entry!.notice]);
     } catch (error) {
       console.warn("[RelayNoticeOutbox] Couldn't report a notice crowded out:", error);
     }

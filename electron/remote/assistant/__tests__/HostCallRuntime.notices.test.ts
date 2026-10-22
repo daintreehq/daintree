@@ -506,6 +506,67 @@ describe("HostCallRuntime notices from hosts (#13500)", () => {
     expect(queued[2]!.wake.lostNotices).toEqual({ hostName: "studio-01", terminalIds: ["host-t-2"] });
   });
 
+  it("follows a batch by the items that ran, naming only those still missing", async () => {
+    relayCall.mockResolvedValueOnce({
+      status: "done",
+      result: {
+        isError: false,
+        structured: {
+          results: [
+            { target: "claude", ok: true, result: { launched: true, terminalId: "host-t-1" } },
+            { target: "codex", ok: true, result: { launched: true, terminalId: "host-t-2" } },
+          ],
+        },
+        text: null,
+      },
+    } satisfies McpCallAnswer);
+    await runtime.call(
+      "a",
+      { ...LAUNCH, tool: "agent.launchMany", args: { agentIds: ["claude", "codex"], notify: true } },
+      { tier: "core" }
+    );
+    relayCall.mockResolvedValueOnce({
+      status: "done",
+      result: {
+        isError: false,
+        structured: {
+          results: [
+            { target: "host-t-3", ok: true, result: { ran: true } },
+            { target: "host-t-4", ok: false, error: { code: "NOT_FOUND" } },
+          ],
+        },
+        text: null,
+      },
+    } satisfies McpCallAnswer);
+    await runtime.call(
+      "a",
+      {
+        ...LAUNCH,
+        tool: "terminal.sendCommandMany",
+        args: {
+          sends: [
+            { terminalId: "host-t-3", command: "go" },
+            { terminalId: "host-t-4", command: "go" },
+          ],
+          notify: true,
+        },
+      },
+      { tier: "core" }
+    );
+    runtime.receiveNotices("studio", { notices: [notice({ callId: "call-1" })] });
+    runtime.receiveNoticeStatus("studio", {
+      calls: [
+        { helpSessionId: "a", callId: "call-1", status: "unknown" },
+        { helpSessionId: "a", callId: "call-2", status: "unknown" },
+      ],
+    });
+
+    const lost = queued.filter(({ wake }) => wake.kind === "lost");
+    expect(lost.map(({ wake }) => wake.lostNotices)).toEqual([
+      { hostName: "studio-01", terminalIds: ["host-t-2", "host-t-3"] },
+    ]);
+  });
+
   it("reports no loss for a call whose answer never came back, which may never have reached the host", async () => {
     relayCall.mockRejectedValueOnce(Object.assign(new Error("lost"), { code: "OUTCOME_UNKNOWN" }));
     await runtime.call("a", LAUNCH, { tier: "core" });

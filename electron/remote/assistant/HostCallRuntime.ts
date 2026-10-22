@@ -214,15 +214,32 @@ interface NoticePin {
   settled?: boolean;
 }
 
-/** The host answered a call: it holds a record of it, and a launch names its terminal. */
+/**
+ * The host answered a call: it holds a record of it. A launch names the
+ * terminal it made only in its result, and a batch says which items ran:
+ * one refused armed nothing.
+ */
 function noteAnswered(
   pin: NoticePin,
   result: Extract<McpCallAnswer, { status: "done" }>["result"]
 ): void {
   pin.answered = true;
-  const launched = result.structured?.terminalId;
-  if (typeof launched === "string" && !pin.terminalIds.includes(launched)) {
-    pin.terminalIds.push(launched);
+  const learn = (terminalId: unknown): void => {
+    if (typeof terminalId === "string" && !pin.terminalIds.includes(terminalId)) {
+      pin.terminalIds.push(terminalId);
+    }
+  };
+  learn(result.structured?.terminalId);
+  const items: unknown = result.structured?.results;
+  if (!Array.isArray(items)) return;
+  for (const item of items as unknown[]) {
+    if (item === null || typeof item !== "object") continue;
+    const { target, ok, result: value } = item as Record<string, unknown>;
+    if (ok === false) {
+      pin.terminalIds = pin.terminalIds.filter((terminalId) => terminalId !== target);
+    } else if (ok === true && value !== null && typeof value === "object") {
+      learn((value as Record<string, unknown>).terminalId);
+    }
   }
 }
 
@@ -488,9 +505,10 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
       pin.settled = true;
       // One the host never answered may never have reached it: nothing was lost.
       if (status !== "unknown" || pin.answered !== true) continue;
-      // Nor was a notice that already came, with nothing to follow it.
+      // Nor was a notice that already came, with nothing to follow it. With
+      // no terminals known, what came can't say nothing else was asked for.
       const missing = pin.terminalIds.filter((terminalId) => !pin.noticed.has(terminalId));
-      if (pin.terminalIds.length > 0 ? missing.length === 0 : pin.noticed.size > 0) continue;
+      if (pin.terminalIds.length > 0 && missing.length === 0) continue;
       this.noticePins.delete(callId);
       if (!this.stillRunning(pin.run)) continue;
       const key = `${pin.run.sessionId}\u0000${pin.run.terminalId}\u0000${pin.run.launchGeneration}`;

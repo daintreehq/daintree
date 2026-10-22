@@ -219,6 +219,35 @@ describe("RelayNoticeOutbox (#13500, #13930)", () => {
     h.outbox.dispose();
   });
 
+  it("never crowds out a notice that is out to the Shell now, and says which it did", async () => {
+    const sessions: MetricsSessionContext[] = [];
+    const senders = new SenderSessions();
+    const dropped: string[] = [];
+    let nextId = 0;
+    const outbox = new RelayNoticeOutbox({
+      server: { sessions, onSession: () => () => {} },
+      senders: () => senders,
+      newId: () => `notice-${++nextId}`,
+      onDropped: (_senderId, notices) => dropped.push(...notices.map((n) => n.callId)),
+    });
+    const link = fakeSession("link-1");
+    link.answers.push(() => new Promise(() => {}));
+    senders.bind(link.ctx.session, "sender-a", "link-1");
+    sessions.push(link.ctx);
+
+    outbox.enqueue("sender-a", [notice("t-0", "out-now")]);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(link.payloads).toHaveLength(1);
+    outbox.enqueue(
+      "sender-a",
+      Array.from({ length: MAX_RELAY_NOTICES_PER_SENDER }, (_, i) => notice(`t-${i + 1}`, `later-${i}`))
+    );
+
+    expect(dropped).toEqual(["later-0"]);
+    expect(outbox.waitingCalls("sender-a", "help-1").has("out-now")).toBe(true);
+    outbox.dispose();
+  });
+
   it("keeps the newest of a sender's notices past its bound", async () => {
     const h = harness();
     h.outbox.enqueue(
