@@ -196,6 +196,36 @@ describe("resource box handoff", () => {
     expect(canOpenResourceBoxOnHost("dt-feature-x")).toBe(false);
   });
 
+  it("adds nothing for a worktree that went away while ssh was asked", async () => {
+    client.probe.mockResolvedValue(probeResult({ hostModeListening: true }));
+
+    await expect(openResourceBoxOnHost({ ...box, isCurrent: () => false })).rejects.toMatchObject({
+      code: "CANCELLED",
+    });
+    expect(client.add).not.toHaveBeenCalled();
+  });
+
+  it("places nothing once the worktree's machine changed while connecting", async () => {
+    client.probe.mockResolvedValue(probeResult({ hostModeListening: true }));
+    let current = true;
+    client.connectAndSettle.mockImplementation(async () => {
+      current = false;
+      return connected;
+    });
+
+    await expect(openResourceBoxOnHost({ ...box, isCurrent: () => current })).rejects.toMatchObject(
+      { code: "CANCELLED" }
+    );
+    expect(requestHostSwitch).not.toHaveBeenCalled();
+  });
+
+  it("keeps a numbered name inside the host list's 64 characters", () => {
+    const long = "a".repeat(64);
+    const name = freeHostName(long, [entry(descriptor(long, "x"))]);
+    expect(name).toHaveLength(64);
+    expect(name.endsWith("-2")).toBe(true);
+  });
+
   it("numbers the box's name past hosts already called that", () => {
     const hosts = [entry(descriptor("box", "a")), entry(descriptor("box-2", "b"))];
     expect(freeHostName("root@box.example.com", hosts)).toBe("box-3");

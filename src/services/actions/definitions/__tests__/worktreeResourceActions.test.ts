@@ -49,10 +49,10 @@ vi.mock("@/store/terminalStore", () => ({
 }));
 
 const mockOpenResourceBoxOnHost = vi.fn();
-const mockCanOpenResourceBoxOnHost = vi.fn((target: unknown) => typeof target === "string");
+const mockCanOfferResourceBoxHandoff = vi.fn(() => true);
 vi.mock("@/components/Hosts/resourceHostHandoff", () => ({
   openResourceBoxOnHost: (...args: unknown[]) => mockOpenResourceBoxOnHost(...args),
-  canOpenResourceBoxOnHost: (target: unknown) => mockCanOpenResourceBoxOnHost(target),
+  canOfferResourceBoxHandoff: () => mockCanOfferResourceBoxHandoff(),
 }));
 
 type ActionFactory = () => AnyActionDefinition;
@@ -95,15 +95,38 @@ describe("worktree resource action definitions", () => {
     mockOpenResourceBoxOnHost.mockReset();
   });
 
-  it("openOnHost is offered only for a worktree whose ready status named a machine", () => {
+  it("openOnHost is gated on the window, not on the focused worktree, and stays out of the palette", () => {
     const def = registry.get("worktree.resource.openOnHost")!();
     mockWorktrees.set("/plain", { resourceStatus: { lastStatus: "ready" } });
-    mockWorktrees.set("/box", { resourceStatus: { lastStatus: "ready", ssh: "dt-feature-x" } });
 
+    // The card names its own worktree in the args, which isEnabled never sees.
+    mockCanOfferResourceBoxHandoff.mockReturnValue(true);
+    expect(def.isEnabled!({ activeWorktreeId: "/plain" })).toBe(true);
+    mockCanOfferResourceBoxHandoff.mockReturnValue(false);
     expect(def.isEnabled!({ activeWorktreeId: "/plain" })).toBe(false);
-    expect(def.disabledReason!({ activeWorktreeId: "/plain" })).toMatch(/ssh target/);
-    expect(def.isEnabled!({ activeWorktreeId: "/box" })).toBe(true);
-    expect(def.disabledReason!({ activeWorktreeId: "/box" })).toBeUndefined();
+    expect(def.disabledReason!({})).toMatch(/can't open/);
+    mockCanOfferResourceBoxHandoff.mockReturnValue(true);
+    expect(def.paletteHidden).toBe(true);
+  });
+
+  it("openOnHost shows ssh's own words when the machine can't be reached", async () => {
+    mockWorktrees.set("/box", {
+      id: "/box",
+      path: "/box",
+      resourceStatus: { lastStatus: "ready", ssh: "dt-feature-x" },
+    });
+    const refusal = Object.assign(new Error("ssh couldn't reach dt-feature-x"), {
+      name: "AppError",
+      code: "HOST_DISCONNECTED",
+      userMessage: "Host key verification failed.",
+    });
+    mockOpenResourceBoxOnHost.mockRejectedValue(refusal);
+    const def = registry.get("worktree.resource.openOnHost")!();
+
+    await expect(def.run!({ worktreeId: "/box" }, { projectId: "proj-1" })).rejects.toBe(refusal);
+    expect(mockNotify).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "Host key verification failed." })
+    );
   });
 
   it("openOnHost hands the worktree, its project and the box's target to the handoff", async () => {
@@ -123,6 +146,7 @@ describe("worktree resource action definitions", () => {
       projectId: "proj-1",
       sshTarget: "dt-feature-x",
       askFirst: false,
+      isCurrent: expect.any(Function),
     });
     expect(result).toEqual({ status: "placing", hostId: "dt-feature-x" });
   });

@@ -88,6 +88,12 @@ export const EVENT_META: Record<keyof DaintreeEventMap, EventMetadata> = {
     requiresTimestamp: true,
     description: "Worktree was removed from monitoring",
   },
+  "sys:worktree:resource-teardown": {
+    category: "system",
+    requiresContext: true,
+    requiresTimestamp: true,
+    description: "A worktree's resource teardown succeeded",
+  },
   "sys:pr:detected": {
     category: "system",
     requiresContext: true,
@@ -508,6 +514,7 @@ export type DaintreeEventMap = {
   "sys:worktree:selectByName": WorktreeSelectByNamePayload;
   "sys:worktree:update": WorktreeState;
   "sys:worktree:remove": { worktreeId: string; timestamp: number };
+  "sys:worktree:resource-teardown": { worktreeId: string; timestamp: number };
 
   "watcher:change": WatcherChangePayload;
 
@@ -1111,6 +1118,7 @@ export const ALL_EVENT_TYPES: Array<keyof DaintreeEventMap> = [
   "sys:worktree:selectByName",
   "sys:worktree:update",
   "sys:worktree:remove",
+  "sys:worktree:resource-teardown",
   "watcher:change",
   "sys:pr:detected",
   "sys:pr:cleared",

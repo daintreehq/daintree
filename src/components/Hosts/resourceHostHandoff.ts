@@ -17,6 +17,9 @@ import { getViewHostId } from "@/hooks/useHostConnection";
 import { isRemoteShellSupported, remoteConnectionKind } from "@/lib/remoteHosts";
 import { ClientAppError } from "@/utils/clientAppError";
 
+/** The host list's own limit on a name (`HostRegistry`), with no editor here to fix one. */
+const MAX_HOST_NAME_LENGTH = 64;
+
 export interface ResourceBox {
   worktreeId: string;
   worktreePath: string;
@@ -25,6 +28,12 @@ export interface ResourceBox {
   sshTarget: string;
   /** Asked for by an agent or a plugin: the switch dialog never moves the window by itself. */
   askFirst?: boolean;
+  /**
+   * Whether the worktree is still there with this machine to open, asked
+   * again after each wait: a host added for a worktree deleted meanwhile
+   * would have nothing left to remove it.
+   */
+  isCurrent?: () => boolean;
 }
 
 /**
@@ -40,26 +49,35 @@ export type ResourceHandoffOutcome =
  * window's worktree lives on its host, not here), and only where hosts are
  * reached over ssh: a Windows Shell reaches them through WSL.
  */
+export function canOfferResourceBoxHandoff(): boolean {
+  return isRemoteShellSupported() && remoteConnectionKind() === "ssh" && getViewHostId() === null;
+}
+
 export function canOpenResourceBoxOnHost(sshTarget: string | undefined): sshTarget is string {
   return (
-    typeof sshTarget === "string" &&
-    isValidSshTarget(sshTarget) &&
-    isRemoteShellSupported() &&
-    remoteConnectionKind() === "ssh" &&
-    getViewHostId() === null
+    typeof sshTarget === "string" && isValidSshTarget(sshTarget) && canOfferResourceBoxHandoff()
   );
 }
 
 /** The box's default name, numbered past any host already called that. */
 export function freeHostName(sshTarget: string, hosts: HostListEntry[]): string {
-  const base = defaultHostName(sshTarget);
+  const base = defaultHostName(sshTarget).slice(0, MAX_HOST_NAME_LENGTH);
   const taken = (name: string) =>
     isReservedHostName(name) || hosts.some((entry) => sameHostName(entry.descriptor.name, name));
   if (!taken(base)) return base;
   for (let n = 2; ; n++) {
-    const candidate = `${base}-${n}`;
+    const suffix = `-${n}`;
+    const candidate = `${base.slice(0, MAX_HOST_NAME_LENGTH - suffix.length)}${suffix}`;
     if (!taken(candidate)) return candidate;
   }
+}
+
+function gone(): ClientAppError {
+  return new ClientAppError(
+    "CANCELLED",
+    "The worktree or its machine went away during the handoff",
+    "The worktree was removed, or its resource stopped reporting this machine, before it could open there."
+  );
 }
 
 function isUsable(state: HostConnectionState): boolean {
@@ -92,6 +110,8 @@ export async function openResourceBoxOnHost(box: ResourceBox): Promise<ResourceH
       probe.sshError ?? `ssh couldn't reach ${box.sshTarget}.`
     );
   }
+  const stillCurrent = () => box.isCurrent?.() ?? true;
+  if (!stillCurrent()) throw gone();
   const hosts = await remoteHostsClient.list();
   const existing: HostDescriptor | undefined = hosts.find((entry) =>
     sameHostAccount(entry.descriptor.connection, connection)
@@ -120,6 +140,7 @@ export async function openResourceBoxOnHost(box: ResourceBox): Promise<ResourceH
   if (!probe.hostModeListening) return setup();
   const state = await remoteHostsClient.connectAndSettle(host.id);
   if (!isUsable(state)) return setup();
+  if (!stillCurrent()) throw gone();
 
   const requestId = requestHostSwitch({
     toHostId: host.id,

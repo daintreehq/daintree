@@ -1083,6 +1083,28 @@ describe("WorkspaceService.runLifecycleTeardown — resource teardown integratio
     expect(resourceTeardownIdx).toBeLessThan(teardownIdx);
   });
 
+  it("stops offering the box's ssh target once a delete's resource teardown succeeds", async () => {
+    const monitor = createAndRegisterMonitor();
+    monitor.setHasResourceConfig(true);
+    monitor.setResourceStatus({ lastStatus: "ready", ssh: "dt-feature-x" });
+
+    const fsModule = await import("fs/promises");
+    vi.mocked(fsModule.access).mockImplementation(async (p: unknown) => {
+      if (n(p as string).endsWith("/test/root/.daintree/config.json")) return undefined;
+      throw new Error("ENOENT");
+    });
+    vi.mocked(fsModule.readFile).mockResolvedValue(
+      JSON.stringify({ resource: { teardown: ["terraform destroy"] } }) as never
+    );
+    const childProcessModule = await import("child_process");
+    vi.mocked(childProcessModule.spawn).mockImplementation(makeSpawnChild(0));
+
+    await service["runLifecycleTeardown"]("/test/worktree", monitor, false);
+
+    expect(monitor.resourceStatus?.ssh).toBeUndefined();
+    expect(monitor.resourceStatus?.lastStatus).toBe("ready");
+  });
+
   it("runs only regular teardown when no resource config", async () => {
     const monitor = createAndRegisterMonitor();
 

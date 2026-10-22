@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { HostDescriptor } from "../../../../shared/types/remoteHosts.js";
-import type { WorktreeState } from "../../../../shared/types/worktree.js";
 import { events } from "../../../services/events.js";
 import { watchOwnedHostCleanup } from "../ownedHostCleanup.js";
 
@@ -26,16 +25,8 @@ function removeWorktree(worktreeId: string): void {
   events.emit("sys:worktree:remove", { worktreeId, timestamp: Date.now() });
 }
 
-function finishTeardown(
-  worktreeId: string,
-  state: "success" | "failed" | "running" = "success",
-  phase: "resource-teardown" | "resource-pause" = "resource-teardown",
-  startedAt = 1
-): void {
-  events.emit("sys:worktree:update", {
-    id: worktreeId,
-    lifecycleStatus: { phase, state, startedAt },
-  } as unknown as WorktreeState);
+function finishTeardown(worktreeId: string): void {
+  events.emit("sys:worktree:resource-teardown", { worktreeId, timestamp: Date.now() });
 }
 
 describe("watchOwnedHostCleanup", () => {
@@ -124,35 +115,42 @@ describe("watchOwnedHostCleanup", () => {
     expect(forget).toHaveBeenCalledTimes(1);
   });
 
-  it.each([
-    ["a teardown still running", "running", "resource-teardown"],
-    ["a failed teardown", "failed", "resource-teardown"],
-    ["a pause", "success", "resource-pause"],
-  ] as const)("keeps the host through %s", async (_label, state, phase) => {
-    const forget = vi.fn(async () => {});
-    stop = watchOwnedHostCleanup({ list: () => [host("box-a", "/wt/a")], forget, probe: enoent });
+  it("tries a refused removal again once the install that blocked it is over", async () => {
+    let installing = true;
+    const forget = vi.fn(async () => {
+      if (installing) throw new Error("It can be removed once the install finishes");
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    stop = watchOwnedHostCleanup({
+      list: () => [host("box-a", "/wt/a")],
+      forget,
+      probe: enoent,
+      retryDelayMs: 5,
+    });
 
-    finishTeardown("/wt/a", state, phase);
+    finishTeardown("/wt/a");
+    await vi.waitFor(() => expect(forget).toHaveBeenCalledTimes(1));
+    installing = false;
 
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(forget).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(forget).toHaveBeenCalledTimes(2));
+    warn.mockRestore();
   });
 
-  it("acts once on a teardown its every later update repeats, and again on the next one", async () => {
+  it("stops retrying once the host is gone some other way", async () => {
     const hosts = [host("box-a", "/wt/a")];
-    const list = vi.fn(() => hosts);
-    const forget = vi.fn(async () => {});
-    stop = watchOwnedHostCleanup({ list, forget, probe: enoent });
+    const forget = vi.fn(async () => {
+      throw new Error("installing");
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    stop = watchOwnedHostCleanup({ list: () => hosts, forget, probe: enoent, retryDelayMs: 5 });
 
-    finishTeardown("/wt/a", "success", "resource-teardown", 1);
+    finishTeardown("/wt/a");
     await vi.waitFor(() => expect(forget).toHaveBeenCalledTimes(1));
-    list.mockClear();
-    finishTeardown("/wt/a", "success", "resource-teardown", 1);
-    expect(list).not.toHaveBeenCalled();
+    hosts.length = 0;
 
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    finishTeardown("/wt/a", "success", "resource-teardown", 2);
-    await vi.waitFor(() => expect(forget).toHaveBeenCalledTimes(2));
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(forget).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
   });
 
   it("stops listening once disposed", () => {

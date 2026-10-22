@@ -4,12 +4,17 @@ import { events } from "../../services/events.js";
 import { withTimeout } from "../../utils/withTimeout.js";
 
 const WORKTREE_GONE_PROBE_TIMEOUT_MS = 5000;
+/** A removal refused while the host is installing or being re-pointed is tried again this often. */
+const RETRY_DELAY_MS = 15_000;
+/** About fifteen minutes of retries: longer than an install takes, short of retrying forever. */
+const MAX_RETRIES = 60;
 
 export interface OwnedHostCleanupOptions {
   list(): HostDescriptor[];
   forget(hostId: HostId): Promise<void>;
   /** Resolves when the worktree's root still exists; rejects with ENOENT once it is gone. */
   probe?: (worktreePath: string) => Promise<unknown>;
+  retryDelayMs?: number;
 }
 
 /**
@@ -35,26 +40,41 @@ async function isWorktreeGone(probe: Promise<unknown>): Promise<boolean> {
  */
 export function watchOwnedHostCleanup(options: OwnedHostCleanupOptions): () => void {
   const probe = options.probe ?? lstat;
+  const retryDelayMs = options.retryDelayMs ?? RETRY_DELAY_MS;
   const pending = new Set<string>();
-  /** Teardowns already acted on, by worktree and start: a settled status repeats on every update. */
-  const handledTeardowns = new Set<string>();
+  const retryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  let disposed = false;
 
-  const forgetOwned = (worktreeId: string, confirm?: () => Promise<boolean>): void => {
-    if (pending.has(worktreeId)) return;
-    if (!options.list().some((host) => host.ownerWorktreeId === worktreeId)) return;
+  const ownedBy = (worktreeId: string) =>
+    options.list().filter((host) => host.ownerWorktreeId === worktreeId);
+
+  const forgetOwned = (worktreeId: string, confirm?: () => Promise<boolean>, attempt = 0): void => {
+    if (disposed || pending.has(worktreeId)) return;
+    if (ownedBy(worktreeId).length === 0) return;
     pending.add(worktreeId);
     void (async () => {
+      let refused = false;
       try {
         if (confirm && !(await confirm())) return;
         // Read again: the list may have changed while the folder was checked.
-        const owned = options.list().filter((host) => host.ownerWorktreeId === worktreeId);
-        for (const host of owned) {
+        for (const host of ownedBy(worktreeId)) {
           await options.forget(host.id).catch((error: unknown) => {
+            refused = true;
             console.warn("[RemoteHosts] Removing a worktree's resource host failed:", error);
           });
         }
       } finally {
         pending.delete(worktreeId);
+      }
+      // Refused while installing or being re-pointed: the box is still gone, so
+      // try again once that settles rather than leave a host nothing removes.
+      if (refused && !disposed && attempt < MAX_RETRIES && !retryTimers.has(worktreeId)) {
+        const timer = setTimeout(() => {
+          retryTimers.delete(worktreeId);
+          forgetOwned(worktreeId, undefined, attempt + 1);
+        }, retryDelayMs);
+        timer.unref?.();
+        retryTimers.set(worktreeId, timer);
       }
     })();
   };
@@ -62,16 +82,14 @@ export function watchOwnedHostCleanup(options: OwnedHostCleanupOptions): () => v
   const stopRemove = events.on("sys:worktree:remove", ({ worktreeId }) => {
     forgetOwned(worktreeId, () => isWorktreeGone(probe(worktreeId)));
   });
-  const stopUpdate = events.on("sys:worktree:update", (worktree) => {
-    const status = worktree.lifecycleStatus;
-    if (status?.phase !== "resource-teardown" || status.state !== "success") return;
-    const key = `${worktree.id}:${status.startedAt}`;
-    if (handledTeardowns.has(key)) return;
-    handledTeardowns.add(key);
-    forgetOwned(worktree.id);
+  const stopTeardown = events.on("sys:worktree:resource-teardown", ({ worktreeId }) => {
+    forgetOwned(worktreeId);
   });
   return () => {
+    disposed = true;
     stopRemove();
-    stopUpdate();
+    stopTeardown();
+    for (const timer of retryTimers.values()) clearTimeout(timer);
+    retryTimers.clear();
   };
 }

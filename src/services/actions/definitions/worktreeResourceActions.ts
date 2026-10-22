@@ -6,10 +6,10 @@ import type { WorktreeResourceStatus } from "@shared/types/worktree";
 import { worktreeClient } from "@/clients";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { notify } from "@/lib/notify";
-import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { clientErrorText } from "@/utils/clientAppError";
 import { TerminalSpawnSourceSchema, AddPanelFocusPolicySchema } from "./schemas";
 import {
-  canOpenResourceBoxOnHost,
+  canOfferResourceBoxHandoff,
   openResourceBoxOnHost,
 } from "@/components/Hosts/resourceHostHandoff";
 
@@ -29,7 +29,9 @@ function notifyWorktreeResourceError(
   worktreeId: string | undefined
 ): void {
   try {
-    const message = formatErrorMessage(err, fallbackMessage) || fallbackMessage;
+    // An AppError's own words when it has them (ssh's refusal, the host list's
+    // reason), never the `[AppError|…]` prefix an IPC error carries.
+    const message = clientErrorText(err, fallbackMessage) || fallbackMessage;
     notify({
       type: "error",
       priority: "high",
@@ -390,6 +392,9 @@ export function registerWorktreeResourceActions(
         "Adds the resource's machine to this device's host list, and can lead on to installing and starting Daintree there.",
       scope: "renderer",
       nonRepeatable: true,
+      // Its confirmation lives on the card's environment popover, the one
+      // place a person reaches it from; a palette run would skip it.
+      paletteHidden: true,
       argsSchema: z
         .object({
           worktreeId: z
@@ -400,22 +405,14 @@ export function registerWorktreeResourceActions(
             ),
         })
         .optional(),
-      isEnabled: (ctx: ActionContext) => {
-        const worktreeId = ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
-        if (!worktreeId) return false;
-        const worktree = getCurrentViewStore().getState().worktrees.get(worktreeId);
-        return canOpenResourceBoxOnHost(worktree?.resourceStatus?.ssh);
-      },
-      disabledReason: (ctx: ActionContext) => {
-        const worktreeId = ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
-        if (!worktreeId) return "No worktree selected";
-        const worktree = getCurrentViewStore().getState().worktrees.get(worktreeId);
-        if (!worktree?.resourceStatus?.ssh)
-          return "The worktree's resource hasn't reported a ready machine with an ssh target";
-        if (!canOpenResourceBoxOnHost(worktree.resourceStatus.ssh))
-          return "This window can't open the resource's machine as a host";
-        return undefined;
-      },
+      // Only what holds for every worktree here: the card names its own
+      // worktree in the args, which this gate never sees, so run() checks
+      // that worktree's machine.
+      isEnabled: () => canOfferResourceBoxHandoff(),
+      disabledReason: () =>
+        canOfferResourceBoxHandoff()
+          ? undefined
+          : "This window can't open a resource's machine as a host",
       selfNotifiesOnExecutionError: true,
       run: async (args, ctx: ActionContext) => {
         const targetWorktreeId = args?.worktreeId ?? ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
@@ -434,6 +431,9 @@ export function registerWorktreeResourceActions(
             projectId: ctx.projectId,
             sshTarget,
             askFirst: ctx.dispatchSource === "agent" || ctx.dispatchSource === "plugin",
+            isCurrent: () =>
+              getCurrentViewStore().getState().worktrees.get(worktree.id)?.resourceStatus?.ssh ===
+              sshTarget,
           });
         } catch (err) {
           notifyWorktreeResourceError(
