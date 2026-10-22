@@ -2044,26 +2044,137 @@ type AgentResumeTemplate = {
 };
 
 /**
- * One `contributes.fileEditors` entry (#12323). Declares that the plugin's
- * renderer registers an editor view for files with the listed extensions,
- * offered by the host file panel as its writable **Edit** mode.
+ * One `contributes.fileEditors` entry (#12323, #13809): an editor the host
+ * file panel offers for matching files. Exactly one of `slot` / `view`.
  *
- * `slot` names a builtin view id the plugin's renderer entry registers with
- * `registerBuiltinView`; the host resolves it enable-aware, so disabling the
- * plugin removes the mode live. Built-in plugins only in v1: the builtin view
- * registry is compiled into the host bundle, which an installed plugin's
- * renderer cannot reach, so the host refuses the contribution from any other
- * origin at load.
+ * A **view-backed** editor names one of the plugin's own `location:
+ * "fileEditor"` views. `mode: "edit"` fills the file panel's Edit mode;
+ * `mode: "view"` fills Rendered for a type the host cannot render itself. The
+ * view receives a host-owned document as {@link PanelViewProps.fileDocument}.
+ * Any plugin may declare one; the mode is labelled with the plugin's name, and
+ * when several editors match the user picks with "Edit with…", remembered per
+ * project.
+ *
+ * A **slot-backed** editor names a builtin view id the plugin's renderer entry
+ * registers with `registerBuiltinView`. Built-in plugins only: that registry
+ * is compiled into the host bundle, which no other plugin's renderer reaches.
+ *
+ * Matching is by `extensions` and, for a `"scope": "project"` plugin only, by
+ * `paths` — globs relative to the project or worktree root.
  */
 interface FileEditorContribution {
     /** Namespaced at runtime as `{pluginId}.{id}`. */
     id: string;
-    /** Builtin view id the plugin's renderer registers for the editor surface. */
-    slot: string;
+    /** Builtin view id the plugin's renderer registers for the editor surface. Built-in plugins only. */
+    slot?: string;
+    /** Id of one of this plugin's `location: "fileEditor"` views. */
+    view?: string;
+    /** What a view-backed editor fills: the Edit mode, or Rendered for a type the host can't render. */
+    mode?: FileEditorMode;
     /** Lower-case extensions without the dot (`["md", "markdown"]`), matched case-insensitively. */
-    extensions: string[];
+    extensions?: string[];
+    /** Project-relative globs, such as `content/entries/*.json`. Project plugins only. */
+    paths?: string[];
     /** Largest file the editor accepts, in bytes. Absent means the host's default cap. */
     maxBytes?: number;
+}
+/** Which file panel mode a view-backed file editor fills. */
+type FileEditorMode = "edit" | "view";
+/** What {@link PluginFileDocument.read} found on disk. */
+type PluginFileDocumentReadResult = {
+    status: "ok";
+    /** The file's text: a UTF-8 BOM stripped, line endings as `\n`. */
+    text: string;
+    /** Opaque token for these exact bytes; pass it back to `save`. */
+    revision: string;
+}
+/** Gone, unreadable, or outside the project. */
+ | {
+    status: "unavailable";
+}
+/** Larger than the editor's `maxBytes`. */
+ | {
+    status: "too-large";
+}
+/** Not UTF-8 text. */
+ | {
+    status: "not-text";
+};
+/** The outcome of {@link PluginFileDocument.save}. */
+type PluginFileDocumentSaveResult = {
+    status: "saved";
+    revision: string;
+}
+/**
+ * The file changed on disk since `expectedRevision`. Nothing was written,
+ * and the document is marked as in conflict until a later save lands or the
+ * draft is discarded. `revision` is what is on disk now, null when the file
+ * is gone.
+ */
+ | {
+    status: "conflict";
+    revision: string | null;
+} | {
+    status: "refused";
+    reason: "read-only" | "too-large" | "unavailable";
+} | {
+    status: "error";
+    message: string;
+};
+/** Why a {@link PluginFileDocument} changed under the view. */
+interface PluginFileDocumentChange {
+    /**
+     * `"disk"`: the file changed on disk — re-read it, or keep your draft and
+     * let the conflict stand. `"saved"`: the host saved the draft (the close
+     * prompt's Save). `"discarded"`: the host dropped the draft — re-read.
+     */
+    readonly reason: "disk" | "saved" | "discarded";
+    /**
+     * The revision now on disk; null when the file is gone, grew past the
+     * editor's `maxBytes`, or no longer reads as UTF-8 text.
+     */
+    readonly revision: string | null;
+}
+/**
+ * The host-owned document a `location: "fileEditor"` view edits (#13809),
+ * handed to it as {@link PanelViewProps.fileDocument}.
+ *
+ * The host reads and writes the file; the view never touches the filesystem
+ * for it. A save names the revision it was based on and is refused, not
+ * merged, when the file moved underneath — the same compare-and-replace the
+ * built-in Markdown editor relies on, checked in the main process at write
+ * time. A `mode: "view"` editor gets a read-only document.
+ */
+interface PluginFileDocument {
+    /** Absolute path of the file. */
+    readonly filePath: string;
+    /** Path relative to the project or worktree root, with forward slashes. */
+    readonly relativePath: string;
+    readonly fileName: string;
+    /** The mode this editor was opened in. */
+    readonly mode: FileEditorMode;
+    /** True for a `mode: "view"` editor: `save` and `setDraft` are refused. */
+    readonly readOnly: boolean;
+    /** Read the file as it is on disk now. */
+    read(): Promise<PluginFileDocumentReadResult>;
+    /** Write `text` if the file is still at `expectedRevision`. Clears the draft on success. */
+    save(text: string, options: {
+        expectedRevision: string;
+    }): Promise<PluginFileDocumentSaveResult>;
+    /**
+     * The unsaved text the host holds for this panel, or null when clean — read
+     * it on mount to restore a draft from before the user switched modes.
+     */
+    getDraft(): string | null;
+    /** Report the unsaved text (null when clean). The host derives "dirty" from it. */
+    setDraft(text: string | null): void;
+    /**
+     * Report a conflict your editor detected itself. It can raise the host's
+     * conflict flag but never clear one the host observed on disk.
+     */
+    setConflict(conflict: boolean): void;
+    /** Subscribe to changes made outside the view. Returns the unsubscribe. */
+    onDidChange(listener: (change: PluginFileDocumentChange) => void): () => void;
 }
 /**
  * One `contributes.previewTools` entry: a tool the dev-preview panel offers in
@@ -2319,11 +2430,15 @@ interface ContextMenuContribution {
  * installed plugin, Project settings → Plugins for a project plugin). It
  * receives {@link PanelViewProps.settingsContext}.
  *
+ * `fileEditor` backs a view-backed `contributes.fileEditors` entry: tied to no
+ * panel, mounted only inside the file panel for a file the editor matches, and
+ * handed the host-owned {@link PanelViewProps.fileDocument} (#13809).
+ *
  * `sidebar` is one of the sidebar's views: listed by `name` in the sidebar
  * header's switcher beside the built-in worktree list, ordered by `priority`,
  * gated by an optional `when`, and mounted below the header while chosen.
  */
-type ViewLocation = "panel" | "settings" | "sidebar";
+type ViewLocation = "panel" | "settings" | "fileEditor" | "sidebar";
 /**
  * Where a `location: "settings"` view is mounted, handed to it as
  * {@link PanelViewProps.settingsContext}. An installed plugin's section mounts
@@ -2351,7 +2466,7 @@ interface PluginSettingsViewContext {
  * so a view that switches on this must give unknown kinds a sensible default
  * rather than treat the list as exhaustive.
  */
-type PluginViewHostKind = "panel" | "surface" | "settings" | "sidebar";
+type PluginViewHostKind = "panel" | "surface" | "settings" | "fileEditor" | "sidebar";
 interface PluginViewHostContext {
     readonly kind: PluginViewHostKind;
 }
@@ -2684,6 +2799,16 @@ interface PanelViewProps {
      * mounted in, so it renders the rows for that scope. Absent for a panel view.
      */
     readonly settingsContext?: PluginSettingsViewContext;
+    /**
+     * Present only for a `location: "fileEditor"` view (#13809): the file it was
+     * opened for, owned by the host. Read it with a revision, save against the
+     * revision you read, and report your unsaved text with `setDraft` so the
+     * host's dirty indicator, Rendered preview and Save / Discard / Cancel prompt
+     * on close all apply. The draft is the host's, not the view's: it survives
+     * the user switching to Source and back, and the close prompt can save it
+     * after your view has unmounted.
+     */
+    readonly fileDocument?: PluginFileDocument;
     /**
      * Where the host mounted this view — a panel, a project surface, the plugin's
      * settings section, the sidebar — so one view can lay itself out for each
@@ -6974,4 +7099,4 @@ declare function syncedCollectionSnapshotChannel(channel: string): string;
  */
 declare function createSyncedCollection<T>(host: SyncedCollectionHost, channel: string, options: SyncedCollectionOptions<T>): Promise<SyncedCollection<T>>;
 
-export { AGENT_CONTEXT_DRAG_MIME, AGENT_CONTEXT_MAX_SOURCE_LABEL_LENGTH, AGENT_CONTEXT_MAX_TEXT_LENGTH, AGENT_CONTEXT_MAX_TITLE_LENGTH, type ActionDanger, type ActionDispatchError, type ActionDispatchResult, type ActionDispatchSuccess, type ActionError, type ActionErrorCode, type ActionExample, type ActionHandler, type ActionId, type ActionKind, type AgentContextDataTransfer, type AgentContextDragPayload, type AgentState, type AnyForgeProviderImpl, type AuthValidation, type AutoMergeCapability, type BuiltInActionId, type BuiltInPluginCapability, type CIStatus, type CheckRun, type CheckRunConclusion, type CheckRunStatus, type ChecksCapability, type ContextMenuContribution, type ContextMenuLocation, type CreateIssueInput, type CredentialImportCandidate, type CredentialImportCapability, type CredentialImportExpected, type CredentialImportFailureReason, type CredentialImportPreview, type CredentialImportUnavailable, type Credentials, type DisableAutoMergeResult, type EnableAutoMergeInput, type EnableAutoMergeResult, type FetchOptions, type FileDecoration, type FileDecorationContribution, type FileDecorationProviderDescriptor, type FileDecorationProviderImpl, type FileEditorContribution, type ForgeCodeProviderImpl, type ForgeIssueProviderImpl, type ForgeLabel, type ForgeProviderBaseImpl, type ForgeProviderContribution, type ForgeProviderDescriptor, type ForgeProviderImpl, type ForgeProviderKind, type ForgeProviderRole, type ForgeUser, type Issue, type KeybindingContribution, type ListOptions, type McpServerContribution, type MenuItemContribution, type MenuItemLocation, type NormalizedIssueState, type NormalizedPRState, PLUGIN_PROCESS_STREAM_CHANNEL, PLUGIN_STYLE_ROOT_ATTRIBUTE, type PR, type PRCommitSummary, type PRMergeIntent, type PRMergeMethod, type PRMergeStatus, type Page, type PanelContribution, type PanelMenuItemContribution, type PanelReloadResult, type PanelViewProps, type PluginAccountAccessToken, type PluginAccountApi, type PluginAccountContribution, type PluginAccountIdentity, type PluginAccountKind, type PluginAccountState, type PluginActionContribution, type PluginActionManifestEntry, type PluginActivate, type PluginActivationApi, type PluginAgentMcpContribution, type PluginAgentPane, type PluginAgentRun, type PluginAgentSnapshot, type PluginAgentsApi, type PluginAllAgentsSnapshot, type PluginAuthor, type PluginCanDispatchResult, type PluginCapability, type PluginChannelSchema, type PluginClipboardApi, type PluginConfirmOptions, type PluginContextValue, type PluginDatabase, type PluginDatabaseApi, type PluginDatabaseBackupResult, type PluginDatabaseChangeEvent, type PluginDatabaseColumn, type PluginDatabaseContribution, type PluginDatabaseLocation, type PluginDatabaseLocationKind, type PluginDatabaseOpenOptions, type PluginDatabaseParams, type PluginDatabaseQueryContribution, type PluginDatabaseQueryParam, type PluginDatabaseQueryParamFormat, type PluginDatabaseQueryParamType, type PluginDatabaseRunResult, type PluginDatabaseStatements, type PluginDispatchOptions, type PluginDocumentsApi, type PluginDuplexProcessHandle, type PluginDuplexProcessSpawnOptions, type PluginFocusedPanel, type PluginFocusedPanelKind, type PluginFsApi, type PluginFsDirEntry, type PluginFsReadFilesEncoding, type PluginFsReadFilesEntry, type PluginFsReadFilesErrorCode, type PluginFsReadFilesOptions, type PluginFsReadWithRevisionResult, type PluginFsScope, type PluginFsStat, type PluginFsWalkEntry, type PluginFsWalkOptions, type PluginFsWalkResult, type PluginFsWatchOptions, type PluginGitApi, type PluginGitCommitOptions, type PluginGitCommitResult, type PluginGitStatus, type PluginGitStatusFile, type PluginHandlerOptions, type PluginHostActionsApi, type PluginHostApi, type PluginHostCallOptions, type PluginHostSubscriptionOptions, type PluginIdentity, type PluginInputBoxOptions, type PluginInvokeOrigin, type PluginIpcContext, type PluginIpcHandler, type PluginLocalSocketScope, type PluginLogger, type PluginManifest, type PluginManifestScopes, type PluginMcpApi, type PluginMcpCaller, type PluginMcpJsonSchema, type PluginMcpToolAnnotations, type PluginMcpToolDefinition, type PluginNetworkScope, type PluginNotifyAction, type PluginNotifyOptions, type PluginNotifyResult, type PluginPanelBadge, type PluginPanelBadgeColor, type PluginPanelLifecycleEvent, type PluginPanelLifecyclePhase, type PluginPanelToolbarItemState, type PluginPdfMargins, type PluginPdfPageSize, type PluginProcessApi, type PluginProcessDataChunk, type PluginProcessHandle, type PluginProcessMode, type PluginProcessSpawnOptions, type PluginProcessStreamEvent, type PluginPromptCallOptions, type PluginPtyProcessHandle, type PluginPtyProcessSpawnOptions, type PluginQuickPickItem, type PluginQuickPickOptions, type PluginRenderPdfOptions, type PluginRenderPdfResult, type PluginSendToAgentOptions, type PluginSendToAgentRefusalReason, type PluginSendToAgentResult, type PluginSettingsScope, type PluginStorageScope, type PluginSystemApi, type PluginSystemWakeEvent, type PluginTerminalReadScreenOptions, type PluginTerminalScreenResult, type PluginTerminalsApi, type PluginToastOptions, type PluginToolbarButtonRuntimeState, type PluginTypedIpcHandler, type PluginViewHostContext, type PluginViewHostKind, type PluginWorktreeCardStatus, type PluginWorktreeFileState, type PluginWorktreeLinked, type PluginWorktreeLinkedIssue, type PluginWorktreeLinkedPR, type PluginWorktreeSnapshot, type PluginWorktreeStatus, type PluginWorktreeStatusFile, type PluginWorktreesChange, type PluginWorktreesResult, type PluginWorktreesUnavailableReason, type RateLimitInfo, type RepoMergeSettings, type RepoMetadata, type RepoRef, type ResourceRef, type SettingDefinition, type SettingFieldType, type SettingsApi, type StorageApi, type SyncedCollection, type SyncedCollectionDelta, type SyncedCollectionHost, type SyncedCollectionOptions, type SyncedCollectionSnapshot, type ToolbarButtonContribution, type ViewContribution, type ViewLocation, type WaitingReason, type WorkerRestartResult, createSyncedCollection, encodeAgentContextDragPayload, localAuthStubs, setAgentContextDragData, syncedCollectionSnapshotChannel };
+export { AGENT_CONTEXT_DRAG_MIME, AGENT_CONTEXT_MAX_SOURCE_LABEL_LENGTH, AGENT_CONTEXT_MAX_TEXT_LENGTH, AGENT_CONTEXT_MAX_TITLE_LENGTH, type ActionDanger, type ActionDispatchError, type ActionDispatchResult, type ActionDispatchSuccess, type ActionError, type ActionErrorCode, type ActionExample, type ActionHandler, type ActionId, type ActionKind, type AgentContextDataTransfer, type AgentContextDragPayload, type AgentState, type AnyForgeProviderImpl, type AuthValidation, type AutoMergeCapability, type BuiltInActionId, type BuiltInPluginCapability, type CIStatus, type CheckRun, type CheckRunConclusion, type CheckRunStatus, type ChecksCapability, type ContextMenuContribution, type ContextMenuLocation, type CreateIssueInput, type CredentialImportCandidate, type CredentialImportCapability, type CredentialImportExpected, type CredentialImportFailureReason, type CredentialImportPreview, type CredentialImportUnavailable, type Credentials, type DisableAutoMergeResult, type EnableAutoMergeInput, type EnableAutoMergeResult, type FetchOptions, type FileDecoration, type FileDecorationContribution, type FileDecorationProviderDescriptor, type FileDecorationProviderImpl, type FileEditorContribution, type FileEditorMode, type ForgeCodeProviderImpl, type ForgeIssueProviderImpl, type ForgeLabel, type ForgeProviderBaseImpl, type ForgeProviderContribution, type ForgeProviderDescriptor, type ForgeProviderImpl, type ForgeProviderKind, type ForgeProviderRole, type ForgeUser, type Issue, type KeybindingContribution, type ListOptions, type McpServerContribution, type MenuItemContribution, type MenuItemLocation, type NormalizedIssueState, type NormalizedPRState, PLUGIN_PROCESS_STREAM_CHANNEL, PLUGIN_STYLE_ROOT_ATTRIBUTE, type PR, type PRCommitSummary, type PRMergeIntent, type PRMergeMethod, type PRMergeStatus, type Page, type PanelContribution, type PanelMenuItemContribution, type PanelReloadResult, type PanelViewProps, type PluginAccountAccessToken, type PluginAccountApi, type PluginAccountContribution, type PluginAccountIdentity, type PluginAccountKind, type PluginAccountState, type PluginActionContribution, type PluginActionManifestEntry, type PluginActivate, type PluginActivationApi, type PluginAgentMcpContribution, type PluginAgentPane, type PluginAgentRun, type PluginAgentSnapshot, type PluginAgentsApi, type PluginAllAgentsSnapshot, type PluginAuthor, type PluginCanDispatchResult, type PluginCapability, type PluginChannelSchema, type PluginClipboardApi, type PluginConfirmOptions, type PluginContextValue, type PluginDatabase, type PluginDatabaseApi, type PluginDatabaseBackupResult, type PluginDatabaseChangeEvent, type PluginDatabaseColumn, type PluginDatabaseContribution, type PluginDatabaseLocation, type PluginDatabaseLocationKind, type PluginDatabaseOpenOptions, type PluginDatabaseParams, type PluginDatabaseQueryContribution, type PluginDatabaseQueryParam, type PluginDatabaseQueryParamFormat, type PluginDatabaseQueryParamType, type PluginDatabaseRunResult, type PluginDatabaseStatements, type PluginDispatchOptions, type PluginDocumentsApi, type PluginDuplexProcessHandle, type PluginDuplexProcessSpawnOptions, type PluginFileDocument, type PluginFileDocumentChange, type PluginFileDocumentReadResult, type PluginFileDocumentSaveResult, type PluginFocusedPanel, type PluginFocusedPanelKind, type PluginFsApi, type PluginFsDirEntry, type PluginFsReadFilesEncoding, type PluginFsReadFilesEntry, type PluginFsReadFilesErrorCode, type PluginFsReadFilesOptions, type PluginFsReadWithRevisionResult, type PluginFsScope, type PluginFsStat, type PluginFsWalkEntry, type PluginFsWalkOptions, type PluginFsWalkResult, type PluginFsWatchOptions, type PluginGitApi, type PluginGitCommitOptions, type PluginGitCommitResult, type PluginGitStatus, type PluginGitStatusFile, type PluginHandlerOptions, type PluginHostActionsApi, type PluginHostApi, type PluginHostCallOptions, type PluginHostSubscriptionOptions, type PluginIdentity, type PluginInputBoxOptions, type PluginInvokeOrigin, type PluginIpcContext, type PluginIpcHandler, type PluginLocalSocketScope, type PluginLogger, type PluginManifest, type PluginManifestScopes, type PluginMcpApi, type PluginMcpCaller, type PluginMcpJsonSchema, type PluginMcpToolAnnotations, type PluginMcpToolDefinition, type PluginNetworkScope, type PluginNotifyAction, type PluginNotifyOptions, type PluginNotifyResult, type PluginPanelBadge, type PluginPanelBadgeColor, type PluginPanelLifecycleEvent, type PluginPanelLifecyclePhase, type PluginPanelToolbarItemState, type PluginPdfMargins, type PluginPdfPageSize, type PluginProcessApi, type PluginProcessDataChunk, type PluginProcessHandle, type PluginProcessMode, type PluginProcessSpawnOptions, type PluginProcessStreamEvent, type PluginPromptCallOptions, type PluginPtyProcessHandle, type PluginPtyProcessSpawnOptions, type PluginQuickPickItem, type PluginQuickPickOptions, type PluginRenderPdfOptions, type PluginRenderPdfResult, type PluginSendToAgentOptions, type PluginSendToAgentRefusalReason, type PluginSendToAgentResult, type PluginSettingsScope, type PluginStorageScope, type PluginSystemApi, type PluginSystemWakeEvent, type PluginTerminalReadScreenOptions, type PluginTerminalScreenResult, type PluginTerminalsApi, type PluginToastOptions, type PluginToolbarButtonRuntimeState, type PluginTypedIpcHandler, type PluginViewHostContext, type PluginViewHostKind, type PluginWorktreeCardStatus, type PluginWorktreeFileState, type PluginWorktreeLinked, type PluginWorktreeLinkedIssue, type PluginWorktreeLinkedPR, type PluginWorktreeSnapshot, type PluginWorktreeStatus, type PluginWorktreeStatusFile, type PluginWorktreesChange, type PluginWorktreesResult, type PluginWorktreesUnavailableReason, type RateLimitInfo, type RepoMergeSettings, type RepoMetadata, type RepoRef, type ResourceRef, type SettingDefinition, type SettingFieldType, type SettingsApi, type StorageApi, type SyncedCollection, type SyncedCollectionDelta, type SyncedCollectionHost, type SyncedCollectionOptions, type SyncedCollectionSnapshot, type ToolbarButtonContribution, type ViewContribution, type ViewLocation, type WaitingReason, type WorkerRestartResult, createSyncedCollection, encodeAgentContextDragPayload, localAuthStubs, setAgentContextDragData, syncedCollectionSnapshotChannel };
