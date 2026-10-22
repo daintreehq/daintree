@@ -4087,7 +4087,10 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
       manifest.contributes.layouts.forEach((layout, layoutIndex) => {
         const layoutPath = ["contributes", "layouts", layoutIndex] as const;
         const references = new Set<string>();
-        const groups = new Map<string, { location: string; size: number; entryIndex: number }>();
+        const groups = new Map<
+          string,
+          { location: string; projectScoped: boolean; size: number; entryIndex: number }
+        >();
         let maximizedSeen = false;
         layout.entries.forEach((entry, entryIndex) => {
           const path = [...layoutPath, "entries", entryIndex];
@@ -4114,6 +4117,7 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
 
           let location = entry.location ?? "grid";
           let size = 1;
+          let projectScoped = false;
           let reference: string;
           if (entry.panel !== undefined) {
             const panelId = entry.panel;
@@ -4136,23 +4140,18 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
               });
               return;
             }
-            const projectScoped = panel.scope === "project";
+            projectScoped = panel.scope === "project";
             location = entry.location ?? (projectScoped ? "dock" : "grid");
             const placementProblem =
               location === "grid" && projectScoped
                 ? 'a scope: "project" panel opens in the dock, never the grid'
                 : location === "dock" && panel.dockable === false
                   ? "the panel opts out of the dock with dockable: false"
-                  : entry.tabGroup !== undefined && projectScoped
-                    ? 'a scope: "project" panel belongs to no worktree, so it can\'t share a tab group'
-                    : undefined;
+                  : undefined;
             if (placementProblem !== undefined) {
               ctx.addIssue({
                 code: z.ZodIssueCode.custom,
-                path: [
-                  ...path,
-                  entry.tabGroup !== undefined && projectScoped ? "tabGroup" : "location",
-                ],
+                path: [...path, "location"],
                 message: `Layout "${layout.id}" can't place panel "${panelId}" that way: ${placementProblem}.`,
                 params: { errorCode: "layout_panel_placement" },
               });
@@ -4210,7 +4209,16 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
           if (entry.tabGroup !== undefined) {
             const group = groups.get(entry.tabGroup);
             if (group === undefined) {
-              groups.set(entry.tabGroup, { location, size, entryIndex });
+              groups.set(entry.tabGroup, { location, projectScoped, size, entryIndex });
+            } else if (group.projectScoped !== projectScoped) {
+              // A group's tabs share one worktree, and a project panel belongs
+              // to none: it can share a group only with other project panels.
+              ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: [...path, "tabGroup"],
+                message: `Layout "${layout.id}" tab group "${entry.tabGroup}" mixes scope: "project" panels with worktree panels — a group's tabs belong to one worktree, or all to the project.`,
+                params: { errorCode: "layout_tab_group_scope" },
+              });
             } else if (group.location !== location) {
               ctx.addIssue({
                 code: z.ZodIssueCode.custom,

@@ -29,6 +29,10 @@ vi.mock("@/services/layout/applyPluginLayout", () => ({ applyPluginLayout }));
 
 import { pluginLayoutActionId, usePluginLayouts } from "../usePluginLayouts";
 import { usePluginLayoutsStore } from "@/store/pluginLayoutsStore";
+import {
+  requestLayoutApplyConfirmation,
+  useLayoutApplyConfirmStore,
+} from "@/store/layoutApplyConfirmStore";
 
 const layout = (localId: string, name = `${localId} layout`): PluginLayoutConfig => ({
   id: `acme.${localId}`,
@@ -96,6 +100,29 @@ describe("usePluginLayouts (#13780)", () => {
     act(() => push?.({ layouts: [layout("a", "Renamed")] }));
     expect([...actions.keys()]).toEqual([pluginLayoutActionId("acme.a")]);
     expect(actions.get(pluginLayoutActionId("acme.a"))?.title).toBe("Apply layout: Renamed");
+  });
+
+  it("declines a pending confirmation for a layout that leaves the snapshot", async () => {
+    useLayoutApplyConfirmStore.setState({ current: null, queue: [] });
+    renderHook(() => usePluginLayouts());
+    act(() => push?.({ layouts: [layout("a"), layout("b")] }));
+    const forA = requestLayoutApplyConfirmation({
+      layoutId: "acme.a",
+      layoutName: "a layout",
+      pluginName: "Acme",
+      previewLines: [],
+    });
+    void requestLayoutApplyConfirmation({
+      layoutId: "acme.b",
+      layoutName: "b layout",
+      pluginName: "Acme",
+      previewLines: [],
+    });
+
+    act(() => push?.({ layouts: [layout("b")] }));
+
+    await expect(forA).resolves.toBe(false);
+    expect(useLayoutApplyConfirmStore.getState().current?.layoutId).toBe("acme.b");
   });
 
   it("withdraws every row on unmount", () => {

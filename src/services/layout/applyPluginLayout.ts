@@ -7,6 +7,7 @@ import { getPanelKindConfig, panelKindIsProjectScoped } from "@shared/config/pan
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { actionService } from "@/services/ActionService";
 import { usePanelStore } from "@/store/panelStore";
+import type { MaximizeTarget } from "@/store/slices/terminalFocusSlice";
 import { useLayoutUndoStore } from "@/store/layoutUndoStore";
 import { useRecipeStore } from "@/store/recipeStore";
 import { usePluginLayoutsStore } from "@/store/pluginLayoutsStore";
@@ -96,6 +97,7 @@ function sameUrl(a: string | undefined, b: string): boolean {
 
 /** Open one entry, or find the panel it already has, and return the panel ids it covers. */
 async function openEntry(
+  layout: PluginLayoutConfig,
   entry: PluginLayoutEntry,
   worktreeId: string | undefined,
   approvedDigests: ReadonlyMap<string, string>
@@ -106,8 +108,12 @@ async function openEntry(
 
   if (target.type === "panel") {
     const kind = target.panelKindId;
-    if (getPanelKindConfig(kind)?.extensionId === undefined) {
-      throw new Error(`Panel "${kind}" isn't registered`);
+    // Checked against the live kind, not the manifest the layout was read
+    // from: a reload while recipes start could have made it PTY-backed, and a
+    // shell must never start without the confirmation having listed it.
+    const config = getPanelKindConfig(kind);
+    if (config?.extensionId !== layout.pluginId || config.hasPty === true) {
+      throw new Error(`Panel "${kind}" isn't available`);
     }
     // Reused the way `panel.openPluginPanel` reuses: a project panel is the
     // project's wherever it sits, any other is this worktree's.
@@ -161,7 +167,13 @@ async function openEntry(
   // layout or its confirmation, never a plugin's or an agent's request alone.
   const result = await actionService.dispatch(
     "recipe.run",
-    { recipeId: target.recipeId, ...(worktreeId !== undefined && { worktreeId }) },
+    {
+      recipeId: target.recipeId,
+      ...(worktreeId !== undefined && { worktreeId }),
+      // The layout decides focus and maximize once everything has opened; a
+      // recipe left to its default would exit an unlisted panel's maximize.
+      focusPolicy: "preserve",
+    },
     { source: "user" }
   );
   if (!result.ok) throw new Error(result.error.message);
@@ -172,6 +184,37 @@ async function openEntry(
     Array.isArray(value.spawnedTerminalIds)
     ? value.spawnedTerminalIds.filter((id): id is string => typeof id === "string")
     : [];
+}
+
+/**
+ * The maximize repair for listed panels leaving a maximized group, as
+ * `placeTerminal` makes it for one panel leaving: a group that survives stays
+ * maximized on a tab still in it, and one that dissolved leaves its unlisted
+ * survivor maximized alone.
+ */
+function repairMaximizeAfterDetach(
+  target: MaximizeTarget,
+  members: readonly string[],
+  listed: ReadonlySet<string>
+): void {
+  const store = usePanelStore.getState;
+  if (target?.type !== "group" || !members.some((id) => listed.has(id))) return;
+  const group = store().tabGroups.get(target.id);
+  if (group) {
+    const { maximizedId } = store();
+    if (maximizedId !== null && !group.panelIds.includes(maximizedId)) {
+      store().setMaximizedId(group.activeTabId);
+    }
+    return;
+  }
+  store().exitMaximize();
+  const survivor = members.find(
+    (id) => !listed.has(id) && store().panelsById[id]?.location === "grid"
+  );
+  if (survivor !== undefined) {
+    const { gridCols, gridItemCount } = getGridLayoutSnapshot();
+    store().toggleMaximize(survivor, gridCols, gridItemCount, store().getPanelGroup);
+  }
 }
 
 /** Group, place and maximize what the entries opened. Only listed panels move. */
@@ -202,13 +245,22 @@ function arrange(placed: ReadonlyArray<{ entry: PluginLayoutEntry; ids: string[]
       existing.panelIds.length === ids.length &&
       ids.every((id) => existing.panelIds.includes(id))
     ) {
+      if (existing.panelIds.some((id, index) => id !== ids[index])) {
+        store().reorderPanelsInGroup(existing.id, ids);
+      }
       continue;
     }
     // A listed panel leaves whatever group it was in; the unlisted tabs it
-    // leaves behind stay where they are.
+    // leaves behind stay where they are, a maximize they held included.
+    const { maximizeTarget, tabGroups, focusedId } = store();
+    const maximizedMembers =
+      maximizeTarget?.type === "group" ? (tabGroups.get(maximizeTarget.id)?.panelIds ?? []) : [];
     for (const id of ids) store().removePanelFromGroup(id);
+    repairMaximizeAfterDetach(maximizeTarget, maximizedMembers, new Set(ids));
     const location = first.location === "dock" ? "dock" : "grid";
-    store().createTabGroup(location, worktreeId, ids, first.id);
+    // A focused member stays the visible tab, so focus never lands on a hidden one.
+    const activeTabId = ids.find((id) => id === focusedId) ?? first.id;
+    store().createTabGroup(location, worktreeId, ids, activeTabId);
   }
 
   const maximized = placed.find(({ entry, ids }) => entry.maximized === true && ids.length > 0);
@@ -216,6 +268,8 @@ function arrange(placed: ReadonlyArray<{ entry: PluginLayoutEntry; ids: string[]
   if (targetId === undefined || store().panelsById[targetId]?.location !== "grid") return;
   const { maximizedId, getPanelGroup } = store();
   const group = getPanelGroup(targetId);
+  // A maximized group shows its active tab, so the requested panel has to be it.
+  if (group && group.activeTabId !== targetId) store().setActiveTab(group.id, targetId);
   const alreadyMaximized =
     maximizedId !== null && (maximizedId === targetId || group?.panelIds.includes(maximizedId));
   if (!alreadyMaximized) {
@@ -245,7 +299,7 @@ async function applyResolved(
   const unreported: string[] = [];
   for (const entry of layout.entries) {
     try {
-      placed.push({ entry, ids: await openEntry(entry, worktreeId, approvedDigests) });
+      placed.push({ entry, ids: await openEntry(layout, entry, worktreeId, approvedDigests) });
     } catch (error) {
       const reason = formatErrorMessage(error, "Couldn't open a layout entry");
       failures.push(reason);
@@ -298,6 +352,7 @@ export async function applyPluginLayout(
     recipes.map((recipe) => [recipe.id, recipeApprovalDigest(recipe.terminals)])
   );
   const approval = requestLayoutApplyConfirmation({
+    layoutId: layout.id,
     layoutName: layout.name,
     pluginName: layout.pluginName,
     previewLines: recipes.flatMap((recipe, index) => [

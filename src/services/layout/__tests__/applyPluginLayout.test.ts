@@ -33,19 +33,33 @@ vi.mock("@/components/Terminal/gridLayoutSnapshot", () => ({
 }));
 vi.mock("@shared/config/panelKindRegistry", () => ({
   getPanelKindConfig: (kind: string) =>
-    kind.startsWith("acme.") ? { id: kind, extensionId: "acme" } : undefined,
+    kind.startsWith("acme.")
+      ? { id: kind, extensionId: "acme", ...(kind === "acme.shell" && { hasPty: true }) }
+      : undefined,
   panelKindIsProjectScoped: (kind: string) => kind === "acme.board",
 }));
 vi.mock("@/lib/notify", () => ({ notify }));
 
 import { applyPluginLayout } from "../applyPluginLayout";
 import { usePluginLayoutsStore } from "@/store/pluginLayoutsStore";
-import { useLayoutApplyConfirmStore } from "@/store/layoutApplyConfirmStore";
+import {
+  cancelLayoutApplyConfirmations,
+  useLayoutApplyConfirmStore,
+} from "@/store/layoutApplyConfirmStore";
+
+interface FakeGroup {
+  id: string;
+  panelIds: string[];
+  activeTabId: string;
+}
+type FakeTarget = { type: "panel" | "group"; id: string } | null;
 
 let panels: Record<string, FakePanel>;
 let panelIds: string[];
-let groups: Map<string, { id: string; panelIds: string[] }>;
+let groups: Map<string, FakeGroup>;
 let maximizedId: string | null;
+let maximizeTarget: FakeTarget;
+let focusedId: string | null;
 let nextId: number;
 
 const addPanel = vi.fn(async (options: Omit<FakePanel, "id">) => {
@@ -62,21 +76,39 @@ const removePanelFromGroup = vi.fn((id: string) => {
   for (const [key, group] of groups) {
     if (group.panelIds.includes(id)) {
       group.panelIds = group.panelIds.filter((member) => member !== id);
+      if (group.activeTabId === id) group.activeTabId = group.panelIds[0] ?? "";
       if (group.panelIds.length < 2) groups.delete(key);
     }
   }
 });
 const createTabGroup = vi.fn(
-  (_location: string, _worktreeId: string | undefined, ids: string[]) => {
+  (_location: string, _worktreeId: string | undefined, ids: string[], activeTabId: string) => {
     const id = `group-${groups.size + 1}`;
-    groups.set(id, { id, panelIds: [...ids] });
+    groups.set(id, { id, panelIds: [...ids], activeTabId });
     return id;
   }
 );
+const reorderPanelsInGroup = vi.fn((groupId: string, ids: string[]) => {
+  const group = groups.get(groupId);
+  if (group) group.panelIds = [...ids];
+});
+const setActiveTab = vi.fn((groupId: string, id: string) => {
+  const group = groups.get(groupId);
+  if (group) group.activeTabId = id;
+});
 const getPanelGroup = vi.fn((id: string) =>
   [...groups.values()].find((group) => group.panelIds.includes(id))
 );
 const toggleMaximize = vi.fn((id: string) => {
+  maximizedId = id;
+  const group = getPanelGroup(id);
+  maximizeTarget = group ? { type: "group", id: group.id } : { type: "panel", id };
+});
+const exitMaximize = vi.fn(() => {
+  maximizedId = null;
+  maximizeTarget = null;
+});
+const setMaximizedId = vi.fn((id: string | null) => {
   maximizedId = id;
 });
 const setFocused = vi.fn();
@@ -115,17 +147,26 @@ describe("applyPluginLayout", () => {
     seed([]);
     groups = new Map();
     maximizedId = null;
+    maximizeTarget = null;
+    focusedId = null;
     nextId = 1;
     panelStoreMock.getState.mockImplementation(() => ({
       panelIds,
       panelsById: panels,
+      tabGroups: groups,
       maximizedId,
+      maximizeTarget,
+      focusedId,
       addPanel,
       placeTerminal,
       removePanelFromGroup,
       createTabGroup,
+      reorderPanelsInGroup,
+      setActiveTab,
       getPanelGroup,
       toggleMaximize,
+      exitMaximize,
+      setMaximizedId,
       setFocused,
     }));
     getRecipeById.mockReturnValue(pairRecipe);
@@ -182,7 +223,7 @@ describe("applyPluginLayout", () => {
       { id: "records", kind: "acme.records", location: "grid", worktreeId: "wt-1" },
       { id: "other", kind: "terminal", location: "grid", worktreeId: "wt-1" },
     ]);
-    groups.set("old", { id: "old", panelIds: ["records", "other"] });
+    groups.set("old", { id: "old", panelIds: ["records", "other"], activeTabId: "records" });
     usePluginLayoutsStore.setState({
       layouts: [
         layout({
@@ -231,6 +272,145 @@ describe("applyPluginLayout", () => {
     expect(toggleMaximize).not.toHaveBeenCalled();
   });
 
+  it("keeps an unlisted panel maximized when regrouping dissolves its group", async () => {
+    seed([
+      { id: "records", kind: "acme.records", location: "grid", worktreeId: "wt-1" },
+      { id: "other", kind: "terminal", location: "grid", worktreeId: "wt-1" },
+    ]);
+    groups.set("old", { id: "old", panelIds: ["records", "other"], activeTabId: "records" });
+    maximizedId = "records";
+    maximizeTarget = { type: "group", id: "old" };
+    usePluginLayoutsStore.setState({
+      layouts: [
+        layout({
+          entries: [
+            {
+              target: { type: "panel", panelKindId: "acme.records" },
+              location: "grid",
+              tabGroup: "main",
+            },
+            {
+              target: { type: "panel", panelKindId: "acme.notes" },
+              location: "grid",
+              tabGroup: "main",
+            },
+          ],
+        }),
+      ],
+    });
+
+    await applyPluginLayout("acme.workspace", userCtx);
+
+    expect(groups.has("old")).toBe(false);
+    expect(maximizedId).toBe("other");
+    expect(maximizeTarget).toEqual({ type: "panel", id: "other" });
+  });
+
+  it("shows the maximized member as its group's visible tab", async () => {
+    usePluginLayoutsStore.setState({
+      layouts: [
+        layout({
+          entries: [
+            {
+              target: { type: "panel", panelKindId: "acme.records" },
+              location: "grid",
+              tabGroup: "main",
+            },
+            {
+              target: { type: "panel", panelKindId: "acme.notes" },
+              location: "grid",
+              tabGroup: "main",
+              maximized: true,
+            },
+          ],
+        }),
+      ],
+    });
+
+    await applyPluginLayout("acme.workspace", userCtx);
+
+    const [group] = [...groups.values()];
+    expect(group?.activeTabId).toBe("new-2");
+    expect(maximizedId).toBe("new-2");
+    expect(setFocused).toHaveBeenCalledWith("new-2");
+  });
+
+  it("keeps a focused member as the new group's visible tab", async () => {
+    seed([{ id: "notes", kind: "acme.notes", location: "grid", worktreeId: "wt-1" }]);
+    focusedId = "notes";
+    usePluginLayoutsStore.setState({
+      layouts: [
+        layout({
+          entries: [
+            {
+              target: { type: "panel", panelKindId: "acme.records" },
+              location: "grid",
+              tabGroup: "main",
+            },
+            {
+              target: { type: "panel", panelKindId: "acme.notes" },
+              location: "grid",
+              tabGroup: "main",
+            },
+          ],
+        }),
+      ],
+    });
+
+    await applyPluginLayout("acme.workspace", userCtx);
+
+    expect(createTabGroup).toHaveBeenCalledWith("grid", "wt-1", ["new-1", "notes"], "notes");
+  });
+
+  it("puts an existing group of the same panels in the declared order", async () => {
+    seed([
+      { id: "records", kind: "acme.records", location: "grid", worktreeId: "wt-1" },
+      { id: "notes", kind: "acme.notes", location: "grid", worktreeId: "wt-1" },
+    ]);
+    groups.set("g", { id: "g", panelIds: ["notes", "records"], activeTabId: "notes" });
+    usePluginLayoutsStore.setState({
+      layouts: [
+        layout({
+          entries: [
+            {
+              target: { type: "panel", panelKindId: "acme.records" },
+              location: "grid",
+              tabGroup: "main",
+            },
+            {
+              target: { type: "panel", panelKindId: "acme.notes" },
+              location: "grid",
+              tabGroup: "main",
+            },
+          ],
+        }),
+      ],
+    });
+
+    await applyPluginLayout("acme.workspace", userCtx);
+
+    expect(reorderPanelsInGroup).toHaveBeenCalledWith("g", ["records", "notes"]);
+    expect(createTabGroup).not.toHaveBeenCalled();
+  });
+
+  it("refuses a panel kind that is PTY-backed or another plugin's at apply time", async () => {
+    usePluginLayoutsStore.setState({
+      layouts: [
+        layout({
+          entries: [
+            { target: { type: "panel", panelKindId: "acme.shell" }, location: "grid" },
+            { target: { type: "panel", panelKindId: "other.records" }, location: "grid" },
+          ],
+        }),
+      ],
+    });
+
+    const result = await applyPluginLayout("acme.workspace", userCtx);
+
+    expect(addPanel).not.toHaveBeenCalled();
+    expect(result.status === "applied" && result.failures).toHaveLength(2);
+  });
+
   describe("with a recipe", () => {
     beforeEach(() => {
       usePluginLayoutsStore.setState({
@@ -266,7 +446,7 @@ describe("applyPluginLayout", () => {
 
       expect(dispatch).toHaveBeenCalledWith(
         "recipe.run",
-        { recipeId: "acme.pair", worktreeId: "wt-1" },
+        { recipeId: "acme.pair", worktreeId: "wt-1", focusPolicy: "preserve" },
         { source: "user" }
       );
       expect(result.status).toBe("applied");
@@ -309,6 +489,15 @@ describe("applyPluginLayout", () => {
       const result = await pending;
       expect(dispatch).not.toHaveBeenCalled();
       expect(result.status === "applied" && result.failures[0]).toMatch(/changed since/);
+    });
+
+    it("declines a confirmation whose layout was withdrawn", async () => {
+      const pending = applyPluginLayout("acme.workspace", userCtx);
+      cancelLayoutApplyConfirmations(new Set(["acme.workspace"]));
+
+      expect(await pending).toEqual({ status: "cancelled" });
+      expect(useLayoutApplyConfirmStore.getState().current).toBeNull();
+      expect(dispatch).not.toHaveBeenCalled();
     });
 
     it("refuses a recipe a team recipe now shadows", async () => {

@@ -226,12 +226,14 @@ function applySnapshot(snapshot: LayoutSnapshot): boolean {
     return target && target.location !== "trash" && target.location !== "dialog" ? id : null;
   };
   const restoredMaximizedId = layoutPointer(snapshot.maximizedId);
-  // A group target whose group did not survive the restore maximizes the
-  // panel alone, the way `toggleMaximize` treats a panel with no group.
+  // A group target whose group no longer holds the maximized panel — dissolved,
+  // or pruned of it above — maximizes the panel alone, the way `toggleMaximize`
+  // treats a panel with no group.
   const restoredMaximizeTarget: MaximizeTarget =
     restoredMaximizedId === null
       ? null
-      : snapshot.maximizeTarget?.type === "group" && !restoredGroups.has(snapshot.maximizeTarget.id)
+      : snapshot.maximizeTarget?.type === "group" &&
+          !restoredGroups.get(snapshot.maximizeTarget.id)?.panelIds.includes(restoredMaximizedId)
         ? { type: "panel", id: restoredMaximizedId }
         : snapshot.maximizeTarget;
 

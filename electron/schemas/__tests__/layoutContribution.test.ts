@@ -18,6 +18,7 @@ const panels = [
   { id: "records", name: "Records", iconId: "puzzle", color: "#ffffff" },
   { id: "notes", name: "Notes", iconId: "puzzle", color: "#ffffff" },
   { id: "board", name: "Board", iconId: "puzzle", color: "#ffffff", scope: "project" },
+  { id: "inbox", name: "Inbox", iconId: "puzzle", color: "#ffffff", scope: "project" },
   { id: "pinned", name: "Pinned", iconId: "puzzle", color: "#ffffff", dockable: false },
   { id: "shell", name: "Shell", iconId: "puzzle", color: "#ffffff", hasPty: true },
 ];
@@ -103,16 +104,28 @@ describe("layouts", () => {
     expect(
       issuesFor(parse([{ panel: "board", location: "grid" }], "project"), "layout_panel_placement")
     ).toHaveLength(1);
+  });
+
+  it("groups project panels only with each other", () => {
+    expect(
+      parse(
+        [
+          { panel: "board", tabGroup: "g" },
+          { panel: "inbox", tabGroup: "g" },
+        ],
+        "project"
+      ).success
+    ).toBe(true);
     expect(
       issuesFor(
         parse(
           [
             { panel: "board", tabGroup: "g" },
-            { panel: "records", tabGroup: "g" },
+            { panel: "records", tabGroup: "g", location: "dock" },
           ],
           "project"
         ),
-        "layout_panel_placement"
+        "layout_tab_group_scope"
       )
     ).toHaveLength(1);
   });

@@ -4,6 +4,7 @@ import type { ActionDefinition, ActionId } from "@shared/types/actions";
 import { actionService } from "@/services/ActionService";
 import { applyPluginLayout } from "@/services/layout/applyPluginLayout";
 import { usePluginLayoutsStore } from "@/store/pluginLayoutsStore";
+import { cancelLayoutApplyConfirmations } from "@/store/layoutApplyConfirmStore";
 import { logWarn } from "@/utils/logger";
 
 /** Palette entry for one plugin layout; `layout.apply` stays the one dispatch entry point. */
@@ -59,10 +60,17 @@ export function usePluginLayouts(): void {
       if (disposed) return;
       usePluginLayoutsStore.getState().setLayouts(layouts);
       const incoming = new Map(layouts.map((layout) => [layout.id, layout]));
+      const withdrawn = new Set<string>();
       for (const [id, entry] of registered) {
         const next = incoming.get(id);
-        if (!next || JSON.stringify(next) !== entry.key) withdraw(id);
+        if (!next || JSON.stringify(next) !== entry.key) {
+          withdraw(id);
+          withdrawn.add(id);
+        }
       }
+      // A dialog still asking about a layout that changed or left would apply
+      // something other than what it describes, or nothing at all.
+      if (withdrawn.size > 0) cancelLayoutApplyConfirmations(withdrawn);
       for (const [id, layout] of incoming) {
         if (registered.has(id)) continue;
         const actionId = pluginLayoutActionId(id);
@@ -93,6 +101,7 @@ export function usePluginLayouts(): void {
       disposed = true;
       cleanup();
       for (const id of [...registered.keys()]) withdraw(id);
+      cancelLayoutApplyConfirmations();
       usePluginLayoutsStore.getState().setLayouts([]);
     };
   }, []);

@@ -7,6 +7,8 @@ import { create } from "zustand";
  */
 export interface PendingLayoutApplyConfirm {
   requestId: string;
+  /** The runtime layout id, so a withdrawn layout's requests can be cancelled. */
+  layoutId: string;
   layoutName: string;
   pluginName: string;
   /** Every terminal the layout's recipes start, listed as the recipe confirmation lists them. */
@@ -35,6 +37,30 @@ export const useLayoutApplyConfirmStore = create<LayoutApplyConfirmState>((set, 
     resolve?.(approved);
   },
 }));
+
+/**
+ * Decline every request for a layout that is no longer offered — its plugin
+ * unloaded, reloaded or was hidden — so its dialog never asks about it. With no
+ * ids, every request is declined.
+ */
+export function cancelLayoutApplyConfirmations(layoutIds?: ReadonlySet<string>): void {
+  const { current, queue } = useLayoutApplyConfirmStore.getState();
+  const cancelled = (item: PendingLayoutApplyConfirm) =>
+    layoutIds === undefined || layoutIds.has(item.layoutId);
+  const kept = queue.filter((item) => !cancelled(item));
+  for (const item of [...(current ? [current] : []), ...queue]) {
+    if (!cancelled(item)) continue;
+    const resolve = resolvers.get(item.requestId);
+    resolvers.delete(item.requestId);
+    resolve?.(false);
+  }
+  if (current !== null && cancelled(current)) {
+    const [next = null, ...rest] = kept;
+    useLayoutApplyConfirmStore.setState({ current: next, queue: rest });
+  } else if (kept.length !== queue.length) {
+    useLayoutApplyConfirmStore.setState({ queue: kept });
+  }
+}
 
 /** Ask the user to approve applying a layout; resolves `false` when they decline. */
 export function requestLayoutApplyConfirmation(
