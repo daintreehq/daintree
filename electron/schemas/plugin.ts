@@ -26,6 +26,12 @@ import {
 } from "../../shared/types/plugin.js";
 import { isBuiltInAgentId } from "../../shared/config/agentIds.js";
 import { MAX_TERMINALS_PER_RECIPE } from "../../shared/utils/recipeSanitizer.js";
+import {
+  PROMPT_TEMPLATE_ARG_NAME_PATTERN,
+  PROMPT_TEMPLATE_MAX_ARGS,
+  PROMPT_TEMPLATE_MAX_BODY_LENGTH,
+  findPromptTemplatePlaceholders,
+} from "../../shared/utils/pluginPromptTemplates.js";
 import { PROCESS_TOOL_ICON_BY_COMMAND } from "../../shared/config/processToolRegistry.js";
 import { AGENT_CLI_NAMES } from "../services/ProcessDetector/registries.js";
 import {
@@ -51,6 +57,7 @@ import type {
   McpServerContribution,
   SkillContribution,
   ThemeContribution,
+  PromptTemplateContribution,
   PluginCapability,
 } from "../../shared/types/plugin.js";
 import type {
@@ -796,6 +803,34 @@ export const RecipeContributionSchema = z
     terminals: z.array(RecipeContributionTerminalSchema).min(1).max(MAX_TERMINALS_PER_RECIPE),
     showInEmptyState: z.boolean().optional(),
     autoAssign: z.enum(["always", "never", "prompt"]).optional(),
+  })
+  .strict();
+
+export const PromptTemplateArgumentSchema = z
+  .object({
+    name: z.string().regex(PROMPT_TEMPLATE_ARG_NAME_PATTERN, {
+      message:
+        "argument names are lowercase letters, digits and underscores, starting with a letter",
+    }),
+    label: z.string().min(1).max(80),
+    required: z.boolean().optional(),
+  })
+  .strict();
+
+/**
+ * `contributes.promptTemplates` manifest entry (#13799). A template the
+ * composer's command picker offers under the plugin's name; choosing it fills
+ * the draft and never submits. The body's `{{name}}` references are checked
+ * against `args` by the manifest-level `superRefine`. Inert declarative
+ * content, so no capability is required. Strict so unknown fields fail loudly.
+ */
+export const PromptTemplateContributionSchema = z
+  .object({
+    id: z.string().min(1).max(64).regex(SAFE_ID_PATTERN),
+    title: z.string().min(1).max(80),
+    description: z.string().min(1).max(300),
+    body: z.string().min(1).max(PROMPT_TEMPLATE_MAX_BODY_LENGTH),
+    args: z.array(PromptTemplateArgumentSchema).max(PROMPT_TEMPLATE_MAX_ARGS).default([]),
   })
   .strict();
 
@@ -2291,6 +2326,7 @@ export const MANIFEST_CONTRIBUTION_CAPS = {
   mcpServers: 20,
   skills: 50,
   themes: 20,
+  promptTemplates: 50,
   forgeProviders: 20,
   fileDecorationProviders: 50,
   fileEditors: 10,
@@ -2765,6 +2801,10 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
               .array(SettingDefinitionSchema)
               .max(MANIFEST_CONTRIBUTION_CAPS.settings)
               .default([]),
+            promptTemplates: z
+              .array(PromptTemplateContributionSchema)
+              .max(MANIFEST_CONTRIBUTION_CAPS.promptTemplates)
+              .default([]),
             recipes: z
               .array(RecipeContributionSchema)
               .max(MANIFEST_CONTRIBUTION_CAPS.recipes)
@@ -2800,6 +2840,7 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
             mcpServers: [],
             skills: [],
             themes: [],
+            promptTemplates: [],
             forgeProviders: [],
             fileDecorationProviders: [],
             fileEditors: [],
@@ -3375,6 +3416,28 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
       reportDuplicateIds("mcpServers", manifest.contributes.mcpServers);
       reportDuplicateIds("skills", manifest.contributes.skills);
       reportDuplicateIds("themes", manifest.contributes.themes);
+      reportDuplicateIds("promptTemplates", manifest.contributes.promptTemplates);
+      manifest.contributes.promptTemplates.forEach((template, templateIndex) => {
+        const declared = new Set<string>();
+        template.args.forEach((arg, argIndex) => {
+          if (declared.has(arg.name)) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: ["contributes", "promptTemplates", templateIndex, "args", argIndex, "name"],
+              message: `Duplicate argument "${arg.name}" in prompt template "${template.id}".`,
+            });
+          }
+          declared.add(arg.name);
+        });
+        for (const reference of new Set(findPromptTemplatePlaceholders(template.body))) {
+          if (declared.has(reference)) continue;
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["contributes", "promptTemplates", templateIndex, "body"],
+            message: `Prompt template "${template.id}" references {{${reference}}}, which is not a declared argument name.`,
+          });
+        }
+      });
       reportDuplicateIds("forgeProviders", manifest.contributes.forgeProviders);
       reportDuplicateIds("fileDecorationProviders", manifest.contributes.fileDecorationProviders);
       reportDuplicateIds("fileEditors", manifest.contributes.fileEditors);
@@ -3805,6 +3868,7 @@ export type {
   McpServerContribution,
   SkillContribution,
   ThemeContribution,
+  PromptTemplateContribution,
   PluginCapability,
 };
 export type { ForgeProviderContribution, FileDecorationContribution };

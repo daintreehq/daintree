@@ -947,6 +947,15 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       }
     };
 
+    // A template fills the draft and leaves the sending to the user; routing it
+    // through sendText would submit it.
+    const handleTemplateDraft = (text: string) => {
+      applyEditorValue(text, {
+        selection: EditorSelection.create([EditorSelection.cursor(text.length)]),
+        focus: true,
+      });
+    };
+
     useImperativeHandle(
       ref,
       () => ({
@@ -1577,6 +1586,9 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           ownerId={pickerOwnerId}
           context={commandContext}
           onCommandExecuted={handleCommandExecuted}
+          templateProjectId={currentProjectId}
+          onDraftReady={handleTemplateDraft}
+          getDraftFocusTarget={() => editorViewRef.current?.contentDOM ?? null}
         />
         {isRemote && <LazyUploadConfirmHost />}
         <AppDialog

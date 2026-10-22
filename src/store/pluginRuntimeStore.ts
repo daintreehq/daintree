@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { logError } from "@/utils/logger";
+import type { PromptTemplateContribution } from "@shared/types/plugin";
 
 /**
  * Renderer mirror of live plugin runtime state: which plugins are disabled, so
@@ -44,7 +45,19 @@ export interface PluginRuntimeMeta {
   previewToolIds?: ReadonlySet<string>;
 }
 
+/** A prompt template a loaded plugin contributes, with who it belongs to. */
+export interface PluginPromptTemplate {
+  /** `{instanceId}::{template id}`: unique across plugins, which may reuse an id. */
+  key: string;
+  pluginId: string;
+  pluginName: string;
+  /** Owning project for a project plugin; null for an installed or builtin one. */
+  projectId: string | null;
+  template: PromptTemplateContribution;
+}
+
 interface PluginRuntimeState {
+  promptTemplates: readonly PluginPromptTemplate[];
   disabledPluginIds: ReadonlySet<string>;
   /**
    * Keyed by plugin *instance* id — the host-side key every contribution
@@ -87,7 +100,8 @@ let pullSeq = 0;
 let committedSeq = 0;
 
 async function pullPluginRuntimeSnapshot(
-  set: (state: Partial<PluginRuntimeState>) => void
+  set: (state: Partial<PluginRuntimeState>) => void,
+  get: () => PluginRuntimeState
 ): Promise<void> {
   const seq = ++pullSeq;
   try {
@@ -96,6 +110,7 @@ async function pullPluginRuntimeSnapshot(
     committedSeq = seq;
     const disabledPluginIds = new Set<string>();
     const pluginMetaById = new Map<string, PluginRuntimeMeta>();
+    const promptTemplates: PluginPromptTemplate[] = [];
     for (const p of list) {
       // Both maps key on the instance id for the same reason: every consumer
       // holds a contribution's `pluginId`, which is this key, never the bare
@@ -105,6 +120,18 @@ async function pullPluginRuntimeSnapshot(
       // silently overwrite the other's metadata.
       const id = p.instanceId;
       if (p.disabled) disabledPluginIds.add(id);
+      // A disabled or blocklisted plugin never ran, so what it declares is not on offer.
+      if (!p.disabled && !p.blocklisted) {
+        for (const template of p.manifest.contributes?.promptTemplates ?? []) {
+          promptTemplates.push({
+            key: `${id}::${template.id}`,
+            pluginId: id,
+            pluginName: p.manifest.displayName?.trim() || p.manifest.name,
+            projectId: p.projectId,
+            template,
+          });
+        }
+      }
       pluginMetaById.set(id, {
         devMode: p.devMode,
         // Falls back to the manifest id, never the instance key: the key
@@ -123,7 +150,14 @@ async function pullPluginRuntimeSnapshot(
     }
     // One commit: a consumer must never read a plugin's dev-mode flag from a
     // different snapshot than the disabled set it renders against.
-    set({ disabledPluginIds, pluginMetaById });
+    // An unchanged list keeps its identity: every picker opening refreshes, and
+    // a new array would rebuild the picker's rows and reset its highlight.
+    const unchanged = JSON.stringify(promptTemplates) === JSON.stringify(get().promptTemplates);
+    set(
+      unchanged
+        ? { disabledPluginIds, pluginMetaById }
+        : { disabledPluginIds, pluginMetaById, promptTemplates }
+    );
   } catch (err) {
     logError("Failed to load plugin runtime state", err);
   }
@@ -139,7 +173,10 @@ async function pullPluginRuntimeSnapshot(
  * set stays empty (plugins read as enabled), matching prod optimism before the
  * first snapshot.
  */
-function ensureSubscribed(set: (state: Partial<PluginRuntimeState>) => void): boolean {
+function ensureSubscribed(
+  set: (state: Partial<PluginRuntimeState>) => void,
+  get: () => PluginRuntimeState
+): boolean {
   if (initialized) return false;
   initialized = true;
 
@@ -149,7 +186,7 @@ function ensureSubscribed(set: (state: Partial<PluginRuntimeState>) => void): bo
   }
 
   const offProvenance = plugin.onProvenanceChanged(() => {
-    void pullPluginRuntimeSnapshot(set);
+    void pullPluginRuntimeSnapshot(set, get);
   });
   // Project plugins come and go without a provenance change: trusting a
   // folder, muting or reloading one pushes a project-plugins snapshot instead,
@@ -158,7 +195,7 @@ function ensureSubscribed(set: (state: Partial<PluginRuntimeState>) => void): bo
   const offProjectPlugins =
     typeof events?.on === "function"
       ? events.on("plugin:project-plugins-changed", () => {
-          void pullPluginRuntimeSnapshot(set);
+          void pullPluginRuntimeSnapshot(set, get);
         })
       : undefined;
   unsubscribe = () => {
@@ -168,19 +205,20 @@ function ensureSubscribed(set: (state: Partial<PluginRuntimeState>) => void): bo
   return true;
 }
 
-export const usePluginRuntimeStore = create<PluginRuntimeState>((set) => ({
+export const usePluginRuntimeStore = create<PluginRuntimeState>((set, get) => ({
+  promptTemplates: [],
   disabledPluginIds: new Set<string>(),
   pluginMetaById: new Map<string, PluginRuntimeMeta>(),
   init: () => {
-    if (ensureSubscribed(set)) void pullPluginRuntimeSnapshot(set);
+    if (ensureSubscribed(set, get)) void pullPluginRuntimeSnapshot(set, get);
   },
   refresh: () => {
     // Subscribes without pulling twice — `pullSeq` would discard the first of
     // two same-tick pulls, so a rejected second one could throw away the only
     // successful snapshot.
-    ensureSubscribed(set);
+    ensureSubscribed(set, get);
     if (typeof window.electron?.plugin?.list !== "function") return;
-    void pullPluginRuntimeSnapshot(set);
+    void pullPluginRuntimeSnapshot(set, get);
   },
 }));
 
@@ -192,6 +230,7 @@ export function _resetPluginRuntimeStoreForTest(): void {
   pullSeq = 0;
   committedSeq = 0;
   usePluginRuntimeStore.setState({
+    promptTemplates: [],
     disabledPluginIds: new Set<string>(),
     pluginMetaById: new Map<string, PluginRuntimeMeta>(),
   });
