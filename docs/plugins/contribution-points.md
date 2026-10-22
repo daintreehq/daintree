@@ -25,12 +25,12 @@ A plugin that declares `"scope": "project"` lives in a project's own repository 
 | `surfaces` | **Project scope only** — see [Surfaces](#surfaces--shipped-project-scope-only) |
 | `agentMcp` | Available — every credential for the plugin's server is minted per terminal and bound to one project, and a project plugin's server can only be granted to its own project |
 | `databases` | Available — a `"project"` database is a file in the repository, resolved against the bound project root; `"local"` stays in this machine's plugin data |
+| `fileDecorationProviders` | Available — consulted only for the owning project's views, ahead of installed providers in the merge |
 | `recipes` | Available — only in the owning project's launcher, empty state and recipe manager, and gone while the plugin is switched off or its folder is untrusted. A terminal may use `terminal`, `dev-preview` or a built-in agent; `agents` is rejected below, so there is no plugin agent of its own to name |
 | `promptTemplates` | Available — offered only in the owning project's composer, and gone while the plugin is switched off or its folder is untrusted |
 | `menuItems` | Rejected — the application menu is one OS-level menu shared by every window, with no per-project projection |
 | `agents` | Rejected — the agent roster is one app-wide registry mirrored into the shared pty-host, and launch identity outlives the project binding |
 | `skills` | Rejected — contributed skills land in one app-wide index behind the MCP server's `skills.search` / `skills.load`, which filter by no project |
-| `fileDecorationProviders` | Rejected — decoration requests carry a resource path with no owning-project routing |
 | `processTools` | Rejected — detections are mirrored into the shared pty-host as one table for every terminal |
 | `mcpServers` | Rejected — the plugin-MCP IPC surface is app-global: servers are addressed by plugin and server id alone, and a tool call carries no project to check the contribution against. To serve tools to the project's agents, declare `agentMcp` instead |
 | `tours` | Rejected — plugin tours are offered from the app-wide Help menu and command palette, and tour playback has no per-project visibility yet |
@@ -1395,13 +1395,13 @@ Registers a provider that decorates files (or other scoped resources) with statu
 | Scope | Surface | Notes |
 | --- | --- | --- |
 | `worktree-diff:<worktreePath>` | Review Hub changed-file rows (base-branch diff, linked PR) | Used by the first-party GitHub plugin to badge PR-review state. |
-| `worktree-files:<worktreePath>` | Local worktree file-change list (`FileChangeList` in the worktree card) | Local-only — no PR or remote required. Use this to badge a worktree's changed files from a lint/leak/status plugin. |
+| `worktree-files:<worktreePath>` | Local worktree file-change list (`FileChangeList` in the worktree card) | Local-only — no PR or remote required. Use this to badge a worktree's changed files from a lint/leak/status plugin. The file browser tree requests the same scope for its visible rows, with paths relative to the worktree or workspace root. |
 
 Keep these scopes distinct: a provider registered for `worktree-diff:*` is **not** invoked on the local `worktree-files:*` list and vice versa, so PR-review badges don't leak onto the plain change list. The path strings the host passes (and that your provider keys its returned map by) are the worktree's changed-file paths as the surface renders them.
 
 The manifest entry is read eagerly so the host's decoration-routing table (`electron/services/fileDecorationRegistry.ts`) knows which provider owns a scope before any plugin code runs; the implementation binds lazily in `activate()`. See [Host API](./host-api.md) for the runtime registration signature.
 
-When more than one provider matches a scope, their decorations merge per path and per field (`badge`, `tooltip`, `color`, `url`), first writer wins in plugin load order — so the second provider's badge for a shared path is silently dropped. A provider that rejects, or doesn't answer within 3 seconds, is skipped for that pull, and entries for paths the host didn't ask about are discarded. When two plugins declare the **same exact scope string**, the host emits a `console.warn` at registration time naming both plugins and the duplicated scope so the collision is detectable. (Broad/narrow coexistence — a `worktree-files:*` provider alongside a `worktree-files:/some/path` one — is intentional and not warned, though the two still merge the same way.)
+When more than one provider matches a scope, their decorations merge per path and per field (`badge`, `tooltip`, `color`, `url`), first writer wins, with a project-local plugin ahead of installed ones and load order within each group — so the second provider's badge for a shared path is silently dropped. A provider that rejects, or doesn't answer within 3 seconds, is skipped for that pull, and entries for paths the host didn't ask about are discarded. When two plugins declare the **same exact scope string**, the host emits a `console.warn` at registration time naming both plugins and the duplicated scope so the collision is detectable. A request only reaches plugins visible in the requesting project: a project-local plugin decorates its own project's files and no other's, and an installed plugin switched off for a project neither decorates it nor is started by it. (Broad/narrow coexistence — a `worktree-files:*` provider alongside a `worktree-files:/some/path` one — is intentional and not warned, though the two still merge the same way.)
 
 From your `activate()` subscriptions and timers, call `host.invalidateFileDecorations(scope, paths?)` to signal that a scope's decorations changed and any renderer showing them should re-pull.
 

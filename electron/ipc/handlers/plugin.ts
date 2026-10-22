@@ -69,6 +69,7 @@ import { getPluginMenuItems } from "../../services/pluginMenuRegistry.js";
 import { getPluginKeybindings } from "../../services/pluginKeybindingRegistry.js";
 import { getPluginContextMenuItems } from "../../services/pluginContextMenuRegistry.js";
 import {
+  getPluginContributionScope,
   getPluginCustomIconsForProject,
   getPluginHostedViewsForProject,
   recipeOwner,
@@ -1378,10 +1379,17 @@ async function handleFileDecorationsGet(
   // that project's file views, and its decorations stay out of them.
   await (await getPluginService()).activatePluginsForFileDecorationScope(scope, ctx.projectId);
 
+  // The merge is first-writer-per-field, so the project's own plugin goes
+  // ahead of installed ones: it is the more specific source. Array#sort is
+  // stable, which keeps load order within each group.
   const impls = selectContributionsForProject(
     getFileDecorationImpls(scope),
     (entry) => entry.pluginId,
     ctx.projectId
+  ).sort(
+    (a, b) =>
+      Number(getPluginContributionScope(a.pluginId) === "global") -
+      Number(getPluginContributionScope(b.pluginId) === "global")
   );
   if (impls.length === 0) return {};
 

@@ -135,6 +135,8 @@ export function FileDecorationBadge({ decoration, className }: FileDecorationBad
           e.stopPropagation();
           void systemClient.openExternal(url);
         }}
+        // The row opens its file on double-click too.
+        onDoubleClick={(e) => e.stopPropagation()}
         // A pointer move over the badge is the badge's, so the row's own path
         // tooltip is not asked to open beside this one. Radix already closes
         // any open tooltip when another opens; this keeps the row's from

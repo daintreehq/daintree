@@ -2059,6 +2059,36 @@ describe("PLUGIN_FILE_DECORATIONS_GET handler", () => {
     });
   });
 
+  it("orders a project plugin ahead of an installed one regardless of load order", async () => {
+    const entry = (pluginId: string, badge: string) => ({
+      pluginId,
+      contributionId: "d",
+      impl: { provideDecorations: vi.fn().mockResolvedValue({ "a.ts": { badge } }) },
+    });
+    setPluginContributionScope("p.project", "proj-a");
+    mockGetFileDecorationImpls.mockReturnValue([
+      entry("p.installed", "I"),
+      entry("p.project", "P"),
+    ]);
+    mockGetProjectForWebContents.mockReturnValue("proj-a");
+    const handler = getHandler();
+    const result = await handler(SENDER, "worktree-files:/r", ["a.ts"]);
+    expect(result).toEqual({ "a.ts": { badge: "P" } });
+  });
+
+  it("keeps another project's plugin out of the result", async () => {
+    const provide = vi.fn().mockResolvedValue({ "a.ts": { badge: "P" } });
+    setPluginContributionScope("p.project", "proj-a");
+    mockGetFileDecorationImpls.mockReturnValue([
+      { pluginId: "p.project", contributionId: "d", impl: { provideDecorations: provide } },
+    ]);
+    mockGetProjectForWebContents.mockReturnValue("proj-b");
+    const handler = getHandler();
+    const result = await handler(SENDER, "worktree-files:/r", ["a.ts"]);
+    expect(result).toEqual({});
+    expect(provide).not.toHaveBeenCalled();
+  });
+
   it("deduplicates requested paths before invoking impls", async () => {
     const provide = vi.fn().mockResolvedValue({});
     mockGetFileDecorationImpls.mockReturnValue([
