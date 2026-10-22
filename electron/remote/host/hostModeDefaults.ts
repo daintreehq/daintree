@@ -3,6 +3,9 @@ import { app, safeStorage } from "electron";
 import { CHANNELS } from "../../ipc/channels.js";
 import { store } from "../../store.js";
 import { getAllAppWebContents } from "../../window/webContentsRegistry.js";
+import { getWindowRegistry } from "../../window/windowRef.js";
+import { onProjectPresenceChanged } from "../../window/projectPresenceChanges.js";
+import { getStagedUpdate, onStagedUpdateChanged } from "../../services/stagedUpdateState.js";
 import type { HostModeEvent, HostModeStatus } from "../../../shared/types/ipc/hostMode.js";
 import { getLocalHandshakeInfo } from "../handshakeInfo.js";
 import { HostAdvertiser } from "./advertise.js";
@@ -136,5 +139,21 @@ export function createHostModeService(
           });
         }
       : undefined,
+    runtime: {
+      read: () => ({
+        // Minimized or hidden still counts: someone at the machine has it open.
+        windows: (getWindowRegistry()?.all() ?? []).some((ctx) => !ctx.browserWindow.isDestroyed()),
+        stagedUpdate: getStagedUpdate(),
+      }),
+      subscribe: (onChange) => {
+        // Window registration and removal both pass through this invalidation.
+        const offWindows = onProjectPresenceChanged(onChange);
+        const offStaged = onStagedUpdateChanged(onChange);
+        return () => {
+          offWindows();
+          offStaged();
+        };
+      },
+    },
   });
 }

@@ -9,6 +9,7 @@ import {
   type HostRecentUse,
 } from "@shared/types/remoteHosts";
 import { getAgentConfig } from "@shared/config/agentRegistry";
+import { compareReleaseVersions } from "@shared/utils/hostBuildOrder";
 import { formatRelativeTime } from "@/lib/formatRelativeTime";
 import { isMac, isWindows } from "@/lib/platform";
 import { pluralize } from "@/lib/pluralize";
@@ -392,23 +393,6 @@ export function hostChipStatusText(status: HostChipStatus): string | null {
   }
 }
 
-function compareVersions(a: string, b: string): number {
-  const parse = (value: string) =>
-    value
-      .split(/[.+-]/)
-      .slice(0, 3)
-      .map((part) => Number.parseInt(part, 10));
-  const left = parse(a);
-  const right = parse(b);
-  for (let i = 0; i < 3; i += 1) {
-    const l = left[i];
-    const r = right[i];
-    if (l === undefined || r === undefined || Number.isNaN(l) || Number.isNaN(r)) return 0;
-    if (l !== r) return l - r;
-  }
-  return 0;
-}
-
 /**
  * Which side a mismatch asks to update: the one that is behind. Builds that
  * can't be ordered (same version, different commit) update the host, since
@@ -419,7 +403,7 @@ export function updateTargetFor(mismatch: HandshakeMismatch): "host" | "local" {
     mismatch.kind === "protocol"
       ? mismatch.remote - mismatch.local
       : mismatch.kind === "version"
-        ? compareVersions(mismatch.remote, mismatch.local)
+        ? (compareReleaseVersions(mismatch.remote, mismatch.local) ?? 0)
         : 0;
   return order > 0 ? "local" : "host";
 }

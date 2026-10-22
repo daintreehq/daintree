@@ -195,9 +195,37 @@ export interface HostProbeResult {
   canDownload: boolean;
   /** The installed build is this client's version and commit; null when that can't be read. */
   matchesClient: boolean | null;
+  /**
+   * The host's build and where it stands against this client's: the build a
+   * listening host runs, else the installed one; null when neither can be read.
+   */
+  hostBuild: { version: string; commit: string | null; order: HostBuildOrder } | null;
+  /**
+   * An update the host's own updater downloaded and holds until Daintree
+   * there restarts. Only from the live listener's own record; null otherwise.
+   */
+  stagedUpdate: StagedHostUpdate | null;
   advice: HostAdvice;
   /** What Daintree on the host last wrote about its Host mode setting; null when it wrote nothing. */
   hostModeState: HostModeObservation | null;
+}
+
+/** Where a host's build stands against this machine's, by release order. */
+export type HostBuildOrder = "same" | "older" | "newer" | "unordered";
+
+/** An update a Daintree downloaded for itself and installs when it next restarts. */
+export interface StagedHostUpdate {
+  version: string;
+  /**
+   * Quitting installs it: a Mac app or an AppImage. A deb or rpm only installs
+   * from Restart to update there, which asks for an administrator password.
+   */
+  installsOnQuit: boolean;
+  /**
+   * Ready to install on quit. A Mac hands the download to macOS's own updater
+   * after it lands, and quitting before that finishes installs nothing.
+   */
+  ready: boolean;
 }
 
 /**
@@ -220,6 +248,13 @@ export interface HostModeObservation {
    * update not yet restarted into). Absent in files written before it existed.
    */
   build?: { version: string; commit: string };
+  /**
+   * The process had a window open when it wrote this: someone uses it at its
+   * own screen. Absent in files written before it existed.
+   */
+  windows?: boolean;
+  /** What the process's updater has downloaded; absent with nothing staged, or in older files. */
+  stagedUpdate?: StagedHostUpdate;
   enabled: boolean;
   startAtLogin: boolean;
   /** The Daintree-owned login item or unit was on disk when the host last looked; null when unread. */
@@ -288,9 +323,15 @@ export type LinuxPackagePreference = "deb" | "appimage";
 export type InstallDelivery = "push-bundle" | "host-fetch" | "client-download-push";
 
 export interface HostInstallPlan {
-  kind: "up-to-date" | "install" | "unsupported";
+  /**
+   * `host-newer`: the host runs a later release than this client, so this
+   * client's build would be a downgrade; it installs only when asked for one.
+   */
+  kind: "up-to-date" | "install" | "unsupported" | "host-newer";
   delivery: InstallDelivery | null;
   packaging: "app-bundle" | "deb" | "appimage" | null;
+  /** Installing puts this client's older build over the host's newer one, as asked. */
+  downgrade: boolean;
   /** The exact build the host gets: always this client's. */
   version: string;
   commit: string;
@@ -302,7 +343,7 @@ export interface HostInstallPlan {
   restartsHost: boolean;
   /** A deb needs sudo, so the last step is a command the user runs. */
   userCommandNeeded: boolean;
-  /** Why nothing can be installed, when kind is "unsupported". */
+  /** Why nothing can be installed, when kind is "unsupported" or "host-newer". */
   reason: string | null;
 }
 
@@ -314,6 +355,8 @@ export interface HostSetupTarget {
 export interface PlanInstallPayload {
   connection: HostConnection;
   linuxPackage?: LinuxPackagePreference;
+  /** Plan this client's build even over a newer one on the host. */
+  allowDowngrade?: boolean;
 }
 
 export interface InstallHostPayload {
@@ -333,6 +376,14 @@ export interface InstallHostPayload {
    * before the restart: anything that appeared since stops the update.
    */
   confirmed?: HostRestartImpact;
+  /** The user chose to put this client's older build over the host's newer one. */
+  allowDowngrade?: boolean;
+  /**
+   * Install the update the host already downloaded, by restarting Daintree
+   * there, instead of this client's build. The version is the one the user
+   * was shown: a host now holding another stops it.
+   */
+  applyStaged?: { version: string };
 }
 
 /** One project's terminals that a restart of the host ends. */
@@ -374,6 +425,13 @@ export interface HostRestartImpact {
 export type InstallHostResult =
   | { status: "installed"; probe: HostProbeResult; reconnected: boolean | null }
   | { status: "up-to-date"; probe: HostProbeResult }
+  /** Nothing was changed: the host runs a later release than this client. */
+  | { status: "host-newer"; probe: HostProbeResult }
+  /**
+   * The host restarted into the update it had downloaded. It may now run a
+   * different build from this client's, which `reconnected` doesn't count against it.
+   */
+  | { status: "staged-applied"; probe: HostProbeResult; reconnected: boolean | null }
   /** Nothing was changed: restarting the host would end this, and needs the user's yes. */
   | { status: "needs-confirmation"; impact: HostRestartImpact }
   | {

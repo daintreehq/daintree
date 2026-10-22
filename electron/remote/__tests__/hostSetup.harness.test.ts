@@ -248,6 +248,8 @@ describe("host setup over the harness", () => {
         pid: process.pid,
         // The build the listener runs, which the link's handshake meets.
         build: { version: "0.0.0-harness", commit: expect.any(String) },
+        // A windowless host: what a restart from a Shell brings back.
+        windows: false,
         enabled: true,
         startAtLogin: true,
         startAtLoginInstalled: true,

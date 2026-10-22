@@ -10,6 +10,7 @@ import type {
   HostModeObservation,
   HostProbeResult,
 } from "../../../shared/types/ipc/remoteHosts.js";
+import { hostBuildOrder } from "../../../shared/utils/hostBuildOrder.js";
 import { HOST_MODE_STATUS_NAME, parseHostModeStatus } from "../host/hostModeStatusFile.js";
 import { launchAgentLabel } from "../host/startAtLogin.js";
 import {
@@ -378,16 +379,45 @@ export function parseHostProbe(stdout: string): ParsedProbe {
   };
 }
 
+type LiveProbe = Pick<ParsedProbe, "hostModeListening" | "hostPid" | "hostModeState">;
+
+/**
+ * `host-mode.json` when the listener running now wrote it, so what it says
+ * (its build, its windows, its staged update) is about that process; null
+ * for a record left by one that quit or isn't the listener.
+ */
+export function liveHostRecord(probe: LiveProbe): HostModeObservation | null {
+  const state = probe.hostModeState;
+  if (!probe.hostModeListening || !state || state.stopped || state.pid !== probe.hostPid) {
+    return null;
+  }
+  return state;
+}
+
 /**
  * The build a listening host runs, as that same process recorded it in
  * `host-mode.json`; null unless the file's writer is the live listener.
  */
-export function runningHostBuild(
-  probe: Pick<ParsedProbe, "hostModeListening" | "hostPid" | "hostModeState">
-): { version: string; commit: string } | null {
-  const state = probe.hostModeState;
-  if (!probe.hostModeListening || !state?.build || state.pid !== probe.hostPid) return null;
-  return state.build;
+export function runningHostBuild(probe: LiveProbe): { version: string; commit: string } | null {
+  return liveHostRecord(probe)?.build ?? null;
+}
+
+/**
+ * The host's build against this client's: the one a listening host runs,
+ * else the one installed. Null when neither can be read, or while it can't
+ * be told which AppImage is the installed one.
+ */
+export function hostBuildOf(
+  probe: ParsedProbe,
+  client: Pick<HostHandshakeInfo, "version" | "commit">
+): HostProbeResult["hostBuild"] {
+  const running = runningHostBuild(probe);
+  const build =
+    running ??
+    (!probe.appImageConflict && probe.install?.version
+      ? { version: probe.install.version, commit: probe.install.commit }
+      : null);
+  return build ? { ...build, order: hostBuildOrder(build, client) } : null;
 }
 
 /**
@@ -474,6 +504,8 @@ export async function probeHost(params: {
         appImages: [],
         canDownload: false,
         matchesClient: null,
+        hostBuild: null,
+        stagedUpdate: null,
         advice: {
           sleepObserved: null,
           sleepDisabled: null,
@@ -514,6 +546,8 @@ export async function probeHost(params: {
       appImages: observed.appImages,
       canDownload: observed.canDownload,
       matchesClient: hostMatchesClient(observed, params.client),
+      hostBuild: hostBuildOf(observed, params.client),
+      stagedUpdate: liveHostRecord(observed)?.stagedUpdate ?? null,
       advice: observed.advice,
       hostModeState: observed.hostModeState,
     },

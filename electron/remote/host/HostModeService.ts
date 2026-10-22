@@ -4,7 +4,10 @@ import type {
   HostModeStatus,
   SetHostModePayload,
 } from "../../../shared/types/ipc/hostMode.js";
-import type { HostModeObservation } from "../../../shared/types/ipc/remoteHosts.js";
+import type {
+  HostModeObservation,
+  StagedHostUpdate,
+} from "../../../shared/types/ipc/remoteHosts.js";
 import type { AdvertiseState } from "./advertise.js";
 import type { CommandResult, CommandRunner } from "./hostCommands.js";
 import type { HostListener } from "./hostListener.js";
@@ -73,6 +76,16 @@ export interface HostModeServiceDeps {
    * to "not checked" on every restart.
    */
   readStatus?(): Promise<HostModeObservation | null>;
+  /**
+   * What this process is doing that bears on restarting it from another
+   * machine: whether a window is open, and the update its updater holds.
+   * Recorded with the setting while the record is kept; `subscribe` says when
+   * either may have changed.
+   */
+  runtime?: {
+    read(): { windows: boolean; stagedUpdate: StagedHostUpdate | null };
+    subscribe(onChange: () => void): () => void;
+  };
 }
 
 function messageOf(error: unknown): string {
@@ -109,6 +122,10 @@ export class HostModeService {
   private disposed = false;
   private recordedStatus: string | null = null;
   private statusWrite: Promise<void> = Promise.resolve();
+  private recordTimer: ReturnType<typeof setTimeout> | null = null;
+  /** A record has been written (or tried) this run, so it is kept current from here on. */
+  private recording = false;
+  private offRuntime: (() => void) | null = null;
 
   constructor(private readonly deps: HostModeServiceDeps) {
     this.advertiser = deps.createAdvertiser(() => this.pushSoon());
@@ -125,6 +142,7 @@ export class HostModeService {
         })
         .catch(() => {});
     }
+    this.offRuntime = deps.runtime?.subscribe(() => this.recordSoon()) ?? null;
   }
 
   /** Listen for Shells; used at boot and by the switch. Concurrent calls share one start. */
@@ -261,6 +279,10 @@ export class HostModeService {
     this.disposed = true;
     if (this.pushTimer) clearTimeout(this.pushTimer);
     this.pushTimer = null;
+    if (this.recordTimer) clearTimeout(this.recordTimer);
+    this.recordTimer = null;
+    this.offRuntime?.();
+    this.offRuntime = null;
     this.abort?.abort();
     this.abort = null;
     this.advertiser.stop();
@@ -391,11 +413,16 @@ export class HostModeService {
   private writeRecordedStatus(extra: { stopped?: true }): Promise<void> {
     const write = this.deps.writeStatus;
     if (!write) return Promise.resolve();
+    this.recording = true;
     const settings = this.deps.readSettings();
     const keychain =
       this.keychainCheck ?? classifyKeychainWithoutTrial(this.deps.platform, this.deps.keychain);
+    // A process that has quit holds no windows and installs nothing more.
+    const runtime = extra.stopped ? null : (this.deps.runtime?.read() ?? null);
     const observation: Omit<HostModeObservation, "pid"> = {
       ...extra,
+      ...(runtime ? { windows: runtime.windows } : {}),
+      ...(runtime?.stagedUpdate ? { stagedUpdate: runtime.stagedUpdate } : {}),
       enabled: settings.enabled,
       startAtLogin: settings.startAtLogin,
       startAtLoginInstalled: this.observation?.installed ?? null,
@@ -482,5 +509,18 @@ export class HostModeService {
       this.push();
     }, this.deps.pushDelayMs ?? 100);
     this.pushTimer.unref?.();
+  }
+
+  /**
+   * Record again after a window opened or closed or an update was staged.
+   * Only once a record is kept this run: a machine that never hosted gets none.
+   */
+  private recordSoon(): void {
+    if (this.disposed || this.recordTimer || !this.recording) return;
+    this.recordTimer = setTimeout(() => {
+      this.recordTimer = null;
+      if (!this.disposed) void this.recordStatus();
+    }, this.deps.pushDelayMs ?? 100);
+    this.recordTimer.unref?.();
   }
 }

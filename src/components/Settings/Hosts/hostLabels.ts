@@ -12,6 +12,7 @@ import type {
   HostInstallPlan,
   HostProbeResult,
   HostRestartImpact,
+  StagedHostUpdate,
 } from "@shared/types/ipc/remoteHosts";
 import { pluralize } from "@/lib/pluralize";
 
@@ -62,6 +63,22 @@ export function installLabel(install: HostInstallInfo | null): string {
   const version = install.version ? `Daintree ${install.version}` : "Daintree (version unknown)";
   const commit = shortCommit(install.commit);
   return commit ? `${version} (${commit})` : version;
+}
+
+/** How the host's build compares with this machine's, as far as the probe could tell. */
+export function buildMatchLabel(
+  probe: Pick<HostProbeResult, "matchesClient" | "hostBuild">
+): string {
+  if (probe.matchesClient === true) return "Same build";
+  if (probe.hostBuild?.order === "newer") return "Newer build";
+  if (probe.hostBuild?.order === "older") return "Older build";
+  return probe.matchesClient === false ? "Different build" : "Can't tell";
+}
+
+export function stagedUpdateLabel(staged: StagedHostUpdate): string {
+  return staged.installsOnQuit && !staged.ready
+    ? `Daintree ${staged.version}, still being prepared`
+    : `Daintree ${staged.version}`;
 }
 
 function formatSeen(at: number | null, now: number): string {
@@ -247,17 +264,20 @@ export function restartTerminalCount(impact: HostRestartImpact): number | null {
  * ends. With no terminals counted it names the operations and Sessions that
  * held it up instead, never "0 terminals".
  */
-export function restartConfirmLabel(impact: HostRestartImpact): string {
+export function restartConfirmLabel(
+  impact: HostRestartImpact,
+  verb: "Update" | "Downgrade" = "Update"
+): string {
   const detail = impact.detail;
   const terminals = restartTerminalCount(impact);
-  if (!detail || terminals === null) return "Update and end terminals";
-  if (terminals > 0) return `Update and end ${pluralize(terminals, "terminal")}`;
-  if (!detail.complete) return "Update and end terminals";
+  if (!detail || terminals === null) return `${verb} and end terminals`;
+  if (terminals > 0) return `${verb} and end ${pluralize(terminals, "terminal")}`;
+  if (!detail.complete) return `${verb} and end terminals`;
   const ends = [
     detail.operations > 0 ? pluralize(detail.operations, "operation") : null,
     detail.otherShells.length > 0 ? pluralize(detail.otherShells.length, "session") : null,
   ].filter((part) => part !== null);
-  return ends.length > 0 ? `Update and end ${ends.join(" and ")}` : "Update now";
+  return ends.length > 0 ? `${verb} and end ${ends.join(" and ")}` : `${verb} now`;
 }
 
 /** Whether waiting for idle can be watched: the host reports both working and waiting agents. */
