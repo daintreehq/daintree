@@ -136,9 +136,21 @@ describe("DeviceAnswerGroup", () => {
             label: "Yes",
             outcome: "answered",
           },
+          {
+            at: Date.now(),
+            deviceId: "d1",
+            deviceName: "Greg's phone",
+            runId: "r1",
+            hostId: "studio-03",
+            hostName: "studio-03",
+            label: "No",
+            outcome: "answered",
+          },
         ],
       })
     );
     expect(await screen.findByText("Greg's phone picked “Yes”")).toBeTruthy();
+    // The same run id on a connected host is another run, named by its host.
+    expect(await screen.findByText("Greg's phone picked “No” on studio-03")).toBeTruthy();
   });
 });

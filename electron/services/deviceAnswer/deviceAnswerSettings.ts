@@ -57,10 +57,13 @@ export function sanitizeDeviceAnswerSettings(raw: unknown): DeviceAnswerSettings
         )
         .slice(0, MAX_AUDIT_ENTRIES)
         // Entries recorded before labels were redacted can still hold a secret.
-        .map((a) => ({
+        .map(({ hostId, hostName, reason, ...a }) => ({
           ...a,
           label: redactSecrets(a.label),
-          ...(typeof a.reason === "string" ? { reason: redactSecrets(a.reason) } : {}),
+          ...(typeof reason === "string" ? { reason: redactSecrets(reason) } : {}),
+          ...(typeof hostId === "string" && typeof hostName === "string"
+            ? { hostId, hostName }
+            : {}),
         }))
     : [];
   return {

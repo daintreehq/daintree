@@ -19,6 +19,7 @@ import { installHostFileClient } from "./files/clientInstall.js";
 import { installHostUploadClient } from "./files/uploadClient.js";
 import { installHostMetricsClient } from "./metrics/clientInstall.js";
 import { installCanopyHostsClient } from "./canopy/clientInstall.js";
+import { installDeviceAnswerHostsClient } from "./deviceAnswer/clientInstall.js";
 import { installHostControl, installHostControlLinkClient } from "./assistant/install.js";
 import {
   acceptLocalPushForRemoteView,
@@ -267,6 +268,14 @@ function startClient(options: StartRemoteHostsOptions): void {
       manager: client.manager,
       registry: client.registry,
       hostForView: client.hostForView,
+    })
+  );
+  // A device paired here answers the agents on the hosts this Shell is connected to.
+  teardowns.push(
+    installDeviceAnswerHostsClient({
+      registry: client.registry,
+      manager: client.manager,
+      sessionFor: client.sessionFor,
     })
   );
   // This Shell's assistants' reach into its hosts: `host.list` and `host.call` (#13493).

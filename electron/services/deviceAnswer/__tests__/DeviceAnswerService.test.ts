@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DeviceAnswerSettings } from "../../../../shared/types/ipc/deviceAnswer.js";
 import { DeviceAnswerService, type DeviceAnswerServiceDeps } from "../DeviceAnswerService.js";
 import { defaultDeviceAnswerSettings } from "../deviceAnswerSettings.js";
-import type { WaitingRunView } from "../deviceAnswerRuns.js";
+import type { DeviceWaitingHost, DeviceWaitingRun } from "../deviceAnswerRuns.js";
 
 interface Reply {
   status: number;
@@ -53,7 +53,9 @@ function request(
   });
 }
 
-const RUN: WaitingRunView = {
+const RUN: DeviceWaitingRun = {
+  hostId: "local",
+  host: "greg-studio",
   runId: "run-1",
   spawnedAt: 100,
   project: "daintree",
@@ -78,7 +80,8 @@ async function setup(overrides: Partial<DeviceAnswerSettings> = {}) {
     ...overrides,
   };
   const answer = vi.fn<DeviceAnswerServiceDeps["answer"]>(async () => {});
-  const listWaiting = vi.fn(async () => [RUN]);
+  const hosts: DeviceWaitingHost[] = [{ hostId: "studio-03", host: "studio-03", status: "ok" }];
+  const listWaiting = vi.fn(async (_options: { hosts: boolean }) => ({ runs: [RUN], hosts }));
   const onStatusChanged = vi.fn();
   const service = new DeviceAnswerService({
     readSettings: () => settings,
@@ -87,6 +90,7 @@ async function setup(overrides: Partial<DeviceAnswerSettings> = {}) {
     },
     listWaiting,
     answer,
+    hostName: (hostId) => (hostId === "studio-03" ? "studio-03" : null),
     onStatusChanged,
   });
   services.push(service);
@@ -175,7 +179,7 @@ describe("DeviceAnswerService", () => {
   });
 
   it("pairs a device with the open code, keeps only its token's digest, and lists waiting runs to it", async () => {
-    const { service, port, api, pair, settings } = await setup();
+    const { service, port, api, pair, settings, listWaiting } = await setup();
     await service.setEnabled({ enabled: true });
     expect((await request(port(), "GET", "/api/waiting", { headers: api })).status).toBe(401);
 
@@ -185,11 +189,21 @@ describe("DeviceAnswerService", () => {
     expect(JSON.stringify(settings())).not.toContain(token);
     expect(JSON.stringify(service.getStatus())).not.toContain(device!.tokenHash);
 
-    const waiting = await request(port(), "GET", "/api/waiting", {
+    const waiting = await request(port(), "GET", "/api/waiting?hosts=1", {
       headers: { ...api, Authorization: `Bearer ${token}` },
     });
     expect(waiting.status).toBe(200);
+    expect(listWaiting).toHaveBeenLastCalledWith({ hosts: true });
     expect(waiting.json().runs).toEqual([RUN]);
+    expect(waiting.json().hosts).toEqual([
+      { hostId: "studio-03", host: "studio-03", status: "ok" },
+    ]);
+
+    // A page from before hosts were listed would answer theirs as this machine's.
+    await request(port(), "GET", "/api/waiting", {
+      headers: { ...api, Authorization: `Bearer ${token}` },
+    });
+    expect(listWaiting).toHaveBeenLastCalledWith({ hosts: false });
   });
 
   it("refuses a wrong code, and a code that was used", async () => {
@@ -220,7 +234,8 @@ describe("DeviceAnswerService", () => {
     expect(reply.status).toBe(200);
     expect(answer).toHaveBeenCalledTimes(1);
     const call = answer.mock.calls[0]![0];
-    expect(call).toMatchObject({ runId: "run-1", spawnedAt: 100, label: "Yes" });
+    // A page that names no host answers this machine's run.
+    expect(call).toMatchObject({ hostId: "local", runId: "run-1", spawnedAt: 100, label: "Yes" });
     expect(call).not.toHaveProperty("keys");
     expect(call.device.name).toBe("Greg's phone");
     expect(call.stillAllowed()).toBeNull();
@@ -230,6 +245,60 @@ describe("DeviceAnswerService", () => {
       label: "Yes",
       outcome: "answered",
     });
+  });
+
+  it("answers a connected host's run on that host, and records the host it went to", async () => {
+    const { service, port, api, pair, answer, settings } = await setup();
+    await service.setEnabled({ enabled: true });
+    const token = await pair();
+    const reply = await request(port(), "POST", "/api/answer", {
+      headers: { ...api, Authorization: `Bearer ${token}` },
+      body: { hostId: "studio-03", runId: "run-1", spawnedAt: 100, label: "Yes" },
+    });
+    expect(reply.status).toBe(200);
+    expect(answer.mock.calls[0]![0]).toMatchObject({ hostId: "studio-03", runId: "run-1" });
+    expect(settings().answers[0]).toMatchObject({
+      hostId: "studio-03",
+      hostName: "studio-03",
+      outcome: "answered",
+    });
+
+    answer.mockRejectedValueOnce({
+      userMessage: "The connection to studio-03 dropped while answering. It may have been pressed.",
+    });
+    const dropped = await request(port(), "POST", "/api/answer", {
+      headers: { ...api, Authorization: `Bearer ${token}` },
+      body: { hostId: "studio-03", runId: "run-1", spawnedAt: 100, label: "No" },
+    });
+    expect(dropped.status).toBe(409);
+    expect(dropped.json().error).toContain("may have been pressed");
+    expect(settings().answers[0]).toMatchObject({ hostId: "studio-03", outcome: "refused" });
+  });
+
+  it("records no host for this machine's own runs", async () => {
+    const { service, port, api, pair, settings } = await setup();
+    await service.setEnabled({ enabled: true });
+    const token = await pair();
+    await request(port(), "POST", "/api/answer", {
+      headers: { ...api, Authorization: `Bearer ${token}` },
+      body: { hostId: "local", runId: "run-1", spawnedAt: 100, label: "Yes" },
+    });
+    expect(settings().answers[0]).not.toHaveProperty("hostId");
+    expect(settings().answers[0]).not.toHaveProperty("hostName");
+  });
+
+  it("refuses an answer naming a host it can't be for, pressing nothing", async () => {
+    const { service, port, api, pair, answer } = await setup();
+    await service.setEnabled({ enabled: true });
+    const token = await pair();
+    for (const hostId of [null, "", 7, "x".repeat(65)]) {
+      const reply = await request(port(), "POST", "/api/answer", {
+        headers: { ...api, Authorization: `Bearer ${token}` },
+        body: { hostId, runId: "run-1", spawnedAt: 100, label: "Yes" },
+      });
+      expect(reply.status).toBe(400);
+    }
+    expect(answer).not.toHaveBeenCalled();
   });
 
   it("records a refused answer with the reason the page is shown", async () => {

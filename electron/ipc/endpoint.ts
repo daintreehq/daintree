@@ -31,6 +31,17 @@ export function isCanopyViewerEndpointId(endpointId: string): boolean {
 }
 
 /**
+ * The lease standing of a device paired with a remote Shell, answering one of
+ * this machine's agents through that Shell. Never registered or pushed to: it
+ * is only ever asked whether it drives.
+ */
+export const DEVICE_ANSWER_ENDPOINT_PREFIX = "device-answer:";
+
+export function isDeviceAnswerEndpointId(endpointId: string): boolean {
+  return endpointId.startsWith(DEVICE_ANSWER_ENDPOINT_PREFIX);
+}
+
+/**
  * What a Host pushes to one endpoint. Terminal bytes do not travel as frames;
  * they ride the terminal stream bridge on the interactive lane. Requests that
  * need an answer go through {@link ClientEndpoint.request}.

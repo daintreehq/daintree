@@ -1,7 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { app } from "electron";
 import { CHANNELS } from "../ipc/channels.js";
-import { LOCAL_CLIENT_ID, isCanopyViewerEndpointId } from "../ipc/endpoint.js";
+import {
+  LOCAL_CLIENT_ID,
+  isCanopyViewerEndpointId,
+  isDeviceAnswerEndpointId,
+} from "../ipc/endpoint.js";
 import type { ClientEndpoint, ClientRef, EndpointRegistry } from "../ipc/endpoint.js";
 import { getEndpointRegistry } from "../ipc/endpointRegistry.js";
 import type { LeaseGate } from "../ipc/dispatcher.js";
@@ -950,9 +954,13 @@ function drives(
   endpoint: Pick<ClientEndpoint, "endpointId" | "clientId">
 ): boolean {
   if (holder === null || holder.endpointId === endpoint.endpointId) return true;
-  // A Canopy panel reading this host from another machine types as that
-  // machine's windows do: it drives where one of them holds the lease.
-  if (isCanopyViewerEndpointId(endpoint.endpointId)) {
+  // A Canopy panel reading this host from another machine, or a device paired
+  // with that machine, types as that machine's windows do: it drives where
+  // one of them holds the lease.
+  if (
+    isCanopyViewerEndpointId(endpoint.endpointId) ||
+    isDeviceAnswerEndpointId(endpoint.endpointId)
+  ) {
     return holder.clientId === endpoint.clientId;
   }
   return holder.clientId === LOCAL_CLIENT_ID && endpoint.clientId === LOCAL_CLIENT_ID;

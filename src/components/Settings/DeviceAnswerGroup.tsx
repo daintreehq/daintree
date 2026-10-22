@@ -249,8 +249,10 @@ export default function DeviceAnswerGroup() {
         <SettingsGroup label="Recent answers">
           {answers.map((answer) => (
             <SettingsRow
-              key={`${answer.at}-${answer.deviceId}-${answer.runId}`}
-              label={`${answer.deviceName} picked “${answer.label}”`}
+              key={`${answer.at}-${answer.deviceId}-${answer.hostId ?? ""}-${answer.runId}`}
+              label={`${answer.deviceName} picked “${answer.label}”${
+                answer.hostName ? ` on ${answer.hostName}` : ""
+              }`}
               description={`${formatRelativeTime(answer.at)}${
                 answer.outcome === "refused" && answer.reason ? ` · ${answer.reason}` : ""
               }`}
@@ -264,7 +266,7 @@ export default function DeviceAnswerGroup() {
         onClose={() => setRemoveTarget(null)}
         variant="destructive"
         title={`Remove '${removeTarget?.name ?? "device"}'?`}
-        description="It can no longer see this machine's waiting agents or answer them. To use it again, pair it with a new code."
+        description="It can no longer see or answer the waiting agents on this machine or its connected hosts. To use it again, pair it with a new code."
         confirmLabel="Remove device"
         onConfirm={() => {
           const target = removeTarget;
