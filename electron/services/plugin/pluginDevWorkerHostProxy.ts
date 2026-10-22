@@ -1273,9 +1273,10 @@ export class PluginDevWorkerHostProxy {
         const dispose = (): void => {
           if (disposed) return;
           disposed = true;
-          if (this.worktreeSetupSteps.get(stepId) === handler) {
-            this.worktreeSetupSteps.delete(stepId);
-          }
+          // A disposer whose binding a later register replaced is inert: main
+          // holds one binding per step id, and it is the replacement's.
+          if (this.worktreeSetupSteps.get(stepId) !== handler) return;
+          this.worktreeSetupSteps.delete(stepId);
           this.notify("unregisterWorktreeSetupStep", { stepId });
         };
         return Promise.resolve(dispose);

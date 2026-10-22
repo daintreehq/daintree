@@ -205,9 +205,20 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
   const reviewHubButtonLabel = isUnpushedClean ? "Review & push" : "Review & commit";
 
   const lifecycleState = worktree.lifecycleStatus?.state;
-  const lifecycleFailed = lifecycleState === "failed" || lifecycleState === "timed-out";
-  const lifecycleError = worktree.lifecycleStatus?.error;
-  const lifecycleOutput = worktree.lifecycleStatus?.output;
+  const lifecycleSlotFailed = lifecycleState === "failed" || lifecycleState === "timed-out";
+  // Plugin steps that did not succeed stay retryable after a later resource
+  // action overwrites the lifecycle slot, so their failure is read from
+  // `setupStatus`, which no later phase repurposes.
+  const pluginStepsFailed =
+    !lifecycleSlotFailed &&
+    lifecycleState !== "running" &&
+    worktree.setupStatus?.stage === "plugin-steps" &&
+    (worktree.setupStatus.state === "failed" || worktree.setupStatus.state === "timed-out");
+  const lifecycleFailed = lifecycleSlotFailed || pluginStepsFailed;
+  const lifecycleError = pluginStepsFailed
+    ? worktree.setupStatus?.error
+    : worktree.lifecycleStatus?.error;
+  const lifecycleOutput = pluginStepsFailed ? undefined : worktree.lifecycleStatus?.output;
   const hasLifecycleDetails = lifecycleFailed && Boolean(lifecycleError || lifecycleOutput);
   // Two separate observations: the host found unapproved repository commands
   // this worktree would run, and/or its setup was skipped for want of approval.

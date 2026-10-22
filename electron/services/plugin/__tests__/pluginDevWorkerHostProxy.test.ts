@@ -2575,6 +2575,18 @@ describe("PluginDevWorkerHostProxy worktree setup steps (#13807)", () => {
     expect(sent.some((m) => m.type === "invoke-result" && m.requestId === "s3")).toBe(false);
   });
 
+  it("leaves the replacement bound in main when an overwritten binding's disposer runs", async () => {
+    const { proxy, sent } = makeProxy();
+    const disposeFirst = await proxy.host.registerWorktreeSetupStep("db", vi.fn());
+    await proxy.host.registerWorktreeSetupStep("db", vi.fn());
+
+    disposeFirst();
+
+    expect(
+      sent.some((m) => m.type === "host-notify" && m.method === "unregisterWorktreeSetupStep")
+    ).toBe(false);
+  });
+
   it("refuses registration once activation has closed", () => {
     const { proxy } = makeProxy();
     proxy.revoke();

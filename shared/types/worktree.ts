@@ -103,8 +103,9 @@ export interface WorktreeSetupStatus {
 }
 
 /**
- * `skipped` — the step's plugin is declared for the project but could not run
- * it: it would not activate, or never bound a handler. Never a success.
+ * `skipped` — the step's plugin could not run it: it would not activate, never
+ * bound a handler, or was no longer loaded when setup was retried. Never a
+ * success.
  * `needs-approval` — the user has not allowed this step for the project.
  */
 export type WorktreeSetupPluginStepState =

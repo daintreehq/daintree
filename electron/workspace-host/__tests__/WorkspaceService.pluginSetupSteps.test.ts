@@ -318,7 +318,9 @@ describe("WorkspaceService plugin worktree setup steps (#13807)", () => {
 
   it("skips an unallowed step, runs the allowed ones, and asks for approval", async () => {
     bridge.listSteps.mockResolvedValue([ACME_DB, ZED_REGISTER]);
-    vi.mocked(service["lifecycleService"].pendingPluginSteps).mockResolvedValue([ACME_DB]);
+    vi.mocked(service["lifecycleService"].pendingPluginSteps).mockImplementation(async (steps) =>
+      steps.filter((s) => s.stepId === "provision-db")
+    );
 
     const worktreeId = await create("step-unapproved");
 
@@ -361,6 +363,11 @@ describe("WorkspaceService plugin worktree setup steps (#13807)", () => {
     expect(status?.state).toBe("failed");
     expect(status?.stage).toBe("plugin-steps");
     expect(status?.error).toContain("Couldn't read the plugin setup steps");
+    // The card reads the lifecycle slot for its error and its Retry button.
+    expect(service["monitors"].get(worktreeId)?.lifecycleStatus).toMatchObject({
+      phase: "setup",
+      state: "failed",
+    });
   });
 
   it("is ready with no plugin record when no plugin declares a step", async () => {
@@ -407,6 +414,125 @@ describe("WorkspaceService plugin worktree setup steps (#13807)", () => {
     expect(bridge.runStep).toHaveBeenCalledTimes(1);
     expect(statusOf(worktreeId)?.state).toBe("ready");
     expect(service["setupAwaitingApproval"].has(service["monitors"].get(worktreeId)!)).toBe(false);
+  });
+
+  it("records a step whose plugin is gone by the retry as skipped, never as ready", async () => {
+    bridge.listSteps.mockResolvedValue([ACME_DB]);
+    bridge.runStep.mockResolvedValue({ state: "failed", error: "quota exceeded" });
+    const worktreeId = await create("retry-plugin-gone");
+    bridge.listSteps.mockResolvedValue([]);
+    bridge.runStep.mockClear();
+
+    await service.retryLifecycleSetup(worktreeId);
+
+    expect(bridge.runStep).not.toHaveBeenCalled();
+    const status = statusOf(worktreeId);
+    expect(status?.state).toBe("failed");
+    expect(status?.pluginSteps).toEqual([
+      expect.objectContaining({ stepId: "provision-db", state: "skipped" }),
+    ]);
+  });
+
+  it("reruns a step that succeeded once its declaration changed, rather than carrying the success", async () => {
+    bridge.listSteps.mockResolvedValue([ACME_DB, ZED_REGISTER]);
+    bridge.runStep.mockImplementation(async (s: WorktreeSetupStepDescriptor) =>
+      s.stepId === "register" ? { state: "failed", error: "offline" } : { state: "succeeded" }
+    );
+    const worktreeId = await create("retry-upgraded");
+    const upgraded = { ...ACME_DB, pluginVersion: "2.0.0" };
+    bridge.listSteps.mockResolvedValue([upgraded, ZED_REGISTER]);
+    bridge.runStep.mockClear();
+    bridge.runStep.mockResolvedValue({ state: "succeeded" });
+
+    await service.retryLifecycleSetup(worktreeId);
+
+    expect(bridge.runStep.mock.calls.map(([s]) => s)).toEqual([upgraded, ZED_REGISTER]);
+    expect(statusOf(worktreeId)?.state).toBe("ready");
+  });
+
+  it("runs no plugin step for a replacement created while the old tail was still in its script", async () => {
+    bridge.listSteps.mockResolvedValue([ACME_DB]);
+    let finishScript!: () => void;
+    vi.mocked(service["lifecycleService"].runLifecycleSetup).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishScript = () => resolve({ shouldProvision: false, needsApproval: false });
+        })
+    );
+    await service.createWorktree("req-replaced", "/test/root", {
+      baseBranch: "main",
+      newBranch: "feature/replaced",
+      path: "/test/replaced",
+    });
+    const worktreeId = path.resolve("/test/replaced");
+    await vi.waitFor(() => expect(finishScript).toBeDefined());
+    const original = service["monitors"].get(worktreeId)!;
+    const replacement = Object.create(original, {
+      generation: { value: original.generation + 1 },
+    }) as typeof original;
+    service["monitors"].set(worktreeId, replacement);
+
+    finishScript();
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(bridge.listSteps).not.toHaveBeenCalled();
+    expect(bridge.runStep).not.toHaveBeenCalled();
+  });
+
+  it("settles the card's slot when a running step is cancelled but the worktree stays", async () => {
+    bridge.listSteps.mockResolvedValue([ACME_DB]);
+    bridge.runStep.mockImplementation(
+      (_s: WorktreeSetupStepDescriptor, _t: unknown, signal: AbortSignal) =>
+        new Promise((_resolve, reject) =>
+          signal.addEventListener("abort", () => reject(new Error("Cancelled")))
+        )
+    );
+    await service.createWorktree("req-cancelled", "/test/root", {
+      baseBranch: "main",
+      newBranch: "feature/cancelled",
+      path: "/test/cancelled",
+    });
+    const worktreeId = path.resolve("/test/cancelled");
+    await vi.waitFor(() => expect(bridge.runStep).toHaveBeenCalled());
+    const monitor = service["monitors"].get(worktreeId)!;
+
+    // What teardown does first, before a delete that then fails to remove it.
+    service["cancelPluginSetup"](monitor);
+
+    await vi.waitFor(() => expect(statusOf(worktreeId)?.state).toBe("failed"));
+    expect(monitor.lifecycleStatus?.state).toBe("failed");
+    bridge.runStep.mockResolvedValue({ state: "succeeded" });
+    await expect(service.retryLifecycleSetup(worktreeId)).resolves.toBeUndefined();
+  });
+
+  it("puts waiting plugin steps in the card's review, and approving them resumes setup", async () => {
+    bridge.listSteps.mockResolvedValue([ACME_DB]);
+    let allowed = false;
+    vi.mocked(service["lifecycleService"].pendingPluginSteps).mockImplementation(async (steps) =>
+      allowed ? [] : [...steps]
+    );
+    const approve = vi
+      .spyOn(service["lifecycleService"], "approveCommandReview")
+      .mockImplementation(async () => {
+        allowed = true;
+      });
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const worktreeId = await create("approve-flow");
+    expect(statusOf(worktreeId)?.state).toBe("needs-approval");
+    expect(service["monitors"].get(worktreeId)?.lifecycleCommandsNeedApproval).toBe(true);
+
+    const review = await service.getLifecycleCommandReview(worktreeId);
+    expect(review?.pluginSteps).toEqual([
+      { pluginId: "acme", pluginName: "Acme", stepId: "provision-db", label: "Provision DB" },
+    ]);
+    await service.approveLifecycleCommands(worktreeId, review!.fingerprint);
+
+    expect(approve).toHaveBeenCalledWith(expect.any(String), "/test/root", review!.fingerprint, [
+      ACME_DB,
+    ]);
+    await vi.waitFor(() => expect(statusOf(worktreeId)?.state).toBe("ready"));
+    expect(bridge.runStep).toHaveBeenCalledTimes(1);
   });
 
   it("refuses a retry while plugin steps are still running", async () => {

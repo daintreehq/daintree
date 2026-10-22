@@ -5193,6 +5193,11 @@ export class PluginService {
     return this.plugins.has(pluginId);
   }
 
+  /** Whether the plugin is loaded and its latest activation succeeded. */
+  isPluginActivated(pluginId: string): boolean {
+    return this.activatedPlugins.has(pluginId);
+  }
+
   /**
    * What "Back up data…" needs to find a loaded plugin's databases, read from
    * the host's own manifest and binding so a caller can name nothing but the

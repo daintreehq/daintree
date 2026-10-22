@@ -33,6 +33,7 @@ describe("WorktreeSetupRpcServer", () => {
       resolveProjectId: vi.fn(async () => "project-1"),
       whenPluginsLoaded: vi.fn(async () => undefined),
       activatePlugin: vi.fn(async () => undefined),
+      isPluginActivated: vi.fn(() => true),
       filterForProject: vi.fn(async (steps) => steps),
     };
     server = new WorktreeSetupRpcServer(
@@ -70,6 +71,8 @@ describe("WorktreeSetupRpcServer", () => {
       value: [DB],
     });
     expect(deps.resolveProjectId).toHaveBeenCalledWith("/repo");
+    // The project's own plugins are waited for, so a list is not a load-time blank.
+    expect(deps.whenPluginsLoaded).toHaveBeenCalledWith("project-1");
     expect(deps.filterForProject).toHaveBeenCalledWith(expect.any(Array), "project-1");
   });
 
@@ -113,6 +116,35 @@ describe("WorktreeSetupRpcServer", () => {
 
     expect(await answerTo("run-4")).toMatchObject({ ok: true, value: { state: "skipped" } });
     expect(deps.activatePlugin).toHaveBeenCalledWith("acme");
+  });
+
+  it("skips a step whose plugin failed to activate, even with a handler still bound", async () => {
+    const handler = vi.fn();
+    registerWorktreeSetupStepHandler("acme", "db", handler);
+    vi.mocked(deps.isPluginActivated).mockReturnValue(false);
+
+    server.handleRun("run-4b", DB, TARGET);
+
+    expect(await answerTo("run-4b")).toMatchObject({
+      ok: true,
+      value: { state: "skipped", error: "the plugin didn't start" },
+    });
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("does not run a handler whose plugin was replaced by a new version while activating", async () => {
+    const stale = vi.fn();
+    registerWorktreeSetupStepHandler("acme", "db", stale);
+    vi.mocked(deps.activatePlugin).mockImplementation(async () => {
+      registerWorktreeSetupSteps("acme", { pluginName: "Acme", pluginVersion: "2.0.0" }, [
+        { id: "db", label: "Provision DB", timeoutMs: 5_000 },
+      ]);
+    });
+
+    server.handleRun("run-4c", DB, TARGET);
+
+    expect(await answerTo("run-4c")).toMatchObject({ ok: true, value: { state: "failed" } });
+    expect(stale).not.toHaveBeenCalled();
   });
 
   it("refuses a step whose declaration changed since the host listed it", async () => {

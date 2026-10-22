@@ -662,6 +662,47 @@ describe("WorktreeDetailsSection — repository command approval", () => {
     expect(screen.getByRole("button", { name: /run setup/i })).toBeDefined();
   });
 
+  it("keeps a failed plugin step retryable after a resource action overwrote the lifecycle slot (#13807)", () => {
+    renderSection({
+      worktree: {
+        ...baseWorktree,
+        setupStatus: {
+          state: "failed",
+          stage: "plugin-steps",
+          startedAt: 1,
+          error: 'Acme "Provision DB" failed: quota exceeded',
+        },
+        lifecycleStatus: {
+          phase: "resource-status",
+          state: "success",
+          startedAt: 2,
+          completedAt: 3,
+        },
+      },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /retry setup/i }));
+    expect(actionService.dispatch).toHaveBeenCalledWith(
+      "worktree.lifecycle.retrySetup",
+      { worktreeId: baseWorktree.id },
+      expect.objectContaining({ source: "user" })
+    );
+    expect(document.body.textContent).toContain('Acme "Provision DB" failed: quota exceeded');
+  });
+
+  it("asks to allow plugin steps, not to approve commands, when those are what setup waits on", () => {
+    renderSection({
+      worktree: {
+        ...baseWorktree,
+        lifecycleCommandsNeedApproval: true,
+        setupStatus: { state: "needs-approval", stage: "plugin-steps", startedAt: 1 },
+      },
+    });
+
+    expect(screen.getByText("Setup is waiting for you to allow plugin steps")).toBeDefined();
+    expect(screen.getByRole("button", { name: /review steps/i })).toBeDefined();
+  });
+
   it("stays out of the way when nothing needs approval", () => {
     renderSection();
     expect(screen.queryByTestId("worktree-command-approval")).toBeNull();

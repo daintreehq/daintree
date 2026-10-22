@@ -2125,20 +2125,44 @@ describe("NewWorktreeDialog — first agent and prompt (#12796)", () => {
       terminals: [{ type: "claude" }],
     };
     const runRecipe = vi.mocked(useRecipeStore((s) => s.runRecipeWithResults));
-    runRecipe.mockResolvedValue([]);
+    runRecipe.mockResolvedValue({ spawned: [], failed: [] });
+    let markReady!: () => void;
+    const ready = new Promise<void>((resolve) => (markReady = resolve));
+    mockDispatch.mockImplementation(async (actionId: string) => {
+      if (actionId === "worktree.create") {
+        return { ok: true, result: { worktreeId: "new-wt-id", branch: "feature/test" } };
+      }
+      if (actionId === "worktree.waitUntilReady") {
+        await ready;
+        return {
+          ok: true,
+          result: {
+            worktreeId: "new-wt-id",
+            setupState: "ready",
+            stage: null,
+            error: null,
+            timedOut: false,
+          },
+        };
+      }
+      return { ok: true, result: undefined };
+    });
     renderDialog();
     await advanceTimersGradually(500);
     await nameBranch();
     await submit();
+
+    expect(actionCalls("worktree.waitUntilReady")).toHaveLength(1);
+    expect(runRecipe).not.toHaveBeenCalled();
+
     await act(async () => {
+      markReady();
       await vi.advanceTimersByTimeAsync(0);
     });
 
     expect(runRecipe).toHaveBeenCalledTimes(1);
-    const waitIndex = mockDispatch.mock.calls.findIndex(([id]) => id === "worktree.waitUntilReady");
-    expect(waitIndex).toBeGreaterThanOrEqual(0);
-    expect(runRecipe.mock.invocationCallOrder[0]).toBeGreaterThan(
-      mockDispatch.mock.invocationCallOrder[waitIndex]
+    expect(mockNotify.mock.calls.some(([payload]) => /recipe/i.test(payload.title ?? ""))).toBe(
+      false
     );
   });
 
@@ -2184,7 +2208,7 @@ describe("NewWorktreeDialog — first agent and prompt (#12796)", () => {
   it("runs a recipe with no agent straight away, without waiting on setup", async () => {
     recipePickerCalls.selected = { id: "r2", name: "Shells", terminals: [{ type: "terminal" }] };
     const runRecipe = vi.mocked(useRecipeStore((s) => s.runRecipeWithResults));
-    runRecipe.mockResolvedValue([]);
+    runRecipe.mockResolvedValue({ spawned: [], failed: [] });
     renderDialog();
     await advanceTimersGradually(500);
     await nameBranch();

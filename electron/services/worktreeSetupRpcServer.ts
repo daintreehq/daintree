@@ -16,10 +16,15 @@ type Sender = (request: WorkspaceHostRequest) => boolean;
 export interface WorktreeSetupRpcDeps {
   /** The project id of the host's project root, or `null` when none is recorded. */
   resolveProjectId(projectPath: string): Promise<string | null>;
-  /** Settles once the startup plugin scan has, so a list is never a cold-start blank. */
-  whenPluginsLoaded(): Promise<void>;
-  /** Never rejects: a failed activation leaves the step with no handler. */
+  /**
+   * Settles once the startup plugin scan has, and the project's own plugins
+   * have loaded or stopped being waited for, so a list is never a cold-start
+   * blank.
+   */
+  whenPluginsLoaded(projectId: string | null): Promise<void>;
+  /** Never rejects: a failed activation is read back with `isPluginActivated`. */
   activatePlugin(pluginId: string): Promise<void>;
+  isPluginActivated(pluginId: string): boolean;
   /** The steps whose plugin a view of `projectId` would see. */
   filterForProject(
     steps: RegisteredWorktreeSetupStep[],
@@ -27,20 +32,37 @@ export interface WorktreeSetupRpcDeps {
   ): Promise<RegisteredWorktreeSetupStep[]>;
 }
 
+const PROJECT_PLUGINS_WAIT_MS = 10_000;
+
 // Loaded lazily so importing this module from `WorkspaceHostProcess` does not
 // construct the PluginService and ProjectStore singletons at module load.
+let loadedPluginService: { isPluginActivated(pluginId: string): boolean } | null = null;
 const defaultDeps: WorktreeSetupRpcDeps = {
   async resolveProjectId(projectPath) {
     const { projectStore } = await import("./ProjectStore.js");
     return (await projectStore.getProjectByPath(projectPath))?.id ?? null;
   },
-  async whenPluginsLoaded() {
+  async whenPluginsLoaded(projectId) {
     const { pluginService } = await import("./PluginService.js");
     await pluginService.waitForInit();
+    // Project plugins load on their own queue from the project switch. A
+    // timeout goes ahead with what has loaded, as a terminal launch does.
+    if (projectId !== null) {
+      const settled = await pluginService.waitForProjectPlugins(projectId, PROJECT_PLUGINS_WAIT_MS);
+      if (!settled) {
+        console.warn(
+          `[WorktreeSetup] Project plugins not settled after ${PROJECT_PLUGINS_WAIT_MS}ms; listing the setup steps loaded so far`
+        );
+      }
+    }
   },
   async activatePlugin(pluginId) {
     const { pluginService } = await import("./PluginService.js");
+    loadedPluginService = pluginService;
     await pluginService.activatePlugin(pluginId);
+  },
+  isPluginActivated(pluginId) {
+    return loadedPluginService?.isPluginActivated(pluginId) ?? false;
   },
   async filterForProject(steps, projectId) {
     const { selectContributionsForProject } =
@@ -141,8 +163,8 @@ export class WorktreeSetupRpcServer {
     projectId: string | null;
     steps: RegisteredWorktreeSetupStep[];
   }> {
-    await this.deps.whenPluginsLoaded();
     const projectId = await this.deps.resolveProjectId(this.projectPath);
+    await this.deps.whenPluginsLoaded(projectId);
     const steps = await this.deps.filterForProject(getWorktreeSetupSteps(), projectId);
     return { projectId, steps };
   }
@@ -151,17 +173,22 @@ export class WorktreeSetupRpcServer {
     return (await this.visibleSteps()).steps.map(describe);
   }
 
-  private async runStep(
-    requested: WorktreeSetupStepDescriptor,
-    target: WorktreeSetupStepTarget,
-    signal: AbortSignal
-  ): Promise<WorktreeSetupStepRunOutcome> {
+  /**
+   * The step the host asked for, as the project's plugins declare it now, or
+   * the outcome that says why it can't run.
+   */
+  private async resolveStep(
+    requested: WorktreeSetupStepDescriptor
+  ): Promise<
+    | { projectId: string; current: RegisteredWorktreeSetupStep }
+    | { outcome: WorktreeSetupStepRunOutcome }
+  > {
     const { projectId, steps } = await this.visibleSteps();
     const current = steps.find(
       (step) => step.pluginId === requested.pluginId && step.stepId === requested.stepId
     );
-    if (!current) {
-      return { state: "skipped", error: "the plugin isn't loaded for this project" };
+    if (!current || projectId === null) {
+      return { outcome: { state: "skipped", error: "the plugin isn't loaded for this project" } };
     }
     // What the user allowed is what runs: an upgrade or an edited declaration
     // between listing and running is not this step any more.
@@ -170,20 +197,34 @@ export class WorktreeSetupRpcServer {
       current.label !== requested.label ||
       current.timeoutMs !== requested.timeoutMs
     ) {
-      return { state: "failed", error: "the plugin changed while setup was running" };
+      return { outcome: { state: "failed", error: "the plugin changed while setup was running" } };
     }
-    if (projectId === null) {
-      return {
-        state: "skipped",
-        error: "the project isn't recorded, so no plugin is loaded for it",
-      };
-    }
+    return { projectId, current };
+  }
 
-    await this.deps.activatePlugin(current.pluginId);
+  private async runStep(
+    requested: WorktreeSetupStepDescriptor,
+    target: WorktreeSetupStepTarget,
+    signal: AbortSignal
+  ): Promise<WorktreeSetupStepRunOutcome> {
+    const declared = await this.resolveStep(requested);
+    if ("outcome" in declared) return declared.outcome;
+
+    await this.deps.activatePlugin(declared.current.pluginId);
     if (signal.aborted) return { state: "failed", error: "cancelled" };
+    // A failed activation can leave a dev worker running with its handler
+    // bound; that is not a plugin that started.
+    if (!this.deps.isPluginActivated(declared.current.pluginId)) {
+      return { state: "skipped", error: "the plugin didn't start" };
+    }
+    // Checked again now that it is active, since activating can reload it, and
+    // the handler is read in the same turn so the two belong to one plugin.
+    const resolved = await this.resolveStep(requested);
+    if ("outcome" in resolved) return resolved.outcome;
+    const { projectId, current } = resolved;
     const handler = getWorktreeSetupStepHandler(current.pluginId, current.stepId);
     if (!handler) {
-      return { state: "skipped", error: "the plugin didn't start, or never registered this step" };
+      return { state: "skipped", error: "the plugin never registered this step" };
     }
 
     const step = new AbortController();
