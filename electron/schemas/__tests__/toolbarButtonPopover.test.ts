@@ -91,6 +91,21 @@ describe("toolbar button popover", () => {
     expect(issuesFor(result, "toolbar_popover_view_settings")).toHaveLength(1);
   });
 
+  it("rejects a popover naming a sidebar view, which has no panel to mount", () => {
+    const result = parse(
+      { popover: { viewId: "board" } },
+      {
+        views: [
+          view,
+          { id: "board", componentPath: "dist/board.js", location: "sidebar", name: "Board" },
+        ],
+      }
+    );
+    expect(result.success).toBe(false);
+    const [issue] = issuesFor(result, "toolbar_popover_view_sidebar");
+    expect(issue?.path).toEqual(["contributes", "toolbarButtons", 0, "popover", "viewId"]);
+  });
+
   it("rejects a popover naming a PTY panel, whose view never loads", () => {
     const result = parse(
       { popover: { viewId: "inbox" } },

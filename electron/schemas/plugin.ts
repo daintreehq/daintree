@@ -3517,7 +3517,7 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
         }
         if (button.popover === undefined) return;
         // The popover mounts the view's panel kind, exactly as a surface does,
-        // so the same three dead ends apply.
+        // so the same dead ends apply.
         const { viewId } = button.popover;
         const viewPath = [...path, "popover", "viewId"];
         if (!viewIds.has(viewId)) {
@@ -3533,6 +3533,13 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
             path: viewPath,
             message: `toolbarButtons "${button.id}" popover.viewId "${viewId}" names a location: "settings" view — a popover draws a panel view, and a settings view renders only in the plugin's settings.`,
             params: { errorCode: "toolbar_popover_view_settings" },
+          });
+        } else if (sidebarViewIds.has(viewId)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: viewPath,
+            message: `toolbarButtons "${button.id}" popover.viewId "${viewId}" names a location: "sidebar" view — a popover draws a panel view, and a sidebar view renders only in the sidebar.`,
+            params: { errorCode: "toolbar_popover_view_sidebar" },
           });
         } else if (ptyPanelIds.has(viewId)) {
           ctx.addIssue({
