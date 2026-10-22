@@ -10,6 +10,7 @@ async function loadStore() {
 
 afterEach(() => {
   localStorage.clear();
+  delete window.__DAINTREE_HOST_ID__;
 });
 
 describe("sidebarViewStore", () => {
@@ -31,6 +32,19 @@ describe("sidebarViewStore", () => {
     const { useSidebarViewStore, WORKTREES_SIDEBAR_VIEW_ID } = await loadStore();
     expect(useSidebarViewStore.getState().chosenSidebarView).toBe("acme.beads.board");
     expect(useSidebarViewStore.getState().activeSidebarView).toBe(WORKTREES_SIDEBAR_VIEW_ID);
+  });
+
+  it("keeps a remote host's project apart from a local one with the same id", async () => {
+    localStorage.setItem(
+      KEY,
+      JSON.stringify({ state: { chosenSidebarView: "acme.local.view" }, version: 1 })
+    );
+    window.__DAINTREE_HOST_ID__ = { id: "studio" };
+    const { useSidebarViewStore, WORKTREES_SIDEBAR_VIEW_ID } = await loadStore();
+    expect(useSidebarViewStore.getState().chosenSidebarView).toBe(WORKTREES_SIDEBAR_VIEW_ID);
+    useSidebarViewStore.getState().chooseSidebarView("acme.remote.view");
+    const local: unknown = JSON.parse(localStorage.getItem(KEY) ?? "null");
+    expect(local).toEqual({ state: { chosenSidebarView: "acme.local.view" }, version: 1 });
   });
 
   it.each([

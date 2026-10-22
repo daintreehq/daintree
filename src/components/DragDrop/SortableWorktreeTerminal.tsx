@@ -7,6 +7,7 @@ import type { PanelInstance } from "@shared/types/panel";
 import type { WorktreeDragData } from "./DndProvider";
 import { DragHandleProvider } from "./DragHandleContext";
 import { pixelSnapTransform } from "./SortableTerminal";
+import { useBuiltInSidebarViewHidden } from "@/components/Sidebar/sidebarViewContext";
 
 interface SortableWorktreeTerminalProps {
   terminal: PanelInstance;
@@ -41,6 +42,7 @@ export function SortableWorktreeTerminal({
     origin: "accordion",
   };
 
+  const isHiddenInSidebar = useBuiltInSidebarViewHidden();
   const {
     attributes,
     listeners,
@@ -52,6 +54,8 @@ export function SortableWorktreeTerminal({
   } = useSortable({
     id: getAccordionDragId(terminal.id),
     data: dragData,
+    // Hidden behind a plugin's sidebar view, it would still take drops there.
+    disabled: isHiddenInSidebar,
     animateLayoutChanges: () => false,
   });
 

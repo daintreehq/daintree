@@ -46,6 +46,7 @@ vi.mock("@/components/Plugin/PluginHostedView", () => ({
 
 import { SidebarViewHost } from "../SidebarViewHost";
 import { SidebarViewHeading, _resetSidebarViewSwitcherForTest } from "../SidebarViewSwitcher";
+import { useBuiltInSidebarViewHidden } from "../sidebarViewContext";
 import { useSidebarViewStore, WORKTREES_SIDEBAR_VIEW_ID } from "@/store/sidebarViewStore";
 
 const BOARD_ID = "acme.beads.board";
@@ -70,10 +71,11 @@ function offer(views: PluginSidebarHostedViewDescriptor[]) {
 }
 
 function BuiltIn() {
+  const hidden = useBuiltInSidebarViewHidden();
   return (
     <div>
       <SidebarViewHeading className="truncate">Worktrees</SidebarViewHeading>
-      <div role="grid" aria-label="Worktrees" tabIndex={0} />
+      <div role="grid" aria-label="Worktrees" tabIndex={0} data-hidden={String(hidden)} />
     </div>
   );
 }
@@ -152,9 +154,11 @@ describe("SidebarViewHost", () => {
     expect(useSidebarViewStore.getState().activeSidebarView).toBe(BOARD_ID);
     const builtIn = screen.getByTestId("sidebar-builtin-view");
     expect(builtIn.hasAttribute("inert")).toBe(true);
-    // Hidden without giving up its box, so the list underneath keeps its measurements.
-    expect(builtIn.className).toContain("invisible");
-    expect(builtIn.style.display).not.toBe("none");
+    // Still mounted under the plugin view, and told so: its drop targets and
+    // announcements stand down while it keeps its state.
+    expect(screen.getByRole("grid", { name: "Worktrees", hidden: true }).dataset.hidden).toBe(
+      "true"
+    );
 
     const mount = h.mounts.at(-1);
     expect(mount?.host).toBe("sidebar");
@@ -246,17 +250,69 @@ describe("SidebarViewHost", () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     try {
       useSidebarViewStore.setState({ chosenSidebarView: BOARD_ID });
-      const { rerender } = render(ui());
+      const tree = () => (
+        <>
+          <button type="button">Terminal</button>
+          {ui()}
+        </>
+      );
+      const { rerender } = render(tree());
+      const elsewhere = screen.getByRole("button", { name: "Terminal" });
+      act(() => elsewhere.focus());
       offer([board()]);
-      rerender(ui());
+      rerender(tree());
       await act(async () => {
         vi.runAllTimers();
       });
       expect(screen.queryByTestId("sidebar-plugin-view")).not.toBeNull();
-      expect(document.activeElement).toBe(document.body);
+      expect(document.activeElement).toBe(elsewhere);
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("keeps focus in the sidebar when an action swaps the plugin view that held it", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const docs: PluginSidebarHostedViewDescriptor = {
+        ...board(),
+        id: "plugin-view:acme.beads/docs",
+        viewId: "docs",
+        title: "Docs",
+      };
+      offer([board(), docs]);
+      useSidebarViewStore.setState({ chosenSidebarView: BOARD_ID });
+      render(ui());
+      act(() => screen.getByRole("button", { name: "Plugin control" }).focus());
+      act(() => useSidebarViewStore.getState().chooseSidebarView("acme.beads.docs"));
+      await act(async () => {
+        vi.runAllTimers();
+      });
+      const trigger = screen.getByTestId("sidebar-view-switcher");
+      expect(trigger.textContent).toBe("Docs");
+      expect(document.activeElement).toBe(trigger);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps a right-click on the plugin view's header from reaching the sidebar's own menu", () => {
+    offer([board()]);
+    useSidebarViewStore.setState({ chosenSidebarView: BOARD_ID });
+    const backgroundMenu = vi.fn();
+    render(<div onContextMenu={backgroundMenu}>{ui()}</div>);
+    fireEvent.contextMenu(screen.getByTestId("sidebar-view-switcher"));
+    expect(backgroundMenu).not.toHaveBeenCalled();
+  });
+
+  it("stops publishing a plugin view once the sidebar is gone, keeping the choice", () => {
+    offer([board()]);
+    useSidebarViewStore.setState({ chosenSidebarView: BOARD_ID });
+    const { unmount } = render(ui());
+    expect(useSidebarViewStore.getState().activeSidebarView).toBe(BOARD_ID);
+    unmount();
+    expect(useSidebarViewStore.getState().activeSidebarView).toBe(WORKTREES_SIDEBAR_VIEW_ID);
+    expect(useSidebarViewStore.getState().chosenSidebarView).toBe(BOARD_ID);
   });
 
   it("hands focus to the plugin view's switcher when a keyboard pick leaves the worktree list", async () => {

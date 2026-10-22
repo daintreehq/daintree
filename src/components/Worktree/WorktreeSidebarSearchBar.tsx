@@ -3,6 +3,7 @@ import { cn } from "@/lib/utils";
 import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
 import { WorktreeFilterPopover } from "./WorktreeFilterPopover";
 import { SearchField } from "@/components/ui/SearchField";
+import { useBuiltInSidebarViewHidden } from "@/components/Sidebar/sidebarViewContext";
 import type { ChipCounts } from "@/lib/worktreeFilters";
 
 interface WorktreeSidebarSearchBarProps {
@@ -90,6 +91,14 @@ export function WorktreeSidebarSearchBar({
   const hasActiveFiltersValue = useWorktreeFilterStore((state) => state.hasActiveFilters());
 
   const [isPopoverOpen, setIsPopoverOpen] = useState(false);
+  // The popover is portalled, so the inert worktree list behind a plugin's
+  // sidebar view doesn't cover it: it closes as the list goes.
+  const isHiddenInSidebar = useBuiltInSidebarViewHidden();
+  const [wasHiddenInSidebar, setWasHiddenInSidebar] = useState(isHiddenInSidebar);
+  if (isHiddenInSidebar !== wasHiddenInSidebar) {
+    setWasHiddenInSidebar(isHiddenInSidebar);
+    if (isHiddenInSidebar) setIsPopoverOpen(false);
+  }
   const debounceRef = useRef<NodeJS.Timeout | null>(null);
   const internalRef = useRef<HTMLInputElement | null>(null);
   const prevHasActiveFiltersRef = useRef(hasActiveFiltersValue);

@@ -36,10 +36,18 @@ export function isPluginViewBlockedError(error: unknown): boolean {
 export function PluginViewBlockedPlaceholder({
   pluginDisplayName,
   onRetry,
+  leave,
 }: {
   pluginDisplayName: string;
   onRetry: () => void;
+  /** A host's way out of the view, beside the placeholder's own action (the sidebar's "Show worktrees"). */
+  leave?: { label: string; onClick: () => void };
 }) {
+  const leaveButton = leave ? (
+    <Button variant="ghost" size="sm" onClick={() => leave.onClick()}>
+      {leave.label}
+    </Button>
+  ) : null;
   const { hostName } = useHostConnection();
   const machine = hostName ?? "this window's host";
   const lease = useDriveLeaseView();
@@ -70,9 +78,12 @@ export function PluginViewBlockedPlaceholder({
           title={`${pluginDisplayName} shows in the window driving this project`}
           description={`${driver} has control of it on ${machine}. Take control to show ${pluginDisplayName} here.`}
           action={
-            <Button variant="outline" size="sm" onClick={() => takeControlOf(projectId)}>
-              Take control
-            </Button>
+            <div className="flex flex-wrap items-center justify-center gap-2">
+              <Button variant="outline" size="sm" onClick={() => takeControlOf(projectId)}>
+                Take control
+              </Button>
+              {leaveButton}
+            </div>
           }
         />
       </div>
@@ -89,9 +100,12 @@ export function PluginViewBlockedPlaceholder({
         title={`${pluginDisplayName} is blocked on this computer`}
         description={`Its view comes from ${machine} and runs here only with your yes. To be asked again, reset it in Settings → Hosts → ${machine} → Plugin views, then try again.`}
         action={
-          <Button variant="outline" size="sm" onClick={onRetry}>
-            Try again
-          </Button>
+          <div className="flex flex-wrap items-center justify-center gap-2">
+            <Button variant="outline" size="sm" onClick={onRetry}>
+              Try again
+            </Button>
+            {leaveButton}
+          </div>
         }
       />
     </div>

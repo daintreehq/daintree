@@ -7,6 +7,7 @@ import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { useWorktreeTerminals } from "../../hooks/useWorktreeTerminals";
 
 import { useDroppable } from "@dnd-kit/core";
+import { useBuiltInSidebarViewHidden } from "@/components/Sidebar/sidebarViewContext";
 import type { SyntheticListenerMap } from "@dnd-kit/core/dist/hooks/utilities";
 import type { WorktreeDragData } from "../DragDrop/DndProvider";
 import { useDndPlaceholder, useIsWorktreeSortDragging } from "../DragDrop/dndPlaceholderContext";
@@ -823,6 +824,9 @@ export function WorktreeCard({
   const { activeTerminal: draggedPanel } = useDndPlaceholder();
   const isCrossWorktreePanelDrag =
     draggedPanel !== null && (draggedPanel.worktreeId ?? null) !== worktree.id;
+  // Under a plugin's sidebar view the card keeps its box, so it would still
+  // catch a terminal dropped onto the view in front of it.
+  const isHiddenInSidebar = useBuiltInSidebarViewHidden();
 
   const { setNodeRef, isOver, over, active } = useDroppable({
     id: `worktree-drop-${worktree.id}`,
@@ -830,7 +834,8 @@ export function WorktreeCard({
       type: "worktree",
       worktreeId: worktree.id,
     },
-    disabled: (isActive && !isCrossWorktreePanelDrag) || isWorktreeSortDragging,
+    disabled:
+      (isActive && !isCrossWorktreePanelDrag) || isWorktreeSortDragging || isHiddenInSidebar,
   });
 
   const droppableRef = (node: HTMLElement | null) => {

@@ -1,5 +1,6 @@
 import React from "react";
 import { useSortable } from "@dnd-kit/sortable";
+import { useBuiltInSidebarViewHidden } from "@/components/Sidebar/sidebarViewContext";
 import { CSS } from "@dnd-kit/utilities";
 import type { SyntheticListenerMap } from "@dnd-kit/core/dist/hooks/utilities";
 import { cn } from "@/lib/utils";
@@ -83,6 +84,7 @@ export const SortableWorktreeCard = React.memo(function SortableWorktreeCard({
     worktreeId,
     dragStartOrder,
   };
+  const isHiddenInSidebar = useBuiltInSidebarViewHidden();
 
   const {
     attributes,
@@ -98,7 +100,8 @@ export const SortableWorktreeCard = React.memo(function SortableWorktreeCard({
   } = useSortable({
     id: getWorktreeSortDragId(worktreeId),
     data: dragData,
-    disabled,
+    // Hidden behind a plugin's sidebar view, it would still take drops there.
+    disabled: disabled || isHiddenInSidebar,
     animateLayoutChanges: () => false,
   });
 

@@ -430,6 +430,12 @@ export function makePluginViewContent(
   // change the component type on every render of the owning panel.
   function PluginViewFallback({ error, errorInfo, resetError, incidentId }: ErrorFallbackProps) {
     const { onRequestClose, requestCloseLabel } = useContext(PluginViewCloseContext);
+    // A host that names its own way out (the sidebar's "Show worktrees") offers
+    // it from every placeholder; a panel's close stays on the panel's chrome.
+    const leave =
+      onRequestClose !== undefined && requestCloseLabel !== undefined
+        ? { label: requestCloseLabel, onClick: onRequestClose }
+        : undefined;
     // Two primitive selectors rather than one object selector: the meta record
     // is rebuilt on every provenance pull, so selecting it whole would re-render
     // the pane on pulls that changed nothing about this plugin.
@@ -452,12 +458,18 @@ export function makePluginViewContent(
     // Not a failure: the host declined to start this plugin for a window on
     // another machine. Nothing here is broken, so there are no diagnostics.
     if (isRemoteUnsupportedError(error)) {
-      return <PluginRemoteUnsupportedPlaceholder pluginDisplayName={pluginDisplayName} />;
+      return (
+        <PluginRemoteUnsupportedPlaceholder pluginDisplayName={pluginDisplayName} leave={leave} />
+      );
     }
     // This computer didn't run the host's view: the person's choice, not a bug.
     if (isPluginViewBlockedError(error)) {
       return (
-        <PluginViewBlockedPlaceholder pluginDisplayName={pluginDisplayName} onRetry={resetError} />
+        <PluginViewBlockedPlaceholder
+          pluginDisplayName={pluginDisplayName}
+          onRetry={resetError}
+          leave={leave}
+        />
       );
     }
     // The window's host doesn't have this plugin (any more). Also not broken.

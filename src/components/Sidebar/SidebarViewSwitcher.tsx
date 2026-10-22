@@ -1,5 +1,4 @@
 import {
-  createContext,
   useCallback,
   useContext,
   useEffect,
@@ -23,20 +22,8 @@ import { useTerminalNotificationCounts } from "@/hooks/useTerminalSelectors";
 import { pluralize } from "@/lib/pluralize";
 import { cn } from "@/lib/utils";
 import { WORKTREES_SIDEBAR_VIEW_ID } from "@/store/sidebarViewStore";
-import { OPEN_SIDEBAR_VIEW_SWITCHER_EVENT, type SidebarViewOption } from "@/lib/sidebarViews";
-
-/** What every sidebar header needs to draw the switcher, provided by `SidebarViewHost`. */
-export interface SidebarViewSwitcherModel {
-  /** Highest priority first, the built-in view always among them. */
-  options: readonly SidebarViewOption[];
-  /** The view showing. */
-  activeId: string;
-  /** The built-in view's name and glyph here: the worktree list, or the workspace without git. */
-  builtIn: { title: string; icon: ComponentType<{ className?: string }> };
-  choose: (viewId: string) => void;
-}
-
-export const SidebarViewSwitcherContext = createContext<SidebarViewSwitcherModel | null>(null);
+import { OPEN_SIDEBAR_VIEW_SWITCHER_EVENT } from "@/lib/sidebarViews";
+import { SidebarViewSwitcherContext, type SidebarViewSwitcherModel } from "./sidebarViewContext";
 
 /**
  * The trigger of whichever switcher is mounted. Only one ever is: a header
@@ -108,8 +95,11 @@ export function SidebarViewHeading({
   }
   return (
     // Not clipped: the trigger's hover fill and focus ring reach past the text
-    // into the header row's padding. The trigger truncates the name itself.
-    <h2 className={cn(className, "flex min-w-0 overflow-visible")} {...props}>
+    // into the header row's padding. Free to shrink, even where the plain
+    // heading may not: at the sidebar's minimum width the trigger's chevron and
+    // padding must give way to the actions beside it, and the trigger
+    // truncates the name itself.
+    <h2 className={cn(className, "flex min-w-0 shrink overflow-visible")} {...props}>
       <SidebarViewSwitcher model={model} title={children} />
     </h2>
   );
@@ -171,7 +161,9 @@ function SidebarViewSwitcher({ model, title }: { model: SidebarViewSwitcherModel
         onPointerDown={() => {
           pointerPickRef.current = true;
         }}
-        onKeyDown={() => {
+        // Capture, not bubble: Radix selects an item from its own keydown, so a
+        // bubbling handler would learn about the keyboard only after the pick.
+        onKeyDownCapture={() => {
           pointerPickRef.current = false;
         }}
       >

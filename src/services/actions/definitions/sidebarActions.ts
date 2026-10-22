@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { getSidebarViewOptions } from "@/hooks/useSidebarViews";
 import { OPEN_SIDEBAR_VIEW_SWITCHER_EVENT } from "@/lib/sidebarViews";
+import { suppressSidebarResizes } from "@/lib/sidebarToggle";
 import { useFocusStore } from "@/store/focusStore";
 import { useSidebarViewStore, WORKTREES_SIDEBAR_VIEW_ID } from "@/store/sidebarViewStore";
 
@@ -17,10 +18,20 @@ const SwitchViewArgsSchema = z.object({
 
 type SidebarActionCallbacks = Pick<ActionCallbacks, "onToggleSidebar">;
 
-/** Bring a hidden sidebar back through the toggle path, which owns its resize handling. */
+/**
+ * Bring a hidden sidebar back. Through the toggle path first, which owns its
+ * resize handling; but that travels as a window event AppLayout drops while
+ * any overlay is open — and the palette these run from still holds one while
+ * it animates out — so a reveal that didn't land is applied directly, the way
+ * `nav.toggleSidebar`'s undo does.
+ */
 function revealSidebar(callbacks: SidebarActionCallbacks): boolean {
   if (!useFocusStore.getState().gestureSidebarHidden) return false;
   callbacks.onToggleSidebar();
+  if (useFocusStore.getState().gestureSidebarHidden) {
+    suppressSidebarResizes();
+    useFocusStore.getState().setSidebarGestureHidden(false);
+  }
   return true;
 }
 

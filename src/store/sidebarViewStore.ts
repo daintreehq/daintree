@@ -3,6 +3,7 @@ import { persist } from "zustand/middleware";
 import { createSafeJSONStorage } from "./persistence/safeStorage";
 import { registerPersistedStore } from "./persistence/persistedStoreRegistry";
 import { getViewWorkspaceId } from "./viewWorkspaceId";
+import { hostScopedKey } from "@/hooks/useHostPlatform";
 
 /** The built-in sidebar view's id — the worktree list every project starts on. */
 export const WORKTREES_SIDEBAR_VIEW_ID = "worktrees";
@@ -34,9 +35,10 @@ interface SidebarViewPersistedState {
 /**
  * One key per workspace, like the worktree filters: the view and its id are
  * fixed for the life of this renderer, and two windows on the same project
- * share the pick.
+ * share the pick. Host-scoped, because a remote host's project can carry the
+ * same id as a local one and every view shares this storage; bare locally.
  */
-const STORAGE_KEY = `daintree-sidebar-view:${getViewWorkspaceId() ?? "default"}`;
+const STORAGE_KEY = `daintree-sidebar-view:${hostScopedKey(getViewWorkspaceId() ?? "default")}`;
 
 export const useSidebarViewStore = create<SidebarViewState>()(
   persist(

@@ -9,6 +9,8 @@ const h = vi.hoisted(() => ({ options: [] as SidebarViewOption[] }));
 vi.mock("@/hooks/useSidebarViews", () => ({
   getSidebarViewOptions: () => h.options,
 }));
+// Takes the PTY resize lock, which reaches the terminal services; the reveal is what's under test.
+vi.mock("@/lib/sidebarToggle", () => ({ suppressSidebarResizes: () => {} }));
 
 import { registerSidebarActions } from "../sidebarActions";
 import { OPEN_SIDEBAR_VIEW_SWITCHER_EVENT } from "@/lib/sidebarViews";
@@ -108,6 +110,18 @@ describe("ui.sidebar.switchView", () => {
     h.options = [BUILT_IN, BOARD];
     expect(def.isEnabled?.(ctx)).toBe(true);
     expect(def.disabledReason?.(ctx)).toBeUndefined();
+  });
+});
+
+describe("revealing a hidden sidebar", () => {
+  it("reveals it even when the toggle event is dropped behind a closing palette", async () => {
+    useFocusStore.setState({ gestureSidebarHidden: true });
+    const onToggleSidebar = vi.fn();
+    const actions: ActionRegistry = new Map();
+    registerSidebarActions(actions, { onToggleSidebar });
+    await actions.get("ui.sidebar.showWorktrees")?.().run(undefined, ctx);
+    expect(onToggleSidebar).toHaveBeenCalledTimes(1);
+    expect(useFocusStore.getState().gestureSidebarHidden).toBe(false);
   });
 });
 

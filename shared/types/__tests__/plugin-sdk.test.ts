@@ -592,7 +592,9 @@ describe("plugin-sdk boundary", () => {
       // Where the view is mounted (#13770), as a named SDK type. Optional so a
       // view built against it still runs on a host that predates it.
       expectTypeOf(props.hostContext).toEqualTypeOf<PluginViewHostContext | undefined>();
-      expectTypeOf<PluginViewHostKind>().toEqualTypeOf<"panel" | "surface" | "settings">();
+      expectTypeOf<PluginViewHostKind>().toEqualTypeOf<
+        "panel" | "surface" | "settings" | "sidebar"
+      >();
     });
 
     it("exposes the panel lifecycle contract as named SDK types", () => {
