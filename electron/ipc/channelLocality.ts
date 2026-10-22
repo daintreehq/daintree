@@ -808,6 +808,8 @@ export const CHANNEL_LOCALITY = {
   "project:on-switch": "hybrid",
   "project:open-dialog": "hybrid",
   "project:open-git-init-dialog": "hybrid",
+  "project:panel-recovery-query": "shell",
+  "project:panel-recovery-reply": "shell",
   "project:prefetch-hydrate": "hybrid",
   "project:read-claude-md": "host",
   "project:remove": "host",

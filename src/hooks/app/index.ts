@@ -13,6 +13,7 @@ export { useRosettaWarning } from "./useRosettaWarning";
 export { useAccessibilityAnnouncements } from "./useAccessibilityAnnouncements";
 export { useGettingStartedChecklist } from "./useGettingStartedChecklist";
 export { useUnloadCleanup } from "./useUnloadCleanup";
+export { usePanelRecoveryResponder } from "./usePanelRecoveryResponder";
 export { useHomeDir } from "./useHomeDir";
 export { usePerformanceMonitors } from "./usePerformanceMonitors";
 export { useSettingsDialog } from "./useSettingsDialog";

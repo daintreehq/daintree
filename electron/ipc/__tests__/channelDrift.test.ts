@@ -61,6 +61,11 @@ const DEAD_CHANNEL_ALLOWLIST = new Set<string>([
   // public/skeleton-ready.js, consumed by a WebContents-scoped `ipc.once`
   // in createWindow.ts loadRenderer.
   "app:skeleton-parsed",
+
+  // fire-and-forget — renderer→main `ipcRenderer.send` reply to the
+  // `project:panel-recovery-query` event, matched by request id in
+  // panelRecoveryQuery.ts.
+  "project:panel-recovery-reply",
   "mcp:dispatch-action-response",
   "mcp:get-manifest-response",
   "plugin:dispatch-action-response",

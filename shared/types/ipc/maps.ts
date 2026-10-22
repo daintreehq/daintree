@@ -1778,6 +1778,7 @@ export interface IpcEventMap {
   "project:on-switch": ProjectSwitchPayload;
   "project:worktree-load-status": ProjectWorktreeLoadStatusPayload;
   "project:focus-on-activate": ProjectFocusOnActivateIntent;
+  "project:panel-recovery-query": string;
   "project:background-resize": { width: number; height: number };
   "project:stats-updated": ProjectStatusMap;
   "fleet:snapshot-updated": FleetSnapshot;

@@ -744,7 +744,7 @@ export class IdleBackgroundAutoCloseService {
     if (outcome.status === "skipped") {
       return {
         status: "skipped",
-        reason: outcome.reason === "mcp-dispatch" ? "mcp-dispatch" : "ineligible",
+        reason: outcome.reason === "in-flight" ? "ineligible" : outcome.reason,
       };
     }
     if (outcome.status !== "slept") return { status: "ineligible" };

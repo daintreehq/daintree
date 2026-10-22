@@ -22,7 +22,9 @@ export type IdleShellSkipReason =
   | "agent-terminal"
   | "terminal-unknown"
   | "terminal-busy"
-  | "terminal-activity";
+  | "terminal-activity"
+  | "panel-unrecoverable"
+  | "panel-unknown";
 
 export type GateResult<T> = { ok: true; value: T } | { ok: false; reason: IdleShellSkipReason };
 

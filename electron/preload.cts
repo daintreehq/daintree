@@ -2205,6 +2205,13 @@ function buildElectronApi(): ElectronAPI {
         ) => void
       ) => _typedOn(CHANNELS.PROJECT_FOCUS_ON_ACTIVATE, callback),
 
+      onPanelRecoveryQuery: (callback: (requestId: string) => void) =>
+        _typedOn(CHANNELS.PROJECT_PANEL_RECOVERY_QUERY, callback),
+
+      replyPanelRecovery: (requestId: string, holding: boolean) => {
+        ipcRenderer.send(CHANNELS.PROJECT_PANEL_RECOVERY_REPLY, { requestId, holding });
+      },
+
       onBackgroundResize: (callback: (payload: { width: number; height: number }) => void) =>
         _typedOn(CHANNELS.PROJECT_BACKGROUND_RESIZE, callback),
 

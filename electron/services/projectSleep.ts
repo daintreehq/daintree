@@ -9,6 +9,7 @@ import {
   type ProjectTeardownSnapshot,
 } from "./pty/projectSessionJournal.js";
 import { notifyProjectPluginsClosed } from "../window/projectPluginLifecycle.js";
+import { readPanelRecoveryHold, type PanelRecoveryHold } from "./panelRecoveryQuery.js";
 import type { ProjectViewManagersProvider } from "../window/activeProjectIds.js";
 import type { PtyClient } from "./PtyClient.js";
 import type { WorkspaceClient } from "./WorkspaceClient.js";
@@ -54,7 +55,7 @@ export type SleepProjectOptions =
     };
 
 /** Why a policy can't go on right now. */
-type PolicyRefusal = "mcp-dispatch" | "ineligible";
+type PolicyRefusal = "mcp-dispatch" | "ineligible" | PanelRecoveryHold;
 
 export type SleepProjectOutcome =
   | ({ status: "slept" } & ProjectSleepResult)
@@ -65,6 +66,8 @@ export type SleepProjectOutcome =
        * `in-flight`: another sleep of this project is already running.
        * `mcp-dispatch`: an MCP dispatch is waiting on one of its views.
        * `ineligible`: the policy said no at a later check.
+       * `panel-unrecoverable` / `panel-unknown`: a view holds work recovery
+       * storage would not bring back, or could not say whether it does.
        */
       reason: "in-flight" | PolicyRefusal;
     };
@@ -159,6 +162,11 @@ async function runSleep(
     if (isMcpDispatchProtected(projectId, deps.projectViewManagers)) return "mcp-dispatch";
     return null;
   };
+  // A user's Sleep goes through unsaved work on purpose; an automatic one has
+  // no one to have asked, so it waits for the view to say it holds nothing a
+  // destroyed view would lose.
+  const panelRefusal = async (): Promise<PolicyRefusal | null> =>
+    policy ? readPanelRecoveryHold(projectId, deps.projectViewManagers) : null;
   const skip = (reason: PolicyRefusal): SleepProjectOutcome => {
     logInfo("project-sleep-skipped", { projectId, initiator: options.initiator, reason });
     return { status: "skipped", reason };
@@ -168,6 +176,10 @@ async function runSleep(
   // never even revoked (claim-then-act, #10820).
   const refusedUpFront = policyRefusal();
   if (refusedUpFront) return skip(refusedUpFront);
+  const panelHoldUpFront = await panelRefusal();
+  if (panelHoldUpFront) return skip(panelHoldUpFront);
+  const refusedAfterPanelRead = policyRefusal();
+  if (refusedAfterPanelRead) return skip(refusedAfterPanelRead);
 
   try {
     const ptyClient = deps.ptyClient;
@@ -236,6 +248,16 @@ async function runSleep(
         // Costs this terminal its restore banner, nothing else.
         console.warn(`[ProjectSleep] marker failed for ${session.id}:`, markerError);
       }
+    }
+
+    // A draft can start in the seconds the kill took, and the view it lives in
+    // is about to be destroyed. The terminals are already gone, so a hold here
+    // leaves the project open with the same restore markers a refusal after
+    // the kill always leaves.
+    const panelHoldBeforeEviction = await panelRefusal();
+    if (panelHoldBeforeEviction) {
+      logInfo("project-sleep-panel-hold-after-kill", { projectId, terminalsKilled });
+      return skip(panelHoldBeforeEviction);
     }
 
     // A policy asks once more after the slowest await of all. A project picked

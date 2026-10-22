@@ -731,6 +731,9 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     onFocusOnActivate(
       callback: (payload: import("./project.js").ProjectFocusOnActivateIntent) => void
     ): () => void;
+    /** Main asks whether this view holds work that would not survive its teardown. */
+    onPanelRecoveryQuery(callback: (requestId: string) => void): () => void;
+    replyPanelRecovery(requestId: string, holding: boolean): void;
     onBackgroundResize(callback: (payload: { width: number; height: number }) => void): () => void;
     onUpdated(callback: (project: Project) => void): () => void;
     /** A project was put to sleep — a window showing it drops to no-project. */

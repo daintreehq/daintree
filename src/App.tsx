@@ -48,6 +48,7 @@ import {
   useRosettaWarning,
   useAccessibilityAnnouncements,
   useUnloadCleanup,
+  usePanelRecoveryResponder,
   useHomeDir,
   usePerformanceMonitors,
   useSettingsDialog,
@@ -125,6 +126,7 @@ void ensureHydrationBootstrap().catch(() => {});
 function AppInner() {
   useErrors();
   useUnloadCleanup();
+  usePanelRecoveryResponder();
   useResourceProfile();
   usePowerSavingMotion();
   useOverlayClaimCountMarker();
