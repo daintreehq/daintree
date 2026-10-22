@@ -7,6 +7,7 @@ import type {
 import type { PtyClient } from "./PtyClient.js";
 import type { ProjectViewManager } from "../window/ProjectViewManager.js";
 import { collectActiveProjectIds } from "../window/activeProjectIds.js";
+import { projectVisibilityClock, type ProjectVisibilityClock } from "./projectVisibilityClock.js";
 import { getPtyClient, getWorkspaceClientRef } from "../window/serviceRefs.js";
 import { store } from "../store.js";
 import { projectStore } from "./ProjectStore.js";
@@ -76,6 +77,8 @@ export class IdleBackgroundAutoCloseService {
   private projectViewManagersProvider: (() => ProjectViewManager[]) | null = null;
   /** Guards against overlapping sweeps when one cycle outruns the 5-min tick. */
   private sweepInProgress = false;
+
+  constructor(private readonly visibilityClock: ProjectVisibilityClock = projectVisibilityClock) {}
 
   /**
    * Inject the live PtyClient so terminal-presence checks read the real registry
@@ -320,13 +323,28 @@ export class IdleBackgroundAutoCloseService {
    * per-window ProjectViewManager and falls back to the SQLite current-project
    * pointer so an early-startup sweep (before the provider is wired) still skips
    * the active project.
+   *
+   * Every read is also an observation for the visibility clock, so a project
+   * that left the screen since the clock last looked is stamped before any idle
+   * age is measured from it.
    */
   private collectActiveProjectIds(): Set<string> {
-    return collectActiveProjectIds(
+    const activeIds = collectActiveProjectIds(
       this.projectViewManagersProvider,
       projectStore.getCurrentProjectId(),
       "idle-background-auto-close"
     );
+    this.visibilityClock.observe(activeIds);
+    return activeIds;
+  }
+
+  /**
+   * Idle means time since the project was last on screen anywhere, never time
+   * since `lastOpened` — the MRU field keeps its open time on every way out
+   * except a project-to-project switch (#13844).
+   */
+  private isWithinIdleThreshold(projectId: string, now: number, thresholdMs: number): boolean {
+    return now - this.visibilityClock.lastVisibleAt(projectId) < thresholdMs;
   }
 
   private async checkAndClose(): Promise<void> {
@@ -398,7 +416,7 @@ export class IdleBackgroundAutoCloseService {
       if (!project.lastOpened || project.lastOpened <= 0) continue;
 
       // Still within the idle threshold.
-      if (now - project.lastOpened < thresholdMs) continue;
+      if (this.isWithinIdleThreshold(pid, now, thresholdMs)) continue;
 
       // Gate: terminal presence. Any live PTY means skip — we never tear down a
       // project that still has agent/terminal scrollback, and the Daintree
@@ -458,8 +476,12 @@ export class IdleBackgroundAutoCloseService {
     const fresh = projectStore.getProjectById(projectId);
     if (!fresh || fresh.status !== "background") return null;
     if (!fresh.lastOpened || fresh.lastOpened <= 0) return null;
-    if (now - fresh.lastOpened < thresholdMs) return null;
+    // Read the active set first: it is what stamps a visit that came and went
+    // during the caller's await, and the age check below has to see that stamp.
+    // Such a stamp postdates the sweep's `now`, so the age goes negative and the
+    // project stays put.
     if (this.collectActiveProjectIds().has(projectId)) return null;
+    if (this.isWithinIdleThreshold(projectId, now, thresholdMs)) return null;
     return fresh;
   }
 
@@ -475,10 +497,10 @@ export class IdleBackgroundAutoCloseService {
     thresholdMs: number
   ): Promise<IdleBackgroundClosedProjectEntry | null> {
     // Re-verify eligibility against FRESH state immediately before the
-    // irreversible teardown. The sweep snapshotted projects (status, lastOpened)
-    // and terminals before this async loop, so during an earlier project's awaits
-    // the user could have switched to this project — which bumps its lastOpened
-    // to `now-1` and flips its status — or spawned a terminal in it (TOCTOU). Re-
+    // irreversible teardown. The sweep snapshotted projects (status) and
+    // terminals before this async loop, so during an earlier project's awaits
+    // the user could have switched to this project — which puts it on screen
+    // and flips its status — or spawned a terminal in it (TOCTOU). Re-
     // read the project row and the live registry, and bail if anything now
     // disqualifies it. Also re-check `enabled` so a toggle-off mid-sweep halts.
     const fresh = this.readEligibleProject(projectId, now, thresholdMs);

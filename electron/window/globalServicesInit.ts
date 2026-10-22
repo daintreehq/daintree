@@ -80,11 +80,13 @@ import {
   getFleetSnapshotService,
 } from "../ipc/handlers/projectCrud/index.js";
 import { registerDeferredTask } from "./deferredInitQueue.js";
+import { collectActiveProjectIds, projectViewManagersFrom } from "./activeProjectIds.js";
 import { isSmokeTest } from "../setup/environment.js";
 import { setPluginDirResolver, setPluginTourAudioResolver } from "../setup/protocols.js";
 import { isE2EFaultMode, isE2EMode } from "../setup/runtimeFlags.js";
 import { activateOpenFileInstaller } from "../setup/openFileInstall.js";
 import { projectStore } from "../services/ProjectStore.js";
+import { trackProjectVisibility } from "../services/projectVisibilityClock.js";
 import { getCompositeMemorySnapshot } from "../services/memoryAccounting.js";
 import { scratchStore } from "../services/ScratchStore.js";
 import { registerCommands } from "../services/commands/index.js";
@@ -565,6 +567,22 @@ export async function initGlobalServices(
     name: "crash-recovery-backup-timer",
     run: () => {
       getCrashRecoveryService().startBackupTimer();
+    },
+  });
+
+  registerDeferredTask({
+    name: "project-visibility-clock",
+    run: () => {
+      // Idle gates measure from when a project was last on screen (#13844). The
+      // sweeps observe too, but only this catches a project that comes and goes
+      // between two of them. The same union the reclaim guards read.
+      trackProjectVisibility(() =>
+        collectActiveProjectIds(
+          projectViewManagersFrom(windowRegistry),
+          projectStore.getCurrentProjectId(),
+          "project-visibility-clock"
+        )
+      );
     },
   });
 

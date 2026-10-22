@@ -120,13 +120,41 @@ const pluginLifecycleMock = vi.hoisted(() => ({
 vi.mock("../../window/projectPluginLifecycle.js", () => pluginLifecycleMock);
 
 import { IdleBackgroundAutoCloseService } from "../IdleBackgroundAutoCloseService.js";
+import { ProjectVisibilityClock, trackProjectVisibility } from "../projectVisibilityClock.js";
+import { collectActiveProjectIds } from "../../window/activeProjectIds.js";
+import { notifyProjectPresenceChanged } from "../../window/projectPresenceChanges.js";
 import type { PtyClient } from "../PtyClient.js";
 import type { ProjectViewManager } from "../../window/ProjectViewManager.js";
 
 const THIRTY_MIN_MS = 30 * 60 * 1000;
 
-function makeService(): IdleBackgroundAutoCloseService {
-  const service = new IdleBackgroundAutoCloseService();
+/** Pins the visibility clock's "now" while a test back-dates an observation. */
+const clockNowOverride = vi.hoisted(() => ({ value: null as number | null }));
+
+/**
+ * A visibility clock that has been running for `runningForMs` without seeing
+ * any project on screen — so every project starts out that idle.
+ */
+function makeClock(runningForMs = THIRTY_MIN_MS): ProjectVisibilityClock {
+  return new ProjectVisibilityClock(
+    () => clockNowOverride.value ?? Date.now(),
+    Date.now() - runningForMs
+  );
+}
+
+/** The project was on screen until `agoMs` ago. */
+function leftScreen(clock: ProjectVisibilityClock, projectId: string, agoMs = 0): void {
+  clockNowOverride.value = Date.now() - agoMs;
+  try {
+    clock.observe([projectId]);
+    clock.observe([]);
+  } finally {
+    clockNowOverride.value = null;
+  }
+}
+
+function makeService(clock: ProjectVisibilityClock = makeClock()): IdleBackgroundAutoCloseService {
+  const service = new IdleBackgroundAutoCloseService(clock);
   service.setPtyClient(ptyClientMock as unknown as PtyClient);
   return service;
 }
@@ -656,12 +684,12 @@ describe("IdleBackgroundAutoCloseService", () => {
       );
     });
 
-    it("skips a project still within the idle threshold", async () => {
+    it("skips a project last on screen within the idle threshold", async () => {
       enable(60);
-      projectStoreMock.getAllProjects.mockReturnValue([
-        makeIdleProject("proj-1", { lastOpened: Date.now() - THIRTY_MIN_MS }),
-      ]);
-      const service = makeService();
+      projectStoreMock.getAllProjects.mockReturnValue([makeIdleProject("proj-1")]);
+      const clock = makeClock(2 * 60 * 60 * 1000);
+      leftScreen(clock, "proj-1", THIRTY_MIN_MS);
+      const service = makeService(clock);
       await runCheck(service);
       expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
     });
@@ -784,6 +812,85 @@ describe("IdleBackgroundAutoCloseService", () => {
     });
   });
 
+  describe("idle clock (#13844)", () => {
+    const THREE_HOURS_MS = 3 * 60 * 60 * 1000;
+
+    it("does not reclaim a project that was on screen at the previous sweep, however old its lastOpened", async () => {
+      enable();
+      // Opened hours ago and worked in ever since: lastOpened still holds the
+      // open time, because leaving for a scratch never stamps it.
+      const stale = { lastOpened: Date.now() - THREE_HOURS_MS };
+      projectStoreMock.getAllProjects.mockReturnValue([makeIdleProject("proj-1", stale)]);
+      projectStoreMock.getProjectById.mockImplementation((id) => makeIdleProject(id, stale));
+      let onScreen = true;
+      const service = makeService();
+      service.setProjectViewManagersProvider(() => [makePvm(onScreen ? "proj-1" : "scratch-1")]);
+
+      await runCheck(service);
+      onScreen = false;
+      await runCheck(service);
+
+      expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
+      expect(evictProjectRendererMock).not.toHaveBeenCalled();
+    });
+
+    it("counts a visit that started and ended between two sweeps", async () => {
+      enable();
+      const stale = { lastOpened: Date.now() - THREE_HOURS_MS };
+      projectStoreMock.getAllProjects.mockReturnValue([makeIdleProject("proj-1", stale)]);
+      projectStoreMock.getProjectById.mockImplementation((id) => makeIdleProject(id, stale));
+      const clock = makeClock(THREE_HOURS_MS);
+      let shown = "scratch-1";
+      const provider = () => [makePvm(shown)];
+      const stopTracking = trackProjectVisibility(
+        () => collectActiveProjectIds(provider, null, "test"),
+        clock
+      );
+      const service = makeService(clock);
+      service.setProjectViewManagersProvider(provider);
+
+      try {
+        // No sweep ever sees proj-1 on screen: it comes and goes in between.
+        shown = "proj-1";
+        notifyProjectPresenceChanged();
+        shown = "scratch-1";
+        notifyProjectPresenceChanged();
+        await runCheck(service);
+      } finally {
+        stopTracking();
+      }
+
+      expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
+    });
+
+    it("gives a project nothing has seen since startup a full threshold, whatever its lastOpened", async () => {
+      enable();
+      const yesterday = { lastOpened: Date.now() - 24 * 60 * 60 * 1000 };
+      projectStoreMock.getAllProjects.mockReturnValue([makeIdleProject("proj-1", yesterday)]);
+      projectStoreMock.getProjectById.mockImplementation((id) => makeIdleProject(id, yesterday));
+      const service = makeService(makeClock(5 * 60 * 1000));
+      await runCheck(service);
+      expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
+    });
+
+    it("closes a project off screen past the threshold even when its lastOpened is fresh", async () => {
+      enable();
+      // The MRU stamp is the switcher's, not the idle timer's.
+      const fresh = { lastOpened: Date.now() };
+      projectStoreMock.getAllProjects.mockReturnValue([makeIdleProject("proj-1", fresh)]);
+      projectStoreMock.getProjectById.mockImplementation((id) => makeIdleProject(id, fresh));
+      const clock = makeClock(THREE_HOURS_MS);
+      leftScreen(clock, "proj-1", THIRTY_MIN_MS);
+      const service = makeService(clock);
+      await runCheck(service);
+      expect(projectStoreMock.updateProjectStatus).toHaveBeenCalledWith(
+        "proj-1",
+        "closed",
+        expect.anything()
+      );
+    });
+  });
+
   describe("teardown re-check (TOCTOU)", () => {
     it("does not close a project that became active during the sweep", async () => {
       enable();
@@ -811,19 +918,20 @@ describe("IdleBackgroundAutoCloseService", () => {
       expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
     });
 
-    it("does not close a project whose lastOpened was freshly bumped (re-fetch)", async () => {
+    it("does not close a project that came on screen and went during the sweep", async () => {
       enable();
       projectStoreMock.getAllProjects.mockReturnValue([makeIdleProject("proj-1")]);
-      // The fresh row read at teardown shows a just-switched-away project: still
-      // "background" with zero terminals, but lastOpened bumped to ~now.
-      projectStoreMock.getProjectById.mockReturnValue({
-        id: "proj-1",
-        name: "proj-1",
-        path: "/projects/proj-1",
-        status: "background",
-        lastOpened: Date.now(),
-      });
-      const service = makeService();
+      const clock = makeClock();
+      // A switch there and straight back while the teardown's terminal snapshot
+      // is in flight: the row is still "background" with zero terminals and no
+      // window shows it at the re-check. Only the clock saw the visit.
+      ptyClientMock.getAllTerminalsAsync
+        .mockResolvedValueOnce([])
+        .mockImplementationOnce(async () => {
+          leftScreen(clock, "proj-1");
+          return [];
+        });
+      const service = makeService(clock);
       await runCheck(service);
       expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
     });
@@ -866,9 +974,9 @@ describe("IdleBackgroundAutoCloseService", () => {
         }));
       }
 
-      function makeActivatableService(): IdleBackgroundAutoCloseService {
+      function makeActivatableService(clock = makeClock()): IdleBackgroundAutoCloseService {
         activated = false;
-        const service = makeService();
+        const service = makeService(clock);
         service.setProjectViewManagersProvider(() => (activated ? [makePvm("proj-1")] : []));
         return service;
       }
@@ -921,24 +1029,19 @@ describe("IdleBackgroundAutoCloseService", () => {
         expectSurvived();
       });
 
-      it("survives a lastOpened bump during the kill even before the row leaves background", async () => {
+      it("survives a visit that came and went during the kill, before the row leaves background", async () => {
         enable();
         projectStoreMock.getAllProjects.mockReturnValue([makeIdleProject("proj-1")]);
         const kill = deferred<Array<{ id: string }>>();
         ptyClientMock.gracefulKillByProject.mockReturnValueOnce(kill.promise);
-        const service = makeActivatableService();
+        const clock = makeClock();
+        const service = makeActivatableService(clock);
 
         const sweep = runCheck(service);
         await vi.waitFor(() =>
           expect(ptyClientMock.gracefulKillByProject).toHaveBeenCalledTimes(1)
         );
-        projectStoreMock.getProjectById.mockImplementation((id) => ({
-          id,
-          name: id,
-          path: `/projects/${id}`,
-          status: "background",
-          lastOpened: Date.now(),
-        }));
+        leftScreen(clock, "proj-1");
         kill.resolve([]);
         await sweep;
 
