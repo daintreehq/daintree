@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { isPtyPanel } from "@shared/types/panel";
 import { usePanelStore } from "@/store";
+import { exitProjectHome } from "@/store/storeAccessors";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useScreenReaderStore } from "@/store/screenReaderStore";
@@ -197,6 +198,10 @@ export function useTypeAnywhere(): void {
       // a worktree the user isn't currently looking at.
       if (panelStore.maximizedId !== null && panelStore.maximizedId !== targetId) {
         panelStore.exitMaximize();
+      }
+      // Home hides every grid pane; the dock stays on screen beside it.
+      if (target.location === "grid" || target.location === undefined) {
+        exitProjectHome();
       }
       panelStore.setPreferredTerminalFocusTarget("hybridInput");
       panelStore.setFocused(targetId);

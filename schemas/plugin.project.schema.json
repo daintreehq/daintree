@@ -1788,6 +1788,21 @@
                 "viewId"
               ],
               "additionalProperties": false
+            },
+            "projectHome": {
+              "type": "object",
+              "properties": {
+                "viewId": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 64,
+                  "pattern": "^[a-zA-Z0-9._-]+$"
+                }
+              },
+              "required": [
+                "viewId"
+              ],
+              "additionalProperties": false
             }
           },
           "additionalProperties": false

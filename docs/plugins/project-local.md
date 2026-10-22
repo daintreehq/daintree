@@ -177,19 +177,22 @@ These are deferred, not closed. Each error names the structural obstacle so that
 
 `contributes.surfaces` lets a project plugin replace one of the host's own surfaces for its own project, so the project can present as a purpose-built application rather than as Daintree with one extra panel. It is available to `scope: "project"` plugins only: an installed plugin is bound to no project, so there is nothing to scope a claim to and nothing to arbitrate a second claimant against.
 
-One slot exists today.
+Two slots exist today.
 
 ```jsonc
 "contributes": {
   "panels": [{ "id": "overview", "name": "Overview", "iconId": "gauge", "color": "var(--theme-category-orange)" }],
   "views":  [{ "id": "overview", "componentPath": "dist/panel.js", "location": "panel" }],
   "surfaces": {
-    "emptyCanvas": { "viewId": "overview" }
+    "emptyCanvas": { "viewId": "overview" },
+    "projectHome": { "viewId": "overview" }
   }
 }
 ```
 
-`emptyCanvas` replaces what the content grid draws when the project has no panels open — the region the stock launcher lives in.
+`emptyCanvas` replaces what the content grid draws when the project has no panels open — the region the stock launcher lives in. It gives way the moment a panel opens, which is right for a cold open.
+
+`projectHome` gives the project a Home the main area can switch to beside the grid, for a project whose main screen is the plugin. While it can show, the host draws a Home/Grid switch above the main area: Home shows your view, with the project's banners above it, and the grid is one click back. Which of the two a project was left on is remembered for it on this machine, and a palette action goes either way. Fleet scope and a maximized panel still draw over Home, and focusing, spawning, moving or restoring a grid panel returns to the grid, because that panel would otherwise land out of sight. The sidebar, the dock and the toolbar stay on screen, so agent attention signals never hide behind it, and a notice from the panel that held focus still reaches the user. Home is a route, not a URL: nothing outside the app can open it.
 
 Rules:
 
@@ -198,9 +201,10 @@ Rules:
 - **`viewId` must name a declared `contributes.views` entry**, cross-checked at manifest validation like any other dangling reference. It must not name a `location: "settings"` view, which has no panel to draw, or a panel with `hasPty: true` — a PTY panel is rendered by the terminal host and never loads the view module, so the claim would hold the slot and draw nothing.
 - **At most one plugin per slot per project.** The plugin with the lower manifest id keeps it, whichever loaded first, so a reload never hands the slot to the other one. The other is refused, with both plugin names logged and shown beside your plugin in Project settings → Plugins, in the Plugin Manager and in `daintree-plugin doctor` — fixing it means editing one of the two manifests, and you cannot do that without knowing the other. The refused plugin still loads and everything else it contributes works, and its claim is remembered: if the winner later unloads, the slot passes to it rather than reverting to stock.
 - The surface view receives the standard `PanelViewProps` (`panelId`, `pluginId`, `disposeSignal`) and sits inside the standard plugin error boundary, so a crash falls back with a working "Try again" rather than a blank region.
+- **On Home, the slot's strip sits below your view instead**, clear of the Home/Grid switch above it. Its switch names your panel and "No home": choosing No home removes the Home entry altogether until the user turns it back on in Project settings → Plugins. Going to the grid with the Home/Grid switch never answers that question, so Home stays on offer.
 - **The box is the region below the strip, at its full height.** A surface gets the same container a panel view does — `flex flex-col flex-1 min-h-0 w-full` — so the root shape in [Views](./views.md#where-you-render) applies here unchanged, and a view with its own bottom bar can rely on that bar sitting on the region's bottom edge.
 
-`projectHome` and `defaultLayout` appear in the design notes for this feature and are **not implemented** — the manifest schema rejects them. There is no per-project routing a persistent home surface could live at yet, and a recipe is launched against a worktree rather than against a project cold open. They land with the routing they need, not before it.
+`defaultLayout` appears in the design notes for this feature and is **not implemented** — the manifest schema rejects it. A recipe is launched against a worktree rather than against a project cold open, so it lands with the cold-open routing it needs, not before it.
 
 ## Binding — which project a host call reaches
 

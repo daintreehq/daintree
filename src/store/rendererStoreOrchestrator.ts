@@ -23,6 +23,7 @@ import { useCliAvailabilityStore } from "./cliAvailabilityStore";
 import { useAgentSettingsStore } from "./agentSettingsStore";
 import { useHelpPanelStore } from "./helpPanelStore";
 import { usePortalStore } from "./portalStore";
+import { useProjectHomeStore } from "./projectHomeStore";
 import { removeArtifactsForTerminal } from "@/hooks/useArtifacts";
 import { forgetPanelActivity } from "@/utils/panelProps";
 import {
@@ -121,7 +122,11 @@ export function initStoreOrchestrator(): () => void {
   // navigates away within the grace window.
   setActiveContextAccessors({
     getActiveWorktreeId: () => useWorktreeSelectionStore.getState().activeWorktreeId,
-    getFocusedPanelId: () => usePanelStore.getState().focusedId,
+    // The project's Home hides the grid, focused panel and all, so while it
+    // shows nothing focused is on screen — and a notice from that panel is
+    // exactly the attention signal Home must never swallow.
+    getFocusedPanelId: () =>
+      useProjectHomeStore.getState().presented ? null : usePanelStore.getState().focusedId,
     subscribeActiveContext: (cb) => {
       const unsubWorktree = useWorktreeSelectionStore.subscribe((state, prev) => {
         if (state.activeWorktreeId !== prev.activeWorktreeId) cb();
@@ -130,9 +135,13 @@ export function initStoreOrchestrator(): () => void {
         (state) => state.focusedId,
         () => cb()
       );
+      const unsubHome = useProjectHomeStore.subscribe((state, prev) => {
+        if (state.presented !== prev.presented) cb();
+      });
       return () => {
         unsubWorktree();
         unsubPanel();
+        unsubHome();
       };
     },
   });

@@ -11,6 +11,7 @@ import {
 } from "@/store/panelFocusFallback";
 import type { TerminalFocusTarget } from "@/components/Terminal/terminalFocus";
 import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
+import { exitProjectHome } from "@/store/storeAccessors";
 
 type CarrierPanel = Parameters<typeof getNarrowPanel>[0][string];
 
@@ -547,6 +548,10 @@ export const createTerminalFocusSlice =
       focusOrMaximizeByIndex: (index, findByIndex, getPanelGroup) => {
         const targetId = findByIndex(index);
         if (!targetId) return;
+        // Index navigation addresses grid cells, so it is a request for the
+        // grid — including the branch that maximizes the focused cell without
+        // going through `activateTerminal`.
+        exitProjectHome();
         const {
           focusedId,
           maximizedId,
@@ -686,6 +691,13 @@ export const createTerminalFocusSlice =
         // dialog's own trap, and the `else` branch below would otherwise treat
         // this non-dock location as grid and hand it the grid focus pointer.
         if (terminal.location === "dialog") return;
+
+        // The same goes for the project's Home, which hides the grid of every
+        // worktree — so unlike the maximize check below, a grid panel in
+        // another worktree counts too. The dock stays visible on Home.
+        if (terminal.location === "grid" || terminal.location === undefined) {
+          exitProjectHome();
+        }
 
         // Activation means "show me this panel", so a fullscreen cell rendering
         // over the grid has to go — otherwise the panel lands focused and

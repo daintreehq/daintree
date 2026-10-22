@@ -5,7 +5,10 @@ import {
   type PanelKindConfig,
 } from "@shared/config/panelKindRegistry";
 import type { ProjectSurfaceClaim, ProjectSurfaceSlot } from "@shared/types/plugin";
-import { usePluginProjectSurfacesStore } from "@/store/pluginProjectSurfacesStore";
+import {
+  selectSurfaceChoice,
+  usePluginProjectSurfacesStore,
+} from "@/store/pluginProjectSurfacesStore";
 
 type PanelKindRegistrySnapshot = ReturnType<typeof getPanelKindRegistrySnapshot>;
 
@@ -60,4 +63,15 @@ export function renderableSurfaceClaim(
   const config = registry[claim.panelKindId];
   if (config === undefined || config.componentPath === undefined) return null;
   return { claim, config };
+}
+
+/**
+ * `useProjectSurface`'s answer read once, outside React: the claim on `slot`
+ * when it can render and the user hasn't chosen the stock content. For callers
+ * with no render to subscribe from — an action deciding whether it applies.
+ */
+export function currentProjectSurface(slot: ProjectSurfaceSlot): RenderableSurfaceClaim | null {
+  const state = usePluginProjectSurfacesStore.getState();
+  if (!state.choicesLoaded || selectSurfaceChoice(state, slot) === "stock") return null;
+  return renderableSurfaceClaim(state.surfaces[slot], getPanelKindRegistrySnapshot());
 }

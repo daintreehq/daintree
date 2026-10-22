@@ -46,6 +46,21 @@ vi.mock("@/services/TerminalInstanceService", () => ({
   },
 }));
 
+const notifyContext = vi.hoisted(() => ({
+  accessors: null as null | import("@/lib/notify").ActiveContextAccessors,
+}));
+
+vi.mock("@/lib/notify", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/notify")>();
+  return {
+    ...actual,
+    setActiveContextAccessors: (accessors: import("@/lib/notify").ActiveContextAccessors) => {
+      notifyContext.accessors = accessors;
+      actual.setActiveContextAccessors(accessors);
+    },
+  };
+});
+
 vi.mock("../../persistence/panelPersistence", () => ({
   panelPersistence: {
     setProjectIdGetter: vi.fn(),
@@ -100,6 +115,7 @@ const { agentSettingsClient } = await import("@/clients");
 const { DEFAULT_AGENT_SETTINGS } = await import("@shared/types");
 const { useHelpPanelStore } = await import("../helpPanelStore");
 const { usePortalStore } = await import("../portalStore");
+const { useProjectHomeStore } = await import("../projectHomeStore");
 const { initStoreOrchestrator, destroyStoreOrchestrator } =
   await import("../rendererStoreOrchestrator");
 
@@ -130,6 +146,40 @@ describe("rendererStoreOrchestrator", () => {
 
   afterEach(() => {
     destroyStoreOrchestrator();
+  });
+
+  describe("notification origin while the project's Home shows", () => {
+    afterEach(() => {
+      useProjectHomeStore.setState({ presented: false });
+    });
+
+    it("reports no focused panel while Home hides the grid", () => {
+      usePanelStore.setState({ focusedId: "term-1" });
+      const accessors = notifyContext.accessors!;
+      expect(accessors.getFocusedPanelId()).toBe("term-1");
+
+      useProjectHomeStore.setState({ presented: true });
+      expect(accessors.getFocusedPanelId()).toBeNull();
+
+      useProjectHomeStore.setState({ presented: false });
+      expect(accessors.getFocusedPanelId()).toBe("term-1");
+    });
+
+    it("tells a waiting suppression when the user moves onto or off Home", () => {
+      const changed = vi.fn();
+      const unsubscribe = notifyContext.accessors!.subscribeActiveContext(changed);
+
+      useProjectHomeStore.setState({ presented: true });
+      expect(changed).toHaveBeenCalledTimes(1);
+      // A write that leaves Home's presence alone is not a move.
+      useProjectHomeStore.setState({ homeByProject: { other: true } });
+      expect(changed).toHaveBeenCalledTimes(1);
+
+      unsubscribe();
+      useProjectHomeStore.setState({ presented: false });
+      expect(changed).toHaveBeenCalledTimes(1);
+      useProjectHomeStore.setState({ homeByProject: {} });
+    });
   });
 
   it("tracks terminal focus in worktree store when focusedId changes", () => {

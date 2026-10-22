@@ -4,39 +4,11 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { act, render, screen, within } from "@testing-library/react";
 import { registerPanelKind, unregisterPanelKind } from "@shared/config/panelKindRegistry";
 import {
-  PROJECT_SURFACE_SLOTS,
   type ProjectSurfaceChoiceUpdate,
   type ProjectSurfaceChoices,
   type ProjectSurfaceSlot,
   type ProjectSurfaceSlotState,
 } from "@shared/types/plugin";
-
-/**
- * Only `emptyCanvas` is catalogued, so this file declares a second slot for
- * itself: one plugin setting up several slots is the case the shared notice is
- * for.
- */
-vi.mock("@shared/types/plugin", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@shared/types/plugin")>();
-  const catalogue = {
-    ...actual.PROJECT_SURFACE_SLOT_CATALOGUE,
-    projectHome: {
-      mode: "exclusive",
-      claim: "view",
-      label: "Home",
-      stockLabel: "Overview",
-      noun: "home",
-      switchPlacement: "above",
-    },
-  };
-  const slots = Object.keys(catalogue);
-  return {
-    ...actual,
-    PROJECT_SURFACE_SLOT_CATALOGUE: catalogue,
-    PROJECT_SURFACE_SLOTS: slots,
-    isProjectSurfaceSlot: (value: unknown) => slots.some((slot) => slot === value),
-  };
-});
 
 vi.mock("@/components/Plugin/PluginViewContent", () => ({
   makePluginViewContent: () => () => null,
@@ -53,8 +25,7 @@ import {
   useProjectPluginStore,
 } from "@/store/projectPluginStore";
 
-/** The slot this file's catalogue mock adds after `emptyCanvas`. */
-const HOME = PROJECT_SURFACE_SLOTS[1]!;
+const HOME: ProjectSurfaceSlot = "projectHome";
 const OWNER = "project__p1__acme.dash";
 const kindOf = (slot: ProjectSurfaceSlot) => `project:p1/acme.dash/${slot}`;
 
@@ -207,7 +178,7 @@ describe("the shared consent notice", () => {
     expect(screen.getAllByRole("status")).toHaveLength(1);
     const [canvas, home] = frames();
     expect(canvas?.notice?.textContent).toContain(
-      "Acme Dashboard set up this project: Empty canvas, Home"
+      "Acme Dashboard set up this project: Empty canvas, Project home"
     );
     expect(home?.notice).toBeNull();
 
@@ -232,7 +203,7 @@ describe("the shared consent notice", () => {
 
     const [canvas, home] = frames();
     expect(canvas?.notice).toBeNull();
-    expect(home?.notice?.textContent).toContain("Acme Dashboard set up this project: Home");
+    expect(home?.notice?.textContent).toContain("Acme Dashboard set up this project: Project home");
 
     await act(async () => {
       within(screen.getByRole("status")).getByRole("button", { name: "Keep" }).click();
@@ -250,7 +221,9 @@ describe("the shared consent notice", () => {
     render(<Frames slots={["emptyCanvas", HOME]} />);
 
     expect(screen.getAllByRole("status")).toHaveLength(1);
-    expect(frames()[1]?.notice?.textContent).toContain("beta.home set up this project: Home");
+    expect(frames()[1]?.notice?.textContent).toContain(
+      "beta.home set up this project: Project home"
+    );
   });
 
   it("hands the question to the next frame when its frame goes away", () => {
@@ -262,7 +235,9 @@ describe("the shared consent notice", () => {
 
     expect(screen.getAllByRole("status")).toHaveLength(1);
     expect(frames()[0]?.slot).toBe(HOME);
-    expect(frames()[0]?.notice?.textContent).toContain("set up this project: Empty canvas, Home");
+    expect(frames()[0]?.notice?.textContent).toContain(
+      "set up this project: Empty canvas, Project home"
+    );
   });
 
   it("asks once when the same slot is framed twice, and hands it on when the asking frame goes", () => {

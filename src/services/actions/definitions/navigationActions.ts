@@ -1,7 +1,14 @@
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { notifyUndoableKeyboardLayoutChange } from "../keyboardLayoutChangeFeedback";
 import { useFocusStore } from "@/store/focusStore";
+import { usePanelStore } from "@/store/panelStore";
+import { useProjectHomeStore } from "@/store/projectHomeStore";
+import { currentProjectSurface } from "@/hooks/useRenderableSurfaceClaim";
 import { suppressSidebarResizes } from "@/lib/sidebarToggle";
+
+/** Only a project whose plugin offers a Home, and that hasn't chosen to have none, has one to go to. */
+const hasProjectHome = () => currentProjectSurface("projectHome") !== null;
+const NO_PROJECT_HOME = "This project has no home view";
 
 export function registerNavigationActions(
   actions: ActionRegistry,
@@ -101,6 +108,45 @@ export function registerNavigationActions(
     nonRepeatable: true,
     run: async () => {
       callbacks.onOpenQuickSwitcher();
+    },
+  }));
+
+  actions.set("nav.showProjectHome", () => ({
+    id: "nav.showProjectHome",
+    title: "Show project home",
+    description: "Switch the main area to the home view this project's plugin provides",
+    category: "navigation",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    nonRepeatable: true,
+    keywords: ["home", "plugin", "main area"],
+    isVisible: hasProjectHome,
+    isEnabled: hasProjectHome,
+    disabledReason: () => (hasProjectHome() ? undefined : NO_PROJECT_HOME),
+    run: async () => {
+      // Asked for by name, so a maximized cell drawing over the main area
+      // gives way rather than leave the command looking like it did nothing.
+      usePanelStore.getState().exitMaximize();
+      useProjectHomeStore.getState().showHome();
+    },
+  }));
+
+  actions.set("nav.showGrid", () => ({
+    id: "nav.showGrid",
+    title: "Show grid",
+    description: "Switch the main area from the project's home view back to its panels",
+    category: "navigation",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    nonRepeatable: true,
+    keywords: ["panels", "grid", "main area"],
+    isVisible: hasProjectHome,
+    isEnabled: hasProjectHome,
+    disabledReason: () => (hasProjectHome() ? undefined : NO_PROJECT_HOME),
+    run: async () => {
+      useProjectHomeStore.getState().showGrid();
     },
   }));
 

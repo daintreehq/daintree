@@ -121,7 +121,7 @@ describe("projectSurfaceChoices", () => {
       /project workspace id/
     );
     expect(() =>
-      setProjectSurfaceChoice(PROJECT_A, "projectHome" as unknown as "emptyCanvas", "stock")
+      setProjectSurfaceChoice(PROJECT_A, "defaultLayout" as unknown as "emptyCanvas", "stock")
     ).toThrow(/unknown surface slot/);
     expect(() =>
       setProjectSurfaceChoice(PROJECT_A, "emptyCanvas", "hidden" as unknown as "stock")
@@ -133,7 +133,7 @@ describe("projectSurfaceChoices", () => {
     storeMock.data.set("projectSurfaceChoices", {
       [PROJECT_A]: {
         emptyCanvas: { pluginId: "", choice: "stock", decidedAt: 1 },
-        projectHome: { pluginId: "acme.dash", choice: "stock", decidedAt: 1 },
+        defaultLayout: { pluginId: "acme.dash", choice: "stock", decidedAt: 1 },
       },
       [PROJECT_B]: { emptyCanvas: { pluginId: "acme.dash", choice: "surface" } },
     });
@@ -157,7 +157,7 @@ describe("projectSurfaceChoices", () => {
   it("keeps an answer about a slot this build does not know when writing another", () => {
     // Written by a newer build; a downgrade must not erase it on its first save.
     const future = { pluginId: "acme.dash", choice: "stock", decidedAt: 1 };
-    storeMock.data.set("projectSurfaceChoices", { [PROJECT_A]: { projectHome: future } });
+    storeMock.data.set("projectSurfaceChoices", { [PROJECT_A]: { defaultLayout: future } });
     claimCanvas();
 
     const returned = setProjectSurfaceChoice(PROJECT_A, "emptyCanvas", "surface", undefined, 7);
@@ -167,7 +167,7 @@ describe("projectSurfaceChoices", () => {
     });
     expect(storeMock.data.get("projectSurfaceChoices")).toEqual({
       [PROJECT_A]: {
-        projectHome: future,
+        defaultLayout: future,
         emptyCanvas: { pluginId: "acme.dash", choice: "surface", decidedAt: 7 },
       },
     });
@@ -260,7 +260,7 @@ describe("answers about several slots at once", () => {
     expect(() =>
       setProjectSurfaceChoices(PROJECT_A, [
         { slot: "emptyCanvas", choice: null },
-        { slot: "projectHome" as unknown as "emptyCanvas", choice: "stock" },
+        { slot: "defaultLayout" as unknown as "emptyCanvas", choice: "stock" },
       ])
     ).toThrow(/unknown surface slot/);
     expect(() =>

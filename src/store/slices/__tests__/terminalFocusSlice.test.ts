@@ -2202,4 +2202,84 @@ describe("TerminalFocusSlice - activation leaves fullscreen (#11506)", () => {
     expect(state.focusedId).toBe("grid-2");
     expect(state.maximizedId).toBeNull();
   });
+
+  describe("leaving the project's Home", () => {
+    const exitHome = vi.fn();
+
+    beforeAll(async () => {
+      const { setProjectHomeExitAccessor } = await import("@/store/storeAccessors");
+      setProjectHomeExitAccessor(exitHome);
+    });
+
+    afterAll(async () => {
+      const { resetStoreAccessorsForTesting } = await import("@/store/storeAccessors");
+      resetStoreAccessorsForTesting();
+    });
+
+    beforeEach(() => {
+      exitHome.mockClear();
+    });
+
+    it("leaves Home when a grid panel is activated", () => {
+      state.activateTerminal("grid-2");
+
+      expect(exitHome).toHaveBeenCalledTimes(1);
+      expect(state.focusedId).toBe("grid-2");
+    });
+
+    it("leaves Home for a legacy row with no location, which is a grid panel", () => {
+      state.activateTerminal("legacy-1");
+
+      expect(exitHome).toHaveBeenCalledTimes(1);
+    });
+
+    it("leaves Home when re-activating the panel that already holds focus", () => {
+      // Home hides it, so "show me this panel" still has something to do.
+      state.focusedId = "grid-1";
+
+      state.activateTerminal("grid-1");
+
+      expect(exitHome).toHaveBeenCalledTimes(1);
+    });
+
+    it("leaves Home for a grid panel in another worktree, unlike a maximize", () => {
+      state.activateTerminal("other-wt-1");
+
+      expect(exitHome).toHaveBeenCalledTimes(1);
+    });
+
+    it("stays on Home when a dock panel is activated, since the dock shows beside it", () => {
+      state.activateTerminal("dock-1");
+
+      expect(exitHome).not.toHaveBeenCalled();
+      expect(state.activeDockTerminalId).toBe("dock-1");
+    });
+
+    it("stays on Home when a trashed panel is activated", () => {
+      state.activateTerminal("trash-1");
+
+      expect(exitHome).not.toHaveBeenCalled();
+    });
+
+    it("leaves Home on index navigation, including the press that maximizes", () => {
+      state.focusedId = "grid-1";
+
+      state.focusOrMaximizeByIndex(
+        1,
+        () => "grid-1",
+        () => undefined
+      );
+
+      expect(exitHome).toHaveBeenCalledTimes(1);
+      expect(state.maximizedId).toBe("grid-1");
+    });
+
+    it("stays on Home when focus merely moves through setFocused", () => {
+      // Bookkeeping writers (a neighbour after a close, a worktree restore) use
+      // setFocused; only an explicit reveal leaves Home.
+      state.setFocused("grid-2");
+
+      expect(exitHome).not.toHaveBeenCalled();
+    });
+  });
 });

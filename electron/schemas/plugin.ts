@@ -1964,20 +1964,19 @@ export const SurfaceViewSlotSchema = z
  * (project plugins first, then the lower manifest id), and every other claimant
  * is refused by name.
  *
- * `emptyCanvas` is the only slot accepted today. The spec also describes
- * `projectHome` (a persistent home surface in the project's primary
- * navigation) and `defaultLayout` (the arrangement opened on a cold first open
- * with no restorable session). Neither is declared here, because neither has a
- * consumer: this renderer has no per-project routing a persistent home surface
- * could live at — the sidebar lists worktrees, not views — and a recipe is
- * launched against a worktree, not against a project cold open. Accepting
- * either now would put a field in a frozen public contract that nothing reads,
- * which is the drift `manifestContributionConsumers.test.ts` exists to stop.
- * They land with the routing they need, not before it.
+ * `emptyCanvas` stands in for the launcher while the grid is empty;
+ * `projectHome` is a persistent Home the main area can switch to beside the
+ * grid, which stays one click away. The spec also describes `defaultLayout`
+ * (the arrangement opened on a cold first open with no restorable session). It
+ * is not declared here, because it has no consumer: a recipe is launched
+ * against a worktree, not against a project cold open. Accepting it now would
+ * put a field in a frozen public contract that nothing reads, which is the
+ * drift `manifestContributionConsumers.test.ts` exists to stop.
  */
 export const SurfaceContributionsSchema = z
   .object({
     emptyCanvas: SurfaceViewSlotSchema.optional(),
+    projectHome: SurfaceViewSlotSchema.optional(),
   })
   .strict();
 

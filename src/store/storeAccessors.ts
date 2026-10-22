@@ -42,6 +42,7 @@ let _clearFleetArming: (() => void) | null = null;
 let _getFleetArmedIds: (() => Set<string>) | null = null;
 let _getFleetLastArmedId: (() => string | null) | null = null;
 let _getAgentSettingsEntry: ((agentId: string) => AgentSettingsEntry | undefined) | null = null;
+let _exitProjectHome: (() => void) | null = null;
 
 export function setAgentSettingsEntryAccessor(
   getter: (agentId: string) => AgentSettingsEntry | undefined
@@ -195,6 +196,23 @@ export function getFleetLastArmedId(): string | null {
   return _getFleetLastArmedId?.() ?? null;
 }
 
+export function setProjectHomeExitAccessor(callback: () => void): void {
+  _exitProjectHome = callback;
+}
+
+/**
+ * Put this project's main area back on the grid. Called wherever a grid panel
+ * is revealed on purpose — focused, spawned, moved or restored into the grid —
+ * the same places that leave a maximize (#11060), because a panel landing
+ * behind Home is just as invisible as one behind a maximized cell. Never from
+ * bookkeeping that merely moves focus (a neighbour after a close, a restore
+ * pass): that is not the user asking for the grid. A no-op until the Home
+ * store has loaded, when there is no Home to leave.
+ */
+export function exitProjectHome(): void {
+  _exitProjectHome?.();
+}
+
 export function resetStoreAccessorsForTesting(): void {
   _getPanelStoreState = null;
   _getWorktreeSelectionState = null;
@@ -207,4 +225,5 @@ export function resetStoreAccessorsForTesting(): void {
   _clearFleetArming = null;
   _getFleetArmedIds = null;
   _getFleetLastArmedId = null;
+  _exitProjectHome = null;
 }

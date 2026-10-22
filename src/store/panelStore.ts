@@ -40,6 +40,7 @@ import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { useWorktreeSelectionStore } from "./worktreeStore";
 import { isAssistantFocused } from "./macroFocusStore";
 import { isMcpSpawnFocusSuppressed } from "./mcpSpawnFocusGuard";
+import { exitProjectHome } from "./storeAccessors";
 import type { CrashType } from "@shared/types/pty-host";
 import type { TabGroup } from "@shared/types/panel";
 import { isRuntimeAgentTerminal } from "@/utils/terminalType";
@@ -570,6 +571,9 @@ export const usePanelStore = create<PanelGridState>()(
           if (!options.preserveMaximize) {
             get().exitMaximize();
           }
+          // Home hides the grid outright, so it goes even when the maximize
+          // stays: the grid is where the panel the user asked for lands.
+          exitProjectHome();
           const focusedByCommit = focusesOnCommit && get().focusedId === id;
           if (!focusedByCommit) {
             if (focusedBeforeCreate !== id) {
@@ -682,6 +686,7 @@ export const usePanelStore = create<PanelGridState>()(
           // visible rather than parked behind a fullscreen cell (#11060). It came
           // from the dock, so it can never be the panel/group being maximized.
           get().exitMaximize();
+          exitProjectHome();
           set({
             focusedId: id,
             activeDockTerminalId: null,
@@ -721,6 +726,7 @@ export const usePanelStore = create<PanelGridState>()(
           // visible rather than parked behind a fullscreen cell (#11060). It came
           // from the dock, so it can never be the panel/group being maximized.
           get().exitMaximize();
+          exitProjectHome();
           set({
             focusedId: nextFocusedId,
             ...(shouldClearDock && { activeDockTerminalId: null }),
@@ -981,6 +987,7 @@ export const usePanelStore = create<PanelGridState>()(
         // the popover instead and leaves the grid's fullscreen view alone.
         if (!landsInDock) {
           get().exitMaximize();
+          exitProjectHome();
         }
         set({
           focusedId: id,
@@ -1035,6 +1042,7 @@ export const usePanelStore = create<PanelGridState>()(
         // be the group currently maximized.
         if (!landsInDock) {
           get().exitMaximize();
+          exitProjectHome();
         }
         set({
           focusedId: focusId,
@@ -1066,6 +1074,7 @@ export const usePanelStore = create<PanelGridState>()(
         const restored = get().panelsById[id];
         if (restored !== undefined && restored.location !== "dock") {
           get().exitMaximize();
+          exitProjectHome();
         }
       },
 
@@ -1084,6 +1093,7 @@ export const usePanelStore = create<PanelGridState>()(
         });
         if (landedInGrid) {
           get().exitMaximize();
+          exitProjectHome();
         }
       },
 

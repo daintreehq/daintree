@@ -1763,7 +1763,7 @@ export interface GeneratedIpcInvokeMap {
   };
   "plugin:project-surface-choice-set": {
     args: [
-      slot: "emptyCanvas",
+      slot: "emptyCanvas" | "projectHome",
       choice: import("../plugin.js").ProjectSurfaceChoice | null,
       optionId?: string | undefined,
     ];
