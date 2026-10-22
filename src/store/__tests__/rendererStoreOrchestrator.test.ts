@@ -1550,12 +1550,14 @@ describe("rendererStoreOrchestrator", () => {
         extensionId: "acme",
       });
       try {
-        usePanelStore.setState({
-          panelsById: {
-            rec: { id: "rec", kind: "acme.records", title: "Records", location: "dock" },
-          },
-          panelIds: ["rec"],
-        });
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- plugin kinds sit outside the built-in kind union by design
+        const rec = {
+          id: "rec",
+          kind: "acme.records",
+          title: "Records",
+          location: "dock",
+        } as unknown as PanelInstance;
+        usePanelStore.setState({ panelsById: { rec }, panelIds: ["rec"] });
         const read = () => {
           const panel = usePanelStore.getState().panelsById.rec;
           return { title: panel?.title, titleMode: panel?.titleMode };

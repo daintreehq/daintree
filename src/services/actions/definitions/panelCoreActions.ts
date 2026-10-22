@@ -35,7 +35,7 @@ const openPluginPanelArgsSchema = z.object({
     .enum(["panel", "dock", "dialog"])
     .optional()
     .describe(
-      'Where the view opens. Default `panel` (the grid), or `dock` for a kind declaring `scope: "project"`, which never opens in the grid. `dock` opens it as a dock chip and shows it. `dialog` presents the view as a modal, replacing any panel dialog already open; when one of this kind is already open for the worktree, returns its id instead. PTY-backed kinds can\'t be presented as a dialog.'
+      'Where the view opens. Default `panel` (the grid), or `dock` for a kind declaring `scope: "project"`, which never opens in the grid. `dock` opens it as a dock chip and shows it. `dialog` presents the view as a modal, replacing any panel dialog already open; when one of this kind is already open for the worktree, returns its id instead. A dialog is ephemeral: closing it removes the panel and its persisted view state. PTY-backed kinds can\'t be presented as a dialog.'
     ),
   size: z
     .enum(PLUGIN_PANEL_DIALOG_SIZES)
@@ -198,7 +198,7 @@ export function registerPanelCoreActions(
     id: "panel.openPluginPanel",
     title: "Open plugin panel",
     description:
-      "Spawn (or focus an existing) plugin-contributed panel kind, handing it an initial argument. Args: `kind` (required) — the plugin panel kind id from `contributes.panels`; `initialArgs` (optional) — an opaque bag delivered to the view as `PanelViewProps.initialArgs` (e.g. `{ path }` to open a file), or as `PanelViewProps.openRequest` to a panel or dialog the open reuses; `worktreeId` (optional) — target worktree, which must belong to the current project; `reuseExisting` (optional, default true) — focus an existing panel of this kind in the worktree instead of spawning a second one; `presentation` (optional) — `dock` opens it as a dock chip, and `dialog` (with `size`, `toggle`) presents it as a modal, which is ephemeral: closing it removes the panel and its persisted view state. A kind declared `scope: \"project\"` opens with no worktree, in the dock by default, and shows in every worktree. Returns `{ panelId }`. Errors when `kind` is not a registered plugin panel kind, when `worktreeId` belongs to another project or is given for a project-scoped kind, or — transiently, retry — when the project's worktrees haven't loaded yet.",
+      "Spawn (or focus an existing) plugin-contributed panel kind, handing it an initial argument. Args: `kind` (required) — the plugin panel kind id from `contributes.panels`; `initialArgs` (optional) — an opaque bag delivered to the view as `PanelViewProps.initialArgs`, or as `PanelViewProps.openRequest` to a panel or dialog the open reuses; `worktreeId` (optional) — target worktree, which must belong to the current project; `reuseExisting` (optional, default true) — focus an existing panel of this kind in the worktree instead of spawning a second one; `presentation`, `size`, `toggle` (optional) — open it in the dock, or as an ephemeral modal dialog. A `scope: \"project\"` kind opens with no worktree, in the dock by default. Returns `{ panelId }`. Errors when `kind` is not a registered plugin panel kind, when `worktreeId` belongs to another project or is given for a project-scoped kind, or — transiently, retry — when the project's worktrees haven't loaded yet.",
     category: "panel",
     kind: "command",
     danger: "safe",
