@@ -4,7 +4,6 @@ import { z } from "zod";
 import {
   agentSettingsClient,
   appClient,
-  hibernationClient,
   sessionRestoreClient,
   windowOpeningClient,
   idleTerminalClient,
@@ -199,45 +198,6 @@ export function registerAppConfigActions(
     argsSchema: WindowOpeningConfigPatchSchema,
     run: async (args: unknown) => {
       return await windowOpeningClient.updateConfig(WindowOpeningConfigPatchSchema.parse(args));
-    },
-  }));
-
-  actions.set("hibernation.getConfig", () => ({
-    id: "hibernation.getConfig",
-    title: "Get hibernation config",
-    description:
-      "Read the auto-hibernation configuration that governs when idle worktrees are suspended to reclaim host memory. No arguments. Returns { enabled, inactiveThresholdHours }: `enabled` is whether auto-hibernation is on; `inactiveThresholdHours` is how long a worktree must be idle before it hibernates.",
-    category: "settings",
-    kind: "query",
-    danger: "safe",
-    scope: "renderer",
-    resultSchema: z.object({
-      enabled: z.boolean(),
-      inactiveThresholdHours: z.number(),
-    }),
-    run: async () => {
-      return await hibernationClient.getConfig();
-    },
-  }));
-
-  actions.set("hibernation.updateConfig", () => ({
-    id: "hibernation.updateConfig",
-    title: "Update hibernation config",
-    description: "Update auto-hibernation configuration",
-    category: "settings",
-    kind: "command",
-    danger: "safe",
-    scope: "renderer",
-    // Config-patch tool: a palette pick dispatches `{}` (an empty patch that
-    // changes nothing). Belongs in Settings, not the palette. Stays an MCP tool.
-    palette: { mode: "hidden" },
-    argsSchema: z.object({
-      enabled: z.boolean().optional(),
-      inactiveThresholdHours: z.number().int().positive().optional(),
-    }),
-    run: async (args: unknown) => {
-      const config = args as { enabled?: boolean; inactiveThresholdHours?: number };
-      return await hibernationClient.updateConfig(config);
     },
   }));
 

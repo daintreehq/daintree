@@ -129,9 +129,8 @@ A **backgrounded project** (its host paused via `WorkspaceService.pause()`) runs
 
 ### HibernationService
 
-`setMemoryPressureThresholdMs(config.memoryPressureInactiveMs)` tunes the **memory-pressure** hibernation path only (`HibernationService.ts`). There are two independent idle paths:
+`setMemoryPressureThresholdMs(config.memoryPressureInactiveMs)` tunes the **memory-pressure** hibernation path (`HibernationService.ts`). Nothing hibernates on a timer: the scheduled sweep and its "Hibernate inactive projects" setting were removed (#13840), and migration 035 deletes the stored `hibernation` key so it can't opt anyone into a later automatic sleep.
 
-- **Scheduled idle** — `inactiveThresholdHours` (default 24 h), user-configurable, profile-independent.
 - **Memory-pressure** — `hibernateUnderMemoryPressure()`, invoked by `ProcessMemoryMonitor`'s tier-2 mitigation (`ProcessMemoryMonitor.ts`, wired through `globalServicesInit.ts`). It hibernates non-current projects idle longer than `memoryPressureInactiveMs`, skipping any project with an active agent (`ACTIVE_AGENT_STATES`) or an in-flight git operation. The profile makes this threshold stricter under pressure (15 min on `efficiency` vs 60 min on `performance`).
 
 `ProcessMemoryMonitor` applies tier 1 once at the start of a pressure episode, then at most once per five minutes while the same episode persists. Tier 1 trims PTY-host state and hidden browser/dev-preview webviews; it never clears caches or forces GC in the visible renderer. Tier 2 requires three consecutive pressure samples, rechecks the originating system-memory signal after tier 1, and is limited to once per ten minutes. It destroys hidden webviews, evicts cached project renderers down to the active view, and runs memory-pressure hibernation. A clean sample resets the episode so a later independent event can react immediately.

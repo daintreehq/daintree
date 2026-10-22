@@ -29,7 +29,6 @@ export type PortableSettingsCategoryId =
   | "notifications"
   | "worktreePath"
   | "globalRecipes"
-  | "hibernation"
   | "sessionRestore"
   | "idleTerminals"
   | "updateChecks"
@@ -116,15 +115,6 @@ export const PORTABLE_SETTINGS_CATEGORIES: readonly PortableSettingsCategory[] =
     label: "Global recipes",
     description: "Recipes offered in every project. Copying one never runs it",
     sections: ["globalRecipes"],
-    selectedByDefault: true,
-    device: false,
-    inFile: true,
-  },
-  {
-    id: "hibernation",
-    label: "Project hibernation",
-    description: "Closing projects left unused for a while",
-    sections: ["hibernation"],
     selectedByDefault: true,
     device: false,
     inFile: true,

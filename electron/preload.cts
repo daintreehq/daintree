@@ -103,7 +103,6 @@ import { buildProjectPresentationPreloadBindings } from "./ipc/handlers/projectP
 import { buildDiffMediaPreloadBindings } from "./ipc/handlers/diffMedia.preload.js";
 import { buildFileBrowserPreloadBindings } from "./ipc/handlers/fileBrowser.preload.js";
 import { buildFileWatchPreloadBindings } from "./ipc/handlers/fileWatch.preload.js";
-import { buildHibernationPreloadBindings } from "./ipc/handlers/hibernation.preload.js";
 import { buildSessionRestorePreloadBindings } from "./ipc/handlers/sessionRestore.preload.js";
 import { buildWindowOpeningPreloadBindings } from "./ipc/handlers/windowOpening.preload.js";
 import { buildKeepAwakePreloadBindings } from "./ipc/handlers/keepAwake.preload.js";
@@ -2802,13 +2801,11 @@ function buildElectronApi(): ElectronAPI {
     },
 
     hibernation: {
-      ...buildHibernationPreloadBindings(_unwrappingInvoke),
-
       onProjectHibernated: (
         callback: (payload: {
           projectId: string;
           projectName: string;
-          reason: "scheduled" | "memory-pressure" | "user-initiated";
+          reason: "memory-pressure" | "user-initiated";
           terminalsKilled: number;
           timestamp: number;
         }) => void

@@ -41,7 +41,6 @@
     "electron/services/GpuCrashMonitorService.ts",
     "electron/services/HelpService.ts",
     "electron/services/HelpSessionService.ts",
-    "electron/services/HibernationService.ts",
     "electron/services/IdleTerminalNotificationService.ts",
     "electron/services/PanelSuspectLedgerService.ts",
     "electron/services/PeriodicCleanupService.ts",
@@ -858,11 +857,6 @@
     {
       "file": "electron/services/HelpSessionService.ts",
       "line": 1212,
-      "pattern": "sync-store-get"
-    },
-    {
-      "file": "electron/services/HibernationService.ts",
-      "line": 388,
       "pattern": "sync-store-get"
     },
     {

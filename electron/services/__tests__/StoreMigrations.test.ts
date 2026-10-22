@@ -1115,6 +1115,23 @@ describe("MigrationRunner", () => {
     expect(LATEST_SCHEMA_VERSION).toBe(highest);
   });
 
+  it("runs migration035 from v34 under the full barrel, dropping the retired hibernation setting (#13840)", async () => {
+    // The buffered facade is the production branch, and a switched-on value is
+    // the one that must not survive into a later automatic sleep.
+    const store = createBufferedMockStore(storePath, {
+      _schemaVersion: 34,
+      hibernation: { enabled: true, inactiveThresholdHours: 48 },
+      idleTerminalNotify: { enabled: true, thresholdMinutes: 60 },
+    });
+    const runner = new MigrationRunner(store as never);
+
+    await runner.runMigrations(migrations);
+
+    expect(store.data._schemaVersion).toBe(LATEST_SCHEMA_VERSION);
+    expect("hibernation" in store.data).toBe(false);
+    expect(store.data.idleTerminalNotify).toEqual({ enabled: true, thresholdMinutes: 60 });
+  });
+
   it("runs migration025 from v24 under the full barrel, upgrading the voice correction model (#11365)", async () => {
     const store = createMockStore(storePath, {
       _schemaVersion: 24,
@@ -1840,6 +1857,9 @@ describe("MigrationRunner", () => {
 
       // Verify migrations actually ran
       expect(store.data._schemaVersion).toBe(LATEST_SCHEMA_VERSION);
+
+      // Migration 035: the retired hibernation setting is gone.
+      expect("hibernation" in store.data).toBe(false);
 
       // Migration 025: the legacy gpt-5-nano correction model migrates to luna.
       const migratedVoice = store.data.voiceInput as Record<string, unknown>;

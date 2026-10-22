@@ -512,14 +512,6 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["help-assistant:set-settings"]["args"]
     ): Promise<IpcInvokeMap["help-assistant:set-settings"]["result"]>;
   };
-  hibernation: {
-    getConfig(
-      ...args: IpcInvokeMap["hibernation:get-config"]["args"]
-    ): Promise<IpcInvokeMap["hibernation:get-config"]["result"]>;
-    updateConfig(
-      ...args: IpcInvokeMap["hibernation:update-config"]["args"]
-    ): Promise<IpcInvokeMap["hibernation:update-config"]["result"]>;
-  };
   hostFiles: {
     getPickerRoots(
       ...args: IpcInvokeMap["host-files:get-picker-roots"]["args"]

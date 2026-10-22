@@ -84,9 +84,6 @@ function setupDispatchMock() {
     if (actionId === "agentSettings.get") {
       return { ok: true, result: { agents: { claude: { pinned: true } } } };
     }
-    if (actionId === "hibernation.getConfig") {
-      return { ok: true, result: { enabled: false, inactiveThresholdHours: 24 } };
-    }
     if (actionId === "windowOpening.getConfig") {
       return { ok: true, result: { openFoldersInNewWindow: "default" } };
     }

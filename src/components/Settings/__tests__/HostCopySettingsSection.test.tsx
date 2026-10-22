@@ -40,7 +40,7 @@ const PREVIEW: SettingsCopyPreview = {
         { key: "pathPattern", label: "Path pattern", kind: "update", from: "a/{x}", to: "b/{x}" },
       ],
     },
-    { section: "hibernation", add: 0, update: 0, unchanged: 2, changes: [] },
+    { section: "idleTerminalNotify", add: 0, update: 0, unchanged: 2, changes: [] },
   ],
   unknownSections: ["sessionRestore"],
   withheld: [{ section: "agentSettings", name: "GITHUB_TOKEN" }],

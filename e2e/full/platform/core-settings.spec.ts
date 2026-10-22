@@ -115,8 +115,10 @@ const GLOBAL_TABS: Record<GlobalSettingsTab, TabExpectation> = {
       await expect(settingsDialog(window).locator("text=System Status")).toBeVisible({
         timeout: T_SHORT,
       });
-      await selectSubtab(window, "General settings sections", "Hibernation");
-      await expect(window.locator("#general-hibernation")).toBeVisible({ timeout: T_MEDIUM });
+      await selectSubtab(window, "General settings sections", "Background");
+      await expect(window.locator("#general-idle-terminal-notify")).toBeVisible({
+        timeout: T_MEDIUM,
+      });
       await selectSubtab(window, "General settings sections", "Display");
       await expect(window.locator("#general-project-pulse")).toBeVisible({ timeout: T_SHORT });
     },

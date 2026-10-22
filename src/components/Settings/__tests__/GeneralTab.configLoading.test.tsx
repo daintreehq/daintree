@@ -82,7 +82,6 @@ vi.mock("@/services/ActionService", () => ({
 type Pending = { resolve: (v: unknown) => void; reject: (e: unknown) => void };
 const pending = new Map<string, Pending>();
 const DEFERRED = new Set([
-  "hibernation.getConfig",
   "sessionRestore.getConfig",
   "idleTerminalNotify.getConfig",
   "idleBackgroundAutoClose.getConfig",
@@ -144,49 +143,57 @@ describe("GeneralTab — config groups render before their data", () => {
     ).toBe("false");
   });
 
-  it("renders every hibernation group immediately, with no threshold selected while unknown", async () => {
-    const { container } = await renderGeneralTab("hibernation");
+  it("renders every background-projects group immediately, with no threshold selected while unknown", async () => {
+    const { container } = await renderGeneralTab("background");
 
     for (const id of [
       "general-idle-terminal-notify",
       "general-idle-terminal-threshold",
       "general-idle-background-auto-close",
       "general-idle-background-threshold",
-      "general-hibernation",
-      "general-hibernation-threshold",
     ]) {
       expect(container.querySelector(`#${id}`)).not.toBeNull();
     }
-    expect(screen.queryByText(/Loading hibernation settings/)).toBeNull();
-    expect(switchDisabled("Hibernate inactive projects")).toBe(true);
-    const threshold = within(screen.getByRole("radiogroup", { name: "Hibernate after" }));
+    expect(switchDisabled("Notify me about idle terminals")).toBe(true);
+    const threshold = within(screen.getByRole("radiogroup", { name: "Remind after" }));
     for (const option of threshold.getAllByRole("radio")) {
       expect(option.getAttribute("aria-checked")).toBe("false");
       expect(option.hasAttribute("disabled")).toBe(true);
     }
   });
 
+  it("no longer offers the retired hibernation setting (#13840)", async () => {
+    const { container } = await renderGeneralTab("background");
+
+    expect(container.querySelector("#general-hibernation")).toBeNull();
+    expect(screen.queryByRole("switch", { name: "Hibernate inactive projects" })).toBeNull();
+    expect(mockDispatch.mock.calls.some(([id]) => String(id).startsWith("hibernation."))).toBe(
+      false
+    );
+  });
+
   it("keeps a failed group's rows in place, disabled, with the error and Retry above them", async () => {
-    await renderGeneralTab("hibernation");
+    await renderGeneralTab("background");
 
     await act(async () => {
-      pending.get("hibernation.getConfig")?.reject(new Error("ipc down"));
+      pending.get("idleTerminalNotify.getConfig")?.reject(new Error("ipc down"));
     });
 
-    expect(await screen.findByText("Couldn't load hibernation settings")).toBeTruthy();
-    expect(switchDisabled("Hibernate inactive projects")).toBe(true);
+    const section = screen.getByTestId("section-Background projects");
+    expect(await within(section).findByText("ipc down")).toBeTruthy();
+    expect(switchDisabled("Notify me about idle terminals")).toBe(true);
 
     await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+      fireEvent.click(within(section).getByRole("button", { name: "Retry" }));
     });
     await act(async () => {
       pending
-        .get("hibernation.getConfig")
-        ?.resolve({ ok: true, result: { enabled: true, inactiveThresholdHours: 24 } });
+        .get("idleTerminalNotify.getConfig")
+        ?.resolve({ ok: true, result: { enabled: true, thresholdMinutes: 60 } });
     });
 
-    await waitFor(() => expect(switchDisabled("Hibernate inactive projects")).toBe(false));
-    expect(screen.queryByText("Couldn't load hibernation settings")).toBeNull();
+    await waitFor(() => expect(switchDisabled("Notify me about idle terminals")).toBe(false));
+    expect(within(section).queryByText("ipc down")).toBeNull();
   });
 
   it("keeps a failed save on its group with a Retry that resends the attempted value", async () => {

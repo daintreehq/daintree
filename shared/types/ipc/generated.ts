@@ -1149,14 +1149,6 @@ export interface GeneratedIpcInvokeMap {
     args: [terminalId: string];
     result: void;
   };
-  "hibernation:get-config": {
-    args: [];
-    result: import("./hibernation.js").HibernationConfig;
-  };
-  "hibernation:update-config": {
-    args: [config: Partial<import("./hibernation.js").HibernationConfig>];
-    result: import("./hibernation.js").HibernationConfig;
-  };
   "host-files:get-picker-roots": {
     args: [];
     result: import("./hostFiles.js").HostPickerRoots;

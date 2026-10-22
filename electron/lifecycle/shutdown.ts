@@ -762,9 +762,10 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
           setResourceProfileService(null);
 
           try {
-            getHibernationService().stop();
+            // Drop the injected PtyClient so a restart can't reuse a stale host client (#8637).
+            getHibernationService().setPtyClient(null);
           } catch (err) {
-            console.warn("[MAIN] HibernationService.stop failed:", err);
+            console.warn("[MAIN] HibernationService teardown failed:", err);
           }
           try {
             getIdleTerminalNotificationService().stop();

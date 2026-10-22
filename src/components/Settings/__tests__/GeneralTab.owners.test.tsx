@@ -127,7 +127,7 @@ describe("General in a window attached to another host", () => {
   });
 
   it("files background-project housekeeping under the host", async () => {
-    expect(await badgesOn("hibernation")).toMatchObject({ "Background projects": "On studio-01" });
+    expect(await badgesOn("background")).toMatchObject({ "Background projects": "On studio-01" });
   });
 
   it("files interface preferences under this machine", async () => {
@@ -137,7 +137,7 @@ describe("General in a window attached to another host", () => {
 
 describe("General in a local window", () => {
   it("marks no section, so the page renders as it always has", async () => {
-    for (const subtab of ["overview", "hibernation", "display"]) {
+    for (const subtab of ["overview", "background", "display"]) {
       const badges = await badgesOn(subtab);
       expect(Object.keys(badges).length, subtab).toBeGreaterThan(0);
       for (const [section, badge] of Object.entries(badges)) {

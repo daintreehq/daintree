@@ -378,8 +378,6 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `env.global.set` | Set global environment variables | safe | `variables` |
 | `env.project.get` | Get project environment variables | safe | `projectId` |
 | `env.project.set` | Set project environment variables | safe | `projectId`, `variables` |
-| `hibernation.getConfig` | Get hibernation config | safe | — |
-| `hibernation.updateConfig` | Update hibernation config | safe | `enabled?`, `inactiveThresholdHours?` |
 | `idleBackgroundAutoClose.getConfig` | Get idle background auto-close config | safe | — |
 | `idleBackgroundAutoClose.updateConfig` | Update idle background auto-close config | safe | `enabled?`, `thresholdMinutes?` |
 | `idleTerminalNotify.getConfig` | Get idle terminal notification config | safe | — |

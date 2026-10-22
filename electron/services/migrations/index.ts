@@ -31,6 +31,7 @@ import { migration031 } from "./031-assistant-models-per-agent.js";
 import { migration032 } from "./032-assistant-host-consent-defaults.js";
 import { migration033 } from "./033-remove-retired-assistant-cli.js";
 import { migration034 } from "./034-assistant-host-control-fold.js";
+import { migration035 } from "./035-remove-hibernation-setting.js";
 
 export const migrations: Migration[] = [
   migration002,
@@ -66,4 +67,5 @@ export const migrations: Migration[] = [
   migration032,
   migration033,
   migration034,
+  migration035,
 ];

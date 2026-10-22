@@ -38,7 +38,6 @@ const renderer = vi.hoisted(() => ({
   >(),
   inputBlocking: new Map<number, { snapshot: unknown; capturedAt: number }>(),
   unresponsiveSince: new Map<number, number>(),
-  hibernationSnapshot: {} as unknown,
   resourceProfileSnapshot: null as unknown,
 }));
 
@@ -142,28 +141,6 @@ vi.mock("../ProcessMemoryMonitor.js", () => ({
   getSessionPeakSnapshot: () => [],
 }));
 
-vi.mock("../HibernationService.js", () => ({
-  getHibernationService: () => ({ getSnapshot: () => renderer.hibernationSnapshot }),
-}));
-
-// The published McpServerService ref. Tests install a facade over a real,
-// seeded AuditService so the section is exercised against real audit data.
-const mcp = vi.hoisted(() => ({
-  service: null as null | {
-    isEnabled: () => boolean;
-    isRunning: boolean;
-    getAuditDiagnostics: () => unknown;
-  },
-}));
-
-vi.mock("../../window/serviceRefs.js", () => ({
-  getResourceProfileService: () =>
-    renderer.resourceProfileSnapshot === null
-      ? null
-      : { getSnapshot: () => renderer.resourceProfileSnapshot },
-  getMcpServerServiceRef: () => mcp.service,
-}));
-
 type DiagnosticsCollectorModule = typeof import("../DiagnosticsCollector.js");
 
 function createDeps(eventBuffer?: { getAll: () => unknown[] }) {
@@ -198,6 +175,10 @@ function setDefaultToolFixtures(): void {
 
 describe("DiagnosticsCollector adversarial", () => {
   let diagnostics: DiagnosticsCollectorModule;
+  // The real module, refs installed through its setters. Several sections import
+  // it in the same tick, and concurrent imports of a mocked module after
+  // resetModules hand all but the first the original (vitest-dev/vitest#7040).
+  let refs: typeof import("../../window/serviceRefs.js");
 
   beforeEach(async () => {
     vi.useFakeTimers();
@@ -211,11 +192,6 @@ describe("DiagnosticsCollector adversarial", () => {
     renderer.elu = new Map();
     renderer.inputBlocking = new Map();
     renderer.unresponsiveSince = new Map();
-    renderer.hibernationSnapshot = {
-      config: { enabled: false, inactiveThresholdHours: 24 },
-      isRunning: false,
-      memoryPressureThresholdMs: 1_800_000,
-    };
     renderer.resourceProfileSnapshot = {
       profile: "balanced",
       thermalState: "unknown",
@@ -223,13 +199,16 @@ describe("DiagnosticsCollector adversarial", () => {
       speedLimit: 100,
       lagPressureActive: false,
     };
-    mcp.service = null;
     cliSpawn.target.mockImplementation((command: string, args: string[]) => ({
       command,
       args: [...args],
       shell: false,
     }));
     setDefaultToolFixtures();
+    refs = await import("../../window/serviceRefs.js");
+    refs.setResourceProfileService({
+      getSnapshot: () => renderer.resourceProfileSnapshot,
+    } as unknown as Parameters<typeof refs.setResourceProfileService>[0]);
     diagnostics = await import("../DiagnosticsCollector.js");
   });
 
@@ -752,7 +731,7 @@ describe("DiagnosticsCollector adversarial", () => {
     }
   });
 
-  it("PER_RENDERER_AND_HIBERNATION_SECTIONS_POPULATED (#10500)", async () => {
+  it("PER_RENDERER_AND_RESOURCE_SECTIONS_POPULATED (#10500)", async () => {
     renderer.blink = new Map([[101, { allocated: 51_200, total: 102_400, timestamp: 1 }]]);
     renderer.elu = new Map([
       [
@@ -786,11 +765,6 @@ describe("DiagnosticsCollector adversarial", () => {
     // 102 hung before it ever answered a sample.
     const hangStartedAt = Date.now() - 90_000;
     renderer.unresponsiveSince = new Map([[102, hangStartedAt]]);
-    renderer.hibernationSnapshot = {
-      config: { enabled: true, inactiveThresholdHours: 24 },
-      isRunning: true,
-      memoryPressureThresholdMs: 1_800_000,
-    };
 
     shared.terminals = [
       { id: "t1", kind: "agent", agentState: "working", hasPty: true },
@@ -854,7 +828,6 @@ describe("DiagnosticsCollector adversarial", () => {
       };
       memoryTrends: { processes: unknown; sessionPeaks: unknown };
       resourceState: {
-        hibernation: { isRunning: boolean };
         resourceProfile: { profile: string };
       };
       counts: {
@@ -905,9 +878,9 @@ describe("DiagnosticsCollector adversarial", () => {
     expect(Array.isArray(payload.memoryTrends.processes)).toBe(true);
     expect(Array.isArray(payload.memoryTrends.sessionPeaks)).toBe(true);
 
-    // resourceState — both singletons surfaced.
-    expect(payload.resourceState.hibernation.isRunning).toBe(true);
+    // resourceState — the resource profile, and nothing from the retired hibernation scheduler (#13840).
     expect(payload.resourceState.resourceProfile.profile).toBe("balanced");
+    expect(payload.resourceState).not.toHaveProperty("hibernation");
 
     // counts — derived from the same PVM inventory + terminal list.
     expect(payload.counts.windows).toBe(1);
@@ -1122,12 +1095,12 @@ describe("DiagnosticsCollector adversarial", () => {
 
   it("NEW_SECTIONS_DEGRADE_GRACEFULLY_WITHOUT_SERVICES (#10500)", async () => {
     // No windowRegistry, no projectViewManager, resource-profile singleton absent.
-    renderer.resourceProfileSnapshot = null;
+    refs.setResourceProfileService(null);
 
     const payload = (await diagnostics.collectDiagnostics(createDeps())) as {
       projectViews: unknown[];
       memoryTrends: { processes: unknown; sessionPeaks: unknown };
-      resourceState: { resourceProfile: unknown; hibernation: { isRunning: boolean } };
+      resourceState: { resourceProfile: unknown };
       counts: { windows: number; openProjects: number; terminals: { total: number } };
     };
 
@@ -1135,7 +1108,6 @@ describe("DiagnosticsCollector adversarial", () => {
     expect(Array.isArray(payload.memoryTrends.processes)).toBe(true);
     expect(Array.isArray(payload.memoryTrends.sessionPeaks)).toBe(true);
     expect(payload.resourceState.resourceProfile).toBeNull();
-    expect(payload.resourceState.hibernation.isRunning).toBe(false);
     expect(payload.counts.windows).toBe(0);
     expect(payload.counts.openProjects).toBe(0);
     expect(payload.counts.terminals.total).toBe(0);
@@ -1184,12 +1156,14 @@ describe("DiagnosticsCollector adversarial", () => {
       });
     }
 
+    // A facade over a real, seeded AuditService, so the section is exercised
+    // against real audit data.
     function installService(audit: AuditServiceInstance, running = true) {
-      mcp.service = {
+      refs.setMcpServerServiceRef({
         isEnabled: () => true,
         isRunning: running,
         getAuditDiagnostics: () => audit.getDiagnosticsSnapshot(),
-      };
+      } as unknown as Parameters<typeof refs.setMcpServerServiceRef>[0]);
     }
 
     it("MCP_AUDIT_SECTION_POPULATED_FROM_AUDIT_RING", async () => {
@@ -1279,13 +1253,13 @@ describe("DiagnosticsCollector adversarial", () => {
     });
 
     it("MCP_AUDIT_SECTION_FAILURE_CONTAINED", async () => {
-      mcp.service = {
+      refs.setMcpServerServiceRef({
         isEnabled: () => true,
         isRunning: false,
         getAuditDiagnostics: () => {
           throw new Error("ARGS_SENTINEL leaked through the error");
         },
-      };
+      } as unknown as Parameters<typeof refs.setMcpServerServiceRef>[0]);
 
       const payload = (await diagnostics.collectDiagnostics(createDeps())) as {
         mcpAudit: unknown;

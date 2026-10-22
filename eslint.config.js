@@ -1034,7 +1034,6 @@ export default tseslint.config(
       "electron/ipc/handlers/git-write.ts",
       "electron/ipc/handlers/globalRecipes.ts",
       "electron/ipc/handlers/helpAssistant.ts",
-      "electron/ipc/handlers/hibernation.ts",
       "electron/ipc/handlers/idleTerminals.ts",
       "electron/ipc/handlers/keybinding.ts",
       "electron/ipc/handlers/logs.ts",
