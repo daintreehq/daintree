@@ -473,6 +473,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `terminal.redraw` | Redraw terminal | safe | `terminalId?` |
 | `terminal.rename` | Rename terminal | safe | `name?`, `terminalId?` |
 | `terminal.restart` | Restart terminal | confirm | `confirmed?`, `terminalId?` |
+| `terminal.restartOnPreset` | Restart agent on preset | confirm | `presetId`, `confirmed?`, `terminalId?` |
 | `terminal.restartService` | Restart terminal service | safe | — |
 | `terminal.resumeSessions` | Resume session… | safe | — |
 | `terminal.revealOwned` | Reveal owned terminal | safe | `terminalId` |

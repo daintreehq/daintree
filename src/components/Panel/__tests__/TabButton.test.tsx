@@ -136,6 +136,24 @@ describe("TabButton", () => {
     expect(fallbackIndicator).toBeDefined();
   });
 
+  it("names the live preset when the visible title doesn't (#13746)", () => {
+    // The full title still carries the launch stamp; the slot shows the task alone.
+    render(
+      <TabButton
+        {...defaultProps}
+        title="Fix auth tests"
+        fullTitle="Codex [Personal]: Fix auth tests"
+        presetName="Work"
+      />
+    );
+    expect(screen.getByTestId("tab-preset-name").textContent).toBe("Work");
+  });
+
+  it("doesn't repeat a preset the visible title already names (#13746)", () => {
+    render(<TabButton {...defaultProps} title="Codex [Work]" presetName="Work" />);
+    expect(screen.queryByTestId("tab-preset-name")).toBeNull();
+  });
+
   it("renders the active indicator element when isActive is true", () => {
     render(<TabButton {...defaultProps} isActive={true} />);
     const indicator = screen.queryByTestId("motion-div");

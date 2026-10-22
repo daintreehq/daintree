@@ -1909,3 +1909,202 @@ describe("restartTerminal forced resume of an ended launch (#13226)", () => {
     expect(payload.command).toBeUndefined();
   });
 });
+
+/**
+ * Moving a running pane to another preset (#13746): the hop the fallback chain
+ * makes, but chosen by the user, so the pane takes the preset as its own.
+ */
+describe("restartTerminalOnPreset", () => {
+  const presets: Record<
+    string,
+    { id: string; name: string; color?: string; env?: Record<string, string> }
+  > = {
+    personal: { id: "personal", name: "Personal", env: { CODEX_HOME: "/home/me/.codex" } },
+    work: { id: "work", name: "Work", color: "#3366ff", env: { CODEX_HOME: "/home/me/.codex-2" } },
+    backup: { id: "backup", name: "Backup" },
+  };
+
+  beforeEach(async () => {
+    // Reset first: it tears down the previous test's pane through the mocks.
+    await usePanelStore.getState().reset();
+    vi.clearAllMocks();
+    getMergedPresetMock.mockImplementation((_agentId: string, presetId: string) =>
+      presetId ? presets[presetId] : undefined
+    );
+    buildAgentLaunchFlagsMock.mockReturnValue([]);
+    const { agentSettingsClient } = await import("@/clients");
+    vi.mocked(agentSettingsClient.get).mockResolvedValue({ agents: {} });
+  });
+
+  function seed(overrides: Partial<PtyPanelData> = {}): void {
+    const pane: PtyPanelData = {
+      ...agentPanelBase,
+      agentState: "waiting",
+      title: "Claude [Personal]",
+      titleMode: "custom",
+      agentPresetId: "personal",
+      originalPresetId: "personal",
+      agentSessionId: "sess-personal",
+      env: { CODEX_HOME: "/home/me/.codex", STALE_ONLY_ON_OLD: "1" },
+      ...overrides,
+    };
+    usePanelStore.setState({ panelsById: { [pane.id]: pane }, panelIds: [pane.id] });
+  }
+
+  function pane(): PtyPanelData {
+    const panel = usePanelStore.getState().panelsById["test-1"];
+    if (!panel || !isPtyPanel(panel)) throw new Error("pane missing");
+    return panel;
+  }
+
+  it("respawns on the chosen preset's env and saves it as the launch layer", async () => {
+    seed();
+
+    const result = await usePanelStore.getState().restartTerminalOnPreset("test-1", "work");
+
+    expect(result).toEqual({ success: true });
+    const payload = mockSpawn.mock.calls[0]![0];
+    expect(payload.env.CODEX_HOME).toBe("/home/me/.codex-2");
+    expect(payload.agentPresetId).toBe("work");
+    // Replaced, never merged: a key only the old preset set must not come back
+    // on a cold restore, which prefers this saved layer (#10922).
+    expect(pane().env).toEqual({ CODEX_HOME: "/home/me/.codex-2" });
+    expect(pane().agentPresetId).toBe("work");
+    expect(pane().agentPresetColor).toBe("#3366ff");
+  });
+
+  it("starts a new conversation: no session id survives into the new home", async () => {
+    seed();
+
+    const { buildResumeCommand, buildResumeLatestCommand } = await import("@shared/types");
+
+    await usePanelStore.getState().restartTerminalOnPreset("test-1", "work");
+
+    expect(pane().agentSessionId).toBeUndefined();
+    expect(mockSpawn.mock.calls[0]![0].agentSessionId).toBeUndefined();
+    // Neither an exact resume nor resume-latest is ever built for this respawn.
+    expect(vi.mocked(buildResumeCommand)).not.toHaveBeenCalled();
+    expect(vi.mocked(buildResumeLatestCommand)).not.toHaveBeenCalled();
+  });
+
+  it("drops a caller's own resume selector, keeping the rest of its flags", async () => {
+    // `--continue` would reopen whatever conversation the new home has last,
+    // when the confirm promised a new one.
+    seed({
+      agentLaunchFlags: ["--persisted-flag", "--continue", "--verbose"],
+      callerLaunchFlags: ["--continue", "--verbose"],
+    });
+
+    await usePanelStore.getState().restartTerminalOnPreset("test-1", "work");
+
+    expect(pane().callerLaunchFlags).toEqual(["--verbose"]);
+    expect(pane().agentLaunchFlags).not.toContain("--continue");
+    expect(mockSpawn.mock.calls[0]![0].command).not.toContain("--continue");
+  });
+
+  it("leaves a fallback hop's caller flags exactly as they were", async () => {
+    seed({
+      agentLaunchFlags: ["--persisted-flag", "--continue"],
+      callerLaunchFlags: ["--continue"],
+    });
+
+    await usePanelStore.getState().activateFallbackPreset("test-1", "work", "personal");
+
+    expect(pane().callerLaunchFlags).toEqual(["--continue"]);
+  });
+
+  it("makes the chosen preset the pane's own when it was on a fallback", async () => {
+    seed({
+      agentPresetId: "backup",
+      originalPresetId: "personal",
+      isUsingFallback: true,
+      fallbackChainIndex: 1,
+    });
+
+    await usePanelStore.getState().restartTerminalOnPreset("test-1", "work");
+
+    expect(pane().isUsingFallback).toBeFalsy();
+    expect(pane().fallbackChainIndex).toBeUndefined();
+    expect(pane().originalPresetId).toBe("work");
+    expect(mockSpawn.mock.calls[0]![0].originalAgentPresetId).toBe("work");
+  });
+
+  it("moves a title that is still the launch stamp to the new preset", async () => {
+    seed();
+
+    await usePanelStore.getState().restartTerminalOnPreset("test-1", "work");
+
+    expect(pane().title).toBe("Claude [Work]");
+    expect(pane().titleMode).toBe("custom");
+    expect(mockSpawn.mock.calls[0]![0].title).toBe("Claude [Work]");
+  });
+
+  it("recognises the original preset's stamp on a pane that fell back", async () => {
+    seed({
+      agentPresetId: "backup",
+      originalPresetId: "personal",
+      isUsingFallback: true,
+      fallbackChainIndex: 1,
+    });
+
+    await usePanelStore.getState().restartTerminalOnPreset("test-1", "work");
+
+    expect(pane().title).toBe("Claude [Work]");
+  });
+
+  it("keeps a user's rename", async () => {
+    seed({ title: "Claude [Personal]", titleMode: "user" });
+
+    await usePanelStore.getState().restartTerminalOnPreset("test-1", "work");
+
+    expect(pane().title).toBe("Claude [Personal]");
+    expect(pane().titleMode).toBe("user");
+  });
+
+  it("keeps a caller-supplied name", async () => {
+    seed({ title: "Review API", titleMode: "custom" });
+
+    await usePanelStore.getState().restartTerminalOnPreset("test-1", "work");
+
+    expect(pane().title).toBe("Review API");
+  });
+
+  it("puts the old preset back, persisted, when the respawn fails", async () => {
+    seed();
+    mockSpawn.mockRejectedValueOnce(new Error("spawn failed"));
+
+    const result = await usePanelStore.getState().restartTerminalOnPreset("test-1", "work");
+
+    expect(result.success).toBe(false);
+    expect(pane().agentPresetId).toBe("personal");
+    expect(pane().env).toEqual({ CODEX_HOME: "/home/me/.codex", STALE_ONLY_ON_OLD: "1" });
+    expect(pane().title).toBe("Claude [Personal]");
+    expect(pane().isRestarting).toBe(false);
+    expect(pane().restartError?.context?.phase).toBe("preset-switch");
+  });
+
+  it("refuses an unknown preset without touching the process", async () => {
+    seed();
+
+    const result = await usePanelStore.getState().restartTerminalOnPreset("test-1", "gone");
+
+    expect(result.success).toBe(false);
+    expect(mockKill).not.toHaveBeenCalled();
+    expect(mockSpawn).not.toHaveBeenCalled();
+    expect(pane().agentPresetId).toBe("personal");
+  });
+
+  it("saves the hopped preset's env on a fallback hop too", async () => {
+    // Same gap as the switch: a hop that left the saved layer alone came back
+    // on the failed preset's env after a relaunch.
+    seed();
+
+    await usePanelStore.getState().activateFallbackPreset("test-1", "work", "personal");
+
+    expect(pane().env).toEqual({ CODEX_HOME: "/home/me/.codex-2" });
+    expect(pane().isUsingFallback).toBe(true);
+    expect(pane().originalPresetId).toBe("personal");
+    // A hop keeps the title: the fallback indicator says what it's running on.
+    expect(pane().title).toBe("Claude [Personal]");
+  });
+});

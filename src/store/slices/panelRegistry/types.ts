@@ -274,6 +274,17 @@ export interface PanelRegistrySlice {
     nextPresetId: string,
     originalPresetId: string
   ) => Promise<{ success: boolean; error?: string }>;
+  /**
+   * Respawn an agent pane in place on another preset of the same agent
+   * (#13746). Always a new conversation: a session can't follow the pane into
+   * another preset's home. The chosen preset becomes the pane's own — fallback
+   * marking is reset — and its env replaces the saved launch layer so a cold
+   * restore comes back on it.
+   */
+  restartTerminalOnPreset: (
+    id: string,
+    presetId: string
+  ) => Promise<{ success: boolean; error?: string }>;
   /** Open a terminal's Scratchpad column (#12835), or expand a collapsed one. */
   showScratchpad: (id: string) => void;
   /** Collapse the Scratchpad; an empty one is removed instead. */

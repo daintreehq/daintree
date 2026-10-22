@@ -1061,6 +1061,7 @@ const EXPECTED_CONFIRM_DANGER: ReadonlyArray<ActionId> = [
   "terminal.killBatch",
   "terminal.killAll",
   "terminal.restart",
+  "terminal.restartOnPreset",
   "terminal.restartAll",
   "terminal.arm",
   "worktree.delete",
@@ -1122,6 +1123,7 @@ const CONFIRMED_WIRED: ReadonlyArray<ActionId> = [
   "terminal.kill",
   "terminal.killAll",
   "terminal.restart",
+  "terminal.restartOnPreset",
   "terminal.restartAll",
   "worktree.delete",
   "worktree.sessions.endAll",
@@ -1324,6 +1326,8 @@ describe("destructive-action danger metadata", () => {
       // terminal.killBatch takes an explicit list and has no scalar spelling, so
       // the placeholder above does not reach its confirm gate.
       terminalIds: ["term-placeholder"],
+      // terminal.restartOnPreset names the preset to respawn on.
+      presetId: "preset-placeholder",
       // session.bookmarkAndClose/delete need label + sessionId to clear arg
       // validation and reach the confirm gate.
       label: "placeholder",

@@ -3,6 +3,7 @@ import { formatLastChecked } from "@/utils/timeAgo";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsGroup, SettingsRow } from "./SettingsGroup";
 import { useCodexQuota } from "@/hooks/useCodexQuota";
+import { windowLabel } from "@/utils/codexQuotaFormat";
 import { useGlobalMinuteClock } from "@/hooks/useGlobalMinuteTicker";
 import {
   CODEX_QUOTA_STALE_AFTER_MS,
@@ -33,12 +34,7 @@ export function profileLabel(profile: CodexQuotaProfile): string {
   return names ? `Default profile · ${names}` : "Default profile";
 }
 
-export function windowLabel(windowDurationMins: number): string {
-  if (windowDurationMins === 10080) return "Weekly limit";
-  if (windowDurationMins % 1440 === 0) return `${windowDurationMins / 1440}-day limit`;
-  if (windowDurationMins % 60 === 0) return `${windowDurationMins / 60}-hour limit`;
-  return `${windowDurationMins}-minute limit`;
-}
+export { windowLabel };
 
 function formatReset(resetsAt: number, now: number): string {
   const time = new Date(resetsAt).toLocaleTimeString(undefined, {

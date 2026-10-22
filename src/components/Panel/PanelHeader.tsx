@@ -1146,6 +1146,7 @@ function PanelHeaderComponent({
                       presetColor={tab.presetColor}
                       isUsingFallback={tab.isUsingFallback}
                       fallbackTooltip={tab.fallbackTooltip}
+                      presetName={tab.presetName}
                       hasDangerousFlags={tab.hasDangerousFlags}
                       tabPanelId={tabPanelId}
                       menuLocation={location}
@@ -1185,6 +1186,7 @@ function PanelHeaderComponent({
                   presetColor={tab.presetColor}
                   isUsingFallback={tab.isUsingFallback}
                   fallbackTooltip={tab.fallbackTooltip}
+                  presetName={tab.presetName}
                   hasDangerousFlags={tab.hasDangerousFlags}
                   tabPanelId={tabPanelId}
                   menuLocation={location}

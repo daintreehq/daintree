@@ -14,6 +14,7 @@ import {
   buildResumeLatestCommand,
   buildLaunchCommandFromFlags,
   stripAssignedSessionIdArgs,
+  stripConversationSelectorFlags,
   supportsSessionIdAssignment,
   reconcileBypassFlags,
   reconcileDecorationFlags,
@@ -28,7 +29,14 @@ import type { AgentState } from "@/types";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { TerminalRefreshTier } from "@/types";
 import { validateTerminalConfig } from "@/utils/terminalValidation";
-import { getAgentConfig } from "@/config/agents";
+import {
+  getAgentConfig,
+  getMergedPreset,
+  sanitizeAgentEnv,
+  type AgentPreset,
+} from "@/config/agents";
+import { getAgentDisplayTitle } from "@shared/config/agentRegistry";
+import { agentPresetTitle } from "@shared/utils/agentLaunchPlan";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
@@ -177,6 +185,19 @@ function updateTerminal(
   return { panelsById: { ...state.panelsById, [id]: updater(terminal) } };
 }
 
+/** {@link updateTerminal}, then persisted, for writes a reload must not undo. */
+function updateAndSaveTerminal(
+  set: Set,
+  id: string,
+  updater: (t: PanelRegistrySlice["panelsById"][string]) => PanelRegistrySlice["panelsById"][string]
+): void {
+  set((state) => {
+    const next = updateTerminal(state, id, updater);
+    if (next !== state) saveNormalized(next.panelsById, state.panelIds);
+    return next;
+  });
+}
+
 /**
  * A restart whose new PTY is up. "exited" survives deriveRuntimeStatus, so it
  * is dropped here, once the spawn has succeeded: a respawn that failed stays
@@ -229,6 +250,7 @@ export const createRestartActions = (
   | "setInputLocked"
   | "toggleInputLocked"
   | "activateFallbackPreset"
+  | "restartTerminalOnPreset"
   | "dismissSessionLost"
   | "dismissAllSessionLost"
 > => ({
@@ -1386,289 +1408,389 @@ export const createRestartActions = (
     });
   },
 
-  activateFallbackPreset: async (id, nextPresetId, originalPresetId) => {
-    const terminal = get().panelsById[id];
-    if (!terminal) {
-      return { success: false, error: "terminal not found" };
+  activateFallbackPreset: (id, nextPresetId, originalPresetId) =>
+    respawnAgentOnPreset(set, get, id, nextPresetId, { kind: "fallback", originalPresetId }),
+
+  restartTerminalOnPreset: (id, presetId) =>
+    respawnAgentOnPreset(set, get, id, presetId, { kind: "switch" }),
+});
+
+/**
+ * The title a pane takes when it moves to `nextPreset`. Only a title that is
+ * still what a launch on the preset it left would carry follows the move
+ * (#13746): that preset's stamp, or the bare agent name of a preset-free
+ * launch. A rename or a caller-supplied name stays exactly as it is.
+ */
+export function presetSwitchTitle(
+  current: { title: string; titleMode?: PanelTitleMode },
+  context: {
+    agentId: string;
+    modelId?: string;
+    leftPresets: ReadonlyArray<Pick<AgentPreset, "name" | "displayTitle"> | undefined>;
+    nextPreset: Pick<AgentPreset, "name" | "displayTitle">;
+  }
+): { title: string; titleMode?: PanelTitleMode } {
+  if (current.titleMode === "user") return current;
+  const baseTitle = getAgentDisplayTitle(context.agentId, context.modelId);
+  const stamped =
+    current.titleMode === "custom"
+      ? context.leftPresets.some(
+          (preset) => preset && agentPresetTitle(baseTitle, preset) === current.title
+        )
+      : current.title === baseTitle;
+  if (!stamped) return current;
+  const nextTitle = agentPresetTitle(baseTitle, context.nextPreset);
+  return nextTitle ? { title: nextTitle, titleMode: "custom" } : current;
+}
+
+type PresetRespawnMode = { kind: "fallback"; originalPresetId: string } | { kind: "switch" };
+
+async function respawnAgentOnPreset(
+  set: Set,
+  get: Get,
+  id: string,
+  nextPresetId: string,
+  mode: PresetRespawnMode
+): Promise<{ success: boolean; error?: string }> {
+  const terminal = get().panelsById[id];
+  if (!terminal) {
+    return { success: false, error: "terminal not found" };
+  }
+  if (!isPtyPanel(terminal)) {
+    return { success: false, error: "panel is not a PTY panel" };
+  }
+  if (terminal.isRestarting) {
+    return { success: false, error: "already restarting" };
+  }
+
+  const effectiveAgentId = terminal.launchAgentId;
+  if (!effectiveAgentId) {
+    return { success: false, error: "panel is not an agent" };
+  }
+  // Held for recovery (#12434): nothing ran, so nothing failed over.
+  if (terminal.restoreRecovery) {
+    return { success: false, error: "panel is held for recovery" };
+  }
+
+  markTerminalRestarting(id);
+  set((state) =>
+    updateTerminal(state, id, (t) => ({
+      ...t,
+      restartError: undefined,
+      spawnError: undefined,
+      isRestarting: true,
+    }))
+  );
+
+  // Snapshot pre-mutation preset fields for rollback on spawn failure.
+  // Without this, a failed respawn leaves the panel permanently stamped as
+  // "using fallback N" while no process is running, corrupting any retry
+  // that reads fallbackChainIndex.
+  const priorSnapshot = {
+    command: terminal.command,
+    agentPresetId: terminal.agentPresetId,
+    agentPresetColor: terminal.agentPresetColor,
+    originalPresetId: terminal.originalPresetId,
+    isUsingFallback: terminal.isUsingFallback,
+    fallbackChainIndex: terminal.fallbackChainIndex,
+    agentLaunchFlags: terminal.agentLaunchFlags,
+    callerLaunchFlags: terminal.callerLaunchFlags,
+    conversationCwd: terminal.conversationCwd,
+    env: terminal.env,
+  };
+  // Set only when a switch retitled the pane, so a failure can put back the
+  // stamp it replaced — unless the user renamed it in the meantime.
+  let switchedTitle: { title: string; titleMode?: PanelTitleMode } | undefined;
+
+  try {
+    const [agentSettings, tmpDir] = await Promise.all([
+      agentSettingsClient.get(),
+      resolveHostTmpDir(() => systemClient.getTmpDir()).catch(() => ""),
+    ]);
+    const entry = agentSettings?.agents?.[effectiveAgentId] ?? {};
+    const ccrPresets = useCcrPresetsStore.getState().ccrPresetsByAgent[effectiveAgentId];
+    const projectPresets = useProjectPresetsStore.getState().presetsByAgent[effectiveAgentId];
+    const runtimeSettings = resolveAgentRuntimeSettings({
+      agentId: effectiveAgentId,
+      presetId: nextPresetId,
+      entry,
+      ccrPresets,
+      projectPresets,
+    });
+    const nextPreset = runtimeSettings.preset;
+    if (!nextPreset) {
+      throw new Error(`preset "${nextPresetId}" not found`);
     }
-    if (!isPtyPanel(terminal)) {
-      return { success: false, error: "panel is not a PTY panel" };
-    }
-    if (terminal.isRestarting) {
-      return { success: false, error: "already restarting" };
+    // A switch makes the chosen preset the pane's own: the chain it was
+    // walking, and the tooltip that says so, belong to the preset it left.
+    // A hop keeps walking the original's chain.
+    const nextOriginalPresetId = mode.kind === "fallback" ? mode.originalPresetId : nextPreset.id;
+
+    const effectiveEntry = runtimeSettings.effectiveEntry;
+
+    let clipboardDirectory: string | undefined;
+    if (effectiveAgentId === "gemini" && effectiveEntry.shareClipboardDirectory !== false) {
+      clipboardDirectory = tmpDir ? agentClipboardDirectory(tmpDir, isRemoteWindow()) : undefined;
     }
 
-    const effectiveAgentId = terminal.launchAgentId;
-    if (!effectiveAgentId) {
-      return { success: false, error: "panel is not an agent" };
-    }
-    // Held for recovery (#12434): nothing ran, so nothing failed over.
-    if (terminal.restoreRecovery) {
-      return { success: false, error: "panel is held for recovery" };
-    }
-
-    markTerminalRestarting(id);
-    set((state) =>
-      updateTerminal(state, id, (t) => ({
-        ...t,
-        restartError: undefined,
-        spawnError: undefined,
-        isRestarting: true,
-      }))
+    const agentConfig = getAgentConfig(effectiveAgentId);
+    const baseCommand = resolveAgentLaunchBaseCommand(
+      agentConfig?.command || effectiveAgentId,
+      await getCurrentLaunchCliDetail(effectiveAgentId)
     );
+    const globalSkipPermissions = agentSettings?.globalSkipPermissions ?? false;
+    const globalUseAltScreen = agentSettings?.globalUseAltScreen ?? false;
+    // A failover swaps the provider, not the caller's standing instruction
+    // or its own verbatim flags (#13046).
+    const { base: storedBaseFlags, caller: storedCallerFlags } = splitCallerLaunchFlags(
+      terminal.agentLaunchFlags,
+      terminal.callerLaunchFlags
+    );
+    // A switch promises a new conversation, so a caller's own resume selector
+    // (`--continue`, `resume --last`) can't ride along into the new home.
+    const callerLaunchFlags =
+      mode.kind === "switch"
+        ? stripConversationSelectorFlags(storedCallerFlags, effectiveAgentId)
+        : storedCallerFlags;
+    const systemPromptArgs = extractSystemPromptArgs(storedBaseFlags, effectiveAgentId);
+    const commandToRun = appendCallerLaunchFlagsToCommand(
+      generateAgentCommand(baseCommand, effectiveEntry, effectiveAgentId, {
+        clipboardDirectory,
+        modelId: terminal.agentModelId,
+        systemPromptArgs,
+        presetArgs: nextPreset.args?.join(" "),
+        globalSkipPermissions,
+        globalUseAltScreen,
+      }),
+      callerLaunchFlags
+    );
+    const nextLaunchFlags = [
+      ...buildAgentLaunchFlags(effectiveEntry, effectiveAgentId, {
+        modelId: terminal.agentModelId,
+        systemPromptArgs,
+        presetArgs: nextPreset.args,
+        globalSkipPermissions,
+        globalUseAltScreen,
+      }),
+      ...callerLaunchFlags,
+    ];
 
-    // Snapshot pre-mutation preset fields for rollback on spawn failure.
-    // Without this, a failed respawn leaves the panel permanently stamped as
-    // "using fallback N" while no process is running, corrupting any retry
-    // that reads fallbackChainIndex.
-    const priorSnapshot = {
-      command: terminal.command,
-      agentPresetId: terminal.agentPresetId,
-      agentPresetColor: terminal.agentPresetColor,
-      originalPresetId: terminal.originalPresetId,
-      isUsingFallback: terminal.isUsingFallback,
-      fallbackChainIndex: terminal.fallbackChainIndex,
-      agentLaunchFlags: terminal.agentLaunchFlags,
-      callerLaunchFlags: terminal.callerLaunchFlags,
-      conversationCwd: terminal.conversationCwd,
-    };
+    // Capture live terminal dimensions before teardown
+    const managedInstance = terminalInstanceService.get(id);
+    let spawnCols = terminal.cols || 80;
+    let spawnRows = terminal.rows || 24;
+    if (managedInstance?.terminal) {
+      spawnCols = managedInstance.terminal.cols || spawnCols;
+      spawnRows = managedInstance.terminal.rows || spawnRows;
+    }
 
+    terminalInstanceService.destroy(id);
+    terminalInstanceService.suppressNextExit(id, 10000);
     try {
-      const [agentSettings, tmpDir] = await Promise.all([
-        agentSettingsClient.get(),
-        resolveHostTmpDir(() => systemClient.getTmpDir()).catch(() => ""),
-      ]);
-      const entry = agentSettings?.agents?.[effectiveAgentId] ?? {};
-      const ccrPresets = useCcrPresetsStore.getState().ccrPresetsByAgent[effectiveAgentId];
-      const projectPresets = useProjectPresetsStore.getState().presetsByAgent[effectiveAgentId];
-      const runtimeSettings = resolveAgentRuntimeSettings({
-        agentId: effectiveAgentId,
-        presetId: nextPresetId,
-        entry,
-        ccrPresets,
-        projectPresets,
-      });
-      const nextPreset = runtimeSettings.preset;
-      if (!nextPreset) {
-        throw new Error(`fallback preset "${nextPresetId}" not found`);
-      }
-
-      const effectiveEntry = runtimeSettings.effectiveEntry;
-
-      let clipboardDirectory: string | undefined;
-      if (effectiveAgentId === "gemini" && effectiveEntry.shareClipboardDirectory !== false) {
-        clipboardDirectory = tmpDir ? agentClipboardDirectory(tmpDir, isRemoteWindow()) : undefined;
-      }
-
-      const agentConfig = getAgentConfig(effectiveAgentId);
-      const baseCommand = resolveAgentLaunchBaseCommand(
-        agentConfig?.command || effectiveAgentId,
-        await getCurrentLaunchCliDetail(effectiveAgentId)
-      );
-      const globalSkipPermissions = agentSettings?.globalSkipPermissions ?? false;
-      const globalUseAltScreen = agentSettings?.globalUseAltScreen ?? false;
-      // A failover swaps the provider, not the caller's standing instruction
-      // or its own verbatim flags (#13046).
-      const { base: storedBaseFlags, caller: callerLaunchFlags } = splitCallerLaunchFlags(
-        terminal.agentLaunchFlags,
-        terminal.callerLaunchFlags
-      );
-      const systemPromptArgs = extractSystemPromptArgs(storedBaseFlags, effectiveAgentId);
-      const commandToRun = appendCallerLaunchFlagsToCommand(
-        generateAgentCommand(baseCommand, effectiveEntry, effectiveAgentId, {
-          clipboardDirectory,
-          modelId: terminal.agentModelId,
-          systemPromptArgs,
-          presetArgs: nextPreset.args?.join(" "),
-          globalSkipPermissions,
-          globalUseAltScreen,
-        }),
-        callerLaunchFlags
-      );
-      const nextLaunchFlags = [
-        ...buildAgentLaunchFlags(effectiveEntry, effectiveAgentId, {
-          modelId: terminal.agentModelId,
-          systemPromptArgs,
-          presetArgs: nextPreset.args,
-          globalSkipPermissions,
-          globalUseAltScreen,
-        }),
-        ...callerLaunchFlags,
-      ];
-
-      // Capture live terminal dimensions before teardown
-      const managedInstance = terminalInstanceService.get(id);
-      let spawnCols = terminal.cols || 80;
-      let spawnRows = terminal.rows || 24;
-      if (managedInstance?.terminal) {
-        spawnCols = managedInstance.terminal.cols || spawnCols;
-        spawnRows = managedInstance.terminal.rows || spawnRows;
-      }
-
-      terminalInstanceService.destroy(id);
-      terminalInstanceService.suppressNextExit(id, 10000);
-      try {
-        await terminalClient.kill(id, { forRestart: true });
-      } catch (error) {
-        logWarn("[TerminalStore] kill failed during fallback activation; continuing", {
-          id,
-          error,
-        });
-      }
-
-      const nextChainIndex = (terminal.fallbackChainIndex ?? 0) + 1;
-
-      set((state) => {
-        const t = state.panelsById[id];
-        if (!t || !isPtyPanel(t)) return state;
-        const updated = {
-          ...t,
-          restartKey: (t.restartKey ?? 0) + 1,
-          agentState: "working" as AgentState,
-          lastStateChange: Date.now(),
-          stateChangeTrigger: undefined,
-          stateChangeConfidence: undefined,
-          command: commandToRun,
-          agentPresetId: nextPreset.id,
-          agentPresetColor: nextPreset.color,
-          originalPresetId: originalPresetId,
-          isUsingFallback: true,
-          fallbackChainIndex: nextChainIndex,
-          agentLaunchFlags: nextLaunchFlags,
-          callerLaunchFlags: callerLaunchFlags.length > 0 ? callerLaunchFlags : undefined,
-          agentSessionId: undefined,
-          // The fallback starts a new conversation where the pane runs.
-          conversationCwd: undefined,
-          isRestarting: true,
-          restartError: undefined,
-          exitCode: undefined,
-          // Drop the prior session's parsed check result (#10682) — a fresh
-          // run hasn't produced one yet, and a stale pass/fail would mislead.
-          lastCheckResult: undefined,
-          // Same for its handback (#12488): the restarted session was never asked.
-          lastHandback: undefined,
-          // A new PTY starts the session count over, matching the fresh record
-          // the host builds for it (#12535). Carrying the old one forward would
-          // leave this surface disagreeing with the host about a session
-          // neither of them is holding any more.
-          agentIncarnation: undefined,
-          startedAt: Date.now(),
-        };
-        const newById = { ...state.panelsById, [id]: updated };
-        saveNormalized(newById, state.panelIds);
-        return { panelsById: newById };
-      });
-
-      await terminalInstanceService.waitForInstance(id, { timeoutMs: 5000 });
-
-      const projectStore = await resolveProjectStore();
-      const capturedProjectId = projectStore.getState().currentProject?.id;
-      const capturedWorkspaceId = capturedProjectId ?? getViewWorkspaceId() ?? undefined;
-
-      const restartEnv = await buildRestartEnv(capturedProjectId, runtimeSettings.env, "fallback");
-
-      // Live at spawn time for the same reason as the restart path above: the
-      // hop awaits, and a move that lands mid-hop must not be undone by it.
-      const liveFallbackPanel = get().panelsById[id];
-      const fallbackWorktreeId = liveFallbackPanel
-        ? liveFallbackPanel.worktreeId
-        : terminal.worktreeId;
-
-      // A fallback hop respawns the id — new renderer ledger incarnation, with
-      // the hopped preset recorded as the active one.
-      agentLifecycleLedger.recordLaunch(id, {
-        launchAgentId: terminal.launchAgentId,
-        cwd: terminal.cwd,
-        projectId: capturedWorkspaceId,
-        worktreeId: fallbackWorktreeId,
-        worktreeSource: fallbackWorktreeId !== undefined ? "explicit" : undefined,
-        agentModelId: terminal.agentModelId,
-        agentPresetId: nextPreset.id,
-        originalPresetId: originalPresetId,
-        agentLaunchFlags: nextLaunchFlags,
-        env: computeEnvProvenance(restartEnv),
-        initialCols: spawnCols,
-        initialRows: spawnRows,
-      });
-
-      const fallbackTitle = titleAtSpawn(get, id, terminal);
-      await terminalClient.spawn({
+      await terminalClient.kill(id, { forRestart: true });
+    } catch (error) {
+      logWarn("[TerminalStore] kill failed during preset respawn; continuing", {
         id,
-        projectId: capturedWorkspaceId,
-        cwd: terminal.cwd,
-        cols: spawnCols,
-        rows: spawnRows,
-        kind: "terminal",
-        launchAgentId: terminal.launchAgentId,
-        // Carried with the title, never without it: a title that arrives
-        // unaccompanied re-stamps as "default" and the next detection sweep
-        // overwrites the user's rename (#10794).
-        ...fallbackTitle,
+        error,
+      });
+    }
+
+    const nextChainIndex = (terminal.fallbackChainIndex ?? 0) + 1;
+
+    set((state) => {
+      const t = state.panelsById[id];
+      if (!t || !isPtyPanel(t)) return state;
+      const updated = {
+        ...t,
+        restartKey: (t.restartKey ?? 0) + 1,
+        agentState: "working" as AgentState,
+        lastStateChange: Date.now(),
+        stateChangeTrigger: undefined,
+        stateChangeConfidence: undefined,
         command: commandToRun,
-        restore: false,
-        env: restartEnv,
-        agentLaunchFlags: nextLaunchFlags,
-        agentModelId: terminal.agentModelId,
-        // Carried for the same reason as the restart path: a fallback hop that
-        // drops it strands the run in the palette's "No worktree" bucket for
-        // the rest of its life (#12060).
-        worktreeId: fallbackWorktreeId,
         agentPresetId: nextPreset.id,
         agentPresetColor: nextPreset.color,
-        originalAgentPresetId: originalPresetId,
-        actionContext: buildAgentLaunchContext({
-          launchAgentId: terminal.launchAgentId,
-          terminalId: id,
-          title: fallbackTitle.title,
-          worktreeId: fallbackWorktreeId,
-        }),
-      });
+        originalPresetId: nextOriginalPresetId,
+        isUsingFallback: mode.kind === "fallback" ? true : undefined,
+        fallbackChainIndex: mode.kind === "fallback" ? nextChainIndex : undefined,
+        // The launch layer a cold restore replays ahead of the preset's own
+        // env (#10922). Left as it was, a relaunch would bring the pane back
+        // on the preset it just moved off.
+        env: sanitizeAgentEnv(runtimeSettings.env),
+        agentLaunchFlags: nextLaunchFlags,
+        callerLaunchFlags: callerLaunchFlags.length > 0 ? callerLaunchFlags : undefined,
+        agentSessionId: undefined,
+        // The fallback starts a new conversation where the pane runs.
+        conversationCwd: undefined,
+        isRestarting: true,
+        restartError: undefined,
+        exitCode: undefined,
+        // Drop the prior session's parsed check result (#10682) — a fresh
+        // run hasn't produced one yet, and a stale pass/fail would mislead.
+        lastCheckResult: undefined,
+        // Same for its handback (#12488): the restarted session was never asked.
+        lastHandback: undefined,
+        // A new PTY starts the session count over, matching the fresh record
+        // the host builds for it (#12535). Carrying the old one forward would
+        // leave this surface disagreeing with the host about a session
+        // neither of them is holding any more.
+        agentIncarnation: undefined,
+        startedAt: Date.now(),
+      };
+      const newById = { ...state.panelsById, [id]: updated };
+      saveNormalized(newById, state.panelIds);
+      return { panelsById: newById };
+    });
 
-      reconcileWorktreeAfterSpawn(id, fallbackWorktreeId, get().panelsById[id]);
+    await terminalInstanceService.waitForInstance(id, { timeoutMs: 5000 });
 
-      // The new PTY was spawned from a grid read before the await; a resize
-      // sent in between reached no PTY, so re-assert rather than trust it.
-      terminalInstanceService.invalidatePtyGrid(id);
-      if (terminal.location === "dock") {
-        optimizeForDock(id);
-      } else {
-        terminalInstanceService.fit(id);
-      }
+    const projectStore = await resolveProjectStore();
+    const capturedProjectId = projectStore.getState().currentProject?.id;
+    const capturedWorkspaceId = capturedProjectId ?? getViewWorkspaceId() ?? undefined;
 
-      unmarkTerminalRestarting(id);
-      set((state) => updateTerminal(state, id, respawned));
-      return { success: true };
-    } catch (error) {
-      const appError = isClientAppError(error) ? error : null;
-      const errorMessage =
-        appError?.userMessage ?? formatErrorMessage(error, "Failed to restart terminal");
-      unmarkTerminalRestarting(id);
-      set((state) =>
-        updateTerminal(state, id, (t) => ({
-          ...t,
-          isRestarting: false,
-          // Restore pre-mutation fields so fallbackChainIndex and presetId
-          // accurately reflect "we are NOT running the next preset". Without
-          // rollback, any subsequent fallback trigger would jump past this
-          // preset even though the PTY never started.
-          ...priorSnapshot,
-          restartError: {
-            message: errorMessage,
-            timestamp: Date.now(),
-            recoverable: false,
-            context: {
-              failedCwd: terminal.cwd,
-              phase: "fallback-activation",
-              nextPresetId,
-            },
-          },
-        }))
-      );
-      logError("[TerminalStore] Failed to activate fallback preset", error, {
+    const restartEnv = await buildRestartEnv(capturedProjectId, runtimeSettings.env, "fallback");
+
+    // Live at spawn time for the same reason as the restart path above: the
+    // hop awaits, and a move that lands mid-hop must not be undone by it.
+    const liveFallbackPanel = get().panelsById[id];
+    const fallbackWorktreeId = liveFallbackPanel
+      ? liveFallbackPanel.worktreeId
+      : terminal.worktreeId;
+
+    // A fallback hop respawns the id — new renderer ledger incarnation, with
+    // the hopped preset recorded as the active one.
+    agentLifecycleLedger.recordLaunch(id, {
+      launchAgentId: terminal.launchAgentId,
+      cwd: terminal.cwd,
+      projectId: capturedWorkspaceId,
+      worktreeId: fallbackWorktreeId,
+      worktreeSource: fallbackWorktreeId !== undefined ? "explicit" : undefined,
+      agentModelId: terminal.agentModelId,
+      agentPresetId: nextPreset.id,
+      originalPresetId: nextOriginalPresetId,
+      agentLaunchFlags: nextLaunchFlags,
+      env: computeEnvProvenance(restartEnv),
+      initialCols: spawnCols,
+      initialRows: spawnRows,
+    });
+
+    const liveTitle = titleAtSpawn(get, id, terminal);
+    const fallbackTitle =
+      mode.kind === "switch"
+        ? presetSwitchTitle(liveTitle, {
+            agentId: effectiveAgentId,
+            modelId: terminal.agentModelId,
+            leftPresets: [terminal.agentPresetId, terminal.originalPresetId].map((presetId) =>
+              presetId
+                ? getMergedPreset(
+                    effectiveAgentId,
+                    presetId,
+                    entry.customPresets,
+                    ccrPresets,
+                    projectPresets
+                  )
+                : undefined
+            ),
+            nextPreset,
+          })
+        : liveTitle;
+    if (fallbackTitle !== liveTitle) {
+      switchedTitle = fallbackTitle;
+      updateAndSaveTerminal(set, id, (t) => ({
+        ...t,
+        title: fallbackTitle.title,
+        titleMode: fallbackTitle.titleMode,
+      }));
+    }
+    await terminalClient.spawn({
+      id,
+      projectId: capturedWorkspaceId,
+      cwd: terminal.cwd,
+      cols: spawnCols,
+      rows: spawnRows,
+      kind: "terminal",
+      launchAgentId: terminal.launchAgentId,
+      // Carried with the title, never without it: a title that arrives
+      // unaccompanied re-stamps as "default" and the next detection sweep
+      // overwrites the user's rename (#10794).
+      ...fallbackTitle,
+      command: commandToRun,
+      restore: false,
+      env: restartEnv,
+      agentLaunchFlags: nextLaunchFlags,
+      agentModelId: terminal.agentModelId,
+      // Carried for the same reason as the restart path: a fallback hop that
+      // drops it strands the run in the palette's "No worktree" bucket for
+      // the rest of its life (#12060).
+      worktreeId: fallbackWorktreeId,
+      agentPresetId: nextPreset.id,
+      agentPresetColor: nextPreset.color,
+      originalAgentPresetId: nextOriginalPresetId,
+      actionContext: buildAgentLaunchContext({
+        launchAgentId: terminal.launchAgentId,
+        terminalId: id,
+        title: fallbackTitle.title,
+        worktreeId: fallbackWorktreeId,
+      }),
+    });
+
+    reconcileWorktreeAfterSpawn(id, fallbackWorktreeId, get().panelsById[id]);
+
+    // The new PTY was spawned from a grid read before the await; a resize
+    // sent in between reached no PTY, so re-assert rather than trust it.
+    terminalInstanceService.invalidatePtyGrid(id);
+    if (terminal.location === "dock") {
+      optimizeForDock(id);
+    } else {
+      terminalInstanceService.fit(id);
+    }
+
+    unmarkTerminalRestarting(id);
+    set((state) => updateTerminal(state, id, respawned));
+    return { success: true };
+  } catch (error) {
+    const appError = isClientAppError(error) ? error : null;
+    const errorMessage =
+      appError?.userMessage ?? formatErrorMessage(error, "Failed to restart terminal");
+    unmarkTerminalRestarting(id);
+    // Persisted: the respawn already saved the destination, and a reload
+    // must not bring the pane back on a preset it never started on.
+    updateAndSaveTerminal(set, id, (t) => ({
+      ...t,
+      isRestarting: false,
+      // Restore pre-mutation fields so fallbackChainIndex and presetId
+      // accurately reflect "we are NOT running the next preset". Without
+      // rollback, any subsequent fallback trigger would jump past this
+      // preset even though the PTY never started.
+      ...priorSnapshot,
+      // Only the stamp this switch wrote: a rename since then, even one that
+      // happens to spell the same title, now belongs to the user.
+      ...(switchedTitle &&
+      t.title === switchedTitle.title &&
+      t.titleMode === switchedTitle.titleMode
+        ? { title: terminal.title, titleMode: terminal.titleMode }
+        : {}),
+      restartError: {
+        message: errorMessage,
+        timestamp: Date.now(),
+        recoverable: false,
+        context: {
+          failedCwd: terminal.cwd,
+          phase: mode.kind === "fallback" ? "fallback-activation" : "preset-switch",
+          nextPresetId,
+        },
+      },
+    }));
+    logError(
+      mode.kind === "fallback"
+        ? "[TerminalStore] Failed to activate fallback preset"
+        : "[TerminalStore] Failed to restart terminal on preset",
+      error,
+      {
         id,
         nextPresetId,
-      });
-      return { success: false, error: errorMessage };
-    }
-  },
-});
+      }
+    );
+    return { success: false, error: errorMessage };
+  }
+}
