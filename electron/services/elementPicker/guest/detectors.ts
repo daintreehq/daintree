@@ -204,9 +204,21 @@ export function detectExpandos(node: Element, into: DetectionSet): void {
     const key = keys[index];
     if (key === undefined) continue;
     for (const marker of EXPANDO_MARKERS) {
-      const matches = marker.prefix ? key.startsWith(marker.name) : key === marker.name;
-      if (matches) into.add(marker.framework, "expando", marker.prefix ? marker.name + "*" : key);
+      if (marker.prefix && key.startsWith(marker.name)) {
+        into.add(marker.framework, "expando", marker.name + "*");
+      }
     }
+  }
+  // Asked by name rather than listed: Vue defines its expandos non-enumerable.
+  for (const marker of EXPANDO_MARKERS) {
+    if (marker.prefix) continue;
+    let own = false;
+    try {
+      own = Object.hasOwn(node, marker.name);
+    } catch {
+      // A node that cannot be asked is no evidence either way.
+    }
+    if (own) into.add(marker.framework, "expando", marker.name);
   }
 }
 

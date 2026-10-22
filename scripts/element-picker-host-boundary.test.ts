@@ -85,6 +85,7 @@ const isSourceMapDecoder = (file: string) =>
   file.includes("node_modules/@jridgewell/trace-mapping/");
 const isJsParser = (file: string) => file.includes("node_modules/@babel/parser/");
 const isJsxParser = (file: string) => file.includes("node_modules/@lezer/");
+const isVueCompiler = (file: string) => file.includes("node_modules/@vue/compiler-");
 
 describe("the Element Picker host boundary", () => {
   it("keeps the host process's code out of main, eagerly or lazily", async () => {
@@ -166,6 +167,22 @@ describe("the Element Picker host boundary", () => {
     expect(
       reachable.filter((file) => file.startsWith("electron/") && !file.startsWith(HOST_DIR))
     ).toEqual(["electron/utils/bootstrapErrorGuard.ts"]);
+  }, 60_000);
+
+  it("keeps Vue's template parser behind the Vue resolver's first template check", async () => {
+    // Not in the registry until #13888 registers it, so held to the rule on its own graph.
+    const entry = `${RESOLVERS_DIR}vue.ts`;
+    const metafile = await metafileOf(entry, NATIVE_EXTERNAL);
+    const reachable = Object.keys(metafile.inputs);
+    // Not a vacuous pass: the parser is in the build, behind its dynamic import.
+    expect(reachable.some(isVueCompiler)).toBe(true);
+    expect([...walkEagerGraph(metafile, entry)].filter(isVueCompiler)).toEqual([]);
+    // Nothing of Svelte's comes with it, and no file or network access at all.
+    expect(scanForbiddenModules(reachable)).toEqual([]);
+    expect(authorityImports(metafile)).toEqual([]);
+    expect(
+      reachable.filter((file) => file.startsWith("electron/") && !file.startsWith(HOST_DIR))
+    ).toEqual([]);
   }, 60_000);
 
   it("decodes source maps only in the host, loading the decoder when a frame is first mapped", async () => {
