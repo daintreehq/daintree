@@ -18,11 +18,11 @@ function isRowBand(band: FleetBand): band is RowBand {
 }
 
 /** Only an agent asking for something is named under its host; the rest are counted. */
-function isAsking(band: FleetBand): band is OtherHostAsk["band"] {
+function isAsking(band: FleetBand): band is HostAsk["band"] {
   return band === "blocked" || band === "needs-you";
 }
 
-export interface OtherHostAsk {
+export interface HostAsk {
   projectId: string;
   worktreeId: string;
   /** Null from a host that doesn't say which terminal: the switch lands on the project. */
@@ -33,14 +33,20 @@ export interface OtherHostAsk {
   branch: string;
   band: "blocked" | "needs-you";
   agentState: AgentState | null;
+  /** The worktree's, as its host reported them; null when it didn't. */
+  modifiedCount: number | null;
+  lastActivityAt: number | null;
 }
 
-export interface OtherHostSummary {
+export interface HostProjectSummary {
   counts: Readonly<Record<RowBand, number>>;
   /** Every band the host observed, settled ones too, for the row's spoken description. */
   observed: ReadonlyMap<FleetBand, number>;
   /** The agents asking, blocked first, in a stable order. */
-  asks: readonly OtherHostAsk[];
+  asks: readonly HostAsk[];
+  worktreeCount: number;
+  /** The newest activity any of the project's worktrees there reported; null when none did. */
+  latestActivityAt: number | null;
 }
 
 function runsOf(entry: HostWorktreeEntry) {
@@ -53,11 +59,15 @@ function runsOf(entry: HostWorktreeEntry) {
  * What a host observed of this project's agents: per-band counts of agents
  * (not worktrees: one worktree may hold several), and the asking ones by name.
  */
-export function summarizeOtherHost(entries: readonly HostWorktreeEntry[]): OtherHostSummary {
+export function summarizeHostProject(entries: readonly HostWorktreeEntry[]): HostProjectSummary {
   const counts: Record<RowBand, number> = { quiet: 0, review: 0, running: 0 };
   const observed = new Map<FleetBand, number>();
-  const asks: OtherHostAsk[] = [];
+  const asks: HostAsk[] = [];
+  let latestActivityAt: number | null = null;
   for (const entry of entries) {
+    if (entry.lastActivityAt !== null && entry.lastActivityAt > (latestActivityAt ?? -Infinity)) {
+      latestActivityAt = entry.lastActivityAt;
+    }
     for (const run of runsOf(entry)) {
       observed.set(run.band, (observed.get(run.band) ?? 0) + 1);
       const band = run.band;
@@ -71,6 +81,8 @@ export function summarizeOtherHost(entries: readonly HostWorktreeEntry[]): Other
           branch: entry.branch ?? entry.name,
           band,
           agentState: run.agentState,
+          modifiedCount: entry.modifiedCount,
+          lastActivityAt: entry.lastActivityAt,
         });
       }
     }
@@ -84,7 +96,7 @@ export function summarizeOtherHost(entries: readonly HostWorktreeEntry[]): Other
   const ordered = new Map(
     FLEET_BANDS.filter((band) => observed.has(band)).map((band) => [band, observed.get(band)!])
   );
-  return { counts, observed: ordered, asks };
+  return { counts, observed: ordered, asks, worktreeCount: entries.length, latestActivityAt };
 }
 
 /** "3 working, 1 waiting, 2 finished": every band the host observed, worst first. */

@@ -6,28 +6,61 @@ import { getViewHostId } from "@/hooks/useHostConnection";
 import { isRemoteShellSupported } from "@/lib/remoteHosts";
 import { logWarn } from "@/utils/logger";
 import { hasRemoteHosts, useHostList } from "./hostList";
-import { buildHostMenuRows, clientPlatform, describeHostMenuState } from "./hostModel";
+import {
+  buildHostMenuRows,
+  clientPlatform,
+  describeHostMenuState,
+  type HostMenuRow,
+} from "./hostModel";
 import { useProjectPresence } from "./hostProjects";
 import { isLive } from "./Overview/overviewModel";
 
 /** The least time between asking the other hosts again whether they have this project. */
 export const PRESENCE_RECHECK_MS = 3_000;
 
-export interface OtherHostWorktrees {
+/**
+ * Whether the host has this project: as it last said, "unknown" when it
+ * couldn't be asked (or never has been while its link was up), "pending" while
+ * the first answer is out.
+ */
+export type ProjectPresence = "has" | "none" | "unknown" | "pending";
+
+export interface ProjectHost {
   hostId: HostId;
   hostName: string;
   platform: HostPlatform | null;
-  /** This project's ids on that host: more than one when it has several checkouts. */
-  projectIds: readonly string[];
-  /** Null until the host's first list lands, and while it isn't connected. */
-  entries: readonly HostWorktreeEntry[] | null;
-  /** The link's own words while the host isn't connected ("Not connected"); null while it is. */
+  isLocal: boolean;
+  /** The host this window shows. */
+  isCurrent: boolean;
+  /** The host menu's row, for the link's details. */
+  row: HostMenuRow;
+  /** The link's own words while what the host says isn't current ("Not connected", "No reply"); null while it is. */
   away: string | null;
+  presence: ProjectPresence;
+  /** This project's ids there as last matched: more than one when it has several checkouts. */
+  projectIds: readonly string[];
+  /** Null until the host's first list lands, and while it is away. */
+  entries: readonly HostWorktreeEntry[] | null;
+}
+
+/** A host's last read, with the match it was read for: one read for another match never stands in. */
+interface Read {
+  ids: string;
+  entries: readonly HostWorktreeEntry[];
 }
 
 interface Remembered {
   projectId: string | null;
   hosts: ReadonlyMap<HostId, readonly string[]>;
+}
+
+/**
+ * Whether what the host tells us is current: this machine, or a host whose
+ * link is up and still answering. A silent link's last word is history.
+ */
+export function isTalking(row: HostMenuRow): boolean {
+  if (!isLive(row)) return false;
+  return !(row.connection?.status === "connected" && row.connection.quietSince !== undefined);
 }
 
 /** "hostId\tprojectId,projectId" per matched host, so an effect re-runs only when a match moves. */
@@ -46,51 +79,63 @@ function parseMatchKey(key: string): Map<HostId, ReadonlySet<string>> {
 }
 
 /**
- * Every other host that has this project, in the host menu's order, with its
- * worktrees and the agents each host observed in them. Matched by repository
- * identity (a shared remote URL, as `project.openOnHost` matches); read when a
- * host matches and again each time that host says its list changed; a failed
- * read keeps what was shown. A host that drops its link keeps its place, in
- * the link's own words, until a connected answer says it no longer has the
- * project. Empty until some other host has this project.
+ * This project on every host, the window's own included, in the host menu's
+ * fixed order: this machine first, then every other host by name. No host
+ * joins or leaves the list for its link, its activity or whether it has the
+ * project, so the list reads the same from every window and never moves under
+ * a click.
+ *
+ * Another host's copy is matched by repository identity (a shared remote URL,
+ * as `project.openOnHost` matches); the window's own host is this view's
+ * project. Each matched host's worktrees are read when it matches and again
+ * each time it says its list changed, the window's own host the same way as
+ * the rest, so a host's counts don't depend on which window reads them. A
+ * failed read keeps what was shown.
  */
-export function useOtherHostsWorktrees(projectId: string | null): OtherHostWorktrees[] {
+export function useProjectHosts(projectId: string | null): ProjectHost[] {
   const hostList = useHostList();
-  const [lists, setLists] = useState<ReadonlyMap<HostId, readonly HostWorktreeEntry[]>>(
-    () => new Map()
-  );
+  const [lists, setLists] = useState<ReadonlyMap<HostId, Read>>(() => new Map());
   const enabled =
     projectId !== null &&
     !isScratchWorkspaceId(projectId) &&
     isRemoteShellSupported() &&
     hasRemoteHosts(hostList);
-  const others = enabled
+  const currentHostId = getViewHostId() ?? LOCAL_HOST_ID;
+  const rows = enabled
     ? buildHostMenuRows(hostList.hosts, {
         localPlatform: clientPlatform(),
-        currentHostId: getViewHostId() ?? LOCAL_HOST_ID,
+        currentHostId,
         localSummary: hostList.localSummary,
-      }).filter((row) => !row.isCurrent)
+      })
     : [];
-  const rows = others.filter(isLive);
-  const hostIds = rows.map((row) => row.hostId);
+  const current = rows.find((row) => row.isCurrent);
+  // The lookup starts from the window's own host, so nothing is asked while
+  // it is away; its return changes this list, which asks again. Asked only
+  // while the answer can be current, and never the window's own host: its
+  // copy is the project this view shows.
+  const askable =
+    current && !isTalking(current)
+      ? []
+      : rows.filter((row) => !row.isCurrent && isTalking(row)).map((row) => row.hostId);
   // Bumped when a host with no match says its list changed: it may have this project now.
   const [presenceRevision, setPresenceRevision] = useState(0);
-  const presence = useProjectPresence(projectId ?? "", hostIds, presenceRevision);
+  const presence = useProjectPresence(projectId ?? "", askable, presenceRevision);
 
   const matches = new Map<HostId, readonly string[]>();
-  for (const row of rows) {
-    const found = presence.get(row.hostId)?.projects;
+  for (const hostId of askable) {
+    const found = presence.get(hostId)?.projects;
     if (found && found.length > 0) {
+      // By path, so a host row always opens the same checkout.
       matches.set(
-        row.hostId,
-        found.map((project) => project.projectId)
+        hostId,
+        [...found].sort((a, b) => a.path.localeCompare(b.path)).map((project) => project.projectId)
       );
     }
   }
   const key = matchKey(matches);
-  const unmatchedKey = hostIds.filter((hostId) => !matches.has(hostId)).join("\n");
-  // Only a connected answer of "none" forgets a host; one that couldn't be asked keeps its place.
-  const absentKey = hostIds
+  const unmatchedKey = askable.filter((hostId) => !matches.has(hostId)).join("\n");
+  // Only a connected answer of "none" forgets a host; one that couldn't be asked keeps its match.
+  const absentKey = askable
     .filter((hostId) => presence.get(hostId)?.projects?.length === 0)
     .join("\n");
 
@@ -112,6 +157,11 @@ export function useOtherHostsWorktrees(projectId: string | null): OtherHostWorkt
   }, [projectId, key, absentKey]);
   const known =
     remembered.projectId === projectId ? remembered.hosts : new Map<HostId, readonly string[]>();
+
+  const readable = new Map(matches);
+  if (current && projectId !== null && isTalking(current))
+    readable.set(current.hostId, [projectId]);
+  const readKey = matchKey(readable);
 
   useEffect(() => {
     if (unmatchedKey === "") return;
@@ -145,10 +195,11 @@ export function useOtherHostsWorktrees(projectId: string | null): OtherHostWorkt
   }, [unmatchedKey]);
 
   useEffect(() => {
-    const matched = parseMatchKey(key);
+    const matched = parseMatchKey(readKey);
     if (matched.size === 0) return;
     const api = window.electron?.hostMetrics;
     if (!api) return;
+    const ownHostId = getViewHostId() ?? LOCAL_HOST_ID;
     let live = true;
     // Only the newest read for a host may land: a slow one never overwrites a later answer.
     const latest = new Map<HostId, number>();
@@ -163,10 +214,12 @@ export function useOtherHostsWorktrees(projectId: string | null): OtherHostWorkt
         .then((entries) => {
           if (!live || latest.get(hostId) !== seq) return;
           const mine = entries.filter((entry) => projectIds.has(entry.projectId));
-          setLists((previous) => new Map(previous).set(hostId, mine));
+          setLists((previous) =>
+            new Map(previous).set(hostId, { ids: [...projectIds].join(","), entries: mine })
+          );
           // Nothing of this project listed: it may have closed there, or gone.
-          // Asking again is what lets a host that dropped it leave the list.
-          if (mine.length === 0) {
+          // Asking again is what tells "not open" from "no longer there".
+          if (mine.length === 0 && hostId !== ownHostId) {
             const now = Date.now();
             if (now - (rechecked.get(hostId) ?? 0) >= PRESENCE_RECHECK_MS) {
               rechecked.set(hostId, now);
@@ -175,7 +228,7 @@ export function useOtherHostsWorktrees(projectId: string | null): OtherHostWorkt
           }
         })
         .catch((error: unknown) => {
-          logWarn("[Hosts] Couldn't list another host's worktrees", { hostId, error });
+          logWarn("[Hosts] Couldn't list a host's worktrees", { hostId, error });
         });
     };
     const off = api.onEvent((event) => {
@@ -186,30 +239,45 @@ export function useOtherHostsWorktrees(projectId: string | null): OtherHostWorkt
       live = false;
       off();
     };
-  }, [key]);
+  }, [readKey]);
 
-  const out: OtherHostWorktrees[] = [];
-  for (const row of others) {
-    const live = isLive(row);
-    // A connected host waiting on its answer keeps the place it had.
-    const projectIds =
-      matches.get(row.hostId) ??
-      (live && presence.get(row.hostId)?.projects?.length === 0
-        ? undefined
-        : known.get(row.hostId));
-    if (!projectIds) continue;
-    // A read from before the host matched another project never shows under this one.
+  return rows.map((row) => {
+    const talking = isTalking(row);
+    let state: ProjectPresence;
+    let projectIds: readonly string[];
+    if (row.isCurrent) {
+      state = "has";
+      projectIds = projectId === null ? [] : [projectId];
+    } else {
+      const answer = talking ? presence.get(row.hostId) : undefined;
+      const match = matches.get(row.hostId) ?? known.get(row.hostId);
+      if (answer?.projects?.length === 0) {
+        state = "none";
+        projectIds = [];
+      } else if (match) {
+        state = "has";
+        projectIds = match;
+      } else {
+        state = talking && answer === undefined ? "pending" : "unknown";
+        projectIds = [];
+      }
+    }
+    // A read for another match (another project, another checkout) never
+    // stands in for this one: until this match's own read lands, nothing is.
     const read = lists.get(row.hostId);
     const entries =
-      live && read ? read.filter((entry) => projectIds.includes(entry.projectId)) : null;
-    out.push({
+      talking && state === "has" && read?.ids === projectIds.join(",") ? read.entries : null;
+    return {
       hostId: row.hostId,
       hostName: row.name,
       platform: row.platform,
+      isLocal: row.isLocal,
+      isCurrent: row.isCurrent,
+      row,
+      away: talking ? null : (describeHostMenuState(row).state ?? "Not connected"),
+      presence: state,
       projectIds,
       entries,
-      away: live ? null : (describeHostMenuState(row).state ?? "Not connected"),
-    });
-  }
-  return out;
+    };
+  });
 }

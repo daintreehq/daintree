@@ -44,7 +44,7 @@ import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { Server } from "@/components/icons";
 import { getViewHostId } from "@/hooks/useHostConnection";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
-import { OtherHostsWorktreeGroup } from "./OtherHostsWorktreeGroup";
+import { ProjectHostsGroup } from "./ProjectHostsGroup";
 import { useHostConnectionStore } from "@/store/hostConnectionStore";
 import { splitHostName } from "@/components/Hosts/hostModel";
 import { Button } from "@/components/ui/button";
@@ -2247,7 +2247,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         </div>
       </div>
 
-      <OtherHostsWorktreeGroup projectId={getViewWorkspaceId()} />
+      <ProjectHostsGroup projectId={getViewWorkspaceId()} />
 
       {restartConfirmDialog}
     </div>
