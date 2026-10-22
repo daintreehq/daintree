@@ -147,6 +147,52 @@ describe("WorktreeSetupRpcServer", () => {
     expect(stale).not.toHaveBeenCalled();
   });
 
+  it("does not start a handler cancelled while main was rechecking the step", async () => {
+    const handler = vi.fn();
+    registerWorktreeSetupStepHandler("acme", "db", handler);
+    let release!: () => void;
+    let calls = 0;
+    vi.mocked(deps.filterForProject).mockImplementation(async (steps) => {
+      calls += 1;
+      if (calls === 2) await new Promise<void>((resolve) => (release = resolve));
+      return steps;
+    });
+
+    server.handleRun("run-4d", DB, TARGET);
+    await vi.waitFor(() => expect(calls).toBe(2));
+    server.handleCancel("run-4d");
+    release();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(handler).not.toHaveBeenCalled();
+    expect(sent).toEqual([]);
+  });
+
+  it("does not run a replacement's handler under a declaration checked before the swap", async () => {
+    const stale = vi.fn();
+    registerWorktreeSetupStepHandler("acme", "db", stale);
+    let calls = 0;
+    vi.mocked(deps.filterForProject).mockImplementation(async (steps) => {
+      calls += 1;
+      // The reload lands while main is awaiting its second visibility check.
+      if (calls === 2) {
+        registerWorktreeSetupSteps("acme", { pluginName: "Acme", pluginVersion: "2.0.0" }, [
+          { id: "db", label: "Provision DB", timeoutMs: 5_000 },
+        ]);
+        registerWorktreeSetupStepHandler("acme", "db", vi.fn());
+      }
+      return steps;
+    });
+
+    server.handleRun("run-4e", DB, TARGET);
+
+    expect(await answerTo("run-4e")).toMatchObject({
+      ok: true,
+      value: { state: "failed", error: "the plugin changed while setup was running" },
+    });
+    expect(stale).not.toHaveBeenCalled();
+  });
+
   it("refuses a step whose declaration changed since the host listed it", async () => {
     const handler = vi.fn();
     registerWorktreeSetupStepHandler("acme", "db", handler);

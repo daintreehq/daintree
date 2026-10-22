@@ -2587,6 +2587,28 @@ describe("PluginDevWorkerHostProxy worktree setup steps (#13807)", () => {
     ).toBe(false);
   });
 
+  it("keeps a replacement that reuses the same callback when the first disposer runs", async () => {
+    const { proxy, sent } = makeProxy();
+    const handler = vi.fn(async () => undefined);
+    const disposeFirst = await proxy.host.registerWorktreeSetupStep("db", handler);
+    await proxy.host.registerWorktreeSetupStep("db", handler);
+
+    disposeFirst();
+
+    expect(
+      sent.some((m) => m.type === "host-notify" && m.method === "unregisterWorktreeSetupStep")
+    ).toBe(false);
+    proxy.handleMessage({
+      type: "invoke",
+      requestId: "s9",
+      kind: "worktree-setup-step",
+      stepId: "db",
+      context,
+    } as any);
+    await flush();
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
   it("refuses registration once activation has closed", () => {
     const { proxy } = makeProxy();
     proxy.revoke();

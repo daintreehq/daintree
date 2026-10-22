@@ -227,8 +227,13 @@ export class PluginDevWorkerHostProxy {
   /** Signals handed to in-flight `mcp-tool` executes, keyed by invoke requestId,
    * so a main-side `invoke-cancel` reaches the plugin's `execute`. */
   private readonly mcpInvokeAborts = new Map<string, AbortController>();
-  /** Bound `worktreeSetupSteps` handlers, keyed by step id. */
-  private readonly worktreeSetupSteps = new Map<string, PluginWorktreeSetupStepHandler>();
+  /** Bound `worktreeSetupSteps` handlers, keyed by step id. Each registration
+   * is its own binding object, so a disposer owns exactly the one it made even
+   * when a later registration reuses the same callback. */
+  private readonly worktreeSetupSteps = new Map<
+    string,
+    { readonly handler: PluginWorktreeSetupStepHandler }
+  >();
   /** Signals handed to in-flight `worktree-setup-step` handlers, keyed by invoke
    * requestId, so a main-side `invoke-cancel` reaches the handler. */
   private readonly setupStepInvokeAborts = new Map<string, AbortController>();
@@ -469,7 +474,7 @@ export class PluginDevWorkerHostProxy {
       this.post({ type: "invoke-result", requestId: msg.requestId, ...outcome });
     };
     try {
-      const handler = this.worktreeSetupSteps.get(msg.stepId);
+      const handler = this.worktreeSetupSteps.get(msg.stepId)?.handler;
       if (!handler) {
         throw new Error(`No worktree setup step registered for "${msg.stepId}"`);
       }
@@ -1267,7 +1272,8 @@ export class PluginDevWorkerHostProxy {
             `Plugin "${this.pluginId}" registerWorktreeSetupStep: handler must be a function`
           );
         }
-        this.worktreeSetupSteps.set(stepId, handler);
+        const binding = { handler };
+        this.worktreeSetupSteps.set(stepId, binding);
         this.notify("registerWorktreeSetupStep", { stepId }, `worktreeSetupStep:${stepId}`);
         let disposed = false;
         const dispose = (): void => {
@@ -1275,7 +1281,7 @@ export class PluginDevWorkerHostProxy {
           disposed = true;
           // A disposer whose binding a later register replaced is inert: main
           // holds one binding per step id, and it is the replacement's.
-          if (this.worktreeSetupSteps.get(stepId) !== handler) return;
+          if (this.worktreeSetupSteps.get(stepId) !== binding) return;
           this.worktreeSetupSteps.delete(stepId);
           this.notify("unregisterWorktreeSetupStep", { stepId });
         };

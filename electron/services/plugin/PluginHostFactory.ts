@@ -86,6 +86,7 @@ import {
   PLUGIN_TERMINAL_STATUS_MAX_PER_PROJECT,
   type PluginDatabaseApi,
   type PluginPanelActivityReport,
+  type PluginWorktreeSetupStepHandler,
 } from "../../../shared/types/plugin.js";
 import {
   databaseBackupApprovers,
@@ -2546,10 +2547,13 @@ export function createHost(
         );
       }
 
-      registerWorktreeSetupStepHandler(pluginId, stepId, handler);
+      // Bound through a wrapper of its own, so this registration's disposer
+      // can't unbind a later one that reused the same callback.
+      const bound: PluginWorktreeSetupStepHandler = (context) => handler(context);
+      registerWorktreeSetupStepHandler(pluginId, stepId, bound);
 
       const dispose = trackPluginDisposer(deps.pluginEventCleanups, pluginId, () =>
-        unregisterWorktreeSetupStepHandler(pluginId, stepId, handler)
+        unregisterWorktreeSetupStepHandler(pluginId, stepId, bound)
       );
       return Promise.resolve(dispose);
     },

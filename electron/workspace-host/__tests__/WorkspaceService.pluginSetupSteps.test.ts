@@ -502,6 +502,9 @@ describe("WorkspaceService plugin worktree setup steps (#13807)", () => {
 
     await vi.waitFor(() => expect(statusOf(worktreeId)?.state).toBe("failed"));
     expect(monitor.lifecycleStatus?.state).toBe("failed");
+    // Nothing is left reading as in flight.
+    expect(statusOf(worktreeId)?.pluginSteps?.map((s) => s.state)).toEqual(["failed"]);
+    expect(service["setupAwaitingApproval"].has(monitor)).toBe(false);
     bridge.runStep.mockResolvedValue({ state: "succeeded" });
     await expect(service.retryLifecycleSetup(worktreeId)).resolves.toBeUndefined();
   });
@@ -533,6 +536,33 @@ describe("WorkspaceService plugin worktree setup steps (#13807)", () => {
     ]);
     await vi.waitFor(() => expect(statusOf(worktreeId)?.state).toBe("ready"));
     expect(bridge.runStep).toHaveBeenCalledTimes(1);
+  });
+
+  it("picks up an approval that lands while a later step is still running", async () => {
+    bridge.listSteps.mockResolvedValue([ACME_DB, ZED_REGISTER]);
+    let allowed = false;
+    vi.mocked(service["lifecycleService"].pendingPluginSteps).mockImplementation(async (steps) =>
+      allowed ? [] : steps.filter((s) => s.stepId === "provision-db")
+    );
+    let finishZed!: () => void;
+    bridge.runStep.mockImplementation((s: WorktreeSetupStepDescriptor) =>
+      s.stepId === "register"
+        ? new Promise((resolve) => (finishZed = () => resolve({ state: "succeeded" })))
+        : Promise.resolve({ state: "succeeded" })
+    );
+    await service.createWorktree("req-late-approval", "/test/root", {
+      baseBranch: "main",
+      newBranch: "feature/late-approval",
+      path: "/test/late-approval",
+    });
+    const worktreeId = path.resolve("/test/late-approval");
+    await vi.waitFor(() => expect(finishZed).toBeDefined());
+
+    allowed = true;
+    finishZed();
+
+    await vi.waitFor(() => expect(statusOf(worktreeId)?.state).toBe("ready"));
+    expect(bridge.runStep.mock.calls.map(([s]) => s.stepId)).toEqual(["register", "provision-db"]);
   });
 
   it("refuses a retry while plugin steps are still running", async () => {

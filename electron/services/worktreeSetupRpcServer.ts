@@ -71,6 +71,17 @@ const defaultDeps: WorktreeSetupRpcDeps = {
   },
 };
 
+function sameDeclaration(
+  current: RegisteredWorktreeSetupStep,
+  requested: WorktreeSetupStepDescriptor
+): boolean {
+  return (
+    current.pluginVersion === requested.pluginVersion &&
+    current.label === requested.label &&
+    current.timeoutMs === requested.timeoutMs
+  );
+}
+
 function describe(step: RegisteredWorktreeSetupStep): WorktreeSetupStepDescriptor {
   return {
     pluginId: step.pluginId,
@@ -192,11 +203,7 @@ export class WorktreeSetupRpcServer {
     }
     // What the user allowed is what runs: an upgrade or an edited declaration
     // between listing and running is not this step any more.
-    if (
-      current.pluginVersion !== requested.pluginVersion ||
-      current.label !== requested.label ||
-      current.timeoutMs !== requested.timeoutMs
-    ) {
+    if (!sameDeclaration(current, requested)) {
       return { outcome: { state: "failed", error: "the plugin changed while setup was running" } };
     }
     return { projectId, current };
@@ -217,11 +224,23 @@ export class WorktreeSetupRpcServer {
     if (!this.deps.isPluginActivated(declared.current.pluginId)) {
       return { state: "skipped", error: "the plugin didn't start" };
     }
-    // Checked again now that it is active, since activating can reload it, and
-    // the handler is read in the same turn so the two belong to one plugin.
+    // Visibility is checked again now that it is active, since activating can
+    // reload it. Everything after that await is read in one synchronous turn —
+    // the declaration, the activation and the handler — so all three belong
+    // to the same plugin, and the handler starts in that turn too.
     const resolved = await this.resolveStep(requested);
     if ("outcome" in resolved) return resolved.outcome;
-    const { projectId, current } = resolved;
+    const { projectId } = resolved;
+    if (signal.aborted) return { state: "failed", error: "cancelled" };
+    const current = getWorktreeSetupSteps().find(
+      (step) => step.pluginId === requested.pluginId && step.stepId === requested.stepId
+    );
+    if (!current || !sameDeclaration(current, requested)) {
+      return { state: "failed", error: "the plugin changed while setup was running" };
+    }
+    if (!this.deps.isPluginActivated(current.pluginId)) {
+      return { state: "skipped", error: "the plugin didn't start" };
+    }
     const handler = getWorktreeSetupStepHandler(current.pluginId, current.stepId);
     if (!handler) {
       return { state: "skipped", error: "the plugin never registered this step" };
@@ -238,15 +257,20 @@ export class WorktreeSetupRpcServer {
       }, current.timeoutMs);
     });
     try {
-      const ran = Promise.resolve().then(() =>
-        handler({
-          projectId,
-          worktreeId: target.worktreeId,
-          worktreePath: target.worktreePath,
-          branch: target.branch,
-          signal: step.signal,
-        })
-      );
+      let ran: Promise<void>;
+      try {
+        ran = Promise.resolve(
+          handler({
+            projectId,
+            worktreeId: target.worktreeId,
+            worktreePath: target.worktreePath,
+            branch: target.branch,
+            signal: step.signal,
+          })
+        );
+      } catch (err) {
+        ran = Promise.reject(err);
+      }
       // A handler that ignores its signal is not waited for past its timeout.
       ran.catch(() => undefined);
       if ((await Promise.race([ran.then(() => "done" as const), timedOut])) === "timed-out") {

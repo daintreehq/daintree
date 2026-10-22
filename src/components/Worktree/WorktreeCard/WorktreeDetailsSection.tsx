@@ -214,7 +214,9 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
     lifecycleState !== "running" &&
     worktree.setupStatus?.stage === "plugin-steps" &&
     (worktree.setupStatus.state === "failed" || worktree.setupStatus.state === "timed-out");
-  const lifecycleFailed = lifecycleSlotFailed || pluginStepsFailed;
+  // Setup still running refuses a retry, whatever an overwritten slot says.
+  const lifecycleFailed =
+    worktree.setupStatus?.state !== "running" && (lifecycleSlotFailed || pluginStepsFailed);
   const lifecycleError = pluginStepsFailed
     ? worktree.setupStatus?.error
     : worktree.lifecycleStatus?.error;

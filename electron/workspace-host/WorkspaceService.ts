@@ -4642,41 +4642,70 @@ export class WorkspaceService {
         worktreePath: monitor.path,
         branch: monitor.branch ?? null,
       };
-      for (const [index, step] of declared.entries()) {
-        if (steps[index].state !== "pending") continue;
-        const unapproved =
-          (await this.lifecycleService.pendingPluginSteps([step], projectRootPath)).length > 0;
-        if (cancelled()) return cancelledOutcome;
-        if (unapproved) {
-          steps[index] = { ...steps[index], state: "needs-approval" };
-          publish();
-          continue;
-        }
-        ranAny = true;
-        steps[index] = { ...steps[index], state: "running" };
-        monitor.setLifecycleStatus({
-          phase: "setup",
-          state: "running",
-          currentCommand: `${step.label} (${step.pluginName})`,
-          startedAt: Date.now(),
-        });
-        publish();
-        let result: WorktreeSetupStepRunOutcome;
-        try {
-          result = await bridge.runStep(step, target, controller.signal);
-        } catch (err) {
+      // Passes repeat while an approval lands for a step already passed over:
+      // the approval's own resume can't start while this run holds setup, so
+      // this run is what has to pick it up. Each pass settles at least one
+      // step for good, which bounds them.
+      for (let pass = 0; pass <= declared.length; pass++) {
+        for (const [index, step] of declared.entries()) {
+          if (steps[index].state !== "pending") continue;
+          const unapproved =
+            (await this.lifecycleService.pendingPluginSteps([step], projectRootPath)).length > 0;
           if (cancelled()) return cancelledOutcome;
-          result = { state: "failed", error: formatErrorMessage(err, "no answer") };
+          if (unapproved) {
+            steps[index] = { ...steps[index], state: "needs-approval" };
+            publish();
+            continue;
+          }
+          ranAny = true;
+          steps[index] = { ...steps[index], state: "running" };
+          monitor.setLifecycleStatus({
+            phase: "setup",
+            state: "running",
+            currentCommand: `${step.label} (${step.pluginName})`,
+            startedAt: Date.now(),
+          });
+          publish();
+          let result: WorktreeSetupStepRunOutcome;
+          try {
+            result = await bridge.runStep(step, target, controller.signal);
+          } catch (err) {
+            if (cancelled()) return cancelledOutcome;
+            result = { state: "failed", error: formatErrorMessage(err, "no answer") };
+          }
+          if (cancelled()) return cancelledOutcome;
+          if (result.state === "succeeded") {
+            successes.add(fingerprintPluginSetupStep(step));
+            steps[index] = { ...steps[index], state: "succeeded" };
+          } else {
+            steps[index] = { ...steps[index], state: result.state, error: result.error };
+          }
+          publish();
         }
+
+        const waiting = declared.filter((_, index) => steps[index].state === "needs-approval");
+        if (waiting.length === 0) break;
+        const stillWaiting = new Set(
+          (await this.lifecycleService.pendingPluginSteps(waiting, projectRootPath)).map(
+            pluginStepKey
+          )
+        );
         if (cancelled()) return cancelledOutcome;
-        if (result.state === "succeeded") {
-          successes.add(fingerprintPluginSetupStep(step));
-          steps[index] = { ...steps[index], state: "succeeded" };
-        } else {
-          steps[index] = { ...steps[index], state: result.state, error: result.error };
+        let reopened = false;
+        for (const [index, step] of declared.entries()) {
+          if (steps[index].state !== "needs-approval" || stillWaiting.has(pluginStepKey(step))) {
+            continue;
+          }
+          steps[index] = { ...steps[index], state: "pending" };
+          reopened = true;
         }
-        publish();
+        if (!reopened) break;
       }
+      // Reopened on the last pass the bound allows: still waiting, as far as
+      // this run got to see.
+      steps = steps.map((step) =>
+        step.state === "pending" ? { ...step, state: "needs-approval" } : step
+      );
 
       const unfinished = steps.filter((step) => step.state !== "succeeded");
       if (unfinished.length === 0) return { ok: true };
@@ -4704,9 +4733,21 @@ export class WorkspaceService {
     } finally {
       if (this.pluginSetupRuns.get(monitor) === controller) this.pluginSetupRuns.delete(monitor);
     }
+    // A cancel that lands after the steps settled still wins: the worktree is
+    // going, and nothing should be left waiting to resume it.
+    const wasCancelled = controller.signal.aborted || outcome === cancelledOutcome;
+    if (wasCancelled) {
+      outcome = cancelledOutcome;
+      steps = steps.map((step) =>
+        step.state === "running"
+          ? { ...step, state: "failed", error: "setup was cancelled" }
+          : step.state === "pending"
+            ? { ...step, state: "skipped", error: "setup was cancelled" }
+            : step
+      );
+    }
     if (!isLive()) return { outcome, ...(steps.length > 0 ? { pluginSteps: steps } : {}) };
 
-    const wasCancelled = controller.signal.aborted;
     // Approving resumes here, through the same path as unapproved commands.
     if (!outcome.ok && "needsApproval" in outcome) {
       this.setupAwaitingApproval.set(monitor, { provisionResource: false });

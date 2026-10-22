@@ -690,6 +690,18 @@ describe("WorktreeDetailsSection — repository command approval", () => {
     expect(document.body.textContent).toContain('Acme "Provision DB" failed: quota exceeded');
   });
 
+  it("offers no retry while setup is still running, whatever an overwritten slot says", () => {
+    renderSection({
+      worktree: {
+        ...baseWorktree,
+        setupStatus: { state: "running", stage: "plugin-steps", startedAt: 1 },
+        lifecycleStatus: { phase: "resource-status", state: "failed", startedAt: 2, error: "down" },
+      },
+    });
+
+    expect(screen.queryByRole("button", { name: /retry setup/i })).toBeNull();
+  });
+
   it("asks to allow plugin steps, not to approve commands, when those are what setup waits on", () => {
     renderSection({
       worktree: {
