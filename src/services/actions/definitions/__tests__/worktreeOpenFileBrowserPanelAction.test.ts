@@ -737,4 +737,182 @@ describe("worktree.openFileBrowserPanel", () => {
       expect(() => getAction().argsSchema!.parse({ worktreeId: "" })).toThrow();
     });
   });
+
+  describe("rootPath", () => {
+    const run = (args: Record<string, unknown>, ctx: Partial<ActionContext> = {}) =>
+      getAction().run({ worktreeId: "wt-1", ...args }, ctx as ActionContext);
+
+    it("opens a new panel rooted at the folder", async () => {
+      seedWorktree("wt-1");
+      await run({ rootPath: "content" });
+      expect(addPanelOptions()).toMatchObject({ worktreeId: "wt-1", browserRootPath: "content" });
+    });
+
+    it("normalizes separators, dot segments and trailing slashes", async () => {
+      seedWorktree("wt-1");
+      await run({ rootPath: ".\\content\\posts//./" });
+      expect(addPanelOptions()).toMatchObject({ browserRootPath: "content/posts" });
+    });
+
+    it("passes the root when docking", async () => {
+      seedWorktree("wt-1");
+      await run({ rootPath: "content", location: "dock" });
+      expect(addPanelOptions()).toMatchObject({ location: "dock", browserRootPath: "content" });
+    });
+
+    it("sets no root on create when none, or the base folder, is named", async () => {
+      seedWorktree("wt-1");
+      await run({ rootPath: "." });
+      expect(addPanelOptions()).not.toHaveProperty("browserRootPath");
+    });
+
+    it.each([
+      "/etc",
+      "\\\\server\\share",
+      "C:\\repo",
+      "C:content",
+      "./C:/repo",
+      "../other",
+      "a/../../b",
+      "a\\..\\b",
+    ])("rejects %s before anything is selected, focused or created", async (rootPath) => {
+      seedWorktree("wt-1");
+      activeWorktreeIdMock.current = "wt-other";
+      await expect(
+        run({ rootPath }, { dispatchSource: "user" } as Partial<ActionContext>)
+      ).rejects.toThrow(/Root must be inside the worktree/);
+      expect(selectWorktreeMock).not.toHaveBeenCalled();
+      expect(addPanelMock).not.toHaveBeenCalled();
+      expect(setFileBrowserViewMock).not.toHaveBeenCalled();
+      expect(activateTerminalMock).not.toHaveBeenCalled();
+    });
+
+    it("rescopes an existing panel instead of opening a second one", async () => {
+      seedWorktree("wt-1");
+      panelsMock.byId = [
+        browserPanel("fb-existing", {
+          worktreeId: "wt-1",
+          browserRootPath: "docs",
+          browserSelectedPath: "docs/a.md",
+        }),
+      ];
+
+      await run({ rootPath: "content" });
+
+      expect(addPanelMock).not.toHaveBeenCalled();
+      // Root only: the user's selection and expansions are not part of it.
+      expect(setFileBrowserViewMock).toHaveBeenCalledWith("fb-existing", {
+        browserRootPath: "content",
+      });
+      expect(activateTerminalMock).toHaveBeenCalledWith("fb-existing");
+    });
+
+    it("resets a scoped panel to the base folder for an explicit empty root", async () => {
+      seedWorktree("wt-1");
+      panelsMock.byId = [
+        browserPanel("fb-existing", { worktreeId: "wt-1", browserRootPath: "docs" }),
+      ];
+
+      await run({ rootPath: "" });
+
+      expect(setFileBrowserViewMock).toHaveBeenCalledWith("fb-existing", { browserRootPath: "" });
+    });
+
+    it("leaves the scope alone when no root is named", async () => {
+      seedWorktree("wt-1");
+      panelsMock.byId = [
+        browserPanel("fb-existing", { worktreeId: "wt-1", browserRootPath: "docs" }),
+      ];
+
+      await run({});
+
+      expect(setFileBrowserViewMock).not.toHaveBeenCalled();
+    });
+
+    it("applies the explicit root together with a reveal inside it", async () => {
+      seedWorktree("wt-1");
+      panelsMock.byId = [
+        browserPanel("fb-existing", { worktreeId: "wt-1", browserExpandedPaths: ["docs"] }),
+      ];
+
+      await run({ rootPath: "content", revealPath: "content/posts/a.md" });
+
+      expect(setFileBrowserViewMock).toHaveBeenCalledTimes(1);
+      expect(setFileBrowserViewMock).toHaveBeenCalledWith("fb-existing", {
+        browserRootPath: "content",
+        browserSelectedPath: "content/posts/a.md",
+        browserExpandedPaths: ["content", "content/posts", "docs"],
+      });
+    });
+
+    it("keeps the explicit root over the outside-reveal reset when the reveal is inside", async () => {
+      seedWorktree("wt-1");
+      panelsMock.byId = [
+        browserPanel("fb-existing", { worktreeId: "wt-1", browserRootPath: "packages/app" }),
+      ];
+
+      await run({ rootPath: "content", revealPath: "content", revealKind: "directory" });
+
+      expect(setFileBrowserViewMock.mock.calls[0]![1]).toMatchObject({
+        browserRootPath: "content",
+      });
+    });
+
+    it("seeds a new panel with both the root and the reveal", async () => {
+      seedWorktree("wt-1");
+      await run({ rootPath: "content", revealPath: "content/a.md" });
+      expect(addPanelOptions()).toMatchObject({
+        browserRootPath: "content",
+        browserSelectedPath: "content/a.md",
+      });
+    });
+
+    it.each(["README.md", "contentx/a.md", "content/../README.md", "content\\..\\x"])(
+      "rejects a reveal of %s outside the root before any side effect",
+      async (revealPath) => {
+        seedWorktree("wt-1");
+        panelsMock.byId = [browserPanel("fb-existing", { worktreeId: "wt-1" })];
+        activeWorktreeIdMock.current = "wt-other";
+
+        await expect(
+          run({ rootPath: "content", revealPath }, {
+            dispatchSource: "user",
+          } as Partial<ActionContext>)
+        ).rejects.toThrow(/outside the root content/);
+
+        expect(selectWorktreeMock).not.toHaveBeenCalled();
+        expect(setFileBrowserViewMock).not.toHaveBeenCalled();
+        expect(activateTerminalMock).not.toHaveBeenCalled();
+        expect(addPanelMock).not.toHaveBeenCalled();
+      }
+    );
+
+    it.each(["", "."])("rejects a traversal reveal under the base root %j", async (rootPath) => {
+      seedWorktree("wt-1");
+      panelsMock.byId = [
+        browserPanel("fb-existing", { worktreeId: "wt-1", browserRootPath: "docs" }),
+      ];
+
+      await expect(run({ rootPath, revealPath: "../outside.txt" })).rejects.toThrow(
+        /outside the root/
+      );
+      expect(setFileBrowserViewMock).not.toHaveBeenCalled();
+    });
+
+    it("accepts a relative root with no worktree, against the workspace folder", async () => {
+      await getAction().run({ rootPath: "content" }, {
+        projectPath: "/repo",
+        projectName: "repo",
+      } as ActionContext);
+      const options = addPanelOptions();
+      expect(options).toMatchObject({ browserRootPath: "content" });
+      expect(options).not.toHaveProperty("worktreeId");
+    });
+
+    it("advertises the field on the schema", () => {
+      expect(getAction().argsSchema!.parse({ rootPath: "content" })).toEqual({
+        rootPath: "content",
+      });
+    });
+  });
 });
