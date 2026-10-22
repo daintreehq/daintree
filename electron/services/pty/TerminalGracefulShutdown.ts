@@ -59,12 +59,17 @@ export interface TerminalGracefulShutdownHost {
  * its own bucket so the outcome counts still say how the scrape itself is
  * doing — folding it into `captured` would inflate that rate with terminals the
  * scrape never ran for.
+ *
+ * `awaiting-approval` is a scrape refused on purpose (#13842): the agent was
+ * last seen showing an approval selector, where the quit bytes would be read
+ * as the answer. A missing id there points at the prompt, not at the scrape.
  */
 export type GracefulShutdownOutcome =
   | "already-exited"
   | "already-killed"
   | "agent-not-live"
   | "no-resume-config"
+  | "awaiting-approval"
   | "no-quit-signal"
   | "captured"
   | "preassigned"
@@ -83,8 +88,8 @@ export type GracefulShutdownOutcome =
  * for a `session-id` echo to land, then `kill("graceful-shutdown")`. Used
  * by Daintree's resume flow to capture a chat session ID before tearing
  * down the PTY. Returns the captured session id, or `null` if the agent
- * has no resume config, has already exited, demoted before shutdown, or
- * the timeout fires before a match.
+ * has no resume config, has already exited, is waiting on an approval,
+ * demoted before shutdown, or the timeout fires before a match.
  *
  * Every agent terminal emits exactly one `info` line naming its
  * {@link GracefulShutdownOutcome}; terminals with no agent identity stay
@@ -186,6 +191,18 @@ export async function gracefulShutdown(host: TerminalGracefulShutdownHost): Prom
     logOutcome("preassigned", true);
     host.kill("graceful-shutdown");
     return preassignedId;
+  }
+
+  // Every quit signal below ends in Enter, a key press or Ctrl-C, and at an
+  // approval selector any of those can be taken as the answer — approving
+  // whatever the agent asked to do on the way out (#13842). Write nothing and
+  // leave the kill to the caller; losing a scraped id costs a fresh launch on
+  // restore, which is the cheaper mistake. Questions and errors leave the agent
+  // at its composer, where the quit command is the ordinary way out. The
+  // reason is only read while waiting: a record can keep a stale one after.
+  if (terminal.agentState === "waiting" && terminal.waitingReason === "approval") {
+    logOutcome("awaiting-approval", false);
+    return null;
   }
   // Structured escalation is `session-id`-only, so the union has to be narrowed
   // before the field exists. It REPLACES the quit-command path rather than

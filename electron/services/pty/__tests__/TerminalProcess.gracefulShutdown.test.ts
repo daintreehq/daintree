@@ -561,6 +561,85 @@ describe("TerminalProcess.gracefulShutdown — input-clear prelude", () => {
   });
 });
 
+describe("TerminalProcess.gracefulShutdown — agent waiting on an approval (#13842)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    // A resolved shutdown leaves a pending SIGKILL escalation against the mock's
+    // pid; never let a later timer advance fire it.
+    vi.clearAllTimers();
+    vi.useRealTimers();
+  });
+
+  function waitingOn(
+    terminal: TerminalProcess,
+    waitingReason: NonNullable<ReturnType<TerminalProcess["getInfo"]>["waitingReason"]>
+  ): TerminalProcess {
+    terminal.getInfo().agentState = "waiting";
+    terminal.getInfo().waitingReason = waitingReason;
+    return terminal;
+  }
+
+  // One per shutdown family: split-write /quit, single-write /exit, a bare key
+  // sequence, and Codex's gated Ctrl-C. At a selector any of them can be read
+  // as the answer.
+  it.each(["gemini", "copilot", "amp", "codex"])(
+    "writes nothing into %s and leaves the kill to the caller",
+    async (agentId) => {
+      const handles = createMockPty();
+      const terminal = waitingOn(createAgentTerminal(handles, agentId), "approval");
+
+      await expect(terminal.gracefulShutdown()).resolves.toBeNull();
+      await vi.advanceTimersByTimeAsync(GRACEFUL_SHUTDOWN_TIMEOUT_MS);
+
+      expect(handles.writeMock).not.toHaveBeenCalled();
+      // `PtyManager.gracefulKill` kills a terminal that comes back unkilled.
+      expect(terminal.getInfo().wasKilled).toBeFalsy();
+    }
+  );
+
+  it("still returns an id assigned at launch, since that path writes nothing either", async () => {
+    const handles = createMockPty();
+    const terminal = waitingOn(
+      createAgentTerminalWithSession(handles, "claude", "assigned-at-approval"),
+      "approval"
+    );
+
+    await expect(terminal.gracefulShutdown()).resolves.toBe("assigned-at-approval");
+    expect(handles.writeMock).not.toHaveBeenCalled();
+  });
+
+  it.each(["question", "error", "prompt"] as const)(
+    "still quits through the composer for a %s wait",
+    async (reason) => {
+      const handles = createMockPty();
+      const terminal = waitingOn(createAgentTerminal(handles, "gemini"), reason);
+
+      const promise = terminal.gracefulShutdown();
+      await vi.advanceTimersByTimeAsync(GRACEFUL_SHUTDOWN_CLEAR_DELAY_MS);
+
+      expect(handles.writeMock.mock.calls.map(([data]) => data)).toEqual(["\x05\x15", "/quit"]);
+      handles.emitData("gemini --resume composer-quit\n");
+      await expect(promise).resolves.toBe("composer-quit");
+    }
+  );
+
+  it("ignores an approval reason left behind once the agent stopped waiting", async () => {
+    const handles = createMockPty();
+    const terminal = waitingOn(createAgentTerminal(handles, "gemini"), "approval");
+    terminal.getInfo().agentState = "working";
+
+    const promise = terminal.gracefulShutdown();
+    await vi.advanceTimersByTimeAsync(GRACEFUL_SHUTDOWN_CLEAR_DELAY_MS);
+
+    expect(handles.writeMock).toHaveBeenCalledWith("/quit");
+    handles.emitData("gemini --resume after-work\n");
+    await expect(promise).resolves.toBe("after-work");
+  });
+});
+
 describe("TerminalProcess.gracefulShutdown — gated Ctrl-C escalation (#11851)", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -1181,6 +1260,15 @@ describe("TerminalProcess.gracefulShutdown — outcome logging", () => {
       const terminal = createAgentTerminal(handles);
       terminal.getInfo().agentState = "exited";
       terminal.getInfo().detectedAgentId = undefined;
+      await expect(terminal.gracefulShutdown()).resolves.toBeNull();
+      return soleOutcome();
+    },
+
+    async awaitingApproval() {
+      const handles = createMockPty();
+      const terminal = createAgentTerminal(handles, "gemini");
+      terminal.getInfo().agentState = "waiting";
+      terminal.getInfo().waitingReason = "approval";
       await expect(terminal.gracefulShutdown()).resolves.toBeNull();
       return soleOutcome();
     },

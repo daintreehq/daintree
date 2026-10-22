@@ -81,7 +81,13 @@ vi.mock("../../../../shared/config/agentRegistry.js", () => ({
     // The pattern is load-bearing: bookmarking gates on the id being
     // OBSERVABLE, not merely on the resume kind (#11851).
     if (id === "claude")
-      return { resume: { kind: "session-id", sessionIdPattern: "claude --resume ([\\w-]+)" } };
+      return {
+        resume: {
+          kind: "session-id",
+          sessionIdPattern: "claude --resume ([\\w-]+)",
+          assignSessionIdArgs: () => ["--session-id"],
+        },
+      };
     if (id === "rolling") return { resume: { kind: "rolling-history" } };
     if (id === "uncapturable") return { resume: { kind: "session-id" } };
     return undefined;
@@ -236,6 +242,38 @@ describe("prepareBookmark handler", () => {
     // Refused before the capture kill, so the pane survives the rejection.
     expect(ptyClient.gracefulKill).not.toHaveBeenCalled();
     expect(m.journalAgentSessionRecord).not.toHaveBeenCalled();
+  });
+
+  it("rejects NOT_BOOKMARKABLE before killing an agent waiting on an approval", async () => {
+    // The capture types nothing into an approval prompt (#13842), so the kill
+    // would come back with no id: the decision would be gone and nothing saved.
+    ptyClient.getTerminalAsync.mockResolvedValue({
+      ...agentInfo,
+      agentState: "waiting",
+      waitingReason: "approval",
+    });
+    register();
+    await expect(
+      handlerFor(CHANNELS.AGENT_SESSION_PREPARE_BOOKMARK)({}, { terminalId: "term-1", label: "L" })
+    ).rejects.toMatchObject({ code: "NOT_BOOKMARKABLE" });
+    expect(ptyClient.gracefulKill).not.toHaveBeenCalled();
+  });
+
+  it("still bookmarks an approval wait whose id was assigned at launch", async () => {
+    ptyClient.getTerminalAsync.mockResolvedValue({
+      ...agentInfo,
+      agentSessionId: "sess-assigned",
+      agentState: "waiting",
+      waitingReason: "approval",
+    });
+    ptyClient.gracefulKill.mockResolvedValue("sess-assigned");
+    m.journalAgentSessionRecord.mockResolvedValue({ sessionId: "sess-assigned" });
+    register();
+    await handlerFor(CHANNELS.AGENT_SESSION_PREPARE_BOOKMARK)(
+      {},
+      { terminalId: "term-1", label: "L" }
+    );
+    expect(ptyClient.gracefulKill).toHaveBeenCalledWith("term-1");
   });
 
   it("rejects SESSION_CAPTURE_FAILED when no session id is captured", async () => {

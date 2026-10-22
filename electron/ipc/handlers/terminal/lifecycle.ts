@@ -52,6 +52,7 @@ import {
   DEFAULT_DANGEROUS_ARGS,
   relaunchResumeAsAssignedSession,
   supportsExactSessionCapture,
+  supportsSessionIdAssignment,
 } from "../../../../shared/types/agentSettings.js";
 import {
   declaresActiveAssistantTier,
@@ -1349,6 +1350,20 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       throw new AppError({
         code: "NOT_BOOKMARKABLE",
         message: `Terminal ${terminalId} has no owning project to scope a bookmark to`,
+      });
+    }
+    // The capture types nothing into an approval prompt (#13842), so an id the
+    // agent would only print on quit can't be had there: the kill would discard
+    // the decision it is waiting on and save nothing. An id assigned at launch
+    // needs no typing.
+    if (
+      info.agentState === "waiting" &&
+      info.waitingReason === "approval" &&
+      !(info.agentSessionId && supportsSessionIdAssignment(info.launchAgentId))
+    ) {
+      throw new AppError({
+        code: "NOT_BOOKMARKABLE",
+        message: `Terminal ${terminalId} is waiting on an approval; answer it before bookmarking`,
       });
     }
 
