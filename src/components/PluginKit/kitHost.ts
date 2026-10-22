@@ -19,6 +19,7 @@ export interface PluginKitToast {
   message: string;
   duration?: number;
   rateLimitKey?: string;
+  rateLimitLabel?: string;
   transient?: boolean;
   action?: { label: string; onClick: () => void };
 }

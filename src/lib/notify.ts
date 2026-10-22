@@ -305,8 +305,16 @@ interface NotifyPayloadBase {
    * inbox summary, catching slow-dripping noisy producers that sit outside
    * the coalesce window. Falls back to `correlationId`, then
    * `context.projectId`, then `<context.worktreeId>:<type>`, then `type`.
+   * Printed as the source in the overflow summary unless `rateLimitLabel`
+   * names it.
    */
   rateLimitKey?: string;
+  /**
+   * How the overflow summary names a `rateLimitKey` source, for a key that is
+   * an internal id (a plugin's instance key). Never part of the bucket's
+   * identity: two sources may share a label.
+   */
+  rateLimitLabel?: string;
   /** When false, the history entry exists but does not increment the unread badge. Defaults to true. */
   countable?: boolean;
   /**
@@ -697,7 +705,7 @@ interface RateLimitBucketId {
 
 function getRateLimitBucketId(payload: NotifyPayload): RateLimitBucketId {
   const explicit = payload.rateLimitKey ?? payload.correlationId ?? payload.context?.projectId;
-  if (explicit) return { key: explicit, label: explicit };
+  if (explicit) return { key: explicit, label: payload.rateLimitLabel || explicit };
   const worktreeId = payload.context?.worktreeId;
   if (worktreeId) {
     // Keyed by severity too: a burst of routine successes in one worktree

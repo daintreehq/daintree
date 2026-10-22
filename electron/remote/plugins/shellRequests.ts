@@ -358,7 +358,7 @@ export function installPluginShellRequests(deps: PluginShellRequestDeps = {}): (
   const showToast = (request: ViewReverseRequest): null => {
     const parsed = PluginToastPayloadSchema.safeParse(request.payload);
     if (!parsed.success) throw malformed("toast");
-    const { pluginId, type, message, durationMs } = parsed.data;
+    const { pluginId, type, message, durationMs, pluginDisplayName } = parsed.data;
     const wc = scopeView(request, pluginId);
     // Every plugin on a host draws on the host's one budget, so naming more
     // plugins can't raise more toasts; past it, a toast is dropped quietly.
@@ -370,6 +370,10 @@ export function installPluginShellRequests(deps: PluginShellRequestDeps = {}): (
       message: displaySafeText(message),
       duration: durationMs,
       rateLimitKey: `plugin:${request.hostId}:${pluginId}`,
+      // An older host sends no name; the manifest id still keeps the instance
+      // key out of the overflow summary.
+      rateLimitLabel:
+        displaySafeText(pluginDisplayName ?? "").trim() || pluginManifestIdFromInstanceKey(pluginId),
     });
     return null;
   };

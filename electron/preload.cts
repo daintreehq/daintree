@@ -2987,6 +2987,7 @@ function buildElectronApi(): ElectronAPI {
           message: string;
           duration?: number;
           rateLimitKey?: string;
+          rateLimitLabel?: string;
           priority?: "high" | "low" | "watch";
           action?: { label: string; ipcChannel: string; data?: string };
           pluginActions?: Array<{

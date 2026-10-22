@@ -2573,20 +2573,22 @@ export function createHost(
       // which for a project-owned plugin is an instance key no user should be
       // shown (#12211).
       //
-      // rateLimitKey keeps the raw id: it is a bucket key, never rendered, and
-      // two plugins may legitimately share a display name. It gives the plugin
-      // one renderer bucket shared with `notify`, whatever the tone — without
-      // it plugin toasts fall into the global type-keyed bucket and a burst of
-      // unrelated system toasts could silently suppress a plugin's toast.
-      // Past main's own budget the toast is dropped quietly, here and for a
-      // remote window alike.
+      // rateLimitKey keeps the raw id, since two plugins may legitimately
+      // share a display name; the display name rides beside it as the label
+      // an overflow summary prints. It gives the plugin one renderer bucket
+      // shared with `notify`, whatever the tone — without it plugin toasts
+      // fall into the global type-keyed bucket and a burst of unrelated system
+      // toasts could silently suppress a plugin's toast. Past main's own
+      // budget the toast is dropped quietly, here and for a remote window alike.
       if (!admitPluginToast(pluginId)) return;
-      const message = `${deps.pluginDisplayName(pluginId)}: ${parsed.data.message}`;
+      const displayName = deps.pluginDisplayName(pluginId);
+      const message = `${displayName}: ${parsed.data.message}`;
       pushToRenderers(CHANNELS.NOTIFICATION_SHOW_TOAST, {
         type: parsed.data.type,
         message,
         duration: parsed.data.durationMs,
         rateLimitKey: `plugin:${pluginId}`,
+        rateLimitLabel: displayName,
       });
       // A toast is the Shell's to show, so a push never reaches a window on
       // another machine; the one driving the project is asked to show it.
@@ -2599,6 +2601,7 @@ export function createHost(
               pluginId,
               type: parsed.data.type,
               message,
+              pluginDisplayName: displayName,
               ...(parsed.data.durationMs !== undefined
                 ? { durationMs: parsed.data.durationMs }
                 : {}),
@@ -2657,13 +2660,15 @@ export function createHost(
       // The same budget as showToast. A call past it does nothing at all — no
       // toast, no banner, no retired banner — as if it was never made.
       if (!admitPluginToast(pluginId)) return { id };
-      const displayTitle = `${deps.pluginDisplayName(pluginId)}: ${title}`;
+      const displayName = deps.pluginDisplayName(pluginId);
+      const displayTitle = `${displayName}: ${title}`;
       const replaceKey = dedupeKey !== undefined ? `plugin:${pluginId}:${dedupeKey}` : undefined;
       pushToRenderers(CHANNELS.NOTIFICATION_SHOW_TOAST, {
         type: "info",
         title: displayTitle,
         message: body,
         rateLimitKey: `plugin:${pluginId}`,
+        rateLimitLabel: displayName,
         ...(actions.length > 0 ? { pluginActions: actions } : {}),
         ...(replaceKey !== undefined ? { replaceKey } : {}),
       });
@@ -2702,7 +2707,12 @@ export function createHost(
         frontend.endpoint
           .request(
             PluginFrontendMethod.TOAST,
-            { pluginId, type: "info", message: `${displayTitle} — ${body}` },
+            {
+              pluginId,
+              type: "info",
+              message: `${displayTitle} — ${body}`,
+              pluginDisplayName: displayName,
+            },
             { timeoutMs: 10_000 }
           )
           .catch(() => {

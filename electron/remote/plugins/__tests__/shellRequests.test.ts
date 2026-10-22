@@ -497,6 +497,35 @@ describe("host plugin toasts", () => {
       message: "Deploy: shipped",
       duration: undefined,
       rateLimitKey: `plugin:${HOST}:acme.deploy`,
+      rateLimitLabel: "acme.deploy",
+    });
+  });
+
+  it("labels the overflow summary with the host's plain-text name for the plugin (#13760)", async () => {
+    const wc = makeView();
+    await ask(PluginFrontendMethod.TOAST, {
+      pluginId: "acme.deploy",
+      type: "info",
+      message: "Deploy: shipped",
+      pluginDisplayName: "\u202eDeploy\u0007",
+    });
+    expect(wc.send.mock.calls[0]![1]).toMatchObject({
+      rateLimitKey: `plugin:${HOST}:acme.deploy`,
+      rateLimitLabel: "Deploy",
+    });
+  });
+
+  it("falls back to the manifest id, never the instance key, when an older host sends no name", async () => {
+    const wc = makeView();
+    const instanceKey = `project__${PROJECT}__acme.deploy`;
+    await ask(PluginFrontendMethod.TOAST, {
+      pluginId: instanceKey,
+      type: "info",
+      message: "Deploy: shipped",
+    });
+    expect(wc.send.mock.calls[0]![1]).toMatchObject({
+      rateLimitKey: `plugin:${HOST}:${instanceKey}`,
+      rateLimitLabel: "acme.deploy",
     });
   });
 

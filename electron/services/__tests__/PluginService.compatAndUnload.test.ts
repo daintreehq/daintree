@@ -324,6 +324,8 @@ describe("engines.daintree compatibility gate", () => {
     expect(payload).toMatchObject({
       type: "warning",
       message: expect.stringContaining('"Incompatible Plugin" targets Daintree ^0.7.0'),
+      rateLimitKey: "plugin-engine:acme.incompatible",
+      rateLimitLabel: "Incompatible Plugin",
     });
     expect(payload.message).toContain("newer version of the plugin");
     expect(payload).not.toHaveProperty("action");

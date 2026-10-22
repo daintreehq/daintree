@@ -234,6 +234,11 @@ export interface MainProcessToastPayload {
    */
   rateLimitKey?: string;
   /**
+   * Threaded through to `notify({ rateLimitLabel })`: how the overflow summary
+   * names the source when `rateLimitKey` is an internal id.
+   */
+  rateLimitLabel?: string;
+  /**
    * Routing priority threaded through to `notify({ priority })`. Omit for the
    * default `"high"` (toast when focused). `"low"` routes to the history inbox
    * only — never a toast or OS notification — for signals the user can act on

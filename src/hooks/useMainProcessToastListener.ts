@@ -181,6 +181,7 @@ export function useMainProcessToastListener(): void {
         message: payload.message,
         duration: payload.duration,
         rateLimitKey: payload.rateLimitKey,
+        rateLimitLabel: payload.rateLimitLabel,
         priority: payload.priority,
         action,
         ...(pluginActions ? { actions: pluginActions, urgent: false } : {}),

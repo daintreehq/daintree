@@ -76,11 +76,13 @@ export function showPluginViewToast(owner: string | null, options: unknown): str
       };
     }
   }
+  const name = owner ? pluginDisplayName(owner) : undefined;
   return getPluginKitHost().showToast({
     type: tone,
-    message: owner ? `${pluginDisplayName(owner)}: ${message}` : message,
+    message: name ? `${name}: ${message}` : message,
     duration: readDuration(field(options, "durationMs")),
     rateLimitKey: owner ? `plugin:${owner}` : undefined,
+    rateLimitLabel: name,
     action,
   });
 }

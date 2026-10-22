@@ -56,7 +56,12 @@ describe("installAppPluginKitHost", () => {
 
   it("shows and dismisses toasts through notify and the notification store", () => {
     const host = getPluginKitHost();
-    const toast = { type: "error" as const, message: "Acme: failed", rateLimitKey: "k" };
+    const toast = {
+      type: "error" as const,
+      message: "Acme: failed",
+      rateLimitKey: "k",
+      rateLimitLabel: "Acme",
+    };
     expect(host.showToast(toast)).toBe("toast-1");
     expect(notify).toHaveBeenCalledWith(toast);
     host.dismissToast("toast-1");
