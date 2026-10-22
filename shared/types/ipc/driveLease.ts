@@ -65,6 +65,14 @@ export interface DriveLeaseView extends DriveLeaseState {
    */
   hostScreenInUse?: boolean;
   /**
+   * The holder is away (its link dropped, its view closed or moved, or the
+   * Host restarted without it) and keeps the lease this many milliseconds more
+   * unless it comes back. A duration, not a time: the two machines' clocks
+   * needn't agree. Absent while the holder is there, and from hosts before
+   * this field.
+   */
+  holderAwayMs?: number;
+  /**
    * The driver's navigation as it last reported it, kept across a change of
    * holder so a view taking over starts from it. Absent until a driver reports,
    * and from hosts before this field.

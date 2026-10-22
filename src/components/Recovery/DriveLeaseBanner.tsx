@@ -1,6 +1,6 @@
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { useHostConnectionStore } from "@/store/hostConnectionStore";
-import { useDriveLeaseBanner } from "./driveLeaseState";
+import { useDriveLeaseAwaySeconds, useDriveLeaseBanner } from "./driveLeaseState";
 import { getDriveLeaseBannerCopy } from "./recoveryCopy";
 import { takeControl, useTakeControlPending } from "./takeControl";
 
@@ -14,10 +14,11 @@ export function DriveLeaseBanner() {
   const state = useDriveLeaseBanner();
   const hostName = useHostConnectionStore((s) => s.hostName ?? s.hostId ?? "The host");
   const busy = useTakeControlPending(state?.projectId);
+  const awaySeconds = useDriveLeaseAwaySeconds();
 
   if (state === null) return null;
 
-  const copy = getDriveLeaseBannerCopy(state, hostName);
+  const copy = getDriveLeaseBannerCopy(state, hostName, awaySeconds);
   const projectId = state.projectId;
 
   return (

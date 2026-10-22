@@ -3,6 +3,7 @@ import type { PanelSuspectReason } from "@shared/types/ipc/crashRecovery";
 import { pluralize } from "@/lib/pluralize";
 import type { HostBannerVariant } from "@/store/hostConnectionStore";
 import { formatRelativeTime } from "@/lib/formatRelativeTime";
+import { formatCountdown } from "@/utils/formatCountdown";
 import { sshRefusalLine } from "@shared/utils/sshRefusal";
 
 export interface RecoveryBannerCopy {
@@ -156,18 +157,28 @@ export function getHostConnectionBannerCopy(
  * Copy for a project another device controls. One device controls a project
  * at a time; this names it and offers control here. This view follows its
  * terminals, panels, navigation and composer drafts live but can't change
- * them, so it is read-only, in the pane strips' word.
+ * them, so it is read-only, in the pane strips' word. While that device is
+ * away (`awaySeconds`), nothing of it shows here live: the host holds control
+ * for it that much longer, then passes it on to a view still on the project.
  */
 export function getDriveLeaseBannerCopy(
   state:
     | { kind: "taken-from-host"; driverName: string }
     | { kind: "driven-elsewhere"; driverName: string; driverIsHostScreen: boolean },
-  hostName: string
+  hostName: string,
+  awaySeconds: number | null = null
 ): RecoveryBannerCopy & { actionLabel: string } {
   const controller =
     state.kind === "driven-elsewhere" && state.driverIsHostScreen
       ? `${hostName}'s own screen`
       : state.driverName;
+  if (awaySeconds !== null) {
+    return {
+      title: `${controller} is away`,
+      description: `Read-only. Control passes on in ${formatCountdown(awaySeconds)} unless it comes back.`,
+      actionLabel: "Take control",
+    };
+  }
   return {
     title: `${controller} has control of this project`,
     description: "Read-only. Its terminals, panels and drafts show here live.",

@@ -30,6 +30,7 @@ import {
 } from "../driveLeaseState";
 import { getDriveLeaseBannerCopy } from "../recoveryCopy";
 import { useHostConnectionStore } from "@/store/hostConnectionStore";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import {
   _resetHostConnectionSyncForTesting,
   useHostConnectionSync,
@@ -262,6 +263,73 @@ describe("DriveLeaseBanner", () => {
     fireEvent.click(screen.getByRole("button", { name: copy.actionLabel }));
     await waitFor(() => expect(notify).toHaveBeenCalledTimes(1));
     expect(notify.mock.calls[0]![0]).toMatchObject({ type: "error" });
+  });
+
+  it("says a controller that has gone is away, counts down to the handover, and goes back to live when it returns (#13937)", () => {
+    vi.useFakeTimers();
+    const announce = vi.fn();
+    const realAnnounce = useAnnouncerStore.getState().announce;
+    useAnnouncerStore.setState({ announce });
+    try {
+      render(<Harness />);
+      act(() => emit?.({ type: "changed", state: view() }));
+      const live = getDriveLeaseBannerCopy(
+        { kind: "taken-from-host", driverName: "greg-mbp" },
+        "studio-01"
+      );
+      expect(screen.getByText(live.title)).toBeTruthy();
+      announce.mockClear();
+
+      act(() => emit?.({ type: "changed", state: view({ holderAwayMs: 15_000 }) }));
+      expect(screen.getByText("greg-mbp is away")).toBeTruthy();
+      expect(
+        screen.getByText("Read-only. Control passes on in 15s unless it comes back.")
+      ).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Take control" })).toBeTruthy();
+      expect(getTerminalInputBlock()).toMatchObject({ driverAway: true });
+
+      act(() => {
+        vi.advanceTimersByTime(4_000);
+      });
+      expect(
+        screen.getByText("Read-only. Control passes on in 11s unless it comes back.")
+      ).toBeTruthy();
+      // Said once on going away, not once a second.
+      expect(announce.mock.calls.map(([message]) => message)).toEqual(["greg-mbp is away"]);
+
+      act(() => emit?.({ type: "changed", state: view() }));
+      expect(screen.getByText(live.title)).toBeTruthy();
+      expect(screen.queryByText("greg-mbp is away")).toBeNull();
+      expect(getTerminalInputBlock()).toMatchObject({ driverAway: false });
+      expect(announce.mock.calls.map(([message]) => message)).toEqual([
+        "greg-mbp is away",
+        "greg-mbp is back",
+      ]);
+    } finally {
+      useAnnouncerStore.setState({ announce: realAnnounce });
+      vi.useRealTimers();
+    }
+  });
+
+  it("says a controller already away when the view first hears of it is away, not in control", () => {
+    const announce = vi.fn();
+    const realAnnounce = useAnnouncerStore.getState().announce;
+    useAnnouncerStore.setState({ announce });
+    try {
+      render(<Harness />);
+      act(() => emit?.({ type: "changed", state: view({ holderAwayMs: 45_000 }) }));
+      expect(screen.getByText("greg-mbp is away")).toBeTruthy();
+      expect(announce.mock.calls.map(([message]) => message)).toEqual(["greg-mbp is away"]);
+    } finally {
+      useAnnouncerStore.setState({ announce: realAnnounce });
+    }
+  });
+
+  it("keeps the live wording for a host that doesn't say whether its controller is away", () => {
+    render(<Harness />);
+    act(() => emit?.({ type: "changed", state: view() }));
+    expect(screen.getByText("greg-mbp has control of this project")).toBeTruthy();
+    expect(screen.queryByText(/is away/)).toBeNull();
   });
 
   it("ignores lease changes for other projects", () => {

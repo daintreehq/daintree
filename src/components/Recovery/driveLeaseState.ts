@@ -1,10 +1,15 @@
-import { useEffect, useSyncExternalStore } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import type { DriveLeaseView } from "@shared/types/ipc/driveLease";
 import { isEitherRemoteRoleSupported } from "@/lib/remoteHosts";
 import { getViewHostId } from "@/hooks/useHostConnection";
+import { useVisibilityAwareInterval } from "@/hooks/useVisibilityAwareInterval";
 import { useHostConnectionStore } from "@/store/hostConnectionStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
-import { getDriveLeaseSnapshot, subscribeDriveLeaseSnapshot } from "@/services/terminal/inputGate";
+import {
+  getDriveLeaseSnapshot,
+  getDriveLeaseSnapshotReceivedAt,
+  subscribeDriveLeaseSnapshot,
+} from "@/services/terminal/inputGate";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 
 /**
@@ -46,6 +51,12 @@ export function selectDriveLeaseBanner(
 }
 
 let lease: DriveLeaseView | null = null;
+/**
+ * What was left of the away controller's grace when the lease landed here. The
+ * host sends a duration, not a time, so it is counted down by this machine's
+ * clock from that moment.
+ */
+let away: { receivedAt: number; ms: number } | null = null;
 const listeners = new Set<() => void>();
 
 /** Who controls the project, as the banner names them; null when this view has control. */
@@ -73,11 +84,24 @@ function announceControlChange(prev: DriveLeaseView | null, next: DriveLeaseView
   const sameProject = prev !== null && prev.projectId === next.projectId;
   const before = sameProject ? controllerOf(prev) : null;
   const after = controllerOf(next);
-  if (after?.key === before?.key) return;
   const announce = useAnnouncerStore.getState().announce;
+  if (after?.key === before?.key) {
+    // The same controller going away or coming back: said once each, never
+    // per second of the countdown.
+    const wasAway = prev?.holderAwayMs !== undefined;
+    const isAway = next.holderAwayMs !== undefined;
+    if (after !== null && wasAway !== isAway) {
+      announce(isAway ? `${after.name} is away` : `${after.name} is back`, "polite");
+    }
+    return;
+  }
   if (after !== null) {
     announce(
-      sameProject ? `Control moved to ${after.name}` : `${after.name} has control of this project`,
+      sameProject
+        ? `Control moved to ${after.name}`
+        : next.holderAwayMs !== undefined
+          ? `${after.name} is away`
+          : `${after.name} has control of this project`,
       "polite"
     );
   } else if (before !== null && next.drivingHere) {
@@ -85,10 +109,11 @@ function announceControlChange(prev: DriveLeaseView | null, next: DriveLeaseView
   }
 }
 
-function setLease(next: DriveLeaseView | null): void {
+function setLease(next: DriveLeaseView | null, receivedAt = Date.now()): void {
   if (lease === next) return;
   announceControlChange(lease, next);
   lease = next;
+  away = next?.holderAwayMs === undefined ? null : { receivedAt, ms: next.holderAwayMs };
   for (const listener of [...listeners]) listener();
 }
 
@@ -99,6 +124,10 @@ function subscribe(listener: () => void): () => void {
 
 function getLease(): DriveLeaseView | null {
   return lease;
+}
+
+function getAway(): { receivedAt: number; ms: number } | null {
+  return away;
 }
 
 /** Set the lease outright, bypassing the view's own project check. For the preview harness and tests. */
@@ -120,7 +149,10 @@ function beginSync(): () => void {
   if (!isEitherRemoteRoleSupported()) return () => {};
   const adopt = () => {
     const next = getDriveLeaseSnapshot();
-    setLease(next !== null && next.projectId === getViewWorkspaceId() ? next : null);
+    setLease(
+      next !== null && next.projectId === getViewWorkspaceId() ? next : null,
+      getDriveLeaseSnapshotReceivedAt()
+    );
   };
   // Nothing to adopt yet leaves a seeded lease (preview, tests) in place.
   if (getDriveLeaseSnapshot() !== null) adopt();
@@ -155,10 +187,26 @@ export function useDriveLeaseBanner(): DriveLeaseBannerState | null {
   return selectDriveLeaseBanner(view, getViewHostId() !== null);
 }
 
+/**
+ * Whole seconds until the away controller's grace runs out and control passes
+ * on, ticking while the view can be seen; null while the controller is there.
+ * Never below 1: the handover itself is what ends the countdown.
+ */
+export function useDriveLeaseAwaySeconds(): number | null {
+  const current = useSyncExternalStore(subscribe, getAway, getAway);
+  const [now, setNow] = useState(() => Date.now());
+  useVisibilityAwareInterval(() => setNow(Date.now()), 1000, current !== null);
+  if (current === null) return null;
+  // A tick from before this lease landed counts as the moment it landed.
+  const elapsed = Math.max(0, now - current.receivedAt);
+  return Math.max(1, Math.ceil((current.ms - elapsed) / 1000));
+}
+
 export function _resetDriveLeaseBannerForTesting(): void {
   stopSync?.();
   stopSync = null;
   syncRefs = 0;
   lease = null;
+  away = null;
   listeners.clear();
 }
