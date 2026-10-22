@@ -105,6 +105,7 @@ import {
 import { isPluginToolbarButtonIdShape } from "@shared/types/toolbar";
 import { useProjectPresentationStore } from "@/store/projectPresentationStore";
 import { copyWithToast } from "@/lib/copyWithToast";
+import { ProjectPluginMenuItems } from "@/components/Plugin/ProjectPluginMenuItems";
 import { saveProjectToolbar } from "./saveProjectToolbar";
 import type { ToolbarButtonConfig } from "@shared/config/toolbarButtonRegistry";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -3039,6 +3040,7 @@ export function Toolbar({
                         <Settings data-menu-icon className="mr-2 h-3.5 w-3.5" />
                         Project settings…
                       </ContextMenuItem>
+                      <ProjectPluginMenuItems projectId={currentProject.id} />
                       {activeSearchableProject && activeProjectHasProcesses && (
                         <ContextMenuItem
                           destructive

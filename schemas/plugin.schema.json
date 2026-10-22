@@ -498,7 +498,8 @@
                 "enum": [
                   "worktree",
                   "terminal",
-                  "file"
+                  "file",
+                  "project"
                 ]
               },
               "label": {
