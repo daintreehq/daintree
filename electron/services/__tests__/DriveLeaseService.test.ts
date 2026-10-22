@@ -1146,6 +1146,25 @@ describe("DriveLeaseService across a restart of this app", () => {
     });
   });
 
+  it("writes the tenure a reservation saved without one gets, so the next restart keeps it", async () => {
+    service.dispose();
+    const first = restarted({ p: greg });
+    service = first.next;
+    const tenure = service.getHolder("p")!.tenureId;
+
+    const back = remote("s2:e1", "shell-launch-1");
+    registry.add(back);
+    noteClient(back, "shell-launch-1", "greg-mbp");
+    await settle();
+    expect(first.memory.saved.at(-1)).toEqual({ p: { ...greg, tenureId: tenure } });
+
+    service.dispose();
+    back.close();
+    const second = restarted(first.memory.saved.at(-1)!);
+    service = second.next;
+    expect(service.getHolder("p")?.tenureId).toBe(tenure);
+  });
+
   it("gives it to the Shell that waited once the grace runs out; the old driver returning late observes", async () => {
     service.dispose();
     const { next } = restarted({ p: greg });

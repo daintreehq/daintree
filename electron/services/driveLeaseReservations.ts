@@ -6,6 +6,8 @@ import type { DriveLeaseReservation, DriveLeaseReservationStore } from "./DriveL
 /** More than any Host has projects; a file past it is not one this app wrote. */
 const MAX_RESERVATIONS = 512;
 const MAX_FIELD_LENGTH = 512;
+/** The longest tenure the link carries to a Shell; anything longer starts afresh. */
+const MAX_TENURE_LENGTH = 256;
 
 function isField(value: unknown): value is string {
   return typeof value === "string" && value !== "" && value.length <= MAX_FIELD_LENGTH;
@@ -29,11 +31,12 @@ export function parseReservations(raw: string): Record<string, DriveLeaseReserva
     if (!isField(clientId) || !isField(clientName)) continue;
     // One saved before installs were recorded, or with a damaged install or
     // tenure, still holds the project for its client.
+    const tenure = isField(tenureId) && tenureId.length <= MAX_TENURE_LENGTH ? tenureId : null;
     out[projectId] = {
       clientId,
       clientName,
       ...(isField(deviceId) ? { deviceId } : {}),
-      ...(isField(tenureId) ? { tenureId } : {}),
+      ...(tenure !== null ? { tenureId: tenure } : {}),
     };
     count++;
   }

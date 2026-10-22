@@ -98,6 +98,16 @@ export interface DriveLeaseReservationStore {
 const RESTORED_HOLDER_ENDPOINT_PREFIX = "restored:";
 const RESTORED_HOLDER_CONNECTION = 0;
 
+/** A holder, or a reservation read back, as the reservation file keeps it. */
+function toReservation(entry: DriveLeaseReservation): DriveLeaseReservation {
+  return {
+    clientId: entry.clientId,
+    clientName: entry.clientName,
+    ...(entry.deviceId ? { deviceId: entry.deviceId } : {}),
+    ...(entry.tenureId ? { tenureId: entry.tenureId } : {}),
+  };
+}
+
 interface ProjectLease {
   holder: DriveLeaseHolder;
   /** The holder endpoint's handle, which is its pty-host port connection id. */
@@ -216,7 +226,13 @@ export class DriveLeaseService {
       lease.releaseTimer.unref?.();
       this.leases.set(projectId, lease);
     }
-    this.savedReservations = JSON.stringify(this.remoteHolders());
+    // As the file has them, so a tenure given to one saved without it is
+    // written with the next save rather than made up again after a restart.
+    const loaded: Record<string, DriveLeaseReservation> = {};
+    for (const projectId of Object.keys(restored).sort()) {
+      loaded[projectId] = toReservation(restored[projectId]!);
+    }
+    this.savedReservations = JSON.stringify(loaded);
     this.publishDriveLeases();
   }
 
@@ -226,12 +242,12 @@ export class DriveLeaseService {
     for (const projectId of projectIds) {
       const { holder, holderDeviceId } = this.leases.get(projectId)!;
       if (holder.clientId === LOCAL_CLIENT_ID) continue;
-      out[projectId] = {
+      out[projectId] = toReservation({
         clientId: holder.clientId,
         clientName: holder.clientName,
-        ...(holderDeviceId ? { deviceId: holderDeviceId } : {}),
-        ...(holder.tenureId ? { tenureId: holder.tenureId } : {}),
-      };
+        deviceId: holderDeviceId ?? undefined,
+        tenureId: holder.tenureId,
+      });
     }
     return out;
   }
