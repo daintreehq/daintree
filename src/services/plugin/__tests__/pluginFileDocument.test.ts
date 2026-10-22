@@ -144,6 +144,66 @@ describe("pluginFileDocument (#13809)", () => {
     expect(useFileDocumentStore.getState().byPanelId["panel-1"]?.dirty).toBe(false);
   });
 
+  it("never rebases a standing draft on a re-read, so the close prompt can't overwrite a change", async () => {
+    bridge.read.mockResolvedValueOnce({ status: "ok", text: "{}", revision: REV_A });
+    bridge.save.mockResolvedValue({ status: "conflict", revision: REV_B });
+    const handle = openPluginFileDocument(target());
+    handle.retain();
+    await handle.document.read();
+    handle.document.setDraft("mine");
+    // The disk moved on and a remounted view re-reads it.
+    bridge.read.mockResolvedValueOnce({ status: "ok", text: "theirs", revision: REV_B });
+    await handle.document.read();
+    await expect(useFileDocumentStore.getState().byPanelId["panel-1"]!.save()).resolves.toBe(false);
+    expect(bridge.save).toHaveBeenCalledWith(expect.objectContaining({ expectedRevision: REV_A }));
+  });
+
+  it("reports a file that stopped reading as text as a change, and conflicts the draft", async () => {
+    bridge.read.mockResolvedValueOnce({ status: "ok", text: "{}", revision: REV_A });
+    const handle = openPluginFileDocument(target());
+    handle.retain();
+    await handle.document.read();
+    handle.document.setDraft("mine");
+    const listener = vi.fn();
+    handle.document.onDidChange(listener);
+    bridge.read.mockResolvedValue({ status: "too-large" });
+    await handle.notifyDiskChange();
+    await handle.notifyDiskChange();
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(listener).toHaveBeenCalledWith({ reason: "disk", revision: null });
+    expect(useFileDocumentStore.getState().byPanelId["panel-1"]?.conflict).toBe(true);
+  });
+
+  it("releases a clean record on unmount even with a conflict reported", () => {
+    const handle = openPluginFileDocument(target());
+    const release = handle.retain();
+    handle.document.setConflict(true);
+    release();
+    expect(useFileDocumentStore.getState().byPanelId["panel-1"]).toBeUndefined();
+  });
+
+  it("does not let a stale record's late save clear a newer record's projection", async () => {
+    bridge.read.mockResolvedValue({ status: "ok", text: "{}", revision: REV_A });
+    let finishSave: (value: unknown) => void = () => {};
+    bridge.save.mockReturnValueOnce(new Promise((resolve) => (finishSave = resolve)));
+    const old = openPluginFileDocument(target());
+    const releaseOld = old.retain();
+    await old.document.read();
+    const saving = old.document.save("x", { expectedRevision: REV_A });
+    old.document.setDraft(null);
+    releaseOld();
+
+    const fresh = openPluginFileDocument(target());
+    fresh.retain();
+    fresh.document.setDraft("newer");
+    finishSave({ status: "saved", revision: REV_B });
+    await saving;
+    expect(useFileDocumentStore.getState().byPanelId["panel-1"]).toMatchObject({
+      dirty: true,
+      draftText: "newer",
+    });
+  });
+
   it("gives a view editor a read-only document", async () => {
     const { document } = openPluginFileDocument(target({ mode: "view" }));
     expect(document.readOnly).toBe(true);

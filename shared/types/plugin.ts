@@ -145,7 +145,10 @@ export interface PluginFileDocumentChange {
    * prompt's Save). `"discarded"`: the host dropped the draft — re-read.
    */
   readonly reason: "disk" | "saved" | "discarded";
-  /** The revision now on disk, when known; null when the file is gone. */
+  /**
+   * The revision now on disk; null when the file is gone, grew past the
+   * editor's `maxBytes`, or no longer reads as UTF-8 text.
+   */
   readonly revision: string | null;
 }
 

@@ -228,7 +228,10 @@ export interface PluginFileEditorCandidate {
  * lower-case extension, or `*` for a file without one.
  */
 export function fileEditorChoiceKey(mode: FileEditorMode, filePath: string): FileEditorChoiceKey {
-  return `${mode}:${extensionOf(filePath) ?? "*"}`;
+  const ext = extensionOf(filePath);
+  // Only a suffix a manifest could name is a key of its own; anything else
+  // (a path claim on `notes.draft-v2`) shares the extensionless answer.
+  return `${mode}:${ext !== null && /^[a-z0-9]{1,16}$/.test(ext) ? ext : "*"}`;
 }
 
 function editorMatches(

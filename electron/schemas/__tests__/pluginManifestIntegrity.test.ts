@@ -479,6 +479,14 @@ describe("contributes.fileEditors (#12323, #13809)", () => {
     expect(issueWithCode(collision, "file_editor_view_panel_id_collision")).toBeDefined();
   });
 
+  it("refuses a surface claim naming a fileEditor view", () => {
+    const result = projectWith({
+      views: [editorView],
+      surfaces: { emptyCanvas: { viewId: "records-editor" } },
+    });
+    expect(issueWithCode(result, "surface_view_ref_file_editor")).toBeDefined();
+  });
+
   it("accepts paths only from a project plugin", () => {
     const paths = ["content/entries/*.json", "data/**/*.record"];
     expect(projectWith({ views: [editorView], fileEditors: [viewEditor({ paths })] }).success).toBe(

@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import type { HostedFileEditorDescriptor, PluginHostedViewDescriptor } from "@shared/types/plugin";
+import {
+  isFileEditorChoiceKey,
+  type HostedFileEditorDescriptor,
+  type PluginHostedViewDescriptor,
+} from "@shared/types/plugin";
 import {
   HOST_FILE_EDITOR_CHOICE,
   fileEditorChoiceKey,
@@ -84,6 +88,12 @@ describe("pickFileEditorChoice", () => {
     expect(key).toBe("edit:json");
     expect(fileEditorChoiceKey("view", "/repo/DATA.CSV")).toBe("view:csv");
     expect(fileEditorChoiceKey("edit", "/repo/Makefile")).toBe("edit:*");
+    // A suffix no manifest could name shares the extensionless answer, so the
+    // key always survives main's validation.
+    expect(fileEditorChoiceKey("edit", "/repo/notes.draft-v2")).toBe("edit:*");
+    expect(
+      isFileEditorChoiceKey(fileEditorChoiceKey("edit", "/repo/a.averyveryverylongsuffix"))
+    ).toBe(true);
   });
 
   it("keeps the host first unless the user picked something still on offer", () => {

@@ -78,8 +78,18 @@ async function resolveContained(rootPath: string, filePath: string): Promise<str
 
 type BoundedRead = { ok: true; bytes: Buffer; mode: number } | { ok: false; tooLarge: boolean };
 
-/** Read a regular file without following a link swapped in after the realpath check. */
+/**
+ * Read a regular file without following a link swapped in after the realpath
+ * check: `O_NOFOLLOW` on the leaf where the platform has it, and everywhere a
+ * check that the opened descriptor is the very file the path named.
+ */
 async function readBounded(realFile: string, maxBytes: number): Promise<BoundedRead> {
+  let pathStat: Awaited<ReturnType<typeof fs.stat>>;
+  try {
+    pathStat = await fs.stat(realFile);
+  } catch {
+    return { ok: false, tooLarge: false };
+  }
   let handle: Awaited<ReturnType<typeof fs.open>>;
   try {
     handle = await fs.open(
@@ -92,6 +102,9 @@ async function readBounded(realFile: string, maxBytes: number): Promise<BoundedR
   try {
     const stat = await handle.stat();
     if (!stat.isFile()) return { ok: false, tooLarge: false };
+    if (String(stat.ino) !== String(pathStat.ino) || String(stat.dev) !== String(pathStat.dev)) {
+      return { ok: false, tooLarge: false };
+    }
     const bytes = await readBoundedFromHandle(handle, stat.size, maxBytes);
     if (bytes === null) return { ok: false, tooLarge: true };
     return { ok: true, bytes, mode: stat.mode & 0o777 };
@@ -142,6 +155,12 @@ export async function saveFileDocument(
   const realFile = await resolveContained(rootPath, filePath);
   if (realFile === null) return { status: "conflict", revision: null };
   return runExclusive(realFile, async (): Promise<FileDocumentSaveResult> => {
+    // Re-resolved under the lock: a directory swapped for a link while this
+    // save waited must not carry the write outside the root, or under a lock
+    // key that no longer names the file.
+    if ((await resolveContained(rootPath, filePath)) !== realFile) {
+      return { status: "conflict", revision: null };
+    }
     const current = await readBounded(realFile, FILE_EDITOR_MAX_BYTES_CEILING);
     if (!current.ok) {
       return current.tooLarge

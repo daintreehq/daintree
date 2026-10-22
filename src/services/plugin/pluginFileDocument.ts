@@ -5,10 +5,11 @@ import type {
   PluginFileDocumentReadResult,
   PluginFileDocumentSaveResult,
 } from "@shared/types/plugin";
-import { useFileDocumentStore } from "@/store/fileDocumentStore";
+import { useFileDocumentStore, type FileDocumentProjection } from "@/store/fileDocumentStore";
 import { logWarn } from "@/utils/logger";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { relativeFilePath } from "@/registry/fileEditorGlob";
+import { pluginFileDocumentIdentity } from "./pluginFileDocumentIdentity";
 
 /**
  * The host-owned document behind a view-backed file editor (#13809).
@@ -46,10 +47,14 @@ interface DocumentRecord {
   fileName: string;
   rootPath: string;
   maxBytes: number;
-  /** The revision the draft is based on: the last one read or saved. */
+  /**
+   * The revision the draft is based on: the last one read or saved while
+   * clean. A read while a draft stands does not move it — otherwise the close
+   * prompt's Save would quietly write the draft over a change it never saw.
+   */
   revision: string | null;
-  /** The last revision a disk-change check saw, so one change is reported once. */
-  observedRevision: string | null;
+  /** The last disk state a disk-change check saw, so one change is reported once. */
+  observedState: string | null;
   draft: string | null;
   /** Observed by the host: a save refused as stale, or the disk moving under a draft. */
   hostConflict: boolean;
@@ -57,6 +62,10 @@ interface DocumentRecord {
   viewConflict: boolean;
   listeners: Set<(change: PluginFileDocumentChange) => void>;
   mounts: number;
+  /** Saves in flight: the record outlives its views until they settle. */
+  pending: number;
+  /** The projection this record last published, so it only ever clears its own. */
+  projection: FileDocumentProjection | null;
 }
 
 const records = new Map<string, DocumentRecord>();
@@ -67,24 +76,34 @@ function recordKey(panelId: string, filePath: string): string {
 
 function publish(record: DocumentRecord): void {
   const store = useFileDocumentStore.getState();
-  const conflict = record.hostConflict || record.viewConflict;
-  if (record.mounts === 0 && record.draft === null && !conflict) {
-    // Clean and nobody editing: the document is released.
-    if (store.byPanelId[record.panelId]?.identityKey === record.identityKey) {
+  if (record.mounts === 0 && record.draft === null && record.pending === 0) {
+    // No draft and nobody editing: the document is released. Only this
+    // record's own projection and map entry go — a newer record for the same
+    // panel and file may already hold both.
+    if (record.projection !== null && store.byPanelId[record.panelId] === record.projection) {
       store.clearFileDocument(record.panelId);
     }
-    records.delete(record.key);
+    record.projection = null;
+    if (records.get(record.key) === record) records.delete(record.key);
     return;
   }
-  store.setFileDocument(record.panelId, {
+  const projection: FileDocumentProjection = {
     identityKey: record.identityKey,
     fileName: record.fileName,
     draftText: record.draft,
     dirty: record.draft !== null,
-    conflict,
+    conflict: record.hostConflict || record.viewConflict,
     save: () => saveDraft(record),
     discard: async () => discardDraft(record),
-  });
+  };
+  record.projection = projection;
+  store.setFileDocument(record.panelId, projection);
+}
+
+/** The revision on disk as last observed; null when gone or unreadable as text. */
+function diskRevisionOf(record: DocumentRecord): string | null {
+  const state = record.observedState;
+  return state === null || state.startsWith("status:") ? null : state;
 }
 
 function emit(record: DocumentRecord, change: PluginFileDocumentChange): void {
@@ -105,11 +124,13 @@ async function read(record: DocumentRecord): Promise<PluginFileDocumentReadResul
       maxBytes: record.maxBytes,
     });
     if (result.status === "ok") {
-      record.revision = result.revision;
-      record.observedRevision = result.revision;
-      if (record.draft === null && record.hostConflict) {
-        record.hostConflict = false;
-        publish(record);
+      record.observedState = result.revision;
+      if (record.draft === null) {
+        record.revision = result.revision;
+        if (record.hostConflict) {
+          record.hostConflict = false;
+          publish(record);
+        }
       }
     }
     return result;
@@ -125,6 +146,7 @@ async function save(
   expectedRevision: string
 ): Promise<PluginFileDocumentSaveResult> {
   let result: PluginFileDocumentSaveResult;
+  record.pending += 1;
   try {
     result = await window.electron.fileDocument.save({
       rootPath: record.rootPath,
@@ -134,19 +156,23 @@ async function save(
       expectedRevision,
     });
   } catch (err) {
-    return { status: "error", message: formatErrorMessage(err, "Save failed") };
+    result = { status: "error", message: formatErrorMessage(err, "Save failed") };
+  } finally {
+    record.pending -= 1;
   }
   if (result.status === "saved") {
     record.revision = result.revision;
-    record.observedRevision = result.revision;
+    record.observedState = result.revision;
     // Typing that landed while the save was in flight stays a draft.
     if (record.draft === text) record.draft = null;
     record.hostConflict = false;
     record.viewConflict = false;
     publish(record);
   } else if (result.status === "conflict") {
-    record.observedRevision = result.revision;
+    record.observedState = result.revision;
     record.hostConflict = true;
+    publish(record);
+  } else {
     publish(record);
   }
   return result;
@@ -167,7 +193,7 @@ function discardDraft(record: DocumentRecord): void {
   record.draft = null;
   record.hostConflict = false;
   record.viewConflict = false;
-  emit(record, { reason: "discarded", revision: record.observedRevision });
+  emit(record, { reason: "discarded", revision: diskRevisionOf(record) });
   publish(record);
 }
 
@@ -231,18 +257,20 @@ export function openPluginFileDocument(target: PluginFileDocumentTarget): Plugin
     record = {
       key,
       panelId: target.panelId,
-      identityKey: `${target.projectId}\u0000${target.filePath}`,
+      identityKey: pluginFileDocumentIdentity(target.projectId, target.filePath),
       filePath: target.filePath,
       fileName: target.fileName,
       rootPath: target.rootPath,
       maxBytes: target.maxBytes,
       revision: null,
-      observedRevision: null,
+      observedState: null,
       draft: null,
       hostConflict: false,
       viewConflict: false,
       listeners: new Set(),
       mounts: 0,
+      pending: 0,
+      projection: null,
     };
     records.set(key, record);
   }
@@ -255,7 +283,7 @@ export function openPluginFileDocument(target: PluginFileDocumentTarget): Plugin
     document: createDocument(live, target.mode),
     retain: () => {
       live.mounts += 1;
-      if (records.get(live.key) !== live) records.set(live.key, live);
+      if (!records.has(live.key)) records.set(live.key, live);
       publish(live);
       let released = false;
       return () => {
@@ -266,30 +294,29 @@ export function openPluginFileDocument(target: PluginFileDocumentTarget): Plugin
       };
     },
     notifyDiskChange: async () => {
-      let revision: string | null;
+      let state: string;
       try {
         const result = await window.electron.fileDocument.read({
           rootPath: live.rootPath,
           filePath: live.filePath,
           maxBytes: live.maxBytes,
         });
-        // A file that grew past the ceiling or stopped decoding still changed.
-        if (result.status === "ok") revision = result.revision;
-        else if (result.status === "unavailable") revision = null;
-        else return;
+        // A file that grew past the ceiling or stopped decoding changed too;
+        // the view hears about it as a change with no readable revision.
+        state = result.status === "ok" ? result.revision : `status:${result.status}`;
       } catch {
         return;
       }
-      if (revision === live.observedRevision) return;
-      live.observedRevision = revision;
+      if (state === live.observedState) return;
+      live.observedState = state;
       // Nothing read yet means nothing to be stale against; the view's first
       // read sees whatever is there now.
-      if (live.revision === null || revision === live.revision) return;
+      if (live.revision === null || state === live.revision) return;
       if (live.draft !== null && !live.hostConflict) {
         live.hostConflict = true;
         publish(live);
       }
-      emit(live, { reason: "disk", revision });
+      emit(live, { reason: "disk", revision: diskRevisionOf(live) });
     },
   };
 }

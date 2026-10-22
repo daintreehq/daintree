@@ -3379,6 +3379,11 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
       const settingsViewIds = new Set(
         manifest.contributes.views.filter((view) => view.location === "settings").map((v) => v.id)
       );
+      const fileEditorViewIds = new Set(
+        manifest.contributes.views
+          .filter((view) => view.location === "fileEditor")
+          .map((view) => view.id)
+      );
       const sidebarViewIds = new Set(
         manifest.contributes.views.filter((view) => view.location === "sidebar").map((v) => v.id)
       );
@@ -3438,6 +3443,16 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
           });
           continue;
         }
+        // Nor does a file editor view, which mounts only in the file panel.
+        if (fileEditorViewIds.has(claim.viewId)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["contributes", "surfaces", slot, "viewId"],
+            message: `surfaces.${slot}.viewId "${claim.viewId}" names a location: "fileEditor" view — a surface draws a panel view, and a file editor view renders only in the file panel.`,
+            params: { errorCode: "surface_view_ref_file_editor" },
+          });
+          continue;
+        }
         if (sidebarViewIds.has(claim.viewId)) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
@@ -3481,11 +3496,6 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
       // `location: "fileEditor"` views — anything else would advertise a mode
       // that mounts nothing, or mount a panel or settings view somewhere it was
       // never written for.
-      const fileEditorViewIds = new Set(
-        manifest.contributes.views
-          .filter((view) => view.location === "fileEditor")
-          .map((view) => view.id)
-      );
       manifest.contributes.fileEditors.forEach((entry, index) => {
         if (entry.view === undefined || fileEditorViewIds.has(entry.view)) return;
         ctx.addIssue({

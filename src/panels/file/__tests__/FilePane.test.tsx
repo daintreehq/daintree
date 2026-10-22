@@ -3911,6 +3911,58 @@ describe("FilePane edit mode (#12323)", () => {
       expect(screen.queryByTestId("file-editor-picker")).toBeNull();
     });
 
+    it("skips a remembered editor too small for the file and offers one that fits", async () => {
+      seedWorktree();
+      fileEditorState.resolved = { maxBytes: 4 };
+      const roomy = candidate("acme.records", "Acme records", "edit");
+      roomy.editor.maxBytes = 1024;
+      fileEditorState.plugin.edit = [roomy];
+      useFileEditorChoicesStore.setState({ choices: { "edit:md": "host" }, loaded: true });
+      await renderPane({ fileViewMode: "edit", content: "# a long enough file\n" });
+      expect(radioLabels()).toEqual(["Source", "Rendered", "Edit · Acme records"]);
+      expect(await screen.findByTestId("plugin-file-editor-mock")).toBeTruthy();
+    });
+
+    it("keeps the built-in editor while it holds a draft, whatever was picked", async () => {
+      seedWorktree();
+      fileEditorState.plugin.edit = [candidate("acme.records", "Acme records", "edit")];
+      useFileEditorChoicesStore.setState({
+        choices: { "edit:md": "acme.records/main" },
+        loaded: true,
+      });
+      useFileDocumentStore.getState().setFileDocument("file-1", {
+        identityKey: "builtin-doc",
+        draftText: "# Plan (edited)\n",
+        dirty: true,
+        conflict: false,
+        save: async () => true,
+        discard: async () => {},
+      });
+      await renderPane({ fileViewMode: "edit" });
+      expect(radioLabels()).toEqual(["Source", "Rendered", "Edit"]);
+      expect(await screen.findByTestId("file-editor-mock")).toBeTruthy();
+      expect(screen.queryByTestId("plugin-file-editor-mock")).toBeNull();
+      expect(screen.queryByTestId("file-editor-picker")).toBeNull();
+    });
+
+    it("draws only the plugin viewer when the host's own reader refused the file", async () => {
+      seedWorktree();
+      fileEditorState.resolved = null;
+      fileEditorState.plugin.view = [candidate("acme.csv", "Acme CSV", "view")];
+      readMock.mockRejectedValue(new ClientAppError("FILE_TOO_LARGE", "too big"));
+      panelsById["file-1"] = {
+        id: "file-1",
+        kind: "file",
+        filePath: "/repo/data/table.csv",
+        worktreeId: WORKTREE_ID,
+        fileViewMode: "rendered",
+      };
+      render(paneElement());
+      await act(async () => {});
+      expect(await screen.findByTestId("plugin-file-editor-mock")).toBeTruthy();
+      expect(screen.queryByTestId("file-pane-unavailable")).toBeNull();
+    });
+
     it("never offers plugin editors in the read-only dialog", async () => {
       seedWorktree();
       fileEditorState.resolved = null;
