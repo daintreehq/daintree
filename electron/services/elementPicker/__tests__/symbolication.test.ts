@@ -320,9 +320,11 @@ describe("source map symbolication", () => {
     await expect(
       symbolicate(fake(cardMap(), { read: { ok: false, reason: "budget-exhausted" } }))
     ).resolves.toMatchObject({ ok: true, sourceMap: { sourceCheck: "unchecked" } });
+    // Gone, but still the file the frame is in: an earlier result pinned to it can say so.
     await expect(symbolicate(fake(cardMap(), { disk: {} }))).resolves.toEqual({
       ok: false,
       reason: "file-missing",
+      file: { workspaceId: "ws", path: "src/Card.tsx" },
     });
   });
 
@@ -340,17 +342,27 @@ describe("source map symbolication", () => {
   });
 
   it("reports a position the map does not cover as map-missing", async () => {
-    // Past the last line, and a segment that names no source.
+    // Past the last line, and a segment that names no source. A map of one
+    // source still says which file the frame is in, though not where.
+    const card = { workspaceId: "ws", path: "src/Card.tsx" };
     await expect(symbolicate(fake(cardMap()), v8(40, 1))).resolves.toEqual({
       ok: false,
       reason: "map-missing",
+      file: card,
     });
     const sourceless = cardMap({ mappings: "A;AAAA" });
     await expect(symbolicate(fake(sourceless), v8(1, 1))).resolves.toEqual({
       ok: false,
       reason: "map-missing",
+      file: card,
     });
     await expect(symbolicate(fake(cardMap({ sources: [null] })))).resolves.toEqual({
+      ok: false,
+      reason: "map-missing",
+    });
+    // With two sources, an unplaced position could be in either.
+    const bundled = cardMap({ sources: ["Card.tsx", "List.tsx"], sourcesContent: [CARD, LIST] });
+    await expect(symbolicate(fake(bundled), v8(40, 1))).resolves.toEqual({
       ok: false,
       reason: "map-missing",
     });

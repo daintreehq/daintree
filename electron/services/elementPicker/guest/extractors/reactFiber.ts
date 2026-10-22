@@ -230,6 +230,40 @@ export function isMemoImplementation(fiber: Fiber): boolean {
   return canonicalFiber(fiber) !== fiber;
 }
 
+/**
+ * The first fiber below `component` that the component's own render created
+ * from an element, so its `_debugStack` was captured while that render ran.
+ * Text, implicit fragments and anything passed in as children are skipped:
+ * the first carry no stack, and children were made by whoever passed them. A
+ * memo's implementation renders on its memo's behalf. Null when the component
+ * made nothing of its own within the budget.
+ */
+export function ownedElementFiber(component: Fiber, budget: Budget): Fiber | null {
+  const halves = new Set<Fiber>([component]);
+  const alternate = fiberField(component, "alternate");
+  if (alternate !== null) halves.add(alternate);
+  const pending: Fiber[] = [];
+  const first = fiberField(component, "child");
+  if (first !== null) pending.push(first);
+  while (pending.length > 0) {
+    if (!budget.spend()) return null;
+    const fiber = pending.pop()!;
+    const sibling = fiberField(fiber, "sibling");
+    if (sibling !== null) pending.push(sibling);
+    const owner = fiberField(fiber, "_debugOwner");
+    if (
+      owner !== null &&
+      halves.has(canonicalFiber(owner)) &&
+      field(fiber, "_debugStack") != null
+    ) {
+      return fiber;
+    }
+    const child = fiberField(fiber, "child");
+    if (child !== null) pending.push(child);
+  }
+  return null;
+}
+
 /** The innermost component above `fiber`, the memo standing for its implementation. */
 export function nearestComponent(fiber: Fiber, budget: Budget): Fiber | null {
   for (let next = parentOf(fiber); next !== null && budget.spend(); next = parentOf(next)) {

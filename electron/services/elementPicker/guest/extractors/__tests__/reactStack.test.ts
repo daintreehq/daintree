@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { creationFrames, readRawStack } from "../reactStack.js";
+import { componentFrame, creationFrames, readRawStack } from "../reactStack.js";
 
 const ctor = Error as unknown as { prepareStackTrace?: unknown };
 const original = Object.getOwnPropertyDescriptor(Error, "prepareStackTrace");
@@ -94,6 +94,40 @@ describe("creationFrames", () => {
     expect(frames[0]?.index).toBe(1);
     expect(frames[0]?.file).toContain("reactStack.test.ts");
     expect(frames[0]?.line).toBeGreaterThan(0);
+  });
+});
+
+describe("componentFrame", () => {
+  it("is the last frame above React's render entry: the function React called", () => {
+    const frame = componentFrame(
+      debugStack(
+        FACTORY,
+        "    at renderRow (http://localhost:5173/src/rows.tsx?t=4:8:12)",
+        "    at Array.map (<anonymous>)",
+        "    at Table (http://localhost:5173/src/Table.tsx?t=4:21:18)",
+        BOTTOM,
+        "    at renderWithHooks (http://localhost:5173/node_modules/.vite/deps/react-dom_client.js?v=1:5650:22)"
+      )
+    );
+    expect(frame).toEqual({
+      index: 3,
+      file: "http://localhost:5173/src/Table.tsx?t=4",
+      line: 21,
+      column: 18,
+    });
+  });
+
+  it("is nothing for a stack cut short of the marker, or one with no located frame above it", () => {
+    const deep = Array.from(
+      { length: 9 },
+      (_, depth) => `    at Level${depth} (http://localhost:5173/src/deep.ts:${depth + 1}:1)`
+    );
+    // Wherever the capture limit fell is not the component.
+    expect(componentFrame(debugStack(FACTORY, ...deep))).toBeNull();
+    expect(
+      componentFrame(debugStack(FACTORY, "    at Array.map (<anonymous>)", BOTTOM))
+    ).toBeNull();
+    expect(componentFrame({ stack: "TypeError: nope\n    at x (a.js:1:1)" })).toBeNull();
   });
 });
 

@@ -116,19 +116,34 @@ function parseFrame(line: string): { file: string; line: number; column: number 
  * bottom marker; its frames are all above the render entry, so they are kept.
  */
 export function creationFrames(error: unknown, limit: number): CreationFrames {
+  const { frames: located } = stackFrames(error);
+  return { frames: located.slice(0, limit), omitted: Math.max(0, located.length - limit) };
+}
+
+/**
+ * The frame React called the rendering component through: the last one above
+ * `react_stack_bottom_frame`, which is the function React invokes as the
+ * component (`Component(props)`, or a class instance's `render()`). An element
+ * the component itself created therefore says where that component is written,
+ * which none of its own call sites do. Null without the bottom marker: a stack
+ * cut short by the capture limit ends wherever the limit fell.
+ */
+export function componentFrame(error: unknown): CreationFrame | null {
+  const { frames, bottom } = stackFrames(error);
+  return bottom ? (frames.at(-1) ?? null) : null;
+}
+
+function stackFrames(error: unknown): { frames: CreationFrame[]; bottom: boolean } {
   const raw = readRawStack(error);
-  if (raw === null || !raw.startsWith(TOP_FRAME)) return { frames: [], omitted: 0 };
+  if (raw === null || !raw.startsWith(TOP_FRAME)) return { frames: [], bottom: false };
   const lines = raw.slice(TOP_FRAME.length, MAX_STACK_CHARS).split("\n", MAX_STACK_LINES);
   const frames: CreationFrame[] = [];
-  let omitted = 0;
   // Line 0 is React's own factory frame.
   for (let index = 1; index < lines.length; index += 1) {
     const line = lines[index]!;
-    if (line.includes(BOTTOM_FRAME)) break;
+    if (line.includes(BOTTOM_FRAME)) return { frames, bottom: true };
     const location = parseFrame(line);
-    if (location === null) continue;
-    if (frames.length < limit) frames.push({ index, ...location });
-    else omitted += 1;
+    if (location !== null) frames.push({ index, ...location });
   }
-  return { frames, omitted };
+  return { frames, bottom: false };
 }

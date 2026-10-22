@@ -5,6 +5,12 @@
  * rendered DOM roots, and the creation frames React captured, raw, for the
  * host to map. No hook is installed and nothing in the page is written to.
  *
+ * Each component record carries two kinds of frame, which are different
+ * claims: `component-invocation`, from the component's own element, where it
+ * was called; and one `component-definition`, from an element the component
+ * itself created, whose last frame above React's render entry is the function
+ * React ran as the component, which is where it is written.
+ *
  * Hover pays for one walk up to the nearest component and its name; the
  * owners, roots and stacks are read on selection only.
  */
@@ -33,12 +39,17 @@ import {
   parentOf,
   tagOf,
   canonicalFiber,
+  ownedElementFiber,
   type Fiber,
 } from "./reactFiber.js";
-import { creationFrames } from "./reactStack.js";
+import { componentFrame, creationFrames, type CreationFrame } from "./reactStack.js";
 
-/** Restated from `COMPONENT_LIMITS`: a value import would bundle zod into the page. */
-const LIMITS = { records: 64, roots: 32, candidates: 4 } as const;
+/**
+ * Restated from `COMPONENT_LIMITS`: a value import would bundle zod into the
+ * page. A record's four candidates are its invocation frames and its one
+ * definition frame.
+ */
+const LIMITS = { records: 64, roots: 32, candidates: 4, invocations: 3 } as const;
 
 const STEPS = {
   hover: 2_048,
@@ -47,6 +58,9 @@ const STEPS = {
   roots: 32_768,
   /** One component's share of `roots`, so an app-sized outer component cannot starve the rest. */
   rootsPerRecord: 4_096,
+  /** Looking for an element a component made itself, which is almost always its first child. */
+  definitions: 8_192,
+  definitionsPerRecord: 512,
 } as const;
 
 /**
@@ -128,33 +142,49 @@ class CandidateWriter {
     const { frames, omitted } = creationFrames(field(fiber, "_debugStack"), limit);
     this.omitted += omitted;
     for (const frame of frames) {
-      const size = frame.file.length + CANDIDATE_OVERHEAD_CHARS;
-      if (this.chars + size > MAX_CANDIDATE_CHARS) {
-        this.omitted += 1;
-        continue;
-      }
-      this.chars += size;
-      this.next += 1;
-      out.push({
-        kind,
-        candidateId: `react-frame-${this.next}`,
-        framework: "react",
-        extraction: {
-          kind: "generated-stack-frame",
-          field: "_debugStack",
-          frameIndex: frame.index,
-        },
-        file: frame.file,
-        location: {
-          lineBase: 1,
-          columnBase: 1,
-          columnUnit: "utf16",
-          line: frame.line,
-          column: frame.column,
-        },
-      });
+      const candidate = this.candidate(kind, frame);
+      if (candidate !== null) out.push(candidate);
     }
     return out;
+  }
+
+  /** Where `component` is written, from an element its own render made; nothing when it made none. */
+  writeDefinition(component: Fiber, budget: Budget): SourceCandidate[] {
+    const owned = ownedElementFiber(component, budget);
+    const frame = owned === null ? null : componentFrame(field(owned, "_debugStack"));
+    const candidate = frame === null ? null : this.candidate("component-definition", frame);
+    return candidate === null ? [] : [candidate];
+  }
+
+  private candidate(
+    kind: "element-creation" | "component-invocation" | "component-definition",
+    frame: CreationFrame
+  ): SourceCandidate | null {
+    const size = frame.file.length + CANDIDATE_OVERHEAD_CHARS;
+    if (this.chars + size > MAX_CANDIDATE_CHARS) {
+      this.omitted += 1;
+      return null;
+    }
+    this.chars += size;
+    this.next += 1;
+    return {
+      kind,
+      candidateId: `react-frame-${this.next}`,
+      framework: "react",
+      extraction: {
+        kind: "generated-stack-frame",
+        field: "_debugStack",
+        frameIndex: frame.index,
+      },
+      file: frame.file,
+      location: {
+        lineBase: 1,
+        columnBase: 1,
+        columnUnit: "utf16",
+        line: frame.line,
+        column: frame.column,
+      },
+    };
   }
 }
 
@@ -271,12 +301,15 @@ function selectionOf(
   const sourceCandidates =
     development && host.own ? writer.write(host.fiber, "element-creation", LIMITS.candidates) : [];
   if (development) {
+    const definitionBudget = new Budget(STEPS.definitions);
     records.forEach((record, index) => {
-      record.sourceCandidates = writer.write(
-        fibers[index]!,
-        "component-invocation",
-        LIMITS.candidates
-      );
+      record.sourceCandidates = [
+        ...writer.write(fibers[index]!, "component-invocation", LIMITS.invocations),
+        ...writer.writeDefinition(
+          fibers[index]!,
+          new Budget(STEPS.definitionsPerRecord, definitionBudget)
+        ),
+      ];
     });
   }
 

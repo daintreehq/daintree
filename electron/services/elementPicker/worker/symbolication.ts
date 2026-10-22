@@ -46,7 +46,17 @@ export type Symbolication =
       /** What was on disk when the map's source was compared with it; null when it was not. */
       fileRevision: FileRevision | null;
     }
-  | { ok: false; reason: UnavailableReason };
+  | {
+      ok: false;
+      reason: UnavailableReason;
+      /**
+       * The file the frame is in even so, when the map does not place the
+       * position but names that one source and nothing else, as a dev server's
+       * map of one module does. Enough to say the file has changed since an
+       * earlier result was pinned to it; never a position in it.
+       */
+      file?: SourceFileRef;
+    };
 
 /**
  * Turns generated frames into authored positions. A source map is one way to
@@ -279,7 +289,8 @@ type SourceVerdict =
       sourceCheck: SourceContentCheck;
       fileRevision: FileRevision | null;
     }
-  | Unavailable;
+  /** With the file when it was located and then could not be read. */
+  | (Unavailable & { file?: SourceFileRef });
 
 /**
  * One resolve's symbolicator. Every frame in one module shares one fetch of
@@ -332,7 +343,7 @@ export function createSourceMapSymbolicator(access: ResolverSourceAccess): Frame
       if (read.reason === "budget-exhausted") {
         return { ok: true, file, sourceCheck: "unchecked", fileRevision: null };
       }
-      return read;
+      return { ok: false, reason: read.reason, file };
     }
     const matches = withoutBom(textDecoder.decode(read.value.bytes)) === withoutBom(source.content);
     return {
@@ -341,6 +352,35 @@ export function createSourceMapSymbolicator(access: ResolverSourceAccess): Frame
       sourceCheck: matches ? "matches" : "differs",
       fileRevision: read.value.revision,
     };
+  }
+
+  function checkOnce(
+    loaded: Extract<LoadedMap, { ok: true }>,
+    url: string,
+    index: number,
+    raw: string,
+    source: MapSource,
+    signal: AbortSignal
+  ): Promise<SourceVerdict> {
+    const key = `${loaded.revision}\n${url}\n${index}`;
+    let checked = checks.get(key);
+    if (!checked) {
+      checked = check(url, raw, source, signal);
+      checks.set(key, checked);
+    }
+    return checked;
+  }
+
+  /** A position the map leaves unplaced, attributed to its file when the map names only one. */
+  async function unplaced(
+    loaded: Extract<LoadedMap, { ok: true }>,
+    url: string,
+    signal: AbortSignal
+  ): Promise<Symbolication> {
+    const [only, ...rest] = loaded.decoded.sources;
+    if (!only || rest.length > 0 || only.raw === null) return unavailable("map-missing");
+    const { file } = await checkOnce(loaded, url, 0, only.raw, only, signal);
+    return file ? { ok: false, reason: "map-missing", file } : unavailable("map-missing");
   }
 
   return {
@@ -367,7 +407,7 @@ export function createSourceMapSymbolicator(access: ResolverSourceAccess): Frame
         return unavailable("map-missing");
       }
       if (found.source === null || found.line === null || found.column === null) {
-        return unavailable("map-missing");
+        return unplaced(loaded, frame.url, signal);
       }
       const index = Number(found.source);
       const source = loaded.decoded.sources[index];
@@ -382,13 +422,7 @@ export function createSourceMapSymbolicator(access: ResolverSourceAccess): Frame
         return unavailable("map-missing");
       }
 
-      const key = `${loaded.revision}\n${frame.url}\n${index}`;
-      let checked = checks.get(key);
-      if (!checked) {
-        checked = check(frame.url, source.raw, source, signal);
-        checks.set(key, checked);
-      }
-      const verdict = await checked;
+      const verdict = await checkOnce(loaded, frame.url, index, source.raw, source, signal);
       if (!verdict.ok) return verdict;
 
       return {
