@@ -5,6 +5,33 @@ import type { ErrorRecord, ErrorType, GitOperationReason } from "../../types/ipc
 describe("formatErrorMessage", () => {
   const FALLBACK = "Couldn't load thing";
 
+  describe("AppError wire encoding", () => {
+    const wire = (rest: string) => `[AppError|${rest}`;
+
+    it("shows the user message, never the prefix", () => {
+      const user = "Greg’s Mac Studio has control of this project. Take control first.";
+      const error = new Error(wire(`DRIVEN_ELSEWHERE|${encodeURIComponent(user)}] terminal:spawn`));
+      expect(formatErrorMessage(error, FALLBACK)).toBe(user);
+    });
+
+    it("falls back to the decoded message when there is no user message", () => {
+      expect(
+        formatErrorMessage(new Error(wire("VALIDATION] No view to hand the lease to")), FALLBACK)
+      ).toBe("No view to hand the lease to");
+    });
+
+    it("decodes strings and message-only objects too", () => {
+      expect(formatErrorMessage(wire("X_Y] plain"), FALLBACK)).toBe("plain");
+      expect(formatErrorMessage({ message: wire("X_Y] plain") }, FALLBACK)).toBe("plain");
+    });
+
+    it("leaves the error unmodified so the code can still be decoded", () => {
+      const error = new Error(wire("HOST_DISCONNECTED|Couldn't%20reach] gone"));
+      formatErrorMessage(error, FALLBACK);
+      expect(error.message.startsWith("[AppError|HOST_DISCONNECTED")).toBe(true);
+    });
+  });
+
   describe("Error instances", () => {
     it("returns the message of a real Error", () => {
       expect(formatErrorMessage(new Error("boom"), FALLBACK)).toBe("boom");

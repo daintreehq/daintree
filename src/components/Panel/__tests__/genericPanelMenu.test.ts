@@ -1,4 +1,8 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+const remoteBound = vi.hoisted(() => ({ value: false }));
+vi.mock("@/clients/operationsClient", () => ({ isRemoteBoundView: () => remoteBound.value }));
+
 import {
   getPanelKindRegistrySnapshot,
   panelKindHasPty,
@@ -171,6 +175,17 @@ describe("readPanelKindMenuCapabilities", () => {
     expect(
       readPanelKindMenuCapabilities(snapshot, UNDOCKABLE_PLUGIN_KIND).pluginBackupId
     ).toBeNull();
+  });
+
+  it("doesn't offer Back up data… in a remote-bound view", () => {
+    registerPluginKind(VIEW_PLUGIN_KIND, { hasPluginDatabases: true });
+    const snapshot = getPanelKindRegistrySnapshot();
+    remoteBound.value = true;
+    try {
+      expect(readPanelKindMenuCapabilities(snapshot, VIEW_PLUGIN_KIND).pluginBackupId).toBeNull();
+    } finally {
+      remoteBound.value = false;
+    }
   });
 
   it("offers a kind's own menu items in declared order, once each action is registered", () => {

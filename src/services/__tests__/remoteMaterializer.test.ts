@@ -148,22 +148,31 @@ describe("remote materialize", () => {
     expect(deps.reportFailure).toHaveBeenCalledWith({
       title: "Couldn't send invoice.pdf",
       message: "Couldn't read invoice.pdf on This Mac.",
+      code: "INVALID_PATH",
     });
   });
 
   it("reports the host's own message for a failed upload", async () => {
     const { materialize, fileTransfer, deps } = setup();
     fileTransfer.uploadLocalFile.mockRejectedValueOnce(
-      Object.assign(new Error("x"), {
-        code: "PAYLOAD_TOO_LARGE",
-        userMessage: "studio-01 is out of disk space.",
-      })
+      // The shape the bridge leaves: no properties, the code in the message.
+      new Error(
+        `[AppError|PAYLOAD_TOO_LARGE|${encodeURIComponent("studio-01 is out of disk space.")}] upload failed`
+      )
     );
     await expect(materialize({ kind: "local-file", path: "/Users/me/a.txt" })).rejects.toThrow();
     expect(deps.reportFailure).toHaveBeenCalledWith({
       title: "Couldn't send a.txt",
       message: "studio-01 is out of disk space.",
+      code: "PAYLOAD_TOO_LARGE",
     });
+  });
+
+  it("stays silent for a wire-encoded cancellation", async () => {
+    const { materialize, fileTransfer, deps } = setup();
+    fileTransfer.uploadLocalFile.mockRejectedValueOnce(new Error("[AppError|CANCELLED] cancelled"));
+    await expect(materialize({ kind: "local-file", path: "/Users/me/a.txt" })).rejects.toThrow();
+    expect(deps.reportFailure).not.toHaveBeenCalled();
   });
 
   it("cancels the upload by its operation id when the signal aborts", async () => {

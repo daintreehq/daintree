@@ -1,5 +1,16 @@
 import type { ErrorRecord, ErrorType, GitOperationReason } from "../types/ipc/errors.js";
+import { decodeAppErrorWire } from "./appErrorWire.js";
 import { getGitRecoveryHint } from "./gitOperationErrors.js";
+
+/**
+ * An AppError that crossed the contextBridge carries its code and user message
+ * as an `[AppError|CODE|…]` prefix on the message; show the error's own words,
+ * never the transport encoding.
+ */
+function displayText(message: string): string {
+  const decoded = decodeAppErrorWire(message);
+  return decoded ? (decoded.userMessage ?? decoded.message) : message;
+}
 
 /**
  * Extract a human-readable message from an unknown caught error, falling back
@@ -14,13 +25,13 @@ import { getGitRecoveryHint } from "./gitOperationErrors.js";
  * `instanceof Error` but still carry the original message.
  */
 export function formatErrorMessage(error: unknown, fallback: string): string {
-  if (error instanceof Error) return error.message;
-  if (typeof error === "string") return error;
+  if (error instanceof Error) return displayText(error.message);
+  if (typeof error === "string") return displayText(error);
   if (typeof error === "object" && error !== null) {
     try {
       if ("message" in error) {
         const message = (error as { message: unknown }).message;
-        if (typeof message === "string") return message;
+        if (typeof message === "string") return displayText(message);
       }
     } catch {
       // Proxies with throwing `has` traps or accessor errors fall back.
