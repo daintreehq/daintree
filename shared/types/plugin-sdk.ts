@@ -42,7 +42,7 @@ export type {
 
 // ── View component props ────────────────────────────────────────────
 
-export type { PanelViewProps } from "./plugin.js";
+export type { PanelViewProps, PluginViewHostContext, PluginViewHostKind } from "./plugin.js";
 // A value, not a type: a bundled view marking its own portal container needs
 // the attribute name at runtime. A raw `plugin://` view cannot import this, so
 // `PanelViewProps.styleRootAttributes` carries the same thing as a prop.

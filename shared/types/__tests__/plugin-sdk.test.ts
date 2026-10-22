@@ -19,6 +19,8 @@ import type {
   ViewContribution,
   ViewLocation,
   PanelViewProps,
+  PluginViewHostContext,
+  PluginViewHostKind,
   PluginPanelLifecycleEvent,
   PluginPanelLifecyclePhase,
   PanelReloadResult,
@@ -587,6 +589,10 @@ describe("plugin-sdk boundary", () => {
       expectTypeOf(props.styleRootAttributes).toEqualTypeOf<Readonly<Record<string, string>>>();
       // Optional: a host that cannot police reload loops offers none (#12609).
       expectTypeOf(props.requestReload).toEqualTypeOf<(() => void) | undefined>();
+      // Where the view is mounted (#13770), as a named SDK type. Optional so a
+      // view built against it still runs on a host that predates it.
+      expectTypeOf(props.hostContext).toEqualTypeOf<PluginViewHostContext | undefined>();
+      expectTypeOf<PluginViewHostKind>().toEqualTypeOf<"panel" | "surface" | "settings">();
     });
 
     it("exposes the panel lifecycle contract as named SDK types", () => {

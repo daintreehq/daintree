@@ -17,6 +17,7 @@ import { getPluginAgentRegistry } from "../../../shared/config/pluginAgentRegist
 import { getPluginRecipes } from "./PluginRecipeRegistry.js";
 import { getRegisteredFileDecorationProviders } from "../fileDecorationRegistry.js";
 import { getPluginTours, notifyPluginToursVisibilityChanged } from "./PluginTourRegistry.js";
+import { getPluginHostedViews } from "./PluginHostedViewRegistry.js";
 import { getPluginCustomIcons } from "../../../shared/config/pluginCustomIconRegistry.js";
 import {
   hasProjectPluginVisibilityOverrides,
@@ -207,6 +208,11 @@ export function getPluginToursForProject(projectId: string | null | undefined) {
   return selectContributionsForProject(getPluginTours(), (tour) => tour.pluginId, projectId);
 }
 
+/** Plugin views that mount outside the panel grid, visible in a view of `projectId` (#13770). */
+export function getPluginHostedViewsForProject(projectId: string | null | undefined) {
+  return selectContributionsForProject(getPluginHostedViews(), (view) => view.pluginId, projectId);
+}
+
 /** Plugin-shipped custom icons visible in a view of `projectId` (#13143). */
 export function getPluginCustomIconsForProject(projectId: string | null | undefined) {
   return selectContributionsForProject(getPluginCustomIcons(), (icon) => icon.pluginId, projectId);
@@ -319,6 +325,8 @@ export class PluginContributionBroadcaster {
   private toursBroadcastPending = false;
   /** Same as {@link toursBroadcastPending}: icon snapshots replace wholesale. */
   private iconsBroadcastPending = false;
+  /** Same as {@link toursBroadcastPending}: hosted-view snapshots replace wholesale. */
+  private hostedViewsBroadcastPending = false;
   /**
    * Same coalescing rationale as {@link panelKindsBroadcastPending}. A plugin's
    * `activate()` typically calls `host.registerAction` many times in one
@@ -415,6 +423,7 @@ export class PluginContributionBroadcaster {
     this.scheduleContextMenuItemsBroadcast(true);
     this.scheduleToursBroadcast();
     this.schedulePluginIconsBroadcast();
+    this.scheduleHostedViewsBroadcast();
     this.scheduleRecipesBroadcast(true);
     // The native menus list plugin items and tours per project too; rebuild them.
     notifyPluginToursVisibilityChanged();
@@ -693,6 +702,20 @@ export class PluginContributionBroadcaster {
     });
   }
 
+  /** Coalesce hosted-view registry mutations into one scoped snapshot per tick (#13770). */
+  scheduleHostedViewsBroadcast(): void {
+    if (this.deps.isDisposed()) return;
+    if (this.hostedViewsBroadcastPending) return;
+    this.hostedViewsBroadcastPending = true;
+    this.defer(() => {
+      this.hostedViewsBroadcastPending = false;
+      if (this.deps.isDisposed()) return;
+      this.emitScoped("plugin:hosted-views-changed", (projectId) => ({
+        views: forProject(getPluginHostedViews(), (view) => view.pluginId, projectId),
+      }));
+    });
+  }
+
   /**
    * Replay the current actions / panel-kinds / toolbar-button snapshots to a
    * single target webContents. Used by the cold-start view-ready hook so a
@@ -782,6 +805,10 @@ export class PluginContributionBroadcaster {
       {
         name: "plugin:icons-changed",
         payload: { icons: forProject(getPluginCustomIcons(), (icon) => icon.pluginId, target) },
+      },
+      {
+        name: "plugin:hosted-views-changed",
+        payload: { views: forProject(getPluginHostedViews(), (view) => view.pluginId, target) },
       },
       // Narrowed by instance ownership, not by `forProject`: a runtime status is
       // health metadata about a backend, so what governs it is which project the

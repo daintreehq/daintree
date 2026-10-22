@@ -19,6 +19,8 @@ import type {
   PanelViewProps,
   PluginPanelToolbarItemState,
   PluginSettingsViewContext,
+  PluginViewHostContext,
+  PluginViewHostKind,
 } from "@shared/types/plugin";
 import { pluginManifestIdFromInstanceKey } from "@shared/types/plugin";
 import {
@@ -100,12 +102,28 @@ export interface PluginViewContentConfig {
   componentPath: string;
   extensionId: string;
   /**
-   * The id names no registered panel kind — a plugin's settings view. Such a
-   * view is not torn down by `plugin:panel-kinds-changed` (its id is never in
-   * that snapshot, so every broadcast would read as removal); its host unmounts
-   * it when the plugin goes away instead.
+   * The id names no registered panel kind — a view hosted outside the panel
+   * grid (`PluginHostedView`). Such a view is not torn down by
+   * `plugin:panel-kinds-changed` (its id is never in that snapshot, so every
+   * broadcast would read as removal); its host retires it when the plugin goes
+   * away instead.
    */
   standalone?: boolean;
+}
+
+/**
+ * One frozen context per host kind, so a view receives the same object on
+ * every render and a memo keyed on it never churns.
+ */
+const HOST_CONTEXTS: Readonly<Record<PluginViewHostKind, PluginViewHostContext>> = {
+  panel: Object.freeze({ kind: "panel" }),
+  surface: Object.freeze({ kind: "surface" }),
+  settings: Object.freeze({ kind: "settings" }),
+};
+
+/** The stable {@link PanelViewProps.hostContext} for a host kind. */
+export function pluginViewHostContext(kind: PluginViewHostKind): PluginViewHostContext {
+  return HOST_CONTEXTS[kind];
 }
 
 /**
@@ -194,6 +212,11 @@ export interface PluginViewContentProps {
   offerToolbar?: boolean;
   /** Forwarded as `PanelViewProps.settingsContext`, for a settings view's host only. */
   settingsContext?: PluginSettingsViewContext;
+  /**
+   * Forwarded as `PanelViewProps.hostContext`. Panel hosts leave it unset and
+   * get `"panel"`; a host outside the grid passes its own kind.
+   */
+  hostContext?: PluginViewHostContext;
 }
 
 /**
@@ -987,6 +1010,7 @@ export function makePluginViewContent(
     offerRequestReload = false,
     offerToolbar = false,
     settingsContext,
+    hostContext = HOST_CONTEXTS.panel,
   }: PluginViewContentProps) {
     // Resolved before any attempt is built so the first attempt already takes
     // the right path. Reactive, because a slot registered after this panel
@@ -1901,6 +1925,7 @@ export function makePluginViewContent(
                           worktreeId={worktreeId}
                           styleRootAttributes={styleRootProps}
                           {...(settingsContext ? { settingsContext } : {})}
+                          hostContext={hostContext}
                         />
                       </PluginKitViewHostContext.Provider>
                     </PluginKitOwnerContext.Provider>

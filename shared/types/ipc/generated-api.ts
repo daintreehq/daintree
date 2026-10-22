@@ -826,6 +826,9 @@ export interface GeneratedElectronAPI {
     getForgeProviders(
       ...args: IpcInvokeMap["plugin:forge-providers-get"]["args"]
     ): Promise<IpcInvokeMap["plugin:forge-providers-get"]["result"]>;
+    getHostedViews(
+      ...args: IpcInvokeMap["plugin:hosted-views-get"]["args"]
+    ): Promise<IpcInvokeMap["plugin:hosted-views-get"]["result"]>;
     getIcons(
       ...args: IpcInvokeMap["plugin:icons-get"]["args"]
     ): Promise<IpcInvokeMap["plugin:icons-get"]["result"]>;

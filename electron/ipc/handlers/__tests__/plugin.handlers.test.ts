@@ -211,6 +211,11 @@ import {
   clearAllPluginContributionScopes,
   setPluginContributionScope,
 } from "../../../services/plugin/PluginContributionBroadcaster.js";
+import {
+  clearPluginHostedViewRegistry,
+  registerPluginHostedViews,
+} from "../../../services/plugin/PluginHostedViewRegistry.js";
+import type { PluginHostedViewDescriptor } from "../../../../shared/types/plugin.js";
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -2582,6 +2587,38 @@ describe("plugin install jobs (#11302)", () => {
       await expect(inFlight).resolves.toEqual([tour]);
     });
 
+    it("plugin:hosted-views-get serves each project only the views it may see (#13770)", async () => {
+      const LOCAL = "project__project-a__acme.local";
+      const view = (pluginId: string): PluginHostedViewDescriptor => ({
+        id: `plugin-view:${pluginId}/prefs`,
+        pluginId,
+        viewId: "prefs",
+        location: "settings",
+        name: `${pluginId} settings`,
+        componentPath: `plugin://${pluginId}/prefs.js`,
+      });
+      registerPluginHostedViews("acme.tools", [view("acme.tools")]);
+      registerPluginHostedViews(LOCAL, [view(LOCAL)]);
+      setPluginContributionScope(LOCAL, "project-a");
+      const pull = () => getHandler("plugin:hosted-views-get")({ sender: { id: 1 } });
+
+      try {
+        // A project plugin's view reaches only its own project.
+        mockGetProjectForWebContents.mockReturnValue("project-b");
+        await expect(pull()).resolves.toEqual([view("acme.tools")]);
+        mockGetProjectForWebContents.mockReturnValue("project-a");
+        await expect(pull()).resolves.toEqual([view("acme.tools"), view(LOCAL)]);
+
+        // An installed plugin's view reaches only projects that show it.
+        hidePluginInProject("project-a", "acme.tools");
+        await expect(pull()).resolves.toEqual([view(LOCAL)]);
+        mockGetProjectForWebContents.mockReturnValue("project-b");
+        await expect(pull()).resolves.toEqual([view("acme.tools")]);
+      } finally {
+        clearPluginHostedViewRegistry();
+      }
+    });
+
     it("plugin:recipes-get serves only the recipes the sender's project shows, after init (#13765)", async () => {
       const { pluginService } = await import("../../../services/PluginService.js");
       const waitForInit = vi.mocked(pluginService.waitForInit);
@@ -3114,8 +3151,8 @@ describe("cross-project plugin control", () => {
     expect(mockUnregisterPluginAction).not.toHaveBeenCalled();
   });
 
-  it("applies the same ownership rule to a project plugin's settings view", async () => {
-    const settingsKind = `plugin-settings-view:${INSTANCE_A}`;
+  it("applies the same ownership rule to a project plugin's view hosted outside the grid", async () => {
+    const settingsKind = `plugin-view:${INSTANCE_A}/prefs`;
     mockGetProjectForWebContents.mockReturnValue(PROJECT_B);
     await expect(
       getHandler("plugin:activate-for-view")({ sender: { id: 1 } }, settingsKind)
@@ -3123,7 +3160,7 @@ describe("cross-project plugin control", () => {
     await expect(
       getHandler("plugin:activate-for-view")(
         { sender: { id: 1 } },
-        "plugin-settings-view:project____acme.dashboard"
+        "plugin-view:project____acme.dashboard/prefs"
       )
     ).rejects.toThrow(/different project/);
     expect(mockActivatePluginForView).not.toHaveBeenCalled();

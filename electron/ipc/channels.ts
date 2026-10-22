@@ -1145,6 +1145,8 @@ export const CHANNELS = {
   PLUGIN_RECIPES_GET: "plugin:recipes-get",
   /** Plugin tours visible in the sender's project (#12773). */
   PLUGIN_TOURS_GET: "plugin:tours-get",
+  /** Plugin views that mount outside the panel grid, visible in the sender's project (#13770). */
+  PLUGIN_HOSTED_VIEWS_GET: "plugin:hosted-views-get",
   /** Plugin-shipped custom icons visible in the sender's project (#13143). */
   PLUGIN_ICONS_GET: "plugin:icons-get",
   /** Append one run timestamp to a plugin recipe's sidecar metadata (#11860). */

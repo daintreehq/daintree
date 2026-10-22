@@ -2085,6 +2085,12 @@ export interface IpcEventMap {
     tours: import("../plugin.js").PluginTourDescriptor[];
   };
 
+  // Plugin views that mount outside the panel grid (#13770), scoped to the
+  // view's project. A full snapshot every time; the renderer replaces its copy.
+  "plugin:hosted-views-changed": {
+    views: import("../plugin.js").PluginHostedViewDescriptor[];
+  };
+
   // Plugin-shipped custom icons visible to this view (#13143). A full
   // snapshot every time; the renderer replaces its copy wholesale.
   "plugin:icons-changed": {
@@ -2359,6 +2365,7 @@ export type IpcEventBusMap = Pick<
   // Plugin recipe registry (global broadcast)
   | "plugin:recipes-changed"
   | "plugin:tours-changed"
+  | "plugin:hosted-views-changed"
   | "plugin:icons-changed"
   // Plugin file-decoration invalidation (global broadcast)
   | "plugin:decorations-changed"
