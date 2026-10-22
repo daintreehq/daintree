@@ -57,7 +57,12 @@ import {
 } from "./pluginToolbarBadge";
 import { presentPluginToolbarButton } from "./pluginToolbarButtonState";
 import { usePluginToolbarButtonState } from "@/store/pluginToolbarStateStore";
-import { PluginToolbarPopover } from "./PluginToolbarPopover";
+import {
+  PluginToolbarPopover,
+  focusToolbarControl,
+  isHiddenToolbarControl,
+  pluginCommandFocusTarget,
+} from "./PluginToolbarPopover";
 
 export type PluginToolbarConfigs = ReadonlyMap<string, ToolbarButtonConfig>;
 
@@ -499,6 +504,7 @@ export function PluginTrayButton({
   // back out of the popover onto this button — which reads as an outside focus
   // and dismisses it.
   const pendingPopoverRef = useRef<string | null>(null);
+  const trayButtonRef = useRef<HTMLButtonElement>(null);
   const openPopover = usePluginToolbarPopoverStore((s) => s.open);
 
   const groups = useMemo(
@@ -611,6 +617,7 @@ export function PluginTrayButton({
                       the menu. */}
                     <PopoverAnchor asChild restoreFocus>
                       <Button
+                        ref={trayButtonRef}
                         variant="ghost"
                         size="icon"
                         data-toolbar-item={dataToolbarItem}
@@ -662,7 +669,16 @@ export function PluginTrayButton({
               // first would only flash a ring on the way.
               e.preventDefault();
               wasPointerCloseRef.current = false;
-              openPopover(pendingPopover, "tray");
+              const tray = trayButtonRef.current;
+              if (tray === null || !isHiddenToolbarControl(tray)) {
+                openPopover(pendingPopover, "tray");
+                return;
+              }
+              // The tray moved into overflow while its menu was open: a popover
+              // would hang off a button nobody can see, so focus goes where the
+              // command lives now instead.
+              const target = pluginCommandFocusTarget(pendingPopover);
+              if (target !== null) focusToolbarControl(target);
               return;
             }
             // Skip focus restoration for pointer dismissals so the trigger

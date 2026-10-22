@@ -65,7 +65,12 @@ import {
   groupPluginToolbarButtons,
   type PluginTrayGroup,
 } from "./PluginTrayButton";
-import { PluginToolbarPopover, closePluginToolbarPopoverIfHidden } from "./PluginToolbarPopover";
+import {
+  PluginToolbarPopover,
+  closePluginToolbarPopoverIfHidden,
+  focusToolbarControl,
+  pluginCommandFocusTarget,
+} from "./PluginToolbarPopover";
 import { PopoverAnchor } from "@/components/ui/popover";
 import { usePluginToolbarPopoverStore } from "@/store/pluginToolbarPopoverStore";
 import {
@@ -313,20 +318,6 @@ interface OverflowMenuProps {
   branchRow?: { label: string; copyLabel: string; copyValue: string } | null;
 }
 
-/**
- * The focusable control of a toolbar button that is on the toolbar right now —
- * not one an overflow wrapper is holding hidden for measurement.
- */
-function visibleToolbarButton(id: string): HTMLElement | null {
-  for (const wrapper of document.querySelectorAll<HTMLElement>("[data-toolbar-button-id]")) {
-    if (wrapper.dataset.toolbarButtonId !== id || wrapper.getAttribute("aria-hidden") === "true") {
-      continue;
-    }
-    return wrapper.querySelector<HTMLElement>("[data-toolbar-item]");
-  }
-  return null;
-}
-
 // Overflow `…` menu. A component (not just a render helper) so the trigger can
 // stay mounted across the empty↔non-empty transition and animate its entry /
 // exit via CSS (issue #9821) while `open` stays controlled — avoiding React's
@@ -404,13 +395,10 @@ function OverflowMenu({
   }, [isEmpty]);
   // The `…` button hides with nothing to hold, and a plugin popover hanging off
   // it would be left pointing at nothing. What it held is back on the toolbar,
-  // so focus goes to the button itself, or to the tray it came out of.
+  // which is where focus goes.
   useEffect(() => {
     if (!isEmpty) return;
-    closePluginToolbarPopoverIfHidden(
-      (opening) => opening.origin === popoverOrigin,
-      (opening) => visibleToolbarButton(opening.buttonId) ?? visibleToolbarButton("plugin-tray")
-    );
+    closePluginToolbarPopoverIfHidden((opening) => opening.origin === popoverOrigin);
   }, [isEmpty, popoverOrigin]);
   // Set in onPointerDownOutside, read in onCloseAutoFocus. Suppresses focus
   // restoration for pointer dismissals so the ellipsis button doesn't keep its
@@ -495,14 +483,20 @@ function OverflowMenu({
           onCloseAutoFocus={(e) => {
             const pendingPopover = pendingPopoverRef.current;
             pendingPopoverRef.current = null;
-            // Not if the menu emptied while it closed: the `…` button it would
-            // hang off is gone, and the row's button is back on the toolbar.
-            if (pendingPopover !== null && !isEmpty) {
+            if (pendingPopover !== null) {
               // The popover takes focus into itself; returning it to the button
               // first would only flash a ring on the way.
               e.preventDefault();
               overflowMenuPointerCloseRef.current = false;
-              openPopover(pendingPopover, popoverOrigin);
+              if (!isEmpty) {
+                openPopover(pendingPopover, popoverOrigin);
+                return;
+              }
+              // The menu emptied while it closed: the `…` button the popover
+              // would hang off, and would hand focus back to, is gone, and the
+              // row's command is back on the toolbar.
+              const target = pluginCommandFocusTarget(pendingPopover);
+              if (target !== null) focusToolbarControl(target);
               return;
             }
             if (overflowMenuPointerCloseRef.current) {
@@ -2314,15 +2308,10 @@ export function Toolbar({
       (opening) =>
         (opening.origin === "button" && hiddenIds.has(opening.buttonId)) ||
         (opening.origin === "tray" && hiddenIds.has("plugin-tray")),
-      (opening) => {
-        const id = opening.origin === "tray" ? "plugin-tray" : opening.buttonId;
-        const side = rightHiddenIds.includes(id) ? "right" : "left";
-        return (
-          toolbarRef.current?.querySelector<HTMLElement>(
-            `[data-toolbar-overflow-trigger][data-toolbar-overflow-side="${side}"][data-visible="true"]`
-          ) ?? null
-        );
-      }
+      (opening) =>
+        rightHiddenIds.includes(opening.origin === "tray" ? "plugin-tray" : opening.buttonId)
+          ? "right"
+          : "left"
     );
   }, [measuredLeftOverflow, measuredRightOverflow, demotedIds, copyTreeOnRight]);
 

@@ -70,6 +70,7 @@ vi.mock("@/components/Plugin/PluginHostedView", () => ({
 const { PluginToolbarButton, PluginTrayButton } = await import("../PluginTrayButton");
 const { usePluginToolbarPopoverStore } = await import("@/store/pluginToolbarPopoverStore");
 const { closePluginToolbarPopoverIfHidden } = await import("../PluginToolbarPopover");
+const { isTooltipSuppressedForElement } = await import("@/lib/tooltipFocusSuppression");
 
 const KIND_ID = "acme.inbox.inbox";
 
@@ -319,14 +320,28 @@ describe("plugin toolbar popover (#13784)", () => {
     expect(document.activeElement).toBe(button);
   });
 
-  it("moves focus off a control being hidden to its successor, when focus was inside", async () => {
+  it("moves focus off a control being hidden to where its command is shown, when focus was inside", async () => {
+    // The toolbar's own markup: the tray's wrapper is hidden for measurement,
+    // so the `…` trigger that holds it now is the place left to land.
     render(
       <>
         <PluginToolbarButton
           pluginId={"acme.inbox.open"}
           config={popoverButton("acme.inbox.open")}
         />
-        <button type="button">More</button>
+        <div data-toolbar-button-id="plugin-tray" aria-hidden="true">
+          <button type="button" data-toolbar-item="">
+            Tray
+          </button>
+        </div>
+        <button
+          type="button"
+          data-toolbar-overflow-trigger=""
+          data-toolbar-overflow-side="right"
+          data-visible="true"
+        >
+          More
+        </button>
       </>
     );
     await act(async () => {
@@ -335,26 +350,25 @@ describe("plugin toolbar popover (#13784)", () => {
     await act(async () => {
       screen.getByRole("button", { name: "Done" }).focus();
     });
-    const successor = screen.getByRole("button", { name: "More" });
 
     // Not this button's opening: nothing happens.
     act(() => {
-      closePluginToolbarPopoverIfHidden(
-        (opening) => opening.buttonId === "acme.inbox.other",
-        () => successor
-      );
+      closePluginToolbarPopoverIfHidden((opening) => opening.buttonId === "acme.inbox.other");
     });
     expect(popovers()).toHaveLength(1);
 
     act(() => {
       closePluginToolbarPopoverIfHidden(
         (opening) => opening.buttonId === "acme.inbox.open",
-        () => successor
+        () => "right"
       );
     });
     await flush();
     expect(popovers()).toHaveLength(0);
-    expect(document.activeElement).toBe(successor);
+    const more = screen.getByText("More");
+    expect(document.activeElement).toBe(more);
+    // A move the user didn't make: the control's tooltip must not open for it.
+    expect(isTooltipSuppressedForElement(more)).toBe(true);
   });
 
   it("closes when its button goes away, and ignores a close kept from an earlier opening", () => {

@@ -12,6 +12,7 @@ import type {
   ToolbarButtonConfig,
   ToolbarButtonPopoverConfig,
 } from "@shared/config/toolbarButtonRegistry";
+import { armTooltipFocusSuppression } from "@/lib/tooltipFocusSuppression";
 import { keepOpenBehindAppDialog, yieldEscapeToFocusedDialog } from "./dockPopoverGuard";
 
 type PopoverButtonConfig = ToolbarButtonConfig & { popover: ToolbarButtonPopoverConfig };
@@ -20,24 +21,76 @@ type PopoverButtonConfig = ToolbarButtonConfig & { popover: ToolbarButtonPopover
 const POPOVER_CONTENT_ATTR = "data-plugin-toolbar-popover";
 
 /**
+ * Whether a toolbar control is out of sight: inside a wrapper the overflow
+ * measurement keeps mounted but hidden, or the `…` button with nothing to hold.
+ */
+export function isHiddenToolbarControl(element: Element): boolean {
+  return !element.isConnected || element.closest('[aria-hidden="true"]') !== null;
+}
+
+function shownToolbarControl(buttonId: string): HTMLElement | null {
+  for (const wrapper of document.querySelectorAll<HTMLElement>("[data-toolbar-button-id]")) {
+    if (wrapper.dataset.toolbarButtonId !== buttonId || isHiddenToolbarControl(wrapper)) continue;
+    return wrapper.querySelector<HTMLElement>("[data-toolbar-item]");
+  }
+  return null;
+}
+
+/**
+ * Where a plugin button's command is on the toolbar right now, for focus that
+ * can't go back to a control being hidden: the button itself if it is
+ * promoted and showing, else the tray (every contribution keeps a row there),
+ * else the `…` menu holding them — `side`'s, if it is showing.
+ */
+export function pluginCommandFocusTarget(
+  buttonId: string,
+  side?: "left" | "right"
+): HTMLElement | null {
+  const overflowTriggers = Array.from(
+    document.querySelectorAll<HTMLElement>('[data-toolbar-overflow-trigger][data-visible="true"]')
+  );
+  return (
+    shownToolbarControl(buttonId) ??
+    shownToolbarControl("plugin-tray") ??
+    overflowTriggers.find((trigger) => trigger.dataset.toolbarOverflowSide === side) ??
+    overflowTriggers[0] ??
+    null
+  );
+}
+
+/**
+ * Focus a toolbar control on the host's behalf — a move the user didn't make,
+ * so its tooltip must not open the way the overlay primitives' own restores
+ * already guard against.
+ */
+export function focusToolbarControl(element: HTMLElement): void {
+  armTooltipFocusSuppression();
+  element.focus({ preventScroll: true });
+}
+
+/**
  * Close the open plugin popover if the toolbar control it hangs off is about to
  * be hidden — moved into overflow, or the `…` button emptied. Its portalled
  * content would otherwise stay on screen, pinned to a control nobody can see.
  *
  * The hidden control can't take focus back either, so when focus was inside
- * the popover it goes to `successor` — wherever the command lives now —
- * instead of falling to `document.body`.
+ * the popover it goes wherever the command lives once the popover is gone
+ * ({@link pluginCommandFocusTarget}), instead of falling to `document.body`.
  */
 export function closePluginToolbarPopoverIfHidden(
   isHidden: (opening: PluginToolbarPopoverOpening) => boolean,
-  successor: (opening: PluginToolbarPopoverOpening) => HTMLElement | null
+  side?: (opening: PluginToolbarPopoverOpening) => "left" | "right"
 ): void {
   const { opening, close } = usePluginToolbarPopoverStore.getState();
   if (opening === null || !isHidden(opening)) return;
   const active = document.activeElement;
   const focusInside =
     active instanceof Element && active.closest(`[${POPOVER_CONTENT_ATTR}]`) !== null;
-  close(opening.seq, focusInside ? successor(opening) : null);
+  const preferredSide = side?.(opening);
+  close(
+    opening.seq,
+    focusInside ? () => pluginCommandFocusTarget(opening.buttonId, preferredSide) : null
+  );
 }
 
 function isPopoverButton(config: ToolbarButtonConfig | undefined): config is PopoverButtonConfig {
@@ -108,8 +161,8 @@ export function PluginToolbarPopover({
         onInteractOutside={keepOpenBehindAppDialog}
         onEscapeKeyDown={yieldEscapeToFocusedDialog}
         onCloseAutoFocus={(event) => {
-          const { opening, takeCloseFocusTarget } = usePluginToolbarPopoverStore.getState();
-          const successor = takeCloseFocusTarget();
+          const { opening, takeCloseFocus } = usePluginToolbarPopoverStore.getState();
+          const findSuccessor = takeCloseFocus();
           // Replaced by another button's popover, which holds focus now.
           // Handing it back to this one's control would read there as focus
           // leaving, and close that one too.
@@ -119,9 +172,10 @@ export function PluginToolbarPopover({
           }
           // Closed because its control is being hidden; see
           // `closePluginToolbarPopoverIfHidden`.
-          if (successor?.isConnected) {
+          const successor = findSuccessor?.() ?? null;
+          if (successor !== null) {
             event.preventDefault();
-            successor.focus({ preventScroll: true });
+            focusToolbarControl(successor);
           }
         }}
       >

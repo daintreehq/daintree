@@ -18,21 +18,23 @@ export interface PluginToolbarPopoverOpening {
 interface PluginToolbarPopoverState {
   opening: PluginToolbarPopoverOpening | null;
   /**
-   * Where focus goes when the popover closes, in place of the control it hangs
-   * off — set by a close that is hiding that control. Spent by the close.
+   * Finds where focus goes when the popover closes, in place of the control it
+   * hangs off — set by a close that is hiding that control, and asked only
+   * once focus actually moves, since the toolbar can reflow again meanwhile.
+   * Spent by the close.
    */
-  closeFocusTarget: HTMLElement | null;
+  closeFocus: (() => HTMLElement | null) | null;
   /** Open `buttonId`'s popover off `origin`, replacing whichever was open. */
   open: (buttonId: string, origin: PluginToolbarPopoverOrigin) => void;
   /**
    * Close the open popover — only if it is still opening `seq`, when given —
-   * optionally handing focus to `focusTarget` instead of its own control.
+   * optionally handing focus to what `focus` finds instead of its own control.
    */
-  close: (seq?: number, focusTarget?: HTMLElement | null) => void;
+  close: (seq?: number, focus?: (() => HTMLElement | null) | null) => void;
   /** Close the open popover if its button is no longer contributed. */
   retain: (buttonIds: ReadonlySet<string>) => void;
-  /** The pending {@link closeFocusTarget}, cleared as it is read. */
-  takeCloseFocusTarget: () => HTMLElement | null;
+  /** The pending {@link closeFocus}, cleared as it is read. */
+  takeCloseFocus: () => (() => HTMLElement | null) | null;
 }
 
 let nextSeq = 1;
@@ -44,22 +46,22 @@ let nextSeq = 1;
  */
 export const usePluginToolbarPopoverStore = create<PluginToolbarPopoverState>((set, get) => ({
   opening: null,
-  closeFocusTarget: null,
+  closeFocus: null,
   open: (buttonId, origin) =>
-    set({ opening: { buttonId, origin, seq: nextSeq++ }, closeFocusTarget: null }),
-  close: (seq, focusTarget = null) => {
+    set({ opening: { buttonId, origin, seq: nextSeq++ }, closeFocus: null }),
+  close: (seq, focus = null) => {
     const { opening } = get();
     if (opening === null) return;
     if (seq !== undefined && opening.seq !== seq) return;
-    set({ opening: null, closeFocusTarget: focusTarget });
+    set({ opening: null, closeFocus: focus });
   },
   retain: (buttonIds) => {
     const { opening } = get();
     if (opening !== null && !buttonIds.has(opening.buttonId)) set({ opening: null });
   },
-  takeCloseFocusTarget: () => {
-    const { closeFocusTarget } = get();
-    if (closeFocusTarget !== null) set({ closeFocusTarget: null });
-    return closeFocusTarget;
+  takeCloseFocus: () => {
+    const { closeFocus } = get();
+    if (closeFocus !== null) set({ closeFocus: null });
+    return closeFocus;
   },
 }));
