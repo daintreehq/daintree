@@ -27,6 +27,8 @@ import { Button } from "@/components/ui/button";
 import { actionService } from "@/services/ActionService";
 import { CodeViewer, type CodeViewerHandle } from "@/components/FileViewer/CodeViewer";
 import { FileEditorBanner } from "@/components/FileViewer/FileEditorBanner";
+import { useDriveLeaseView } from "@/components/Recovery/driveLeaseState";
+import { drivenElsewhereBy } from "@/hooks/useHostConnection";
 import {
   FileViewerToolbar,
   TOOLBAR_ICON_CLASS,
@@ -388,10 +390,14 @@ export function FileBrowserViewer({
     () => (state.status === "text" ? new TextEncoder().encode(state.content).byteLength : null),
     [state]
   );
+  // The host refuses a save while another screen drives the project; a
+  // standing draft keeps Edit, so the draft stays in view.
+  const editLockedBy = drivenElsewhereBy(useDriveLeaseView());
   const canEdit =
     !!editorContext &&
     !!editor &&
     pluginKnown &&
+    (editLockedBy === null || draftText !== null) &&
     (explicitRenderMode === "edit" ||
       draftText !== null ||
       (contentBytes !== null && contentBytes <= editor.registration.maxBytes));
@@ -1006,7 +1012,11 @@ export function FileBrowserViewer({
           )}
         </FileViewerToolbar.Actions>
       </FileViewerToolbar.Root>
-      {filePath && editorContext && renderMode !== "edit" && state.status === "text" && (
+      {filePath &&
+        editorContext &&
+        editLockedBy === null &&
+        renderMode !== "edit" &&
+        state.status === "text" && (
         <FileEditorBanner
           key={`${panelId}:${filePath}`}
           filePath={filePath}

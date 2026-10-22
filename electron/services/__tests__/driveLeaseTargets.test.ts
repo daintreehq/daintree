@@ -236,6 +236,22 @@ describe("resolveLeaseTarget", () => {
     ).toEqual({ kind: "every" });
   });
 
+  it("reads a session history clear naming no worktree as host-wide, and one worktree's as its project", () => {
+    const clear = target("agent-session:clear");
+    for (const args of [[{}], [undefined], [{ worktreeId: null }]]) {
+      expect(resolveLeaseTarget(clear, args, "a", stubResolvers()), JSON.stringify(args)).toEqual({
+        kind: "every",
+      });
+    }
+    expect(
+      resolveLeaseTarget(clear, [{ worktreeId: "/repo/b/wt" }], "a", stubResolvers())
+    ).toEqual({ kind: "projects", projectIds: ["b"] });
+    // The handler refuses an empty scope rather than widening it; so does the gate.
+    expect(resolveLeaseTarget(clear, [{ worktreeId: "" }], "a", stubResolvers())).toMatchObject({
+      kind: "unresolved",
+    });
+  });
+
   it("checks the Host's current project for a spawn that names none, as its handler uses it", () => {
     const resolvers = stubResolvers({ currentProjectId: () => "b" });
     expect(

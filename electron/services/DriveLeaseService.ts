@@ -877,7 +877,8 @@ function drives(
   return holder.clientId === LOCAL_CLIENT_ID && endpoint.clientId === LOCAL_CLIENT_ID;
 }
 
-function drivenElsewhereError(
+/** The refusal of a change to a project someone else drives, in the wording every such refusal uses. */
+export function drivenElsewhereError(
   channel: string,
   projectId: string | null,
   holder: DriveLeaseHolder | null
@@ -889,6 +890,17 @@ function drivenElsewhereError(
       ? `${holder.clientName} has control of this project. Take control first.`
       : "Another screen has control of this project. Take control first.",
     context: { channel, projectId },
+  });
+}
+
+/** The refusal of a change that couldn't be traced to a project while another window drives one here. */
+export function unmatchedTargetError(channel: string, reason: string): AppError {
+  return new AppError({
+    code: "DRIVEN_ELSEWHERE",
+    message: `${channel} targets ${reason}, and another window drives a project here`,
+    userMessage:
+      "Another screen has control of a project on this host, and this change couldn't be matched to a project. Take control first.",
+    context: { channel },
   });
 }
 
@@ -918,15 +930,7 @@ export function createDriveLeaseGate(
       resolution: LeaseTargetResolution,
       holders: Map<string, DriveLeaseHolder>
     ): AppError | null => {
-      if (resolution.kind === "unresolved") {
-        return new AppError({
-          code: "DRIVEN_ELSEWHERE",
-          message: `${channel} targets ${resolution.reason}, and another window drives a project here`,
-          userMessage:
-            "Another screen has control of a project on this host, and this change couldn't be matched to a project. Take control first.",
-          context: { channel },
-        });
-      }
+      if (resolution.kind === "unresolved") return unmatchedTargetError(channel, resolution.reason);
       const projectIds = resolution.kind === "every" ? [...holders.keys()] : resolution.projectIds;
       for (const projectId of projectIds) {
         const holder = holders.get(projectId);

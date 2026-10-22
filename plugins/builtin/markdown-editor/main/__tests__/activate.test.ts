@@ -352,6 +352,24 @@ describe("markdown-editor main (#12323)", () => {
       await expect(fs.stat(identity.filePath)).rejects.toThrow();
     });
 
+    it("a save the host refuses because another screen drives the project says to take control", async () => {
+      const read = await open("# Plan\n");
+      const wording = "greg-mbp has control of this project. Take control first.";
+      vi.spyOn(fake.host.fs, "writeFile").mockRejectedValueOnce(
+        Object.assign(fsError("DRIVEN_ELSEWHERE", wording), { userMessage: wording })
+      );
+      const result = await call<DocumentSaveResult>(CHANNELS.save, {
+        identity,
+        text: "# Plan\n\nmine\n",
+        expectedRevision: read.revision,
+        unchanged: false,
+        hasBom: false,
+        eol: "\n",
+      });
+      expect(result).toEqual({ status: "error", message: wording });
+      expect(await fs.readFile(identity.filePath, "utf-8")).toBe("# Plan\n");
+    });
+
     it("refuses the write boundary for a non-Markdown path and an oversized buffer", async () => {
       const read = await open("# Plan\n");
       expect(
@@ -411,6 +429,25 @@ describe("markdown-editor main (#12323)", () => {
       });
       expect(second).toEqual({ status: "exists" });
       expect(await fs.readFile(target, "utf-8")).toBe("draft\n");
+    });
+
+    it("drops the code from a lease refusal that reaches it as a message alone", async () => {
+      const target = path.join(dir, "repo", "docs", "plan-draft.md");
+      vi.spyOn(fake.host.fs, "writeFile").mockRejectedValueOnce(
+        fsError("DRIVEN_ELSEWHERE", "Another screen has control of this project. Take control first.")
+      );
+      const result = await call<DocumentSaveAsResult>(CHANNELS.saveAs, {
+        identity,
+        targetPath: target,
+        text: "draft\n",
+        hasBom: false,
+        eol: "\n",
+      });
+      expect(result).toEqual({
+        status: "error",
+        message: "Another screen has control of this project. Take control first.",
+      });
+      await expect(fs.stat(target)).rejects.toThrow();
     });
   });
 

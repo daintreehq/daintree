@@ -849,6 +849,54 @@ describe("drive-lease gate", () => {
     expect(handler).not.toHaveBeenCalled();
   });
 
+  it("refuses clearing every project's session history from a window that watches", async () => {
+    const handler = handle("agent-session:clear");
+    const { endpoint } = makeRemoteEndpoint(-4, "proj-1");
+    installGate(new Map([["proj-1", { endpointId: "remote:-9", clientId: "client-c" }]]));
+    const refused = await getIpcDispatcher().invokeForEndpoint(
+      { endpoint, client: REMOTE_CLIENT },
+      "agent-session:clear",
+      [{}]
+    );
+    expect(refused.ok ? null : refused.error.code).toBe("DRIVEN_ELSEWHERE");
+    expect(refused.ok ? null : refused.error.userMessage).toMatch(/Take control first/);
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("refuses a clear of every project while another screen drives any of them", async () => {
+    const handler = handle("agent-session:clear");
+    getProjectMock.mockReturnValue("proj-1");
+    installGate(new Map([["proj-2", { endpointId: "remote:-9", clientId: "client-c" }]]));
+    const refused = await invokeLocal("agent-session:clear", makeEvent(), {});
+    expect(refused.ok ? null : refused.error.code).toBe("DRIVEN_ELSEWHERE");
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("clears one worktree's history unless that worktree's project is driven elsewhere", async () => {
+    const handler = handle("agent-session:clear");
+    getProjectMock.mockReturnValue("proj-1");
+    installGate(new Map([["proj-2", { endpointId: "remote:-9", clientId: "client-c" }]]));
+    await expect(
+      invokeLocal("agent-session:clear", makeEvent(), { worktreeId: P1 })
+    ).resolves.toEqual(wrapSuccess("ran"));
+    const refused = await invokeLocal("agent-session:clear", makeEvent(), { worktreeId: P2 });
+    expect(refused.ok ? null : refused.error.code).toBe("DRIVEN_ELSEWHERE");
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses changing the session history window while any project is driven elsewhere", async () => {
+    const handler = handle("agent-session:set-retention");
+    const { endpoint } = makeRemoteEndpoint(-4, "proj-1");
+    installGate(new Map([["proj-2", { endpointId: "remote:-9", clientId: "client-c" }]]));
+    const refused = await getIpcDispatcher().invokeForEndpoint(
+      { endpoint, client: REMOTE_CLIENT },
+      "agent-session:set-retention",
+      [7]
+    );
+    expect(refused.ok ? null : refused.error.code).toBe("DRIVEN_ELSEWHERE");
+    expect(handler).not.toHaveBeenCalled();
+  });
+
   it("checks nothing with no gate installed, as for anyone who never used Remote Hosts", async () => {
     const handler = handle(DRIVER_CHANNEL);
     getProjectMock.mockReturnValue("proj-1");

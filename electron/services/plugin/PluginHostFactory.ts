@@ -49,6 +49,7 @@ import {
   noFrontendAttached,
   resolvePluginFrontend,
 } from "./pluginFrontendRouting.js";
+import { assertPluginCallerDrives } from "./pluginDriveLease.js";
 import {
   PluginFrontendMethod,
   REMOTE_CLIPBOARD_IMAGE_MAX_BYTES,
@@ -1600,6 +1601,9 @@ export function createHost(
       if (!ptyClient) {
         throw new Error("NO_ACTIVE_AGENT: terminal host is not available");
       }
+      // Typing into an agent is held to the lease its terminal's input is.
+      await assertPluginCallerDrives(pluginId, "sendToActiveAgent", { terminalId });
+      if (!isBound()) return;
       // submit defaults to false — stage-only (no Enter) is the default-safe
       // mode per #10558. submit:true appends Enter and runs the text.
       if (options?.submit === true) {
@@ -3386,6 +3390,11 @@ export function createHost(
             `Plugin "${pluginId}" settings.set: no active project — "project" scope has no target`
           );
         }
+        // Project settings live in the repository's `.daintree`; a local file,
+        // outside every project, changes none.
+        if (scope !== "user") {
+          await assertPluginCallerDrives(pluginId, "settings.set", { paths: [filePath] });
+        }
         const store = deps.settings.getOrCreateSettingsStore(pluginId, filePath);
         const changed = await store.set(key, value, {
           secret: deps.settings.isSecretKey(pluginId, key),
@@ -3485,6 +3494,11 @@ export function createHost(
             `Plugin "${pluginId}" storage.set: no active ${scope} — "${scope}" scope has no target`
           );
         }
+        // Project and worktree storage lives in the repository's `.daintree`.
+        if (scope !== "user") {
+          await assertPluginCallerDrives(pluginId, "storage.set", { paths: [filePath] });
+          if (!isBound()) return;
+        }
         const store = deps.storage.getOrCreateStorageStore(pluginId, scope, filePath);
         const changed = await store.set(key, value);
         if (changed) deps.storage.notifyStorageSubscribers(pluginId, scope, key, value);
@@ -3499,6 +3513,10 @@ export function createHost(
         // Missing target or unloaded plugin: a delete is a no-op rather than a
         // throw (matching the "already absent" return of the store).
         if (!filePath || !isBound()) return;
+        if (scope !== "user") {
+          await assertPluginCallerDrives(pluginId, "storage.delete", { paths: [filePath] });
+          if (!isBound()) return;
+        }
         const store = deps.storage.getOrCreateStorageStore(pluginId, scope, filePath);
         const changed = await store.delete(key);
         if (changed) deps.storage.notifyStorageSubscribers(pluginId, scope, key, undefined);
@@ -3638,6 +3656,14 @@ function buildProcessApi(
     }
     // Re-check membership after the async cwd resolution so a racing unload
     // doesn't spawn into a disposed plugin.
+    if (!deps.plugins.has(pluginId)) {
+      throw new Error(`Plugin "${pluginId}" process.spawn: plugin is no longer loaded`);
+    }
+    // A process started in a project works on it, as a terminal spawned there
+    // does, so a call from a view must drive it.
+    await assertPluginCallerDrives(pluginId, "process.spawn", {
+      paths: cwd === undefined ? [] : [path.resolve(cwd)],
+    });
     if (!deps.plugins.has(pluginId)) {
       throw new Error(`Plugin "${pluginId}" process.spawn: plugin is no longer loaded`);
     }
@@ -4240,6 +4266,12 @@ function buildFsApi(
   };
   const containWithClass = (targetPath: string) =>
     containToDeclaredRoots(deps, pluginId, targetPath, workspaceScope);
+  // The plugin's own data dir is no project's; anything else a call writes is
+  // held to the lease of the view that made the call.
+  const requireCallerDrives = async (op: string, resolved: string): Promise<void> => {
+    await assertPluginCallerDrives(pluginId, `fs.${op}`, { paths: [resolved] });
+    requireLoaded(op);
+  };
   // Every gate a mutation passes before it may touch the disk: the root-class
   // capability, containment, and JIT consent — taken exactly once, and always
   // before anything is created.
@@ -4281,6 +4313,8 @@ function buildFsApi(
     requireLoaded(op);
     requireWriteCapForClass(op, rootClass);
     if (!isDataDirTarget) {
+      // Before consent, so a write the lease refuses never banks a grant.
+      await requireCallerDrives(op, resolved);
       await ensureCapabilityConsent(deps, pluginId, writeCap);
       requireLoaded(op);
     }
@@ -4363,6 +4397,8 @@ function buildFsApi(
     }
     const { resolved, isDataDirTarget } = await gateMutation(op, targetPath, writeCap);
     if (isDataDirTarget) await createDataDirParents(op, resolved);
+    // The approval is the last this host sees of the write: judge it after the consent wait.
+    else await requireCallerDrives(op, resolved);
     await refuseSymlinkLeaf(op, targetPath);
     // Recorded when approved: the write itself happens in the plugin's own
     // process, which the audit trail cannot see.
@@ -4536,6 +4572,8 @@ function buildFsApi(
         // the recheck below misreports an unloaded plugin's roots as scope.
         requireLoaded("writeFile");
         await recheckContained("writeFile", filePath, resolved);
+        // The queue wait can outlast a takeover, too.
+        if (!isDataDirTarget) await requireCallerDrives("writeFile", resolved);
         const leafStat = await refuseSymlinkLeaf("writeFile", filePath);
         const bytes = Buffer.from(contents, "utf-8");
         if (expected === null) {
@@ -4621,12 +4659,13 @@ function buildFsApi(
       // Containment realpaths the deepest existing ancestor and re-appends the
       // missing tail, so an existing ancestor that is a symlink out of every
       // root is refused here, before anything is created.
-      const { resolved } = await gateMutation("mkdir", dirPath, writeCap);
+      const { resolved, isDataDirTarget } = await gateMutation("mkdir", dirPath, writeCap);
       // Only what this call made is audited; an existing directory changed
       // nothing.
       await runExclusive(resolved, async () => {
         requireLoaded("mkdir");
         await recheckContained("mkdir", dirPath, resolved);
+        if (!isDataDirTarget) await requireCallerDrives("mkdir", resolved);
         await createDirectoryChain(
           pluginId,
           "mkdir",
@@ -4650,6 +4689,7 @@ function buildFsApi(
       await runExclusive(resolved, async () => {
         requireLoaded("appendFile");
         await recheckContained("appendFile", filePath, resolved);
+        if (!isDataDirTarget) await requireCallerDrives("appendFile", resolved);
         const leafStat = await refuseSymlinkLeaf("appendFile", filePath);
         // A FIFO or device is refused before the open, which on a FIFO with
         // no reader would otherwise block.
@@ -5066,6 +5106,12 @@ function buildGitApi(deps: PluginHostFactoryDeps, pluginId: string): PluginGitAp
       );
     }
   };
+  // Staging and committing change the worktree's project, so a call from a
+  // view must drive it.
+  const requireCallerDrives = async (op: string, resolved: string): Promise<void> => {
+    await assertPluginCallerDrives(pluginId, `git.${op}`, { paths: [resolved] });
+    requireLoaded(op);
+  };
   // A worktree the plugin may access = one contained inside its declared
   // allowedPaths (with `${project}` / `${worktree}` tokens expanded at call
   // time). We resolve the worktree root itself (not a child) so the git ops
@@ -5114,11 +5160,13 @@ function buildGitApi(deps: PluginHostFactoryDeps, pluginId: string): PluginGitAp
       const targets = resolveAddPathspecs(pluginId, paths);
       const resolved = await containWorktree(worktreePath);
       requireLoaded("add");
+      await requireCallerDrives("add", resolved);
       // Consent fires after containment + pathspec validation so a doomed call
       // never banks a git:write grant (#10524). Re-check liveness after the
       // prompt await.
       await ensureCapabilityConsent(deps, pluginId, "git:write");
       requireLoaded("add");
+      await requireCallerDrives("add", resolved);
       await git.add(resolved, targets, options?.signal);
       deps.safeAppendAudit({
         pluginId,
@@ -5152,10 +5200,12 @@ function buildGitApi(deps: PluginHostFactoryDeps, pluginId: string): PluginGitAp
       }
       const resolved = await containWorktree(worktreePath);
       requireLoaded("commit");
+      await requireCallerDrives("commit", resolved);
       // Consent fires after containment + message validation so a doomed call
       // never banks a grant (#10524). Re-check liveness after the prompt await.
       await ensureCapabilityConsent(deps, pluginId, "git:write");
       requireLoaded("commit");
+      await requireCallerDrives("commit", resolved);
       const result = await git.commit(resolved, options, callOptions?.signal);
       deps.safeAppendAudit({
         pluginId,
@@ -5690,6 +5740,10 @@ function buildDocumentsApi(deps: PluginHostFactoryDeps, pluginId: string): Plugi
           const contained = await containToDeclaredRoots(deps, pluginId, outputPath);
           requireLoaded();
           requireCapForClass("write", contained.rootClass, "the output");
+          await assertPluginCallerDrives(pluginId, "documents.renderPdf", {
+            paths: [contained.resolved],
+          });
+          requireLoaded();
           const parent = await fs.stat(path.dirname(contained.resolved)).catch(() => null);
           if (!parent?.isDirectory()) {
             throw new Error(
@@ -5768,6 +5822,10 @@ function buildDocumentsApi(deps: PluginHostFactoryDeps, pluginId: string): Plugi
             }
           );
           if (recheck.resolved !== contained.resolved) throw moved();
+          await assertPluginCallerDrives(pluginId, "documents.renderPdf", {
+            paths: [contained.resolved],
+          });
+          requireLoaded();
           const leafStat = await refuseSymlinkLeaf(outputPath);
           const mode = leafStat ? leafStat.mode & 0o777 : undefined;
           requireLoaded();

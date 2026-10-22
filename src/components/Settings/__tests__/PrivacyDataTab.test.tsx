@@ -4,6 +4,9 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import { PrivacyDataTab } from "../PrivacyDataTab";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ANALYTICS_EVENTS } from "@shared/config/telemetry";
+import { ClientAppError } from "@/utils/clientAppError";
+
+const TAKE_CONTROL = "greg-mbp has control of this project. Take control first.";
 
 const mockNotify = vi.fn();
 vi.mock("@/lib/notify", () => ({ notify: (...args: unknown[]) => mockNotify(...args) }));
@@ -495,6 +498,22 @@ describe("PrivacyDataTab", () => {
       expect(sessionOption("30 days").getAttribute("aria-checked")).toBe("true");
     });
 
+    it("says to take control when the host refuses because another screen drives a project", async () => {
+      Reflect.set(window, "electron", {
+        privacy: createPrivacyApi(),
+        agentSessionHistory: createAgentSessionHistoryApi({
+          setRetentionDays: vi.fn().mockRejectedValue(new ClientAppError("DRIVEN_ELSEWHERE", "refused", TAKE_CONTROL)),
+        }),
+      });
+      await renderStorage();
+      fireEvent.click(sessionOption("7 days"));
+      const dialog = await screen.findByRole("alertdialog");
+      fireEvent.click(within(dialog).getByRole("button", { name: "Shorten and delete" }));
+
+      await within(dialog).findByText(TAKE_CONTROL);
+      expect(sessionOption("30 days").getAttribute("aria-checked")).toBe("true");
+    });
+
     it("applies a longer window straight away, since nothing is deleted", async () => {
       await renderStorage();
       fireEvent.click(sessionOption("Keep forever"));
@@ -504,6 +523,24 @@ describe("PrivacyDataTab", () => {
       });
       expect(screen.queryByRole("alertdialog")).toBeNull();
     });
+  });
+
+  it("keeps the clear confirm open with the host's refusal when another screen drives a project", async () => {
+    Reflect.set(window, "electron", {
+      privacy: createPrivacyApi(),
+      agentSessionHistory: createAgentSessionHistoryApi({
+        clear: vi.fn().mockRejectedValue(new ClientAppError("DRIVEN_ELSEWHERE", "refused", TAKE_CONTROL)),
+      }),
+    });
+    render(<PrivacyDataTab activeSubtab="storage" onSubtabChange={vi.fn()} />, {
+      wrapper: TooltipProvider,
+    });
+    fireEvent.click(await screen.findByRole("button", { name: "Clear history…" }));
+    const dialog = await screen.findByRole("alertdialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Clear history" }));
+
+    await within(dialog).findByText(TAKE_CONTROL);
+    expect(screen.queryByRole("button", { name: "History cleared" })).toBeNull();
   });
 
   it("resets all app data only from a confirm dialog, behind the typed-name gate", async () => {
