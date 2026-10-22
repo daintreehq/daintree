@@ -248,7 +248,7 @@ describe("HttpLifecycle.openRelaySession (#13493)", () => {
     session.close();
   });
 
-  it("gives its notices the relay principal's pane, routed back over its link (#13500)", async () => {
+  it("gives its notices the relay principal's pane, routed back to its sender (#13500)", async () => {
     const whenIdle = vi.fn().mockResolvedValue({ armed: true, terminalId: "t-1" });
     const { lc } = await startedLifecycle({
       terminalNotify: {
@@ -277,10 +277,11 @@ describe("HttpLifecycle.openRelaySession (#13493)", () => {
     const [pane] = whenIdle.mock.calls[0]!;
     expect(pane.relay).toMatchObject({
       projectId: "project-1",
-      linkSessionId: "link-1",
       helpSessionId: "help-1",
       callId: "call-7",
     });
+    // Not tied to the link it came over, which may expire before it fires (#13930).
+    expect(pane.relay).not.toHaveProperty("linkSessionId");
     expect(pane.relay.deliver).toBe(deliverNotices);
     // Held under the principal, not the session, which closes when idle.
     expect(pane.key).toContain(relayOwnershipPrincipal(CALLER.senderId, CALLER.helpSessionId));
