@@ -43,7 +43,10 @@ import {
 } from "@/components/ui/context-menu";
 import { useWorktreeTerminals } from "@/hooks/useWorktreeTerminals";
 import { actionService } from "@/services/ActionService";
-import { suppressPaletteFocusRestore } from "@/components/ui/paletteFocusRestore";
+import {
+  deferPaletteFocusRestore,
+  suppressPaletteFocusRestore,
+} from "@/components/ui/paletteFocusRestore";
 import { copyContextWithFeedback } from "@/hooks/useWorktreeActions";
 import { FocusHandoffGuard } from "./FocusHandoffGuard";
 import {
@@ -565,7 +568,13 @@ export function WorktreeOverviewRow({
                     worktreeId={worktree.id}
                     statuses={pluginStatuses}
                     tabIndex={-1}
-                    onBeforeRun={onBeforeMenuAction}
+                    onBeforeRun={() => {
+                      // The palette refocuses its opener after its exit
+                      // animation, which would pull the keyboard off a view
+                      // the command just opened; restore only if nothing took it.
+                      deferPaletteFocusRestore((restore) => restore());
+                      onBeforeMenuAction();
+                    }}
                     onFocusLost={onFocusLost}
                   />
                 </div>

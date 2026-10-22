@@ -14,6 +14,7 @@ import {
   usePluginWorktreeCardStatusStore,
 } from "@/store/pluginWorktreeCardStatusStore";
 import { publishRegisteredPluginActions } from "@/services/plugin/registeredPluginActions";
+import { consumeDeferredPaletteFocusRestore } from "@/components/ui/paletteFocusRestore";
 import { WorktreeOverviewRow } from "../WorktreeOverviewRow";
 
 const { dispatchMock } = vi.hoisted(() => ({ dispatchMock: vi.fn() }));
@@ -46,6 +47,7 @@ const worktree = {
 } as WorktreeState;
 
 beforeEach(() => {
+  consumeDeferredPaletteFocusRestore();
   _resetPluginWorktreeCardStatusStoreForTest();
   publishRegisteredPluginActions([]);
   dispatchMock.mockReset();
@@ -126,6 +128,13 @@ describe("WorktreeOverviewRow plugin statuses (#13776)", () => {
     );
     expect(onBeforeMenuAction).toHaveBeenCalledTimes(1);
     expect(onActivate).not.toHaveBeenCalled();
+
+    // The close hands its focus restore back, to run only if nothing took it.
+    const receive = consumeDeferredPaletteFocusRestore();
+    expect(receive).not.toBeNull();
+    const restore = vi.fn();
+    receive!(restore);
+    expect(restore).toHaveBeenCalledTimes(1);
   });
 
   it("keeps the overview up for a chip with nothing to run", () => {
@@ -137,6 +146,7 @@ describe("WorktreeOverviewRow plugin statuses (#13776)", () => {
     expect(dispatchMock).not.toHaveBeenCalled();
     expect(onBeforeMenuAction).not.toHaveBeenCalled();
     expect(onActivate).not.toHaveBeenCalled();
+    expect(consumeDeferredPaletteFocusRestore()).toBeNull();
   });
 
   it("draws no chip line for a worktree no plugin marked", () => {

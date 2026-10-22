@@ -136,7 +136,10 @@ describe("WorktreePluginStatusChips", () => {
 });
 
 describe("WorktreePluginStatusChips commands (#13776)", () => {
-  const docker = { pluginId: "acme.docker", status: { label: "2 up", command: "acme.docker.show" } };
+  const docker = {
+    pluginId: "acme.docker",
+    status: { label: "2 up", command: "acme.docker.show" },
+  };
 
   it("runs its plugin's registered command with the card's worktree, never selecting the card", () => {
     publishRegisteredPluginActions([["acme.docker.show", "Show containers"]]);

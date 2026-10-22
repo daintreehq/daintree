@@ -71,9 +71,7 @@ describe("validatePluginWorktreeCardStatus", () => {
 
     const tooltip = "y".repeat(PLUGIN_WORKTREE_CARD_STATUS_TOOLTIP_MAX);
     expect(vet("/wt", { label: "ok", tooltip }).ok).toBe(true);
-    expect(
-      vet("/wt", { label: "ok", tooltip: `${tooltip}y` }).ok
-    ).toBe(false);
+    expect(vet("/wt", { label: "ok", tooltip: `${tooltip}y` }).ok).toBe(false);
   });
 });
 
