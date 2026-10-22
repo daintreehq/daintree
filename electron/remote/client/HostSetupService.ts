@@ -33,7 +33,7 @@ import { discoverHosts, discoverWslDistros } from "./discovery.js";
 import { type ArtifactChecksum, lookupArtifactChecksum } from "./clientBuild.js";
 import { runHostInstall } from "./hostInstaller.js";
 import { RestartImpactSchema } from "../metrics/linkMethods.js";
-import { bootstrapHostMode, LINUX_START_SCRIPT, MAC_START_SCRIPT } from "./hostModeBootstrap.js";
+import { bootstrapHostMode, LINUX_START_SCRIPT, macStartScript } from "./hostModeBootstrap.js";
 import { probeHost, type ProbeOutcome } from "./hostProbe.js";
 import { NIGHTLY_FEED_URL, STABLE_FEED_URL, type ClientBuild, planInstall } from "./installPlan.js";
 import { createSshCommandChannel, failureDetail, type HostCommandChannel } from "./remoteShell.js";
@@ -299,7 +299,7 @@ export class HostSetupService {
     if (probe.hostModeState?.stopped === true) return "not-startable";
     const script =
       probe.platform === "darwin" && probe.hostModeState?.enabled === true
-        ? MAC_START_SCRIPT
+        ? macStartScript(probe.install.path)
         : probe.platform === "linux" && probe.advice.hostModeUnit === true
           ? LINUX_START_SCRIPT
           : null;

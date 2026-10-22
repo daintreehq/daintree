@@ -10,7 +10,7 @@ import { clearAdvertRecord, reapOrphanedAdvert, saveAdvertRecord } from "./adver
 import { runCommand, spawnOwnedProcess } from "./hostCommands.js";
 import { hostLocation, startHostListener } from "./hostListener.js";
 import { HostModeService, type HostModeSettings } from "./HostModeService.js";
-import { writeHostModeStatusFile } from "./hostModeStatusFile.js";
+import { readHostModeStatusFile, writeHostModeStatusFile } from "./hostModeStatusFile.js";
 import type { HostSocketLocation } from "./hostSocketPath.js";
 import {
   runningAppImage,
@@ -124,6 +124,7 @@ export function createHostModeService(
     },
     run: runCommand,
     broadcast: broadcastLocal,
+    readStatus: statusDir ? () => readHostModeStatusFile(statusDir) : undefined,
     writeStatus: statusDir
       ? (observation) => {
           const { version, commit } = getLocalHandshakeInfo();

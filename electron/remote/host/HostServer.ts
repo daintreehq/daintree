@@ -12,7 +12,7 @@ import { Lane } from "../link/frames.js";
 import { LinkSession, type LinkCloseInfo, type LinkSessionOptions } from "../link/session.js";
 import { assertSocketPathFits, type HostSocketLocation } from "./hostSocketPath.js";
 import { removeDiscoveryFile, tokensEqual, writeDiscoveryFile } from "./discoveryFile.js";
-import { withHostSocketLock } from "./hostSocketLock.js";
+import { processStartTime, withHostSocketLock } from "./hostSocketLock.js";
 import { LOCAL_CLIENT_ID, type RemoteSessionExpiryCause } from "../../ipc/endpoint.js";
 import { createLogger } from "../../utils/logger.js";
 
@@ -267,11 +267,13 @@ export class HostServer {
       await fs.chmod(socketPath, 0o600);
       this.assertCurrent(generation);
       // Advertise only once the socket is live and locked down.
+      const startedAt = processStartTime(process.pid)?.replace(/\s+/g, " ") ?? null;
       await writeDiscoveryFile(discoveryPath, {
         version: 1,
         socketPath,
         token: this.token,
         pid: process.pid,
+        ...(startedAt && { startedAt }),
         ...(this.options.launchCommand && { command: this.options.launchCommand }),
       });
       this.assertCurrent(generation);

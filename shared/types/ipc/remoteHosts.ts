@@ -231,6 +231,8 @@ export interface HostModeObservation {
     detail: string;
     /** The host ran its keychain check; false while it hasn't yet. */
     checked: boolean;
+    /** When the check last finished (Unix ms); kept across restarts. Absent in files written before it existed. */
+    checkedAt?: number;
   };
 }
 

@@ -223,12 +223,18 @@ export function linuxHandoffScript(
 // `-n`: without it LaunchServices only reactivates a Daintree already running
 // (one whose listener failed) and drops the arguments; a new instance hands
 // them to it through second-instance, or becomes Daintree if none is running.
-export const MAC_START_SCRIPT = `open -n -g -a ${sq(MAC_APP_PATH)} --args ${HOST_MODE_FLAG}`;
+export function macStartScript(appPath: string = MAC_APP_PATH): string {
+  return `open -n -g -a ${sq(appPath)} --args ${HOST_MODE_FLAG}`;
+}
+export const MAC_START_SCRIPT = macStartScript();
 export const LINUX_START_SCRIPT = `systemctl --user start ${LINUX_UNIT_NAME}`;
 
 /** Launch (or hand over to) Daintree on a Mac, in its logged-in session. */
-export function macEnableScript(updateChannel?: UpdateChannel): string {
-  return `open -n -g -a ${sq(MAC_APP_PATH)} --args ${HOST_MODE_FLAG} ${ENABLE_HOST_MODE_FLAG}${channelArg(updateChannel)}`;
+export function macEnableScript(
+  updateChannel?: UpdateChannel,
+  appPath: string = MAC_APP_PATH
+): string {
+  return `open -n -g -a ${sq(appPath)} --args ${HOST_MODE_FLAG} ${ENABLE_HOST_MODE_FLAG}${channelArg(updateChannel)}`;
 }
 
 export const MAC_ENABLE_SCRIPT = macEnableScript();
@@ -324,7 +330,7 @@ export async function bootstrapHostMode(
   let confirmed: ProbeOutcome;
   try {
     if (probe.platform === "darwin") {
-      const started = await deps.channel.exec(macEnableScript(updateChannel), {
+      const started = await deps.channel.exec(macEnableScript(updateChannel, probe.install?.path), {
         timeoutMs: 30_000,
         signal,
       });

@@ -16,6 +16,7 @@ import {
   type HostSocketLocation,
 } from "../hostSocketPath.js";
 import { readDiscoveryFile, removeDiscoveryFile, writeDiscoveryFile } from "../discoveryFile.js";
+import { processStartTime } from "../hostSocketLock.js";
 import { logBuffer } from "../../../services/LogBuffer.js";
 import {
   TEST_HANDSHAKE,
@@ -178,7 +179,11 @@ describe("HostServer socket and discovery", () => {
       socketPath: location.socketPath,
       token: server.token,
       pid: process.pid,
+      ...(info?.startedAt && { startedAt: info.startedAt }),
     });
+    if (process.platform === "darwin" || process.platform === "linux") {
+      expect(info?.startedAt).toBe(processStartTime(process.pid)?.replace(/\s+/g, " "));
+    }
     expect(server.token).toMatch(/^[0-9a-f]{64}$/);
   });
 
