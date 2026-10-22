@@ -166,7 +166,10 @@ describe("project-theme:answer-suggestion", () => {
   });
 
   it("refuses an answer about a theme the repository no longer suggests", async () => {
-    projectStoreMock.readInRepoProjectIdentity.mockResolvedValue({ found: true, theme: "daintree" });
+    projectStoreMock.readInRepoProjectIdentity.mockResolvedValue({
+      found: true,
+      theme: "daintree",
+    });
     await expect(
       invoke("project-theme:answer-suggestion", SUGGESTED, "accepted")
     ).rejects.toThrow();

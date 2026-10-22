@@ -86,9 +86,9 @@ describe("appThemeStore: a project's own theme (#13833)", () => {
     store.setProjectTheme({ colorSchemeId: light.id });
     store.setAccentColorOverride("#ff00aa");
     flushPendingTheme();
-    expect(
-      document.documentElement.style.getPropertyValue("--theme-accent-primary").trim()
-    ).toBe("#ff00aa");
+    expect(document.documentElement.style.getPropertyValue("--theme-accent-primary").trim()).toBe(
+      "#ff00aa"
+    );
     expect(paintedCanvas()).toBe(canvasOf(light));
   });
 

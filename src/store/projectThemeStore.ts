@@ -139,7 +139,8 @@ export const useProjectThemeStore = create<ProjectThemeState>((set, get) => {
       const failed = get().failedSave?.save;
       if (!failed) return;
       if (failed.kind === "theme") void get().setTheme(failed.schemeId);
-      else if (failed.kind === "answer") void get().answerSuggestion(failed.schemeId, failed.answer);
+      else if (failed.kind === "answer")
+        void get().answerSuggestion(failed.schemeId, failed.answer);
       else void get().resetSuggestion();
     },
 

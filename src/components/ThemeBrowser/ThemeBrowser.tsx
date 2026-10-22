@@ -13,11 +13,7 @@ import { Badge } from "@/components/ui/badge";
 import { OVERLAY_SHEET_SHADOW_CLASS } from "@/components/ui/floatingSurface";
 import { pluralize } from "@/lib/pluralize";
 import { BUILT_IN_APP_SCHEMES } from "@/config/appColorSchemes";
-import {
-  injectSchemeToDOM,
-  resolveCommittedScheme,
-  useAppThemeStore,
-} from "@/store/appThemeStore";
+import { injectSchemeToDOM, resolveCommittedScheme, useAppThemeStore } from "@/store/appThemeStore";
 import { selectSelectableSchemes } from "@/theme/selectableSchemes";
 import { useThemeBrowserStore } from "@/store/themeBrowserStore";
 import { logError } from "@/utils/logger";

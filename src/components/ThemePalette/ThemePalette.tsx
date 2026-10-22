@@ -10,11 +10,7 @@ import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { Check } from "lucide-react";
 import { useSearchablePalette } from "@/hooks/useSearchablePalette";
 import { useEffectiveCombo } from "@/hooks/useKeybinding";
-import {
-  useAppThemeStore,
-  injectSchemeToDOM,
-  resolveCommittedScheme,
-} from "@/store/appThemeStore";
+import { useAppThemeStore, injectSchemeToDOM, resolveCommittedScheme } from "@/store/appThemeStore";
 import { selectSelectableSchemes } from "@/theme/selectableSchemes";
 import { notify } from "@/lib/notify";
 import { appThemeClient } from "@/clients/appThemeClient";

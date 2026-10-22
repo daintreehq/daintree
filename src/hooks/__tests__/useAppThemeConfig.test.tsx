@@ -117,9 +117,8 @@ describe("useAppThemeConfig", () => {
   });
 
   describe("a project's own theme (#13833)", () => {
-    let projectThemeListener:
-      | ((change: { projectId: string; choice: unknown }) => void)
-      | null = null;
+    let projectThemeListener: ((change: { projectId: string; choice: unknown }) => void) | null =
+      null;
 
     beforeEach(() => {
       projectThemeListener = null;

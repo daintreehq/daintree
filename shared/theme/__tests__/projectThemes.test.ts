@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  compilePluginTheme,
-  makePluginThemeId,
-  toPluginThemeSnapshot,
-} from "../pluginThemes.js";
+import { compilePluginTheme, makePluginThemeId, toPluginThemeSnapshot } from "../pluginThemes.js";
 import {
   projectThemeSuggestionAnswer,
   readProjectThemeChoice,
@@ -74,10 +70,7 @@ describe("resolveProjectThemeOverride", () => {
   it("is null for a project following the global theme", () => {
     expect(resolveProjectThemeOverride(null, [])).toBeNull();
     expect(
-      resolveProjectThemeOverride(
-        { suggestionAnswer: { schemeId: "x", answer: "declined" } },
-        []
-      )
+      resolveProjectThemeOverride({ suggestionAnswer: { schemeId: "x", answer: "declined" } }, [])
     ).toBeNull();
   });
 

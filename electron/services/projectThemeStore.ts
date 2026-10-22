@@ -13,10 +13,7 @@ import {
   toPluginThemeSnapshot,
 } from "../../shared/theme/pluginThemes.js";
 import { readProjectThemeChoice } from "../../shared/theme/projectThemes.js";
-import type {
-  ProjectThemeChoice,
-  ProjectThemeSuggestionAnswer,
-} from "../../shared/theme/types.js";
+import type { ProjectThemeChoice, ProjectThemeSuggestionAnswer } from "../../shared/theme/types.js";
 
 /**
  * Each project's own theme (#13833), under `appTheme.projectThemes` beside the

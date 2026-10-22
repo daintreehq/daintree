@@ -227,8 +227,7 @@ export function ColorSchemePicker({
   const [previewAnnouncement, setPreviewAnnouncement] = useState("");
 
   const resolvedSchemes = useMemo(
-    () =>
-      [...BUILT_IN_SCHEMES, ...customSchemes].map((s) => resolveSchemeForPreview(s, appScheme)),
+    () => [...BUILT_IN_SCHEMES, ...customSchemes].map((s) => resolveSchemeForPreview(s, appScheme)),
     [customSchemes, appScheme]
   );
   const selectedScheme =

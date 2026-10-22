@@ -5,7 +5,7 @@ import { BUILT_IN_APP_SCHEMES } from "@/config/appColorSchemes";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useAppThemeStore } from "@/store/appThemeStore";
 import { resetProjectThemeStoreForTests, useProjectThemeStore } from "@/store/projectThemeStore";
-import type { ProjectThemeChoice } from "@shared/theme";
+import type { ProjectThemeChoice, ProjectThemeSuggestionAnswer } from "@shared/theme";
 import type { ProjectThemeSnapshot } from "@shared/types/ipc/projectTheme";
 import { ProjectThemeNotice } from "../ProjectThemeNotice";
 
@@ -15,7 +15,9 @@ const SUGGESTED = BUILT_IN_APP_SCHEMES.find((scheme) => scheme.type === "light")
 const QUESTION = `This repository suggests the ${SUGGESTED.name} theme`;
 
 const answerSuggestion =
-  vi.fn<(schemeId: string, answer: string) => Promise<ProjectThemeSnapshot>>();
+  vi.fn<
+    (schemeId: string, answer: ProjectThemeSuggestionAnswer) => Promise<ProjectThemeSnapshot>
+  >();
 
 beforeAll(() => {
   Object.defineProperty(window, "matchMedia", {
@@ -70,7 +72,7 @@ beforeEach(() => {
     projectId: PROJECT,
     choice: {
       ...(answer === "accepted" ? { colorSchemeId: schemeId } : {}),
-      suggestionAnswer: { schemeId, answer: answer as "accepted" | "declined" },
+      suggestionAnswer: { schemeId, answer },
     },
     suggestedSchemeId: schemeId,
   }));

@@ -63,7 +63,6 @@ function requireSender(ctx: IpcContext): Sender {
   return sender;
 }
 
-
 /** `null` for a sender with no project binding yet, rather than a project with no theme. */
 async function handleGet(ctx: IpcContext): Promise<ProjectThemeSnapshot | null> {
   const sender = senderOf(ctx);
