@@ -254,6 +254,8 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `action.palette.open` | Open command palette | safe | — |
 | `find.inFocusedPanel` | Find in focused panel | safe | — |
 | `nav.quickSwitcher` | Quick switcher | safe | — |
+| `nav.showGrid` | Show grid | safe | — |
+| `nav.showProjectHome` | Show project home | safe | — |
 | `nav.toggleFocusMode` | Toggle focus mode | safe | — |
 
 ## panel
