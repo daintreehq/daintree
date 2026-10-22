@@ -200,7 +200,7 @@ describe("ActionButton", () => {
     const reason = document.getElementById(
       configured.getAttribute("aria-describedby") ?? ""
     )?.textContent;
-    expect(reason).toMatch(/with a prompt/);
+    expect(reason).toMatch(/a task/);
     expect(reason).not.toMatch(/confirmation/);
     fireEvent.click(configured);
     await flush();

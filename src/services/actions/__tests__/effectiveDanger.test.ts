@@ -9,7 +9,9 @@ import {
   TERMINAL_CWD_DISPATCH_DANGER_RATIONALE,
   dispatchCarriesAgentLaunchEnv,
   dispatchCarriesAgentLaunchFlags,
+  dispatchCarriesAgentPreset,
   dispatchCarriesAgentSystemPrompt,
+  dispatchCarriesOptionLikePrompt,
   dispatchConfiguresAgentLaunch,
   dispatchCarriesRecipeId,
   dispatchCarriesTerminalCommand,
@@ -152,13 +154,31 @@ describe("agent.launch configuration from a plugin (#13762)", () => {
     );
   });
 
+  it("refuses a plugin choosing a preset, or dropping the default one", () => {
+    // A preset carries its own args, env and bypass mode, and null skips the
+    // default preset that may be vetoing a bypass.
+    expect(resolve("plugin", { agentId: "mistral", presetId: "auto-approve" })).toBe("confirm");
+    expect(resolve("plugin", { agentId: "claude", presetId: null })).toBe("confirm");
+  });
+
+  it("refuses a prompt the CLI would parse as an option", () => {
+    // The first turn is a positional argument, so this prompt is the bypass flag.
+    expect(
+      resolve("plugin", { agentId: "codex", prompt: "--dangerously-bypass-approvals-and-sandbox" })
+    ).toBe("confirm");
+    expect(resolve("plugin", { agentId: "claude", prompt: "\n  -p" })).toBe("confirm");
+    expect(resolve("plugin", { agentId: "claude", prompt: "Fix --verbose output" })).toBe("safe");
+  });
+
   it("refuses the bypass flags agent settings classify as dangerous", () => {
     for (const [agentId, flag] of Object.entries(DEFAULT_DANGEROUS_ARGS)) {
       expect(resolve("plugin", { agentId, agentLaunchFlags: flag.split(" ") })).toBe("confirm");
     }
   });
 
-  it("counts blank flags and empty env values, which still reach the process", () => {
+  it("counts blank flags and empty env values", () => {
+    // An empty env value overrides an inherited one; blank flags are dropped by
+    // the launch plan, so refusing them is only the conservative reading.
     expect(resolve("plugin", { agentId: "claude", agentLaunchFlags: [""] })).toBe("confirm");
     expect(resolve("plugin", { agentId: "claude", env: { HOME: "" } })).toBe("confirm");
   });
@@ -175,6 +195,8 @@ describe("agent.launch configuration from a plugin (#13762)", () => {
       agentLaunchFlags: ["--dangerously-skip-permissions"],
       env: { FOO: "1" },
       systemPrompt: "Be brief.",
+      presetId: "auto-approve",
+      prompt: "--yolo",
     };
     for (const source of ["user", "keybinding", "menu", "context-menu", "agent"] as const) {
       expect(resolve(source, args)).toBe("safe");
@@ -211,6 +233,10 @@ describe("dispatchConfiguresAgentLaunch", () => {
     expect(dispatchCarriesAgentLaunchEnv({ env: {} })).toBe(false);
     expect(dispatchCarriesAgentSystemPrompt({ systemPrompt: "x" })).toBe(true);
     expect(dispatchCarriesAgentSystemPrompt({ systemPrompt: "\n\t" })).toBe(false);
+    expect(dispatchCarriesAgentPreset({ presetId: "p1" })).toBe(true);
+    expect(dispatchCarriesAgentPreset({ agentId: "claude" })).toBe(false);
+    expect(dispatchCarriesOptionLikePrompt({ prompt: "-c x=1" })).toBe(true);
+    expect(dispatchCarriesOptionLikePrompt({ prompt: "Write it" })).toBe(false);
   });
 
   it("fails closed on a value the schema would reject", () => {
@@ -218,6 +244,7 @@ describe("dispatchConfiguresAgentLaunch", () => {
     // draw as blocked, and dispatch then refuses it on the schema anyway.
     expect(dispatchCarriesAgentLaunchFlags({ agentLaunchFlags: "--yolo" })).toBe(true);
     expect(dispatchCarriesAgentLaunchEnv({ env: "FOO=1" })).toBe(true);
+    expect(dispatchCarriesAgentLaunchEnv({ env: [] })).toBe(true);
     expect(dispatchCarriesAgentSystemPrompt({ systemPrompt: ["Never ask first."] })).toBe(true);
     expect(dispatchCarriesAgentLaunchFlags({ agentLaunchFlags: null })).toBe(true);
     expect(dispatchCarriesAgentLaunchEnv({ env: null })).toBe(true);

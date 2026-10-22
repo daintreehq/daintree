@@ -10,7 +10,9 @@ export {
   AGENT_LAUNCH_ACTION_ID,
   dispatchCarriesAgentLaunchEnv,
   dispatchCarriesAgentLaunchFlags,
+  dispatchCarriesAgentPreset,
   dispatchCarriesAgentSystemPrompt,
+  dispatchCarriesOptionLikePrompt,
   dispatchConfiguresAgentLaunch,
 } from "@shared/utils/dispatchAgentLaunch";
 export { dispatchCarriesRecipeId, readDispatchRecipeId } from "@shared/utils/dispatchRecipeId";
@@ -64,9 +66,9 @@ export const TERMINAL_COMMAND_DISPATCH_DANGER_RATIONALE =
 export const CLOSE_ALL_DISPATCH_DANGER_RATIONALE =
   "This closes every panel in the active worktree, including your own shells and other agents' terminals, not just ones the assistant opened. Most go to the trash briefly; after that their processes are gone.";
 
-/** Counterpart for a plugin launching an agent with its own configuration. */
+/** Counterpart for a plugin choosing how the agent it launches runs. */
 export const AGENT_LAUNCH_CONFIG_DISPATCH_DANGER_RATIONALE =
-  "This call launches an agent with extra CLI flags, environment variables or a system prompt, which change what the agent may do and how it runs rather than only giving it a task. Plugins can launch an agent with a prompt, not configure one.";
+  "This call launches an agent with its own CLI flags, environment variables, system prompt or preset, or with a prompt the CLI would read as an option. Those change what the agent may do and how it runs rather than only giving it a task, so a plugin can't choose them.";
 
 /** Counterpart for a dispatch that only chooses where the terminal opens. */
 export const TERMINAL_CWD_DISPATCH_DANGER_RATIONALE =

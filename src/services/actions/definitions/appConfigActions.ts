@@ -75,6 +75,10 @@ export function registerAppConfigActions(
     category: "settings",
     kind: "command",
     danger: "safe",
+    // Custom flags, bypass mode and presets persist into every later launch of
+    // the agent, which is the configuration a plugin's own agent.launch is
+    // refused (#13762).
+    denyPluginDispatch: true,
     scope: "renderer",
     argsSchema: z.object({ agentId: z.string(), settings: AgentSettingsEntrySchema }),
     run: async (args: unknown) => {
