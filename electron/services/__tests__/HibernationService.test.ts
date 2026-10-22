@@ -171,7 +171,11 @@ describe("HibernationService", () => {
       ptyManagerMock.gracefulKillByProject.mockResolvedValue([{ id: "t1", agentSessionId: null }]);
 
       const service = makeService();
-      const killed = await service.hibernateProjectOnDemand("proj-1", "Proj One", "memory-pressure");
+      const killed = await service.hibernateProjectOnDemand(
+        "proj-1",
+        "Proj One",
+        "memory-pressure"
+      );
 
       expect(killed).toBe(0);
       expect(ptyManagerMock.gracefulKillByProject).not.toHaveBeenCalled();
@@ -559,7 +563,11 @@ describe("HibernationService", () => {
 
         const service = makeService();
         service.setHasLiveAssistantBackend(() => true);
-        const killed = await service.hibernateProjectOnDemand("proj-1", "Proj One", "memory-pressure");
+        const killed = await service.hibernateProjectOnDemand(
+          "proj-1",
+          "Proj One",
+          "memory-pressure"
+        );
 
         expect(killed).toBe(0);
         expect(ptyManagerMock.gracefulKillByProject).not.toHaveBeenCalled();
@@ -572,7 +580,11 @@ describe("HibernationService", () => {
 
         const service = makeService();
         service.setHasLiveAssistantBackend(() => false);
-        const killed = await service.hibernateProjectOnDemand("proj-1", "Proj One", "memory-pressure");
+        const killed = await service.hibernateProjectOnDemand(
+          "proj-1",
+          "Proj One",
+          "memory-pressure"
+        );
 
         expect(killed).toBe(1);
         expect(ptyManagerMock.gracefulKillByProject).toHaveBeenCalledWith("proj-1", {
@@ -586,7 +598,11 @@ describe("HibernationService", () => {
         ]);
 
         const service = makeService();
-        const killed = await service.hibernateProjectOnDemand("proj-1", "Proj One", "memory-pressure");
+        const killed = await service.hibernateProjectOnDemand(
+          "proj-1",
+          "Proj One",
+          "memory-pressure"
+        );
 
         expect(killed).toBe(1);
       });
