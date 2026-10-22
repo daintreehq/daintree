@@ -363,4 +363,31 @@ describe("useIssueTooltip asks the provider that owns the number (#13744)", () =
     expect(getIssueTooltipMock).toHaveBeenCalledTimes(2);
     expect(byId.result.current.data?.title).toBe("By id");
   });
+
+  it("keeps the current link's details when a superseded request finishes after it", async () => {
+    let resolveFirst: (value: IssueTooltipData | null) => void = () => {};
+    getIssueTooltipMock.mockImplementationOnce(
+      () => new Promise((resolve) => (resolveFirst = resolve))
+    );
+    getIssueTooltipMock.mockResolvedValueOnce(makeIssue("Current link"));
+
+    const { result, rerender } = renderHook(({ target }) => useIssueTooltip(CWD, 7, target), {
+      initialProps: { target: { role: "code" } as IssueLinkTarget },
+    });
+    let first: Promise<void> = Promise.resolve();
+    act(() => {
+      first = result.current.fetchTooltip();
+    });
+
+    rerender({ target: { issueProviderId: "acme.linear.linear", issueKey: "ENG-7" } });
+    await act(async () => {
+      await result.current.fetchTooltip();
+    });
+    await act(async () => {
+      resolveFirst(makeIssue("Old link"));
+      await first;
+    });
+
+    expect(result.current.data?.title).toBe("Current link");
+  });
 });

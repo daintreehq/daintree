@@ -150,12 +150,18 @@ export function useIssueTooltip(
     if (!cwd || !issueNumber || !cacheKey || !providerResolved) return;
     if (missingCredential && !(await recheckCredential())) return;
 
-    const toSettled = (result: IssueTooltipData | null): IssueTooltipState => ({
+    const settled: (result: IssueTooltipData | null) => IssueTooltipState = (result) => ({
       data: result,
       loading: false,
       error: result === null,
       key: cacheKey,
     });
+    // A completion lands only while the badge still shows this request's link:
+    // a newer link's request has re-keyed the state, and must keep it.
+    const toSettled =
+      (result: IssueTooltipData | null) =>
+      (prev: IssueTooltipState): IssueTooltipState =>
+        prev.key === cacheKey ? settled(result) : prev;
     const toLoading = (prev: IssueTooltipState): IssueTooltipState =>
       prev.key === cacheKey
         ? { ...prev, loading: true, error: false }
@@ -163,7 +169,7 @@ export function useIssueTooltip(
 
     const cached = issueCache.get(cacheKey);
     if (cached) {
-      setState(toSettled(cached));
+      setState(settled(cached));
       return;
     }
 

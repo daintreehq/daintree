@@ -113,7 +113,7 @@ function IssueOptionRow({
             )}
           </span>
           <span className="block text-xs text-text-secondary tabular-nums">
-            #{issue.number}
+            {issue.key ?? `#${issue.number}`}
             <span className="sr-only">{isOpenIssue ? ", open" : ", closed"}</span>
           </span>
         </span>
@@ -389,7 +389,7 @@ export function IssuePickerDialog({
       >
         {issues.map((issue, index) => (
           <IssueOptionRow
-            key={issue.number}
+            key={issue.id ?? issue.key ?? issue.number}
             id={optionId(index)}
             issue={issue}
             isActive={index === selectedIndex}
@@ -397,7 +397,8 @@ export function IssuePickerDialog({
             // code forge's #42 the worktree is linked to.
             isCurrentlyAttached={
               issue.number === currentIssueNumber &&
-              (issue.providerId ?? undefined) === (worktree.issueProviderId ?? undefined)
+              (issue.providerId ?? undefined) === (worktree.issueProviderId ?? undefined) &&
+              (worktree.issueKey === undefined || issue.key === worktree.issueKey)
             }
             onPoint={() => {
               if (index !== selectedIndex) setSelectedIndex(index);
