@@ -17,9 +17,10 @@ vi.mock("@/store/projectStore", () => ({
 vi.mock("@shared/utils/projectMru", () => ({ getMruProjects: () => [] }));
 vi.mock("@/lib/notify", () => ({ notify: vi.fn() }));
 
-import type { ActionContext } from "@shared/types/actions";
 import type { ActionRegistry } from "../../actionTypes";
 import { registerProjectActions } from "../projectActions";
+
+const ctx = {} as never;
 
 function action() {
   const actions: ActionRegistry = new Map();
@@ -47,29 +48,27 @@ describe("project.toggleNeverAutoSleep", () => {
   });
 
   it("flips the current state when enabled is omitted", async () => {
-    await action().run({ projectId: "p1" }, {} as ActionContext);
+    await action().run({ projectId: "p1" }, ctx);
     expect(updateProjectMock).toHaveBeenCalledWith("p1", { neverAutoSleep: true });
 
-    await action().run({ projectId: "p2" }, {} as ActionContext);
+    await action().run({ projectId: "p2" }, ctx);
     expect(updateProjectMock).toHaveBeenCalledWith("p2", { neverAutoSleep: false });
   });
 
   it("sets the value explicitly when enabled is given", async () => {
-    await action().run({ projectId: "p2", enabled: true }, {} as ActionContext);
+    await action().run({ projectId: "p2", enabled: true }, ctx);
     expect(updateProjectMock).toHaveBeenCalledWith("p2", { neverAutoSleep: true });
   });
 
   it("defaults to the current project", async () => {
-    await action().run({}, {} as ActionContext);
+    await action().run({}, ctx);
     expect(updateProjectMock).toHaveBeenCalledWith("p1", { neverAutoSleep: true });
   });
 
   it("refuses when no project resolves", async () => {
     storeState.currentProject = null;
-    await expect(action().run({}, {} as ActionContext)).rejects.toThrow("No project given");
-    await expect(action().run({ projectId: "nope" }, {} as ActionContext)).rejects.toThrow(
-      "Project not found"
-    );
+    await expect(action().run({}, ctx)).rejects.toThrow("No project given");
+    await expect(action().run({ projectId: "nope" }, ctx)).rejects.toThrow("Project not found");
     expect(updateProjectMock).not.toHaveBeenCalled();
   });
 });
