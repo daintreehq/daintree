@@ -645,21 +645,19 @@ function TerminalContextMenuBody({
     });
   }, [terminalId]);
 
+  const panelKind = terminal?.kind;
+  const panelWorktreeId = terminal?.worktreeId;
   const pluginMenuContext = useMemo<WhenClauseContext>(
-    () => ({
-      panelId: terminalId,
-      panelKind: terminal?.kind,
-      worktreeId: terminal?.worktreeId,
-    }),
-    [terminalId, terminal?.kind, terminal?.worktreeId]
+    () => ({ panelId: terminalId, panelKind, worktreeId: panelWorktreeId }),
+    [terminalId, panelKind, panelWorktreeId]
   );
   const pluginDispatchArgs = useMemo(
     () => ({
       panelId: terminalId,
-      panelKind: terminal?.kind,
-      ...(terminal?.worktreeId && { worktreeId: terminal.worktreeId }),
+      panelKind,
+      ...(panelWorktreeId && { worktreeId: panelWorktreeId }),
     }),
-    [terminalId, terminal?.kind, terminal?.worktreeId]
+    [terminalId, panelKind, panelWorktreeId]
   );
   const pluginItems = usePluginContextMenuItems("terminal", pluginMenuContext);
 

@@ -726,9 +726,10 @@ export function BrowserToolbar({
   const isConsoleShown = canToggleConsole && isConsoleOpen;
   const showStop = isLoading && Boolean(onStop);
   const consoleInMenu = isCompact && Boolean(onToggleConsole);
-  const hasMoreMenu = Boolean(
-    onZoomChange || onToggleDevTools || onPromoteToPortal || isCompact || pluginItems.length > 0
+  const hasNativeMenuContent = Boolean(
+    onZoomChange || onToggleDevTools || onPromoteToPortal || isCompact
   );
+  const hasMoreMenu = hasNativeMenuContent || pluginItems.length > 0;
   // The chip stays while its popover is open, so stepping through 100% keeps the
   // controls under the pointer; it goes once the popover closes at the default.
   const showZoomChip = Boolean(onZoomChange) && (isNonDefaultZoom || isZoomPopoverOpen);
@@ -1467,6 +1468,7 @@ export function BrowserToolbar({
                 )}
                 <PluginContextMenuSection
                   items={pluginItems}
+                  leadingSeparator={hasNativeMenuContent}
                   components={{ Item: DropdownMenuItem, Separator: DropdownMenuSeparator }}
                   dispatchArgs={pluginDispatchArgs}
                 />
