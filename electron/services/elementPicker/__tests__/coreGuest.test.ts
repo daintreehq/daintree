@@ -6,6 +6,7 @@ import type { FrameworkDetection } from "../../../../shared/elementPicker/observ
 import { CoreGuest, type CoreGuestDeps } from "../coreGuest.js";
 import type { CoreGuestAssetId } from "../guestAssets.js";
 import { EXTRACTOR_INSTALL_STATUS } from "../guestChannel.js";
+import type { PickerAvailability } from "../guest/types.js";
 import type { ElementPickerPushPayload } from "../types.js";
 
 const CONTEXT_ID = 5;
@@ -28,6 +29,8 @@ type Call = { method: string; params: Record<string, unknown> };
 function harness(
   overrides: {
     probeResult?: unknown;
+    /** Answers for successive probes, in order; past the last, `probeResult`. */
+    probeResults?: unknown[];
     extractorStatus?: unknown;
     extractorError?: Error;
     assets?: Partial<Record<CoreGuestAssetId, string | Error>>;
@@ -65,7 +68,8 @@ function harness(
         throw new Error("Cannot find context with specified id");
       }
       if (expression.includes("const api = { result: null }")) {
-        return { result: { value: overrides.probeResult ?? null } };
+        const next = overrides.probeResults?.shift();
+        return { result: { value: next ?? overrides.probeResult ?? null } };
       }
       if (expression.includes("installed: false")) {
         if (overrides.extractorError) throw overrides.extractorError;
@@ -109,7 +113,25 @@ function harness(
         call.method === "Runtime.evaluate" &&
         (call.params.expression as string).includes("installed: false")
     );
-  return { guest, deps, calls, emitted, state, main, timers, install, settle, extractorEvaluates };
+  /** What the host told the picker about the document's readers, in the order it said it. */
+  const availabilities = () =>
+    calls.flatMap((call) => {
+      const match = /api\.setAvailability\((.*)\);/.exec(String(call.params.expression ?? ""));
+      return match === null ? [] : [JSON.parse(match[1]!) as PickerAvailability];
+    });
+  return {
+    guest,
+    deps,
+    calls,
+    emitted,
+    state,
+    main,
+    timers,
+    install,
+    settle,
+    extractorEvaluates,
+    availabilities,
+  };
 }
 
 describe("CoreGuest", () => {
@@ -150,6 +172,121 @@ describe("CoreGuest", () => {
     await h.settle();
     expect(h.emitted).toEqual([]);
     expect(h.extractorEvaluates()).toHaveLength(0);
+    // Nor is it evidence the page has no framework: the picker is told nothing.
+    expect(h.availabilities()).toEqual([]);
+  });
+
+  it("settles detection once its late look also found nothing, and tells the picker so once", async () => {
+    const h = harness({ probeResult: [] });
+    await h.install();
+    h.guest.onGuestEvent(0, READY);
+    await h.settle();
+    // An app that mounts after it reported ready would be missed by the first look alone.
+    expect(h.availabilities()).toEqual([]);
+    h.timers[0]!();
+    await h.settle();
+    expect(h.emitted).toEqual([]);
+    expect(h.availabilities()).toEqual([{ detection: "settled", extractors: {} }]);
+    const call = h.calls.find((entry) =>
+      String(entry.params.expression).includes("api.setAvailability(")
+    );
+    // Into the picker's own world, for this install's bootstrap only.
+    expect(call?.params.contextId).toBe(CONTEXT_ID);
+    expect(call?.params.expression).toContain("api.installId !== 7");
+  });
+
+  it("tells the picker each framework is pending, then what its install came to", async () => {
+    const h = harness({ probeResult: SVELTE });
+    await h.install();
+    h.guest.onGuestEvent(0, READY);
+    await h.settle();
+    h.timers[0]!();
+    await h.settle();
+    expect(h.availabilities()).toEqual([
+      { detection: "pending", extractors: { svelte: "pending" } },
+      { detection: "pending", extractors: { svelte: "installed" } },
+      { detection: "settled", extractors: { svelte: "installed" } },
+    ]);
+  });
+
+  it("settles on a late look that comes back well-formed after a first that did not", async () => {
+    const h = harness({ probeResults: [{ forged: true }, []] });
+    await h.install();
+    h.guest.onGuestEvent(0, READY);
+    await h.settle();
+    h.timers[0]!();
+    await h.settle();
+    expect(h.availabilities()).toEqual([{ detection: "settled", extractors: {} }]);
+  });
+
+  it("keeps detection open when the late look's answer fails the schema", async () => {
+    const h = harness({ probeResults: [[], { forged: true }] });
+    await h.install();
+    h.guest.onGuestEvent(0, READY);
+    await h.settle();
+    h.timers[0]!();
+    await h.settle();
+    expect(h.availabilities()).toEqual([]);
+  });
+
+  it("probes again for a reinstall into the same document", async () => {
+    const h = harness({ probeResult: [] });
+    const probes = () =>
+      h.calls.filter((call) =>
+        String(call.params.expression).includes("const api = { result: null }")
+      ).length;
+    await h.install();
+    h.guest.onGuestEvent(0, READY);
+    await h.settle();
+    expect(probes()).toBe(1);
+    await h.install();
+    h.guest.onGuestEvent(0, READY);
+    await h.settle();
+    expect(probes()).toBe(2);
+  });
+
+  it("ends an install whose evaluate lost its world as failed, so the picker stops waiting on it", async () => {
+    const h = harness({ extractorError: new Error("Cannot find context with specified id") });
+    await h.install();
+    h.guest.onGuestEvent(0, { type: "frameworksDetected", detections: SVELTE });
+    await h.settle();
+    expect(h.emitted).toEqual([]);
+    expect(h.availabilities().at(-1)).toEqual({
+      detection: "pending",
+      extractors: { svelte: "failed" },
+    });
+  });
+
+  it.each([
+    ["the build ships no reader for it", { framework: "angular" }, "unavailable"],
+    ["its reader fails to install", { extractorStatus: EXTRACTOR_INSTALL_STATUS.threw }, "failed"],
+  ] as const)("tells the picker when %s", async (_label, overrides, expected) => {
+    const framework = "framework" in overrides ? overrides.framework : "svelte";
+    const h = harness("extractorStatus" in overrides ? overrides : {});
+    await h.install();
+    h.guest.onGuestEvent(0, {
+      type: "frameworksDetected",
+      detections: [{ framework, signals: [{ via: "attribute", name: "marker" }] }],
+    });
+    await h.settle();
+    // No probe has come back, so detection itself is still open.
+    expect(h.availabilities()).toEqual([
+      { detection: "pending", extractors: { [framework]: "pending" } },
+      { detection: "pending", extractors: { [framework]: expected } },
+    ]);
+  });
+
+  it("tells a document that is no longer current nothing", async () => {
+    let release!: () => void;
+    const h = harness({ assetGate: new Promise((resolve) => (release = resolve)) });
+    await h.install();
+    h.guest.onGuestEvent(0, { type: "frameworksDetected", detections: SVELTE });
+    const told = h.availabilities().length;
+    h.state.epoch = 1;
+    h.guest.invalidate();
+    release();
+    await h.settle();
+    expect(h.availabilities()).toHaveLength(told);
   });
 
   it("schedules exactly one late probe per document, and cancels it with the document", async () => {

@@ -10,6 +10,7 @@ export const ELEMENT_CONTEXT_LIMITS = {
   styles: 40,
   property: 64,
   value: 256,
+  shadowHosts: 32,
 } as const;
 
 export const OBSERVATION_LIMITS = {
@@ -43,6 +44,12 @@ export type Rect = z.infer<typeof RectSchema>;
  * styles that say something about it. The selector is how a reader finds the
  * element, not what it is: the same element keeps its `elementId` while its
  * selector changes under it.
+ *
+ * Inside a shadow tree the selector is relative to that tree's root, which no
+ * document query reaches through, so `shadowHosts` names the elements hosting
+ * each enclosing root, innermost first, as `ShadowRoot.host` reports them. A
+ * host is a DOM boundary, not a component: its tag is what the page registered,
+ * not a name anything checked.
  */
 export const ElementContextSchema = z.strictObject({
   selector: z.string().min(1).max(ELEMENT_CONTEXT_LIMITS.selector),
@@ -56,6 +63,20 @@ export const ElementContextSchema = z.strictObject({
       })
     )
     .max(ELEMENT_CONTEXT_LIMITS.styles),
+  /** Empty for an element in the document's own tree; absent from a guest that did not look. */
+  shadowHosts: z
+    .array(
+      z.strictObject({
+        elementId: PickerIdSchema,
+        tagName: z.string().min(1).max(OBSERVATION_LIMITS.tagName),
+        /** The page's own words for the host, quoted as data like any label. */
+        label: z.string().max(OBSERVATION_LIMITS.label),
+      })
+    )
+    .max(ELEMENT_CONTEXT_LIMITS.shadowHosts)
+    .optional(),
+  /** More roots enclose the element than the list holds; the outermost are the ones left out. */
+  shadowHostsTruncated: z.literal(true).optional(),
 });
 export type ElementContext = z.infer<typeof ElementContextSchema>;
 

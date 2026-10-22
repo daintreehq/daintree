@@ -195,7 +195,9 @@ describe("source metadata", () => {
     expect(evidenceOf(node).unmapped).toBe(true);
 
     // Described again, it is still the click's answer.
-    picker.refresh();
+    const before = ofType(events, "selectionChanged").length;
+    picker.setAvailability({ detection: "settled", extractors: { svelte: "installed" } });
+    expect(ofType(events, "selectionChanged")).toHaveLength(before + 1);
     const [again] = lastSelection(events);
     expect(again?.elementId).toBe(node?.elementId);
     expect(evidenceOf(again).unmapped).toBe(true);

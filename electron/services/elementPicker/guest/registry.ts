@@ -242,12 +242,13 @@ function createRegistry(channel: string): Registry {
     if (request === null) return;
     const target = targetOf(event);
     if (target === null) return;
-    const reply: ExtractReply = { id: request.id, contributions: [] };
+    const empty: string[] = [];
+    const reply: ExtractReply = { id: request.id, contributions: [], empty };
     // One table for the whole reply: the bootstrap adopts one contribution,
     // and whichever it is, its tokens are this request's.
     const refs = createRefTable();
     for (const [framework, extractor] of extractors) {
-      let data: ExtractorContribution | null = null;
+      let data: ExtractorContribution | null;
       // Each contribution names its own pick: the bootstrap reads the one it adopts.
       let token: string | null = null;
       try {
@@ -264,9 +265,14 @@ function createRegistry(channel: string): Registry {
           data = extractor.extract(target, request.phase, refs);
         }
       } catch {
-        // One framework's reader failing must not cost the others their answer.
+        // One framework's reader failing must not cost the others their answer,
+        // and is no answer of its own.
+        continue;
       }
-      if (data === null || data === undefined) continue;
+      if (data === null || data === undefined) {
+        empty.push(framework);
+        continue;
+      }
       reply.contributions.push(
         token === null ? { framework, data } : { framework, data, target: token }
       );

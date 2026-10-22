@@ -95,6 +95,12 @@ export interface ExtractReply {
     /** A pick's answer: the token for the element it stands for, when not the one asked about. */
     target?: string;
   }>;
+  /**
+   * Frameworks whose reader looked at the element and had nothing to say. A
+   * reader that threw, or a reply cut for size, is in neither list: only this
+   * one lets the picker report something as not exposed.
+   */
+  empty?: string[];
 }
 
 /** Distinct elements one reply may name; a reference past it is never made. */
