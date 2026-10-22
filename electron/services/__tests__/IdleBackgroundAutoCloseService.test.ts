@@ -44,12 +44,44 @@ const ptyClientMock = vi.hoisted(() => ({
     shardsTotal: 2,
     shardsFailed: snapshotDegraded.value ? 1 : 0,
   })),
+  // The process census the idle-shell gate reads (#13849).
+  getProcessInventory: vi.fn<
+    () => Promise<{ inventories: unknown[]; shardsTotal: number; shardsFailed: number }>
+  >(async () => ({ inventories: [], shardsTotal: 1, shardsFailed: 0 })),
 }));
 
 const snapshotDegraded = vi.hoisted(() => ({ value: false }));
 
 const workspaceClientMock = vi.hoisted(() => ({
   evictProject: vi.fn<(p: string) => boolean>(() => true),
+  getAllStatesWithGitBackedForProjectAsync: vi.fn<
+    (path: string, id: string) => Promise<{ states: unknown[]; gitBacked: boolean | null }>
+  >(async (path) => ({ states: [{ path }], gitBacked: true })),
+}));
+
+const gitSafetyMock = vi.hoisted(() => ({
+  probeRepositorySleepSafety: vi.fn<
+    (
+      paths: readonly string[],
+      options?: { missingRepoIsClear?: boolean }
+    ) => Promise<{ state: string; marker?: string }>
+  >(async () => ({ state: "clear" })),
+}));
+vi.mock("../../utils/gitSleepSafety.js", () => gitSafetyMock);
+
+const resourceProbeMock = vi.hoisted(() => ({
+  probeResourceConfig: vi.fn<(root: string, paths: readonly string[]) => Promise<string>>(
+    async () => "none"
+  ),
+}));
+vi.mock("../../utils/resourceConfigProbe.js", () => resourceProbeMock);
+
+/** Remote Shell views attached to a project, as the endpoint registry lists them. */
+const remoteViewProjects = vi.hoisted(() => new Set<string>());
+vi.mock("../../ipc/endpointRegistry.js", () => ({
+  getEndpointRegistry: () => ({
+    getRemote: () => [...remoteViewProjects].map((projectId) => ({ projectId })),
+  }),
 }));
 
 vi.mock("../../window/serviceRefs.js", () => ({
@@ -146,10 +178,14 @@ vi.mock("../HibernationService.js", () => ({
   }),
 }));
 
+/** Machine-sleep time to subtract from every awake reading. */
+const sleptMs = vi.hoisted(() => ({ value: 0 }));
 vi.mock("../SystemSleepService.js", () => ({
   getSystemSleepService: () => ({
     onSuspend: vi.fn(() => vi.fn()),
     onWake: vi.fn(() => vi.fn()),
+    isSleeping: () => false,
+    getAwakeTimeSince: (timestamp: number) => Math.max(0, Date.now() - timestamp - sleptMs.value),
   }),
 }));
 
@@ -288,6 +324,18 @@ describe("IdleBackgroundAutoCloseService", () => {
     ptyClientMock.getAllTerminalsAsync.mockResolvedValue([]);
     ptyClientMock.gracefulKillByProject.mockResolvedValue([]);
     killConfirmed.value = true;
+    sleptMs.value = 0;
+    remoteViewProjects.clear();
+    gitSafetyMock.probeRepositorySleepSafety.mockResolvedValue({ state: "clear" });
+    resourceProbeMock.probeResourceConfig.mockResolvedValue("none");
+    workspaceClientMock.getAllStatesWithGitBackedForProjectAsync.mockImplementation(
+      async (path) => ({ states: [{ path }], gitBacked: true })
+    );
+    ptyClientMock.getProcessInventory.mockResolvedValue({
+      inventories: [],
+      shardsTotal: 1,
+      shardsFailed: 0,
+    });
     evictProjectRendererMock.mockReturnValue(1);
     workspaceClientMock.evictProject.mockReturnValue(true);
     assistantBackends.clear();
@@ -302,13 +350,23 @@ describe("IdleBackgroundAutoCloseService", () => {
   describe("config", () => {
     it("defaults to disabled with a 15-minute threshold", () => {
       const service = makeService();
-      expect(service.getConfig()).toEqual({ enabled: false, thresholdMinutes: 15 });
+      expect(service.getConfig()).toEqual({
+        enabled: false,
+        thresholdMinutes: 15,
+        includeIdleShells: false,
+        idleShellThresholdMinutes: 60,
+      });
     });
 
     it("returns defaults for malformed persisted config", () => {
       storeBacking.idleBackgroundAutoClose = { enabled: "yes", thresholdMinutes: Number.NaN };
       const service = makeService();
-      expect(service.getConfig()).toEqual({ enabled: false, thresholdMinutes: 15 });
+      expect(service.getConfig()).toEqual({
+        enabled: false,
+        thresholdMinutes: 15,
+        includeIdleShells: false,
+        idleShellThresholdMinutes: 60,
+      });
     });
 
     it("clamps threshold to [15, 1440]", () => {
@@ -327,6 +385,8 @@ describe("IdleBackgroundAutoCloseService", () => {
       expect(storeMock.set).toHaveBeenCalledWith("idleBackgroundAutoClose", {
         enabled: true,
         thresholdMinutes: 30,
+        includeIdleShells: false,
+        idleShellThresholdMinutes: 60,
       });
       service.stop();
     });
@@ -1359,6 +1419,265 @@ describe("IdleBackgroundAutoCloseService", () => {
       expect(ptyClientMock.getAllTerminalsAsync).toHaveBeenCalledTimes(1);
       release();
       await first;
+    });
+  });
+
+  describe("idle shell projects (#13849)", () => {
+    const HOUR_MS = 60 * 60 * 1000;
+
+    function enableShells(idleShellThresholdMinutes = 60): void {
+      storeBacking.idleBackgroundAutoClose = {
+        enabled: true,
+        thresholdMinutes: 15,
+        includeIdleShells: true,
+        idleShellThresholdMinutes,
+      };
+    }
+
+    function shellTerminal(projectId: string, overrides: Record<string, unknown> = {}) {
+      const quietSince = Date.now() - 3 * HOUR_MS;
+      return makeTerminal(projectId, {
+        kind: "terminal",
+        spawnedAt: quietSince,
+        lastInputTime: quietSince,
+        lastOutputTime: quietSince,
+        ...overrides,
+      });
+    }
+
+    function census(
+      projectId: string,
+      overrides: {
+        comm?: string;
+        processCount?: number;
+        sampledAt?: number;
+        available?: boolean;
+      } = {}
+    ) {
+      return {
+        inventories: [
+          {
+            terminals: [
+              {
+                id: `t-${projectId}`,
+                projectId,
+                rootPid: 100,
+                sample: {
+                  cpuPercent: 0,
+                  memoryKb: 4096,
+                  processCount: overrides.processCount ?? 1,
+                  members: [
+                    { pid: 100, comm: overrides.comm ?? "zsh", cpuPercent: 0, memoryKb: 4096 },
+                  ],
+                },
+              },
+            ],
+            pidSamples: {},
+            available: overrides.available ?? true,
+            sampledAt: overrides.sampledAt ?? Date.now(),
+          },
+        ],
+        shardsTotal: 1,
+        shardsFailed: 0,
+      };
+    }
+
+    /** A background shell project, off screen for three hours, every gate open. */
+    function setUpIdleShellProject(projectId = "proj-1") {
+      const lastOpened = Date.now() - 3 * HOUR_MS;
+      projectStoreMock.getAllProjects.mockReturnValue([makeIdleProject(projectId, { lastOpened })]);
+      projectStoreMock.getProjectById.mockImplementation((id) =>
+        makeIdleProject(id, { lastOpened })
+      );
+      ptyClientMock.getAllTerminalsAsync.mockResolvedValue([shellTerminal(projectId)]);
+      ptyClientMock.getProcessInventory.mockResolvedValue(census(projectId));
+      return makeService(makeClock(3 * HOUR_MS));
+    }
+
+    function skipLog(): Record<string, string[]> | undefined {
+      const call = logInfoMock.mock.calls.find(
+        ([event]) => event === "idle-background-auto-close-skip-idle-shells"
+      );
+      return (call?.[1] as { reasons: Record<string, string[]> } | undefined)?.reasons;
+    }
+
+    it("sleeps a project whose only terminal is an idle plain shell", async () => {
+      enableShells();
+      const service = setUpIdleShellProject();
+      await runCheck(service);
+
+      expect(gitSafetyMock.probeRepositorySleepSafety).toHaveBeenCalledWith(
+        ["/projects/proj-1", "/projects/proj-1"],
+        { missingRepoIsClear: false }
+      );
+      expect(ptyClientMock.gracefulKillByProject).toHaveBeenCalledWith("proj-1", {
+        preserveSession: true,
+      });
+      expect(projectStoreMock.updateProjectStatus).toHaveBeenCalledWith("proj-1", "closed", {
+        autoParkedAt: expect.any(Number),
+      });
+      expect(broadcastToRendererMock).toHaveBeenCalledWith(
+        "idle-background:closed",
+        expect.objectContaining({ projects: [{ projectId: "proj-1", projectName: "proj-1" }] })
+      );
+    });
+
+    it("leaves shell projects alone until they are opted in", async () => {
+      enable();
+      const service = setUpIdleShellProject();
+      await runCheck(service);
+      expect(ptyClientMock.gracefulKillByProject).not.toHaveBeenCalled();
+      expect(ptyClientMock.getProcessInventory).not.toHaveBeenCalled();
+    });
+
+    it("waits out the chosen threshold", async () => {
+      enableShells(240);
+      const service = setUpIdleShellProject();
+      await runCheck(service);
+      expect(ptyClientMock.gracefulKillByProject).not.toHaveBeenCalled();
+    });
+
+    it("doesn't count time the machine spent asleep", async () => {
+      enableShells();
+      const service = setUpIdleShellProject();
+      sleptMs.value = 2.5 * HOUR_MS;
+      await runCheck(service);
+      expect(ptyClientMock.gracefulKillByProject).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      [
+        "a foreground or background job",
+        "terminal-busy",
+        () =>
+          ptyClientMock.getProcessInventory.mockResolvedValue(
+            census("proj-1", { processCount: 2 })
+          ),
+      ],
+      [
+        "a terminal launched straight into a REPL",
+        "terminal-busy",
+        () =>
+          ptyClientMock.getProcessInventory.mockResolvedValue(census("proj-1", { comm: "node" })),
+      ],
+      [
+        "a stale census",
+        "census-stale",
+        () =>
+          ptyClientMock.getProcessInventory.mockResolvedValue(
+            census("proj-1", { sampledAt: Date.now() - 5 * 60 * 1000 })
+          ),
+      ],
+      [
+        "a failing census",
+        "census-unavailable",
+        () =>
+          ptyClientMock.getProcessInventory.mockResolvedValue(
+            census("proj-1", { available: false })
+          ),
+      ],
+      [
+        "an agent terminal",
+        "agent-terminal",
+        () =>
+          ptyClientMock.getAllTerminalsAsync.mockResolvedValue([
+            shellTerminal("proj-1", { launchAgentId: "claude" }),
+          ]),
+      ],
+      [
+        "recent terminal output",
+        "terminal-activity",
+        () =>
+          ptyClientMock.getAllTerminalsAsync.mockResolvedValue([
+            shellTerminal("proj-1", { lastOutputTime: Date.now() - 60_000 }),
+          ]),
+      ],
+      [
+        "a git operation in progress",
+        "git-busy",
+        () =>
+          gitSafetyMock.probeRepositorySleepSafety.mockResolvedValue({
+            state: "busy",
+            marker: "rebase-merge",
+          }),
+      ],
+      [
+        "an unreadable git directory",
+        "git-unknown",
+        () => gitSafetyMock.probeRepositorySleepSafety.mockResolvedValue({ state: "unknown" }),
+      ],
+      [
+        "no workspace host answer",
+        "workspace-unknown",
+        () =>
+          workspaceClientMock.getAllStatesWithGitBackedForProjectAsync.mockResolvedValue({
+            states: [],
+            gitBacked: null,
+          }),
+      ],
+      [
+        "a resource environment",
+        "resource-configured",
+        () =>
+          workspaceClientMock.getAllStatesWithGitBackedForProjectAsync.mockResolvedValue({
+            states: [{ path: "/projects/proj-1", hasResourceConfig: true }],
+            gitBacked: true,
+          }),
+      ],
+      [
+        "a running lifecycle script",
+        "lifecycle-busy",
+        () =>
+          workspaceClientMock.getAllStatesWithGitBackedForProjectAsync.mockResolvedValue({
+            states: [{ path: "/projects/proj-1", lifecycleStatus: { state: "running" } }],
+            gitBacked: true,
+          }),
+      ],
+      [
+        "a resource environment declared on disk",
+        "resource-configured",
+        () => resourceProbeMock.probeResourceConfig.mockResolvedValue("configured"),
+      ],
+      [
+        "an unreadable resource config",
+        "resource-unknown",
+        () => resourceProbeMock.probeResourceConfig.mockResolvedValue("unknown"),
+      ],
+      ["a remote Shell's view", "remote-host", () => remoteViewProjects.add("proj-1")],
+    ])("stays awake for %s and logs why", async (_case, reason, arrange) => {
+      enableShells();
+      const service = setUpIdleShellProject();
+      arrange();
+      await runCheck(service);
+
+      expect(ptyClientMock.gracefulKillByProject).not.toHaveBeenCalled();
+      expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
+      expect(skipLog()).toEqual({ [reason]: ["proj-1"] });
+    });
+
+    it("won't kill a terminal it never vetted", async () => {
+      enableShells();
+      const service = setUpIdleShellProject();
+      // The sweep and the close both see one shell; the kill's own snapshot
+      // finds a second one opened in between.
+      ptyClientMock.getAllTerminalsAsync
+        .mockResolvedValueOnce([shellTerminal("proj-1")])
+        .mockResolvedValueOnce([shellTerminal("proj-1")])
+        .mockResolvedValue([shellTerminal("proj-1"), shellTerminal("proj-1", { id: "t-new" })]);
+      await runCheck(service);
+
+      expect(ptyClientMock.gracefulKillByProject).not.toHaveBeenCalled();
+      expect(skipLog()).toEqual({ ineligible: ["proj-1"] });
+    });
+
+    it("keeps zero-terminal projects on their own shorter threshold", async () => {
+      enableShells(480);
+      projectStoreMock.getAllProjects.mockReturnValue([makeIdleProject("proj-1")]);
+      const service = makeService();
+      await runCheck(service);
+      expect(projectStoreMock.updateProjectStatus).toHaveBeenCalledWith("proj-1", "closed", {
+        autoParkedAt: expect.any(Number),
+      });
     });
   });
 });

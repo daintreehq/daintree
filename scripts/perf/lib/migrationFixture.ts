@@ -300,7 +300,12 @@ export function createHeavyMigrationFixture(): LegacyStoreV0 {
     idleTerminalNotifiedAt: {},
     parkedRuns: {},
     snoozedRuns: {},
-    idleBackgroundAutoClose: { enabled: false, thresholdMinutes: 15 },
+    idleBackgroundAutoClose: {
+      enabled: false,
+      thresholdMinutes: 15,
+      includeIdleShells: false,
+      idleShellThresholdMinutes: 60,
+    },
     pluginBackgroundUpdateCheck: { enabled: false, lastCheckedAt: null },
     appState: {
       activeWorktreeId: "wt-0",

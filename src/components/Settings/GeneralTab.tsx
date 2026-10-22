@@ -28,6 +28,7 @@ import type {
   IdleBackgroundAutoCloseConfig,
   CliAvailability,
 } from "@shared/types";
+import type { IdleShellThresholdMinutes } from "@shared/types/ipc/idleBackgroundAutoClose";
 import {
   isAgentInstalled,
   isAgentReady,
@@ -99,9 +100,17 @@ const IDLE_BACKGROUND_THRESHOLD_PRESETS = [
   { value: 120, label: "2h" },
 ] as const;
 
+const IDLE_SHELL_THRESHOLD_PRESETS = [
+  { value: 60, label: "1h" },
+  { value: 120, label: "2h" },
+  { value: 240, label: "4h" },
+  { value: 480, label: "8h" },
+] as const satisfies ReadonlyArray<{ value: IdleShellThresholdMinutes; label: string }>;
+
 // Mirrors the electron-store defaults, so a row can say when it has moved off them.
 const DEFAULT_IDLE_TERMINAL_THRESHOLD_MINUTES = 60;
 const DEFAULT_IDLE_BACKGROUND_THRESHOLD_MINUTES = 15;
+const DEFAULT_IDLE_SHELL_THRESHOLD_MINUTES: IdleShellThresholdMinutes = 60;
 const DEFAULT_UPDATE_CHANNEL = "stable";
 const DEFAULT_SESSION_RESTORE_ENABLED = true;
 
@@ -639,18 +648,16 @@ export function GeneralTab({
     }
   };
 
-  const handleIdleAutoCloseToggle = async () => {
+  const updateIdleAutoCloseConfig = async (patch: Partial<IdleBackgroundAutoCloseConfig>) => {
     if (!idleAutoCloseConfig || isIdleAutoCloseSaving) return;
     const prev = idleAutoCloseConfig;
     clearSaveFailure("idleAutoClose");
-    setIdleAutoCloseConfig({ ...prev, enabled: !prev.enabled });
+    setIdleAutoCloseConfig({ ...prev, ...patch });
     setIsIdleAutoCloseSaving(true);
     try {
-      const result = await actionService.dispatch(
-        "idleBackgroundAutoClose.updateConfig",
-        { enabled: !prev.enabled },
-        { source: "user" }
-      );
+      const result = await actionService.dispatch("idleBackgroundAutoClose.updateConfig", patch, {
+        source: "user",
+      });
       if (!isMountedRef.current) return;
       if (!result.ok) {
         throw new Error(result.error.message);
@@ -661,7 +668,7 @@ export function GeneralTab({
       if (!isMountedRef.current) return;
       setIdleAutoCloseConfig(prev);
       logError("Failed to update idle background auto-close config", error);
-      recordSaveFailure("idleAutoClose", () => handleIdleAutoCloseToggle());
+      recordSaveFailure("idleAutoClose", () => updateIdleAutoCloseConfig(patch));
     } finally {
       if (isMountedRef.current) {
         setIsIdleAutoCloseSaving(false);
@@ -669,35 +676,8 @@ export function GeneralTab({
     }
   };
 
-  const handleIdleAutoCloseThresholdChange = async (value: number) => {
-    if (!idleAutoCloseConfig || isIdleAutoCloseSaving) return;
-    const prev = idleAutoCloseConfig;
-    clearSaveFailure("idleAutoClose");
-    setIdleAutoCloseConfig({ ...prev, thresholdMinutes: value });
-    setIsIdleAutoCloseSaving(true);
-    try {
-      const result = await actionService.dispatch(
-        "idleBackgroundAutoClose.updateConfig",
-        { thresholdMinutes: value },
-        { source: "user" }
-      );
-      if (!isMountedRef.current) return;
-      if (!result.ok) {
-        throw new Error(result.error.message);
-      }
-      setIdleAutoCloseConfig(result.result as IdleBackgroundAutoCloseConfig);
-      clearSaveFailure("idleAutoClose");
-    } catch (error) {
-      if (!isMountedRef.current) return;
-      setIdleAutoCloseConfig(prev);
-      logError("Failed to update idle background auto-close threshold", error);
-      recordSaveFailure("idleAutoClose", () => handleIdleAutoCloseThresholdChange(value));
-    } finally {
-      if (isMountedRef.current) {
-        setIsIdleAutoCloseSaving(false);
-      }
-    }
-  };
+  const handleIdleAutoCloseToggle = () =>
+    updateIdleAutoCloseConfig({ enabled: !idleAutoCloseConfig?.enabled });
 
   return (
     <div className="space-y-6">
@@ -1243,10 +1223,10 @@ export function GeneralTab({
                   <SettingsPresetGroup<number>
                     id="general-idle-background-threshold"
                     label="Close after"
-                    description="How long a background project sits idle before it closes"
+                    description="How long a background project with no open terminals sits idle before it closes"
                     options={IDLE_BACKGROUND_THRESHOLD_PRESETS}
                     value={idleAutoCloseConfig?.thresholdMinutes ?? null}
-                    onChange={(v) => void handleIdleAutoCloseThresholdChange(v)}
+                    onChange={(v) => void updateIdleAutoCloseConfig({ thresholdMinutes: v })}
                     disabled={isIdleAutoCloseSaving}
                     isModified={
                       !!idleAutoCloseConfig &&
@@ -1254,11 +1234,55 @@ export function GeneralTab({
                         DEFAULT_IDLE_BACKGROUND_THRESHOLD_MINUTES
                     }
                     onReset={() =>
-                      void handleIdleAutoCloseThresholdChange(
-                        DEFAULT_IDLE_BACKGROUND_THRESHOLD_MINUTES
-                      )
+                      void updateIdleAutoCloseConfig({
+                        thresholdMinutes: DEFAULT_IDLE_BACKGROUND_THRESHOLD_MINUTES,
+                      })
                     }
                   />
+                  <SettingsSwitchCard
+                    id="general-idle-background-include-shells"
+                    title="Include projects with idle shells"
+                    subtitle="Also sleeps projects whose terminals are plain shells with nothing running in them. Never projects with agents."
+                    isEnabled={idleAutoCloseConfig?.includeIdleShells ?? false}
+                    onChange={() =>
+                      void updateIdleAutoCloseConfig({
+                        includeIdleShells: !idleAutoCloseConfig?.includeIdleShells,
+                      })
+                    }
+                    disabled={!idleAutoCloseConfig || isIdleAutoCloseSaving}
+                    isModified={!!idleAutoCloseConfig?.includeIdleShells}
+                    onReset={() => void updateIdleAutoCloseConfig({ includeIdleShells: false })}
+                  />
+                  <SettingsDependents
+                    disabled={!idleAutoCloseConfig?.includeIdleShells}
+                    reason={
+                      idleAutoCloseConfig?.enabled
+                        ? "Include projects with idle shells to choose when they sleep"
+                        : undefined
+                    }
+                  >
+                    <SettingsPresetGroup<IdleShellThresholdMinutes>
+                      id="general-idle-shell-threshold"
+                      label="Sleep after"
+                      description="How long a shell project stays off screen with no terminal input or output"
+                      options={IDLE_SHELL_THRESHOLD_PRESETS}
+                      value={idleAutoCloseConfig?.idleShellThresholdMinutes ?? null}
+                      onChange={(v) =>
+                        void updateIdleAutoCloseConfig({ idleShellThresholdMinutes: v })
+                      }
+                      disabled={isIdleAutoCloseSaving}
+                      isModified={
+                        !!idleAutoCloseConfig &&
+                        idleAutoCloseConfig.idleShellThresholdMinutes !==
+                          DEFAULT_IDLE_SHELL_THRESHOLD_MINUTES
+                      }
+                      onReset={() =>
+                        void updateIdleAutoCloseConfig({
+                          idleShellThresholdMinutes: DEFAULT_IDLE_SHELL_THRESHOLD_MINUTES,
+                        })
+                      }
+                    />
+                  </SettingsDependents>
                 </SettingsDependents>
               </SettingsGroup>
             </SettingsSection>

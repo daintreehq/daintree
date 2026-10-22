@@ -1,8 +1,9 @@
 // eager-import-allow: reads auto-close settings via store.get synchronously
-import type {
-  IdleBackgroundAutoCloseConfig,
-  IdleBackgroundClosedPayload,
-  IdleBackgroundClosedProjectEntry,
+import {
+  isIdleShellThresholdMinutes,
+  type IdleBackgroundAutoCloseConfig,
+  type IdleBackgroundClosedPayload,
+  type IdleBackgroundClosedProjectEntry,
 } from "../../shared/types/ipc/idleBackgroundAutoClose.js";
 import type { PtyClient } from "./PtyClient.js";
 import type { ProjectViewManager } from "../window/ProjectViewManager.js";
@@ -17,11 +18,29 @@ import { getSystemSleepService } from "./SystemSleepService.js";
 import { logInfo, logError } from "../utils/logger.js";
 import { broadcastToRenderer } from "../ipc/utils.js";
 import { CHANNELS } from "../ipc/channels.js";
+import { getEndpointRegistry } from "../ipc/endpointRegistry.js";
+import { probeRepositorySleepSafety } from "../utils/gitSleepSafety.js";
+import { probeResourceConfig } from "../utils/resourceConfigProbe.js";
+import { withTimeout } from "../utils/withTimeout.js";
+import {
+  evaluateGit,
+  evaluateShellTerminals,
+  evaluateWorkspace,
+  isLiveTerminal,
+  terminalsStillVetted,
+  type IdleShellSkipReason,
+  type ProcessInventoryRead,
+} from "./idleShellSleepGates.js";
 
 const DEFAULT_CONFIG: IdleBackgroundAutoCloseConfig = {
   enabled: false,
   thresholdMinutes: 15,
+  includeIdleShells: false,
+  idleShellThresholdMinutes: 60,
 };
+
+/** Bounds the workspace-host read a shell project's sleep waits on. */
+const WORKSPACE_READ_TIMEOUT_MS = 5_000;
 
 const MIN_THRESHOLD_MINUTES = 15;
 const MAX_THRESHOLD_MINUTES = 1440; // 24h
@@ -32,11 +51,24 @@ type AutoCloseTerminal = Awaited<ReturnType<PtyClient["getAllTerminalsAsync"]>>[
 /** Why a project must not be reclaimed this sweep. */
 type BlockingReason = "terminal" | "assistant";
 
+/** Why a project past its threshold was left awake, as the sweep log names it. */
+type SkipReason = IdleShellSkipReason | "mcp-dispatch" | "ineligible";
+
+type ShellCloseResult =
+  | { status: "slept"; entry: IdleBackgroundClosedProjectEntry }
+  | { status: "skipped"; reason: SkipReason }
+  | { status: "ineligible" };
+
 /**
  * IdleBackgroundAutoCloseService — Auto-closes background projects that have
  * been idle past a configurable threshold (default 15 min) AND hold zero
  * terminals, putting them to sleep through the same teardown the manual
  * Sleep project runs (#13845).
+ *
+ * With `includeIdleShells` on it also sleeps projects whose only terminals are
+ * plain shells with nothing running, on their own 1h–8h threshold, behind the
+ * gates in `idleShellSleepGates` (#13849). One scheduler for both, so the two
+ * classes can never race each other over the same project.
  *
  * @pattern Factory/Accessor Methods (Pattern C)
  *
@@ -191,6 +223,8 @@ export class IdleBackgroundAutoCloseService {
     const candidate = (raw ?? {}) as {
       enabled?: unknown;
       thresholdMinutes?: unknown;
+      includeIdleShells?: unknown;
+      idleShellThresholdMinutes?: unknown;
     };
     return {
       enabled: typeof candidate.enabled === "boolean" ? candidate.enabled : DEFAULT_CONFIG.enabled,
@@ -198,6 +232,13 @@ export class IdleBackgroundAutoCloseService {
         candidate.thresholdMinutes,
         DEFAULT_CONFIG.thresholdMinutes
       ),
+      includeIdleShells:
+        typeof candidate.includeIdleShells === "boolean"
+          ? candidate.includeIdleShells
+          : DEFAULT_CONFIG.includeIdleShells,
+      idleShellThresholdMinutes: isIdleShellThresholdMinutes(candidate.idleShellThresholdMinutes)
+        ? candidate.idleShellThresholdMinutes
+        : DEFAULT_CONFIG.idleShellThresholdMinutes,
     };
   }
 
@@ -215,6 +256,12 @@ export class IdleBackgroundAutoCloseService {
         config.thresholdMinutes,
         current.thresholdMinutes
       );
+    }
+    if (typeof config.includeIdleShells === "boolean") {
+      current.includeIdleShells = config.includeIdleShells;
+    }
+    if (isIdleShellThresholdMinutes(config.idleShellThresholdMinutes)) {
+      current.idleShellThresholdMinutes = config.idleShellThresholdMinutes;
     }
     store.set("idleBackgroundAutoClose", current);
 
@@ -403,6 +450,11 @@ export class IdleBackgroundAutoCloseService {
     const closed: IdleBackgroundClosedProjectEntry[] = [];
     /** Projects held back purely by a live assistant — logged once per sweep. */
     const assistantProtected: string[] = [];
+    /** Shell projects past their threshold that stayed awake, by the gate that held them. */
+    const skipped: Partial<Record<SkipReason, string[]>> = {};
+    const skip = (reason: SkipReason, projectId: string) => {
+      (skipped[reason] ??= []).push(projectId);
+    };
 
     for (const project of projects) {
       if (!project.id) continue;
@@ -422,6 +474,44 @@ export class IdleBackgroundAutoCloseService {
 
       // Never opened in this install — no cached resources to reclaim.
       if (!project.lastOpened || project.lastOpened <= 0) continue;
+
+      // A project whose only terminals are idle shells has a separate opt-in,
+      // a separate threshold and a far longer list of things that hold it.
+      const hasTerminals = allTerminals.some((t) => t.projectId === pid && isLiveTerminal(t));
+      if (hasTerminals && config.includeIdleShells) {
+        if (this.hasLiveAssistantBackend(pid)) {
+          assistantProtected.push(pid);
+          continue;
+        }
+        if (!this.isShellIdleOffScreen(pid, project.lastOpened)) continue;
+        if (this.hasRemoteView(pid)) {
+          skip("remote-host", pid);
+          continue;
+        }
+        // Screen with the sweep's own snapshot first, so a project with a busy
+        // shell costs no workspace or git reads. The census is read per project
+        // because an earlier project's teardown can outlast its freshness bound.
+        const screened = evaluateShellTerminals(
+          pid,
+          allTerminals,
+          await this.readProcessInventory(),
+          Date.now(),
+          this.shellThresholdMs(),
+          this.awakeSince
+        );
+        if (!screened.ok) {
+          skip(screened.reason, pid);
+          continue;
+        }
+        try {
+          const result = await this.closeShellProject(pid);
+          if (result.status === "slept") closed.push(result.entry);
+          else if (result.status === "skipped") skip(result.reason, pid);
+        } catch (error) {
+          logError("idle-background-auto-close-project-failed", error, { projectId: pid });
+        }
+        continue;
+      }
 
       // Still within the idle threshold.
       if (this.isWithinIdleThreshold(pid, project.lastOpened, now, thresholdMs)) continue;
@@ -454,6 +544,9 @@ export class IdleBackgroundAutoCloseService {
       logInfo("idle-background-auto-close-skip-live-assistant", {
         projectIds: assistantProtected,
       });
+    }
+    if (Object.keys(skipped).length > 0) {
+      logInfo("idle-background-auto-close-skip-idle-shells", { reasons: skipped });
     }
 
     if (closed.length === 0) return;
@@ -491,6 +584,176 @@ export class IdleBackgroundAutoCloseService {
     if (this.collectActiveProjectIds().has(projectId)) return null;
     if (this.isWithinIdleThreshold(projectId, fresh.lastOpened, now, thresholdMs)) return null;
     return fresh;
+  }
+
+  /** Sleep-adjusted time since `timestamp`; zero when that can't be measured. */
+  private readonly awakeSince = (timestamp: number): number => {
+    try {
+      const sleepService = getSystemSleepService();
+      if (sleepService.isSleeping()) return 0;
+      return sleepService.getAwakeTimeSince(timestamp);
+    } catch {
+      return 0;
+    }
+  };
+
+  private shellThresholdMs(): number {
+    return this.getConfig().idleShellThresholdMinutes * 60 * 1000;
+  }
+
+  /**
+   * Off screen everywhere for the whole shell threshold, counting only time
+   * the machine was awake. `getAwakeTimeSince` also starts no earlier than
+   * this launch, so a restart gives every project the full threshold again.
+   */
+  private isShellIdleOffScreen(projectId: string, lastOpened: number): boolean {
+    const idleSince = Math.max(this.visibilityClock.lastVisibleAt(projectId), lastOpened);
+    if (idleSince > Date.now()) return false;
+    return this.awakeSince(idleSince) >= this.shellThresholdMs();
+  }
+
+  /**
+   * A remote Shell holds a view of this project, shown or cached. Hidden views
+   * report no timestamp, so how long they have been out of sight is unknown,
+   * and the project stays awake while any is attached.
+   */
+  private hasRemoteView(projectId: string): boolean {
+    try {
+      return getEndpointRegistry()
+        .getRemote()
+        .some((endpoint) => endpoint.projectId === projectId);
+    } catch {
+      return true;
+    }
+  }
+
+  /** Every shard's census, or `null` when the read itself failed. */
+  private async readProcessInventory(): Promise<ProcessInventoryRead | null> {
+    const client = this.ptyClient;
+    if (!client) return null;
+    try {
+      return await client.getProcessInventory();
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * The project host's worktree states, or `null` when there's no answer. A
+   * project whose host has been reclaimed has none, and stays awake: a setup
+   * command it started can outlive it, and only it knows the worktree list.
+   */
+  private async readWorkspace(projectPath: string, projectId: string) {
+    const workspaceClient = getWorkspaceClientRef();
+    if (!workspaceClient) return null;
+    try {
+      return await withTimeout(
+        workspaceClient.getAllStatesWithGitBackedForProjectAsync(projectPath, projectId),
+        WORKSPACE_READ_TIMEOUT_MS,
+        "workspace states read timed out"
+      );
+    } catch {
+      return null;
+    }
+  }
+
+  /** {@link readEligibleProject} for a project with idle shells. */
+  private readEligibleShellProject(projectId: string) {
+    const config = this.getConfig();
+    if (!config.enabled || !config.includeIdleShells) return null;
+    const fresh = projectStore.getProjectById(projectId);
+    if (!fresh || fresh.status !== "background") return null;
+    if (!fresh.lastOpened || fresh.lastOpened <= 0) return null;
+    if (this.collectActiveProjectIds().has(projectId)) return null;
+    if (this.hasRemoteView(projectId)) return null;
+    if (!this.isShellIdleOffScreen(projectId, fresh.lastOpened)) return null;
+    if (this.hasLiveAssistantBackend(projectId)) return null;
+    return fresh;
+  }
+
+  /**
+   * Put a project whose terminals are all idle shells to sleep (#13849).
+   *
+   * Every gate reads fresh here rather than trusting the sweep: workspace,
+   * resource config and git first, then the terminal registry and the process
+   * census together, so the census the kill trusts is the last thing read
+   * before it. Sleep's own kill snapshot is then held to the exact terminals
+   * vetted here, still quiet, so a shell opened or typed into after this point
+   * stops it. Resource config and the repository are read from disk rather
+   * than from the host, whose view of both is a cache.
+   */
+  private async closeShellProject(projectId: string): Promise<ShellCloseResult> {
+    const project = this.readEligibleShellProject(projectId);
+    if (!project) return { status: "ineligible" };
+
+    const read = await this.readWorkspace(project.path, projectId);
+    const workspace = evaluateWorkspace(read);
+    if (!workspace.ok) return { status: "skipped", reason: workspace.reason };
+    const worktreePaths = workspace.value;
+    const resources = await probeResourceConfig(project.path, worktreePaths);
+    if (resources === "configured") return { status: "skipped", reason: "resource-configured" };
+    if (resources === "unknown") return { status: "skipped", reason: "resource-unknown" };
+    const gitBlock = evaluateGit(
+      await probeRepositorySleepSafety([project.path, ...worktreePaths], {
+        missingRepoIsClear: read?.gitBacked === false,
+      })
+    );
+    if (gitBlock) return { status: "skipped", reason: gitBlock };
+
+    const client = this.ptyClient;
+    const [terminals, census] = await Promise.all([
+      this.readTerminals(),
+      this.readProcessInventory(),
+    ]);
+    if (!terminals) return { status: "skipped", reason: "terminal-unknown" };
+    if (!this.readEligibleShellProject(projectId)) return { status: "ineligible" };
+    const vetted = evaluateShellTerminals(
+      projectId,
+      terminals,
+      census,
+      Date.now(),
+      this.shellThresholdMs(),
+      this.awakeSince
+    );
+    if (!vetted.ok) return { status: "skipped", reason: vetted.reason };
+
+    const outcome = await sleepProject(
+      projectId,
+      {
+        initiator: "policy",
+        autoParkedAt: Date.now(),
+        isStillEligible: () =>
+          this.ptyClient === client && this.readEligibleShellProject(projectId) !== null,
+        allowsTerminals: (snapshot) =>
+          !snapshot.degraded &&
+          terminalsStillVetted(
+            projectId,
+            snapshot.terminals,
+            vetted.value,
+            Date.now(),
+            this.shellThresholdMs(),
+            this.awakeSince
+          ),
+      },
+      {
+        ptyClient: client,
+        workspaceClient: getWorkspaceClientRef(),
+        projectViewManagers: this.projectViewManagersProvider ?? (() => []),
+      }
+    );
+    if (outcome.status === "skipped") {
+      return {
+        status: "skipped",
+        reason: outcome.reason === "mcp-dispatch" ? "mcp-dispatch" : "ineligible",
+      };
+    }
+    if (outcome.status !== "slept") return { status: "ineligible" };
+
+    logInfo("idle-background-auto-close-slept-idle-shells", {
+      projectId,
+      terminalsKilled: outcome.terminalsKilled,
+    });
+    return { status: "slept", entry: { projectId, projectName: project.name } };
   }
 
   /**
