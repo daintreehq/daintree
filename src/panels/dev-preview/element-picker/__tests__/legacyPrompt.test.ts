@@ -320,7 +320,7 @@ describe("a traced selection's prompt", () => {
       "- Screenshot of the selection, cropped from the preview: /tmp/daintree-clipboard/element-1.png"
     );
   });
-  it("doesn't credit the stamp when main placed the element somewhere else", () => {
+  it("quotes the page's stamp beside the place main found the element, when they differ", () => {
     // A hydrated page stamps an element with its neighbour's location; main
     // places it by the template's shape instead, and checks that place.
     const prompt = sitePrompt({
@@ -332,8 +332,9 @@ describe("a traced selection's prompt", () => {
       shown: shownAt(7, 2),
     });
 
-    expect(prompt).toContain(`  - Source: written at ${FILE}:6:3 ${LOC}`);
-    expect(prompt).not.toContain("__svelte_meta.loc");
+    expect(prompt).toContain(
+      `  - Source: written at ${FILE}:6:3 (the page reported "${FILE}:7:3" in runtime field "__svelte_meta.loc", and Daintree found it here instead; checked against the file)`
+    );
   });
 
   it("says which app the page's paths are relative to, even without the project model", () => {
@@ -378,7 +379,9 @@ describe("a traced selection's prompt", () => {
     });
 
     expect(prompt.split("\n").filter((line) => line.includes('"PricingCard"'))).toHaveLength(1);
-    expect(prompt).toContain("  - Rendered inside the same components as the element before it");
+    expect(prompt).toContain(
+      "  - Rendered inside: the page reported the same chain as for the element before it"
+    );
   });
 });
 

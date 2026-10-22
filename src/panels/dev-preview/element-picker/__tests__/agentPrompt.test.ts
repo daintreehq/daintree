@@ -92,16 +92,25 @@ describe("how the prompt says a source claim was established", () => {
   });
 
   it("says a target found in the worktree wasn't checked, even when the file was read", () => {
-    const prompt = promptFor(FRAME, {
+    const reported: SourceCandidate = {
+      kind: "element-creation",
+      candidateId: "src",
+      framework: "vue",
+      extraction: { kind: "runtime-field", field: "__vnode.loc" },
+      file: "src/components/SaveButton.vue",
+      location: { ...V8, line: 18, column: 5 },
+    };
+    // Observed is the report contained to a file, at the place it named.
+    const prompt = promptFor(reported, {
       state: "observed",
-      candidateId: "frame-0",
+      candidateId: "src",
       claim: "element-creation",
-      target: SAVE_BUTTON,
+      target: at("src/components/SaveButton.vue", { ...V8, line: 18, column: 5 }),
       fileRevision: REVISION,
     });
 
     expect(sourceLines(prompt)).toEqual([
-      '- Source: created at src/components/SaveButton.tsx:18:5 (reported by the page in frame 0 of "_debugStack", a position in the code the dev server sent; found in the worktree, not checked against the file)',
+      '- Source: created at src/components/SaveButton.vue:18:5 (reported by the page in runtime field "__vnode.loc"; found in the worktree, not checked against the file)',
     ]);
   });
 
@@ -153,6 +162,28 @@ describe("how the prompt says a source claim was established", () => {
     expect(sourceLines(prompt)[0]).toContain(
       '; mapped through source map "http://localhost:3000/assets/app.js.map", then checked against the file)'
     );
+  });
+
+  it("keeps the page's report beside a target the host found somewhere else", () => {
+    const reported: SourceCandidate = {
+      kind: "template-location",
+      candidateId: "loc",
+      framework: "svelte",
+      extraction: { kind: "runtime-field", field: "__svelte_meta.loc" },
+      file: "src/lib/Card.svelte",
+      location: { ...SVELTE, line: 7, column: 2 },
+    };
+    const prompt = promptFor(reported, {
+      state: "verified",
+      candidateId: "loc",
+      claim: "template-location",
+      target: at("src/lib/Card.svelte", { ...SVELTE, line: 6, column: 2 }),
+      fileRevision: REVISION,
+    });
+
+    expect(sourceLines(prompt)).toEqual([
+      '- Source: written at src/lib/Card.svelte:6:3 (the page reported "src/lib/Card.svelte:7:3" in runtime field "__svelte_meta.loc", and Daintree found it here instead; checked against the file)',
+    ]);
   });
 
   it("numbers lines and columns from 1, whatever base the runtime counted from", () => {
@@ -491,7 +522,7 @@ describe("what the prompt carries", () => {
 
     expect(prompt).toContain('    - "Header" (named in runtime field "type.name")');
     expect(prompt).toContain('    - "Footer" (named in runtime field "type.name")');
-    expect(prompt).not.toContain("the same components");
+    expect(prompt).not.toContain("the same chain");
   });
 
   it("frames a component request around the record it names", () => {

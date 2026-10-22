@@ -47,22 +47,21 @@ function appPrefixIn(worktreePath: string | null, appRoot: string): string | nul
 }
 
 /**
- * Where main's location for an element came from. It checks the place the page
- * stamped, but places an element by its template's shape when the stamp is a
- * neighbour's or missing — and then the location came from Svelte's metadata
- * as a whole, not that one field. Without the stamp to compare, it can't say
- * which, so it says the less specific of the two.
+ * Where the page said an element is written: the location it stamped,
+ * verbatim. Main checks that place, but places an element by its template's
+ * shape when the stamp is a neighbour's or missing, so the stamp and main's
+ * location can differ. With no stamp kept to cite, main's own coordinate is
+ * all there is, credited to Svelte's metadata as a whole rather than the one
+ * field it may not have come from.
  */
-function locationField(node: SelectedNode | undefined, shown: ShownNode | undefined): string {
+function reportedAt(
+  node: SelectedNode | undefined,
+  shown: ShownNode | undefined
+): { file: string; line: number; column: number; field: string } | null {
+  const definition = node?.definition;
+  if (!definition) return null;
   const stamp = shown?.stamp;
-  const at = node?.definition?.location;
-  return stamp &&
-    at &&
-    stamp.file === at.file &&
-    stamp.line === at.line &&
-    stamp.column === at.column
-    ? LOC_FIELD
-    : META_FIELD;
+  return stamp ? { ...stamp, field: LOC_FIELD } : { ...definition.location, field: META_FIELD };
 }
 
 function siteElement(
@@ -73,15 +72,15 @@ function siteElement(
   const definition = node.definition;
   const sourceCandidates: SourceCandidate[] = [];
   const resolutions: ResolutionResult[] = [];
-  if (definition) {
-    const location = svelteLocation(definition.location.line, definition.location.column);
+  const reported = reportedAt(node, shown);
+  if (definition && reported) {
     sourceCandidates.push({
       kind: "template-location",
       candidateId: "loc",
       framework: "svelte",
-      extraction: { kind: "runtime-field", field: locationField(node, shown) },
-      file: definition.location.file,
-      location,
+      extraction: { kind: "runtime-field", field: reported.field },
+      file: reported.file,
+      location: svelteLocation(reported.line, reported.column),
     });
     // Main found the element at that place in the file and hashed the bytes it
     // read. Without the file in the host's own spelling there is nothing to
@@ -91,7 +90,10 @@ function siteElement(
         state: "verified",
         candidateId: "loc",
         claim: "template-location",
-        target: { file: ref(node.sourceFile), location },
+        target: {
+          file: ref(node.sourceFile),
+          location: svelteLocation(definition.location.line, definition.location.column),
+        },
         fileRevision: `sha256:${definition.revision}`,
       });
     }
@@ -160,7 +162,7 @@ function scopedElement(
   scope: Extract<TaskScope, { kind: "component" }>,
   element: PromptElement,
   node: SelectedNode | undefined,
-  ownField: string,
+  ownReport: ReturnType<typeof reportedAt>,
   ref: (appRelative: string) => SourceFileRef
 ): { element: PromptElement; componentId: string } {
   const { observation } = element;
@@ -193,14 +195,17 @@ function scopedElement(
   if (usedAt !== null) return withRecord(record([invocation("scope:at", usedAt)]));
   // A chain that names nothing leaves the element's own file at the top, read
   // from where the page placed the element and checked by main with it.
-  const own = !scope.fromPage && node?.definition ? node.definition : null;
+  const own = !scope.fromPage && node?.definition && ownReport ? node.definition : null;
   if (scope.file === null) return withRecord(record([]));
   const hint: SourceCandidate = {
     kind: "file-hint",
     candidateId: "scope:file",
     framework: "svelte",
-    extraction: { kind: "runtime-field", field: own === null ? PARENT_FIELD : ownField },
-    file: own?.location.file ?? scope.file,
+    extraction: {
+      kind: "runtime-field",
+      field: own === null || ownReport === null ? PARENT_FIELD : ownReport.field,
+    },
+    file: own === null || ownReport === null ? scope.file : ownReport.file,
   };
   if (own === null || node?.sourceFile === undefined) return withRecord(record([hint]));
   return withRecord(record([hint]), [
@@ -299,11 +304,11 @@ export function sitePromptInput(context: SitePromptContext): AgentPromptInput {
   const scope = context.scope;
   let promptScope: PromptScope = { kind: "element" };
   if (scope?.kind === "component" && elements[0]) {
-    const ownField = locationField(
+    const ownReport = reportedAt(
       owner,
       owner ? context.shown?.get(owner.runtimeOccurrenceId) : undefined
     );
-    const scoped = scopedElement(scope, elements[0], owner, ownField, ref);
+    const scoped = scopedElement(scope, elements[0], owner, ownReport, ref);
     elements[0] = scoped.element;
     promptScope = {
       kind: "component",
