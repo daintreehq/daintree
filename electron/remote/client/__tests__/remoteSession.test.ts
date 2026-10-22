@@ -835,7 +835,9 @@ describe("remote session wiring", () => {
           call = vi.spyOn(session, "call");
         }),
         connection.onEndpointOpened(() => {
-          const asked = call?.mock.calls.some(([method]) => method === LinkMethod.ENDPOINT_RECONCILE);
+          const asked = call?.mock.calls.some(
+            ([method]) => method === LinkMethod.ENDPOINT_RECONCILE
+          );
           askedBeforeStreams.push(asked ?? false);
         })
       );
