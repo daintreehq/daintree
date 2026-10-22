@@ -1237,6 +1237,10 @@ export class PluginInstaller {
       // such write from putting it back.
       if (wipeSettings) {
         await wipeSettingsFile(path.join(this.deps.getSettingsRoot(), `${pluginId}.json`));
+        // The host-managed account's tokens go with the settings they sit beside.
+        await wipeSettingsFile(
+          path.join(this.deps.getSettingsRoot(), "accounts", `${pluginId}.json`)
+        );
       }
 
       // Bookkeeping runs only after the filesystem deletion succeeds — if `fs.rm`

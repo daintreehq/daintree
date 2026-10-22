@@ -152,6 +152,17 @@ export type {
   SettingFieldType,
 } from "./plugin.js";
 
+// ── Account (host.account) ──────────────────────────────────────────
+
+export type {
+  PluginAccountApi,
+  PluginAccountAccessToken,
+  PluginAccountContribution,
+  PluginAccountIdentity,
+  PluginAccountKind,
+  PluginAccountState,
+} from "./plugin.js";
+
 // ── Storage (host.storage) ──────────────────────────────────────────
 
 export type { StorageApi, PluginStorageScope } from "./plugin.js";

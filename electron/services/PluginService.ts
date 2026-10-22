@@ -80,6 +80,8 @@ import type {
   PluginCheckUpdateResult,
   PluginSettingsScope,
   PluginSettingsUiValues,
+  PluginAccountConnectResult,
+  PluginAccountUiStatus,
   PluginWorktreeStatus,
   PluginPanelBadge,
   PluginToolbarButtonRuntimeState,
@@ -170,6 +172,7 @@ import { PluginRendererDispatcher } from "./plugin/PluginRendererDispatcher.js";
 import { PluginPanelReloadDispatcher } from "./plugin/PluginPanelReloadDispatcher.js";
 import { PluginUIPromptDispatcher } from "./plugin/PluginUIPromptDispatcher.js";
 import { PluginSettingsManager } from "./plugin/PluginSettingsManager.js";
+import { PluginAccountService } from "./plugin/PluginAccountService.js";
 import { PluginStorageManager } from "./plugin/PluginStorageManager.js";
 import { PluginChannelRegistry } from "./plugin/PluginChannelRegistry.js";
 import {
@@ -1199,6 +1202,8 @@ export class PluginService {
    * lookup callback.
    */
   private readonly settings: PluginSettingsManager;
+  /** Host-managed `contributes.account` sign-ins and their keychain-held tokens (#13823). */
+  private readonly accounts: PluginAccountService;
   /**
    * Owns the per-(plugin, scope, path) private-storage store cache, scope and
    * file-path resolution (including the `"worktree"` scope that resolves the
@@ -1302,6 +1307,14 @@ export class PluginService {
       getManifest: (pluginId) =>
         (this.plugins.get(pluginId) ?? this.disabledPlugins.get(pluginId))?.manifest,
       onSettingChanged: (pluginId) => this.emitSettingsChanged(pluginId),
+    });
+
+    this.accounts = new PluginAccountService({
+      getSettingsRoot: () => this.settings.settingsRoot(),
+      getManifest: (pluginId) =>
+        (this.plugins.get(pluginId) ?? this.disabledPlugins.get(pluginId))?.manifest,
+      // The settings row listens for the same event to re-read its status.
+      onAccountChanged: (pluginId) => this.emitSettingsChanged(pluginId),
     });
 
     this.storage = new PluginStorageManager({
@@ -3993,6 +4006,7 @@ export class PluginService {
       panelReloadDispatcher: this.panelReloadDispatcher,
       promptDispatcher: this.promptDispatcher,
       settings: this.settings,
+      accounts: this.accounts,
       storage: this.storage,
       getHostGitFactory: () => this.hostGitFactory,
       getProcessManager: () => this.getProcessManager(),
@@ -6790,6 +6804,9 @@ export class PluginService {
     runUnloadStep(pluginId, "clearPluginSettingsState", () =>
       this.settings.clearPluginSettingsState(pluginId)
     );
+    runUnloadStep(pluginId, "clearPluginAccountState", () =>
+      this.accounts.clearPluginState(pluginId)
+    );
     // Same teardown for private storage: drops leftover subscriber-set entries
     // and the in-memory storage store caches so a reload starts from disk. A
     // discrete step (not bundled with settings) per the unload-cascade contract
@@ -7995,6 +8012,26 @@ export class PluginService {
     projectId: string | null
   ): Promise<string | null> {
     return this.settings.revealSecretSettingForUi(pluginId, key, scope, projectId);
+  }
+
+  getAccountStatusForUi(pluginId: string): Promise<PluginAccountUiStatus | null> {
+    return this.accounts.getUiStatus(pluginId);
+  }
+
+  connectAccountFromUi(pluginId: string): Promise<PluginAccountConnectResult> {
+    return this.accounts.connect(pluginId);
+  }
+
+  cancelAccountConnectFromUi(pluginId: string): void {
+    this.accounts.cancelConnect(pluginId);
+  }
+
+  setAccountTokenFromUi(pluginId: string, token: string): Promise<PluginAccountUiStatus> {
+    return this.accounts.setToken(pluginId, token);
+  }
+
+  disconnectAccountFromUi(pluginId: string): Promise<void> {
+    return this.accounts.disconnect(pluginId);
   }
 
   /**

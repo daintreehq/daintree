@@ -1397,6 +1397,88 @@ const PluginAuthorUrlSchema = z.string().superRefine((value, ctx) => {
 });
 
 /**
+ * An endpoint of `contributes.account`. Fixed by the manifest so the host only
+ * ever sends a code, a refresh token or an access token where the user can see
+ * it would go. No fragment: a token endpoint is POSTed to, and an authorize URL
+ * gets its own query appended.
+ */
+function accountUrlSchema(fieldLabel: string) {
+  return z
+    .string()
+    .max(2048)
+    .superRefine((value, ctx) => {
+      refinePluginHttpsUrl(value, ctx, fieldLabel);
+      if (value.includes("#")) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `${fieldLabel} must not carry a fragment: "${value}"`,
+          params: { errorCode: "account_url_fragment" },
+        });
+      }
+    });
+}
+
+/**
+ * Where "Connected as …" comes from: a GET with the access token as a bearer,
+ * whose JSON response holds the name at `field` (a dotted path such as
+ * `"viewer.login"`).
+ */
+const PluginAccountIdentitySchema = z
+  .object({
+    url: accountUrlSchema("contributes.account.identity.url"),
+    field: z
+      .string()
+      .min(1)
+      .max(128)
+      .regex(/^[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*$/, {
+        message: "identity.field must be a dotted path of plain keys, such as viewer.login",
+      }),
+  })
+  .strict();
+
+const PluginAccountBaseShape = {
+  label: z.string().trim().min(1).max(64),
+  description: z.string().trim().min(1).max(200).optional(),
+  identity: PluginAccountIdentitySchema.optional(),
+};
+
+/**
+ * `contributes.account` — one sign-in the host runs and stores for the plugin.
+ * `oauth2` is an authorization-code flow with PKCE (S256) as a public client;
+ * `token` is an API token the user pastes. The plugin only ever receives the
+ * current access token.
+ */
+export const PluginAccountContributionSchema = z.discriminatedUnion("kind", [
+  z
+    .object({
+      kind: z.literal("oauth2"),
+      ...PluginAccountBaseShape,
+      authorizeUrl: accountUrlSchema("contributes.account.authorizeUrl"),
+      tokenUrl: accountUrlSchema("contributes.account.tokenUrl"),
+      clientId: z.string().trim().min(1).max(256),
+      scopes: z
+        .array(
+          z
+            .string()
+            .min(1)
+            .max(256)
+            .regex(/^[\x21\x23-\x5B\x5D-\x7E]+$/, {
+              message: "scopes entries must be single OAuth scope tokens without spaces",
+            })
+        )
+        .max(64)
+        .default([]),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("token"),
+      ...PluginAccountBaseShape,
+    })
+    .strict(),
+]);
+
+/**
  * Upper bounds inside one `contributes.tours` entry. Like
  * {@link MANIFEST_CONTRIBUTION_CAPS} these reject pathological manifests rather
  * than shape authoring; a panel tour is expected to use a couple of chapters.
@@ -2560,6 +2642,7 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
             // Not an array, so it carries no MANIFEST_CONTRIBUTION_CAPS entry —
             // three optional fixed slots are structurally bounded already.
             surfaces: SurfaceContributionsSchema.default({}),
+            account: PluginAccountContributionSchema.optional(),
           })
           // A factory, not a literal: zod only shallow-clones a default value,
           // so a literal's arrays would be shared by every parse of the cached
@@ -2737,6 +2820,22 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
           }
         });
       });
+
+      // An account exists to reach an online service, and the consent dialog
+      // and plugin manager disclose that through `network:fetch`. Declaring
+      // the account without it would hide the plugin's network use.
+      if (
+        manifest.contributes.account !== undefined &&
+        !manifest.capabilities.includes("network:fetch")
+      ) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["contributes", "account"],
+          message:
+            'contributes.account requires the "network:fetch" capability — the account is for an online service, and the capability is how the user is told the plugin reaches the network.',
+          params: { errorCode: "account_requires_network_fetch" },
+        });
+      }
 
       // The inverse asymmetry: `contributes.surfaces` is available to project
       // plugins ALONE. An installed plugin taking over a project's empty canvas,

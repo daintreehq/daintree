@@ -1171,6 +1171,14 @@ export const CHANNELS = {
   PLUGIN_SETTINGS_REVEAL_SECRET: "plugin:settings-reveal-secret",
   /** Which declared `required` settings a plugin still has unset, for the panel setup strip. */
   PLUGIN_SETTINGS_REQUIRED_STATUS: "plugin:settings-required-status",
+  /** A plugin's `contributes.account` status for its settings row. Never carries a token. */
+  PLUGIN_ACCOUNT_STATUS: "plugin:account-status",
+  /** Start the declared OAuth sign-in from the settings row's click (#13823). */
+  PLUGIN_ACCOUNT_CONNECT: "plugin:account-connect",
+  PLUGIN_ACCOUNT_CANCEL_CONNECT: "plugin:account-cancel-connect",
+  /** Store a pasted API token for a `kind: "token"` account. */
+  PLUGIN_ACCOUNT_SET_TOKEN: "plugin:account-set-token",
+  PLUGIN_ACCOUNT_DISCONNECT: "plugin:account-disconnect",
   /** Cancel an in-flight plugin install by its job id (#11302). */
   PLUGIN_CANCEL_INSTALL: "plugin:cancel-install",
   /** Phase/entry progress for an in-flight install, targeted at the initiating window (#11302). */

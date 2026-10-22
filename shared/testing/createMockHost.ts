@@ -99,6 +99,8 @@ import type {
   PanelReloadResult,
   WorkerRestartResult,
   PluginSystemWakeEvent,
+  PluginAccountAccessToken,
+  PluginAccountState,
   PluginGitCommitResult,
   PluginPanelBadge,
   PluginToolbarButtonRuntimeState,
@@ -407,6 +409,17 @@ export interface MockHostState {
   simulateListenersChange(channel: string, hasListeners: boolean): void;
 
   /**
+   * Connect or disconnect the plugin's `host.account` as the user would from
+   * the settings row, and call every `account.onDidChange` subscriber. Pass an
+   * `accessToken` to change what `getAccessToken()` answers while connected.
+   */
+  simulateAccountChange(
+    account:
+      | ({ connected: true; identity?: string | null } & Partial<PluginAccountAccessToken>)
+      | { connected: false }
+  ): void;
+
+  /**
    * Pre-seed a deterministic `dispatch()` result for one action id. Overrides
    * the default in-memory routing (which resolves the registered handler).
    */
@@ -542,6 +555,15 @@ export interface CreateMockHostOptions {
    * by default (the mock has no manifest model), which accepts any non-empty id.
    */
   toolbarButtonIds?: readonly string[];
+  /**
+   * Seed `host.account`. Omitted, the account starts disconnected. The mock
+   * models a plugin that declares `contributes.account`.
+   */
+  account?: {
+    identity?: string | null;
+    accessToken?: string;
+    expiresAt?: number | null;
+  };
   /** Pre-seed private `host.storage` values per scope. */
   storage?: {
     user?: Record<string, unknown>;
@@ -1117,6 +1139,11 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
   const agentStateSubs = new Set<(snapshot: PluginAgentSnapshot) => void>();
   const panelLifecycleSubs = new Set<(event: PluginPanelLifecycleEvent) => void>();
   const systemWakeSubs = new Set<(event: PluginSystemWakeEvent) => void>();
+  const accountSubs = new Set<(state: PluginAccountState) => void>();
+  let accountToken: PluginAccountAccessToken | null = options.account?.accessToken
+    ? { accessToken: options.account.accessToken, expiresAt: options.account.expiresAt ?? null }
+    : null;
+  let accountIdentity: string | null = accountToken ? (options.account?.identity ?? null) : null;
   /** Channels a test marked as having no listener; every other channel has one. */
   const unlistenedChannels = new Set<string>();
   const listenerSubs = new Map<string, Set<(hasListeners: boolean) => void>>();
@@ -2879,6 +2906,20 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
         };
       },
     },
+    account: {
+      getState: async () => ({ connected: accountToken !== null, identity: accountIdentity }),
+      getAccessToken: async () => (accountToken ? { ...accountToken } : null),
+      onDidChange(callback) {
+        if (typeof callback !== "function") {
+          throw new Error("account.onDidChange: callback must be a function");
+        }
+        const registered = (state: PluginAccountState): void => callback(state);
+        accountSubs.add(registered);
+        return () => {
+          accountSubs.delete(registered);
+        };
+      },
+    },
     settings,
     storage,
     logger: {
@@ -2960,6 +3001,20 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
       else unlistenedChannels.add(channel);
       if (was === hasListeners) return;
       for (const cb of [...(listenerSubs.get(channel) ?? [])]) cb(hasListeners);
+    },
+    simulateAccountChange(account) {
+      if (account.connected) {
+        accountToken = {
+          accessToken: account.accessToken ?? accountToken?.accessToken ?? "mock-access-token",
+          expiresAt: account.expiresAt ?? null,
+        };
+        accountIdentity = account.identity ?? null;
+      } else {
+        accountToken = null;
+        accountIdentity = null;
+      }
+      const state = { connected: accountToken !== null, identity: accountIdentity };
+      for (const cb of [...accountSubs]) cb({ ...state });
     },
     simulateSystemWake(event) {
       // Frozen like production delivery, for the same reason.

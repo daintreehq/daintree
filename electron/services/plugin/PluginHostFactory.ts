@@ -55,6 +55,7 @@ import {
   REMOTE_CLIPBOARD_TIMEOUT_MS,
 } from "./pluginFrontendRequests.js";
 import { assertSettingsKey, type PluginSettingsManager } from "./PluginSettingsManager.js";
+import type { PluginAccountService } from "./PluginAccountService.js";
 import {
   assertStorageKey,
   type ExplicitStorageTarget,
@@ -636,6 +637,7 @@ export interface PluginHostFactoryDeps {
   panelReloadDispatcher: PluginPanelReloadDispatcher;
   promptDispatcher: PluginUIPromptDispatcher;
   settings: PluginSettingsManager;
+  accounts: PluginAccountService;
   storage: PluginStorageManager;
   /** Live read of the mutable `hostGitFactory` field — reassignable via `_setHostGitFactoryForTests`. */
   getHostGitFactory: () => HostGitFactory | undefined;
@@ -3043,6 +3045,26 @@ export function createHost(
     // HTML-to-PDF export written under host.fs.writeFile's gates. NOT
     // revoke-guarded, same as fs/system.
     documents: buildDocumentsApi(deps, pluginId),
+    // NOT revoke-guarded: a plugin asks for a token from timers and callbacks.
+    // Signing in and out are not here at all — only the host's settings row
+    // can start either.
+    account: {
+      getState: () => deps.accounts.getState(pluginId),
+      getAccessToken: () => deps.accounts.getAccessToken(pluginId),
+      onDidChange: (callback) => {
+        if (typeof callback !== "function") {
+          throw new Error(`Plugin "${pluginId}" account.onDidChange: callback must be a function`);
+        }
+        if (!deps.accounts.declaredAccount(pluginId)) {
+          throw new Error(`Plugin "${pluginId}" declares no contributes.account`);
+        }
+        if (!isBound()) return () => {};
+        const unsubscribe = deps.accounts.subscribe(pluginId, (state) => {
+          if (isBound()) callback(state);
+        });
+        return trackPluginDisposer(deps.pluginEventCleanups, pluginId, unsubscribe);
+      },
+    },
     // NOT revoke-guarded: plugins read/write settings throughout their
     // lifetime (IPC handlers, timers), long after activate() resolves. The
     // store is the source of truth, so a late call is harmless.

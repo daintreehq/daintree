@@ -931,6 +931,10 @@ export class PluginDevWorkerMainBridge {
       }
       case "settings.missingRequired":
         return this.host.settings.missingRequired();
+      case "account.getState":
+        return this.host.account.getState();
+      case "account.getAccessToken":
+        return this.host.account.getAccessToken();
       case "storage.get": {
         const p = params as StorageGetParams;
         return this.host.storage.get(p.key, p.scope);
@@ -1566,6 +1570,8 @@ export class PluginDevWorkerMainBridge {
             : kind === "process-crash"
               ? handle.onCrash((info) => push(info))
               : handle.onData((chunk) => push(chunk));
+      } else if (kind === "account") {
+        dispose = this.host.account.onDidChange((state) => push(state));
       } else if (kind === "storage") {
         if (!msg.key) {
           logger.warn(`[${this.pluginId}] storage subscribe missing key`);

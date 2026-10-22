@@ -18,7 +18,12 @@ import {
 import { SettingsLoadErrorBanner } from "@/components/Settings/SettingsLoadErrorBanner";
 import { landOnSettingsElement } from "@/components/Settings/settingsLanding";
 import { PluginSettingsView } from "@/components/Plugin/PluginSettingsView";
-import { pluginDeclaresSettingsView, settingsForHome } from "@/services/plugin/pluginSettingsHome";
+import {
+  accountHomeOf,
+  pluginDeclaresSettingsView,
+  settingsForHome,
+} from "@/services/plugin/pluginSettingsHome";
+import { PluginAccountRow } from "@/components/Settings/PluginAccountRow";
 import { actionService } from "@/services/ActionService";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -890,6 +895,10 @@ export function PluginSettingsForm({
   const home = viewScope === "user" ? "manager" : "project";
   const settings = settingsForHome(plugin, home);
   const elsewhere = settingsForHome(plugin, home === "manager" ? "project" : "manager");
+  const account = plugin.manifest.contributes.account;
+  const accountHome = accountHomeOf(plugin);
+  const showAccount = account !== undefined && accountHome === home;
+  const accountElsewhere = account !== undefined && accountHome !== home;
   const projectId = useProjectStore((s) => s.currentProject?.id ?? null);
 
   const [reloadKey, setReloadKey] = useState(0);
@@ -967,16 +976,24 @@ export function PluginSettingsForm({
   }, [focusNonce, focusKey, focusReady, focusInView, pluginId, onFocusHandled]);
 
   const hasView = pluginDeclaresSettingsView(plugin);
-  if (settings.length === 0 && elsewhere.length === 0 && !hasView) return null;
+  if (
+    settings.length === 0 &&
+    elsewhere.length === 0 &&
+    !hasView &&
+    !showAccount &&
+    !accountElsewhere
+  ) {
+    return null;
+  }
   // A value the plugin's own section edits is shown there, not twice.
   const fields = hasView ? settings.filter((def) => def.editor !== "view") : settings;
 
   const anyFailed = userScope.failed || projectScope.failed || localScope.failed;
   const elsewhereRow =
-    elsewhere.length === 0 ? null : (
+    elsewhere.length === 0 && !accountElsewhere ? null : (
       <SettingsElsewhereRow
         pluginId={pluginId}
-        firstKey={elsewhere[0]!.id}
+        firstKey={elsewhere[0]?.id}
         home={home === "manager" ? "project" : "manager"}
         projectOpen={projectId !== null}
       />
@@ -993,6 +1010,7 @@ export function PluginSettingsForm({
           onRetry={() => setReloadKey((k) => k + 1)}
         />
       )}
+      {showAccount && <PluginAccountRow plugin={plugin} account={account} />}
       {(fields.length > 0 || elsewhereRow) && (
         <SettingsGroup>
           {fields.map((def) => {
@@ -1057,7 +1075,8 @@ function SettingsElsewhereRow({
   projectOpen,
 }: {
   pluginId: string;
-  firstKey: string;
+  /** The first setting kept there, when the pointer is for settings and not only the account. */
+  firstKey: string | undefined;
   home: "manager" | "project";
   projectOpen: boolean;
 }) {
@@ -1080,7 +1099,7 @@ function SettingsElsewhereRow({
           onClick={() =>
             void actionService.dispatch(
               "plugin.openSettings",
-              { pluginId, key: firstKey },
+              firstKey === undefined ? { pluginId } : { pluginId, key: firstKey },
               { source: "user" }
             )
           }

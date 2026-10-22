@@ -2038,8 +2038,101 @@ export interface PluginManifest {
      * `agentMcp`.
      */
     databases?: PluginDatabaseContribution[];
+    /**
+     * The one online account the host signs in to for this plugin (#13823).
+     * The host draws the Connect / Disconnect row, runs the flow, stores the
+     * tokens in the OS keychain and hands the plugin a current access token
+     * through `host.account`. A project plugin's account is per project.
+     */
+    account?: PluginAccountContribution;
   };
 }
+
+/** Where "Connected as …" comes from: a bearer GET whose JSON holds the name at `field`. */
+export interface PluginAccountIdentity {
+  url: string;
+  /** Dotted path into the response, such as `"viewer.login"`. */
+  field: string;
+}
+
+interface PluginAccountContributionBase {
+  /** The service's name, shown on the Connect row ("GitLab", "Linear"). */
+  label: string;
+  description?: string;
+  identity?: PluginAccountIdentity;
+}
+
+/**
+ * `contributes.account`. `oauth2` runs an authorization-code flow with PKCE
+ * (S256) as a public client against fixed `https:` endpoints; `token` stores
+ * an API token the user pastes.
+ */
+export type PluginAccountContribution =
+  | (PluginAccountContributionBase & {
+      kind: "oauth2";
+      authorizeUrl: string;
+      tokenUrl: string;
+      clientId: string;
+      scopes: string[];
+    })
+  | (PluginAccountContributionBase & { kind: "token" });
+
+export type PluginAccountKind = PluginAccountContribution["kind"];
+
+/** What a plugin hears about its account. Never carries a token. */
+export interface PluginAccountState {
+  connected: boolean;
+  /** The name the service reported, when the manifest declares `identity` and it answered. */
+  identity: string | null;
+}
+
+/** A current access token for the plugin's account. The refresh token never leaves the host. */
+export interface PluginAccountAccessToken {
+  accessToken: string;
+  /** Epoch ms the token expires at, or `null` when the service didn't say. */
+  expiresAt: number | null;
+}
+
+/**
+ * `host.account` — the plugin's side of its host-managed account. Signing in
+ * and out happens only from the host's own settings row.
+ */
+export interface PluginAccountApi {
+  /** Whether the account is connected, and as whom. */
+  getState(): Promise<PluginAccountState>;
+  /**
+   * A current access token, refreshed first when it is about to expire, or
+   * `null` when the account isn't connected (including after the service
+   * refused a refresh, which disconnects it). Ask each time you need one;
+   * don't keep it. Rejects when the plugin declares no `contributes.account`,
+   * or when a refresh fails for a reason that may pass (offline, server error).
+   */
+  getAccessToken(): Promise<PluginAccountAccessToken | null>;
+  /**
+   * Called when the account connects, disconnects or reports a new identity.
+   * Returns a disposer; every subscription is disposed when the plugin unloads.
+   */
+  onDidChange(callback: (state: PluginAccountState) => void): () => void;
+}
+
+/** The settings row's view of a plugin account. */
+export interface PluginAccountUiStatus {
+  kind: PluginAccountKind;
+  label: string;
+  description: string | null;
+  connected: boolean;
+  identity: string | null;
+  /** A browser sign-in is waiting on the user. */
+  pending: boolean;
+  /** Whether the OS keychain can store the tokens right now. */
+  secretTier: PluginSecretStorageTier;
+}
+
+/** How a Connect click ended. `cancelled` covers a superseded or cancelled flow. */
+export type PluginAccountConnectResult =
+  | { status: "connected"; account: PluginAccountUiStatus }
+  | { status: "cancelled" }
+  | { status: "failed"; message: string };
 
 /**
  * Field control kind for a {@link SettingDefinition}. Drives which input the
@@ -5823,6 +5916,13 @@ export interface PluginHostApi extends PluginActivationApi {
    * {@link SettingsApi}.
    */
   readonly settings: SettingsApi;
+  /**
+   * The host-managed account declared in `contributes.account`. See
+   * {@link PluginAccountApi}. NOT revoke-guarded: plugins ask for a token from
+   * timers and callbacks. Every member rejects (or, for `onDidChange`, throws)
+   * when the manifest declares no account.
+   */
+  readonly account: PluginAccountApi;
   /**
    * Private, plugin-scoped key/value storage — the machine-owned counterpart to
    * {@link settings}. Values never surface in the settings UI and are not gated

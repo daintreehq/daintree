@@ -53,6 +53,9 @@ const HOST_CALL_DEADLINES = {
   "settings.set": INTERACTIVE,
   "settings.open": DEFAULT,
   "settings.missingRequired": DEFAULT,
+  "account.getState": DEFAULT,
+  // A refresh can wait on the keychain and then on the service.
+  "account.getAccessToken": INTERACTIVE,
   "storage.get": DEFAULT,
   "storage.set": DEFAULT,
   "storage.delete": DEFAULT,

@@ -687,6 +687,14 @@ export const CHANNEL_LOCALITY = {
   "plugin:settings-reveal-secret": "host",
   "plugin:settings-set-value": "host",
   "plugin:settings-required-status": "host",
+  "plugin:account-status": "host",
+  "plugin:account-disconnect": "host",
+  // Signing in needs the browser and the keychain on the same machine, and a
+  // pasted token would cross the link to reach the host's keychain. With no
+  // split registered, a remote-bound window is refused.
+  "plugin:account-connect": "hybrid",
+  "plugin:account-cancel-connect": "hybrid",
+  "plugin:account-set-token": "hybrid",
   "plugin:toolbar-buttons": "host",
   "plugin:ui-prompt-cancel": "shell",
   "plugin:ui-prompt-request": "shell",
