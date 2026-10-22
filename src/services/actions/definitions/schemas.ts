@@ -423,7 +423,7 @@ export const AgentSettingsEntrySchema = z
 export const WorktreeSetupStateSchema = z
   .enum(["pending", "running", "ready", "failed", "timed-out", "needs-approval", "unknown"])
   .describe(
-    "pending, running (config copy, submodules, setup script, provisioning or plugin steps), ready, failed, timed-out, needs-approval (repo setup commands or plugin steps await the user's approval; you can't give it), or unknown (not created by this host, or it restarted since)."
+    "pending, running (config copy, submodules, setup script, provisioning, plugin steps), ready, failed, timed-out, needs-approval (awaits the user's approval; you can't give it), or unknown (not created by this host, or it restarted since)."
   );
 
 export const WorktreeSummarySchema = z.object({

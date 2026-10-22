@@ -1571,7 +1571,7 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           type: "string",
           enum: ["pending", "running", "ready", "failed", "timed-out", "needs-approval", "unknown"],
           description:
-            "pending, running (config copy, submodules, setup script, provisioning or plugin steps), ready, failed, timed-out, needs-approval (repo setup commands or plugin steps await the user's approval; you can't give it), or unknown (not created by this host, or it restarted since).",
+            "pending, running (config copy, submodules, setup script, provisioning, plugin steps), ready, failed, timed-out, needs-approval (awaits the user's approval; you can't give it), or unknown (not created by this host, or it restarted since).",
         },
         stage: {
           anyOf: [
