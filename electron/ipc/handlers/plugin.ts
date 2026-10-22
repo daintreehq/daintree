@@ -63,6 +63,11 @@ import {
   getProjectFileEditorChoices,
   setProjectFileEditorChoice,
 } from "../../services/plugin/projectFileEditorChoices.js";
+import {
+  getProjectHiddenLaunchGroups,
+  isHiddenGroupId,
+  setProjectLaunchGroupHidden,
+} from "../../services/plugin/projectHiddenLaunchGroups.js";
 import { pluginInstallJobs } from "../../services/plugin/PluginInstallJobRegistry.js";
 import { sendToRendererContext } from "../utils.js";
 import { getPluginMenuItems } from "../../services/pluginMenuRegistry.js";
@@ -72,6 +77,7 @@ import {
   getPluginContributionScope,
   getPluginCustomIconsForProject,
   getPluginHostedViewsForProject,
+  getPluginLaunchEntriesForProject,
   recipeOwner,
   selectContributionsForProject,
 } from "../../services/plugin/PluginContributionBroadcaster.js";
@@ -120,6 +126,7 @@ import type {
   FileEditorChoice,
   FileEditorChoiceKey,
   FileEditorChoices,
+  PluginLaunchEntryConfig,
 } from "../../../shared/types/plugin.js";
 import {
   PROJECT_SURFACE_SLOTS,
@@ -709,6 +716,34 @@ async function handleToolbarButtons(ctx: IpcContext): Promise<ToolbarButtonConfi
   // renderer's own mount-time path and must agree with what the push path
   // broadcast to that same view.
   return selectContributionsForProject(buttons, (c) => c.pluginId, ctx.projectId);
+}
+
+/** The SENDER's project's launch entries (#13788), behind the same init guard as toolbar buttons. */
+async function handleLaunchEntries(ctx: IpcContext): Promise<PluginLaunchEntryConfig[]> {
+  await (await getPluginService()).waitForInit();
+  return getPluginLaunchEntriesForProject(ctx.projectId);
+}
+
+/** The plugin ids whose launcher group the SENDER's project hides; empty for a view with no project. */
+async function handleHiddenLaunchGroupsGet(ctx: IpcContext): Promise<string[]> {
+  if (!ctx.projectId) return [];
+  return getProjectHiddenLaunchGroups(ctx.projectId);
+}
+
+/**
+ * Hide or show one plugin's launcher group in the SENDER's project. Shape-checked
+ * only: an id that names no loaded plugin is remembered as asked, and simply
+ * hides nothing until that plugin is there.
+ */
+async function handleLaunchGroupHiddenSet(
+  ctx: IpcContext,
+  pluginId: string,
+  hidden: boolean
+): Promise<string[]> {
+  if (!ctx.projectId) throw new Error("launch group: sender has no project");
+  if (!isHiddenGroupId(pluginId)) throw new Error("launch group: malformed plugin id");
+  if (typeof hidden !== "boolean") throw new Error("launch group: malformed hidden flag");
+  return setProjectLaunchGroupHidden(ctx.projectId, pluginId, hidden);
 }
 
 async function handleKeybindings(ctx: IpcContext) {
@@ -2194,6 +2229,19 @@ export const pluginNamespace = defineIpcNamespace({
     toolbarButtons: op(PLUGIN_METHOD_CHANNELS.toolbarButtons, handleToolbarButtons, {
       withContext: true,
     }),
+    launchEntries: op(PLUGIN_METHOD_CHANNELS.launchEntries, handleLaunchEntries, {
+      withContext: true,
+    }),
+    getHiddenLaunchGroups: op(
+      PLUGIN_METHOD_CHANNELS.getHiddenLaunchGroups,
+      handleHiddenLaunchGroupsGet,
+      { withContext: true }
+    ),
+    setLaunchGroupHidden: op(
+      PLUGIN_METHOD_CHANNELS.setLaunchGroupHidden,
+      handleLaunchGroupHiddenSet,
+      { withContext: true }
+    ),
     keybindings: op(PLUGIN_METHOD_CHANNELS.keybindings, handleKeybindings, { withContext: true }),
     contextMenuItems: op(PLUGIN_METHOD_CHANNELS.contextMenuItems, handleContextMenuItems, {
       withContext: true,

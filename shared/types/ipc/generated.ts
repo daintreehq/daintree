@@ -1765,6 +1765,18 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: { pluginId: string; item: import("../plugin.js").KeybindingContribution }[];
   };
+  "plugin:launch-entries": {
+    args: [];
+    result: import("../plugin.js").PluginLaunchEntryConfig[];
+  };
+  "plugin:launch-group-hidden-set": {
+    args: [pluginId: string, hidden: boolean];
+    result: string[];
+  };
+  "plugin:launch-groups-hidden-get": {
+    args: [];
+    result: string[];
+  };
   "plugin:list": {
     args: [];
     result: import("../plugin.js").LoadedPluginInfo[];

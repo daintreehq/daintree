@@ -61,6 +61,7 @@ import {
   getPluginAgentRegistrySnapshot,
 } from "@shared/config/pluginAgentRegistry";
 import { useRecipeStore } from "@/store/recipeStore";
+import { usePluginLaunchEntriesStore } from "@/store/pluginLaunchEntriesStore";
 import { useUserAgentRegistryStore } from "@/store/userAgentRegistryStore";
 import { resolveLauncherItemMetadata } from "@/components/Layout/launcherToolbarCatalog";
 import { BUILT_IN_AGENT_IDS, isBuiltInAgentId } from "@shared/config/agentIds";
@@ -602,6 +603,13 @@ export function ToolbarSettingsTab() {
   // a user-defined agent lives here, so without this its row keeps a stale name
   // and icon after an edit.
   const userAgentRegistry = useUserAgentRegistryStore((s) => s.registry);
+  // Plugin launch entries are held in their own store rather than a registry,
+  // so they are passed in rather than read from inside the resolver.
+  const launchEntries = usePluginLaunchEntriesStore((s) => s.entries);
+  const initLaunchEntries = usePluginLaunchEntriesStore((s) => s.init);
+  useEffect(() => {
+    initLaunchEntries();
+  }, [initLaunchEntries]);
   const launcherItemMetadata = useMemo(() => {
     // Referenced, not merely listed as dependencies. `resolveLauncherItemMetadata`
     // reads both registries itself, so these snapshots exist only to invalidate
@@ -619,7 +627,7 @@ export function ToolbarSettingsTab() {
     for (const [id, isPinned] of Object.entries(layout.pinnedButtons)) {
       if (isPinned !== true) continue;
       if (!isLauncherItemToolbarButtonId(id)) continue;
-      const metadata = resolveLauncherItemMetadata(id, recipes, currentProjectId);
+      const metadata = resolveLauncherItemMetadata(id, recipes, currentProjectId, launchEntries);
       if (metadata) entries.push([id, metadata]);
     }
     return Object.fromEntries(entries);
@@ -627,6 +635,7 @@ export function ToolbarSettingsTab() {
     layout.pinnedButtons,
     recipes,
     currentProjectId,
+    launchEntries,
     panelKindRegistry,
     pluginAgentRegistry,
     userAgentRegistry,

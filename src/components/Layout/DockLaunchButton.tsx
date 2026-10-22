@@ -12,7 +12,16 @@ import {
 } from "react";
 import { useShallow } from "zustand/react/shallow";
 import Fuse, { type IFuseOptions } from "fuse.js";
-import { ChevronRight, Keyboard, Pin, Plug, Plus, Settings2, SquareTerminal } from "lucide-react";
+import {
+  ChevronRight,
+  EyeOff,
+  Keyboard,
+  Pin,
+  Plug,
+  Plus,
+  Settings2,
+  SquareTerminal,
+} from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -81,11 +90,14 @@ import {
   insertExpandedPresetRows,
   rowHasPresets,
   useDockLaunchModel,
-  DOCK_LAUNCH_BAND_LABELS,
   DOCK_LAUNCH_CATEGORY_LABELS,
   DOCK_LAUNCH_CUE_LABELS,
   DOCK_LAUNCH_PRESET_GROUP_LABELS,
+  dockLaunchBandLabel,
+  getDockLaunchRowPluginGroup,
+  type ActivateDockLaunchItemContext,
   type DockLaunchAgent,
+  type DockLaunchAgentOptions,
   type DockLaunchCueId,
   type DockLaunchInventoryState,
   type DockLaunchItem,
@@ -166,7 +178,7 @@ type DockLaunchPinTarget =
 interface DockLaunchButtonProps {
   agents: ReadonlyArray<DockLaunchAgent>;
   pinnedCount?: number;
-  onLaunchAgent: (agentId: string, presetId?: string | null) => void;
+  onLaunchAgent: ActivateDockLaunchItemContext["onLaunchAgent"];
   activeWorktreeId: string | null;
   cwd: string;
   recipeContext?: RecipeContext;
@@ -650,7 +662,7 @@ export function DockLaunchButton({
   );
 
   const launchAgent = useCallback(
-    (agentId: string, presetId?: string | null) => {
+    (agentId: string, presetId?: string | null, options?: DockLaunchAgentOptions) => {
       // Clear the NEW signal only for the agent actually launched — opening the
       // launcher alone must not burn the cue for every other one.
       void markAgentsSeen([agentId]);
@@ -666,7 +678,9 @@ export function DockLaunchButton({
       if (activeWorktreeId && presetId !== undefined) {
         void updateWorktreePreset(agentId, activeWorktreeId, presetId ?? undefined);
       }
-      onLaunchAgent(agentId, presetId);
+      // Only a plugin entry passes options; every other row keeps the two-argument call.
+      if (options) onLaunchAgent(agentId, presetId, options);
+      else onLaunchAgent(agentId, presetId);
     },
     [activeWorktreeId, markAgentsSeen, onLaunchAgent, updateWorktreePreset]
   );
@@ -675,7 +689,7 @@ export function DockLaunchButton({
     (row: DockLaunchRow) => {
       if (row.kind === "cue") {
         closeLauncher();
-        activateDockLaunchCue(row.cue, activeWorktreeId, "menu");
+        activateDockLaunchCue(row.cue, activeWorktreeId, "menu", row.pluginGroup);
         return;
       }
 
@@ -903,7 +917,7 @@ export function DockLaunchButton({
           data-testid="dock-launcher-band"
           className={cn(PALETTE_SECTION_LABEL_CLASS, "px-2 pt-2 pb-1 first:pt-0")}
         >
-          {DOCK_LAUNCH_BAND_LABELS[headingBand(row.band)]}
+          {dockLaunchBandLabel(headingBand(row.band), row)}
         </div>
       )}
       {capturingRowKey === row.rowKey ? (
@@ -1246,7 +1260,13 @@ function shouldShowBandLabel(rows: ReadonlyArray<DockLaunchRow>, index: number):
   let previous = index - 1;
   while (previous >= 0 && rows[previous]?.kind === "preset") previous -= 1;
   const prior = rows[previous];
-  return previous < 0 || !prior || headingBand(prior.band) !== headingBand(row.band);
+  if (previous < 0 || !prior || headingBand(prior.band) !== headingBand(row.band)) return true;
+  // Plugin groups share one browse band and are told apart by plugin, each
+  // under its own name. Search results are one flat list with one heading.
+  if (row.band !== "plugin-entries") return false;
+  return (
+    getDockLaunchRowPluginGroup(prior)?.pluginId !== getDockLaunchRowPluginGroup(row)?.pluginId
+  );
 }
 
 /**
@@ -1412,9 +1432,13 @@ function DockLaunchOption({
     unavailableAgent !== null ||
     disabledReason !== undefined ||
     (item?.category === "recipe" && item.isShadowed);
+  // A plugin entry's description rides the same attribute: a tooltip for the
+  // eye and, beside the `aria-label`, the accessible description for the ear.
   const title = unavailableAgent
     ? unavailableAgentHint(unavailableAgent.name, unavailableAgent.availability)
-    : undefined;
+    : item?.category === "plugin-entry"
+      ? item.description
+      : undefined;
 
   const displayName =
     row.kind === "cue"
@@ -1455,7 +1479,9 @@ function DockLaunchOption({
   // cannot see the band heading has nothing else to place the row with.
   const spokenQualifier =
     row.kind === "cue"
-      ? "Action"
+      ? // The hide row sits under its plugin's heading, which a listener never
+        // hears, so it names the plugin itself.
+        (row.pluginGroup?.pluginName ?? "Action")
       : row.kind === "preset"
         ? // From the preset's own data, never from whether a heading happened to
           // render above it: only the first row of a named group carries one.
@@ -1466,19 +1492,23 @@ function DockLaunchOption({
           ]
             .filter(Boolean)
             .join(" · ")
-        : disabledReason !== undefined
-          ? disabledReason
-          : item!.category === "panel"
-            ? item!.location === "dock"
-              ? "Dock"
-              : "Grid"
-            : item!.category === "recipe"
-              ? item!.isShadowed
-                ? `${item!.scopeLabel} · Overridden by Team`
-                : item!.scopeLabel
-              : item!.agentBand !== "launch"
-                ? "Setup"
-                : "Agent";
+        : item!.category === "plugin-entry"
+          ? // The heading's attribution, for a listener who never sees it —
+            // kept beside a disabled reason rather than replaced by it.
+            [item!.pluginName, disabledReason].filter(Boolean).join(" · ")
+          : disabledReason !== undefined
+            ? disabledReason
+            : item!.category === "panel"
+              ? item!.location === "dock"
+                ? "Dock"
+                : "Grid"
+              : item!.category === "recipe"
+                ? item!.isShadowed
+                  ? `${item!.scopeLabel} · Overridden by Team`
+                  : item!.scopeLabel
+                : item!.agentBand !== "launch"
+                  ? "Setup"
+                  : "Agent";
 
   // `visualQualifier` is what the eye sees, and the eye has the band heading
   // that the ear does not. Every browse band is type-homogeneous — "Launch
@@ -1550,11 +1580,15 @@ function DockLaunchOption({
                       // named Work are otherwise indistinguishable in results.
                       item!.category === "recipe"
                       ? `${DOCK_LAUNCH_CATEGORY_LABELS.recipe} · ${item!.scopeLabel}`
-                      : // The launch outcome rides behind the category, so a
-                        // searched agent still says which preset Enter uses.
-                        [DOCK_LAUNCH_CATEGORY_LABELS[item!.category], launchOutcome]
-                          .filter(Boolean)
-                          .join(" · ")
+                      : // Search drops the plugin's heading, so a result says
+                        // whose row it is beside what it is.
+                        item!.category === "plugin-entry"
+                        ? `${DOCK_LAUNCH_CATEGORY_LABELS["plugin-entry"]} · ${item!.pluginName}`
+                        : // The launch outcome rides behind the category, so a
+                          // searched agent still says which preset Enter uses.
+                          [DOCK_LAUNCH_CATEGORY_LABELS[item!.category], launchOutcome]
+                            .filter(Boolean)
+                            .join(" · ")
                     : item!.category === "recipe"
                       ? item!.scopeLabel
                       : undefined;
@@ -1884,6 +1918,7 @@ const DOCK_LAUNCH_CUE_ICONS: Record<DockLaunchCueId, LucideIcon> = {
   "setup-agents": Plug,
   "manage-agents": Settings2,
   "customize-toolbar": TOOLBAR_CUSTOMIZE_ICON,
+  "hide-plugin-group": EyeOff,
 };
 
 function DockLaunchOptionIcon({
@@ -1904,6 +1939,9 @@ function DockLaunchOptionIcon({
   }
   if (item.category === "panel") {
     return <PanelKindIcon iconId={item.iconId} color={item.color} size={14} className="mr-2" />;
+  }
+  if (item.category === "plugin-entry") {
+    return <PanelKindIcon iconId={item.iconId} size={14} className="mr-2" />;
   }
 
   const { agent } = item;

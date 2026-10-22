@@ -3827,6 +3827,11 @@ function buildElectronApi(): ElectronAPI {
       onToolbarButtonsChanged: (
         callback: (payload: { buttons: ToolbarButtonConfig[]; complete: boolean }) => void
       ) => _eventBusOn("plugin:toolbar-buttons-changed", callback),
+      onLaunchEntriesChanged: (
+        callback: (payload: {
+          entries: import("../shared/types/plugin.js").PluginLaunchEntryConfig[];
+        }) => void
+      ) => _eventBusOn("plugin:launch-entries-changed", callback),
       onKeybindingsChanged: (
         callback: (payload: {
           keybindings: PluginKeybindingDescriptor[];

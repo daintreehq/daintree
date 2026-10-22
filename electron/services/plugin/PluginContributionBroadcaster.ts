@@ -11,6 +11,7 @@ import {
 import { CHANNELS } from "../../ipc/channels.js";
 import { getPluginPanelKinds } from "../../../shared/config/panelKindRegistry.js";
 import { getAllPluginToolbarButtonConfigs } from "../../../shared/config/toolbarButtonRegistry.js";
+import { getAllPluginLaunchEntries } from "../../../shared/config/pluginLaunchEntryRegistry.js";
 import { getPluginKeybindings } from "../pluginKeybindingRegistry.js";
 import { getPluginContextMenuItems } from "../pluginContextMenuRegistry.js";
 import { getPluginAgentRegistry } from "../../../shared/config/pluginAgentRegistry.js";
@@ -195,6 +196,15 @@ export function getPluginToolbarButtonsForProject(projectId: string | null | und
   );
 }
 
+/** Plugin launch entries visible in a view of `projectId` (#13788). */
+export function getPluginLaunchEntriesForProject(projectId: string | null | undefined) {
+  return selectContributionsForProject(
+    getAllPluginLaunchEntries(),
+    (entry) => entry.pluginId,
+    projectId
+  );
+}
+
 /** Plugin keybindings visible in a view of `projectId`. */
 export function getPluginKeybindingsForProject(projectId: string | null | undefined) {
   return selectContributionsForProject(
@@ -324,6 +334,12 @@ export class PluginContributionBroadcaster {
    * and keeps no preference to sweep, so every snapshot replaces wholesale.
    */
   private toursBroadcastPending = false;
+  /**
+   * Same as {@link toursBroadcastPending}: launch-entry snapshots replace
+   * wholesale. Pins of an entry that is gone are left alone by the launcher's
+   * catalog gate rather than swept, so no snapshot needs to be authoritative.
+   */
+  private launchEntriesBroadcastPending = false;
   /** Same as {@link toursBroadcastPending}: icon snapshots replace wholesale. */
   private iconsBroadcastPending = false;
   /** Same as {@link toursBroadcastPending}: hosted-view snapshots replace wholesale. */
@@ -424,6 +440,7 @@ export class PluginContributionBroadcaster {
     this.broadcastPluginActions();
     this.schedulePanelKindsBroadcast();
     this.scheduleToolbarButtonsBroadcast(true);
+    this.scheduleLaunchEntriesBroadcast();
     this.scheduleKeybindingsBroadcast(true);
     this.scheduleContextMenuItemsBroadcast(true);
     this.scheduleToursBroadcast();
@@ -693,6 +710,20 @@ export class PluginContributionBroadcaster {
     });
   }
 
+  /** Coalesce launch-entry registry mutations into one scoped snapshot per tick (#13788). */
+  scheduleLaunchEntriesBroadcast(): void {
+    if (this.deps.isDisposed()) return;
+    if (this.launchEntriesBroadcastPending) return;
+    this.launchEntriesBroadcastPending = true;
+    this.defer(() => {
+      this.launchEntriesBroadcastPending = false;
+      if (this.deps.isDisposed()) return;
+      this.emitScoped("plugin:launch-entries-changed", (projectId) => ({
+        entries: forProject(getAllPluginLaunchEntries(), (entry) => entry.pluginId, projectId),
+      }));
+    });
+  }
+
   /** Coalesce custom-icon registry mutations into one scoped snapshot per tick. */
   schedulePluginIconsBroadcast(): void {
     if (this.deps.isDisposed()) return;
@@ -802,6 +833,12 @@ export class PluginContributionBroadcaster {
         payload: {
           buttons: forProject(getAllPluginToolbarButtonConfigs(), (c) => c.pluginId, target),
           complete: false,
+        },
+      },
+      {
+        name: "plugin:launch-entries-changed",
+        payload: {
+          entries: forProject(getAllPluginLaunchEntries(), (entry) => entry.pluginId, target),
         },
       },
       {

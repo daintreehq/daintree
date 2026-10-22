@@ -690,6 +690,15 @@ export interface StoreSchema {
   projectFileEditorChoices?: Record<string, FileEditorChoices>;
 
   /**
+   * Per-project launcher groups the user hid (#13788): plugin instance ids
+   * whose launch entries this project's launcher leaves out. Keyed by project
+   * id. Daintree's own settings, never the repository, and separate from
+   * `projectPluginVisibility` — hiding a plugin's rows hides nothing else it
+   * contributes. Same additive-key convention as above.
+   */
+  projectHiddenLaunchGroups?: Record<string, string[]>;
+
+  /**
    * Per-project presentation profiles (#13771): the levels the user set or
    * accepted for each built-in surface, and their answer to the repository's
    * `.daintree/presentation.json` suggestion. Read and written only through
@@ -1014,6 +1023,7 @@ const storeOptions = {
     projectPluginTrust: {},
     projectSurfaceChoices: {},
     projectFileEditorChoices: {},
+    projectHiddenLaunchGroups: {},
     projectPresentation: {},
     projectAgentMcpEnablement: {},
     projectAgentMcpAccess: {},

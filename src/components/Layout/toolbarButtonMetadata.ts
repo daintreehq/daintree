@@ -190,7 +190,8 @@ export function getToolbarButtonGroup(
   // Launcher items (#12217) group by the category their id declares, so a
   // pinned plugin agent stands with the built-in agents and a pinned Review
   // panel with the panel buttons rather than all of them landing in the
-  // trailing `utilities` catch-all. A recipe is neither, so it does.
+  // trailing `utilities` catch-all. A recipe or a plugin's launch entry is
+  // neither, so it does — beside the plugin's own toolbar buttons.
   const launcherItem = decodeLauncherItemToolbarButtonId(buttonId);
   if (launcherItem) {
     if (launcherItem.category === "agent") return "agents";

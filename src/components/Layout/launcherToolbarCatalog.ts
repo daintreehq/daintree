@@ -13,6 +13,7 @@ import { getPanelKindConfig } from "@shared/config/panelKindRegistry";
 import { getAgentConfig } from "@/config/agents";
 import { getRecipeScope, recipeToolbarSourceId } from "@/utils/recipeScope";
 import type { TerminalRecipe } from "@shared/types";
+import type { PluginLaunchEntryConfig } from "@shared/types/plugin";
 import { DEFAULT_PANEL_ICON, resolvePluginIcon } from "@/components/icons/pluginIconRegistry";
 import { Workflow } from "@/components/icons";
 import type { ToolbarButtonMetadata } from "./toolbarButtonMetadata";
@@ -66,6 +67,13 @@ export function resolveLauncherToolbarButtonId(
     // would throw away rather than a case that reaches us.
     if (sourceId.length === 0 || sourceId.endsWith(":")) return null;
     return launcherItemToolbarButtonId("recipe", sourceId);
+  }
+  if (item.category === "plugin-entry") {
+    // The runtime entry id, which carries the plugin's instance id — so a
+    // project plugin's pin is that project's alone, and two projects with the
+    // same plugin can't share one button.
+    if (item.entryId.length === 0) return null;
+    return launcherItemToolbarButtonId("plugin-entry", item.entryId);
   }
   return null;
 }
@@ -149,6 +157,15 @@ const LAUNCHER_ITEM_ACTION_LABEL = {
 } as const;
 
 /**
+ * A plugin entry's label is already the verb phrase the author wrote ("New
+ * record…", "Publish site"), so the plugin's name in place of a verb is what
+ * tells two plugins' "New…" buttons apart.
+ */
+function pluginEntryDescription(label: string, pluginName: string): string {
+  return `${label} (${pluginName})`;
+}
+
+/**
  * What pressing the button does, plus whatever it takes to tell two rows apart.
  *
  * Two recipes can share a name across scopes — a Project "Deploy" and a Team
@@ -157,6 +174,7 @@ const LAUNCHER_ITEM_ACTION_LABEL = {
  * Settings switches would all read identically (#12217).
  */
 function launcherItemDescription(item: DockLaunchItem): string {
+  if (item.category === "plugin-entry") return pluginEntryDescription(item.name, item.pluginName);
   const verb = LAUNCHER_ITEM_ACTION_LABEL[item.category];
   if (item.category === "recipe") return `${verb} ${item.name} (${item.scopeLabel})`;
   return `${verb} ${item.name}`;
@@ -165,7 +183,9 @@ function launcherItemDescription(item: DockLaunchItem): string {
 /** The glyph a catalog entry renders, resolved from whatever its category carries. */
 function launcherItemIcon(item: DockLaunchItem): ToolbarButtonMetadata["icon"] {
   if (item.category === "agent") return item.agent.icon ?? DEFAULT_PANEL_ICON;
-  if (item.category === "panel") return resolvePluginIcon(item.iconId, DEFAULT_PANEL_ICON);
+  if (item.category === "panel" || item.category === "plugin-entry") {
+    return resolvePluginIcon(item.iconId, DEFAULT_PANEL_ICON);
+  }
   return Workflow;
 }
 
@@ -211,11 +231,24 @@ export function buildLauncherToolbarMeta(
 export function resolveLauncherItemMetadata(
   buttonId: string,
   recipes: ReadonlyArray<TerminalRecipe>,
-  currentProjectId: string | null | undefined
+  currentProjectId: string | null | undefined,
+  launchEntries: ReadonlyArray<PluginLaunchEntryConfig> = []
 ): ToolbarButtonMetadata | undefined {
   const decoded = decodeLauncherItemToolbarButtonId(buttonId);
   if (!decoded) return undefined;
   const { category, sourceId } = decoded;
+
+  if (category === "plugin-entry") {
+    // Every registered entry, hidden group or false `when` included: the pin
+    // is still the user's, and Settings is where they find it to remove it.
+    const entry = launchEntries.find((candidate) => candidate.id === sourceId);
+    if (!entry) return undefined;
+    return {
+      label: entry.label,
+      icon: resolvePluginIcon(entry.iconId, DEFAULT_PANEL_ICON),
+      description: pluginEntryDescription(entry.label, entry.pluginName),
+    };
+  }
 
   if (category === "agent") {
     const config = getAgentConfig(sourceId);

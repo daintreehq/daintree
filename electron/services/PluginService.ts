@@ -85,6 +85,7 @@ import type {
   PluginWorktreeStatus,
   PluginPanelBadge,
   PluginToolbarButtonRuntimeState,
+  PluginLaunchEntryTarget,
   PluginContextValue,
   PluginWorktreeCardStatus,
   PluginRuntimeStatus,
@@ -242,6 +243,10 @@ import {
   registerToolbarButton,
   unregisterPluginToolbarButtons,
 } from "../../shared/config/toolbarButtonRegistry.js";
+import {
+  registerPluginLaunchEntry,
+  unregisterPluginLaunchEntries,
+} from "../../shared/config/pluginLaunchEntryRegistry.js";
 import { registerPluginMenuItem, unregisterPluginMenuItems } from "./pluginMenuRegistry.js";
 import {
   registerPluginKeybinding,
@@ -2415,6 +2420,61 @@ export class PluginService {
     }
     if (manifest.contributes.toolbarButtons.length > 0) {
       this.broadcaster.scheduleToolbarButtonsBroadcast(false);
+    }
+
+    // Launch entries (#13788) carry runtime ids, never manifest ones: a panel
+    // target names the kind exactly as the panels loop below registers it, and
+    // a command target is rewritten into the instance namespace like every
+    // other contributed `actionId`. The schema already held both to this
+    // plugin's own panels and commands.
+    const launchEntries = manifest.contributes.launchEntries ?? [];
+    for (const entry of launchEntries) {
+      let target: PluginLaunchEntryTarget;
+      if (entry.panel !== undefined) {
+        const panelKindId = isProject
+          ? toRuntimePanelKindId(
+              { origin: "project", pluginId: manifest.name, kindId: entry.panel.id },
+              binding.projectId
+            )
+          : `${manifest.name}.${entry.panel.id}`;
+        if (panelKindId === null) {
+          console.error(
+            `[PluginService] Plugin "${manifest.name}": cannot qualify launch entry panel "${entry.panel.id}" without an owning project — skipping entry "${entry.id}"`
+          );
+          continue;
+        }
+        target = {
+          type: "panel",
+          panelKindId,
+          ...(entry.panel.args !== undefined ? { args: entry.panel.args } : {}),
+          ...(entry.panel.placement !== undefined ? { placement: entry.panel.placement } : {}),
+        };
+      } else if (entry.command !== undefined) {
+        target = {
+          type: "command",
+          actionId: qualifyActionId(entry.command.actionId),
+          ...(entry.command.args !== undefined ? { args: entry.command.args } : {}),
+        };
+      } else if (entry.agent !== undefined) {
+        target = { type: "agent", agentId: entry.agent.id, prompt: entry.agent.prompt };
+      } else {
+        continue;
+      }
+      registerPluginLaunchEntry({
+        id: `${pluginId}.${entry.id}`,
+        pluginId,
+        pluginName: manifest.displayName ?? manifest.name,
+        label: entry.label,
+        iconId: resolveIconId(entry.iconId),
+        ...(entry.description !== undefined ? { description: entry.description } : {}),
+        priority: entry.priority ?? 3,
+        ...(entry.when !== undefined ? { when: entry.when } : {}),
+        target,
+      });
+      trackPluginExpression(pluginId, entry.when);
+    }
+    if (launchEntries.length > 0) {
+      this.broadcaster.scheduleLaunchEntriesBroadcast();
     }
 
     for (const menuItem of manifest.contributes.menuItems) {
@@ -6900,6 +6960,12 @@ export class PluginService {
     );
     runUnloadStep(pluginId, "scheduleToolbarButtonsBroadcast", () =>
       this.broadcaster.scheduleToolbarButtonsBroadcast(true)
+    );
+    runUnloadStep(pluginId, "unregisterPluginLaunchEntries", () =>
+      unregisterPluginLaunchEntries(pluginId)
+    );
+    runUnloadStep(pluginId, "scheduleLaunchEntriesBroadcast", () =>
+      this.broadcaster.scheduleLaunchEntriesBroadcast()
     );
     runUnloadStep(pluginId, "unregisterPluginPanelKinds", () =>
       unregisterPluginPanelKinds(pluginId)

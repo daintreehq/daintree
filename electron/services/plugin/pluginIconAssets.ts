@@ -18,6 +18,7 @@ import { PluginPathNotAllowedError, resolveContainedPath } from "./pluginFsConta
 interface IconBearingContributions {
   panels: ReadonlyArray<{ iconId: string; toolbar?: ReadonlyArray<{ iconId?: string }> }>;
   toolbarButtons: ReadonlyArray<{ iconId: string }>;
+  launchEntries?: ReadonlyArray<{ iconId: string }>;
   processTools: ReadonlyArray<{ iconId: string }>;
   views?: ReadonlyArray<{ location: string; iconId?: string }>;
 }
@@ -60,6 +61,9 @@ export function collectPluginCustomIconRefs(
     }
   }
   add("toolbarButtons");
+  for (const [index, entry] of (contributes.launchEntries ?? []).entries()) {
+    note(entry.iconId, `contributes.launchEntries.${index}.iconId`);
+  }
   add("processTools");
   // A panel view's icon is advisory (the panel's own draws), so only a sidebar
   // view's is ever rendered — and only that one is worth reading off disk.

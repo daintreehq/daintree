@@ -38,6 +38,7 @@ import { DockLaunchButton } from "./DockLaunchButton";
 import { DockScrollChevron } from "./DockScrollChevron";
 import { useLauncherData } from "./useLauncherData";
 import { DockLaunchMenuItems, type DockLaunchMenuComponents } from "./DockLaunchMenuItems";
+import type { DockLaunchAgentOptions } from "./dockLaunchItems";
 import {
   SortableDockItem,
   SortableDockPlaceholder,
@@ -370,7 +371,12 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
   );
 
   const handleAddTerminal = useCallback(
-    async (agentId: string, source: ActionSource = "menu", presetId?: string | null) => {
+    async (
+      agentId: string,
+      source: ActionSource = "menu",
+      presetId?: string | null,
+      options?: DockLaunchAgentOptions
+    ) => {
       // `activateDockOnCreate` folds the dock activation into the same `set()`
       // that commits the new panel to the store. Without it, the watchdog
       // effect in `DockPanelOffscreenContainer` can fire `closeDockTerminal()`
@@ -388,6 +394,8 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
           // explicit-default sentinel the launcher relies on, and `undefined`
           // must leave the key off entirely so the saved preset still resolves.
           ...(presetId !== undefined ? { presetId } : {}),
+          // A plugin launch entry's first turn, and nothing else of its own.
+          ...(options?.prompt !== undefined ? { prompt: options.prompt } : {}),
         },
         { source }
       );
@@ -458,8 +466,8 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
               agentInventoryState={agentInventoryState}
               hasWorkspace={hasWorkspace}
               hasProject={hasProject}
-              onLaunchAgent={(agentId, presetId) =>
-                void handleAddTerminal(agentId, "menu", presetId)
+              onLaunchAgent={(agentId, presetId, options) =>
+                void handleAddTerminal(agentId, "menu", presetId, options)
               }
               activeWorktreeId={activeWorktreeId}
               cwd={cwd}
@@ -568,7 +576,9 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
           activeWorktreeId={activeWorktreeId}
           cwd={cwd}
           recipeContext={recipeContext}
-          onLaunchAgent={(agentId) => void handleAddTerminal(agentId, "context-menu")}
+          onLaunchAgent={(agentId, presetId, options) =>
+            void handleAddTerminal(agentId, "context-menu", presetId, options)
+          }
           surface="dock"
           source="context-menu"
         />

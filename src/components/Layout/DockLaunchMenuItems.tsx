@@ -1,5 +1,6 @@
+import { Fragment } from "react";
 import type * as React from "react";
-import { SquareTerminal } from "lucide-react";
+import { EyeOff, SquareTerminal } from "lucide-react";
 import { BrandMark, Workflow } from "@/components/icons";
 import { PanelKindIcon } from "@/components/PanelPalette/PanelKindIcon";
 import type { RecipeContext } from "@/utils/recipeVariables";
@@ -7,11 +8,15 @@ import type { ActionSource } from "@shared/types";
 import { isAgentLaunchable } from "@shared/utils/agentAvailability";
 import {
   activateCreateRecipeCue,
+  activateDockLaunchCue,
   activateDockLaunchItem,
   useDockLaunchModel,
+  DOCK_LAUNCH_CUE_LABELS,
+  type ActivateDockLaunchItemContext,
   type DockLaunchAgent,
   type DockLaunchItem,
   type DockLaunchPanelItem,
+  type DockLaunchPluginEntryItem,
   type DockLaunchRecipeItem,
   type DockLaunchSurface,
 } from "./dockLaunchItems";
@@ -34,7 +39,7 @@ interface DockLaunchMenuItemsProps {
   activeWorktreeId: string | null;
   cwd: string;
   recipeContext?: RecipeContext;
-  onLaunchAgent: (agentId: string) => void;
+  onLaunchAgent: ActivateDockLaunchItemContext["onLaunchAgent"];
   /**
    * Number of leading `agents` entries that are pinned to the toolbar (as
    * produced by `sortAgentsByToolbarPin`). The menu lists every agent under one
@@ -146,6 +151,26 @@ export function DockLaunchMenuItems({
     );
   };
 
+  const renderPluginEntryItem = (item: DockLaunchPluginEntryItem) => (
+    <C.Item
+      key={item.key}
+      className={item.disabled ? "text-text-secondary" : undefined}
+      // The group label isn't tied to its items, so the item names its plugin
+      // itself: two plugins' "New record…" must not read the same.
+      aria-label={[item.name, item.pluginName, item.disabled?.reason].filter(Boolean).join(", ")}
+      title={item.description}
+      onSelect={() => activate(item)}
+    >
+      <PanelKindIcon iconId={item.iconId} size={14} className="mr-2" />
+      <span className="truncate">{item.name}</span>
+      {item.disabled && (
+        <C.Meta aria-hidden={false} className="shrink-0">
+          {item.disabled.reason}
+        </C.Meta>
+      )}
+    </C.Item>
+  );
+
   const renderRecipeItem = (item: DockLaunchRecipeItem) => (
     <C.Item
       key={item.key}
@@ -203,6 +228,27 @@ export function DockLaunchMenuItems({
           {model.gridPanels.map(renderPanelItem)}
         </>
       )}
+
+      {/* One group per plugin, headed by the plugin's name — the attribution —
+          and ended by a real menu item that hides it, so the control is
+          reachable the same way every row is. */}
+      {model.pluginGroups.map((group) => (
+        <Fragment key={group.pluginId}>
+          <C.Separator />
+          <C.Label>{group.pluginName}</C.Label>
+          {group.items.map(renderPluginEntryItem)}
+          <C.Item
+            className="text-text-secondary"
+            aria-label={`Hide ${group.pluginName} in this project`}
+            onSelect={() =>
+              activateDockLaunchCue("hide-plugin-group", activeWorktreeId, source, group)
+            }
+          >
+            <EyeOff className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+            {DOCK_LAUNCH_CUE_LABELS["hide-plugin-group"]}
+          </C.Item>
+        </Fragment>
+      ))}
 
       <C.Separator />
       <C.Label>Recipes</C.Label>
