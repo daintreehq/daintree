@@ -76,6 +76,7 @@ import { isClientAppError } from "@/utils/clientAppError";
 import { transferBetweenWorktreeIndex } from "./worktreeIndex";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import { useMemoryPressureWaitStore } from "@/store/memoryPressureWaitStore";
+import { isHeldForDriveLease } from "@/store/driveLeaseWaitStore";
 import {
   getCurrentLaunchCliDetail,
   resolveAgentLaunchBaseCommand,
@@ -326,6 +327,13 @@ export const createRestartActions = (
     // its gate is where it starts now or carries on waiting.
     if (useMemoryPressureWaitStore.getState().heldPanelIds[id] === true) {
       logWarn("[TerminalStore] Cannot restart a pane held for memory pressure", { id });
+      return;
+    }
+
+    // Nor one waiting for control of its project (#13913): its launch starts
+    // once this view drives, and a restart alongside it would spawn twice.
+    if (isHeldForDriveLease(id)) {
+      logWarn("[TerminalStore] Cannot restart a pane waiting for control", { id });
       return;
     }
 

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { store, setAgentState, reportLost } = vi.hoisted(() => {
+const { store, setAgentState, reportLost, fetchAndRestore } = vi.hoisted(() => {
   const store = {
     panelsById: {} as Record<string, Record<string, unknown>>,
     panelIds: [] as string[],
@@ -11,7 +11,12 @@ const { store, setAgentState, reportLost } = vi.hoisted(() => {
     setRuntimeStatus: vi.fn(),
     removePanel: vi.fn(),
   };
-  return { store, setAgentState: vi.fn(), reportLost: vi.fn() };
+  return {
+    store,
+    setAgentState: vi.fn(),
+    reportLost: vi.fn(),
+    fetchAndRestore: vi.fn().mockResolvedValue(true),
+  };
 });
 
 vi.mock("@/utils/logger", () => ({
@@ -29,7 +34,7 @@ vi.mock("@/store/panelStore", () => ({
   },
 }));
 vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: { setAgentState, reportLost },
+  terminalInstanceService: { setAgentState, reportLost, fetchAndRestore },
 }));
 vi.mock("@/utils/stateHydration/statePatcher", () => ({
   buildArgsForOrphanedTerminal: (info: { id: string; cwd: string; kind?: string }) => ({
@@ -43,6 +48,11 @@ vi.mock("@/utils/stateHydration/statePatcher", () => ({
 }));
 
 import { resyncHostTerminals } from "../hostTerminalResync";
+import {
+  holdForDriveLease,
+  isHeldForDriveLease,
+  resetDriveLeaseHoldsForTesting,
+} from "../driveLeaseWaitStore";
 import {
   resetStoreAccessorsForTesting,
   setWorktreePathIndexAccessor,
@@ -73,6 +83,7 @@ beforeEach(() => {
     configurable: true,
   });
   reconnectBulk.mockResolvedValue({});
+  resetDriveLeaseHoldsForTesting();
 });
 
 const current = { isCurrent: () => true };
@@ -339,5 +350,70 @@ describe("resyncHostTerminals following the driver (#13280)", () => {
     await resyncHostTerminals("proj-1", following);
 
     expect(store.panelsById["t-live"]).toMatchObject({ runtimeStatus: "exited" });
+  });
+
+  describe("a pane waiting for control of the project (#13913)", () => {
+    function waitingPane(id: string) {
+      panel(id, { spawnStatus: "spawning", runtimeStatus: "running" });
+      const resume = vi.fn();
+      holdForDriveLease(id, { projectId: "proj-1", resume });
+      return resume;
+    }
+
+    it("isn't reported lost for a terminal it hasn't started yet", async () => {
+      waitingPane("t-wait");
+      getForProject.mockResolvedValue([]);
+      reconnectBulk.mockResolvedValue({ "t-wait": { exists: false } });
+
+      await resyncHostTerminals("proj-1", following);
+
+      expect(store.setRuntimeStatus).not.toHaveBeenCalled();
+      expect(reportLost).not.toHaveBeenCalled();
+      expect(store.panelsById["t-wait"]).toMatchObject({ spawnStatus: "spawning" });
+    });
+
+    it("isn't reported lost when it starts waiting while the probe is out", async () => {
+      panel("t-refused", { spawnStatus: "spawning", runtimeStatus: "running" });
+      getForProject.mockResolvedValue([]);
+      reconnectBulk.mockImplementation(async () => {
+        holdForDriveLease("t-refused", { projectId: "proj-1", resume: vi.fn() });
+        return { "t-refused": { exists: false } };
+      });
+
+      await resyncHostTerminals("proj-1", following);
+
+      expect(store.setRuntimeStatus).not.toHaveBeenCalled();
+      expect(reportLost).not.toHaveBeenCalled();
+    });
+
+    it("attaches to the terminal the host now runs under its id, once", async () => {
+      const resume = waitingPane("t-wait");
+      getForProject.mockResolvedValue([{ id: "t-wait", cwd: "/repo", spawnedAt: 2 }]);
+
+      await resyncHostTerminals("proj-1", following);
+      await resyncHostTerminals("proj-1", following);
+
+      expect(store.panelsById["t-wait"]).toMatchObject({ spawnStatus: "ready" });
+      expect(isHeldForDriveLease("t-wait")).toBe(false);
+      expect(store.addPanel).not.toHaveBeenCalled();
+      expect(resume).not.toHaveBeenCalled();
+      expect(fetchAndRestore).toHaveBeenCalledTimes(1);
+      expect(fetchAndRestore).toHaveBeenCalledWith("t-wait");
+    });
+
+    it("keeps waiting when the host's terminal under its id is gone or trashed", async () => {
+      waitingPane("t-dead");
+      waitingPane("t-trash");
+      getForProject.mockResolvedValue([
+        { id: "t-dead", cwd: "/repo", spawnedAt: 1, hasPty: false },
+        { id: "t-trash", cwd: "/repo", spawnedAt: 1, isTrashed: true },
+      ]);
+
+      await resyncHostTerminals("proj-1", current);
+
+      expect(isHeldForDriveLease("t-dead")).toBe(true);
+      expect(isHeldForDriveLease("t-trash")).toBe(true);
+      expect(fetchAndRestore).not.toHaveBeenCalled();
+    });
   });
 });

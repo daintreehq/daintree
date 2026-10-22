@@ -56,6 +56,15 @@ import {
   isMemoryPressureCritical,
   panelHoldKey,
 } from "@/store/memoryPressureWaitStore";
+import {
+  cancelDriveLeaseHold,
+  clearPanelDriveLeaseMark,
+  drivesProject,
+  holdForDriveLease,
+  markPanelDriveLeaseLaunch,
+  watchesProject,
+} from "@/store/driveLeaseWaitStore";
+import { getDriveLeaseSnapshot } from "@/services/terminal/inputGate";
 import { computeEnvProvenance } from "@shared/utils/agentLifecycleLedger";
 import { mergeTerminalLaunchEnv } from "@shared/utils/terminalLaunchOptions";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
@@ -354,6 +363,12 @@ class TerminalStartupQueue {
   enqueue(task: () => Promise<void>, concurrency = 1): void {
     if (this.reservations > 0) this.reservations--;
     this.tasks.push({ run: task, concurrency });
+    this.drain();
+  }
+
+  /** Queue a launch that already left the queue once; it never reserved a slot, so it releases none. */
+  requeue(task: () => Promise<void>): void {
+    this.tasks.push({ run: task, concurrency: 1 });
     this.drain();
   }
 
@@ -1121,6 +1136,9 @@ export const createAddPanelActions = (
       spawnedBy: options.spawnedBy,
       resumedFromSessionId: options.agentSessionId,
     });
+    // A launch of this id supersedes any earlier one still waiting for control.
+    cancelDriveLeaseHold(id);
+    clearPanelDriveLeaseMark(id);
     if (isReconnect) {
       // Mark this generation as restore-born so the stale-restore guard above
       // can tell an idempotent re-merge from a clobbering one.
@@ -1313,12 +1331,35 @@ export const createAddPanelActions = (
     // offers.
     const holdsForMemoryPressure =
       Boolean(launchAgentId) && location !== "overlay" && location !== "dialog";
+    // Any pane waits for control of its project (#13913), save the assistant
+    // and dialog panes, whose own surfaces handle a launch that didn't start.
+    const holdsForDriveLease = location !== "overlay" && location !== "dialog";
     const isStillStarting = (): boolean => {
       const current = get().panelsById[id];
       return (
         Boolean(current && isPtyPanel(current) && current.spawnStatus === "spawning") &&
         agentLifecycleLedger.isCurrent(id, launchGeneration)
       );
+    };
+    // The host already runs this id: the pane attaches to that terminal, as a
+    // reconnect does, and nothing is spawned.
+    const adoptHostTerminal = (): void => {
+      agentLifecycleLedger.recordSpawnResolved(id, launchGeneration, true);
+      let adopted = false;
+      set((state) => {
+        const current = state.panelsById[id];
+        if (!current || !isPtyPanel(current) || current.spawnStatus !== "spawning") return state;
+        adopted = true;
+        return {
+          panelsById: { ...state.panelsById, [id]: { ...current, spawnStatus: "ready" } },
+        };
+      });
+      // What it printed before this pane attached comes from the host's record.
+      if (adopted) {
+        terminalInstanceService.fetchAndRestore(id).catch((error: unknown) => {
+          logWarn("[TerminalStore] Couldn't restore an adopted terminal's output", { id, error });
+        });
+      }
     };
 
     // The panel chrome is already committed. Realize backend PTY startup and
@@ -1328,11 +1369,75 @@ export const createAddPanelActions = (
     // lightweight chrome instead of mounting XtermAdapter. Named so a launch
     // held for memory pressure can queue itself again when it continues.
     terminalStartupQueue.enqueue(
-      async function startPty(launchAnyway = false, resumed = false): Promise<void> {
+      async function startPty(
+        launchAnyway = false,
+        resumed = false,
+        controlArrived = false
+      ): Promise<void> {
         if (resumed) clearPanelMemoryPressureMark(id);
+        // Set once this run hands the launch on (to a hold or a retry), which
+        // then owns the pane's mark.
+        let handedOn = false;
+        // Held outside the queue until this view drives the project (#13913):
+        // the host refuses a spawn from a view that only watches, and a refusal
+        // left standing would cost a restore its resume. It continues with the
+        // launch it was given, command and session id included.
+        const waitForControl = (projectId: string): void => {
+          handedOn = true;
+          holdForDriveLease(id, {
+            projectId,
+            resume: () => terminalStartupQueue.requeue(() => startPty(launchAnyway, false, true)),
+            isStale: () => !isStillStarting(),
+            // Closed while it waited: it stays held in the trash, as a pane held
+            // for memory pressure does, rather than starting unseen.
+            isDeferred: () => get().panelsById[id]?.location === "trash",
+          });
+        };
+        // A launch control released keeps its pane marked until its spawn has
+        // an answer, so a restart can't start a second one beside it. Never a
+        // successor's mark, and gone before the attach wait, which needs the
+        // terminal on screen.
+        const settleControl = (): void => {
+          if (controlArrived && !handedOn && agentLifecycleLedger.isCurrent(id, launchGeneration)) {
+            clearPanelDriveLeaseMark(id);
+          }
+        };
+        const waitOutMemoryPressure = (): void => {
+          // A launch control released keeps its mark through the memory wait:
+          // a restart stays off it until its spawn has an answer.
+          if (controlArrived) handedOn = true;
+          holdForMemoryPressure(panelHoldKey(id), {
+            panelId: id,
+            resume: (anyway) =>
+              terminalStartupQueue.enqueue(() => startPty(anyway, true, controlArrived)),
+            isStale: () => !isStillStarting(),
+            // A pane closed while it waited stays held in the trash, so an
+            // undo brings back the same waiting launch rather than one that
+            // started unseen.
+            isDeferred: () => get().panelsById[id]?.location === "trash",
+          });
+        };
+        // A released launch whose pane was closed before its turn goes back to
+        // the wait it came from, in the trash, rather than starting unseen.
+        const waitInTrash = (): boolean => {
+          if (get().panelsById[id]?.location !== "trash") return false;
+          if (controlArrived && capturedWorkspaceId) {
+            waitForControl(capturedWorkspaceId);
+            return true;
+          }
+          if (resumed && holdsForMemoryPressure) {
+            waitOutMemoryPressure();
+            return true;
+          }
+          return false;
+        };
         const _p0 = get().panelsById[id];
-        if (!_p0 || !isPtyPanel(_p0) || _p0.spawnStatus !== "spawning") return;
+        if (!_p0 || !isPtyPanel(_p0) || _p0.spawnStatus !== "spawning") {
+          settleControl();
+          return;
+        }
         markRendererPerformance("agentlaunch.task-start", { id });
+        let leaseAtSpawn = getDriveLeaseSnapshot();
 
         try {
           // Asked as each launch reaches the front, not when it was queued, so
@@ -1357,17 +1462,40 @@ export const createAddPanelActions = (
             // time, whatever its batch: pressure has only just eased. One that
             // was closed while its release queued goes back to waiting.
             if (pressureCritical || (resumed && _p1.location === "trash")) {
-              holdForMemoryPressure(panelHoldKey(id), {
-                panelId: id,
-                resume: (anyway) => terminalStartupQueue.enqueue(() => startPty(anyway, true)),
-                isStale: () => !isStillStarting(),
-                // A pane closed while it waited stays held in the trash, so an
-                // undo brings back the same waiting launch rather than one that
-                // started unseen.
-                isDeferred: () => get().panelsById[id]?.location === "trash",
-              });
+              waitOutMemoryPressure();
               return;
             }
+          }
+
+          if (waitInTrash()) return;
+          // A launch that waited, for control or for memory, in a view that
+          // follows a drive lease: the driver may have started this very
+          // terminal meanwhile (its own restore of the same pane), so attach to
+          // it rather than spawn over it. A failed probe says nothing, so the
+          // spawn goes.
+          if (
+            holdsForDriveLease &&
+            (controlArrived || resumed) &&
+            getDriveLeaseSnapshot() !== null
+          ) {
+            const onHost = await terminalClient.reconnect(id).catch(() => null);
+            if (!isStillStarting()) return;
+            if (onHost?.exists && onHost.hasPty !== false && onHost.isTrashed !== true) {
+              adoptHostTerminal();
+              return;
+            }
+            if (waitInTrash()) return;
+          }
+          // Another screen has control of the project, so the host would refuse
+          // the spawn: it waits for control instead of failing.
+          leaseAtSpawn = getDriveLeaseSnapshot();
+          if (
+            holdsForDriveLease &&
+            capturedWorkspaceId &&
+            watchesProject(leaseAtSpawn, capturedWorkspaceId)
+          ) {
+            if (isStillStarting()) waitForControl(capturedWorkspaceId);
+            return;
           }
           const spawnWorktreeId = _p1.worktreeId;
 
@@ -1430,6 +1558,7 @@ export const createAddPanelActions = (
           });
 
           markRendererPerformance("agentlaunch.spawn-ipc-resolved", { id });
+          settleControl();
 
           // Reject a spawn resolution that no longer belongs to this incarnation:
           // if a restart or hydration replay re-launched the id while our IPC was
@@ -1517,6 +1646,31 @@ export const createAddPanelActions = (
             }
           }
         } catch (error) {
+          // Refused because another screen has control: the launch waits for
+          // control rather than failing. A refusal while this view still reads
+          // as driving, from the same lease it spawned under, fails as before:
+          // nothing on screen would explain the wait. Control that arrived
+          // while the refusal travelled gets one more attempt at once.
+          if (
+            holdsForDriveLease &&
+            isClientAppError(error) &&
+            error.code === "DRIVEN_ELSEWHERE" &&
+            capturedWorkspaceId &&
+            isStillStarting()
+          ) {
+            const lease = getDriveLeaseSnapshot();
+            if (!drivesProject(lease, capturedWorkspaceId)) {
+              waitForControl(capturedWorkspaceId);
+              return;
+            }
+            if (lease !== leaseAtSpawn) {
+              // Marked until the retry has its answer, as a released launch is.
+              handedOn = true;
+              markPanelDriveLeaseLaunch(id);
+              terminalStartupQueue.requeue(() => startPty(launchAnyway, false, true));
+              return;
+            }
+          }
           logError("[TerminalStore] Failed to spawn terminal", error);
           // Same staleness gate as the success path: never stamp a failure onto
           // a successor incarnation that re-launched this id mid-flight.
@@ -1571,6 +1725,8 @@ export const createAddPanelActions = (
 
           const after = get();
           saveNormalized(after.panelsById, after.panelIds);
+        } finally {
+          settleControl();
         }
       },
       options.spawnBatchId && (options.spawnBatchSize ?? 0) > 1
