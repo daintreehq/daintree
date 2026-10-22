@@ -73,6 +73,12 @@ vi.mock("@/services/TerminalInstanceService", () => ({
   },
 }));
 
+// The badge hook reads the real panel and plugin stores; these suites stub the store layer.
+vi.mock("../DockChipBadge", () => ({
+  useDockChipBadge: () => null,
+  DockChipBadge: () => null,
+}));
+
 vi.mock("../dockPanelPortalContext", () => ({
   useDockPanelPortal: () => vi.fn(),
 }));

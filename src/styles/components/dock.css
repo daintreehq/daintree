@@ -65,3 +65,61 @@
     border: 1px solid CanvasText;
   }
 }
+
+/* ── Plugin badge on a dock chip (#13789) ──
+ * Inline after the title, the same marks the promoted toolbar buttons draw
+ * (.toolbar-count / .toolbar-pip) without their corner offset or sidebar
+ * cut-out ring: a chip has room for the mark in its row, and the dock surface
+ * is not the sidebar's. Fills match PluginPanelBadges' dots; the count's digits
+ * pick black or white off the fill with the toolbar's OKLCH split. Severity
+ * also lives in the dot's shape (WCAG 1.4.1), which survives forced colours.
+ */
+.dock-chip-badge {
+  --dock-chip-badge-fill: var(--color-text-muted);
+  flex-shrink: 0;
+  background-color: var(--dock-chip-badge-fill);
+  border-radius: 9999px;
+}
+
+.dock-chip-badge[data-badge-color="success"] {
+  --dock-chip-badge-fill: var(--color-text-primary);
+}
+.dock-chip-badge[data-badge-color="warning"] {
+  --dock-chip-badge-fill: var(--color-status-warning);
+}
+.dock-chip-badge[data-badge-color="error"] {
+  --dock-chip-badge-fill: var(--color-status-error);
+}
+
+.dock-chip-badge[data-dock-chip-badge="dot"] {
+  width: 6px;
+  height: 6px;
+}
+.dock-chip-badge[data-dock-chip-badge="dot"][data-badge-color="error"] {
+  border-radius: 0;
+}
+.dock-chip-badge[data-dock-chip-badge="dot"][data-badge-color="warning"] {
+  border-radius: 2px;
+}
+
+.dock-chip-badge[data-dock-chip-badge="count"] {
+  min-width: 12px;
+  height: 12px;
+  padding: 0 3px;
+  color: oklch(from var(--dock-chip-badge-fill) clamp(0, (0.56 - l) * 1000, 1) 0 0);
+  font-size: var(--text-4xs);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 12px;
+  letter-spacing: -0.02em;
+  text-align: center;
+}
+
+@media (forced-colors: active) {
+  .dock-chip-badge {
+    background-color: CanvasText;
+  }
+  .dock-chip-badge[data-dock-chip-badge="count"] {
+    color: Canvas;
+  }
+}

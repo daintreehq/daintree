@@ -10,6 +10,8 @@ import { TerminalContextMenu } from "@/components/Terminal/TerminalContextMenu";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { useDockPanelPortal } from "./dockPanelPortalContext";
+import { DockChipBadge, useDockChipBadge } from "./DockChipBadge";
+import { dockChipBadgeLabelSuffix } from "./dockChipBadgeModel";
 import { DOCK_CHIP_CLASS, DOCK_CHIP_OPEN_CLASS } from "./dockChipStyles";
 import { useDockPopoverResize } from "./useDockPopoverResize";
 import { DockPopoverResizeHandle } from "./DockPopoverResizeHandle";
@@ -117,6 +119,7 @@ export function DockedNonPtyPanelItem({ panel, displayTitle }: DockedNonPtyPanel
   }, [panel.id, moveTerminalToGrid, closeDockTerminal]);
 
   const chrome = useMemo(() => deriveTerminalChrome({ kind: panel.kind }), [panel.kind]);
+  const badge = useDockChipBadge(panel.id);
 
   const { height: popoverHeight, isResizing, handleProps } = useDockPopoverResize();
 
@@ -145,7 +148,7 @@ export function DockedNonPtyPanelItem({ panel, displayTitle }: DockedNonPtyPanel
                   e.stopPropagation();
                   handleMoveToGrid();
                 }}
-                aria-label={`${displayTitle} - Click to preview, double-click to move to grid, drag to reorder`}
+                aria-label={`${displayTitle}${dockChipBadgeLabelSuffix(badge)} - Click to preview, double-click to move to grid, drag to reorder`}
               >
                 <div className="flex items-center justify-center shrink-0">
                   <TerminalIcon kind={panel.kind} chrome={chrome} className="w-3.5 h-3.5" />
@@ -153,6 +156,7 @@ export function DockedNonPtyPanelItem({ panel, displayTitle }: DockedNonPtyPanel
                 <span className="truncate min-w-[48px] max-w-[140px] font-sans font-medium">
                   {displayTitle}
                 </span>
+                <DockChipBadge model={badge} />
               </button>
             </PopoverTrigger>
           </TerminalContextMenu>

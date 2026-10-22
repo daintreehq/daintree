@@ -134,7 +134,7 @@ export function PluginBadgeIndicator({
  * (#13213). Null for a built-in, a kind no longer registered, or a panel this
  * view doesn't hold, so an unresolved owner draws neutral.
  */
-function usePanelOwnerPluginId(panelId: string): string | null {
+export function usePanelOwnerPluginId(panelId: string): string | null {
   const registry = useSyncExternalStore(
     subscribeToPanelKindRegistry,
     getPanelKindRegistrySnapshot,
