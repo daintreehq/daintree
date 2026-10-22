@@ -69,7 +69,7 @@ interface MapSource {
 interface DecodedMap {
   trace: TraceMap;
   sources: MapSource[];
-  /** The map text's length, which is what the cache is bounded by. */
+  /** Roughly what holding it costs, which is what the cache is bounded by. */
   size: number;
 }
 
@@ -91,7 +91,23 @@ export const SOURCE_MAP_LIMITS = {
  * fetched again on every resolve, so the new bytes miss and the old entry is
  * only ever reached by a module still serving the old map.
  */
-export const DECODED_MAP_CACHE_LIMITS = { entries: 32, size: 32 * 1024 * 1024 } as const;
+export const DECODED_MAP_CACHE_LIMITS = { entries: 32, size: 64 * 1024 * 1024 } as const;
+
+/**
+ * A decoded map is mostly arrays: one per generated line and one per segment,
+ * each costing V8 tens of bytes before it holds anything. Charged by those
+ * rather than by its text, since a map of a few bytes can decode to a million
+ * empty lines.
+ */
+const LINE_COST = 40;
+const SEGMENT_COST = 64;
+
+function retainedSize(trace: Decoder, map: TraceMap, textLength: number): number {
+  const lines = trace.decodedMappings(map);
+  let segments = 0;
+  for (const line of lines) segments += line.length;
+  return textLength * 2 + lines.length * LINE_COST + segments * SEGMENT_COST;
+}
 
 const decodedMaps = new Map<FileRevision, DecodedMap>();
 let decodedSize = 0;
@@ -159,11 +175,14 @@ function isCoordinate(value: unknown): value is number {
  * embeds a regular map. The pinned decoder places a nested section's columns
  * wrongly, and a section that points at a `url` would have the host fetch.
  */
-function opaque(input: unknown): { map: Record<string, unknown>; sources: MapSource[] } | null {
+function opaque(
+  trace: Decoder,
+  input: unknown
+): { map: Record<string, unknown>; sources: MapSource[] } | null {
   if (!isRecord(input)) return null;
   const sources: MapSource[] = [];
   if (!("sections" in input)) {
-    const map = opaqueLeaf(input, sources);
+    const map = opaqueLeaf(trace, input, sources);
     return map && { map, sources };
   }
   if (input.version !== 3 || !Array.isArray(input.sections)) return null;
@@ -175,14 +194,20 @@ function opaque(input: unknown): { map: Record<string, unknown>; sources: MapSou
     if (!isCoordinate(line) || !isCoordinate(column)) return null;
     if (line > SOURCE_MAP_LIMITS.sectionLine) return null;
     if (!isRecord(section.map) || "sections" in section.map) return null;
-    const map = opaqueLeaf(section.map, sources);
+    const map = opaqueLeaf(trace, section.map, sources);
     if (!map) return null;
     sections.push({ offset: { line, column }, map });
   }
   return { map: { version: 3, sections }, sources };
 }
 
+/**
+ * One regular map, decoded here so its segments can be checked against its
+ * own sources: once sections are flattened, an index past the end of one
+ * section's sources names a source in the next.
+ */
 function opaqueLeaf(
+  trace: Decoder,
   input: Record<string, unknown>,
   sources: MapSource[]
 ): Record<string, unknown> | null {
@@ -207,7 +232,14 @@ function opaqueLeaf(
     });
     return String(sources.length - 1);
   });
-  return { version: 3, sources: ids, names: names ?? [], mappings };
+  const leaf = { version: 3 as const, sources: ids, names: (names ?? []) as string[], mappings };
+  const lines = trace.decodedMappings(new trace.TraceMap(leaf));
+  for (const line of lines) {
+    for (const segment of line) {
+      if (segment.length > 1 && segment[1]! >= ids.length) return null;
+    }
+  }
+  return { ...leaf, mappings: lines };
 }
 
 function decode(trace: Decoder, text: string): DecodedMap | null {
@@ -217,14 +249,11 @@ function decode(trace: Decoder, text: string): DecodedMap | null {
   } catch {
     return null;
   }
-  const prepared = opaque(parsed);
-  if (!prepared) return null;
   try {
-    return {
-      trace: trace.AnyMap(prepared.map as Parameters<Decoder["AnyMap"]>[0]),
-      sources: prepared.sources,
-      size: text.length,
-    };
+    const prepared = opaque(trace, parsed);
+    if (!prepared) return null;
+    const map = trace.AnyMap(prepared.map as Parameters<Decoder["AnyMap"]>[0]);
+    return { trace: map, sources: prepared.sources, size: retainedSize(trace, map, text.length) };
   } catch {
     return null;
   }

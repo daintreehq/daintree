@@ -391,6 +391,53 @@ describe("source map symbolication", () => {
     await expect(symbolicate(fake(section(cardMap())))).resolves.toMatchObject({ ok: true });
   });
 
+  it("never lets one section's bad source index name a source in the next", async () => {
+    const leaf = (source: string, mappings: string) => ({
+      version: 3,
+      sources: [source],
+      names: [],
+      mappings,
+    });
+    const sectioned = {
+      version: 3,
+      sections: [
+        // "ACAA" points at source 1, which this section does not have.
+        { offset: { line: 0, column: 0 }, map: leaf("a.ts", "ACAA") },
+        { offset: { line: 1, column: 0 }, map: leaf("b.ts", "AAAA") },
+      ],
+    };
+    await expect(symbolicate(fake(sectioned), v8(1, 1))).resolves.toEqual({
+      ok: false,
+      reason: "map-missing",
+    });
+  });
+
+  it("charges the cache for what a map decodes to, not its text", async () => {
+    // A few bytes that decode to most of a million empty lines. Two of them
+    // cannot both be held, so the first is decoded again rather than reused.
+    const phantom = (tag: string) => ({
+      version: 3,
+      tag,
+      sections: [{ offset: { line: SOURCE_MAP_LIMITS.sectionLine, column: 0 }, map: cardMap() }],
+    });
+    const first = phantom("a");
+    await symbolicate(fake(first), v8(SOURCE_MAP_LIMITS.sectionLine + 2, 10));
+    await symbolicate(fake(phantom("b")), v8(SOURCE_MAP_LIMITS.sectionLine + 2, 10));
+    const replay = fake(first);
+    replay.fetchSourceMap.mockResolvedValue({
+      ok: true,
+      value: {
+        url: null,
+        revision: revisionOf(new TextEncoder().encode(JSON.stringify(first))),
+        text: "{ not json",
+      },
+    });
+    await expect(symbolicate(replay, v8(SOURCE_MAP_LIMITS.sectionLine + 2, 10))).resolves.toEqual({
+      ok: false,
+      reason: "map-missing",
+    });
+  });
+
   it("marks a source the map ignore-lists", async () => {
     await expect(symbolicate(fake(cardMap({ x_google_ignoreList: [0] })))).resolves.toMatchObject({
       ok: true,

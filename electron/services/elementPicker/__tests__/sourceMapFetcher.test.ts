@@ -338,6 +338,7 @@ describe("sourceMappingReference", () => {
     expect(
       sourceMappingReference("//# sourceMappingURL=a.map\n/* a */ run(); /* b */\n")
     ).toBeNull();
+    expect(sourceMappingReference("/*# sourceMappingURL=a.map*/run();/*b*/")).toBeNull();
     expect(sourceMappingReference("\n")).toBeNull();
     expect(sourceMappingReference("")).toBeNull();
   });

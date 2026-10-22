@@ -45,7 +45,9 @@ function isHttp(url: URL): boolean {
  * The map a module names in its trailing comments: the last annotation in the
  * run of comment and blank lines that ends the file, and none at all once a
  * line of code comes after it. A block comment counts when it opens and closes
- * on its own line. Conservative on purpose: an annotation-shaped
+ * on its own line. Line-based, like ECMA-426's extraction without parsing: a
+ * module can contrive a template literal to fool it, which at worst picks
+ * another map on the same origin. Conservative on purpose: an annotation-shaped
  * string inside the module's own code is not where its map is.
  */
 export function sourceMappingReference(text: string): string | null {
@@ -58,7 +60,8 @@ export function sourceMappingReference(text: string): string | null {
     const match =
       /^\/\/[#@]\s*sourceMappingURL=(\S+)$/.exec(line) ??
       /^\/\*[#@]\s*sourceMappingURL=(\S+?)\s*\*\/$/.exec(line);
-    if (match) return match[1]!;
+    // `/*# sourceMappingURL=a.map*/run();/*b*/` ends in a comment but is code.
+    if (match) return match[1]!.includes("*/") ? null : match[1]!;
     const comment =
       line.startsWith("//") ||
       (line.startsWith("/*") && line.endsWith("*/") && line.indexOf("*/") === line.length - 2);
