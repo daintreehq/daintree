@@ -1969,6 +1969,10 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: { hostId: string }];
     result: import("./portForwards.js").HostListeningPort[];
   };
+  "port-forwards:release": {
+    args: [payload: import("./portForwards.js").ReleasePortForwardsPayload];
+    result: void;
+  };
   "port-forwards:stop": {
     args: [payload: { forwardId: string }];
     result: void;

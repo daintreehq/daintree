@@ -1459,6 +1459,7 @@ export const CHANNELS = {
   PORT_FORWARDS_LIST: "port-forwards:list",
   PORT_FORWARDS_FORWARD: "port-forwards:forward",
   PORT_FORWARDS_STOP: "port-forwards:stop",
+  PORT_FORWARDS_RELEASE: "port-forwards:release",
   PORT_FORWARDS_LIST_HOST_PORTS: "port-forwards:list-host-ports",
   PORT_FORWARDS_EVENT: "port-forwards:event",
 

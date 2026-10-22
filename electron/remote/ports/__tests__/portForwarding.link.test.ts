@@ -904,3 +904,240 @@ describe("ssh -O forward on the ControlMaster", () => {
     await expect(get(forward.localPort, "/")).resolves.toMatchObject({ body: "via the link" });
   });
 });
+
+function bindable(port: number): Promise<void> {
+  const server = net.createServer();
+  return new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(port, "127.0.0.1", () => server.close(() => resolve()));
+  });
+}
+
+function recordingSpawn(calls: string[][]) {
+  return (args: string[]): SshChild => {
+    calls.push(args);
+    const child = new FakeSshChild();
+    if (args[0] === "-G") child.stdout.end("hostname studio-01\ncontrolpath /tmp/rh/cm2-7f3a\n");
+    else child.stdout.end();
+    setImmediate(() => child.emit("exit", 0, null));
+    return child as unknown as SshChild;
+  };
+}
+
+describe("forward lifetime", () => {
+  it("frees a panel's port once the last panel that asked for it lets go", async () => {
+    const upstream = http.createServer((_req, res) => res.end("ok"));
+    const remotePort = await listen(upstream);
+    cleanups.push(() => upstream.close());
+    const m = manager({ panelReleaseGraceMs: 0 });
+
+    const first = await m.forward(
+      { hostId: HOST, remotePort, origin: "browser-panel", panelId: "a" },
+      "panel:9:a"
+    );
+    const second = await m.forward(
+      { hostId: HOST, remotePort, origin: "browser-panel", panelId: "b" },
+      "panel:9:b"
+    );
+    expect(second.forwardId).toBe(first.forwardId);
+    expect(m.list()[0]!.origin).toBe("browser-panel");
+
+    // One panel going away leaves the forward to the other.
+    m.release("panel:9:a");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(m.list()).toHaveLength(1);
+    expect(m.hasForwardsFor(HOST)).toBe(true);
+
+    m.release("panel:9:b");
+    await waitFor(() => m.list().length === 0, 3_000);
+    expect(m.hasForwardsFor(HOST)).toBe(false);
+    await bindable(first.localPort);
+  });
+
+  it("carries a terminal link over link streams on a host with a master, and keeps it while the page uses it", async () => {
+    const upstream = net.createServer((socket) => socket.pipe(socket));
+    const remotePort = await listen(upstream);
+    cleanups.push(() => upstream.close());
+    const calls: string[][] = [];
+    const m = manager({
+      sshMuxFor: () => ({ target: "studio-01", controlPath: "/tmp/rh/cm2-abc" }),
+      spawn: recordingSpawn(calls),
+      oauthIdleMs: 400,
+    });
+
+    const forward = await m.forward({
+      hostId: HOST,
+      remotePort,
+      origin: "oauth-callback",
+      label: "Opened from terminal",
+    });
+    // A master forward's traffic is invisible here, so its idle clock could never see the page.
+    expect(calls.some((args) => args.includes("forward"))).toBe(false);
+
+    const socket = net.connect(forward.localPort, "127.0.0.1");
+    cleanups.push(() => socket.destroy());
+    const echoed = new Promise<string>((resolve) => socket.once("data", (d) => resolve(String(d))));
+    socket.write("hmr");
+    await expect(echoed).resolves.toBe("hmr");
+
+    // Well past the idle window, the open socket still holds it.
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+    expect(m.list()).toHaveLength(1);
+
+    socket.destroy();
+    await waitFor(() => m.list().length === 0, 3_000);
+  });
+
+  it("keeps a forward made by hand when a panel or preview that shared it lets go", async () => {
+    const upstream = http.createServer((_req, res) => res.end("ok"));
+    const remotePort = await listen(upstream);
+    cleanups.push(() => upstream.close());
+    previewResolution = { kind: "ok", port: remotePort, isHttps: false };
+    const m = manager({ panelReleaseGraceMs: 0 });
+
+    const panel = await m.forward(
+      { hostId: HOST, remotePort, origin: "browser-panel", panelId: "a" },
+      "panel:9:a"
+    );
+    await m.resolvePreview("dp-proj-panel");
+    await m.forward({ hostId: HOST, remotePort, origin: "manual" });
+    expect(m.list()).toEqual([expect.objectContaining({ origin: "manual" })]);
+
+    m.release("panel:9:a");
+    m.releasePreview("dp-proj-panel");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(m.list()).toEqual([
+      expect.objectContaining({ forwardId: panel.forwardId, origin: "manual" }),
+    ]);
+  });
+
+  it("keeps a panel's forward when it asks again within the release grace, and drops a gone view's at once", async () => {
+    const upstream = http.createServer((_req, res) => res.end("ok"));
+    const remotePort = await listen(upstream);
+    cleanups.push(() => upstream.close());
+    const m = manager({ panelReleaseGraceMs: 100 });
+    const ask = () =>
+      m.forward({ hostId: HOST, remotePort, origin: "browser-panel", panelId: "a" }, "panel:9:a");
+
+    const first = await ask();
+    // A remount lets go and asks again straight away.
+    m.release("panel:9:a");
+    const again = await ask();
+    expect(again.forwardId).toBe(first.forwardId);
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(m.list()).toHaveLength(1);
+
+    m.releaseAll("panel:9:");
+    await waitFor(() => m.list().length === 0, 3_000);
+  });
+
+  it("refuses another host's page at a port one of these forwards holds, naming that host", async () => {
+    const OTHER = "studio-02";
+    const probe = net.createServer();
+    const remotePort = await listen(probe);
+    await new Promise((resolve) => probe.close(resolve));
+    const m = manager({
+      sessionFor: (hostId) =>
+        (hostId === HOST || hostId === OTHER) && client.isOpen ? client : null,
+      isKnownHost: (hostId) => hostId === HOST || hostId === OTHER,
+      hostName: (hostId) => (hostId === HOST ? "Studio One" : null),
+    });
+
+    const held = await m.forward(
+      { hostId: HOST, remotePort, origin: "browser-panel", panelId: "a", samePort: true },
+      "panel:9:a"
+    );
+    expect(held.localPort).toBe(remotePort);
+
+    await expect(
+      m.forward(
+        { hostId: OTHER, remotePort, origin: "browser-panel", panelId: "b", samePort: true },
+        "panel:10:b"
+      )
+    ).rejects.toMatchObject({
+      code: "PORT_IN_USE",
+      userMessage: expect.stringContaining(
+        `Port ${remotePort} on this machine already forwards Studio One's port ${remotePort}`
+      ),
+    });
+    // Refused outright: no forward on some other port is left behind for it.
+    expect(m.list()).toEqual([expect.objectContaining({ hostId: HOST })]);
+    expect(m.hasForwardsFor(OTHER)).toBe(false);
+  });
+
+  it("moves a master forward to link streams once a page outside Daintree uses it too", async () => {
+    const upstream = http.createServer((_req, res) => res.end("via the link"));
+    const remotePort = await listen(upstream);
+    cleanups.push(() => upstream.close());
+    const calls: string[][] = [];
+    const m = manager({
+      sshMuxFor: () => ({ target: "studio-01", controlPath: "/tmp/rh/cm2-abc" }),
+      spawn: recordingSpawn(calls),
+      oauthIdleMs: 500,
+      panelReleaseGraceMs: 0,
+    });
+
+    const panel = await m.forward(
+      { hostId: HOST, remotePort, origin: "browser-panel", panelId: "a" },
+      "panel:9:a"
+    );
+    expect(calls.some((args) => args.includes("forward"))).toBe(true);
+    const link = await m.forward({
+      hostId: HOST,
+      remotePort,
+      origin: "oauth-callback",
+      label: "Opened from terminal",
+    });
+    // Moved before the link opens, keeping the id and the local port the panel's page uses.
+    expect(calls.some((args) => args.includes("cancel"))).toBe(true);
+    expect(link).toMatchObject({ forwardId: panel.forwardId, localPort: panel.localPort });
+    await expect(get(panel.localPort, "/")).resolves.toMatchObject({ body: "via the link" });
+
+    // The panel closing leaves the page outside, on the idle clock it can now see.
+    m.release("panel:9:a");
+    await waitFor(() => m.list()[0]?.origin === "oauth-callback" || m.list().length === 0);
+    await waitFor(() => m.list().length === 0, 3_000);
+  });
+
+  it("honours a Stop that arrives while a forward moves to link streams", async () => {
+    const upstream = http.createServer((_req, res) => res.end("ok"));
+    const remotePort = await listen(upstream);
+    cleanups.push(() => upstream.close());
+    const m = manager({
+      sshMuxFor: () => ({ target: "studio-01", controlPath: "/tmp/rh/cm2-abc" }),
+      spawn: recordingSpawn([]),
+    });
+    const panel = await m.forward(
+      { hostId: HOST, remotePort, origin: "browser-panel", panelId: "a" },
+      "panel:9:a"
+    );
+
+    const link = m.forward({ hostId: HOST, remotePort, origin: "oauth-callback" });
+    await m.stop(panel.forwardId);
+
+    await expect(link).rejects.toMatchObject({ code: "CANCELLED" });
+    expect(m.list()).toEqual([]);
+    expect(m.hasForwardsFor(HOST)).toBe(false);
+  });
+
+  it("keeps a sign-in forward another request still waits on when one request for it fails", async () => {
+    const upstream = http.createServer((_req, res) => res.end("ok"));
+    // The host and this machine are one here, so the host's port is taken locally.
+    const remotePort = await listen(upstream);
+    cleanups.push(() => upstream.close());
+    const m = manager({ oauthIdleMs: 10_000 });
+
+    const strict = m.forward({
+      hostId: HOST,
+      remotePort,
+      origin: "oauth-callback",
+      samePort: true,
+    });
+    const loose = m.forward({ hostId: HOST, remotePort, origin: "oauth-callback" });
+    await expect(strict).rejects.toMatchObject({ code: "PORT_IN_USE" });
+    const forward = await loose;
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(m.list()).toEqual([expect.objectContaining({ forwardId: forward.forwardId })]);
+  });
+});

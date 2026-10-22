@@ -4,6 +4,7 @@ export const PORT_FORWARDS_METHOD_CHANNELS = {
   list: "port-forwards:list",
   forward: "port-forwards:forward",
   stop: "port-forwards:stop",
+  release: "port-forwards:release",
   listHostPorts: "port-forwards:list-host-ports",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 

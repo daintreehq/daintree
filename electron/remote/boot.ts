@@ -6,12 +6,14 @@ import { notifyRemoteViewEndpointOpened } from "../ipc/hostSendRelay.js";
 import { setRemoteBoundViewFilter } from "../ipc/utils.js";
 import { releaseWindowTerminalPort, setRemoteViewHooks } from "../window/portDistribution.js";
 import { getPtyClient } from "../window/serviceRefs.js";
+import { onWebContentsDestroyed } from "../window/webContentsDestroyed.js";
 import { resolveLiveWebContents } from "../window/webContentsRegistry.js";
 import { getWindowRegistry } from "../window/windowRef.js";
 import { toDisposable } from "../utils/lifecycle.js";
 import { isRemoteHostSupported } from "./buildGate.js";
 import { initRemoteHostsClient } from "./client/initClient.js";
-import { closeSshMasters } from "./client/sshTransport.js";
+import { defaultCommandRunner } from "./client/commandRunner.js";
+import { closeSshMasters, exitStaleSshMasters } from "./client/sshTransport.js";
 import { installViewReverseRequests } from "./client/viewRequests.js";
 import { installHostFileClient } from "./files/clientInstall.js";
 import { installHostUploadClient } from "./files/uploadClient.js";
@@ -239,6 +241,13 @@ function startClient(options: StartRemoteHostsOptions): void {
       sessionFor: client.sessionFor,
       connectionFor: (hostId) => hostEntry(hostId)?.descriptor.connection ?? null,
       clientDir: path.join(app.getPath("userData"), "rh"),
+      hostName: (hostId) => hostEntry(hostId)?.descriptor.name ?? null,
+      watchView(webContentsId, onGone) {
+        const wc = resolveLiveWebContents(webContentsId);
+        if (wc) return onWebContentsDestroyed(wc, onGone);
+        queueMicrotask(onGone);
+        return () => {};
+      },
     })
   );
   // Host summaries and notifications: dials only hosts whose notifications are on.
@@ -330,6 +339,16 @@ export async function startRemoteHosts(options: StartRemoteHostsOptions): Promis
     }
   }
   if (!started) return;
+  // A master a crashed launch left behind still holds its port forwards; this
+  // launch would otherwise reuse it. Only the system ssh transport makes masters.
+  if (!options.createTransport) {
+    await exitStaleSshMasters(
+      defaultCommandRunner,
+      path.join(app.getPath("userData"), "rh"),
+      MASTER_EXIT_TIMEOUT_MS
+    );
+    if (!started) return;
+  }
   startClient(options);
   if (__DAINTREE_REMOTE_HOST_ROLE__ && isRemoteHostSupported()) {
     const { startHostRole } = await import("./hostBoot.js");

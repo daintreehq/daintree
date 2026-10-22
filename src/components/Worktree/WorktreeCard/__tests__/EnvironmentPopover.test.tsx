@@ -338,8 +338,9 @@ describe("EnvironmentPopover content", () => {
       fireEvent.click(screen.getByRole("button", { name: "Open endpoint in browser" }));
 
       await waitFor(() => expect(systemClient.openExternal).toHaveBeenCalledTimes(1));
+      // Opened outside Daintree, so it is kept while in use rather than until stopped.
       expect(forward).toHaveBeenCalledWith(
-        expect.objectContaining({ hostId: "build-box", remotePort: 8080 })
+        expect.objectContaining({ hostId: "build-box", remotePort: 8080, origin: "oauth-callback" })
       );
       expect(systemClient.openExternal).toHaveBeenCalledWith("http://127.0.0.1:8080/");
     });

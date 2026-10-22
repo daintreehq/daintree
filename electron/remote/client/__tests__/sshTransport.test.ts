@@ -1,5 +1,6 @@
 import { EventEmitter } from "node:events";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
 import net from "node:net";
 import path from "node:path";
 import { PassThrough } from "node:stream";
@@ -24,6 +25,7 @@ import {
   buildStreamLocalCheckArgs,
   controlPathFor,
   controlPathOption,
+  exitStaleSshMasters,
   isForwardablePath,
   isValidSshTarget,
   parseProbeOutput,
@@ -982,5 +984,77 @@ describe("closing masters when the app quits", () => {
     } finally {
       rmSync(clientDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("exitStaleSshMasters", () => {
+  it("tells every master a crashed launch left to exit, by its own socket, and removes the socket", async () => {
+    // Short: a unix socket path has to fit sun_path.
+    const clientDir = mkdtempSync(path.join(os.tmpdir(), "rh-"));
+    const servers: net.Server[] = [];
+    const socketAt = (name: string) =>
+      new Promise<string>((resolve) => {
+        const server = net.createServer();
+        servers.push(server);
+        const socketPath = path.join(clientDir, name);
+        server.listen(socketPath, () => resolve(socketPath));
+      });
+    try {
+      const current = await socketAt("cm2-7f3a");
+      const older = await socketAt("cm1-9b1c");
+      // A link's own forwarded socket is not a master.
+      const linkSocket = await socketAt("l-1234abcd-0011.sock");
+      writeFileSync(path.join(clientDir, "cm2-notes"), "not a socket");
+      const runs: string[][] = [];
+
+      await exitStaleSshMasters(
+        async (_command, args) => {
+          runs.push([...args]);
+          return { code: 0, stdout: "", stderr: "", spawnError: null, timedOut: false };
+        },
+        clientDir,
+        1_000
+      );
+
+      expect(runs.map((args) => args[args.indexOf("-o") + 1]).sort()).toEqual(
+        [controlPathOption(older), controlPathOption(current)].sort()
+      );
+      for (const args of runs) {
+        // No user config: its own forwards and options would ride along.
+        expect(args.slice(0, 2)).toEqual(["-F", "/dev/null"]);
+        expect(args[args.indexOf("-O") + 1]).toBe("exit");
+      }
+      expect(existsSync(current)).toBe(false);
+      expect(existsSync(older)).toBe(false);
+      expect(existsSync(linkSocket)).toBe(true);
+      expect(existsSync(path.join(clientDir, "cm2-notes"))).toBe(true);
+    } finally {
+      await Promise.all(servers.map((server) => new Promise((resolve) => server.close(resolve))));
+      rmSync(clientDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the socket of a master that wouldn't exit, so it can still be reached", async () => {
+    const clientDir = mkdtempSync(path.join(os.tmpdir(), "rh-"));
+    const server = net.createServer();
+    try {
+      const socketPath = path.join(clientDir, "cm2-7f3a");
+      await new Promise<void>((resolve) => server.listen(socketPath, () => resolve()));
+      await exitStaleSshMasters(
+        async () => ({ code: 255, stdout: "", stderr: "", spawnError: null, timedOut: false }),
+        clientDir,
+        1_000
+      );
+      expect(existsSync(socketPath)).toBe(true);
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+      rmSync(clientDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does nothing when there is no control directory yet", async () => {
+    const run = vi.fn();
+    await exitStaleSshMasters(run, path.join(os.tmpdir(), "rh-missing-dir-x"), 1_000);
+    expect(run).not.toHaveBeenCalled();
   });
 });

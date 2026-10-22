@@ -5,6 +5,7 @@ import { usePanelStore } from "@/store/panelStore";
 import { flushConsoleCaptureBuffer, useConsoleCaptureStore } from "@/store/consoleCaptureStore";
 import { isBrowserPanel, isDevPreviewPanel } from "@shared/types/panel";
 import { PANEL_LIMIT_ERROR_SUFFIX } from "./panelLimitError";
+import { resolveExternalPageForView } from "@/services/terminal/remoteLoopbackLinks";
 
 const getConsoleMessagesArgsSchema = z
   .object({
@@ -190,7 +191,10 @@ export function registerBrowserActions(actions: ActionRegistry, _callbacks: Acti
         throw new Error("No browser URL available to open externally");
       }
 
-      await systemClient.openExternal(derivedUrl);
+      // A host's page keeps its forward while the system browser uses it, not
+      // only while the panel that showed it stays open.
+      const external = await resolveExternalPageForView(derivedUrl, "Opened from a browser panel");
+      await systemClient.openExternal(external);
     },
   }));
 

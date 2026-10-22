@@ -33,7 +33,7 @@ import { notify } from "@/lib/notify";
 import { logError } from "@/utils/logger";
 import {
   hostForwardFailure,
-  resolveBrowserUrlForView,
+  resolveExternalPageForView,
 } from "@/services/terminal/remoteLoopbackLinks";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { UI_ACTION_SUCCESS_DWELL_MS } from "@/lib/animationUtils";
@@ -102,7 +102,7 @@ function isOpenableUrl(value: string): boolean {
  * forwarded here first; opening the raw URL would reach this machine's server.
  */
 function openEndpointInBrowser(endpoint: string): void {
-  resolveBrowserUrlForView(endpoint).then(
+  resolveExternalPageForView(endpoint, "Worktree endpoint").then(
     (url) =>
       systemClient
         .openExternal(url)

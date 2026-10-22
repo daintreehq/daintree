@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
-import type net from "node:net";
+import net from "node:net";
 import path from "node:path";
 import type { Readable } from "node:stream";
 import { ATTACH_STDIO_FLAG } from "../host/attachStdio.js";
@@ -512,6 +512,70 @@ export async function closeSshMaster(
   usedMasters.delete(masterKey(target, controlPath));
   await run(sshExecutable(), buildExitArgs(target, controlPath), { timeoutMs }).catch(() => {});
   if (!controlPath.includes("%")) await fs.rm(controlPath, { force: true }).catch(() => {});
+}
+
+/** Every name a build gives a master's control socket: `cm1-…`, `cm2-…`, and the temporary one ssh binds first. */
+const CONTROL_SOCKET_NAME = /^cm\d*-/;
+
+/**
+ * Masters a previous launch left running because it crashed or was killed,
+ * so its quit never told them to exit. This launch would reuse one (the
+ * control path is the same every launch) with that launch's port forwards
+ * still bound on it, unlisted and unstoppable here; an older build's keeps its
+ * forwards bound until it times out. Each is told to exit and its socket
+ * removed, as a normal quit would have, before anything here dials a host.
+ */
+export async function exitStaleSshMasters(
+  run: CommandRunner,
+  clientDir: string,
+  timeoutMs: number
+): Promise<void> {
+  let names: string[];
+  try {
+    names = await fs.readdir(clientDir);
+  } catch {
+    return;
+  }
+  await Promise.all(
+    names
+      .filter((name) => CONTROL_SOCKET_NAME.test(name))
+      .map(async (name) => {
+        const socketPath = path.join(clientDir, name);
+        try {
+          if (!(await fs.lstat(socketPath)).isSocket()) return;
+        } catch {
+          return;
+        }
+        // The socket names the master; the destination is only there because ssh requires one.
+        const args = ["-F", "/dev/null", "-o", controlPathOption(socketPath), "-O", "exit", "--"];
+        const result = await run(sshExecutable(), [...args, "localhost"], { timeoutMs }).catch(
+          () => null
+        );
+        // A master that wouldn't go keeps its socket: without it, nothing could reach it again.
+        if (result?.code === 0 || (await isDeadSocket(socketPath, timeoutMs))) {
+          await fs.rm(socketPath, { force: true }).catch(() => {});
+        } else {
+          console.warn(`[RemoteHosts] A master left by an earlier launch didn't exit: ${name}`);
+        }
+      })
+  );
+}
+
+/** Whether nothing answers on a unix socket any more: its process is gone. */
+function isDeadSocket(socketPath: string, timeoutMs: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = net.connect({ path: socketPath });
+    const finish = (dead: boolean) => {
+      clearTimeout(timer);
+      socket.destroy();
+      resolve(dead);
+    };
+    const timer = setTimeout(() => finish(false), timeoutMs);
+    socket.once("connect", () => finish(false));
+    socket.once("error", (error: NodeJS.ErrnoException) =>
+      finish(error.code === "ECONNREFUSED" || error.code === "ENOENT")
+    );
+  });
 }
 
 /**

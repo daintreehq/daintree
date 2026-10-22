@@ -1124,6 +1124,9 @@ export interface GeneratedElectronAPI {
     listHostPorts(
       ...args: IpcInvokeMap["port-forwards:list-host-ports"]["args"]
     ): Promise<IpcInvokeMap["port-forwards:list-host-ports"]["result"]>;
+    release(
+      ...args: IpcInvokeMap["port-forwards:release"]["args"]
+    ): Promise<IpcInvokeMap["port-forwards:release"]["result"]>;
     stop(
       ...args: IpcInvokeMap["port-forwards:stop"]["args"]
     ): Promise<IpcInvokeMap["port-forwards:stop"]["result"]>;
