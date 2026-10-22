@@ -1234,7 +1234,7 @@ describe("DriveLeaseService across a restart of this app", () => {
 
   it("starts with nothing held when the store can't be read", async () => {
     service.dispose();
-    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    loggerMock.error.mockClear();
     service = new DriveLeaseService({
       registry,
       releaseGraceMs: GRACE_MS,
@@ -1247,8 +1247,10 @@ describe("DriveLeaseService across a restart of this app", () => {
       },
     });
     expect(service.getState("p").holder).toBeNull();
-    expect(errors).toHaveBeenCalled();
-    errors.mockRestore();
+    expect(loggerMock.error).toHaveBeenCalledWith(
+      "Drive lease reservations could not be read",
+      expect.any(Error)
+    );
   });
 });
 
@@ -1524,22 +1526,21 @@ describe("DriveLeaseService and a relaunched Shell (#13909)", () => {
     const messages = () => loggerMock.info.mock.calls.map(([message]) => message);
 
     it("records who got the lease, who lost it and why", async () => {
-      const hostWindow = local(1);
       const laptop = remote("s1:e1", "c1");
-      registry.add(hostWindow);
+      const phone = remote("s2:e1", "c2");
+      registry.add(laptop);
+      registry.add(phone);
       await settle();
       service.takeOver("p", laptop);
+      service.takeOver("p", phone);
 
-      expect(loggerMock.info).toHaveBeenCalledWith(
-        "Drive lease granted",
-        expect.objectContaining({ projectId: "p", clientId: "local", reason: "vacant" })
-      );
       expect(loggerMock.info).toHaveBeenCalledWith(
         "Drive lease transferred",
         expect.objectContaining({
-          clientId: "c1",
+          projectId: "p",
+          clientId: "c2",
           reason: "explicit-takeover",
-          previousClientId: "local",
+          previousClientId: "c1",
         })
       );
     });

@@ -402,8 +402,7 @@ export class IpcDispatcherImpl implements IpcDispatcher<IpcContext> {
               channel,
               code: refusal.code,
             });
-          }
-          else listener(event, ...args);
+          } else listener(event, ...args);
         },
         (error: unknown) =>
           logger.warn("Send dropped: lease check failed", {
