@@ -26,6 +26,13 @@ import {
 import { buildOriginGuardSource, type GuestOriginPolicy } from "../sitePreview/originPolicy.js";
 import { BOOTSTRAP_GLOBAL, EXTRACTOR_INSTALL_STATUS, channelEvent } from "./guestChannel.js";
 
+/**
+ * Fixed, unlike the per-install channel: a newer bootstrap must reach every
+ * older one in the document whatever channel it was given. Page script can
+ * send it too, and the most that buys is retiring the picker in its own page.
+ */
+export const SUPERSEDE_EVENT = "daintree-element-picker:supersede";
+
 export interface BootstrapSourceParams {
   sessionId: string;
   /** Strictly increasing across every install, so the newer bootstrap in a world always wins. */
@@ -55,12 +62,33 @@ export function buildBootstrapSource(params: BootstrapSourceParams): string {
   const send = g[${JSON.stringify(bindingName)}];
   if (typeof send !== "function") return;
   const KEY = ${JSON.stringify(BOOTSTRAP_GLOBAL)};
+  const SUPERSEDE = ${JSON.stringify(SUPERSEDE_EVENT)};
   const INSTALL_ID = ${installId};
   const previous = g[KEY];
   // A world outlives a reinstall into the same document; the newer install wins.
   if (previous && typeof previous.installId === "number" && previous.installId >= INSTALL_ID) return;
-  if (previous && typeof previous.dispose === "function") {
-    try { previous.dispose(); } catch { /* a torn-down bootstrap must not block its replacement */ }
+  // An older picker in another world cannot be reached through this world's
+  // global — a rebind makes a new world, a debugger session that came back
+  // gets one of its own — so it is told through the DOM, which both share.
+  // Without this, one whose disposal never arrived would go on swallowing the
+  // page's clicks under its successor.
+  try { document.dispatchEvent(new CustomEvent(SUPERSEDE, { detail: String(INSTALL_ID) })); } catch {}
+  if (previous && typeof previous.retire === "function") {
+    try { previous.retire(); } catch { /* a torn-down bootstrap must not block its replacement */ }
+  }
+  let retired = false;
+  const onSupersede = (event) => {
+    const by = Number(event.detail);
+    if (Number.isSafeInteger(by) && by > INSTALL_ID) retire();
+  };
+  function retire() {
+    if (retired) return;
+    retired = true;
+    document.removeEventListener(SUPERSEDE, onSupersede);
+    try { if (typeof api.dispose === "function") api.dispose(); } catch {}
+    if (g[KEY] === api) {
+      try { delete g[KEY]; } catch { g[KEY] = undefined; }
+    }
   }
   const VERSION = ${ELEMENT_PICKER_PROTOCOL_VERSION};
   const SESSION_ID = ${JSON.stringify(sessionId)};
@@ -83,6 +111,7 @@ export function buildBootstrapSource(params: BootstrapSourceParams): string {
     clearHover() {},
     refresh() {},
     dispose: null,
+    retire,
     post(event) {
       let text;
       try { text = envelope(event); } catch { return; }
@@ -96,6 +125,7 @@ export function buildBootstrapSource(params: BootstrapSourceParams): string {
     },
   };
   g[KEY] = api;
+  document.addEventListener(SUPERSEDE, onSupersede);
   try {
 ${body}
   } catch (err) {
@@ -167,13 +197,7 @@ export function buildPickerRefreshSource(installId: number): string {
   return bootstrapCall(installId, "api.refresh();");
 }
 
-/** Disposes the bootstrap, which tells the main-world extractors installed for it to go too. */
+/** Retires the bootstrap, which tells the main-world extractors installed for it to go too. */
 export function buildPickerDisposeSource(installId: number): string {
-  return `(() => {
-  const KEY = ${JSON.stringify(BOOTSTRAP_GLOBAL)};
-  const api = globalThis[KEY];
-  if (!api || api.installId !== ${installId}) return;
-  try { if (typeof api.dispose === "function") api.dispose(); } catch {}
-  try { delete globalThis[KEY]; } catch { globalThis[KEY] = undefined; }
-})();`;
+  return bootstrapCall(installId, "api.retire();");
 }

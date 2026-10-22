@@ -134,11 +134,14 @@ describe("detectMarkup", () => {
     expect(names).toEqual(["ng-version", "_nghost-*", "class=svelte-*"]);
   });
 
-  it("does not read a plain `svelte-` word as Svelte's scoped class", () => {
-    document.body.innerHTML = '<div class="svelte-logo"></div>';
-    const set = new DetectionSet();
-    detectMarkup(document.querySelector("div")!, "attribute", set);
-    expect(set.size).toBe(0);
+  it("reads a letters-only hash as Svelte's scoped class, but not a word too short to be one", () => {
+    document.body.innerHTML = '<p class="svelte-qwkzbe"></p><div class="svelte-logo"></div>';
+    const hashed = new DetectionSet();
+    detectMarkup(document.querySelector("p")!, "attribute", hashed);
+    expect(frameworks(hashed)).toEqual(["svelte"]);
+    const word = new DetectionSet();
+    detectMarkup(document.querySelector("div")!, "attribute", word);
+    expect(word.size).toBe(0);
   });
 });
 

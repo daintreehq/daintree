@@ -105,11 +105,12 @@ const ISLAND_RENDERERS: ReadonlyArray<[string, ElementPickerFramework]> = [
 ];
 
 /**
- * Svelte's scoped-style class: `svelte-` and a short base-36 hash. A digit is
- * required so a page's own `svelte-header` is not taken for one; the odd hash
- * with no digit costs nothing, since any other scoped element still matches.
+ * Svelte's scoped-style class: `svelte-` and a base-36 hash of five to eight
+ * characters, about one in eight of them letters only. A page's own
+ * `svelte-header` reads the same; that costs an extractor finding nothing,
+ * where demanding a digit would miss those components outright.
  */
-const SVELTE_CLASS = /^svelte-(?=[a-z]*\d)[a-z0-9]{5,8}$/;
+const SVELTE_CLASS = /^svelte-[a-z0-9]{5,8}$/;
 
 /**
  * The detections found so far, bounded the way the wire schema bounds them so

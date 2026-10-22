@@ -33,11 +33,14 @@ function harness(
     assets?: Partial<Record<CoreGuestAssetId, string | Error>>;
     assetGate?: Promise<void>;
     noWorld?: true;
+    /** The bootstrap evaluate fails as an evaluate into a world whose document is gone does. */
+    worldGone?: true;
   } = {}
 ) {
   const calls: Call[] = [];
   const emitted: ElementPickerPushPayload[] = [];
   const state = { epoch: 0 as number | null };
+  const main = { uniqueId: "main-1" as string | null, generation: 3 };
   let queue: Promise<void> = Promise.resolve();
   const timers: Array<() => void> = [];
   const assets: Partial<Record<CoreGuestAssetId, string | Error>> = {
@@ -58,6 +61,9 @@ function harness(
       }
       if (method !== "Runtime.evaluate") return {};
       const expression = params.expression as string;
+      if (params.contextId === CONTEXT_ID && overrides.worldGone) {
+        throw new Error("Cannot find context with specified id");
+      }
       if (expression.includes("const api = { result: null }")) {
         return { result: { value: overrides.probeResult ?? null } };
       }
@@ -82,6 +88,7 @@ function harness(
     },
     emit: (payload) => emitted.push(payload),
     liveEpoch: () => state.epoch,
+    mainWorld: () => ({ ...main }),
     evaluateTimeoutMs: 1000,
     setTimer: (callback) => {
       timers.push(callback);
@@ -102,7 +109,7 @@ function harness(
         call.method === "Runtime.evaluate" &&
         (call.params.expression as string).includes("installed: false")
     );
-  return { guest, deps, calls, emitted, state, timers, install, settle, extractorEvaluates };
+  return { guest, deps, calls, emitted, state, main, timers, install, settle, extractorEvaluates };
 }
 
 describe("CoreGuest", () => {
@@ -119,6 +126,12 @@ describe("CoreGuest", () => {
     expect(h.calls[2]!.params.contextId).toBe(CONTEXT_ID);
     expect(h.guest.isTrustedContext(CONTEXT_ID)).toBe(true);
     expect(h.guest.isTrustedContext(CONTEXT_ID + 1)).toBe(false);
+  });
+
+  it("reports an install whose world went with its document as not installed, not as a failure", async () => {
+    const h = harness({ worldGone: true });
+    await expect(h.install()).resolves.toBe(false);
+    await expect(harness().install()).resolves.toBe(true);
   });
 
   it("fails the install when the catalog has no bootstrap or the guest makes no world", async () => {
@@ -149,6 +162,42 @@ describe("CoreGuest", () => {
     h.guest.invalidate();
     // A timer left armed would keep a dead binding's guest alive until it fired.
     expect(h.deps.clearTimer).toHaveBeenCalledWith(1);
+  });
+
+  it("aims the probe and extractors at the bootstrap document's main world", async () => {
+    const h = harness({ probeResult: SVELTE });
+    await h.install();
+    h.guest.onGuestEvent(0, READY);
+    await h.settle();
+    const mainWorld = h.calls.filter(
+      (call) => call.method === "Runtime.evaluate" && call.params.contextId === undefined
+    );
+    expect(mainWorld.map((call) => call.params.uniqueContextId)).toEqual(["main-1", "main-1"]);
+    expect(h.extractorEvaluates()).toHaveLength(1);
+  });
+
+  it("evaluates nothing in the main world when it cannot name the bootstrap's document", async () => {
+    const unknown = harness({ probeResult: SVELTE });
+    unknown.main.uniqueId = null;
+    await unknown.install();
+    unknown.guest.onGuestEvent(0, READY);
+    unknown.guest.onGuestEvent(0, { type: "frameworksDetected", detections: SVELTE });
+    await unknown.settle();
+    expect(
+      unknown.calls.filter(
+        (c) => c.method === "Runtime.evaluate" && c.params.contextId === undefined
+      )
+    ).toHaveLength(0);
+
+    // The lease has moved to a later document the bridge has not heard about yet.
+    const later = harness();
+    await later.install();
+    later.main.generation += 1;
+    later.main.uniqueId = "main-2";
+    later.guest.onGuestEvent(0, { type: "frameworksDetected", detections: SVELTE });
+    await later.settle();
+    expect(later.extractorEvaluates()).toHaveLength(0);
+    expect(later.emitted).toEqual([]);
   });
 
   it("drops a detection for a document that is no longer current", async () => {

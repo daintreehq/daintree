@@ -542,6 +542,13 @@ export class SitePreviewBridge {
       emit: (payload) => this.emit(binding, payload),
       liveEpoch: () =>
         binding.detached || binding.suspended || this.closed ? null : binding.documentEpoch,
+      mainWorld: () =>
+        binding.lease === null
+          ? null
+          : {
+              uniqueId: binding.lease.mainWorldUniqueId(),
+              generation: binding.lease.navigationGeneration,
+            },
       evaluateTimeoutMs: GUEST_EVALUATE_TIMEOUT_MS,
     });
     await this.commitBinding(binding, wc);
@@ -1291,14 +1298,16 @@ export class SitePreviewBridge {
     // Read once: both can change across the awaits below.
     const epoch = binding.documentEpoch;
     const installedMode = binding.mode;
-    await core.install({
+    const installed = await core.install({
       epoch,
       installId,
       mode: installedMode,
       origins: binding.origins,
       frameId,
     });
-    if (binding.detached || this.closed) return;
+    // Not installed means the document went under the install; the navigation
+    // that replaced it queues its own, which this must not mark as done.
+    if (!installed || binding.detached || this.closed) return;
     binding.installedEpoch = epoch;
     if (binding.mode !== installedMode) await core.setMode(binding.mode);
   }

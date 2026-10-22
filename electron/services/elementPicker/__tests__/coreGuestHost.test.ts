@@ -39,15 +39,46 @@ type Command = { method: string; params: Record<string, unknown> };
 class FakeDebugger extends EventEmitter {
   attached = false;
   readonly commands: Command[] = [];
+  /** The main frame's default world; a new one per document, as CDP announces them. */
+  mainWorld = 1;
+  /** Runs before the next evaluate into the picker's world, which then fails as a gone world does. */
+  beforeIsolatedEvaluate: (() => void) | null = null;
+
   isAttached(): boolean {
     return this.attached;
   }
   attach(): void {
     this.attached = true;
   }
+
+  private announceMainWorld(): void {
+    this.emit("message", {} as Electron.Event, "Runtime.executionContextCreated", {
+      context: {
+        id: this.mainWorld,
+        uniqueId: `main-${this.mainWorld}`,
+        auxData: { isDefault: true, frameId: MAIN_FRAME_ID },
+      },
+    });
+  }
+
+  /**
+   * A cross-document navigation as CDP reports it, and — unless `observed` is
+   * false, standing in for Electron's event arriving late — as Electron does.
+   */
+  navigate(wc: EventEmitter, observed = true): void {
+    this.emit("message", {} as Electron.Event, "Runtime.executionContextsCleared", {});
+    this.mainWorld += 1;
+    this.announceMainWorld();
+    if (observed) wc.emit("did-navigate");
+  }
+
   async sendCommand(method: string, params: Record<string, unknown> = {}): Promise<unknown> {
     this.commands.push({ method, params });
     switch (method) {
+      case "Runtime.enable":
+        // The replay of contexts that already exist.
+        this.announceMainWorld();
+        return {};
       case "Page.getFrameTree":
         return { frameTree: { frame: { id: MAIN_FRAME_ID } } };
       case "Runtime.addBinding": {
@@ -71,6 +102,18 @@ class FakeDebugger extends EventEmitter {
       case "Page.addScriptToEvaluateOnNewDocument":
         return { identifier: "script-1" };
       case "Runtime.evaluate": {
+        if (
+          params.uniqueContextId !== undefined &&
+          params.uniqueContextId !== `main-${this.mainWorld}`
+        ) {
+          throw new Error("uniqueContextId not found");
+        }
+        if (params.contextId === ISOLATED_CONTEXT_ID && this.beforeIsolatedEvaluate !== null) {
+          const hook = this.beforeIsolatedEvaluate;
+          this.beforeIsolatedEvaluate = null;
+          hook();
+          throw new Error("Cannot find context with specified id");
+        }
         try {
           const source = (params.expression as string).trim().replace(/;$/, "");
           const value = new Function(`return ${source}`)() as unknown;
@@ -156,11 +199,11 @@ function makeHarness(options: { catalog?: Record<string, string> } = {}) {
       return catalog[id] ?? null;
     },
   });
-  const bind = () =>
+  const bind = (mode: "select" | "browse" = "select") =>
     bridge.bindElementPicker({
       projectId: PROJECT_ID,
       panelId: PANEL_ID,
-      mode: "select",
+      mode,
       subscriberWebContentsId: SUBSCRIBER_WC_ID,
       sink: (payload) => sunk.push(payload),
     });
@@ -172,7 +215,8 @@ function makeHarness(options: { catalog?: Record<string, string> } = {}) {
     sunk.flatMap((payload) =>
       payload.kind === "picker-event" && payload.event.type === type ? [payload] : []
     );
-  return { bridge, wc, sunk, pushed, extractorLoad, bind, kinds, pickerEvents };
+  const navigate = (observed = true) => wc.debugger.navigate(wc, observed);
+  return { bridge, wc, sunk, pushed, extractorLoad, bind, navigate, kinds, pickerEvents };
 }
 
 /** Lets the binding queue, binding calls and probes settle. */
@@ -240,6 +284,11 @@ describe("core Element Picker guest loading", () => {
     expect(h.wc.debugger.evaluates().filter((entry) => entry.kind === "extractor")).toEqual([
       { kind: "extractor", framework: "svelte" },
     ]);
+    // Both aimed at the bootstrap's own document, never "whatever is there now".
+    const mainWorldTargets = h.wc.debugger.commands
+      .filter((c) => c.method === "Runtime.evaluate" && c.params.contextId === undefined)
+      .map((c) => c.params.uniqueContextId);
+    expect(mainWorldTargets).toEqual(["main-1", "main-1"]);
 
     const probed = h.kinds("frameworks-probed");
     expect(probed).toHaveLength(1);
@@ -340,7 +389,7 @@ describe("core Element Picker guest loading", () => {
     expect(h.kinds("frameworks-probed")).toHaveLength(1);
     expect(h.wc.debugger.evaluates().some((entry) => entry.kind === "extractor")).toBe(false);
 
-    h.wc.emit("did-navigate");
+    h.navigate();
     release();
     await settle();
 
@@ -363,7 +412,7 @@ describe("core Element Picker guest loading", () => {
     };
     expect(first.has("svelte")).toBe(true);
 
-    h.wc.emit("did-navigate");
+    h.navigate();
     await settle();
 
     // jsdom keeps the old document, so the old registry is still reachable
@@ -443,6 +492,65 @@ describe("core Element Picker guest loading", () => {
     expect(h.pushed.map((payload) => payload.kind)).toEqual(["detached"]);
     expect(h.pushed[0]).toMatchObject({ reason: "rebound" });
     expect(h.pickerEvents("documentReady")).toHaveLength(1);
+  });
+
+  it("never evaluates an extractor in a document that replaced its own before the host saw it go", async () => {
+    svelteNode();
+    const h = makeHarness();
+    let release!: () => void;
+    h.extractorLoad.gate = new Promise((resolve) => {
+      release = resolve;
+    });
+    await h.bind();
+    await settle();
+    expect(h.kinds("frameworks-probed")).toHaveLength(1);
+
+    // CDP has replaced the document; Electron's `did-navigate` is still on its way.
+    h.navigate(false);
+    release();
+    await settle();
+
+    expect(h.wc.debugger.evaluates().some((entry) => entry.kind === "extractor")).toBe(false);
+    expect(h.kinds("extractor-installed")).toHaveLength(0);
+    expect(h.kinds("host-issue")).toHaveLength(0);
+  });
+
+  it("keeps the binding through a reload that lands under its first install", async () => {
+    const h = makeHarness();
+    h.wc.debugger.beforeIsolatedEvaluate = () => h.navigate();
+    const state = await h.bind();
+    await settle();
+
+    expect(h.kinds("detached")).toHaveLength(0);
+    expect(h.pickerEvents("documentReady").map((entry) => entry.documentEpoch)).toEqual([1]);
+    expect(h.bridge.getState(PROJECT_ID, state.sessionId)?.guestReady).toBe(true);
+  });
+
+  it("retires an older picker it cannot reach through its own world", async () => {
+    svelteNode();
+    const h = makeHarness();
+    const first = await h.bind();
+    await settle();
+    const registry = scope[EXTRACTOR_REGISTRY_GLOBAL] as { has(framework: string): boolean };
+    expect(registry.has("svelte")).toBe(true);
+    // Out of reach, as in a world a debugger session that came back cannot
+    // see, so its disposal never arrives.
+    delete scope[BOOTSTRAP_GLOBAL];
+    await h.bridge.detach(PROJECT_ID, first.sessionId);
+
+    let pageClicks = 0;
+    const button = document.getElementById("cta")!;
+    button.addEventListener("click", () => {
+      pageClicks += 1;
+    });
+    button.click();
+    expect(pageClicks).toBe(0);
+
+    await h.bind("browse");
+    await settle();
+    button.click();
+    expect(pageClicks).toBe(1);
+    expect(registry.has("svelte")).toBe(false);
   });
 
   it("reports an extractor that fails to register, once, without retrying it", async () => {

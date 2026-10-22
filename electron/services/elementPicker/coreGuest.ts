@@ -77,6 +77,11 @@ export interface CoreGuestDeps {
   emit(payload: ElementPickerPushPayload): void;
   /** The binding's epoch now, or null once it may install nothing (detached, suspended, closing). */
   liveEpoch(): number | null;
+  /**
+   * The page's main world as the CDP lease sees it: the default world's
+   * `uniqueId` and the document generation it belongs to. Null with no lease.
+   */
+  mainWorld(): { uniqueId: string | null; generation: number } | null;
   evaluateTimeoutMs: number;
   setTimer?: (callback: () => void, ms: number) => unknown;
   clearTimer?: (handle: unknown) => void;
@@ -87,14 +92,19 @@ export interface CoreGuestDeps {
 type EvaluateResult = { result?: { value?: unknown }; exceptionDetails?: { text?: string } };
 
 /**
- * A call into a world whose document is gone. Expected here and nowhere else
- * in main: only the picker targets a world it created by context id.
+ * A call into a world or frame whose document is gone. Expected here and
+ * nowhere else in main: only the picker aims evaluates at a context it named.
  */
+const GONE_CONTEXT_ERRORS = [
+  "Cannot find context with specified id",
+  "uniqueContextId not found",
+  "No frame for given id found",
+];
+
 function isGoneContextError(err: unknown): boolean {
-  return (
-    isExpectedCdpError(err) ||
-    formatErrorMessage(err, "").includes("Cannot find context with specified id")
-  );
+  if (isExpectedCdpError(err)) return true;
+  const message = formatErrorMessage(err, "");
+  return GONE_CONTEXT_ERRORS.some((expected) => message.includes(expected));
 }
 
 export class CoreGuest {
@@ -109,6 +119,8 @@ export class CoreGuest {
   private readonly extractors = new Map<ElementPickerFramework, ExtractorState>();
   private probedEpoch = -1;
   private lateProbe: unknown = null;
+  /** The lease's document generation when this install's world was created. */
+  private generation: number | null = null;
 
   constructor(private readonly deps: CoreGuestDeps) {}
 
@@ -133,6 +145,7 @@ export class CoreGuest {
    */
   invalidate(): void {
     this.epoch = -1;
+    this.generation = null;
     this.extractors.clear();
     if (this.lateProbe !== null) {
       (this.deps.clearTimer ?? ((handle) => clearTimeout(handle as NodeJS.Timeout)))(
@@ -146,13 +159,17 @@ export class CoreGuest {
     return epoch !== -1 && this.epoch === epoch && this.deps.liveEpoch() === epoch;
   }
 
+  /**
+   * False when the document the install was for went away under it — a
+   * navigation the bridge will reinstall for — rather than a failure to report.
+   */
   async install(input: {
     epoch: number;
     installId: number;
     mode: SitePreviewMode;
     origins: GuestOriginPolicy;
     frameId: string;
-  }): Promise<void> {
+  }): Promise<boolean> {
     const body = await this.deps.loadAsset("bootstrap");
     if (body === null) {
       throw new AppError({
@@ -160,7 +177,7 @@ export class CoreGuest {
         message: "The Element Picker bootstrap is missing from the guest asset catalog",
       });
     }
-    if (this.deps.liveEpoch() !== input.epoch) return;
+    if (this.deps.liveEpoch() !== input.epoch) return false;
     // Scoped by world name: page script in the main world never sees the
     // binding, and neither does a frame the picker made no world in.
     await this.deps.send("Runtime.addBinding", {
@@ -169,12 +186,18 @@ export class CoreGuest {
     });
     // For the current document only, unlike a new-document script: nothing of
     // the picker's carries over into a document it was not installed in.
-    const world = (await this.deps.send("Page.createIsolatedWorld", {
-      frameId: input.frameId,
-      worldName: this.worldName,
-      grantUniveralAccess: false,
-    })) as { executionContextId?: unknown } | undefined;
-    if (this.deps.liveEpoch() !== input.epoch) return;
+    let world: { executionContextId?: unknown } | undefined;
+    try {
+      world = (await this.deps.send("Page.createIsolatedWorld", {
+        frameId: input.frameId,
+        worldName: this.worldName,
+        grantUniveralAccess: false,
+      })) as { executionContextId?: unknown } | undefined;
+    } catch (err) {
+      if (isGoneContextError(err)) return false;
+      throw err;
+    }
+    if (this.deps.liveEpoch() !== input.epoch) return false;
     const contextId = world?.executionContextId;
     if (typeof contextId !== "number") {
       throw new AppError({
@@ -187,25 +210,36 @@ export class CoreGuest {
     this.epoch = input.epoch;
     this.contextId = contextId;
     this.installId = input.installId;
+    // Read with nothing awaited since the world was made, so it is the
+    // generation of the document the world is in.
+    this.generation = this.deps.mainWorld()?.generation ?? null;
     const channel =
       this.deps.newChannel?.() ?? `daintree-element-picker-${randomBytes(12).toString("hex")}`;
     this.channel = channel;
 
     // Set before the evaluate: the bootstrap reports `documentReady` from inside it.
-    const evaluated = (await this.deps.send("Runtime.evaluate", {
-      expression: buildBootstrapSource({
-        sessionId: this.deps.sessionId,
-        installId: input.installId,
-        documentEpoch: input.epoch,
-        bindingName: this.deps.bindingName,
-        channel,
-        mode: input.mode,
-        origins: input.origins,
-        body,
-      }),
-      contextId,
-      timeout: this.deps.evaluateTimeoutMs,
-    })) as EvaluateResult | undefined;
+    let evaluated: EvaluateResult | undefined;
+    try {
+      evaluated = (await this.deps.send("Runtime.evaluate", {
+        expression: buildBootstrapSource({
+          sessionId: this.deps.sessionId,
+          installId: input.installId,
+          documentEpoch: input.epoch,
+          bindingName: this.deps.bindingName,
+          channel,
+          mode: input.mode,
+          origins: input.origins,
+          body,
+        }),
+        contextId,
+        timeout: this.deps.evaluateTimeoutMs,
+      })) as EvaluateResult | undefined;
+    } catch (err) {
+      // The world went with its document: a reload landed between creating it
+      // and evaluating into it. The navigation's own reinstall takes over.
+      if (isGoneContextError(err)) return false;
+      throw err;
+    }
     if (evaluated?.exceptionDetails) {
       throw new AppError({
         code: "INTERNAL",
@@ -213,6 +247,22 @@ export class CoreGuest {
         context: { detail: evaluated.exceptionDetails.text },
       });
     }
+    return true;
+  }
+
+  /**
+   * The main world of the document this install's bootstrap is in, or null
+   * when it is unknown or belongs to a later document. Evaluates aimed at its
+   * `uniqueId` fail outright once that document is gone, so nothing meant for
+   * one document can run in the next — however the page dresses up the
+   * handshake, which stays only as a second check.
+   */
+  private mainWorldTarget(): string | null {
+    const world = this.deps.mainWorld();
+    if (world === null || this.generation === null || world.generation !== this.generation) {
+      return null;
+    }
+    return world.uniqueId;
   }
 
   /** An admitted event from the bootstrap, for the epoch it was admitted under. */
@@ -251,15 +301,18 @@ export class CoreGuest {
     if (!this.isCurrent(epoch) || channel === null) return;
     const body = await this.deps.loadAsset("probe");
     if (body === null || !this.isCurrent(epoch)) return;
+    const target = this.mainWorldTarget();
+    if (target === null) return;
     let evaluated: EvaluateResult | undefined;
     try {
       evaluated = (await this.deps.send("Runtime.evaluate", {
         expression: buildProbeSource({ channel, body }),
+        uniqueContextId: target,
         returnByValue: true,
         timeout: this.deps.evaluateTimeoutMs,
       })) as EvaluateResult | undefined;
     } catch (err) {
-      if (!isExpectedCdpError(err)) this.warn("probe", err);
+      if (!isGoneContextError(err)) this.warn("probe", err);
       return;
     }
     if (!this.isCurrent(epoch) || evaluated?.exceptionDetails) return;
@@ -307,15 +360,23 @@ export class CoreGuest {
       this.extractors.set(framework, "unavailable");
       return;
     }
+    const target = this.mainWorldTarget();
+    if (target === null) {
+      // The document this detection was made in is not the one the lease now
+      // sees; its own navigation resets this, so it is nobody's failure.
+      this.extractors.set(framework, "failed");
+      return;
+    }
     let evaluated: EvaluateResult | undefined;
     try {
       evaluated = (await this.deps.send("Runtime.evaluate", {
         expression: buildExtractorSource({ channel, framework, body }),
+        uniqueContextId: target,
         returnByValue: true,
         timeout: this.deps.evaluateTimeoutMs,
       })) as EvaluateResult | undefined;
     } catch (err) {
-      if (!this.isCurrent(epoch) || isExpectedCdpError(err)) return;
+      if (!this.isCurrent(epoch) || isGoneContextError(err)) return;
       this.fail(epoch, framework, "the extractor could not be evaluated");
       return;
     }

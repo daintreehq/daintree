@@ -46,6 +46,9 @@ const FRAMEWORKS: ReadonlySet<string> = new Set([
 ]);
 /** Replies kept per request; the first one whose id matches wins. */
 const MAX_REPLIES = 4;
+const PROBE_SIZE = 100;
+/** 16px line plus padding; the label is one line. */
+const LABEL_HEIGHT = 20;
 
 /** Keys the arrow walk leaves to a page control that has focus. */
 const CONTROL_ROLES: ReadonlySet<string> = new Set([
@@ -109,6 +112,32 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function isObjectArray(value: unknown): value is Array<Record<string, unknown>> {
+  return Array.isArray(value) && value.every(isPlainObject);
+}
+
+function isChainShape(value: unknown): value is ObservationFields["componentChain"] {
+  return (
+    isPlainObject(value) &&
+    (value.nearestId === null || typeof value.nearestId === "string") &&
+    isObjectArray(value.components) &&
+    typeof value.truncated === "boolean"
+  );
+}
+
+const CAPABILITY_KEYS = ["names", "chain", "componentSelection", "file", "line", "exactRange"];
+const CAPABILITY_STATES: ReadonlySet<unknown> = new Set(["available", "unknown", "unavailable"]);
+
+function isCapabilitiesShape(value: unknown): value is ObservationFields["capabilities"] {
+  return (
+    isPlainObject(value) &&
+    CAPABILITY_KEYS.every((key) => {
+      const entry = value[key];
+      return isPlainObject(entry) && CAPABILITY_STATES.has(entry.state);
+    })
+  );
+}
+
 export function createPicker(host: PickerHost): PickerHandle {
   let mode: PickerMode = host.mode;
   let disposed = false;
@@ -120,7 +149,11 @@ export function createPicker(host: PickerHost): PickerHandle {
   let overlayHost: HTMLElement | null = null;
   let overlayRoot: ShadowRoot | null = null;
   let overlayLayer: HTMLElement | null = null;
+  let overlayProbe: HTMLElement | null = null;
   let overlayBlocked = false;
+  /** Watches the outlined elements themselves, which a root-sized observer misses. */
+  let resizes: ResizeObserver | null = null;
+  let tracked: Element[] = [];
   const ids = new WeakMap<Element, string>();
   let nextId = 0;
   let nextRequest = 0;
@@ -265,16 +298,21 @@ export function createPicker(host: PickerHost): PickerHandle {
     // chains is a resolver's call to make with both in view, not the page's.
     const contribution = extract(node, phase);
     if (contribution === null) return fields;
-    if (isPlainObject(contribution.componentChain)) {
+    // Each field is taken only in the shape the wire needs, so one malformed
+    // field costs that field rather than the whole observation. Deeper rules —
+    // ids that resolve, edges without cycles — stay the host's to enforce.
+    if (isChainShape(contribution.componentChain)) {
       fields.componentChain = contribution.componentChain;
     }
-    if (Array.isArray(contribution.sourceCandidates)) {
+    if (isObjectArray(contribution.sourceCandidates)) {
       fields.sourceCandidates = contribution.sourceCandidates.slice(0, LIMITS.sourceCandidates);
     }
-    if (Array.isArray(contribution.frameworkEvidence)) {
+    if (isObjectArray(contribution.frameworkEvidence)) {
       fields.frameworkEvidence = contribution.frameworkEvidence.slice(0, LIMITS.frameworkEvidence);
     }
-    if (isPlainObject(contribution.capabilities)) fields.capabilities = contribution.capabilities;
+    if (isCapabilitiesShape(contribution.capabilities)) {
+      fields.capabilities = contribution.capabilities;
+    }
     return fields;
   }
 
@@ -400,10 +438,34 @@ export function createPicker(host: PickerHost): PickerHandle {
     }
     const layer = document.createElement("div");
     root.appendChild(layer);
+    // A fixed probe of known size reads back whatever transform an ancestor
+    // imposes on fixed children — `html { transform }`, zoom, scale — which
+    // client rects already include and the overlay would otherwise apply twice.
+    const probe = document.createElement("div");
+    style(probe, [
+      ["position", "fixed"],
+      ["top", "0"],
+      ["left", "0"],
+      ["width", PROBE_SIZE + "px"],
+      ["height", PROBE_SIZE + "px"],
+      ["visibility", "hidden"],
+      ["pointer-events", "none"],
+    ]);
+    root.appendChild(probe);
     parent.appendChild(hostElement);
     overlayHost = hostElement;
     overlayRoot = root;
     overlayLayer = layer;
+    overlayProbe = probe;
+  }
+
+  /** Viewport → overlay coordinates. */
+  function readTransform(): { x: number; y: number; sx: number; sy: number } {
+    const rect = overlayProbe?.getBoundingClientRect();
+    if (rect === undefined) return { x: 0, y: 0, sx: 1, sy: 1 };
+    const sx = rect.width > 0 ? rect.width / PROBE_SIZE : 1;
+    const sy = rect.height > 0 ? rect.height / PROBE_SIZE : 1;
+    return { x: rect.left, y: rect.top, sx, sy };
   }
 
   function removeOverlay(): void {
@@ -411,6 +473,7 @@ export function createPicker(host: PickerHost): PickerHandle {
     overlayHost = null;
     overlayRoot = null;
     overlayLayer = null;
+    overlayProbe = null;
   }
 
   /**
@@ -422,15 +485,22 @@ export function createPicker(host: PickerHost): PickerHandle {
     for (const [property, value] of declarations) node.style.setProperty(property, value);
   }
 
-  function drawBox(layer: HTMLElement, node: Element, kind: "hover" | "selected"): void {
+  type Transform = ReturnType<typeof readTransform>;
+
+  function drawBox(
+    layer: HTMLElement,
+    node: Element,
+    kind: "hover" | "selected",
+    transform: Transform
+  ): void {
     const rect = node.getBoundingClientRect();
     const box = document.createElement("div");
     style(box, [
       ["position", "fixed"],
-      ["left", rect.left + "px"],
-      ["top", rect.top + "px"],
-      ["width", Math.max(0, rect.width) + "px"],
-      ["height", Math.max(0, rect.height) + "px"],
+      ["left", (rect.left - transform.x) / transform.sx + "px"],
+      ["top", (rect.top - transform.y) / transform.sy + "px"],
+      ["width", Math.max(0, rect.width) / transform.sx + "px"],
+      ["height", Math.max(0, rect.height) / transform.sy + "px"],
       ["box-sizing", "border-box"],
       ["pointer-events", "none"],
       ["border", kind === "selected" ? "2px solid #3884ff" : "1px solid rgba(56, 132, 255, 0.9)"],
@@ -439,15 +509,23 @@ export function createPicker(host: PickerHost): PickerHandle {
     layer.appendChild(box);
   }
 
-  function drawLabel(layer: HTMLElement, node: Element): void {
+  /**
+   * Above the element, else below it, else just inside its top edge — an
+   * element as tall as the viewport has no outside to put a label in — and
+   * kept inside the viewport horizontally, measured once it has a width.
+   */
+  function drawLabel(layer: HTMLElement, node: Element, transform: Transform): void {
     const rect = node.getBoundingClientRect();
     const label = document.createElement("div");
     label.textContent = describe(node);
-    const above = rect.top >= 22;
+    let top = rect.top - LABEL_HEIGHT - 2;
+    if (top < 0) top = rect.bottom + 2;
+    if (top + LABEL_HEIGHT > innerHeight) top = Math.max(0, rect.top) + 2;
+    top = Math.max(0, Math.min(top, innerHeight - LABEL_HEIGHT));
     style(label, [
       ["position", "fixed"],
-      ["left", Math.max(0, rect.left) + "px"],
-      ["top", (above ? rect.top - 22 : rect.bottom + 4) + "px"],
+      ["left", "0px"],
+      ["top", (top - transform.y) / transform.sy + "px"],
       ["max-width", "320px"],
       ["overflow", "hidden"],
       ["text-overflow", "ellipsis"],
@@ -460,6 +538,9 @@ export function createPicker(host: PickerHost): PickerHandle {
       ["pointer-events", "none"],
     ]);
     layer.appendChild(label);
+    const width = label.getBoundingClientRect().width;
+    const left = Math.max(0, Math.min(rect.left, innerWidth - width));
+    style(label, [["left", (left - transform.x) / transform.sx + "px"]]);
   }
 
   function paint(): void {
@@ -472,11 +553,13 @@ export function createPicker(host: PickerHost): PickerHandle {
     const layer = overlayLayer;
     if (layer === null) return;
     layer.textContent = "";
-    if (selected !== null) drawBox(layer, selected, "selected");
+    const transform = readTransform();
+    if (selected !== null) drawBox(layer, selected, "selected", transform);
     if (hovered !== null) {
-      if (hovered !== selected) drawBox(layer, hovered, "hover");
-      drawLabel(layer, hovered);
+      if (hovered !== selected) drawBox(layer, hovered, "hover", transform);
+      drawLabel(layer, hovered, transform);
     }
+    trackOutlined();
   }
 
   function keyTargetsPageControl(event: Event): boolean {
@@ -492,8 +575,20 @@ export function createPicker(host: PickerHost): PickerHandle {
     return false;
   }
 
+  /**
+   * The rendered tree: a host's children are its open shadow root's, and a
+   * node's siblings are its actual parent node's — which for the top of a
+   * shadow tree is the root, not the host.
+   */
   function childrenOf(node: Element): Element[] {
-    return Array.from(node.children).filter((child) => !isOverlay(child));
+    const root = node.shadowRoot;
+    return Array.from((root ?? node).children).filter((child) => !isOverlay(child));
+  }
+
+  function siblingsOf(node: Element): Element[] {
+    const parent = node.parentNode;
+    if (!(parent instanceof Element) && !(parent instanceof ShadowRoot)) return [];
+    return Array.from(parent.children).filter((child) => !isOverlay(child));
   }
 
   /** Arrows walk the rendered tree the way a browser inspector does; Escape lets go. */
@@ -519,9 +614,7 @@ export function createPicker(host: PickerHost): PickerHandle {
     } else if (keyboard.key === "ArrowDown") {
       next = childrenOf(current)[0];
     } else if (keyboard.key === "ArrowLeft" || keyboard.key === "ArrowRight") {
-      const parent = parentAcrossShadow(current);
-      if (parent === null) return;
-      const siblings = childrenOf(parent);
+      const siblings = siblingsOf(current);
       const index = siblings.indexOf(current);
       if (index < 0) return;
       next = siblings[index + (keyboard.key === "ArrowRight" ? 1 : -1)];
@@ -555,6 +648,14 @@ export function createPicker(host: PickerHost): PickerHandle {
     select(hit, "user");
   }
 
+  /**
+   * On `window` in the capture phase, the earliest point a script installed
+   * into a loaded document can reach: ahead of every document, root and
+   * element listener a page or its router adds. A listener the page itself
+   * put on `window` in the capture phase before the picker arrived still runs
+   * first; only a document-start registration could precede it, and the core
+   * picker deliberately installs into documents, not ahead of them.
+   */
   function attachSelectListeners(): void {
     if (selectTeardown.length > 0) return;
     const capture: AddEventListenerOptions = { capture: true };
@@ -569,11 +670,38 @@ export function createPicker(host: PickerHost): PickerHandle {
     }
     listen(window, "scroll", schedule, passiveCapture, selectTeardown);
     listen(window, "resize", schedule, { passive: true }, selectTeardown);
-    // Layout and structure move with no event at all — an HMR patch, a list
-    // re-rendering. One frame absorbs any number of records.
+    // Layout and structure move with no event at all — an HMR patch, a class
+    // flip, an image arriving. One frame absorbs any number of records, and
+    // neither observer sees the overlay, which lives in a shadow root.
     const mutations = new MutationObserver(schedule);
-    mutations.observe(document.documentElement ?? document, { childList: true, subtree: true });
+    mutations.observe(document.documentElement ?? document, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ["class", "style"],
+    });
     selectTeardown.push(() => mutations.disconnect());
+    if (typeof ResizeObserver === "function") {
+      const observer = new ResizeObserver(schedule);
+      resizes = observer;
+      selectTeardown.push(() => {
+        observer.disconnect();
+        resizes = null;
+        tracked = [];
+      });
+    }
+  }
+
+  /** Re-observing makes the observer report again, so only when the outlined set changed. */
+  function trackOutlined(): void {
+    if (resizes === null) return;
+    const next = [selected, hovered].filter((node): node is Element => node !== null);
+    if (next.length === tracked.length && next.every((node, index) => node === tracked[index])) {
+      return;
+    }
+    tracked = next;
+    resizes.disconnect();
+    for (const node of next) resizes.observe(node);
   }
 
   function detachSelectListeners(): void {

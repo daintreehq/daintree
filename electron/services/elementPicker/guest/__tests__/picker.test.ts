@@ -10,8 +10,11 @@ import type { PickerMode } from "../types.js";
 
 const CHANNEL = "test-channel";
 
-let frames: FrameRequestCallback[] = [];
+let frames = new Map<number, FrameRequestCallback>();
+let nextFrame = 0;
 let events: ElementPickerEvent[] = [];
+/** Removes the listeners a test adds to the document, which outlives the test. */
+let testListeners = new AbortController();
 let picker: PickerHandle | null = null;
 
 function start(mode: PickerMode = "select"): PickerHandle {
@@ -29,8 +32,8 @@ function start(mode: PickerMode = "select"): PickerHandle {
 }
 
 function runFrames(): void {
-  const pending = frames;
-  frames = [];
+  const pending = [...frames.values()];
+  frames = new Map();
   for (const callback of pending) callback(0);
 }
 
@@ -59,14 +62,16 @@ function selectedTag(): string | undefined {
 }
 
 beforeEach(() => {
-  frames = [];
+  frames = new Map();
   events = [];
+  testListeners = new AbortController();
   vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
-    frames.push(callback);
-    return frames.length;
+    nextFrame += 1;
+    frames.set(nextFrame, callback);
+    return nextFrame;
   });
-  vi.stubGlobal("cancelAnimationFrame", () => {
-    frames = [];
+  vi.stubGlobal("cancelAnimationFrame", (id: number) => {
+    frames.delete(id);
   });
   document.body.innerHTML = `
     <main id="main">
@@ -76,6 +81,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  testListeners.abort();
   picker?.dispose();
   picker = null;
   vi.unstubAllGlobals();
@@ -181,6 +187,38 @@ describe("createPicker", () => {
     expect(ofType("hoverChanged")).toHaveLength(0);
   });
 
+  it("cancels a pending frame when switched to browse or disposed, so nothing lands after", () => {
+    const toBrowse = start();
+    pointAt(document.getElementById("first")!);
+    expect(frames.size).toBe(1);
+    toBrowse.setMode("browse");
+    expect(frames.size).toBe(0);
+    toBrowse.dispose();
+
+    events = [];
+    const disposed = start();
+    pointAt(document.getElementById("second")!);
+    expect(frames.size).toBe(1);
+    disposed.dispose();
+    expect(frames.size).toBe(0);
+    expect(ofType("hoverChanged")).toHaveLength(0);
+  });
+
+  it("walks into and along a shadow tree, not past it", () => {
+    document.body.innerHTML = '<div id="host"><span id="light">slotted</span></div>';
+    const hostElement = document.getElementById("host")!;
+    const root = hostElement.attachShadow({ mode: "open" });
+    root.innerHTML = '<b id="one">1</b><i id="two">2</i><slot></slot>';
+    start();
+    root.getElementById("one")!.click();
+    press("ArrowRight");
+    expect(ofType("selectionChanged").at(-1)?.observations[0]?.label).toBe("i#two");
+    press("ArrowUp");
+    expect(ofType("selectionChanged").at(-1)?.observations[0]?.label).toBe("div#host");
+    press("ArrowDown");
+    expect(ofType("selectionChanged").at(-1)?.observations[0]?.label).toBe("b#one");
+  });
+
   it("stops listening and drops the overlay when switched to browse", () => {
     const handle = start();
     document.getElementById("first")!.click();
@@ -256,7 +294,7 @@ describe("createPicker", () => {
           ],
         });
       },
-      true
+      { capture: true, signal: testListeners.signal }
     );
     start();
     const target = document.getElementById("first")!;
@@ -267,6 +305,40 @@ describe("createPicker", () => {
     expect(phases).toEqual(["hover", "selection"]);
     expect(ofType("hoverChanged")[0]?.observation?.componentChain).toEqual(chain);
     expect(ofType("selectionChanged")[0]?.observations[0]?.componentChain).toEqual(chain);
+  });
+
+  it("keeps the neutral fields where an extractor's answer is malformed", () => {
+    document.addEventListener(
+      channelEvent(CHANNEL, "extract"),
+      (event) => {
+        const { id } = JSON.parse((event as CustomEvent<string>).detail) as { id: number };
+        document.dispatchEvent(
+          new CustomEvent(channelEvent(CHANNEL, "extracted"), {
+            detail: JSON.stringify({
+              id,
+              contributions: [
+                {
+                  framework: "react",
+                  data: {
+                    capabilities: {},
+                    componentChain: { components: "not a list" },
+                    sourceCandidates: [1, 2],
+                  },
+                },
+              ],
+            }),
+          })
+        );
+      },
+      { capture: true, signal: testListeners.signal }
+    );
+    start();
+    // The schema check in `post` is the assertion: a malformed field would throw.
+    document.getElementById("first")!.click();
+    const observation = ofType("selectionChanged")[0]?.observations[0];
+    expect(observation?.componentChain.components).toEqual([]);
+    expect(observation?.capabilities.names).toEqual({ state: "unknown" });
+    expect(observation?.sourceCandidates).toEqual([]);
   });
 
   it("describes the selection again when the host asks, and reports one the document removed", () => {
@@ -301,9 +373,13 @@ describe("createPicker", () => {
     const overlayHost = handle.getOverlayRoot()?.host;
     expect(overlayHost?.isConnected).toBe(true);
     let disposals = 0;
-    document.addEventListener(channelEvent(CHANNEL, "dispose"), () => {
-      disposals += 1;
-    });
+    document.addEventListener(
+      channelEvent(CHANNEL, "dispose"),
+      () => {
+        disposals += 1;
+      },
+      { signal: testListeners.signal }
+    );
 
     handle.dispose();
     expect(disposals).toBe(1);
