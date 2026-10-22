@@ -24,7 +24,12 @@ import {
 } from "./agentTask.js";
 import { forgetComposerMemories } from "./composerMemory.js";
 import { isRemoteWindow } from "@/hooks/useHostPlatform";
-import { unionBounds, type PageScreenshot, type PageSelection } from "./pageSelection.js";
+import {
+  unionBounds,
+  type PageNode,
+  type PageScreenshot,
+  type PageSelection,
+} from "./pageSelection.js";
 import { mismatchMessage, wireFailureMessage } from "./copy.js";
 import { usePanelStore } from "@/store/panelStore";
 import {
@@ -360,10 +365,20 @@ function routeFor(
 
 /** How long an agent request waits for the route files before going without them. */
 const PAGE_PLACE_TIMEOUT_MS = 3_000;
-/** How long a page selection's picture may take before the request goes without it. */
+/** How long a selection's picture may take before the request goes without it. */
 const CAPTURE_TIMEOUT_MS = 5_000;
 /** Pictures kept for the selections a draft may still be about. */
 const CAPTURES_KEPT = 16;
+
+/** Keep the newest of a per-selection record, dropping the oldest past the bound. */
+function keepRecent<T>(records: Map<string, T>, selectionId: string, record: T): void {
+  records.set(selectionId, record);
+  while (records.size > CAPTURES_KEPT) {
+    const oldest = records.keys().next();
+    if (oldest.done === true) break;
+    records.delete(oldest.value);
+  }
+}
 
 /** Page verdicts that a traced element disproves. */
 const MAPPING_ISSUES = new Set(["no-svelte-meta", "not-dev-build", "metadata-shape"]);
@@ -580,8 +595,10 @@ export class InspectorController implements DevPreviewToolSession {
    * one if the answer turns out to be that there is no source to trace.
    */
   private lastObserved: { epoch: number; nodes: SiteGuestNodeObservation[] } | null = null;
-  /** Each page selection's picture, taken when it was made: oldest first, bounded. */
+  /** Each selection's picture, taken when it was made: oldest first, bounded. */
   private readonly captures = new Map<string, Promise<PageScreenshot>>();
+  /** What the page showed of each traced selection's elements, kept the same way. */
+  private readonly shown = new Map<string, ReadonlyMap<string, PageNode>>();
 
   constructor(
     panelId: string,
@@ -1387,7 +1404,12 @@ export class InspectorController implements DevPreviewToolSession {
       // The picture first: publishing the selection opens the drawer, which
       // takes its width from the page and moves the element out of the box
       // just measured.
-      if (described !== null) this.capturePicture(described, nodes);
+      if (described !== null) {
+        this.keepPicture(
+          described.selectionId,
+          this.takePicture(described.previewPanelId, described.viewport, nodes)
+        );
+      }
       refuse(
         { status: "observed", epoch, node: primary, nodeCount: nodes.length, page: described },
         false
@@ -1412,6 +1434,10 @@ export class InspectorController implements DevPreviewToolSession {
       return;
     }
 
+    // A traced selection goes out with its picture too, taken before anything
+    // is published for the same reason as a page selection's: the drawer
+    // opening moves the element out of the box the page just measured.
+    const picture = this.takePicture(binding.panelId, page.viewport, nodes);
     if (reproving) this.quietResolve = request;
     else this.patchState({ selection: { status: "resolving", epoch, requestId: request } });
     let raw: unknown;
@@ -1509,6 +1535,8 @@ export class InspectorController implements DevPreviewToolSession {
       reproving && before.status === "ready"
         ? [...(before.supersedes ?? []), before.selection.selectionId].slice(-SUPERSEDES_KEPT)
         : undefined;
+    this.keepPicture(selection.selectionId, picture);
+    this.keepShown(selection.selectionId, nodes);
     this.endReprove();
     this.patchState({
       selection: {
@@ -2215,63 +2243,84 @@ export class InspectorController implements DevPreviewToolSession {
    * not when a request is sent: by then the page may have scrolled, and the
    * boxes the guest measured would frame something else.
    */
-  private capturePicture(selection: PageSelection, nodes: SiteGuestNodeObservation[]): void {
+  private takePicture(
+    previewPanelId: string,
+    viewport: { width: number; height: number },
+    nodes: SiteGuestNodeObservation[]
+  ): Promise<PageScreenshot> {
     const capture = this.deps.capture;
     const omitted = (reason: string): Promise<PageScreenshot> =>
       Promise.resolve({ status: "omitted", reason });
     const rect = unionBounds(nodes.flatMap((node) => node.bounds));
-    let picture: Promise<PageScreenshot>;
-    if (capture === undefined) {
-      picture = omitted("this host can't capture the preview");
-    } else if (this.deps.remoteWindow?.() === true) {
-      picture = omitted("this window is attached to another machine");
-    } else if (rect === null) {
-      picture = omitted("the element has no size on screen");
-    } else {
-      const taken = capture
-        .captureElement(selection.previewPanelId, {
-          rect,
-          viewportWidth: selection.viewport.width,
-          viewportHeight: selection.viewport.height,
-        })
-        .then(
-          (result): PageScreenshot => {
-            switch (result.status) {
-              case "saved":
-                return { status: "attached", path: result.filePath };
-              case "offscreen":
-                return { status: "omitted", reason: "the element is outside the visible page" };
-              case "resized":
-                return {
-                  status: "omitted",
-                  reason: "the preview changed size before it could be captured",
-                };
-            }
-          },
-          (): PageScreenshot => ({ status: "omitted", reason: "the preview couldn't be captured" })
-        );
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      const deadline = new Promise<PageScreenshot>((resolve) => {
-        timer = setTimeout(
-          () => resolve({ status: "omitted", reason: "capturing the preview took too long" }),
-          CAPTURE_TIMEOUT_MS
-        );
-      });
-      picture = Promise.race([taken, deadline]).finally(() => clearTimeout(timer));
+    if (capture === undefined) return omitted("this host can't capture the preview");
+    if (this.deps.remoteWindow?.() === true) {
+      return omitted("this window is attached to another machine");
     }
-    this.keepPicture(selection.selectionId, picture);
+    if (rect === null) return omitted("the element has no size on screen");
+    const taken = capture
+      .captureElement(previewPanelId, {
+        rect,
+        viewportWidth: viewport.width,
+        viewportHeight: viewport.height,
+      })
+      .then(
+        (result): PageScreenshot => {
+          switch (result.status) {
+            case "saved":
+              return { status: "attached", path: result.filePath };
+            case "offscreen":
+              return { status: "omitted", reason: "the element is outside the visible page" };
+            case "resized":
+              return {
+                status: "omitted",
+                reason: "the preview changed size before it could be captured",
+              };
+          }
+        },
+        (): PageScreenshot => ({ status: "omitted", reason: "the preview couldn't be captured" })
+      );
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<PageScreenshot>((resolve) => {
+      timer = setTimeout(
+        () => resolve({ status: "omitted", reason: "capturing the preview took too long" }),
+        CAPTURE_TIMEOUT_MS
+      );
+    });
+    return Promise.race([taken, deadline]).finally(() => clearTimeout(timer));
   }
 
   private keepPicture(selectionId: string, picture: Promise<PageScreenshot>): void {
-    this.captures.set(selectionId, picture);
-    while (this.captures.size > CAPTURES_KEPT) {
-      const oldest = this.captures.keys().next();
-      if (oldest.done === true) break;
-      this.captures.delete(oldest.value);
-    }
+    keepRecent(this.captures, selectionId, picture);
   }
 
-  /** The picture taken of a page selection, or why a request about it goes without one. */
+  /**
+   * What the page showed of a traced selection's elements. A resolve carries
+   * the source and leaves the page's own account behind, so it is kept here
+   * for the request to quote beside the source.
+   */
+  private keepShown(selectionId: string, nodes: SiteGuestNodeObservation[]): void {
+    keepRecent(
+      this.shown,
+      selectionId,
+      new Map(
+        nodes.map((node) => [
+          node.runtimeOccurrenceId,
+          {
+            label: singleLineLabel(node.label),
+            tagName: node.tagName,
+            context: node.context ?? null,
+          },
+        ])
+      )
+    );
+  }
+
+  /** What the page showed of a traced selection's elements, by occurrence id; null once too old to be kept. */
+  shownNodes(selectionId: string): ReadonlyMap<string, PageNode> | null {
+    return this.shown.get(selectionId) ?? null;
+  }
+
+  /** The picture taken of a selection, or why a request about it goes without one. */
   pagePicture(selectionId: string): Promise<PageScreenshot> {
     return (
       this.captures.get(selectionId) ??

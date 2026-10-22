@@ -3176,7 +3176,27 @@ describe("an element with nothing Svelte to trace, in a worktree that holds a Sv
     const resolved = host.calls(CHANNELS.selectionResolve)[0]!.nodes as Record<string, unknown>[];
     expect(resolved).toHaveLength(nodes.length);
     expect(resolved.some((node) => "context" in node)).toBe(false);
-    expect(host.captureElement).not.toHaveBeenCalled();
+  });
+
+  it("sends a traced element's source with what the page showed of it and its picture", async () => {
+    withAgent("term-traced");
+    const sent = await recordSends();
+    await mountBound();
+    await act(async () => host.select(0, [{ ...OBSERVATION, context: PAGE_NODE.context }]));
+    await waitFor(() => expect(host.calls(CHANNELS.selectionResolve)).toHaveLength(1));
+    // Taken at the click, before the drawer opens and moves the element.
+    expect(host.captureElement).toHaveBeenCalledTimes(1);
+
+    const prompt = await sendRequest(sent);
+    expect(prompt).toContain(`- Source: written at ${FILE}:6:3 (`);
+    expect(prompt).toContain("checked against the file)");
+    expect(prompt).toContain('- Selector: "main > button.cta"');
+    expect(prompt).toContain('"display: inline-flex; padding: 8px 16px"');
+    expect(prompt).toContain("/tmp/daintree-clipboard/element-1.png");
+    // Main traces source; what the page says the element looks like stays
+    // out of what it is asked.
+    const resolved = host.calls(CHANNELS.selectionResolve)[0]!.nodes as Record<string, unknown>[];
+    expect(resolved.some((node) => "context" in node)).toBe(false);
   });
 
   it.each([

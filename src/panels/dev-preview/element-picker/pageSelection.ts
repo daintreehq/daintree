@@ -26,7 +26,7 @@ export interface PageNode {
   context: ElementContext | null;
 }
 
-/** The picture of a page selection, or why there isn't one. */
+/** The picture of a selection, cropped from the preview, or why there isn't one. */
 export type PageScreenshot =
   { status: "attached"; path: string } | { status: "omitted"; reason: string };
 

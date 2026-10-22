@@ -35,8 +35,6 @@ import {
 } from "@/components/ui/select";
 import {
   MAX_INSTRUCTION_CHARS,
-  buildAgentTaskPrompt,
-  buildPageTaskPrompt,
   scopesForSubject as scopesFor,
   matchScope,
   isAgentBusy,
@@ -44,6 +42,8 @@ import {
   type AgentTarget,
   type TaskScope,
 } from "./agentTask.js";
+import { buildAgentTaskPrompt } from "./agentPrompt.js";
+import { pagePromptInput, sitePromptInput } from "./legacyPrompt.js";
 import { ownerFile, type InspectorController, type SelectionState } from "./inspectorController.js";
 import { InspectorNotice } from "./InspectorNotice.js";
 import { WaitingRow } from "./WaitingRow.js";
@@ -442,22 +442,21 @@ export function AgentComposer({
         const now = checked ?? { about: made, scope: madeScopes[made.scope] };
         const about = now.about.selection;
         builtFor = about.selectionId;
-        if (isPageSelection(about)) {
-          return buildPageTaskPrompt({
-            instruction,
-            selection: about,
-            worktreePath,
-            picture: await controller.pagePicture(about.selectionId),
-          });
-        }
-        return buildAgentTaskPrompt({
-          instruction,
-          selection: about,
-          file: now.about.file,
-          worktreePath,
-          place: await controller.pagePlace(about),
-          scope: now.scope,
-        });
+        const picture = await controller.pagePicture(about.selectionId);
+        return buildAgentTaskPrompt(
+          isPageSelection(about)
+            ? pagePromptInput({ instruction, selection: about, worktreePath, picture })
+            : sitePromptInput({
+                instruction,
+                selection: about,
+                file: now.about.file,
+                worktreePath,
+                place: await controller.pagePlace(about),
+                scope: now.scope,
+                picture,
+                shown: controller.shownNodes(about.selectionId),
+              })
+        );
       },
     });
   };
