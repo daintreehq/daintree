@@ -66,6 +66,9 @@ export function PluginQuickPickDialog() {
     useSearchablePalette<PluginQuickPickItem>({
       items,
       fuseOptions,
+      // Every item the plugin sent is an answer the user may need, and a
+      // multi-select can only check a row it renders — no cap, query or not.
+      maxResults: items.length,
       getItemId: (item) => item.id,
     });
 
