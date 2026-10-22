@@ -113,6 +113,9 @@ export type LibDirectory =
   | { status: "none" }
   | { status: "stopped"; reason: UnavailableReason };
 
+/** `from "./…"`, `import "../…"`, `import("./…")`, `require("./…")`: a module beside the config. */
+const LOCAL_MODULE = /\b(?:from|import|require)\s*\(?\s*["'`]\.{1,2}[/\\]/;
+
 const SVELTE_CONFIGS = [
   "svelte.config.js",
   "svelte.config.mjs",
@@ -215,10 +218,12 @@ export class SvelteJob {
    * Where `$lib` points. SvelteKit's is `src/lib` unless `kit.files.lib` says
    * otherwise, and that config is project code this never runs, so it is
    * followed only in an app that depends on SvelteKit and whose config never
-   * mentions `files` at all, as a key, quoted, shorthand or spread. Every
-   * file that could say otherwise must have been read or be absent: one
-   * refused or undecodable proves nothing. A plain Svelte app's `$lib`, if it
-   * has one, is a Vite alias this cannot see.
+   * mentions `files` at all, as a key, quoted, shorthand or spread, and pulls
+   * in no module of the app's own, which could set it out of sight. A config
+   * shared through a package is the one spelling this cannot see. Every file
+   * that could say otherwise must have been read or be absent: one refused or
+   * undecodable proves nothing. A plain Svelte app's `$lib`, if it has one, is
+   * a Vite alias this cannot see either.
    */
   libDirectory(): Promise<LibDirectory> {
     this.lib ??= this.findLibDirectory();
@@ -250,6 +255,7 @@ export class SvelteJob {
       if (config.status === "absent") continue;
       if (config.status === "stopped") return config;
       if (config.status === "unreadable" || /files/.test(config.text)) return { status: "none" };
+      if (LOCAL_MODULE.test(config.text)) return { status: "none" };
     }
     return { status: "found", directory: "src/lib" };
   }

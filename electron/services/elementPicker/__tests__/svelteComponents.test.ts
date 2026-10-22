@@ -314,6 +314,37 @@ describe("component definitions from source", () => {
     expect(await definitions([{ file: PAGE, line: 5, column: 0 }])).toEqual([null]);
   });
 
+  it("leaves $lib unproven when svelte.config takes its settings from a module of the app's own", async () => {
+    await sandbox.write(
+      "svelte.config.base.js",
+      'export default { kit: { "files": { lib: "src/ui" } } };\n'
+    );
+    await page([
+      "<script>",
+      '  import Card from "$lib/card.svelte";',
+      "</script>",
+      "",
+      '<Card plan="x" />',
+      "",
+    ]);
+    for (const config of [
+      'import base from "./svelte.config.base.js";\nexport default base;\n',
+      "const base = require('./svelte.config.base.js');\nmodule.exports = { ...base };\n",
+      "export default (await import(`./svelte.config.base.js`)).default;\n",
+    ]) {
+      await sandbox.write("svelte.config.js", config);
+      expect(await definitions([{ file: PAGE, line: 5, column: 0 }])).toEqual([null]);
+    }
+    // A package import is how every config gets its adapter, and proves nothing either way.
+    await sandbox.write(
+      "svelte.config.js",
+      'import adapter from "@sveltejs/adapter-auto";\nexport default { kit: { adapter: adapter() } };\n'
+    );
+    expect(await definitions([{ file: PAGE, line: 5, column: 0 }])).toEqual([
+      "src/lib/card.svelte",
+    ]);
+  });
+
   it("leaves $lib unproven when a config it would have to read is past the byte limit", async () => {
     await sandbox.write("svelte.config.js", `export default {};\n// ${"x".repeat(200)}\n`);
     await page([
