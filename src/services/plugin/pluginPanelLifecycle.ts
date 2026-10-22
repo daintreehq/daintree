@@ -81,6 +81,7 @@ const userReloadHandlers = new Map<string, Array<() => void>>();
  * panel can overlap: one leaving must not clear what the other still holds.
  */
 const unsavedOwners = new Map<string, Set<object>>();
+const unsavedListeners = new Set<() => void>();
 let pending: PluginPanelLifecycleEvent[] = [];
 let flushScheduled = false;
 let nextMountToken = 1;
@@ -337,11 +338,34 @@ export function setViewUnsavedChanges(panelId: string, owner: object, dirty: boo
   const owners = unsavedOwners.get(panelId);
   if (dirty) {
     if (owners) owners.add(owner);
-    else unsavedOwners.set(panelId, new Set([owner]));
+    else {
+      unsavedOwners.set(panelId, new Set([owner]));
+      notifyUnsavedChanged();
+    }
     return;
   }
   if (!owners?.delete(owner)) return;
-  if (owners.size === 0) unsavedOwners.delete(panelId);
+  if (owners.size === 0) {
+    unsavedOwners.delete(panelId);
+    notifyUnsavedChanged();
+  }
+}
+
+function notifyUnsavedChanged(): void {
+  for (const listener of [...unsavedListeners]) listener();
+}
+
+/** Ids of the panels whose live view says it holds unsaved work, sorted. */
+export function getViewUnsavedPanelIds(): string[] {
+  return [...unsavedOwners.keys()].sort();
+}
+
+/** Fires when a panel's unsaved status flips, not on every owner change. */
+export function subscribeViewUnsavedChanges(listener: () => void): () => void {
+  unsavedListeners.add(listener);
+  return () => {
+    unsavedListeners.delete(listener);
+  };
 }
 
 /** Whether the panel's live view attempt says it holds unsaved work. */
@@ -393,7 +417,7 @@ export function syncPluginPanels(
 
   for (const [panelId, entry] of tracked) {
     if (live.has(panelId) || entry.removed) continue;
-    unsavedOwners.delete(panelId);
+    if (unsavedOwners.delete(panelId)) notifyUnsavedChanged();
     entry.removed = true;
     entry.lastPhase = "removed";
     enqueue(panelId, entry, "removed");
@@ -406,6 +430,7 @@ export function resetPluginPanelLifecycleForTests(): void {
   tracked.clear();
   userReloadHandlers.clear();
   unsavedOwners.clear();
+  unsavedListeners.clear();
   pending = [];
   flushScheduled = false;
   nextMountToken = 1;
