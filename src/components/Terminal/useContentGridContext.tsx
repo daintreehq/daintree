@@ -519,6 +519,10 @@ export function useContentGridContext({
   });
 
   const gridContainerRef = useRef<HTMLDivElement>(null);
+  // The same node as state, so the measurement effect below re-attaches when
+  // the grid unmounts and comes back with nothing else in its deps moving — a
+  // round trip to the project's Home replaces the node and nothing more.
+  const [gridContainerNode, setGridContainerNode] = useState<HTMLDivElement | null>(null);
   const preMaximizeLayoutRef = useRef(preMaximizeLayout);
   useEffect(() => {
     preMaximizeLayoutRef.current = preMaximizeLayout;
@@ -589,6 +593,7 @@ export function useContentGridContext({
     (node: HTMLDivElement | null) => {
       setNodeRef(node);
       gridContainerRef.current = node;
+      setGridContainerNode(node);
     },
     [setNodeRef]
   );
@@ -596,7 +601,7 @@ export function useContentGridContext({
   // Observe container resizes with rAF deferral to avoid RO depth-cap warnings.
   // Recreated when the container element or layout-affecting deps change.
   useEffect(() => {
-    const container = gridContainerRef.current;
+    const container = gridContainerNode;
     if (!container) return;
 
     let rafId: number | null = null;
@@ -698,7 +703,14 @@ export function useContentGridContext({
       unsubscribeDock();
       setGridDimensions(null);
     };
-  }, [setGridDimensions, gridTerminals.length, maximizedId, twoPaneSplitEnabled, showPlaceholder]);
+  }, [
+    setGridDimensions,
+    gridContainerNode,
+    gridTerminals.length,
+    maximizedId,
+    twoPaneSplitEnabled,
+    showPlaceholder,
+  ]);
 
   useEffect(() => {
     if (

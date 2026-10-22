@@ -15,6 +15,7 @@ import { isMcpSpawnFocusSuppressed } from "./mcpSpawnFocusGuard";
 import { isAssistantFocused } from "./macroFocusStore";
 import {
   isDevPreviewPanel,
+  isGridPanelLocation,
   isPtyPanel,
   type DevPreviewPanelData,
   type PtyPanelData,
@@ -1429,7 +1430,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
       const committed = usePanelStore.getState().panelsById[focusId];
       if (committed !== undefined && committed.location !== "dock") {
         terminalStore.exitMaximize();
-        exitProjectHome();
+        if (isGridPanelLocation(committed.location)) exitProjectHome();
       }
       terminalStore.setFocused(focusId);
     }

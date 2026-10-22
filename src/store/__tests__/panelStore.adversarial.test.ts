@@ -706,6 +706,24 @@ describe("panelStore adversarial", () => {
         expect(exitHome).toHaveBeenCalledTimes(1);
       });
 
+      it("leaves Home when a panel is placed into the grid at a position, not the dock", () => {
+        usePanelStore.setState({
+          panelsById: {
+            p1: makePanel("p1"),
+            d1: makePanel("d1", { location: "dock", kind: "terminal" }),
+          },
+          panelIds: ["p1", "d1"],
+          panelIdsByWorktreeId: { "wt-1": ["p1", "d1"] },
+        });
+
+        usePanelStore.getState().moveTerminalToPosition("p1", 0, "dock", "wt-1");
+        expect(exitHome).not.toHaveBeenCalled();
+
+        usePanelStore.getState().moveTerminalToPosition("d1", 0, "grid", "wt-1");
+        expect(usePanelStore.getState().focusedId).toBe("d1");
+        expect(exitHome).toHaveBeenCalledTimes(1);
+      });
+
       it("leaves Home when a docked panel moves to the grid", () => {
         usePanelStore.setState({
           panelsById: {

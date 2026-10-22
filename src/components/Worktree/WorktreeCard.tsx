@@ -37,6 +37,7 @@ import { humanizeAppError } from "@shared/utils/errorMessage";
 import { getGitRecoveryAction } from "@shared/utils/gitOperationErrors";
 import { isClientGitError } from "@/utils/clientGitError";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
+import { exitProjectHome } from "@/store/storeAccessors";
 import { issueAttachPayload } from "@/utils/linkProviderIssue";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { cn } from "../../lib/utils";
@@ -735,10 +736,12 @@ export function WorktreeCard({
       onSelect();
     }
 
-    // Focus the terminal (Dock or Grid)
+    // Focus the terminal (Dock or Grid). A grid pane is hidden while the
+    // project's Home shows; the dock stays on screen beside it.
     if (terminal.location === "dock") {
       openDockTerminal(terminal.id);
     } else {
+      exitProjectHome();
       setFocused(terminal.id);
     }
 

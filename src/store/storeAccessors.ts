@@ -206,8 +206,8 @@ export function setProjectHomeExitAccessor(callback: () => void): void {
  * the same places that leave a maximize (#11060), because a panel landing
  * behind Home is just as invisible as one behind a maximized cell. Never from
  * bookkeeping that merely moves focus (a neighbour after a close, a restore
- * pass): that is not the user asking for the grid. A no-op until the Home
- * store has loaded, when there is no Home to leave.
+ * pass): that is not the user asking for the grid. A no-op until the store
+ * orchestrator has registered it.
  */
 export function exitProjectHome(): void {
   _exitProjectHome?.();

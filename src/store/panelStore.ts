@@ -1074,7 +1074,7 @@ export const usePanelStore = create<PanelGridState>()(
         const restored = get().panelsById[id];
         if (restored !== undefined && restored.location !== "dock") {
           get().exitMaximize();
-          exitProjectHome();
+          if (isGridPanelLocation(restored.location)) exitProjectHome();
         }
       },
 
@@ -1093,6 +1093,8 @@ export const usePanelStore = create<PanelGridState>()(
         });
         if (landedInGrid) {
           get().exitMaximize();
+        }
+        if (memberIds.some((id) => isGridPanelLocation(get().panelsById[id]?.location))) {
           exitProjectHome();
         }
       },
@@ -1189,6 +1191,8 @@ export const usePanelStore = create<PanelGridState>()(
 
         if (committedLocation === "grid") {
           const previousFocusedId = state.focusedId;
+          // It takes focus in the grid, so the grid has to be what's showing.
+          exitProjectHome();
           set({
             focusedId: id,
             activeDockTerminalId: null,

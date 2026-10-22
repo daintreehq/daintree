@@ -25,6 +25,12 @@ vi.mock("@/components/Project/ProjectPresentationNotice", () => ({
 vi.mock("../GridNotificationBar", () => ({
   GridNotificationBar: () => <div data-testid="grid-notification-bar" />,
 }));
+vi.mock("../TerminalCountWarning", () => ({
+  TerminalCountWarning: () => <div data-testid="terminal-count-warning" />,
+}));
+vi.mock("../BatchScrollbackRestoreBar", () => ({
+  BatchScrollbackRestoreBar: () => <div data-testid="batch-restore-bar" />,
+}));
 
 import type { PanelKindConfig } from "@shared/config/panelKindRegistry";
 import { ContentGridProjectHome } from "../ContentGridProjectHome";
@@ -47,7 +53,7 @@ afterEach(() => {
 });
 
 describe("ContentGridProjectHome", () => {
-  it("keeps the project's banners above the plugin's view, framed as the Home slot", () => {
+  it("keeps the grid's banner stack above the plugin's view, framed as the Home slot", () => {
     render(
       <ContentGridProjectHome config={config} isMacroFocused={false} bindGridRegion={() => {}} />
     );
@@ -60,6 +66,8 @@ describe("ContentGridProjectHome", () => {
       "grid-notification-bar",
       "trust-banner",
       "presentation-notice",
+      "terminal-count-warning",
+      "batch-restore-bar",
       "frame",
       "home-view",
     ]);

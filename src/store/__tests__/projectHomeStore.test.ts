@@ -4,7 +4,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const STORAGE_KEY = "daintree-project-home";
 
 type ProjectHomeModule = typeof import("../projectHomeStore");
-type AccessorsModule = typeof import("../storeAccessors");
 
 function seedViewWorkspace(id: string | null): void {
   Object.defineProperty(window, "__DAINTREE_INITIAL_PROJECT__", {
@@ -45,10 +44,8 @@ function readHomes(backing: Map<string, string>): Record<string, unknown> {
   return readBlob(backing).state?.homeByProject ?? {};
 }
 
-async function load(): Promise<ProjectHomeModule & Pick<AccessorsModule, "exitProjectHome">> {
-  const store = await import("../projectHomeStore");
-  const { exitProjectHome } = await import("../storeAccessors");
-  return { ...store, exitProjectHome };
+async function load(): Promise<ProjectHomeModule> {
+  return import("../projectHomeStore");
 }
 
 const originalLocalStorage = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
@@ -149,16 +146,6 @@ describe("projectHomeStore", () => {
 
     expect(selectProjectMainAreaRoute(useProjectHomeStore.getState())).toBe("grid");
     expect(readHomes(backing)).toEqual({});
-  });
-
-  it("leaves Home through the accessor the focus and spawn paths call", async () => {
-    installLocalStorage();
-    const { useProjectHomeStore, selectProjectMainAreaRoute, exitProjectHome } = await load();
-    useProjectHomeStore.getState().showHome();
-
-    exitProjectHome();
-
-    expect(selectProjectMainAreaRoute(useProjectHomeStore.getState())).toBe("grid");
   });
 
   it("never persists whether Home is on screen", async () => {

@@ -37,6 +37,7 @@ import {
   setFleetArmingClearAccessor,
   setFleetArmedIdsAccessor,
   setFleetLastArmedIdAccessor,
+  setProjectHomeExitAccessor,
   resetStoreAccessorsForTesting,
 } from "./storeAccessors";
 import { getCurrentViewStoreOrNull } from "./createWorktreeStore";
@@ -114,6 +115,9 @@ export function initStoreOrchestrator(): () => void {
   });
   setFleetArmedIdsAccessor(() => useFleetArmingStore.getState().armedIds);
   setFleetLastArmedIdAccessor(() => useFleetArmingStore.getState().lastArmedId);
+  setProjectHomeExitAccessor(() => {
+    useProjectHomeStore.getState().showGrid();
+  });
 
   if (cleanupFn) return cleanupFn;
 

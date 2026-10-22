@@ -1,5 +1,6 @@
 import { usePanelStore } from "@/store/panelStore";
 import { exitProjectHome } from "@/store/storeAccessors";
+import { isGridPanelLocation } from "@shared/types/panel";
 import { agentSettingsClient, systemClient } from "@/clients";
 import { getAgentConfig } from "@/config/agents";
 import { generateAgentCommand, buildAgentLaunchFlags, mintAssignedSessionId } from "@shared/types";
@@ -242,7 +243,7 @@ export async function spawnPanelsFromRecipe(options: SpawnPanelsOptions): Promis
     const committed = usePanelStore.getState().panelsById[lastSpawnedId];
     if (committed !== undefined && committed.location !== "dock") {
       store.exitMaximize();
-      exitProjectHome();
+      if (isGridPanelLocation(committed.location)) exitProjectHome();
     }
     store.setFocused(lastSpawnedId);
   }

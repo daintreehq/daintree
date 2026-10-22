@@ -7,7 +7,6 @@ import {
   type PersistWriteMergeContext,
 } from "./persistence/persistWriteMerge";
 import { registerPersistedStore } from "./persistence/persistedStoreRegistry";
-import { setProjectHomeExitAccessor } from "./storeAccessors";
 import { getViewWorkspaceId } from "./viewWorkspaceId";
 
 /** Which of its two places a project's main area is on. */
@@ -144,10 +143,6 @@ export function selectProjectMainAreaRoute(
   const key = viewKey();
   return key !== null && state.homeByProject[key] === true ? "home" : "grid";
 }
-
-setProjectHomeExitAccessor(() => {
-  useProjectHomeStore.getState().showGrid();
-});
 
 registerPersistedStore({
   storeId: "projectHomeStore",

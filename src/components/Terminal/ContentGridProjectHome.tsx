@@ -7,12 +7,17 @@ import { SurfacePaletteAction } from "@/components/Plugin/SurfacePaletteAction";
 import { ProjectPresentationNotice } from "@/components/Project/ProjectPresentationNotice";
 import { cn } from "@/lib/utils";
 import { useProjectHomeStore } from "@/store/projectHomeStore";
+import { BatchScrollbackRestoreBar } from "./BatchScrollbackRestoreBar";
 import { GridNotificationBar } from "./GridNotificationBar";
+import { TerminalCountWarning } from "./TerminalCountWarning";
 
 /**
  * The main area on a project plugin's Home (`contributes.surfaces.projectHome`,
- * §7.8): the project's banners, then the plugin's view in the slot's shared
- * frame, which carries the consent question and the switch to having no Home.
+ * §7.8): the grid's own banner stack, then the plugin's view in the slot's
+ * shared frame, which carries the consent question and the switch to having no
+ * Home. The banners stay because a project left on Home can sit there for a
+ * whole session, and a restore failure or a terminal-count warning still needs
+ * its way to act.
  *
  * A branch of `ContentGrid` like a maximize, not an overlay on the grid: the
  * grid unmounts and its terminals park offscreen through the same
@@ -57,6 +62,8 @@ export function ContentGridProjectHome({
       <GridNotificationBar className="mx-1 mt-1 shrink-0" />
       <ProjectPluginTrustBanner />
       <ProjectPresentationNotice />
+      <TerminalCountWarning className="mx-1 mt-1 shrink-0" />
+      <BatchScrollbackRestoreBar className="mx-1 mt-1 shrink-0" />
       <div className="relative min-h-0 flex-1">
         <ProjectSurfaceFrame slot="projectHome" surfaceActions={<SurfacePaletteAction />}>
           <ProjectSurfaceView config={config} />

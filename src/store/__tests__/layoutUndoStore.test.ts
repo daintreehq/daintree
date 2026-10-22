@@ -51,7 +51,7 @@ vi.mock("@/clients/appClient", () => ({
 import { useLayoutUndoStore } from "../layoutUndoStore";
 import { usePanelStore } from "../panelStore";
 import { useLayoutConfigStore } from "../layoutConfigStore";
-import { setWorktreeSelectionAccessor } from "@/store/storeAccessors";
+import { setProjectHomeExitAccessor, setWorktreeSelectionAccessor } from "@/store/storeAccessors";
 import { isPtyPanel, type PtyPanelData } from "@shared/types/panel";
 import type { TabGroup } from "@shared/types";
 
@@ -981,5 +981,51 @@ describe("layoutUndoStore syncs restored worktree filings to the pty host", () =
     useLayoutUndoStore.getState().undo();
 
     expect(updateWorktreeId).not.toHaveBeenCalled();
+  });
+});
+
+describe("layoutUndoStore — leaving the project's Home", () => {
+  const exitHome = vi.fn();
+
+  beforeEach(() => {
+    exitHome.mockClear();
+    setProjectHomeExitAccessor(exitHome);
+    useLayoutUndoStore.setState({
+      undoStack: [],
+      redoStack: [],
+      canUndo: false,
+      canRedo: false,
+    });
+  });
+
+  afterEach(() => {
+    setProjectHomeExitAccessor(() => {});
+  });
+
+  it("leaves Home when undo hands focus back to a grid panel", () => {
+    const t1 = makeTerminal({ id: "t1", location: "grid" });
+    const t2 = makeTerminal({ id: "t2", location: "grid" });
+    seedTerminals([t1, t2]);
+    useLayoutUndoStore.getState().pushLayoutSnapshot();
+    setTerminals([{ ...t1, location: "dock" }, t2]);
+    usePanelStore.setState({ focusedId: "t2" });
+
+    useLayoutUndoStore.getState().undo();
+
+    expect(usePanelStore.getState().focusedId).toBe("t1");
+    expect(exitHome).toHaveBeenCalledTimes(1);
+  });
+
+  it("stays on Home when undo hands focus back to a dock panel", () => {
+    const t1 = makeTerminal({ id: "t1", location: "dock" });
+    const t2 = makeTerminal({ id: "t2", location: "grid" });
+    seedTerminals([t1, t2]);
+    useLayoutUndoStore.getState().pushLayoutSnapshot();
+    usePanelStore.setState({ focusedId: "t2" });
+
+    useLayoutUndoStore.getState().undo();
+
+    expect(usePanelStore.getState().focusedId).toBe("t1");
+    expect(exitHome).not.toHaveBeenCalled();
   });
 });

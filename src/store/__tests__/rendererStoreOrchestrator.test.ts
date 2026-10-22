@@ -148,6 +148,20 @@ describe("rendererStoreOrchestrator", () => {
     destroyStoreOrchestrator();
   });
 
+  it("lets the focus and spawn paths leave Home, including after a restart", async () => {
+    // beforeEach already tore the orchestrator down, clearing every accessor,
+    // and brought it back up.
+    const { exitProjectHome } = await import("../storeAccessors");
+    const showGrid = vi.spyOn(useProjectHomeStore.getState(), "showGrid");
+    try {
+      exitProjectHome();
+
+      expect(showGrid).toHaveBeenCalledTimes(1);
+    } finally {
+      showGrid.mockRestore();
+    }
+  });
+
   describe("notification origin while the project's Home shows", () => {
     afterEach(() => {
       useProjectHomeStore.setState({ presented: false });
