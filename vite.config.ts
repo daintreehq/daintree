@@ -807,6 +807,7 @@ const HOST_FACADE_REQUIRED_EXPORTS: Record<HostFacadeSpecifier, readonly string[
     "TruncatedTooltip",
     "UnreadDot",
     "UnsavedChangesBar",
+    "VirtualGrid",
     "VirtualList",
     "VisuallyHidden",
     "WorktreeBadge",

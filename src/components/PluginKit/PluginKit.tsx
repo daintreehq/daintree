@@ -111,6 +111,7 @@ import { renderMenuEntries, stopReactPropagation, type KitMenuParts } from "./ki
 import { iconNode, KitDialogFrame, layerOf, noop, zIndexOf } from "./kitDialog";
 import { pluginKitPatterns } from "./PluginKitPatterns";
 import { pluginKitLists } from "./PluginKitLists";
+import { pluginKitVirtualGrid } from "./PluginKitVirtualGrid";
 import { pluginKitOverlays } from "./PluginKitOverlays";
 import { pluginKitData } from "./PluginKitData";
 import { pluginKitDisplay } from "./PluginKitDisplay";
@@ -1292,6 +1293,7 @@ export const pluginKitFamilies = [
   pluginKitBasics,
   pluginKitPatterns,
   pluginKitLists,
+  pluginKitVirtualGrid,
   pluginKitOverlays,
   pluginKitData,
   pluginKitDisplay,
@@ -1327,6 +1329,7 @@ export const pluginKit = {
   ...pluginKitBasics,
   ...pluginKitPatterns,
   ...pluginKitLists,
+  ...pluginKitVirtualGrid,
   ...pluginKitOverlays,
   ...pluginKitData,
   ...pluginKitDisplay,

@@ -107,6 +107,7 @@ import type {
   PluginToolbarProps,
   PluginTooltipProps,
   PluginTruncatedTooltipProps,
+  PluginVirtualGridComponent,
   PluginVirtualListComponent,
 } from "@shared/types/plugin-sdk-react";
 import type {
@@ -338,6 +339,10 @@ export const Icon: ComponentType<PluginIconProps> = fromKit("Icon", (kit) => kit
 export const VirtualList: PluginVirtualListComponent = fromKit(
   "VirtualList",
   (kit) => kit.VirtualList
+);
+export const VirtualGrid: PluginVirtualGridComponent = fromKit(
+  "VirtualGrid",
+  (kit) => kit.VirtualGrid
 );
 export const DataTable: <T>(props: PluginDataTableProps<T>) => ReactNode = fromKit(
   "DataTable",
@@ -868,6 +873,11 @@ export type {
   PluginVirtualListProps as VirtualListProps,
   PluginVirtualListItemsProps as VirtualListItemsProps,
   PluginVirtualListCountProps as VirtualListCountProps,
+  PluginVirtualGridProps as VirtualGridProps,
+  PluginVirtualGridItemsProps as VirtualGridItemsProps,
+  PluginVirtualGridCountProps as VirtualGridCountProps,
+  PluginVirtualGridItemState as VirtualGridItemState,
+  PluginVirtualGridSelection as VirtualGridSelection,
   PluginDataTableProps as DataTableProps,
   PluginDataTableColumn as DataTableColumn,
   PluginDataTableSort as DataTableSort,

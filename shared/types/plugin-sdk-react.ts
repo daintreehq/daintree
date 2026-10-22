@@ -1059,6 +1059,122 @@ export interface PluginVirtualListComponent {
   (props: PluginVirtualListProps): ReactNode;
 }
 
+/** What `VirtualGrid` hands `renderItem` besides the item. */
+export interface PluginVirtualGridItemState {
+  /** The keyboard cursor is on this item. */
+  active: boolean;
+  /** `selection` holds this item. */
+  selected: boolean;
+}
+
+/**
+ * The part of a `useSelection` result `VirtualGrid` drives: pass the result
+ * itself. Its ids are the grid's `itemKey` values (the index without one).
+ */
+export interface PluginVirtualGridSelection {
+  count: number;
+  anchor: PluginSelectionKey | null;
+  isSelected(id: PluginSelectionKey): boolean;
+  handleSelect(id: PluginSelectionKey, gesture?: PluginSelectionGesture): void;
+  handleNavigate(id: PluginSelectionKey, gesture?: PluginSelectionGesture): void;
+  selectAll(): void;
+  clear(): void;
+}
+
+/**
+ * Props of `VirtualGrid`: cards in as many equal columns as fit, windowed by
+ * row so only the rows in view are mounted. It fills its container's height;
+ * give the container one.
+ *
+ * With `selection` or `onItemActivate` it is a keyboard grid: one tab stop,
+ * the arrow keys move a cursor in two dimensions, and clicks and keys select
+ * the way a `DataTable` row does. Without either it is a plain list of cards
+ * whose own controls keep their Tab stops.
+ */
+export interface PluginVirtualGridBaseProps extends PluginAriaRootAttributes {
+  /**
+   * The narrowest a column may get, in px (16 to 4096). Defaults to 180. A
+   * grid narrower than this draws one column at its own width.
+   */
+  minColumnWidth?: number;
+  /** Never more columns than this, however wide the grid gets. */
+  maxColumns?: number;
+  /** Space between cards, across and down. Defaults to `md`. */
+  gap?: PluginLayoutGap;
+  /** Expected card height in px, before rows are measured. Defaults to 180. */
+  estimatedItemSize?: number;
+  /** Rows rendered beyond each edge of the viewport. Defaults to 2. */
+  overscan?: number;
+  /** Called once the last item scrolls into view: load the next page here. */
+  onEndReached?: (lastIndex: number) => void;
+  /**
+   * The keyboard cursor, controlled; the grid keeps its own without it. A
+   * plain grid keeps this item in view as it changes.
+   */
+  activeIndex?: number;
+  /** The cursor moved, by keyboard or click. */
+  onActiveIndexChange?: (index: number) => void;
+  /**
+   * A `useSelection` result over the items' keys. Pass `aria-multiselectable`
+   * too unless it is `mode: "single"`.
+   */
+  selection?: PluginVirtualGridSelection;
+  /** Edge fades that show there is more above or below, as `ScrollShadow` draws. */
+  shadows?: boolean;
+  /** Required: names the grid for assistive tech. */
+  "aria-label": string;
+  /** Classes for the scrolling element. */
+  className?: string;
+}
+
+/** A `VirtualGrid` over an array: each card is handed its item, typed `T`. */
+export interface PluginVirtualGridItemsProps<T = unknown> extends PluginVirtualGridBaseProps {
+  /** The cards. */
+  items: readonly T[];
+  /** Ignored when `items` is given. */
+  count?: number;
+  /** Renders one card. */
+  renderItem(index: number, item: T, state: PluginVirtualGridItemState): ReactNode;
+  /** A stable key per card, and its id in `selection`. Defaults to the index. */
+  itemKey?(index: number, item: T): string | number;
+  /** Enter on the cursor, or a plain click: open the item. */
+  onItemActivate?(index: number, item: T): void;
+}
+
+/** A `VirtualGrid` of `count` cards fetched by index: cards are handed no item. */
+export interface PluginVirtualGridCountProps extends PluginVirtualGridBaseProps {
+  items?: undefined;
+  /** The card count. */
+  count: number;
+  /** Renders one card; `item` is always `undefined`, so read your data by `index`. */
+  renderItem(index: number, item: undefined, state: PluginVirtualGridItemState): ReactNode;
+  /** A stable key per card, and its id in `selection`. Defaults to the index. */
+  itemKey?(index: number, item: undefined): string | number;
+  /** Enter on the cursor, or a plain click: open the item. */
+  onItemActivate?(index: number, item: undefined): void;
+}
+
+/** Props of `VirtualGrid` in their general form, either `items` or `count`, for a wrapper that forwards them. */
+export interface PluginVirtualGridProps<T = unknown> extends PluginVirtualGridBaseProps {
+  /** The cards. Omit and pass `count` when cards are fetched by index. */
+  items?: readonly T[];
+  /** The card count when there is no `items` array. Ignored when `items` is given. */
+  count?: number;
+  /** Renders one card. `item` is `undefined` for a `count`-only grid. */
+  renderItem(index: number, item: T | undefined, state: PluginVirtualGridItemState): ReactNode;
+  /** A stable key per card, and its id in `selection`. Defaults to the index. */
+  itemKey?(index: number, item: T | undefined): string | number;
+  /** Enter on the cursor, or a plain click: open the item. */
+  onItemActivate?(index: number, item: T | undefined): void;
+}
+
+/** `VirtualGrid`'s call signatures, narrowing as `VirtualList`'s do. */
+export interface PluginVirtualGridComponent {
+  <T>(props: PluginVirtualGridItemsProps<T>): ReactNode;
+  (props: PluginVirtualGridCountProps): ReactNode;
+  (props: PluginVirtualGridProps): ReactNode;
+}
+
 /** One column of a `DataTable`. */
 export interface PluginDataTableColumn<T = unknown> {
   /** Unique within the table; also the row field read when there is no `render`. */
