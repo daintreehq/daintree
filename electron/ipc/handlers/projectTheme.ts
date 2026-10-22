@@ -22,8 +22,6 @@ import type { ProjectThemeSnapshot } from "../../../shared/types/ipc/projectThem
 interface Sender {
   /** The bare project id the choice is stored under, as the view's renderer knows it. */
   projectId: string;
-  /** The view key main routes by: host-scoped for a remote view. */
-  viewKey: string;
   local: boolean;
 }
 
@@ -51,13 +49,12 @@ async function snapshotOf(sender: Sender): Promise<ProjectThemeSnapshot> {
 
 /**
  * The choice is stored under the bare project id, which is what the boot paths
- * and the view's renderer know it by; main routes a remote view by its
- * host-scoped key.
+ * and the view's renderer know it by, for a remote view as for a local one.
  */
 function senderOf(ctx: IpcContext): Sender | null {
   if (!ctx.projectId) return null;
   const { hostId, projectId } = parseHostScopedKey(ctx.projectId);
-  return { projectId, viewKey: ctx.projectId, local: isLocalHostId(hostId) };
+  return { projectId, local: isLocalHostId(hostId) };
 }
 
 function requireSender(ctx: IpcContext): Sender {
@@ -66,10 +63,6 @@ function requireSender(ctx: IpcContext): Sender {
   return sender;
 }
 
-/** Every local view of the project, and the sender's own view when it is remote. */
-function publish(sender: Sender): void {
-  publishProjectThemeChoice(sender.projectId, sender.viewKey);
-}
 
 /** `null` for a sender with no project binding yet, rather than a project with no theme. */
 async function handleGet(ctx: IpcContext): Promise<ProjectThemeSnapshot | null> {
@@ -86,7 +79,7 @@ async function handleSetTheme(
     throw new Error("project theme: schemeId must be a string or null");
   }
   setProjectThemeScheme(sender.projectId, schemeId);
-  publish(sender);
+  publishProjectThemeChoice(sender.projectId);
   return snapshotOf(sender);
 }
 
@@ -108,14 +101,14 @@ async function handleAnswerSuggestion(
     throw new Error("project theme: the repository no longer suggests this theme");
   }
   answerProjectThemeSuggestion(sender.projectId, schemeId, answer);
-  publish(sender);
+  publishProjectThemeChoice(sender.projectId);
   return snapshotOf(sender);
 }
 
 async function handleResetSuggestion(ctx: IpcContext): Promise<ProjectThemeSnapshot> {
   const sender = requireSender(ctx);
   resetProjectThemeSuggestion(sender.projectId);
-  publish(sender);
+  publishProjectThemeChoice(sender.projectId);
   return snapshotOf(sender);
 }
 

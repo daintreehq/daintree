@@ -10,6 +10,9 @@ const ipcMainMock = vi.hoisted(() => ({
 const registryMock = vi.hoisted(() => ({
   getProjectForWebContents: vi.fn<(id: number) => string | null>(() => null),
   getWindowForWebContents: vi.fn<() => { id: number } | null>(() => null),
+  getRegisteredProjectViews: vi.fn<() => Array<{ projectId: string; webContents: unknown }>>(
+    () => []
+  ),
 }));
 
 const broadcastMock = vi.hoisted(() => vi.fn());
@@ -76,6 +79,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   storeState.data = { appTheme: { colorSchemeId: "daintree" } };
   registryMock.getProjectForWebContents.mockReturnValue(PROJECT_A);
+  registryMock.getRegisteredProjectViews.mockReturnValue([]);
   projectStoreMock.getProjectById.mockReturnValue({ path: "/repo" });
   projectStoreMock.readInRepoProjectIdentity.mockResolvedValue({ found: true, theme: SUGGESTED });
   cleanup = registerProjectThemeHandlers();
@@ -177,6 +181,9 @@ describe("project-theme:answer-suggestion", () => {
 describe("a remote view (host-scoped key)", () => {
   it("stores the choice under the bare project id and reaches the remote view's own key", async () => {
     registryMock.getProjectForWebContents.mockReturnValue(`host-1:${PROJECT_A}`);
+    registryMock.getRegisteredProjectViews.mockReturnValue([
+      { projectId: `host-1:${PROJECT_A}`, webContents: {} },
+    ]);
     const snapshot = (await invoke("project-theme:set-theme", "bondi")) as ProjectThemeSnapshot;
 
     expect(snapshot.projectId).toBe(PROJECT_A);

@@ -16,6 +16,7 @@ import type { AppColorScheme, AppThemeConfig } from "@shared/types/appTheme";
 import type { ColorVisionMode } from "@shared/types";
 
 const VALID_COLOR_VISION_MODES: ColorVisionMode[] = ["default", "red-green", "blue-yellow"];
+const PROJECT_THEME_READ_RETRY_MS = [250, 1000, 3000] as const;
 
 export function useAppThemeConfig() {
   const setSelectedSchemeIdSilent = useAppThemeStore((state) => state.setSelectedSchemeIdSilent);
@@ -140,23 +141,33 @@ export function useAppThemeConfig() {
       setProjectTheme(choice, { crossfade: true });
     });
     // A change another window made between the boot payload and this
-    // subscription reached no push, so read once more now that one would.
-    if (typeof projectTheme.get === "function") {
+    // subscription reached no push, so read once more now that one would. A
+    // relaunch restores the project before main has registered this view, so
+    // a read that comes back unbound tries again a few times.
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    const read = (attempt: number): void => {
+      if (typeof projectTheme.get !== "function") return;
       projectTheme
         .get()
         .then((snapshot) => {
-          if (disposed || pushed || !snapshot || snapshot.projectId !== getViewWorkspaceId()) {
+          if (disposed || pushed) return;
+          if (!snapshot) {
+            const delay = PROJECT_THEME_READ_RETRY_MS[attempt];
+            if (delay !== undefined) retryTimer = setTimeout(() => read(attempt + 1), delay);
             return;
           }
+          if (snapshot.projectId !== getViewWorkspaceId()) return;
           projectThemeLiveRef.current = true;
           setProjectTheme(snapshot.choice, { crossfade: true });
         })
         .catch((error: unknown) => {
           logError("Failed to read the project theme", error);
         });
-    }
+    };
+    read(0);
     return () => {
       disposed = true;
+      if (retryTimer !== null) clearTimeout(retryTimer);
       unsubscribe();
     };
   }, [setProjectTheme]);

@@ -22,6 +22,11 @@ vi.mock("../../ipc/utils.js", () => ({ broadcastToProjectRenderers }));
 const repaintAllWindowThemes = vi.hoisted(() => vi.fn());
 vi.mock("../../window/projectThemeChrome.js", () => ({ repaintAllWindowThemes }));
 
+const getRegisteredProjectViews = vi.hoisted(() =>
+  vi.fn<() => Array<{ projectId: string; webContents: unknown }>>(() => [])
+);
+vi.mock("../../window/webContentsRegistry.js", () => ({ getRegisteredProjectViews }));
+
 import {
   answerProjectThemeSuggestion,
   getProjectThemeChoice,
@@ -69,6 +74,7 @@ function appTheme(): Record<string, unknown> {
 describe("project theme store (#13833)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    getRegisteredProjectViews.mockReturnValue([]);
     storeState.data = { appTheme: { colorSchemeId: "daintree" } };
   });
 
@@ -157,6 +163,17 @@ describe("project theme store (#13833)", () => {
       choice: { colorSchemeId: LIGHT.id },
     });
     expect(repaintAllWindowThemes).toHaveBeenCalled();
+  });
+
+  it("also reaches a remote view of the project, which is routed by its host-scoped key", () => {
+    getRegisteredProjectViews.mockReturnValue([
+      { projectId: "p1", webContents: {} },
+      { projectId: "host-1:p1", webContents: {} },
+      { projectId: "host-1:p2", webContents: {} },
+    ]);
+    publishProjectThemeChoice("p1");
+    const keys = broadcastToProjectRenderers.mock.calls.map(([key]) => key);
+    expect(keys.sort()).toEqual(["host-1:p1", "p1"]);
   });
 
   describe("reconcileProjectPluginThemes", () => {

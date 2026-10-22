@@ -71,9 +71,13 @@ export function ProjectThemeRows() {
         ? `The chosen theme isn't available here, so the global theme shows · ${globalScheme.name}`
         : `Only this project. Global theme · ${globalScheme.name}`;
 
-  const themeError = failedSave?.save.kind === "theme" ? failedSave.message : undefined;
-  const suggestionError =
-    failedSave && failedSave.save.kind !== "theme" ? failedSave.message : undefined;
+  // A suggestion failure sits on its own row, or on the Theme row once the
+  // suggestion is gone, so its Retry is never left with nowhere to show.
+  const failureOnSuggestionRow =
+    failedSave !== null && failedSave.save.kind !== "theme" && suggestion !== null;
+  const themeError =
+    failedSave !== null && !failureOnSuggestionRow ? failedSave.message : undefined;
+  const suggestionError = failureOnSuggestionRow && failedSave ? failedSave.message : undefined;
 
   let suggestionDescription: string | null = null;
   if (suggestion !== null) {

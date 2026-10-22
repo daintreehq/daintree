@@ -3,6 +3,8 @@ import { store } from "../store.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { broadcastToProjectRenderers } from "../ipc/utils.js";
 import { repaintAllWindowThemes } from "../window/projectThemeChrome.js";
+import { getRegisteredProjectViews } from "../window/webContentsRegistry.js";
+import { parseHostScopedKey } from "../../shared/types/remoteHosts.js";
 import { getPluginTheme } from "./plugin/PluginThemeRegistry.js";
 import { BUILT_IN_APP_SCHEMES } from "../../shared/theme/themes.js";
 import {
@@ -58,14 +60,18 @@ export function getProjectThemeChoice(projectId: string): ProjectThemeChoice | n
 /**
  * Tell every view of the project what it now shows — the settings row and the
  * suggestion notice can sit in different windows — and repaint the chrome of
- * any window showing it. A remote view is routed by its host-scoped key, so
- * the view that made the change passes it as `viewKey` to hear about it too.
+ * any window showing it. The choice is stored under the bare project id, but a
+ * remote view is routed by its host-scoped key, so each such key is sent to as
+ * well.
  */
-export function publishProjectThemeChoice(projectId: string, viewKey: string = projectId): void {
+export function publishProjectThemeChoice(projectId: string): void {
   const change = { projectId, choice: getProjectThemeChoice(projectId) };
-  broadcastToProjectRenderers(projectId, CHANNELS.PROJECT_THEME_CHANGED, change);
-  if (viewKey !== projectId) {
-    broadcastToProjectRenderers(viewKey, CHANNELS.PROJECT_THEME_CHANGED, change);
+  const viewKeys = new Set([projectId]);
+  for (const view of getRegisteredProjectViews()) {
+    if (parseHostScopedKey(view.projectId).projectId === projectId) viewKeys.add(view.projectId);
+  }
+  for (const key of viewKeys) {
+    broadcastToProjectRenderers(key, CHANNELS.PROJECT_THEME_CHANGED, change);
   }
   repaintAllWindowThemes();
 }
