@@ -1,4 +1,5 @@
 import type { AgentConfig } from "./agentRegistry.js";
+import { buildLaunchMcpInjection } from "./launchMcp.js";
 import type { PluginAgentContribution } from "../types/plugin.js";
 
 /**
@@ -104,6 +105,9 @@ function contributionToAgentConfig(
     supportsContextInjection: contribution.supportsContextInjection ?? false,
     ...(contribution.detection ? { detection: contribution.detection } : {}),
     ...(contribution.resume ? { resumeTemplate: contribution.resume } : {}),
+    ...(contribution.launchMcp
+      ? { capabilities: { launchMcp: buildLaunchMcpInjection(contribution.launchMcp.format) } }
+      : {}),
   };
 }
 

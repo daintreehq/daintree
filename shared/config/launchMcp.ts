@@ -32,3 +32,34 @@ export type LaunchMcpInjection =
   | { format: "vibe-mcp-servers-env" };
 
 export type LaunchMcpFormat = LaunchMcpInjection["format"];
+
+export const LAUNCH_MCP_FORMATS = [
+  "claude-mcp-config",
+  "codex-config-overrides",
+  "gemini-system-defaults",
+  "qwen-mcp-config",
+  "opencode-config-content",
+  "copilot-additional-mcp-config",
+  "amp-mcp-config",
+  "vibe-mcp-servers-env",
+] as const satisfies readonly LaunchMcpFormat[];
+
+/**
+ * The one environment variable each env-carrying format writes. Built-in
+ * entries and plugin-contributed agents both take it from here, so a manifest
+ * never names a variable on the spawned PTY.
+ */
+export const LAUNCH_MCP_ENV_VARS = {
+  "gemini-system-defaults": "GEMINI_CLI_SYSTEM_DEFAULTS_PATH",
+  "opencode-config-content": "OPENCODE_CONFIG_CONTENT",
+} as const;
+
+export function buildLaunchMcpInjection(format: LaunchMcpFormat): LaunchMcpInjection {
+  switch (format) {
+    case "gemini-system-defaults":
+    case "opencode-config-content":
+      return { format, envVar: LAUNCH_MCP_ENV_VARS[format] };
+    default:
+      return { format };
+  }
+}

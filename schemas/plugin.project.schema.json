@@ -1520,6 +1520,28 @@
                     "additionalProperties": false
                   }
                 ]
+              },
+              "launchMcp": {
+                "type": "object",
+                "properties": {
+                  "format": {
+                    "type": "string",
+                    "enum": [
+                      "claude-mcp-config",
+                      "codex-config-overrides",
+                      "gemini-system-defaults",
+                      "qwen-mcp-config",
+                      "opencode-config-content",
+                      "copilot-additional-mcp-config",
+                      "amp-mcp-config",
+                      "vibe-mcp-servers-env"
+                    ]
+                  }
+                },
+                "required": [
+                  "format"
+                ],
+                "additionalProperties": false
               }
             },
             "required": [

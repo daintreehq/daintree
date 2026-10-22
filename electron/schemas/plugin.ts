@@ -24,6 +24,7 @@ import {
   SIDEBAR_VIEW_PRIORITY_MAX,
   SIDEBAR_VIEW_PRIORITY_MIN,
 } from "../../shared/types/plugin.js";
+import { LAUNCH_MCP_FORMATS } from "../../shared/config/launchMcp.js";
 import { isBuiltInAgentId } from "../../shared/config/agentIds.js";
 import { PLUGIN_ACTION_CATEGORY_MAX_LENGTH } from "../../shared/config/actionCategories.js";
 import {
@@ -1627,6 +1628,10 @@ export const AgentContributionSchema = z
     supportsContextInjection: z.boolean().default(false),
     detection: AgentDetectionConfigSchema.optional(),
     resume: AgentResumeConfigSchema.optional(),
+    launchMcp: z
+      .object({ format: z.enum(LAUNCH_MCP_FORMATS) })
+      .strict()
+      .optional(),
   })
   .strict();
 

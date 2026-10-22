@@ -201,6 +201,11 @@ import {
   type PluginManifest,
 } from "../../../../../shared/types/plugin.js";
 
+import {
+  clearPluginAgentRegistryForTests,
+  registerPluginAgents,
+} from "../../../../../shared/config/pluginAgentRegistry.js";
+
 const PROJECT_A = "a".repeat(64);
 const PROJECT_B = "b".repeat(64);
 
@@ -301,6 +306,7 @@ describe("terminal spawn handler - plugin MCP servers for agent launches", () =>
   });
 
   afterEach(async () => {
+    clearPluginAgentRegistryForTests();
     await mcpPaneConfigService.revokeAll();
     pluginMcpGrantRegistry.revokeAll();
   });
@@ -634,6 +640,46 @@ describe("terminal spawn handler - plugin MCP servers for agent launches", () =>
     const [grant] = pluginMcpGrantRegistry.listForTerminal("term-codex");
     expect(grant).toMatchObject({ scope: READ_WRITE_SCOPE, launchAgentIdHint: "codex" });
     expect(pluginMcpGrantRegistry.authenticate(bearer)).toBe(grant);
+  });
+
+  it("hands a plugin-contributed agent the endpoints of the mechanism it declared", async () => {
+    registerPluginAgents("acme.agents", [
+      {
+        id: "acme-agent",
+        name: "Acme Agent",
+        command: "acme",
+        color: "#3366ff",
+        iconId: "terminal",
+        launchMcp: { format: "claude-mcp-config" },
+      },
+    ]);
+    setProjectAgentMcpAccess(PROJECT_A, "acme.ledger", "read-write");
+
+    await spawn({ id: "term-contributed", command: "acme", launchAgentId: "acme-agent" });
+
+    const { command } = ptyClient.spawn.mock.calls[0][1];
+    const servers = await readServers(configPathFromCommand(command));
+    expect(Object.keys(servers)).toEqual(["daintree-ledger"]);
+    const [grant] = pluginMcpGrantRegistry.listForTerminal("term-contributed");
+    expect(grant).toMatchObject({ scope: READ_WRITE_SCOPE, launchAgentIdHint: "acme-agent" });
+  });
+
+  it("mints nothing for a plugin-contributed agent that declared no mechanism", async () => {
+    registerPluginAgents("acme.agents", [
+      {
+        id: "acme-agent",
+        name: "Acme Agent",
+        command: "acme",
+        color: "#3366ff",
+        iconId: "terminal",
+      },
+    ]);
+    setProjectAgentMcpAccess(PROJECT_A, "acme.ledger", "read-write");
+
+    await spawn({ id: "term-plain", command: "acme", launchAgentId: "acme-agent" });
+
+    expect(ptyClient.spawn.mock.calls[0][1].command).toBe("acme");
+    expect(pluginMcpGrantRegistry.listForTerminal("term-plain")).toEqual([]);
   });
 
   it("mints nothing for an agent with no launch mechanism", async () => {
