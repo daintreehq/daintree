@@ -20,6 +20,7 @@ vi.mock("../../utils/logger.js", () => ({
   logDebug: vi.fn(),
   logInfo: vi.fn(),
   logWarn: vi.fn(),
+  createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
 
 import type { DiskSpaceMonitorActions } from "../DiskSpaceMonitor.js";

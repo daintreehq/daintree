@@ -71,6 +71,7 @@ vi.mock("../../../lifecycle/shutdownCoordinator.js", () => ({
 vi.mock("../../../utils/logger.js", () => ({
   logInfo: vi.fn(),
   logWarn: vi.fn(),
+  createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
 
 import { registerGpuHandlers } from "../app/gpu.js";

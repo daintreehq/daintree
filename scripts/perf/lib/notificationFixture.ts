@@ -299,6 +299,14 @@ export function logInfo() { bus().logInfoCount += 1; }
 export function logError() { bus().logErrorCount += 1; }
 export function logWarn() { bus().logInfoCount += 1; }
 export function logDebug() { bus().logInfoCount += 1; }
+export function createLogger() {
+  return {
+    debug() { bus().logInfoCount += 1; },
+    info() { bus().logInfoCount += 1; },
+    warn() { bus().logInfoCount += 1; },
+    error() { bus().logErrorCount += 1; },
+  };
+}
 `;
 
 function dataUrl(source: string): string {
