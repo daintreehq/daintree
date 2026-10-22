@@ -185,6 +185,31 @@ export function evaluateShellTerminals(
 }
 
 /**
+ * What the census says these terminals hold, in KB: each one's whole process
+ * tree, counted once however many shards list it. Resident memory summed per
+ * process counts shared pages repeatedly, so this is an estimate of what a
+ * sleep frees, not a measurement.
+ */
+export function censusMemoryKb(
+  census: ProcessInventoryRead | null,
+  projectId: string,
+  terminalIds: ReadonlySet<string>
+): number {
+  if (!census) return 0;
+  const byTerminal = new Map<string, number>();
+  for (const inventory of census.inventories) {
+    for (const terminal of inventory.terminals) {
+      if (terminal.projectId !== projectId || !terminalIds.has(terminal.id)) continue;
+      const kb = terminal.sample?.memoryKb;
+      if (typeof kb === "number" && Number.isFinite(kb) && kb > 0) byTerminal.set(terminal.id, kb);
+    }
+  }
+  let total = 0;
+  for (const kb of byTerminal.values()) total += kb;
+  return total;
+}
+
+/**
  * The kill's own snapshot, held to what the sweep vouched for: no terminal it
  * didn't vet, and none of the vetted ones touched since.
  */

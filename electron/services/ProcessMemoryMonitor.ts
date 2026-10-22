@@ -517,7 +517,10 @@ export interface MemoryPressureActions {
    * implying it covers every webview this action tears down.
    */
   destroyHiddenWebviews: (tier: 1 | 2) => Promise<number>;
-  /** Returns the number of terminals killed. */
+  /**
+   * Puts opted-in idle projects to sleep early (#13852). Returns the number of
+   * terminals killed.
+   */
   hibernateIdleProjects: () => Promise<number>;
   /** Returns the number of cached project views evicted. */
   evictCachedProjectViews?: () => Promise<number> | number;
@@ -1311,6 +1314,21 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
                 error: String(err),
               });
             }
+            // Before the view and host levers: a sleep reads the project's
+            // workspace host to prove nothing is mid-lifecycle there, and the
+            // two levers below take away the hosts background projects hold,
+            // which leaves every candidate blocked. Sleep evicts its own
+            // project's views and host anyway.
+            let tier2TerminalsHibernated = 0;
+            try {
+              tier2TerminalsHibernated = await actions.hibernateIdleProjects();
+            } catch (err) {
+              tier2ActionFailed = true;
+              logWarn("memory-pressure-tier2-action-failed", {
+                action: "hibernateIdleProjects",
+                error: String(err),
+              });
+            }
             let tier2ViewsEvicted = 0;
             try {
               tier2ViewsEvicted = (await actions.evictCachedProjectViews?.()) ?? 0;
@@ -1331,16 +1349,6 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
               tier2ActionFailed = true;
               logWarn("memory-pressure-tier2-action-failed", {
                 action: "reclaimDormantWorkspaceHosts",
-                error: String(err),
-              });
-            }
-            let tier2TerminalsHibernated = 0;
-            try {
-              tier2TerminalsHibernated = await actions.hibernateIdleProjects();
-            } catch (err) {
-              tier2ActionFailed = true;
-              logWarn("memory-pressure-tier2-action-failed", {
-                action: "hibernateIdleProjects",
                 error: String(err),
               });
             }

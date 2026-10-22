@@ -22,14 +22,26 @@ export interface IdleBackgroundAutoCloseConfig {
   idleShellThresholdMinutes: IdleShellThresholdMinutes;
 }
 
+/** What started a sweep: the regular idle check, or the memory-pressure ladder */
+export type IdleBackgroundSweepTrigger = "idle" | "memory-pressure";
+
 /** A single project entry inside an auto-close broadcast payload */
 export interface IdleBackgroundClosedProjectEntry {
   projectId: string;
   projectName: string;
+  /**
+   * Resident memory of the project's terminal process trees, as the process
+   * census last read it before the sleep. Summed per process, so shared pages
+   * count more than once: an estimate, never a measured reclaim. Absent for a
+   * project that had no terminals.
+   */
+  estimatedMemoryKb?: number;
 }
 
 /** Broadcast payload emitted after one or more idle background projects are auto-closed */
 export interface IdleBackgroundClosedPayload {
   projects: IdleBackgroundClosedProjectEntry[];
   timestamp: number;
+  /** Absent reads as `"idle"`. */
+  trigger?: IdleBackgroundSweepTrigger;
 }
