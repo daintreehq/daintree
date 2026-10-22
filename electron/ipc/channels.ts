@@ -1308,6 +1308,13 @@ export const CHANNELS = {
   PROJECT_PRESENTATION_RESET_TOOLBAR: "project-presentation:reset-toolbar",
   PROJECT_PRESENTATION_CHANGED: "project-presentation:changed",
 
+  // The sender project's own theme (#13833)
+  PROJECT_THEME_GET: "project-theme:get",
+  PROJECT_THEME_SET_THEME: "project-theme:set-theme",
+  PROJECT_THEME_ANSWER_SUGGESTION: "project-theme:answer-suggestion",
+  PROJECT_THEME_RESET_SUGGESTION: "project-theme:reset-suggestion",
+  PROJECT_THEME_CHANGED: "project-theme:changed",
+
   // Per-service connectivity channels
   CONNECTIVITY_GET_STATE: "connectivity:get-state",
   CONNECTIVITY_SERVICE_CHANGED: "connectivity:service-changed",

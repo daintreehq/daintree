@@ -67,6 +67,22 @@ describe("writeInRepoProjectIdentity", () => {
     expect(content.emoji).toBe("🚀");
   });
 
+  it("carries the repository's suggested theme through an identity edit (#13833)", async () => {
+    const dir = path.join(tmpDir, ".daintree");
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(
+      path.join(dir, "project.json"),
+      JSON.stringify({ version: 1, name: "Old Name", theme: "bondi" }),
+      "utf-8"
+    );
+
+    await identityFiles.writeInRepoProjectIdentity(tmpDir, { name: "New Name" });
+    const content = JSON.parse(
+      await fs.readFile(path.join(tmpDir, DAINTREE_PROJECT_JSON), "utf-8")
+    );
+    expect(content).toEqual({ version: 1, name: "New Name", theme: "bondi" });
+  });
+
   it("writes pretty-printed JSON (2-space indent)", async () => {
     await identityFiles.writeInRepoProjectIdentity(tmpDir, { name: "Formatted" });
     const raw = await fs.readFile(path.join(tmpDir, DAINTREE_PROJECT_JSON), "utf-8");

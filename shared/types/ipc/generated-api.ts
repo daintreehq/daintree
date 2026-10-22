@@ -1240,6 +1240,20 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["project-relocation:preview"]["args"]
     ): Promise<IpcInvokeMap["project-relocation:preview"]["result"]>;
   };
+  projectTheme: {
+    answerSuggestion(
+      ...args: IpcInvokeMap["project-theme:answer-suggestion"]["args"]
+    ): Promise<IpcInvokeMap["project-theme:answer-suggestion"]["result"]>;
+    get(
+      ...args: IpcInvokeMap["project-theme:get"]["args"]
+    ): Promise<IpcInvokeMap["project-theme:get"]["result"]>;
+    resetSuggestion(
+      ...args: IpcInvokeMap["project-theme:reset-suggestion"]["args"]
+    ): Promise<IpcInvokeMap["project-theme:reset-suggestion"]["result"]>;
+    setTheme(
+      ...args: IpcInvokeMap["project-theme:set-theme"]["args"]
+    ): Promise<IpcInvokeMap["project-theme:set-theme"]["result"]>;
+  };
   remoteHosts: {
     add(
       ...args: IpcInvokeMap["remote-hosts:add"]["args"]

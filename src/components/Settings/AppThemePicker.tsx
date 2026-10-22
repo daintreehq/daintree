@@ -17,14 +17,17 @@ import {
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import { BUILT_IN_APP_SCHEMES, DEFAULT_APP_SCHEME_ID } from "@/config/appColorSchemes";
-import { injectSchemeToDOM, useAppThemeStore } from "@/store/appThemeStore";
+import {
+  injectSchemeToDOM,
+  resolveCommittedScheme,
+  useAppThemeStore,
+} from "@/store/appThemeStore";
 import { selectSelectableSchemes } from "@/theme/selectableSchemes";
 import { appThemeClient } from "@/clients/appThemeClient";
 import { runThemeReveal } from "@/lib/appThemeViewTransition";
 import {
   accentOverrideHasLowContrast,
   applyAccentOverrideToScheme,
-  resolveAppTheme,
   type AccentContrastFailure,
 } from "@shared/theme";
 import { PaletteStrip } from "@/components/ui/PaletteStrip";
@@ -188,6 +191,12 @@ interface SaveError {
 
 export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
   const selectedSchemeId = useAppThemeStore((s) => s.selectedSchemeId);
+  // Set in Project settings (#13833); the pickers here keep editing the global theme.
+  const projectThemeName = useAppThemeStore((s) => {
+    if (!s.projectSchemeId) return null;
+    const shown = resolveCommittedScheme(s);
+    return shown.id === s.projectSchemeId ? shown.name : null;
+  });
   const customSchemes = useAppThemeStore((s) => s.customSchemes);
   const selectableSchemes = useAppThemeStore(selectSelectableSchemes);
   const commitSchemeSelection = useAppThemeStore((s) => s.commitSchemeSelection);
@@ -382,7 +391,8 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
     if (storeFollowSystem) setFollowSystem(false);
     commitSchemeSelection(id);
     const targetRecents = useAppThemeStore.getState().recentSchemeIds;
-    const scheme = resolveAppTheme(id, selectSelectableSchemes(useAppThemeStore.getState()));
+    // A project with its own theme keeps showing it; this sets the global theme.
+    const scheme = resolveCommittedScheme(useAppThemeStore.getState());
     runThemeReveal(origin ?? null, () => injectSchemeToDOM(scheme, { immediate: true }));
 
     const restoreConfirmed = () => {
@@ -395,13 +405,7 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
       // list has to be put back after it, not before.
       commitSchemeSelection(confirmed.selectedSchemeId);
       setRecentSchemeIds(confirmed.recentSchemeIds);
-      injectSchemeToDOM(
-        resolveAppTheme(
-          confirmed.selectedSchemeId,
-          selectSelectableSchemes(useAppThemeStore.getState())
-        ),
-        { immediate: true }
-      );
+      injectSchemeToDOM(resolveCommittedScheme(useAppThemeStore.getState()), { immediate: true });
     };
 
     try {
@@ -630,9 +634,11 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
       <SettingsRow
         label="Theme"
         description={
-          followSystem
-            ? "Picking a theme turns off system matching"
-            : `${allSchemes.length} themes to browse, each with a live preview`
+          projectThemeName !== null
+            ? `This project shows its own theme, ${projectThemeName}. Picks here change the global theme.`
+            : followSystem
+              ? "Picking a theme turns off system matching"
+              : `${allSchemes.length} themes to browse, each with a live preview`
         }
         isModified={!followSystem && selectedSchemeId !== DEFAULT_APP_SCHEME_ID}
         onReset={() => void handleSelect(DEFAULT_APP_SCHEME_ID)}

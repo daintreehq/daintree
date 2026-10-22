@@ -1,10 +1,13 @@
 import { create } from "zustand";
-import { BUILT_IN_APP_SCHEMES, DEFAULT_APP_SCHEME_ID } from "@/config/appColorSchemes";
+import { DEFAULT_APP_SCHEME_ID } from "@/config/appColorSchemes";
 import {
   applyAccentOverrideToScheme,
+  getAppThemeById,
   isPluginThemeId,
+  readPluginThemeSnapshot,
   resolveAppTheme,
   type AppColorScheme,
+  type ProjectThemeChoice,
 } from "@shared/theme";
 import type { ColorVisionMode } from "@shared/types";
 import { applyAppThemeToRoot, applyColorVisionMode } from "@/theme/applyAppTheme";
@@ -25,6 +28,14 @@ interface AppThemeState {
    * theme the user moved off can't linger as selectable once its plugin goes.
    */
   pluginSnapshotScheme: AppColorScheme | null;
+  /**
+   * The theme this view's project shows instead of the global one (#13833), or
+   * null when it follows the global selection. `selectedSchemeId` stays the
+   * global selection either way, so the global pickers keep editing it.
+   */
+  projectSchemeId: string | null;
+  /** The project's plugin theme from its persisted snapshot, while the catalog lacks it. */
+  projectSnapshotScheme: AppColorScheme | null;
   colorVisionMode: ColorVisionMode;
   followSystem: boolean;
   preferredDarkSchemeId: string;
@@ -68,6 +79,11 @@ interface AppThemeState {
    * move to `schemeId` and forget the vanished theme.
    */
   applyPluginThemeFallback: (schemeId: string) => void;
+  /**
+   * This view's project's own theme changed, or arrived at boot. Pass
+   * `{ crossfade: true }` when the outgoing theme is already on screen.
+   */
+  setProjectTheme: (choice: ProjectThemeChoice | null, opts?: { crossfade?: boolean }) => void;
   addCustomScheme: (scheme: AppColorScheme) => void;
   removeCustomScheme: (id: string) => void;
   injectTheme: (scheme: AppColorScheme) => void;
@@ -82,6 +98,42 @@ interface AppThemeState {
 /** What `pluginSnapshotScheme` holds once `scheme` is the selection. */
 function retainedPluginScheme(scheme: AppColorScheme): AppColorScheme | null {
   return scheme.plugin ? scheme : null;
+}
+
+type CommittedSchemeSources = Pick<
+  AppThemeState,
+  | "selectedSchemeId"
+  | "customSchemes"
+  | "pluginSchemes"
+  | "pluginSnapshotScheme"
+  | "projectSchemeId"
+  | "projectSnapshotScheme"
+>;
+
+/**
+ * The project's own theme when it has one that resolves. One that does not —
+ * an imported theme since deleted, a plugin theme whose plugin is gone — shows
+ * the global theme instead and comes back if its theme does.
+ */
+function resolveProjectScheme(state: CommittedSchemeSources): AppColorScheme | null {
+  const id = state.projectSchemeId;
+  if (!id) return null;
+  const snapshot = state.projectSnapshotScheme;
+  return (
+    getAppThemeById(id, selectSelectableSchemes(state)) ?? (snapshot?.id === id ? snapshot : null)
+  );
+}
+
+/**
+ * The scheme this view paints when no preview holds the DOM: its project's own
+ * theme, else the global selection. Colour vision and the accent override are
+ * applied on top of whichever it is.
+ */
+export function resolveCommittedScheme(state: CommittedSchemeSources): AppColorScheme {
+  return (
+    resolveProjectScheme(state) ??
+    resolveAppTheme(state.selectedSchemeId, selectSelectableSchemes(state))
+  );
 }
 
 let pendingScheme: AppColorScheme | null = null;
@@ -155,6 +207,8 @@ export const useAppThemeStore = create<AppThemeState>()((set) => ({
   customSchemes: [],
   pluginSchemes: [],
   pluginSnapshotScheme: null,
+  projectSchemeId: null,
+  projectSnapshotScheme: null,
   colorVisionMode: "default" as ColorVisionMode,
   followSystem: false,
   preferredDarkSchemeId: "daintree",
@@ -175,7 +229,7 @@ export const useAppThemeStore = create<AppThemeState>()((set) => ({
         RECENT_SCHEMES_LIMIT
       ),
     }));
-    injectSchemeToDOM(scheme);
+    injectSchemeToDOM(resolveCommittedScheme(useAppThemeStore.getState()));
   },
 
   commitSchemeSelection: (id) => {
@@ -192,9 +246,11 @@ export const useAppThemeStore = create<AppThemeState>()((set) => ({
 
   setSelectedSchemeIdSilent: (id, opts) => {
     const state = useAppThemeStore.getState();
-    const previousSchemeId = state.selectedSchemeId;
-    const scheme = resolveAppTheme(id, selectSelectableSchemes(state), opts?.fallbackType);
-    set({ selectedSchemeId: scheme.id, pluginSnapshotScheme: retainedPluginScheme(scheme) });
+    const previousSchemeId = resolveCommittedScheme(state).id;
+    const selected = resolveAppTheme(id, selectSelectableSchemes(state), opts?.fallbackType);
+    set({ selectedSchemeId: selected.id, pluginSnapshotScheme: retainedPluginScheme(selected) });
+    // A project with its own theme keeps showing it.
+    const scheme = resolveCommittedScheme(useAppThemeStore.getState());
 
     // Only transition on a real change. `nativeTheme` can re-fire for OS changes that
     // don't move the light/dark bucket, and crossfading there would skipTransition() an
@@ -215,7 +271,8 @@ export const useAppThemeStore = create<AppThemeState>()((set) => ({
   },
 
   setPluginSchemes: (schemes) => {
-    const { selectedSchemeId, previewSchemeId, pluginSnapshotScheme } = useAppThemeStore.getState();
+    const { selectedSchemeId, previewSchemeId, pluginSnapshotScheme, projectSchemeId } =
+      useAppThemeStore.getState();
     // An update to the selected theme replaces the retained copy; a catalog
     // that lacks it keeps the copy until main says the theme is gone.
     const offered = schemes.find((scheme) => scheme.id === selectedSchemeId);
@@ -229,10 +286,10 @@ export const useAppThemeStore = create<AppThemeState>()((set) => ({
         return;
       }
       set({ previewSchemeId: null });
-    } else if (!isPluginThemeId(selectedSchemeId)) {
+    } else if (!isPluginThemeId(selectedSchemeId) && !isPluginThemeId(projectSchemeId ?? "")) {
       return;
     }
-    injectSchemeToDOM(resolveAppTheme(selectedSchemeId, selectable));
+    injectSchemeToDOM(resolveCommittedScheme(state));
   },
 
   applyPluginThemeFallback: (schemeId) => {
@@ -260,21 +317,44 @@ export const useAppThemeStore = create<AppThemeState>()((set) => ({
     setSelectedSchemeIdSilent(schemeId, { crossfade: true });
   },
 
+  setProjectTheme: (choice, opts) => {
+    const state = useAppThemeStore.getState();
+    const previousSchemeId = resolveCommittedScheme(state).id;
+    const projectSchemeId = choice?.colorSchemeId ?? null;
+    set({
+      projectSchemeId,
+      projectSnapshotScheme: projectSchemeId ? readPluginThemeSnapshot(choice) : null,
+    });
+    // A preview owns the DOM and paints the committed theme when it ends.
+    if (state.previewSchemeId !== null) return;
+    const scheme = resolveCommittedScheme(useAppThemeStore.getState());
+    if (opts?.crossfade && previousSchemeId !== scheme.id) {
+      const intent = claimThemeIntent();
+      runThemeCrossfade(() => {
+        if (intent !== themeIntentSeq) return;
+        injectSchemeToDOM(scheme, { immediate: true });
+      });
+    } else {
+      injectSchemeToDOM(scheme);
+    }
+  },
+
   addCustomScheme: (scheme) =>
     set((state) => ({
       customSchemes: [...state.customSchemes.filter((s) => s.id !== scheme.id), scheme],
     })),
 
   removeCustomScheme: (id) => {
-    const needsFallback = useAppThemeStore.getState().selectedSchemeId === id;
+    const { selectedSchemeId, projectSchemeId } = useAppThemeStore.getState();
+    const needsFallback = selectedSchemeId === id;
     set((state) => ({
       customSchemes: state.customSchemes.filter((s) => s.id !== id),
       selectedSchemeId: needsFallback ? DEFAULT_APP_SCHEME_ID : state.selectedSchemeId,
       recentSchemeIds: state.recentSchemeIds.filter((x) => x !== id),
     }));
-    if (needsFallback) {
-      const defaultScheme = BUILT_IN_APP_SCHEMES.find((s) => s.id === DEFAULT_APP_SCHEME_ID)!;
-      injectSchemeToDOM(defaultScheme);
+    // A project showing the removed theme falls back to the global one.
+    if (needsFallback || projectSchemeId === id) {
+      injectSchemeToDOM(resolveCommittedScheme(useAppThemeStore.getState()));
     }
   },
 
@@ -288,7 +368,7 @@ export const useAppThemeStore = create<AppThemeState>()((set) => ({
     // the mode doesn't override, rather than stripped to undefined.
     const state = useAppThemeStore.getState();
     const effective = applyAccentOverrideToScheme(
-      resolveAppTheme(state.selectedSchemeId, selectSelectableSchemes(state)),
+      resolveCommittedScheme(state),
       state.accentColorOverride
     );
     applyColorVisionMode(document.documentElement, mode, effective);
@@ -302,9 +382,7 @@ export const useAppThemeStore = create<AppThemeState>()((set) => ({
 
   setAccentColorOverride: (color) => {
     set({ accentColorOverride: color });
-    const state = useAppThemeStore.getState();
-    const scheme = resolveAppTheme(state.selectedSchemeId, selectSelectableSchemes(state));
-    injectSchemeToDOM(scheme);
+    injectSchemeToDOM(resolveCommittedScheme(useAppThemeStore.getState()));
   },
 }));
 

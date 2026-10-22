@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
 import { useTerminalColorSchemeStore, useTerminalFontStore } from "@/store";
-import { useAppThemeStore } from "@/store/appThemeStore";
+import { resolveCommittedScheme, useAppThemeStore } from "@/store/appThemeStore";
 import { selectSelectableSchemes } from "@/theme/selectableSchemes";
 import { BUILT_IN_SCHEMES } from "@/config/terminalColorSchemes";
 import { DEFAULT_TERMINAL_FONT_FAMILY, DEFAULT_TERMINAL_FONT_SIZE } from "@/config/terminalFont";
@@ -336,7 +336,7 @@ export function TerminalAppearanceTab({
 function FontSampleRow({ fontFamily, fontSize }: { fontFamily: string; fontSize: number }) {
   const selectedSchemeId = useTerminalColorSchemeStore((s) => s.selectedSchemeId);
   const customSchemes = useTerminalColorSchemeStore((s) => s.customSchemes);
-  const appThemeId = useAppThemeStore((s) => s.selectedSchemeId);
+  const appThemeId = useAppThemeStore((s) => resolveCommittedScheme(s).id);
   const appCustomSchemes = useAppThemeStore(selectSelectableSchemes);
 
   const scheme = useMemo(() => {

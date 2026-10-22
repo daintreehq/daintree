@@ -1,5 +1,6 @@
 import { ProjectPluginTrustBanner } from "@/components/Plugin/ProjectPluginTrustBanner";
 import { ProjectPresentationNotice } from "@/components/Project/ProjectPresentationNotice";
+import { ProjectThemeNotice } from "@/components/Project/ProjectThemeNotice";
 import { AnimatePresence, LayoutGroup, m } from "framer-motion";
 import { cn } from "@/lib/utils";
 import { COMFORTABLE_PANEL_HEIGHT_PX, MIN_TERMINAL_WIDTH_PX } from "@/lib/terminalLayout";
@@ -80,6 +81,7 @@ export function ContentGridFleetScope({
       <GridNotificationBar className="mx-1 mt-1 shrink-0" />
       <ProjectPluginTrustBanner />
       <ProjectPresentationNotice />
+      <ProjectThemeNotice />
       <GridShell ctx={ctx}>
         <div
           ref={bindCombinedGrid}

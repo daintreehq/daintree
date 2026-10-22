@@ -22,6 +22,13 @@ vi.mock("@/store/appThemeStore", () => ({
     }
   ),
   injectSchemeToDOM: vi.fn(),
+  // No project theme here, so what is painted is the global selection (#13833).
+  resolveCommittedScheme: (s: Record<string, unknown>) => ({
+    id: s.selectedSchemeId,
+    name: s.selectedSchemeId,
+    type: "dark",
+    tokens: {},
+  }),
 }));
 
 vi.mock("@shared/theme", () => ({

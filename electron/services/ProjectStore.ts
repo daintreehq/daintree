@@ -47,7 +47,7 @@ import type {
   CopyTreeHistoryRecord,
 } from "../../shared/types/ipc/copyTreeHistory.js";
 import { GlobalFileStore } from "./GlobalFileStore.js";
-import { ProjectIdentityFiles } from "./ProjectIdentityFiles.js";
+import { ProjectIdentityFiles, type InRepoProjectIdentity } from "./ProjectIdentityFiles.js";
 import {
   cleanupQuarantinedProjectFiles,
   cleanupGlobalQuarantineFiles,
@@ -366,9 +366,7 @@ export class ProjectStore {
 
   // --- In-Repo Identity ---
 
-  async readInRepoProjectIdentity(
-    projectPath: string
-  ): Promise<{ id?: string; name?: string; emoji?: string; color?: string; found: boolean }> {
+  async readInRepoProjectIdentity(projectPath: string): Promise<InRepoProjectIdentity> {
     return this.identityFiles.readInRepoProjectIdentity(projectPath);
   }
 

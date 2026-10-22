@@ -1790,8 +1790,10 @@ describe("ProjectViewManager — frame confirmation before reveal (#12394)", () 
     bWc._fireOnce("did-finish-load");
     await vi.advanceTimersByTimeAsync(0);
     // A frame drawn before the CSS applies can still be the opacity-0 entrance.
+    // Painted in the destination's own theme when it has one (#13833).
     expect(vi.mocked(injectSkeletonCss)).toHaveBeenLastCalledWith(bWc, null, {
       instantReveal: true,
+      projectId: "proj-b",
     });
     expect(frames.probeCount()).toBe(0);
 

@@ -23,6 +23,7 @@ import { getProjectGradient, isValidHexColor } from "@/lib/colorUtils";
 import { cn } from "@/lib/utils";
 import { sanitizeSvg, svgToDataUrl } from "@/lib/svg";
 import { GITIGNORE_SNIPPET } from "./projectSettingsConstants";
+import { ProjectThemeRows } from "./ProjectThemeSettings";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { isClientAppError } from "@/utils/clientAppError";
 import type { DaintreeMcpTier, Project } from "@shared/types/project";
@@ -549,6 +550,8 @@ export function GeneralTab({
                 </div>
               )}
             />
+
+            <ProjectThemeRows />
 
             <SettingsRow
               label="Icon"

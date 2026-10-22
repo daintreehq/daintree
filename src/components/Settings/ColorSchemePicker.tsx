@@ -5,7 +5,7 @@ import {
   type TerminalColorScheme,
 } from "@/config/terminalColorSchemes";
 import { useTerminalColorSchemeStore } from "@/store/terminalColorSchemeStore";
-import { useAppThemeStore } from "@/store/appThemeStore";
+import { resolveCommittedScheme, useAppThemeStore } from "@/store/appThemeStore";
 import { selectSelectableSchemes } from "@/theme/selectableSchemes";
 import { terminalConfigClient } from "@/clients/terminalConfigClient";
 import { getTerminalThemeFromAppScheme, relativeLuminance, resolveAppTheme } from "@shared/theme";
@@ -215,7 +215,7 @@ export function ColorSchemePicker({
   const selectedSchemeId = useTerminalColorSchemeStore((s) => s.selectedSchemeId);
   const customSchemes = useTerminalColorSchemeStore((s) => s.customSchemes);
   const setPreviewSchemeId = useTerminalColorSchemeStore((s) => s.setPreviewSchemeId);
-  const appThemeId = useAppThemeStore((s) => s.selectedSchemeId);
+  const appThemeId = useAppThemeStore((s) => resolveCommittedScheme(s).id);
   const appCustomSchemes = useAppThemeStore(selectSelectableSchemes);
 
   const [previewAnnouncement, setPreviewAnnouncement] = useState("");

@@ -13,7 +13,11 @@ import { Badge } from "@/components/ui/badge";
 import { OVERLAY_SHEET_SHADOW_CLASS } from "@/components/ui/floatingSurface";
 import { pluralize } from "@/lib/pluralize";
 import { BUILT_IN_APP_SCHEMES } from "@/config/appColorSchemes";
-import { injectSchemeToDOM, useAppThemeStore } from "@/store/appThemeStore";
+import {
+  injectSchemeToDOM,
+  resolveCommittedScheme,
+  useAppThemeStore,
+} from "@/store/appThemeStore";
 import { selectSelectableSchemes } from "@/theme/selectableSchemes";
 import { useThemeBrowserStore } from "@/store/themeBrowserStore";
 import { logError } from "@/utils/logger";
@@ -312,7 +316,7 @@ export function ThemeBrowser() {
   const revertPreview = useCallback(() => {
     const state = useAppThemeStore.getState();
     if (state.previewSchemeId !== null) {
-      const committed = resolveAppTheme(state.selectedSchemeId, selectSelectableSchemes(state));
+      const committed = resolveCommittedScheme(state);
       setPreviewSchemeId(null);
       injectSchemeToDOM(committed, { immediate: true });
     }
@@ -371,7 +375,8 @@ export function ThemeBrowser() {
     clearPendingAnnouncement();
 
     commitSchemeSelection(targetId);
-    const scheme = resolveAppTheme(targetId, selectSelectableSchemes(useAppThemeStore.getState()));
+    // A project with its own theme keeps showing it; the pick is the global theme.
+    const scheme = resolveCommittedScheme(useAppThemeStore.getState());
     runThemeReveal(origin, () => injectSchemeToDOM(scheme, { immediate: true }));
 
     // Close the browser synchronously after the reveal fires — the Settings
@@ -425,7 +430,7 @@ export function ThemeBrowser() {
       clearAnnouncementTimer();
       const state = useAppThemeStore.getState();
       if (state.previewSchemeId !== null) {
-        const committed = resolveAppTheme(state.selectedSchemeId, selectSelectableSchemes(state));
+        const committed = resolveCommittedScheme(state);
         useAppThemeStore.getState().setPreviewSchemeId(null);
         injectSchemeToDOM(committed, { immediate: true });
       }

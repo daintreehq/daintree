@@ -38,6 +38,7 @@ import {
   injectSkeletonProjectIdentity,
   resolveInitialAppScheme,
   resolveInitialColorSchemeId,
+  resolveProjectOverrideScheme,
   resolveE2EPreloadArgs,
   resolveInstanceRole,
   INITIAL_COLOR_SCHEME_ARG,
@@ -195,7 +196,8 @@ export function setupBrowserWindow(
   // Daintree always defaults to its dark theme on first run, regardless of the
   // OS color-scheme preference. Users who want light or system-following
   // behavior can opt in via Settings → Appearance.
-  const colorSchemeId = resolveInitialColorSchemeId(themeConfig);
+  // A project with its own theme opens in it (#13833).
+  const colorSchemeId = resolveInitialColorSchemeId(themeConfig, initialProjectId);
 
   // Apply lazy migration for legacy string-encoded customSchemes
   let customSchemes: AppColorScheme[] = [];
@@ -222,7 +224,9 @@ export function setupBrowserWindow(
     }
   }
 
-  const scheme = resolveInitialAppScheme(colorSchemeId, themeConfig, customSchemes);
+  const scheme =
+    resolveProjectOverrideScheme(themeConfig, initialProjectId, customSchemes) ??
+    resolveInitialAppScheme(colorSchemeId, themeConfig, customSchemes);
   const windowBg = scheme.tokens["surface-canvas"];
 
   // ── Create BrowserWindow as a thin host ──
@@ -413,7 +417,7 @@ export function setupBrowserWindow(
     // skeleton's 400ms Doherty gate and entrance fades belong on the initial
     // launch).
     const initialProject = projectId ? readLastActiveProjectIdentitySync(projectId) : null;
-    const precomputedSkeletonCss = buildSkeletonCss(initialProject, themeConfig);
+    const precomputedSkeletonCss = buildSkeletonCss(initialProject, themeConfig, { projectId });
     let firstDomReady = true;
     appWebContents.on("dom-ready", () => {
       const crashReload = !firstDomReady;
@@ -428,7 +432,7 @@ export function setupBrowserWindow(
       } else {
         // Rebuild fresh so the skeleton reflects current theme/sidebar/focus
         // state, keeping the persisted project's accent.
-        void injectSkeletonCss(appWebContents, project);
+        void injectSkeletonCss(appWebContents, project, { projectId });
       }
       // Repaint name/emoji on every parse so crash reloads stay identified.
       injectSkeletonProjectIdentity(appWebContents, project);

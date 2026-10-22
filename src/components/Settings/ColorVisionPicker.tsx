@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup";
-import { useAppThemeStore } from "@/store/appThemeStore";
+import { resolveCommittedScheme, useAppThemeStore } from "@/store/appThemeStore";
 import { appThemeClient } from "@/clients/appThemeClient";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import type { ColorVisionMode } from "@shared/types";
@@ -28,7 +28,7 @@ const SWATCH_TOKENS = [
 
 function SwatchPreview() {
   const colorVisionMode = useAppThemeStore((s) => s.colorVisionMode);
-  const selectedSchemeId = useAppThemeStore((s) => s.selectedSchemeId);
+  const selectedSchemeId = useAppThemeStore((s) => resolveCommittedScheme(s).id);
   const [colors, setColors] = useState<string[]>([]);
 
   useEffect(() => {

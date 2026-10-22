@@ -1586,6 +1586,9 @@ export interface IpcEventMap {
   // The sender project's presentation profile changed (#13771); main sends it to every view of that project.
   "project-presentation:changed": import("./projectPresentation.js").ProjectPresentationSnapshot;
 
+  // The sender project's own theme changed (#13833); main sends it to every view of that project.
+  "project-theme:changed": import("./projectTheme.js").ProjectThemeChange;
+
   /**
    * MCP server runtime-state transition. Distinct from
    * `connectivity:service-changed` because the renderer needs the derived

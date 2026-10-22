@@ -1,9 +1,10 @@
 import { isDeepStrictEqual } from "node:util";
-import { BrowserWindow, nativeTheme } from "electron";
+import { nativeTheme } from "electron";
 import { store } from "../store.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { broadcastToVisibleRenderersOrAll } from "../ipc/utils.js";
-import { setTitleBarOverlayTheme } from "../window/titleBarOverlay.js";
+import { repaintAllWindowThemes } from "../window/projectThemeChrome.js";
+import { publishProjectThemeChoice, reconcileProjectPluginThemes } from "./projectThemeStore.js";
 import { getPluginTheme } from "./plugin/PluginThemeRegistry.js";
 import {
   BUILT_IN_APP_SCHEMES,
@@ -78,14 +79,6 @@ export function persistColorSchemeSelection(schemeId: string): void {
   store.set("appTheme.colorSchemeId", schemeId);
 }
 
-function repaintWindows(scheme: AppColorScheme): void {
-  for (const win of BrowserWindow.getAllWindows()) {
-    if (win.isDestroyed()) continue;
-    win.setBackgroundColor(scheme.tokens["surface-canvas"]);
-    setTitleBarOverlayTheme(win, scheme.tokens);
-  }
-}
-
 function notifyFallback(lost: AppColorScheme | null, fallback: AppColorScheme): void {
   const message = lost?.plugin
     ? `"${lost.name}" from ${lost.plugin.name} isn't available anymore. Now using "${fallback.name}".`
@@ -113,6 +106,11 @@ function notifyFallback(lost: AppColorScheme | null, fallback: AppColorScheme): 
 export function reconcilePluginThemeSelection(
   canSettle: (pluginId: string) => boolean
 ): string | null {
+  // Projects showing their own plugin theme settle on the same catalog (#13833).
+  for (const projectId of reconcileProjectPluginThemes(canSettle)) {
+    publishProjectThemeChoice(projectId);
+  }
+
   const config = readThemeRecord();
   const selectedId = typeof config.colorSchemeId === "string" ? config.colorSchemeId.trim() : "";
   if (!isPluginThemeId(selectedId)) return null;
@@ -139,7 +137,8 @@ export function reconcilePluginThemeSelection(
       config.recentSchemeIds.filter((id) => id !== selectedId)
     );
   }
-  repaintWindows(fallback);
+  // Per window: one showing a project with its own theme keeps it.
+  repaintAllWindowThemes();
   notifyFallback(lost, fallback);
   return fallback.id;
 }
