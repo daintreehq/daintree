@@ -33,6 +33,10 @@ import {
   projectIdFromPluginInstanceKey,
 } from "./projectPluginIdentity.js";
 import { toRuntimePanelKindId } from "../../../shared/config/panelKindRegistry.js";
+import {
+  isPluginCustomIconRef,
+  makePluginCustomIconKey,
+} from "../../../shared/config/pluginCustomIcon.js";
 import type { PluginProcessManager } from "./PluginProcessManager.js";
 import { PLUGIN_PTY_DEFAULT_COLS, PLUGIN_PTY_DEFAULT_ROWS } from "./PluginProcessManager.js";
 import type { PluginContributionBroadcaster } from "./PluginContributionBroadcaster.js";
@@ -123,6 +127,7 @@ import {
   PluginNotifyOptionsSchema,
   PluginPanelBadgeSchema,
   PluginToastOptionsSchema,
+  PluginToolbarButtonRuntimeStateSchema,
 } from "../../schemas/plugin.js";
 import {
   normalizePanelMenuItems,
@@ -219,6 +224,7 @@ import type {
   PluginGitCommitOptions,
   PluginGitCommitResult,
   PluginPanelBadge,
+  PluginToolbarButtonRuntimeState,
   PluginContextValue,
   PluginWorktreeCardStatus,
   PluginHostBinding,
@@ -254,6 +260,20 @@ const PLUGIN_PANEL_MENUS_MAX_PANELS = 256;
 const PLUGIN_PANEL_BADGES_MAX_PANELS = 256;
 
 /** An omitted colour is `default`, so it is the same badge as one that says so. */
+function sameToolbarButtonState(
+  a: PluginToolbarButtonRuntimeState,
+  b: PluginToolbarButtonRuntimeState
+): boolean {
+  return (
+    a.pressed === b.pressed &&
+    a.disabled === b.disabled &&
+    a.disabledReason === b.disabledReason &&
+    a.busy === b.busy &&
+    a.tooltip === b.tooltip &&
+    a.iconId === b.iconId
+  );
+}
+
 function samePanelBadge(a: PluginPanelBadge, b: PluginPanelBadge): boolean {
   return (
     a.kind === b.kind &&
@@ -574,6 +594,10 @@ export interface PluginHostFactoryDeps {
   pluginToolbarBadges: Map<string, Map<string, PluginPanelBadge>>;
   /** Publish one plugin's complete toolbar-badge map to the views entitled to it. */
   emitToolbarBadges: (pluginId: string) => void;
+  /** Live toolbar-button state set via `host.setToolbarButtonState`, `pluginId → buttonId → state`. */
+  pluginToolbarStates: Map<string, Map<string, PluginToolbarButtonRuntimeState>>;
+  /** Publish one plugin's complete toolbar-state map to the views entitled to it. */
+  emitToolbarStates: (pluginId: string) => void;
   /** Context keys set via `host.setContext`, `pluginId → key → value`. */
   pluginContextKeys: Map<string, Map<string, PluginContextValue>>;
   /** Publish one plugin's complete context-key map to the views entitled to it. */
@@ -2380,6 +2404,75 @@ export function createHost(
       // Deliver this plugin's queued pushes first, as every direct send does.
       flushPluginPushes();
       deps.emitToolbarBadges(pluginId);
+      return Promise.resolve();
+    },
+    // NOT revoke-guarded, like setToolbarButtonBadge, and owned the same way:
+    // the id must be one this plugin's manifest contributed (#13785).
+    setToolbarButtonState: (buttonId, state) => {
+      if (!isBound() || !boundPlugin) return Promise.resolve();
+      if (typeof buttonId !== "string" || buttonId.length === 0) {
+        return Promise.reject(
+          new Error(
+            `Plugin "${pluginId}" setToolbarButtonState: buttonId must be a non-empty string`
+          )
+        );
+      }
+      if (!boundPlugin.manifest.contributes.toolbarButtons.some((btn) => btn.id === buttonId)) {
+        return Promise.reject(
+          new Error(
+            `Plugin "${pluginId}" setToolbarButtonState: "${buttonId}" is not one of this plugin's contributes.toolbarButtons`
+          )
+        );
+      }
+      let validated: PluginToolbarButtonRuntimeState | null = null;
+      if (state !== null && state !== undefined) {
+        let parsed: ReturnType<typeof PluginToolbarButtonRuntimeStateSchema.safeParse>;
+        try {
+          parsed = PluginToolbarButtonRuntimeStateSchema.safeParse(state);
+        } catch (err) {
+          // A throwing getter escapes safeParse; it still has to reject.
+          return Promise.reject(
+            new Error(
+              `Plugin "${pluginId}" setToolbarButtonState: invalid state — ${formatErrorMessage(err, "unreadable")}`
+            )
+          );
+        }
+        if (!parsed.success) {
+          return Promise.reject(
+            new Error(
+              `Plugin "${pluginId}" setToolbarButtonState: invalid state — ${parsed.error.issues
+                .map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`)
+                .join("; ")}`
+            )
+          );
+        }
+        validated = parsed.data;
+        // A `./icon.svg` reference names one of this plugin's own files; the
+        // renderer knows it by the runtime key the manifest's icons load under.
+        if (isPluginCustomIconRef(validated.iconId)) {
+          validated = { ...validated, iconId: makePluginCustomIconKey(pluginId, validated.iconId) };
+        }
+        // An empty state is the manifest default, the same as a clear.
+        if (Object.keys(validated).length === 0) validated = null;
+      }
+      let buttonMap = deps.pluginToolbarStates.get(pluginId);
+      if (validated === null) {
+        if (!buttonMap || !buttonMap.has(buttonId)) return Promise.resolve();
+        buttonMap.delete(buttonId);
+        if (buttonMap.size === 0) deps.pluginToolbarStates.delete(pluginId);
+      } else {
+        const previous = buttonMap?.get(buttonId);
+        if (previous !== undefined && sameToolbarButtonState(previous, validated)) {
+          return Promise.resolve();
+        }
+        if (!buttonMap) {
+          buttonMap = new Map<string, PluginToolbarButtonRuntimeState>();
+          deps.pluginToolbarStates.set(pluginId, buttonMap);
+        }
+        buttonMap.set(buttonId, validated);
+      }
+      flushPluginPushes();
+      deps.emitToolbarStates(pluginId);
       return Promise.resolve();
     },
     // NOT revoke-guarded, like setPanelBadge: a key tracks state the plugin

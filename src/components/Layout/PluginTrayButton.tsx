@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
-import { Pin } from "lucide-react";
+import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { Check, Pin } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
@@ -23,10 +23,8 @@ import {
   TOOLBAR_UNPIN_LABEL,
 } from "./toolbarMenuStrings";
 import { Package } from "@/components/icons";
-import {
-  DEFAULT_PLUGIN_BUTTON_ICON,
-  resolvePluginIcon,
-} from "@/components/icons/pluginIconRegistry";
+import { Spinner } from "@/components/ui/Spinner";
+import { ARIA_DISABLED_CLASSES } from "@/components/ui/ariaDisabled";
 import { actionService } from "@/services/ActionService";
 import { useToolbarPreferencesStore } from "@/store/toolbarPreferencesStore";
 import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
@@ -47,6 +45,8 @@ import {
   mostSevereBadgeColor,
   toolbarBadgeCountGlyph,
 } from "./pluginToolbarBadge";
+import { presentPluginToolbarButton } from "./pluginToolbarButtonState";
+import { usePluginToolbarButtonState } from "@/store/pluginToolbarStateStore";
 
 export type PluginToolbarConfigs = ReadonlyMap<string, ToolbarButtonConfig>;
 
@@ -111,7 +111,11 @@ export function PluginToolbarButton({
   const hover = useShortcutHintHover(config.actionId);
   const ariaShortcut = useAriaKeyshortcuts(config.actionId);
   const setPluginButtonPromoted = useToolbarPreferencesStore((s) => s.setPluginButtonPromoted);
-  const Icon = resolvePluginIcon(config.iconId, DEFAULT_PLUGIN_BUTTON_ICON);
+  const reasonId = useId();
+  const { Icon, tooltip, pressed, busy, disabled, blocked } = presentPluginToolbarButton(
+    config,
+    usePluginToolbarButtonState(config)
+  );
   const badge = usePluginToolbarBadge(config);
   // The mark keeps its last badge while it fades out, as Canopy's count does.
   const [shownBadge, setShownBadge] = useState(badge);
@@ -121,6 +125,7 @@ export function PluginToolbarButton({
   const countGlyph = shownBadge ? toolbarBadgeCountGlyph(shownBadge) : null;
   const badgeColor = shownBadge?.color ?? "default";
   const name = badge ? `${config.label}, ${describeToolbarBadge(badge)}` : config.label;
+  const tooltipText = badge ? `${tooltip}, ${describeToolbarBadge(badge)}` : tooltip;
 
   return (
     <ContextMenu>
@@ -133,15 +138,26 @@ export function PluginToolbarButton({
                 variant="ghost"
                 size="icon"
                 data-toolbar-item={dataToolbarItem}
+                loading={busy}
                 onClick={() => {
+                  // Announced unavailable rather than natively disabled, so the
+                  // reason's tooltip still opens and the veto happens here.
+                  if (blocked) return;
                   void actionService.dispatch(
                     config.actionId as Parameters<typeof actionService.dispatch>[0],
                     undefined,
                     { source: "user" }
                   );
                 }}
-                className="toolbar-icon-button text-text-primary relative"
+                className={cn(
+                  "toolbar-icon-button text-text-primary relative",
+                  disabled && !busy && ARIA_DISABLED_CLASSES
+                )}
                 aria-label={name}
+                // A toggle keeps one name; aria-pressed announces the state.
+                aria-pressed={pressed}
+                aria-disabled={disabled || undefined}
+                aria-describedby={disabled ? reasonId : undefined}
                 aria-keyshortcuts={ariaShortcut}
               >
                 <span className="relative inline-flex">
@@ -162,8 +178,13 @@ export function PluginToolbarButton({
                 </span>
               </Button>
             </TooltipTrigger>
-            <TooltipContent side="bottom">{name}</TooltipContent>
+            <TooltipContent side="bottom">{tooltipText}</TooltipContent>
           </Tooltip>
+          {disabled && (
+            <span id={reasonId} className="sr-only">
+              {tooltip}
+            </span>
+          )}
         </span>
       </ContextMenuTrigger>
       <ContextMenuContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
@@ -197,12 +218,31 @@ export function PluginOverflowItem({
   onSelect: () => void;
   keybinding?: string;
 }) {
-  const Icon = resolvePluginIcon(config.iconId, DEFAULT_PLUGIN_BUTTON_ICON);
+  const presentation = presentPluginToolbarButton(config, usePluginToolbarButtonState(config));
   const badge = usePluginToolbarBadge(config);
   return (
-    <DropdownMenuItem onClick={onSelect} keybinding={keybinding}>
-      <Icon className="mr-2 h-3.5 w-3.5" />
-      <span className="flex-1">{config.label}</span>
+    <DropdownMenuItem
+      onClick={(event) => {
+        if (presentation.blocked) {
+          event.preventDefault();
+          return;
+        }
+        onSelect();
+      }}
+      keybinding={keybinding}
+      {...menuToggleProps(presentation.pressed)}
+      aria-disabled={presentation.blocked || undefined}
+      className={cn(presentation.blocked && ARIA_DISABLED_CLASSES)}
+    >
+      <PluginMenuRowIcon presentation={presentation} />
+      <TruncatedTooltip
+        content={presentation.tooltip}
+        isTruncated={presentation.tooltip !== config.label}
+        focusable={false}
+      >
+        <span className="flex-1">{config.label}</span>
+      </TruncatedTooltip>
+      <PluginMenuRowState presentation={presentation} />
       {badge && (
         <>
           <span className="ml-2 inline-flex shrink-0 items-center">
@@ -212,6 +252,52 @@ export function PluginOverflowItem({
         </>
       )}
     </DropdownMenuItem>
+  );
+}
+
+/** A menu row's icon: a spinner while busy, else the live icon. */
+function PluginMenuRowIcon({
+  presentation,
+}: {
+  presentation: ReturnType<typeof presentPluginToolbarButton>;
+}) {
+  if (presentation.busy) {
+    return (
+      <span data-menu-icon className="mr-2 inline-flex h-3.5 w-3.5 shrink-0" aria-hidden="true">
+        <Spinner size="sm" />
+      </span>
+    );
+  }
+  const { Icon } = presentation;
+  return <Icon data-menu-icon className="mr-2 h-3.5 w-3.5 shrink-0" aria-hidden="true" />;
+}
+
+/**
+ * A toggle's menu row is a `menuitemcheckbox`, the menu's form of
+ * `aria-pressed`. The plugin's state stays authoritative: selecting the row
+ * dispatches, and the check only moves when the plugin republishes.
+ */
+function menuToggleProps(pressed: boolean | undefined) {
+  if (pressed === undefined) return {};
+  return { role: "menuitemcheckbox" as const, "aria-checked": pressed };
+}
+
+/** A menu row's live state: a check for a toggle that is on, and why a blocked row won't run. */
+function PluginMenuRowState({
+  presentation,
+}: {
+  presentation: ReturnType<typeof presentPluginToolbarButton>;
+}) {
+  return (
+    <>
+      {presentation.pressed === true && (
+        <Check className="ml-2 h-3.5 w-3.5 shrink-0 text-text-secondary" aria-hidden="true" />
+      )}
+      {presentation.busy && <span className="sr-only">, busy</span>}
+      {presentation.disabled && !presentation.busy && (
+        <span className="sr-only">, unavailable: {presentation.tooltip}</span>
+      )}
+    </>
   );
 }
 
@@ -226,7 +312,7 @@ function PluginTrayRow({
   onSelect: (config: ToolbarButtonConfig) => void;
   onTogglePin: (config: ToolbarButtonConfig) => void;
 }) {
-  const Icon = resolvePluginIcon(config.iconId, DEFAULT_PLUGIN_BUTTON_ICON);
+  const presentation = presentPluginToolbarButton(config, usePluginToolbarButtonState(config));
   const badge = usePluginToolbarBadge(config);
 
   const handleKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
@@ -239,17 +325,36 @@ function PluginTrayRow({
 
   return (
     <DropdownMenuItem
-      onSelect={() => onSelect(config)}
+      // Not Radix's `disabled`: that would skip the row in keyboard navigation
+      // and take its pin control with it. The row stays reachable, says why,
+      // and only selecting it is vetoed — the menu stays open.
+      onSelect={(event) => {
+        if (presentation.blocked) {
+          event.preventDefault();
+          return;
+        }
+        onSelect(config);
+      }}
       onKeyDown={handleKeyDown}
-      className="group"
+      {...menuToggleProps(presentation.pressed)}
+      aria-disabled={presentation.blocked || undefined}
+      className={cn("group", presentation.blocked && ARIA_DISABLED_CLASSES)}
       data-testid={`plugin-tray-row-${config.id}`}
       keybinding={config.actionId}
     >
-      <Icon data-menu-icon className="mr-2 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+      <PluginMenuRowIcon presentation={presentation} />
 
-      <TruncatedTooltip content={config.label} focusable={false}>
+      {/* The plugin's tooltip or disabled reason shows on hover whether or not
+          the label is cut off; with neither, only a truncated label does. */}
+      <TruncatedTooltip
+        content={presentation.tooltip}
+        isTruncated={presentation.tooltip !== config.label ? true : undefined}
+        focusable={false}
+      >
         <span className="min-w-0 flex-1 truncate">{config.label}</span>
       </TruncatedTooltip>
+
+      <PluginMenuRowState presentation={presentation} />
 
       {badge && (
         <>

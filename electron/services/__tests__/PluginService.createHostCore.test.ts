@@ -304,6 +304,7 @@ type CreateHostShape = (pluginId: string) => {
     postToPanel: (channel: string, payload: unknown, panelId?: string | null) => Promise<void>;
     setPanelBadge: (panelId: string, badge: unknown) => Promise<void>;
     setToolbarButtonBadge: (buttonId: string, badge: unknown) => Promise<void>;
+    setToolbarButtonState: (buttonId: string, state: unknown) => Promise<void>;
     setContext: (key: unknown, value: unknown) => Promise<void>;
     setPanelMenuItems: (panelId: string, items: unknown) => Promise<void>;
     reloadPanel: (panelId: unknown) => Promise<string>;
@@ -720,6 +721,121 @@ describe("createHost (plugin activation API)", () => {
       const { service, host } = await toolbarHost("tb-unloaded");
       service.unloadPlugin("acme.tb-unloaded");
       await expect(host.setToolbarButtonBadge("", { kind: "bogus" })).resolves.toBeUndefined();
+    });
+  });
+
+  describe("host.setToolbarButtonState (#13785)", () => {
+    async function toolbarHost(id: string) {
+      await writePlugin(id, {
+        name: `acme.${id}`,
+        version: "1.0.0",
+        contributes: {
+          toolbarButtons: [
+            { id: "sync", label: "Sync", iconId: "puzzle", actionId: `acme.${id}.sync` },
+          ],
+        },
+      });
+      const service = new PluginService(tmpDir);
+      await service.initialize();
+      const { host } = (service as unknown as { createHost: CreateHostShape }).createHost(
+        `acme.${id}`
+      );
+      return { service, host };
+    }
+    const toolbarStateEvents = () =>
+      broadcastToRendererMock.mock.calls
+        .filter((call) => call[0] === CHANNELS.EVENTS_PUSH)
+        .map((call) => call[1] as { name: string; payload: unknown })
+        .filter((event) => event.name === "plugin:toolbar-states-changed");
+
+    it("publishes the plugin's whole map on set and clear, deduping repeats, and an empty one on unload", async () => {
+      const { service, host } = await toolbarHost("ts-publish");
+      broadcastToRendererMock.mockClear();
+
+      await host.setToolbarButtonState("sync", { pressed: true, tooltip: "Syncing on save" });
+      // The same state again sends nothing.
+      await host.setToolbarButtonState("sync", { pressed: true, tooltip: "Syncing on save" });
+      await host.setToolbarButtonState("sync", { disabled: true, disabledReason: "Sign in first" });
+      // An empty state is the manifest default, the same as a clear.
+      await host.setToolbarButtonState("sync", {});
+      await host.setToolbarButtonState("sync", null);
+      await host.setToolbarButtonState("sync", { busy: true });
+      service.unloadPlugin("acme.ts-publish");
+
+      expect(toolbarStateEvents().map((event) => event.payload)).toEqual([
+        {
+          pluginId: "acme.ts-publish",
+          states: { sync: { pressed: true, tooltip: "Syncing on save" } },
+        },
+        {
+          pluginId: "acme.ts-publish",
+          states: { sync: { disabled: true, disabledReason: "Sign in first" } },
+        },
+        { pluginId: "acme.ts-publish", states: {} },
+        { pluginId: "acme.ts-publish", states: { sync: { busy: true } } },
+        { pluginId: "acme.ts-publish", states: {} },
+      ]);
+    });
+
+    it("rewrites a ./svg icon reference to the plugin's own custom-icon key", async () => {
+      const { host } = await toolbarHost("ts-icon");
+      broadcastToRendererMock.mockClear();
+
+      await host.setToolbarButtonState("sync", { iconId: "./icons/on.svg" });
+      await host.setToolbarButtonState("sync", { iconId: "check" });
+
+      const icons = toolbarStateEvents().map(
+        (event) =>
+          (event.payload as { states: Record<string, { iconId?: string }> }).states.sync?.iconId
+      );
+      expect(icons[0]).not.toBe("./icons/on.svg");
+      expect(icons[0]).toContain("acme.ts-icon");
+      expect(icons[1]).toBe("check");
+    });
+
+    it("rejects an empty or foreign buttonId and an invalid state, publishing nothing", async () => {
+      const { host } = await toolbarHost("ts-reject");
+      broadcastToRendererMock.mockClear();
+
+      await expect(host.setToolbarButtonState("", { pressed: true })).rejects.toThrow(
+        /setToolbarButtonState: buttonId/
+      );
+      await expect(host.setToolbarButtonState("other", { pressed: true })).rejects.toThrow(
+        /"other" is not one of this plugin's contributes\.toolbarButtons/
+      );
+      await expect(host.setToolbarButtonState("sync", { disabled: true })).rejects.toThrow(
+        /a disabled button needs a disabledReason/
+      );
+      await expect(
+        host.setToolbarButtonState("sync", { disabledReason: "Not without disabled" })
+      ).rejects.toThrow(/only valid with disabled: true/);
+      await expect(host.setToolbarButtonState("sync", { label: "Renamed" })).rejects.toThrow(
+        /setToolbarButtonState: invalid state/
+      );
+      await expect(
+        host.setToolbarButtonState("sync", { tooltip: "x".repeat(201) })
+      ).rejects.toThrow(/setToolbarButtonState: invalid state/);
+      await expect(host.setToolbarButtonState("sync", [])).rejects.toThrow(
+        /setToolbarButtonState: invalid state/
+      );
+      const throwing = {
+        get tooltip(): string {
+          throw new Error("boom");
+        },
+      };
+      let call: Promise<void> | undefined;
+      expect(() => {
+        call = host.setToolbarButtonState("sync", throwing);
+      }).not.toThrow();
+      await expect(call).rejects.toThrow(/setToolbarButtonState: invalid state — boom/);
+      expect(() => host.setToolbarButtonState("", null).catch(() => {})).not.toThrow();
+      expect(toolbarStateEvents()).toEqual([]);
+    });
+
+    it("silently no-ops once the plugin is unloaded", async () => {
+      const { service, host } = await toolbarHost("ts-unloaded");
+      service.unloadPlugin("acme.ts-unloaded");
+      await expect(host.setToolbarButtonState("", { bogus: true })).resolves.toBeUndefined();
     });
   });
 

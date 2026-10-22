@@ -1854,6 +1854,27 @@ type PluginPanelBadge = {
     tooltip?: string;
 };
 /**
+ * Live state a plugin sets on one of its own toolbar buttons via
+ * {@link PluginHostApi.setToolbarButtonState} (#13785). Every field is optional
+ * and each call replaces the whole state, so a field left out returns to the
+ * manifest's default. The button's label never changes: a toggle reads the same
+ * name in both positions and announces `pressed` as `aria-pressed`.
+ */
+interface PluginToolbarButtonRuntimeState {
+    /** Marks the button as a toggle and whether it is on. Leave out for a plain button. */
+    pressed?: boolean;
+    /** Blocks activation. Requires `disabledReason`, shown in place of the tooltip. */
+    disabled?: boolean;
+    /** Why the button is disabled, in a sentence the user can act on. Only with `disabled: true`. */
+    disabledReason?: string;
+    /** Work started by this button is running: shows a spinner and blocks activation. */
+    busy?: boolean;
+    /** Replaces the tooltip text. The accessible name stays the manifest `label`. */
+    tooltip?: string;
+    /** Replaces the icon, using the same ids as the manifest `iconId`. Unknown ids keep the manifest icon. */
+    iconId?: string;
+}
+/**
  * A short status a plugin shows on one worktree's card via
  * {@link PluginHostApi.setWorktreeCardStatus} (#13704): a one-line `label`
  * drawn as quiet metadata, an optional `tooltip` with the detail, and an
@@ -4761,6 +4782,25 @@ interface PluginHostApi extends PluginActivationApi {
      */
     setToolbarButtonBadge(buttonId: string, badge: PluginPanelBadge | null): Promise<void>;
     /**
+     * Set (or clear) the live state of one of this plugin's own toolbar buttons —
+     * `buttonId` is a `contributes.toolbarButtons[].id` from this plugin's
+     * manifest — so a toggle shows whether it is on, a button can say why it
+     * can't run, and running work shows on the button that started it. Each call
+     * replaces the button's whole {@link PluginToolbarButtonRuntimeState}; pass
+     * `null` to return it to the manifest's defaults.
+     *
+     * State shows on a promoted button, its plugin-tray row and its overflow-menu
+     * entry. A disabled or busy button ignores clicks; the action itself stays
+     * dispatchable from keybindings, the palette and `host.dispatch`. The label
+     * never changes with state.
+     *
+     * Like {@link setToolbarButtonBadge} this is NOT revoke-guarded and becomes a
+     * silent no-op once the plugin is unloaded; all of its button state is cleared
+     * on unload and whenever its worker is replaced or shut down. An empty or
+     * foreign `buttonId` or an invalid state rejects, in a worker as in process.
+     */
+    setToolbarButtonState(buttonId: string, state: PluginToolbarButtonRuntimeState | null): Promise<void>;
+    /**
      * Publish one of this plugin's own context keys to `when` clauses, so a
      * keybinding or `contributes.contextMenus` entry can turn on and off with the
      * plugin's state. The host namespaces the key under this plugin's manifest
@@ -5256,6 +5296,11 @@ interface SetToolbarButtonBadgeRecord {
     buttonId: string;
     badge: PluginPanelBadge | null;
 }
+/** Captured `host.setToolbarButtonState(buttonId, state)` calls. `null` clears. */
+interface SetToolbarButtonStateRecord {
+    buttonId: string;
+    state: PluginToolbarButtonRuntimeState | null;
+}
 /** Captured `host.setContext(key, value)` calls. `null` clears. */
 interface SetContextRecord {
     key: string;
@@ -5336,6 +5381,7 @@ interface MockHostState {
     readonly invalidationCalls: ReadonlyArray<InvalidationRecord>;
     readonly setPanelBadgeCalls: ReadonlyArray<SetPanelBadgeRecord>;
     readonly setToolbarButtonBadgeCalls: ReadonlyArray<SetToolbarButtonBadgeRecord>;
+    readonly setToolbarButtonStateCalls: ReadonlyArray<SetToolbarButtonStateRecord>;
     /** Accepted `host.setContext` calls, in order. */
     readonly setContextCalls: ReadonlyArray<SetContextRecord>;
     /**
@@ -5554,7 +5600,7 @@ interface CreateMockHostOptions {
     manifestSettings?: SettingDefinition[];
     /**
      * Opt-in `contributes.toolbarButtons[].id` list, so `setToolbarButtonBadge`
-     * rejects an id the plugin did not contribute, as the real host does. Omitted
+     * and `setToolbarButtonState` reject an id the plugin did not contribute, as the real host does. Omitted
      * by default (the mock has no manifest model), which accepts any non-empty id.
      */
     toolbarButtonIds?: readonly string[];

@@ -122,7 +122,7 @@ import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useNotificationSettingsStore } from "@/store/notificationSettingsStore";
 import { useCanopyStore } from "@/store/canopyStore";
 import type { AnyToolbarButtonId } from "@/../../shared/types/toolbar";
-import { usePluginToolbarButtons } from "@/hooks/usePluginToolbarButtons";
+import { useVisiblePluginToolbarButtons } from "@/hooks/usePluginToolbarButtons";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { usePanelStore } from "@/store/panelStore";
@@ -1266,7 +1266,7 @@ export function Toolbar({
   // an `mx-1` on top gave the launcher 10px on one side and 6px on the other.
   const toolbarFixedDividerClass = "toolbar-divider w-px h-5 shrink-0";
 
-  const { buttonIds: pluginButtonIds, configs: pluginConfigs } = usePluginToolbarButtons();
+  const { buttonIds: pluginButtonIds, configs: pluginConfigs } = useVisiblePluginToolbarButtons();
 
   // Scopes a project-owned recipe's pin id — see `recipeToolbarSourceId`.
   const currentRecipeProjectId = useRecipeStore((s) => s.currentProjectId);

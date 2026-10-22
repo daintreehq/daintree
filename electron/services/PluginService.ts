@@ -82,6 +82,7 @@ import type {
   PluginSettingsUiValues,
   PluginWorktreeStatus,
   PluginPanelBadge,
+  PluginToolbarButtonRuntimeState,
   PluginContextValue,
   PluginWorktreeCardStatus,
   PluginRuntimeStatus,
@@ -787,6 +788,12 @@ export class PluginService {
    * buttons only exist in that project's views.
    */
   private pluginToolbarBadges = new Map<string, Map<string, PluginPanelBadge>>();
+  /**
+   * Live toolbar-button state set via `host.setToolbarButtonState`, keyed
+   * `pluginId → buttonId → state` (#13785). Held, scoped, cleared and replayed
+   * exactly like {@link pluginToolbarBadges}.
+   */
+  private pluginToolbarStates = new Map<string, Map<string, PluginToolbarButtonRuntimeState>>();
   /**
    * `when`-clause context keys set via `host.setContext`, keyed `pluginId → key
    * → value` (#13506). Held, scoped and replayed like
@@ -2319,7 +2326,9 @@ export class PluginService {
         actionId: qualifyActionId(btn.actionId),
         priority: btn.priority ?? 3,
         pluginId,
+        ...(btn.when !== undefined ? { when: btn.when } : {}),
       });
+      trackPluginExpression(pluginId, btn.when);
     }
     if (manifest.contributes.toolbarButtons.length > 0) {
       this.broadcaster.scheduleToolbarButtonsBroadcast(false);
@@ -3207,6 +3216,7 @@ export class PluginService {
         // toolbar count (#13503).
         this.clearPluginPanelMenus(pluginId);
         if (this.pluginToolbarBadges.delete(pluginId)) this.emitToolbarBadges(pluginId);
+        if (this.pluginToolbarStates.delete(pluginId)) this.emitToolbarStates(pluginId);
         this.resetPluginContextKeys(pluginId);
         this.clearPluginWorktreeCardStatuses(pluginId);
       },
@@ -3963,6 +3973,8 @@ export class PluginService {
       pluginBadges: this.pluginBadges,
       pluginToolbarBadges: this.pluginToolbarBadges,
       emitToolbarBadges: (pluginId) => this.emitToolbarBadges(pluginId),
+      pluginToolbarStates: this.pluginToolbarStates,
+      emitToolbarStates: (pluginId) => this.emitToolbarStates(pluginId),
       pluginContextKeys: this.pluginContextKeys,
       emitContextKeys: (pluginId) => this.emitContextKeys(pluginId),
       pluginWorktreeCardStatuses: this.pluginWorktreeCardStatuses,
@@ -5690,6 +5702,30 @@ export class PluginService {
     broadcastToProjectRenderers(owningProjectId, CHANNELS.EVENTS_PUSH, event);
   }
 
+  /** Publish one plugin's complete toolbar-button state, scoped like {@link emitToolbarBadges}. */
+  private emitToolbarStates(pluginId: string): void {
+    if (this.disposed) return;
+    const event = {
+      name: "plugin:toolbar-states-changed" as const,
+      payload: { pluginId, states: this.serializePluginToolbarStates(pluginId) },
+    };
+    const owningProjectId = projectIdFromPluginInstanceKey(pluginId);
+    if (owningProjectId === null) {
+      broadcastToRenderer(CHANNELS.EVENTS_PUSH, event);
+      return;
+    }
+    broadcastToProjectRenderers(owningProjectId, CHANNELS.EVENTS_PUSH, event);
+  }
+
+  /** One plugin's toolbar-button state (`buttonId → state`), empty when it has none. */
+  private serializePluginToolbarStates(
+    pluginId: string
+  ): Record<string, PluginToolbarButtonRuntimeState> {
+    const buttonMap = this.pluginToolbarStates.get(pluginId);
+    if (!buttonMap || buttonMap.size === 0) return {};
+    return Object.fromEntries(buttonMap);
+  }
+
   /** One plugin's toolbar badges (`buttonId → badge`), empty when it has none. */
   private serializePluginToolbarBadges(pluginId: string): Record<string, PluginPanelBadge> {
     const buttonMap = this.pluginToolbarBadges.get(pluginId);
@@ -6888,6 +6924,10 @@ export class PluginService {
       runUnloadStep(pluginId, "clearToolbarBadges", () => this.emitToolbarBadges(pluginId));
     }
 
+    if (this.pluginToolbarStates.delete(pluginId)) {
+      runUnloadStep(pluginId, "clearToolbarStates", () => this.emitToolbarStates(pluginId));
+    }
+
     if (this.pluginContextKeys.delete(pluginId)) {
       runUnloadStep(pluginId, "clearContextKeys", () => this.emitContextKeys(pluginId));
     }
@@ -8019,6 +8059,27 @@ export class PluginService {
           name: "plugin:toolbar-badges-changed",
           payload: { pluginId, badges: this.serializePluginToolbarBadges(pluginId) },
         });
+      } catch {
+        // Silently ignore send failures during window initialization/disposal.
+      }
+    }
+    for (const pluginId of this.pluginToolbarStates.keys()) {
+      const owningProjectId = projectIdFromPluginInstanceKey(pluginId);
+      if (owningProjectId !== null && !inView(owningProjectId)) continue;
+      const envelope = {
+        name: "plugin:toolbar-states-changed",
+        payload: { pluginId, states: this.serializePluginToolbarStates(pluginId) },
+      };
+      // A local view bound to a remote host shows that host's buttons, so this
+      // machine's state for a same-named plugin would disable or press them.
+      if (
+        projectId === undefined &&
+        isWithheldFromView(webContents.id, CHANNELS.EVENTS_PUSH, [envelope])
+      ) {
+        continue;
+      }
+      try {
+        webContents.send(CHANNELS.EVENTS_PUSH, envelope);
       } catch {
         // Silently ignore send failures during window initialization/disposal.
       }

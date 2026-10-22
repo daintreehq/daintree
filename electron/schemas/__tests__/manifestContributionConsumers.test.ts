@@ -444,6 +444,14 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       ],
       note: "Registered as the toolbar button ordering priority (defaulted to 3), consumed by the plugin tray's within-group sort (#11304).",
     },
+    when: {
+      mode: "verbatim",
+      consumers: [
+        { file: PLUGIN_SERVICE, symbol: "loadPlugin → trackPluginExpression" },
+        { file: "src/hooks/usePluginToolbarButtons.ts", symbol: "useVisiblePluginToolbarButtons" },
+      ],
+      note: "Registered on the toolbar button config and evaluated live in the renderer; a false clause drops the button from the toolbar and the tray without touching its saved position.",
+    },
   },
   menuItems: {
     label: {

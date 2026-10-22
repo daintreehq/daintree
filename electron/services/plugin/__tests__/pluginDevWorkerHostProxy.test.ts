@@ -1459,6 +1459,98 @@ describe("PluginDevWorkerHostProxy setContext (#13506)", () => {
   });
 });
 
+describe("PluginDevWorkerHostProxy setToolbarButtonState (#13785)", () => {
+  beforeEach(() => vi.clearAllMocks());
+  afterEach(() => vi.restoreAllMocks());
+
+  it("relays a plain copy of the state as a call, normalizing a clear to null", async () => {
+    const { proxy, sent } = makeProxy();
+    const set = proxy.host.setToolbarButtonState("sync", { pressed: true, busy: undefined });
+    const call = sent.find((m) => m.type === "host-call" && m.method === "setToolbarButtonState");
+    expect(call?.params).toEqual({ buttonId: "sync", state: { pressed: true } });
+    resolveCall(proxy, sent, "setToolbarButtonState", undefined);
+    await expect(set).resolves.toBeUndefined();
+
+    const clear = proxy.host.setToolbarButtonState("sync", undefined as never);
+    const clears = sent.filter(
+      (m) => m.type === "host-call" && m.method === "setToolbarButtonState"
+    );
+    expect(clears.at(-1)?.params).toEqual({ buttonId: "sync", state: null });
+    resolveCall(proxy, sent, "setToolbarButtonState", undefined);
+    await expect(clear).resolves.toBeUndefined();
+  });
+
+  it("passes main's ownership rejection back to the caller", async () => {
+    const { proxy, sent } = makeProxy();
+    const promise = proxy.host.setToolbarButtonState("other", { pressed: true });
+    const call = sent.find((m) => m.type === "host-call" && m.method === "setToolbarButtonState");
+    proxy.handleMessage({
+      type: "host-result",
+      requestId: call.requestId,
+      ok: false,
+      error: `Plugin "acme" setToolbarButtonState: "other" is not one of this plugin's contributes.toolbarButtons`,
+    });
+    await expect(promise).rejects.toThrow(/is not one of this plugin's/);
+  });
+
+  it("rejects an empty id or an uncloneable field without crossing the port", async () => {
+    const { proxy, sent } = makeProxy();
+    await expect(proxy.host.setToolbarButtonState("", { pressed: true })).rejects.toThrow(
+      /setToolbarButtonState: buttonId/
+    );
+    await expect(
+      proxy.host.setToolbarButtonState("sync", { tooltip: (() => "x") as never })
+    ).rejects.toThrow(/setToolbarButtonState: invalid state — tooltip/);
+    await expect(proxy.host.setToolbarButtonState("sync", [] as never)).rejects.toThrow(
+      /state must be an object/
+    );
+    const throwing = {
+      get tooltip(): string {
+        throw new Error("boom");
+      },
+    };
+    let call: Promise<void> | undefined;
+    expect(() => {
+      call = proxy.host.setToolbarButtonState("sync", throwing);
+    }).not.toThrow();
+    await expect(call).rejects.toThrow(/invalid state — boom/);
+    expect(sent.find((m) => m.type === "host-call")).toBeUndefined();
+  });
+
+  it("reads an inherited getter and keeps a __proto__ key, as the in-process schema does", () => {
+    const { proxy, sent } = makeProxy();
+    class Busy {
+      get busy(): boolean {
+        return true;
+      }
+    }
+    void proxy.host.setToolbarButtonState("sync", new Busy()).catch(() => {});
+    void proxy.host
+      .setToolbarButtonState("sync", JSON.parse('{"__proto__":false}') as never)
+      .catch(() => {});
+    const calls = sent.filter(
+      (m) => m.type === "host-call" && m.method === "setToolbarButtonState"
+    );
+    expect(calls[0]?.params.state).toEqual({ busy: true });
+    expect(Object.keys(calls[1]?.params.state ?? {})).toEqual(["__proto__"]);
+  });
+
+  it("carries an unknown key to main even when it is undefined, so the strict schema refuses it", () => {
+    const { proxy, sent } = makeProxy();
+    void proxy.host.setToolbarButtonState("sync", { label: undefined } as never).catch(() => {});
+    const call = sent.find((m) => m.type === "host-call" && m.method === "setToolbarButtonState");
+    expect(Object.keys(call?.params.state ?? {})).toEqual(["label"]);
+  });
+
+  it("resolves once the proxy is disposed, like the in-process no-op after unload", async () => {
+    const { proxy } = makeProxy();
+    const promise = proxy.host.setToolbarButtonState("sync", { busy: true });
+    proxy.dispose();
+    await expect(promise).resolves.toBeUndefined();
+    await expect(proxy.host.setToolbarButtonState("", null)).resolves.toBeUndefined();
+  });
+});
+
 describe("PluginDevWorkerHostProxy setWorktreeCardStatus (#13704)", () => {
   beforeEach(() => vi.clearAllMocks());
   afterEach(() => vi.restoreAllMocks());

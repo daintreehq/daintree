@@ -797,6 +797,44 @@ describe("init gate — waitForInit() and pushSnapshotTo() (#9285)", () => {
     ]);
   });
 
+  it("pushSnapshotTo() replays toolbar-button state to entitled views, withholding it from a remote-bound one (#13785)", async () => {
+    const service = new PluginService(tmpDir);
+    await service.activateStartupFinishedPlugins();
+    const states = (
+      service as unknown as {
+        pluginToolbarStates: Map<string, Map<string, { pressed?: boolean; busy?: boolean }>>;
+      }
+    ).pluginToolbarStates;
+    states.set("acme.global", new Map([["sync", { pressed: true }]]));
+    states.set("project__other-project__acme.local", new Map([["sync", { busy: true }]]));
+    const send = vi.fn();
+    const wc = { id: 4245, send, isDestroyed: () => false } as unknown as Electron.WebContents;
+    const stateEvents = () =>
+      send.mock.calls
+        .map((c) => c[1] as { name?: string; payload?: unknown })
+        .filter((event) => event.name === "plugin:toolbar-states-changed");
+
+    try {
+      await service.pushSnapshotTo(wc);
+      expect(stateEvents()).toEqual([
+        {
+          name: "plugin:toolbar-states-changed",
+          payload: { pluginId: "acme.global", states: { sync: { pressed: true } } },
+        },
+      ]);
+
+      send.mockClear();
+      ipcViewMocks.isWithheldFromView.mockImplementation(
+        (_id, _channel, args) =>
+          (args[0] as { name?: string } | undefined)?.name === "plugin:toolbar-states-changed"
+      );
+      await service.pushSnapshotTo(wc);
+      expect(stateEvents()).toEqual([]);
+    } finally {
+      ipcViewMocks.isWithheldFromView.mockImplementation(() => false);
+    }
+  });
+
   it("pushSnapshotTo() replays context keys to the views entitled to them, empty ones too (#13506)", async () => {
     const service = new PluginService(tmpDir);
     await service.activateStartupFinishedPlugins();

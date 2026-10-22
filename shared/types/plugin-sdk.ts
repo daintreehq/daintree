@@ -87,6 +87,7 @@ export type {
   PluginNotifyOptions,
   PluginNotifyResult,
   PluginPanelBadge,
+  PluginToolbarButtonRuntimeState,
   PluginContextValue,
   PluginWorktreeCardStatus,
   PluginPanelBadgeColor,

@@ -220,6 +220,7 @@ import type {
   PluginArchiveInstallIntent,
   PluginDeepLinkIntent,
   PluginPanelBadge,
+  PluginToolbarButtonRuntimeState,
   PluginContextValue,
   PluginWorktreeCardStatus,
   PluginFocusedPanel,
@@ -987,6 +988,8 @@ const _eventBusReplayable: ReadonlySet<keyof IpcEventBusMap> = new Set([
   "plugin:panel-menus-changed",
   // Same replay, landing before the toolbar has mounted its badge store (#13503).
   "plugin:toolbar-badges-changed",
+  // Same replay, for the toolbar's button-state store (#13785).
+  "plugin:toolbar-states-changed",
   // Same replay, landing before the keybinding hook subscribes its store (#13506).
   "plugin:context-keys-changed",
   // Same replay, landing before the worktree cards mount their store (#13704).
@@ -1007,6 +1010,7 @@ const _eventBusFifoReplay: ReadonlySet<keyof IpcEventBusMap> = new Set([
   // matters — but the latest of all would drop every other plugin's.
   "plugin:panel-menus-changed",
   "plugin:toolbar-badges-changed",
+  "plugin:toolbar-states-changed",
   "plugin:context-keys-changed",
   "plugin:worktree-card-statuses-changed",
 ]);
@@ -1016,6 +1020,7 @@ const _eventBusFifoReplay: ReadonlySet<keyof IpcEventBusMap> = new Set([
 const _eventBusPerPluginLatest: ReadonlySet<keyof IpcEventBusMap> = new Set([
   "plugin:panel-menus-changed",
   "plugin:toolbar-badges-changed",
+  "plugin:toolbar-states-changed",
   "plugin:context-keys-changed",
   "plugin:worktree-card-statuses-changed",
 ]);
@@ -3834,6 +3839,12 @@ function buildElectronApi(): ElectronAPI {
       onToolbarBadgesChanged: (
         callback: (payload: { pluginId: string; badges: Record<string, PluginPanelBadge> }) => void
       ) => _eventBusOn("plugin:toolbar-badges-changed", callback),
+      onToolbarStatesChanged: (
+        callback: (payload: {
+          pluginId: string;
+          states: Record<string, PluginToolbarButtonRuntimeState>;
+        }) => void
+      ) => _eventBusOn("plugin:toolbar-states-changed", callback),
       onContextKeysChanged: (
         callback: (payload: {
           pluginId: string;

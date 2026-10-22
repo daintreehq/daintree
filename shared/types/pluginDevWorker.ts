@@ -31,6 +31,7 @@ import type {
   PluginPtyProcessSpawnOptions,
   PluginProcessMode,
   PluginPanelBadge,
+  PluginToolbarButtonRuntimeState,
   PluginContextValue,
   PluginWorktreeCardStatus,
   PanelMenuItemContribution,
@@ -67,6 +68,7 @@ export type PluginHostCallMethod =
   // A call, not a notify like the badges: main owns the per-plugin key cap,
   // and its rejection has to reach the plugin's `await` (#13506).
   | "setContext"
+  | "setToolbarButtonState"
   // A call for the same reason: whether the worktree is one this plugin may
   // reach is main's answer, and its refusal has to reach the caller (#13704).
   | "setWorktreeCardStatus"
@@ -440,6 +442,12 @@ export interface SetPanelBadgeParams {
 export interface SetToolbarButtonBadgeParams {
   buttonId: string;
   badge: PluginPanelBadge | null;
+}
+
+/** Params for `setToolbarButtonState` (`host-call`). `null` clears the state. */
+export interface SetToolbarButtonStateParams {
+  buttonId: string;
+  state: PluginToolbarButtonRuntimeState | null;
 }
 
 /** Params for `setContext` (`host-call`). `null` clears the key. */

@@ -2490,6 +2490,17 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       }) => void
     ): () => void;
     /**
+     * Subscribe to plugin toolbar-button state (#13785). The callback fires with
+     * one plugin's COMPLETE current map (manifest button id → state); an empty
+     * map clears that plugin's state, as on unload. Returns a cleanup.
+     */
+    onToolbarStatesChanged(
+      callback: (payload: {
+        pluginId: string;
+        states: Record<string, import("../plugin.js").PluginToolbarButtonRuntimeState>;
+      }) => void
+    ): () => void;
+    /**
      * Subscribe to plugin `when`-clause context keys (#13506). The callback fires
      * with one plugin's COMPLETE current map (key → value): empty when it holds
      * no keys, `null` once it unloads. Returns a cleanup.

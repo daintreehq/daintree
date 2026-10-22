@@ -45,6 +45,7 @@ interface TerminalBridge {
 
 interface PluginBridge {
   onToolbarBadgesChanged: (cb: (payload: unknown) => void) => () => void;
+  onToolbarStatesChanged: (cb: (payload: unknown) => void) => () => void;
   onWorktreeCardStatusesChanged: (cb: (payload: unknown) => void) => () => void;
 }
 
@@ -186,6 +187,26 @@ describe("preload event subscriptions", () => {
     ]);
 
     push({ pluginId: "p1", badges: { needs: { kind: "dot" } } });
+    expect(received).toHaveLength(3);
+    dispose();
+  });
+
+  it("replays each plugin's latest toolbar-state map to a late subscriber (#13785)", () => {
+    terminal.onExit(() => {})();
+    const push = (payload: unknown) =>
+      ipcRenderer.emit("events:push", {}, { name: "plugin:toolbar-states-changed", payload });
+    push({ pluginId: "p1", states: { sync: { pressed: true } } });
+    push({ pluginId: "p2", states: { run: { busy: true } } });
+    push({ pluginId: "p1", states: {} });
+
+    const received: unknown[] = [];
+    const dispose = plugin.onToolbarStatesChanged((payload) => received.push(payload));
+    expect(received).toEqual([
+      { pluginId: "p2", states: { run: { busy: true } } },
+      { pluginId: "p1", states: {} },
+    ]);
+
+    push({ pluginId: "p1", states: { sync: { pressed: false } } });
     expect(received).toHaveLength(3);
     dispose();
   });

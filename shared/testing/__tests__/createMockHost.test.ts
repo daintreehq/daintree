@@ -504,6 +504,42 @@ describe("createMockHost", () => {
     expect(host.setToolbarButtonBadgeCalls).toEqual([]);
   });
 
+  it("records setToolbarButtonState calls, normalizing a cleared state to null (#13785)", async () => {
+    const host = createMockHost();
+    await host.setToolbarButtonState("sync", { pressed: true, tooltip: "Syncing on save" });
+    await host.setToolbarButtonState("sync", null);
+    expect(host.setToolbarButtonStateCalls).toEqual([
+      { buttonId: "sync", state: { pressed: true, tooltip: "Syncing on save" } },
+      { buttonId: "sync", state: null },
+    ]);
+  });
+
+  it("setToolbarButtonState rejects what the real host rejects, recording nothing (#13785)", async () => {
+    const host = createMockHost({ toolbarButtonIds: ["sync"] });
+    await expect(host.setToolbarButtonState("", { pressed: true })).rejects.toThrow(
+      /setToolbarButtonState: buttonId/
+    );
+    await expect(host.setToolbarButtonState("other", { pressed: true })).rejects.toThrow(
+      /"other" is not one of this plugin's contributes\.toolbarButtons/
+    );
+    await expect(host.setToolbarButtonState("sync", { disabled: true })).rejects.toThrow(
+      /needs a disabledReason/
+    );
+    await expect(
+      host.setToolbarButtonState("sync", { disabledReason: "Sign in first" })
+    ).rejects.toThrow(/only valid with disabled: true/);
+    await expect(host.setToolbarButtonState("sync", { label: "Renamed" } as never)).rejects.toThrow(
+      /label: unrecognized key/
+    );
+    await expect(host.setToolbarButtonState("sync", [] as never)).rejects.toThrow(
+      /state must be an object/
+    );
+    await expect(host.setToolbarButtonState("sync", { tooltip: "x".repeat(201) })).rejects.toThrow(
+      /tooltip: must be a non-empty string/
+    );
+    expect(host.setToolbarButtonStateCalls).toEqual([]);
+  });
+
   it("records reloadPanel calls and answers from simulated lifecycle phases (#12610)", async () => {
     const host = createMockHost({ pluginId: "acme" });
     await expect(host.reloadPanel("p1")).resolves.toBe("not-mounted");

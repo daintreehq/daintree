@@ -1,4 +1,6 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
+import { evaluateWhenClause } from "@shared/utils/whenClause";
+import { useChromeWhenContext } from "@/hooks/useChromeWhenContext";
 import { isRemoteContributionActionAllowed } from "@shared/utils/remotePluginContributions";
 import { pluginViewHostId } from "@/components/Plugin/remotePluginView";
 import type { ToolbarButtonConfig } from "@shared/config/toolbarButtonRegistry";
@@ -6,6 +8,7 @@ import type { PluginToolbarButtonId } from "@shared/types/toolbar";
 import { useToolbarPreferencesStore } from "@/store";
 import { logWarn } from "@/utils/logger";
 import { usePluginToolbarBadgeStore } from "@/store/pluginToolbarBadgeStore";
+import { usePluginToolbarStateStore } from "@/store/pluginToolbarStateStore";
 
 export interface PluginToolbarButtonState {
   buttonIds: PluginToolbarButtonId[];
@@ -55,8 +58,9 @@ export function usePluginToolbarButtons(): PluginToolbarButtonState {
 
     const electron = typeof window !== "undefined" ? window.electron : undefined;
     if (!electron?.plugin) return;
-    // The buttons' live badges, subscribed alongside the buttons themselves.
+    // The buttons' live badges and state, subscribed alongside the buttons themselves.
     usePluginToolbarBadgeStore.getState().init();
+    usePluginToolbarStateStore.getState().init();
 
     void electron.plugin
       .toolbarButtons()
@@ -91,4 +95,32 @@ export function usePluginToolbarButtons(): PluginToolbarButtonState {
   const isRegistered = (id: string) => configs.has(id);
 
   return { buttonIds, configs, isRegistered };
+}
+
+/**
+ * The plugin toolbar buttons whose manifest `when` holds right now — what the
+ * toolbar and its tray show. A hidden button only leaves this view: its config,
+ * its pin and its saved slot in the layout stay where they are, so it returns
+ * to the same place once the clause is true again. Settings and the stale-pin
+ * sweep keep reading the full set from {@link usePluginToolbarButtons}.
+ */
+export function useVisiblePluginToolbarButtons(): PluginToolbarButtonState {
+  const all = usePluginToolbarButtons();
+  const context = useChromeWhenContext();
+  const { configs } = all;
+
+  return useMemo(() => {
+    let hidden = false;
+    const visible = new Map<string, ToolbarButtonConfig>();
+    for (const [id, config] of configs) {
+      if (evaluateWhenClause(config.when, context)) visible.set(id, config);
+      else hidden = true;
+    }
+    if (!hidden) return all;
+    return {
+      buttonIds: all.buttonIds.filter((id) => visible.has(id)),
+      configs: visible,
+      isRegistered: (id: string) => visible.has(id),
+    };
+  }, [all, configs, context]);
 }
