@@ -373,7 +373,8 @@ export function installPluginShellRequests(deps: PluginShellRequestDeps = {}): (
       // An older host sends no name; the manifest id still keeps the instance
       // key out of the overflow summary.
       rateLimitLabel:
-        displaySafeText(pluginDisplayName ?? "").trim() || pluginManifestIdFromInstanceKey(pluginId),
+        displaySafeText(pluginDisplayName ?? "").trim() ||
+        pluginManifestIdFromInstanceKey(pluginId),
     });
     return null;
   };
