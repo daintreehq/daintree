@@ -409,3 +409,55 @@ describe("repoStats", () => {
     expect(fetchMock()).toHaveBeenCalledTimes(2);
   });
 });
+
+describe("assignment Undo", () => {
+  const GRACE = { id: "user-2", name: "Grace", displayName: "grace", avatarUrl: null };
+
+  it("hands an issue back to whoever 'Assign to me' took it from", async () => {
+    fetchMock()
+      .mockResolvedValueOnce(gql({ viewer: VIEWER }))
+      .mockResolvedValueOnce(gql({ issues: { nodes: [issueNode({ assignee: GRACE })] } }))
+      .mockResolvedValueOnce(gql({ issueUpdate: { success: true, issue: { assignee: VIEWER } } }))
+      .mockResolvedValueOnce(gql({ issues: { nodes: [issueNode({ assignee: VIEWER })] } }))
+      .mockResolvedValueOnce(gql({ issueUpdate: { success: true, issue: { assignee: GRACE } } }));
+
+    await linearForgeProvider.assignIssue(REPO, 42, "ada");
+    const assignees = await linearForgeProvider.unassignIssue(REPO, 42, "ada");
+
+    expect(body(4).variables).toEqual({ id: "issue-uuid-42", input: { assigneeId: "user-2" } });
+    expect(assignees.map((a) => a.login)).toEqual(["grace"]);
+  });
+
+  it("doesn't rewrite an issue the viewer already holds", async () => {
+    fetchMock()
+      .mockResolvedValueOnce(gql({ viewer: VIEWER }))
+      .mockResolvedValueOnce(gql({ issues: { nodes: [issueNode({ assignee: VIEWER })] } }));
+    const assignees = await linearForgeProvider.assignIssue(REPO, 42, "ada");
+    expect(assignees.map((a) => a.login)).toEqual(["ada"]);
+    expect(fetchMock()).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("search scoping", () => {
+  it("doesn't read another team's key as this team's number", async () => {
+    fetchMock().mockResolvedValueOnce(
+      gql({ issues: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } })
+    );
+    await linearForgeProvider.listIssues(REPO, { search: "DES-42" });
+    expect((body(0).variables.filter as Record<string, unknown>).or).toEqual([
+      { title: { containsIgnoreCase: "DES-42" } },
+    ]);
+  });
+});
+
+describe("team resolution", () => {
+  it("looks the team up once per key", async () => {
+    setTeamKeyReader(async () => "ENG");
+    fetchMock()
+      .mockResolvedValueOnce(gql({ viewer: VIEWER }))
+      .mockResolvedValueOnce(gql({ teams: { nodes: [{ id: "team-uuid", key: "ENG" }] } }));
+    await linearForgeProvider.resolveIssueRepo!("/projects/app");
+    await linearForgeProvider.resolveIssueRepo!("/projects/app");
+    expect(fetchMock()).toHaveBeenCalledTimes(2);
+  });
+});

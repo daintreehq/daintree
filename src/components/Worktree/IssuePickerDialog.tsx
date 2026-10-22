@@ -35,6 +35,11 @@ interface IssuePickerDialogProps {
   onDetach: () => void;
   /** `"nested"` when opened from inside another dialog, so it layers above it. */
   zIndex?: "modal" | "nested";
+  /**
+   * Picking for a form that hasn't been submitted yet, so nothing is linked
+   * until the form is: the copy talks about a selection, not a link.
+   */
+  draft?: boolean;
 }
 
 type StateFilter = "open" | "closed" | "all";
@@ -137,6 +142,7 @@ export function IssuePickerDialog({
   onAttach,
   onDetach,
   zIndex,
+  draft = false,
 }: IssuePickerDialogProps) {
   const [search, setSearch] = useState("");
   const [stateFilter, setStateFilter] = useState<StateFilter>("open");
@@ -431,7 +437,13 @@ export function IssuePickerDialog({
     >
       <AppDialog.Header>
         <AppDialog.Title icon={<Link className="w-4 h-4 text-text-secondary" />}>
-          {isLinked ? "Change linked issue" : "Attach issue"}
+          {draft
+            ? isLinked
+              ? "Change selected issue"
+              : "Select issue"
+            : isLinked
+              ? "Change linked issue"
+              : "Attach issue"}
         </AppDialog.Title>
         <AppDialog.CloseButton />
       </AppDialog.Header>
@@ -481,7 +493,7 @@ export function IssuePickerDialog({
           isLinked || !hasResults ? undefined : (
             <>
               <Kbd>↵</Kbd>
-              <span>to link</span>
+              <span>{draft ? "to select" : "to link"}</span>
             </>
           )
         }
@@ -489,7 +501,9 @@ export function IssuePickerDialog({
         {isLinked && (
           <Button variant="ghost" onClick={handleDetach} className="text-text-secondary mr-auto">
             <Link2Off aria-hidden="true" />
-            Unlink issue {worktree.issueKey ?? `#${currentIssueNumber}`}
+            {draft
+              ? "Clear selection"
+              : `Unlink issue ${worktree.issueKey ?? `#${currentIssueNumber}`}`}
           </Button>
         )}
         <Button variant="ghost" onClick={onClose} className="text-text-secondary">

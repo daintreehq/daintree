@@ -210,6 +210,7 @@ export function NewWorktreeDialog({
   const [firstAgentId, setFirstAgentId] = useState<string | null>(null);
   const [firstPrompt, setFirstPrompt] = useState("");
   const [agentPickerOpen, setAgentPickerOpen] = useState(false);
+  const [issuePickerOpen, setIssuePickerOpen] = useState(false);
   // A remembered or restored agent that is no longer launchable reads as "No
   // agent" rather than launching something the picker can't show.
   const firstAgent = agentOptions.find((a) => a.id === firstAgentId);
@@ -1209,7 +1210,9 @@ export function NewWorktreeDialog({
   });
 
   useEffect(() => {
-    if (!isOpen || isDiscardConfirmOpen) return;
+    // A picker layered over the form owns the keyboard: Cmd/Ctrl+Enter there
+    // must not create the worktree mid-selection.
+    if (!isOpen || isDiscardConfirmOpen || issuePickerOpen) return;
     const handler = (e: KeyboardEvent) => {
       if (e.key !== "Enter" || !(e.metaKey || e.ctrlKey) || e.isComposing) return;
       const { handleCreate: create, submitDisabled: blocked } = submitRef.current;
@@ -1219,7 +1222,7 @@ export function NewWorktreeDialog({
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [isOpen, isDiscardConfirmOpen]);
+  }, [isOpen, isDiscardConfirmOpen, issuePickerOpen]);
 
   // What the form is actually about to do, said once. Replaces the mono echo
   // line that used to sit under the branch input restating its own value.
@@ -1521,6 +1524,7 @@ export function NewWorktreeDialog({
                         projectPath={rootPath}
                         selectedIssue={selectedIssue}
                         onSelectIssue={handleIssueSelectWrapper}
+                        onPickerOpenChange={setIssuePickerOpen}
                       />
                     </FormRow>
                   )}

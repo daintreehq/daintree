@@ -17,6 +17,7 @@ interface PickerProps {
   onAttach: (issue: Issue) => void;
   onDetach: () => void;
   zIndex?: string;
+  draft?: boolean;
 }
 
 let lastPickerProps: PickerProps | null = null;
@@ -102,6 +103,7 @@ describe("IssueLinkerView host fallback", () => {
     await findByTestId("issue-picker");
 
     expect(lastPickerProps?.zIndex).toBe("nested");
+    expect(lastPickerProps?.draft).toBe(true);
     expect(lastPickerProps?.worktree.path).toBe("/proj");
     expect(lastPickerProps?.currentIssueNumber).toBeUndefined();
 
@@ -155,5 +157,23 @@ describe("IssueLinkerView host fallback", () => {
       <IssueLinkerView projectPath="/proj" selectedIssue={null} onSelectIssue={vi.fn()} />
     );
     expect(queryByRole("button", { name: /Select an issue/ })).toBeNull();
+  });
+
+  it("tells the form while its picker owns the keyboard", async () => {
+    const onPickerOpenChange = vi.fn();
+    const { getByRole } = render(
+      <IssueLinkerView
+        projectPath="/proj"
+        selectedIssue={null}
+        onSelectIssue={vi.fn()}
+        onPickerOpenChange={onPickerOpenChange}
+      />
+    );
+    fireEvent.click(getByRole("button", { name: /Select an issue/ }));
+    await flushLazy();
+    expect(onPickerOpenChange).toHaveBeenLastCalledWith(true);
+
+    act(() => lastPickerProps?.onClose());
+    expect(onPickerOpenChange).toHaveBeenLastCalledWith(false);
   });
 });

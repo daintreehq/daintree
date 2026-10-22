@@ -1,4 +1,4 @@
-import { Suspense, lazy, useRef, useState } from "react";
+import { Suspense, useRef, useState } from "react";
 import type { Issue } from "@shared/types/forge";
 import { useBuiltinView } from "@/registry/builtinRendererRegistry";
 import type { ForgeIssueSelectorProps } from "@/types/forgeSlotProps";
@@ -10,16 +10,17 @@ import { Avatar, avatarUrlAtSize } from "@/components/ui/Avatar";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { FIELD_SURFACE } from "./WorktreeFormLayout";
-
-const LazyIssuePickerDialog = lazy(() =>
-  import("../IssuePickerDialog").then((m) => ({ default: m.IssuePickerDialog }))
-);
+// Eager, not lazy: while a lazy chunk loaded there would be no dialog to take
+// Escape, and it would close the New Worktree dialog underneath instead.
+import { IssuePickerDialog } from "../IssuePickerDialog";
 
 interface IssueLinkerViewProps {
   projectPath: string;
   selectedIssue: Issue | null;
   onSelectIssue: (issue: Issue | null) => void;
   disabled?: boolean;
+  /** Reports the host picker opening and closing, so the form can stand its own shortcuts down. */
+  onPickerOpenChange?: (open: boolean) => void;
 }
 
 /**
@@ -32,6 +33,7 @@ export function IssueLinkerView({
   selectedIssue,
   onSelectIssue,
   disabled,
+  onPickerOpenChange,
 }: IssueLinkerViewProps) {
   // Resolve the issue-selector view from the issues provider's slot so any
   // registered forge provider can contribute it — the code forge's unless the
@@ -49,6 +51,7 @@ export function IssueLinkerView({
         selectedIssue={selectedIssue}
         onSelectIssue={onSelectIssue}
         disabled={disabled}
+        onPickerOpenChange={onPickerOpenChange}
       />
     );
   }
@@ -76,8 +79,13 @@ function HostIssueSelector({
   selectedIssue,
   onSelectIssue,
   disabled,
+  onPickerOpenChange,
 }: IssueLinkerViewProps) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpenState] = useState(false);
+  const setOpen = (next: boolean) => {
+    setOpenState(next);
+    onPickerOpenChange?.(next);
+  };
   // Stays mounted after the first open so the dialog can play its exit.
   const [pickerMounted, setPickerMounted] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -150,21 +158,20 @@ function HostIssueSelector({
         )}
       </div>
       {pickerMounted && (
-        <Suspense fallback={null}>
-          <LazyIssuePickerDialog
-            isOpen={open}
-            onClose={() => setOpen(false)}
-            zIndex="nested"
-            worktree={{
-              path: projectPath,
-              issueProviderId: selectedIssue?.providerId,
-              issueKey: selectedIssue?.key,
-            }}
-            currentIssueNumber={selectedIssue?.number}
-            onAttach={onSelectIssue}
-            onDetach={() => onSelectIssue(null)}
-          />
-        </Suspense>
+        <IssuePickerDialog
+          isOpen={open}
+          onClose={() => setOpen(false)}
+          zIndex="nested"
+          draft
+          worktree={{
+            path: projectPath,
+            issueProviderId: selectedIssue?.providerId,
+            issueKey: selectedIssue?.key,
+          }}
+          currentIssueNumber={selectedIssue?.number}
+          onAttach={onSelectIssue}
+          onDetach={() => onSelectIssue(null)}
+        />
       )}
     </>
   );

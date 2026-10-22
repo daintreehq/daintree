@@ -1,6 +1,11 @@
 import type { ForgeUser, Issue, NormalizedIssueState } from "../../../../shared/types/forge.js";
 
-/** The issue fields every query in this plugin selects. */
+/**
+ * The issue fields every query in this plugin selects. Nested connections are
+ * bounded explicitly: Linear prices an unbounded one at its default page size
+ * of 50, which multiplied by a full issue page would exceed the per-query
+ * complexity limit.
+ */
 export const ISSUE_FIELDS = `
   id
   identifier
@@ -16,7 +21,7 @@ export const ISSUE_FIELDS = `
   state { name type }
   assignee { id name displayName avatarUrl }
   creator { id name displayName avatarUrl }
-  labels { nodes { name color } }
+  labels(first: 20) { nodes { name color } }
 `;
 
 export interface LinearUserNode {

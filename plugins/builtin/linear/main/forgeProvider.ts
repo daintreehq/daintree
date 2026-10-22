@@ -31,8 +31,11 @@ import {
 
 export const LINEAR_HOST = "linear.app";
 const DEFAULT_PAGE_SIZE = 50;
-/** Linear caps `first` at 250. */
-const MAX_PAGE_SIZE = 250;
+/**
+ * Linear accepts `first` up to 250, but a full issue page of that size runs into
+ * its per-query complexity limit, so listing pages stop well short of it.
+ */
+const MAX_PAGE_SIZE = 100;
 
 /** Linear team keys: letters and digits, starting with a letter. */
 const TEAM_KEY_PATTERN = /^[A-Za-z][A-Za-z0-9_]{0,15}$/;
@@ -61,22 +64,48 @@ async function getViewer(): Promise<Viewer> {
   const version = getTokenVersion();
   if (cachedViewer && cachedViewer.version === version) return cachedViewer.viewer;
   const data = await linearGraphQL<{ viewer: Viewer }>(
-    `query { viewer { id name displayName avatarUrl organization { urlKey } } }`
+    `query { viewer { id name displayName avatarUrl organization { urlKey } } }`,
+    {},
+    pinnedToken()
   );
   if (getTokenVersion() === version) cachedViewer = { version, viewer: data.viewer };
   return data.viewer;
 }
 
+/**
+ * The key a multi-request operation started under, so a key swapped mid-way
+ * can't have the operation's later requests answered for a different account.
+ */
+function pinnedToken(): { token?: string } {
+  const token = getToken();
+  return token ? { token } : {};
+}
+
 /** Counting pages through every open issue's id; past this many, the count reads as unknown. */
 const COUNT_PAGE_SIZE = 250;
 const COUNT_PAGE_LIMIT = 8;
-const STATS_CACHE_TTL_MS = 60_000;
+/**
+ * The host polls stats every 30s while visible, and a count can cost several
+ * requests against a per-user quota shared with everything else the key does,
+ * so a count is reused for a few minutes unless the host asks for a fresh one.
+ */
+const STATS_CACHE_TTL_MS = 5 * 60_000;
 
 const statsCache = new Map<string, { version: number; at: number; issueCount: number | null }>();
+/** Team key → team, per key version: every issue call resolves the project's team first. */
+const teamCache = new Map<string, { id: string; key: string }>();
+/**
+ * Who an issue was assigned to before "Assign to me" replaced them, by issue
+ * id. Linear issues take one assignee, so the Undo has to put that person back
+ * rather than leave the issue unassigned.
+ */
+const previousAssignees = new Map<string, string | null>();
 
 export function clearLinearCaches(): void {
   cachedViewer = null;
   statsCache.clear();
+  teamCache.clear();
+  previousAssignees.clear();
 }
 
 /** Normalize a stored team key, or `null` when it can't be one. */
@@ -108,8 +137,10 @@ function issueFilter(repo: RepoRef, opts: ListOptions): Record<string, unknown> 
   const search = opts.search?.trim();
   if (search) {
     const asNumber = /^#?(\d+)$/.exec(search);
-    const asKey = /^[A-Za-z][A-Za-z0-9_]*-(\d+)$/.exec(search);
-    const number = asNumber?.[1] ?? asKey?.[1];
+    // A full key only means a number in this team: `DES-42` is not `ENG-42`.
+    const asKey = /^([A-Za-z][A-Za-z0-9_]*)-(\d+)$/.exec(search);
+    const number =
+      asNumber?.[1] ?? (asKey?.[1].toUpperCase() === teamKeyOf(repo) ? asKey[2] : undefined);
     filter.or = [
       { title: { containsIgnoreCase: search } },
       ...(number ? [{ number: { eq: Number(number) } }] : []),
@@ -127,8 +158,8 @@ async function findIssue(filter: Record<string, unknown>): Promise<Issue | null>
   return node ? mapIssue(node) : null;
 }
 
-/** The issue's UUID, which every Linear mutation takes. */
-async function requireIssueId(repo: RepoRef, number: number): Promise<string> {
+/** The issue a mutation targets, with the UUID every Linear mutation takes. */
+async function requireIssue(repo: RepoRef, number: number): Promise<Issue & { id: string }> {
   const issue = await findIssue({
     team: { key: { eq: teamKeyOf(repo) } },
     number: { eq: number },
@@ -136,7 +167,11 @@ async function requireIssueId(repo: RepoRef, number: number): Promise<string> {
   if (!issue?.id) {
     throw new Error(`Linear issue ${teamKeyOf(repo)}-${number} wasn't found`);
   }
-  return issue.id;
+  return issue as Issue & { id: string };
+}
+
+function assigneeIdOf(issue: Issue): string | null {
+  return (issue.assignees[0]?.rawData as { id?: string } | undefined)?.id ?? null;
 }
 
 async function setAssignee(id: string, assigneeId: string | null): Promise<ForgeUser[]> {
@@ -192,6 +227,7 @@ async function validateWithToken(token?: string): Promise<AuthValidation> {
  */
 async function countOpenIssues(repo: RepoRef): Promise<number | null> {
   const filter = issueFilter(repo, { state: "open" });
+  const auth = pinnedToken();
   let count = 0;
   let after: string | null = null;
   for (let page = 0; page < COUNT_PAGE_LIMIT; page++) {
@@ -207,7 +243,8 @@ async function countOpenIssues(repo: RepoRef): Promise<number | null> {
           pageInfo { hasNextPage endCursor }
         }
       }`,
-      { filter, first: COUNT_PAGE_SIZE, after }
+      { filter, first: COUNT_PAGE_SIZE, after },
+      auth
     );
     count += data.issues.nodes.length;
     if (!data.issues.pageInfo.hasNextPage) return count;
@@ -290,16 +327,23 @@ export const linearForgeProvider: ForgeIssueProviderImpl = {
   async resolveIssueRepo(projectPath: string): Promise<RepoRef | null> {
     const teamKey = normalizeTeamKey(await teamKeyReader?.(projectPath));
     if (!teamKey) return null;
+    const version = getTokenVersion();
     const viewer = await getViewer();
-    const data = await linearGraphQL<{ teams: { nodes: Array<{ id: string; key: string }> } }>(
-      `query ($key: String!) { teams(filter: { key: { eq: $key } }, first: 1) { nodes { id key } } }`,
-      { key: teamKey }
-    );
-    const team = data.teams.nodes[0];
+    const cacheKey = `${version}\u0000${teamKey}`;
+    let team = teamCache.get(cacheKey);
     if (!team) {
-      throw new Error(
-        `Linear has no team with the key ${teamKey} in this workspace. Check the team key in Project settings.`
+      const data = await linearGraphQL<{ teams: { nodes: Array<{ id: string; key: string }> } }>(
+        `query ($key: String!) { teams(filter: { key: { eq: $key } }, first: 1) { nodes { id key } } }`,
+        { key: teamKey },
+        pinnedToken()
       );
+      team = data.teams.nodes[0];
+      if (!team) {
+        throw new Error(
+          `Linear has no team with the key ${teamKey} in this workspace. Check the team key in Project settings.`
+        );
+      }
+      if (getTokenVersion() === version) teamCache.set(cacheKey, team);
     }
     const rawData: ResolvedRepoData = { teamId: team.id };
     return { host: LINEAR_HOST, owner: viewer.organization.urlKey, repo: team.key, rawData };
@@ -363,25 +407,28 @@ export const linearForgeProvider: ForgeIssueProviderImpl = {
 
   async assignIssue(repo: RepoRef, issueNumber: number, username: string): Promise<ForgeUser[]> {
     const viewer = await requireViewerFor(username);
-    return setAssignee(await requireIssueId(repo, issueNumber), viewer.id);
+    const issue = await requireIssue(repo, issueNumber);
+    const before = assigneeIdOf(issue);
+    if (before === viewer.id) return issue.assignees;
+    const assignees = await setAssignee(issue.id, viewer.id);
+    previousAssignees.set(issue.id, before);
+    return assignees;
   },
 
   async unassignIssue(repo: RepoRef, issueNumber: number, username: string): Promise<ForgeUser[]> {
     const viewer = await requireViewerFor(username);
-    const current = await findIssue({
-      team: { key: { eq: teamKeyOf(repo) } },
-      number: { eq: issueNumber },
-    });
-    if (!current?.id) {
-      throw new Error(`Linear issue ${teamKeyOf(repo)}-${issueNumber} wasn't found`);
-    }
+    const current = await requireIssue(repo, issueNumber);
     // Only take the issue off the viewer: if someone else picked it up since,
     // the Undo has nothing of ours to undo.
-    const assignee = current.assignees[0];
-    if (!assignee || (assignee.rawData as { id?: string }).id !== viewer.id) {
+    if (assigneeIdOf(current) !== viewer.id) {
+      previousAssignees.delete(current.id);
       return current.assignees;
     }
-    return setAssignee(current.id, null);
+    // Hand it back to whoever "Assign to me" took it from.
+    const previous = previousAssignees.get(current.id) ?? null;
+    const assignees = await setAssignee(current.id, previous);
+    previousAssignees.delete(current.id);
+    return assignees;
   },
 
   createIssue: () => notSupported("Creating issues"),
