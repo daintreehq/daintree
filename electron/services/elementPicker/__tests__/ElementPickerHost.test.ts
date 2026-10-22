@@ -699,7 +699,7 @@ describe("ElementPickerHost project context", () => {
     return [{ id: "sveltekit", detects, load: async () => ({ describe }) }];
   }
 
-  it("answers a selection while a project adapter hangs, and settles the hang at its deadline", async () => {
+  it("answers a selection while a project adapter hangs", async () => {
     fs.writeFileSync(path.join(root, "app", "package.json"), kitManifest);
     let entered!: () => void;
     const adapterRunning = new Promise<void>((resolve) => (entered = resolve));
@@ -708,7 +708,8 @@ describe("ElementPickerHost project context", () => {
         entered();
         return new Promise<never>(() => {});
       }),
-      projectContextDeadlineMs: 1_000,
+      // Far off: nothing but the workspace closing ends this context request.
+      projectContextDeadlineMs: 60_000,
     });
     const id = await workspace(host);
     let contextSettled = false;
@@ -724,7 +725,8 @@ describe("ElementPickerHost project context", () => {
 
     expect(results(response)[0]).toMatchObject({ state: "verified", candidateId: "c-1" });
     expect(contextSettled).toBe(false);
-    await expect(context).resolves.toEqual({ status: "unavailable", reason: "budget-exhausted" });
+    host.releaseWorkspace(id);
+    await expect(context).resolves.toEqual({ status: "unavailable", reason: "cancelled" });
   });
 
   it("reads context without starting the resolver process, and a resolve never consults it", async () => {

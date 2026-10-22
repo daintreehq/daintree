@@ -162,7 +162,10 @@ describe("ProjectContextService", () => {
   });
 
   it("is cancelled by its caller and by its workspace closing", async () => {
-    const hanging = service(registration(() => never()));
+    const hanging = service(
+      registration(() => never()),
+      60_000
+    );
     const caller = new AbortController();
     const byCaller = hanging.describe(workspaceAt(), "http://localhost/", caller.signal);
     const workspace = workspaceAt();
@@ -179,11 +182,13 @@ describe("ProjectContextService", () => {
     let entered!: (signal: AbortSignal) => void;
     const entry = new Promise<AbortSignal>((resolve) => (entered = resolve));
     const caller = new AbortController();
+    // A deadline far off, so only the caller's abort can end this request.
     const pending = service(
       registration(async (request) => {
         entered(request.signal);
         return never();
-      })
+      }),
+      60_000
     ).describe(workspaceAt(), "http://localhost/", caller.signal);
 
     const signal = await entry;
@@ -195,32 +200,46 @@ describe("ProjectContextService", () => {
   });
 
   it("frees a hung adapter's slot at the deadline, so hangs cannot wedge later requests", async () => {
+    const deadlineMs = 1_000;
     let entered = 0;
-    const hangs = service(
-      registration(async ({ pathname }) => {
-        if (pathname !== "/hang") return CONTEXT;
-        entered += 1;
-        return never();
-      }),
-      1_000
-    );
-    const hung = Array.from({ length: PROJECT_CONTEXT_ADMISSION.concurrent }, () =>
-      hangs.describe(workspaceAt(), "http://localhost/hang")
-    );
-    // Every slot is held by an adapter that will never answer.
-    await vi.waitFor(() => expect(entered).toBe(PROJECT_CONTEXT_ADMISSION.concurrent));
+    let allEntered!: () => void;
+    const slotsHeld = new Promise<void>((resolve) => (allEntered = resolve));
+    // Only the deadline's timer is faked: the manifest reads are real I/O and
+    // must finish on their own before the deadline is moved.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const hangs = service(
+        registration(async ({ pathname }) => {
+          if (pathname !== "/hang") return CONTEXT;
+          if (++entered === PROJECT_CONTEXT_ADMISSION.concurrent) allEntered();
+          return never();
+        }),
+        deadlineMs
+      );
+      const hung = Array.from({ length: PROJECT_CONTEXT_ADMISSION.concurrent }, () =>
+        hangs.describe(workspaceAt(), "http://localhost/hang")
+      );
+      // Every slot is held by an adapter that will never answer.
+      await slotsHeld;
+      vi.advanceTimersByTime(deadlineMs);
 
-    await expect(Promise.all(hung)).resolves.toEqual(
-      hung.map(() => ({ status: "unavailable", reason: "budget-exhausted" }))
-    );
-    await expect(hangs.describe(workspaceAt(), "http://localhost/")).resolves.toEqual({
-      status: "described",
-      context: CONTEXT,
-    });
+      await expect(Promise.all(hung)).resolves.toEqual(
+        hung.map(() => ({ status: "unavailable", reason: "budget-exhausted" }))
+      );
+      await expect(hangs.describe(workspaceAt(), "http://localhost/")).resolves.toEqual({
+        status: "described",
+        context: CONTEXT,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("refuses rather than queueing past its limit", async () => {
-    const busy = service(registration(() => never()));
+    const busy = service(
+      registration(() => never()),
+      60_000
+    );
     const caller = new AbortController();
     const held = Array.from(
       { length: PROJECT_CONTEXT_ADMISSION.concurrent + PROJECT_CONTEXT_ADMISSION.queued },
