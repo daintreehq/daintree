@@ -10,6 +10,7 @@ import {
   type ResolveResponse,
 } from "../../../shared/elementPicker/resolver.js";
 import type { UnavailableReason } from "../../../shared/elementPicker/resolution.js";
+import type { ProjectContextOutcome } from "../../../shared/elementPicker/projectContext.js";
 import { logError, logInfo, logWarn } from "../../utils/logger.js";
 import { minimalSpawnEnv } from "../../utils/minimalSpawnEnv.js";
 import { watchShared } from "../FileObservationService.js";
@@ -20,6 +21,8 @@ import { ElementPickerHostError, type ElementPickerHostErrorCode } from "./error
 import { HostOutboundSchema, type HostInbound } from "./hostProtocol.js";
 import { unavailableResponse } from "./outcomes.js";
 import { isStrictlyInside } from "./containment.js";
+import type { ProjectContextService } from "./projectAdapters/projectContext.js";
+import type { ProjectAdapterRegistration } from "./projectAdapters/types.js";
 import {
   JobSourceAccess,
   readSourceRevision,
@@ -84,6 +87,9 @@ export interface ElementPickerHostOptions {
   startTimeoutMs?: number;
   cancelGraceMs?: number;
   disposeKillMs?: number;
+  /** The project adapters context is read with; the core catalog when omitted. */
+  projectAdapters?: readonly ProjectAdapterRegistration[];
+  projectContextDeadlineMs?: number;
 }
 
 export interface RegisterWorkspaceOptions {
@@ -197,6 +203,9 @@ export class ElementPickerHost {
   private readonly startTimeoutMs: number;
   private readonly cancelGraceMs: number;
   private readonly disposeKillMs: number;
+  private readonly projectAdapters: readonly ProjectAdapterRegistration[] | undefined;
+  private readonly projectContextDeadlineMs: number | undefined;
+  private projectContext: Promise<ProjectContextService> | null = null;
   private current: Generation | null = null;
   private generations = 0;
   private nextJobId = 1;
@@ -212,6 +221,8 @@ export class ElementPickerHost {
     this.startTimeoutMs = options.startTimeoutMs ?? HOST_START_TIMEOUT_MS;
     this.cancelGraceMs = options.cancelGraceMs ?? HOST_CANCEL_GRACE_MS;
     this.disposeKillMs = options.disposeKillMs ?? HOST_DISPOSE_KILL_MS;
+    this.projectAdapters = options.projectAdapters;
+    this.projectContextDeadlineMs = options.projectContextDeadlineMs;
   }
 
   /** Whether a host process is running or starting. Registering a workspace never starts one. */
@@ -322,6 +333,45 @@ export class ElementPickerHost {
       // However it settled, nothing main is still doing for this job is wanted.
       controller.abort();
     }
+  }
+
+  /**
+   * What the app's project layout says about the page at `url`: the route
+   * files that render it and the toolchain installed. Context beside a
+   * selection, never on its path: `resolve()` neither waits for it nor depends
+   * on it, and it never starts the resolver process. It settles within its own
+   * deadline and never rejects, `unavailable` being the worst it can say.
+   */
+  async describeProject(
+    workspaceId: string,
+    url: string,
+    options: { signal?: AbortSignal } = {}
+  ): Promise<ProjectContextOutcome> {
+    if (this.disposed) return { status: "unavailable", reason: "cancelled" };
+    const workspace = this.workspaces.get(workspaceId);
+    if (!workspace) return { status: "unavailable", reason: "unknown-workspace" };
+    let service: ProjectContextService;
+    try {
+      service = await this.loadProjectContext();
+    } catch (error) {
+      logWarn(`${P} Project context failed to load`, { error: String(error) });
+      return { status: "unavailable", reason: "failed" };
+    }
+    return service.describe(workspace, url, options.signal);
+  }
+
+  /** Loaded on the first request for context, so a picker that never asks for it pays nothing. */
+  private loadProjectContext(): Promise<ProjectContextService> {
+    this.projectContext ??= import("./projectAdapters/projectContext.js").then(
+      ({ ProjectContextService: Service }) =>
+        new Service({ adapters: this.projectAdapters, deadlineMs: this.projectContextDeadlineMs }),
+      (error: unknown) => {
+        // Not cached: a failed load must not disable project context for the session.
+        this.projectContext = null;
+        throw error;
+      }
+    );
+    return this.projectContext;
   }
 
   /**

@@ -1,12 +1,12 @@
 /**
- * The filesystem surface the project model is allowed to assume.
+ * The filesystem surface a project adapter is allowed to assume.
  *
- * Deliberately narrower than `node:fs`: the plugin's main side hands this
- * straight through from `host.fs` (`PluginFsApi`), whose reads are capability-
- * gated and realpath-contained to the declared scopes. Structurally
+ * Deliberately narrower than `node:fs`, so adapter code never holds file
+ * authority of its own: the picker host hands it a reader contained to the
+ * workspace (`reader.ts`), the legacy plugin hands over `host.fs`
+ * (`PluginFsApi`), and a test hands over a fixture tree. Structurally
  * `PluginFsApi` satisfies it — its richer `PluginFsDirEntry` / `PluginFsStat`
- * and its optional options argument are assignable to these — so no adapter is
- * needed at the call site, and a test can hand over a fixture tree instead.
+ * and its optional options argument are assignable to these.
  *
  * Note what is *not* here: `mkdir`, `rename`, `rm`. Detection reads. It never
  * repairs a project, and the host API would not let it.

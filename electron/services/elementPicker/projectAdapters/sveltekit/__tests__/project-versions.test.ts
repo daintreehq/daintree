@@ -1,21 +1,23 @@
 import { describe, expect, it } from "vitest";
 import { join } from "node:path";
-import { SUPPORTED_BASELINE } from "../model.js";
+import {
+  SUPPORTED_BASELINE,
+  majorVersion,
+  untestedVersionNotes,
+} from "../../../../../../shared/elementPicker/sveltekit/versionNotes.js";
 import {
   assessSupport,
   detectInstallStyle,
-  majorVersion,
   readInstalledVersionReport,
   readInstalledVersions,
-  untestedVersionNotes,
-} from "../project/versions.js";
-import { declaredDependencies } from "../project/discovery.js";
-import { readJsonFile } from "../project/fs.js";
+} from "../versions.js";
+import { declaredDependencies } from "../discovery.js";
+import { readJsonFile } from "../../fs.js";
 import {
   createFixtureReader,
   createMemoryReader,
   fixtureWorktree,
-} from "../project/__testing__/fixtureReader.js";
+} from "../__testing__/fixtureReader.js";
 
 const reader = createFixtureReader();
 

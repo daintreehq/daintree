@@ -14,20 +14,32 @@ export const MAX_CONCURRENT_RESOLVES = 4;
  */
 export const MAX_QUEUED_RESOLVES = 32;
 
-/** Bounds how many resolves run at once; a waiter whose signal aborts leaves the queue. */
+export interface AdmissionLimits {
+  concurrent: number;
+  queued: number;
+}
+
+/** Bounds how much work runs at once; a waiter whose signal aborts leaves the queue. */
 export class AdmissionGate {
   private running = 0;
   private readonly waiting: Array<{ resolve: () => void; reject: (reason: unknown) => void }> = [];
 
+  constructor(
+    private readonly limits: AdmissionLimits = {
+      concurrent: MAX_CONCURRENT_RESOLVES,
+      queued: MAX_QUEUED_RESOLVES,
+    }
+  ) {}
+
   /** Resolves with the release for the slot it took. */
   async acquire(signal: AbortSignal): Promise<() => void> {
     signal.throwIfAborted();
-    if (this.running < MAX_CONCURRENT_RESOLVES) {
+    if (this.running < this.limits.concurrent) {
       this.running += 1;
       return this.releaser();
     }
-    if (this.waiting.length >= MAX_QUEUED_RESOLVES) {
-      throw new ElementPickerHostError("HOST_BUSY", "too many resolves are already queued");
+    if (this.waiting.length >= this.limits.queued) {
+      throw new ElementPickerHostError("HOST_BUSY", "too many requests are already queued");
     }
     // The waiter inherits the slot the releasing resolve held, so `running`
     // never dips between the two and a fresh caller cannot slip in past the cap.

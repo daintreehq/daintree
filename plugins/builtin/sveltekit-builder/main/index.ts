@@ -27,7 +27,10 @@ import {
   BUILDER_TOOL_ID,
   TOGGLE_BUILDER_ACTION_ID,
 } from "../shared/protocol.js";
-import type { ProjectFileReader, ProjectReadOptions } from "../shared/project/fs.js";
+import type {
+  ProjectFileReader,
+  ProjectReadOptions,
+} from "../../../../electron/services/elementPicker/projectAdapters/fs.js";
 import { loadParse, loadSourceModel } from "./engine.js";
 import { resolveSelection } from "./selection.js";
 import {
@@ -190,7 +193,8 @@ export async function activate(host: BuiltinPluginHostApi): Promise<() => void> 
     },
     async (ctx, args) => {
       if (args.projectId !== ctx.projectId) throw workspaceForbidden();
-      const { inspectWorktree } = await import("../shared/project/index.js");
+      const { inspectWorktree } =
+        await import("../../../../electron/services/elementPicker/projectAdapters/sveltekit/index.js");
       const worktreePath = path.resolve(args.worktreePath);
       const requested = args.appRoot === undefined ? undefined : path.resolve(args.appRoot);
 
@@ -306,7 +310,8 @@ export async function activate(host: BuiltinPluginHostApi): Promise<() => void> 
     { args: DetectAppsArgsSchema, result: DetectAppsResultSchema, requires: ["fs:project-read"] },
     async (ctx, args) => {
       if (args.projectId !== ctx.projectId) throw workspaceForbidden();
-      const { discoverSvelteKitApps } = await import("../shared/project/index.js");
+      const { discoverSvelteKitApps } =
+        await import("../../../../electron/services/elementPicker/projectAdapters/sveltekit/index.js");
       // Scoped like a workspace even though discovery opens none: the answer
       // decides whether the button appears, and the ambient handle would deny
       // the read — reporting "no app" — for any worktree outside the focused
@@ -426,7 +431,8 @@ export async function activate(host: BuiltinPluginHostApi): Promise<() => void> 
     async (ctx, { workspaceSessionId }) => {
       const workspace = ownedWorkspace(registry, ctx, workspaceSessionId);
       if (!workspace) throw workspaceClosed();
-      const { inspectProject } = await import("../shared/project/index.js");
+      const { inspectProject } =
+        await import("../../../../electron/services/elementPicker/projectAdapters/sveltekit/index.js");
       // Read fresh: routes are exactly what an agent adds while the panel is open.
       const { model } = await scans.run(
         null,

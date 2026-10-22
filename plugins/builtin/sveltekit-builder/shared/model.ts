@@ -220,10 +220,3 @@ export const SiteSelectionSchema = z
   })
   .strict();
 export type SiteSelection = z.infer<typeof SiteSelectionSchema>;
-
-/** Supported-baseline floors. Read from installed packages, never from semver ranges. */
-export const SUPPORTED_BASELINE = {
-  svelteMajor: 5,
-  kitMajor: 2,
-  tailwindMajor: 4,
-} as const;

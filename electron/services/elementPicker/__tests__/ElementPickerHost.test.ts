@@ -17,6 +17,7 @@ import type {
   ResolveResponse,
 } from "../../../../shared/elementPicker/resolver.js";
 import type { ResolverLoaders } from "../worker/runtime.js";
+import type { ProjectAdapter, ProjectAdapterRegistration } from "../projectAdapters/types.js";
 import type { SourceChange } from "../sourceTracker.js";
 import { revisionOf, type SourceMapProvider } from "../sourceAccess.js";
 import { createSourceMapSymbolicator, symbolicatedResult } from "../worker/symbolication.js";
@@ -685,5 +686,123 @@ describe("ElementPickerHost", () => {
         onSourceChanged: () => {},
       })
     ).rejects.toMatchObject({ code: "INVALID_REQUEST" });
+  });
+});
+
+describe("ElementPickerHost project context", () => {
+  const kitManifest = JSON.stringify({ devDependencies: { "@sveltejs/kit": "^2.0.0" } });
+
+  function adapters(
+    describe: ProjectAdapter["describe"],
+    detects: ProjectAdapterRegistration["detects"] = () => true
+  ): ProjectAdapterRegistration[] {
+    return [{ id: "sveltekit", detects, load: async () => ({ describe }) }];
+  }
+
+  it("answers a selection while a project adapter hangs, and settles the hang at its deadline", async () => {
+    fs.writeFileSync(path.join(root, "app", "package.json"), kitManifest);
+    const { host } = harness(undefined, {
+      projectAdapters: adapters(() => new Promise<never>(() => {})),
+      projectContextDeadlineMs: 300,
+    });
+    const id = await workspace(host);
+    const settled: string[] = [];
+
+    const context = host
+      .describeProject(id, "http://localhost:5173/blog")
+      .then((outcome) => (settled.push("context"), outcome));
+    const response = await host.resolve(
+      request(id, [observation("el-1", [candidate("c-1", "app/src/App.svelte")])])
+    );
+    settled.push("resolve");
+
+    expect(results(response)[0]).toMatchObject({ state: "verified", candidateId: "c-1" });
+    await expect(context).resolves.toEqual({ status: "unavailable", reason: "budget-exhausted" });
+    expect(settled).toEqual(["resolve", "context"]);
+  });
+
+  it("reads context without starting the resolver process, and a resolve never consults it", async () => {
+    fs.writeFileSync(path.join(root, "app", "package.json"), kitManifest);
+    const detects = vi.fn(() => true);
+    const { host, children } = harness(undefined, {
+      projectAdapters: adapters(async () => {
+        throw new Error("route parser exploded");
+      }, detects),
+    });
+    const id = await workspace(host);
+
+    await expect(host.describeProject(id, "http://localhost/")).resolves.toEqual({
+      status: "unavailable",
+      reason: "failed",
+    });
+    expect(host.running).toBe(false);
+    expect(children).toHaveLength(0);
+
+    const response = await host.resolve(
+      request(id, [observation("el-1", [candidate("c-1", "app/src/App.svelte")])])
+    );
+    expect(results(response)[0]).toMatchObject({ state: "verified" });
+    expect(detects).toHaveBeenCalledTimes(1);
+  });
+
+  it("reads each workspace's own app, so one app's failure leaves another's context alone", async () => {
+    fs.writeFileSync(path.join(root, "app", "package.json"), kitManifest);
+    fs.writeFileSync(path.join(root, "other", "package.json"), kitManifest);
+    const seen: string[] = [];
+    const { host } = harness(undefined, {
+      projectAdapters: adapters(async ({ roots }) => {
+        seen.push(path.relative(root, roots.appRoot));
+        if (roots.appRoot.endsWith("other")) throw new Error("unreadable tree");
+        return {
+          adapter: "sveltekit",
+          appPath: "app",
+          route: null,
+          routes: { directory: "app/src/routes", source: "default", basePath: "", complete: true },
+          toolchain: {
+            versions: { svelte: "5.0.0", kit: "2.0.0", tailwind: null, vite: null },
+            verdict: "tested",
+            reasons: [],
+            missingInstall: [],
+          },
+          diagnostics: [],
+        };
+      }),
+    });
+    const app = await workspace(host);
+    const other = await host.registerWorkspace({
+      worktreePath: root,
+      appRoot: path.join(root, "other"),
+      onSourceChanged: () => {},
+    });
+
+    const [otherOutcome, appOutcome] = await Promise.all([
+      host.describeProject(other, "http://localhost/"),
+      host.describeProject(app, "http://localhost/"),
+    ]);
+
+    expect(otherOutcome).toEqual({ status: "unavailable", reason: "failed" });
+    expect(appOutcome).toMatchObject({ status: "described", context: { appPath: "app" } });
+    expect(seen.sort()).toEqual(["app", "other"]);
+  });
+
+  it("answers an unknown or released workspace, and a disposed host, without rejecting", async () => {
+    fs.writeFileSync(path.join(root, "app", "package.json"), kitManifest);
+    const { host } = harness(undefined, {
+      projectAdapters: adapters(() => new Promise<never>(() => {})),
+    });
+    const id = await workspace(host);
+
+    await expect(host.describeProject("nope", "http://localhost/")).resolves.toEqual({
+      status: "unavailable",
+      reason: "unknown-workspace",
+    });
+    const pending = host.describeProject(id, "http://localhost/");
+    expect(host.releaseWorkspace(id)).toBe(true);
+    await expect(pending).resolves.toEqual({ status: "unavailable", reason: "cancelled" });
+    await host.dispose();
+    await expect(host.describeProject(id, "http://localhost/")).resolves.toEqual({
+      status: "unavailable",
+      reason: "cancelled",
+    });
   });
 });

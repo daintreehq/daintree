@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { matchRoute } from "../project/routeMatch.js";
-import type { RouteNode } from "../protocol.js";
+import { matchRoute, type MatchableRoute } from "../sveltekit/routeMatch.js";
+
+interface RouteNode extends MatchableRoute {
+  pageFile: string | null;
+  layoutFiles: string[];
+  dynamic: boolean;
+}
 
 function route(routeId: string, extra: Partial<RouteNode> = {}): RouteNode {
   return {

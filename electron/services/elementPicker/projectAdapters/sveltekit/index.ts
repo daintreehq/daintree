@@ -1,11 +1,11 @@
-import type { ProjectModel } from "../protocol.js";
+import type { ProjectModel, RouteDiagnostic } from "./model.js";
 import {
   type ProjectFileReader,
   type ProjectReadOptions,
   joinPath,
   readJsonFile,
   toWorktreeRelative,
-} from "./fs.js";
+} from "../fs.js";
 import {
   declaredDependencies,
   discoverSvelteKitApps,
@@ -17,7 +17,6 @@ import {
   analyzeRoutes,
   resolveBasePath,
   resolveRoutesDirectory,
-  type RouteDiagnostic,
   type RoutesDirectory,
 } from "./routes.js";
 import {
@@ -27,8 +26,9 @@ import {
   type SupportAssessment,
 } from "./versions.js";
 
-export * from "./fs.js";
+export * from "../fs.js";
 export * from "./discovery.js";
+export * from "./model.js";
 export * from "./packageManager.js";
 export * from "./routes.js";
 export * from "./versions.js";

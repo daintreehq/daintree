@@ -9,6 +9,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const HOST_DIR = "electron/services/elementPicker/";
 const WORKER_DIR = `${HOST_DIR}worker/`;
 const RESOLVERS_DIR = `${WORKER_DIR}resolvers/`;
+const ADAPTERS_DIR = `${HOST_DIR}projectAdapters/`;
 const BOOTSTRAP = `${HOST_DIR}host-bootstrap.ts`;
 const HOST_ENTRY = `${HOST_DIR}host.ts`;
 
@@ -113,6 +114,26 @@ describe("the Element Picker host boundary", () => {
     expect(authorityImports(metafile)).toContain(`${HOST_DIR}sourceAccess.ts -> node:fs/promises`);
   }, 60_000);
 
+  it("loads project context on its first request, and an adapter only for an app it detects", async () => {
+    const service = `${HOST_DIR}ElementPickerHost.ts`;
+    const hostGraph = await metafileOf(service, NATIVE_EXTERNAL);
+    expect(
+      [...walkEagerGraph(hostGraph, service)].filter((file) => file.startsWith(ADAPTERS_DIR))
+    ).toEqual([]);
+    // Not a vacuous pass: the context service is in the build, behind its import.
+    expect(Object.keys(hostGraph.inputs)).toContain(`${ADAPTERS_DIR}projectContext.ts`);
+
+    // Detection reads a manifest; the route parser and config readers wait for `load()`.
+    const registration = `${ADAPTERS_DIR}sveltekit/registration.ts`;
+    const adapterGraph = await metafileOf(registration, NATIVE_EXTERNAL);
+    expect(
+      [...walkEagerGraph(adapterGraph, registration)]
+        .filter((file) => file.startsWith(`${ADAPTERS_DIR}sveltekit/`))
+        .sort()
+    ).toEqual([`${ADAPTERS_DIR}sveltekit/discovery.ts`, registration]);
+    expect(Object.keys(adapterGraph.inputs)).toContain(`${ADAPTERS_DIR}sveltekit/routes.ts`);
+  }, 60_000);
+
   it("gives the host process no resolver eagerly and no file or network module", async () => {
     const metafile = await metafileOf(BOOTSTRAP, NATIVE_EXTERNAL);
     const reachable = Object.keys(metafile.inputs);
@@ -124,6 +145,8 @@ describe("the Element Picker host boundary", () => {
     expect(scanForbiddenModules(eager)).toEqual([]);
     // Bytes come from main; nothing the host runs can open a file or a socket itself.
     expect(authorityImports(metafile)).toEqual([]);
+    // Project adapters walk directories, which is main's authority, never the host's.
+    expect(reachable.filter((file) => file.startsWith(ADAPTERS_DIR))).toEqual([]);
     // Nor reach main-side services, which would bring their authority with them.
     expect(
       reachable.filter((file) => file.startsWith("electron/") && !file.startsWith(HOST_DIR))

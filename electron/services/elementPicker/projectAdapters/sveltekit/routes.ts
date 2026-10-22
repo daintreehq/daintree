@@ -1,4 +1,4 @@
-import type { RouteDiagnostic, RouteNode, RoutesDirectorySource } from "../protocol.js";
+import type { RouteDiagnostic, RouteNode, RoutesDirectorySource } from "./model.js";
 import {
   type ProjectFileReader,
   type ProjectReadOptions,
@@ -10,9 +10,7 @@ import {
   readJsonFile,
   rethrowIfAborted,
   toWorktreeRelative,
-} from "./fs.js";
-
-export type { RouteDiagnostic, RoutesDirectorySource };
+} from "../fs.js";
 
 /** The roles SvelteKit's `+` files play. Recognising them is what makes this a route view rather than a file tree. */
 export type RouteFileKind =

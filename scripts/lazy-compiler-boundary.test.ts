@@ -99,7 +99,10 @@ const LAZY_ONLY = [
     test: (file: string) => file.includes("ElementPickerSurfaces"),
   },
   { label: "inspectorController", test: (file: string) => file.includes("inspectorController") },
-  { label: "routeMatch", test: (file: string) => file.includes("shared/project/routeMatch") },
+  {
+    label: "routeMatch",
+    test: (file: string) => file.includes("shared/elementPicker/sveltekit/routeMatch"),
+  },
   { label: "protocol", test: (file: string) => file.endsWith(`${PLUGIN}shared/protocol.ts`) },
   { label: "zod", test: (file: string) => /(^|\/)node_modules\/zod(\/|$)/.test(file) },
 ];
@@ -185,6 +188,11 @@ describe.each(MODES)("the SvelteKit builder's eager renderer entry (%s)", (mode)
     // of this plugin, lazy or not, means a module landed on the wrong side.
     const reachable = Object.keys(metafile.inputs);
     expect(scanForbiddenModules(reachable)).toEqual([]);
+    // Nor the picker host's project adapters, which read the user's tree with
+    // main's file authority: the renderer gets the route matcher from shared/.
+    expect(reachable.filter((file) => file.startsWith("electron/services/elementPicker/"))).toEqual(
+      []
+    );
   }, 60_000);
 });
 

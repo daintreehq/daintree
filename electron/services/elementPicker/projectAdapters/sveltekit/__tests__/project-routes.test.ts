@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { RouteNode } from "../protocol.js";
+import type { RouteNode } from "../model.js";
 import {
   analyzeRoutes,
   buildRouteTree,
@@ -8,12 +8,12 @@ import {
   resolveBasePath,
   resolveRoutesDirectory,
   routeIdFromSegments,
-} from "../project/routes.js";
+} from "../routes.js";
 import {
   createFixtureReader,
   createMemoryReader,
   fixtureWorktree,
-} from "../project/__testing__/fixtureReader.js";
+} from "../__testing__/fixtureReader.js";
 
 const reader = createFixtureReader();
 
