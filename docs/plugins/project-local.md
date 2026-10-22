@@ -157,6 +157,7 @@ Scoped to the owning project, and visible only in its views:
 | `fileDecorationProviders` | Consulted only for requests from the owning project's views, and ahead of installed providers in the merge. Gone while the plugin is switched off or the folder is untrusted. See [File decorations](./contribution-points.md#file-decoration-providers--shipped) |
 | `recipes` | In the owning project's launcher, empty state and recipe manager only, pinnable like any plugin recipe, and gone while the plugin is switched off or the folder is untrusted. Unlike a file in `.daintree/recipes/`, they come and go with the plugin. A terminal may use `terminal`, `dev-preview` or a built-in agent; one naming any other agent is dropped, since `agents` is forbidden here. See [Recipes](./contribution-points.md#recipes--shipped) |
 | `promptTemplates` | In the owning project's composer command picker only, and gone while the plugin is switched off or the folder is untrusted. They fill the draft and never submit. See [Prompt templates](./contribution-points.md#prompt-templates--shipped) |
+| `worktreeSetupSteps` | Run only for worktrees created in the owning project, from the copy of the plugin in the project root, never the new worktree's branch. The user allows each step once for the project. See [Worktree setup steps](./contribution-points.md#worktree-setup-steps--shipped) |
 
 Forbidden under `scope: "project"`, each rejected at manifest validation with an error naming the real obstacle:
 

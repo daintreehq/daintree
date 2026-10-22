@@ -1101,6 +1101,45 @@ describe("createMockHost", () => {
     });
   });
 
+  describe("registerWorktreeSetupStep (#13807)", () => {
+    it("records the handler so a test can run the step as the host would", async () => {
+      const host = createMockHost();
+      const handler = vi.fn(async () => undefined);
+      await host.registerWorktreeSetupStep("provision-db", handler);
+
+      const record = host.registeredWorktreeSetupSteps[0];
+      expect(record?.stepId).toBe("provision-db");
+      const context = {
+        projectId: "p",
+        worktreeId: "/wt",
+        worktreePath: "/wt",
+        branch: null,
+        signal: new AbortController().signal,
+      };
+      await record?.handler(context);
+      expect(handler).toHaveBeenCalledWith(context);
+    });
+
+    it("replaces by id, and a stale disposer leaves the replacement bound", async () => {
+      const host = createMockHost();
+      const first = vi.fn();
+      const second = vi.fn();
+      const disposeFirst = await host.registerWorktreeSetupStep("db", first);
+      const disposeSecond = await host.registerWorktreeSetupStep("db", second);
+
+      disposeFirst();
+      expect(host.registeredWorktreeSetupSteps.map((r) => r.handler)).toEqual([second]);
+      disposeSecond();
+      expect(host.registeredWorktreeSetupSteps).toHaveLength(0);
+    });
+
+    it("rejects a missing id or a non-function handler", () => {
+      const host = createMockHost();
+      expect(() => host.registerWorktreeSetupStep("", vi.fn())).toThrow(/stepId/);
+      expect(() => host.registerWorktreeSetupStep("db", {} as never)).toThrow(/handler/);
+    });
+  });
+
   describe("registerFileDecorationProvider", () => {
     it("replaces a prior registration with the same id (replace-by-id)", async () => {
       const host = createMockHost();

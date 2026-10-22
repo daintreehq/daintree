@@ -30,6 +30,7 @@ A plugin that declares `"scope": "project"` lives in a project's own repository 
 | `fileDecorationProviders` | Available — consulted only for the owning project's views, ahead of installed providers in the merge |
 | `recipes` | Available — only in the owning project's launcher, empty state and recipe manager, and gone while the plugin is switched off or its folder is untrusted. A terminal may use `terminal`, `dev-preview`, `plugin-panel` for one of the plugin's own panels, or a built-in agent; `agents` is rejected below, so there is no plugin agent of its own to name |
 | `promptTemplates` | Available — offered only in the owning project's composer, and gone while the plugin is switched off or its folder is untrusted |
+| `worktreeSetupSteps` | Available — run only for worktrees created in the owning project |
 | `menuItems` | Rejected — the application menu is one OS-level menu shared by every window, with no per-project projection |
 | `agents` | Rejected — the agent roster is one app-wide registry mirrored into the shared pty-host, and launch identity outlives the project binding |
 | `skills` | Rejected — contributed skills land in one app-wide index behind the MCP server's `skills.search` / `skills.load`, which filter by no project |
@@ -149,7 +150,7 @@ If a manifest-declared command has no matching `src/{id}.{ext}` file and no impe
 
 **Collision rule:** a command whose resolved `{pluginId}.{id}` matches a built-in Daintree action id is rejected at load with a provenance `loadError` — the command does not register. Pick a different id.
 
-**Duplicate ids within an array** are rejected at manifest validation (`duplicate_contribution_id`). The bare `id` is the registry key for every contribution array that has one — `panels`, `toolbarButtons`, `commands`, `views`, `mcpServers`, `agentMcp`, `databases`, `skills`, `recipes`, `tours`, `forgeProviders`, `fileDecorationProviders`, `fileEditors`, `previewTools`, `guestAdapters`, `agents`, and `settings` — so two entries with the same id in the same array would silently first-win at load. The check is per-array: ids in different arrays are namespaced independently and never collide.
+**Duplicate ids within an array** are rejected at manifest validation (`duplicate_contribution_id`). The bare `id` is the registry key for every contribution array that has one — `panels`, `toolbarButtons`, `commands`, `views`, `mcpServers`, `agentMcp`, `databases`, `skills`, `recipes`, `tours`, `forgeProviders`, `fileDecorationProviders`, `fileEditors`, `previewTools`, `guestAdapters`, `agents`, `worktreeSetupSteps`, and `settings` — so two entries with the same id in the same array would silently first-win at load. The check is per-array: ids in different arrays are namespaced independently and never collide.
 
 ## Panels — _Shipped_
 
@@ -1567,6 +1568,38 @@ When more than one provider matches a scope, their decorations merge per path an
 From your `activate()` subscriptions and timers, call `host.invalidateFileDecorations(scope, paths?)` to signal that a scope's decorations changed and any renderer showing them should re-pull.
 
 On the worktree card, a decoration renders as the app's count pill in its own column at the end of the row, with the `tooltip` text added under the file path in the row's own tooltip (on hover and on keyboard focus) and read out as the row's description. Keep `badge` to two characters; a longer badge widens the column for the whole list. A decoration with a `url` is underlined, opens the link when its badge is clicked, and adds **Open in browser** to the row's context menu, which is how keyboard users reach it. If you pass a `color`, you own its contrast: a status wash under primary text (`bg-status-error/20 text-text-primary`) holds 4.5:1 across the built-in themes, while status-coloured text on its own wash does not.
+
+## Worktree setup steps — _Shipped_
+
+Work a plugin does for each worktree Daintree creates, after the project's own setup: provisioning a preview database, seeding fixtures, registering the branch with an outside service. The step is declared here and its handler bound in `activate()` with `host.registerWorktreeSetupStep` (see [Host API](./host-api.md#worktree-setup-steps)).
+
+```json
+{
+  "contributes": {
+    "worktreeSetupSteps": [{ "id": "provision-db", "label": "Provision DB", "timeoutMs": 120000 }]
+  }
+}
+```
+
+**Fields:**
+
+| Field | Required | Notes |
+| --- | --- | --- |
+| `id` | yes | Unique within the plugin. The handler registers under it; an undeclared id is rejected. |
+| `label` | yes | Up to 80 characters. Shown on the worktree card while the step runs ("Running setup: Provision DB (Acme)") and when asking the user to allow it. |
+| `timeoutMs` | no | 1 second to 30 minutes, default 5 minutes. When it passes, the handler's `signal` aborts and the step is recorded as timed out. |
+
+At most 10 steps per plugin.
+
+**When steps run.** After config copy, submodules and the project's setup script, and only when that script succeeded: a step may depend on what it installed. Steps run one at a time, ordered by plugin id and then as the manifest lists them. Each one's failure is recorded and the next still runs, so one plugin can't hold another's setup up. The worktree's setup stays `running` until every step settles, so `worktree.waitUntilReady`, a new worktree's first agent, and a recipe that starts an agent all wait for them.
+
+**What the worktree records.** Every step is recorded against the worktree with its own outcome: succeeded, failed, timed out, waiting for approval, or skipped. A step is skipped when its plugin is declared for the project but couldn't run it: it would not activate, or it never bound a handler. A skipped step is never a success. Setup is `ready` only when every step succeeded; otherwise it settles `failed` or `timed-out` with stage `plugin-steps` and an error naming the plugin and step, or `needs-approval` when a step hasn't been allowed. Retry setup from the worktree card (or `worktree.lifecycle.retrySetup`) reruns only the steps that didn't succeed, without rerunning the setup script, so a handler must tolerate running again.
+
+**Consent.** The user allows each step once per project, from the worktree card: "Acme will run "Provision DB" when worktrees are created". Until then the step doesn't run and setup waits at `needs-approval`; the setup script and other allowed steps still run. A new plugin version, label or timeout asks again. See [Trust model](./trust-model.md#worktree-setup-steps).
+
+**Where the code comes from.** The step runs from the plugin as it is loaded for the project, never from the new worktree's branch. A project plugin's step is the copy in the project root, not whatever the branch being checked out carries, and a worktree whose branch changes the plugin still gets the version that was loaded.
+
+**Not a teardown hook.** Nothing calls a plugin back when the worktree is deleted; a step still running is cancelled through its `signal`. A resource that costs money while it runs belongs in a resource environment (`resources` in `.daintree/config.json`), which pairs provision with teardown and is torn down with the worktree. Use a setup step for work that is cheap to leave behind, or that the plugin cleans up on its own schedule.
 
 ## File editors — _Shipped_
 

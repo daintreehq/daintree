@@ -1525,7 +1525,7 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     category: "worktree",
     danger: "safe",
     description:
-      "Wait for a worktree's post-create setup (config copy, submodules, setup script, provisioning) and report where it got. Setup can outlive creation, so work started earlier may see an unpopulated tree. A zero timeout reads without blocking; running out of time is not a failure.",
+      "Wait for a worktree's post-create setup (config copy, submodules, setup script, provisioning, plugin steps) and report where it got. Setup can outlive creation, so earlier work may see an unpopulated tree. A zero timeout reads without blocking; timing out is not a failure.",
     enabled: true,
     id: "worktree.waitUntilReady",
     inputSchema: {
@@ -1571,13 +1571,13 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           type: "string",
           enum: ["pending", "running", "ready", "failed", "timed-out", "needs-approval", "unknown"],
           description:
-            "pending, running (config copy, submodules, setup script or provisioning), ready, failed, timed-out, needs-approval (repo setup commands await the user's approval; you can't give it), or unknown (not created by this host, or it restarted since).",
+            "pending, running (config copy, submodules, setup script, provisioning or plugin steps), ready, failed, timed-out, needs-approval (repo setup commands or plugin steps await the user's approval; you can't give it), or unknown (not created by this host, or it restarted since).",
         },
         stage: {
           anyOf: [
             {
               type: "string",
-              enum: ["copy-config", "submodules", "setup-script"],
+              enum: ["copy-config", "submodules", "setup-script", "plugin-steps"],
             },
             {
               type: "null",

@@ -56,6 +56,7 @@ import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { recipeTerminalsStartAgent, spawnPanelsFromRecipe } from "./panelSpawning";
 import {
   notifyAgentNotStarted,
+  runAgentLayoutWhenReady,
   startFirstAgentWhenReady,
   type FirstAgentLaunch,
 } from "./worktreeAgentLaunch";
@@ -947,18 +948,7 @@ export function NewWorktreeDialog({
         let layoutAgentConflict: "recipe-has-agent" | "layout-has-agent" | null = null;
 
         if (snapRecipeId === CLONE_LAYOUT_ID && snapSourceWorktreeId) {
-          try {
-            const terminals =
-              snapCloneTerminals ??
-              useRecipeStore.getState().generateRecipeFromActiveTerminals(snapSourceWorktreeId);
-            if (recipeTerminalsStartAgent(terminals)) layoutAgentConflict = "layout-has-agent";
-            await spawnPanelsFromRecipe({
-              terminals,
-              worktreeId,
-              cwd: snapWorktreePath,
-              source: { kind: "clone-layout" },
-            });
-          } catch (cloneErr) {
+          const notifyCloneFailed = (cloneErr: unknown) => {
             const message = formatErrorMessage(cloneErr, "Couldn't clone layout");
             notify({
               type: "warning",
@@ -966,65 +956,99 @@ export function NewWorktreeDialog({
               message: `${message} — the worktree itself was created`,
               context: { worktreeId },
             });
+          };
+          try {
+            const terminals =
+              snapCloneTerminals ??
+              useRecipeStore.getState().generateRecipeFromActiveTerminals(snapSourceWorktreeId);
+            const cloneLayout = () =>
+              spawnPanelsFromRecipe({
+                terminals,
+                worktreeId,
+                cwd: snapWorktreePath,
+                source: { kind: "clone-layout" },
+              }).catch(notifyCloneFailed);
+            if (recipeTerminalsStartAgent(terminals)) {
+              layoutAgentConflict = "layout-has-agent";
+              // Its agent waits for setup, like the dialog's own would.
+              void runAgentLayoutWhenReady({ worktreeId, name: "Cloned layout", run: cloneLayout });
+            } else {
+              await cloneLayout();
+            }
+          } catch (cloneErr) {
+            notifyCloneFailed(cloneErr);
           }
         } else if (snapSelectedRecipe) {
           // Shadowing can swap in a different recipe at run time, so judge
           // the one that will actually execute.
           const executedRecipe =
             useRecipeStore.getState().getRecipeById(snapSelectedRecipe.id) ?? snapSelectedRecipe;
-          if (recipeTerminalsStartAgent(executedRecipe.terminals)) {
+          const recipeStartsAgent = recipeTerminalsStartAgent(executedRecipe.terminals);
+          if (recipeStartsAgent) {
             layoutAgentConflict = "recipe-has-agent";
           }
-          try {
-            const results = await runRecipeWithResults(
-              snapSelectedRecipe.id,
-              snapWorktreePath,
-              worktreeId,
-              {
+          const runRecipe = async () => {
+            try {
+              const results = await runRecipeWithResults(
+                snapSelectedRecipe.id,
+                snapWorktreePath,
+                worktreeId,
+                {
+                  issueNumber: snapIssue?.number,
+                  prNumber: snapInitialPR?.number,
+                  worktreePath: snapWorktreePath,
+                  branchName: fullBranchName,
+                }
+              );
+              notifyRecipeSpawnFailures(results, {
+                recipeName: snapSelectedRecipe.name,
+                projectId,
+                worktreeId,
+              });
+            } catch (recipeErr) {
+              const message = formatErrorMessage(recipeErr, "Couldn't run recipe");
+              const recipeId = snapSelectedRecipe.id;
+              const recipePath = snapWorktreePath;
+              const recipeWorktreeId = worktreeId;
+              const recipeContext = {
                 issueNumber: snapIssue?.number,
                 prNumber: snapInitialPR?.number,
-                worktreePath: snapWorktreePath,
+                worktreePath: recipePath,
                 branchName: fullBranchName,
-              }
-            );
-            notifyRecipeSpawnFailures(results, {
-              recipeName: snapSelectedRecipe.name,
-              projectId,
-              worktreeId,
-            });
-          } catch (recipeErr) {
-            const message = formatErrorMessage(recipeErr, "Couldn't run recipe");
-            const recipeId = snapSelectedRecipe.id;
-            const recipePath = snapWorktreePath;
-            const recipeWorktreeId = worktreeId;
-            const recipeContext = {
-              issueNumber: snapIssue?.number,
-              prNumber: snapInitialPR?.number,
-              worktreePath: recipePath,
-              branchName: fullBranchName,
-            };
-            notify({
-              type: "warning",
-              title: "Couldn't run recipe",
-              message: `${message} — the worktree itself was created`,
-              context: { worktreeId: recipeWorktreeId },
-              actions: [
-                {
-                  label: "Retry recipe",
-                  onClick: () => {
-                    runRecipeWithResults(recipeId, recipePath, recipeWorktreeId, recipeContext)
-                      .then((results) =>
-                        notifyRecipeSpawnFailures(results, {
-                          recipeName: snapSelectedRecipe.name,
-                          projectId,
-                          worktreeId: recipeWorktreeId,
-                        })
-                      )
-                      .catch((err) => logError("Failed to run recipe", err));
+              };
+              notify({
+                type: "warning",
+                title: "Couldn't run recipe",
+                message: `${message} — the worktree itself was created`,
+                context: { worktreeId: recipeWorktreeId },
+                actions: [
+                  {
+                    label: "Retry recipe",
+                    onClick: () => {
+                      runRecipeWithResults(recipeId, recipePath, recipeWorktreeId, recipeContext)
+                        .then((results) =>
+                          notifyRecipeSpawnFailures(results, {
+                            recipeName: snapSelectedRecipe.name,
+                            projectId,
+                            worktreeId: recipeWorktreeId,
+                          })
+                        )
+                        .catch((err) => logError("Failed to run recipe", err));
+                    },
                   },
-                },
-              ],
+                ],
+              });
+            }
+          };
+          if (recipeStartsAgent) {
+            // Its agent waits for setup, like the dialog's own would.
+            void runAgentLayoutWhenReady({
+              worktreeId,
+              name: snapSelectedRecipe.name,
+              run: runRecipe,
             });
+          } else {
+            await runRecipe();
           }
         }
 

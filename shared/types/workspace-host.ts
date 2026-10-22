@@ -753,7 +753,48 @@ export type WorkspaceHostRequest =
       forgeRequestId: string;
       ok: false;
       error: string;
+    }
+  // Answer to a `worktree-setup:list` or `worktree-setup:run` event (#13807),
+  // correlated by `setupRequestId`. A cancelled run gets none.
+  | {
+      type: "worktree-setup:result";
+      setupRequestId: string;
+      ok: true;
+      value: unknown;
+    }
+  | {
+      type: "worktree-setup:result";
+      setupRequestId: string;
+      ok: false;
+      error: string;
     };
+
+/**
+ * A plugin's worktree setup step as main declares it to the workspace host
+ * (#13807): enough to show it, ask for it to be allowed, and run it.
+ */
+export interface WorktreeSetupStepDescriptor {
+  pluginId: string;
+  pluginName: string;
+  pluginVersion: string;
+  stepId: string;
+  label: string;
+  timeoutMs: number;
+}
+
+/** The worktree a plugin setup step runs for, as the host knows it. */
+export interface WorktreeSetupStepTarget {
+  worktreeId: string;
+  worktreePath: string;
+  branch: string | null;
+}
+
+/**
+ * How a plugin setup step ended. `skipped` — the plugin was not there to run
+ * it: unloaded, hidden for the project, not activating, or with no handler.
+ */
+export type WorktreeSetupStepRunOutcome =
+  { state: "succeeded" } | { state: "failed" | "timed-out" | "skipped"; error: string };
 
 /**
  * Forge RPC methods the workspace-host can request from main. The
@@ -1202,6 +1243,19 @@ export type WorkspaceHostEvent =
       namespacedId?: string;
       args: unknown[];
     }
+  // Plugin worktree setup steps (#13807). The handlers live in main or a
+  // plugin worker, so the host asks main which steps its project declares
+  // (`list`) and to run one (`run`), each answered by `worktree-setup:result`.
+  // `cancel` aborts a run whose worktree went away. The project is the one this
+  // host serves; main reads it from its own record, never from the event.
+  | { type: "worktree-setup:list"; setupRequestId: string }
+  | {
+      type: "worktree-setup:run";
+      setupRequestId: string;
+      step: WorktreeSetupStepDescriptor;
+      target: WorktreeSetupStepTarget;
+    }
+  | { type: "worktree-setup:cancel"; setupRequestId: string }
   // WSL git opt-in entry is no longer reachable from the live worktree set
   // (#9926). Fired both on individual worktree removal (via the host's
   // `removeMonitor` chokepoint) and as a bulk self-heal pass at the end of

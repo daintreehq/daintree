@@ -1914,6 +1914,28 @@ interface PluginWorktreeReviewCheck {
      */
     command?: string;
 }
+/** What a worktree setup step handler is told about the worktree it sets up. */
+interface PluginWorktreeSetupStepContext {
+    /** The project the worktree belongs to. */
+    readonly projectId: string;
+    readonly worktreeId: string;
+    /** Absolute path of the new worktree's checkout. */
+    readonly worktreePath: string;
+    /** The checked-out branch, or `null` when HEAD is detached. */
+    readonly branch: string | null;
+    /**
+     * Aborted when the step times out or the worktree is deleted while it runs.
+     * The host stops waiting either way; a handler that ignores it keeps running
+     * unobserved.
+     */
+    readonly signal: AbortSignal;
+}
+/**
+ * Runs one worktree setup step. Resolving is success; throwing, or rejecting,
+ * is a failure the worktree card attributes to the plugin. A retry runs the
+ * step again, so it must tolerate running more than once.
+ */
+type PluginWorktreeSetupStepHandler = (context: PluginWorktreeSetupStepContext) => void | Promise<void>;
 /**
  * A short status a plugin shows on one terminal's header via
  * {@link PluginHostApi.setTerminalStatus} (#13802): the same shape as a
@@ -2764,21 +2786,25 @@ type PluginWorktreeGitOperation = "merge" | "rebase" | "cherry-pick" | "revert";
  * How far a worktree's post-create setup has got.
  *
  * - `pending`: the worktree exists and setup has not started
- * - `running`: config copy, submodule init or the setup commands are in flight
+ * - `running`: config copy, submodule init, the setup commands or a plugin
+ *   setup step are in flight
  * - `ready`: the recorded run finished without a failure, including a project
- *   with no setup commands. A retry reruns only the setup commands, so after a
- *   retry `ready` speaks for those alone
- * - `failed` / `timed-out`: a stage failed; {@link PluginWorktreeSetup.stage} says which
- * - `needs-approval`: setup or provisioning commands from the repository are
- *   waiting for the user's approval, so they were skipped. The checkout exists,
- *   but its initialization may be incomplete
+ *   with no setup commands. A retry resumes the setup commands, or the plugin
+ *   setup steps that did not succeed, so after a retry `ready` speaks for those
+ *   alone
+ * - `failed` / `timed-out`: a stage failed; {@link PluginWorktreeSetup.stage} says which.
+ *   A plugin setup step whose plugin could not run it counts as failed
+ * - `needs-approval`: setup or provisioning commands from the repository, or a
+ *   plugin setup step, are waiting for the user's approval, so they were
+ *   skipped. The checkout exists, but its initialization may be incomplete
  */
 type PluginWorktreeSetupState = "pending" | "running" | "ready" | "failed" | "timed-out" | "needs-approval";
 /**
  * The stages of worktree setup, in the order they run. `setup-script` covers
  * the project's setup commands and any resource provisioning that follows them.
+ * `plugin-steps` covers every plugin's {@link WorktreeSetupStepContribution}.
  */
-type PluginWorktreeSetupStage = "copy-config" | "submodules" | "setup-script";
+type PluginWorktreeSetupStage = "copy-config" | "submodules" | "setup-script" | "plugin-steps";
 /** The workspace host's record of a worktree's setup run, including a retry. */
 interface PluginWorktreeSetup {
     readonly state: PluginWorktreeSetupState;
@@ -4468,6 +4494,28 @@ interface PluginActivationApi {
      */
     registerFileDecorationProvider(descriptor: FileDecorationProviderDescriptor, impl: FileDecorationProviderImpl): Promise<() => void>;
     /**
+     * Bind the handler for a step declared in `contributes.worktreeSetupSteps`
+     * (#13807). The host runs it for each worktree it creates in a project this
+     * plugin is loaded for, after the project's setup script succeeded and once
+     * the user has allowed the step for that project. Steps run one at a time,
+     * ordered by plugin id and then declaration order, and one failing does not
+     * stop the next.
+     *
+     * The step runs from this plugin as loaded for the project, never from the
+     * new worktree's branch. It is not a teardown hook: resources that cost
+     * money belong in a resource environment, which has its own teardown.
+     *
+     * `stepId` must match a declared entry; an undeclared id is rejected.
+     * Returns a disposer that unbinds the handler; bindings are removed when the
+     * plugin unloads. Must be called during `activate()`. Calling it twice with
+     * the same id overwrites the prior binding, and the older disposer becomes
+     * inert.
+     *
+     * @throws {Error} If called after activation resolves or times out — the host
+     *   is revoked and registration is rejected.
+     */
+    registerWorktreeSetupStep(stepId: string, handler: PluginWorktreeSetupStepHandler): Promise<() => void>;
+    /**
      * Subscribe to active-worktree changes. The callback fires with the new
      * active snapshot (or `null` when none is active). Returns a disposer;
      * calling it more than once is a no-op. All subscriptions are automatically
@@ -5672,6 +5720,14 @@ interface RegisteredFileDecorationProviderRecord {
     impl: FileDecorationProviderImpl;
 }
 /**
+ * A handler bound through `host.registerWorktreeSetupStep`. Call `handler`
+ * with a context of your own to run the step as the host would.
+ */
+interface RegisteredWorktreeSetupStepRecord {
+    stepId: string;
+    handler: PluginWorktreeSetupStepHandler;
+}
+/**
  * A roster bound through `host.mcp.registerTools`. `tools` is the plugin's own
  * roster, `execute` functions included, so a test can call a tool directly with
  * a caller and signal of its choosing.
@@ -5789,6 +5845,8 @@ interface MockHostState {
     readonly readScreenCalls: ReadonlyArray<ReadScreenRecord>;
     readonly registeredForgeProviders: ReadonlyArray<RegisteredForgeProviderRecord>;
     readonly registeredFileDecorationProviders: ReadonlyArray<RegisteredFileDecorationProviderRecord>;
+    /** Live `host.registerWorktreeSetupStep` bindings, one per step id. */
+    readonly registeredWorktreeSetupSteps: ReadonlyArray<RegisteredWorktreeSetupStepRecord>;
     /** Live `host.mcp.registerTools` rosters, one per endpoint id. */
     readonly registeredMcpTools: ReadonlyArray<RegisteredMcpToolsRecord>;
     readonly invalidationCalls: ReadonlyArray<InvalidationRecord>;
@@ -6145,4 +6203,4 @@ interface CreateMockHostOptions {
 }
 declare function createMockHost(options?: CreateMockHostOptions): PluginHostApi & MockHostState;
 
-export { type BroadcastRecord, type CreateMockHostOptions, type DispatchedActionRecord, type InvalidationRecord, type MockHostState, type NotificationRecord, type PluginActionManifestEntry, type PluginCanDispatchResult, type ReadScreenRecord, type RegisteredActionRecord, type RegisteredFileDecorationProviderRecord, type RegisteredForgeProviderRecord, type RegisteredHandlerRecord, type RegisteredMcpToolsRecord, type RunRecipeRecord, type SentToAgentRecord, type ShowConfirmRecord, type ShowInputBoxRecord, type ShowQuickPickRecord, type ShownToastRecord, createMockHost };
+export { type BroadcastRecord, type CreateMockHostOptions, type DispatchedActionRecord, type InvalidationRecord, type MockHostState, type NotificationRecord, type PluginActionManifestEntry, type PluginCanDispatchResult, type ReadScreenRecord, type RegisteredActionRecord, type RegisteredFileDecorationProviderRecord, type RegisteredForgeProviderRecord, type RegisteredHandlerRecord, type RegisteredMcpToolsRecord, type RegisteredWorktreeSetupStepRecord, type RunRecipeRecord, type SentToAgentRecord, type ShowConfirmRecord, type ShowInputBoxRecord, type ShowQuickPickRecord, type ShownToastRecord, createMockHost };

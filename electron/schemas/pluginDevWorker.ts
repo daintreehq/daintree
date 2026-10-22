@@ -108,6 +108,8 @@ const HOST_NOTIFY_METHODS = {
   setPanelMenuItems: true,
   registerFileDecorationProvider: true,
   unregisterFileDecorationProvider: true,
+  registerWorktreeSetupStep: true,
+  unregisterWorktreeSetupStep: true,
   "mcp.registerTools": true,
   "mcp.unregisterTools": true,
   "logger.info": true,

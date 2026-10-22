@@ -94,33 +94,69 @@ export interface WorktreeSetupStatus {
    * arbitrary command output and stays where it is.
    */
   error?: string;
+  /**
+   * One record per plugin setup step this run expected, in the order they run
+   * (#13807). Absent until the `plugin-steps` stage starts, and on a project
+   * whose plugins declare none.
+   */
+  pluginSteps?: WorktreeSetupPluginStep[];
+}
+
+/**
+ * `skipped` — the step's plugin is declared for the project but could not run
+ * it: it would not activate, or never bound a handler. Never a success.
+ * `needs-approval` — the user has not allowed this step for the project.
+ */
+export type WorktreeSetupPluginStepState =
+  "pending" | "running" | "succeeded" | "failed" | "timed-out" | "skipped" | "needs-approval";
+
+/** What became of one plugin's setup step on one worktree. */
+export interface WorktreeSetupPluginStep {
+  pluginId: string;
+  /** The plugin's display name, for attribution. */
+  pluginName: string;
+  stepId: string;
+  label: string;
+  state: WorktreeSetupPluginStepState;
+  /** One line, bounded like {@link WorktreeSetupStatus.error}. */
+  error?: string;
 }
 
 /**
  * `pending` — the git worktree exists; the initialization tail has not started.
- * `running` — config copy, submodule init, or the setup script and any
- * configured resource provisioning, is in flight.
+ * `running` — config copy, submodule init, the setup script and any
+ * configured resource provisioning, or a plugin setup step, is in flight.
  * `ready` — every stage finished, including the no-setup-commands path.
- * `failed` / `timed-out` — a stage failed; `stage` says which.
- * `needs-approval` — the setup commands come from the repository and the user
- * has not approved them, so they were skipped. Only the user can approve them,
- * from the worktree card; the worktree itself is usable.
+ * `failed` / `timed-out` — a stage failed; `stage` says which. A plugin step
+ * that was skipped because its plugin could not run it counts as `failed`.
+ * `needs-approval` — the setup commands come from the repository, or a plugin
+ * setup step has not been allowed for the project, and the user has not
+ * approved them, so they were skipped. Only the user can approve them, from
+ * the worktree card; the worktree itself is usable.
  */
 export type WorktreeSetupState =
   "pending" | "running" | "ready" | "failed" | "timed-out" | "needs-approval";
 
 /**
- * The three stages of the create tail, in the order they run. `setup-script`
+ * The stages of the create tail, in the order they run. `setup-script`
  * covers the project's setup commands AND the resource provisioning that
  * optionally follows them, since a caller waiting on readiness is waiting on
- * both.
+ * both. `plugin-steps` runs only once that stage succeeded.
  */
-export type WorktreeSetupStage = "copy-config" | "submodules" | "setup-script";
+export type WorktreeSetupStage = "copy-config" | "submodules" | "setup-script" | "plugin-steps";
 
 /** One labelled run of command templates, exactly as the config file declares them. */
 export interface LifecycleCommandReviewGroup {
   label: string;
   commands: string[];
+}
+
+/** A plugin setup step waiting to be allowed: "Acme will run "Provision DB"". */
+export interface LifecycleCommandReviewPluginStep {
+  pluginId: string;
+  pluginName: string;
+  stepId: string;
+  label: string;
 }
 
 /** A repository file whose commands are waiting for approval. */
@@ -140,6 +176,8 @@ export interface LifecycleCommandReviewSource {
 export interface LifecycleCommandReview {
   fingerprint: string;
   sources: LifecycleCommandReviewSource[];
+  /** Plugin setup steps the user has not yet allowed for this project. */
+  pluginSteps?: LifecycleCommandReviewPluginStep[];
   /**
    * Approving resumes a setup this worktree skipped, and that setup goes on to
    * provision a resource: the label of the group whose commands it runs. The

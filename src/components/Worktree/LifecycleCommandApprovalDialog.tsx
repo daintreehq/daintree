@@ -187,6 +187,10 @@ export function LifecycleCommandApprovalDialog({
   };
 
   const nothingWaiting = review === null;
+  // Plugin steps alone are the user's own plugins asking, not a repository.
+  const hasCommands = (review?.sources.length ?? 0) > 0;
+  const pluginSteps = review?.pluginSteps ?? [];
+  const onlyPluginSteps = !hasCommands && pluginSteps.length > 0;
 
   return (
     <ConfirmDialog
@@ -198,13 +202,29 @@ export function LifecycleCommandApprovalDialog({
       variant="default"
       size="lg"
       initialFocus="cancel"
-      title={nothingWaiting ? "No commands need approval" : "Approve repository commands?"}
+      title={
+        nothingWaiting
+          ? "No commands need approval"
+          : onlyPluginSteps
+            ? "Allow plugin setup steps?"
+            : "Approve repository commands?"
+      }
       description={
         nothingWaiting
           ? "These commands are already approved, or they're your own."
-          : "These come from the repository and run with your account. Approve them only if you trust whoever wrote them — on a pull request branch, that's its author."
+          : onlyPluginSteps
+            ? "Plugins run these in each new worktree in this project, after its setup script. Allow them only if you trust the plugin."
+            : "These come from the repository and run with your account. Approve them only if you trust whoever wrote them — on a pull request branch, that's its author."
       }
-      confirmLabel={setupAwaitingApproval ? "Approve and run setup" : "Approve commands"}
+      confirmLabel={
+        onlyPluginSteps
+          ? setupAwaitingApproval
+            ? "Allow and run setup"
+            : "Allow steps"
+          : setupAwaitingApproval
+            ? "Approve and run setup"
+            : "Approve commands"
+      }
       cancelLabel={nothingWaiting ? "Close" : "Cancel"}
       onConfirm={handleApprove}
       isConfirmLoading={showApproveSpinner}
@@ -305,9 +325,36 @@ export function LifecycleCommandApprovalDialog({
                 ))}
               </section>
             ))}
+            {pluginSteps.length > 0 && (
+              <section className="space-y-2" aria-label="Plugin setup steps">
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                  <h3 className={SECTION_LABEL_CLASS}>Plugins</h3>
+                  {setupAwaitingApproval ? (
+                    <Badge className="text-text-primary">
+                      {hasSetupGroup ? "Runs right after setup" : "Runs as soon as you approve"}
+                    </Badge>
+                  ) : (
+                    <span className="text-xs text-text-secondary">
+                      Runs when a worktree is created
+                    </span>
+                  )}
+                </div>
+                <ul className="divide-y divide-border-subtle rounded-[var(--radius-md)] bg-surface-inset">
+                  {pluginSteps.map((step) => (
+                    <li
+                      key={`${step.pluginId}:${step.stepId}`}
+                      className="px-3 py-1.5 text-xs text-text-primary"
+                    >
+                      {step.pluginName} will run “{step.label}” when worktrees are created
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            )}
             <p className="text-xs text-text-secondary">
-              Approval is saved for this project and covers these exact lines, not the scripts they
-              call. Any change to them asks again.
+              {hasCommands
+                ? "Approval is saved for this project and covers these exact lines, not the scripts they call. Any change to them asks again."
+                : "Approval is saved for this project. A new version of the plugin, or a change to a step, asks again."}
             </p>
           </>
         )}

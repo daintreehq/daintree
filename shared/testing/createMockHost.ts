@@ -87,6 +87,7 @@ import type {
   PluginTypedIpcHandler,
   PluginHandlerOptions,
   PluginWorktreeSnapshot,
+  PluginWorktreeSetupStepHandler,
   PluginWorktreesChange,
   PluginFsApi,
   PluginFsReadFilesEntry,
@@ -212,6 +213,15 @@ export interface RegisteredForgeProviderRecord {
 export interface RegisteredFileDecorationProviderRecord {
   descriptor: FileDecorationProviderDescriptor;
   impl: FileDecorationProviderImpl;
+}
+
+/**
+ * A handler bound through `host.registerWorktreeSetupStep`. Call `handler`
+ * with a context of your own to run the step as the host would.
+ */
+export interface RegisteredWorktreeSetupStepRecord {
+  stepId: string;
+  handler: PluginWorktreeSetupStepHandler;
 }
 
 /**
@@ -355,6 +365,8 @@ export interface MockHostState {
   readonly readScreenCalls: ReadonlyArray<ReadScreenRecord>;
   readonly registeredForgeProviders: ReadonlyArray<RegisteredForgeProviderRecord>;
   readonly registeredFileDecorationProviders: ReadonlyArray<RegisteredFileDecorationProviderRecord>;
+  /** Live `host.registerWorktreeSetupStep` bindings, one per step id. */
+  readonly registeredWorktreeSetupSteps: ReadonlyArray<RegisteredWorktreeSetupStepRecord>;
   /** Live `host.mcp.registerTools` rosters, one per endpoint id. */
   readonly registeredMcpTools: ReadonlyArray<RegisteredMcpToolsRecord>;
   readonly invalidationCalls: ReadonlyArray<InvalidationRecord>;
@@ -1259,6 +1271,7 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
   );
   const registeredForgeProviders: RegisteredForgeProviderRecord[] = [];
   const registeredFileDecorationProviders: RegisteredFileDecorationProviderRecord[] = [];
+  const registeredWorktreeSetupSteps: RegisteredWorktreeSetupStepRecord[] = [];
   const registeredMcpTools: RegisteredMcpToolsRecord[] = [];
   const invalidationCalls: InvalidationRecord[] = [];
   const setPanelBadgeCalls: SetPanelBadgeRecord[] = [];
@@ -2385,6 +2398,32 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
       };
       return Promise.resolve(dispose);
     },
+    registerWorktreeSetupStep(stepId, handler) {
+      // Validation order matches production. As for decoration providers, the
+      // manifest-declared-id check is skipped: the mock has no manifest model.
+      if (typeof stepId !== "string" || stepId.length === 0) {
+        throw new Error("registerWorktreeSetupStep: stepId must be a non-empty string");
+      }
+      if (typeof handler !== "function") {
+        throw new Error("registerWorktreeSetupStep: handler must be a function");
+      }
+      const existing = registeredWorktreeSetupSteps.findIndex((r) => r.stepId === stepId);
+      if (existing >= 0) {
+        registeredWorktreeSetupSteps[existing] = { stepId, handler };
+      } else {
+        registeredWorktreeSetupSteps.push({ stepId, handler });
+      }
+      let disposed = false;
+      const dispose = () => {
+        if (disposed) return;
+        disposed = true;
+        const i = registeredWorktreeSetupSteps.findIndex(
+          (r) => r.stepId === stepId && r.handler === handler
+        );
+        if (i >= 0) registeredWorktreeSetupSteps.splice(i, 1);
+      };
+      return Promise.resolve(dispose);
+    },
     mcp: {
       registerTools(endpointId, tools) {
         // Structural checks only. The mock has no manifest model (#9878), so the
@@ -3300,6 +3339,7 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
     readScreenCalls,
     registeredForgeProviders,
     registeredFileDecorationProviders,
+    registeredWorktreeSetupSteps,
     registeredMcpTools,
     invalidationCalls,
     setPanelBadgeCalls,

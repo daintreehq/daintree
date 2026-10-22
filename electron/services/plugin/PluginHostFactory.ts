@@ -109,6 +109,11 @@ import {
   unregisterFileDecorationProviderImpl,
   scopeMatchesPattern,
 } from "../fileDecorationRegistry.js";
+import {
+  isWorktreeSetupStepDeclared,
+  registerWorktreeSetupStepHandler,
+  unregisterWorktreeSetupStepHandler,
+} from "../worktreeSetupStepRegistry.js";
 import { broadcastToRenderer, broadcastToProjectRenderers } from "../../ipc/utils.js";
 import {
   PLUGIN_PUSH_MAX_PAYLOAD_BYTES,
@@ -2514,6 +2519,37 @@ export function createHost(
 
       const dispose = trackPluginDisposer(deps.pluginEventCleanups, pluginId, () =>
         unregisterFileDecorationProviderImpl(pluginId, contributionId, impl)
+      );
+      return Promise.resolve(dispose);
+    },
+    registerWorktreeSetupStep: (stepId, handler) => {
+      if (revoked) {
+        throw new Error(
+          `Plugin "${pluginId}" host revoked: registerWorktreeSetupStep called after activate() returned or timed out`
+        );
+      }
+      if (typeof stepId !== "string" || stepId.length === 0) {
+        throw new Error(
+          `Plugin "${pluginId}" registerWorktreeSetupStep: stepId must be a non-empty string`
+        );
+      }
+      if (typeof handler !== "function") {
+        throw new Error(
+          `Plugin "${pluginId}" registerWorktreeSetupStep: handler must be a function`
+        );
+      }
+      // The label and timeout the user allowed come from the manifest, so a
+      // handler for an undeclared step would run something nobody was shown.
+      if (!isWorktreeSetupStepDeclared(pluginId, stepId)) {
+        throw new Error(
+          `Plugin "${pluginId}" registerWorktreeSetupStep: "${stepId}" is not declared in contributes.worktreeSetupSteps`
+        );
+      }
+
+      registerWorktreeSetupStepHandler(pluginId, stepId, handler);
+
+      const dispose = trackPluginDisposer(deps.pluginEventCleanups, pluginId, () =>
+        unregisterWorktreeSetupStepHandler(pluginId, stepId, handler)
       );
       return Promise.resolve(dispose);
     },

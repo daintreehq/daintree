@@ -18,6 +18,9 @@ import {
   PLUGIN_NOTIFY_MAX_ACTIONS,
   PLUGIN_PANEL_BADGE_LABEL_MAX,
   PLUGIN_TOOLBAR_BUTTON_STATE_TEXT_MAX,
+  PLUGIN_WORKTREE_SETUP_STEP_LABEL_MAX,
+  PLUGIN_WORKTREE_SETUP_STEP_MAX_TIMEOUT_MS,
+  PLUGIN_WORKTREE_SETUP_STEP_MIN_TIMEOUT_MS,
   PROJECT_SURFACE_SLOT_CATALOGUE,
   PROJECT_SURFACE_SLOTS,
   SIDEBAR_VIEW_NAME_MAX_LENGTH,
@@ -1070,6 +1073,24 @@ export const PromptTemplateContributionSchema = z
     description: z.string().min(1).max(300),
     body: z.string().min(1).max(PROMPT_TEMPLATE_MAX_BODY_LENGTH),
     args: z.array(PromptTemplateArgumentSchema).max(PROMPT_TEMPLATE_MAX_ARGS).default([]),
+  })
+  .strict();
+
+/**
+ * `contributes.worktreeSetupSteps` manifest entry (#13807). Declared here, not
+ * at runtime, so the label and timeout the user allows are the ones that run:
+ * the handler registers by id alone. Strict so unknown fields fail loudly.
+ */
+export const WorktreeSetupStepContributionSchema = z
+  .object({
+    id: z.string().min(1).max(64).regex(SAFE_ID_PATTERN),
+    label: z.string().trim().min(1).max(PLUGIN_WORKTREE_SETUP_STEP_LABEL_MAX),
+    timeoutMs: z
+      .number()
+      .int()
+      .min(PLUGIN_WORKTREE_SETUP_STEP_MIN_TIMEOUT_MS)
+      .max(PLUGIN_WORKTREE_SETUP_STEP_MAX_TIMEOUT_MS)
+      .optional(),
   })
   .strict();
 
@@ -2586,6 +2607,8 @@ export const MANIFEST_CONTRIBUTION_CAPS = {
   agentMcp: AGENT_MCP_MAX_ENDPOINTS_PER_PLUGIN,
   tours: 10,
   databases: 16,
+  // Each one runs, in sequence, before a new worktree is ready.
+  worktreeSetupSteps: 10,
 } as const;
 
 /**
@@ -3071,6 +3094,10 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
               .array(DatabaseContributionSchema)
               .max(MANIFEST_CONTRIBUTION_CAPS.databases)
               .default([]),
+            worktreeSetupSteps: z
+              .array(WorktreeSetupStepContributionSchema)
+              .max(MANIFEST_CONTRIBUTION_CAPS.worktreeSetupSteps)
+              .default([]),
             // Not an array, so it carries no MANIFEST_CONTRIBUTION_CAPS entry —
             // three optional fixed slots are structurally bounded already.
             surfaces: SurfaceContributionsSchema.default({}),
@@ -3105,6 +3132,7 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
             agentMcp: [],
             tours: [],
             databases: [],
+            worktreeSetupSteps: [],
             surfaces: {},
           }))
       ),
@@ -3707,6 +3735,7 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
       reportDuplicateIds("agentMcp", manifest.contributes.agentMcp);
       reportDuplicateIds("tours", manifest.contributes.tours);
       reportDuplicateIds("databases", manifest.contributes.databases);
+      reportDuplicateIds("worktreeSetupSteps", manifest.contributes.worktreeSetupSteps);
 
       // Cross-reference integrity — a contribution that names another by id must
       // point at one that exists in the same manifest, else the reference dangles

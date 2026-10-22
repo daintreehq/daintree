@@ -668,6 +668,66 @@ export const PLUGIN_WORKTREE_REVIEW_CHECK_DETAIL_MAX = 2048;
 export const PLUGIN_WORKTREE_REVIEW_CHECKS_MAX = 10;
 
 /**
+ * One `contributes.worktreeSetupSteps` entry (#13807): work the plugin does
+ * for each worktree Daintree creates, after the project's own setup script.
+ * The handler is bound in `activate()` through
+ * {@link PluginActivationApi.registerWorktreeSetupStep}.
+ *
+ * Declared in the manifest so the step can be shown and allowed before any
+ * plugin code runs. The user allows each step once per project, and a new
+ * label, timeout or plugin version asks again.
+ */
+export interface WorktreeSetupStepContribution {
+  /** Unique within the plugin; the id the handler registers under. */
+  id: string;
+  /** Shown on the worktree card while the step runs, and when asking to allow it. */
+  label: string;
+  /**
+   * How long the step may run before its signal aborts and it is recorded as
+   * timed out. Defaults to {@link PLUGIN_WORKTREE_SETUP_STEP_DEFAULT_TIMEOUT_MS}.
+   */
+  timeoutMs?: number;
+}
+
+/** Max length of a {@link WorktreeSetupStepContribution} `label`. */
+export const PLUGIN_WORKTREE_SETUP_STEP_LABEL_MAX = 80;
+
+/** Shortest {@link WorktreeSetupStepContribution} `timeoutMs` a manifest may declare. */
+export const PLUGIN_WORKTREE_SETUP_STEP_MIN_TIMEOUT_MS = 1_000;
+
+/** Longest {@link WorktreeSetupStepContribution} `timeoutMs` a manifest may declare. */
+export const PLUGIN_WORKTREE_SETUP_STEP_MAX_TIMEOUT_MS = 30 * 60_000;
+
+/** The timeout of a {@link WorktreeSetupStepContribution} that declares none. */
+export const PLUGIN_WORKTREE_SETUP_STEP_DEFAULT_TIMEOUT_MS = 5 * 60_000;
+
+/** What a worktree setup step handler is told about the worktree it sets up. */
+export interface PluginWorktreeSetupStepContext {
+  /** The project the worktree belongs to. */
+  readonly projectId: string;
+  readonly worktreeId: string;
+  /** Absolute path of the new worktree's checkout. */
+  readonly worktreePath: string;
+  /** The checked-out branch, or `null` when HEAD is detached. */
+  readonly branch: string | null;
+  /**
+   * Aborted when the step times out or the worktree is deleted while it runs.
+   * The host stops waiting either way; a handler that ignores it keeps running
+   * unobserved.
+   */
+  readonly signal: AbortSignal;
+}
+
+/**
+ * Runs one worktree setup step. Resolving is success; throwing, or rejecting,
+ * is a failure the worktree card attributes to the plugin. A retry runs the
+ * step again, so it must tolerate running more than once.
+ */
+export type PluginWorktreeSetupStepHandler = (
+  context: PluginWorktreeSetupStepContext
+) => void | Promise<void>;
+
+/**
  * A short status a plugin shows on one terminal's header via
  * {@link PluginHostApi.setTerminalStatus} (#13802): the same shape as a
  * worktree card's, drawn as a colourless chip named after the plugin.
@@ -2668,6 +2728,12 @@ export interface PluginManifest {
      */
     databases?: PluginDatabaseContribution[];
     /**
+     * Steps run for each new worktree after the project's setup script
+     * (#13807). Optional in the type but always materialized by the manifest
+     * schema's `.default([])`, like `agentMcp`.
+     */
+    worktreeSetupSteps?: WorktreeSetupStepContribution[];
+    /**
      * The one online account the host signs in to for this plugin (#13823).
      * The host draws the Connect / Disconnect row, runs the flow, stores the
      * tokens in the OS keychain and hands the plugin a current access token
@@ -3963,14 +4029,17 @@ export type PluginWorktreeGitOperation = "merge" | "rebase" | "cherry-pick" | "r
  * How far a worktree's post-create setup has got.
  *
  * - `pending`: the worktree exists and setup has not started
- * - `running`: config copy, submodule init or the setup commands are in flight
+ * - `running`: config copy, submodule init, the setup commands or a plugin
+ *   setup step are in flight
  * - `ready`: the recorded run finished without a failure, including a project
- *   with no setup commands. A retry reruns only the setup commands, so after a
- *   retry `ready` speaks for those alone
- * - `failed` / `timed-out`: a stage failed; {@link PluginWorktreeSetup.stage} says which
- * - `needs-approval`: setup or provisioning commands from the repository are
- *   waiting for the user's approval, so they were skipped. The checkout exists,
- *   but its initialization may be incomplete
+ *   with no setup commands. A retry resumes the setup commands, or the plugin
+ *   setup steps that did not succeed, so after a retry `ready` speaks for those
+ *   alone
+ * - `failed` / `timed-out`: a stage failed; {@link PluginWorktreeSetup.stage} says which.
+ *   A plugin setup step whose plugin could not run it counts as failed
+ * - `needs-approval`: setup or provisioning commands from the repository, or a
+ *   plugin setup step, are waiting for the user's approval, so they were
+ *   skipped. The checkout exists, but its initialization may be incomplete
  */
 export type PluginWorktreeSetupState =
   "pending" | "running" | "ready" | "failed" | "timed-out" | "needs-approval";
@@ -3978,8 +4047,10 @@ export type PluginWorktreeSetupState =
 /**
  * The stages of worktree setup, in the order they run. `setup-script` covers
  * the project's setup commands and any resource provisioning that follows them.
+ * `plugin-steps` covers every plugin's {@link WorktreeSetupStepContribution}.
  */
-export type PluginWorktreeSetupStage = "copy-config" | "submodules" | "setup-script";
+export type PluginWorktreeSetupStage =
+  "copy-config" | "submodules" | "setup-script" | "plugin-steps";
 
 /** The workspace host's record of a worktree's setup run, including a retry. */
 export interface PluginWorktreeSetup {
@@ -5839,6 +5910,31 @@ export interface PluginActivationApi {
   registerFileDecorationProvider(
     descriptor: FileDecorationProviderDescriptor,
     impl: FileDecorationProviderImpl
+  ): Promise<() => void>;
+  /**
+   * Bind the handler for a step declared in `contributes.worktreeSetupSteps`
+   * (#13807). The host runs it for each worktree it creates in a project this
+   * plugin is loaded for, after the project's setup script succeeded and once
+   * the user has allowed the step for that project. Steps run one at a time,
+   * ordered by plugin id and then declaration order, and one failing does not
+   * stop the next.
+   *
+   * The step runs from this plugin as loaded for the project, never from the
+   * new worktree's branch. It is not a teardown hook: resources that cost
+   * money belong in a resource environment, which has its own teardown.
+   *
+   * `stepId` must match a declared entry; an undeclared id is rejected.
+   * Returns a disposer that unbinds the handler; bindings are removed when the
+   * plugin unloads. Must be called during `activate()`. Calling it twice with
+   * the same id overwrites the prior binding, and the older disposer becomes
+   * inert.
+   *
+   * @throws {Error} If called after activation resolves or times out — the host
+   *   is revoked and registration is rejected.
+   */
+  registerWorktreeSetupStep(
+    stepId: string,
+    handler: PluginWorktreeSetupStepHandler
   ): Promise<() => void>;
   /**
    * Subscribe to active-worktree changes. The callback fires with the new

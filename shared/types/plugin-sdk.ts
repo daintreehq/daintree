@@ -226,6 +226,9 @@ export type {
   PluginWorktreeSetup,
   PluginWorktreeSetupState,
   PluginWorktreeSetupStage,
+  PluginWorktreeSetupStepContext,
+  PluginWorktreeSetupStepHandler,
+  WorktreeSetupStepContribution,
 } from "./plugin.js";
 
 // ── Agent observability ─────────────────────────────────────────────

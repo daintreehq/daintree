@@ -63,6 +63,7 @@ function makeHost() {
     onDidWake: vi.fn((_cb: any) => vi.fn()),
     registerForgeProvider: vi.fn(() => vi.fn()),
     registerFileDecorationProvider: vi.fn(() => vi.fn()),
+    registerWorktreeSetupStep: vi.fn((_stepId: string, _handler: any) => vi.fn()),
     invalidateFileDecorations: vi.fn(),
     setPanelBadge: vi.fn(async () => {}),
     setToolbarButtonBadge: vi.fn(async () => {}),
@@ -1466,6 +1467,76 @@ describe("PluginDevWorkerMainBridge", () => {
       result: { "a.ts": { badge: "M" } },
     });
     await expect(resultPromise).resolves.toEqual({ "a.ts": { badge: "M" } });
+  });
+
+  it("registerWorktreeSetupStep binds a handler that runs the worker's and cancels it on abort (#13807)", async () => {
+    const { host, workerHost } = makeBridge();
+    workerHost.emit("worker-message", {
+      type: "host-notify",
+      method: "registerWorktreeSetupStep",
+      registrationKey: "worktreeSetupStep:db",
+      params: { stepId: "db" },
+    });
+    await flush();
+    expect(host.registerWorktreeSetupStep).toHaveBeenCalledTimes(1);
+    const [stepId, handler] = host.registerWorktreeSetupStep.mock.calls[0] as unknown as [
+      string,
+      (ctx: Record<string, unknown>) => Promise<void>,
+    ];
+    expect(stepId).toBe("db");
+
+    const context = {
+      projectId: "project-1",
+      worktreeId: "/repo/wt",
+      worktreePath: "/repo/wt",
+      branch: null,
+    };
+    const ok = handler({ ...context, signal: new AbortController().signal });
+    const first = workerHost.sent.find(
+      (m) => m.type === "invoke" && m.kind === "worktree-setup-step"
+    );
+    // The signal stays behind: it cannot cross the port.
+    expect(first).toEqual({
+      type: "invoke",
+      requestId: first.requestId,
+      kind: "worktree-setup-step",
+      stepId: "db",
+      context,
+    });
+    workerHost.emit("worker-message", {
+      type: "invoke-result",
+      requestId: first.requestId,
+      ok: true,
+      result: null,
+    });
+    await expect(ok).resolves.toBeUndefined();
+
+    const controller = new AbortController();
+    const cancelled = handler({ ...context, signal: controller.signal });
+    const second = workerHost.sent.filter(
+      (m) => m.type === "invoke" && m.kind === "worktree-setup-step"
+    )[1];
+    controller.abort(new Error("timed out"));
+    await expect(cancelled).rejects.toThrow();
+    expect(workerHost.sent.at(-1)).toEqual({ type: "invoke-cancel", requestId: second.requestId });
+  });
+
+  it("unregisterWorktreeSetupStep disposes the host registration", async () => {
+    const { host, workerHost } = makeBridge();
+    const dispose = vi.fn();
+    host.registerWorktreeSetupStep.mockReturnValueOnce(dispose);
+    workerHost.emit("worker-message", {
+      type: "host-notify",
+      method: "registerWorktreeSetupStep",
+      params: { stepId: "db" },
+    });
+    await flush();
+    workerHost.emit("worker-message", {
+      type: "host-notify",
+      method: "unregisterWorktreeSetupStep",
+      params: { stepId: "db" },
+    });
+    expect(dispose).toHaveBeenCalledTimes(1);
   });
 
   it("unregisterFileDecorationProvider disposes the host registration", async () => {
