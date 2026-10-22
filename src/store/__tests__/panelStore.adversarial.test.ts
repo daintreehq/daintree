@@ -724,6 +724,32 @@ describe("panelStore adversarial", () => {
         expect(exitHome).toHaveBeenCalledTimes(1);
       });
 
+      it("leaves Home for a backgrounded group restored to the grid, not to the dock", () => {
+        usePanelStore.setState({
+          panelsById: {
+            p1: makePanel("p1"),
+            d1: makePanel("d1", { location: "dock", kind: "terminal" }),
+            d2: makePanel("d2", { location: "dock", kind: "terminal" }),
+            g1: makePanel("g1"),
+            g2: makePanel("g2"),
+          },
+          panelIds: ["p1", "d1", "d2", "g1", "g2"],
+          panelIdsByWorktreeId: { "wt-1": ["p1", "d1", "d2", "g1", "g2"] },
+        });
+        usePanelStore.getState().createTabGroup("dock", "wt-1", ["d1", "d2"], "d1");
+        usePanelStore.getState().createTabGroup("grid", "wt-1", ["g1", "g2"], "g1");
+        const restoreIdOf = (memberId: string) =>
+          usePanelStore.getState().backgroundedTerminals.get(memberId)?.groupRestoreId;
+
+        usePanelStore.getState().backgroundPanelGroup("d1");
+        usePanelStore.getState().restoreBackgroundGroup(restoreIdOf("d1")!);
+        expect(exitHome).not.toHaveBeenCalled();
+
+        usePanelStore.getState().backgroundPanelGroup("g1");
+        usePanelStore.getState().restoreBackgroundGroup(restoreIdOf("g1")!);
+        expect(exitHome).toHaveBeenCalledTimes(1);
+      });
+
       it("leaves Home when a docked panel moves to the grid", () => {
         usePanelStore.setState({
           panelsById: {

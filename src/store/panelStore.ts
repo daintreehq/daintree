@@ -1094,7 +1094,11 @@ export const usePanelStore = create<PanelGridState>()(
         if (landedInGrid) {
           get().exitMaximize();
         }
-        if (memberIds.some((id) => isGridPanelLocation(get().panelsById[id]?.location))) {
+        const revealedInGrid = memberIds.some((id) => {
+          const restored = get().panelsById[id];
+          return restored !== undefined && isGridPanelLocation(restored.location);
+        });
+        if (revealedInGrid) {
           exitProjectHome();
         }
       },
