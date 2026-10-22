@@ -10,8 +10,6 @@ const setPluginButtonPromotedMock = vi.fn();
 const refreshRuntimeMock = vi.fn();
 
 let mockPinnedButtons: Record<string, boolean> = {};
-// Whether the last row selection was cancelled, which keeps a real Radix menu open.
-let lastSelectPrevented = false;
 let mockPluginMetaById = new Map<string, { devMode: boolean; displayName: string }>();
 
 vi.mock("@/services/ActionService", () => ({
@@ -100,11 +98,7 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
       role="menuitem"
       tabIndex={0}
       data-keybinding={keybinding}
-      onClick={() => {
-        const event = new Event("select", { cancelable: true });
-        onSelect?.(event);
-        lastSelectPrevented = event.defaultPrevented;
-      }}
+      onClick={() => onSelect?.(new Event("select", { cancelable: true }))}
       onKeyDown={onKeyDown}
       {...props}
     >
@@ -140,8 +134,7 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
     <div data-testid="menu-sub-content">{children}</div>
   ),
 }));
-const { PluginToolbarButton, PluginTrayButton, PluginOverflowItem } =
-  await import("../PluginTrayButton");
+const { PluginToolbarButton, PluginTrayButton } = await import("../PluginTrayButton");
 const { usePluginToolbarStateStore, _resetPluginToolbarStateStoreForTest } =
   await import("@/store/pluginToolbarStateStore");
 const { act } = await import("@testing-library/react");
@@ -173,7 +166,6 @@ function setStates(states: Record<string, Record<string, PluginToolbarButtonRunt
 beforeEach(() => {
   vi.clearAllMocks();
   mockPinnedButtons = {};
-  lastSelectPrevented = false;
   mockPluginMetaById = new Map();
   _resetPluginToolbarStateStoreForTest();
   act(() => {
