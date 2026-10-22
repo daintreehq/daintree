@@ -511,6 +511,22 @@ describe("HostServer authentication", () => {
 });
 
 describe("HostServer session resume", () => {
+  it("lets a Shell on another build in, and logs both builds with the session", async () => {
+    const server = await startServer();
+    const seen: HostSessionContext[] = [];
+    server.onSession((ctx) => seen.push(ctx));
+    const client = startClient(server, { handshake: { ...TEST_HANDSHAKE, version: "0.9.0" } });
+    await waitFor(() => seen.length === 1 && client.getState().status === "connected");
+
+    const started = logged("main:HostServer").find(
+      (entry) => entry.message === "Remote session started"
+    );
+    expect(started?.context).toMatchObject({
+      sessionId: seen[0]!.sessionId,
+      buildMismatch: { kind: "version", local: TEST_HANDSHAKE.version, remote: "0.9.0" },
+    });
+  });
+
   it("logs a link's life on both ends with the session id, and never a credential", async () => {
     const server = await startServer({ resumeGraceMs: 60_000 });
     const seen: HostSessionContext[] = [];

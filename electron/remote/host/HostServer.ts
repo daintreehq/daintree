@@ -529,7 +529,13 @@ export class HostServer {
     });
     this.live.set(id, ctx);
     this.loggedRefusals.delete(clientId);
-    const who = { sessionId: id, clientId, clientName: hello.client.clientName };
+    const who = {
+      sessionId: id,
+      clientId,
+      clientName: hello.client.clientName,
+      // Let in best effort: a channel either build lacks fails on the other.
+      ...(mismatch ? { buildMismatch: mismatch } : {}),
+    };
     if (resumedFrom === "live-link") {
       logger.info("Remote session resumed over a new link", { ...who, replacedLiveLink: true });
     } else if (resumedFrom) {

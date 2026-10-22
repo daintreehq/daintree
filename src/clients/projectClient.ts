@@ -260,8 +260,10 @@ export const projectClient = {
       return await window.electron.project.addBrowserAllowedHost(projectId, hostname);
     } catch (error) {
       // A remote host whose Daintree predates the channel refuses it as one it
-      // doesn't know; save the way that build did instead.
-      if (clientErrorCode(error) !== "CHANNEL_NOT_REMOTABLE") throw error;
+      // doesn't know (said as a build skew once the Shell knows the builds
+      // differ); save the way that build did instead.
+      const code = clientErrorCode(error);
+      if (code !== "CHANNEL_NOT_REMOTABLE" && code !== "HOST_BUILD_SKEW") throw error;
       console.warn(
         "[projectClient] Host has no field-level allow-list write; saving the settings whole"
       );
