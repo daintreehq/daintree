@@ -1899,7 +1899,7 @@ export class PluginService {
     // distributions never register it, so point at the download page instead.
     // The Store owns installs there, so a daintree.org download is wrong.
     const offerDownload = mismatch === "app-too-old" && !isWindowsStoreBuild();
-    const name = manifest.displayName ?? manifest.name;
+    const name = manifest.displayName || manifest.name;
     const payload = {
       type: "warning" as const,
       title: "Plugin version mismatch",
@@ -7159,7 +7159,7 @@ export class PluginService {
   getPluginDisplayName(pluginId: string): string {
     const manifest = this.plugins.get(pluginId)?.manifest;
     if (!manifest) return pluginManifestIdFromInstanceKey(pluginId);
-    return manifest.displayName ?? manifest.name;
+    return manifest.displayName || manifest.name;
   }
 
   /**

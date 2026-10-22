@@ -515,6 +515,23 @@ describe("host plugin toasts", () => {
     });
   });
 
+  it.each([
+    ["longer than the schema allows", "D".repeat(300)],
+    ["blank once made safe", " \u200b\u0007 "],
+  ])("still shows the toast, labelled by manifest id, for a name %s", async (_, name) => {
+    const wc = makeView();
+    await ask(PluginFrontendMethod.TOAST, {
+      pluginId: "acme.deploy",
+      type: "info",
+      message: "Deploy: shipped",
+      pluginDisplayName: name,
+    });
+    expect(wc.send.mock.calls[0]![1]).toMatchObject({
+      message: "Deploy: shipped",
+      rateLimitLabel: "acme.deploy",
+    });
+  });
+
   it("falls back to the manifest id, never the instance key, when an older host sends no name", async () => {
     const wc = makeView();
     const instanceKey = `project__${PROJECT}__acme.deploy`;

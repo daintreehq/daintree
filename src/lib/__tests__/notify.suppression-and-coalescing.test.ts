@@ -812,6 +812,15 @@ describe("per-source rate-limit", () => {
     expect(summaries).toHaveLength(2);
   });
 
+  it("falls back to the key when the label is empty", () => {
+    for (let i = 0; i < 4; i++) {
+      notify({ type: "info", message: `m${i}`, rateLimitKey: "noisy-source", rateLimitLabel: "" });
+    }
+    expect(useNotificationHistoryStore.getState().entries[0]!.message).toBe(
+      "noisy-source reported 1 more event — open inbox"
+    );
+  });
+
   it("does not bump timestamp when refreshing the summary row", () => {
     notify({ type: "error", message: "1", rateLimitKey: "noisy" });
     notify({ type: "error", message: "2", rateLimitKey: "noisy" });

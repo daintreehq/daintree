@@ -1432,6 +1432,31 @@ describe("createHost — showToast", () => {
     });
   });
 
+  it("names a plugin with a blank displayName by its manifest name (#13760)", async () => {
+    await writePlugin("toast-blank", {
+      name: "acme.toast-blank",
+      version: "1.0.0",
+      displayName: "",
+    });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: ToastHostShape }).createHost(
+      "acme.toast-blank"
+    );
+
+    broadcastToRendererMock.mockClear();
+    await host.showToast({ message: "Synced", type: "success" });
+
+    expect(broadcastToRendererMock).toHaveBeenCalledWith(
+      CHANNELS.NOTIFICATION_SHOW_TOAST,
+      expect.objectContaining({
+        message: "acme.toast-blank: Synced",
+        rateLimitLabel: "acme.toast-blank",
+      })
+    );
+  });
+
   it("forwards durationMs as duration", async () => {
     await writePlugin("toast-duration", { name: "acme.toast-duration", version: "1.0.0" });
     const service = new PluginService(tmpDir);
