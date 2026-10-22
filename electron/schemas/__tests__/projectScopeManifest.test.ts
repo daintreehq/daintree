@@ -164,7 +164,6 @@ const UNSCOPED_SAMPLES: Record<UnscopedGroup, unknown[]> = {
     { id: "acme-agent", name: "Acme", command: "acme", color: "#123456", iconId: "sparkles" },
   ],
   skills: [{ id: "skill", name: "Skill", path: "skills/skill.md" }],
-  fileDecorationProviders: [{ id: "dec", scopes: ["file"] }],
   processTools: [{ command: "acmetool", iconId: "sparkles" }],
   mcpServers: [{ id: "srv", name: "Srv", command: "node" }],
   tours: [
@@ -181,6 +180,17 @@ const UNSCOPED_SAMPLES: Record<UnscopedGroup, unknown[]> = {
 type UnscopedGroup = (typeof PROJECT_SCOPE_UNSCOPED_CONTRIBUTIONS)[number][0];
 
 const UNSCOPED_GROUPS = PROJECT_SCOPE_UNSCOPED_CONTRIBUTIONS.map(([group]) => group);
+
+describe('contributes.fileDecorationProviders under "scope": "project"', () => {
+  it("accepts a project plugin declaring a decoration provider", () => {
+    const result = parse("project", {
+      scope: "project",
+      contributes: { fileDecorationProviders: [{ id: "dec", scopes: ["worktree-files:*"] }] },
+    });
+    expect(errorCodes(result)).not.toContain("fileDecorationProviders_project_scope_forbidden");
+    expect(result.success).toBe(true);
+  });
+});
 
 /**
  * Every group here still broadcasts app-wide (`PluginContributionBroadcaster`

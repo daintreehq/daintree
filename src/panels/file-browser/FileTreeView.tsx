@@ -31,6 +31,12 @@ import {
 } from "./fileBrowserTree";
 import { getFileBrowserRowGitStatus, type FileBrowserGitStatusIndex } from "./fileBrowserGitStatus";
 import { getGitStatusPresentation } from "@/lib/gitStatusPresentation";
+import { useFileTreeDecorations } from "@/hooks/useFileTreeDecorations";
+import {
+  FileDecorationBadge,
+  resolveFileDecoration,
+} from "@/components/Plugin/FileDecorationBadge";
+import type { FileDecoration } from "@shared/types/forge";
 import { FILE_TREE_ICON_CLASS, FILE_TREE_ICON_COLOR_CLASS, getFileTypeIcon } from "./fileTypeIcons";
 import { INSERT_FILE_REFERENCE_COMBO, matchesInsertFileReferenceCombo } from "./fileReference";
 
@@ -145,6 +151,10 @@ function isEventInsideTree(event: React.SyntheticEvent, container: HTMLElement |
 const INDENT_PER_DEPTH_PX = 12;
 const BASE_PADDING_PX = 6;
 const ROW_HEIGHT_PX = 24;
+// Decoration requests follow the mounted window, padded and snapped to chunks
+// so a scroll frame doesn't change the requested set on every row it passes.
+const DECORATION_OVERSCAN_ROWS = 20;
+const DECORATION_CHUNK_ROWS = 20;
 
 /**
  * Virtualized directory tree.
@@ -225,6 +235,26 @@ export function FileTreeView({
     start: 0,
     end: -1,
   });
+
+  const decorationPaths = useMemo(() => {
+    if (renderedRange.end < renderedRange.start) return [];
+    const first =
+      Math.floor(
+        Math.max(0, renderedRange.start - DECORATION_OVERSCAN_ROWS) / DECORATION_CHUNK_ROWS
+      ) * DECORATION_CHUNK_ROWS;
+    const last =
+      Math.ceil((renderedRange.end + DECORATION_OVERSCAN_ROWS + 1) / DECORATION_CHUNK_ROWS) *
+      DECORATION_CHUNK_ROWS;
+    return rows.slice(first, last).map((row) => row.path);
+  }, [rows, renderedRange]);
+  // The scope names the root the rows are relative to, the same contract the
+  // worktree file list uses, so one provider decorates both surfaces. Which
+  // plugins answer is decided in main from this view's project.
+  const decorations = useFileTreeDecorations(
+    `worktree-files:${basePath}`,
+    decorationPaths,
+    basePath !== ""
+  );
 
   const cursorIndex = useMemo(
     () => (cursorPath === null ? -1 : rows.findIndex((row) => row.path === cursorPath)),
@@ -435,6 +465,7 @@ export function FileTreeView({
       instanceId,
       basePath,
       gitStatusIndex,
+      decorations,
     }),
     [
       cursorPath,
@@ -447,6 +478,7 @@ export function FileTreeView({
       instanceId,
       basePath,
       gitStatusIndex,
+      decorations,
     ]
   );
 
@@ -537,6 +569,7 @@ interface TreeContext {
   instanceId: string;
   basePath: string;
   gitStatusIndex: FileBrowserGitStatusIndex | null;
+  decorations: Readonly<Record<string, FileDecoration>>;
 }
 
 /**
@@ -698,12 +731,16 @@ function FileTreeRow({ row, isSelected, isOpen, context }: FileTreeRowProps) {
       ? `Contains ${gitPresentation.name.toLowerCase()} changes`
       : gitPresentation.name
     : null;
+  const decoration = context.decorations[row.path];
+  const decorationView = resolveFileDecoration(decoration);
   const rowId = rowDomId(context.instanceId, row.path);
+  const decorationMarkerId = decorationView ? `${rowId}-decoration` : undefined;
   const gitMarkerId = gitPresentation ? `${rowId}-git` : undefined;
   const symlinkMarkerId = symlinkDescription ? `${rowId}-symlink` : undefined;
   // Space-separated id list: a row can be both a link and changed, and the two
   // descriptions are owned by different concerns.
-  const describedBy = [gitMarkerId, symlinkMarkerId].filter(Boolean).join(" ") || undefined;
+  const describedBy =
+    [gitMarkerId, symlinkMarkerId, decorationMarkerId].filter(Boolean).join(" ") || undefined;
 
   const menuItems = context.rowContextMenu?.(row);
   const rowSurface = (
@@ -802,13 +839,28 @@ function FileTreeRow({ row, isSelected, isOpen, context }: FileTreeRowProps) {
           {symlinkDescription}
         </span>
       )}
+      {decorationView && (
+        // Before the git marker, taking the trailing edge's `ml-auto`, so both
+        // stay in their own column. The badge itself is presentational; the
+        // provider's words ride the row's description.
+        <span className="ml-auto flex shrink-0 items-center">
+          <span id={decorationMarkerId} className="sr-only">
+            {decorationView.label}
+          </span>
+          <FileDecorationBadge decoration={decoration} />
+        </span>
+      )}
       {gitPresentation && (
         // `ml-auto` parks the marker at the trailing edge so a column of them
         // scans vertically, rather than tracking each name's ragged end.
         <span
           id={gitMarkerId}
           title={gitDescription ?? undefined}
-          className={cn("ml-auto w-3 shrink-0 text-center font-bold", gitPresentation.colorClass)}
+          className={cn(
+            "w-3 shrink-0 text-center font-bold",
+            !decorationView && "ml-auto",
+            gitPresentation.colorClass
+          )}
         >
           <span className="sr-only">{gitDescription}</span>
           <span aria-hidden="true">{gitPresentation.marker}</span>

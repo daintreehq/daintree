@@ -2410,10 +2410,6 @@ export const PROJECT_SCOPE_UNSCOPED_CONTRIBUTIONS = [
     "contributed skills land in one app-wide index behind the built-in MCP server's skills.search/skills.load, which external agent sessions query with no project context to filter on.",
   ],
   [
-    "fileDecorationProviders",
-    "decoration requests carry a resource path with no owning-project routing, so the provider would be consulted for files in every project the app has open.",
-  ],
-  [
     "processTools",
     "process-tool detections are mirrored into the shared pty-host as one detection table for every terminal in the app, so the icon mapping would apply to every project's processes.",
   ],

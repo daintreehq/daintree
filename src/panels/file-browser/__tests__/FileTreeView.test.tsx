@@ -22,6 +22,14 @@ const { isMacMock } = vi.hoisted(() => ({ isMacMock: vi.fn<() => boolean>(() => 
  * gate can be exercised without a real scroller. Null means "everything is
  * mounted", which is what the stub actually renders.
  */
+const { useFileTreeDecorationsMock } = vi.hoisted(() => ({
+  useFileTreeDecorationsMock:
+    vi.fn<(scope: string, paths: string[], enabled?: boolean) => Record<string, unknown>>(),
+}));
+vi.mock("@/hooks/useFileTreeDecorations", () => ({
+  useFileTreeDecorations: useFileTreeDecorationsMock,
+}));
+
 let rangeOverride: { startIndex: number; endIndex: number } | null = null;
 vi.mock("@/lib/platform", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/platform")>()),
@@ -107,6 +115,8 @@ beforeEach(() => {
   // Every render with a resolvable cursor scrolls once on mount, so the count
   // carries into the next test without this.
   scrollIntoViewMock.mockClear();
+  useFileTreeDecorationsMock.mockReset();
+  useFileTreeDecorationsMock.mockReturnValue({});
 });
 
 function renderTree(overrides: Partial<Parameters<typeof FileTreeView>[0]> = {}) {
@@ -1260,5 +1270,49 @@ describe("FileTreeView Add to project drop", () => {
     const over = fileDrag("dragover", true);
     fireEvent(getByRole("tree"), over);
     expect(over.defaultPrevented).toBe(false);
+  });
+});
+
+describe("FileTreeView plugin decorations", () => {
+  const files = Array.from({ length: 100 }, (_, i) => row(`f${i}.ts`));
+
+  afterEach(() => {
+    rangeOverride = null;
+  });
+
+  it("asks for the root's scope, enabled only when the tree has a root", () => {
+    renderTree();
+    expect(useFileTreeDecorationsMock.mock.calls.at(-1)?.[0]).toBe("worktree-files:/repo");
+    expect(useFileTreeDecorationsMock.mock.calls.at(-1)?.[2]).toBe(true);
+
+    renderTree({ basePath: "" });
+    expect(useFileTreeDecorationsMock.mock.calls.at(-1)?.[2]).toBe(false);
+  });
+
+  it("requests only the mounted window plus padding, not the whole listing", () => {
+    rangeOverride = { startIndex: 50, endIndex: 55 };
+    renderTree({ rows: files });
+    const paths = useFileTreeDecorationsMock.mock.calls.at(-1)?.[1] ?? [];
+    expect(paths).toContain("f50.ts");
+    expect(paths).toContain("f55.ts");
+    expect(paths).not.toContain("f0.ts");
+    expect(paths).not.toContain("f99.ts");
+    expect(paths.length).toBeLessThan(files.length);
+  });
+
+  it("draws a returned badge on its row and describes the row with the provider's words", () => {
+    useFileTreeDecorationsMock.mockReturnValue({
+      "README.md": { badge: "3", tooltip: "3 lint errors" },
+    });
+    const { container } = renderTree();
+    const treeitem = container.querySelector<HTMLElement>(
+      '[role="treeitem"][aria-label="README.md"]'
+    );
+    expect(treeitem?.textContent).toContain("3");
+    const ids = treeitem?.getAttribute("aria-describedby")?.split(" ") ?? [];
+    const described = ids.map((id) => container.ownerDocument.getElementById(id)?.textContent);
+    expect(described).toContain("3 lint errors");
+    const other = container.querySelector<HTMLElement>('[role="treeitem"][aria-label="src"]');
+    expect(other?.getAttribute("aria-describedby")).toBeNull();
   });
 });
