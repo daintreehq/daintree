@@ -262,7 +262,6 @@ export class IpcDispatcherImpl implements IpcDispatcher<IpcContext> {
     const listeners = this.sendListeners.get(channel);
     const refusal = this.refuseOverLink(channel, listeners !== undefined && listeners.size > 0);
     if (refusal) {
-      logRefusal("Link send dropped", `link-send:${channel}`, { channel, reason: refusal.code });
       return;
     }
     const ctx = buildEndpointContext(invocation);
@@ -273,7 +272,12 @@ export class IpcDispatcherImpl implements IpcDispatcher<IpcContext> {
         })
       )
     ).then((envelope) => {
-      if (!envelope.ok) {
+      // Refusals by the lease gate and the locality check are logged where they are made.
+      if (
+        !envelope.ok &&
+        envelope.error.code !== "DRIVEN_ELSEWHERE" &&
+        envelope.error.code !== "CHANNEL_NOT_REMOTABLE"
+      ) {
         logRefusal("Link send failed", `link-send-failed:${channel}:${envelope.error.code}`, {
           channel,
           code: envelope.error.code,
@@ -386,23 +390,13 @@ export class IpcDispatcherImpl implements IpcDispatcher<IpcContext> {
     if (router === null || hostId === null) {
       const verdict = this.checkLease(channel, { kind: "local", sender: event.sender }, args);
       if (verdict === null) return listener(event, ...args);
-      if (!isPendingVerdict(verdict)) {
-        logRefusal("Send dropped", `send:${channel}:${verdict.code}`, {
-          channel,
-          code: verdict.code,
-        });
-        return undefined;
-      }
+      // The gate logs its refusal where it makes it.
+      if (!isPendingVerdict(verdict)) return undefined;
       // Only a send whose target needed a lookup waits for it; the rest keep
       // their order with the sends around them.
       void verdict.then(
         (refusal) => {
-          if (refusal) {
-            logRefusal("Send dropped", `send:${channel}:${refusal.code}`, {
-              channel,
-              code: refusal.code,
-            });
-          } else listener(event, ...args);
+          if (!refusal) listener(event, ...args);
         },
         (error: unknown) =>
           logger.warn("Send dropped: lease check failed", {

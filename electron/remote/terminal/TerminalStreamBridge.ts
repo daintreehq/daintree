@@ -401,6 +401,7 @@ export class TerminalStreamBridge {
       if (replayable) {
         stream.sentSeq = entry.lastSeq;
         stream.needsReset = false;
+        stream.resetReason = null;
         outcomes.push({ id: entry.id, outcome: "replayed" });
       } else {
         this.markReset(
@@ -424,6 +425,7 @@ export class TerminalStreamBridge {
         this.settleOutstanding(stream);
         stream.sentSeq = stream.seq;
         stream.needsReset = false;
+        stream.resetReason = null;
         stream.owedReplacement = false;
       }
     }
@@ -740,7 +742,7 @@ export class TerminalStreamBridge {
     const requestId = ++this.nextFenceId;
     const timer = setTimeout(() => {
       const fence = this.fences.get(requestId);
-      if (fence) this.completeFence(requestId, fence, null);
+      if (fence) this.completeFence(requestId, fence, null, true);
     }, this.opts.snapshotTimeoutMs ?? DEFAULT_SNAPSHOT_TIMEOUT_MS);
     timer.unref?.();
     this.fences.set(requestId, { stream, boundary: null, timer });
@@ -756,7 +758,8 @@ export class TerminalStreamBridge {
   private completeFence(
     requestId: number,
     fence: PendingFence,
-    received: SerializedTerminalSnapshot | null
+    received: SerializedTerminalSnapshot | null,
+    timedOut = false
   ): void {
     clearTimeout(fence.timer);
     this.fences.delete(requestId);
@@ -773,7 +776,13 @@ export class TerminalStreamBridge {
     const covered = fence.boundary !== null;
     const boundary = fence.boundary ?? stream.seq;
     let snapshot = covered ? received : null;
-    let snapshotLost: string | null = covered ? (received ? null : "snapshot-missing") : "timeout";
+    let snapshotLost: string | null = timedOut
+      ? "timeout"
+      : covered
+        ? received
+          ? null
+          : "snapshot-missing"
+        : "fence-marker-missing";
     if (snapshot !== null && Buffer.byteLength(snapshot.data, "utf8") > this.maxSnapshotBytes) {
       snapshot = null;
       snapshotLost = "snapshot-too-large";
