@@ -141,7 +141,7 @@ async function resolveClassFile(
     };
   }
   if (source.text === null) return unreadableResult(candidate, "unsupported", source);
-  if (!job.declares(source, className)) {
+  if (!job.declares(source, source.text, className)) {
     return unreadableResult(candidate, "mismatch", source);
   }
   return {
@@ -446,11 +446,11 @@ class AngularJob {
   }
 
   /** A recursive chain names one class on every record; its file is scanned for it once. */
-  declares(source: ReadSource & { text: string }, className: string): boolean {
+  declares(source: ReadSource, text: string, className: string): boolean {
     const key = `${source.revision}\0${source.file.path}\0${className}`;
     let found = this.declarations.get(key);
     if (found === undefined) {
-      found = declaresClass(source.text, className);
+      found = declaresClass(text, className);
       this.declarations.set(key, found);
     }
     return found;
