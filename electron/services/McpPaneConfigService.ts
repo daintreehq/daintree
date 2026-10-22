@@ -12,6 +12,7 @@ import {
 } from "./pluginAgentMcp/grantRegistry.js";
 import { createLogger } from "../utils/logger.js";
 import { pluginMcpRoutePath, type AgentMcpToolScope } from "./pluginAgentMcp/types.js";
+import { RESERVED_PLUGIN_SERVER_KEYS } from "./pluginAgentMcp/serverKeys.js";
 import type { LaunchMcpInjection } from "../../shared/config/launchMcp.js";
 import {
   LAUNCH_MCP_FILE_PLACEHOLDER,
@@ -78,6 +79,8 @@ export interface PreparePanePluginServers {
    * grant the unload or revocation sweep never saw.
    */
   isEligible?: (server: PanePluginServer) => boolean;
+  /** The launch is a Daintree Assistant session's: its grants answer to the Assistant's access too. */
+  consumer?: "assistant";
 }
 
 export interface PreparePaneConfigParams {
@@ -328,10 +331,10 @@ export class McpPaneConfigService {
   private mintPluginServers(
     paneId: string,
     port: number,
-    { projectId, servers, launchAgentIdHint, isEligible }: PreparePanePluginServers
+    { projectId, servers, launchAgentIdHint, isEligible, consumer }: PreparePanePluginServers
   ): LaunchMcpServer[] {
     const seenInstances = new Set<string>();
-    const seenKeys = new Set<string>([MCP_SERVER_KEY]);
+    const seenKeys = new Set<string>([MCP_SERVER_KEY, ...RESERVED_PLUGIN_SERVER_KEYS]);
     const minted: Array<{ server: PanePluginServer; token: string }> = [];
     for (const server of servers) {
       if (seenInstances.has(server.pluginInstanceId) || seenKeys.has(server.serverKey)) continue;
@@ -352,6 +355,7 @@ export class McpPaneConfigService {
           projectId,
           terminalId: paneId,
           ...(launchAgentIdHint !== undefined ? { launchAgentIdHint } : {}),
+          ...(consumer !== undefined ? { consumer } : {}),
         });
         this.grantedPanes.add(paneId);
         minted.push({ server, token });

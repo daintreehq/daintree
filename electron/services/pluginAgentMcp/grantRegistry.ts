@@ -23,6 +23,11 @@ export interface PluginMcpGrant {
   readonly projectId: string;
   readonly terminalId: string;
   readonly launchAgentIdHint?: string;
+  /**
+   * Issued to the project's Daintree Assistant rather than to an agent the user
+   * launched, so the Assistant's own answer is checked on every request too.
+   */
+  readonly consumer?: "assistant";
   readonly issuedAt: number;
 }
 
@@ -33,6 +38,7 @@ export interface IssuePluginMcpGrantParams {
   projectId: string;
   terminalId: string;
   launchAgentIdHint?: string;
+  consumer?: "assistant";
 }
 
 export type PluginMcpGrantRevokeReason =
@@ -131,6 +137,7 @@ export class PluginMcpGrantRegistry {
       ...(params.launchAgentIdHint !== undefined
         ? { launchAgentIdHint: params.launchAgentIdHint }
         : {}),
+      ...(params.consumer !== undefined ? { consumer: params.consumer } : {}),
       issuedAt: now,
     });
     this.byDigest.set(grant.bearerSha256, grant);
@@ -140,6 +147,7 @@ export class PluginMcpGrantRegistry {
       pluginInstanceId: grant.pluginInstanceId,
       projectId: grant.projectId,
       terminalId: grant.terminalId,
+      ...(grant.consumer !== undefined ? { consumer: grant.consumer } : {}),
     });
     return { grant, token };
   }

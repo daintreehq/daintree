@@ -4,7 +4,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { ToolListChangedNotificationSchema } from "@modelcontextprotocol/sdk/types.js";
 import type { PluginMcpCaller } from "../../../../shared/types/plugin.js";
 import { AgentMcpEndpointRegistry } from "../endpointRegistry.js";
-import { createPluginSessionServer } from "../pluginSessionServer.js";
+import { createPluginSessionServer, type PluginToolCallObserver } from "../pluginSessionServer.js";
 import {
   DATABASE_ENDPOINT_ID,
   type AgentMcpRegisteredTool,
@@ -98,6 +98,7 @@ async function connect(
     databaseTools?: AgentMcpRegisteredTool[];
     activation?: "fails" | "registers-nothing";
     isCallerServable?: () => boolean;
+    observeToolCall?: PluginToolCallObserver;
   } = {}
 ): Promise<Harness> {
   const registry = new AgentMcpEndpointRegistry();
@@ -140,6 +141,7 @@ async function connect(
     ...(options.isCallerServable !== undefined
       ? { isCallerServable: options.isCallerServable }
       : {}),
+    ...(options.observeToolCall !== undefined ? { observeToolCall: options.observeToolCall } : {}),
   });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: "test-client", version: "1.0.0" });
@@ -938,5 +940,95 @@ describe("createPluginSessionServer", () => {
       pending.resolve({ value: 1 });
       expect((await call).isError).toBeUndefined();
     });
+  });
+});
+
+describe("observing tool calls", () => {
+  function observer() {
+    const settled: string[] = [];
+    const observe = vi.fn<PluginToolCallObserver>(() => (outcome) => {
+      settled.push(outcome);
+    });
+    return { observe, settled };
+  }
+
+  it("is told the tool and the argument names, never their values, and how the call ended", async () => {
+    const { observe, settled } = observer();
+    const { client } = await connect(
+      vi.fn(async () => ({ ok: true })),
+      {
+        observeToolCall: observe,
+      }
+    );
+
+    const result = await client.callTool({ name: "lookup", arguments: { id: "secret-42" } });
+
+    expect(result.isError).toBeFalsy();
+    expect(observe).toHaveBeenCalledTimes(1);
+    expect(observe).toHaveBeenCalledWith("lookup", ["id"]);
+    expect(JSON.stringify(observe.mock.calls)).not.toContain("secret-42");
+    expect(settled).toEqual(["ok"]);
+  });
+
+  it("settles a tool error as an error", async () => {
+    const { observe, settled } = observer();
+    const { client } = await connect(
+      vi.fn(async () => {
+        throw new Error("ledger locked");
+      }),
+      { observeToolCall: observe }
+    );
+
+    const result = await client.callTool({ name: "lookup", arguments: {} });
+
+    expect(result.isError).toBe(true);
+    expect(settled).toEqual(["error"]);
+  });
+
+  it("settles a call refused before dispatch as an error", async () => {
+    const { observe, settled } = observer();
+    const invoke = vi.fn();
+    const { client } = await connect(invoke, { observeToolCall: observe });
+
+    await expect(client.callTool({ name: "missing", arguments: {} })).rejects.toThrow(
+      /Unknown tool/
+    );
+
+    expect(invoke).not.toHaveBeenCalled();
+    expect(settled).toEqual(["error"]);
+  });
+
+  it("never fails a call because the observer threw", async () => {
+    const { client } = await connect(
+      vi.fn(async () => ({ ok: true })),
+      {
+        observeToolCall: () => {
+          throw new Error("observer broke");
+        },
+      }
+    );
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const result = await client.callTool({ name: "lookup", arguments: {} });
+
+    expect(result.isError).toBeFalsy();
+    errors.mockRestore();
+  });
+
+  it("never fails a call because the settle threw", async () => {
+    const { client } = await connect(
+      vi.fn(async () => ({ ok: true })),
+      {
+        observeToolCall: () => () => {
+          throw new Error("settle broke");
+        },
+      }
+    );
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const result = await client.callTool({ name: "lookup", arguments: {} });
+
+    expect(result.isError).toBeFalsy();
+    errors.mockRestore();
   });
 });

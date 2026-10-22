@@ -1,10 +1,14 @@
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import type { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/protocol.js";
 import {
   CallToolRequestSchema,
   ErrorCode,
   ListToolsRequestSchema,
   McpError,
+  type CallToolRequest,
   type CallToolResult,
+  type ServerNotification,
+  type ServerRequest,
   type Tool,
 } from "@modelcontextprotocol/sdk/types.js";
 import {
@@ -57,7 +61,21 @@ export interface PluginSessionServerOptions {
    * began can reach dispatch after the next generation registered.
    */
   isCallerServable?: () => boolean;
+  /**
+   * Told when a tool call starts, by name; the function it returns, if any, is
+   * told once how the call ended. Only ever sees the tool's name and the
+   * argument names, never their values or the result.
+   */
+  observeToolCall?: PluginToolCallObserver;
 }
+
+/** How a plugin tool call ended, as an observer is told: answered, or a tool error. */
+export type PluginToolCallOutcome = "ok" | "error";
+
+export type PluginToolCallObserver = (
+  toolName: string,
+  argNames: readonly string[]
+) => ((outcome: PluginToolCallOutcome) => void) | undefined;
 
 /** Long enough for a respawned worker to re-register; short enough to stay inside a call's budget. */
 const DEFAULT_ROSTER_WAIT_MS = 5_000;
@@ -120,6 +138,7 @@ export function createPluginSessionServer(options: PluginSessionServerOptions): 
     maxResultBytes = AGENT_MCP_MAX_RESULT_BYTES,
     rosterWaitMs = DEFAULT_ROSTER_WAIT_MS,
     isCallerServable = () => true,
+    observeToolCall,
   } = options;
 
   const server = new Server(
@@ -254,7 +273,21 @@ export function createPluginSessionServer(options: PluginSessionServerOptions): 
 
   let inFlight = 0;
 
-  server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
+  // An observer failing must never fail the call it watches.
+  const observe = (toolName: string, args: unknown) => {
+    if (observeToolCall === undefined) return undefined;
+    try {
+      return observeToolCall(toolName, isPlainObject(args) ? Object.keys(args) : []);
+    } catch (err) {
+      console.error("[PluginAgentMcp] tool call observer threw:", err);
+      return undefined;
+    }
+  };
+
+  const callTool = async (
+    request: CallToolRequest,
+    extra: RequestHandlerExtra<ServerRequest, ServerNotification>
+  ): Promise<CallToolResult> => {
     const toolName = request.params.name;
     const rawArgs: unknown = request.params.arguments ?? {};
     if (!isPlainObject(rawArgs)) {
@@ -444,6 +477,23 @@ export function createPluginSessionServer(options: PluginSessionServerOptions): 
       offRegistry?.();
       extra.signal.removeEventListener("abort", onClientCancel);
       sessionSignal.removeEventListener("abort", onSessionClosed);
+    }
+  };
+
+  server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
+    const settle = observe(request.params.name, request.params.arguments);
+    if (settle === undefined) return callTool(request, extra);
+    let outcome: PluginToolCallOutcome = "error";
+    try {
+      const result = await callTool(request, extra);
+      if (result.isError !== true) outcome = "ok";
+      return result;
+    } finally {
+      try {
+        settle(outcome);
+      } catch (err) {
+        console.error("[PluginAgentMcp] tool call observer threw:", err);
+      }
     }
   });
 

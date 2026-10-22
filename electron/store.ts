@@ -739,6 +739,15 @@ export interface StoreSchema {
     string,
     { decidedAt: number; access: "off" | "read-only" | "read-write" | null }
   >;
+  /**
+   * How much of each plugin's agent tools the project's Daintree Assistant may
+   * use, capped at the project's own access. Answered by the user alone: no
+   * repository default and no all-projects answer reach it.
+   */
+  projectAssistantAgentMcpAccess?: Record<
+    string,
+    Record<string, { decidedAt: number; access: "off" | "read-only" | "read-write" }>
+  >;
 
   /**
    * Workspaces the user asked to keep resident in the project-view cache
@@ -1028,6 +1037,7 @@ const storeOptions = {
     projectAgentMcpEnablement: {},
     projectAgentMcpAccess: {},
     pluginAgentMcpAccess: {},
+    projectAssistantAgentMcpAccess: {},
     workspaceKeepResident: {},
   },
   cwd: process.env.DAINTREE_USER_DATA,

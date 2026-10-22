@@ -68,8 +68,11 @@ import type * as PluginServiceModule from "../../../services/PluginService.js";
 import { listDeclaredAgentMcpPlugins } from "../../../services/pluginAgentMcp/declaredEndpoints.js";
 import {
   agentMcpScopeFor,
+  assistantAgentMcpScopeFor,
   hasAnyAgentMcpEnablement,
+  hasAnyAssistantAgentMcpAccess,
   isAgentMcpScopeAllowed,
+  isAssistantAgentMcpScopeAllowed,
   refreshProjectAgentMcpDefaults,
 } from "../../../services/pluginAgentMcp/projectEnablement.js";
 import { pluginServerKeysFor } from "../../../services/pluginAgentMcp/serverKeys.js";
@@ -228,9 +231,11 @@ import { buildCommandLaunchShell } from "./commandLaunch.js";
 // The plugin MCP servers an agent launch in this project should be handed: one
 // per plugin instance that is running, may serve this project, and has agent
 // access here (the user's answer, else their answer for every project or the
-// repository's own `.daintree/mcp.json`). Access is read first because it is a
-// store read and one small file, and an empty answer — every project with no
-// plugin tools on — keeps the launch off the lazy PluginService load entirely.
+// repository's own `.daintree/mcp.json`). A Daintree Assistant launch gets
+// those its own answer allows as well, and nothing more. Access is read first
+// because it is a store read and one small file, and an empty answer — every
+// project with no plugin tools on — keeps the launch off the lazy PluginService
+// load entirely.
 const PLUGIN_INIT_WAIT_MS = 5000;
 const PROJECT_PLUGINS_WAIT_MS = 5000;
 // Longest a Windows command launch waits for the default shell's PATH search,
@@ -239,9 +244,11 @@ const WINDOWS_SHELL_WAIT_MS = 2_000;
 
 async function resolvePluginMcpServers(
   projectId: string,
-  projectRoot: string
+  projectRoot: string,
+  consumer?: "assistant"
 ): Promise<PanePluginServer[]> {
   if (!isProjectWorkspaceId(projectId)) return [];
+  if (consumer === "assistant" && !hasAnyAssistantAgentMcpAccess(projectId)) return [];
   await refreshProjectAgentMcpDefaults(projectId, projectRoot);
   if (!hasAnyAgentMcpEnablement(projectId)) return [];
   const pluginService = await getPluginService();
@@ -285,9 +292,10 @@ async function resolvePluginMcpServers(
   // Named over every plugin that could serve here, not only those on, so a
   // plugin's name does not change when another is switched on or off.
   const keys = pluginServerKeysFor(declared);
+  const scopeFor = consumer === "assistant" ? assistantAgentMcpScopeFor : agentMcpScopeFor;
   const servers: PanePluginServer[] = [];
   for (const plugin of declared) {
-    const scope = agentMcpScopeFor(projectId, plugin);
+    const scope = scopeFor(projectId, plugin);
     const serverKey = keys.get(plugin.pluginInstanceId);
     if (scope !== null && serverKey !== undefined) {
       servers.push({ pluginInstanceId: plugin.pluginInstanceId, serverKey, scope });
@@ -314,16 +322,38 @@ function mergeLaunchEnv(
   return { ...kept, ...injected };
 }
 
+/**
+ * The session's `--mcp-config` file and the plugin servers' file as one flag
+ * with both values, the form Claude documents for several files. Anything else
+ * is appended as it is.
+ */
+function joinMcpConfigArgs(sessionArgs: string[], pluginArgs: string[]): string[] {
+  if (
+    sessionArgs.length === 2 &&
+    pluginArgs.length === 2 &&
+    sessionArgs[0] === "--mcp-config" &&
+    pluginArgs[0] === "--mcp-config"
+  ) {
+    return ["--mcp-config", sessionArgs[1]!, pluginArgs[1]!];
+  }
+  return [...sessionArgs, ...pluginArgs];
+}
+
 // Re-checked synchronously as each grant is minted: the servers above were
 // resolved before the launch's awaits, and a plugin unloaded or its access
 // reduced in between would otherwise get a grant its revocation sweep has
 // already run past. `cachedPluginService` is always set by then — the server
 // list could not have been non-empty without loading it.
-function isPluginMcpServerStillEligible(projectId: string): (server: PanePluginServer) => boolean {
+function isPluginMcpServerStillEligible(
+  projectId: string,
+  consumer?: "assistant"
+): (server: PanePluginServer) => boolean {
+  const isAllowed =
+    consumer === "assistant" ? isAssistantAgentMcpScopeAllowed : isAgentMcpScopeAllowed;
   return ({ pluginInstanceId, scope }) =>
     cachedPluginService !== null &&
     cachedPluginService.hasPlugin(pluginInstanceId) &&
-    isAgentMcpScopeAllowed(projectId, pluginInstanceId, scope);
+    isAllowed(projectId, pluginInstanceId, scope);
 }
 
 export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): () => void {
@@ -781,16 +811,15 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       // supplied this way raise no per-folder approval prompt. Same `null`
       // contract as Codex and Copilot: a valid help token that does not
       // belong to a Claude session is a cross-agent reuse and refuses to spawn.
+      let claudeArgs: string[] = [];
       if (launchAgentId === "claude") {
-        const claudeArgs = helpSessionService.getClaudeLaunchArgs(helpToken);
-        if (claudeArgs === null) {
+        const laneArgs = helpSessionService.getClaudeLaunchArgs(helpToken);
+        if (laneArgs === null) {
           throw new Error(
             "Daintree Assistant help token does not belong to a Claude session; refusing to spawn"
           );
         }
-        if (claudeArgs.length > 0) {
-          safeCommand = `${safeCommand} ${claudeArgs.map((arg) => quoteCommandArg(arg, quotingShell)).join(" ")}`;
-        }
+        claudeArgs = laneArgs;
       }
 
       // Inject the per-session assistant scratch dir into the PTY spawn env
@@ -805,6 +834,77 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
         spawnEnv = { ...(spawnEnv ?? {}), ...scratchEnv };
       }
 
+      // The plugin servers the user let this project's Assistant use, in the
+      // agent's own launch dialect beside the session's servers. Each grant is
+      // minted for this launch alone and keyed by its terminal id, so PTY exit
+      // and a failed spawn revoke it as they do an agent pane's, and the
+      // session's own teardown revokes it too. Any failure here launches the
+      // Assistant without them rather than not at all.
+      let pluginArgs: string[] = [];
+      let pluginsPrepared = false;
+      const pluginLaunch =
+        launchMcp !== undefined ? helpSessionService.getPluginLaunchContext(helpToken) : null;
+      if (launchMcp !== undefined && pluginLaunch !== null) {
+        try {
+          // A name the Assistant's own servers or the user's assistant folder
+          // already use is skipped rather than merged into theirs.
+          const servers = (
+            await resolvePluginMcpServers(
+              pluginLaunch.projectId,
+              pluginLaunch.projectPath,
+              "assistant"
+            )
+          ).filter((server) => !pluginLaunch.serverNamesInUse.has(server.serverKey));
+          if (servers.length > 0) {
+            const mcpServerService = await getMcpServerService();
+            // So the Assistant's panel shows its plugin tool calls beside its
+            // calls to Daintree's own server.
+            mcpServerService.setAssistantPluginLaneResolver((terminalId) =>
+              helpSessionService.getAssistantPluginLane(terminalId)
+            );
+            const ready = mcpServerService.isRunning || (await mcpServerService.ensureReady());
+            const port = mcpServerService.currentPort;
+            if (ready && port) {
+              const prepared = await mcpPaneConfigService.preparePaneConfig({
+                paneId: id,
+                port,
+                tier: "off",
+                injection: launchMcp,
+                inheritedEnv: { ...process.env, ...(spawnEnv ?? {}) },
+                cwd,
+                plugin: {
+                  projectId: pluginLaunch.projectId,
+                  servers,
+                  launchAgentIdHint: launchAgentId,
+                  isEligible: isPluginMcpServerStillEligible(pluginLaunch.projectId, "assistant"),
+                  consumer: "assistant",
+                },
+              });
+              if (prepared) {
+                pluginsPrepared = true;
+                pluginArgs = prepared.args;
+                if (Object.keys(prepared.env).length > 0) {
+                  spawnEnv = mergeLaunchEnv(spawnEnv ?? {}, prepared.env);
+                }
+              }
+            }
+          }
+        } catch (pluginErr) {
+          if (pluginsPrepared) {
+            await mcpPaneConfigService.revokePaneConfig(id).catch(() => {});
+          }
+          pluginArgs = [];
+          console.error(
+            "[TerminalSpawn] Failed to hand the Daintree Assistant its plugin tools; launching without them:",
+            pluginErr
+          );
+        }
+      }
+      const launchArgs = joinMcpConfigArgs(claudeArgs, pluginArgs);
+      if (launchArgs.length > 0) {
+        safeCommand = `${safeCommand} ${launchArgs.map((arg) => quoteCommandArg(arg, quotingShell)).join(" ")}`;
+      }
+
       // Bind this terminalId to the help session so HelpSessionService can
       // kill the PTY when the session is displaced or revoked (#7509). Owns
       // the binding from main-process spawn time, so it doesn't depend on
@@ -814,6 +914,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       // already displaced) — refuse to launch as a help session rather
       // than silently degrading to a non-help Claude.
       if (!helpSessionService.markTerminalForToken(helpToken, id, launchAgentId)) {
+        if (pluginsPrepared) await mcpPaneConfigService.revokePaneConfig(id).catch(() => {});
         throw new Error(
           "Daintree Assistant session token is invalid or already displaced; refusing to spawn"
         );

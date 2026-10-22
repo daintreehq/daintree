@@ -18,6 +18,7 @@ function plugin(over: Partial<ProjectAgentToolPlugin> = {}): ProjectAgentToolPlu
     pluginTools: { name: "Household ledger" },
     access: "off",
     source: "default",
+    assistantAccess: "off",
     allProjectsAccess: "off",
     available: true,
     ...over,
@@ -882,5 +883,143 @@ describe("ProjectAgentToolsSection", () => {
 
     await screen.findByTestId("project-agent-tool-row");
     expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  describe("the Daintree Assistant (#13827)", () => {
+    function assistantSwitch(name: string): HTMLElement {
+      return within(rowFor(name)).getByTestId("project-agent-tool-assistant");
+    }
+
+    function changesSwitch(name: string): HTMLElement {
+      return within(rowFor(name)).getByTestId("project-agent-tool-assistant-changes");
+    }
+
+    const isOn = (el: HTMLElement) => el.getAttribute("aria-checked") === "true";
+    const isDisabled = (el: HTMLElement) => el.hasAttribute("disabled");
+
+    async function renderWith(plugins: ProjectAgentToolPlugin[]) {
+      agentMcpApi.listProjectPlugins.mockResolvedValue(snapshot(plugins));
+      render(<ProjectAgentToolsSection />);
+      await screen.findByTestId("project-agent-tools");
+    }
+
+    it("is off by default and can't be turned on while the project's agents have no access", async () => {
+      await renderWith([plugin()]);
+
+      const toggle = assistantSwitch("Ledger");
+      expect(isOn(toggle)).toBe(false);
+      expect(isDisabled(toggle)).toBe(true);
+      expect(describedText(toggle)).toContain("Agents in this project have no access");
+    });
+
+    it("starts at read only and says plainly what its plugin data can do", async () => {
+      await renderWith([plugin({ access: "read-write", source: "project" })]);
+      agentMcpApi.setPluginAccess.mockResolvedValue(
+        snapshot([
+          plugin({ access: "read-write", source: "project", assistantAccess: "read-only" }),
+        ])
+      );
+
+      const toggle = assistantSwitch("Ledger");
+      expect(describedText(toggle)).toContain("could steer");
+      fireEvent.click(toggle);
+
+      expect(agentMcpApi.setPluginAccess).toHaveBeenCalledWith({
+        pluginInstanceId: "acme.ledger",
+        access: "read-only",
+        scope: "assistant",
+      });
+      await waitFor(() => expect(isOn(assistantSwitch("Ledger"))).toBe(true));
+    });
+
+    it("needs a second choice for tools that change things", async () => {
+      await renderWith([
+        plugin({ access: "read-write", source: "project", assistantAccess: "read-only" }),
+      ]);
+      agentMcpApi.setPluginAccess.mockResolvedValue(
+        snapshot([
+          plugin({ access: "read-write", source: "project", assistantAccess: "read-write" }),
+        ])
+      );
+
+      const changes = changesSwitch("Ledger");
+      expect(isOn(changes)).toBe(false);
+      expect(isDisabled(changes)).toBe(false);
+      fireEvent.click(changes);
+
+      expect(agentMcpApi.setPluginAccess).toHaveBeenCalledWith({
+        pluginInstanceId: "acme.ledger",
+        access: "read-write",
+        scope: "assistant",
+      });
+      await waitFor(() => expect(isOn(changesSwitch("Ledger"))).toBe(true));
+    });
+
+    it("offers no changes until the Assistant has access, and none past the agents' own", async () => {
+      await renderWith([
+        plugin({ access: "read-write", source: "project" }),
+        notes({ access: "read-write", source: "project" }),
+        plugin({
+          pluginInstanceId: "acme.crm",
+          pluginDisplayName: "Crm",
+          access: "read-only",
+          source: "project",
+          assistantAccess: "read-only",
+        }),
+      ]);
+
+      expect(isDisabled(changesSwitch("Ledger"))).toBe(true);
+      expect(describedText(changesSwitch("Ledger"))).toContain(
+        "Let the Assistant use its tools first"
+      );
+      expect(isDisabled(changesSwitch("Crm"))).toBe(true);
+      expect(describedText(changesSwitch("Crm"))).toContain("can only read it");
+    });
+
+    it("turning it off sends off, and stays possible after the agents lose access", async () => {
+      await renderWith([plugin({ access: "off", assistantAccess: "read-write" })]);
+      agentMcpApi.setPluginAccess.mockResolvedValue(snapshot([plugin()]));
+
+      const toggle = assistantSwitch("Ledger");
+      expect(isOn(toggle)).toBe(true);
+      expect(isDisabled(toggle)).toBe(false);
+      expect(describedText(toggle)).toContain("the Assistant has none either");
+      expect(isDisabled(changesSwitch("Ledger"))).toBe(false);
+      fireEvent.click(toggle);
+
+      expect(agentMcpApi.setPluginAccess).toHaveBeenCalledWith({
+        pluginInstanceId: "acme.ledger",
+        access: "off",
+        scope: "assistant",
+      });
+    });
+
+    it("says a plugin with no read-only tools gives the Assistant nothing until changes are allowed", async () => {
+      await renderWith([notes({ access: "read-write", source: "project" })]);
+
+      expect(describedText(assistantSwitch("Notes"))).toContain(
+        "reaches nothing here until changes are allowed"
+      );
+    });
+
+    it("has no changes switch for a plugin with nothing that changes things", async () => {
+      await renderWith([
+        plugin({ pluginTools: undefined, access: "read-only", source: "project" }),
+      ]);
+
+      expect(
+        within(rowFor("Ledger")).queryByTestId("project-agent-tool-assistant-changes")
+      ).toBeNull();
+    });
+
+    it("keeps an answer for a plugin that went away visible and switchable off", async () => {
+      await renderWith([
+        plugin({ available: false, access: "off", assistantAccess: "read-only" }),
+        notes({ available: false, access: "read-write", source: "project" }),
+      ]);
+
+      expect(isDisabled(assistantSwitch("Ledger"))).toBe(false);
+      expect(within(rowFor("Notes")).queryByTestId("project-agent-tool-assistant")).toBeNull();
+    });
   });
 });

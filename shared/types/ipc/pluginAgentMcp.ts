@@ -56,6 +56,12 @@ export interface ProjectAgentToolPlugin {
    */
   writesWithheld?: true;
   /**
+   * How much of the plugin's tools the user lets this project's Daintree
+   * Assistant use. Never more than `access` takes effect, and only the user
+   * sets it: nothing in the repository and no default for every project does.
+   */
+  assistantAccess: AgentMcpAccess;
+  /**
    * False for a plugin whose access is on for this project but that no running
    * plugin currently offers here (it was disabled, uninstalled or changed its
    * manifest). The answer is kept, so it is listed and can be turned off; it
@@ -73,10 +79,18 @@ export interface ProjectAgentToolsSnapshot {
   mcpServerEnabled: boolean;
 }
 
-export interface SetProjectAgentToolAccessPayload {
-  pluginInstanceId: string;
-  /** Null clears the answer at that scope, so the plugin follows the next one down. */
-  access: AgentMcpAccess | null;
-  /** `"all-projects"` is for installed plugins only. */
-  scope: "project" | "all-projects";
-}
+export type SetProjectAgentToolAccessPayload =
+  | {
+      pluginInstanceId: string;
+      /** Null clears the answer at that scope, so the plugin follows the next one down. */
+      access: AgentMcpAccess | null;
+      /** `"all-projects"` is for installed plugins only. */
+      scope: "project" | "all-projects";
+    }
+  | {
+      pluginInstanceId: string;
+      /** No more than this project's agents have; off is always accepted. */
+      access: AgentMcpAccess;
+      /** The project's Daintree Assistant. */
+      scope: "assistant";
+    };

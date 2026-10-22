@@ -9,15 +9,18 @@ import {
 } from "../../services/pluginAgentMcp/declaredEndpoints.js";
 import {
   allProjectsAgentMcpAccess,
+  assistantAgentMcpAccess,
   hasLegacyAgentMcpAnswer,
   isAgentMcpEndpointEnabled,
   isAgentMcpEndpointEnabledByDefault,
   listAgentMcpAccessInstances,
+  listAssistantAgentMcpAccessInstances,
   listLegacyAgentMcpEndpointIds,
   projectAgentMcpAccessAnswer,
   refreshProjectAgentMcpDefaults,
   setAllProjectsAgentMcpAccess,
   setProjectAgentMcpAccess,
+  setProjectAssistantAgentMcpAccess,
 } from "../../services/pluginAgentMcp/projectEnablement.js";
 import { projectDefaultForEndpoint } from "../../services/pluginAgentMcp/projectDefaults.js";
 import { projectStore } from "../../services/ProjectStore.js";
@@ -63,11 +66,20 @@ async function getMcpServerService(): Promise<McpServerSingleton> {
   return cachedMcpServerService;
 }
 
-const SetPluginAccessSchema = z.object({
-  pluginInstanceId: z.string().min(1).max(512),
-  access: z.enum(AGENT_MCP_ACCESS_LEVELS).nullable(),
-  scope: z.enum(["project", "all-projects"]),
-});
+const SetPluginAccessSchema = z.union([
+  z.object({
+    pluginInstanceId: z.string().min(1).max(512),
+    access: z.enum(AGENT_MCP_ACCESS_LEVELS).nullable(),
+    scope: z.enum(["project", "all-projects"]),
+  }),
+  z.object({
+    pluginInstanceId: z.string().min(1).max(512),
+    access: z.enum(AGENT_MCP_ACCESS_LEVELS),
+    scope: z.literal("assistant"),
+  }),
+]);
+
+const ACCESS_RANK: Record<AgentMcpAccess, number> = { off: 0, "read-only": 1, "read-write": 2 };
 
 function senderProjectId(ctx: IpcContext): string | null {
   return ctx.projectId !== null && isProjectWorkspaceId(ctx.projectId) ? ctx.projectId : null;
@@ -188,6 +200,7 @@ function row(
       : {}),
     access: levelOf(databases, own, writes),
     source,
+    assistantAccess: assistantAgentMcpAccess(projectId, id),
     ...(installed ? { allProjectsAccess: allProjects ?? "off" } : {}),
     ...(!installed && repositoryNamesPlugin
       ? {
@@ -272,7 +285,11 @@ async function buildSnapshot(projectId: string | null): Promise<ProjectAgentTool
   // Consent outlives the plugin being loaded, so access left on for a plugin
   // that has since been disabled or uninstalled would silently apply again the
   // moment it comes back. Listing it keeps that answer visible and revocable.
-  for (const id of listAgentMcpAccessInstances(projectId)) {
+  const retained = new Set([
+    ...listAgentMcpAccessInstances(projectId),
+    ...listAssistantAgentMcpAccessInstances(projectId),
+  ]);
+  for (const id of retained) {
     if (declared.some((d) => d.pluginInstanceId === id)) continue;
     const manifest = plugins.find((p) => p.instanceId === id)?.manifest;
     const orphan = row(
@@ -305,6 +322,43 @@ function isMeaningful(plugin: DeclaredAgentMcpPlugin, access: AgentMcpAccess): b
 }
 
 /**
+ * Record how much of a plugin's tools the project's Daintree Assistant may use.
+ * Off is always accepted, so an answer for a plugin that went away can be
+ * cleared. Anything else needs the plugin running here, and never goes past
+ * what this project's agents have: the Assistant's answer is a share of theirs.
+ * Read only is accepted for a plugin with no database tools, where it reaches
+ * nothing until read and write is chosen as well.
+ */
+async function setAssistantAccess(
+  projectId: string,
+  pluginInstanceId: string,
+  access: AgentMcpAccess
+): Promise<void> {
+  if (access === "off") {
+    setProjectAssistantAgentMcpAccess(projectId, pluginInstanceId, access);
+    return;
+  }
+  const svc = await getPluginService();
+  await svc.waitForInit();
+  await refreshProjectAgentMcpDefaults(projectId, projectStore.getProjectById(projectId)?.path);
+  // Checked and written with no await between, as the project answer is.
+  const plugin = declaredFor(svc, projectId).find((d) => d.pluginInstanceId === pluginInstanceId);
+  if (!plugin) {
+    throw new Error("agent tools: no running plugin offers tools in this project");
+  }
+  if (access === "read-write" && !isMeaningful(plugin, access)) {
+    throw new Error(`agent tools: that plugin has nothing for "${access}" to allow`);
+  }
+  const projectAccess = row(projectId, plugin, true).access;
+  if (ACCESS_RANK[access] > ACCESS_RANK[projectAccess]) {
+    throw new Error(
+      "agent tools: the Daintree Assistant can't have more access than this project's agents"
+    );
+  }
+  setProjectAssistantAgentMcpAccess(projectId, pluginInstanceId, access);
+}
+
+/**
  * How much of each plugin's agent tools this project's agents may use (the
  * access `projectEnablement.ts` stores), and an installed plugin's access for
  * every project.
@@ -331,6 +385,10 @@ export const pluginAgentMcpNamespace = defineIpcNamespace({
       async (ctx, payload): Promise<ProjectAgentToolsSnapshot> => {
         const projectId = senderProjectId(ctx);
         if (projectId === null) throw new Error("agent tools: sender has no project");
+        if (payload.scope === "assistant") {
+          await setAssistantAccess(projectId, payload.pluginInstanceId, payload.access);
+          return buildSnapshot(projectId);
+        }
         const { pluginInstanceId, access, scope } = payload;
         if (scope === "all-projects" && projectIdFromPluginInstanceKey(pluginInstanceId) !== null) {
           throw new Error("agent tools: only an installed plugin has a setting for every project");

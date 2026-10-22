@@ -127,19 +127,38 @@ vi.mock("../../../utils.js", () => ({
   },
 }));
 
-const { mockValidateToken, mockMarkTerminalForToken } = vi.hoisted(() => ({
+type PluginLaunchContext = {
+  projectId: string;
+  projectPath: string;
+  serverNamesInUse: ReadonlySet<string>;
+};
+
+const {
+  mockValidateToken,
+  mockMarkTerminalForToken,
+  mockClaudeLaunchArgs,
+  mockCodexLaunchArgs,
+  mockCopilotLaunchArgs,
+  mockPluginLaunchContext,
+} = vi.hoisted(() => ({
   mockValidateToken: vi.fn<(token: string) => "core" | "full" | false>(),
   mockMarkTerminalForToken: vi.fn(() => true),
+  mockClaudeLaunchArgs: vi.fn<() => string[] | null>(() => []),
+  mockCodexLaunchArgs: vi.fn<() => string[] | null>(() => null),
+  mockCopilotLaunchArgs: vi.fn<() => string[] | null>(() => null),
+  mockPluginLaunchContext: vi.fn<(token: string) => PluginLaunchContext | null>(() => null),
 }));
 
 vi.mock("../../../../services/HelpSessionService.js", () => ({
   helpSessionService: {
     validateToken: (token: string) => mockValidateToken(token),
-    getCodexLaunchArgs: () => null,
-    getCopilotLaunchArgs: () => null,
-    getClaudeLaunchArgs: () => [],
+    getCodexLaunchArgs: () => mockCodexLaunchArgs(),
+    getCopilotLaunchArgs: () => mockCopilotLaunchArgs(),
+    getClaudeLaunchArgs: () => mockClaudeLaunchArgs(),
     getAssistantScratchEnv: () => null,
     getBypassPermissions: () => false,
+    getPluginLaunchContext: (token: string) => mockPluginLaunchContext(token),
+    getAssistantPluginLane: () => null,
     markTerminalForToken: mockMarkTerminalForToken,
     unbindTerminal: vi.fn(),
     isHelpTerminal: () => false,
@@ -158,6 +177,7 @@ vi.mock("../../../../services/McpServerService.js", () => ({
     setPaneWorkspaceBindingResolver: vi.fn(),
     setPaneOwnershipPrincipalResolver: vi.fn(),
     setPaneTerminalResolver: vi.fn(),
+    setAssistantPluginLaneResolver: vi.fn(),
     revokePaneBearer: vi.fn(),
   },
 }));
@@ -193,6 +213,7 @@ import { pluginMcpGrantRegistry } from "../../../../services/pluginAgentMcp/gran
 import {
   setAllProjectsAgentMcpAccess,
   setProjectAgentMcpAccess,
+  setProjectAssistantAgentMcpAccess,
 } from "../../../../services/pluginAgentMcp/projectEnablement.js";
 import { pluginServerKeysFor } from "../../../../services/pluginAgentMcp/serverKeys.js";
 import {
@@ -303,6 +324,19 @@ describe("terminal spawn handler - plugin MCP servers for agent launches", () =>
     mockHasPlugin.mockReturnValue(true);
     mockWaitForInit.mockImplementation(() => Promise.resolve());
     mockWaitForProjectPlugins.mockImplementation(() => Promise.resolve(true));
+    mockMarkTerminalForToken.mockReturnValue(true);
+    mockClaudeLaunchArgs.mockReturnValue([]);
+    mockCodexLaunchArgs.mockReturnValue(null);
+    mockCopilotLaunchArgs.mockReturnValue(null);
+    mockPluginLaunchContext.mockImplementation((token) =>
+      token === "help-token"
+        ? {
+            projectId: PROJECT_A,
+            projectPath: tmpDir,
+            serverNamesInUse: new Set(["daintree", "daintree-docs", "daintree-runbooks"]),
+          }
+        : null
+    );
   });
 
   afterEach(async () => {
@@ -699,5 +733,126 @@ describe("terminal spawn handler - plugin MCP servers for agent launches", () =>
 
     expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
     expect(pluginMcpGrantRegistry.listForTerminal("term-help")).toEqual([]);
+  });
+
+  describe("the Daintree Assistant (#13827)", () => {
+    const LANE_FILE = "/sessions/p.claude/.lanes/slot-0-s.mcp.json";
+
+    beforeEach(() => {
+      mockValidateToken.mockImplementation((token) => (token === "help-token" ? "core" : false));
+    });
+
+    function helpSpawn(options: Record<string, unknown> = {}) {
+      return spawn({ id: "term-help", env: { DAINTREE_MCP_TOKEN: "help-token" }, ...options });
+    }
+
+    it("hands Claude the plugin's read-only server beside the session's own, in one --mcp-config", async () => {
+      setProjectAgentMcpAccess(PROJECT_A, "acme.ledger", "read-write");
+      setProjectAssistantAgentMcpAccess(PROJECT_A, "acme.ledger", "read-only");
+      mockClaudeLaunchArgs.mockReturnValue(["--mcp-config", LANE_FILE]);
+
+      await helpSpawn();
+
+      const { command } = ptyClient.spawn.mock.calls[0][1];
+      expect(command.match(/--mcp-config/g)).toHaveLength(1);
+      const match = /'?--mcp-config'? '?([^' ]+)'? '?([^' ]+)'?/.exec(command);
+      expect(match?.[1]).toBe(LANE_FILE);
+      const servers = await readServers(match![2]!);
+      expect(Object.keys(servers)).toEqual(["daintree-ledger"]);
+      expect(servers["daintree-ledger"]!.url).toBe("http://127.0.0.1:45454/mcp/plugin/acme.ledger");
+      const [grant] = pluginMcpGrantRegistry.listForTerminal("term-help");
+      expect(grant).toMatchObject({
+        scope: { databases: true },
+        consumer: "assistant",
+        launchAgentIdHint: "claude",
+      });
+      expect(servers["daintree-ledger"]!.headers.Authorization).toMatch(/^Bearer /);
+      expect(mockMarkTerminalForToken).toHaveBeenCalledWith("help-token", "term-help", "claude");
+    });
+
+    it("never gives the Assistant more than the project's agents have", async () => {
+      setProjectAgentMcpAccess(PROJECT_A, "acme.ledger", "read-only");
+      setProjectAssistantAgentMcpAccess(PROJECT_A, "acme.ledger", "read-write");
+
+      await helpSpawn();
+
+      const [grant] = pluginMcpGrantRegistry.listForTerminal("term-help");
+      expect(grant?.scope).toEqual({ databases: true });
+    });
+
+    it("hands a Codex session the plugin's server as -c overrides, its bearer in the env", async () => {
+      setProjectAgentMcpAccess(PROJECT_A, "acme.ledger", "read-write");
+      setProjectAssistantAgentMcpAccess(PROJECT_A, "acme.ledger", "read-write");
+      mockCodexLaunchArgs.mockReturnValue(["-c", 'mcp_servers.daintree-docs.transport="http"']);
+
+      await helpSpawn({ command: "codex", launchAgentId: "codex" });
+
+      const { command, env } = ptyClient.spawn.mock.calls[0][1];
+      expect(command).toContain("mcp_servers.daintree-docs.transport");
+      expect(command).toContain(
+        'mcp_servers.daintree-ledger.url="http://127.0.0.1:45454/mcp/plugin/acme.ledger"'
+      );
+      const bearer = env?.DAINTREE_PLUGIN_MCP_TOKEN_1 as string;
+      expect(env?.DAINTREE_MCP_TOKEN).toBe("help-token");
+      expect(command).not.toContain(bearer);
+      const [grant] = pluginMcpGrantRegistry.listForTerminal("term-help");
+      expect(grant).toMatchObject({ scope: READ_WRITE_SCOPE, consumer: "assistant" });
+      expect(pluginMcpGrantRegistry.authenticate(bearer)).toBe(grant);
+    });
+
+    it("hands a Copilot session the plugin's server through --additional-mcp-config", async () => {
+      setProjectAgentMcpAccess(PROJECT_A, "acme.ledger", "read-write");
+      setProjectAssistantAgentMcpAccess(PROJECT_A, "acme.ledger", "read-only");
+      mockCopilotLaunchArgs.mockReturnValue([]);
+
+      await helpSpawn({ command: "copilot", launchAgentId: "copilot" });
+
+      const { command } = ptyClient.spawn.mock.calls[0][1];
+      expect(command).toContain("--additional-mcp-config");
+      expect(pluginMcpGrantRegistry.listForTerminal("term-help")).toHaveLength(1);
+    });
+
+    it("skips a plugin whose server name the session already uses", async () => {
+      setProjectAgentMcpAccess(PROJECT_A, "acme.ledger", "read-write");
+      setProjectAssistantAgentMcpAccess(PROJECT_A, "acme.ledger", "read-only");
+      mockPluginLaunchContext.mockReturnValue({
+        projectId: PROJECT_A,
+        projectPath: tmpDir,
+        serverNamesInUse: new Set(["daintree-ledger"]),
+      });
+
+      await helpSpawn();
+
+      expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
+      expect(ptyClient.spawn.mock.calls[0][1].command).not.toContain("--mcp-config");
+      expect(pluginMcpGrantRegistry.listForTerminal("term-help")).toEqual([]);
+    });
+
+    it("revokes what it minted when the session was displaced before the launch bound", async () => {
+      setProjectAgentMcpAccess(PROJECT_A, "acme.ledger", "read-write");
+      setProjectAssistantAgentMcpAccess(PROJECT_A, "acme.ledger", "read-only");
+      mockMarkTerminalForToken.mockReturnValue(false);
+
+      await expect(helpSpawn()).rejects.toThrow(/invalid or already displaced/);
+
+      expect(ptyClient.spawn).not.toHaveBeenCalled();
+      expect(pluginMcpGrantRegistry.listForTerminal("term-help")).toEqual([]);
+    });
+
+    it("launches the Assistant without plugin tools when preparing them fails", async () => {
+      setProjectAgentMcpAccess(PROJECT_A, "acme.ledger", "read-write");
+      setProjectAssistantAgentMcpAccess(PROJECT_A, "acme.ledger", "read-only");
+      mockClaudeLaunchArgs.mockReturnValue(["--mcp-config", LANE_FILE]);
+      mockListPlugins.mockImplementation(() => {
+        throw new Error("plugin registry unavailable");
+      });
+      const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+
+      await helpSpawn();
+
+      expect(ptyClient.spawn.mock.calls[0][1].command).toContain(LANE_FILE);
+      expect(pluginMcpGrantRegistry.listForTerminal("term-help")).toEqual([]);
+      errors.mockRestore();
+    });
   });
 });

@@ -262,6 +262,8 @@ vi.mock("../../../../services/HelpSessionService.js", () => ({
     getClaudeLaunchArgs: (token: string) => mockGetClaudeLaunchArgs(token),
     getAssistantScratchEnv: (token: string) => mockGetAssistantScratchEnv(token),
     getBypassPermissions: (token: string) => mockGetBypassPermissions(token),
+    // No Assistant here has plugin tools; lifecycle.pluginAgentMcp.test.ts covers them.
+    getPluginLaunchContext: () => null,
     markTerminalForToken: (token: string, terminalId: string, expectedAgentId?: string) =>
       mockMarkTerminalForToken(token, terminalId, expectedAgentId),
     unbindTerminal: (terminalId: string) => mockUnbindTerminal(terminalId),

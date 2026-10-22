@@ -53,6 +53,15 @@ import {
 const LEGACY_STORE_KEY = "projectAgentMcpEnablement";
 const PROJECT_STORE_KEY = "projectAgentMcpAccess";
 const ALL_PROJECTS_STORE_KEY = "pluginAgentMcpAccess";
+/**
+ * How much of a plugin's agent tools the project's Daintree Assistant may use
+ * (`projectId → pluginInstanceId → { decidedAt, access }`). A fourth answer,
+ * kept apart from the three above because nothing but the user's own click
+ * sets it: no repository default and no all-projects answer reach it, and with
+ * nothing on record it is off. It caps rather than grants: an Assistant grant
+ * reaches only what this project's terminal agents could reach as well.
+ */
+const ASSISTANT_STORE_KEY = "projectAssistantAgentMcpAccess";
 
 export interface AgentMcpAccessRecord {
   decidedAt: number;
@@ -213,24 +222,86 @@ export function agentMcpScopeFor(
   };
 }
 
+/** Whether `allows` covers every roster in a scope. */
+function isScopeCoveredBy(scope: AgentMcpToolScope, allows: (endpointId: string) => boolean) {
+  return (
+    (!scope.databases || allows(DATABASE_ENDPOINT_ID)) &&
+    (scope.databaseWrites !== true || allows(DATABASE_WRITES_ACCESS_ID)) &&
+    (scope.pluginEndpointId === undefined || allows(scope.pluginEndpointId))
+  );
+}
+
 /** Whether the project's current access still covers everything in a scope. */
 export function isAgentMcpScopeAllowed(
   projectId: string,
   pluginInstanceId: string,
   scope: AgentMcpToolScope
 ): boolean {
-  return (
-    (!scope.databases ||
-      isAgentMcpEndpointEnabled(projectId, pluginInstanceId, DATABASE_ENDPOINT_ID)) &&
-    (scope.databaseWrites !== true ||
-      isAgentMcpEndpointEnabled(projectId, pluginInstanceId, DATABASE_WRITES_ACCESS_ID)) &&
-    (scope.pluginEndpointId === undefined ||
-      isAgentMcpEndpointEnabled(projectId, pluginInstanceId, scope.pluginEndpointId))
+  return isScopeCoveredBy(scope, (endpointId) =>
+    isAgentMcpEndpointEnabled(projectId, pluginInstanceId, endpointId)
   );
 }
 
+/** The user's answer for the project's Daintree Assistant; off when there is none. */
+export function assistantAgentMcpAccess(
+  projectId: string,
+  pluginInstanceId: string
+): AgentMcpAccess {
+  const record = accessRecord(
+    own(asDict(own(read(ASSISTANT_STORE_KEY), projectId)), pluginInstanceId)
+  );
+  return record?.access ?? "off";
+}
+
+/**
+ * The part of a terminal scope the Assistant's answer lets it reach: nothing
+ * when off; the host's database reads alone at read only, so neither declared
+ * writes nor the plugin's own tools, which the host can't vouch for; and the
+ * whole scope at read and write.
+ */
+function assistantShareOf(
+  scope: AgentMcpToolScope,
+  access: AgentMcpAccess
+): AgentMcpToolScope | null {
+  if (access === "read-write") return scope;
+  if (access === "read-only" && scope.databases) return { databases: true };
+  return null;
+}
+
+/**
+ * The rosters a new Assistant grant for this plugin may reach in the project,
+ * or null for none: what this project's terminal agents could reach, narrowed
+ * to the user's answer for the Assistant.
+ */
+export function assistantAgentMcpScopeFor(
+  projectId: string,
+  plugin: DeclaredAgentMcpPlugin
+): AgentMcpToolScope | null {
+  const scope = agentMcpScopeFor(projectId, plugin);
+  if (scope === null) return null;
+  return assistantShareOf(scope, assistantAgentMcpAccess(projectId, plugin.pluginInstanceId));
+}
+
+/** Whether both the project's access and the Assistant's answer still cover everything in a scope. */
+export function isAssistantAgentMcpScopeAllowed(
+  projectId: string,
+  pluginInstanceId: string,
+  scope: AgentMcpToolScope
+): boolean {
+  if (!isAgentMcpScopeAllowed(projectId, pluginInstanceId, scope)) return false;
+  const access = assistantAgentMcpAccess(projectId, pluginInstanceId);
+  return isScopeCoveredBy(scope, (endpointId) => accessAllowsEndpoint(access, endpointId));
+}
+
+/**
+ * Whether a grant's scope is still allowed: by the project's access, and for
+ * an Assistant grant by the Assistant's answer as well, so lowering either one
+ * revokes it.
+ */
 export function isPluginMcpGrantAllowed(grant: PluginMcpGrant): boolean {
-  return isAgentMcpScopeAllowed(grant.projectId, grant.pluginInstanceId, grant.scope);
+  return grant.consumer === "assistant"
+    ? isAssistantAgentMcpScopeAllowed(grant.projectId, grant.pluginInstanceId, grant.scope)
+    : isAgentMcpScopeAllowed(grant.projectId, grant.pluginInstanceId, grant.scope);
 }
 
 /**
@@ -257,6 +328,27 @@ export function listAgentMcpAccessInstances(projectId: string): string[] {
     if (access !== undefined && access !== null && access !== "off") ids.add(id);
   }
   return [...ids];
+}
+
+/**
+ * Every plugin instance the project's Daintree Assistant has an answer on
+ * record for that lets it reach something, whether or not that plugin is
+ * running now or this project's agents can reach it — so settings can keep
+ * that answer visible and revocable too.
+ */
+export function listAssistantAgentMcpAccessInstances(projectId: string): string[] {
+  const project = asDict(own(read(ASSISTANT_STORE_KEY), projectId));
+  return Object.entries(project ?? {})
+    .filter(([, raw]) => {
+      const access = accessRecord(raw)?.access;
+      return access !== undefined && access !== null && access !== "off";
+    })
+    .map(([id]) => id);
+}
+
+/** Whether the project's Assistant could reach any plugin, so an Assistant launch with none never loads PluginService. */
+export function hasAnyAssistantAgentMcpAccess(projectId: string): boolean {
+  return listAssistantAgentMcpAccessInstances(projectId).length > 0;
 }
 
 /**
@@ -334,4 +426,35 @@ export function setAllProjectsAgentMcpAccess(
   store.set(ALL_PROJECTS_STORE_KEY, all);
 
   pluginMcpGrantRegistry.revokeDisallowedForPlugin(pluginInstanceId, isPluginMcpGrantAllowed);
+}
+
+/**
+ * Record the user's answer for the project's Daintree Assistant; off removes
+ * it. Anything it takes away is revoked at once for the Assistant, which loses
+ * the plugin's server on its next request; anything it adds reaches Assistant
+ * sessions launched afterwards, never past what the project's agents have.
+ */
+export function setProjectAssistantAgentMcpAccess(
+  projectId: string,
+  pluginInstanceId: string,
+  access: AgentMcpAccess,
+  now: number = Date.now()
+): void {
+  if (!isProjectWorkspaceId(projectId)) {
+    throw new Error("agent MCP: projectId must be a project workspace id");
+  }
+  if (!pluginInstanceId) throw new Error("agent MCP: plugin id is required");
+
+  const all = copy(read(ASSISTANT_STORE_KEY));
+  const project = copy(asDict(own(all, projectId)));
+  if (access === "off") delete project[pluginInstanceId];
+  else project[pluginInstanceId] = { decidedAt: now, access } satisfies AgentMcpAccessRecord;
+  if (Object.keys(project).length > 0) all[projectId] = project;
+  else delete all[projectId];
+  store.set(ASSISTANT_STORE_KEY, all);
+
+  pluginMcpGrantRegistry.revokeDisabledInProject(
+    projectId,
+    (grant) => grant.pluginInstanceId !== pluginInstanceId || isPluginMcpGrantAllowed(grant)
+  );
 }

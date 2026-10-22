@@ -10,6 +10,18 @@ const MAX_NAME_LENGTH = MAX_PLUGIN_SERVER_KEY_LENGTH - PLUGIN_SERVER_KEY_PREFIX.
 const HASH_LENGTH = 8;
 const FALLBACK_NAME = "plugin";
 
+/**
+ * Keys Daintree's own servers use beside a plugin's: the orchestration server,
+ * and the Daintree Assistant's docs and runbooks servers. The manifest schema
+ * refuses them as an `mcpName`, but a name derived from a manifest id
+ * (`acme.docs`) could still arrive at one, so no plugin is ever given them.
+ */
+export const RESERVED_PLUGIN_SERVER_KEYS: ReadonlySet<string> = new Set([
+  "daintree",
+  "daintree-docs",
+  "daintree-runbooks",
+]);
+
 export interface PluginServerNameInput {
   readonly pluginInstanceId: string;
   readonly pluginManifestId: string;
@@ -50,8 +62,9 @@ function compare(a: string, b: string): number {
  * member of the group gets eight hex characters of a hash of its origin and
  * manifest id, so a project copy of an installed plugin is named the same in
  * every project, and an installed plugin keeps its name when a project copy of
- * it appears. Only the set of plugins decides the keys, never the order they
- * are listed in.
+ * it appears. A plain name in {@link RESERVED_PLUGIN_SERVER_KEYS} is hashed the
+ * same way. Only the set of plugins decides the keys, never the order they are
+ * listed in.
  */
 export function pluginServerKeysFor(
   plugins: readonly PluginServerNameInput[]
@@ -67,7 +80,7 @@ export function pluginServerKeysFor(
     `${PLUGIN_SERVER_KEY_PREFIX}${p.mcpName ?? fallbackPluginMcpName(p.pluginManifestId)}`;
 
   const keys = new Map<string, string>();
-  const used = new Set<string>();
+  const used = new Set<string>(RESERVED_PLUGIN_SERVER_KEYS);
   const losers: PluginServerNameInput[] = [];
   // Every plain name is claimed before any hashed one is chosen, so a hashed
   // key can never take a name its owner would otherwise have kept.
