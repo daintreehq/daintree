@@ -5,8 +5,9 @@ import { usePanelStore } from "@/store/panelStore";
 import { registerPanelKind, unregisterPanelKind } from "@shared/config/panelKindRegistry";
 import type { PanelInstance } from "@shared/types/panel";
 
-const { useWorktreeStoreMock } = vi.hoisted(() => ({
+const { useWorktreeStoreMock, selectWorktreeMock } = vi.hoisted(() => ({
   useWorktreeStoreMock: vi.fn(),
+  selectWorktreeMock: vi.fn(),
 }));
 
 vi.mock("@/hooks/useWorktreeStore", () => ({
@@ -19,7 +20,7 @@ vi.mock("@/store", async () => {
     ...actual,
     useWorktreeSelectionStore: Object.assign(
       (selector: (s: unknown) => unknown) =>
-        selector({ selectWorktree: vi.fn(), activeWorktreeId: null }),
+        selector({ selectWorktree: selectWorktreeMock, activeWorktreeId: null }),
       { getState: () => ({ activeWorktreeId: null }) }
     ),
   };
@@ -27,6 +28,7 @@ vi.mock("@/store", async () => {
 
 import { useQuickSwitcher, type QuickSwitcherItem } from "../useQuickSwitcher";
 import { usePaletteStore } from "@/store/paletteStore";
+import { consumePaletteFocusRestoreSuppression } from "@/components/ui/paletteFocusRestore";
 
 type MockWorktreeState = {
   worktrees: Map<string, unknown>;
@@ -166,14 +168,26 @@ describe("useQuickSwitcher MRU prune", () => {
 });
 
 describe("useQuickSwitcher panel items (#13763)", () => {
+  const { pruneMru, activateTerminal, restoreBackgroundTerminal } = usePanelStore.getState();
+
   beforeEach(() => {
-    usePanelStore.setState({ panelsById: {}, panelIds: [], mruList: [] });
+    // The prune suite above swaps in pruneMru mocks; start from the real actions.
+    usePanelStore.setState({
+      panelsById: {},
+      panelIds: [],
+      mruList: [],
+      pruneMru,
+      activateTerminal,
+      restoreBackgroundTerminal,
+    });
     useWorktreeStoreMock.mockReset();
+    selectWorktreeMock.mockReset();
     usePaletteStore.setState({ activePaletteId: "quick-switcher" });
   });
 
   afterEach(() => {
     usePaletteStore.setState({ activePaletteId: null });
+    consumePaletteFocusRestoreSuppression();
     unregisterPanelKind("acme.dashboard");
   });
 
@@ -292,25 +306,68 @@ describe("useQuickSwitcher panel items (#13763)", () => {
     expect(result.current.results[0]?.id).toBe("terminal:br-1");
   });
 
-  it("activates a selected browser panel so a fullscreen neighbour can't hide it", () => {
-    const activateTerminal = vi.fn();
-    const original = usePanelStore.getState().activateTerminal;
-    usePanelStore.setState({ activateTerminal });
-    try {
-      seedPanels([
-        { id: "br-1", kind: "browser", title: "Storybook", location: "grid" },
-      ] as PanelInstance[]);
-      seedWorktreeState({ isInitialized: true });
+  function selectById(id: string): void {
+    const { result } = renderHook(() => useQuickSwitcher());
+    const item = result.current.results.find((entry) => entry.id === id);
+    expect(item).toBeDefined();
+    act(() => result.current.selectItem(item!));
+  }
 
-      const { result } = renderHook(() => useQuickSwitcher());
-      const item = result.current.results.find((entry) => entry.id === "terminal:br-1");
-      expect(item).toBeDefined();
-      act(() => result.current.selectItem(item!));
+  it("activates a selected browser panel and keeps the closing palette from refocusing its opener", () => {
+    const activate = vi.fn();
+    usePanelStore.setState({ activateTerminal: activate });
+    seedPanels([
+      { id: "br-1", kind: "browser", title: "Storybook", location: "grid" },
+    ] as PanelInstance[]);
+    seedWorktreeState({ isInitialized: true });
 
-      expect(activateTerminal).toHaveBeenCalledWith("br-1");
-    } finally {
-      usePanelStore.setState({ activateTerminal: original });
-    }
+    selectById("terminal:br-1");
+
+    expect(activate).toHaveBeenCalledWith("br-1");
+    expect(consumePaletteFocusRestoreSuppression()).toBe(true);
+  });
+
+  it("switches to a panel's worktree before activating it", () => {
+    const activate = vi.fn();
+    usePanelStore.setState({ activateTerminal: activate });
+    seedPanels([
+      { id: "br-1", kind: "browser", title: "Storybook", location: "grid", worktreeId: "wt-2" },
+    ] as PanelInstance[]);
+    seedWorktreeState({ isInitialized: true });
+
+    selectById("terminal:br-1");
+
+    expect(selectWorktreeMock).toHaveBeenCalledWith("wt-2");
+    expect(selectWorktreeMock.mock.invocationCallOrder[0]).toBeLessThan(
+      activate.mock.invocationCallOrder[0]!
+    );
+  });
+
+  it("restores a backgrounded non-PTY panel before activating it", () => {
+    const activate = vi.fn();
+    const restore = vi.fn();
+    usePanelStore.setState({ activateTerminal: activate, restoreBackgroundTerminal: restore });
+    seedPanels([
+      { id: "rv-1", kind: "review", title: "Review", location: "background" },
+    ] as PanelInstance[]);
+    seedWorktreeState({ isInitialized: true });
+
+    selectById("terminal:rv-1");
+
+    expect(restore).toHaveBeenCalledWith("rv-1");
+    expect(restore.mock.invocationCallOrder[0]).toBeLessThan(activate.mock.invocationCallOrder[0]!);
+  });
+
+  it("does not suppress the palette's focus restore when a worktree is picked", () => {
+    seedWorktreeState({
+      isInitialized: true,
+      worktrees: new Map([["wt-1", { id: "wt-1", name: "main", path: "/repo" }]]),
+    });
+
+    selectById("worktree:wt-1");
+
+    expect(selectWorktreeMock).toHaveBeenCalledWith("wt-1");
+    expect(consumePaletteFocusRestoreSuppression()).toBe(false);
   });
 
   it("keeps MRU entries for open non-PTY panels when pruning", () => {

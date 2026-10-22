@@ -662,6 +662,49 @@ describe("hydrateAppState", () => {
     );
   });
 
+  it("restores the last-focused terminal first when a non-PTY panel heads the MRU (#10527, #13763)", async () => {
+    appClientMock.hydrate.mockResolvedValue({
+      appState: {
+        terminals: [
+          { id: "browser-1", kind: "browser", title: "Browser", cwd: "/project", location: "grid" },
+          {
+            id: "term-a",
+            kind: "terminal",
+            title: "A",
+            cwd: "/project",
+            location: "grid",
+            worktreeId: "wt-active",
+          },
+          {
+            id: "term-b",
+            kind: "terminal",
+            title: "B",
+            cwd: "/project",
+            location: "grid",
+            worktreeId: "wt-active",
+          },
+        ],
+        activeWorktreeId: "wt-active",
+        mruList: ["terminal:browser-1", "terminal:term-b", "terminal:term-a"],
+      },
+      terminalConfig,
+      project,
+      agentSettings,
+    });
+    const addPanel = vi.fn().mockResolvedValue("panel-id");
+
+    await hydrateAppState({
+      addPanel,
+      setActiveWorktree: vi.fn(),
+      loadRecipes: vi.fn().mockResolvedValue(undefined),
+      openDiagnosticsDock: vi.fn(),
+    });
+
+    const restoredTitles = addPanel.mock.calls.map((call) => (call[0] as { title?: string }).title);
+    expect(restoredTitles.indexOf("B")).toBeGreaterThanOrEqual(0);
+    expect(restoredTitles.indexOf("B")).toBeLessThan(restoredTitles.indexOf("A"));
+  });
+
   describe("prefetchedHydrateResult", () => {
     const fullProject = {
       id: "project-1",
