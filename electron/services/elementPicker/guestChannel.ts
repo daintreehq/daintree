@@ -38,6 +38,18 @@ export const CHANNEL_EVENTS = {
   element: "element",
   /** Bootstrap → extractors: the bootstrap is gone, and so is everything installed for it. */
   dispose: "dispose",
+  /**
+   * Extractor → bootstrap, dispatched ON an element while a request is being
+   * answered. JSON cannot carry a node from one world to the other, but an
+   * event can: each world's listener sees its own wrapper of the same element.
+   */
+  point: "point",
+  /** Bootstrap → one framework's extractor: find elements by a query only that framework reads. */
+  locate: "locate",
+  /** Extractor → bootstrap, on the document: the end of a locate, after its points. */
+  located: "located",
+  /** Extractor → bootstrap, on the document: a fact about the page, from a fixed vocabulary. */
+  notice: "notice",
 } as const;
 
 export type ChannelEventName = keyof typeof CHANNEL_EVENTS;
@@ -72,6 +84,12 @@ export type ExtractionPhase = "hover" | "selection";
 export interface ExtractRequest {
   id: number;
   phase: ExtractionPhase;
+  /**
+   * A user's pick rather than a description: the extractor may answer for the
+   * element the pick stands for, and point at it, when that is not the node the
+   * pointer landed on.
+   */
+  pick?: true;
 }
 
 export interface ExtractReply {
@@ -95,3 +113,34 @@ export interface ElementRefMessage {
   id: number;
   ref: number;
 }
+
+/** Ceiling on a locate request's detail; a locator names a file, which can be long. */
+export const MAX_LOCATE_REQUEST_CHARS = 4096;
+/** Ceiling on a locate's terminal reply: a few ids and flags, never a description. */
+export const MAX_LOCATED_REPLY_CHARS = 1024;
+/** Elements one request may point at: the most roots a component selection holds. */
+export const MAX_POINTED_ELEMENTS = 32;
+
+export interface LocateRequest {
+  id: number;
+  framework: string;
+  /** The framework's own query, opaque to the bootstrap. */
+  query: unknown;
+}
+
+export interface LocatedReply {
+  id: number;
+  data: Record<string, unknown> | null;
+}
+
+/**
+ * What an extractor can tell the bootstrap about the page unprompted. Codes,
+ * not text: the bootstrap words the issue itself, so the page never writes a
+ * notice the host shows.
+ */
+export const EXTRACTOR_NOTICES = [
+  "not-dev-build",
+  "metadata-unavailable",
+  "ancestry-truncated",
+] as const;
+export type ExtractorNotice = (typeof EXTRACTOR_NOTICES)[number];

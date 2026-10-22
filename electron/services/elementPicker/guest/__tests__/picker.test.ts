@@ -4,8 +4,9 @@ import {
   ElementPickerEventSchema,
   type ElementPickerEvent,
 } from "../../../../../shared/elementPicker/protocol.js";
-import { channelEvent } from "../../guestChannel.js";
+import { EXTRACTOR_REGISTRY_GLOBAL, channelEvent } from "../../guestChannel.js";
 import { createPicker, type PickerHandle } from "../picker.js";
+import { installExtractor } from "../registry.js";
 import type { PickerMode } from "../types.js";
 
 const CHANNEL = "test-channel";
@@ -84,6 +85,7 @@ afterEach(() => {
   testListeners.abort();
   picker?.dispose();
   picker = null;
+  delete (globalThis as Record<string, unknown>)[EXTRACTOR_REGISTRY_GLOBAL];
   vi.unstubAllGlobals();
   document.body.innerHTML = "";
 });
@@ -584,5 +586,177 @@ describe("createPicker", () => {
     const count = events.length;
     document.getElementById("second")!.click();
     expect(events).toHaveLength(count);
+  });
+});
+
+describe("the bridge's element exchanges", () => {
+  function installReact(extractor: Parameters<typeof installExtractor>[1]): void {
+    installExtractor({ channel: CHANNEL, framework: "react", installed: false }, extractor);
+  }
+
+  const record = {
+    componentId: "c1",
+    framework: "react" as const,
+    name: { value: "List", extraction: { kind: "runtime-field" as const, field: "type.name" } },
+    environment: "client" as const,
+    rootElementIds: [],
+    rootsComplete: false,
+    sourceCandidates: [
+      {
+        kind: "component-invocation" as const,
+        candidateId: "call",
+        framework: "react" as const,
+        extraction: { kind: "runtime-field" as const, field: "_debugSource" },
+        file: "src/List.tsx",
+        location: {
+          lineBase: 1 as const,
+          columnBase: 1 as const,
+          columnUnit: "utf16" as const,
+          line: 3,
+          column: 1,
+        },
+      },
+    ],
+  };
+
+  it("selects the element an extractor's pick points at, and takes no forged point", () => {
+    const first = document.getElementById("first")!;
+    const list = document.getElementById("list")!;
+    installReact({
+      extract: () => ({}),
+      pick: (hit) => ({ target: hit === first ? list : hit, data: {} }),
+    });
+    // A page pointing at something during the exchange, under the wrong id.
+    document.addEventListener(
+      channelEvent(CHANNEL, "extract"),
+      () => {
+        document
+          .getElementById("field")!
+          .dispatchEvent(
+            new CustomEvent(channelEvent(CHANNEL, "point"), { detail: "999", composed: true })
+          );
+      },
+      { capture: true, signal: testListeners.signal }
+    );
+    start();
+
+    first.click();
+    expect(selectedTag()).toBe("section");
+    // A plain walk selects what it reaches; only a pick is stood in for.
+    press("ArrowDown");
+    expect(selectedTag()).toBe("a");
+  });
+
+  it("widens to the component's roots and back to the element on the next click", () => {
+    const first = document.getElementById("first")!;
+    const second = document.getElementById("second")!;
+    installReact({
+      extract: () => ({
+        componentChain: { nearestId: "c1", components: [record], truncated: false },
+      }),
+      locate: (query) =>
+        (query as { kind?: string }).kind === "roots"
+          ? { elements: [first, second], data: { complete: true } }
+          : null,
+    });
+    start();
+    first.click();
+
+    expect(press("ArrowUp", { altKey: true }).defaultPrevented).toBe(true);
+    const widened = ofType("selectionChanged").at(-1)!;
+    expect(widened.scope).toEqual({ kind: "component", componentId: "c1" });
+    const ids = widened.observations.map((observation) => observation.elementId);
+    expect(ids).toHaveLength(2);
+    for (const observation of widened.observations) {
+      expect(observation.componentChain.components[0]).toMatchObject({
+        rootElementIds: ids,
+        rootsComplete: true,
+      });
+    }
+
+    second.click();
+    expect(ofType("selectionChanged").at(-1)?.scope).toEqual({ kind: "element" });
+  });
+
+  it("keeps the old selection when the new one cannot fit one envelope", () => {
+    const first = document.getElementById("first")!;
+    const second = document.getElementById("second")!;
+    // Three UTF-8 bytes a character: each answer fits the bridge and one
+    // envelope on its own, and two of them fit neither however shortened.
+    const wide = "€".repeat(2048);
+    const heavy = {
+      componentChain: { nearestId: "c1", components: [record], truncated: false },
+      sourceCandidates: Array.from({ length: 16 }, (_, index) => ({
+        ...record.sourceCandidates[0]!,
+        kind: "element-creation" as const,
+        candidateId: "e" + index,
+        file: wide,
+      })),
+      frameworkEvidence: Array.from({ length: 8 }, () => ({
+        kind: "generic" as const,
+        framework: "react" as const,
+        fields: Array.from({ length: 16 }, (_, index) => ({
+          name: "f" + index,
+          value: "€".repeat(256),
+        })),
+      })),
+    };
+    installReact({
+      extract: () => heavy,
+      locate: () => ({ elements: [first, second], data: { complete: true } }),
+    });
+    start();
+    first.click();
+    const before = ofType("selectionChanged").length;
+
+    press("ArrowUp", { altKey: true });
+
+    expect(ofType("selectionChanged")).toHaveLength(before);
+    expect(ofType("runtimeIssue").at(-1)).toMatchObject({
+      code: "capacity",
+      detail: expect.stringContaining("selection left unchanged"),
+    });
+    // Still the click's selection, so the next walk starts from it.
+    press("ArrowRight");
+    expect(ofType("selectionChanged").at(-1)?.observations[0]?.label).toBe("a#second");
+  });
+
+  it("selects again by the id it reported, while that is still the same node", () => {
+    const handle = start();
+    const first = document.getElementById("first")!;
+    first.click();
+    document.getElementById("second")!.click();
+    const id = ofType("selectionChanged")[0]!.observations[0]!.elementId;
+
+    expect(handle.reselect({ elementId: id })).toBe(true);
+    expect(ofType("selectionChanged").at(-1)).toMatchObject({
+      cause: "reselect",
+      observations: [{ elementId: id }],
+    });
+    expect(handle.reselect({ elementId: "el-999" })).toBe(false);
+    first.remove();
+    expect(handle.reselect({ elementId: id })).toBe(false);
+    expect(handle.reselect("not a request")).toBe(false);
+  });
+
+  it("turns an extractor's notice into one issue per document, in its own words", () => {
+    start();
+    const notify = (detail: unknown) =>
+      document.dispatchEvent(
+        new CustomEvent(channelEvent(CHANNEL, "notice"), { detail: JSON.stringify(detail) })
+      );
+    notify({ framework: "svelte", notice: "not-dev-build" });
+    notify({ framework: "svelte", notice: "not-dev-build" });
+    notify({ framework: "jquery", notice: "not-dev-build" });
+    notify({ framework: "svelte", notice: "<b>anything the page likes</b>" });
+
+    expect(ofType("runtimeIssue")).toEqual([
+      {
+        type: "runtimeIssue",
+        code: "not-dev-build",
+        framework: "svelte",
+        detail: expect.stringContaining("production build"),
+      },
+    ]);
   });
 });

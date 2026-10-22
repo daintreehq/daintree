@@ -110,6 +110,7 @@ export function buildBootstrapSource(params: BootstrapSourceParams): string {
     clearSelection() {},
     clearHover() {},
     refresh() {},
+    reselect() { return false; },
     dispose: null,
     retire,
     post(event) {
@@ -195,6 +196,28 @@ export function buildPickerClearHoverSource(installId: number): string {
 
 export function buildPickerRefreshSource(installId: number): string {
   return bootstrapCall(installId, "api.refresh();");
+}
+
+/**
+ * Asks the bootstrap to select again what the host had selected. Evaluates, by
+ * value, to whether it did; false for a bootstrap some later install replaced.
+ * The request is data for the guest to validate: an element id and a
+ * framework locator the host built from an observation it admitted.
+ */
+export function buildPickerReselectSource(
+  installId: number,
+  request: {
+    elementId?: string;
+    framework?: ElementPickerFramework;
+    locator?: unknown;
+    reveal?: boolean;
+  }
+): string {
+  return `(() => {
+  const api = globalThis[${JSON.stringify(BOOTSTRAP_GLOBAL)}];
+  if (!api || api.installId !== ${installId}) return false;
+  try { return api.reselect(${JSON.stringify(request)}) === true; } catch { return false; }
+})()`;
 }
 
 /** Retires the bootstrap, which tells the main-world extractors installed for it to go too. */

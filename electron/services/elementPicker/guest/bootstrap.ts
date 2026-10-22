@@ -28,4 +28,5 @@ api.setMode = (mode: PickerMode) => {
 api.clearSelection = () => picker.clearSelection();
 api.clearHover = () => picker.clearHover();
 api.refresh = () => picker.refresh();
+api.reselect = (request: unknown) => picker.reselect(request);
 api.dispose = () => picker.dispose();
