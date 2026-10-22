@@ -55,6 +55,7 @@ const HOST_CALL_METHODS = {
   setWorktreeCardStatus: true,
   setWorktreeReviewChecks: true,
   setTerminalStatus: true,
+  setPanelActivity: true,
   "actions.list": true,
   "actions.get": true,
   "settings.get": true,

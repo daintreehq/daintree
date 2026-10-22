@@ -1929,6 +1929,18 @@ interface PluginTerminalStatus {
      */
     command?: string;
 }
+/** What a plugin says one of its own panels is doing, via {@link PluginHostApi.setPanelActivity}. */
+type PluginPanelActivityState = "working" | "waiting" | "finished" | "failed";
+/**
+ * A plugin's report of its own work on one of its own panels (#13820): its
+ * state and an optional one-line `reason` ("Importing 3 of 12", "Pick a
+ * branch to sync"). Drawn the way agent activity is drawn, always attributed
+ * to the plugin.
+ */
+interface PluginPanelActivity {
+    state: PluginPanelActivityState;
+    reason?: string;
+}
 /** Value a plugin publishes to `when` clauses via {@link PluginHostApi.setContext}. */
 type PluginContextValue = boolean | string;
 declare const BUILT_IN_PLUGIN_CAPABILITIES: readonly ["fs:project-read", "fs:project-write", "fs:user-data-read", "fs:user-data-write", "network:fetch", "agent:invoke", "agent:read", "agent:register", "agent:input", "terminal:read", "git:read", "git:write", "clipboard:read", "clipboard:write", "shell:exec", "socket:connect", "mcp:expose", "project:dispatch", "panel:focus-read", "notification:os"];
@@ -5139,6 +5151,31 @@ interface PluginHostApi extends PluginActivationApi {
      */
     setTerminalStatus(terminalId: string, status: PluginTerminalStatus | null): Promise<void>;
     /**
+     * Report (or clear) what this plugin is doing on one of its own panels
+     * (#13820): `working`, `waiting` on the user, `finished` or `failed`, with an
+     * optional one-line `reason`. Pass `null` to clear it. The host draws it the
+     * way it draws agent activity — working and waiting borders in the grid
+     * (when the user's grid highlights are on), a glyph in the panel header and
+     * on the dock chip — and every mark reads "Reported by" your plugin. A
+     * `finished` report draws as unread until the panel has been in front of the
+     * user; a `failed` one stays until you change or clear it.
+     *
+     * Only panels of a kind this plugin contributes with `reportsActivity: true`.
+     * The call rejects for another plugin's panel, a built-in panel, a kind that
+     * does not declare `reportsActivity`, a `reason` that is empty, multi-line or
+     * longer than {@link PLUGIN_PANEL_ACTIVITY_REASON_MAX} characters, or a new
+     * panel past {@link PLUGIN_PANEL_ACTIVITY_MAX_PANELS} reports. A panel id
+     * the host has not seen yet (one `panel.openPluginPanel` just returned) is
+     * accepted and drawn once the panel shows up as yours; a report on a panel
+     * that has closed is dropped. Reporting the state a panel already shows
+     * sends nothing.
+     *
+     * Reports are not persisted, and are cleared when the plugin unloads or its
+     * worker is replaced. Like {@link setPanelBadge} this is NOT revoke-guarded
+     * and becomes a silent no-op once the plugin is unloaded.
+     */
+    setPanelActivity(panelId: string, activity: PluginPanelActivity | null): Promise<void>;
+    /**
      * Publish the contextual actions the ⋯ and right-click menus of one of this
      * plugin's own panels offer right now — the backend-side twin of the view's
      * `PanelViewProps.setMenuItems`, and the only way a PTY-backed panel (which
@@ -5641,6 +5678,11 @@ interface SetTerminalStatusRecord {
     terminalId: string;
     status: PluginTerminalStatus | null;
 }
+/** Captured `host.setPanelActivity(panelId, activity)` calls. `null` clears. */
+interface SetPanelActivityRecord {
+    panelId: string;
+    activity: PluginPanelActivity | null;
+}
 /** Captured `host.setPanelBadge(panelId, badge)` calls. `null` clears. */
 interface SetPanelBadgeRecord {
     panelId: string;
@@ -5730,6 +5772,10 @@ interface MockHostState {
     readonly setTerminalStatusCalls: ReadonlyArray<SetTerminalStatusRecord>;
     /** The terminal chips this plugin shows right now, keyed by `terminalId`. */
     readonly terminalStatuses: ReadonlyMap<string, PluginTerminalStatus>;
+    /** Accepted `host.setPanelActivity` calls, in order. */
+    readonly setPanelActivityCalls: ReadonlyArray<SetPanelActivityRecord>;
+    /** The activity this plugin reports right now, keyed by `panelId`. */
+    readonly panelActivity: ReadonlyMap<string, PluginPanelActivity>;
     readonly setPanelMenuItemsCalls: ReadonlyArray<SetPanelMenuItemsRecord>;
     /**
      * Panel ids passed to `host.reloadPanel(panelId)`, in order (#12610). Only
@@ -5966,6 +6012,14 @@ interface CreateMockHostOptions {
      * by default (the mock has no manifest model), which accepts any non-empty id.
      */
     toolbarButtonIds?: readonly string[];
+    /**
+     * Opt-in `contributes.panels[].id` list of the kinds declaring
+     * `reportsActivity: true`, so `setPanelActivity` rejects when none does, or
+     * when a panel pushed through `simulatePanelLifecycleChange` is of another
+     * kind, as the real host does. Omitted by default (the mock has no manifest
+     * model), which accepts any panel not reported as another plugin's.
+     */
+    reportsActivityPanelIds?: readonly string[];
     /**
      * Seed `host.account`. Omitted, the account starts disconnected. The mock
      * models a plugin that declares `contributes.account`.

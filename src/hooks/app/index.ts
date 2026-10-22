@@ -25,6 +25,7 @@ export { useActiveWorktreeSync } from "./useActiveWorktreeSync";
 export { useAgentActivityBroadcast } from "./useAgentActivityBroadcast";
 export { useAgentWaitingNudge } from "./useAgentWaitingNudge";
 export { useCanopySeenTracking } from "./useCanopySeenTracking";
+export { usePluginPanelActivitySeenTracking } from "./usePluginPanelActivitySeenTracking";
 export { useCanopySnapshotSync } from "./useCanopySnapshotSync";
 export { useCanopyDoubleShift } from "./useCanopyDoubleShift";
 export { useForgeEnableRecommendation } from "./useForgeEnableRecommendation";

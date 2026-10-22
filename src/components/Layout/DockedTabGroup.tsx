@@ -58,6 +58,11 @@ import {
 import { TerminalRefreshTier } from "@/types";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { DockActivityCue } from "./DockActivityCue";
+import {
+  PluginPanelActivityDockCue,
+  pluginPanelActivityLabelSuffix,
+  usePluginPanelActivity,
+} from "@/components/Panel/PluginPanelActivity";
 import { DockChipBadge, useDockChipBadge } from "./DockChipBadge";
 import { dockChipBadgeLabelSuffix } from "./dockChipBadgeModel";
 import { useDockPanelPortal } from "./dockPanelPortalContext";
@@ -177,6 +182,8 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
   const activePanelId = activePanel?.id;
   const activeHandBack = useRunHandBackState(activePanelId ?? "");
   const badge = useDockChipBadge(activePanelId ?? "");
+  // The active tab's plugin report, like its agent glyph (#13820).
+  const reportedActivity = usePluginPanelActivity(activePanelId ?? "");
 
   // The pane this group actually has open in the dock — the id every close must
   // name. Reading it from the store (rather than assuming the active tab) keeps
@@ -703,6 +710,11 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
   const stateLabel =
     isHandBack && shownAgentState ? SESSION_LABELS[shownAgentState] : observedStateLabel;
   const StateIcon = shownAgentState ? SESSION_ICONS[shownAgentState] : null;
+  // Only where no agent glyph is drawn, and never folded into the agent state.
+  const pluginActivity = displayAgentState ? null : reportedActivity;
+  // An active plugin report on the active tab is not a resting chip.
+  const chipDeprioritized =
+    isDeprioritized && pluginActivity?.shown !== "working" && pluginActivity?.shown !== "waiting";
 
   return (
     <DockPopoverChildProvider>
@@ -717,9 +729,9 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                 isOpen && DOCK_CHIP_OPEN_CLASS,
                 !isOpen &&
                   showDockAgentHighlights &&
-                  blockedState === "waiting" &&
+                  (blockedState === "waiting" || pluginActivity?.shown === "waiting") &&
                   DOCK_CHIP_WAITING_CLASS,
-                isDeprioritized && "border-transparent"
+                chipDeprioritized && "border-transparent"
               )}
               onClick={(e) => {
                 e.preventDefault();
@@ -741,7 +753,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                   return moved;
                 });
               }}
-              aria-label={`${activePanel.title}${displayAgentState ? (stateLabel ? ` — agent ${stateLabel}` : "") : groupPlainWorking ? " — command running" : ""}${dockChipBadgeLabelSuffix(badge)} (${panels.length} tabs) - Click to preview, double-click to move to grid, drag to reorder`}
+              aria-label={`${activePanel.title}${displayAgentState ? (stateLabel ? ` — agent ${stateLabel}` : "") : pluginActivity ? pluginPanelActivityLabelSuffix(pluginActivity) : groupPlainWorking ? " — command running" : ""}${dockChipBadgeLabelSuffix(badge)} (${panels.length} tabs) - Click to preview, double-click to move to grid, drag to reorder`}
             >
               <div className="flex items-center justify-center shrink-0">
                 <TerminalIcon
@@ -774,8 +786,13 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                 </>
               )}
 
-              {!displayAgentState && (groupPlainWorking || showFinishedCue) && (
-                <DockActivityCue state={groupPlainWorking ? "working" : "finished"} />
+              {pluginActivity ? (
+                <PluginPanelActivityDockCue activity={pluginActivity} />
+              ) : (
+                !displayAgentState &&
+                (groupPlainWorking || showFinishedCue) && (
+                  <DockActivityCue state={groupPlainWorking ? "working" : "finished"} />
+                )
               )}
 
               {shownAgentState && StateIcon && (

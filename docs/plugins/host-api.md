@@ -1239,6 +1239,44 @@ A click on a chip with a registered `command` dispatches it with `{ terminalId, 
 
 The chip sits in the terminal's header beside the other metadata chips, named after its plugin in its tooltip and accessible name. It takes no colour and no glyph: the pane's accent belongs to agent state. Statuses are not persisted. They are cleared when the project closes and when the plugin unloads or its worker is replaced, so republish them after a restart.
 
+## `setPanelActivity`
+
+Say what your plugin is doing on one of its own panels — a chat waiting on a hosted model, a long import, a sync that needs a decision — so the user can see it without opening the panel. Daintree draws it the way it draws agent activity: a working or waiting border in the grid, the matching glyph in the panel header and on the dock chip, and a finished report drawn as unread until the panel has been in front of the user. Every mark reads "Reported by" your plugin: it is your description of your own work, never a statement about an agent.
+
+```json
+{
+  "contributes": {
+    "panels": [
+      {
+        "id": "chat",
+        "name": "Chat",
+        "iconId": "message",
+        "color": "#7c3aed",
+        "reportsActivity": true
+      }
+    ]
+  }
+}
+```
+
+```ts
+const { panelId } = await openChat();
+await host.setPanelActivity(panelId, { state: "working", reason: "Asking the model" });
+// …
+await host.setPanelActivity(panelId, { state: "waiting", reason: "Pick a branch to sync" });
+await host.setPanelActivity(panelId, { state: "finished", reason: "Synced 12 files" });
+await host.setPanelActivity(panelId, { state: "failed", reason: "Token expired" });
+await host.setPanelActivity(panelId, null); // clear
+```
+
+Only panels of a kind your plugin contributes with `reportsActivity: true` take a report, and the plugin manager lists those kinds as reporting activity. The call rejects for another plugin's panel, a built-in panel, one of your own panels of a kind that does not declare `reportsActivity`, or any report at all when none of your kinds declares it. A panel id the host has not seen yet, such as one `panel.openPluginPanel` just handed back, is accepted and drawn once the panel shows up as yours; a report on a panel that has closed is dropped.
+
+`state` is `working`, `waiting` (on the user), `finished` or `failed`. `reason` is optional and drawn after the state in the tooltip and accessible name; it is trimmed and must then be one line of 1 to 120 characters (`PLUGIN_PANEL_ACTIVITY_REASON_MAX`). Unknown keys reject. A plugin holds one report per panel, on up to 256 panels at once: a new panel past that rejects, so clear a closed panel's report with `null`, while changing or clearing one already held always works. Reporting the state a panel already shows sends nothing, so it is safe to report from a timer.
+
+What the user sees follows their settings for agents. The grid borders show only while **Grid panel agent highlights** is on, and the dock chip's waiting fill only while **Dock item agent highlights** is on; the glyphs show either way. A `finished` report turns from unread to done once the panel has been focused, in a focused window, for a moment. That record lives in the view and is never an agent read mark. A `failed` report stays until you change or clear it. On a PTY-backed panel the glyph gives way to an agent's when Daintree observes one running in it.
+
+Reports are not persisted. They are cleared when your plugin unloads or its worker is replaced, so report afresh after a restart. Not revoke-guarded, and a silent no-op once the plugin unloads. A worker's call is answered by main, so its refusals reach your `await`. `createMockHost` applies the same validation, refuses a panel `simulatePanelLifecycleChange` reported for another plugin, takes the kinds that declare the flag through its `reportsActivityPanelIds` option, records accepted calls in `setPanelActivityCalls`, and holds the current reports in `panelActivity`.
+
 ## `setPanelMenuItems`
 
 Publish the contextual actions that the ⋯ and right-click menus of one of your panels offer right now. It is the backend twin of the view's `setMenuItems`, and the only way a PTY-backed panel, which has no view, gets entries of its own:

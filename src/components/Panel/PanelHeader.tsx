@@ -78,6 +78,7 @@ import {
 } from "@/components/Worktree/terminalStateConfig";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { PluginPanelBadges } from "@/components/Panel/PluginPanelBadges";
+import { PluginPanelActivityIndicator } from "@/components/Panel/PluginPanelActivity";
 import { TerminalPluginStatusChips } from "@/components/Terminal/TerminalPluginStatusChips";
 import { BellDot, FolderGit2, NotebookPen } from "@/components/icons";
 import { useDragHandle } from "@/components/DragDrop/DragHandleContext";
@@ -1376,6 +1377,9 @@ function PanelHeaderComponent({
                 <BellDot className="w-3 h-3 animate-pulse motion-reduce:animate-none" />
               </span>
             )}
+
+            {/* What the owning plugin reports it is doing (host.setPanelActivity) */}
+            <PluginPanelActivityIndicator panelId={id} />
 
             {/* Live plugin-contributed badges (host.setPanelBadge) for this panel */}
             <PluginPanelBadges panelId={id} />

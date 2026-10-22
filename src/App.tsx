@@ -60,6 +60,7 @@ import {
   useActiveWorktreeSync,
   useAgentActivityBroadcast,
   useCanopySeenTracking,
+  usePluginPanelActivitySeenTracking,
   useCanopySnapshotSync,
   useCanopyDoubleShift,
 } from "./hooks/app";
@@ -243,6 +244,7 @@ function AppInner() {
   useAgentActivityBroadcast();
   useCanopySnapshotSync();
   useCanopySeenTracking();
+  usePluginPanelActivitySeenTracking();
   useCanopyDoubleShift();
   const resumeSession = useResumeAgentSession();
 

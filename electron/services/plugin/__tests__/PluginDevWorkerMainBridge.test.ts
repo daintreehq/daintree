@@ -70,6 +70,7 @@ function makeHost() {
     setContext: vi.fn(async () => {}),
     setWorktreeCardStatus: vi.fn(async () => {}),
     setWorktreeReviewChecks: vi.fn(async () => {}),
+    setPanelActivity: vi.fn(async () => {}),
     setPanelMenuItems: vi.fn(async () => {}),
     showToast: vi.fn(async () => {}),
     notify: vi.fn(async (_options: unknown) => ({ id: "n-1" })),
@@ -442,6 +443,35 @@ describe("PluginDevWorkerMainBridge", () => {
       (m) => m.type === "host-result" && m.requestId === "c-ts-bad"
     );
     expect(refused).toMatchObject({ ok: false, error: expect.stringMatching(/disabledReason/) });
+  });
+
+  it("relays setPanelActivity as a call and returns the host's rejection (#13820)", async () => {
+    const { host, workerHost } = makeBridge();
+    workerHost.emit("worker-message", {
+      type: "host-call",
+      requestId: "c-pa",
+      method: "setPanelActivity",
+      params: { panelId: "panel-1", activity: { state: "working" } },
+    });
+    await flush();
+    expect(host.setPanelActivity).toHaveBeenCalledWith("panel-1", { state: "working" });
+    expect(
+      workerHost.sent.find((m) => m.type === "host-result" && m.requestId === "c-pa")
+    ).toMatchObject({ ok: true });
+
+    host.setPanelActivity.mockRejectedValueOnce(
+      new Error('setPanelActivity: panel "panel-2" belongs to another plugin')
+    );
+    workerHost.emit("worker-message", {
+      type: "host-call",
+      requestId: "c-pa-foreign",
+      method: "setPanelActivity",
+      params: { panelId: "panel-2", activity: { state: "waiting" } },
+    });
+    await flush();
+    expect(
+      workerHost.sent.find((m) => m.type === "host-result" && m.requestId === "c-pa-foreign")
+    ).toMatchObject({ ok: false, error: expect.stringMatching(/belongs to another plugin/) });
   });
 
   it("relays setWorktreeReviewChecks as a call and returns the host's rejection (#13806)", async () => {

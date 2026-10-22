@@ -15,6 +15,7 @@ import { useConsoleCaptureStore } from "./consoleCaptureStore";
 import { useResourceMonitoringStore } from "./resourceMonitoringStore";
 import { useVoiceRecordingStore } from "./voiceRecordingStore";
 import { usePluginPanelBadgeStore } from "./pluginPanelBadgeStore";
+import { usePluginPanelActivityStore } from "./pluginPanelActivityStore";
 import { usePluginPanelToolbarStore } from "./pluginPanelToolbarStore";
 import { usePluginPanelMenuStore } from "./pluginPanelMenuStore";
 import { usePluginPanelOpenRequestStore } from "./pluginPanelOpenRequestStore";
@@ -417,6 +418,8 @@ export function initStoreOrchestrator(): () => void {
             // resource-metrics store above this leaks otherwise: badges are
             // keyed by panelId and nothing else drops them when a panel closes.
             usePluginPanelBadgeStore.getState().removePanel(removedId);
+            // Activity reports and their seen marks, keyed the same way (#13820).
+            usePluginPanelActivityStore.getState().removePanel(removedId);
             // Header button states are keyed the same way and leak the same way.
             usePluginPanelToolbarStore.getState().clearPanel(removedId);
             usePluginPanelMenuStore.getState().removePanel(removedId);

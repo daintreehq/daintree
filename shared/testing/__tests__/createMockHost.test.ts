@@ -516,6 +516,63 @@ describe("createMockHost", () => {
     ).rejects.toThrow(/PERMISSION_REQUIRED/);
   });
 
+  it("setPanelActivity records reports with production's gates (#13820)", async () => {
+    const host = createMockHost({ reportsActivityPanelIds: ["chat"] });
+    await host.setPanelActivity("p1", { state: "working", reason: " Importing " });
+    await host.setPanelActivity("p1", { state: "finished" });
+    expect(host.setPanelActivityCalls).toEqual([
+      { panelId: "p1", activity: { state: "working", reason: "Importing" } },
+      { panelId: "p1", activity: { state: "finished" } },
+    ]);
+    expect([...host.panelActivity]).toEqual([["p1", { state: "finished" }]]);
+    await host.setPanelActivity("p1", null);
+    expect(host.panelActivity.size).toBe(0);
+
+    await expect(host.setPanelActivity("p1", { state: "idle" } as never)).rejects.toThrow(
+      /setPanelActivity: activity\.state/
+    );
+    host.simulatePanelLifecycleChange({
+      panelId: "theirs",
+      panelKindId: "other.chat",
+      pluginId: "other",
+      phase: "mounted",
+    });
+    await expect(host.setPanelActivity("theirs", { state: "working" })).rejects.toThrow(
+      /belongs to another plugin/
+    );
+    host.simulatePanelLifecycleChange({
+      panelId: "notes",
+      panelKindId: "test.mock.notes",
+      pluginId: "test.mock",
+      phase: "mounted",
+    });
+    await expect(host.setPanelActivity("notes", { state: "working" })).rejects.toThrow(
+      /does not declare reportsActivity/
+    );
+    await expect(
+      createMockHost({ reportsActivityPanelIds: [] }).setPanelActivity("p", { state: "working" })
+    ).rejects.toThrow(/none of this plugin's contributes\.panels/);
+
+    const project = createMockHost({
+      pluginId: "project__b6700c7a__acme.chat",
+      reportsActivityPanelIds: ["chat"],
+    });
+    project.simulatePanelLifecycleChange({
+      panelId: "mine",
+      panelKindId: project.panelKindId("chat"),
+      pluginId: "project__b6700c7a__acme.chat",
+      phase: "mounted",
+    });
+    await expect(project.setPanelActivity("mine", { state: "waiting" })).resolves.toBeUndefined();
+
+    const many = createMockHost();
+    for (let i = 0; i < 256; i++) await many.setPanelActivity(`p${i}`, { state: "working" });
+    await expect(many.setPanelActivity("p256", { state: "working" })).rejects.toThrow(
+      /already reported on 256 panels/
+    );
+    await expect(many.setPanelActivity("p0", { state: "failed" })).resolves.toBeUndefined();
+  });
+
   it("setWorktreeCardStatus keys a status by the snapshot id, whichever id is passed (#13704)", async () => {
     const host = createMockHost({
       worktrees: [{ ...sampleSnapshot, id: "/tmp/repo", worktreeId: "wt-stable" }],

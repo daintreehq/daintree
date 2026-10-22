@@ -261,6 +261,9 @@
                   "project"
                 ]
               },
+              "reportsActivity": {
+                "type": "boolean"
+              },
               "menu": {
                 "maxItems": 5,
                 "type": "array",

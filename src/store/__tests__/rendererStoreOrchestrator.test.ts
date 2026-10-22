@@ -105,6 +105,7 @@ const { useConsoleCaptureStore } = await import("../consoleCaptureStore");
 const { useResourceMonitoringStore } = await import("../resourceMonitoringStore");
 const { useVoiceRecordingStore } = await import("../voiceRecordingStore");
 const { usePluginPanelBadgeStore } = await import("../pluginPanelBadgeStore");
+const { usePluginPanelActivityStore } = await import("../pluginPanelActivityStore");
 const { usePluginPanelToolbarStore } = await import("../pluginPanelToolbarStore");
 const { usePluginPanelOpenRequestStore } = await import("../pluginPanelOpenRequestStore");
 const { unregisterInputController } = await import("../terminalInputStore");
@@ -140,6 +141,7 @@ describe("rendererStoreOrchestrator", () => {
     useResourceMonitoringStore.setState({ metrics: new Map() });
     useVoiceRecordingStore.setState({ panelBuffers: {} });
     usePluginPanelBadgeStore.setState({ badgesByPanelId: {} });
+    usePluginPanelActivityStore.setState({ activityByPanelId: {}, seenRevisionByPanelId: {} });
     usePluginPanelToolbarStore.setState({ statesByPanelId: {} });
     usePluginPanelOpenRequestStore.setState({ entriesByPanelId: {} });
   });
@@ -304,6 +306,13 @@ describe("rendererStoreOrchestrator", () => {
         keep: { "plugin-1": { kind: "dot" } },
       },
     });
+    usePluginPanelActivityStore.setState({
+      activityByPanelId: {
+        [panelId]: { "plugin-1": { state: "finished", revision: 1 } },
+        keep: { "plugin-1": { state: "working", revision: 2 } },
+      },
+      seenRevisionByPanelId: { [panelId]: 1 },
+    });
 
     usePanelStore.getState().removePanel(panelId);
 
@@ -311,6 +320,13 @@ describe("rendererStoreOrchestrator", () => {
     expect(badges[panelId]).toBeUndefined();
     // Unrelated panels' badges survive the prune.
     expect(badges.keep).toEqual({ "plugin-1": { kind: "dot" } });
+    // Activity reports and their seen marks go the same way (#13820).
+    const activity = usePluginPanelActivityStore.getState();
+    expect(activity.activityByPanelId[panelId]).toBeUndefined();
+    expect(activity.seenRevisionByPanelId[panelId]).toBeUndefined();
+    expect(activity.activityByPanelId.keep).toEqual({
+      "plugin-1": { state: "working", revision: 2 },
+    });
   });
 
   it("prunes plugin panel toolbar and open-request state for the removed panel only", () => {

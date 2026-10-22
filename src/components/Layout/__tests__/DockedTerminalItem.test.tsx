@@ -20,6 +20,9 @@ const moveTerminalToGridMock = vi.fn();
 let mockActiveDockTerminalId: string | null = null;
 let mockDockAgentState: string | undefined = undefined;
 let mockIsAgent = false;
+let mockPluginActivity: { pluginId: string; shown: string; description: string } | null = null;
+let mockDeprioritized = false;
+let mockShowDockHighlights = false;
 let capturedOnOpenChange: ((open: boolean) => void) | null = null;
 let capturedOnOpenAutoFocus: ((event: { preventDefault: () => void }) => void) | null = null;
 let capturedOnFocusOutside: ((event: { preventDefault: () => void }) => void) | null = null;
@@ -43,7 +46,7 @@ vi.mock("@/store", () => ({
     selector: (s: { isFocusMode: boolean; gestureSidebarHidden: boolean }) => unknown
   ) => selector({ isFocusMode: false, gestureSidebarHidden: false }),
   usePreferencesStore: (selector: (s: { showDockAgentHighlights: boolean }) => unknown) =>
-    selector({ showDockAgentHighlights: false }),
+    selector({ showDockAgentHighlights: mockShowDockHighlights }),
 }));
 
 vi.mock("@/store/agentSettingsStore", () => ({
@@ -79,6 +82,16 @@ vi.mock("../DockChipBadge", () => ({
   DockChipBadge: () => null,
 }));
 
+// The activity hook reads the real panel, registry and plugin stores too.
+vi.mock("@/components/Panel/PluginPanelActivity", () => ({
+  usePluginPanelActivity: () => mockPluginActivity,
+  PluginPanelActivityDockCue: ({ activity }: { activity: { shown: string } }) => (
+    <span data-plugin-panel-activity={activity.shown} />
+  ),
+  pluginPanelActivityLabelSuffix: (activity: { description: string } | null) =>
+    activity ? ` — ${activity.description}` : "",
+}));
+
 vi.mock("../dockPanelPortalContext", () => ({
   useDockPanelPortal: () => vi.fn(),
 }));
@@ -86,7 +99,7 @@ vi.mock("../dockPanelPortalContext", () => ({
 vi.mock("../useDockBlockedState", () => ({
   useDockBlockedState: () => null,
   getDockDisplayAgentState: () => mockDockAgentState,
-  isDockAgentStateDeprioritized: () => false,
+  isDockAgentStateDeprioritized: () => mockDeprioritized,
 }));
 
 vi.mock("../dockPopoverGuard", () => ({
@@ -298,6 +311,60 @@ describe("DockedTerminalItem plain-terminal activity cue (#11187)", () => {
   beforeEach(() => {
     mockActiveDockTerminalId = null;
     mockDockAgentState = undefined;
+    mockPluginActivity = null;
+  });
+
+  it("gives a PTY plugin panel's own report the cue slot and the accessible name (#13820)", () => {
+    mockPluginActivity = {
+      pluginId: "acme",
+      shown: "waiting",
+      description: "Reported by Acme: Waiting — Pick a branch",
+    };
+    const { container } = render(
+      <DockedTerminalItem terminal={makeTerminal({ id: "t-1", activityStatus: "working" })} />
+    );
+    expect(container.querySelector('[data-plugin-panel-activity="waiting"]')).not.toBeNull();
+    expect(container.querySelector("[data-dock-activity-state]")).toBeNull();
+    expect(
+      screen.getByRole("button", { name: /— Reported by Acme: Waiting — Pick a branch/ })
+    ).not.toBeNull();
+  });
+
+  it("keeps a plain PTY plugin panel's chip un-dimmed while its plugin reports it waiting", () => {
+    mockDeprioritized = true;
+    mockShowDockHighlights = true;
+    try {
+      const resting = render(<DockedTerminalItem terminal={makeTerminal({ id: "t-1" })} />);
+      const restingChip = resting.container.querySelector("[data-dock-item]");
+      expect(restingChip?.className).toContain("border-transparent");
+      resting.unmount();
+
+      mockPluginActivity = {
+        pluginId: "acme",
+        shown: "waiting",
+        description: "Reported by Acme: Waiting",
+      };
+      const waiting = render(<DockedTerminalItem terminal={makeTerminal({ id: "t-1" })} />);
+      const chip = waiting.container.querySelector("[data-dock-item]");
+      expect(chip?.className).not.toContain("border-transparent");
+      expect(chip?.className).not.toBe(restingChip?.className);
+    } finally {
+      mockDeprioritized = false;
+      mockShowDockHighlights = false;
+    }
+  });
+
+  it("never lets a plugin's report displace an observed agent state", () => {
+    mockDockAgentState = "working";
+    mockPluginActivity = {
+      pluginId: "acme",
+      shown: "failed",
+      description: "Reported by Acme: Failed",
+    };
+    const { container } = render(<DockedTerminalItem terminal={makeTerminal({ id: "t-1" })} />);
+    expect(container.querySelector("[data-plugin-panel-activity]")).toBeNull();
+    expect(screen.getByRole("button", { name: /— agent working/ })).not.toBeNull();
+    expect(screen.queryByRole("button", { name: /Reported by/ })).toBeNull();
   });
 
   it("shows a running spinner and 'command running' accessible name while a plain command runs", () => {

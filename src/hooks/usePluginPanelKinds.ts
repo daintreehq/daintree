@@ -64,6 +64,8 @@ const PANEL_KIND_META_KEYS = [
   // Read off the registered config by `panel.openPluginPanel` to decide whether
   // a new panel gets a worktree at all.
   "scope",
+  // Read off the registered config before drawing a plugin's activity report.
+  "reportsActivity",
   // A reload that only adds, drops or retargets a tour changes only this, and
   // the panel menus read it off the registered config.
   "tourId",

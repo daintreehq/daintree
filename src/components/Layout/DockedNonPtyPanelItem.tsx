@@ -4,7 +4,7 @@ import type { DraggableSyntheticListeners } from "@dnd-kit/core";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useDragHandle } from "@/components/DragDrop/DragHandleContext";
 import { cn } from "@/lib/utils";
-import { usePanelStore, useFocusStore } from "@/store";
+import { usePanelStore, useFocusStore, usePreferencesStore } from "@/store";
 import type { PanelInstance } from "@shared/types/panel";
 import { TerminalContextMenu } from "@/components/Terminal/TerminalContextMenu";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
@@ -12,7 +12,12 @@ import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { useDockPanelPortal } from "./dockPanelPortalContext";
 import { DockChipBadge, useDockChipBadge } from "./DockChipBadge";
 import { dockChipBadgeLabelSuffix } from "./dockChipBadgeModel";
-import { DOCK_CHIP_CLASS, DOCK_CHIP_OPEN_CLASS } from "./dockChipStyles";
+import { DOCK_CHIP_CLASS, DOCK_CHIP_OPEN_CLASS, DOCK_CHIP_WAITING_CLASS } from "./dockChipStyles";
+import {
+  PluginPanelActivityDockCue,
+  pluginPanelActivityLabelSuffix,
+  usePluginPanelActivity,
+} from "@/components/Panel/PluginPanelActivity";
 import { useDockPopoverResize } from "./useDockPopoverResize";
 import { DockPopoverResizeHandle } from "./DockPopoverResizeHandle";
 import {
@@ -38,7 +43,8 @@ interface DockedNonPtyPanelItemProps {
  * Dock chip for a non-PTY content panel (file viewer, browser, file browser,
  * plugin view).
  * Mirrors DockedTerminalItem's popover + stable-wrapper relocation flow, minus
- * everything PTY: no renderer policies, no xterm fit, no agent state. The
+ * everything PTY: no renderer policies, no xterm fit, no agent state — only
+ * what the owning plugin reports it is doing, drawn like an agent's. The
  * panel's React subtree lives in DockPanelOffscreenContainer and is moved (not
  * remounted) into this popover — a webview's guest survives the move too — so
  * scroll position, view mode, and page state survive open/close.
@@ -120,6 +126,8 @@ export function DockedNonPtyPanelItem({ panel, displayTitle }: DockedNonPtyPanel
 
   const chrome = useMemo(() => deriveTerminalChrome({ kind: panel.kind }), [panel.kind]);
   const badge = useDockChipBadge(panel.id);
+  const activity = usePluginPanelActivity(panel.id);
+  const showDockAgentHighlights = usePreferencesStore((s) => s.showDockAgentHighlights);
 
   const { height: popoverHeight, isResizing, handleProps } = useDockPopoverResize();
 
@@ -132,7 +140,14 @@ export function DockedNonPtyPanelItem({ panel, displayTitle }: DockedNonPtyPanel
               <button
                 {...dragPointerListeners}
                 data-dock-item=""
-                className={cn(DOCK_CHIP_CLASS, isOpen && DOCK_CHIP_OPEN_CLASS)}
+                className={cn(
+                  DOCK_CHIP_CLASS,
+                  isOpen && DOCK_CHIP_OPEN_CLASS,
+                  !isOpen &&
+                    showDockAgentHighlights &&
+                    activity?.shown === "waiting" &&
+                    DOCK_CHIP_WAITING_CLASS
+                )}
                 onClick={(e) => {
                   e.preventDefault();
                   e.stopPropagation();
@@ -148,7 +163,7 @@ export function DockedNonPtyPanelItem({ panel, displayTitle }: DockedNonPtyPanel
                   e.stopPropagation();
                   handleMoveToGrid();
                 }}
-                aria-label={`${displayTitle}${dockChipBadgeLabelSuffix(badge)} - Click to preview, double-click to move to grid, drag to reorder`}
+                aria-label={`${displayTitle}${pluginPanelActivityLabelSuffix(activity)}${dockChipBadgeLabelSuffix(badge)} - Click to preview, double-click to move to grid, drag to reorder`}
               >
                 <div className="flex items-center justify-center shrink-0">
                   <TerminalIcon kind={panel.kind} chrome={chrome} className="w-3.5 h-3.5" />
@@ -157,6 +172,7 @@ export function DockedNonPtyPanelItem({ panel, displayTitle }: DockedNonPtyPanel
                   {displayTitle}
                 </span>
                 <DockChipBadge model={badge} />
+                {activity && <PluginPanelActivityDockCue activity={activity} />}
               </button>
             </PopoverTrigger>
           </TerminalContextMenu>

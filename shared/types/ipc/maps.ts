@@ -2156,6 +2156,15 @@ export interface IpcEventMap {
     pluginId: string;
   };
 
+  // A plugin's activity reports on its own panels changed (main → renderer,
+  // #13820). Carries the plugin's COMPLETE current map (panelId → report),
+  // never a delta; an empty `activity` clears them, which is also how an
+  // unload or a worker swap is sent.
+  "plugin:panel-activity-changed": {
+    pluginId: string;
+    activity: Record<string, import("../plugin.js").PluginPanelActivityReport>;
+  };
+
   // A plugin's toolbar-button badges changed (main → renderer, #13503). Carries
   // the plugin's COMPLETE current map (manifest button id → badge), never a
   // delta; an empty `badges` clears them, which is also how an unload is sent.
@@ -2441,6 +2450,8 @@ export type IpcEventBusMap = Pick<
   // Plugin panel-badge state (global broadcast)
   | "plugin:panel-badges-changed"
   | "plugin:panel-badges-cleared"
+  // Plugin panel activity reports (project-scoped for a project instance)
+  | "plugin:panel-activity-changed"
   // Plugin toolbar-button badges (project-scoped for a project instance)
   | "plugin:toolbar-badges-changed"
   // Plugin toolbar-button state (project-scoped for a project instance)

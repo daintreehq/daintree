@@ -416,3 +416,45 @@ describe("pushTargetsFor", () => {
     expect(broker.pushTargetsFor("p1", "acme")).toEqual([]);
   });
 });
+
+describe("ownership (#13820)", () => {
+  it("names the kind of a panel the caller owns, in any live phase", () => {
+    const broker = makeBroker();
+    broker.ingest(1, [event({ phase: "hidden" }), event({ panelId: "p2", phase: "backgrounded" })]);
+
+    expect(broker.ownership("p1", "acme")).toEqual({ kind: "owned", panelKindId: "acme.dash" });
+    expect(broker.ownership("p2", "acme")).toEqual({ kind: "owned", panelKindId: "acme.dash" });
+  });
+
+  it("answers foreign for another plugin's panel, whatever the renderer claimed", () => {
+    const broker = makeBroker();
+    broker.ingest(1, [event({ panelKindId: "other.panel", pluginId: "acme" })]);
+
+    expect(broker.ownership("p1", "acme")).toEqual({ kind: "foreign" });
+  });
+
+  it("answers non-plugin for a built-in panel and missing for an id nobody reported", () => {
+    const broker = makeBroker();
+    broker.setNonPluginPanels(1, ["term-1"]);
+
+    expect(broker.ownership("term-1", "acme")).toEqual({ kind: "non-plugin" });
+    expect(broker.ownership("nope", "acme")).toEqual({ kind: "missing" });
+  });
+
+  it("forgets a removed panel", () => {
+    const broker = makeBroker();
+    broker.ingest(1, [event()]);
+    broker.ingest(1, [event({ phase: "removed" })]);
+
+    expect(broker.ownership("p1", "acme")).toEqual({ kind: "missing" });
+  });
+
+  it("authorizes nothing while the kind has no registered owner", () => {
+    const owners: Record<string, string | undefined> = { "acme.dash": "acme" };
+    const broker = new PluginPanelLifecycleBroker((kindId) => owners[kindId]);
+    broker.ingest(1, [event()]);
+    owners["acme.dash"] = undefined;
+
+    expect(broker.ownership("p1", "acme")).toEqual({ kind: "unavailable" });
+  });
+});

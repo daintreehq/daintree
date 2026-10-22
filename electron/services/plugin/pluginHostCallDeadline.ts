@@ -51,6 +51,7 @@ const HOST_CALL_DEADLINES = {
   setWorktreeCardStatus: DEFAULT,
   setWorktreeReviewChecks: DEFAULT,
   setTerminalStatus: DEFAULT,
+  setPanelActivity: DEFAULT,
   "actions.list": DEFAULT,
   "actions.get": DEFAULT,
   "settings.get": INTERACTIVE,
