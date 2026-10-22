@@ -52,6 +52,9 @@ function launchAgent(agentId: string, presetId?: string | null, options?: DockLa
  * band never flashes in.
  */
 export function PluginLaunchBand({ activeWorktreeId, cwd, className }: PluginLaunchBandProps) {
+  // The registry snapshots below are read for invalidation only, which the
+  // compiler would drop from the memo's inputs.
+  "use no memo";
   const entries = usePluginLaunchEntriesStore((s) => s.entries);
   const hiddenPluginIds = usePluginLaunchEntriesStore((s) => s.hiddenPluginIds);
   const hiddenLoaded = usePluginLaunchEntriesStore((s) => s.hiddenLoaded);
