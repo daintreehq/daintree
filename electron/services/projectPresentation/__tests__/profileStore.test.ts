@@ -309,6 +309,10 @@ describe("project toolbar (#13783)", () => {
 
   it("turns the toggle back to following the profile when a toolbar level is chosen", () => {
     setProjectToolbarEnabled(PROJECT_A, false);
+    // Git detail sits on worktree cards, so choosing it says nothing about the toolbar.
+    expect(setProjectPresentationLevel(PROJECT_A, "gitDetail", "demoted").useProjectToolbar).toBe(
+      false
+    );
     expect(setProjectPresentationLevel(PROJECT_A, "devServer", "demoted").useProjectToolbar).toBe(
       null
     );
@@ -318,13 +322,14 @@ describe("project toolbar (#13783)", () => {
     const suggestion = suggest({ forgeStats: "hidden" });
     answerProjectPresentationSuggestion(PROJECT_A, suggestion, suggestion.hash, "declined", 5);
     setProjectPresentationLevel(PROJECT_A, "copyTree", "demoted");
+    setProjectPresentationLevel(PROJECT_A, "gitDetail", "demoted");
     setProjectPluginButtonPromoted(PROJECT_A, own(1), true);
     setProjectToolbarEnabled(PROJECT_A, true);
     setProjectPresentationLevel(PROJECT_B, "copyTree", "demoted");
     const before = getProjectPresentation(PROJECT_A).revision;
 
     const reset = resetProjectToolbar(PROJECT_A);
-    expect(reset.levels).toEqual({});
+    expect(reset.levels).toEqual({ gitDetail: "demoted" });
     expect(reset.promotedPluginButtons).toEqual([]);
     expect(reset.useProjectToolbar).toBeNull();
     expect(reset.suggestionAnswers[suggestion.hash]?.answer).toBe("declined");
