@@ -1,4 +1,4 @@
-import { useEffect, useSyncExternalStore } from "react";
+import { useEffect, useRef, useSyncExternalStore } from "react";
 import { isOwnPluginAction } from "@shared/utils/remotePluginContributions";
 import type { ActionId } from "@shared/types/actions";
 import type { PluginWorktreeReviewCheck } from "@shared/types/plugin";
@@ -13,6 +13,7 @@ import {
   subscribeToRegisteredPluginActions,
 } from "@/services/plugin/registeredPluginActions";
 import { useProjectStore } from "@/store/projectStore";
+import { FocusHandoffGuard } from "../FocusHandoffGuard";
 import {
   usePluginWorktreeReviewChecksStore,
   worktreeReviewChecksFor,
@@ -45,11 +46,13 @@ function PluginCheckRow({
   worktreeId,
   check,
   registeredActions,
+  onFocusLeaving,
 }: {
   pluginId: string;
   worktreeId: string;
   check: PluginWorktreeReviewCheck;
   registeredActions: ReadonlyMap<string, string>;
+  onFocusLeaving: () => void;
 }) {
   const { name } = usePluginAttribution(pluginId);
   const { Icon, toneClass } = SEVERITY[check.severity];
@@ -76,21 +79,25 @@ function PluginCheckRow({
           {check.detail && <span className="ml-1 text-text-secondary"> {check.detail}</span>}
         </span>
       </TruncatedTooltip>
-      <span aria-hidden className="shrink-0 text-text-secondary">
+      <span aria-hidden className="max-w-32 shrink-0 truncate text-text-secondary">
         {name}
       </span>
       {command !== undefined && actionTitle !== undefined && (
-        <Button
-          variant="subtle"
-          size="xs"
-          data-testid="plugin-readiness-check-command"
-          onClick={() =>
-            void actionService.dispatch(command as ActionId, { worktreeId }, { source: "user" })
-          }
-          className={cn("shrink-0", CTA_CLASS)}
-        >
-          {actionTitle.length > 0 ? actionTitle : "Run"}
-        </Button>
+        // Guarded on the button alone: it goes with its row, and also when
+        // the action unregisters while the row stays.
+        <FocusHandoffGuard onFocusLeaving={onFocusLeaving}>
+          <Button
+            variant="subtle"
+            size="xs"
+            data-testid="plugin-readiness-check-command"
+            onClick={() =>
+              void actionService.dispatch(command as ActionId, { worktreeId }, { source: "user" })
+            }
+            className={cn("max-w-40 shrink-0 truncate", CTA_CLASS)}
+          >
+            {actionTitle.length > 0 ? actionTitle : "Run"}
+          </Button>
+        </FocusHandoffGuard>
       )}
     </li>
   );
@@ -116,21 +123,34 @@ export function PluginReadinessChecks({
     getRegisteredPluginActionsSnapshot,
     getRegisteredPluginActionsSnapshot
   );
+  const listRef = useRef<HTMLUListElement>(null);
   if (plugins.length === 0) return null;
+  // A row whose button had focus can go (the plugin clears its checks, or its
+  // action unregisters): the list takes focus rather than leaving the keyboard
+  // on the document.
+  const handOffFocus = () => listRef.current?.focus({ preventScroll: true });
   return (
+    // Bounded: ten checks from several plugins must not push the header and the
+    // commit panel out of a short pane.
     <ul
+      ref={listRef}
+      tabIndex={-1}
       data-testid="plugin-readiness-checks"
       aria-label="Plugin checks"
-      className="flex flex-col gap-1 px-3 py-1.5 border-b border-divider text-2xs"
+      className="flex max-h-32 flex-col gap-1 overflow-y-auto px-3 py-1.5 border-b border-divider text-2xs"
     >
       {plugins.flatMap(({ pluginId, checks }) =>
         checks.map((check, index) => (
+          // Keyed on what the row is, with the position only to tell identical
+          // rows apart, so a removed earlier check cannot hand its focused
+          // button to a different command.
           <PluginCheckRow
-            key={`${pluginId}:${index}`}
+            key={`${pluginId}:${check.label}:${check.command ?? ""}:${checks.slice(0, index).filter((c) => c.label === check.label && c.command === check.command).length}`}
             pluginId={pluginId}
             worktreeId={worktreeId}
             check={check}
             registeredActions={registeredActions}
+            onFocusLeaving={handOffFocus}
           />
         ))
       )}

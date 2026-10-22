@@ -96,6 +96,58 @@ describe("PluginReadinessChecks", () => {
     );
   });
 
+  it("hands focus to the list when the focused command button goes", async () => {
+    registered.current = new Map([["acme.lint.openReport", "Open report"]]);
+    const { rerender } = render(<PluginReadinessChecks worktreeId="wt-1" plugins={plugins} />);
+    const button = screen.getByTestId("plugin-readiness-check-command");
+    button.focus();
+    expect(document.activeElement).toBe(button);
+
+    // The action unregisters while the row stays.
+    act(() => {
+      registered.current = new Map();
+      listeners.forEach((cb) => cb());
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(screen.queryByTestId("plugin-readiness-check-command")).toBeNull();
+    expect(document.activeElement).toBe(screen.getByTestId("plugin-readiness-checks"));
+
+    rerender(
+      <TooltipProvider>
+        <PluginReadinessChecks worktreeId="wt-1" plugins={[]} />
+      </TooltipProvider>
+    );
+  });
+
+  it("keeps a row's identity when an earlier check is removed", () => {
+    registered.current = new Map([
+      ["acme.lint.a", "Run a"],
+      ["acme.lint.b", "Run b"],
+    ]);
+    const first = {
+      pluginId: "acme.lint",
+      checks: [
+        { label: "A", severity: "info" as const, command: "acme.lint.a" },
+        { label: "B", severity: "info" as const, command: "acme.lint.b" },
+      ],
+    };
+    const { rerender } = render(<PluginReadinessChecks worktreeId="wt-1" plugins={[first]} />);
+    const buttonB = screen.getAllByTestId("plugin-readiness-check-command")[1]!;
+    expect(buttonB.textContent).toBe("Run b");
+
+    rerender(
+      <TooltipProvider>
+        <PluginReadinessChecks
+          worktreeId="wt-1"
+          plugins={[{ pluginId: "acme.lint", checks: [first.checks[1]!] }]}
+        />
+      </TooltipProvider>
+    );
+    expect(screen.getByTestId("plugin-readiness-check-command")).toBe(buttonB);
+  });
+
   it("never offers another plugin's action", () => {
     registered.current = new Map([["other.plugin.run", "Run"]]);
     render(

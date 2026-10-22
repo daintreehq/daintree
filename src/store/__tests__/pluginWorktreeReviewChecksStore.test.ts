@@ -55,6 +55,22 @@ describe("pluginWorktreeReviewChecksStore", () => {
     expect(checksByProject.B?.p1?.["/b"]).toEqual([warn("three")]);
   });
 
+  it("replaces the whole map, so a worktree left out of the update loses its checks", async () => {
+    const mod = await load();
+    changedCb!({
+      pluginId: "p1",
+      projectId: "A",
+      checks: { "/a": [warn("one")], "/b": [warn("two")] },
+    });
+    changedCb!({ pluginId: "p1", projectId: "A", checks: { "/a": [warn("one")] } });
+    expect(
+      mod.worktreeReviewChecksFor(
+        mod.usePluginWorktreeReviewChecksStore.getState().checksByProject.A,
+        "/b"
+      )
+    ).toEqual([]);
+  });
+
   it("drops an entry, then its project, when an empty map arrives", async () => {
     const mod = await load();
     changedCb!({ pluginId: "p1", projectId: "A", checks: { "/a": [warn("one")] } });

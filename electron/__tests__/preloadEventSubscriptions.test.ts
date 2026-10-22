@@ -47,6 +47,7 @@ interface PluginBridge {
   onToolbarBadgesChanged: (cb: (payload: unknown) => void) => () => void;
   onToolbarStatesChanged: (cb: (payload: unknown) => void) => () => void;
   onWorktreeCardStatusesChanged: (cb: (payload: unknown) => void) => () => void;
+  onWorktreeReviewChecksChanged: (cb: (payload: unknown) => void) => () => void;
 }
 
 interface ProjectPresentationBridge {
@@ -231,6 +232,30 @@ describe("preload event subscriptions", () => {
       { pluginId: "p1", projectId: "B", statuses: { "/b": { label: "up" } } },
       { pluginId: "p2", projectId: "A", statuses: { "/a": { label: "x" } } },
       { pluginId: "p1", projectId: "A", statuses: {} },
+    ]);
+    dispose();
+  });
+
+  it("replays each plugin's latest review checks per project to a late subscriber (#13806)", () => {
+    terminal.onExit(() => {})();
+    const push = (payload: unknown) =>
+      ipcRenderer.emit(
+        "events:push",
+        {},
+        { name: "plugin:worktree-review-checks-changed", payload }
+      );
+    const check = (label: string) => ({ label, severity: "warning" });
+    push({ pluginId: "p1", projectId: "A", checks: { "/a": [check("one")] } });
+    push({ pluginId: "p1", projectId: "B", checks: { "/b": [check("two")] } });
+    push({ pluginId: "p2", projectId: "A", checks: { "/a": [check("three")] } });
+    push({ pluginId: "p1", projectId: "A", checks: {} });
+
+    const received: unknown[] = [];
+    const dispose = plugin.onWorktreeReviewChecksChanged((payload) => received.push(payload));
+    expect(received).toEqual([
+      { pluginId: "p1", projectId: "B", checks: { "/b": [check("two")] } },
+      { pluginId: "p2", projectId: "A", checks: { "/a": [check("three")] } },
+      { pluginId: "p1", projectId: "A", checks: {} },
     ]);
     dispose();
   });

@@ -1368,6 +1368,194 @@ describe("worktree card statuses (#13704)", () => {
   });
 });
 
+describe("worktree review checks (#13806)", () => {
+  type Check = { label: string; severity: "warning" | "info" };
+  type Checks = Map<string, Map<string, Map<string, Check[]>>>;
+  const checksOf = (service: PluginService): Checks =>
+    (service as unknown as { pluginWorktreeReviewChecks: Checks }).pluginWorktreeReviewChecks;
+  const checkEvents = () =>
+    ipcViewMocks.broadcastToProjectRenderers.mock.calls
+      .map((call) => ({ to: call[0], ...(call[2] as { name: string; payload: unknown }) }))
+      .filter((event) => event.name === "plugin:worktree-review-checks-changed");
+  const warn = (label: string): Check => ({ label, severity: "warning" });
+
+  beforeEach(() => {
+    devWorkerMock.instances.length = 0;
+    devWorkerMock.bridges.length = 0;
+  });
+  afterEach(() => {
+    ipcViewMocks.getProjectRendererTargets.mockImplementation(() => []);
+  });
+
+  async function writeDevPlugin(name: string, pluginName: string): Promise<void> {
+    const dir = path.join(tmpDir, name);
+    await fs.mkdir(path.join(dir, "dist"), { recursive: true });
+    await fs.writeFile(
+      path.join(dir, "plugin.json"),
+      JSON.stringify({ name: pluginName, version: "1.0.0", main: "dist/index.js" })
+    );
+    await fs.writeFile(path.join(dir, "dist", "index.js"), "export function activate() {}");
+    await fs.writeFile(path.join(dir, ".dev-marker"), "");
+  }
+
+  it("pushSnapshotTo() replays only the buckets for the view's own project", async () => {
+    const service = new PluginService(tmpDir);
+    await service.activateStartupFinishedPlugins();
+    checksOf(service).set(
+      "acme.global",
+      new Map([
+        ["proj-a", new Map([["/a/wt", [warn("a")]]])],
+        ["proj-b", new Map([["/b/wt", [warn("b")]]])],
+      ])
+    );
+    ipcViewMocks.getProjectRendererTargets.mockImplementation((projectId) =>
+      projectId === "proj-a" ? [{ id: 4260 }] : []
+    );
+    const send = vi.fn();
+    const wc = { id: 4260, send, isDestroyed: () => false } as unknown as Electron.WebContents;
+
+    await service.pushSnapshotTo(wc);
+
+    const replayed = send.mock.calls
+      .map((c) => c[1] as { name?: string; payload?: unknown })
+      .filter((event) => event.name === "plugin:worktree-review-checks-changed");
+    expect(replayed).toEqual([
+      {
+        name: "plugin:worktree-review-checks-changed",
+        payload: { pluginId: "acme.global", projectId: "proj-a", checks: { "/a/wt": [warn("a")] } },
+      },
+    ]);
+  });
+
+  it("withholds replayed checks from a local view bound to a remote host", async () => {
+    const service = new PluginService(tmpDir);
+    await service.activateStartupFinishedPlugins();
+    checksOf(service).set("acme.global", new Map([["proj-a", new Map([["/a/wt", [warn("a")]]])]]));
+    ipcViewMocks.getProjectRendererTargets.mockImplementation(() => [{ id: 4261 }]);
+    ipcViewMocks.isWithheldFromView.mockImplementation((id) => id === 4261);
+    const send = vi.fn();
+    const wc = { id: 4261, send, isDestroyed: () => false } as unknown as Electron.WebContents;
+    try {
+      await service.pushSnapshotTo(wc);
+    } finally {
+      ipcViewMocks.isWithheldFromView.mockImplementation(() => false);
+    }
+    const replayed = send.mock.calls
+      .map((c) => c[1] as { name?: string })
+      .filter((event) => event.name === "plugin:worktree-review-checks-changed");
+    expect(replayed).toEqual([]);
+  });
+
+  it("clears every project a plugin published to when it unloads", async () => {
+    await writeDevPlugin("dev-checks", "acme.checks");
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+    await service.activatePlugin("acme.checks");
+    checksOf(service).set(
+      "acme.checks",
+      new Map([
+        ["proj-a", new Map([["/a/wt", [warn("a")]]])],
+        ["proj-b", new Map([["/b/wt", [warn("b")]]])],
+      ])
+    );
+    ipcViewMocks.broadcastToProjectRenderers.mockClear();
+
+    service.unloadPlugin("acme.checks");
+
+    expect(checksOf(service).has("acme.checks")).toBe(false);
+    expect(checkEvents().map((event) => [event.to, event.payload])).toEqual([
+      ["proj-a", { pluginId: "acme.checks", projectId: "proj-a", checks: {} }],
+      ["proj-b", { pluginId: "acme.checks", projectId: "proj-b", checks: {} }],
+    ]);
+  });
+
+  it("clears a plugin's checks, and advances its generation, when its worker is replaced", async () => {
+    await writeDevPlugin("dev-checks-reload", "acme.checks-reload");
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+    await service.activatePlugin("acme.checks-reload");
+    checksOf(service).set(
+      "acme.checks-reload",
+      new Map([["proj-a", new Map([["/a/wt", [warn("a")]]])]])
+    );
+    ipcViewMocks.broadcastToProjectRenderers.mockClear();
+
+    (
+      devWorkerMock.bridges[0].deps as unknown as { clearPriorRegistrations: () => void }
+    ).clearPriorRegistrations();
+
+    expect(checksOf(service).size).toBe(0);
+    expect(checkEvents().map((event) => event.payload)).toEqual([
+      { pluginId: "acme.checks-reload", projectId: "proj-a", checks: {} },
+    ]);
+    const generation = (
+      service as unknown as { worktreeReviewChecksGenerations: Map<string, number> }
+    ).worktreeReviewChecksGenerations.get("acme.checks-reload");
+    expect(generation).toBe(1);
+  });
+
+  it("clears every plugin's checks on a closed project and leaves other projects alone", async () => {
+    const service = new PluginService(tmpDir);
+    await service.activateStartupFinishedPlugins();
+    checksOf(service).set(
+      "acme.global",
+      new Map([
+        ["proj-a", new Map([["/a/wt", [warn("a")]]])],
+        ["proj-b", new Map([["/b/wt", [warn("b")]]])],
+      ])
+    );
+    ipcViewMocks.broadcastToProjectRenderers.mockClear();
+
+    await service.onProjectClosed("proj-a");
+
+    expect([...checksOf(service).get("acme.global")!.keys()]).toEqual(["proj-b"]);
+    expect(checkEvents().map((event) => event.payload)).toEqual([
+      { pluginId: "acme.global", projectId: "proj-a", checks: {} },
+    ]);
+  });
+
+  it("prunes a removed worktree from every plugin, and only that worktree", async () => {
+    const service = new PluginService(tmpDir);
+    await service.activateStartupFinishedPlugins();
+    const handlers = new Map<string, Set<(payload: unknown) => void>>();
+    service.setWorkspaceClient({
+      on: vi.fn((event: string, handler: (payload: unknown) => void) => {
+        if (!handlers.has(event)) handlers.set(event, new Set());
+        handlers.get(event)!.add(handler);
+      }),
+      off: vi.fn((event: string, handler: (payload: unknown) => void) => {
+        handlers.get(event)?.delete(handler);
+      }),
+    } as never);
+    checksOf(service).set(
+      "acme.one",
+      new Map([
+        [
+          "proj-a",
+          new Map([
+            ["/a/gone", [warn("x")]],
+            ["/a/kept", [warn("y")]],
+          ]),
+        ],
+      ])
+    );
+    checksOf(service).set("acme.two", new Map([["proj-a", new Map([["/a/gone", [warn("z")]]])]]));
+    ipcViewMocks.broadcastToProjectRenderers.mockClear();
+
+    for (const handler of handlers.get("worktree-removed") ?? []) {
+      handler({ worktreeId: "/a/gone", projectPath: "/a" });
+    }
+
+    expect(checksOf(service).get("acme.one")?.get("proj-a")?.has("/a/kept")).toBe(true);
+    expect(checksOf(service).has("acme.two")).toBe(false);
+    expect(checkEvents().map((event) => event.payload)).toEqual([
+      { pluginId: "acme.one", projectId: "proj-a", checks: { "/a/kept": [warn("y")] } },
+      { pluginId: "acme.two", projectId: "proj-a", checks: {} },
+    ]);
+    service.dispose();
+  });
+});
+
 describe("PluginService settings for launch-disabled plugins", () => {
   let svc: PluginService;
 
