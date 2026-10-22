@@ -6,11 +6,10 @@ import type { HostMetricsEvent, HostWorktreeEntry } from "@shared/types/ipc/host
 import type { HostProjectPresence } from "@shared/types/ipc/hostSwitch";
 import { HANDSHAKE, makeSummary } from "@/components/Hosts/Overview/__tests__/fixtures";
 
-const { hostList, switchToHost, openProjectOnHost, dispatch } = vi.hoisted(() => ({
+const { hostList, switchToHost, openProjectOnHost } = vi.hoisted(() => ({
   hostList: { hosts: [] as HostListEntry[], localSummary: null },
   switchToHost: vi.fn(async () => {}),
   openProjectOnHost: vi.fn(async () => {}),
-  dispatch: vi.fn(async () => ({ ok: true })),
 }));
 
 vi.mock("@/components/Hosts/hostList", () => ({
@@ -23,14 +22,27 @@ vi.mock("@/components/Hosts/hostSwitching", () => ({
     event.metaKey || event.ctrlKey,
 }));
 vi.mock("@/components/Hosts/OpenOnHostSubmenu", () => ({ openProjectOnHost }));
-vi.mock("@/services/ActionService", () => ({ actionService: { dispatch } }));
+// Which mark a count wears, without copying the glyphs' own geometry.
+vi.mock("@/components/Pilot/PilotRunState", () => ({
+  PilotRunState: ({ band }: { band: string }) => <span data-mark={band} />,
+}));
 vi.mock("@/store/projectStore", () => ({
   useProjectStore: (select: (state: { currentProject: { name: string } }) => unknown) =>
-    select({ currentProject: { name: "helios" } }),
+    select({ currentProject: { name: "Helios Web" } }),
 }));
 
 import { ProjectHostsGroup } from "../ProjectHostsGroup";
-import { PROJECT_HOSTS_EXPANDED_KEY } from "../projectHostsExpanded";
+import {
+  PROJECT_HOSTS_ALL_SHOWN_KEY,
+  PROJECT_HOSTS_EXPANDED_KEY,
+  setProjectHostsAllShown,
+  setProjectHostsExpanded,
+} from "../projectHostsExpanded";
+import {
+  HANDOFF_TTL_MS,
+  ORDER_SETTLE_MS,
+  PROJECT_HOSTS_HANDOFF_KEY,
+} from "@/components/Hosts/projectHostOrder";
 
 const PROJECT = "a".repeat(64);
 
@@ -88,6 +100,8 @@ const waiting = (terminalId: string) =>
   ({ terminalId, band: "needs-you", agentState: "waiting" }) as const;
 const working = (terminalId: string) =>
   ({ terminalId, band: "running", agentState: "working" }) as const;
+const finished = (terminalId: string) =>
+  ({ terminalId, band: "done", agentState: "completed" }) as const;
 
 let lists: Record<string, HostWorktreeEntry[]>;
 let presence: HostProjectPresence[];
@@ -108,7 +122,6 @@ const has = (hostId: string, projectId = "remote-p"): HostProjectPresence => ({
 beforeEach(() => {
   switchToHost.mockClear();
   openProjectOnHost.mockClear();
-  dispatch.mockClear();
   listWorktrees.mockReset().mockImplementation(async ({ hostId }) => lists[hostId] ?? []);
   locate.mockClear();
   eventListeners.clear();
@@ -120,9 +133,7 @@ beforeEach(() => {
     linux: [
       worktree("remote-p", "feature/c", [waiting("t1"), working("t2")]),
       worktree("remote-p", "feature/d", [working("t3")]),
-      worktree("remote-p", "develop", [
-        { terminalId: "t4", band: "done", agentState: "completed" },
-      ]),
+      worktree("remote-p", "develop", [finished("t4")]),
       worktree("someone-else", "other/x", [waiting("t9")]),
     ],
   };
@@ -147,6 +158,12 @@ beforeEach(() => {
 
 afterEach(() => {
   delete (window as { __DAINTREE_HOST_ID__?: unknown }).__DAINTREE_HOST_ID__;
+  vi.restoreAllMocks();
+  vi.useRealTimers();
+  // The preferences keep a fallback for a view that can't write storage; a
+  // working write clears it, so no test inherits another's.
+  setProjectHostsExpanded(true);
+  setProjectHostsAllShown(false);
 });
 
 function rows(): HTMLElement[] {
@@ -182,7 +199,6 @@ describe("ProjectHostsGroup", () => {
     presence = [has("linux"), { hostId: "away", projects: [] }];
     render(<ProjectHostsGroup projectId={PROJECT} />);
     await waitFor(() => expect(count(rowFor("linux"), "running")).toBe("2"));
-    // This machine, then by name: a host without the project or without a link keeps its place.
     expect(hostOrder()).toEqual(["local", "linux", "away", "zeta"]);
     expect(rowFor("local").getAttribute("aria-current")).toBe("true");
     expect(rowFor("linux").getAttribute("aria-current")).toBeNull();
@@ -198,67 +214,51 @@ describe("ProjectHostsGroup", () => {
     });
   });
 
-  it("keeps the same rows in the same order from a window on another host, marking that one", async () => {
-    window.__DAINTREE_HOST_ID__ = { id: "linux" } as typeof window.__DAINTREE_HOST_ID__;
-    lists.linux = [worktree(PROJECT, "feature/c", [working("t1")])];
-    presence = [{ hostId: "local", projects: [{ projectId: "local-p", name: "h", path: "/p" }] }];
-    lists.local = [worktree("local-p", "develop", [working("l1"), working("l2")])];
-    render(<ProjectHostsGroup projectId={PROJECT} />);
-    await waitFor(() => expect(count(rowFor("local"), "running")).toBe("2"));
-    expect(hostOrder()).toEqual(["local", "away", "linux"]);
-    expect(rowFor("linux").getAttribute("aria-current")).toBe("true");
-    expect(count(rowFor("linux"), "running")).toBe("1");
-    expect(locate).toHaveBeenCalledWith({
-      fromHostId: "linux",
-      projectId: PROJECT,
-      toHostIds: ["local"],
-    });
-  });
-
-  it("counts a host's agents by the band that host observed, naming the ones asking", async () => {
+  it("counts a host's agents by band, asking ones included, and never lists its worktrees", async () => {
     render(<ProjectHostsGroup projectId={PROJECT} />);
     await waitFor(() => expect(count(rowFor("linux"), "running")).toBe("2"));
     const row = rowFor("linux");
-    // Agents, not worktrees: feature/c's working agent counts beside feature/d's.
-    // The asking agent is named under the row rather than counted on it, and a
-    // zero draws nothing; each band keeps its own column.
-    expect(
-      [...row.querySelectorAll("[data-band]")].map((el) => el.getAttribute("data-band"))
-    ).toEqual(["running"]);
-    // Settled agents and other projects' agents never count.
+    // Agents, not worktrees; settled agents and other projects' agents never count.
+    expect(count(row, "asking")).toBe("1");
     expect(row.querySelector('[data-band="done"]')).toBeNull();
     expect(row.getAttribute("aria-label")).toBe(
       "name-linux: 1 waiting, 2 working, 1 finished (observed)"
     );
-    const asks = screen.getAllByTestId("project-hosts-ask-row");
-    expect(asks).toHaveLength(1);
-    // The branch without its type prefix, which is where an issue number starts.
-    expect(asks[0]!.textContent).toBe("cWaiting");
-    expect(asks[0]!.getAttribute("aria-label")).toBe("feature/c on name-linux, waiting (observed)");
+    // One row per host and nothing under it.
+    expect(document.querySelectorAll("[data-project-hosts-row]")).toHaveLength(3);
+    expect(screen.getByTestId("project-hosts-group").textContent).not.toContain("feature/c");
+    // Counts are right-aligned in shared columns: the working count ends both rows,
+    // and this machine's row, with nothing asking, leaves that column to its name.
+    const cells = (hostId: string) =>
+      [...rowFor(hostId).querySelectorAll<HTMLElement>("[data-count-cell]")].map(
+        (cell) => cell.dataset.countCell
+      );
+    expect(cells("linux")).toEqual(["asking", "running"]);
+    expect(cells("local")).toEqual(["running"]);
   });
 
-  it("lands on an asking agent's pane on its host, or on this one without switching", async () => {
-    lists.local = [worktree(PROJECT, "feature/here", [waiting("l1")])];
+  it("reads a host from before agents were listed by its worktrees' top bands", async () => {
+    const { runs: _runs, ...old } = worktree("remote-p", "feature/c", [waiting("t1")]);
+    lists.linux = [old];
     render(<ProjectHostsGroup projectId={PROJECT} />);
-    await waitFor(() => expect(screen.getAllByTestId("project-hosts-ask-row")).toHaveLength(2));
-    const [here, there] = screen.getAllByTestId("project-hosts-ask-row");
+    await waitFor(() => expect(count(rowFor("linux"), "asking")).toBe("1"));
+  });
 
-    fireEvent.click(there!);
-    expect(switchToHost).toHaveBeenLastCalledWith("linux", false, "remote-p", {
-      focusIntent: { intent: "focus-panel", panelId: "t1" },
-    });
-    fireEvent.click(there!, { metaKey: true });
-    expect(switchToHost).toHaveBeenLastCalledWith("linux", true, "remote-p", {
-      focusIntent: { intent: "focus-panel", panelId: "t1" },
-    });
+  it("marks a host's asking count blocked when any agent there is blocked, else waiting", async () => {
+    const blocked = { terminalId: "b1", band: "blocked", agentState: "waiting" } as const;
+    const mark = () =>
+      rowFor("linux").querySelector('[data-band="asking"] [data-mark]')?.getAttribute("data-mark");
+    lists.linux = [worktree("remote-p", "feature/a", [waiting("w1"), blocked])];
+    render(<ProjectHostsGroup projectId={PROJECT} />);
+    await waitFor(() => expect(count(rowFor("linux"), "asking")).toBe("2"));
+    expect(mark()).toBe("blocked");
 
-    fireEvent.click(here!);
-    expect(dispatch).toHaveBeenLastCalledWith(
-      "pilot.openRun",
-      { runId: "l1", workspaceId: PROJECT },
-      { source: "user" }
-    );
-    expect(switchToHost).toHaveBeenCalledTimes(2);
+    lists.linux = [worktree("remote-p", "feature/a", [waiting("w1")])];
+    await act(async () => {
+      emit({ type: "worktrees", hostId: "linux" });
+    });
+    await waitFor(() => expect(count(rowFor("linux"), "asking")).toBe("1"));
+    expect(mark()).toBe("needs-you");
   });
 
   it("switches to a host's copy from its row, and does nothing from the window's own", async () => {
@@ -287,31 +287,6 @@ describe("ProjectHostsGroup", () => {
     expect(switchToHost).toHaveBeenLastCalledWith("away", false, undefined);
   });
 
-  it("expands a host's asking agents past the first two in place", async () => {
-    lists.linux = ["a", "b", "c", "d"].map((name, i) =>
-      worktree("remote-p", `feature/${name}`, [waiting(`t${i}`)])
-    );
-    render(<ProjectHostsGroup projectId={PROJECT} />);
-    await waitFor(() => expect(screen.getAllByTestId("project-hosts-ask-row")).toHaveLength(2));
-    const more = screen.getByTestId("project-hosts-more-row");
-    expect(more.textContent).toBe("2 more");
-    fireEvent.click(more);
-    expect(switchToHost).not.toHaveBeenCalled();
-    expect(screen.getAllByTestId("project-hosts-ask-row")).toHaveLength(4);
-    expect(screen.queryByTestId("project-hosts-more-row")).toBeNull();
-  });
-
-  it("reads a host from before agents were listed by its worktrees' top bands, landing on the next one waiting", async () => {
-    const { runs: _runs, ...old } = worktree("remote-p", "feature/c", [waiting("t1")]);
-    lists.linux = [old];
-    render(<ProjectHostsGroup projectId={PROJECT} />);
-    const asks = await screen.findAllByTestId("project-hosts-ask-row");
-    fireEvent.click(asks[0]!);
-    expect(switchToHost).toHaveBeenLastCalledWith("linux", false, "remote-p", {
-      focusIntent: { intent: "focus-next-waiting" },
-    });
-  });
-
   it("says what the host listed in place of counts: no agents, how many agents, no worktrees", async () => {
     render(<ProjectHostsGroup projectId={PROJECT} />);
     await waitFor(() => expect(count(rowFor("linux"), "running")).toBe("2"));
@@ -324,12 +299,8 @@ describe("ProjectHostsGroup", () => {
     };
     await reread([worktree("remote-p", "develop")]);
     await waitFor(() => expect(rowFor("linux").textContent).toContain("No agents"));
-    await reread([
-      worktree("remote-p", "develop", [
-        { terminalId: "t4", band: "done", agentState: "completed" },
-      ]),
-    ]);
     // Agents in bands the row doesn't count: how many, never a verdict on what they are doing.
+    await reread([worktree("remote-p", "develop", [finished("t4")])]);
     await waitFor(() => expect(rowFor("linux").textContent).toContain("1 agent"));
     expect(countsShown(rowFor("linux"))).toBe("");
     expect(rowFor("linux").getAttribute("aria-label")).toBe("name-linux: 1 finished (observed)");
@@ -338,17 +309,15 @@ describe("ProjectHostsGroup", () => {
     await waitFor(() => expect(rowFor("linux").textContent).toContain("No worktrees"));
   });
 
-  it("shows a dropped host in its link's words, in its place, and nothing it said before", async () => {
+  it("shows a dropped host in its link's words and nothing it said before", async () => {
     const { rerender } = render(<ProjectHostsGroup projectId={PROJECT} />);
-    await screen.findAllByTestId("project-hosts-ask-row");
+    await waitFor(() => expect(count(rowFor("linux"), "running")).toBe("2"));
 
     hostList.hosts = [host("linux", false), host("away", false)];
     rerender(<ProjectHostsGroup projectId={PROJECT} />);
-    expect(hostOrder()).toEqual(["local", "away", "linux"]);
     const row = rowFor("linux");
     expect(row.textContent).toContain("Not connected");
     expect(row.querySelector("[data-band]")).toBeNull();
-    expect(screen.queryAllByTestId("project-hosts-ask-row")).toHaveLength(0);
     // Still the copy it was matched with.
     fireEvent.click(row);
     expect(switchToHost).toHaveBeenLastCalledWith("linux", false, "remote-p");
@@ -369,12 +338,11 @@ describe("ProjectHostsGroup", () => {
     rerender(<ProjectHostsGroup projectId={PROJECT} />);
     expect(rowFor("linux").textContent).toContain("No reply");
     expect(countsShown(rowFor("linux"))).toBe("");
-    expect(screen.queryAllByTestId("project-hosts-ask-row")).toHaveLength(0);
   });
 
   it("reads a host again when it says its list changed, and only that host", async () => {
     render(<ProjectHostsGroup projectId={PROJECT} />);
-    await screen.findAllByTestId("project-hosts-ask-row");
+    await waitFor(() => expect(count(rowFor("linux"), "running")).toBe("2"));
     const linuxReads = () => listWorktrees.mock.calls.filter(([a]) => a.hostId === "linux").length;
     expect(linuxReads()).toBe(1);
 
@@ -383,7 +351,7 @@ describe("ProjectHostsGroup", () => {
       emit({ type: "worktrees", hostId: "elsewhere" });
       emit({ type: "worktrees", hostId: "linux" });
     });
-    await waitFor(() => expect(screen.queryAllByTestId("project-hosts-ask-row")).toHaveLength(0));
+    await waitFor(() => expect(count(rowFor("linux"), "asking")).toBeUndefined());
     expect(count(rowFor("linux"), "running")).toBe("1");
     expect(linuxReads()).toBe(2);
   });
@@ -397,14 +365,13 @@ describe("ProjectHostsGroup", () => {
     await act(async () => {
       emit({ type: "worktrees", hostId: "linux" });
     });
-    const asks = await screen.findAllByTestId("project-hosts-ask-row");
-    expect(asks[0]!.getAttribute("aria-label")).toBe("feature/c on name-linux, waiting (observed)");
+    await waitFor(() => expect(count(rowFor("linux"), "asking")).toBe("1"));
     expect(locate).toHaveBeenCalledTimes(2);
   });
 
   it("never counts a host's agents for a project it no longer matches", async () => {
     const { rerender } = render(<ProjectHostsGroup projectId={PROJECT} />);
-    await screen.findAllByTestId("project-hosts-ask-row");
+    await waitFor(() => expect(count(rowFor("linux"), "running")).toBe("2"));
 
     // The host reconnects matching through another checkout, whose read fails.
     hostList.hosts = [host("linux", false), host("away", false)];
@@ -415,24 +382,22 @@ describe("ProjectHostsGroup", () => {
     rerender(<ProjectHostsGroup projectId={PROJECT} />);
     await waitFor(() => expect(locate).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(countsShown(rowFor("linux"))).toBe(""));
-    expect(screen.queryAllByTestId("project-hosts-ask-row")).toHaveLength(0);
     // The old checkout's read is not this one's, so it isn't "No worktrees" either: nothing yet.
     expect(rowFor("linux").dataset.status).toBe("none");
   });
 
   it("never carries the last project's counts over to a new one while its own answer is out", async () => {
     const { rerender } = render(<ProjectHostsGroup projectId={PROJECT} />);
-    await screen.findAllByTestId("project-hosts-ask-row");
+    await waitFor(() => expect(count(rowFor("linux"), "running")).toBe("2"));
 
     locate.mockImplementationOnce(() => new Promise<HostProjectPresence[]>(() => {}));
     rerender(<ProjectHostsGroup projectId={"b".repeat(64)} />);
     expect(countsShown(rowFor("linux"))).toBe("");
-    expect(screen.queryAllByTestId("project-hosts-ask-row")).toHaveLength(0);
   });
 
   it("forgets a host's copy once a connected answer says it's gone, and offers to set one up", async () => {
     render(<ProjectHostsGroup projectId={PROJECT} />);
-    await screen.findAllByTestId("project-hosts-ask-row");
+    await waitFor(() => expect(count(rowFor("linux"), "running")).toBe("2"));
 
     // The checkout is removed on the host: its list no longer has the project,
     // and asked again, it says so.
@@ -443,7 +408,6 @@ describe("ProjectHostsGroup", () => {
     });
     await waitFor(() => expect(rowFor("linux").textContent).toContain("Not added"));
     expect(countsShown(rowFor("linux"))).toBe("");
-    expect(screen.queryAllByTestId("project-hosts-ask-row")).toHaveLength(0);
     fireEvent.click(rowFor("linux"));
     expect(openProjectOnHost).toHaveBeenLastCalledWith("linux", PROJECT, false, "user");
     expect(switchToHost).not.toHaveBeenCalled();
@@ -485,33 +449,260 @@ describe("ProjectHostsGroup", () => {
     expect(locate).toHaveBeenCalledTimes(1);
   });
 
-  it('keeps focus in the list when a focused "more" row expands, on the first agent it revealed', async () => {
-    lists.linux = ["a", "b", "c", "d"].map((name, i) =>
-      worktree("remote-p", `feature/${name}`, [waiting(`t${i}`)])
-    );
-    render(<ProjectHostsGroup projectId={PROJECT} />);
-    const more = await screen.findByTestId("project-hosts-more-row");
-    more.focus();
-    fireEvent.click(more);
-    const asks = screen.getAllByTestId("project-hosts-ask-row");
-    expect(asks).toHaveLength(4);
-    expect(document.activeElement).toBe(asks[2]);
-    fireEvent.keyDown(document.activeElement!, { key: "ArrowDown" });
-    expect(document.activeElement).toBe(asks[3]);
+  it("asks nothing without another host, or in a scratch view", () => {
+    hostList.hosts = [];
+    const { container, rerender } = render(<ProjectHostsGroup projectId={PROJECT} />);
+    hostList.hosts = [host("linux")];
+    rerender(<ProjectHostsGroup projectId="0f8fad5b-d9cb-469f-a165-70867728950e" />);
+    expect(locate).not.toHaveBeenCalled();
+    expect(container.textContent).toBe("");
   });
 
-  it("folds a host's asks again when the project changes and comes back", async () => {
-    lists.linux = ["a", "b", "c", "d"].map((name, i) =>
-      worktree("remote-p", `feature/${name}`, [waiting(`t${i}`)])
-    );
-    const { rerender } = render(<ProjectHostsGroup projectId={PROJECT} />);
-    fireEvent.click(await screen.findByTestId("project-hosts-more-row"));
-    expect(screen.getAllByTestId("project-hosts-ask-row")).toHaveLength(4);
+  describe("order", () => {
+    /** One connected host per spec, each with this project and the agents given. */
+    function fleet(specs: Record<string, HostWorktreeEntry["runs"] | "none" | "away">) {
+      hostList.hosts = Object.entries(specs).map(([id, spec]) => host(id, spec !== "away"));
+      presence = Object.entries(specs).map(([id, spec]) =>
+        spec === "none" ? { hostId: id, projects: [] } : has(id, `${id}-p`)
+      );
+      for (const [id, spec] of Object.entries(specs)) {
+        if (Array.isArray(spec)) lists[id] = [worktree(`${id}-p`, "develop", spec)];
+      }
+    }
 
-    rerender(<ProjectHostsGroup projectId={"b".repeat(64)} />);
-    rerender(<ProjectHostsGroup projectId={PROJECT} />);
-    await screen.findByTestId("project-hosts-more-row");
-    expect(screen.getAllByTestId("project-hosts-ask-row")).toHaveLength(2);
+    it("puts this machine first, then hosts asking, working, settled, without the project, away", async () => {
+      fleet({
+        a: [finished("a1")],
+        b: [working("b1")],
+        c: [waiting("c1")],
+        d: "none",
+        e: "away",
+      });
+      render(<ProjectHostsGroup projectId={PROJECT} />);
+      await waitFor(() => expect(hostOrder()).toEqual(["local", "c", "b", "a", "d", "e"]));
+    });
+
+    it("holds still while the pointer is over it, and moves once it leaves", async () => {
+      fleet({ b: [working("b1")], c: [finished("c1")] });
+      render(<ProjectHostsGroup projectId={PROJECT} />);
+      await waitFor(() => expect(count(rowFor("b"), "running")).toBe("1"));
+      expect(hostOrder()).toEqual(["local", "b", "c"]);
+
+      const section = screen.getByTestId("project-hosts-group");
+      fireEvent.pointerEnter(section);
+      lists.c = [worktree("c-p", "develop", [waiting("c1")])];
+      await act(async () => {
+        emit({ type: "worktrees", hostId: "c" });
+      });
+      await waitFor(() => expect(count(rowFor("c"), "asking")).toBe("1"));
+      expect(hostOrder()).toEqual(["local", "b", "c"]);
+
+      fireEvent.pointerLeave(section);
+      expect(hostOrder()).toEqual(["local", "c", "b"]);
+    });
+
+    it("holds still while focus is in it", async () => {
+      fleet({ b: [working("b1")], c: [finished("c1")] });
+      render(<ProjectHostsGroup projectId={PROJECT} />);
+      await waitFor(() => expect(count(rowFor("b"), "running")).toBe("1"));
+      rowFor("b").focus();
+      lists.c = [worktree("c-p", "develop", [waiting("c1")])];
+      await act(async () => {
+        emit({ type: "worktrees", hostId: "c" });
+      });
+      await waitFor(() => expect(count(rowFor("c"), "asking")).toBe("1"));
+      expect(hostOrder()).toEqual(["local", "b", "c"]);
+      act(() => rowFor("b").blur());
+      expect(hostOrder()).toEqual(["local", "c", "b"]);
+    });
+
+    it("opens a window a click made on the order that click was made in", async () => {
+      fleet({ b: [working("b1")], c: [finished("c1")] });
+      localStorage.setItem(
+        PROJECT_HOSTS_HANDOFF_KEY,
+        JSON.stringify({ order: ["local", "c", "c", "b"], at: Date.now() })
+      );
+      locate.mockImplementationOnce(() => new Promise<HostProjectPresence[]>(() => {}));
+      render(<ProjectHostsGroup projectId={PROJECT} />);
+      await waitFor(() => expect(count(rowFor("local"), "running")).toBe("1"));
+      // Each host once, however the handoff listed it.
+      expect(hostOrder()).toEqual(["local", "c", "b"]);
+    });
+
+    it("ignores a handoff that is stale or unreadable", async () => {
+      fleet({ b: [working("b1")], c: [finished("c1")] });
+      for (const stored of [
+        JSON.stringify({ order: ["local", "c", "b"], at: Date.now() - HANDOFF_TTL_MS - 1 }),
+        "not json",
+        JSON.stringify(["local", "c", "b"]),
+      ]) {
+        localStorage.setItem(PROJECT_HOSTS_HANDOFF_KEY, stored);
+        const { unmount } = render(<ProjectHostsGroup projectId={PROJECT} />);
+        await waitFor(() => expect(count(rowFor("b"), "running")).toBe("1"));
+        expect(hostOrder()).toEqual(["local", "b", "c"]);
+        unmount();
+      }
+    });
+
+    it("hands the order on screen to the window a click opens", async () => {
+      fleet({ b: [working("b1")], c: [finished("c1")] });
+      render(<ProjectHostsGroup projectId={PROJECT} />);
+      await waitFor(() => expect(count(rowFor("b"), "running")).toBe("1"));
+      fireEvent.click(rowFor("c"));
+      const handoff: unknown = JSON.parse(
+        localStorage.getItem(PROJECT_HOSTS_HANDOFF_KEY) ?? "null"
+      );
+      expect(handoff).toMatchObject({ order: hostOrder() });
+    });
+
+    it("keeps a host that joins while the order is held where it first landed", async () => {
+      fleet({ b: [working("b1")], c: [finished("c1")] });
+      const { rerender } = render(<ProjectHostsGroup projectId={PROJECT} />);
+      await waitFor(() => expect(count(rowFor("b"), "running")).toBe("1"));
+      fireEvent.pointerEnter(screen.getByTestId("project-hosts-group"));
+
+      // n joins with nothing counted yet: it lands among the settled hosts.
+      hostList.hosts = [...hostList.hosts, host("n")];
+      presence = [...presence, has("n", "n-p")];
+      lists.n = [worktree("n-p", "develop", [finished("n1")])];
+      rerender(<ProjectHostsGroup projectId={PROJECT} />);
+      await waitFor(() => expect(rowFor("n").textContent).toContain("1 agent"));
+      const landed = hostOrder();
+      expect(landed).toContain("n");
+
+      // Then an agent there asks: it would go first, but the section is in use.
+      lists.n = [worktree("n-p", "develop", [waiting("n1")])];
+      await act(async () => {
+        emit({ type: "worktrees", hostId: "n" });
+      });
+      await waitFor(() => expect(count(rowFor("n"), "asking")).toBe("1"));
+      expect(hostOrder()).toEqual(landed);
+
+      fireEvent.pointerLeave(screen.getByTestId("project-hosts-group"));
+      expect(hostOrder()).toEqual(["local", "n", "b", "c"]);
+    });
+
+    it("orders without a host that never answers once it has waited long enough", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      fleet({ b: [working("b1")], c: [finished("c1")], slow: [] });
+      // slow is connected but never says whether it has the project.
+      presence = presence.filter((answer) => answer.hostId !== "slow");
+      lists.c = [worktree("c-p", "develop", [waiting("c1")])];
+      render(<ProjectHostsGroup projectId={PROJECT} />);
+      await waitFor(() => expect(count(rowFor("c"), "asking")).toBe("1"));
+      // Still waiting on slow: the first order holds.
+      expect(hostOrder()).toEqual(["local", "b", "c", "slow"]);
+      await act(async () => {
+        vi.advanceTimersByTime(ORDER_SETTLE_MS);
+      });
+      expect(hostOrder()).toEqual(["local", "c", "b", "slow"]);
+    });
+
+    it("shows this machine and four more, folding the rest into one row that carries their counts", async () => {
+      fleet({
+        h1: [waiting("1")],
+        h2: [working("2")],
+        h3: [working("3")],
+        h4: [working("4")],
+        h5: [working("5"), working("6")],
+        h6: [waiting("7")],
+      });
+      render(<ProjectHostsGroup projectId={PROJECT} />);
+      const more = await screen.findByTestId("project-hosts-more-row");
+      await waitFor(() => expect(count(more, "running")).toBe("3"));
+      // Asking first, so h1 and h6 both show; h4 and h5 are past the first five.
+      expect(
+        rows().map((row) => row.closest("[data-host-id]")?.getAttribute("data-host-id"))
+      ).toEqual(["local", "h1", "h6", "h2", "h3"]);
+      expect(more.textContent).toContain("2 more hosts");
+      expect(more.getAttribute("aria-expanded")).toBe("false");
+
+      fireEvent.click(more);
+      expect(rows()).toHaveLength(7);
+      expect(more.getAttribute("aria-expanded")).toBe("true");
+      // The label stays; the folded counts go once their hosts are showing.
+      expect(more.textContent).toContain("2 more hosts");
+      expect(more.querySelector("[data-band]")).toBeNull();
+      expect(localStorage.getItem(PROJECT_HOSTS_ALL_SHOWN_KEY)).toBe("true");
+    });
+
+    it("holds the fold still while in use: a seventh host waits, then folds", async () => {
+      fleet({ h1: [], h2: [], h3: [], h4: [], h5: [] });
+      const { rerender } = render(<ProjectHostsGroup projectId={PROJECT} />);
+      await waitFor(() => expect(rows()).toHaveLength(6));
+      fireEvent.pointerEnter(screen.getByTestId("project-hosts-group"));
+
+      hostList.hosts = [...hostList.hosts, host("h6")];
+      presence = [...presence, has("h6", "h6-p")];
+      lists.h6 = [worktree("h6-p", "develop")];
+      rerender(<ProjectHostsGroup projectId={PROJECT} />);
+      // Everything has answered, h6 included: only the pointer holds the fold now.
+      await waitFor(() => expect(rowFor("h6").textContent).toContain("No agents"));
+      expect(rows()).toHaveLength(7);
+      expect(screen.queryByTestId("project-hosts-more-row")).toBeNull();
+
+      fireEvent.pointerLeave(screen.getByTestId("project-hosts-group"));
+      expect(rows()).toHaveLength(5);
+      expect(screen.getByTestId("project-hosts-more-row").textContent).toContain("2 more hosts");
+    });
+
+    it("brings a folded host up once it asks and the section is out of use", async () => {
+      fleet({
+        h1: [working("1")],
+        h2: [working("2")],
+        h3: [working("3")],
+        h4: [working("4")],
+        h5: [finished("5")],
+        h6: [finished("6")],
+      });
+      render(<ProjectHostsGroup projectId={PROJECT} />);
+      const more = await screen.findByTestId("project-hosts-more-row");
+      await waitFor(() => expect(rows()).toHaveLength(5));
+      expect(more.querySelector("[data-band]")).toBeNull();
+
+      fireEvent.pointerEnter(screen.getByTestId("project-hosts-group"));
+      lists.h6 = [
+        worktree("h6-p", "develop", [{ terminalId: "6", band: "blocked", agentState: "waiting" }]),
+      ];
+      await act(async () => {
+        emit({ type: "worktrees", hostId: "h6" });
+      });
+      // Still folded, and the fold row says what came up inside it.
+      await waitFor(() => expect(count(more, "asking")).toBe("1"));
+      expect(
+        more.querySelector('[data-band="asking"] [data-mark]')?.getAttribute("data-mark")
+      ).toBe("blocked");
+      const described = document.getElementById(more.getAttribute("aria-describedby") ?? "");
+      expect(described?.textContent).toBe("1 asking (observed)");
+
+      fireEvent.pointerLeave(screen.getByTestId("project-hosts-group"));
+      expect(hostOrder().slice(0, 2)).toEqual(["local", "h6"]);
+      expect(count(screen.getByTestId("project-hosts-more-row"), "asking")).toBeUndefined();
+    });
+
+    it("follows another window opening the fold, but not while this one is in use", async () => {
+      fleet({ h1: [], h2: [], h3: [], h4: [], h5: [], h6: [] });
+      render(<ProjectHostsGroup projectId={PROJECT} />);
+      await screen.findByTestId("project-hosts-more-row");
+      await waitFor(() => expect(rowFor("h1").textContent).toContain("No agents"));
+      const section = screen.getByTestId("project-hosts-group");
+      fireEvent.pointerEnter(section);
+
+      localStorage.setItem(PROJECT_HOSTS_ALL_SHOWN_KEY, "true");
+      act(() => {
+        window.dispatchEvent(new StorageEvent("storage", { key: PROJECT_HOSTS_ALL_SHOWN_KEY }));
+      });
+      expect(rows()).toHaveLength(5);
+      fireEvent.pointerLeave(section);
+      expect(rows()).toHaveLength(7);
+    });
+
+    it("never folds a single host: a row for one is no saving", async () => {
+      fleet({ h1: [], h2: [], h3: [], h4: [], h5: [] });
+      render(<ProjectHostsGroup projectId={PROJECT} />);
+      await waitFor(() => expect(rows()).toHaveLength(6));
+      expect(screen.queryByTestId("project-hosts-more-row")).toBeNull();
+    });
   });
 
   it("still toggles in a view that can't write storage, and follows another view once storage works", async () => {
@@ -536,34 +727,26 @@ describe("ProjectHostsGroup", () => {
     }
   });
 
-  it("asks nothing without another host, or in a scratch view", () => {
-    hostList.hosts = [];
-    const { container, rerender } = render(<ProjectHostsGroup projectId={PROJECT} />);
-    hostList.hosts = [host("linux")];
-    rerender(<ProjectHostsGroup projectId="0f8fad5b-d9cb-469f-a165-70867728950e" />);
-    expect(locate).not.toHaveBeenCalled();
-    expect(container.textContent).toBe("");
-  });
-
-  it("collapses under a header naming the project, keeping every host's totals, for every view", async () => {
+  it("collapses under a header naming the project, keeping the other hosts' totals, for every view", async () => {
     render(<ProjectHostsGroup projectId={PROJECT} />);
-    await screen.findAllByTestId("project-hosts-ask-row");
+    await waitFor(() => expect(count(rowFor("linux"), "running")).toBe("2"));
     const toggle = screen.getByTestId("project-hosts-toggle");
-    expect(toggle.textContent).toContain("helios across hosts");
+    // The project's name exactly as the project selector shows it; only "across hosts" is ours.
+    expect(toggle.textContent).toBe("Helios Web across hosts");
     expect(toggle.getAttribute("aria-expanded")).toBe("true");
 
     fireEvent.click(toggle);
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
     expect(rows()).toHaveLength(0);
     expect(localStorage.getItem(PROJECT_HOSTS_EXPANDED_KEY)).toBe("false");
-    // One asking on linux; two working there and one on this machine.
+    // One asking and two working on linux; this machine's own working agent isn't counted.
     const totals = screen.getByTestId("project-hosts-totals");
     expect(totals.querySelector('[data-total="asking"]')?.textContent).toBe("1");
-    expect(totals.querySelector('[data-total="working"]')?.textContent).toBe("3");
+    expect(totals.querySelector('[data-total="working"]')?.textContent).toBe("2");
     // The toggle's name never changes with its state; the totals describe it.
-    expect(toggle.getAttribute("aria-label")).toBe("helios across hosts");
+    expect(toggle.getAttribute("aria-label")).toBe("Helios Web across hosts");
     const described = document.getElementById(toggle.getAttribute("aria-describedby") ?? "");
-    expect(described?.textContent).toBe("1 asking, 3 working (observed)");
+    expect(described?.textContent).toBe("1 asking, 2 working on other hosts (observed)");
 
     // Another project view opens it again: this one follows.
     localStorage.setItem(PROJECT_HOSTS_EXPANDED_KEY, "true");
@@ -574,27 +757,32 @@ describe("ProjectHostsGroup", () => {
     expect(rows()).toHaveLength(3);
   });
 
+  it("shows no totals when collapsed if only this machine has agents", async () => {
+    lists.local = [worktree(PROJECT, "develop", [working("l1"), waiting("l2")])];
+    lists.linux = [worktree("remote-p", "develop", [finished("t1")])];
+    render(<ProjectHostsGroup projectId={PROJECT} />);
+    await waitFor(() => expect(rowFor("linux").textContent).toContain("1 agent"));
+    const toggle = screen.getByTestId("project-hosts-toggle");
+    fireEvent.click(toggle);
+    expect(screen.queryByTestId("project-hosts-totals")).toBeNull();
+    expect(toggle.getAttribute("aria-describedby")).toBeNull();
+  });
+
   it("moves between the section's rows with the arrow keys", async () => {
     render(<ProjectHostsGroup projectId={PROJECT} />);
-    await screen.findAllByTestId("project-hosts-ask-row");
+    await waitFor(() => expect(count(rowFor("linux"), "running")).toBe("2"));
     const toggle = screen.getByTestId("project-hosts-toggle");
     const press = (key: string) => fireEvent.keyDown(document.activeElement!, { key });
     toggle.focus();
-    // The header, then every row in its order: this machine, name-away, name-linux and its ask.
     press("ArrowDown");
     expect(document.activeElement).toBe(rowFor("local"));
     press("ArrowDown");
-    press("ArrowDown");
     expect(document.activeElement).toBe(rowFor("linux"));
+    press("End");
+    expect(document.activeElement).toBe(rowFor("away"));
     press("ArrowDown");
-    expect(document.activeElement).toBe(screen.getByTestId("project-hosts-ask-row"));
-    press("ArrowDown");
-    expect(document.activeElement).toBe(screen.getByTestId("project-hosts-ask-row"));
+    expect(document.activeElement).toBe(rowFor("away"));
     press("Home");
     expect(document.activeElement).toBe(toggle);
-    press("ArrowUp");
-    expect(document.activeElement).toBe(toggle);
-    press("End");
-    expect(document.activeElement).toBe(screen.getByTestId("project-hosts-ask-row"));
   });
 });

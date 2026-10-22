@@ -1,10 +1,9 @@
 import { formatRelativeTime } from "@/lib/formatRelativeTime";
-import { bandLabel } from "@/lib/fleetAttention";
 import { pluralize } from "@/lib/pluralize";
 import { describeHostMenuState, liveSummary } from "./hostModel";
 import { describeRtt } from "./Overview/overviewModel";
 import type { ProjectHost } from "./projectHosts";
-import { describeObserved, type HostAsk, type HostProjectSummary } from "./projectHostSummary";
+import { describeObserved, ROW_BANDS, type HostProjectSummary } from "./projectHostSummary";
 
 /**
  * What a host row shows right of its name: the counts, or the one phrase that
@@ -38,8 +37,7 @@ export function hostRowStatus(
   // project it couldn't read, so an empty list is not "closed there".
   if (summary.worktreeCount === 0) return { kind: "note", text: "No worktrees" };
   if (summary.observed.size === 0) return { kind: "note", text: "No agents" };
-  const counted = summary.counts.quiet + summary.counts.review + summary.counts.running;
-  if (counted === 0 && summary.asks.length === 0) {
+  if (ROW_BANDS.every((band) => summary.counts[band] === 0)) {
     // Every agent in a band the row doesn't count (finished, parked, idle…):
     // how many there are, never a verdict on what they are doing.
     let agents = 0;
@@ -141,35 +139,4 @@ export function hostRowLabel(host: ProjectHost, summary: HostProjectSummary | nu
       : `${name}: ${describeObserved(summary.observed)} (observed)`;
   }
   return status.kind === "counts" ? name : `${name}, ${status.text.toLowerCase()}`;
-}
-
-export function askLabel(ask: HostAsk): string {
-  return bandLabel(ask.band, { agentState: ask.agentState ?? undefined });
-}
-
-export function askRowLabel(ask: HostAsk, hostName: string): string {
-  return `${ask.branch} on ${hostName}, ${askLabel(ask).toLowerCase()} (observed)`;
-}
-
-export function askTooltip(
-  ask: HostAsk,
-  host: ProjectHost,
-  newWindowKey: string,
-  now: number = Date.now()
-): string[] {
-  const lines = [ask.branch, `${askLabel(ask)} on ${host.hostName} (observed)`];
-  const detail: string[] = [];
-  if (ask.modifiedCount !== null && ask.modifiedCount > 0) {
-    detail.push(`${pluralize(ask.modifiedCount, "file")} changed`);
-  }
-  if (ask.lastActivityAt !== null) {
-    detail.push(`active ${formatRelativeTime(ask.lastActivityAt, now)}`);
-  }
-  if (detail.length > 0) lines.push(detail.join(" · "));
-  lines.push(
-    host.isCurrent
-      ? "Click to go to this agent"
-      : `Click to go to this agent · ${newWindowKey}-click for a new window`
-  );
-  return lines;
 }

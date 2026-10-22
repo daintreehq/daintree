@@ -3,7 +3,7 @@ import type { HostWorktreeEntry } from "@shared/types/ipc/hostMetrics";
 import type { HostMenuRow } from "../hostModel";
 import type { ProjectHost } from "../projectHosts";
 import { summarizeHostProject } from "../projectHostSummary";
-import { askTooltip, hostRowLabel, hostRowStatus, hostRowTooltip } from "../projectHostLines";
+import { hostRowLabel, hostRowStatus, hostRowTooltip } from "../projectHostLines";
 import { HANDSHAKE, makeRow } from "../Overview/__tests__/fixtures";
 
 const NOW = 10 * 3_600_000;
@@ -120,17 +120,5 @@ describe("hostRowTooltip", () => {
       { away: "No reply" }
     );
     expect(hostRowTooltip(host, null, "Cmd", NOW)[1]).toBe("No reply · last heard 2 minutes ago");
-  });
-});
-
-describe("askTooltip", () => {
-  it("names the branch, what the host observed, and what the worktree reported", () => {
-    const [ask] = summarizeHostProject(entries).asks;
-    expect(askTooltip(ask!, projectHost(), "Cmd", NOW)).toEqual([
-      "feature/a",
-      "Waiting on studio-01 (observed)",
-      "3 files changed · active 4 minutes ago",
-      "Click to go to this agent · Cmd-click for a new window",
-    ]);
   });
 });

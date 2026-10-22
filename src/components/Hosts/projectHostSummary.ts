@@ -1,49 +1,28 @@
 import type { HostWorktreeEntry } from "@shared/types/ipc/hostMetrics";
-import type { AgentState } from "@shared/types/agent";
 import { FLEET_BANDS, type FleetBand } from "@shared/utils/fleetBands";
 import { bandLabel } from "@/lib/fleetAttention";
-import { branchTitle } from "@/lib/worktreeHeadline";
 
 /**
- * The bands a host row counts, in fixed columns that never move: an agent gone
- * quiet, a hand-back nobody has read, work in flight. Agents asking (blocked,
- * waiting) are named under their host instead, so the row doesn't count them
- * twice; finished, parked, snoozed and idle agents are settled business.
+ * What a host row counts, worst first: agents asking (blocked or waiting),
+ * agents gone quiet, hand-backs nobody has read, work in flight. Finished,
+ * parked, snoozed and idle agents are settled business and only reach the
+ * row's hover.
  */
-export const ROW_BANDS = ["quiet", "review", "running"] as const;
+export const ROW_BANDS = ["asking", "quiet", "review", "running"] as const;
 export type RowBand = (typeof ROW_BANDS)[number];
 
-function isRowBand(band: FleetBand): band is RowBand {
-  return (ROW_BANDS as readonly FleetBand[]).includes(band);
-}
-
-/** Only an agent asking for something is named under its host; the rest are counted. */
-function isAsking(band: FleetBand): band is HostAsk["band"] {
-  return band === "blocked" || band === "needs-you";
-}
-
-export interface HostAsk {
-  projectId: string;
-  worktreeId: string;
-  /** Null from a host that doesn't say which terminal: the switch lands on the project. */
-  terminalId: string | null;
-  /** The branch without its type prefix, which is where issue numbers start. */
-  label: string;
-  /** The full branch (or worktree name), for the tooltip and the spoken name. */
-  branch: string;
-  band: "blocked" | "needs-you";
-  agentState: AgentState | null;
-  /** The worktree's, as its host reported them; null when it didn't. */
-  modifiedCount: number | null;
-  lastActivityAt: number | null;
+function rowBandOf(band: FleetBand): RowBand | null {
+  if (band === "blocked" || band === "needs-you") return "asking";
+  if (band === "quiet" || band === "review" || band === "running") return band;
+  return null;
 }
 
 export interface HostProjectSummary {
   counts: Readonly<Record<RowBand, number>>;
-  /** Every band the host observed, settled ones too, for the row's spoken description. */
+  /** Which mark the asking count wears: blocked when any agent there is blocked. */
+  askingBand: "blocked" | "needs-you";
+  /** Every band the host observed, settled ones too, worst first, for the hover and the spoken name. */
   observed: ReadonlyMap<FleetBand, number>;
-  /** The agents asking, blocked first, in a stable order. */
-  asks: readonly HostAsk[];
   worktreeCount: number;
   /** The newest activity any of the project's worktrees there reported; null when none did. */
   latestActivityAt: number | null;
@@ -52,17 +31,14 @@ export interface HostProjectSummary {
 function runsOf(entry: HostWorktreeEntry) {
   if (entry.runs) return entry.runs;
   // A host from before agents were listed says only the worktree's most urgent one.
-  return entry.observed ? [{ ...entry.observed, terminalId: null }] : [];
+  return entry.observed ? [entry.observed] : [];
 }
 
-/**
- * What a host observed of this project's agents: per-band counts of agents
- * (not worktrees: one worktree may hold several), and the asking ones by name.
- */
+/** What a host observed of this project's agents: agents, not worktrees, since one worktree may hold several. */
 export function summarizeHostProject(entries: readonly HostWorktreeEntry[]): HostProjectSummary {
-  const counts: Record<RowBand, number> = { quiet: 0, review: 0, running: 0 };
+  const counts: Record<RowBand, number> = { asking: 0, quiet: 0, review: 0, running: 0 };
   const observed = new Map<FleetBand, number>();
-  const asks: HostAsk[] = [];
+  let blocked = false;
   let latestActivityAt: number | null = null;
   for (const entry of entries) {
     if (entry.lastActivityAt !== null && entry.lastActivityAt > (latestActivityAt ?? -Infinity)) {
@@ -70,33 +46,21 @@ export function summarizeHostProject(entries: readonly HostWorktreeEntry[]): Hos
     }
     for (const run of runsOf(entry)) {
       observed.set(run.band, (observed.get(run.band) ?? 0) + 1);
-      const band = run.band;
-      if (isRowBand(band)) counts[band] += 1;
-      if (isAsking(band)) {
-        asks.push({
-          projectId: entry.projectId,
-          worktreeId: entry.worktreeId,
-          terminalId: run.terminalId,
-          label: branchTitle(entry.branch ?? entry.name),
-          branch: entry.branch ?? entry.name,
-          band,
-          agentState: run.agentState,
-          modifiedCount: entry.modifiedCount,
-          lastActivityAt: entry.lastActivityAt,
-        });
-      }
+      if (run.band === "blocked") blocked = true;
+      const band = rowBandOf(run.band);
+      if (band) counts[band] += 1;
     }
   }
-  asks.sort(
-    (a, b) =>
-      FLEET_BANDS.indexOf(a.band) - FLEET_BANDS.indexOf(b.band) ||
-      a.branch.localeCompare(b.branch) ||
-      (a.terminalId ?? "").localeCompare(b.terminalId ?? "")
-  );
   const ordered = new Map(
     FLEET_BANDS.filter((band) => observed.has(band)).map((band) => [band, observed.get(band)!])
   );
-  return { counts, observed: ordered, asks, worktreeCount: entries.length, latestActivityAt };
+  return {
+    counts,
+    askingBand: blocked ? "blocked" : "needs-you",
+    observed: ordered,
+    worktreeCount: entries.length,
+    latestActivityAt,
+  };
 }
 
 /** "3 working, 1 waiting, 2 finished": every band the host observed, worst first. */
