@@ -163,14 +163,15 @@ export function installPortForwardClient(deps: PortForwardClientDeps): () => Pro
   // that preview: the authority wherever one exists; the claim below is the
   // fallback for a preview started before this Shell saw it (a restored panel).
   const registeredPreviews = new Map<string, ViewProject>();
-  const registerPreview = (subdomain: string, project: ViewProject): void => {
+  /** False when another host or project already has the origin. */
+  const registerPreview = (subdomain: string, project: ViewProject): boolean => {
     const existing = registeredPreviews.get(subdomain);
     // Two projects whose ids sanitise alike: the first to start the panel keeps it.
     if (
       existing &&
       (existing.hostId !== project.hostId || existing.projectId !== project.projectId)
     ) {
-      return;
+      return false;
     }
     registeredPreviews.delete(subdomain);
     registeredPreviews.set(subdomain, project);
@@ -178,6 +179,12 @@ export function installPortForwardClient(deps: PortForwardClientDeps): () => Pro
       const oldest = registeredPreviews.keys().next().value;
       if (oldest !== undefined) registeredPreviews.delete(oldest);
     }
+    return true;
+  };
+  /** Whether a call from `project` speaks for the origin: no other host or project has it. */
+  const ownsPreview = (subdomain: string, project: ViewProject): boolean => {
+    const owner = registeredPreviews.get(subdomain) ?? previewOwners.get(subdomain);
+    return !owner || (owner.hostId === project.hostId && owner.projectId === project.projectId);
   };
   const showsProject = (webContentsId: number, owner: ViewProject): boolean => {
     const project = projectForView(webContentsId);
@@ -199,7 +206,11 @@ export function installPortForwardClient(deps: PortForwardClientDeps): () => Pro
     if (resolveLocalDevPreviewUpstream(subdomain).kind !== "unknown-subdomain") return false;
     const registered = registeredPreviews.get(subdomain);
     if (registered) {
-      return registered.hostId === project.hostId && registered.projectId === project.projectId;
+      if (registered.hostId !== project.hostId || registered.projectId !== project.projectId) {
+        return false;
+      }
+      notePreviewView(subdomain, webContentsId);
+      return true;
     }
     // The subdomain carries its project's id; a view claims only its own project's.
     if (!subdomain.startsWith(`dp-${sanitizeSubdomainToken(project.projectId)}-`)) return false;
@@ -245,6 +256,10 @@ export function installPortForwardClient(deps: PortForwardClientDeps): () => Pro
   const watchedViews = new Map<number, () => void>();
   // The views each remote preview was started or loaded in: it lets go with the last of them.
   const previewViews = new Map<string, Set<number>>();
+  // Each worktree's remote previews (by host, project and worktree), for a stop of the worktree's server.
+  const previewWorktrees = new Map<string, Set<string>>();
+  const worktreeKey = (project: ViewProject, worktreeId: string): string =>
+    `${project.hostId}\u0000${project.projectId}\u0000${worktreeId}`;
   const viewGone = (webContentsId: number): void => {
     watchedViews.delete(webContentsId);
     forwards.releaseAll(viewOwnerPrefix(webContentsId));
@@ -303,23 +318,44 @@ export function installPortForwardClient(deps: PortForwardClientDeps): () => Pro
     registerRemoteService("portForwards", service),
     observeForwardedInvokes(({ hostId, webContentsId, hostProjectId, channel, args }) => {
       if (!hostProjectId) return;
-      const request = args[0] as { panelId?: unknown } | null | undefined;
+      // The project comes from this machine's own view key, never from the request.
+      const project: ViewProject = { hostId, projectId: hostProjectId };
+      const request = args[0] as { panelId?: unknown; worktreeId?: unknown } | null | undefined;
+      const worktreeId = typeof request?.worktreeId === "string" ? request.worktreeId : null;
+      // A worktree's servers were stopped: its previews' panels look nothing up again.
+      if (
+        channel === CHANNELS.DEV_PREVIEW_STOP_BY_WORKTREE ||
+        channel === CHANNELS.DEV_PREVIEW_STOP_DEV_SERVER_BY_WORKTREE
+      ) {
+        if (worktreeId === null) return;
+        const key = worktreeKey(project, worktreeId);
+        for (const subdomain of previewWorktrees.get(key) ?? []) forwards.releasePreview(subdomain);
+        previewWorktrees.delete(key);
+        return;
+      }
       const panelId = request?.panelId;
       if (typeof panelId !== "string" || panelId.length === 0) return;
-      // The project comes from this machine's own view key, never from the request.
       const subdomain = buildDevPreviewSubdomain(hostProjectId, panelId);
       switch (channel) {
-        case CHANNELS.DEV_PREVIEW_ENSURE:
-          registerPreview(subdomain, { hostId, projectId: hostProjectId });
+        case CHANNELS.DEV_PREVIEW_ENSURE: {
+          if (!registerPreview(subdomain, project)) return;
           notePreviewView(subdomain, webContentsId);
+          if (worktreeId === null) return;
+          const key = worktreeKey(project, worktreeId);
+          const previews = previewWorktrees.get(key) ?? new Set<string>();
+          previews.add(subdomain);
+          previewWorktrees.set(key, previews);
           return;
+        }
         // The panel closed, or its dev server was stopped: nothing will look its preview up again.
         case CHANNELS.DEV_PREVIEW_STOP_BY_PANEL:
+          if (!ownsPreview(subdomain, project)) return;
           previewViews.delete(subdomain);
+          for (const previews of previewWorktrees.values()) previews.delete(subdomain);
           forwards.releasePreview(subdomain);
           return;
         case CHANNELS.DEV_PREVIEW_STOP:
-          forwards.releasePreview(subdomain);
+          if (ownsPreview(subdomain, project)) forwards.releasePreview(subdomain);
           return;
       }
     }),
@@ -344,6 +380,7 @@ export function installPortForwardClient(deps: PortForwardClientDeps): () => Pro
     for (const unwatch of watchedViews.values()) unwatch();
     watchedViews.clear();
     previewViews.clear();
+    previewWorktrees.clear();
     sessions.clear();
     previewOwners.clear();
     registeredPreviews.clear();

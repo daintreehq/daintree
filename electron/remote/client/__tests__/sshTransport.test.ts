@@ -1034,6 +1034,24 @@ describe("exitStaleSshMasters", () => {
     }
   });
 
+  it("keeps the socket of a master that wouldn't exit, so it can still be reached", async () => {
+    const clientDir = mkdtempSync(path.join(os.tmpdir(), "rh-"));
+    const server = net.createServer();
+    try {
+      const socketPath = path.join(clientDir, "cm2-7f3a");
+      await new Promise<void>((resolve) => server.listen(socketPath, () => resolve()));
+      await exitStaleSshMasters(
+        async () => ({ code: 255, stdout: "", stderr: "", spawnError: null, timedOut: false }),
+        clientDir,
+        1_000
+      );
+      expect(existsSync(socketPath)).toBe(true);
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+      rmSync(clientDir, { recursive: true, force: true });
+    }
+  });
+
   it("does nothing when there is no control directory yet", async () => {
     const run = vi.fn();
     await exitStaleSshMasters(run, path.join(os.tmpdir(), "rh-missing-dir-x"), 1_000);

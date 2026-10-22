@@ -327,6 +327,62 @@ describe("installPortForwardClient", () => {
     await waitFor(() => service.list().length === 0, 3_000);
   });
 
+  it("lets a worktree's previews go when its servers are stopped, and ignores another host's stop", async () => {
+    const OTHER = "studio-02";
+    cleanups.push(
+      installPortForwardClient({
+        onEndpointOpened: () => () => {},
+        hostForView: (webContentsId) => (webContentsId === 9 ? HOST : null),
+        projectForView: (webContentsId) =>
+          webContentsId === 9 ? { hostId: HOST, projectId: "proj" } : null,
+        isKnownHost: (hostId) => hostId === HOST || hostId === OTHER,
+        sessionFor: (hostId) => (hostId === HOST || hostId === OTHER ? client : null),
+        connectionFor: () => null,
+        clientDir: dir,
+      })
+    );
+    const service = getRemoteService("portForwards")!;
+    hooks.localSubdomains.add("dp-proj-panel");
+    hooks.forwarded!({
+      hostId: HOST,
+      webContentsId: 9,
+      hostProjectId: "proj",
+      channel: "dev-preview:ensure",
+      args: [
+        { panelId: "panel", projectId: "proj", cwd: "/x", devCommand: "x", worktreeId: "wt-1" },
+      ],
+    });
+    await (hooks.resolver!("dp-proj-panel") as Promise<unknown>);
+    expect(service.list()).toHaveLength(1);
+
+    // Another host's project that sanitises to the same origin doesn't speak for this preview.
+    hooks.forwarded!({
+      hostId: OTHER,
+      webContentsId: 10,
+      hostProjectId: "proj",
+      channel: "dev-preview:stop-by-panel",
+      args: [{ panelId: "panel" }],
+    });
+    hooks.forwarded!({
+      hostId: OTHER,
+      webContentsId: 10,
+      hostProjectId: "proj",
+      channel: "dev-preview:stop-dev-server-by-worktree",
+      args: [{ worktreeId: "wt-1" }],
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(service.list()).toHaveLength(1);
+
+    hooks.forwarded!({
+      hostId: HOST,
+      webContentsId: 9,
+      hostProjectId: "proj",
+      channel: "dev-preview:stop-dev-server-by-worktree",
+      args: [{ worktreeId: "wt-1" }],
+    });
+    await waitFor(() => service.list().length === 0, 3_000);
+  });
+
   it("holds a panel's forward for the view that asked, and lets it go when that view is gone", async () => {
     const upstream = http.createServer((_req, res) => res.end("ok"));
     const remotePort = await new Promise<number>((resolve) =>

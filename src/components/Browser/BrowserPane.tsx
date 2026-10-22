@@ -55,6 +55,7 @@ import { panelNotificationAddress } from "@/lib/notificationAddress";
 import {
   hostForwardFailure,
   needsHostForward,
+  parseLoopbackLink,
   releaseBrowserPanelForwards,
   resolveBrowserUrlForView,
 } from "@/services/terminal/remoteLoopbackLinks";
@@ -261,6 +262,17 @@ export function BrowserPane({
     hostForwardRef.current = next;
     setHostForwardState(next);
   }, []);
+  // The host ports this panel holds a forward of, by port.
+  const heldPortsRef = useRef(new Set<number>());
+  const holdHostPage = useCallback(
+    (url: string) =>
+      resolveBrowserUrlForView(url, id).then((resolved) => {
+        const port = parseLoopbackLink(url)?.port;
+        if (port !== undefined) heldPortsRef.current.add(port);
+        return resolved;
+      }),
+    [id]
+  );
   // Every navigation takes a number; a forward that settles after a newer
   // navigation began decides nothing.
   const navigationGenRef = useRef(0);
@@ -467,7 +479,7 @@ export function BrowserPane({
     let cancelled = false;
     const generation = navigationGenRef.current;
     const url = initialUrlRef.current;
-    resolveBrowserUrlForView(url, id).then(
+    holdHostPage(url).then(
       () => {
         if (cancelled || generation !== navigationGenRef.current) return;
         failedHostUrlRef.current = null;
@@ -484,11 +496,23 @@ export function BrowserPane({
     return () => {
       cancelled = true;
     };
-  }, [hostForward, setHostForward, id]);
+  }, [hostForward, setHostForward, holdHostPage]);
 
   // Every host port this panel forwarded stays held while it is open (its
   // back and forward can return to any of them), and goes when it closes.
   useEffect(() => () => releaseBrowserPanelForwards(id), [id]);
+
+  // A page can reach another of the host's ports on its own (a link, a
+  // redirect) through a forward another panel asked for: this panel holds it
+  // too, so it isn't let go under the page when that panel closes.
+  useEffect(() => {
+    if (hostForward !== "ready" || !needsHostForward(currentUrl)) return;
+    const port = parseLoopbackLink(currentUrl)?.port;
+    if (port === undefined || heldPortsRef.current.has(port)) return;
+    holdHostPage(currentUrl).catch(() => {
+      // Not forwarded here (its port is taken here, or the host is gone): nothing to hold.
+    });
+  }, [currentUrl, hostForward, holdHostPage]);
 
   useEffect(() => {
     if (!isWebviewReady || !webviewElement || !pendingNavigationRef.current) return;
@@ -539,7 +563,7 @@ export function BrowserPane({
       setPendingApproval(null);
       setIsLoading(true);
       setLoadError(null);
-      resolveBrowserUrlForView(url, id).then(
+      holdHostPage(url).then(
         (resolved) => {
           if (generation === navigationGenRef.current) commitResolvedNavigation(resolved);
         },
@@ -551,7 +575,7 @@ export function BrowserPane({
         }
       );
     },
-    [commitResolvedNavigation, id]
+    [commitResolvedNavigation, holdHostPage]
   );
 
   /**

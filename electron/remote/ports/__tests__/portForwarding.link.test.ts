@@ -962,7 +962,7 @@ describe("forward lifetime", () => {
     const m = manager({
       sshMuxFor: () => ({ target: "studio-01", controlPath: "/tmp/rh/cm2-abc" }),
       spawn: recordingSpawn(calls),
-      oauthIdleMs: 150,
+      oauthIdleMs: 400,
     });
 
     const forward = await m.forward({
@@ -981,7 +981,7 @@ describe("forward lifetime", () => {
     await expect(echoed).resolves.toBe("hmr");
 
     // Well past the idle window, the open socket still holds it.
-    await new Promise((resolve) => setTimeout(resolve, 450));
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
     expect(m.list()).toHaveLength(1);
 
     socket.destroy();
@@ -1065,7 +1065,7 @@ describe("forward lifetime", () => {
     expect(m.hasForwardsFor(OTHER)).toBe(false);
   });
 
-  it("moves a master forward to link streams when only a page outside Daintree still uses it", async () => {
+  it("moves a master forward to link streams once a page outside Daintree uses it too", async () => {
     const upstream = http.createServer((_req, res) => res.end("via the link"));
     const remotePort = await listen(upstream);
     cleanups.push(() => upstream.close());
@@ -1073,7 +1073,7 @@ describe("forward lifetime", () => {
     const m = manager({
       sshMuxFor: () => ({ target: "studio-01", controlPath: "/tmp/rh/cm2-abc" }),
       spawn: recordingSpawn(calls),
-      oauthIdleMs: 200,
+      oauthIdleMs: 500,
       panelReleaseGraceMs: 0,
     });
 
@@ -1088,18 +1088,56 @@ describe("forward lifetime", () => {
       origin: "oauth-callback",
       label: "Opened from terminal",
     });
-    expect(link.forwardId).toBe(panel.forwardId);
-
-    m.release("panel:9:a");
-    await waitFor(() => calls.some((args) => args.includes("cancel")) && m.list().length === 1);
-    // Same id and local port, so the page's address still reaches it.
-    expect(m.list()[0]).toMatchObject({
-      forwardId: panel.forwardId,
-      localPort: panel.localPort,
-      origin: "oauth-callback",
-    });
+    // Moved before the link opens, keeping the id and the local port the panel's page uses.
+    expect(calls.some((args) => args.includes("cancel"))).toBe(true);
+    expect(link).toMatchObject({ forwardId: panel.forwardId, localPort: panel.localPort });
     await expect(get(panel.localPort, "/")).resolves.toMatchObject({ body: "via the link" });
-    // Unused from here, it closes on the idle clock it can now see.
+
+    // The panel closing leaves the page outside, on the idle clock it can now see.
+    m.release("panel:9:a");
+    await waitFor(() => m.list()[0]?.origin === "oauth-callback" || m.list().length === 0);
     await waitFor(() => m.list().length === 0, 3_000);
+  });
+
+  it("honours a Stop that arrives while a forward moves to link streams", async () => {
+    const upstream = http.createServer((_req, res) => res.end("ok"));
+    const remotePort = await listen(upstream);
+    cleanups.push(() => upstream.close());
+    const m = manager({
+      sshMuxFor: () => ({ target: "studio-01", controlPath: "/tmp/rh/cm2-abc" }),
+      spawn: recordingSpawn([]),
+    });
+    const panel = await m.forward(
+      { hostId: HOST, remotePort, origin: "browser-panel", panelId: "a" },
+      "panel:9:a"
+    );
+
+    const link = m.forward({ hostId: HOST, remotePort, origin: "oauth-callback" });
+    await m.stop(panel.forwardId);
+
+    await expect(link).rejects.toMatchObject({ code: "CANCELLED" });
+    expect(m.list()).toEqual([]);
+    expect(m.hasForwardsFor(HOST)).toBe(false);
+  });
+
+  it("keeps a sign-in forward another request still waits on when one request for it fails", async () => {
+    const upstream = http.createServer((_req, res) => res.end("ok"));
+    // The host and this machine are one here, so the host's port is taken locally.
+    const remotePort = await listen(upstream);
+    cleanups.push(() => upstream.close());
+    const m = manager({ oauthIdleMs: 10_000 });
+
+    const strict = m.forward({
+      hostId: HOST,
+      remotePort,
+      origin: "oauth-callback",
+      samePort: true,
+    });
+    const loose = m.forward({ hostId: HOST, remotePort, origin: "oauth-callback" });
+    await expect(strict).rejects.toMatchObject({ code: "PORT_IN_USE" });
+    const forward = await loose;
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(m.list()).toEqual([expect.objectContaining({ forwardId: forward.forwardId })]);
   });
 });

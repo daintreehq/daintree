@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
-import type net from "node:net";
+import net from "node:net";
 import path from "node:path";
 import type { Readable } from "node:stream";
 import { ATTACH_STDIO_FLAG } from "../host/attachStdio.js";
@@ -548,10 +548,34 @@ export async function exitStaleSshMasters(
         }
         // The socket names the master; the destination is only there because ssh requires one.
         const args = ["-F", "/dev/null", "-o", controlPathOption(socketPath), "-O", "exit", "--"];
-        await run(sshExecutable(), [...args, "localhost"], { timeoutMs }).catch(() => {});
-        await fs.rm(socketPath, { force: true }).catch(() => {});
+        const result = await run(sshExecutable(), [...args, "localhost"], { timeoutMs }).catch(
+          () => null
+        );
+        // A master that wouldn't go keeps its socket: without it, nothing could reach it again.
+        if (result?.code === 0 || (await isDeadSocket(socketPath, timeoutMs))) {
+          await fs.rm(socketPath, { force: true }).catch(() => {});
+        } else {
+          console.warn(`[RemoteHosts] A master left by an earlier launch didn't exit: ${name}`);
+        }
       })
   );
+}
+
+/** Whether nothing answers on a unix socket any more: its process is gone. */
+function isDeadSocket(socketPath: string, timeoutMs: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = net.connect({ path: socketPath });
+    const finish = (dead: boolean) => {
+      clearTimeout(timer);
+      socket.destroy();
+      resolve(dead);
+    };
+    const timer = setTimeout(() => finish(false), timeoutMs);
+    socket.once("connect", () => finish(false));
+    socket.once("error", (error: NodeJS.ErrnoException) =>
+      finish(error.code === "ECONNREFUSED" || error.code === "ENOENT")
+    );
+  });
 }
 
 /**
