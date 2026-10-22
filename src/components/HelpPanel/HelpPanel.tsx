@@ -114,15 +114,14 @@ const ASSISTANT_INSTALLER_URL = "https://daintree.org/download";
 // spurious tick from tearing down a running conversation.
 const ASSISTANT_AGENT_EXIT_SETTLE_MS = 750;
 
-// First-run starter prompts. Clicking one starts the assistant AND seeds the
-// agent with the question, so the very first session is an explicit, useful
-// action rather than a bare empty terminal. Shown only before the user has
-// ever launched an agent (#10699).
-const STARTER_PROMPTS = [
+// Stock starter prompts, shown whenever the assistant has no session and the
+// project supplies none of its own. Clicking one starts the assistant AND seeds
+// the agent with the question, so the card text is exactly what gets sent.
+const DEFAULT_STARTER_PROMPTS: readonly string[] = [
   "How do I set up a new worktree?",
   "Explain Daintree's panel system",
   "Help me configure my first agent",
-] as const;
+];
 
 interface HelpPanelProps {
   /**
@@ -365,6 +364,40 @@ export function HelpPanel({
       cancelled = true;
     };
   }, [sessionId]);
+
+  // A project's own starter prompts replace the stock ones. Read on demand —
+  // on open and on project switch — so an edit to the file shows up without a
+  // watcher. `null` while the read is in flight: the cards stay hidden until it
+  // settles, so a stock card is never clickable while replacements are pending.
+  const [projectStarterPrompts, setProjectStarterPrompts] = useState<string[] | null>(null);
+  useEffect(() => {
+    setProjectStarterPrompts(null);
+    if (!isOpen) return;
+    if (!activeWorkspaceId) {
+      setProjectStarterPrompts([]);
+      return;
+    }
+    let cancelled = false;
+    const request =
+      window.electron.help.getStarterPrompts?.(activeWorkspaceId) ?? Promise.resolve([]);
+    void request
+      .then((prompts) => {
+        if (!cancelled) setProjectStarterPrompts(prompts);
+      })
+      .catch((err) => {
+        logWarn("HelpPanel: failed to load project starter prompts", err);
+        if (!cancelled) setProjectStarterPrompts([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, activeWorkspaceId]);
+  const starterPrompts =
+    projectStarterPrompts === null
+      ? []
+      : projectStarterPrompts.length > 0
+        ? projectStarterPrompts
+        : DEFAULT_STARTER_PROMPTS;
 
   const focusedWorktreeId = useWorktreeSelectionStore((s) => s.focusedWorktreeId);
   const selectWorktree = useWorktreeSelectionStore((s) => s.selectWorktree);
@@ -1485,6 +1518,30 @@ export function HelpPanel({
     [controller, launchableAgentId, setAutoLaunchEnabled]
   );
 
+  // A starter never submits into a live session: if one has appeared since the
+  // card rendered, the prompt lands in its input as a draft for the user to send.
+  const handleStarterPrompt = useCallback(
+    (prompt: string) => {
+      const store = useHelpPanelStore.getState();
+      const liveTerminalId = selectSlot(store, store.activeSlot).terminalId;
+      if (!liveTerminalId) {
+        handleStartAssistant(prompt);
+        return;
+      }
+      // Same scope the composer reads its draft under: the project id, none for a scratch.
+      const draftScope = currentProject?.id;
+      const inputs = useTerminalInputStore.getState();
+      const existing = inputs.getDraftInput(liveTerminalId, draftScope);
+      inputs.setDraftInput(
+        liveTerminalId,
+        existing ? `${existing}\n${prompt}` : prompt,
+        draftScope
+      );
+      inputs.bumpExternalDraftRevision();
+    },
+    [currentProject?.id, handleStartAssistant]
+  );
+
   // First-run choice when several installed agents could run the assistant:
   // the pick is stored as the default, then launched like "Start assistant".
   const handleChooseAssistant = useCallback(
@@ -1867,14 +1924,14 @@ export function HelpPanel({
                     <StartAssistantIcon />
                     Start assistant
                   </Button>
-                  {!hasEverLaunchedAgent && (
+                  {starterPrompts.length > 0 && (
                     <div className="flex flex-col gap-1.5 w-full">
                       <p className="text-2xs text-text-secondary">Or start with a question</p>
-                      {STARTER_PROMPTS.map((prompt) => (
+                      {starterPrompts.map((prompt) => (
                         <ChoiceCard
                           key={prompt}
                           padding="sm"
-                          onClick={() => handleStartAssistant(prompt)}
+                          onClick={() => handleStarterPrompt(prompt)}
                           className="items-center gap-2 w-full text-xs text-text-primary"
                         >
                           <MessageCircle

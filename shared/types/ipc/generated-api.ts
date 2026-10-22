@@ -475,6 +475,9 @@ export interface GeneratedElectronAPI {
     getPinnedActionContext(
       ...args: IpcInvokeMap["help:get-pinned-action-context"]["args"]
     ): Promise<IpcInvokeMap["help:get-pinned-action-context"]["result"]>;
+    getStarterPrompts(
+      ...args: IpcInvokeMap["help:get-starter-prompts"]["args"]
+    ): Promise<IpcInvokeMap["help:get-starter-prompts"]["result"]>;
     listPastSessions(
       ...args: IpcInvokeMap["help:list-past-sessions"]["args"]
     ): Promise<IpcInvokeMap["help:list-past-sessions"]["result"]>;

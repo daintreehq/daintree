@@ -312,6 +312,7 @@ export const CHANNEL_LEASE_POLICY = {
   "help:discard-conversation": "driver",
   "help:get-folder-path": "free",
   "help:get-pinned-action-context": "free",
+  "help:get-starter-prompts": "free",
   "help:list-past-sessions": "free",
   "help:list-pending-hibernation-slots": "free",
   "help:mark-terminal": "free",

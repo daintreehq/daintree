@@ -1099,6 +1099,10 @@ export interface GeneratedIpcInvokeMap {
     args: [sessionId: string];
     result: import("./help.js").PinnedActionContextSnapshot | null;
   };
+  "help:get-starter-prompts": {
+    args: [projectId: string];
+    result: string[];
+  };
   "help:list-past-sessions": {
     args: [projectId: string];
     result: import("./help.js").HelpPastSession[];
