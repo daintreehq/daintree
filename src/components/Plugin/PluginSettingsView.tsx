@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import type { LoadedPluginInfo, PluginSettingsViewContext } from "@shared/types/plugin";
 import { SettingsGroup, SettingsRow } from "@/components/Settings/SettingsGroup";
+import { Button } from "@/components/ui/button";
 import { PluginHostedView } from "@/components/Plugin/PluginHostedView";
 import { pluginDeclaresSettingsView } from "@/services/plugin/pluginSettingsHome";
 import { selectPluginHostedView, usePluginHostedViewsStore } from "@/store/pluginHostedViewsStore";
@@ -41,6 +42,7 @@ export function PluginSettingsView({
     initHostedViews();
   }, [initHostedViews]);
   const snapshotLoaded = usePluginHostedViewsStore((s) => s.views !== null);
+  const loadFailed = usePluginHostedViewsStore((s) => s.loadFailed);
   const view = usePluginHostedViewsStore((s) =>
     selectPluginHostedView(s.views, plugin.instanceId, "settings")
   );
@@ -61,9 +63,24 @@ export function PluginSettingsView({
       </SettingsGroup>
     );
   }
-  // The first snapshot is one round trip away; a running plugin's section
-  // waits for it rather than flashing a row that says it isn't available.
-  if (running && !plugin.disabled && !snapshotLoaded) return null;
+  if (running && !plugin.disabled && !snapshotLoaded) {
+    // The first snapshot is one round trip away; a running plugin's section
+    // waits for it rather than flashing a row that says it isn't available.
+    if (!loadFailed) return null;
+    return (
+      <SettingsGroup>
+        <SettingsRow
+          label="More settings"
+          description="Couldn't load this section"
+          control={
+            <Button size="sm" variant="outline" onClick={initHostedViews}>
+              Retry
+            </Button>
+          }
+        />
+      </SettingsGroup>
+    );
+  }
   return (
     <SettingsGroup>
       <SettingsRow label="More settings" description={unavailableReason(plugin, running)} />
@@ -73,8 +90,11 @@ export function PluginSettingsView({
 
 function unavailableReason(plugin: LoadedPluginInfo, running: boolean): string {
   if (plugin.disabled) return "Available when the plugin is enabled";
-  if (!running || plugin.blocklisted) return "Available while the plugin is running";
-  // Running, yet main serves this project no section for it: an installed
-  // plugin this project hides.
-  return "Available in projects that show this plugin";
+  if (!running || plugin.blocklisted || plugin.origin === "project") {
+    return "Available while the plugin is running";
+  }
+  // Main serves this project no section for a running installed plugin. Said
+  // as observed: usually the project hides the plugin, but a reload in flight
+  // reads the same way for a moment.
+  return "Not available in this project";
 }

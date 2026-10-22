@@ -99,16 +99,32 @@ describe("pluginHostedViewsStore", () => {
     expect(bridge.getHostedViews).toHaveBeenCalledTimes(1);
   });
 
-  it("stays unloaded when the pull fails, rather than reading as nothing served", async () => {
+  it("reports a failed pull as failed, not as nothing served, and retries on the next init", async () => {
     usePluginHostedViewsStore.getState().init();
+    rejectPull(new Error("ipc down"));
+    await vi.waitFor(() => expect(usePluginHostedViewsStore.getState().loadFailed).toBe(true));
+    expect(usePluginHostedViewsStore.getState().views).toBeNull();
+    // Released, so the retry doesn't stack a second subscription on the first.
+    expect(listeners.size).toBe(0);
+
+    usePluginHostedViewsStore.getState().init();
+    expect(usePluginHostedViewsStore.getState().loadFailed).toBe(false);
+    expect(bridge.getHostedViews).toHaveBeenCalledTimes(2);
+    expect(listeners.size).toBe(1);
+    resolvePull([view("acme.a")]);
+    await vi.waitFor(() =>
+      expect(usePluginHostedViewsStore.getState().views).toEqual([view("acme.a")])
+    );
+  });
+
+  it("lets a push that beat the failure stand", async () => {
+    usePluginHostedViewsStore.getState().init();
+    push([view("acme.a")]);
     rejectPull(new Error("ipc down"));
     await Promise.resolve();
     await Promise.resolve();
-    expect(usePluginHostedViewsStore.getState().views).toBeNull();
-
-    // The next push still lands.
-    push([view("acme.a")]);
     expect(usePluginHostedViewsStore.getState().views).toEqual([view("acme.a")]);
+    expect(usePluginHostedViewsStore.getState().loadFailed).toBe(false);
   });
 
   it("drops a pull that resolves after a reset", async () => {

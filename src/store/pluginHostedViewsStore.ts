@@ -19,7 +19,15 @@ import { logWarn } from "@/utils/logger";
 interface PluginHostedViewsState {
   /** `null` until the first snapshot, pulled or pushed, has arrived. */
   views: readonly PluginHostedViewDescriptor[] | null;
-  /** Idempotent: subscribes to live updates, then pulls the current snapshot. */
+  /**
+   * The first pull failed and no push has arrived since. Nothing is promised to
+   * push until some plugin changes, so a host offers a retry rather than wait.
+   */
+  loadFailed: boolean;
+  /**
+   * Idempotent: subscribes to live updates, then pulls the current snapshot.
+   * Callable again after a failed pull, which is how a host retries.
+   */
   init: () => void;
 }
 
@@ -30,6 +38,7 @@ let epoch = 0;
 
 export const usePluginHostedViewsStore = create<PluginHostedViewsState>((set) => ({
   views: null,
+  loadFailed: false,
   init: () => {
     if (initialized) return;
     // Tolerate a partially stubbed bridge, and don't latch the guard until it
@@ -39,13 +48,15 @@ export const usePluginHostedViewsStore = create<PluginHostedViewsState>((set) =>
     initialized = true;
     const session = epoch;
     let pushed = false;
+    set({ loadFailed: false });
 
     // Subscribed BEFORE the pull, so a snapshot landing mid-round-trip is kept.
     // Push is authoritative: a pull answered before that push is older than it.
-    unsubscribe = plugin.onHostedViewsChanged(({ views }) => {
+    const off = plugin.onHostedViewsChanged(({ views }) => {
       pushed = true;
-      set({ views });
+      set({ views, loadFailed: false });
     });
+    unsubscribe = off;
 
     if (typeof plugin.getHostedViews !== "function") return;
     void plugin
@@ -56,6 +67,13 @@ export const usePluginHostedViewsStore = create<PluginHostedViewsState>((set) =>
       })
       .catch((err: unknown) => {
         logWarn("[PluginHostedViews] Failed to fetch plugin hosted views", { error: err });
+        if (pushed || session !== epoch) return;
+        // Released rather than kept: the next `init` subscribes and pulls
+        // afresh, and a push in between would already have answered.
+        off();
+        unsubscribe = null;
+        initialized = false;
+        set({ loadFailed: true });
       });
   },
 }));
@@ -75,5 +93,5 @@ export function _resetPluginHostedViewsStoreForTest(): void {
   unsubscribe = null;
   initialized = false;
   epoch += 1;
-  usePluginHostedViewsStore.setState({ views: null });
+  usePluginHostedViewsStore.setState({ views: null, loadFailed: false });
 }

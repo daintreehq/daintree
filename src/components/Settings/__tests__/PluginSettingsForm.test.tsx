@@ -1119,7 +1119,7 @@ describe("PluginSettingsForm custom settings section", () => {
     expect(screen.getByText("Available while the plugin is running")).toBeTruthy();
   });
 
-  it("says where the section is available when this project hides the plugin", () => {
+  it("says the section isn't available here when this project isn't served it", () => {
     // Running, but main serves this project no section for it.
     serveHostedViews([]);
     render(
@@ -1132,7 +1132,7 @@ describe("PluginSettingsForm custom settings section", () => {
     );
 
     expect(screen.queryByTestId("fake-settings-view")).toBeNull();
-    expect(screen.getByText("Available in projects that show this plugin")).toBeTruthy();
+    expect(screen.getByText("Not available in this project")).toBeTruthy();
     // The generated fields are the host's own and keep working.
     expect(screen.getByText("Region")).toBeTruthy();
   });
@@ -1188,6 +1188,45 @@ describe("PluginSettingsForm custom settings section", () => {
     const next = _pluginHostedViewRemovalSignalForTest(SETTINGS_VIEW_ID)!;
     pushHostedViews([]);
     expect(next.aborted).toBe(true);
+  });
+
+  it("offers a retry when the first snapshot couldn't be read, and mounts once it is", async () => {
+    pluginApi.getHostedViews.mockRejectedValueOnce(new Error("ipc down"));
+    render(
+      <PluginSettingsForm
+        plugin={makeViewPlugin([], undefined, { declaresView: true })}
+        viewScope="user"
+      />
+    );
+
+    const retry = await screen.findByRole("button", { name: "Retry" });
+    expect(screen.getByText("Couldn't load this section")).toBeTruthy();
+
+    hosted.views = [settingsViewDescriptor("plugin://a/settings.js")];
+    fireEvent.click(retry);
+
+    expect(await screen.findByTestId("fake-settings-view")).toBeTruthy();
+    expect(screen.queryByText("Couldn't load this section")).toBeNull();
+  });
+
+  it("rides a reload through its empty snapshot onto the new module", () => {
+    render(
+      <PluginSettingsForm
+        plugin={makeViewPlugin([], "plugin://a/__dtv-3/settings.js")}
+        viewScope="user"
+      />
+    );
+    expect(screen.getByTestId("fake-settings-view")).toBeTruthy();
+
+    // Main unloads before the replacement registers: for a moment nothing is
+    // served, and the section says only what it sees.
+    pushHostedViews([]);
+    expect(screen.queryByTestId("fake-settings-view")).toBeNull();
+    expect(screen.getByText("Not available in this project")).toBeTruthy();
+
+    pushHostedViews([settingsViewDescriptor("plugin://b/__dtv-4/settings.js")]);
+    expect(screen.getByTestId("fake-settings-view")).toBeTruthy();
+    expect(madeFor.at(-1)?.componentPath).toBe("plugin://b/__dtv-4/settings.js");
   });
 
   it("swaps a mounted view for the reloaded module while the page stays open", () => {
