@@ -442,6 +442,26 @@ describe("appThemeImporter", () => {
     });
   });
 
+  it("drops and reports a registered extension whose value would end its declaration", () => {
+    const result = parseAppThemeContent(
+      JSON.stringify({
+        name: "Breakout",
+        type: "dark",
+        tokens: { "text-primary": "#e6e6e6" },
+        extensions: { "panel-grid-bg": "#101010; --theme-text-primary: #202020" },
+      }),
+      "breakout.json"
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    expect(result.scheme.extensions ?? {}).toEqual({});
+    expect(result.warnings.map((warning) => warning.message)).toContain(
+      "Ignored extensions whose value is not a single CSS value: panel-grid-bg"
+    );
+  });
+
   it("reports a __proto__ extension key it drops", () => {
     const result = parseAppThemeContent(
       '{"name":"Proto","type":"dark","tokens":{"text-primary":"#e6e6e6"},"extensions":{"__proto__":"#000000"}}',

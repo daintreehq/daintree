@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { sanitizeThemeExtensions } from "../extensionKeys.js";
+import { isCssDeclarationValue, sanitizeThemeExtensions } from "../extensionKeys.js";
 import {
   BUILT_IN_APP_SCHEMES,
   getAppThemeCssVariables,
@@ -87,6 +87,20 @@ describe("sanitizeThemeExtensions", () => {
     expect(sanitizeThemeExtensions(undefined)).toEqual({});
   });
 
+  it("keeps every built-in theme's extensions", () => {
+    for (const scheme of BUILT_IN_APP_SCHEMES) {
+      expect(sanitizeThemeExtensions(scheme.extensions), scheme.id).toEqual(
+        scheme.extensions ?? {}
+      );
+    }
+  });
+
+  it("drops a registered key whose value would end its declaration", () => {
+    expect(
+      sanitizeThemeExtensions({ "panel-grid-bg": "#101010; --theme-text-primary: #202020" })
+    ).toEqual({});
+  });
+
   it("no registered key collides with a variable the engine emits", () => {
     const engineVariables = new Set(
       BUILT_IN_APP_SCHEMES.flatMap((scheme) =>
@@ -95,6 +109,34 @@ describe("sanitizeThemeExtensions", () => {
     );
 
     expect(EXTENSION_KEYS.filter((key) => engineVariables.has(`--${key}`))).toEqual([]);
+  });
+});
+
+describe("isCssDeclarationValue", () => {
+  it.each([
+    "#101010",
+    "rgb(from var(--theme-shadow-color) r g b / 0.4)",
+    'url("data:image/png;base64,AAAA")',
+    "url(data:image/png;base64,AAAA)",
+    "linear-gradient(180deg, #1a2027, #0f1115)",
+    "'a;b' 'c}d'",
+    "\\31 0px",
+  ])("accepts %s", (value) => {
+    expect(isCssDeclarationValue(value)).toBe(true);
+  });
+
+  it.each([
+    "red; --theme-text-primary: #202020",
+    "red !important",
+    "red } :root { color: blue",
+    "red /* hidden",
+    "calc(1px",
+    "1px)",
+    '"unterminated',
+    "red\\",
+    "red\nblue",
+  ])("rejects %s", (value) => {
+    expect(isCssDeclarationValue(value)).toBe(false);
   });
 });
 
@@ -120,5 +162,22 @@ describe("resolveAppTheme fallback polarity", () => {
     ).toBe("dark");
     expect(getAppThemeFallbackType("other", preferences, false)).toBe("light");
     expect(getAppThemeFallbackType("other", {}, true)).toBe("dark");
+  });
+
+  it("follows the system when both slots or neither hold the id", () => {
+    const both = { preferredDarkSchemeId: "mine", preferredLightSchemeId: "mine" };
+
+    expect(getAppThemeFallbackType("mine", both, false)).toBe("light");
+    expect(getAppThemeFallbackType("mine", both, true)).toBe("dark");
+    expect(getAppThemeFallbackType("", { preferredLightSchemeId: "" }, true)).toBe("dark");
+  });
+
+  it("matches a slot regardless of surrounding whitespace", () => {
+    expect(getAppThemeFallbackType(" mine ", { preferredLightSchemeId: "mine" }, true)).toBe(
+      "light"
+    );
+    expect(getAppThemeFallbackType("mine", { preferredLightSchemeId: " mine " }, true)).toBe(
+      "light"
+    );
   });
 });

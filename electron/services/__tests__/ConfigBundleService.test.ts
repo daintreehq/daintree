@@ -370,6 +370,19 @@ describe("ConfigBundleService.apply", () => {
       extensions?: Record<string, string>;
     }>;
     expect(stored[0]?.extensions).toEqual({ "panel-grid-bg": "#101010" });
+
+    const again = await service.apply({
+      appTheme: {
+        customSchemes: [
+          {
+            id: "mine",
+            name: "Mine",
+            extensions: { "theme-text-primary": "#202020", "panel-grid-bg": "#101010" },
+          },
+        ],
+      },
+    });
+    expect(statusFor(again, "appTheme", "theme:mine")?.status).toBe("unchanged");
   });
 
   it("keeps a pre-existing theme that the current schema would reject", async () => {

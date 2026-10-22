@@ -83,6 +83,11 @@ export function applyColorVisionMode(
   }
 }
 
+/** The OS appearance, read defensively: test environments have no `matchMedia`. */
+export function systemPrefersDark(): boolean {
+  return window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? true;
+}
+
 export function applyDefaultAppTheme(root: HTMLElement): AppColorScheme {
   // Prefer the persisted scheme seeded by the main process (via preload) so the
   // first paint matches the saved theme instead of flashing a

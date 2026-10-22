@@ -14,6 +14,7 @@ import {
   getAppThemeCssVariables,
   getAppThemeFallbackType,
   applyAccentOverrideToScheme,
+  isCssDeclarationValue,
 } from "../../shared/theme/index.js";
 import type { AppColorScheme, AppThemeConfig } from "../../shared/theme/index.js";
 import type { Project } from "../../shared/types/project.js";
@@ -228,8 +229,12 @@ export function buildSkeletonCss(
   // sibling of `#startup-skeleton`, so the app never inherits this block.
   const lines: string[] = ["#startup-skeleton {"];
 
-  // Theme tokens (--theme-surface-canvas, --theme-border-default, etc.)
+  // Theme tokens (--theme-surface-canvas, --theme-border-default, etc.).
+  // Values are written into stylesheet text, so one that could end its
+  // declaration or the rule is left out; the renderer sets every variable
+  // inline once it mounts.
   for (const [prop, value] of Object.entries(themeVars)) {
+    if (!isCssDeclarationValue(value)) continue;
     lines.push(`  ${prop}: ${value};`);
   }
 

@@ -7,6 +7,7 @@ import {
   getAppThemeWarnings,
   getBuiltInAppSchemeForType,
   inferAppThemeTypeFromTokens,
+  isCssDeclarationValue,
   isExtensionKey,
   normalizeAppColorScheme,
   validateImportedThemeData,
@@ -172,17 +173,31 @@ export function parseAppThemeContent(content: string, filename: string): AppThem
 
   // Read the names off the raw JSON: zod skips a `__proto__` record key, so
   // the parsed object would hide it from the report.
-  const rawExtensions = (rawData as Record<string, unknown>).extensions;
-  const unknownExtensions =
-    rawExtensions && typeof rawExtensions === "object" && !Array.isArray(rawExtensions)
-      ? Object.keys(rawExtensions)
-          .filter((key) => !isExtensionKey(key))
-          .sort()
+  const rawExtensions =
+    "extensions" in rawData && rawData.extensions && typeof rawData.extensions === "object"
+      ? Object.entries(rawData.extensions)
       : [];
+  const unknownExtensions = rawExtensions
+    .filter(([key]) => !isExtensionKey(key))
+    .map(([key]) => key)
+    .sort();
   if (unknownExtensions.length > 0) {
     warnings.push({
       kind: "unknown-tokens",
       message: `Ignored unknown extensions: ${unknownExtensions.join(", ")}`,
+    });
+  }
+  const unsafeExtensions = rawExtensions
+    .filter(
+      ([key, value]) =>
+        isExtensionKey(key) && typeof value === "string" && !isCssDeclarationValue(value)
+    )
+    .map(([key]) => key)
+    .sort();
+  if (unsafeExtensions.length > 0) {
+    warnings.push({
+      kind: "unknown-tokens",
+      message: `Ignored extensions whose value is not a single CSS value: ${unsafeExtensions.join(", ")}`,
     });
   }
 

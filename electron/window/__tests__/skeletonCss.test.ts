@@ -49,6 +49,15 @@ describe("resolveInitialCanvasBackgroundColor (#9573)", () => {
     storeMock.get.mockClear();
   });
 
+  // These cases swap the store read; later groups expect the default one.
+  afterEach(() => {
+    storeMock.get.mockImplementation((key: string) => {
+      if (key === "appState") return { sidebarWidth: 350, focusMode: false };
+      if (key === "appTheme") return { colorSchemeId: "daintree" };
+      return undefined;
+    });
+  });
+
   it("returns the surface-canvas token for the default dark scheme", () => {
     storeMock.get.mockImplementation((key: string) => {
       if (key === "appTheme") return { colorSchemeId: "daintree" };
@@ -135,6 +144,26 @@ describe("buildSkeletonCss extension keys (#13761)", () => {
     );
     expect(css).not.toContain("#202020");
     expect(css).toContain("--panel-grid-bg: #101010;");
+  });
+
+  it("never writes a stored value that would close the skeleton rule", () => {
+    const breakout = "none; } :root { --theme-text-primary: #202020 !important; } #x { --y: 0";
+    const custom = {
+      id: "custom-breakout",
+      name: "Custom breakout",
+      type: "dark" as const,
+      builtin: false,
+      tokens: { ...resolveAppTheme("daintree", []).tokens, "shadow-floating": breakout },
+      extensions: { "panel-grid-bg": breakout },
+    };
+    const css = buildSkeletonCss(undefined, {
+      colorSchemeId: "custom-breakout",
+      customSchemes: [custom as never],
+    });
+
+    expect(css).not.toContain("#202020");
+    expect(css).not.toContain("--panel-grid-bg");
+    expect(css).not.toContain("--theme-shadow-floating");
   });
 });
 

@@ -3,6 +3,7 @@ import { useAppThemeStore } from "@/store/appThemeStore";
 import { appThemeClient } from "@/clients/appThemeClient";
 import { getSafeBootPromise } from "@/lib/bootPromise";
 import { logError } from "@/utils/logger";
+import { systemPrefersDark } from "@/theme/applyAppTheme";
 import {
   getAppThemeFallbackType,
   normalizeAccentHex,
@@ -12,10 +13,6 @@ import type { AppColorScheme, AppThemeConfig } from "@shared/types/appTheme";
 import type { ColorVisionMode } from "@shared/types";
 
 const VALID_COLOR_VISION_MODES: ColorVisionMode[] = ["default", "red-green", "blue-yellow"];
-
-function systemPrefersDark(): boolean {
-  return window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? true;
-}
 
 export function useAppThemeConfig() {
   const setSelectedSchemeIdSilent = useAppThemeStore((state) => state.setSelectedSchemeIdSilent);

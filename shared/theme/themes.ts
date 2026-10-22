@@ -836,8 +836,10 @@ export function getAppThemeFallbackType(
   preferences: Pick<Partial<AppThemeConfig>, "preferredDarkSchemeId" | "preferredLightSchemeId">,
   systemPrefersDark: boolean
 ): AppColorScheme["type"] {
-  const isPreferredLight = preferences.preferredLightSchemeId === id;
-  const isPreferredDark = preferences.preferredDarkSchemeId === id;
+  const target = id.trim();
+  const holds = (slot: string | undefined) => target !== "" && slot?.trim() === target;
+  const isPreferredLight = holds(preferences.preferredLightSchemeId);
+  const isPreferredDark = holds(preferences.preferredDarkSchemeId);
   if (isPreferredLight !== isPreferredDark) return isPreferredLight ? "light" : "dark";
   return systemPrefersDark ? "dark" : "light";
 }
