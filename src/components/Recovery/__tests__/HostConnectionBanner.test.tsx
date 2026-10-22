@@ -141,7 +141,7 @@ describe("HostConnectionBanner", () => {
     // Not a prompt to install: the host may well be set up and on its way back.
     expect(screen.getByRole("status").textContent).not.toContain("set up there");
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
-    expect(connect).toHaveBeenCalledWith({ hostId: "studio-01" });
+    expect(connect).toHaveBeenCalledWith({ hostId: "studio-01", restart: true });
     expect(screen.getByRole("button", { name: "Set up…" })).toBeTruthy();
   });
 
