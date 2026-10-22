@@ -50,10 +50,12 @@ export type Symbolication =
       ok: false;
       reason: UnavailableReason;
       /**
-       * The file the frame is in even so, when the map does not place the
-       * position but names that one source and nothing else, as a dev server's
-       * map of one module does. Enough to say the file has changed since an
-       * earlier result was pinned to it; never a position in it.
+       * The file the frame is in even so: the one its source was located at
+       * before reading it failed, or, where the map places no source at the
+       * position, the only source it names. A dev server maps each module it
+       * serves from the one file it transformed, so that file is what the
+       * module's code, placed or not, came from. Enough to say the file has
+       * changed since an earlier result was pinned to it; never a position.
        */
       file?: SourceFileRef;
     };

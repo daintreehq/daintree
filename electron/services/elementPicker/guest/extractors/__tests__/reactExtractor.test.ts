@@ -4,7 +4,9 @@ import {
   Fragment,
   Suspense,
   act,
+  cloneElement,
   createElement,
+  createRef,
   use,
   useEffect,
   useState,
@@ -521,6 +523,26 @@ describe("the React extractor on what a render hides or hands elsewhere", () => 
     expect(kinds(producer)).not.toContain("component-definition");
     expect(kinds(record(observation, "Consumer"))).toContain("component-definition");
     expect(kinds(badge)).toContain("component-definition");
+  });
+});
+
+describe("the React extractor on an element one component made and another cloned", () => {
+  it("claims no definition from a stack React kept when another component took the element", () => {
+    // Slot and `asChild` do this: the ref they set makes the clone theirs, the stack stays Parent's.
+    function Slot({ children }: { children: ReactElement }) {
+      return cloneElement(children, { ref: createRef<HTMLElement>() } as Record<string, unknown>);
+    }
+    function Parent() {
+      return createElement(Slot, null, createElement("i", { className: "cloned" }));
+    }
+    mountTree(createElement(Parent));
+    const node = query("i.cloned");
+    const owner = (fiberOf(node)._debugOwner ?? null) as Record<string, unknown> | null;
+    expect((owner?.type as { name?: string } | undefined)?.name).toBe("Slot");
+
+    const observation = pick("i.cloned");
+    expect(kinds(record(observation, "Slot"))).not.toContain("component-definition");
+    expect(kinds(record(observation, "Parent"))).toContain("component-definition");
   });
 });
 

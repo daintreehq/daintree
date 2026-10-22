@@ -320,12 +320,19 @@ describe("source map symbolication", () => {
     await expect(
       symbolicate(fake(cardMap(), { read: { ok: false, reason: "budget-exhausted" } }))
     ).resolves.toMatchObject({ ok: true, sourceMap: { sourceCheck: "unchecked" } });
-    // Gone, but still the file the frame is in: an earlier result pinned to it can say so.
+    // Gone, or refused, but still the file the frame is in: an earlier result pinned to it can say so.
+    const card = { workspaceId: "ws", path: "src/Card.tsx" };
     await expect(symbolicate(fake(cardMap(), { disk: {} }))).resolves.toEqual({
       ok: false,
       reason: "file-missing",
-      file: { workspaceId: "ws", path: "src/Card.tsx" },
+      file: card,
     });
+    for (const reason of ["outside-workspace", "unsupported", "cancelled"] as const) {
+      await expect(
+        symbolicate(fake(cardMap(), { read: { ok: false, reason } })),
+        reason
+      ).resolves.toEqual({ ok: false, reason, file: card });
+    }
   });
 
   it("passes on why main would not fetch or locate", async () => {

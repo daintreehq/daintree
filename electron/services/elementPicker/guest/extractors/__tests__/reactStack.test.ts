@@ -114,7 +114,17 @@ describe("componentFrame", () => {
       file: "http://localhost:5173/src/Table.tsx?t=4",
       line: 21,
       column: 18,
+      name: "Table",
     });
+  });
+
+  it("names the function as V8 printed it, and an anonymous one not at all", () => {
+    const named = (line: string) => componentFrame(debugStack(FACTORY, line, BOTTOM))?.name;
+    expect(named("    at Legacy.render (http://localhost:5173/src/Legacy.tsx:9:12)")).toBe(
+      "Legacy.render"
+    );
+    expect(named("    at new Widget (http://localhost:5173/src/Widget.tsx:4:3)")).toBe("Widget");
+    expect(named("    at http://localhost:5173/src/anonymous.tsx:2:30")).toBeNull();
   });
 
   it("is nothing for a stack cut short of the marker, or one with no located frame above it", () => {

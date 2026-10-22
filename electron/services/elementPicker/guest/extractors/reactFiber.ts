@@ -264,6 +264,20 @@ export function ownedElementFiber(component: Fiber, budget: Budget): Fiber | nul
   return null;
 }
 
+/**
+ * The function React calls to render `component`: the component itself, a
+ * forwardRef's `render`, or what a memo wraps, as deep as React nests them.
+ * A class component renders through its instance's `render`, named for the class.
+ */
+export function renderFunction(component: Fiber): unknown {
+  let type = field(component, "type");
+  for (let depth = 0; depth < MAX_TYPE_DEPTH && typeof type !== "function"; depth += 1) {
+    const render = field(type, "render");
+    type = typeof render === "function" ? render : field(type, "type");
+  }
+  return typeof type === "function" ? type : null;
+}
+
 /** The innermost component above `fiber`, the memo standing for its implementation. */
 export function nearestComponent(fiber: Fiber, budget: Budget): Fiber | null {
   for (let next = parentOf(fiber); next !== null && budget.spend(); next = parentOf(next)) {

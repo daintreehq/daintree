@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { transform } from "esbuild";
 import { beforeEach, describe, expect, it } from "vitest";
 import type { SourceLocation } from "../../../../shared/elementPicker/coordinates.js";
@@ -7,29 +6,37 @@ import type {
   FileRevision,
   ResolutionResult,
 } from "../../../../shared/elementPicker/resolution.js";
-import {
-  ResolveResponseSchema,
-  type ResolverSourceAccess,
+import type {
+  ResolveResponse,
+  ResolverSourceAccess,
 } from "../../../../shared/elementPicker/resolver.js";
 import type { SourceCandidate } from "../../../../shared/elementPicker/source.js";
+import { checkResolveResponse } from "../checkResponse.js";
+import { observationCandidates } from "../outcomes.js";
+import { revisionOf } from "../sourceAccess.js";
+import { locateMapSource } from "../sourceLocator.js";
 import { reactResolver } from "../worker/resolvers/react.js";
+import { parseSource } from "../worker/resolvers/react/source.js";
 import { clearDecodedMapCache } from "../worker/symbolication.js";
 import { observation, request } from "./fixtures.js";
 
 /**
  * The React resolver's choices, frame by frame, against modules transformed
- * the way a dev server serves them (esbuild's `jsxDEV` output and its map)
- * and a workspace held in memory, so each case says exactly which bytes the
- * page ran and which are on disk. A real Vite dev server and real React
- * stacks are `reactResolver.test.ts`'s.
+ * the way a dev server serves them (esbuild's `jsxDEV` output, its map inline
+ * and its sources named relative to the module, as Vite names them) and a
+ * workspace held in memory, so each case says exactly which bytes the page
+ * ran and which are on disk. Sources are located by main's own locator and
+ * every response is held to main's own check of what this job served. A real
+ * Vite dev server and real React stacks are `reactResolver.test.ts`'s.
  */
 
 const WORKSPACE = "ws-react";
 const ORIGIN = "http://localhost:5173";
+const ROOTS = { worktreePath: "/work/app", appRoot: "/work/app" };
+const encoder = new TextEncoder();
 
-function revisionOf(bytes: Uint8Array | string): FileRevision {
-  return `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
-}
+const revision = (text: string | Uint8Array) =>
+  revisionOf(typeof text === "string" ? encoder.encode(text) : text);
 
 interface FrameAt {
   file: string;
@@ -37,30 +44,45 @@ interface FrameAt {
   column: number;
 }
 
+interface ServeOptions {
+  /** The map lists its source as library code. */
+  ignored?: boolean;
+  /** The map embeds a copy of the source to compare the file with. */
+  withContent?: boolean;
+  /** What the map names its source; the module's own file name by default. */
+  sourcefile?: string;
+}
+
 /** A dev server that has served some modules, over a workspace that may have moved on since. */
 class DevServer {
-  readonly files = new Map<string, string>();
+  readonly files = new Map<string, Uint8Array>();
   readonly fetched: string[] = [];
+  /** Paths whose reads are refused as over budget. */
+  readonly overBudget = new Set<string>();
+  /** Called as each map is fetched, before it is answered. */
+  onFetch: (url: string) => void = () => {};
   private readonly modules = new Map<string, { code: string; map: string }>();
+  private readonly servedRevisions = new Map<string, FileRevision>();
+  private readonly servedMaps = new Set<FileRevision>();
 
-  async serve(
-    path: string,
-    source: string,
-    options: { ignored?: boolean; withContent?: boolean; sourcefile?: string } = {}
-  ): Promise<void> {
+  async serve(path: string, source: string, options: ServeOptions = {}): Promise<void> {
     const out = await transform(source, {
       loader: "tsx",
       jsx: "automatic",
       jsxDev: true,
       format: "esm",
       sourcemap: "external",
-      sourcefile: options.sourcefile ?? path,
+      sourcefile: options.sourcefile ?? path.split("/").at(-1),
       sourcesContent: options.withContent ?? true,
     });
     const map = JSON.parse(out.map) as Record<string, unknown>;
     if (options.ignored) map.x_google_ignoreList = [0];
     this.modules.set(`/${path}`, { code: out.code, map: JSON.stringify(map) });
-    this.files.set(path, source);
+    this.write(path, source);
+  }
+
+  write(path: string, contents: string | Uint8Array): void {
+    this.files.set(path, typeof contents === "string" ? encoder.encode(contents) : contents);
   }
 
   /**
@@ -76,37 +98,51 @@ class DevServer {
         column !== -1;
         column = line.indexOf(call, column + 1)
       ) {
-        if (seen++ === nth)
+        if (seen++ === nth) {
           return { file: `${ORIGIN}/${path}?t=1`, line: index + 1, column: column + 1 };
+        }
       }
     }
     throw new Error(`${call} is not called ${nth + 1} times in ${path}`);
   }
 
   access(): ResolverSourceAccess {
-    const encoder = new TextEncoder();
     return {
       fetchSourceMap: async (url) => {
         this.fetched.push(url);
+        this.onFetch(url);
         const module = this.modules.get(new URL(url).pathname);
         if (!module) return { ok: false, reason: "map-missing" };
-        return {
-          ok: true,
-          value: { url: null, revision: revisionOf(module.map), text: module.map },
-        };
+        const mapRevision = revision(module.map);
+        this.servedMaps.add(mapRevision);
+        return { ok: true, value: { url: null, revision: mapRevision, text: module.map } };
       },
-      locateSource: async ({ source }) =>
-        source.startsWith("../")
-          ? { ok: false, reason: "outside-workspace" }
-          : { ok: true, value: { workspaceId: WORKSPACE, path: source } },
+      // Main's own rules: relative to the module an inline map came with.
+      locateSource: async ({ generatedUrl, source, sourceRoot }) =>
+        locateMapSource(source, sourceRoot, {
+          workspaceId: WORKSPACE,
+          roots: ROOTS,
+          previewOrigin: ORIGIN,
+          base: generatedUrl,
+        }),
       readSource: async (file) => {
-        const text = this.files.get(file.path);
-        if (text === undefined) return { ok: false, reason: "file-missing" };
-        const bytes = encoder.encode(text);
+        if (this.overBudget.has(file.path)) return { ok: false, reason: "budget-exhausted" };
+        const bytes = this.files.get(file.path);
+        if (bytes === undefined) return { ok: false, reason: "file-missing" };
+        this.servedRevisions.set(file.path, revisionOf(bytes));
         return { ok: true, value: { file, revision: revisionOf(bytes), bytes } };
       },
       locateFile: async () => ({ ok: false, reason: "outside-workspace" }),
     };
+  }
+
+  /** Main's check of a response: only files, revisions and maps this job served. */
+  admit(req: Parameters<typeof checkResolveResponse>[0], response: ResolveResponse) {
+    return checkResolveResponse(req, response, {
+      roots: ROOTS,
+      servedRevision: (path) => this.servedRevisions.get(path),
+      servedMap: (mapUrl, mapRevision) => mapUrl === null && this.servedMaps.has(mapRevision),
+    });
   }
 }
 
@@ -129,10 +165,11 @@ function stack(
 function selection(
   tagName: string,
   element: SourceCandidate[],
-  components: SourceCandidate[][] = []
+  components: SourceCandidate[][] = [],
+  elementId = "el-1"
 ): SelectionObservation {
   return {
-    ...observation("el-1", element),
+    ...observation(elementId, element),
     tagName,
     componentChain: {
       nearestId: components.length > 0 ? "component-0" : null,
@@ -141,7 +178,7 @@ function selection(
         framework: "react",
         name: null,
         environment: "client",
-        rootElementIds: ["el-1"],
+        rootElementIds: [elementId],
         rootsComplete: true,
         sourceCandidates,
       })),
@@ -150,16 +187,21 @@ function selection(
   };
 }
 
-async function resolve(
+interface ResolveOptions {
+  known?: Array<[string, FileRevision]>;
+  signal?: AbortSignal;
+}
+
+async function resolveAll(
   server: DevServer,
-  observed: SelectionObservation,
-  options: { known?: Array<[string, FileRevision]>; signal?: AbortSignal } = {}
-): Promise<ResolutionResult[]> {
+  observed: SelectionObservation[],
+  options: ResolveOptions = {}
+): Promise<ResolutionResult[][]> {
   const req = {
-    ...request(WORKSPACE, [observed]),
-    knownRevisions: (options.known ?? []).map(([path, revision]) => ({
+    ...request(WORKSPACE, observed),
+    knownRevisions: (options.known ?? []).map(([path, pinned]) => ({
       file: { workspaceId: WORKSPACE, path },
-      revision,
+      revision: pinned,
     })),
   };
   const response = await reactResolver.resolve(
@@ -167,8 +209,23 @@ async function resolve(
     server.access(),
     options.signal ?? new AbortController().signal
   );
-  // Only what the host would pass on: every result well formed and for a candidate it was sent.
-  return ResolveResponseSchema.parse(response).outcomes[0]!.results;
+  // What main would pass on, and nothing it would refuse.
+  expect(server.admit(req, response)).toEqual(response);
+  // Every candidate answered once, in the order it was sent.
+  expect(
+    response.outcomes.map((outcome) => outcome.results.map((result) => result.candidateId))
+  ).toEqual(
+    observed.map((entry) => observationCandidates(entry).map((candidate) => candidate.candidateId))
+  );
+  return response.outcomes.map((outcome) => outcome.results);
+}
+
+async function resolve(
+  server: DevServer,
+  observed: SelectionObservation,
+  options: ResolveOptions = {}
+): Promise<ResolutionResult[]> {
+  return (await resolveAll(server, [observed], options))[0]!;
 }
 
 /** `start` through the end of `end`, as a source map numbers it: 1-based lines, 0-based columns. */
@@ -184,6 +241,10 @@ function rangeOf(text: string, start: string, end: string): SourceLocation {
 }
 
 const ref = (path: string) => ({ workspaceId: WORKSPACE, path });
+
+/** What each result came to, a reason standing in for `unavailable`. */
+const outcomes = (results: ResolutionResult[]) =>
+  results.map((result) => (result.state === "unavailable" ? result.reason : result.state));
 
 const CARD = [
   'import { Badge } from "./Badge";',
@@ -209,18 +270,18 @@ beforeEach(async () => {
   await server.serve("src/Card.tsx", CARD);
 });
 
+const h2 = () =>
+  selection("h2", stack("element-creation", server.at("src/Card.tsx", 'jsxDEV("h2"')));
+
 describe("an element's creation frames", () => {
   it("are verified at the JSX element the first frame of the app's code maps to", async () => {
-    const [result] = await resolve(
-      server,
-      selection("h2", stack("element-creation", server.at("src/Card.tsx", 'jsxDEV("h2"')))
-    );
+    const [result] = await resolve(server, h2());
     expect(result).toEqual({
       state: "verified",
       candidateId: expect.any(String),
       claim: "element-creation",
       target: { file: ref("src/Card.tsx"), location: rangeOf(CARD, "<h2", "</h2>") },
-      fileRevision: revisionOf(CARD),
+      fileRevision: revision(CARD),
       sourceMap: {
         mapUrl: null,
         mapRevision: expect.stringMatching(/^sha256:/),
@@ -237,7 +298,7 @@ describe("an element's creation frames", () => {
     expect(results[0]).toMatchObject({
       state: "unavailable",
       reason: "mismatch",
-      read: { file: ref("src/Card.tsx"), fileRevision: revisionOf(CARD) },
+      read: { file: ref("src/Card.tsx"), fileRevision: revision(CARD) },
     });
     const [component] = await resolve(
       server,
@@ -264,21 +325,15 @@ describe("an element's creation frames", () => {
         )
       )
     );
-    expect(results.map((result) => result.state)).toEqual([
-      "unavailable",
-      "verified",
-      "unavailable",
-    ]);
-    expect(results[0]).toMatchObject({ reason: "unsupported" });
     // The call below the claim is a caller, not a second creation site.
-    expect(results[2]).toMatchObject({ reason: "unsupported" });
+    expect(outcomes(results)).toEqual(["unsupported", "verified", "unsupported"]);
     expect(server.fetched.some((url) => url.includes("node_modules"))).toBe(false);
   });
 
   it("pass over a source the map lists as library code, and one outside the workspace", async () => {
     const WRAP = "export const wrap = (tag: string) => <i data-tag={tag} />;\n";
     await server.serve("src/vendor/wrap.tsx", WRAP, { ignored: true });
-    await server.serve("src/shared.tsx", WRAP, { sourcefile: "../shared/wrap.tsx" });
+    await server.serve("src/shared.tsx", WRAP, { sourcefile: "http://cdn.example.com/wrap.tsx" });
     const results = await resolve(
       server,
       selection(
@@ -291,13 +346,11 @@ describe("an element's creation frames", () => {
         )
       )
     );
-    expect(
-      results.map((result) => (result.state === "unavailable" ? result.reason : result.state))
-    ).toEqual(["unsupported", "outside-workspace", "verified"]);
+    expect(outcomes(results)).toEqual(["unsupported", "outside-workspace", "verified"]);
   });
 
-  it("stop at a frame that cannot be mapped rather than take a caller in its place", async () => {
-    const results = await resolve(
+  it("stop at a frame that cannot be mapped, or names no file, rather than take a caller in its place", async () => {
+    const unmapped = await resolve(
       server,
       selection(
         "h2",
@@ -308,10 +361,36 @@ describe("an element's creation frames", () => {
         )
       )
     );
-    expect(results).toMatchObject([
-      { state: "unavailable", reason: "map-missing" },
-      { state: "unavailable", reason: "unsupported" },
-    ]);
+    expect(outcomes(unmapped)).toEqual(["map-missing", "unsupported"]);
+
+    // A map naming a bundler's module, not a file: unknown whether it was the call.
+    await server.serve("src/virtual.tsx", "export const v = () => <i />;\n", {
+      sourcefile: "webpack://app/./virtual.tsx",
+    });
+    const virtual = await resolve(
+      server,
+      selection(
+        "h2",
+        stack(
+          "element-creation",
+          server.at("src/virtual.tsx", 'jsxDEV("i"'),
+          server.at("src/Card.tsx", 'jsxDEV("h2"')
+        )
+      )
+    );
+    expect(outcomes(virtual)).toEqual(["unsupported", "unsupported"]);
+  });
+
+  it("take the stack's own order, however the candidates arrived", async () => {
+    const frames = stack(
+      "element-creation",
+      { file: `${ORIGIN}/node_modules/.vite/deps/react-dom_client.js?v=1`, line: 9, column: 3 },
+      server.at("src/Card.tsx", 'jsxDEV("h2"'),
+      server.at("src/Card.tsx", 'jsxDEV("section"')
+    );
+    const results = await resolve(server, selection("h2", [...frames].reverse()));
+    // Answered in the order sent; judged in the order captured.
+    expect(outcomes(results)).toEqual(["unsupported", "verified", "unsupported"]);
   });
 
   it("offer the app's own frames as alternatives where the first holds no JSX, and choose none", async () => {
@@ -334,24 +413,23 @@ describe("an element's creation frames", () => {
       server,
       selection("li", stack("element-creation", helper, caller))
     );
+    const at = (needle: string) => {
+      const { line, column } = rangeOf(LIST, needle, "(");
+      return { line, column };
+    };
     expect(ambiguous).toMatchObject({
       state: "ambiguous",
       claim: "element-creation",
       alternatives: [
         {
           state: "mapped",
-          target: {
-            file: ref("src/List.tsx"),
-            location: { line: 4, column: rangeOf(LIST, "createElement(", "(").column },
-          },
-          fileRevision: revisionOf(LIST),
+          target: { file: ref("src/List.tsx"), location: at("createElement(") },
+          fileRevision: revision(LIST),
         },
         {
           state: "mapped",
-          target: {
-            file: ref("src/List.tsx"),
-            location: { line: 8, column: rangeOf(LIST, 'item("one")', "(").column },
-          },
+          target: { file: ref("src/List.tsx"), location: at('item("one")') },
+          fileRevision: revision(LIST),
         },
       ],
     });
@@ -366,16 +444,82 @@ describe("an element's creation frames", () => {
     });
   });
 
+  it("offer each place once, the first ones, and no more than a result holds", async () => {
+    const calls = Array.from({ length: 10 }, (_, index) => `  item("${index}");`);
+    const MANY = [
+      'import { createElement } from "react";',
+      "",
+      "function item(label: string) {",
+      '  return createElement("li", null, label);',
+      "}",
+      "",
+      "export function Many() {",
+      ...calls,
+      "  return null;",
+      "}",
+      "",
+    ].join("\n");
+    await server.serve("src/Many.tsx", MANY);
+    const frames = [
+      server.at("src/Many.tsx", "createElement("),
+      server.at("src/Many.tsx", 'item("0")'),
+      server.at("src/Many.tsx", 'item("0")'),
+      ...Array.from({ length: 9 }, (_, index) => server.at("src/Many.tsx", `item("${index + 1}")`)),
+    ];
+    const results = await resolve(server, selection("li", stack("element-creation", ...frames)));
+    const [first, ...rest] = results;
+    const lines =
+      first?.state === "ambiguous"
+        ? first.alternatives.map((alt) => alt.target.location?.line)
+        : [];
+    // The helper, then its callers in stack order, the repeated one once, cut at eight.
+    expect(lines).toEqual([4, 8, 9, 10, 11, 12, 13, 14]);
+    expect(
+      rest.every((result) => result.state === "unavailable" && result.reason === "unsupported")
+    ).toBe(true);
+  });
+
   it("answer work not begun before the request was withdrawn as cancelled", async () => {
     const controller = new AbortController();
     controller.abort();
+    const results = await resolve(server, h2(), { signal: controller.signal });
+    expect(outcomes(results)).toEqual(["cancelled"]);
+    expect(server.fetched).toEqual([]);
+  });
+
+  it("answer what was still to do as cancelled when the request is withdrawn part way", async () => {
+    await server.serve("src/Badge.tsx", "export function Badge() {\n  return <span />;\n}\n");
+    const controller = new AbortController();
+    server.onFetch = () => controller.abort();
     const results = await resolve(
       server,
-      selection("h2", stack("element-creation", server.at("src/Card.tsx", 'jsxDEV("h2"'))),
+      selection("h2", stack("element-creation", server.at("src/Card.tsx", 'jsxDEV("h2"')), [
+        stack("component-definition", server.at("src/Badge.tsx", 'jsxDEV("span"')),
+      ]),
       { signal: controller.signal }
     );
-    expect(results).toMatchObject([{ state: "unavailable", reason: "cancelled" }]);
-    expect(server.fetched).toEqual([]);
+    expect(outcomes(results)).toEqual(["cancelled", "cancelled"]);
+    expect(server.fetched).toHaveLength(1);
+  });
+
+  it("answer each observation in one request on its own, sharing what they read", async () => {
+    const [own] = stack("element-creation", server.at("src/Card.tsx", 'jsxDEV("h2"'));
+    const [other] = stack("element-creation", server.at("src/Card.tsx", 'jsxDEV("section"'));
+    // Ids are the page's per observation, so two can repeat one.
+    const [title, card] = await resolveAll(server, [
+      selection("h2", [own!], [], "el-title"),
+      selection("section", [{ ...other!, candidateId: own!.candidateId }], [], "el-card"),
+    ]);
+    expect(title?.[0]).toMatchObject({
+      state: "verified",
+      target: { location: rangeOf(CARD, "<h2", "</h2>") },
+    });
+    expect(card?.[0]).toMatchObject({
+      state: "verified",
+      target: { location: rangeOf(CARD, "<section", "</section>") },
+      fileRevision: revision(CARD),
+    });
+    expect(server.fetched).toHaveLength(1);
   });
 });
 
@@ -400,15 +544,34 @@ describe("a component's call site", () => {
     expect(results[0]).not.toHaveProperty("definition");
     expect(results[1]).toMatchObject({ state: "unavailable", reason: "mismatch" });
   });
+
+  it("is found past a library component's own JSX wrapper", async () => {
+    const results = await resolve(
+      server,
+      selection(
+        "span",
+        [],
+        [
+          stack(
+            "component-invocation",
+            {
+              file: `${ORIGIN}/node_modules/.vite/deps/@emotion_react.js?v=1`,
+              line: 12,
+              column: 7,
+            },
+            server.at("src/Card.tsx", "jsxDEV(Badge")
+          ),
+        ]
+      )
+    );
+    expect(outcomes(results)).toEqual(["unsupported", "verified"]);
+  });
 });
 
 describe("staleness", () => {
-  const h2 = () =>
-    selection("h2", stack("element-creation", server.at("src/Card.tsx", 'jsxDEV("h2"')));
-
   it("is reported when the file changed under the map the page ran, never a line in the new file", async () => {
     const edited = `// a comment\n// and another\n${CARD}`;
-    server.files.set("src/Card.tsx", edited);
+    server.write("src/Card.tsx", edited);
     const [result] = await resolve(server, h2());
     expect(result).toEqual({
       state: "stale",
@@ -423,13 +586,13 @@ describe("staleness", () => {
         fileRevision: null,
         sourceMap: expect.objectContaining({ sourceCheck: "differs" }),
       },
-      currentFileRevision: revisionOf(edited),
+      currentFileRevision: revision(edited),
       reason: "file-changed",
     });
   });
 
   it("is reported when the file moved on from the revision an earlier result held", async () => {
-    const earlier = revisionOf("export function Card() { return null; }\n");
+    const earlier = revision("export function Card() { return null; }\n");
     const [result] = await resolve(server, h2(), { known: [["src/Card.tsx", earlier]] });
     expect(result).toMatchObject({
       state: "stale",
@@ -440,11 +603,53 @@ describe("staleness", () => {
         target: { file: ref("src/Card.tsx"), location: null },
         fileRevision: earlier,
       },
-      currentFileRevision: revisionOf(CARD),
+      currentFileRevision: revision(CARD),
     });
 
-    const [same] = await resolve(server, h2(), { known: [["src/Card.tsx", revisionOf(CARD)]] });
+    const [same] = await resolve(server, h2(), { known: [["src/Card.tsx", revision(CARD)]] });
     expect(same).toMatchObject({ state: "verified" });
+  });
+
+  it("holds a pinned selection stale even where the new map places its old frame on another element of its tag", async () => {
+    const TITLES = [
+      "export function Titles() {",
+      "  return (",
+      "    <header>",
+      '      <h2 className="first">First</h2>',
+      '      <h2 className="second">Second</h2>',
+      "    </header>",
+      "  );",
+      "}",
+      "",
+    ].join("\n");
+    const swapped = TITLES.replace('"first">First', '"tmp">Tmp')
+      .replace('"second">Second', '"first">First')
+      .replace('"tmp">Tmp', '"second">Second');
+    await server.serve("src/Titles.tsx", TITLES);
+    const old = selection(
+      "h2",
+      stack("element-creation", server.at("src/Titles.tsx", 'jsxDEV("h2"'))
+    );
+    const [before] = await resolve(server, old);
+    expect(before).toMatchObject({
+      state: "verified",
+      target: { location: rangeOf(TITLES, '<h2 className="first"', "</h2>") },
+    });
+
+    // The edit reaches the dev server; the page still runs the old module.
+    await server.serve("src/Titles.tsx", swapped);
+    // Where the old frame now lands is another <h2>, the one the user did not pick.
+    const start = ({ line, column }: SourceLocation) => ({ line, column });
+    expect(start(rangeOf(swapped, '<h2 className="second"', "</h2>"))).toEqual(
+      start(rangeOf(TITLES, '<h2 className="first"', "</h2>"))
+    );
+    const [held] = await resolve(server, old, { known: [["src/Titles.tsx", revision(TITLES)]] });
+    expect(held).toMatchObject({
+      state: "stale",
+      reason: "file-changed",
+      held: { fileRevision: revision(TITLES), target: { location: null } },
+      currentFileRevision: revision(swapped),
+    });
   });
 
   it("is reported for a pinned file the map no longer places the frame in, or that has gone", async () => {
@@ -454,7 +659,7 @@ describe("staleness", () => {
       line: 999,
       column: 1,
     });
-    const earlier = revisionOf("export function Card() { return null; }\n");
+    const earlier = revision("export function Card() { return null; }\n");
     const [moved] = await resolve(server, selection("h2", lost), {
       known: [["src/Card.tsx", earlier]],
     });
@@ -466,14 +671,14 @@ describe("staleness", () => {
         target: { file: ref("src/Card.tsx"), location: null },
         fileRevision: earlier,
       },
-      currentFileRevision: revisionOf(CARD),
+      currentFileRevision: revision(CARD),
     });
     // Nothing pinned: a position the map does not place is just that.
     const [unpinned] = await resolve(server, selection("h2", lost));
     expect(unpinned).toMatchObject({ state: "unavailable", reason: "map-missing" });
 
     server.files.delete("src/Card.tsx");
-    const [gone] = await resolve(server, h2(), { known: [["src/Card.tsx", revisionOf(CARD)]] });
+    const [gone] = await resolve(server, h2(), { known: [["src/Card.tsx", revision(CARD)]] });
     expect(gone).toMatchObject({
       state: "stale",
       reason: "file-missing",
@@ -482,27 +687,67 @@ describe("staleness", () => {
     });
   });
 
-  it("leaves a map with no copy of the source to the file, and says it was not compared", async () => {
+  it("leaves a map with no copy of the source mapped, not verified: nothing ties it to the file", async () => {
     await server.serve("src/Card.tsx", CARD, { withContent: false });
     const [result] = await resolve(server, h2());
+    expect(result).toEqual({
+      state: "mapped",
+      candidateId: expect.any(String),
+      claim: "element-creation",
+      target: {
+        file: ref("src/Card.tsx"),
+        location: { lineBase: 1, columnBase: 0, columnUnit: "utf16", line: 6, column: 6 },
+      },
+      fileRevision: revision(CARD),
+      sourceMap: expect.objectContaining({ sourceCheck: "unchecked" }),
+    });
+    // What the file does contradict is still said.
+    const [wrong] = await resolve(
+      server,
+      selection("span", stack("element-creation", server.at("src/Card.tsx", 'jsxDEV("h2"')))
+    );
+    expect(wrong).toMatchObject({ state: "unavailable", reason: "mismatch" });
+  });
+
+  it("keeps a mapping it had no budget to read the file for, mapped and unchecked", async () => {
+    server.overBudget.add("src/Card.tsx");
+    const [result] = await resolve(server, h2());
     expect(result).toMatchObject({
-      state: "verified",
-      fileRevision: revisionOf(CARD),
+      state: "mapped",
+      target: { file: ref("src/Card.tsx"), location: { line: 6, column: 6 } },
+      fileRevision: null,
       sourceMap: { sourceCheck: "unchecked" },
     });
   });
 
-  it("names what it read but places nothing in a file that no longer parses", async () => {
+  it("names what it read but places nothing in a file that no longer parses, or is not text", async () => {
     await server.serve("src/Card.tsx", CARD, { withContent: false });
-    const broken = CARD.replace("</section>", "");
-    server.files.set("src/Card.tsx", broken);
+    for (const contents of [
+      CARD.replace("</section>", ""),
+      new Uint8Array([0x3c, 0xff, 0xfe, 0x3e]),
+    ]) {
+      server.write("src/Card.tsx", contents);
+      const [result] = await resolve(server, h2());
+      expect(result).toEqual({
+        state: "unavailable",
+        candidateId: expect.any(String),
+        claim: "element-creation",
+        reason: "unsupported",
+        read: { file: ref("src/Card.tsx"), fileRevision: revision(contents) },
+      });
+    }
+  });
+
+  it("places JSX in a file with a byte order mark and CRLF line endings by its own lines", async () => {
+    const crlf = `\ufeff${CARD.replaceAll("\n", "\r\n")}`;
+    await server.serve("src/Card.tsx", crlf);
     const [result] = await resolve(server, h2());
-    expect(result).toEqual({
-      state: "unavailable",
-      candidateId: expect.any(String),
-      claim: "element-creation",
-      reason: "unsupported",
-      read: { file: ref("src/Card.tsx"), fileRevision: revisionOf(broken) },
+    expect(result).toMatchObject({
+      state: "verified",
+      target: { location: rangeOf(crlf, "<h2", "</h2>") },
+      // Of the raw bytes, the mark and the carriage returns with them.
+      fileRevision: revision(crlf),
+      sourceMap: { sourceCheck: "matches" },
     });
   });
 });
@@ -546,14 +791,29 @@ describe("a component's definition", () => {
     "  return rows.map((row) => <li key={row}>{row}</li>);",
     "}",
     "",
+    "class Maker {",
+    "  element = <s />;",
+    "}",
+    "",
+    "export function Made() {",
+    "  return new Maker().element;",
+    "}",
+    "",
+    "export function Once() {",
+    "  return (() => <u />)();",
+    "}",
+    "",
     "export const banner = <aside />;",
     "",
     "export { Badge };",
     "",
   ].join("\n");
 
-  async function definitions(...calls: Array<[string, number?]>): Promise<ResolutionResult[]> {
-    await server.serve("src/forms.tsx", DEFINITIONS);
+  async function definitions(
+    source: string,
+    ...calls: Array<[string, number?]>
+  ): Promise<ResolutionResult[]> {
+    await server.serve("src/forms.tsx", source);
     return resolve(
       server,
       selection(
@@ -571,6 +831,7 @@ describe("a component's definition", () => {
 
   it("is the declaration of the function the frame runs in, through every wrapper around it", async () => {
     const results = await definitions(
+      DEFINITIONS,
       ['jsxDEV("section"'],
       ['jsxDEV("b"'],
       ['jsxDEV("input"'],
@@ -587,21 +848,75 @@ describe("a component's definition", () => {
       // A component a factory returns is the inner function, not the factory.
       rangeOf(DEFINITIONS, "function Bordered", "\n  }"),
     ]);
-    // What a component's own element was made through can be a helper it calls, or a method.
-    const [helper, method] = await definitions(["renderRows(rows, total);"], ["map((row)", 1]);
-    expect(declared(helper)).toEqual(rangeOf(DEFINITIONS, "export function Rows", "\n}"));
-    expect(declared(method)).toEqual(rangeOf(DEFINITIONS, "export function Items", "\n}"));
     expect(results[0]).toMatchObject({
       state: "verified",
       claim: "component-definition",
-      fileRevision: revisionOf(DEFINITIONS),
+      fileRevision: revision(DEFINITIONS),
       sourceMap: { sourceCheck: "matches" },
     });
   });
 
+  it("is found through whatever call made the component's element: a helper, a method, a constructor", async () => {
+    const results = await definitions(
+      DEFINITIONS,
+      ["renderRows(rows, total);"],
+      ["map((row)", 1],
+      ["new Maker()"],
+      // An IIFE's callee starts where the call does: the function making it is Once.
+      ['() => /* @__PURE__ */ jsxDEV("u"']
+    );
+    expect(results.map(declared)).toEqual([
+      rangeOf(DEFINITIONS, "export function Rows", "\n}"),
+      rangeOf(DEFINITIONS, "export function Items", "\n}"),
+      rangeOf(DEFINITIONS, "export function Made", "\n}"),
+      rangeOf(DEFINITIONS, "export function Once", "\n}"),
+    ]);
+  });
+
+  it("takes a method call's frame on its dot as well as its name, as a compiled call's map puts it", () => {
+    const source =
+      "export function Items({ rows }) {\n  return rows?.map((row) => <li>{row}</li>);\n}\n";
+    const parsed = parseSource("src/Items.jsx", source)!;
+    const line = 2;
+    const column = (needle: string) => source.split("\n")[line - 1]!.indexOf(needle);
+    const declaration = rangeOf(source, "export function Items", "\n}");
+    for (const at of [column("rows?."), column("?.map"), column("map(")]) {
+      expect(parsed.definitionAt({ line, column: at }), String(at)).toEqual(declaration);
+    }
+    // Inside the receiver, or past the name, is no call.
+    expect(parsed.definitionAt({ line, column: column("rows?.") + 1 })).toBeNull();
+    expect(parsed.definitionAt({ line, column: column("map(") + 1 })).toBeNull();
+  });
+
+  it("is the default export, named, wrapped or anonymous", async () => {
+    const cases: Array<[string, string, string, string]> = [
+      [
+        "export default function App() {\n  return <main />;\n}\n",
+        'jsxDEV("main"',
+        "export default function App",
+        "\n}",
+      ],
+      [
+        'import { memo } from "react";\nexport default memo(function Tile() {\n  return <i />;\n});\n',
+        'jsxDEV("i"',
+        "export default memo",
+        "});",
+      ],
+      ["export default () => <b />;\n", 'jsxDEV("b"', "export default", ";"],
+    ];
+    for (const [source, call, start, end] of cases) {
+      const [result] = await definitions(source, [call]);
+      expect(declared(result), start).toEqual(rangeOf(source, start, end));
+    }
+  });
+
   it("is a mismatch for a frame in no function, or one that stands at no call", async () => {
     // Where a frame from some other version of the file would land: in a function, at no call.
-    const [outside, uncalled] = await definitions(['jsxDEV("aside"'], ["total = rows"]);
+    const [outside, uncalled] = await definitions(
+      DEFINITIONS,
+      ['jsxDEV("aside"'],
+      ["total = rows"]
+    );
     for (const result of [outside, uncalled]) {
       expect(result).toMatchObject({
         state: "unavailable",

@@ -47,7 +47,9 @@ import { RuntimeChild, request } from "./fixtures.js";
  *
  * The page's module loader is the one piece stood in for: served modules are
  * run with `vm` under their dev-server URL, imports bound by a prologue on
- * their first line, so every line a frame can land on is the line served.
+ * their first line, so every call is at the line and column served. React
+ * and react-dom run as Node loads them, not as Vite pre-bundles them for a
+ * browser; their frames are passed over either way.
  */
 
 const require = createRequire(import.meta.url);
@@ -61,7 +63,7 @@ const { createRoot } = require("react-dom/client") as typeof import("react-dom/c
 const FILES: Record<string, string> = {
   "src/main.tsx": [
     'import type { Root } from "react-dom/client";',
-    'import { App } from "./App";',
+    'import App from "./App";',
     "",
     "export function mount(root: Root) {",
     "  root.render(<App />);",
@@ -69,14 +71,36 @@ const FILES: Record<string, string> = {
     "",
   ].join("\n"),
   "src/App.tsx": [
+    'import type { ReactNode } from "react";',
     'import { Card } from "./Card";',
     'import { Badge } from "./ui";',
     "",
-    "export function App() {",
+    "function Frame({ children }: { children: ReactNode }) {",
+    "  return children;",
+    "}",
+    "",
+    "function List({ items }: { items: string[] }) {",
+    "  return (",
+    "    <>",
+    "      {items.map((item) => (",
+    '        <li key={item} className="entry">',
+    "          {item}",
+    "        </li>",
+    "      ))}",
+    "    </>",
+    "  );",
+    "}",
+    "",
+    "export default function App() {",
     "  return (",
     '    <main className="app">',
     '      <Card title="Fixture" />',
     "      <Badge n={3} />",
+    '      <ul className="list">',
+    "        <Frame>",
+    '          <List items={["one", "two"]} />',
+    "        </Frame>",
+    "      </ul>",
     "    </main>",
     "  );",
     "}",
@@ -137,13 +161,28 @@ const REFRESH_RUNTIME = {
 const IMPORT = /import\s*(?:(\{[^}]*\})|\*\s*as\s+([\w$]+)|([\w$]+))\s*from\s*"([^"]+)";?/g;
 const REEXPORT = /export\s*(\{[^}]*\})\s*from\s*"([^"]+)";?/g;
 const AS = /([\w$]+)\s+as\s+([\w$]+)/g;
+/** As wide as `import.meta`, so a line holding it keeps its columns. */
+const META = "__vite_meta";
+
+/** Only an import's or an export's own line changes, and no call on any line moves. */
+function expectSamePositions(served: string, run: string): void {
+  const before = served.split("\n");
+  const after = run.split("\n");
+  expect(after).toHaveLength(before.length);
+  before.forEach((line, index) => {
+    if (after[index] === line) return;
+    expect(line, `line ${index + 1} changed`).toMatch(/^(?:import|export)\b|import\.meta/);
+    if (!/^(?:import|export\s*\{)/.test(line)) expect(after[index]).toHaveLength(line.length);
+    expect(line).not.toMatch(/_jsxDEV\(/);
+  });
+}
 
 /**
  * Runs what the dev server serves for `url`, and what it imports from the
  * app, the way a page would: under the module's own URL. Imports are hoisted
- * into a prologue on line 1, which only ever holds imports, and every other
- * line keeps its columns (`export` becomes as many spaces), so the generated
- * positions V8 reports are the dev server's own.
+ * into a prologue on line 1 and leave their newlines behind, `export` becomes
+ * as many spaces and `import.meta` a name as wide, so every call keeps the
+ * line and column Vite gave it, as `expectSamePositions` holds it to.
  */
 class PageModules {
   private readonly loaded = new Map<string, Record<string, unknown>>();
@@ -172,32 +211,37 @@ class PageModules {
       if (specifier.startsWith("/src/")) local.push(specifier);
       return `__import(${JSON.stringify(specifier)})`;
     };
+    const newlines = (text: string) => text.replace(/[^\n]/g, "");
     let code = served.code
-      .replace(IMPORT, (_all, named?: string, namespace?: string, single?: string, from = "") => {
+      .replace(IMPORT, (all, named?: string, namespace?: string, single?: string, from = "") => {
         if (named) prologue.push(`var ${named.replace(AS, "$1: $2")} = ${bind(from)};`);
         else if (namespace) prologue.push(`var ${namespace} = ${bind(from)};`);
         else prologue.push(`var ${single} = ${bind(from)}.default;`);
-        return "";
+        return newlines(all);
       })
-      .replace(REEXPORT, (_all, named: string, from: string) => {
+      .replace(REEXPORT, (all, named: string, from: string) => {
         const module = `__reexport${prologue.length}`;
         prologue.push(`var ${module} = ${bind(from)};`);
         for (const entry of named.slice(1, -1).split(",")) {
           const [name, alias = name] = entry.trim().split(/\s+as\s+/);
           if (name) exported.push(`${alias}: ${module}.${name}`);
         }
-        return "";
+        return newlines(all);
       });
     for (const dependency of local) await this.load(dependency);
-    exported.push(
-      ...[...code.matchAll(/^export\s+(?:function|const|let|class)\s+([\w$]+)/gm)].map(
-        (match) => match[1]!
-      )
-    );
-    code = code.replace(/^export(?=\s+(?:function|const|let|class)\s)/gm, "      ");
-    code = code.replaceAll("import.meta", "__meta");
+    for (const match of code.matchAll(/^export\s+(?:function|const|let|class)\s+([\w$]+)/gm)) {
+      exported.push(match[1]!);
+    }
+    for (const match of code.matchAll(/^export default\s+(?:function|class)\s+([\w$]+)/gm)) {
+      exported.push(`default: ${match[1]!}`);
+    }
+    code = code
+      .replace(/^export default(?=\s+(?:function|class)\s)/gm, " ".repeat("export default".length))
+      .replace(/^export(?=\s+(?:function|const|let|class)\s)/gm, " ".repeat("export".length))
+      .replaceAll("import.meta", META);
+    expectSamePositions(served.code, code);
     const run = vm.runInThisContext(
-      `(function (__import, __meta) {${prologue.join(" ")}${code}\nreturn { ${exported.join(", ")} };\n})`,
+      `(function (__import, ${META}) {${prologue.join(" ")}${code}\nreturn { ${exported.join(", ")} };\n})`,
       { filename: `${this.origin}${key}` }
     ) as (load: (specifier: string) => unknown, meta: object) => Record<string, unknown>;
     Object.assign(
@@ -216,6 +260,14 @@ class PageModules {
     if (local) return local;
     throw new Error(`the page imported ${specifier}`);
   }
+}
+
+/** Whether the compiler memoized the function `name` declares, rather than bailing out of it. */
+function compiled(code: string, name: string): boolean {
+  const start = code.search(new RegExp(`function ${name}\\(`));
+  if (start === -1) throw new Error(`no function ${name} was served`);
+  const body = code.slice(start, code.indexOf("\n}", start));
+  return /= _c\(\d+\)/.test(body);
 }
 
 const CHANNEL = "react-resolver-test";
@@ -284,14 +336,10 @@ describe.each([
     return observation;
   }
 
-  /** Each claim the host made for the selection, by component (null for the element's own) and kind. */
-  async function trace(
-    observation: SelectionObservation,
-    knownRevisions: Array<{
-      file: { workspaceId: string; path: string };
-      revision: FileRevision;
-    }> = []
-  ) {
+  type Pinned = Array<{ file: { workspaceId: string; path: string }; revision: FileRevision }>;
+
+  /** Each claim the host made for the selection: the element's own, and each component's by kind. */
+  async function trace(observation: SelectionObservation, knownRevisions: Pinned = []) {
     const response = await host.resolve({ ...request(workspaceId, [observation]), knownRevisions });
     const results = new Map(
       response.outcomes[0]!.results.map((result) => [result.candidateId, result])
@@ -313,14 +361,26 @@ describe.each([
     return { element: of(observation.sourceCandidates), component };
   }
 
-  /** The one verified result among a claim's frames: the frames below it are its callers. */
+  /**
+   * A claim's one verified frame. Every other frame is a library's, a caller
+   * or outside the app, and none of them is made any claim for.
+   */
   function verified(results: ResolutionResult[]) {
-    const found = results.filter((result) => result.state === "verified");
-    expect(found).toHaveLength(1);
-    const [result] = found;
+    expect(results.filter((result) => result.state !== "unavailable").map((r) => r.state)).toEqual([
+      "verified",
+    ]);
+    const result = results.find((entry) => entry.state === "verified");
     return result?.state === "verified"
       ? { file: result.target.file, location: result.target.location }
       : null;
+  }
+
+  /** A claim's one stale frame, with nothing verified or placed for any other. */
+  function stale(results: ResolutionResult[]) {
+    expect(results.filter((result) => result.state !== "unavailable").map((r) => r.state)).toEqual([
+      "stale",
+    ]);
+    return results.find((entry) => entry.state === "stale");
   }
 
   beforeAll(async () => {
@@ -370,10 +430,16 @@ describe.each([
     if (root) fs.rmSync(root, { recursive: true, force: true });
   });
 
-  it("runs the variant it names", async () => {
-    const served = (await server.transformRequest("/src/Card.tsx"))!.code;
-    // A compiler bail-out would leave the "on" case proving nothing.
-    expect(served.includes("react/compiler-runtime")).toBe(compiler);
+  it("runs every component it traces compiled, or not, as the variant says", async () => {
+    // A bail-out in any one of them would leave the "on" case proving nothing for it.
+    for (const [module, names] of [
+      ["/src/Card.tsx", ["Title", "Card"]],
+      ["/src/App.tsx", ["App", "List"]],
+      ["/src/ui/Badge.tsx", ["Badge"]],
+    ] as const) {
+      const code = (await server.transformRequest(module))!.code;
+      for (const name of names) expect(compiled(code, name), name).toBe(compiler);
+    }
   });
 
   it("places a picked element at the JSX that made it", async () => {
@@ -421,7 +487,7 @@ describe.each([
     });
     expect(verified(component("App").definition)).toEqual({
       file: ref("src/App.tsx"),
-      location: rangeOf(app, "export function App", "\n}"),
+      location: rangeOf(app, "export default function App", "\n}"),
     });
   });
 
@@ -442,11 +508,40 @@ describe.each([
     });
   });
 
+  it("finds a component whose elements a callback makes, and claims nothing for one that only passes children on", async () => {
+    const { element, component } = await trace(pick("li.entry"));
+    const app = FILES["src/App.tsx"]!;
+    expect(verified(element)).toEqual({
+      file: ref("src/App.tsx"),
+      location: rangeOf(app, "<li", "</li>"),
+    });
+    expect(verified(component("List").invocation)).toEqual({
+      file: ref("src/App.tsx"),
+      location: rangeOf(app, "<List", "/>"),
+    });
+    // The frame React called List through stands at `items.map(…)`, not at any JSX.
+    expect(verified(component("List").definition)).toEqual({
+      file: ref("src/App.tsx"),
+      location: rangeOf(app, "function List", "\n}"),
+    });
+    expect(verified(component("Frame").invocation)).toEqual({
+      file: ref("src/App.tsx"),
+      location: rangeOf(app, "<Frame>", "</Frame>"),
+    });
+    // Every element under Frame was made by App or List: nothing says where Frame is written.
+    expect(component("Frame").definition).toEqual([]);
+  });
+
   it("calls a selection stale after an edit, never a line in the edited file, and traces it again once the page has it", async () => {
     const before = pick("h2.title");
-    const pinned = [{ file: ref("src/Card.tsx"), revision: revision("src/Card.tsx") }];
+    const first = await trace(before);
+    const traced = first.element.find((result) => result.state === "verified");
+    const pinnedRevision = traced?.state === "verified" ? traced.fileRevision : null;
+    expect(pinnedRevision).toBe(revision("src/Card.tsx"));
+    const pinned = [{ file: ref("src/Card.tsx"), revision: pinnedRevision! }];
     const edited = `// moved\n// down\n${FILES["src/Card.tsx"]}`;
     const cardPath = path.join(root, "src/Card.tsx");
+    const original = (await server.transformRequest("/src/Card.tsx"))!.code;
     fs.writeFileSync(cardPath, edited);
     try {
       // On disk, but neither the dev server nor the page has it yet.
@@ -457,36 +552,39 @@ describe.each([
         lagging.component("Title").definition,
         lagging.component("Card").definition,
       ]) {
-        expect(results.filter((result) => result.state === "verified")).toEqual([]);
-        expect(results).toContainEqual(
-          expect.objectContaining({
-            state: "stale",
-            reason: "file-changed",
-            currentFileRevision: revision("src/Card.tsx"),
-          })
-        );
+        expect(stale(results)).toMatchObject({
+          reason: "file-changed",
+          held: { state: "mapped", target: { file: ref("src/Card.tsx") } },
+          currentFileRevision: revision("src/Card.tsx"),
+        });
       }
       // App.tsx is untouched, and still says where Card is called.
       expect(verified(lagging.component("Card").invocation)?.file).toEqual(ref("src/App.tsx"));
 
       // The dev server has the edit, the page does not: its frames are the old module's.
-      const servedBefore = (await server.transformRequest("/src/Card.tsx"))!.code;
       server.watcher.emit("change", cardPath);
       await vi.waitFor(
         async () =>
-          expect((await server.transformRequest("/src/Card.tsx"))!.code).not.toBe(servedBefore),
+          expect((await server.transformRequest("/src/Card.tsx"))!.code).not.toBe(original),
         { timeout: 5_000 }
       );
       const held = await trace(before, pinned);
-      expect(held.element).toContainEqual(
-        expect.objectContaining({
-          state: "stale",
+      for (const results of [
+        held.element,
+        held.component("Title").invocation,
+        held.component("Title").definition,
+        held.component("Card").definition,
+      ]) {
+        expect(stale(results)).toMatchObject({
           reason: "file-changed",
-          held: expect.objectContaining({ fileRevision: pinned[0]!.revision }),
+          held: {
+            state: "observed",
+            target: { file: ref("src/Card.tsx"), location: null },
+            fileRevision: pinnedRevision,
+          },
           currentFileRevision: revision("src/Card.tsx"),
-        })
-      );
-      expect(held.element.filter((result) => result.state === "verified")).toEqual([]);
+        });
+      }
 
       // The page runs the new module and the selection is made again: the new line.
       await render();
@@ -495,12 +593,20 @@ describe.each([
         file: ref("src/Card.tsx"),
         location: rangeOf(edited, "<h2", "</h2>"),
       });
-      expect(rangeOf(edited, "<h2", "</h2>").line).toBe(
-        rangeOf(FILES["src/Card.tsx"]!, "<h2", "</h2>").line + 2
-      );
     } finally {
+      // The page, the dev server and the disk back where the other cases expect them.
       fs.writeFileSync(cardPath, FILES["src/Card.tsx"]!);
       server.watcher.emit("change", cardPath);
+      // Served again with its HMR timestamp in the self-import, and otherwise as it was.
+      const untimed = (code: string) => code.replace(/\?t=\d+/g, "");
+      await vi.waitFor(
+        async () =>
+          expect(untimed((await server.transformRequest("/src/Card.tsx"))!.code)).toBe(
+            untimed(original)
+          ),
+        { timeout: 5_000 }
+      );
+      await render();
     }
-  });
+  }, 30_000);
 });

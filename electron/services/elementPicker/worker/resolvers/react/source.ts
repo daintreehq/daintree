@@ -161,20 +161,35 @@ function startsAt(node: unknown, position: Position): boolean {
   return !!start && start.line === position.line && start.column === position.column;
 }
 
+/** Whether `position` lies from the end of the object a method is called on to the start of its name. */
+function atMethod(callee: unknown, position: Position): boolean {
+  if (!isNode(callee) || !/MemberExpression$/.test(callee.type)) return false;
+  const from = isNode(callee.object) ? callee.object.loc?.end : undefined;
+  const to = isNode(callee.property) ? callee.property.loc?.start : undefined;
+  return !!from && !!to && !before(position, from) && !before(to, position);
+}
+
 /**
  * Whether `node` is a call a stack frame can stand at. V8 places a frame at
- * the call it was making, and a map takes that back to a JSX element's `<` or
- * to the callee, or the property a method is called through. Anywhere else is
+ * the call it was making, and a map takes that back to a JSX element's `<`,
+ * to the callee, or to the property a method is called through: its name, or
+ * the `.` before it, where a compiled call's map can put it. Anywhere else is
  * a position from some other version of the file.
  */
 function isCallAt(node: AstNode, position: Position): boolean {
-  if (node.type === "JSXElement") return startsAt(node, position);
-  if (node.type !== "CallExpression" && node.type !== "OptionalCallExpression") return false;
-  const callee = node.callee;
-  return (
-    startsAt(callee, position) ||
-    (isNode(callee) && /MemberExpression$/.test(callee.type) && startsAt(callee.property, position))
-  );
+  switch (node.type) {
+    case "JSXElement":
+      return startsAt(node, position);
+    case "NewExpression":
+      return startsAt(node, position) || startsAt(node.callee, position);
+    case "TaggedTemplateExpression":
+      return startsAt(node.tag, position);
+    case "CallExpression":
+    case "OptionalCallExpression":
+      return startsAt(node.callee, position) || atMethod(node.callee, position);
+    default:
+      return false;
+  }
 }
 
 /**
@@ -231,8 +246,11 @@ class Parsed implements ParsedSource {
       path.push(node);
       node = children(node).find((child) => contains(child, position));
     }
-    if (!path.some((node) => isCallAt(node, position))) return null;
-    for (let index = path.length - 1; index >= 0; index -= 1) {
+    // The function making the call, not one the call is of: an IIFE's own
+    // body is below the call, and starts where the call does.
+    let call = path.length - 1;
+    while (call >= 0 && !isCallAt(path[call]!, position)) call -= 1;
+    for (let index = call - 1; index >= 0; index -= 1) {
       if (FUNCTION_TYPES.has(path[index]!.type)) return locationOf(declarationOf(path, index));
     }
     return null;
@@ -254,7 +272,8 @@ class Parsed implements ParsedSource {
           });
         }
       }
-      pending.push(...children(node));
+      // One at a time: a program of a few hundred thousand statements is past what a spread passes.
+      for (const child of children(node)) pending.push(child);
     }
     return elements;
   }

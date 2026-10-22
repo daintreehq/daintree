@@ -40,6 +40,7 @@ import {
   tagOf,
   canonicalFiber,
   ownedElementFiber,
+  renderFunction,
   type Fiber,
 } from "./reactFiber.js";
 import { componentFrame, creationFrames, type CreationFrame } from "./reactStack.js";
@@ -127,6 +128,14 @@ function cutOwnerCycles(records: ComponentRecord[]): boolean {
   return cut;
 }
 
+/** Whether a frame V8 named `frameName` is a call of `render`: by its name, a class's method, or anonymous. */
+function ranAs(frameName: string | null, render: unknown): boolean {
+  const name = field(render, "name");
+  if (typeof name !== "string") return false;
+  if (name === "") return frameName === null;
+  return frameName === name || (frameName?.startsWith(`${name}.`) ?? false);
+}
+
 class CandidateWriter {
   private next = 0;
   private chars = 0;
@@ -148,11 +157,18 @@ class CandidateWriter {
     return out;
   }
 
-  /** Where `component` is written, from an element its own render made; nothing when it made none. */
+  /**
+   * Where `component` is written, from an element its own render made, and
+   * nothing when it made none. React makes an element whose ref another
+   * component overrides with `cloneElement` that component's own while
+   * keeping the stack it was first made with, so the frame counts only when
+   * V8 named it for the function React renders the component with.
+   */
   writeDefinition(component: Fiber, budget: Budget): SourceCandidate[] {
     const owned = ownedElementFiber(component, budget);
     const frame = owned === null ? null : componentFrame(field(owned, "_debugStack"));
-    const candidate = frame === null ? null : this.candidate("component-definition", frame);
+    if (frame === null || !ranAs(frame.name, renderFunction(component))) return [];
+    const candidate = this.candidate("component-definition", frame);
     return candidate === null ? [] : [candidate];
   }
 

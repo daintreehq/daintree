@@ -74,11 +74,37 @@ function positionOf(location: SourceLocation): { line: number; column: number } 
   };
 }
 
-function heldOf(mapped: Mapped): HeldTarget {
+function heldOf(mapped: Mapped, fileRevision = mapped.fileRevision): HeldTarget {
+  return { state: "mapped", target: mapped.target, fileRevision, sourceMap: mapped.sourceMap };
+}
+
+/**
+ * A claim that held in the file as read, given the place it was found there.
+ * Only a map whose copy of the source is the file's bytes says the page's
+ * frame belongs to that file as it is now; with no copy to compare, the place
+ * the map named is all that is reported, `mapped` at the revision read.
+ */
+function heldResult(
+  candidate: StackFrameCandidate,
+  mapped: Mapped,
+  source: ReadSource,
+  location: SourceLocation
+): ResolutionResult {
+  const claim = { candidateId: candidate.candidateId, claim: candidate.kind };
+  if (mapped.sourceMap.sourceCheck !== "matches") {
+    return {
+      state: "mapped",
+      ...claim,
+      target: mapped.target,
+      fileRevision: source.revision,
+      sourceMap: mapped.sourceMap,
+    };
+  }
   return {
-    state: "mapped",
-    target: mapped.target,
-    fileRevision: mapped.fileRevision,
+    state: "verified",
+    ...claim,
+    target: { file: source.file, location },
+    fileRevision: source.revision,
     sourceMap: mapped.sourceMap,
   };
 }
@@ -181,6 +207,12 @@ function holds(element: JsxElement, claim: JsxClaim): boolean {
  * calls `createElement` or `jsx` for its caller — which frame wrote the
  * element is not something the stack says: the app's own frames from there
  * down are reported as the alternatives, and none is chosen.
+ *
+ * A dev server serves the latest transform of a module whatever version of
+ * it the page ran, so a frame is checked against the module as it is now. A
+ * selection made while an edit is still on its way to the page can therefore
+ * only be told apart once it is held: the revisions a result was pinned to
+ * are what makes the next resolve of it `stale`.
  */
 export async function resolveFrames(
   job: ReactJob,
@@ -223,19 +255,12 @@ export async function resolveFrames(
       answers.set(
         candidate.candidateId,
         holds(element, claim)
-          ? {
-              state: "verified",
-              candidateId: candidate.candidateId,
-              claim: candidate.kind,
-              target: { file: source.file, location: element.location },
-              fileRevision: source.revision,
-              sourceMap: mapped.sourceMap,
-            }
+          ? heldResult(candidate, mapped, source, element.location)
           : unreadableResult(candidate, "mismatch", source)
       );
       continue;
     }
-    const alternatives = await callerTargets(job, ordered.slice(index + 1), mapped);
+    const alternatives = await callerTargets(job, ordered.slice(index + 1), mapped, source);
     answers.set(
       candidate.candidateId,
       alternatives.length >= 2
@@ -251,25 +276,34 @@ export async function resolveFrames(
   return answers;
 }
 
-/** The first frame of the app's own code, then each of its callers that maps into the app, distinct. */
+/**
+ * The first frame of the app's own code, then each of its callers that maps
+ * into the app, distinct, at the revision each file was read at. A caller in
+ * a file that has moved on since the map was built, or since it was pinned,
+ * is no place to offer.
+ */
 async function callerTargets(
   job: ReactJob,
   callers: StackFrameCandidate[],
-  first: Mapped
+  first: Mapped,
+  read: ReadSource
 ): Promise<HeldTarget[]> {
-  const targets = [heldOf(first)];
+  const targets = [heldOf(first, read.revision)];
   const seen = new Set([JSON.stringify(first.target)]);
   for (const caller of callers) {
     if (targets.length >= RESOLUTION_LIMITS.alternatives || job.cancelled) break;
     if (isLibraryUrl(caller.file)) continue;
     const mapped = await job.symbolicate(caller);
     if (!mapped.ok || isLibrary(mapped) || mapped.sourceMap.sourceCheck === "differs") continue;
-    const known = job.knownRevision(mapped.target.file);
-    if (known !== undefined && known !== mapped.fileRevision) continue;
     const key = JSON.stringify(mapped.target);
     if (seen.has(key)) continue;
+    const current = await job.read(mapped.target.file);
+    const revision = current.ok ? current.source.revision : mapped.fileRevision;
+    const known = job.knownRevision(mapped.target.file);
+    if (known !== undefined && known !== revision) continue;
+    if (mapped.fileRevision !== null && mapped.fileRevision !== revision) continue;
     seen.add(key);
-    targets.push(heldOf(mapped));
+    targets.push(heldOf(mapped, revision));
   }
   return targets;
 }
@@ -294,12 +328,5 @@ export async function resolveDefinition(
   if (!checked.ok) return checked.result;
   const location = checked.parsed.definitionAt(positionOf(mapped.target.location));
   if (location === null) return unreadableResult(candidate, "mismatch", checked.source);
-  return {
-    state: "verified",
-    candidateId: candidate.candidateId,
-    claim: candidate.kind,
-    target: { file: checked.source.file, location },
-    fileRevision: checked.source.revision,
-    sourceMap: mapped.sourceMap,
-  };
+  return heldResult(candidate, mapped, checked.source, location);
 }
