@@ -76,19 +76,31 @@ const candidateFields = {
   file: ReportedFileSchema,
 };
 
-const positionedCandidate = <K extends Exclude<SourceClaimKind, "file-hint">>(kind: K) =>
-  z.strictObject({ kind: z.literal(kind), ...candidateFields, location: SourceLocationSchema });
+const positionedCandidate = <K extends Exclude<SourceClaimKind, "file-hint" | "template-location">>(
+  kind: K
+) => z.strictObject({ kind: z.literal(kind), ...candidateFields, location: SourceLocationSchema });
 
 /**
  * One source claim the guest observed. A `file-hint` has no location field at
  * all, so a file-only hint cannot be presented as a line by any consumer that
  * accepts this schema.
+ *
+ * A `template-location` alone may say `location: null`: an element the page
+ * rendered from a template but never stamped with a position, as hydration
+ * leaves the tail of a Svelte template, and which it reports only by its place
+ * in that template (framework evidence). The host places it from that
+ * evidence and checks the place against the file, or does not place it at all;
+ * no position is ever made up to fill the field.
  */
 export const SourceCandidateSchema = z.discriminatedUnion("kind", [
   positionedCandidate("element-creation"),
   positionedCandidate("component-invocation"),
   positionedCandidate("component-definition"),
-  positionedCandidate("template-location"),
+  z.strictObject({
+    kind: z.literal("template-location"),
+    ...candidateFields,
+    location: SourceLocationSchema.nullable(),
+  }),
   z.strictObject({ kind: z.literal("file-hint"), ...candidateFields }),
 ]);
 export type SourceCandidate = z.infer<typeof SourceCandidateSchema>;

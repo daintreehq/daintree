@@ -175,6 +175,39 @@ describe("host runtime", () => {
     expect(sent.map((message) => message.type)).toEqual([]);
   });
 
+  it("asks main to locate a reported path, and refuses one the wire could not carry", async () => {
+    const located: unknown[] = [];
+    const { subject, next } = runtime({
+      svelte: async () => ({
+        framework: "svelte",
+        resolve: async (req, access, signal) => {
+          located.push(await access.locateFile("src/A.svelte", signal));
+          located.push(await access.locateFile("x".repeat(2049), signal));
+          return { requestId: req.requestId, documentEpoch: req.documentEpoch, outcomes: [] };
+        },
+      }),
+    });
+    subject.handle({
+      type: "resolve",
+      jobId: 9,
+      request: request("ws", [observation("el-1", [candidate("c-1", "src/A.svelte")])]),
+    });
+    const ask = await next("locate-file");
+    expect(ask).toMatchObject({ jobId: 9, reported: "src/A.svelte" });
+    const file = { workspaceId: "ws", path: "app/src/A.svelte" };
+    subject.handle({
+      type: "access-result",
+      jobId: 9,
+      accessId: ask.type === "locate-file" ? ask.accessId : 0,
+      result: { ok: true, value: file },
+    });
+    await next("resolved");
+    expect(located).toEqual([
+      { ok: true, value: file },
+      { ok: false, reason: "outside-workspace" },
+    ]);
+  });
+
   it("answers a cancelled job with every unanswered candidate cancelled", async () => {
     const { subject, next } = runtime({ svelte: async () => stubResolver() });
     subject.handle({

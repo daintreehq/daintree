@@ -49,6 +49,30 @@ export function lexicalSourcePath(roots: SourceRoots, relative: string): string 
 }
 
 /**
+ * The ref a page-reported path names, if it names a file inside the app. A dev
+ * server reports a file relative to the root it serves, which is the app root
+ * and in a monorepo not the worktree, or absolute when the file is outside
+ * that root; refs are relative to the worktree, so the two are reconciled here
+ * rather than by a resolver that is never told where either root is.
+ */
+export function locateReportedFile(
+  workspaceId: string,
+  roots: SourceRoots,
+  reported: unknown
+): SourceFileRef | null {
+  if (typeof reported !== "string" || reported.length === 0 || hasControlCharacter(reported)) {
+    return null;
+  }
+  const absolute = path.isAbsolute(reported)
+    ? path.resolve(reported)
+    : path.resolve(roots.appRoot, reported);
+  if (!isStrictlyInside(roots.appRoot, absolute)) return null;
+  const relative = path.relative(roots.worktreePath, absolute).split(path.sep).join("/");
+  const parsed = SourceFileRefSchema.safeParse({ workspaceId, path: relative });
+  return parsed.success ? parsed.data : null;
+}
+
+/**
  * The file a ref names, if it is one this workspace may read. Lexical first,
  * so a ref that points out of the app never touches the disk; then the real
  * path, so a symlink inside the app that leads out of it is refused too.
@@ -210,6 +234,14 @@ export class JobSourceAccess {
   /** Whether this job served the map a result says it was mapped through. */
   servedMap(mapUrl: string | null, revision: FileRevision): boolean {
     return this.servedMaps.has(mapKey(mapUrl, revision));
+  }
+
+  /** Lexical, so a refused path never touches the disk; the read that follows still contains the real path. */
+  locateFile(reported: unknown): SourceAccessResult<SourceFileRef> {
+    const stopped = this.stopped();
+    if (stopped) return stopped;
+    const file = locateReportedFile(this.options.workspaceId, this.options.roots, reported);
+    return file ? { ok: true, value: file } : { ok: false, reason: "outside-workspace" };
   }
 
   readSource(file: unknown): Promise<SourceAccessResult<RevisionedSource>> {

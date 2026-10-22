@@ -205,6 +205,14 @@ export interface ResolverSourceAccess {
     location: MapSourceLocation,
     signal: AbortSignal
   ): Promise<SourceAccessResult<SourceFileRef>>;
+  /**
+   * The workspace file a path the page reported names, read the way a dev
+   * server reports one: relative to the app root it serves, or absolute.
+   * Lexical, so it reads nothing and costs nothing against the budget, and a
+   * located file may still be missing or refused when it is read. A path that
+   * lands outside the app is `outside-workspace`.
+   */
+  locateFile(reported: string, signal: AbortSignal): Promise<SourceAccessResult<SourceFileRef>>;
 }
 
 /** Resolves the candidates of one framework; the host routes each candidate by its `framework`. */

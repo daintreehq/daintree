@@ -441,6 +441,67 @@ describe("ElementPickerHost", () => {
     ).rejects.toMatchObject({ code: "RESOLVER_FAILED" });
   });
 
+  it("holds a component's definition to the same authority as the call site that names it", async () => {
+    const served = sha256(path.join(root, "app", "src", "App.svelte"));
+    const naming = (definition: { path: string; fileRevision: string }): HostSourceResolver => ({
+      framework: "svelte",
+      resolve: async (req, access, signal) => {
+        const file = { workspaceId: req.workspaceId, path: "app/src/App.svelte" };
+        await access.readSource(file, signal);
+        await access.readSource(
+          { workspaceId: req.workspaceId, path: "app/src/Plain.svelte" },
+          signal
+        );
+        return {
+          requestId: req.requestId,
+          documentEpoch: req.documentEpoch,
+          outcomes: [
+            {
+              elementId: "el-1",
+              results: [
+                {
+                  state: "verified",
+                  candidateId: "c-1",
+                  claim: "component-invocation",
+                  target: { file, location: null },
+                  fileRevision: served,
+                  definition: {
+                    file: { workspaceId: req.workspaceId, path: definition.path },
+                    fileRevision: definition.fileRevision,
+                    specifier: "./Plain.svelte",
+                  },
+                },
+              ],
+            },
+          ],
+        };
+      },
+    });
+    const ask = async (resolver: HostSourceResolver) => {
+      const { host } = harness({ svelte: async () => resolver });
+      const id = await workspace(host);
+      const invocation = {
+        ...candidate("c-1", "app/src/App.svelte"),
+        kind: "component-invocation",
+        location: { lineBase: 1, columnBase: 0, columnUnit: "utf16", line: 1, column: 0 },
+      } as const;
+      return host.resolve(request(id, [observation("el-1", [], [invocation])]));
+    };
+    const plain = sha256(path.join(root, "app", "src", "Plain.svelte"));
+
+    await expect(
+      ask(naming({ path: "app/src/Plain.svelte", fileRevision: plain }))
+    ).resolves.toMatchObject({
+      outcomes: [{ results: [{ definition: { fileRevision: plain } }] }],
+    });
+    await expect(
+      ask(naming({ path: "app/src/Plain.svelte", fileRevision: `sha256:${"0".repeat(64)}` }))
+    ).rejects.toMatchObject({ code: "RESOLVER_FAILED" });
+    await expect(
+      ask(naming({ path: "other/Elsewhere.svelte", fileRevision: plain }))
+    ).rejects.toMatchObject({ code: "RESOLVER_FAILED" });
+  });
+
   it("rejects a resolver's answer that names a file outside the app", async () => {
     const wanderer: HostSourceResolver = {
       framework: "svelte",

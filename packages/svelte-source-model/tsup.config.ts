@@ -13,8 +13,8 @@ export default defineConfig({
   },
   clean: true,
   // The Svelte compiler is the one real dependency and it is large. Keeping it
-  // external means the consumer (the built-in plugin, bundled by esbuild into
-  // the main process) decides when it loads — the plugin `await import()`s this
-  // package lazily so the compiler never sits on the eager main-process path.
+  // external means the consumer, whose own esbuild bundle takes it in, decides
+  // when it loads: every consumer reaches this package behind a dynamic import
+  // so the compiler never sits on an eager path.
   external: ["svelte", "svelte/compiler"],
 });

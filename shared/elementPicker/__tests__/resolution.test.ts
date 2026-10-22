@@ -228,6 +228,40 @@ describe("ResolutionResultSchema", () => {
     ).toBe(true);
   });
 
+  it("says when a verified location came from structure rather than the reported position", () => {
+    const placed = { ...verified, placedBy: "structure" };
+    expect(ResolutionResultSchema.parse(placed)).toEqual(placed);
+    expect(ResolutionResultSchema.safeParse({ ...verified, placedBy: "guess" }).success).toBe(
+      false
+    );
+    expect(
+      ResolutionResultSchema.safeParse({ ...stale, held: { ...stale.held, placedBy: "structure" } })
+        .success
+    ).toBe(true);
+  });
+
+  it("lets only a verified component invocation name the definition it invokes", () => {
+    const definition = {
+      file: { ...file, path: "src/lib/Card.svelte" },
+      fileRevision: REVISION_B,
+      specifier: "$lib/Card.svelte",
+    };
+    const invocation = { ...verified, claim: "component-invocation", definition };
+    expect(ResolutionResultSchema.parse(invocation)).toEqual(invocation);
+    expect(ResolutionResultSchema.safeParse({ ...verified, definition }).success).toBe(false);
+    expect(
+      ResolutionResultSchema.safeParse({ ...observed, claim: "component-invocation", definition })
+        .success
+    ).toBe(false);
+    // A definition is a file read at a revision, never one taken on trust.
+    expect(
+      ResolutionResultSchema.safeParse({
+        ...invocation,
+        definition: { ...definition, fileRevision: null },
+      }).success
+    ).toBe(false);
+  });
+
   it("rejects a revision that is not a sha256 content hash", () => {
     expect(
       ResolutionResultSchema.safeParse({ ...verified, fileRevision: "a".repeat(64) }).success

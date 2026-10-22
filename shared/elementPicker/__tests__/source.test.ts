@@ -111,6 +111,21 @@ describe("SourceCandidateSchema", () => {
     expect(SourceCandidateSchema.safeParse(positionless).success).toBe(false);
   });
 
+  it("lets only a template location say it has no stamped position", () => {
+    const placed = {
+      kind: "template-location",
+      candidateId: "c-1",
+      framework: "svelte",
+      extraction: { kind: "runtime-field", field: "__svelte_meta.parent" },
+      file: "src/routes/+page.svelte",
+      location: null,
+    };
+    expect(SourceCandidateSchema.parse(placed)).toEqual(placed);
+    for (const kind of ["element-creation", "component-invocation", "component-definition"]) {
+      expect(SourceCandidateSchema.safeParse({ ...placed, kind }).success).toBe(false);
+    }
+  });
+
   it("accepts a file-only hint and rejects one that carries any position", () => {
     const hint = {
       kind: "file-hint",

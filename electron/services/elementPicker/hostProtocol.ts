@@ -70,6 +70,12 @@ export const HostOutboundSchema = z.discriminatedUnion("type", [
     source: z.string().max(4096),
     sourceRoot: z.string().max(4096).nullable(),
   }),
+  z.strictObject({
+    type: z.literal("locate-file"),
+    jobId: JobIdSchema,
+    accessId: JobIdSchema,
+    reported: z.string().min(1).max(2048),
+  }),
   // Unbounded: a bootstrap failure posts a whole stack, and refusing it would
   // misreport a failed start as a malformed message.
   z.strictObject({ type: z.literal("fatal"), message: z.string() }),
@@ -90,4 +96,5 @@ export type HostOutbound =
       source: string;
       sourceRoot: string | null;
     }
+  | { type: "locate-file"; jobId: number; accessId: number; reported: string }
   | { type: "fatal"; message: string };
