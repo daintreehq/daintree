@@ -70,6 +70,7 @@ describe("forwarded snapshot reads", () => {
 
   it("passes a null snapshot, other channels, and refusals through untouched", async () => {
     await expect(forward(CHANNELS.TERMINAL_GET_SERIALIZED_STATE, null)).resolves.toBeNull();
+    await expect(forward(CHANNELS.TERMINAL_GET_SERIALIZED_STATES, null)).resolves.toBeNull();
     const other = { ...snapshot, continuation };
     await expect(forward("terminal:get-info", other)).resolves.toBe(other);
 

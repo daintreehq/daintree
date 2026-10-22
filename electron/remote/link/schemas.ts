@@ -176,13 +176,16 @@ const TerminalResetSchema = z.object({
       data: z.string(),
       cols: z.number().int().min(1).max(MAX_TERMINAL_GRID_DIMENSION),
       rows: z.number().int().min(1).max(MAX_TERMINAL_GRID_DIMENSION),
-      // Absent from a host that does not forward stream offsets.
+      // Absent from a host that does not forward stream offsets. One this side
+      // cannot read is dropped rather than failing the frame, which would end
+      // the session over metadata the repaint can do without.
       continuation: z
         .object({
           pendingEscapeTail: z.string().nullable(),
           streamOffset: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional(),
         })
-        .optional(),
+        .optional()
+        .catch(undefined),
     })
     .nullable(),
   seq: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),

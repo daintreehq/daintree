@@ -682,6 +682,48 @@ describe("terminal stream over the link", () => {
     });
   });
 
+  it("still repaints a terminal whose PTY restarts before its owed reset lands", async () => {
+    const h = await setup({ maxOutstandingBytes: 10 });
+    await h.connectLink();
+    h.pty().holdFences = true;
+    h.pty().stampStreams = true;
+
+    // Owed a repaint; the pty-host restarts the PTY before the snapshot comes back.
+    h.pty().emit("t1", "0123456789ABC");
+    await waitFor(() => h.pty().pendingFences.length === 1);
+    h.incarnations.set("t1", 2);
+    h.pty().emit("t1", "fresh");
+    await waitFor(() => h.pty().pendingFences.length === 2);
+
+    const fence = h.pty().pendingFences[1]!;
+    h.pty().postFenceMarker(fence);
+    h.pty().postSnapshot(fence, { data: "fresh", cols: 80, rows: 24 });
+    await waitFor(() => h.renderer().ofType("reset").length === 1);
+    expect(h.resets[0]).toMatchObject({ terminalId: "t1", incarnation: 2, seq: 1 });
+    expect(rendererData(h)).toEqual([]);
+  });
+
+  it("drops the continuation along with a snapshot too large to send", async () => {
+    const h = await setup({ maxOutstandingBytes: 10, maxSnapshotBytes: 4 });
+    await h.connectLink();
+    h.pty().holdFences = true;
+    h.pty().stampStreams = true;
+
+    h.pty().emit("t1", "0123456789ABC");
+    await waitFor(() => h.pty().pendingFences.length === 1);
+    const fence = h.pty().pendingFences[0]!;
+    h.pty().postFenceMarker(fence);
+    h.pty().postSnapshot(fence, {
+      data: "TOO LARGE",
+      cols: 80,
+      rows: 24,
+      continuation: { pendingEscapeTail: "\x1b[", streamOffset: 13 },
+    });
+
+    await waitFor(() => h.renderer().ofType("reset").length === 1);
+    expect(h.renderer().ofType("reset")[0]).toEqual({ type: "reset", id: "t1", snapshot: null });
+  });
+
   it("resets to a cleared screen when the snapshot never arrives", async () => {
     const h = await setup({ maxOutstandingBytes: 10, snapshotTimeoutMs: 30 });
     await h.connectLink();

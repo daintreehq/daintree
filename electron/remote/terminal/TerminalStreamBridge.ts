@@ -512,6 +512,12 @@ export class TerminalStreamBridge {
     const incarnation = this.incarnationOf(id);
     let stream = this.streams.get(id);
     if (!stream || stream.incarnation !== incarnation) {
+      // A repaint the old incarnation still owed (its pty-host connection was
+      // replaced, or the client fell behind) is owed to the new one: the
+      // client's screen is stale either way, and only a reset retires the
+      // restore fence it holds, which a restarted pty-host's offsets may sit
+      // below.
+      const owed = stream !== undefined && (stream.needsReset || stream.resetting);
       if (stream) {
         // The PTY restarted under the same id: its old output is history the
         // client already has; the new incarnation streams from seq 1.
@@ -524,6 +530,7 @@ export class TerminalStreamBridge {
         return;
       }
       stream = this.createStream(id, incarnation);
+      stream.needsReset = owed;
     }
     stream.seq++;
     stream.lastActivity = ++this.activityClock;

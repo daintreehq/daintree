@@ -1837,6 +1837,10 @@ describe("TerminalRestoreController replay fidelity (real xterm)", () => {
   });
 
   describe("host reset", () => {
+    beforeEach(() => {
+      gridScrollback = 200;
+    });
+
     /** The host reset the stream after parsing `parsed` chunks; the rest follow it. */
     async function resetMidStream(
       chunks: string[],
@@ -1866,6 +1870,16 @@ describe("TerminalRestoreController replay fidelity (real xterm)", () => {
     it("drops output the reset's snapshot already holds", async () => {
       const chunks = ["one\r\n", "two\r\n", "three\r\n"];
       expect(await resetMidStream(chunks, 2, 2)).toEqual(await uninterrupted(chunks));
+    });
+
+    it("fences and lands the tail through the incremental path for a large reset", async () => {
+      gridScrollback = 12000;
+      const filler = Array.from({ length: 11000 }, (_, i) => `line ${i} ${"x".repeat(24)}\r\n`);
+      const chunks = [filler.join(""), "tail \x1b[3", "1mRED"];
+      expect((await hostSnapshot(chunks, 2)).data.length).toBeGreaterThan(
+        INCREMENTAL_RESTORE_CONFIG.indicatorThresholdBytes
+      );
+      expect(await resetMidStream(chunks, 2, 1)).toEqual(await uninterrupted(chunks));
     });
 
     it("lands the escape tail of a reset to a screen that is only mid-sequence", async () => {
