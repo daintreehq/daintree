@@ -231,6 +231,23 @@ export function computeGuardedOverflow(
   return previousResult;
 }
 
+/**
+ * The `…` menu's ids once a per-project profile has demoted some buttons
+ * (#13771): what the width budget evicted plus what was demoted, in row order,
+ * so a demoted button sits in the menu where it would have sat on the row.
+ * Demoted ids are left out of the measured list, so they never cost the row
+ * any width.
+ */
+export function withDemotedOverflow(
+  orderedIds: readonly AnyToolbarButtonId[],
+  measuredOverflow: AnyToolbarButtonId[],
+  demotedIds: ReadonlySet<AnyToolbarButtonId>
+): AnyToolbarButtonId[] {
+  if (demotedIds.size === 0) return measuredOverflow;
+  const evicted = new Set<AnyToolbarButtonId>(measuredOverflow);
+  return orderedIds.filter((id) => demotedIds.has(id) || evicted.has(id));
+}
+
 function arraysEqual(a: readonly string[], b: readonly string[]): boolean {
   return a.length === b.length && a.every((v, i) => v === b[i]);
 }

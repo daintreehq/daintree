@@ -2132,6 +2132,13 @@ export const PROJECT_SETTINGS_SECTIONS: Readonly<
         keywords: ["name", "title", "label"],
       },
       {
+        id: "project-features",
+        section: "Features",
+        title: "Features",
+        description: "Show, demote or hide built-in surfaces such as forge stats in this project",
+        keywords: ["features", "presentation", "profile", "hide", "demote", "forge", "toolbar"],
+      },
+      {
         id: "project-dev-server",
         section: "Dev server",
         title: "Dev server command",

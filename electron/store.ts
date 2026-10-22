@@ -679,6 +679,26 @@ export interface StoreSchema {
   projectSurfaceChoices?: Record<string, ProjectSurfaceChoices>;
 
   /**
+   * Per-project presentation profiles (#13771): the levels the user set or
+   * accepted for each built-in surface, and their answer to the repository's
+   * `.daintree/presentation.json` suggestion. Read and written only through
+   * `services/projectPresentation/profileStore.ts`, which validates every
+   * entry. Out of the repository for the same reason as
+   * `projectPluginVisibility`. Same additive-key convention as
+   * `projectPluginTrust` above.
+   */
+  projectPresentation?: Record<
+    string,
+    {
+      levels?: Record<string, string>;
+      /** Suggestion hash → answer, the most recent few (`profileStore.ts`). */
+      suggestionAnswers?: Record<string, { answer: "accepted" | "declined"; decidedAt: number }>;
+      /** Bumped on every write; views drop snapshots older than one they hold. */
+      revision?: number;
+    }
+  >;
+
+  /**
    * Plugin agent-tool access, read and written only through
    * `services/pluginAgentMcp/projectEnablement.ts`: the per-endpoint answers
    * given before access levels (`projectAgentMcpEnablement`, read-only now),
@@ -984,6 +1004,7 @@ const storeOptions = {
     pluginCapabilityConsent: {},
     projectPluginTrust: {},
     projectSurfaceChoices: {},
+    projectPresentation: {},
     projectAgentMcpEnablement: {},
     projectAgentMcpAccess: {},
     pluginAgentMcpAccess: {},

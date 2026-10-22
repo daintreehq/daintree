@@ -1276,6 +1276,12 @@ export const CHANNELS = {
   AGENT_DEFAULTS_MIGRATE_LEGACY: "agent-defaults:migrate-legacy",
   AGENT_DEFAULTS_CHANGED: "agent-defaults:changed",
 
+  // Per-project presentation profile (#13771)
+  PROJECT_PRESENTATION_GET: "project-presentation:get",
+  PROJECT_PRESENTATION_SET_LEVEL: "project-presentation:set-level",
+  PROJECT_PRESENTATION_ANSWER_SUGGESTION: "project-presentation:answer-suggestion",
+  PROJECT_PRESENTATION_CHANGED: "project-presentation:changed",
+
   // Per-service connectivity channels
   CONNECTIVITY_GET_STATE: "connectivity:get-state",
   CONNECTIVITY_SERVICE_CHANGED: "connectivity:service-changed",

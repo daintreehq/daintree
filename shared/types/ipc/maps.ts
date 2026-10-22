@@ -1577,6 +1577,8 @@ export interface IpcEventMap {
   // Where projects are open may have changed — re-read with
   // `project-presence:get-snapshot`, which answers per window (#12597).
   "project-presence:changed": void;
+  // The sender project's presentation profile changed (#13771); main sends it to every view of that project.
+  "project-presentation:changed": import("./projectPresentation.js").ProjectPresentationSnapshot;
 
   /**
    * MCP server runtime-state transition. Distinct from
