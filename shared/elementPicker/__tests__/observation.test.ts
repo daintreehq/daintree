@@ -79,7 +79,7 @@ describe("observations", () => {
     expect(over({ shadowHosts: [host], shadowHostsTruncated: true })).toBe(true);
     expect(
       over({
-        shadowHosts: Array.from({ length: ELEMENT_CONTEXT_LIMITS.shadowHosts + 1 }, () => host),
+        shadowHosts: Array.from({ length: OBSERVATION_LIMITS.shadowHosts + 1 }, () => host),
       })
     ).toBe(false);
     expect(over({ shadowHosts: [{ ...host, tagName: "" }] })).toBe(false);

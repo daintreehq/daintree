@@ -18,7 +18,6 @@ export const GUEST_CONTEXT_LIMITS = {
   styles: 40,
   property: 64,
   value: 256,
-  shadowHosts: 32,
 } as const;
 
 const MAX_SELECTOR_DEPTH = 8;

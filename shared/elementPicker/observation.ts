@@ -10,7 +10,6 @@ export const ELEMENT_CONTEXT_LIMITS = {
   styles: 40,
   property: 64,
   value: 256,
-  shadowHosts: 32,
 } as const;
 
 export const OBSERVATION_LIMITS = {
@@ -20,6 +19,8 @@ export const OBSERVATION_LIMITS = {
   candidates: 16,
   detections: 8,
   signals: 16,
+  /** Shadow roots named around one element; real nesting is a handful deep. */
+  shadowHosts: 32,
 } as const;
 
 /**
@@ -73,7 +74,7 @@ export const ElementContextSchema = z.strictObject({
         label: z.string().max(OBSERVATION_LIMITS.label),
       })
     )
-    .max(ELEMENT_CONTEXT_LIMITS.shadowHosts)
+    .max(OBSERVATION_LIMITS.shadowHosts)
     .optional(),
   /** More roots enclose the element than the list holds; the outermost are the ones left out. */
   shadowHostsTruncated: z.literal(true).optional(),

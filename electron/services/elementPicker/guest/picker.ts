@@ -36,7 +36,7 @@ import {
   type LocateRequest,
 } from "../guestChannel.js";
 import { DetectionSet, detectAncestry, parentAcrossShadow } from "./detectors.js";
-import { GUEST_CONTEXT_LIMITS, classWordsOf, elementContextOf } from "./elementContext.js";
+import { classWordsOf, elementContextOf } from "./elementContext.js";
 import type { ExtractorContribution, PickerAvailability, PickerMode } from "./types.js";
 
 /** Restated from the shared schemas: a value import would bundle zod into the page. */
@@ -55,6 +55,7 @@ const LIMITS = {
   evidenceFields: 16,
   evidenceFieldName: 64,
   evidenceFieldValue: 256,
+  shadowHosts: 32,
 } as const;
 const MAX_RECT_PX = 2 ** 52;
 const FRAMEWORKS: ReadonlySet<string> = new Set([
@@ -809,7 +810,7 @@ export function createPicker(host: PickerHost): PickerHandle {
       root instanceof ShadowRoot;
       root = root.host.getRootNode()
     ) {
-      if (hosts.length >= GUEST_CONTEXT_LIMITS.shadowHosts) {
+      if (hosts.length >= LIMITS.shadowHosts) {
         return { shadowHosts: hosts, shadowHostsTruncated: true };
       }
       const shadowHost = root.host;

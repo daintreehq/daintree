@@ -4,7 +4,11 @@ import {
   ElementPickerEventSchema,
   type ElementPickerEvent,
 } from "../../../../../shared/elementPicker/protocol.js";
-import type { Capabilities, Capability } from "../../../../../shared/elementPicker/observation.js";
+import {
+  OBSERVATION_LIMITS,
+  type Capabilities,
+  type Capability,
+} from "../../../../../shared/elementPicker/observation.js";
 import { EXTRACTOR_REGISTRY_GLOBAL, channelEvent } from "../../guestChannel.js";
 import { createPicker, type PickerHandle } from "../picker.js";
 import { installExtractor } from "../registry.js";
@@ -941,7 +945,8 @@ describe("createPicker", () => {
   it("says when more shadow roots enclose a selection than it names, keeping the innermost", () => {
     document.body.innerHTML = '<x-level id="level-0"></x-level>';
     let host = document.getElementById("level-0")!;
-    for (let level = 1; level <= 33; level += 1) {
+    const limit = OBSERVATION_LIMITS.shadowHosts;
+    for (let level = 1; level <= limit + 1; level += 1) {
       const root = host.attachShadow({ mode: "open" });
       root.innerHTML = `<x-level id="level-${level}"></x-level>`;
       host = root.getElementById(`level-${level}`)!;
@@ -949,8 +954,8 @@ describe("createPicker", () => {
     start();
     host.click();
     const context = ofType("selectionChanged").at(-1)?.observations[0]?.context;
-    expect(context?.shadowHosts).toHaveLength(32);
-    expect(context?.shadowHosts?.[0]?.label).toBe("x-level#level-32");
+    expect(context?.shadowHosts).toHaveLength(limit);
+    expect(context?.shadowHosts?.[0]?.label).toBe(`x-level#level-${limit}`);
     expect(context?.shadowHostsTruncated).toBe(true);
   });
 
