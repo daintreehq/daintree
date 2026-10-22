@@ -341,6 +341,153 @@ describe("createPicker", () => {
     expect(observation?.sourceCandidates).toEqual([]);
   });
 
+  describe("element roots", () => {
+    const record = (rootElementIds: string[]) => ({
+      componentId: "c1",
+      framework: "react",
+      name: null,
+      environment: "client",
+      rootElementIds,
+      rootsComplete: true,
+      sourceCandidates: [],
+    });
+
+    /** Stands in for the main-world registry: names elements by event, then replies. */
+    function answerWith(
+      reply: (id: number, name: (node: Element, message: unknown) => void) => unknown
+    ): void {
+      document.addEventListener(
+        channelEvent(CHANNEL, "extract"),
+        (event) => {
+          const { id } = JSON.parse((event as CustomEvent<string>).detail) as { id: number };
+          const name = (node: Element, message: unknown) =>
+            node.dispatchEvent(
+              new CustomEvent(channelEvent(CHANNEL, "element"), {
+                detail: JSON.stringify(message),
+                composed: true,
+              })
+            );
+          const body = reply(id, name);
+          document.dispatchEvent(
+            new CustomEvent(channelEvent(CHANNEL, "extracted"), { detail: JSON.stringify(body) })
+          );
+        },
+        { capture: true, signal: testListeners.signal }
+      );
+    }
+
+    function selectedChain() {
+      return ofType("selectionChanged").at(-1)?.observations[0]?.componentChain;
+    }
+
+    it("turns a reply's root tokens into the picker's own element ids", () => {
+      const first = document.getElementById("first")!;
+      const second = document.getElementById("second")!;
+      answerWith((id, name) => {
+        name(first, { id, ref: 0 });
+        name(second, { id, ref: 1 });
+        return {
+          id,
+          contributions: [
+            {
+              framework: "react",
+              data: {
+                componentChain: {
+                  nearestId: "c1",
+                  components: [record(["ref-0", "ref-1", "ref-0"])],
+                  truncated: false,
+                },
+              },
+            },
+          ],
+        };
+      });
+      start();
+      second.click();
+      const secondId = ofType("selectionChanged").at(-1)?.observations[0]?.elementId;
+      first.click();
+      const firstId = ofType("selectionChanged").at(-1)?.observations[0]?.elementId;
+
+      expect(selectedChain()?.components[0]).toMatchObject({
+        rootElementIds: [firstId, secondId],
+        rootsComplete: true,
+      });
+    });
+
+    it("drops what it cannot resolve and says the roots are no longer complete", () => {
+      const first = document.getElementById("first")!;
+      const second = document.getElementById("second")!;
+      answerWith((id, name) => {
+        // One token claimed for two nodes names neither; a stale request's names nothing.
+        name(first, { id, ref: 0 });
+        name(second, { id, ref: 0 });
+        name(first, { id: id - 1, ref: 1 });
+        name(second, { id, ref: 2 });
+        second.remove();
+        return {
+          id,
+          contributions: [
+            {
+              framework: "react",
+              data: {
+                componentChain: {
+                  nearestId: "c1",
+                  // A page-world reader cannot know an element id, so a literal one names nothing.
+                  components: [record(["ref-0", "ref-1", "ref-2", "el-1"])],
+                  truncated: false,
+                },
+              },
+            },
+          ],
+        };
+      });
+      start();
+      first.click();
+
+      expect(selectedChain()?.components[0]).toMatchObject({
+        rootElementIds: [],
+        rootsComplete: false,
+      });
+    });
+
+    it("gives a description set off inside another's dispatch no answer of its own", () => {
+      const first = document.getElementById("first")!;
+      const second = document.getElementById("second")!;
+      let nested = false;
+      answerWith((id, name) => {
+        if (!nested) {
+          nested = true;
+          // Page code running inside the dispatch selects something else.
+          second.click();
+        }
+        name(first, { id, ref: 0 });
+        return {
+          id,
+          contributions: [
+            {
+              framework: "react",
+              data: {
+                componentChain: {
+                  nearestId: "c1",
+                  components: [record(["ref-0"])],
+                  truncated: false,
+                },
+              },
+            },
+          ],
+        };
+      });
+      start();
+      first.click();
+
+      const [inner, outer] = ofType("selectionChanged");
+      expect(inner?.observations[0]?.componentChain.components).toEqual([]);
+      expect(outer?.observations[0]?.componentChain.components[0]?.rootElementIds).toEqual([
+        outer?.observations[0]?.elementId,
+      ]);
+    });
+  });
+
   it("describes the selection again when the host asks, and reports one the document removed", () => {
     const handle = start();
     const target = document.getElementById("first")!;

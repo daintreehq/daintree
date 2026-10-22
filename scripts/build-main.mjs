@@ -241,6 +241,11 @@ export const CORE_PICKER_GUEST_ASSETS = [
     entry: "electron/services/elementPicker/guest/extractors/svelte.ts",
     outfile: "dist-electron/element-picker/guest/extractors/svelte.js",
   },
+  {
+    id: "extractor:react",
+    entry: "electron/services/elementPicker/guest/extractors/react.ts",
+    outfile: "dist-electron/element-picker/guest/extractors/react.js",
+  },
 ];
 
 /**

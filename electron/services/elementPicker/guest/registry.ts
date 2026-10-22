@@ -15,7 +15,10 @@
 import {
   EXTRACTOR_REGISTRY_GLOBAL,
   MAX_BRIDGE_MESSAGE_CHARS,
+  MAX_ELEMENT_REFS,
   channelEvent,
+  elementRefToken,
+  type ElementRefMessage,
   type ExtractReply,
   type ExtractRequest,
   type ExtractionPhase,
@@ -23,12 +26,31 @@ import {
 import type { ExtractorContribution } from "./types.js";
 
 /**
+ * How an extractor names an element in `rootElementIds`: element ids are the
+ * bootstrap's, minted in a world this one cannot see, so the reply carries a
+ * token and the element follows it across as an event's target.
+ */
+export interface ElementRefs {
+  /**
+   * The token for `node`, the same one each time it is asked for. Null for a
+   * node the bootstrap could not be told about — detached, in another
+   * document, behind a closed shadow root — or once the reply names as many
+   * elements as it may.
+   */
+  ref(node: Element): string | null;
+}
+
+/**
  * One framework's reader. `extract` must be synchronous and bounded: it runs
  * inside a pointer move when the phase is `hover`, so it reads only what labels
  * a highlight there and saves anything costly for `selection`.
  */
 export interface ElementPickerExtractor {
-  extract(element: Element, phase: ExtractionPhase): ExtractorContribution | null;
+  extract(
+    element: Element,
+    phase: ExtractionPhase,
+    refs: ElementRefs
+  ): ExtractorContribution | null;
   dispose?(): void;
 }
 
@@ -71,10 +93,58 @@ function parseRequest(detail: unknown): ExtractRequest | null {
   return { id: request.id as number, phase: request.phase };
 }
 
+/** Bounds the walk out through shadow hosts; real nesting is a handful deep. */
+const MAX_SHADOW_DEPTH = 32;
+
+/**
+ * Whether an event dispatched on `node` reaches the bootstrap's document
+ * listener with `node` itself first on its path. A closed shadow root
+ * retargets the path to its host, which would name the wrong element.
+ */
+function reachesDocument(node: Element): boolean {
+  if (!node.isConnected) return false;
+  let root = node.getRootNode();
+  for (let depth = 0; depth < MAX_SHADOW_DEPTH && root instanceof ShadowRoot; depth += 1) {
+    if (root.mode !== "open") return false;
+    root = root.host.getRootNode();
+  }
+  return root === document;
+}
+
+interface RefTable extends ElementRefs {
+  nodes: Element[];
+}
+
+function createRefTable(): RefTable {
+  const tokens = new Map<Element, string | null>();
+  const nodes: Element[] = [];
+  return {
+    nodes,
+    ref(node) {
+      if (!(node instanceof Element)) return null;
+      const known = tokens.get(node);
+      if (known !== undefined) return known;
+      if (nodes.length >= MAX_ELEMENT_REFS) return null;
+      let token: string | null = null;
+      try {
+        if (reachesDocument(node)) {
+          token = elementRefToken(nodes.length);
+          nodes.push(node);
+        }
+      } catch {
+        // A node whose root cannot be read cannot be named either.
+      }
+      tokens.set(node, token);
+      return token;
+    },
+  };
+}
+
 function createRegistry(channel: string): Registry {
   const extractors = new Map<string, ElementPickerExtractor>();
   const extractEvent = channelEvent(channel, "extract");
   const extractedEvent = channelEvent(channel, "extracted");
+  const elementEvent = channelEvent(channel, "element");
   const disposeEvent = channelEvent(channel, "dispose");
 
   const onExtract = (event: Event): void => {
@@ -84,25 +154,41 @@ function createRegistry(channel: string): Registry {
     const target = path.length > 0 ? path[0] : event.target;
     if (!(target instanceof Element)) return;
     const reply: ExtractReply = { id: request.id, contributions: [] };
+    // One table for the whole reply: the bootstrap adopts one contribution,
+    // and whichever it is, its tokens are this request's.
+    const refs = createRefTable();
     for (const [framework, extractor] of extractors) {
       let data: ExtractorContribution | null = null;
       try {
-        data = extractor.extract(target, request.phase);
+        data = extractor.extract(target, request.phase, refs);
       } catch {
         // One framework's reader failing must not cost the others their answer.
       }
       if (data !== null && data !== undefined) reply.contributions.push({ framework, data });
     }
     let text: string;
+    let named = refs.nodes;
     try {
       text = JSON.stringify(reply);
     } catch {
       text = JSON.stringify({ id: request.id, contributions: [] });
+      named = [];
     }
     // Over the ceiling the bootstrap would only discard it; say nothing instead.
     if (text.length > MAX_BRIDGE_MESSAGE_CHARS) {
       text = JSON.stringify({ id: request.id, contributions: [] });
+      named = [];
     }
+    named.forEach((node, ref) => {
+      const message: ElementRefMessage = { id: request.id, ref };
+      try {
+        node.dispatchEvent(
+          new CustomEvent(elementEvent, { detail: JSON.stringify(message), composed: true })
+        );
+      } catch {
+        // That root goes unnamed; the bootstrap marks its record incomplete.
+      }
+    });
     document.dispatchEvent(new CustomEvent(extractedEvent, { detail: text }));
   };
 
