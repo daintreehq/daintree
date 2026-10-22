@@ -686,7 +686,9 @@ describe("IdleBackgroundAutoCloseService", () => {
 
     it("skips a project last on screen within the idle threshold", async () => {
       enable(60);
-      projectStoreMock.getAllProjects.mockReturnValue([makeIdleProject("proj-1")]);
+      const opened = { lastOpened: Date.now() - 2 * 60 * 60 * 1000 };
+      projectStoreMock.getAllProjects.mockReturnValue([makeIdleProject("proj-1", opened)]);
+      projectStoreMock.getProjectById.mockImplementation((id) => makeIdleProject(id, opened));
       const clock = makeClock(2 * 60 * 60 * 1000);
       leftScreen(clock, "proj-1", THIRTY_MIN_MS);
       const service = makeService(clock);
@@ -873,21 +875,36 @@ describe("IdleBackgroundAutoCloseService", () => {
       expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
     });
 
-    it("closes a project off screen past the threshold even when its lastOpened is fresh", async () => {
+    it("still counts a recent open the clock never saw", async () => {
       enable();
-      // The MRU stamp is the switcher's, not the idle timer's.
-      const fresh = { lastOpened: Date.now() };
-      projectStoreMock.getAllProjects.mockReturnValue([makeIdleProject("proj-1", fresh)]);
-      projectStoreMock.getProjectById.mockImplementation((id) => makeIdleProject(id, fresh));
+      // The legacy single-view switch moves only the DB pointer, so the clock
+      // can miss a visit that its lastOpened stamp still records.
+      const recent = { lastOpened: Date.now() - 60 * 1000 };
+      projectStoreMock.getAllProjects.mockReturnValue([makeIdleProject("proj-1", recent)]);
+      projectStoreMock.getProjectById.mockImplementation((id) => makeIdleProject(id, recent));
+      const service = makeService(makeClock(THREE_HOURS_MS));
+      await runCheck(service);
+      expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
+    });
+
+    it("keeps a project another window shows on the clock's screen through a read without the provider", async () => {
+      enable();
+      projectStoreMock.getAllProjects.mockReturnValue([makeIdleProject("proj-1")]);
       const clock = makeClock(THREE_HOURS_MS);
-      leftScreen(clock, "proj-1", THIRTY_MIN_MS);
+      // What the tracker saw. The service has no provider yet, so its own read
+      // holds only the DB pointer and must not count as the whole screen.
+      clock.observe(["proj-1"]);
       const service = makeService(clock);
       await runCheck(service);
-      expect(projectStoreMock.updateProjectStatus).toHaveBeenCalledWith(
-        "proj-1",
-        "closed",
-        expect.anything()
-      );
+
+      const later = Date.now() + THIRTY_MIN_MS;
+      clockNowOverride.value = later;
+      try {
+        expect(clock.lastVisibleAt("proj-1")).toBe(later);
+      } finally {
+        clockNowOverride.value = null;
+      }
+      expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
     });
   });
 

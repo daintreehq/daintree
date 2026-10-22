@@ -326,7 +326,9 @@ export class IdleBackgroundAutoCloseService {
    *
    * Every read is also an observation for the visibility clock, so a project
    * that left the screen since the clock last looked is stamped before any idle
-   * age is measured from it.
+   * age is measured from it. Not before the provider is wired, though: a read
+   * holding only the DB pointer would take a project another window still
+   * shows off the clock's screen, and its real departure would then go unseen.
    */
   private collectActiveProjectIds(): Set<string> {
     const activeIds = collectActiveProjectIds(
@@ -334,17 +336,25 @@ export class IdleBackgroundAutoCloseService {
       projectStore.getCurrentProjectId(),
       "idle-background-auto-close"
     );
-    this.visibilityClock.observe(activeIds);
+    if (this.projectViewManagersProvider) this.visibilityClock.observe(activeIds);
     return activeIds;
   }
 
   /**
-   * Idle means time since the project was last on screen anywhere, never time
-   * since `lastOpened` — the MRU field keeps its open time on every way out
-   * except a project-to-project switch (#13844).
+   * Idle runs from the last time the project was on screen anywhere (#13844).
+   * `lastOpened` is only a floor: the MRU field keeps its open time on every
+   * way out but a project-to-project switch, so on its own it read a project
+   * left a minute ago as hours idle. A recent open still counts, though — the
+   * legacy single-view switch moves nothing but the DB pointer.
    */
-  private isWithinIdleThreshold(projectId: string, now: number, thresholdMs: number): boolean {
-    return now - this.visibilityClock.lastVisibleAt(projectId) < thresholdMs;
+  private isWithinIdleThreshold(
+    projectId: string,
+    lastOpened: number,
+    now: number,
+    thresholdMs: number
+  ): boolean {
+    const idleSince = Math.max(this.visibilityClock.lastVisibleAt(projectId), lastOpened);
+    return now - idleSince < thresholdMs;
   }
 
   private async checkAndClose(): Promise<void> {
@@ -416,7 +426,7 @@ export class IdleBackgroundAutoCloseService {
       if (!project.lastOpened || project.lastOpened <= 0) continue;
 
       // Still within the idle threshold.
-      if (this.isWithinIdleThreshold(pid, now, thresholdMs)) continue;
+      if (this.isWithinIdleThreshold(pid, project.lastOpened, now, thresholdMs)) continue;
 
       // Gate: terminal presence. Any live PTY means skip — we never tear down a
       // project that still has agent/terminal scrollback, and the Daintree
@@ -481,7 +491,7 @@ export class IdleBackgroundAutoCloseService {
     // Such a stamp postdates the sweep's `now`, so the age goes negative and the
     // project stays put.
     if (this.collectActiveProjectIds().has(projectId)) return null;
-    if (this.isWithinIdleThreshold(projectId, now, thresholdMs)) return null;
+    if (this.isWithinIdleThreshold(projectId, fresh.lastOpened, now, thresholdMs)) return null;
     return fresh;
   }
 
@@ -497,10 +507,11 @@ export class IdleBackgroundAutoCloseService {
     thresholdMs: number
   ): Promise<IdleBackgroundClosedProjectEntry | null> {
     // Re-verify eligibility against FRESH state immediately before the
-    // irreversible teardown. The sweep snapshotted projects (status) and
-    // terminals before this async loop, so during an earlier project's awaits
-    // the user could have switched to this project — which puts it on screen
-    // and flips its status — or spawned a terminal in it (TOCTOU). Re-
+    // irreversible teardown. The sweep snapshotted projects (status, lastOpened)
+    // and terminals before this async loop, so during an earlier project's awaits
+    // the user could have switched to this project — which puts it on screen,
+    // bumps its lastOpened and flips its status — or spawned a terminal in it
+    // (TOCTOU). Re-
     // read the project row and the live registry, and bail if anything now
     // disqualifies it. Also re-check `enabled` so a toggle-off mid-sweep halts.
     const fresh = this.readEligibleProject(projectId, now, thresholdMs);

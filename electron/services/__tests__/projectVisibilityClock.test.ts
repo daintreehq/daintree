@@ -9,10 +9,18 @@ function makeClock(startAt = 1_000) {
 }
 
 describe("ProjectVisibilityClock", () => {
-  it("counts a project it has never seen as idle since the clock started", () => {
+  it("counts a project it has never seen as idle since its first observation", () => {
+    const { clock, time } = makeClock(1_000);
+    time.now = 3_000;
+    clock.observe([]);
+    time.now = 50_000;
+    expect(clock.lastVisibleAt("p1")).toBe(3_000);
+  });
+
+  it("reads every project as just seen until it has observed anything", () => {
     const { clock, time } = makeClock(1_000);
     time.now = 50_000;
-    expect(clock.lastVisibleAt("p1")).toBe(1_000);
+    expect(clock.lastVisibleAt("p1")).toBe(50_000);
   });
 
   it("reads a project still on screen as visible right now", () => {

@@ -177,6 +177,32 @@ describe("installEndpointVisibility", () => {
     }
   });
 
+  it("lets the idle clock stamp a project whose Shell view closed or moved to another project", () => {
+    const registry = fakeRegistry();
+    const dispose = installEndpointVisibility({ server: null, registry });
+    const time = { now: 1_000 };
+    const clock = new ProjectVisibilityClock(() => time.now);
+    const stop = trackProjectVisibility(() => collectActiveProjectIds(null, null, "test"), clock);
+    try {
+      time.now = 2_000;
+      const closing = registry.add("remote:s1:view-1", "p1");
+      const moving = registry.add("remote:s2:view-1", "p2");
+      time.now = 5_000;
+      closing.closed = true;
+      registry.change();
+      time.now = 7_000;
+      moving.projectId = "p3";
+      registry.change();
+      time.now = 60_000;
+      expect(clock.lastVisibleAt("p1")).toBe(5_000);
+      expect(clock.lastVisibleAt("p2")).toBe(7_000);
+      expect(clock.lastVisibleAt("p3")).toBe(60_000);
+    } finally {
+      stop();
+      dispose();
+    }
+  });
+
   it("announces that the Shells' projects stopped counting once uninstalled", () => {
     const registry = fakeRegistry();
     const dispose = installEndpointVisibility({ server: null, registry });

@@ -1002,26 +1002,32 @@ describe("initGlobalServices task ordering", () => {
     await initGlobalServices(fakeRegistry);
     const run = registeredTaskRuns.get("project-visibility-clock");
     expect(run).toBeDefined();
-    await run!();
 
-    // A window that opens after wiring is still seen.
-    contexts.push({
-      services: {
-        projectViewManager: {
-          getActiveProjectId: () => "p-clock",
-          getOutgoingBridgeProjectId: () => null,
+    const nowSpy = vi.spyOn(Date, "now");
+    try {
+      nowSpy.mockReturnValue(1_000);
+      await run!();
+
+      // A window that opens after wiring is still seen.
+      nowSpy.mockReturnValue(2_000);
+      contexts.push({
+        services: {
+          projectViewManager: {
+            getActiveProjectId: () => "p-clock",
+            getOutgoingBridgeProjectId: () => null,
+          },
         },
-      },
-    });
-    notifyProjectPresenceChanged();
-    contexts.length = 0;
-    const before = Date.now();
-    notifyProjectPresenceChanged();
-    const after = Date.now();
+      });
+      notifyProjectPresenceChanged();
+      nowSpy.mockReturnValue(5_000);
+      contexts.length = 0;
+      notifyProjectPresenceChanged();
 
-    const stamp = projectVisibilityClock.lastVisibleAt("p-clock");
-    expect(stamp).toBeGreaterThanOrEqual(before);
-    expect(stamp).toBeLessThanOrEqual(after);
+      nowSpy.mockReturnValue(60_000);
+      expect(projectVisibilityClock.lastVisibleAt("p-clock")).toBe(5_000);
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 
   it("calls helpSessionService.setMcpRegistry before pushing the mcp-server task", async () => {
