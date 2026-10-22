@@ -2065,6 +2065,12 @@ export interface IpcEventMap {
     entries: import("../plugin.js").PluginLaunchEntryConfig[];
   };
 
+  // Plugin layout registry events (main → renderer, #13780). Same wholesale
+  // replacement as launch entries.
+  "plugin:layouts-changed": {
+    layouts: import("../plugin.js").PluginLayoutConfig[];
+  };
+
   // Plugin keybinding registry events (main → renderer). Same `complete` flag
   // semantics as toolbar buttons.
   "plugin:keybindings-changed": {
@@ -2413,6 +2419,8 @@ export type IpcEventBusMap = Pick<
   | "plugin:toolbar-buttons-changed"
   // Plugin launch-entry registry (global broadcast)
   | "plugin:launch-entries-changed"
+  // Plugin layout registry (global broadcast)
+  | "plugin:layouts-changed"
   // Plugin keybinding registry (global broadcast)
   | "plugin:keybindings-changed"
   // Plugin context-menu item registry (global broadcast)

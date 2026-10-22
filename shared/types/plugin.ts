@@ -481,6 +481,72 @@ export interface PluginLaunchEntryConfig {
   target: PluginLaunchEntryTarget;
 }
 
+/** Where a layout entry puts its panels. `grid` is the active worktree's panel grid. */
+export type PluginLayoutLocation = "grid" | "dock";
+
+/**
+ * One entry of a {@link LayoutContribution}. Declaring exactly one of `panel`,
+ * `browser` and `recipe` is required; none or several is a manifest error.
+ */
+export interface LayoutEntryContribution {
+  /** A `contributes.panels[].id` of this plugin. A PTY-backed panel is refused: terminals come from recipes. */
+  panel?: string;
+  /** An `http:` or `https:` URL, opened in a browser panel. */
+  browser?: string;
+  /** A `contributes.recipes[].id` of this plugin. Its terminals start only once the user confirms. */
+  recipe?: string;
+  /** Default `grid`, or `dock` for a `scope: "project"` panel. A recipe puts all its terminals here. */
+  location?: PluginLayoutLocation;
+  /** Entries sharing a key open as the tabs of one group, in entry order. */
+  tabGroup?: string;
+  /** Maximize this entry's panel, or its tab group, in the grid. At most one per layout. */
+  maximized?: boolean;
+}
+
+/**
+ * A named arrangement of the plugin's own panels, browser pages and recipes
+ * (#13780). The user applies one from the palette and the plugin's commands
+ * can apply their own through `layout.apply`. Applying is additive: it opens
+ * or moves what it lists and leaves every other panel where it is.
+ */
+export interface LayoutContribution {
+  id: string;
+  name: string;
+  entries: LayoutEntryContribution[];
+}
+
+/** A layout entry's target as main resolved it, with runtime ids in place of manifest ones. */
+export type PluginLayoutTarget =
+  | {
+      type: "panel";
+      /** The runtime panel kind id, project-qualified for a project plugin. */
+      panelKindId: string;
+    }
+  | { type: "browser"; url: string }
+  | {
+      type: "recipe";
+      /** The qualified recipe id, `{pluginId}.{recipe id}`. */
+      recipeId: string;
+    };
+
+export interface PluginLayoutEntry {
+  target: PluginLayoutTarget;
+  location: PluginLayoutLocation;
+  tabGroup?: string;
+  maximized?: boolean;
+}
+
+/** A registered layout, as main broadcasts it to the renderer. */
+export interface PluginLayoutConfig {
+  /** `{pluginId}.{layout id}`: the plugin instance id, so project-qualified for a project plugin. */
+  id: string;
+  pluginId: string;
+  /** The plugin's display name, shown beside the layout's own. */
+  pluginName: string;
+  name: string;
+  entries: PluginLayoutEntry[];
+}
+
 /**
  * Semantic color for a {@link PluginPanelBadge}. Plugins pick intent, not a raw
  * hex value, so badges stay theme-consistent. `"warning"` and `"error"` map to
@@ -2430,6 +2496,12 @@ export interface PluginManifest {
      * `agentMcp`.
      */
     launchEntries?: PluginLaunchEntryContribution[];
+    /**
+     * Named panel layouts (#13780). Optional in the type but always
+     * materialized by the manifest schema's `.default([])`, like
+     * `launchEntries`.
+     */
+    layouts?: LayoutContribution[];
     /**
      * Manifest-declared commands. Each entry registers a {@link PluginActionDescriptor}
      * at load time (so the command appears in the palette before the plugin

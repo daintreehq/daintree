@@ -22,6 +22,8 @@ import {
   LaunchEntryCommandTargetSchema,
   LaunchEntryContributionSchema,
   LaunchEntryPanelTargetSchema,
+  LayoutContributionSchema,
+  LayoutEntryContributionSchema,
   McpServerContributionSchema,
   MenuItemContributionSchema,
   PanelContributionObjectSchema,
@@ -136,6 +138,7 @@ const SIDEBAR_VIEW_HOST = "src/components/Sidebar/SidebarViewHost.tsx";
 const SIDEBAR_VIEW_SWITCHER = "src/components/Sidebar/SidebarViewSwitcher.tsx";
 const LAUNCH_ENTRY_REGISTRY = "shared/config/pluginLaunchEntryRegistry.ts";
 const DOCK_LAUNCH_ITEMS = "src/components/Layout/dockLaunchItems.ts";
+const APPLY_PLUGIN_LAYOUT = "src/services/layout/applyPluginLayout.ts";
 
 /**
  * The schemas swept for field coverage. The first block matches the fourteen
@@ -147,6 +150,7 @@ const SWEPT_SCHEMAS = {
   panels: PanelContributionObjectSchema,
   toolbarButtons: ToolbarButtonContributionSchema,
   launchEntries: LaunchEntryContributionSchema,
+  layouts: LayoutContributionSchema,
   menuItems: MenuItemContributionSchema,
   keybindings: KeybindingContributionSchema,
   contextMenus: ContextMenuContributionSchema,
@@ -181,6 +185,7 @@ const SWEPT_SCHEMAS = {
   "launchEntries.panel": LaunchEntryPanelTargetSchema,
   "launchEntries.command": LaunchEntryCommandTargetSchema,
   "launchEntries.agent": LaunchEntryAgentTargetSchema,
+  "layouts.entries": LayoutEntryContributionSchema,
   "recipes.terminals": RecipeContributionTerminalSchema,
   "forgeProviders.credentialFields": CredentialFieldSchema,
   "forgeProviders.slots": ForgeProviderContributionSchema.shape.slots,
@@ -199,6 +204,7 @@ const TOP_LEVEL_GROUPS = [
   "panels",
   "toolbarButtons",
   "launchEntries",
+  "layouts",
   "menuItems",
   "keybindings",
   "contextMenus",
@@ -257,6 +263,11 @@ type FieldConsumerCoverage = {
   >;
   "launchEntries.agent": Record<
     keyof z.infer<typeof LaunchEntryAgentTargetSchema>,
+    ConsumerDescriptor
+  >;
+  layouts: Record<keyof z.infer<typeof LayoutContributionSchema>, ConsumerDescriptor>;
+  "layouts.entries": Record<
+    keyof z.infer<typeof LayoutEntryContributionSchema>,
     ConsumerDescriptor
   >;
   menuItems: Record<keyof z.infer<typeof MenuItemContributionSchema>, ConsumerDescriptor>;
@@ -661,6 +672,78 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       mode: "verbatim",
       consumers: [{ file: DOCK_LAUNCH_ITEMS, symbol: "activatePluginLaunchEntry (onLaunchAgent)" }],
       note: "The launch's first turn, and the only thing about it the plugin chooses.",
+    },
+  },
+  layouts: {
+    id: {
+      mode: "verbatim",
+      consumers: [
+        { file: PLUGIN_SERVICE, symbol: "loadPlugin → registerPluginLayout" },
+        { file: APPLY_PLUGIN_LAYOUT, symbol: "resolveLayout" },
+      ],
+      note: "Namespaced into the runtime layout id `{pluginId}.{id}`, which a plugin's own `layout.apply` names and the palette row is keyed by.",
+    },
+    name: {
+      mode: "verbatim",
+      consumers: [
+        { file: "src/hooks/usePluginLayouts.ts", symbol: "toAction" },
+        {
+          file: "src/components/Layout/LayoutApplyConfirmDialog.tsx",
+          symbol: "LayoutApplyConfirmDialog",
+        },
+      ],
+      note: "The palette row's title and the confirmation dialog's question.",
+    },
+    entries: {
+      mode: "verbatim",
+      consumers: [
+        { file: PLUGIN_SERVICE, symbol: "loadPlugin (layout entries)" },
+        { file: APPLY_PLUGIN_LAYOUT, symbol: "applyResolved" },
+      ],
+      note: "Opened in order, then placed, grouped and maximized.",
+    },
+  },
+  "layouts.entries": {
+    panel: {
+      mode: "derived-input",
+      consumers: [
+        { file: PLUGIN_SCHEMA, symbol: "manifest superRefine (layout_panel_*)" },
+        { file: PLUGIN_SERVICE, symbol: "loadPlugin (toRuntimePanelKindId)" },
+        { file: APPLY_PLUGIN_LAYOUT, symbol: "openEntry" },
+      ],
+      note: "One of three exclusive targets: one of the plugin's own non-PTY panels, reused when already open.",
+    },
+    browser: {
+      mode: "verbatim",
+      consumers: [{ file: APPLY_PLUGIN_LAYOUT, symbol: "openEntry (browser)" }],
+      note: "One of three exclusive targets: a browser panel at this URL, reused when one already shows it.",
+    },
+    recipe: {
+      mode: "derived-input",
+      consumers: [
+        { file: PLUGIN_SCHEMA, symbol: "manifest superRefine (layout_recipe_unknown)" },
+        { file: PLUGIN_SERVICE, symbol: "loadPlugin (qualified recipe id)" },
+        { file: APPLY_PLUGIN_LAYOUT, symbol: "resolveLayoutRecipes" },
+      ],
+      note: "One of three exclusive targets: one of the plugin's own recipes, started through `recipe.run` after the user confirms.",
+    },
+    location: {
+      mode: "verbatim",
+      consumers: [
+        { file: PLUGIN_SERVICE, symbol: "loadPlugin (layout entry location)" },
+        { file: APPLY_PLUGIN_LAYOUT, symbol: "arrange (placeTerminal)" },
+      ],
+      note: "Grid or dock; a project panel defaults to the dock.",
+    },
+    tabGroup: {
+      mode: "verbatim",
+      consumers: [{ file: APPLY_PLUGIN_LAYOUT, symbol: "arrange (createTabGroup)" }],
+      note: "Entries sharing a key become the tabs of one group, in entry order.",
+    },
+    maximized: {
+      mode: "verbatim",
+      consumers: [{ file: APPLY_PLUGIN_LAYOUT, symbol: "arrange (toggleMaximize)" }],
+      note: "Maximizes the entry's panel, or its group, in the grid.",
     },
   },
   menuItems: {

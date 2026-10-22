@@ -2672,6 +2672,10 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     onLaunchEntriesChanged(
       callback: (payload: { entries: import("../plugin.js").PluginLaunchEntryConfig[] }) => void
     ): () => void;
+    /** Subscribe to plugin layout registry changes (#13780). Returns a cleanup. */
+    onLayoutsChanged(
+      callback: (payload: { layouts: import("../plugin.js").PluginLayoutConfig[] }) => void
+    ): () => void;
     /** Subscribe to plugin keybinding registry changes. Returns a cleanup. */
     onKeybindingsChanged(
       callback: (payload: {

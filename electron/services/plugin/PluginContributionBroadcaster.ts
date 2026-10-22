@@ -12,6 +12,7 @@ import { CHANNELS } from "../../ipc/channels.js";
 import { getPluginPanelKinds } from "../../../shared/config/panelKindRegistry.js";
 import { getAllPluginToolbarButtonConfigs } from "../../../shared/config/toolbarButtonRegistry.js";
 import { getAllPluginLaunchEntries } from "../../../shared/config/pluginLaunchEntryRegistry.js";
+import { getAllPluginLayouts } from "../../../shared/config/pluginLayoutRegistry.js";
 import { getPluginKeybindings } from "../pluginKeybindingRegistry.js";
 import { getPluginContextMenuItems } from "../pluginContextMenuRegistry.js";
 import { getPluginAgentRegistry } from "../../../shared/config/pluginAgentRegistry.js";
@@ -205,6 +206,15 @@ export function getPluginLaunchEntriesForProject(projectId: string | null | unde
   );
 }
 
+/** Plugin layouts visible in a view of `projectId` (#13780). */
+export function getPluginLayoutsForProject(projectId: string | null | undefined) {
+  return selectContributionsForProject(
+    getAllPluginLayouts(),
+    (layout) => layout.pluginId,
+    projectId
+  );
+}
+
 /** Plugin keybindings visible in a view of `projectId`. */
 export function getPluginKeybindingsForProject(projectId: string | null | undefined) {
   return selectContributionsForProject(
@@ -340,6 +350,8 @@ export class PluginContributionBroadcaster {
    * catalog gate rather than swept, so no snapshot needs to be authoritative.
    */
   private launchEntriesBroadcastPending = false;
+  /** Same as {@link toursBroadcastPending}: layout snapshots replace wholesale. */
+  private layoutsBroadcastPending = false;
   /** Same as {@link toursBroadcastPending}: icon snapshots replace wholesale. */
   private iconsBroadcastPending = false;
   /** Same as {@link toursBroadcastPending}: hosted-view snapshots replace wholesale. */
@@ -441,6 +453,7 @@ export class PluginContributionBroadcaster {
     this.schedulePanelKindsBroadcast();
     this.scheduleToolbarButtonsBroadcast(true);
     this.scheduleLaunchEntriesBroadcast();
+    this.scheduleLayoutsBroadcast();
     this.scheduleKeybindingsBroadcast(true);
     this.scheduleContextMenuItemsBroadcast(true);
     this.scheduleToursBroadcast();
@@ -724,6 +737,20 @@ export class PluginContributionBroadcaster {
     });
   }
 
+  /** Coalesce layout registry mutations into one scoped snapshot per tick (#13780). */
+  scheduleLayoutsBroadcast(): void {
+    if (this.deps.isDisposed()) return;
+    if (this.layoutsBroadcastPending) return;
+    this.layoutsBroadcastPending = true;
+    this.defer(() => {
+      this.layoutsBroadcastPending = false;
+      if (this.deps.isDisposed()) return;
+      this.emitScoped("plugin:layouts-changed", (projectId) => ({
+        layouts: forProject(getAllPluginLayouts(), (layout) => layout.pluginId, projectId),
+      }));
+    });
+  }
+
   /** Coalesce custom-icon registry mutations into one scoped snapshot per tick. */
   schedulePluginIconsBroadcast(): void {
     if (this.deps.isDisposed()) return;
@@ -839,6 +866,12 @@ export class PluginContributionBroadcaster {
         name: "plugin:launch-entries-changed",
         payload: {
           entries: forProject(getAllPluginLaunchEntries(), (entry) => entry.pluginId, target),
+        },
+      },
+      {
+        name: "plugin:layouts-changed",
+        payload: {
+          layouts: forProject(getAllPluginLayouts(), (layout) => layout.pluginId, target),
         },
       },
       {

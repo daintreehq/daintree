@@ -20,6 +20,7 @@ A plugin that declares `"scope": "project"` lives in a project's own repository 
 | `commands` | Available — in that project's palette, dispatched into that project's renderer |
 | `toolbarButtons` | Available — only in the owning project's toolbar |
 | `launchEntries` | Available — only in the owning project's launcher, and a pinned entry's toolbar button is that project's alone |
+| `layouts` | Available — only in the owning project's palette, and only that project's views can apply them |
 | `contextMenus` | Available — only in the owning project's views |
 | `keybindings` | Available — renderer-level, so they resolve within the focused project |
 | `settings` | Available — every field, whatever its `scope`, lives in Project settings; `project` and `local` values resolve from the bound project root, not the focused one |
@@ -701,6 +702,60 @@ An entry declares exactly one target (`launch_entry_target_missing`, `launch_ent
 Declaring an entry for one of your panels replaces that panel's own row in the launcher, even while the entry's `when` is false or its group is hidden, so the panel is never listed twice. A panel no entry targets keeps its plain row.
 
 Entries are user-only. They run when the user picks the row or presses its pinned button, never from the command palette, an MCP client or an agent; those reach the same panels, commands and `agent.launch` through their own routes and confirmations.
+
+## Layouts — _Shipped_
+
+A layout is a named arrangement of your panels, browser pages and recipes: "Records on the left, an agent beside it, the preview docked". The user applies one from the command palette, where each layout is a row titled **Apply layout: {name}**, and your own commands can apply yours with `host.dispatch("layout.apply", { layoutId: "workspace" })`.
+
+```json
+{
+  "contributes": {
+    "panels": [
+      { "id": "records", "name": "Records", "iconId": "database", "color": "#0ea5e9" },
+      { "id": "notes", "name": "Notes", "iconId": "file-text", "color": "#0ea5e9" }
+    ],
+    "recipes": [
+      {
+        "id": "agent",
+        "name": "Records agent",
+        "terminals": [{ "type": "claude", "initialPrompt": "Read RECORDS.md." }]
+      }
+    ],
+    "layouts": [
+      {
+        "id": "workspace",
+        "name": "Records workspace",
+        "entries": [
+          { "panel": "records", "tabGroup": "main", "maximized": true },
+          { "panel": "notes", "tabGroup": "main" },
+          { "recipe": "agent" },
+          { "browser": "http://localhost:3000", "location": "dock" }
+        ]
+      }
+    ]
+  }
+}
+```
+
+**Fields:**
+
+| Field | Required | Notes |
+| --- | --- | --- |
+| `id` | yes | Namespaced at runtime as `{pluginId}.{id}`. Your commands may pass either form to `layout.apply`. |
+| `name` | yes | Up to 80 characters; the palette row and the confirmation dialog show it. |
+| `entries` | yes | 1–12 entries, opened in order. |
+| `entries[].panel` | one of `panel`, `browser`, `recipe` | One of your own `contributes.panels`. A panel of that kind already open in the worktree (or anywhere, for a `scope: "project"` panel) is reused rather than opened again. A `hasPty: true` panel is refused: terminals come from recipes. |
+| `entries[].browser` | one of `panel`, `browser`, `recipe` | An `http:` or `https:` URL, opened in a browser panel. A browser panel already showing that page is reused. The browser still asks before loading a host the user hasn't approved. |
+| `entries[].recipe` | one of `panel`, `browser`, `recipe` | One of your own `contributes.recipes`. Its terminals start in the active worktree, every time the layout is applied. |
+| `entries[].location` | no | `"grid"` or `"dock"`. Default `"grid"`, or `"dock"` for a `scope: "project"` panel. A recipe puts all its terminals there; split a recipe in two to place its terminals apart. |
+| `entries[].tabGroup` | no | Entries sharing a key become the tabs of one group, in entry order. A group needs at least two panels in one place. |
+| `entries[].maximized` | no | Maximizes the entry's panel, or its tab group, in the grid. At most one per layout. |
+
+Applying a layout is additive. It opens what's missing and moves, groups and maximizes what it lists; a panel it doesn't list is never closed, killed or moved. **Undo layout change** (`layout.undo`) puts back everything the layout moved in one step and drops the groups it made. Panels and terminals it opened stay open.
+
+A layout that runs a recipe never starts it silently. Before anything opens or moves, the user sees a confirmation listing every terminal the recipes start, as the recipe confirmation lists them, and the layout applies only if they approve. A command that applies such a layout gets `{ "status": "awaiting-confirmation" }` back at once rather than waiting on the dialog. A recipe that changed after the user approved it doesn't start, and neither does one a team recipe of the same name now shadows.
+
+Your commands can apply only your own layouts, and MCP clients and agents can't apply layouts at all. Validation refuses an entry with no target or several (`layout_entry_target_missing`, `layout_entry_target_conflict`), a panel or recipe you don't declare (`layout_panel_unknown`, `layout_recipe_unknown`), a PTY panel (`layout_panel_pty`), a placement the panel can't take (`layout_panel_placement`), the same panel, recipe or page twice (`layout_entry_duplicate`), a second or docked maximize (`layout_maximized_invalid`), and a tab group split between grid and dock or holding one panel (`layout_tab_group_location`, `layout_tab_group_single`). A plugin may declare at most 20 layouts.
 
 ## Menu items — _Shipped_
 

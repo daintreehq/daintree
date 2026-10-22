@@ -918,6 +918,9 @@ export interface GeneratedElectronAPI {
     launchEntries(
       ...args: IpcInvokeMap["plugin:launch-entries"]["args"]
     ): Promise<IpcInvokeMap["plugin:launch-entries"]["result"]>;
+    layouts(
+      ...args: IpcInvokeMap["plugin:layouts"]["args"]
+    ): Promise<IpcInvokeMap["plugin:layouts"]["result"]>;
     list(
       ...args: IpcInvokeMap["plugin:list"]["args"]
     ): Promise<IpcInvokeMap["plugin:list"]["result"]>;

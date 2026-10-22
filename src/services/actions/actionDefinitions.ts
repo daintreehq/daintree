@@ -20,6 +20,7 @@ import { registerPreferencesActions } from "./definitions/preferencesActions";
 import { registerProjectActions } from "./definitions/projectActions";
 import { registerCanopyActions } from "./definitions/canopyActions";
 import { registerRecipeActions } from "./definitions/recipeActions";
+import { registerLayoutActions } from "./definitions/layoutActions";
 import { registerSystemActions } from "./definitions/systemActions";
 import { registerTerminalQueryActions } from "./definitions/terminalQueryActions";
 import { registerTerminalNotifyActions } from "./definitions/terminalNotifyActions";
@@ -71,6 +72,7 @@ export function createActionDefinitions(
   registerWorktreeSessionActions(actions, callbacks);
   registerWorktreeBulkActions(actions);
   registerRecipeActions(actions, callbacks);
+  registerLayoutActions(actions);
   registerProjectActions(actions, callbacks);
   registerCanopyActions(actions);
   registerWorkspaceActions(actions);

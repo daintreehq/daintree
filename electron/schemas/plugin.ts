@@ -378,6 +378,49 @@ export const LaunchEntryContributionSchema = z
   })
   .strict();
 
+/** Most entries one layout may arrange (#13780). */
+export const LAYOUT_MAX_ENTRIES = 12;
+
+function isHttpUrl(value: string): boolean {
+  try {
+    const { protocol } = new URL(value);
+    return protocol === "http:" || protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * One entry of a named layout (#13780). `panel`, `browser` and `recipe` are
+ * each optional so the object keeps a `.shape`; that exactly one is present,
+ * and that a panel or recipe is this plugin's own, is checked with the
+ * manifest's cross-references (`layout_*`).
+ */
+export const LayoutEntryContributionSchema = z
+  .object({
+    panel: z.string().min(1).max(64).regex(SAFE_ID_PATTERN).optional(),
+    browser: z
+      .string()
+      .min(1)
+      .max(2048)
+      .refine(isHttpUrl, { message: "browser must be an http: or https: URL" })
+      .optional(),
+    recipe: z.string().min(1).max(64).regex(SAFE_ID_PATTERN).optional(),
+    location: z.enum(["grid", "dock"]).optional(),
+    tabGroup: z.string().min(1).max(64).regex(SAFE_ID_PATTERN).optional(),
+    maximized: z.boolean().optional(),
+  })
+  .strict();
+
+/** A named layout (#13780): an ordered arrangement of this plugin's panels, browser pages and recipes. */
+export const LayoutContributionSchema = z
+  .object({
+    id: z.string().min(1).max(64).regex(SAFE_ID_PATTERN),
+    name: z.string().trim().min(1).max(80),
+    entries: z.array(LayoutEntryContributionSchema).min(1).max(LAYOUT_MAX_ENTRIES),
+  })
+  .strict();
+
 export const MenuItemContributionSchema = z
   .object({
     label: z.string().min(1),
@@ -2476,6 +2519,7 @@ export const MANIFEST_CONTRIBUTION_CAPS = {
   // Small on purpose, unlike the rest: these are rows in a shared launcher, and
   // one plugin must not be able to bury everyone else's.
   launchEntries: 20,
+  layouts: 20,
   menuItems: 200,
   keybindings: 200,
   contextMenus: 200,
@@ -2580,7 +2624,7 @@ function reportReservedTourCueNames(raw: unknown, ctx: z.RefinementCtx): void {
  *
  * The dividing line is {@link
  * ../services/plugin/PluginContributionBroadcaster.js}: the groups it filters by
- * owning plugin id (panels, commands/actions, toolbarButtons, launchEntries,
+ * owning plugin id (panels, commands/actions, toolbarButtons, launchEntries, layouts,
  * keybindings, contextMenus, recipes) reach only the owning project's views, and `settings`
  * resolves through the bound instance handle. Everything here registers into a
  * registry with no project axis — a single app menu, one agent roster mirrored
@@ -2895,6 +2939,10 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
               .array(LaunchEntryContributionSchema)
               .max(MANIFEST_CONTRIBUTION_CAPS.launchEntries)
               .default([]),
+            layouts: z
+              .array(LayoutContributionSchema)
+              .max(MANIFEST_CONTRIBUTION_CAPS.layouts)
+              .default([]),
             menuItems: z
               .array(MenuItemContributionSchema)
               .max(MANIFEST_CONTRIBUTION_CAPS.menuItems)
@@ -2991,6 +3039,7 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
             panels: [],
             toolbarButtons: [],
             launchEntries: [],
+            layouts: [],
             menuItems: [],
             keybindings: [],
             contextMenus: [],
@@ -3571,6 +3620,7 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
       reportDuplicateIds("panels", manifest.contributes.panels);
       reportDuplicateIds("toolbarButtons", manifest.contributes.toolbarButtons);
       reportDuplicateIds("launchEntries", manifest.contributes.launchEntries);
+      reportDuplicateIds("layouts", manifest.contributes.layouts);
       reportDuplicateIds("commands", manifest.contributes.commands);
       reportDuplicateIds("views", manifest.contributes.views);
       reportDuplicateIds("mcpServers", manifest.contributes.mcpServers);
@@ -4026,6 +4076,160 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
             path: [...recipePath, "requiresAgentTools"],
             message: `Recipe "${recipe.id}" requires agent tools but starts no agent.`,
             params: { errorCode: "recipe_requires_agent_tools_no_agent" },
+          });
+        }
+      });
+
+      // A layout arranges only what this plugin owns (#13780), and terminals
+      // reach it only through a recipe, which the user confirms before it
+      // starts. The placement refusals are the ones the panel store would make
+      // at apply time, moved here so the author hears about them first.
+      manifest.contributes.layouts.forEach((layout, layoutIndex) => {
+        const layoutPath = ["contributes", "layouts", layoutIndex] as const;
+        const references = new Set<string>();
+        const groups = new Map<string, { location: string; size: number; entryIndex: number }>();
+        let maximizedSeen = false;
+        layout.entries.forEach((entry, entryIndex) => {
+          const path = [...layoutPath, "entries", entryIndex];
+          const targets = [entry.panel, entry.browser, entry.recipe].filter(
+            (target) => target !== undefined
+          );
+          if (targets.length !== 1) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path,
+              message:
+                targets.length === 0
+                  ? `Layout "${layout.id}" entry ${entryIndex} declares no target — give it one of panel, browser or recipe.`
+                  : `Layout "${layout.id}" entry ${entryIndex} declares more than one of panel, browser and recipe — an entry places one thing, so keep one.`,
+              params: {
+                errorCode:
+                  targets.length === 0
+                    ? "layout_entry_target_missing"
+                    : "layout_entry_target_conflict",
+              },
+            });
+            return;
+          }
+
+          let location = entry.location ?? "grid";
+          let size = 1;
+          let reference: string;
+          if (entry.panel !== undefined) {
+            const panelId = entry.panel;
+            const panel = manifest.contributes.panels.find((candidate) => candidate.id === panelId);
+            if (panel === undefined) {
+              ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: [...path, "panel"],
+                message: `Layout "${layout.id}" panel "${panelId}" matches no contributes.panels[].id — a layout arranges only this plugin's own panels.`,
+                params: { errorCode: "layout_panel_unknown" },
+              });
+              return;
+            }
+            if (panel.hasPty === true) {
+              ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: [...path, "panel"],
+                message: `Layout "${layout.id}" panel "${panelId}" is PTY-backed (hasPty: true) — a layout starts terminals only through a recipe, which the user confirms.`,
+                params: { errorCode: "layout_panel_pty" },
+              });
+              return;
+            }
+            const projectScoped = panel.scope === "project";
+            location = entry.location ?? (projectScoped ? "dock" : "grid");
+            const placementProblem =
+              location === "grid" && projectScoped
+                ? 'a scope: "project" panel opens in the dock, never the grid'
+                : location === "dock" && panel.dockable === false
+                  ? "the panel opts out of the dock with dockable: false"
+                  : entry.tabGroup !== undefined && projectScoped
+                    ? 'a scope: "project" panel belongs to no worktree, so it can\'t share a tab group'
+                    : undefined;
+            if (placementProblem !== undefined) {
+              ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: [
+                  ...path,
+                  entry.tabGroup !== undefined && projectScoped ? "tabGroup" : "location",
+                ],
+                message: `Layout "${layout.id}" can't place panel "${panelId}" that way: ${placementProblem}.`,
+                params: { errorCode: "layout_panel_placement" },
+              });
+            }
+            reference = `panel:${panelId}`;
+          } else if (entry.recipe !== undefined) {
+            const recipeId = entry.recipe;
+            const recipe = manifest.contributes.recipes.find(
+              (candidate) => candidate.id === recipeId
+            );
+            if (recipe === undefined) {
+              ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: [...path, "recipe"],
+                message: `Layout "${layout.id}" recipe "${recipeId}" matches no contributes.recipes[].id — a layout runs only this plugin's own recipes.`,
+                params: { errorCode: "layout_recipe_unknown" },
+              });
+              return;
+            }
+            size = recipe.terminals.length;
+            reference = `recipe:${recipeId}`;
+          } else if (entry.browser !== undefined) {
+            // The field's own refinement has already reported a malformed URL,
+            // and the manifest checks still run after it.
+            if (!isHttpUrl(entry.browser)) return;
+            reference = `browser:${new URL(entry.browser).href}`;
+          } else {
+            return;
+          }
+
+          if (references.has(reference)) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path,
+              message: `Layout "${layout.id}" lists the same ${reference.split(":")[0]} twice — each panel, page and recipe takes one place in a layout.`,
+              params: { errorCode: "layout_entry_duplicate" },
+            });
+          }
+          references.add(reference);
+
+          if (entry.maximized === true) {
+            if (maximizedSeen || location !== "grid") {
+              ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: [...path, "maximized"],
+                message: maximizedSeen
+                  ? `Layout "${layout.id}" maximizes more than one entry — only one panel or group can fill the grid.`
+                  : `Layout "${layout.id}" maximizes an entry in the dock — only a grid panel can be maximized.`,
+                params: { errorCode: "layout_maximized_invalid" },
+              });
+            }
+            maximizedSeen = true;
+          }
+
+          if (entry.tabGroup !== undefined) {
+            const group = groups.get(entry.tabGroup);
+            if (group === undefined) {
+              groups.set(entry.tabGroup, { location, size, entryIndex });
+            } else if (group.location !== location) {
+              ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: [...path, "location"],
+                message: `Layout "${layout.id}" puts tab group "${entry.tabGroup}" in both the grid and the dock — a group's tabs share one place.`,
+                params: { errorCode: "layout_tab_group_location" },
+              });
+            } else {
+              group.size += size;
+            }
+          }
+        });
+        for (const [key, group] of groups) {
+          if (group.size >= 2) continue;
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [...layoutPath, "entries", group.entryIndex, "tabGroup"],
+            message: `Layout "${layout.id}" tab group "${key}" holds a single panel — a tab group needs at least two.`,
+            params: { errorCode: "layout_tab_group_single" },
           });
         }
       });

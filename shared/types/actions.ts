@@ -206,6 +206,13 @@ export interface ActionContext {
    * many rather than the first three.
    */
   hostApprovedRecipeRun?: HostApprovedRecipeRun;
+  /**
+   * The plugin behind a `"plugin"` dispatch, stamped by `ActionService.dispatch`
+   * from {@link ActionDispatchOptions.callerPluginId} and absent for every other
+   * source, so a `contextOverride` can't claim one. Lets an action hold a plugin
+   * to its own contributions (`layout.apply`, #13780).
+   */
+  callerPluginId?: string;
 }
 
 /**

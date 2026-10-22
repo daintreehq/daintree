@@ -918,6 +918,55 @@ describe("ActionService", () => {
       });
     });
 
+    // #13780: `layout.apply` holds a plugin to its own layouts by this field, so
+    // it must name the bridge's caller and nobody else.
+    describe("callerPluginId reaches run() only for a plugin dispatch", () => {
+      function safeAction(run: ActionDefinition["run"]): ActionDefinition {
+        return {
+          id: "actions.list",
+          title: "Test Action",
+          description: "A test action",
+          category: "test",
+          kind: "command",
+          danger: "safe",
+          scope: "renderer",
+          run,
+        };
+      }
+
+      it("stamps the plugin the bridge named", async () => {
+        const mockRun = vi.fn().mockResolvedValue(undefined);
+        service.register(safeAction(mockRun));
+
+        await service.dispatch("actions.list", undefined, {
+          source: "plugin",
+          callerPluginId: "acme",
+          contextOverride: { callerPluginId: "other" },
+        });
+
+        expect(mockRun).toHaveBeenCalledWith(
+          undefined,
+          expect.objectContaining({ callerPluginId: "acme" })
+        );
+      });
+
+      it("drops a caller claimed on any other source", async () => {
+        const mockRun = vi.fn().mockResolvedValue(undefined);
+        service.register(safeAction(mockRun));
+
+        await service.dispatch("actions.list", undefined, {
+          source: "user",
+          callerPluginId: "acme",
+          contextOverride: { callerPluginId: "acme" },
+        });
+
+        expect(mockRun).toHaveBeenCalledWith(
+          undefined,
+          expect.objectContaining({ callerPluginId: undefined })
+        );
+      });
+    });
+
     it("maps TerminalInOtherProjectError to TERMINAL_IN_OTHER_PROJECT with plain details (#13120)", async () => {
       service.register({
         id: "actions.list" as ActionId,

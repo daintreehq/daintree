@@ -192,6 +192,12 @@ export const LazyPluginConfirmDialog = lazyWithPreload(
 );
 export const preloadPluginConfirmDialog = LazyPluginConfirmDialog.preload;
 
+export const LazyLayoutApplyConfirmDialog = lazy(() =>
+  import("./components/Layout/LayoutApplyConfirmDialog").then((m) => ({
+    default: m.LayoutApplyConfirmDialog,
+  }))
+);
+
 export const LazyPluginArchiveInstallConfirmDialog = lazy(() =>
   import("./components/Plugin/PluginArchiveInstallConfirmDialog").then((m) => ({
     default: m.PluginArchiveInstallConfirmDialog,

@@ -385,6 +385,9 @@ export const BUILT_IN_ACTION_IDS = [
   "recipe.saveToRepo",
   "recipe.delete",
 
+  // -- layoutActions --
+  "layout.apply",
+
   // -- agentActions --
   "agent.launch",
   "agent.launchMany",

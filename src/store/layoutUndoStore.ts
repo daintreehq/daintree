@@ -16,6 +16,7 @@ import {
   syncWorktreeAttributionToHost,
 } from "@/store/slices/panelRegistry/helpers";
 import { reconcileMovedPanel } from "@/services/terminal/crossWorktreeMove";
+import type { MaximizeTarget } from "@/store/slices/terminalFocusSlice";
 
 type CarrierPanel = Parameters<typeof getNarrowPanel>[0][string];
 
@@ -35,6 +36,12 @@ export interface LayoutSnapshot {
   tabGroups: Map<string, TabGroup>;
   focusedId: string | null;
   maximizedId: string | null;
+  /**
+   * Whether `maximizedId` fills the grid alone or with its tab group. Restored
+   * with it: an undo that unmaximizes must not leave the old target behind,
+   * or the next maximize click on that panel reads as an unmaximize.
+   */
+  maximizeTarget: MaximizeTarget;
   activeDockTerminalId: string | null;
 }
 
@@ -75,6 +82,7 @@ function captureCurrentLayout(): LayoutSnapshot {
     tabGroups: structuredClone(state.tabGroups),
     focusedId: state.focusedId,
     maximizedId: state.maximizedId,
+    maximizeTarget: state.maximizeTarget,
     activeDockTerminalId: state.activeDockTerminalId,
   };
 }
@@ -218,6 +226,14 @@ function applySnapshot(snapshot: LayoutSnapshot): boolean {
     return target && target.location !== "trash" && target.location !== "dialog" ? id : null;
   };
   const restoredMaximizedId = layoutPointer(snapshot.maximizedId);
+  // A group target whose group did not survive the restore maximizes the
+  // panel alone, the way `toggleMaximize` treats a panel with no group.
+  const restoredMaximizeTarget: MaximizeTarget =
+    restoredMaximizedId === null
+      ? null
+      : snapshot.maximizeTarget?.type === "group" && !restoredGroups.has(snapshot.maximizeTarget.id)
+        ? { type: "panel", id: restoredMaximizedId }
+        : snapshot.maximizeTarget;
 
   const worktreeBefore = new Map<string, string | undefined>();
   for (const id of newTerminalIds) worktreeBefore.set(id, panelsById[id]?.worktreeId);
@@ -232,12 +248,12 @@ function applySnapshot(snapshot: LayoutSnapshot): boolean {
     tabGroups: restoredGroups,
     focusedId: layoutPointer(snapshot.focusedId),
     maximizedId: restoredMaximizedId,
-    // Rejecting the snapshot's maximized panel must clear the trio together, or
-    // the live target turns the next maximize click into an unmaximize. Any
-    // other restore leaves them alone: snapshots don't carry the target, so redo
-    // relies on it, and `preMaximizeLayout` deliberately outlives an unmaximize.
+    maximizeTarget: restoredMaximizeTarget,
+    // Rejecting the snapshot's maximized panel clears the pre-maximize layout
+    // too. Any other restore leaves it alone: it deliberately outlives an
+    // unmaximize.
     ...(snapshot.maximizedId !== null &&
-      restoredMaximizedId === null && { maximizeTarget: null, preMaximizeLayout: null }),
+      restoredMaximizedId === null && { preMaximizeLayout: null }),
     activeDockTerminalId: activeDockStillValid ? restoredActiveDock : null,
   });
 

@@ -1781,6 +1781,10 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: string[];
   };
+  "plugin:layouts": {
+    args: [];
+    result: import("../plugin.js").PluginLayoutConfig[];
+  };
   "plugin:list": {
     args: [];
     result: import("../plugin.js").LoadedPluginInfo[];

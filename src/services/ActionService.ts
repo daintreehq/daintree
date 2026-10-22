@@ -746,6 +746,9 @@ export class ActionService {
         // terminals a dialog listed, so an injected `contextOverride` must not
         // be able to claim an approval that raises the agent terminal cap.
         hostApprovedRecipeRun: options?.hostApprovedRecipeRun,
+        // Same unconditional stamp: a plugin's identity comes from the host's
+        // own bridge closure, never from a context the caller could shape.
+        callerPluginId: source === "plugin" ? options?.callerPluginId : undefined,
       };
       const result = await definition.run(validatedArgs, runContext);
       // Enforce the action's own result contract. Zod objects strip unknown

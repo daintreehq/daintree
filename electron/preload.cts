@@ -3858,6 +3858,11 @@ function buildElectronApi(): ElectronAPI {
           entries: import("../shared/types/plugin.js").PluginLaunchEntryConfig[];
         }) => void
       ) => _eventBusOn("plugin:launch-entries-changed", callback),
+      onLayoutsChanged: (
+        callback: (payload: {
+          layouts: import("../shared/types/plugin.js").PluginLayoutConfig[];
+        }) => void
+      ) => _eventBusOn("plugin:layouts-changed", callback),
       onKeybindingsChanged: (
         callback: (payload: {
           keybindings: PluginKeybindingDescriptor[];
