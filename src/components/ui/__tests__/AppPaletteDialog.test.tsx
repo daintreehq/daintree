@@ -3,6 +3,7 @@ import { render, act, screen, fireEvent } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AppPaletteDialog } from "../AppPaletteDialog";
 import { usePaletteStore } from "@/store/paletteStore";
+import { deferPaletteFocusRestore } from "../paletteFocusRestore";
 import { _resetForTests } from "@/lib/escapeStack";
 import { _resetForTests as _resetBackstopForTests } from "@/lib/dialogEscapeBackstop";
 import { TABBABLE_SELECTOR } from "@/lib/accessibility";
@@ -430,6 +431,50 @@ describe("AppPaletteDialog focus restore", () => {
 
     expect(document.activeElement).toBe(trigger);
     document.body.removeChild(trigger);
+  });
+
+  function closedPalette() {
+    return (
+      <>
+        <Dispatcher />
+        <AppPaletteDialog isOpen={false} onClose={() => {}} ariaLabel="Test palette" tier="command">
+          <input type="text" placeholder="Palette input" />
+        </AppPaletteDialog>
+      </>
+    );
+  }
+
+  it("leaves focus where a pick moved it when the restore is handed off", async () => {
+    const trigger = document.createElement("button");
+    const picked = document.createElement("div");
+    picked.tabIndex = -1;
+    document.body.append(trigger, picked);
+    trigger.focus();
+
+    const { rerender } = renderPalette({ isOpen: true });
+    await act(() => vi.runAllTimersAsync());
+    deferPaletteFocusRestore((restore) => restore());
+    picked.focus();
+    rerender(closedPalette());
+
+    expect(document.activeElement).toBe(picked);
+    trigger.remove();
+    picked.remove();
+  });
+
+  it("still returns an unclaimed keyboard to the opener when the restore is handed off", async () => {
+    const trigger = document.createElement("button");
+    document.body.appendChild(trigger);
+    trigger.focus();
+
+    const { rerender } = renderPalette({ isOpen: true });
+    await act(() => vi.runAllTimersAsync());
+    screen.getByPlaceholderText("Palette input").focus();
+    deferPaletteFocusRestore((restore) => restore());
+    rerender(closedPalette());
+
+    expect(document.activeElement).toBe(trigger);
+    trigger.remove();
   });
 
   it("cancels delayed autofocus when the palette closes before its animation frame", async () => {

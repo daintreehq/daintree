@@ -8,7 +8,7 @@ import { isPtyPanel, type PanelKind } from "@shared/types/panel";
 import { isQuickSwitchablePanel } from "@/utils/quickSwitcher";
 import { useSearchablePalette, type FuseResultMatch } from "./useSearchablePalette";
 import { usePaletteStore } from "@/store/paletteStore";
-import { suppressPaletteFocusRestore } from "@/components/ui/paletteFocusRestore";
+import { deferPaletteFocusRestore } from "@/components/ui/paletteFocusRestore";
 import { deriveTerminalChrome, type TerminalChromeDescriptor } from "@/utils/terminalChrome";
 
 export type QuickSwitcherItemType = "terminal" | "worktree";
@@ -224,6 +224,10 @@ export function useQuickSwitcher(): UseQuickSwitcherReturn {
 
   const selectItem = useCallback(
     (item: QuickSwitcherItem) => {
+      // The palette refocuses its opener after the exit animation, which would
+      // pull the keyboard straight off the pick. Restore only if nothing took
+      // it — re-picking the focused panel moves no focus at all.
+      deferPaletteFocusRestore((restore) => restore());
       if (item.type === "terminal") {
         const terminalId = item.id.replace("terminal:", "");
         if (
@@ -240,9 +244,6 @@ export function useQuickSwitcher(): UseQuickSwitcherReturn {
         // Activate rather than focus: a panel behind a fullscreen neighbour
         // would otherwise land focused but hidden.
         activateTerminal(terminalId);
-        // The palette hands the keyboard back to its opener after the exit
-        // animation, which would pull it straight off the panel just picked.
-        if (terminal) suppressPaletteFocusRestore();
       } else if (item.type === "worktree") {
         const worktreeId = item.id.replace("worktree:", "");
         selectWorktree(worktreeId);

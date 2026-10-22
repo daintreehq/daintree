@@ -28,7 +28,7 @@ vi.mock("@/store", async () => {
 
 import { useQuickSwitcher, type QuickSwitcherItem } from "../useQuickSwitcher";
 import { usePaletteStore } from "@/store/paletteStore";
-import { consumePaletteFocusRestoreSuppression } from "@/components/ui/paletteFocusRestore";
+import { consumeDeferredPaletteFocusRestore } from "@/components/ui/paletteFocusRestore";
 
 type MockWorktreeState = {
   worktrees: Map<string, unknown>;
@@ -187,7 +187,7 @@ describe("useQuickSwitcher panel items (#13763)", () => {
 
   afterEach(() => {
     usePaletteStore.setState({ activePaletteId: null });
-    consumePaletteFocusRestoreSuppression();
+    consumeDeferredPaletteFocusRestore();
     unregisterPanelKind("acme.dashboard");
   });
 
@@ -313,7 +313,7 @@ describe("useQuickSwitcher panel items (#13763)", () => {
     act(() => result.current.selectItem(item!));
   }
 
-  it("activates a selected browser panel and keeps the closing palette from refocusing its opener", () => {
+  it("activates a selected browser panel and takes over the palette's focus restore", () => {
     const activate = vi.fn();
     usePanelStore.setState({ activateTerminal: activate });
     seedPanels([
@@ -324,7 +324,12 @@ describe("useQuickSwitcher panel items (#13763)", () => {
     selectById("terminal:br-1");
 
     expect(activate).toHaveBeenCalledWith("br-1");
-    expect(consumePaletteFocusRestoreSuppression()).toBe(true);
+    // The hand-off runs the palette's guarded restore, which only refocuses
+    // the opener while nothing else holds the keyboard.
+    const receive = consumeDeferredPaletteFocusRestore();
+    const restore = vi.fn();
+    receive?.(restore);
+    expect(restore).toHaveBeenCalledTimes(1);
   });
 
   it("switches to a panel's worktree before activating it", () => {
@@ -358,7 +363,7 @@ describe("useQuickSwitcher panel items (#13763)", () => {
     expect(restore.mock.invocationCallOrder[0]).toBeLessThan(activate.mock.invocationCallOrder[0]!);
   });
 
-  it("does not suppress the palette's focus restore when a worktree is picked", () => {
+  it("takes over the palette's focus restore when a worktree is picked", () => {
     seedWorktreeState({
       isInitialized: true,
       worktrees: new Map([["wt-1", { id: "wt-1", name: "main", path: "/repo" }]]),
@@ -367,7 +372,7 @@ describe("useQuickSwitcher panel items (#13763)", () => {
     selectById("worktree:wt-1");
 
     expect(selectWorktreeMock).toHaveBeenCalledWith("wt-1");
-    expect(consumePaletteFocusRestoreSuppression()).toBe(false);
+    expect(consumeDeferredPaletteFocusRestore()).not.toBeNull();
   });
 
   it("keeps MRU entries for open non-PTY panels when pruning", () => {
