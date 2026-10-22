@@ -9,7 +9,7 @@ import {
   resetProjectThemeSuggestion,
   setProjectThemeScheme,
 } from "../../services/projectThemeStore.js";
-import { parseHostScopedKey } from "../../../shared/types/remoteHosts.js";
+import { isLocalHostId, parseHostScopedKey } from "../../../shared/types/remoteHosts.js";
 import type { ProjectThemeSuggestionAnswer } from "../../../shared/theme/types.js";
 import type { ProjectThemeSnapshot } from "../../../shared/types/ipc/projectTheme.js";
 
@@ -19,8 +19,21 @@ import type { ProjectThemeSnapshot } from "../../../shared/types/ipc/projectThem
  * ever read or change the theme of the project it shows.
  */
 
-async function readSuggestedSchemeId(projectId: string): Promise<string | null> {
-  const project = projectStore.getProjectById(projectId);
+interface Sender {
+  /** The bare project id the choice is stored under, as the view's renderer knows it. */
+  projectId: string;
+  /** The view key main routes by: host-scoped for a remote view. */
+  viewKey: string;
+  local: boolean;
+}
+
+/**
+ * Only a local project's repository is on this machine to read. A remote
+ * project's suggestion would have to come from its host, so it is not offered.
+ */
+async function readSuggestedSchemeId(sender: Sender): Promise<string | null> {
+  if (!sender.local) return null;
+  const project = projectStore.getProjectById(sender.projectId);
   if (!project) return null;
   try {
     return (await projectStore.readInRepoProjectIdentity(project.path)).theme ?? null;
@@ -29,40 +42,52 @@ async function readSuggestedSchemeId(projectId: string): Promise<string | null> 
   }
 }
 
-async function snapshotOf(projectId: string): Promise<ProjectThemeSnapshot> {
-  const suggestedSchemeId = await readSuggestedSchemeId(projectId);
+async function snapshotOf(sender: Sender): Promise<ProjectThemeSnapshot> {
+  const suggestedSchemeId = await readSuggestedSchemeId(sender);
   // Read after the await, so a reply never carries an older choice than a push sent meanwhile.
+  const { projectId } = sender;
   return { projectId, choice: getProjectThemeChoice(projectId), suggestedSchemeId };
 }
 
-/** The key the renderer and the boot paths use: a remote view knows the bare project id. */
-function senderProjectId(ctx: IpcContext): string | null {
-  return ctx.projectId ? parseHostScopedKey(ctx.projectId).projectId : null;
+/**
+ * The choice is stored under the bare project id, which is what the boot paths
+ * and the view's renderer know it by; main routes a remote view by its
+ * host-scoped key.
+ */
+function senderOf(ctx: IpcContext): Sender | null {
+  if (!ctx.projectId) return null;
+  const { hostId, projectId } = parseHostScopedKey(ctx.projectId);
+  return { projectId, viewKey: ctx.projectId, local: isLocalHostId(hostId) };
 }
 
-function requireProjectId(ctx: IpcContext): string {
-  const projectId = senderProjectId(ctx);
-  if (!projectId) throw new Error("project theme: sender has no project");
-  return projectId;
+function requireSender(ctx: IpcContext): Sender {
+  const sender = senderOf(ctx);
+  if (!sender) throw new Error("project theme: sender has no project");
+  return sender;
+}
+
+/** Every local view of the project, and the sender's own view when it is remote. */
+function publish(sender: Sender): void {
+  publishProjectThemeChoice(sender.projectId, sender.viewKey);
 }
 
 /** `null` for a sender with no project binding yet, rather than a project with no theme. */
 async function handleGet(ctx: IpcContext): Promise<ProjectThemeSnapshot | null> {
-  const projectId = senderProjectId(ctx);
-  return projectId ? snapshotOf(projectId) : null;
+  const sender = senderOf(ctx);
+  return sender ? snapshotOf(sender) : null;
 }
 
 async function handleSetTheme(
   ctx: IpcContext,
   schemeId: string | null
 ): Promise<ProjectThemeSnapshot> {
-  const projectId = requireProjectId(ctx);
+  const sender = requireSender(ctx);
   if (schemeId !== null && typeof schemeId !== "string") {
     throw new Error("project theme: schemeId must be a string or null");
   }
-  setProjectThemeScheme(projectId, schemeId);
-  publishProjectThemeChoice(projectId);
-  return snapshotOf(projectId);
+  setProjectThemeScheme(sender.projectId, schemeId);
+  publish(sender);
+  return snapshotOf(sender);
 }
 
 async function handleAnswerSuggestion(
@@ -70,7 +95,7 @@ async function handleAnswerSuggestion(
   schemeId: string,
   answer: ProjectThemeSuggestionAnswer
 ): Promise<ProjectThemeSnapshot> {
-  const projectId = requireProjectId(ctx);
+  const sender = requireSender(ctx);
   if (typeof schemeId !== "string" || !schemeId) {
     throw new Error("project theme: schemeId is required");
   }
@@ -79,19 +104,19 @@ async function handleAnswerSuggestion(
   }
   // Re-read rather than trust the renderer: the answer only counts for what
   // the file suggests NOW, and only if that is what the notice showed.
-  if ((await readSuggestedSchemeId(projectId)) !== schemeId) {
+  if ((await readSuggestedSchemeId(sender)) !== schemeId) {
     throw new Error("project theme: the repository no longer suggests this theme");
   }
-  answerProjectThemeSuggestion(projectId, schemeId, answer);
-  publishProjectThemeChoice(projectId);
-  return snapshotOf(projectId);
+  answerProjectThemeSuggestion(sender.projectId, schemeId, answer);
+  publish(sender);
+  return snapshotOf(sender);
 }
 
 async function handleResetSuggestion(ctx: IpcContext): Promise<ProjectThemeSnapshot> {
-  const projectId = requireProjectId(ctx);
-  resetProjectThemeSuggestion(projectId);
-  publishProjectThemeChoice(projectId);
-  return snapshotOf(projectId);
+  const sender = requireSender(ctx);
+  resetProjectThemeSuggestion(sender.projectId);
+  publish(sender);
+  return snapshotOf(sender);
 }
 
 export const projectThemeNamespace = defineIpcNamespace({

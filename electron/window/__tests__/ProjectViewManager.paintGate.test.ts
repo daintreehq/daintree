@@ -182,6 +182,14 @@ vi.mock("../skeletonCss.js", () => ({
   resolveInitialCanvasBackgroundColor: vi.fn(() => "#1f1b16"),
 }));
 
+// The window chrome repaint is observed rather than run: which project it is
+// painted for is the contract (#13833), and the real one reaches the store.
+const repaintWindowTheme = vi.hoisted(() => vi.fn());
+vi.mock("../projectThemeChrome.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../projectThemeChrome.js")>()),
+  repaintWindowTheme,
+}));
+
 // ProjectViewManager imports isDemoMode from setup/environment.js, whose
 // module-level side effects (deepLinkUrlQueue app.on, userData setPath) need
 // the real electron app API the partial mock above does not provide.
@@ -355,6 +363,46 @@ describe("ProjectViewManager — paint gate (cold-start visible swap)", () => {
 
     expect(win.contentView.removeChildView).toHaveBeenCalledTimes(1);
     expect(manager.getActiveProjectId()).toBe("proj-b");
+  });
+
+  it("keeps the window chrome on the outgoing project until the incoming one is revealed (#13833)", async () => {
+    const incomingWc = createMockWebContents();
+    wcQueue.push(incomingWc);
+    // Settle the startup view's own paint first.
+    await Promise.resolve();
+    repaintWindowTheme.mockClear();
+
+    const switchPromise = manager.switchTo("proj-b", "/path/b");
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // `activeProjectId` already names proj-b, but proj-a is what is on screen.
+    expect(manager.getActiveProjectId()).toBe("proj-b");
+    expect(repaintWindowTheme).toHaveBeenCalledWith(win, "proj-a");
+    for (const [, projectId] of repaintWindowTheme.mock.calls) expect(projectId).toBe("proj-a");
+
+    manager.signalViewPainted(incomingWc.id);
+    await switchPromise;
+    await Promise.resolve();
+
+    expect(repaintWindowTheme).toHaveBeenLastCalledWith(win, "proj-b");
+  });
+
+  it("puts the window chrome back on the outgoing project when the switch is abandoned (#13833)", async () => {
+    vi.useFakeTimers();
+    try {
+      wcQueue.push(createMockWebContents());
+      const rejection = expectRejection(manager.switchTo("proj-b", "/path/b"));
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(PAINT_HARD_MS + 10);
+      await rejection;
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(manager.getActiveProjectId()).toBe("proj-a");
+      expect(repaintWindowTheme).toHaveBeenLastCalledWith(win, "proj-a");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("soft timeout warns but does NOT detach the outgoing view", async () => {

@@ -2,7 +2,12 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { BUILT_IN_APP_SCHEMES } from "@/config/appColorSchemes";
 import { BUILT_IN_THEME_SOURCES } from "@shared/theme/builtInThemes";
-import { flushPendingTheme, resolveCommittedScheme, useAppThemeStore } from "../appThemeStore";
+import {
+  flushPendingTheme,
+  injectSchemeToDOM,
+  resolveCommittedScheme,
+  useAppThemeStore,
+} from "../appThemeStore";
 import {
   compilePluginTheme,
   makePluginThemeId,
@@ -116,10 +121,19 @@ describe("appThemeStore: a project's own theme (#13833)", () => {
     expect(paintedCanvas()).toBe(canvasOf(compiled));
   });
 
-  it("leaves an open preview on screen and restores the project's theme after it", () => {
+  it("leaves an open preview on screen, and restoring the committed theme shows the project's", () => {
+    const store = useAppThemeStore.getState();
     useAppThemeStore.setState({ previewSchemeId: otherDark.id });
-    useAppThemeStore.getState().setProjectTheme({ colorSchemeId: light.id });
+    store.injectTheme(otherDark);
+    expect(paintedCanvas()).toBe(canvasOf(otherDark));
+
+    store.setProjectTheme({ colorSchemeId: light.id });
+    // The preview still owns the DOM.
+    expect(paintedCanvas()).toBe(canvasOf(otherDark));
+
+    // Ending it the way the theme browser does paints the project's theme.
     useAppThemeStore.setState({ previewSchemeId: null });
-    expect(resolveCommittedScheme(useAppThemeStore.getState()).id).toBe(light.id);
+    injectSchemeToDOM(resolveCommittedScheme(useAppThemeStore.getState()), { immediate: true });
+    expect(paintedCanvas()).toBe(canvasOf(light));
   });
 });

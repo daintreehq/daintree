@@ -174,6 +174,29 @@ describe("project-theme:answer-suggestion", () => {
   });
 });
 
+describe("a remote view (host-scoped key)", () => {
+  it("stores the choice under the bare project id and reaches the remote view's own key", async () => {
+    registryMock.getProjectForWebContents.mockReturnValue(`host-1:${PROJECT_A}`);
+    const snapshot = (await invoke("project-theme:set-theme", "bondi")) as ProjectThemeSnapshot;
+
+    expect(snapshot.projectId).toBe(PROJECT_A);
+    const change = { projectId: PROJECT_A, choice: { colorSchemeId: "bondi" } };
+    expect(broadcastMock).toHaveBeenCalledWith(PROJECT_A, CHANNELS.PROJECT_THEME_CHANGED, change);
+    expect(broadcastMock).toHaveBeenCalledWith(
+      `host-1:${PROJECT_A}`,
+      CHANNELS.PROJECT_THEME_CHANGED,
+      change
+    );
+  });
+
+  it("offers no suggestion: the repository lives on the host, not here", async () => {
+    registryMock.getProjectForWebContents.mockReturnValue(`host-1:${PROJECT_A}`);
+    const snapshot = (await invoke("project-theme:get")) as ProjectThemeSnapshot;
+    expect(snapshot.suggestedSchemeId).toBeNull();
+    expect(projectStoreMock.readInRepoProjectIdentity).not.toHaveBeenCalled();
+  });
+});
+
 describe("project-theme:reset-suggestion", () => {
   it("forgets the answer and keeps the theme", async () => {
     await invoke("project-theme:answer-suggestion", SUGGESTED, "accepted");

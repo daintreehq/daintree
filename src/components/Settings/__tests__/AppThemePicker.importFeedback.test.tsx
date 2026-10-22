@@ -27,20 +27,20 @@ vi.mock("@/lib/appThemeViewTransition", () => ({
 
 const storeState: Record<string, unknown> = {};
 
-vi.mock("@/store/appThemeStore", () => ({
-  useAppThemeStore: Object.assign(
-    (selector: (s: Record<string, unknown>) => unknown) => selector(storeState),
-    { getState: () => storeState }
-  ),
-  injectSchemeToDOM: vi.fn(),
-  // No project theme here, so what is painted is the global selection (#13833).
-  resolveCommittedScheme: (s: Record<string, unknown>) => ({
-    id: s.selectedSchemeId,
-    name: s.selectedSchemeId,
-    type: "dark",
-    tokens: {},
-  }),
-}));
+vi.mock("@/store/appThemeStore", async () => {
+  const { BUILT_IN_APP_SCHEMES } = await import("@/config/appColorSchemes");
+  return {
+    useAppThemeStore: Object.assign(
+      (selector: (s: Record<string, unknown>) => unknown) => selector(storeState),
+      { getState: () => storeState }
+    ),
+    injectSchemeToDOM: vi.fn(),
+    // No project theme here, so what is painted is the global selection (#13833).
+    resolveCommittedScheme: (s: Record<string, unknown>) =>
+      BUILT_IN_APP_SCHEMES.find((scheme) => scheme.id === s.selectedSchemeId) ??
+      BUILT_IN_APP_SCHEMES[0],
+  };
+});
 
 vi.mock("@shared/theme", () => ({
   APP_THEME_PREVIEW_KEYS: { background: "--daintree-bg" },

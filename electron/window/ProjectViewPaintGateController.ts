@@ -123,6 +123,8 @@ export function waitForPaint(
         clearTimeout(gate.hardTimeout);
         if (host.pendingPaintGate === gate) {
           host.pendingPaintGate = null;
+          // A warm switch's bridge ends here; the chrome follows what is revealed.
+          host.repaintThemeChrome();
         }
         resolveOuter(reason);
       },

@@ -58,13 +58,15 @@ export function getProjectThemeChoice(projectId: string): ProjectThemeChoice | n
 /**
  * Tell every view of the project what it now shows — the settings row and the
  * suggestion notice can sit in different windows — and repaint the chrome of
- * any window showing it.
+ * any window showing it. A remote view is routed by its host-scoped key, so
+ * the view that made the change passes it as `viewKey` to hear about it too.
  */
-export function publishProjectThemeChoice(projectId: string): void {
-  broadcastToProjectRenderers(projectId, CHANNELS.PROJECT_THEME_CHANGED, {
-    projectId,
-    choice: getProjectThemeChoice(projectId),
-  });
+export function publishProjectThemeChoice(projectId: string, viewKey: string = projectId): void {
+  const change = { projectId, choice: getProjectThemeChoice(projectId) };
+  broadcastToProjectRenderers(projectId, CHANNELS.PROJECT_THEME_CHANGED, change);
+  if (viewKey !== projectId) {
+    broadcastToProjectRenderers(viewKey, CHANNELS.PROJECT_THEME_CHANGED, change);
+  }
   repaintAllWindowThemes();
 }
 

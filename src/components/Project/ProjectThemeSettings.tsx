@@ -17,13 +17,16 @@ const GLOBAL_THEME_VALUE = "__global__";
  * page: a pick lands in Daintree's own store and repaints this project.
  */
 export function ProjectThemeRows() {
-  const init = useProjectThemeStore((s) => s.init);
-  const choice = useProjectThemeStore((s) => s.choice);
+  const refresh = useProjectThemeStore((s) => s.refresh);
   const failedSave = useProjectThemeStore((s) => s.failedSave);
+  const retryFailedSave = useProjectThemeStore((s) => s.retryFailedSave);
   const setTheme = useProjectThemeStore((s) => s.setTheme);
   const answerSuggestion = useProjectThemeStore((s) => s.answerSuggestion);
   const resetSuggestion = useProjectThemeStore((s) => s.resetSuggestion);
   const answering = useProjectThemeStore((s) => s.answering);
+  // What this view paints: seeded at boot and kept current by main's pushes, so
+  // it is right before the settings read below has answered.
+  const overrideId = useAppThemeStore((s) => s.projectSchemeId);
   const projectSnapshotScheme = useAppThemeStore((s) => s.projectSnapshotScheme);
   const globalScheme = useAppThemeStore((s) =>
     resolveAppTheme(s.selectedSchemeId, selectSelectableSchemes(s))
@@ -31,11 +34,11 @@ export function ProjectThemeRows() {
   const schemes = useAllAppSchemes();
   const suggestion = useThemeSuggestion();
 
+  // Every time the dialog opens: a checkout can change what the repository suggests.
   useEffect(() => {
-    init();
-  }, [init]);
+    refresh();
+  }, [refresh]);
 
-  const overrideId = choice?.colorSchemeId ?? null;
   const overrideScheme =
     overrideId === null
       ? null
@@ -68,8 +71,9 @@ export function ProjectThemeRows() {
         ? `The chosen theme isn't available here, so the global theme shows · ${globalScheme.name}`
         : `Only this project. Global theme · ${globalScheme.name}`;
 
-  const saveError =
-    failedSave && failedSave.save.kind !== "answer" ? failedSave.message : undefined;
+  const themeError = failedSave?.save.kind === "theme" ? failedSave.message : undefined;
+  const suggestionError =
+    failedSave && failedSave.save.kind !== "theme" ? failedSave.message : undefined;
 
   let suggestionDescription: string | null = null;
   if (suggestion !== null) {
@@ -97,7 +101,7 @@ export function ProjectThemeRows() {
         isModified={overrideId !== null}
         onReset={() => void setTheme(null)}
         resetAriaLabel="Use the global theme in this project"
-        error={saveError}
+        error={themeError}
       />
       {suggestion !== null && suggestionDescription !== null && (
         <SettingsRow
@@ -106,8 +110,13 @@ export function ProjectThemeRows() {
           isModified={suggestion.answer !== null}
           onReset={() => void resetSuggestion()}
           resetAriaLabel="Ask about the suggested theme again"
+          error={suggestionError}
           control={
-            canUseSuggestion ? (
+            suggestionError !== undefined ? (
+              <Button variant="outline" size="sm" onClick={retryFailedSave}>
+                Retry
+              </Button>
+            ) : canUseSuggestion ? (
               <Button
                 variant="outline"
                 size="sm"

@@ -6,9 +6,13 @@ import {
 } from "@/config/terminalColorSchemes";
 import { useTerminalColorSchemeStore } from "@/store/terminalColorSchemeStore";
 import { resolveCommittedScheme, useAppThemeStore } from "@/store/appThemeStore";
-import { selectSelectableSchemes } from "@/theme/selectableSchemes";
 import { terminalConfigClient } from "@/clients/terminalConfigClient";
-import { getTerminalThemeFromAppScheme, relativeLuminance, resolveAppTheme } from "@shared/theme";
+import {
+  getTerminalThemeFromAppScheme,
+  relativeLuminance,
+  resolveAppTheme,
+  type AppColorScheme,
+} from "@shared/theme";
 import { logError } from "@/utils/logger";
 import { Button } from "@/components/ui/button";
 import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup";
@@ -187,11 +191,12 @@ export function ImportColorSchemeButton({
  */
 export function resolveSchemeForPreview(
   scheme: TerminalColorScheme,
-  appThemeId: string,
+  appTheme: string | AppColorScheme,
   appCustomSchemes: Parameters<typeof resolveAppTheme>[1] = []
 ): TerminalColorScheme {
   if (scheme.id !== DEFAULT_SCHEME_ID) return scheme;
-  const appScheme = resolveAppTheme(appThemeId, appCustomSchemes);
+  const appScheme =
+    typeof appTheme === "string" ? resolveAppTheme(appTheme, appCustomSchemes) : appTheme;
   return { ...scheme, colors: getTerminalThemeFromAppScheme(appScheme) };
 }
 
@@ -215,17 +220,16 @@ export function ColorSchemePicker({
   const selectedSchemeId = useTerminalColorSchemeStore((s) => s.selectedSchemeId);
   const customSchemes = useTerminalColorSchemeStore((s) => s.customSchemes);
   const setPreviewSchemeId = useTerminalColorSchemeStore((s) => s.setPreviewSchemeId);
-  const appThemeId = useAppThemeStore((s) => resolveCommittedScheme(s).id);
-  const appCustomSchemes = useAppThemeStore(selectSelectableSchemes);
+  // The app theme on screen, which is the project's own when it has one —
+  // including a plugin theme painted from its snapshot.
+  const appScheme = useAppThemeStore(resolveCommittedScheme);
 
   const [previewAnnouncement, setPreviewAnnouncement] = useState("");
 
   const resolvedSchemes = useMemo(
     () =>
-      [...BUILT_IN_SCHEMES, ...customSchemes].map((s) =>
-        resolveSchemeForPreview(s, appThemeId, appCustomSchemes)
-      ),
-    [customSchemes, appThemeId, appCustomSchemes]
+      [...BUILT_IN_SCHEMES, ...customSchemes].map((s) => resolveSchemeForPreview(s, appScheme)),
+    [customSchemes, appScheme]
   );
   const selectedScheme =
     resolvedSchemes.find((s) => s.id === selectedSchemeId) ?? resolvedSchemes[0]!;

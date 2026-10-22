@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { useAppThemeStore } from "@/store/appThemeStore";
 import { appThemeClient } from "@/clients/appThemeClient";
 import { getSafeBootPromise } from "@/lib/bootPromise";
@@ -26,6 +26,9 @@ export function useAppThemeConfig() {
   const setPreferredLightSchemeId = useAppThemeStore((state) => state.setPreferredLightSchemeId);
   const setRecentSchemeIds = useAppThemeStore((state) => state.setRecentSchemeIds);
   const setProjectTheme = useAppThemeStore((state) => state.setProjectTheme);
+  // Set once main has said what this view's project shows since boot — a push,
+  // or the read taken after subscribing. The boot payload is older than either.
+  const projectThemeLiveRef = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -52,7 +55,9 @@ export function useAppThemeConfig() {
 
       // Also before the selection, so a project with its own theme (#13833)
       // paints it in the same frame rather than the global one first.
-      setProjectTheme(readProjectThemeChoice(config, getViewWorkspaceId()));
+      if (!projectThemeLiveRef.current) {
+        setProjectTheme(readProjectThemeChoice(config, getViewWorkspaceId()));
+      }
 
       if (typeof config.colorSchemeId === "string" && config.colorSchemeId.trim()) {
         const schemeId = config.colorSchemeId.trim();
@@ -124,12 +129,36 @@ export function useAppThemeConfig() {
   useEffect(() => {
     const projectTheme = window.electron?.projectTheme;
     if (!projectTheme?.onChanged) return;
-    return projectTheme.onChanged(({ projectId, choice }) => {
+    let disposed = false;
+    let pushed = false;
+    const unsubscribe = projectTheme.onChanged(({ projectId, choice }) => {
       // Main sends it to every view of the project; anything else is not ours.
       if (projectId !== getViewWorkspaceId()) return;
+      pushed = true;
+      projectThemeLiveRef.current = true;
       // The outgoing theme is on screen, so fade rather than cut.
       setProjectTheme(choice, { crossfade: true });
     });
+    // A change another window made between the boot payload and this
+    // subscription reached no push, so read once more now that one would.
+    if (typeof projectTheme.get === "function") {
+      projectTheme
+        .get()
+        .then((snapshot) => {
+          if (disposed || pushed || !snapshot || snapshot.projectId !== getViewWorkspaceId()) {
+            return;
+          }
+          projectThemeLiveRef.current = true;
+          setProjectTheme(snapshot.choice, { crossfade: true });
+        })
+        .catch((error: unknown) => {
+          logError("Failed to read the project theme", error);
+        });
+    }
+    return () => {
+      disposed = true;
+      unsubscribe();
+    };
   }, [setProjectTheme]);
 
   useEffect(() => {

@@ -37,6 +37,11 @@ interface ProjectThemeState {
   deferSuggestion: (schemeId: string) => void;
   /** Idempotent: pulls once, then follows main's pushes. */
   init: () => void;
+  /**
+   * Read again: the repository's suggestion changes with a checkout and no
+   * push says so, so Project settings re-reads it whenever it opens.
+   */
+  refresh: () => void;
 }
 
 let initialized = false;
@@ -48,11 +53,16 @@ const RETRY_DELAYS_MS = [250, 1000, 3000] as const;
 
 export const useProjectThemeStore = create<ProjectThemeState>((set, get) => {
   const adopt = (snapshot: ProjectThemeSnapshot): void => {
+    const failed = get().failedSave;
     set({
       projectId: snapshot.projectId,
       choice: snapshot.choice,
       suggestedSchemeId: snapshot.suggestedSchemeId,
       loaded: true,
+      // An answer about a suggestion the file no longer makes can never succeed.
+      ...(failed?.save.kind === "answer" && failed.save.schemeId !== snapshot.suggestedSchemeId
+        ? { failedSave: null }
+        : {}),
     });
   };
 
@@ -71,6 +81,9 @@ export const useProjectThemeStore = create<ProjectThemeState>((set, get) => {
       set({
         failedSave: { save, message: formatErrorMessage(error, "Couldn't save the theme") },
       });
+      // The refusal may be about a suggestion that changed underneath; the
+      // fresh read clears a failure that can never succeed.
+      pull(0);
       return false;
     }
   };
@@ -133,6 +146,14 @@ export const useProjectThemeStore = create<ProjectThemeState>((set, get) => {
     dismissFailedSave: () => set({ failedSave: null }),
 
     deferSuggestion: (schemeId) => set({ deferredSuggestionId: schemeId }),
+
+    refresh: () => {
+      if (!initialized) {
+        get().init();
+        return;
+      }
+      pull(0);
+    },
 
     init: () => {
       if (initialized) return;

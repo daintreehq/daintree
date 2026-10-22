@@ -192,11 +192,8 @@ interface SaveError {
 export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
   const selectedSchemeId = useAppThemeStore((s) => s.selectedSchemeId);
   // Set in Project settings (#13833); the pickers here keep editing the global theme.
-  const projectThemeName = useAppThemeStore((s) => {
-    if (!s.projectSchemeId) return null;
-    const shown = resolveCommittedScheme(s);
-    return shown.id === s.projectSchemeId ? shown.name : null;
-  });
+  const projectSchemeId = useAppThemeStore((s) => s.projectSchemeId);
+  const projectSnapshotScheme = useAppThemeStore((s) => s.projectSnapshotScheme);
   const customSchemes = useAppThemeStore((s) => s.customSchemes);
   const selectableSchemes = useAppThemeStore(selectSelectableSchemes);
   const commitSchemeSelection = useAppThemeStore((s) => s.commitSchemeSelection);
@@ -318,23 +315,35 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
     onError: onHeroError,
   } = useImageError(selectedScheme.heroImage);
 
+  // The accent override lands on the theme on screen, which in a project with
+  // its own theme (#13833) is not the global selection browsed above.
+  const paintedScheme = useMemo(() => {
+    if (!projectSchemeId) return selectedScheme;
+    return (
+      allSchemes.find((s) => s.id === projectSchemeId) ??
+      (projectSnapshotScheme?.id === projectSchemeId ? projectSnapshotScheme : null) ??
+      selectedScheme
+    );
+  }, [allSchemes, projectSchemeId, projectSnapshotScheme, selectedScheme]);
+  const projectThemeName =
+    projectSchemeId && paintedScheme.id === projectSchemeId ? paintedScheme.name : null;
   const effectiveAccent = useMemo(
-    () => accentColorOverride ?? selectedScheme.tokens["accent-primary"],
-    [accentColorOverride, selectedScheme]
+    () => accentColorOverride ?? paintedScheme.tokens["accent-primary"],
+    [accentColorOverride, paintedScheme]
   );
   const pickerValue = useMemo(() => {
-    const candidate = accentColorOverride ?? selectedScheme.tokens["accent-primary"];
+    const candidate = accentColorOverride ?? paintedScheme.tokens["accent-primary"];
     return /^#[0-9a-f]{6}$/i.test(candidate) ? candidate.toLowerCase() : "#000000";
-  }, [accentColorOverride, selectedScheme]);
+  }, [accentColorOverride, paintedScheme]);
 
   // Warn — non-blocking — when an accent override drops below WCAG AA 4.5:1 against the
   // active theme, either as button-label text or as accent-tinted text on the theme surfaces.
   const accentContrastFail = useMemo<AccentContrastFailure | null>(() => {
     if (!accentColorOverride) return null;
     return accentOverrideHasLowContrast(
-      applyAccentOverrideToScheme(selectedScheme, accentColorOverride)
+      applyAccentOverrideToScheme(paintedScheme, accentColorOverride)
     );
-  }, [accentColorOverride, selectedScheme]);
+  }, [accentColorOverride, paintedScheme]);
 
   const handleAccentInput = (e: FormEvent<HTMLInputElement>) => {
     setAccentColorOverride(e.currentTarget.value);
@@ -392,8 +401,10 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
     commitSchemeSelection(id);
     const targetRecents = useAppThemeStore.getState().recentSchemeIds;
     // A project with its own theme keeps showing it; this sets the global theme.
-    const scheme = resolveCommittedScheme(useAppThemeStore.getState());
-    runThemeReveal(origin ?? null, () => injectSchemeToDOM(scheme, { immediate: true }));
+    // Resolved when the reveal paints, so a project theme pushed meanwhile wins.
+    runThemeReveal(origin ?? null, () =>
+      injectSchemeToDOM(resolveCommittedScheme(useAppThemeStore.getState()), { immediate: true })
+    );
 
     const restoreConfirmed = () => {
       const confirmed = confirmedRef.current;
@@ -589,7 +600,7 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
     window.dispatchEvent(new CustomEvent("daintree:open-theme-browser"));
   };
 
-  const themeDefaultAccent = selectedScheme.tokens["accent-primary"];
+  const themeDefaultAccent = paintedScheme.tokens["accent-primary"];
   const defaultSchemeName =
     allSchemes.find((scheme) => scheme.id === DEFAULT_APP_SCHEME_ID)?.name ?? "the default";
 
@@ -744,7 +755,7 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
             description={
               accentContrastFail.mode === "foreground"
                 ? `Button text scores ${accentContrastFail.worstRatio.toFixed(2)}:1 on this accent. Pick a lighter or darker one.`
-                : `The accent scores ${accentContrastFail.worstRatio.toFixed(2)}:1 on ${selectedScheme.name} surfaces. Pick a more distinct one.`
+                : `The accent scores ${accentContrastFail.worstRatio.toFixed(2)}:1 on ${paintedScheme.name} surfaces. Pick a more distinct one.`
             }
           />
         </div>
