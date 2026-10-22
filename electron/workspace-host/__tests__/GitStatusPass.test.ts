@@ -539,7 +539,9 @@ describe("GitStatusPass", () => {
     mockGetWorktreeChangesWithStats.mockResolvedValue(
       makeChanges({ lastCommitMessage: undefined })
     );
-    const { pass, host } = makePass();
+    const { pass, host } = makePass({}, {
+      compute: vi.fn().mockResolvedValue(null),
+    } as unknown as BaseDivergence);
     host.hasInitialStatus = true;
 
     await pass.run(false);

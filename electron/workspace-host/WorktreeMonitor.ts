@@ -63,9 +63,9 @@ const STATUS_INITIAL_DELAY_MAX_MS = 5_000;
 // A monitor started without a git-status pass publishes `worktreeChanges:
 // null` ("Checking status…"), and a background worktree under a git-only
 // watcher otherwise waits a full 5-minute poll for its first real status
-// (#13749). Retries double from the deadline while the status stays null.
+// (#13749). Retries double from the deadline, capped, while it stays null.
 const FIRST_STATUS_DEADLINE_MS = 5_000;
-const FIRST_STATUS_MAX_ATTEMPTS = 4;
+const FIRST_STATUS_RETRY_MAX_MS = 30_000;
 
 function randomBetween(minMs: number, maxMs: number): number {
   if (maxMs <= minMs) return minMs;
@@ -1227,6 +1227,9 @@ export class WorktreeMonitor {
       // starts here needs it back. No-op when a timer is already armed.
       this.scheduleNextPoll();
       this.reportWritesMissedWhilePaused();
+      // Agent work can lift a suspend that cleared the first-status recovery,
+      // and the refresh below may not land a status either.
+      this.rearmFirstStatusRecovery(this._pollAbortController);
     }
     if (this._hasInitialStatus) {
       this.triggerRefreshIfUpdating();
@@ -1655,6 +1658,7 @@ export class WorktreeMonitor {
       this.initialStatusTimer = setTimeout(() => {
         this.initialStatusTimer = null;
         if (!this._isRunning) return;
+        const lifecycle = this._pollAbortController;
         // updateGitStatus already surfaces non-removal errors via mood=error
         // + emit; the catch here just prevents the unhandled rejection from
         // bubbling out of the fire-and-forget timer.
@@ -1664,6 +1668,7 @@ export class WorktreeMonitor {
           })
           .finally(() => {
             this.scheduleNextPoll();
+            this.rearmFirstStatusRecovery(lifecycle);
           });
       }, delayMs);
       this.initialStatusTimer.unref?.();
@@ -1682,30 +1687,33 @@ export class WorktreeMonitor {
       this.watcherController.start();
     }
 
-    // Skipping the initial git status scan is a perf optimization — freshly
-    // created worktrees are clean by definition, and bulk-loading a project
-    // runs its own refreshAll later. But we still have to (a) emit the
-    // current (default-clean) snapshot so the renderer can add the worktree
-    // to its store (the store only grows on worktree-update events), and
-    // (b) schedule polling so changes after file-watcher events get picked
-    // up. start() does both via updateGitStatus + scheduleNextPoll; this
-    // mirrors that contract minus the expensive git invocation.
+    // Skipping the initial git status scan is a perf optimization — bulk-
+    // loading a project runs its own refreshAll later. But we still have to
+    // (a) emit a snapshot so the renderer can add the worktree to its store
+    // (the store only grows on worktree-update events) — its null
+    // worktreeChanges reads as "Checking status…" — and (b) schedule polling
+    // so changes after file-watcher events get picked up. start() does both
+    // via updateGitStatus + scheduleNextPoll; this mirrors that contract minus
+    // the expensive git invocation, and the first-status recovery owes the
+    // snapshot a real status when nothing else delivers one.
     this._hasInitialStatus = true;
     this.emitUpdate();
 
     this.scheduleNextPoll();
     this.fetchScheduler.schedule(true);
-    this.armFirstStatusRecovery(FIRST_STATUS_DEADLINE_MS, 1);
+    this.armFirstStatusRecovery();
   }
 
   /**
    * Owe a placeholder snapshot its first real status. A bulk project load's
    * refreshAll usually lands it first, in which case the pass is skipped. A
-   * suspended monitor's resume catch-up owes it instead, so a timer cleared by
-   * the suspend is not re-armed.
+   * suspend clears the timer; resume's catch-up re-arms it if that pass also
+   * leaves the status unresolved.
    */
-  private armFirstStatusRecovery(delayMs: number, attempt: number): void {
-    if (this.firstStatusTimer) clearTimeout(this.firstStatusTimer);
+  private armFirstStatusRecovery(delayMs: number = FIRST_STATUS_DEADLINE_MS): void {
+    // An armed deadline is never pushed back.
+    if (this.firstStatusTimer) return;
+    const lifecycle = this._pollAbortController;
     this.firstStatusTimer = setTimeout(() => {
       this.firstStatusTimer = null;
       if (!this._isRunning || this.worktreeChanges !== null) return;
@@ -1713,17 +1721,33 @@ export class WorktreeMonitor {
         () => true,
         () => this.worktreeChanges === null
       ).finally(() => {
-        if (
-          attempt < FIRST_STATUS_MAX_ATTEMPTS &&
-          this._isRunning &&
-          this.statusWorkAllowed &&
-          this.worktreeChanges === null
-        ) {
-          this.armFirstStatusRecovery(delayMs * 2, attempt + 1);
-        }
+        this.rearmFirstStatusRecovery(
+          lifecycle,
+          Math.min(delayMs * 2, FIRST_STATUS_RETRY_MAX_MS)
+        );
       });
     }, delayMs);
     this.firstStatusTimer.unref?.();
+  }
+
+  /**
+   * Re-arm after a pass that may have published the first status settles.
+   * `lifecycle` is the controller pinned when that pass began: a stop-then-
+   * start swaps it, and the old lifecycle's completion must not act on the new.
+   */
+  private rearmFirstStatusRecovery(
+    lifecycle: AbortController,
+    delayMs: number = FIRST_STATUS_DEADLINE_MS
+  ): void {
+    if (
+      lifecycle !== this._pollAbortController ||
+      !this._isRunning ||
+      !this.statusWorkAllowed ||
+      this.worktreeChanges !== null
+    ) {
+      return;
+    }
+    this.armFirstStatusRecovery(delayMs);
   }
 
   stop(): void {
@@ -1949,6 +1973,7 @@ export class WorktreeMonitor {
     if (this.resumeCatchUpWaiting) return;
     const token = {};
     this.resumeCatchUpWaiting = token;
+    const lifecycle = this._pollAbortController;
     const release = (): void => {
       if (this.resumeCatchUpWaiting === token) this.resumeCatchUpWaiting = null;
     };
@@ -1957,7 +1982,12 @@ export class WorktreeMonitor {
       const force = this.resumeCatchUpNeedsForce || this.isElevated;
       this.resumeCatchUpNeedsForce = false;
       return force;
-    }).finally(release);
+    }).finally(() => {
+      release();
+      // The suspend cleared any first-status recovery; a catch-up that still
+      // left the status unresolved hands the job back to it.
+      this.rearmFirstStatusRecovery(lifecycle);
+    });
   }
 
   /**

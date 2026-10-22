@@ -1777,6 +1777,47 @@ describe("WorktreeMonitor", () => {
       monitor.stop();
     });
 
+    it("recovers a deferred start() whose initial pass failed", async () => {
+      mockGetWorktreeChangesWithStats
+        .mockRejectedValueOnce(new Error("fatal: not a git repository"))
+        .mockResolvedValue(CLEAN_CHANGES);
+      const callbacks = makeCallbacks();
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, GIT_WATCH_CONFIG, callbacks, "main");
+
+      await monitor.start();
+      await flushInitialStatus();
+      expect(mockGetWorktreeChangesWithStats).toHaveBeenCalledTimes(1);
+      expect(monitor.getWorktreeChanges()).toBeNull();
+
+      await vi.advanceTimersByTimeAsync(FIRST_STATUS_DEADLINE_MS);
+      expect(mockGetWorktreeChangesWithStats).toHaveBeenCalledTimes(2);
+      expect(monitor.getWorktreeChanges()).not.toBeNull();
+
+      monitor.stop();
+    });
+
+    it("re-arms when agent work lifts the pause that cleared the recovery", async () => {
+      // Whatever pass the activation itself triggers fails; only the
+      // recovery can land the status before the 60 s elevated poll.
+      mockGetWorktreeChangesWithStats
+        .mockRejectedValueOnce(new Error("fatal: not a git repository"))
+        .mockResolvedValue(CLEAN_CHANGES);
+      const callbacks = makeCallbacks();
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, GIT_WATCH_CONFIG, callbacks, "main");
+
+      monitor.startWithoutGitStatus();
+      monitor.pausePolling();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(mockGetWorktreeChangesWithStats).not.toHaveBeenCalled();
+
+      monitor.agentActive = true;
+      await vi.advanceTimersByTimeAsync(FIRST_STATUS_DEADLINE_MS);
+
+      expect(monitor.getWorktreeChanges()).not.toBeNull();
+
+      monitor.stop();
+    });
+
     it("stop() before the deadline cancels the first-status pass", async () => {
       mockGetWorktreeChangesWithStats.mockResolvedValue(CLEAN_CHANGES);
       const callbacks = makeCallbacks();
