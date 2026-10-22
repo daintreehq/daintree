@@ -233,8 +233,26 @@ const NO_FORWARDING = [
  */
 const KEEPALIVE = ["-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3"];
 
+/**
+ * Every call here names its own command, so a `RemoteCommand` in the user's
+ * config for the host would make ssh refuse it ("Cannot execute command-line
+ * and remote command"), and a `RequestTTY force` would put a pty under stdin
+ * fed scripts and the binary attach link. `IgnoreUnknown` comes first so an
+ * ssh older than 7.6, which has no `RemoteCommand`, skips it instead of
+ * failing.
+ */
+export const OWN_COMMAND_ARGS = [
+  "-o",
+  "IgnoreUnknown=RemoteCommand",
+  "-o",
+  "RemoteCommand=none",
+  "-o",
+  "RequestTTY=no",
+];
+
 export function sshCommonArgs(controlPath: string, controlPersist = "10m"): string[] {
   return [
+    ...OWN_COMMAND_ARGS,
     "-o",
     "BatchMode=yes",
     ...KEEPALIVE,

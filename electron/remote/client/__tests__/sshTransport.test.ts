@@ -31,6 +31,7 @@ import {
   type SshSpawner,
   type SshStreamSpawner,
 } from "../sshTransport.js";
+import { remoteShellArgs, scpArgs } from "../remoteShell.js";
 import { HostModeOffError, SshAccessError, TransportError } from "../transport.js";
 import {
   TEST_HANDSHAKE,
@@ -40,6 +41,12 @@ import {
 } from "../../link/__tests__/linkTestUtils.js";
 
 const COMMON = [
+  "-o",
+  "IgnoreUnknown=RemoteCommand",
+  "-o",
+  "RemoteCommand=none",
+  "-o",
+  "RequestTTY=no",
   "-o",
   "BatchMode=yes",
   "-o",
@@ -66,6 +73,23 @@ describe("ssh argument construction", () => {
       'ControlPath="/Users/g/Library/Application Support/Daintree/rh/cm-%C"'
     );
     expect(controlPathOption('/tmp/a"b\\c/cm-%C')).toBe('ControlPath="/tmp/a\\"b\\\\c/cm-%C"');
+  });
+
+  it("overrides the user's RemoteCommand and RequestTTY on every call that names a command", () => {
+    const calls = [
+      buildProbeArgs("studio", "/cp/cm-%C"),
+      buildCatArgs("studio", "/cp/cm-%C", "/home/g/host.json"),
+      buildAttachArgs("studio", "/cp/cm-%C", "daintree --attach-stdio"),
+      buildStreamLocalCheckArgs("studio", "/cp/cm-%C", "/run/user/1/daintree/host.sock"),
+      remoteShellArgs("studio", "/cp/cm-%C", "true"),
+      scpArgs("studio", "/cp/cm-%C", "/tmp/a", "/tmp/b", "ssh"),
+    ];
+    for (const args of calls) {
+      const ignore = args.indexOf("IgnoreUnknown=RemoteCommand");
+      expect(ignore).toBeGreaterThan(-1);
+      expect(args.indexOf("RemoteCommand=none")).toBeGreaterThan(ignore);
+      expect(args).toContain("RequestTTY=no");
+    }
   });
 
   it("builds the probe, discovery read and forward commands", () => {
