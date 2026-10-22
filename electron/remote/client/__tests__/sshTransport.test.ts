@@ -42,7 +42,7 @@ import {
 
 const COMMON = [
   "-o",
-  "IgnoreUnknown=RemoteCommand",
+  "IgnoreUnknown=*",
   "-o",
   "RemoteCommand=none",
   "-o",
@@ -85,7 +85,7 @@ describe("ssh argument construction", () => {
       scpArgs("studio", "/cp/cm-%C", "/tmp/a", "/tmp/b", "ssh"),
     ];
     for (const args of calls) {
-      const ignore = args.indexOf("IgnoreUnknown=RemoteCommand");
+      const ignore = args.indexOf("IgnoreUnknown=*");
       expect(ignore).toBeGreaterThan(-1);
       expect(args.indexOf("RemoteCommand=none")).toBeGreaterThan(ignore);
       expect(args).toContain("RequestTTY=no");

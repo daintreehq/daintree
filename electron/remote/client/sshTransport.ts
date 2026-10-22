@@ -239,11 +239,13 @@ const KEEPALIVE = ["-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3"
  * and remote command"), and a `RequestTTY force` would put a pty under stdin
  * fed scripts and the binary attach link. `IgnoreUnknown` comes first so an
  * ssh older than 7.6, which has no `RemoteCommand`, skips it instead of
- * failing.
+ * failing. The first `IgnoreUnknown` wins rather than adding to the user's,
+ * so it is `*`: a narrower list would make options their config already
+ * tolerates fatal.
  */
 export const OWN_COMMAND_ARGS = [
   "-o",
-  "IgnoreUnknown=RemoteCommand",
+  "IgnoreUnknown=*",
   "-o",
   "RemoteCommand=none",
   "-o",
