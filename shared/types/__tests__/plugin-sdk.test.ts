@@ -12,6 +12,7 @@ import type {
   PluginActivate,
   PanelContribution,
   ToolbarButtonContribution,
+  ToolbarButtonPopover,
   PluginPanelBadge,
   PluginPanelBadgeColor,
   MenuItemContribution,
@@ -594,10 +595,31 @@ describe("plugin-sdk boundary", () => {
       // view built against it still runs on a host that predates it.
       expectTypeOf(props.hostContext).toEqualTypeOf<PluginViewHostContext | undefined>();
       expectTypeOf<PluginViewHostKind>().toEqualTypeOf<
-        "panel" | "surface" | "settings" | "fileEditor" | "sidebar"
+        "panel" | "surface" | "settings" | "sidebar" | "fileEditor" | "popover"
       >();
       // A file editor view's host-owned document (#13809), a named SDK type.
       expectTypeOf(props.fileDocument).toEqualTypeOf<PluginFileDocument | undefined>();
+      // A toolbar popover's view closes its own host (#13784); every other
+      // host leaves it out.
+      const context = {} as PluginViewHostContext;
+      expectTypeOf(context.close).toEqualTypeOf<(() => void) | undefined>();
+    });
+
+    it("lets a toolbar button dispatch an action or open a popover (#13784)", () => {
+      // Each is optional on the type; the manifest schema requires exactly one.
+      expectTypeOf<{
+        id: "inbox";
+        label: "Inbox";
+        iconId: "package";
+        popover: { viewId: "inbox" };
+      }>().toMatchTypeOf<ToolbarButtonContribution>();
+      expectTypeOf<{
+        id: "run";
+        label: "Run";
+        iconId: "package";
+        actionId: "acme.run";
+      }>().toMatchTypeOf<ToolbarButtonContribution>();
+      expectTypeOf<ToolbarButtonPopover>().toEqualTypeOf<{ viewId: string }>();
     });
 
     it("exposes the panel lifecycle contract as named SDK types", () => {

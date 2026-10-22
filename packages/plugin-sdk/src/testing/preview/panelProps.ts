@@ -45,7 +45,8 @@ export interface PreviewPanelPropsOptions {
   settingsContext?: PluginSettingsViewContext;
   /**
    * Where the view is mounted, as `hostContext`. Defaults to `"settings"` when
-   * {@link settingsContext} is given and `"panel"` otherwise.
+   * {@link settingsContext} is given and `"panel"` otherwise. A `close` passed
+   * here is handed through, so a popover view's dismissal can be asserted.
    */
   hostContext?: PluginViewHostContext;
   /**
@@ -128,6 +129,7 @@ export function createPreviewPanelController(
   const hostContext: PluginViewHostContext = Object.freeze({
     kind:
       options.hostContext?.kind ?? (options.settingsContext !== undefined ? "settings" : "panel"),
+    ...(options.hostContext?.close !== undefined ? { close: options.hostContext.close } : {}),
   });
 
   let persistedState = options.initialArgs;

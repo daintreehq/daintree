@@ -7199,15 +7199,24 @@ interface PluginSettingsViewContext {
  * plugin's panel views in place of the host's own content — so the same view
  * can see both and lay itself out for each. `"settings"` is the plugin's custom
  * settings section. `"sidebar"` is a sidebar view, below the sidebar header and
- * as narrow as the sidebar's minimum width.
+ * as narrow as the sidebar's minimum width. `"fileEditor"` is a view-backed
+ * file editor inside the file panel. `"popover"` is the anchored popover
+ * a toolbar button opens (`contributes.toolbarButtons[].popover`), again one of
+ * the plugin's panel views.
  *
- * Open-ended: hosts added later (a popover, an editor) arrive as new members,
- * so a view that switches on this must give unknown kinds a sensible default
- * rather than treat the list as exhaustive.
+ * Open-ended: hosts added later arrive as new members, so a view that switches
+ * on this must give unknown kinds a sensible default rather than treat the list
+ * as exhaustive.
  */
-type PluginViewHostKind = "panel" | "surface" | "settings" | "fileEditor" | "sidebar";
+type PluginViewHostKind = "panel" | "surface" | "settings" | "sidebar" | "fileEditor" | "popover";
 interface PluginViewHostContext {
     readonly kind: PluginViewHostKind;
+    /**
+     * Dismiss the host the view is in. Present only where the view may end its
+     * own mount — today the toolbar popover, after a "quick add" submits, say.
+     * Focus goes back to the button that opened it.
+     */
+    readonly close?: () => void;
 }
 /**
  * Props every plugin-contributed panel view receives from the renderer host.

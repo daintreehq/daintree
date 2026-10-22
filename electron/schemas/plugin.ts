@@ -246,12 +246,25 @@ export const PanelContributionSchema = PanelContributionObjectSchema.superRefine
   });
 });
 
+export const ToolbarButtonPopoverSchema = z
+  .object({
+    viewId: z.string().min(1).max(64).regex(SAFE_ID_PATTERN),
+  })
+  .strict();
+
+/**
+ * A toolbar button. `actionId` and `popover` are each optional here so the
+ * object keeps a `.shape`; that exactly one is present is checked with the
+ * manifest's cross-references (`toolbar_button_behavior_*`), alongside the
+ * check that `popover.viewId` names a view the popover can mount.
+ */
 export const ToolbarButtonContributionSchema = z
   .object({
     id: z.string().min(1).max(64).regex(SAFE_ID_PATTERN),
     label: z.string().min(1),
     iconId: z.string().min(1),
-    actionId: z.string().min(1),
+    actionId: z.string().min(1).optional(),
+    popover: ToolbarButtonPopoverSchema.optional(),
     priority: z
       .union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5)])
       .optional(),
@@ -3240,6 +3253,9 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
       for (const [arrayName, entries] of actionIdContributions) {
         entries.forEach((entry, index) => {
           const { actionId } = entry;
+          // A popover button has no action; `toolbar_button_behavior_*` below
+          // reports a button with neither.
+          if (actionId === undefined) return;
           const issuePath = ["contributes", arrayName, index, "actionId"] as const;
 
           if (DENY_PLUGIN_DISPATCH_SET.has(actionId)) {
@@ -3475,6 +3491,72 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
           });
         }
       }
+
+      // A toolbar button does one thing on click. With neither it is a dead
+      // button; with both, the host would have to pick one and silently drop
+      // the other.
+      manifest.contributes.toolbarButtons.forEach((button, index) => {
+        const path = ["contributes", "toolbarButtons", index] as const;
+        if (button.actionId === undefined && button.popover === undefined) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [...path],
+            message: `Toolbar button "${button.id}" declares neither actionId nor popover — give it one, or it does nothing when clicked.`,
+            params: { errorCode: "toolbar_button_behavior_missing" },
+          });
+          return;
+        }
+        if (button.actionId !== undefined && button.popover !== undefined) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [...path, "popover"],
+            message: `Toolbar button "${button.id}" declares both actionId and popover — a button either dispatches an action or opens a popover, so keep one.`,
+            params: { errorCode: "toolbar_button_behavior_conflict" },
+          });
+          return;
+        }
+        if (button.popover === undefined) return;
+        // The popover mounts the view's panel kind, exactly as a surface does,
+        // so the same dead ends apply.
+        const { viewId } = button.popover;
+        const viewPath = [...path, "popover", "viewId"];
+        if (!viewIds.has(viewId)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: viewPath,
+            message: `toolbarButtons "${button.id}" popover.viewId "${viewId}" matches no contributes.views[].id.`,
+            params: { errorCode: "toolbar_popover_view_unknown" },
+          });
+        } else if (settingsViewIds.has(viewId)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: viewPath,
+            message: `toolbarButtons "${button.id}" popover.viewId "${viewId}" names a location: "settings" view — a popover draws a panel view, and a settings view renders only in the plugin's settings.`,
+            params: { errorCode: "toolbar_popover_view_settings" },
+          });
+        } else if (sidebarViewIds.has(viewId)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: viewPath,
+            message: `toolbarButtons "${button.id}" popover.viewId "${viewId}" names a location: "sidebar" view — a popover draws a panel view, and a sidebar view renders only in the sidebar.`,
+            params: { errorCode: "toolbar_popover_view_sidebar" },
+          });
+        } else if (fileEditorViewIds.has(viewId)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: viewPath,
+            message: `toolbarButtons "${button.id}" popover.viewId "${viewId}" names a location: "fileEditor" view — a popover draws a panel view, and a file editor view renders only in the file panel.`,
+            params: { errorCode: "toolbar_popover_view_file_editor" },
+          });
+        } else if (ptyPanelIds.has(viewId)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: viewPath,
+            message: `toolbarButtons "${button.id}" popover.viewId "${viewId}" names a panel with hasPty: true — PTY panels are rendered by the terminal host and never load the view module, so the popover would open empty.`,
+            params: { errorCode: "toolbar_popover_view_pty" },
+          });
+        }
+      });
 
       // A view renders into a `contributes.panels` entry with a matching id; a
       // view whose id matches no panel can never be shown (#10620). This is a

@@ -34,6 +34,7 @@ import {
   ThemeContributionSchema,
   SurfaceViewSlotSchema,
   ToolbarButtonContributionSchema,
+  ToolbarButtonPopoverSchema,
   TourCaptionSchema,
   TourChapterSchema,
   TourContributionSchema,
@@ -96,6 +97,7 @@ const FORGE_REGISTRY = "electron/services/forgeProviderRegistry.ts";
 const AGENT_REGISTRY = "shared/config/pluginAgentRegistry.ts";
 const MCP_SUPERVISOR = "electron/services/PluginMcpSupervisor.ts";
 const PLUGIN_SCHEMA = "electron/schemas/plugin.ts";
+const PLUGIN_TOOLBAR_POPOVER = "src/components/Layout/PluginToolbarPopover.tsx";
 const SKILL_REGISTRY = "electron/services/plugin/PluginSkillRegistry.ts";
 const THEME_REGISTRY = "electron/services/plugin/PluginThemeRegistry.ts";
 const RECIPE_REGISTRY = "electron/services/plugin/PluginRecipeRegistry.ts";
@@ -159,6 +161,7 @@ const SWEPT_SCHEMAS = {
   "agents.detection": AgentDetectionConfigSchema,
   "surfaces.emptyCanvas": SurfaceViewSlotSchema,
   "surfaces.projectHome": SurfaceViewSlotSchema,
+  "toolbarButtons.popover": ToolbarButtonPopoverSchema,
   "recipes.terminals": RecipeContributionTerminalSchema,
   "forgeProviders.credentialFields": CredentialFieldSchema,
   "forgeProviders.slots": ForgeProviderContributionSchema.shape.slots,
@@ -258,6 +261,10 @@ type FieldConsumerCoverage = {
   "agents.detection": Record<keyof z.infer<typeof AgentDetectionConfigSchema>, ConsumerDescriptor>;
   "surfaces.emptyCanvas": Record<keyof z.infer<typeof SurfaceViewSlotSchema>, ConsumerDescriptor>;
   "surfaces.projectHome": Record<keyof z.infer<typeof SurfaceViewSlotSchema>, ConsumerDescriptor>;
+  "toolbarButtons.popover": Record<
+    keyof z.infer<typeof ToolbarButtonPopoverSchema>,
+    ConsumerDescriptor
+  >;
   "recipes.terminals": Record<
     keyof z.infer<typeof RecipeContributionTerminalSchema>,
     ConsumerDescriptor
@@ -440,6 +447,18 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
         { file: "shared/config/toolbarButtonRegistry.ts", symbol: "registerToolbarButton" },
       ],
       note: "Registered as the action the button dispatches.",
+    },
+    popover: {
+      mode: "derived-input",
+      consumers: [
+        {
+          file: PLUGIN_SCHEMA,
+          symbol: "manifest superRefine (toolbar_button_behavior_*)",
+        },
+        { file: PLUGIN_SERVICE, symbol: "loadPlugin → registerToolbarButton (popover)" },
+        { file: PLUGIN_TOOLBAR_POPOVER, symbol: "PluginToolbarPopover" },
+      ],
+      note: "Exclusive with actionId. Registered as the popover the button opens instead of dispatching, drawn by the host around the named view (#13784).",
     },
     priority: {
       mode: "verbatim",
@@ -1475,6 +1494,23 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
         },
       ],
       note: "Claims the project's Home slot at load; the main area offers a Home/Grid switch and draws the claimed view as the project's Home.",
+    },
+  },
+  "toolbarButtons.popover": {
+    viewId: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: PLUGIN_SCHEMA,
+          symbol: "getPluginManifestSchema superRefine (toolbar_popover_view_unknown)",
+        },
+        {
+          file: PLUGIN_SERVICE,
+          symbol: "loadPlugin (toRuntimePanelKindId → registerToolbarButton)",
+        },
+        { file: PLUGIN_TOOLBAR_POPOVER, symbol: "PluginToolbarPopoverView (usePanelKindRegistry)" },
+      ],
+      note: "Cross-checked against declared contributes.views, then resolved to the runtime panel-kind id the popover mounts.",
     },
   },
   "surfaces.emptyCanvas": {

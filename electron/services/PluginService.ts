@@ -2363,15 +2363,38 @@ export class PluginService {
       // here alone and is migrated renderer-side by `toolbarPreferencesStore`'s
       // v9 migration so existing user pins survive the rename.
       const buttonId = `${pluginId}.${btn.id}` as PluginToolbarButtonId;
-      registerToolbarButton({
+      const base = {
         id: buttonId,
         label: btn.label,
         iconId: resolveIconId(btn.iconId),
-        actionId: qualifyActionId(btn.actionId),
         priority: btn.priority ?? 3,
         pluginId,
         ...(btn.when !== undefined ? { when: btn.when } : {}),
-      });
+      };
+      if (btn.popover !== undefined) {
+        // The popover mounts the view's panel kind, so it carries the RUNTIME
+        // kind id — project-qualified for a project plugin, exactly as the
+        // panels loop below registers it. The renderer resolves that id in its
+        // own registry and refuses a kind this plugin does not own.
+        const panelKindId = isProject
+          ? toRuntimePanelKindId(
+              { origin: "project", pluginId: manifest.name, kindId: btn.popover.viewId },
+              binding.projectId
+            )
+          : `${manifest.name}.${btn.popover.viewId}`;
+        if (panelKindId === null) {
+          console.error(
+            `[PluginService] Plugin "${manifest.name}": cannot qualify toolbar popover view "${btn.popover.viewId}" without an owning project — skipping button "${btn.id}"`
+          );
+          continue;
+        }
+        registerToolbarButton({
+          ...base,
+          popover: { viewId: btn.popover.viewId, panelKindId },
+        });
+      } else if (btn.actionId !== undefined) {
+        registerToolbarButton({ ...base, actionId: qualifyActionId(btn.actionId) });
+      }
       trackPluginExpression(pluginId, btn.when);
     }
     if (manifest.contributes.toolbarButtons.length > 0) {

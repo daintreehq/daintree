@@ -61,6 +61,34 @@ function getPopoverAvailableWidth(collisionPadding = DEFAULT_COLLISION_PADDING):
 
 const PopoverIntentContext = React.createContext<((next: boolean) => void) | null>(null);
 
+/**
+ * Where this popover hands focus back, kept on its own root. A trigger records
+ * itself as the shared policy's restore target; an anchor that opts in through
+ * `restoreFocus` does the same, and also takes the keyboard close, which the
+ * shared policy leaves to Radix — and Radix restores to a trigger an anchored
+ * popover doesn't have, so focus would land on `document.body`.
+ *
+ * Its own context rather than `OverlayFocusRestoreContext`: a trigger or an
+ * anchor often sits on another overlay's trigger (a context menu around a
+ * toolbar button, a menu button whose item opens this popover), where the
+ * nearest focus-restore provider is that overlay's, not this popover's.
+ */
+interface PopoverFocusTargets {
+  setRestoreTarget: (node: HTMLElement | null) => void;
+  setAnchor: (node: HTMLElement | null) => void;
+  getAnchor: () => HTMLElement | null;
+  /**
+   * Radix restores nothing once an outside interaction it didn't veto has
+   * closed the popover — focus already went where the user sent it — and
+   * neither may the anchor. Per opening, like the shared policy's flags.
+   */
+  markInteractedOutside: () => void;
+  takeInteractedOutside: () => boolean;
+  resetForOpen: () => void;
+}
+
+const PopoverFocusTargetsContext = React.createContext<PopoverFocusTargets | null>(null);
+
 type PopoverRootProps = React.ComponentProps<typeof PopoverPrimitiveType.Root>;
 
 const Popover = ({ children, open, defaultOpen, onOpenChange, ...rest }: PopoverRootProps) => {
@@ -68,14 +96,40 @@ const Popover = ({ children, open, defaultOpen, onOpenChange, ...rest }: Popover
   const [pendingOpen, setPendingOpen] = React.useState<boolean | undefined>(undefined);
   const isControlled = open !== undefined;
   const focusRestore = useOverlayFocusRestoreValue();
+  const anchorRef = React.useRef<HTMLElement | null>(null);
+  const interactedOutsideRef = React.useRef(false);
+  const focusTargets = React.useMemo<PopoverFocusTargets>(
+    () => ({
+      setRestoreTarget: (node) => focusRestore.setRestoreTarget(node),
+      setAnchor: (node) => {
+        anchorRef.current = node;
+        focusRestore.setRestoreTarget(node);
+      },
+      getAnchor: () => anchorRef.current,
+      markInteractedOutside: () => {
+        interactedOutsideRef.current = true;
+      },
+      takeInteractedOutside: () => {
+        const interacted = interactedOutsideRef.current;
+        interactedOutsideRef.current = false;
+        return interacted;
+      },
+      resetForOpen: () => {
+        interactedOutsideRef.current = false;
+      },
+    }),
+    [focusRestore]
+  );
 
   // Radix only calls `onOpenChange` for opens it initiates, so a CONTROLLED
   // consumer flipping `open` back to true never reaches the reset below.
   // That matters when a pointer dismissal is reversed mid-exit: the close
   // never reaches `onCloseAutoFocus`, and its flags would decide the next one.
   React.useEffect(() => {
-    if (open) focusRestore.resetForOpen();
-  }, [open, focusRestore]);
+    if (!open) return;
+    focusRestore.resetForOpen();
+    focusTargets.resetForOpen();
+  }, [open, focusRestore, focusTargets]);
 
   const requestOpen = React.useCallback(
     (next: boolean) => {
@@ -92,7 +146,11 @@ const Popover = ({ children, open, defaultOpen, onOpenChange, ...rest }: Popover
 
   if (!radix) {
     return (
-      <PopoverIntentContext.Provider value={requestOpen}>{children}</PopoverIntentContext.Provider>
+      <PopoverFocusTargetsContext.Provider value={focusTargets}>
+        <PopoverIntentContext.Provider value={requestOpen}>
+          {children}
+        </PopoverIntentContext.Provider>
+      </PopoverFocusTargetsContext.Provider>
     );
   }
 
@@ -100,20 +158,25 @@ const Popover = ({ children, open, defaultOpen, onOpenChange, ...rest }: Popover
   const effectiveDefaultOpen = isControlled ? defaultOpen : (pendingOpen ?? defaultOpen);
   return (
     <OverlayFocusRestoreContext.Provider value={focusRestore}>
-      <Root
-        open={open}
-        defaultOpen={effectiveDefaultOpen}
-        onOpenChange={(next) => {
-          // Cleared per opening — the content wrapper outlives each close, so
-          // a dismissal that skips close-autofocus must not leak its flags.
-          if (next) focusRestore.resetForOpen();
-          if (!isControlled) setPendingOpen(undefined);
-          onOpenChange?.(next);
-        }}
-        {...rest}
-      >
-        {children}
-      </Root>
+      <PopoverFocusTargetsContext.Provider value={focusTargets}>
+        <Root
+          open={open}
+          defaultOpen={effectiveDefaultOpen}
+          onOpenChange={(next) => {
+            // Cleared per opening — the content wrapper outlives each close, so
+            // a dismissal that skips close-autofocus must not leak its flags.
+            if (next) {
+              focusRestore.resetForOpen();
+              focusTargets.resetForOpen();
+            }
+            if (!isControlled) setPendingOpen(undefined);
+            onOpenChange?.(next);
+          }}
+          {...rest}
+        >
+          {children}
+        </Root>
+      </PopoverFocusTargetsContext.Provider>
     </OverlayFocusRestoreContext.Provider>
   );
 };
@@ -139,16 +202,16 @@ const PopoverTrigger = React.forwardRef<
   ) => {
     const radix = useRadixPrimitives();
     const requestOpen = React.useContext(PopoverIntentContext);
-    const focusRestore = useOverlayFocusRestore();
+    const focusTargets = React.useContext(PopoverFocusTargetsContext);
     const triggerNodeRef = React.useRef<HTMLElement | null>(null);
     const setTriggerRef = React.useCallback(
       (node: React.ElementRef<typeof PopoverPrimitiveType.Trigger> | null) => {
         triggerNodeRef.current = node as HTMLElement | null;
         // Where focus goes back to after a pointer selection closes the popover.
-        focusRestore?.setRestoreTarget(node as HTMLElement | null);
+        focusTargets?.setRestoreTarget(node as HTMLElement | null);
         assignForwardedRef(ref, node);
       },
-      [focusRestore, ref]
+      [focusTargets, ref]
     );
 
     React.useLayoutEffect(() => {
@@ -175,10 +238,14 @@ const PopoverTrigger = React.forwardRef<
     };
 
     if (!radix) {
+      // Consumer first, then the queued open only if nobody prevented it, as
+      // Radix's own trigger composes its toggle. An `asChild` child's handler
+      // has already run by now: Slot calls the child's before its own.
       const intentClick: React.MouseEventHandler<HTMLButtonElement> = (event) => {
         primeOnEvent();
-        requestOpen?.(true);
         onClick?.(event);
+        if (event.defaultPrevented) return;
+        requestOpen?.(true);
       };
       if (asChild) {
         return (
@@ -227,13 +294,29 @@ const PopoverTrigger = React.forwardRef<
 );
 PopoverTrigger.displayName = "PopoverTrigger";
 
-type PopoverAnchorProps = React.ComponentPropsWithoutRef<typeof PopoverPrimitiveType.Anchor>;
+type PopoverAnchorProps = React.ComponentPropsWithoutRef<typeof PopoverPrimitiveType.Anchor> & {
+  /**
+   * Hand focus back to this element when the popover closes. For a popover
+   * with no `PopoverTrigger` — one opened from another control's menu, say —
+   * whose anchor is itself focusable. The shared close policy then treats it
+   * as the trigger: ringless after a pointer close, ringed after the keyboard.
+   */
+  restoreFocus?: boolean;
+};
 
 const PopoverAnchor = React.forwardRef<
   React.ElementRef<typeof PopoverPrimitiveType.Anchor>,
   PopoverAnchorProps
->((props, ref) => {
+>(({ restoreFocus = false, ...props }, ref) => {
   const radix = useRadixPrimitives();
+  const focusTargets = React.useContext(PopoverFocusTargetsContext);
+  const setAnchorRef = React.useCallback(
+    (node: React.ElementRef<typeof PopoverPrimitiveType.Anchor> | null) => {
+      if (restoreFocus) focusTargets?.setAnchor(node as HTMLElement | null);
+      assignForwardedRef(ref, node);
+    },
+    [restoreFocus, focusTargets, ref]
+  );
   if (!radix) {
     // Through a Slot rather than returning the child bare: an anchor composed
     // inside another trigger's `asChild` chain receives that trigger's
@@ -241,12 +324,12 @@ const PopoverAnchor = React.forwardRef<
     // element inert until the Radix chunk lands.
     if (props.asChild && React.isValidElement(props.children)) {
       const { asChild: _asChild, ...slotProps } = props;
-      return <Slot ref={ref} {...slotProps} />;
+      return <Slot ref={setAnchorRef} {...slotProps} />;
     }
     return null;
   }
   const Anchor = radix.PopoverPrimitive.Anchor;
-  return <Anchor ref={ref} {...props} />;
+  return <Anchor ref={setAnchorRef} {...props} />;
 });
 PopoverAnchor.displayName = "PopoverAnchor";
 
@@ -285,6 +368,7 @@ const PopoverContent = React.forwardRef<
     ref
   ) => {
     const radix = useRadixPrimitives();
+    const focusTargets = React.useContext(PopoverFocusTargetsContext);
     const [boundary, setBoundary] = React.useState<HTMLElement | null>(null);
     // Floating UI's autoUpdate observes the reference/floating elements but not the
     // collision boundary. The portal boundary's width tracks --right-obstruction-offset,
@@ -329,6 +413,7 @@ const PopoverContent = React.forwardRef<
     ) => {
       onInteractOutside?.(event);
       focusRestore?.onContentInteractOutside(event);
+      if (!event.defaultPrevented) focusTargets?.markInteractedOutside();
     };
     // A press inside the popover must not lose it to an ancestor that pulls
     // focus on pointerdown (see `layer-press-focus-guard.ts`).
@@ -351,6 +436,17 @@ const PopoverContent = React.forwardRef<
     const handleCloseAutoFocus: NonNullable<PopoverContentProps["onCloseAutoFocus"]> = (event) => {
       onCloseAutoFocus?.(event);
       focusRestore?.onContentCloseAutoFocus(event);
+      // A close nobody claimed, with focus not sent elsewhere, is the
+      // keyboard's (or the content's own), and Radix would restore it to a
+      // trigger. An anchor that opted into `restoreFocus` stands in for the
+      // missing one, ringed, because the keyboard user has to see where they
+      // landed.
+      const interactedOutside = focusTargets?.takeInteractedOutside() ?? false;
+      if (event.defaultPrevented || interactedOutside) return;
+      const anchor = focusTargets?.getAnchor();
+      if (!anchor?.isConnected) return;
+      event.preventDefault();
+      anchor.focus({ preventScroll: true });
     };
 
     if (!radix) return null;

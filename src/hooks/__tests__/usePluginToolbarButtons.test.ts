@@ -3,10 +3,17 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { renderHook, waitFor } from "@testing-library/react";
 import type { ToolbarButtonConfig } from "@shared/config/toolbarButtonRegistry";
 
-const { toolbarButtonsMock, onToolbarButtonsChangedMock, sweepMock } = vi.hoisted(() => ({
-  toolbarButtonsMock: vi.fn(),
-  onToolbarButtonsChangedMock: vi.fn(),
-  sweepMock: vi.fn(),
+const { toolbarButtonsMock, onToolbarButtonsChangedMock, sweepMock, hostIdMock } = vi.hoisted(
+  () => ({
+    toolbarButtonsMock: vi.fn(),
+    onToolbarButtonsChangedMock: vi.fn(),
+    sweepMock: vi.fn(),
+    hostIdMock: vi.fn((): string | null => null),
+  })
+);
+
+vi.mock("@/components/Plugin/remotePluginView", () => ({
+  pluginViewHostId: () => hostIdMock(),
 }));
 
 vi.mock("@/store", () => ({
@@ -28,6 +35,7 @@ function pluginButton(id: string): ToolbarButtonConfig {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  hostIdMock.mockReturnValue(null);
   (globalThis as unknown as { window: unknown }).window = Object.assign(globalThis.window ?? {}, {
     electron: {
       plugin: {
@@ -87,5 +95,50 @@ describe("usePluginToolbarButtons", () => {
     emit!({ buttons: [pluginButton("acme.foo.btn")], complete: true });
 
     expect(sweepMock).toHaveBeenCalledWith(["acme.foo.btn"]);
+  });
+
+  it("closes an open popover when its button stops being contributed", async () => {
+    let emit: ((p: { buttons: ToolbarButtonConfig[]; complete: boolean }) => void) | null = null;
+    onToolbarButtonsChangedMock.mockImplementation(
+      (cb: (p: { buttons: ToolbarButtonConfig[]; complete: boolean }) => void) => {
+        emit = cb;
+        return () => {};
+      }
+    );
+    const { usePluginToolbarButtons } = await import("../usePluginToolbarButtons");
+    const { usePluginToolbarPopoverStore } = await import("@/store/pluginToolbarPopoverStore");
+    renderHook(() => usePluginToolbarButtons());
+    await waitFor(() => expect(emit).not.toBeNull());
+
+    usePluginToolbarPopoverStore.getState().open("acme.foo.inbox", "tray");
+    emit!({
+      buttons: [pluginButton("acme.foo.inbox"), pluginButton("acme.foo.btn")],
+      complete: false,
+    });
+    expect(usePluginToolbarPopoverStore.getState().opening?.buttonId).toBe("acme.foo.inbox");
+
+    emit!({ buttons: [pluginButton("acme.foo.btn")], complete: true });
+    expect(usePluginToolbarPopoverStore.getState().opening).toBeNull();
+  });
+
+  it("keeps a remote host's popover button, which names no action to allow", async () => {
+    hostIdMock.mockReturnValue("remote-host");
+    const popover: ToolbarButtonConfig = {
+      id: "acme.inbox" as ToolbarButtonConfig["id"],
+      label: "Inbox",
+      iconId: "list",
+      priority: 3,
+      pluginId: "acme",
+      popover: { viewId: "inbox", panelKindId: "acme.inbox" },
+    };
+    // An action outside the plugin's own namespace is still refused.
+    const foreign = { ...pluginButton("acme.foreign"), actionId: "other.plugin.run" };
+    toolbarButtonsMock.mockResolvedValue([popover, foreign]);
+    const { usePluginToolbarButtons } = await import("../usePluginToolbarButtons");
+
+    const { result } = renderHook(() => usePluginToolbarButtons());
+
+    await waitFor(() => expect(result.current.buttonIds).toContain("acme.inbox"));
+    expect(result.current.buttonIds).not.toContain("acme.foreign");
   });
 });

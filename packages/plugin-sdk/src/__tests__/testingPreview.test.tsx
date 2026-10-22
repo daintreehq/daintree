@@ -231,6 +231,16 @@ describe("createPreviewPanelController", () => {
     expect(surface.props().hostContext).toEqual({ kind: "surface" });
   });
 
+  it("hands a popover view its close, as the toolbar popover does", () => {
+    const close = vi.fn();
+    const popover = createPreviewPanelController({ hostContext: { kind: "popover", close } });
+    const context = popover.props().hostContext;
+    expect(context?.kind).toBe("popover");
+    context?.close?.();
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(createPreviewPanelController().props().hostContext).not.toHaveProperty("close");
+  });
+
   it("persists with the host's rules and hands the next attempt what was accepted", () => {
     const panel = createPreviewPanelController({
       initialArgs: { keep: 1 },

@@ -411,7 +411,7 @@ Views are the React components a plugin renders. A `location: "panel"` view bind
 
 **A settings view** — `location: "settings"` is the one exception to the pairing below. It names no panel: its `id` may not match a panel's (`settings_view_panel_id_collision`), a plugin declares at most one (`settings_view_duplicate`), and a surface can't claim it (`surface_view_ref_settings`). The host mounts it in the plugin's settings home, below the generated [settings](#settings-schema--shipped) fields, with `settingsContext` and without the panel-record props. See [Settings → A custom section](#a-custom-settings-section) and [Views → A settings section](./views.md#a-settings-section).
 
-**A sidebar view** — `location: "sidebar"` puts the view in the sidebar, beside the built-in worktree list (the workspace, in a folder without git). Like a settings view it names no panel: its `id` may not match a panel's (`sidebar_view_panel_id_collision`) and a surface can't claim it (`surface_view_ref_sidebar`). A plugin may declare several.
+**A sidebar view** — `location: "sidebar"` puts the view in the sidebar, beside the built-in worktree list (the workspace, in a folder without git). Like a settings view it names no panel: its `id` may not match a panel's (`sidebar_view_panel_id_collision`) and neither a surface nor a toolbar popover can claim it (`surface_view_ref_sidebar`, `toolbar_popover_view_sidebar`). A plugin may declare several.
 
 ```json
 {
@@ -558,7 +558,7 @@ The `__dtv-<n>` segment is virtual — it never exists on disk, and the protocol
 
 ## Toolbar buttons — _Shipped_
 
-Toolbar buttons dispatch an existing action from the main toolbar.
+Toolbar buttons dispatch an existing action from the main toolbar, or open an anchored popover holding one of your own views.
 
 Every contributed button is collected into the **plugin tray** — a single toolbar button, grouped by plugin — rather than claiming its own top-level slot. A user can promote any individual button to its own toolbar slot from the tray (hover the row and click the pin, or press <kbd>P</kbd>) or from Settings → Toolbar; a promoted button keeps its tray row as well. Placement is the user's call, not the manifest's: there is no field that requests a top-level slot.
 
@@ -585,7 +585,8 @@ Every contributed button is collected into the **plugin tray** — a single tool
 | `id` | yes | Namespaced at runtime as `{pluginId}.{id}` — matches the convention used by every other contribution surface. |
 | `label` | yes | Hover tooltip. |
 | `iconId` | yes | One of the shared plugin icon IDs listed in `shared/config/pluginIconIds.ts` — the same set panels use — or a [custom SVG](#custom-icons) inside your plugin (`"./icons/flutter.svg"`). An unrecognized ID falls back to a generic puzzle glyph; `daintree-plugin validate` warns about it. Agent brand IDs (e.g. `claude`) don't resolve here. |
-| `actionId` | yes | Fully-qualified action ID, including plugin namespace. Built-in actions (e.g. `terminal.new`) also work. |
+| `actionId` | one of `actionId` or `popover` | Fully-qualified action ID, including plugin namespace. Built-in actions (e.g. `terminal.new`) also work. |
+| `popover` | one of `actionId` or `popover` | `{ "viewId": "<view id>" }` — open a popover showing that view instead of dispatching an action. See below. |
 | `priority` | no | `1`–`5`, lower = earlier. Orders your buttons within your plugin's tray group. Default `3`. |
 | `when` | no | Context expression deciding whether the button shows, evaluated live. |
 
@@ -606,6 +607,24 @@ The clause sees the [project keys](#keybindings--shipped) (`isGitBacked`, `works
 ```
 
 To show state on a button rather than hide it — a toggle that is on, a reason it can't run, work in progress — use [`host.setToolbarButtonState`](./host-api.md#settoolbarbuttonstate).
+
+A button declares exactly one of `actionId` and `popover`; neither (`toolbar_button_behavior_missing`) or both (`toolbar_button_behavior_conflict`) fails validation.
+
+**Popovers.** For an inbox, a recent-items list or a quick-add form, name one of your views instead of an action:
+
+```json
+{
+  "contributes": {
+    "panels": [{ "id": "inbox", "name": "Inbox", "iconId": "list", "color": "#7c3aed" }],
+    "views": [{ "id": "inbox", "componentPath": "dist/inbox.js", "location": "panel" }],
+    "toolbarButtons": [
+      { "id": "inbox-button", "label": "Inbox", "iconId": "list", "popover": { "viewId": "inbox" } }
+    ]
+  }
+}
+```
+
+`viewId` names a `location: "panel"` view whose panel is not `hasPty` (`toolbar_popover_view_unknown`, `toolbar_popover_view_settings`, `toolbar_popover_view_sidebar`, `toolbar_popover_view_file_editor` and `toolbar_popover_view_pty` otherwise). The same view stays spawnable as a panel. The host draws the popover itself — 450 by up to 500 pixels, clamped to the room on screen — anchored under the promoted button, or under the plugin tray or the toolbar's overflow menu when the button is picked from one of their rows. It stays open while a dialog, menu or picker your view opened is up, and closes on Escape or a click outside; closing it from inside hands focus back to the button that opened it. Only one plugin popover is open at a time. Your view mounts fresh on each opening, with `hostContext.kind` set to `"popover"` and `hostContext.close()` to dismiss it, after a quick-add submits for example. Like a project surface, it has no panel record behind it, so `persistState`, `initialArgs` and the other panel-record props are absent. A popover button takes `when` and [`host.setToolbarButtonState`](./host-api.md#settoolbarbuttonstate) like any other: a disabled or busy one doesn't open, and an open popover closes when its button's `when` turns false. Works the same for installed and project plugins.
 
 ## Menu items — _Shipped_
 
@@ -1380,7 +1399,7 @@ A **slot-backed** editor names a builtin view the plugin's renderer registers wi
 | Field | Required | Notes |
 | --- | --- | --- |
 | `id` | yes | Namespaced at runtime as `{pluginId}.{id}`. |
-| `view` | one of `view`/`slot` | Id of one of this plugin's `location: "fileEditor"` views. Such a view needs no panel and may not share an id with one. |
+| `view` | one of `view`/`slot` | Id of one of this plugin's `location: "fileEditor"` views. Such a view needs no panel and may not share an id with one, and neither a surface nor a toolbar popover can claim it (`surface_view_ref_file_editor`, `toolbar_popover_view_file_editor`). |
 | `mode` | with `view` | `"edit"` or `"view"`. A `view` editor's document is read-only. |
 | `slot` | one of `view`/`slot` | Built-in plugins only. The builtin view id the plugin's renderer registers; always an Edit mode matched by extension. |
 | `extensions` | `extensions` and/or `paths` | Bare lower-case suffixes without the dot (`[a-z0-9]+`, 1–16 characters each, 1–20 entries), matched case-insensitively against the file name. |

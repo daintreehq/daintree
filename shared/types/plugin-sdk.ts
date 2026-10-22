@@ -23,6 +23,7 @@ export type {
   PanelContribution,
   PanelMenuItemContribution,
   ToolbarButtonContribution,
+  ToolbarButtonPopover,
   MenuItemContribution,
   MenuItemLocation,
   ViewContribution,

@@ -1,4 +1,4 @@
-import type { ComponentType } from "react";
+import { useMemo, type ComponentType } from "react";
 import {
   getPanelKindRegistrySnapshot,
   subscribeToPanelKindRegistry,
@@ -8,6 +8,7 @@ import type {
   PluginFileDocument,
   PluginHostedViewDescriptor,
   PluginSettingsViewContext,
+  PluginViewHostContext,
   PluginViewHostKind,
 } from "@shared/types/plugin";
 import {
@@ -172,7 +173,8 @@ export function _pluginHostedViewRemovalSignalForTest(id: string): AbortSignal |
  * `hostContext` naming where the view is. No reload or toolbar: those police a
  * panel record a hosted view doesn't have. A host with a way out of a broken
  * view (the sidebar's "Show worktrees") passes it as `onRequestClose` with
- * the words for its button.
+ * the words for its button. A host the view may dismiss itself (the toolbar
+ * popover) passes `onClose`, which reaches the view as `hostContext.close`.
  *
  * The box isolates and contains the plugin's layout: `isolate` caps its
  * z-indexes in its own stacking context, and `contain: layout paint` with
@@ -189,6 +191,7 @@ export function PluginHostedView({
   onRequestClose,
   requestCloseLabel,
   fileDocument,
+  onClose,
   className,
   testId,
 }: {
@@ -204,10 +207,21 @@ export function PluginHostedView({
   onRequestClose?: () => void;
   requestCloseLabel?: string;
   fileDocument?: PluginFileDocument;
+  /** Handed to the view as `hostContext.close`; keep it stable per opening. */
+  onClose?: () => void;
   className?: string;
   testId?: string;
 }) {
   const { content: Content, removal } = getRuntime(source);
+  // Per mount, never on the shared frozen context: the callback belongs to
+  // this one opening, and a view that kept it must not close a later one.
+  const hostContext = useMemo<PluginViewHostContext>(
+    () =>
+      onClose === undefined
+        ? pluginViewHostContext(host)
+        : Object.freeze({ kind: host, close: onClose }),
+    [host, onClose]
+  );
   return (
     <div
       className={cn("relative isolate flex min-h-0 min-w-0 flex-col overflow-hidden", className)}
@@ -217,7 +231,7 @@ export function PluginHostedView({
       <Content
         panelId={mountId}
         panelRemovedSignal={removal.signal}
-        hostContext={pluginViewHostContext(host)}
+        hostContext={hostContext}
         {...(settingsContext ? { settingsContext } : {})}
         {...(onRequestClose ? { onRequestClose } : {})}
         {...(requestCloseLabel !== undefined ? { requestCloseLabel } : {})}

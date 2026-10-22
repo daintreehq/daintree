@@ -1,10 +1,23 @@
 import type { ToolbarButtonPriority, PluginToolbarButtonId } from "../types/toolbar.js";
 
+/**
+ * The popover a button opens, resolved by main to the runtime panel-kind id of
+ * the view it names — a project plugin's kind is project-qualified, so the
+ * renderer never rebuilds the id from the manifest's own.
+ */
+export interface ToolbarButtonPopoverConfig {
+  viewId: string;
+  panelKindId: string;
+}
+
 export interface ToolbarButtonConfig {
   id: PluginToolbarButtonId;
   label: string;
   iconId: string;
-  actionId: string;
+  /** Dispatched on click. Exactly one of this and {@link popover} is set. */
+  actionId?: string;
+  /** Opened on click, in place of an action (#13784). */
+  popover?: ToolbarButtonPopoverConfig;
   priority: ToolbarButtonPriority;
   pluginId: string;
   /** Visibility clause, evaluated live against the renderer's chrome context. */
