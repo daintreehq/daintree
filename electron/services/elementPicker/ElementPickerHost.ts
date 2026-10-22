@@ -15,7 +15,7 @@ import { minimalSpawnEnv } from "../../utils/minimalSpawnEnv.js";
 import { watchShared } from "../FileObservationService.js";
 import { noteTerminationIntent } from "../processTerminationIntent.js";
 import { AdmissionGate } from "./admissionGate.js";
-import { checkResolveResponse } from "./checkResponse.js";
+import { checkResolveResponse, relabelCancelled } from "./checkResponse.js";
 import { ElementPickerHostError, type ElementPickerHostErrorCode } from "./errors.js";
 import { HostOutboundSchema, type HostInbound } from "./hostProtocol.js";
 import { unavailableResponse } from "./outcomes.js";
@@ -25,6 +25,7 @@ import {
   readSourceRevision,
   unsupportedSourceMaps,
   type SourceMapProvider,
+  type SourceRoots,
 } from "./sourceAccess.js";
 import { SourceTracker, type SourceChange, type SourceTrackerOptions } from "./sourceTracker.js";
 import { WorkspaceRegistry, type PickerWorkspace } from "./workspaceRegistry.js";
@@ -121,6 +122,7 @@ type JobOutcome = { ok: true; response: ResolveResponse } | { ok: false; error: 
 interface Job {
   readonly id: number;
   readonly request: ResolveRequest;
+  readonly roots: SourceRoots;
   readonly signal: AbortSignal;
   readonly access: JobSourceAccess;
   readonly expired: () => boolean;
@@ -249,6 +251,11 @@ export class ElementPickerHost {
     const parsed = ResolveRequestSchema.safeParse(input);
     if (!parsed.success) throw hostError("INVALID_REQUEST", "the request is malformed");
     const request = parsed.data;
+    // Results are matched to observations by element id, so one id must name one observation.
+    const elementIds = new Set(request.observations.map((observation) => observation.elementId));
+    if (elementIds.size !== request.observations.length) {
+      throw hostError("INVALID_REQUEST", "two observations share an element id");
+    }
     const workspace = this.workspaces.get(request.workspaceId);
     if (!workspace) throw hostError("UNKNOWN_WORKSPACE", "no open workspace has this id");
 
@@ -256,6 +263,8 @@ export class ElementPickerHost {
     const controller = new AbortController();
     let expired = false;
     const deadline = setTimeout(() => {
+      // The first cause stands: a deadline passing after a cancel does not relabel it.
+      if (controller.signal.aborted) return;
       expired = true;
       controller.abort();
     }, request.budget.deadlineMs);
@@ -284,6 +293,8 @@ export class ElementPickerHost {
     } finally {
       clearTimeout(deadline);
       for (const signal of sources) signal.removeEventListener("abort", onAbort);
+      // However it settled, nothing main is still doing for this job is wanted.
+      controller.abort();
     }
   }
 
@@ -328,6 +339,7 @@ export class ElementPickerHost {
       const job: Job = {
         id: this.nextJobId++,
         request,
+        roots: workspace.roots,
         signal,
         expired,
         access: new JobSourceAccess({
@@ -499,10 +511,13 @@ export class ElementPickerHost {
       case "resolved": {
         const job = generation.jobs.get(message.jobId);
         if (!job) return;
-        const response = checkResolveResponse(job.request, message.response);
+        const response = checkResolveResponse(job.request, message.response, {
+          roots: job.roots,
+          servedRevision: (file) => job.access.servedRevision(file),
+        });
         job.settle(
           response
-            ? { ok: true, response }
+            ? { ok: true, response: job.expired() ? relabelCancelled(response) : response }
             : {
                 ok: false,
                 error: hostError("RESOLVER_FAILED", "a resolver returned an invalid response"),

@@ -150,4 +150,51 @@ describe("host runtime", () => {
     });
     await expect(next("failed")).resolves.toMatchObject({ jobId: 5, message: "parse exploded" });
   });
+
+  it("fails the job when a resolver answers a different request", async () => {
+    const { subject, next } = runtime({
+      svelte: async () => ({
+        framework: "svelte",
+        resolve: async (req) => ({
+          requestId: "stale",
+          documentEpoch: req.documentEpoch,
+          outcomes: [],
+        }),
+      }),
+    });
+    subject.handle({
+      type: "resolve",
+      jobId: 6,
+      request: request("ws", [observation("el-1", [candidate("c-1", "a.svelte")])]),
+    });
+    await expect(next("failed")).resolves.toMatchObject({ jobId: 6 });
+  });
+
+  it("ends a read on cancel even when the resolver passed a signal of its own", async () => {
+    let read: Promise<unknown> | undefined;
+    const { subject, next } = runtime({
+      svelte: async () => ({
+        framework: "svelte",
+        resolve: async (req, access) => {
+          read = access.readSource(
+            { workspaceId: req.workspaceId, path: "a.svelte" },
+            new AbortController().signal
+          );
+          await read;
+          return { requestId: req.requestId, documentEpoch: req.documentEpoch, outcomes: [] };
+        },
+      }),
+    });
+    subject.handle({
+      type: "resolve",
+      jobId: 8,
+      request: request("ws", [observation("el-1", [candidate("c-1", "a.svelte")])]),
+    });
+    await next("read-source");
+    subject.handle({ type: "cancel", jobId: 8 });
+    await expect(read).resolves.toEqual({ ok: false, reason: "cancelled" });
+    await expect(next("resolved")).resolves.toMatchObject({
+      response: { outcomes: [{ results: [{ reason: "cancelled" }] }] },
+    });
+  });
 });

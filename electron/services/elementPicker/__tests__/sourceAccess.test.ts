@@ -58,6 +58,14 @@ describe("containSourcePath", () => {
     });
   });
 
+  it("accepts a directory whose name merely starts with two dots", async () => {
+    fs.mkdirSync(path.join(root, "app", "..generated"));
+    fs.writeFileSync(path.join(root, "app", "..generated", "G.svelte"), "g");
+    await expect(containSourcePath(roots, "app/..generated/G.svelte")).resolves.toMatchObject({
+      ok: true,
+    });
+  });
+
   it("reports a missing file, and refuses control characters", async () => {
     await expect(containSourcePath(roots, "app/src/Gone.svelte")).resolves.toEqual({
       ok: false,
@@ -236,5 +244,54 @@ describe("JobSourceAccess", () => {
       reason: "budget-exhausted",
     });
     expect(sourceMaps).toHaveBeenCalledTimes(2);
+  });
+
+  it("remembers the revision it served for each path, and only those", async () => {
+    const { access: job } = access();
+    const read = await job.readSource(ref("app/src/A.svelte"));
+    expect(job.servedRevision("app/src/A.svelte")).toBe(read.ok ? read.value.revision : "none");
+    expect(job.servedRevision("app/src/B.svelte")).toBeUndefined();
+  });
+
+  it("runs source-map fetches one at a time against what is left of the byte budget", async () => {
+    const releases: Array<() => void> = [];
+    const text = "x".repeat(6);
+    const sourceMaps = vi.fn(
+      () =>
+        new Promise<{ ok: true; value: { url: null; revision: string; text: string } }>((resolve) =>
+          releases.push(() =>
+            resolve({
+              ok: true,
+              value: { url: null, revision: revisionOf(new TextEncoder().encode(text)), text },
+            })
+          )
+        )
+    );
+    const { access: job } = access({
+      sourceMaps,
+      budget: { ...fullBudget, maxNetworkBytes: 8 },
+    });
+    const first = job.fetchSourceMap("http://localhost/a.js");
+    const second = job.fetchSourceMap("http://localhost/b.js");
+    await vi.waitFor(() => expect(sourceMaps).toHaveBeenCalledTimes(1));
+    releases[0]!();
+    await expect(first).resolves.toMatchObject({ ok: true });
+    await vi.waitFor(() => expect(sourceMaps).toHaveBeenCalledTimes(2));
+    expect(sourceMaps).toHaveBeenLastCalledWith(
+      expect.objectContaining({ maxBytes: 2 }),
+      expect.anything()
+    );
+    releases[1]!();
+    await expect(second).resolves.toEqual({ ok: false, reason: "budget-exhausted" });
+  });
+
+  it("never calls the provider once no network bytes are left", async () => {
+    const sourceMaps = vi.fn();
+    const { access: job } = access({ sourceMaps, budget: { ...fullBudget, maxNetworkBytes: 0 } });
+    await expect(job.fetchSourceMap("http://localhost/a.js")).resolves.toEqual({
+      ok: false,
+      reason: "budget-exhausted",
+    });
+    expect(sourceMaps).not.toHaveBeenCalled();
   });
 });

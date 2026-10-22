@@ -3,35 +3,61 @@ import {
   type ResolveRequest,
   type ResolveResponse,
 } from "../../../shared/elementPicker/resolver.js";
-import type { ResolutionResult, SourceFileRef } from "../../../shared/elementPicker/resolution.js";
+import type {
+  FileRevision,
+  HeldTarget,
+  ResolutionResult,
+  SourceFileRef,
+} from "../../../shared/elementPicker/resolution.js";
 import type { SourceClaimKind } from "../../../shared/elementPicker/source.js";
 import { observationCandidates } from "./outcomes.js";
+import { lexicalSourcePath, type SourceRoots } from "./sourceAccess.js";
 
-function resultFiles(result: ResolutionResult): SourceFileRef[] {
+/** What main knows about the job the response answers. */
+export interface ResponseAuthority {
+  roots: SourceRoots;
+  /** The revision main served for a path in this job, if it served one. */
+  servedRevision: (path: string) => FileRevision | undefined;
+}
+
+/** A file named with a revision: the revision must be one main served for it. */
+interface NamedFile {
+  file: SourceFileRef;
+  revision: FileRevision | null;
+}
+
+function heldFile(target: HeldTarget): NamedFile {
+  return { file: target.target.file, revision: target.fileRevision };
+}
+
+function namedFiles(result: ResolutionResult): NamedFile[] {
   switch (result.state) {
     case "observed":
     case "mapped":
     case "verified":
-      return [result.target.file];
+      return [heldFile(result)];
     case "ambiguous":
-      return result.alternatives.map((alternative) => alternative.target.file);
+      return result.alternatives.map(heldFile);
     case "stale":
-      return [result.held.target.file];
+      // The held revision is what an earlier result read, so only the current one is this job's.
+      return [{ file: result.held.target.file, revision: result.currentFileRevision }];
     case "unavailable":
-      return result.read ? [result.read.file] : [];
+      return result.read ? [{ file: result.read.file, revision: result.read.fileRevision }] : [];
   }
 }
 
 /**
  * The host's answer, if it answers this request. Well formed is not enough: it
  * must be for this request and epoch, speak only of the elements and
- * candidates the request carried, keep each candidate's claim, and name files
- * only in the request's own workspace. Anything else is a resolver bug, and
- * none of it is passed on.
+ * candidates the request carried, keep each candidate's claim, name files only
+ * inside the request's own workspace and app, and claim only revisions main
+ * actually served in this job. Anything else is a resolver bug, and none of it
+ * is passed on.
  */
 export function checkResolveResponse(
   request: ResolveRequest,
-  raw: unknown
+  raw: unknown,
+  authority: ResponseAuthority
 ): ResolveResponse | null {
   const parsed = ResolveResponseSchema.safeParse(raw);
   if (!parsed.success) return null;
@@ -50,6 +76,11 @@ export function checkResolveResponse(
       ),
     ])
   );
+  const owned = ({ file, revision }: NamedFile) =>
+    file.workspaceId === request.workspaceId &&
+    lexicalSourcePath(authority.roots, file.path) !== null &&
+    (revision === null || authority.servedRevision(file.path) === revision);
+
   const answered = new Set<string>();
   for (const outcome of response.outcomes) {
     const candidates = claims.get(outcome.elementId);
@@ -60,10 +91,26 @@ export function checkResolveResponse(
       if (candidates.get(result.candidateId) !== result.claim) return null;
       if (results.has(result.candidateId)) return null;
       results.add(result.candidateId);
-      if (resultFiles(result).some((file) => file.workspaceId !== request.workspaceId)) {
-        return null;
-      }
+      if (!namedFiles(result).every(owned)) return null;
     }
   }
   return response;
+}
+
+/**
+ * A job stopped by its deadline: whatever the host could not finish ran out of
+ * budget, whichever word the resolver used for being stopped.
+ */
+export function relabelCancelled(response: ResolveResponse): ResolveResponse {
+  return {
+    ...response,
+    outcomes: response.outcomes.map((outcome) => ({
+      ...outcome,
+      results: outcome.results.map((result) =>
+        result.state === "unavailable" && result.reason === "cancelled"
+          ? { ...result, reason: "budget-exhausted" }
+          : result
+      ),
+    })),
+  };
 }

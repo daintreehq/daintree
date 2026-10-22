@@ -36,7 +36,12 @@ export interface SourceRoots {
 
 export function isStrictlyInside(parent: string, child: string): boolean {
   const relative = path.relative(parent, child);
-  return relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative);
+  return (
+    relative !== "" &&
+    relative !== ".." &&
+    !relative.startsWith(`..${path.sep}`) &&
+    !path.isAbsolute(relative)
+  );
 }
 
 function hasControlCharacter(value: string): boolean {
@@ -49,15 +54,21 @@ function hasControlCharacter(value: string): boolean {
 
 type Contained = { ok: true; absolute: string } | { ok: false; reason: UnavailableReason };
 
+/** Where a ref's path lands, if it lands inside the app at all. Lexical: nothing is read. */
+export function lexicalSourcePath(roots: SourceRoots, relative: string): string | null {
+  if (hasControlCharacter(relative)) return null;
+  const lexical = path.resolve(roots.worktreePath, ...relative.split("/"));
+  return isStrictlyInside(roots.appRoot, lexical) ? lexical : null;
+}
+
 /**
  * The file a ref names, if it is one this workspace may read. Lexical first,
  * so a ref that points out of the app never touches the disk; then the real
  * path, so a symlink inside the app that leads out of it is refused too.
  */
 export async function containSourcePath(roots: SourceRoots, relative: string): Promise<Contained> {
-  if (hasControlCharacter(relative)) return { ok: false, reason: "outside-workspace" };
-  const lexical = path.resolve(roots.worktreePath, ...relative.split("/"));
-  if (!isStrictlyInside(roots.appRoot, lexical)) return { ok: false, reason: "outside-workspace" };
+  const lexical = lexicalSourcePath(roots, relative);
+  if (lexical === null) return { ok: false, reason: "outside-workspace" };
   let real: string;
   try {
     real = await fs.realpath(lexical);
@@ -72,12 +83,14 @@ export type BoundedRead =
   { status: "ok"; bytes: Uint8Array } | { status: "missing" } | { status: "too-large" };
 
 /**
- * At most `limitBytes` of one regular file. O_NOFOLLOW refuses a leaf swapped
- * for a symlink after containment resolved it, O_NONBLOCK keeps a FIFO from
- * holding the open, and the descriptor is compared with what stands at the
- * path so Windows, which has no O_NOFOLLOW, is held to the same leaf. An
- * ancestor swapped between containment and the open is not covered, as for
- * every pathname read in main.
+ * At most `limitBytes` of one regular file, which `absolute` must name by its
+ * real path. O_NOFOLLOW refuses a leaf swapped for a symlink after containment
+ * resolved it, O_NONBLOCK keeps a FIFO from holding the open, and the
+ * descriptor is compared with what stands at the path so Windows, which has no
+ * O_NOFOLLOW, is held to the same leaf. The path is resolved again once the
+ * file is open, so an ancestor swapped for a symlink and left there is
+ * refused too; one swapped and put back between the two is not, as for every
+ * pathname read in main.
  */
 export async function readBoundedSource(
   absolute: string,
@@ -95,13 +108,15 @@ export async function readBoundedSource(
     return { status: "missing" };
   }
   try {
-    const [opened, entry] = await Promise.all([
+    const [opened, entry, real] = await Promise.all([
       handle.stat({ bigint: true }),
       fs.lstat(absolute, { bigint: true }).catch(() => null),
+      fs.realpath(absolute).catch(() => null),
     ]);
     if (!entry || entry.isSymbolicLink() || entry.dev !== opened.dev || entry.ino !== opened.ino) {
       return { status: "missing" };
     }
+    if (real !== absolute) return { status: "missing" };
     if (!opened.isFile()) return { status: "missing" };
     const bytes = await readBoundedFromHandle(handle, Number(opened.size), limitBytes, signal);
     if (bytes === null) return { status: "too-large" };
@@ -162,10 +177,18 @@ export interface JobSourceAccessOptions {
  */
 export class JobSourceAccess {
   private readonly reads = new Map<string, Promise<SourceAccessResult<RevisionedSource>>>();
+  private readonly served = new Map<string, FileRevision>();
   private networkRequests = 0;
   private networkBytes = 0;
+  /** One fetch at a time, so each is handed what the ones before it left of the byte budget. */
+  private fetching: Promise<unknown> = Promise.resolve();
 
   constructor(private readonly options: JobSourceAccessOptions) {}
+
+  /** The revision this job served for a path, if it served one: a resolver may claim no other. */
+  servedRevision(relative: string): FileRevision | undefined {
+    return this.served.get(relative);
+  }
 
   readSource(file: unknown): Promise<SourceAccessResult<RevisionedSource>> {
     const stopped = this.stopped();
@@ -185,15 +208,24 @@ export class JobSourceAccess {
     return read;
   }
 
-  async fetchSourceMap(generatedUrl: string): Promise<SourceAccessResult<RevisionedSourceMap>> {
+  fetchSourceMap(generatedUrl: string): Promise<SourceAccessResult<RevisionedSourceMap>> {
+    const { budget } = this.options;
+    if (!this.stopped() && this.networkRequests < budget.maxNetworkRequests) {
+      this.networkRequests += 1;
+    } else {
+      return Promise.resolve(this.stopped() ?? { ok: false, reason: "budget-exhausted" });
+    }
+    const fetched = this.fetching.then(() => this.fetch(generatedUrl));
+    this.fetching = fetched.catch(() => undefined);
+    return fetched;
+  }
+
+  private async fetch(generatedUrl: string): Promise<SourceAccessResult<RevisionedSourceMap>> {
     const stopped = this.stopped();
     if (stopped) return stopped;
     const { budget } = this.options;
-    if (this.networkRequests >= budget.maxNetworkRequests) {
-      return { ok: false, reason: "budget-exhausted" };
-    }
-    this.networkRequests += 1;
     const maxBytes = budget.maxNetworkBytes - this.networkBytes;
+    if (maxBytes <= 0) return { ok: false, reason: "budget-exhausted" };
     let result: SourceAccessResult<RevisionedSourceMap>;
     try {
       result = await this.options.sourceMaps(
@@ -229,6 +261,7 @@ export class JobSourceAccess {
     if (read.status === "missing") return { ok: false, reason: "file-missing" };
     if (read.status === "too-large") return { ok: false, reason: "budget-exhausted" };
     const revision = revisionOf(read.bytes);
+    this.served.set(ref.path, revision);
     this.options.onRead(contained.absolute, ref, revision);
     return { ok: true, value: { file: ref, revision, bytes: read.bytes } };
   }

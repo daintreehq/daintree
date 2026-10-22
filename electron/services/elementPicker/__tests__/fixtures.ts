@@ -146,11 +146,12 @@ export function stubResolver(framework: ElementPickerFramework = "svelte"): Host
 }
 
 /** Never answers until its signal aborts, and then only if `honour` says so. */
-export function stallingResolver(honour: boolean): HostSourceResolver {
+export function stallingResolver(honour: boolean, onEnter?: () => void): HostSourceResolver {
   return {
     framework: "svelte",
     resolve: (request, _access, signal) =>
       new Promise((resolve) => {
+        onEnter?.();
         if (!honour) return;
         signal.addEventListener("abort", () =>
           resolve({

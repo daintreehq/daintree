@@ -46,6 +46,44 @@ function errorMessage(error: unknown): string {
   return formatErrorMessage(error, "resolver failed").slice(0, 1024);
 }
 
+/**
+ * A resolver's answer, checked against the request it was given before it is
+ * merged away: merging takes the current request's ids, so an answer for an
+ * earlier request or document would otherwise pass as this one's.
+ */
+function checkAnswer(
+  framework: ElementPickerFramework,
+  request: ResolveRequest,
+  answer: ResolveResponse
+): ResolveResponse {
+  const fail = (what: string): never => {
+    throw new Error(`the ${framework} resolver ${what}`);
+  };
+  if (answer.requestId !== request.requestId || answer.documentEpoch !== request.documentEpoch) {
+    fail("answered a different request");
+  }
+  const candidates = new Map(
+    request.observations.map((observation) => [
+      observation.elementId,
+      new Set(observationCandidates(observation).map((candidate) => candidate.candidateId)),
+    ])
+  );
+  const answered = new Set<string>();
+  for (const outcome of answer.outcomes) {
+    const owned = candidates.get(outcome.elementId);
+    if (!owned || answered.has(outcome.elementId)) fail("answered an element it was not sent");
+    answered.add(outcome.elementId);
+    const results = new Set<string>();
+    for (const result of outcome.results) {
+      if (!owned!.has(result.candidateId) || results.has(result.candidateId)) {
+        fail("answered a candidate it was not sent, or one twice");
+      }
+      results.add(result.candidateId);
+    }
+  }
+  return answer;
+}
+
 /** The request as one framework's resolver sees it: only the candidates it owns. */
 function requestFor(request: ResolveRequest, framework: ElementPickerFramework): ResolveRequest {
   const owns = (candidate: SourceCandidate) => candidate.framework === framework;
@@ -144,10 +182,11 @@ export function createHostRuntime(
           answers.set(framework, null);
           return;
         }
+        const own = requestFor(request, framework);
         try {
           answers.set(
             framework,
-            await (await resolver).resolve(requestFor(request, framework), sourceAccess, signal)
+            checkAnswer(framework, own, await (await resolver).resolve(own, sourceAccess, signal))
           );
         } catch (error) {
           if (!signal.aborted) throw error;
@@ -197,9 +236,16 @@ export function createHostRuntime(
             });
           return;
         }
-        case "cancel":
-          jobs.get(message.jobId)?.controller.abort();
+        case "cancel": {
+          const job = jobs.get(message.jobId);
+          if (!job) return;
+          job.controller.abort();
+          // A resolver may have passed a signal of its own to a read; the job's
+          // cancel still ends it, so nothing is left waiting on main.
+          for (const settle of [...job.pending.values()])
+            settle({ ok: false, reason: "cancelled" });
           return;
+        }
         case "access-result":
           jobs.get(message.jobId)?.pending.get(message.accessId)?.(message.result);
           return;

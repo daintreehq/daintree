@@ -263,22 +263,80 @@ describe("ElementPickerHost", () => {
     expect(kill).toHaveBeenCalledWith(children[0]!.pid);
   });
 
+  // The deadline runs from admission, so each window below is wide enough for
+  // a cold start, and each test proves the resolver was reached before it.
   it("answers budget-exhausted at the deadline and retires a host that ignores the cancel", async () => {
+    let entered = false;
     const { host, children } = harness(
-      { svelte: async () => stallingResolver(false) },
+      { svelte: async () => stallingResolver(false, () => (entered = true)) },
       { cancelGraceMs: 20 }
     );
     const id = await workspace(host);
     const response = await host.resolve(
       request(id, [observation("el-1", [candidate("c-1", "app/src/App.svelte")])], {
-        deadlineMs: 200,
+        deadlineMs: 600,
       })
     );
+    expect(entered).toBe(true);
     expect(results(response)).toEqual([
       { state: "unavailable", candidateId: "c-1", claim: "file-hint", reason: "budget-exhausted" },
     ]);
     expect(children[0]?.posted).toContain("cancel");
     await vi.waitFor(() => expect(children[0]?.alive).toBe(false));
+  });
+
+  it("reports a cooperative resolver stopped by the deadline as out of budget, not cancelled", async () => {
+    let entered = false;
+    const { host, children } = harness({
+      svelte: async () => stallingResolver(true, () => (entered = true)),
+    });
+    const id = await workspace(host);
+    const response = await host.resolve(
+      request(id, [observation("el-1", [candidate("c-1", "app/src/App.svelte")])], {
+        deadlineMs: 600,
+      })
+    );
+    expect(entered).toBe(true);
+    expect(results(response)).toEqual([
+      { state: "unavailable", candidateId: "c-1", claim: "file-hint", reason: "budget-exhausted" },
+    ]);
+    expect(children[0]?.alive).toBe(true);
+  });
+
+  it("keeps a cancel a cancel when the deadline passes before the resolver answers it", async () => {
+    let entered = false;
+    // Honours the cancel, but only answers once the deadline has also passed.
+    const slow: HostSourceResolver = {
+      framework: "svelte",
+      resolve: (req, _access, signal) =>
+        new Promise((resolve) => {
+          entered = true;
+          signal.addEventListener("abort", () =>
+            setTimeout(
+              () =>
+                resolve({
+                  requestId: req.requestId,
+                  documentEpoch: req.documentEpoch,
+                  outcomes: [],
+                }),
+              900
+            )
+          );
+        }),
+    };
+    const { host } = harness({ svelte: async () => slow }, { cancelGraceMs: 2_000 });
+    const id = await workspace(host);
+    const controller = new AbortController();
+    const pending = host.resolve(
+      request(id, [observation("el-1", [candidate("c-1", "app/src/App.svelte")])], {
+        deadlineMs: 1_000,
+      }),
+      { signal: controller.signal }
+    );
+    await vi.waitFor(() => expect(entered).toBe(true));
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    controller.abort();
+    expect(results(await pending)[0]).toMatchObject({ reason: "cancelled" });
   });
 
   it("keeps a host that answers a cancel, with every unanswered candidate cancelled", async () => {
@@ -342,6 +400,84 @@ describe("ElementPickerHost", () => {
     expect(host.running).toBe(true);
   });
 
+  it("rejects a resolver's answer that claims a revision main never served", async () => {
+    const liar: HostSourceResolver = {
+      framework: "svelte",
+      resolve: async (req) => ({
+        requestId: req.requestId,
+        documentEpoch: req.documentEpoch,
+        outcomes: [
+          {
+            elementId: "el-1",
+            results: [
+              {
+                state: "verified",
+                candidateId: "c-1",
+                claim: "file-hint",
+                target: {
+                  file: { workspaceId: req.workspaceId, path: "app/src/App.svelte" },
+                  location: null,
+                },
+                fileRevision: `sha256:${"0".repeat(64)}`,
+              },
+            ],
+          },
+        ],
+      }),
+    };
+    const { host } = harness({ svelte: async () => liar });
+    const id = await workspace(host);
+    await expect(
+      host.resolve(request(id, [observation("el-1", [candidate("c-1", "app/src/App.svelte")])]))
+    ).rejects.toMatchObject({ code: "RESOLVER_FAILED" });
+  });
+
+  it("rejects a resolver's answer that names a file outside the app", async () => {
+    const wanderer: HostSourceResolver = {
+      framework: "svelte",
+      resolve: async (req) => ({
+        requestId: req.requestId,
+        documentEpoch: req.documentEpoch,
+        outcomes: [
+          {
+            elementId: "el-1",
+            results: [
+              {
+                state: "observed",
+                candidateId: "c-1",
+                claim: "file-hint",
+                target: {
+                  file: { workspaceId: req.workspaceId, path: "other/Elsewhere.svelte" },
+                  location: null,
+                },
+                fileRevision: null,
+              },
+            ],
+          },
+        ],
+      }),
+    };
+    const { host } = harness({ svelte: async () => wanderer });
+    const id = await workspace(host);
+    await expect(
+      host.resolve(request(id, [observation("el-1", [candidate("c-1", "app/src/App.svelte")])]))
+    ).rejects.toMatchObject({ code: "RESOLVER_FAILED" });
+  });
+
+  it("refuses a request whose observations share an element id, before forking", async () => {
+    const { host, children } = harness();
+    const id = await workspace(host);
+    await expect(
+      host.resolve(
+        request(id, [
+          observation("el-1", [candidate("c-1", "app/src/App.svelte")]),
+          observation("el-1", [candidate("c-2", "app/src/App.svelte")]),
+        ])
+      )
+    ).rejects.toMatchObject({ code: "INVALID_REQUEST" });
+    expect(children).toHaveLength(0);
+  });
+
   it("retires a host that sends a malformed message", async () => {
     const { host, children } = harness({ svelte: async () => stallingResolver(false) });
     const id = await workspace(host);
@@ -366,10 +502,8 @@ describe("ElementPickerHost", () => {
 
     const onChange = watched.get(path.dirname(file));
     expect(onChange).toBeDefined();
+    // An event for unchanged content first: the single push below proves it added none.
     onChange!(file);
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(changes).toEqual([]);
-
     fs.writeFileSync(file, `<h2>${STUB_MARKER}</h2>`);
     onChange!(file);
     await vi.waitFor(() =>

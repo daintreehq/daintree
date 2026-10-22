@@ -1,6 +1,11 @@
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { MAX_WATCHED_DIRECTORIES, SourceTracker, type SourceChange } from "../sourceTracker.js";
+import {
+  MAX_TRACKED_FILES,
+  MAX_WATCHED_DIRECTORIES,
+  SourceTracker,
+  type SourceChange,
+} from "../sourceTracker.js";
 
 const revision = (n: number) => `sha256:${n.toString(16).padStart(64, "0")}`;
 
@@ -69,16 +74,37 @@ describe("SourceTracker", () => {
     const t = tracker({ [file("A.svelte")]: revision(1) });
     t.subject.observe(file("A.svelte"), ref("A.svelte"), revision(1));
     await t.settle();
+
     t.readRevision.mockClear();
+    // Hold the first read open while the file changes again underneath it.
+    const held: Array<() => void> = [];
+    let inFlight = 0;
+    let maxInFlight = 0;
+    t.readRevision.mockImplementation(async (path: string) => {
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      const seen = t.disk.get(path) ?? null;
+      await new Promise<void>((resolve) => held.push(resolve));
+      inFlight -= 1;
+      return seen;
+    });
     const notify = t.listeners.get(path.join("/repo", "src"))!;
     t.disk.set(file("A.svelte"), revision(5));
     notify(file("A.svelte"));
+    t.disk.set(file("A.svelte"), revision(6));
     notify(file("A.svelte"));
     notify(file("A.svelte"));
+    held.shift()!();
+    await vi.waitFor(() => expect(held).toHaveLength(1));
+    held.shift()!();
     await t.settle();
-    await t.settle();
+
     expect(t.readRevision).toHaveBeenCalledTimes(2);
-    expect(t.changes).toEqual([{ file: ref("A.svelte"), revision: revision(5) }]);
+    expect(maxInFlight).toBe(1);
+    expect(t.changes).toEqual([
+      { file: ref("A.svelte"), revision: revision(5) },
+      { file: ref("A.svelte"), revision: revision(6) },
+    ]);
   });
 
   it("stops tracking past the directory cap and survives a watch that fails", async () => {
@@ -88,6 +114,18 @@ describe("SourceTracker", () => {
     }
     t.subject.observe(path.join("/repo", "past", "x.svelte"), ref("x.svelte"), revision(1));
     expect(t.listeners.has(path.join("/repo", "past"))).toBe(false);
+
+    const files = tracker();
+    for (let index = 0; index < MAX_TRACKED_FILES + 1; index++) {
+      files.subject.observe(
+        path.join("/repo", "src", `f${index}.svelte`),
+        ref(`f${index}.svelte`),
+        revision(1)
+      );
+    }
+    await files.settle();
+    // One reconcile read per tracked file: the one past the cap is never read.
+    expect(files.readRevision).toHaveBeenCalledTimes(MAX_TRACKED_FILES);
 
     const failing = tracker();
     failing.subject.observe(
