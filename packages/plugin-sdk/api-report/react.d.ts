@@ -7100,13 +7100,14 @@ interface PluginSettingsViewContext {
  * project surface slot (`contributes.surfaces`), which mounts one of the
  * plugin's panel views in place of the host's own content — so the same view
  * can see both and lay itself out for each. `"settings"` is the plugin's custom
- * settings section.
+ * settings section. `"sidebar"` is a sidebar view, below the sidebar header and
+ * as narrow as the sidebar's minimum width.
  *
- * Open-ended: hosts added later (a sidebar, a popover, an editor) arrive as new
- * members, so a view that switches on this must give unknown kinds a sensible
- * default rather than treat the list as exhaustive.
+ * Open-ended: hosts added later (a popover, an editor) arrive as new members,
+ * so a view that switches on this must give unknown kinds a sensible default
+ * rather than treat the list as exhaustive.
  */
-type PluginViewHostKind = "panel" | "surface" | "settings";
+type PluginViewHostKind = "panel" | "surface" | "settings" | "sidebar";
 interface PluginViewHostContext {
     readonly kind: PluginViewHostKind;
 }
@@ -7411,8 +7412,8 @@ interface PanelViewProps {
     readonly settingsContext?: PluginSettingsViewContext;
     /**
      * Where the host mounted this view — a panel, a project surface, the plugin's
-     * settings section — so one view can lay itself out for each place it
-     * appears. Always set by Daintree; absent only from a host that predates it,
+     * settings section, the sidebar — so one view can lay itself out for each
+     * place it appears. Always set by Daintree; absent only from a host that predates it,
      * which you can treat as `"panel"`.
      *
      * This is the whole of what a view learns about its surroundings. Your view

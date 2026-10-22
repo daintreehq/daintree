@@ -123,11 +123,20 @@ export async function collectManifestAdvisories({
       );
     }
   }
-  // A view's `iconId` is ignored at runtime whatever its value — the matching
-  // panels entry owns the rendered icon — so warn on its presence rather than
-  // only when it's unrecognized. A recognized-but-ignored id is the more
-  // misleading case: it looks like it works.
+  // A panel or settings view's `iconId` is ignored at runtime whatever its
+  // value — the matching panels entry owns the rendered icon — so warn on its
+  // presence rather than only when it's unrecognized. A recognized-but-ignored
+  // id is the more misleading case: it looks like it works. A sidebar view's is
+  // its switcher glyph, checked like a toolbar button's.
   for (const [index, view] of manifest.contributes.views.entries()) {
+    if (view.location === "sidebar") {
+      if (view.iconId && !isPluginIconId(view.iconId) && !isPluginCustomIconRef(view.iconId)) {
+        warnings.push(
+          `views[${index}].iconId "${view.iconId}" isn't a recognized plugin icon — it will render as the default puzzle icon. Known ids: ${knownIds}`
+        );
+      }
+      continue;
+    }
     if (view.iconId) {
       warnings.push(
         `views[${index}].iconId "${view.iconId}" is ignored at runtime — the matching panels entry owns the rendered icon. Set iconId there instead.`

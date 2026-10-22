@@ -111,6 +111,8 @@ import { SidebarWorktreeRow } from "./SidebarWorktreeRow";
 import { WorktreeLoadErrorBanner } from "./WorktreeLoadErrorBanner";
 import { StaticWorktreeRow } from "./StaticWorktreeRow";
 import { WorkspaceRootSidebar } from "./WorkspaceRootSidebar";
+import { SidebarViewHeading } from "./SidebarViewSwitcher";
+import { useBuiltInSidebarViewHidden } from "./sidebarViewContext";
 import { WorktreeCardPlaceholder } from "./WorktreeCardPlaceholder";
 import { useWorkspaceRoot } from "@/hooks/useWorkspaceRoot";
 import { useShouldSkipMotion } from "@/hooks/useShouldSkipMotion";
@@ -1314,6 +1316,8 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   // scopeTotal`) — `liveQuery` clears instantly while `deferredQuery` still
   // drives the rows, so without that check it spoke "All 7" over a list of one
   // and then again when the rows arrived.
+  // A list hidden behind a plugin's sidebar view speaks for nothing on screen.
+  const isHiddenInSidebar = useBuiltInSidebarViewHidden();
   const wasNarrowedRef = useRef(false);
   useEffect(() => {
     let message: string | null = null;
@@ -1324,7 +1328,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       message = `All ${scopeTotal} worktrees shown`;
       wasNarrowedRef.current = false;
     }
-    if (message === null) return;
+    if (message === null || isHiddenInSidebar) return;
     const spoken = message;
     const timer = window.setTimeout(() => {
       useAnnouncerStore.getState().announce(spoken);
@@ -1334,7 +1338,15 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     };
     // Keyed on the filter inputs as well as the count, so swapping to a
     // different set of the same size still speaks.
-  }, [showScope, filteredCount, scopeTotal, activeFacetText, liveQuery, quickStateFilter]);
+  }, [
+    showScope,
+    filteredCount,
+    scopeTotal,
+    activeFacetText,
+    liveQuery,
+    quickStateFilter,
+    isHiddenInSidebar,
+  ]);
 
   // Announce the sort-disabled reason whenever it appears or changes — covers
   // null → reason (sorting becomes disabled) and reason → reason (e.g. switching
@@ -1693,9 +1705,9 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     return (
       <div className="flex flex-col h-full">
         <div className={cn(SIDEBAR_HEADER_ROW, "border-b border-divider")}>
-          <h2 className="truncate text-text-primary font-semibold text-sm tracking-wide">
+          <SidebarViewHeading className="truncate text-text-primary font-semibold text-sm tracking-wide">
             Worktrees
-          </h2>
+          </SidebarViewHeading>
         </div>
         <div className="flex-1 min-h-0 relative overflow-hidden pb-8">
           <Skeleton label="Loading worktrees">
@@ -1728,9 +1740,9 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       <>
         <div className="flex flex-col h-full">
           <div className={cn(SIDEBAR_HEADER_ROW, "border-b border-divider")}>
-            <h2 className="truncate text-text-primary font-semibold text-sm tracking-wide">
+            <SidebarViewHeading className="truncate text-text-primary font-semibold text-sm tracking-wide">
               Worktrees
-            </h2>
+            </SidebarViewHeading>
           </div>
           {errorBanner}
           {worktreeLoadErrorBanner}
@@ -1832,14 +1844,14 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         <div className="flex min-w-0 flex-1 items-baseline gap-1.5">
           {/* Heading navigation lands here, not on the tag, so the host rides in
               the heading's name, and stays there when the tag hides. */}
-          <h2
+          <SidebarViewHeading
             className="shrink-0 text-text-primary font-semibold text-sm tracking-wide"
             aria-label={
               remoteHostName === null ? undefined : `Worktrees, on host ${remoteHostName}`
             }
           >
             Worktrees
-          </h2>
+          </SidebarViewHeading>
           {remoteHostParts && !showReconnecting && (
             // These checkouts live on the host, not here: the list says where,
             // in the remote hue the toolbar above it wears. It repeats the host

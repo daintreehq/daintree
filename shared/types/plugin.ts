@@ -426,11 +426,28 @@ export interface ContextMenuContribution {
  * installed plugin, Project settings → Plugins for a project plugin). It
  * receives {@link PanelViewProps.settingsContext}.
  *
- * `sidebar` is rejected at the manifest gate (`ViewContributionSchema`) because
- * the sidebar host does not exist yet — accepting it would validate a
- * contribution the runtime cannot honor.
+ * `sidebar` is one of the sidebar's views: listed by `name` in the sidebar
+ * header's switcher beside the built-in worktree list, ordered by `priority`,
+ * gated by an optional `when`, and mounted below the header while chosen.
  */
-export type ViewLocation = "panel" | "settings";
+export type ViewLocation = "panel" | "settings" | "sidebar";
+
+/** Longest `name` a sidebar view may declare: it is the sidebar header's title. */
+export const SIDEBAR_VIEW_NAME_MAX_LENGTH = 40;
+
+/** The range a sidebar view's `priority` may take. Higher sorts first in the switcher. */
+export const SIDEBAR_VIEW_PRIORITY_MIN = -1000;
+export const SIDEBAR_VIEW_PRIORITY_MAX = 1000;
+
+/**
+ * The built-in worktree list's fixed priority, which every plugin sidebar
+ * view's is compared against: a positive priority lists above it, zero or
+ * negative below it, because the worktree list wins a tie.
+ */
+export const WORKTREES_SIDEBAR_VIEW_PRIORITY = 0;
+
+/** A sidebar view that declares no `priority` ties the worktree list, so lists below it. */
+export const SIDEBAR_VIEW_DEFAULT_PRIORITY = WORKTREES_SIDEBAR_VIEW_PRIORITY;
 
 /**
  * Where a `location: "settings"` view is mounted, handed to it as
@@ -453,13 +470,14 @@ export interface PluginSettingsViewContext {
  * project surface slot (`contributes.surfaces`), which mounts one of the
  * plugin's panel views in place of the host's own content — so the same view
  * can see both and lay itself out for each. `"settings"` is the plugin's custom
- * settings section.
+ * settings section. `"sidebar"` is a sidebar view, below the sidebar header and
+ * as narrow as the sidebar's minimum width.
  *
- * Open-ended: hosts added later (a sidebar, a popover, an editor) arrive as new
- * members, so a view that switches on this must give unknown kinds a sensible
- * default rather than treat the list as exhaustive.
+ * Open-ended: hosts added later (a popover, an editor) arrive as new members,
+ * so a view that switches on this must give unknown kinds a sensible default
+ * rather than treat the list as exhaustive.
  */
-export type PluginViewHostKind = "panel" | "surface" | "settings";
+export type PluginViewHostKind = "panel" | "surface" | "settings" | "sidebar";
 
 export interface PluginViewHostContext {
   readonly kind: PluginViewHostKind;
@@ -471,19 +489,40 @@ export interface PluginViewHostContext {
  * never as a panel kind, so nothing can spawn it from the launcher, palette or
  * dock, and served only to the views of projects that may see the plugin.
  */
-export interface PluginHostedViewDescriptor {
+interface PluginHostedViewDescriptorBase {
   /** {@link pluginHostedViewKindId} of the plugin instance and view. */
   id: string;
   /** The plugin's RUNTIME instance key, as panel kinds carry it in `extensionId`. */
   pluginId: string;
   /** The view's own manifest id. */
   viewId: string;
-  location: Exclude<ViewLocation, "panel">;
   /** Display name for diagnostics: the plugin's name and what the view is for. */
   name: string;
   /** The `plugin://` module URL under the plugin's current load and generation. */
   componentPath: string;
 }
+
+export interface PluginSettingsHostedViewDescriptor extends PluginHostedViewDescriptorBase {
+  location: "settings";
+}
+
+/** A sidebar view, carrying what its switcher entry needs. */
+export interface PluginSidebarHostedViewDescriptor extends PluginHostedViewDescriptorBase {
+  location: "sidebar";
+  /** The manifest `name`: the switcher entry, and the header's title while it shows. */
+  title: string;
+  /** The plugin's display name, which attributes the entry. */
+  pluginName: string;
+  /** The manifest `iconId`, with a custom SVG reference resolved to its runtime key. */
+  iconId?: string;
+  /** The manifest `priority`, or {@link SIDEBAR_VIEW_DEFAULT_PRIORITY}. */
+  priority: number;
+  /** The manifest `when`, evaluated live against the chrome context. */
+  when?: string;
+}
+
+export type PluginHostedViewDescriptor =
+  PluginSettingsHostedViewDescriptor | PluginSidebarHostedViewDescriptor;
 
 /**
  * The synthetic view-kind id a hosted view mounts under. It names no panel
@@ -523,10 +562,14 @@ export interface ViewContribution {
   id: string;
   componentPath: string;
   location: ViewLocation;
-  // Advisory only — the matching `contributes.panels` entry owns the rendered
-  // icon/name at runtime. `name`/`description` were removed (#10888) because no
-  // runtime path consumed them.
+  // Advisory only for a panel view — the matching `contributes.panels` entry
+  // owns the rendered icon/name at runtime, which is why `name`/`description`
+  // were removed from panel views (#10888). A sidebar view has no panel, so it
+  // carries its own `iconId`, `name`, `priority` and `when`.
   iconId?: string;
+  name?: string;
+  priority?: number;
+  when?: string;
 }
 
 /**
@@ -1144,8 +1187,8 @@ export interface PanelViewProps {
   readonly settingsContext?: PluginSettingsViewContext;
   /**
    * Where the host mounted this view — a panel, a project surface, the plugin's
-   * settings section — so one view can lay itself out for each place it
-   * appears. Always set by Daintree; absent only from a host that predates it,
+   * settings section, the sidebar — so one view can lay itself out for each
+   * place it appears. Always set by Daintree; absent only from a host that predates it,
    * which you can treat as `"panel"`.
    *
    * This is the whole of what a view learns about its surroundings. Your view

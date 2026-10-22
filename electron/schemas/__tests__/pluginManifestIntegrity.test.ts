@@ -227,6 +227,83 @@ describe("location: settings views", () => {
   });
 });
 
+describe("location: sidebar views", () => {
+  function sidebarView(id: string, extra: Record<string, unknown> = {}): Record<string, unknown> {
+    return { id, componentPath: "./view/sidebar.js", location: "sidebar", name: "Board", ...extra };
+  }
+
+  it("accepts several sidebar views with no panel of their own", () => {
+    const result = manifestWith({
+      views: [sidebarView("board", { priority: 200, when: "isGitBacked" }), sidebarView("docs")],
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects a sidebar view without a name", () => {
+    const { name: _omit, ...unnamed } = sidebarView("board");
+    const result = manifestWith({ views: [unnamed] });
+    expect(result.success).toBe(false);
+    expect(issueWithCode(result, "sidebar_view_name_missing")?.path).toEqual([
+      "contributes",
+      "views",
+      0,
+      "name",
+    ]);
+  });
+
+  it.each(["activeSidebarView == 'acme.my-plugin.board'", "isGitBacked && !activeSidebarView"])(
+    "rejects a sidebar view whose when reads activeSidebarView: %s",
+    (when) => {
+      const result = manifestWith({ views: [sidebarView("board", { when })] });
+      expect(result.success).toBe(false);
+      expect(issueWithCode(result, "sidebar_view_when_reads_active_view")?.path).toEqual([
+        "contributes",
+        "views",
+        0,
+        "when",
+      ]);
+    }
+  );
+
+  it("rejects a sidebar view that shares a panel's id", () => {
+    const result = manifestWith({ panels: [panel("rich")], views: [sidebarView("rich")] });
+    expect(result.success).toBe(false);
+    expect(errorCodes(result)).toContain("sidebar_view_panel_id_collision");
+  });
+
+  it.each([
+    ["panel", { name: "Rich" }, "name"],
+    ["panel", { priority: 5 }, "priority"],
+    ["settings", { when: "isGitBacked" }, "when"],
+  ])("rejects a %s view that sets the sidebar-only %o", (location, extra, field) => {
+    const result = manifestWith({
+      panels: [panel("rich")],
+      views: [{ ...view(location === "panel" ? "rich" : "prefs"), location, ...extra }],
+    });
+    expect(result.success).toBe(false);
+    expect(issueWithCode(result, "view_sidebar_field_misplaced")?.path).toEqual([
+      "contributes",
+      "views",
+      0,
+      field,
+    ]);
+  });
+
+  it("rejects a project surface that names a sidebar view", () => {
+    const result = getPluginManifestSchema("project").safeParse({
+      name: "acme.my-plugin",
+      version: "1.0.0",
+      scope: "project",
+      contributes: {
+        views: [sidebarView("board")],
+        surfaces: { emptyCanvas: { viewId: "board" } },
+      },
+    });
+    expect(result.success).toBe(false);
+    expect(errorCodes(result)).toContain("surface_view_ref_sidebar");
+  });
+});
+
 describe("MCP server ${settings:*} token references (#10620)", () => {
   it("accepts tokens that name declared settings across command/args/env", () => {
     const result = manifestWith({

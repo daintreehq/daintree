@@ -16,6 +16,8 @@ export interface PluginNotOnHostPlaceholderProps {
   /** Name to show until the host answers with the plugin's own. */
   pluginDisplayName?: string;
   onRemove?: () => void;
+  /** What the `onRemove` button says, for a host whose way out is not removing a panel. */
+  removeLabel?: string;
 }
 
 type RowState =
@@ -34,6 +36,7 @@ export function PluginNotOnHostPlaceholder({
   kind,
   pluginDisplayName,
   onRemove,
+  removeLabel = "Remove panel",
 }: PluginNotOnHostPlaceholderProps) {
   const hostId = pluginViewHostId();
   const { hostName } = useHostConnection();
@@ -140,7 +143,7 @@ export function PluginNotOnHostPlaceholder({
               )}
               {onRemove && (
                 <Button variant="ghost" size="sm" onClick={onRemove}>
-                  Remove panel
+                  {removeLabel}
                 </Button>
               )}
             </div>

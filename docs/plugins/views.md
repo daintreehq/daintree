@@ -10,7 +10,7 @@ The host mounts your default export under an error boundary and a `Suspense` bou
 
 You receive [`PanelViewProps`](./contribution-points.md#views--shipped): `panelId`, `pluginId`, `worktreeId`, `disposeSignal`, `panelRemovedSignal`, `initialArgs`, `openRequest`, `stateVersion`, `persistState`, `requestReload`, `setHasUnsavedChanges`, `setToolbarItemState`, `setMenuItems`, `setTitle`, `runningActions`, `styleRootAttributes`, `hostContext`, and on a settings view `settingsContext`. Two of these are misread in every first plugin. `pluginId` is your host-side id, which for a project plugin is the instance key, not your manifest name; pass it through to the bridge as given. `disposeSignal` aborts on every unmount, including the temporary ones (a sibling pane maximised, a dock tab left), so it is for cancelling fetches, never for deciding something is finished. `stateVersion` says which shape `initialArgs` holds, and is only meaningful once you declare `stateVersion` on the panel contribution — see [panel state versioning](./contribution-points.md#panels--shipped).
 
-**Where you are, and where you stop.** `hostContext.kind` says where the host mounted you: `"panel"` (the grid, the dock or a dialog), `"surface"` (a project surface showing one of your panels in place of the host's own content) or `"settings"` (your settings section). One view can be mounted in more than one of these, so lay out for each; more hosts are coming, so give a kind you don't recognise your panel layout rather than switching on the list exhaustively. Every host gives the same contract: these props, the error boundary with Try again, lazy loading and your style root. Your view owns its own box and nothing outside it. Reading or styling the host's DOM, depending on an ancestor's layout or class names, or reaching past your box with global CSS is unsupported and can break on any update. Outside a panel the host contains your layout (`contain: layout paint`, overflow clipped, its own stacking context), so a `position: fixed` descendant stays inside your box, but a modal `<dialog>`, a `popover` element or a portal into `document.body` leaves that containment: use the kit's `Dialog`, `Popover` and menus, which the host draws.
+**Where you are, and where you stop.** `hostContext.kind` says where the host mounted you: `"panel"` (the grid, the dock or a dialog), `"surface"` (a project surface showing one of your panels in place of the host's own content), `"settings"` (your settings section) or `"sidebar"` (a [sidebar view](#a-sidebar-view)). One view can be mounted in more than one of these, so lay out for each; more hosts are coming, so give a kind you don't recognise your panel layout rather than switching on the list exhaustively. Every host gives the same contract: these props, the error boundary with Try again, lazy loading and your style root. Your view owns its own box and nothing outside it. Reading or styling the host's DOM, depending on an ancestor's layout or class names, or reaching past your box with global CSS is unsupported and can break on any update. Outside a panel the host contains your layout (`contain: layout paint`, overflow clipped, its own stacking context), so a `position: fixed` descendant stays inside your box, but a modal `<dialog>`, a `popover` element or a portal into `document.body` leaves that containment: use the kit's `Dialog`, `Popover` and menus, which the host draws.
 
 A render error shows the host's diagnostics pane with Try again, Close panel, Copy diagnostics and View logs. Try again mounts a new attempt with the module already loaded; it imports the module afresh only when loading it is what failed. An error from a [registration only a window reload can replace](#global-registration-survives-reload) offers Reload window in place of Try again. The rest of Daintree keeps working.
 
@@ -93,6 +93,22 @@ const { connected } = await window.electron.plugin.invoke(pluginId, "connection"
 ```
 
 Store what the section edits with your worker: credentials as a declared `type: "secret"` setting (`host.settings.set`), everything else in `host.storage` or a `host.db` database (declare it `location: "local"` to keep it on this machine and out of the repository). Never put a credential in `host.storage` or a database. In the section, a kit `SecretInput` with `stored` shows that one is saved, with Replace (and Clear, when you pass `onClear`), without the view ever holding it.
+
+## A sidebar view
+
+A view with `location: "sidebar"` sits in the sidebar, chosen from the switcher in its header beside the worktree list. Give it a `name` for the switcher, and optionally an `iconId`, a `priority` and a `when` (see [Views → A sidebar view](./contribution-points.md#views--shipped)):
+
+```json
+{
+  "id": "board",
+  "componentPath": "dist/board.js",
+  "location": "sidebar",
+  "name": "Board",
+  "iconId": "list"
+}
+```
+
+The host mounts it in the whole region below the sidebar's header, with `hostContext` `{ kind: "sidebar" }`. The header holds only the switcher, so put your controls in your own view. The sidebar can be as narrow as 200px: lay out for that width, and let long text truncate rather than push the box wider. Like a settings view there is no panel record, so `initialArgs`, `openRequest`, `persistState`, `stateVersion`, `worktreeId`, `requestReload`, `setHasUnsavedChanges`, `setToolbarItemState` and `setMenuItems` are absent. The view unmounts when the user switches to another sidebar view, so `disposeSignal` aborts then; `panelRemovedSignal` aborts only when the plugin stops, is muted, reloads or is hidden in the project. A right-click inside your view is yours: the sidebar's own background menu never opens over it. If your view throws, its error pane offers **Show worktrees** beside **Try again**.
 
 ## Styling
 

@@ -123,6 +123,25 @@ describe("plugin view close action", () => {
     expect(onRequestClose).toHaveBeenCalledWith();
   });
 
+  it("carries the host's words for its way out to the diagnostics pane", async () => {
+    const { makePluginViewContent } = await import("../PluginViewContent");
+    const Content = makePluginViewContent(makeContentConfig());
+    const showWorktrees = vi.fn();
+
+    render(
+      <Content
+        panelId="sidebar:acme.board"
+        onRequestClose={showWorktrees}
+        requestCloseLabel="Show worktrees"
+      />
+    );
+
+    const button = await screen.findByTestId("plugin-view-diagnostics-close");
+    expect(button.textContent).toBe("Show worktrees");
+    fireEvent.click(button);
+    expect(showWorktrees).toHaveBeenCalledTimes(1);
+  });
+
   it("renders no close affordance when the host supplies none", async () => {
     const { makePluginViewContent } = await import("../PluginViewContent");
     const Content = makePluginViewContent(makeContentConfig());

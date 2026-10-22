@@ -257,6 +257,8 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `nav.showGrid` | Show grid | safe | — |
 | `nav.showProjectHome` | Show project home | safe | — |
 | `nav.toggleFocusMode` | Toggle focus mode | safe | — |
+| `ui.sidebar.showWorktrees` | Show worktrees in sidebar | safe | — |
+| `ui.sidebar.switchView` | Switch sidebar view | safe | `viewId?` |
 
 ## panel
 

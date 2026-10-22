@@ -566,6 +566,10 @@ export const BUILT_IN_ACTION_IDS = [
   // -- uiActions --
   "ui.sidebar.resetWidth",
 
+  // -- sidebarActions --
+  "ui.sidebar.switchView",
+  "ui.sidebar.showWorktrees",
+
   // -- devServerActions --
   "devServer.start",
   "devPreview.stop",

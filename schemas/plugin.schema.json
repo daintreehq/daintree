@@ -617,10 +617,25 @@
                 "type": "string",
                 "enum": [
                   "panel",
-                  "settings"
+                  "settings",
+                  "sidebar"
                 ]
               },
               "iconId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 40
+              },
+              "priority": {
+                "type": "integer",
+                "minimum": -1000,
+                "maximum": 1000
+              },
+              "when": {
                 "type": "string",
                 "minLength": 1
               }

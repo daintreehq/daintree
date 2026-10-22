@@ -118,6 +118,9 @@ const DATABASE_ENDPOINT = "electron/services/pluginAgentMcp/databaseEndpoint.ts"
 const DECLARED_QUERIES = "electron/services/pluginAgentMcp/declaredQueries.ts";
 const GENERIC_PANEL_MENU = "src/components/Panel/genericPanelMenu.ts";
 const PLUGIN_PANEL_TOOLBAR = "src/components/Panel/PluginPanelToolbar.tsx";
+const SIDEBAR_VIEWS = "src/lib/sidebarViews.ts";
+const SIDEBAR_VIEW_HOST = "src/components/Sidebar/SidebarViewHost.tsx";
+const SIDEBAR_VIEW_SWITCHER = "src/components/Sidebar/SidebarViewSwitcher.tsx";
 
 /**
  * The schemas swept for field coverage. The first block matches the fourteen
@@ -632,17 +635,49 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
     location: {
       mode: "cross-reference",
       consumers: [
-        { file: PLUGIN_SCHEMA, symbol: "ViewContributionSchema (enum 'panel' | 'settings')" },
+        {
+          file: PLUGIN_SCHEMA,
+          symbol: "ViewContributionSchema (enum 'panel' | 'settings' | 'sidebar')",
+        },
         { file: PLUGIN_SERVICE, symbol: "loadPlugin → registerPluginHostedViews (non-panel)" },
       ],
-      note: "'panel' ties the view to the panel host; any other location is registered as a hosted view that mounts outside the panel grid — 'settings' is the plugin's one custom settings section, mounted in its settings home and never matched to a panel. A sidebar host is rejected at parse.",
+      note: "'panel' ties the view to the panel host; any other location is registered as a hosted view that mounts outside the panel grid — 'settings' is the plugin's one custom settings section, mounted in its settings home, and 'sidebar' a sidebar view chosen from the header switcher. Neither is ever matched to a panel.",
     },
     iconId: {
       mode: "verbatim",
       consumers: [
         { file: "packages/daintree-plugin/src/commands/validate.ts", symbol: "validateManifest" },
+        { file: PLUGIN_SERVICE, symbol: "loadPlugin → sidebar hosted view (resolveIconId)" },
+        { file: SIDEBAR_VIEW_SWITCHER, symbol: "SidebarViewSwitcher (resolvePluginIcon)" },
       ],
-      note: "Advisory: the SDK validate command flags an unrenderable view icon id.",
+      note: "A sidebar view's switcher glyph, custom SVG references resolved at load. Advisory on a panel or settings view: the SDK validate command flags it as ignored there.",
+    },
+    name: {
+      mode: "verbatim",
+      consumers: [
+        { file: PLUGIN_SERVICE, symbol: "loadPlugin → sidebar hosted view title" },
+        { file: SIDEBAR_VIEW_HOST, symbol: "SidebarViewHost (header title)" },
+      ],
+      note: "Sidebar views only: the switcher entry and the header title while the view shows.",
+    },
+    priority: {
+      mode: "verbatim",
+      consumers: [
+        { file: PLUGIN_SERVICE, symbol: "loadPlugin → sidebar hosted view priority" },
+        { file: SIDEBAR_VIEWS, symbol: "resolveSidebarViewOptions (ordering)" },
+      ],
+      note: "Sidebar views only: orders the switcher against the worktree list's fixed priority.",
+    },
+    when: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: PLUGIN_SCHEMA,
+          symbol: "getPluginManifestSchema (sidebar when reads no activeSidebarView)",
+        },
+        { file: SIDEBAR_VIEWS, symbol: "resolveSidebarViewOptions (evaluateWhenClause)" },
+      ],
+      note: "Sidebar views only: evaluated live against the chrome when context to decide whether the view is on offer.",
     },
   },
   mcpServers: {
