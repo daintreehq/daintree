@@ -14,9 +14,44 @@ const ALLOWED_KEYS = new Set(["label", "tooltip", "command"]);
 /** The authored form a plugin writes its own action ids in, `"{manifestId}.{id}"`. */
 const AUTHORED_ACTION_ID = /^[a-z0-9][a-z0-9_-]*\.[a-z0-9][a-zA-Z0-9._-]*$/;
 
+/**
+ * Vet a `command` a plugin attaches to something it publishes and rewrite it
+ * from the authored `"{manifestId}.{id}"` into the instance's namespace.
+ * `field` names it in the error.
+ */
+export function qualifyPluginOwnCommand(
+  command: unknown,
+  field: string,
+  manifestId: string,
+  instanceId: string
+): { ok: true; actionId: string } | { ok: false; error: string } {
+  const ownPrefix = `${manifestId}.`;
+  if (
+    typeof command !== "string" ||
+    !command.startsWith(ownPrefix) ||
+    command.length === ownPrefix.length ||
+    !AUTHORED_ACTION_ID.test(command)
+  ) {
+    const named =
+      typeof command === "string" ? `"${command.slice(0, 200)}"` : `of type ${typeof command}`;
+    return {
+      ok: false,
+      error: `${field} ${named} must be one of this plugin's own actions, written "${manifestId}.<id>"`,
+    };
+  }
+  const actionId = `${instanceId}.${command.slice(ownPrefix.length)}`;
+  if (isBuiltInActionId(command) || isBuiltInActionId(actionId)) {
+    return {
+      ok: false,
+      error: `${field} "${command}" is a built-in action, not one of this plugin's own`,
+    };
+  }
+  return { ok: true, actionId };
+}
+
 // Read without invoking an accessor, so a getter on plugin data can neither
 // throw out of a host method that must reject nor answer differently twice.
-function readField(value: object, key: string): unknown {
+export function readField(value: object, key: string): unknown {
   return Object.getOwnPropertyDescriptor(value, key)?.value;
 }
 
@@ -77,27 +112,9 @@ export function validatePluginWorktreeCardStatus(
   }
   let actionId: string | undefined;
   if (command !== undefined && command !== null) {
-    const ownPrefix = `${manifestId}.`;
-    if (
-      typeof command !== "string" ||
-      !command.startsWith(ownPrefix) ||
-      command.length === ownPrefix.length ||
-      !AUTHORED_ACTION_ID.test(command)
-    ) {
-      const named =
-        typeof command === "string" ? `"${command.slice(0, 200)}"` : `of type ${typeof command}`;
-      return {
-        ok: false,
-        error: `status.command ${named} must be one of this plugin's own actions, written "${manifestId}.<id>"`,
-      };
-    }
-    actionId = `${instanceId}.${command.slice(ownPrefix.length)}`;
-    if (isBuiltInActionId(command) || isBuiltInActionId(actionId)) {
-      return {
-        ok: false,
-        error: `status.command "${command}" is a built-in action, not one of this plugin's own`,
-      };
-    }
+    const qualified = qualifyPluginOwnCommand(command, "status.command", manifestId, instanceId);
+    if (!qualified.ok) return qualified;
+    actionId = qualified.actionId;
   }
   return {
     ok: true,

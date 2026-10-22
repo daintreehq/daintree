@@ -77,6 +77,7 @@ import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { normalizePanelMenuItems } from "../../../shared/utils/pluginPanelMenuItems.js";
 import { validatePluginContextEntry } from "../../../shared/utils/pluginContextKeys.js";
 import { validatePluginWorktreeCardStatus } from "../../../shared/utils/pluginWorktreeCardStatus.js";
+import { validatePluginWorktreeReviewChecks } from "../../../shared/utils/pluginWorktreeReviewChecks.js";
 import { toPluginFocusedPanel } from "../../../shared/utils/pluginFocusedPanel.js";
 import {
   normalizePluginAllAgentsSnapshot,
@@ -1407,6 +1408,27 @@ export class PluginDevWorkerHostProxy {
         return this.callWithGrace<void>(
           "setWorktreeCardStatus",
           { worktreeId: entry.worktreeId, status: entry.status },
+          undefined
+        );
+      },
+      // Same shape as setWorktreeCardStatus (#13806): commands stay authored.
+      setWorktreeReviewChecks: (worktreeId, checks) => {
+        if (this.disposed) return Promise.resolve();
+        const entry = validatePluginWorktreeReviewChecks(
+          worktreeId,
+          checks,
+          manifestId,
+          manifestId
+        );
+        if (!entry.ok) {
+          // Reject (not sync throw): runtime-surface Promise method (#10617).
+          return Promise.reject(
+            new Error(`Plugin "${this.pluginId}" setWorktreeReviewChecks: ${entry.error}`)
+          );
+        }
+        return this.callWithGrace<void>(
+          "setWorktreeReviewChecks",
+          { worktreeId: entry.worktreeId, checks: entry.checks },
           undefined
         );
       },

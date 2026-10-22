@@ -69,6 +69,7 @@ function makeHost() {
     setToolbarButtonState: vi.fn(async () => {}),
     setContext: vi.fn(async () => {}),
     setWorktreeCardStatus: vi.fn(async () => {}),
+    setWorktreeReviewChecks: vi.fn(async () => {}),
     setPanelMenuItems: vi.fn(async () => {}),
     showToast: vi.fn(async () => {}),
     notify: vi.fn(async (_options: unknown) => ({ id: "n-1" })),
@@ -441,6 +442,41 @@ describe("PluginDevWorkerMainBridge", () => {
       (m) => m.type === "host-result" && m.requestId === "c-ts-bad"
     );
     expect(refused).toMatchObject({ ok: false, error: expect.stringMatching(/disabledReason/) });
+  });
+
+  it("relays setWorktreeReviewChecks as a call and returns the host's rejection (#13806)", async () => {
+    const { host, workerHost } = makeBridge();
+    const checks = [{ label: "broken", severity: "warning", command: "acme.demo.open" }];
+    workerHost.emit("worker-message", {
+      type: "host-call",
+      requestId: "c-rc",
+      method: "setWorktreeReviewChecks",
+      params: { worktreeId: "/repo/wt", checks },
+    });
+    await flush();
+    expect(host.setWorktreeReviewChecks).toHaveBeenCalledWith("/repo/wt", checks);
+    expect(
+      workerHost.sent.find((m) => m.type === "host-result" && m.requestId === "c-rc")
+    ).toMatchObject({
+      ok: true,
+    });
+
+    host.setWorktreeReviewChecks.mockRejectedValueOnce(
+      new Error('setWorktreeReviewChecks: "/other" is not a worktree this plugin can see')
+    );
+    workerHost.emit("worker-message", {
+      type: "host-call",
+      requestId: "c-rc-foreign",
+      method: "setWorktreeReviewChecks",
+      params: { worktreeId: "/other", checks: null },
+    });
+    await flush();
+    expect(
+      workerHost.sent.find((m) => m.type === "host-result" && m.requestId === "c-rc-foreign")
+    ).toMatchObject({
+      ok: false,
+      error: expect.stringMatching(/not a worktree this plugin can see/),
+    });
   });
 
   it("relays setWorktreeCardStatus as a call and returns the host's rejection (#13704)", async () => {

@@ -224,6 +224,7 @@ import type {
   PluginToolbarButtonRuntimeState,
   PluginContextValue,
   PluginWorktreeCardStatus,
+  PluginWorktreeReviewCheck,
   PluginFocusedPanel,
 } from "../shared/types/plugin.js";
 import type { PanelKindConfig } from "../shared/config/panelKindRegistry.js";
@@ -995,6 +996,8 @@ const _eventBusReplayable: ReadonlySet<keyof IpcEventBusMap> = new Set([
   "plugin:context-keys-changed",
   // Same replay, landing before the worktree cards mount their store (#13704).
   "plugin:worktree-card-statuses-changed",
+  // Same replay, for the Review Hub's checks store (#13806).
+  "plugin:worktree-review-checks-changed",
 ]);
 // Replayable events that accumulate instead of superseding. A double-clicked
 // `.dntr` archive (#11280) is one decision per file, so collapsing two
@@ -1014,6 +1017,7 @@ const _eventBusFifoReplay: ReadonlySet<keyof IpcEventBusMap> = new Set([
   "plugin:toolbar-states-changed",
   "plugin:context-keys-changed",
   "plugin:worktree-card-statuses-changed",
+  "plugin:worktree-review-checks-changed",
 ]);
 // FIFO events whose every payload is one plugin's whole map: a newer one for the
 // same plugin supersedes the buffered one. A payload that also names a project
@@ -1024,6 +1028,7 @@ const _eventBusPerPluginLatest: ReadonlySet<keyof IpcEventBusMap> = new Set([
   "plugin:toolbar-states-changed",
   "plugin:context-keys-changed",
   "plugin:worktree-card-statuses-changed",
+  "plugin:worktree-review-checks-changed",
 ]);
 const _eventBusBuffered = new Map<keyof IpcEventBusMap, unknown[]>();
 
@@ -3868,6 +3873,13 @@ function buildElectronApi(): ElectronAPI {
           statuses: Record<string, PluginWorktreeCardStatus>;
         }) => void
       ) => _eventBusOn("plugin:worktree-card-statuses-changed", callback),
+      onWorktreeReviewChecksChanged: (
+        callback: (payload: {
+          pluginId: string;
+          projectId: string;
+          checks: Record<string, PluginWorktreeReviewCheck[]>;
+        }) => void
+      ) => _eventBusOn("plugin:worktree-review-checks-changed", callback),
       onPanelMenusChanged: (
         callback: (payload: {
           pluginId: string;

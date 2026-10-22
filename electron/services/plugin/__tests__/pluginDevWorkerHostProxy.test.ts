@@ -1576,6 +1576,62 @@ describe("PluginDevWorkerHostProxy setToolbarButtonState (#13785)", () => {
   });
 });
 
+describe("PluginDevWorkerHostProxy setWorktreeReviewChecks (#13806)", () => {
+  beforeEach(() => vi.clearAllMocks());
+  afterEach(() => vi.restoreAllMocks());
+
+  it("relays the vetted list as a call, normalizing a clear to null", async () => {
+    const { proxy, sent } = makeProxy();
+    const set = proxy.host.setWorktreeReviewChecks("/repo/wt", [
+      { label: " broken ", severity: "warning", detail: "" },
+    ]);
+    const call = sent.find((m) => m.type === "host-call" && m.method === "setWorktreeReviewChecks");
+    expect(call?.params).toEqual({
+      worktreeId: "/repo/wt",
+      checks: [{ label: "broken", severity: "warning" }],
+    });
+    resolveCall(proxy, sent, "setWorktreeReviewChecks", undefined);
+    await expect(set).resolves.toBeUndefined();
+
+    const clear = proxy.host.setWorktreeReviewChecks("/repo/wt", []);
+    const calls = sent.filter(
+      (m) => m.type === "host-call" && m.method === "setWorktreeReviewChecks"
+    );
+    expect(calls.at(-1)?.params).toEqual({ worktreeId: "/repo/wt", checks: null });
+    resolveCall(proxy, sent, "setWorktreeReviewChecks", undefined);
+    await expect(clear).resolves.toBeUndefined();
+  });
+
+  it("passes main's foreign-worktree rejection back to the caller", async () => {
+    const { proxy, sent } = makeProxy();
+    const promise = proxy.host.setWorktreeReviewChecks("/other/wt", [
+      { label: "x", severity: "info" },
+    ]);
+    const call = sent.find((m) => m.type === "host-call" && m.method === "setWorktreeReviewChecks");
+    proxy.handleMessage({
+      type: "host-result",
+      requestId: call.requestId,
+      ok: false,
+      error:
+        'Plugin "acme" setWorktreeReviewChecks: "/other/wt" is not a worktree this plugin can see',
+    });
+    await expect(promise).rejects.toThrow(/is not a worktree this plugin can see/);
+  });
+
+  it("rejects a bad list without crossing the port", async () => {
+    const { proxy, sent } = makeProxy();
+    await expect(
+      proxy.host.setWorktreeReviewChecks("/wt", [{ label: "x", severity: "blocker" } as never])
+    ).rejects.toThrow(/setWorktreeReviewChecks: checks\[0\]\.severity/);
+    await expect(
+      proxy.host.setWorktreeReviewChecks("/wt", [
+        { label: "x", severity: "info", command: "other.open" },
+      ])
+    ).rejects.toThrow(/setWorktreeReviewChecks: checks\[0\]\.command "other.open" must be one of/);
+    expect(sent.find((m) => m.type === "host-call")).toBeUndefined();
+  });
+});
+
 describe("PluginDevWorkerHostProxy setWorktreeCardStatus (#13704)", () => {
   beforeEach(() => vi.clearAllMocks());
   afterEach(() => vi.restoreAllMocks());

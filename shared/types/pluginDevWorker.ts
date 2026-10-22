@@ -34,6 +34,7 @@ import type {
   PluginToolbarButtonRuntimeState,
   PluginContextValue,
   PluginWorktreeCardStatus,
+  PluginWorktreeReviewCheck,
   PanelMenuItemContribution,
   BuiltInPluginCapability,
   PluginFsWriteOptions,
@@ -72,6 +73,7 @@ export type PluginHostCallMethod =
   // A call for the same reason: whether the worktree is one this plugin may
   // reach is main's answer, and its refusal has to reach the caller (#13704).
   | "setWorktreeCardStatus"
+  | "setWorktreeReviewChecks"
   | "actions.list"
   | "actions.get"
   | "settings.get"
@@ -463,6 +465,12 @@ export interface SetContextParams {
 export interface SetWorktreeCardStatusParams {
   worktreeId: string;
   status: PluginWorktreeCardStatus | null;
+}
+
+/** Params for `setWorktreeReviewChecks` (`host-call`). `null` clears the list. */
+export interface SetWorktreeReviewChecksParams {
+  worktreeId: string;
+  checks: readonly PluginWorktreeReviewCheck[] | null;
 }
 
 /** Params for `setPanelMenuItems` (`host-notify`). `null` clears the list. */

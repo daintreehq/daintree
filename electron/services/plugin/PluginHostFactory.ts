@@ -143,6 +143,10 @@ import {
   sameWorktreeCardStatus,
   validatePluginWorktreeCardStatus,
 } from "../../../shared/utils/pluginWorktreeCardStatus.js";
+import {
+  sameWorktreeReviewChecks,
+  validatePluginWorktreeReviewChecks,
+} from "../../../shared/utils/pluginWorktreeReviewChecks.js";
 import { makeForgeProviderId } from "../../../shared/utils/forgeProviderIds.js";
 import { forgeProviderRoles } from "../../../shared/utils/forgeProviderRoles.js";
 import {
@@ -228,6 +232,7 @@ import type {
   PluginToolbarButtonRuntimeState,
   PluginContextValue,
   PluginWorktreeCardStatus,
+  PluginWorktreeReviewCheck,
   PluginHostBinding,
   PluginMcpCaller,
   PluginMcpToolDefinition,
@@ -619,6 +624,18 @@ export interface PluginHostFactoryDeps {
    * a call its previous generation left in flight lands on nothing.
    */
   worktreeCardStatusGeneration: (pluginId: string) => number;
+  /**
+   * Readiness checks set via `host.setWorktreeReviewChecks`, `pluginId →
+   * projectId → worktreeId → checks` (#13806), bucketed like the card statuses.
+   */
+  pluginWorktreeReviewChecks: Map<
+    string,
+    Map<string, Map<string, readonly PluginWorktreeReviewCheck[]>>
+  >;
+  /** Publish one plugin's complete checks map for one project to that project's views. */
+  emitWorktreeReviewChecks: (pluginId: string, projectId: string) => void;
+  /** Bumped whenever a plugin's checks are cleared (unload, worker swap). */
+  worktreeReviewChecksGeneration: (pluginId: string) => number;
   /** Bumped on every worktree removal and project close. */
   worktreeCardTargetRevision: () => number;
   /**
@@ -1095,6 +1112,7 @@ export function createHost(
   };
 
   let worktreeCardStatusChain: Promise<void> = Promise.resolve();
+  let worktreeReviewChecksChain: Promise<void> = Promise.resolve();
 
   // Identity is derived once, here, from the id and binding this host was built
   // with. Deriving it host-side — through the canonical parser that owns the key
@@ -2611,6 +2629,69 @@ export function createHost(
       // call does not poison the ones queued behind it.
       const next = worktreeCardStatusChain.then(run);
       worktreeCardStatusChain = next.catch(() => {});
+      return next;
+    },
+    // Same gates as setWorktreeCardStatus (#13806): the worktree must be one
+    // this host's own worktree read names, an unavailable read refuses and
+    // never prunes, and a call queued behind another cannot outlive a removal
+    // or a clear. Each accepted call replaces the plugin's whole list there.
+    setWorktreeReviewChecks: (worktreeId, checks) => {
+      if (!isBound()) return Promise.resolve();
+      const entry = validatePluginWorktreeReviewChecks(worktreeId, checks, manifestId, pluginId);
+      if (!entry.ok) {
+        // Reject (not sync throw): runtime-surface Promise method (#10617).
+        return Promise.reject(
+          new Error(`Plugin "${pluginId}" setWorktreeReviewChecks: ${entry.error}`)
+        );
+      }
+      const generation = deps.worktreeReviewChecksGeneration(pluginId);
+      const since = { revision: deps.worktreeCardTargetRevision(), at: Date.now() };
+      const run = async (): Promise<void> => {
+        const result = await getWorktreesResult();
+        if (!isBound() || deps.worktreeReviewChecksGeneration(pluginId) !== generation) return;
+        if (result.status !== "ok") {
+          throw new Error(
+            `Plugin "${pluginId}" setWorktreeReviewChecks: worktrees are unavailable (${result.reason})`
+          );
+        }
+        const target = result.worktrees.find(
+          (w) => w.id === entry.worktreeId || w.worktreeId === entry.worktreeId
+        );
+        if (!target) {
+          throw new Error(
+            `Plugin "${pluginId}" setWorktreeReviewChecks: "${entry.worktreeId}" is not a worktree this plugin can see`
+          );
+        }
+        const projectId = result.projectId;
+        const checkId = target.id;
+        if (deps.isWorktreeCardTargetRetired(projectId, checkId, since)) {
+          throw new Error(
+            `Plugin "${pluginId}" setWorktreeReviewChecks: "${entry.worktreeId}" was removed`
+          );
+        }
+        let byProject = deps.pluginWorktreeReviewChecks.get(pluginId);
+        let stored = byProject?.get(projectId);
+        if (entry.checks === null) {
+          if (!stored?.delete(checkId)) return;
+          if (stored.size === 0) byProject!.delete(projectId);
+          if (byProject!.size === 0) deps.pluginWorktreeReviewChecks.delete(pluginId);
+        } else {
+          if (sameWorktreeReviewChecks(stored?.get(checkId), entry.checks)) return;
+          if (!byProject) {
+            byProject = new Map();
+            deps.pluginWorktreeReviewChecks.set(pluginId, byProject);
+          }
+          if (!stored) {
+            stored = new Map();
+            byProject.set(projectId, stored);
+          }
+          stored.set(checkId, entry.checks);
+        }
+        flushPluginPushes();
+        deps.emitWorktreeReviewChecks(pluginId, projectId);
+      };
+      const next = worktreeReviewChecksChain.then(run);
+      worktreeReviewChecksChain = next.catch(() => {});
       return next;
     },
     // NOT revoke-guarded, like setPanelBadge: a plugin republishes its menu

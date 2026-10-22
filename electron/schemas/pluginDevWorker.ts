@@ -52,6 +52,7 @@ const HOST_CALL_METHODS = {
   setContext: true,
   setToolbarButtonState: true,
   setWorktreeCardStatus: true,
+  setWorktreeReviewChecks: true,
   "actions.list": true,
   "actions.get": true,
   "settings.get": true,

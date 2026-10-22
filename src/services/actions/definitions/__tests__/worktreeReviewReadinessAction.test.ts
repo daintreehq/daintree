@@ -5,6 +5,9 @@ import type { AnyActionDefinition } from "../../actionTypes";
 
 const mockGetCurrentViewStore = vi.fn();
 const mockHealthProviders: { current: Record<string, unknown> } = { current: {} };
+const mockPluginChecks: { current: Record<string, Record<string, Record<string, unknown[]>>> } = {
+  current: {},
+};
 
 vi.mock("@/clients", () => ({
   copyTreeClient: { generateAndCopyFile: vi.fn() },
@@ -21,6 +24,23 @@ vi.mock("@/store/forgeProviderHealthStore", () => ({
   useForgeProviderHealthStore: {
     getState: () => ({ providers: mockHealthProviders.current }),
   },
+}));
+vi.mock("@/store/projectStore", () => ({
+  useProjectStore: { getState: () => ({ currentProject: { id: "proj-1" } }) },
+}));
+vi.mock("@/store/pluginWorktreeReviewChecksStore", async () => {
+  const actual = await vi.importActual<typeof import("@/store/pluginWorktreeReviewChecksStore")>(
+    "@/store/pluginWorktreeReviewChecksStore"
+  );
+  return {
+    ...actual,
+    usePluginWorktreeReviewChecksStore: {
+      getState: () => ({ init: vi.fn(), checksByProject: mockPluginChecks.current }),
+    },
+  };
+});
+vi.mock("@/hooks/usePluginAttribution", () => ({
+  resolvePluginAttribution: (key: string) => ({ name: `Name of ${key}` }),
 }));
 vi.mock("@/lib/copyTreeFormat", () => ({ DEFAULT_COPYTREE_FORMAT: "xml" }));
 vi.mock("@/services/ActionService", () => ({ actionService: { dispatch: vi.fn() } }));
@@ -92,6 +112,7 @@ describe("worktree.reviewReadiness run()", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockHealthProviders.current = {};
+    mockPluginChecks.current = {};
     mockGetStagingStatus.mockResolvedValue(makeStatus());
     // @ts-expect-error - minimal window.electron stub for the renderer IPC call
     globalThis.window = { electron: { git: { getStagingStatus: mockGetStagingStatus } } };
@@ -123,6 +144,45 @@ describe("worktree.reviewReadiness run()", () => {
     expect(result.behindCount).toBe(0);
     expect(result.pr).toBeNull();
     expect(result.reviewDecision).toBeNull();
+  });
+
+  it("lists plugin checks separately, attributed by manifest id, and leaves readiness alone", async () => {
+    const def = getDefinition();
+    const clean = (await def.run({ worktreeId: "wt-1" } as never, {} as ActionContext)) as Record<
+      string,
+      unknown
+    >;
+    expect(clean.pluginChecks).toEqual([]);
+
+    mockPluginChecks.current = {
+      "proj-1": {
+        "project__proj-a__acme.lint": {
+          "wt-1": [
+            { label: "3 broken links", severity: "warning", detail: "in docs/", command: "x.y" },
+          ],
+          "wt-2": [{ label: "other worktree", severity: "info" }],
+        },
+      },
+      "proj-other": { "acme.lint": { "wt-1": [{ label: "other project", severity: "info" }] } },
+    };
+    const result = (await def.run({ worktreeId: "wt-1" } as never, {} as ActionContext)) as Record<
+      string,
+      unknown
+    >;
+
+    expect(result.pluginChecks).toEqual([
+      {
+        pluginId: "acme.lint",
+        pluginName: "Name of project__proj-a__acme.lint",
+        label: "3 broken links",
+        severity: "warning",
+        detail: "in docs/",
+      },
+    ]);
+    for (const key of ["level", "commitReady", "pushReady", "prReady", "blockers", "warnings"]) {
+      expect(result[key]).toEqual(clean[key]);
+    }
+    expect(def.resultSchema!.safeParse(result).success).toBe(true);
   });
 
   it("validates its own resultSchema against a live result", async () => {
