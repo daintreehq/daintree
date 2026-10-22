@@ -596,9 +596,12 @@ describe("anchorStamp", () => {
     expect(anchorStamp(stamp, "/projects/shop/notsrc/App.vue")).toBeNull();
   });
 
-  it("matches a file spelled in another case, as a case-insensitive filesystem would", () => {
-    const windows = parseStamp("src/App.vue:3:5", stamp.extraction)!;
-    expect(anchorStamp(windows, "C:/Repo/SRC/app.vue")?.file).toBe("C:/Repo/SRC/app.vue");
+  it("matches a Windows drive letter in either case, and nothing else spelled differently", () => {
+    const absolute = parseStamp("C:/Repo/src/App.vue:3:5", stamp.extraction)!;
+    // The same file: kept as the page spelled it.
+    expect(anchorStamp(absolute, "c:/Repo/src/App.vue")).toBe(absolute);
+    // Another case is another file where the filesystem says so.
+    expect(anchorStamp(stamp, "/projects/shop/src/app.vue")).toBeNull();
   });
 
   it("keeps a stamp as read when no component names a file", () => {
@@ -618,6 +621,26 @@ describe("renderedRoots on what a page hands over", () => {
     );
     expect(roots.complete).toBe(false);
     expect(Date.now() - started).toBeLessThan(1_000);
+  });
+
+  it("takes nothing past a static block whose anchor page code removed", () => {
+    const parent = document.createElement("main");
+    parent.innerHTML = "<p>a</p><p>b</p><p>later</p>";
+    document.body.append(parent);
+    const [a, b, later] = Array.from(parent.querySelectorAll("p"));
+    b!.remove();
+    const block = instance({ subTree: vnode({ type: Symbol.for("v-stc"), el: a, anchor: b }) });
+    expect(renderedRoots(block as VueInstance, 32, new Budget(100))).toEqual({
+      elements: [],
+      complete: false,
+    });
+    // Nor does the block claim what now follows it.
+    const outer = instance({
+      type: { __name: "Outer" },
+      subTree: elementVNode(parent, [vnode({ type: {}, shapeFlag: 4, component: block })]),
+    });
+    mark(parent, outer);
+    expect(names(select(later!))).toEqual(["Outer"]);
   });
 
   it("reads what a hydrating Suspense shows from its pending branch", () => {

@@ -116,28 +116,25 @@ function appAt(node: Node): Record<string, unknown> | null {
 
 const FOREIGN_NAMES = ["__svelte_meta", "__ngContext__"];
 
-/** Another framework rendered this node itself. */
-function renderedByForeign(node: Node): boolean {
+/**
+ * What another framework left on a node, from one read of its keys: whether
+ * it rendered the node itself, and whether the node holds a live React root,
+ * whose contents are React's whoever rendered the node. React leaves the
+ * container key behind, emptied, when its root unmounts.
+ */
+function foreignMarks(node: Node): { rendered: boolean; hosts: boolean } {
+  let rendered = false;
+  let hosts = false;
   try {
-    if (FOREIGN_NAMES.some((name) => Object.hasOwn(node, name))) return true;
-    return Object.keys(node).some(
-      (key) => key.startsWith("__reactFiber$") && field(node, key) != null
-    );
+    rendered = FOREIGN_NAMES.some((name) => Object.hasOwn(node, name));
+    for (const key of Object.keys(node)) {
+      if (key.startsWith("__reactFiber$")) rendered ||= field(node, key) != null;
+      else if (key.startsWith("__reactContainer$")) hosts ||= field(node, key) != null;
+    }
   } catch {
-    return false;
+    // A node that cannot be read is no evidence either way.
   }
-}
-
-/** The node holds a live React root: what is inside it is React's, whoever rendered the node. */
-function hostsForeign(node: Node): boolean {
-  try {
-    // React leaves the key behind, emptied, when the root unmounts.
-    return Object.keys(node).some(
-      (key) => key.startsWith("__reactContainer$") && field(node, key) != null
-    );
-  } catch {
-    return false;
-  }
+  return { rendered, hosts };
 }
 
 function parentNodeOf(node: Node): Node | null {
@@ -172,11 +169,12 @@ export function lookUp(node: Element): Lookup | null {
       if (depth === 0 && instance !== null) {
         return { kind: "instance", instance, own: true, node: current };
       }
-      if (depth > 0 && hostsForeign(current)) return null;
+      const marks = foreignMarks(current);
+      if (depth > 0 && marks.hosts) return null;
       const app = depth === 0 ? null : appAt(current);
       if (app !== null) return { kind: "app", app, container: current };
       if (instance !== null) return { kind: "instance", instance, own: false, node: current };
-      if (renderedByForeign(current)) return null;
+      if (marks.rendered) return null;
     }
     const parent = parentNodeOf(current);
     if (parent instanceof ShadowRoot) {
@@ -345,6 +343,22 @@ export function componentsRootedAt(element: Element, instance: VueInstance | nul
   return out;
 }
 
+/**
+ * The nodes of a static block, from `first` through `last`, or null when
+ * `last` is not where its siblings lead: once page code has moved or removed
+ * part of a block, the run past it is someone else's.
+ */
+function staticRange(first: unknown, last: unknown, budget: Budget): Node[] | null {
+  if (!(first instanceof Node) || !(last instanceof Node)) return null;
+  const nodes: Node[] = [];
+  for (let node: Node | null = first; node !== null; node = node.nextSibling) {
+    if (!budget.spend()) return null;
+    nodes.push(node);
+    if (node === last) return nodes;
+  }
+  return null;
+}
+
 export interface RenderedRoots {
   elements: Element[];
   complete: boolean;
@@ -459,20 +473,18 @@ export function renderedRoots(instance: VueInstance, limit: number, budget: Budg
           complete = false;
           continue;
         }
-        let reachedEnd = false;
-        for (let node: Node | null = first; node !== null; node = node.nextSibling) {
-          if (!budget.spend()) return { elements, complete: false };
+        const range = staticRange(first, last, budget);
+        if (range === null) {
+          complete = false;
+          continue;
+        }
+        for (const node of range) {
           if (node instanceof Element) {
             if (!addRoot(node)) return { elements, complete: false };
           } else if (node instanceof Text && hasText(node)) {
             loose.push(node);
           }
-          if (node === last) {
-            reachedEnd = true;
-            break;
-          }
         }
-        if (!reachedEnd) complete = false;
       } else if (type !== COMMENT) {
         complete = false;
       }
@@ -540,13 +552,9 @@ export function staticBlockOf(
         continue;
       }
       if (field(vnode, "type") === STATIC) {
-        const last = field(vnode, "anchor");
-        let current = field(vnode, "el");
-        while (current instanceof Node) {
-          if (!budget.spend()) return null;
-          if (current === node || current.contains(node)) return { vnode, instance: frame.owner };
-          if (current === last) break;
-          current = current.nextSibling;
+        const range = staticRange(field(vnode, "el"), field(vnode, "anchor"), budget);
+        if (range?.some((current) => current === node || current.contains(node))) {
+          return { vnode, instance: frame.owner };
         }
         continue;
       }

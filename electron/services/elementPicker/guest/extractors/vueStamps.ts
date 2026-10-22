@@ -147,11 +147,16 @@ export function invocationStamp(instance: VueInstance): Stamp | null {
  * spelling. A stamp naming another file is not this tag's, and is dropped.
  * `templateFile` is null when no component says, and the stamp stays as read.
  */
+function spelling(file: string): string {
+  return file.replaceAll("\\", "/").replace(/^[A-Za-z]:/, (drive) => drive.toLowerCase());
+}
+
 export function anchorStamp(stamp: Stamp, templateFile: string | null): Stamp | null {
   if (templateFile === null) return stamp;
-  // Compared as a case-insensitive filesystem would: one spelling must not cost a real stamp.
-  const owner = templateFile.replaceAll("\\", "/").toLowerCase();
-  const reported = stamp.file.replaceAll("\\", "/").toLowerCase();
+  // Both come from the one module id Vite resolved, so they agree in case,
+  // short of the drive letter a Windows path can spell either way.
+  const owner = spelling(templateFile);
+  const reported = spelling(stamp.file);
   if (owner === reported) return stamp;
   // A file outside the working directory is written up out of it first.
   const tail = reported.replace(/^(?:\.\.?\/)+/, "");
