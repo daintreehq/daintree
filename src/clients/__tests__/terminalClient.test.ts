@@ -888,6 +888,39 @@ describe("terminalClient MessagePort data routing", () => {
       expect(received).toEqual([]);
     });
 
+    it("hands the subscriber the snapshot's continuation, and drops a malformed one", async () => {
+      const port = acquirePort();
+      const resets: unknown[] = [];
+      const unsubscribe = terminalClient.onReset((_id, snapshot) => resets.push(snapshot));
+      const continuation = { pendingEscapeTail: "\x1b[3", streamOffset: 42 };
+
+      port.postMessage({ type: "reset", id: "term-1", snapshot: { ...SNAP, continuation } });
+      port.postMessage({
+        type: "reset",
+        id: "term-1",
+        snapshot: { ...SNAP, continuation: { pendingEscapeTail: "\x1b[", streamOffset: -1 } },
+      });
+      await tick();
+      unsubscribe();
+
+      expect(resets).toEqual([{ ...SNAP, continuation }, SNAP]);
+    });
+
+    it("never paints a continuation's escape tail when nobody subscribes", async () => {
+      const port = acquirePort();
+      const received: string[] = [];
+      terminalClient.onData("term-1", (data) => received.push(String(data)));
+
+      port.postMessage({
+        type: "reset",
+        id: "term-1",
+        snapshot: { ...SNAP, continuation: { pendingEscapeTail: "\x1b[3", streamOffset: 42 } },
+      });
+      await tick();
+
+      expect(received).toEqual(["\x1bcS"]);
+    });
+
     it("keeps a snapshot whose geometry is not a grid, without the geometry", async () => {
       const port = acquirePort();
       const resets: unknown[] = [];

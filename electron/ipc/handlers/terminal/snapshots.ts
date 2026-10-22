@@ -48,6 +48,18 @@ function resolveSenderWorkspaceId(ctx: IpcContext): string | null {
   return ctx.projectId ?? (ctx.event && getProjectIdFromSenderUrl(ctx.event.sender));
 }
 
+/**
+ * Mark a live snapshot answered to a remote view: this host forwards stream
+ * offsets on its terminal stream, so the view's Shell may keep the snapshot's
+ * continuation (#13916). The pty client's own object is never written to.
+ */
+function vouchForStreamOffsets(
+  snapshot: SerializedTerminalSnapshot | null
+): SerializedTerminalSnapshot | null {
+  if (snapshot?.continuation?.streamOffset === undefined) return snapshot;
+  return { ...snapshot, remoteStreamOffsets: true };
+}
+
 export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () => void {
   const { ptyClient } = deps;
   if (!ptyClient) {
@@ -55,6 +67,7 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
   }
 
   const handleTerminalGetSerializedState = async (
+    ctx: IpcContext,
     terminalId: string,
     options?: SerializeReadOptions
   ): Promise<SerializedTerminalSnapshot | null> => {
@@ -76,7 +89,9 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
           `terminal:getSerializedState(${terminalId}): ${serializedState ? `${serializedState.data.length} bytes @ ${serializedState.cols}x${serializedState.rows}` : "null"}`
         );
       }
-      return serializedState;
+      return ctx.endpoint?.kind === "remote-view"
+        ? vouchForStreamOffsets(serializedState)
+        : serializedState;
     } catch (error) {
       const errorMessage = formatErrorMessage(error, "Failed to get serialized terminal state");
       throw new Error(`Failed to get serialized terminal state: ${errorMessage}`);
@@ -84,6 +99,7 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
   };
 
   const handleTerminalGetSerializedStates = async (
+    ctx: IpcContext,
     terminalIds: string[]
   ): Promise<Record<string, SerializedTerminalSnapshot | null>> => {
     if (!Array.isArray(terminalIds)) {
@@ -105,11 +121,15 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
       )
     );
 
+    const remote = ctx.endpoint?.kind === "remote-view";
     const results = await Promise.all(
       normalizedIds.map(async (terminalId) => {
         try {
           const serializedState = await ptyClient.getSerializedStateAsync(terminalId);
-          return [terminalId, serializedState] as const;
+          return [
+            terminalId,
+            remote ? vouchForStreamOffsets(serializedState) : serializedState,
+          ] as const;
         } catch (error) {
           logWarn(`terminal:getSerializedStates(${terminalId}) failed`, { error });
           return [terminalId, null] as const;
@@ -535,11 +555,13 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
     ops: {
       getSerializedState: op(
         CHANNELS.TERMINAL_GET_SERIALIZED_STATE,
-        handleTerminalGetSerializedState
+        handleTerminalGetSerializedState,
+        { withContext: true }
       ),
       getSerializedStates: op(
         CHANNELS.TERMINAL_GET_SERIALIZED_STATES,
-        handleTerminalGetSerializedStates
+        handleTerminalGetSerializedStates,
+        { withContext: true }
       ),
       getInfo: op(CHANNELS.TERMINAL_GET_INFO, handleTerminalGetInfo),
       locate: op(CHANNELS.TERMINAL_LOCATE, handleTerminalLocate),

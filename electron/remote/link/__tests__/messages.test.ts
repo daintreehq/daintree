@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { FrameDecoder, Lane, encodeFrame } from "../frames.js";
-import { BulkKind, ControlKind, RpcKind, frameToMessage, messageToFrame } from "../messages.js";
+import {
+  BulkKind,
+  ControlKind,
+  InteractiveKind,
+  RpcKind,
+  frameToMessage,
+  messageToFrame,
+} from "../messages.js";
 import { parseInboundFrame } from "../schemas.js";
 
 describe("link messages", () => {
@@ -59,6 +66,35 @@ describe("link messages", () => {
       body: { endpointId: "view-1", projectId: "p", openId: "o1" },
     } as never);
     expect(parseInboundFrame(frame).body).toEqual({ endpointId: "view-1", projectId: "p" });
+  });
+
+  it("keeps a terminal reset's continuation, and the reset when its continuation is unreadable", () => {
+    const reset = (continuation: unknown): unknown =>
+      Reflect.get(
+        parseInboundFrame(
+          messageToFrame({
+            lane: Lane.INTERACTIVE,
+            kind: InteractiveKind.TERMINAL_RESET,
+            body: {
+              endpointId: "e1",
+              terminalId: "t1",
+              incarnation: 1,
+              seq: 4,
+              snapshot: { data: "S", cols: 80, rows: 24, continuation },
+            },
+          } as never)
+        ).body,
+        "snapshot"
+      );
+
+    const continuation = { pendingEscapeTail: "\x1b[3", streamOffset: 42 };
+    expect(reset(continuation)).toEqual({ data: "S", cols: 80, rows: 24, continuation });
+    // A host build that shapes it differently must not end the session over it.
+    expect(reset({ pendingEscapeTail: 7, streamOffset: "42" })).toEqual({
+      data: "S",
+      cols: 80,
+      rows: 24,
+    });
   });
 
   it("uses distinct kind codes within each lane", () => {

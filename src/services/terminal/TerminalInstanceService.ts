@@ -649,7 +649,8 @@ class TerminalInstanceService {
     void this.restoreController.applyReset(
       id,
       snapshot?.data ?? null,
-      snapshot ? { cols: snapshot.cols, rows: snapshot.rows } : undefined
+      snapshot ? { cols: snapshot.cols, rows: snapshot.rows } : undefined,
+      snapshot?.continuation
     );
   }
 

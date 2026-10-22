@@ -75,6 +75,9 @@ export interface PendingFence {
 export class FakePtyHost extends FakePeer {
   holdFences = false;
   readonly pendingFences: PendingFence[] = [];
+  /** Stamp each chunk with its end offset in the terminal's stream, as the real pty-host does. */
+  stampStreams = false;
+  private readonly streamOffsets = new Map<string, number>();
 
   constructor(
     private readonly snapshotFor: (id: string) => SerializedTerminalSnapshot | null = () => null
@@ -94,8 +97,19 @@ export class FakePtyHost extends FakePeer {
 
   emit(id: string, text: string): number {
     const data = new TextEncoder().encode(text);
-    this.post({ type: "data", id, data, bytes: data.byteLength });
+    if (this.stampStreams) {
+      const streamEnd = (this.streamOffsets.get(id) ?? 0) + data.byteLength;
+      this.streamOffsets.set(id, streamEnd);
+      this.post({ type: "data", id, data, bytes: data.byteLength, streamEnd });
+    } else {
+      this.post({ type: "data", id, data, bytes: data.byteLength });
+    }
     return data.byteLength;
+  }
+
+  /** The offset the next stamped chunk for `id` starts at. */
+  streamOffset(id: string): number {
+    return this.streamOffsets.get(id) ?? 0;
   }
 
   postFenceMarker(fence: PendingFence): void {

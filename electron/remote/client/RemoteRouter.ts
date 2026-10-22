@@ -6,6 +6,7 @@ import {
 } from "../../../shared/types/remoteHosts.js";
 import type { RemoteRouter } from "../../ipc/endpoint.js";
 import { hostDisconnectedEnvelope } from "../link/envelopes.js";
+import { acceptForwardedSnapshots } from "../terminal/forwardedSnapshots.js";
 import type { RemoteHostManager } from "./RemoteHostManager.js";
 import type { WindowHostBinding } from "./WindowHostBinding.js";
 
@@ -101,7 +102,9 @@ export class RemoteRouterImpl implements RemoteRouter {
       return Promise.resolve(hostDisconnectedEnvelope(`host ${hostId} is not connected`));
     }
     const hostProjectId = this.hostProjectId(webContentsId);
-    const call = connection.invoke(webContentsId, hostProjectId, channel, args);
+    const call = connection
+      .invoke(webContentsId, hostProjectId, channel, args)
+      .then((envelope) => acceptForwardedSnapshots(channel, envelope));
     if (forwardObservers.size === 0) return call;
     return call.then((envelope) => {
       if (!envelope.ok) return envelope;
