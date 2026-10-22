@@ -110,6 +110,8 @@ const HOST_NOTIFY_METHODS = {
   unregisterFileDecorationProvider: true,
   registerWorktreeSetupStep: true,
   unregisterWorktreeSetupStep: true,
+  registerSearchProvider: true,
+  unregisterSearchProvider: true,
   "mcp.registerTools": true,
   "mcp.unregisterTools": true,
   "logger.info": true,

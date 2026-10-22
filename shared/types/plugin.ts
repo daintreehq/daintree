@@ -556,6 +556,133 @@ export interface PluginLayoutConfig {
 }
 
 /**
+ * Where a quick switcher search result opens, in manifest terms: one of the
+ * plugin's own `contributes.panels[].id`, or one of its own commands written
+ * `{manifest name}.{command id}`. Exactly one of the two.
+ */
+export interface PluginSearchResultTarget {
+  panel?: string;
+  command?: string;
+}
+
+/**
+ * A search provider the plugin adds to the quick switcher (#13792). Typing
+ * `keyword` then Tab scopes the switcher to it; with `blend` it also offers a
+ * few results to the unscoped search.
+ *
+ * - `kind: "declarative"` names one of the plugin's read-only
+ *   `contributes.databases[].queries` with exactly one string parameter, which
+ *   the host runs with what the user typed. No plugin code runs. Result rows
+ *   are read by column name: `id` and `label` (required), `description`,
+ *   `iconId` and `args` (a JSON object as text). `target` is required.
+ * - `kind: "runtime"` is answered by the function the plugin binds with
+ *   {@link PluginHostApi.registerSearchProvider} during `activate()`. `target`
+ *   is the default for results that carry none.
+ */
+export interface PluginSearchProviderContribution {
+  id: string;
+  kind: "declarative" | "runtime";
+  /** Shown in the switcher's scope chip and in Settings. */
+  title: string;
+  /** Lowercase letters, digits and `-`, starting with a letter. Unique per project. */
+  keyword: string;
+  /** A generic plugin icon id, or a `./…svg` path to the plugin's own icon. Results without their own use it. */
+  iconId?: string;
+  /** Offer a few results to the unscoped search too. Default false. */
+  blend?: boolean;
+  /** For `declarative`: the `name` of one of the plugin's read-only declared queries. */
+  query?: string;
+  target?: PluginSearchResultTarget;
+}
+
+/** One result a runtime search provider returns. The host renders it; nothing here is markup. */
+export interface PluginSearchResult {
+  /** Stable within this provider; results with a repeated id are dropped. */
+  id: string;
+  label: string;
+  description?: string;
+  /** A generic plugin icon id or one of this plugin's registered custom icons. */
+  iconId?: string;
+  /** Omitted: the provider's manifest `target`. */
+  target?: PluginSearchResultTarget;
+  /** Handed to the target: the panel's `initialArgs` (or `openRequest`), or the command's args. */
+  args?: Record<string, unknown>;
+}
+
+/** What a runtime search provider is told about the query it is answering. */
+export interface PluginSearchContext {
+  /** `scoped` when the user picked this provider by keyword; `blended` for the unscoped search. */
+  mode: "scoped" | "blended";
+  /** Most results the host will show; extra ones are dropped. */
+  limit: number;
+  /** Aborted when the user typed on, closed the switcher, or the deadline passed. */
+  signal: AbortSignal;
+}
+
+/** A runtime search provider, bound with {@link PluginHostApi.registerSearchProvider}. */
+export type PluginSearchProvider = (
+  query: string,
+  context: PluginSearchContext
+) => PluginSearchResult[] | Promise<PluginSearchResult[]>;
+
+/** A search result's target as main resolved it, with runtime ids in place of manifest ones. */
+export type PluginSearchResolvedTarget =
+  | {
+      type: "panel";
+      /** The runtime panel kind id, project-qualified for a project plugin. */
+      panelKindId: string;
+      args: Record<string, unknown>;
+    }
+  | {
+      type: "command";
+      /** The runtime action id, in the plugin instance's own namespace. */
+      actionId: string;
+      args: Record<string, unknown>;
+    };
+
+/** A search provider as the quick switcher and Settings see it, for one project. */
+export interface PluginSearchProviderInfo {
+  /** `{pluginId}.{provider id}`: the plugin instance id, so project-qualified for a project plugin. */
+  key: string;
+  pluginId: string;
+  pluginName: string;
+  title: string;
+  keyword: string;
+  iconId: string;
+  blend: boolean;
+  kind: "declarative" | "runtime";
+  /** The user's "Show in quick switcher" choice. */
+  shown: boolean;
+  /** Another plugin's provider registered the same keyword first in this project; this one is refused. */
+  keywordTakenBy?: string;
+}
+
+/** One validated result row, as main hands it to the quick switcher. */
+export interface PluginSearchResultRow {
+  id: string;
+  label: string;
+  description?: string;
+  iconId: string;
+  target: PluginSearchResolvedTarget;
+}
+
+/** What the quick switcher asks one provider. */
+export interface PluginSearchQueryRequest {
+  providerKey: string;
+  query: string;
+  mode: "scoped" | "blended";
+}
+
+/**
+ * One provider's answer. `unavailable` is a provider that can't be asked now
+ * (gone, hidden, refused, or not running for a blended search); `timeout` and
+ * `error` are recorded in the plugin's diagnostics.
+ */
+export type PluginSearchQueryResponse =
+  | { status: "ok"; results: PluginSearchResultRow[] }
+  | { status: "cancelled" | "timeout" | "error" | "unavailable" };
+
+/**
  * Semantic color for a {@link PluginPanelBadge}. Plugins pick intent, not a raw
  * hex value, so badges stay theme-consistent. `"warning"` and `"error"` map to
  * the app's status palette; `"default"` is the neutral accent-free tint.
@@ -2608,6 +2735,11 @@ export interface PluginManifest {
      * `launchEntries`.
      */
     layouts?: LayoutContribution[];
+    /**
+     * Search providers for the quick switcher (#13792). Optional in the type
+     * but always materialized by the manifest schema's `.default([])`.
+     */
+    searchProviders?: PluginSearchProviderContribution[];
     /**
      * Manifest-declared commands. Each entry registers a {@link PluginActionDescriptor}
      * at load time (so the command appears in the palette before the plugin
@@ -5936,6 +6068,23 @@ export interface PluginActivationApi {
     stepId: string,
     handler: PluginWorktreeSetupStepHandler
   ): Promise<() => void>;
+  /**
+   * Answer a `kind: "runtime"` entry of `contributes.searchProviders` (#13792)
+   * with `provider`. `id` must name such an entry; an undeclared id, or a
+   * declarative one, is rejected. The host asks it while the user types in the
+   * quick switcher, with a short deadline: an answer that misses it is dropped
+   * and recorded in this plugin's diagnostics, and `context.signal` aborts when
+   * the query is superseded. Results are re-checked host-side — a target outside
+   * this plugin, or args over the size limit, drop the row.
+   *
+   * A blended (unscoped) search only asks a provider whose plugin is already
+   * running; it never activates the plugin. Returns a disposer; re-registering
+   * the same id replaces the binding. Must be called during `activate()`.
+   *
+   * @throws {Error} If called after activation resolves or times out — the host
+   *   is revoked and registration is rejected.
+   */
+  registerSearchProvider(id: string, provider: PluginSearchProvider): Promise<() => void>;
   /**
    * Subscribe to active-worktree changes. The callback fires with the new
    * active snapshot (or `null` when none is active). Returns a disposer;

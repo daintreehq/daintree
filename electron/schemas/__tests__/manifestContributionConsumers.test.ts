@@ -24,6 +24,8 @@ import {
   LaunchEntryPanelTargetSchema,
   LayoutContributionSchema,
   LayoutEntryContributionSchema,
+  SearchProviderContributionSchema,
+  SearchProviderTargetSchema,
   McpServerContributionSchema,
   MenuItemContributionSchema,
   PanelContributionObjectSchema,
@@ -143,6 +145,10 @@ const SIDEBAR_VIEW_SWITCHER = "src/components/Sidebar/SidebarViewSwitcher.tsx";
 const LAUNCH_ENTRY_REGISTRY = "shared/config/pluginLaunchEntryRegistry.ts";
 const DOCK_LAUNCH_ITEMS = "src/components/Layout/dockLaunchItems.ts";
 const APPLY_PLUGIN_LAYOUT = "src/services/layout/applyPluginLayout.ts";
+const SEARCH_PROVIDER_REGISTRY = "electron/services/plugin/pluginSearchProviderRegistry.ts";
+const PLUGIN_SEARCH_SERVICE = "electron/services/plugin/PluginSearchService.ts";
+const QUICK_SWITCHER = "src/components/QuickSwitcher/QuickSwitcher.tsx";
+const OPEN_PLUGIN_SEARCH_HIT = "src/components/QuickSwitcher/openPluginSearchHit.ts";
 
 /**
  * The schemas swept for field coverage. The first block matches the fourteen
@@ -155,6 +161,7 @@ const SWEPT_SCHEMAS = {
   toolbarButtons: ToolbarButtonContributionSchema,
   launchEntries: LaunchEntryContributionSchema,
   layouts: LayoutContributionSchema,
+  searchProviders: SearchProviderContributionSchema,
   menuItems: MenuItemContributionSchema,
   keybindings: KeybindingContributionSchema,
   contextMenus: ContextMenuContributionSchema,
@@ -191,6 +198,7 @@ const SWEPT_SCHEMAS = {
   "launchEntries.command": LaunchEntryCommandTargetSchema,
   "launchEntries.agent": LaunchEntryAgentTargetSchema,
   "layouts.entries": LayoutEntryContributionSchema,
+  "searchProviders.target": SearchProviderTargetSchema,
   "recipes.terminals": RecipeContributionTerminalSchema,
   "forgeProviders.credentialFields": CredentialFieldSchema,
   "forgeProviders.slots": ForgeProviderContributionSchema.shape.slots,
@@ -210,6 +218,7 @@ const TOP_LEVEL_GROUPS = [
   "toolbarButtons",
   "launchEntries",
   "layouts",
+  "searchProviders",
   "menuItems",
   "keybindings",
   "contextMenus",
@@ -274,6 +283,14 @@ type FieldConsumerCoverage = {
   layouts: Record<keyof z.infer<typeof LayoutContributionSchema>, ConsumerDescriptor>;
   "layouts.entries": Record<
     keyof z.infer<typeof LayoutEntryContributionSchema>,
+    ConsumerDescriptor
+  >;
+  searchProviders: Record<
+    keyof z.infer<typeof SearchProviderContributionSchema>,
+    ConsumerDescriptor
+  >;
+  "searchProviders.target": Record<
+    keyof z.infer<typeof SearchProviderTargetSchema>,
     ConsumerDescriptor
   >;
   menuItems: Record<keyof z.infer<typeof MenuItemContributionSchema>, ConsumerDescriptor>;
@@ -773,6 +790,88 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       mode: "verbatim",
       consumers: [{ file: APPLY_PLUGIN_LAYOUT, symbol: "arrange (toggleMaximize)" }],
       note: "Maximizes the entry's panel, or its group, in the grid.",
+    },
+  },
+  searchProviders: {
+    id: {
+      mode: "verbatim",
+      consumers: [
+        { file: PLUGIN_SERVICE, symbol: "loadPlugin → registerSearchProviders" },
+        { file: PLUGIN_HOST_FACTORY, symbol: "registerSearchProvider" },
+      ],
+      note: "Namespaced into the provider key `{pluginId}.{id}`, which a runtime binding must name and the user's switch is stored under.",
+    },
+    kind: {
+      mode: "verbatim",
+      consumers: [
+        { file: PLUGIN_SEARCH_SERVICE, symbol: "PluginSearchCoordinator.ask" },
+        { file: SEARCH_PROVIDER_REGISTRY, symbol: "bindSearchProviderImpl" },
+      ],
+      note: "Declarative answers from its query without the plugin running; runtime asks the function bound in activate().",
+    },
+    title: {
+      mode: "verbatim",
+      consumers: [{ file: QUICK_SWITCHER, symbol: "QuickSwitcher (scope chip, placeholder)" }],
+      note: "The scope chip, the scoped placeholder and the Settings row.",
+    },
+    keyword: {
+      mode: "verbatim",
+      consumers: [
+        { file: SEARCH_PROVIDER_REGISTRY, symbol: "searchKeywordRefusals" },
+        { file: "src/hooks/useQuickSwitcher.ts", symbol: "keywordProvider" },
+      ],
+      note: "Typed then Tab to scope the switcher; the first provider to claim it in a project keeps it.",
+    },
+    iconId: {
+      mode: "derived-input",
+      consumers: [
+        { file: PLUGIN_SERVICE, symbol: "loadPlugin (resolveIconId)" },
+        { file: PLUGIN_ICON_ASSETS, symbol: "collectPluginCustomIconRefs" },
+      ],
+      note: "The glyph of results that carry none; a `./…svg` reference is loaded and rewritten to its custom-icon key first.",
+    },
+    blend: {
+      mode: "verbatim",
+      consumers: [
+        { file: PLUGIN_SEARCH_SERVICE, symbol: "PluginSearchCoordinator.eligibleProvider" },
+      ],
+      note: "Opts the provider into the unscoped search; only an explicit true does.",
+    },
+    query: {
+      mode: "derived-input",
+      consumers: [
+        { file: PLUGIN_SCHEMA, symbol: "manifest superRefine (search_provider_query_*)" },
+        { file: PLUGIN_SERVICE, symbol: "loadPlugin → createDeclarativeSearchRunner" },
+      ],
+      note: "Names the declared read query, with one string param, that a declarative provider runs.",
+    },
+    target: {
+      mode: "derived-input",
+      consumers: [
+        { file: PLUGIN_SCHEMA, symbol: "manifest superRefine (search_provider_target_*)" },
+        { file: PLUGIN_SEARCH_SERVICE, symbol: "validateSearchResults (defaultTarget)" },
+      ],
+      note: "Where results open: required for a declarative provider, the default for a runtime one's results.",
+    },
+  },
+  "searchProviders.target": {
+    panel: {
+      mode: "derived-input",
+      consumers: [
+        { file: PLUGIN_SCHEMA, symbol: "manifest superRefine (search_provider_panel_unknown)" },
+        { file: PLUGIN_SERVICE, symbol: "loadPlugin (search provider resolveTarget)" },
+        { file: OPEN_PLUGIN_SEARCH_HIT, symbol: "openPluginSearchHit (panel.openPluginPanel)" },
+      ],
+      note: "Resolved to the runtime panel kind id and opened with the result's args, reusing an open panel.",
+    },
+    command: {
+      mode: "derived-input",
+      consumers: [
+        { file: PLUGIN_SCHEMA, symbol: "manifest superRefine (search_provider_command_not_own)" },
+        { file: PLUGIN_SERVICE, symbol: "loadPlugin (search provider resolveTarget)" },
+        { file: OPEN_PLUGIN_SEARCH_HIT, symbol: "openPluginSearchHit" },
+      ],
+      note: "Rewritten into the instance namespace and dispatched with the result's args, after an own-namespace check.",
     },
   },
   menuItems: {

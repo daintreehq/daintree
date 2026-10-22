@@ -798,6 +798,9 @@ export interface GeneratedElectronAPI {
     cancelInstall(
       ...args: IpcInvokeMap["plugin:cancel-install"]["args"]
     ): Promise<IpcInvokeMap["plugin:cancel-install"]["result"]>;
+    cancelSearchProviders(
+      ...args: IpcInvokeMap["plugin:search-providers-cancel"]["args"]
+    ): Promise<IpcInvokeMap["plugin:search-providers-cancel"]["result"]>;
     capturePanel(
       ...args: IpcInvokeMap["plugin:capture-panel"]["args"]
     ): Promise<IpcInvokeMap["plugin:capture-panel"]["result"]>;
@@ -894,6 +897,9 @@ export interface GeneratedElectronAPI {
     getRuntimeStatuses(
       ...args: IpcInvokeMap["plugin:runtime-statuses-get"]["args"]
     ): Promise<IpcInvokeMap["plugin:runtime-statuses-get"]["result"]>;
+    getSearchProviders(
+      ...args: IpcInvokeMap["plugin:search-providers-get"]["args"]
+    ): Promise<IpcInvokeMap["plugin:search-providers-get"]["result"]>;
     getSettingValues(
       ...args: IpcInvokeMap["plugin:settings-get-values"]["args"]
     ): Promise<IpcInvokeMap["plugin:settings-get-values"]["result"]>;
@@ -936,6 +942,9 @@ export interface GeneratedElectronAPI {
     pickPath(
       ...args: IpcInvokeMap["plugin:pick-path"]["args"]
     ): Promise<IpcInvokeMap["plugin:pick-path"]["result"]>;
+    querySearchProvider(
+      ...args: IpcInvokeMap["plugin:search-providers-query"]["args"]
+    ): Promise<IpcInvokeMap["plugin:search-providers-query"]["result"]>;
     recordRecipeUse(
       ...args: IpcInvokeMap["plugin:recipe-record-use"]["args"]
     ): Promise<IpcInvokeMap["plugin:recipe-record-use"]["result"]>;
@@ -999,6 +1008,9 @@ export interface GeneratedElectronAPI {
     setProjectSurfaceChoices(
       ...args: IpcInvokeMap["plugin:project-surface-choices-set"]["args"]
     ): Promise<IpcInvokeMap["plugin:project-surface-choices-set"]["result"]>;
+    setSearchProviderShown(
+      ...args: IpcInvokeMap["plugin:search-provider-shown-set"]["args"]
+    ): Promise<IpcInvokeMap["plugin:search-provider-shown-set"]["result"]>;
     setSettingValue(
       ...args: IpcInvokeMap["plugin:settings-set-value"]["args"]
     ): Promise<IpcInvokeMap["plugin:settings-set-value"]["result"]>;

@@ -92,6 +92,7 @@ export const STORE_KEY_OWNERSHIP = {
   projectFileEditorChoices: "host",
   projectHiddenLaunchGroups: "host",
   pluginNotificationSilences: "host",
+  hiddenSearchProviders: "host",
   projectPresentation: "host",
   worktreeCustomTitles: "host",
   projectAgentMcpEnablement: "host",

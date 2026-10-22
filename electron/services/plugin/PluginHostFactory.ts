@@ -115,6 +115,7 @@ import {
   registerWorktreeSetupStepHandler,
   unregisterWorktreeSetupStepHandler,
 } from "../worktreeSetupStepRegistry.js";
+import { bindSearchProviderImpl } from "./pluginSearchProviderRegistry.js";
 import { broadcastToRenderer, broadcastToProjectRenderers } from "../../ipc/utils.js";
 import {
   PLUGIN_PUSH_MAX_PAYLOAD_BYTES,
@@ -2556,6 +2557,35 @@ export function createHost(
         unregisterWorktreeSetupStepHandler(pluginId, stepId, bound)
       );
       return Promise.resolve(dispose);
+    },
+    registerSearchProvider: (id, provider) => {
+      if (revoked) {
+        throw new Error(
+          `Plugin "${pluginId}" host revoked: registerSearchProvider called after activate() returned or timed out`
+        );
+      }
+      if (typeof id !== "string" || id.length === 0) {
+        throw new Error(
+          `Plugin "${pluginId}" registerSearchProvider: id must be a non-empty string`
+        );
+      }
+      if (typeof provider !== "function") {
+        throw new Error(`Plugin "${pluginId}" registerSearchProvider: provider must be a function`);
+      }
+      // Only a declared runtime provider: the keyword, title and scope come from
+      // the manifest, so an undeclared binding could never be asked.
+      const declared = deps.plugins
+        .get(pluginId)
+        ?.manifest.contributes.searchProviders?.some(
+          (entry) => entry.id === id && entry.kind === "runtime"
+        );
+      if (!declared) {
+        throw new Error(
+          `Plugin "${pluginId}" registerSearchProvider: "${id}" is not a kind: "runtime" entry of contributes.searchProviders`
+        );
+      }
+      const unbind = bindSearchProviderImpl(`${pluginId}.${id}`, provider);
+      return Promise.resolve(trackPluginDisposer(deps.pluginEventCleanups, pluginId, unbind));
     },
     mcp: {
       registerTools: (endpointId, tools) => {

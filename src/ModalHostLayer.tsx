@@ -336,6 +336,11 @@ export function ModalHostLayer({
               selectNext={quickSwitcher.selectNext}
               selectItem={quickSwitcher.selectItem}
               confirmSelection={quickSwitcher.confirmSelection}
+              scopedProvider={quickSwitcher.scopedProvider}
+              keywordProvider={quickSwitcher.keywordProvider}
+              scopedStatus={quickSwitcher.scopedStatus}
+              enterScope={quickSwitcher.enterScope}
+              exitScope={quickSwitcher.exitScope}
             />
           </Suspense>
         )}

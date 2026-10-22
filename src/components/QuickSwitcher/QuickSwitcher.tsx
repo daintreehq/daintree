@@ -1,9 +1,17 @@
-import { useCallback, useId } from "react";
+import { useCallback, useEffect, useId, useMemo, useState } from "react";
 import { KbdChord } from "@/components/ui/Kbd";
 import { SearchablePalette } from "@/components/ui/SearchablePalette";
-import { PaletteFooterHints, PaletteNoMatchHint } from "@/components/ui/AppPaletteDialog";
+import {
+  KBD_CLASS,
+  PaletteFooterHints,
+  PaletteNoMatchHint,
+} from "@/components/ui/AppPaletteDialog";
+import { PaletteScopeChip } from "@/components/ui/PaletteScopeChip";
 import { QuickSwitcherItem } from "./QuickSwitcherItem";
 import { useEffectiveCombo } from "@/hooks/useKeybinding";
+import { useAnimatedPresence } from "@/hooks/useAnimatedPresence";
+import { UI_PALETTE_EXIT_DURATION } from "@/lib/animationUtils";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import type {
   QuickSwitcherItem as QuickSwitcherItemData,
   UseQuickSwitcherReturn,
@@ -15,6 +23,8 @@ function getQuickSwitcherActionLabel(item: QuickSwitcherItemData): string {
       return "to switch panel";
     case "worktree":
       return "to switch worktree";
+    case "plugin":
+      return "to open";
   }
   const _exhaustive: never = item.type;
   return _exhaustive;
@@ -36,6 +46,11 @@ type QuickSwitcherProps = Pick<
   | "selectNext"
   | "selectItem"
   | "confirmSelection"
+  | "scopedProvider"
+  | "keywordProvider"
+  | "scopedStatus"
+  | "enterScope"
+  | "exitScope"
 >;
 
 export function QuickSwitcher({
@@ -53,6 +68,11 @@ export function QuickSwitcher({
   selectNext,
   selectItem,
   confirmSelection,
+  scopedProvider,
+  keywordProvider,
+  scopedStatus,
+  enterScope,
+  exitScope,
 }: QuickSwitcherProps) {
   const handleSelect = useCallback(
     (item: QuickSwitcherItemData) => {
@@ -63,17 +83,103 @@ export function QuickSwitcher({
 
   const footerHintId = useId();
 
+  // While the query spells a provider's keyword, the footer says Tab scopes to
+  // it — the one place the keyword grammar is taught.
+  const keywordHint = useMemo(
+    () => (keywordProvider ? { keys: ["Tab"], label: `to search ${keywordProvider.title}` } : null),
+    [keywordProvider]
+  );
   const getFooter = useCallback(
     (item: QuickSwitcherItemData | null): React.ReactNode => {
-      if (!item) return undefined;
-      const label = getQuickSwitcherActionLabel(item);
+      if (!item && !keywordHint) return undefined;
       return (
         <div id={footerHintId} className="w-full">
-          <PaletteFooterHints primaryHint={{ keys: ["↵"], label }} />
+          {item ? (
+            <PaletteFooterHints
+              primaryHint={{ keys: ["↵"], label: getQuickSwitcherActionLabel(item) }}
+              hints={keywordHint ? [keywordHint] : []}
+            />
+          ) : (
+            <PaletteFooterHints primaryHint={keywordHint!} />
+          )}
         </div>
       );
     },
-    [footerHintId]
+    [footerHintId, keywordHint]
+  );
+
+  // Keyword + Tab scopes the switcher to that provider; Backspace on an empty
+  // field, or Escape once the query is clear, steps back out. Plain Tab and
+  // Shift+Tab keep moving the selection as before.
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLInputElement>) => {
+      if (
+        e.key === "Tab" &&
+        !e.shiftKey &&
+        !e.metaKey &&
+        !e.ctrlKey &&
+        !e.altKey &&
+        keywordProvider
+      ) {
+        e.preventDefault();
+        e.stopPropagation();
+        enterScope(keywordProvider.key);
+        useAnnouncerStore.getState().announce(`Searching ${keywordProvider.title}`, "polite");
+        return;
+      }
+      if (!scopedProvider) return;
+      if (e.key === "Backspace") {
+        const input = e.currentTarget;
+        if (input.selectionStart === 0 && input.selectionEnd === 0) {
+          e.preventDefault();
+          exitScope();
+          useAnnouncerStore.getState().announce("Searching everything", "polite");
+        }
+        return;
+      }
+      if (e.key === "Escape" && query === "") {
+        e.preventDefault();
+        e.stopPropagation();
+        exitScope();
+        useAnnouncerStore.getState().announce("Searching everything", "polite");
+      }
+    },
+    [keywordProvider, scopedProvider, enterScope, exitScope, query]
+  );
+
+  // Hold the last chip label across the exit animation so it doesn't blank out.
+  const [chipLabel, setChipLabel] = useState("");
+  useEffect(() => {
+    if (scopedProvider) setChipLabel(scopedProvider.title);
+  }, [scopedProvider]);
+  const { isVisible: chipVisible, shouldRender: chipShouldRender } = useAnimatedPresence({
+    isOpen: scopedProvider !== null,
+    animationDuration: UI_PALETTE_EXIT_DURATION,
+  });
+  const chipNode = chipShouldRender ? (
+    <PaletteScopeChip label={chipLabel} isVisible={chipVisible} live={false} />
+  ) : null;
+
+  const scopedFailure =
+    scopedProvider && scopedStatus === "timeout"
+      ? `${scopedProvider.title} didn't answer in time`
+      : scopedProvider && scopedStatus === "error"
+        ? `${scopedProvider.title} couldn't search right now`
+        : null;
+  // The empty field's way out of the scope is Backspace; with a query in the
+  // field Backspace edits it, so that state's next step is Escape.
+  const backToEverything = (
+    <p className="mt-2 text-xs text-text-secondary">
+      {scopedFailure ? "Type to try again, or press " : "Press "}
+      <kbd className={KBD_CLASS}>Backspace</kbd> to search everything
+    </p>
+  );
+  const scopedNoMatch = scopedFailure ? (
+    <p className="mt-2 text-xs text-text-secondary">
+      Type to try again, or press <kbd className={KBD_CLASS}>Esc</kbd> to clear the search
+    </p>
+  ) : (
+    <PaletteNoMatchHint />
   );
 
   const newTerminalShortcut = useEffectiveCombo("terminal.new");
@@ -92,6 +198,8 @@ export function QuickSwitcher({
       onConfirm={confirmSelection}
       onClose={close}
       onHoverIndex={setSelectedIndex}
+      onKeyDown={handleKeyDown}
+      inputPrefix={chipNode}
       getItemId={(item) => item.id}
       matchesById={matchesById}
       renderItem={(item, index, isSelected, onHoverIndex, matches) => (
@@ -110,23 +218,38 @@ export function QuickSwitcher({
       shortcut={quickSwitcherShortcut}
       ariaLabel="Quick switcher"
       isLoading={isLoading}
-      searchPlaceholder="Find panels, agents, or worktrees"
-      searchAriaLabel="Search panels, agents, and worktrees"
+      searchPlaceholder={
+        scopedProvider ? `Search ${scopedProvider.title}` : "Find panels, agents, or worktrees"
+      }
+      searchAriaLabel={
+        scopedProvider ? `Search ${scopedProvider.title}` : "Search panels, agents, and worktrees"
+      }
       listId="quick-switcher-list"
       itemIdPrefix="qs-option"
-      emptyMessage="No panels open"
-      noMatchContent={<PaletteNoMatchHint what="everything open" />}
+      emptyMessage={
+        scopedProvider
+          ? (scopedFailure ?? `Type to search ${scopedProvider.title}`)
+          : "No panels open"
+      }
+      noMatchMessage={scopedProvider ? (scopedFailure ?? undefined) : undefined}
+      noMatchContent={
+        scopedProvider ? scopedNoMatch : <PaletteNoMatchHint what="everything open" />
+      }
       totalResults={totalResults}
       emptyContent={
-        <p className="mt-2 text-xs text-text-secondary">
-          {newTerminalShortcut ? (
-            <>
-              Press <KbdChord shortcut={newTerminalShortcut} /> to create a terminal.
-            </>
-          ) : (
-            "Create a terminal to get started."
-          )}
-        </p>
+        scopedProvider ? (
+          backToEverything
+        ) : (
+          <p className="mt-2 text-xs text-text-secondary">
+            {newTerminalShortcut ? (
+              <>
+                Press <KbdChord shortcut={newTerminalShortcut} /> to create a terminal.
+              </>
+            ) : (
+              "Create a terminal to get started."
+            )}
+          </p>
+        )
       }
     />
   );

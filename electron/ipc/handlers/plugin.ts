@@ -73,6 +73,11 @@ import {
   getPluginNotificationSilences,
   setPluginNotificationSilenced,
 } from "../../services/plugin/pluginNotificationSilences.js";
+import {
+  canSetSearchProviderFrom,
+  isSearchProviderKey,
+  setSearchProviderShown,
+} from "../../services/plugin/searchProviderPreferences.js";
 import { pluginInstallJobs } from "../../services/plugin/PluginInstallJobRegistry.js";
 import { sendToRendererContext } from "../utils.js";
 import { getPluginMenuItems } from "../../services/pluginMenuRegistry.js";
@@ -134,6 +139,9 @@ import type {
   FileEditorChoices,
   PluginLaunchEntryConfig,
   PluginLayoutConfig,
+  PluginSearchProviderInfo,
+  PluginSearchQueryRequest,
+  PluginSearchQueryResponse,
 } from "../../../shared/types/plugin.js";
 import {
   PROJECT_SURFACE_SLOTS,
@@ -792,6 +800,66 @@ async function handleNotificationSilenceSet(
   }
   setPluginNotificationSilenced(pluginId, silenced);
   return handleNotificationSilencesGet();
+}
+
+/** The quick switcher search providers the SENDER's project can see (#13792), with the user's choices. */
+async function handleSearchProvidersGet(ctx: IpcContext): Promise<PluginSearchProviderInfo[]> {
+  const service = await getPluginService();
+  await service.waitForInit();
+  return service.searchCoordinator.list(ctx.projectId);
+}
+
+/**
+ * Ask one search provider for the SENDER's project. The project comes from the
+ * sender, never the payload, so a view can only reach providers it can see; a
+ * newer query from the same view to the same provider supersedes this one.
+ */
+async function handleSearchProvidersQuery(
+  ctx: IpcContext,
+  request: PluginSearchQueryRequest
+): Promise<PluginSearchQueryResponse> {
+  if (
+    !request ||
+    typeof request !== "object" ||
+    !isSearchProviderKey(request.providerKey) ||
+    typeof request.query !== "string" ||
+    (request.mode !== "scoped" && request.mode !== "blended")
+  ) {
+    throw new Error("search provider: malformed query");
+  }
+  const service = await getPluginService();
+  return service.searchCoordinator.query(ctx.endpoint, ctx.projectId, {
+    providerKey: request.providerKey,
+    query: request.query,
+    mode: request.mode,
+  });
+}
+
+/** Abort every search the SENDER has in flight: its switcher closed or changed scope. */
+async function handleSearchProvidersCancel(ctx: IpcContext): Promise<void> {
+  const service = await getPluginService();
+  service.searchCoordinator.cancel(ctx.endpoint.endpointId);
+}
+
+/**
+ * Show or hide one provider in the quick switcher. A project plugin's provider
+ * can only be switched from its own project's views; an installed plugin's
+ * choice is app-wide. A key that names no loaded provider is remembered as
+ * asked. Returns the SENDER's project's providers as they now stand.
+ */
+async function handleSearchProviderShownSet(
+  ctx: IpcContext,
+  key: string,
+  shown: boolean
+): Promise<PluginSearchProviderInfo[]> {
+  if (!isSearchProviderKey(key)) throw new Error("search provider: malformed key");
+  if (typeof shown !== "boolean") throw new Error("search provider: malformed shown flag");
+  if (!canSetSearchProviderFrom(key, ctx.projectId)) {
+    throw new Error("search provider: belongs to another project");
+  }
+  setSearchProviderShown(key, shown);
+  const service = await getPluginService();
+  return service.searchCoordinator.list(ctx.projectId);
 }
 
 async function handleKeybindings(ctx: IpcContext) {
@@ -2300,6 +2368,24 @@ export const pluginNamespace = defineIpcNamespace({
     setNotificationSilenced: op(
       PLUGIN_METHOD_CHANNELS.setNotificationSilenced,
       handleNotificationSilenceSet
+    ),
+    getSearchProviders: op(PLUGIN_METHOD_CHANNELS.getSearchProviders, handleSearchProvidersGet, {
+      withContext: true,
+    }),
+    querySearchProvider: op(
+      PLUGIN_METHOD_CHANNELS.querySearchProvider,
+      handleSearchProvidersQuery,
+      { withContext: true }
+    ),
+    cancelSearchProviders: op(
+      PLUGIN_METHOD_CHANNELS.cancelSearchProviders,
+      handleSearchProvidersCancel,
+      { withContext: true }
+    ),
+    setSearchProviderShown: op(
+      PLUGIN_METHOD_CHANNELS.setSearchProviderShown,
+      handleSearchProviderShownSet,
+      { withContext: true }
     ),
     keybindings: op(PLUGIN_METHOD_CHANNELS.keybindings, handleKeybindings, { withContext: true }),
     contextMenuItems: op(PLUGIN_METHOD_CHANNELS.contextMenuItems, handleContextMenuItems, {

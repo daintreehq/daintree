@@ -28,6 +28,7 @@ import {
   DEPRECATED_CONTRIBUTION_ALIASES,
   describeManifestIssues,
   getPluginManifestSchema,
+  isBuiltInActionId,
   parsePluginManifestForLoad,
   SCOPED_PLUGIN_NAME_PATTERN,
 } from "../schemas/plugin.js";
@@ -88,6 +89,8 @@ import type {
   PluginToolbarButtonRuntimeState,
   PluginLaunchEntryTarget,
   PluginLayoutEntry,
+  PluginSearchResolvedTarget,
+  PluginSearchResultTarget,
   PluginContextValue,
   PluginWorktreeCardStatus,
   PluginWorktreeReviewCheck,
@@ -260,6 +263,19 @@ import {
   registerPluginLayout,
   unregisterPluginLayouts,
 } from "../../shared/config/pluginLayoutRegistry.js";
+import { isPluginIconId } from "../../shared/config/pluginIconIds.js";
+import { SEARCH_PROVIDER_DEFAULT_ICON_ID } from "../../shared/config/pluginSearchProviders.js";
+import {
+  registerSearchProviders,
+  unregisterSearchProviders,
+  type RegisteredSearchProvider,
+} from "./plugin/pluginSearchProviderRegistry.js";
+import {
+  createDeclarativeSearchRunner,
+  type DeclarativeSearchRunner,
+} from "./plugin/pluginSearchDatabase.js";
+import { PluginSearchCoordinator } from "./plugin/PluginSearchService.js";
+import { getHiddenSearchProviders } from "./plugin/searchProviderPreferences.js";
 import { registerPluginMenuItem, unregisterPluginMenuItems } from "./pluginMenuRegistry.js";
 import {
   registerPluginKeybinding,
@@ -1244,6 +1260,19 @@ export class PluginService {
    * after {@link initPromise} is set, so it can await the init gate.
    */
   private readonly broadcaster: PluginContributionBroadcaster;
+  /**
+   * Answers the quick switcher's queries to plugin search providers (#13792).
+   * A scoped search may activate a plugin; a blended one never reaches this
+   * `activatePlugin` (the coordinator refuses an unbound runtime provider).
+   */
+  readonly searchCoordinator = new PluginSearchCoordinator({
+    activatePlugin: (pluginId) => this.activatePlugin(pluginId),
+    recordDiagnostic: (pluginId, message) => {
+      const plugin = this.plugins.get(pluginId);
+      if (plugin) this.recordPluginLog(plugin, pluginId, "warn", message);
+    },
+    hiddenProviderKeys: () => new Set(getHiddenSearchProviders()),
+  });
   private readonly panelLifecycleBroker: PluginPanelLifecycleBroker;
   /** Per-plugin cost observations, read by the perf IPC and the dev CLI. */
   readonly metrics: PluginMetricsService;
@@ -2780,6 +2809,99 @@ export class PluginService {
         dataDir: this.pluginDataDir(pluginId),
         isCurrent: () => this.plugins.get(pluginId) === plugin,
       });
+    }
+
+    // Quick switcher search providers (#13792), bound with the plugin rather
+    // than at activation: a declarative one answers from its declared query
+    // without the plugin's code running, and a runtime one is asked only once
+    // `activate()` has bound it. Every target a result names is resolved here,
+    // so a row can only open this plugin's own panels and commands.
+    const searchProviders = manifest.contributes.searchProviders ?? [];
+    if (searchProviders.length > 0) {
+      const panelKindIdFor = (panelId: string): string | null => {
+        const panel = manifest.contributes.panels.find((candidate) => candidate.id === panelId);
+        if (!panel || panel.hasPty === true) return null;
+        return isProject
+          ? toRuntimePanelKindId(
+              { origin: "project", pluginId: manifest.name, kindId: panelId },
+              binding.projectId
+            )
+          : `${manifest.name}.${panelId}`;
+      };
+      const declaredCommands = new Set(
+        manifest.contributes.commands.map((command) => `${ownPrefix}${command.id}`)
+      );
+      const resolveTarget = (
+        target: PluginSearchResultTarget,
+        args: Record<string, unknown>
+      ): PluginSearchResolvedTarget | null => {
+        if (typeof target.panel === "string" && target.command === undefined) {
+          const panelKindId = panelKindIdFor(target.panel);
+          return panelKindId === null ? null : { type: "panel", panelKindId, args };
+        }
+        if (typeof target.command === "string" && target.panel === undefined) {
+          const actionId = target.command;
+          if (
+            !actionId.startsWith(ownPrefix) ||
+            actionId.length === ownPrefix.length ||
+            isBuiltInActionId(actionId) ||
+            (declaredCommands.size > 0 && !declaredCommands.has(actionId))
+          ) {
+            return null;
+          }
+          return { type: "command", actionId: qualifyActionId(actionId), args };
+        }
+        return null;
+      };
+      const resolveResultIcon = (iconId: string): string | undefined =>
+        isPluginIconId(iconId) ? iconId : customIconKeys.get(iconId);
+      const declaredQueries = manifest.contributes.databases.flatMap((declaration) =>
+        (declaration.queries ?? []).map((query) => ({ declaration, query }))
+      );
+      const registered: RegisteredSearchProvider[] = [];
+      for (const provider of searchProviders) {
+        let runDeclarative: DeclarativeSearchRunner | undefined;
+        if (provider.kind === "declarative") {
+          const declared = declaredQueries.find(({ query }) => query.name === provider.query);
+          if (!declared) continue;
+          runDeclarative = createDeclarativeSearchRunner({
+            declaration: declared.declaration,
+            query: declared.query,
+            manifestId: manifest.name,
+            projectRoot: binding.projectRoot,
+            dataDir: this.pluginDataDir(pluginId),
+            isCurrent: () => this.plugins.get(pluginId) === plugin,
+          });
+        }
+        registered.push({
+          key: `${pluginId}.${provider.id}`,
+          pluginId,
+          providerId: provider.id,
+          pluginName: manifest.displayName ?? manifest.name,
+          title: provider.title,
+          keyword: provider.keyword,
+          iconId: resolveIconId(provider.iconId ?? SEARCH_PROVIDER_DEFAULT_ICON_ID),
+          blend: provider.blend === true,
+          kind: provider.kind,
+          projectId: binding.projectId,
+          ...(provider.target !== undefined ? { defaultTarget: provider.target } : {}),
+          resolveTarget,
+          resolveResultIcon,
+          ...(runDeclarative ? { runDeclarative } : {}),
+        });
+      }
+      // Reported to the refused provider's own plugin, which may be another one
+      // whose keyword this plugin's reload just took back.
+      for (const { provider, takenBy } of registerSearchProviders(pluginId, registered)) {
+        const refused = this.plugins.get(provider.pluginId);
+        if (!refused) continue;
+        this.recordPluginLog(
+          refused,
+          provider.pluginId,
+          "warn",
+          `Search provider "${provider.providerId}" keyword "${provider.keyword}" is already taken by ${takenBy.pluginName}, so the quick switcher refuses it wherever both plugins are on. Choose a different keyword.`
+        );
+      }
     }
 
     // Panel kinds are published only AFTER the map commit above, with no await
@@ -7312,6 +7434,7 @@ export class PluginService {
     runUnloadStep(pluginId, "unregisterPluginLaunchEntries", () =>
       unregisterPluginLaunchEntries(pluginId)
     );
+    runUnloadStep(pluginId, "unregisterSearchProviders", () => unregisterSearchProviders(pluginId));
     runUnloadStep(pluginId, "scheduleLaunchEntriesBroadcast", () =>
       this.broadcaster.scheduleLaunchEntriesBroadcast()
     );
