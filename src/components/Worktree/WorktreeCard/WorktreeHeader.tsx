@@ -63,6 +63,8 @@ export interface WorktreeHeaderProps {
   devServerSession?: DevPreviewSessionState;
   onCheckResourceStatus?: () => void | Promise<unknown>;
   onPreviewEndpoint?: () => void;
+  /** Opens the worktree on the machine its resource reported; omitted where that can't be offered. */
+  onOpenOnHost?: () => void;
   onAttachmentAction?: (name: string, action: "detach" | "status") => void;
   onCleanupWorktree?: () => void;
   badges: {
@@ -106,6 +108,7 @@ export function WorktreeHeader({
   devServerSession,
   onCheckResourceStatus,
   onPreviewEndpoint,
+  onOpenOnHost,
   onAttachmentAction,
   onCleanupWorktree,
   badges,
@@ -397,6 +400,8 @@ export function WorktreeHeader({
                 resourceLastCheckedAt={resourceLastCheckedAt}
                 onCheckResourceStatus={onCheckResourceStatus}
                 onPreviewEndpoint={onPreviewEndpoint}
+                resourceSsh={worktree.resourceStatus?.ssh}
+                onOpenOnHost={onOpenOnHost}
               />
             )}
             {hasAttachmentChips && onAttachmentAction && (

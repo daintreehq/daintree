@@ -12,6 +12,7 @@ import {
 } from "./WorktreeLifecycleService.js";
 import { applyResourceConfigToMonitor } from "./resourceConfigHelpers.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
+import { isValidSshTarget } from "../../shared/utils/sshTarget.js";
 
 const READY_STATUSES = new Set(["ready", "running", "healthy", "up"]);
 const RESUMABLE_STATUSES = new Set(["paused", "stopped"]);
@@ -262,8 +263,9 @@ export class ResourceActionExecutor {
 
       try {
         const parsed = JSON.parse(result.output);
+        const lastStatus = typeof parsed.status === "string" ? parsed.status : "unhealthy";
         statusMonitor.setResourceStatus({
-          lastStatus: typeof parsed.status === "string" ? parsed.status : "unhealthy",
+          lastStatus,
           lastOutput: result.output,
           lastCheckedAt: Date.now(),
           endpoint: typeof parsed.endpoint === "string" ? parsed.endpoint : undefined,
@@ -273,6 +275,12 @@ export class ResourceActionExecutor {
           meta:
             parsed.meta != null && typeof parsed.meta === "object" && !Array.isArray(parsed.meta)
               ? parsed.meta
+              : undefined,
+          // Daintree acts on this one (it adds a Remote Host), so it is held to
+          // the host list's own target rule and only believed of a ready box.
+          ssh:
+            lastStatus === "ready" && typeof parsed.ssh === "string" && isValidSshTarget(parsed.ssh)
+              ? parsed.ssh
               : undefined,
         });
       } catch {
@@ -401,11 +409,23 @@ export class ResourceActionExecutor {
       if (result.success && (effectiveAction === "resume" || effectiveAction === "pause")) {
         const prevStatus = finalMonitor.resourceStatus;
         const timestampUpdate: Partial<WorktreeResourceStatus> =
-          effectiveAction === "resume" ? { resumedAt: Date.now() } : { pausedAt: Date.now() };
+          effectiveAction === "resume"
+            ? { resumedAt: Date.now() }
+            : // A paused box isn't one to open: the next ready status names it again.
+              { pausedAt: Date.now(), ssh: undefined };
         finalMonitor.setResourceStatus({
           ...prevStatus,
           ...timestampUpdate,
         });
+      }
+
+      // The box is gone; nothing it reported can be opened any more.
+      if (
+        result.success &&
+        effectiveAction === "teardown" &&
+        finalMonitor.resourceStatus?.ssh !== undefined
+      ) {
+        finalMonitor.setResourceStatus({ ...finalMonitor.resourceStatus, ssh: undefined });
       }
 
       this.ctx.emitUpdate(finalMonitor);

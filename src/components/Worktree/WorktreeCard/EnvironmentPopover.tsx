@@ -135,6 +135,10 @@ interface EnvironmentPopoverProps {
   onCheckResourceStatus: (() => void | Promise<unknown>) | undefined;
   /** Opens the endpoint in a dev preview panel; omitted where no panel can host it. */
   onPreviewEndpoint?: () => void;
+  /** The ssh target a ready status reported for the resource's machine. */
+  resourceSsh?: string;
+  /** Opens the worktree on that machine as a Remote Host; omitted where it can't be offered. */
+  onOpenOnHost?: () => void;
 }
 
 export function EnvironmentPopover({
@@ -150,6 +154,8 @@ export function EnvironmentPopover({
   resourceLastCheckedAt,
   onCheckResourceStatus,
   onPreviewEndpoint,
+  resourceSsh,
+  onOpenOnHost,
 }: EnvironmentPopoverProps) {
   const [open, setOpen] = useState(false);
   const [checkRequested, setCheckRequested] = useState(false);
@@ -181,7 +187,8 @@ export function EnvironmentPopover({
     (!!activity && showActivity) ||
     (!onCheckResourceStatus && !reportedStatus && !activity) ||
     showOutput ||
-    !!resourceEndpoint;
+    !!resourceEndpoint ||
+    !!resourceSsh;
 
   const triggerStatus = activity ?? resourceStatusLabel;
   const triggerLabel = triggerStatus
@@ -398,6 +405,38 @@ export function EnvironmentPopover({
                       </TooltipTrigger>
                       <TooltipContent side="top">Open endpoint in browser</TooltipContent>
                     </Tooltip>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {resourceSsh && (
+              <div className="flex flex-col gap-1">
+                <span className="text-2xs text-text-secondary">Machine</span>
+                <div className="-mr-1.5 flex min-w-0 items-center gap-1">
+                  <TruncatedTooltip content={resourceSsh}>
+                    <span className="min-w-0 flex-1 truncate font-mono text-2xs text-text-primary">
+                      {resourceSsh}
+                    </span>
+                  </TruncatedTooltip>
+                  <CopyButton
+                    text={resourceSsh}
+                    aria-label="Copy SSH target"
+                    announcement="SSH target copied"
+                  />
+                  {onOpenOnHost && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="-mr-1.5 focus-visible:-outline-offset-2"
+                      onClick={() => {
+                        setOpen(false);
+                        onOpenOnHost();
+                      }}
+                    >
+                      <Server aria-hidden="true" />
+                      Open on its machine
+                    </Button>
                   )}
                 </div>
               </div>

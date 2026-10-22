@@ -17,6 +17,8 @@ import type { ProjectFocusOnActivateIntent } from "./project.js";
 export interface AddHostPayload {
   name: string;
   connection: HostConnection;
+  /** Added for this worktree's resource environment, and removed along with it. */
+  ownerWorktreeId?: string;
 }
 
 export interface UpdateHostPayload {

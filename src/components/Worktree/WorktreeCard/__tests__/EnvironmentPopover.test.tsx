@@ -393,4 +393,24 @@ describe("EnvironmentPopover content", () => {
       expect(forward).not.toHaveBeenCalled();
     });
   });
+
+  it("offers to open the worktree on the machine the status named, and closes itself once asked", () => {
+    const onOpenOnHost = vi.fn();
+    renderPopover({ resourceSsh: "dt-feature-x", onOpenOnHost });
+    const dialog = openPopover();
+
+    expect(dialog.textContent).toContain("dt-feature-x");
+    fireEvent.click(screen.getByRole("button", { name: "Open on its machine" }));
+
+    expect(onOpenOnHost).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("shows the machine without the offer where it can't be opened as a host", () => {
+    renderPopover({ resourceSsh: "dt-feature-x" });
+    const dialog = openPopover();
+
+    expect(dialog.textContent).toContain("dt-feature-x");
+    expect(screen.queryByRole("button", { name: "Open on its machine" })).toBeNull();
+  });
 });

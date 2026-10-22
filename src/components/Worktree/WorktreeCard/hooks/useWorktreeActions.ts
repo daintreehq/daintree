@@ -43,6 +43,7 @@ export interface UseWorktreeActionsResult {
   handleTerminateAll: () => void;
   handleClearHistory: () => void;
   handleResourceTeardown: () => void;
+  handleResourceOpenOnHost: () => void;
   confirmAttachmentMove: (name: string, fromLabel: string, onConfirm: () => void) => void;
 }
 
@@ -215,6 +216,29 @@ export function useWorktreeActions({
     });
   }, [worktree.id, worktree.issueTitle, worktree.branch, worktree.name, teardownCommands, source]);
 
+  // Adding a host and, from there, installing and starting Daintree on the box
+  // are bundled, so the one confirmation names each step (D2, bundled operations).
+  const sshTarget = worktree.resourceStatus?.ssh;
+  const handleResourceOpenOnHost = useCallback(() => {
+    if (!sshTarget) return;
+    const label = worktree.issueTitle ?? worktree.branch ?? worktree.name;
+    setConfirmDialog({
+      isOpen: true,
+      title: `Open '${label}' on ${sshTarget}?`,
+      description: `If ${sshTarget} isn't in your host list, it's added for this worktree and removed again when the worktree is deleted or its resource is torn down. If Daintree isn't running there, Host setup opens to install and start it; otherwise the host switch dialog places this branch there.`,
+      confirmLabel: "Open on its machine",
+      variant: "default",
+      onConfirm: () => {
+        setConfirmDialog({ isOpen: false });
+        void actionService.dispatch(
+          "worktree.resource.openOnHost",
+          { worktreeId: worktree.id },
+          { source }
+        );
+      },
+    });
+  }, [worktree.id, worktree.issueTitle, worktree.branch, worktree.name, sshTarget, source]);
+
   // A move is two commands on two worktrees, so the one confirmation names both
   // (D2, bundled operations) — and moving a test device can mean reinstalling a
   // build for minutes.
@@ -249,6 +273,7 @@ export function useWorktreeActions({
     handleTerminateAll,
     handleClearHistory,
     handleResourceTeardown,
+    handleResourceOpenOnHost,
     confirmAttachmentMove,
     handleSelectAllAgents,
     handleSelectWaitingAgents,

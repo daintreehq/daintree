@@ -553,6 +553,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `worktree.resource.config.get` | Get resource environments config | safe | `projectId` |
 | `worktree.resource.config.set` | Set resource environments config | safe | `projectId`, `resourceEnvironments` |
 | `worktree.resource.connect` | Connect to resource | safe | `focusPolicy?`, `spawnedBy?`, `worktreeId?` |
+| `worktree.resource.openOnHost` | Open on its machine | confirm | `worktreeId?` |
 | `worktree.resource.pause` | Pause resource | safe | `worktreeId?` |
 | `worktree.resource.provision` | Provision resource | safe | `worktreeId?` |
 | `worktree.resource.resume` | Resume resource | safe | `worktreeId?` |

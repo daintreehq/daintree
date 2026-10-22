@@ -1077,6 +1077,7 @@ const EXPECTED_CONFIRM_DANGER: ReadonlyArray<ActionId> = [
   "fleet.restart",
   "fleet.deleteNamedFleet",
   "worktree.resource.teardown",
+  "worktree.resource.openOnHost",
   "portal.links.remove",
   "keybinding.resetAll",
   "logs.clear",
@@ -1131,6 +1132,7 @@ const CONFIRMED_WIRED: ReadonlyArray<ActionId> = [
   "worktree.sessions.restartAll",
   "worktree.sessions.clearHistory",
   "worktree.resource.teardown",
+  "worktree.resource.openOnHost",
   "keybinding.resetAll",
   "logs.clear",
   "recipe.delete",
@@ -1348,7 +1350,14 @@ describe("destructive-action danger metadata", () => {
     // and pass the matching context so the danger gate is what fires.
     const viewStore: WorktreeViewStoreApi = createStore<WorktreeViewStore>(() => ({
       worktrees: new Map<string, WorktreeSnapshot>([
-        ["wt-placeholder", { id: "wt-placeholder", hasTeardownCommand: true } as WorktreeSnapshot],
+        [
+          "wt-placeholder",
+          {
+            id: "wt-placeholder",
+            hasTeardownCommand: true,
+            resourceStatus: { lastStatus: "ready", ssh: "dt-placeholder" },
+          } as WorktreeSnapshot,
+        ],
       ]),
       statusCheckedAt: new Map(),
       workingTreeChangedAtById: new Map(),

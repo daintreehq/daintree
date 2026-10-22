@@ -1845,3 +1845,24 @@ describe("createWorktreeStore — issue provenance (#13744)", () => {
     expect(store.getState().worktrees.get("wt-1")?.issueTitle).toBeUndefined();
   });
 });
+
+// Pins the resource's ssh target into `snapshotsEqual`: a status check whose
+// only news is the box's target is what makes "Open on its machine" appear.
+describe("createWorktreeStore — resource ssh target updates", () => {
+  it("surfaces an update whose only change is the resource's ssh target", () => {
+    const store = createWorktreeStore();
+    const ready = { lastStatus: "ready", lastCheckedAt: 1 };
+    store.getState().applyUpdate(makeSnapshot("wt-1", { resourceStatus: ready }), nextV());
+    const mapBefore = store.getState().worktrees;
+
+    store
+      .getState()
+      .applyUpdate(
+        makeSnapshot("wt-1", { resourceStatus: { ...ready, ssh: "dt-feature-x" } }),
+        nextV()
+      );
+
+    expect(store.getState().worktrees).not.toBe(mapBefore);
+    expect(store.getState().worktrees.get("wt-1")?.resourceStatus?.ssh).toBe("dt-feature-x");
+  });
+});

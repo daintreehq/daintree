@@ -283,6 +283,12 @@ export interface HostDescriptor {
    * across a change of target; the person can turn it off.
    */
   assistantControlEnabled: boolean;
+  /**
+   * The worktree (by path) whose resource environment named this host, when
+   * it was added for that worktree's box: removed with the worktree, or when
+   * its resource is torn down. Absent for every host the user added.
+   */
+  ownerWorktreeId?: string;
 }
 
 export type HostConnectionState =

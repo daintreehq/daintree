@@ -8,6 +8,10 @@ import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { notify } from "@/lib/notify";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { TerminalSpawnSourceSchema, AddPanelFocusPolicySchema } from "./schemas";
+import {
+  canOpenResourceBoxOnHost,
+  openResourceBoxOnHost,
+} from "@/components/Hosts/resourceHostHandoff";
 
 /**
  * Never throws. Callers rethrow the original failure immediately after this
@@ -69,6 +73,7 @@ const worktreeResourceStatusSchema = z.object({
   lastCheckedAt: z.number().optional(),
   endpoint: z.string().optional(),
   meta: z.record(z.string(), z.unknown()).optional(),
+  ssh: z.string().optional(),
   provider: z.string().optional(),
   resumedAt: z.number().optional(),
   pausedAt: z.number().optional(),
@@ -368,6 +373,77 @@ export function registerWorktreeResourceActions(
           spawnedBy,
           focusPolicy,
         });
+      },
+    })
+  );
+
+  actions.set("worktree.resource.openOnHost", () =>
+    defineAction({
+      id: "worktree.resource.openOnHost",
+      title: "Open on its machine",
+      description:
+        "Open a worktree on the machine its resource status names as an ssh target, as a Remote Host. Adds the host for this worktree (removed with it), opens Host setup if Daintree isn't running there, else the host switch dialog to place the branch.",
+      category: "worktree",
+      kind: "command",
+      danger: "confirm",
+      dangerRationale:
+        "Adds the resource's machine to this device's host list, and can lead on to installing and starting Daintree there.",
+      scope: "renderer",
+      nonRepeatable: true,
+      argsSchema: z
+        .object({
+          worktreeId: z
+            .string()
+            .optional()
+            .describe(
+              "Worktree id from the worktree listing (default: focused or active worktree)."
+            ),
+        })
+        .optional(),
+      isEnabled: (ctx: ActionContext) => {
+        const worktreeId = ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
+        if (!worktreeId) return false;
+        const worktree = getCurrentViewStore().getState().worktrees.get(worktreeId);
+        return canOpenResourceBoxOnHost(worktree?.resourceStatus?.ssh);
+      },
+      disabledReason: (ctx: ActionContext) => {
+        const worktreeId = ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
+        if (!worktreeId) return "No worktree selected";
+        const worktree = getCurrentViewStore().getState().worktrees.get(worktreeId);
+        if (!worktree?.resourceStatus?.ssh)
+          return "The worktree's resource hasn't reported a ready machine with an ssh target";
+        if (!canOpenResourceBoxOnHost(worktree.resourceStatus.ssh))
+          return "This window can't open the resource's machine as a host";
+        return undefined;
+      },
+      selfNotifiesOnExecutionError: true,
+      run: async (args, ctx: ActionContext) => {
+        const targetWorktreeId = args?.worktreeId ?? ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
+        try {
+          if (!targetWorktreeId) throw new Error("No worktree selected");
+          const worktree = getCurrentViewStore().getState().worktrees.get(targetWorktreeId);
+          if (!worktree) throw new Error("Worktree not found");
+          const sshTarget = worktree.resourceStatus?.ssh;
+          if (!sshTarget) {
+            throw new Error("The worktree's resource hasn't reported a machine to open");
+          }
+          if (!ctx.projectId) throw new Error("No project is open");
+          return await openResourceBoxOnHost({
+            worktreeId: worktree.id,
+            worktreePath: worktree.path,
+            projectId: ctx.projectId,
+            sshTarget,
+            askFirst: ctx.dispatchSource === "agent" || ctx.dispatchSource === "plugin",
+          });
+        } catch (err) {
+          notifyWorktreeResourceError(
+            err,
+            "Couldn't open on its machine",
+            "Opening the worktree on its machine failed",
+            targetWorktreeId
+          );
+          throw err;
+        }
       },
     })
   );

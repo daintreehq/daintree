@@ -195,6 +195,13 @@ export interface WorktreeResourceStatus {
   endpoint?: string;
   /** Arbitrary metadata from status JSON */
   meta?: Record<string, unknown>;
+  /**
+   * The box's ssh target from status JSON (an `~/.ssh/config` alias or
+   * `user@host`), present only on a `ready` status and only when it passes
+   * the host list's target rule. Lets the worktree be opened there as a
+   * Remote Host.
+   */
+  ssh?: string;
   /** Provider identifier from config */
   provider?: string;
   /** Timestamp (ms epoch) when resource was last resumed */

@@ -48,6 +48,13 @@ vi.mock("@/store/terminalStore", () => ({
   useTerminalStore: { getState: () => ({ addTerminal: vi.fn() }) },
 }));
 
+const mockOpenResourceBoxOnHost = vi.fn();
+const mockCanOpenResourceBoxOnHost = vi.fn((target: unknown) => typeof target === "string");
+vi.mock("@/components/Hosts/resourceHostHandoff", () => ({
+  openResourceBoxOnHost: (...args: unknown[]) => mockOpenResourceBoxOnHost(...args),
+  canOpenResourceBoxOnHost: (target: unknown) => mockCanOpenResourceBoxOnHost(target),
+}));
+
 type ActionFactory = () => AnyActionDefinition;
 
 const RESOURCE_ACTION_IDS = [
@@ -85,6 +92,66 @@ describe("worktree resource action definitions", () => {
     mockResourceAction.mockReset();
     mockOnAddTerminal.mockReset();
     mockNotify.mockReset();
+    mockOpenResourceBoxOnHost.mockReset();
+  });
+
+  it("openOnHost is offered only for a worktree whose ready status named a machine", () => {
+    const def = registry.get("worktree.resource.openOnHost")!();
+    mockWorktrees.set("/plain", { resourceStatus: { lastStatus: "ready" } });
+    mockWorktrees.set("/box", { resourceStatus: { lastStatus: "ready", ssh: "dt-feature-x" } });
+
+    expect(def.isEnabled!({ activeWorktreeId: "/plain" })).toBe(false);
+    expect(def.disabledReason!({ activeWorktreeId: "/plain" })).toMatch(/ssh target/);
+    expect(def.isEnabled!({ activeWorktreeId: "/box" })).toBe(true);
+    expect(def.disabledReason!({ activeWorktreeId: "/box" })).toBeUndefined();
+  });
+
+  it("openOnHost hands the worktree, its project and the box's target to the handoff", async () => {
+    mockWorktrees.set("/box", {
+      id: "/box",
+      path: "/box",
+      resourceStatus: { lastStatus: "ready", ssh: "dt-feature-x" },
+    });
+    mockOpenResourceBoxOnHost.mockResolvedValue({ status: "placing", hostId: "dt-feature-x" });
+    const def = registry.get("worktree.resource.openOnHost")!();
+
+    const result = await def.run!({ worktreeId: "/box" }, { projectId: "proj-1" });
+
+    expect(mockOpenResourceBoxOnHost).toHaveBeenCalledWith({
+      worktreeId: "/box",
+      worktreePath: "/box",
+      projectId: "proj-1",
+      sshTarget: "dt-feature-x",
+      askFirst: false,
+    });
+    expect(result).toEqual({ status: "placing", hostId: "dt-feature-x" });
+  });
+
+  it("openOnHost leaves the window where it is for an agent until the person decides", async () => {
+    mockWorktrees.set("/box", {
+      id: "/box",
+      path: "/box",
+      resourceStatus: { lastStatus: "ready", ssh: "dt-feature-x" },
+    });
+    mockOpenResourceBoxOnHost.mockResolvedValue({ status: "placing", hostId: "dt-feature-x" });
+    const def = registry.get("worktree.resource.openOnHost")!();
+
+    await def.run!({ worktreeId: "/box" }, { projectId: "proj-1", dispatchSource: "agent" });
+
+    expect(mockOpenResourceBoxOnHost).toHaveBeenCalledWith(
+      expect.objectContaining({ askFirst: true })
+    );
+  });
+
+  it("openOnHost notifies and rejects when the status named no machine", async () => {
+    mockWorktrees.set("/plain", { id: "/plain", path: "/plain", resourceStatus: {} });
+    const def = registry.get("worktree.resource.openOnHost")!();
+
+    await expect(def.run!({ worktreeId: "/plain" }, { projectId: "proj-1" })).rejects.toThrow();
+    expect(mockOpenResourceBoxOnHost).not.toHaveBeenCalled();
+    expect(mockNotify).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "error", title: "Couldn't open on its machine" })
+    );
   });
 
   afterEach(() => {
@@ -447,6 +514,7 @@ describe("worktree.resource.status emits a manifest outputSchema (#11533)", () =
       "lastCheckedAt",
       "endpoint",
       "meta",
+      "ssh",
       "provider",
       "resumedAt",
       "pausedAt",

@@ -92,6 +92,7 @@ import { bulkParkAgents, selectParkTargets, type BulkParkVerb } from "@/lib/park
 import { devServerMenuState } from "./utils/devServerMenuState";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { CHIP_LABELS, WorktreeStatusTick } from "./WorktreeCard/WorktreeStatusTick";
+import { canOpenResourceBoxOnHost } from "@/components/Hosts/resourceHostHandoff";
 
 const HOVER_REVALIDATE_DELAY = 150;
 const REVALIDATE_FRESHNESS_GATE = 10_000;
@@ -469,6 +470,7 @@ export function WorktreeCard({
     handleTerminateAll,
     handleClearHistory,
     handleResourceTeardown,
+    handleResourceOpenOnHost,
     confirmAttachmentMove,
   } = useWorktreeActions({
     worktree,
@@ -1544,6 +1546,11 @@ export function WorktreeCard({
                   devServerSession={devServerSession}
                   onCheckResourceStatus={hasStatusCommand ? handleResourceStatus : undefined}
                   onPreviewEndpoint={handlePreviewEndpoint}
+                  onOpenOnHost={
+                    canOpenResourceBoxOnHost(worktree.resourceStatus?.ssh)
+                      ? handleResourceOpenOnHost
+                      : undefined
+                  }
                   onAttachmentAction={handleAttachmentAction}
                   onCleanupWorktree={
                     chipState === "cleanup" && !isMainWorktree

@@ -231,6 +231,51 @@ describe("HostRegistry", () => {
     expect(saved).not.toHaveProperty("assistantStartEnabled");
   });
 
+  it("keeps the worktree a host was added for, across a reload and a rename", () => {
+    const store = memoryStore();
+    const registry = new HostRegistry(store);
+    const owned = registry.add({
+      name: "dt-feature-x",
+      connection: { kind: "ssh", target: "dt-feature-x" },
+      ownerWorktreeId: "/repo/worktrees/feature-x",
+    });
+    const mine = registry.add({ name: "studio", connection: { kind: "ssh", target: "studio" } });
+    expect(owned.ownerWorktreeId).toBe("/repo/worktrees/feature-x");
+    expect(mine).not.toHaveProperty("ownerWorktreeId");
+
+    registry.update({ hostId: owned.id, name: "feature box" });
+    const reloaded = new HostRegistry(store);
+    expect(reloaded.get(owned.id)?.ownerWorktreeId).toBe("/repo/worktrees/feature-x");
+    expect(reloaded.get(mine.id)).not.toHaveProperty("ownerWorktreeId");
+  });
+
+  it("hands a worktree's host to the user once it is pointed at another machine", () => {
+    const registry = new HostRegistry(memoryStore());
+    const owned = registry.add({
+      name: "dt-feature-x",
+      connection: { kind: "ssh", target: "dt-feature-x" },
+      ownerWorktreeId: "/repo/worktrees/feature-x",
+    });
+    const updated = registry.update({
+      hostId: owned.id,
+      connection: { kind: "ssh", target: "studio" },
+    });
+    expect(updated).not.toHaveProperty("ownerWorktreeId");
+    expect(registry.get(owned.id)).not.toHaveProperty("ownerWorktreeId");
+  });
+
+  it("ignores an owner a hand-edited settings file left empty or mistyped", () => {
+    const registry = new HostRegistry(
+      memoryStore({
+        hosts: [
+          { id: "a", name: "a", connection: { kind: "ssh", target: "a" }, ownerWorktreeId: "" },
+          { id: "b", name: "b", connection: { kind: "ssh", target: "b" }, ownerWorktreeId: 7 },
+        ],
+      })
+    );
+    expect(registry.list().map((host) => "ownerWorktreeId" in host)).toEqual([false, false]);
+  });
+
   it("forgets a host and reports changes", () => {
     const registry = new HostRegistry(memoryStore());
     const listener = vi.fn();
