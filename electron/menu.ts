@@ -21,7 +21,7 @@ import {
 import type { UpdateMenuState } from "./services/AutoUpdaterService.js";
 import { getAutoUpdaterServiceRef } from "./window/serviceRefs.js";
 import { getPluginMenuItems } from "./services/pluginMenuRegistry.js";
-import { getPluginTours } from "./services/plugin/PluginTourRegistry.js";
+import { getPluginToursForProject } from "./services/plugin/PluginContributionBroadcaster.js";
 import { isPluginVisibleInProject } from "./services/plugin/projectPluginVisibility.js";
 import { evaluateWhen } from "./services/WhenClauseService.js";
 import { getAppWebContents, getProjectForWebContents } from "./window/webContentsRegistry.js";
@@ -137,20 +137,25 @@ function handleUpdateMenuClick(): void {
 let unsubscribeUpdateMenuState: (() => void) | null = null;
 
 /**
- * Which plugins a menu built for `projectId` leaves out, as a comparable key.
- * Empty in an app where nobody has hidden a plugin, which is every app that
- * never touches the setting, so the rebuild check below costs nothing there.
+ * What a menu built for `projectId` leaves out of its plugin items and shows of
+ * its plugin tours, as a comparable key. Empty in an app where nobody has hidden
+ * a plugin and no project plugin offers a tour, so the rebuild check below
+ * costs nothing there.
  */
 function hiddenMenuPluginsKey(projectId: string | null): string {
   const hidden = new Set<string>();
   for (const { pluginId } of getPluginMenuItems()) {
     if (!isPluginVisibleInProject(pluginId, projectId)) hidden.add(pluginId);
   }
-  for (const { pluginId, panelKind } of getPluginTours()) {
-    if (panelKind !== undefined) continue;
-    if (!isPluginVisibleInProject(pluginId, projectId)) hidden.add(pluginId);
-  }
-  return [...hidden].sort().join("\n");
+  // Tours are keyed by what shows, not what hides: a project plugin's tour is
+  // absent from every other project, and hiding alone can't express that.
+  const tours = helpMenuTours(projectId).map((tour) => tour.id);
+  return [[...hidden].sort().join("\n"), tours.sort().join("\n")].join("\n\n");
+}
+
+/** Plugin tours the Help menu lists for `projectId`; panel tours open from their panel. */
+function helpMenuTours(projectId: string | null) {
+  return getPluginToursForProject(projectId).filter((tour) => tour.panelKind === undefined);
 }
 
 /** {@link hiddenMenuPluginsKey} of the menu currently installed. */
@@ -290,16 +295,13 @@ export function createApplicationMenu(
   const helpPluginItems = buildPluginMenuItems("help");
   // Plugin tours sit beside the Daintree Tour, named "<plugin>: <tour>". Panel
   // tours are opened from their panel, not from Help.
-  const pluginTourItems: Electron.MenuItemConstructorOptions[] = getPluginTours()
-    .filter(
-      (tour) =>
-        tour.panelKind === undefined && isPluginVisibleInProject(tour.pluginId, menuProjectId)
-    )
-    .map((tour) => ({
+  const pluginTourItems: Electron.MenuItemConstructorOptions[] = helpMenuTours(menuProjectId).map(
+    (tour) => ({
       label: `${tour.pluginName}: ${tour.title}`,
       click: (_item, browserWindow) =>
         sendAction("help.tour.show", getTargetBrowserWindow(browserWindow), { tourId: tour.id }),
-    }));
+    })
+  );
 
   // Built BEFORE the gate is resolved: this reads getAllProjects(), which
   // repairs stale status rows as a side effect (a "closed" row that is still the

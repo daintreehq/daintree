@@ -30,7 +30,7 @@ A plugin scaffolded with `daintree-plugin new` already lists this package as a d
 
 ## Authoring a tour with Claude Code
 
-Every plugin scaffolded with `new` (except `--project`, since project plugins can't contribute tours) includes `.claude/skills/daintree-tour/`, a Claude Code skill that takes you from nothing to a working tour: it asks whether it's a plugin or panel tour, what to show, which voice, and where the Inworld key or your recordings are, then writes the manifest entry, the narration and the scenes, runs `tour voice` or `tour align`, reviews every `tour preview --headless` frame against the narration and Daintree's own tour, and runs `validate`. Start Claude Code in the plugin directory and ask for a tour, or run `/daintree-tour`. For a plugin created before this, run `npx daintree-plugin skill add`. The skill never writes your Inworld key to a file; it passes it to the one command that needs it through `INWORLD_API_KEY`.
+Every plugin scaffolded with `new` includes `.claude/skills/daintree-tour/`, a Claude Code skill that takes you from nothing to a working tour: it asks whether it's a plugin or panel tour, what to show, which voice, and where the Inworld key or your recordings are, then writes the manifest entry, the narration and the scenes, runs `tour voice` or `tour align`, reviews every `tour preview --headless` frame against the narration and Daintree's own tour, and runs `validate`. Start Claude Code in the plugin directory and ask for a tour, or run `/daintree-tour`. For a plugin created before this, run `npx daintree-plugin skill add`. The skill never writes your Inworld key to a file; it passes it to the one command that needs it through `INWORLD_API_KEY`.
 
 ## The usual loop
 

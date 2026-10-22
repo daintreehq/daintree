@@ -125,10 +125,10 @@ describe("runSkillAdd", () => {
     expect(await fs.readFile(path.join(skillDir, "local-notes.md"), "utf8")).toBe("keep me\n");
   });
 
-  it("refuses a project plugin, which can't contribute tours", async () => {
+  it("installs into a project plugin, which can contribute tours", async () => {
     await writeManifest({ name: "acme.site", scope: "project" });
-    await expect(runSkillAdd("daintree-tour", { dir: tmpDir })).rejects.toThrow(/project plugin/);
-    await expect(fs.access(path.join(tmpDir, ".claude"))).rejects.toThrow();
+    const result = await runSkillAdd("daintree-tour", { dir: tmpDir });
+    expect(result.written).toContain(SKILL_MD);
   });
 
   it("needs a plugin directory", async () => {

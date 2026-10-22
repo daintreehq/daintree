@@ -41,7 +41,7 @@ Creates `./my-plugin/` with:
 - `review/panel.stories.tsx`, `review/panel.spec.ts` and `playwright.config.ts` — for a template with a view, one story of the starter panel and a spec that captures every story, the [panel preview](#preview-a-panel-outside-daintree). `review/` is never built or packaged into `dist/`. Not in the 0.1.0 release on npm; it ships in the next one
 - `.gitignore` — excludes `node_modules/`, `dist/`, `*.dntr`, `.dev-marker`, `.tour-preview/`, and the preview's `test-results/` and `playwright-report/`
 - `.dntrignore` — commented-out examples of files to keep out of the packaged archive (see [Distribution → Packaging](./distribution.md#packaging))
-- `.claude/skills/daintree-tour/` — the tour-authoring Claude Code skill (`SKILL.md` plus its reference files), so a Claude Code session in the plugin can build a [tour](./tours.md) without a Daintree checkout. Not written under `--project`, since project plugins cannot contribute tours. Not in the 0.1.0 release on npm; it ships in the next one — [`skill add`](#daintree-plugin-skill-add-name) adds it to an existing plugin
+- `.claude/skills/daintree-tour/` — the tour-authoring Claude Code skill (`SKILL.md` plus its reference files), so a Claude Code session in the plugin can build a [tour](./tours.md) without a Daintree checkout. Not in the 0.1.0 release on npm; it ships in the next one — [`skill add`](#daintree-plugin-skill-add-name) adds it to an existing plugin
 
 Templates:
 
@@ -64,7 +64,7 @@ Alongside the usual template files it emits:
 - a watcher recipe in `<projectRoot>/.daintree/recipes/`, so Daintree can bring the build up with the rest of the project environment
 - a `.gitignore` that force-includes `dist/`, and a `README.md` explaining why — and, for the `view` template, pointing at the [panel preview](#preview-a-panel-outside-daintree) rather than the running app
 - no `.dntrignore` and no `package` script — a project plugin is distributed by being committed, not as a `.dntr`
-- no `.claude/skills/daintree-tour/`, and an `@types/node` dev dependency, because the project `vite.config.ts` imports `node:path`
+- an `@types/node` dev dependency, because the project `vite.config.ts` imports `node:path`
 
 **`dist/` is the load contract.** Daintree reads `plugin.json` and `dist/`. It never compiles a project plugin, never reads `src/`, and never runs its `package.json` — a project opening must not run a build. So `dist/` is committed, and the generated `.gitignore` force-includes it with `!dist/` and `!dist/**`: most repositories ignore `dist/` at the root, and that pattern would otherwise swallow the plugin's build output, leaving a plugin that silently fails to load on every other checkout. Both negations are needed — `!dist/` re-includes the directory so git descends into it at all, `!dist/**` re-includes the files against a parent rule that matches contents (`dist/*`, `**/dist/**`). Rebuild and commit `dist/` in the same commit as the source change.
 
@@ -335,7 +335,7 @@ Prints the JSON Schema for `plugin.json`, generated from the same Zod schema the
 npx daintree-plugin skill add [name] [--force]
 ```
 
-Copies a Claude Code skill bundled with the CLI into the plugin in the current directory, at `.claude/skills/<name>/`. `name` defaults to `daintree-tour`, the only bundled skill today: the tour-authoring skill `new` writes into every installed-plugin scaffold, so this is how an older plugin gets it, or a newer copy. It must run from a directory holding a `plugin.json`, and it refuses a project plugin (`"scope": "project"`), since Daintree refuses tours from project plugins.
+Copies a Claude Code skill bundled with the CLI into the plugin in the current directory, at `.claude/skills/<name>/`. `name` defaults to `daintree-tour`, the only bundled skill today: the tour-authoring skill `new` writes into every scaffold, so this is how an older plugin gets it, or a newer copy. It must run from a directory holding a `plugin.json`.
 
 Every destination is checked before anything is written. An identical file is left alone; one that differs — your own edit, or an older copy — stops the command with the list of differing files and nothing written, unless `--force` replaces them with this version's copy. Files in that folder the bundle doesn't ship are kept, and it refuses to write through a symlink.
 

@@ -2730,7 +2730,7 @@ export class PluginService {
         );
         continue;
       }
-      tourIdByPanelId.set(tour.panelKind, makePluginTourId(manifest.name, tour.id));
+      tourIdByPanelId.set(tour.panelKind, makePluginTourId(pluginId, tour.id));
     }
 
     // Every panel of the plugin offers "Plugin settings…" when there is anything
@@ -2849,7 +2849,8 @@ export class PluginService {
     // Tours (#12773) resolve their scene module and bundled audio under this
     // load's authority and generation, so a reload hands renderers URLs V8 has
     // never cached. The module itself is imported only when a tour opens.
-    // Project plugins can't declare tours (rejected by the schema).
+    // Registered under the instance key, so a project plugin's tours stay with
+    // its project and never collide with the same plugin installed globally.
     if (manifest.contributes.tours.length > 0) {
       registerPluginTours(pluginId, manifest.contributes.tours, {
         pluginName: manifest.displayName ?? manifest.name,

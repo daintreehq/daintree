@@ -567,10 +567,9 @@ describe("scaffoldPlugin --project", () => {
     }
   });
 
-  it("leaves out the tour-authoring skill, since project plugins can't contribute tours", async () => {
+  it("ships the tour-authoring skill, since project plugins can contribute tours", async () => {
     const result = await scaffoldProject();
-    expect(result.files.some((file) => file.startsWith(".claude/"))).toBe(false);
-    await expect(fs.access(path.join(result.dir, ".claude"))).rejects.toThrow();
+    expect(result.files).toContain(".claude/skills/daintree-tour/SKILL.md");
   });
 
   it("marks the manifest as project scope and passes the project-origin schema", async () => {

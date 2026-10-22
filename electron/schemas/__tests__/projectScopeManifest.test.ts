@@ -166,20 +166,32 @@ const UNSCOPED_SAMPLES: Record<UnscopedGroup, unknown[]> = {
   skills: [{ id: "skill", name: "Skill", path: "skills/skill.md" }],
   processTools: [{ command: "acmetool", iconId: "sparkles" }],
   mcpServers: [{ id: "srv", name: "Srv", command: "node" }],
-  tours: [
-    {
-      id: "welcome",
-      title: "Welcome",
-      componentPath: "tours/welcome.js",
-      chapters: [{ id: "intro", duration: 5, audioUrl: null, narrationHash: "0a1b2c3d" }],
-    },
-  ],
   themes: [{ id: "midnight", name: "Midnight", type: "dark", path: "themes/midnight.json" }],
 };
 
 type UnscopedGroup = (typeof PROJECT_SCOPE_UNSCOPED_CONTRIBUTIONS)[number][0];
 
 const UNSCOPED_GROUPS = PROJECT_SCOPE_UNSCOPED_CONTRIBUTIONS.map(([group]) => group);
+
+describe('contributes.tours under "scope": "project"', () => {
+  it("accepts a project plugin declaring a tour", () => {
+    const result = parse("project", {
+      scope: "project",
+      contributes: {
+        tours: [
+          {
+            id: "welcome",
+            title: "Welcome",
+            componentPath: "tours/welcome.js",
+            chapters: [{ id: "intro", duration: 5, audioUrl: null, narrationHash: "0a1b2c3d" }],
+          },
+        ],
+      },
+    });
+    expect(errorCodes(result)).not.toContain("tours_project_scope_forbidden");
+    expect(result.success).toBe(true);
+  });
+});
 
 describe('contributes.fileDecorationProviders under "scope": "project"', () => {
   it("accepts a project plugin declaring a decoration provider", () => {

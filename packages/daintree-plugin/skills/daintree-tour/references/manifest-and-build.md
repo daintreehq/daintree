@@ -34,7 +34,6 @@ Errors `daintree-plugin validate` may report and what they mean:
 - `tour_cue_out_of_range` / `tour_caption_out_of_range` — timing and audio disagree; re-run `tour voice` rather than editing numbers.
 - `tour_chapter_duplicate_id`, `duplicate_contribution_id` — two chapters or two tours share an id.
 - A missing `chapters` / `narrationHash` / `duration` — the tour has not been voiced yet.
-- A project-scope error naming `tours` — project plugins can't contribute tours.
 
 ## The scene module
 

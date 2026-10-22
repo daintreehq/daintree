@@ -373,9 +373,7 @@ describe("parsePluginManifestForLoad tour isolation (#12768)", () => {
       ...manifest([tour()]),
       scope: "project",
     });
-    expect(projectScope.result.success).toBe(false);
-    if (!projectScope.result.success) {
-      expect(errorCodes(projectScope.result)).toContain("tours_project_scope_forbidden");
-    }
+    expect(projectScope.result.success).toBe(true);
+    expect(projectScope.droppedTourIssues).toEqual([]);
   });
 });

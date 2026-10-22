@@ -54,7 +54,7 @@ const UNENCODED_RULES = [
   'A "project" database needs "scope": "project" and the "fs:project-write" capability; path applies only to a "project" database.',
   'A database query\'s sql must be one statement: for a "read" query, one SELECT, WITH or VALUES statement with no INSERT, UPDATE, DELETE or REPLACE; for a "write" query, one INSERT, REPLACE, UPDATE or DELETE statement, optionally after WITH. Its named placeholders must match its params exactly, and positional (?) placeholders are refused. Query names must be unique across all of a plugin\'s databases, may not be database_schema or database_query, and number at most 16 in all; with any tools the plugin registers, at most 16 together.',
   'A secret setting (type "secret" or secret: true) may not declare a default, since it would ship in plugin.json.',
-  'Under project scope, menuItems, agents, skills, fileDecorationProviders, processTools, mcpServers, tours and forgeProviders are refused, and "scope": "project" is required.',
+  'Under project scope, menuItems, agents, skills, processTools, mcpServers, themes and forgeProviders are refused, and "scope": "project" is required.',
   'A fileEditors entry names exactly one of slot or view. A slot is accepted only for built-in plugins and takes no mode or paths; a view must name one of the plugin\'s location: "fileEditor" views and needs a mode. Every entry declares extensions, paths or both, and paths are accepted only under "scope": "project".',
   'A contextMenus entry may declare kind, extensions or paths only at location "file", and extensions may not be combined with kind "folder". Paths are globs relative to the worktree root.',
   "The reserved daintree.* publisher namespace is accepted only for built-in plugins.",

@@ -91,11 +91,6 @@ export async function runSkillAdd(
   if (typeof manifest !== "object" || manifest === null || Array.isArray(manifest)) {
     throw new Error("plugin.json must be a JSON object");
   }
-  if (name === "daintree-tour" && (manifest as { scope?: unknown }).scope === "project") {
-    throw new Error(
-      'This is a project plugin ("scope": "project"), and Daintree refuses tours from project plugins, so the daintree-tour skill has nothing to build here'
-    );
-  }
 
   const files = await loadBundledSkill(name, opts.skillsRoot);
   const written: string[] = [];
