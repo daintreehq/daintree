@@ -346,6 +346,104 @@ describe("how the prompt says a source claim was established", () => {
       );
     });
   });
+
+  describe("a template the page reported without a position", () => {
+    const UNSTAMPED: SourceCandidate = {
+      kind: "template-location",
+      candidateId: "loc",
+      framework: "svelte",
+      extraction: { kind: "runtime-field", field: "__svelte_meta.loc" },
+      file: "src/lib/Card.svelte",
+      location: null,
+    };
+
+    it("says the page gave no line or column, and cites none", () => {
+      expect(sourceLines(promptFor(UNSTAMPED))).toEqual([
+        '- Source: written in "src/lib/Card.svelte" (reported by the page in runtime field "__svelte_meta.loc" with no line or column; not checked)',
+      ]);
+    });
+
+    it("stays a file when the host couldn't place it", () => {
+      const prompt = promptFor(UNSTAMPED, {
+        state: "unavailable",
+        candidateId: "loc",
+        claim: "template-location",
+        reason: "unsupported",
+      });
+
+      expect(sourceLines(prompt)).toEqual([
+        '- Source: written in "src/lib/Card.svelte" (reported by the page in runtime field "__svelte_meta.loc" with no line or column; not resolved: Daintree doesn\'t resolve this kind of claim)',
+      ]);
+    });
+
+    it("gains a line only from a place the host found, beside what the page said", () => {
+      const prompt = promptFor(UNSTAMPED, {
+        state: "verified",
+        candidateId: "loc",
+        claim: "template-location",
+        target: at("src/lib/Card.svelte", { ...SVELTE, line: 9, column: 2 }),
+        fileRevision: REVISION,
+        placedBy: "structure",
+      });
+
+      expect(sourceLines(prompt)).toEqual([
+        '- Source: written at src/lib/Card.svelte:9:3 (the page reported "src/lib/Card.svelte" in runtime field "__svelte_meta.loc" with no line or column, and Daintree found it here; checked against the file)',
+      ]);
+    });
+  });
+});
+
+describe("how many copies of the markup the prompt says there are", () => {
+  const STAMPED: SourceCandidate = {
+    kind: "template-location",
+    candidateId: "loc",
+    framework: "svelte",
+    extraction: { kind: "runtime-field", field: "__svelte_meta.loc" },
+    file: "src/lib/Card.svelte",
+    location: { ...SVELTE, line: 7, column: 2 },
+  };
+  const promptWith = (result: ResolutionResult): string =>
+    buildAgentTaskPrompt(
+      input([
+        {
+          observation: observation({
+            sourceCandidates: [STAMPED],
+            frameworkEvidence: [{ kind: "svelte", ancestry: [], sameLocCount: 3, unmapped: false }],
+          }),
+          resolutions: [result],
+        },
+      ])
+    );
+  const checked = {
+    state: "verified",
+    candidateId: "loc",
+    claim: "template-location",
+    fileRevision: REVISION,
+  } as const;
+
+  it("passes on the page's count for the place it stamped", () => {
+    const prompt = promptWith({
+      ...checked,
+      target: at("src/lib/Card.svelte", { ...SVELTE, line: 7, column: 2 }),
+    });
+
+    expect(prompt).toContain(
+      "The page counted 3 copies of this markup on it; changing it changes all of them"
+    );
+  });
+
+  it("doesn't credit an element placed by its shape with the stamp's count", () => {
+    const prompt = promptWith({
+      ...checked,
+      target: at("src/lib/Card.svelte", { ...SVELTE, line: 9, column: 2 }),
+      placedBy: "structure",
+    });
+
+    expect(prompt).not.toContain("3 copies");
+    expect(prompt).toContain(
+      "At least 1 copy of this markup is on the page; any others weren't counted, and changing it changes every copy"
+    );
+  });
 });
 
 describe("what the prompt carries", () => {

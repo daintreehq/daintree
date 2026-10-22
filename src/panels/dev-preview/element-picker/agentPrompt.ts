@@ -157,8 +157,12 @@ function readFrom(extraction: Extraction): string {
   }
 }
 
-/** What a candidate claims, as the verb its citation follows. Different claims, never one for another. */
-function claimed(kind: SourceCandidate["kind"]): string {
+/**
+ * What a candidate claims, as the verb its citation follows. Different claims,
+ * never one for another. A template location the page gave no position for is
+ * cited by its file alone, and is written in it rather than at it.
+ */
+function claimed(kind: SourceCandidate["kind"], positioned: boolean): string {
   switch (kind) {
     case "element-creation":
       return "created at";
@@ -167,7 +171,7 @@ function claimed(kind: SourceCandidate["kind"]): string {
     case "component-definition":
       return "defined at";
     case "template-location":
-      return "written at";
+      return positioned ? "written at" : "written in";
     case "file-hint":
       return "in";
   }
@@ -232,10 +236,13 @@ function heldHow(target: HeldTarget): string {
  */
 function claimText(candidate: SourceCandidate, result: ResolutionResult | undefined): string {
   const fileOnly = candidate.kind === "file-hint";
+  // A template location may arrive with no position: the page rendered the
+  // element from that file and never said where in it. That absence is what
+  // was observed, so it is said, and no line is cited until the host finds one.
+  const stamp = candidate.kind === "file-hint" ? null : candidate.location;
+  const unpositioned = !fileOnly && stamp === null;
   const reported = pageData(
-    candidate.kind === "file-hint"
-      ? candidate.file
-      : `${candidate.file}:${position(candidate.location)}`
+    stamp === null ? candidate.file : `${candidate.file}:${position(stamp)}`
   );
   const held = (target: HeldTarget): string => {
     const { file, location } = target.target;
@@ -243,8 +250,9 @@ function claimText(candidate: SourceCandidate, result: ResolutionResult | undefi
       ? hostPath(file.path)
       : hostLocation(file.path, position(location));
   };
-  const from = `${fileOnly ? "a file without a line, " : ""}reported by the page in ${readFrom(candidate.extraction)}`;
-  const verb = claimed(candidate.kind);
+  const where = `${readFrom(candidate.extraction)}${unpositioned ? " with no line or column" : ""}`;
+  const from = `${fileOnly ? "a file without a line, " : ""}reported by the page in ${where}`;
+  const verb = claimed(candidate.kind, stamp !== null);
   if (result === undefined) return `${verb} ${reported} (${from}; not checked)`;
   switch (result.state) {
     case "observed":
@@ -257,14 +265,14 @@ function claimText(candidate: SourceCandidate, result: ResolutionResult | undefi
         result.state === "observed" || (result.state === "verified" && !result.sourceMap);
       const at = result.target.location;
       const moved =
-        candidate.kind !== "file-hint" &&
+        !fileOnly &&
         unmapped &&
         at !== null &&
-        position(at) !== position(candidate.location);
+        (stamp === null || position(at) !== position(stamp));
       const how = moved
-        ? `the page reported ${reported} in ${readFrom(candidate.extraction)}, and Daintree found it here instead`
+        ? `the page reported ${reported} in ${where}, and Daintree found it here${stamp === null ? "" : " instead"}`
         : from;
-      return `${verb} ${held(result)} (${how}; ${heldHow(result)})`;
+      return `${claimed(candidate.kind, at !== null)} ${held(result)} (${how}; ${heldHow(result)})`;
     }
     case "ambiguous": {
       const fits = result.alternatives.map(
@@ -337,13 +345,20 @@ function renderChain(observation: PromptObservation): ComponentRecord[] {
 /** Elements described in full; past these, a selection lists the rest by source and selector. */
 const DESCRIBED_NODES = 8;
 
-function copiesLine(observation: PromptObservation): string | null {
+function copiesLine(element: PromptElement): string | null {
+  const { observation } = element;
   const svelte = observation.frameworkEvidence.find((entry) => entry.kind === "svelte");
   if (svelte === undefined) return null;
-  const count = svelte.sameLocCount;
-  // A floor also comes from a structural placement, where the page counted
-  // nothing at all; the line has to be true either way.
-  if (svelte.sameLocCountPartial) {
+  // The page counted the nodes sharing the position it stamped. Once the host
+  // has placed the element by its shape instead, that count is some other
+  // element's, and the one copy in hand is a floor, as a count the page cut
+  // short is; the line has to be true either way.
+  const placed = observation.sourceCandidates.some((candidate) => {
+    const result = resultFor(element, candidate);
+    return result?.state === "verified" && result.placedBy === "structure";
+  });
+  const count = placed ? 1 : svelte.sameLocCount;
+  if (placed || svelte.sameLocCountPartial) {
     return `At least ${pluralize(count, "copy of this markup is", "copies of this markup are")} on the page; any others weren't counted, and changing it changes every copy`;
   }
   if (count > 1) {
@@ -389,7 +404,7 @@ function describeElement(
   for (const candidate of candidates) {
     lines.push(`  - Source: ${claimText(candidate, resultFor(element, candidate))}`);
   }
-  const copies = copiesLine(observation);
+  const copies = copiesLine(element);
   if (copies !== null) lines.push(`  - ${copies}`);
   // Siblings picked together usually report one chain, and a second copy of
   // it only buries what differs.
