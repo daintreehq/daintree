@@ -7,6 +7,8 @@ import { getEndpointRegistry } from "../ipc/endpointRegistry.js";
 import type { LeaseGate } from "../ipc/dispatcher.js";
 import { getLocalClientRef, getLocalEndpoint } from "../ipc/localEndpoint.js";
 import { AppError } from "../utils/errorTypes.js";
+import { createLogger } from "../utils/logger.js";
+import { createKeyedLogLimiter } from "../utils/keyedLogLimiter.js";
 import { getChannelLeaseTarget } from "../ipc/channelLeasePolicy.js";
 import {
   resolveLeaseTarget,
@@ -23,6 +25,29 @@ import type {
   DriveLeaseNavigation,
   DriveLeaseView,
 } from "../../shared/types/ipc/driveLease.js";
+
+const logger = createLogger("main:DriveLeaseService");
+const refusalLogLimiter = createKeyedLogLimiter();
+
+type GrantReason =
+  | "vacant"
+  | "explicit-takeover"
+  | "conditional-claim"
+  | "host-screen-in-use"
+  | "same-client-or-install"
+  | "grace-expired";
+
+function holderContext(projectId: string, holder: DriveLeaseHolder) {
+  return {
+    projectId,
+    leaseId: holder.leaseId,
+    tenureId: holder.tenureId,
+    endpointId: holder.endpointId,
+    clientId: holder.clientId,
+    clientName: holder.clientName,
+    isHostLocal: holder.isHostLocal,
+  };
+}
 
 /**
  * How long a lease stays reserved for its client after the holder's link drops
@@ -199,7 +224,7 @@ export class DriveLeaseService {
     try {
       restored = this.reservations.load();
     } catch (error) {
-      console.error("[DriveLease] Couldn't read the reserved leases:", error);
+      logger.error("Drive lease reservations could not be read", error);
       return;
     }
     for (const [projectId, reservation] of Object.entries(restored)) {
@@ -225,6 +250,10 @@ export class DriveLeaseService {
       );
       lease.releaseTimer.unref?.();
       this.leases.set(projectId, lease);
+      logger.info("Drive lease reservation restored", {
+        ...holderContext(projectId, holder),
+        graceMs: this.restoredReservationGraceMs,
+      });
     }
     // As the file has them, so a tenure given to one saved without it is
     // written with the next save rather than made up again after a restart.
@@ -262,7 +291,7 @@ export class DriveLeaseService {
       // Only once written: a failed save is tried again on the next change.
       this.savedReservations = serialized;
     } catch (error) {
-      console.error("[DriveLease] Couldn't save the reserved leases:", error);
+      logger.error("Drive lease reservations could not be saved", error);
     }
   }
 
@@ -451,10 +480,14 @@ export class DriveLeaseService {
       // read-only, and Take control is the explicit step.
       if (holder === null || holder.isHostLocal) {
         const inUse = this.presentFor(projectId).find((present) => this.hostScreenShows(present));
-        if (inUse) return holder ?? this.grant(projectId, inUse);
+        if (inUse) return holder ?? this.grant(projectId, inUse, "host-screen-in-use");
       }
     }
-    return this.grant(projectId, endpoint);
+    return this.grant(
+      projectId,
+      endpoint,
+      options.ifLeaseId !== undefined ? "conditional-claim" : "explicit-takeover"
+    );
   }
 
   /**
@@ -677,7 +710,7 @@ export class DriveLeaseService {
     if (!lease) {
       if (!mayGrant) return;
       const next = this.successor(projectId, null);
-      if (next) this.grant(projectId, next);
+      if (next) this.grant(projectId, next, "vacant");
       return;
     }
     if (this.holderIsPresent(projectId, lease)) {
@@ -687,6 +720,7 @@ export class DriveLeaseService {
       }
       if (lease.awayUntil !== null) {
         lease.awayUntil = null;
+        logger.info("Drive lease holder returned", holderContext(projectId, lease.holder));
         this.sendViews(projectId, lease.holder);
       }
       return;
@@ -698,7 +732,7 @@ export class DriveLeaseService {
     // keeps the project, so a read may do this much.
     const continuer = this.continuer(this.presentFor(projectId), lease, this.holderIsGone(lease));
     if (continuer) {
-      this.grant(projectId, continuer);
+      this.grant(projectId, continuer, "same-client-or-install");
       return;
     }
     if (lease.releaseTimer) return;
@@ -708,6 +742,10 @@ export class DriveLeaseService {
     // The holder stays the same, so no holder change goes out; the views say
     // it is away, and when control passes on without it.
     lease.awayUntil = this.now() + this.releaseGraceMs;
+    logger.info("Drive lease holder away", {
+      ...holderContext(projectId, lease.holder),
+      graceMs: this.releaseGraceMs,
+    });
     this.sendViews(projectId, lease.holder);
   }
 
@@ -729,19 +767,26 @@ export class DriveLeaseService {
     lease.releaseTimer = null;
     if (this.holderIsPresent(projectId, lease)) {
       lease.awayUntil = null;
+      logger.info("Drive lease holder returned", holderContext(projectId, lease.holder));
       this.sendViews(projectId, lease.holder);
       return;
     }
+    logger.info("Drive lease grace expired", holderContext(projectId, lease.holder));
     const next = this.successor(projectId, lease);
     if (next) {
-      this.grant(projectId, next);
+      this.grant(projectId, next, "grace-expired");
       return;
     }
     this.leases.delete(projectId);
+    logger.info("Drive lease released", holderContext(projectId, lease.holder));
     this.publish(projectId, null);
   }
 
-  private grant(projectId: string, endpoint: ClientEndpoint): DriveLeaseHolder {
+  private grant(
+    projectId: string,
+    endpoint: ClientEndpoint,
+    reason: GrantReason
+  ): DriveLeaseHolder {
     const previous = this.leases.get(projectId);
     if (previous?.releaseTimer) clearTimeout(previous.releaseTimer);
     const client = this.clientOf(endpoint);
@@ -762,6 +807,18 @@ export class DriveLeaseService {
       holderDeviceId: client?.deviceId ?? null,
       releaseTimer: null,
       awayUntil: null,
+    });
+    logger.info(previous ? "Drive lease transferred" : "Drive lease granted", {
+      ...holderContext(projectId, holder),
+      reason,
+      ...(previous
+        ? {
+            previousLeaseId: previous.holder.leaseId,
+            previousEndpointId: previous.holder.endpointId,
+            previousClientId: previous.holder.clientId,
+            previousClientName: previous.holder.clientName,
+          }
+        : {}),
     });
     this.publish(projectId, holder);
     return holder;
@@ -806,7 +863,7 @@ export class DriveLeaseService {
       try {
         listener(state);
       } catch (error) {
-        console.error("[DriveLease] change listener failed:", error);
+        logger.error("Drive lease change listener failed", error, { projectId });
       }
     }
   }
@@ -859,7 +916,7 @@ export class DriveLeaseService {
     try {
       this.applyDriveLeases(table);
     } catch (error) {
-      console.error("[DriveLease] Failed to publish the drive leases:", error);
+      logger.error("Drive leases could not be published", error);
     }
   }
 }
@@ -881,8 +938,10 @@ function drives(
 export function drivenElsewhereError(
   channel: string,
   projectId: string | null,
-  holder: DriveLeaseHolder | null
+  holder: DriveLeaseHolder | null,
+  caller?: Pick<ClientEndpoint, "endpointId" | "clientId">
 ): AppError {
+  logRefusal(channel, projectId, holder, caller);
   return new AppError({
     code: "DRIVEN_ELSEWHERE",
     message: `${channel} changes ${projectId ?? "a project"}, which another window drives`,
@@ -894,13 +953,42 @@ export function drivenElsewhereError(
 }
 
 /** The refusal of a change that couldn't be traced to a project while another window drives one here. */
-export function unmatchedTargetError(channel: string, reason: string): AppError {
+export function unmatchedTargetError(
+  channel: string,
+  reason: string,
+  holder: DriveLeaseHolder | null = null,
+  caller?: Pick<ClientEndpoint, "endpointId" | "clientId">
+): AppError {
+  logRefusal(channel, null, holder, caller);
   return new AppError({
     code: "DRIVEN_ELSEWHERE",
     message: `${channel} targets ${reason}, and another window drives a project here`,
     userMessage:
       "Another screen has control of a project on this host, and this change couldn't be matched to a project. Take control first.",
     context: { channel },
+  });
+}
+
+function logRefusal(
+  channel: string,
+  projectId: string | null,
+  holder: DriveLeaseHolder | null,
+  caller?: Pick<ClientEndpoint, "endpointId" | "clientId">
+): void {
+  const suppressedCount = refusalLogLimiter.take(
+    `${channel}:${caller?.endpointId ?? ""}:${holder?.leaseId ?? ""}`
+  );
+  if (suppressedCount === null) return;
+  logger.info("Call refused: another window drives the project", {
+    code: "DRIVEN_ELSEWHERE",
+    channel,
+    projectId,
+    endpointId: caller?.endpointId,
+    clientId: caller?.clientId,
+    holderLeaseId: holder?.leaseId,
+    holderClientId: holder?.clientId,
+    holderClientName: holder?.clientName,
+    suppressedCount,
   });
 }
 
@@ -924,17 +1012,24 @@ export function createDriveLeaseGate(
     const target = getChannelLeaseTarget(channel);
     if (target === null) {
       const [projectId, holder] = elsewhere.entries().next().value!;
-      return drivenElsewhereError(channel, projectId, holder);
+      return drivenElsewhereError(channel, projectId, holder, endpoint);
     }
     const verdict = (
       resolution: LeaseTargetResolution,
       holders: Map<string, DriveLeaseHolder>
     ): AppError | null => {
-      if (resolution.kind === "unresolved") return unmatchedTargetError(channel, resolution.reason);
+      if (resolution.kind === "unresolved") {
+        return unmatchedTargetError(
+          channel,
+          resolution.reason,
+          holders.values().next().value ?? null,
+          endpoint
+        );
+      }
       const projectIds = resolution.kind === "every" ? [...holders.keys()] : resolution.projectIds;
       for (const projectId of projectIds) {
         const holder = holders.get(projectId);
-        if (holder) return drivenElsewhereError(channel, projectId, holder);
+        if (holder) return drivenElsewhereError(channel, projectId, holder, endpoint);
       }
       return null;
     };

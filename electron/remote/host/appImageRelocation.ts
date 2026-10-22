@@ -108,7 +108,7 @@ export function relocateHostAppImageSync(
       reloadUnits();
     }
   } catch (error) {
-    logger.warn("Couldn't point the Host mode unit at the updated AppImage:", { error });
+    logger.warn("Couldn't point the Host mode unit at the updated AppImage", { error });
   }
   try {
     const oldMarker = `${previous}${APPIMAGE_BUILD_INFO_SUFFIX}`;
@@ -122,7 +122,7 @@ export function relocateHostAppImageSync(
       fs.rmSync(oldMarker, { force: true });
     }
   } catch (error) {
-    logger.warn("Couldn't move the AppImage's build marker:", { error });
+    logger.warn("Couldn't move the AppImage's build marker", { error });
   }
 }
 
@@ -159,11 +159,11 @@ export async function reconcileHostAppImage(params: {
       if (moved !== null) {
         resilientAtomicWriteFileSync(files.unitFile, moved, "utf-8", { mode: 0o644 });
         await params.reloadUnits();
-        console.log(`[RemoteHosts] Pointed the Host mode unit at ${image}`);
+        logger.info("Pointed the Host mode unit at the updated AppImage");
       }
     }
   } catch (error) {
-    logger.warn("Couldn't point the Host mode unit at this AppImage:", { error });
+    logger.warn("Couldn't point the Host mode unit at this AppImage", { error });
   }
   if (params.ownMarker === null || !OWN_MARKER.test(params.ownMarker)) return;
   try {
@@ -174,7 +174,7 @@ export async function reconcileHostAppImage(params: {
     if (Math.max(mtimeMs, ctimeMs) > params.startedAtMs) return;
     resilientAtomicWriteFileSync(markerFile, params.ownMarker, "utf-8", { mode: 0o644 });
   } catch (error) {
-    logger.warn("Couldn't refresh the AppImage's build marker:", { error });
+    logger.warn("Couldn't refresh the AppImage's build marker", { error });
   }
 }
 

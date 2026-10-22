@@ -24,6 +24,9 @@ import {
   type LinkTransport,
   type LinkTransportConnection,
 } from "./transport.js";
+import { createLogger } from "../../utils/logger.js";
+
+const logger = createLogger("main:sshTransport");
 
 /**
  * Reach a host through the system `ssh`, never an SSH library, so the user's
@@ -569,7 +572,7 @@ export async function exitStaleSshMasters(
         if (result?.code === 0 || (await isDeadSocket(socketPath, timeoutMs))) {
           await fs.rm(socketPath, { force: true }).catch(() => {});
         } else {
-          console.warn(`[RemoteHosts] A master left by an earlier launch didn't exit: ${name}`);
+          logger.warn("A master left by an earlier launch didn't exit");
         }
       })
   );

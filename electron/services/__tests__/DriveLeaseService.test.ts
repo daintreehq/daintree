@@ -1,5 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+const loggerMock = vi.hoisted(() => ({
+  debug: vi.fn(),
+  info: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
+}));
+
+vi.mock("../../utils/logger.js", () => ({
+  createLogger: () => loggerMock,
+}));
+
 vi.mock("electron", () => ({
   webContents: { fromId: vi.fn(() => null), getAllWebContents: vi.fn(() => []) },
   BrowserWindow: { fromWebContents: vi.fn(() => null), getAllWindows: vi.fn(() => []) },
@@ -93,6 +104,7 @@ async function settle(): Promise<void> {
 
 beforeEach(() => {
   vi.useFakeTimers();
+  loggerMock.info.mockClear();
   registry = new EndpointRegistryImpl();
   leaseTables = [];
   changes = [];
@@ -1505,6 +1517,70 @@ describe("DriveLeaseService and a relaunched Shell (#13909)", () => {
       await settle();
       expect(service.getHolder("p")?.clientId).toBe("launch-1");
       expect(service.isDriving("p", after)).toBe(false);
+    });
+  });
+
+  describe("logging", () => {
+    const messages = () => loggerMock.info.mock.calls.map(([message]) => message);
+
+    it("records who got the lease, who lost it and why", async () => {
+      const hostWindow = local(1);
+      const laptop = remote("s1:e1", "c1");
+      registry.add(hostWindow);
+      await settle();
+      service.takeOver("p", laptop);
+
+      expect(loggerMock.info).toHaveBeenCalledWith(
+        "Drive lease granted",
+        expect.objectContaining({ projectId: "p", clientId: "local", reason: "vacant" })
+      );
+      expect(loggerMock.info).toHaveBeenCalledWith(
+        "Drive lease transferred",
+        expect.objectContaining({
+          clientId: "c1",
+          reason: "explicit-takeover",
+          previousClientId: "local",
+        })
+      );
+    });
+
+    it("records a holder going away, the grace running out, and the successor", async () => {
+      const hostWindow = local(1);
+      const laptop = remote("s1:e1", "c1");
+      registry.add(hostWindow);
+      registry.add(laptop);
+      await settle();
+      service.takeOver("p", laptop);
+      loggerMock.info.mockClear();
+
+      laptop.close();
+      await settle();
+      expect(messages()).toContain("Drive lease holder away");
+
+      vi.advanceTimersByTime(GRACE_MS);
+      expect(messages()).toEqual([
+        "Drive lease holder away",
+        "Drive lease grace expired",
+        "Drive lease transferred",
+      ]);
+      expect(loggerMock.info).toHaveBeenLastCalledWith(
+        "Drive lease transferred",
+        expect.objectContaining({ reason: "grace-expired" })
+      );
+    });
+
+    it("records a release when nobody is left, and stays quiet on reads", async () => {
+      const laptop = remote("s1:e1", "c1");
+      registry.add(laptop);
+      await settle();
+      service.getHolder("p");
+      service.getState("p");
+      expect(messages()).toEqual(["Drive lease granted"]);
+
+      laptop.close();
+      await settle();
+      vi.advanceTimersByTime(GRACE_MS);
+      expect(messages().at(-1)).toBe("Drive lease released");
     });
   });
 });

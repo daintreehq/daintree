@@ -123,7 +123,7 @@ export function installRemoteProjectResidency(options: RemoteResidencyOptions = 
     try {
       return brokerOf()?.connectEndpointPort(host, endpoint.handle) ?? false;
     } catch (error) {
-      logger.warn("Couldn't reconnect a remote view's worktree port:", { error });
+      logger.warn("Couldn't reconnect a remote view's worktree port", { error });
       return false;
     }
   };
@@ -143,14 +143,14 @@ export function installRemoteProjectResidency(options: RemoteResidencyOptions = 
       .then(
         (confirmed) => {
           if (confirmed === true && stranded.get(handle) === projectId) stranded.delete(handle);
-          console.log("[RemoteHosts] Reconnected a remote view to its re-spawned workspace host", {
+          logger.info("Reconnected a remote view to its re-spawned workspace host", {
             endpointHandle: handle,
             projectId,
             confirmed: confirmed === true,
           });
         },
         (error: unknown) => {
-          logger.warn("Couldn't redeliver a remote view's worktree port:", { error });
+          logger.warn("Couldn't redeliver a remote view's worktree port", { error });
         }
       )
       .finally(() => redelivering.delete(handle));

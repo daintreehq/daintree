@@ -1,6 +1,11 @@
 import { spawn as nodeSpawn } from "node:child_process";
 import type { Writable } from "node:stream";
 import { WSL_ENV, wslExecArgs, wslExecutable } from "./wslCommand.js";
+import { createLogger } from "../../utils/logger.js";
+import { createKeyedLogLimiter } from "../../utils/keyedLogLimiter.js";
+
+const logger = createLogger("main:wslKeepalive");
+const logLimiter = createKeyedLogLimiter();
 
 /**
  * Keeps a WSL distro running while this Shell wants its Host.
@@ -125,7 +130,10 @@ export class WslKeepalive {
         wslExecArgs(distro, ["/bin/cat"])
       );
     } catch (error) {
-      console.warn(`[RemoteHosts] Couldn't keep WSL distribution ${distro} running:`, error);
+      const suppressedCount = logLimiter.take("spawn");
+      if (suppressedCount !== null) {
+        logger.warn("Couldn't keep a WSL distribution running", { distro, error, suppressedCount });
+      }
       return;
     }
     const forget = () => {
@@ -134,7 +142,10 @@ export class WslKeepalive {
     // Attached first: a missing wsl.exe fails asynchronously.
     child.once("error", (error) => {
       forget();
-      console.warn(`[RemoteHosts] Couldn't keep WSL distribution ${distro} running:`, error);
+      const suppressedCount = logLimiter.take("child-error");
+      if (suppressedCount !== null) {
+        logger.warn("Couldn't keep a WSL distribution running", { distro, error, suppressedCount });
+      }
     });
     child.once("exit", forget);
     child.stdin?.on("error", () => {});

@@ -338,7 +338,7 @@ export async function startRemoteHosts(options: StartRemoteHostsOptions): Promis
     try {
       await ensureWorkspaceClient({});
     } catch (error) {
-      logger.warn("Workspace client failed; remote worktree ports are off:", { error });
+      logger.warn("Workspace client failed; remote worktree ports are off", { error });
     }
   }
   if (!started) return;

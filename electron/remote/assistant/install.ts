@@ -179,7 +179,7 @@ export function installRetiredSendsNotice(
     pending = readRetiredSends(sqlite);
     if (pending.length === 0) forgetRetiredSends(sqlite);
   } catch (error) {
-    logger.warn("Couldn't read the retired inbox's sends:", { error });
+    logger.warn("Couldn't read the retired inbox's sends", { error });
     return () => {};
   }
   if (pending.length === 0) return () => {};
@@ -221,7 +221,7 @@ export function installRetiredSendsNotice(
             try {
               forgetRetiredSends(sqlite);
             } catch (error) {
-              logger.warn("Couldn't forget the retired inbox's sends:", { error });
+              logger.warn("Couldn't forget the retired inbox's sends", { error });
             }
             finish();
           }

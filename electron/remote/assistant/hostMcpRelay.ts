@@ -261,7 +261,7 @@ export function installHostMcpRelay(
     try {
       deps.retirePrincipal?.(senderId, helpSessionId);
     } catch (error) {
-      logger.warn("Couldn't retire a relay principal:", { error });
+      logger.warn("Couldn't retire a relay principal", { error });
     }
   };
   /** Retires the least recent of a sender's principals past its bound; one in use stays. */

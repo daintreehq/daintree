@@ -74,7 +74,7 @@ export function watchOwnedHostCleanup(options: OwnedHostCleanupOptions): () => v
         for (const host of targets()) {
           await options.forget(host.id).catch((error: unknown) => {
             refused.add(host.id);
-            logger.warn("Removing a worktree's resource host failed:", { error });
+            logger.warn("Removing a worktree's resource host failed", { error });
           });
         }
       } finally {

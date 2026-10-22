@@ -209,7 +209,7 @@ const m = vi.hoisted(() => {
 });
 
 vi.mock("electron", () => ({
-  app: { getPath: () => "/tmp/daintree-user-data", isPackaged: false },
+  app: { getPath: () => "/tmp/daintree-user-data", getVersion: () => "0.0.0", isPackaged: false },
 }));
 vi.mock("../../boot/hostServices.js", () => ({
   ensureWorkspaceClient: m.ensureWorkspaceClient,

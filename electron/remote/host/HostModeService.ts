@@ -219,7 +219,7 @@ export class HostModeService {
     try {
       await startAtLogin.install();
     } catch (error) {
-      logger.warn("Refreshing start at login failed:", { error: messageOf(error) });
+      logger.warn("Refreshing start at login failed", { error: messageOf(error) });
       return;
     }
     await this.observe();
@@ -390,7 +390,7 @@ export class HostModeService {
           { cause: error }
         );
       }
-      logger.warn("Removing start at login failed:", { error: messageOf(error) });
+      logger.warn("Removing start at login failed", { error: messageOf(error) });
     }
   }
 
@@ -445,7 +445,7 @@ export class HostModeService {
       .catch((error: unknown) => {
         // Written again on the next change.
         this.recordedStatus = null;
-        logger.warn("Recording Host mode status failed:", { error: messageOf(error) });
+        logger.warn("Recording Host mode status failed", { error: messageOf(error) });
       });
     return this.statusWrite;
   }
@@ -499,7 +499,7 @@ export class HostModeService {
       try {
         this.deps.broadcast(this.snapshot());
       } catch (error) {
-        logger.warn("Host mode status push failed:", { error: messageOf(error) });
+        logger.warn("Host mode status push failed", { error: messageOf(error) });
       }
       void this.recordStatus();
     });

@@ -39,7 +39,7 @@ export function installHostUploadService(options: { inbox?: HostInbox } = {}): {
     .ensure()
     .then(() => inbox.cleanup())
     .catch((error: unknown) => {
-      logger.warn("Couldn't prepare the host inbox:", { error });
+      logger.warn("Couldn't prepare the host inbox", { error });
     });
   const unregister = registerRemoteService("hostUploadService", service);
   const unwatchLease = lease.onChange((state) => service.onLeaseChanged(state.projectId));

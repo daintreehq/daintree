@@ -245,7 +245,7 @@ export async function askHostApprovalInWindow(
     );
     return envelope.confirmationDecision ?? null;
   } catch (error) {
-    logger.warn("Couldn't ask about a host's call in its assistant's window:", { error });
+    logger.warn("Couldn't ask about a host's call in its assistant's window", { error });
     return null;
   }
 }
