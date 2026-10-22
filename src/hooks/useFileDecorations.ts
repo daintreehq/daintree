@@ -50,7 +50,13 @@ export function useFileDecorations(scope: string, paths: string[]): Record<strin
   // unambiguous even for filenames containing newlines.
   const pathsKey = cleanPaths.join("\0");
 
-  const [decorations, setDecorations] = useState<Record<string, FileDecoration>>(EMPTY);
+  // Tagged with the scope that produced it: paths are relative to the scope's
+  // root, so a result from another root would put its badge on a same-named
+  // file here while the new pull is in flight.
+  const [held, setResult] = useState<{
+    scope: string;
+    decorations: Record<string, FileDecoration>;
+  }>({ scope, decorations: EMPTY });
 
   // Keep the latest path set readable from the subscription callback without
   // making it a dependency (the callback is registered once per scope).
@@ -60,11 +66,11 @@ export function useFileDecorations(scope: string, paths: string[]): Record<strin
   useEffect(() => {
     const electron = typeof window !== "undefined" ? window.electron : undefined;
     if (!electron?.plugin || scope.length === 0) {
-      setDecorations(EMPTY);
+      setResult({ scope, decorations: EMPTY });
       return;
     }
     if (pathsRef.current.length === 0) {
-      setDecorations(EMPTY);
+      setResult({ scope, decorations: EMPTY });
       return;
     }
 
@@ -75,14 +81,17 @@ export function useFileDecorations(scope: string, paths: string[]): Record<strin
       const current = ++requestId;
       const requested = pathsRef.current;
       if (requested.length === 0) {
-        setDecorations(EMPTY);
+        setResult({ scope, decorations: EMPTY });
         return;
       }
       void electron.plugin
         .getDecorations(scope, requested)
         .then((result) => {
           if (disposed || current !== requestId) return;
-          setDecorations(result && Object.keys(result).length > 0 ? result : EMPTY);
+          setResult({
+            scope,
+            decorations: result && Object.keys(result).length > 0 ? result : EMPTY,
+          });
         })
         .catch((err: unknown) => {
           if (disposed || current !== requestId) return;
@@ -90,7 +99,7 @@ export function useFileDecorations(scope: string, paths: string[]): Record<strin
             scope,
             error: err,
           });
-          setDecorations(EMPTY);
+          setResult({ scope, decorations: EMPTY });
         });
     };
 
@@ -118,5 +127,5 @@ export function useFileDecorations(scope: string, paths: string[]): Record<strin
     // overwrite a fresh result. The current path set is read off `pathsRef`.
   }, [scope, pathsKey]);
 
-  return decorations;
+  return held.scope === scope ? held.decorations : EMPTY;
 }
