@@ -58,6 +58,8 @@ import {
 import { TerminalRefreshTier } from "@/types";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { DockActivityCue } from "./DockActivityCue";
+import { DockChipBadge, useDockChipBadge } from "./DockChipBadge";
+import { dockChipBadgeLabelSuffix } from "./dockChipBadgeModel";
 import { useDockPanelPortal } from "./dockPanelPortalContext";
 import {
   DOCK_CHIP_CLASS,
@@ -174,6 +176,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
   }, [panels, activeTabId]);
   const activePanelId = activePanel?.id;
   const activeHandBack = useRunHandBackState(activePanelId ?? "");
+  const badge = useDockChipBadge(activePanelId ?? "");
 
   // The pane this group actually has open in the dock — the id every close must
   // name. Reading it from the store (rather than assuming the active tab) keeps
@@ -738,7 +741,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                   return moved;
                 });
               }}
-              aria-label={`${activePanel.title}${displayAgentState ? (stateLabel ? ` — agent ${stateLabel}` : "") : groupPlainWorking ? " — command running" : ""} (${panels.length} tabs) - Click to preview, double-click to move to grid, drag to reorder`}
+              aria-label={`${activePanel.title}${displayAgentState ? (stateLabel ? ` — agent ${stateLabel}` : "") : groupPlainWorking ? " — command running" : ""}${dockChipBadgeLabelSuffix(badge)} (${panels.length} tabs) - Click to preview, double-click to move to grid, drag to reorder`}
             >
               <div className="flex items-center justify-center shrink-0">
                 <TerminalIcon
@@ -750,6 +753,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
               <span className="truncate min-w-[48px] max-w-[140px] font-sans font-medium">
                 {displayTitle}
               </span>
+              <DockChipBadge model={badge} />
 
               {/* Tab count indicator */}
               <span className="text-3xs text-text-secondary tabular-nums shrink-0">

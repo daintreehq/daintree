@@ -25,6 +25,8 @@ import { useSessionPresentation } from "@/hooks/useRunHandBackState";
 import { TerminalRefreshTier } from "@/types";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { DockActivityCue } from "./DockActivityCue";
+import { DockChipBadge, useDockChipBadge } from "./DockChipBadge";
+import { dockChipBadgeLabelSuffix } from "./dockChipBadgeModel";
 import { useDockPanelPortal } from "./dockPanelPortalContext";
 import {
   DOCK_CHIP_CLASS,
@@ -330,6 +332,7 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
   const plainActivityState = getDockDisplayActivityState(terminal);
   const showFinishedCue = useTransientDockFinishedCue(plainActivityState, terminal.id);
   const plainWorking = plainActivityState === "working";
+  const badge = useDockChipBadge(terminal.id);
   const showDockAgentHighlights = usePreferencesStore((s) => s.showDockAgentHighlights);
   // Use shortened title without command summary for dock items
   const displayTitle = terminal.title;
@@ -391,7 +394,7 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
                   e.stopPropagation();
                   handleMoveToGrid();
                 }}
-                aria-label={`${terminal.title}${displayAgentState ? (stateLabel ? ` — agent ${stateLabel}` : "") : plainWorking ? " — command running" : ""} - Click to preview, double-click to move to grid, drag to reorder`}
+                aria-label={`${terminal.title}${displayAgentState ? (stateLabel ? ` — agent ${stateLabel}` : "") : plainWorking ? " — command running" : ""}${dockChipBadgeLabelSuffix(badge)} - Click to preview, double-click to move to grid, drag to reorder`}
               >
                 <div className="flex items-center justify-center shrink-0">
                   <TerminalIcon kind={terminal.kind} chrome={chrome} className="w-3.5 h-3.5" />
@@ -399,6 +402,7 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
                 <span className="truncate min-w-[48px] max-w-[140px] font-sans font-medium">
                   {displayTitle}
                 </span>
+                <DockChipBadge model={badge} />
 
                 {(isActive || plainWorking) && commandText && (
                   <>
