@@ -40,9 +40,6 @@ vi.mock("@/store/pluginWorktreeReviewChecksStore", async () => {
     },
   };
 });
-vi.mock("@/hooks/usePluginAttribution", () => ({
-  resolvePluginAttribution: (key: string) => ({ name: `Name of ${key}` }),
-}));
 vi.mock("@/lib/copyTreeFormat", () => ({ DEFAULT_COPYTREE_FORMAT: "xml" }));
 vi.mock("@/services/ActionService", () => ({ actionService: { dispatch: vi.fn() } }));
 
@@ -170,7 +167,6 @@ describe("worktree.reviewReadiness run()", () => {
     expect(result.pluginChecks).toEqual([
       {
         pluginId: "acme.lint",
-        pluginName: "Name of project__proj-a__acme.lint",
         label: "3 broken links",
         severity: "warning",
         detail: "in docs/",

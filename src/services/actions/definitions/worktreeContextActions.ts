@@ -14,7 +14,6 @@ import {
   usePluginWorktreeReviewChecksStore,
   worktreeReviewChecksFor,
 } from "@/store/pluginWorktreeReviewChecksStore";
-import { resolvePluginAttribution } from "@/hooks/usePluginAttribution";
 import { pluginManifestIdFromInstanceKey } from "@shared/types/plugin";
 // Static, unlike the panel stores below: both are leaf modules (a lease map and
 // a zustand store) that pull in no client graph, and they are the same two
@@ -136,7 +135,6 @@ const reviewReadinessItemSchema = z.object({
  */
 const reviewReadinessPluginCheckSchema = z.object({
   pluginId: z.string(),
-  pluginName: z.string(),
   label: z.string(),
   severity: z.enum(["warning", "info"]),
   detail: z.string().optional(),
@@ -155,11 +153,7 @@ const reviewReadinessResultSchema = z.object({
   warnings: z.array(reviewReadinessItemSchema),
   infos: z.array(reviewReadinessItemSchema),
   nextActions: z.array(reviewReadinessItemSchema),
-  pluginChecks: z
-    .array(reviewReadinessPluginCheckSchema)
-    .describe(
-      "Advisory checks plugins published for this worktree, each attributed to its plugin. They never affect level or readiness."
-    ),
+  pluginChecks: z.array(reviewReadinessPluginCheckSchema),
   counts: z.object({
     staged: z.number(),
     unstaged: z.number(),
@@ -1170,19 +1164,17 @@ export function registerWorktreeContextActions(
             ? usePluginWorktreeReviewChecksStore.getState().checksByProject[projectId]
             : undefined,
           targetWorktreeId
-        ).flatMap(({ pluginId, checks }) => {
-          const { name } = resolvePluginAttribution(pluginId);
-          return checks.map((check) => ({
+        ).flatMap(({ pluginId, checks }) =>
+          checks.map((check) => ({
             // The manifest id, never the instance key: a project plugin's key
             // carries a machine-local project id (#12211). A check's command
             // is left out too; this query runs nothing.
             pluginId: pluginManifestIdFromInstanceKey(pluginId),
-            pluginName: name,
             label: check.label,
             severity: check.severity,
             ...(check.detail !== undefined ? { detail: check.detail } : {}),
-          }));
-        });
+          }))
+        );
         return {
           worktreeId: targetWorktreeId,
           worktreePath: worktree.path,

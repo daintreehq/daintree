@@ -1169,7 +1169,7 @@ Each check has a `label` of 1–120 characters on one line (`PLUGIN_WORKTREE_REV
 
 The optional `command` follows the rules of the card chip's `command`: one of your own actions written `"{manifestId}.{id}"`, never a built-in. Once it is registered the row gets a button titled with the action's title, and a click dispatches it with `{ worktreeId }`. Until then the row is plain text.
 
-The `worktree.reviewReadiness` tool lists them in a separate `pluginChecks` array, each with its plugin's manifest id and name, `label`, `severity` and `detail`. They never appear among its `blockers`, `warnings` or `infos`, and never move `level`, `commitReady` or `pushReady`.
+The `worktree.reviewReadiness` tool lists them in a separate `pluginChecks` array, each with its plugin's manifest id, `label`, `severity` and `detail`. They never appear among its `blockers`, `warnings` or `infos`, and never move `level`, `commitReady` or `pushReady`.
 
 Checks are not persisted. They are cleared when the worktree is removed, when its project closes, and when your plugin unloads or its worker is replaced, so republish them after a restart. Not revoke-guarded, and a silent no-op once the plugin unloads. `createMockHost` applies the same checks against its seeded worktrees, records accepted calls in `setWorktreeReviewChecksCalls`, and holds the current lists in `worktreeReviewChecks`.
 
