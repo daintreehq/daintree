@@ -295,27 +295,23 @@ describe("one host-summary sample", () => {
       { id: "p1", path: "/p1", status: "active", name: "daintree" },
       { id: "p2", path: "/p2", status: "background", name: "site" },
     ];
+    const holder = (acquiredAt: number) => ({
+      leaseId: acquiredAt,
+      endpointId: `s${acquiredAt}:e1`,
+      clientId: `c${acquiredAt}`,
+      clientName: "greg-mbp",
+      isHostLocal: false,
+      acquiredAt,
+    });
     // A reservation for a project since removed isn't this host's to report.
-    lease.holders = { p1: { acquiredAt: 5 }, p2: { acquiredAt: 9 }, gone: { acquiredAt: 12 } };
+    lease.holders = { p1: holder(5), p2: holder(9), gone: holder(12) };
     lease.away.add("p1");
     const readers = createHostSampleSources().beginSample!();
     expect(readers.drivers!()).toEqual([
-      {
-        projectId: "p2",
-        projectName: "site",
-        holder: { acquiredAt: 9 },
-        state: "live",
-        awayUntil: null,
-      },
-      {
-        projectId: "p1",
-        projectName: "daintree",
-        holder: { acquiredAt: 5 },
-        state: "away",
-        awayUntil: 99,
-      },
+      { projectId: "p2", projectName: "site", holder: holder(9), state: "live", awayUntil: null },
+      { projectId: "p1", projectName: "daintree", holder: holder(5), state: "away", awayUntil: 99 },
     ]);
-    expect(readers.driver()).toEqual({ acquiredAt: 9 });
+    expect(readers.driver()).toEqual(holder(9));
     expect(getAllProjects).toHaveBeenCalledTimes(1);
   });
 

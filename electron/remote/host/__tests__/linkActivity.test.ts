@@ -63,6 +63,14 @@ describe("composeLinkActivity", () => {
     expect(LinkActivitySchema.safeParse(activity).success).toBe(true);
   });
 
+  it("leaves out a lease a Shell would refuse, rather than costing it the whole answer", () => {
+    const restored = lease("p2", "c".repeat(256), 2);
+    restored.holder.endpointId = `restored:${restored.holder.clientId}`;
+    expect(nameLeases([lease("p1", "c1", 1), restored], () => "x").map((d) => d.projectId)).toEqual(
+      ["p1"]
+    );
+  });
+
   it("keeps a lease for a project the host no longer has, unnamed", () => {
     expect(nameLeases([lease("gone", "c1", 1)], () => null)[0]).toMatchObject({
       projectId: "gone",

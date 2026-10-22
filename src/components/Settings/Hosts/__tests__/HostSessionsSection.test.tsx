@@ -124,7 +124,7 @@ describe("HostSessionsSection", () => {
     expect(group("Projects driven")).toContain("Nobody is driving a project on studio-01");
   });
 
-  it("says a host from before this can't report it, and stops asking until Retry or a reconnect", async () => {
+  it("says a host from before this can't report it, and stops asking until it reconnects", async () => {
     linkActivity.mockResolvedValue({ supported: false });
     const { rerender } = render(
       <HostSessionsSection hostId="studio-01" hostName="studio-01" connected sampledAt={1} />
@@ -150,6 +150,32 @@ describe("HostSessionsSection", () => {
     );
     await flush();
     expect(linkActivity).toHaveBeenCalledTimes(2);
+  });
+
+  it("drops an answer for a host it has since moved off, and asks the new one", async () => {
+    const answers: Array<(value: HostLinkActivityResult) => void> = [];
+    linkActivity.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          answers.push(resolve);
+        })
+    );
+    const { rerender } = render(
+      <HostSessionsSection hostId="studio-01" hostName="studio-01" connected sampledAt={1} />
+    );
+    rerender(
+      <HostSessionsSection hostId="studio-02" hostName="studio-02" connected sampledAt={1} />
+    );
+    expect(linkActivity.mock.calls.map(([payload]) => payload.hostId)).toEqual([
+      "studio-01",
+      "studio-02",
+    ]);
+    await act(async () => answers[0]!({ supported: true, activity: activity(), self: SELF }));
+    expect(screen.getByText("Asking studio-02 about its sessions")).toBeTruthy();
+    await act(async () =>
+      answers[1]!({ supported: true, activity: activity({ drivers: [] }), self: SELF })
+    );
+    expect(group("Projects driven")).toContain("Nobody is driving a project on studio-02");
   });
 
   it("puts a failed read on the section with Retry", async () => {

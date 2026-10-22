@@ -1208,7 +1208,8 @@ describe("HostServer link history", () => {
     const seen: HostSessionContext[] = [];
     server.onSession((ctx) => seen.push(ctx));
     const client = startClient(server);
-    await waitFor(() => seen.length === 1);
+    // Only a Shell that has its WELCOME can ask to resume.
+    await waitFor(() => seen.length === 1 && client.getState().status === "connected");
     const sessionId = seen[0]!.sessionId;
     (seen[0]!.session as unknown as { socket: net.Socket }).socket.destroy();
     await waitFor(() => seen.length === 2 && client.getState().status === "connected");
@@ -1243,8 +1244,8 @@ describe("HostServer link history", () => {
     const expired: string[] = [];
     server.onSession((ctx) => seen.push(ctx));
     server.onSessionExpired((info) => expired.push(info.sessionId));
-    startClient(server, { backoff: { initialMs: 200, maxMs: 200, jitter: 0 } });
-    await waitFor(() => seen.length === 1);
+    const client = startClient(server, { backoff: { initialMs: 200, maxMs: 200, jitter: 0 } });
+    await waitFor(() => seen.length === 1 && client.getState().status === "connected");
     const firstId = seen[0]!.sessionId;
     seen[0]!.session.close("test drop");
     await waitFor(() => expired.includes(firstId));

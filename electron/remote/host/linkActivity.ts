@@ -8,7 +8,7 @@ import type {
   HostDriverObservation,
 } from "../../../shared/types/remoteHosts.js";
 import type { LinkClientInfo } from "../link/messages.js";
-import { MAX_PROJECT_NAME_CHARS } from "../link/schemas.js";
+import { DriverObservationSchema, MAX_PROJECT_NAME_CHARS } from "../link/schemas.js";
 import { MAX_ACTIVITY_DRIVERS, MAX_ACTIVITY_SHELLS } from "../metrics/linkMethods.js";
 
 export interface LinkActivitySources {
@@ -22,7 +22,11 @@ export interface LinkActivitySources {
   sessions: ReadonlyArray<{ sessionId: string; client: LinkClientInfo; connectedAt: number }>;
 }
 
-/** Newest control first: the driver someone just took over from leads. */
+/**
+ * Newest control first. One a Shell's schema would refuse (an id from a
+ * reservation file longer than the link carries) is left out: in a summary
+ * it would cost the whole frame, and in an answer the whole page.
+ */
 export function nameLeases(
   leases: readonly DriveLeaseObservation[],
   projectName: (projectId: string) => string | null
@@ -35,6 +39,7 @@ export function nameLeases(
         projectName: name === null ? null : name.slice(0, MAX_PROJECT_NAME_CHARS),
       };
     })
+    .filter((observation) => DriverObservationSchema.safeParse(observation).success)
     .sort((a, b) => b.holder.acquiredAt - a.holder.acquiredAt);
 }
 

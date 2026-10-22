@@ -230,6 +230,14 @@ describe("HostMetricsClient", () => {
     expect(result.supported && result.activity).not.toHaveProperty("unknownField");
   });
 
+  it("never asks this machine's own link activity over a link", async () => {
+    const h = harness([descriptor("studio")]);
+    await expect(h.client.linkActivity({ hostId: "local" })).rejects.toMatchObject({
+      code: "VALIDATION",
+    });
+    expect(h.calls).toEqual([]);
+  });
+
   it("says a host from before link activity can't report it, and passes other failures on", async () => {
     const h = harness([descriptor("old")]);
     h.hook.call = async () => {

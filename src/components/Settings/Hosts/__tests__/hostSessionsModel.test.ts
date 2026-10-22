@@ -71,7 +71,7 @@ describe("describeDriverRow", () => {
 });
 
 describe("describeAttachedShell", () => {
-  it("says when a launch connected and what it drives", () => {
+  it("says when a launch's session started, which a resume keeps, and what it drives", () => {
     const shell = {
       sessionId: "s2",
       clientId: "launch-2",
@@ -82,7 +82,7 @@ describe("describeAttachedShell", () => {
     };
     expect(describeAttachedShell(shell, [driver()], SELF, NOW)).toEqual({
       label: "Greg's Mac Studio (this launch)",
-      description: `Connected since ${time(at(11, 32, 41))} · driving daintree`,
+      description: `Session started ${time(at(11, 32, 41))} · driving daintree`,
     });
     const many = { ...shell, drivingProjectIds: ["a", "b", "c", "d"] };
     expect(describeAttachedShell(many, [], SELF, NOW).description).toContain("driving 4 projects");

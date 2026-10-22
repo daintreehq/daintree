@@ -116,7 +116,7 @@ export function describeDriverRow(
   return { label: driver.projectName ?? "Unknown project", description: `${who} · ${state}` };
 }
 
-/** An attached launch, when it connected, and what it drives. */
+/** An attached launch, when its session started (a resume keeps it), and what it drives. */
 export function describeAttachedShell(
   shell: HostAttachedShell,
   drivers: readonly HostDriverObservation[],
@@ -135,6 +135,6 @@ export function describeAttachedShell(
         : `driving ${pluralize(names.length, "project")}`;
   return {
     label: shellName(shell.clientId, shell.clientName, self),
-    description: `Connected since ${formatHostTime(shell.connectedAt, now)} · ${driving}`,
+    description: `Session started ${formatHostTime(shell.connectedAt, now)} · ${driving}`,
   };
 }
