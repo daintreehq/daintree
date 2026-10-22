@@ -3,6 +3,10 @@ import { parseHostScopedKey, type HostId } from "../../../shared/types/remoteHos
 import type { PluginUiPromptParams } from "../../../shared/types/pluginUiPrompt.js";
 import { requestConsentInWebContents } from "../../ipc/handlers/pluginCapability.js";
 import { PluginRendererDispatcher } from "../../services/plugin/PluginRendererDispatcher.js";
+import {
+  PanelReloadRejectedError,
+  PluginPanelReloadDispatcher,
+} from "../../services/plugin/PluginPanelReloadDispatcher.js";
 import { PluginUIPromptDispatcher } from "../../services/plugin/PluginUIPromptDispatcher.js";
 import {
   PluginActionsGetPayloadSchema,
@@ -12,6 +16,7 @@ import {
   PluginConsentPayloadSchema,
   PluginDispatchPayloadSchema,
   PluginFrontendMethod,
+  PluginPanelReloadPayloadSchema,
   PluginPromptCancelPayloadSchema,
   PluginPromptPayloadSchema,
   PluginToastPayloadSchema,
@@ -190,6 +195,7 @@ export function installPluginShellRequests(deps: PluginShellRequestDeps = {}): (
   let disposed = false;
   const prompts = new PluginUIPromptDispatcher({ isDisposed: () => disposed });
   const actions = new PluginRendererDispatcher({ isDisposed: () => disposed });
+  const panelReloads = new PluginPanelReloadDispatcher({ isDisposed: () => disposed });
   const openPrompts = new Map<
     string,
     { controller: AbortController; hostId: HostId; webContentsId: number; pluginId: string }
@@ -432,7 +438,25 @@ export function installPluginShellRequests(deps: PluginShellRequestDeps = {}): (
     return actions.sendAgentsListToWebContents(scopeView(request, parsed.data.pluginId));
   };
 
+  /** A host plugin's `reloadPanel()` for a panel in the view that drives its project. */
+  const reloadPanel = async (request: ViewReverseRequest): Promise<unknown> => {
+    const parsed = PluginPanelReloadPayloadSchema.safeParse(request.payload);
+    if (!parsed.success) throw malformed("panel reload");
+    const wc = scopeView(request, parsed.data.pluginId);
+    // A parked view would hold the request until the person switches back.
+    if (isCachedViewWebContents(wc.id)) return { result: "unavailable" };
+    try {
+      return {
+        result: await panelReloads.reloadInView(wc, parsed.data.pluginId, parsed.data.panelId),
+      };
+    } catch (err) {
+      if (err instanceof PanelReloadRejectedError) return { rejected: err.reason };
+      throw err;
+    }
+  };
+
   const disposers = [
+    registerReverseRequestMethod(PluginFrontendMethod.PANEL_RELOAD, reloadPanel),
     registerReverseRequestMethod(PluginFrontendMethod.DISPATCH, dispatchAction),
     registerReverseRequestMethod(PluginFrontendMethod.AGENTS_LIST, listAgents),
     registerReverseRequestMethod(PluginFrontendMethod.ACTIONS_LIST, listActions),
@@ -466,6 +490,7 @@ export function installPluginShellRequests(deps: PluginShellRequestDeps = {}): (
   return () => {
     disposed = true;
     for (const dispose of disposers.splice(0).reverse()) dispose();
+    panelReloads.dispose();
     for (const entry of openPrompts.values()) entry.controller.abort();
     openPrompts.clear();
     prompts.dispose();

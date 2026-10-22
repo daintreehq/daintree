@@ -7,7 +7,9 @@ import type {
   PluginPanelReloadRejection,
   PluginPanelReloadRequest,
 } from "../../../shared/types/pluginPanelReload.js";
+import { isRemoteEndpointHandle, type ClientEndpoint } from "../../ipc/endpoint.js";
 import type { PanelReloadTarget } from "./PluginPanelLifecycleBroker.js";
+import { PluginFrontendMethod, RemotePanelReloadAnswerSchema } from "./pluginFrontendRequests.js";
 
 /**
  * How long a `host.reloadPanel()` round-trip may take. The renderer answers as
@@ -24,15 +26,36 @@ export interface PanelReloadWebContents {
   removeListener(event: "destroyed", listener: () => void): unknown;
 }
 
+/**
+ * `host.reloadPanel()` names a panel the plugin does not own, or one that
+ * belongs to no plugin; carried as an error so a Shell can relay which.
+ */
+export class PanelReloadRejectedError extends Error {
+  constructor(
+    readonly reason: PluginPanelReloadRejection,
+    message: string
+  ) {
+    super(message);
+    this.name = "PanelReloadRejectedError";
+  }
+}
+
+/**
+ * Only `isDisposed` is needed to deliver a reload into a view directly (a
+ * Shell relaying a host's request); routing one from the broker's record also
+ * needs the rest.
+ */
 export interface PluginPanelReloadDispatcherDeps {
   isDisposed: () => boolean;
-  locate: (panelId: string, pluginId: string) => PanelReloadTarget;
+  locate?: (panelId: string, pluginId: string) => PanelReloadTarget;
   /** A live, non-destroyed WebContents for the id, or `null`. */
-  resolveWebContents: (webContentsId: number) => PanelReloadWebContents | null;
+  resolveWebContents?: (webContentsId: number) => PanelReloadWebContents | null;
   /** Whether the id is a cached (deactivated) project view. */
-  isCached: (webContentsId: number) => boolean;
+  isCached?: (webContentsId: number) => boolean;
   /** The project a project view belongs to, or `null` when unknown. */
-  projectFor: (webContentsId: number) => string | null;
+  projectFor?: (webContentsId: number) => string | null;
+  /** The attached endpoint a remote view's handle names, if any. */
+  resolveEndpoint?: (handle: number) => ClientEndpoint | undefined;
   now?: () => number;
 }
 
@@ -55,7 +78,8 @@ const RESULTS = new Set<PanelReloadResult>([
 const REJECTIONS = new Set<PluginPanelReloadRejection>(["foreign", "non-plugin"]);
 
 function rejectionError(pluginId: string, panelId: string, reason: PluginPanelReloadRejection) {
-  return new Error(
+  return new PanelReloadRejectedError(
+    reason,
     reason === "foreign"
       ? `Plugin "${pluginId}" reloadPanel: panel "${panelId}" belongs to another plugin`
       : `Plugin "${pluginId}" reloadPanel: panel "${panelId}" is not a plugin panel`
@@ -74,6 +98,7 @@ function rejectionError(pluginId: string, panelId: string, reason: PluginPanelRe
  */
 export class PluginPanelReloadDispatcher {
   private readonly pending = new Map<string, PendingReload>();
+  private readonly remotePending = new Set<{ pluginId: string; controller: AbortController }>();
   private listenerCleanup: (() => void) | null = null;
 
   constructor(private readonly deps: PluginPanelReloadDispatcherDeps) {}
@@ -89,6 +114,7 @@ export class PluginPanelReloadDispatcher {
     boundProjectId: string | null
   ): Promise<PanelReloadResult> {
     if (this.deps.isDisposed()) return Promise.resolve("unavailable");
+    if (!this.deps.locate) return Promise.resolve("unavailable");
     const target = this.deps.locate(panelId, pluginId);
     switch (target.kind) {
       case "foreign":
@@ -104,18 +130,73 @@ export class PluginPanelReloadDispatcher {
     }
 
     const { sourceId } = target;
+    if (isRemoteEndpointHandle(sourceId)) {
+      return this.reloadRemote(pluginId, panelId, sourceId, boundProjectId);
+    }
     if (boundProjectId !== null) {
-      const sourceProject = this.deps.projectFor(sourceId);
+      const sourceProject = this.deps.projectFor?.(sourceId) ?? null;
       if (sourceProject !== null && sourceProject !== boundProjectId) {
         return Promise.reject(rejectionError(pluginId, panelId, "foreign"));
       }
     }
     // A cached project view is parked: sending would queue the request until the
     // user switches back, long after the worker stopped caring.
-    if (this.deps.isCached(sourceId)) return Promise.resolve("unavailable");
-    const webContents = this.deps.resolveWebContents(sourceId);
+    if (this.deps.isCached?.(sourceId)) return Promise.resolve("unavailable");
+    const webContents = this.deps.resolveWebContents?.(sourceId) ?? null;
     if (!webContents) return Promise.resolve("unavailable");
+    return this.reloadInView(webContents, pluginId, panelId);
+  }
 
+  /**
+   * Ask the Shell driving a remote view to reload the panel. The Shell checks
+   * its own binding and cache state; a view that left or never answered is
+   * `"unavailable"`, like a local view that went away.
+   */
+  private async reloadRemote(
+    pluginId: string,
+    panelId: string,
+    handle: number,
+    boundProjectId: string | null
+  ): Promise<PanelReloadResult> {
+    const endpoint = this.deps.resolveEndpoint?.(handle);
+    if (!endpoint || endpoint.isClosed()) return "unavailable";
+    if (boundProjectId !== null && endpoint.projectId !== boundProjectId) {
+      if (endpoint.projectId === null) return "unavailable";
+      throw rejectionError(pluginId, panelId, "foreign");
+    }
+    const entry = { pluginId, controller: new AbortController() };
+    this.remotePending.add(entry);
+    let answer: unknown;
+    try {
+      answer = await endpoint.request(
+        PluginFrontendMethod.PANEL_RELOAD,
+        { pluginId, panelId },
+        { timeoutMs: PLUGIN_PANEL_RELOAD_TIMEOUT_MS, signal: entry.controller.signal }
+      );
+    } catch {
+      return "unavailable";
+    } finally {
+      this.remotePending.delete(entry);
+    }
+    if (entry.controller.signal.aborted) return "unavailable";
+    const parsed = RemotePanelReloadAnswerSchema.safeParse(answer);
+    if (!parsed.success) return "unavailable";
+    if ("rejected" in parsed.data) {
+      throw rejectionError(pluginId, panelId, parsed.data.rejected);
+    }
+    return parsed.data.result;
+  }
+
+  /**
+   * Send a reload to one view and await its acknowledgment. A Shell uses this
+   * directly for a host's request, having already scoped the view.
+   */
+  reloadInView(
+    webContents: PanelReloadWebContents,
+    pluginId: string,
+    panelId: string
+  ): Promise<PanelReloadResult> {
+    if (this.deps.isDisposed()) return Promise.resolve("unavailable");
     this.ensureListener();
 
     return new Promise<PanelReloadResult>((resolve, reject) => {
@@ -163,6 +244,9 @@ export class PluginPanelReloadDispatcher {
       entry.destroyedCleanup();
       entry.resolve("unavailable");
     }
+    for (const remote of this.remotePending) {
+      if (remote.pluginId === pluginId) remote.controller.abort();
+    }
   }
 
   dispose(): void {
@@ -174,6 +258,8 @@ export class PluginPanelReloadDispatcher {
       entry.resolve("unavailable");
     }
     this.pending.clear();
+    for (const remote of this.remotePending) remote.controller.abort();
+    this.remotePending.clear();
   }
 
   private ensureListener(): void {

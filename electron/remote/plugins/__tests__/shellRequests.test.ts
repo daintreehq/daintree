@@ -234,6 +234,56 @@ describe("Shell answers for a host's plugins", () => {
     expect(result.agents[0]).toMatchObject({ terminalId: "t-1", agentId: "claude" });
   });
 
+  it("reloads a host plugin's panel in the driving view and relays the acknowledgment", async () => {
+    const wc = makeView();
+    const answer = ask(PluginFrontendMethod.PANEL_RELOAD, {
+      pluginId: "acme.deploy",
+      panelId: "p1",
+    });
+    await Promise.resolve();
+    const [channel, sent] = wc.send.mock.calls[0]!;
+    expect(channel).toBe(CHANNELS.PLUGIN_PANEL_RELOAD_REQUEST);
+    expect(sent).toMatchObject({ panelId: "p1", pluginId: "acme.deploy" });
+    electronMock.emit(
+      CHANNELS.PLUGIN_PANEL_RELOAD_RESPONSE,
+      { sender: { id: WC_ID } },
+      { requestId: sent.requestId, result: "scheduled" }
+    );
+    await expect(answer).resolves.toEqual({ result: "scheduled" });
+  });
+
+  it("relays a view's refusal of a panel the plugin doesn't own", async () => {
+    const wc = makeView();
+    const answer = ask(PluginFrontendMethod.PANEL_RELOAD, {
+      pluginId: "acme.deploy",
+      panelId: "p1",
+    });
+    await Promise.resolve();
+    const sent = wc.send.mock.calls[0]![1];
+    electronMock.emit(
+      CHANNELS.PLUGIN_PANEL_RELOAD_RESPONSE,
+      { sender: { id: WC_ID } },
+      { requestId: sent.requestId, rejected: "foreign" }
+    );
+    await expect(answer).resolves.toEqual({ rejected: "foreign" });
+  });
+
+  it("answers unavailable for a cached view without messaging it", async () => {
+    const wc = makeView();
+    registry.cached.add(WC_ID);
+    await expect(
+      ask(PluginFrontendMethod.PANEL_RELOAD, { pluginId: "acme.deploy", panelId: "p1" })
+    ).resolves.toEqual({ result: "unavailable" });
+    expect(wc.send).not.toHaveBeenCalled();
+  });
+
+  it("refuses a panel reload for a view bound to another host", async () => {
+    makeView(`other-host:${PROJECT}`);
+    await expect(
+      ask(PluginFrontendMethod.PANEL_RELOAD, { pluginId: "acme.deploy", panelId: "p1" })
+    ).rejects.toMatchObject({ code: "VALIDATION" });
+  });
+
   it("refuses an agents list for a view bound to another host", async () => {
     makeView(`other-host:${PROJECT}`);
     await expect(

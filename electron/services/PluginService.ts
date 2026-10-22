@@ -1350,6 +1350,7 @@ export class PluginService {
       resolveWebContents: (id) => resolveLiveWebContents(id),
       isCached: (id) => isCachedViewWebContents(id),
       projectFor: (id) => getProjectForWebContents(id),
+      resolveEndpoint: (handle) => getEndpointRegistry().getByHandle(handle),
     });
 
     this.promptDispatcher = new PluginUIPromptDispatcher({

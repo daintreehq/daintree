@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { CHANNELS } from "../../../ipc/channels.js";
 import type { PanelReloadTarget } from "../PluginPanelLifecycleBroker.js";
+import type { ClientEndpoint } from "../../../ipc/endpoint.js";
+import { PluginFrontendMethod } from "../pluginFrontendRequests.js";
 
 const ipcMainMock = vi.hoisted(() => {
   const listeners = new Map<string, Set<(...args: unknown[]) => void>>();
@@ -255,5 +257,87 @@ describe("PluginPanelReloadDispatcher", () => {
     );
     await expect(dispatcher.reload("acme", "p1", null)).resolves.toBe("unavailable");
     expect(deps.locate).not.toHaveBeenCalled();
+  });
+
+  describe("a panel in a remote view", () => {
+    function remoteSetup(
+      answer: (
+        method: string,
+        payload: unknown,
+        options?: { signal?: AbortSignal }
+      ) => Promise<unknown>,
+      endpointOverrides: Record<string, unknown> = {}
+    ) {
+      const endpoint = {
+        handle: -2,
+        projectId: "proj-a",
+        isClosed: () => false,
+        request: vi.fn(answer),
+        ...endpointOverrides,
+      };
+      const resolveEndpoint = vi.fn(() => endpoint as unknown as ClientEndpoint);
+      const ctx = setup({ kind: "located", sourceId: -2 }, { resolveEndpoint });
+      return { ...ctx, endpoint, resolveEndpoint };
+    }
+
+    it("asks the endpoint and never resolves a local WebContents", async () => {
+      const { dispatcher, endpoint, deps } = remoteSetup(async () => ({ result: "scheduled" }));
+      await expect(dispatcher.reload("acme", "p1", null)).resolves.toBe("scheduled");
+      expect(endpoint.request).toHaveBeenCalledWith(
+        PluginFrontendMethod.PANEL_RELOAD,
+        { pluginId: "acme", panelId: "p1" },
+        { timeoutMs: PLUGIN_PANEL_RELOAD_TIMEOUT_MS, signal: expect.any(AbortSignal) }
+      );
+      expect(deps.resolveWebContents).not.toHaveBeenCalled();
+      expect(deps.isCached).not.toHaveBeenCalled();
+    });
+
+    it("rejects with the Shell's refusal", async () => {
+      const { dispatcher } = remoteSetup(async () => ({ rejected: "non-plugin" }));
+      await expect(dispatcher.reload("acme", "p1", null)).rejects.toThrow(/not a plugin panel/);
+    });
+
+    it("is unavailable when the endpoint is gone, closed, errors, or answers nonsense", async () => {
+      const closed = remoteSetup(async () => ({ result: "scheduled" }), { isClosed: () => true });
+      await expect(closed.dispatcher.reload("acme", "p1", null)).resolves.toBe("unavailable");
+
+      const failing = remoteSetup(async () => {
+        throw new Error("HOST_DISCONNECTED");
+      });
+      await expect(failing.dispatcher.reload("acme", "p1", null)).resolves.toBe("unavailable");
+
+      const malformed = remoteSetup(async () => ({ result: "bogus" }));
+      await expect(malformed.dispatcher.reload("acme", "p1", null)).resolves.toBe("unavailable");
+
+      const missing = setup(
+        { kind: "located", sourceId: -2 },
+        { resolveEndpoint: () => undefined }
+      );
+      await expect(missing.dispatcher.reload("acme", "p1", null)).resolves.toBe("unavailable");
+    });
+
+    it("keeps a project-bound caller out of another project's view", async () => {
+      const { dispatcher, endpoint } = remoteSetup(async () => ({ result: "scheduled" }));
+      await expect(dispatcher.reload("acme", "p1", "proj-b")).rejects.toThrow(/another plugin/);
+      await expect(dispatcher.reload("acme", "p1", "proj-a")).resolves.toBe("scheduled");
+      expect(endpoint.request).toHaveBeenCalledTimes(1);
+    });
+
+    it("aborts in-flight requests when the plugin unloads or the dispatcher disposes", async () => {
+      let signal: AbortSignal | undefined;
+      const hang = (_m: string, _p: unknown, options?: { signal?: AbortSignal }) => {
+        signal = options?.signal;
+        return new Promise<unknown>((_resolve, reject) => {
+          signal?.addEventListener("abort", () => reject(new Error("aborted")));
+        });
+      };
+      const { dispatcher } = remoteSetup(hang);
+      const first = dispatcher.reload("acme", "p1", null);
+      dispatcher.cancelPlugin("other");
+      expect(signal?.aborted).toBeFalsy();
+      dispatcher.cancelPlugin("acme");
+      await expect(first).resolves.toBe("unavailable");
+      expect(signal?.aborted).toBe(true);
+    });
   });
 });
