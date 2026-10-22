@@ -53,7 +53,9 @@ export interface ElementRefs {
 /**
  * One framework's reader. `extract` must be synchronous and bounded: it runs
  * inside a pointer move when the phase is `hover`, so it reads only what labels
- * a highlight there and saves anything costly for `selection`.
+ * a highlight there and saves anything costly for `selection`. Null says it
+ * looked and found nothing of its framework's; a reader that cannot look
+ * throws instead, and gives no answer either way.
  */
 export interface ElementPickerExtractor {
   extract(

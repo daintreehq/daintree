@@ -1357,6 +1357,53 @@ describe("the bridge's element exchanges", () => {
     expect(widened.observations[0]?.componentChain.components[0]?.rootsComplete).toBe(false);
   });
 
+  it("leaves each root's markup and styles out of a widened selection that cannot fit them", () => {
+    const list = document.getElementById("list")!;
+    // Three UTF-8 bytes a character: every root's markup is within its own
+    // ceiling, and 32 of them are past one envelope.
+    const attributes = Array.from(
+      { length: 16 },
+      (_, index) => `aria-x${index}="${"€".repeat(160)}"`
+    ).join(" ");
+    list.innerHTML = Array.from(
+      { length: 32 },
+      (_, index) => `<p id="p${index}" ${attributes}></p>`
+    ).join("");
+    const roots = Array.from(list.children);
+    installReact({
+      extract: () => ({
+        componentChain: { nearestId: "c1", components: [record], truncated: false },
+        frameworkEvidence: [
+          {
+            kind: "generic",
+            framework: "react",
+            fields: Array.from({ length: 4 }, (_, index) => ({
+              name: "f" + index,
+              value: "€".repeat(256),
+            })),
+          },
+        ],
+      }),
+      locate: () => ({ elements: roots, data: { complete: true } }),
+    });
+    start();
+    roots[0]!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    expect(ofType("selectionChanged").at(-1)?.observations[0]?.context).toBeDefined();
+
+    press("ArrowUp", { altKey: true });
+
+    const widened = ofType("selectionChanged").at(-1)!;
+    expect(widened.scope).toEqual({ kind: "component", componentId: "c1" });
+    expect(widened.observations).toHaveLength(32);
+    expect(widened.observations.some((observation) => observation.context !== undefined)).toBe(
+      false
+    );
+    expect(ofType("runtimeIssue").at(-1)).toMatchObject({
+      code: "capacity",
+      detail: expect.stringContaining("markup and styles left out"),
+    });
+  });
+
   it("goes back to element scope when the component is no longer described", () => {
     const first = document.getElementById("first")!;
     const second = document.getElementById("second")!;

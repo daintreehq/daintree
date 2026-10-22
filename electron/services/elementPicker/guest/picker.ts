@@ -875,7 +875,8 @@ export function createPicker(host: PickerHost): PickerHandle {
     host.post({
       type: "runtimeIssue",
       code: "capacity",
-      detail: "ancestry shortened and element markup and styles left out to fit the selection into one envelope",
+      detail:
+        "ancestry shortened and element markup and styles left out to fit the selection into one envelope",
     });
     return bare;
   }
@@ -975,7 +976,9 @@ export function createPicker(host: PickerHost): PickerHandle {
       });
     }
     const text = serialize({ observations, scope: reportedScope });
-    if (onlyIfChanged && text !== null && text === lastSelection) return { sent: false, detections };
+    if (onlyIfChanged && text !== null && text === lastSelection) {
+      return { sent: false, detections };
+    }
     const event = fitSelection({
       type: "selectionChanged",
       observations,

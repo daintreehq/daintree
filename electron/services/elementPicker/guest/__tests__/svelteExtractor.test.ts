@@ -361,7 +361,10 @@ describe("metadata capabilities", () => {
     ["malformed.json", notExposed, notExposed],
   ])("answers %s with what its shape supports", (fixture, location, chain) => {
     const node = stampFrom(fixture);
-    const { events } = start();
+    const { events, picker } = start();
+    // The host has finished looking at the page and Svelte's is its only
+    // reader: what Svelte says it cannot offer, nothing else could.
+    picker.setAvailability({ detection: "settled", extractors: { svelte: "installed" } });
 
     click(node);
     const capabilities = lastSelection(events)[0]?.capabilities;

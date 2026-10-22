@@ -282,7 +282,8 @@ describe("element refs", () => {
     bootstrap.stop();
 
     const reply = JSON.parse(bootstrap.log.at(-1)!.detail as string) as ExtractReply;
-    expect(reply).toEqual({ id: 9, contributions: [] });
+    // A reader that threw has not looked, so it is not among those that found nothing either.
+    expect(reply).toEqual({ id: 9, contributions: [], empty: [] });
   });
 
   it("names what a locate found by token, before its reply, and says when some could not be", () => {
