@@ -114,6 +114,8 @@ export interface TerminalState {
   location?: PanelLocation;
   /** Restore target of a parked panel; written only with `location: "background"`. */
   backgroundRestoreLocation?: "grid" | "dock";
+  /** See `BasePanelData.pendingDockWorktreeId`. */
+  pendingDockWorktreeId?: string | null;
   /** Command to execute after shell starts (e.g., 'claude' for AI agents) */
   command?: string;
   isInputLocked?: boolean;
