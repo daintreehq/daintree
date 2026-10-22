@@ -2,6 +2,7 @@ import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { defineAction } from "../defineAction";
 import { z } from "zod";
 import { pluginClient } from "@/clients/pluginClient";
+import { isRemoteBoundView } from "@/clients/operationsClient";
 import { parseProjectPluginInstanceKey } from "@shared/types/plugin";
 import { pluginDocumentRuntime } from "@/services/plugin/pluginDocumentRuntime";
 import {
@@ -540,6 +541,13 @@ export function registerPluginActions(actions: ActionRegistry, callbacks: Action
       }),
       // Every outcome, failures included, is reported by the notice below.
       selfNotifiesOnExecutionError: true,
+      // Main refuses it for a remote-bound view on purpose: the save dialog
+      // would open on the host's screen.
+      isEnabled: () => !isRemoteBoundView(),
+      disabledReason: () =>
+        isRemoteBoundView()
+          ? "Plugin data can't be backed up from a window on another host"
+          : undefined,
       run: async ({ pluginId }) => {
         const retry = () =>
           void actionService.dispatch("plugin.backupDatabases", { pluginId }, { source: "user" });

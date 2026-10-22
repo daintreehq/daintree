@@ -11,6 +11,9 @@ const clientMocks = vi.hoisted(() => ({
 
 vi.mock("@/clients/pluginClient", () => ({ pluginClient: clientMocks }));
 
+const remoteBound = vi.hoisted(() => ({ value: false }));
+vi.mock("@/clients/operationsClient", () => ({ isRemoteBoundView: () => remoteBound.value }));
+
 const notifyMock = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/notify", () => ({ notify: notifyMock }));
 
@@ -774,6 +777,16 @@ describe("plugin.backupDatabases", () => {
     expect(payload.type).toBe("error");
     expect(payload.message).toBe("backup.db already exists in /tmp.");
     expect(payload.action.label).toBe("Try again");
+  });
+
+  it("is not enabled in a remote-bound view", () => {
+    const def = definition("plugin.backupDatabases");
+    const ctx = {} as Parameters<NonNullable<typeof def.isEnabled>>[0];
+    remoteBound.value = true;
+    expect(def.isEnabled?.(ctx)).toBe(false);
+    expect(def.disabledReason?.(ctx)).toBeTruthy();
+    remoteBound.value = false;
+    expect(def.isEnabled?.(ctx)).toBe(true);
   });
 
   it("is UI only: closed to plugins and hidden from agents", () => {

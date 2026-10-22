@@ -1,4 +1,5 @@
 import type { ComponentType } from "react";
+import { isRemoteBoundView } from "@/clients/operationsClient";
 import { isOwnPluginAction } from "@shared/utils/remotePluginContributions";
 import {
   ArrowDownFromLine,
@@ -155,8 +156,11 @@ export function readPanelKindMenuCapabilities(
         : null,
     pluginSettingsId:
       config?.hasPluginSettings === true && config.extensionId ? config.extensionId : null,
+    // A remote-bound view can't back up: the save dialog would open on the host.
     pluginBackupId:
-      config?.hasPluginDatabases === true && config.extensionId ? config.extensionId : null,
+      config?.hasPluginDatabases === true && config.extensionId && !isRemoteBoundView()
+        ? config.extensionId
+        : null,
     pluginMenuItems,
     pluginOwnerId: config?.extensionId ?? null,
   };
