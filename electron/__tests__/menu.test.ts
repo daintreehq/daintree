@@ -211,7 +211,7 @@ const autoUpdaterServiceMock = vi.hoisted(() => {
   let menuState: "idle" | "checking" | "ready" = "idle";
   return {
     checkForUpdatesManually: vi.fn(),
-    quitAndInstallIfReady: vi.fn(),
+    confirmAndQuitAndInstall: vi.fn(),
     getMenuState: vi.fn(() => menuState),
     onMenuStateChange: vi.fn(() => vi.fn()),
     __setMenuState: (state: "idle" | "checking" | "ready") => {
@@ -1083,10 +1083,10 @@ describe("update menu lifecycle", () => {
       await flushClick();
 
       expect(autoUpdaterServiceMock.checkForUpdatesManually).toHaveBeenCalledTimes(1);
-      expect(autoUpdaterServiceMock.quitAndInstallIfReady).not.toHaveBeenCalled();
+      expect(autoUpdaterServiceMock.confirmAndQuitAndInstall).not.toHaveBeenCalled();
     });
 
-    it("calls quitAndInstallIfReady when state is ready", async () => {
+    it("calls confirmAndQuitAndInstall when state is ready", async () => {
       autoUpdaterServiceMock.__setMenuState("ready");
       const item = findUpdateItem(capturedTemplate, "check-for-updates-mac");
 
@@ -1097,7 +1097,7 @@ describe("update menu lifecycle", () => {
       );
       await flushClick();
 
-      expect(autoUpdaterServiceMock.quitAndInstallIfReady).toHaveBeenCalledTimes(1);
+      expect(autoUpdaterServiceMock.confirmAndQuitAndInstall).toHaveBeenCalledTimes(1);
       expect(autoUpdaterServiceMock.checkForUpdatesManually).not.toHaveBeenCalled();
     });
   });

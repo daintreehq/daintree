@@ -59,6 +59,7 @@ import {
 } from "./lifecycle/windowRestore.js";
 import { restoreFleetAfterCrash, setCrashFleetRestorer } from "./lifecycle/crashWindowRestore.js";
 import { registerShutdownHandler } from "./lifecycle/shutdown.js";
+import { setAttachedShellsProvider } from "./lifecycle/attachedShells.js";
 import { getActiveShutdown } from "./lifecycle/shutdownCoordinator.js";
 import {
   setMainWindow,
@@ -1047,6 +1048,8 @@ if (!gotTheLock) {
         }
       : undefined,
   });
+
+  setAttachedShellsProvider(() => getRemoteService("hostMode")?.getAttachedClients() ?? []);
 
   registerShutdownHandler({
     getPtyClient,

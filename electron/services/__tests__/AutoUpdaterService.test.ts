@@ -117,8 +117,12 @@ vi.mock("../TelemetryService.js", () => ({
 vi.mock("electron", () => ({
   app: appMock,
   ipcMain: ipcMainMock,
-  BrowserWindow: { getAllWindows: () => [windowMock] },
+  BrowserWindow: { getAllWindows: () => [windowMock], getFocusedWindow: () => null },
+  dialog: { showMessageBox: vi.fn() },
 }));
+
+const updateWarningMock = vi.hoisted(() => ({ showUpdateWarning: vi.fn() }));
+vi.mock("../../utils/quitWarning.js", () => updateWarningMock);
 
 vi.mock("../../ipc/utils.js", () => ({
   broadcastToRenderer: broadcastMock,
@@ -155,6 +159,10 @@ vi.mock("../../lifecycle/armRelaunch.js", () => armRelaunchMock);
 
 import { autoUpdaterService } from "../AutoUpdaterService.js";
 import { CHANNELS } from "../../ipc/channels.js";
+import {
+  isExitConfirmationPending,
+  setAttachedShellsProvider,
+} from "../../lifecycle/attachedShells.js";
 import { PENDING_UPDATE_INSTALL_STAGES } from "../../utils/updateInstallStages.js";
 
 const CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000;
@@ -2140,6 +2148,80 @@ describe("AutoUpdaterService", () => {
       expect(autoUpdaterService.quitAndInstallIfReady()).toBe(false);
       vi.advanceTimersByTime(0);
       expect(autoUpdaterMock.quitAndInstall).not.toHaveBeenCalled();
+    });
+
+    describe("with Shells attached to this host", () => {
+      const quitHandler = () =>
+        (ipcMainMock.handle as Mock).mock.calls.find(
+          (args) => args[0] === CHANNELS.UPDATE_QUIT_AND_INSTALL
+        )![1] as (event: unknown) => void;
+
+      beforeEach(() => {
+        setAttachedShellsProvider(() => [{ clientName: "MacBook Pro" }]);
+        downloadedHandler({ version: "2.0.0" });
+      });
+
+      afterEach(() => {
+        setAttachedShellsProvider(null);
+        updateWarningMock.showUpdateWarning.mockReset();
+      });
+
+      it("asks first and leaves the update staged when cancelled", async () => {
+        updateWarningMock.showUpdateWarning.mockResolvedValue(false);
+
+        await expect(autoUpdaterService.confirmAndQuitAndInstall()).resolves.toBe(false);
+
+        expect(updateWarningMock.showUpdateWarning).toHaveBeenCalledWith(
+          [{ clientName: "MacBook Pro" }],
+          expect.anything(),
+          windowMock
+        );
+        expect(shutdownCoordinatorMock.requestGracefulShutdownForUpdate).not.toHaveBeenCalled();
+        expect(autoUpdaterService.getMenuState()).toBe("ready");
+        expect(isExitConfirmationPending()).toBe(false);
+      });
+
+      it("installs once confirmed", async () => {
+        updateWarningMock.showUpdateWarning.mockResolvedValue(true);
+
+        await expect(autoUpdaterService.confirmAndQuitAndInstall()).resolves.toBe(true);
+
+        expect(shutdownCoordinatorMock.requestGracefulShutdownForUpdate).toHaveBeenCalledTimes(1);
+      });
+
+      it("gates the renderer toast the same way", async () => {
+        updateWarningMock.showUpdateWarning.mockResolvedValue(false);
+
+        quitHandler()(TRUSTED_SENDER);
+        await vi.waitFor(() => expect(updateWarningMock.showUpdateWarning).toHaveBeenCalled());
+        await vi.waitFor(() => expect(isExitConfirmationPending()).toBe(false));
+
+        expect(shutdownCoordinatorMock.requestGracefulShutdownForUpdate).not.toHaveBeenCalled();
+      });
+
+      it("does not stack a second dialog on a pending one", async () => {
+        let answer: (confirmed: boolean) => void = () => {};
+        updateWarningMock.showUpdateWarning.mockReturnValue(
+          new Promise<boolean>((resolve) => {
+            answer = resolve;
+          })
+        );
+
+        const first = autoUpdaterService.confirmAndQuitAndInstall();
+        await expect(autoUpdaterService.confirmAndQuitAndInstall()).resolves.toBe(false);
+        answer(false);
+        await first;
+
+        expect(updateWarningMock.showUpdateWarning).toHaveBeenCalledTimes(1);
+      });
+
+      it("does not ask when nothing is attached any more", async () => {
+        setAttachedShellsProvider(() => []);
+
+        await expect(autoUpdaterService.confirmAndQuitAndInstall()).resolves.toBe(true);
+
+        expect(updateWarningMock.showUpdateWarning).not.toHaveBeenCalled();
+      });
     });
 
     it("coordinates the shutdown when ready, and installs only once it settles", () => {
