@@ -36,7 +36,8 @@ import { HostServer } from "./HostServer.js";
 import { hostLaunchCommand, hostLocation } from "./hostLocation.js";
 import type { HostSocketLocation } from "./hostSocketPath.js";
 import { initRemoteHostsHost } from "./initHost.js";
-import { installHostMetricsHost } from "../metrics/hostMetricsHost.js";
+import { installHostMetricsHost, installLinkActivityHost } from "../metrics/hostMetricsHost.js";
+import { composeLinkActivity } from "./linkActivity.js";
 import { installCanopyHost } from "../canopy/hostInstall.js";
 import { installAssistantSenderHost } from "../assistant/hostSenders.js";
 import { installHostMcpRelay } from "../assistant/hostMcpRelay.js";
@@ -365,6 +366,27 @@ async function buildHostListener(
       }
       notifyMcpDriveTargetChange();
       notify();
+    })
+  );
+
+  // What a Shell's view of this host shows of its links, drivers and attached Shells.
+  teardowns.push(
+    installLinkActivityHost(server, () => {
+      const { version, commit } = getLocalHandshakeInfo();
+      return composeLinkActivity({
+        now: now(),
+        listeningSince: server.listeningSince,
+        version,
+        commit,
+        history: server.linkHistory(),
+        leases: lease.snapshotLeases(),
+        projectName: (projectId) => projectStore.getProjectById(projectId)?.name ?? null,
+        sessions: server.sessions.map((ctx) => ({
+          sessionId: ctx.sessionId,
+          client: ctx.client,
+          connectedAt: connectedAtBySession.get(ctx.sessionId) ?? now(),
+        })),
+      });
     })
   );
 

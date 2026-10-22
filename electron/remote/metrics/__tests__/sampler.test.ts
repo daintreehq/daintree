@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { HostMetricsSampler, type HostSampleSources } from "../sampler.js";
+import { MAX_HOST_SUMMARY_DRIVERS } from "../../../../shared/types/remoteHosts.js";
 
 function sources(overrides: Partial<HostSampleSources> = {}): HostSampleSources {
   let tick = 0;
@@ -25,6 +26,39 @@ function sources(overrides: Partial<HostSampleSources> = {}): HostSampleSources 
 }
 
 describe("HostMetricsSampler", () => {
+  it("carries every driven project up to its bound, a failed read as unknown, and none from a source without it", async () => {
+    const driven = (n: number) =>
+      Array.from({ length: n }, (_, i) => ({
+        projectId: `p${i}`,
+        projectName: `project ${i}`,
+        holder: {
+          leaseId: i,
+          endpointId: `s${i}:e1`,
+          clientId: `c${i}`,
+          clientName: "greg-mbp",
+          isHostLocal: false,
+          acquiredAt: i,
+        },
+        state: "live" as const,
+        awayUntil: null,
+      }));
+    const many = await new HostMetricsSampler(
+      sources({ drivers: () => driven(MAX_HOST_SUMMARY_DRIVERS + 3) })
+    ).sample();
+    expect(many.drivers).toHaveLength(MAX_HOST_SUMMARY_DRIVERS);
+    expect(many.drivers![0]!.projectId).toBe("p0");
+    await expect(
+      new HostMetricsSampler(
+        sources({
+          drivers: () => {
+            throw new Error("lease unreadable");
+          },
+        })
+      ).sample()
+    ).resolves.toMatchObject({ drivers: null });
+    expect(await new HostMetricsSampler(sources()).sample()).not.toHaveProperty("drivers");
+  });
+
   it("carries the host's forge observations, and a failed read as unknown", async () => {
     const github = {
       providerId: "daintree.github.github",

@@ -11,10 +11,14 @@ import {
 } from "../../link/__tests__/linkTestUtils.js";
 import { AttentionPayloadSchema, MetricsLinkMethod } from "../linkMethods.js";
 import { EmptyPayloadSchema } from "../../host/linkMethods.js";
-import type { HostWorktreeEntry } from "../../../../shared/types/ipc/hostMetrics.js";
+import type {
+  HostLinkActivity,
+  HostWorktreeEntry,
+} from "../../../../shared/types/ipc/hostMetrics.js";
 import {
   ATTENTION_COOLDOWN_MS,
   installHostMetricsHostWith,
+  installLinkActivityHost,
   type MetricsHostDeps,
   type MetricsSessionSource,
   type WaitingEvent,
@@ -431,5 +435,46 @@ describe("installHostMetricsHostWith", () => {
     expect(heard[1]).toMatchObject({ terminalId: "loud", quiet: false });
     expect(heard.some((body) => body.terminalId === "off")).toBe(false);
     dispose();
+  });
+});
+
+describe("installLinkActivityHost", () => {
+  const activity: HostLinkActivity = {
+    observedAt: 1,
+    listeningSince: 1,
+    version: "0.46.0",
+    commit: "abc",
+    events: [],
+    eventsTruncated: false,
+    drivers: [],
+    attached: [],
+  };
+
+  it("answers sessions attached before and after it, reading afresh each time", async () => {
+    const server = new FakeServer();
+    const before = await pair();
+    server.attach(before.host, "early");
+    let reads = 0;
+    const dispose = installLinkActivityHost(server, () => ({ ...activity, observedAt: ++reads }));
+    const after = await pair();
+    server.attach(after.host, "late");
+
+    expect(await before.client.call(MetricsLinkMethod.LINK_ACTIVITY, null)).toMatchObject({
+      observedAt: 1,
+    });
+    expect(await after.client.call(MetricsLinkMethod.LINK_ACTIVITY, null)).toMatchObject({
+      observedAt: 2,
+    });
+    dispose();
+  });
+
+  it("stops wiring new sessions once disposed", async () => {
+    const server = new FakeServer();
+    installLinkActivityHost(server, () => activity)();
+    const p = await pair();
+    server.attach(p.host, "late");
+    await expect(p.client.call(MetricsLinkMethod.LINK_ACTIVITY, null)).rejects.toMatchObject({
+      code: "UNSUPPORTED",
+    });
   });
 });

@@ -1074,6 +1074,11 @@ export class RemoteHostManager {
     return this.connections.get(hostId);
   }
 
+  /** Who this Shell launch is to every host it dials. */
+  get localClient(): LinkClientInfo {
+    return this.options.client;
+  }
+
   /**
    * Something that keeps a host's connection open while it says so (a
    * window bound to it, a port forward). Asked on every idle sweep.

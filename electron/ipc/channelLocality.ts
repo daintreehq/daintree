@@ -448,6 +448,7 @@ export const CHANNEL_LOCALITY = {
   "host-metrics:event": "shell",
   "host-metrics:get-snapshots": "shell",
   "host-metrics:list-fleet-targets": "shell",
+  "host-metrics:link-activity": "shell",
   "host-metrics:list-worktrees": "shell",
   "host-metrics:submit-fleet": "shell",
   "host-mode:event": "shell",

@@ -378,6 +378,27 @@ export interface DriveLeaseState {
   holder: DriveLeaseHolder | null;
 }
 
+/**
+ * One project's lease as its host sees it: who holds it, and whether that
+ * holder is there (`live`) or away inside the reservation that keeps the
+ * project for it until `awayUntil`, by the host's clock.
+ */
+export interface DriveLeaseObservation {
+  projectId: string;
+  holder: DriveLeaseHolder;
+  state: "live" | "away";
+  /** When the lease passes on unless its holder comes back; null while it is there. */
+  awayUntil: number | null;
+}
+
+export interface HostDriverObservation extends DriveLeaseObservation {
+  /** Null when the host has no project by that id, such as a reservation for one since removed. */
+  projectName: string | null;
+}
+
+/** Projects a summary names drivers for: the overview's line, not an inventory. */
+export const MAX_HOST_SUMMARY_DRIVERS = 32;
+
 /** Summary frame each host streams every few seconds to every connected client. */
 export interface HostMetricsSummary {
   hostId: HostId;
@@ -404,7 +425,14 @@ export interface HostMetricsSummary {
   projectCount: number | null;
   /** Worktrees across open projects; null when the read failed. */
   worktreeCount: number | null;
+  /** The newest holder across the host's projects: what a Shell from before `drivers` reads. */
   driver: DriveLeaseHolder | null;
+  /**
+   * Every project someone drives, newest control first, up to
+   * {@link MAX_HOST_SUMMARY_DRIVERS}. Absent from a host that doesn't report
+   * it; null when the read failed.
+   */
+  drivers?: HostDriverObservation[] | null;
   /** Installed agent CLIs and their versions, as the Host's detection reports them. */
   agentClis: Array<{ agentId: string; version: string | null }>;
   /**

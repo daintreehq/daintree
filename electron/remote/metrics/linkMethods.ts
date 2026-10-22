@@ -1,5 +1,7 @@
 import { z } from "zod";
 import { FLEET_BANDS } from "../../../shared/utils/fleetBands.js";
+import { DriverObservationSchema } from "../link/schemas.js";
+import { MAX_LINK_HISTORY, MAX_LINK_HISTORY_TEXT } from "../host/linkHistory.js";
 
 /** Bounds on what one host answers, so a busy host can't flood a Shell. */
 export const MAX_FLEET_TARGETS = 500;
@@ -34,6 +36,12 @@ export const MetricsLinkMethod = {
    * answers UNSUPPORTED, and the Shell falls back to the summary's counts.
    */
   RESTART_IMPACT: "host.restart-impact",
+  /**
+   * Shell → Host: what the host saw happen to its links lately, who drives
+   * each project, and which Shells are attached. A host from before it existed
+   * answers UNSUPPORTED, and the Shell says that host can't report it.
+   */
+  LINK_ACTIVITY: "host.link-activity",
 } as const;
 
 const id = z.string().min(1).max(256);
@@ -157,5 +165,105 @@ export const RestartImpactSchema = z
   .object({
     detail: RestartImpactDetailSchema.nullable(),
     agents: z.object({ working: count, waiting: count.nullable() }).strip().nullable(),
+  })
+  .strip();
+
+/** Bounds on a link-activity answer: a page for a person to read, not an inventory. */
+export const MAX_ACTIVITY_DRIVERS = 200;
+export const MAX_ACTIVITY_SHELLS = 64;
+
+const epochMs = z.number().finite();
+const clientName = z.string().max(256);
+const historyText = z.string().max(MAX_LINK_HISTORY_TEXT);
+const seen = { at: epochMs, clientId: id, clientName };
+
+const LinkEventSchema = z.discriminatedUnion("kind", [
+  z
+    .object({
+      ...seen,
+      kind: z.literal("session-started"),
+      sessionId: id,
+      previousNotResumed: z
+        .enum(["session-unknown", "secret-mismatch", "client-mismatch"])
+        .nullable(),
+    })
+    .strip(),
+  z
+    .object({
+      ...seen,
+      kind: z.literal("session-resumed"),
+      sessionId: id,
+      overLiveLink: z.boolean(),
+    })
+    .strip(),
+  z
+    .object({
+      ...seen,
+      kind: z.literal("link-dropped"),
+      sessionId: id,
+      reason: historyText,
+      by: z.enum(["local", "remote", "transport"]),
+    })
+    .strip(),
+  z
+    .object({
+      ...seen,
+      kind: z.literal("session-ended"),
+      sessionId: id,
+      cause: z.enum([
+        "goodbye",
+        "protocol-error",
+        "grace-expired",
+        "session-cap",
+        "session-replaced",
+        "host-shutdown",
+      ]),
+      reason: historyText.nullable(),
+    })
+    .strip(),
+  z
+    .object({
+      ...seen,
+      kind: z.literal("refused"),
+      reason: z.enum(["unauthorized", "version-mismatch", "protocol", "busy", "shutting-down"]),
+      detail: historyText.nullable(),
+      count: count.min(1),
+      lastAt: epochMs,
+    })
+    .strip(),
+]);
+
+export const LinkActivitySchema = z
+  .object({
+    observedAt: epochMs,
+    listeningSince: epochMs.nullable(),
+    version: z.string().max(256),
+    commit: z.string().max(256),
+    // An event a newer host adds is one this Shell can't name: dropped, not fatal.
+    events: z
+      .array(z.unknown())
+      .max(MAX_LINK_HISTORY)
+      .transform((events) =>
+        events.flatMap((event) => {
+          const parsed = LinkEventSchema.safeParse(event);
+          return parsed.success ? [parsed.data] : [];
+        })
+      ),
+    eventsTruncated: z.boolean(),
+    drivers: z.array(DriverObservationSchema.strip()).max(MAX_ACTIVITY_DRIVERS),
+    attached: z
+      .array(
+        z
+          .object({
+            sessionId: id,
+            clientId: id,
+            clientName,
+            platform: z.enum(["darwin", "linux", "win32"]),
+            connectedAt: epochMs,
+            drivingProjectIds: z.array(id).max(MAX_ACTIVITY_DRIVERS),
+          })
+          .strip()
+      )
+      .max(MAX_ACTIVITY_SHELLS),
   })
   .strip();

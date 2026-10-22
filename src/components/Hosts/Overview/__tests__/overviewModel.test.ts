@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
+import type { HostDriverObservation } from "@shared/types/remoteHosts";
+import { formatHostTime } from "../../hostTime";
 import {
   cpuSeries,
+  describeDriver,
+  describeDriverDetail,
   describeObservedAgents,
   describeProjects,
   describeSwap,
@@ -118,5 +122,93 @@ describe("series", () => {
   it("says nothing about swap a host doesn't report", () => {
     expect(describeSwap(makeSummary({ swapTotalBytes: null, swapUsedBytes: null }))).toBeNull();
     expect(describeSwap(makeSummary({ swapTotalBytes: 0 }))).toBe("No swap");
+  });
+});
+
+describe("describeDriver", () => {
+  const NOW = new Date(2026, 9, 22, 11, 33, 0).getTime();
+  const at = (h: number, m: number, sec: number) => new Date(2026, 9, 22, h, m, sec).getTime();
+
+  function driven(
+    projectName: string,
+    clientId: string,
+    clientName: string,
+    acquiredAt: number,
+    awayUntil: number | null = null,
+    isHostLocal = false
+  ): HostDriverObservation {
+    return {
+      projectId: projectName,
+      projectName,
+      holder: {
+        leaseId: 1,
+        endpointId: `${clientId}:e`,
+        clientId,
+        clientName,
+        isHostLocal,
+        acquiredAt,
+      },
+      state: awayUntil === null ? "live" : "away",
+      awayUntil,
+    };
+  }
+
+  it("names every launch that drives a project once, not just the newest", () => {
+    const summary = makeSummary({
+      sampledAt: NOW,
+      drivers: [
+        driven("site", "c2", "studio-02", at(11, 30, 0)),
+        driven("daintree", "c1", "greg-mbp", at(11, 20, 0)),
+        driven("docs", "c1", "greg-mbp", at(11, 10, 0)),
+      ],
+    });
+    expect(describeDriver(summary)).toBe("Driven from studio-02 and greg-mbp");
+  });
+
+  it("tells two launches of one machine apart, and says which one is away", () => {
+    const relaunched = at(11, 32, 41);
+    const earlier = at(11, 27, 2);
+    const summary = makeSummary({
+      sampledAt: NOW,
+      drivers: [
+        driven("site", "launch-2", "Greg's Mac Studio", relaunched),
+        driven("daintree", "launch-1", "Greg's Mac Studio", earlier, at(11, 32, 53)),
+      ],
+    });
+    expect(describeDriver(summary)).toBe(
+      `Driven from Greg's Mac Studio (since ${formatHostTime(relaunched, NOW)}) and Greg's Mac Studio (away, since ${formatHostTime(earlier, NOW)})`
+    );
+    expect(describeDriverDetail(summary)).toBe(
+      `site: Greg's Mac Studio (since ${formatHostTime(relaunched, NOW)}); daintree: Greg's Mac Studio (since ${formatHostTime(earlier, NOW)}), away until ${formatHostTime(at(11, 32, 53), NOW)}`
+    );
+  });
+
+  it("calls a launch away only when it is away from every project it holds", () => {
+    const summary = makeSummary({
+      sampledAt: NOW,
+      drivers: [
+        driven("site", "c1", "greg-mbp", at(11, 0, 0), at(11, 40, 0)),
+        driven("daintree", "c1", "greg-mbp", at(11, 1, 0)),
+        driven("docs", "local", "studio-01", at(11, 2, 0), null, true),
+      ],
+    });
+    expect(describeDriver(summary)).toBe("Driven from greg-mbp and its own screen");
+  });
+
+  it("reads a host from before drivers by its newest holder, and nobody driving as nothing", () => {
+    const holder = {
+      leaseId: 1,
+      endpointId: "e",
+      clientId: "c",
+      clientName: "greg-mbp",
+      isHostLocal: false,
+      acquiredAt: 1,
+    };
+    expect(describeDriver(makeSummary({ driver: holder }))).toBe("Driven from greg-mbp");
+    expect(describeDriver(makeSummary({ driver: holder, drivers: null }))).toBe(
+      "Driven from greg-mbp"
+    );
+    expect(describeDriver(makeSummary({ driver: null, drivers: [] }))).toBeNull();
+    expect(describeDriverDetail(makeSummary({ driver: holder }))).toBeUndefined();
   });
 });

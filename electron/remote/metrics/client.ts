@@ -2,6 +2,8 @@ import type {
   HostAttentionEvent,
   HostFleetSubmitPayload,
   HostFleetTargetList,
+  HostLinkActivity,
+  HostLinkActivityResult,
   HostMetricsEvent,
   HostMetricsSnapshot,
   HostWorktreeEntry,
@@ -22,6 +24,7 @@ import type { FleetCaller } from "./hostOps.js";
 import {
   AttentionPayloadSchema,
   FleetTargetListSchema,
+  LinkActivitySchema,
   MetricsLinkMethod,
   WorktreeListSchema,
   normalizeFleetOpId,
@@ -53,6 +56,8 @@ export interface HostMetricsClientOptions {
     get(hostId: HostId): MetricsConnection | undefined;
     connectionState(hostId: HostId): HostConnectionState;
     onSessionOpened(listener: (hostId: HostId, session: LinkSession) => void): () => void;
+    /** This Shell launch, as every host it dials knows it. */
+    readonly localClient?: { clientId: string; clientName: string };
   };
   registry: {
     list(): HostDescriptor[];
@@ -104,6 +109,40 @@ function isHostFleetRefusal(error: unknown): boolean {
 function isUnknownOutcome(error: unknown): boolean {
   const code = (error as { code?: unknown } | null)?.code;
   return code === "OUTCOME_UNKNOWN" || code === "HOST_DISCONNECTED";
+}
+
+function isUnsupported(error: unknown): boolean {
+  return (error as { code?: unknown } | null)?.code === "UNSUPPORTED";
+}
+
+/** Names and reasons another machine wrote, made safe to show as one line here. */
+function displaySafeActivity(activity: HostLinkActivity): HostLinkActivity {
+  const name = (text: string | null) => (text === null ? null : displaySafeText(text));
+  return {
+    ...activity,
+    events: activity.events.map((event) => {
+      const safe = { ...event, clientName: displaySafeText(event.clientName) };
+      switch (safe.kind) {
+        case "link-dropped":
+          return { ...safe, reason: displaySafeText(safe.reason) };
+        case "session-ended":
+          return { ...safe, reason: name(safe.reason) };
+        case "refused":
+          return { ...safe, detail: name(safe.detail) };
+        default:
+          return safe;
+      }
+    }),
+    drivers: activity.drivers.map((driver) => ({
+      ...driver,
+      projectName: name(driver.projectName),
+      holder: { ...driver.holder, clientName: displaySafeText(driver.holder.clientName) },
+    })),
+    attached: activity.attached.map((shell) => ({
+      ...shell,
+      clientName: displaySafeText(shell.clientName),
+    })),
+  };
 }
 
 function invalid(message: string): AppError {
@@ -271,6 +310,35 @@ export class HostMetricsClient {
         message: `Host ${hostId} sent an invalid worktree list`,
       });
     return parsed.data.map((entry) => ({ ...entry, hostId }));
+  }
+
+  /**
+   * What a host saw happen to its links, who drives each of its projects and
+   * which Shells are attached to it. A host from before it could say answers
+   * `supported: false`.
+   */
+  async linkActivity(payload: unknown): Promise<HostLinkActivityResult> {
+    const hostId = this.hostIdOf(payload);
+    if (isLocalHostId(hostId)) throw invalid("Link activity is read from a remote host");
+    let answer: unknown;
+    try {
+      answer = await this.connection(hostId).callHost(MetricsLinkMethod.LINK_ACTIVITY, null);
+    } catch (error) {
+      if (isUnsupported(error)) return { supported: false };
+      throw error;
+    }
+    const parsed = LinkActivitySchema.safeParse(answer);
+    if (!parsed.success)
+      throw new AppError({
+        code: "INTERNAL",
+        message: `Host ${hostId} sent invalid link activity`,
+      });
+    const self = this.options.manager.localClient;
+    return {
+      supported: true,
+      activity: displaySafeActivity(parsed.data),
+      self: self ? { clientId: self.clientId, clientName: self.clientName } : null,
+    };
   }
 
   /** Record a summary: the host's own id in it is replaced by the id this Shell knows it by. */

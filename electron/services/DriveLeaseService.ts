@@ -18,7 +18,11 @@ import {
 import { getPtyClient } from "../window/serviceRefs.js";
 import { isLocalViewInActiveUse } from "./hostScreenActivity.js";
 import { createFileReservationStore } from "./driveLeaseReservations.js";
-import type { DriveLeaseHolder, DriveLeaseState } from "../../shared/types/remoteHosts.js";
+import type {
+  DriveLeaseHolder,
+  DriveLeaseObservation,
+  DriveLeaseState,
+} from "../../shared/types/remoteHosts.js";
 import type { PtyHostDriveLease } from "../../shared/types/pty-host.js";
 import type {
   DriveLeaseEvent,
@@ -387,6 +391,26 @@ export class DriveLeaseService {
     return endpoint && this.isPresent(endpoint, projectId)
       ? { kind: "live", holder, endpoint }
       : { kind: "reserved", holder };
+  }
+
+  /**
+   * Every lease as it stands, for showing who drives what. Unlike the getters
+   * above, reading this settles nothing: no lease moves and no grace starts,
+   * ends or runs longer. Attach and transport changes already settle them.
+   */
+  snapshotLeases(): DriveLeaseObservation[] {
+    if (this.disposed) return [];
+    const out: DriveLeaseObservation[] = [];
+    for (const [projectId, lease] of this.leases) {
+      const live = this.holderIsPresent(projectId, lease);
+      out.push({
+        projectId,
+        holder: { ...lease.holder },
+        state: live ? "live" : "away",
+        awayUntil: live ? null : lease.awayUntil,
+      });
+    }
+    return out;
   }
 
   /** The live renderer that drives the project, or null when there is none attached. */

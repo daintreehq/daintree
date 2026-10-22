@@ -18,6 +18,7 @@ import { useSettingsSubpage } from "../SettingsSubpage";
 import { AddHostDialog } from "./AddHostDialog";
 import { ChangeHostTargetDialog } from "./ChangeHostTargetDialog";
 import { HostPluginsSection } from "./HostPluginsSection";
+import { HostSessionsSection } from "./HostSessionsSection";
 import { HostCopySettingsSection } from "./HostCopySettingsSection";
 import { takeFirstConnect } from "./hostCopySettingsRequests";
 import { HostClipboardGrants } from "./HostClipboardGrants";
@@ -101,8 +102,9 @@ const nameCollator = new Intl.Collator(undefined, { sensitivity: "base" });
 
 /**
  * One host, under Settings → Hosts: its name and address, what its link and
- * build report, what it reports having installed, and removing it from this
- * device. The settings header names it and carries the way back.
+ * build report, who drives it and what happened to its links, what it reports
+ * having installed, and removing it from this device. The settings header
+ * names it and carries the way back.
  */
 export function HostDetail({
   entry,
@@ -362,6 +364,13 @@ export function HostDetail({
           />
         </SettingsGroup>
       </SettingsSection>
+
+      <HostSessionsSection
+        hostId={descriptor.id}
+        hostName={hostName}
+        connected={connected}
+        sampledAt={liveSummary?.sampledAt ?? null}
+      />
 
       <SettingsSection title="Communication">
         <SettingsGroup>

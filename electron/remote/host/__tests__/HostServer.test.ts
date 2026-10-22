@@ -1032,9 +1032,11 @@ describe("HostServer session cap", () => {
     await waitFor(() => seen.length === 2);
     one.socket.destroy();
     await waitFor(() => resumable.size === 1);
-    // A few identifiers and a timer are parked, never the dropped session.
+    // A few identifiers and a timer are parked, never the dropped session; the
+    // Shell's name stays so its session's end can still name it.
     expect(Object.keys(resumable.get(seen[0]!.sessionId)!).sort()).toEqual([
       "clientId",
+      "clientName",
       "parkedAt",
       "sessionId",
       "timer",
@@ -1189,5 +1191,112 @@ describe("HostServer and a relaunched Shell (#13909)", () => {
     expect(expired).toEqual([]);
     resumed.raw.socket.destroy();
     back.raw.socket.destroy();
+  });
+});
+
+describe("HostServer link history", () => {
+  it("records when it started listening, and forgets it once closed", async () => {
+    const before = Date.now();
+    const server = await startServer();
+    expect(server.listeningSince).toBeGreaterThanOrEqual(before);
+    await server.close();
+    expect(server.listeningSince).toBeNull();
+  });
+
+  it("records a drop held for resume, the resume, and the session ending", async () => {
+    const server = await startServer({ resumeGraceMs: 60_000 });
+    const seen: HostSessionContext[] = [];
+    server.onSession((ctx) => seen.push(ctx));
+    const client = startClient(server);
+    await waitFor(() => seen.length === 1);
+    const sessionId = seen[0]!.sessionId;
+    (seen[0]!.session as unknown as { socket: net.Socket }).socket.destroy();
+    await waitFor(() => seen.length === 2 && client.getState().status === "connected");
+    await client.stop();
+    await waitFor(() => server.linkHistory().events.length === 4);
+
+    const who = { clientId: "client-a", clientName: "greg-mbp", sessionId };
+    expect(server.linkHistory()).toEqual({
+      truncated: false,
+      events: [
+        expect.objectContaining({
+          ...who,
+          kind: "session-ended",
+          cause: "goodbye",
+          reason: expect.any(String),
+        }),
+        expect.objectContaining({ ...who, kind: "session-resumed", overLiveLink: false }),
+        expect.objectContaining({
+          ...who,
+          kind: "link-dropped",
+          reason: "socket closed",
+          by: "transport",
+        }),
+        expect.objectContaining({ ...who, kind: "session-started", previousNotResumed: null }),
+      ],
+    });
+  });
+
+  it("names why a Shell's previous session wasn't resumed on the session it got instead", async () => {
+    const server = await startServer({ resumeGraceMs: 20 });
+    const seen: HostSessionContext[] = [];
+    const expired: string[] = [];
+    server.onSession((ctx) => seen.push(ctx));
+    server.onSessionExpired((info) => expired.push(info.sessionId));
+    startClient(server, { backoff: { initialMs: 200, maxMs: 200, jitter: 0 } });
+    await waitFor(() => seen.length === 1);
+    const firstId = seen[0]!.sessionId;
+    seen[0]!.session.close("test drop");
+    await waitFor(() => expired.includes(firstId));
+    await waitFor(() => seen.length === 2);
+
+    const kinds = server
+      .linkHistory()
+      .events.map((event) =>
+        event.kind === "session-started"
+          ? [event.kind, event.sessionId, event.previousNotResumed]
+          : event.kind === "session-ended"
+            ? [event.kind, event.sessionId, event.cause]
+            : event.kind === "link-dropped"
+              ? [event.kind, event.sessionId, event.reason]
+              : [event.kind]
+      );
+    expect(kinds).toEqual([
+      ["session-started", seen[1]!.sessionId, "session-unknown"],
+      ["session-ended", firstId, "grace-expired"],
+      ["link-dropped", firstId, "test drop"],
+      ["session-started", firstId, null],
+    ]);
+  });
+
+  it("counts a launch retrying into the same refusal on one entry, never keeping the token", async () => {
+    const server = await startServer();
+    for (let i = 0; i < 3; i++) {
+      const raw = await rawHello("f".repeat(64), "c1");
+      await closedSocket(raw.socket);
+    }
+    const accepted = await rawHello(server.token, "c1");
+    await waitFor(() => server.sessions.length === 1);
+    const again = await rawHello("f".repeat(64), "c1");
+    await closedSocket(again.socket);
+
+    const { events } = server.linkHistory();
+    expect(
+      events.map((event) => [event.kind, event.kind === "refused" ? event.count : null])
+    ).toEqual([
+      ["refused", 1],
+      ["session-started", null],
+      ["refused", 3],
+    ]);
+    expect(events[2]).toMatchObject({
+      kind: "refused",
+      reason: "unauthorized",
+      clientId: "c1",
+      clientName: "n",
+      detail: null,
+    });
+    expect(JSON.stringify(events)).not.toContain(server.token);
+    expect(JSON.stringify(events)).not.toContain("f".repeat(64));
+    accepted.socket.destroy();
   });
 });

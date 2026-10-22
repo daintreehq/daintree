@@ -30,7 +30,7 @@ vi.mock("../../../window/serviceRefs.js", () => ({
   getWorkspaceClientRef: () => workspace.client,
 }));
 const store = vi.hoisted(() => ({
-  projects: [] as Array<{ id: string; path: string; status: string }>,
+  projects: [] as Array<{ id: string; path: string; status: string; name?: string }>,
 }));
 const DEFAULT_PROJECTS = [
   { id: "p1", path: "/p1", status: "active" },
@@ -52,10 +52,22 @@ vi.mock("../../../services/AgentAvailabilityStore.js", () => ({
 }));
 const lease = vi.hoisted(() => ({
   holders: null as null | Record<string, { acquiredAt: number }>,
+  away: new Set<string>(),
 }));
 vi.mock("../../../services/DriveLeaseService.js", () => ({
   peekDriveLeaseService: () =>
-    lease.holders ? { getHolder: (id: string) => lease.holders?.[id] ?? null } : null,
+    lease.holders
+      ? {
+          getHolder: (id: string) => lease.holders?.[id] ?? null,
+          snapshotLeases: () =>
+            Object.entries(lease.holders ?? {}).map(([projectId, holder]) => ({
+              projectId,
+              holder,
+              state: lease.away.has(projectId) ? "away" : "live",
+              awayUntil: lease.away.has(projectId) ? 99 : null,
+            })),
+        }
+      : null,
 }));
 const computeProjectAgentCounts = vi.hoisted(() =>
   vi.fn(
@@ -85,6 +97,7 @@ beforeEach(() => {
   getAllProjects.mockReset();
   getAllProjects.mockImplementation(() => store.projects);
   lease.holders = null;
+  lease.away.clear();
   scratches.list = [];
   computeProjectAgentCounts.mockClear();
   workspace.client = null;
@@ -275,6 +288,35 @@ describe("one host-summary sample", () => {
     expect(getAllProjects).toHaveBeenCalledTimes(1);
     // Every registered project and scratch, not only the open ones.
     expect(computeProjectAgentCounts.mock.calls[0]![0]).toEqual(["p1", "p2", "p3", "s1"]);
+  });
+
+  it("names every driven project it lists, newest control first, away holders included", async () => {
+    store.projects = [
+      { id: "p1", path: "/p1", status: "active", name: "daintree" },
+      { id: "p2", path: "/p2", status: "background", name: "site" },
+    ];
+    // A reservation for a project since removed isn't this host's to report.
+    lease.holders = { p1: { acquiredAt: 5 }, p2: { acquiredAt: 9 }, gone: { acquiredAt: 12 } };
+    lease.away.add("p1");
+    const readers = createHostSampleSources().beginSample!();
+    expect(readers.drivers!()).toEqual([
+      {
+        projectId: "p2",
+        projectName: "site",
+        holder: { acquiredAt: 9 },
+        state: "live",
+        awayUntil: null,
+      },
+      {
+        projectId: "p1",
+        projectName: "daintree",
+        holder: { acquiredAt: 5 },
+        state: "away",
+        awayUntil: 99,
+      },
+    ]);
+    expect(readers.driver()).toEqual({ acquiredAt: 9 });
+    expect(getAllProjects).toHaveBeenCalledTimes(1);
   });
 
   it("lists them again next sample, so a change shows", async () => {

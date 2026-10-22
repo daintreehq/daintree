@@ -4,6 +4,7 @@ import { HOST_METRICS_METHOD_CHANNELS } from "./hostMetrics.preload.js";
 import type {
   HostFleetSubmitPayload,
   HostFleetTargetList,
+  HostLinkActivityResult,
   HostMetricsSnapshot,
   HostWorktreeEntry,
 } from "../../../shared/types/ipc/hostMetrics.js";
@@ -30,6 +31,11 @@ export const hostMetricsNamespace = defineIpcNamespace({
       HOST_METRICS_METHOD_CHANNELS.listWorktrees,
       async (payload: { hostId: string }): Promise<HostWorktreeEntry[]> =>
         requireRemoteService("hostMetrics").listWorktrees(payload)
+    ),
+    linkActivity: op(
+      HOST_METRICS_METHOD_CHANNELS.linkActivity,
+      async (payload: { hostId: string }): Promise<HostLinkActivityResult> =>
+        requireRemoteService("hostMetrics").linkActivity(payload)
     ),
   },
 });

@@ -2,7 +2,11 @@ import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import type { AgentId } from "../../../shared/types/agent.js";
-import type { DriveLeaseHolder, HostPlatform } from "../../../shared/types/remoteHosts.js";
+import type {
+  DriveLeaseHolder,
+  HostDriverObservation,
+  HostPlatform,
+} from "../../../shared/types/remoteHosts.js";
 import { getAgentAvailabilityStore } from "../../services/AgentAvailabilityStore.js";
 import { peekDriveLeaseService } from "../../services/DriveLeaseService.js";
 import { helpSessionService } from "../../services/HelpSessionService.js";
@@ -21,6 +25,7 @@ import {
 import { executableForSpawn } from "../../utils/windowsExecutable.js";
 import { getSanitizedProcessEnv } from "../../utils/gitEnv.js";
 import { createForgeObserver } from "./hostForges.js";
+import { nameLeases } from "../host/linkActivity.js";
 import type { HostSampleSources, ObservedAgents, SampleReaders } from "./sampler.js";
 
 type ProjectInventory = ReturnType<typeof projectStore.getAllProjects>;
@@ -169,6 +174,23 @@ async function countWorktrees(
   }
 }
 
+/**
+ * Each of this host's projects someone drives, newest control first, and
+ * whether its holder is there. Read without settling any lease, so it adds no
+ * moves or grace to what {@link currentDriver}'s reads already do.
+ */
+function currentDrivers(
+  projects: () => ProjectInventory = () => projectStore.getAllProjects()
+): HostDriverObservation[] {
+  const lease = peekDriveLeaseService();
+  if (!lease) return [];
+  const names = new Map(projects().map((project) => [project.id, project.name]));
+  return nameLeases(
+    lease.snapshotLeases().filter((observation) => names.has(observation.projectId)),
+    (projectId) => names.get(projectId) ?? null
+  );
+}
+
 /** The most recent holder across this host's projects, when anyone drives one. */
 function currentDriver(
   projects: () => ProjectInventory = () => projectStore.getAllProjects()
@@ -216,6 +238,7 @@ export function createHostSampleSources(now: () => number = Date.now): HostSampl
     agents: () => observeAgents({ readTerminals: getSharedTerminalSnapshot }),
     projects: () => projectsSample(openProjects()),
     driver: () => currentDriver(),
+    drivers: () => currentDrivers(),
     beginSample(): SampleReaders {
       // One project list per sample, failure included: a store that threw for
       // one reader is unknown to all three, and the next sample asks again.
@@ -239,6 +262,7 @@ export function createHostSampleSources(now: () => number = Date.now): HostSampl
           }),
         projects: async () => projectsSample(openProjects(inventory())),
         driver: () => currentDriver(inventory),
+        drivers: () => currentDrivers(inventory),
       };
     },
     async agentClis() {

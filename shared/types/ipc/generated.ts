@@ -1181,6 +1181,10 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("./hostMetrics.js").HostMetricsSnapshot[];
   };
+  "host-metrics:link-activity": {
+    args: [payload: { hostId: string }];
+    result: import("./hostMetrics.js").HostLinkActivityResult;
+  };
   "host-metrics:list-fleet-targets": {
     args: [payload: { hostId: string }];
     result: import("./hostMetrics.js").HostFleetTargetList;
