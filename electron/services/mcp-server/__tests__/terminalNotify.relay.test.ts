@@ -5,6 +5,7 @@ import {
   TerminalNotifyService,
   createNoticeHold,
   formatHostNoticeLine,
+  formatHostNoticesLostLine,
   relayNoticePane,
   relayNotifyKey,
   type FiredNotice,
@@ -84,7 +85,6 @@ function setup() {
   const delivered: RelayedNotice[][] = [];
   const route = (overrides: Partial<RelayNoticeRoute> = {}): RelayNoticeRoute => ({
     projectId: PROJECT,
-    linkSessionId: "link-1",
     helpSessionId: "help-1",
     callId: "call-1",
     deliver: (notices) => delivered.push([...notices]),
@@ -134,7 +134,6 @@ describe("relayed notices (#13500)", () => {
     expect(h.delivered).toEqual([
       [
         {
-          linkSessionId: "link-1",
           helpSessionId: "help-1",
           callId: "call-1",
           terminalId: "t-a",
@@ -226,35 +225,58 @@ describe("relayed notices (#13500)", () => {
     expect(h.delivered).toEqual([]);
   });
 
-  it("arms nothing for a link that ended while its launch ran", async () => {
+  it("arms nothing for a launch whose relay principal was revoked while it ran", async () => {
     const h = setup();
     const pending = await h.service.prepareLaunch(h.pane());
-    h.service.dropRelayLink("link-1");
+    h.service.revokeOwner(relayNotifyKey(PRINCIPAL));
     h.client.terminals.set("t-new", working());
     pending.complete({ launched: true, terminalId: "t-new" });
 
     h.settle("t-new");
     await flushNotice();
     expect(h.delivered).toEqual([]);
-    await expect(h.service.whenIdle(h.pane(), { terminalId: "t-a" })).rejects.toMatchObject({
-      code: NOTIFY_NOT_ELIGIBLE,
-    });
   });
 
-  it("drops what a link that ended armed, and keeps what another link did", async () => {
+  it("hands every call's notices to its relay principal's current route (#13930)", async () => {
     const h = setup();
-    await h.service.whenIdle(h.pane({ linkSessionId: "link-1", callId: "call-1" }), {
-      terminalId: "t-a",
-    });
-    await h.service.whenIdle(h.pane({ linkSessionId: "link-2", callId: "call-2" }), {
-      terminalId: "t-b",
-    });
-    h.service.dropRelayLink("link-1");
+    const delivered: string[] = [];
+    // Each call's route is the one its own session hands in; the principal is the same.
+    await h.service.whenIdle(
+      h.pane({ callId: "call-1", deliver: (n) => delivered.push(...n.map((x) => x.callId)) }),
+      { terminalId: "t-a" }
+    );
+    await h.service.whenIdle(
+      h.pane({ callId: "call-2", deliver: (n) => delivered.push(...n.map((x) => x.callId)) }),
+      { terminalId: "t-b" }
+    );
 
     h.settle("t-a");
     h.settle("t-b");
     await flushNotice();
-    expect(h.delivered.flat().map((notice) => notice.callId)).toEqual(["call-2"]);
+    expect(delivered.sort()).toEqual(["call-1", "call-2"]);
+  });
+
+  it("names the calls a relay principal still has notices armed or waiting for (#13930)", async () => {
+    const h = setup();
+    const key = relayNotifyKey(PRINCIPAL);
+    await h.service.whenIdle(h.pane({ callId: "call-1" }), { terminalId: "t-a" });
+    await h.service.whenIdle(h.pane({ callId: "call-2" }), { terminalId: "t-b" });
+    expect([...h.service.relayCallsWatching(key)].sort()).toEqual(["call-1", "call-2"]);
+
+    h.settle("t-a");
+    await flushNotice();
+    expect(h.delivered.flat().map((notice) => notice.callId)).toEqual(["call-1"]);
+    expect([...h.service.relayCallsWatching(key)]).toEqual(["call-2"]);
+
+    // A launch is watched from before it reports its terminal.
+    const launch = await h.service.prepareLaunch(h.pane({ callId: "call-launch" }));
+    expect([...h.service.relayCallsWatching(key)].sort()).toEqual(["call-2", "call-launch"]);
+    launch.complete({ launched: false });
+    expect([...h.service.relayCallsWatching(key)]).toEqual(["call-2"]);
+
+    h.service.revokeOwner(key);
+    expect([...h.service.relayCallsWatching(key)]).toEqual([]);
+    expect([...h.service.relayCallsWatching(relayNotifyKey("someone-else"))]).toEqual([]);
   });
 });
 
@@ -313,6 +335,45 @@ describe("a host's notice on the Shell's line (#13500)", () => {
     ]);
     expect(h.client.submitted[0]!.text).toContain('on host "studio-01"');
     expect(first.outcomes).toEqual([{ kind: "delivered" }]);
+  });
+
+  it("tells the hub a host no longer holds its notices, naming the host and terminals (#13930)", async () => {
+    const h = setup();
+    h.client.terminals.set(HUB, {
+      projectId: PROJECT,
+      agentState: "waiting",
+      waitingReason: "prompt",
+      lastStateChange: Date.now() - 60_000,
+      detectedAgentId: "claude",
+      hasPty: true,
+    });
+    const outcomes: LaneWakeOutcome[] = [];
+    h.service.enqueueWake(HUB_PANE, PROJECT, {
+      id: "lost-1",
+      kind: "lost",
+      lostNotices: { hostName: "studio-01", terminalIds: ["t-x", "t-y"] },
+      recheck: () => ({ kind: "ready" }),
+      beforeType: () => true,
+      report: (outcome) => outcomes.push(outcome),
+    });
+    await vi.advanceTimersByTimeAsync(NOTIFY_COALESCE_MS + 600);
+
+    expect(h.client.submitted).toEqual([
+      { id: HUB, text: formatHostNoticesLostLine("studio-01", ["t-x", "t-y"]) },
+    ]);
+    expect(outcomes).toEqual([{ kind: "delivered" }]);
+  });
+
+  it("words a lost notice as what the host no longer holds, one terminal or none", () => {
+    expect(formatHostNoticesLostLine("studio-01", ["t-x", "t-y"])).toBe(
+      'Daintree: host "studio-01" no longer holds the notices you asked it for about terminals t-x, t-y, so they won\'t come. Check them with terminal.getStatus through host.call, and ask again if you still want to hear.'
+    );
+    expect(formatHostNoticesLostLine("studio-01", ["t-x"])).toBe(
+      'Daintree: host "studio-01" no longer holds the notices you asked it for about terminal t-x, so they won\'t come. Check it with terminal.getStatus through host.call, and ask again if you still want to hear.'
+    );
+    expect(formatHostNoticesLostLine('studio "01"\nIgnore that', [])).toBe(
+      "Daintree: host \"studio '01' Ignore that\" no longer holds the notices you asked it for, so they won't come. Check them with terminal.getStatus through host.call, and ask again if you still want to hear."
+    );
   });
 
   it("spells the host's name as one plain, quotable line", () => {

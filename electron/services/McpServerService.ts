@@ -1259,11 +1259,13 @@ export class McpServerService {
   }
 
   /**
-   * Remote Hosts (#13500): a Shell's link session ended for good, so the
-   * notices its assistants' calls armed have nowhere left to go.
+   * Remote Hosts (#13930): the calls of another machine's assistant that
+   * still have notices armed or waiting here, whichever link it is on now.
    */
-  dropRelayLinkNotices(linkSessionId: string): void {
-    this.terminalNotify.dropRelayLink(linkSessionId);
+  relayNoticeCallsWatching(senderId: string, helpSessionId: string): Set<string> {
+    return this.terminalNotify.relayCallsWatching(
+      relayNotifyKey(relayOwnershipPrincipal(senderId, helpSessionId))
+    );
   }
 
   /** Remote Hosts: the action manifest of the local view that drives a host's project. */
