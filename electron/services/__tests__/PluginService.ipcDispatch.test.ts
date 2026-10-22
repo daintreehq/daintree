@@ -747,12 +747,14 @@ describe("Plugin IPC handler registration", () => {
         .mockImplementation(() => {});
       try {
         registerReport();
-        service.registerHandler("acme.test-plugin", ACTION, vi.fn().mockResolvedValue({}));
+        const handler = vi.fn().mockResolvedValue({});
+        service.registerHandler("acme.test-plugin", ACTION, handler);
         const failure = await dispatch().then(
           () => null,
           (err: unknown) => err
         );
-        expect(failure).not.toBeNull();
+        expect(handler).toHaveBeenCalledTimes(1);
+        expect((failure as { code?: unknown } | null)?.code).toBe("RESULT_VALIDATION_ERROR");
         expect(appendSpy).not.toHaveBeenCalled();
         expect(isAuditedHandlerFailure(failure)).toBe(false);
       } finally {

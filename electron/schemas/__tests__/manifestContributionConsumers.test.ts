@@ -1089,7 +1089,7 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
           file: "electron/services/plugin/pluginActionResultSchema.ts",
           symbol: "compilePluginActionResultSchema",
         },
-        { file: PLUGIN_SERVICE, symbol: "dispatchHandlerUnmetered (assertPluginActionResult)" },
+        { file: PLUGIN_SERVICE, symbol: "dispatchHandlerUnmetered (enforcePluginActionResult)" },
       ],
       note: "Compiled at registration; every result is checked against it, and the host's copy is published as the catalog and MCP outputSchema.",
     },

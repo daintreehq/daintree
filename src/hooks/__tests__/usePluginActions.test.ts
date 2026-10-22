@@ -248,21 +248,16 @@ describe("usePluginActions", () => {
     renderHook(() => usePluginActions());
     await waitFor(() => expect(onActionsChangedMock).toHaveBeenCalled());
 
-    act(() => emit!({ actions: [descriptor({ resultSchema: { type: "object" } })] }));
-    act(() =>
-      emit!({
-        actions: [
-          descriptor({
-            pluginName: "Renamed",
-            resultSchema: { type: "object", required: ["total"] },
-          }),
-        ],
-      })
-    );
+    const first = { type: "object" as const };
+    const second = { type: "object" as const, required: ["total"] };
+    const entry = () => actionService.get("acme.my-plugin.doThing");
+    act(() => emit!({ actions: [descriptor({ pluginName: "Tool", resultSchema: first })] }));
 
-    const entry = actionService.get("acme.my-plugin.doThing");
-    expect(entry?.outputSchema).toEqual({ type: "object", required: ["total"] });
-    expect(entry?.pluginName).toBe("Renamed");
+    act(() => emit!({ actions: [descriptor({ pluginName: "Tool", resultSchema: second })] }));
+    expect(entry()?.outputSchema).toEqual(second);
+
+    act(() => emit!({ actions: [descriptor({ pluginName: "Renamed", resultSchema: second })] }));
+    expect(entry()?.pluginName).toBe("Renamed");
   });
 
   it("reports a result main refused as RESULT_VALIDATION_ERROR, and says so in the toast", async () => {

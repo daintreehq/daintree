@@ -10,24 +10,29 @@ export interface WorksWithPeer {
 
 /**
  * What this window can see installed, keyed by manifest id: the app's own
- * plugins and the current project's. A project plugin wins a shared id, since
- * that is the one that loads in this project.
+ * plugins and the current project's. An installed plugin and a project plugin
+ * can share an id and both load, so a shared id reads as turned off only when
+ * every copy is, and takes its name from one that is on.
  */
 export function buildWorksWithPeers(
   installed: readonly LoadedPluginInfo[],
   projectPlugins: readonly ProjectPluginInfo[]
 ): ReadonlyMap<string, WorksWithPeer> {
   const peers = new Map<string, WorksWithPeer>();
+  const add = (id: string, copy: WorksWithPeer): void => {
+    const seen = peers.get(id);
+    if (!seen || (seen.turnedOff && !copy.turnedOff)) peers.set(id, copy);
+  };
   for (const plugin of installed) {
     if (plugin.origin === "project") continue;
-    peers.set(plugin.manifest.name, {
+    add(plugin.manifest.name, {
       name: plugin.manifest.displayName ?? plugin.manifest.name,
       turnedOff: plugin.disabled === true,
     });
   }
   for (const plugin of projectPlugins) {
     if (plugin.state === "invalid") continue;
-    peers.set(plugin.id, { name: plugin.displayName, turnedOff: plugin.muted });
+    add(plugin.id, { name: plugin.displayName, turnedOff: plugin.muted });
   }
   return peers;
 }

@@ -56,14 +56,21 @@ describe("buildWorksWithPeers", () => {
     });
   });
 
-  it("answers for the project's own copy when an installed plugin shares its id", () => {
-    const peers = buildWorksWithPeers(
-      [installed("acme.shared", { displayName: "Installed copy", disabled: true })],
-      [projectPlugin("acme.shared", { displayName: "Project copy" })]
-    );
+  it.each([
+    [false, true, { name: "Installed copy", turnedOff: false }],
+    [true, false, { name: "Project copy", turnedOff: false }],
+    [true, true, { name: "Installed copy", turnedOff: true }],
+  ])(
+    "reads a shared id as off only when every copy is (installed off: %s, project off: %s)",
+    (installedOff, projectOff, expected) => {
+      const peers = buildWorksWithPeers(
+        [installed("acme.shared", { displayName: "Installed copy", disabled: installedOff })],
+        [projectPlugin("acme.shared", { displayName: "Project copy", muted: projectOff })]
+      );
 
-    expect(peers.get("acme.shared")).toEqual({ name: "Project copy", turnedOff: false });
-  });
+      expect(peers.get("acme.shared")).toEqual(expected);
+    }
+  );
 });
 
 describe("PluginWorksWith", () => {

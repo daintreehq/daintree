@@ -1223,38 +1223,53 @@ describe("createHost — registerAction", () => {
       await expect(dispatch()).resolves.toEqual({ count: 2 });
     });
 
-    it("holds a call to the contract it started under when the action is replaced mid-run", async () => {
-      let release!: () => void;
-      const gate = new Promise<void>((resolve) => {
-        release = resolve;
-      });
-      let started = false;
-      const { host } = getHost("acme.act-test");
-      host.registerAction(descriptor({ resultSchema: countSchema() }), async () => {
-        started = true;
-        await gate;
-        return { count: 5 };
-      });
+    it.each([
+      [{ count: 5 }, "resolves"],
+      [{ count: "5" }, "rejects"],
+    ] as const)(
+      "holds a call to the contract it started under when the action is replaced mid-run (%j %s)",
+      async (inFlightResult, outcome) => {
+        let release!: () => void;
+        const gate = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        let started = false;
+        const { host } = getHost("acme.act-test");
+        host.registerAction(descriptor({ resultSchema: countSchema() }), async () => {
+          started = true;
+          await gate;
+          return inFlightResult;
+        });
 
-      const running = dispatch();
-      await vi.waitFor(() => {
-        expect(started).toBe(true);
-      });
-      host.registerAction(
-        descriptor({
-          resultSchema: {
-            type: "object",
-            properties: { count: { type: "string" } },
-            required: ["count"],
-          },
-        }),
-        () => ({ count: "five" })
-      );
-      release();
+        const running = dispatch().then(
+          (value) => ({ value }),
+          (err: unknown) => ({ code: (err as { code?: unknown }).code })
+        );
+        try {
+          await vi.waitFor(() => {
+            expect(started).toBe(true);
+          });
+          // The replacement accepts only a string count, the reverse of the first.
+          host.registerAction(
+            descriptor({
+              resultSchema: {
+                type: "object",
+                properties: { count: { type: "string" } },
+                required: ["count"],
+              },
+            }),
+            () => ({ count: "five" })
+          );
+        } finally {
+          release();
+        }
 
-      await expect(running).resolves.toEqual({ count: 5 });
-      await expect(dispatch()).resolves.toEqual({ count: "five" });
-    });
+        expect(await running).toEqual(
+          outcome === "resolves" ? { value: inFlightResult } : { code: "RESULT_VALIDATION_ERROR" }
+        );
+        await expect(dispatch()).resolves.toEqual({ count: "five" });
+      }
+    );
 
     it("names the provider from its manifest, never the contribution", async () => {
       await writePlugin("named", {

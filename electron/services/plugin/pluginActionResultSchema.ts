@@ -63,18 +63,34 @@ export function compilePluginActionResultSchema(
 }
 
 /**
- * Hold a plugin action's result to its declared schema. The problem description
- * names paths and keys taken from the result itself, so it stays in the main
- * log; what the caller receives names only the action.
+ * Hold a plugin action's result to its declared schema and return what the
+ * caller receives. An action without a schema gets its result back untouched.
+ *
+ * With one, the check runs on the result's JSON form and that same copy is what
+ * goes back: a JSON Schema describes JSON, and the agent MCP path sends JSON,
+ * so checking the live value would let a `Date` pass as an object here and
+ * reach an agent as a string its schema refuses. A structured-clone caller then
+ * receives exactly what was checked, too.
+ *
+ * The problem description names paths and keys taken from the result itself,
+ * so it stays in the main log; what the caller receives names only the action.
  */
-export function assertPluginActionResult(
+export function enforcePluginActionResult(
   actionId: string,
   check: PluginActionResultCheck | undefined,
   result: unknown
-): void {
-  if (!check) return;
-  const problem = check(result);
-  if (problem === null) return;
+): unknown {
+  if (!check) return result;
+  let delivered: unknown;
+  let problem: string | null;
+  try {
+    const text = JSON.stringify(result);
+    delivered = text === undefined ? undefined : JSON.parse(text);
+    problem = check(delivered);
+  } catch (err) {
+    problem = `is not JSON-serializable: ${formatErrorMessage(err, "serialization failed")}`;
+  }
+  if (problem === null) return delivered;
   console.warn(
     `[PluginService] Action "${actionId}" returned a result its resultSchema rejects: ${problem}`
   );

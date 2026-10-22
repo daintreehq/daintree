@@ -7697,10 +7697,12 @@ interface PluginActionContribution {
      * JSON Schema the action's result must match, with `type: "object"` at the
      * root. Compiled when the action registers (JSON Schema 2020-12 unless
      * `$schema` names draft-07; references resolve only inside the schema) and
-     * refused there if it can't be enforced as written. Each result is checked as
-     * returned, never coerced, defaulted or stripped; one that does not match
-     * fails the dispatch with `RESULT_VALIDATION_ERROR`. Published to callers as
-     * the catalog entry's `outputSchema`, and to agents as the MCP tool's.
+     * refused there if it can't be enforced as written. Each result is checked in
+     * its JSON form, and that copy is what the caller receives — a `Date` arrives
+     * as its ISO string — but nothing is coerced, defaulted or stripped to make it
+     * fit. One that does not match fails the dispatch with
+     * `RESULT_VALIDATION_ERROR`. Published to callers as the catalog entry's
+     * `outputSchema`, and to agents as the MCP tool's.
      */
     resultSchema?: PluginActionResultSchema;
     /**

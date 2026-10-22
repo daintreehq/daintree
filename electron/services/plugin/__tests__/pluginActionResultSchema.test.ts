@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  assertPluginActionResult,
   compilePluginActionResultSchema,
+  enforcePluginActionResult,
 } from "../pluginActionResultSchema.js";
 
 const ACTION = "acme.tool.report";
@@ -57,13 +57,56 @@ describe("compilePluginActionResultSchema", () => {
   });
 });
 
-describe("assertPluginActionResult", () => {
+describe("enforcePluginActionResult", () => {
   afterEach(() => {
     vi.restoreAllMocks();
   });
 
-  it("lets anything through for an action with no schema", () => {
-    expect(() => assertPluginActionResult(ACTION, undefined, "anything")).not.toThrow();
+  const rejection = (fn: () => unknown): { code?: unknown; message: string } | null => {
+    try {
+      fn();
+      return null;
+    } catch (err) {
+      return err as { code?: unknown; message: string };
+    }
+  };
+
+  it("hands back the very value for an action with no schema", () => {
+    const result = { at: new Date(0) };
+    expect(enforcePluginActionResult(ACTION, undefined, result)).toBe(result);
+  });
+
+  it("checks the JSON a caller receives, so a Date can't pass for an object", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const asObject = compilePluginActionResultSchema(ACTION, {
+      type: "object",
+      properties: { at: { type: "object" } },
+    }).check;
+    const asString = compilePluginActionResultSchema(ACTION, {
+      type: "object",
+      properties: { at: { type: "string" } },
+    }).check;
+
+    expect(
+      rejection(() => enforcePluginActionResult(ACTION, asObject, { at: new Date(0) }))?.code
+    ).toBe("RESULT_VALIDATION_ERROR");
+    expect(enforcePluginActionResult(ACTION, asString, { at: new Date(0) })).toEqual({
+      at: "1970-01-01T00:00:00.000Z",
+    });
+  });
+
+  it("refuses a result that can't become JSON", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { check } = compilePluginActionResultSchema(ACTION, { type: "object" });
+    const cyclic: Record<string, unknown> = {};
+    cyclic.self = cyclic;
+
+    expect(rejection(() => enforcePluginActionResult(ACTION, check, cyclic))?.code).toBe(
+      "RESULT_VALIDATION_ERROR"
+    );
+    expect(rejection(() => enforcePluginActionResult(ACTION, check, undefined))?.code).toBe(
+      "RESULT_VALIDATION_ERROR"
+    );
   });
 
   it("keeps the problem in the log and out of the error the caller gets", () => {
@@ -73,15 +116,12 @@ describe("assertPluginActionResult", () => {
       additionalProperties: false,
     });
 
-    let thrown: unknown;
-    try {
-      assertPluginActionResult(ACTION, check, { "/home/someone/notes.txt": 1 });
-    } catch (err) {
-      thrown = err;
-    }
+    const thrown = rejection(() =>
+      enforcePluginActionResult(ACTION, check, { "/home/someone/notes.txt": 1 })
+    );
 
-    expect((thrown as { code?: unknown }).code).toBe("RESULT_VALIDATION_ERROR");
-    expect((thrown as Error).message).not.toContain("notes.txt");
+    expect(thrown?.code).toBe("RESULT_VALIDATION_ERROR");
+    expect(thrown?.message).not.toContain("notes.txt");
     expect(String(warn.mock.calls[0]?.[0])).toContain("notes.txt");
   });
 });
