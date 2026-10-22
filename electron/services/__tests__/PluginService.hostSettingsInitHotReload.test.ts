@@ -956,7 +956,7 @@ describe("init gate — waitForInit() and pushSnapshotTo() (#9285)", () => {
 
     await service.activateStartupFinishedPlugins();
     await inFlight;
-    expect(send).toHaveBeenCalledTimes(10);
+    expect(send).toHaveBeenCalledTimes(11);
   });
 
   it("pushSnapshotTo() does not send after dispose()", async () => {
