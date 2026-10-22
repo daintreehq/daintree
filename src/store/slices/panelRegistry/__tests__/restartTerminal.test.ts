@@ -1987,6 +1987,32 @@ describe("restartTerminalOnPreset", () => {
     expect(vi.mocked(buildResumeLatestCommand)).not.toHaveBeenCalled();
   });
 
+  it("drops a caller's own resume selector, keeping the rest of its flags", async () => {
+    // `--continue` would reopen whatever conversation the new home has last,
+    // when the confirm promised a new one.
+    seed({
+      agentLaunchFlags: ["--persisted-flag", "--continue", "--verbose"],
+      callerLaunchFlags: ["--continue", "--verbose"],
+    });
+
+    await usePanelStore.getState().restartTerminalOnPreset("test-1", "work");
+
+    expect(pane().callerLaunchFlags).toEqual(["--verbose"]);
+    expect(pane().agentLaunchFlags).not.toContain("--continue");
+    expect(mockSpawn.mock.calls[0]![0].command).not.toContain("--continue");
+  });
+
+  it("leaves a fallback hop's caller flags exactly as they were", async () => {
+    seed({
+      agentLaunchFlags: ["--persisted-flag", "--continue"],
+      callerLaunchFlags: ["--continue"],
+    });
+
+    await usePanelStore.getState().activateFallbackPreset("test-1", "work", "personal");
+
+    expect(pane().callerLaunchFlags).toEqual(["--continue"]);
+  });
+
   it("makes the chosen preset the pane's own when it was on a fallback", async () => {
     seed({
       agentPresetId: "backup",

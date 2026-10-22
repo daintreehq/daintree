@@ -20,6 +20,7 @@ import {
   supportsSessionIdAssignment,
   mintAssignedSessionId,
   stripAssignedSessionIdArgs,
+  stripConversationSelectorFlags,
   relaunchResumeAsAssignedSession,
   DEFAULT_AGENT_SETTINGS,
   DEFAULT_DANGEROUS_ARGS,
@@ -1875,5 +1876,26 @@ describe("plugin-declared resume (#13687)", () => {
       },
     ]);
     expect(buildResumeLatestCommand("pi")).toBe("pi --continue");
+  });
+});
+
+describe("stripConversationSelectorFlags (#13746)", () => {
+  it("drops Claude's resume, assign and continue selectors and keeps everything else", () => {
+    expect(
+      stripConversationSelectorFlags(
+        ["--model", "opus", "--continue", "--resume", "abc", "--session-id", "def", "--verbose"],
+        "claude"
+      )
+    ).toEqual(["--model", "opus", "--verbose"]);
+  });
+
+  it("drops Codex's two-word resume-latest", () => {
+    expect(stripConversationSelectorFlags(["resume", "--last", "--full-auto"], "codex")).toEqual([
+      "--full-auto",
+    ]);
+  });
+
+  it("leaves an agent without a session-id resume untouched", () => {
+    expect(stripConversationSelectorFlags(["--continue"], "no-such-agent")).toEqual(["--continue"]);
   });
 });

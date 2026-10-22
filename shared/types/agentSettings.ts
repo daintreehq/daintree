@@ -1407,6 +1407,38 @@ export function stripAssignedSessionIdArgs(command: string, agentId: string | un
   return command;
 }
 
+/**
+ * Drops the arguments that pick a conversation — the agent's own resume, assign
+ * and resume-latest shapes — from a list of launch flags. For a respawn that
+ * promises a new conversation (#13746): a caller's verbatim `--continue` would
+ * otherwise reopen whichever conversation the new home has last.
+ */
+export function stripConversationSelectorFlags(
+  flags: readonly string[],
+  agentId: string | undefined
+): string[] {
+  const resume = agentId ? getEffectiveAgentConfig(agentId)?.resume : undefined;
+  if (!resume || resume.kind !== "session-id") return [...flags];
+  const shapes = [
+    resume.args(SESSION_ID_SLOT),
+    resume.assignSessionIdArgs?.(SESSION_ID_SLOT) ?? [],
+    resume.resumeLatestArgs ?? [],
+  ].filter((shape) => shape.length > 0);
+  const kept: string[] = [];
+  for (let i = 0; i < flags.length;) {
+    const shape = shapes.find((candidate) =>
+      candidate.every((token, offset) => shapeWordMatches(token, flags[i + offset] ?? ""))
+    );
+    if (shape) {
+      i += shape.length;
+      continue;
+    }
+    kept.push(flags[i]!);
+    i++;
+  }
+  return kept;
+}
+
 const ASSIGNABLE_SESSION_ID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 

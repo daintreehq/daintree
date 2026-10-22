@@ -379,6 +379,7 @@ export {
   supportsExactSessionCapture,
   mintAssignedSessionId,
   stripAssignedSessionIdArgs,
+  stripConversationSelectorFlags,
   buildLaunchCommandFromFlags,
   isAgentBypassSupported,
   resolveEffectiveBypass,

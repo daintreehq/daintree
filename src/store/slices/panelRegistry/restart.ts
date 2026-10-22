@@ -14,6 +14,7 @@ import {
   buildResumeLatestCommand,
   buildLaunchCommandFromFlags,
   stripAssignedSessionIdArgs,
+  stripConversationSelectorFlags,
   supportsSessionIdAssignment,
   reconcileBypassFlags,
   reconcileDecorationFlags,
@@ -1541,10 +1542,16 @@ async function respawnAgentOnPreset(
     const globalUseAltScreen = agentSettings?.globalUseAltScreen ?? false;
     // A failover swaps the provider, not the caller's standing instruction
     // or its own verbatim flags (#13046).
-    const { base: storedBaseFlags, caller: callerLaunchFlags } = splitCallerLaunchFlags(
+    const { base: storedBaseFlags, caller: storedCallerFlags } = splitCallerLaunchFlags(
       terminal.agentLaunchFlags,
       terminal.callerLaunchFlags
     );
+    // A switch promises a new conversation, so a caller's own resume selector
+    // (`--continue`, `resume --last`) can't ride along into the new home.
+    const callerLaunchFlags =
+      mode.kind === "switch"
+        ? stripConversationSelectorFlags(storedCallerFlags, effectiveAgentId)
+        : storedCallerFlags;
     const systemPromptArgs = extractSystemPromptArgs(storedBaseFlags, effectiveAgentId);
     const commandToRun = appendCallerLaunchFlagsToCommand(
       generateAgentCommand(baseCommand, effectiveEntry, effectiveAgentId, {

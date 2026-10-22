@@ -41,14 +41,37 @@ import { useRestartPresetChoices } from "./restartOnPresetChoices";
  */
 export function TerminalRateLimitBadge({ terminalId }: { terminalId: string }) {
   const observedAt = useRateLimitObservationStore((s) => s.observedAtByTerminalId[terminalId]);
-  if (observedAt === undefined) return null;
-  return <RateLimitChip terminalId={terminalId} observedAt={observedAt} />;
+  // Held here, above the chip: a confirm already asked outlives the chip, which
+  // goes the moment its observation expires or is pruned, and the user's answer
+  // still counts.
+  const [request, setRequest] = useState<RestartOnPresetRequest | null>(null);
+  const closeRequest = useCallback(() => setRequest(null), []);
+  return (
+    <>
+      {observedAt !== undefined && (
+        <RateLimitChip terminalId={terminalId} observedAt={observedAt} onPick={setRequest} />
+      )}
+      <RestartOnPresetConfirmDialog
+        request={request}
+        onClose={closeRequest}
+        sourceRef={CHIP_SOURCE}
+      />
+    </>
+  );
 }
 
 const CHIP_SOURCE: { readonly current: ActionSource } = { current: "user" };
 
 // Split out so only a pane that has an observation subscribes to the clock.
-function RateLimitChip({ terminalId, observedAt }: { terminalId: string; observedAt: number }) {
+function RateLimitChip({
+  terminalId,
+  observedAt,
+  onPick,
+}: {
+  terminalId: string;
+  observedAt: number;
+  onPick: (request: RestartOnPresetRequest) => void;
+}) {
   const now = useGlobalMinuteClock();
   const agentId = usePanelStore((s) => {
     const panel = s.panelsById[terminalId];
@@ -59,23 +82,13 @@ function RateLimitChip({ terminalId, observedAt }: { terminalId: string; observe
     return panel && isPtyPanel(panel) ? panel.agentPresetId : undefined;
   });
   const [menuOpen, setMenuOpen] = useState(false);
-  const [request, setRequest] = useState<RestartOnPresetRequest | null>(null);
-  const closeRequest = useCallback(() => setRequest(null), []);
   const live = isRateLimitObservationLive(observedAt, now);
   // An expired chip takes its menu with it, so the quota stops being read too,
   // and a later observation doesn't bring the chip back with the menu open.
   if (!live && menuOpen) setMenuOpen(false);
   const choices = useRestartPresetChoices(agentId, presetId, menuOpen && live);
 
-  const confirmDialog = (
-    <RestartOnPresetConfirmDialog
-      request={request}
-      onClose={closeRequest}
-      sourceRef={CHIP_SOURCE}
-    />
-  );
-  // A confirm already asked outlives the chip: the user's answer still counts.
-  if (!live) return request ? confirmDialog : null;
+  if (!live) return null;
 
   const chipClass = cn(
     HEADER_CHIP_CLASS,
@@ -134,7 +147,7 @@ function RateLimitChip({ terminalId, observedAt }: { terminalId: string; observe
               choices={choices}
               onPick={(preset) => {
                 const panel = usePanelStore.getState().panelsById[terminalId];
-                setRequest({
+                onPick({
                   terminalId,
                   terminalTitle: panel?.title,
                   agentWorking: terminalHasRunningAgentSession(panel),
@@ -144,7 +157,6 @@ function RateLimitChip({ terminalId, observedAt }: { terminalId: string; observe
             />
           </DropdownMenuContent>
         </DropdownMenu>
-        {confirmDialog}
       </>
     );
   }
