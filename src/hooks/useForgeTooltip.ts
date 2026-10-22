@@ -1,5 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import type { IssueTooltipData, PRTooltipData } from "@shared/types/forge";
+import type { IssueLinkTarget } from "@shared/types/ipc/forge";
 import { TtlCache } from "@/utils/ttlCache";
 import { forgeClient } from "@/clients";
 import { useProjectStore } from "@/store/projectStore";
@@ -33,13 +34,19 @@ const credentialStatusCache = new TtlCache<string, boolean>(16, CREDENTIAL_STATU
  * Fetching is enabled only once a forge provider resolves for the current
  * project; `missingCredential` drives the badges' "connect your forge" state
  * (the WCAG-relevant affordance the old `missingToken` flag provided).
+ *
+ * `namedProviderId` is the provider an issue link names (#13744), which may be
+ * neither of the project's current bindings; its credential is the one that
+ * matters, and main reports it unavailable if it's gone.
  */
-function useForgeTooltipGate(role: "issues" | "code") {
+function useForgeTooltipGate(role: "issues" | "code", namedProviderId?: string) {
   const projectId = useProjectStore((s) => s.currentProject?.id ?? null);
   const resolved = useResolvedForgeProvider(projectId);
   // Issue badges ask the issues provider, which a project may bind apart from
   // the code forge (#13700) — and it has its own credential.
-  const { entry, providerId } = role === "issues" ? resolved.issues : resolved;
+  const binding = role === "issues" ? resolved.issues : resolved;
+  const providerResolved = namedProviderId !== undefined || binding.entry !== null;
+  const providerId = namedProviderId ?? binding.providerId;
   const [hasCredential, setHasCredential] = useState<boolean | null>(() =>
     providerId ? (credentialStatusCache.get(providerId) ?? null) : null
   );
@@ -88,24 +95,36 @@ function useForgeTooltipGate(role: "issues" | "code") {
   }, [providerId]);
 
   return {
-    providerResolved: entry !== null,
+    providerResolved,
     providerId,
-    missingCredential: entry !== null && hasCredential === false,
+    missingCredential: providerResolved && hasCredential === false,
     recheckCredential,
   };
 }
 
 const inFlightIssues = new Map<string, Promise<IssueTooltipData | null>>();
 
-export function useIssueTooltip(cwd: string | undefined, issueNumber: number | undefined) {
+/**
+ * `target` says whose number this is (#13744) — see {@link IssueLinkTarget}.
+ * Omitted, the number is read from the project's issues provider.
+ */
+export function useIssueTooltip(
+  cwd: string | undefined,
+  issueNumber: number | undefined,
+  target?: IssueLinkTarget
+) {
   const [state, setState] = useState<TooltipState<IssueTooltipData>>({
     data: null,
     loading: false,
     error: false,
   });
   const mountedRef = useRef(true);
+  const targetRole = target?.role;
+  const issueProviderId = target?.issueProviderId;
+  const issueId = target?.issueId;
+  const issueKey = target?.issueKey;
   const { providerResolved, providerId, missingCredential, recheckCredential } =
-    useForgeTooltipGate("issues");
+    useForgeTooltipGate(targetRole === "code" ? "code" : "issues", issueProviderId);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -118,7 +137,9 @@ export function useIssueTooltip(cwd: string | undefined, issueNumber: number | u
     if (!cwd || !issueNumber || !providerResolved) return;
     if (missingCredential && !(await recheckCredential())) return;
 
-    const cacheKey = `${providerId ?? ""}:${cwd}:${issueNumber}`;
+    // The provider and the issue's own identity, never the number alone: two
+    // trackers can both have an issue 42, and a renumbered issue keeps its id.
+    const cacheKey = `${providerId ?? ""}:${cwd}:${issueId ?? issueKey ?? issueNumber}`;
     const cached = issueCache.get(cacheKey);
     if (cached) {
       setState({ data: cached, loading: false, error: false });
@@ -148,7 +169,18 @@ export function useIssueTooltip(cwd: string | undefined, issueNumber: number | u
 
     const generation = cacheGeneration;
     const promise = (async () => {
-      const data = await forgeClient.getIssueTooltip(cwd, issueNumber);
+      const data = await forgeClient.getIssueTooltip(
+        cwd,
+        issueNumber,
+        targetRole || issueProviderId
+          ? {
+              ...(targetRole ? { role: targetRole } : {}),
+              ...(issueProviderId ? { issueProviderId } : {}),
+              ...(issueId ? { issueId } : {}),
+              ...(issueKey ? { issueKey } : {}),
+            }
+          : undefined
+      );
       // A sidebar refresh landed while this was in flight: the response predates
       // the invalidation, so writing it back would re-poison the cache the
       // refresh just cleared and the next hover would serve pre-refresh data.
@@ -182,7 +214,18 @@ export function useIssueTooltip(cwd: string | undefined, issueNumber: number | u
       if (!mountedRef.current || generation !== cacheGeneration) return;
       setState({ data: null, loading: false, error: true });
     }
-  }, [cwd, issueNumber, providerId, providerResolved, missingCredential, recheckCredential]);
+  }, [
+    cwd,
+    issueNumber,
+    targetRole,
+    issueProviderId,
+    issueId,
+    issueKey,
+    providerId,
+    providerResolved,
+    missingCredential,
+    recheckCredential,
+  ]);
 
   const reset = useCallback(() => {
     setState({ data: null, loading: false, error: false });

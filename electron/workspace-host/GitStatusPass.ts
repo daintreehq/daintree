@@ -13,6 +13,7 @@ import {
   extractIssueNumber,
   deriveIssueTitleFromBranch,
 } from "../services/issueExtractor.js";
+import { claimIssueFromBranch, type ClaimedIssue } from "../services/issueBranchClaim.js";
 import { timeoutSignal, withTimeout } from "../utils/withTimeout.js";
 import type { WorktreeChanges, RepoState } from "../../shared/types/git.js";
 import type { WorktreeMood } from "../../shared/types/worktree.js";
@@ -78,7 +79,10 @@ export interface GitStatusPassHost {
   lastGitStatusCompletedAt: number;
   isUpdating: boolean;
   branch: string | undefined;
+  /** Setting a number here drops any branch claim the old number had. */
   issueNumber: number | undefined;
+  /** Record an issues provider's branch-claimed issue (#13744). */
+  setClaimedIssue?(claim: ClaimedIssue): void;
   branchDerivedTitle: string | undefined;
   issueTitle: string | undefined;
   isDetached: boolean;
@@ -348,8 +352,13 @@ export class GitStatusPass {
         if (hadPendingRefresh) {
           this.watcherController.markPending();
         }
-        const syncIssueNumber = extractIssueNumberSync(currentBranch, this.host.name);
-        if (syncIssueNumber) {
+        const claimed = claimIssueFromBranch(currentBranch, this.host.name);
+        const syncIssueNumber = claimed
+          ? null
+          : extractIssueNumberSync(currentBranch, this.host.name);
+        if (claimed) {
+          this.host.setClaimedIssue?.(claimed);
+        } else if (syncIssueNumber) {
           this.host.issueNumber = syncIssueNumber;
         } else {
           this.host.issueNumber = undefined;

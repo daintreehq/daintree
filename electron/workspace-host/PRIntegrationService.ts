@@ -61,6 +61,8 @@ export interface PRIntegrationCallbacks {
       owner: string;
       /** Canonical repository name the issue belongs to. */
       repo: string;
+      /** Set for an issues provider's branch-claimed issue (#13744). */
+      issueProvenance?: { issueProviderId: string; issueKey: string; issueId?: string };
     }
   ): void;
   onIssueNotFound(worktreeId: string, issueNumber: number): void;
@@ -157,6 +159,7 @@ export class PRIntegrationService {
           providerId: data.providerId,
           owner: data.owner,
           repo: data.repo,
+          issueProvenance: data.issueProvenance,
         });
       })
     );

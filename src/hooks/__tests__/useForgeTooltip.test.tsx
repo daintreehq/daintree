@@ -1,14 +1,16 @@
 // @vitest-environment jsdom
 import { act, renderHook, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PRTooltipData, IssueTooltipData } from "@shared/types/forge";
 
 const { getPRTooltipMock, getIssueTooltipMock, getCredentialStatusMock, provider } = vi.hoisted(
   () => ({
-    provider: { id: "test.forge.provider" },
+    provider: { id: "test.forge.provider", issuesId: undefined as string | undefined },
     getPRTooltipMock: vi.fn<(cwd: string, prNumber: number) => Promise<PRTooltipData | null>>(),
     getIssueTooltipMock:
-      vi.fn<(cwd: string, issueNumber: number) => Promise<IssueTooltipData | null>>(),
+      vi.fn<
+        (cwd: string, issueNumber: number, target?: unknown) => Promise<IssueTooltipData | null>
+      >(),
     getCredentialStatusMock: vi.fn<(providerId: string) => Promise<{ hasCredential: boolean }>>(),
   })
 );
@@ -32,7 +34,7 @@ vi.mock("@/hooks/useResolvedForgeProvider", () => {
       entry,
       providerId: provider.id,
       resolvedVia: "hostname",
-      issues: { entry, providerId: provider.id, resolvedVia: "code" },
+      issues: { entry, providerId: provider.issuesId ?? provider.id, resolvedVia: "code" },
       loading: false,
       refresh: () => {},
     }),
@@ -255,5 +257,61 @@ describe("missing credential recovery", () => {
     } finally {
       provider.id = "test.forge.provider";
     }
+  });
+});
+
+describe("useIssueTooltip asks the provider that owns the number (#13744)", () => {
+  beforeEach(() => {
+    provider.issuesId = "test.tracker.tracker";
+  });
+
+  afterEach(() => {
+    provider.issuesId = undefined;
+  });
+
+  it("gates a number without provenance on the code forge's credential", async () => {
+    getIssueTooltipMock.mockResolvedValue(makeIssue("Code forge issue"));
+
+    const { result } = renderHook(() => useIssueTooltip(CWD, 7, { role: "code" }));
+    await act(async () => {
+      await result.current.fetchTooltip();
+    });
+
+    expect(result.current.providerId).toBe("test.forge.provider");
+    expect(getIssueTooltipMock).toHaveBeenCalledWith(CWD, 7, { role: "code" });
+  });
+
+  it("gates a linked issue on its own provider's credential, whatever the project binds", async () => {
+    getIssueTooltipMock.mockResolvedValue(makeIssue("Linked issue"));
+    const target = { issueProviderId: "acme.linear.linear", issueId: "uuid-7", issueKey: "ENG-7" };
+
+    const { result } = renderHook(() => useIssueTooltip(CWD, 7, target));
+    await waitFor(() => expect(getCredentialStatusMock).toHaveBeenCalledWith("acme.linear.linear"));
+    await act(async () => {
+      await result.current.fetchTooltip();
+    });
+
+    expect(result.current.providerId).toBe("acme.linear.linear");
+    expect(getIssueTooltipMock).toHaveBeenCalledWith(CWD, 7, target);
+  });
+
+  it("never serves one provider's issue 7 for another's", async () => {
+    getIssueTooltipMock.mockResolvedValueOnce(makeIssue("Code forge #7"));
+    getIssueTooltipMock.mockResolvedValueOnce(makeIssue("Tracker ENG-7"));
+
+    const code = renderHook(() => useIssueTooltip(CWD, 7, { role: "code" }));
+    await act(async () => {
+      await code.result.current.fetchTooltip();
+    });
+    const linked = renderHook(() =>
+      useIssueTooltip(CWD, 7, { issueProviderId: "acme.linear.linear", issueKey: "ENG-7" })
+    );
+    await act(async () => {
+      await linked.result.current.fetchTooltip();
+    });
+
+    expect(getIssueTooltipMock).toHaveBeenCalledTimes(2);
+    expect(code.result.current.data?.title).toBe("Code forge #7");
+    expect(linked.result.current.data?.title).toBe("Tracker ENG-7");
   });
 });

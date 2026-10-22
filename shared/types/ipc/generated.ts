@@ -832,7 +832,7 @@ export interface GeneratedIpcInvokeMap {
     result: import("./forge.js").ForgeFirstPageCachePayload | null;
   };
   "forge:get-issue-tooltip": {
-    args: [payload: { cwd: string; issueNumber: number }];
+    args: [payload: { cwd: string; issueNumber: number } & import("./forge.js").IssueLinkTarget];
     result: import("../forge.js").IssueTooltipData | null;
   };
   "forge:get-issues-by-numbers": {

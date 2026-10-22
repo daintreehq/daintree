@@ -84,7 +84,12 @@ export function registerProjectSettingsHandlers(deps: HandlerDependencies = {}):
     // sync with the resolved provider (#8456). No-ops when no host is loaded.
     const providerOverrideChanged =
       (settings.forgeProviderOverride ?? null) !== (previousSettings.forgeProviderOverride ?? null);
-    if (remoteChanged || providerOverrideChanged) {
+    // The host asks main for the issues provider's branch keys whenever its
+    // forge settings are pushed (#13744), so a changed issues binding is pushed
+    // too even though the host never resolves the issues role itself.
+    const issueProviderOverrideChanged =
+      (settings.issueProviderOverride ?? null) !== (previousSettings.issueProviderOverride ?? null);
+    if (remoteChanged || providerOverrideChanged || issueProviderOverrideChanged) {
       const projectPath = project?.path;
       if (projectPath) {
         void deps.worktreeService?.updateForgeSettings(projectPath).catch((error) => {
@@ -92,11 +97,6 @@ export function registerProjectSettingsHandlers(deps: HandlerDependencies = {}):
         });
       }
     }
-    // The workspace host never resolves the issues role — its issue lookups are
-    // numbers read off branch names, which belong to the code forge — so this
-    // one only needs the renderer told.
-    const issueProviderOverrideChanged =
-      (settings.issueProviderOverride ?? null) !== (previousSettings.issueProviderOverride ?? null);
     if (remoteChanged || providerOverrideChanged || issueProviderOverrideChanged) {
       // The renderer caches provider resolution per project and only drops it
       // on `forge:remote-changed` (#11155). That event is signature-gated on

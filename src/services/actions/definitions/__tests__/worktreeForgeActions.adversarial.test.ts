@@ -59,10 +59,26 @@ describe("worktree forge actions", () => {
   });
 
   describe("worktree.openIssue", () => {
-    it("routes through forgeClient", async () => {
+    it("opens a number without provenance on the code forge (#13744)", async () => {
       mockWorktrees.set("wt1", { path: "/repo", issueNumber: 42 });
       await get("worktree.openIssue").run?.(undefined, ctx);
-      expect(forgeClientMock.openIssue).toHaveBeenCalledWith("/repo", 42);
+      expect(forgeClientMock.openIssue).toHaveBeenCalledWith("/repo", 42, { role: "code" });
+    });
+
+    it("opens a linked issue through the provider that served it (#13744)", async () => {
+      mockWorktrees.set("wt1", {
+        path: "/repo",
+        issueNumber: 42,
+        issueProviderId: "acme.linear.linear",
+        issueId: "uuid-42",
+        issueKey: "ENG-42",
+      });
+      await get("worktree.openIssue").run?.(undefined, ctx);
+      expect(forgeClientMock.openIssue).toHaveBeenCalledWith("/repo", 42, {
+        issueProviderId: "acme.linear.linear",
+        issueId: "uuid-42",
+        issueKey: "ENG-42",
+      });
     });
 
     it("throws when worktree has no issue number", async () => {

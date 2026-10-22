@@ -207,6 +207,8 @@ const RATE_LIMIT_SECONDARY_FALLBACK_MS = 60_000; // pause when throttled without
 
 interface WorktreeContext {
   issueNumber?: number;
+  /** Set when an issues provider claimed `issueNumber` from the branch name (#13744). */
+  issueClaim?: { issueProviderId: string; issueKey: string };
   branchName?: string;
   // Last observation of the branch's upstream tracking ref, for spotting a push.
   upstreamRef?: string;
@@ -423,7 +425,16 @@ class PullRequestService {
     const newBranchName = state.branch;
 
     const branchChanged = currentContext?.branchName !== newBranchName;
-    const issueChanged = currentContext?.issueNumber !== newIssueNumber;
+    const newIssueClaim =
+      state.issueProviderId && state.issueKey
+        ? { issueProviderId: state.issueProviderId, issueKey: state.issueKey }
+        : undefined;
+    const claimChanged =
+      currentContext?.issueClaim?.issueProviderId !== newIssueClaim?.issueProviderId ||
+      currentContext?.issueClaim?.issueKey !== newIssueClaim?.issueKey;
+    const issueChanged = currentContext?.issueNumber !== newIssueNumber || claimChanged;
+    // A title fetched for the old owner's issue says nothing about the new one.
+    if (currentContext && claimChanged) this.issueTitleFetchedWorktrees.delete(state.worktreeId);
 
     const shouldTrack = !state.isMainWorktree && isCandidateBranch(newBranchName);
 
@@ -431,6 +442,7 @@ class PullRequestService {
     const nextContext: WorktreeContext = {
       branchName: newBranchName,
       issueNumber: newIssueNumber,
+      ...(newIssueClaim ? { issueClaim: newIssueClaim } : {}),
       upstreamRef: state.upstreamRef,
       upstreamHeadSha: state.upstreamHeadSha,
     };
@@ -2047,37 +2059,16 @@ class PullRequestService {
       for (const [worktreeId, context] of this.candidates) {
         if (!context.issueNumber || typeof context.issueNumber !== "number") continue;
         if (this.issueTitleFetchedWorktrees.has(worktreeId)) continue;
-        const issueNumber = context.issueNumber;
-        const branchAtFetchStart = context.branchName;
         issueRetryLookups.push(
-          bridge
-            .getIssue(providerId, repo, issueNumber)
-            .then((issue) => {
-              const currentBranch = this.candidates.get(worktreeId)?.branchName;
-              if (currentBranch !== branchAtFetchStart) return;
-              if (issue) {
-                this.issueTitleFetchedWorktrees.add(worktreeId);
-                events.emit("sys:issue:detected", {
-                  worktreeId,
-                  issueNumber,
-                  issueTitle: issue.title,
-                  branchName: branchAtFetchStart,
-                  providerId,
-                  owner: repo.owner,
-                  repo: repo.repo,
-                  timestamp: Date.now(),
-                });
-              } else {
-                events.emit("sys:issue:not-found", {
-                  worktreeId,
-                  issueNumber,
-                  timestamp: Date.now(),
-                });
-              }
-            })
-            .catch(() => {
-              // Silent; will retry on the next revalidation cycle.
-            })
+          this.fetchIssueTitle({
+            worktreeId,
+            issueNumber: context.issueNumber,
+            issueClaim: context.issueClaim,
+            branchAtFetchStart: context.branchName,
+            branchName: context.branchName,
+            providerId,
+            repo,
+          })
         );
       }
       if (issueRetryLookups.length > 0) {
@@ -2088,6 +2079,70 @@ class PullRequestService {
         error: formatErrorMessage(error, "PR revalidation failed"),
       });
     }
+  }
+
+  /**
+   * Fetch one candidate's issue title and announce it (#8851). A number an
+   * issues provider claimed from the branch name is looked up through that
+   * provider by its key, never as the code forge's issue of the same number
+   * (#13744). Failures are silent; the next cycle retries.
+   */
+  private fetchIssueTitle(lookup: {
+    worktreeId: string;
+    issueNumber: number;
+    issueClaim: WorktreeContext["issueClaim"];
+    branchAtFetchStart: string | undefined;
+    branchName: string | undefined;
+    providerId: string;
+    repo: RepoRef;
+  }): Promise<void> {
+    const { worktreeId, issueNumber, issueClaim, branchAtFetchStart, providerId, repo } = lookup;
+    const bridge = getForgeBridge();
+    const request = issueClaim
+      ? bridge.getIssueForLink({ projectPath: this.cwd, ...issueClaim })
+      : bridge.getIssue(providerId, repo, issueNumber);
+    return request
+      .then((issue) => {
+        // Branch-token check (lesson #2243): if the worktree's branch changed
+        // during the fetch, the result is stale — don't write the fetched
+        // marker, let the next pass retry against the new branch's issue.
+        const current = this.candidates.get(worktreeId);
+        if (current?.branchName !== branchAtFetchStart) return;
+        if (current?.issueClaim?.issueKey !== issueClaim?.issueKey) return;
+        if (issue) {
+          this.issueTitleFetchedWorktrees.add(worktreeId);
+          events.emit("sys:issue:detected", {
+            worktreeId,
+            issueNumber,
+            issueTitle: issue.title,
+            branchName: lookup.branchName,
+            providerId,
+            owner: repo.owner,
+            repo: repo.repo,
+            ...(issueClaim
+              ? {
+                  issueProvenance: {
+                    ...issueClaim,
+                    ...(issue.id ? { issueId: issue.id } : {}),
+                  },
+                }
+              : {}),
+            timestamp: Date.now(),
+          });
+        } else {
+          // Null = forge confirmed not-found. Leave eligible for retry (no
+          // marker added) so private/transient cases get another chance on
+          // the next polling cycle.
+          events.emit("sys:issue:not-found", {
+            worktreeId,
+            issueNumber,
+            timestamp: Date.now(),
+          });
+        }
+      })
+      .catch(() => {
+        // Issue lookup failure is silent — not an error worth surfacing.
+      });
   }
 
   private async checkForPRs(options?: { forceCiEnrichment?: boolean }): Promise<void> {
@@ -2179,7 +2234,6 @@ class PullRequestService {
       logDebug("Skipping PR check — no forge provider resolved");
       return;
     }
-    const bridge = getForgeBridge();
 
     const rateLimitBlock = await this.checkRateLimitGate();
     if (rateLimitBlock) {
@@ -2209,46 +2263,17 @@ class PullRequestService {
       // Issue lookups (independent of PR lookups, run in parallel per candidate)
       const issueLookups: Promise<void>[] = [];
       for (const c of issueLookupCandidates) {
-        const lookupBranch = lookupBranchByWorktreeId.get(c.worktreeId);
-        const branchAtFetchStart = this.candidates.get(c.worktreeId)?.branchName;
+        const context = this.candidates.get(c.worktreeId);
         issueLookups.push(
-          bridge
-            .getIssue(providerId, repo, c.issueNumber)
-            .then((issue) => {
-              // Branch-token check (lesson #2243): if the worktree's branch
-              // changed during the fetch, the result is stale — don't write
-              // the fetched marker, let the next pass retry against the new
-              // branch's issue number.
-              const currentBranch = this.candidates.get(c.worktreeId)?.branchName;
-              if (currentBranch !== branchAtFetchStart) {
-                return;
-              }
-              if (issue) {
-                this.issueTitleFetchedWorktrees.add(c.worktreeId);
-                events.emit("sys:issue:detected", {
-                  worktreeId: c.worktreeId,
-                  issueNumber: c.issueNumber,
-                  issueTitle: issue.title,
-                  branchName: lookupBranch,
-                  providerId,
-                  owner: repo.owner,
-                  repo: repo.repo,
-                  timestamp: Date.now(),
-                });
-              } else {
-                // Null = forge confirmed not-found. Leave eligible for
-                // retry (no marker added) so private/transient cases get
-                // another chance on the next polling cycle.
-                events.emit("sys:issue:not-found", {
-                  worktreeId: c.worktreeId,
-                  issueNumber: c.issueNumber,
-                  timestamp: Date.now(),
-                });
-              }
-            })
-            .catch(() => {
-              // Issue lookup failure is silent — not an error worth surfacing
-            })
+          this.fetchIssueTitle({
+            worktreeId: c.worktreeId,
+            issueNumber: c.issueNumber,
+            issueClaim: context?.issueClaim,
+            branchAtFetchStart: context?.branchName,
+            branchName: lookupBranchByWorktreeId.get(c.worktreeId),
+            providerId,
+            repo,
+          })
         );
       }
 

@@ -1,5 +1,6 @@
 import { createStore, type StoreApi } from "zustand/vanilla";
 import type { WorktreeSnapshot, WorktreeEventVersion, AttachIssuePayload } from "@shared/types";
+import type { IssueProvenance } from "@shared/types/ipc/worktree";
 import { usePanelStore } from "./panelStore";
 import { getWorktreeSelectionSnapshot } from "./storeAccessors";
 import { worktreeClient } from "@/clients";
@@ -119,7 +120,7 @@ export function getCurrentViewStoreOrNull(): WorktreeViewStoreApi | null {
  * — which carry only auto-detected (branch-name) issue state — don't clobber
  * manual associations between cold hydrations.
  */
-export interface ManualIssueAssociation {
+export interface ManualIssueAssociation extends IssueProvenance {
   issueNumber: number;
   issueTitle?: string;
 }
@@ -1935,6 +1936,7 @@ function applyIssueMutationSuccess(
     const assoc: ManualIssueAssociation = {
       issueNumber: entry.payload.issueNumber,
       issueTitle: entry.payload.issueTitle,
+      ...pickIssueProvenance(entry.payload),
     };
     nextManual = new Map(prev.manualAssociations);
     nextManual.set(worktreeId, assoc);
@@ -1949,7 +1951,14 @@ function applyIssueMutationSuccess(
     }
     if (existing && (existing.issueNumber !== undefined || existing.issueTitle !== undefined)) {
       nextWorktrees = new Map(prev.worktrees);
-      nextWorktrees.set(worktreeId, { ...existing, issueNumber: undefined, issueTitle: undefined });
+      nextWorktrees.set(worktreeId, {
+        ...existing,
+        issueNumber: undefined,
+        issueTitle: undefined,
+        issueProviderId: undefined,
+        issueId: undefined,
+        issueKey: undefined,
+      });
     }
   }
 
@@ -2093,15 +2102,19 @@ export function cleanupOrphanedTerminals(): void {
 function mergeIssueState(
   incoming: WorktreeSnapshot,
   existing: WorktreeSnapshot | undefined,
-  manual: { issueNumber: number; issueTitle?: string } | undefined
+  manual: ManualIssueAssociation | undefined
 ): WorktreeSnapshot {
   let issueNumber = incoming.issueNumber;
   let issueTitle = incoming.issueTitle;
+  // Provenance travels with the number it describes (#13744): replaced
+  // together, cleared together, never left on a number it didn't come with.
+  let provenance = pickIssueProvenance(incoming);
 
   if (
     existing &&
     issueNumber !== undefined &&
     issueNumber === existing.issueNumber &&
+    incoming.issueProviderId === existing.issueProviderId &&
     issueTitle === undefined &&
     existing.issueTitle !== undefined
   ) {
@@ -2121,25 +2134,47 @@ function mergeIssueState(
   // the `pr-detected` overlay re-adds the raw candidate number the event was
   // sent with. Applied before the manual override so an explicit association
   // still wins (#12381).
-  if (issueNumberBelongsToLinkedPr(issueNumber, linked)) {
+  if (issueNumberBelongsToLinkedPr(issueNumber, linked, provenance.issueProviderId)) {
     issueNumber = undefined;
     issueTitle = undefined;
+    provenance = {};
   }
 
   // MANUAL_OVER_AUTO: explicit user association wins over auto-detection.
   if (manual) {
     issueNumber = manual.issueNumber;
     issueTitle = manual.issueTitle;
+    provenance = pickIssueProvenance(manual);
   }
 
   if (
     issueNumber === incoming.issueNumber &&
     issueTitle === incoming.issueTitle &&
+    provenance.issueProviderId === incoming.issueProviderId &&
+    provenance.issueId === incoming.issueId &&
+    provenance.issueKey === incoming.issueKey &&
     linked === incoming.linked
   ) {
     return incoming;
   }
-  return { ...incoming, issueNumber, issueTitle, linked };
+  return {
+    ...incoming,
+    issueNumber,
+    issueTitle,
+    issueProviderId: provenance.issueProviderId,
+    issueId: provenance.issueId,
+    issueKey: provenance.issueKey,
+    linked,
+  };
+}
+
+/** The {@link IssueProvenance} fields of a link or snapshot, absent ones omitted. */
+function pickIssueProvenance(source: IssueProvenance): IssueProvenance {
+  return {
+    ...(source.issueProviderId ? { issueProviderId: source.issueProviderId } : {}),
+    ...(source.issueId ? { issueId: source.issueId } : {}),
+    ...(source.issueKey ? { issueKey: source.issueKey } : {}),
+  };
 }
 
 function snapshotsEqual(a: WorktreeSnapshot, b: WorktreeSnapshot): boolean {
@@ -2166,6 +2201,9 @@ function snapshotsEqual(a: WorktreeSnapshot, b: WorktreeSnapshot): boolean {
     a.prTitle === b.prTitle &&
     a.issueNumber === b.issueNumber &&
     a.issueTitle === b.issueTitle &&
+    a.issueProviderId === b.issueProviderId &&
+    a.issueId === b.issueId &&
+    a.issueKey === b.issueKey &&
     a.branchDerivedTitle === b.branchDerivedTitle &&
     a.sourcePrNumber === b.sourcePrNumber &&
     a.prLastUpdatedAt === b.prLastUpdatedAt &&

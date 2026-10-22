@@ -32,6 +32,10 @@ export function makeIssuesOnlyProvider(
       totalCount: issues.length,
     }),
     getIssue: async (_repo, n) => find(n),
+    // Stable id or full key, as a provider that claims branch keys must accept.
+    getIssueById: async (_repo, id) =>
+      issues.find((issue) => issue.id === id || issue.key === id) ?? null,
+    getIssueBranchKeys: async () => ["ENG"],
     buildIssueUrl: (_repo, n) => `https://tracker.invalid/issue/ENG-${n}`,
     buildIssuesUrl: () => "https://tracker.invalid/team/ENG",
     createIssue: unsupported,

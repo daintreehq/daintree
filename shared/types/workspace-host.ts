@@ -137,6 +137,10 @@ export interface WorktreeSnapshot {
   prCiStatus?: CIStatusState;
   prTitle?: string;
   issueTitle?: string;
+  /** Owner of `issueNumber` (#13744); absent means the code forge's number. */
+  issueProviderId?: string;
+  issueId?: string;
+  issueKey?: string;
   /**
    * Offline-derived sentence-cased title parsed from `issue-<n>-<slug>`
    * branches, used as a fallback headline when `issueTitle` hasn't been
@@ -773,7 +777,19 @@ export type ForgeRpcMethod =
   | "getCIStatuses"
   | "probeOpenPRList"
   | "getRateLimit"
-  | "clearPullRequestCaches";
+  | "clearPullRequestCaches"
+  | "resolveIssueBranchClaim"
+  | "getIssueForLink";
+
+/**
+ * Result of `resolveIssueBranchClaim` (#13744): the literal keys the project's
+ * issues provider claims in branch names, `null` when none does, or `"retry"`
+ * while the answer isn't knowable yet (plugin scan still running, or the
+ * provider failed to report) — the host keeps what it has and asks again.
+ */
+export type ForgeIssueBranchClaimResult =
+  | { status: "resolved"; claim: { providerId: string; keys: string[] } | null }
+  | { status: "retry" };
 
 /**
  * Result shape for `resolveProvider` — used by typed parsing of
@@ -1097,6 +1113,8 @@ export type WorkspaceHostEvent =
       providerId?: string;
       /** Provider-agnostic linked projection (dual-shipped alongside legacy fields during migration). */
       linked?: PluginWorktreeLinked | null;
+      /** Set for an issues provider's branch-claimed issue (#13744). */
+      issueProvenance?: { issueProviderId: string; issueKey: string; issueId?: string };
     }
   | {
       type: "issue-not-found";

@@ -5,7 +5,11 @@ import { CHANNELS } from "../channels.js";
 import { broadcastToRenderer, checkRateLimit, typedHandle } from "../utils.js";
 import { defineIpcNamespace, op } from "../define.js";
 import {
+  getIssueForLink,
+  issueToTooltipData,
+  readIssueLinkTarget,
   resolveForCwd,
+  resolveIssueLinkForCwd,
   resolveIssueOverrideForCwd,
   stampIssuePageProvider,
   stampIssueProvider,
@@ -41,6 +45,7 @@ import type {
   ForgeRepoCountsUpdatedPayload,
   ForgeRepositoryStats,
   ForgeRepoStatsAndPagePayload,
+  IssueLinkTarget,
 } from "../../../shared/types/ipc/forge.js";
 
 /**
@@ -144,7 +149,7 @@ async function readIssueOverrideCount(
   cwd: string,
   mainWorktreePath: string | undefined,
   bypassCache: boolean
-): Promise<{ count: number | null; clean: boolean } | undefined> {
+): Promise<{ count: number | null; clean: boolean; issuesUrl?: string } | undefined> {
   let context: Awaited<ReturnType<typeof resolveIssueOverrideForCwd>>;
   try {
     context = await resolveIssueOverrideForCwd(cwd, mainWorktreePath);
@@ -153,22 +158,29 @@ async function readIssueOverrideCount(
   }
   if (!context) return undefined;
   const { impl, repoRef } = context;
+  let issuesUrl: string | undefined;
+  try {
+    issuesUrl = impl.buildIssuesUrl(repoRef);
+  } catch {
+    issuesUrl = undefined;
+  }
   try {
     if (impl.repoStats) {
       const snapshot = await impl.repoStats.getRepoStats(repoRef, { bypassCache });
       return {
         count: snapshot.counts.issueCount,
         clean: !snapshot.counts.stale && !snapshot.counts.error && snapshot.source !== "disk",
+        issuesUrl,
       };
     }
     // A page without a total can't be counted from its length — that's the
     // page size, not the open-issue count.
     const page = await impl.listIssues(repoRef, { state: "open", perPage: 1, bypassCache });
     return page.totalCount === undefined
-      ? { count: null, clean: false }
-      : { count: page.totalCount, clean: true };
+      ? { count: null, clean: false, issuesUrl }
+      : { count: page.totalCount, clean: true, issuesUrl };
   } catch {
-    return { count: null, clean: false };
+    return { count: null, clean: false, issuesUrl };
   }
 }
 
@@ -643,11 +655,23 @@ async function handleForgeGetProjectHealth(payload: {
         unsupported: true,
       };
     }
-    const result = await impl.projectHealth.getProjectHealth(repoRef, {
-      bypassCache: payload.bypassCache === true,
-    });
+    const bypassCache = payload.bypassCache === true;
+    const [result, overrideIssues] = await Promise.all([
+      impl.projectHealth.getProjectHealth(repoRef, { bypassCache }),
+      readIssueOverrideCount(cwd, repoRef.projectPath, bypassCache),
+    ]);
     if (result.health) {
-      return { ...result.health, hasRemote: true, loading: false, error: result.error };
+      const health = { ...result.health, hasRemote: true, loading: false, error: result.error };
+      if (!overrideIssues) return health;
+      // The project's issues come from another tracker (#13744): the code
+      // forge's count would disagree with the toolbar's, so take the issues
+      // provider's count and list — or hide the chip when it has no count.
+      return {
+        ...health,
+        issueCount: overrideIssues.count ?? 0,
+        ...(overrideIssues.count === null ? { issueCountUnavailable: true } : {}),
+        ...(overrideIssues.issuesUrl ? { issuesUrl: overrideIssues.issuesUrl } : {}),
+      };
     }
     return buildEmptyForgeProjectHealth({
       error: result.error,
@@ -660,10 +684,12 @@ async function handleForgeGetProjectHealth(payload: {
   }
 }
 
-async function handleForgeGetIssueTooltip(payload: {
-  cwd: string;
-  issueNumber: number;
-}): Promise<IssueTooltipData | null> {
+async function handleForgeGetIssueTooltip(
+  payload: {
+    cwd: string;
+    issueNumber: number;
+  } & IssueLinkTarget
+): Promise<IssueTooltipData | null> {
   checkRateLimit(CHANNELS.FORGE_GET_ISSUE_TOOLTIP, 20, 10_000);
   if (!payload || typeof payload !== "object") return null;
   if (typeof payload.cwd !== "string" || !payload.cwd.trim()) return null;
@@ -675,7 +701,11 @@ async function handleForgeGetIssueTooltip(payload: {
     return null;
   }
   try {
-    const { impl, repoRef } = await resolveForCwd(payload.cwd, "issues");
+    const target = readIssueLinkTarget(payload);
+    const context = await resolveIssueLinkForCwd(payload.cwd, target);
+    const issue = await getIssueForLink(context, target);
+    if (issue !== undefined) return issue ? issueToTooltipData(issue) : null;
+    const { impl, repoRef } = context;
     return (await impl.tooltips?.getIssueTooltip(repoRef, payload.issueNumber)) ?? null;
   } catch {
     return null;

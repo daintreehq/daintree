@@ -46,10 +46,26 @@ const repoRef: RepoRef = { host: "fake.test", owner: "acme", repo: "widgets", ra
 
 const resolveForCwdMock = vi.hoisted(() => vi.fn());
 const resolveIssueOverrideForCwdMock = vi.hoisted(() => vi.fn(async () => null as unknown));
+const resolveIssueLinkForCwdMock = vi.hoisted(() => vi.fn());
+const getIssueForLinkMock = vi.hoisted(() => vi.fn<() => Promise<unknown>>(async () => undefined));
 
 vi.mock("../forgeResolution.js", () => ({
   resolveForCwd: resolveForCwdMock,
   resolveIssueOverrideForCwd: resolveIssueOverrideForCwdMock,
+  resolveIssueLinkForCwd: resolveIssueLinkForCwdMock,
+  getIssueForLink: getIssueForLinkMock,
+  readIssueLinkTarget: (payload: Record<string, unknown>) => {
+    const target: Record<string, unknown> = {};
+    for (const key of ["role", "issueProviderId", "issueId", "issueKey"]) {
+      if (payload[key] !== undefined) target[key] = payload[key];
+    }
+    return Object.keys(target).length > 0 ? target : undefined;
+  },
+  issueToTooltipData: (issue: { number: number; title: string }) => ({
+    number: issue.number,
+    title: issue.title,
+    fromIssue: true,
+  }),
   // Mirrors the real stamps: only an issues-override context marks its issues.
   stampIssueProvider: (
     context: { viaIssueOverride?: boolean; namespaceId: string },
@@ -1498,5 +1514,151 @@ describe("forge:resolve-author-avatar coalescing (#13598)", () => {
     });
     for (let i = 0; i < 40; i++) expect(await resolveAvatar(`u${i}@example.com`)).toBeNull();
     expect(resolveForCwdMock).toHaveBeenCalled();
+  });
+});
+
+describe("issue links read from the provider that owns them (#13744)", () => {
+  const trackerRef: RepoRef = { host: "tracker.invalid", owner: "ENG", repo: "ENG", rawData: null };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    _resetRateLimitQueuesForTest();
+    resolveIssueOverrideForCwdMock.mockResolvedValue(null);
+    getIssueForLinkMock.mockResolvedValue(undefined);
+  });
+
+  it("routes the tooltip to the target the badge names", async () => {
+    const getIssueTooltip = vi.fn(async () => ({ number: 42, title: "From the code forge" }));
+    resolveIssueLinkForCwdMock.mockResolvedValue({
+      namespaceId: "fake.provider",
+      repoRef,
+      impl: { tooltips: { getIssueTooltip } },
+    });
+    registerForgeDataHandlers();
+
+    const data = await findHandler("forge:get-issue-tooltip")(null, {
+      cwd: "/repo",
+      issueNumber: 42,
+      role: "code",
+    });
+
+    expect(resolveIssueLinkForCwdMock).toHaveBeenCalledWith("/repo", { role: "code" });
+    expect(getIssueTooltip).toHaveBeenCalledWith(repoRef, 42);
+    expect(data).toMatchObject({ title: "From the code forge" });
+  });
+
+  it("projects the tooltip from the issue looked up by id when the link has one", async () => {
+    const getIssueTooltip = vi.fn();
+    resolveIssueLinkForCwdMock.mockResolvedValue({
+      namespaceId: "acme.tracker.tracker",
+      repoRef: trackerRef,
+      impl: { tooltips: { getIssueTooltip } },
+    });
+    getIssueForLinkMock.mockResolvedValue({ ...makeIssue(57), title: "Moved issue" });
+    registerForgeDataHandlers();
+
+    const data = await findHandler("forge:get-issue-tooltip")(null, {
+      cwd: "/repo",
+      issueNumber: 42,
+      issueProviderId: "acme.tracker.tracker",
+      issueId: "uuid-42",
+    });
+
+    expect(data).toMatchObject({ number: 57, title: "Moved issue", fromIssue: true });
+    expect(getIssueTooltip).not.toHaveBeenCalled();
+  });
+
+  it("returns no tooltip when the named provider can't be resolved", async () => {
+    resolveIssueLinkForCwdMock.mockRejectedValue(new Error("provider gone"));
+    registerForgeDataHandlers();
+
+    const data = await findHandler("forge:get-issue-tooltip")(null, {
+      cwd: "/repo",
+      issueNumber: 42,
+      issueProviderId: "acme.gone.gone",
+    });
+
+    expect(data).toBeNull();
+  });
+
+  function healthImpl() {
+    return {
+      ...fakeImpl,
+      projectHealth: {
+        getProjectHealth: vi.fn(async () => ({
+          health: {
+            ciStatus: "success" as const,
+            issueCount: 99,
+            prCount: 4,
+            latestRelease: null,
+            securityAlerts: { visible: false, count: 0 },
+            mergeVelocity: { mergedCounts: { 60: 0, 120: 0, 180: 0 } },
+            repoUrl: "https://fake.test/acme/widgets",
+          },
+        })),
+      },
+    };
+  }
+
+  it("takes the health issue count and list from the issues provider in split mode", async () => {
+    resolveForCwdMock.mockResolvedValue({
+      namespaceId: "fake.provider",
+      repoRef,
+      impl: healthImpl(),
+    });
+    resolveIssueOverrideForCwdMock.mockResolvedValue({
+      namespaceId: "acme.tracker.tracker",
+      repoRef: trackerRef,
+      impl: {
+        listIssues: vi.fn(async () => ({
+          items: [],
+          nextCursor: null,
+          hasMore: true,
+          totalCount: 7,
+        })),
+        buildIssuesUrl: () => "https://tracker.invalid/team/ENG",
+      },
+      viaIssueOverride: true,
+    });
+    registerForgeDataHandlers();
+
+    const health = await findHandler("forge:get-project-health")(null, { cwd: process.cwd() });
+
+    expect(health).toMatchObject({
+      issueCount: 7,
+      prCount: 4,
+      issuesUrl: "https://tracker.invalid/team/ENG",
+    });
+    expect(health).not.toHaveProperty("issueCountUnavailable");
+  });
+
+  it("hides the health issue count rather than show the code forge's when the tracker fails", async () => {
+    resolveForCwdMock.mockResolvedValue({
+      namespaceId: "fake.provider",
+      repoRef,
+      impl: healthImpl(),
+    });
+    resolveIssueOverrideForCwdMock.mockRejectedValue(new Error("issues provider unavailable"));
+    registerForgeDataHandlers();
+
+    const health = await findHandler("forge:get-project-health")(null, { cwd: process.cwd() });
+
+    expect(health).toMatchObject({ issueCountUnavailable: true, prCount: 4 });
+    expect(health).not.toMatchObject({ issueCount: 99 });
+  });
+
+  it("leaves single-provider health untouched", async () => {
+    resolveForCwdMock.mockResolvedValue({
+      namespaceId: "fake.provider",
+      repoRef,
+      impl: healthImpl(),
+    });
+    registerForgeDataHandlers();
+
+    const health = await findHandler("forge:get-project-health")(null, { cwd: process.cwd() });
+
+    expect(health).toMatchObject({ issueCount: 99 });
+    expect(health).not.toHaveProperty("issuesUrl");
+    expect(health).not.toHaveProperty("issueCountUnavailable");
   });
 });

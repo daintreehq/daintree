@@ -13,6 +13,7 @@ import type { WorktreeSnapshot } from "../../shared/types/workspace-host.js";
 import type { WorktreeChanges, RepoState } from "../../shared/types/git.js";
 import type { PluginWorktreeLinked } from "../../shared/types/plugin.js";
 import { issueNumberBelongsToLinkedPr } from "../../shared/utils/worktreeIssueProjection.js";
+import type { IssueClaimProvenance } from "../services/issueBranchClaim.js";
 
 export interface SnapshotBuilderHost {
   readonly id: string;
@@ -31,6 +32,8 @@ export interface SnapshotBuilderHost {
   readonly aiNote: string | undefined;
   readonly aiNoteTimestamp: number | undefined;
   readonly issueNumber: number | undefined;
+  /** Who owns `issueNumber` when an issues provider claimed it from the branch (#13744). */
+  readonly issueClaim?: IssueClaimProvenance;
   readonly prNumber: number | undefined;
   readonly prUrl: string | undefined;
   readonly prState: import("../../shared/types/forge.js").NormalizedPRState | undefined;
@@ -121,11 +124,20 @@ export class SnapshotBuilder {
         linkedPr.ciStatus.state === "pending")
         ? linkedPr.ciStatus.state
         : undefined;
-    const detectedIssueNumber = linkedIssue?.ref.number ?? this.host.issueNumber;
+    // A claimed issue is the issues provider's, never the code forge's
+    // `linked.issue`, which only ever describes a code-forge number (#13744).
+    const issueClaim = this.host.issueClaim;
+    const detectedIssueNumber = issueClaim
+      ? this.host.issueNumber
+      : (linkedIssue?.ref.number ?? this.host.issueNumber);
     // Dropped from the projection only: the monitor keeps the parsed number so
     // `onIssueNotFound` still matches its lookup, and a genuine PR clear brings
     // the #8851 offline fallback back (#12381).
-    const issueIsLinkedPr = issueNumberBelongsToLinkedPr(detectedIssueNumber, this.host.linked);
+    const issueIsLinkedPr = issueNumberBelongsToLinkedPr(
+      detectedIssueNumber,
+      this.host.linked,
+      issueClaim?.issueProviderId
+    );
 
     const snapshot: WorktreeSnapshot = {
       id: this.host.id,
@@ -155,9 +167,16 @@ export class SnapshotBuilder {
       prTitle: linkedPr ? linkedPr.title : this.host.prTitle,
       issueTitle: issueIsLinkedPr
         ? undefined
-        : linkedIssue
+        : linkedIssue && !issueClaim
           ? linkedIssue.title
           : this.host.issueTitle,
+      ...(issueClaim && !issueIsLinkedPr && detectedIssueNumber !== undefined
+        ? {
+            issueProviderId: issueClaim.issueProviderId,
+            issueKey: issueClaim.issueKey,
+            ...(issueClaim.issueId ? { issueId: issueClaim.issueId } : {}),
+          }
+        : {}),
       branchDerivedTitle: this.host.branchDerivedTitle,
       sourcePrNumber: this.host.sourcePrNumber,
       prLastUpdatedAt: this.host.prLastUpdatedAt,

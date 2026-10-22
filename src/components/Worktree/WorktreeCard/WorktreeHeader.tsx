@@ -272,6 +272,7 @@ export function WorktreeHeader({
               <IssueBadge
                 issueNumber={worktree.issueNumber!}
                 issueTitle={displayTitle}
+                provenance={worktree}
                 worktreePath={worktree.path}
                 onOpen={badges.onOpenIssue}
                 isHeadline

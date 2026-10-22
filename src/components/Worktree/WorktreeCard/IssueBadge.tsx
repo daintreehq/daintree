@@ -6,6 +6,8 @@ import { useForgeBadgeTooltip } from "./hooks/useForgeBadgeTooltip";
 import { useColdNumberGap } from "./hooks/useColdNumberGap";
 import { useForgeBadgeFreshness } from "./hooks/useForgeBadgeFreshness";
 import { freshnessClass } from "@/components/Layout/FreshnessUtils";
+import type { IssueProvenance } from "@shared/types/ipc/worktree";
+import { worktreeIssueLinkTarget } from "@shared/utils/worktreeIssueProjection";
 import {
   IssueTooltipContent,
   TokenMissingTooltip,
@@ -18,6 +20,11 @@ import {
 interface IssueBadgeProps {
   issueNumber: number;
   issueTitle?: string;
+  /**
+   * Who owns `issueNumber` (#13744). Absent means the code forge's number;
+   * the badge reads the issue from the link's own provider either way.
+   */
+  provenance?: IssueProvenance;
   worktreePath: string;
   onOpen?: () => void;
   isHeadline?: boolean;
@@ -28,6 +35,7 @@ interface IssueBadgeProps {
 export function IssueBadge({
   issueNumber,
   issueTitle,
+  provenance,
   worktreePath,
   onOpen,
   isHeadline,
@@ -35,7 +43,10 @@ export function IssueBadge({
   underlineOnHover,
 }: IssueBadgeProps) {
   const { data, loading, error, missingCredential, providerId, fetchTooltip, reset } =
-    useIssueTooltip(worktreePath, issueNumber);
+    useIssueTooltip(worktreePath, issueNumber, worktreeIssueLinkTarget(provenance ?? {}));
+  // A tracker's own identifier (`ENG-42`) when the link has one; its number
+  // alone would read as the code forge's issue.
+  const issueLabel = provenance?.issueKey ?? `#${issueNumber}`;
 
   const { isOpen, handleOpenChange, handleClick } = useForgeBadgeTooltip({
     fetchTooltip,
@@ -89,10 +100,10 @@ export function IssueBadge({
             missingCredential
               ? // Which item, then the action: the badge still names what it's for
                 // even though clicking it now opens Settings.
-                `Issue #${issueNumber}${issueTitle ? `: ${issueTitle}` : ""}. Add a forge access token to see issue details`
+                `Issue ${issueLabel}${issueTitle ? `: ${issueTitle}` : ""}. Add a forge access token to see issue details`
               : issueTitle
-                ? `Open issue #${issueNumber}: ${issueTitle}`
-                : `Open issue #${issueNumber}`
+                ? `Open issue ${issueLabel}: ${issueTitle}`
+                : `Open issue ${issueLabel}`
           }
         >
           <CircleDot
@@ -124,7 +135,7 @@ export function IssueBadge({
                     missingCredential ? "text-text-secondary" : "text-pr-open"
                   )}
                 >
-                  #{issueNumber}
+                  {issueLabel}
                 </span>
               ))}
           </span>

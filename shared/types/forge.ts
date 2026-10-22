@@ -1288,6 +1288,26 @@ export interface ForgeIssueProviderImpl extends ForgeProviderBaseImpl {
 
   listIssues(repo: RepoRef, opts: ListOptions): Promise<Page<Issue>>;
   getIssue(repo: RepoRef, number: number, options?: FetchOptions): Promise<Issue | null>;
+  /**
+   * Optional. Look an issue up by an identifier other than its number: the
+   * stable {@link Issue.id} the host stored on a link, or a full display key
+   * (`"ENG-123"`). The host prefers this over {@link getIssue} for links that
+   * carry either, so an issue renumbered by a team move is still found. A
+   * provider implementing {@link getIssueBranchKeys} must accept full keys
+   * here, since a claimed branch name carries no stable id. `null` means not
+   * found.
+   */
+  getIssueById?(repo: RepoRef, id: string, options?: FetchOptions): Promise<Issue | null>;
+  /**
+   * Optional. The literal issue-key prefixes this project's issues carry
+   * (`["ENG", "DES"]`), read from the provider's own project settings. While
+   * the provider is bound as a project's issues provider, the host claims
+   * branch names containing `<KEY>-<n>` (any case, as a whole token) as that
+   * provider's issues. Keys are matched literally — never as patterns — and
+   * the host drops any that aren't 1–16 letters, digits or `_` starting with a
+   * letter.
+   */
+  getIssueBranchKeys?(repo: RepoRef): Promise<string[]>;
   buildIssueUrl(repo: RepoRef, number: number): string;
   buildIssuesUrl(repo: RepoRef, options?: { query?: string; state?: string }): string;
 

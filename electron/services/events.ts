@@ -566,6 +566,11 @@ export type DaintreeEventMap = {
     owner: string;
     /** Canonical repository name the issue belongs to. */
     repo: string;
+    /**
+     * Set when an issues provider claimed the number from the branch name
+     * (#13744); its title came from that provider, not the code forge.
+     */
+    issueProvenance?: { issueProviderId: string; issueKey: string; issueId?: string };
     timestamp: number;
   };
 

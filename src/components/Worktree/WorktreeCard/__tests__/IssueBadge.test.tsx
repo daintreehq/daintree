@@ -21,16 +21,21 @@ let mockFreshnessCause: "rate-limit" | "circuit-breaker" | undefined = undefined
 let mockIsOpen = true;
 const mockHandleClick = vi.fn();
 
+let mockTooltipArgs: unknown[] = [];
+
 vi.mock("@/hooks/useForgeTooltip", () => ({
-  useIssueTooltip: () => ({
-    data: mockData,
-    loading: mockLoading,
-    error: mockError,
-    missingCredential: mockMissingCredential,
-    providerId: "daintree.github.github",
-    fetchTooltip: vi.fn(),
-    reset: vi.fn(),
-  }),
+  useIssueTooltip: (...args: unknown[]) => {
+    mockTooltipArgs = args;
+    return {
+      data: mockData,
+      loading: mockLoading,
+      error: mockError,
+      missingCredential: mockMissingCredential,
+      providerId: "daintree.github.github",
+      fetchTooltip: vi.fn(),
+      reset: vi.fn(),
+    };
+  },
 }));
 
 vi.mock("../hooks/useForgeBadgeTooltip", () => ({
@@ -128,6 +133,37 @@ describe("IssueBadge trigger", () => {
   it("names the item and its title", () => {
     render(badge({ issueTitle: "Something is broken" }));
     expect(trigger().getAttribute("aria-label")).toBe("Open issue #42: Something is broken");
+  });
+
+  it("names a tracker's issue by its own key rather than a bare number (#13744)", () => {
+    const provenance = { issueProviderId: "acme.linear.linear", issueKey: "ENG-42" };
+    const { rerender } = render(badge({ issueTitle: "Fix login", provenance }));
+    expect(trigger().getAttribute("aria-label")).toBe("Open issue ENG-42: Fix login");
+
+    rerender(badge({ provenance }));
+    expect(trigger().getAttribute("aria-label")).toBe("Open issue ENG-42");
+  });
+
+  it("reads a number without provenance from the code forge (#13744)", () => {
+    render(badge());
+    expect(mockTooltipArgs).toEqual(["/repo", 42, { role: "code" }]);
+  });
+
+  it("reads a linked issue from the provider that served it (#13744)", () => {
+    render(
+      badge({
+        provenance: {
+          issueProviderId: "acme.linear.linear",
+          issueId: "uuid-42",
+          issueKey: "ENG-42",
+        },
+      })
+    );
+    expect(mockTooltipArgs).toEqual([
+      "/repo",
+      42,
+      { issueProviderId: "acme.linear.linear", issueId: "uuid-42", issueKey: "ENG-42" },
+    ]);
   });
 
   it("names the item and the settings route when no token is configured", () => {
