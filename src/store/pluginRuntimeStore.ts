@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { logError } from "@/utils/logger";
-import type { PromptTemplateContribution } from "@shared/types/plugin";
+import type { PromptTemplateContribution, TerminalLinkContribution } from "@shared/types/plugin";
 
 /**
  * Renderer mirror of live plugin runtime state: which plugins are disabled, so
@@ -56,8 +56,26 @@ export interface PluginPromptTemplate {
   template: PromptTemplateContribution;
 }
 
+/** A terminal link matcher a loaded plugin declares, with who it belongs to. */
+export interface PluginTerminalLink {
+  /** `{instanceId}::{matcher id}`: unique across plugins, which may reuse an id. */
+  key: string;
+  pluginId: string;
+  pluginName: string;
+  /** Owning project for a project plugin; null for an installed or builtin one. */
+  projectId: string | null;
+  /**
+   * The command a click dispatches, rewritten from the manifest's namespace
+   * into the instance's — the same rewrite main gives a project plugin's
+   * commands, so it never reaches a same-named installed plugin's action.
+   */
+  actionId: string;
+  link: TerminalLinkContribution;
+}
+
 interface PluginRuntimeState {
   promptTemplates: readonly PluginPromptTemplate[];
+  terminalLinks: readonly PluginTerminalLink[];
   disabledPluginIds: ReadonlySet<string>;
   /**
    * Keyed by plugin *instance* id — the host-side key every contribution
@@ -99,6 +117,29 @@ let pullSeq = 0;
 // routine in dev).
 let committedSeq = 0;
 
+function sameSet(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean {
+  return a.size === b.size && [...a].every((id) => b.has(id));
+}
+
+function sameMeta(
+  a: ReadonlyMap<string, PluginRuntimeMeta>,
+  b: ReadonlyMap<string, PluginRuntimeMeta>
+): boolean {
+  if (a.size !== b.size) return false;
+  for (const [id, meta] of a) {
+    const other = b.get(id);
+    if (
+      other === undefined ||
+      other.devMode !== meta.devMode ||
+      other.displayName !== meta.displayName ||
+      !sameSet(meta.previewToolIds ?? new Set(), other.previewToolIds ?? new Set())
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
 async function pullPluginRuntimeSnapshot(
   set: (state: Partial<PluginRuntimeState>) => void,
   get: () => PluginRuntimeState
@@ -111,6 +152,7 @@ async function pullPluginRuntimeSnapshot(
     const disabledPluginIds = new Set<string>();
     const pluginMetaById = new Map<string, PluginRuntimeMeta>();
     const promptTemplates: PluginPromptTemplate[] = [];
+    const terminalLinks: PluginTerminalLink[] = [];
     for (const p of list) {
       // Both maps key on the instance id for the same reason: every consumer
       // holds a contribution's `pluginId`, which is this key, never the bare
@@ -122,13 +164,28 @@ async function pullPluginRuntimeSnapshot(
       if (p.disabled) disabledPluginIds.add(id);
       // A disabled or blocklisted plugin never ran, so what it declares is not on offer.
       if (!p.disabled && !p.blocklisted) {
+        const pluginName = p.manifest.displayName?.trim() || p.manifest.name;
         for (const template of p.manifest.contributes?.promptTemplates ?? []) {
           promptTemplates.push({
             key: `${id}::${template.id}`,
             pluginId: id,
-            pluginName: p.manifest.displayName?.trim() || p.manifest.name,
+            pluginName,
             projectId: p.projectId,
             template,
+          });
+        }
+        const ownPrefix = `${p.manifest.name}.`;
+        for (const link of p.manifest.contributes?.terminalLinks ?? []) {
+          // The manifest gate admits only the plugin's own namespace; anything
+          // else could only have dodged it, so it gets no link at all.
+          if (!link.actionId.startsWith(ownPrefix)) continue;
+          terminalLinks.push({
+            key: `${id}::${link.id}`,
+            pluginId: id,
+            pluginName,
+            projectId: p.projectId,
+            actionId: `${id}.${link.actionId.slice(ownPrefix.length)}`,
+            link,
           });
         }
       }
@@ -150,14 +207,22 @@ async function pullPluginRuntimeSnapshot(
     }
     // One commit: a consumer must never read a plugin's dev-mode flag from a
     // different snapshot than the disabled set it renders against.
-    // An unchanged list keeps its identity: every picker opening refreshes, and
-    // a new array would rebuild the picker's rows and reset its highlight.
-    const unchanged = JSON.stringify(promptTemplates) === JSON.stringify(get().promptTemplates);
-    set(
-      unchanged
-        ? { disabledPluginIds, pluginMetaById }
-        : { disabledPluginIds, pluginMetaById, promptTemplates }
-    );
+    // An unchanged slice keeps its identity: pulls run on every action change
+    // and every picker opening, and a new object re-renders whatever reads it
+    // (a new template array would also reset the picker's highlight).
+    const current = get();
+    const next: Partial<PluginRuntimeState> = {};
+    if (!sameSet(disabledPluginIds, current.disabledPluginIds)) {
+      next.disabledPluginIds = disabledPluginIds;
+    }
+    if (!sameMeta(pluginMetaById, current.pluginMetaById)) next.pluginMetaById = pluginMetaById;
+    if (JSON.stringify(promptTemplates) !== JSON.stringify(current.promptTemplates)) {
+      next.promptTemplates = promptTemplates;
+    }
+    if (JSON.stringify(terminalLinks) !== JSON.stringify(current.terminalLinks)) {
+      next.terminalLinks = terminalLinks;
+    }
+    if (Object.keys(next).length > 0) set(next);
   } catch (err) {
     logError("Failed to load plugin runtime state", err);
   }
@@ -198,15 +263,26 @@ function ensureSubscribed(
           void pullPluginRuntimeSnapshot(set, get);
         })
       : undefined;
+  // A dev-attached plugin (`daintree-plugin dev`) is loaded and reloaded with
+  // no provenance change either, but registers its actions once it is
+  // listable, so this is when its terminal links become known.
+  const offActions =
+    typeof plugin.onActionsChanged === "function"
+      ? plugin.onActionsChanged(() => {
+          void pullPluginRuntimeSnapshot(set, get);
+        })
+      : undefined;
   unsubscribe = () => {
     offProvenance();
     offProjectPlugins?.();
+    offActions?.();
   };
   return true;
 }
 
 export const usePluginRuntimeStore = create<PluginRuntimeState>((set, get) => ({
   promptTemplates: [],
+  terminalLinks: [],
   disabledPluginIds: new Set<string>(),
   pluginMetaById: new Map<string, PluginRuntimeMeta>(),
   init: () => {
@@ -231,6 +307,7 @@ export function _resetPluginRuntimeStoreForTest(): void {
   committedSeq = 0;
   usePluginRuntimeStore.setState({
     promptTemplates: [],
+    terminalLinks: [],
     disabledPluginIds: new Set<string>(),
     pluginMetaById: new Map<string, PluginRuntimeMeta>(),
   });

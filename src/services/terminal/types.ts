@@ -83,6 +83,8 @@ export interface ManagedTerminal {
   fileLinksDisposable: IDisposable | null;
   imageLinksDisposable: IDisposable | null;
   commandLinksDisposable: IDisposable | null;
+  /** Plugin pattern matchers (#13798), registered after every built-in provider. */
+  pluginLinksDisposable: IDisposable | null;
   webLinksAddon: WebLinksAddon | null;
   // Currently-hovered link (tracked via xterm addon hover/leave callbacks).
   // Read synchronously by the right-click context menu so it reflects the

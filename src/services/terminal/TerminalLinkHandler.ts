@@ -12,10 +12,23 @@ import {
   remoteHostOfView,
   resolveTerminalLinkForView,
 } from "./remoteLoopbackLinks";
+import { activatePluginUrlLink } from "./pluginTerminalLinks";
+
+export interface OpenLinkOptions {
+  /**
+   * Open in the external browser even when a plugin claims the URL — the
+   * escape hatch every URL keeps (#13798).
+   */
+  external?: boolean;
+}
 
 export class TerminalLinkHandler {
-  openLink(url: string, terminalId: string, event?: MouseEvent): void {
-    const isModifierPressed = event ? (isMac() ? event.metaKey : event.ctrlKey) : false;
+  openLink(url: string, terminalId: string, event?: MouseEvent, options?: OpenLinkOptions): void {
+    // A plugin may claim only a public http(s) host, never a loopback one, so
+    // its claim needs none of the port forwarding below.
+    if (!options?.external && activatePluginUrlLink(url, terminalId)) return;
+    const isModifierPressed =
+      !options?.external && event ? (isMac() ? event.metaKey : event.ctrlKey) : false;
     if (remoteHostOfView() === null) {
       this.openResolvedLink(url, terminalId, isModifierPressed);
       return;

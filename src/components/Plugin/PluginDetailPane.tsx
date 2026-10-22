@@ -15,6 +15,7 @@ import { PluginSettingsForm } from "@/components/Settings/PluginSettingsForm";
 import { pluginHasSettings } from "@/services/plugin/pluginSettingsHome";
 import { Button } from "@/components/ui/button";
 import { SettingsSwitch } from "@/components/Settings/SettingsSwitch";
+import { PluginTerminalLinksSection } from "./PluginTerminalLinksSection";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import {
   SettingsSubtabBar,
@@ -484,6 +485,7 @@ export function PluginDetailPane({
   const panels = plugin.manifest.contributes.panels ?? [];
   const agents = plugin.manifest.contributes.agents ?? [];
   const databases = plugin.manifest.contributes.databases ?? [];
+  const terminalLinks = plugin.manifest.contributes.terminalLinks ?? [];
   const [activeTab, setActiveTab] = useState<PluginDetailTab>("overview");
   // Read here rather than inside the tab body: the Logs tab is earned by
   // content like every other tab past Overview (#11302), and the pane cannot
@@ -843,6 +845,10 @@ export function PluginDetailPane({
             {panels.length > 0 && <PluginContributedPanels panels={panels} />}
 
             {agents.length > 0 && <PluginContributedAgents agents={agents} />}
+
+            {terminalLinks.length > 0 && (
+              <PluginTerminalLinksSection pluginId={plugin.instanceId} />
+            )}
 
             {databases.length > 0 && (
               <PluginDatabasesSection databases={databases} origin={plugin.origin} />

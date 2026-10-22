@@ -32,6 +32,7 @@ A plugin that declares `"scope": "project"` lives in a project's own repository 
 | `recipes` | Available — only in the owning project's launcher, empty state and recipe manager, and gone while the plugin is switched off or its folder is untrusted. A terminal may use `terminal`, `dev-preview`, `plugin-panel` for one of the plugin's own panels, or a built-in agent; `agents` is rejected below, so there is no plugin agent of its own to name |
 | `promptTemplates` | Available — offered only in the owning project's composer, and gone while the plugin is switched off or its folder is untrusted |
 | `worktreeSetupSteps` | Available — run only for worktrees created in the owning project |
+| `terminalLinks` | Available — matched only in the owning project's terminals, and gone while the plugin is switched off or its folder is untrusted |
 | `menuItems` | Rejected — the application menu is one OS-level menu shared by every window, with no per-project projection |
 | `agents` | Rejected — the agent roster is one app-wide registry mirrored into the shared pty-host, and launch identity outlives the project binding |
 | `skills` | Rejected — contributed skills land in one app-wide index behind the MCP server's `skills.search` / `skills.load`, which filter by no project |
@@ -1333,6 +1334,60 @@ Prompt templates a plugin offers in the composer's ❯ command picker, for the w
 | `args` | no | Up to 20 single-line text fields, each `{ name, label, required? }`. `name` is lowercase letters, digits and underscores, starting with a letter. A template with no `args` fills the draft as soon as it is chosen. |
 
 Every `{{name}}` in the body must name a declared argument; anything else is a manifest error. Values are inserted exactly as typed, once: a value that itself contains `{{other}}` is not expanded again. An optional argument left blank becomes empty text. Choosing a template replaces the current draft, and the replacement can be undone.
+
+## Terminal links — _Shipped_
+
+Terminal text a plugin makes clickable: the identifiers and URLs of its own world that agents print, such as `updated INV-0042` or a link to a record in a hosted service. A match is underlined on hover, its tooltip says "Open with" and the plugin's name, and clicking it dispatches one of the plugin's own commands. Matchers are declarative and require no capability. An installed plugin's matchers apply in every project's terminals; a [project plugin](./project-local.md)'s apply only in its own project's.
+
+```json
+{
+  "contributes": {
+    "commands": [
+      { "id": "openInvoice", "title": "Open invoice" },
+      { "id": "openRecord", "title": "Open record" }
+    ],
+    "terminalLinks": [
+      {
+        "id": "invoice",
+        "pattern": "\\bINV-(\\d{4,8})\\b",
+        "actionId": "acme.invoices.openInvoice"
+      },
+      {
+        "id": "record",
+        "url": { "host": "records.example.com", "pathPrefix": "/records/" },
+        "actionId": "acme.invoices.openRecord"
+      }
+    ]
+  }
+}
+```
+
+**Fields:**
+
+| Field | Required | Notes |
+| --- | --- | --- |
+| `id` | yes | Unique within the plugin's `terminalLinks`. |
+| `actionId` | yes | One of the plugin's own commands, written `"<plugin name>.<id>"`. When the plugin declares `commands`, it must name one of them. Built-in and other plugins' actions are refused. |
+| `pattern` | one of `pattern` or `url` | A JavaScript regular expression, matched within one terminal row. See the rules below. |
+| `ignoreCase` | no | Match `pattern` without regard to case. Only with `pattern`. |
+| `url` | one of `pattern` or `url` | `{ scheme?, host, pathPrefix? }`: the URLs the plugin claims. |
+| `url.scheme` | no | `"https"` (the default) or `"http"`. |
+| `url.host` | yes | One exact, lowercase public domain with at least two labels, such as `records.example.com`. No port, path, credentials, wildcard or IP address, and nothing loopback, private or local-only (`localhost`, `*.local`, `*.internal`, `*.test`, `*.lan` and the like): those URLs belong to the browser and dev preview panels. |
+| `url.pathPrefix` | no | The URL's path must start with it, as plain text. End it with `/` to match a folder. No query, fragment or `.`/`..` segments. |
+
+**What the command receives.** A pattern match dispatches `actionId` with `TerminalLinkPatternArgs`: `{ text, groups, panelId, panelKind, worktreeId? }`, where `groups` holds the capture groups by position and `null` for an optional group that matched nothing. A claimed URL dispatches it with `TerminalLinkUrlArgs`: `{ url, panelId, panelKind, worktreeId? }`, instead of opening the browser. `worktreeId` is absent for a terminal outside any worktree. If the command declares an `inputSchema` with `additionalProperties: false`, list every one of these fields in it, or the call is refused. Both types are exported from `@daintreehq/plugin-sdk`.
+
+**Pattern rules.** Patterns run in a worker beside the terminal, never on its own thread, and the manifest gate also refuses any whose backtracking could run away. A pattern compiles with the `u` flag (you can't add flags), is at most 256 characters, and must not match empty text. It may not use backreferences, lookarounds or named groups, and has at most 16 capture groups. A group repeated more than once may not itself repeat or have alternatives: write `[a-z]+` rather than `(a|b|...)+`, and `(?:-\d{1,4})?` rather than `(?:-\d+)*`. The product of every quantifier's maximum, counting an unbounded `*`, `+` or `{n,}` as 512, and of every alternation's branch count, may not exceed 1,000,000. So a pattern can have two unbounded quantifiers at most; bound the rest, as in `\w{1,64}`. A pattern that still runs slowly on a real row, or doesn't finish within a second, is switched off for the session.
+
+**How matching works.**
+
+- Matching runs in the host, only for the row under the pointer, and never on terminal output. The first 512 characters of the row are read. A match must fit on one row, is at most 256 characters long, and each row offers at most 32 plugin links.
+- Built-in links win any overlap: a file path, web URL, figure reference or suggested command is never taken over by a pattern. Between plugins, the first plugin by id keeps an overlapping match.
+- URL matchers don't find URLs themselves. They claim the web links Daintree already detects, including OSC 8 hyperlinks. When two plugins claim a URL, the longer `pathPrefix` wins, then the first plugin by id. The URL is parsed before it is compared, so a credential prefix, a non-default port or a lookalike host never matches. The host check reads the URL alone and never resolves the name, so a public-looking domain that your DNS points at a private address can still be claimed.
+- Only the matched text leaves the terminal, and only when the user clicks. A matcher grants no `terminal:read` access.
+- A URL a plugin claims keeps "Open in external browser" in the terminal's right-click menu, beside "Open with" and the plugin's name.
+
+Each plugin's matchers can be switched off from its page in the Plugin Manager, or from Project settings → Plugins for a project plugin. The choice is stored on this machine and applies in every terminal at once.
 
 ## Recipes — _Shipped_
 

@@ -126,6 +126,7 @@ vi.mock("../TerminalAddonManager", () => ({
     fileLinksDisposable: null,
     imageLinksDisposable: null,
     commandLinksDisposable: null,
+    pluginLinksDisposable: null,
     webLinksAddon: null,
   })),
   createImageAddon: createImageAddonMock,

@@ -131,6 +131,7 @@ function makeManaged(visible = true, id = "term"): ManagedTerminal {
     fileLinksDisposable: null,
     imageLinksDisposable: null,
     commandLinksDisposable: null,
+    pluginLinksDisposable: null,
     webLinksAddon: null,
     hoveredLink: null,
   } as ManagedTerminal;

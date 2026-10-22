@@ -28,6 +28,7 @@ import {
   createFileLinksAddon,
   createImageLinksAddon,
   createSuggestedCommandLinksAddon,
+  createPluginTerminalLinksAddon,
   createWebLinksAddon,
 } from "./TerminalAddonManager";
 import { TerminalOutputIngestService } from "./TerminalOutputIngestService";
@@ -36,7 +37,16 @@ import { PartialEscapeTracker } from "@shared/utils/terminalPartialEscapeTail";
 import { TerminalParserHandler } from "./TerminalParserHandler";
 import { TerminalUnseenOutputTracker, UnseenOutputSnapshot } from "./TerminalUnseenOutputTracker";
 import { TerminalOffscreenManager } from "./TerminalOffscreenManager";
-import { TerminalLinkHandler } from "./TerminalLinkHandler";
+import { TerminalLinkHandler, type OpenLinkOptions } from "./TerminalLinkHandler";
+import {
+  activatePluginPatternLink,
+  findPluginPatternLinks,
+  findPluginUrlClaim,
+  getTerminalLinkSubject,
+  initPluginTerminalLinks,
+  isPluginPatternLinkCurrent,
+} from "./pluginTerminalLinks";
+import { hideTerminalLinkTooltip, showTerminalLinkTooltip } from "./terminalLinkTooltip";
 import { isSuggestedCommandSource, runSuggestedCommand } from "./suggestedCommandRunner";
 import { TerminalResizeController, hasStreamingWrites } from "./TerminalResizeController";
 import { TerminalRendererPolicy } from "./TerminalRendererPolicy";
@@ -824,9 +834,39 @@ class TerminalInstanceService {
       range: range ?? { start: { x: 0, y: 0 }, end: { x: 0, y: 0 } },
       text,
       activate: (event: MouseEvent, uri: string) => {
+        const current = this.instances.get(terminalId);
+        if (current) hideTerminalLinkTooltip(current.terminal);
         this.linkHandler.openLink(uri, terminalId, event);
       },
     };
+  }
+
+  /** Names the plugin a hovered URL goes to, when one claims it (#13798). */
+  private showUrlClaimTooltip(id: string, event: MouseEvent, url: string): void {
+    const managed = this.instances.get(id);
+    if (!managed || getTerminalLinkSubject(id) === null) return;
+    const claim = findPluginUrlClaim(url);
+    if (claim) showTerminalLinkTooltip(managed.terminal, event, `Open with ${claim.pluginName}`);
+  }
+
+  /**
+   * The plugin the hovered URL would go to, or null when none claims it or
+   * nothing URL-like is hovered. Read when the context menu opens, so it can
+   * name the plugin and still offer the external browser.
+   */
+  getHoveredLinkPluginName(id: string): string | null {
+    const link = this.instances.get(id)?.hoveredLink;
+    if (link?.kind !== "url" || getTerminalLinkSubject(id) === null) return null;
+    return findPluginUrlClaim(link.text)?.pluginName ?? null;
+  }
+
+  /**
+   * Opens a URL the context menu captured when it opened: the hover itself is
+   * gone by the time an item is chosen. `external` skips any plugin that
+   * claims it — the escape hatch every URL keeps (#13798).
+   */
+  openLink(id: string, url: string, options?: OpenLinkOptions): void {
+    this.linkHandler.openLink(url, id, undefined, options);
   }
 
   /**
@@ -1929,6 +1969,10 @@ class TerminalInstanceService {
     // Claude Code's `! command` suggestions register first: xterm gives an
     // overlapping link to the earliest provider, and a suggestion often holds a
     // path or URL that must not take the click away from the whole command.
+    // Set when this call registers a built-in provider: one created after the
+    // plugin provider (a help lane bound later, a retried failure) would rank
+    // below it, so the plugin provider is then registered again, last.
+    let builtInAdded = false;
     if (!managed.commandLinksDisposable) {
       try {
         managed.commandLinksDisposable = createSuggestedCommandLinksAddon(
@@ -1936,6 +1980,7 @@ class TerminalInstanceService {
           () => isSuggestedCommandSource(id, this.instances.get(id)?.runtimeAgentId),
           (command) => runSuggestedCommand(id, command)
         );
+        builtInAdded = true;
       } catch (err) {
         logWarn("Failed to create SuggestedCommandLinksAddon", { id, error: err });
       }
@@ -1951,6 +1996,7 @@ class TerminalInstanceService {
             current.hoveredLink = link;
           }
         );
+        builtInAdded = true;
       } catch (err) {
         logWarn("Failed to create FileLinksAddon", { id, error: err });
       }
@@ -1985,6 +2031,7 @@ class TerminalInstanceService {
             state.activateFigure(slot, figureNumber, openLightbox);
           }
         );
+        builtInAdded = true;
       } catch (err) {
         logWarn("Failed to create ImageLinksAddon", { id, error: err });
       }
@@ -1993,22 +2040,63 @@ class TerminalInstanceService {
       try {
         managed.webLinksAddon = createWebLinksAddon(
           managed.terminal,
-          (event, uri) => this.linkHandler.openLink(uri, id, event),
+          (event, uri) => {
+            const current = this.instances.get(id);
+            if (current) hideTerminalLinkTooltip(current.terminal);
+            this.linkHandler.openLink(uri, id, event);
+          },
           {
-            hover: (_event, text) => {
+            hover: (event, text) => {
               const current = this.instances.get(id);
               if (!current) return;
               current.hoveredLink = this.makeSyntheticLink(text, null, id);
+              this.showUrlClaimTooltip(id, event, text);
             },
             leave: () => {
               const current = this.instances.get(id);
               if (!current) return;
               current.hoveredLink = null;
+              hideTerminalLinkTooltip(current.terminal);
             },
           }
         );
+        builtInAdded = true;
       } catch (err) {
         logWarn("Failed to create WebLinksAddon", { id, error: err });
+      }
+    }
+    // Plugin pattern matchers (#13798) register after every built-in provider:
+    // xterm hands an overlapping link to the earliest one, so a plugin's match
+    // never takes a click from a path, URL, figure or suggested command. The
+    // matchers are read live on each hover, so nothing here rebuilds when a
+    // plugin loads, stops or is switched off.
+    if (builtInAdded && managed.pluginLinksDisposable) {
+      managed.pluginLinksDisposable.dispose();
+      managed.pluginLinksDisposable = null;
+    }
+    if (!managed.pluginLinksDisposable) {
+      const terminal = managed.terminal;
+      try {
+        initPluginTerminalLinks();
+        managed.pluginLinksDisposable = createPluginTerminalLinksAddon(terminal, {
+          find: (text) =>
+            getTerminalLinkSubject(id) === null
+              ? Promise.resolve([])
+              : findPluginPatternLinks(text),
+          activate: (match) => {
+            hideTerminalLinkTooltip(terminal);
+            activatePluginPatternLink(match, id);
+          },
+          // xterm keeps a row's links while the pointer stays on it, so a link
+          // found before its plugin was switched off can still be hovered.
+          hover: (match, event) => {
+            if (!isPluginPatternLinkCurrent(match)) return;
+            showTerminalLinkTooltip(terminal, event, `Open with ${match.entry.pluginName}`);
+          },
+          leave: () => hideTerminalLinkTooltip(terminal),
+        });
+      } catch (err) {
+        logWarn("Failed to create PluginTerminalLinksAddon", { id, error: err });
       }
     }
     // ImageAddon is lazy-loaded (#10840), so creation is async and runs last —
@@ -2149,11 +2237,20 @@ class TerminalInstanceService {
     };
 
     return {
-      activate: (event: MouseEvent, text: string) => this.linkHandler.openLink(text, id, event),
-      hover: (_event: MouseEvent, text: string, range: IBufferRange) => {
-        setHoveredLink(this.makeSyntheticLink(text, range, id));
+      activate: (event: MouseEvent, text: string) => {
+        const current = this.instances.get(id);
+        if (current) hideTerminalLinkTooltip(current.terminal);
+        this.linkHandler.openLink(text, id, event);
       },
-      leave: () => setHoveredLink(null),
+      hover: (event: MouseEvent, text: string, range: IBufferRange) => {
+        setHoveredLink(this.makeSyntheticLink(text, range, id));
+        this.showUrlClaimTooltip(id, event, text);
+      },
+      leave: () => {
+        setHoveredLink(null);
+        const current = this.instances.get(id);
+        if (current) hideTerminalLinkTooltip(current.terminal);
+      },
     };
   }
 
@@ -2628,11 +2725,13 @@ class TerminalInstanceService {
     // ImageAddon first and by name: its dispose() is what restores the
     // `_core.open` it monkey-patched. Disposing the terminal with the patch
     // still installed is how the wedge survives a rebuild.
+    hideTerminalLinkTooltip(managed.terminal);
     for (const [label, disposable] of [
       ["image addon", managed.imageAddon],
       ["file links", managed.fileLinksDisposable],
       ["image links", managed.imageLinksDisposable],
       ["command links", managed.commandLinksDisposable],
+      ["plugin links", managed.pluginLinksDisposable],
       ["web links", managed.webLinksAddon],
     ] as const) {
       try {
@@ -2645,6 +2744,7 @@ class TerminalInstanceService {
     managed.fileLinksDisposable = null;
     managed.imageLinksDisposable = null;
     managed.commandLinksDisposable = null;
+    managed.pluginLinksDisposable = null;
     managed.webLinksAddon = null;
 
     // Before dispose: the manager holds pool/lease references to this exact
@@ -2965,6 +3065,7 @@ class TerminalInstanceService {
       return;
     }
     this.cancelAttachReveal(managed);
+    hideTerminalLinkTooltip(managed.terminal);
 
     const isDirectChild = managed.hostElement.parentElement === container;
     logDebug(`[TIS.detach] ${id}`, {
@@ -3001,6 +3102,7 @@ class TerminalInstanceService {
     this.cancelAttachReveal(managed);
 
     logDebug(`[TIS.detachForProjectSwitch] ${id}`);
+    hideTerminalLinkTooltip(managed.terminal);
 
     managed.isVisible = false;
     managed.isDetached = true;
@@ -4089,6 +4191,7 @@ class TerminalInstanceService {
     if (!managed) return;
 
     this.settleWaiters.rejectAll(id);
+    hideTerminalLinkTooltip(managed.terminal);
 
     // The attach banner describes an xterm instance that is about to stop
     // existing (#11776). Its Retry would target a terminal this service no
@@ -4185,6 +4288,11 @@ class TerminalInstanceService {
       managed.commandLinksDisposable?.dispose();
     } catch (error) {
       logWarn("Error disposing command links", { error });
+    }
+    try {
+      managed.pluginLinksDisposable?.dispose();
+    } catch (error) {
+      logWarn("Error disposing plugin links", { error });
     }
     try {
       managed.webLinksAddon?.dispose();

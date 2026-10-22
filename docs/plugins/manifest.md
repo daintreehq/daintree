@@ -113,6 +113,7 @@ Daintree reads the manifest eagerly at startup. Contribution points declared her
     "recipes": [/* named multi-terminal launch layouts */],
     "promptTemplates": [/* prompts offered in the composer's command picker */],
     "worktreeSetupSteps": [/* work done for each new worktree after its setup script */],
+    "terminalLinks": [/* terminal text and URLs that open with one of the plugin's commands */],
     "tours": [/* welcome tours for the plugin or one of its panels */],
     "agents": [/* requires the agent:register capability */],
     "processTools": [/* command → terminal-tab icon detections */],
@@ -331,7 +332,7 @@ List `"onStartupFinished"` to opt a plugin into eager activation when it genuine
 
 ### `contributes`
 
-Object containing an array per contribution type (`panels`, `toolbarButtons`, `menuItems`, `keybindings`, `contextMenus`, `commands`, `views`, `mcpServers`, `agentMcp`, `databases`, `tours`, `skills`, `forgeProviders`, `fileDecorationProviders`, `agents`, `processTools`, `settings`, `recipes`, `promptTemplates`, `worktreeSetupSteps`, and the built-in-only `fileEditors`, `previewTools`, `guestAdapters`) — plus the non-array `surfaces` and `account` objects. All are optional; unlisted types default to empty. Each array has an upper bound (`MANIFEST_CONTRIBUTION_CAPS` in `electron/schemas/plugin.ts`) generous for any real plugin and there to reject pathological manifests:
+Object containing an array per contribution type (`panels`, `toolbarButtons`, `menuItems`, `keybindings`, `contextMenus`, `commands`, `views`, `mcpServers`, `agentMcp`, `databases`, `tours`, `skills`, `forgeProviders`, `fileDecorationProviders`, `agents`, `processTools`, `settings`, `recipes`, `promptTemplates`, `worktreeSetupSteps`, `terminalLinks`, and the built-in-only `fileEditors`, `previewTools`, `guestAdapters`) — plus the non-array `surfaces` and `account` objects. All are optional; unlisted types default to empty. Each array has an upper bound (`MANIFEST_CONTRIBUTION_CAPS` in `electron/schemas/plugin.ts`) generous for any real plugin and there to reject pathological manifests:
 
 | Contribution              | Max entries                               |
 | ------------------------- | ----------------------------------------- |
@@ -349,6 +350,7 @@ Object containing an array per contribution type (`panels`, `toolbarButtons`, `m
 | `recipes`                 | 50                                        |
 | `promptTemplates`         | 50                                        |
 | `worktreeSetupSteps`      | 10                                        |
+| `terminalLinks`           | 20                                        |
 | `tours`                   | 10                                        |
 | `forgeProviders`          | 20                                        |
 | `fileDecorationProviders` | 50                                        |
@@ -373,6 +375,7 @@ A few notes on individual points; the [Contribution points reference](./contribu
 - `account` — one online account the host signs in to for the plugin. `kind: "oauth2"` declares `authorizeUrl`, `tokenUrl`, `clientId` and optional `scopes`, and the host runs an authorization-code flow with PKCE (S256) as a public client through a `127.0.0.1` loopback redirect, so the service must accept `http://127.0.0.1:<any port>/oauth/callback`. `kind: "token"` asks the user to paste an API token. Both take a `label`, an optional `description`, and an optional `identity: { url, field }`: a GET with the access token as a bearer whose JSON response names the account at the dotted `field` ("Connected as …"); for a pasted token, a 401 or 403 there refuses the token. Every URL must be public `https:` with no credentials or fragment, and requests to them refuse redirects. Requires the `network:fetch` capability. The host draws the Connect / Disconnect row in the plugin's settings (the plugin manager for an installed plugin, Project settings for a project plugin, whose account is per project), keeps the tokens in the OS keychain, and gives the plugin only a current access token through [`host.account`](./host-api.md#account--host-managed-sign-in). Signing in is refused from a window attached to another machine.
 - `promptTemplates` — declarative prompts for the composer's command picker, requiring no capability. See [Prompt templates](./contribution-points.md#prompt-templates--shipped).
 - `worktreeSetupSteps` — steps the plugin runs for each worktree Daintree creates, after the project's setup script, once the user allows them for the project. The handler is bound in `activate()` with `host.registerWorktreeSetupStep`. See [Worktree setup steps](./contribution-points.md#worktree-setup-steps--shipped).
+- `terminalLinks` — bounded patterns and URL hosts the host makes clickable in terminals, each dispatching one of the plugin's own commands, requiring no capability. See [Terminal links](./contribution-points.md#terminal-links--shipped).
 - `skills` and `recipes` — declarative content, requiring no capability. Skills are markdown served to agents through Daintree's own MCP server; recipes are named multi-terminal launch layouts, registered app-wide and immutable to the user. See [Skills](./contribution-points.md#skills--shipped) and [Recipes](./contribution-points.md#recipes--shipped).
 - `agents` — registers a launchable agent CLI as a selectable agent. Requires the `agent:register` capability; the schema rejects the contribution without it. An optional `detection` block wires it into the same agent-state UI built-in agents use.
 - `forgeProviders` and `fileDecorationProviders` — the manifest entry is read eagerly so the host's routing tables are populated before any plugin code runs; the implementation binds lazily in `activate()`. Forge providers are **built-in plugins only** — their host methods are synchronous and cannot cross the plugin worker's message port.

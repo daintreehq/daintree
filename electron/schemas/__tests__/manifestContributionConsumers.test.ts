@@ -38,6 +38,8 @@ import {
   RecipeContributionTerminalSchema,
   SettingDefinitionObjectSchema,
   PromptTemplateContributionSchema,
+  TerminalLinkContributionSchema,
+  TerminalLinkUrlSchema,
   SkillContributionSchema,
   SurfaceContributionsSchema,
   ThemeContributionSchema,
@@ -111,6 +113,8 @@ const PLUGIN_TOOLBAR_POPOVER = "src/components/Layout/PluginToolbarPopover.tsx";
 const SKILL_REGISTRY = "electron/services/plugin/PluginSkillRegistry.ts";
 const PROMPT_TEMPLATE_UTIL = "shared/utils/pluginPromptTemplates.ts";
 const PLUGIN_RUNTIME_STORE = "src/store/pluginRuntimeStore.ts";
+const PLUGIN_TERMINAL_LINKS = "src/services/terminal/pluginTerminalLinks.ts";
+const PLUGIN_TERMINAL_LINK_UTIL = "shared/utils/pluginTerminalLinks.ts";
 const COMMAND_PICKER = "src/components/Commands/CommandPicker.tsx";
 const PROMPT_TEMPLATE_FORM = "src/components/Commands/PromptTemplateForm.tsx";
 const THEME_REGISTRY = "electron/services/plugin/PluginThemeRegistry.ts";
@@ -171,6 +175,7 @@ const SWEPT_SCHEMAS = {
   skills: SkillContributionSchema,
   themes: ThemeContributionSchema,
   promptTemplates: PromptTemplateContributionSchema,
+  terminalLinks: TerminalLinkContributionSchema,
   forgeProviders: ForgeProviderContributionSchema,
   fileDecorationProviders: FileDecorationContributionSchema,
   fileEditors: FileEditorContributionSchema,
@@ -199,6 +204,7 @@ const SWEPT_SCHEMAS = {
   "launchEntries.agent": LaunchEntryAgentTargetSchema,
   "layouts.entries": LayoutEntryContributionSchema,
   "searchProviders.target": SearchProviderTargetSchema,
+  "terminalLinks.url": TerminalLinkUrlSchema,
   "recipes.terminals": RecipeContributionTerminalSchema,
   "forgeProviders.credentialFields": CredentialFieldSchema,
   "forgeProviders.slots": ForgeProviderContributionSchema.shape.slots,
@@ -228,6 +234,7 @@ const TOP_LEVEL_GROUPS = [
   "skills",
   "themes",
   "promptTemplates",
+  "terminalLinks",
   "forgeProviders",
   "fileDecorationProviders",
   "fileEditors",
@@ -305,6 +312,8 @@ type FieldConsumerCoverage = {
     keyof z.infer<typeof PromptTemplateContributionSchema>,
     ConsumerDescriptor
   >;
+  terminalLinks: Record<keyof z.infer<typeof TerminalLinkContributionSchema>, ConsumerDescriptor>;
+  "terminalLinks.url": Record<keyof z.infer<typeof TerminalLinkUrlSchema>, ConsumerDescriptor>;
   forgeProviders: Record<keyof z.infer<typeof ForgeProviderContributionSchema>, ConsumerDescriptor>;
   fileDecorationProviders: Record<
     keyof z.infer<typeof FileDecorationContributionSchema>,
@@ -1243,6 +1252,66 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
         { file: PROMPT_TEMPLATE_UTIL, symbol: "renderPromptTemplate" },
       ],
       note: "Each argument is a form field whose value replaces {{name}} in the body; required ones must be filled.",
+    },
+  },
+  terminalLinks: {
+    id: {
+      mode: "verbatim",
+      consumers: [{ file: PLUGIN_RUNTIME_STORE, symbol: "pullPluginRuntimeSnapshot (key)" }],
+      note: "Namespaced under the plugin's instance id into the matcher's key, which the slow-matcher switch-off records.",
+    },
+    actionId: {
+      mode: "derived-input",
+      consumers: [
+        { file: PLUGIN_RUNTIME_STORE, symbol: "pullPluginRuntimeSnapshot (actionId)" },
+        {
+          file: PLUGIN_TERMINAL_LINKS,
+          symbol: "activatePluginPatternLink / activatePluginUrlLink",
+        },
+      ],
+      note: "Rewritten into the instance namespace after an own-namespace check, then dispatched with the clicked text.",
+    },
+    pattern: {
+      mode: "verbatim",
+      consumers: [
+        { file: PLUGIN_TERMINAL_LINKS, symbol: "findPluginPatternLinks" },
+        {
+          file: "src/services/terminal/terminalLinkMatchWork.ts",
+          symbol: "createTerminalLinkMatchHandler",
+        },
+        { file: PLUGIN_TERMINAL_LINK_UTIL, symbol: "compileTerminalLinkPattern" },
+      ],
+      note: "Compiled once per worker and run over the hovered row's text, off the renderer thread.",
+    },
+    ignoreCase: {
+      mode: "verbatim",
+      consumers: [{ file: PLUGIN_TERMINAL_LINK_UTIL, symbol: "compileTerminalLinkPattern" }],
+      note: "Adds the `i` flag to the compiled pattern.",
+    },
+    url: {
+      mode: "verbatim",
+      consumers: [{ file: PLUGIN_TERMINAL_LINKS, symbol: "findPluginUrlClaim" }],
+      note: "Claims a hovered or clicked web link; see terminalLinks.url for its fields.",
+    },
+  },
+  "terminalLinks.url": {
+    scheme: {
+      mode: "verbatim",
+      consumers: [{ file: PLUGIN_TERMINAL_LINK_UTIL, symbol: "urlMatchesTerminalLinkTarget" }],
+      note: "The URL's parsed protocol must equal it.",
+    },
+    host: {
+      mode: "verbatim",
+      consumers: [{ file: PLUGIN_TERMINAL_LINK_UTIL, symbol: "urlMatchesTerminalLinkTarget" }],
+      note: "The URL's parsed hostname must equal it exactly, and pass the same loopback/private check again.",
+    },
+    pathPrefix: {
+      mode: "verbatim",
+      consumers: [
+        { file: PLUGIN_TERMINAL_LINK_UTIL, symbol: "urlMatchesTerminalLinkTarget" },
+        { file: PLUGIN_TERMINAL_LINKS, symbol: "findPluginUrlClaim (longest prefix wins)" },
+      ],
+      note: "The URL's parsed path must start with it; the longest prefix wins between plugins.",
     },
   },
   forgeProviders: {

@@ -6,6 +6,7 @@ const notify = vi.hoisted(() => vi.fn());
 const addPanel = vi.hoisted(() => vi.fn(() => Promise.resolve("new")));
 const setBrowserUrl = vi.hoisted(() => vi.fn());
 const activateTerminal = vi.hoisted(() => vi.fn());
+const activatePluginUrlLink = vi.hoisted(() => vi.fn<(url: string, id: string) => boolean>());
 const panelState = vi.hoisted(() => ({
   panelsById: {} as Record<string, unknown>,
   panelIds: [] as string[],
@@ -15,6 +16,7 @@ vi.mock("@/clients", () => ({ systemClient: { openExternal: vi.fn() } }));
 vi.mock("@/services/ActionService", () => ({ actionService: { dispatch } }));
 vi.mock("@/lib/notify", () => ({ notify }));
 vi.mock("@/lib/platform", () => ({ isMac: () => true }));
+vi.mock("../pluginTerminalLinks", () => ({ activatePluginUrlLink }));
 vi.mock("@/store/panelStore", () => ({
   usePanelStore: {
     getState: () => ({ ...panelState, addPanel, setBrowserUrl, activateTerminal }),
@@ -44,6 +46,7 @@ beforeEach(() => {
     createdAt: 1,
   }));
   dispatch.mockClear();
+  activatePluginUrlLink.mockReset().mockReturnValue(false);
   notify.mockClear();
   addPanel.mockClear();
   setBrowserUrl.mockClear();
@@ -129,5 +132,40 @@ describe("a forward that fails", () => {
     });
     expect(notify.mock.calls[0]![0].message).toContain("Port 5173 on the host");
     expect(dispatch).not.toHaveBeenCalled();
+  });
+});
+
+describe("a URL a plugin claims (#13798)", () => {
+  it("goes to the plugin instead of the browser", () => {
+    activatePluginUrlLink.mockReturnValue(true);
+    new TerminalLinkHandler().openLink("https://records.example.com/1", "t1", cmdClick);
+    expect(activatePluginUrlLink).toHaveBeenCalledWith("https://records.example.com/1", "t1");
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(addPanel).not.toHaveBeenCalled();
+  });
+
+  it("still opens in the external browser when asked to, without asking the plugin", () => {
+    activatePluginUrlLink.mockReturnValue(true);
+    new TerminalLinkHandler().openLink("https://records.example.com/1", "t1", cmdClick, {
+      external: true,
+    });
+    expect(activatePluginUrlLink).not.toHaveBeenCalled();
+    expect(dispatch).toHaveBeenCalledWith(
+      "system.openExternal",
+      { url: "https://records.example.com/1" },
+      { source: "user" }
+    );
+  });
+
+  it("opens a localhost link externally rather than in a panel when asked for the browser", () => {
+    new TerminalLinkHandler().openLink("http://localhost:5173/", "t1", cmdClick, {
+      external: true,
+    });
+    expect(addPanel).not.toHaveBeenCalled();
+    expect(dispatch).toHaveBeenCalledWith(
+      "system.openExternal",
+      { url: "http://localhost:5173/" },
+      { source: "user" }
+    );
   });
 });
