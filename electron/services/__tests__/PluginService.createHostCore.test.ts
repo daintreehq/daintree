@@ -832,6 +832,27 @@ describe("createHost (plugin activation API)", () => {
       expect(toolbarStateEvents()).toEqual([]);
     });
 
+    it("publishes a menu in the instance's namespace and refuses a foreign one (#13786)", async () => {
+      const { host } = await toolbarHost("ts-menu");
+      broadcastToRendererMock.mockClear();
+
+      await host.setToolbarButtonState("sync", {
+        menu: [{ actionId: "acme.ts-menu.pull", label: "Pull" }],
+      });
+      await host.setToolbarButtonState("sync", { menu: [] });
+      await expect(
+        host.setToolbarButtonState("sync", { menu: [{ actionId: "terminal.new" }] })
+      ).rejects.toThrow(/menu: entry 0 actionId/);
+
+      expect(toolbarStateEvents().map((event) => event.payload)).toEqual([
+        {
+          pluginId: "acme.ts-menu",
+          states: { sync: { menu: [{ actionId: "acme.ts-menu.pull", label: "Pull" }] } },
+        },
+        { pluginId: "acme.ts-menu", states: { sync: { menu: [] } } },
+      ]);
+    });
+
     it("silently no-ops once the plugin is unloaded", async () => {
       const { service, host } = await toolbarHost("ts-unloaded");
       service.unloadPlugin("acme.ts-unloaded");

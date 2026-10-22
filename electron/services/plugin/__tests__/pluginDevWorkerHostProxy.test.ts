@@ -1480,6 +1480,31 @@ describe("PluginDevWorkerHostProxy setToolbarButtonState (#13785)", () => {
     await expect(clear).resolves.toBeUndefined();
   });
 
+  it("relays a menu as plain entries, and rejects one it can't read (#13786)", async () => {
+    const { proxy, sent } = makeProxy();
+    const set = proxy.host.setToolbarButtonState("sync", {
+      menu: [{ actionId: "acme.pull", label: "Pull" }],
+    });
+    const call = sent.find((m) => m.type === "host-call" && m.method === "setToolbarButtonState");
+    expect(call?.params).toEqual({
+      buttonId: "sync",
+      state: { menu: [{ actionId: "acme.pull", label: "Pull" }] },
+    });
+    resolveCall(proxy, sent, "setToolbarButtonState", undefined);
+    await expect(set).resolves.toBeUndefined();
+
+    const throwing = {
+      get actionId(): string {
+        throw new Error("boom");
+      },
+    };
+    let rejected: Promise<void> | undefined;
+    expect(() => {
+      rejected = proxy.host.setToolbarButtonState("sync", { menu: [throwing] });
+    }).not.toThrow();
+    await expect(rejected).rejects.toThrow(/invalid state — boom/);
+  });
+
   it("passes main's ownership rejection back to the caller", async () => {
     const { proxy, sent } = makeProxy();
     const promise = proxy.host.setToolbarButtonState("other", { pressed: true });

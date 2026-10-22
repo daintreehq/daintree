@@ -848,12 +848,17 @@ const TOOLBAR_STATE_KEYS: ReadonlySet<string> = new Set([
   ...TOOLBAR_STATE_BOOLEAN_KEYS,
   ...TOOLBAR_STATE_TEXT_KEYS,
   "iconId",
+  "menu",
 ]);
 /** Mirrors `PLUGIN_TOOLBAR_BUTTON_STATE_TEXT_MAX` in `shared/types/plugin.ts`. */
 const MOCK_TOOLBAR_STATE_TEXT_MAX = 200;
 
 /** Mirror production's `PluginToolbarButtonRuntimeStateSchema` (#13785). */
-function validateToolbarButtonState(state: PluginToolbarButtonRuntimeState): void {
+function validateToolbarButtonState(
+  state: PluginToolbarButtonRuntimeState,
+  manifestId: string,
+  pluginId: string
+): void {
   const fail = (message: string): never => {
     throw new Error(`setToolbarButtonState: invalid state — ${message}`);
   };
@@ -882,6 +887,11 @@ function validateToolbarButtonState(state: PluginToolbarButtonRuntimeState): voi
     (typeof iconId !== "string" || iconId.length < 1 || iconId.length > 256)
   ) {
     fail("iconId: must be a non-empty string at most 256 characters");
+  }
+  if (state.menu !== undefined) {
+    // The host's own vetting, so a menu it refuses rejects here too.
+    const menu = normalizePanelMenuItems(state.menu, manifestId, pluginId);
+    if (!menu.ok) fail(`menu: ${menu.error}`);
   }
   if (state.disabled === true && state.disabledReason === undefined) {
     fail("disabledReason: a disabled button needs a disabledReason");
@@ -2238,7 +2248,7 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
       }
       if (state !== null && state !== undefined) {
         try {
-          validateToolbarButtonState(state);
+          validateToolbarButtonState(state, mockManifestId, pluginId);
         } catch (err) {
           return Promise.reject(err);
         }
