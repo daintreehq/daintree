@@ -303,6 +303,7 @@ describe("HostControlLinkClient relay notices (#13500)", () => {
       expect(garbled.receiveNoticeStatus).not.toHaveBeenCalled();
       invalid.relay.dispose();
     } finally {
+      warn.mockClear();
     }
   });
 });
