@@ -119,6 +119,11 @@ export class PtyManager extends EventEmitter {
   >();
   // Drive leases a remote client is party to, by project (pushed by Main).
   private driveLeases = new Map<string, PtyHostDriveLease>();
+  // Processes a session-preserving project teardown is ending. Their exits are
+  // tagged so the renderer keeps the pane in the layout it will be restored
+  // into, rather than treating a signal kill's code 0 as the user's own `exit`
+  // (#13841). Held per instance, not per id, so a same-id respawn starts clean.
+  private sessionPreservingTeardowns = new WeakSet<TerminalProcess>();
   // Output the TerminalProcess constructor emits before `registry.add` — the
   // pooled-shell prelude and any chunks the data handoff buffered while the
   // shell sat in the pool. `emitData` routes by registry entry, so without this
@@ -580,7 +585,14 @@ export class PtyManager extends EventEmitter {
             if (this.registry.get(termId) !== terminalProcess) {
               return;
             }
-            this.emit("exit", termId, exitCode, signal, options.launchGeneration);
+            this.emit(
+              "exit",
+              termId,
+              exitCode,
+              signal,
+              options.launchGeneration,
+              this.sessionPreservingTeardowns.has(terminalProcess) || undefined
+            );
             if (!terminalProcess.shouldPreserveOnExit(exitCode)) {
               this.registry.delete(termId);
             }
@@ -1389,6 +1401,15 @@ export class PtyManager extends EventEmitter {
     if (terminalIds.length === 0) return [];
 
     logInfo(`Gracefully killing ${terminalIds.length} terminal(s) for project ${projectId}`);
+
+    // Marked before any shutdown starts: an agent can exit on its own partway
+    // through its quit sequence, before the teardown's kill ever runs.
+    if (options?.preserveSession) {
+      for (const terminalId of terminalIds) {
+        const terminal = this.registry.get(terminalId);
+        if (terminal) this.sessionPreservingTeardowns.add(terminal);
+      }
+    }
 
     const results = await Promise.all(
       terminalIds.map(async (terminalId) => {

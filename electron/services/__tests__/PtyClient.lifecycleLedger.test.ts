@@ -318,7 +318,7 @@ describe("PtyClient lifecycle ledger", () => {
     mockChild.emit("message", { type: "exit", id: "t1", exitCode: 0, launchGeneration: 2 });
     expect(ledger.getEntry("t1")?.closedAt).toBeDefined();
     expect(ledger.getEntry("t1")?.exitCode).toBe(0);
-    expect(onExit).toHaveBeenCalledExactlyOnceWith("t1", 0, undefined);
+    expect(onExit).toHaveBeenCalledExactlyOnceWith("t1", 0, undefined, undefined);
     expect(client.hasTerminal("t1")).toBe(false);
   });
 

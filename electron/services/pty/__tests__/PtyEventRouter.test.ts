@@ -160,8 +160,21 @@ describe("routeHostEvent", () => {
     routeHostEvent({ type: "error", id: "t1", error: "boom" }, deps);
 
     expect(dataListener).toHaveBeenCalledWith("t1", "x");
-    expect(exitListener).toHaveBeenCalledWith("t1", 0, undefined);
+    expect(exitListener).toHaveBeenCalledWith("t1", 0, undefined, undefined);
     expect(errorListener).toHaveBeenCalledWith("t1", "boom");
+  });
+
+  it("forwards a session-preserving teardown's mark with the exit (#13841)", () => {
+    const { deps, emitter } = makeDeps();
+    const exitListener = vi.fn();
+    emitter.on("exit", exitListener);
+
+    routeHostEvent(
+      { type: "exit", id: "t1", exitCode: 0, signal: 15, preserveSession: true },
+      deps
+    );
+
+    expect(exitListener).toHaveBeenCalledExactlyOnceWith("t1", 0, 15, true);
   });
 
   it("forwards the host's delivered-view list on a data event (#12557)", () => {
@@ -310,7 +323,7 @@ describe("routeHostEvent", () => {
     expect(state.pendingSpawns.has("t1")).toBe(false);
     expect(state.terminalPids.has("t1")).toBe(false);
     expect(callbacks.trashIdsRemoved).toEqual(["t1"]);
-    expect(onExit).toHaveBeenCalledExactlyOnceWith("t1", 0, undefined);
+    expect(onExit).toHaveBeenCalledExactlyOnceWith("t1", 0, undefined, undefined);
     expect(recordExit).toHaveBeenLastCalledWith("t1", 0, 2);
   });
 

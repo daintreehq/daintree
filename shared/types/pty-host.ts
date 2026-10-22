@@ -679,7 +679,16 @@ export type PtyHostEvent =
     }
   // `launchGeneration` attributes the exit to one terminal incarnation so a
   // stale exit arriving after a same-id respawn can't close the successor.
-  | { type: "exit"; id: string; exitCode: number; signal?: number; launchGeneration?: number }
+  // `preserveSession` marks an exit a session-preserving project teardown
+  // caused, so the renderer keeps the pane in the layout (#13841).
+  | {
+      type: "exit";
+      id: string;
+      exitCode: number;
+      signal?: number;
+      launchGeneration?: number;
+      preserveSession?: boolean;
+    }
   | { type: "error"; id: string; error: string }
   // Typed submit-lane status (#11875). Deliberately NOT folded into the `error`
   // carrier above: "this prompt is taking a while" is not an error, and the

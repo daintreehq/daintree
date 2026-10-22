@@ -933,6 +933,7 @@ export const createRestartActions = (
           // restart that fails validation leaves the offer to try again.
           agentResumeOffer: undefined,
           exitCode: undefined,
+          sessionPreservingExit: undefined,
           // Drop the prior session's parsed check result (#10682) — a fresh
           // run hasn't produced one yet, and a stale pass/fail would mislead.
           lastCheckResult: undefined,
@@ -1625,6 +1626,7 @@ async function respawnAgentOnPreset(
         isRestarting: true,
         restartError: undefined,
         exitCode: undefined,
+        sessionPreservingExit: undefined,
         // Drop the prior session's parsed check result (#10682) — a fresh
         // run hasn't produced one yet, and a stale pass/fail would mislead.
         lastCheckResult: undefined,

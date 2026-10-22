@@ -15,6 +15,7 @@ import type { AgentSettings } from "../agentSettings.js";
 import type { AgentPreset } from "../../config/agentRegistry.js";
 import type { UserAgentRegistry, UserAgentConfig } from "../userAgentRegistry.js";
 import type { KeyAction } from "../keymap.js";
+import type { TerminalExitContext } from "../terminal.js";
 import type {
   KeybindingImportResult,
   MicPermissionStatus,
@@ -1458,7 +1459,7 @@ export interface IpcEventMap {
 
   // Terminal events
   "terminal:data": [id: string, data: string | Uint8Array];
-  "terminal:exit": [id: string, exitCode: number];
+  "terminal:exit": [id: string, exitCode: number, context?: TerminalExitContext];
   "terminal:error": [id: string, error: string];
   "terminal:trashed": { id: string; expiresAt: number };
   "terminal:restored": { id: string };

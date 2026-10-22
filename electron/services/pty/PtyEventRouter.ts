@@ -224,7 +224,7 @@ export function routeHostEvent(event: PtyHostEvent, deps: PtyEventRouterDeps): b
       // ledger/reaper above, but never clear the successor's PID/trash state or
       // broadcast an id-only exit that would auto-trash its live renderer pane.
       if (superseded) return true;
-      emitter.emit("exit", event.id, event.exitCode, event.signal);
+      emitter.emit("exit", event.id, event.exitCode, event.signal, event.preserveSession);
       return true;
     }
 

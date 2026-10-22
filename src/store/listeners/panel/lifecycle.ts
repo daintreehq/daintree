@@ -398,7 +398,7 @@ export function setupLifecycleListeners(): DisposableStore {
 
   d.add(
     toDisposable(
-      terminalRegistryController.onExit((id, exitCode) => {
+      terminalRegistryController.onExit((id, exitCode, context) => {
         // Check synchronous restart guard FIRST - this handles the race condition where
         // the store's isRestarting flag hasn't propagated yet during bulk restarts
         if (isTerminalRestarting(id)) {
@@ -424,6 +424,8 @@ export function setupLifecycleListeners(): DisposableStore {
         // resurrect a stale "paused" pill on the just-exited panel (#9899).
         cancelTerminalFlowState(id);
 
+        const sessionPreservingExit = context?.preserveSession === true;
+
         // Store exit code and clear the flow state on the terminal before
         // applying exit behavior. Flow status must not outlive the PTY process
         // that owned the pause — clear it atomically with the exit-code write so
@@ -437,6 +439,7 @@ export function setupLifecycleListeners(): DisposableStore {
               [id]: {
                 ...existing,
                 exitCode,
+                sessionPreservingExit: sessionPreservingExit || undefined,
                 flowStatus: undefined,
                 flowStatusTimestamp: undefined,
                 heldDurationMs: undefined,
@@ -458,6 +461,14 @@ export function setupLifecycleListeners(): DisposableStore {
         // so they don't linger in the dock as "exited" agents.
         if (terminal.removeOnExit === true) {
           state.removePanel(id);
+          return;
+        }
+
+        // Sleep, hibernation, idle close and quit end the project's processes
+        // and restore its layout on reopen. A signal-killed shell reports code
+        // 0, so without this it would be trashed like one the user typed `exit`
+        // in, and drop out of the layout that is saved mid-teardown (#13841).
+        if (sessionPreservingExit) {
           return;
         }
 

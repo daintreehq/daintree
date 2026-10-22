@@ -1,6 +1,7 @@
 import type {
   TerminalSpawnOptions,
   TerminalKillOptions,
+  TerminalExitContext,
   AgentStateChangePayload,
   AgentDetectedPayload,
   AgentExitedPayload,
@@ -861,7 +862,9 @@ export const terminalClient = {
     };
   },
 
-  onExit: (callback: (id: string, exitCode: number) => void): (() => void) => {
+  onExit: (
+    callback: (id: string, exitCode: number, context?: TerminalExitContext) => void
+  ): (() => void) => {
     return window.electron.terminal.onExit(callback);
   },
 

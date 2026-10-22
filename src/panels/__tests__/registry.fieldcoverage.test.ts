@@ -143,6 +143,9 @@ const PTY_FIELD_CLASSIFICATION = {
   removeOnExit: false,
   startedAt: false,
   exitCode: false,
+  // Session-preserving teardown mark (#13841) — describes the exit that just
+  // happened; the restored pane gets a new process, so nothing to persist.
+  sessionPreservingExit: false,
   // Parsed check result (#10682) — live signal from agent:state-changed,
   // cleared on restart; intentionally not persisted by the PTY serializer.
   lastCheckResult: false,

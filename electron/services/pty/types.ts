@@ -292,7 +292,18 @@ export interface PtyManagerEvents {
   ) => void;
   /** A window's renderer MessagePort connection was torn down in the host (#12557). */
   "port-disconnected": (windowId: number, reason: string, holderWebContentsId?: number) => void;
-  exit: (id: string, exitCode: number, signal?: number, launchGeneration?: number) => void;
+  /**
+   * `preserveSession` marks an exit caused by a session-preserving project
+   * teardown (sleep, hibernation, idle close, quit, relocation): the pane is
+   * coming back on reopen, so the renderer keeps it in the layout.
+   */
+  exit: (
+    id: string,
+    exitCode: number,
+    signal?: number,
+    launchGeneration?: number,
+    preserveSession?: boolean
+  ) => void;
   error: (id: string, error: string) => void;
   "resize-result": (id: string, result: TerminalResizeResult) => void;
 }
