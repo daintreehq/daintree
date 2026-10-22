@@ -344,6 +344,28 @@ describe("DriveLeaseService", () => {
     expect(service.getHolder("p")?.endpointId).toBe("s2:e1");
   });
 
+  it("hands the lease to a view reopened under its holder's id, on the new view's connection", async () => {
+    const hostWindow = local(1);
+    const laptop = remote("s1:e1", "c1");
+    registry.add(hostWindow);
+    registry.add(laptop);
+    await settle();
+    const taken = service.takeOver("p", laptop);
+
+    // Closed and opened again before the registry's change settles.
+    laptop.close();
+    const reopened = remote("s1:e1", "c1");
+    registry.add(reopened);
+    await settle();
+
+    const holder = service.getHolder("p")!;
+    expect(holder.leaseId).toBeGreaterThan(taken.leaseId);
+    expect(leaseTables.at(-1)).toEqual([
+      { projectId: "p", leaseId: holder.leaseId, holderConnection: reopened.handle },
+    ]);
+    expect(service.isDriving("p", reopened)).toBe(true);
+  });
+
   it("releases to nobody when no one is left on the project", async () => {
     const laptop = remote("s1:e1", "c1");
     registry.add(laptop);

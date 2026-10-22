@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { z } from "zod";
 import { EndpointRegistryImpl } from "../../../ipc/endpointRegistry.js";
 import type { EndpointInvocation, RemoteSessionExpiryCause } from "../../../ipc/endpoint.js";
 import { logBuffer } from "../../../services/LogBuffer.js";
@@ -21,6 +22,7 @@ function fakeLink() {
   const closeListeners = new Set<() => void>();
   const posted: Array<{ lane: number; kind: number; body: unknown }> = [];
   const calls: Array<{ method: string; payload: unknown }> = [];
+  const callHandlers = new Map<string, { schema: z.ZodType; handler: (p: never) => unknown }>();
   const link = {
     isOpen: true,
     isClosed: false,
@@ -43,7 +45,19 @@ function fakeLink() {
       closeListeners.add(cb);
       return () => closeListeners.delete(cb);
     },
-    registerCallHandler: () => () => {},
+    registerCallHandler(method: string, schema: z.ZodType, handler: (p: never) => unknown) {
+      const entry = { schema, handler };
+      callHandlers.set(method, entry);
+      return () => {
+        if (callHandlers.get(method) === entry) callHandlers.delete(method);
+      };
+    },
+    /** What the Shell's CALL would run, its payload validated as the session would. */
+    runCall(method: string, payload: unknown) {
+      const entry = callHandlers.get(method);
+      if (!entry) throw new Error(`no handler for ${method}`);
+      return entry.handler(entry.schema.parse(payload) as never);
+    },
     setInvokeHandler(handler: ((m: unknown) => Promise<IpcEnvelope>) | null) {
       link.invokeHandler = handler;
     },
@@ -134,8 +148,17 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-function open(link: ReturnType<typeof fakeLink>, endpointId: string, projectId: string | null) {
-  link.emit(Lane.CONTROL, ControlKind.ENDPOINT_OPEN, { endpointId, projectId });
+function open(
+  link: ReturnType<typeof fakeLink>,
+  endpointId: string,
+  projectId: string | null,
+  openId?: string
+) {
+  link.emit(Lane.CONTROL, ControlKind.ENDPOINT_OPEN, {
+    endpointId,
+    projectId,
+    ...(openId ? { openId } : {}),
+  });
 }
 
 describe("SessionHost", () => {
@@ -453,6 +476,93 @@ describe("SessionHost", () => {
     expect(handle.link()).toBe(link);
     link.drop();
     expect(handle.link()).toBeNull();
+  });
+});
+
+describe("SessionHost: endpoint changes a dropped link lost (#13917)", () => {
+  function resumed(): ReturnType<typeof fakeLink> {
+    const link = fakeLink();
+    server.attach("s1", link, true);
+    return link;
+  }
+
+  it("closes what a resumed Shell no longer holds, as the Shell's own close would", () => {
+    const first = fakeLink();
+    server.attach("s1", first);
+    open(first, "view-1", "p1", "o1");
+    open(first, "view-2", "p2", "o2");
+    const kept = host.getEndpoint("s1", "view-1")!;
+    const lost = host.getEndpoint("s1", "view-2")!;
+    first.drop();
+
+    const second = resumed();
+    open(second, "view-1", "p1", "o1");
+    second.runCall(LinkMethod.ENDPOINT_RECONCILE, { endpointIds: ["view-1"] });
+
+    expect(lost.closeCause).toBe("client-closed");
+    expect(host.getEndpoint("s1", "view-2")).toBeUndefined();
+    expect(registry.getRemote()).toEqual([kept]);
+  });
+
+  it("keeps an endpoint opened after the Shell's list, which the control lane put ahead of it", () => {
+    const first = fakeLink();
+    server.attach("s1", first);
+    open(first, "view-1", "p1", "o1");
+    open(first, "view-2", "p2", "o2");
+    first.drop();
+
+    const second = resumed();
+    open(second, "view-1", "p1", "o1");
+    // The Shell had closed view-2 and opened it again since it took the list.
+    open(second, "view-2", "p2", "o3");
+    const reopened = host.getEndpoint("s1", "view-2")!;
+    second.runCall(LinkMethod.ENDPOINT_RECONCILE, { endpointIds: ["view-1"] });
+
+    expect(reopened.isClosed()).toBe(false);
+    expect(registry.getRemote()).toHaveLength(2);
+  });
+
+  it("starts a view afresh when it is opened again under another open, and only then", () => {
+    const link = fakeLink();
+    server.attach("s1", link);
+    open(link, "view-1", "p1", "o1");
+    const first = host.getEndpoint("s1", "view-1")!;
+    open(link, "view-1", "p1", "o1");
+    // A Shell that names no open moves the endpoint, as it always has.
+    open(link, "view-1", "p2");
+    expect(host.getEndpoint("s1", "view-1")).toBe(first);
+    expect(first.projectId).toBe("p2");
+
+    open(link, "view-1", "p1", "o2");
+
+    const reopened = host.getEndpoint("s1", "view-1")!;
+    expect(reopened).not.toBe(first);
+    expect(first.closeCause).toBe("client-closed");
+    expect(reopened.projectId).toBe("p1");
+    expect(registry.getRemote()).toEqual([reopened]);
+  });
+
+  it("tells the Shell to resync a view whose open the drop lost", () => {
+    const first = fakeLink();
+    server.attach("s1", first);
+    open(first, "view-1", "p1", "o1");
+    first.drop();
+
+    const second = resumed();
+    open(second, "view-1", "p1", "o1");
+    open(second, "view-2", "p2", "o2");
+    second.runCall(LinkMethod.ENDPOINT_RECONCILE, { endpointIds: ["view-1", "view-2"] });
+
+    expect(second.calls).toEqual([
+      {
+        method: LinkMethod.ENDPOINT_RESYNC,
+        payload: { endpointIds: ["view-1"], reason: "reattached" },
+      },
+      {
+        method: LinkMethod.ENDPOINT_RESYNC,
+        payload: { endpointIds: ["view-2"], reason: "reattached" },
+      },
+    ]);
   });
 });
 

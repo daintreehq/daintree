@@ -21,6 +21,7 @@ import type { HostSessionContext, HostSessionExpired } from "./HostServer.js";
 import {
   DescribeProjectPayloadSchema,
   EmptyPayloadSchema,
+  EndpointReconcilePayloadSchema,
   LinkMethod,
   MAX_LISTED_PROJECTS,
   type EndpointAgentActivityPayload,
@@ -151,6 +152,14 @@ interface SessionState {
   /** Client endpoint ids that missed events and must be told to resync. */
   stale: Set<string>;
   staleReason: EndpointResyncReason;
+  /**
+   * Live endpoints an ENDPOINT_OPEN named on the current link, and those it
+   * created rather than found. A resumed Shell repeats its opens before it
+   * says which endpoints it holds, so an open it made after saying so (which
+   * the control lane can put ahead of the call) is told from one it lost.
+   */
+  openedOnLink: Set<string>;
+  createdOnLink: Set<string>;
   /**
    * What the Shell was last told about each endpoint, per answer, by client
    * endpoint id. An endpoint missing here is owed an answer: cleared when the
@@ -381,6 +390,8 @@ export class SessionHost {
         resyncing: false,
         stale: new Set(),
         staleReason: "reattached",
+        openedOnLink: new Set(),
+        createdOnLink: new Set(),
         told: { assistant: new Map(), agents: new Map() },
         answerRetry: { assistant: null, agents: null },
         overHighWaterTimer: null,
@@ -421,10 +432,12 @@ export class SessionHost {
   private bindLink(state: SessionState, link: LinkSession): void {
     this.unbindLink(state);
     state.link = link;
+    state.openedOnLink.clear();
+    state.createdOnLink.clear();
     const s = state;
     s.detach.push(
       link.on(Lane.CONTROL, ControlKind.ENDPOINT_OPEN, (body) =>
-        this.openEndpoint(s, body.endpointId, body.projectId)
+        this.openEndpoint(s, body.endpointId, body.projectId, body.openId)
       ),
       link.on(Lane.CONTROL, ControlKind.ENDPOINT_REBIND, (body) =>
         this.rebindEndpoint(s, body.endpointId, body.projectId)
@@ -454,6 +467,14 @@ export class SessionHost {
       ),
       link.registerCallHandler(LinkMethod.LAST_ACTIVE_PROJECT, EmptyPayloadSchema, () =>
         this.lastActiveProject(s.client)
+      ),
+      link.registerCallHandler(
+        LinkMethod.ENDPOINT_RECONCILE,
+        EndpointReconcilePayloadSchema,
+        ({ endpointIds }) => {
+          this.reconcileEndpoints(s, endpointIds);
+          return null;
+        }
       ),
       link.onClose(() => {
         if (s.link !== link) return;
@@ -507,11 +528,22 @@ export class SessionHost {
     }
   }
 
-  private openEndpoint(state: SessionState, clientEndpointId: string, projectId: string | null) {
+  private openEndpoint(
+    state: SessionState,
+    clientEndpointId: string,
+    projectId: string | null,
+    openId: string | undefined
+  ) {
     const existing = state.endpoints.get(clientEndpointId);
     if (existing && !existing.isClosed()) {
-      this.rebindEndpoint(state, clientEndpointId, projectId);
-      return;
+      if (openId === undefined || existing.openId === null || existing.openId === openId) {
+        state.openedOnLink.add(clientEndpointId);
+        this.rebindEndpoint(state, clientEndpointId, projectId);
+        return;
+      }
+      // The Shell closed this view and opened it again, and the close was lost
+      // with a dropped link: the reopened view starts afresh, as it would have.
+      existing.close("client-closed");
     }
     if (state.endpoints.size >= this.maxEndpoints) {
       logger.warn("Remote session is at its endpoint cap; ignoring a view", {
@@ -529,10 +561,13 @@ export class SessionHost {
         clientId: state.client.clientId,
         linkSessionId: state.sessionId,
         projectId,
+        openId,
       },
       this.transportFor(state)
     );
     state.endpoints.set(clientEndpointId, endpoint);
+    state.openedOnLink.add(clientEndpointId);
+    state.createdOnLink.add(clientEndpointId);
     logger.info("Remote view endpoint opened", describeEndpoint(endpoint));
     // A new endpoint has no assistant yet, which is what the Shell assumes.
     // Its project's agents may already be working, so that answer is owed.
@@ -545,6 +580,8 @@ export class SessionHost {
       if (state.endpoints.get(clientEndpointId) === endpoint) {
         state.endpoints.delete(clientEndpointId);
         state.stale.delete(clientEndpointId);
+        state.openedOnLink.delete(clientEndpointId);
+        state.createdOnLink.delete(clientEndpointId);
         for (const answer of ENDPOINT_ANSWERS) state.told[answer].delete(clientEndpointId);
         this.publishFrontendCount();
       }
@@ -580,6 +617,33 @@ export class SessionHost {
     // owed one even when it reads the same as the old project's.
     state.told.agents.delete(clientEndpointId);
     for (const answer of ENDPOINT_ANSWERS) this.announce(state, answer);
+  }
+
+  /**
+   * A resumed Shell holds `held` and has repeated each one's open on this
+   * link. Any other endpoint kept for it was closed in a frame the drop lost;
+   * one of `held` this link had to create was opened in one, and its view
+   * missed everything sent since.
+   */
+  private reconcileEndpoints(state: SessionState, held: string[]): void {
+    const holds = new Set(held);
+    const lost = [...state.endpoints.values()].filter(
+      (endpoint) =>
+        !holds.has(endpoint.clientEndpointId) &&
+        !state.openedOnLink.has(endpoint.clientEndpointId) &&
+        !endpoint.isClosed()
+    );
+    if (lost.length > 0) {
+      logger.info("Closing remote view endpoints whose close a dropped link lost", {
+        sessionId: state.sessionId,
+        clientId: state.client.clientId,
+        clientEndpointIds: lost.map((endpoint) => endpoint.clientEndpointId),
+      });
+    }
+    // The ordinary close, so the lease, streams and rings go as they would have.
+    for (const endpoint of lost) endpoint.close("client-closed");
+    for (const id of holds) if (state.createdOnLink.has(id)) state.stale.add(id);
+    if (state.stale.size > 0 && !state.resyncing) this.announceResync(state);
   }
 
   private transportFor(state: SessionState): RemoteEndpointTransport {

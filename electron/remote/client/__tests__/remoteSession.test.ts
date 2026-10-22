@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type net from "node:net";
+import { z } from "zod";
 
 type InvokeListener = (event: unknown, ...args: unknown[]) => unknown;
 
@@ -83,6 +84,7 @@ import {
 import { HostRegistry, type RemoteHostsStore } from "../HostRegistry.js";
 import {
   RemoteHostManager,
+  type HostConnection,
   type ReverseRequestAnswerer,
   type ViewSink,
 } from "../RemoteHostManager.js";
@@ -712,6 +714,109 @@ describe("remote session wiring", () => {
       // Resumed, not replaced: the close owed from the outage reaches the host.
       await waitFor(() => getEndpointRegistry().getRemote().length === 0);
     }
+  });
+
+  describe("endpoint changes still queued when the link drops (#13917)", () => {
+    /** Run `act`, then drop the link in the same tick so what it queued is never written. */
+    async function dropWith(act: (connection: HostConnection) => void): Promise<void> {
+      const connection = h.manager.get(HOST_ID)!;
+      const session = connection.currentSession!;
+      const sessionId = connection.lastSessionId;
+      act(connection);
+      expect(session.queuedBytes(Lane.CONTROL)).toBeGreaterThan(0);
+      for (const socket of h.sockets.splice(0)) socket.destroy();
+      await waitFor(
+        () => connection.currentSession !== null && connection.currentSession !== session
+      );
+      // Resumed, not replaced: the host kept what it had, lost frames and all.
+      expect(connection.lastSessionId).toBe(sessionId);
+    }
+
+    it("opens the endpoint on resume and tells the view it missed events", async () => {
+      await startHarness();
+      await connect();
+
+      await dropWith((connection) => connection.send(VIEW_B, "proj-2", HOST_CHANNEL, [{}]));
+
+      const envelope = await invoke(HOST_CHANNEL, VIEW_B, {});
+      expect(envelope).toEqual(wrapSuccess({ answeredFor: "proj-2", remote: true }));
+      await waitFor(() => h.sink.resyncs.length === 1);
+      expect(h.sink.resyncs).toEqual([{ webContentsId: VIEW_B, reason: "reattached" }]);
+    });
+
+    it("moves the endpoint to the view's project on resume", async () => {
+      await startHarness();
+      await connect();
+      await invoke(HOST_CHANNEL, VIEW_A, {});
+      const endpoint = getEndpointRegistry().getRemote()[0]!;
+
+      await dropWith((connection) => connection.send(VIEW_A, "proj-2", HOST_CHANNEL, [{}]));
+
+      await waitFor(() => endpoint.projectId === "proj-2");
+      expect(getEndpointRegistry().getRemote()).toEqual([endpoint]);
+    });
+
+    it("closes the endpoint of a view closed just before the drop, and keeps the rest", async () => {
+      await startHarness();
+      await connect();
+      await invoke(HOST_CHANNEL, VIEW_A, {});
+      await invoke(HOST_CHANNEL, VIEW_B, {});
+      const kept = getEndpointRegistry()
+        .getRemote()
+        .find((endpoint) => endpoint.projectId === "proj-1")!;
+      const ghost = getEndpointRegistry()
+        .getRemote()
+        .find((endpoint) => endpoint.projectId === "proj-2")!;
+
+      await dropWith(() => h.sink.gone(VIEW_B));
+
+      await waitFor(() => ghost.isClosed());
+      expect(ghost.closeCause).toBe("client-closed");
+      expect(getEndpointRegistry().getRemote()).toEqual([kept]);
+      const envelope = await invoke(HOST_CHANNEL, VIEW_A, {});
+      expect(envelope.ok).toBe(true);
+      expect(hostContexts.at(-1)!.endpoint).toBe(kept);
+    });
+
+    it("ends with the reopened view when a close and reopen under one id were both lost", async () => {
+      await startHarness();
+      await connect();
+      await invoke(HOST_CHANNEL, VIEW_A, {});
+      const closed = getEndpointRegistry().getRemote()[0]!;
+
+      await dropWith((connection) => {
+        connection.retireView(VIEW_A);
+        connection.send(VIEW_A, "proj-1", HOST_CHANNEL, [{}]);
+      });
+
+      await waitFor(() => closed.isClosed());
+      expect(closed.closeCause).toBe("client-closed");
+      const envelope = await invoke(HOST_CHANNEL, VIEW_A, {});
+      expect(envelope.ok).toBe(true);
+      const reopened = hostContexts.at(-1)!.endpoint;
+      expect(reopened).not.toBe(closed);
+      expect(getEndpointRegistry().getRemote()).toEqual([reopened]);
+    });
+
+    it("still opens what was lost on a host too old to reconcile", async () => {
+      await startHarness();
+      // A host from before the reconcile call has no handler for it.
+      cleanups.push(
+        h.server.onSession(({ session }) => {
+          session.registerCallHandler(LinkMethod.ENDPOINT_RECONCILE, z.unknown(), () => {
+            throw new AppError({ code: "UNSUPPORTED", message: "Unknown method" });
+          });
+        })
+      );
+      await connect();
+      await invoke(HOST_CHANNEL, VIEW_A, {});
+
+      await dropWith((connection) => connection.send(VIEW_B, "proj-2", HOST_CHANNEL, [{}]));
+
+      const envelope = await invoke(HOST_CHANNEL, VIEW_B, {});
+      expect(envelope).toEqual(wrapSuccess({ answeredFor: "proj-2", remote: true }));
+      expect((await invoke(HOST_CHANNEL, VIEW_A, {})).ok).toBe(true);
+    });
   });
 
   it("delivers nothing to a view that now belongs to another host", async () => {

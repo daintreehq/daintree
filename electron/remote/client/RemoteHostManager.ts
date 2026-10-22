@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { IpcEnvelope } from "../../../shared/types/ipc/errors.js";
 import type {
   HostConnectionState,
@@ -29,6 +30,7 @@ import {
   HostProjectListSchema,
   LinkMethod,
   ProjectDescriptionSchema,
+  type EndpointReconcilePayload,
   type EndpointResyncReason,
   type HostInfo,
   type HostProjectList,
@@ -87,6 +89,8 @@ interface OpenEndpoint {
   projectId: string | null;
   /** The session it was opened on, which a resume keeps and a fresh session replaces. */
   sessionId: string | null;
+  /** Names this open, so the host can tell it from an earlier one under the same id. */
+  openId: string;
 }
 
 /** A local view's endpoint is live on a session: newly opened, or carried over by a resume. */
@@ -663,11 +667,27 @@ export class HostConnection {
         this.closeEndpoint(webContentsId, "view-moved");
         continue;
       }
+      // An open or move still queued when the link dropped never reached the
+      // host. Saying each again costs nothing where it did: the host takes the
+      // same open on the same project as a no-op.
+      if (!this.postOpen(session, open)) {
+        this.closeEndpoint(webContentsId, "reopen-refused");
+        continue;
+      }
       notifyEndpointOpened(this.openedListeners, {
         session,
         webContentsId,
         endpointId: open.endpointId,
       });
+    }
+    // So is a close, which leaves the host keeping an endpoint (and any lease
+    // it holds) for a view that is gone. A host from before this call refuses
+    // it and keeps such endpoints until the session ends.
+    if (resumed) {
+      const reconcile: EndpointReconcilePayload = {
+        endpointIds: [...this.endpoints.values()].map((open) => open.endpointId),
+      };
+      session.call(LinkMethod.ENDPOINT_RECONCILE, reconcile).catch(() => {});
     }
     // A fresh session reopens the endpoints of views still bound here, so
     // their terminal and worktree streams come back without waiting for the
@@ -722,15 +742,11 @@ export class HostConnection {
       return open.endpointId;
     }
     const endpointId = `view-${webContentsId}`;
-    const result = session.post({
-      lane: Lane.CONTROL,
-      kind: ControlKind.ENDPOINT_OPEN,
-      body: { endpointId, projectId },
-    });
-    if (result === "refused") return null;
-    this.pendingCloses.delete(endpointId);
     const sessionId = this.link.lastSessionId;
-    this.endpoints.set(webContentsId, { endpointId, projectId, sessionId });
+    const opened: OpenEndpoint = { endpointId, projectId, sessionId, openId: randomUUID() };
+    if (!this.postOpen(session, opened)) return null;
+    this.pendingCloses.delete(endpointId);
+    this.endpoints.set(webContentsId, opened);
     this.viewsByEndpoint.set(endpointId, webContentsId);
     logger.info("Remote host view endpoint opened", {
       hostId: this.hostId,
@@ -778,6 +794,17 @@ export class HostConnection {
       cause,
       ...extra,
     });
+  }
+
+  private postOpen(session: LinkSession, open: OpenEndpoint): boolean {
+    const { endpointId, projectId, openId } = open;
+    return (
+      session.post({
+        lane: Lane.CONTROL,
+        kind: ControlKind.ENDPOINT_OPEN,
+        body: { endpointId, projectId, openId },
+      }) !== "refused"
+    );
   }
 
   private postClose(session: LinkSession | null, endpointId: string): boolean {
