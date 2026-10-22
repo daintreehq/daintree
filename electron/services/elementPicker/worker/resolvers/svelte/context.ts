@@ -174,6 +174,10 @@ export class SvelteJob {
     };
   }
 
+  get cancelled(): boolean {
+    return this.signal.aborted;
+  }
+
   get workspaceId(): string {
     return this.request.workspaceId;
   }

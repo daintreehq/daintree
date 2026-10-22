@@ -249,6 +249,8 @@ export async function resolveIn(
   options: {
     knownRevisions?: ResolveRequest["knownRevisions"];
     budget?: Partial<ResolveBudget>;
+    /** Runs as each read is asked for, with a way to withdraw the job right there. */
+    beforeRead?: (file: string, cancel: () => void) => void;
   } = {}
 ): Promise<Resolved> {
   const controller = new AbortController();
@@ -267,6 +269,7 @@ export async function resolveIn(
   const access: ResolverSourceAccess = {
     readSource: (file) => {
       reads.push(file.path);
+      options.beforeRead?.(file.path, () => controller.abort());
       return job.readSource(file);
     },
     fetchSourceMap: (generatedUrl) => job.fetchSourceMap(generatedUrl),

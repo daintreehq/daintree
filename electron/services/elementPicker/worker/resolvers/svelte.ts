@@ -2,6 +2,7 @@ import { loadParse } from "@daintreehq/svelte-source-model";
 import type { SvelteEvidence } from "../../../../../shared/elementPicker/evidence.js";
 import type { SelectionObservation } from "../../../../../shared/elementPicker/observation.js";
 import type { ResolutionResult } from "../../../../../shared/elementPicker/resolution.js";
+import type { SourceCandidate } from "../../../../../shared/elementPicker/source.js";
 import type {
   HostSourceResolver,
   ResolveResponse,
@@ -65,15 +66,26 @@ async function resolveObservation(
   const evidence = observation.frameworkEvidence.find(
     (entry): entry is SvelteEvidence => entry.kind === "svelte"
   );
+  // Work not begun when the job was withdrawn is `cancelled`, even where the
+  // bytes it needs were already read: an answer is what the job finished.
+  const unlessCancelled = (
+    candidate: SourceCandidate,
+    work: () => Promise<ResolutionResult>
+  ): Promise<ResolutionResult> =>
+    job.cancelled ? Promise.resolve(unavailableResult(candidate, "cancelled")) : work();
   const results: ResolutionResult[] = [];
   for (const candidate of observation.sourceCandidates) {
     switch (candidate.kind) {
       case "template-location":
       case "element-creation":
-        results.push(await resolveTemplateLocation(job, observation, candidate, evidence));
+        results.push(
+          await unlessCancelled(candidate, () =>
+            resolveTemplateLocation(job, observation, candidate, evidence)
+          )
+        );
         break;
       case "file-hint":
-        results.push(await resolveFileHint(job, candidate));
+        results.push(await unlessCancelled(candidate, () => resolveFileHint(job, candidate)));
         break;
       default:
         results.push(unavailableResult(candidate, "unsupported"));
@@ -84,7 +96,12 @@ async function resolveObservation(
     const answered = new Map<string, ResolutionResult>();
     for (const candidate of record.sourceCandidates) {
       if (candidate.kind !== "component-invocation") continue;
-      const outcome = await resolveInvocation(job, candidate, evidence);
+      const outcome: InvocationOutcome = job.cancelled
+        ? {
+            result: unavailableResult(candidate, "cancelled"),
+            proof: { status: "stopped", reason: "cancelled" },
+          }
+        : await resolveInvocation(job, candidate, evidence);
       // The record's definition is held to its first call site, the one that
       // rendered this copy; a second is answered on its own.
       invocation ??= outcome;
@@ -98,7 +115,7 @@ async function resolveObservation(
       }
       results.push(
         candidate.kind === "component-definition" || candidate.kind === "file-hint"
-          ? await resolveDefinition(job, candidate, invocation)
+          ? await unlessCancelled(candidate, () => resolveDefinition(job, candidate, invocation))
           : unavailableResult(candidate, "unsupported")
       );
     }

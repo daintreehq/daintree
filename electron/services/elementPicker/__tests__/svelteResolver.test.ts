@@ -566,9 +566,43 @@ describe("revisions", () => {
       }),
     ]);
     expect(reads).toEqual([`${APP}/${NATIVE}`]);
+    const revision = await revisionOfFile(sandbox.file(NATIVE));
     expect(
-      new Set(results.map((result) => result.state === "verified" && result.fileRevision)).size
-    ).toBe(1);
+      results.map((result) => [result.state, "fileRevision" in result && result.fileRevision])
+    ).toEqual([
+      ["verified", revision],
+      ["verified", revision],
+    ]);
+  });
+});
+
+describe("cancellation", () => {
+  it("answers what it had not begun when the job was withdrawn as cancelled, even from bytes in hand", async () => {
+    const source = await native();
+    const card = "src/lib/card.svelte";
+    const cardSource = await fs.readFile(sandbox.file(card), "utf8");
+    const { results } = await resolveIn(
+      sandbox,
+      [
+        selection({
+          tagName: "H1",
+          sourceCandidates: [templateLocation(NATIVE, locationOf(source, "<h1"))],
+        }),
+        selection({
+          tagName: "ARTICLE",
+          sourceCandidates: [templateLocation(card, locationOf(cardSource, "<article"))],
+        }),
+        // Its file was read for the first observation, before the cancel.
+        selection({
+          tagName: "P",
+          sourceCandidates: [templateLocation(NATIVE, locationOf(source, "<p"))],
+        }),
+      ],
+      { beforeRead: (file, cancel) => file.endsWith(card) && cancel() }
+    );
+    expect(
+      results.map((result) => (result.state === "unavailable" ? result.reason : result.state))
+    ).toEqual(["verified", "cancelled", "cancelled"]);
   });
 });
 

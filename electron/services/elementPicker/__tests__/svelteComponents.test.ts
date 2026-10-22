@@ -37,9 +37,15 @@ async function invoke(sites: CallSite[]): Promise<ResolutionResult[]> {
   return results;
 }
 
-/** The app-relative file each call site's import was proven to bind, or null. */
+/**
+ * The app-relative file each call site's import was proven to bind, or null.
+ * Every call site here is real, so each must verify: a definition is absent
+ * because the binding is unproven, never because the call site failed.
+ */
 async function definitions(sites: CallSite[]): Promise<Array<string | null>> {
-  return (await invoke(sites)).map((result) =>
+  const results = await invoke(sites);
+  expect(results.map((result) => result.state)).toEqual(sites.map(() => "verified"));
+  return results.map((result) =>
     result.state === "verified" && result.definition
       ? result.definition.file.path.slice(`${ref("").path}`.length)
       : null
@@ -425,16 +431,70 @@ describe("a component's reported definition", () => {
   });
 
   it("is never left as observed when the proof was stopped rather than refused", async () => {
-    // One file of budget: the call site's. The definition's read is refused
-    // for budget, which says nothing about where the component is written.
+    // The element's own hint reads native.svelte first, so the record's hint
+    // has bytes in hand. Two files of budget: that one and the call site's.
+    // Following the import to card.svelte is refused for budget, which says
+    // nothing about where the component is written.
     const { results } = await resolveIn(
       sandbox,
-      [selection({ components: [component([invocation(site), fileHint("src/lib/card.svelte")])] })],
-      { budget: { maxFiles: 1 } }
+      [
+        selection({
+          sourceCandidates: [fileHint("src/lib/native.svelte")],
+          components: [component([invocation(site), fileHint("src/lib/native.svelte")])],
+        }),
+      ],
+      { budget: { maxFiles: 2 } }
     );
-    expect(results[0]).toMatchObject({ state: "verified" });
-    expect(results[0]).not.toHaveProperty("definition");
-    expect(results[1]).toMatchObject({ state: "unavailable", reason: "budget-exhausted" });
+    expect(results[0]).toMatchObject({ state: "observed" });
+    expect(results[1]).toMatchObject({ state: "verified" });
+    expect(results[1]).not.toHaveProperty("definition");
+    expect(results[2]).toMatchObject({ state: "unavailable", reason: "budget-exhausted" });
+  });
+
+  it("answers a positioned definition claim with the file alone", async () => {
+    const definition = {
+      ...invocation({ file: "src/lib/card.svelte", line: 5, column: 0 }),
+      kind: "component-definition",
+    } as const;
+    const { results } = await resolveIn(sandbox, [
+      selection({ components: [component([invocation(site), definition])] }),
+    ]);
+    expect(results[1]).toEqual({
+      state: "verified",
+      candidateId: definition.candidateId,
+      claim: "component-definition",
+      target: { file: ref("src/lib/card.svelte"), location: null },
+      fileRevision: await revisionOfFile(sandbox.file("src/lib/card.svelte")),
+    });
+  });
+
+  it("is held to the record's first call site, the one that rendered this copy", async () => {
+    await page([
+      "<script>",
+      '  import Native from "../lib/native.svelte";',
+      "</script>",
+      "",
+      "<Native />",
+      "",
+    ]);
+    const { results } = await resolveIn(sandbox, [
+      selection({
+        components: [
+          component([
+            invocation(site),
+            invocation({ file: PAGE, line: 5, column: 0 }),
+            fileHint("src/lib/card.svelte"),
+          ]),
+        ],
+      }),
+    ]);
+    expect(results.map((result) => result.state === "verified" && result.definition?.file)).toEqual(
+      [ref("src/lib/card.svelte"), ref("src/lib/native.svelte"), undefined]
+    );
+    expect(results[2]).toMatchObject({
+      state: "verified",
+      target: { file: ref("src/lib/card.svelte") },
+    });
   });
 
   it("goes stale with the call site it was proven from", async () => {

@@ -126,6 +126,12 @@ const VerifiedTargetSchema = z.strictObject({
  */
 export const ComponentDefinitionSchema = z.strictObject({
   file: SourceFileRefSchema,
+  /**
+   * What the definition's file holds now. The binding is held to the call
+   * site's bytes, so a definition edited under an unchanged call site is named
+   * at its new revision rather than reported stale; whoever pinned the old one
+   * compares.
+   */
   fileRevision: FileRevisionSchema,
   /** The import specifier as the call site's file spells it. */
   specifier: z.string().min(1).max(1024),
