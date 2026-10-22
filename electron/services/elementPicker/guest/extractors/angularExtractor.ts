@@ -493,6 +493,7 @@ export function createAngularExtractor(): ElementPickerExtractor {
   const ids = new InstanceIds();
   return {
     extract(element, phase, refs) {
+      // Null is a look that found no Angular above the element; a look cut short throws.
       if (!isAngularNode(element)) return null;
       // Read per request: an app publishes it as it bootstraps, which can follow the install.
       const api = debugApi();

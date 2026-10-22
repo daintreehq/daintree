@@ -126,6 +126,9 @@ function mount(spec: ComponentSpec, ng: unknown = angular.ng, devMode: unknown =
       events.push(event);
     },
   });
+  // The host has finished looking and Angular's reader is installed, so what it
+  // says it cannot offer is reported as such rather than left open.
+  picker.setAvailability({ detection: "settled", extractors: { angular: "installed" } });
 }
 
 function query(selector: string): Element {
@@ -516,6 +519,10 @@ describe("the Angular extractor", () => {
     const foreign = document.createElement("p");
     document.body.appendChild(foreign);
     expect(createAngularExtractor().extract(foreign, "selection", { ref: () => null })).toBeNull();
+    // Having looked all the way up and found no Angular, its reader says so.
+    const outside = pickNode(foreign);
+    expect(outside.capabilities.file).toEqual({ state: "unavailable", reason: "not-exposed" });
+    expect(outside.capabilities.line).toEqual({ state: "unavailable", reason: "not-exposed" });
   });
 });
 
@@ -923,9 +930,26 @@ describe("the Angular extractor's bounds", () => {
       ])
     );
     expect(chainNames(pick("i.near"))).toEqual(["AppComponent"]);
-    expect(
+    // Past the bound it has not looked, so it gives no answer rather than one of nothing.
+    expect(() =>
       createAngularExtractor().extract(query("i.far"), "selection", { ref: () => null })
-    ).toBeNull();
+    ).toThrow();
+    const far = pick("i.far");
+    expect(far.componentChain.components).toEqual([]);
+    expect(far.capabilities.file).toEqual({ state: "unknown" });
+    expect(far.capabilities.line).toEqual({ state: "unknown" });
+  });
+
+  it("gives no answer for a node whose ancestors it could not read to the top", () => {
+    mount(appOf([{ tag: "div", attrs: { class: "sealed" }, children: [{ tag: "b" }] }]));
+    Object.defineProperty(query("div.sealed"), "parentNode", {
+      get() {
+        throw new Error("sealed");
+      },
+    });
+    expect(() =>
+      createAngularExtractor().extract(query("div.sealed b"), "selection", { ref: () => null })
+    ).toThrow();
   });
 
   it("drops every claim, and the lines beside them, before a record when the reply would pass its ceiling", () => {

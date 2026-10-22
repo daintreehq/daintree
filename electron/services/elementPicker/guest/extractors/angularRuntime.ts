@@ -137,16 +137,25 @@ export function isKeyed(node: Element): boolean {
   }
 }
 
-/** A node's parent element, or the host of the shadow root it sits at the top of: where ShadowDom encapsulation renders a view. */
-export function parentOf(node: Element): Element | null {
+/**
+ * A node's parent element, or the host of the shadow root it sits at the top
+ * of: where ShadowDom encapsulation renders a view. Null at the top of the
+ * tree, undefined when page code made the parent unreadable.
+ */
+function readParent(node: Element): Element | null | undefined {
   try {
     const parent = node.parentNode;
     if (parent instanceof Element) return parent;
     if (parent instanceof ShadowRoot) return parent.host;
+    return null;
   } catch {
-    // A node whose parent cannot be read ends the walk.
+    return undefined;
   }
-  return null;
+}
+
+/** A node's parent as `readParent` finds it, where one that cannot be read ends the walk. */
+export function parentOf(node: Element): Element | null {
+  return readParent(node) ?? null;
 }
 
 /** Whether a walk that ran out of parents at `node` reached the document rather than the top of a detached subtree. */
@@ -158,12 +167,19 @@ export function isDocumentElement(node: Element): boolean {
   }
 }
 
-/** Whether Angular rendered the element: it or an ancestor carries the key Angular sets on what it renders. */
+/**
+ * Whether Angular rendered the element: it or an ancestor carries the key
+ * Angular sets on what it renders. False only for a walk that reached the top
+ * of the tree; one that ran out of steps or met a parent it could not read
+ * throws, since it has not looked at the rest.
+ */
 export function isAngularNode(element: Element): boolean {
-  let node: Element | null = element;
-  for (let depth = 0; node !== null && depth < OWNERSHIP_DEPTH; depth += 1) {
+  let node: Element | null | undefined = element;
+  for (let depth = 0; node !== null; depth += 1) {
+    if (node === undefined) throw new Error("Angular's key: an ancestor could not be read");
+    if (depth >= OWNERSHIP_DEPTH) throw new Error("Angular's key: past the ancestors it reads");
     if (isKeyed(node)) return true;
-    node = parentOf(node);
+    node = readParent(node);
   }
   return false;
 }
