@@ -48,7 +48,7 @@ export function collectPluginCustomIconRefs(
     if (existing) existing.push(where);
     else refs.set(iconId, [where]);
   };
-  const add = (group: keyof IconBearingContributions) => {
+  const add = (group: "panels" | "toolbarButtons" | "processTools") => {
     for (const [index, entry] of contributes[group].entries()) {
       note(entry.iconId, `contributes.${group}.${index}.iconId`);
     }
