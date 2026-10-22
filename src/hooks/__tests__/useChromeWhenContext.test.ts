@@ -142,27 +142,24 @@ describe("useWhenClause", () => {
       });
     });
 
-    const { result } = renderHook(() =>
-      useWhenClause("isGitBacked && presentationForgeStats == 'demoted'")
-    );
-    expect(result.current).toBe(true);
+    const { result } = renderHook(() => ({
+      gitBacked: useWhenClause("isGitBacked"),
+      demoted: useWhenClause("presentationForgeStats == 'demoted'"),
+    }));
+    expect(result.current).toEqual({ gitBacked: true, demoted: true });
 
     // The globally current project moving changes nothing here.
+    const movedOther = { ...other, gitBacked: true };
     act(() => {
-      useProjectStore.setState({
-        projects: [own, { ...other, gitBacked: true }],
-        currentProject: { ...other, gitBacked: true },
-      });
+      useProjectStore.setState({ projects: [own, movedOther], currentProject: movedOther });
     });
-    expect(result.current).toBe(true);
+    expect(result.current).toEqual({ gitBacked: true, demoted: true });
 
+    // Only this view's own row losing git turns the fact off, the global one untouched.
     act(() => {
-      useProjectStore.setState({
-        projects: [{ ...own, gitBacked: false }, other],
-        currentProject: other,
-      });
+      useProjectStore.setState({ projects: [{ ...own, gitBacked: false }, movedOther] });
     });
-    expect(result.current).toBe(false);
+    expect(result.current).toEqual({ gitBacked: false, demoted: false });
   });
 
   it("drops this view's project once it is closed", () => {
