@@ -60,6 +60,7 @@ import {
   _resetReverseRequestMethodsForTesting,
   answerReverseRequest,
 } from "../../client/reverseRequests.js";
+import { PLUGIN_PANEL_RELOAD_SHELL_BUDGET_MS } from "../../../services/plugin/PluginPanelReloadDispatcher.js";
 import {
   PluginFrontendMethod,
   REMOTE_CLIPBOARD_TIMEOUT_MS,
@@ -244,6 +245,11 @@ describe("Shell answers for a host's plugins", () => {
     const [channel, sent] = wc.send.mock.calls[0]!;
     expect(channel).toBe(CHANNELS.PLUGIN_PANEL_RELOAD_REQUEST);
     expect(sent).toMatchObject({ panelId: "p1", pluginId: "acme.deploy" });
+    // The view's deadline falls inside the host's own wait.
+    expect(sent.expiresAt - Date.now()).toBeLessThanOrEqual(PLUGIN_PANEL_RELOAD_SHELL_BUDGET_MS);
+    expect(sent.expiresAt - Date.now()).toBeGreaterThan(
+      PLUGIN_PANEL_RELOAD_SHELL_BUDGET_MS - 2_000
+    );
     electronMock.emit(
       CHANNELS.PLUGIN_PANEL_RELOAD_RESPONSE,
       { sender: { id: WC_ID } },
@@ -278,10 +284,11 @@ describe("Shell answers for a host's plugins", () => {
   });
 
   it("refuses a panel reload for a view bound to another host", async () => {
-    makeView(`other-host:${PROJECT}`);
+    const wc = makeView(`other-host:${PROJECT}`);
     await expect(
       ask(PluginFrontendMethod.PANEL_RELOAD, { pluginId: "acme.deploy", panelId: "p1" })
     ).rejects.toMatchObject({ code: "VALIDATION" });
+    expect(wc.send).not.toHaveBeenCalled();
   });
 
   it("refuses an agents list for a view bound to another host", async () => {

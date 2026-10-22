@@ -5,6 +5,7 @@ import { requestConsentInWebContents } from "../../ipc/handlers/pluginCapability
 import { PluginRendererDispatcher } from "../../services/plugin/PluginRendererDispatcher.js";
 import {
   PanelReloadRejectedError,
+  PLUGIN_PANEL_RELOAD_SHELL_BUDGET_MS,
   PluginPanelReloadDispatcher,
 } from "../../services/plugin/PluginPanelReloadDispatcher.js";
 import { PluginUIPromptDispatcher } from "../../services/plugin/PluginUIPromptDispatcher.js";
@@ -447,7 +448,12 @@ export function installPluginShellRequests(deps: PluginShellRequestDeps = {}): (
     if (isCachedViewWebContents(wc.id)) return { result: "unavailable" };
     try {
       return {
-        result: await panelReloads.reloadInView(wc, parsed.data.pluginId, parsed.data.panelId),
+        result: await panelReloads.reloadInView(
+          wc,
+          parsed.data.pluginId,
+          parsed.data.panelId,
+          PLUGIN_PANEL_RELOAD_SHELL_BUDGET_MS
+        ),
       };
     } catch (err) {
       if (err instanceof PanelReloadRejectedError) return { rejected: err.reason };

@@ -18,6 +18,13 @@ import { PluginFrontendMethod, RemotePanelReloadAnswerSchema } from "./pluginFro
  */
 export const PLUGIN_PANEL_RELOAD_TIMEOUT_MS = 10_000;
 
+/**
+ * How long a Shell lets its view act on a host's reload: the host's wait less
+ * a margin for the link, so the view never reloads after the host has already
+ * answered `"unavailable"`.
+ */
+export const PLUGIN_PANEL_RELOAD_SHELL_BUDGET_MS = PLUGIN_PANEL_RELOAD_TIMEOUT_MS - 5_000;
+
 /** The slice of `Electron.WebContents` the round-trip needs. */
 export interface PanelReloadWebContents {
   readonly id: number;
@@ -194,7 +201,8 @@ export class PluginPanelReloadDispatcher {
   reloadInView(
     webContents: PanelReloadWebContents,
     pluginId: string,
-    panelId: string
+    panelId: string,
+    budgetMs: number = PLUGIN_PANEL_RELOAD_TIMEOUT_MS
   ): Promise<PanelReloadResult> {
     if (this.deps.isDisposed()) return Promise.resolve("unavailable");
     this.ensureListener();
@@ -211,7 +219,7 @@ export class PluginPanelReloadDispatcher {
         resolve("unavailable");
       };
       const onDestroyed = () => settleUnavailable();
-      const timer = setTimeout(settleUnavailable, PLUGIN_PANEL_RELOAD_TIMEOUT_MS);
+      const timer = setTimeout(settleUnavailable, budgetMs);
       const destroyedCleanup = onWebContentsDestroyed(webContents, onDestroyed);
       this.pending.set(requestId, {
         pluginId,
@@ -227,7 +235,7 @@ export class PluginPanelReloadDispatcher {
           requestId,
           panelId,
           pluginId,
-          expiresAt: now + PLUGIN_PANEL_RELOAD_TIMEOUT_MS,
+          expiresAt: now + budgetMs,
         });
       } catch {
         settleUnavailable();

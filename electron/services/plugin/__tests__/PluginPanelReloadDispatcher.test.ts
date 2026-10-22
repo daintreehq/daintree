@@ -323,6 +323,23 @@ describe("PluginPanelReloadDispatcher", () => {
       expect(endpoint.request).toHaveBeenCalledTimes(1);
     });
 
+    it("is unavailable when the answer arrives after the request was cancelled", async () => {
+      let release: (value: unknown) => void = () => {};
+      const { dispatcher } = remoteSetup(
+        () => new Promise<unknown>((resolve) => (release = resolve))
+      );
+      const pending = dispatcher.reload("acme", "p1", null);
+      dispatcher.dispose();
+      release({ result: "scheduled" });
+      await expect(pending).resolves.toBe("unavailable");
+
+      const refused = remoteSetup(() => new Promise<unknown>((resolve) => (release = resolve)));
+      const second = refused.dispatcher.reload("acme", "p1", null);
+      refused.dispatcher.cancelPlugin("acme");
+      release({ rejected: "foreign" });
+      await expect(second).resolves.toBe("unavailable");
+    });
+
     it("aborts in-flight requests when the plugin unloads or the dispatcher disposes", async () => {
       let signal: AbortSignal | undefined;
       const hang = (_m: string, _p: unknown, options?: { signal?: AbortSignal }) => {
