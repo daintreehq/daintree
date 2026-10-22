@@ -106,6 +106,7 @@ export function createSubscriptionCoalescer(
  */
 export function worktreeSnapshotFingerprint(snapshot: PluginWorktreeSnapshot): string {
   const status = snapshot.status;
+  const setup = snapshot.setup;
   return JSON.stringify([
     snapshot.worktreeId,
     snapshot.path,
@@ -126,6 +127,9 @@ export function worktreeSnapshotFingerprint(snapshot: PluginWorktreeSnapshot): s
           status.counts,
           status.files.map((file) => `${file.state}\u0000${file.path}`),
         ],
+    snapshot.headOid ?? null,
+    snapshot.gitOperation ?? null,
+    setup == null ? null : [setup.state, setup.stage ?? null],
   ]);
 }
 

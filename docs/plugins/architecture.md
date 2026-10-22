@@ -494,7 +494,8 @@ Adding a field to the plugin snapshot requires:
 
 1. Updating `PluginWorktreeSnapshot` type in `shared/types/plugin.ts`
 2. Updating `toPluginWorktreeSnapshot()` to copy the field
-3. Releasing a new `@daintreehq/plugin-sdk` minor version
+3. Adding the field to `worktreeSnapshotFingerprint()` in `electron/services/plugin/pluginSubscriptionCoalescing.ts` and to its pinned duplicate `mockWorktreeFingerprint()` in `shared/testing/createMockHost.ts`. A field missing from the fingerprint never puts a worktree in `onDidChangeWorktrees`' `change.changed`
+4. Releasing a new `@daintreehq/plugin-sdk` minor version
 
 Plugins consuming worktree events during `activate()` — before the WorkspaceClient is fully initialized — get their subscriptions queued in `pendingWorktreeSubs` and replayed once the client connects. Your callback never misses the early events.
 

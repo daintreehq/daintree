@@ -448,6 +448,21 @@ describe("GitStatusPass", () => {
     expect(host.summary).toBe("✅ New commit");
   });
 
+  it("publishes a HEAD move that leaves the commit message and time unchanged (#13804)", async () => {
+    const commitTime = Date.now() - 60_000;
+    mockGetWorktreeChangesWithStats
+      .mockResolvedValueOnce(makeChanges({ lastCommitTimestampMs: commitTime, headOid: "aaa111" }))
+      .mockResolvedValueOnce(makeChanges({ lastCommitTimestampMs: commitTime, headOid: "bbb222" }));
+    const { pass, host } = makePass();
+    await pass.run(false);
+    vi.mocked(host.emitUpdate).mockClear();
+
+    await pass.run(false);
+
+    expect(host.worktreeChanges?.headOid).toBe("bbb222");
+    expect(host.emitUpdate).toHaveBeenCalledTimes(1);
+  });
+
   it("uses dirty-file mtime in a repository with no commits", async () => {
     const fileMtime = Date.now() - 30_000;
     mockGetWorktreeChangesWithStats.mockResolvedValue(

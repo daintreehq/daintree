@@ -3843,6 +3843,42 @@ export interface PluginWorktreeStatus {
 }
 
 /**
+ * A git operation the host saw in progress in a worktree, read from the
+ * operation's marker files under the git directory. Only operations that block
+ * normal work appear here; a worktree with none reads as `null`.
+ */
+export type PluginWorktreeGitOperation = "merge" | "rebase" | "cherry-pick" | "revert";
+
+/**
+ * How far a worktree's post-create setup has got.
+ *
+ * - `pending`: the worktree exists and setup has not started
+ * - `running`: config copy, submodule init or the setup commands are in flight
+ * - `ready`: the recorded run finished without a failure, including a project
+ *   with no setup commands. A retry reruns only the setup commands, so after a
+ *   retry `ready` speaks for those alone
+ * - `failed` / `timed-out`: a stage failed; {@link PluginWorktreeSetup.stage} says which
+ * - `needs-approval`: setup or provisioning commands from the repository are
+ *   waiting for the user's approval, so they were skipped. The checkout exists,
+ *   but its initialization may be incomplete
+ */
+export type PluginWorktreeSetupState =
+  "pending" | "running" | "ready" | "failed" | "timed-out" | "needs-approval";
+
+/**
+ * The stages of worktree setup, in the order they run. `setup-script` covers
+ * the project's setup commands and any resource provisioning that follows them.
+ */
+export type PluginWorktreeSetupStage = "copy-config" | "submodules" | "setup-script";
+
+/** The workspace host's record of a worktree's setup run, including a retry. */
+export interface PluginWorktreeSetup {
+  readonly state: PluginWorktreeSetupState;
+  /** The stage running, or the one that failed. `null` once `ready`. */
+  readonly stage: PluginWorktreeSetupStage | null;
+}
+
+/**
  * Read-only, deep-frozen projection of a worktree exposed to plugins.
  * This is an explicit allowlist of fields from the internal WorktreeSnapshot;
  * do not add fields by spreading — every field must be intentionally exposed
@@ -3876,6 +3912,30 @@ export interface PluginWorktreeSnapshot {
    * `null` when the host hasn't computed a status for this worktree yet.
    */
   readonly status: PluginWorktreeStatus | null;
+  /**
+   * Object id of the commit HEAD points at, from the same status poll as
+   * `status`. A new value means HEAD moved since the last poll: a commit from
+   * any source, a checkout, a reset or a pull. It is a sample, not a commit
+   * log, so a move that returns to the same oid between polls is not seen.
+   * Treat it as an opaque string. `null` before the first status poll and on a
+   * repository with no commits yet. While a git operation is in progress the
+   * host pauses status polling, so this holds its last value.
+   */
+  readonly headOid: string | null;
+  /**
+   * The blocking git operation in progress, or `null` when the host saw none.
+   * Detection fails open, so `null` is the host's observation, not a promise
+   * that git is idle.
+   */
+  readonly gitOperation: PluginWorktreeGitOperation | null;
+  /**
+   * Setup progress, or `null` when the workspace host has no record of a setup
+   * run for this worktree. The record is held in memory and written when the
+   * host creates the worktree or retries its setup, so a worktree made outside
+   * Daintree, or one from before the workspace host last started, reads `null`
+   * until its setup is retried. `null` means unknown, never ready.
+   */
+  readonly setup: PluginWorktreeSetup | null;
 }
 
 /**

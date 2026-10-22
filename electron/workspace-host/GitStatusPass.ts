@@ -648,6 +648,11 @@ export class GitStatusPass {
     if (changes.lastCommitMessage !== undefined) {
       fileState.push(`last-commit-message:${changes.lastCommitMessage}`);
     }
+    // Message and time alone miss a HEAD move between two commits that share
+    // both, and plugins read a changed oid as "a commit landed".
+    if (changes.headOid !== undefined) {
+      fileState.push(`head-oid:${changes.headOid}`);
+    }
     const hashInput = fileState.join("|");
     let hash = FNV_OFFSET_BASIS;
     for (let i = 0; i < hashInput.length; i++) {

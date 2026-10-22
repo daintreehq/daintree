@@ -21,6 +21,9 @@ function snap(id: string, overrides: Partial<PluginWorktreeSnapshot> = {}): Plug
     isCurrent: false,
     linked: null,
     status: null,
+    headOid: null,
+    gitOperation: null,
+    setup: null,
     ...overrides,
   };
 }
@@ -127,6 +130,29 @@ describe("WorktreeChangeTracker", () => {
     expect(t.next([snap("a")])).toEqual({ added: [], removed: [], changed: [] });
   });
 
+  it("sees a HEAD move, an operation starting and ending, and each setup transition", () => {
+    const t = new WorktreeChangeTracker();
+    const steps: Array<Partial<PluginWorktreeSnapshot>> = [
+      { headOid: "aaa", setup: { state: "running", stage: "copy-config" } },
+      { headOid: "aaa", setup: { state: "running", stage: "setup-script" } },
+      { headOid: "aaa", setup: { state: "failed", stage: "setup-script" } },
+      { headOid: "aaa", setup: { state: "ready", stage: null } },
+      { headOid: "aaa", setup: { state: "ready", stage: null }, gitOperation: "merge" },
+      { headOid: "aaa", setup: { state: "ready", stage: null } },
+      { headOid: "bbb", setup: { state: "ready", stage: null } },
+    ];
+    t.next([snap("a")]);
+    for (const step of steps) {
+      expect(t.next([snap("a", step)]).changed).toEqual(["a"]);
+    }
+    // A rebuilt but equal setup object is not a change.
+    expect(t.next([snap("a", { ...steps[6], setup: { state: "ready", stage: null } })])).toEqual({
+      added: [],
+      removed: [],
+      changed: [],
+    });
+  });
+
   it("treats a duplicate id in one list as one worktree", () => {
     const t = new WorktreeChangeTracker();
     expect(t.next([snap("a"), snap("a", { name: "dup" })]).added).toEqual(["a"]);
@@ -146,6 +172,9 @@ describe("WorktreeChangeTracker", () => {
       { lastActivityTimestamp: 5 },
       { createdAt: 5 },
       { worktreeId: "other" },
+      { headOid: "abc123" },
+      { gitOperation: "rebase" },
+      { setup: { state: "running", stage: "submodules" } },
     ];
     for (const override of fields) {
       expect(worktreeSnapshotFingerprint({ ...base, ...override })).not.toBe(
@@ -166,6 +195,29 @@ describe("createMockHost parity with the host's coalescing rules", () => {
       [snap("a", { branch: "x" }), snap("c")],
       [snap("c", { status: status([["f", "added"]]) })],
       [snap("c", { status: status([["g", "added"]]) })],
+      [snap("c", { status: status([["g", "added"]]), headOid: "aaa" })],
+      [snap("c", { status: status([["g", "added"]]), headOid: "aaa", gitOperation: "rebase" })],
+      [
+        snap("c", {
+          status: status([["g", "added"]]),
+          headOid: "aaa",
+          setup: { state: "failed", stage: "setup-script" },
+        }),
+      ],
+      [
+        snap("c", {
+          status: status([["g", "added"]]),
+          headOid: "aaa",
+          setup: { state: "failed", stage: "submodules" },
+        }),
+      ],
+      [
+        snap("c", {
+          status: status([["g", "added"]]),
+          headOid: "aaa",
+          setup: { state: "timed-out", stage: "submodules" },
+        }),
+      ],
       [],
     ];
     const expected: PluginWorktreesChange[] = [];

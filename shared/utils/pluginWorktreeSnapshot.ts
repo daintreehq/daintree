@@ -1,15 +1,18 @@
 import type {
   PluginWorktreeFileState,
+  PluginWorktreeGitOperation,
   PluginWorktreeLinked,
   PluginWorktreeLinkedIssue,
   PluginWorktreeLinkedPR,
+  PluginWorktreeSetup,
   PluginWorktreeSnapshot,
   PluginWorktreeStatus,
   PluginWorktreeStatusFile,
 } from "../types/plugin.js";
-import type { GitStatus, WorktreeChanges } from "../types/git.js";
+import type { GitStatus, RepoState, WorktreeChanges } from "../types/git.js";
 import type { NormalizedPRState, ResourceRef } from "../types/forge.js";
 import type { WorktreeSnapshot } from "../types/workspace-host.js";
+import type { WorktreeSetupStatus } from "../types/worktree.js";
 import { BUILTIN_GITHUB_PROVIDER_ID } from "./forgeProviderIds.js";
 
 /**
@@ -95,8 +98,43 @@ export function toPluginWorktreeSnapshot(snapshot: WorktreeSnapshot): PluginWork
     lastActivityTimestamp: snapshot.lastActivityTimestamp ?? null,
     createdAt: snapshot.createdAt,
     status: toPluginWorktreeStatus(snapshot.worktreeChanges),
+    // The general HEAD oid lives on the polled changes; `snapshot.head` is
+    // only populated when detached, so it is not a substitute.
+    headOid: snapshot.worktreeChanges?.headOid ?? null,
+    gitOperation: projectGitOperation(snapshot.repoState),
+    setup: projectSetup(snapshot.setupStatus),
   };
   return Object.freeze(projection);
+}
+
+/**
+ * `CLEAN` and `DIRTY` are not operations (`DIRTY` is unmerged entries with no
+ * marker file), so they read as `null` along with an absent state.
+ */
+function projectGitOperation(state: RepoState | undefined): PluginWorktreeGitOperation | null {
+  switch (state) {
+    case "MERGING":
+      return "merge";
+    case "REBASING":
+      return "rebase";
+    case "CHERRY_PICKING":
+      return "cherry-pick";
+    case "REVERTING":
+      return "revert";
+    case "CLEAN":
+    case "DIRTY":
+    case undefined:
+      return null;
+  }
+}
+
+/**
+ * State and stage only. `error` is free text and the timestamps change on
+ * every transition without telling a plugin anything it can act on.
+ */
+function projectSetup(status: WorktreeSetupStatus | undefined): PluginWorktreeSetup | null {
+  if (status === undefined) return null;
+  return Object.freeze({ state: status.state, stage: status.stage ?? null });
 }
 
 /**
