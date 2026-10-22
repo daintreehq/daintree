@@ -18,7 +18,7 @@ function editor(overrides: Partial<HostedFileEditorDescriptor> = {}): HostedFile
 function view(
   pluginId: string,
   editors: HostedFileEditorDescriptor[],
-  location: PluginHostedViewDescriptor["location"] = "fileEditor"
+  location: Exclude<PluginHostedViewDescriptor["location"], "sidebar"> = "fileEditor"
 ): PluginHostedViewDescriptor {
   return {
     id: `plugin-view:${pluginId}/editor`,

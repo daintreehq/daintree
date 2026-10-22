@@ -446,7 +446,7 @@ Views are the React components a plugin renders. A `location: "panel"` view bind
 | --- | --- | --- |
 | `id` | yes | For a panel view, the panel `id` it provides a component for; for a settings or sidebar view, an id of its own. Letters, digits, `.`, `_` and `-`, at most 64 characters. |
 | `componentPath` | yes | POSIX-relative path to an ESM module inside the plugin (`.js` or `.mjs`). The module's default export is a React component. Absolute paths, backslashes, URL schemes, `?`, `#` and `..` segments are rejected at manifest validation. |
-| `location` | yes | `"panel"` (rendered in the panel of the same id, in the grid, the dock or a dialog), `"settings"` for the plugin's custom settings section, or `"sidebar"` for a sidebar view. |
+| `location` | yes | `"panel"` (rendered in the panel of the same id, in the grid, the dock or a dialog), `"settings"` for the plugin's custom settings section, `"fileEditor"` for a view that backs a [file editor](#file-editors--shipped), or `"sidebar"` for a sidebar view. |
 | `iconId` | no | A sidebar view's glyph in the switcher: a plugin icon id or a `./…svg` [custom icon](#custom-icons). On a panel or settings view it is accepted for compatibility but **ignored at runtime** — the matching `contributes.panels` entry owns the rendered icon. |
 | `name` | sidebar only | The sidebar view's name in the switcher and the header, at most 40 characters. Required for a sidebar view. |
 | `priority` | sidebar only | Integer from `-1000` to `1000`, default `0`; orders the switcher against the worktree list's `0`. |

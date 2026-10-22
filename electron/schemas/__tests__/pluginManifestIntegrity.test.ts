@@ -275,6 +275,7 @@ describe("location: sidebar views", () => {
     ["panel", { name: "Rich" }, "name"],
     ["panel", { priority: 5 }, "priority"],
     ["settings", { when: "isGitBacked" }, "when"],
+    ["fileEditor", { name: "Records" }, "name"],
   ])("rejects a %s view that sets the sidebar-only %o", (location, extra, field) => {
     const result = manifestWith({
       panels: [panel("rich")],
