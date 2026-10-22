@@ -5,6 +5,7 @@ import { useErrorStore } from "@/store/errorStore";
 import { usePortalStore } from "@/store/portalStore";
 import { usePanelStore } from "@/store/panelStore";
 import { usePanelDialogStore, findPanelDialogsOfKind } from "@/store/panelDialogStore";
+import { usePluginPanelOpenRequestStore } from "@/store/pluginPanelOpenRequestStore";
 import type { DialogSize } from "@/components/ui/AppDialog";
 import { focusPanelInput } from "@/components/Panel/panelFocusRegistry";
 import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
@@ -43,6 +44,25 @@ const openPluginPanelArgsSchema = z.object({
       "Dialog only. Close this kind's dialog instead when it is the topmost one for the worktree."
     ),
 });
+
+/**
+ * Hand a reused panel the arguments it was just opened with (#13779). Without
+ * this a second "open this in the panel" only brought the panel forward still
+ * showing the first. An open with no arguments is a plain "show it" and leaves
+ * any request the view hasn't seen yet in place.
+ */
+function deliverOpenRequest(
+  panelId: string,
+  kind: string,
+  initialArgs: Record<string, unknown> | undefined
+): void {
+  if (initialArgs === undefined) return;
+  if (!usePluginPanelOpenRequestStore.getState().publish(panelId, initialArgs)) {
+    throw new Error(
+      `Can't hand \`initialArgs\` to the open "${kind}" panel: they must be JSON-serializable and at most 64KB`
+    );
+  }
+}
 
 export function registerPanelCoreActions(
   actions: ActionRegistry,
@@ -174,7 +194,7 @@ export function registerPanelCoreActions(
     id: "panel.openPluginPanel",
     title: "Open plugin panel",
     description:
-      "Spawn (or focus an existing) plugin-contributed panel kind, handing it an initial argument. Args: `kind` (required) — the plugin panel kind id from `contributes.panels`; `initialArgs` (optional) — an opaque bag delivered to the view as `PanelViewProps.initialArgs` (e.g. `{ path }` to open a file); `worktreeId` (optional) — target worktree, which must belong to the current project; `reuseExisting` (optional, default true) — focus an existing panel of this kind in the worktree instead of spawning a second one; `presentation`, `size`, `toggle` (optional) — present the view as a modal dialog instead, which is ephemeral: closing it removes the panel and its persisted view state. Returns `{ panelId }`. Errors when `kind` is not a registered plugin panel kind, when `worktreeId` belongs to another project, or — transiently, retry — when the project's worktrees haven't loaded yet.",
+      "Spawn (or focus an existing) plugin-contributed panel kind, handing it an initial argument. Args: `kind` (required) — the plugin panel kind id from `contributes.panels`; `initialArgs` (optional) — an opaque bag delivered to the view as `PanelViewProps.initialArgs` (e.g. `{ path }` to open a file), or as `PanelViewProps.openRequest` to a panel or dialog the open reuses; `worktreeId` (optional) — target worktree, which must belong to the current project; `reuseExisting` (optional, default true) — focus an existing panel of this kind in the worktree instead of spawning a second one; `presentation`, `size`, `toggle` (optional) — present the view as a modal dialog instead, which is ephemeral: closing it removes the panel and its persisted view state. Returns `{ panelId }`. Errors when `kind` is not a registered plugin panel kind, when `worktreeId` belongs to another project, or — transiently, retry — when the project's worktrees haven't loaded yet.",
     category: "panel",
     kind: "command",
     danger: "safe",
@@ -240,7 +260,10 @@ export function registerPanelCoreActions(
         // A plain open never closes or re-creates a presented dialog of this
         // kind — that would discard the view's state for a "show it" request.
         const existingDialogId = openOfKind[openOfKind.length - 1];
-        if (existingDialogId !== undefined) return { panelId: existingDialogId };
+        if (existingDialogId !== undefined) {
+          deliverOpenRequest(existingDialogId, kind, initialArgs);
+          return { panelId: existingDialogId };
+        }
 
         const dialogId = await dialogs.openPanelDialog(
           // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- documented extension-panel spawn boundary, as the grid spawn below
@@ -272,6 +295,7 @@ export function registerPanelCoreActions(
               (p.worktreeId ?? undefined) === (targetWorktreeId ?? undefined)
           );
         if (existing) {
+          deliverOpenRequest(existing.id, kind, initialArgs);
           state.activateTerminal(existing.id);
           return { panelId: existing.id };
         }

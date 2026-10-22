@@ -2,6 +2,7 @@ import { create } from "zustand";
 import type { AddPanelOptions } from "@shared/types/addPanelOptions";
 import type { DialogSize } from "@/components/ui/AppDialog";
 import { usePanelStore } from "./panelStore";
+import { usePluginPanelOpenRequestStore } from "./pluginPanelOpenRequestStore";
 import { logError } from "@/utils/logger";
 
 /**
@@ -297,6 +298,9 @@ async function commitDialogPanel(
         state.dialogStack.filter((id) => id !== requestedId)
       )
     );
+    // A reusing open can target the reservation before its record exists, and
+    // with no record ever committed the panel-removal pruning never sees it.
+    usePluginPanelOpenRequestStore.getState().clearPanel(requestedId);
     return null;
   }
 

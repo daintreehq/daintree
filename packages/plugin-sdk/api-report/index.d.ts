@@ -2407,9 +2407,46 @@ interface PanelViewProps {
      * This is a snapshot taken at mount, not a live value: it does not update
      * while the view is mounted, including in response to your own
      * {@link persistState} calls. Treat the contents as read-only and hold your
-     * working copy in React state seeded from here.
+     * working copy in React state seeded from here. Arguments from a later open
+     * that reuses this panel arrive as {@link openRequest} instead.
      */
     readonly initialArgs?: Record<string, unknown>;
+    /**
+     * The latest `panel.openPluginPanel` call that reused this panel rather than
+     * spawning a new one, carrying the `initialArgs` it was called with (#13779).
+     * A fresh panel gets its arguments as {@link initialArgs}; every later "open
+     * this in the panel" — a second context-menu click, a notification button, a
+     * search result — lands here.
+     *
+     * Live: a mounted view re-renders with the new request, keeping its state,
+     * its {@link disposeSignal} and its {@link initialArgs}. A request made while
+     * no view is mounted (a hidden dock tab, a pane behind a maximized sibling, a
+     * view still loading) waits and is handed to the next one. Only the latest
+     * waits: a second call before the view sees the first replaces it.
+     *
+     * `seq` is new for every call, including one with the same `args`, so key
+     * the effect that acts on it by the request itself:
+     *
+     * ```tsx
+     * useEffect(() => {
+     *   if (openRequest) showFile(String(openRequest.args.path));
+     * }, [openRequest]);
+     * ```
+     *
+     * Once a view has committed with a request it is delivered: it stays on
+     * this attempt's props, but a later remount or reload does not see it again,
+     * so persist whatever the request changed if it should survive one. Not
+     * persisted itself, and not merged into {@link initialArgs}: it is held by
+     * the project's window, so one still waiting when that window reloads,
+     * closes or is evicted to save memory is lost.
+     *
+     * Absent until a reusing open supplies `initialArgs`, and always absent on a
+     * host with no panel record (a project surface, a settings view).
+     */
+    readonly openRequest?: {
+        readonly seq: number;
+        readonly args: Record<string, unknown>;
+    };
     /**
      * Which version of your `stateVersion` schema {@link initialArgs} was written
      * against — the other half of declaring one in `contributes.panels` (#12280).

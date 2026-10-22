@@ -91,6 +91,7 @@ const { useResourceMonitoringStore } = await import("../resourceMonitoringStore"
 const { useVoiceRecordingStore } = await import("../voiceRecordingStore");
 const { usePluginPanelBadgeStore } = await import("../pluginPanelBadgeStore");
 const { usePluginPanelToolbarStore } = await import("../pluginPanelToolbarStore");
+const { usePluginPanelOpenRequestStore } = await import("../pluginPanelOpenRequestStore");
 const { unregisterInputController } = await import("../terminalInputStore");
 const { useCliAvailabilityStore, cleanupCliAvailabilityStore } =
   await import("../cliAvailabilityStore");
@@ -124,6 +125,7 @@ describe("rendererStoreOrchestrator", () => {
     useVoiceRecordingStore.setState({ panelBuffers: {} });
     usePluginPanelBadgeStore.setState({ badgesByPanelId: {} });
     usePluginPanelToolbarStore.setState({ statesByPanelId: {} });
+    usePluginPanelOpenRequestStore.setState({ entriesByPanelId: {} });
   });
 
   afterEach(() => {
@@ -247,7 +249,7 @@ describe("rendererStoreOrchestrator", () => {
     expect(badges.keep).toEqual({ "plugin-1": { kind: "dot" } });
   });
 
-  it("prunes plugin panel toolbar state for the removed panel only", () => {
+  it("prunes plugin panel toolbar and open-request state for the removed panel only", () => {
     usePanelStore.setState({
       panelsById: {
         gone: {
@@ -268,15 +270,20 @@ describe("rendererStoreOrchestrator", () => {
     usePluginPanelToolbarStore.getState().setItemState("keep", "acme.ledger.refresh", {
       text: "Fresh",
     });
+    usePluginPanelOpenRequestStore.getState().publish("gone", { path: "/a" });
+    usePluginPanelOpenRequestStore.getState().publish("keep", { path: "/b" });
 
     usePanelStore.getState().removePanel("gone");
 
     const states = usePluginPanelToolbarStore.getState().statesByPanelId;
     expect(states.gone).toBeUndefined();
     expect(states.keep).toEqual({ "acme.ledger.refresh": { text: "Fresh" } });
+    const requests = usePluginPanelOpenRequestStore.getState().entriesByPanelId;
+    expect(requests.gone).toBeUndefined();
+    expect(requests.keep?.request.args).toEqual({ path: "/b" });
   });
 
-  it("clears plugin panel toolbar state when the panel is closed to the trash", () => {
+  it("clears plugin panel toolbar and open-request state when the panel is closed to the trash", () => {
     usePanelStore.setState({
       panelsById: {
         closed: {
@@ -294,11 +301,13 @@ describe("rendererStoreOrchestrator", () => {
     usePluginPanelToolbarStore.getState().setItemState("closed", "acme.ledger.refresh", {
       busy: true,
     });
+    usePluginPanelOpenRequestStore.getState().publish("closed", { path: "/a" });
 
     usePanelStore.getState().trashPanel("closed");
 
     expect(usePanelStore.getState().panelIds).toContain("closed");
     expect(usePluginPanelToolbarStore.getState().statesByPanelId.closed).toBeUndefined();
+    expect(usePluginPanelOpenRequestStore.getState().entriesByPanelId.closed).toBeUndefined();
   });
 
   it("cleans up input store when terminal is removed", () => {

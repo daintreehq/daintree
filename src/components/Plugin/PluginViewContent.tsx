@@ -74,6 +74,11 @@ import { PluginKitViewHostContext } from "@/components/PluginKit/kitViewHost";
 import { getPanelKindConfig } from "@shared/config/panelKindRegistry";
 import { usePluginPanelToolbarStore } from "@/store/pluginPanelToolbarStore";
 import { usePluginPanelMenuStore } from "@/store/pluginPanelMenuStore";
+import {
+  readDeliveredOpenRequestSeq,
+  usePanelOpenRequest,
+  usePluginPanelOpenRequestStore,
+} from "@/store/pluginPanelOpenRequestStore";
 import { normalizePanelMenuItems } from "@shared/utils/pluginPanelMenuItems";
 import { logWarn } from "@/utils/logger";
 import {
@@ -982,10 +987,13 @@ export function makePluginViewContent(
     panelId,
     attempt,
     onCommit,
+    openRequestSeq,
   }: {
     panelId: string;
     attempt: number;
     onCommit: (attempt: number) => void;
+    /** The open request the view committed with, if any. */
+    openRequestSeq: number | undefined;
   }) {
     useEffect(
       () => reportViewMounted(panelId, { kindId, pluginId }),
@@ -995,6 +1003,15 @@ export function makePluginViewContent(
     useEffect(() => {
       onCommit(attempt);
     }, [attempt, onCommit]);
+    // Delivered only once a view has committed with it: a view that throws
+    // while rendering unwinds this effect with it, so the request is still
+    // waiting for the retry. A layout effect, because a passive one can run
+    // after the microtask a `requestReload` from the view's own layout effect
+    // acts in, and the replacement would then read the request as undelivered.
+    useLayoutEffect(() => {
+      if (openRequestSeq === undefined) return;
+      usePluginPanelOpenRequestStore.getState().markDelivered(panelId, openRequestSeq);
+    }, [panelId, openRequestSeq]);
     return null;
   }
 
@@ -1042,6 +1059,20 @@ export function makePluginViewContent(
     // Frozen with the bag it describes: a live version against a frozen bag
     // would tell the view its state had migrated when what it holds has not.
     const [mountStateVersion, setMountStateVersion] = useState(() => stateVersion);
+    // Open requests from reusing opens (#13779) are live, unlike `mountArgs`:
+    // they never come from the view's own writes, so they can't loop. What is
+    // frozen per attempt is the baseline — the newest request an earlier
+    // attempt already rendered. Anything newer is this attempt's to show;
+    // anything at or below it was delivered before, and replaying it on a
+    // remount would undo whatever the user did since.
+    const [openRequestBaseline, setOpenRequestBaseline] = useState(() =>
+      readDeliveredOpenRequestSeq(panelId)
+    );
+    const latestOpenRequest = usePanelOpenRequest(panelId);
+    const openRequest =
+      latestOpenRequest !== undefined && latestOpenRequest.seq > openRequestBaseline
+        ? latestOpenRequest
+        : undefined;
     // The current mount attempt, in state so a retry swaps in a fresh one
     // without a useMemo dependency array. A failed load is sticky for its
     // attempt — recovering requires a genuinely new one, never re-running the
@@ -1326,6 +1357,9 @@ export function makePluginViewContent(
           setMountArgs(recovered.state);
           setMountStateVersion(recovered.version);
         }
+        // A request the outgoing attempt rendered is delivered; one it never
+        // got to render is still waiting for this one.
+        setOpenRequestBaseline(readDeliveredOpenRequestSeq(panelId));
         // Ask main for a fresh view generation only when the module fetch is
         // what failed (#11728) — a new attempt alone cannot recover
         // that, because the poisoned entry belongs to the specifier, not the
@@ -1915,6 +1949,7 @@ export function makePluginViewContent(
                           disposeSignal={controller.signal}
                           panelRemovedSignal={panelRemovedSignal}
                           initialArgs={mountArgs}
+                          openRequest={openRequest}
                           stateVersion={mountStateVersion}
                           persistState={persistState}
                           requestReload={requestReload}
@@ -1935,6 +1970,7 @@ export function makePluginViewContent(
                     panelId={panelId}
                     attempt={retryCount}
                     onCommit={markAttemptCommitted}
+                    openRequestSeq={openRequest?.seq}
                   />
                 </ContentFadeIn>
               </Suspense>
