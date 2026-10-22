@@ -1842,7 +1842,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
           {/* A failed load or a missing connection already has an open
               project — the "Open a Git repository" nudge would contradict the
               banner, so the banner stands alone as the actionable state. */}
-          {!worktreeLoadError && !isProjectDisconnected && (
+          {loadFailure === null && !isProjectDisconnected && (
             <EmptyState
               variant="zero-data"
               scale="sidebar"

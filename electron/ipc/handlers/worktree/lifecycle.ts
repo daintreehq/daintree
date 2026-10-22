@@ -346,7 +346,13 @@ export function registerWorktreeLifecycleHandlers(deps: HandlerDependencies): ()
     if (windowId === undefined) {
       throw new Error("Couldn't identify the window to reload");
     }
-    const project = projectStore.getCurrentProject();
+    // The sender view's own project: the global current project names the
+    // last-focused window's, and reloading that here would broker another
+    // project's worktree port into this view.
+    const project =
+      ctx.projectId !== null
+        ? projectStore.getProjectById(ctx.projectId)
+        : projectStore.getCurrentProject();
     if (!project) {
       throw new Error("No active project to reload");
     }

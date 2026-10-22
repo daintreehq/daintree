@@ -441,7 +441,13 @@ export class WorkspaceHostPool {
    * whose port closed with it has nothing of its own that reconnects it.
    */
   private announceSpawn(entry: ProcessEntry): void {
-    this.emit("host-spawned", { projectPath: entry.projectPath, host: entry.host });
+    // Listeners run synchronously; one that throws must not fail a load whose
+    // host came up fine.
+    try {
+      this.emit("host-spawned", { projectPath: entry.projectPath, host: entry.host });
+    } catch (error) {
+      console.error("[WorkspaceClient] A host-spawned listener failed:", error);
+    }
   }
 
   /**

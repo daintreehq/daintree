@@ -12,7 +12,12 @@ vi.mock("../../../services/ProjectSwitchService.js", () => ({
   activateProjectOnHost: (ws: unknown, project: { id: string }, handle: number) => {
     mocks.resident.set(handle, project.id);
     mocks.stale.delete(handle);
-    return mocks.activate(ws, project, handle);
+    const load = mocks.activate(ws, project, handle);
+    // As the real activation does: a failed load drops the residency.
+    load.catch(() => {
+      if (mocks.resident.get(handle) === project.id) mocks.resident.delete(handle);
+    });
+    return load;
   },
   releaseProjectOnHost: (ws: unknown, handle: number) => {
     if (mocks.resident.delete(handle)) mocks.release(ws, handle);
@@ -22,7 +27,12 @@ vi.mock("../../../services/ProjectSwitchService.js", () => ({
     mocks.resident.get(handle) === projectId && !mocks.stale.has(handle),
 }));
 vi.mock("../../../services/ProjectStore.js", () => ({
-  projectStore: { getProjectById: (id: string) => mocks.projects.get(id) ?? null },
+  projectStore: {
+    getProjectById: (id: string) => {
+      if (id === "unreadable") throw new Error("database is locked");
+      return mocks.projects.get(id) ?? null;
+    },
+  },
 }));
 vi.mock("../../../window/serviceRefs.js", () => ({
   getWorkspaceClientRef: () => null,
@@ -252,6 +262,103 @@ describe("installRemoteProjectResidency", () => {
 
     expect(mocks.activate).toHaveBeenCalledTimes(2);
     expect(ep.request).not.toHaveBeenCalled();
+  });
+
+  it("redelivers once the host comes back, after a re-hold whose load failed", async () => {
+    const registry = fakeRegistry();
+    installRemoteProjectResidency({ registry, workspace: () => workspace, broker: () => broker });
+    const ep = endpoint(-9, "p1");
+    registry.endpoints.push(ep);
+    registry.change();
+    await flush();
+
+    mocks.stale.add(-9);
+    mocks.activate.mockRejectedValueOnce(new Error("spawn failed"));
+    workspace.spawn();
+    await flush();
+    expect(ep.request).not.toHaveBeenCalled();
+
+    // Its residency is gone with the failed load, but the view is still stranded.
+    workspace.spawn();
+    await flush();
+    expect(ep.request).toHaveBeenCalledTimes(1);
+    expect(ep.request).toHaveBeenCalledWith(WORKTREE_PORT_REDELIVER_METHOD, null, {
+      timeoutMs: expect.any(Number),
+    });
+  });
+
+  it("keeps redelivering on later sweeps until the view confirms its port", async () => {
+    const registry = fakeRegistry();
+    installRemoteProjectResidency({ registry, workspace: () => workspace, broker: () => broker });
+    const ep = endpoint(-9, "p1");
+    registry.endpoints.push(ep);
+    registry.change();
+    await flush();
+
+    ep.request.mockResolvedValueOnce(false);
+    mocks.stale.add(-9);
+    workspace.spawn();
+    await flush();
+    expect(ep.request).toHaveBeenCalledTimes(1);
+
+    registry.change();
+    await flush();
+    expect(ep.request).toHaveBeenCalledTimes(2);
+
+    // Confirmed: nothing left to recover.
+    registry.change();
+    await flush();
+    expect(ep.request).toHaveBeenCalledTimes(2);
+  });
+
+  it("forgets a stranded port once the view moves to another project", async () => {
+    const registry = fakeRegistry();
+    installRemoteProjectResidency({ registry, workspace: () => workspace, broker: () => broker });
+    const ep = endpoint(-9, "p1");
+    registry.endpoints.push(ep);
+    registry.change();
+    await flush();
+
+    ep.request.mockResolvedValueOnce(false);
+    mocks.stale.add(-9);
+    workspace.spawn();
+    await flush();
+    expect(ep.request).toHaveBeenCalledTimes(1);
+
+    ep.projectId = "p2";
+    registry.change();
+    await flush();
+    expect(mocks.activate).toHaveBeenLastCalledWith(workspace, mocks.projects.get("p2"), -9);
+    expect(ep.request).toHaveBeenCalledTimes(1);
+  });
+
+  it("reconciles every other view when one view's project can't be read", async () => {
+    const registry = fakeRegistry();
+    installRemoteProjectResidency({ registry, workspace: () => workspace, broker: () => broker });
+    registry.endpoints.push(endpoint(-7, "unreadable"), endpoint(-9, "p1"));
+    expect(() => registry.change()).not.toThrow();
+    await flush();
+    expect(mocks.activate).toHaveBeenCalledWith(workspace, mocks.projects.get("p1"), -9);
+  });
+
+  it("watches for re-spawned hosts once a workspace client appears", async () => {
+    const registry = fakeRegistry();
+    let ws: typeof workspace | null = null;
+    installRemoteProjectResidency({ registry, workspace: () => ws, broker: () => broker });
+    const ep = endpoint(-9, "p1");
+    registry.endpoints.push(ep);
+    registry.change();
+    expect(workspace.spawnListeners.size).toBe(0);
+
+    ws = workspace;
+    registry.change();
+    await flush();
+    expect(workspace.spawnListeners.size).toBe(1);
+
+    mocks.stale.add(-9);
+    workspace.spawn();
+    await flush();
+    expect(ep.request).toHaveBeenCalledTimes(1);
   });
 
   it("stops watching for re-spawned hosts once disposed", () => {

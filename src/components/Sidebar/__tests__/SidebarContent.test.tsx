@@ -926,7 +926,8 @@ describe("SidebarContent disconnected project — issue #12576", () => {
     // Retry used to clear the timeout banner over a sidebar with no port, and
     // the zero-worktree branch then told a user with an open project to open one.
     const branch = zeroWorktreeBranch();
-    const gateIdx = branch.indexOf("{!worktreeLoadError && !isProjectDisconnected && (");
+    // Gated on every load failure, a stalled reconnect over an empty list included.
+    const gateIdx = branch.indexOf("{loadFailure === null && !isProjectDisconnected && (");
     const nudgeIdx = branch.indexOf('title="Open a Git repository"');
     expect(gateIdx).toBeGreaterThan(0);
     expect(nudgeIdx).toBeGreaterThan(gateIdx);

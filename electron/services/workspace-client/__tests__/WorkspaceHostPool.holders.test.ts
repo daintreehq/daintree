@@ -96,6 +96,29 @@ describe("WorkspaceHostPool holders", () => {
     expect(emit).not.toHaveBeenCalledWith("host-spawned", expect.anything());
   });
 
+  it("announces nothing for a prewarm whose host failed to load", async () => {
+    const emit = vi.fn();
+    const pool = new WorkspaceHostPool({ config: {}, emit });
+    pool.prewarmProject(PROJECT);
+    const host = hosts.at(-1) as unknown as { sendWithResponse: ReturnType<typeof vi.fn> };
+    // The load-project round trip starts after readiness resolves.
+    host.sendWithResponse.mockRejectedValueOnce(new Error("not a git repository"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(emit).not.toHaveBeenCalledWith("host-spawned", expect.anything());
+    expect(pool.getHostForProject(PROJECT)).toBeUndefined();
+  });
+
+  it("does not fail a load whose host came up when a spawn listener throws", async () => {
+    const emit = vi.fn((event: string | symbol) => {
+      if (event === "host-spawned") throw new Error("listener broke");
+      return true;
+    });
+    const pool = new WorkspaceHostPool({ config: {}, emit });
+    await expect(pool.loadProject(PROJECT, REMOTE_VIEW)).resolves.toBe("cold");
+    expect(pool.isWindowAttached(REMOTE_VIEW, PROJECT)).toBe(true);
+    expect(pool.getHostForWindow(REMOTE_VIEW)).toBe(pool.getHostForProject(PROJECT));
+  });
+
   it("announces a prewarmed host once it has loaded", async () => {
     const emit = vi.fn();
     const pool = new WorkspaceHostPool({ config: {}, emit });

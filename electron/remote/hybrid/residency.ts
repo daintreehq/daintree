@@ -45,11 +45,19 @@ export function installRemoteProjectResidency(options: RemoteResidencyOptions = 
   const workspaceOf = options.workspace ?? getWorkspaceClientRef;
   const brokerOf = options.broker ?? getWorktreePortBrokerRef;
   const tracked = new Map<number, { dispose(): void }>();
+  // Views whose worktree port went down with a host that was disposed and
+  // re-spawned under them, by the project they were showing. Kept until their
+  // renderer confirms a fresh port, so a failed reload or an unanswered
+  // redelivery is picked up again by the next sweep rather than forgotten.
+  const stranded = new Map<number, string>();
+  const redelivering = new Set<number>();
+  let disposed = false;
   let spawnWatch: { workspace: ResidencyWorkspace; off(): void } | null = null;
 
   const release = (handle: number): void => {
     tracked.get(handle)?.dispose();
     tracked.delete(handle);
+    stranded.delete(handle);
     const workspace = workspaceOf();
     if (workspace) releaseProjectOnHost(workspace, handle);
   };
@@ -62,16 +70,20 @@ export function installRemoteProjectResidency(options: RemoteResidencyOptions = 
         endpoint.onClose(() => release(handle))
       );
     }
+    if (stranded.has(handle) && stranded.get(handle) !== projectId) stranded.delete(handle);
     const workspace = workspaceOf();
     if (!workspace) return;
     if (projectId === null) {
       releaseProjectOnHost(workspace, handle);
       return;
     }
-    if (isProjectHeldOnHost(workspace, handle, projectId)) return;
+    if (isProjectHeldOnHost(workspace, handle, projectId)) {
+      if (stranded.has(handle)) recoverPort(workspace, endpoint);
+      return;
+    }
     // Still resident by name but no longer holding the host: it was disposed
     // and re-spawned under the view, taking the view's worktree port with it.
-    const reholding = getHostResidentProject(handle) === projectId;
+    if (getHostResidentProject(handle) === projectId) stranded.set(handle, projectId);
     const project = projectStore.getProjectById(projectId);
     if (!project) {
       // A scratch (no project row, no workspace host): the project the view left is no longer held.
@@ -80,9 +92,8 @@ export function installRemoteProjectResidency(options: RemoteResidencyOptions = 
     }
     activateProjectOnHost(workspace, project, handle).then(
       () => {
-        if (connectEndpoint(workspace, endpoint, project) && reholding) {
-          redeliverPort(endpoint, projectId);
-        }
+        if (disposed) return;
+        recoverPort(workspace, endpoint);
         reportLoadStatus(endpoint, projectId, null);
       },
       (error: unknown) => {
@@ -100,14 +111,11 @@ export function installRemoteProjectResidency(options: RemoteResidencyOptions = 
   // comes back (#13748), so the residency that re-holds the host also hands
   // the endpoint its port. Idempotent: a view already connected to this host,
   // or not waiting for a port, is left alone.
-  const connectEndpoint = (
-    workspace: ResidencyWorkspace,
-    endpoint: ClientEndpoint,
-    project: { id: string; path: string }
-  ): boolean => {
+  const connectEndpoint = (workspace: ResidencyWorkspace, endpoint: ClientEndpoint): boolean => {
     // The view may have moved on while the load ran.
-    if (endpoint.isClosed() || endpoint.projectId !== project.id) return false;
-    const host = workspace.getHostForProject(project.path);
+    if (endpoint.isClosed() || endpoint.projectId === null) return false;
+    const project = projectStore.getProjectById(endpoint.projectId);
+    const host = project ? workspace.getHostForProject(project.path) : undefined;
     if (!host) return false;
     try {
       return brokerOf()?.connectEndpointPort(host, endpoint.handle) ?? false;
@@ -117,16 +125,23 @@ export function installRemoteProjectResidency(options: RemoteResidencyOptions = 
     }
   };
 
-  // Reconnecting this end alone leaves the view's renderer on the port it
-  // already holds, and it only leaves "Reconnecting…" once a snapshot lands.
-  // A fresh port from its Shell makes it fetch one, as a worktree Retry does.
-  const redeliverPort = (endpoint: ClientEndpoint, projectId: string): void => {
+  // Reconnecting this end alone leaves a stranded view's renderer on the port
+  // it already holds, and it only leaves "Reconnecting…" once a snapshot
+  // lands. A fresh port from its Shell makes it fetch one, as a worktree
+  // Retry does.
+  const recoverPort = (workspace: ResidencyWorkspace, endpoint: ClientEndpoint): void => {
+    const { handle } = endpoint;
+    if (!connectEndpoint(workspace, endpoint)) return;
+    const projectId = stranded.get(handle);
+    if (projectId === undefined || redelivering.has(handle)) return;
+    redelivering.add(handle);
     endpoint
       .request(WORKTREE_PORT_REDELIVER_METHOD, null, { timeoutMs: REDELIVER_TIMEOUT_MS })
       .then(
         (confirmed) => {
+          if (confirmed === true && stranded.get(handle) === projectId) stranded.delete(handle);
           console.log("[RemoteHosts] Reconnected a remote view to its re-spawned workspace host", {
-            endpointHandle: endpoint.handle,
+            endpointHandle: handle,
             projectId,
             confirmed: confirmed === true,
           });
@@ -134,7 +149,8 @@ export function installRemoteProjectResidency(options: RemoteResidencyOptions = 
         (error: unknown) => {
           console.warn("[RemoteHosts] Couldn't redeliver a remote view's worktree port:", error);
         }
-      );
+      )
+      .finally(() => redelivering.delete(handle));
   };
 
   // A re-spawned host is the one event that strands a view whose residency
@@ -151,13 +167,21 @@ export function installRemoteProjectResidency(options: RemoteResidencyOptions = 
     const workspace = workspaceOf();
     if (workspace) watchSpawns(workspace);
     for (const endpoint of registry.getRemote()) {
-      if (!endpoint.isClosed()) reconcile(endpoint);
+      if (endpoint.isClosed()) continue;
+      // One view's failure (a project lookup that throws) must not cost the
+      // others their reconcile, nor fail the host load that announced a spawn.
+      try {
+        reconcile(endpoint);
+      } catch (error) {
+        console.error("[RemoteHosts] Couldn't reconcile a remote view's residency:", error);
+      }
     }
   };
 
   const off = registry.onChange(sweep);
   sweep();
   return () => {
+    disposed = true;
     off();
     spawnWatch?.off();
     spawnWatch = null;
