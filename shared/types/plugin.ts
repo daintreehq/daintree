@@ -504,12 +504,26 @@ export type ProjectSurfaceSlotMode = "exclusive" | "selectable";
 /** What a claim on a slot carries: a view to mount, or data the host applies. */
 export type ProjectSurfaceClaimKind = "view" | "data";
 
-/** One host-declared slot: its arbitration mode, claim shape and user-facing name. */
+/**
+ * One host-declared slot: its arbitration mode, claim shape, and the words the
+ * host's shared slot chrome uses for it. The frame, the consent notice and the
+ * settings section read these, so every slot is switched, asked about and reset
+ * the same way and the user learns it once.
+ */
 export interface ProjectSurfaceSlotDescriptor {
   mode: ProjectSurfaceSlotMode;
   claim: ProjectSurfaceClaimKind;
-  /** Sentence-case name for the slot in settings and diagnostics. */
+  /** Sentence-case name for the slot in settings, notices and diagnostics. */
   label: string;
+  /** Sentence-case name of the host's own content, the switch's way back. */
+  stockLabel: string;
+  /** Lowercase word for what the slot shows, for use mid-sentence ("canvas"). */
+  noun: string;
+  /**
+   * Where the host's strip sits around a framed slot's region. Either way it is
+   * in flow and outside the plugin's box, so no plugin layout can cover it.
+   */
+  switchPlacement: "above" | "below";
 }
 
 /**
@@ -523,7 +537,14 @@ export interface ProjectSurfaceSlotDescriptor {
  * catalogue with the consumer that renders it.
  */
 export const PROJECT_SURFACE_SLOT_CATALOGUE = {
-  emptyCanvas: { mode: "exclusive", claim: "view", label: "Empty canvas" },
+  emptyCanvas: {
+    mode: "exclusive",
+    claim: "view",
+    label: "Empty canvas",
+    stockLabel: "Launcher",
+    noun: "canvas",
+    switchPlacement: "above",
+  },
 } as const satisfies Record<string, ProjectSurfaceSlotDescriptor>;
 
 export type ProjectSurfaceSlot = keyof typeof PROJECT_SURFACE_SLOT_CATALOGUE;
@@ -705,6 +726,24 @@ export interface ProjectSurfaceChoiceRecord {
 
 /** Every remembered surface answer in one project, keyed by slot. */
 export type ProjectSurfaceChoices = Partial<Record<ProjectSurfaceSlot, ProjectSurfaceChoiceRecord>>;
+
+/**
+ * One slot's part of an answer, as the renderer sends it: `null` forgets the
+ * answer. Names no plugin — main records it against what the slot offers now.
+ */
+export interface ProjectSurfaceChoiceUpdate {
+  slot: ProjectSurfaceSlot;
+  choice: ProjectSurfaceChoice | null;
+  /** For a selectable slot's `"surface"`, the INSTANCE key of the option picked. */
+  optionId?: string;
+  /**
+   * The INSTANCE key of the plugin the user was answering about. Main refuses
+   * the whole answer if the slot has passed to another plugin since: agreeing
+   * to one plugin is not agreeing to whatever holds the slot by the time the
+   * click arrives.
+   */
+  ownerId?: string;
+}
 
 /**
  * The option a slot shows once the user's answer is applied, or `null` for

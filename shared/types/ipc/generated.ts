@@ -1769,6 +1769,10 @@ export interface GeneratedIpcInvokeMap {
     ];
     result: import("../plugin.js").ProjectSurfacesSnapshot;
   };
+  "plugin:project-surface-choices-set": {
+    args: [updates: import("../plugin.js").ProjectSurfaceChoiceUpdate[]];
+    result: import("../plugin.js").ProjectSurfacesSnapshot;
+  };
   "plugin:project-surfaces-get": {
     args: [];
     result: import("../plugin.js").ProjectSurfacesSnapshot | null;

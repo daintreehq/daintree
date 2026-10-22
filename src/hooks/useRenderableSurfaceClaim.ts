@@ -7,6 +7,8 @@ import {
 import type { ProjectSurfaceClaim, ProjectSurfaceSlot } from "@shared/types/plugin";
 import { usePluginProjectSurfacesStore } from "@/store/pluginProjectSurfacesStore";
 
+type PanelKindRegistrySnapshot = ReturnType<typeof getPanelKindRegistrySnapshot>;
+
 /** A surface claim that can render: its owner plus the panel kind whose module it mounts. */
 export interface RenderableSurfaceClaim {
   claim: ProjectSurfaceClaim;
@@ -33,12 +35,28 @@ export interface RenderableSurfaceClaim {
  */
 export function useRenderableSurfaceClaim(slot: ProjectSurfaceSlot): RenderableSurfaceClaim | null {
   const claim = usePluginProjectSurfacesStore((s) => s.surfaces[slot]);
-  const registry = useSyncExternalStore(
+  return renderableSurfaceClaim(claim, usePanelKindRegistry());
+}
+
+/** The panel-kind registry, re-rendering on every change to it. */
+export function usePanelKindRegistry(): PanelKindRegistrySnapshot {
+  return useSyncExternalStore(
     subscribeToPanelKindRegistry,
     getPanelKindRegistrySnapshot,
     getPanelKindRegistrySnapshot
   );
-  if (claim === undefined) return null;
+}
+
+/**
+ * {@link useRenderableSurfaceClaim}'s test, for a caller that already holds
+ * the claim and the registry — one asking it of every slot at once, where a
+ * hook per slot is not an option.
+ */
+export function renderableSurfaceClaim(
+  claim: ProjectSurfaceClaim | null | undefined,
+  registry: PanelKindRegistrySnapshot
+): RenderableSurfaceClaim | null {
+  if (claim === undefined || claim === null) return null;
   const config = registry[claim.panelKindId];
   if (config === undefined || config.componentPath === undefined) return null;
   return { claim, config };

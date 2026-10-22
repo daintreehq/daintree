@@ -19,6 +19,7 @@ import type {
   PluginManifest,
   ProjectPluginInfo,
   ProjectSurfaceChoice,
+  ProjectSurfaceChoiceUpdate,
   ProjectSurfaceChoices,
   ProjectSurfaceSlotState,
   ProjectSurfacesSnapshot,
@@ -150,13 +151,14 @@ const pluginApi = {
   setPluginVisibilityDefault: vi.fn().mockResolvedValue(undefined),
   setProjectPluginTrust: vi.fn().mockResolvedValue(undefined),
   // Main records the answer against the slot's owner and returns the new set.
-  setProjectSurfaceChoice: vi.fn((_slot: string, choice: ProjectSurfaceChoice | null) =>
-    Promise.resolve(
+  setProjectSurfaceChoices: vi.fn((updates: ProjectSurfaceChoiceUpdate[]) => {
+    const { choice } = updates[0]!;
+    return Promise.resolve(
       canvasSnapshot(
         choice === null ? {} : { emptyCanvas: { pluginId: "acme.dashboard", choice, decidedAt: 2 } }
       )
-    )
-  ),
+    );
+  }),
   activateStagedProjectPlugin: vi.fn().mockResolvedValue(undefined),
   reloadProjectPlugins: vi.fn().mockResolvedValue(undefined),
   getSettingValues: vi.fn().mockResolvedValue({
@@ -256,6 +258,7 @@ function claimEmptyCanvas(choice?: ProjectSurfaceChoice) {
   });
   act(() => {
     usePluginProjectSurfacesStore.setState({
+      slots: { emptyCanvas: canvasSlot() },
       surfaces: {
         emptyCanvas: { pluginId: CANVAS_OWNER, panelKindId: CANVAS_KIND_ID },
       },
@@ -287,84 +290,149 @@ describe("ProjectPluginsTab", () => {
     expect(labels).toContain("Enable for this session");
   });
 
-  it("discloses which plugin owns the empty canvas and resets the answer", async () => {
+  it("discloses which plugin set up the empty canvas and resets the answer", async () => {
     seed([projectPlugin()]);
     claimEmptyCanvas("stock");
     render(<ProjectPluginsTab />);
     await waitFor(() => expect(pluginApi.list).toHaveBeenCalled());
 
-    // A remembered "use the launcher" is never silent: the plugin is named, the
+    // A remembered "use Daintree's" is never silent: the plugin is named, the
     // answer is stated, and it can be undone from here.
-    const section = screen.getByTestId("project-plugins-empty-canvas");
-    expect(section.textContent).toContain("Acme Dashboard draws what this project shows");
-    expect(section.textContent).toContain("You chose the launcher, so it's hidden.");
+    const row = screen.getByTestId("project-surface-row-emptyCanvas");
+    expect(row.textContent).toContain("Empty canvas");
+    expect(row.textContent).toContain("Set up by Acme Dashboard.");
+    expect(row.textContent).toContain("You chose Daintree's own, so it's hidden.");
 
-    fireEvent.click(within(section).getByRole("button", { name: "Reset choice" }));
+    fireEvent.click(within(row).getByRole("button", { name: "Ask again about the canvas" }));
 
     await waitFor(() =>
-      expect(pluginApi.setProjectSurfaceChoice).toHaveBeenCalledWith("emptyCanvas", null)
+      expect(pluginApi.setProjectSurfaceChoices).toHaveBeenCalledWith([
+        { slot: "emptyCanvas", choice: null },
+      ])
     );
-    await waitFor(() =>
-      expect(section.textContent).toContain("You haven't chosen yet, so it shows.")
-    );
-    expect(
-      within(section).getByRole("button", { name: "Reset choice" }).hasAttribute("disabled")
-    ).toBe(true);
+    await waitFor(() => expect(row.textContent).toContain("You haven't chosen yet, so it shows."));
+    // Nothing is remembered now, so there is nothing left to reset.
+    expect(within(row).queryByRole("button", { name: "Ask again about the canvas" })).toBeNull();
   });
 
-  it("switches the empty canvas to the launcher from settings", async () => {
+  it("switches the empty canvas to Daintree's own from settings", async () => {
     seed([projectPlugin()]);
     claimEmptyCanvas();
     render(<ProjectPluginsTab />);
     await waitFor(() => expect(pluginApi.list).toHaveBeenCalled());
 
-    const section = screen.getByTestId("project-plugins-empty-canvas");
-    expect(section.textContent).toContain("You haven't chosen yet, so it shows.");
+    const row = screen.getByTestId("project-surface-row-emptyCanvas");
+    expect(row.textContent).toContain("You haven't chosen yet, so it shows.");
     // Nothing to reset until something has been chosen.
-    expect(
-      within(section).getByRole("button", { name: "Reset choice" }).hasAttribute("disabled")
-    ).toBe(true);
+    expect(within(row).queryByRole("button", { name: "Ask again about the canvas" })).toBeNull();
 
-    fireEvent.click(screen.getByTestId("project-empty-canvas-switch"));
+    const toggle = screen.getByTestId("project-surface-switch-emptyCanvas");
+    expect(toggle.getAttribute("aria-label")).toBe("Use Acme Dashboard's canvas");
+    fireEvent.click(toggle);
 
     await waitFor(() =>
-      expect(pluginApi.setProjectSurfaceChoice).toHaveBeenCalledWith("emptyCanvas", "stock")
+      expect(pluginApi.setProjectSurfaceChoices).toHaveBeenCalledWith([
+        { slot: "emptyCanvas", choice: "stock", ownerId: CANVAS_OWNER },
+      ])
     );
     await waitFor(() =>
-      expect(section.textContent).toContain("You chose the launcher, so it's hidden.")
+      expect(row.textContent).toContain("You chose Daintree's own, so it's hidden.")
     );
   });
 
   it("says so when the canvas choice couldn't be saved", async () => {
     seed([projectPlugin()]);
     claimEmptyCanvas();
-    pluginApi.setProjectSurfaceChoice.mockRejectedValueOnce(new Error("ENOSPC"));
+    pluginApi.setProjectSurfaceChoices.mockRejectedValueOnce(new Error("ENOSPC"));
     render(<ProjectPluginsTab />);
     await waitFor(() => expect(pluginApi.list).toHaveBeenCalled());
 
-    fireEvent.click(screen.getByTestId("project-empty-canvas-switch"));
+    fireEvent.click(screen.getByTestId("project-surface-switch-emptyCanvas"));
 
-    const section = screen.getByTestId("project-plugins-empty-canvas");
-    expect((await within(section).findByRole("alert")).textContent).toContain(
+    const row = screen.getByTestId("project-surface-row-emptyCanvas");
+    expect((await within(row).findByRole("alert")).textContent).toContain(
       "Couldn't save the canvas choice"
     );
-    // Nothing was recorded, so the section still describes what is on disk.
-    expect(section.textContent).toContain("You haven't chosen yet, so it shows.");
+    // Nothing was recorded, so the row still describes what is on disk.
+    expect(row.textContent).toContain("You haven't chosen yet, so it shows.");
 
-    fireEvent.click(within(section).getByRole("button", { name: "Retry" }));
+    fireEvent.click(within(row).getByRole("button", { name: "Retry" }));
 
     await waitFor(() =>
-      expect(section.textContent).toContain("You chose the launcher, so it's hidden.")
+      expect(row.textContent).toContain("You chose Daintree's own, so it's hidden.")
     );
-    expect(within(section).queryByRole("alert")).toBeNull();
+    expect(within(row).queryByRole("alert")).toBeNull();
   });
 
-  it("says nothing about the empty canvas when no plugin claims it", async () => {
+  it("names a plugin whose claim on a slot isn't shown under that slot", async () => {
+    seed([
+      projectPlugin(),
+      projectPlugin({
+        id: "zeta.board",
+        instanceId: `project__${PROJECT_ID}__zeta.board`,
+        displayName: "Zeta Board",
+        dirName: "zeta",
+      }),
+    ]);
+    claimEmptyCanvas();
+    act(() => {
+      usePluginProjectSurfacesStore.setState({
+        slots: {
+          emptyCanvas: canvasSlot([
+            {
+              slot: "emptyCanvas",
+              pluginId: `project__${PROJECT_ID}__zeta.board`,
+              reason: "outranked",
+              heldBy: CANVAS_OWNER,
+            },
+          ]),
+        },
+      });
+    });
+    render(<ProjectPluginsTab />);
+    await waitFor(() => expect(pluginApi.list).toHaveBeenCalled());
+
+    const row = screen.getByTestId("project-surface-row-emptyCanvas");
+    expect(row.textContent).toContain("Set up by Acme Dashboard.");
+    expect(row.textContent).toContain(
+      "Zeta Board's claim isn't shown: Acme Dashboard also claims it in this project"
+    );
+  });
+
+  it("lists a slot no plugin holds when a claim on it was refused, with no switch", async () => {
+    seed([projectPlugin()]);
+    act(() => {
+      usePluginProjectSurfacesStore.setState({
+        slots: {
+          emptyCanvas: {
+            mode: "exclusive",
+            options: [],
+            defaultOptionId: null,
+            refused: [
+              { slot: "emptyCanvas", pluginId: "installed.board", reason: "installed-exclusive" },
+            ],
+          },
+        },
+        choicesLoaded: true,
+      });
+    });
+    render(<ProjectPluginsTab />);
+    await waitFor(() => expect(pluginApi.list).toHaveBeenCalled());
+
+    const row = screen.getByTestId("project-surface-row-emptyCanvas");
+    expect(row.textContent).toContain("Daintree's own is showing.");
+    expect(row.textContent).toContain(
+      "installed.board's claim isn't shown: Only a project's own plugins can replace it."
+    );
+    expect(screen.queryByTestId("project-surface-switch-emptyCanvas")).toBeNull();
+  });
+
+  it("says nothing about slots when no plugin claims one", async () => {
     seed([projectPlugin()]);
     render(<ProjectPluginsTab />);
     await waitFor(() => expect(pluginApi.list).toHaveBeenCalled());
 
-    expect(screen.queryByTestId("project-plugins-empty-canvas")).toBeNull();
+    expect(screen.queryByTestId("project-plugins-surfaces")).toBeNull();
   });
 
   it("describes the empty canvas only once its answer is known and the claim can render", async () => {
@@ -377,18 +445,18 @@ describe("ProjectPluginsTab", () => {
     await waitFor(() => expect(pluginApi.list).toHaveBeenCalled());
 
     // Before the answer is read, "you haven't chosen yet" could be false.
-    expect(screen.queryByTestId("project-plugins-empty-canvas")).toBeNull();
+    expect(screen.queryByTestId("project-plugins-surfaces")).toBeNull();
 
     act(() => {
       usePluginProjectSurfacesStore.setState({ choicesLoaded: true });
     });
-    expect(screen.getByTestId("project-plugins-empty-canvas")).toBeTruthy();
+    expect(screen.getByTestId("project-surface-row-emptyCanvas")).toBeTruthy();
 
     // A claim whose view cannot render leaves the canvas stock: nothing to describe.
     act(() => {
       unregisterPanelKind(CANVAS_KIND_ID);
     });
-    expect(screen.queryByTestId("project-plugins-empty-canvas")).toBeNull();
+    expect(screen.queryByTestId("project-plugins-surfaces")).toBeNull();
   });
 
   it("mutes a project plugin through its own switch, not the folder trust control", async () => {

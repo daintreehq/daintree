@@ -1,12 +1,16 @@
 import { create } from "zustand";
 import {
+  PROJECT_SURFACE_SLOT_CATALOGUE,
   PROJECT_SURFACE_SLOTS,
   pluginManifestIdFromInstanceKey,
   projectSurfaceClaimFromState,
   type ProjectSurfaceChoice,
+  type ProjectSurfaceChoiceRecord,
+  type ProjectSurfaceChoiceUpdate,
   type ProjectSurfaceChoices,
   type ProjectSurfaceRefusal,
   type ProjectSurfaceSlot,
+  type ProjectSurfaceSlotDescriptor,
   type ProjectSurfaceSlotState,
   type ProjectSurfaceSnapshot,
   type ProjectSurfacesSnapshot,
@@ -65,22 +69,35 @@ interface PluginProjectSurfacesState {
   /** The project main named for this state; a push naming any other is refused. */
   choicesProjectId: string | null;
   /**
-   * The last answer main could not record and the plugin it was about, so the
-   * canvas can say so and retry it. Read it through {@link selectFailedSave}.
+   * The last answer main could not record and the plugins it was about, so the
+   * slot can say so and retry it. Read it through {@link selectFailedSave}.
    */
-  failedSave: {
-    slot: ProjectSurfaceSlot;
-    choice: ProjectSurfaceChoice | null;
-    pluginId: string | null;
-  } | null;
+  failedSave: FailedSurfaceSave | null;
   /** Answer for whichever plugin owns `slot` now, or forget the answer with `null`. */
   setSurfaceChoice: (
     slot: ProjectSurfaceSlot,
     choice: ProjectSurfaceChoice | null
   ) => Promise<void>;
+  /**
+   * Answer for several slots at once, in one write main applies whole or not at
+   * all. The single path every answer takes, one slot or many.
+   */
+  setSurfaceChoices: (updates: ProjectSurfaceChoiceUpdate[]) => Promise<void>;
   dismissFailedSave: () => void;
   /** Idempotent: reads the slot state once, then follows its change signals. */
   init: () => void;
+}
+
+/** An answer main could not record, kept whole so a retry sends exactly it again. */
+export interface FailedSurfaceSave {
+  updates: ProjectSurfaceChoiceUpdate[];
+  /**
+   * Each slot's owner (MANIFEST id) when the answer was sent, `null` for none.
+   * Taken at send time, not when the failure lands: by then the slot may have
+   * changed hands, and the retry would answer for a plugin nobody was asked
+   * about.
+   */
+  owners: Partial<Record<ProjectSurfaceSlot, string | null>>;
 }
 
 let initialized = false;
@@ -91,6 +108,9 @@ let generation = 0;
 // Monotonic read sequence, so a slow read that FAILS can never clear state a
 // newer read already adopted. Successful reads are ordered by revision instead.
 let pullSeq = 0;
+// Monotonic save sequence, so a save that fails after a later one was sent
+// never offers its stale answer for retry.
+let saveSeq = 0;
 // Bumped on every adoption, so a read that fails after something newer was
 // adopted leaves it alone.
 let adoptions = 0;
@@ -130,37 +150,123 @@ function projectSurfaces(
   return surfaces;
 }
 
-/**
- * The remembered answer for `slot`, but only when it was about the plugin that
- * owns the slot NOW.
- *
- * A slot that has passed to a different plugin is undecided again: agreeing to
- * one plugin's canvas is not agreeing to whatever claims it next, which is also
- * why a new owner gets its own first-show question.
- */
-export function selectSurfaceChoice(
-  state: Pick<PluginProjectSurfacesState, "surfaces" | "choices">,
-  slot: ProjectSurfaceSlot
-): ProjectSurfaceChoice | null {
-  const claim = state.surfaces[slot];
-  const record = state.choices[slot];
-  if (claim === undefined || record === undefined) return null;
-  return record.pluginId === pluginManifestIdFromInstanceKey(claim.pluginId) ? record.choice : null;
+/** The MANIFEST id of the plugin a slot shows unless the user says otherwise. */
+function ownerManifestId(state: ProjectSurfaceSlotState | undefined): string | null {
+  const owner = state?.defaultOptionId ?? null;
+  return owner === null ? null : pluginManifestIdFromInstanceKey(owner);
 }
 
 /**
- * The failed save for `slot`, while retrying it still means what it meant: only
- * for the plugin it was about. A slot that has since passed to another plugin
- * gets that plugin's own question, not a retry of an answer about the last one.
+ * The user's answer about the claim `state` shows by default, or `null` while
+ * they haven't given one.
+ *
+ * On an exclusive slot the answer counts only for the plugin it was about: a
+ * slot that has passed to a different plugin is undecided again, because
+ * agreeing to one plugin's surface is not agreeing to whatever claims it next —
+ * which is also why a new owner gets its own question. A selectable answer is
+ * about the slot rather than any plugin (see `ProjectSurfaceChoiceRecord`), so
+ * it stands whichever option is the default.
+ */
+export function surfaceSlotChoice(
+  state: ProjectSurfaceSlotState | undefined,
+  record: ProjectSurfaceChoiceRecord | undefined
+): ProjectSurfaceChoice | null {
+  const owner = ownerManifestId(state);
+  if (state === undefined || owner === null || record === undefined) return null;
+  if (state.mode === "selectable") return record.choice;
+  return record.pluginId === owner ? record.choice : null;
+}
+
+/** The remembered answer for `slot`, read through {@link surfaceSlotChoice}. */
+export function selectSurfaceChoice(
+  state: Pick<PluginProjectSurfacesState, "slots" | "choices">,
+  slot: ProjectSurfaceSlot
+): ProjectSurfaceChoice | null {
+  return surfaceSlotChoice(state.slots[slot], state.choices[slot]);
+}
+
+/**
+ * The failed save that included `slot`, while retrying it still means what it
+ * meant: only while every slot it answered for is held by the plugin it was
+ * about. One that has since passed to another plugin gets that plugin's own
+ * question, not a retry of an answer about the last one.
  */
 export function selectFailedSave(
-  state: Pick<PluginProjectSurfacesState, "surfaces" | "failedSave">,
+  state: Pick<PluginProjectSurfacesState, "slots" | "failedSave">,
   slot: ProjectSurfaceSlot
-): PluginProjectSurfacesState["failedSave"] {
+): FailedSurfaceSave | null {
   const failed = state.failedSave;
-  const claim = state.surfaces[slot];
-  if (failed === null || failed.slot !== slot || claim === undefined) return null;
-  return failed.pluginId === pluginManifestIdFromInstanceKey(claim.pluginId) ? failed : null;
+  if (failed === null || !failed.updates.some((update) => update.slot === slot)) return null;
+  for (const { slot: answered } of failed.updates) {
+    const owner = ownerManifestId(state.slots[answered]);
+    if (owner === null || owner !== failed.owners[answered]) return null;
+  }
+  return failed;
+}
+
+/** A slot a plugin set up in this project, and the user's answer about it. */
+export interface ClaimedSurfaceSlot {
+  slot: ProjectSurfaceSlot;
+  /** INSTANCE key of the plugin whose claim the slot shows unless told otherwise. */
+  pluginId: string;
+  choice: ProjectSurfaceChoice | null;
+}
+
+/**
+ * Every slot a plugin set up in this project, in catalogue order: an exclusive
+ * slot's owner, or a selectable slot's default. An installed plugin's
+ * selectable option is offered rather than applied, so it sets nothing up and
+ * is never asked about. Pure over `slots` and `choices`, so a component selects
+ * those and derives this rather than selecting a fresh array.
+ */
+export function claimedSurfaceSlots(
+  slots: Partial<Record<ProjectSurfaceSlot, ProjectSurfaceSlotState>>,
+  choices: ProjectSurfaceChoices
+): ClaimedSurfaceSlot[] {
+  return PROJECT_SURFACE_SLOTS.flatMap((slot) => {
+    const state = slots[slot];
+    const pluginId = state?.defaultOptionId ?? null;
+    if (pluginId === null) return [];
+    return [{ slot, pluginId, choice: surfaceSlotChoice(state, choices[slot]) }];
+  });
+}
+
+/**
+ * The slot whose frame asks `pluginId`'s consent question: the first of the
+ * plugin's unanswered slots, in catalogue order, that has a frame on screen.
+ * One plugin, one question, however many of its slots are framed; `null` while
+ * none is answerable here, and nothing is recorded meanwhile.
+ */
+export function consentHostSlot<Slot extends string = ProjectSurfaceSlot>(
+  claimed: readonly (Omit<ClaimedSurfaceSlot, "slot"> & { slot: Slot })[],
+  pluginId: string,
+  framed: { has(slot: Slot): boolean }
+): Slot | null {
+  return (
+    claimed.find(
+      (entry) => entry.pluginId === pluginId && entry.choice === null && framed.has(entry.slot)
+    )?.slot ?? null
+  );
+}
+
+/**
+ * One answer about `claimed` slots as the updates that record it, each naming
+ * the plugin it was about so main refuses it if the slot has changed hands. A
+ * selectable slot's "keep" also names its default as the option picked: the
+ * one it was showing.
+ */
+export function surfaceAnswerUpdates(
+  claimed: readonly ClaimedSurfaceSlot[],
+  choice: ProjectSurfaceChoice
+): ProjectSurfaceChoiceUpdate[] {
+  return claimed.map(({ slot, pluginId }) => {
+    // Read through the descriptor type: the catalogue's literal types know only
+    // the slots declared today, and this is written for every mode.
+    const descriptor: ProjectSurfaceSlotDescriptor = PROJECT_SURFACE_SLOT_CATALOGUE[slot];
+    return choice === "surface" && descriptor.mode === "selectable"
+      ? { slot, choice, optionId: pluginId, ownerId: pluginId }
+      : { slot, choice, ownerId: pluginId };
+  });
 }
 
 /**
@@ -211,9 +317,10 @@ export const usePluginProjectSurfacesStore = create<PluginProjectSurfacesState>(
       // attempt that failed before it, and retrying that attempt would
       // overwrite it.
       const failed = get().failedSave;
+      const choices = snapshot.choices;
       if (
         failed !== null &&
-        !sameRecord(snapshot.choices[failed.slot], get().choices[failed.slot])
+        failed.updates.some(({ slot }) => !sameRecord(choices[slot], get().choices[slot]))
       ) {
         next.failedSave = null;
       }
@@ -259,33 +366,49 @@ export const usePluginProjectSurfacesStore = create<PluginProjectSurfacesState>(
     choicesLoaded: false,
     choicesProjectId: null,
     failedSave: null,
-    setSurfaceChoice: async (slot, choice) => {
+    setSurfaceChoice: (slot, choice) => {
+      // An answer names the plugin it is about; forgetting one is about nobody.
+      const owner = get().slots[slot]?.defaultOptionId ?? null;
+      return get().setSurfaceChoices([
+        choice === null || owner === null ? { slot, choice } : { slot, choice, ownerId: owner },
+      ]);
+    },
+    setSurfaceChoices: async (updates) => {
       const plugin = window.electron?.plugin;
-      if (typeof plugin?.setProjectSurfaceChoice !== "function") return;
+      if (typeof plugin?.setProjectSurfaceChoices !== "function") return;
+      const { slots, choices } = get();
+      const owners: FailedSurfaceSave["owners"] = {};
+      const before: ProjectSurfaceChoices = {};
+      for (const { slot } of updates) {
+        owners[slot] = ownerManifestId(slots[slot]);
+        before[slot] = choices[slot];
+      }
       set({ failedSave: null });
       const startedIn = generation;
+      const seq = ++saveSeq;
       try {
         // Not applied ahead of the round trip. Main records answers in the
         // order they arrive and bumps the revision for each, so adopting only
         // what main returns keeps every view in step with disk with nothing to
         // reconcile — and the round trip is one store write.
-        const snapshot = await plugin.setProjectSurfaceChoice(slot, choice);
+        const snapshot = await plugin.setProjectSurfaceChoices(updates);
         if (startedIn === generation) adopt(snapshot);
       } catch (err) {
         if (startedIn !== generation) return;
-        const claim = get().surfaces[slot];
-        set({
-          failedSave: {
-            slot,
-            choice,
-            pluginId: claim === undefined ? null : pluginManifestIdFromInstanceKey(claim.pluginId),
-          },
-        });
         logWarn("[pluginProjectSurfacesStore] Failed to save a project surface choice", {
-          slot,
-          choice,
+          updates,
           error: err,
         });
+        // Superseded: a later save was sent, or an answer was recorded since —
+        // this view's or another's — and retrying this one would overwrite it.
+        const current = get().choices;
+        if (
+          seq !== saveSeq ||
+          updates.some(({ slot }) => !sameRecord(current[slot], before[slot]))
+        ) {
+          return;
+        }
+        set({ failedSave: { updates, owners } });
       }
     },
     dismissFailedSave: () => set({ failedSave: null }),
@@ -353,6 +476,7 @@ export function _resetPluginProjectSurfacesStoreForTest(): void {
   initialized = false;
   generation += 1;
   pullSeq = 0;
+  saveSeq = 0;
   adoptions = 0;
   adoptedRevision = -1;
   announcedRevisions.clear();

@@ -105,10 +105,12 @@ import type {
   PluginPanelLifecycleEvent,
   PluginRuntimeStatus,
   ProjectSurfaceChoice,
+  ProjectSurfaceChoiceUpdate,
   ProjectSurfaceSlot,
   ProjectSurfacesSnapshot,
 } from "../../../shared/types/plugin.js";
 import {
+  PROJECT_SURFACE_SLOTS,
   isProjectSurfaceChoice,
   isProjectSurfaceSlot,
   parsePluginHostedViewKindId,
@@ -857,6 +859,46 @@ async function handleProjectSurfaceChoiceSet(
   // The owner comes from the claim registry, which startup activation fills.
   await svc.waitForInit();
   return svc.setProjectSurfaceChoice(ctx.projectId, slot, choice, optionId);
+}
+
+/**
+ * Remember one answer about several slots in the SENDER's project, in one write
+ * — a consent notice answers for every slot one plugin set up. Each update is
+ * checked as {@link handleProjectSurfaceChoiceSet} checks its arguments, and
+ * main resolves each against the slot's current owner the same way — refusing
+ * the lot if an update names an owner the slot has since passed from.
+ */
+async function handleProjectSurfaceChoicesSet(
+  ctx: IpcContext,
+  updates: ProjectSurfaceChoiceUpdate[]
+): Promise<ProjectSurfacesSnapshot> {
+  if (!ctx.projectId) throw new Error("project surfaces: sender has no project");
+  if (!Array.isArray(updates) || updates.length === 0) {
+    throw new Error("project surfaces: an answer needs at least one slot");
+  }
+  if (updates.length > PROJECT_SURFACE_SLOTS.length) {
+    throw new Error("project surfaces: more updates than there are slots");
+  }
+  for (const update of updates as unknown[]) {
+    if (!update || typeof update !== "object" || Array.isArray(update)) {
+      throw new Error("project surfaces: an update must be an object");
+    }
+    const { slot, choice, optionId, ownerId } = update as Record<string, unknown>;
+    if (!isProjectSurfaceSlot(slot)) throw new Error("project surfaces: unknown surface slot");
+    if (choice !== null && !isProjectSurfaceChoice(choice)) {
+      throw new Error('project surfaces: choice must be "surface", "stock" or null');
+    }
+    if (optionId !== undefined && (typeof optionId !== "string" || optionId.length === 0)) {
+      throw new Error("project surfaces: optionId must be a non-empty string");
+    }
+    if (ownerId !== undefined && (typeof ownerId !== "string" || ownerId.length === 0)) {
+      throw new Error("project surfaces: ownerId must be a non-empty string");
+    }
+  }
+  const svc = await getPluginService();
+  // The owner comes from the claim registry, which startup activation fills.
+  await svc.waitForInit();
+  return svc.setProjectSurfaceChoices(ctx.projectId, updates);
 }
 
 /**
@@ -2029,6 +2071,11 @@ export const pluginNamespace = defineIpcNamespace({
     setProjectSurfaceChoice: op(
       PLUGIN_METHOD_CHANNELS.setProjectSurfaceChoice,
       handleProjectSurfaceChoiceSet,
+      { withContext: true }
+    ),
+    setProjectSurfaceChoices: op(
+      PLUGIN_METHOD_CHANNELS.setProjectSurfaceChoices,
+      handleProjectSurfaceChoicesSet,
       { withContext: true }
     ),
     getProjectPlugins: op(PLUGIN_METHOD_CHANNELS.getProjectPlugins, handleProjectPluginsList, {

@@ -98,6 +98,7 @@ import type {
   ProjectPluginTrustState,
   ProjectPluginVisibility,
   ProjectSurfaceChoice,
+  ProjectSurfaceChoiceUpdate,
   ProjectSurfaceChoices,
   ProjectSurfacesSnapshot,
 } from "../../shared/types/plugin.js";
@@ -130,7 +131,7 @@ import {
 } from "./plugin/PluginSurfaceRegistry.js";
 import {
   getProjectSurfaceChoices as readProjectSurfaceChoices,
-  setProjectSurfaceChoice as writeProjectSurfaceChoice,
+  setProjectSurfaceChoices as writeProjectSurfaceChoices,
 } from "./plugin/projectSurfaceChoices.js";
 import {
   ProjectPluginController,
@@ -6279,7 +6280,18 @@ export class PluginService {
     choice: ProjectSurfaceChoice | null,
     optionId?: string
   ): ProjectSurfacesSnapshot {
-    writeProjectSurfaceChoice(projectId, slot, choice, optionId);
+    return this.setProjectSurfaceChoices(projectId, [{ slot, choice, optionId }]);
+  }
+
+  /**
+   * Remember an answer about several slots in one write — all of them or none
+   * — under one revision and one signal, so no view ever adopts half of it.
+   */
+  setProjectSurfaceChoices(
+    projectId: string,
+    updates: readonly ProjectSurfaceChoiceUpdate[]
+  ): ProjectSurfacesSnapshot {
+    writeProjectSurfaceChoices(projectId, updates);
     bumpProjectSurfaceRevision(projectId);
     this.publishProjectSurfaces([projectId]);
     return this.getProjectSurfacesSnapshot(projectId);

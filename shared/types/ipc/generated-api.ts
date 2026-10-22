@@ -940,6 +940,9 @@ export interface GeneratedElectronAPI {
     setProjectSurfaceChoice(
       ...args: IpcInvokeMap["plugin:project-surface-choice-set"]["args"]
     ): Promise<IpcInvokeMap["plugin:project-surface-choice-set"]["result"]>;
+    setProjectSurfaceChoices(
+      ...args: IpcInvokeMap["plugin:project-surface-choices-set"]["args"]
+    ): Promise<IpcInvokeMap["plugin:project-surface-choices-set"]["result"]>;
     setSettingValue(
       ...args: IpcInvokeMap["plugin:settings-set-value"]["args"]
     ): Promise<IpcInvokeMap["plugin:settings-set-value"]["result"]>;

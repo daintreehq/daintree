@@ -30,6 +30,7 @@ const mockListProjectPlugins = vi.fn();
 const mockSetProjectPluginTrust = vi.fn();
 const mockGetProjectSurfacesSnapshot = vi.fn();
 const mockSetProjectSurfaceChoice = vi.fn();
+const mockSetProjectSurfaceChoices = vi.fn();
 const mockActivateStagedProjectPlugin = vi.fn();
 const mockSetProjectPluginMuted = vi.fn();
 const mockGetProjectPluginVisibility = vi.fn();
@@ -127,6 +128,7 @@ vi.mock("../../../services/PluginService.js", () => ({
     setProjectPluginTrust: (...args: unknown[]) => mockSetProjectPluginTrust(...args),
     getProjectSurfacesSnapshot: (...args: unknown[]) => mockGetProjectSurfacesSnapshot(...args),
     setProjectSurfaceChoice: (...args: unknown[]) => mockSetProjectSurfaceChoice(...args),
+    setProjectSurfaceChoices: (...args: unknown[]) => mockSetProjectSurfaceChoices(...args),
     activateStagedProjectPlugin: (...args: unknown[]) => mockActivateStagedProjectPlugin(...args),
     setProjectPluginMuted: (...args: unknown[]) => mockSetProjectPluginMuted(...args),
     getProjectPluginVisibility: (...args: unknown[]) => mockGetProjectPluginVisibility(...args),
@@ -2852,6 +2854,62 @@ describe("project-local plugin handlers", () => {
     mockGetProjectForWebContents.mockReturnValue(null);
     await expect(set({ sender: { id: 1 } }, "emptyCanvas", "stock")).rejects.toThrow(/no project/);
     expect(mockSetProjectSurfaceChoice).not.toHaveBeenCalled();
+  });
+
+  it("records an answer about several slots in the sender's project, once init has run", async () => {
+    const { pluginService } = await import("../../../services/PluginService.js");
+    const waitForInit = vi.mocked(pluginService.waitForInit);
+    let releaseGate: () => void = () => {};
+    waitForInit.mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        releaseGate = resolve;
+      })
+    );
+    const snapshot = { projectId: PROJECT, revision: 5, slots: {}, choices: {} };
+    mockSetProjectSurfaceChoices.mockReturnValue(snapshot);
+    mockGetProjectForWebContents.mockReturnValue(PROJECT);
+    const updates = [{ slot: "emptyCanvas", choice: "stock" }];
+
+    const inFlight = getHandler("plugin:project-surface-choices-set")(
+      { sender: { id: 1 } },
+      updates
+    ) as Promise<unknown>;
+    await Promise.resolve();
+    await Promise.resolve();
+    // The owner each answer is about comes from the claim registry, which
+    // startup activation fills.
+    expect(mockSetProjectSurfaceChoices).not.toHaveBeenCalled();
+    releaseGate();
+
+    expect(await inFlight).toEqual(snapshot);
+    expect(mockSetProjectSurfaceChoices).toHaveBeenCalledWith(PROJECT, updates);
+  });
+
+  it("rejects a malformed multi-slot answer before main sees any of it", async () => {
+    mockGetProjectForWebContents.mockReturnValue(PROJECT);
+    const set = getHandler("plugin:project-surface-choices-set");
+    const ok = { slot: "emptyCanvas", choice: "stock" };
+
+    await expect(set({ sender: { id: 1 } }, [])).rejects.toThrow(/at least one slot/);
+    await expect(set({ sender: { id: 1 } }, "emptyCanvas")).rejects.toThrow(/at least one slot/);
+    await expect(set({ sender: { id: 1 } }, [ok, ok])).rejects.toThrow(/more updates than/);
+    await expect(set({ sender: { id: 1 } }, [null])).rejects.toThrow(/must be an object/);
+    await expect(
+      set({ sender: { id: 1 } }, [{ slot: "projectHome", choice: "stock" }])
+    ).rejects.toThrow(/unknown surface slot/);
+    await expect(
+      set({ sender: { id: 1 } }, [{ slot: "emptyCanvas", choice: "hidden" }])
+    ).rejects.toThrow(/choice must be/);
+    await expect(
+      set({ sender: { id: 1 } }, [{ slot: "emptyCanvas", choice: "surface", optionId: "" }])
+    ).rejects.toThrow(/optionId must be/);
+    await expect(
+      set({ sender: { id: 1 } }, [{ slot: "emptyCanvas", choice: "stock", ownerId: 7 }])
+    ).rejects.toThrow(/ownerId must be/);
+
+    mockGetProjectForWebContents.mockReturnValue(null);
+    await expect(set({ sender: { id: 1 } }, [ok])).rejects.toThrow(/no project/);
+    expect(mockSetProjectSurfaceChoices).not.toHaveBeenCalled();
   });
 
   it("activates a staged plugin by manifest id and rejects a malformed one", async () => {

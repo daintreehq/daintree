@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   ProjectSurfaceChoice,
+  ProjectSurfaceChoiceUpdate,
   ProjectSurfaceChoices,
   ProjectSurfaceSlotState,
   ProjectSurfacesChangedEvent,
@@ -9,9 +10,13 @@ import type {
 } from "@shared/types/plugin";
 import {
   _resetPluginProjectSurfacesStoreForTest,
+  claimedSurfaceSlots,
+  consentHostSlot,
   selectFailedSave,
   selectSurfaceChoice,
   selectSurfaceRefusals,
+  surfaceAnswerUpdates,
+  surfaceSlotChoice,
   usePluginProjectSurfacesStore,
 } from "../pluginProjectSurfacesStore";
 
@@ -71,18 +76,21 @@ function installBridge(read: Read | (() => Promise<Read>), options: BridgeOption
     };
   });
   // Main records an answer against the slot's current owner; the renderer only
-  // ever says which canvas it wants.
+  // ever says which canvas it wants. Every answer travels as a batch, one slot
+  // or several, so the default answers the batch's first slot.
   let saveRevision = 100;
-  const setProjectSurfaceChoice = vi.fn(
+  const setChoice =
     options.setChoice ??
-      ((_slot: string, choice: ProjectSurfaceChoice | null) =>
-        Promise.resolve(
-          snapshot({
-            revision: ++saveRevision,
-            slots: ownedBy(),
-            choices: choice === null ? {} : { emptyCanvas: record("acme.dash", choice) },
-          })
-        ))
+    ((_slot: string, choice: ProjectSurfaceChoice | null) =>
+      Promise.resolve(
+        snapshot({
+          revision: ++saveRevision,
+          slots: ownedBy(),
+          choices: choice === null ? {} : { emptyCanvas: record("acme.dash", choice) },
+        })
+      ));
+  const setProjectSurfaceChoices = vi.fn((updates: ProjectSurfaceChoiceUpdate[]) =>
+    setChoice(updates[0]!.slot, updates[0]!.choice)
   );
   const on = vi.fn((name: string, cb: SurfacesCallback) => {
     if (name === "plugin:project-surfaces-changed") surfaceListeners.push(cb);
@@ -96,7 +104,7 @@ function installBridge(read: Read | (() => Promise<Read>), options: BridgeOption
   // lint ratchet counts. The descriptor takes the value untyped.
   Object.defineProperty(window, "electron", {
     value: {
-      plugin: { getProjectSurfaces, onPanelKindsChanged, setProjectSurfaceChoice },
+      plugin: { getProjectSurfaces, onPanelKindsChanged, setProjectSurfaceChoices },
       events: { on },
     },
     configurable: true,
@@ -105,7 +113,7 @@ function installBridge(read: Read | (() => Promise<Read>), options: BridgeOption
   return {
     getProjectSurfaces,
     onPanelKindsChanged,
-    setProjectSurfaceChoice,
+    setProjectSurfaceChoices,
     on,
     listeners,
     surfaceListeners,
@@ -388,19 +396,17 @@ describe("pluginProjectSurfacesStore", () => {
 
   it("honours an answer only for the plugin that owns the slot now", () => {
     usePluginProjectSurfacesStore.setState({
-      surfaces: { emptyCanvas: claim },
+      slots: ownedBy(),
       choices: { emptyCanvas: record("acme.dash", "stock") },
     });
     expect(canvasChoice()).toBe("stock");
 
     // The slot passed to a different plugin: the old answer was not about it.
-    usePluginProjectSurfacesStore.setState({
-      surfaces: { emptyCanvas: { ...claim, pluginId: "project__p1__acme.other" } },
-    });
+    usePluginProjectSurfacesStore.setState({ slots: ownedBy("project__p1__acme.other") });
     expect(canvasChoice()).toBeNull();
 
     // Released: nothing to answer about, whatever is on record.
-    usePluginProjectSurfacesStore.setState({ surfaces: {} });
+    usePluginProjectSurfacesStore.setState({ slots: {} });
     expect(canvasChoice()).toBeNull();
   });
 
@@ -408,13 +414,16 @@ describe("pluginProjectSurfacesStore", () => {
     const save = deferred<ProjectSurfacesSnapshot>();
     const bridge = installBridge(null, { setChoice: () => save.promise });
     usePluginProjectSurfacesStore.setState({
+      slots: ownedBy(),
       surfaces: { emptyCanvas: claim },
       choicesLoaded: true,
     });
 
     const pending = state().setSurfaceChoice("emptyCanvas", "stock");
 
-    expect(bridge.setProjectSurfaceChoice).toHaveBeenCalledWith("emptyCanvas", "stock");
+    expect(bridge.setProjectSurfaceChoices).toHaveBeenCalledWith([
+      { slot: "emptyCanvas", choice: "stock", ownerId: claim.pluginId },
+    ]);
     expect(canvasChoice()).toBeNull();
 
     save.resolve(
@@ -444,6 +453,7 @@ describe("pluginProjectSurfacesStore", () => {
             ),
     });
     usePluginProjectSurfacesStore.setState({
+      slots: ownedBy(),
       surfaces: { emptyCanvas: claim },
       choicesLoaded: true,
     });
@@ -451,9 +461,8 @@ describe("pluginProjectSurfacesStore", () => {
     await state().setSurfaceChoice("emptyCanvas", "stock");
 
     expect(state().failedSave).toEqual({
-      slot: "emptyCanvas",
-      choice: "stock",
-      pluginId: "acme.dash",
+      updates: [{ slot: "emptyCanvas", choice: "stock", ownerId: claim.pluginId }],
+      owners: { emptyCanvas: "acme.dash" },
     });
     expect(canvasChoice()).toBeNull();
 
@@ -502,28 +511,32 @@ describe("pluginProjectSurfacesStore", () => {
     bridge.surfaceListeners[0]?.({ projectId: PROJECT, revision: 2 });
     await flush();
 
-    expect(selectFailedSave(state(), "emptyCanvas")?.choice).toBe("stock");
+    expect(selectFailedSave(state(), "emptyCanvas")?.updates).toEqual([
+      { slot: "emptyCanvas", choice: "stock", ownerId: claim.pluginId },
+    ]);
   });
 
   it("offers a failed save for retry only while the same plugin owns the slot", async () => {
     installBridge(null, { setChoice: () => Promise.reject(new Error("ENOSPC")) });
     usePluginProjectSurfacesStore.setState({
+      slots: ownedBy(),
       surfaces: { emptyCanvas: claim },
       choicesLoaded: true,
     });
 
     await state().setSurfaceChoice("emptyCanvas", "stock");
-    expect(selectFailedSave(state(), "emptyCanvas")?.choice).toBe("stock");
+    expect(selectFailedSave(state(), "emptyCanvas")?.updates).toEqual([
+      { slot: "emptyCanvas", choice: "stock", ownerId: claim.pluginId },
+    ]);
 
-    usePluginProjectSurfacesStore.setState({
-      surfaces: { emptyCanvas: { ...claim, pluginId: "project__p1__acme.other" } },
-    });
+    usePluginProjectSurfacesStore.setState({ slots: ownedBy("project__p1__acme.other") });
     expect(selectFailedSave(state(), "emptyCanvas")).toBeNull();
   });
 
   it("forgets an answer with null", async () => {
     const bridge = installBridge(null);
     usePluginProjectSurfacesStore.setState({
+      slots: ownedBy(),
       surfaces: { emptyCanvas: claim },
       choices: { emptyCanvas: record("acme.dash", "stock") },
       choicesLoaded: true,
@@ -531,7 +544,9 @@ describe("pluginProjectSurfacesStore", () => {
 
     await state().setSurfaceChoice("emptyCanvas", null);
 
-    expect(bridge.setProjectSurfaceChoice).toHaveBeenCalledWith("emptyCanvas", null);
+    expect(bridge.setProjectSurfaceChoices).toHaveBeenCalledWith([
+      { slot: "emptyCanvas", choice: null },
+    ]);
     expect(state().choices).toEqual({});
   });
 
@@ -675,7 +690,7 @@ describe("pluginProjectSurfacesStore", () => {
         return saves === 1 ? answered.promise : failed;
       },
     });
-    usePluginProjectSurfacesStore.setState({ surfaces: { emptyCanvas: claim } });
+    usePluginProjectSurfacesStore.setState({ slots: ownedBy(), surfaces: { emptyCanvas: claim } });
     const first = state().setSurfaceChoice("emptyCanvas", "stock");
     const second = state().setSurfaceChoice("emptyCanvas", "surface");
 
@@ -743,5 +758,194 @@ describe("selectSurfaceRefusals", () => {
     );
     expect(selectSurfaceRefusals(slots, claim.pluginId)).toEqual([]);
     expect(selectSurfaceRefusals(slots, undefined)).toEqual([]);
+  });
+});
+
+describe("shared slot answers", () => {
+  it("lists the slots a plugin set up, with the answer about each", () => {
+    expect(claimedSurfaceSlots(ownedBy(), {})).toEqual([
+      { slot: "emptyCanvas", pluginId: claim.pluginId, choice: null },
+    ]);
+    expect(claimedSurfaceSlots(ownedBy(), { emptyCanvas: record("acme.dash", "stock") })).toEqual([
+      { slot: "emptyCanvas", pluginId: claim.pluginId, choice: "stock" },
+    ]);
+    // An answer about the slot's previous owner says nothing about this one.
+    expect(claimedSurfaceSlots(ownedBy(), { emptyCanvas: record("acme.other", "stock") })).toEqual([
+      { slot: "emptyCanvas", pluginId: claim.pluginId, choice: null },
+    ]);
+  });
+
+  it("leaves out a slot nobody holds, even one with refused claims", () => {
+    const slots = ownedBy();
+    slots.emptyCanvas.options = [];
+    slots.emptyCanvas.defaultOptionId = null;
+    slots.emptyCanvas.refused = [
+      { slot: "emptyCanvas", pluginId: "installed.dash", reason: "installed-exclusive" },
+    ];
+
+    expect(claimedSurfaceSlots(slots, {})).toEqual([]);
+  });
+
+  it("treats a selectable slot's answer as about the slot, whichever option is the default", () => {
+    const selectable: ProjectSurfaceSlotState = {
+      mode: "selectable",
+      options: [
+        {
+          pluginId: "project__p1__acme.dash",
+          scope: "project",
+          value: { kind: "view", viewId: "tree" },
+        },
+        { pluginId: "installed.tree", scope: "installed", value: { kind: "view", viewId: "tree" } },
+      ],
+      defaultOptionId: "project__p1__acme.dash",
+      refused: [],
+    };
+
+    expect(surfaceSlotChoice(selectable, undefined)).toBeNull();
+    expect(surfaceSlotChoice(selectable, { pluginId: "", choice: "stock", decidedAt: 1 })).toBe(
+      "stock"
+    );
+    // No project default: an installed option is offered, never applied, so
+    // there is nothing set up to answer about.
+    expect(
+      surfaceSlotChoice(
+        { ...selectable, defaultOptionId: null },
+        { pluginId: "", choice: "stock", decidedAt: 1 }
+      )
+    ).toBeNull();
+  });
+
+  it("asks one plugin's question in the first of its unanswered slots on screen", () => {
+    // Only `emptyCanvas` is catalogued, so the slots here are named rather
+    // than added to the production catalogue: the election takes any names.
+    const claimed = [
+      { slot: "emptyCanvas", pluginId: "project__p1__acme", choice: "stock" as const },
+      { slot: "sidebar", pluginId: "project__p1__acme", choice: null },
+      { slot: "home", pluginId: "project__p1__acme", choice: null },
+    ];
+
+    // Answered slots never host it, and neither do slots with no frame up.
+    expect(consentHostSlot(claimed, "project__p1__acme", new Set(["emptyCanvas"]))).toBeNull();
+    expect(consentHostSlot(claimed, "project__p1__acme", new Set(["home"]))).toBe("home");
+    // Two frames up: the first in catalogue order asks, the other stays quiet.
+    expect(consentHostSlot(claimed, "project__p1__acme", new Set(["home", "sidebar"]))).toBe(
+      "sidebar"
+    );
+    // Another plugin's frame never asks this plugin's question.
+    expect(consentHostSlot(claimed, "project__p1__other", new Set(["sidebar", "home"]))).toBeNull();
+  });
+
+  it("records an exclusive answer without naming an option", () => {
+    expect(
+      surfaceAnswerUpdates(
+        [{ slot: "emptyCanvas", pluginId: claim.pluginId, choice: null }],
+        "surface"
+      )
+    ).toEqual([{ slot: "emptyCanvas", choice: "surface", ownerId: claim.pluginId }]);
+  });
+
+  it("records who an answer was about when it was sent, not when it failed", async () => {
+    let fail!: (error: Error) => void;
+    installBridge(null, {
+      setChoice: () =>
+        new Promise<ProjectSurfacesSnapshot>((_resolve, reject) => {
+          fail = reject;
+        }),
+    });
+    usePluginProjectSurfacesStore.setState({ slots: ownedBy(), choicesLoaded: true });
+
+    const pending = state().setSurfaceChoice("emptyCanvas", "stock");
+    // The slot passes to another plugin while the save is in flight.
+    usePluginProjectSurfacesStore.setState({ slots: ownedBy("project__p1__acme.other") });
+    fail(new Error("ENOSPC"));
+    await pending;
+
+    expect(state().failedSave?.owners).toEqual({ emptyCanvas: "acme.dash" });
+    expect(selectFailedSave(state(), "emptyCanvas")).toBeNull();
+  });
+});
+
+describe("a save that fails after something newer", () => {
+  it("offers no retry once another view's answer has landed meanwhile", async () => {
+    let current = snapshot({ revision: 1, slots: ownedBy() });
+    let fail!: (error: Error) => void;
+    const bridge = installBridge(() => Promise.resolve(current), {
+      setChoice: () =>
+        new Promise<ProjectSurfacesSnapshot>((_resolve, reject) => {
+          fail = reject;
+        }),
+    });
+    state().init();
+    await flush();
+
+    const pending = state().setSurfaceChoice("emptyCanvas", "stock");
+    // Another view keeps the plugin's canvas while this save is in flight.
+    current = snapshot({
+      revision: 2,
+      slots: ownedBy(),
+      choices: { emptyCanvas: record("acme.dash", "surface") },
+    });
+    bridge.surfaceListeners[0]?.({ projectId: PROJECT, revision: 2 });
+    await flush();
+    fail(new Error("ENOSPC"));
+    await pending;
+
+    // Retrying "stock" now would overwrite the newer answer.
+    expect(state().failedSave).toBeNull();
+    expect(canvasChoice()).toBe("surface");
+  });
+
+  it("still offers the retry when only an unrelated change landed meanwhile", async () => {
+    let current = snapshot({ revision: 1, slots: ownedBy() });
+    let fail!: (error: Error) => void;
+    const bridge = installBridge(() => Promise.resolve(current), {
+      setChoice: () =>
+        new Promise<ProjectSurfacesSnapshot>((_resolve, reject) => {
+          fail = reject;
+        }),
+    });
+    state().init();
+    await flush();
+
+    const pending = state().setSurfaceChoice("emptyCanvas", "stock");
+    // Another plugin's claim was refused while the save was in flight: the
+    // slot state moved, the answers did not.
+    current = snapshot({ revision: 2, slots: ownedBy() });
+    bridge.surfaceListeners[0]?.({ projectId: PROJECT, revision: 2 });
+    await flush();
+    fail(new Error("ENOSPC"));
+    await pending;
+
+    expect(selectFailedSave(state(), "emptyCanvas")?.updates).toEqual([
+      { slot: "emptyCanvas", choice: "stock", ownerId: claim.pluginId },
+    ]);
+  });
+
+  it("keeps the retry of the latest save when an earlier one fails after it", async () => {
+    let failFirst!: (error: Error) => void;
+    let saves = 0;
+    installBridge(null, {
+      setChoice: () => {
+        saves += 1;
+        if (saves === 1) {
+          return new Promise<ProjectSurfacesSnapshot>((_resolve, reject) => {
+            failFirst = reject;
+          });
+        }
+        return Promise.reject(new Error("ENOSPC"));
+      },
+    });
+    usePluginProjectSurfacesStore.setState({ slots: ownedBy(), choicesLoaded: true });
+
+    const first = state().setSurfaceChoice("emptyCanvas", "stock");
+    await state().setSurfaceChoice("emptyCanvas", "surface");
+    failFirst(new Error("ENOSPC"));
+    await first;
+
+    // Nothing was recorded either way, so only the order of the saves can say
+    // which retry still means what the user last asked for.
+    expect(selectFailedSave(state(), "emptyCanvas")?.updates).toEqual([
+      { slot: "emptyCanvas", choice: "surface", ownerId: claim.pluginId },
+    ]);
   });
 });
