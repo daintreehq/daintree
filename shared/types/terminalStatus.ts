@@ -44,7 +44,7 @@ export const LAST_OUTPUT_CHANGE_AT_DESCRIPTION =
 
 /** Model-facing description of `lastTypedInputAt`. */
 export const LAST_TYPED_INPUT_AT_DESCRIPTION =
-  "Epoch ms of the last raw PTY input (keys, paste, broadcast, a send withdrawn before its Enter; not sends). Before `lastTransitionAt` means none since. Not proof of delivery or authorship.";
+  "Epoch ms of last PTY input (keys, paste, broadcast, withdrawn sends). Before `lastTransitionAt` means none since. Not proof of delivery or authorship.";
 
 /** One terminal's status, in the shape `TerminalStatusEntrySchema` publishes. */
 export interface TerminalStatusEntry {
