@@ -1,8 +1,5 @@
 import type { IpcEnvelope } from "../../../shared/types/ipc/errors.js";
-import {
-  toSnapshotContinuation,
-  type SerializedTerminalSnapshot,
-} from "../../../shared/types/terminal.js";
+import { toSnapshotContinuation } from "../../../shared/types/terminal.js";
 import { CHANNELS } from "../../ipc/channels.js";
 
 /**
@@ -14,18 +11,11 @@ import { CHANNELS } from "../../ipc/channels.js";
  * host that forwards them (#13916), while every host since #12791 answers a
  * snapshot read with a continuation. The continuation alone proves nothing,
  * so a host that forwards offsets vouches for each snapshot it answers a
- * remote view with, and the Shell keeps a forwarded continuation only then.
+ * remote view with (`remoteStreamOffsets`, set by the terminal snapshot
+ * handlers), and the Shell keeps a forwarded continuation only then.
  */
 
-/** Host side: mark a snapshot answered to a remote view, without touching the pty client's copy. */
-export function vouchForStreamOffsets(
-  snapshot: SerializedTerminalSnapshot | null
-): SerializedTerminalSnapshot | null {
-  if (snapshot?.continuation?.streamOffset === undefined) return snapshot;
-  return { ...snapshot, remoteStreamOffsets: true };
-}
-
-/** Shell side: what a forwarded snapshot read may hand the view that asked. */
+/** What a forwarded snapshot read may hand the view that asked. */
 export function acceptForwardedSnapshots(channel: string, envelope: IpcEnvelope): IpcEnvelope {
   if (!envelope.ok) return envelope;
   if (channel === CHANNELS.TERMINAL_GET_SERIALIZED_STATE) {

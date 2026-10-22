@@ -18,7 +18,6 @@ import { PERF_MARKS } from "../../../../shared/perf/marks.js";
 import { getProjectIdFromSenderUrl } from "../../senderIdentity.js";
 import { defineIpcNamespace, op, opValidated } from "../../define.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
-import { vouchForStreamOffsets } from "../../../remote/terminal/forwardedSnapshots.js";
 import type {
   SerializeReadOptions,
   SerializedTerminalSnapshot,
@@ -47,6 +46,18 @@ type ValidatedReplayHistoryPayload = z.output<typeof TerminalReplayHistoryPayloa
  */
 function resolveSenderWorkspaceId(ctx: IpcContext): string | null {
   return ctx.projectId ?? (ctx.event && getProjectIdFromSenderUrl(ctx.event.sender));
+}
+
+/**
+ * Mark a live snapshot answered to a remote view: this host forwards stream
+ * offsets on its terminal stream, so the view's Shell may keep the snapshot's
+ * continuation (#13916). The pty client's own object is never written to.
+ */
+function vouchForStreamOffsets(
+  snapshot: SerializedTerminalSnapshot | null
+): SerializedTerminalSnapshot | null {
+  if (snapshot?.continuation?.streamOffset === undefined) return snapshot;
+  return { ...snapshot, remoteStreamOffsets: true };
 }
 
 export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () => void {
