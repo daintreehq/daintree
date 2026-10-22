@@ -396,7 +396,11 @@ describe("host connection sync", () => {
       projectId: "proj-1",
       hostLocal: false,
       driverIsHostScreen: false,
+      driverAway: false,
     });
+
+    emitLease({ type: "changed", state: { ...leaseView(holder(), false), holderAwayMs: 9_000 } });
+    expect(getTerminalInputBlock()).toMatchObject({ driverName: "greg-mbp", driverAway: true });
 
     emitLease({ type: "changed", state: leaseView(null, true, "other") });
     expect(getTerminalInputBlock()).not.toBeNull();

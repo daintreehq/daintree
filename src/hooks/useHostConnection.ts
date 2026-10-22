@@ -427,6 +427,7 @@ function applyLease(lease: DriveLeaseView): void {
           projectId: lease.projectId,
           hostLocal: lease.viewerIsHostLocal,
           driverIsHostScreen,
+          driverAway: lease.holderAwayMs !== undefined,
         }
   );
 }

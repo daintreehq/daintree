@@ -17,6 +17,8 @@ export type TerminalInputBlock =
       hostLocal?: boolean;
       /** A window on the host's own screen drives, and `driverName` is the host's. */
       driverIsHostScreen?: boolean;
+      /** The controller is away, and control passes on unless it comes back. */
+      driverAway?: boolean;
     }
   | { kind: "lease-unknown"; hostName: string }
   /**
@@ -54,7 +56,8 @@ function sameBlock(a: TerminalInputBlock | null, b: TerminalInputBlock | null): 
       a.driverName === b.driverName &&
       a.projectId === b.projectId &&
       a.hostLocal === b.hostLocal &&
-      a.driverIsHostScreen === b.driverIsHostScreen
+      a.driverIsHostScreen === b.driverIsHostScreen &&
+      a.driverAway === b.driverAway
     );
   }
   if (a.kind === "lease-unknown" && b.kind === "lease-unknown") return a.hostName === b.hostName;
@@ -105,16 +108,26 @@ export function getLeaseInputBlock(): LeaseBlock | null {
  * asking the host a second time.
  */
 let leaseSnapshot: DriveLeaseView | null = null;
+let leaseSnapshotReceivedAt = 0;
 const leaseSnapshotListeners = new Set<() => void>();
 
 export function setDriveLeaseSnapshot(view: DriveLeaseView | null): void {
   if (leaseSnapshot === view) return;
   leaseSnapshot = view;
+  leaseSnapshotReceivedAt = Date.now();
   for (const listener of [...leaseSnapshotListeners]) listener();
 }
 
 export function getDriveLeaseSnapshot(): DriveLeaseView | null {
   return leaseSnapshot;
+}
+
+/**
+ * When the snapshot landed, by this machine's clock: what a duration in it
+ * (an away holder's grace) counts down from.
+ */
+export function getDriveLeaseSnapshotReceivedAt(): number {
+  return leaseSnapshotReceivedAt;
 }
 
 export function subscribeDriveLeaseSnapshot(listener: () => void): () => void {
@@ -167,11 +180,16 @@ export function getTerminalInputBlockMessage(block: TerminalInputBlock): string 
   switch (block.kind) {
     case "disconnected":
       return `Read-only until ${block.hostName} reconnects`;
-    case "driven-elsewhere":
-      // Names the controller the way the window banner does.
-      return block.driverIsHostScreen
-        ? `Read-only · ${block.driverName}'s own screen has control`
-        : `Read-only · ${block.driverName} has control`;
+    case "driven-elsewhere": {
+      // Names the controller the way the window banner does. No countdown:
+      // every pane would tick it, and the banner already does.
+      const controller = block.driverIsHostScreen
+        ? `${block.driverName}'s own screen`
+        : block.driverName;
+      return block.driverAway
+        ? `Read-only · ${controller} is away`
+        : `Read-only · ${controller} has control`;
+    }
     case "lease-unknown":
       return `Read-only until ${block.hostName} confirms who has control of this project`;
     case "switching":
@@ -195,6 +213,7 @@ export function _resetTerminalInputGateForTesting(): void {
   leaseBlock = null;
   switchBlock = null;
   leaseSnapshot = null;
+  leaseSnapshotReceivedAt = 0;
   listeners.clear();
   unblockListeners.clear();
   leaseSnapshotListeners.clear();

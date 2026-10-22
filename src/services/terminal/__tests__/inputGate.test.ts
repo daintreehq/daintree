@@ -186,4 +186,33 @@ describe("input gate wording", () => {
       gate.getTerminalInputBlockMessage({ kind: "driven-elsewhere", driverName: "greg-mbp" })
     ).toBe("Read-only · greg-mbp has control");
   });
+
+  it("says an away controller is away rather than in control (#13937)", () => {
+    expect(
+      gate.getTerminalInputBlockMessage({
+        kind: "driven-elsewhere",
+        driverName: "greg-mbp",
+        driverAway: true,
+      })
+    ).toBe("Read-only · greg-mbp is away");
+    expect(
+      gate.getTerminalInputBlockMessage({
+        kind: "driven-elsewhere",
+        driverName: "studio-01",
+        driverIsHostScreen: true,
+        driverAway: true,
+      })
+    ).toBe("Read-only · studio-01's own screen is away");
+  });
+
+  it("tells the panes when the same controller goes away and comes back", () => {
+    const listener = vi.fn();
+    gate.subscribeTerminalInputGate(listener);
+    const block = { kind: "driven-elsewhere", driverName: "greg-mbp", projectId: "p" } as const;
+    gate.setLeaseInputBlock({ ...block, driverAway: false });
+    gate.setLeaseInputBlock({ ...block, driverAway: true });
+    gate.setLeaseInputBlock({ ...block, driverAway: true });
+    gate.setLeaseInputBlock({ ...block, driverAway: false });
+    expect(listener).toHaveBeenCalledTimes(3);
+  });
 });

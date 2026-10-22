@@ -279,7 +279,8 @@ async function buildHostListener(
     host.sessionHost.onTransportChange((endpointIds, attached) => {
       lease.noteEndpointTransport(endpointIds, attached);
       // The holder can stay the same while it goes from live to reserved and
-      // back, which the lease does not announce.
+      // back, which the lease tells only the project's views, not its holder
+      // listeners.
       notifyMcpDriveTargetChange();
     })
   );

@@ -99,6 +99,8 @@ interface ProjectLease {
   holderHandle: number;
   /** Set while the holder is away and the lease waits for it, or its client, to come back. */
   releaseTimer: ReturnType<typeof setTimeout> | null;
+  /** When that wait runs out, by this machine's clock; null while the holder is there. */
+  awayUntil: number | null;
 }
 
 /**
@@ -192,6 +194,7 @@ export class DriveLeaseService {
         holder,
         holderHandle: RESTORED_HOLDER_CONNECTION,
         releaseTimer: null,
+        awayUntil: this.now() + this.restoredReservationGraceMs,
       };
       lease.releaseTimer = setTimeout(
         () => this.release(projectId, holder.leaseId),
@@ -614,6 +617,10 @@ export class DriveLeaseService {
         clearTimeout(lease.releaseTimer);
         lease.releaseTimer = null;
       }
+      if (lease.awayUntil !== null) {
+        lease.awayUntil = null;
+        this.sendViews(projectId, lease.holder);
+      }
       return;
     }
     // Another window of the same client carries on driving without a gap. The
@@ -629,6 +636,10 @@ export class DriveLeaseService {
     const { leaseId } = lease.holder;
     lease.releaseTimer = setTimeout(() => this.release(projectId, leaseId), this.releaseGraceMs);
     lease.releaseTimer.unref?.();
+    // The holder stays the same, so no holder change goes out; the views say
+    // it is away, and when control passes on without it.
+    lease.awayUntil = this.now() + this.releaseGraceMs;
+    this.sendViews(projectId, lease.holder);
   }
 
   private holderIsPresent(projectId: string, lease: ProjectLease): boolean {
@@ -641,7 +652,11 @@ export class DriveLeaseService {
     const lease = this.leases.get(projectId);
     if (!lease || lease.holder.leaseId !== leaseId) return;
     lease.releaseTimer = null;
-    if (this.holderIsPresent(projectId, lease)) return;
+    if (this.holderIsPresent(projectId, lease)) {
+      lease.awayUntil = null;
+      this.sendViews(projectId, lease.holder);
+      return;
+    }
     const next = this.successor(projectId, lease.holder.clientId);
     if (next) {
       this.grant(projectId, next);
@@ -663,7 +678,12 @@ export class DriveLeaseService {
       isHostLocal: endpoint.kind === "local-view",
       acquiredAt: this.now(),
     };
-    this.leases.set(projectId, { holder, holderHandle: endpoint.handle, releaseTimer: null });
+    this.leases.set(projectId, {
+      holder,
+      holderHandle: endpoint.handle,
+      releaseTimer: null,
+      awayUntil: null,
+    });
     this.publish(projectId, holder);
     return holder;
   }
@@ -682,8 +702,12 @@ export class DriveLeaseService {
   ): DriveLeaseView {
     const clientId = endpoint?.clientId ?? LOCAL_CLIENT_ID;
     const driverNavigation = this.navigation.get(projectId);
+    const lease = this.leases.get(projectId);
+    const awayUntil =
+      holder !== null && lease?.holder.leaseId === holder.leaseId ? lease.awayUntil : null;
     return {
       ...(driverNavigation ? { driverNavigation } : {}),
+      ...(awayUntil !== null ? { holderAwayMs: Math.max(0, awayUntil - this.now()) } : {}),
       projectId,
       holder,
       drivingHere: drives(holder, { endpointId: endpoint?.endpointId ?? "", clientId }),
@@ -697,6 +721,19 @@ export class DriveLeaseService {
   private publish(projectId: string, holder: DriveLeaseHolder | null): void {
     this.publishDriveLeases();
     this.saveReservations();
+    this.sendViews(projectId, holder);
+    const state: DriveLeaseState = { projectId, holder };
+    for (const listener of [...this.listeners]) {
+      try {
+        listener(state);
+      } catch (error) {
+        console.error("[DriveLease] change listener failed:", error);
+      }
+    }
+  }
+
+  /** Each view of the project gets the lease as it sees it. */
+  private sendViews(projectId: string, holder: DriveLeaseHolder | null): void {
     for (const endpoint of this.registry.getForProject(projectId)) {
       const event: DriveLeaseEvent = {
         type: "changed",
@@ -706,14 +743,6 @@ export class DriveLeaseService {
         endpoint.send({ type: "event", channel: CHANNELS.DRIVE_LEASE_EVENT, args: [event] });
       } catch {
         // A closing endpoint must not keep the others from hearing about it.
-      }
-    }
-    const state: DriveLeaseState = { projectId, holder };
-    for (const listener of [...this.listeners]) {
-      try {
-        listener(state);
-      } catch (error) {
-        console.error("[DriveLease] change listener failed:", error);
       }
     }
   }
