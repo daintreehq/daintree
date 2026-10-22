@@ -105,6 +105,9 @@ function resolveSource(
             : { unresolved: `a ${source.from} in no registered project` }
       );
     case "terminal":
+      // A padded id names no record, yet a handler's session cleanup trims it
+      // into one: "missing" must mean that terminal, not a spelling of another.
+      if (value !== value.trim()) return { unresolved: "a noncanonical terminal id" };
       return then(resolvers.describeTerminal(value), (record) =>
         record !== "missing"
           ? one(record.projectId, "a terminal with no owning project")

@@ -10,6 +10,7 @@ const { projects, pty, gitProbe } = vi.hoisted(() => ({
     tracked: new Map<string, string>(),
     recorded: new Map<string, string>(),
     timingOut: new Set<string>(),
+    absent: false,
   },
   gitProbe: { override: null as null | ((p: string) => Promise<unknown>) },
 }));
@@ -28,18 +29,21 @@ vi.mock("../ProjectStore.js", () => ({
 }));
 
 vi.mock("../../window/serviceRefs.js", () => ({
-  getPtyClient: () => ({
-    getTerminalProjectId: (id: string) => pty.tracked.get(id) ?? null,
-    hasTerminal: (id: string) => pty.tracked.has(id),
-    // As the real client: a timeout reads as no terminal unless asked to be strict.
-    getTerminalAsync: async (id: string, _token?: string, options?: { strict?: boolean }) => {
-      if (pty.timingOut.has(id)) {
-        if (options?.strict) throw new Error("timed out");
-        return null;
-      }
-      return pty.recorded.has(id) ? { id, projectId: pty.recorded.get(id) } : null;
-    },
-  }),
+  getPtyClient: () =>
+    pty.absent
+      ? null
+      : {
+          getTerminalProjectId: (id: string) => pty.tracked.get(id) ?? null,
+          hasTerminal: (id: string) => pty.tracked.has(id),
+          // As the real client: a timeout reads as no terminal unless asked to be strict.
+          getTerminalAsync: async (id: string, _token?: string, options?: { strict?: boolean }) => {
+            if (pty.timingOut.has(id)) {
+              if (options?.strict) throw new Error("timed out");
+              return null;
+            }
+            return pty.recorded.has(id) ? { id, projectId: pty.recorded.get(id) } : null;
+          },
+        },
 }));
 
 import { resolveLeaseTarget, type LeaseTargetResolvers } from "../driveLeaseTargets.js";
@@ -129,7 +133,7 @@ describe("resolveLeaseTarget", () => {
         kind: "projects",
         projectIds: ["b"],
       });
-      for (const args of [["host-shell"], [""], []]) {
+      for (const args of [["host-shell"], [" ta "], [" gone "], [""], []]) {
         expect(
           resolveLeaseTarget(target(channel), args, "a", stubResolvers()),
           `${channel} ${JSON.stringify(args)}`
@@ -150,6 +154,8 @@ describe("resolveLeaseTarget", () => {
       ["terminal:update-title", [{ id: "gone", title: "x" }]],
       ["agent-session:prepare-bookmark", [{ terminalId: "gone" }]],
       ["copytree:inject", [{ terminalId: "gone", worktreeId: "/repo/a" }]],
+      // Optional means it may be left out, not that one named can be untraced.
+      ["commands:execute", [{ commandId: "c", context: { terminalId: "gone" } }]],
     ];
     for (const [channel, args] of elsewhere) {
       expect(
@@ -474,6 +480,23 @@ describe("createLeaseTargetResolvers", () => {
     await expect(Promise.resolve(r.describeTerminal("t-slow"))).resolves.toEqual({
       projectId: null,
     });
+  });
+
+  it("calls every terminal gone before the pty-host has started", () => {
+    pty.absent = true;
+    try {
+      const r = createLeaseTargetResolvers();
+      expect(r.describeTerminal("t1")).toBe("missing");
+      expect(resolveLeaseTarget(getChannelLeaseTarget("terminal:kill")!, ["t1"], "a", r)).toEqual({
+        kind: "projects",
+        projectIds: [],
+      });
+      expect(
+        resolveLeaseTarget(getChannelLeaseTarget("terminal:restore")!, ["t1"], "a", r)
+      ).toMatchObject({ kind: "unresolved" });
+    } finally {
+      pty.absent = false;
+    }
   });
 
   it("reads an operation's project from the registry", async () => {
