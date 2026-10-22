@@ -252,6 +252,23 @@ describe("PluginService plugin themes (#13832)", () => {
     expect(fallbackToasts()).toEqual([]);
   });
 
+  it("falls back once a reload settles with nothing loaded, even after an incomplete scan", async () => {
+    await writeThemePlugin();
+    selectDawn();
+    service = new PluginService(tmpDir, "0.0.0");
+    await service.initialize();
+    await settle();
+    // As if a plugin root had failed to enumerate at startup.
+    Reflect.set(service, "pluginThemeCatalogReady", false);
+
+    await fs.writeFile(path.join(tmpDir, PLUGIN_ID, "plugin.json"), "{ not json");
+    await expect(service.loadDevPlugin(PLUGIN_ID)).rejects.toThrow();
+    await settle();
+
+    expect((storeState.data.appTheme as Record<string, unknown>).colorSchemeId).toBe("bondi");
+    expect(fallbackToasts()).toHaveLength(1);
+  });
+
   it("falls back once a reload settles without the selected theme", async () => {
     await writeThemePlugin();
     selectDawn();

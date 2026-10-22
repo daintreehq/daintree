@@ -4,6 +4,7 @@ import { BUILT_IN_APP_SCHEMES, DEFAULT_APP_SCHEME_ID } from "@/config/appColorSc
 import { flushPendingTheme, injectSchemeToDOM, useAppThemeStore } from "../appThemeStore";
 import type { AppColorScheme } from "@shared/theme";
 import { selectSelectableSchemes } from "@/theme/selectableSchemes";
+import { resolveAppTheme } from "@shared/theme";
 
 describe("appThemeStore.recentSchemeIds LRU", () => {
   beforeEach(() => {
@@ -522,6 +523,28 @@ describe("plugin themes (#13832)", () => {
     expect(state.selectedSchemeId).toBe("svalbard");
     expect(state.previewSchemeId).toBe("bondi");
     expect(canvasToken()).toBe(bondi.tokens["surface-canvas"]);
+  });
+
+  it("keeps the palette of a plugin theme main fell back to while a preview is open", () => {
+    const NOIR_ID = "plugin:acme.themes:noir";
+    useAppThemeStore.setState({
+      pluginSchemes: [pluginTheme(NOIR_ID, daintree, "#0a0a0a")],
+      pluginSnapshotScheme: pluginTheme(MIDNIGHT_ID),
+      selectedSchemeId: MIDNIGHT_ID,
+      previewSchemeId: "bondi",
+    });
+
+    useAppThemeStore.getState().applyPluginThemeFallback(NOIR_ID);
+    // Noir's plugin reloads before the preview ends.
+    useAppThemeStore.getState().setPluginSchemes([]);
+    useAppThemeStore.getState().setPreviewSchemeId(null);
+    const state = useAppThemeStore.getState();
+    injectSchemeToDOM(resolveAppTheme(state.selectedSchemeId, selectSelectableSchemes(state)), {
+      immediate: true,
+    });
+
+    expect(state.selectedSchemeId).toBe(NOIR_ID);
+    expect(canvasToken()).toBe("#0a0a0a");
   });
 
   it("ends a preview of a plugin theme that stops being offered", () => {

@@ -252,7 +252,7 @@ export const useAppThemeStore = create<AppThemeState>()((set) => ({
         schemeId,
         selectSelectableSchemes(useAppThemeStore.getState())
       );
-      set({ selectedSchemeId: fallback.id });
+      set({ selectedSchemeId: fallback.id, pluginSnapshotScheme: retainedPluginScheme(fallback) });
       return;
     }
     if (previewSchemeId !== null) set({ previewSchemeId: null });

@@ -1333,6 +1333,12 @@ export class ConfigBundleService {
           else next[field] = snapshotRecord[field];
         }
         store.set("appTheme", next as never);
+        // The palette snapshot isn't portable, so an import of another plugin
+        // theme replaced it; rebuild it for a restored plugin theme still offered.
+        const restoredId = next.colorSchemeId;
+        if (isPluginThemeId(restoredId) && getPluginTheme(restoredId)) {
+          persistColorSchemeSelection(restoredId);
+        }
         // A rollback that left the caption strip on the imported theme would be
         // the same stale-strip bug, just reached from the other direction.
         await this.deps.refreshTitleBar();

@@ -6676,7 +6676,9 @@ export class PluginService {
    * persisted intent is read here too.
    */
   private settlePluginReload(pluginId: string): void {
-    this.pluginThemeReloads.delete(pluginId);
+    // A settled reload speaks for its plugin's themes whether or not anything
+    // loaded, so it counts as a removal for the sync it schedules.
+    if (this.pluginThemeReloads.delete(pluginId)) this.pluginThemeRemovals.add(pluginId);
     this.schedulePluginThemeSync();
     const current = this.records.getDisabledIds().has(pluginId)
       ? undefined

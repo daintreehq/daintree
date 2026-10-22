@@ -139,8 +139,9 @@ const themeFileSchema = z.strictObject({
 
 const TOKEN_KEY_SET: ReadonlySet<string> = new Set<string>(APP_THEME_TOKEN_KEYS);
 
-/** CSS functions that can load an image or other resource. */
-const RESOURCE_FUNCTION = /^(?:-webkit-image-set|image-set|cross-fade|element|image|url|src)\s*\(/i;
+/** CSS functions that can load an image or other resource, vendor-prefixed or not. */
+const RESOURCE_FUNCTION =
+  /^(?:-(?:webkit|moz|ms|o)-)?(?:image-set|cross-fade|element|image|url|src)\s*\(/i;
 
 /**
  * Whether `value` could make the app fetch something. A theme is colours and

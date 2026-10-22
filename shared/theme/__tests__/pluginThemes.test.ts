@@ -137,6 +137,14 @@ describe("parsePluginThemeFile", () => {
       { extensions: { "grain-image": beacon } },
       { extensions: { "grain-image": 'image-set("https://example.com/a.png" 1x)' } },
       { extensions: { "grain-image": "linear-gradient(red, blue), url(//example.com/a.png)" } },
+      { extensions: { "grain-image": "URL (https://example.com/a.png)" } },
+      {
+        extensions: {
+          "grain-image":
+            '-webkit-cross-fade(url("data:image/png;base64,AAAA"), linear-gradient(red, blue), 50%)',
+        },
+      },
+      { extensions: { "grain-image": "-moz-element(#beacon)" } },
     ]) {
       const result = parsePluginThemeFile({ palette: DAINTREE.palette, ...overrides }, "dark");
       expect(result.ok, JSON.stringify(overrides)).toBe(false);
