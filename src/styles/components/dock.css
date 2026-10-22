@@ -99,7 +99,7 @@
   border-radius: 0;
 }
 .dock-chip-badge[data-dock-chip-badge="dot"][data-badge-color="warning"] {
-  border-radius: 2px;
+  border-radius: var(--radius-xs);
 }
 
 .dock-chip-badge[data-dock-chip-badge="count"] {
