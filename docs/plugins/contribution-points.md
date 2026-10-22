@@ -1257,7 +1257,7 @@ Named multi-terminal launch layouts a plugin ships. A contributed recipe is regi
 
 **Referencing your own agent.** A recipe terminal may name an agent id from the same plugin's `contributes.agents`. Ownership is resolved against the live registry, not the manifest: if another plugin already claimed that agent id, the terminal is dropped rather than silently launching someone else's agent.
 
-**Opening your panel beside an agent.** A `plugin-panel` step opens one of your panels the way `panel.openPluginPanel` does: reusing an open one, in the recipe's worktree, or in the dock for a `scope: "project"` panel. Fields that belong to another kind of step are refused on it rather than ignored (`recipe_panel_step_fields`). Panel steps, plugin variables and system prompts only work in your own recipe, so **Save to repo** refuses a recipe that uses them rather than copying a recipe that quietly does less.
+**Opening your panel beside an agent.** A `plugin-panel` step opens one of your panels the way `panel.openPluginPanel` does: reusing an open one, in the recipe's worktree, or in the dock for a `scope: "project"` panel. Fields that belong to another kind of step are refused on it rather than ignored (`recipe_panel_step_fields`). Panel steps, plugin variables, system prompts and `requiresAgentTools` only work in your own recipe, so **Save to repo** and **Duplicate** refuse a recipe that uses them rather than copying a recipe that quietly does less.
 
 ```json
 {

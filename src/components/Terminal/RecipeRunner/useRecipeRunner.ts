@@ -4,6 +4,8 @@ import {
   type RecipeSpawnFailure,
   type RecipeSpawnResults,
 } from "@/store/recipeStore";
+import { pluginOnlyCopyRefusal, recipeUsesPluginOnlyFeatures } from "@/utils/pluginRecipeCopy";
+import { notify } from "@/lib/notify";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { usePanelStore } from "@/store/panelStore";
@@ -418,6 +420,15 @@ export function useRecipeRunner({
     (recipeId: string) => {
       const recipe = getRecipeById(recipeId);
       if (!recipe) return;
+      // A plugin's panel steps and variables only work in its own recipe (#13797).
+      if (recipeUsesPluginOnlyFeatures(recipe)) {
+        notify({
+          type: "warning",
+          title: "Can't duplicate recipe",
+          message: pluginOnlyCopyRefusal(recipe),
+        });
+        return;
+      }
       // Pick a name that doesn't collide with any existing recipe name —
       // otherwise duplicating a recipe twice produces two same-named copies
       // that slug to the same on-disk filename and overwrite each other.

@@ -29,6 +29,14 @@ import type { WorktreeSnapshot } from "@shared/types";
 
 const EMPTY_WORKTREES: ReadonlyMap<string, WorktreeSnapshot> = new Map();
 
+/**
+ * How long a request waits for the recipe or the worktree it names to reach
+ * this view before it is refused as missing. A view opened moments ago pulls
+ * its plugin recipes and worktrees over separate channels, and a request that
+ * beats them there is not a request for something that doesn't exist.
+ */
+const RUN_RECIPE_HYDRATION_GRACE_MS = 2_000;
+
 interface StepPreview {
   index: number;
   heading: string;
@@ -274,9 +282,15 @@ export function PluginRunRecipeDialog() {
     [promptId, resolveCurrent]
   );
 
-  // Nothing to show: say why straight away rather than open an empty dialog.
+  // Nothing to show: say why rather than open an empty dialog — once the view
+  // has had a moment to load what the request names.
   useEffect(() => {
-    if (unavailable !== null) answer({ status: "refused", reason: unavailable });
+    if (unavailable === null) return;
+    const timer = setTimeout(
+      () => answer({ status: "refused", reason: unavailable }),
+      RUN_RECIPE_HYDRATION_GRACE_MS
+    );
+    return () => clearTimeout(timer);
   }, [unavailable, answer]);
 
   const isOpen = prompt !== null && unavailable === null && preview !== null;

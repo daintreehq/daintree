@@ -34,6 +34,8 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useRecipeStore } from "@/store/recipeStore";
+import { pluginOnlyCopyRefusal, recipeUsesPluginOnlyFeatures } from "@/utils/pluginRecipeCopy";
+import { notify } from "@/lib/notify";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useWorktreeStoreOptional } from "@/hooks/useWorktreeStore";
@@ -201,6 +203,15 @@ export function RecipeManager({
   // place never collides with an existing recipe's name or on-disk filename.
   // A plugin recipe's copy has no projectId and lands as a global the user owns.
   const handleDuplicateRecipe = async (recipe: TerminalRecipe) => {
+    // A plugin's panel steps and variables only work in its own recipe (#13797).
+    if (recipeUsesPluginOnlyFeatures(recipe)) {
+      notify({
+        type: "warning",
+        title: "Can't duplicate recipe",
+        message: pluginOnlyCopyRefusal(recipe),
+      });
+      return;
+    }
     const existingNames = new Set(useRecipeStore.getState().recipes.map((r) => r.name));
     try {
       await createRecipe(

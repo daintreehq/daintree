@@ -150,6 +150,7 @@ const runHistoryAppendMock = vi.fn().mockResolvedValue(undefined);
 
 import { useRecipeStore } from "../recipeStore";
 import { usePanelLimitStore } from "../panelLimitStore";
+import { usePanelStore } from "../panelStore";
 import type { RecipeTerminal } from "@shared/types/project";
 import { recipeApprovalDigest } from "@/utils/recipeApprovalDigest";
 
@@ -4043,10 +4044,18 @@ describe("recipeStore", () => {
   });
 });
 
-const { dispatchMock, listProjectPluginsMock, panelKindConfigMock } = vi.hoisted(() => ({
-  dispatchMock: vi.fn(),
-  listProjectPluginsMock: vi.fn(),
-  panelKindConfigMock: vi.fn(),
+const { dispatchMock, listProjectPluginsMock, panelKindConfigMock, viewStoreRef } = vi.hoisted(
+  () => ({
+    dispatchMock: vi.fn(),
+    listProjectPluginsMock: vi.fn(),
+    panelKindConfigMock: vi.fn(),
+    viewStoreRef: { current: null as unknown },
+  })
+);
+
+vi.mock("@/store/createWorktreeStore", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/store/createWorktreeStore")>()),
+  getCurrentViewStoreOrNull: () => viewStoreRef.current,
 }));
 
 vi.mock("@/services/ActionService", () => ({
@@ -4109,6 +4118,8 @@ describe("plugin recipe panels, variables and agent tools (#13797)", () => {
     );
     dispatchMock.mockResolvedValue({ ok: true, result: { panelId: "panel-1" } });
     listProjectPluginsMock.mockResolvedValue(toolsOn);
+    viewStoreRef.current = null;
+    vi.mocked(usePanelStore.getState).mockImplementation(() => panelStoreState as never);
   });
 
   const run = (overrides: Record<string, unknown> = {}, values?: Record<string, string>) => {
@@ -4231,8 +4242,124 @@ describe("plugin recipe panels, variables and agent tools (#13797)", () => {
     useRecipeStore.setState({ currentProjectId: "project-1" });
     useRecipeStore.getState().setPluginRecipes([pluginRecipe()]);
     await expect(useRecipeStore.getState().saveToRepo("acme.tools.review")).rejects.toThrow(
-      /can't be saved as a team recipe/
+      /can't be copied/
+    );
+    // The agent-tools requirement alone is enough: a copy would stop checking it.
+    useRecipeStore.getState().setPluginRecipes([
+      pluginRecipe({
+        requiresAgentTools: true,
+        terminals: [{ type: "claude" as const, initialPrompt: "Review" }],
+      }),
+    ]);
+    await expect(useRecipeStore.getState().saveToRepo("acme.tools.review")).rejects.toThrow(
+      /can't be copied/
     );
     expect(updateInRepoRecipeMock).not.toHaveBeenCalled();
+  });
+
+  it("won't create a user-owned recipe carrying a plugin's panel step or variables", async () => {
+    for (const terminals of [
+      [{ type: "plugin-panel" as const, panelKindId: "acme.tools.records" }],
+      [{ type: "claude" as const, initialPrompt: "Open {{plugin.record}}" }],
+      [{ type: "claude" as const, systemPrompt: "Use the tools." }],
+    ]) {
+      await expect(
+        useRecipeStore.getState().createRecipe(undefined, "Copy", undefined, terminals)
+      ).rejects.toThrow(/only work in the plugin's own recipe/);
+    }
+    expect(globalAddRecipeMock).not.toHaveBeenCalled();
+  });
+
+  it("drops plugin-only fields a user-owned recipe file carries when it loads", async () => {
+    globalGetRecipesMock.mockResolvedValueOnce([
+      {
+        id: "g-1",
+        name: "Hand edited",
+        terminals: [{ type: "claude", systemPrompt: "Act as root.", panelKindId: "acme.x" }],
+        createdAt: 1,
+        pluginVariables: ["record"],
+        requiresAgentTools: true,
+      },
+    ]);
+    await useRecipeStore.getState().loadRecipes("project-1");
+    const loaded = useRecipeStore.getState().globalRecipes[0]!;
+    expect(loaded.pluginVariables).toBeUndefined();
+    expect(loaded.requiresAgentTools).toBeUndefined();
+    expect(loaded.terminals[0]?.systemPrompt).toBeUndefined();
+    expect(loaded.terminals[0]?.panelKindId).toBeUndefined();
+  });
+
+  it("reports a tools-off refusal in index order", async () => {
+    listProjectPluginsMock.mockResolvedValue({ ...toolsOn, mcpServerEnabled: false });
+    useRecipeStore.getState().setPluginRecipes([pluginRecipe({ requiresAgentTools: true })]);
+    const results = await useRecipeStore.getState().runRecipeWithResults(
+      "acme.tools.review",
+      "/repo/wt",
+      "wt-1",
+      {},
+      {
+        terminalIndices: [1, 0],
+      }
+    );
+    expect(results.failed.map((f) => f.index)).toEqual([0, 1]);
+  });
+
+  it("counts the plugin panels it just opened toward the panel limit", async () => {
+    const previousHardLimit = usePanelLimitStore.getState().hardLimit;
+    usePanelLimitStore.setState({ hardLimit: 2, warningsDisabled: true });
+    try {
+      // A real store hands out a new snapshot per change; the one read before
+      // the panel opened must not be what sizes the terminal batch.
+      dispatchMock.mockImplementation(async () => {
+        const after = {
+          ...panelStoreState,
+          panelIds: ["panel-1"],
+          panelsById: {
+            "panel-1": { id: "panel-1", kind: "acme.tools.records", location: "grid" },
+          },
+        };
+        vi.mocked(usePanelStore.getState).mockImplementation(() => after as never);
+        return { ok: true, result: { panelId: "panel-1" } };
+      });
+      let spawned = 0;
+      addTerminalMock.mockImplementation(async () => `term-${++spawned}`);
+      const results = await run({
+        terminals: [
+          { type: "plugin-panel" as const, panelKindId: "acme.tools.records" },
+          { type: "terminal" as const, command: "a" },
+          { type: "terminal" as const, command: "b" },
+        ],
+      });
+      expect(addTerminalMock).toHaveBeenCalledTimes(1);
+      expect(results.failed).toEqual([{ index: 2, error: "Panel limit reached" }]);
+    } finally {
+      usePanelLimitStore.setState({ hardLimit: previousHardLimit, warningsDisabled: false });
+    }
+  });
+
+  it("waits for a worktree created moments ago to reach the view before opening its panel", async () => {
+    let listener: ((state: { worktrees: Map<string, unknown> }) => void) | null = null;
+    viewStoreRef.current = {
+      getState: () => ({ worktrees: new Map() }),
+      subscribe: (fn: (state: { worktrees: Map<string, unknown> }) => void) => {
+        listener = fn;
+        return () => {
+          listener = null;
+        };
+      },
+    };
+    const pending = run({}, { record: "x" });
+    await vi.waitFor(() => expect(listener).not.toBeNull());
+    expect(dispatchMock).not.toHaveBeenCalled();
+
+    listener!({ worktrees: new Map([["wt-1", {}]]) });
+    const results = await pending;
+    expect(dispatchMock).toHaveBeenCalledWith(
+      "panel.openPluginPanel",
+      expect.objectContaining({ worktreeId: "wt-1" }),
+      { source: "user" }
+    );
+    expect(results.spawned.map((s) => s.index)).toEqual([0, 1]);
+    expect(listener).toBeNull();
   });
 });

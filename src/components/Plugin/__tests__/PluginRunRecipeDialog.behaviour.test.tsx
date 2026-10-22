@@ -243,11 +243,41 @@ describe("PluginRunRecipeDialog", () => {
   it.each([
     ["recipe-unavailable", { recipeId: "acme.ledger.gone" }],
     ["unknown-worktree", { worktreeId: "wt-elsewhere" }],
-  ])("refuses as %s without opening anything", async (reason, request) => {
-    const resolve = seed(request);
-    render(<PluginRunRecipeDialog />);
-    await act(async () => {});
-    expect(resolve).toHaveBeenCalledWith({ status: "refused", reason });
-    expect(document.querySelector('[role="dialog"], [role="alertdialog"]')).toBeNull();
+  ])("refuses as %s, once the view has had a moment to load it", async (reason, request) => {
+    vi.useFakeTimers();
+    try {
+      const resolve = seed(request);
+      render(<PluginRunRecipeDialog />);
+      await act(async () => {});
+      expect(resolve).not.toHaveBeenCalled();
+      await act(async () => {
+        vi.advanceTimersByTime(5_000);
+      });
+      expect(resolve).toHaveBeenCalledWith({ status: "refused", reason });
+      expect(document.querySelector('[role="dialog"], [role="alertdialog"]')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("opens for a recipe that reaches the view just after the request", async () => {
+    vi.useFakeTimers();
+    try {
+      recipeState.pluginRecipes = [];
+      const resolve = seed();
+      const { rerender } = render(<PluginRunRecipeDialog />);
+      await act(async () => {});
+      recipeState.pluginRecipes = [recipe()];
+      rerender(<PluginRunRecipeDialog />);
+      await act(async () => {
+        vi.advanceTimersByTime(5_000);
+      });
+      expect(resolve).not.toHaveBeenCalled();
+      expect(byTestId("plugin-run-recipe-prompt")?.textContent).toBe(
+        "Review Invoice 42 on feature/x"
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -5,7 +5,7 @@ import { replaceRecipeVariables, type RecipeContext } from "@/utils/recipeVariab
 export type ResolvedRecipeAgentStep =
   | {
       ok: true;
-      /** The first turn as launch sends it, variables substituted. */
+      /** The first turn as launch sends it: variables substituted, one trimmed line. */
       initialPrompt: string | undefined;
       /** The standing instruction as the agent receives it, for showing. */
       systemPrompt: string | undefined;
@@ -32,17 +32,26 @@ export function resolveRecipeAgentStep(
   context: RecipeContext
 ): ResolvedRecipeAgentStep {
   const rawPrompt = terminal.initialPrompt?.trim();
-  const initialPrompt = rawPrompt ? replaceRecipeVariables(rawPrompt, context) : undefined;
-  if (isPluginRecipe(recipe) && initialPrompt?.trimStart().startsWith("-")) {
+  // The command builder sends the first turn as one trimmed line; resolve it
+  // to exactly that here, so a dialog showing it shows what launches.
+  const initialPrompt =
+    (rawPrompt ? replaceRecipeVariables(rawPrompt, context) : "")
+      .replace(/\r\n/g, " ")
+      .replace(/\n/g, " ")
+      .trim() || undefined;
+  if (isPluginRecipe(recipe) && initialPrompt?.startsWith("-")) {
     return {
       ok: false,
       reason:
         'The prompt starts with "-", which the agent would read as an option rather than a task.',
     };
   }
-  const systemPromptText = terminal.systemPrompt
-    ? replaceRecipeVariables(terminal.systemPrompt, context)
-    : undefined;
+  // Only a plugin's own recipe carries a system prompt; one that reached a
+  // user-owned recipe some other way is ignored rather than launched.
+  const systemPromptText =
+    terminal.systemPrompt && isPluginRecipe(recipe)
+      ? replaceRecipeVariables(terminal.systemPrompt, context)
+      : undefined;
   const systemPromptArgs = resolveSystemPromptArgs(agentId, systemPromptText);
   if (!systemPromptArgs.ok) return { ok: false, reason: systemPromptArgs.reason };
   return {
