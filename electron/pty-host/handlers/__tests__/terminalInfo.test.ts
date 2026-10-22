@@ -9,7 +9,7 @@ function createCtx(overrides: Partial<HostContext> = {}): HostContext {
     getActivityTier: vi.fn(() => "active" as const),
     getSubmission: vi.fn(() => undefined),
     hasPendingSubmission: vi.fn(() => false),
-    isAnalysisLive: vi.fn(() => true),
+    analysisObservedSince: vi.fn(() => 1_000),
   } as unknown as HostContext["ptyManager"];
 
   return {
@@ -107,7 +107,7 @@ describe("mapTerminalInfo", () => {
         isInTrash,
         getActivityTier: vi.fn(() => "active" as const),
         hasPendingSubmission: vi.fn(() => false),
-        isAnalysisLive: vi.fn(() => true),
+        analysisObservedSince: vi.fn(() => 1_000),
       } as unknown as HostContext["ptyManager"],
     });
 
@@ -127,7 +127,7 @@ describe("mapTerminalInfo", () => {
         isInTrash: vi.fn(() => false),
         getActivityTier: vi.fn(() => "active" as const),
         hasPendingSubmission: vi.fn(() => false),
-        isAnalysisLive: vi.fn(() => true),
+        analysisObservedSince: vi.fn(() => 1_000),
       } as unknown as HostContext["ptyManager"],
     });
 
@@ -199,26 +199,35 @@ describe("mapTerminalInfo", () => {
         isInTrash: vi.fn(() => false),
         getActivityTier: vi.fn(() => "active" as const),
         hasPendingSubmission,
-        isAnalysisLive: vi.fn(() => true),
+        analysisObservedSince: vi.fn(() => 1_000),
       } as unknown as HostContext["ptyManager"],
     });
     expect(mapTerminalInfo(makeTerminal({ id: "busy" }), ctx).hasPendingSubmission).toBe(true);
     expect(mapTerminalInfo(makeTerminal({ id: "idle" }), ctx).hasPendingSubmission).toBe(false);
   });
 
-  it("reports whether a mirror still reads the terminal, keeping an explicit false (#13854)", () => {
-    // A detached analysis backend freezes agent state and the visible-change
-    // stamp; auto-sleep must see that rather than read the frozen values.
+  it("reports since when a mirror has read the output, and nothing while none does (#13854)", () => {
+    // A detached analysis backend or paused reads freeze agent state and the
+    // visible-change stamp; auto-sleep must see that rather than read them.
+    const paused = { isReadPaused: true };
     const ctx = createCtx({
       ptyManager: {
         isInTrash: vi.fn(() => false),
         getActivityTier: vi.fn(() => "active" as const),
         hasPendingSubmission: vi.fn(() => false),
-        isAnalysisLive: vi.fn((id: string) => id !== "detached"),
+        analysisObservedSince: vi.fn((id: string) => (id === "detached" ? null : 4_200)),
       } as unknown as HostContext["ptyManager"],
+      getPauseCoordinator: vi.fn((id: string) =>
+        id === "paused" ? paused : { isReadPaused: false }
+      ) as unknown as HostContext["getPauseCoordinator"],
     });
-    expect(mapTerminalInfo(makeTerminal({ id: "live" }), ctx).analysisLive).toBe(true);
-    expect(mapTerminalInfo(makeTerminal({ id: "detached" }), ctx).analysisLive).toBe(false);
+    expect(mapTerminalInfo(makeTerminal({ id: "live" }), ctx).outputObservedSince).toBe(4_200);
+    expect(
+      mapTerminalInfo(makeTerminal({ id: "detached" }), ctx).outputObservedSince
+    ).toBeUndefined();
+    expect(
+      mapTerminalInfo(makeTerminal({ id: "paused" }), ctx).outputObservedSince
+    ).toBeUndefined();
   });
 
   it("emits exactly the field set the host response type declares", () => {
@@ -298,7 +307,7 @@ describe("mapTerminalInfo submission projection (#12337)", () => {
         getActivityTier: vi.fn(() => "active" as const),
         getSubmission,
         hasPendingSubmission: vi.fn(() => false),
-        isAnalysisLive: vi.fn(() => true),
+        analysisObservedSince: vi.fn(() => 1_000),
       } as unknown as HostContext["ptyManager"],
     });
   }

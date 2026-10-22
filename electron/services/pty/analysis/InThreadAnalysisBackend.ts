@@ -40,6 +40,8 @@ export interface InThreadAnalysisHost {
 export class InThreadAnalysisBackend implements AnalysisBackend {
   readonly kind = "in-thread" as const;
 
+  private readonly createdAt = Date.now();
+
   constructor(private readonly host: InThreadAnalysisHost) {}
 
   feedChunk(data: string, _flags: AnalysisChunkFlags): void {
@@ -114,8 +116,8 @@ export class InThreadAnalysisBackend implements AnalysisBackend {
     return this.host.captureFinalSnapshot();
   }
 
-  isLive(): boolean {
-    return true;
+  observedSince(): number | null {
+    return this.createdAt;
   }
 
   release(): void {

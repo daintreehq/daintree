@@ -763,9 +763,9 @@ export class PtyManager extends EventEmitter {
     return this.registry.get(id)?.hasPendingSubmission();
   }
 
-  /** Undefined when the registry holds no such terminal. */
-  isAnalysisLive(id: string): boolean | undefined {
-    return this.registry.get(id)?.isAnalysisLive();
+  /** Null once nothing reads the output; undefined when the registry holds no such terminal. */
+  analysisObservedSince(id: string): number | null | undefined {
+    return this.registry.get(id)?.analysisObservedSince();
   }
 
   /**

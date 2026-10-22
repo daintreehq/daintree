@@ -1413,8 +1413,8 @@ export class TerminalProcess {
     return this.writeQueue.hasPendingSubmission();
   }
 
-  isAnalysisLive(): boolean {
-    return this.analysis.isLive();
+  analysisObservedSince(): number | null {
+    return this.analysis.observedSince();
   }
 
   /**

@@ -86,11 +86,12 @@ export interface AnalysisBackend {
   captureFinalSnapshot(): Promise<AnalysisFinalCapture>;
 
   /**
-   * Whether a mirror still reads this terminal's output. False once a worker
-   * backend has no worker left: agent state and the visible-change stamp stop
-   * moving then, and their last readings are no longer evidence of quiet.
+   * Since when this mirror has read every byte of the terminal's output: its
+   * creation, or the last time output was lost to it (a rebuilt worker slot, a
+   * dropped feed). Agent state and the visible-change stamp only cover that
+   * span. Null once nothing reads the output any more.
    */
-  isLive(): boolean;
+  observedSince(): number | null;
 
   /** Free the analysis resources (worker slot / headless instance). Idempotent. */
   release(): void;

@@ -260,7 +260,7 @@ describe("AnalysisWorkerPool", () => {
     vi.useRealTimers();
   });
 
-  it("reports a backend no longer live once no worker is left to read it (#13854)", async () => {
+  it("restarts the observed span when output is lost, and ends it with no worker left (#13854)", async () => {
     vi.useFakeTimers();
     const soloWorkers: FakeWorker[] = [];
     const solo = new AnalysisWorkerPool(1, () => {
@@ -269,16 +269,17 @@ describe("AnalysisWorkerPool", () => {
       return worker;
     });
     const backend = solo.createBackend(makeSpec("t1"), makeDelegate())!;
-    expect(backend.isLive()).toBe(true);
+    const createdAt = backend.observedSince();
+    expect(createdAt).toBe(Date.now());
 
     soloWorkers[0].emit("exit", 1);
     await vi.advanceTimersByTimeAsync(600);
-    // Respawned: the mirror is rebuilt and reads on.
-    expect(backend.isLive()).toBe(true);
+    // Respawned: the mirror is rebuilt empty, so it has read nothing from before.
+    expect(backend.observedSince()).toBeGreaterThan(createdAt!);
 
     soloWorkers[soloWorkers.length - 1].emit("exit", 1);
     await vi.advanceTimersByTimeAsync(2000);
-    expect(backend.isLive()).toBe(false);
+    expect(backend.observedSince()).toBeNull();
     solo.dispose();
     vi.useRealTimers();
   });

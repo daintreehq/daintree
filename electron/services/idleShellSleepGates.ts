@@ -57,8 +57,8 @@ export type VettedTerminals = ReadonlyMap<string, SleepGateTerminal>;
  * The gates an agent's own record answers (#13854), asked at the screen and
  * again against the kill's snapshot. Null when it passes.
  *
- * Only the agent Daintree launched, still the one detected and still read by a
- * live mirror, can be held to its own session. It has to be waiting at a plain
+ * Only the agent Daintree launched, still the one detected and read without a
+ * gap by a live mirror, can be held to its own session. It has to be waiting at a plain
  * prompt (the wake gate's reading: an approval, question or error, a turn, the
  * boot window and no reading all fail) with nothing typed since it settled
  * there, nothing queued to submit, and no input or visible change for the
@@ -77,7 +77,8 @@ function agentRecordBlock(
   }
   // With no mirror reading its output, the agent's state and visible-change
   // stamp are frozen at whatever they last were.
-  if (terminal.analysisLive !== true) return "terminal-unknown";
+  const { outputObservedSince } = terminal;
+  if (!Number.isFinite(outputObservedSince)) return "terminal-unknown";
   const prompt = evaluateWakeGate(terminal);
   if (prompt.kind === "hold" && prompt.reason === "typing") return "agent-input-pending";
   if (prompt.kind !== "ready") return "agent-not-at-prompt";
@@ -86,11 +87,14 @@ function agentRecordBlock(
   if (!Number.isFinite(lastInputTime) || !Number.isFinite(lastOutputChangeAt)) {
     return "terminal-unknown";
   }
+  // Readings cover only the span the mirror has read without a gap, so that
+  // span has to cover the whole threshold too.
   const lastActivity = Math.max(
     terminal.spawnedAt,
     lastInputTime!,
     terminal.lastTypedInputAt ?? 0,
-    lastOutputChangeAt!
+    lastOutputChangeAt!,
+    outputObservedSince!
   );
   if (lastActivity > now || awakeSince(lastActivity) < thresholdMs) return "terminal-activity";
   return null;

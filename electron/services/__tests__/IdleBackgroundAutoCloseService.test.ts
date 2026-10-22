@@ -1892,7 +1892,7 @@ describe("IdleBackgroundAutoCloseService", () => {
           lastOutputChangeAt: quietSince,
           lastOutputTime: Date.now() - 1_000,
           hasPendingSubmission: false,
-          analysisLive: true,
+          outputObservedSince: quietSince - 1,
           ...overrides,
         });
       }
