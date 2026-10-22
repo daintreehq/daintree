@@ -228,12 +228,58 @@ describe("a session grant across a close (#13843)", () => {
     ]);
     expect(h.events.some((e) => e.name === "plugin:project-trust-prompt")).toBe(false);
 
-    // The stage is part of the grant now: declined, it stays declined.
+    // The stage is part of the grant now: declined, it stays declined — not
+    // re-announced, and not quietly run either, since it is already known.
     await h.controller.onProjectClosed(PROJECT_A);
+    h.deps.loadProjectPlugin.mockClear();
     h.events.length = 0;
     await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    expect(loadedNames()).toEqual(["acme.dashboard"]);
     expect(h.events.some((e) => e.name === "plugin:project-plugin-staged")).toBe(false);
     expect(h.deps.writeTrust).not.toHaveBeenCalled();
+  });
+
+  it("keeps the ids a close interrupted mid-activation", async () => {
+    const started: string[] = [];
+    let gated = false;
+    let reachedFirst!: () => void;
+    const firstLoadStarted = new Promise<void>((resolve) => {
+      reachedFirst = resolve;
+    });
+    let releaseFirst: (() => void) | undefined;
+    h.deps.loadProjectPlugin.mockImplementation(
+      async ({ manifest }: { manifest: Readonly<PluginManifest> }) => {
+        started.push(manifest.name);
+        if (!gated) {
+          gated = true;
+          reachedFirst();
+          await new Promise<void>((resolve) => {
+            releaseFirst = resolve;
+          });
+        }
+        return true;
+      }
+    );
+    h.setDiscovery(ROOT_A, [discovered("acme.dashboard"), discovered("acme.deploy")]);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+
+    const granting = h.controller.setTrust(PROJECT_A, "session");
+    await firstLoadStarted;
+    const closing = h.controller.onProjectClosed(PROJECT_A);
+    releaseFirst!();
+    await granting;
+    await closing;
+
+    expect(started).toEqual(["acme.dashboard"]);
+    expect(h.controller.loadedInstanceKeys()).toEqual([]);
+
+    // Both ids were consented to at the click, so both run on reopen — the one
+    // the close cut off is not mistaken for new.
+    started.length = 0;
+    h.events.length = 0;
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    expect(started.sort()).toEqual(["acme.dashboard", "acme.deploy"]);
+    expect(h.events.some((e) => e.name === "plugin:project-plugin-staged")).toBe(false);
   });
 
   it("keeps a muted plugin muted", async () => {
@@ -295,6 +341,18 @@ describe("a session grant across a close (#13843)", () => {
     const revoking = h.controller.setTrust(PROJECT_A, "disabled");
     await closing;
     await revoking;
+
+    expect(h.controller.getTrustState(PROJECT_A).decision).toBe("disabled");
+    h.deps.loadProjectPlugin.mockClear();
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    expect(h.deps.loadProjectPlugin).not.toHaveBeenCalled();
+  });
+
+  it("is forgotten by a revoke made after it was restored", async () => {
+    await grantSessionThenClose([discovered("acme.dashboard")]);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    await h.controller.setTrust(PROJECT_A, "disabled");
+    await h.controller.onProjectClosed(PROJECT_A);
 
     expect(h.controller.getTrustState(PROJECT_A).decision).toBe("disabled");
     h.deps.loadProjectPlugin.mockClear();
@@ -895,6 +953,25 @@ describe("races", () => {
     releaseScan!([discovered("acme.dashboard")]);
     await opening;
     await closing;
+
+    expect(h.deps.loadProjectPlugin).not.toHaveBeenCalled();
+  });
+
+  it("does not start a plugin when a revoke is requested right behind a warm open (#12230)", async () => {
+    h.setDiscovery(ROOT_A, [discovered("acme.dashboard")]);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    await h.controller.setTrust(PROJECT_A, "enabled");
+    // The folder goes away and comes back, so the warm open below has a known
+    // plugin to load rather than one that is already running.
+    h.setDiscovery(ROOT_A, []);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    h.setDiscovery(ROOT_A, [discovered("acme.dashboard")]);
+    h.deps.loadProjectPlugin.mockClear();
+
+    const opening = h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    const revoking = h.controller.setTrust(PROJECT_A, "disabled");
+    await opening;
+    await revoking;
 
     expect(h.deps.loadProjectPlugin).not.toHaveBeenCalled();
   });

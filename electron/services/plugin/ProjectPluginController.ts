@@ -256,9 +256,12 @@ export class ProjectPluginController {
     // runs behind us in the chain, so a generation read at task start would be
     // the already-bumped one, compare equal to itself, and let this open load
     // plugins the user has just turned off (#12230).
+    // The generation as well as the entry: `requested?.generation` read inside
+    // the callback is exactly the task-start read described above.
     const requested = this.entries.get(projectId);
+    const requestedGeneration = requested?.generation;
     return this.serialize(projectId, () =>
-      this.doOpen(projectId, projectRoot, requested, requested?.generation)
+      this.doOpen(projectId, projectRoot, requested, requestedGeneration)
     );
   }
 
