@@ -1,7 +1,9 @@
 import { useCallback, useMemo, useState } from "react";
+import type { AgentState, WaitingReason } from "@shared/types/agent";
 import type { Project } from "@shared/types/project";
 import type { ProjectStatusMap } from "@shared/types/ipc/project";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { actionableWaitingReason } from "@shared/utils/waitingReasonDisplay";
 import { projectPresenceClient } from "@/clients/projectPresenceClient";
 import { terminalClient } from "@/clients/terminalClient";
 import { notify } from "@/lib/notify";
@@ -19,16 +21,28 @@ export interface IdleProject {
 }
 
 /**
+ * An agent mid-task, or one waiting on an approval, a question or an error
+ * (#13842). Sleeping it would drop a decision out of the attention views
+ * unseen, and the quit keystrokes could answer the prompt. A wait at the
+ * prompt, or with no more specific reason, holds memory while doing nothing.
+ */
+function keepsProjectAwake(state: AgentState | undefined, reason: WaitingReason | undefined) {
+  if (state === "working" || state === "directing") return true;
+  return state === "waiting" && actionableWaitingReason(reason) !== null;
+}
+
+/**
  * Projects the memory notice may offer to sleep (#13223), as far as the pushed
- * stats can tell: open in the background, with no agent mid-task. Waiting
- * agents count as idle — they hold their memory while doing nothing, and sleep
- * keeps their sessions for the reopen. The project on screen here is never a
- * candidate, nor is the one the status singleton marks active. A project with
- * no stats entry is unknown, not empty, so it is left out.
+ * stats can tell: open in the background, with no agent mid-task or blocked.
+ * Agents waiting at their prompt count as idle — they hold their memory while
+ * doing nothing, and sleep keeps their sessions for the reopen. The project on
+ * screen here is never a candidate, nor is the one the status singleton marks
+ * active. A project with no stats entry is unknown, not empty, so it is left out.
  *
- * Stats can't see everything — a hidden assistant reports no state, and another
- * window's project still reads `background` — so {@link confirmStillIdle} checks
- * each one against live state before it is offered or slept.
+ * Stats can't see everything — a hidden assistant reports no state, an approval
+ * or a question is only a waiting count, and another window's project still
+ * reads `background` — so {@link confirmStillIdle} checks each one against live
+ * state before it is offered or slept.
  */
 export function selectIdleProjects(
   projects: readonly Project[],
@@ -39,8 +53,8 @@ export function selectIdleProjects(
   for (const project of projects) {
     if (project.status !== "background" || project.id === currentProjectId) continue;
     const entry = stats[project.id];
-    if (!entry || entry.activeAgentCount > 0) continue;
-    if (entry.assistantState === "working" || entry.assistantState === "directing") continue;
+    if (!entry || entry.activeAgentCount > 0 || entry.blockedAgentCount > 0) continue;
+    if (keepsProjectAwake(entry.assistantState, entry.assistantWaitingReason)) continue;
     idle.push({
       id: project.id,
       name: project.name,
@@ -94,7 +108,7 @@ async function confirmStillIdle(ids: readonly string[]): Promise<IdleProject[]> 
     if (!t.projectId || t.isTrashed || t.hasPty === false) continue;
     const live = liveByProject.get(t.projectId) ?? { count: 0, busy: false };
     live.count++;
-    if (t.agentState === "working" || t.agentState === "directing") live.busy = true;
+    if (keepsProjectAwake(t.agentState, t.waitingReason)) live.busy = true;
     liveByProject.set(t.projectId, live);
   }
   return currentCandidates().filter((project) => {
@@ -197,7 +211,8 @@ export function useSleepIdleProjects(): SleepIdleProjects {
       type: "info",
       priority: "high",
       title: "No idle projects",
-      message: "Every background project has an agent working or is open in a window.",
+      message:
+        "Every background project has an agent working or waiting on you, or is open in a window.",
       context: { eventKind: "uiFeedback" },
     });
   }, [idleProjects]);

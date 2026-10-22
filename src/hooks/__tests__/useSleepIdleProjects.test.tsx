@@ -45,27 +45,37 @@ function terminal(
 }
 
 describe("selectIdleProjects", () => {
-  it("offers background projects whose agents are only waiting, never the one on screen", () => {
+  it("offers background projects with nothing working or blocked, never the one on screen", () => {
     const projects = [
       project("current"),
       project("waiting"),
       project("working"),
+      project("blocked"),
       project("closed", "closed"),
       project("missing", "missing"),
       project("active-elsewhere", "active"),
       project("no-stats"),
       project("assistant-working"),
       project("assistant-directing"),
+      project("assistant-approval"),
+      project("assistant-prompt"),
     ];
     const stats: ProjectStatusMap = {
       current: entry(),
+      // The stats can't say why these wait; the live check before the offer can.
       waiting: entry({ waitingAgentCount: 3, processCount: 4 }),
       working: entry({ activeAgentCount: 1 }),
+      blocked: entry({ waitingAgentCount: 1, blockedAgentCount: 1, processCount: 1 }),
       closed: entry(),
       missing: entry(),
       "active-elsewhere": entry(),
       "assistant-working": entry({ assistantState: "working" }),
       "assistant-directing": entry({ assistantState: "directing" }),
+      "assistant-approval": entry({
+        assistantState: "waiting",
+        assistantWaitingReason: "approval",
+      }),
+      "assistant-prompt": entry({ assistantState: "waiting", assistantWaitingReason: "prompt" }),
     };
 
     expect(selectIdleProjects(projects, stats, "current")).toEqual([
@@ -75,6 +85,13 @@ describe("selectIdleProjects", () => {
         path: "/repos/waiting",
         waitingAgentCount: 3,
         terminalCount: 4,
+      },
+      {
+        id: "assistant-prompt",
+        name: "Project assistant-prompt",
+        path: "/repos/assistant-prompt",
+        waitingAgentCount: 0,
+        terminalCount: 0,
       },
     ]);
   });
@@ -144,6 +161,39 @@ describe("useSleepIdleProjects", () => {
     expect(result.current.preview?.map((p) => p.id)).toEqual(["a"]);
   });
 
+  it("leaves out a project whose agent waits on an approval, a question or an error", async () => {
+    const ids = ["a", "b", "c", "d", "e"];
+    useProjectStore.setState({ projects: ids.map((id) => project(id)) });
+    useProjectStatsStore.setState({ stats: Object.fromEntries(ids.map((id) => [id, entry()])) });
+    terminals = [
+      terminal("a", "waiting", { waitingReason: "prompt" }),
+      terminal("b", "waiting", { waitingReason: "approval" }),
+      terminal("c", "waiting", { waitingReason: "question" }),
+      terminal("d", "waiting", { waitingReason: "error" }),
+      // No reason recorded reads as a wait at the prompt, as it does everywhere.
+      terminal("e", "waiting"),
+    ];
+    const { result } = renderHook(() => useSleepIdleProjects());
+    await act(async () => {
+      await result.current.openPreview();
+    });
+    expect(result.current.preview?.map((p) => p.id)).toEqual(["a", "e"]);
+  });
+
+  it("skips a project whose agent reached an approval after the preview", async () => {
+    const { result } = renderHook(() => useSleepIdleProjects());
+    await act(async () => {
+      await result.current.openPreview();
+    });
+    expect(result.current.preview?.map((p) => p.id)).toEqual(["a", "b", "c"]);
+
+    terminals = [terminal("b", "waiting", { waitingReason: "approval" })];
+    await act(async () => {
+      await result.current.confirm();
+    });
+    expect(sleptIds()).toEqual(["a", "c"]);
+  });
+
   it("re-checks each project right before its own sleep, and never swaps one in", async () => {
     let releaseA!: () => void;
     sleepProject.mockImplementation(async (id) => {
@@ -211,9 +261,14 @@ describe("useSleepIdleProjects", () => {
     useProjectStatsStore.setState({
       stats: { a: entry(), b: entry({ processCount: 2 }), c: entry() },
     });
-    // A: an exited agent still reads `working`. B: the stats count two
-    // terminals but the host returned none for it, so its state is unknown.
-    terminals = [terminal("a", "working", { hasPty: false }), terminal("c", "waiting")];
+    // A: an exited agent still reads `working`, and a trashed one an approval.
+    // B: the stats count two terminals but the host returned none for it, so
+    // its state is unknown.
+    terminals = [
+      terminal("a", "working", { hasPty: false }),
+      terminal("a", "waiting", { waitingReason: "approval", isTrashed: true }),
+      terminal("c", "waiting"),
+    ];
     const { result } = renderHook(() => useSleepIdleProjects());
     await act(async () => {
       await result.current.openPreview();
