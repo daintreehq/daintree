@@ -6,12 +6,9 @@ import {
   ResolveCancelSchema,
   ResolveRequestSchema,
   ResolveResponseSchema,
-  type GuestFrameworkExtractor,
-  type HostSourceResolver,
+  type FrameworkExtraction,
   type ResolveBudget,
   type ResolveRequest,
-  type ResolverSourceAccess,
-  type ResolutionResult,
 } from "../index.js";
 import {
   REVISION_A,
@@ -90,18 +87,54 @@ describe("ResolveRequestSchema", () => {
 });
 
 describe("resolve responses and cancellation", () => {
+  const file = { workspaceId: "ws-1", path: "src/Card.tsx" };
+  const claim = { candidateId: "c-1", claim: "element-creation" } as const;
+  const response = {
+    requestId: "req-1",
+    documentEpoch: 3,
+    outcomes: [
+      {
+        elementId: "el-1",
+        results: [
+          {
+            state: "verified",
+            ...claim,
+            target: { file, location: null },
+            fileRevision: REVISION_A,
+          },
+          {
+            state: "unavailable",
+            candidateId: "c-2",
+            claim: "component-definition",
+            reason: "budget-exhausted",
+          },
+          { state: "unavailable", candidateId: "c-3", claim: "file-hint", reason: "cancelled" },
+        ],
+      },
+    ],
+  };
+
+  it("carries resolved, refused and cancelled work side by side", () => {
+    expect(ResolveResponseSchema.parse(response)).toEqual(response);
+  });
+
   it("rejects a malformed result inside a response", () => {
-    const response = {
-      requestId: "req-1",
-      documentEpoch: 3,
-      outcomes: [
-        {
-          elementId: "el-1",
-          results: [{ state: "observed", candidateId: "c-1", claim: "element-creation" }],
-        },
-      ],
-    };
-    expect(ResolveResponseSchema.safeParse(response).success).toBe(false);
+    const missingTarget = { state: "observed", ...claim };
+    expect(
+      ResolveResponseSchema.safeParse({
+        ...response,
+        outcomes: [{ elementId: "el-1", results: [missingTarget] }],
+      }).success
+    ).toBe(false);
+  });
+
+  it("bounds the results it returns per observation", () => {
+    const result = { state: "unavailable", ...claim, reason: "unsupported" };
+    const results = Array.from({ length: RESOLVE_LIMITS.resultsPerObservation + 1 }, () => result);
+    expect(
+      ResolveResponseSchema.safeParse({ ...response, outcomes: [{ elementId: "el-1", results }] })
+        .success
+    ).toBe(false);
   });
 
   it("cancels by request id alone", () => {
@@ -112,107 +145,37 @@ describe("resolve responses and cancellation", () => {
   });
 });
 
-describe("resolver contracts", () => {
-  /** A resolver written only against the contract: it sees bytes the access hands it, never a path it opens. */
-  const stubResolver: HostSourceResolver = {
+describe("FrameworkExtractionSchema", () => {
+  const extraction: FrameworkExtraction = {
     framework: "react",
-    async resolve(req, access, signal) {
-      const outcomes = await Promise.all(
-        req.observations.map(async (observation) => {
-          const results: ResolutionResult[] = [];
-          for (const candidate of observation.sourceCandidates) {
-            const claim = { candidateId: candidate.candidateId, claim: candidate.kind };
-            if (signal.aborted) {
-              results.push({ state: "unavailable", ...claim, reason: "cancelled" });
-              continue;
-            }
-            const file = { workspaceId: req.workspaceId, path: "src/Card.tsx" };
-            const read = await access.readSource(file, signal);
-            results.push(
-              read.ok
-                ? {
-                    state: "verified",
-                    ...claim,
-                    target: { file, location: null },
-                    fileRevision: read.value.revision,
-                  }
-                : { state: "unavailable", ...claim, reason: read.reason }
-            );
-          }
-          return { elementId: observation.elementId, results };
-        })
-      );
-      return { requestId: req.requestId, documentEpoch: req.documentEpoch, outcomes };
+    componentChain: {
+      nearestId: "card",
+      components: [component("card", { rootElementIds: ["el-1"] })],
+      truncated: false,
     },
+    sourceCandidates: [creationFrame("c-1")],
+    frameworkEvidence: [],
+    capabilities: capabilities({ line: { state: "unknown" } }),
   };
 
-  const access = (ok: boolean): ResolverSourceAccess => ({
-    async readSource(file) {
-      return ok
-        ? {
-            ok: true,
-            value: { file, revision: REVISION_A, bytes: new TextEncoder().encode("export {}") },
-          }
-        : { ok: false, reason: "budget-exhausted" };
-    },
-    async fetchSourceMap() {
-      return { ok: false, reason: "map-missing" };
-    },
+  it("accepts what an extractor reports for one element", () => {
+    expect(FrameworkExtractionSchema.parse(extraction)).toEqual(extraction);
   });
 
-  it("round-trips a resolve through the schemas, including a read the budget refused", async () => {
-    const live = new AbortController().signal;
-    const resolved = await stubResolver.resolve(request(), access(true), live);
-    expect(ResolveResponseSchema.parse(resolved).outcomes[0]?.results[0]).toMatchObject({
-      state: "verified",
-      fileRevision: REVISION_A,
-    });
-    const refused = await stubResolver.resolve(request(), access(false), live);
-    expect(ResolveResponseSchema.parse(refused).outcomes[0]?.results[0]).toMatchObject({
-      state: "unavailable",
-      reason: "budget-exhausted",
-    });
-  });
-
-  it("reports cancelled work rather than dropping it", async () => {
-    const controller = new AbortController();
-    controller.abort();
-    const response = await stubResolver.resolve(request(), access(true), controller.signal);
-    expect(ResolveResponseSchema.parse(response).outcomes[0]?.results[0]).toMatchObject({
-      reason: "cancelled",
-    });
-  });
-
-  it("validates what an extractor hands back as untrusted data", () => {
-    type FakeNode = { id: string };
-    const extractor: GuestFrameworkExtractor<FakeNode> = {
-      framework: "react",
-      extract(node, _phase, identity) {
-        return {
-          framework: "react",
-          componentChain: {
-            nearestId: "card",
-            components: [component("card", { rootElementIds: [identity.elementId(node)] })],
-            truncated: false,
-          },
-          sourceCandidates: [creationFrame()],
-          frameworkEvidence: [],
-          capabilities: capabilities({ line: { state: "unknown" } }),
-        };
-      },
-      componentRoots: () => ({ roots: [], complete: true }),
-    };
-
-    const extraction = extractor.extract({ id: "n" }, "selection", {
-      elementId: (node) => `el-${node.id}`,
-    });
-    expect(
-      FrameworkExtractionSchema.parse(extraction).componentChain.components[0]?.rootElementIds
-    ).toEqual(["el-n"]);
+  it("holds an extractor to the same chain and candidate invariants as an observation", () => {
     expect(
       FrameworkExtractionSchema.safeParse({
         ...extraction,
-        componentChain: { nearestId: "ghost", components: [], truncated: false },
+        componentChain: { ...extraction.componentChain, nearestId: "ghost" },
+      }).success
+    ).toBe(false);
+    expect(
+      FrameworkExtractionSchema.safeParse({
+        ...extraction,
+        componentChain: {
+          ...extraction.componentChain,
+          components: [component("card", { sourceCandidates: [creationFrame("c-1")] })],
+        },
       }).success
     ).toBe(false);
   });

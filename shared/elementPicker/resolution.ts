@@ -13,6 +13,7 @@ export type FileRevision = z.infer<typeof FileRevisionSchema>;
 
 function isWorkspaceRelative(path: string): boolean {
   if (path.startsWith("/") || path.includes("\\") || /^[A-Za-z]:/.test(path)) return false;
+  if (path.includes("\0")) return false;
   return path.split("/").every((segment) => segment !== "" && segment !== "." && segment !== "..");
 }
 
@@ -76,11 +77,40 @@ export type UnavailableReason = z.infer<typeof UnavailableReasonSchema>;
 
 const claimFields = { candidateId: PickerIdSchema, claim: SourceClaimKindSchema };
 
-const AlternativeSchema = z.strictObject({
+const ObservedTargetSchema = z.strictObject({
+  state: z.literal("observed"),
   target: SourceTargetSchema,
   fileRevision: FileRevisionSchema.nullable(),
+});
+
+const MappedTargetSchema = z.strictObject({
+  state: z.literal("mapped"),
+  target: SourceTargetSchema,
+  fileRevision: FileRevisionSchema.nullable(),
+  sourceMap: SourceMapProvenanceSchema,
+});
+
+const VerifiedTargetSchema = z.strictObject({
+  state: z.literal("verified"),
+  target: SourceTargetSchema,
+  fileRevision: FileRevisionSchema,
+  /** Present when mapping came before the check. */
   sourceMap: SourceMapProvenanceSchema.optional(),
 });
+
+/**
+ * A target and how far it got: reported as-is, mapped through a named source
+ * map, or checked against the file. A revision alone does not say which, since
+ * a file can be read without the claim being checked in it, so every target
+ * carries its state wherever it appears: as a result, as one of several
+ * ambiguous alternatives, or as what a stale result used to hold.
+ */
+export const HeldTargetSchema = z.discriminatedUnion("state", [
+  ObservedTargetSchema,
+  MappedTargetSchema,
+  VerifiedTargetSchema,
+]);
+export type HeldTarget = z.infer<typeof HeldTargetSchema>;
 
 /**
  * What the host made of one candidate. Each state says how far the claim got,
@@ -92,7 +122,7 @@ const AlternativeSchema = z.strictObject({
  * - `mapped`: through the named source map, not checked against the file;
  * - `verified`: checked against the file at `fileRevision`;
  * - `ambiguous`: more than one target fits, and none is chosen;
- * - `stale`: held at `fileRevision`, and no longer does;
+ * - `stale`: what the claim held, which no longer holds;
  * - `unavailable`: no target, and a code saying why.
  *
  * `fileRevision` is required wherever a file is named, and null only where the
@@ -101,38 +131,18 @@ const AlternativeSchema = z.strictObject({
  */
 export const ResolutionResultSchema = z
   .discriminatedUnion("state", [
-    z.strictObject({
-      state: z.literal("observed"),
-      ...claimFields,
-      target: SourceTargetSchema,
-      fileRevision: FileRevisionSchema.nullable(),
-    }),
-    z.strictObject({
-      state: z.literal("mapped"),
-      ...claimFields,
-      target: SourceTargetSchema,
-      fileRevision: FileRevisionSchema.nullable(),
-      sourceMap: SourceMapProvenanceSchema,
-    }),
-    z.strictObject({
-      state: z.literal("verified"),
-      ...claimFields,
-      target: SourceTargetSchema,
-      fileRevision: FileRevisionSchema,
-      /** Present when mapping came before the check. */
-      sourceMap: SourceMapProvenanceSchema.optional(),
-    }),
+    ObservedTargetSchema.extend(claimFields),
+    MappedTargetSchema.extend(claimFields),
+    VerifiedTargetSchema.extend(claimFields),
     z.strictObject({
       state: z.literal("ambiguous"),
       ...claimFields,
-      alternatives: z.array(AlternativeSchema).min(2).max(RESOLUTION_LIMITS.alternatives),
+      alternatives: z.array(HeldTargetSchema).min(2).max(RESOLUTION_LIMITS.alternatives),
     }),
     z.strictObject({
       state: z.literal("stale"),
       ...claimFields,
-      target: SourceTargetSchema,
-      /** The revision the claim held at; null when it was never read. */
-      fileRevision: FileRevisionSchema.nullable(),
+      held: HeldTargetSchema,
       /** What is on disk now; null when the file is gone or was not reread. */
       currentFileRevision: FileRevisionSchema.nullable(),
       reason: StaleReasonSchema,
@@ -141,16 +151,25 @@ export const ResolutionResultSchema = z
       state: z.literal("unavailable"),
       ...claimFields,
       reason: UnavailableReasonSchema,
+      /** The file the host read before giving up; required for a `mismatch`. */
+      read: z
+        .strictObject({ file: SourceFileRefSchema, fileRevision: FileRevisionSchema })
+        .optional(),
     }),
   ])
   .superRefine((result, ctx) => {
+    if (result.state === "unavailable" && result.reason === "mismatch" && !result.read) {
+      ctx.addIssue({ code: "custom", path: ["read"], message: "a mismatch names what was read" });
+    }
     if (result.claim !== "file-hint") return;
     const targets =
       result.state === "ambiguous"
         ? result.alternatives.map((alternative) => alternative.target)
-        : result.state === "unavailable"
-          ? []
-          : [result.target];
+        : result.state === "stale"
+          ? [result.held.target]
+          : result.state === "unavailable"
+            ? []
+            : [result.target];
     if (targets.some((target) => target.location !== null)) {
       ctx.addIssue({ code: "custom", message: "a file-hint never resolves to a location" });
     }

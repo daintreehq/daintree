@@ -21,11 +21,18 @@ export const OBSERVATION_LIMITS = {
   signals: 16,
 } as const;
 
+/**
+ * Chromium's layout saturates near 2^25 px (a 32-bit fixed-point unit with six
+ * fractional bits), so no rendered box lies past it, and a page-supplied rect
+ * that does would turn edge arithmetic into Infinity.
+ */
+export const MAX_LAYOUT_PX = 2 ** 25;
+
 export const RectSchema = z.strictObject({
-  x: z.number(),
-  y: z.number(),
-  width: z.number().nonnegative(),
-  height: z.number().nonnegative(),
+  x: z.number().min(-MAX_LAYOUT_PX).max(MAX_LAYOUT_PX),
+  y: z.number().min(-MAX_LAYOUT_PX).max(MAX_LAYOUT_PX),
+  width: z.number().nonnegative().max(MAX_LAYOUT_PX),
+  height: z.number().nonnegative().max(MAX_LAYOUT_PX),
 });
 export type Rect = z.infer<typeof RectSchema>;
 
@@ -113,7 +120,7 @@ const observationFields = {
  * Resolution results point back at a candidate by id, so an id has to name one
  * claim across the element and every component in its chain.
  */
-function requireUniqueCandidateIds(
+export function requireUniqueCandidateIds(
   observation: {
     sourceCandidates: readonly { candidateId: string }[];
     componentChain: {

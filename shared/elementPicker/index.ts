@@ -44,6 +44,7 @@ export {
   ElementObservationSchema,
   FrameworkDetectionSchema,
   HoverObservationSchema,
+  MAX_LAYOUT_PX,
   OBSERVATION_LIMITS,
   RectSchema,
   SelectionObservationSchema,
@@ -58,6 +59,7 @@ export {
 } from "./observation.js";
 export {
   FileRevisionSchema,
+  HeldTargetSchema,
   RESOLUTION_LIMITS,
   ResolutionResultSchema,
   SourceFileRefSchema,
@@ -66,6 +68,7 @@ export {
   StaleReasonSchema,
   UnavailableReasonSchema,
   type FileRevision,
+  type HeldTarget,
   type ResolutionResult,
   type SourceFileRef,
   type SourceMapProvenance,

@@ -19,6 +19,11 @@ import {
  * reports today, so the port (#13873) can move to them without dropping a
  * field. These conversions are test-local on purpose: they prove the shapes
  * fit, and the real mapping belongs to the port.
+ *
+ * Lossless within the neutral contract's bounds, which are tighter where the
+ * legacy one left numbers and paths open: a reported file is at most 2048
+ * characters and a coordinate at most `MAX_SOURCE_COORDINATE`. Nothing a real
+ * page stamps comes near either.
  */
 
 const LOC_FIELD = "__svelte_meta.loc";
@@ -120,7 +125,7 @@ const full = GuestNodeObservationSchema.parse({
   tagName: "button",
   sameLocCount: 3,
   sameLocCountPartial: true,
-  locIndex: 2,
+  locIndex: 0,
   structure: {
     file: "src/lib/PricingCard.svelte",
     path: [
@@ -159,7 +164,7 @@ describe("Svelte guest observations on the neutral contract", () => {
     ["an unstamped node with nothing optional", minimal],
   ])("carries %s across and back without losing a field", (_, legacy) => {
     const neutral = SelectionObservationSchema.parse(toNeutral(legacy));
-    expect(GuestNodeObservationSchema.parse(fromNeutral(neutral))).toEqual(legacy);
+    expect(GuestNodeObservationSchema.parse(fromNeutral(neutral))).toStrictEqual(legacy);
   });
 
   it("keeps Svelte's block ancestry in order instead of flattening it into components", () => {
@@ -177,22 +182,39 @@ describe("page context ceilings", () => {
     expect(NEUTRAL_CONTEXT_LIMITS).toEqual(ELEMENT_CONTEXT_LIMITS);
   });
 
+  const atCeiling = {
+    selector: "s".repeat(ELEMENT_CONTEXT_LIMITS.selector),
+    markup: "m".repeat(ELEMENT_CONTEXT_LIMITS.markup),
+    styles: Array.from({ length: ELEMENT_CONTEXT_LIMITS.styles }, () => ({
+      property: "p".repeat(ELEMENT_CONTEXT_LIMITS.property),
+      value: "v".repeat(ELEMENT_CONTEXT_LIMITS.value),
+    })),
+  };
+  const style = { property: "color", value: "red" };
+
+  const verdicts = (context: unknown) => [
+    NeutralElementContextSchema.safeParse(context).success,
+    ElementContextSchema.safeParse(context).success,
+  ];
+
+  it("both accept a context at every ceiling at once", () => {
+    expect(verdicts(atCeiling)).toEqual([true, true]);
+  });
+
+  // One field over at a time, so a limit one contract dropped cannot hide behind another field's.
   it.each([
-    ["at every ceiling", 0],
-    ["one past every ceiling", 1],
-  ])("accept and reject the same context %s", (_, past) => {
-    const context = {
-      selector: "s".repeat(ELEMENT_CONTEXT_LIMITS.selector + past),
-      markup: "m".repeat(ELEMENT_CONTEXT_LIMITS.markup + past),
-      styles: Array.from({ length: ELEMENT_CONTEXT_LIMITS.styles + past }, () => ({
-        property: "p".repeat(ELEMENT_CONTEXT_LIMITS.property + past),
-        value: "v".repeat(ELEMENT_CONTEXT_LIMITS.value + past),
-      })),
-    };
-    const expected = past === 0;
-    expect([
-      NeutralElementContextSchema.safeParse(context).success,
-      ElementContextSchema.safeParse(context).success,
-    ]).toEqual([expected, expected]);
+    ["selector", { selector: "s".repeat(ELEMENT_CONTEXT_LIMITS.selector + 1) }],
+    ["markup", { markup: "m".repeat(ELEMENT_CONTEXT_LIMITS.markup + 1) }],
+    [
+      "style count",
+      { styles: Array.from({ length: ELEMENT_CONTEXT_LIMITS.styles + 1 }, () => style) },
+    ],
+    [
+      "property",
+      { styles: [{ ...style, property: "p".repeat(ELEMENT_CONTEXT_LIMITS.property + 1) }] },
+    ],
+    ["value", { styles: [{ ...style, value: "v".repeat(ELEMENT_CONTEXT_LIMITS.value + 1) }] }],
+  ])("both reject a %s one past its ceiling", (_, patch) => {
+    expect(verdicts({ ...atCeiling, ...patch })).toEqual([false, false]);
   });
 });

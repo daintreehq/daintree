@@ -48,10 +48,15 @@ describe("SourceLocationSchema", () => {
       SourceLocationSchema.safeParse({ ...svelte, line: 4, column: 2, end: { line: 3, column: 9 } })
         .success
     ).toBe(false);
+    // Runs forward, so only the end's base can reject it.
     expect(
-      SourceLocationSchema.safeParse({ ...v8, line: 1, column: 1, end: { line: 1, column: 0 } })
+      SourceLocationSchema.safeParse({ ...v8, line: 1, column: 1, end: { line: 2, column: 0 } })
         .success
     ).toBe(false);
+    expect(
+      SourceLocationSchema.safeParse({ ...v8, line: 1, column: 1, end: { line: 2, column: 1 } })
+        .success
+    ).toBe(true);
   });
 
   it("rejects other units, other bases, fractions and unbounded numbers", () => {

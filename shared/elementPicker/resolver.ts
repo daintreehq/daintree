@@ -5,6 +5,7 @@ import {
   CapabilitiesSchema,
   OBSERVATION_LIMITS,
   SelectionObservationSchema,
+  requireUniqueCandidateIds,
   type FrameworkDetection,
 } from "./observation.js";
 import {
@@ -68,13 +69,15 @@ export interface GuestFrameworkExtractor<TNode> {
  * where page code can reach them, so this crosses into the bootstrap as
  * untrusted data and is validated like anything else the page sends.
  */
-export const FrameworkExtractionSchema = z.strictObject({
-  framework: ElementPickerFrameworkSchema,
-  componentChain: ComponentChainSchema,
-  sourceCandidates: z.array(SourceCandidateSchema).max(OBSERVATION_LIMITS.candidates),
-  frameworkEvidence: z.array(FrameworkEvidenceSchema).max(EVIDENCE_LIMITS.entries),
-  capabilities: CapabilitiesSchema,
-});
+export const FrameworkExtractionSchema = z
+  .strictObject({
+    framework: ElementPickerFrameworkSchema,
+    componentChain: ComponentChainSchema,
+    sourceCandidates: z.array(SourceCandidateSchema).max(OBSERVATION_LIMITS.candidates),
+    frameworkEvidence: z.array(FrameworkEvidenceSchema).max(EVIDENCE_LIMITS.entries),
+    capabilities: CapabilitiesSchema,
+  })
+  .superRefine(requireUniqueCandidateIds);
 export type FrameworkExtraction = z.infer<typeof FrameworkExtractionSchema>;
 
 /* Host side. */

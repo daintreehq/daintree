@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { MAX_SOURCE_COORDINATE } from "./coordinates.js";
 import { ElementPickerFrameworkSchema } from "./source.js";
 
 export const EVIDENCE_LIMITS = {
@@ -29,8 +30,8 @@ export const SvelteEvidenceSchema = z.strictObject({
       z.strictObject({
         type: z.string().min(1).max(32),
         file: z.string().min(1).max(1024),
-        line: z.number().int().positive(),
-        column: z.number().int().nonnegative(),
+        line: z.number().int().positive().max(MAX_SOURCE_COORDINATE),
+        column: z.number().int().nonnegative().max(MAX_SOURCE_COORDINATE),
         /** The tag a `component` entry was written as at its call site. */
         componentTag: z.string().min(1).max(128).optional(),
       })

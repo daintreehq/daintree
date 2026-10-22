@@ -5,6 +5,7 @@ import {
   ElementObservationSchema,
   FrameworkEvidenceSchema,
   HoverObservationSchema,
+  MAX_LAYOUT_PX,
   OBSERVATION_LIMITS,
   SelectionObservationSchema,
   type ElementContext,
@@ -75,9 +76,14 @@ describe("observations", () => {
         selection({ bounds: Array.from({ length: OBSERVATION_LIMITS.bounds + 1 }, () => rect) })
       ).success
     ).toBe(false);
-    expect(
-      SelectionObservationSchema.safeParse(selection({ bounds: [{ ...rect, width: -1 }] })).success
-    ).toBe(false);
+    const withRect = (patch: Partial<typeof rect>) =>
+      SelectionObservationSchema.safeParse(selection({ bounds: [{ ...rect, ...patch }] })).success;
+    expect(withRect({ width: -1 })).toBe(false);
+    // Scrolled above or left of the viewport: a real box, so negative positions stay legal.
+    expect(withRect({ x: -MAX_LAYOUT_PX, y: -120 })).toBe(true);
+    expect(withRect({ x: -MAX_LAYOUT_PX - 1 })).toBe(false);
+    expect(withRect({ width: Number.MAX_VALUE })).toBe(false);
+    expect(withRect({ x: Number.MAX_VALUE })).toBe(false);
     expect(
       SelectionObservationSchema.safeParse(
         selection({

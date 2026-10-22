@@ -7,7 +7,7 @@ import {
   type ElementPickerAdmission,
   type ElementPickerEvent,
 } from "../index.js";
-import { component, hover, selection } from "./fixtures.js";
+import { capabilities, component, creationFrame, hover, selection } from "./fixtures.js";
 
 const admission: ElementPickerAdmission = Object.freeze({
   sessionId: "session-1",
@@ -48,6 +48,76 @@ describe("admitElementPickerMessage", () => {
     expect(admission.lastSequence).toBe(4);
   });
 
+  /** A Next.js page: a client Card rendered inside a Layout but created by a server component. */
+  const rscSelection = selection({
+    detections: [{ framework: "react", signals: [{ via: "expando", name: "__reactFiber$" }] }],
+    componentChain: {
+      nearestId: "card",
+      components: [
+        component("card", { renderParentId: "layout", ownerId: "page", rootElementIds: ["el-1"] }),
+        component("layout", { renderParentId: "page", ownerId: "page" }),
+        component("page", {
+          environment: "server",
+          name: {
+            value: "ProductPage",
+            extraction: { kind: "runtime-field", field: "_debugInfo[0].name" },
+          },
+          ownerId: null,
+        }),
+      ],
+      truncated: false,
+    },
+    sourceCandidates: [creationFrame()],
+    capabilities: capabilities({
+      names: { state: "available" },
+      chain: { state: "available" },
+      componentSelection: { state: "available" },
+      exactRange: { state: "unavailable", reason: "not-exposed" },
+    }),
+    frameworkEvidence: [
+      {
+        kind: "generic",
+        framework: "react",
+        fields: [{ name: "rendererVersion", value: "19.3.0" }],
+      },
+    ],
+    context: { selector: "main > button", markup: "<button>Save</button>", styles: [] },
+  });
+
+  it.each([
+    ["documentReady", ready],
+    [
+      "frameworksDetected",
+      {
+        type: "frameworksDetected",
+        detections: [{ framework: "svelte", signals: [{ via: "global", name: "__svelte" }] }],
+      },
+    ],
+    ["hoverChanged", { type: "hoverChanged", observation: hover() }],
+    ["hoverChanged (cleared)", { type: "hoverChanged", observation: null }],
+    [
+      "selectionChanged (an RSC component)",
+      {
+        type: "selectionChanged",
+        observations: [rscSelection],
+        cause: "reselect",
+        scope: { kind: "component", componentId: "card" },
+      },
+    ],
+    [
+      "runtimeIssue",
+      {
+        type: "runtimeIssue",
+        code: "extractor-failed",
+        framework: "react",
+        detail: "fiber walk hit its bound",
+      },
+    ],
+  ])("admits a well-formed %s event", (_, event) => {
+    const verdict = admitElementPickerMessage(send(event), admission);
+    expect(verdict.ok && verdict.envelope.event).toEqual(event);
+  });
+
   describe("malformed", () => {
     it.each([
       ["a non-string", { protocolVersion: 1 }],
@@ -76,9 +146,10 @@ describe("admitElementPickerMessage", () => {
       expect(admitElementPickerMessage(send({ type: "evalScript", code: "1" }), admission).ok).toBe(
         false
       );
+      const valid = hover();
       const nested = {
         type: "hoverChanged",
-        observation: { ...hover(), bounds: [{ x: 0, y: 0, width: 1, height: 1, z: 1 }] },
+        observation: { ...valid, bounds: [{ ...valid.bounds[0], z: 1 }] },
       };
       expect(admitElementPickerMessage(send(nested), admission)).toEqual({
         ok: false,
@@ -231,7 +302,9 @@ describe("admitElementPickerMessage", () => {
       const raw = body + " ".repeat(MAX_ELEMENT_PICKER_MESSAGE_BYTES - body.length - 1);
       expect(raw.length).toBeLessThan(MAX_ELEMENT_PICKER_MESSAGE_BYTES);
       expect(utf8(raw)).toBeGreaterThan(MAX_ELEMENT_PICKER_MESSAGE_BYTES);
+      const parse = vi.spyOn(JSON, "parse");
       expect(admitElementPickerMessage(raw, admission)).toEqual({ ok: false, reason: "oversized" });
+      expect(parse).not.toHaveBeenCalled();
     });
 
     it("rejects an oversized body before parsing it, even when it is not JSON at all", () => {
