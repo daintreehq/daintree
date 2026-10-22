@@ -145,6 +145,7 @@ function makeManaged(fixture: ManagedFixture): ManagedTerminal {
     fileLinksDisposable: null,
     imageLinksDisposable: null,
     commandLinksDisposable: null,
+    pluginLinksDisposable: null,
     webLinksAddon: null,
     hoveredLink: null,
   } as ManagedTerminal;

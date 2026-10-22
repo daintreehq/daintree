@@ -83,6 +83,7 @@ vi.mock("@/services/TerminalInstanceService", () => ({
     getTerminal: () => undefined,
     getSelection: () => "",
     getHoveredLinkText: () => null,
+    getHoveredLinkPluginName: () => null,
     getHoveredFilePath: () => hoveredFilePath.current,
     getHoveredFileKind: () => (hoveredFilePath.current ? hoveredFileKind.current : null),
     openHoveredLink: vi.fn(),

@@ -663,6 +663,8 @@ function TerminalContextMenuBody({
 
   const [hasSelection, setHasSelection] = useState(false);
   const [hoveredUrl, setHoveredUrl] = useState<string | null>(null);
+  // The plugin that claims the hovered URL (#13798), read with it on open.
+  const [hoveredUrlPluginName, setHoveredUrlPluginName] = useState<string | null>(null);
   const [hoveredFilePath, setHoveredFilePath] = useState<string | null>(null);
   const [hoveredFileKind, setHoveredFileKind] = useState<"file" | "directory" | null>(null);
   const [selectedText, setSelectedText] = useState<string | null>(null);
@@ -725,6 +727,7 @@ function TerminalContextMenuBody({
       if (!managed?.terminal) {
         setHasSelection(false);
         setHoveredUrl(null);
+        setHoveredUrlPluginName(null);
         setHoveredFilePath(null);
         setHoveredFileKind(null);
         setSelectedText(null);
@@ -737,6 +740,7 @@ function TerminalContextMenuBody({
       setSelectedText(selection || null);
       setHomeDir(systemClient.getCachedHomeDir());
       setHoveredUrl(terminalInstanceService.getHoveredLinkText(terminalId));
+      setHoveredUrlPluginName(terminalInstanceService.getHoveredLinkPluginName(terminalId));
       setHoveredFilePath(terminalInstanceService.getHoveredFilePath(terminalId));
       setHoveredFileKind(terminalInstanceService.getHoveredFileKind(terminalId));
     },
@@ -790,6 +794,11 @@ function TerminalContextMenuBody({
 
       if (actionId === "open-link") {
         void terminalInstanceService.openHoveredLink(terminalId);
+        return;
+      }
+
+      if (actionId === "open-link-external") {
+        terminalInstanceService.openHoveredLinkExternally(terminalId);
         return;
       }
 
@@ -1763,10 +1772,24 @@ function TerminalContextMenuBody({
               {hoveredUrl && (
                 <>
                   <ContextMenuSeparator />
-                  <ContextMenuItem onSelect={() => handleAction("open-link")}>
-                    <ExternalLink className={ICON_CLASS} aria-hidden="true" />
-                    Open link
-                  </ContextMenuItem>
+                  {hoveredUrlPluginName ? (
+                    <>
+                      <ContextMenuItem onSelect={() => handleAction("open-link")}>
+                        <Puzzle className={ICON_CLASS} aria-hidden="true" />
+                        Open with {hoveredUrlPluginName}
+                      </ContextMenuItem>
+                      {/* A claimed URL still reaches the browser from here. */}
+                      <ContextMenuItem onSelect={() => handleAction("open-link-external")}>
+                        <Globe className={ICON_CLASS} aria-hidden="true" />
+                        Open in external browser
+                      </ContextMenuItem>
+                    </>
+                  ) : (
+                    <ContextMenuItem onSelect={() => handleAction("open-link")}>
+                      <ExternalLink className={ICON_CLASS} aria-hidden="true" />
+                      Open link
+                    </ContextMenuItem>
+                  )}
                   <ContextMenuItem onSelect={() => handleAction(`copy-link:${hoveredUrl}`)}>
                     <Copy className={ICON_CLASS} aria-hidden="true" />
                     Copy link address

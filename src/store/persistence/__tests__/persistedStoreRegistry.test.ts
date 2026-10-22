@@ -134,6 +134,7 @@ const EXPECTED_STORE_IDS = [
   "notificationHistoryStore",
   "diffNotesStore",
   "forgeTokenCalloutStore",
+  "pluginTerminalLinkPreferencesStore",
   "projectHomeStore",
   "sidebarViewStore",
 ] as const;
@@ -153,6 +154,7 @@ const EXPECTED_STORAGE_KEYS: Record<(typeof EXPECTED_STORE_IDS)[number], string>
   notificationHistoryStore: "daintree-notification-history",
   diffNotesStore: "daintree-diff-notes",
   forgeTokenCalloutStore: "daintree-forge-token-callout",
+  pluginTerminalLinkPreferencesStore: "daintree-plugin-terminal-links",
   projectHomeStore: "daintree-project-home",
   // One key per workspace; a test view has none.
   sidebarViewStore: "daintree-sidebar-view:default",
@@ -177,6 +179,7 @@ describe("persisted store inventory", () => {
       import("../../slices/notificationHistorySlice"),
       import("../../diffNotesStore"),
       import("../../forgeTokenCalloutStore"),
+      import("../../pluginTerminalLinkPreferencesStore"),
       import("../../projectHomeStore"),
       import("../../sidebarViewStore"),
     ]);

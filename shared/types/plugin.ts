@@ -2317,6 +2317,54 @@ export interface PromptTemplateContribution {
   args: PromptTemplateArgument[];
 }
 
+/** The URLs a {@link TerminalLinkContribution} claims: one scheme, one exact host. */
+export interface TerminalLinkUrlContribution {
+  scheme: "https" | "http";
+  /** A lowercase public domain name; never loopback, private, local-only or an IP. */
+  host: string;
+  /** Matched against the URL's path as a plain prefix. */
+  pathPrefix?: string;
+}
+
+/**
+ * One `contributes.terminalLinks` entry (#13798): terminal text the plugin
+ * makes clickable. Exactly one of `pattern` or `url` is set. A pattern match
+ * dispatches `actionId` with {@link TerminalLinkPatternArgs}; a claimed URL
+ * dispatches it with {@link TerminalLinkUrlArgs} instead of opening the
+ * browser. Matching runs in the host on hover only, and only the matched text
+ * reaches the plugin, on click. Built-in links win any overlap.
+ */
+export interface TerminalLinkContribution {
+  id: string;
+  /** One of the plugin's own commands, written `"{manifest name}.{id}"`. */
+  actionId: string;
+  /** A bounded regular expression, matched within one terminal row. */
+  pattern?: string;
+  /** Match `pattern` without regard to case. */
+  ignoreCase?: boolean;
+  url?: TerminalLinkUrlContribution;
+}
+
+/** The terminal a clicked plugin link was in. */
+export interface TerminalLinkSubject {
+  panelId: string;
+  panelKind: string;
+  /** Absent for a terminal outside any worktree. */
+  worktreeId?: string;
+}
+
+/** What a pattern {@link TerminalLinkContribution}'s command receives on click. */
+export interface TerminalLinkPatternArgs extends TerminalLinkSubject {
+  text: string;
+  /** Capture groups by position; `null` where an optional group matched nothing. */
+  groups: (string | null)[];
+}
+
+/** What a URL {@link TerminalLinkContribution}'s command receives on click. */
+export interface TerminalLinkUrlArgs extends TerminalLinkSubject {
+  url: string;
+}
+
 /**
  * One `contributes.recipes` entry (#11860). A recipe is a named multi-terminal
  * launch layout the plugin ships; the host registers it under the qualified id
@@ -2776,6 +2824,13 @@ export interface PluginManifest {
      * `scope: "project"` one.
      */
     promptTemplates?: PromptTemplateContribution[];
+    /**
+     * Plugin-contributed terminal link matchers (#13798). Optional in the type
+     * but always materialized by the manifest schema's `.default([])`. Applied
+     * in every project's terminals for an installed plugin, in its own
+     * project's only for a `scope: "project"` one.
+     */
+    terminalLinks?: TerminalLinkContribution[];
     forgeProviders: ForgeProviderContribution[];
     fileDecorationProviders: FileDecorationContribution[];
     /**

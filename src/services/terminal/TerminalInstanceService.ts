@@ -28,6 +28,7 @@ import {
   createFileLinksAddon,
   createImageLinksAddon,
   createSuggestedCommandLinksAddon,
+  createPluginTerminalLinksAddon,
   createWebLinksAddon,
 } from "./TerminalAddonManager";
 import { TerminalOutputIngestService } from "./TerminalOutputIngestService";
@@ -37,6 +38,14 @@ import { TerminalParserHandler } from "./TerminalParserHandler";
 import { TerminalUnseenOutputTracker, UnseenOutputSnapshot } from "./TerminalUnseenOutputTracker";
 import { TerminalOffscreenManager } from "./TerminalOffscreenManager";
 import { TerminalLinkHandler } from "./TerminalLinkHandler";
+import {
+  activatePluginPatternLink,
+  findPluginPatternLinks,
+  findPluginUrlClaim,
+  getTerminalLinkSubject,
+  initPluginTerminalLinks,
+} from "./pluginTerminalLinks";
+import { hideTerminalLinkTooltip, showTerminalLinkTooltip } from "./terminalLinkTooltip";
 import { isSuggestedCommandSource, runSuggestedCommand } from "./suggestedCommandRunner";
 import { TerminalResizeController, hasStreamingWrites } from "./TerminalResizeController";
 import { TerminalRendererPolicy } from "./TerminalRendererPolicy";
@@ -824,9 +833,40 @@ class TerminalInstanceService {
       range: range ?? { start: { x: 0, y: 0 }, end: { x: 0, y: 0 } },
       text,
       activate: (event: MouseEvent, uri: string) => {
+        const current = this.instances.get(terminalId);
+        if (current) hideTerminalLinkTooltip(current.terminal);
         this.linkHandler.openLink(uri, terminalId, event);
       },
     };
+  }
+
+  /** Names the plugin a hovered URL goes to, when one claims it (#13798). */
+  private showUrlClaimTooltip(id: string, event: MouseEvent, url: string): void {
+    const managed = this.instances.get(id);
+    if (!managed || getTerminalLinkSubject(id) === null) return;
+    const claim = findPluginUrlClaim(url);
+    if (claim) showTerminalLinkTooltip(managed.terminal, event, `Open with ${claim.pluginName}`);
+  }
+
+  /**
+   * The plugin the hovered URL would go to, or null when none claims it or
+   * nothing URL-like is hovered. Read when the context menu opens, so it can
+   * name the plugin and still offer the external browser.
+   */
+  getHoveredLinkPluginName(id: string): string | null {
+    const link = this.instances.get(id)?.hoveredLink;
+    if (link?.kind !== "url" || getTerminalLinkSubject(id) === null) return null;
+    return findPluginUrlClaim(link.text)?.pluginName ?? null;
+  }
+
+  /**
+   * Opens the hovered URL in the external browser, skipping any plugin that
+   * claims it — the escape hatch every URL keeps (#13798).
+   */
+  openHoveredLinkExternally(id: string): void {
+    const link = this.instances.get(id)?.hoveredLink;
+    if (link?.kind !== "url") return;
+    this.linkHandler.openLink(link.text, id, undefined, { external: true });
   }
 
   /**
@@ -1993,22 +2033,51 @@ class TerminalInstanceService {
       try {
         managed.webLinksAddon = createWebLinksAddon(
           managed.terminal,
-          (event, uri) => this.linkHandler.openLink(uri, id, event),
+          (event, uri) => {
+            const current = this.instances.get(id);
+            if (current) hideTerminalLinkTooltip(current.terminal);
+            this.linkHandler.openLink(uri, id, event);
+          },
           {
-            hover: (_event, text) => {
+            hover: (event, text) => {
               const current = this.instances.get(id);
               if (!current) return;
               current.hoveredLink = this.makeSyntheticLink(text, null, id);
+              this.showUrlClaimTooltip(id, event, text);
             },
             leave: () => {
               const current = this.instances.get(id);
               if (!current) return;
               current.hoveredLink = null;
+              hideTerminalLinkTooltip(current.terminal);
             },
           }
         );
       } catch (err) {
         logWarn("Failed to create WebLinksAddon", { id, error: err });
+      }
+    }
+    // Plugin pattern matchers (#13798) register after every built-in provider:
+    // xterm hands an overlapping link to the earliest one, so a plugin's match
+    // never takes a click from a path, URL, figure or suggested command. The
+    // matchers are read live on each hover, so nothing here rebuilds when a
+    // plugin loads, stops or is switched off.
+    if (!managed.pluginLinksDisposable) {
+      const terminal = managed.terminal;
+      try {
+        initPluginTerminalLinks();
+        managed.pluginLinksDisposable = createPluginTerminalLinksAddon(terminal, {
+          find: (text) => (getTerminalLinkSubject(id) === null ? [] : findPluginPatternLinks(text)),
+          activate: (match) => {
+            hideTerminalLinkTooltip(terminal);
+            activatePluginPatternLink(match, id);
+          },
+          hover: (match, event) =>
+            showTerminalLinkTooltip(terminal, event, `Open with ${match.entry.pluginName}`),
+          leave: () => hideTerminalLinkTooltip(terminal),
+        });
+      } catch (err) {
+        logWarn("Failed to create PluginTerminalLinksAddon", { id, error: err });
       }
     }
     // ImageAddon is lazy-loaded (#10840), so creation is async and runs last —
@@ -2149,11 +2218,20 @@ class TerminalInstanceService {
     };
 
     return {
-      activate: (event: MouseEvent, text: string) => this.linkHandler.openLink(text, id, event),
-      hover: (_event: MouseEvent, text: string, range: IBufferRange) => {
-        setHoveredLink(this.makeSyntheticLink(text, range, id));
+      activate: (event: MouseEvent, text: string) => {
+        const current = this.instances.get(id);
+        if (current) hideTerminalLinkTooltip(current.terminal);
+        this.linkHandler.openLink(text, id, event);
       },
-      leave: () => setHoveredLink(null),
+      hover: (event: MouseEvent, text: string, range: IBufferRange) => {
+        setHoveredLink(this.makeSyntheticLink(text, range, id));
+        this.showUrlClaimTooltip(id, event, text);
+      },
+      leave: () => {
+        setHoveredLink(null);
+        const current = this.instances.get(id);
+        if (current) hideTerminalLinkTooltip(current.terminal);
+      },
     };
   }
 
@@ -2633,6 +2711,7 @@ class TerminalInstanceService {
       ["file links", managed.fileLinksDisposable],
       ["image links", managed.imageLinksDisposable],
       ["command links", managed.commandLinksDisposable],
+      ["plugin links", managed.pluginLinksDisposable],
       ["web links", managed.webLinksAddon],
     ] as const) {
       try {
@@ -2645,6 +2724,7 @@ class TerminalInstanceService {
     managed.fileLinksDisposable = null;
     managed.imageLinksDisposable = null;
     managed.commandLinksDisposable = null;
+    managed.pluginLinksDisposable = null;
     managed.webLinksAddon = null;
 
     // Before dispose: the manager holds pool/lease references to this exact
@@ -4185,6 +4265,11 @@ class TerminalInstanceService {
       managed.commandLinksDisposable?.dispose();
     } catch (error) {
       logWarn("Error disposing command links", { error });
+    }
+    try {
+      managed.pluginLinksDisposable?.dispose();
+    } catch (error) {
+      logWarn("Error disposing plugin links", { error });
     }
     try {
       managed.webLinksAddon?.dispose();

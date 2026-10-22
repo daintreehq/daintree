@@ -1,6 +1,10 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { LoadedPluginInfo, PromptTemplateContribution } from "@shared/types/plugin";
+import type {
+  LoadedPluginInfo,
+  PromptTemplateContribution,
+  TerminalLinkContribution,
+} from "@shared/types/plugin";
 import { _resetPluginRuntimeStoreForTest, usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 
 const logErrorMock = vi.hoisted(() => vi.fn());
@@ -19,6 +23,7 @@ function makePlugin(opts: {
   /** Project-owned instance: `id` stays the manifest id, the key gets qualified. */
   projectId?: string;
   promptTemplates?: PromptTemplateContribution[];
+  terminalLinks?: TerminalLinkContribution[];
   blocklisted?: boolean;
 }): LoadedPluginInfo {
   const projectId = opts.projectId ?? null;
@@ -48,6 +53,7 @@ function makePlugin(opts: {
         processTools: [],
         recipes: [],
         ...(opts.promptTemplates ? { promptTemplates: opts.promptTemplates } : {}),
+        ...(opts.terminalLinks ? { terminalLinks: opts.terminalLinks } : {}),
       },
     },
     dir: `/plugins/${opts.id}`,
@@ -442,5 +448,28 @@ describe("usePluginRuntimeStore", () => {
     await Promise.resolve();
 
     expect(usePluginRuntimeStore.getState().promptTemplates).toBe(before);
+  });
+
+  it("offers running plugins' terminal links with their command in the instance's namespace", async () => {
+    const invoice = { id: "inv", pattern: "INV-\\d{1,4}", actionId: "acme.a.open" };
+    listMock.mockResolvedValue([
+      makePlugin({ id: "acme.a", displayName: "Acme A", terminalLinks: [invoice] }),
+      makePlugin({ id: "acme.a", projectId: "p1", terminalLinks: [invoice] }),
+      makePlugin({ id: "acme.off", disabled: true, terminalLinks: [invoice] }),
+      // Outside its own namespace, so it could only have dodged the manifest gate.
+      makePlugin({ id: "acme.rogue", terminalLinks: [invoice] }),
+    ]);
+
+    usePluginRuntimeStore.getState().init();
+
+    await vi.waitFor(() => expect(usePluginRuntimeStore.getState().terminalLinks.length).toBe(2));
+    expect(
+      usePluginRuntimeStore
+        .getState()
+        .terminalLinks.map((e) => [e.key, e.pluginName, e.projectId, e.actionId])
+    ).toEqual([
+      ["acme.a::inv", "Acme A", null, "acme.a.open"],
+      ["project__p1__acme.a::inv", "acme.a", "p1", "project__p1__acme.a.open"],
+    ]);
   });
 });

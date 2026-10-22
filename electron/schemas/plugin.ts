@@ -52,6 +52,15 @@ import {
   PROMPT_TEMPLATE_MAX_BODY_LENGTH,
   findPromptTemplatePlaceholders,
 } from "../../shared/utils/pluginPromptTemplates.js";
+import {
+  TERMINAL_LINK_HOST_MAX_LENGTH,
+  TERMINAL_LINK_MAX_PER_PLUGIN,
+  TERMINAL_LINK_PATH_PREFIX_MAX_LENGTH,
+  TERMINAL_LINK_PATTERN_MAX_LENGTH,
+  checkTerminalLinkHost,
+  checkTerminalLinkPathPrefix,
+  checkTerminalLinkPattern,
+} from "../../shared/utils/pluginTerminalLinks.js";
 import { PROCESS_TOOL_ICON_BY_COMMAND } from "../../shared/config/processToolRegistry.js";
 import { AGENT_CLI_NAMES } from "../services/ProcessDetector/registries.js";
 import {
@@ -1130,6 +1139,37 @@ export const WorktreeSetupStepContributionSchema = z
       .min(PLUGIN_WORKTREE_SETUP_STEP_MIN_TIMEOUT_MS)
       .max(PLUGIN_WORKTREE_SETUP_STEP_MAX_TIMEOUT_MS)
       .optional(),
+  })
+  .strict();
+
+/**
+ * The URLs a `contributes.terminalLinks` entry claims (#13798). Host and path
+ * rules that JSON Schema can't express — no IP, nothing loopback, private or
+ * local-only — are applied by the manifest-level `superRefine`.
+ */
+export const TerminalLinkUrlSchema = z
+  .object({
+    scheme: z.enum(["https", "http"]).default("https"),
+    host: z.string().min(1).max(TERMINAL_LINK_HOST_MAX_LENGTH),
+    pathPrefix: z.string().min(1).max(TERMINAL_LINK_PATH_PREFIX_MAX_LENGTH).optional(),
+  })
+  .strict();
+
+/**
+ * `contributes.terminalLinks` manifest entry (#13798): terminal text a plugin
+ * makes clickable, dispatching one of its own commands. Exactly one of
+ * `pattern` or `url`; that rule, the pattern's safety rules and the action's
+ * ownership are checked by the manifest-level `superRefine`. Declarative and
+ * matched by the host on hover, so no capability is required. Strict so
+ * unknown fields fail loudly.
+ */
+export const TerminalLinkContributionSchema = z
+  .object({
+    id: z.string().min(1).max(64).regex(SAFE_ID_PATTERN),
+    actionId: z.string().min(1).max(200),
+    pattern: z.string().min(1).max(TERMINAL_LINK_PATTERN_MAX_LENGTH).optional(),
+    ignoreCase: z.boolean().optional(),
+    url: TerminalLinkUrlSchema.optional(),
   })
   .strict();
 
@@ -2636,6 +2676,7 @@ export const MANIFEST_CONTRIBUTION_CAPS = {
   skills: 50,
   themes: 20,
   promptTemplates: 50,
+  terminalLinks: TERMINAL_LINK_MAX_PER_PLUGIN,
   forgeProviders: 20,
   fileDecorationProviders: 50,
   fileEditors: 10,
@@ -3123,6 +3164,10 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
               .array(PromptTemplateContributionSchema)
               .max(MANIFEST_CONTRIBUTION_CAPS.promptTemplates)
               .default([]),
+            terminalLinks: z
+              .array(TerminalLinkContributionSchema)
+              .max(MANIFEST_CONTRIBUTION_CAPS.terminalLinks)
+              .default([]),
             recipes: z
               .array(RecipeContributionSchema)
               .max(MANIFEST_CONTRIBUTION_CAPS.recipes)
@@ -3166,6 +3211,7 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
             skills: [],
             themes: [],
             promptTemplates: [],
+            terminalLinks: [],
             forgeProviders: [],
             fileDecorationProviders: [],
             fileEditors: [],
@@ -3713,6 +3759,82 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
         }
       });
 
+      // A terminal link hands the matched text to the plugin, so it may only
+      // dispatch the plugin's OWN command — never a built-in or another
+      // plugin's — under the same own-namespace rules as a panel menu.
+      manifest.contributes.terminalLinks.forEach((link, index) => {
+        const path = ["contributes", "terminalLinks", index] as const;
+        const issue = (field: string, message: string, errorCode: string) =>
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [...path, field],
+            message,
+            params: { errorCode },
+          });
+        const { actionId } = link;
+        if (
+          !actionId.startsWith(ownNamespacePrefix) ||
+          actionId.length === ownNamespacePrefix.length ||
+          !PANEL_MENU_ACTION_ID.test(actionId)
+        ) {
+          issue(
+            "actionId",
+            `Terminal link actionId "${actionId}" must be one of this plugin's own actions, written "${manifest.name}.<id>" — a link's text can only go to the plugin that declared it.`,
+            "terminal_link_action_not_own"
+          );
+        } else if (declaredCommandActionIds.size > 0 && !declaredCommandActionIds.has(actionId)) {
+          issue(
+            "actionId",
+            `Terminal link actionId "${actionId}" is in this plugin's "${manifest.name}" namespace but matches no entry in contributes.commands — likely a typo for a declared command.`,
+            "action_id_undeclared_command"
+          );
+        }
+
+        if ((link.pattern === undefined) === (link.url === undefined)) {
+          issue(
+            link.pattern === undefined ? "pattern" : "url",
+            "A terminal link sets exactly one of pattern or url.",
+            "terminal_link_target"
+          );
+          return;
+        }
+        if (link.url !== undefined) {
+          if (link.ignoreCase !== undefined) {
+            issue(
+              "ignoreCase",
+              "ignoreCase applies to a pattern; a URL's host is already matched without regard to case.",
+              "terminal_link_ignore_case"
+            );
+          }
+          const hostProblem = checkTerminalLinkHost(link.url.host);
+          if (hostProblem !== null) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: [...path, "url", "host"],
+              message: `Terminal link ${hostProblem}.`,
+              params: { errorCode: "terminal_link_host" },
+            });
+          }
+          const pathProblem =
+            link.url.pathPrefix === undefined
+              ? null
+              : checkTerminalLinkPathPrefix(link.url.pathPrefix);
+          if (pathProblem !== null) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: [...path, "url", "pathPrefix"],
+              message: `Terminal link ${pathProblem}.`,
+              params: { errorCode: "terminal_link_path_prefix" },
+            });
+          }
+          return;
+        }
+        const patternProblem = checkTerminalLinkPattern(link.pattern!, link.ignoreCase === true);
+        if (patternProblem !== null) {
+          issue("pattern", `Terminal link ${patternProblem}.`, "terminal_link_pattern");
+        }
+      });
+
       // Duplicate contribution ids — within each contribution array, the bare
       // `id` is the lookup key the runtime keys its registries on (panel kind,
       // command descriptor, MCP server, agent, view, setting, forge provider,
@@ -3746,6 +3868,7 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
       reportDuplicateIds("skills", manifest.contributes.skills);
       reportDuplicateIds("themes", manifest.contributes.themes);
       reportDuplicateIds("promptTemplates", manifest.contributes.promptTemplates);
+      reportDuplicateIds("terminalLinks", manifest.contributes.terminalLinks);
       manifest.contributes.promptTemplates.forEach((template, templateIndex) => {
         const declared = new Set<string>();
         template.args.forEach((arg, argIndex) => {

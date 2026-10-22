@@ -69,6 +69,7 @@ import {
   type PluginSearchProviderInfo,
 } from "@shared/types/plugin";
 import { PathSegments } from "@/components/ui/PathSegments";
+import { PluginTerminalLinksRow } from "@/components/Plugin/PluginTerminalLinksSection";
 import { pluralize } from "@/lib/pluralize";
 
 /**
@@ -1151,6 +1152,10 @@ function ProjectPluginPane({
           })}
 
           {awaitingActivation && capabilitiesRow}
+
+          {loaded && (loaded.manifest.contributes.terminalLinks?.length ?? 0) > 0 && (
+            <PluginTerminalLinksRow pluginId={loaded.instanceId} />
+          )}
         </SettingsGroup>
       </SettingsSection>
 
