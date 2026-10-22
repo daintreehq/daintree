@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { getPluginManifestSchema, PROJECT_SCOPE_UNSCOPED_CONTRIBUTIONS } from "../plugin.js";
+import {
+  ContextMenuContributionSchema,
+  getPluginManifestSchema,
+  PROJECT_SCOPE_UNSCOPED_CONTRIBUTIONS,
+} from "../plugin.js";
 import type { PluginOrigin } from "../../../shared/types/plugin.js";
 
 /**
@@ -282,6 +286,26 @@ describe('structurally-global contributions under "scope": "project"', () => {
       },
     });
     expect(result.success).toBe(true);
+  });
+});
+
+describe("contextMenus project location", () => {
+  it("accepts a project-location context menu item", () => {
+    const result = ContextMenuContributionSchema.safeParse({
+      label: "Go",
+      actionId: "acme.project-plugin.go",
+      location: "project",
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("still rejects the removed panel location", () => {
+    const result = ContextMenuContributionSchema.safeParse({
+      label: "Go",
+      actionId: "acme.project-plugin.go",
+      location: "panel",
+    });
+    expect(result.success).toBe(false);
   });
 });
 

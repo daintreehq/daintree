@@ -105,7 +105,7 @@ Daintree reads the manifest eagerly at startup. Contribution points declared her
     "databases": [/* SQLite files opened with host.db */],
     "toolbarButtons": [/* ... */],
     "keybindings": [/* ... */],
-    "contextMenus": [/* worktree, terminal and file right-click entries */],
+    "contextMenus": [/* worktree, terminal, file and project right-click entries */],
     "menuItems": [/* application menu entries; not under scope: "project" */],
     "agentMcp": [/* tools Daintree serves to terminal agents; requires mcp:expose */],
     "mcpServers": [/* stdio servers Daintree connects to as a client */],
