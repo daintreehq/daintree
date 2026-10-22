@@ -149,4 +149,77 @@ describe("sanitizeRecipeTerminals", () => {
       expect(result).toEqual([]);
     });
   });
+
+  describe("plugin-only steps and fields (#13797)", () => {
+    const PANELS = new Set(["acme.records"]);
+
+    it("drops a plugin-panel step at every boundary that doesn't name the plugin's own kinds", () => {
+      const steps = [{ type: "plugin-panel", panelKindId: "acme.records" }];
+      expect(sanitizeRecipeTerminals(steps)).toEqual([]);
+      expect(sanitizeRecipeTerminals(steps, { pluginPanelKinds: new Set() })).toEqual([]);
+      expect(
+        sanitizeRecipeTerminals([{ type: "plugin-panel", panelKindId: "other.records" }], {
+          pluginPanelKinds: PANELS,
+        })
+      ).toEqual([]);
+    });
+
+    it("keeps an own panel step with only its panel fields, copying its args", () => {
+      const panelArgs = { recordId: "42", nested: { tab: "notes" } };
+      const [step] = sanitizeRecipeTerminals(
+        [
+          {
+            type: "plugin-panel",
+            title: "Records",
+            panelKindId: "acme.records",
+            panelArgs,
+            command: "rm -rf /",
+            env: { TOKEN: "x" },
+          },
+        ],
+        { pluginPanelKinds: PANELS }
+      );
+      expect(step).toEqual({
+        type: "plugin-panel",
+        title: "Records",
+        panelKindId: "acme.records",
+        panelArgs,
+      });
+      expect(step!.panelArgs).not.toBe(panelArgs);
+    });
+
+    it("drops a panel step whose args are not plain JSON within the cap", () => {
+      const oversized = { blob: "x".repeat(9000) };
+      expect(
+        sanitizeRecipeTerminals(
+          [
+            { type: "plugin-panel", panelKindId: "acme.records", panelArgs: oversized },
+            { type: "plugin-panel", panelKindId: "acme.records", panelArgs: ["not", "an object"] },
+          ],
+          { pluginPanelKinds: PANELS }
+        )
+      ).toEqual([]);
+    });
+
+    it("keeps an agent step's systemPrompt only where the boundary allows it", () => {
+      const steps = [{ type: "claude", systemPrompt: "  Use the ledger tools.  " }];
+      expect(sanitizeRecipeTerminals(steps)[0]!.systemPrompt).toBeUndefined();
+      expect(sanitizeRecipeTerminals(steps, { allowSystemPrompt: true })[0]!.systemPrompt).toBe(
+        "Use the ledger tools."
+      );
+      expect(
+        sanitizeRecipeTerminals([{ type: "terminal", systemPrompt: "x" }], {
+          allowSystemPrompt: true,
+        })[0]!.systemPrompt
+      ).toBeUndefined();
+    });
+
+    it("drops an agent step whose systemPrompt holds control characters", () => {
+      expect(
+        sanitizeRecipeTerminals([{ type: "claude", systemPrompt: "ok\u0007bell" }], {
+          allowSystemPrompt: true,
+        })
+      ).toEqual([]);
+    });
+  });
 });

@@ -93,6 +93,7 @@ import type {
   WorkerRestartResult,
   PluginAgentPane,
   PluginSendToAgentResult,
+  PluginRunRecipeResult,
   PluginTerminalScreenResult,
   PluginToolbarButtonRuntimeState,
 } from "../../../shared/types/plugin.js";
@@ -1579,6 +1580,15 @@ export class PluginDevWorkerHostProxy {
         this.callWithGrace<PluginSendToAgentResult>(
           "sendToAgent",
           { text, options },
+          { status: "cancelled" },
+          callOptions?.signal,
+          { hostAnswersAbort: true }
+        ),
+      // Likewise: once the user confirms, the run is theirs and main reports it.
+      runRecipe: (recipeId, options, callOptions) =>
+        this.callWithGrace<PluginRunRecipeResult>(
+          "runRecipe",
+          { recipeId, options },
           { status: "cancelled" },
           callOptions?.signal,
           { hostAnswersAbort: true }

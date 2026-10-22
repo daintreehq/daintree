@@ -159,3 +159,19 @@ describe("formatRecipePreviewLines (#11860)", () => {
     expect(joined).toContain("four");
   });
 });
+
+describe("plugin panel steps and system prompts in the preview (#13797)", () => {
+  it("says a panel step opens a panel and shows an agent's system prompt", () => {
+    const lines = formatRecipePreviewLines(
+      recipe({
+        terminals: [
+          { type: "plugin-panel", panelKindId: "acme.tools.records" },
+          { type: "claude", systemPrompt: "Use the ledger tools." },
+        ],
+      }),
+      { spawns: true }
+    );
+    expect(lines).toContain("1. opens Plugin panel");
+    expect(lines).toContain("   system prompt: Use the ledger tools.");
+  });
+});

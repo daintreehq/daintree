@@ -11,6 +11,7 @@ import { actionService } from "@/services/ActionService";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { detectUnresolvedVariables, type RecipeContext } from "@/utils/recipeVariables";
 import { getAgentConfig } from "@/config/agents";
+import { recipePanelStepName } from "@/components/Terminal/utils/recipeUtils";
 import { isInRepoRecipeId } from "@shared/utils/recipeFilename";
 import { isPluginRecipe } from "@shared/types/project";
 import { logError } from "@/utils/logger";
@@ -87,6 +88,9 @@ function getTerminalDisplayName(terminal: RecipeTerminal, index: number): string
   if (terminal.type === "dev-preview") {
     return "Dev server";
   }
+  if (terminal.type === "plugin-panel") {
+    return recipePanelStepName(terminal);
+  }
   if (terminal.type !== "terminal") {
     const agent = getAgentConfig(terminal.type);
     if (agent?.name) return agent.name;
@@ -94,17 +98,19 @@ function getTerminalDisplayName(terminal: RecipeTerminal, index: number): string
   return `Terminal ${index + 1}`;
 }
 
-// Only scans terminal.initialPrompt — that is the single field the store
-// passes through replaceRecipeVariables (recipeStore.ts:600). terminal.command,
+// Only scans the prompts — initialPrompt and a plugin step's systemPrompt are
+// the fields the store passes through replaceRecipeVariables. terminal.command,
 // terminal.devCommand, and terminal.args are forwarded raw, so flagging
 // {{var}} in them would mislead the user into thinking the substitution was
 // expected to happen.
 function collectUnresolvedVars(recipe: TerminalRecipe, context: RecipeContext): string[] {
   const seen = new Set<string>();
   for (const terminal of recipe.terminals) {
-    if (!terminal.initialPrompt) continue;
-    for (const name of detectUnresolvedVariables(terminal.initialPrompt, context)) {
-      seen.add(name);
+    for (const text of [terminal.initialPrompt, terminal.systemPrompt]) {
+      if (!text) continue;
+      for (const name of detectUnresolvedVariables(text, context)) {
+        seen.add(name);
+      }
     }
   }
   return Array.from(seen);

@@ -224,6 +224,11 @@ export const LazyPluginConfirmPromptDialog = lazy(() =>
     default: m.PluginConfirmPromptDialog,
   }))
 );
+export const LazyPluginRunRecipeDialog = lazy(() =>
+  import("./components/Plugin/PluginRunRecipeDialog").then((m) => ({
+    default: m.PluginRunRecipeDialog,
+  }))
+);
 export const LazyPluginCapabilityConfirmDialog = lazyWithPreload(
   () => import("./components/Plugin/PluginCapabilityConfirmDialog"),
   (m) => m.PluginCapabilityConfirmDialog

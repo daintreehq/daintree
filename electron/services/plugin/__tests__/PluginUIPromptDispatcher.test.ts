@@ -766,6 +766,55 @@ describe("PluginUIPromptDispatcher", () => {
     });
   });
 
+  describe("runRecipe (#13797)", () => {
+    const RUN: PluginUiPromptParams = {
+      kind: "runRecipe",
+      request: { recipeId: "acme.ledger.review", variables: {}, sourceLabel: "Acme" },
+    };
+    const respond = (promptId: string, payload: Record<string, unknown>) =>
+      ipcMainMock._emit(
+        CHANNELS.PLUGIN_UI_PROMPT_RESPONSE,
+        { sender: { id: 7 } },
+        { promptId, ...payload }
+      );
+
+    it("dismisses as cancelled, and refuses a second dialog as prompt-open", async () => {
+      const wc = makeWebContents(7);
+      setActiveWebContents(wc);
+      const d = new PluginUIPromptDispatcher({ isDisposed: () => false });
+      const first = d.requestPrompt("p1", RUN);
+      await expect(d.requestPrompt("p1", RUN)).resolves.toEqual({
+        status: "refused",
+        reason: "prompt-open",
+      });
+      d.cancelForPlugin("p1");
+      await expect(first).resolves.toEqual({ status: "cancelled" });
+    });
+
+    it("reports what a confirmed run did, even when the plugin aborts meanwhile", async () => {
+      const wc = makeWebContents(7);
+      setActiveWebContents(wc);
+      const d = new PluginUIPromptDispatcher({ isDisposed: () => false });
+      const controller = new AbortController();
+      const promise = d.requestPrompt("p1", RUN, undefined, controller.signal);
+      const promptId = lastPromptId(wc);
+      let settled = false;
+      void promise.then(() => {
+        settled = true;
+      });
+
+      respond(promptId, { accepted: true });
+      controller.abort();
+      await Promise.resolve();
+      expect(settled).toBe(false);
+
+      const outcome = { status: "ran", spawnedCount: 2, failedCount: 0 };
+      respond(promptId, { result: outcome });
+      await expect(promise).resolves.toEqual(outcome);
+      d.dispose();
+    });
+  });
+
   it("delivers a bound prompt to a cached (not currently visible) view", async () => {
     const cached = makeWebContents(31);
     setActiveWebContents(null);

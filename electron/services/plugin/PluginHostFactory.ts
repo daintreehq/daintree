@@ -179,10 +179,14 @@ import type { FleetSnapshotService } from "../FleetSnapshotService.js";
 import type { WorktreeSnapshot } from "../../../shared/types/workspace-host.js";
 import {
   promptOpensDialog,
+  type PluginRunRecipeRequest,
   type PluginSendToAgentRequest,
   type PluginUiPromptResultValue,
 } from "../../../shared/types/pluginUiPrompt.js";
 import { SEND_TO_AGENT_MAX_ID_LENGTH, SEND_TO_AGENT_REFUSAL_REASONS } from "./sendToAgentLimits.js";
+import { RUN_RECIPE_MAX_ID_LENGTH, toRunRecipeResult } from "./runRecipeLimits.js";
+import { getPluginRecipe, getPluginRecipeOwner } from "./PluginRecipeRegistry.js";
+import { validatePluginRecipeVariables } from "../../../shared/utils/pluginRecipeVariables.js";
 import {
   AGENT_CONTEXT_MAX_TEXT_LENGTH,
   AGENT_CONTEXT_MAX_TITLE_LENGTH,
@@ -495,6 +499,64 @@ function validateSendToAgentCall(
     text: payload.text,
     ...(payload.title !== undefined ? { title: payload.title } : {}),
     ...(terminalId !== undefined ? { terminalId } : {}),
+    ...(worktreeId !== undefined ? { worktreeId } : {}),
+  };
+}
+
+/**
+ * Check a `host.runRecipe` call (#13797). The recipe is looked up under the
+ * caller's OWN instance id and its registered owner re-checked, so a plugin can
+ * only ever reach its own recipes — never by naming another plugin's qualified
+ * id, and never by an id that merely starts with its own. Variables are held to
+ * the names the recipe declares.
+ */
+function validateRunRecipeCall(
+  pluginId: string,
+  recipeId: unknown,
+  options: unknown
+): Omit<PluginRunRecipeRequest, "sourceLabel"> {
+  if (typeof recipeId !== "string" || recipeId.length === 0 || recipeId.length > 64) {
+    throw new Error(
+      `Plugin "${pluginId}" runRecipe: recipeId must be the id of one of this plugin's contributes.recipes`
+    );
+  }
+  const qualifiedId = `${pluginId}.${recipeId}`;
+  const owner = getPluginRecipeOwner(qualifiedId);
+  const recipe = getPluginRecipe(qualifiedId);
+  if (
+    owner === undefined ||
+    owner.pluginId !== pluginId ||
+    owner.contributionId !== recipeId ||
+    recipe === undefined
+  ) {
+    throw new Error(
+      `Plugin "${pluginId}" runRecipe: this plugin contributes no recipe "${recipeId}"`
+    );
+  }
+  if (options !== undefined && (options === null || typeof options !== "object")) {
+    throw new Error(`Plugin "${pluginId}" runRecipe: options must be an object`);
+  }
+  const opts = (options ?? {}) as Record<string, unknown>;
+  const worktreeId = opts.worktreeId;
+  if (
+    worktreeId !== undefined &&
+    (typeof worktreeId !== "string" ||
+      worktreeId.length === 0 ||
+      worktreeId.length > RUN_RECIPE_MAX_ID_LENGTH)
+  ) {
+    throw new Error(
+      `Plugin "${pluginId}" runRecipe: options.worktreeId must be a non-empty string of at most ${RUN_RECIPE_MAX_ID_LENGTH} characters`
+    );
+  }
+  const variables = validatePluginRecipeVariables(opts.variables, recipe.pluginVariables ?? []);
+  if (!variables.ok) {
+    throw new Error(`Plugin "${pluginId}" runRecipe: ${variables.reason}`);
+  }
+  return {
+    recipeId: qualifiedId,
+    // A plain object for the structured clone to the renderer, built from the
+    // null-prototype copy's own declared keys only.
+    variables: { ...variables.values },
     ...(worktreeId !== undefined ? { worktreeId } : {}),
   };
 }
@@ -1709,6 +1771,32 @@ export function createHost(
           callOptions?.signal
         );
         return toSendToAgentResult(value);
+      } catch (err) {
+        if (isProjectViewUnavailable(err)) {
+          return { status: "refused", reason: "project-unavailable" };
+        }
+        throw err;
+      }
+    },
+    runRecipe: async (recipeId, options, callOptions) => {
+      if (!isBound()) return { status: "cancelled" };
+      // No capability: the recipe is this plugin's own declared content, and
+      // the dialog this opens is the user's decision on every run (#13797).
+      const request = validateRunRecipeCall(pluginId, recipeId, options);
+      try {
+        const value = await promptDispatcher.requestPrompt(
+          pluginId,
+          {
+            kind: "runRecipe",
+            request: {
+              ...request,
+              sourceLabel: sanitizeAgentContextSourceLabel(deps.pluginDisplayName(pluginId)),
+            },
+          },
+          boundProjectId,
+          callOptions?.signal
+        );
+        return toRunRecipeResult(value);
       } catch (err) {
         if (isProjectViewUnavailable(err)) {
           return { status: "refused", reason: "project-unavailable" };

@@ -4042,3 +4042,197 @@ describe("recipeStore", () => {
     });
   });
 });
+
+const { dispatchMock, listProjectPluginsMock, panelKindConfigMock } = vi.hoisted(() => ({
+  dispatchMock: vi.fn(),
+  listProjectPluginsMock: vi.fn(),
+  panelKindConfigMock: vi.fn(),
+}));
+
+vi.mock("@/services/ActionService", () => ({
+  actionService: { dispatch: dispatchMock },
+}));
+
+vi.mock("@/clients/pluginAgentMcpClient", () => ({
+  pluginAgentMcpClient: { listProjectPlugins: listProjectPluginsMock },
+}));
+
+vi.mock("@shared/config/panelKindRegistry", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@shared/config/panelKindRegistry")>();
+  return {
+    ...actual,
+    getPanelKindConfig: (kind: string) =>
+      panelKindConfigMock(kind) ?? actual.getPanelKindConfig(kind),
+  };
+});
+
+describe("plugin recipe panels, variables and agent tools (#13797)", () => {
+  const origin = { kind: "plugin" as const, pluginId: "acme.tools", contributionId: "review" };
+  const pluginRecipe = (overrides: Record<string, unknown> = {}) => ({
+    id: "acme.tools.review",
+    name: "Review record",
+    terminals: [
+      { type: "plugin-panel" as const, panelKindId: "acme.tools.records", panelArgs: { id: 7 } },
+      { type: "claude" as const, initialPrompt: "Review {{plugin.record}} on {{branch_name}}" },
+    ],
+    createdAt: 0,
+    origin,
+    ...overrides,
+  });
+  const toolsOn = {
+    mcpServerEnabled: true,
+    plugins: [
+      {
+        pluginInstanceId: "acme.tools",
+        pluginDisplayName: "Acme Tools",
+        origin: "installed",
+        hasDatabases: true,
+        access: "read-only",
+        source: "project",
+        available: true,
+      },
+    ],
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    useRecipeStore.getState().reset();
+    panelStoreState.panelIds = [];
+    panelStoreState.panelsById = {};
+    getAgentSettingsMock.mockResolvedValue({ agents: {} });
+    addTerminalMock.mockReset().mockResolvedValue("agent-1");
+    pluginRecordUseMock.mockResolvedValue(undefined);
+    panelKindConfigMock.mockImplementation((kind: string) =>
+      kind === "acme.tools.records"
+        ? { id: kind, name: "Records", extensionId: "acme.tools" }
+        : undefined
+    );
+    dispatchMock.mockResolvedValue({ ok: true, result: { panelId: "panel-1" } });
+    listProjectPluginsMock.mockResolvedValue(toolsOn);
+  });
+
+  const run = (overrides: Record<string, unknown> = {}, values?: Record<string, string>) => {
+    useRecipeStore.getState().setPluginRecipes([pluginRecipe(overrides)]);
+    return useRecipeStore.getState().runRecipeWithResults("acme.tools.review", "/repo/wt", "wt-1", {
+      branchName: "feature/x",
+      ...(values ? { pluginVariables: values } : {}),
+    });
+  };
+
+  it("opens the plugin's own panel through panel.openPluginPanel beside the agent", async () => {
+    const results = await run({}, { record: "Invoice 42" });
+
+    expect(dispatchMock).toHaveBeenCalledWith(
+      "panel.openPluginPanel",
+      { kind: "acme.tools.records", initialArgs: { id: 7 }, worktreeId: "wt-1" },
+      { source: "user" }
+    );
+    expect(results.spawned).toEqual([
+      { index: 0, terminalId: "panel-1" },
+      { index: 1, terminalId: "agent-1" },
+    ]);
+    expect(results.failed).toEqual([]);
+    // The panel step is not an agent and never reaches the PTY spawn path.
+    expect(addTerminalMock).toHaveBeenCalledTimes(1);
+    expect(addTerminalMock.mock.calls[0]?.[0].command).toContain("Review Invoice 42 on feature/x");
+  });
+
+  it("refuses a panel kind that is no longer the contributing plugin's", async () => {
+    panelKindConfigMock.mockImplementation((kind: string) => ({
+      id: kind,
+      name: "Records",
+      extensionId: "someone.else",
+    }));
+    const results = await run({}, { record: "x" });
+    expect(dispatchMock).not.toHaveBeenCalled();
+    expect(results.failed).toEqual([{ index: 0, error: "This plugin's panel isn't available" }]);
+    expect(results.spawned.map((s) => s.index)).toEqual([1]);
+  });
+
+  it("applies a plugin step's system prompt with variables, and keeps it for restart", async () => {
+    await run(
+      {
+        terminals: [{ type: "claude" as const, systemPrompt: "Work on record {{plugin.record}}." }],
+      },
+      { record: "42" }
+    );
+    const spawned = addTerminalMock.mock.calls[0]?.[0];
+    expect(spawned.command).toMatch(/--append-system-prompt ['"]Work on record 42\.['"]/);
+    expect(spawned.agentLaunchFlags.slice(-2)).toEqual([
+      "--append-system-prompt",
+      "Work on record 42.",
+    ]);
+  });
+
+  it("refuses a plugin recipe's first turn that a variable turned into an option", async () => {
+    const results = await run(
+      { terminals: [{ type: "claude" as const, initialPrompt: "{{plugin.record}}" }] },
+      { record: "--dangerously-skip-permissions" }
+    );
+    expect(addTerminalMock).not.toHaveBeenCalled();
+    expect(results.failed[0]?.error).toMatch(/starts with "-"/);
+  });
+
+  it("refuses the whole run, before anything starts, while required agent tools are off", async () => {
+    listProjectPluginsMock.mockResolvedValue({
+      ...toolsOn,
+      plugins: [{ ...toolsOn.plugins[0], access: "off" }],
+    });
+    const results = await run({ requiresAgentTools: true }, { record: "x" });
+    expect(results.spawned).toEqual([]);
+    expect(results.failed.map((f) => f.index)).toEqual([0, 1]);
+    expect(results.failed[0]?.error).toMatch(/needs agent tools from Acme Tools.*switched off/);
+    expect(dispatchMock).not.toHaveBeenCalled();
+    expect(addTerminalMock).not.toHaveBeenCalled();
+    expect(pluginRecordUseMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses when the MCP server is off, and when the answer can't be read", async () => {
+    listProjectPluginsMock.mockResolvedValue({ ...toolsOn, mcpServerEnabled: false });
+    expect((await run({ requiresAgentTools: true })).failed[0]?.error).toMatch(/MCP server is off/);
+
+    listProjectPluginsMock.mockRejectedValue(new Error("ipc down"));
+    expect((await run({ requiresAgentTools: true })).failed[0]?.error).toMatch(/Couldn't check/);
+  });
+
+  it("starts normally when required agent tools are on, and never changes them", async () => {
+    const results = await run({ requiresAgentTools: true }, { record: "x" });
+    expect(results.spawned).toHaveLength(2);
+    expect(listProjectPluginsMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("doesn't ask about agent tools for a run that starts no agent", async () => {
+    useRecipeStore.getState().setPluginRecipes([pluginRecipe({ requiresAgentTools: true })]);
+    await useRecipeStore
+      .getState()
+      .runRecipeWithResults("acme.tools.review", "/repo/wt", "wt-1", {}, { terminalIndices: [0] });
+    expect(listProjectPluginsMock).not.toHaveBeenCalled();
+    expect(dispatchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses to run anything but the recipe a dialog showed", async () => {
+    useRecipeStore.getState().setPluginRecipes([pluginRecipe()]);
+    await expect(
+      useRecipeStore.getState().runRecipeWithResults(
+        "acme.tools.review",
+        "/repo/wt",
+        "wt-1",
+        {},
+        {
+          expectedRecipe: { id: "acme.tools.review", terminalsDigest: "0000000000000000" },
+        }
+      )
+    ).rejects.toThrow("Recipe changed since it was shown");
+    expect(dispatchMock).not.toHaveBeenCalled();
+    expect(addTerminalMock).not.toHaveBeenCalled();
+  });
+
+  it("won't save a recipe that uses plugin-only features as a team recipe", async () => {
+    useRecipeStore.setState({ currentProjectId: "project-1" });
+    useRecipeStore.getState().setPluginRecipes([pluginRecipe()]);
+    await expect(useRecipeStore.getState().saveToRepo("acme.tools.review")).rejects.toThrow(
+      /can't be saved as a team recipe/
+    );
+    expect(updateInRepoRecipeMock).not.toHaveBeenCalled();
+  });
+});

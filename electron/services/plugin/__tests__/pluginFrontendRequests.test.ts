@@ -67,3 +67,50 @@ describe("PluginPromptPayloadSchema", () => {
     });
   });
 });
+
+describe("a remote recipe run (#13797)", () => {
+  const runRecipe: PluginUiPromptParams = {
+    kind: "runRecipe",
+    request: {
+      recipeId: "acme.ledger.review",
+      variables: { record_id: "42" },
+      sourceLabel: "Acme",
+    },
+  };
+
+  it("passes each well-formed outcome through and reads anything else as cancelled", () => {
+    for (const answer of [
+      { status: "ran", spawnedCount: 2, failedCount: 1 },
+      { status: "cancelled" },
+      { status: "refused", reason: "agent-tools-off" },
+    ]) {
+      expect(coercePromptAnswer(runRecipe, answer)).toEqual(answer);
+    }
+    for (const answer of [
+      undefined,
+      { status: "ran" },
+      { status: "ran", spawnedCount: -1, failedCount: 0 },
+      { status: "refused", reason: "made-up" },
+    ]) {
+      expect(coercePromptAnswer(runRecipe, answer)).toEqual({ status: "cancelled" });
+    }
+  });
+
+  it("validates the request a Shell is asked to show", () => {
+    const payload = (params: unknown) => ({
+      promptId: "p-1",
+      pluginId: "acme.ledger",
+      pluginDisplayName: "Acme",
+      params,
+    });
+    expect(PluginPromptPayloadSchema.safeParse(payload(runRecipe)).success).toBe(true);
+    expect(
+      PluginPromptPayloadSchema.safeParse(
+        payload({
+          kind: "runRecipe",
+          request: { recipeId: "x", variables: { a: 1 }, sourceLabel: "A" },
+        })
+      ).success
+    ).toBe(false);
+  });
+});

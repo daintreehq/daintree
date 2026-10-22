@@ -3278,16 +3278,29 @@ interface ThemeContribution {
  * strips on persist, so a manifest may not declare them. `type` accepts the
  * built-in terminal kinds plus an agent id the SAME plugin contributes — a
  * foreign plugin's agent id is dropped by the sanitizer at registration.
+ *
+ * `type: "plugin-panel"` opens one of this plugin's own `contributes.panels`
+ * (#13797), named by `panelId`, with `panelArgs` handed to the view.
  */
 interface RecipeContributionTerminal {
     type: string;
     title?: string;
     command?: string;
     env?: Record<string, string>;
+    /** First turn for an agent step. `{{plugin.<name>}}` takes one of the recipe's `variables`. */
     initialPrompt?: string;
+    /**
+     * Standing instruction appended to an agent step's system prompt, on agents
+     * whose CLI supports one. Takes `{{plugin.<name>}}` like `initialPrompt`.
+     */
+    systemPrompt?: string;
     args?: string;
     devCommand?: string;
     exitBehavior?: "keep" | "trash" | "remove";
+    /** A `contributes.panels[].id` of this plugin, for a `plugin-panel` step. */
+    panelId?: string;
+    /** Handed to a `plugin-panel` step's view as `initialArgs`, or as `openRequest` to a panel it reuses. */
+    panelArgs?: Record<string, unknown>;
 }
 /**
  * One argument of a {@link PromptTemplateContribution}: a single-line text
@@ -3350,6 +3363,18 @@ interface RecipeContribution {
      * `TerminalRecipe.autoAssign`, so any drift is a compile error there.
      */
     autoAssign?: "always" | "never" | "prompt";
+    /**
+     * Names the prompts may use as `{{plugin.<name>}}` (#13797), filled by
+     * {@link PluginHostApi.runRecipe}. A run that supplies no value for one
+     * leaves it empty, as a host variable with no value is.
+     */
+    variables?: string[];
+    /**
+     * The recipe's agents need this plugin's agent tools. While those are off in
+     * the project the launch is refused and says so, rather than starting agents
+     * without them. It never turns them on.
+     */
+    requiresAgentTools?: boolean;
 }
 /** One caption line in a {@link PluginTourChapter}, in seconds from the chapter start. */
 interface PluginTourCaption {
@@ -4844,6 +4869,45 @@ type PluginSendToAgentResult = {
     status: "refused";
     reason: PluginSendToAgentRefusalReason;
     worktreeId?: string;
+};
+/** Options for {@link PluginHostApi.runRecipe}. */
+interface PluginRunRecipeOptions {
+    /**
+     * Values for the recipe's declared `variables`, filling `{{plugin.<name>}}`
+     * in its prompts. A name the recipe doesn't declare is an error; a declared
+     * one left out is empty.
+     */
+    variables?: Record<string, string>;
+    /** The worktree to run it in. Omit for the active one. */
+    worktreeId?: string;
+}
+/**
+ * Why a {@link PluginHostApi.runRecipe} call ran nothing:
+ *
+ * - `unknown-worktree` — `options.worktreeId` is not a worktree of the plugin's project.
+ * - `recipe-unavailable` — the recipe isn't offered in the project's window,
+ *   for example because the plugin is hidden there.
+ * - `agent-tools-off` — the recipe declares `requiresAgentTools` and this
+ *   plugin's agent tools are off in the project. The dialog said so.
+ * - `project-unavailable` — the plugin's project has no open view, or it did not answer.
+ * - `prompt-open` — another dialog from this plugin is already open.
+ * - `launch-failed` — the user ran it and nothing started.
+ */
+type PluginRunRecipeRefusalReason = "unknown-worktree" | "recipe-unavailable" | "agent-tools-off" | "project-unavailable" | "prompt-open" | "launch-failed";
+/**
+ * How a {@link PluginHostApi.runRecipe} call ended. `ran` means the user
+ * confirmed and at least one step started; `failedCount` is the steps that
+ * didn't.
+ */
+type PluginRunRecipeResult = {
+    status: "ran";
+    spawnedCount: number;
+    failedCount: number;
+} | {
+    status: "cancelled";
+} | {
+    status: "refused";
+    reason: PluginRunRecipeRefusalReason;
 };
 /**
  * Options for {@link PluginHostApi.showToast}. Intentionally narrower than the
@@ -6512,6 +6576,28 @@ interface PluginHostApi extends PluginActivationApi {
      */
     sendToAgent(text: string, options?: PluginSendToAgentOptions, callOptions?: PluginHostCallOptions): Promise<PluginSendToAgentResult>;
     /**
+     * Offer to run one of this plugin's own `contributes.recipes`, named by its
+     * manifest `id`, with values for its `{{plugin.<name>}}` variables (#13797).
+     * Nothing starts until the user confirms: the host shows every step with its
+     * final prompt, system prompt and arguments resolved, and runs exactly that.
+     *
+     * Needs no capability — the recipe is the plugin's own declared content, and
+     * each run is the user's decision. Only the plugin's own recipes are
+     * reachable. A recipe declaring `requiresAgentTools` is refused while those
+     * tools are off in the project; this never turns them on.
+     *
+     * Resolves `{ status: "ran", spawnedCount, failedCount }`,
+     * `{ status: "cancelled" }` (the user dismissed it, or the call was aborted
+     * or the plugin unloaded before they answered), or
+     * `{ status: "refused", reason }` — see {@link PluginRunRecipeRefusalReason}.
+     * Once the user confirms, the run is theirs: an abort no longer cancels it.
+     *
+     * @throws {Error} If `recipeId` names no recipe this plugin contributes, or a
+     *   variable is undeclared, not a string, holds control characters, or is
+     *   longer than 8,192 characters (32,768 across all of them).
+     */
+    runRecipe(recipeId: string, options?: PluginRunRecipeOptions, callOptions?: PluginHostCallOptions): Promise<PluginRunRecipeResult>;
+    /**
      * Signal that decorations for `scope` (optionally narrowed to `paths`) have
      * changed and any renderer showing them should re-pull. Unlike the
      * `register*` methods this is NOT revoke-guarded: it is called from the
@@ -7330,4 +7416,4 @@ declare function syncedCollectionSnapshotChannel(channel: string): string;
  */
 declare function createSyncedCollection<T>(host: SyncedCollectionHost, channel: string, options: SyncedCollectionOptions<T>): Promise<SyncedCollection<T>>;
 
-export { AGENT_CONTEXT_DRAG_MIME, AGENT_CONTEXT_MAX_SOURCE_LABEL_LENGTH, AGENT_CONTEXT_MAX_TEXT_LENGTH, AGENT_CONTEXT_MAX_TITLE_LENGTH, type ActionDanger, type ActionDispatchError, type ActionDispatchResult, type ActionDispatchSuccess, type ActionError, type ActionErrorCode, type ActionExample, type ActionHandler, type ActionId, type ActionKind, type AgentContextDataTransfer, type AgentContextDragPayload, type AgentState, type AnyForgeProviderImpl, type AuthValidation, type AutoMergeCapability, type BuiltInActionId, type BuiltInPluginCapability, type CIStatus, type CheckRun, type CheckRunConclusion, type CheckRunStatus, type ChecksCapability, type ContextMenuContribution, type ContextMenuLocation, type CreateIssueInput, type CredentialImportCandidate, type CredentialImportCapability, type CredentialImportExpected, type CredentialImportFailureReason, type CredentialImportPreview, type CredentialImportUnavailable, type Credentials, type DisableAutoMergeResult, type EnableAutoMergeInput, type EnableAutoMergeResult, type FetchOptions, type FileDecoration, type FileDecorationContribution, type FileDecorationProviderDescriptor, type FileDecorationProviderImpl, type FileEditorContribution, type FileEditorMode, type ForgeCodeProviderImpl, type ForgeIssueProviderImpl, type ForgeLabel, type ForgeProviderBaseImpl, type ForgeProviderContribution, type ForgeProviderDescriptor, type ForgeProviderImpl, type ForgeProviderKind, type ForgeProviderRole, type ForgeUser, type Issue, type KeybindingContribution, type ListOptions, type McpServerContribution, type MenuItemContribution, type MenuItemLocation, type NormalizedIssueState, type NormalizedPRState, PLUGIN_PROCESS_STREAM_CHANNEL, PLUGIN_STYLE_ROOT_ATTRIBUTE, type PR, type PRCommitSummary, type PRMergeIntent, type PRMergeMethod, type PRMergeStatus, type Page, type PanelContribution, type PanelMenuItemContribution, type PanelReloadResult, type PanelViewProps, type PluginAccountAccessToken, type PluginAccountApi, type PluginAccountContribution, type PluginAccountIdentity, type PluginAccountKind, type PluginAccountState, type PluginActionContribution, type PluginActionManifestEntry, type PluginActivate, type PluginActivationApi, type PluginAgentMcpContribution, type PluginAgentPane, type PluginAgentRun, type PluginAgentSnapshot, type PluginAgentsApi, type PluginAllAgentsSnapshot, type PluginAuthor, type PluginCanDispatchResult, type PluginCapability, type PluginChannelSchema, type PluginClipboardApi, type PluginConfirmOptions, type PluginContextValue, type PluginDatabase, type PluginDatabaseApi, type PluginDatabaseBackupResult, type PluginDatabaseChangeEvent, type PluginDatabaseColumn, type PluginDatabaseContribution, type PluginDatabaseLocation, type PluginDatabaseLocationKind, type PluginDatabaseOpenOptions, type PluginDatabaseParams, type PluginDatabaseQueryContribution, type PluginDatabaseQueryParam, type PluginDatabaseQueryParamFormat, type PluginDatabaseQueryParamType, type PluginDatabaseRunResult, type PluginDatabaseStatements, type PluginDispatchOptions, type PluginDocumentsApi, type PluginDuplexProcessHandle, type PluginDuplexProcessSpawnOptions, type PluginFileDocument, type PluginFileDocumentChange, type PluginFileDocumentReadResult, type PluginFileDocumentSaveResult, type PluginFocusedPanel, type PluginFocusedPanelKind, type PluginFsApi, type PluginFsDirEntry, type PluginFsReadFilesEncoding, type PluginFsReadFilesEntry, type PluginFsReadFilesErrorCode, type PluginFsReadFilesOptions, type PluginFsReadWithRevisionResult, type PluginFsScope, type PluginFsStat, type PluginFsWalkEntry, type PluginFsWalkOptions, type PluginFsWalkResult, type PluginFsWatchOptions, type PluginGitApi, type PluginGitCommitOptions, type PluginGitCommitResult, type PluginGitStatus, type PluginGitStatusFile, type PluginHandlerOptions, type PluginHostActionsApi, type PluginHostApi, type PluginHostCallOptions, type PluginHostSubscriptionOptions, type PluginIdentity, type PluginInputBoxOptions, type PluginInvokeOrigin, type PluginIpcContext, type PluginIpcHandler, type PluginLocalSocketScope, type PluginLogger, type PluginManifest, type PluginManifestScopes, type PluginMcpApi, type PluginMcpCaller, type PluginMcpJsonSchema, type PluginMcpToolAnnotations, type PluginMcpToolDefinition, type PluginNetworkScope, type PluginNotifyAction, type PluginNotifyOptions, type PluginNotifyResult, type PluginPanelBadge, type PluginPanelBadgeColor, type PluginPanelLifecycleEvent, type PluginPanelLifecyclePhase, type PluginPanelToolbarItemState, type PluginPdfMargins, type PluginPdfPageSize, type PluginProcessApi, type PluginProcessDataChunk, type PluginProcessHandle, type PluginProcessMode, type PluginProcessSpawnOptions, type PluginProcessStreamEvent, type PluginPromptCallOptions, type PluginPtyProcessHandle, type PluginPtyProcessSpawnOptions, type PluginQuickPickItem, type PluginQuickPickOptions, type PluginRenderPdfOptions, type PluginRenderPdfResult, type PluginSendToAgentOptions, type PluginSendToAgentRefusalReason, type PluginSendToAgentResult, type PluginSettingsScope, type PluginStorageScope, type PluginSystemApi, type PluginSystemWakeEvent, type PluginTerminalReadScreenOptions, type PluginTerminalScreenResult, type PluginTerminalStatus, type PluginTerminalsApi, type PluginToastOptions, type PluginToolbarButtonRuntimeState, type PluginTypedIpcHandler, type PluginViewHostContext, type PluginViewHostKind, type PluginWorktreeCardStatus, type PluginWorktreeFileState, type PluginWorktreeLinked, type PluginWorktreeLinkedIssue, type PluginWorktreeLinkedPR, type PluginWorktreeReviewCheck, type PluginWorktreeSnapshot, type PluginWorktreeStatus, type PluginWorktreeStatusFile, type PluginWorktreesChange, type PluginWorktreesResult, type PluginWorktreesUnavailableReason, type RateLimitInfo, type RepoMergeSettings, type RepoMetadata, type RepoRef, type ResourceRef, type SettingDefinition, type SettingFieldType, type SettingsApi, type StorageApi, type SyncedCollection, type SyncedCollectionDelta, type SyncedCollectionHost, type SyncedCollectionOptions, type SyncedCollectionSnapshot, type ToolbarButtonContribution, type ToolbarButtonPopover, type ViewContribution, type ViewLocation, type WaitingReason, type WorkerRestartResult, createSyncedCollection, encodeAgentContextDragPayload, localAuthStubs, setAgentContextDragData, syncedCollectionSnapshotChannel };
+export { AGENT_CONTEXT_DRAG_MIME, AGENT_CONTEXT_MAX_SOURCE_LABEL_LENGTH, AGENT_CONTEXT_MAX_TEXT_LENGTH, AGENT_CONTEXT_MAX_TITLE_LENGTH, type ActionDanger, type ActionDispatchError, type ActionDispatchResult, type ActionDispatchSuccess, type ActionError, type ActionErrorCode, type ActionExample, type ActionHandler, type ActionId, type ActionKind, type AgentContextDataTransfer, type AgentContextDragPayload, type AgentState, type AnyForgeProviderImpl, type AuthValidation, type AutoMergeCapability, type BuiltInActionId, type BuiltInPluginCapability, type CIStatus, type CheckRun, type CheckRunConclusion, type CheckRunStatus, type ChecksCapability, type ContextMenuContribution, type ContextMenuLocation, type CreateIssueInput, type CredentialImportCandidate, type CredentialImportCapability, type CredentialImportExpected, type CredentialImportFailureReason, type CredentialImportPreview, type CredentialImportUnavailable, type Credentials, type DisableAutoMergeResult, type EnableAutoMergeInput, type EnableAutoMergeResult, type FetchOptions, type FileDecoration, type FileDecorationContribution, type FileDecorationProviderDescriptor, type FileDecorationProviderImpl, type FileEditorContribution, type FileEditorMode, type ForgeCodeProviderImpl, type ForgeIssueProviderImpl, type ForgeLabel, type ForgeProviderBaseImpl, type ForgeProviderContribution, type ForgeProviderDescriptor, type ForgeProviderImpl, type ForgeProviderKind, type ForgeProviderRole, type ForgeUser, type Issue, type KeybindingContribution, type ListOptions, type McpServerContribution, type MenuItemContribution, type MenuItemLocation, type NormalizedIssueState, type NormalizedPRState, PLUGIN_PROCESS_STREAM_CHANNEL, PLUGIN_STYLE_ROOT_ATTRIBUTE, type PR, type PRCommitSummary, type PRMergeIntent, type PRMergeMethod, type PRMergeStatus, type Page, type PanelContribution, type PanelMenuItemContribution, type PanelReloadResult, type PanelViewProps, type PluginAccountAccessToken, type PluginAccountApi, type PluginAccountContribution, type PluginAccountIdentity, type PluginAccountKind, type PluginAccountState, type PluginActionContribution, type PluginActionManifestEntry, type PluginActivate, type PluginActivationApi, type PluginAgentMcpContribution, type PluginAgentPane, type PluginAgentRun, type PluginAgentSnapshot, type PluginAgentsApi, type PluginAllAgentsSnapshot, type PluginAuthor, type PluginCanDispatchResult, type PluginCapability, type PluginChannelSchema, type PluginClipboardApi, type PluginConfirmOptions, type PluginContextValue, type PluginDatabase, type PluginDatabaseApi, type PluginDatabaseBackupResult, type PluginDatabaseChangeEvent, type PluginDatabaseColumn, type PluginDatabaseContribution, type PluginDatabaseLocation, type PluginDatabaseLocationKind, type PluginDatabaseOpenOptions, type PluginDatabaseParams, type PluginDatabaseQueryContribution, type PluginDatabaseQueryParam, type PluginDatabaseQueryParamFormat, type PluginDatabaseQueryParamType, type PluginDatabaseRunResult, type PluginDatabaseStatements, type PluginDispatchOptions, type PluginDocumentsApi, type PluginDuplexProcessHandle, type PluginDuplexProcessSpawnOptions, type PluginFileDocument, type PluginFileDocumentChange, type PluginFileDocumentReadResult, type PluginFileDocumentSaveResult, type PluginFocusedPanel, type PluginFocusedPanelKind, type PluginFsApi, type PluginFsDirEntry, type PluginFsReadFilesEncoding, type PluginFsReadFilesEntry, type PluginFsReadFilesErrorCode, type PluginFsReadFilesOptions, type PluginFsReadWithRevisionResult, type PluginFsScope, type PluginFsStat, type PluginFsWalkEntry, type PluginFsWalkOptions, type PluginFsWalkResult, type PluginFsWatchOptions, type PluginGitApi, type PluginGitCommitOptions, type PluginGitCommitResult, type PluginGitStatus, type PluginGitStatusFile, type PluginHandlerOptions, type PluginHostActionsApi, type PluginHostApi, type PluginHostCallOptions, type PluginHostSubscriptionOptions, type PluginIdentity, type PluginInputBoxOptions, type PluginInvokeOrigin, type PluginIpcContext, type PluginIpcHandler, type PluginLocalSocketScope, type PluginLogger, type PluginManifest, type PluginManifestScopes, type PluginMcpApi, type PluginMcpCaller, type PluginMcpJsonSchema, type PluginMcpToolAnnotations, type PluginMcpToolDefinition, type PluginNetworkScope, type PluginNotifyAction, type PluginNotifyOptions, type PluginNotifyResult, type PluginPanelBadge, type PluginPanelBadgeColor, type PluginPanelLifecycleEvent, type PluginPanelLifecyclePhase, type PluginPanelToolbarItemState, type PluginPdfMargins, type PluginPdfPageSize, type PluginProcessApi, type PluginProcessDataChunk, type PluginProcessHandle, type PluginProcessMode, type PluginProcessSpawnOptions, type PluginProcessStreamEvent, type PluginPromptCallOptions, type PluginPtyProcessHandle, type PluginPtyProcessSpawnOptions, type PluginQuickPickItem, type PluginQuickPickOptions, type PluginRenderPdfOptions, type PluginRenderPdfResult, type PluginRunRecipeOptions, type PluginRunRecipeRefusalReason, type PluginRunRecipeResult, type PluginSendToAgentOptions, type PluginSendToAgentRefusalReason, type PluginSendToAgentResult, type PluginSettingsScope, type PluginStorageScope, type PluginSystemApi, type PluginSystemWakeEvent, type PluginTerminalReadScreenOptions, type PluginTerminalScreenResult, type PluginTerminalStatus, type PluginTerminalsApi, type PluginToastOptions, type PluginToolbarButtonRuntimeState, type PluginTypedIpcHandler, type PluginViewHostContext, type PluginViewHostKind, type PluginWorktreeCardStatus, type PluginWorktreeFileState, type PluginWorktreeLinked, type PluginWorktreeLinkedIssue, type PluginWorktreeLinkedPR, type PluginWorktreeReviewCheck, type PluginWorktreeSnapshot, type PluginWorktreeStatus, type PluginWorktreeStatusFile, type PluginWorktreesChange, type PluginWorktreesResult, type PluginWorktreesUnavailableReason, type RateLimitInfo, type RepoMergeSettings, type RepoMetadata, type RepoRef, type ResourceRef, type SettingDefinition, type SettingFieldType, type SettingsApi, type StorageApi, type SyncedCollection, type SyncedCollectionDelta, type SyncedCollectionHost, type SyncedCollectionOptions, type SyncedCollectionSnapshot, type ToolbarButtonContribution, type ToolbarButtonPopover, type ViewContribution, type ViewLocation, type WaitingReason, type WorkerRestartResult, createSyncedCollection, encodeAgentContextDragPayload, localAuthStubs, setAgentContextDragData, syncedCollectionSnapshotChannel };

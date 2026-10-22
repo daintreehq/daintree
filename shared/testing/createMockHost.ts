@@ -97,6 +97,8 @@ import type {
   PluginFocusedPanel,
   PluginSendToAgentOptions,
   PluginSendToAgentResult,
+  PluginRunRecipeOptions,
+  PluginRunRecipeResult,
   PluginTerminalScreenResult,
   PluginPanelLifecycleEvent,
   PanelReloadResult,
@@ -179,6 +181,13 @@ export interface SentToAgentRecord {
   text: string;
   options: PluginSendToAgentOptions | undefined;
   result: PluginSendToAgentResult;
+}
+
+/** Captured `host.runRecipe(recipeId, options)` calls, with what each resolved. */
+export interface RunRecipeRecord {
+  recipeId: string;
+  options: PluginRunRecipeOptions | undefined;
+  result: PluginRunRecipeResult;
 }
 
 /** Captured `host.terminals.readScreen(terminalId, options)` calls, with what each resolved. */
@@ -321,6 +330,8 @@ export interface MockHostState {
   readonly sentToActiveAgentCalls: ReadonlyArray<SentToActiveAgentRecord>;
   /** Every `host.sendToAgent` call that got past validation, in order. */
   readonly sentToAgentCalls: ReadonlyArray<SentToAgentRecord>;
+  /** Every `host.runRecipe` call that got past validation, in order. */
+  readonly runRecipeCalls: ReadonlyArray<RunRecipeRecord>;
   /** Every `host.terminals.readScreen` call that got past validation, in order. */
   readonly readScreenCalls: ReadonlyArray<ReadScreenRecord>;
   readonly registeredForgeProviders: ReadonlyArray<RegisteredForgeProviderRecord>;
@@ -510,6 +521,11 @@ export interface MockHostState {
    * picker and resolves `{ status: "cancelled" }`.
    */
   simulateSendToAgentPick(terminalId: string | null): void;
+  /**
+   * Configure how the user answers `runRecipe`'s confirmation. The default,
+   * `{ status: "cancelled" }`, is the user dismissing it.
+   */
+  simulateRunRecipeResult(result: PluginRunRecipeResult): void;
   /**
    * Set what `terminals.readScreen(terminalId)` finds, or pass `null` to forget
    * the terminal so it reads `not-found`. An `ok` screen's `text` is trimmed to
@@ -1132,6 +1148,8 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
   const dispatchedActions: DispatchedActionRecord[] = [];
   const sentToActiveAgentCalls: SentToActiveAgentRecord[] = [];
   const sentToAgentCalls: SentToAgentRecord[] = [];
+  const runRecipeCalls: RunRecipeRecord[] = [];
+  let runRecipeResult: PluginRunRecipeResult = { status: "cancelled" };
   let agentPanes: PluginAgentPane[] = options.agents ?? [];
   let allAgentsSnapshot: PluginAllAgentsSnapshot = normalizePluginAllAgentsSnapshot(
     options.allAgents ?? { agents: [], degraded: false, lastSuccessfulAt: 0 }
@@ -2003,6 +2021,31 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
         }
       }
       sentToAgentCalls.push({ text, options, result });
+      return result;
+    },
+    async runRecipe(recipeId, options, callOptions) {
+      // The mock has no recipe registry or dialog: it checks the call's shape
+      // as production does, then answers what `simulateRunRecipeResult` set.
+      if (typeof recipeId !== "string" || recipeId.length === 0) {
+        throw new Error(
+          "runRecipe: recipeId must be the id of one of this plugin's contributes.recipes"
+        );
+      }
+      if (options !== undefined && (typeof options !== "object" || options === null)) {
+        throw new Error("runRecipe: options must be an object");
+      }
+      const variables: unknown = options?.variables;
+      if (variables !== undefined) {
+        if (typeof variables !== "object" || variables === null || Array.isArray(variables)) {
+          throw new Error("runRecipe: variables must be an object of strings");
+        }
+        for (const [name, value] of Object.entries(variables)) {
+          if (typeof value !== "string") throw new Error(`runRecipe: "${name}" must be a string`);
+        }
+      }
+      if (callOptions?.signal?.aborted) return { status: "cancelled" };
+      const result = { ...runRecipeResult };
+      runRecipeCalls.push({ recipeId, options, result });
       return result;
     },
     onDidChangeAgentState(callback, subscribeOptions) {
@@ -3051,6 +3094,7 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
     dispatchedActions,
     sentToActiveAgentCalls,
     sentToAgentCalls,
+    runRecipeCalls,
     readScreenCalls,
     registeredForgeProviders,
     registeredFileDecorationProviders,
@@ -3210,6 +3254,9 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
     },
     simulateSendToAgentPick(terminalId) {
       sendToAgentPick = terminalId;
+    },
+    simulateRunRecipeResult(result) {
+      runRecipeResult = { ...result };
     },
     simulateTerminalScreen(terminalId, screen) {
       if (screen === null) terminalScreens.delete(terminalId);

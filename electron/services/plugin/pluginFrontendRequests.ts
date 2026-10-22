@@ -10,6 +10,11 @@ import {
   AGENT_CONTEXT_MAX_TITLE_LENGTH,
 } from "../../../shared/utils/agentContextDrag.js";
 import { SEND_TO_AGENT_MAX_ID_LENGTH, SEND_TO_AGENT_REFUSAL_REASONS } from "./sendToAgentLimits.js";
+import { RUN_RECIPE_MAX_ID_LENGTH, toRunRecipeResult } from "./runRecipeLimits.js";
+import {
+  MAX_PLUGIN_RECIPE_VARIABLES,
+  PLUGIN_RECIPE_VARIABLE_MAX_LENGTH,
+} from "../../../shared/utils/pluginRecipeVariables.js";
 import type {
   PluginUiPromptParams,
   PluginUiPromptResultValue,
@@ -120,6 +125,17 @@ const PromptParamsSchema = z.discriminatedUnion("kind", [
       sourceLabel: z.string().min(1).max(256),
       terminalId: z.string().min(1).max(SEND_TO_AGENT_MAX_ID_LENGTH).optional(),
       worktreeId: z.string().min(1).max(SEND_TO_AGENT_MAX_ID_LENGTH).optional(),
+    }),
+  }),
+  z.object({
+    kind: z.literal("runRecipe"),
+    request: z.object({
+      recipeId: z.string().min(1).max(RUN_RECIPE_MAX_ID_LENGTH),
+      variables: z
+        .record(z.string().max(64), z.string().max(PLUGIN_RECIPE_VARIABLE_MAX_LENGTH))
+        .refine((values) => Object.keys(values).length <= MAX_PLUGIN_RECIPE_VARIABLES),
+      worktreeId: z.string().min(1).max(RUN_RECIPE_MAX_ID_LENGTH).optional(),
+      sourceLabel: z.string().min(1).max(256),
     }),
   }),
 ]);
@@ -279,5 +295,7 @@ export function coercePromptAnswer(
       const parsed = SendToAgentAnswerSchema.safeParse(answer);
       return parsed.success ? parsed.data : { status: "cancelled" };
     }
+    case "runRecipe":
+      return toRunRecipeResult(answer);
   }
 }

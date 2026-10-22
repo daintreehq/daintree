@@ -37,6 +37,7 @@ import type {
   DispatchParams,
   SendToActiveAgentParams,
   SendToAgentParams,
+  RunRecipeParams,
   TerminalsReadScreenParams,
   InvalidateFileDecorationsParams,
   LoggerParams,
@@ -900,6 +901,11 @@ export class PluginDevWorkerMainBridge {
         // a retired worker's question comes off the screen with it.
         const p = params as SendToAgentParams;
         return this.host.sendToAgent(p.text, p.options, { signal });
+      }
+      case "runRecipe": {
+        // Same as sendToAgent: the dialog belongs to this generation.
+        const p = params as RunRecipeParams;
+        return this.host.runRecipe(p.recipeId, p.options, { signal });
       }
       case "showQuickPick": {
         // Reuse the real host so validation/provenance/cancellation all match

@@ -27,7 +27,7 @@ A plugin that declares `"scope": "project"` lives in a project's own repository 
 | `agentMcp` | Available — every credential for the plugin's server is minted per terminal and bound to one project, and a project plugin's server can only be granted to its own project |
 | `databases` | Available — a `"project"` database is a file in the repository, resolved against the bound project root; `"local"` stays in this machine's plugin data |
 | `fileDecorationProviders` | Available — consulted only for the owning project's views, ahead of installed providers in the merge |
-| `recipes` | Available — only in the owning project's launcher, empty state and recipe manager, and gone while the plugin is switched off or its folder is untrusted. A terminal may use `terminal`, `dev-preview` or a built-in agent; `agents` is rejected below, so there is no plugin agent of its own to name |
+| `recipes` | Available — only in the owning project's launcher, empty state and recipe manager, and gone while the plugin is switched off or its folder is untrusted. A terminal may use `terminal`, `dev-preview`, `plugin-panel` for one of the plugin's own panels, or a built-in agent; `agents` is rejected below, so there is no plugin agent of its own to name |
 | `promptTemplates` | Available — offered only in the owning project's composer, and gone while the plugin is switched off or its folder is untrusted |
 | `menuItems` | Rejected — the application menu is one OS-level menu shared by every window, with no per-project projection |
 | `agents` | Rejected — the agent roster is one app-wide registry mirrored into the shared pty-host, and launch identity outlives the project binding |
@@ -1230,16 +1230,21 @@ Named multi-terminal launch layouts a plugin ships. A contributed recipe is regi
 | `terminals` | yes | 1–10 terminal definitions. See the table below. |
 | `showInEmptyState` | no | Default for the empty-state pin. A user pin/unpin overrides it. |
 | `autoAssign` | no | `always` \| `never` \| `prompt` — default issue auto-assign behaviour during quick worktree creation. A user choice overrides it. |
+| `variables` | no | Names the prompts may use as `{{plugin.<name>}}`, filled by [`host.runRecipe`](./host-api.md#runrecipe--offer-to-run-one-of-your-recipes). Lowercase letters, digits and underscores, starting with a letter; at most 20. A prompt using an undeclared one is a manifest error (`recipe_variable_undeclared`). |
+| `requiresAgentTools` | no | The recipe's agents need this plugin's [agent tools](./agent-extensions.md). While they're off in the project, or Daintree's MCP server is off, a launch is refused with a message saying so, instead of starting the agents without them. It never turns them on. Needs `contributes.agentMcp` or `contributes.databases` and at least one agent step. |
 
 **Terminal fields:**
 
 | Field | Required | Notes |
 | --- | --- | --- |
-| `type` | yes | `terminal`, `dev-preview`, a built-in agent id, or an agent id **this same plugin** contributes. Any other value drops that terminal at load. At most 64 characters. |
+| `type` | yes | `terminal`, `dev-preview`, `plugin-panel`, a built-in agent id, or an agent id **this same plugin** contributes. Any other value drops that terminal at load. At most 64 characters. |
 | `title` | no | Custom pane title. At most 200 characters. |
 | `command` | no | Shell command, for `type: "terminal"`. At most 4096 characters. |
 | `devCommand` | no | Dev-server command, for `type: "dev-preview"`. At most 4096 characters. |
-| `initialPrompt` | no | Sent to an agent terminal after boot. Supports the same `{{issue_number}}` / `{{branch_name}}` variables user recipes do. At most 8192 characters. |
+| `initialPrompt` | no | Sent to an agent terminal after boot. Supports the same `{{issue_number}}` / `{{branch_name}}` variables user recipes do, plus the recipe's own `{{plugin.<name>}}`. At most 8192 characters. |
+| `systemPrompt` | no | Standing instruction appended to an agent step's system prompt, on agents whose CLI supports one; a launch on one that doesn't fails that step. Takes the same variables as `initialPrompt`. At most 2000 characters. |
+| `panelId` | for `plugin-panel` | One of **this plugin's own** `contributes.panels` ids (`recipe_panel_unknown` otherwise). |
+| `panelArgs` | no | For `plugin-panel`: handed to the view as `initialArgs`, or as `openRequest` to a panel the step reuses. At most 8 KB of JSON; refused for a PTY-backed panel (`recipe_panel_args_pty`). |
 | `args` | no | Extra CLI flags for an agent terminal, as one string. At most 4096 characters. |
 | `env` | no | Environment variables for the spawned terminal. |
 | `exitBehavior` | no | `keep` \| `trash` \| `remove`. |
@@ -1251,6 +1256,27 @@ Named multi-terminal launch layouts a plugin ships. A contributed recipe is regi
 **Your own metadata survives.** Frecency (`lastUsedAt` / usage history), the empty-state pin, and `autoAssign` are yours, not the plugin's, so they live in a sidecar (`plugin-recipe-metadata.json` in the global config dir) keyed by qualified id. They persist across disable, reload, and plugin updates, and are purged only when you explicitly uninstall the plugin. A project plugin's metadata is kept even while its project is closed, since nothing outside the repository can tell a closed project from a removed one.
 
 **Referencing your own agent.** A recipe terminal may name an agent id from the same plugin's `contributes.agents`. Ownership is resolved against the live registry, not the manifest: if another plugin already claimed that agent id, the terminal is dropped rather than silently launching someone else's agent.
+
+**Opening your panel beside an agent.** A `plugin-panel` step opens one of your panels the way `panel.openPluginPanel` does: reusing an open one, in the recipe's worktree, or in the dock for a `scope: "project"` panel. Fields that belong to another kind of step are refused on it rather than ignored (`recipe_panel_step_fields`). Panel steps, plugin variables and system prompts only work in your own recipe, so **Save to repo** refuses a recipe that uses them rather than copying a recipe that quietly does less.
+
+```json
+{
+  "id": "review-record",
+  "name": "Review record",
+  "variables": ["record_id", "record_title"],
+  "requiresAgentTools": true,
+  "terminals": [
+    { "type": "plugin-panel", "panelId": "records", "panelArgs": { "mode": "review" } },
+    {
+      "type": "claude",
+      "initialPrompt": "Review {{plugin.record_title}} and note anything that looks wrong.",
+      "systemPrompt": "You are reviewing ledger record {{plugin.record_id}}. Use the ledger tools to read it."
+    }
+  ]
+}
+```
+
+**Running your own recipe.** Your plugin can offer to run one of its own recipes with values for its variables through [`host.runRecipe`](./host-api.md#runrecipe--offer-to-run-one-of-your-recipes) — "Open in agent" from your own panel, for example. Nothing starts until the user confirms a dialog showing every step resolved, final prompt and system prompt included. A launch the user starts from the recipe list leaves a variable with no value empty, as a host variable with no value is.
 
 **Agent-initiated runs are confirmation-gated.** Any agent or MCP dispatch that carries a `recipeId` — through `recipe.run` or a composite like `worktree.createWithRecipe` — pauses for a single human approval showing the resolved recipe, its origin, and the commands each terminal will run (env keys are listed, values are not). This applies to every recipe tier, not just plugin-contributed ones. An external MCP session bound to one workspace has no one watching that view to answer the dialog, so there the dispatch is refused outright rather than paused (#11789).
 
