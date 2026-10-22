@@ -78,6 +78,7 @@ import { getAgentConfig } from "@/config/agents";
 import { usePluginToolbarButtons } from "@/hooks/usePluginToolbarButtons";
 
 import { buildPluginToolbarMeta } from "@/components/Layout/pluginToolbarMeta";
+import { ProjectToolbarProfileNotice } from "@/components/Settings/ProjectToolbarProfileNotice";
 import { cn } from "@/lib/utils";
 import { DROP_TARGET_FRAME } from "@/components/DragDrop/dropIndicator";
 import { useArmedDropTarget } from "@/components/DragDrop/useArmedDropTarget";
@@ -1053,6 +1054,7 @@ export function ToolbarSettingsTab() {
 
   return (
     <div className="space-y-8">
+      <ProjectToolbarProfileNotice />
       <SettingsSection
         title="Toolbar buttons"
         badge={ownerMarker("device")}

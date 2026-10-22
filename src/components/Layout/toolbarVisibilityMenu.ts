@@ -13,6 +13,8 @@ export interface ToolbarVisibilityMenuRow {
   label: string;
   icon: ComponentType<ToolbarButtonIconProps>;
   checked: boolean;
+  /** Listed but not changeable from this menu right now (#13783). */
+  disabled?: boolean;
 }
 
 export interface ToolbarVisibilityMenuRows {

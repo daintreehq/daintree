@@ -11,6 +11,7 @@ import {
 import {
   PRESENTATION_FEATURE_IDS,
   PRESENTATION_FEATURES,
+  isToolbarPresentationFeature,
   type PresentationFeatureDefinition,
   type PresentationFeatureId,
   type PresentationLevel,
@@ -80,15 +81,23 @@ export function usePendingSuggestion(): {
   const profileProjectId = useProjectPresentationStore((s) => s.projectId);
   const suggestion = useProjectPresentationStore((s) => s.suggestion);
   const answer = useProjectPresentationStore((s) => s.suggestionAnswer);
+  const useProjectToolbar = useProjectPresentationStore((s) => s.useProjectToolbar);
+  const promotedPluginButtons = useProjectPresentationStore((s) => s.promotedPluginButtons);
 
   if (project == null || !loaded || profileProjectId !== project.id || suggestion === null) {
     return null;
   }
-  const profile = { loaded, projectId: profileProjectId };
-  const current = resolvePresentationFor(project, { ...profile, levels });
+  const profile = { loaded, projectId: profileProjectId, promotedPluginButtons };
+  const current = resolvePresentationFor(project, { ...profile, levels, useProjectToolbar });
+  // Accepting toolbar levels turns this project's toolbar back on (#13783), as
+  // main does, so the question names everything that would come back with it.
+  const suggestsToolbar = PRESENTATION_FEATURE_IDS.some(
+    (id) => suggestion.levels[id] !== undefined && isToolbarPresentationFeature(id)
+  );
   const next = resolvePresentationFor(project, {
     ...profile,
     levels: { ...levels, ...suggestion.levels } satisfies PresentationLevels,
+    useProjectToolbar: suggestsToolbar ? null : useProjectToolbar,
   });
   const changes = suggestedChanges(current, next);
   if (changes.length === 0) return null;

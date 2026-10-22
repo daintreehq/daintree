@@ -1,3 +1,5 @@
+import type { ToolbarButtonId } from "../types/toolbar.js";
+
 /**
  * The per-project presentation profile (#13771): how much room each built-in
  * surface takes in one project.
@@ -5,8 +7,15 @@
  * The vocabulary is closed and host-owned. A feature joins it only by a host
  * change here, and nothing a profile can name is a safety or observation
  * signal — agent state and attention, conflicts, dirty state, the trust banner,
- * Project settings, the plugin manager and terminal launch are never features,
+ * Project settings, the plugin manager and the launcher are never features,
  * so no profile, the user's or a repository's, can quiet them.
+ *
+ * Toolbar features (#13783) only ever demote: a demoted button moves into the
+ * toolbar's `…` overflow, where it still launches what it always did. The
+ * toolbar buttons that carry state or reach the rest of the app — the app
+ * menu, sidebar, assistant and portal toggles, memory pause, voice recording,
+ * problems, notifications, Canopy, settings, the launcher, the plugin tray and
+ * the overflow itself — are never features.
  *
  * Levels:
  * - `shown` — drawn where it always is.
@@ -52,7 +61,17 @@ export interface PresentationFeatureDefinition {
    * keeps an explicit "shown" from polling git in a folder that has none.
    */
   requiresRepository?: boolean;
+  /**
+   * The toolbar item this feature places (#13783): its button id, or `true`
+   * for a toolbar surface with no button of its own (the branch chip). Toolbar
+   * features follow "Use this project's toolbar" — while that is off they draw
+   * as the app-wide toolbar does.
+   */
+  toolbar?: ToolbarButtonId | true;
 }
+
+const DEMOTABLE: readonly PresentationLevel[] = ["shown", "demoted"];
+const shownByDefault = () => "shown" as const;
 
 export const PRESENTATION_FEATURES = {
   forgeStats: {
@@ -64,6 +83,72 @@ export const PRESENTATION_FEATURES = {
     // A folder without a repository has no commits, issues or PRs to count.
     defaultLevel: ({ gitBacked }) => (gitBacked ? "shown" : "hidden"),
     requiresRepository: true,
+    toolbar: "forge-stats",
+  },
+  copyTree: {
+    label: "CopyTree",
+    noun: "CopyTree",
+    description: "The toolbar button that copies the worktree's context for an agent",
+    levels: DEMOTABLE,
+    contextKey: "presentationCopyTree",
+    defaultLevel: shownByDefault,
+    toolbar: "copy-tree",
+  },
+  resumeSessions: {
+    label: "Resume sessions",
+    noun: "resume sessions",
+    description: "The toolbar button that reopens agent sessions from earlier",
+    levels: DEMOTABLE,
+    contextKey: "presentationResumeSessions",
+    defaultLevel: shownByDefault,
+    toolbar: "resume-sessions",
+  },
+  terminal: {
+    label: "Terminal button",
+    noun: "the terminal button",
+    description: "The toolbar button that opens a terminal",
+    levels: DEMOTABLE,
+    contextKey: "presentationTerminal",
+    defaultLevel: shownByDefault,
+    toolbar: "terminal",
+  },
+  fileBrowser: {
+    label: "File browser button",
+    noun: "the file browser button",
+    description: "The toolbar button that opens the file browser",
+    levels: DEMOTABLE,
+    contextKey: "presentationFileBrowser",
+    defaultLevel: shownByDefault,
+    toolbar: "file-browser",
+  },
+  browser: {
+    label: "Browser button",
+    noun: "the browser button",
+    description: "The toolbar button that opens a browser",
+    levels: DEMOTABLE,
+    contextKey: "presentationBrowser",
+    defaultLevel: shownByDefault,
+    toolbar: "browser",
+  },
+  devServer: {
+    label: "Dev server button",
+    noun: "the dev server button",
+    description: "The toolbar button that starts the dev server",
+    levels: DEMOTABLE,
+    contextKey: "presentationDevServer",
+    defaultLevel: shownByDefault,
+    toolbar: "dev-server",
+  },
+  branchChip: {
+    label: "Branch chip",
+    noun: "the branch chip",
+    description: "The current branch on the project pill",
+    levels: DEMOTABLE,
+    contextKey: "presentationBranchChip",
+    defaultLevel: shownByDefault,
+    // A folder without a repository has no branch to name.
+    requiresRepository: true,
+    toolbar: true,
   },
   gitDetail: {
     label: "Git detail",
@@ -141,14 +226,76 @@ export function isPresentationFeatureAvailable(
   return context.gitBacked || definition.requiresRepository !== true;
 }
 
+/** Whether `feature` places something on the toolbar, and so follows "Use this project's toolbar". */
+export function isToolbarPresentationFeature(feature: PresentationFeatureId): boolean {
+  const definition: PresentationFeatureDefinition = PRESENTATION_FEATURES[feature];
+  return definition.toolbar !== undefined;
+}
+
+/** The toolbar features that place a button, keyed by that button's id. */
+export const PRESENTATION_FEATURE_BY_TOOLBAR_BUTTON: ReadonlyMap<
+  ToolbarButtonId,
+  PresentationFeatureId
+> = new Map(
+  PRESENTATION_FEATURE_IDS.flatMap((id) => {
+    const toolbar = (PRESENTATION_FEATURES[id] as PresentationFeatureDefinition).toolbar;
+    return typeof toolbar === "string" ? [[toolbar, id] as const] : [];
+  })
+);
+
+/** The feature that places toolbar button `id`, for any id the toolbar holds. */
+export function presentationFeatureForToolbarButton(id: string): PresentationFeatureId | undefined {
+  for (const [buttonId, feature] of PRESENTATION_FEATURE_BY_TOOLBAR_BUTTON) {
+    if (buttonId === id) return feature;
+  }
+  return undefined;
+}
+
+/** At most this many of a project plugin's own toolbar buttons can be promoted by its profile. */
+export const MAX_PROMOTED_PLUGIN_BUTTONS = 3;
+
+/**
+ * Whether this project's toolbar overlay applies (#13783). An explicit choice
+ * wins; with none, it is on exactly when the profile places something on the
+ * toolbar, so a project nobody has touched keeps the app-wide toolbar.
+ */
+export function isProjectToolbarActive(profile: {
+  levels: PresentationLevels;
+  useProjectToolbar: boolean | null;
+  promotedPluginButtons: readonly string[];
+}): boolean {
+  if (profile.useProjectToolbar !== null) return profile.useProjectToolbar;
+  return hasProjectToolbarOverrides(profile);
+}
+
+/** Whether the profile sets anything the toolbar draws differently. */
+export function hasProjectToolbarOverrides(profile: {
+  levels: PresentationLevels;
+  promotedPluginButtons: readonly string[];
+}): boolean {
+  return (
+    profile.promotedPluginButtons.length > 0 ||
+    PRESENTATION_FEATURE_IDS.some(
+      (id) => isToolbarPresentationFeature(id) && profile.levels[id] !== undefined
+    )
+  );
+}
+
+/**
+ * `toolbar: false` resolves every toolbar feature to its default, which is
+ * what "Use this project's toolbar" turned off means; the levels stay stored.
+ */
 export function resolvePresentation(
   levels: PresentationLevels,
-  context: PresentationDefaultsContext
+  context: PresentationDefaultsContext,
+  options: { toolbar?: boolean } = {}
 ): ResolvedPresentation {
   const resolved = {} as ResolvedPresentation;
+  const toolbar = options.toolbar ?? true;
   for (const id of PRESENTATION_FEATURE_IDS) {
+    const applies = toolbar || !isToolbarPresentationFeature(id);
     resolved[id] = isPresentationFeatureAvailable(id, context)
-      ? (levels[id] ?? defaultPresentationLevel(id, context))
+      ? ((applies ? levels[id] : undefined) ?? defaultPresentationLevel(id, context))
       : "hidden";
   }
   return resolved;

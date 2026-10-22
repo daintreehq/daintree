@@ -14,6 +14,11 @@ import { BUILT_IN_AGENT_IDS, type BuiltInAgentId } from "../config/agentIds.js";
  */
 export type PluginToolbarButtonId = `${string}.${string}`;
 
+/** Shape only, not registration: whether `id` is spelled like a plugin button id. */
+export function isPluginToolbarButtonIdShape(id: string): id is PluginToolbarButtonId {
+  return id.includes(".");
+}
+
 /**
  * Identifier for a launcher row that has no toolbar button id of its own: a
  * plugin or user-defined agent, a panel kind outside the fixed four, or a

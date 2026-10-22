@@ -27,7 +27,7 @@ import {
   Check,
 } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
-import { BrandSurface, FolderTree, Folders } from "@/components/icons";
+import { BrandSurface, FolderTree, Folders, GitBranch } from "@/components/icons";
 import { buildPluginToolbarMeta } from "./pluginToolbarMeta";
 import {
   TOOLBAR_BUTTON_METADATA,
@@ -36,12 +36,16 @@ import {
 } from "./toolbarButtonMetadata";
 import { getToolbarDividerAfterIds, orderToolbarButtonsByGroup } from "./toolbarButtonGrouping";
 import { ToolbarContextMenuItems } from "./ToolbarContextMenuItems";
-import { ToolbarButtonsContextMenu } from "./ToolbarButtonsContextMenu";
+import {
+  ToolbarButtonsContextMenu,
+  type ProjectToolbarMenuState,
+} from "./ToolbarButtonsContextMenu";
 import {
   buildToolbarVisibilityMenuRows,
   canListToolbarButton,
   resolveToolbarButtonMetadata,
   type ToolbarSide,
+  type ToolbarVisibilityMenuRow,
 } from "./toolbarVisibilityMenu";
 import {
   isToolbarButtonOnToolbar,
@@ -81,7 +85,19 @@ import {
 import { buildLauncherToolbarMeta, useLauncherToolbarCatalog } from "./launcherToolbarCatalog";
 import { LauncherToolbarButton } from "./LauncherToolbarButton";
 import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
-import { pluginManifestIdFromInstanceKey } from "@shared/types/plugin";
+import {
+  pluginManifestIdFromInstanceKey,
+  projectIdFromPluginInstanceKey,
+} from "@shared/types/plugin";
+import {
+  MAX_PROMOTED_PLUGIN_BUTTONS,
+  PRESENTATION_FEATURE_BY_TOOLBAR_BUTTON,
+  presentationFeatureForToolbarButton,
+} from "@shared/config/presentationProfile";
+import { isPluginToolbarButtonIdShape } from "@shared/types/toolbar";
+import { useProjectPresentationStore } from "@/store/projectPresentationStore";
+import { copyWithToast } from "@/lib/copyWithToast";
+import { saveProjectToolbar } from "./saveProjectToolbar";
 import type { ToolbarButtonConfig } from "@shared/config/toolbarButtonRegistry";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
@@ -102,7 +118,7 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { useToolbarOverflow, withDemotedOverflow } from "@/hooks/useToolbarOverflow";
-import { useResolvedPresentation } from "@/hooks/useResolvedPresentation";
+import { useProjectToolbarOverlay, useResolvedPresentation } from "@/hooks/useResolvedPresentation";
 import { useWorktreeActions } from "@/hooks/useWorktreeActions";
 import {
   useAriaKeyshortcuts,
@@ -198,9 +214,8 @@ const PROJECT_SCOPED_TOOLBAR_IDS = new Set<AnyToolbarButtonId>(["dev-server", "f
 const VOICE_RECORDING_PINNED: ReadonlySet<AnyToolbarButtonId> = new Set(["voice-recording"]);
 const NO_PINNED_IDS: ReadonlySet<AnyToolbarButtonId> = new Set();
 
-// Buttons this project's presentation profile demotes (#13771). Stable sets so
-// the overflow hook's recalculate callback doesn't re-fire on every render.
-const FORGE_STATS_DEMOTED: ReadonlySet<AnyToolbarButtonId> = new Set(["forge-stats"]);
+// Buttons this project's presentation profile demotes (#13771). Stable so the
+// overflow hook's recalculate callback doesn't re-fire on every render.
 const NO_DEMOTED_IDS: ReadonlySet<AnyToolbarButtonId> = new Set();
 
 function ForgeStatsPlaceholder() {
@@ -290,6 +305,9 @@ interface OverflowMenuProps {
   // Action ids keyed by toolbar button id, so each overflow item shows the
   // same live binding its visible button does (issue #9821).
   keybindingById: Partial<Record<string, string>>;
+  // The project pill's branch chip, when this project's profile demotes it
+  // here (#13783): what the chip would have said, and what selecting copies.
+  branchRow?: { label: string; copyLabel: string; copyValue: string } | null;
 }
 
 // Overflow `…` menu. A component (not just a render helper) so the trigger can
@@ -317,6 +335,7 @@ function OverflowMenu({
   launcherAgentIds,
   panelTrayDisabled,
   keybindingById,
+  branchRow = null,
 }: OverflowMenuProps) {
   const [open, setOpen] = useState(false);
   // Read here rather than threaded through props: the overflow copy-tree item
@@ -341,7 +360,7 @@ function OverflowMenu({
     }
     setOpen(nextOpen);
   };
-  const isEmpty = overflowIds.length === 0;
+  const isEmpty = overflowIds.length === 0 && branchRow === null;
 
   // Keep the controlled `open` state in sync when the menu empties: Radix
   // closes the popover when `open` is forced false, but `open` state would
@@ -364,7 +383,7 @@ function OverflowMenu({
   // which read five hidden commands as five problems. What the badge is
   // actually reporting rides behind the count instead, as the observations
   // themselves: the error count, the unread count, the agent states seen.
-  const n = overflowIds.length;
+  const n = overflowIds.length + (branchRow === null ? 0 : 1);
   const observations: string[] = [];
   if (overflowIds.includes("problems") && errorCount > 0) {
     observations.push(`${pluralize(errorCount, "error")}`);
@@ -434,6 +453,19 @@ function OverflowMenu({
           }
         }}
       >
+        {branchRow !== null && (
+          <DropdownMenuGroup key="branch-chip">
+            <DropdownMenuItem
+              onClick={() => copyWithToast(branchRow.copyLabel, branchRow.copyValue)}
+              data-toolbar-overflow-branch=""
+            >
+              <GitBranch className="mr-2 h-3.5 w-3.5" />
+              <span className="flex-1">{branchRow.label}</span>
+              <DropdownMenuMeta>Copy</DropdownMenuMeta>
+            </DropdownMenuItem>
+          </DropdownMenuGroup>
+        )}
+        {branchRow !== null && overflowIds.length > 0 && <DropdownMenuSeparator />}
         {overflowIds.flatMap((id, idx) => {
           if (id === "forge-stats") {
             const isLast = idx === overflowIds.length - 1;
@@ -749,8 +781,21 @@ export function Toolbar({
   // This project's presentation profile (#13771). Demoted folds the pill into
   // the `…` menu; hidden drops its slot. A folder without a repository
   // resolves to hidden at any level: it has nothing to count.
-  const forgeStatsLevel = useResolvedPresentation().forgeStats;
+  const presentation = useResolvedPresentation();
+  const forgeStatsLevel = presentation.forgeStats;
   const forgeStatsHidden = currentProject !== null && forgeStatsLevel === "hidden";
+  // "Use this project's toolbar" (#13783): demoted buttons fold into `…`,
+  // explicitly shown ones and promoted plugin buttons claim a slot. All of it
+  // is applied at the render boundary; the app-wide layout is never written.
+  const toolbarOverlay = useProjectToolbarOverlay();
+  const projectToolbarMode = currentProject !== null && toolbarOverlay.active;
+  const profileLevels = useProjectPresentationStore((s) => s.levels);
+  const setPresentationLevel = useProjectPresentationStore((s) => s.setLevel);
+  const setProjectToolbarEnabled = useProjectPresentationStore((s) => s.setToolbarEnabled);
+  const setProjectPluginButtonPromoted = useProjectPresentationStore(
+    (s) => s.setPluginButtonPromoted
+  );
+  const branchChipDemoted = currentProject !== null && presentation.branchChip === "demoted";
   const workspaceIdentity = activeWorkspaceIdentity(currentProject, currentScratch);
   const loadProjects = useProjectStore((state) => state.loadProjects);
   const getCurrentProject = useProjectStore((state) => state.getCurrentProject);
@@ -1796,7 +1841,24 @@ export function Toolbar({
     ]
   );
 
-  const pinnedButtons = toolbarLayout.pinnedButtons;
+  const appPinnedButtons = toolbarLayout.pinnedButtons;
+  // The app-wide pins with this project's toolbar laid over them. Only ever
+  // read: every write still goes to the app-wide store or the profile.
+  const pinnedButtons = useMemo(() => {
+    if (!projectToolbarMode) return appPinnedButtons;
+    const next = { ...appPinnedButtons };
+    for (const [buttonId, feature] of PRESENTATION_FEATURE_BY_TOOLBAR_BUTTON) {
+      // Demoted counts too: the button has to stay mounted to be folded into
+      // `…`, even where it is off app-wide.
+      const level = profileLevels[feature];
+      if (level === "shown" || level === "demoted") next[buttonId] = true;
+    }
+    for (const id of toolbarOverlay.promotedPluginButtons) {
+      // Plugin button ids are `{instanceKey}.{id}`; main only stores those.
+      if (isPluginToolbarButtonIdShape(id)) next[id] = true;
+    }
+    return next;
+  }, [projectToolbarMode, appPinnedButtons, profileLevels, toolbarOverlay.promotedPluginButtons]);
 
   // An agent the user explicitly pinned but that sits in neither side array
   // still has to render (#11680). Two ways to get here, and neither can be
@@ -2005,8 +2067,21 @@ export function Toolbar({
   // row sizes as if the button weren't there, and always in the `…` menu. It
   // stays mounted like any evicted button — the menu's forge rows open the
   // pill's dropdowns through its ref.
-  const demotedIds =
-    currentProject !== null && forgeStatsLevel === "demoted" ? FORGE_STATS_DEMOTED : NO_DEMOTED_IDS;
+  // Keyed on a string so the set only changes when what is demoted does.
+  const demotedKey =
+    currentProject === null
+      ? ""
+      : [...PRESENTATION_FEATURE_BY_TOOLBAR_BUTTON]
+          .filter(([, feature]) => presentation[feature] === "demoted")
+          .map(([buttonId]) => buttonId)
+          .join(" ");
+  const demotedIds = useMemo<ReadonlySet<AnyToolbarButtonId>>(() => {
+    if (demotedKey === "") return NO_DEMOTED_IDS;
+    const demoted = new Set(demotedKey.split(" "));
+    return new Set(
+      [...PRESENTATION_FEATURE_BY_TOOLBAR_BUTTON.keys()].filter((id) => demoted.has(id))
+    );
+  }, [demotedKey]);
   const measuredLeftIds = useMemo(
     () => availableLeftIds.filter((id) => !demotedIds.has(id)),
     [availableLeftIds, demotedIds]
@@ -2114,6 +2189,10 @@ export function Toolbar({
     [rightAgentObservations, rightPluginBadgeCount]
   );
 
+  // Read from the side lists, not measured overflow: a demoted button never
+  // reaches the overflow hook.
+  const copyTreeOnRight = rightOverflow.includes("copy-tree");
+
   const leftVisibleSet = useMemo(() => new Set<AnyToolbarButtonId>(leftVisible), [leftVisible]);
   const rightVisibleSet = useMemo(() => new Set<AnyToolbarButtonId>(rightVisible), [rightVisible]);
 
@@ -2156,7 +2235,7 @@ export function Toolbar({
       // `.focus()` at this point is bounced straight back inside. The move
       // happens in the menu's own onCloseAutoFocus, once the trap has let go.
       if (focusWasInPanel) {
-        const side = measuredRightOverflow.includes("copy-tree") ? "right" : "left";
+        const side = copyTreeOnRight ? "right" : "left";
         copyTreeEvictionFocusRef.current =
           toolbarRef.current?.querySelector<HTMLElement>(
             `[data-toolbar-overflow-trigger][data-toolbar-overflow-side="${side}"][data-visible="true"]`
@@ -2164,7 +2243,7 @@ export function Toolbar({
       }
       setCopyTreeOpen(false);
     }
-  }, [measuredLeftOverflow, measuredRightOverflow, demotedIds]);
+  }, [measuredLeftOverflow, measuredRightOverflow, demotedIds, copyTreeOnRight]);
 
   const renderGroupedButtons = (
     buttonIds: AnyToolbarButtonId[],
@@ -2248,11 +2327,45 @@ export function Toolbar({
     ]
   );
 
+  // This project's own plugin buttons (#13783). Installed plugins have no say
+  // over placement (#11304), so only these can be promoted by the profile.
+  const overlayProjectId = toolbarOverlay.projectId;
+  const ownProjectPluginButtonIds = useMemo(
+    () =>
+      overlayProjectId === null
+        ? []
+        : pluginButtonIds.filter(
+            (id) =>
+              projectIdFromPluginInstanceKey(pluginConfigs.get(id)?.pluginId ?? "") ===
+              overlayProjectId
+          ),
+    [overlayProjectId, pluginButtonIds, pluginConfigs]
+  );
+
+  // In project mode the menu also offers this project's own plugin buttons
+  // that are only in the tray, so one can be promoted from here.
+  const menuRightButtons = useMemo(() => {
+    if (!projectToolbarMode) return positionedRightButtons;
+    const listed = new Set<AnyToolbarButtonId>([
+      ...positionedLeftButtons,
+      ...positionedRightButtons,
+    ]);
+    const trayOnly = ownProjectPluginButtonIds.filter((id) => !listed.has(id));
+    return trayOnly.length === 0
+      ? positionedRightButtons
+      : [...positionedRightButtons, ...trayOnly];
+  }, [
+    projectToolbarMode,
+    positionedLeftButtons,
+    positionedRightButtons,
+    ownProjectPluginButtonIds,
+  ]);
+
   // Rows for the empty-space menu (#12355), built from the side lists before
   // the visibility filter so a hidden button still has one.
-  const toolbarMenuRows = useMemo(
+  const appToolbarMenuRows = useMemo(
     () =>
-      buildToolbarVisibilityMenuRows(positionedLeftButtons, positionedRightButtons, {
+      buildToolbarVisibilityMenuRows(positionedLeftButtons, menuRightButtons, {
         resolveMetadata: (id) =>
           resolveToolbarButtonMetadata(id, TOOLBAR_BUTTON_METADATA, dynamicOverflowMeta),
         canList: (id) =>
@@ -2267,7 +2380,7 @@ export function Toolbar({
       }),
     [
       positionedLeftButtons,
-      positionedRightButtons,
+      menuRightButtons,
       dynamicOverflowMeta,
       buttonRegistry,
       effectiveAgentSettings,
@@ -2276,8 +2389,57 @@ export function Toolbar({
     ]
   );
 
+  const projectPromotedCount = toolbarOverlay.promotedPluginButtons.length;
+  // In project mode a row is the profile's to change only for the closed list
+  // of demotable built-ins and this project's own plugin buttons. Every other
+  // row stays listed with its app-wide state, but can't be changed from here:
+  // this menu writes nothing app-wide while the project's toolbar is in use.
+  const toolbarMenuRows = useMemo(() => {
+    if (!projectToolbarMode) return appToolbarMenuRows;
+    const ownPlugins = new Set<string>(ownProjectPluginButtonIds);
+    const promoted = new Set(toolbarOverlay.promotedPluginButtons);
+    const toProjectRow = (row: ToolbarVisibilityMenuRow): ToolbarVisibilityMenuRow => {
+      const feature = presentationFeatureForToolbarButton(row.id);
+      if (feature !== undefined) {
+        const level = presentation[feature];
+        return { ...row, checked: row.checked && level !== "demoted" && level !== "hidden" };
+      }
+      if (ownPlugins.has(row.id)) {
+        // An app-wide pin isn't the profile's to take away.
+        const appPinned = appPinnedButtons[row.id] === true;
+        const atCap = !promoted.has(row.id) && projectPromotedCount >= MAX_PROMOTED_PLUGIN_BUTTONS;
+        return { ...row, disabled: appPinned || (atCap && !row.checked) };
+      }
+      return { ...row, disabled: true };
+    };
+    return {
+      left: appToolbarMenuRows.left.map(toProjectRow),
+      right: appToolbarMenuRows.right.map(toProjectRow),
+    };
+  }, [
+    projectToolbarMode,
+    appToolbarMenuRows,
+    ownProjectPluginButtonIds,
+    toolbarOverlay.promotedPluginButtons,
+    projectPromotedCount,
+    presentation,
+    appPinnedButtons,
+  ]);
+
   const handleToolbarMenuToggle = useCallback(
     (buttonId: AnyToolbarButtonId, side: ToolbarSide, onToolbar: boolean) => {
+      if (projectToolbarMode) {
+        // Never falls through to an app-wide setter below.
+        const feature = presentationFeatureForToolbarButton(buttonId);
+        if (feature !== undefined) {
+          // An explicit "shown" keeps the button on this project's toolbar
+          // even where it is off app-wide.
+          saveProjectToolbar(() => setPresentationLevel(feature, onToolbar ? "shown" : "demoted"));
+        } else if ((ownProjectPluginButtonIds as readonly string[]).includes(buttonId)) {
+          saveProjectToolbar(() => setProjectPluginButtonPromoted(buttonId, onToolbar));
+        }
+        return;
+      }
       setToolbarButtonOnToolbar(buttonId, side, onToolbar, toolbarPlacementState, {
         setAgentPinned,
         toggleButtonVisibility,
@@ -2288,6 +2450,10 @@ export function Toolbar({
       });
     },
     [
+      projectToolbarMode,
+      setPresentationLevel,
+      ownProjectPluginButtonIds,
+      setProjectPluginButtonPromoted,
       toolbarPlacementState,
       setAgentPinned,
       toggleButtonVisibility,
@@ -2381,7 +2547,8 @@ export function Toolbar({
     overflowIds: AnyToolbarButtonId[],
     side: "left" | "right",
     severity: OverflowBadgeSeverity,
-    agentObservations: readonly string[]
+    agentObservations: readonly string[],
+    branchRow: OverflowMenuProps["branchRow"] = null
   ) => (
     <OverflowMenu
       overflowIds={overflowIds}
@@ -2402,6 +2569,7 @@ export function Toolbar({
       launcherAgentIds={launcherAgentIds}
       panelTrayDisabled={panelTrayDisabled}
       keybindingById={OVERFLOW_KEYBINDING_BY_ID}
+      branchRow={branchRow}
     />
   );
 
@@ -2450,6 +2618,14 @@ export function Toolbar({
       : chipState === "detached"
         ? `detached at ${shortSha(headSha) ?? "unknown commit"}`
         : undefined;
+  // Beside the pill, in the left `…`, while this project demotes the chip.
+  const branchOverflowRow: OverflowMenuProps["branchRow"] = !branchChipDemoted
+    ? null
+    : chipState === "visible" && branchName
+      ? { label: branchName, copyLabel: "Branch name", copyValue: branchName }
+      : chipState === "detached" && headSha
+        ? { label: pillBranchLabel ?? headSha, copyLabel: "Commit hash", copyValue: headSha }
+        : null;
   // Routed through the switcher row's copy so the two "Copy path" rows confirm
   // the same way; the menu closes on select, leaving nothing else to show it.
   const handleCopyProjectPath = useCallback(() => {
@@ -2542,7 +2718,7 @@ export function Toolbar({
         <ToolbarProjectPill
           workspaceIdentity={workspaceIdentity}
           emoji={currentProject?.emoji}
-          chipState={chipState}
+          chipState={branchChipDemoted ? "hidden" : chipState}
           branchName={branchName}
           headSha={headSha}
           isDropdownOpen={isDropdownOpen}
@@ -2553,6 +2729,24 @@ export function Toolbar({
     </ContextMenuTrigger>
   );
 
+  const projectToolbarMenu: ProjectToolbarMenuState | null =
+    toolbarOverlay.available && currentProject !== null
+      ? {
+          active: toolbarOverlay.active,
+          onToggle: (active) => saveProjectToolbar(() => setProjectToolbarEnabled(active)),
+          branchChip:
+            toolbarOverlay.active && presentation.branchChip !== "hidden"
+              ? {
+                  checked: presentation.branchChip === "shown",
+                  onToggle: (shown) =>
+                    saveProjectToolbar(() =>
+                      setPresentationLevel("branchChip", shown ? "shown" : "demoted")
+                    ),
+                }
+              : null,
+        }
+      : null;
+
   // Static per view: a project view is bound to one host for its life.
   const remoteWindow = getViewHostId() !== null;
 
@@ -2561,7 +2755,11 @@ export function Toolbar({
       {/* Brand marks in the toolbar are painted on the toolbar surface, not on
           whichever surface the theme happens to make hardest. */}
       <BrandSurface surface="surface-toolbar">
-        <ToolbarButtonsContextMenu rows={toolbarMenuRows} onToggle={handleToolbarMenuToggle}>
+        <ToolbarButtonsContextMenu
+          rows={toolbarMenuRows}
+          onToggle={handleToolbarMenuToggle}
+          projectToolbar={projectToolbarMenu}
+        >
           <div
             ref={toolbarRef}
             role="toolbar"
@@ -2621,7 +2819,13 @@ export function Toolbar({
               >
                 {renderGroupedButtons(effectiveLeftButtons, leftVisibleSet)}
               </div>
-              {renderOverflowMenu(visibleLeftOverflow, "left", leftMenuSeverity, leftObservations)}
+              {renderOverflowMenu(
+                visibleLeftOverflow,
+                "left",
+                leftMenuSeverity,
+                leftObservations,
+                branchOverflowRow
+              )}
             </div>
 
             {/* CENTER GROUP - Grid-centered, shrinks gracefully on narrow windows */}

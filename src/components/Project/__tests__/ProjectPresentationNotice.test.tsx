@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Project } from "@shared/types/project";
 import type { ProjectPresentationSnapshot } from "@shared/types/ipc/projectPresentation";
+import { resolvePresentation, type PresentationLevels } from "@shared/config/presentationProfile";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useProjectStore } from "@/store/projectStore";
 import {
@@ -106,17 +107,13 @@ afterEach(() => {
 
 describe("suggestedChanges", () => {
   it("names only the features accepting would actually change", () => {
-    const changes = suggestedChanges(
-      { forgeStats: "shown", gitDetail: "shown" },
-      { forgeStats: "hidden", gitDetail: "shown" }
-    );
+    const resolve = (levels: PresentationLevels) =>
+      resolvePresentation(levels, { gitBacked: true });
+    const changes = suggestedChanges(resolve({}), resolve({ forgeStats: "hidden" }));
     expect(changes).toEqual([{ feature: "forgeStats", level: "hidden" }]);
     expect(describeChanges(changes)).toBe("Forge stats hidden");
     expect(
-      suggestedChanges(
-        { forgeStats: "hidden", gitDetail: "shown" },
-        { forgeStats: "hidden", gitDetail: "shown" }
-      )
+      suggestedChanges(resolve({ forgeStats: "hidden" }), resolve({ forgeStats: "hidden" }))
     ).toEqual([]);
   });
 

@@ -10,6 +10,10 @@ import {
   DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
 import { useToolbarPreferencesStore } from "@/store/toolbarPreferencesStore";
+import { useProjectPresentationStore } from "@/store/projectPresentationStore";
+import { useProjectToolbarOverlay } from "@/hooks/useResolvedPresentation";
+import { presentationFeatureForToolbarButton } from "@shared/config/presentationProfile";
+import { saveProjectToolbar } from "./saveProjectToolbar";
 import type { AnyToolbarButtonId } from "@/../../shared/types/toolbar";
 import {
   TOOLBAR_CUSTOMIZE_ICON,
@@ -55,7 +59,15 @@ export function ToolbarContextMenuItems({
   onUnpin,
 }: ToolbarContextMenuItemsProps) {
   const toggleButtonVisibility = useToolbarPreferencesStore((s) => s.toggleButtonVisibility);
-  const handleUnpin = onUnpin ?? (() => toggleButtonVisibility(buttonId, side));
+  const projectToolbarActive = useProjectToolbarOverlay().active;
+  const setPresentationLevel = useProjectPresentationStore((s) => s.setLevel);
+  const feature = presentationFeatureForToolbarButton(buttonId);
+  // While this project's toolbar is in use (#13783), unpinning a demotable
+  // built-in moves it into `…` for this project and writes nothing app-wide.
+  const handleUnpin =
+    projectToolbarActive && feature !== undefined
+      ? () => saveProjectToolbar(() => setPresentationLevel(feature, "demoted"))
+      : (onUnpin ?? (() => toggleButtonVisibility(buttonId, side)));
 
   if (variant === "dropdown") {
     return (

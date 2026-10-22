@@ -28,6 +28,19 @@ export interface ProjectPresentationSnapshot {
   suggestion: PresentationSuggestion | null;
   suggestionAnswer: PresentationSuggestionAnswerRecord | null;
   /**
+   * "Use this project's toolbar" as the user last set it, or `null` for never:
+   * then the overlay applies exactly when the profile places anything on the
+   * toolbar (`isProjectToolbarActive`).
+   */
+  useProjectToolbar: boolean | null;
+  /**
+   * Up to three of this project's own plugin buttons, by toolbar button id,
+   * shown on the toolbar in this project rather than only in the plugin tray.
+   * May name a button whose plugin is not loaded right now; it draws nothing
+   * until it is.
+   */
+  promotedPluginButtons: string[];
+  /**
    * The stored profile's write count, which only grows. A view drops a
    * snapshot older than the one it holds: a push and an invoke reply can
    * arrive out of order, and either could otherwise roll it back.

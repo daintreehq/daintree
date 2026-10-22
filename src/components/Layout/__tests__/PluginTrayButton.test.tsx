@@ -9,6 +9,9 @@ const dispatchMock = vi.fn();
 const setPluginButtonPromotedMock = vi.fn();
 const refreshRuntimeMock = vi.fn();
 
+const setProjectPromotedMock = vi.fn((_id: string, _promoted: boolean) => Promise.resolve(true));
+let mockOverlay = { active: false, promotedPluginButtons: [] as string[] };
+
 let mockPinnedButtons: Record<string, boolean> = {};
 let mockPluginMetaById = new Map<string, { devMode: boolean; displayName: string }>();
 
@@ -34,6 +37,20 @@ vi.mock("@/store/toolbarPreferencesStore", () => ({
 type MockRuntimeStoreState = {
   pluginMetaById: Map<string, { devMode: boolean; displayName: string }>;
 };
+
+vi.mock("@/hooks/useResolvedPresentation", () => ({
+  useProjectToolbarOverlay: () => mockOverlay,
+}));
+
+vi.mock("@/store/projectPresentationStore", () => ({
+  useProjectPresentationStore: (
+    selector: (s: { setPluginButtonPromoted: typeof setProjectPromotedMock }) => unknown
+  ) => selector({ setPluginButtonPromoted: setProjectPromotedMock }),
+}));
+
+vi.mock("../saveProjectToolbar", () => ({
+  saveProjectToolbar: (save: () => Promise<boolean>) => void save(),
+}));
 
 vi.mock("@/store/pluginRuntimeStore", () => ({
   usePluginRuntimeStore: Object.assign(
@@ -143,6 +160,7 @@ function configMap(...configs: ToolbarButtonConfig[]): Map<string, ToolbarButton
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockOverlay = { active: false, promotedPluginButtons: [] };
   mockPinnedButtons = {};
   mockPluginMetaById = new Map();
 });
@@ -384,5 +402,61 @@ describe("PluginToolbarButton icon", () => {
   it("does not resolve agent brand ids on the toolbar", () => {
     // The toolbar has no brand-icon path, which is why the CLI warns here.
     expect(renderButton("claude")).toBe(registryGlyph("puzzle"));
+  });
+});
+
+describe("PluginTrayButton with this project's toolbar (#13783)", () => {
+  const PROJECT_PLUGIN = `project__${"a".repeat(64)}__acme.tools`;
+  const own = (n: number) =>
+    config({ id: `${PROJECT_PLUGIN}.b${n}`, pluginId: PROJECT_PLUGIN, label: `B${n}` });
+
+  it("promotes a project plugin's button through the profile, never app-wide", () => {
+    mockOverlay = { active: true, promotedPluginButtons: [] };
+    const button = own(1);
+    const { getByTestId } = render(<PluginTrayButton configs={configMap(button)} />);
+
+    fireEvent.click(getByTestId(`plugin-tray-pin-${button.id}`));
+
+    expect(setProjectPromotedMock).toHaveBeenCalledWith(button.id, true);
+    expect(setPluginButtonPromotedMock).not.toHaveBeenCalled();
+  });
+
+  it("offers no pin past the profile's cap rather than pinning app-wide", () => {
+    mockOverlay = { active: true, promotedPluginButtons: [own(1).id, own(2).id, own(3).id] };
+    const fourth = own(4);
+    const { getByTestId, queryByTestId } = render(
+      <PluginTrayButton configs={configMap(own(1), own(2), own(3), fourth)} />
+    );
+
+    expect(queryByTestId(`plugin-tray-pin-${fourth.id}`)).toBeNull();
+    fireEvent.keyDown(getByTestId(`plugin-tray-row-${fourth.id}`), { key: "P" });
+    expect(setProjectPromotedMock).not.toHaveBeenCalled();
+    expect(setPluginButtonPromotedMock).not.toHaveBeenCalled();
+    // Already promoted ones can still be let go.
+    expect(getByTestId(`plugin-tray-pin-${own(1).id}`).getAttribute("data-pinned")).toBe("true");
+  });
+
+  it("unpins a button pinned both ways from both", () => {
+    const button = own(1);
+    mockOverlay = { active: true, promotedPluginButtons: [button.id] };
+    mockPinnedButtons = { [button.id]: true };
+    const { getByTestId } = render(<PluginTrayButton configs={configMap(button)} />);
+
+    fireEvent.click(getByTestId(`plugin-tray-pin-${button.id}`));
+
+    expect(setProjectPromotedMock).toHaveBeenCalledWith(button.id, false);
+    expect(setPluginButtonPromotedMock).toHaveBeenCalledWith(button.id, false);
+  });
+
+  it("keeps an installed plugin's pin app-wide, where it always was", () => {
+    mockOverlay = { active: true, promotedPluginButtons: [] };
+    const { getByTestId } = render(
+      <PluginTrayButton configs={configMap(config({ id: "acme.a" }))} />
+    );
+
+    fireEvent.click(getByTestId("plugin-tray-pin-acme.a"));
+
+    expect(setPluginButtonPromotedMock).toHaveBeenCalledWith("acme.a", true);
+    expect(setProjectPromotedMock).not.toHaveBeenCalled();
   });
 });
