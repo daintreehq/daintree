@@ -144,4 +144,36 @@ describe("CommandPickerHost prompt templates", () => {
     expect(onDraftReady).toHaveBeenCalledWith("Reply to Ada about {{name}}.");
     expect(onCommandExecuted).not.toHaveBeenCalled();
   });
+
+  it("accepts an argument named like an inherited property", async () => {
+    const { onDraftReady } = openWith({
+      ...template([{ name: "constructor", label: "Thing", required: true }]),
+      template: {
+        ...template([]).template,
+        body: "About {{constructor}}.",
+        args: [{ name: "constructor", label: "Thing", required: true }],
+      },
+    });
+    fireEvent.click(await screen.findByRole("option", { name: /Draft a reply/ }));
+
+    fireEvent.click(await screen.findByRole("button", { name: "Fill draft" }));
+    expect(onDraftReady).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByLabelText("Thing"), { target: { value: "x" } });
+    fireEvent.click(screen.getByRole("button", { name: "Fill draft" }));
+
+    expect(onDraftReady).toHaveBeenCalledWith("About x.");
+  });
+
+  it("does not reopen a form for a plugin that went away and came back", async () => {
+    const entry = template([{ name: "name", label: "Recipient" }]);
+    openWith(entry);
+    fireEvent.click(await screen.findByRole("option", { name: /Draft a reply/ }));
+    await screen.findByLabelText("Recipient");
+
+    act(() => usePluginRuntimeStore.setState({ promptTemplates: [] }));
+    expect(screen.queryByLabelText("Recipient")).toBeNull();
+    act(() => usePluginRuntimeStore.setState({ promptTemplates: [entry] }));
+
+    expect(screen.queryByLabelText("Recipient")).toBeNull();
+  });
 });

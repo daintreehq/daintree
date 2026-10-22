@@ -30,6 +30,8 @@ interface CommandPickerHostProps {
    * user to edit; nothing here sends it.
    */
   onDraftReady?: (text: string) => void;
+  /** Where focus belongs once a template has filled the draft: the composer's editor. */
+  getDraftFocusTarget?: () => HTMLElement | null;
 }
 
 export function CommandPickerHost({
@@ -38,6 +40,7 @@ export function CommandPickerHost({
   onCommandExecuted,
   templateProjectId,
   onDraftReady,
+  getDraftFocusTarget,
 }: CommandPickerHostProps) {
   const {
     isPickerOpen: isAnyPickerOpen,
@@ -127,17 +130,32 @@ export function CommandPickerHost({
   // Held by key and read back through the live list, so a plugin that is
   // disabled, unloaded or changed while its form is open takes the form with it.
   const [activeTemplateKey, setActiveTemplateKey] = useState<string | null>(null);
+  useEffect(() => {
+    if (activeTemplateKey !== null && !templates.some((t) => t.key === activeTemplateKey)) {
+      setActiveTemplateKey(null);
+    }
+  }, [activeTemplateKey, templates]);
+  // A form that filled the draft closes onto the editor; one that was cancelled
+  // closes onto the control that opened the picker.
+  const filledDraftRef = useRef(false);
+  const getTemplateFocusTarget = useCallback(
+    () => (filledDraftRef.current && getDraftFocusTarget?.()) || getInvoker(),
+    [getDraftFocusTarget, getInvoker]
+  );
   const activeTemplate: PluginPromptTemplate | null =
     (isOwner && templates.find((t) => t.key === activeTemplateKey)) || null;
 
   const handleSelectTemplate = useCallback(
     (entry: PluginPromptTemplate) => {
       closePicker();
+      filledDraftRef.current = false;
+      // The palette would otherwise hand focus back to the control behind it,
+      // after the draft has been filled and the editor focused.
+      suppressPaletteFocusRestore();
       if (entry.template.args.length === 0) {
         onDraftReady?.(renderPromptTemplate(entry.template.body, {}));
         return;
       }
-      suppressPaletteFocusRestore();
       setActiveTemplateKey(entry.key);
     },
     [closePicker, onDraftReady]
@@ -146,6 +164,7 @@ export function CommandPickerHost({
   const handleTemplateSubmit = useCallback(
     (values: Record<string, string>) => {
       if (!activeTemplate) return;
+      filledDraftRef.current = true;
       setActiveTemplateKey(null);
       onDraftReady?.(renderPromptTemplate(activeTemplate.template.body, values));
     },
@@ -227,7 +246,7 @@ export function CommandPickerHost({
           args={activeTemplate.template.args}
           onSubmit={handleTemplateSubmit}
           onCancel={handleTemplateCancel}
-          restoreFocusTo={getInvoker}
+          restoreFocusTo={getTemplateFocusTarget}
         />
       )}
 

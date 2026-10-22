@@ -100,7 +100,8 @@ let pullSeq = 0;
 let committedSeq = 0;
 
 async function pullPluginRuntimeSnapshot(
-  set: (state: Partial<PluginRuntimeState>) => void
+  set: (state: Partial<PluginRuntimeState>) => void,
+  get: () => PluginRuntimeState
 ): Promise<void> {
   const seq = ++pullSeq;
   try {
@@ -149,7 +150,14 @@ async function pullPluginRuntimeSnapshot(
     }
     // One commit: a consumer must never read a plugin's dev-mode flag from a
     // different snapshot than the disabled set it renders against.
-    set({ disabledPluginIds, pluginMetaById, promptTemplates });
+    // An unchanged list keeps its identity: every picker opening refreshes, and
+    // a new array would rebuild the picker's rows and reset its highlight.
+    const unchanged = JSON.stringify(promptTemplates) === JSON.stringify(get().promptTemplates);
+    set(
+      unchanged
+        ? { disabledPluginIds, pluginMetaById }
+        : { disabledPluginIds, pluginMetaById, promptTemplates }
+    );
   } catch (err) {
     logError("Failed to load plugin runtime state", err);
   }
@@ -165,7 +173,10 @@ async function pullPluginRuntimeSnapshot(
  * set stays empty (plugins read as enabled), matching prod optimism before the
  * first snapshot.
  */
-function ensureSubscribed(set: (state: Partial<PluginRuntimeState>) => void): boolean {
+function ensureSubscribed(
+  set: (state: Partial<PluginRuntimeState>) => void,
+  get: () => PluginRuntimeState
+): boolean {
   if (initialized) return false;
   initialized = true;
 
@@ -175,7 +186,7 @@ function ensureSubscribed(set: (state: Partial<PluginRuntimeState>) => void): bo
   }
 
   const offProvenance = plugin.onProvenanceChanged(() => {
-    void pullPluginRuntimeSnapshot(set);
+    void pullPluginRuntimeSnapshot(set, get);
   });
   // Project plugins come and go without a provenance change: trusting a
   // folder, muting or reloading one pushes a project-plugins snapshot instead,
@@ -184,7 +195,7 @@ function ensureSubscribed(set: (state: Partial<PluginRuntimeState>) => void): bo
   const offProjectPlugins =
     typeof events?.on === "function"
       ? events.on("plugin:project-plugins-changed", () => {
-          void pullPluginRuntimeSnapshot(set);
+          void pullPluginRuntimeSnapshot(set, get);
         })
       : undefined;
   unsubscribe = () => {
@@ -194,20 +205,20 @@ function ensureSubscribed(set: (state: Partial<PluginRuntimeState>) => void): bo
   return true;
 }
 
-export const usePluginRuntimeStore = create<PluginRuntimeState>((set) => ({
+export const usePluginRuntimeStore = create<PluginRuntimeState>((set, get) => ({
   promptTemplates: [],
   disabledPluginIds: new Set<string>(),
   pluginMetaById: new Map<string, PluginRuntimeMeta>(),
   init: () => {
-    if (ensureSubscribed(set)) void pullPluginRuntimeSnapshot(set);
+    if (ensureSubscribed(set, get)) void pullPluginRuntimeSnapshot(set, get);
   },
   refresh: () => {
     // Subscribes without pulling twice — `pullSeq` would discard the first of
     // two same-tick pulls, so a rejected second one could throw away the only
     // successful snapshot.
-    ensureSubscribed(set);
+    ensureSubscribed(set, get);
     if (typeof window.electron?.plugin?.list !== "function") return;
-    void pullPluginRuntimeSnapshot(set);
+    void pullPluginRuntimeSnapshot(set, get);
   },
 }));
 

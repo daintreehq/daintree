@@ -17,6 +17,12 @@ interface PromptTemplateFormProps {
   restoreFocusTo?: () => HTMLElement | null;
 }
 
+// Argument names are plugin-authored, so `constructor` is a legal one: read
+// only what was set on the object itself.
+function valueOf(values: Record<string, string>, name: string): string {
+  return Object.hasOwn(values, name) ? values[name]! : "";
+}
+
 /** The arguments a prompt template asks for before it fills the composer. */
 export function PromptTemplateForm({
   title,
@@ -34,7 +40,7 @@ export function PromptTemplateForm({
   const handleChange = useCallback((arg: PromptTemplateArgument, value: string) => {
     setValues((prev) => ({ ...prev, [arg.name]: value }));
     setErrors((prev) => {
-      if (!(arg.name in prev)) return prev;
+      if (!Object.hasOwn(prev, arg.name)) return prev;
       const next = { ...prev };
       if (arg.required && value.trim() === "") next[arg.name] = "Required";
       else delete next[arg.name];
@@ -45,10 +51,11 @@ export function PromptTemplateForm({
   const handleSubmit = useCallback(() => {
     const nextErrors: Record<string, string> = {};
     for (const arg of args) {
-      if (arg.required && (values[arg.name] ?? "").trim() === "") nextErrors[arg.name] = "Required";
+      if (arg.required && valueOf(values, arg.name).trim() === "")
+        nextErrors[arg.name] = "Required";
     }
     setErrors(nextErrors);
-    const firstInvalid = args.find((arg) => arg.name in nextErrors);
+    const firstInvalid = args.find((arg) => Object.hasOwn(nextErrors, arg.name));
     if (firstInvalid) {
       formRef.current?.querySelector<HTMLElement>(`#prompt-template-${firstInvalid.name}`)?.focus();
       return;
@@ -83,7 +90,7 @@ export function PromptTemplateForm({
             {args.map((arg) => {
               const inputId = `prompt-template-${arg.name}`;
               const errorId = `${inputId}-error`;
-              const error = errors[arg.name];
+              const error = Object.hasOwn(errors, arg.name) ? errors[arg.name] : undefined;
               return (
                 <FormRow
                   key={arg.name}
@@ -95,7 +102,7 @@ export function PromptTemplateForm({
                   <input
                     id={inputId}
                     type="text"
-                    value={values[arg.name] ?? ""}
+                    value={valueOf(values, arg.name)}
                     onChange={(e) => handleChange(arg, e.target.value)}
                     aria-describedby={error ? errorId : undefined}
                     aria-invalid={error ? "true" : undefined}

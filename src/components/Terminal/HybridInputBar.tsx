@@ -1588,6 +1588,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           onCommandExecuted={handleCommandExecuted}
           templateProjectId={currentProjectId}
           onDraftReady={handleTemplateDraft}
+          getDraftFocusTarget={() => editorViewRef.current?.contentDOM ?? null}
         />
         {isRemote && <LazyUploadConfirmHost />}
         <AppDialog

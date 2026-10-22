@@ -396,7 +396,7 @@ export function CommandPicker({
         const band = bandStarts.get(rowKey(row));
         if (isTemplateRow(row)) {
           const { entry } = row;
-          const domId = `command-template-${entry.key}`;
+          const domId = `command-${rowKey(row)}`;
           const titleId = `${domId}-title`;
           const summaryId = `${domId}-summary`;
           const sourceId = `${domId}-source`;

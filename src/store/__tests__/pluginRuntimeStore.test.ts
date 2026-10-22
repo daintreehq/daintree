@@ -429,4 +429,18 @@ describe("usePluginRuntimeStore", () => {
       ["project__p1__acme.a::t", "acme.a", "p1"],
     ]);
   });
+
+  it("keeps the template list's identity across an identical refresh", async () => {
+    const template = { id: "t", title: "T", description: "d", body: "b", args: [] };
+    listMock.mockResolvedValue([makePlugin({ id: "acme.a", promptTemplates: [template] })]);
+    usePluginRuntimeStore.getState().init();
+    await vi.waitFor(() => expect(usePluginRuntimeStore.getState().promptTemplates.length).toBe(1));
+    const before = usePluginRuntimeStore.getState().promptTemplates;
+
+    usePluginRuntimeStore.getState().refresh();
+    await vi.waitFor(() => expect(listMock).toHaveBeenCalledTimes(2));
+    await Promise.resolve();
+
+    expect(usePluginRuntimeStore.getState().promptTemplates).toBe(before);
+  });
 });
