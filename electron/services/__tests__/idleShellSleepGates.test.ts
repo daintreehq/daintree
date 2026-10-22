@@ -81,6 +81,17 @@ describe("evaluateShellTerminals", () => {
     expect(result).toEqual({ ok: true, value: new Set(["a", "b"]) });
   });
 
+  it("doesn't hold the project to a shard that carries none of its terminals", () => {
+    const census = inventory([{ id: "a" }]);
+    census.inventories.push({
+      terminals: [],
+      pidSamples: {},
+      available: false,
+      sampledAt: 0,
+    });
+    expect(evaluate([terminal("a")], census)).toEqual({ ok: true, value: new Set(["a"]) });
+  });
+
   it("ignores other projects' terminals and exited records", () => {
     const result = evaluate(
       [terminal("a"), terminal("x", { projectId: "other" }), terminal("dead", { hasPty: false })],
@@ -196,20 +207,9 @@ describe("evaluateWorkspace", () => {
 });
 
 describe("evaluateGit", () => {
-  it("passes only when every probe is clear", () => {
-    expect(evaluateGit([{ state: "clear" }, { state: "clear" }])).toBeNull();
-    expect(evaluateGit([])).toBeNull();
-  });
-
-  it("names a busy worktree ahead of an unreadable one", () => {
-    expect(
-      evaluateGit([
-        { state: "unknown", reason: "EACCES" },
-        { state: "busy", marker: "MERGE_HEAD" },
-      ])
-    ).toBe("git-busy");
-    expect(evaluateGit([{ state: "clear" }, { state: "unknown", reason: "timeout" }])).toBe(
-      "git-unknown"
-    );
+  it("passes only a clear probe", () => {
+    expect(evaluateGit({ state: "clear" })).toBeNull();
+    expect(evaluateGit({ state: "busy", marker: "MERGE_HEAD" })).toBe("git-busy");
+    expect(evaluateGit({ state: "unknown", reason: "timeout" })).toBe("git-unknown");
   });
 });

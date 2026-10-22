@@ -1223,7 +1223,7 @@ export function GeneralTab({
                   <SettingsPresetGroup<number>
                     id="general-idle-background-threshold"
                     label="Close after"
-                    description="How long a background project sits idle before it closes"
+                    description="How long a background project with no open terminals sits idle before it closes"
                     options={IDLE_BACKGROUND_THRESHOLD_PRESETS}
                     value={idleAutoCloseConfig?.thresholdMinutes ?? null}
                     onChange={(v) => void updateIdleAutoCloseConfig({ thresholdMinutes: v })}
@@ -1249,7 +1249,7 @@ export function GeneralTab({
                         includeIdleShells: !idleAutoCloseConfig?.includeIdleShells,
                       })
                     }
-                    disabled={!idleAutoCloseConfig}
+                    disabled={!idleAutoCloseConfig || isIdleAutoCloseSaving}
                     isModified={!!idleAutoCloseConfig?.includeIdleShells}
                     onReset={() => void updateIdleAutoCloseConfig({ includeIdleShells: false })}
                   />

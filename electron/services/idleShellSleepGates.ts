@@ -14,6 +14,7 @@ export type IdleShellSkipReason =
   | "workspace-unknown"
   | "lifecycle-busy"
   | "resource-configured"
+  | "resource-unknown"
   | "git-busy"
   | "git-unknown"
   | "census-unavailable"
@@ -95,9 +96,9 @@ export function evaluateWorkspace(
   return { ok: true, value: read.states.map((state) => state.path) };
 }
 
-export function evaluateGit(results: readonly GitSleepSafety[]): IdleShellSkipReason | null {
-  if (results.some((result) => result.state === "busy")) return "git-busy";
-  if (results.some((result) => result.state !== "clear")) return "git-unknown";
+export function evaluateGit(result: GitSleepSafety): IdleShellSkipReason | null {
+  if (result.state === "busy") return "git-busy";
+  if (result.state !== "clear") return "git-unknown";
   return null;
 }
 
@@ -127,21 +128,20 @@ export function evaluateShellTerminals(
   thresholdMs: number,
   awakeSince: (timestamp: number) => number
 ): GateResult<Set<string>> {
-  if (!census || census.shardsFailed > 0 || census.inventories.length === 0) {
-    return { ok: false, reason: "census-unavailable" };
-  }
+  if (!census || census.shardsFailed > 0) return { ok: false, reason: "census-unavailable" };
+  // Only the shards holding this project's terminals have to be current: a
+  // shard with nothing subscribed stops sweeping, and its idle census says
+  // nothing about these shells either way.
+  const sampled = new Map<string, HostProcessInventory["terminals"][number]>();
   for (const inventory of census.inventories) {
+    const own = inventory.terminals.filter((terminal) => terminal.projectId === projectId);
+    if (own.length === 0) continue;
     if (!inventory.available) return { ok: false, reason: "census-unavailable" };
     if (!(inventory.sampledAt > 0) || now - inventory.sampledAt > CENSUS_MAX_AGE_MS) {
       return { ok: false, reason: "census-stale" };
     }
+    for (const terminal of own) sampled.set(terminal.id, terminal);
   }
-  const sampled = new Map(
-    census.inventories
-      .flatMap((inventory) => inventory.terminals)
-      .filter((terminal) => terminal.projectId === projectId)
-      .map((terminal) => [terminal.id, terminal])
-  );
 
   const live = terminals.filter((t) => t.projectId === projectId && isLiveTerminal(t));
   const liveIds = new Set(live.map((t) => t.id));

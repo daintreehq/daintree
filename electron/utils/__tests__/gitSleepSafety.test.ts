@@ -2,41 +2,39 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import path from "path";
-import { probeGitSleepSafety } from "../gitSleepSafety.js";
+import { probeRepositorySleepSafety } from "../gitSleepSafety.js";
 
-describe("probeGitSleepSafety", () => {
+describe("probeRepositorySleepSafety", () => {
   let root: string;
+  let repo: string;
 
   beforeEach(() => {
     root = mkdtempSync(path.join(tmpdir(), "git-sleep-safety-"));
+    repo = path.join(root, "repo");
+    mkdirSync(path.join(repo, ".git"), { recursive: true });
   });
 
   afterEach(() => {
     rmSync(root, { recursive: true, force: true });
   });
 
-  function mainCheckout(): string {
-    const repo = path.join(root, "repo");
-    mkdirSync(path.join(repo, ".git"), { recursive: true });
-    return repo;
-  }
-
-  /** A linked worktree whose `.git` file points into the main repo, as `git worktree add` writes it. */
-  function linkedWorktree(gitdirLine: (gitDir: string) => string): {
-    worktree: string;
-    gitDir: string;
-  } {
-    const repo = mainCheckout();
-    const gitDir = path.join(repo, ".git", "worktrees", "feature");
+  /** A linked worktree laid out as `git worktree add` leaves it, including `commondir`. */
+  function linkedWorktree(name: string, gitdirLine?: (gitDir: string) => string) {
+    const gitDir = path.join(repo, ".git", "worktrees", name);
     mkdirSync(gitDir, { recursive: true });
-    const worktree = path.join(root, "feature");
+    writeFileSync(path.join(gitDir, "commondir"), "../..\n");
+    const worktree = path.join(root, name);
     mkdirSync(worktree);
-    writeFileSync(path.join(worktree, ".git"), `${gitdirLine(gitDir)}\n`);
+    writeFileSync(
+      path.join(worktree, ".git"),
+      `${gitdirLine ? gitdirLine(gitDir) : `gitdir: ${gitDir}`}\n`
+    );
     return { worktree, gitDir };
   }
 
-  it("is clear for a main checkout with nothing in progress", async () => {
-    expect(await probeGitSleepSafety(mainCheckout())).toEqual({ state: "clear" });
+  it("is clear for a repository with nothing in progress", async () => {
+    linkedWorktree("feature");
+    expect(await probeRepositorySleepSafety([repo])).toEqual({ state: "clear" });
   });
 
   it.each([
@@ -47,40 +45,57 @@ describe("probeGitSleepSafety", () => {
     "REVERT_HEAD",
     "index.lock",
   ])("is busy while %s is present", async (marker) => {
-    const repo = mainCheckout();
     writeFileSync(path.join(repo, ".git", marker), "");
-    expect(await probeGitSleepSafety(repo)).toEqual({ state: "busy", marker });
+    expect(await probeRepositorySleepSafety([repo])).toEqual({ state: "busy", marker });
   });
 
-  it("follows a linked worktree's .git file to its own git directory", async () => {
-    const { worktree, gitDir } = linkedWorktree((dir) => `gitdir: ${dir}`);
-    expect(await probeGitSleepSafety(worktree)).toEqual({ state: "clear" });
-
+  it("finds an operation in a linked worktree it was never told about", async () => {
+    // Created outside Daintree: only the repository's own worktrees directory knows it.
+    const { gitDir } = linkedWorktree("elsewhere");
     mkdirSync(path.join(gitDir, "rebase-merge"));
-    expect(await probeGitSleepSafety(worktree)).toEqual({ state: "busy", marker: "rebase-merge" });
+    expect(await probeRepositorySleepSafety([repo])).toEqual({
+      state: "busy",
+      marker: "rebase-merge",
+    });
+  });
+
+  it("follows a linked worktree's .git file and commondir back to the main repository", async () => {
+    const { worktree } = linkedWorktree("feature");
+    writeFileSync(path.join(repo, ".git", "MERGE_HEAD"), "");
+    expect(await probeRepositorySleepSafety([worktree])).toEqual({
+      state: "busy",
+      marker: "MERGE_HEAD",
+    });
   });
 
   it("resolves a relative gitdir against the worktree", async () => {
     const { worktree, gitDir } = linkedWorktree(
+      "feature",
       (dir) => `gitdir: ${path.relative(path.join(root, "feature"), dir)}`
     );
-    writeFileSync(path.join(gitDir, "MERGE_HEAD"), "");
-    expect(await probeGitSleepSafety(worktree)).toEqual({ state: "busy", marker: "MERGE_HEAD" });
+    writeFileSync(path.join(gitDir, "index.lock"), "");
+    expect(await probeRepositorySleepSafety([worktree])).toEqual({
+      state: "busy",
+      marker: "index.lock",
+    });
   });
 
-  it("is unknown when the .git file is malformed", async () => {
-    const { worktree } = linkedWorktree(() => "not a gitdir line");
-    expect((await probeGitSleepSafety(worktree)).state).toBe("unknown");
+  it("is unknown when a .git file is malformed", async () => {
+    const { worktree } = linkedWorktree("feature", () => "not a gitdir line");
+    expect((await probeRepositorySleepSafety([repo, worktree])).state).toBe("unknown");
   });
 
-  it("is unknown when the .git file points nowhere", async () => {
-    const { worktree } = linkedWorktree(() => `gitdir: ${path.join(root, "gone")}`);
-    expect((await probeGitSleepSafety(worktree)).state).toBe("unknown");
+  it("is unknown when a .git file points nowhere", async () => {
+    const { worktree } = linkedWorktree("feature", () => `gitdir: ${path.join(root, "gone")}`);
+    expect((await probeRepositorySleepSafety([worktree])).state).toBe("unknown");
   });
 
-  it("is unknown when there is no .git at all", async () => {
+  it("is unknown for a folder with no .git unless it is known not to be a repository", async () => {
     const folder = path.join(root, "plain");
     mkdirSync(folder);
-    expect((await probeGitSleepSafety(folder)).state).toBe("unknown");
+    expect((await probeRepositorySleepSafety([folder])).state).toBe("unknown");
+    expect(await probeRepositorySleepSafety([folder], { missingRepoIsClear: true })).toEqual({
+      state: "clear",
+    });
   });
 });

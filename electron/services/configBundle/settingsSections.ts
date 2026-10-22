@@ -85,6 +85,8 @@ export function idleTerminalNotifySection(): SectionHandler {
   });
 }
 
+const readIdleBackgroundAutoClose = () => store.get("idleBackgroundAutoClose");
+
 export function idleBackgroundAutoCloseSection(): SectionHandler {
   return scalarSection({
     id: "idleBackgroundAutoClose",
@@ -103,7 +105,17 @@ export function idleBackgroundAutoCloseSection(): SectionHandler {
         display: minutes,
       },
     },
-    read: () => store.get("idleBackgroundAutoClose"),
+    // Defaults filled in, so a snapshot of a pre-#13849 object still restores
+    // the shell opt-in to off rather than leaving an imported value in place.
+    read: () => {
+      const stored: Partial<ReturnType<typeof readIdleBackgroundAutoClose>> =
+        readIdleBackgroundAutoClose();
+      return {
+        ...stored,
+        includeIdleShells: stored.includeIdleShells ?? false,
+        idleShellThresholdMinutes: stored.idleShellThresholdMinutes ?? 60,
+      };
+    },
     write: async (patch) => {
       const { getIdleBackgroundAutoCloseService } =
         await import("../IdleBackgroundAutoCloseService.js");

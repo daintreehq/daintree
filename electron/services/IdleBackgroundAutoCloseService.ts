@@ -19,7 +19,8 @@ import { logInfo, logError } from "../utils/logger.js";
 import { broadcastToRenderer } from "../ipc/utils.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { getEndpointRegistry } from "../ipc/endpointRegistry.js";
-import { probeGitSleepSafety } from "../utils/gitSleepSafety.js";
+import { probeRepositorySleepSafety } from "../utils/gitSleepSafety.js";
+import { probeResourceConfig } from "../utils/resourceConfigProbe.js";
 import { withTimeout } from "../utils/withTimeout.js";
 import {
   evaluateGit,
@@ -637,10 +638,14 @@ export class IdleBackgroundAutoCloseService {
     }
   }
 
-  /** The project host's worktree states, or `null` when there's no answer. */
+  /**
+   * The project host's worktree states, `"no-host"` when the project has no
+   * workspace host at all, or `null` when there's no answer.
+   */
   private async readWorkspace(projectPath: string, projectId: string) {
     const workspaceClient = getWorkspaceClientRef();
     if (!workspaceClient) return null;
+    if (!workspaceClient.getHostForProject(projectPath)) return "no-host" as const;
     try {
       return await withTimeout(
         workspaceClient.getAllStatesWithGitBackedForProjectAsync(projectPath, projectId),
@@ -669,20 +674,36 @@ export class IdleBackgroundAutoCloseService {
   /**
    * Put a project whose terminals are all idle shells to sleep (#13849).
    *
-   * Every gate reads fresh here rather than trusting the sweep: workspace and
-   * git first, then the terminal registry and the process census together, so
-   * the census the kill trusts is the last thing read before it. Sleep's own
-   * kill snapshot is then held to the exact terminals vetted here, still
-   * quiet, so a shell opened or typed into after this point stops it.
+   * Every gate reads fresh here rather than trusting the sweep: workspace,
+   * resource config and git first, then the terminal registry and the process
+   * census together, so the census the kill trusts is the last thing read
+   * before it. Sleep's own kill snapshot is then held to the exact terminals
+   * vetted here, still quiet, so a shell opened or typed into after this point
+   * stops it.
+   *
+   * Lifecycle scripts and resource actions only ever run inside the workspace
+   * host, so a project whose host has been reclaimed has none in flight; its
+   * resource config and repository are read from disk either way, since the
+   * host's own view of both is a cache.
    */
   private async closeShellProject(projectId: string): Promise<ShellCloseResult> {
     const project = this.readEligibleShellProject(projectId);
     if (!project) return { status: "ineligible" };
 
-    const workspace = evaluateWorkspace(await this.readWorkspace(project.path, projectId));
-    if (!workspace.ok) return { status: "skipped", reason: workspace.reason };
+    const read = await this.readWorkspace(project.path, projectId);
+    let worktreePaths: string[] = [];
+    if (read !== "no-host") {
+      const workspace = evaluateWorkspace(read);
+      if (!workspace.ok) return { status: "skipped", reason: workspace.reason };
+      worktreePaths = workspace.value;
+    }
+    const resources = await probeResourceConfig(project.path, worktreePaths);
+    if (resources === "configured") return { status: "skipped", reason: "resource-configured" };
+    if (resources === "unknown") return { status: "skipped", reason: "resource-unknown" };
     const gitBlock = evaluateGit(
-      await Promise.all(workspace.value.map((worktreePath) => probeGitSleepSafety(worktreePath)))
+      await probeRepositorySleepSafety([project.path, ...worktreePaths], {
+        missingRepoIsClear: read !== "no-host" && read?.gitBacked === false,
+      })
     );
     if (gitBlock) return { status: "skipped", reason: gitBlock };
 

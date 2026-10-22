@@ -54,17 +54,28 @@ const snapshotDegraded = vi.hoisted(() => ({ value: false }));
 
 const workspaceClientMock = vi.hoisted(() => ({
   evictProject: vi.fn<(p: string) => boolean>(() => true),
+  getHostForProject: vi.fn<(path: string) => object | undefined>(() => ({})),
   getAllStatesWithGitBackedForProjectAsync: vi.fn<
     (path: string, id: string) => Promise<{ states: unknown[]; gitBacked: boolean | null }>
   >(async (path) => ({ states: [{ path }], gitBacked: true })),
 }));
 
 const gitSafetyMock = vi.hoisted(() => ({
-  probeGitSleepSafety: vi.fn<(path: string) => Promise<{ state: string; marker?: string }>>(
-    async () => ({ state: "clear" })
-  ),
+  probeRepositorySleepSafety: vi.fn<
+    (
+      paths: readonly string[],
+      options?: { missingRepoIsClear?: boolean }
+    ) => Promise<{ state: string; marker?: string }>
+  >(async () => ({ state: "clear" })),
 }));
 vi.mock("../../utils/gitSleepSafety.js", () => gitSafetyMock);
+
+const resourceProbeMock = vi.hoisted(() => ({
+  probeResourceConfig: vi.fn<(root: string, paths: readonly string[]) => Promise<string>>(
+    async () => "none"
+  ),
+}));
+vi.mock("../../utils/resourceConfigProbe.js", () => resourceProbeMock);
 
 /** Remote Shell views attached to a project, as the endpoint registry lists them. */
 const remoteViewProjects = vi.hoisted(() => new Set<string>());
@@ -316,7 +327,9 @@ describe("IdleBackgroundAutoCloseService", () => {
     killConfirmed.value = true;
     sleptMs.value = 0;
     remoteViewProjects.clear();
-    gitSafetyMock.probeGitSleepSafety.mockResolvedValue({ state: "clear" });
+    gitSafetyMock.probeRepositorySleepSafety.mockResolvedValue({ state: "clear" });
+    resourceProbeMock.probeResourceConfig.mockResolvedValue("none");
+    workspaceClientMock.getHostForProject.mockReturnValue({});
     workspaceClientMock.getAllStatesWithGitBackedForProjectAsync.mockImplementation(
       async (path) => ({ states: [{ path }], gitBacked: true })
     );
@@ -1495,7 +1508,10 @@ describe("IdleBackgroundAutoCloseService", () => {
       const service = setUpIdleShellProject();
       await runCheck(service);
 
-      expect(gitSafetyMock.probeGitSleepSafety).toHaveBeenCalledWith("/projects/proj-1");
+      expect(gitSafetyMock.probeRepositorySleepSafety).toHaveBeenCalledWith(
+        ["/projects/proj-1", "/projects/proj-1"],
+        { missingRepoIsClear: false }
+      );
       expect(ptyClientMock.gracefulKillByProject).toHaveBeenCalledWith("proj-1", {
         preserveSession: true,
       });
@@ -1582,7 +1598,7 @@ describe("IdleBackgroundAutoCloseService", () => {
         "a git operation in progress",
         "git-busy",
         () =>
-          gitSafetyMock.probeGitSleepSafety.mockResolvedValue({
+          gitSafetyMock.probeRepositorySleepSafety.mockResolvedValue({
             state: "busy",
             marker: "rebase-merge",
           }),
@@ -1590,7 +1606,7 @@ describe("IdleBackgroundAutoCloseService", () => {
       [
         "an unreadable git directory",
         "git-unknown",
-        () => gitSafetyMock.probeGitSleepSafety.mockResolvedValue({ state: "unknown" }),
+        () => gitSafetyMock.probeRepositorySleepSafety.mockResolvedValue({ state: "unknown" }),
       ],
       [
         "no workspace host answer",
@@ -1619,6 +1635,16 @@ describe("IdleBackgroundAutoCloseService", () => {
             gitBacked: true,
           }),
       ],
+      [
+        "a resource environment declared on disk",
+        "resource-configured",
+        () => resourceProbeMock.probeResourceConfig.mockResolvedValue("configured"),
+      ],
+      [
+        "an unreadable resource config",
+        "resource-unknown",
+        () => resourceProbeMock.probeResourceConfig.mockResolvedValue("unknown"),
+      ],
       ["a remote Shell's view", "remote-host", () => remoteViewProjects.add("proj-1")],
     ])("stays awake for %s and logs why", async (_case, reason, arrange) => {
       enableShells();
@@ -1629,6 +1655,24 @@ describe("IdleBackgroundAutoCloseService", () => {
       expect(ptyClientMock.gracefulKillByProject).not.toHaveBeenCalled();
       expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
       expect(skipLog()).toEqual({ [reason]: ["proj-1"] });
+    });
+
+    it("sleeps a project whose workspace host was already reclaimed", async () => {
+      enableShells();
+      const service = setUpIdleShellProject();
+      // No host means no lifecycle script or resource action can be running;
+      // config and the repository are still read from disk.
+      workspaceClientMock.getHostForProject.mockReturnValue(undefined);
+      await runCheck(service);
+
+      expect(workspaceClientMock.getAllStatesWithGitBackedForProjectAsync).not.toHaveBeenCalled();
+      expect(resourceProbeMock.probeResourceConfig).toHaveBeenCalledWith("/projects/proj-1", []);
+      expect(gitSafetyMock.probeRepositorySleepSafety).toHaveBeenCalledWith(["/projects/proj-1"], {
+        missingRepoIsClear: false,
+      });
+      expect(ptyClientMock.gracefulKillByProject).toHaveBeenCalledWith("proj-1", {
+        preserveSession: true,
+      });
     });
 
     it("won't kill a terminal it never vetted", async () => {
