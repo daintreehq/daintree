@@ -60,6 +60,10 @@ export class FakePtyHost {
       connection.port.close();
     },
     getTerminalProjectId: (id: string) => this.terminals.get(id)?.projectId ?? null,
+    getTerminalAsync: async (id: string, _submissionToken?: string, _options?: object) => {
+      const terminal = this.terminals.get(id);
+      return terminal ? { id, projectId: terminal.projectId } : null;
+    },
     // The host's assistant and agent answers follow spawns, exits and agent
     // state; this fake emits none, so only the reads have to answer.
     hasTerminal: (id: string) => this.terminals.has(id),
