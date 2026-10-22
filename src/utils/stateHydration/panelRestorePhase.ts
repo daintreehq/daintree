@@ -581,6 +581,27 @@ export interface PanelRestorePhaseResult {
  *  - `backendTerminalMap` is mutated by reference; orphan detection depends
  *    on the surviving entries after the saved-panels loop.
  */
+const MRU_TERMINAL_PREFIX = "terminal:";
+
+/**
+ * The saved panel id the per-project MRU names as last on screen, for the
+ * `visiblePanelId` tier (#10527). Non-PTY panels share the `terminal:` key
+ * (#13763) but can never take that PTY-only tier, so they are skipped — the
+ * result is the head the list had before they were recorded. A `worktree:`
+ * entry ahead of every PTY panel still yields `undefined`.
+ */
+export function resolveVisiblePanelId(
+  mruList: readonly unknown[] | undefined,
+  isNonPtyPanel: (savedId: string) => boolean
+): string | undefined {
+  for (const entry of mruList ?? []) {
+    if (typeof entry !== "string" || !entry.startsWith(MRU_TERMINAL_PREFIX)) return undefined;
+    const savedId = entry.slice(MRU_TERMINAL_PREFIX.length);
+    if (!isNonPtyPanel(savedId)) return savedId;
+  }
+  return undefined;
+}
+
 export async function restorePanelsPhase(
   savedPanels: TerminalState[] | undefined,
   ctx: PanelRestoreContext

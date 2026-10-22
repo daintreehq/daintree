@@ -1653,6 +1653,37 @@ describe("app:set-state handler", () => {
     await invokeSetState({ focusMode: true });
     expect(crashService.scheduleBackup).toHaveBeenCalledTimes(1);
   });
+
+  it("keeps plugin panel and worktree path MRU ids while dropping malformed ones (#13763)", async () => {
+    vi.mocked(projectStore.getCurrentProject).mockReturnValue(null);
+    const projectPluginPanel = `terminal:project:${"a".repeat(64)}/acme/dashboard-${"0".repeat(36)}`;
+
+    await invokeSetState({
+      mruList: [
+        "terminal:acme.dashboard-1234",
+        projectPluginPanel,
+        "worktree:/Users/me/repo-wt",
+        "worktree:C:\\repo\\wt",
+        "terminal:acme.dashboard-1234",
+        "terminal:",
+        "panel:x",
+        "terminal:bad\nid",
+        `terminal:${"x".repeat(1025)}`,
+        42,
+      ],
+    });
+
+    const calls = vi.mocked(storeModule.store.set).mock.calls as unknown as unknown[][];
+    const written = calls.filter((call) => call[0] === "appState").at(-1)?.[1] as {
+      mruList?: string[];
+    };
+    expect(written.mruList).toEqual([
+      "terminal:acme.dashboard-1234",
+      projectPluginPanel,
+      "worktree:/Users/me/repo-wt",
+      "worktree:C:\\repo\\wt",
+    ]);
+  });
 });
 
 describe("app:hydrate host fields", () => {

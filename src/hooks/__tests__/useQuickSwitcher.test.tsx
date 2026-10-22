@@ -1,7 +1,9 @@
 // @vitest-environment jsdom
-import { renderHook } from "@testing-library/react";
+import { act, renderHook } from "@testing-library/react";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { usePanelStore } from "@/store/panelStore";
+import { registerPanelKind, unregisterPanelKind } from "@shared/config/panelKindRegistry";
+import type { PanelInstance } from "@shared/types/panel";
 
 const { useWorktreeStoreMock } = vi.hoisted(() => ({
   useWorktreeStoreMock: vi.fn(),
@@ -23,7 +25,7 @@ vi.mock("@/store", async () => {
   };
 });
 
-import { useQuickSwitcher } from "../useQuickSwitcher";
+import { useQuickSwitcher, type QuickSwitcherItem } from "../useQuickSwitcher";
 import { usePaletteStore } from "@/store/paletteStore";
 
 type MockWorktreeState = {
@@ -160,5 +162,167 @@ describe("useQuickSwitcher MRU prune", () => {
 
     // worktree:wt-1 is a live item; terminal:t-1 is protected (no terminal items yet).
     expect(pruneMru).toHaveBeenCalledWith(new Set(["worktree:wt-1", "terminal:t-1"]));
+  });
+});
+
+describe("useQuickSwitcher panel items (#13763)", () => {
+  beforeEach(() => {
+    usePanelStore.setState({ panelsById: {}, panelIds: [], mruList: [] });
+    useWorktreeStoreMock.mockReset();
+    usePaletteStore.setState({ activePaletteId: "quick-switcher" });
+  });
+
+  afterEach(() => {
+    usePaletteStore.setState({ activePaletteId: null });
+    unregisterPanelKind("acme.dashboard");
+  });
+
+  function seedPanels(panels: PanelInstance[]): void {
+    usePanelStore.setState({
+      panelsById: Object.fromEntries(panels.map((panel) => [panel.id, panel])),
+      panelIds: panels.map((panel) => panel.id),
+    });
+  }
+
+  function panelRows(results: QuickSwitcherItem[]) {
+    return results
+      .filter((item) => item.type === "terminal")
+      .map(({ id, title, subtitle }) => ({ id, title, subtitle }));
+  }
+
+  it("lists open non-PTY and plugin panels by title with their worktree as subtitle", () => {
+    registerPanelKind({
+      id: "acme.dashboard",
+      name: "Acme Dashboard",
+      iconId: "gauge",
+      color: "#abcdef",
+      hasPty: false,
+      canRestart: false,
+      canConvert: false,
+      extensionId: "acme",
+    });
+    seedPanels([
+      {
+        id: "br-1",
+        kind: "browser",
+        title: "localhost:3000",
+        location: "grid",
+        worktreeId: "wt-1",
+      },
+      { id: "dp-1", kind: "dev-preview", title: "Preview", location: "dock", worktreeId: "wt-1" },
+      { id: "f-1", kind: "file", title: "README.md", location: "grid", worktreeId: "wt-1" },
+      { id: "fb-1", kind: "file-browser", title: "Files", location: "grid", worktreeId: "wt-1" },
+      { id: "d-1", kind: "diff", title: "app.ts", location: "grid", worktreeId: "wt-1" },
+      { id: "r-1", kind: "review", title: "Review", location: "grid", worktreeId: "wt-1" },
+      {
+        id: "p-1",
+        kind: "acme.dashboard",
+        title: "Dashboard",
+        location: "grid",
+        worktreeId: "wt-1",
+      },
+    ] as PanelInstance[]);
+    seedWorktreeState({
+      isInitialized: true,
+      worktrees: new Map([["wt-1", { id: "wt-1", name: "main", path: "/repo" }]]),
+    });
+
+    const { result } = renderHook(() => useQuickSwitcher());
+
+    expect(panelRows(result.current.results)).toEqual([
+      { id: "terminal:br-1", title: "localhost:3000", subtitle: "main" },
+      { id: "terminal:dp-1", title: "Preview", subtitle: "main" },
+      { id: "terminal:f-1", title: "README.md", subtitle: "main" },
+      { id: "terminal:fb-1", title: "Files", subtitle: "main" },
+      { id: "terminal:d-1", title: "app.ts", subtitle: "main" },
+      { id: "terminal:r-1", title: "Review", subtitle: "main" },
+      { id: "terminal:p-1", title: "Dashboard", subtitle: "main" },
+    ]);
+  });
+
+  it("leaves out trashed, ephemeral and dead-PTY panels", () => {
+    seedPanels([
+      { id: "br-live", kind: "browser", title: "Live", location: "grid" },
+      { id: "br-trash", kind: "browser", title: "Trashed", location: "trash" },
+      {
+        id: "f-dialog",
+        kind: "file",
+        title: "Dialog file",
+        location: "dialog",
+        excludeFromPersistence: true,
+      },
+      {
+        id: "t-dead",
+        kind: "terminal",
+        title: "Dead",
+        location: "grid",
+        cwd: "/repo",
+        cols: 80,
+        rows: 24,
+        hasPty: false,
+      },
+    ] as PanelInstance[]);
+    seedWorktreeState({ isInitialized: true });
+
+    const { result } = renderHook(() => useQuickSwitcher());
+
+    expect(panelRows(result.current.results)).toEqual([
+      { id: "terminal:br-live", title: "Live", subtitle: undefined },
+    ]);
+  });
+
+  it("finds a browser panel by its title", () => {
+    seedPanels([
+      {
+        id: "t-1",
+        kind: "terminal",
+        title: "Shell",
+        location: "grid",
+        cwd: "/repo",
+        cols: 80,
+        rows: 24,
+      },
+      { id: "br-1", kind: "browser", title: "Storybook", location: "grid" },
+    ] as PanelInstance[]);
+    seedWorktreeState({ isInitialized: true });
+
+    const { result } = renderHook(() => useQuickSwitcher());
+    act(() => result.current.setQuery("storybook"));
+
+    expect(result.current.results[0]?.id).toBe("terminal:br-1");
+  });
+
+  it("activates a selected browser panel so a fullscreen neighbour can't hide it", () => {
+    const activateTerminal = vi.fn();
+    const original = usePanelStore.getState().activateTerminal;
+    usePanelStore.setState({ activateTerminal });
+    try {
+      seedPanels([
+        { id: "br-1", kind: "browser", title: "Storybook", location: "grid" },
+      ] as PanelInstance[]);
+      seedWorktreeState({ isInitialized: true });
+
+      const { result } = renderHook(() => useQuickSwitcher());
+      const item = result.current.results.find((entry) => entry.id === "terminal:br-1");
+      expect(item).toBeDefined();
+      act(() => result.current.selectItem(item!));
+
+      expect(activateTerminal).toHaveBeenCalledWith("br-1");
+    } finally {
+      usePanelStore.setState({ activateTerminal: original });
+    }
+  });
+
+  it("keeps MRU entries for open non-PTY panels when pruning", () => {
+    const pruneMru = vi.fn();
+    usePanelStore.setState({ pruneMru, mruList: ["terminal:br-1", "terminal:br-closed"] });
+    seedPanels([
+      { id: "br-1", kind: "browser", title: "Storybook", location: "grid" },
+    ] as PanelInstance[]);
+    seedWorktreeState({ isInitialized: true });
+
+    renderHook(() => useQuickSwitcher());
+
+    expect(pruneMru).toHaveBeenCalledWith(new Set(["terminal:br-1"]));
   });
 });

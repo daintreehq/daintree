@@ -116,11 +116,11 @@ describe("QuickSwitcher dynamic footer hint", () => {
     };
 
     const { rerender } = render(<QuickSwitcher {...props} selectedIndex={0} />);
-    expect(screen.getByText("to switch terminal")).toBeTruthy();
+    expect(screen.getByText("to switch panel")).toBeTruthy();
 
     rerender(<QuickSwitcher {...props} selectedIndex={1} />);
     expect(screen.getByText("to switch worktree")).toBeTruthy();
-    expect(screen.queryByText("to switch terminal")).toBeNull();
+    expect(screen.queryByText("to switch panel")).toBeNull();
   });
 
   it("removes the footer when results transition from populated to empty", () => {
@@ -142,10 +142,10 @@ describe("QuickSwitcher dynamic footer hint", () => {
     const { rerender } = render(
       <QuickSwitcher {...baseProps} results={[terminalItem]} selectedIndex={0} />
     );
-    expect(screen.getByText("to switch terminal")).toBeTruthy();
+    expect(screen.getByText("to switch panel")).toBeTruthy();
 
     rerender(<QuickSwitcher {...baseProps} results={[]} selectedIndex={-1} />);
-    expect(screen.queryByText("to switch terminal")).toBeNull();
+    expect(screen.queryByText("to switch panel")).toBeNull();
     expect(screen.queryByText("to select")).toBeNull();
   });
 
@@ -162,7 +162,7 @@ describe("QuickSwitcher dynamic footer hint", () => {
 
     const hintEl = document.getElementById(describedBy!);
     expect(hintEl).not.toBeNull();
-    expect(hintEl?.textContent).toContain("to switch terminal");
+    expect(hintEl?.textContent).toContain("to switch panel");
   });
 
   it("does not render an aria-live region", () => {
