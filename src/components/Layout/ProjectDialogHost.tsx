@@ -7,6 +7,8 @@ import { useWorktrees } from "@/hooks/useWorktrees";
 import { useResolvedForgeProvider } from "@/hooks/useResolvedForgeProvider";
 import { useBuiltinView } from "@/registry/builtinRendererRegistry";
 import type { ForgeBulkCreateWorktreeDialogProps } from "@/types/forgeSlotProps";
+import { useProjectSurface } from "@/components/Plugin/ProjectSurfaceView";
+import { ProjectWorktreeCreateDialog } from "./ProjectWorktreeCreateDialog";
 import { useProjectStore } from "@/store/projectStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useFleetPickerPaletteStore } from "@/store/fleetPickerPaletteStore";
@@ -39,19 +41,36 @@ const LazyRecipeManager = lazy(() =>
 function ProjectDialogHost() {
   const projectId = useProjectStore((state) => state.currentProject?.id ?? null);
   const rootPath = useProjectStore((state) => state.currentProject?.path ?? "");
-  const { createDialog, closeCreateDialog, bulkCreateDialog, closeBulkCreateDialog } =
-    useWorktreeSelectionStore(
-      useShallow((state) => ({
-        createDialog: state.createDialog,
-        closeCreateDialog: state.closeCreateDialog,
-        bulkCreateDialog: state.bulkCreateDialog,
-        closeBulkCreateDialog: state.closeBulkCreateDialog,
-      }))
-    );
+  const {
+    createDialog,
+    closeCreateDialog,
+    showStockCreateDialog,
+    bulkCreateDialog,
+    closeBulkCreateDialog,
+  } = useWorktreeSelectionStore(
+    useShallow((state) => ({
+      createDialog: state.createDialog,
+      closeCreateDialog: state.closeCreateDialog,
+      showStockCreateDialog: state.showStockCreateDialog,
+      bulkCreateDialog: state.bulkCreateDialog,
+      closeBulkCreateDialog: state.closeBulkCreateDialog,
+    }))
+  );
   // Disabled so the host doesn't re-render on every worktree-map change; only
   // `refresh` is read.
   const { refresh } = useWorktrees({ enabled: false });
-  const shouldMountNewWorktreeDialog = useKeepMounted(createDialog.isOpen);
+  // The plugin's dialog shows only while the claim this opening was handed to
+  // still renders and the user hasn't chosen stock; otherwise the same opening
+  // falls through to the stock dialog with its prefills intact.
+  const worktreeCreateSurface = useProjectSurface("worktreeCreate");
+  const pluginCreateConfig =
+    createDialog.isOpen &&
+    createDialog.surfacePanelKindId !== undefined &&
+    worktreeCreateSurface?.config.id === createDialog.surfacePanelKindId
+      ? worktreeCreateSurface.config
+      : null;
+  const isStockCreateOpen = createDialog.isOpen && pluginCreateConfig === null;
+  const shouldMountNewWorktreeDialog = useKeepMounted(isStockCreateOpen);
 
   // Resolved reactively from the active provider's slot so the dialog drops
   // out (and back in) live with the owning plugin's enable state instead of
@@ -128,11 +147,11 @@ function ProjectDialogHost() {
         <ErrorBoundary
           variant="component"
           componentName="NewWorktreeDialog"
-          resetKeys={[Number(createDialog.isOpen)]}
+          resetKeys={[Number(isStockCreateOpen)]}
         >
           <Suspense fallback={null}>
             <LazyNewWorktreeDialog
-              isOpen={createDialog.isOpen}
+              isOpen={isStockCreateOpen}
               onClose={closeCreateDialog}
               rootPath={rootPath}
               onWorktreeCreated={(worktreeId) => {
@@ -147,6 +166,21 @@ function ProjectDialogHost() {
               initialPrompt={createDialog.initialPrompt}
             />
           </Suspense>
+        </ErrorBoundary>
+      )}
+
+      {pluginCreateConfig !== null && (
+        <ErrorBoundary
+          variant="component"
+          componentName="ProjectWorktreeCreateDialog"
+          resetKeys={[pluginCreateConfig.id]}
+        >
+          <ProjectWorktreeCreateDialog
+            config={pluginCreateConfig}
+            isOpen
+            onClose={closeCreateDialog}
+            onUseStock={showStockCreateDialog}
+          />
         </ErrorBoundary>
       )}
 

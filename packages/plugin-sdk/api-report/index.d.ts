@@ -2530,6 +2530,7 @@ interface SurfaceViewSlot {
 interface SurfaceContributions {
     emptyCanvas?: SurfaceViewSlot;
     projectHome?: SurfaceViewSlot;
+    worktreeCreate?: SurfaceViewSlot;
 }
 /**
  * The attribute the host stamps on the element a plugin view renders into, and

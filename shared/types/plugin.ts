@@ -861,6 +861,16 @@ export const PROJECT_SURFACE_SLOT_CATALOGUE = {
     noun: "home",
     switchPlacement: "below",
   },
+  // The plugin's view stands in for the New worktree dialog, so the strip sits
+  // above it like a dialog's own header, and "Standard dialog…" is the way back.
+  worktreeCreate: {
+    mode: "exclusive",
+    claim: "view",
+    label: "New worktree",
+    stockLabel: "Standard dialog",
+    noun: "dialog",
+    switchPlacement: "above",
+  },
 } as const satisfies Record<string, ProjectSurfaceSlotDescriptor>;
 
 export type ProjectSurfaceSlot = keyof typeof PROJECT_SURFACE_SLOT_CATALOGUE;
@@ -878,6 +888,7 @@ export interface SurfaceViewSlot {
 export interface SurfaceContributions {
   emptyCanvas?: SurfaceViewSlot;
   projectHome?: SurfaceViewSlot;
+  worktreeCreate?: SurfaceViewSlot;
 }
 
 /**

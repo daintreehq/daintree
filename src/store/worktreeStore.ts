@@ -34,6 +34,13 @@ interface CreateDialogState {
   initialAgentId: string | null;
   initialPrompt: string | null;
   onCreated?: (worktreeId: string) => void;
+  /**
+   * The panel kind of the project plugin's `worktreeCreate` view this opening
+   * was handed to. Per opening, so "Standard dialog…" can move one opening to
+   * the stock dialog without touching the saved choice; absent, the stock
+   * dialog shows.
+   */
+  surfacePanelKindId?: string;
 }
 
 /** What a failed creation's Retry reopens the dialog with. The prompt stays in memory only. */
@@ -397,8 +404,11 @@ interface WorktreeSelectionState {
       initialAgentId?: string | null;
       initialPrompt?: string | null;
       onCreated?: (worktreeId: string) => void;
+      surfacePanelKindId?: string;
     }
   ) => void;
+  /** Moves the open create dialog to the stock dialog, keeping what it was opened with. */
+  showStockCreateDialog: () => void;
   openCreateDialogForPR: (pr: PR) => void;
   closeCreateDialog: () => void;
   openBulkCreateDialog: (selectedIssues: Issue[], onComplete?: () => void) => void;
@@ -1231,9 +1241,15 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
         initialAgentId: options?.initialAgentId ?? null,
         initialPrompt: options?.initialPrompt ?? null,
         onCreated: options?.onCreated,
+        surfacePanelKindId: options?.surfacePanelKindId,
       },
     });
   },
+
+  showStockCreateDialog: () =>
+    set((state) => ({
+      createDialog: { ...state.createDialog, surfacePanelKindId: undefined },
+    })),
 
   openCreateDialogForPR: (pr) => {
     // Restore the worktree sidebar (only) before opening a dialog that needs

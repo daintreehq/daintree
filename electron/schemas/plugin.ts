@@ -2256,7 +2256,8 @@ export const SurfaceViewSlotSchema = z
  *
  * `emptyCanvas` stands in for the launcher while the grid is empty;
  * `projectHome` is a persistent Home the main area can switch to beside the
- * grid, which stays one click away. The spec also describes `defaultLayout`
+ * grid, which stays one click away; `worktreeCreate` opens a view as the New
+ * worktree dialog, with the stock dialog one click away. The spec also describes `defaultLayout`
  * (the arrangement opened on a cold first open with no restorable session). It
  * is not declared here, because it has no consumer: a recipe is launched
  * against a worktree, not against a project cold open. Accepting it now would
@@ -2267,6 +2268,7 @@ export const SurfaceContributionsSchema = z
   .object({
     emptyCanvas: SurfaceViewSlotSchema.optional(),
     projectHome: SurfaceViewSlotSchema.optional(),
+    worktreeCreate: SurfaceViewSlotSchema.optional(),
   })
   .strict();
 
