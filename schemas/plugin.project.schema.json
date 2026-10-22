@@ -365,6 +365,29 @@
                 ],
                 "additionalProperties": false
               },
+              "menu": {
+                "maxItems": 5,
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "actionId": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 200
+                    },
+                    "label": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 80
+                    }
+                  },
+                  "required": [
+                    "actionId"
+                  ],
+                  "additionalProperties": false
+                }
+              },
               "priority": {
                 "anyOf": [
                   {

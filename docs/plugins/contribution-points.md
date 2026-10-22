@@ -585,8 +585,9 @@ Every contributed button is collected into the **plugin tray** — a single tool
 | `id` | yes | Namespaced at runtime as `{pluginId}.{id}` — matches the convention used by every other contribution surface. |
 | `label` | yes | Hover tooltip. |
 | `iconId` | yes | One of the shared plugin icon IDs listed in `shared/config/pluginIconIds.ts` — the same set panels use — or a [custom SVG](#custom-icons) inside your plugin (`"./icons/flutter.svg"`). An unrecognized ID falls back to a generic puzzle glyph; `daintree-plugin validate` warns about it. Agent brand IDs (e.g. `claude`) don't resolve here. |
-| `actionId` | one of `actionId` or `popover` | Fully-qualified action ID, including plugin namespace. Built-in actions (e.g. `terminal.new`) also work. |
-| `popover` | one of `actionId` or `popover` | `{ "viewId": "<view id>" }` — open a popover showing that view instead of dispatching an action. See below. |
+| `actionId` | one of `actionId`, `popover` or `menu` | Fully-qualified action ID, including plugin namespace. Built-in actions (e.g. `terminal.new`) also work. |
+| `popover` | one of `actionId`, `popover` or `menu` | `{ "viewId": "<view id>" }` — open a popover showing that view instead of dispatching an action. See below. |
+| `menu` | no | Up to five of your own actions, `[{ "actionId": "acme.sync.pull", "label": "Pull" }]` (`label` defaults to the action's title). With an `actionId` the button is a split button: the click runs the action and a chevron opens the menu. On its own it is a menu button. In the tray and the overflow menu it is a submenu. See below. |
 | `priority` | no | `1`–`5`, lower = earlier. Orders your buttons within your plugin's tray group. Default `3`. |
 | `when` | no | Context expression deciding whether the button shows, evaluated live. |
 
@@ -608,7 +609,9 @@ The clause sees the [project keys](#keybindings--shipped) (`isGitBacked`, `works
 
 To show state on a button rather than hide it — a toggle that is on, a reason it can't run, work in progress — use [`host.setToolbarButtonState`](./host-api.md#settoolbarbuttonstate).
 
-A button declares exactly one of `actionId` and `popover`; neither (`toolbar_button_behavior_missing`) or both (`toolbar_button_behavior_conflict`) fails validation.
+A button declares `actionId` or `popover`, not both (`toolbar_button_behavior_conflict`), or it carries a non-empty `menu` instead; none of the three fails validation (`toolbar_button_behavior_missing`).
+
+A `menu` lists your own actions only — a built-in or another plugin's id fails (`toolbar_button_menu_action_not_own`), as does a repeat (`toolbar_button_menu_duplicate_action`) or a popover button that also declares one (`toolbar_button_menu_popover_conflict`). Each entry shows while its action is registered and dispatches on its own, with nothing from your plugin. Replace the list at runtime with the `menu` field of [`host.setToolbarButtonState`](./host-api.md#settoolbarbuttonstate).
 
 **Popovers.** For an inbox, a recent-items list or a quick-add form, name one of your views instead of an action:
 

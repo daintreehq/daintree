@@ -1058,6 +1058,7 @@ Every field is optional, and each call replaces the button's whole state, so a f
 | `busy` | Shows a spinner and ignores clicks. |
 | `tooltip` | Replaces the tooltip text. |
 | `iconId` | Replaces the icon, using the same ids as the manifest's `iconId`. A `./…svg` must be one your manifest already uses; an id that doesn't resolve keeps the manifest icon. |
+| `menu` | Replaces the button's manifest `menu` with up to five `{ actionId, label? }` entries from your own namespace, written `"{manifestId}.{id}"`; `[]` removes the menu. A button that opens a popover can't take one. A foreign id, a repeat or a longer list rejects. |
 
 The label never changes: a toggle reads the same name on and off and announces its state as `aria-pressed`, or as a checked row in the tray and the overflow menu. `tooltip` and `disabledReason` are trimmed and must then be 1 to 200 characters (`PLUGIN_TOOLBAR_BUTTON_STATE_TEXT_MAX`). The shape is strict, so an unknown key such as `label` rejects.
 

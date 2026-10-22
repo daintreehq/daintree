@@ -2318,8 +2318,17 @@ interface ToolbarButtonPopover {
     viewId: string;
 }
 /**
- * A toolbar button does exactly one thing on click: dispatch `actionId`, or
- * open `popover`. Declaring neither or both is a manifest error.
+ * A toolbar button does one thing on click: dispatch `actionId`, or open
+ * `popover`. Declaring both is a manifest error.
+ *
+ * `menu` adds a short list of the plugin's own commands (at most
+ * {@link PANEL_MENU_MAX_ITEMS}). With an `actionId` the button is a split
+ * button — the click runs the action and a chevron opens the menu; with
+ * neither `actionId` nor `popover` it is a menu button that opens the menu.
+ * A button with a `popover` can't also carry a menu. Each item is dispatched
+ * on its own with nothing the plugin supplies, and shows only while its action
+ * is registered. A plugin can replace the list at runtime with
+ * {@link PluginToolbarButtonRuntimeState.menu}.
  */
 interface ToolbarButtonContribution {
     id: string;
@@ -2328,6 +2337,7 @@ interface ToolbarButtonContribution {
     iconId: string;
     actionId?: ActionId;
     popover?: ToolbarButtonPopover;
+    menu?: PanelMenuItemContribution[];
     priority?: 1 | 2 | 3 | 4 | 5;
 }
 /**
@@ -2382,6 +2392,13 @@ interface PluginToolbarButtonRuntimeState {
     tooltip?: string;
     /** Replaces the icon, using the same ids as the manifest `iconId`. Unknown ids keep the manifest icon. */
     iconId?: string;
+    /**
+     * Replaces the button's manifest `menu` (#13786); `[]` removes it. Each
+     * `actionId` must be one of this plugin's own actions, written
+     * `"{manifestId}.{id}"`, at most {@link PANEL_MENU_MAX_ITEMS} of them. Not
+     * for a button that opens a popover.
+     */
+    menu?: PanelMenuItemContribution[];
 }
 /**
  * A short status a plugin shows on one worktree's card via
