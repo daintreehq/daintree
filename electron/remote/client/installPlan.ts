@@ -18,8 +18,9 @@ import { hostBuildOrder } from "../../../shared/utils/hostBuildOrder.js";
  *   client fetches it and copies it over. A host that has them but can't
  *   reach the feed falls back to the same copy at install time.
  *
- * Linux prefers the deb (declared dependencies, no FUSE; needs sudo, so the
- * user runs one shown command); the AppImage is the no-root fallback.
+ * Linux defaults to the AppImage (no root); a host already on the deb keeps
+ * it (declared dependencies, no FUSE; needs sudo, so the user runs one shown
+ * command).
  */
 
 export const STABLE_FEED_URL = "https://updates.daintree.org/releases/";

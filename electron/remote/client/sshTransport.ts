@@ -185,7 +185,7 @@ function targetHash(target: string): string {
 const CONTROL_PATH_PREFIX = "cm2-";
 
 /**
- * `cm1-%C` when it fits the platform's socket path limit; otherwise a short
+ * `cm2-%C` when it fits the platform's socket path limit; otherwise a short
  * per-target hash (%C alone is 40 characters, and ssh adds a temporary
  * suffix while binding).
  */
