@@ -62,6 +62,10 @@ export function createFakeWorkspaceClient(hosts: Map<string, FakeWorkspaceHost>)
       return "warm" as const;
     },
     attachDirectPort: () => undefined,
+    // Every host here is up from the start and never replaced under a view.
+    isWindowAttached: () => true,
+    on: () => undefined,
+    off: () => undefined,
     prewarmProject: () => undefined,
     waitForReady: async () => undefined,
     isWorktreeOwnedByProject: async () => null,

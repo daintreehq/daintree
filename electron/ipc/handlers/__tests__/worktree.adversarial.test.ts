@@ -465,6 +465,31 @@ describe("worktree IPC adversarial", () => {
       expect(waitForConfirmation).toHaveBeenCalledWith(7, 10_000);
     });
 
+    it("reloads the sender view's project, not the global current one", async () => {
+      ctxOverrides.projectId = "proj-2";
+      projectStoreMock.getProjectById.mockImplementation((id: string) =>
+        id === "proj-2" ? { id: "proj-2", path: "/other-repo" } : null
+      );
+      const loadProject = vi.fn().mockResolvedValue(undefined);
+      const host = { hostId: "h2" };
+      const getHostForProject = vi.fn().mockReturnValue(host);
+      const brokerPort = vi.fn().mockReturnValue(true);
+      registerRetryHandlers({
+        loadProject,
+        attachDirectPort: vi.fn(),
+        getHostForProject,
+        brokerPort,
+      });
+
+      const event = eventWithSender();
+      await getHandler(CHANNELS.WORKTREE_RETRY_PROJECT_LOAD)(event);
+
+      expect(loadProject).toHaveBeenCalledWith("/other-repo", 7);
+      expect(getHostForProject).toHaveBeenCalledWith("/other-repo");
+      expect(brokerPort).toHaveBeenCalledWith(host, event.sender, { force: true });
+      expect(projectStoreMock.getCurrentProject).not.toHaveBeenCalled();
+    });
+
     it("stays pending until the renderer confirms the fresh port", async () => {
       let confirm: (confirmed: boolean) => void = () => {};
       registerRetryHandlers({

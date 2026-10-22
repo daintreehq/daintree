@@ -926,7 +926,8 @@ describe("SidebarContent disconnected project — issue #12576", () => {
     // Retry used to clear the timeout banner over a sidebar with no port, and
     // the zero-worktree branch then told a user with an open project to open one.
     const branch = zeroWorktreeBranch();
-    const gateIdx = branch.indexOf("{!worktreeLoadError && !isProjectDisconnected && (");
+    // Gated on every load failure, a stalled reconnect over an empty list included.
+    const gateIdx = branch.indexOf("{loadFailure === null && !isProjectDisconnected && (");
     const nudgeIdx = branch.indexOf('title="Open a Git repository"');
     expect(gateIdx).toBeGreaterThan(0);
     expect(nudgeIdx).toBeGreaterThan(gateIdx);
@@ -937,9 +938,16 @@ describe("SidebarContent disconnected project — issue #12576", () => {
     // own banner and Restart action, so the fallback stays out of its way, and
     // a cold start that is still loading is not a failure yet.
     expect(source).toMatch(
-      /const loadFailure =\s*worktreeLoadError \?\?\s*\(isProjectDisconnected && !isLoading && error === null \? WORKTREE_DISCONNECTED_MESSAGE : null\);/
+      /const loadFailure =\s*worktreeLoadError \?\?\s*\(isProjectDisconnected && !isLoading && error === null\s*\?\s*WORKTREE_DISCONNECTED_MESSAGE\s*:\s*null\) \?\?/
     );
     expect(zeroWorktreeBranch()).toContain("{worktreeLoadErrorBanner}");
+  });
+
+  it("offers Retry once a lost port has stalled past any restart (#13748)", () => {
+    // Last in the chain: a reported failure or a missing connection says more.
+    expect(source).toMatch(
+      /WORKTREE_DISCONNECTED_MESSAGE\s*:\s*null\) \?\?\s*\(isReconnectStalled\(\{ isReconnecting, reconnectingAt \}\)\s*\?\s*WORKTREE_RECONNECT_STALLED_MESSAGE\s*:\s*null\);/
+    );
   });
 
   it("never shows the loading skeleton over a reported load failure", () => {

@@ -131,6 +131,7 @@ import type { UseAgentLauncherReturn } from "@/hooks/useAgentLauncher";
 import type { WorktreeActions } from "@/hooks/useWorktreeActions";
 import { LIST_LABEL_CLASS } from "@/components/ui/sectionLabel";
 import { CountBadge } from "@/components/ui/badge";
+import { isReconnectStalled } from "@/lib/worktreeReconnect";
 
 const LazyNewWorktreeDialog = lazyWithPreload(
   () => import("@/components/Worktree/NewWorktreeDialog"),
@@ -178,6 +179,8 @@ const SIDEBAR_VIRTUOSO_OVERSCAN_PX = 600;
 const RECONNECT_ESCALATE_MS = 10_000;
 
 const WORKTREE_DISCONNECTED_MESSAGE = "The workspace service isn't connected to this project.";
+const WORKTREE_RECONNECT_STALLED_MESSAGE =
+  "Lost the connection to the workspace service, and it hasn't come back. The list may be out of date.";
 
 // Fixed-count shimmer card placeholders for the worktree sidebar loading state.
 // Follows the same 3-bone structure as the `.skel-card` design in the
@@ -1739,10 +1742,16 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   // with no snapshot once loading has settled is a connection failure (#12576)
   // and takes the same banner. It yields to any service error, shown or
   // dismissed: a crashed host needs Restart, and Retry offers a fix that
-  // cannot work.
+  // cannot work. A lost port that no restart brought back takes it too, under
+  // the cached list: nothing else on its way will reconnect it (#13748).
   const loadFailure =
     worktreeLoadError ??
-    (isProjectDisconnected && !isLoading && error === null ? WORKTREE_DISCONNECTED_MESSAGE : null);
+    (isProjectDisconnected && !isLoading && error === null
+      ? WORKTREE_DISCONNECTED_MESSAGE
+      : null) ??
+    (isReconnectStalled({ isReconnecting, reconnectingAt })
+      ? WORKTREE_RECONNECT_STALLED_MESSAGE
+      : null);
   const worktreeLoadErrorBanner =
     loadFailure !== null && error === null ? <WorktreeLoadErrorBanner error={loadFailure} /> : null;
 
@@ -1833,7 +1842,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
           {/* A failed load or a missing connection already has an open
               project — the "Open a Git repository" nudge would contradict the
               banner, so the banner stands alone as the actionable state. */}
-          {!worktreeLoadError && !isProjectDisconnected && (
+          {loadFailure === null && !isProjectDisconnected && (
             <EmptyState
               variant="zero-data"
               scale="sidebar"
