@@ -4,7 +4,12 @@ import { createRoot } from "react-dom/client";
 import { DndContext } from "@dnd-kit/core";
 import { Settings, Terminal as TerminalIcon, Puzzle } from "lucide-react";
 import { resolveAppTheme } from "@shared/theme/themes";
-import type { LoadedPluginInfo, PluginManifest, ProjectPluginInfo } from "@shared/types/plugin";
+import type {
+  LoadedPluginInfo,
+  PluginManifest,
+  PluginPanelBadge,
+  ProjectPluginInfo,
+} from "@shared/types/plugin";
 import type { PtyPanelData } from "@shared/types/panel";
 import type { WorktreeState } from "@shared/types/worktree";
 import type { StagingFileEntry } from "@shared/types/git";
@@ -83,7 +88,7 @@ import {
   type SectionViewState,
 } from "@/components/Worktree/ReviewHub/reviewHubUtils";
 import { DeletedWorktreeCard } from "@/components/Sidebar/DeletedWorktreeCard";
-import { PluginPanelBadges } from "@/components/Panel/PluginPanelBadges";
+import { PluginBadgeIndicator, PluginPanelBadges } from "@/components/Panel/PluginPanelBadges";
 import { TerminalRateLimitBadge } from "@/components/Terminal/TerminalRateLimitBadge";
 import { TerminalDrivenByBadge } from "@/components/Terminal/TerminalHandOver";
 import { TerminalNotifyChip } from "@/components/Terminal/TerminalNotifyChip";
@@ -1077,6 +1082,16 @@ const NOTIFY: Record<string, PaneNotifyState> = {
   } as PaneNotifyState,
 };
 
+// Each from its own plugin, so they sit side by side as the palette. On the
+// preview's panel, which none of them own, they all draw neutral (#13766).
+const PLUGIN_BADGES: Record<string, PluginPanelBadge> = {
+  "a-default": { kind: "label", text: "12", color: "default", tooltip: "12 open" },
+  "b-success": { kind: "label", text: "Pass", color: "success" },
+  "c-warning": { kind: "label", text: "Stale", color: "warning" },
+  "d-error": { kind: "label", text: "Fail", color: "error" },
+  "e-dot": { kind: "dot", color: "warning", tooltip: "Needs attention" },
+};
+
 function seedChips() {
   initBuiltInPanelKinds();
   const panels = [
@@ -1108,19 +1123,11 @@ function seedChips() {
   useWorktreeSelectionStore.setState({ activeWorktreeId: null });
   usePluginContextMenuItemsStore.setState({ entries: [], init: noop });
   usePluginPanelBadgeStore.setState({
-    badgesByPanelId: {
-      "panel-badges": {
-        "a-default": { kind: "label", text: "12", color: "default", tooltip: "12 open" },
-        "b-success": { kind: "label", text: "Pass", color: "success" },
-        "c-warning": { kind: "label", text: "Stale", color: "warning" },
-        "d-error": { kind: "label", text: "Fail", color: "error" },
-        "e-dot": { kind: "dot", color: "warning", tooltip: "Needs attention" },
-      },
-    },
+    badgesByPanelId: { "panel-badges": PLUGIN_BADGES },
   });
   usePluginRuntimeStore.setState({
     pluginMetaById: new Map(
-      ["a-default", "b-success", "c-warning", "d-error", "e-dot"].map((id) => [
+      Object.keys(PLUGIN_BADGES).map((id) => [
         id,
         { devMode: false, displayName: "Release board", previewToolIds: new Set() },
       ])
@@ -1247,7 +1254,14 @@ function ChipsSheet() {
         </Item>
       </Group>
       <Group title="Pane header chips">
-        <Item name="PluginPanelBadges — default / success / warning / error + dot">
+        <Item name="PluginBadgeIndicator — default / success / warning / error + dot">
+          <div className="flex items-center">
+            {Object.entries(PLUGIN_BADGES).map(([pluginId, badge]) => (
+              <PluginBadgeIndicator key={pluginId} pluginId={pluginId} badge={badge} />
+            ))}
+          </div>
+        </Item>
+        <Item name="PluginPanelBadges — on a panel the plugins don't own">
           <div className="flex items-center">
             <PluginPanelBadges panelId="panel-badges" />
           </div>

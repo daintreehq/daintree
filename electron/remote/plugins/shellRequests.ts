@@ -369,7 +369,7 @@ export function installPluginShellRequests(deps: PluginShellRequestDeps = {}): (
       type,
       message: displaySafeText(message),
       duration: durationMs,
-      rateLimitKey: `plugin:${request.hostId}:${pluginId}:${type}`,
+      rateLimitKey: `plugin:${request.hostId}:${pluginId}`,
     });
     return null;
   };

@@ -1,14 +1,38 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import type { LoadedPluginInfo } from "@shared/types/plugin";
-import { PluginPanelBadges } from "../PluginPanelBadges";
+import { PluginBadgeIndicator, PluginPanelBadges } from "../PluginPanelBadges";
 import { usePluginPanelBadgeStore } from "@/store/pluginPanelBadgeStore";
 import { _resetPluginRuntimeStoreForTest, usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { usePanelStore } from "@/store/panelStore";
+import { registerPanelKind, unregisterPanelKind } from "@shared/config/panelKindRegistry";
 
 const PANEL_ID = "panel-1";
 const INSTANCE_ID = "project__b6700c7a__gregpriday.video-manager";
+const OWN_KIND = "gregpriday.video-manager.board";
+const OTHER_KIND = "acme.other.board";
+
+function registerKind(id: string, extensionId: string, hasPty = false): void {
+  registerPanelKind({
+    id,
+    name: "Board",
+    iconId: "puzzle",
+    color: "#abcdef",
+    hasPty,
+    canRestart: false,
+    canConvert: false,
+    extensionId,
+  });
+}
+
+function seedPanel(panel: { kind: string; pluginPanelKindId?: string }): void {
+  usePanelStore.setState({
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+    panelsById: { [PANEL_ID]: { id: PANEL_ID, title: "Panel", ...panel } as never },
+  });
+}
 
 function meta(displayName: string) {
   return new Map([[INSTANCE_ID, { devMode: false, displayName }]]);
@@ -69,11 +93,17 @@ beforeEach(() => {
     pluginMetaById: new Map(),
     disabledPluginIds: new Set<string>(),
   });
+  // The plugin's own panel by default: the foreign-panel cases set their own.
+  registerKind(OWN_KIND, INSTANCE_ID);
+  seedPanel({ kind: OWN_KIND });
 });
 
 afterEach(() => {
   _resetPluginRuntimeStoreForTest();
   Reflect.deleteProperty(window, "electron");
+  unregisterPanelKind(OWN_KIND);
+  unregisterPanelKind(OTHER_KIND);
+  usePanelStore.setState({ panelsById: {} });
 });
 
 describe("PluginPanelBadges", () => {
@@ -189,5 +219,146 @@ describe("PluginPanelBadges", () => {
     expect(warning).not.toBe("");
     expect(error).not.toBe("");
     expect(warning).not.toBe(error);
+  });
+});
+
+describe("PluginPanelBadges on a panel the plugin does not own (#13766)", () => {
+  function renderBadge(badge: Parameters<typeof setBadge>[0]) {
+    setBadge(badge);
+    usePluginRuntimeStore.setState({ pluginMetaById: meta("Video Manager") });
+    return render(<PluginPanelBadges panelId={PANEL_ID} />);
+  }
+
+  function setBadge(badge: {
+    kind: "dot" | "label";
+    text?: string;
+    color?: "default" | "success" | "warning" | "error";
+    tooltip?: string;
+  }) {
+    usePluginPanelBadgeStore.setState({
+      badgesByPanelId: {
+        [PANEL_ID]: {
+          [INSTANCE_ID]:
+            badge.kind === "label"
+              ? {
+                  kind: "label",
+                  text: badge.text ?? "3",
+                  color: badge.color,
+                  tooltip: badge.tooltip,
+                }
+              : { kind: "dot", color: badge.color, tooltip: badge.tooltip },
+        },
+      },
+    });
+  }
+
+  /** The dot or pill as drawn, with what the same badge looks like at `default`. */
+  function paintOf(badge: Parameters<typeof setBadge>[0]) {
+    const { container, unmount } = renderBadge(badge);
+    const drawn = {
+      glyph: container.querySelector("svg") !== null,
+      className: screen.getByRole("status").className,
+    };
+    unmount();
+    const { unmount: unmountNeutral } = renderBadge({ ...badge, color: "default" });
+    const neutral = screen.getByRole("status").className;
+    unmountNeutral();
+    return { ...drawn, neutral };
+  }
+
+  it("draws an error dot on an agent terminal as a neutral dot, without the severity glyph", () => {
+    seedPanel({ kind: "terminal" });
+
+    const paint = paintOf({ kind: "dot", color: "error" });
+
+    expect(paint.glyph).toBe(false);
+    expect(paint.className).toBe(paint.neutral);
+  });
+
+  it("draws warning, error and success labels on a foreign panel exactly as a default one", () => {
+    seedPanel({ kind: "terminal" });
+
+    for (const color of ["warning", "error", "success"] as const) {
+      const paint = paintOf({ kind: "label", text: "3", color });
+      expect(paint.className).toBe(paint.neutral);
+    }
+  });
+
+  it("names the plugin in the label and tooltip of a badge on a foreign panel", async () => {
+    seedPanel({ kind: "terminal" });
+
+    renderBadge({ kind: "dot", color: "warning", tooltip: "2 checks failing" });
+
+    const status = screen.getByRole("status");
+    expect(status.getAttribute("aria-label")).toBe("Video Manager: 2 checks failing");
+    fireEvent.focus(status);
+    expect((await screen.findByRole("tooltip")).textContent).toContain(
+      "Video Manager: 2 checks failing"
+    );
+  });
+
+  it("gives a foreign badge with no tooltip of its own one that names the plugin", async () => {
+    seedPanel({ kind: "terminal" });
+
+    renderBadge({ kind: "label", text: "3", color: "error" });
+
+    fireEvent.focus(screen.getByRole("status"));
+    expect((await screen.findByRole("tooltip")).textContent).toContain("Video Manager: 3");
+  });
+
+  it("repaints when the panel's ownership changes under a mounted badge", () => {
+    seedPanel({ kind: "terminal" });
+    const { container } = renderBadge({ kind: "dot", color: "error" });
+    expect(container.querySelector("svg")).toBeNull();
+
+    act(() => seedPanel({ kind: OWN_KIND }));
+    expect(container.querySelector("svg")).not.toBeNull();
+
+    act(() => {
+      unregisterPanelKind(OWN_KIND);
+    });
+    expect(container.querySelector("svg")).toBeNull();
+  });
+
+  it("treats a panel of another plugin's kind as foreign", () => {
+    registerKind(OTHER_KIND, "acme.other");
+    seedPanel({ kind: OTHER_KIND });
+
+    const paint = paintOf({ kind: "dot", color: "error" });
+
+    expect(paint.glyph).toBe(false);
+    expect(paint.className).toBe(paint.neutral);
+  });
+
+  it("treats a panel it cannot find as foreign", () => {
+    usePanelStore.setState({ panelsById: {} });
+
+    const paint = paintOf({ kind: "dot", color: "error" });
+
+    expect(paint.glyph).toBe(false);
+  });
+
+  it("keeps full colour on the plugin's own panel", () => {
+    const { container } = renderBadge({ kind: "dot", color: "error", tooltip: "Sync failed" });
+
+    expect(container.querySelector("svg")).not.toBeNull();
+    expect(screen.getByRole("status").getAttribute("aria-label")).toBe("Sync failed");
+  });
+
+  it("keeps full colour for a caller that draws the indicator itself, like the toolbar", () => {
+    const { container } = render(
+      <PluginBadgeIndicator pluginId={INSTANCE_ID} badge={{ kind: "dot", color: "error" }} />
+    );
+
+    expect(container.querySelector("svg")).not.toBeNull();
+  });
+
+  it("counts a PTY-backed panel opened as the plugin's kind as its own", () => {
+    registerKind(OWN_KIND, INSTANCE_ID, true);
+    seedPanel({ kind: "terminal", pluginPanelKindId: OWN_KIND });
+
+    const { container } = renderBadge({ kind: "dot", color: "error" });
+
+    expect(container.querySelector("svg")).not.toBeNull();
   });
 });
