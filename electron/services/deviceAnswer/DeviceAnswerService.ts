@@ -44,8 +44,11 @@ export interface DevicePrincipal {
 export interface DeviceAnswerServiceDeps {
   readSettings: () => DeviceAnswerSettings;
   writeSettings: (settings: DeviceAnswerSettings) => void;
-  /** This machine's waiting runs and every connected host's, each tagged with its machine. */
-  listWaiting: () => Promise<DeviceWaitingList>;
+  /**
+   * This machine's waiting runs, with every connected host's when `hosts` is
+   * set, each tagged with its machine.
+   */
+  listWaiting: (options: { hosts: boolean }) => Promise<DeviceWaitingList>;
   /**
    * Press the option labelled `label` in the run on `hostId` (`LOCAL_HOST_ID`
    * for this machine), for `device`. Resolves when every key went in; rejects
@@ -334,7 +337,11 @@ export class DeviceAnswerService {
 
       const device = this.authenticate(req.headers.authorization);
       if (req.method === "GET" && url.pathname === "/api/waiting") {
-        const { runs, hosts } = await this.deps.listWaiting();
+        // A page from before hosts were listed answers every run as this
+        // machine's, so it is shown this machine's alone.
+        const { runs, hosts } = await this.deps.listWaiting({
+          hosts: url.searchParams.get("hosts") === "1",
+        });
         // Only a device still paired once the screens are read is shown them.
         this.requireStillPaired(device);
         this.sendJson(res, 200, { runs, hosts });
@@ -458,7 +465,7 @@ export class DeviceAnswerService {
     this.answerTimes.set(device.id, times);
 
     const { hostId: rawHostId, runId, spawnedAt, label } = (body ?? {}) as Record<string, unknown>;
-    // A page from before hosts were listed names none: its runs are this machine's.
+    // A page from before hosts were listed names none: it was shown this machine's runs only.
     const hostId = rawHostId === undefined ? LOCAL_HOST_ID : rawHostId;
     if (
       typeof hostId !== "string" ||
@@ -571,7 +578,8 @@ function headerValue(value: string | string[] | undefined): string | undefined {
 function refusalText(error: unknown): string {
   const userMessage = (error as { userMessage?: unknown } | null)?.userMessage;
   if (typeof userMessage === "string" && userMessage !== "") return userMessage;
-  return "Nothing was pressed.";
+  // Nothing says how far it got.
+  return "Something went wrong while answering. Check the screen before answering again.";
 }
 
 function readJson(req: http.IncomingMessage): Promise<unknown> {

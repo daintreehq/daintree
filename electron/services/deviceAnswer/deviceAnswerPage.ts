@@ -11,6 +11,8 @@ const SCRIPT = String.raw`
 (() => {
   const KEY = "daintree-device-token";
   const POLL_MS = 3000;
+  // An answer whose reply never arrived, or couldn't be read, may have gone in.
+  const UNHEARD = "Couldn't hear back from Daintree. It may have been pressed, so check before answering again.";
   const $ = (id) => document.getElementById(id);
   let token = null;
   let timer = null;
@@ -61,7 +63,10 @@ const SCRIPT = String.raw`
     return m < 60 ? m + " min" : Math.round(m / 60) + " h";
   };
 
-  const render = (runs, hosts) => {
+  const render = (runs, reported) => {
+    const hosts = Array.isArray(reported)
+      ? reported.filter((host) => host && typeof host.host === "string")
+      : [];
     const list = $("runs");
     list.replaceChildren();
     $("empty").hidden = runs.length > 0;
@@ -116,10 +121,10 @@ const SCRIPT = String.raw`
         spawnedAt: run.spawnedAt,
         label,
       });
-      result.textContent = r.ok ? "Picked “" + label + "”." : (r.data && r.data.error) || "Nothing was pressed.";
+      result.textContent = r.ok ? "Picked “" + label + "”." : (r.data && r.data.error) || UNHEARD;
     } catch {
       // The request may have arrived before the reply was lost.
-      result.textContent = "Couldn't hear back from Daintree. It may have been pressed, so check before answering again.";
+      result.textContent = UNHEARD;
     } finally {
       busy = false;
       setTimeout(poll, 600);
@@ -134,12 +139,12 @@ const SCRIPT = String.raw`
       polling = true;
       const seq = answerSeq;
       try {
-        const r = await call("GET", "/api/waiting");
+        const r = await call("GET", "/api/waiting?hosts=1");
         if (busy || seq !== answerSeq) {
           // An answer began while this was in flight; the next read shows its result.
         } else if (r.ok && r.data) {
           $("status").textContent = "";
-          render(r.data.runs, r.data.hosts || []);
+          render(r.data.runs, r.data.hosts);
         } else if (r.status !== 401) {
           $("status").textContent = (r.data && r.data.error) || "Couldn't read the waiting agents.";
         }

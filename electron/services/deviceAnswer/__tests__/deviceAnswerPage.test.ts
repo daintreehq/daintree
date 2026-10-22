@@ -44,7 +44,7 @@ async function openPage(
         path,
         body: init.body === undefined ? undefined : JSON.parse(init.body),
       });
-      const data = path === "/api/waiting" ? waiting : await answer();
+      const data = path.startsWith("/api/waiting") ? waiting : await answer();
       return { ok: true, status: 200, json: async () => data };
     })
   );
@@ -63,6 +63,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  Reflect.deleteProperty(document, "visibilityState");
   vi.useRealTimers();
   vi.unstubAllGlobals();
   localStorage.clear();
@@ -81,6 +82,8 @@ describe("the paired device's page", () => {
         { hostId: "studio-04", host: "studio-04", status: "needs-update" },
       ],
     });
+    // Hosts' runs are asked for only by a page that can answer them there.
+    expect(sent[0]).toMatchObject({ method: "GET", path: "/api/waiting?hosts=1" });
     const cards = [...document.querySelectorAll(".run")];
     expect(cards.map((card) => card.querySelector(".host")?.textContent)).toEqual([
       "greg-studio",
@@ -107,6 +110,12 @@ describe("the paired device's page", () => {
     button(card, "Yes").click();
     await vi.advanceTimersByTimeAsync(0);
     expect(sent.at(-1)!.body).toEqual({ runId: "run-1", spawnedAt: 100, label: "Yes" });
+  });
+
+  it("keeps the runs it can answer when what it's told of hosts can't be read", async () => {
+    await openPage({ runs: [run({ hostId: "local", host: "greg-studio" })], hosts: [null, 7] });
+    expect(document.querySelectorAll(".run")).toHaveLength(1);
+    expect(document.getElementById("status")!.textContent).toBe("");
   });
 
   it("never says nothing was pressed when the reply to an answer was lost", async () => {

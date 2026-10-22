@@ -81,7 +81,7 @@ async function setup(overrides: Partial<DeviceAnswerSettings> = {}) {
   };
   const answer = vi.fn<DeviceAnswerServiceDeps["answer"]>(async () => {});
   const hosts: DeviceWaitingHost[] = [{ hostId: "studio-03", host: "studio-03", status: "ok" }];
-  const listWaiting = vi.fn(async () => ({ runs: [RUN], hosts }));
+  const listWaiting = vi.fn(async (_options: { hosts: boolean }) => ({ runs: [RUN], hosts }));
   const onStatusChanged = vi.fn();
   const service = new DeviceAnswerService({
     readSettings: () => settings,
@@ -179,7 +179,7 @@ describe("DeviceAnswerService", () => {
   });
 
   it("pairs a device with the open code, keeps only its token's digest, and lists waiting runs to it", async () => {
-    const { service, port, api, pair, settings } = await setup();
+    const { service, port, api, pair, settings, listWaiting } = await setup();
     await service.setEnabled({ enabled: true });
     expect((await request(port(), "GET", "/api/waiting", { headers: api })).status).toBe(401);
 
@@ -189,14 +189,21 @@ describe("DeviceAnswerService", () => {
     expect(JSON.stringify(settings())).not.toContain(token);
     expect(JSON.stringify(service.getStatus())).not.toContain(device!.tokenHash);
 
-    const waiting = await request(port(), "GET", "/api/waiting", {
+    const waiting = await request(port(), "GET", "/api/waiting?hosts=1", {
       headers: { ...api, Authorization: `Bearer ${token}` },
     });
     expect(waiting.status).toBe(200);
+    expect(listWaiting).toHaveBeenLastCalledWith({ hosts: true });
     expect(waiting.json().runs).toEqual([RUN]);
     expect(waiting.json().hosts).toEqual([
       { hostId: "studio-03", host: "studio-03", status: "ok" },
     ]);
+
+    // A page from before hosts were listed would answer theirs as this machine's.
+    await request(port(), "GET", "/api/waiting", {
+      headers: { ...api, Authorization: `Bearer ${token}` },
+    });
+    expect(listWaiting).toHaveBeenLastCalledWith({ hosts: false });
   });
 
   it("refuses a wrong code, and a code that was used", async () => {

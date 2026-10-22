@@ -52,10 +52,11 @@ describe("sanitizeDeviceAnswerSettings", () => {
         { ...entry, hostId: "studio-05" },
       ],
     });
+    // Only what can't be read goes; the answer is still on record.
+    expect(settings.answers).toHaveLength(3);
     expect(settings.answers[0]).toMatchObject({ hostId: "studio-03", hostName: "studio-03" });
     for (const answer of settings.answers.slice(1)) {
-      expect(answer).not.toHaveProperty("hostId");
-      expect(answer).not.toHaveProperty("hostName");
+      expect(answer).toEqual(entry);
     }
   });
 });

@@ -14,6 +14,7 @@ import {
   HOST_ANSWER_BUDGET_MS,
   installDeviceAnswerHostWith,
   type DeviceAnswerHostDeps,
+  type DeviceAnswerSessionContext,
 } from "../host.js";
 import { DeviceAnswerLinkMethod, DeviceAnswerListPayloadSchema } from "../linkMethods.js";
 
@@ -240,5 +241,93 @@ describe("answering a connected host's agents from a device paired with the Shel
     uninstall();
     const listed = await client.listWaiting();
     expect(listed).toEqual([{ hostId: HOST, host: HOST, status: "needs-update", runs: [] }]);
+  });
+
+  it("serves a Shell that attaches after it started, until it is uninstalled", async () => {
+    const late = await pair();
+    const listeners: Array<(ctx: DeviceAnswerSessionContext) => void> = [];
+    const off = vi.fn();
+    const stop = installDeviceAnswerHostWith(
+      {
+        sessions: [],
+        onSession: (listener) => {
+          listeners.push(listener);
+          return off;
+        },
+      },
+      hostDeps
+    );
+    listeners[0]!({
+      session: late.host,
+      client: { clientId: SHELL_CLIENT, clientName: "Greg's Mac", platform: "darwin" },
+    });
+    sessionByHost.set("studio-04", late.client);
+    const listed = await client.listWaiting();
+    expect(listed.find((host) => host.hostId === "studio-04")?.status).toBe("ok");
+    stop();
+    expect(off).toHaveBeenCalledTimes(1);
+  });
+
+  it("asks nothing of a host whose link closed after it was listed", async () => {
+    await client.listWaiting();
+    sessions.client.close("test");
+    await expect(
+      client.answer({ hostId: HOST, runId: "run-1", spawnedAt: 100, label: "Yes" })
+    ).rejects.toMatchObject({ userMessage: expect.stringContaining("isn't connected") });
+    expect(hold).not.toHaveBeenCalled();
+    expect(hostDeps.answer).not.toHaveBeenCalled();
+  });
+});
+
+describe("what a Shell tells a device when a host's reply doesn't come", () => {
+  const failing = (code: string) => ({
+    isOpen: true,
+    call: vi.fn(async () => {
+      throw Object.assign(new Error(code), { code });
+    }),
+  });
+
+  function clientOver(session: ReturnType<typeof failing>, release = vi.fn()) {
+    return {
+      release,
+      client: new DeviceAnswerHostsClient({
+        hosts: () => [{ hostId: HOST, name: HOST }],
+        sessionFor: () => session,
+        touch: () => {},
+        hold: () => release,
+      }),
+    };
+  }
+
+  it("lists a host that didn't answer in time as unreachable", async () => {
+    const { client: shell } = clientOver(failing("OUTCOME_UNKNOWN"));
+    expect(await shell.listWaiting()).toEqual([
+      { hostId: HOST, host: HOST, status: "unreachable", runs: [] },
+    ]);
+  });
+
+  it("says an answer the host may have taken may have been pressed, and never sends it again", async () => {
+    const session = failing("OUTCOME_UNKNOWN");
+    const { client: shell, release } = clientOver(session);
+    await expect(
+      shell.answer({ hostId: HOST, runId: "run-1", spawnedAt: 100, label: "Yes" })
+    ).rejects.toMatchObject({ userMessage: expect.stringContaining("may have been pressed") });
+    expect(session.call).toHaveBeenCalledTimes(1);
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("says nothing was pressed for an answer that never left this machine", async () => {
+    const { client: shell, release } = clientOver(failing("HOST_DISCONNECTED"));
+    await expect(
+      shell.answer({ hostId: HOST, runId: "run-1", spawnedAt: 100, label: "Yes" })
+    ).rejects.toMatchObject({ userMessage: `${HOST} isn't connected. Nothing was pressed.` });
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("claims nothing about keys when the host failed in a way it didn't explain", async () => {
+    const { client: shell } = clientOver(failing("INTERNAL"));
+    await expect(
+      shell.answer({ hostId: HOST, runId: "run-1", spawnedAt: 100, label: "Yes" })
+    ).rejects.toMatchObject({ userMessage: expect.not.stringContaining("Nothing was pressed") });
   });
 });

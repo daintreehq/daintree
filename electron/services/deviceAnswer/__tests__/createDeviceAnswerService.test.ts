@@ -194,7 +194,7 @@ describe("createDeviceAnswerService and connected hosts", () => {
   });
 
   it("lists this machine's runs with every connected host's, each named with its machine", async () => {
-    const { runs, hosts } = await wiredDeps().listWaiting();
+    const { runs, hosts } = await wiredDeps().listWaiting({ hosts: true });
     expect(runs.map((run) => [run.hostId, run.runId])).toEqual([
       // The host's run has waited longest.
       ["studio-03", "run-1"],
@@ -210,9 +210,26 @@ describe("createDeviceAnswerService and connected hosts", () => {
 
   it("lists only this machine's runs where remote hosts aren't running", async () => {
     state.remote = undefined;
-    const { runs, hosts } = await wiredDeps().listWaiting();
+    const { runs, hosts } = await wiredDeps().listWaiting({ hosts: true });
     expect(runs.map((run) => run.hostId)).toEqual([LOCAL_HOST_ID]);
     expect(hosts).toEqual([]);
+  });
+
+  it("asks no host for a page that can't answer hosts' runs", async () => {
+    const { runs, hosts } = await wiredDeps().listWaiting({ hosts: false });
+    expect(state.remote!.listWaiting).not.toHaveBeenCalled();
+    expect(runs.map((run) => run.hostId)).toEqual([LOCAL_HOST_ID]);
+    expect(hosts).toEqual([]);
+  });
+
+  it("still lists this machine's runs when the hosts can't be listed at all", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    state.remote!.listWaiting.mockImplementationOnce(() => {
+      throw new Error("registry unreadable");
+    });
+    const { runs } = await wiredDeps().listWaiting({ hosts: true });
+    expect(runs.map((run) => run.hostId)).toEqual([LOCAL_HOST_ID]);
+    warn.mockRestore();
   });
 
   it("sends a host's run to that host, and presses nothing here though a run of the same id waits", async () => {

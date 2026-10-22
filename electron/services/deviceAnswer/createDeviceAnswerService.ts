@@ -37,10 +37,22 @@ function bySince(a: DeviceWaitingRun, b: DeviceWaitingRun): number {
   return (a.since ?? Infinity) - (b.since ?? Infinity);
 }
 
-async function listWaiting(): Promise<DeviceWaitingList> {
+async function listWaiting(options: { hosts: boolean }): Promise<DeviceWaitingList> {
+  const remote = options.hosts ? getRemoteService("deviceAnswerHosts") : undefined;
   const [local, hosts] = await Promise.all([
     listLocalWaitingRuns(),
-    getRemoteService("deviceAnswerHosts")?.listWaiting() ?? [],
+    // Hosts that can't be read never hide this machine's own runs.
+    remote
+      ? Promise.resolve()
+          .then(() => remote.listWaiting())
+          .catch((error: unknown) => {
+            console.warn(
+              "[DeviceAnswer] Couldn't list connected hosts:",
+              (error as Error)?.message
+            );
+            return [];
+          })
+      : [],
   ]);
   const name = thisMachineName();
   const runs: DeviceWaitingRun[] = [

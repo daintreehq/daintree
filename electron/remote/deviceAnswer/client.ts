@@ -58,9 +58,9 @@ export class DeviceAnswerHostsClient {
     });
     return Promise.all(
       connected.map(async ({ hostId, host, session }): Promise<HostWaitingRuns> => {
-        // A device watching a host's agents is using it: the idle release starts counting again.
-        this.deps.touch(hostId);
         try {
+          // A device watching a host's agents is using it: the idle release starts counting again.
+          this.deps.touch(hostId);
           const raw = await session.call(
             DeviceAnswerLinkMethod.LIST,
             {},
