@@ -7,7 +7,10 @@ import type { ProjectPresentationSnapshot } from "@shared/types/ipc/projectPrese
 import type { PluginLaunchEntryConfig } from "@shared/types/plugin";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useProjectStore } from "@/store/projectStore";
-import { _resetProjectPresentationStoreForTest } from "@/store/projectPresentationStore";
+import {
+  _resetProjectPresentationStoreForTest,
+  useProjectPresentationStore,
+} from "@/store/projectPresentationStore";
 import { usePluginLaunchEntriesStore } from "@/store/pluginLaunchEntriesStore";
 import { LauncherPresentationSection } from "../LauncherPresentationSection";
 
@@ -199,6 +202,14 @@ describe("LauncherPresentationSection", () => {
     );
     await renderSection();
     fireEvent.click(groupRow("recipes").getByLabelText("Move Recipes up"));
+    // The rows show the order being saved, and the buttons follow it.
+    expect(drawnOrder()).toEqual([
+      "agents",
+      "panels",
+      `plugin:${NOTES}`,
+      "recipes",
+      `plugin:${TOOLS}`,
+    ]);
     fireEvent.click(groupRow("recipes").getByLabelText("Move Recipes up"));
     expect(setLauncherGroupOrder).toHaveBeenLastCalledWith([
       "agents",
@@ -210,6 +221,47 @@ describe("LauncherPresentationSection", () => {
     await act(async () => {
       resolveFirst(snapshot({}, { revision: 1 }));
     });
+  });
+
+  it("lets an order saved elsewhere win over one still being saved here", async () => {
+    setLauncherGroupOrder.mockImplementationOnce(() => new Promise(() => {}));
+    await renderSection();
+    fireEvent.click(groupRow("panels").getByLabelText("Move Panels up"));
+    act(() => {
+      useProjectPresentationStore.setState({
+        launcherGroupOrder: ["recipes", "agents", "panels"],
+        revision: 7,
+      });
+    });
+    expect(drawnOrder().slice(0, 3)).toEqual(["recipes", "agents", "panels"]);
+    fireEvent.click(groupRow("agents").getByLabelText("Move Agents down"));
+    expect(setLauncherGroupOrder).toHaveBeenLastCalledWith([
+      "recipes",
+      "panels",
+      "agents",
+      `plugin:${NOTES}`,
+      `plugin:${TOOLS}`,
+    ]);
+  });
+
+  it("keeps a move that failed to save in place for Retry and builds on it", async () => {
+    setLauncherGroupOrder.mockRejectedValueOnce(new Error("offline"));
+    await renderSection();
+    fireEvent.click(groupRow("recipes").getByLabelText("Move Recipes up"));
+    await act(async () => {});
+    expect(screen.getByText("Couldn't save the change")).toBeTruthy();
+    expect(drawnOrder()[3]).toBe("recipes");
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    fireEvent.click(groupRow("recipes").getByLabelText("Move Recipes up"));
+    expect(setLauncherGroupOrder).toHaveBeenLastCalledWith([
+      "agents",
+      "panels",
+      "recipes",
+      `plugin:${NOTES}`,
+      `plugin:${TOOLS}`,
+    ]);
+    await act(async () => {});
   });
 
   it("resets the order back to the project's", async () => {

@@ -3216,6 +3216,25 @@ describe("DockLaunchButton — project arrangement (#13791)", () => {
     expect(recentRows(container)).toEqual(claude);
   });
 
+  it("leaves the selection alone on the Left Arrow in search, with More left open", () => {
+    mockLauncherArrangement = arranged({ demoted: { agents: true, panels: true } });
+    const { container } = renderButton();
+    act(() => popoverOpenChangeSpy!(true));
+    fireEvent.click(moreRow(container)!);
+
+    // Browser and File browser: two demoted panels, so neither is first.
+    fireEvent.change(searchInput(container), { target: { value: "browser" } });
+    const rows = options(container);
+    expect(rows.length).toBeGreaterThan(1);
+    const chosen = rows[1]!;
+    movePointer(chosen, { x: 10, y: 40 });
+    expect(selectedOption(container)).toBe(chosen);
+
+    // From the results region, where the input's caret has no say.
+    fireEvent.keyDown(listbox(container), { key: "ArrowLeft" });
+    expect(selectedOption(container)).toBe(chosen);
+  });
+
   it("still finds a demoted agent by search", () => {
     mockLauncherArrangement = arranged({ demoted: { agents: true, panels: true } });
     const { container, getByText } = renderButton();

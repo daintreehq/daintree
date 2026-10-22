@@ -870,10 +870,14 @@ export function DockLaunchButton({
         }
       }
       // From anywhere inside an open More, the Left Arrow shuts it and goes
-      // back to its row, as it does from an agent's presets.
+      // back to its row, as it does from an agent's presets. Only while More
+      // is on screen: a search result shares its row key with the row it
+      // matches, and More is not among the results.
+      const moreIndex = results.findIndex((row) => row.rowKey === MORE_ROW_KEY);
       if (
         event.key === "ArrowLeft" &&
         moreOpen &&
+        moreIndex >= 0 &&
         selectedRow &&
         moreRowKeys.has(selectedRow.rowKey) &&
         caretAtStart
@@ -881,12 +885,7 @@ export function DockLaunchButton({
         event.preventDefault();
         event.stopPropagation();
         setMoreOpen(false);
-        setSelectedIndex(
-          Math.max(
-            0,
-            results.findIndex((row) => row.rowKey === MORE_ROW_KEY)
-          )
-        );
+        setSelectedIndex(moreIndex);
         return;
       }
       if (event.key === "Enter") {
