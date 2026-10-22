@@ -404,24 +404,77 @@ export interface PluginSettingsViewContext {
 }
 
 /**
- * The synthetic view-kind id a plugin's `location: "settings"` view mounts
- * under. It names no panel kind: it exists so the shared plugin-view loader can
- * activate the owning plugin and key its per-view state, and main recognises
- * the prefix in `activatePluginForView`.
+ * Where a plugin view is mounted, handed to it as
+ * {@link PanelViewProps.hostContext}.
+ *
+ * `"panel"` is a panel in the grid, the dock or a dialog. `"surface"` is a
+ * project surface slot (`contributes.surfaces`), which mounts one of the
+ * plugin's panel views in place of the host's own content — so the same view
+ * can see both and lay itself out for each. `"settings"` is the plugin's custom
+ * settings section.
+ *
+ * Open-ended: hosts added later (a sidebar, a popover, an editor) arrive as new
+ * members, so a view that switches on this must give unknown kinds a sensible
+ * default rather than treat the list as exhaustive.
  */
-export const PLUGIN_SETTINGS_VIEW_KIND_PREFIX = "plugin-settings-view:";
+export type PluginViewHostKind = "panel" | "surface" | "settings";
 
-export function pluginSettingsViewKindId(pluginId: string): string {
-  return `${PLUGIN_SETTINGS_VIEW_KIND_PREFIX}${pluginId}`;
+export interface PluginViewHostContext {
+  readonly kind: PluginViewHostKind;
 }
 
-/** The plugin instance key a settings-view kind id names, or `null` for any other id. */
-export function pluginIdFromSettingsViewKindId(kindId: string): string | null {
-  if (typeof kindId !== "string" || !kindId.startsWith(PLUGIN_SETTINGS_VIEW_KIND_PREFIX)) {
+/**
+ * A plugin view that mounts outside the panel grid — every `contributes.views`
+ * entry whose location is not `"panel"`. Registered by main at plugin load,
+ * never as a panel kind, so nothing can spawn it from the launcher, palette or
+ * dock, and served only to the views of projects that may see the plugin.
+ */
+export interface PluginHostedViewDescriptor {
+  /** {@link pluginHostedViewKindId} of the plugin instance and view. */
+  id: string;
+  /** The plugin's RUNTIME instance key, as panel kinds carry it in `extensionId`. */
+  pluginId: string;
+  /** The view's own manifest id. */
+  viewId: string;
+  location: Exclude<ViewLocation, "panel">;
+  /** Display name for diagnostics: the plugin's name and what the view is for. */
+  name: string;
+  /** The `plugin://` module URL under the plugin's current load and generation. */
+  componentPath: string;
+}
+
+/**
+ * The synthetic view-kind id a hosted view mounts under. It names no panel
+ * kind: it lets the shared plugin-view loader activate the owning plugin and
+ * key the view's state, and main resolves it in `activatePluginForView`.
+ */
+export const PLUGIN_HOSTED_VIEW_KIND_PREFIX = "plugin-view:";
+
+/** The manifest grammar for a view id (`SAFE_ID_PATTERN`), which rules out `/`. */
+const HOSTED_VIEW_ID_PATTERN = /^[a-zA-Z0-9._-]+$/;
+
+export function pluginHostedViewKindId(pluginId: string, viewId: string): string {
+  return `${PLUGIN_HOSTED_VIEW_KIND_PREFIX}${pluginId}/${viewId}`;
+}
+
+/**
+ * The plugin instance key and view id a hosted-view kind id names, or `null`
+ * for any other id. Split at the LAST `/`: a view id can never contain one,
+ * while an instance key is not promised not to.
+ */
+export function parsePluginHostedViewKindId(
+  kindId: string
+): { pluginId: string; viewId: string } | null {
+  if (typeof kindId !== "string" || !kindId.startsWith(PLUGIN_HOSTED_VIEW_KIND_PREFIX)) {
     return null;
   }
-  const pluginId = kindId.slice(PLUGIN_SETTINGS_VIEW_KIND_PREFIX.length);
-  return pluginId.length > 0 ? pluginId : null;
+  const rest = kindId.slice(PLUGIN_HOSTED_VIEW_KIND_PREFIX.length);
+  const slash = rest.lastIndexOf("/");
+  if (slash <= 0) return null;
+  const pluginId = rest.slice(0, slash);
+  const viewId = rest.slice(slash + 1);
+  if (!HOSTED_VIEW_ID_PATTERN.test(viewId)) return null;
+  return { pluginId, viewId };
 }
 
 export interface ViewContribution {
@@ -937,6 +990,26 @@ export interface PanelViewProps {
    * mounted in, so it renders the rows for that scope. Absent for a panel view.
    */
   readonly settingsContext?: PluginSettingsViewContext;
+  /**
+   * Where the host mounted this view — a panel, a project surface, the plugin's
+   * settings section — so one view can lay itself out for each place it
+   * appears. Always set by Daintree; absent only from a host that predates it,
+   * which you can treat as `"panel"`.
+   *
+   * This is the whole of what a view learns about its surroundings. Your view
+   * owns its own box and nothing outside it: reading or styling the host's DOM,
+   * relying on an ancestor's layout or class names, or reaching past your box
+   * with global CSS is unsupported and can break on any update. The host
+   * contains your layout (`position: fixed` stays inside your box, and your
+   * z-indexes stay in your own stacking context), but a modal `<dialog>`, a
+   * `popover` element or a `createPortal` into `document.body` leaves that
+   * containment. For overlays use `@daintreehq/plugin-ui`'s `Dialog`, `Popover`
+   * and menus, which the host draws and positions.
+   *
+   * New host kinds are added over time, so give an unrecognised `kind` a
+   * sensible default rather than switching on it exhaustively.
+   */
+  readonly hostContext?: PluginViewHostContext;
 }
 
 /**
@@ -2839,12 +2912,6 @@ export interface LoadedPluginInfo {
    * `PluginMcpTierAuth`; do not re-declare it anywhere else.
    */
   pluginDanger: "safe" | "confirm";
-  /**
-   * The `plugin://` module URL of the plugin's `location: "settings"` view,
-   * built by main under this load's authority and generation. Present only
-   * while the plugin is running and declares one.
-   */
-  settingsViewPath?: string;
   /**
    * True when the plugin was refused at load time by the remote blocklist /
    * kill-switch (#10891) — its `manifest.name` matched a blocklist entry whose

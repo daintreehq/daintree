@@ -3793,6 +3793,11 @@ function buildElectronApi(): ElectronAPI {
           tours: import("../shared/types/plugin.js").PluginTourDescriptor[];
         }) => void
       ) => _eventBusOn("plugin:tours-changed", callback),
+      onHostedViewsChanged: (
+        callback: (payload: {
+          views: import("../shared/types/plugin.js").PluginHostedViewDescriptor[];
+        }) => void
+      ) => _eventBusOn("plugin:hosted-views-changed", callback),
       onIconsChanged: (
         callback: (payload: {
           icons: import("../shared/config/pluginCustomIcon.js").PluginCustomIconAsset[];

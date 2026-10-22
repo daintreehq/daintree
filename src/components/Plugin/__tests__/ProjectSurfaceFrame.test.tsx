@@ -31,15 +31,13 @@ vi.mock("@/components/Plugin/PluginViewContent", () => ({
       </div>
     </div>
   ),
+  pluginViewHostContext: (kind: string) => ({ kind }),
 }));
 
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ProjectSurfaceFrame } from "../ProjectSurfaceFrame";
-import {
-  ProjectSurfaceView,
-  _resetProjectSurfaceRuntimesForTest,
-  useProjectSurface,
-} from "../ProjectSurfaceView";
+import { ProjectSurfaceView, useProjectSurface } from "../ProjectSurfaceView";
+import { _resetPluginHostedViewRuntimesForTest } from "../PluginHostedView";
 import {
   _resetPluginProjectSurfacesStoreForTest,
   selectSurfaceChoice,
@@ -128,7 +126,7 @@ beforeEach(() => {
 afterEach(() => {
   unregisterPanelKind(KIND_ID);
   _resetPluginProjectSurfacesStoreForTest();
-  _resetProjectSurfaceRuntimesForTest();
+  _resetPluginHostedViewRuntimesForTest();
   __resetProjectPluginStoreForTesting();
   Reflect.deleteProperty(window, "electron");
 });

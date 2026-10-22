@@ -153,7 +153,8 @@ import type { EventBusEnvelope } from "../../shared/types/ipc/maps.js";
 import {
   makeProjectPluginInstanceKey,
   parseProjectPluginInstanceKey,
-  pluginIdFromSettingsViewKindId,
+  parsePluginHostedViewKindId,
+  pluginHostedViewKindId,
   pluginManifestIdFromInstanceKey,
   projectIdFromPluginInstanceKey,
 } from "../../shared/types/plugin.js";
@@ -287,6 +288,10 @@ import {
   unregisterPluginTours,
   type PluginTourRemoteAudio,
 } from "./plugin/PluginTourRegistry.js";
+import {
+  registerPluginHostedViews,
+  unregisterPluginHostedViews,
+} from "./plugin/PluginHostedViewRegistry.js";
 import { PluginRecipeMetadataStore } from "./plugin/PluginRecipeMetadataStore.js";
 import {
   broadcastToRenderer,
@@ -2463,10 +2468,10 @@ export class PluginService {
     const unmatchedViewIds = new Set<string>();
     for (const view of manifest.contributes.views) {
       // `componentPath` safety is enforced by `ViewContributionSchema` at
-      // manifest parse. A settings view renders in the plugin's settings home,
-      // never into a panel, so it is left out of the panel match entirely —
-      // `settingsViewPath` builds its URL on demand.
-      if (view.location === "settings") continue;
+      // manifest parse. A view for any other location mounts outside the
+      // panel grid, so it is left out of the panel match entirely and
+      // registered as a hosted view below.
+      if (view.location !== "panel") continue;
       if (viewsByBareId.has(view.id)) {
         // Two entries with the same bare id — last would silently overwrite
         // earlier. Surface the authoring mistake; keep the first to make the
@@ -2617,6 +2622,34 @@ export class PluginService {
           buildPluginViewUrl(authority, relativePath, plugin.viewGeneration),
       });
       this.broadcaster.scheduleToursBroadcast();
+    }
+
+    // Views that mount outside the panel grid (#13770) — today the settings
+    // section. Registered here, after the map commit and with no await since,
+    // for the same addressability reason as the panel kinds above: the URL is
+    // only resolvable once the protocol handler can see this load's authority.
+    // Never registered as panel kinds, so nothing can spawn one.
+    const hostedViews = manifest.contributes.views.flatMap((view) =>
+      view.location === "panel"
+        ? []
+        : [
+            {
+              id: pluginHostedViewKindId(pluginId, view.id),
+              pluginId,
+              viewId: view.id,
+              location: view.location,
+              name: `${manifest.displayName ?? manifest.name} ${view.location}`,
+              componentPath: buildPluginViewUrl(
+                authority,
+                view.componentPath,
+                plugin.viewGeneration
+              ),
+            },
+          ]
+    );
+    if (hostedViews.length > 0) {
+      registerPluginHostedViews(pluginId, hostedViews);
+      this.broadcaster.scheduleHostedViewsBroadcast();
     }
 
     // Project surface claims (§7.8). After the panels loop, because a claim
@@ -3576,9 +3609,14 @@ export class PluginService {
     options: { remoteFrontend?: boolean } = {}
   ): Promise<PluginActivationResult> {
     if (typeof panelKindId !== "string" || panelKindId.length === 0) return { ok: true };
-    const settingsPluginId = pluginIdFromSettingsViewKindId(panelKindId);
-    if (settingsPluginId !== null) {
-      return this.activatePluginForSettingsView(settingsPluginId, requestRecoveryPath);
+    const hosted = parsePluginHostedViewKindId(panelKindId);
+    if (hosted !== null) {
+      return this.activatePluginForHostedView(
+        hosted.pluginId,
+        hosted.viewId,
+        requestRecoveryPath,
+        options
+      );
     }
     for (const [pluginId, plugin] of this.plugins) {
       const projectId = plugin.binding?.projectId ?? null;
@@ -3648,17 +3686,32 @@ export class PluginService {
   }
 
   /**
-   * {@link activatePluginForView} for a plugin's `location: "settings"` view,
-   * which names no panel kind: the id carries the instance key directly. Same
-   * activation, failure reporting and recovery-URL contract as a panel view.
+   * {@link activatePluginForView} for a view that mounts outside the panel grid
+   * (#13770), which names no panel kind: the id carries the instance key and
+   * the view id directly. Same activation, remote gate, failure reporting and
+   * recovery-URL contract as a panel view.
    */
-  private async activatePluginForSettingsView(
+  private async activatePluginForHostedView(
     pluginId: string,
-    requestRecoveryPath: boolean
+    viewId: string,
+    requestRecoveryPath: boolean,
+    options: { remoteFrontend?: boolean }
   ): Promise<PluginActivationResult> {
     const plugin = this.plugins.get(pluginId);
-    const view = plugin?.manifest.contributes.views.find((v) => v.location === "settings");
+    const view = plugin?.manifest.contributes.views.find(
+      (v) => v.id === viewId && v.location !== "panel"
+    );
     if (!plugin || !view) return { ok: true };
+    if (options.remoteFrontend && plugin.manifest.remote === "unsupported") {
+      console.warn(
+        `[PluginService] Refused to activate "${pluginId}" for a window on another machine: the plugin declares "remote": "unsupported"`
+      );
+      return {
+        ok: false,
+        error: `Plugin "${pluginId}" only works on the machine it runs on`,
+        remoteUnsupported: { pluginId },
+      };
+    }
     await this.activatePlugin(pluginId);
     const loadError = this.getPluginLoadError(pluginId);
     if (loadError) return { ok: false, error: loadError.message, stack: loadError.stack };
@@ -3676,20 +3729,6 @@ export class PluginService {
         live.recoveryViewGeneration
       ),
     };
-  }
-
-  /**
-   * The `plugin://` URL of a running plugin's settings view under this load's
-   * authority and generation, or `undefined` when it declares none (or has no
-   * live authority, in which case the URL would address nothing).
-   */
-  private settingsViewPath(pluginId: string): string | undefined {
-    const plugin = this.plugins.get(pluginId);
-    const view = plugin?.manifest.contributes.views.find((v) => v.location === "settings");
-    if (!plugin || !view) return undefined;
-    const authority = this.pluginAuthorities.get(pluginId);
-    if (!authority) return undefined;
-    return buildPluginViewUrl(authority, view.componentPath, plugin.viewGeneration);
   }
 
   /**
@@ -6669,6 +6708,9 @@ export class PluginService {
     runUnloadStep(pluginId, "scheduleToursBroadcast", () =>
       this.broadcaster.scheduleToursBroadcast()
     );
+    runUnloadStep(pluginId, "unregisterPluginHostedViews", () => {
+      if (unregisterPluginHostedViews(pluginId)) this.broadcaster.scheduleHostedViewsBroadcast();
+    });
     runUnloadStep(pluginId, "unregisterPluginAgents", () => unregisterPluginAgents(pluginId));
     runUnloadStep(pluginId, "scheduleAgentsBroadcast", () =>
       this.broadcaster.scheduleAgentsBroadcast(true)
@@ -7216,12 +7258,9 @@ export class PluginService {
       const blocklisted = blocklistReason !== undefined;
       const pendingRestart = blocklisted ? false : isRunning ? disabled : !disabled;
       const pluginDanger = computePluginDanger(p.manifest);
-      const settingsViewPath = isRunning ? this.settingsViewPath(instanceId) : undefined;
-      const settingsView = settingsViewPath !== undefined ? { settingsViewPath } : {};
       if (p.isBuiltin) {
         return {
           ...identity,
-          ...settingsView,
           manifest: p.manifest,
           dir: p.dir,
           loadedAt,
@@ -7243,7 +7282,6 @@ export class PluginService {
       const record = isProject ? undefined : installed[p.manifest.name];
       return {
         ...identity,
-        ...settingsView,
         manifest: p.manifest,
         dir: p.dir,
         loadedAt,

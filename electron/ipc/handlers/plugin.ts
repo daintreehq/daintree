@@ -66,6 +66,7 @@ import { getPluginKeybindings } from "../../services/pluginKeybindingRegistry.js
 import { getPluginContextMenuItems } from "../../services/pluginContextMenuRegistry.js";
 import {
   getPluginCustomIconsForProject,
+  getPluginHostedViewsForProject,
   recipeOwner,
   selectContributionsForProject,
 } from "../../services/plugin/PluginContributionBroadcaster.js";
@@ -86,6 +87,7 @@ import type {
   PluginIpcContext,
   PluginActionContribution,
   PluginActionDescriptor,
+  PluginHostedViewDescriptor,
   PluginTourDescriptor,
   PluginInstallOptions,
   PluginInstallError,
@@ -109,7 +111,7 @@ import type {
 import {
   isProjectSurfaceChoice,
   isProjectSurfaceSlot,
-  pluginIdFromSettingsViewKindId,
+  parsePluginHostedViewKindId,
 } from "../../../shared/types/plugin.js";
 import type { IpcContext } from "../types.js";
 import {
@@ -908,18 +910,18 @@ async function handleActivateForView(
   panelKindId: string,
   requestRecoveryPath?: boolean
 ): Promise<string | undefined> {
-  // A settings view names its plugin instance directly rather than a panel
-  // kind, so the owning project comes from the instance key — the same rule,
-  // applied to the other id shape.
-  const settingsPluginId = pluginIdFromSettingsViewKindId(panelKindId);
-  if (settingsPluginId !== null) {
-    const settingsOwner = projectIdFromPluginInstanceKey(settingsPluginId);
+  // A view hosted outside the panel grid names its plugin instance directly
+  // rather than a panel kind, so the owning project comes from the instance
+  // key — the same rule, applied to the other id shape.
+  const hosted = parsePluginHostedViewKindId(panelKindId);
+  if (hosted !== null) {
+    const hostedOwner = projectIdFromPluginInstanceKey(hosted.pluginId);
     const malformed =
-      settingsOwner === null && settingsPluginId.startsWith(PROJECT_PLUGIN_INSTANCE_PREFIX);
-    if (malformed || (settingsOwner !== null && settingsOwner !== ctx.projectId)) {
+      hostedOwner === null && hosted.pluginId.startsWith(PROJECT_PLUGIN_INSTANCE_PREFIX);
+    if (malformed || (hostedOwner !== null && hostedOwner !== ctx.projectId)) {
       throw new AppError({
         code: "PLUGIN_ACTIVATION_FAILED",
-        message: `Plugin activation rejected for settings view "${panelKindId}": sender belongs to a different project`,
+        message: `Plugin activation rejected for view "${panelKindId}": sender belongs to a different project`,
         userMessage: "That plugin belongs to a different project.",
       });
     }
@@ -1147,6 +1149,17 @@ async function handleToursGet(ctx: IpcContext): Promise<PluginTourDescriptor[]> 
     (tour) => tour.pluginId,
     ctx.projectId
   );
+}
+
+/**
+ * Plugin views that mount outside the panel grid (#13770), as the sender's
+ * project may see them: a project plugin's only in its own project, an
+ * installed plugin's wherever it is visible. The project comes from the
+ * sender, never an argument.
+ */
+async function handleHostedViewsGet(ctx: IpcContext): Promise<PluginHostedViewDescriptor[]> {
+  await (await getPluginService()).waitForInit();
+  return getPluginHostedViewsForProject(ctx.projectId);
 }
 
 async function handleIconsGet(ctx: IpcContext): Promise<PluginCustomIconAsset[]> {
@@ -2078,6 +2091,9 @@ export const pluginNamespace = defineIpcNamespace({
     getAgents: op(PLUGIN_METHOD_CHANNELS.getAgents, handleAgentsGet),
     getRecipes: op(PLUGIN_METHOD_CHANNELS.getRecipes, handleRecipesGet, { withContext: true }),
     getTours: op(PLUGIN_METHOD_CHANNELS.getTours, handleToursGet, { withContext: true }),
+    getHostedViews: op(PLUGIN_METHOD_CHANNELS.getHostedViews, handleHostedViewsGet, {
+      withContext: true,
+    }),
     getIcons: op(PLUGIN_METHOD_CHANNELS.getIcons, handleIconsGet, { withContext: true }),
     recordRecipeUse: op(PLUGIN_METHOD_CHANNELS.recordRecipeUse, handleRecipeRecordUse),
     updateRecipeMetadata: op(

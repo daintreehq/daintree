@@ -246,6 +246,7 @@ import { type PluginIpcContext } from "../../../shared/types/plugin.js";
 import { registerPanelKind } from "../../../shared/config/panelKindRegistry.js";
 import { registerToolbarButton } from "../../../shared/config/toolbarButtonRegistry.js";
 import { registerPluginMenuItem } from "../pluginMenuRegistry.js";
+import { getPluginHostedViews } from "../plugin/PluginHostedViewRegistry.js";
 
 function makeCtx(pluginId: string, overrides: Partial<PluginIpcContext> = {}): PluginIpcContext {
   return {
@@ -496,17 +497,34 @@ describe("PluginService", () => {
     expect(Object.prototype.hasOwnProperty.call(plain, "hasPluginSettings")).toBe(false);
     expect(Object.prototype.hasOwnProperty.call(plain, "hasRequiredSettings")).toBe(false);
 
-    const listed = service.listPlugins();
-    const withView = listed.find((p) => p.instanceId === "acme.settings-plugin");
-    expect(withView?.settingsViewPath).toMatch(/^plugin:\/\/.*dist\/prefs\.js$/);
-    expect(listed.find((p) => p.instanceId === "acme.plain-plugin")?.settingsViewPath).toBe(
-      undefined
-    );
+    // Served as a hosted view instead: outside the grid, under this load's authority.
+    const hosted = getPluginHostedViews().filter((v) => v.pluginId.startsWith("acme."));
+    expect(hosted).toEqual([
+      {
+        id: "plugin-view:acme.settings-plugin/prefs",
+        pluginId: "acme.settings-plugin",
+        viewId: "prefs",
+        location: "settings",
+        name: "acme.settings-plugin settings",
+        componentPath: expect.stringMatching(/^plugin:\/\/.*dist\/prefs\.js$/),
+      },
+    ]);
 
-    // The settings view activates its plugin like a panel view does.
+    // The settings view activates its plugin like a panel view does, and only
+    // a view the plugin actually hosts outside the grid resolves.
     await expect(
-      service.activatePluginForView("plugin-settings-view:acme.settings-plugin")
+      service.activatePluginForView("plugin-view:acme.settings-plugin/prefs", true)
+    ).resolves.toMatchObject({
+      ok: true,
+      recoveryComponentPath: expect.stringMatching(/dist\/prefs\.js$/),
+    });
+    await expect(
+      service.activatePluginForView("plugin-view:acme.settings-plugin/board", true)
     ).resolves.toEqual({ ok: true });
+
+    // Unloading withdraws it.
+    service.unloadPlugin("acme.settings-plugin");
+    expect(getPluginHostedViews().some((v) => v.pluginId === "acme.settings-plugin")).toBe(false);
   });
 
   it("skips directories without plugin.json", async () => {

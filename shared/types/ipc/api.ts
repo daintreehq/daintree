@@ -2592,6 +2592,10 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     onToursChanged(
       callback: (payload: { tours: import("../plugin.js").PluginTourDescriptor[] }) => void
     ): () => void;
+    /** Subscribe to plugin hosted-view registry changes (#13770). Returns a cleanup. */
+    onHostedViewsChanged(
+      callback: (payload: { views: import("../plugin.js").PluginHostedViewDescriptor[] }) => void
+    ): () => void;
     /** Subscribe to plugin custom-icon snapshot changes (#13143). Returns a cleanup. */
     onIconsChanged(
       callback: (payload: {

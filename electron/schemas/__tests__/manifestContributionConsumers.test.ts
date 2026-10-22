@@ -601,15 +601,15 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
     componentPath: {
       mode: "verbatim",
       consumers: [{ file: PLUGIN_SERVICE, symbol: "loadPlugin → buildPluginViewUrl" }],
-      note: "Resolved to a plugin:// URL and attached to the panel kind.",
+      note: "Resolved to a plugin:// URL and attached to the panel kind, or registered as the hosted view.",
     },
     location: {
       mode: "cross-reference",
       consumers: [
         { file: PLUGIN_SCHEMA, symbol: "ViewContributionSchema (enum 'panel' | 'settings')" },
-        { file: PLUGIN_SERVICE, symbol: "settingsViewPath (location 'settings')" },
+        { file: PLUGIN_SERVICE, symbol: "loadPlugin → registerPluginHostedViews (non-panel)" },
       ],
-      note: "'panel' ties the view to the panel host; 'settings' is the plugin's one custom settings section, mounted in its settings home and never matched to a panel. A sidebar host is rejected at parse.",
+      note: "'panel' ties the view to the panel host; any other location is registered as a hosted view that mounts outside the panel grid — 'settings' is the plugin's one custom settings section, mounted in its settings home and never matched to a panel. A sidebar host is rejected at parse.",
     },
     iconId: {
       mode: "verbatim",

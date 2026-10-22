@@ -444,6 +444,7 @@ export const CHANNEL_LEASE_POLICY = {
   "plugin:report-push-listeners": "free",
   "plugin:report-view-metrics": "free",
   "plugin:tours-get": "free",
+  "plugin:hosted-views-get": "free",
   "plugin:panel-kinds-get": "free",
   "plugin:panel-reload-request": "free",
   "plugin:panel-reload-response": "free",

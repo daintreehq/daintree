@@ -215,6 +215,21 @@ describe("createPreviewPanelController", () => {
     );
   });
 
+  it("says where the view is mounted, as the host does", () => {
+    const panel = createPreviewPanelController();
+    expect(panel.props().hostContext).toEqual({ kind: "panel" });
+    // The same object for every attempt, as the host hands it.
+    expect(panel.props().hostContext).toBe(panel.props().hostContext);
+
+    const settings = createPreviewPanelController({
+      settingsContext: { scope: "user", projectId: null },
+    });
+    expect(settings.props().hostContext).toEqual({ kind: "settings" });
+
+    const surface = createPreviewPanelController({ hostContext: { kind: "surface" } });
+    expect(surface.props().hostContext).toEqual({ kind: "surface" });
+  });
+
   it("persists with the host's rules and hands the next attempt what was accepted", () => {
     const panel = createPreviewPanelController({
       initialArgs: { keep: 1 },

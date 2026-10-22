@@ -156,6 +156,24 @@ interface PluginSettingsViewContext {
     readonly projectId: string | null;
 }
 /**
+ * Where a plugin view is mounted, handed to it as
+ * {@link PanelViewProps.hostContext}.
+ *
+ * `"panel"` is a panel in the grid, the dock or a dialog. `"surface"` is a
+ * project surface slot (`contributes.surfaces`), which mounts one of the
+ * plugin's panel views in place of the host's own content — so the same view
+ * can see both and lay itself out for each. `"settings"` is the plugin's custom
+ * settings section.
+ *
+ * Open-ended: hosts added later (a sidebar, a popover, an editor) arrive as new
+ * members, so a view that switches on this must give unknown kinds a sensible
+ * default rather than treat the list as exhaustive.
+ */
+type PluginViewHostKind = "panel" | "surface" | "settings";
+interface PluginViewHostContext {
+    readonly kind: PluginViewHostKind;
+}
+/**
  * Props every plugin-contributed panel view receives from the renderer host.
  * Intentionally narrower than the host-internal `PanelComponentProps` so the
  * SDK surface stays stable across a future `plugin://` → trusted-iframe
@@ -395,6 +413,26 @@ interface PanelViewProps {
      * mounted in, so it renders the rows for that scope. Absent for a panel view.
      */
     readonly settingsContext?: PluginSettingsViewContext;
+    /**
+     * Where the host mounted this view — a panel, a project surface, the plugin's
+     * settings section — so one view can lay itself out for each place it
+     * appears. Always set by Daintree; absent only from a host that predates it,
+     * which you can treat as `"panel"`.
+     *
+     * This is the whole of what a view learns about its surroundings. Your view
+     * owns its own box and nothing outside it: reading or styling the host's DOM,
+     * relying on an ancestor's layout or class names, or reaching past your box
+     * with global CSS is unsupported and can break on any update. The host
+     * contains your layout (`position: fixed` stays inside your box, and your
+     * z-indexes stay in your own stacking context), but a modal `<dialog>`, a
+     * `popover` element or a `createPortal` into `document.body` leaves that
+     * containment. For overlays use `@daintreehq/plugin-ui`'s `Dialog`, `Popover`
+     * and menus, which the host draws and positions.
+     *
+     * New host kinds are added over time, so give an unrecognised `kind` a
+     * sensible default rather than switching on it exhaustively.
+     */
+    readonly hostContext?: PluginViewHostContext;
 }
 
 /**
@@ -454,6 +492,11 @@ interface PreviewPanelPropsOptions {
     worktreeId?: string;
     runningActions?: readonly string[];
     settingsContext?: PluginSettingsViewContext;
+    /**
+     * Where the view is mounted, as `hostContext`. Defaults to `"settings"` when
+     * {@link settingsContext} is given and `"panel"` otherwise.
+     */
+    hostContext?: PluginViewHostContext;
     /**
      * Leave out the optional host callbacks (`persistState`, `requestReload`,
      * `setHasUnsavedChanges`, `setToolbarItemState`, `setMenuItems`), as on a

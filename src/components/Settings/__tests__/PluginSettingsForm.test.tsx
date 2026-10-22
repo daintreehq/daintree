@@ -7,16 +7,21 @@ import type { ReactNode } from "react";
 import { PluginSettingsForm, lockedSecretStorageText } from "../PluginSettingsForm";
 import type {
   LoadedPluginInfo,
-  PluginRuntimeStatusChangedEvent,
+  PluginHostedViewDescriptor,
   PluginSettingsUiValues,
   PluginSettingsViewContext,
+  PluginViewHostContext,
   SettingDefinition,
 } from "@shared/types/plugin";
 import { _resetPluginRuntimeStatusStoreForTest } from "@/store/pluginRuntimeStatusStore";
 import {
-  _resetPluginSettingsViewRuntimesForTest,
-  _settingsViewRemovalSignalForTest,
-} from "@/components/Plugin/PluginSettingsView";
+  _resetPluginHostedViewsStoreForTest,
+  usePluginHostedViewsStore,
+} from "@/store/pluginHostedViewsStore";
+import {
+  _pluginHostedViewRemovalSignalForTest,
+  _resetPluginHostedViewRuntimesForTest,
+} from "@/components/Plugin/PluginHostedView";
 
 /** Build a complete settings-UI payload; overrides fill in only what a test cares about. */
 function uiValues(over: Partial<PluginSettingsUiValues> = {}): PluginSettingsUiValues {
@@ -46,6 +51,7 @@ vi.mock("@/components/Plugin/PluginViewContent", () => ({
     return function FakeContent(props: {
       panelId: string;
       settingsContext?: PluginSettingsViewContext;
+      hostContext?: PluginViewHostContext;
     }) {
       return (
         <div
@@ -53,11 +59,44 @@ vi.mock("@/components/Plugin/PluginViewContent", () => ({
           data-panel-id={props.panelId}
           data-scope={props.settingsContext?.scope}
           data-project={props.settingsContext?.projectId ?? ""}
+          data-host={props.hostContext?.kind}
         />
       );
     };
   },
+  pluginViewHostContext: (kind: string) => ({ kind }),
 }));
+
+/** Main's side of the hosted-view snapshot this project view is served. */
+const hosted = vi.hoisted(() => ({
+  views: [] as PluginHostedViewDescriptor[],
+  listeners: new Set<(payload: { views: PluginHostedViewDescriptor[] }) => void>(),
+}));
+
+const SETTINGS_VIEW_ID = "plugin-view:acme.test/prefs";
+
+function settingsViewDescriptor(componentPath: string): PluginHostedViewDescriptor {
+  return {
+    id: SETTINGS_VIEW_ID,
+    pluginId: "acme.test",
+    viewId: "prefs",
+    location: "settings",
+    name: "acme.test settings",
+    componentPath,
+  };
+}
+
+/** Serve this snapshot to the view, as the first pull would, before anything renders. */
+function serveHostedViews(views: PluginHostedViewDescriptor[]): void {
+  hosted.views = views;
+  usePluginHostedViewsStore.setState({ views });
+}
+
+/** A later snapshot pushed by main: a reload, a stop, the plugin hidden here. */
+function pushHostedViews(views: PluginHostedViewDescriptor[]): void {
+  hosted.views = views;
+  act(() => hosted.listeners.forEach((cb) => cb({ views })));
+}
 
 // The real Select lazy-loads Radix. This stand-in keeps the trigger's own props (its
 // label wiring and disabled state) and lets a test pick an option with a click.
@@ -110,6 +149,11 @@ vi.mock("@/components/ui/select", () => {
 });
 
 const pluginApi = {
+  getHostedViews: vi.fn(async () => hosted.views),
+  onHostedViewsChanged: vi.fn((cb: (payload: { views: PluginHostedViewDescriptor[] }) => void) => {
+    hosted.listeners.add(cb);
+    return () => hosted.listeners.delete(cb);
+  }),
   getSettingValues: vi.fn(),
   setSettingValue: vi.fn().mockResolvedValue(undefined),
   deleteSettingValue: vi.fn().mockResolvedValue(undefined),
@@ -159,7 +203,9 @@ beforeEach(() => {
   currentProjectId = null;
   madeFor.length = 0;
   vi.clearAllMocks();
-  _resetPluginSettingsViewRuntimesForTest();
+  hosted.views = [];
+  _resetPluginHostedViewRuntimesForTest();
+  _resetPluginHostedViewsStoreForTest();
   _resetPluginRuntimeStatusStoreForTest();
   Element.prototype.scrollIntoView = vi.fn();
   pluginApi.setSettingValue.mockResolvedValue(undefined);
@@ -954,12 +1000,17 @@ describe("a keychain that gave no key this session", () => {
   });
 });
 
+/**
+ * A plugin that declares a settings view. Given a module URL, main serves that
+ * view to this project too — the running case every home normally sees.
+ */
 function makeViewPlugin(
   settings: SettingDefinition[],
   settingsViewPath?: string,
   overrides: { declaresView?: boolean; disabled?: boolean } = {}
 ): LoadedPluginInfo {
   const declaresView = overrides.declaresView ?? settingsViewPath !== undefined;
+  if (settingsViewPath !== undefined) serveHostedViews([settingsViewDescriptor(settingsViewPath)]);
   return {
     manifest: {
       name: "acme.test",
@@ -1001,7 +1052,6 @@ function makeViewPlugin(
     devMode: false,
     pluginDanger: "safe",
     blocklisted: false,
-    ...(settingsViewPath ? { settingsViewPath } : {}),
   };
 }
 
@@ -1017,12 +1067,13 @@ describe("PluginSettingsForm custom settings section", () => {
     const view = screen.getByTestId("fake-settings-view");
     expect(view.getAttribute("data-scope")).toBe("user");
     expect(view.getAttribute("data-project")).toBe("");
+    expect(view.getAttribute("data-host")).toBe("settings");
     // Below the declared fields, in its own host-owned group.
     const field = document.getElementById("plugin-setting-acme.test-apiKey")!;
     expect(field.compareDocumentPosition(view) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.getByTestId("plugin-settings-view").closest(".settings-card")).not.toBeNull();
     expect(madeFor[0]).toMatchObject({
-      id: "plugin-settings-view:acme.test",
+      id: SETTINGS_VIEW_ID,
       componentPath: "plugin://a/settings.js",
       extensionId: "acme.test",
       standalone: true,
@@ -1046,6 +1097,7 @@ describe("PluginSettingsForm custom settings section", () => {
   });
 
   it("says a stopped plugin's section needs it enabled, instead of dropping it", () => {
+    serveHostedViews([]);
     render(
       <PluginSettingsForm
         plugin={makeViewPlugin([], undefined, { declaresView: true, disabled: true })}
@@ -1056,7 +1108,7 @@ describe("PluginSettingsForm custom settings section", () => {
     expect(screen.getByText("Available when the plugin is enabled")).toBeTruthy();
   });
 
-  it("unmounts a running section the home knows has stopped, before its list catches up", () => {
+  it("unmounts a running section the home knows has stopped, before its snapshot catches up", () => {
     currentProjectId = "proj-1";
     const plugin = makeViewPlugin([], "plugin://a/settings.js");
     const { rerender } = render(<PluginSettingsForm plugin={plugin} viewScope="project" />);
@@ -1067,30 +1119,44 @@ describe("PluginSettingsForm custom settings section", () => {
     expect(screen.getByText("Available while the plugin is running")).toBeTruthy();
   });
 
-  it("retires a cached runtime when its plugin stops or reloads, with no settings page open", () => {
-    const listeners: Array<(payload: PluginRuntimeStatusChangedEvent) => void> = [];
-    Object.defineProperty(window, "electron", {
-      configurable: true,
-      writable: true,
-      value: {
-        plugin: pluginApi,
-        events: {
-          on: (_name: string, cb: (payload: PluginRuntimeStatusChangedEvent) => void) => {
-            listeners.push(cb);
-            return () => {};
-          },
-        },
-      },
-    });
-    const push = (status: PluginRuntimeStatusChangedEvent["status"]) =>
-      listeners.forEach((cb) => cb({ pluginId: "acme.test", status }));
-    const status = (viewGeneration: number | null) => ({
-      pluginId: "acme.test",
-      viewGeneration,
-      worker: null,
-      dev: null,
-    });
+  it("says where the section is available when this project hides the plugin", () => {
+    // Running, but main serves this project no section for it.
+    serveHostedViews([]);
+    render(
+      <PluginSettingsForm
+        plugin={makeViewPlugin([{ id: "region", type: "string", label: "Region" }], undefined, {
+          declaresView: true,
+        })}
+        viewScope="user"
+      />
+    );
 
+    expect(screen.queryByTestId("fake-settings-view")).toBeNull();
+    expect(screen.getByText("Available in projects that show this plugin")).toBeTruthy();
+    // The generated fields are the host's own and keep working.
+    expect(screen.getByText("Region")).toBeTruthy();
+  });
+
+  it("waits for the first snapshot rather than calling a served section unavailable", async () => {
+    let resolvePull: (views: PluginHostedViewDescriptor[]) => void = () => {};
+    pluginApi.getHostedViews.mockImplementationOnce(
+      () => new Promise((resolve) => (resolvePull = resolve))
+    );
+    render(
+      <PluginSettingsForm
+        plugin={makeViewPlugin([], undefined, { declaresView: true })}
+        viewScope="user"
+      />
+    );
+    expect(screen.queryByText(/^Available/)).toBeNull();
+    expect(screen.queryByTestId("fake-settings-view")).toBeNull();
+
+    await act(async () => resolvePull([settingsViewDescriptor("plugin://a/settings.js")]));
+
+    expect(screen.getByTestId("fake-settings-view")).toBeTruthy();
+  });
+
+  it("retires a cached runtime when its plugin reloads or stops, with no settings page open", () => {
     // Mounted once, then the page closes: the runtime stays cached.
     render(
       <PluginSettingsForm
@@ -1099,114 +1165,45 @@ describe("PluginSettingsForm custom settings section", () => {
       />
     );
     cleanup();
-    const signal = _settingsViewRemovalSignalForTest("acme.test")!;
+    const signal = _pluginHostedViewRemovalSignalForTest(SETTINGS_VIEW_ID)!;
     expect(signal.aborted).toBe(false);
 
-    // Still the same generation: nothing to retire.
-    push(status(3));
+    // The same module still served: nothing to retire.
+    pushHostedViews([settingsViewDescriptor("plugin://a/__dtv-3/settings.js")]);
     expect(signal.aborted).toBe(false);
 
     // Reloaded onto a new module: retired at once, not on the next visit.
-    push(status(4));
+    pushHostedViews([settingsViewDescriptor("plugin://b/__dtv-4/settings.js")]);
     expect(signal.aborted).toBe(true);
-    expect(_settingsViewRemovalSignalForTest("acme.test")).toBeUndefined();
+    expect(_pluginHostedViewRemovalSignalForTest(SETTINGS_VIEW_ID)).toBeUndefined();
 
-    // Stopped: the same, for the runtime minted after the reload.
+    // Stopped (or hidden here): the same, for the runtime minted after the reload.
     render(
       <PluginSettingsForm
-        plugin={makeViewPlugin([], "plugin://a/__dtv-4/settings.js")}
+        plugin={makeViewPlugin([], "plugin://b/__dtv-4/settings.js")}
         viewScope="user"
       />
     );
     cleanup();
-    const next = _settingsViewRemovalSignalForTest("acme.test")!;
-    push(null);
+    const next = _pluginHostedViewRemovalSignalForTest(SETTINGS_VIEW_ID)!;
+    pushHostedViews([]);
     expect(next.aborted).toBe(true);
   });
 
-  it("swaps a mounted view for the reloaded module while the page stays open", async () => {
-    const listeners: Array<(payload: PluginRuntimeStatusChangedEvent) => void> = [];
-    const list = vi.fn(async () => [makeViewPlugin([], "plugin://b/__dtv-4/settings.js")]);
-    Object.defineProperty(window, "electron", {
-      configurable: true,
-      writable: true,
-      value: {
-        plugin: { ...pluginApi, list },
-        events: {
-          on: (name: string, cb: (payload: PluginRuntimeStatusChangedEvent) => void) => {
-            if (name === "plugin:runtime-status-changed") listeners.push(cb);
-            return () => {};
-          },
-        },
-      },
-    });
-    const push = (viewGeneration: number) =>
-      act(() =>
-        listeners.forEach((cb) =>
-          cb({
-            pluginId: "acme.test",
-            status: { pluginId: "acme.test", viewGeneration, worker: null, dev: null },
-          })
-        )
-      );
+  it("swaps a mounted view for the reloaded module while the page stays open", () => {
     render(
       <PluginSettingsForm
         plugin={makeViewPlugin([], "plugin://a/__dtv-3/settings.js")}
         viewScope="user"
       />
     );
-    push(3);
     expect(screen.getByTestId("fake-settings-view")).toBeTruthy();
 
-    // A dev rebuild: the live generation moves on, the props do not.
-    push(4);
+    // A dev rebuild: main serves the new module; the props never change.
+    pushHostedViews([settingsViewDescriptor("plugin://b/__dtv-4/settings.js")]);
 
-    await waitFor(() =>
-      expect(madeFor.at(-1)?.componentPath).toBe("plugin://b/__dtv-4/settings.js")
-    );
+    expect(madeFor.at(-1)?.componentPath).toBe("plugin://b/__dtv-4/settings.js");
     expect(screen.getByTestId("fake-settings-view")).toBeTruthy();
-    expect(list).toHaveBeenCalled();
-  });
-
-  it("says the reloaded section couldn't load when the inventory never catches up", async () => {
-    const listeners: Array<(payload: PluginRuntimeStatusChangedEvent) => void> = [];
-    const list = vi.fn(async () => [makeViewPlugin([], "plugin://a/__dtv-3/settings.js")]);
-    Object.defineProperty(window, "electron", {
-      configurable: true,
-      writable: true,
-      value: {
-        plugin: { ...pluginApi, list },
-        events: {
-          on: (name: string, cb: (payload: PluginRuntimeStatusChangedEvent) => void) => {
-            if (name === "plugin:runtime-status-changed") listeners.push(cb);
-            return () => {};
-          },
-        },
-      },
-    });
-    render(
-      <PluginSettingsForm
-        plugin={makeViewPlugin([], "plugin://a/__dtv-3/settings.js")}
-        viewScope="user"
-      />
-    );
-    act(() =>
-      listeners.forEach((cb) =>
-        cb({
-          pluginId: "acme.test",
-          status: { pluginId: "acme.test", viewGeneration: 4, worker: null, dev: null },
-        })
-      )
-    );
-    expect(screen.getByText("Reloading…")).toBeTruthy();
-
-    await waitFor(
-      () => expect(screen.getByText(/Couldn't load the reloaded section/)).toBeTruthy(),
-      {
-        timeout: 5000,
-      }
-    );
-    expect(list.mock.calls.length).toBe(5);
   });
 
   it("renders nothing for a plugin with neither fields nor a view", () => {

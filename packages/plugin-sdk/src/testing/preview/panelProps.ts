@@ -2,6 +2,7 @@ import type {
   PanelViewProps,
   PluginPanelToolbarItemState,
   PluginSettingsViewContext,
+  PluginViewHostContext,
 } from "../../../../../shared/types/plugin.js";
 import { PLUGIN_STYLE_ROOT_ATTRIBUTE } from "../../../../../shared/types/plugin.js";
 import {
@@ -41,6 +42,11 @@ export interface PreviewPanelPropsOptions {
   worktreeId?: string;
   runningActions?: readonly string[];
   settingsContext?: PluginSettingsViewContext;
+  /**
+   * Where the view is mounted, as `hostContext`. Defaults to `"settings"` when
+   * {@link settingsContext} is given and `"panel"` otherwise.
+   */
+  hostContext?: PluginViewHostContext;
   /**
    * Leave out the optional host callbacks (`persistState`, `requestReload`,
    * `setHasUnsavedChanges`, `setToolbarItemState`, `setMenuItems`), as on a
@@ -114,6 +120,11 @@ export function createPreviewPanelController(
   const styleRootAttributes = Object.freeze({
     [PLUGIN_STYLE_ROOT_ATTRIBUTE]: "",
     [PLUGIN_STYLE_OWNER_ATTRIBUTE]: pluginId,
+  });
+  // One object for every attempt, as the host hands it.
+  const hostContext: PluginViewHostContext = Object.freeze({
+    kind:
+      options.hostContext?.kind ?? (options.settingsContext !== undefined ? "settings" : "panel"),
   });
 
   let persistedState = options.initialArgs;
@@ -214,6 +225,7 @@ export function createPreviewPanelController(
         ...(options.settingsContext !== undefined
           ? { settingsContext: options.settingsContext }
           : {}),
+        hostContext,
         styleRootAttributes,
         ...callbacks,
       };

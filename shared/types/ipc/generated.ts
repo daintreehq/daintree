@@ -1697,6 +1697,10 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("./pluginDiagnostics.js").PluginDiagnosticsSnapshot;
   };
+  "plugin:hosted-views-get": {
+    args: [];
+    result: import("../plugin.js").PluginHostedViewDescriptor[];
+  };
   "plugin:icons-get": {
     args: [];
     result: import("../../config/pluginCustomIcon.js").PluginCustomIconAsset[];
