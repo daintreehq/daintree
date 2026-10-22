@@ -699,12 +699,22 @@ describe("WorktreeMenuItems — Extensions", () => {
     expect(labels).toEqual(["gregpriday.video-manager", "zeta"]);
   });
 
-  it("dispatches the plugin's own action id with the surface source", () => {
-    renderWorktreeMenu({ pluginItems: [item("acme", "Do the thing", "acme.go")] }, "context-menu");
+  it("dispatches the plugin's own action id with the clicked worktree and the surface source", () => {
+    renderWorktreeMenu(
+      {
+        worktree: makeWorktree({ id: "/wt/a" }),
+        pluginItems: [item("acme", "Do the thing", "acme.go")],
+      },
+      "context-menu"
+    );
 
     fireEvent.click(screen.getByText("Do the thing"));
 
-    expect(dispatch).toHaveBeenCalledWith("acme.go", undefined, { source: "context-menu" });
+    expect(dispatch).toHaveBeenCalledWith(
+      "acme.go",
+      { worktreeId: "/wt/a" },
+      { source: "context-menu" }
+    );
   });
 });
 
