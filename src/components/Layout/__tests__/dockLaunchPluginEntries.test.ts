@@ -565,7 +565,7 @@ describe("project arrangement (#13791)", () => {
         id: `${NOTES}.ask`,
         pluginId: NOTES,
         pluginName: "Notes",
-        target: { type: "agent", agentId: "not-installed" },
+        target: { type: "agent", agentId: "not-installed", prompt: "Summarise the board" },
       }),
     ];
     const model = build({
