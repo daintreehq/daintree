@@ -1721,10 +1721,7 @@ export class WorktreeMonitor {
         () => true,
         () => this.worktreeChanges === null
       ).finally(() => {
-        this.rearmFirstStatusRecovery(
-          lifecycle,
-          Math.min(delayMs * 2, FIRST_STATUS_RETRY_MAX_MS)
-        );
+        this.rearmFirstStatusRecovery(lifecycle, Math.min(delayMs * 2, FIRST_STATUS_RETRY_MAX_MS));
       });
     }, delayMs);
     this.firstStatusTimer.unref?.();
