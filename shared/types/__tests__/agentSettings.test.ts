@@ -174,6 +174,17 @@ describe("buildResumeLatestCommand", () => {
     );
   });
 
+  it("keeps the registry's default args when the pane hands over no captured flags", () => {
+    // A deleted preset voids the captured flags. Aider must still resume with
+    // auto-commits off, as the fresh launch this replaced always did.
+    expect(buildResumeLatestCommand("aider")).toBe(
+      "aider --no-auto-commits --restore-chat-history"
+    );
+    expect(buildResumeLatestCommand("aider", ["--model", "sonnet"])).toBe(
+      "aider --no-auto-commits --model 'sonnet' --restore-chat-history"
+    );
+  });
+
   it("returns undefined for a rolling-history agent whose only way back is a picker", () => {
     // Interpreter declares empty args rather than a picker that would block the PTY.
     expect(buildResumeLatestCommand("interpreter")).toBeUndefined();
@@ -208,6 +219,7 @@ describe("buildResumeLatestCommand", () => {
   it("falls back to --continue for Qwen and Mistral when the id capture missed (#13847)", () => {
     expect(buildResumeLatestCommand("qwen")).toBe("qwen --continue");
     expect(buildResumeLatestCommand("mistral", ["--trust"])).toBe("vibe --trust --continue");
+    expect(buildResumeLatestCommand("mistral")).toBe("vibe --trust --continue");
   });
 
   it("returns opencode --continue for opencode without flags", () => {

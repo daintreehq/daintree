@@ -1154,7 +1154,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
   };
 
   // Journal a resume record for an agent terminal close (kill / gracefulKill).
-  // Best-effort: a null sessionId (no resumable session — e.g. Cursor or a
+  // Best-effort: a null sessionId (no captured session id — e.g. Cursor or a
   // non-resume-config agent), a non-agent terminal, or a branch-lookup failure
   // all skip silently and never fail the close. Mirrors PtyManager's trash-
   // expiry capture, the fourth close path that already journals.

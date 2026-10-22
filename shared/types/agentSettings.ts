@@ -1205,6 +1205,15 @@ export function buildResumeLatestCommand(
 
   const parts = [baseCommand ?? agentConfig.command];
 
+  // Registry defaults ride every launch (Aider's `--no-auto-commits` keeps it
+  // off the user's history), but a pane whose captured flags were voided — a
+  // deleted preset, a snapshot from before flags were kept — hands over none.
+  // A fresh launch builds them in, so the resume standing in for one must too.
+  for (const arg of agentConfig.args ?? []) {
+    if (launchFlags?.includes(arg) || fallbackArgs.includes(arg)) continue;
+    parts.push(isSafeShellOption(arg) ? arg : quoteAgentArg(arg));
+  }
+
   if (launchFlags?.length) {
     for (const flag of launchFlags) {
       if (isSafeShellOption(flag)) {

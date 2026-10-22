@@ -409,10 +409,11 @@ export type AgentSessionIdResume = AgentSessionIdResumeBase &
  * Discriminated union describing how an agent's prior session can be resumed.
  * The `kind` field selects the shape:
  *
- * - `session-id` — agent emits a session ID on quit (Claude/Gemini/Codex/etc.).
+ * - `session-id` — agent resumes an exact session by ID (Claude/Gemini/Codex/etc.).
  *   `quitCommand` is sent to the running process; `sessionIdPattern` (a regex
  *   with one capture group) is matched against the post-quit output to harvest
- *   the ID, which is then passed to `args(id)` on the next launch.
+ *   the ID, which is then passed to `args(id)` on the next launch. An agent that
+ *   prints no ID omits the pattern and resumes by `resumeLatestArgs` (Cursor).
  * - `rolling-history` — agent has no session model but records a chronological
  *   history that can be resumed in order. `args()` returns the resume flags;
  *   no ID is captured, so on restore they are the agent's resume-latest form
