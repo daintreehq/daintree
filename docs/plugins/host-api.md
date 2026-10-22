@@ -1388,7 +1388,7 @@ For a plugin that declares [`contributes.account`](./manifest.md#contributes). T
 
 Ask `getAccessToken()` each time you need a token rather than keeping one. Within 60 seconds of expiry the host refreshes it first, one refresh per account however many callers ask. A refresh the service refuses with `invalid_grant` disconnects the account and resolves `null`; a refresh that fails for a reason that may pass (offline, a server error) rejects and leaves the account connected. `expiresAt` is epoch milliseconds, or `null` when the service gave no lifetime. The refresh token never leaves the host, and an account connected under an earlier `contributes.account` (a different token URL, client id or scopes) reads as disconnected until the user connects again.
 
-Every member rejects (`onDidChange` throws) when the manifest declares no account. An installed plugin has one account on the machine; a project plugin's account belongs to its project.
+`getState()` and `getAccessToken()` reject when the manifest declares no account, and after the plugin unloads; `onDidChange` then never calls back. An installed plugin has one account on the machine; a project plugin's account belongs to its project.
 
 ## `storage` — private key/value storage
 

@@ -125,6 +125,9 @@ export function PluginAccountRow({ plugin, account }: PluginAccountRowProps) {
   };
 
   const connected = status?.connected === true;
+  // A sign-in started from another window, or before this row was opened, is
+  // still this account's: show it and let it be cancelled here.
+  const signingIn = waitingForBrowser || (status?.pending === true && !connected);
   const secretHost = remoteHostId === null ? null : { name: hostName ?? remoteHostId, platform };
   const disabledReason =
     remoteHostId !== null && !connected
@@ -142,7 +145,7 @@ export function PluginAccountRow({ plugin, account }: PluginAccountRowProps) {
       ? status?.identity
         ? `Connected as ${status.identity}`
         : "Connected"
-      : waitingForBrowser
+      : signingIn
         ? "Finish signing in in your browser…"
         : (account.description ??
           (account.kind === "oauth2"
@@ -212,7 +215,7 @@ export function PluginAccountRow({ plugin, account }: PluginAccountRowProps) {
               </form>
             );
           }
-          if (waitingForBrowser) {
+          if (signingIn) {
             return (
               <Button variant="outline" size="sm" onClick={cancel}>
                 Cancel

@@ -215,7 +215,8 @@ describe("PluginAccountService OAuth sign-in", () => {
     });
     expect(JSON.stringify(result)).not.toContain("at-1");
     expect(seen).toEqual([{ connected: true, identity: "octo" }]);
-    expect(h.changes).toEqual([PLUGIN_ID]);
+    // Renderers hear about the sign-in starting, ending and connecting; only this plugin's.
+    expect(new Set(h.changes)).toEqual(new Set([PLUGIN_ID]));
     const identityInit = h.fetch.mock.calls[1]![1];
     expect((identityInit.headers as Record<string, string>).Authorization).toBe("Bearer at-1");
     const raw = await fs.readFile(h.service.accountFilePath(PLUGIN_ID), "utf-8");
@@ -378,6 +379,84 @@ describe("PluginAccountService access tokens", () => {
     await expect(h.service.getAccessToken(PLUGIN_ID)).rejects.toThrow(
       "declares no contributes.account"
     );
+  });
+});
+
+describe("PluginAccountService ordering", () => {
+  it("doesn't store a sign-in whose token exchange finishes after Disconnect", async () => {
+    const h = harness(OAUTH_ACCOUNT);
+    let answer!: (r: Response) => void;
+    h.fetch.mockReturnValueOnce(new Promise<Response>((resolve) => (answer = resolve)));
+    const connecting = h.service.connect(PLUGIN_ID);
+    await vi.waitFor(() => expect(h.fetch).toHaveBeenCalledTimes(1));
+
+    await h.service.disconnect(PLUGIN_ID);
+    answer(jsonResponse({ access_token: "at-late", refresh_token: "rt-late" }));
+
+    expect(await connecting).toEqual({ status: "cancelled" });
+    expect((await h.service.getState(PLUGIN_ID)).connected).toBe(false);
+  });
+
+  it("doesn't let an old refresh's invalid_grant remove a newer sign-in", async () => {
+    const h = harness(OAUTH_ACCOUNT);
+    await connectOAuth(h);
+    h.setNow(10_000_000);
+    let answer!: (r: Response) => void;
+    h.fetch.mockReturnValueOnce(new Promise<Response>((resolve) => (answer = resolve)));
+    const stale = h.service.getAccessToken(PLUGIN_ID);
+    await vi.waitFor(() => expect(h.fetch).toHaveBeenCalledTimes(3));
+
+    await connectOAuth(h, { access_token: "at-new", refresh_token: "rt-new", expires_in: 3600 });
+    answer(jsonResponse({ error: "invalid_grant" }, 400));
+
+    expect(await stale).toEqual({ accessToken: "at-new", expiresAt: 10_000_000 + 3_600_000 });
+    expect(await h.service.getState(PLUGIN_ID)).toEqual({ connected: true, identity: "octo" });
+  });
+
+  it("drops a refresh that lands after the plugin unloads", async () => {
+    const h = harness(OAUTH_ACCOUNT);
+    await connectOAuth(h);
+    h.setNow(10_000_000);
+    let answer!: (r: Response) => void;
+    h.fetch.mockReturnValueOnce(new Promise<Response>((resolve) => (answer = resolve)));
+    void h.service.getAccessToken(PLUGIN_ID).catch(() => undefined);
+    await vi.waitFor(() => expect(h.fetch).toHaveBeenCalledTimes(3));
+
+    h.service.clearPluginState(PLUGIN_ID);
+    await fs.rm(h.service.accountFilePath(PLUGIN_ID));
+    answer(jsonResponse({ access_token: "at-late", refresh_token: "rt-late" }));
+    await vi.waitFor(() => expect(h.fetch.mock.calls.length).toBeGreaterThanOrEqual(3));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    await expect(fs.readFile(h.service.accountFilePath(PLUGIN_ID), "utf-8")).rejects.toThrow();
+  });
+});
+
+describe("PluginAccountService expiry", () => {
+  it("hands out a short-lived token with no refresh token until it actually expires", async () => {
+    const h = harness(OAUTH_ACCOUNT);
+    await connectOAuth(h, { access_token: "at-short", expires_in: 30 });
+    expect((await h.service.getAccessToken(PLUGIN_ID))?.accessToken).toBe("at-short");
+
+    h.setNow(1_000_000 + 30_000);
+    expect(await h.service.getAccessToken(PLUGIN_ID)).toBeNull();
+    expect((await h.service.getState(PLUGIN_ID)).connected).toBe(false);
+  });
+
+  it("treats a zero lifetime as already expired, not as never expiring", async () => {
+    const h = harness(OAUTH_ACCOUNT);
+    await connectOAuth(h, { access_token: "at-spent", expires_in: 0 });
+    expect(await h.service.getAccessToken(PLUGIN_ID)).toBeNull();
+  });
+
+  it("names only a standard OAuth error code, never a service's own text", async () => {
+    const h = harness(OAUTH_ACCOUNT);
+    h.fetch.mockResolvedValueOnce(jsonResponse({ error: "Rejected code code-1" }, 400));
+    const result = await h.service.connect(PLUGIN_ID);
+    expect(result).toEqual({
+      status: "failed",
+      message: "The service refused the request (HTTP 400)",
+    });
   });
 });
 

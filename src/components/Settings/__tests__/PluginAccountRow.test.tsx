@@ -113,6 +113,7 @@ beforeEach(() => {
   pluginApi.onSettingsChanged.mockImplementation(() => () => {});
   pluginApi.getAccountStatus.mockResolvedValue(status());
   pluginApi.disconnectAccount.mockResolvedValue(undefined);
+  pluginApi.cancelAccountConnect.mockResolvedValue(undefined);
   Object.defineProperty(window, "electron", {
     value: { plugin: pluginApi },
     configurable: true,
@@ -213,5 +214,14 @@ describe("PluginAccountRow", () => {
     pluginApi.getAccountStatus.mockResolvedValue(status());
     for (const listener of listeners) listener({ pluginId: "acme.tracker" });
     await screen.findByRole("button", { name: "Connect" });
+  });
+
+  it("picks up a browser sign-in already in progress and can cancel it", async () => {
+    pluginApi.getAccountStatus.mockResolvedValue(status({ pending: true }));
+    render(<PluginAccountRow plugin={plugin(OAUTH)} account={OAUTH} />);
+
+    await screen.findByText("Finish signing in in your browser…");
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(pluginApi.cancelAccountConnect).toHaveBeenCalledWith("acme.tracker");
   });
 });

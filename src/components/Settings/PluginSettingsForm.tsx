@@ -1010,7 +1010,14 @@ export function PluginSettingsForm({
           onRetry={() => setReloadKey((k) => k + 1)}
         />
       )}
-      {showAccount && <PluginAccountRow plugin={plugin} account={account} />}
+      {showAccount && (
+        // Remounted on reload: a changed declaration starts from a fresh read.
+        <PluginAccountRow
+          key={`${pluginId}:${plugin.loadedAt}`}
+          plugin={plugin}
+          account={account}
+        />
+      )}
       {(fields.length > 0 || elsewhereRow) && (
         <SettingsGroup>
           {fields.map((def) => {

@@ -1,7 +1,7 @@
 import path from "path";
 import { createHash, randomBytes } from "crypto";
 import { net } from "electron";
-import { PluginSettingsStore, wipeSettingsFile } from "../PluginSettingsStore.js";
+import { PluginSettingsStore } from "../PluginSettingsStore.js";
 import { safeStorageCipher, type SecretCipher } from "./secretCipher.js";
 import { isSafePluginInstanceId } from "./projectPluginIdentity.js";
 import {
@@ -30,6 +30,8 @@ interface StoredCredentials {
   expiresAt: number | null;
 }
 
+type OAuthAccount = Extract<PluginAccountContribution, { kind: "oauth2" }>;
+
 /**
  * Store keys. Identity and the configuration fingerprint are plain so the
  * settings row can show the account without a keychain prompt.
@@ -47,6 +49,26 @@ const MAX_RESPONSE_BYTES = 256 * 1024;
 const MAX_TOKEN_LENGTH = 16 * 1024;
 const MAX_IDENTITY_LENGTH = 200;
 const SESSION_PREFIX = "plugin-account\u0000";
+/** A token read that keeps losing to concurrent sign-ins and sign-outs gives up after this many. */
+const MAX_TOKEN_READ_ATTEMPTS = 3;
+
+/**
+ * The error codes RFC 6749 §4.1.2.1 and §5.2 define. Only these are repeated
+ * to the user: a service's own `error` text is free-form and can echo what it
+ * was sent.
+ */
+const OAUTH_ERROR_CODES = new Set([
+  "invalid_request",
+  "invalid_client",
+  "invalid_grant",
+  "unauthorized_client",
+  "unsupported_grant_type",
+  "unsupported_response_type",
+  "invalid_scope",
+  "access_denied",
+  "server_error",
+  "temporarily_unavailable",
+]);
 
 /** A service refusal worth naming to the user: the OAuth `error` code, never its free text. */
 class AccountRequestError extends Error {
@@ -66,7 +88,10 @@ interface PluginAccountServiceDeps {
   /** Root of the plugin settings tree; accounts live under `<root>/accounts`. */
   getSettingsRoot: () => string;
   getManifest: (pluginId: string) => PluginManifest | undefined;
-  /** Told after any account connects, disconnects or changes identity. */
+  /**
+   * Told after any account connects, disconnects, changes identity, or starts
+   * or ends a browser sign-in. Carries no state: a listener re-reads it.
+   */
   onAccountChanged?: (pluginId: string) => void;
   cipher?: SecretCipher;
   fetch?: FetchLike;
@@ -76,7 +101,7 @@ interface PluginAccountServiceDeps {
 }
 
 interface AccountListener {
-  cb: (state: PluginAccountState) => void;
+  cb: (state: PluginAccountState) => unknown;
   failures: ListenerFailureState;
 }
 
@@ -97,10 +122,8 @@ function base64Url(bytes: Buffer): string {
   return bytes.toString("base64url");
 }
 
-/** Only an OAuth error code's own alphabet gets through to a message (RFC 6749 §5.2). */
-function sanitizeOAuthError(value: unknown): string | null {
-  if (typeof value !== "string") return null;
-  return /^[\x20-\x21\x23-\x5B\x5D-\x7E]{1,64}$/.test(value) ? value : null;
+function knownOAuthError(value: unknown): string | null {
+  return typeof value === "string" && OAUTH_ERROR_CODES.has(value) ? value : null;
 }
 
 async function readJsonBody(response: Response): Promise<unknown> {
@@ -143,10 +166,11 @@ function connectFailureMessage(result: AuthorizationCodeLoopbackResult): string 
   switch (result.cause) {
     case "cancelled":
       return null;
-    case "denied":
-      return result.error === "access_denied"
-        ? "Sign-in was declined in the browser"
-        : `The service refused the sign-in${sanitizeOAuthError(result.error) ? ` (${sanitizeOAuthError(result.error)})` : ""}`;
+    case "denied": {
+      if (result.error === "access_denied") return "Sign-in was declined in the browser";
+      const code = knownOAuthError(result.error);
+      return `The service refused the sign-in${code ? ` (${code})` : ""}`;
+    }
     case "timed-out":
       return "Sign-in timed out before the browser came back to Daintree";
     case "open-external-failed":
@@ -163,6 +187,12 @@ function connectFailureMessage(result: AuthorizationCodeLoopbackResult): string 
  * plugin's account belongs to its project and an installed plugin has one
  * account on this machine.
  *
+ * Every write or delete of an account runs under that account's lock and
+ * bumps its generation. An operation remembers the generation it started
+ * under and does nothing once a newer one exists, so a sign-in, a refresh or a
+ * failure that finishes late can never undo a disconnect, a newer sign-in or
+ * an uninstall.
+ *
  * Tokens are never logged and never returned to a renderer. Requests go only to
  * the manifest's endpoints, refuse redirects, and send no client secret.
  */
@@ -173,12 +203,12 @@ export class PluginAccountService {
   private readonly now: () => number;
   private readonly stores = new Map<string, PluginSettingsStore>();
   private readonly listeners = new Map<string, Set<AccountListener>>();
-  /** One refresh per account at a time; concurrent callers share it. */
-  private readonly refreshes = new Map<string, Promise<PluginAccountAccessToken | null>>();
-  /** Sign-ins waiting on the browser, by plugin id, with the flow's own token. */
+  /** One token read (and refresh) per account at a time; concurrent callers share it. */
+  private readonly tokenReads = new Map<string, Promise<PluginAccountAccessToken | null>>();
+  /** Sign-ins in progress, from the click until the tokens are stored. */
   private readonly pending = new Map<string, symbol>();
-  /** Bumped by every disconnect, so a refresh that was in flight can't write after it. */
   private readonly generations = new Map<string, number>();
+  private readonly locks = new Map<string, Promise<void>>();
 
   constructor(deps: PluginAccountServiceDeps) {
     this.deps = deps;
@@ -222,6 +252,28 @@ export class PluginAccountService {
     return store;
   }
 
+  private generation(pluginId: string): number {
+    return this.generations.get(pluginId) ?? 0;
+  }
+
+  private bumpGeneration(pluginId: string): void {
+    this.generations.set(pluginId, this.generation(pluginId) + 1);
+  }
+
+  /** Run `fn` after every earlier mutation of this account has finished. */
+  private withLock<T>(pluginId: string, fn: () => Promise<T>): Promise<T> {
+    const result = (this.locks.get(pluginId) ?? Promise.resolve()).then(fn);
+    const tail = result.then(
+      () => undefined,
+      () => undefined
+    );
+    this.locks.set(pluginId, tail);
+    void tail.then(() => {
+      if (this.locks.get(pluginId) === tail) this.locks.delete(pluginId);
+    });
+    return result;
+  }
+
   private async readIdentity(pluginId: string): Promise<string | null> {
     const identity = await this.store(pluginId).get<unknown>(IDENTITY_KEY);
     return typeof identity === "string" ? identity : null;
@@ -260,7 +312,8 @@ export class PluginAccountService {
 
   /**
    * Run the declared OAuth sign-in. Called only from the settings row's click.
-   * A second click supersedes a flow still waiting on the browser.
+   * A second click supersedes a sign-in still in progress, and Cancel or
+   * Disconnect ends one at any point until its tokens are stored.
    */
   async connect(pluginId: string): Promise<PluginAccountConnectResult> {
     const account = this.requireAccount(pluginId);
@@ -275,36 +328,50 @@ export class PluginAccountService {
     }
     const flow = Symbol(pluginId);
     this.pending.set(pluginId, flow);
+    this.deps.onAccountChanged?.(pluginId);
+    const current = () => this.pending.get(pluginId) === flow;
+    try {
+      return await this.runSignIn(pluginId, account, current);
+    } finally {
+      if (current()) {
+        this.pending.delete(pluginId);
+        this.deps.onAccountChanged?.(pluginId);
+      }
+    }
+  }
+
+  private async runSignIn(
+    pluginId: string,
+    account: OAuthAccount,
+    current: () => boolean
+  ): Promise<PluginAccountConnectResult> {
     const verifier = base64Url(randomBytes(32));
     const challenge = base64Url(createHash("sha256").update(verifier).digest());
     const state = base64Url(randomBytes(32));
     const startLoopback = this.deps.startLoopback ?? startAuthorizationCodeLoopback;
-    let result: AuthorizationCodeLoopbackResult;
-    try {
-      result = await startLoopback(SESSION_PREFIX + pluginId, state, (redirectUri) => {
-        const url = new URL(account.authorizeUrl);
-        url.searchParams.set("response_type", "code");
-        url.searchParams.set("client_id", account.clientId);
-        url.searchParams.set("redirect_uri", redirectUri);
-        if (account.scopes.length > 0) url.searchParams.set("scope", account.scopes.join(" "));
-        url.searchParams.set("state", state);
-        url.searchParams.set("code_challenge", challenge);
-        url.searchParams.set("code_challenge_method", "S256");
-        return url.toString();
-      });
-    } finally {
-      if (this.pending.get(pluginId) === flow) this.pending.delete(pluginId);
-    }
+    const result = await startLoopback(SESSION_PREFIX + pluginId, state, (redirectUri) => {
+      const url = new URL(account.authorizeUrl);
+      url.searchParams.set("response_type", "code");
+      url.searchParams.set("client_id", account.clientId);
+      url.searchParams.set("redirect_uri", redirectUri);
+      if (account.scopes.length > 0) url.searchParams.set("scope", account.scopes.join(" "));
+      url.searchParams.set("state", state);
+      url.searchParams.set("code_challenge", challenge);
+      url.searchParams.set("code_challenge_method", "S256");
+      return url.toString();
+    });
+    if (!current()) return { status: "cancelled" };
     if (!result.success) {
       const message = connectFailureMessage(result);
       return message === null ? { status: "cancelled" } : { status: "failed", message };
     }
     // The manifest may have changed while the browser was open; only the
-    // endpoint declared now receives the code.
-    const current = this.declaredAccount(pluginId);
-    if (!current || current.kind !== "oauth2" || current.tokenUrl !== account.tokenUrl) {
+    // account declared now receives the code.
+    const declared = this.declaredAccount(pluginId);
+    if (!declared || accountFingerprint(declared) !== accountFingerprint(account)) {
       return { status: "failed", message: "The plugin's account changed during sign-in" };
     }
+    let saved: boolean;
     try {
       const credentials = await this.requestTokens(account.tokenUrl, {
         grant_type: "authorization_code",
@@ -313,18 +380,22 @@ export class PluginAccountService {
         client_id: account.clientId,
         code_verifier: verifier,
       });
-      await this.saveConnected(pluginId, account, credentials);
+      if (!current()) return { status: "cancelled" };
+      saved = await this.saveConnected(pluginId, account, credentials, current);
     } catch (err) {
+      if (!current()) return { status: "cancelled" };
       return { status: "failed", message: this.describeFailure(err, "Couldn't finish signing in") };
     }
+    if (!saved) return { status: "cancelled" };
     const status = await this.getUiStatus(pluginId);
     return status ? { status: "connected", account: status } : { status: "cancelled" };
   }
 
-  /** Stop a sign-in still waiting on the browser. */
+  /** Stop a sign-in that hasn't stored its tokens yet. */
   cancelConnect(pluginId: string): void {
-    if (!this.pending.has(pluginId)) return;
+    if (!this.pending.delete(pluginId)) return;
     (this.deps.cancelLoopback ?? cancelOAuthLoopback)(SESSION_PREFIX + pluginId);
+    this.deps.onAccountChanged?.(pluginId);
   }
 
   /**
@@ -345,18 +416,22 @@ export class PluginAccountService {
     if (trimmed.length > MAX_TOKEN_LENGTH || !/^[\x21-\x7E]+$/.test(trimmed)) {
       throw new Error("That doesn't look like an API token");
     }
-    await this.saveConnected(
+    this.cancelConnect(pluginId);
+    const generation = this.generation(pluginId);
+    const saved = await this.saveConnected(
       pluginId,
       account,
       { accessToken: trimmed, refreshToken: null, expiresAt: null },
+      () => this.generation(pluginId) === generation,
       { rejectUnauthorized: true }
     );
+    if (!saved) throw new Error("The account changed while the token was being checked");
     const status = await this.getUiStatus(pluginId);
     if (!status) throw new Error(`Plugin "${pluginId}" declares no contributes.account`);
     return status;
   }
 
-  /** Forget the account's tokens. Called from the settings row. */
+  /** Forget the account's tokens and end any sign-in in progress. Called from the settings row. */
   async disconnect(pluginId: string): Promise<void> {
     this.requireAccount(pluginId);
     this.cancelConnect(pluginId);
@@ -366,42 +441,72 @@ export class PluginAccountService {
   /**
    * A current access token for the plugin, refreshing first when it is within
    * {@link ACCOUNT_REFRESH_SKEW_MS} of expiry. `null` when not connected.
+   * Concurrent callers share one read, so a rotating refresh token is only
+   * ever spent once.
    */
-  async getAccessToken(pluginId: string): Promise<PluginAccountAccessToken | null> {
-    const account = this.requireAccount(pluginId);
+  getAccessToken(pluginId: string): Promise<PluginAccountAccessToken | null> {
+    let account: PluginAccountContribution;
+    try {
+      account = this.requireAccount(pluginId);
+    } catch (err) {
+      return Promise.reject(err);
+    }
+    const inFlight = this.tokenReads.get(pluginId);
+    if (inFlight) return inFlight;
+    const read = this.readToken(pluginId, account).finally(() => {
+      if (this.tokenReads.get(pluginId) === read) this.tokenReads.delete(pluginId);
+    });
+    this.tokenReads.set(pluginId, read);
+    return read;
+  }
+
+  private async readToken(
+    pluginId: string,
+    account: PluginAccountContribution
+  ): Promise<PluginAccountAccessToken | null> {
+    for (let attempt = 0; attempt < MAX_TOKEN_READ_ATTEMPTS; attempt++) {
+      const outcome = await this.readTokenOnce(pluginId, account, this.generation(pluginId));
+      // A read that saw the account replaced or removed under it starts over.
+      if (outcome !== "stale") return outcome;
+    }
+    return null;
+  }
+
+  private async readTokenOnce(
+    pluginId: string,
+    account: PluginAccountContribution,
+    generation: number
+  ): Promise<PluginAccountAccessToken | null | "stale"> {
     if (!(await this.hasCurrentCredentials(pluginId, account))) {
       // Tokens issued for an earlier account declaration are not handed out.
-      await this.clear(pluginId);
+      await this.clear(pluginId, generation);
       return null;
     }
     const credentials = await this.readCredentials(pluginId);
+    if (this.generation(pluginId) !== generation) return "stale";
     if (!credentials) return null;
-    if (
-      credentials.expiresAt === null ||
-      credentials.expiresAt - ACCOUNT_REFRESH_SKEW_MS > this.now()
-    ) {
+    const now = this.now();
+    if (credentials.expiresAt === null || credentials.expiresAt - ACCOUNT_REFRESH_SKEW_MS > now) {
       return { accessToken: credentials.accessToken, expiresAt: credentials.expiresAt };
     }
-    if (account.kind !== "oauth2" || credentials.refreshToken === null) {
-      // Expired with no way to renew it: the account has to be connected again.
-      await this.clear(pluginId);
-      return null;
+    if (account.kind === "oauth2" && credentials.refreshToken !== null) {
+      return this.refresh(pluginId, account, credentials, generation);
     }
-    const inFlight = this.refreshes.get(pluginId);
-    if (inFlight) return inFlight;
-    const refresh = this.refresh(pluginId, account, credentials).finally(() => {
-      if (this.refreshes.get(pluginId) === refresh) this.refreshes.delete(pluginId);
-    });
-    this.refreshes.set(pluginId, refresh);
-    return refresh;
+    // No way to renew it: hand it out until it actually expires, then the
+    // account has to be connected again.
+    if (credentials.expiresAt > now) {
+      return { accessToken: credentials.accessToken, expiresAt: credentials.expiresAt };
+    }
+    await this.clear(pluginId, generation);
+    return null;
   }
 
   private async refresh(
     pluginId: string,
-    account: Extract<PluginAccountContribution, { kind: "oauth2" }>,
-    credentials: StoredCredentials
-  ): Promise<PluginAccountAccessToken | null> {
-    const generation = this.generations.get(pluginId) ?? 0;
+    account: OAuthAccount,
+    credentials: StoredCredentials,
+    generation: number
+  ): Promise<PluginAccountAccessToken | null | "stale"> {
     let next: StoredCredentials;
     try {
       next = await this.requestTokens(account.tokenUrl, {
@@ -410,9 +515,10 @@ export class PluginAccountService {
         client_id: account.clientId,
       });
     } catch (err) {
+      if (this.generation(pluginId) !== generation) return "stale";
       if (err instanceof AccountRequestError && err.oauthError === "invalid_grant") {
         // RFC 6749 §5.2: the grant is revoked or expired. Retrying can't help.
-        await this.clear(pluginId);
+        await this.clear(pluginId, generation);
         return null;
       }
       throw new Error(this.describeFailure(err, "Couldn't refresh the account's access token"), {
@@ -424,14 +530,12 @@ export class PluginAccountService {
       ...next,
       refreshToken: next.refreshToken ?? credentials.refreshToken,
     };
-    // A disconnect while the request was out wins over the late answer.
-    if ((this.generations.get(pluginId) ?? 0) !== generation) return null;
-    await this.store(pluginId).set(CREDENTIALS_KEY, merged, { secret: true });
-    if ((this.generations.get(pluginId) ?? 0) !== generation) {
-      // The keychain write waited and a disconnect landed meanwhile: undo it.
-      await this.store(pluginId).delete(CREDENTIALS_KEY);
-      return null;
-    }
+    const stored = await this.withLock(pluginId, async () => {
+      if (this.generation(pluginId) !== generation) return false;
+      await this.store(pluginId).set(CREDENTIALS_KEY, merged, { secret: true });
+      return true;
+    });
+    if (!stored) return "stale";
     return { accessToken: merged.accessToken, expiresAt: merged.expiresAt };
   }
 
@@ -449,34 +553,51 @@ export class PluginAccountService {
     return isStoredCredentials(parsed) ? parsed : null;
   }
 
+  /**
+   * Store a new sign-in, unless `stillWanted` says it was cancelled or
+   * superseded by the time it holds the lock. Resolves whether it was stored.
+   */
   private async saveConnected(
     pluginId: string,
     account: PluginAccountContribution,
     credentials: StoredCredentials,
+    stillWanted: () => boolean,
     options: { rejectUnauthorized?: boolean } = {}
-  ): Promise<void> {
+  ): Promise<boolean> {
     const identity = account.identity
       ? await this.fetchIdentity(account.identity, credentials.accessToken, options)
       : null;
-    const store = this.store(pluginId);
-    // A new sign-in supersedes any refresh still running on the old tokens.
-    this.generations.set(pluginId, (this.generations.get(pluginId) ?? 0) + 1);
-    await store.set(CREDENTIALS_KEY, credentials, { secret: true });
-    await store.set(CONFIG_KEY, accountFingerprint(account));
-    if (identity === null) await store.delete(IDENTITY_KEY);
-    else await store.set(IDENTITY_KEY, identity);
-    this.notify(pluginId, { connected: true, identity });
+    const stored = await this.withLock(pluginId, async () => {
+      if (!stillWanted()) return false;
+      // Whatever was running against the previous tokens no longer applies.
+      this.bumpGeneration(pluginId);
+      const store = this.store(pluginId);
+      await store.set(CREDENTIALS_KEY, credentials, { secret: true });
+      await store.set(CONFIG_KEY, accountFingerprint(account));
+      if (identity === null) await store.delete(IDENTITY_KEY);
+      else await store.set(IDENTITY_KEY, identity);
+      return true;
+    });
+    if (stored) this.notify(pluginId, { connected: true, identity });
+    return stored;
   }
 
-  private async clear(pluginId: string): Promise<void> {
-    this.generations.set(pluginId, (this.generations.get(pluginId) ?? 0) + 1);
-    const store = this.store(pluginId);
-    const removedCredentials = await store.delete(CREDENTIALS_KEY);
-    const removedIdentity = await store.delete(IDENTITY_KEY);
-    await store.delete(CONFIG_KEY);
-    if (removedCredentials || removedIdentity) {
-      this.notify(pluginId, { connected: false, identity: null });
-    }
+  /**
+   * Remove the account's stored tokens. With `expected`, only while the
+   * account is still the one that generation saw: a late failure must not
+   * remove a newer sign-in.
+   */
+  private async clear(pluginId: string, expected?: number): Promise<void> {
+    const removed = await this.withLock(pluginId, async () => {
+      if (expected !== undefined && this.generation(pluginId) !== expected) return false;
+      this.bumpGeneration(pluginId);
+      const store = this.store(pluginId);
+      const removedCredentials = await store.delete(CREDENTIALS_KEY);
+      const removedIdentity = await store.delete(IDENTITY_KEY);
+      await store.delete(CONFIG_KEY);
+      return removedCredentials || removedIdentity;
+    });
+    if (removed) this.notify(pluginId, { connected: false, identity: null });
   }
 
   /**
@@ -511,7 +632,7 @@ export class PluginAccountService {
     if (!response.ok) {
       throw new AccountRequestError(
         "The service refused the request",
-        sanitizeOAuthError(record?.error),
+        knownOAuthError(record?.error),
         response.status
       );
     }
@@ -527,15 +648,22 @@ export class PluginAccountService {
       typeof record?.refresh_token === "string" && record.refresh_token.length > 0
         ? record.refresh_token
         : null;
-    const expiresIn = record?.expires_in;
+    return { accessToken, refreshToken, expiresAt: this.expiryFrom(record?.expires_in) };
+  }
+
+  /**
+   * `expires_in` as an instant. Absent or unreadable means the service gave no
+   * lifetime (`null`); zero or less means the token is already spent.
+   */
+  private expiryFrom(expiresIn: unknown): number | null {
     const seconds =
       typeof expiresIn === "number"
         ? expiresIn
-        : typeof expiresIn === "string"
+        : typeof expiresIn === "string" && expiresIn.trim() !== ""
           ? Number(expiresIn)
           : NaN;
-    const expiresAt = Number.isFinite(seconds) && seconds > 0 ? this.now() + seconds * 1000 : null;
-    return { accessToken, refreshToken, expiresAt };
+    if (!Number.isFinite(seconds)) return null;
+    return this.now() + Math.max(0, seconds) * 1000;
   }
 
   /**
@@ -571,7 +699,7 @@ export class PluginAccountService {
     const value = readDottedField(body, identity.field);
     const name =
       typeof value === "string" ? value.trim() : typeof value === "number" ? String(value) : "";
-    if (name.length === 0) return null;
+    if (name.length === 0 || name.includes(accessToken)) return null;
     return name.length > MAX_IDENTITY_LENGTH ? `${name.slice(0, MAX_IDENTITY_LENGTH - 1)}…` : name;
   }
 
@@ -585,8 +713,11 @@ export class PluginAccountService {
     return err instanceof Error && err.message.length > 0 ? err.message : fallback;
   }
 
-  /** `host.account.onDidChange` for one plugin. */
-  subscribe(pluginId: string, cb: (state: PluginAccountState) => void): () => void {
+  /**
+   * `host.account.onDidChange` for one plugin. A rejected async callback is
+   * tracked like a thrown one.
+   */
+  subscribe(pluginId: string, cb: (state: PluginAccountState) => unknown): () => void {
     const listener: AccountListener = { cb, failures: createListenerFailureState() };
     let set = this.listeners.get(pluginId);
     if (!set) {
@@ -614,21 +745,20 @@ export class PluginAccountService {
     this.deps.onAccountChanged?.(pluginId);
   }
 
-  /** Drop a plugin's listeners and cached store on unload; its tokens stay stored. */
+  /**
+   * Unload: drop the plugin's listeners and cached store, end a sign-in in
+   * progress, and retire anything still running against its tokens (a refresh
+   * in flight must not write after an uninstall wipes the file). The tokens
+   * themselves stay stored.
+   */
   clearPluginState(pluginId: string): void {
     this.listeners.delete(pluginId);
     this.cancelConnect(pluginId);
+    this.bumpGeneration(pluginId);
     try {
       this.stores.delete(this.accountFilePath(pluginId));
     } catch {
       // Not a valid instance id, so nothing was ever cached for it.
     }
-  }
-
-  /** Delete a plugin's stored account for good, as an uninstall that wipes settings does. */
-  async wipeAccount(pluginId: string): Promise<void> {
-    const filePath = this.accountFilePath(pluginId);
-    this.stores.delete(filePath);
-    await wipeSettingsFile(filePath);
   }
 }

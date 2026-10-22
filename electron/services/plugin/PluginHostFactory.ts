@@ -1034,6 +1034,13 @@ export function createHost(
   // into the current same-id instance's panels or read its worktrees.
   const isBound = (): boolean =>
     boundPlugin !== undefined && deps.plugins.get(pluginId) === boundPlugin;
+  const assertAccountHostLoaded = (method: string): void => {
+    if (!isBound()) {
+      throw new Error(
+        `PLUGIN_UNLOADED: plugin "${pluginId}" account.${method}: plugin is no longer loaded`
+      );
+    }
+  };
   // Last agent-state snapshot observed for this host since it subscribed via
   // onDidChangeAgentState. The host keeps no pre-subscription history, so
   // getAgentState() returns null until the first transition is observed.
@@ -3049,19 +3056,28 @@ export function createHost(
     // Signing in and out are not here at all — only the host's settings row
     // can start either.
     account: {
-      getState: () => deps.accounts.getState(pluginId),
-      getAccessToken: () => deps.accounts.getAccessToken(pluginId),
+      getState: async () => {
+        assertAccountHostLoaded("getState");
+        return deps.accounts.getState(pluginId);
+      },
+      getAccessToken: async () => {
+        assertAccountHostLoaded("getAccessToken");
+        const token = await deps.accounts.getAccessToken(pluginId);
+        // A token read that outlives an unload or reload doesn't reach a host
+        // that no longer speaks for the plugin.
+        assertAccountHostLoaded("getAccessToken");
+        return token;
+      },
       onDidChange: (callback) => {
         if (typeof callback !== "function") {
           throw new Error(`Plugin "${pluginId}" account.onDidChange: callback must be a function`);
         }
-        if (!deps.accounts.declaredAccount(pluginId)) {
-          throw new Error(`Plugin "${pluginId}" declares no contributes.account`);
-        }
-        if (!isBound()) return () => {};
-        const unsubscribe = deps.accounts.subscribe(pluginId, (state) => {
-          if (isBound()) callback(state);
-        });
+        // An undeclared account never changes. Same answer in a worker, which
+        // can't see the manifest to refuse synchronously.
+        if (!isBound() || !deps.accounts.declaredAccount(pluginId)) return () => {};
+        const unsubscribe = deps.accounts.subscribe(pluginId, (state) =>
+          isBound() ? callback(state) : undefined
+        );
         return trackPluginDisposer(deps.pluginEventCleanups, pluginId, unsubscribe);
       },
     },

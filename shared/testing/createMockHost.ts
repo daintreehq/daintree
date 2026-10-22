@@ -1139,7 +1139,7 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
   const agentStateSubs = new Set<(snapshot: PluginAgentSnapshot) => void>();
   const panelLifecycleSubs = new Set<(event: PluginPanelLifecycleEvent) => void>();
   const systemWakeSubs = new Set<(event: PluginSystemWakeEvent) => void>();
-  const accountSubs = new Set<(state: PluginAccountState) => void>();
+  const accountSubs = new Set<(state: PluginAccountState) => unknown>();
   let accountToken: PluginAccountAccessToken | null = options.account?.accessToken
     ? { accessToken: options.account.accessToken, expiresAt: options.account.expiresAt ?? null }
     : null;
@@ -2913,7 +2913,7 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
         if (typeof callback !== "function") {
           throw new Error("account.onDidChange: callback must be a function");
         }
-        const registered = (state: PluginAccountState): void => callback(state);
+        const registered = (state: PluginAccountState): unknown => callback(state);
         accountSubs.add(registered);
         return () => {
           accountSubs.delete(registered);
@@ -3014,7 +3014,19 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
         accountIdentity = null;
       }
       const state = { connected: accountToken !== null, identity: accountIdentity };
-      for (const cb of [...accountSubs]) cb({ ...state });
+      // One failing subscriber doesn't stop the rest, as in the real host.
+      for (const cb of [...accountSubs]) {
+        try {
+          const result: unknown = cb({ ...state });
+          if (result instanceof Promise) {
+            result.catch((err: unknown) =>
+              console.error("account.onDidChange callback failed", err)
+            );
+          }
+        } catch (err) {
+          console.error("account.onDidChange callback failed", err);
+        }
+      }
     },
     simulateSystemWake(event) {
       // Frozen like production delivery, for the same reason.
