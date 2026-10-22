@@ -56,7 +56,7 @@ function stubResolvers(overrides: Partial<LeaseTargetResolvers> = {}): LeaseTarg
     projectsForPath: (p) =>
       p.startsWith("/repo/a") ? ["a"] : p.startsWith("/repo/b") ? ["b"] : [],
     describeTerminal: (id) =>
-      id === "ta"
+      id === "ta" || id === " launched-padded "
         ? { projectId: "a" }
         : id === "tb"
           ? { projectId: "b" }
@@ -133,6 +133,11 @@ describe("resolveLeaseTarget", () => {
         kind: "projects",
         projectIds: ["b"],
       });
+      // An id a launch asked for may be padded; one the host has is still its own.
+      expect(
+        resolveLeaseTarget(target(channel), [" launched-padded "], "a", stubResolvers())
+      ).toEqual({ kind: "projects", projectIds: ["a"] });
+      // A padded spelling of a live terminal reads as missing, but isn't gone.
       for (const args of [["host-shell"], [" ta "], [" gone "], [""], []]) {
         expect(
           resolveLeaseTarget(target(channel), args, "a", stubResolvers()),
