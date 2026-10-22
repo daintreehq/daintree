@@ -1005,8 +1005,10 @@ export function makePluginViewContent(
     }, [attempt, onCommit]);
     // Delivered only once a view has committed with it: a view that throws
     // while rendering unwinds this effect with it, so the request is still
-    // waiting for the retry.
-    useEffect(() => {
+    // waiting for the retry. A layout effect, because a passive one can run
+    // after the microtask a `requestReload` from the view's own layout effect
+    // acts in, and the replacement would then read the request as undelivered.
+    useLayoutEffect(() => {
       if (openRequestSeq === undefined) return;
       usePluginPanelOpenRequestStore.getState().markDelivered(panelId, openRequestSeq);
     }, [panelId, openRequestSeq]);

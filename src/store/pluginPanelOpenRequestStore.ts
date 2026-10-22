@@ -38,7 +38,7 @@ let nextSeq = 1;
  * (#13779), one latest request per panel. Keyed by panel rather than held by
  * the view, so a request made while the view is unmounted is still there for
  * the next mount; `deliveredSeq` is what stops that next mount replaying a
- * request an earlier view already rendered. Not persisted: an open request is
+ * request an earlier view already committed with. Not persisted: an open request is
  * an intent, not state, and replaying one after a restart would undo whatever
  * the user did since. The renderer store orchestrator prunes a closed panel.
  */

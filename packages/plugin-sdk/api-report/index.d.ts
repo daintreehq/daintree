@@ -2433,11 +2433,12 @@ interface PanelViewProps {
      * }, [openRequest]);
      * ```
      *
-     * Once a view has rendered a request it is delivered: it stays on this
-     * attempt's props, but a later remount or reload does not see it again, so
-     * persist whatever the request changed if it should survive one. Not
-     * persisted itself, and not merged into {@link initialArgs}: a request
-     * arriving while the project's window is closed or reloaded is lost.
+     * Once a view has committed with a request it is delivered: it stays on
+     * this attempt's props, but a later remount or reload does not see it again,
+     * so persist whatever the request changed if it should survive one. Not
+     * persisted itself, and not merged into {@link initialArgs}: it is held by
+     * the project's window, so one still waiting when that window reloads,
+     * closes or is evicted to save memory is lost.
      *
      * Absent until a reusing open supplies `initialArgs`, and always absent on a
      * host with no panel record (a project surface, a settings view).

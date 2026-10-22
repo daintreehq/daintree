@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { useEffect, useState } from "react";
+import { StrictMode, useEffect, useLayoutEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -80,6 +80,8 @@ const h = {
   mounts: 0,
   /** The view throws while rendering a request for this path. */
   throwOnPath: null as string | null,
+  /** The view asks for a reload from a layout effect the first time it sees a request. */
+  reloadOnRequest: false,
 };
 
 function RequestView(props: PanelViewProps) {
@@ -88,6 +90,12 @@ function RequestView(props: PanelViewProps) {
   useEffect(() => {
     h.mounts += 1;
   }, [instance]);
+  const { openRequest, requestReload } = props;
+  useLayoutEffect(() => {
+    if (!h.reloadOnRequest || !openRequest) return;
+    h.reloadOnRequest = false;
+    requestReload?.();
+  }, [openRequest, requestReload]);
   if (h.throwOnPath !== null && props.openRequest?.args["path"] === h.throwOnPath) {
     throw new Error("can't open that");
   }
@@ -109,6 +117,7 @@ beforeEach(() => {
   h.renders = [];
   h.mounts = 0;
   h.throwOnPath = null;
+  h.reloadOnRequest = false;
   Object.defineProperty(window, "electron", {
     configurable: true,
     writable: true,
@@ -249,6 +258,61 @@ describe("PluginViewContent openRequest (#13779)", () => {
     await settlePluginViewLoad(() => expect(latest().disposeSignal).not.toBe(before.disposeSignal));
 
     expect(latest().openRequest).toBeUndefined();
+  });
+
+  it("counts a request delivered before a reload the committing view asks for can run", async () => {
+    // `requestReload` acts from a microtask. Asked for in a layout effect, that
+    // runs before passive effects flush, so an ack that waited for them let the
+    // replacement freeze a baseline that still counted the request as waiting.
+    const { Content, publish } = await load();
+    await publish({ path: "/a" });
+    h.reloadOnRequest = true;
+
+    render(<Content panelId="panel-1" offerRequestReload />);
+    await settlePluginViewLoad(() => {
+      expect(new Set(h.renders.map((p) => p.disposeSignal)).size).toBe(2);
+      expect(latest().disposeSignal.aborted).toBe(false);
+    });
+
+    expect(h.renders[0]?.openRequest?.args).toEqual({ path: "/a" });
+    expect(latest().openRequest).toBeUndefined();
+  });
+
+  it("delivers once under StrictMode and still withholds the request from a later mount", async () => {
+    const { Content, publish, seqOf, delivered } = await load();
+    await publish({ path: "/a" });
+
+    const first = render(
+      <StrictMode>
+        <Content panelId="panel-1" />
+      </StrictMode>
+    );
+    await settlePluginViewLoad(() => expect(screen.getByTestId("plugin-view")).toBeTruthy());
+    expect(latest().openRequest?.args).toEqual({ path: "/a" });
+    expect(delivered()).toBe(seqOf());
+    first.unmount();
+
+    render(
+      <StrictMode>
+        <Content panelId="panel-1" />
+      </StrictMode>
+    );
+    await settlePluginViewLoad(() => expect(screen.getByTestId("plugin-view")).toBeTruthy());
+    expect(latest().openRequest).toBeUndefined();
+  });
+
+  it("keeps the delivered request on the attempt's props through unrelated re-renders", async () => {
+    const { Content, publish } = await load();
+    const { rerender } = await mount(Content, { worktreeId: "wt-1" });
+    await publish({ path: "/a" });
+    const delivered = latest();
+    expect(delivered.openRequest?.args).toEqual({ path: "/a" });
+
+    rerender(<Content panelId="panel-1" worktreeId="wt-2" />);
+
+    expect(latest().worktreeId).toBe("wt-2");
+    expect(latest().openRequest).toBe(delivered.openRequest);
+    expect(latest().disposeSignal).toBe(delivered.disposeSignal);
   });
 
   it("delivers only to the panel the request names", async () => {
