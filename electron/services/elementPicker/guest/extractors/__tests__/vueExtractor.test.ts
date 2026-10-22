@@ -84,6 +84,7 @@ function startPicker(): void {
       events.push(event);
     },
   });
+  picker.setAvailability({ detection: "settled", extractors: { vue: "installed" } });
 }
 
 async function mountVite(
@@ -339,6 +340,23 @@ describe("the Vue extractor against a dev build", () => {
     const observation = pick("#outside");
     expect(observation.componentChain.components).toEqual([]);
     expect(observation.frameworkEvidence).toEqual([]);
+    // Vue's reader looked and found nothing, which is an answer, not an open question.
+    expect(observation.capabilities.names).toEqual({ state: "unavailable", reason: "not-exposed" });
+  });
+
+  it("leaves a node open when its component is further up than the reader will look", async () => {
+    await mountVite();
+    // Markup a widget built inside App's <main>, deeper than the walk goes.
+    let leaf = query("main.app");
+    for (let depth = 0; depth < 128; depth += 1) {
+      const child = document.createElement("div");
+      leaf.append(child);
+      leaf = child;
+    }
+    leaf.id = "deep";
+    const observation = pick("#deep");
+    expect(observation.componentChain.components).toEqual([]);
+    // Not "Vue has nothing here": the reader gave up before it could say.
     expect(observation.capabilities.names).toEqual({ state: "unknown" });
   });
 

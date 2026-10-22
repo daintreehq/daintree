@@ -497,6 +497,25 @@ describe("the Vue extractor at the edges of what Vue owns", () => {
     expect(() => createVueExtractor().extract(button, "selection", refTable())).not.toThrow();
   });
 
+  it("gives no answer when the instance is further up than it will look", () => {
+    const host = document.createElement("section");
+    mark(host, instance({ type: { __name: "Deep" } }));
+    document.body.append(host);
+    let parent: Element = host;
+    let leaf: Element = host;
+    for (let depth = 0; depth < 128; depth += 1) {
+      parent = leaf;
+      leaf = document.createElement("div");
+      parent.append(leaf);
+    }
+    // Out of steps is not "nothing of Vue's here", which a null would claim.
+    for (const phase of ["hover", "selection"] as const) {
+      expect(() => createVueExtractor().extract(leaf, phase, refTable())).toThrow();
+    }
+    // One node nearer, the same walk reaches it.
+    expect(names(select(parent))).toEqual(["Deep"]);
+  });
+
   it("says a walk cut short has not shown there is nothing to select", () => {
     const button = document.createElement("button");
     document.body.append(button);

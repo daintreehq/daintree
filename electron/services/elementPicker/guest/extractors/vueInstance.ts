@@ -160,6 +160,10 @@ export type Lookup =
  * app's instance, and at the first node another framework rendered or holds a
  * live root of, since what is in there is that framework's whatever Vue
  * rendered around it. A container itself is not part of the app inside it.
+ *
+ * Null is a walk that reached the top of the document, or another framework's
+ * node, without finding Vue. A walk out of steps short of either has not shown
+ * that, so it throws rather than answer.
  */
 export function lookUp(node: Element): Lookup | null {
   let current: Node | null = node;
@@ -184,6 +188,9 @@ export function lookUp(node: Element): Lookup | null {
     } else {
       current = parent;
     }
+  }
+  if (current !== null) {
+    throw new Error(`no Vue instance within ${MAX_DOM_ANCESTORS} ancestors`);
   }
   return null;
 }
