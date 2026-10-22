@@ -24,6 +24,7 @@ export const PLUGIN_SDK_REACT_RUNTIME_EXPORTS = [
   "usePluginPanelEvent",
   "usePreloadOnIntent",
   "useProgressiveList",
+  "useProjectPresence",
   "useStreamBuffer",
   "useSyncedCollection",
   "useThrottledCallback",

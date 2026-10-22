@@ -1722,6 +1722,89 @@ describe("createMockHost production-parity validation (#10617)", () => {
       errors.mockRestore();
     });
 
+    it("onDidChangeProjectPresence replays every open project to an installed plugin", async () => {
+      const alpha = "a".repeat(64);
+      const beta = "b".repeat(64);
+      const host = createMockHost({
+        capabilities: [],
+        projectPresence: [
+          { projectId: alpha, state: "foreground" },
+          { projectId: beta, state: "background" },
+        ],
+      });
+      const received: unknown[] = [];
+      const dispose = await host.onDidChangeProjectPresence((p) => received.push(p));
+      expect(host.subscriptionOptions.at(-1)).toEqual({
+        kind: "project-presence",
+        debounceMs: 100,
+      });
+      await Promise.resolve();
+      expect(received).toEqual([
+        { projectId: alpha, state: "foreground" },
+        { projectId: beta, state: "background" },
+      ]);
+
+      host.simulateProjectPresenceChange({ projectId: alpha, state: "foreground" });
+      host.simulateProjectPresenceChange({ projectId: beta, state: "closed" });
+      // Never seen open, so never told it closed.
+      host.simulateProjectPresenceChange({ projectId: "c".repeat(64), state: "closed" });
+      expect(received.slice(2)).toEqual([{ projectId: beta, state: "closed" }]);
+      expect(Object.isFrozen(received[2])).toBe(true);
+
+      dispose();
+      host.simulateProjectPresenceChange({ projectId: alpha, state: "background" });
+      expect(received).toHaveLength(3);
+
+      // A close drops the project from a later subscription's replay.
+      const later: unknown[] = [];
+      await host.onDidChangeProjectPresence((p) => later.push(p));
+      await Promise.resolve();
+      expect(later).toEqual([{ projectId: alpha, state: "background" }]);
+      expect(() =>
+        host.simulateProjectPresenceChange({ projectId: alpha, state: "minimised" } as never)
+      ).toThrow(/simulateProjectPresenceChange/);
+    });
+
+    it("onDidChangeProjectPresence never shows an installed plugin a scratch", async () => {
+      const scratch = "11111111-2222-4333-8444-555555555555";
+      const host = createMockHost({
+        projectPresence: [{ projectId: scratch, state: "foreground" }],
+      });
+      const received: unknown[] = [];
+      await host.onDidChangeProjectPresence((p) => received.push(p));
+      await Promise.resolve();
+      host.simulateProjectPresenceChange({ projectId: scratch, state: "background" });
+
+      expect(received).toEqual([]);
+    });
+
+    it("onDidChangeProjectPresence shows a project plugin its own project only", async () => {
+      const own = "a".repeat(64);
+      const host = createMockHost({ pluginId: `project__${own}__acme.board` });
+      const received: unknown[] = [];
+      await host.onDidChangeProjectPresence((p) => received.push(p));
+      await Promise.resolve();
+
+      host.simulateProjectPresenceChange({ projectId: "b".repeat(64), state: "foreground" });
+      host.simulateProjectPresenceChange({ projectId: own, state: "background" });
+      host.simulateProjectPresenceChange({ projectId: own, state: "closed" });
+
+      expect(received).toEqual([
+        { projectId: own, state: "foreground" },
+        { projectId: own, state: "background" },
+        { projectId: own, state: "closed" },
+      ]);
+
+      const unlisted = createMockHost({
+        pluginId: `project__${own}__acme.board`,
+        projectPresence: [],
+      });
+      const replay: unknown[] = [];
+      await unlisted.onDidChangeProjectPresence((p) => replay.push(p));
+      await Promise.resolve();
+      expect(replay).toEqual([{ projectId: own, state: "closed" }]);
+    });
+
     it("sendToAgent gates on agent:input and validates like production", async () => {
       await expect(
         createMockHost({ capabilities: ["agent:read"] }).sendToAgent("x")

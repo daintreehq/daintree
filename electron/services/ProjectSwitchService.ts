@@ -16,6 +16,7 @@ import { PERF_MARKS } from "../../shared/perf/marks.js";
 import { markPerformance, withPerformanceSpan } from "../utils/performance.js";
 import { buildSwitchHydrateResult } from "./AppHydrationService.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
+import { getProjectPresenceTracker } from "./ProjectPresenceTracker.js";
 
 export class ProjectSwitchService {
   private deps: HandlerDependencies;
@@ -331,6 +332,10 @@ export function activateProjectOnHost(
   project: Pick<Project, "id" | "path">,
   residentId: number
 ): Promise<void> {
+  // Every activation is an open as plugins count it, the re-hold of a project
+  // the view never left included: a project closed under a still-attached view
+  // is reopened by that same view switching back to it.
+  getProjectPresenceTracker().markOpened(project.id);
   const current = hostResidency.get(residentId);
   if (current?.projectId === project.id && isResidencyHeld(workspace, residentId, current)) {
     return current.load;

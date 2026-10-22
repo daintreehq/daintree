@@ -17,11 +17,17 @@
  * background sweep, and right before `project:remove` deletes the row. Eviction
  * is not a close: the project is still open, its terminals still run, and its
  * plugins must survive the renderer being reclaimed.
+ *
+ * The same two edges are what plugins are told about a project's presence
+ * (#13813), recorded synchronously so a plugin the open goes on to load already
+ * finds its project open.
  */
+import { getProjectPresenceTracker } from "../services/ProjectPresenceTracker.js";
 
 /** A project came into use in some window. Idempotent; also the reconcile trigger. */
 export function notifyProjectPluginsOpened(projectId: string, projectPath: string): void {
   if (!projectId || !projectPath) return;
+  getProjectPresenceTracker().markOpened(projectId);
   void import("../services/PluginService.js")
     .then(({ pluginService }) => pluginService.onProjectOpened(projectId, projectPath))
     .catch((err: unknown) => {
@@ -32,6 +38,7 @@ export function notifyProjectPluginsOpened(projectId: string, projectPath: strin
 /** This project stopped being live — closed, removed, slept or auto-parked. Unload everything it owns. */
 export function notifyProjectPluginsClosed(projectId: string): void {
   if (!projectId) return;
+  getProjectPresenceTracker().markClosed(projectId);
   void import("../services/PluginService.js")
     .then(({ pluginService }) => pluginService.onProjectClosed(projectId))
     .catch((err: unknown) => {

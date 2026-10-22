@@ -2875,8 +2875,9 @@ export interface PluginPromptCallOptions extends PluginHostCallOptions {
  * {@link PluginActivationApi.onDidChangeWorktrees},
  * {@link PluginActivationApi.onDidChangeActiveWorktree},
  * {@link PluginActivationApi.onDidChangeAgentState},
- * {@link PluginActivationApi.onDidChangeAllAgents} and
- * {@link PluginActivationApi.onDidChangeFocusedPanel}. These coalesce by default:
+ * {@link PluginActivationApi.onDidChangeAllAgents},
+ * {@link PluginActivationApi.onDidChangeFocusedPanel} and
+ * {@link PluginActivationApi.onDidChangeProjectPresence}. These coalesce by default:
  * a burst of events becomes one trailing callback fired `debounceMs` after the
  * last event (the host re-emits the worktree set on every git-status poll, and
  * agents change state many times a second). A burst that never goes quiet
@@ -4230,6 +4231,22 @@ export interface PluginFocusedPanel {
   readonly agent: boolean;
   /** The focused panel's worktree, when it belongs to one. Always `null` for `"portal"`. */
   readonly worktreeId: string | null;
+}
+
+/**
+ * Where a project is, as {@link PluginActivationApi.onDidChangeProjectPresence}
+ * reports it: `"foreground"` while it is the project some window shows (or a
+ * remote Shell shows from this machine), `"background"` while it is open but
+ * no window shows it, and `"closed"` once it is closed, removed or put to
+ * sleep. A project whose renderer was reclaimed under memory pressure is still
+ * open, and reads as `"background"`.
+ */
+export type PluginProjectPresenceState = "foreground" | "background" | "closed";
+
+/** One project's presence. Carries the project id and the state only. */
+export interface PluginProjectPresence {
+  readonly projectId: string;
+  readonly state: PluginProjectPresenceState;
 }
 
 /** `host.agents` — the agent panes in the plugin's project. */
@@ -5806,6 +5823,38 @@ export interface PluginActivationApi {
    */
   onDidChangeFocusedPanel(
     callback: (focus: PluginFocusedPanel) => void,
+    options?: PluginHostSubscriptionOptions
+  ): Promise<() => void>;
+  /**
+   * Subscribe to where projects are (#13813): `"foreground"` while a window
+   * shows the project, `"background"` while it is open behind another one, and
+   * `"closed"` when it closes. The callback receives one frozen
+   * {@link PluginProjectPresence} per project that changed. A project plugin
+   * hears about its own project only; an installed plugin hears about every
+   * open project, and never about a scratch. No capability is required.
+   *
+   * Presence follows the project each window has switched to, not the user's
+   * attention: a project in an unfocused or minimised window is still
+   * `"foreground"`, and it changes as a switch commits, before the incoming
+   * project has finished painting. Use `onDidChangeFocusedPanel` for focus.
+   *
+   * The current state is delivered once after subscribing — the bound project
+   * for a project plugin, every open project for an installed one — then every
+   * change. Coalesced per project to its latest state with the 100ms default
+   * window, and a state equal to the last one delivered for that project is
+   * never repeated, so a project closed and reopened inside one window may
+   * report nothing; see {@link PluginHostSubscriptionOptions}. An installed
+   * plugin is never told about a project that opened and closed inside one
+   * window. Resolves to a disposer; calling it more than once is a no-op.
+   * Disposed automatically when the plugin is unloaded — a project plugin is
+   * unloaded as its project closes, so it may not live to see `"closed"`.
+   *
+   * Subscribing is revoke-guarded — call it during `activate()`.
+   *
+   * @throws {Error} If the host is revoked.
+   */
+  onDidChangeProjectPresence(
+    callback: (presence: PluginProjectPresence) => void,
     options?: PluginHostSubscriptionOptions
   ): Promise<() => void>;
   /**

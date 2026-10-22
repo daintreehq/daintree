@@ -8,6 +8,7 @@ vi.mock("../../utils/logger.js", () => ({
 
 import {
   collectActiveProjectIds,
+  collectShownProjectIds,
   projectViewManagersFrom,
   setRemoteVisibleProjectIdsProvider,
 } from "../activeProjectIds.js";
@@ -137,6 +138,43 @@ describe("collectActiveProjectIds with Host mode visibility", () => {
     });
     const ids = collectActiveProjectIds(providerOf([makePvm("proj-a")]), "ptr", "test");
     expect([...ids].sort()).toEqual(["proj-a", "ptr"]);
+  });
+});
+
+describe("collectShownProjectIds (#13813)", () => {
+  let off: (() => void) | null = null;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    off?.();
+    off = null;
+  });
+
+  it("reads each window's switched-to project and leaves the outgoing bridge out", () => {
+    const switching = makePvm("proj-incoming", "proj-outgoing");
+    const other = makePvm("proj-b");
+
+    const ids = collectShownProjectIds(providerOf([switching, other]), "test");
+
+    expect([...ids].sort()).toEqual(["proj-b", "proj-incoming"]);
+    expect(switching.getOutgoingBridgeProjectId).not.toHaveBeenCalled();
+  });
+
+  it("unions in what a remote Shell shows, and has no DB pointer to fall back on", () => {
+    off = setRemoteVisibleProjectIdsProvider(() => new Set(["remote-proj"]));
+
+    expect([...collectShownProjectIds(null, "test")]).toEqual(["remote-proj"]);
+  });
+
+  it("isolates a throwing manager like the reclaim collector", () => {
+    const broken = makePvm();
+    broken.getActiveProjectId.mockImplementation(() => {
+      throw new Error("disposing");
+    });
+
+    const ids = collectShownProjectIds(providerOf([broken, makePvm("proj-b")]), "test");
+
+    expect([...ids]).toEqual(["proj-b"]);
   });
 });
 

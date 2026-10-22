@@ -1535,6 +1535,10 @@ export class PluginDevWorkerMainBridge {
         dispose = await this.host.onDidChangeFocusedPanel((focus) => push(focus), {
           debounceMs: msg.debounceMs,
         });
+      } else if (kind === "project-presence") {
+        dispose = await this.host.onDidChangeProjectPresence((presence) => push(presence), {
+          debounceMs: msg.debounceMs,
+        });
       } else if (kind === "panel-lifecycle") {
         dispose = await this.host.onDidChangePanelLifecycle((event) => push(event));
       } else if (kind === "system-wake") {

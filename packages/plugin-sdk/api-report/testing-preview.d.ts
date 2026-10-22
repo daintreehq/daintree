@@ -4,109 +4,6 @@
 
 import { ComponentType } from 'react';
 
-/**
- * A fixture-driven stand-in for the two bridges a plugin view talks to:
- * `window.electron.plugin` (`invoke`, `on`, `onPanel`) and the view-lifecycle
- * half of `window.electron.app`. Every SDK view hook reaches the host through
- * those two (`react/hostBridge.ts`), so installing this is enough to run a real
- * panel view outside Daintree — in a plain browser page or in vitest/jsdom.
- *
- * Browser-safe by construction: no Node import anywhere on this path.
- */
-/** What a channel answers with, or a function computing it from the call's args. */
-type ChannelFixture = unknown | ((...args: unknown[]) => unknown);
-declare const PENDING: unique symbol;
-interface PendingMarker {
-    readonly [PENDING]: true;
-}
-/**
- * The failure shapes the real host produces, in the form they arrive over the
- * bridge — so the SDK's own hooks turn them into what a view sees in Daintree
- * (`HostDisconnectedError`, `OutcomeUnknownError`, a prefixed `Error`).
- *
- * Use one as a fixture value, or throw one from a fixture function.
- */
-declare const hostResponses: {
-    /** The call's arguments failed the channel's schema. */
-    readonly schemaError: (detail?: string) => Error;
-    /** The plugin lacks a capability the call needs. */
-    readonly permissionRequired: (detail?: string) => Error;
-    /** The view's host is not connected; the call never reached it. */
-    readonly disconnected: (message?: string) => Error;
-    /** The link dropped mid-call; the host may or may not have run it. */
-    readonly outcomeUnknown: (message?: string) => Error;
-    /** Never settles — the view's loading state, held for as long as the preview lives. */
-    readonly pending: () => PendingMarker;
-};
-/** One call the view made into the bridge, in order. */
-type MockViewHostCall = {
-    kind: "invoke";
-    pluginId: string;
-    channel: string;
-    args: unknown[];
-} | {
-    kind: "on";
-    pluginId: string;
-    channel: string;
-} | {
-    kind: "onPanel";
-    pluginId: string;
-    channel: string;
-    panelId: string;
-};
-interface MockViewHostOptions {
-    /**
-     * The plugin this host serves. Set, a call or subscription from any other
-     * plugin id is refused, as it would address nothing in Daintree.
-     */
-    pluginId?: string;
-    /** Answers per channel. A channel with no fixture rejects, as an unhandled one does in Daintree. */
-    channels?: Record<string, ChannelFixture>;
-    /** Start as a cached (hidden, background) project view. */
-    viewCached?: boolean;
-}
-/** The bridge objects, in the shape `react/hostBridge.ts` reads them. */
-interface MockViewHostBridges {
-    plugin: {
-        invoke(pluginId: string, channel: string, ...args: unknown[]): Promise<unknown>;
-        on(pluginId: string, channel: string, callback: (payload: unknown) => void): () => void;
-        onPanel(pluginId: string, channel: string, panelId: string, callback: (payload: unknown) => void): () => void;
-    };
-    app: {
-        isViewCached(): boolean;
-        onViewCached(callback: () => void): () => void;
-        onViewWarmActivated(callback: () => void): () => void;
-    };
-}
-interface MockViewHost {
-    readonly bridges: MockViewHostBridges;
-    /** Every call the view has made, oldest first. */
-    readonly calls: readonly MockViewHostCall[];
-    /** The argument lists of every `invoke` on `channel`. */
-    invocations(channel: string): unknown[][];
-    /** Replace (or, with `undefined`, remove) one channel's fixture. */
-    setChannel(channel: string, fixture: ChannelFixture | undefined): void;
-    /** Deliver a broadcast to every `on` subscriber of `channel`. Returns how many received it. */
-    push(channel: string, payload: unknown): number;
-    /** Deliver a per-panel event to `onPanel` subscribers of `channel` for `panelId`. */
-    pushPanel(channel: string, panelId: string, payload: unknown): number;
-    /** Live subscribers on `channel`, `on` and `onPanel` together. */
-    subscriberCount(channel: string): number;
-    /** Whether the project view currently reads as cached. */
-    readonly viewCached: boolean;
-    /**
-     * Cache the view (fires the cached edge) or warm-activate it (fires the
-     * warm-activated edge). A no-op when the state already matches.
-     */
-    setViewCached(cached: boolean): void;
-    /**
-     * Put the bridges on `globalThis.electron`, where the SDK looks for them.
-     * Returns the restore function, which puts back whatever was there before.
-     */
-    install(target?: object): () => void;
-}
-declare function createMockViewHost(options?: MockViewHostOptions): MockViewHost;
-
 /** Which file panel mode a view-backed file editor fills. */
 type FileEditorMode = "edit" | "view";
 /** What {@link PluginFileDocument.read} found on disk. */
@@ -612,6 +509,138 @@ interface PanelViewProps {
      */
     readonly hostContext?: PluginViewHostContext;
 }
+/**
+ * Where a project is, as {@link PluginActivationApi.onDidChangeProjectPresence}
+ * reports it: `"foreground"` while it is the project some window shows (or a
+ * remote Shell shows from this machine), `"background"` while it is open but
+ * no window shows it, and `"closed"` once it is closed, removed or put to
+ * sleep. A project whose renderer was reclaimed under memory pressure is still
+ * open, and reads as `"background"`.
+ */
+type PluginProjectPresenceState = "foreground" | "background" | "closed";
+/** One project's presence. Carries the project id and the state only. */
+interface PluginProjectPresence {
+    readonly projectId: string;
+    readonly state: PluginProjectPresenceState;
+}
+
+/**
+ * A fixture-driven stand-in for the two bridges a plugin view talks to:
+ * `window.electron.plugin` (`invoke`, `on`, `onPanel`, project presence) and
+ * the view-lifecycle half of `window.electron.app`. Every SDK view hook reaches
+ * the host through those two (`react/hostBridge.ts`), so installing this is
+ * enough to run a real panel view outside Daintree — in a plain browser page or
+ * in vitest/jsdom.
+ *
+ * Browser-safe by construction: no Node import anywhere on this path.
+ */
+/** What a channel answers with, or a function computing it from the call's args. */
+type ChannelFixture = unknown | ((...args: unknown[]) => unknown);
+declare const PENDING: unique symbol;
+interface PendingMarker {
+    readonly [PENDING]: true;
+}
+/**
+ * The failure shapes the real host produces, in the form they arrive over the
+ * bridge — so the SDK's own hooks turn them into what a view sees in Daintree
+ * (`HostDisconnectedError`, `OutcomeUnknownError`, a prefixed `Error`).
+ *
+ * Use one as a fixture value, or throw one from a fixture function.
+ */
+declare const hostResponses: {
+    /** The call's arguments failed the channel's schema. */
+    readonly schemaError: (detail?: string) => Error;
+    /** The plugin lacks a capability the call needs. */
+    readonly permissionRequired: (detail?: string) => Error;
+    /** The view's host is not connected; the call never reached it. */
+    readonly disconnected: (message?: string) => Error;
+    /** The link dropped mid-call; the host may or may not have run it. */
+    readonly outcomeUnknown: (message?: string) => Error;
+    /** Never settles — the view's loading state, held for as long as the preview lives. */
+    readonly pending: () => PendingMarker;
+};
+/** One call the view made into the bridge, in order. */
+type MockViewHostCall = {
+    kind: "invoke";
+    pluginId: string;
+    channel: string;
+    args: unknown[];
+} | {
+    kind: "on";
+    pluginId: string;
+    channel: string;
+} | {
+    kind: "onPanel";
+    pluginId: string;
+    channel: string;
+    panelId: string;
+};
+interface MockViewHostOptions {
+    /**
+     * The plugin this host serves. Set, a call or subscription from any other
+     * plugin id is refused, as it would address nothing in Daintree.
+     */
+    pluginId?: string;
+    /** Answers per channel. A channel with no fixture rejects, as an unhandled one does in Daintree. */
+    channels?: Record<string, ChannelFixture>;
+    /** Start as a cached (hidden, background) project view. */
+    viewCached?: boolean;
+    /**
+     * Where the view's project starts, as `useProjectPresence()` reads it.
+     * Defaults to `"foreground"`; `null` is a view with no project.
+     */
+    projectPresence?: PluginProjectPresenceState | null;
+}
+/** The bridge objects, in the shape `react/hostBridge.ts` reads them. */
+interface MockViewHostBridges {
+    plugin: {
+        invoke(pluginId: string, channel: string, ...args: unknown[]): Promise<unknown>;
+        on(pluginId: string, channel: string, callback: (payload: unknown) => void): () => void;
+        onPanel(pluginId: string, channel: string, panelId: string, callback: (payload: unknown) => void): () => void;
+        getProjectPresence(): Promise<PluginProjectPresence | null>;
+        onProjectPresenceChanged(callback: (presence: PluginProjectPresence) => void): () => void;
+    };
+    app: {
+        isViewCached(): boolean;
+        onViewCached(callback: () => void): () => void;
+        onViewWarmActivated(callback: () => void): () => void;
+    };
+}
+interface MockViewHost {
+    readonly bridges: MockViewHostBridges;
+    /** Every call the view has made, oldest first. */
+    readonly calls: readonly MockViewHostCall[];
+    /** The argument lists of every `invoke` on `channel`. */
+    invocations(channel: string): unknown[][];
+    /** Replace (or, with `undefined`, remove) one channel's fixture. */
+    setChannel(channel: string, fixture: ChannelFixture | undefined): void;
+    /** Deliver a broadcast to every `on` subscriber of `channel`. Returns how many received it. */
+    push(channel: string, payload: unknown): number;
+    /** Deliver a per-panel event to `onPanel` subscribers of `channel` for `panelId`. */
+    pushPanel(channel: string, panelId: string, payload: unknown): number;
+    /** Live subscribers on `channel`, `on` and `onPanel` together. */
+    subscriberCount(channel: string): number;
+    /** Whether the project view currently reads as cached. */
+    readonly viewCached: boolean;
+    /**
+     * Cache the view (fires the cached edge) or warm-activate it (fires the
+     * warm-activated edge). A no-op when the state already matches.
+     */
+    setViewCached(cached: boolean): void;
+    /** Where the view's project currently is; `null` for a view with no project. */
+    readonly projectPresence: PluginProjectPresenceState | null;
+    /**
+     * Move the view's project and push the change, as main does. A no-op when it
+     * already matches, or for a view with no project.
+     */
+    setProjectPresence(state: PluginProjectPresenceState): void;
+    /**
+     * Put the bridges on `globalThis.electron`, where the SDK looks for them.
+     * Returns the restore function, which puts back whatever was there before.
+     */
+    install(target?: object): () => void;
+}
+declare function createMockViewHost(options?: MockViewHostOptions): MockViewHost;
 
 /**
  * The rules a plugin panel's `persistState` write is held to, in one place.

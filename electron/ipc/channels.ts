@@ -1142,6 +1142,10 @@ export const CHANNELS = {
   PLUGIN_REPORT_PUSH_LISTENERS: "plugin:report-push-listeners",
   /** Renderer → main, fire-and-forget: the kind of panel holding DOM focus in this view (#13221). */
   PLUGIN_REPORT_FOCUSED_PANEL: "plugin:report-focused-panel",
+  /** The asking view's own project presence (#13813). */
+  PLUGIN_PROJECT_PRESENCE_GET: "plugin:project-presence-get",
+  /** Main → a project's renderers: that project's presence changed. */
+  PLUGIN_PROJECT_PRESENCE_CHANGED: "plugin:project-presence-changed",
   /** Every tracked plugin's `PluginPerfSnapshot`. */
   PLUGIN_PERF_SNAPSHOTS_GET: "plugin:perf-snapshots-get",
   PLUGIN_CAPTURE_PANEL: "plugin:capture-panel",

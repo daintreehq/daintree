@@ -258,6 +258,18 @@ describe("ProjectViewManager — views keyed per host", () => {
     expect(clearEvictionMock).toHaveBeenCalledWith("proj-a");
   });
 
+  it("still signals an open when switching to the project already on screen", async () => {
+    // A project closed while shown leaves its window on the welcome view, and
+    // reopening it is a switch to the active project.
+    await manager.switchTo("proj-a", "/path/a");
+    await flushImmediates();
+    pluginsOpenedMock.mockClear();
+
+    await manager.switchTo("proj-a", "/path/a");
+
+    expect(pluginsOpenedMock).toHaveBeenCalledWith("proj-a", "/path/a");
+  });
+
   it("keys a remote project by host and tells its renderer the bare id plus the host", async () => {
     const view = await manager.switchToHostProject("studio-01", "proj-a", "/srv/a");
     await flushImmediates();

@@ -52,6 +52,10 @@ vi.mock("../../../../services/pty/projectSessionJournal.js", () => teardownMock)
 import { ipcMain } from "electron";
 import { CHANNELS } from "../../../channels.js";
 import { registerScratchHandlers } from "../index.js";
+import {
+  ProjectPresenceTracker,
+  _setProjectPresenceTrackerForTests,
+} from "../../../../services/ProjectPresenceTracker.js";
 import type { HandlerDependencies } from "../../../types.js";
 
 function getHandler(channel: string) {
@@ -100,6 +104,23 @@ describe("scratch:remove handler", () => {
     const killOrder = teardownMock.gracefulTeardownAndJournalProject.mock.invocationCallOrder[0]!;
     const removeOrder = scratchStoreMock.removeScratch.mock.invocationCallOrder[0]!;
     expect(killOrder).toBeLessThan(removeOrder);
+  });
+
+  it("tells project presence the scratch closed, once it is gone", async () => {
+    const scratchId = "11111111-2222-4333-8444-555555555555";
+    const tracker = new ProjectPresenceTracker(() => [scratchId]);
+    tracker.refresh();
+    _setProjectPresenceTrackerForTests(tracker);
+    try {
+      registerScratchHandlers(makeDeps({}));
+      await getHandler(CHANNELS.SCRATCH_REMOVE)(fakeEvent, scratchId);
+    } finally {
+      _setProjectPresenceTrackerForTests(null);
+    }
+
+    // Closed even though its window still points at it, and no longer held open.
+    expect(tracker.getState(scratchId)).toBe("closed");
+    expect(tracker.getOpen()).toEqual([]);
   });
 
   it("fails closed: keeps the scratch when the teardown is unconfirmed", async () => {

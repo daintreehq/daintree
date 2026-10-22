@@ -342,6 +342,53 @@ describe("PluginDevWorkerHostProxy agent handoff", () => {
     expect(Object.isFrozen(focus)).toBe(true);
   });
 
+  it("subscribes project-presence, rebuilds each change frozen and drops a malformed one", async () => {
+    const { proxy, sent } = makeProxy();
+    const callback = vi.fn();
+    await proxy.host.onDidChangeProjectPresence(callback);
+    const sub = sent.find((m) => m.type === "subscribe" && m.kind === "project-presence");
+    expect(sub).toBeDefined();
+    expect(sub.debounceMs).toBeUndefined();
+
+    proxy.handleMessage({
+      type: "subscription-event",
+      subscriptionId: sub.subscriptionId,
+      payload: { projectId: "p1", state: "foreground", extra: "x" },
+    });
+    proxy.handleMessage({
+      type: "subscription-event",
+      subscriptionId: sub.subscriptionId,
+      payload: { projectId: "p1", state: "minimised" },
+    });
+
+    expect(callback).toHaveBeenCalledTimes(1);
+    const presence = callback.mock.calls[0][0];
+    expect(presence).toStrictEqual({ projectId: "p1", state: "foreground" });
+    expect(Object.isFrozen(presence)).toBe(true);
+  });
+
+  it("catches an async presence callback's rejection rather than leaving it unhandled", async () => {
+    const { proxy, sent } = makeProxy();
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    await proxy.host.onDidChangeProjectPresence(async () => {
+      throw new Error("async boom");
+    });
+    const sub = sent.find((m) => m.type === "subscribe" && m.kind === "project-presence");
+    proxy.handleMessage({
+      type: "subscription-event",
+      subscriptionId: sub.subscriptionId,
+      payload: { projectId: "p1", state: "background" },
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(error).toHaveBeenCalledWith(
+      expect.stringContaining("subscription callback threw"),
+      expect.any(Error)
+    );
+    error.mockRestore();
+  });
+
   it("relays terminals.readScreen and resolves with the screen", async () => {
     const { proxy, sent } = makeProxy();
     const promise = proxy.host.terminals.readScreen("t-1", { lines: 5 });

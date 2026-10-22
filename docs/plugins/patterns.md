@@ -355,63 +355,57 @@ Tell agents in your data contract to leave the host's `_daintree_meta` table alo
 
 ## Refresh when the user comes back
 
-Switching projects leaves your view mounted, its React state intact, and its page visibility unchanged — nothing in the DOM marks the switch. The signal is main's, on `window.electron.app`, and the pull it drives is the one you already wrote for mount. That bridge is the host's own, not part of the plugin API ([Views → Project switches and staleness](./views.md#project-switches-and-staleness)): `@daintreehq/plugin-sdk/view-globals` deliberately leaves it out, a TypeScript view reads it through its own narrow cast, and every call below is optional-chained so a host without it reads as a view that is never cached or revealed. Where the SDK already covers the case — `useNow`, `useAnimationFrame` — use the hook rather than the bridge.
+Switching projects leaves your view mounted, its React state intact, and its page visibility unchanged — nothing in the DOM marks the switch. `useProjectPresence()` from `@daintreehq/plugin-sdk/react` does: `"foreground"` while a window shows your project, `"background"` while it is open behind another, from main, the same answer the worker gets from `host.onDidChangeProjectPresence` ([Views → Project switches and staleness](./views.md#project-switches-and-staleness)). The pull it drives is the one you already wrote for mount.
 
 ```js
-// view: subscribe and pull on mount, re-pull when this project is shown again —
-// reveal is an extra trigger for the same load, not a replacement for it.
+import { useProjectPresence } from "@daintreehq/plugin-sdk/react";
+
+const presence = useProjectPresence();
+// `null` (not answered yet) loads too: the mount pull must never wait on it.
+const inFront = presence !== "background";
+const accept = (next) => setSlate((prev) => (prev && prev.revision >= next.revision ? prev : next));
+
+// Pushes, subscribed once and before the first pull.
+useEffect(() => window.electron.plugin.on(pluginId, "slate", accept), [pluginId]);
+
+// Pull on mount, and again each time the project comes back to the front —
+// the return is an extra trigger for the same load, not a replacement for it.
 useEffect(() => {
+  if (!inFront) return;
   let live = true;
-  const accept = (next) =>
-    live && setSlate((prev) => (prev && prev.revision >= next.revision ? prev : next));
-  const load = async () => {
-    // `invoke` rejects when the handler throws or the plugin has unloaded.
-    const next = await window.electron.plugin.invoke(pluginId, "slate").catch(() => null);
-    if (next) accept(next);
-  };
-  const off = window.electron.plugin.on(pluginId, "slate", accept); // subscribe first
-  void load(); // first mount, and the remount after a reclaimed renderer
-  const offRevealed = window.electron?.app?.onViewRevealed?.(() => void load());
+  // `invoke` rejects when the handler throws or the plugin has unloaded.
+  window.electron.plugin.invoke(pluginId, "slate").then(
+    (next) => live && next && accept(next),
+    () => {}
+  );
   return () => {
     live = false;
-    off();
-    offRevealed?.();
   };
-}, [pluginId]);
+}, [pluginId, inFront]);
 ```
 
-The mount pull is not redundant with the reveal pull: under memory pressure the host destroys a backgrounded project view outright, and the user's next switch back is a cold mount with no reveal to catch. Route both through one function and the two cannot drift.
+The mount pull is not redundant with the return: under memory pressure the host destroys a backgrounded project view outright, and the user's next switch back is a cold mount whose presence goes from `null` straight to `"foreground"`, never through `"background"`, so there is no return to catch. Route both through one function and the two cannot drift.
 
-Periodic work in the view is the other half. For the two common cases the SDK already does it: `useNow` (a clock) and `useAnimationFrame` (a canvas loop) both pause while the project view is cached or the document hidden — see [Clocks](#clocks-and-relative-times) and [Canvas](#draw-on-a-canvas). Anything else needs the cache edges rather than the reveal: `onViewRevealed` arrives only for a switch that completes with your project in front. Seed from `isViewCached()` — these are edges, nothing replays, and a mount can land in an already-cached view — and AND it with document visibility, which covers the window being minimised while this project is the active one.
+Periodic work in the view is the other half. For the two common cases the SDK already does it: `useNow` (a clock) and `useAnimationFrame` (a canvas loop) both pause while the project view is cached or the document hidden — see [Clocks](#clocks-and-relative-times) and [Canvas](#draw-on-a-canvas). Anything else keys off presence, ANDed with document visibility, which covers the window being minimised while your project is the one it shows: presence is where the project is, not whether anyone is looking.
 
 ```js
 // view: demote while nobody can see this project.
+const presence = useProjectPresence();
 useEffect(() => {
-  const app = window.electron?.app;
-  // Reconcile rather than start/stop on the edge: the mount itself can land
-  // already cached, and the latch is the only thing that can say so.
   const sync = () => {
-    const idle = (app?.isViewCached?.() ?? false) || document.hidden;
-    if (idle) stopTicking();
+    if (presence === "background" || document.hidden) stopTicking();
     else startTicking();
   };
   sync();
-  const offCached = app?.onViewCached?.(sync);
-  // Warm activation, not reveal: warm activation is the cached-to-active edge
-  // and can arrive without a reveal ever following it — a cold switch that
-  // rolls back sends it alone.
-  const offActive = app?.onViewWarmActivated?.(sync);
   document.addEventListener("visibilitychange", sync);
   return () => {
-    offCached?.();
-    offActive?.();
     document.removeEventListener("visibilitychange", sync);
     stopTicking();
   };
-}, []);
+}, [presence]);
 ```
 
-[Views → Project switches and staleness](./views.md#project-switches-and-staleness) has why the DOM cannot do this, what each signal means, and the caveat that this bridge is the host's own rather than part of the plugin API.
+A poll that must not miss a beat belongs in the worker, which hears the same thing from `host.onDidChangeProjectPresence` and can slow down there instead. [Views → Project switches and staleness](./views.md#project-switches-and-staleness) has why the DOM cannot do this and what the states mean.
 
 ## Clocks and relative times
 

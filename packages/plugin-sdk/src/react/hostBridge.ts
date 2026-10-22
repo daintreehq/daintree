@@ -1,7 +1,10 @@
+import type { PluginProjectPresence } from "../../../../shared/types/plugin.js";
+
 /**
  * The documented plugin-view bridge on `window.electron.plugin`: `invoke`
  * (request/response), `on` (broadcast subscribe) and `onPanel` (per-instance
- * subscribe), each subscription returning its disposer.
+ * subscribe), each subscription returning its disposer, plus this view's
+ * project presence.
  *
  * `@daintreehq/plugin-sdk/view-globals` declares the same shape as the global
  * `DaintreePluginViewBridge` for authors (kept React-free, so it cannot import
@@ -19,6 +22,18 @@ export interface PluginHostBridge {
     panelId: string,
     callback: (payload: unknown) => void
   ): () => void;
+  /**
+   * This view's own project presence, as `host.onDidChangeProjectPresence`
+   * reports it to a worker, or `null` in a view with no project. Absent on a
+   * Daintree that predates it (#13813). `useProjectPresence()` wraps this pair.
+   */
+  getProjectPresence?(): Promise<PluginProjectPresence | null>;
+  /**
+   * Receive presence changes pushed to this view's project. Each names its
+   * project, so compare it with what `getProjectPresence()` answered. Returns
+   * the unsubscribe.
+   */
+  onProjectPresenceChanged?(callback: (presence: PluginProjectPresence) => void): () => void;
 }
 
 /**

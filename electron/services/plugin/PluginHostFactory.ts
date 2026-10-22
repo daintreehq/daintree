@@ -175,6 +175,8 @@ import {
 } from "../../../shared/utils/pluginFocusedPanel.js";
 import { PLUGIN_FOCUSED_PANEL_DEFAULT_DEBOUNCE_MS } from "../../../shared/config/pluginBudgets.js";
 import { getFocusedPanelTracker, type FocusedPanelState } from "../FocusedPanelTracker.js";
+import { getProjectPresenceTracker } from "../ProjectPresenceTracker.js";
+import { isProjectWorkspaceId } from "../../../shared/utils/workspaceIds.js";
 import type { FleetSnapshotService } from "../FleetSnapshotService.js";
 import type { WorktreeSnapshot } from "../../../shared/types/workspace-host.js";
 import {
@@ -219,6 +221,8 @@ import type {
   PluginAgentSnapshot,
   PluginAllAgentsSnapshot,
   PluginFocusedPanel,
+  PluginProjectPresence,
+  PluginProjectPresenceState,
   PluginSendToAgentRefusalReason,
   PluginSendToAgentResult,
   PluginPanelLifecycleEvent,
@@ -2100,6 +2104,83 @@ export function createHost(
       // The current focus, replayed straight away rather than after a window a
       // later change would restart. A microtask, so the plugin holds the
       // disposer first and a throwing replay can quarantine the listener.
+      queueMicrotask(deliver);
+      return Promise.resolve(dispose);
+    },
+    onDidChangeProjectPresence: (callback, options) => {
+      if (revoked) {
+        throw new Error(
+          `Plugin "${pluginId}" host revoked: onDidChangeProjectPresence called after activate() returned or timed out`
+        );
+      }
+      // No capability gate: whether a project is shown says less than which
+      // panel has focus, and an installed plugin already lists every open
+      // project's worktrees. A project plugin hears about its own project only;
+      // an installed one about every project, but never a scratch.
+      const tracker = getProjectPresenceTracker();
+      const sees = (projectId: string): boolean =>
+        boundProjectId === null ? isProjectWorkspaceId(projectId) : projectId === boundProjectId;
+      const failures = createListenerFailureState();
+      // Latest state per project: a burst across several projects must not
+      // lose one project's change behind another's.
+      const pending = new Map<string, PluginProjectPresenceState>();
+      const delivered = new Map<string, PluginProjectPresenceState>();
+      let active = true;
+      const deliver = (): void => {
+        const batch = [...pending];
+        pending.clear();
+        for (const [projectId, state] of batch) {
+          if (!active || !isBound()) return;
+          const previous = delivered.get(projectId);
+          if (previous === state) continue;
+          // An installed plugin was never told this project opened, so its
+          // close is noise. A project plugin's own replay always answers.
+          if (state === "closed" && previous === undefined && boundProjectId === null) continue;
+          // Forget closed projects, so an installed plugin's bookkeeping does not
+          // grow with every project ever opened; the bound plugin has one key.
+          if (state === "closed" && boundProjectId === null) delivered.delete(projectId);
+          else delivered.set(projectId, state);
+          const presence: PluginProjectPresence = Object.freeze({ projectId, state });
+          invokeTrackedListener(
+            failures,
+            pluginId,
+            "onDidChangeProjectPresence",
+            () => callback(presence),
+            () => dispose()
+          );
+        }
+      };
+      const coalescer = createSubscriptionCoalescer(
+        resolveSubscriptionDebounceMs(options?.debounceMs),
+        deliver
+      );
+      // Subscribed before the replay is read, so nothing between the two is lost.
+      const unsub = tracker.subscribe((changes) => {
+        if (!active || !isBound()) return;
+        let relevant = false;
+        for (const change of changes) {
+          if (!sees(change.projectId)) continue;
+          pending.set(change.projectId, change.state);
+          relevant = true;
+        }
+        if (relevant) coalescer.push();
+      });
+      if (boundProjectId !== null) {
+        pending.set(boundProjectId, tracker.getState(boundProjectId));
+      } else {
+        for (const open of tracker.getOpen()) {
+          if (sees(open.projectId)) pending.set(open.projectId, open.state);
+        }
+      }
+      const dispose = trackPluginDisposer(deps.pluginEventCleanups, pluginId, () => {
+        active = false;
+        coalescer.dispose();
+        pending.clear();
+        unsub();
+      });
+      // Replayed straight away rather than after a window a later change would
+      // restart. A microtask, so the plugin holds the disposer first and a
+      // throwing replay can quarantine the listener.
       queueMicrotask(deliver);
       return Promise.resolve(dispose);
     },

@@ -19,6 +19,11 @@ export const back: DaintreePluginViewBridge = bridge;
 export const pending: Promise<unknown> = window.electron.plugin.invoke("acme.demo", "list", { a: 1 });
 export const off: () => void = window.electron.plugin.on("acme.demo", "changed", (p: unknown) => void p);
 export const offPanel: () => void = window.electron.plugin.onPanel("acme.demo", "c", "panel-1", () => {});
+export const presence: Promise<DaintreePluginProjectPresence | null> | undefined =
+  window.electron.plugin.getProjectPresence?.();
+export const offPresence: (() => void) | undefined = window.electron.plugin.onProjectPresenceChanged?.(
+  (p: DaintreePluginProjectPresence) => void p.state
+);
 
 // @ts-expect-error host internals are not part of the plugin-view surface
 export const app = window.electron.app;
