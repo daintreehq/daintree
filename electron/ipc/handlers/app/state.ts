@@ -924,8 +924,11 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
       }
 
       if ("mruList" in partialState && Array.isArray(partialState.mruList)) {
-        // Sanitize: dense array, string items with valid prefix, per-item length cap, dedupe
-        const MRU_ID_PATTERN = /^(terminal|worktree):[a-zA-Z0-9_-]{1,128}$/;
+        // Sanitize: dense array, string items with valid prefix, per-item length cap, dedupe.
+        // The id after the prefix is opaque: plugin panel ids carry `.`, `:` and `/`
+        // (`acme.dash-<uuid>`, `project:<id>/acme/dash-<uuid>`) and worktree ids are
+        // absolute paths, so only control characters are refused.
+        const MRU_ID_PATTERN = /^(terminal|worktree):\P{Cc}{1,1024}$/u;
         const seen = new Set<string>();
         const sanitized: string[] = [];
         for (const id of partialState.mruList) {

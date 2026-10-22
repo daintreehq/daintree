@@ -390,7 +390,7 @@ export const SEL = {
   },
   quickSwitcher: {
     dialog: '[role="dialog"][aria-label="Quick switcher"]',
-    searchInput: '[aria-label="Search terminals, agents, and worktrees"]',
+    searchInput: '[aria-label="Search panels, agents, and worktrees"]',
     list: "#quick-switcher-list",
     options: '#quick-switcher-list [role="option"]',
   },

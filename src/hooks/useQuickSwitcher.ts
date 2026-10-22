@@ -5,8 +5,10 @@ import { usePanelStore } from "@/store";
 import { useWorktrees } from "./useWorktrees";
 import { useWorktreeSelectionStore } from "@/store";
 import { isPtyPanel, type PanelKind } from "@shared/types/panel";
+import { isQuickSwitchablePanel } from "@/utils/quickSwitcher";
 import { useSearchablePalette, type FuseResultMatch } from "./useSearchablePalette";
 import { usePaletteStore } from "@/store/paletteStore";
+import { deferPaletteFocusRestore } from "@/components/ui/paletteFocusRestore";
 import { deriveTerminalChrome, type TerminalChromeDescriptor } from "@/utils/terminalChrome";
 
 export type QuickSwitcherItemType = "terminal" | "worktree";
@@ -82,7 +84,6 @@ export function useQuickSwitcher(): UseQuickSwitcherReturn {
   const panelsById = usePanelStore((state) =>
     paletteIsOpen ? state.panelsById : EMPTY_PANELS_BY_ID
   );
-  const setFocused = usePanelStore((state) => state.setFocused);
   const mruList = usePanelStore((state) => (paletteIsOpen ? state.mruList : EMPTY_MRU));
   const pruneMru = usePanelStore((state) => state.pruneMru);
 
@@ -101,17 +102,14 @@ export function useQuickSwitcher(): UseQuickSwitcherReturn {
   const items = useMemo<QuickSwitcherItem[]>(() => {
     const result: QuickSwitcherItem[] = [];
 
-    // Add terminals
+    // Every open panel, PTY or not, keyed `terminal:` so persisted MRU
+    // entries and the prune guard below keep working unchanged.
     for (const id of panelIds) {
       const t = panelsById[id];
-      if (!t) continue;
-      if (t.location === "trash") continue;
-      if (!isPtyPanel(t)) continue;
-      if (t.excludeFromPersistence === true) continue;
-      if (t.hasPty === false) continue;
+      if (!t || !isQuickSwitchablePanel(t)) continue;
       const worktreeName = t.worktreeId ? worktreeMap.get(t.worktreeId)?.name : undefined;
       const isBackground = t.location === "background";
-      const baseSubtitle = worktreeName ?? t.cwd ?? undefined;
+      const baseSubtitle = worktreeName ?? (isPtyPanel(t) ? t.cwd : undefined);
       result.push({
         id: `terminal:${t.id}`,
         type: "terminal",
@@ -226,6 +224,10 @@ export function useQuickSwitcher(): UseQuickSwitcherReturn {
 
   const selectItem = useCallback(
     (item: QuickSwitcherItem) => {
+      // The palette refocuses its opener after the exit animation, which would
+      // pull the keyboard straight off the pick. Restore only if nothing took
+      // it — re-picking the focused panel moves no focus at all.
+      deferPaletteFocusRestore((restore) => restore());
       if (item.type === "terminal") {
         const terminalId = item.id.replace("terminal:", "");
         if (
@@ -238,17 +240,17 @@ export function useQuickSwitcher(): UseQuickSwitcherReturn {
         const terminal = usePanelStore.getState().panelsById[terminalId];
         if (terminal?.location === "background") {
           restoreBackgroundTerminal(terminalId);
-          activateTerminal(terminalId);
-        } else {
-          setFocused(terminalId);
         }
+        // Activate rather than focus: a panel behind a fullscreen neighbour
+        // would otherwise land focused but hidden.
+        activateTerminal(terminalId);
       } else if (item.type === "worktree") {
         const worktreeId = item.id.replace("worktree:", "");
         selectWorktree(worktreeId);
       }
       close();
     },
-    [setFocused, selectWorktree, close, restoreBackgroundTerminal, activateTerminal]
+    [selectWorktree, close, restoreBackgroundTerminal, activateTerminal]
   );
 
   const confirmSelection = useCallback(() => {

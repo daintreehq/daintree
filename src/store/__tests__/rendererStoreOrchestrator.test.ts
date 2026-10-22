@@ -968,7 +968,9 @@ describe("rendererStoreOrchestrator", () => {
     }
   });
 
-  it("does not record or persist MRU when a non-PTY panel is focused (#9922)", async () => {
+  it("records and persists MRU when a non-PTY panel is focused (#13763)", async () => {
+    // The quick switcher lists browser and plugin panels, so their focus must
+    // rank them the same way a terminal's does.
     vi.useFakeTimers();
     try {
       usePanelStore.setState({
@@ -986,7 +988,43 @@ describe("rendererStoreOrchestrator", () => {
 
       usePanelStore.setState({ focusedId: "br-1" });
 
-      vi.advanceTimersByTime(150);
+      vi.advanceTimersByTime(1000);
+      await Promise.resolve();
+
+      expect(usePanelStore.getState().mruList).toEqual(["terminal:br-1"]);
+      expect(persistMruList).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not record MRU for trashed or dialog-hosted non-PTY panels", async () => {
+    vi.useFakeTimers();
+    try {
+      usePanelStore.setState({
+        panelsById: {
+          "br-trash": {
+            id: "br-trash",
+            title: "Browser",
+            kind: "browser" as const,
+            location: "trash",
+          } as PanelInstance,
+          "file-dialog": {
+            id: "file-dialog",
+            title: "README.md",
+            kind: "file" as const,
+            location: "dialog",
+            excludeFromPersistence: true,
+          } as PanelInstance,
+        },
+        panelIds: ["br-trash", "file-dialog"],
+        mruList: [],
+      });
+
+      usePanelStore.setState({ focusedId: "br-trash" });
+      usePanelStore.setState({ focusedId: "file-dialog" });
+
+      vi.advanceTimersByTime(1000);
       await Promise.resolve();
 
       expect(persistMruList).not.toHaveBeenCalled();

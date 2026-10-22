@@ -43,6 +43,7 @@ import { debounce } from "@/utils/debounce";
 import { DisposableStore, toDisposable } from "@/utils/disposable";
 import { logDebug, logInfo, logWarn } from "@/utils/logger";
 import { isPtyPanel } from "@shared/types/panel";
+import { isQuickSwitchablePanel } from "@/utils/quickSwitcher";
 import { terminalClient } from "@/clients";
 import { createFocusFollowBreaker } from "./focusFollowBreaker";
 import { subscribeFocusedPanelReporter } from "./focusedPanelReporter";
@@ -298,11 +299,10 @@ export function initStoreOrchestrator(): () => void {
     );
   }
 
-  // 1c. Terminal MRU recording: append the newly focused terminal to the
-  //     MRU list and persist it (debounced) unless suppressed. Only PTY
-  //     panels (kind "terminal") become quick-switcher items, so non-PTY
-  //     panels (browser, dev-preview, review) must not pollute the capped
-  //     MRU list with entries the switcher will never show (#9922).
+  // 1c. Panel MRU recording: append the newly focused panel to the MRU list
+  //     and persist it (debounced) unless suppressed. Only panels the quick
+  //     switcher lists are recorded, so help/overlay terminals and dialog
+  //     panels never eat the capped list (#9922).
   disposables.add(
     toDisposable(
       usePanelStore.subscribe(
@@ -311,12 +311,7 @@ export function initStoreOrchestrator(): () => void {
           if (!focusedId) return;
           if (isMruRecordingSuppressed()) return;
           const panel = usePanelStore.getState().panelsById[focusedId];
-          // Only record panels the quick switcher can actually show — mirror
-          // its item filter (PTY kind, persisted, has a live PTY). Help/overlay
-          // terminals carry excludeFromPersistence and must not eat the cap.
-          if (!panel || !isPtyPanel(panel)) return;
-          if (panel.excludeFromPersistence === true) return;
-          if (panel.hasPty === false) return;
+          if (!panel || !isQuickSwitchablePanel(panel)) return;
           usePanelStore.getState().recordMru(`terminal:${focusedId}`);
           debouncedPersistMruList();
         }

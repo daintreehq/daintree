@@ -12,7 +12,7 @@ import type {
 function getQuickSwitcherActionLabel(item: QuickSwitcherItemData): string {
   switch (item.type) {
     case "terminal":
-      return "to switch terminal";
+      return "to switch panel";
     case "worktree":
       return "to switch worktree";
   }
@@ -111,7 +111,7 @@ export function QuickSwitcher({
       ariaLabel="Quick switcher"
       isLoading={isLoading}
       searchPlaceholder="Find panels, agents, or worktrees"
-      searchAriaLabel="Search terminals, agents, and worktrees"
+      searchAriaLabel="Search panels, agents, and worktrees"
       listId="quick-switcher-list"
       itemIdPrefix="qs-option"
       emptyMessage="No panels open"

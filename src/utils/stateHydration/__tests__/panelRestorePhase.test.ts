@@ -289,7 +289,7 @@ function wtList(...ids: string[]): WorktreeState[] {
   }));
 }
 
-const { restorePanelsPhase } = await import("../panelRestorePhase");
+const { resolveVisiblePanelId, restorePanelsPhase } = await import("../panelRestorePhase");
 
 beforeEach(() => {
   initializeBackendTierMock.mockReset();
@@ -2780,5 +2780,31 @@ describe("restorePanelsPhase — parked panels (#13661)", () => {
 
     expect(ctx.addPanel.mock.calls[0]![0]).toMatchObject({ location: "grid" });
     expect(ctx.addPanel.mock.calls[0]![0]).not.toHaveProperty("backgroundRestoreLocation");
+  });
+});
+
+describe("resolveVisiblePanelId (#10527, #13763)", () => {
+  const nonPty = new Set(["br1", "plugin1"]);
+  const isNonPty = (id: string) => nonPty.has(id);
+
+  it("reads the saved id off a terminal head", () => {
+    expect(resolveVisiblePanelId(["terminal:a1", "terminal:b1"], isNonPty)).toBe("a1");
+  });
+
+  it("skips non-PTY panels ahead of the last-focused terminal", () => {
+    expect(
+      resolveVisiblePanelId(["terminal:br1", "terminal:plugin1", "terminal:a1"], isNonPty)
+    ).toBe("a1");
+  });
+
+  it("yields undefined when a worktree entry comes before any terminal", () => {
+    expect(
+      resolveVisiblePanelId(["terminal:br1", "worktree:/repo/wt", "terminal:a1"], isNonPty)
+    ).toBeUndefined();
+  });
+
+  it("yields undefined for a missing or all-non-PTY list", () => {
+    expect(resolveVisiblePanelId(undefined, isNonPty)).toBeUndefined();
+    expect(resolveVisiblePanelId(["terminal:br1"], isNonPty)).toBeUndefined();
   });
 });
