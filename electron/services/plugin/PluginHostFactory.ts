@@ -3390,11 +3390,9 @@ export function createHost(
             `Plugin "${pluginId}" settings.set: no active project — "project" scope has no target`
           );
         }
-        // Project settings live in the repository's `.daintree`; a local file,
-        // outside every project, changes none.
-        if (scope !== "user") {
-          await assertPluginCallerDrives(pluginId, "settings.set", { paths: [filePath] });
-        }
+        // Project settings live in the repository's `.daintree`; user and local
+        // files, outside every project, change none.
+        await assertPluginCallerDrives(pluginId, "settings.set", { paths: [filePath] });
         const store = deps.settings.getOrCreateSettingsStore(pluginId, filePath);
         const changed = await store.set(key, value, {
           secret: deps.settings.isSecretKey(pluginId, key),
@@ -3494,11 +3492,10 @@ export function createHost(
             `Plugin "${pluginId}" storage.set: no active ${scope} — "${scope}" scope has no target`
           );
         }
-        // Project and worktree storage lives in the repository's `.daintree`.
-        if (scope !== "user") {
-          await assertPluginCallerDrives(pluginId, "storage.set", { paths: [filePath] });
-          if (!isBound()) return;
-        }
+        // Project and worktree storage lives in the repository's `.daintree`;
+        // user storage is in no project unless one holds the storage dir.
+        await assertPluginCallerDrives(pluginId, "storage.set", { paths: [filePath] });
+        if (!isBound()) return;
         const store = deps.storage.getOrCreateStorageStore(pluginId, scope, filePath);
         const changed = await store.set(key, value);
         if (changed) deps.storage.notifyStorageSubscribers(pluginId, scope, key, value);
@@ -3513,10 +3510,8 @@ export function createHost(
         // Missing target or unloaded plugin: a delete is a no-op rather than a
         // throw (matching the "already absent" return of the store).
         if (!filePath || !isBound()) return;
-        if (scope !== "user") {
-          await assertPluginCallerDrives(pluginId, "storage.delete", { paths: [filePath] });
-          if (!isBound()) return;
-        }
+        await assertPluginCallerDrives(pluginId, "storage.delete", { paths: [filePath] });
+        if (!isBound()) return;
         const store = deps.storage.getOrCreateStorageStore(pluginId, scope, filePath);
         const changed = await store.delete(key);
         if (changed) deps.storage.notifyStorageSubscribers(pluginId, scope, key, undefined);
@@ -3662,9 +3657,10 @@ function buildProcessApi(
     // A process started in a project works on it, as a terminal spawned there
     // does, so a call from a view must drive it: judged before the consent
     // prompt and again after it, which can outlast a takeover.
+    // With no cwd the child inherits Main's, which is judged in its place.
     const requireCallerDrives = async () => {
       await assertPluginCallerDrives(pluginId, "process.spawn", {
-        paths: cwd === undefined ? [] : [path.resolve(cwd)],
+        paths: [path.resolve(cwd ?? process.cwd())],
       });
       if (!deps.plugins.has(pluginId)) {
         throw new Error(`Plugin "${pluginId}" process.spawn: plugin is no longer loaded`);
