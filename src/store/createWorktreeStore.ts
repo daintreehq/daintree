@@ -2275,6 +2275,7 @@ function resourceStatusEqual(
     a.lastStatus === b.lastStatus &&
     a.provider === b.provider &&
     a.endpoint === b.endpoint &&
+    a.ssh === b.ssh &&
     a.lastCheckedAt === b.lastCheckedAt &&
     a.lastOutput === b.lastOutput &&
     a.error === b.error &&

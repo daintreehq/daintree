@@ -796,7 +796,9 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // instead of its lanes.
   // 129_000 → 129_800 for #13662's `terminal.placeOwned`, the same cost the
   // external ceiling above pays; it carries no unscoped twin to remove.
-  const MAX_COHORT_PAYLOAD_BYTES = 129_800;
+  // 129_800 → 129_830 for #13742, measured at 129_814 B: the `ssh` target a
+  // ready resource status may report, in `worktree.resource.status`'s output.
+  const MAX_COHORT_PAYLOAD_BYTES = 129_830;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 

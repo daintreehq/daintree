@@ -91,6 +91,7 @@ Columns:
 | `worktree.resource.provision` | safe | n/a | n/a | reversible (teardown) | one resource | D0 | Leave | — |
 | `worktree.resource.teardown` | **confirm** (updated #8023) | yes (`ConfirmDialog` via `useWorktreeActions` / `WorktreeCard`) — preview lists the actual teardown commands | Boolean via dispatch | shared-state (cloud resource destroyed) | one resource | D2 | Done (#8023) — confirm shows the resolved teardown command list before dispatch | — |
 | `worktree.resource.pause` / `worktree.resource.resume` | safe | n/a | n/a | reversible | one resource | D0 | Leave | — |
+| `worktree.resource.openOnHost` (#13742) | **confirm** | yes (`ConfirmDialog` via `useWorktreeActions` / `WorktreeCard`) — names the ssh target and each step: adding the host for this worktree, its removal with the worktree or its resource, Host setup where Daintree isn't running, then the switch dialog | Boolean via dispatch | shared-state (a host record on this device; may lead to installing Daintree on the box) | one host | D2 | Done — install and placement keep their own confirms (Settings → Hosts setup, the switch dialog's push review) | Kept out of every MCP tier |
 
 ### Worktree sessions
 

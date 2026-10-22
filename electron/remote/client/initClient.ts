@@ -70,6 +70,7 @@ import {
   type ViewSink,
 } from "./RemoteHostManager.js";
 import { RemoteHostsClient, type WindowControl } from "./RemoteHostsClient.js";
+import { watchOwnedHostCleanup } from "./ownedHostCleanup.js";
 import { RemoteRouterImpl, type SenderLookup } from "./RemoteRouter.js";
 import { answerReverseRequest } from "./reverseRequests.js";
 import { requireSupportedConnection } from "./connection.js";
@@ -857,6 +858,10 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
     isRetiring: (connection) => client.isRetiring(connection),
     wslKeepalive,
   });
+  const stopOwnedHostCleanup = watchOwnedHostCleanup({
+    list: () => registry.list(),
+    forget: (hostId) => client.forget({ hostId }),
+  });
   const unregister = registerRemoteService("remoteHostsClient", client);
   const unregisterWindowHosts = registerRemoteService("windowHosts", client);
   const unregisterSetup = registerRemoteService("hostSetup", setup);
@@ -871,6 +876,7 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
     emitLocal: broadcastLocal,
     registry,
     async dispose() {
+      stopOwnedHostCleanup();
       unregister();
       unregisterWindowHosts();
       unregisterSetup();

@@ -1325,6 +1325,11 @@ export class WorktreeLifecycleService {
             timedOut: resourceResult.timedOut,
             aborted: resourceResult.aborted,
           });
+          // The box is gone even if removing the checkout then fails, so the
+          // card must not keep offering to open it.
+          if (resourceResult.success && m.resourceStatus?.ssh !== undefined) {
+            m.setResourceStatus({ ...m.resourceStatus, ssh: undefined });
+          }
           ctx.emitUpdate(m);
         }
 

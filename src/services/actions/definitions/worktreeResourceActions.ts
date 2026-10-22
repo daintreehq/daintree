@@ -6,8 +6,12 @@ import type { WorktreeResourceStatus } from "@shared/types/worktree";
 import { worktreeClient } from "@/clients";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { notify } from "@/lib/notify";
-import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { clientErrorText } from "@/utils/clientAppError";
 import { TerminalSpawnSourceSchema, AddPanelFocusPolicySchema } from "./schemas";
+import {
+  canOfferResourceBoxHandoff,
+  openResourceBoxOnHost,
+} from "@/components/Hosts/resourceHostHandoff";
 
 /**
  * Never throws. Callers rethrow the original failure immediately after this
@@ -25,7 +29,9 @@ function notifyWorktreeResourceError(
   worktreeId: string | undefined
 ): void {
   try {
-    const message = formatErrorMessage(err, fallbackMessage) || fallbackMessage;
+    // An AppError's own words when it has them (ssh's refusal, the host list's
+    // reason), never the `[AppError|…]` prefix an IPC error carries.
+    const message = clientErrorText(err, fallbackMessage) || fallbackMessage;
     notify({
       type: "error",
       priority: "high",
@@ -69,6 +75,7 @@ const worktreeResourceStatusSchema = z.object({
   lastCheckedAt: z.number().optional(),
   endpoint: z.string().optional(),
   meta: z.record(z.string(), z.unknown()).optional(),
+  ssh: z.string().optional(),
   provider: z.string().optional(),
   resumedAt: z.number().optional(),
   pausedAt: z.number().optional(),
@@ -368,6 +375,75 @@ export function registerWorktreeResourceActions(
           spawnedBy,
           focusPolicy,
         });
+      },
+    })
+  );
+
+  actions.set("worktree.resource.openOnHost", () =>
+    defineAction({
+      id: "worktree.resource.openOnHost",
+      title: "Open on its machine",
+      description:
+        "Open a worktree on the machine its resource status names as an ssh target, as a Remote Host. Adds the host for this worktree (removed with it), opens Host setup if Daintree isn't running there, else the host switch dialog to place the branch.",
+      category: "worktree",
+      kind: "command",
+      danger: "confirm",
+      dangerRationale:
+        "Adds the resource's machine to this device's host list, and can lead on to installing and starting Daintree there.",
+      scope: "renderer",
+      nonRepeatable: true,
+      // Its confirmation lives on the card's environment popover, the one
+      // place a person reaches it from; a palette run would skip it.
+      palette: { mode: "hidden" },
+      argsSchema: z
+        .object({
+          worktreeId: z
+            .string()
+            .optional()
+            .describe(
+              "Worktree id from the worktree listing (default: focused or active worktree)."
+            ),
+        })
+        .optional(),
+      // Only what holds for every worktree here: the card names its own
+      // worktree in the args, which this gate never sees, so run() checks
+      // that worktree's machine.
+      isEnabled: () => canOfferResourceBoxHandoff(),
+      disabledReason: () =>
+        canOfferResourceBoxHandoff()
+          ? undefined
+          : "This window can't open a resource's machine as a host",
+      selfNotifiesOnExecutionError: true,
+      run: async (args, ctx: ActionContext) => {
+        const targetWorktreeId = args?.worktreeId ?? ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
+        try {
+          if (!targetWorktreeId) throw new Error("No worktree selected");
+          const worktree = getCurrentViewStore().getState().worktrees.get(targetWorktreeId);
+          if (!worktree) throw new Error("Worktree not found");
+          const sshTarget = worktree.resourceStatus?.ssh;
+          if (!sshTarget) {
+            throw new Error("The worktree's resource hasn't reported a machine to open");
+          }
+          if (!ctx.projectId) throw new Error("No project is open");
+          return await openResourceBoxOnHost({
+            worktreeId: worktree.id,
+            worktreePath: worktree.path,
+            projectId: ctx.projectId,
+            sshTarget,
+            askFirst: ctx.dispatchSource === "agent" || ctx.dispatchSource === "plugin",
+            isCurrent: () =>
+              getCurrentViewStore().getState().worktrees.get(worktree.id)?.resourceStatus?.ssh ===
+              sshTarget,
+          });
+        } catch (err) {
+          notifyWorktreeResourceError(
+            err,
+            "Couldn't open on its machine",
+            "Opening the worktree on its machine failed",
+            targetWorktreeId
+          );
+          throw err;
+        }
       },
     })
   );

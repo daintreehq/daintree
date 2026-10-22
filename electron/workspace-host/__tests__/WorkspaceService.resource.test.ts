@@ -402,6 +402,36 @@ describe("WorkspaceService.runResourceAction", () => {
         })
       );
     });
+
+    it("reads an ssh target from a ready status", async () => {
+      const monitor = createAndRegisterMonitor();
+      await setupConfig({
+        resource: { status: "check-status", provision: ["provision-cmd"] },
+      });
+      await setupSpawn(0, JSON.stringify({ status: "ready", ssh: "dt-feature-x" }));
+
+      await service.runResourceAction("req-ssh1", "/test/worktree", "status");
+
+      expect(monitor.resourceStatus?.ssh).toBe("dt-feature-x");
+    });
+
+    it.each([
+      ["a status that isn't ready", { status: "provisioning", ssh: "dt-feature-x" }],
+      ["a target with options", { status: "ready", ssh: "-oProxyCommand=evil host" }],
+      ["a target with a port", { status: "ready", ssh: "root@10.0.0.5 -p 32351" }],
+      ["a non-string target", { status: "ready", ssh: { host: "box" } }],
+    ])("ignores the ssh target for %s", async (_label, payload) => {
+      const monitor = createAndRegisterMonitor();
+      await setupConfig({
+        resource: { status: "check-status", provision: ["provision-cmd"] },
+      });
+      await setupSpawn(0, JSON.stringify(payload));
+
+      await service.runResourceAction("req-ssh2", "/test/worktree", "status");
+
+      expect(monitor.resourceStatus).toBeDefined();
+      expect(monitor.resourceStatus?.ssh).toBeUndefined();
+    });
   });
 
   // --- daintree-remote wrapper generation ---
@@ -827,6 +857,39 @@ describe("WorkspaceService.runResourceAction", () => {
       expect(monitor.resourceStatus?.pausedAt).toBeGreaterThanOrEqual(before);
       expect(monitor.resourceStatus?.pausedAt).toBeLessThanOrEqual(after);
     });
+
+    it.each([
+      ["pause", { pause: ["stop-cmd"], provision: ["provision-cmd"] }],
+      ["teardown", { teardown: ["destroy-cmd"], provision: ["provision-cmd"] }],
+    ] as const)(
+      "stops offering the box's ssh target once a %s succeeds",
+      async (action, resource) => {
+        const monitor = createAndRegisterMonitor();
+        monitor.setResourceStatus({
+          lastStatus: "ready",
+          ssh: "dt-feature-x",
+          endpoint: "http://x",
+        });
+        await setupConfig({ resource });
+        await setupSpawn(0, "done");
+
+        await service.runResourceAction("req-ssh-clear", "/test/worktree", action);
+
+        expect(monitor.resourceStatus?.ssh).toBeUndefined();
+        expect(monitor.resourceStatus?.endpoint).toBe("http://x");
+      }
+    );
+
+    it("keeps the box's ssh target when the pause fails", async () => {
+      const monitor = createAndRegisterMonitor();
+      monitor.setResourceStatus({ lastStatus: "ready", ssh: "dt-feature-x" });
+      await setupConfig({ resource: { pause: ["stop-cmd"], provision: ["provision-cmd"] } });
+      await setupSpawn(1, "nope");
+
+      await service.runResourceAction("req-ssh-keep", "/test/worktree", "pause");
+
+      expect(monitor.resourceStatus?.ssh).toBe("dt-feature-x");
+    });
   });
 
   // --- Idempotent provision logic ---
@@ -1018,6 +1081,28 @@ describe("WorkspaceService.runLifecycleTeardown — resource teardown integratio
     expect(resourceTeardownIdx).toBeGreaterThanOrEqual(0);
     expect(teardownIdx).toBeGreaterThanOrEqual(0);
     expect(resourceTeardownIdx).toBeLessThan(teardownIdx);
+  });
+
+  it("stops offering the box's ssh target once a delete's resource teardown succeeds", async () => {
+    const monitor = createAndRegisterMonitor();
+    monitor.setHasResourceConfig(true);
+    monitor.setResourceStatus({ lastStatus: "ready", ssh: "dt-feature-x" });
+
+    const fsModule = await import("fs/promises");
+    vi.mocked(fsModule.access).mockImplementation(async (p: unknown) => {
+      if (n(p as string).endsWith("/test/root/.daintree/config.json")) return undefined;
+      throw new Error("ENOENT");
+    });
+    vi.mocked(fsModule.readFile).mockResolvedValue(
+      JSON.stringify({ resource: { teardown: ["terraform destroy"] } }) as never
+    );
+    const childProcessModule = await import("child_process");
+    vi.mocked(childProcessModule.spawn).mockImplementation(makeSpawnChild(0));
+
+    await service["runLifecycleTeardown"]("/test/worktree", monitor, false);
+
+    expect(monitor.resourceStatus?.ssh).toBeUndefined();
+    expect(monitor.resourceStatus?.lastStatus).toBe("ready");
   });
 
   it("runs only regular teardown when no resource config", async () => {

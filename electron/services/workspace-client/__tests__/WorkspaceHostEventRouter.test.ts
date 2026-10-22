@@ -255,6 +255,47 @@ describe("WorkspaceHostEventRouter", () => {
     });
   });
 
+  describe("resource teardown announcement (#13742)", () => {
+    const teardown = (state: WorktreeLifecycleState, startedAt = 100) =>
+      makeWorktreeUpdateEvent({
+        lifecycleStatus: {
+          phase: "resource-teardown" as WorktreeLifecyclePhase,
+          state,
+          startedAt,
+        },
+      });
+    const announced = () =>
+      vi
+        .mocked(events.emit)
+        .mock.calls.filter(([name]) => name === "sys:worktree:resource-teardown");
+
+    it("announces a successful teardown before the sys-bus coalescing window drains", () => {
+      router.routeHostEvent(makeEntry(), teardown("success"));
+
+      expect(announced()).toEqual([
+        ["sys:worktree:resource-teardown", { worktreeId: "wt-1", timestamp: expect.any(Number) }],
+      ]);
+    });
+
+    it("announces each teardown once, however often its settled status repeats", () => {
+      const entry = makeEntry();
+      router.routeHostEvent(entry, teardown("success", 100));
+      router.routeHostEvent(entry, teardown("success", 100));
+      router.routeHostEvent(entry, teardown("success", 200));
+
+      expect(announced()).toHaveLength(2);
+    });
+
+    it.each(["running", "failed", "timed-out"] as const)(
+      "announces nothing for a teardown that is %s",
+      (state) => {
+        router.routeHostEvent(makeEntry(), teardown(state));
+
+        expect(announced()).toEqual([]);
+      }
+    );
+  });
+
   describe("file-search cache invalidation", () => {
     it("hands every worktree-update snapshot to the invalidator", () => {
       // The router does not decide; it delivers. The `pathMembershipChangedAt`

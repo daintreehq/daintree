@@ -81,6 +81,7 @@ export const BUILT_IN_ACTION_IDS = [
   "worktree.resource.pause",
   "worktree.resource.status",
   "worktree.resource.connect",
+  "worktree.resource.openOnHost",
   "worktree.resource.config.get",
   "worktree.resource.config.set",
 

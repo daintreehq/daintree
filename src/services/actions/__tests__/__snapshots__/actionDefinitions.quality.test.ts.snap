@@ -7223,6 +7223,18 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
   },
   {
     "category": "worktree",
+    "danger": "confirm",
+    "dangerRationale": "Adds the resource's machine to this device's host list, and can lead on to installing and starting Daintree there.",
+    "description": "Open a worktree on the machine its resource status names as an ssh target, as a Remote Host. Adds the host for this worktree (removed with it), opens Host setup if Daintree isn't running there, else the host switch dialog to place the branch.",
+    "examples": undefined,
+    "id": "worktree.resource.openOnHost",
+    "keywords": undefined,
+    "kind": "command",
+    "requiresArgs": false,
+    "title": "Open on its machine",
+  },
+  {
+    "category": "worktree",
     "danger": "safe",
     "dangerRationale": undefined,
     "description": "Run the project's pause commands for a worktree's remote resource, typically stopping a cloud devbox to save cost. These are arbitrary project commands; resume is a separate sequence, not guaranteed to undo this.",

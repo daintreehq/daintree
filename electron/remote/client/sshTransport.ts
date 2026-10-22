@@ -14,6 +14,7 @@ import {
 import type { CommandRunner } from "./commandRunner.js";
 import { createCommandStreamTransport, type StreamCommandChild } from "./commandStreamTransport.js";
 import { sshExecutable } from "./sshExecutable.js";
+import { isValidSshTarget } from "../../../shared/utils/sshTarget.js";
 import {
   HostModeOffError,
   SshAccessError,
@@ -156,9 +157,7 @@ export function controlPathOption(controlPath: string): string {
   return `ControlPath="${controlPath.replace(/[\\"]/g, "\\$&")}"`;
 }
 
-export function isValidSshTarget(target: string): boolean {
-  return /^[A-Za-z0-9_.@%+[\]-]{1,255}$/.test(target) && !target.startsWith("-");
-}
+export { isValidSshTarget };
 
 export function defaultSshSpawner(sshPath = sshExecutable()): SshSpawner {
   return (args) =>
