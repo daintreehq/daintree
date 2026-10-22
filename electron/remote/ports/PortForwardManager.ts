@@ -38,9 +38,13 @@ import { PortStreamMux } from "./streamForwarder.js";
  * ControlMaster when there is one (`ssh -O forward`), and otherwise through a
  * local listener whose connections ride the link as streams.
  *
- * One forward per (host, remote port), whatever asked for it. Forwards made
- * for a CLI's sign-in callback close after they go idle; the rest last until
- * stopped.
+ * One forward per (host, remote port), whatever asked for it, kept while
+ * something holds it: the user's own Forward port… until it is stopped, each
+ * browser panel and dev preview that asked for it until it lets go, and a
+ * sign-in callback or a page opened in the system browser until its
+ * connections have been idle a while. Only what Daintree carries itself shows
+ * that last kind's use, so a forward held for that alone rides link streams,
+ * never the ControlMaster.
  *
  * A forward counts (is listed, and admits a webview) only while the session
  * it rides is open. An ssh forward belongs to the ControlMaster that was
@@ -67,6 +71,44 @@ export interface PortForwardManagerDeps {
   now?(): number;
   /** How long a sign-in callback forward may sit idle before it closes. */
   oauthIdleMs?: number;
+  /** How long a panel's release waits, so a remount that asks again keeps the same forward. */
+  panelReleaseGraceMs?: number;
+  /** A host's name for copy, or null for a host not in the list. */
+  hostName?(hostId: HostId): string | null;
+}
+
+/**
+ * What keeps a forward. `manual` is the user's own request, which lasts until
+ * stopped; `owners` are browser panels (`panel:<view>:<panel>`) and dev
+ * previews (`preview:<subdomain>`), each letting go on its own; `idle` is a
+ * sign-in callback or a system-browser page, kept while it is in use.
+ */
+interface Hold {
+  manual: PortForwardOrigin | null;
+  owners: Set<string>;
+  idle: boolean;
+}
+
+function isLasting(hold: Hold | undefined): boolean {
+  return hold !== undefined && (hold.manual !== null || hold.owners.size > 0);
+}
+
+function isHeld(hold: Hold | undefined): boolean {
+  return isLasting(hold) || hold?.idle === true;
+}
+
+/** What the forward is listed as: the most lasting reason it is held for. */
+function originOf(hold: Hold | undefined, fallback: PortForwardOrigin): PortForwardOrigin {
+  if (!hold) return fallback;
+  if (hold.manual) return hold.manual;
+  const owners = [...hold.owners];
+  if (owners.some((owner) => owner.startsWith(PREVIEW_OWNER))) return "dev-preview";
+  if (owners.some((owner) => owner.startsWith(PANEL_OWNER))) return "browser-panel";
+  return "oauth-callback";
+}
+
+function previewOwner(subdomain: string): string {
+  return `${PREVIEW_OWNER}${subdomain}`;
 }
 
 interface ActiveForward {
@@ -111,12 +153,17 @@ const ORIGINS: ReadonlySet<PortForwardOrigin> = new Set([
   "oauth-callback",
   "manual",
   "detected",
+  "browser-panel",
 ]);
+const PANEL_OWNER = "panel:";
+const PREVIEW_OWNER = "preview:";
+const MAX_PANEL_ID_LENGTH = 256;
 const MAX_FORWARDS = 128;
 const MAX_LABEL_LENGTH = 128;
 const DEFAULT_OAUTH_IDLE_MS = 10 * 60 * 1000;
 const PREVIEW_CACHE_MS = 2_000;
 const PREVIEW_LOOKUP_TIMEOUT_MS = 5_000;
+const DEFAULT_PANEL_RELEASE_GRACE_MS = 5_000;
 
 function keyOf(hostId: HostId, remotePort: number): string {
   return `${hostId}\u0000${remotePort}`;
@@ -126,14 +173,17 @@ function invalid(message: string): AppError {
   return new AppError({ code: "VALIDATION", message });
 }
 
-function validatePayload(payload: ForwardPortPayload): Required<
-  Pick<ForwardPortPayload, "hostId" | "remotePort">
-> & {
+interface ForwardRequest {
+  hostId: HostId;
+  remotePort: number;
   origin: PortForwardOrigin;
   label: string | null;
-} {
+  samePort: boolean;
+}
+
+function validatePayload(payload: ForwardPortPayload): ForwardRequest {
   if (!payload || typeof payload !== "object") throw invalid("Invalid forward request");
-  const { hostId, remotePort, origin, label } = payload;
+  const { hostId, remotePort, origin, label, samePort } = payload;
   if (typeof hostId !== "string" || !isValidRemoteHostId(hostId)) {
     throw invalid("Ports are forwarded from a remote host");
   }
@@ -144,12 +194,29 @@ function validatePayload(payload: ForwardPortPayload): Required<
   if (label !== undefined && (typeof label !== "string" || label.length > MAX_LABEL_LENGTH)) {
     throw invalid("Invalid forward label");
   }
+  if (samePort !== undefined && typeof samePort !== "boolean")
+    throw invalid("Invalid forward request");
   return {
     hostId,
     remotePort,
     origin: origin ?? "manual",
     label: label?.trim() ? label.trim() : null,
+    samePort: samePort === true,
   };
+}
+
+/** A browser panel's id as its owner key's last part. */
+export function isValidPanelId(panelId: unknown): panelId is string {
+  return typeof panelId === "string" && panelId.length > 0 && panelId.length <= MAX_PANEL_ID_LENGTH;
+}
+
+export function panelOwner(webContentsId: number, panelId: string): string {
+  return `${PANEL_OWNER}${webContentsId}:${panelId}`;
+}
+
+/** Every panel owner in one view, for releasing them all when the view is gone. */
+export function viewOwnerPrefix(webContentsId: number): string {
+  return `${PANEL_OWNER}${webContentsId}:`;
 }
 
 export class PortForwardManager {
@@ -166,8 +233,10 @@ export class PortForwardManager {
     string,
     { at: number; hostId: HostId; result: Promise<RemoteUpstreamResolution | null> }
   >();
-  /** Which forward each preview subdomain last resolved to, so a moved dev server frees the old one. */
-  private readonly previewForwards = new Map<string, string>();
+  /** What keeps each forward, by key: kept across a session's retire and re-add. */
+  private readonly holds = new Map<string, Hold>();
+  /** Panel releases waiting out their grace, by owner. */
+  private readonly releaseTimers = new Map<string, ReturnType<typeof setTimeout>>();
   /** Latest lookup per subdomain; an older lookup that finishes later changes nothing. */
   private readonly previewGenerations = new Map<string, number>();
   private previewGeneration = 0;
@@ -214,15 +283,18 @@ export class PortForwardManager {
     this.watch(hostId, session);
     const lapsed = [...this.lapsed.values()].filter((spec) => spec.hostId === hostId);
     for (const spec of lapsed) {
+      const key = keyOf(spec.hostId, spec.remotePort);
       // Stopped (or already added again) while an earlier one was being added.
-      if (this.lapsed.get(keyOf(spec.hostId, spec.remotePort)) !== spec) continue;
+      if (this.lapsed.get(key) !== spec) continue;
       try {
         // Keeps its id, so a Stop for it lands whether it comes before or after.
-        await this.forward({
+        // Whatever held it still does: nothing new claims it.
+        await this.acquire(key, {
           hostId,
           remotePort: spec.remotePort,
           origin: spec.origin,
-          ...(spec.label ? { label: spec.label } : {}),
+          label: spec.label,
+          samePort: false,
         });
       } catch {
         // The session went again, or the port can't be had, or it was stopped:
@@ -233,8 +305,16 @@ export class PortForwardManager {
     this.emit();
   }
 
-  async forward(payload: ForwardPortPayload): Promise<PortForward> {
+  /**
+   * Forward a host port for `owner` (a browser panel or dev preview, held
+   * until it lets go) or, with none, for the payload's origin: the user's own
+   * request, or a sign-in callback or system-browser page kept while in use.
+   */
+  async forward(payload: ForwardPortPayload, owner: string | null = null): Promise<PortForward> {
     const request = validatePayload(payload);
+    if (request.origin === "browser-panel" && owner === null) {
+      throw invalid("A browser panel's forward needs its panel");
+    }
     if (!this.deps.isKnownHost(request.hostId)) {
       throw new AppError({
         code: "NOT_FOUND",
@@ -242,22 +322,88 @@ export class PortForwardManager {
         userMessage: "That host isn't in the host list.",
       });
     }
+    if (this.disposed) {
+      throw new AppError({ code: "CANCELLED", message: "Port forwarding stopped" });
+    }
     const key = keyOf(request.hostId, request.remotePort);
+    // Asking again within a release's grace keeps the forward it was letting go of.
+    if (owner !== null) this.cancelRelease(owner);
+    // Held before anything is awaited, so a release meanwhile finds it.
+    const undo = this.claim(key, request, owner);
+    try {
+      return await this.acquire(key, request);
+    } catch (error) {
+      undo();
+      throw error;
+    }
+  }
+
+  /**
+   * Let go of everything `owner` holds. A panel's release waits a moment, so
+   * one remounted (moved, or its view reloaded) that asks again keeps the
+   * same forward; anything else lets go at once.
+   */
+  release(owner: string): void {
+    this.cancelRelease(owner);
+    const graceMs = owner.startsWith(PANEL_OWNER)
+      ? (this.deps.panelReleaseGraceMs ?? DEFAULT_PANEL_RELEASE_GRACE_MS)
+      : 0;
+    if (graceMs <= 0 || this.disposed) {
+      this.dropOwner(owner);
+      return;
+    }
+    const timer = setTimeout(() => {
+      this.releaseTimers.delete(owner);
+      this.dropOwner(owner);
+    }, graceMs);
+    timer.unref?.();
+    this.releaseTimers.set(owner, timer);
+  }
+
+  /** Let go at once of every owner whose id starts with `prefix`: a view's panels, once it is gone. */
+  releaseAll(prefix: string): void {
+    const owners = new Set<string>();
+    for (const owner of this.releaseTimers.keys()) if (owner.startsWith(prefix)) owners.add(owner);
+    for (const hold of this.holds.values()) {
+      for (const owner of hold.owners) if (owner.startsWith(prefix)) owners.add(owner);
+    }
+    for (const owner of owners) {
+      this.cancelRelease(owner);
+      this.dropOwner(owner);
+    }
+  }
+
+  /**
+   * A preview's panel closed or its dev server was stopped: its forward goes
+   * unless something else holds it, and a lookup still in flight for it
+   * changes nothing.
+   */
+  releasePreview(subdomain: string): void {
+    this.previewGenerations.set(subdomain, ++this.previewGeneration);
+    this.previewCache.delete(subdomain);
+    this.dropOwner(previewOwner(subdomain));
+  }
+
+  private async acquire(key: string, request: ForwardRequest): Promise<PortForward> {
     const existing = this.forwards.get(key);
     if (existing) {
-      if (this.isLive(existing)) return this.reuse(existing, request.origin, request.label);
+      if (this.isLive(existing)) return this.reuse(existing, request);
       this.requireSession(request.hostId);
       if (existing.driver.kind === "ssh") this.retire(key, existing);
     }
     if (this.retiring.size > 0) {
       await Promise.all(this.retiring);
-      return this.forward(payload);
+      return this.acquire(key, request);
     }
     const inFlight = this.pending.get(key);
     if (inFlight) {
       const info = await inFlight;
       const created = this.forwards.get(key);
-      return created ? this.reuse(created, request.origin, request.label) : info;
+      if (created) return this.reuse(created, request);
+      if (request.samePort && info.localPort !== request.remotePort) {
+        throw this.portInUse(request.remotePort, request.origin);
+      }
+      return info;
     }
     if (this.forwards.size >= MAX_FORWARDS) {
       throw new AppError({
@@ -271,7 +417,6 @@ export class PortForwardManager {
     if (lapsed) {
       // Added again under its old id; a Stop for that id until it is listed marks this.
       this.lapsed.delete(key);
-      if (request.origin === "oauth-callback") request.origin = lapsed.origin;
       request.label = request.label ?? lapsed.label;
       let finish = () => {};
       recreation = {
@@ -289,6 +434,7 @@ export class PortForwardManager {
           lapsed &&
           !recreation?.stopped &&
           !this.disposed &&
+          isHeld(this.holds.get(key)) &&
           !this.forwards.has(key) &&
           !this.lapsed.has(key)
         ) {
@@ -309,31 +455,35 @@ export class PortForwardManager {
 
   async stop(forwardId: string): Promise<void> {
     if (typeof forwardId !== "string") throw invalid("Invalid forward id");
-    for (const [key, spec] of this.lapsed) {
-      if (spec.forwardId === forwardId) this.lapsed.delete(key);
+    // Stopped: whatever held it lets go with it.
+    for (const [key, spec] of [...this.lapsed]) {
+      if (spec.forwardId !== forwardId) continue;
+      this.lapsed.delete(key);
+      this.holds.delete(key);
     }
-    const recreating = [...this.recreating.values()].find((r) => r.forwardId === forwardId);
+    const recreating = [...this.recreating.entries()].find(([, r]) => r.forwardId === forwardId);
     if (recreating) {
       // Being added again right now: it is torn down before it is ever listed.
-      recreating.stopped = true;
-      await recreating.done;
+      this.holds.delete(recreating[0]);
+      recreating[1].stopped = true;
+      await recreating[1].done;
       return;
     }
     const entry = [...this.forwards.entries()].find(([, f]) => f.info.forwardId === forwardId);
     if (!entry) return;
     const [key, forward] = entry;
     this.forwards.delete(key);
+    const hold = this.holds.get(key);
+    this.holds.delete(key);
     if (!(await this.teardown(forward))) {
       // ssh still holds the port: keep it listed so it can be stopped again.
       this.forwards.set(key, forward);
+      if (hold && !this.holds.has(key)) this.holds.set(key, hold);
       throw new AppError({
         code: "INTERNAL",
         message: `ssh refused to cancel the forward of port ${forward.info.remotePort}`,
         userMessage: "Couldn't stop forwarding this port. Try again.",
       });
-    }
-    for (const [subdomain, id] of this.previewForwards) {
-      if (id === forwardId) this.previewForwards.delete(subdomain);
     }
     this.previewCache.clear();
     this.emit();
@@ -366,6 +516,7 @@ export class PortForwardManager {
       if (spec.hostId === hostId) this.lapsed.delete(key);
     }
     const prefix = keyOf(hostId, 0).slice(0, -1);
+    for (const key of [...this.holds.keys()]) if (key.startsWith(prefix)) this.holds.delete(key);
     for (const [key, recreation] of this.recreating) {
       if (key.startsWith(prefix)) recreation.stopped = true;
     }
@@ -376,11 +527,6 @@ export class PortForwardManager {
     const gone = [...this.forwards].filter(([, forward]) => forward.info.hostId === hostId);
     if (gone.length === 0) return;
     for (const [key] of gone) this.forwards.delete(key);
-    for (const [subdomain, id] of this.previewForwards) {
-      if (gone.some(([, forward]) => forward.info.forwardId === id)) {
-        this.previewForwards.delete(subdomain);
-      }
-    }
     this.previewCache.clear();
     // Its master may be gone with it: cancelling is only a courtesy, the local side always closes.
     await Promise.all(gone.map(([, forward]) => this.teardown(forward).catch(() => false)));
@@ -433,26 +579,22 @@ export class PortForwardManager {
     const recreations = [...this.recreating.values()];
     for (const entry of recreations) entry.stopped = true;
     const pending = [...this.pending.values()];
-    this.previewForwards.clear();
     this.previewCache.clear();
+    this.holds.clear();
+    for (const timer of this.releaseTimers.values()) clearTimeout(timer);
+    this.releaseTimers.clear();
     await Promise.all(all.map((forward) => this.teardown(forward)));
     // A forward still being added tears itself down on seeing `disposed`; wait for it.
     await Promise.allSettled([...pending, ...recreations.map((entry) => entry.done)]);
   }
 
-  private reuse(
-    forward: ActiveForward,
-    origin: PortForwardOrigin,
-    label: string | null
-  ): PortForward {
-    let changed = false;
-    // A lasting reason to forward outranks a sign-in's temporary one.
-    if (forward.info.origin === "oauth-callback" && origin !== "oauth-callback") {
-      forward.info.origin = origin;
-      changed = true;
+  private reuse(forward: ActiveForward, request: ForwardRequest): PortForward {
+    if (request.samePort && forward.info.localPort !== request.remotePort) {
+      throw this.portInUse(request.remotePort, request.origin);
     }
-    if (label && !forward.info.label) {
-      forward.info.label = label;
+    let changed = this.syncOrigin(forward);
+    if (request.label && !forward.info.label) {
+      forward.info.label = request.label;
       changed = true;
     }
     this.touch(forward);
@@ -462,12 +604,7 @@ export class PortForwardManager {
 
   private async create(
     key: string,
-    request: {
-      hostId: HostId;
-      remotePort: number;
-      origin: PortForwardOrigin;
-      label: string | null;
-    },
+    request: ForwardRequest,
     recreation: Recreation | null
   ): Promise<PortForward> {
     // Fail before binding anything when the host can't carry the forward.
@@ -477,19 +614,22 @@ export class PortForwardManager {
       hostId: request.hostId,
       remotePort: request.remotePort,
       localPort: 0,
-      origin: request.origin,
+      origin: originOf(this.holds.get(key), request.origin),
       label: request.label,
       createdAt: this.now(),
     };
     this.watch(request.hostId, session);
+    // A forward kept only while in use rides link streams, where its use shows.
     const forward =
-      (await this.createSshForward(info, session)) ??
-      (await this.createStreamForward(info, session));
+      (isLasting(this.holds.get(key))
+        ? await this.createSshForward(info, session, request.samePort)
+        : null) ?? (await this.createStreamForward(info, session, request.samePort));
     if (this.disposed) {
       await this.teardown(forward);
       throw new AppError({ code: "CANCELLED", message: "Port forwarding stopped" });
     }
-    if (recreation?.stopped) {
+    if (recreation?.stopped || !isHeld(this.holds.get(key))) {
+      // Stopped, or let go by everything that asked for it, while it was being added.
       await this.teardown(forward);
       throw new AppError({ code: "CANCELLED", message: "Port forward stopped" });
     }
@@ -501,6 +641,7 @@ export class PortForwardManager {
     // Listed from here on under its id, so a Stop from now finds it like any other.
     if (recreation && this.recreating.get(key) === recreation) this.recreating.delete(key);
     this.forwards.set(key, forward);
+    this.syncOrigin(forward);
     this.touch(forward);
     this.emit();
     return { ...forward.info };
@@ -508,7 +649,8 @@ export class PortForwardManager {
 
   private async createSshForward(
     info: PortForward,
-    session: LinkSession
+    session: LinkSession,
+    samePort: boolean
   ): Promise<ActiveForward | null> {
     const mux = this.deps.sshMuxFor?.(info.hostId) ?? null;
     if (!mux) return null;
@@ -518,6 +660,8 @@ export class PortForwardManager {
     } catch {
       return null;
     }
+    if (samePort && localPort !== info.remotePort)
+      throw this.portInUse(info.remotePort, info.origin);
     let relay: LoopbackListener | null;
     try {
       relay = await listenIpv6Relay(localPort);
@@ -541,17 +685,23 @@ export class PortForwardManager {
 
   private async createStreamForward(
     info: PortForward,
-    session: LinkSession
+    session: LinkSession,
+    samePort: boolean,
+    preferredPort = info.remotePort
   ): Promise<ActiveForward> {
     const sockets = new Set<net.Socket>();
     let forward: ActiveForward | null = null;
-    const listener = await listenLoopback(info.remotePort, (socket) => {
+    const listener = await listenLoopback(preferredPort, (socket) => {
       if (!forward) {
         socket.destroy();
         return;
       }
       this.acceptLocal(forward, socket);
     });
+    if (samePort && listener.port !== preferredPort) {
+      await listener.close();
+      throw this.portInUse(preferredPort, info.origin);
+    }
     forward = {
       info: { ...info, localPort: listener.port },
       driver: { kind: "stream", listener, sockets },
@@ -595,10 +745,16 @@ export class PortForwardManager {
     return mux;
   }
 
+  /** Restart the idle clock of a forward held only while in use; any other forward has none. */
   private touch(forward: ActiveForward): void {
     if (forward.idleTimer) clearTimeout(forward.idleTimer);
     forward.idleTimer = null;
-    if (forward.info.origin !== "oauth-callback" || this.disposed) return;
+    const key = keyOf(forward.info.hostId, forward.info.remotePort);
+    const hold = this.holds.get(key);
+    // A torn-down forward's closing sockets never start a clock.
+    if (this.disposed || this.forwards.get(key) !== forward || isLasting(hold) || !hold?.idle) {
+      return;
+    }
     const idleMs = this.deps.oauthIdleMs ?? DEFAULT_OAUTH_IDLE_MS;
     forward.idleTimer = setTimeout(() => {
       forward.idleTimer = null;
@@ -606,9 +762,160 @@ export class PortForwardManager {
         this.touch(forward);
         return;
       }
-      this.stop(forward.info.forwardId).catch(() => {});
+      if (this.forwards.get(key) !== forward) return;
+      const current = this.holds.get(key);
+      if (current) current.idle = false;
+      this.settle(key);
     }, idleMs);
     forward.idleTimer.unref?.();
+  }
+
+  /**
+   * Hold `key` for this request before anything is awaited. Returns the undo
+   * for a request that fails: it gives back only what this request added.
+   */
+  private claim(key: string, request: ForwardRequest, owner: string | null): () => void {
+    let hold = this.holds.get(key);
+    if (!hold) {
+      hold = { manual: null, owners: new Set(), idle: false };
+      this.holds.set(key, hold);
+    }
+    const held = hold;
+    const undo = (): void => {
+      if (this.holds.get(key) === held) this.settle(key);
+    };
+    if (owner !== null) {
+      if (held.owners.has(owner)) return () => {};
+      held.owners.add(owner);
+      return () => {
+        if (held.owners.delete(owner)) undo();
+      };
+    }
+    if (request.origin === "oauth-callback") {
+      if (held.idle) return () => {};
+      held.idle = true;
+      return () => {
+        held.idle = false;
+        undo();
+      };
+    }
+    if (held.manual !== null) return () => {};
+    held.manual = request.origin;
+    return () => {
+      held.manual = null;
+      undo();
+    };
+  }
+
+  private cancelRelease(owner: string): void {
+    const timer = this.releaseTimers.get(owner);
+    if (!timer) return;
+    clearTimeout(timer);
+    this.releaseTimers.delete(owner);
+  }
+
+  private dropOwner(owner: string): void {
+    for (const [key, hold] of [...this.holds]) {
+      if (hold.owners.delete(owner)) this.settle(key);
+    }
+  }
+
+  /** Something let go of the forward at `key`: it closes once nothing holds it. */
+  private settle(key: string): void {
+    const hold = this.holds.get(key);
+    const forward = this.forwards.get(key);
+    if (isLasting(hold)) {
+      if (forward && this.syncOrigin(forward)) this.emit();
+      return;
+    }
+    if (hold?.idle) {
+      // One still being added, or waiting for its session, starts its clock once listed.
+      if (!forward) return;
+      if (this.syncOrigin(forward)) this.emit();
+      if (forward.driver.kind === "ssh") this.rehome(key, forward);
+      else this.touch(forward);
+      return;
+    }
+    this.holds.delete(key);
+    this.lapsed.delete(key);
+    const recreation = this.recreating.get(key);
+    if (recreation) recreation.stopped = true;
+    // One still being added sees nothing holds it and tears itself down.
+    if (forward) void this.stop(forward.info.forwardId).catch(() => {});
+  }
+
+  /**
+   * A forward on the master now held only while in use moves to a link stream
+   * on the same local port, where its use shows. ssh's cancel closes only its
+   * listener, so connections the page already has keep running on the master.
+   */
+  private rehome(key: string, forward: ActiveForward): void {
+    if (forward.driver.kind !== "ssh" || this.pending.has(key)) return;
+    const session = this.deps.sessionFor(forward.info.hostId);
+    if (!session?.isOpen) return;
+    this.forwards.delete(key);
+    const moving = (async (): Promise<PortForward> => {
+      if (!(await this.teardown(forward))) {
+        // ssh kept it: it stays on the master, on the idle clock alone.
+        this.forwards.set(key, forward);
+        this.touch(forward);
+        return { ...forward.info };
+      }
+      // Anywhere else, the page's address would reach whatever took the port.
+      const moved = await this.createStreamForward(
+        { ...forward.info },
+        session,
+        true,
+        forward.info.localPort
+      );
+      if (this.disposed || !isHeld(this.holds.get(key))) {
+        await this.teardown(moved);
+        throw new AppError({ code: "CANCELLED", message: "Port forward stopped" });
+      }
+      this.forwards.set(key, moved);
+      this.syncOrigin(moved);
+      this.touch(moved);
+      return { ...moved.info };
+    })();
+    this.pending.set(key, moving);
+    moving
+      .catch(() => {
+        if (!this.forwards.has(key) && !isLasting(this.holds.get(key))) this.holds.delete(key);
+      })
+      .finally(() => {
+        if (this.pending.get(key) === moving) this.pending.delete(key);
+        this.emit();
+      });
+  }
+
+  /** List the forward as what holds it now; true when that changed. */
+  private syncOrigin(forward: ActiveForward): boolean {
+    const hold = this.holds.get(keyOf(forward.info.hostId, forward.info.remotePort));
+    const origin = originOf(hold, forward.info.origin);
+    if (forward.info.origin === origin) return false;
+    forward.info.origin = origin;
+    return true;
+  }
+
+  /** The port is taken here; when one of these forwards has it, say which host's. */
+  private portInUse(port: number, origin: PortForwardOrigin): AppError {
+    const holder = [...this.forwards.values()].find(
+      (forward) => forward.info.localPort === port && this.isLive(forward)
+    );
+    const blocked =
+      origin === "oauth-callback"
+        ? "the host's sign-in callback can't reach it"
+        : "the host's page can't open here at the same address";
+    const userMessage = holder
+      ? `Port ${port} on this machine already forwards ${
+          this.deps.hostName?.(holder.info.hostId) ?? holder.info.hostId
+        }'s port ${holder.info.remotePort}, so ${blocked}. Stop that forward in Ports, then try again.`
+      : `Port ${port} is in use on this machine, so ${blocked}. Stop what's using it here, then try again.`;
+    return new AppError({
+      code: "PORT_IN_USE",
+      message: `Port ${port} is taken on this machine`,
+      userMessage,
+    });
   }
 
   /** False only when ssh refused to cancel, so the local port is still forwarded. */
@@ -655,14 +962,17 @@ export class PortForwardManager {
       }
     }
     const current = () => this.previewGenerations.get(subdomain) === generation;
+    if (!current()) {
+      // A newer lookup, or the preview's release, overtook this one: its answer is the one that counts.
+      const latest = this.previewCache.get(subdomain);
+      return latest && latest.hostId === hostId ? latest.result : null;
+    }
     if (resolution?.kind === "ok") {
-      const forward = await this.forward({
-        hostId,
-        remotePort: resolution.port,
-        origin: "dev-preview",
-        label: "Dev preview",
-      });
-      if (current()) await this.notePreviewForward(subdomain, forward.forwardId);
+      const forward = await this.forward(
+        { hostId, remotePort: resolution.port, origin: "dev-preview", label: "Dev preview" },
+        previewOwner(subdomain)
+      );
+      if (current()) this.notePreviewForward(subdomain, keyOf(hostId, resolution.port));
       return {
         kind: "ok",
         port: forward.localPort,
@@ -671,19 +981,15 @@ export class PortForwardManager {
       };
     }
     // The dev server is gone: its forward would otherwise reach whatever takes the port next.
-    if (current()) await this.notePreviewForward(subdomain, null);
+    this.notePreviewForward(subdomain, null);
     return resolution?.kind === "not-running" ? resolution : null;
   }
 
-  private async notePreviewForward(subdomain: string, forwardId: string | null): Promise<void> {
-    const previous = this.previewForwards.get(subdomain);
-    if (forwardId) this.previewForwards.set(subdomain, forwardId);
-    else this.previewForwards.delete(subdomain);
-    if (!previous || previous === forwardId) return;
-    const stillUsed = [...this.previewForwards.values()].includes(previous);
-    const old = [...this.forwards.values()].find((f) => f.info.forwardId === previous);
-    if (!stillUsed && old?.info.origin === "dev-preview") {
-      await this.stop(previous).catch(() => {});
+  /** The preview now resolves to `key` (or to nothing): it lets go of every other forward. */
+  private notePreviewForward(subdomain: string, key: string | null): void {
+    const owner = previewOwner(subdomain);
+    for (const [heldKey, hold] of [...this.holds]) {
+      if (heldKey !== key && hold.owners.delete(owner)) this.settle(heldKey);
     }
   }
 

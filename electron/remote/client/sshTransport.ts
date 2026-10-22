@@ -514,6 +514,46 @@ export async function closeSshMaster(
   if (!controlPath.includes("%")) await fs.rm(controlPath, { force: true }).catch(() => {});
 }
 
+/** Every name a build gives a master's control socket: `cm1-…`, `cm2-…`, and the temporary one ssh binds first. */
+const CONTROL_SOCKET_NAME = /^cm\d*-/;
+
+/**
+ * Masters a previous launch left running because it crashed or was killed,
+ * so its quit never told them to exit. This launch would reuse one (the
+ * control path is the same every launch) with that launch's port forwards
+ * still bound on it, unlisted and unstoppable here; an older build's keeps its
+ * forwards bound until it times out. Each is told to exit and its socket
+ * removed, as a normal quit would have, before anything here dials a host.
+ */
+export async function exitStaleSshMasters(
+  run: CommandRunner,
+  clientDir: string,
+  timeoutMs: number
+): Promise<void> {
+  let names: string[];
+  try {
+    names = await fs.readdir(clientDir);
+  } catch {
+    return;
+  }
+  await Promise.all(
+    names
+      .filter((name) => CONTROL_SOCKET_NAME.test(name))
+      .map(async (name) => {
+        const socketPath = path.join(clientDir, name);
+        try {
+          if (!(await fs.lstat(socketPath)).isSocket()) return;
+        } catch {
+          return;
+        }
+        // The socket names the master; the destination is only there because ssh requires one.
+        const args = ["-F", "/dev/null", "-o", controlPathOption(socketPath), "-O", "exit", "--"];
+        await run(sshExecutable(), [...args, "localhost"], { timeoutMs }).catch(() => {});
+        await fs.rm(socketPath, { force: true }).catch(() => {});
+      })
+  );
+}
+
 /**
  * Parse the probe's output. Takes the last three lines so a noisy remote
  * shell startup file printing to stdout doesn't break it.

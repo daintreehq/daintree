@@ -3,6 +3,7 @@ import type {
   HostListeningPort,
   PortForward,
   PortForwardsEvent,
+  ReleasePortForwardsPayload,
 } from "../../../shared/types/ipc/portForwards.js";
 import {
   isLocalHostId,
@@ -17,6 +18,7 @@ import {
 } from "../../../shared/utils/devPreviewProxy.js";
 import { isBoundLoopbackUrl } from "../../../shared/utils/urlUtils.js";
 import { CHANNELS } from "../../ipc/channels.js";
+import { AppError } from "../../utils/errorTypes.js";
 import {
   getDevPreviewProxyPort,
   resolveLocalDevPreviewUpstream,
@@ -32,13 +34,26 @@ import { sshTargetOf } from "../client/connection.js";
 import { controlPathFor } from "../client/sshTransport.js";
 import type { LinkSession } from "../link/session.js";
 import { registerRemoteService } from "../runtime.js";
-import { PortForwardManager } from "./PortForwardManager.js";
+import {
+  isValidPanelId,
+  panelOwner,
+  PortForwardManager,
+  viewOwnerPrefix,
+} from "./PortForwardManager.js";
 import type { SshMuxTarget } from "./sshForward.js";
+
+/** The view a `portForwards` call came from, as the IPC layer saw it, never as the call claims. */
+export interface PortForwardCaller {
+  webContentsId: number;
+}
 
 /** What the Shell's `portForwards` handlers reach through the remote-hosts runtime. */
 export interface PortForwardService {
   list(): PortForward[];
-  forward(payload: ForwardPortPayload): Promise<PortForward>;
+  /** A payload naming a `panelId` is held for that panel of `caller`'s view until it lets go. */
+  forward(payload: ForwardPortPayload, caller?: PortForwardCaller): Promise<PortForward>;
+  /** The panel closed: its forwards go once nothing else holds them. */
+  release(payload: ReleasePortForwardsPayload, caller: PortForwardCaller): void;
   stop(forwardId: string): Promise<void>;
   listHostPorts(hostId: HostId): Promise<HostListeningPort[]>;
 }
@@ -71,6 +86,13 @@ export interface PortForwardClientDeps {
   connectionFor(hostId: HostId): HostConnection | null;
   /** The Daintree-owned directory holding the hosts' ControlMaster sockets. */
   clientDir: string;
+  /** A host's name for copy, or null for a host not in the list. */
+  hostName?(hostId: HostId): string | null;
+  /**
+   * Call `onGone` once the view is destroyed (at once for one already gone);
+   * returns an unwatch. Without it, a view's panels let go only by releasing.
+   */
+  watchView?(webContentsId: number, onGone: () => void): () => void;
 }
 
 interface ViewProject {
@@ -108,6 +130,10 @@ function proxySubdomainOf(src: string, proxyPort: number): string | null {
   } catch {
     return null;
   }
+}
+
+function invalidPanel(): AppError {
+  return new AppError({ code: "VALIDATION", message: "Invalid browser panel id" });
 }
 
 function broadcastLocal(event: PortForwardsEvent): void {
@@ -187,6 +213,7 @@ export function installPortForwardClient(deps: PortForwardClientDeps): () => Pro
       previewOwners.set(subdomain, owner);
     }
     owner.views.add(webContentsId);
+    notePreviewView(subdomain, webContentsId);
     return true;
   };
   const liveSession = (hostId: HostId): LinkSession | null => {
@@ -195,7 +222,7 @@ export function installPortForwardClient(deps: PortForwardClientDeps): () => Pro
     const session = sessions.get(hostId);
     return session?.isOpen ? session : null;
   };
-  const manager = new PortForwardManager({
+  const forwards = new PortForwardManager({
     sessionFor: liveSession,
     previewOwner: (subdomain) =>
       registeredPreviews.get(subdomain)?.hostId ?? livePreviewOwner(subdomain),
@@ -211,14 +238,55 @@ export function installPortForwardClient(deps: PortForwardClientDeps): () => Pro
         return null;
       }
     },
-    onChange: (forwards) => broadcastLocal({ type: "changed", forwards }),
+    onChange: (list) => broadcastLocal({ type: "changed", forwards: list }),
+    hostName: deps.hostName,
   });
+  // Views watched for their end, so the panels and previews they held let go.
+  const watchedViews = new Map<number, () => void>();
+  // The views each remote preview was started or loaded in: it lets go with the last of them.
+  const previewViews = new Map<string, Set<number>>();
+  const viewGone = (webContentsId: number): void => {
+    watchedViews.delete(webContentsId);
+    forwards.releaseAll(viewOwnerPrefix(webContentsId));
+    for (const [subdomain, views] of previewViews) {
+      if (!views.delete(webContentsId) || views.size > 0) continue;
+      previewViews.delete(subdomain);
+      forwards.releasePreview(subdomain);
+    }
+  };
+  const watchView = (webContentsId: number): void => {
+    if (!deps.watchView || watchedViews.has(webContentsId)) return;
+    // Set first: a view already gone calls back on a later microtask, which deletes it.
+    watchedViews.set(webContentsId, () => {});
+    const unwatch = deps.watchView(webContentsId, () => viewGone(webContentsId));
+    if (watchedViews.has(webContentsId)) watchedViews.set(webContentsId, unwatch);
+  };
+  const notePreviewView = (subdomain: string, webContentsId: number): void => {
+    let views = previewViews.get(subdomain);
+    if (!views) {
+      views = new Set();
+      previewViews.set(subdomain, views);
+    }
+    views.add(webContentsId);
+    watchView(webContentsId);
+  };
 
   const service: PortForwardService = {
-    list: () => manager.list(),
-    forward: (payload) => manager.forward(payload),
-    stop: (forwardId) => manager.stop(forwardId),
-    listHostPorts: (hostId) => manager.listHostPorts(hostId),
+    list: () => forwards.list(),
+    forward: async (payload, caller) => {
+      const panelId = (payload as { panelId?: unknown } | null | undefined)?.panelId;
+      if (panelId === undefined) return forwards.forward(payload);
+      if (!caller || !isValidPanelId(panelId)) throw invalidPanel();
+      watchView(caller.webContentsId);
+      return forwards.forward(payload, panelOwner(caller.webContentsId, panelId));
+    },
+    release: (payload, caller) => {
+      const panelId = (payload as { panelId?: unknown } | null | undefined)?.panelId;
+      if (!isValidPanelId(panelId)) throw invalidPanel();
+      forwards.release(panelOwner(caller.webContentsId, panelId));
+    },
+    stop: (forwardId) => forwards.stop(forwardId),
+    listHostPorts: (hostId) => forwards.listHostPorts(hostId),
   };
 
   const disposers = [
@@ -227,29 +295,40 @@ export function installPortForwardClient(deps: PortForwardClientDeps): () => Pro
       session.onClose(() => {
         if (sessions.get(hostId) === session) sessions.delete(hostId);
       });
-      void manager.reestablish(hostId);
+      void forwards.reestablish(hostId);
     }),
-    deps.onSessionOpened?.((hostId) => void manager.reestablish(hostId)) ?? (() => {}),
-    deps.onHostsChanged?.(() => void manager.pruneUnknownHosts()) ?? (() => {}),
-    deps.addUseCheck?.((hostId) => manager.hasForwardsFor(hostId)) ?? (() => {}),
+    deps.onSessionOpened?.((hostId) => void forwards.reestablish(hostId)) ?? (() => {}),
+    deps.onHostsChanged?.(() => void forwards.pruneUnknownHosts()) ?? (() => {}),
+    deps.addUseCheck?.((hostId) => forwards.hasForwardsFor(hostId)) ?? (() => {}),
     registerRemoteService("portForwards", service),
-    observeForwardedInvokes(({ hostId, hostProjectId, channel, args }) => {
-      if (channel !== CHANNELS.DEV_PREVIEW_ENSURE || !hostProjectId) return;
+    observeForwardedInvokes(({ hostId, webContentsId, hostProjectId, channel, args }) => {
+      if (!hostProjectId) return;
       const request = args[0] as { panelId?: unknown } | null | undefined;
       const panelId = request?.panelId;
       if (typeof panelId !== "string" || panelId.length === 0) return;
       // The project comes from this machine's own view key, never from the request.
-      registerPreview(buildDevPreviewSubdomain(hostProjectId, panelId), {
-        hostId,
-        projectId: hostProjectId,
-      });
+      const subdomain = buildDevPreviewSubdomain(hostProjectId, panelId);
+      switch (channel) {
+        case CHANNELS.DEV_PREVIEW_ENSURE:
+          registerPreview(subdomain, { hostId, projectId: hostProjectId });
+          notePreviewView(subdomain, webContentsId);
+          return;
+        // The panel closed, or its dev server was stopped: nothing will look its preview up again.
+        case CHANNELS.DEV_PREVIEW_STOP_BY_PANEL:
+          previewViews.delete(subdomain);
+          forwards.releasePreview(subdomain);
+          return;
+        case CHANNELS.DEV_PREVIEW_STOP:
+          forwards.releasePreview(subdomain);
+          return;
+      }
     }),
-    setRemoteDevPreviewResolver((subdomain) => manager.resolvePreview(subdomain)),
+    setRemoteDevPreviewResolver((subdomain) => forwards.resolvePreview(subdomain)),
     setRemoteWebviewSrcGate(
       (webContentsId, src) => {
         const hostId = deps.hostForView(webContentsId);
         if (!hostId) return null;
-        if (isBoundLoopbackUrl(src, manager.boundEndpointsFor(hostId))) return true;
+        if (isBoundLoopbackUrl(src, forwards.boundEndpointsFor(hostId))) return true;
         const subdomain = proxySubdomainOf(src, getDevPreviewProxyPort());
         return subdomain !== null && claimPreview(subdomain, webContentsId, hostId);
       },
@@ -262,9 +341,12 @@ export function installPortForwardClient(deps: PortForwardClientDeps): () => Pro
   // finishes before the host connections these ride on are torn down.
   return async () => {
     for (const dispose of disposers.splice(0).reverse()) dispose();
+    for (const unwatch of watchedViews.values()) unwatch();
+    watchedViews.clear();
+    previewViews.clear();
     sessions.clear();
     previewOwners.clear();
     registeredPreviews.clear();
-    await manager.dispose();
+    await forwards.dispose();
   };
 }

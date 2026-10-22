@@ -718,6 +718,7 @@ export const CHANNEL_LOCALITY = {
   "port-forwards:forward": "shell",
   "port-forwards:list": "shell",
   "port-forwards:list-host-ports": "shell",
+  "port-forwards:release": "shell",
   "port-forwards:stop": "shell",
   "portal:blur": "shell",
   "portal:close-tab": "shell",

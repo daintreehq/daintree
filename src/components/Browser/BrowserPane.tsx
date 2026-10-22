@@ -55,6 +55,7 @@ import { panelNotificationAddress } from "@/lib/notificationAddress";
 import {
   hostForwardFailure,
   needsHostForward,
+  releaseBrowserPanelForwards,
   resolveBrowserUrlForView,
 } from "@/services/terminal/remoteLoopbackLinks";
 
@@ -466,7 +467,7 @@ export function BrowserPane({
     let cancelled = false;
     const generation = navigationGenRef.current;
     const url = initialUrlRef.current;
-    resolveBrowserUrlForView(url).then(
+    resolveBrowserUrlForView(url, id).then(
       () => {
         if (cancelled || generation !== navigationGenRef.current) return;
         failedHostUrlRef.current = null;
@@ -483,7 +484,11 @@ export function BrowserPane({
     return () => {
       cancelled = true;
     };
-  }, [hostForward, setHostForward]);
+  }, [hostForward, setHostForward, id]);
+
+  // Every host port this panel forwarded stays held while it is open (its
+  // back and forward can return to any of them), and goes when it closes.
+  useEffect(() => () => releaseBrowserPanelForwards(id), [id]);
 
   useEffect(() => {
     if (!isWebviewReady || !webviewElement || !pendingNavigationRef.current) return;
@@ -534,7 +539,7 @@ export function BrowserPane({
       setPendingApproval(null);
       setIsLoading(true);
       setLoadError(null);
-      resolveBrowserUrlForView(url).then(
+      resolveBrowserUrlForView(url, id).then(
         (resolved) => {
           if (generation === navigationGenRef.current) commitResolvedNavigation(resolved);
         },
@@ -546,7 +551,7 @@ export function BrowserPane({
         }
       );
     },
-    [commitResolvedNavigation]
+    [commitResolvedNavigation, id]
   );
 
   /**

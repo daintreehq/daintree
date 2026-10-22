@@ -6,8 +6,8 @@ import { isClientAppError } from "@/utils/clientAppError";
 /**
  * Links a remote terminal prints that point at `localhost` mean the host's
  * localhost, not this machine's. Before such a link opens here, its port is
- * forwarded from the host (for the length of the flow: a sign-in callback
- * forward closes once idle) and the link is rewritten to the local end.
+ * forwarded from the host (while the page uses it: the forward closes once its
+ * connections have been idle a while) and the link is rewritten to the local end.
  *
  * A browser sign-in that names a loopback `redirect_uri` is the same problem
  * one hop later: the provider sends the browser back to the host's callback
@@ -68,38 +68,67 @@ export function callbackPortOf(text: string): number | null {
   return null;
 }
 
-async function forwardForFlow(hostId: string, remotePort: number, label: string) {
+/** Forwarded for a page outside Daintree: kept while its connections are, then closed once idle. */
+async function forwardForFlow(hostId: string, remotePort: number, label: string, samePort = false) {
   return window.electron.portForwards.forward({
     hostId,
     remotePort,
     origin: "oauth-callback",
     label,
+    ...(samePort ? { samePort } : {}),
   });
 }
 
 /**
  * The URL a browser panel in this view loads for `text`: a `localhost` URL in
  * a view on a host means the host's localhost, so its port is forwarded here
- * (kept until stopped, like one forwarded by hand, since the page keeps using
- * it) to the same port, and the URL is unchanged. Anything else, and every URL
- * in a view on this machine, comes back untouched. Rejects when the forward
- * can't be made at that port: loading the URL anyway would reach this
+ * to the same port, held for `panelId` until the panel closes (it may go back
+ * to any page it showed), and the URL is unchanged. Anything else, and every
+ * URL in a view on this machine, comes back untouched. Rejects when the
+ * forward can't be made at that port: loading the URL anyway would reach this
  * machine's own server.
  */
-export async function resolveBrowserUrlForView(text: string): Promise<string> {
+export async function resolveBrowserUrlForView(text: string, panelId: string): Promise<string> {
   const hostId = remoteHostOfView();
   if (!hostId) return text;
   const loopback = parseLoopbackLink(text);
   if (!loopback) return text;
-  const forward = await window.electron.portForwards.forward({
-    hostId,
-    remotePort: loopback.port,
-    origin: "manual",
-    label: "Browser panel",
-  });
   // The page keeps the host's address: it is what the panel shows, saves and
   // forwards again after a reload, and a dev server's absolute URLs and
   // sockets name it too. A port taken here can't stand in for it.
+  const forward = await window.electron.portForwards.forward({
+    hostId,
+    remotePort: loopback.port,
+    origin: "browser-panel",
+    label: "Browser panel",
+    panelId,
+    samePort: true,
+  });
+  if (forward.localPort !== loopback.port) throw new HostPortInUseError(loopback.port);
+  return loopback.url.toString();
+}
+
+/** The browser panel closed: the host ports it forwarded go once nothing else holds them. */
+export function releaseBrowserPanelForwards(panelId: string): void {
+  const release = window.electron?.portForwards?.release;
+  if (!release || !remoteHostOfView()) return;
+  release({ panelId }).catch(() => {
+    // The view is going too, and main lets go of its panels' forwards with it.
+  });
+}
+
+/**
+ * The URL to open in the system browser for a page in this view: a host's
+ * `localhost` page is forwarded here at the same port, for as long as its
+ * connections stay in use (nothing here sees the page close). Rejects when the
+ * port is taken here.
+ */
+export async function resolveExternalPageForView(text: string, label: string): Promise<string> {
+  const hostId = remoteHostOfView();
+  if (!hostId) return text;
+  const loopback = parseLoopbackLink(text);
+  if (!loopback) return text;
+  const forward = await forwardForFlow(hostId, loopback.port, label, true);
   if (forward.localPort !== loopback.port) throw new HostPortInUseError(loopback.port);
   return loopback.url.toString();
 }
@@ -117,6 +146,10 @@ export class HostPortInUseError extends Error {
 /** Why a host's localhost page couldn't be forwarded here, in the host's own words where it gave some. */
 export function hostForwardFailure(url: string, error: unknown): string {
   if (error instanceof HostPortInUseError) return error.message;
+  // Main's words: which host's forward has the port, when one does.
+  if (isClientAppError(error) && error.code === "PORT_IN_USE" && error.userMessage) {
+    return error.userMessage;
+  }
   const port = parseLoopbackLink(url)?.port;
   const reason =
     isClientAppError(error) && error.userMessage
@@ -150,7 +183,7 @@ export async function resolveTerminalLinkForView(text: string): Promise<string> 
   }
   const callbackPort = callbackPortOf(text);
   if (callbackPort !== null) {
-    const forward = await forwardForFlow(hostId, callbackPort, "Sign-in callback");
+    const forward = await forwardForFlow(hostId, callbackPort, "Sign-in callback", true);
     // The provider sends the browser to the callback's own port; on any other
     // port it would land on whatever this machine runs there.
     if (forward.localPort !== callbackPort) {

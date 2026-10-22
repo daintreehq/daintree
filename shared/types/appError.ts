@@ -70,6 +70,9 @@ export type AppErrorCode =
   | "HOST_DISCONNECTED"
   | "OUTCOME_UNKNOWN"
   | "HOST_VERSION_MISMATCH"
+  // A host's port couldn't be forwarded to the same port here: something on
+  // this machine, or another forward, already has it.
+  | "PORT_IN_USE"
   // A host's settings changed after the copy to it was previewed; it applies
   // nothing and asks for a fresh preview rather than write over the change.
   | "SETTINGS_PREVIEW_STALE"

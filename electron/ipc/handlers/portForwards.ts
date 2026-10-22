@@ -5,6 +5,7 @@ import type {
   ForwardPortPayload,
   HostListeningPort,
   PortForward,
+  ReleasePortForwardsPayload,
 } from "../../../shared/types/ipc/portForwards.js";
 
 export const portForwardsNamespace = defineIpcNamespace({
@@ -14,10 +15,22 @@ export const portForwardsNamespace = defineIpcNamespace({
       PORT_FORWARDS_METHOD_CHANNELS.list,
       async (): Promise<PortForward[]> => getRemoteService("portForwards")?.list() ?? []
     ),
+    // The calling view comes from the IPC layer: a panel's forward is held for that view's panel.
     forward: op(
       PORT_FORWARDS_METHOD_CHANNELS.forward,
-      async (payload: ForwardPortPayload): Promise<PortForward> =>
-        requireRemoteService("portForwards").forward(payload)
+      async (ctx, payload: ForwardPortPayload): Promise<PortForward> =>
+        requireRemoteService("portForwards").forward(payload, {
+          webContentsId: ctx.webContentsId,
+        }),
+      { withContext: true }
+    ),
+    release: op(
+      PORT_FORWARDS_METHOD_CHANNELS.release,
+      async (ctx, payload: ReleasePortForwardsPayload): Promise<void> => {
+        // A panel closing with Remote Hosts off has nothing to let go of.
+        getRemoteService("portForwards")?.release(payload, { webContentsId: ctx.webContentsId });
+      },
+      { withContext: true }
     ),
     stop: op(
       PORT_FORWARDS_METHOD_CHANNELS.stop,
