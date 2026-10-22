@@ -147,7 +147,7 @@ export function BulkCreateWorktreeDialog({
     queueRef.current = null;
   }, []);
 
-  // SidebarContent renders this dialog only while `isOpen`, so every close
+  // ProjectDialogHost renders this dialog only while `isOpen`, so every close
   // unmounts it. Without this, a close that bypasses handleClose (parent
   // teardown, error boundary reset) leaves the batch spawning into a detached
   // component.

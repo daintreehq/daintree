@@ -1,13 +1,23 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { StrictMode } from "react";
 import { render, screen, cleanup, act, fireEvent } from "@testing-library/react";
+import type { TerminalRecipe } from "@/types";
 
 interface MockProject {
   id: string;
   path: string;
 }
 
-const { refreshMock, forgeState, BOTH_FORGES, projectState } = vi.hoisted(() => {
+const { refreshMock, forgeState, BOTH_FORGES, projectState, MANAGER_RECIPE } = vi.hoisted(() => {
+  const MANAGER_RECIPE: TerminalRecipe = {
+    id: "recipe-managed",
+    name: "Managed",
+    projectId: "project-1",
+    worktreeId: "wt-3",
+    terminals: [],
+    createdAt: 0,
+  };
   const BOTH_FORGES = {
     entry: { contribution: { slots: { bulkCreateWorktreeDialog: "code-forge.bulk" } } },
     issues: {
@@ -19,6 +29,7 @@ const { refreshMock, forgeState, BOTH_FORGES, projectState } = vi.hoisted(() => 
     forgeState: { current: BOTH_FORGES as unknown },
     BOTH_FORGES,
     projectState: { current: null as MockProject | null },
+    MANAGER_RECIPE,
   };
 });
 
@@ -100,8 +111,19 @@ vi.mock("@/components/TerminalRecipe/RecipeEditor", () => ({
 }));
 
 vi.mock("@/components/TerminalRecipe/RecipeManager", () => ({
-  RecipeManager: ({ isOpen }: { isOpen: boolean }) => (
-    <div data-testid="recipe-manager" data-open={String(isOpen)} />
+  RecipeManager: ({
+    isOpen,
+    onEditRecipe,
+    onCreateRecipe,
+  }: {
+    isOpen: boolean;
+    onEditRecipe: (recipe: TerminalRecipe) => void;
+    onCreateRecipe: (scope: "global" | "project") => void;
+  }) => (
+    <div data-testid="recipe-manager" data-open={String(isOpen)}>
+      <button onClick={() => onEditRecipe(MANAGER_RECIPE)}>edit recipe</button>
+      <button onClick={() => onCreateRecipe("project")}>new project recipe</button>
+    </div>
   ),
 }));
 
@@ -109,7 +131,6 @@ import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useFleetPickerPaletteStore } from "@/store/fleetPickerPaletteStore";
 import { useRecipeEditorActivityStore } from "@/store/recipeEditorActivityStore";
 import { useRecipeStore } from "@/store/recipeStore";
-import type { TerminalRecipe } from "@/types";
 import { ProjectDialogHost } from "../ProjectDialogHost";
 
 const initialSelectionState = useWorktreeSelectionStore.getState();
@@ -146,13 +167,16 @@ describe("ProjectDialogHost", () => {
       expect(dialog.dataset.root).toBe("/repo");
     });
 
-    it("stays mounted, closed, after it closes so its exit can play", async () => {
+    it("keeps the same dialog mounted, closed, after it closes so its exit can play", async () => {
       render(<ProjectDialogHost />);
       act(() => useWorktreeSelectionStore.getState().openCreateDialog());
-      fireEvent.click(await screen.findByText("close"));
+      const dialog = await screen.findByTestId("new-worktree-dialog");
+
+      fireEvent.click(screen.getByText("close"));
 
       expect(useWorktreeSelectionStore.getState().createDialog.isOpen).toBe(false);
-      expect(screen.getByTestId("new-worktree-dialog").dataset.open).toBe("false");
+      expect(screen.getByTestId("new-worktree-dialog")).toBe(dialog);
+      expect(dialog.dataset.open).toBe("false");
     });
 
     it("refreshes the worktree list and hands the new id to the opener", async () => {
@@ -216,7 +240,7 @@ describe("ProjectDialogHost", () => {
   });
 
   describe("recipe editor and manager", () => {
-    it("acknowledges an editor request only once it has opened the editor", async () => {
+    it("acknowledges a request it accepts and opens the editor", async () => {
       render(<ProjectDialogHost />);
       const acknowledge = vi.fn();
 
@@ -290,6 +314,57 @@ describe("ProjectDialogHost", () => {
       });
 
       expect((await screen.findByTestId("recipe-manager")).dataset.open).toBe("true");
+    });
+
+    it("hands an edit from the manager to the editor in the recipe's own scope", async () => {
+      render(<ProjectDialogHost />);
+      act(() => {
+        window.dispatchEvent(new CustomEvent("daintree:open-recipe-manager"));
+      });
+      fireEvent.click(await screen.findByText("edit recipe"));
+
+      expect(screen.getByTestId("recipe-manager").dataset.open).toBe("false");
+      const editor = await screen.findByTestId("recipe-editor");
+      expect(editor.dataset.open).toBe("true");
+      expect(editor.dataset.recipe).toBe("recipe-managed");
+      expect(editor.dataset.worktree).toBe("wt-3");
+      expect(editor.dataset.scope).toBe("project");
+      expect(useRecipeEditorActivityStore.getState().openCount).toBe(1);
+    });
+
+    it("hands a new recipe from the manager to a blank editor in the chosen scope", async () => {
+      render(<ProjectDialogHost />);
+      act(() => {
+        window.dispatchEvent(new CustomEvent("daintree:open-recipe-manager"));
+      });
+      fireEvent.click(await screen.findByText("new project recipe"));
+
+      expect(screen.getByTestId("recipe-manager").dataset.open).toBe("false");
+      const editor = await screen.findByTestId("recipe-editor");
+      expect(editor.dataset.open).toBe("true");
+      expect(editor.dataset.recipe).toBe("");
+      expect(editor.dataset.worktree).toBe("");
+      expect(editor.dataset.scope).toBe("project");
+    });
+
+    it("answers each request once under StrictMode's effect replay", async () => {
+      render(
+        <StrictMode>
+          <ProjectDialogHost />
+        </StrictMode>
+      );
+      const acknowledge = vi.fn();
+
+      act(() => {
+        window.dispatchEvent(
+          new CustomEvent("daintree:open-recipe-editor", {
+            detail: { worktreeId: "wt-1", acknowledge },
+          })
+        );
+      });
+
+      expect(acknowledge).toHaveBeenCalledTimes(1);
+      await screen.findByTestId("recipe-editor");
     });
 
     it("stops listening once the host unmounts", () => {

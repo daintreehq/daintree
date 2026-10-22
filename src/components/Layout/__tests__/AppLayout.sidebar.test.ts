@@ -80,10 +80,25 @@ describe("AppLayout sidebar visibility — issue #5023 hide on welcome screen", 
     // sidebar, a workspace with no git worktrees — so the host hangs off the
     // workspace and hydration gates alone, outside both the sidebar subtree and
     // the inert chrome wrappers. Neither sidebar visibility nor git may gate it.
+    const INERT_SPREAD = "{...(chromeInert ? { inert: true } : {})}";
+    const toolbarWrapper = source.indexOf(`<div ${INERT_SPREAD}>`);
+    const toolbarWrapperEnd = source.indexOf("</div>", source.indexOf("<FleetArmingRibbon />"));
+    const contentWrapper = source.lastIndexOf(
+      "<div",
+      source.indexOf(INERT_SPREAD, toolbarWrapperEnd)
+    );
     const mount = source.indexOf("{hasWorkspace && isHydrated && <ProjectDialogHost />}");
-    expect(mount).toBeGreaterThan(-1);
-    expect(mount).toBeGreaterThan(source.indexOf("<ImportConfigDialog />"));
-    expect(mount).toBeLessThan(source.indexOf("<Sidebar\n"));
+    expect(toolbarWrapper).toBeGreaterThan(-1);
+    expect(toolbarWrapperEnd).toBeGreaterThan(toolbarWrapper);
+    expect(mount).toBeGreaterThan(toolbarWrapperEnd);
+    expect(mount).toBeLessThan(contentWrapper);
+    expect(contentWrapper).toBeLessThan(source.search(/<Sidebar\b/));
+    // Between the two inert wrappers sit only self-closing dialog siblings and
+    // the host: no element or conditional block there can wrap it.
+    const zone = source.slice(toolbarWrapperEnd + "</div>".length, contentWrapper);
+    expect(zone).toContain("<ImportConfigDialog />");
+    expect(zone.match(/<[A-Za-z][\w.]*(?:\s[^>]*)?(?<!\/)>/g)).toBeNull();
+    expect(zone).not.toMatch(/&&\s*\(/);
     expect(source.match(/<ProjectDialogHost\b/g)).toHaveLength(1);
   });
 
