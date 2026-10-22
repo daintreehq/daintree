@@ -47,14 +47,16 @@ describe("creationFrames", () => {
         "    at async Promise.all (index 0)",
         "    at List (/Users/me/My Project (copy)/src/List.tsx:40:12)",
         "    at Wrapped (inner) (http://localhost:5173/src/wrap.tsx:7:2)",
+        "    at async http://localhost:5173/src/load.ts:9:4",
         BOTTOM
       ),
       4
     );
-    // A parenthesis in a path or in a function name leaves the location whole.
+    // A parenthesis in a path or a function name, or an anonymous async frame, leaves the location whole.
     expect(frames).toEqual([
       { index: 4, file: "/Users/me/My Project (copy)/src/List.tsx", line: 40, column: 12 },
       { index: 5, file: "http://localhost:5173/src/wrap.tsx", line: 7, column: 2 },
+      { index: 6, file: "http://localhost:5173/src/load.ts", line: 9, column: 4 },
     ]);
   });
 

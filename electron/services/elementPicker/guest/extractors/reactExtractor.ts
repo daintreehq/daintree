@@ -289,8 +289,11 @@ function selectionOf(
       components: kept,
       truncated,
     };
+    // Frames read but held back for size are still frames the runtime exposed.
     const hasFrames =
-      elementCandidates.length > 0 || kept.some((record) => record.sourceCandidates.length > 0);
+      omitted > 0 ||
+      elementCandidates.length > 0 ||
+      kept.some((record) => record.sourceCandidates.length > 0);
     return {
       componentChain,
       sourceCandidates: elementCandidates,

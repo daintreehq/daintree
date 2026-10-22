@@ -51,6 +51,8 @@ const HOST_TAGS: ReadonlySet<number> = new Set([
 const MAX_NAME_CHARS = 256;
 /** memo(forwardRef(fn)) and memo(memo(fn)) are as deep as React nests a component type. */
 const MAX_TYPE_DEPTH = 4;
+/** Memos nested in memos: far past anything written, short of a loop. */
+const MAX_MEMO_DEPTH = 16;
 /** DOM parents tried when the picked node is not one React rendered. */
 const MAX_DOM_ANCESTORS = 64;
 
@@ -216,7 +218,7 @@ export function committedFiber(fiber: Fiber, budget: Budget): Fiber {
 export function canonicalFiber(fiber: Fiber): Fiber {
   let canonical = fiber;
   // memo(memo(fn)) nests one implementation inside another.
-  for (let depth = 0; depth < MAX_TYPE_DEPTH; depth += 1) {
+  for (let depth = 0; depth < MAX_MEMO_DEPTH; depth += 1) {
     const parent = parentOf(canonical);
     if (parent === null || tagOf(parent) !== FIBER_TAGS.memo) break;
     canonical = parent;
@@ -342,6 +344,8 @@ export function hostRoots(component: Fiber, limit: number, budget: Budget): Host
   let complete = true;
   const covered = (node: Node): boolean =>
     elements.some((root) => root === node || root.contains(node));
+  /** Text outside every root collected so far; a root found later can still cover it. */
+  const loose: Node[] = [];
   const pending: Array<{ fiber: Fiber; cover: Node | null }> = [];
   const first = fiberField(component, "child");
   if (first !== null) pending.push({ fiber: first, cover: null });
@@ -363,11 +367,15 @@ export function hostRoots(component: Fiber, limit: number, budget: Budget): Host
             elements.push(node);
           }
           childCover = node;
-        } else if (!(node == null && tag === FIBER_TAGS.hostHoistable)) {
+        } else if (!(node === null && tag === FIBER_TAGS.hostHoistable)) {
           if (cover === null) complete = false;
         }
       } else if (tag === FIBER_TAGS.hostText) {
-        if (cover === null) complete = false;
+        if (cover === null) {
+          const text = field(fiber, "stateNode");
+          if (text instanceof Node) loose.push(text);
+          else complete = false;
+        }
       } else if (tag === FIBER_TAGS.hostPortal) {
         // Its children land in its container, covered only if that is.
         const container = field(field(fiber, "stateNode"), "containerInfo");
@@ -384,6 +392,11 @@ export function hostRoots(component: Fiber, limit: number, budget: Budget): Host
     }
     const child = fiberField(fiber, "child");
     if (child !== null) pending.push({ fiber: child, cover: childCover });
+  }
+  try {
+    if (loose.some((text) => !covered(text))) complete = false;
+  } catch {
+    complete = false;
   }
   return { elements, complete };
 }

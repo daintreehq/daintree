@@ -94,7 +94,8 @@ const LOCATION_START = /^(?:[a-z][a-z0-9+.-]*:|\/)/i;
 function parseFrame(line: string): { file: string; line: number; column: number } | null {
   const text = line.trim();
   if (!text.startsWith("at ")) return null;
-  const body = text.slice(3);
+  // `at async url:line:col` is an anonymous async frame.
+  const body = text.slice(text.startsWith("at async ") ? 9 : 3);
   // Inside an eval: the position is in code no file holds.
   if (body.includes("eval at ")) return null;
   if (!body.endsWith(")")) return parseLocation(body);

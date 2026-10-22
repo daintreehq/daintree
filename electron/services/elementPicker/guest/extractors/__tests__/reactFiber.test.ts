@@ -169,6 +169,20 @@ describe("hostRoots", () => {
     });
   });
 
+  it("counts text a root collected later turns out to hold as covered", () => {
+    const frame = host("main");
+    const text = document.createTextNode("hi");
+    (frame.stateNode as Element).appendChild(text);
+    const into = link(
+      fiber(FIBER_TAGS.hostPortal, { stateNode: { containerInfo: frame.stateNode } }),
+      [fiber(FIBER_TAGS.hostText, { stateNode: text })]
+    );
+    expect(hostRoots(link(component("Shell"), [into, frame]), 32, new Budget(1_000))).toEqual({
+      elements: [frame.stateNode],
+      complete: true,
+    });
+  });
+
   it("marks a node it cannot represent, or cannot safely inspect, incomplete without throwing", () => {
     const foreign = fiber(FIBER_TAGS.hostHoistable, { stateNode: { nodeType: 1 } });
     expect(hostRoots(link(component("Head"), [foreign]), 32, new Budget(100)).complete).toBe(false);
@@ -393,11 +407,22 @@ describe("the React extractor on a hostile or partial tree", () => {
   });
 
   it("drops frames, then outer records, until a reply of page-sized names fits", () => {
+    const stack = {
+      stack: [
+        "Error: react-stack-top-frame",
+        "    at jsxDEV (http://localhost/react.js:1:1)",
+        "    at A (http://localhost/src/a.tsx:1:1)",
+        "    at B (http://localhost/src/b.tsx:2:2)",
+        "    at Object.react_stack_bottom_frame (http://localhost/react-dom.js:1:1)",
+      ].join("\n"),
+    };
     const leaf = host("button");
     let below = leaf;
     for (let depth = 0; depth < 64; depth += 1) {
       // Every character escapes to six in JSON.
-      const next = component("\u0001".repeat(250) + String(depth).padStart(2, "0"));
+      const next = component("\u0001".repeat(250) + String(depth).padStart(2, "0"), {
+        _debugStack: stack,
+      });
       below.return = next;
       below = next;
     }
@@ -408,6 +433,12 @@ describe("the React extractor on a hostile or partial tree", () => {
     expect(chain.components.length).toBeLessThan(64);
     expect(chain.truncated).toBe(true);
     expect(chain.nearestId).toBe(chain.components[0]?.componentId);
+    // Frames went first, every one of them counted, and the line is still the host's to find.
+    expect(chain.components.every((record) => record.sourceCandidates.length === 0)).toBe(true);
+    expect(contribution.frameworkEvidence?.[0]).toMatchObject({
+      fields: expect.arrayContaining([{ name: "framesOmitted", value: 64 * 2 }]),
+    });
+    expect(contribution.capabilities?.line).toEqual({ state: "unknown" });
     // It survives the bridge, and the host's envelope around it.
     const text = JSON.stringify(contribution);
     expect(text.length).toBeLessThanOrEqual(MAX_BRIDGE_MESSAGE_CHARS);
