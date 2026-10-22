@@ -70,6 +70,7 @@ export function makeSelection(
           revision: REVISION,
           renderedOccurrences: overrides.renderedOccurrences ?? 1,
         },
+        sourceFile: FILE,
         invocation: null,
         ancestry: [
           {

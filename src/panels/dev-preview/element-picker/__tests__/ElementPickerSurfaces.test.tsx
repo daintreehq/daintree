@@ -3104,7 +3104,8 @@ describe("an element with nothing Svelte to trace, in a worktree that holds a Sv
     expect(prompt).toContain("/tmp/daintree-clipboard/element-1.png");
     expect(prompt).not.toContain("- App:");
     expect(prompt).not.toContain("apps/docs");
-    expect(prompt).not.toContain("file references only");
+    expect(prompt).toContain("no source file was traced");
+    expect(prompt).not.toContain("file references");
     expect(host.calls(CHANNELS.selectionResolve)).toEqual([]);
   });
 
@@ -3176,7 +3177,75 @@ describe("an element with nothing Svelte to trace, in a worktree that holds a Sv
     const resolved = host.calls(CHANNELS.selectionResolve)[0]!.nodes as Record<string, unknown>[];
     expect(resolved).toHaveLength(nodes.length);
     expect(resolved.some((node) => "context" in node)).toBe(false);
-    expect(host.captureElement).not.toHaveBeenCalled();
+  });
+
+  it("pairs a traced selection with its own picture and page account, not an earlier one's", async () => {
+    withAgent("term-reselected");
+    const sent = await recordSends();
+    let resolves = 0;
+    host.handlers.set(CHANNELS.selectionResolve, (args) => {
+      resolves += 1;
+      return {
+        status: "ok",
+        selection: makeSelection({
+          documentEpoch: args.documentEpoch as number,
+          selectionId: `sel-${resolves}`,
+        }),
+      };
+    });
+    const saved = (filePath: string) => ({
+      status: "saved" as const,
+      filePath,
+      width: 10,
+      height: 10,
+    });
+    host.captureElement
+      .mockResolvedValueOnce(saved("/tmp/daintree-clipboard/first.png"))
+      .mockResolvedValueOnce(saved("/tmp/daintree-clipboard/second.png"));
+    await mountBound();
+    const withSelector = (selector: string) => ({
+      ...OBSERVATION,
+      context: { ...PAGE_NODE.context, selector },
+    });
+    await act(async () => host.select(0, [withSelector("main > button.first")]));
+    await waitFor(() => expect(host.calls(CHANNELS.selectionResolve)).toHaveLength(1));
+    await act(async () =>
+      pushGuest(2, { type: "selectionChanged", nodes: [withSelector("main > button.second")] })
+    );
+    await waitFor(() => expect(host.calls(CHANNELS.selectionResolve)).toHaveLength(2));
+
+    const prompt = await sendRequest(sent);
+    expect(prompt).toContain('- Selector: "main > button.second"');
+    expect(prompt).toContain("/tmp/daintree-clipboard/second.png");
+    expect(prompt).not.toContain("button.first");
+    expect(prompt).not.toContain("first.png");
+  });
+
+  it("sends a traced element's source with what the page showed of it and its picture", async () => {
+    withAgent("term-traced");
+    const sent = await recordSends();
+    await mountBound();
+    await act(async () => host.select(0, [{ ...OBSERVATION, context: PAGE_NODE.context }]));
+    await waitFor(() => expect(host.calls(CHANNELS.selectionResolve)).toHaveLength(1));
+    // Taken at the click, before the drawer opens and moves the element, of
+    // the box the page measured.
+    expect(host.captureElement).toHaveBeenCalledTimes(1);
+    expect(host.captureElement).toHaveBeenCalledWith("preview-1", {
+      rect: { x: 0, y: 0, width: 10, height: 10 },
+      viewportWidth: 800,
+      viewportHeight: 600,
+    });
+
+    const prompt = await sendRequest(sent);
+    expect(prompt).toContain(`- Source: written at ${FILE}:6:3 (`);
+    expect(prompt).toContain("checked against the file)");
+    expect(prompt).toContain('- Selector: "main > button.cta"');
+    expect(prompt).toContain('"display: inline-flex; padding: 8px 16px"');
+    expect(prompt).toContain("/tmp/daintree-clipboard/element-1.png");
+    // Main traces source; what the page says the element looks like stays
+    // out of what it is asked.
+    const resolved = host.calls(CHANNELS.selectionResolve)[0]!.nodes as Record<string, unknown>[];
+    expect(resolved.some((node) => "context" in node)).toBe(false);
   });
 
   it.each([
