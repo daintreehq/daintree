@@ -662,6 +662,13 @@ export interface PtyPanelData extends BasePanelData {
   /** Exit code from the last process exit */
   exitCode?: number;
   /**
+   * The last exit came from a session-preserving project teardown (sleep,
+   * hibernation, idle close, quit), so the pane keeps its place and is not
+   * auto-restarted. Live-only, never persisted; cleared by the next exit or a
+   * restart.
+   */
+  sessionPreservingExit?: boolean;
+  /**
    * Parsed test/lint/build result from the most recent recognized check
    * summary (issue #10682). Best-effort, not an authoritative exit code — see
    * `TerminalCheckResult`. Surfaced over MCP via `terminal.getStatus`.
@@ -1261,6 +1268,13 @@ export interface TerminalInstance {
   startedAt?: number;
   /** Exit code from the last process exit */
   exitCode?: number;
+  /**
+   * The last exit came from a session-preserving project teardown (sleep,
+   * hibernation, idle close, quit), so the pane keeps its place and is not
+   * auto-restarted. Live-only, never persisted; cleared by the next exit or a
+   * restart.
+   */
+  sessionPreservingExit?: boolean;
   /**
    * Live-only spawn lifecycle state. "spawning" from the moment the optimistic
    * placeholder lands in `panelsById` until the PTY IPC round-trip resolves;

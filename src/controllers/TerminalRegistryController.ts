@@ -23,6 +23,7 @@ import type {
   AgentFallbackTriggeredPayload,
   TerminalActivityPayload,
   TerminalStatusPayload,
+  TerminalExitContext,
   SpawnResult,
 } from "@shared/types";
 import type { TerminalReliabilityMetricPayload } from "@shared/types/pty-host";
@@ -294,7 +295,7 @@ class TerminalRegistryController {
     return terminalClient.onRestored(handler);
   }
 
-  onExit(handler: (id: string, exitCode: number) => void) {
+  onExit(handler: (id: string, exitCode: number, context?: TerminalExitContext) => void) {
     return terminalClient.onExit(handler);
   }
 

@@ -18,6 +18,16 @@ export interface TerminalKillOptions {
   forRestart?: boolean;
 }
 
+/** What Main knows about why a terminal exited, beyond its exit code. */
+export interface TerminalExitContext {
+  /**
+   * A session-preserving project teardown (sleep, hibernation, idle close,
+   * quit, relocation) ended this process. The pane is restored on reopen, so it
+   * stays in the layout instead of being treated as a finished shell.
+   */
+  preserveSession?: boolean;
+}
+
 /**
  * Terminal activity status.
  * - working: Terminal is actively processing

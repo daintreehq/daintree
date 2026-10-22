@@ -29,7 +29,12 @@ const restoredHandlers = vi.hoisted(() => [] as Array<(data: { id: string }) => 
 const trashedHandlers = vi.hoisted(
   () => [] as Array<(data: { id: string; expiresAt: number }) => void>
 );
-const exitHandlers = vi.hoisted(() => [] as Array<(id: string, exitCode: number) => void>);
+type ExitHandler = (
+  id: string,
+  exitCode: number,
+  context?: { preserveSession?: boolean }
+) => void;
+const exitHandlers = vi.hoisted(() => [] as Array<ExitHandler>);
 const reliabilityMetricHandlers = vi.hoisted(
   () =>
     [] as Array<
@@ -53,7 +58,7 @@ vi.mock("@/controllers", () => {
         restoredHandlers.push(handler);
         return () => {};
       }),
-      onExit: vi.fn((handler: (id: string, exitCode: number) => void) => {
+      onExit: vi.fn((handler: ExitHandler) => {
         exitHandlers.push(handler);
         return () => {};
       }),
@@ -858,7 +863,7 @@ describe("onReliabilityMetric — pause-duration-gauge routing", () => {
 });
 
 describe("onExit — stale flow state cleared (#9899)", () => {
-  function getExitHandler(): (id: string, exitCode: number) => void {
+  function getExitHandler(): ExitHandler {
     exitHandlers.length = 0;
     setupLifecycleListeners();
     const handler = exitHandlers.at(-1);
@@ -954,5 +959,121 @@ describe("onExit — stale flow state cleared (#9899)", () => {
     // term-1's patch was evicted; term-2's still applies.
     expect(getPanel("term-1")?.flowStatus).toBeUndefined();
     expect(getPanel("term-2")?.flowStatus).toBe("paused-backpressure");
+  });
+});
+
+// Sleep, hibernation, idle close and quit signal-kill plain shells, which
+// node-pty reports as exit code 0. Main tags those exits so the pane keeps its
+// place in the layout it will be restored into, instead of auto-trashing like a
+// shell the user typed `exit` in (#13841).
+describe("onExit — session-preserving teardown (#13841)", () => {
+  beforeEach(() => {
+    Object.defineProperty(window, "electron", {
+      value: {
+        terminal: {
+          trash: vi.fn(async () => {}),
+          kill: vi.fn(async () => {}),
+        },
+      },
+      configurable: true,
+      writable: true,
+    });
+  });
+
+  afterEach(() => {
+    delete (window as { electron?: unknown }).electron;
+  });
+
+  function getExitHandler(): ExitHandler {
+    exitHandlers.length = 0;
+    setupLifecycleListeners();
+    const handler = exitHandlers.at(-1);
+    if (!handler) throw new Error("onExit handler was not registered");
+    return handler;
+  }
+
+  function setupShell(overrides: Record<string, unknown> = {}) {
+    usePanelStore.setState({
+      panelsById: {
+        shell: {
+          id: "shell",
+          kind: "terminal",
+          title: "Shell",
+          cwd: "/tmp",
+          cols: 80,
+          rows: 24,
+          location: "grid" as const,
+          ...overrides,
+        },
+      },
+      panelIds: ["shell"],
+    });
+  }
+
+  function getShell() {
+    const panel = usePanelStore.getState().panelsById.shell;
+    if (!panel || !isPtyPanel(panel)) return undefined;
+    return panel;
+  }
+
+  it("keeps a plain shell in place, marked exited, when its exit came from a session-preserving teardown", () => {
+    setupShell();
+
+    getExitHandler()("shell", 0, { preserveSession: true });
+
+    const shell = getShell();
+    expect(shell?.location).toBe("grid");
+    expect(usePanelStore.getState().trashedTerminals.has("shell")).toBe(false);
+    expect(shell?.runtimeStatus).toBe("exited");
+    expect(shell?.exitCode).toBe(0);
+    expect(shell?.sessionPreservingExit).toBe(true);
+  });
+
+  it("still trashes a plain shell whose exit carried no teardown context", () => {
+    setupShell();
+
+    getExitHandler()("shell", 0);
+
+    expect(getShell()?.location).toBe("trash");
+    expect(getShell()?.sessionPreservingExit).toBeUndefined();
+  });
+
+  it.each(["trash", "remove", "restart"] as const)(
+    "overrides exitBehavior %s so the pane survives into the restored layout",
+    (exitBehavior) => {
+      setupShell({ location: "dock", exitBehavior });
+
+      getExitHandler()("shell", 0, { preserveSession: true });
+
+      expect(getShell()?.location).toBe("dock");
+      expect(getShell()?.sessionPreservingExit).toBe(true);
+    }
+  );
+
+  it("still removes a pane that was already in the trash", () => {
+    setupShell({ location: "trash" });
+
+    getExitHandler()("shell", 0, { preserveSession: true });
+
+    expect(usePanelStore.getState().panelsById.shell).toBeUndefined();
+  });
+
+  it("still removes a remove-on-exit pane", () => {
+    setupShell({ removeOnExit: true });
+
+    getExitHandler()("shell", 0, { preserveSession: true });
+
+    expect(usePanelStore.getState().panelsById.shell).toBeUndefined();
+  });
+
+  it("clears the mark when a later exit is not a teardown", () => {
+    setupShell({ exitBehavior: "keep" });
+    const onExit = getExitHandler();
+
+    onExit("shell", 0, { preserveSession: true });
+    expect(getShell()?.sessionPreservingExit).toBe(true);
+
+    onExit("shell", 0);
+    expect(getShell()?.sessionPreservingExit).toBeUndefined();
   });
 });

@@ -92,7 +92,12 @@ export function registerTerminalEventHandlers(deps: HandlerDependencies): () => 
   ptyClient.on("data", handlePtyData);
   handlers.push(() => ptyClient.off("data", handlePtyData));
 
-  const handlePtyExit = (id: string, exitCode: number) => {
+  const handlePtyExit = (
+    id: string,
+    exitCode: number,
+    _signal?: number,
+    preserveSession?: boolean
+  ) => {
     // The shell and project views have separate renderer restart guards. An
     // intentional restart must be suppressed here before it reaches either
     // view, even when its exit arrives before the replacement is registered.
@@ -109,7 +114,7 @@ export function registerTerminalEventHandlers(deps: HandlerDependencies): () => 
     if (forRestart) return;
     broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
       name: "terminal:exit",
-      payload: [id, exitCode],
+      payload: preserveSession ? [id, exitCode, { preserveSession: true }] : [id, exitCode],
     });
   };
   ptyClient.on("exit", handlePtyExit);

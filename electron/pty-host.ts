@@ -1395,7 +1395,13 @@ ptyManager.on("data", (id: string, data: string | Uint8Array, _routing, streamEn
 
 ptyManager.on(
   "exit",
-  (id: string, exitCode: number, signal?: number, launchGeneration?: number) => {
+  (
+    id: string,
+    exitCode: number,
+    signal?: number,
+    launchGeneration?: number,
+    preserveSession?: boolean
+  ) => {
     // Release all pause holds and remove coordinator for this terminal
     const coordinator = pauseCoordinators.get(id);
     if (coordinator) {
@@ -1449,7 +1455,14 @@ ptyManager.on(
     // reports live terminals, and the map stays bounded across long sessions.
     terminalDropTallies.delete(id);
 
-    sendEvent({ type: "exit", id, exitCode, signal, launchGeneration });
+    sendEvent({
+      type: "exit",
+      id,
+      exitCode,
+      signal,
+      launchGeneration,
+      ...(preserveSession && { preserveSession }),
+    });
   }
 );
 

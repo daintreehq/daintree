@@ -71,6 +71,7 @@ import type { AppVersionInfo } from "./app.js";
 import type {
   SerializeReadOptions,
   SerializedTerminalSnapshot,
+  TerminalExitContext,
   TerminalKillOptions,
 } from "../terminal.js";
 import type {
@@ -386,7 +387,9 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       id: string,
       callback: (data: string | Uint8Array, streamEnd?: number) => void
     ): () => void;
-    onExit(callback: (id: string, exitCode: number) => void): () => void;
+    onExit(
+      callback: (id: string, exitCode: number, context?: TerminalExitContext) => void
+    ): () => void;
     onAgentStateChanged(callback: (data: AgentStateChangePayload) => void): () => void;
     onAgentDetected(callback: (data: AgentDetectedPayload) => void): () => void;
     onAgentExited(callback: (data: AgentExitedPayload) => void): () => void;

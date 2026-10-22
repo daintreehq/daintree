@@ -490,6 +490,7 @@ export type { EventContext } from "./events.js";
 export type {
   TerminalTaskType,
   TerminalKillOptions,
+  TerminalExitContext,
   TerminalActivityStatus,
   TerminalActivity,
   TerminalActivityPayload,

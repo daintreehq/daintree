@@ -279,6 +279,7 @@ async function followHostTerminals(
           [info.id]: {
             ...target,
             exitCode: undefined,
+            sessionPreservingExit: undefined,
             restartKey: (target.restartKey ?? 0) + 1,
             runtimeStatus: deriveRuntimeStatus(target.isVisible, target.flowStatus),
           },

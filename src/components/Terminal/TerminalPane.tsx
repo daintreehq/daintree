@@ -553,6 +553,7 @@ function TerminalPaneComponent({
         stateChangeTrigger: pty?.stateChangeTrigger,
         isRestarting: pty?.isRestarting ?? false,
         exitBehavior: pty?.exitBehavior,
+        sessionPreservingExit: pty?.sessionPreservingExit === true,
         isTrashedOrRemoved: terminal?.location === "trash" || terminal === undefined,
         spawnStatus: pty?.spawnStatus,
         eagerAttach: pty?.eagerAttach ?? false,
@@ -566,6 +567,7 @@ function TerminalPaneComponent({
     stateChangeTrigger,
     isRestarting,
     exitBehavior,
+    sessionPreservingExit,
     isTrashedOrRemoved,
     spawnStatus,
     eagerAttach,
@@ -759,7 +761,11 @@ function TerminalPaneComponent({
     autoRestartTimerRef.current = setTimeout(() => {
       autoRestartTimerRef.current = null;
       const currentTerminal = usePanelStore.getState().panelsById[id];
-      if (!currentTerminal || currentTerminal.location === "trash") {
+      if (
+        !currentTerminal ||
+        currentTerminal.location === "trash" ||
+        (isPtyPanel(currentTerminal) && currentTerminal.sessionPreservingExit === true)
+      ) {
         setIsAutoRestarting(false);
         return;
       }
@@ -774,6 +780,9 @@ function TerminalPaneComponent({
     if (exitCode === 130) return;
     if (isTrashedOrRemoved) return;
     if (isRestarting) return;
+    // Sleep, hibernation, idle close and quit end the process on purpose; a
+    // respawn here would outlive the teardown in a project being closed (#13841).
+    if (sessionPreservingExit) return;
 
     scheduleAutoRestart();
 
@@ -784,7 +793,7 @@ function TerminalPaneComponent({
         setIsAutoRestarting(false);
       }
     };
-  }, [isExited, exitBehavior, exitCode, isTrashedOrRemoved, isRestarting]);
+  }, [isExited, exitBehavior, exitCode, isTrashedOrRemoved, isRestarting, sessionPreservingExit]);
 
   const isDragging = useIsDragging();
 

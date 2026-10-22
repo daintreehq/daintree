@@ -143,6 +143,26 @@ describe("preload event subscriptions", () => {
     expect(ipcRenderer.listenerCount("events:push")).toBe(busListenersBefore);
   });
 
+  it("passes a session-preserving teardown's exit context through, and nothing else (#13841)", () => {
+    const exits: unknown[][] = [];
+    const dispose = terminal.onExit((...args) => exits.push(args));
+
+    ipcRenderer.emit(
+      "events:push",
+      {},
+      { name: "terminal:exit", payload: ["t1", 0, { preserveSession: true }] }
+    );
+    ipcRenderer.emit(
+      "events:push",
+      {},
+      { name: "terminal:exit", payload: ["t2", 0, { preserveSession: "yes", extra: 1 }] }
+    );
+    ipcRenderer.emit("events:push", {}, { name: "terminal:exit", payload: ["t3", 0, null] });
+    dispose();
+
+    expect(exits).toEqual([["t1", 0, { preserveSession: true }], ["t2", 0], ["t3", 0]]);
+  });
+
   it("replays each plugin's latest toolbar-badge map to a late subscriber (#13503)", () => {
     // Wire the bus, then leave the toolbar-badge event with no subscriber, as a
     // restored view's did-finish-load replay finds it.

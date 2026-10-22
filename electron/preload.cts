@@ -16,7 +16,7 @@ import { deserializeError } from "../shared/utils/ipcErrorSerialization.js";
 import type { AppErrorCode } from "../shared/types/appError.js";
 import type { PanelTitleMode } from "../shared/types/panel.js";
 import type { HostMemoryPauseSnapshot } from "../shared/types/pty-host.js";
-import type { TerminalKillOptions } from "../shared/types/terminal.js";
+import type { TerminalExitContext, TerminalKillOptions } from "../shared/types/terminal.js";
 import type { RendererInputBlockingSnapshot } from "../shared/types/ipc/system.js";
 import type {
   McpRuntimeSnapshot,
@@ -1530,11 +1530,14 @@ function buildElectronApi(): ElectronAPI {
       onData: (id: string, callback: (data: string | Uint8Array, streamEnd?: number) => void) =>
         _terminalDataOn(id, callback),
 
-      onExit: (callback: (id: string, exitCode: number) => void) =>
+      onExit: (callback: (id: string, exitCode: number, context?: TerminalExitContext) => void) =>
         _eventBusOn("terminal:exit", (payload) => {
           if (!Array.isArray(payload)) return;
-          const [id, exitCode] = payload;
-          if (typeof id === "string" && typeof exitCode === "number") {
+          const [id, exitCode, context] = payload;
+          if (typeof id !== "string" || typeof exitCode !== "number") return;
+          if (context?.preserveSession === true) {
+            callback(id, exitCode, { preserveSession: true });
+          } else {
             callback(id, exitCode);
           }
         }),
