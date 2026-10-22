@@ -150,6 +150,35 @@ export function localNameSuggestion(sshTarget: string, sshError: string | null):
   return `${sshTarget.slice(0, at + 1)}${host}.local`;
 }
 
+/** A target as one shell word: the host list accepts `[` and `]`, which a shell reads as a glob. */
+export function shellWord(target: string): string {
+  return /^[\w@.%+-]+$/.test(target) ? target : `'${target}'`;
+}
+
+export type SshRefusalAdvice = "untrusted-host-key" | "changed-host-key" | "login-refused";
+
+/**
+ * What ssh's own words say stopped a probe that BatchMode refused, so the
+ * dialog can name the next step. The probe keeps only the last lines of
+ * stderr, so a changed key is told apart by its "has changed" or "Offending"
+ * line rather than the banner above them.
+ */
+export function sshRefusalAdvice(sshError: string | null): SshRefusalAdvice | null {
+  if (!sshError) return null;
+  if (
+    /^Host key for \S+ has changed\b|REMOTE HOST IDENTIFICATION HAS CHANGED|^Offending \S+ key in /im.test(
+      sshError
+    )
+  ) {
+    return "changed-host-key";
+  }
+  if (/Host key verification failed|No \S+ host key is known/i.test(sshError)) {
+    return "untrusted-host-key";
+  }
+  if (/Permission denied \(/i.test(sshError)) return "login-refused";
+  return null;
+}
+
 /**
  * Host mode is on for good there: listening, saved as on and set to start at
  * login, as the host's own Daintree recorded it and the probe saw it.
