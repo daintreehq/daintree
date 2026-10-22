@@ -56,6 +56,9 @@ describe("parsePluginPaletteArgs", () => {
       object({ a: { type: "string", enum: ["x"], minLength: 1 } }, ["a"]),
     ],
     ["a required name with no property", object({ a: { type: "string" } }, ["b"])],
+    ["an inherited required name", object({ a: { type: "string" } }, ["toString"])],
+    ["a catastrophic pattern", object({ a: { type: "string", pattern: "^(a+)+$" } }, ["a"])],
+    ["a backreference pattern", object({ a: { type: "string", pattern: "(a)\\1" } }, ["a"])],
     ["a prototype-polluting name", object({ constructor: { type: "string" } }, ["constructor"])],
     [
       "a schema-valued additionalProperties",

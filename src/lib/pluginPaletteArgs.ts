@@ -68,6 +68,11 @@ const STRING_KEYS: ReadonlySet<string> = new Set([
 const ENUM_KEYS: ReadonlySet<string> = new Set(["type", "title", "description", "enum"]);
 const BOOLEAN_KEYS: ReadonlySet<string> = new Set(["type", "title", "description"]);
 
+// The pattern is tested on every keystroke on the renderer's main thread, so
+// shapes that can backtrack catastrophically — a quantified group that itself
+// contains a quantifier, or a backreference — fail closed.
+const NESTED_QUANTIFIER = /\((?:[^()\\]|\\.)*[+*{](?:[^()\\]|\\.)*\)[+*{]|\\[1-9]|\\k</;
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -124,6 +129,7 @@ function parseField(name: string, prop: unknown): PromptField | null {
       let regex: RegExp | undefined;
       if (pattern !== undefined) {
         if (typeof pattern !== "string") return null;
+        if (NESTED_QUANTIFIER.test(pattern)) return null;
         try {
           regex = new RegExp(pattern, "u");
         } catch {
@@ -155,7 +161,9 @@ export function parsePluginPaletteArgs(schema: unknown): PluginPaletteArgs | nul
   if (names.length === 0 || names.length > MAX_PROPERTIES) return null;
   if (!Array.isArray(required) || required.length === 0) return null;
   if (
-    !required.every((name): name is string => typeof name === "string" && name in properties) ||
+    !required.every(
+      (name): name is string => typeof name === "string" && Object.hasOwn(properties, name)
+    ) ||
     new Set(required).size !== required.length
   ) {
     return null;
@@ -169,7 +177,7 @@ export function parsePluginPaletteArgs(schema: unknown): PluginPaletteArgs | nul
   }
   const requiredSet = new Set<string>(required);
   const fields = names.filter((name) => requiredSet.has(name)).map((name) => byName.get(name)!);
-  return { fields };
+  return fields.length > 0 ? { fields } : null;
 }
 
 /** The reason `value` can't be submitted for `field`, or null when it can. */

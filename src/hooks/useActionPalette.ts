@@ -493,25 +493,6 @@ export function useActionPalette(): UseActionPaletteReturn {
     }
   }, [isOpen]);
 
-  const executeAction = useCallback(
-    (item: ActionPaletteItem) => {
-      // Enter on a disabled row is a silent no-op: palette stays open, no
-      // dispatch, no toast. The inline disabled-reason text in the row already
-      // explains why it's unavailable (issue #8814).
-      if (!item.enabled) return;
-      if (item.promptsForArgs) {
-        const spec = actionService.getPluginPaletteArgs(item.id);
-        if (!spec) return;
-        setArgSession({ item, spec, step: 0, values: {}, returnQuery: query });
-        setArgSelectedId(null);
-        setQuery("");
-        return;
-      }
-      dispatchAction(item, {});
-    },
-    [dispatchAction, query, setQuery]
-  );
-
   const argField = argSession ? argSession.spec.fields[argSession.step]! : null;
 
   const argRows = useMemo<ActionPaletteItem[]>(() => {
@@ -598,17 +579,48 @@ export function useActionPalette(): UseActionPaletteReturn {
     setQuery(previous.kind === "string" && typeof prior === "string" ? prior : "");
   }, [argSession, setQuery]);
 
-  const confirmSelection = useCallback(() => {
-    if (argSession && argField) {
-      const row = argRows[argSelectedIndex];
-      if (!row || !row.enabled) return;
+  const pickArgRow = useCallback(
+    (row: ActionPaletteItem | undefined) => {
+      if (!argField || !row || !row.enabled) return;
       if (argField.kind === "string") {
         submitArgValue(query);
-      } else {
-        const options =
-          argField.kind === "boolean" ? [true, false] : argField.options.map((o) => o.value);
-        submitArgValue(options[Number(row.id.slice("arg:".length))]!);
+        return;
       }
+      const options =
+        argField.kind === "boolean" ? [true, false] : argField.options.map((o) => o.value);
+      submitArgValue(options[Number(row.id.slice("arg:".length))]!);
+    },
+    [argField, query, submitArgValue]
+  );
+
+  const executeAction = useCallback(
+    (item: ActionPaletteItem) => {
+      // Enter on a disabled row is a silent no-op: palette stays open, no
+      // dispatch, no toast. The inline disabled-reason text in the row already
+      // explains why it's unavailable (issue #8814).
+      if (!item.enabled) return;
+      // A row clicked while arguments are being collected is an answer, not an
+      // action: it must never reach dispatch under its synthetic id.
+      if (argSession) {
+        pickArgRow(item);
+        return;
+      }
+      if (item.promptsForArgs) {
+        const spec = actionService.getPluginPaletteArgs(item.id);
+        if (!spec) return;
+        setArgSession({ item, spec, step: 0, values: {}, returnQuery: query });
+        setArgSelectedId(null);
+        setQuery("");
+        return;
+      }
+      dispatchAction(item, {});
+    },
+    [argSession, pickArgRow, dispatchAction, query, setQuery]
+  );
+
+  const confirmSelection = useCallback(() => {
+    if (argSession) {
+      pickArgRow(argRows[argSelectedIndex]);
       return;
     }
     // While the deferred filter is catching up, `results` reflects the previous
@@ -623,11 +635,9 @@ export function useActionPalette(): UseActionPaletteReturn {
     }
   }, [
     argSession,
-    argField,
     argRows,
     argSelectedIndex,
-    submitArgValue,
-    query,
+    pickArgRow,
     isStale,
     results,
     selectedIndex,

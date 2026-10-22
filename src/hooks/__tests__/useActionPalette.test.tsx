@@ -1637,6 +1637,21 @@ describe("useActionPalette", () => {
       expect(dispatchMock).not.toHaveBeenCalled();
     });
 
+    it("treats a clicked choice row as the answer, never dispatching its row id", async () => {
+      paletteArgsMock.mockReturnValue({ fields: [spec.fields[0]] });
+      const { result } = await openPalette([pluginEntry()]);
+      act(() => result.current.executeAction(result.current.results[0]!));
+      const prod = result.current.results.find((r) => r.title === "prod")!;
+      act(() => result.current.executeAction(prod));
+
+      expect(dispatchMock).toHaveBeenCalledTimes(1);
+      expect(dispatchMock).toHaveBeenCalledWith(
+        "plugin.acme.deploy",
+        { env: "prod" },
+        { source: "user" }
+      );
+    });
+
     it("records MRU only when the command is finally dispatched", async () => {
       paletteArgsMock.mockReturnValue({ fields: [spec.fields[1]] });
       const { result } = await openPalette([pluginEntry()]);
