@@ -8,8 +8,9 @@
  * lookups cache on the nodes they visit, as Angular DevTools' do, and nothing
  * else in the page is written to.
  *
- * Hover pays for one walk up to the nearest component host and its name; the
- * owners, roots, class debug info and template stamps are read on selection.
+ * Hover pays for one walk up to the nearest component host and its name, and
+ * for a node Angular did not key, one question of whether a template holds it;
+ * the owners, roots, class debug info and template stamps are read on selection.
  */
 
 import type {
@@ -31,6 +32,7 @@ import {
   hostedOn,
   isAngularNode,
   isDocumentElement,
+  isKeyed,
   isProductionBuild,
   observedName,
   parentOf,
@@ -134,9 +136,11 @@ class CandidateWriter {
   }
 }
 
-/** Angular rendered the element but left nothing to read it with. */
+/** Angular rendered the element, or something inside its view, but left nothing to read it with. */
 function unreadable(reason: Capability): ExtractorContribution {
   return {
+    // With no API to tell its own nodes from a library's, any other reader knows better.
+    ownership: "fallback",
     componentChain: { nearestId: null, components: [], truncated: false },
     frameworkEvidence: [
       { kind: "generic", framework: "angular", fields: [{ name: "debugApi", value: false }] },
@@ -150,6 +154,18 @@ function unreadable(reason: Capability): ExtractorContribution {
       exactRange: reason,
     },
   };
+}
+
+/**
+ * Whether Angular rendered the element itself, rather than holding a node some
+ * library put inside one of its views: keyed, or found in a template. A node
+ * neither is still inside Angular's components, and is described as such only
+ * for want of a reader that knows it, such as a React tree mounted there.
+ */
+function renderedByAngular(element: Element, api: DebugApi): boolean {
+  if (isKeyed(element)) return true;
+  const owner = api.ownerOf(element);
+  return owner !== null && owner !== undefined;
 }
 
 function hoverOf(element: Element, api: DebugApi, ids: InstanceIds): ExtractorContribution {
@@ -172,12 +188,18 @@ function hoverOf(element: Element, api: DebugApi, ids: InstanceIds): ExtractorCo
     line: UNKNOWN,
     exactRange: UNKNOWN,
   };
+  const ownership = renderedByAngular(element, api) ? {} : { ownership: "fallback" as const };
   if (nearest === null) {
-    return { componentChain: { nearestId: null, components: [], truncated: true }, capabilities };
+    return {
+      ...ownership,
+      componentChain: { nearestId: null, components: [], truncated: true },
+      capabilities,
+    };
   }
   const record = recordFor(nearest, ids.idOf(nearest));
   // One record by design: the rest of the chain is a selection's to read.
   return {
+    ...ownership,
     componentChain: { nearestId: record.componentId, components: [record], truncated: true },
     capabilities,
   };
@@ -367,6 +389,14 @@ function selectionOf(
     }
   });
 
+  // The element's own stamp is Angular's word on it; a node in no template is anyone's.
+  const ownership =
+    ownLocation !== null
+      ? { ownership: "direct" as const }
+      : lookup === "host" || isKeyed(element) || templateOwnerId !== null
+        ? {}
+        : { ownership: "fallback" as const };
+
   let kept = records;
   let sourceCandidates = elementCandidates;
   let omitted = writer.omitted;
@@ -388,6 +418,7 @@ function selectionOf(
     const hasLine =
       omittedLines > 0 || lines.length > 0 || claims.some((claim) => claim.kind !== "file-hint");
     return {
+      ...ownership,
       componentChain,
       sourceCandidates,
       // What the reading rests on, for a reader deciding how far to trust it.

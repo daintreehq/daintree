@@ -150,7 +150,6 @@ describe("the Element Picker host boundary", () => {
     // import. Asserted apart, since the model alone would satisfy a joint check
     // once the compiler stopped being bundled.
     expect(reachable).toContain(`${RESOLVERS_DIR}svelte.ts`);
-    expect(reachable).toContain(`${RESOLVERS_DIR}angular.ts`);
     const behind = scanForbiddenModules(reachable);
     expect(behind.filter((m) => m.label === "Svelte compiler").length).toBeGreaterThan(0);
     expect(behind.filter((m) => m.label === "svelte-source-model").length).toBeGreaterThan(0);
@@ -180,6 +179,16 @@ describe("the Element Picker host boundary", () => {
       Object.keys(metafile.inputs).filter(
         (file) => file.startsWith("electron/") && !file.startsWith(HOST_DIR)
       )
+    ).toEqual([]);
+  }, 60_000);
+
+  it("holds Angular's resolver, which also waits on #13888, to the same rule", async () => {
+    const metafile = await metafileOf(`${RESOLVERS_DIR}angular.ts`, NATIVE_EXTERNAL);
+    const reachable = Object.keys(metafile.inputs);
+    expect(scanForbiddenModules(reachable)).toEqual([]);
+    expect(authorityImports(metafile)).toEqual([]);
+    expect(
+      reachable.filter((file) => file.startsWith("electron/") && !file.startsWith(HOST_DIR))
     ).toEqual([]);
   }, 60_000);
 

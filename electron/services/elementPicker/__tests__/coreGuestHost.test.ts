@@ -184,17 +184,28 @@ let shipped: Record<string, string> = {};
 let assets: Record<string, string> = {};
 /** Built as the app would build it, but kept out of the shipped catalog until #13888 lists it. */
 let astroAsset = "";
+/** Likewise Angular's, which #13888 lists too. */
+let angularAsset = "";
 
 beforeAll(() => {
-  const { "extractor:astro": astro, ...built } = buildCoreGuestAssets([
+  const {
+    "extractor:astro": astro,
+    "extractor:angular": angular,
+    ...built
+  } = buildCoreGuestAssets([
     {
       id: "fixture:react",
       entry: "electron/services/elementPicker/__tests__/fixtures/contributingExtractor.ts",
     },
     { id: "extractor:astro", entry: "electron/services/elementPicker/guest/extractors/astro.ts" },
+    {
+      id: "extractor:angular",
+      entry: "electron/services/elementPicker/guest/extractors/angular.ts",
+    },
   ]);
   shipped = built;
   astroAsset = astro ?? "";
+  angularAsset = angular ?? "";
   assets = { ...shipped, "extractor:react": shipped["fixture:react"]! };
 }, 60_000);
 
@@ -725,7 +736,7 @@ describe("core Element Picker guest loading", () => {
     }
   });
 
-  it("describes an Angular selection with the shipped extractor: host ancestry, declaring owner, file hints and hosts as element ids", async () => {
+  it("describes an Angular selection with the built extractor: host ancestry, declaring owner, file hints and hosts as element ids", async () => {
     document.body.innerHTML = '<div id="root"></div>';
     const angular = new FakeAngular();
     const Label: ComponentSpec = {
@@ -755,7 +766,7 @@ describe("core Element Picker guest loading", () => {
     vi.stubGlobal("ng", angular.ng);
     vi.stubGlobal("ngDevMode", {});
     try {
-      const h = makeHarness({ catalog: shipped });
+      const h = makeHarness({ catalog: { ...shipped, "extractor:angular": angularAsset } });
       await h.bind();
       await settle();
       expect(h.kinds("extractor-installed")).toEqual([

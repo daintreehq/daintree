@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+import { act, createElement } from "react";
+import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ComponentRecord } from "../../../../../../shared/elementPicker/component.js";
 import type { GenericEvidence } from "../../../../../../shared/elementPicker/evidence.js";
@@ -14,6 +16,7 @@ import { EXTRACTOR_REGISTRY_GLOBAL } from "../../../guestChannel.js";
 import { createPicker, type PickerHandle } from "../../picker.js";
 import { installExtractor } from "../../registry.js";
 import { createAngularExtractor } from "../angularExtractor.js";
+import { createReactExtractor } from "../reactExtractor.js";
 import { FakeAngular, type ComponentSpec, type TemplateNode } from "./angularFixture.js";
 
 /**
@@ -775,6 +778,64 @@ describe("the Angular extractor on a debug API it cannot fully trust", () => {
       "AppComponent",
     ]);
     expect(records[2]).not.toHaveProperty("renderParentId");
+  });
+});
+
+describe("the Angular extractor beside other readers", () => {
+  const extract = (node: Element, phase: "hover" | "selection" = "selection") =>
+    createAngularExtractor().extract(node, phase, { ref: () => null });
+
+  it("claims what it rendered plainly, its own stamp directly, and a node in no template only as a fallback", () => {
+    mount(
+      appOf([
+        {
+          tag: "p",
+          attrs: {
+            class: "stamped",
+            "data-ng-source-location": "src/app/app.component.html@o:0,l:0,c:0",
+          },
+        },
+        { component: Card },
+      ])
+    );
+    const widget = document.createElement("canvas");
+    query("section.card").appendChild(widget);
+    expect(extract(query("main.app"))).not.toHaveProperty("ownership");
+    expect(extract(query("app-card"))).not.toHaveProperty("ownership");
+    expect(extract(query("p.stamped"))?.ownership).toBe("direct");
+    expect(extract(widget)?.ownership).toBe("fallback");
+    expect(extract(widget, "hover")?.ownership).toBe("fallback");
+  });
+
+  it("leaves a React tree mounted inside an Angular view to React's extractor, and says what surrounds it", () => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    // Angular's reader installs first, so only ranking can hand the tree to React's.
+    mount(App);
+    installExtractor(
+      { channel: CHANNEL, framework: "react", installed: false },
+      createReactExtractor()
+    );
+    const container = document.createElement("div");
+    query("section.card").appendChild(container);
+    const root = createRoot(container);
+    function Widget() {
+      return createElement("b", { className: "widget" }, "w");
+    }
+    act(() => root.render(createElement(Widget)));
+    try {
+      const observation = pick("b.widget");
+      expect(chainNames(observation)).toEqual(["Widget"]);
+      expect(observation.componentChain.components[0]!.framework).toBe("react");
+      expect(
+        observation.frameworkEvidence.some(
+          (entry) => entry.kind === "generic" && entry.framework === "angular"
+        )
+      ).toBe(true);
+      // The Angular markup around it is still Angular's to describe.
+      expect(chainNames(pick("section.card"))).toEqual(["CardComponent", "AppComponent"]);
+    } finally {
+      act(() => root.unmount());
+    }
   });
 });
 

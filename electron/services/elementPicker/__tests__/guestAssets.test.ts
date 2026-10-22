@@ -42,7 +42,7 @@ describe("createCoreGuestAssetLoader", () => {
 
   it("has nothing for a framework the build ships no extractor for", async () => {
     const { load, read } = loader();
-    await expect(load("extractor:vue")).resolves.toBeNull();
+    await expect(load("extractor:angular")).resolves.toBeNull();
     expect(read).not.toHaveBeenCalled();
   });
 

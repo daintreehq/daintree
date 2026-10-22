@@ -128,7 +128,8 @@ export function isProductionBuild(): boolean {
   return !read(globalThis, "ngDevMode");
 }
 
-function hasContext(node: Element): boolean {
+/** Whether Angular keyed the node itself: a view's root, a host, or a root of content it projected. */
+export function isKeyed(node: Element): boolean {
   try {
     return Object.prototype.hasOwnProperty.call(node, CONTEXT_KEY);
   } catch {
@@ -161,7 +162,7 @@ export function isDocumentElement(node: Element): boolean {
 export function isAngularNode(element: Element): boolean {
   let node: Element | null = element;
   for (let depth = 0; node !== null && depth < OWNERSHIP_DEPTH; depth += 1) {
-    if (hasContext(node)) return true;
+    if (isKeyed(node)) return true;
     node = parentOf(node);
   }
   return false;
@@ -173,7 +174,7 @@ export function isAngularNode(element: Element): boolean {
  * tree looking for a keyed ancestor of its own.
  */
 export function hostedOn(node: Element, api: DebugApi): object | null | undefined {
-  return hasContext(node) ? api.componentOf(node) : null;
+  return isKeyed(node) ? api.componentOf(node) : null;
 }
 
 function stringAt(value: unknown, key: string, limit: number): string | null {
