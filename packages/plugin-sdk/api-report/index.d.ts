@@ -3001,6 +3001,22 @@ interface SkillContribution {
     triggers?: string[];
 }
 /**
+ * One `contributes.themes` entry (#13832). `path` is a plugin-relative JSON file
+ * holding `{ palette, tokens?, extensions? }`, the palette in the same shape
+ * Daintree's built-in themes use, with overrides limited to the registered token
+ * and extension sets. Offered in Appearance as `plugin:{pluginId}:{id}`, grouped
+ * under the plugin, once the theme clears the contrast gate; a theme that fails
+ * is not offered and the failure is written to the plugin's log. `type` is the
+ * polarity the palette must declare.
+ */
+interface ThemeContribution {
+    id: string;
+    name: string;
+    type: "dark" | "light";
+    /** Plugin-relative path to the theme JSON file (e.g. `./themes/midnight.json`). */
+    path: string;
+}
+/**
  * One terminal in a `contributes.recipes` entry (#11860). The authorable subset
  * of {@link RecipeTerminal}: the transient per-launch fields (`agentModelId`,
  * `agentLaunchFlags`, `location`) are session state the recipe editor already
@@ -3367,6 +3383,12 @@ interface PluginManifest {
          * Empty unless the plugin ships skills.
          */
         skills: SkillContribution[];
+        /**
+         * Plugin-contributed themes (#13832). Optional in the type but always
+         * materialized by the manifest schema's `.default([])`, for the same reason
+         * as `surfaces`. Installed and built-in plugins only.
+         */
+        themes?: ThemeContribution[];
         forgeProviders: ForgeProviderContribution[];
         fileDecorationProviders: FileDecorationContribution[];
         /**

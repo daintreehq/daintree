@@ -33,6 +33,7 @@ A plugin that declares `"scope": "project"` lives in a project's own repository 
 | `processTools` | Rejected — detections are mirrored into the shared pty-host as one table for every terminal |
 | `mcpServers` | Rejected — the plugin-MCP IPC surface is app-global: servers are addressed by plugin and server id alone, and a tool call carries no project to check the contribution against. To serve tools to the project's agents, declare `agentMcp` instead |
 | `tours` | Rejected — plugin tours are offered from the app-wide Help menu and command palette, and tour playback has no per-project visibility yet |
+| `themes` | Rejected — the app theme is one machine-wide selection painted into every window, with no per-project theme to narrow to |
 | `forgeProviders` | Rejected — forge providers need synchronous host methods that cannot cross the plugin worker's message port |
 | `fileEditors` | Rejected — built-in only; the editor slot resolves through the host-bundled builtin view registry, which a project plugin has no renderer in |
 | `previewTools` | Rejected — built-in only; the tool's components resolve out of the host bundle, which no other origin's renderer reaches |
@@ -1194,9 +1195,9 @@ Rules:
 
 `defaultLayout` (the arrangement opened on a cold first open) appears in this feature's design notes and is **not implemented** — the schema rejects it. A recipe is launched against a worktree rather than against a project cold open.
 
-## Themes — _Future_
+## Themes — _Shipped_
 
-Ships palette-based themes, following the same `BuiltInThemeSource` shape used by Daintree's built-in themes. See [Theme system](../themes/theme-system.md) for the palette and token model.
+Ships app themes. Each one is offered in Settings → Appearance, grouped under the plugin's name, and in the theme palette, and the user applies it like a built-in theme. Installed and built-in plugins only; a `scope: "project"` plugin is refused until per-project themes exist.
 
 ```json
 {
@@ -1213,7 +1214,30 @@ Ships palette-based themes, following the same `BuiltInThemeSource` shape used b
 }
 ```
 
-Theme contribution requires a theme registry surface that doesn't exist yet. Daintree's themes stay free and open-contribution; there is no planned monetization around color schemes.
+**Fields:**
+
+| Field | Required | Notes |
+| --- | --- | --- |
+| `id` | yes | Namespaced as `plugin:{pluginId}:{id}`, so it can never shadow a built-in or imported theme. |
+| `name` | yes | Shown in Appearance, the theme palette, and the notice when the theme stops being offered. |
+| `type` | yes | `"dark"` or `"light"`. The palette's own `type` must match. |
+| `path` | yes | JSON file relative to the plugin directory, at most 128 KiB, at most 20 themes per plugin. |
+
+The file holds a `palette` in the same shape as Daintree's built-in theme sources, plus optional `tokens` and `extensions` overrides. Overrides are limited to the registered token and extension sets. See [Theme system](../themes/theme-system.md) for the palette and token model.
+
+```json
+{
+  "palette": { "type": "dark", "surfaces": { "grid": "#0e0f12", "…": "…" }, "…": "…" },
+  "tokens": { "overlay-highlight": "#2a2d35" },
+  "extensions": {}
+}
+```
+
+Validation is strict. A missing palette field, an unknown key, a token or extension outside the registered sets, or a value that isn't a single CSS value refuses the theme rather than being dropped.
+
+**The contrast checks are a gate, not a warning.** A theme is offered only if it passes every check an imported theme is warned about: the text, accent, status, terminal, syntax and overlay contrast pairs that Daintree's built-in themes are held to. A pair the checks can't evaluate fails too. That covers a non-hex value, and a light theme that leaves the engine's `color-mix()` overlay tokens in place. Set those tokens to hex values, as the built-in light themes do. A refused theme never appears in Appearance, and the reason is written to the plugin's log in the Plugin Manager. The plugin's other contributions are unaffected.
+
+A plugin theme is chosen directly. It can't be the theme for a "Match system appearance" slot. The selected theme's palette is saved with the choice, so it paints on the first frame after a restart, before any plugin has loaded. If the plugin is disabled, uninstalled or blocked, or an update stops offering the theme, Daintree switches to the user's preferred built-in theme of the same polarity and says so.
 
 ## Forge providers — _Shipped_
 

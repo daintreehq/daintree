@@ -2099,6 +2099,14 @@ export interface IpcEventMap {
     views: import("../plugin.js").PluginHostedViewDescriptor[];
   };
 
+  // Every theme an installed plugin offers (#13832), app-wide. A full snapshot
+  // every time; the renderer replaces its copy. `fallbackSchemeId` is set when
+  // main replaced a selected plugin theme that is no longer offered.
+  "plugin:themes-changed": {
+    themes: import("../appTheme.js").AppColorScheme[];
+    fallbackSchemeId?: string;
+  };
+
   // Plugin-shipped custom icons visible to this view (#13143). A full
   // snapshot every time; the renderer replaces its copy wholesale.
   "plugin:icons-changed": {
@@ -2382,6 +2390,7 @@ export type IpcEventBusMap = Pick<
   | "plugin:recipes-changed"
   | "plugin:tours-changed"
   | "plugin:hosted-views-changed"
+  | "plugin:themes-changed"
   | "plugin:icons-changed"
   // Plugin file-decoration invalidation (global broadcast)
   | "plugin:decorations-changed"

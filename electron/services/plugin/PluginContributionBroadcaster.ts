@@ -18,6 +18,7 @@ import { getPluginRecipes } from "./PluginRecipeRegistry.js";
 import { getRegisteredFileDecorationProviders } from "../fileDecorationRegistry.js";
 import { getPluginTours, notifyPluginToursVisibilityChanged } from "./PluginTourRegistry.js";
 import { getPluginHostedViews } from "./PluginHostedViewRegistry.js";
+import { getPluginThemeSchemes } from "./PluginThemeRegistry.js";
 import { getPluginCustomIcons } from "../../../shared/config/pluginCustomIconRegistry.js";
 import {
   hasProjectPluginVisibilityOverrides,
@@ -327,6 +328,10 @@ export class PluginContributionBroadcaster {
   private iconsBroadcastPending = false;
   /** Same as {@link toursBroadcastPending}: hosted-view snapshots replace wholesale. */
   private hostedViewsBroadcastPending = false;
+  /** Same as {@link toursBroadcastPending}: theme catalogs replace wholesale. */
+  private themesBroadcastPending = false;
+  /** The selection the next theme snapshot reports main fell back to, if any. */
+  private pendingThemeFallback: string | null = null;
   /**
    * Same coalescing rationale as {@link panelKindsBroadcastPending}. A plugin's
    * `activate()` typically calls `host.registerAction` many times in one
@@ -699,6 +704,32 @@ export class PluginContributionBroadcaster {
       this.emitScoped("plugin:icons-changed", (projectId) => ({
         icons: forProject(getPluginCustomIcons(), (icon) => icon.pluginId, projectId),
       }));
+    });
+  }
+
+  /**
+   * Coalesce theme catalog changes into one snapshot per tick (#13832). Not
+   * project-scoped: the app theme is one machine-wide selection, so every view
+   * sees every installed plugin's themes. A fallback main persisted rides along
+   * so each view moves off the vanished theme without re-reading the store.
+   */
+  scheduleThemesBroadcast(fallbackSchemeId: string | null = null): void {
+    if (this.deps.isDisposed()) return;
+    if (fallbackSchemeId !== null) this.pendingThemeFallback = fallbackSchemeId;
+    if (this.themesBroadcastPending) return;
+    this.themesBroadcastPending = true;
+    this.defer(() => {
+      this.themesBroadcastPending = false;
+      const fallback = this.pendingThemeFallback;
+      this.pendingThemeFallback = null;
+      if (this.deps.isDisposed()) return;
+      broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
+        name: "plugin:themes-changed",
+        payload: {
+          themes: getPluginThemeSchemes(),
+          ...(fallback !== null ? { fallbackSchemeId: fallback } : {}),
+        },
+      });
     });
   }
 

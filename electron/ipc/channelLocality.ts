@@ -657,6 +657,9 @@ export const CHANNEL_LOCALITY = {
   "plugin:report-view-metrics": "host",
   "plugin:tours-get": "host",
   "plugin:hosted-views-get": "host",
+  // The theme selection is this machine's (`app-theme:*` is shell), so the
+  // catalog it is chosen from has to be this machine's plugins too.
+  "plugin:themes-get": "shell",
   "plugin:panel-kinds-get": "host",
   "plugin:panel-reload-request": "host",
   "plugin:panel-reload-response": "host",
@@ -1168,6 +1171,7 @@ export const EVENT_LOCALITY: Readonly<Record<string, ChannelLocality>> = {
   "plugin:toolbar-buttons-changed": "host",
   "plugin:tours-changed": "host",
   "plugin:hosted-views-changed": "host",
+  "plugin:themes-changed": "shell",
   "plugin:worktree-card-statuses-changed": "host",
   "resource:profile-changed": "host",
   "project-groups:update": "host",

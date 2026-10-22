@@ -45,6 +45,7 @@ import type {
   ViewContribution,
   McpServerContribution,
   SkillContribution,
+  ThemeContribution,
   PluginCapability,
 } from "../../shared/types/plugin.js";
 import type {
@@ -659,6 +660,28 @@ export const SkillContributionSchema = z
         "path must be a relative plugin asset path (no leading /, backslash, URL scheme, NUL, or .. segments)",
     }),
     triggers: z.array(z.string().min(1)).max(50).optional(),
+  })
+  .strict();
+
+/**
+ * `contributes.themes` manifest entry (#13832). A theme is a palette file the
+ * plugin ships, offered in Appearance under `plugin:{pluginId}:{id}` once it
+ * clears the contrast gate. `path` uses the same asset-path guard as skills and
+ * is realpath-contained at read time; the file's contents are validated by the
+ * theme registry, which refuses the theme rather than the plugin when they
+ * fail. `type` is the declared polarity the palette must match. Inert
+ * declarative content, so no capability is required. Strict so unknown fields
+ * fail loudly.
+ */
+export const ThemeContributionSchema = z
+  .object({
+    id: z.string().min(1).max(64).regex(SAFE_ID_PATTERN),
+    name: z.string().min(1).max(80),
+    type: z.enum(["dark", "light"]),
+    path: z.string().min(1).refine(isSafePluginAssetPath, {
+      message:
+        "path must be a relative plugin asset path (no leading /, backslash, URL scheme, NUL, or .. segments)",
+    }),
   })
   .strict();
 
@@ -2153,6 +2176,7 @@ export const MANIFEST_CONTRIBUTION_CAPS = {
   views: 50,
   mcpServers: 20,
   skills: 50,
+  themes: 20,
   forgeProviders: 20,
   fileDecorationProviders: 50,
   fileEditors: 10,
@@ -2290,6 +2314,10 @@ export const PROJECT_SCOPE_UNSCOPED_CONTRIBUTIONS = [
   [
     "tours",
     "plugin tours are offered from the app-wide Help menu and command palette with no project axis, and tour playback has no per-project visibility to narrow a panel tour to the owning project's views either.",
+  ],
+  [
+    "themes",
+    "the app theme is one machine-wide selection painted into every window and every project's view, so there is no per-project theme for the contribution to narrow to.",
   ],
 ] as const satisfies ReadonlyArray<readonly [string, string]>;
 
@@ -2591,6 +2619,10 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
               .array(SkillContributionSchema)
               .max(MANIFEST_CONTRIBUTION_CAPS.skills)
               .default([]),
+            themes: z
+              .array(ThemeContributionSchema)
+              .max(MANIFEST_CONTRIBUTION_CAPS.themes)
+              .default([]),
             forgeProviders: z
               .array(ForgeProviderContributionSchema)
               .max(MANIFEST_CONTRIBUTION_CAPS.forgeProviders)
@@ -2657,6 +2689,7 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
             views: [],
             mcpServers: [],
             skills: [],
+            themes: [],
             forgeProviders: [],
             fileDecorationProviders: [],
             fileEditors: [],
@@ -3167,6 +3200,7 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
       reportDuplicateIds("views", manifest.contributes.views);
       reportDuplicateIds("mcpServers", manifest.contributes.mcpServers);
       reportDuplicateIds("skills", manifest.contributes.skills);
+      reportDuplicateIds("themes", manifest.contributes.themes);
       reportDuplicateIds("forgeProviders", manifest.contributes.forgeProviders);
       reportDuplicateIds("fileDecorationProviders", manifest.contributes.fileDecorationProviders);
       reportDuplicateIds("fileEditors", manifest.contributes.fileEditors);
@@ -3380,6 +3414,7 @@ export type {
   ViewContribution,
   McpServerContribution,
   SkillContribution,
+  ThemeContribution,
   PluginCapability,
 };
 export type { ForgeProviderContribution, FileDecorationContribution };

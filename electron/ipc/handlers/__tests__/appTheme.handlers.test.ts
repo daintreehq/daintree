@@ -151,6 +151,17 @@ import {
   WINDOWS_CAPTION_SYMBOL_COLOR,
   WINDOWS_TITLEBAR_HEIGHT_PX,
 } from "../../../../shared/config/windowChrome.js";
+import {
+  clearPluginThemeRegistry,
+  registerPluginThemes,
+} from "../../../services/plugin/PluginThemeRegistry.js";
+import {
+  compilePluginTheme,
+  makePluginThemeId,
+  toPluginThemeSnapshot,
+} from "../../../../shared/theme/pluginThemes.js";
+import { BUILT_IN_THEME_SOURCES } from "../../../../shared/theme/builtInThemes/index.js";
+import type { PluginThemeSource } from "../../../../shared/theme/types.js";
 
 type Handler = (event: unknown, ...args: unknown[]) => Promise<unknown>;
 
@@ -203,6 +214,55 @@ describe("appTheme handlers", () => {
     await handler({}, "custom-dark");
 
     expect(storeState.data.appTheme).toMatchObject({ preferredDarkSchemeId: "custom-dark" });
+  });
+
+  describe("plugin themes (#13832)", () => {
+    const daintree = BUILT_IN_THEME_SOURCES.find((source) => source.id === "daintree")!;
+    const source: PluginThemeSource = {
+      id: makePluginThemeId("acme.themes", "midnight"),
+      name: "Midnight",
+      type: "dark",
+      pluginId: "acme.themes",
+      pluginName: "Acme Themes",
+      palette: daintree.palette,
+    };
+
+    afterEach(() => {
+      clearPluginThemeRegistry();
+    });
+
+    it("persists an offered plugin theme together with the snapshot that paints it", async () => {
+      registerPluginThemes("acme.themes", [{ source, scheme: compilePluginTheme(source) }]);
+      storeState.data.appTheme = { colorSchemeId: "daintree" };
+      registerAppThemeHandlers();
+
+      await getHandler(CHANNELS.APP_THEME_SET_COLOR_SCHEME)({}, source.id);
+
+      expect(storeState.data.appTheme).toEqual({
+        colorSchemeId: source.id,
+        pluginThemeSnapshot: toPluginThemeSnapshot(source),
+      });
+    });
+
+    it("refuses a plugin theme no loaded plugin offers, so the picker rolls back", async () => {
+      storeState.data.appTheme = { colorSchemeId: "daintree" };
+      registerAppThemeHandlers();
+
+      await expect(
+        getHandler(CHANNELS.APP_THEME_SET_COLOR_SCHEME)({}, source.id)
+      ).rejects.toThrow();
+      expect(storeState.data.appTheme).toEqual({ colorSchemeId: "daintree" });
+    });
+
+    it("keeps plugin themes out of the follow-system slots", async () => {
+      storeState.data.appTheme = { colorSchemeId: "daintree" };
+      registerAppThemeHandlers();
+
+      await getHandler(CHANNELS.APP_THEME_SET_PREFERRED_DARK_SCHEME)({}, source.id);
+      await getHandler(CHANNELS.APP_THEME_SET_PREFERRED_LIGHT_SCHEME)({}, source.id);
+
+      expect(storeState.data.appTheme).toEqual({ colorSchemeId: "daintree" });
+    });
   });
 
   it("setPreferredLightScheme stores the scheme id", async () => {

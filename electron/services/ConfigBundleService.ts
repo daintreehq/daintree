@@ -26,6 +26,7 @@ import {
 import type { CliAvailability } from "../../shared/types/ipc/system.js";
 import { buildDefaultKeybindings } from "../../shared/config/defaultKeybindings.js";
 import { BUILT_IN_APP_SCHEMES } from "../../shared/theme/themes.js";
+import { isPluginThemeId } from "../../shared/theme/pluginThemes.js";
 import type { TerminalRecipe, UserAgentConfig } from "../../shared/types/index.js";
 import {
   validatePathPattern,
@@ -1110,9 +1111,12 @@ export class ConfigBundleService {
     const validateScalar = (field: string, value: unknown): string | null => {
       switch (field) {
         case "colorSchemeId":
+          return typeof value === "string" && value.trim() !== "" ? null : "Not a valid theme id";
         case "preferredDarkSchemeId":
         case "preferredLightSchemeId":
-          return typeof value === "string" && value.trim() !== "" ? null : "Not a valid theme id";
+          if (typeof value !== "string" || value.trim() === "") return "Not a valid theme id";
+          // Same rule as the Appearance slot setters.
+          return isPluginThemeId(value.trim()) ? "A plugin theme can't be a preferred theme" : null;
         case "followSystem":
           return typeof value === "boolean" ? null : "Not a boolean";
         case "colorVisionMode":

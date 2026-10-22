@@ -52,8 +52,8 @@ async function dntrignoreKept(dir: string): Promise<Set<string>> {
  * Paths the manifest points at, which the archive is invalid without.
  * `verifyPluginArchive` already rejects a missing `main` or view
  * `componentPath`, but only after the `.dntr` has been written — and a dry run
- * never reaches it at all. Skills aren't verified there either: a dropped skill
- * just goes quiet at runtime. Since `.dntrignore` makes excluding these easy for
+ * never reaches it at all. Skills and themes aren't verified there either: a
+ * dropped one just goes quiet at runtime. Since `.dntrignore` makes excluding these easy for
  * the first time, check them up front instead.
  */
 function requiredManifestPaths(manifest: MinimalManifest): string[] {
@@ -74,6 +74,10 @@ function requiredManifestPaths(manifest: MinimalManifest): string[] {
   }
   for (const skill of manifest.contributes?.skills ?? []) {
     add(skill.path);
+  }
+  // A dropped theme file is refused at load, so the theme quietly never appears.
+  for (const theme of manifest.contributes?.themes ?? []) {
+    add(theme.path);
   }
   // Custom SVG icons (#13143): a dropped one silently falls back to the generic
   // glyph at runtime, so catch it while packaging instead.
@@ -111,6 +115,7 @@ interface MinimalManifest {
     /** @deprecated Renamed to `views` in the 1.0 freeze; still honored here. */
     experimental_views?: Array<{ componentPath?: string }>;
     skills?: Array<{ path?: string }>;
+    themes?: Array<{ path?: string }>;
     panels?: Array<{ iconId?: string }>;
     toolbarButtons?: Array<{ iconId?: string }>;
     processTools?: Array<{ iconId?: string }>;

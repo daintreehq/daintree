@@ -16,6 +16,7 @@ import {
   applyAccentOverrideToScheme,
   isCssDeclarationValue,
 } from "../../shared/theme/index.js";
+import { withSelectedPluginTheme } from "../../shared/theme/pluginThemes.js";
 import type { AppColorScheme, AppThemeConfig } from "../../shared/theme/index.js";
 import type { Project } from "../../shared/types/project.js";
 import { WINDOWS_CAPTION_WIDTH_PX } from "../../shared/config/windowChrome.js";
@@ -129,6 +130,8 @@ function systemPrefersDark(): boolean {
  * Resolves the persisted scheme for a boot paint. An id that names no scheme
  * (a custom theme since deleted, or dropped as invalid) falls back to a
  * built-in of the polarity the user was on rather than always the dark one.
+ * A selected plugin theme resolves from its persisted snapshot, since every
+ * boot paint runs before any plugin has loaded (#13832).
  */
 export function resolveInitialAppScheme(
   colorSchemeId: string,
@@ -137,7 +140,7 @@ export function resolveInitialAppScheme(
 ): AppColorScheme {
   return resolveAppTheme(
     colorSchemeId,
-    customSchemes,
+    withSelectedPluginTheme(customSchemes, themeConfig),
     getAppThemeFallbackType(colorSchemeId, themeConfig ?? {}, systemPrefersDark())
   );
 }

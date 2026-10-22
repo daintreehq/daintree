@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { AlertTriangle, Check, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
@@ -6,6 +14,7 @@ import { OVERLAY_SHEET_SHADOW_CLASS } from "@/components/ui/floatingSurface";
 import { pluralize } from "@/lib/pluralize";
 import { BUILT_IN_APP_SCHEMES } from "@/config/appColorSchemes";
 import { injectSchemeToDOM, useAppThemeStore } from "@/store/appThemeStore";
+import { selectSelectableSchemes } from "@/theme/selectableSchemes";
 import { useThemeBrowserStore } from "@/store/themeBrowserStore";
 import { logError } from "@/utils/logger";
 import { appThemeClient } from "@/clients/appThemeClient";
@@ -163,6 +172,42 @@ function ThemeRow({
   );
 }
 
+/**
+ * Built-in and imported themes as they come, then each plugin's themes
+ * together, plugins in name order, so a plugin's themes sit under its name
+ * (#13832).
+ */
+function groupPluginThemesLast(schemes: readonly AppColorScheme[]): AppColorScheme[] {
+  const own: AppColorScheme[] = [];
+  const byPlugin = new Map<string, AppColorScheme[]>();
+  for (const scheme of schemes) {
+    if (!scheme.plugin) {
+      own.push(scheme);
+      continue;
+    }
+    const group = byPlugin.get(scheme.plugin.id);
+    if (group) group.push(scheme);
+    else byPlugin.set(scheme.plugin.id, [scheme]);
+  }
+  const groups = [...byPlugin.values()].sort((a, b) =>
+    a[0]!.plugin!.name.localeCompare(b[0]!.plugin!.name)
+  );
+  return [...own, ...groups.flat()];
+}
+
+/** Consecutive rows that share an owner: no plugin, or one plugin. */
+function pluginRuns(
+  schemes: readonly AppColorScheme[]
+): Array<{ plugin: AppColorScheme["plugin"]; schemes: AppColorScheme[] }> {
+  const runs: Array<{ plugin: AppColorScheme["plugin"]; schemes: AppColorScheme[] }> = [];
+  for (const scheme of schemes) {
+    const last = runs[runs.length - 1];
+    if (last && last.plugin?.id === scheme.plugin?.id) last.schemes.push(scheme);
+    else runs.push({ plugin: scheme.plugin, schemes: [scheme] });
+  }
+  return runs;
+}
+
 const APPEARANCE_OPTIONS: SegmentedRadioOption<"dark" | "light">[] = [
   { value: "dark", label: "Dark" },
   { value: "light", label: "Light" },
@@ -173,7 +218,7 @@ export function ThemeBrowser() {
 
   const close = useThemeBrowserStore((s) => s.close);
   const selectedSchemeId = useAppThemeStore((s) => s.selectedSchemeId);
-  const customSchemes = useAppThemeStore((s) => s.customSchemes);
+  const selectableSchemes = useAppThemeStore(selectSelectableSchemes);
   const previewSchemeId = useAppThemeStore((s) => s.previewSchemeId);
   const setPreviewSchemeId = useAppThemeStore((s) => s.setPreviewSchemeId);
   const commitSchemeSelection = useAppThemeStore((s) => s.commitSchemeSelection);
@@ -184,7 +229,7 @@ export function ThemeBrowser() {
   const [query, setQuery] = useState("");
   const [previewAnnouncement, setPreviewAnnouncement] = useState("");
   const [typeFilter, setTypeFilter] = useState<"dark" | "light">(() => {
-    const committed = [...BUILT_IN_APP_SCHEMES, ...customSchemes].find(
+    const committed = [...BUILT_IN_APP_SCHEMES, ...selectableSchemes].find(
       (s) => s.id === selectedSchemeId
     );
     return committed?.type === "light" ? "light" : "dark";
@@ -208,7 +253,10 @@ export function ThemeBrowser() {
     setPreviewAnnouncement("");
   }, [clearAnnouncementTimer]);
 
-  const allSchemes = useMemo(() => [...BUILT_IN_APP_SCHEMES, ...customSchemes], [customSchemes]);
+  const allSchemes = useMemo(
+    () => groupPluginThemesLast([...BUILT_IN_APP_SCHEMES, ...selectableSchemes]),
+    [selectableSchemes]
+  );
   const darkSchemes = useMemo(() => allSchemes.filter((s) => s.type !== "light"), [allSchemes]);
   const lightSchemes = useMemo(() => allSchemes.filter((s) => s.type === "light"), [allSchemes]);
   const committedScheme = useMemo(
@@ -264,7 +312,7 @@ export function ThemeBrowser() {
   const revertPreview = useCallback(() => {
     const state = useAppThemeStore.getState();
     if (state.previewSchemeId !== null) {
-      const committed = resolveAppTheme(state.selectedSchemeId, state.customSchemes);
+      const committed = resolveAppTheme(state.selectedSchemeId, selectSelectableSchemes(state));
       setPreviewSchemeId(null);
       injectSchemeToDOM(committed, { immediate: true });
     }
@@ -276,7 +324,7 @@ export function ThemeBrowser() {
       const state = useAppThemeStore.getState();
       if (state.previewSchemeId === id) return;
       if (state.previewSchemeId === null && state.selectedSchemeId === id) return;
-      const scheme = resolveAppTheme(id, state.customSchemes);
+      const scheme = resolveAppTheme(id, selectSelectableSchemes(state));
       setPreviewSchemeId(id);
       injectSchemeToDOM(scheme);
       if (debounceAnnounce) {
@@ -323,7 +371,7 @@ export function ThemeBrowser() {
     clearPendingAnnouncement();
 
     commitSchemeSelection(targetId);
-    const scheme = resolveAppTheme(targetId, useAppThemeStore.getState().customSchemes);
+    const scheme = resolveAppTheme(targetId, selectSelectableSchemes(useAppThemeStore.getState()));
     runThemeReveal(origin, () => injectSchemeToDOM(scheme, { immediate: true }));
 
     // Close the browser synchronously after the reveal fires — the Settings
@@ -377,7 +425,7 @@ export function ThemeBrowser() {
       clearAnnouncementTimer();
       const state = useAppThemeStore.getState();
       if (state.previewSchemeId !== null) {
-        const committed = resolveAppTheme(state.selectedSchemeId, state.customSchemes);
+        const committed = resolveAppTheme(state.selectedSchemeId, selectSelectableSchemes(state));
         useAppThemeStore.getState().setPreviewSchemeId(null);
         injectSchemeToDOM(committed, { immediate: true });
       }
@@ -638,17 +686,36 @@ export function ThemeBrowser() {
             No themes match your search
           </p>
         ) : (
-          filteredThemes.map((scheme) => (
-            <ThemeRow
-              key={scheme.id}
-              scheme={scheme}
-              effectiveScheme={effectiveSchemes.get(scheme.id) ?? scheme}
-              isCommitted={scheme.id === selectedSchemeId}
-              isActive={scheme.id === activeSchemeId}
-              onSelect={handleSelect}
-              warnings={warningsByScheme.get(scheme.id) ?? EMPTY_WARNINGS}
-              onRowRef={registerRowRef}
-            />
+          pluginRuns(filteredThemes).map((run) => (
+            <Fragment key={run.plugin?.id ?? ""}>
+              {run.plugin && (
+                // An inert option rather than role="group": inside a listbox,
+                // Chromium + VoiceOver drop a group's label (see
+                // SearchablePalette). Arrow keys skip it because it is not in
+                // `filteredThemes`. Sentence case, since it is a plugin's name.
+                <div
+                  role="option"
+                  aria-disabled="true"
+                  aria-selected="false"
+                  aria-label={`From ${run.plugin.name}`}
+                  className="px-3 pt-3 pb-1 text-2xs font-medium text-text-secondary truncate select-none"
+                >
+                  {run.plugin.name}
+                </div>
+              )}
+              {run.schemes.map((scheme) => (
+                <ThemeRow
+                  key={scheme.id}
+                  scheme={scheme}
+                  effectiveScheme={effectiveSchemes.get(scheme.id) ?? scheme}
+                  isCommitted={scheme.id === selectedSchemeId}
+                  isActive={scheme.id === activeSchemeId}
+                  onSelect={handleSelect}
+                  warnings={warningsByScheme.get(scheme.id) ?? EMPTY_WARNINGS}
+                  onRowRef={registerRowRef}
+                />
+              ))}
+            </Fragment>
           ))
         )}
       </div>

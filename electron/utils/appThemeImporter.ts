@@ -9,6 +9,7 @@ import {
   inferAppThemeTypeFromTokens,
   isCssDeclarationValue,
   isExtensionKey,
+  isPluginThemeId,
   normalizeAppColorScheme,
   validateImportedThemeData,
   type AppThemeImportResult,
@@ -136,9 +137,12 @@ export function parseAppThemeContent(content: string, filename: string): AppThem
   const resolvedType =
     rawTheme.type ?? paletteType ?? inferAppThemeTypeFromTokens(rawTokens) ?? "dark";
   const name = rawTheme.name?.trim() || getFileDisplayName(filename);
+  // The plugin namespace is reserved, so a file claiming an id in it gets a
+  // generated one rather than sitting beside the plugin theme it names.
+  const fileId = rawTheme.id?.trim();
   const scheme = normalizeAppColorScheme(
     {
-      id: rawTheme.id?.trim() || generateThemeId(name),
+      id: fileId && !isPluginThemeId(fileId) ? fileId : generateThemeId(name),
       name,
       type: resolvedType,
       tokens: rawTokens,

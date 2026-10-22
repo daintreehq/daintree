@@ -11,6 +11,7 @@ import { Check } from "lucide-react";
 import { useSearchablePalette } from "@/hooks/useSearchablePalette";
 import { useEffectiveCombo } from "@/hooks/useKeybinding";
 import { useAppThemeStore, injectSchemeToDOM } from "@/store/appThemeStore";
+import { selectSelectableSchemes } from "@/theme/selectableSchemes";
 import { notify } from "@/lib/notify";
 import { appThemeClient } from "@/clients/appThemeClient";
 import { BUILT_IN_APP_SCHEMES } from "@/config/appColorSchemes";
@@ -69,7 +70,7 @@ function ThemeListItem({
       className={cn(
         PALETTE_ROW_CLASS,
         "w-full text-left px-3 rounded-[var(--radius-md)] flex items-center gap-3",
-        scheme.location ? "py-2" : "py-1.5"
+        scheme.location || scheme.plugin ? "py-2" : "py-1.5"
       )}
     >
       <div className="flex-1 min-w-0">
@@ -90,6 +91,11 @@ function ThemeListItem({
             </div>
           </TruncatedTooltip>
         )}
+        {!scheme.location && scheme.plugin && (
+          <TruncatedTooltip content={`From ${scheme.plugin.name}`} focusable={false}>
+            <div className="text-xs text-text-secondary truncate">From {scheme.plugin.name}</div>
+          </TruncatedTooltip>
+        )}
       </div>
       <PaletteStrip scheme={scheme} variant="compact" />
       {/* Reserved whether or not it is filled, so the strips hold one column. */}
@@ -107,11 +113,14 @@ function ThemeListItem({
 
 export function ThemePalette({ isOpen, onClose }: ThemePaletteProps) {
   const selectedSchemeId = useAppThemeStore((s) => s.selectedSchemeId);
-  const customSchemes = useAppThemeStore((s) => s.customSchemes);
+  const selectableSchemes = useAppThemeStore(selectSelectableSchemes);
   const setSelectedSchemeId = useAppThemeStore((s) => s.setSelectedSchemeId);
   const themePaletteShortcut = useEffectiveCombo("app.theme.pick");
 
-  const allSchemes = useMemo(() => [...BUILT_IN_APP_SCHEMES, ...customSchemes], [customSchemes]);
+  const allSchemes = useMemo(
+    () => [...BUILT_IN_APP_SCHEMES, ...selectableSchemes],
+    [selectableSchemes]
+  );
 
   const {
     query,
@@ -173,8 +182,10 @@ export function ThemePalette({ isOpen, onClose }: ThemePaletteProps) {
       livePreviewReadyRef.current = false;
       const originalId = originalSchemeIdRef.current;
       if (!committedRef.current && originalId) {
-        const latestCustom = useAppThemeStore.getState().customSchemes;
-        const originalScheme = resolveAppTheme(originalId, latestCustom);
+        const originalScheme = resolveAppTheme(
+          originalId,
+          selectSelectableSchemes(useAppThemeStore.getState())
+        );
         injectSchemeToDOM(originalScheme);
       }
       originalSchemeIdRef.current = null;
@@ -192,7 +203,9 @@ export function ThemePalette({ isOpen, onClose }: ThemePaletteProps) {
       // painting one the filter has hidden, which no row or footer could name.
       const originalId = originalSchemeIdRef.current;
       if (livePreviewReadyRef.current && originalId) {
-        injectSchemeToDOM(resolveAppTheme(originalId, useAppThemeStore.getState().customSchemes));
+        injectSchemeToDOM(
+          resolveAppTheme(originalId, selectSelectableSchemes(useAppThemeStore.getState()))
+        );
       }
       return;
     }

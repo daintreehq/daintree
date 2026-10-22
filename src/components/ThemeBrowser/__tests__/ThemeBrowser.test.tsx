@@ -818,4 +818,49 @@ describe("ThemeBrowser navigation contract", () => {
     expect(document.activeElement).toBe(opener);
     opener.remove();
   });
+
+  describe("plugin themes (#13832)", () => {
+    const base = BUILT_IN_APP_SCHEMES.find((s) => s.type !== "light")!;
+    const pluginTheme = (pluginId: string, pluginName: string, themeId: string, name: string) => ({
+      ...base,
+      id: `plugin:${pluginId}:${themeId}`,
+      name,
+      builtin: false,
+      plugin: { id: pluginId, name: pluginName },
+    });
+
+    afterEach(() => {
+      useAppThemeStore.setState({ pluginSchemes: [] });
+    });
+
+    it("lists each plugin's themes after the built-ins, under the plugin's name", () => {
+      useAppThemeStore.setState({
+        pluginSchemes: [
+          pluginTheme("zeta.themes", "Zeta Themes", "noir", "Noir"),
+          pluginTheme("acme.themes", "Acme Themes", "midnight", "Midnight"),
+          pluginTheme("zeta.themes", "Zeta Themes", "dusk", "Dusk"),
+        ],
+      });
+      render(<Harness />);
+
+      const labels = screen
+        .getAllByRole("option")
+        .map((o) => o.getAttribute("aria-label") ?? o.textContent ?? "");
+      const tail = labels.slice(labels.findIndex((label) => label === "From Acme Themes"));
+      expect(tail.map((label) => label.replace(/Current|Trying/, "").trim())).toEqual([
+        "From Acme Themes",
+        expect.stringContaining("Midnight"),
+        "From Zeta Themes",
+        expect.stringContaining("Noir"),
+        expect.stringContaining("Dusk"),
+      ]);
+      const headings = screen
+        .getAllByRole("option")
+        .filter((o) => o.getAttribute("aria-disabled") === "true");
+      expect(headings.map((o) => o.getAttribute("aria-label"))).toEqual([
+        "From Acme Themes",
+        "From Zeta Themes",
+      ]);
+    });
+  });
 });
