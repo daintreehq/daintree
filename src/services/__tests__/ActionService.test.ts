@@ -1467,6 +1467,10 @@ describe("ActionService", () => {
       it("emits nothing for an attributed plugin dispatch that is refused or fails", async () => {
         const emit = vi.fn().mockResolvedValue(undefined);
         const restore = installEmit(emit);
+        // Emission starts hashing attributed args synchronously inside
+        // dispatch, so a refused dispatch that reached it shows here with no
+        // need to wait on digests that settle in no particular order.
+        const digest = vi.spyOn(globalThis.crypto.subtle, "digest");
         try {
           register("test.confirm", { danger: "confirm" });
           register("test.denied", { denyPluginDispatch: true });
@@ -1484,12 +1488,14 @@ describe("ActionService", () => {
             "RESTRICTED",
             "EXECUTION_ERROR",
           ]);
+          expect(digest).not.toHaveBeenCalled();
 
-          // A later success is the settle point: anything the failures emitted
-          // would have been hashed and sent before it.
+          // The same dispatch that succeeds does reach the hash.
           await service.dispatch("actions.list", { q: 1 }, options);
+          expect(digest).toHaveBeenCalledTimes(1);
           expect(await emitted(emit)).toMatchObject({ actionId: "actions.list" });
         } finally {
+          digest.mockRestore();
           restore();
         }
       });

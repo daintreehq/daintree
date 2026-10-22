@@ -49,6 +49,7 @@ import {
   buildSendToAgentRows,
   filterSendToAgentRows,
 } from "@/components/Plugin/sendToAgentRows";
+import { pluginViewHostId } from "@/components/Plugin/remotePluginView";
 import {
   STATE_COLORS,
   STATE_ICONS,
@@ -209,7 +210,9 @@ export function readActionState(actionId: string, args: unknown, revision = 0): 
 
 /**
  * Runs an action as `host.dispatch` would, never throwing. `owner` is the
- * plugin whose view rendered the control, so the dispatch is audited under it.
+ * plugin whose view rendered the control, so the dispatch is audited under it,
+ * unless the view belongs to another machine's plugin: this machine's audit
+ * log would hold that bare id with no host provenance.
  */
 export async function dispatchActionFromView(
   actionId: string,
@@ -219,7 +222,7 @@ export async function dispatchActionFromView(
   try {
     const result = await getPluginKitHost().dispatchAction(actionId as ActionId, args, {
       source: "plugin",
-      callerPluginId: owner ?? undefined,
+      callerPluginId: pluginViewHostId() === null ? (owner ?? undefined) : undefined,
     });
     if (result.ok) return { ok: true };
     return { ok: false, error: { code: result.error.code, message: result.error.message } };

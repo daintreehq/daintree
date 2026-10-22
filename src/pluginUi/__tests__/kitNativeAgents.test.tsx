@@ -389,6 +389,19 @@ describe("action menu entries", () => {
     });
   });
 
+  it("leaves a remote host's view unattributed, since its id has no provenance here", async () => {
+    addAction({ id: "worktree.refresh" });
+    window.__DAINTREE_HOST_ID__ = { id: "studio-01" };
+    try {
+      render(inView(createElement(kit.ActionButton, { actionId: "worktree.refresh" })));
+      fireEvent.click(screen.getByRole("button", { name: "Refresh worktrees" }));
+      await flush();
+      expect(dispatch).toHaveBeenCalledWith("worktree.refresh", undefined, { source: "plugin" });
+    } finally {
+      delete window.__DAINTREE_HOST_ID__;
+    }
+  });
+
   it("draws a refused row as the host draws its unavailable rows", async () => {
     addAction({
       id: "panel.close",
