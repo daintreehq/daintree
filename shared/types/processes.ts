@@ -23,6 +23,18 @@ export interface ProcessTreeSample {
   members: ProcessTreeMember[];
 }
 
+/**
+ * What a launched agent's process tree held at the last census, read by the
+ * host from every process in it (#13854):
+ * - `runtime-and-servers`: the launch shell, the agent alone under it, and no
+ *   shell under the agent.
+ * - `other`: something else — a shell under the agent, a second process under
+ *   the launch shell, or a root that isn't that shell and agent.
+ * - `unknown`: the census couldn't say, or this agent's tree shape hasn't been
+ *   checked.
+ */
+export type AgentProcessTreeKind = "runtime-and-servers" | "other" | "unknown";
+
 /** A live PTY as one pty-host shard reports it. */
 export interface HostProcessInventoryTerminal {
   id: string;
@@ -40,6 +52,8 @@ export interface HostProcessInventoryTerminal {
   rootPid: number | null;
   /** Null when the census has no entry for the root pid. */
   sample: ProcessTreeSample | null;
+  /** Set for a launched agent with a sampled root; absent from older hosts. */
+  agentTree?: AgentProcessTreeKind;
 }
 
 /**

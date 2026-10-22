@@ -28,15 +28,18 @@ import { getEndpointRegistry } from "../ipc/endpointRegistry.js";
 import { probeRepositorySleepSafety } from "../utils/gitSleepSafety.js";
 import { probeResourceConfig } from "../utils/resourceConfigProbe.js";
 import { withTimeout } from "../utils/withTimeout.js";
+import { observeExactAgentResumes } from "./pty/exactAgentResume.js";
 import {
   censusMemoryKb,
   evaluateGit,
   evaluateShellTerminals,
   evaluateWorkspace,
+  isAgentTerminal,
   isLiveTerminal,
   terminalsStillVetted,
   type IdleShellSkipReason,
   type ProcessInventoryRead,
+  type VettedTerminals,
 } from "./idleShellSleepGates.js";
 
 const DEFAULT_CONFIG: IdleBackgroundAutoCloseConfig = {
@@ -84,14 +87,16 @@ type ShellCloseResult =
  * terminals, putting them to sleep through the same teardown the manual
  * Sleep project runs (#13845).
  *
- * With `includeIdleShells` on it also sleeps projects whose only terminals are
- * plain shells with nothing running, on their own 1h–8h threshold, behind the
- * gates in `idleShellSleepGates` (#13849). One scheduler for both, so the two
- * classes can never race each other over the same project.
+ * With `includeIdleShells` on it also sleeps projects whose terminals are all
+ * plain shells with nothing running (#13849) or agents at rest that will
+ * resume their conversation (#13854), on their own 1h–8h threshold, behind the
+ * gates in `idleShellSleepGates`. One scheduler for both, so the two classes
+ * can never race each other over the same project.
  *
  * Memory pressure runs the same sweep early through
- * {@link sleepUnderMemoryPressure} (#13852): the idle-shell threshold shortens
- * to the resource profile's, and nothing else the project is held to changes.
+ * {@link sleepUnderMemoryPressure} (#13852): the idle-terminal threshold
+ * shortens to the resource profile's, and nothing else the project is held to
+ * changes.
  *
  * @pattern Factory/Accessor Methods (Pattern C)
  *
@@ -464,7 +469,7 @@ export class IdleBackgroundAutoCloseService {
 
   /**
    * The tier-2 memory ladder's sleep lever (#13852). Runs the regular sweep
-   * now, for idle shell projects only, with their threshold shortened to the
+   * now, for idle terminal projects only, with their threshold shortened to the
    * resource profile's `memoryPressureInactiveMs` — never past the user's own
    * — and every other gate as it is. Projects with no terminals hold no
    * processes to free and stay on their own schedule.
@@ -573,8 +578,8 @@ export class IdleBackgroundAutoCloseService {
       // unaffected because it never passes through the sweep.
       if (project.neverAutoSleep) continue;
 
-      // A project whose only terminals are idle shells has a separate opt-in,
-      // a separate threshold and a far longer list of things that hold it.
+      // A project with idle shells or resting agents has a separate opt-in, a
+      // separate threshold and a far longer list of things that hold it.
       const hasTerminals = allTerminals.some((t) => t.projectId === pid && isLiveTerminal(t));
       if (hasTerminals && shellThresholdMs) {
         if (this.hasLiveAssistantBackend(pid)) {
@@ -840,15 +845,17 @@ export class IdleBackgroundAutoCloseService {
   }
 
   /**
-   * Put a project whose terminals are all idle shells to sleep (#13849).
+   * Put a project whose terminals are all idle shells or resting agents to
+   * sleep (#13849, #13854).
    *
    * Every gate reads fresh here rather than trusting the sweep: workspace,
    * resource config and git first, then the terminal registry and the process
-   * census together, so the census the kill trusts is the last thing read
-   * before it. Sleep's own kill snapshot is then held to the exact terminals
-   * vetted here, still quiet, so a shell opened or typed into after this point
-   * stops it. Resource config and the repository are read from disk rather
-   * than from the host, whose view of both is a cache.
+   * census together, then each agent's transcript, so what the kill trusts is
+   * the last thing read before it. Sleep's own kill snapshot is then held to
+   * the exact terminals vetted here, still quiet and each agent still the same
+   * session at rest, so a shell opened or typed into after this point, or an
+   * agent that takes a turn, stops it. Resource config and the repository are
+   * read from disk rather than from the host, whose view of both is a cache.
    *
    * `thresholdMs` is the sweep's idle-shell threshold, the user's or the
    * shorter one memory pressure allows; every check here reads it.
@@ -896,6 +903,9 @@ export class IdleBackgroundAutoCloseService {
     // Every shell it had is gone since the sweep looked, so it is a project
     // with no terminals now, and those sleep on their own clock.
     if (vetted.value.size === 0) return { status: "ineligible" };
+    const resumeRefusal = await this.agentResumeRefusal(projectId, vetted.value);
+    if (resumeRefusal) return { status: "skipped", reason: resumeRefusal };
+    if (!this.readEligibleShellProject(projectId, thresholdMs)) return { status: "ineligible" };
     // Taken now: once the kill lands there is no tree left to read. The kill
     // is held to exactly these terminals, so this is what it frees.
     const estimatedMemoryKb = censusMemoryKb(census, projectId, vetted.value);
@@ -949,6 +959,34 @@ export class IdleBackgroundAutoCloseService {
       },
       terminalsKilled: outcome.terminalsKilled,
     };
+  }
+
+  /**
+   * Whether every vetted agent would come back to this exact conversation
+   * (#13848), asked last because it reads each transcript. Only a yes passes:
+   * an agent without an assigned id, a transcript store that isn't certain or a
+   * lookup that couldn't decide all hold the project, and the refusals are
+   * logged as observed.
+   */
+  private async agentResumeRefusal(
+    projectId: string,
+    vetted: VettedTerminals
+  ): Promise<IdleShellSkipReason | null> {
+    const agents = [...vetted.values()].filter(isAgentTerminal);
+    if (agents.length === 0) return null;
+    let observations: Awaited<ReturnType<typeof observeExactAgentResumes>>;
+    try {
+      observations = await observeExactAgentResumes(agents);
+    } catch (error) {
+      logError("idle-background-auto-close-resume-read-failed", error, { projectId });
+      return "agent-resume-unproven";
+    }
+    const refused = observations.flatMap(({ terminalId, verdict }) =>
+      verdict.resumesExactly ? [] : [{ terminalId, reason: verdict.reason }]
+    );
+    if (refused.length === 0 && observations.length === agents.length) return null;
+    logInfo("idle-background-auto-close-resume-unproven", { projectId, refused });
+    return "agent-resume-unproven";
   }
 
   /**

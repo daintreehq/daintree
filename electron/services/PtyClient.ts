@@ -174,6 +174,8 @@ interface TerminalInfoResponse {
   /** Last input that could have put text in the composer, ignoring xterm's own reports (#12491). */
   lastTypedInputAt?: number;
   lastOutputTime?: number;
+  /** A submission is queued or still being written; absent from older hosts. */
+  hasPendingSubmission?: boolean;
   spawnedAt: number;
   isTrashed?: boolean;
   trashExpiresAt?: number;

@@ -44,12 +44,14 @@ function makeCtx(
   opts: {
     trashed?: Record<string, number>;
     summaries?: Record<number, ReturnType<typeof summary>>;
+    processes?: Array<{ pid: number; ppid: number; comm: string; command: string }>;
     lastError?: Error | null;
     lastRefresh?: number;
   } = {}
 ) {
   const trashed = opts.trashed ?? {};
   const summaries = opts.summaries ?? {};
+  const processes = opts.processes ?? [];
   const getTreeResourceSummary = vi.fn((pid: number) => summaries[pid] ?? null);
   const ctx = {
     ptyManager: {
@@ -59,6 +61,8 @@ function makeCtx(
     },
     processTreeCache: {
       getTreeResourceSummary,
+      getProcess: (pid: number) => processes.find((p) => p.pid === pid),
+      getChildPids: (pid: number) => processes.filter((p) => p.ppid === pid).map((p) => p.pid),
       getLastError: () => opts.lastError ?? null,
       getLastRefreshTime: () => opts.lastRefresh ?? 1_000,
     },
@@ -110,6 +114,37 @@ describe("buildProcessInventory (#13175)", () => {
     expect(t1.trashExpiresAt).toBeUndefined();
     expect(asst.isAssistantTerminal).toBe(true);
     expect(asst.projectId).toBeNull();
+  });
+
+  it("classifies a launched agent's tree on the host and ships only the verdict (#13854)", () => {
+    const { ctx } = makeCtx(
+      [
+        {
+          id: "claude",
+          launchAgentId: "claude",
+          cwd: "/",
+          spawnedAt: 1,
+          ptyProcess: { pid: 200 },
+        },
+        { id: "shell", cwd: "/", spawnedAt: 1, ptyProcess: { pid: 300 } },
+        { id: "unsampled", launchAgentId: "claude", cwd: "/", spawnedAt: 1 },
+      ],
+      {
+        summaries: { 200: summary(200, 1024), 300: summary(300, 1024) },
+        processes: [
+          { pid: 200, ppid: 1, comm: "/bin/zsh", command: "/bin/zsh -lic claude" },
+          { pid: 201, ppid: 200, comm: "claude", command: "/home/me/.local/bin/claude --x" },
+          { pid: 202, ppid: 201, comm: "/bin/zsh", command: "/bin/zsh -c secret-token=abc" },
+        ],
+      }
+    );
+
+    const [claude, shell, unsampled] = buildProcessInventory(ctx, []).terminals;
+
+    expect(claude.agentTree).toBe("other");
+    expect(JSON.stringify(claude)).not.toContain("secret-token");
+    expect(shell.agentTree).toBeUndefined();
+    expect(unsampled.agentTree).toBeUndefined();
   });
 
   it("names tree members by executable, never by path", () => {

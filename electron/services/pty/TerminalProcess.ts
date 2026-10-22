@@ -1409,6 +1409,10 @@ export class TerminalProcess {
     return this.writeQueue.getSubmission(token);
   }
 
+  hasPendingSubmission(): boolean {
+    return this.writeQueue.hasPendingSubmission();
+  }
+
   /**
    * Stage `text` into the terminal's input WITHOUT submitting it — the no-Enter
    * counterpart to {@link submit}. Reuses the same bracketed-paste / soft-newline

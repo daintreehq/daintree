@@ -69,6 +69,7 @@ export function mapTerminalInfo(
     lastInputTime: t.lastInputTime,
     lastTypedInputAt: t.lastTypedInputAt,
     lastOutputTime: t.lastOutputTime,
+    hasPendingSubmission: ctx.ptyManager.hasPendingSubmission(t.id),
     spawnedAt: t.spawnedAt,
     isTrashed: ctx.ptyManager.isInTrash(t.id),
     trashExpiresAt: t.trashExpiresAt,

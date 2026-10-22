@@ -758,6 +758,11 @@ export class PtyManager extends EventEmitter {
     return this.registry.get(id)?.getSubmission(submissionToken);
   }
 
+  /** Undefined when the registry holds no such terminal. */
+  hasPendingSubmission(id: string): boolean | undefined {
+    return this.registry.get(id)?.hasPendingSubmission();
+  }
+
   /**
    * Stage text into a terminal's input without submitting it (no Enter). The
    * no-execute counterpart to {@link submit}; see {@link TerminalProcess.stage}.

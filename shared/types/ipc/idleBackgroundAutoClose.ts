@@ -14,8 +14,9 @@ export interface IdleBackgroundAutoCloseConfig {
   /** Minutes a background project with no terminals must be idle before it sleeps (minimum 15) */
   thresholdMinutes: number;
   /**
-   * Whether projects whose only terminals are plain shells with nothing running
-   * are slept too (default off). Projects with agents are never included.
+   * Whether projects with terminals are slept too (default off): every one a
+   * plain shell with nothing running, or an agent at its prompt with nothing
+   * running beside it that will resume its conversation.
    */
   includeIdleShells: boolean;
   /** Minutes such a project must be off screen and quiet before it sleeps */

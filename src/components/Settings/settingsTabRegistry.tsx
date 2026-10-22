@@ -498,10 +498,19 @@ export const SETTINGS_REGISTRY = [
         subtab: "background",
         subtabLabel: "Background",
         section: "Background projects",
-        title: "Include projects with idle shells",
+        title: "Include projects with idle terminals",
         description:
-          "Also sleep projects whose terminals are plain shells with nothing running in them",
-        keywords: ["idle", "shell", "terminal", "sleep", "memory", "background", "project"],
+          "Also sleep projects whose shells have nothing running and whose agents sit at their prompt",
+        keywords: [
+          "idle",
+          "shell",
+          "agent",
+          "terminal",
+          "sleep",
+          "memory",
+          "background",
+          "project",
+        ],
       },
       {
         id: "general-idle-shell-threshold",

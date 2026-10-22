@@ -8,6 +8,7 @@ function createCtx(overrides: Partial<HostContext> = {}): HostContext {
     isInTrash: vi.fn(() => false),
     getActivityTier: vi.fn(() => "active" as const),
     getSubmission: vi.fn(() => undefined),
+    hasPendingSubmission: vi.fn(() => false),
   } as unknown as HostContext["ptyManager"];
 
   return {
@@ -104,6 +105,7 @@ describe("mapTerminalInfo", () => {
       ptyManager: {
         isInTrash,
         getActivityTier: vi.fn(() => "active" as const),
+        hasPendingSubmission: vi.fn(() => false),
       } as unknown as HostContext["ptyManager"],
     });
 
@@ -122,6 +124,7 @@ describe("mapTerminalInfo", () => {
       ptyManager: {
         isInTrash: vi.fn(() => false),
         getActivityTier: vi.fn(() => "active" as const),
+        hasPendingSubmission: vi.fn(() => false),
       } as unknown as HostContext["ptyManager"],
     });
 
@@ -182,6 +185,21 @@ describe("mapTerminalInfo", () => {
       mapTerminalInfo(makeTerminal({ lastOutputChangeAt: 4242 }), ctx).lastOutputChangeAt
     ).toBe(4242);
     expect(mapTerminalInfo(makeTerminal(), ctx).lastOutputChangeAt).toBeUndefined();
+  });
+
+  it("reports whether a submission is still queued, keeping an explicit false (#13854)", () => {
+    // Auto-sleep holds an agent awake on anything but an explicit false, so a
+    // dropped field must read as unknown rather than as an empty queue.
+    const hasPendingSubmission = vi.fn((id: string) => id === "busy");
+    const ctx = createCtx({
+      ptyManager: {
+        isInTrash: vi.fn(() => false),
+        getActivityTier: vi.fn(() => "active" as const),
+        hasPendingSubmission,
+      } as unknown as HostContext["ptyManager"],
+    });
+    expect(mapTerminalInfo(makeTerminal({ id: "busy" }), ctx).hasPendingSubmission).toBe(true);
+    expect(mapTerminalInfo(makeTerminal({ id: "idle" }), ctx).hasPendingSubmission).toBe(false);
   });
 
   it("emits exactly the field set the host response type declares", () => {
@@ -260,6 +278,7 @@ describe("mapTerminalInfo submission projection (#12337)", () => {
         isInTrash: vi.fn(() => false),
         getActivityTier: vi.fn(() => "active" as const),
         getSubmission,
+        hasPendingSubmission: vi.fn(() => false),
       } as unknown as HostContext["ptyManager"],
     });
   }
