@@ -124,6 +124,7 @@ describe("how the prompt says a source claim was established", () => {
       sourceMap: {
         mapUrl: "http://user:pass@localhost:3000/assets/app.js.map?token=secret#frag",
         mapRevision: MAP_REVISION,
+        sourceCheck: "unchecked",
       },
     });
 
@@ -143,7 +144,7 @@ describe("how the prompt says a source claim was established", () => {
       claim: "element-creation",
       target: SAVE_BUTTON,
       fileRevision: null,
-      sourceMap: { mapUrl: null, mapRevision: MAP_REVISION },
+      sourceMap: { mapUrl: null, mapRevision: MAP_REVISION, sourceCheck: "unchecked" },
     });
 
     expect(sourceLines(prompt)[0]).toContain("mapped through an inline source map");
@@ -156,7 +157,11 @@ describe("how the prompt says a source claim was established", () => {
       claim: "element-creation",
       target: SAVE_BUTTON,
       fileRevision: REVISION,
-      sourceMap: { mapUrl: "http://localhost:3000/assets/app.js.map", mapRevision: MAP_REVISION },
+      sourceMap: {
+        mapUrl: "http://localhost:3000/assets/app.js.map",
+        mapRevision: MAP_REVISION,
+        sourceCheck: "matches",
+      },
     });
 
     expect(sourceLines(prompt)[0]).toContain(
@@ -615,7 +620,11 @@ describe("page-made values in a source claim", () => {
               claim: "element-creation",
               target: SAVE_BUTTON,
               fileRevision: null,
-              sourceMap: { mapUrl: `http://localhost/${hostile}`, mapRevision: MAP_REVISION },
+              sourceMap: {
+                mapUrl: `http://localhost/${hostile}`,
+                mapRevision: MAP_REVISION,
+                sourceCheck: "unchecked",
+              },
             },
           ],
         },
