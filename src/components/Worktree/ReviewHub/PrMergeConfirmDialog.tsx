@@ -135,13 +135,23 @@ export function PrMergeConfirmDialog({
       mode === "arm"
         ? await actionService.dispatch(
             "forge.enableAutoMerge",
-            { ...target, ...(method ? { mergeMethod: method } : {}), expectedHeadSha: headSha! },
+            {
+              ...target,
+              ...(method ? { mergeMethod: method } : {}),
+              expectedHeadSha: headSha!,
+              expectedBaseRef: pr.baseRef,
+            },
             { source: "user" }
           )
         : mode === "merge"
           ? await actionService.dispatch(
               "forge.mergePR",
-              { ...target, ...(method ? { mergeMethod: method } : {}), expectedHeadSha: headSha! },
+              {
+                ...target,
+                ...(method ? { mergeMethod: method } : {}),
+                expectedHeadSha: headSha!,
+                expectedBaseRef: pr.baseRef,
+              },
               { source: "user" }
             )
           : await actionService.dispatch("forge.disableAutoMerge", target, { source: "user" });

@@ -1176,6 +1176,7 @@ export const GET_PR_MERGE_STATE_QUERY = `
       pullRequest(number: $number) {
         id
         headRefOid
+        baseRefName
         mergeStateStatus
         isInMergeQueue
         isMergeQueueEnabled

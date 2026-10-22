@@ -396,6 +396,29 @@ describe("mergePR head pin and merge queues (#13747)", () => {
     });
   });
 
+  it("re-reads the base before merging and refuses a retargeted PR", async () => {
+    const fetchMock = mockFetch({ ok: true, status: 200, body: { sha: "m", merged: true } });
+    mockGraphQLClient.mockResolvedValueOnce({
+      repository: { pullRequest: { id: "PR_42", baseRefName: "main" } },
+    });
+    await expect(
+      githubForgeProvider.mergePR(repo, 42, { expectedHeadSha: HEAD, expectedBaseRef: "develop" })
+    ).rejects.toThrow(/no longer targets develop/);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("merges when the previewed base still holds", async () => {
+    const fetchMock = mockFetch({ ok: true, status: 200, body: { sha: "m", merged: true } });
+    mockGraphQLClient.mockResolvedValueOnce({
+      repository: { pullRequest: { id: "PR_42", baseRefName: "develop" } },
+    });
+    await githubForgeProvider.mergePR(repo, 42, {
+      expectedHeadSha: HEAD,
+      expectedBaseRef: "develop",
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("names the merge queue when a 405 comes from a queue-required branch", async () => {
     mockFetch({ ok: false, status: 405, text: "Not allowed" });
     mockGraphQLClient.mockResolvedValueOnce({
@@ -423,6 +446,7 @@ describe("autoMerge capability (#13747)", () => {
         pullRequest: {
           id: "PR_42",
           headRefOid: HEAD,
+          baseRefName: "develop",
           mergeStateStatus: "BLOCKED",
           isInMergeQueue: false,
           isMergeQueueEnabled: false,
@@ -520,6 +544,14 @@ describe("autoMerge capability (#13747)", () => {
     await expect(autoMerge.enable(repo, 42, { expectedHeadSha: HEAD })).rejects.toThrow(
       /new commits/i
     );
+    expect(mockGraphQLClient).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses to arm a PR retargeted since the preview", async () => {
+    mockGraphQLClient.mockResolvedValueOnce(mergeState({ baseRefName: "main" }));
+    await expect(
+      autoMerge.enable(repo, 42, { expectedHeadSha: HEAD, expectedBaseRef: "develop" })
+    ).rejects.toThrow(/no longer targets develop/);
     expect(mockGraphQLClient).toHaveBeenCalledTimes(1);
   });
 

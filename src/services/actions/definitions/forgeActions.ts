@@ -324,6 +324,8 @@ const HeadShaSchema = z
   .string()
   .regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i, "Expected a full commit SHA");
 
+const BaseRefSchema = z.string().min(1).max(255);
+
 // Draft state a PR ended in after a draft-toggle action.
 const ForgePRDraftStateResultSchema = z.object({
   prNumber: z.number(),
@@ -1138,11 +1140,22 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
         expectedHeadSha: HeadShaSchema.optional().describe(
           "Head commit you reviewed; the forge refuses the merge if the PR has moved past it"
         ),
+        expectedBaseRef: BaseRefSchema.optional().describe(
+          "Base branch you reviewed; the merge is refused if the PR has been retargeted"
+        ),
       }),
       resultSchema: ForgeMergePRResultSchema,
       mcpOutputSchema: true,
       run: async (
-        { prNumber, mergeMethod, commitTitle, commitMessage, expectedHeadSha, ...location },
+        {
+          prNumber,
+          mergeMethod,
+          commitTitle,
+          commitMessage,
+          expectedHeadSha,
+          expectedBaseRef,
+          ...location
+        },
         ctx: ActionContext
       ) => {
         const resolvedCwd = requireWorktreePath(location, ctx);
@@ -1152,6 +1165,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
             commitTitle,
             commitMessage,
             ...(expectedHeadSha ? { expectedHeadSha } : {}),
+            ...(expectedBaseRef ? { expectedBaseRef } : {}),
           })
         );
       },
@@ -1181,14 +1195,21 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
           "Merge strategy (provider default when omitted; ignored on merge-queue branches)"
         ),
         expectedHeadSha: HeadShaSchema.describe("Head commit you reviewed"),
+        expectedBaseRef: BaseRefSchema.optional().describe(
+          "Base branch you reviewed; arming is refused if the PR has been retargeted"
+        ),
       }),
       resultSchema: ForgeEnableAutoMergeResultSchema,
-      run: async ({ prNumber, mergeMethod, expectedHeadSha, ...location }, ctx: ActionContext) => {
+      run: async (
+        { prNumber, mergeMethod, expectedHeadSha, expectedBaseRef, ...location },
+        ctx: ActionContext
+      ) => {
         const resolvedCwd = requireWorktreePath(location, ctx);
         return ForgeEnableAutoMergeResultSchema.parse(
           await forgeClient.enableAutoMerge(resolvedCwd, prNumber, {
             ...(mergeMethod ? { mergeMethod } : {}),
             expectedHeadSha,
+            ...(expectedBaseRef ? { expectedBaseRef } : {}),
           })
         );
       },

@@ -126,7 +126,13 @@ describe("PrMergeConfirmDialog", () => {
     await waitFor(() => expect(onClose).toHaveBeenCalled());
     expect(dispatchMock).toHaveBeenCalledWith(
       "forge.enableAutoMerge",
-      { worktreePath: "/tmp/wt", prNumber: 42, mergeMethod: "squash", expectedHeadSha: HEAD },
+      {
+        worktreePath: "/tmp/wt",
+        prNumber: 42,
+        mergeMethod: "squash",
+        expectedHeadSha: HEAD,
+        expectedBaseRef: "develop",
+      },
       { source: "user" }
     );
     expect(refreshMock).toHaveBeenCalled();
@@ -154,7 +160,13 @@ describe("PrMergeConfirmDialog", () => {
     await waitFor(() => expect(onClose).toHaveBeenCalled());
     expect(dispatchMock).toHaveBeenLastCalledWith(
       "forge.mergePR",
-      { worktreePath: "/tmp/wt", prNumber: 42, mergeMethod: "merge", expectedHeadSha: HEAD },
+      {
+        worktreePath: "/tmp/wt",
+        prNumber: 42,
+        mergeMethod: "merge",
+        expectedHeadSha: HEAD,
+        expectedBaseRef: "develop",
+      },
       { source: "user" }
     );
   });
@@ -182,6 +194,7 @@ describe("PrMergeConfirmDialog", () => {
       worktreePath: "/tmp/wt",
       prNumber: 42,
       expectedHeadSha: HEAD,
+      expectedBaseRef: "develop",
     });
   });
 

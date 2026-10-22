@@ -492,6 +492,11 @@ export interface MergePRInput {
    * the PR's head has moved since, rather than merging commits nobody saw.
    */
   expectedHeadSha?: string;
+  /**
+   * Base branch the caller previewed. When set, the provider re-reads the PR
+   * and refuses the merge if it has been retargeted since.
+   */
+  expectedBaseRef?: string;
 }
 
 /** Input for {@link AutoMergeCapability.enable}. */
@@ -503,6 +508,8 @@ export interface EnableAutoMergeInput {
    * head that moved between review and click.
    */
   expectedHeadSha: string;
+  /** Base branch the caller previewed; the provider refuses if the PR was retargeted. */
+  expectedBaseRef?: string;
 }
 
 /**
@@ -945,7 +952,11 @@ export type PRListProbeResult =
  */
 export interface BatchLookupCapability {
   getCIStatuses?(repo: RepoRef, prNumbers: number[]): Promise<Map<number, CIStatus | null>>;
-  findPRsByNumbers?(repo: RepoRef, prNumbers: number[]): Promise<Map<number, PR | null>>;
+  findPRsByNumbers?(
+    repo: RepoRef,
+    prNumbers: number[],
+    options?: FetchOptions
+  ): Promise<Map<number, PR | null>>;
   findIssuesByNumbers?(repo: RepoRef, issueNumbers: number[]): Promise<Map<number, Issue | null>>;
   /**
    * Optional cheap conditional probe of the repo's open-PR list. Given the

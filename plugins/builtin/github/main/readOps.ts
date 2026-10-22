@@ -776,13 +776,15 @@ export async function findPRByBranchImpl(repo: RepoRef, branchName: string): Pro
 
 export async function findPRsByNumbersImpl(
   repo: RepoRef,
-  prNumbers: number[]
+  prNumbers: number[],
+  options?: FetchOptions
 ): Promise<Map<number, PR | null>> {
   const unique = uniquePositiveIntegers(prNumbers);
   if (unique.length === 0) return new Map<number, PR | null>();
+  const fresh = options?.fresh === true;
 
   const inflightKey = buildNumberBatchInflightKey(repo, unique);
-  return dedupe(findPRsByNumbersInflight, inflightKey, false, async () => {
+  return dedupe(findPRsByNumbersInflight, inflightKey, fresh, async () => {
     const result = new Map<number, PR | null>();
 
     const block = gitHubRateLimitService.shouldBlockRequest("graphql");
@@ -796,7 +798,7 @@ export async function findPRsByNumbersImpl(
 
       let response: GraphQlQueryResponseData;
       try {
-        response = await runQuery(query, {}, "BATCH_PRS_QUERY");
+        response = await runQuery(query, {}, "BATCH_PRS_QUERY", fresh);
       } catch {
         // Omit this chunk so callers treat it as transient and keep stale data.
         continue;

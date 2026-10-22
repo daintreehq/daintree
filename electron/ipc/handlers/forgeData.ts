@@ -398,7 +398,7 @@ export function registerForgeDataHandlers(): () => void {
         const cwd = requireCwd(payload.cwd);
         const prNumber = requirePositiveInt(payload.prNumber, "PR number");
         const fresh = payload.fresh === true;
-        return coalesce(`${cwd}::getPR::${prNumber}${fresh ? "::fresh" : ""}`, async () => {
+        const read = async () => {
           const { impl, repoRef, namespaceId } = await resolveForCwd(cwd);
           return auditForgeCall(
             {
@@ -414,7 +414,10 @@ export function registerForgeDataHandlers(): () => void {
                 : impl.getPR(repoRef, prNumber),
             (value) => (value === null ? "not-found" : "success")
           );
-        });
+        };
+        // A fresh read joins nothing: an earlier caller's answer, even one
+        // still retained, may predate the write this caller is about to make.
+        return fresh ? read() : coalesce(`${cwd}::getPR::${prNumber}`, read);
       }
     )
   );

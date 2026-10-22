@@ -622,6 +622,12 @@ function assertHeadSha(sha: unknown): asserts sha is string {
   }
 }
 
+function assertBaseRef(ref: unknown): asserts ref is string | undefined {
+  if (ref !== undefined && (typeof ref !== "string" || !ref.trim() || ref.length > 255)) {
+    throw new Error("Invalid base branch");
+  }
+}
+
 function assertMergeMethod(
   method: unknown
 ): asserts method is "merge" | "squash" | "rebase" | undefined {
@@ -716,6 +722,7 @@ async function handleForgeMergePR(payload: {
   commitTitle?: string;
   commitMessage?: string;
   expectedHeadSha?: string;
+  expectedBaseRef?: string;
 }): Promise<MergePRResult> {
   checkRateLimit(CHANNELS.FORGE_MERGE_PR, 5, 10_000);
   if (!payload || typeof payload !== "object") throw new Error("Invalid payload");
@@ -723,6 +730,7 @@ async function handleForgeMergePR(payload: {
   assertPRNumber(payload.prNumber);
   assertMergeMethod(payload.mergeMethod);
   if (payload.expectedHeadSha !== undefined) assertHeadSha(payload.expectedHeadSha);
+  assertBaseRef(payload.expectedBaseRef);
   const { namespaceId, repoRef } = await resolveForCwd(payload.cwd);
   const impl = getImplForNamespace(namespaceId);
   return auditForgeCall(
@@ -741,6 +749,7 @@ async function handleForgeMergePR(payload: {
           ? { commitMessage: payload.commitMessage }
           : {}),
         ...(payload.expectedHeadSha ? { expectedHeadSha: payload.expectedHeadSha } : {}),
+        ...(payload.expectedBaseRef ? { expectedBaseRef: payload.expectedBaseRef } : {}),
       })
   );
 }
@@ -750,6 +759,7 @@ async function handleForgeEnableAutoMerge(payload: {
   prNumber: number;
   mergeMethod?: "merge" | "squash" | "rebase";
   expectedHeadSha: string;
+  expectedBaseRef?: string;
 }): Promise<EnableAutoMergeResult> {
   checkRateLimit(CHANNELS.FORGE_ENABLE_AUTO_MERGE, 5, 10_000);
   if (!payload || typeof payload !== "object") throw new Error("Invalid payload");
@@ -757,6 +767,7 @@ async function handleForgeEnableAutoMerge(payload: {
   assertPRNumber(payload.prNumber);
   assertMergeMethod(payload.mergeMethod);
   assertHeadSha(payload.expectedHeadSha);
+  assertBaseRef(payload.expectedBaseRef);
   const { namespaceId, repoRef } = await resolveForCwd(payload.cwd);
   const impl = getImplForNamespace(namespaceId);
   const autoMerge = impl.autoMerge;
@@ -775,6 +786,7 @@ async function handleForgeEnableAutoMerge(payload: {
       autoMerge.enable(repoRef, payload.prNumber, {
         ...(payload.mergeMethod ? { mergeMethod: payload.mergeMethod } : {}),
         expectedHeadSha: payload.expectedHeadSha,
+        ...(payload.expectedBaseRef ? { expectedBaseRef: payload.expectedBaseRef } : {}),
       })
   );
 }

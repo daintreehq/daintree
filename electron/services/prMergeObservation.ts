@@ -7,6 +7,20 @@ export interface MergeObservation {
   headMovedWhileArmed?: boolean;
 }
 
+/**
+ * Whether two reads describe the same arming episode: both pending, and not two
+ * auto-merges armed at different times. Armed → queued continues an episode.
+ * An unreported intent (`undefined`) matches anything.
+ */
+export function sameMergeEpisode(
+  a: PRMergeIntent | null | undefined,
+  b: PRMergeIntent | null | undefined
+): boolean {
+  if (a === undefined || b === undefined) return true;
+  if (a === null || b === null) return false;
+  return !(a.kind === "auto-merge" && b.kind === "auto-merge" && a.enabledAt !== b.enabledAt);
+}
+
 // Folds one forge read into the entry. An episode runs from arming until
 // nothing is pending; re-arming (a new `enabledAt`) starts a new one, and moving
 // from armed into the queue continues it. Observed this session only: a head
@@ -20,14 +34,7 @@ export function applyMergeObservation(
   const previous = prior?.mergeIntent;
   // A read that didn't carry the fields keeps what was known.
   const next = intent === undefined ? previous : intent;
-  const continues =
-    previous != null &&
-    next != null &&
-    !(
-      previous.kind === "auto-merge" &&
-      next.kind === "auto-merge" &&
-      previous.enabledAt !== next.enabledAt
-    );
+  const continues = previous != null && next != null && sameMergeEpisode(previous, next);
   const armedHeadSha = continues ? prior?.armedHeadSha : undefined;
   const moved = continues ? prior?.headMovedWhileArmed : undefined;
   pr.mergeIntent = next;

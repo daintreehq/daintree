@@ -283,6 +283,7 @@ export const forgeClient = {
       commitTitle?: string;
       commitMessage?: string;
       expectedHeadSha?: string;
+      expectedBaseRef?: string;
     }
   ): Promise<MergePRResult> => {
     return window.electron.forge.mergePR({ cwd, prNumber, ...input });
@@ -291,7 +292,11 @@ export const forgeClient = {
   enableAutoMerge: (
     cwd: string,
     prNumber: number,
-    input: { mergeMethod?: "merge" | "squash" | "rebase"; expectedHeadSha: string }
+    input: {
+      mergeMethod?: "merge" | "squash" | "rebase";
+      expectedHeadSha: string;
+      expectedBaseRef?: string;
+    }
   ): Promise<EnableAutoMergeResult> => {
     return window.electron.forge.enableAutoMerge({ cwd, prNumber, ...input });
   },

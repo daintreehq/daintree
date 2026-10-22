@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { PRMergeIntent } from "../../../shared/types/forge.js";
-import { applyMergeObservation, type MergeObservation } from "../prMergeObservation.js";
+import {
+  applyMergeObservation,
+  sameMergeEpisode,
+  type MergeObservation,
+} from "../prMergeObservation.js";
 
 const armed = (enabledAt: number): PRMergeIntent => ({
   kind: "auto-merge",
@@ -66,5 +70,15 @@ describe("applyMergeObservation", () => {
   it("keeps what was known when a read didn't carry the fields", () => {
     const first = observe(undefined, armed(1), H1);
     expect(observe(first, undefined, undefined)).toEqual(first);
+  });
+});
+
+describe("sameMergeEpisode", () => {
+  it("separates re-arms, continues into the queue, and lets an unreported read match", () => {
+    expect(sameMergeEpisode(armed(1), armed(1))).toBe(true);
+    expect(sameMergeEpisode(armed(1), armed(2))).toBe(false);
+    expect(sameMergeEpisode(armed(1), { kind: "queued", position: null })).toBe(true);
+    expect(sameMergeEpisode(armed(1), null)).toBe(false);
+    expect(sameMergeEpisode(undefined, armed(1))).toBe(true);
   });
 });

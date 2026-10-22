@@ -830,6 +830,7 @@ export interface GeneratedIpcInvokeMap {
         prNumber: number;
         mergeMethod?: "merge" | "squash" | "rebase" | undefined;
         expectedHeadSha: string;
+        expectedBaseRef?: string | undefined;
       },
     ];
     result: import("../forge.js").EnableAutoMergeResult;
@@ -909,6 +910,7 @@ export interface GeneratedIpcInvokeMap {
         commitTitle?: string | undefined;
         commitMessage?: string | undefined;
         expectedHeadSha?: string | undefined;
+        expectedBaseRef?: string | undefined;
       },
     ];
     result: import("../forge.js").MergePRResult;

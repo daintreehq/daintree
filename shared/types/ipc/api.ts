@@ -2069,6 +2069,8 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       commitMessage?: string;
       /** Head commit the caller reviewed; the forge refuses the merge if it moved. */
       expectedHeadSha?: string;
+      /** Base branch the caller previewed; refused if the PR was retargeted. */
+      expectedBaseRef?: string;
     }): Promise<MergePRResult>;
     /**
      * Ask the forge to merge a pull request once its requirements pass, pinned
@@ -2080,6 +2082,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       prNumber: number;
       mergeMethod?: "merge" | "squash" | "rebase";
       expectedHeadSha: string;
+      expectedBaseRef?: string;
     }): Promise<import("../forge.js").EnableAutoMergeResult>;
     /** Cancel a pull request's pending auto-merge, or take it out of the merge queue. */
     disableAutoMerge(payload: {

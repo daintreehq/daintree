@@ -461,6 +461,12 @@ export async function mergePRImpl(
   input?: MergePRInput
 ): Promise<MergePRResult> {
   const token = requireGitHubToken();
+  // REST `sha` pins the head; only a read before the write can pin the base.
+  if (input?.expectedBaseRef) {
+    assertPinned(prNumber, await fetchPRMergeState(repo, prNumber), {
+      expectedBaseRef: input.expectedBaseRef,
+    });
+  }
   const requestBody: Record<string, unknown> = {};
   if (input?.mergeMethod) requestBody.merge_method = input.mergeMethod;
   if (input?.commitTitle) requestBody.commit_title = input.commitTitle;
@@ -522,6 +528,7 @@ export async function mergePRImpl(
 interface PRMergeStateRead {
   id: string;
   headSha: string | null;
+  baseRef: string | null;
   mergeQueueRequired: boolean;
   inQueue: boolean;
   autoMergeArmed: boolean;
@@ -545,6 +552,7 @@ async function fetchPRMergeState(repo: RepoRef, prNumber: number): Promise<PRMer
   return {
     id: pr.id,
     headSha: typeof pr.headRefOid === "string" && pr.headRefOid ? pr.headRefOid : null,
+    baseRef: typeof pr.baseRefName === "string" && pr.baseRefName ? pr.baseRefName : null,
     mergeQueueRequired,
     inQueue: pr.isInMergeQueue === true,
     autoMergeArmed: pr.autoMergeRequest != null,
@@ -560,6 +568,26 @@ function headMovedError(prNumber: number): Error {
   return new Error(
     `Pull request #${prNumber} has new commits since you reviewed it — review the new head and try again.`
   );
+}
+
+function retargetedError(prNumber: number, expected: string): Error {
+  return new Error(
+    `Pull request #${prNumber} no longer targets ${expected} — review where it merges and try again.`
+  );
+}
+
+// The head pin can't see a retarget: the same commits can move to another base.
+function assertPinned(
+  prNumber: number,
+  state: PRMergeStateRead,
+  pins: { expectedHeadSha?: string; expectedBaseRef?: string }
+): void {
+  if (pins.expectedHeadSha && state.headSha && state.headSha !== pins.expectedHeadSha) {
+    throw headMovedError(prNumber);
+  }
+  if (pins.expectedBaseRef && state.baseRef && state.baseRef !== pins.expectedBaseRef) {
+    throw retargetedError(prNumber, pins.expectedBaseRef);
+  }
 }
 
 function alreadyMergeable(prNumber: number): EnableAutoMergeResult {
@@ -581,7 +609,7 @@ export async function enableAutoMergeImpl(
   input: EnableAutoMergeInput
 ): Promise<EnableAutoMergeResult> {
   const before = await fetchPRMergeState(repo, prNumber);
-  if (before.headSha && before.headSha !== input.expectedHeadSha) throw headMovedError(prNumber);
+  assertPinned(prNumber, before, input);
   if (before.immediatelyMergeable) return alreadyMergeable(prNumber);
 
   let response: unknown;
@@ -601,7 +629,7 @@ export async function enableAutoMergeImpl(
     // GraphQL rejections carry no stable code, so classify by what the PR
     // reports now: it may have turned clean, or moved, between read and write.
     const after = await fetchPRMergeState(repo, prNumber).catch(() => null);
-    if (after?.headSha && after.headSha !== input.expectedHeadSha) throw headMovedError(prNumber);
+    if (after) assertPinned(prNumber, after, input);
     if (after?.immediatelyMergeable) return alreadyMergeable(prNumber);
     throw error;
   }

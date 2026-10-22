@@ -3,7 +3,7 @@ import { logInfo, logWarn, logDebug } from "../utils/logger.js";
 import type { WorktreeSnapshot as WorktreeState } from "../../shared/types/workspace-host.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { mergeIntentEqual } from "../../shared/utils/prMergeIntent.js";
-import { applyMergeObservation } from "./prMergeObservation.js";
+import { applyMergeObservation, sameMergeEpisode } from "./prMergeObservation.js";
 import { createHardenedGit } from "../utils/hardenedGit.js";
 import { getForgeBridge } from "../workspace-host/forgeBridge.js";
 import { BatchLoader } from "../workspace-host/batchLoader.js";
@@ -887,7 +887,10 @@ class PullRequestService {
       const list = [...prNumbers];
       let batchMap: Map<number, ForgePR | null> | null = null;
       try {
-        batchMap = await bridge.findPRsByNumbers(providerId, repo, list);
+        // Fresh: this loader only re-reads PRs the REST probe just flagged, and
+        // the probe's markers advance on this answer — a cached one would hide
+        // the change (an auto-merge armed on github.com, say) until a refresh.
+        batchMap = await bridge.findPRsByNumbers(providerId, repo, list, { fresh: true });
       } catch {
         batchMap = null; // fall through to per-number lookups
       }
@@ -2400,12 +2403,20 @@ class PullRequestService {
         // Any entry for this PR carries the episode, not just this lookup's own
         // worktrees: a sibling resolved earlier may already have seen the head
         // move, and a worktree joining later must not reset that to a clean
-        // baseline. The strongest observation wins.
+        // baseline. The URL names the repository, so a remote switched to
+        // another repo's #42 inherits nothing. An entry on the episode this
+        // read reports beats one on an older episode, then a seen move wins.
         let samePRPrior: InternalLinkedPR | undefined;
+        let bestRank = -1;
         for (const prior of this.detectedPRs.values()) {
           if (prior.number !== internalPR.number || prior.providerId !== providerId) continue;
-          if (!samePRPrior || (prior.headMovedWhileArmed && !samePRPrior.headMovedWhileArmed)) {
+          if (prior.url !== internalPR.url) continue;
+          const rank =
+            (sameMergeEpisode(prior.mergeIntent, pr.mergeIntent) ? 2 : 0) +
+            (prior.headMovedWhileArmed ? 1 : 0);
+          if (rank > bestRank) {
             samePRPrior = prior;
+            bestRank = rank;
           }
         }
         applyMergeObservation(internalPR, samePRPrior, pr.mergeIntent, pr.headSha);
