@@ -27,6 +27,7 @@ import {
   syncWorktreeAttributionToHost,
 } from "./helpers";
 import { logError } from "@/utils/logger";
+import { releaseDriveLeaseHolds } from "@/store/driveLeaseWaitStore";
 import { transferBetweenWorktreeIndex } from "./worktreeIndex";
 import { getWorktreeSelectionSnapshot } from "@/store/storeAccessors";
 
@@ -334,6 +335,9 @@ export const createTrashActions = (
           terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE);
         }
       }
+      // A launch that waited for control in the trash starts once it is back,
+      // if control came meanwhile.
+      releaseDriveLeaseHolds();
     },
 
     restoreTrashedGroup: (groupRestoreId, targetWorktreeId) => {
@@ -466,6 +470,7 @@ export const createTrashActions = (
           }
         }
       }
+      releaseDriveLeaseHolds();
     },
 
     markAsTrashed: (id, expiresAt, originalLocation) => {

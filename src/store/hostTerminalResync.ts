@@ -1,6 +1,7 @@
 import { isPtyPanel, type PanelKind } from "@shared/types/panel";
 import type { BackendTerminalInfo, TerminalReconnectResult } from "@shared/types/ipc/terminal";
 import { getWorktreePathIndex, getWorktreeSelectionSnapshot } from "@/store/storeAccessors";
+import { cancelDriveLeaseHold, isHeldForDriveLease } from "@/store/driveLeaseWaitStore";
 import { logWarn } from "@/utils/logger";
 
 export interface HostTerminalResyncOptions {
@@ -75,6 +76,8 @@ export async function resyncHostTerminals(
       info.waitingReason
     );
   }
+
+  adoptAwaitedTerminals(infos, usePanelStore, terminalInstanceService);
 
   if (options.follow) {
     await followHostTerminals(infos, exitedBefore, usePanelStore);
@@ -164,6 +167,8 @@ async function observeVanishedTerminals(
       (!options.follow || followsHostLayout(panel)) &&
       !panel.isRestarting &&
       !panel.spawnError &&
+      // Waiting for control, it has started nothing the host could have lost.
+      !isHeldForDriveLease(id) &&
       // Held for restore recovery: it has no PTY on purpose, and is waiting on the user.
       panel.restoreRecovery === undefined &&
       panel.exitCode === undefined &&
@@ -198,6 +203,8 @@ async function observeVanishedTerminals(
     if (!answer || answer.conflict) continue;
     const panel = state.panelsById[id];
     if (!panel || !isPtyPanel(panel) || panel.isRestarting) continue;
+    // Refused while the probe was out, it now waits for control instead.
+    if (isHeldForDriveLease(id)) continue;
     if ((panel.restartKey ?? 0) !== probed.get(id)) continue;
     // A real exit reported while the probe was out already says it all, code included.
     if (panel.exitCode !== undefined || panel.runtimeStatus === "exited") continue;
@@ -223,6 +230,38 @@ async function observeVanishedTerminals(
 }
 
 type PanelStore = typeof import("@/store/panelStore").usePanelStore;
+
+/**
+ * A pane waiting for control whose terminal the host runs after all (the
+ * driver started that id itself): it attaches to it, and the launch it was
+ * holding never runs, so the id isn't spawned twice. One whose launch is
+ * already on its way checks the host for itself before it spawns.
+ */
+function adoptAwaitedTerminals(
+  infos: BackendTerminalInfo[],
+  store: PanelStore,
+  instances: Pick<
+    typeof import("@/services/TerminalInstanceService").terminalInstanceService,
+    "fetchAndRestore"
+  >
+): void {
+  for (const info of infos) {
+    if (info.hasPty === false || info.isTrashed) continue;
+    const panel = store.getState().panelsById[info.id];
+    if (!panel || !isPtyPanel(panel) || panel.spawnStatus !== "spawning") continue;
+    if (!cancelDriveLeaseHold(info.id)) continue;
+    store.setState((current) => {
+      const target = current.panelsById[info.id];
+      if (!target || !isPtyPanel(target) || target.spawnStatus !== "spawning") return current;
+      return {
+        panelsById: { ...current.panelsById, [info.id]: { ...target, spawnStatus: "ready" } },
+      };
+    });
+    instances.fetchAndRestore(info.id).catch((error: unknown) => {
+      logWarn("[HostResync] Couldn't restore an adopted terminal's output", { error });
+    });
+  }
+}
 
 function showsExited(state: PanelState, id: string): boolean {
   const panel = state.panelsById[id];

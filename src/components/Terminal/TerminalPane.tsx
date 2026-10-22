@@ -44,6 +44,7 @@ import {
 } from "@/services/terminal/agentEndRecovery";
 import { RestoreRecoveryGate } from "./RestoreRecoveryGate";
 import { MemoryPressureGate } from "./MemoryPressureGate";
+import { DriveLeaseGate } from "./DriveLeaseGate";
 import { InlineStatusBanner } from "./InlineStatusBanner";
 import { PluginKindSetupStrip } from "@/components/Plugin/PluginSetupStrip";
 import { useForceResumeCycleWatchdog } from "@/hooks/terminal/useForceResumeCycleWatchdog";
@@ -72,6 +73,7 @@ import {
   panelHoldKey,
   useMemoryPressureWaitStore,
 } from "@/store/memoryPressureWaitStore";
+import { useDriveLeaseWaitStore } from "@/store/driveLeaseWaitStore";
 import type { AgentCliDetail } from "@shared/types/ipc";
 import {
   useErrorStore,
@@ -576,9 +578,10 @@ function TerminalPaneComponent({
   const isHeldForMemoryPressure = useMemoryPressureWaitStore(
     (state) => state.heldPanelIds[id] === true
   );
-  // Either hold replaces the terminal with a gate of its own, so focus, find
-  // and the composer all treat the two alike.
-  const isHeldPane = isHeldForRecovery || isHeldForMemoryPressure;
+  const isWaitingForControl = useDriveLeaseWaitStore((state) => state.heldPanelIds[id] === true);
+  // Each hold replaces the terminal with a gate of its own, so focus, find
+  // and the composer all treat them alike.
+  const isHeldPane = isHeldForRecovery || isHeldForMemoryPressure || isWaitingForControl;
   // Keyboard navigation into a held pane lands on its recovery surface, which
   // has no terminal or input bar to take focus (#12434).
   const recoveryGateRef = useRef<HTMLDivElement>(null);
@@ -1694,6 +1697,8 @@ function TerminalPaneComponent({
               onLaunchAnyway={() => launchDespiteMemoryPressure(panelHoldKey(id))}
               onCancel={() => onClose(true)}
             />
+          ) : isWaitingForControl ? (
+            <DriveLeaseGate agentId={agentId} containerRef={recoveryGateRef} />
           ) : spawnStatus === "spawning" && !eagerAttach ? (
             <TerminalStartupPlaceholder agentId={agentId} onCancel={() => onClose()} />
           ) : spawnStatus === "failed" ? (

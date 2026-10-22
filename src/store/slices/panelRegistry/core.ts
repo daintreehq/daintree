@@ -31,6 +31,7 @@ import { getWorktreeSelectionSnapshot } from "@/store/storeAccessors";
 import { countPanelsTowardLimit } from "./panelCount";
 import { usePanelLimitStore } from "@/store/panelLimitStore";
 import { notify } from "@/lib/notify";
+import { cancelDriveLeaseHold, clearPanelDriveLeaseMark } from "@/store/driveLeaseWaitStore";
 
 type Set = PanelRegistryStoreApi["setState"];
 type Get = PanelRegistryStoreApi["getState"];
@@ -154,6 +155,9 @@ export const createCorePanelActions = (
     // Only call PTY operations for PTY-backed terminals
     if (terminal && panelKindHasPty(terminal.kind ?? "terminal")) {
       recordLedgerClose(id, "removed");
+      // A launch still waiting for control goes with its pane.
+      cancelDriveLeaseHold(id);
+      clearPanelDriveLeaseMark(id);
       // Bookmark and close already closed the backend via prepareBookmark; a
       // second kill here is redundant and could hit a same-id successor.
       if (!options?.backendAlreadyClosed) {
