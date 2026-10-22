@@ -793,6 +793,8 @@ export function createPicker(host: PickerHost): PickerHandle {
     if (live.length === selection.length) return;
     selection = live;
     if (live.length === 0) scope = ELEMENT_SCOPE;
+    // What is left of a component is no longer every root it rendered.
+    else if (scope.kind === "component") scope = { ...scope, rootsComplete: false };
     if (!emitSelection("document").sent) {
       selection = [];
       scope = ELEMENT_SCOPE;

@@ -723,6 +723,35 @@ describe("the bridge's element exchanges", () => {
     expect(ofType("selectionChanged").at(-1)?.scope).toEqual({ kind: "element" });
   });
 
+  it("stops calling a widened component's roots complete once the document drops one", () => {
+    const first = document.getElementById("first")!;
+    const second = document.getElementById("second")!;
+    installReact({
+      extract: () => ({
+        componentChain: { nearestId: "c1", components: [record], truncated: false },
+      }),
+      locate: () => ({ elements: [first, second], data: { complete: true } }),
+    });
+    start();
+    first.click();
+    press("ArrowUp", { altKey: true });
+    expect(
+      ofType("selectionChanged").at(-1)?.observations[0]?.componentChain.components[0]
+    ).toMatchObject({ rootsComplete: true });
+
+    second.remove();
+    runFrames();
+
+    const latest = ofType("selectionChanged").at(-1)!;
+    expect(latest.cause).toBe("document");
+    expect(latest.scope).toEqual({ kind: "component", componentId: "c1" });
+    expect(latest.observations).toHaveLength(1);
+    expect(latest.observations[0]?.componentChain.components[0]).toMatchObject({
+      rootElementIds: [latest.observations[0]?.elementId],
+      rootsComplete: false,
+    });
+  });
+
   it("keeps the old selection when the new one cannot fit one envelope", () => {
     const first = document.getElementById("first")!;
     const second = document.getElementById("second")!;

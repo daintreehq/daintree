@@ -434,7 +434,10 @@ export function createSvelteExtractor(): ElementPickerExtractor {
     // Out of ancestors before the invocation's edge: its siblings there are
     // its interior, not its roots, and nothing is better than them.
     if (!edge) return { roots: [], complete: false };
-    const container = parentOf(root);
+    // Where the root sits, not the walk's way out: a root directly inside a
+    // shadow root has its siblings there, not among its host's light children.
+    const container =
+      root.parentElement ?? (root.parentNode instanceof ShadowRoot ? root.parentNode : null);
     if (container === null) return { roots: [root], complete: true };
     const roots: Element[] = [];
     for (const child of Array.from(container.children)) {

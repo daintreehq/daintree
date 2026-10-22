@@ -274,6 +274,25 @@ describe("reselect", () => {
     expect(lastSelection(events).map((observation) => observation.tagName)).toEqual(["h2", "p"]);
   });
 
+  it("finds an invocation's roots beside each other in the shadow root that holds them", () => {
+    document.body.innerHTML = '<main id="main"><div id="host"><i id="light">L</i></div></main>';
+    const card = { ...page, line: 6, column: 6, componentTag: "Card", parent: page };
+    const host = document.getElementById("host")!;
+    setMeta(document.getElementById("main")!, loc(1), page);
+    setMeta(host, loc(2), page);
+    const shadow = host.attachShadow({ mode: "open" });
+    const title = shadow.appendChild(document.createElement("h2"));
+    const body = shadow.appendChild(document.createElement("p"));
+    setMeta(title, loc(2, 0, "src/lib/Card.svelte"), card);
+    setMeta(body, loc(3, 0, "src/lib/Card.svelte"), card);
+    const { events } = start();
+    click(title);
+
+    key({ key: "ArrowUp", altKey: true });
+
+    expect(lastSelection(events).map((observation) => observation.tagName)).toEqual(["h2", "p"]);
+  });
+
   it("names no roots for an invocation deeper than it can climb out of", () => {
     const card = { ...page, line: 6, column: 6, componentTag: "Card", parent: page };
     const main = document.createElement("main");
