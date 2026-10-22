@@ -1170,6 +1170,17 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["project-presence:get-snapshot"]["args"]
     ): Promise<IpcInvokeMap["project-presence:get-snapshot"]["result"]>;
   };
+  projectPresentation: {
+    answerSuggestion(
+      ...args: IpcInvokeMap["project-presentation:answer-suggestion"]["args"]
+    ): Promise<IpcInvokeMap["project-presentation:answer-suggestion"]["result"]>;
+    get(
+      ...args: IpcInvokeMap["project-presentation:get"]["args"]
+    ): Promise<IpcInvokeMap["project-presentation:get"]["result"]>;
+    setLevel(
+      ...args: IpcInvokeMap["project-presentation:set-level"]["args"]
+    ): Promise<IpcInvokeMap["project-presentation:set-level"]["result"]>;
+  };
   projectRelocation: {
     apply(
       ...args: IpcInvokeMap["project-relocation:apply"]["args"]

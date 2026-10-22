@@ -2023,6 +2023,18 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("./projectPresence.js").ProjectPresenceSnapshot;
   };
+  "project-presentation:answer-suggestion": {
+    args: [hash: string, answer: import("./projectPresentation.js").PresentationSuggestionAnswer];
+    result: import("./projectPresentation.js").ProjectPresentationSnapshot;
+  };
+  "project-presentation:get": {
+    args: [];
+    result: import("./projectPresentation.js").ProjectPresentationSnapshot | null;
+  };
+  "project-presentation:set-level": {
+    args: [feature: "forgeStats", level: "hidden" | "shown" | "demoted" | null];
+    result: import("./projectPresentation.js").ProjectPresentationSnapshot;
+  };
   "project-relocation:apply": {
     args: [request: import("../projectRelocation.js").RelocationRequest];
     result: import("../project.js").Project;

@@ -101,7 +101,8 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
-import { useToolbarOverflow } from "@/hooks/useToolbarOverflow";
+import { useToolbarOverflow, withDemotedOverflow } from "@/hooks/useToolbarOverflow";
+import { useResolvedPresentation } from "@/hooks/useResolvedPresentation";
 import { useWorktreeActions } from "@/hooks/useWorktreeActions";
 import {
   useAriaKeyshortcuts,
@@ -196,6 +197,11 @@ const PROJECT_SCOPED_TOOLBAR_IDS = new Set<AnyToolbarButtonId>(["dev-server", "f
 // should be added here.
 const VOICE_RECORDING_PINNED: ReadonlySet<AnyToolbarButtonId> = new Set(["voice-recording"]);
 const NO_PINNED_IDS: ReadonlySet<AnyToolbarButtonId> = new Set();
+
+// Buttons this project's presentation profile demotes (#13771). Stable sets so
+// the overflow hook's recalculate callback doesn't re-fire on every render.
+const FORGE_STATS_DEMOTED: ReadonlySet<AnyToolbarButtonId> = new Set(["forge-stats"]);
+const NO_DEMOTED_IDS: ReadonlySet<AnyToolbarButtonId> = new Set();
 
 function ForgeStatsPlaceholder() {
   return (
@@ -433,16 +439,16 @@ function OverflowMenu({
             const isLast = idx === overflowIds.length - 1;
             // Without a resolved forge provider the visible slot is the
             // commits-only pill — mirror that here: a local-git group with
-            // just the commit count (issues/PRs are forge data). The commits
-            // dropdown view is provider-supplied, so the no-forge item shows
-            // the count without an open action.
+            // just the commits row (issues/PRs are forge data). It opens the
+            // pill's local commit history (#10414), the only route to it once
+            // a project's profile demotes the pill into this menu.
             if (!forgeProviderName) {
               return [
                 <DropdownMenuGroup key="forge-group">
                   <DropdownMenuLabel>Git</DropdownMenuLabel>
                   <DropdownMenuItem
                     key="forge-commits"
-                    disabled
+                    onClick={() => forgeStatsRef.current?.openCommits()}
                     aria-label={
                       repoStats?.commitCount != null
                         ? `Commits, ${formatCountExact(repoStats.commitCount)}`
@@ -740,6 +746,11 @@ export function Toolbar({
 }: ToolbarProps) {
   const currentProject = useProjectStore((state) => state.currentProject);
   const currentScratch = useScratchStore((state) => state.currentScratch);
+  // This project's presentation profile (#13771). Demoted folds the pill into
+  // the `…` menu; hidden drops its slot. A folder without a repository
+  // resolves to hidden at any level: it has nothing to count.
+  const forgeStatsLevel = useResolvedPresentation().forgeStats;
+  const forgeStatsHidden = currentProject !== null && forgeStatsLevel === "hidden";
   const workspaceIdentity = activeWorkspaceIdentity(currentProject, currentScratch);
   const loadProjects = useProjectStore((state) => state.loadProjects);
   const getCurrentProject = useProjectStore((state) => state.getCurrentProject);
@@ -1498,11 +1509,12 @@ export function Toolbar({
         // local git data). Placeholder (not removal) when no project: the
         // slot's no-drag rectangle must exist on first paint regardless
         // (PROJECT_SCOPED_TOOLBAR_IDS).
-        // A workspace with no repository has no commits, issues or PRs to
-        // report, so it takes the placeholder too — which also keeps the
-        // button's stats polling from ever starting for it (#11405).
+        // A profile that hides the pill drops its slot from the row instead
+        // (see `isButtonShownOnToolbar`), so the button — and its stats
+        // polling — never mounts. A workspace with no repository always
+        // resolves to hidden, so polling never starts for it (#11405).
         render: () =>
-          currentProject && isGitBackedProject(currentProject) ? (
+          currentProject && forgeStatsLevel !== "hidden" ? (
             <ForgeStatsToolbarButton
               key="forge-stats"
               ref={forgeStatsRef}
@@ -1751,6 +1763,7 @@ export function Toolbar({
       copyTreeCombo,
       copyTreeAriaShortcut,
       currentProject,
+      forgeStatsLevel,
       handleCopyTreeOpenChange,
       handleCopyTreeFullContext,
       handleCopyTreeRunRecent,
@@ -1899,6 +1912,10 @@ export function Toolbar({
 
   const isButtonShownOnToolbar = useCallback(
     (id: AnyToolbarButtonId) =>
+      // A profile overlay, applied here at the render boundary and never
+      // written into the app-wide layout (#10938): the pin survives, so
+      // showing the pill again puts it back where it was.
+      !(forgeStatsHidden && id === "forge-stats") &&
       isToolbarButtonVisible(
         id,
         pinnedButtons,
@@ -1906,7 +1923,7 @@ export function Toolbar({
         agentAvailability,
         pluginConfigs.has(id)
       ),
-    [pinnedButtons, effectiveAgentSettings, agentAvailability, pluginConfigs]
+    [forgeStatsHidden, pinnedButtons, effectiveAgentSettings, agentAvailability, pluginConfigs]
   );
 
   // Filtering the grouped list yields the same sequence as grouping the filtered
@@ -1984,13 +2001,41 @@ export function Toolbar({
   // render.
   const pinnedIds = hasActiveVoiceRecording ? VOICE_RECORDING_PINNED : NO_PINNED_IDS;
 
-  const { leftVisible, leftOverflow, rightVisible, rightOverflow } = useToolbarOverflow(
+  // Demoted by this project's profile: kept out of the width budget, so the
+  // row sizes as if the button weren't there, and always in the `…` menu. It
+  // stays mounted like any evicted button — the menu's forge rows open the
+  // pill's dropdowns through its ref.
+  const demotedIds =
+    currentProject !== null && forgeStatsLevel === "demoted" ? FORGE_STATS_DEMOTED : NO_DEMOTED_IDS;
+  const measuredLeftIds = useMemo(
+    () => availableLeftIds.filter((id) => !demotedIds.has(id)),
+    [availableLeftIds, demotedIds]
+  );
+  const measuredRightIds = useMemo(
+    () => availableRightIds.filter((id) => !demotedIds.has(id)),
+    [availableRightIds, demotedIds]
+  );
+
+  const {
+    leftVisible,
+    leftOverflow: measuredLeftOverflow,
+    rightVisible,
+    rightOverflow: measuredRightOverflow,
+  } = useToolbarOverflow(
     leftGroupRef,
     rightGroupRef,
-    availableLeftIds,
-    availableRightIds,
+    measuredLeftIds,
+    measuredRightIds,
     pinnedIds,
     resolveToolbarGroup
+  );
+  const leftOverflow = useMemo(
+    () => withDemotedOverflow(availableLeftIds, measuredLeftOverflow, demotedIds),
+    [availableLeftIds, measuredLeftOverflow, demotedIds]
+  );
+  const rightOverflow = useMemo(
+    () => withDemotedOverflow(availableRightIds, measuredRightOverflow, demotedIds),
+    [availableRightIds, measuredRightOverflow, demotedIds]
   );
 
   // Voice recording reserves layout via an always-available slot but should

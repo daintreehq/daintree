@@ -5,6 +5,8 @@ import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useMacroFocusStore } from "@/store/macroFocusStore";
 import { useCanopyStore } from "@/store/canopyStore";
 import { usePluginContextKeyStore } from "@/store/pluginContextKeyStore";
+import { buildPresentationWhenContext } from "@shared/config/presentationProfile";
+import { getResolvedPresentation } from "@/hooks/useResolvedPresentation";
 
 /**
  * Live `when`-clause context for keybinding resolution — the documented
@@ -57,5 +59,8 @@ export function buildKeybindingWhenContext(event: KeyboardEvent): WhenClauseCont
     fleetWaiting,
     sidebarVisible: useMacroFocusStore.getState().visibility.sidebar,
     canopyHidden: useCanopyStore.getState().mode === "hidden",
+    // This project's presentation profile, one key per feature
+    // (`presentationForgeStats == 'hidden'`).
+    ...buildPresentationWhenContext(getResolvedPresentation()),
   };
 }

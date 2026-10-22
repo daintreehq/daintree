@@ -7,6 +7,8 @@ import {
   type PluginContextMenuItemEntry,
 } from "@/store/pluginContextMenuItemsStore";
 import { usePluginContextKeyStore } from "@/store/pluginContextKeyStore";
+import { buildPresentationWhenContext } from "@shared/config/presentationProfile";
+import { useResolvedPresentation } from "@/hooks/useResolvedPresentation";
 
 export type { PluginContextMenuItemEntry };
 
@@ -24,7 +26,8 @@ const EMPTY_CONTEXT: WhenClauseContext = {};
  * to `false` and is hidden — fail-closed. Parse errors are also fail-closed.
  * Because the context is consumer-specific, the `when`-clause evaluation stays
  * here rather than in the shared store. Keys plugins publish with
- * `host.setContext` are visible too, under their manifest name; the caller's
+ * `host.setContext` are visible too, under their manifest name, and so are the
+ * project's presentation profile keys (`presentationForgeStats`); the caller's
  * surface keys win any clash.
  */
 export function usePluginContextMenuItems(
@@ -35,6 +38,7 @@ export function usePluginContextMenuItems(
   const init = usePluginContextMenuItemsStore((s) => s.init);
   const pluginContext = usePluginContextKeyStore((s) => s.whenContext);
   const initPluginContext = usePluginContextKeyStore((s) => s.init);
+  const presentation = useResolvedPresentation();
 
   useEffect(() => {
     init();
@@ -42,7 +46,11 @@ export function usePluginContextMenuItems(
   }, [init, initPluginContext]);
 
   return useMemo(() => {
-    const context = { ...pluginContext, ...(ctx ?? EMPTY_CONTEXT) };
+    const context = {
+      ...pluginContext,
+      ...buildPresentationWhenContext(presentation),
+      ...(ctx ?? EMPTY_CONTEXT),
+    };
     return entries.filter((entry) => {
       if (entry.item.location !== location) return false;
       const whenExpr = entry.item.when;
@@ -53,5 +61,5 @@ export function usePluginContextMenuItems(
         return false;
       }
     });
-  }, [entries, location, ctx, pluginContext]);
+  }, [entries, location, ctx, pluginContext, presentation]);
 }

@@ -99,6 +99,7 @@ import { buildSettingsCopyPreloadBindings } from "./ipc/handlers/settingsCopy.pr
 import { buildTelemetryPreloadBindings } from "./ipc/handlers/telemetry.preload.js";
 import { buildConnectivityPreloadBindings } from "./ipc/handlers/connectivity.preload.js";
 import { buildProjectPresencePreloadBindings } from "./ipc/handlers/projectPresence.preload.js";
+import { buildProjectPresentationPreloadBindings } from "./ipc/handlers/projectPresentation.preload.js";
 import { buildDiffMediaPreloadBindings } from "./ipc/handlers/diffMedia.preload.js";
 import { buildFileBrowserPreloadBindings } from "./ipc/handlers/fileBrowser.preload.js";
 import { buildFileWatchPreloadBindings } from "./ipc/handlers/fileWatch.preload.js";
@@ -2455,6 +2456,14 @@ function buildElectronApi(): ElectronAPI {
       ...buildProjectPresencePreloadBindings(_unwrappingInvoke),
 
       onChanged: (callback: () => void) => _typedOn(CHANNELS.PROJECT_PRESENCE_CHANGED, callback),
+    },
+
+    // The sender project's presentation profile (#13771)
+    projectPresentation: {
+      ...buildProjectPresentationPreloadBindings(_unwrappingInvoke),
+
+      onChanged: (callback: (snapshot: IpcEventMap["project-presentation:changed"]) => void) =>
+        _typedOn(CHANNELS.PROJECT_PRESENTATION_CHANGED, callback),
     },
 
     // Dev Preview API

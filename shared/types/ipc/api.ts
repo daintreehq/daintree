@@ -1057,6 +1057,12 @@ export interface ElectronAPI extends GeneratedElectronAPI {
   projectPresence: GeneratedElectronAPI["projectPresence"] & {
     onChanged(callback: () => void): () => void;
   };
+  // get / setLevel / answerSuggestion come from GeneratedElectronAPI; onChanged is a renderer-only subscription.
+  projectPresentation: GeneratedElectronAPI["projectPresentation"] & {
+    onChanged(
+      callback: (snapshot: import("./projectPresentation.js").ProjectPresentationSnapshot) => void
+    ): () => void;
+  };
   // ensure / restart / stop / getState etc. come from GeneratedElectronAPI;
   // onStateChanged is a renderer-only subscription.
   devPreview: GeneratedElectronAPI["devPreview"] & {

@@ -9,6 +9,12 @@ import { useCanopyStore } from "@/store/canopyStore";
 import { usePluginContextKeyStore } from "@/store/pluginContextKeyStore";
 import { buildPluginWhenContext } from "@shared/utils/pluginContextKeys";
 import { evaluate, parse } from "@shared/utils/whenClause";
+import { useProjectStore } from "@/store/projectStore";
+import {
+  _resetProjectPresentationStoreForTest,
+  useProjectPresentationStore,
+} from "@/store/projectPresentationStore";
+import type { Project } from "@shared/types/project";
 
 function makeAgent(id: string, overrides: Partial<PtyPanelData> = {}): PtyPanelData {
   return {
@@ -37,8 +43,14 @@ afterEach(() => {
   useFleetArmingStore.setState({ armedIds: new Set<string>() });
   usePanelStore.setState({ panelsById: {} });
   usePluginContextKeyStore.setState({ keysByPlugin: {}, whenContext: {} });
+  useProjectStore.setState({ currentProject: null });
+  _resetProjectPresentationStoreForTest();
   document.body.innerHTML = "";
 });
+
+function repoProject(gitBacked: boolean): Project {
+  return { id: "a".repeat(64), name: "Repo", path: "/repo", emoji: "", lastOpened: 0, gitBacked };
+}
 
 function seedPluginKeys(keysByPlugin: Parameters<typeof buildPluginWhenContext>[0]): void {
   usePluginContextKeyStore.setState({
@@ -151,5 +163,33 @@ describe("buildKeybindingWhenContext", () => {
     expect(ctx("xterm-input").textInputFocused).toBe(false);
     expect(ctx("xterm-input").terminalFocused).toBe(true);
     expect(ctx("button").textInputFocused).toBe(false);
+  });
+
+  it("reports this project's presentation profile, one key per feature", () => {
+    const project = repoProject(true);
+    useProjectStore.setState({ currentProject: project });
+    const holds = (when: string) =>
+      evaluate(parse(when), buildKeybindingWhenContext(eventFrom(null)));
+
+    // Until main answers, the default: what the toolbar drew before profiles.
+    expect(holds("presentationForgeStats == 'shown'")).toBe(true);
+
+    useProjectPresentationStore.setState({
+      loaded: true,
+      projectId: project.id,
+      levels: { forgeStats: "demoted" },
+    });
+    expect(holds("presentationForgeStats == 'demoted'")).toBe(true);
+
+    // A profile main sent for some other project never applies here.
+    useProjectPresentationStore.setState({ projectId: "b".repeat(64) });
+    expect(holds("presentationForgeStats == 'shown'")).toBe(true);
+  });
+
+  it("hides forge stats by default in a folder without a repository", () => {
+    useProjectStore.setState({
+      currentProject: repoProject(false),
+    });
+    expect(buildKeybindingWhenContext(eventFrom(null)).presentationForgeStats).toBe("hidden");
   });
 });

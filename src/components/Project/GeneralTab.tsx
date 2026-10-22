@@ -30,6 +30,7 @@ import { workspaceResidencyClient } from "@/clients/workspaceResidencyClient";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { useProjectRelocationStore } from "@/store/projectRelocationStore";
 import { findDevServerCandidate } from "@/utils/devServerDetection";
+import { PresentationFeaturesSection } from "./PresentationFeaturesSection";
 
 const DAINTREE_MCP_TIER_OPTIONS: readonly ChoiceboxOption<DaintreeMcpTier>[] = [
   {
@@ -630,6 +631,8 @@ export function GeneralTab({
           </SettingsGroup>
         </SettingsSection>
       )}
+
+      {currentProject && <PresentationFeaturesSection isOpen={isOpen} />}
 
       <SettingsSection
         id="project-dev-server"

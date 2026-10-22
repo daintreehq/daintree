@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { computeOverflow, computeGuardedOverflow, dividerFootprint } from "../useToolbarOverflow";
+import {
+  computeOverflow,
+  computeGuardedOverflow,
+  dividerFootprint,
+  withDemotedOverflow,
+} from "../useToolbarOverflow";
 import type { OverflowResult } from "../useToolbarOverflow";
 import type {
   AnyToolbarButtonId,
@@ -657,5 +662,27 @@ describe("computeGuardedOverflow — restoring a wide item after a backfill", ()
       layout
     );
     expect(at140).toBe(held);
+  });
+});
+
+describe("withDemotedOverflow", () => {
+  const row: AnyToolbarButtonId[] = ["copy-tree", "forge-stats", "dev-server", "settings"];
+  const demoted = (...ids: AnyToolbarButtonId[]) => new Set<AnyToolbarButtonId>(ids);
+
+  it("leaves the measured overflow alone when nothing is demoted", () => {
+    const measured: AnyToolbarButtonId[] = ["settings"];
+    expect(withDemotedOverflow(row, measured, demoted())).toBe(measured);
+  });
+
+  it("adds demoted buttons in row order, beside what the width budget evicted", () => {
+    expect(withDemotedOverflow(row, ["settings"], demoted("forge-stats"))).toEqual([
+      "forge-stats",
+      "settings",
+    ]);
+    expect(withDemotedOverflow(row, [], demoted("forge-stats"))).toEqual(["forge-stats"]);
+  });
+
+  it("never adds a demoted id that is not on this side of the row", () => {
+    expect(withDemotedOverflow(["copy-tree"], [], demoted("forge-stats"))).toEqual([]);
   });
 });

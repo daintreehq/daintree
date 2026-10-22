@@ -1,4 +1,5 @@
 import { ProjectPluginTrustBanner } from "@/components/Plugin/ProjectPluginTrustBanner";
+import { ProjectPresentationNotice } from "@/components/Project/ProjectPresentationNotice";
 import { cn } from "@/lib/utils";
 import { GridNotificationBar } from "./GridNotificationBar";
 import { GridPanel } from "./GridPanel";
@@ -34,6 +35,7 @@ export function ContentGridMaximizedSingle({
     >
       <GridNotificationBar className="mx-1 mt-1 shrink-0" />
       <ProjectPluginTrustBanner />
+      <ProjectPresentationNotice />
       <div className="relative min-h-0 flex-1">
         {/* Being the only pane on screen is not the same as owning the keyboard:
             while a dock popover is open, focus belongs to the dock pane. Pinning

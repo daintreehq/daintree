@@ -121,6 +121,7 @@ import { registerPluginFocusedPanelHandlers } from "./handlers/pluginFocusedPane
 import { registerConnectivityHandlers } from "./handlers/connectivity.js";
 import { registerAgentDefaultsHandlers } from "./handlers/agentDefaults.js";
 import { registerProjectPresenceHandlers } from "./handlers/projectPresence.js";
+import { registerProjectPresentationHandlers } from "./handlers/projectPresentation.js";
 import { registerScratchHandlers } from "./handlers/scratch/index.js";
 import { events } from "../services/events.js";
 import {
@@ -275,6 +276,7 @@ export function registerIpcHandlers(deps: HandlerDependencies): () => void {
     register(() => registerConnectivityHandlers());
     register(() => registerAgentDefaultsHandlers());
     register(() => registerProjectPresenceHandlers(deps));
+    register(() => registerProjectPresentationHandlers());
     register(() => registerScratchHandlers(deps));
 
     // Remote Hosts: macOS and Linux only. Windows builds register none of it.

@@ -1,4 +1,5 @@
 import { ProjectPluginTrustBanner } from "@/components/Plugin/ProjectPluginTrustBanner";
+import { ProjectPresentationNotice } from "@/components/Project/ProjectPresentationNotice";
 import React, { useCallback, useRef, useState } from "react";
 import {
   SortableContext,
@@ -189,6 +190,7 @@ export function ContentGridDefault({
       >
         <GridNotificationBar className="mx-1 mt-1 shrink-0" />
         <ProjectPluginTrustBanner />
+        <ProjectPresentationNotice />
         <TerminalCountWarning className="mx-1 mt-1 shrink-0" />
         <BatchScrollbackRestoreBar className="mx-1 mt-1 shrink-0" />
         <div className="relative flex-1 min-h-0">
