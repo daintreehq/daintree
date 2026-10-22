@@ -45,8 +45,9 @@ const BUILT_IN_OPTION: SidebarViewOption = Object.freeze({
 /**
  * Every sidebar view on offer, highest priority first: the built-in worktree
  * list, always, plus each plugin sidebar view whose `when` holds. The worktree
- * list wins a tie, and plugin views that tie sort by id, so the order never
- * depends on which plugin happened to load first.
+ * list wins a tie, then a project plugin's view beats an installed plugin's,
+ * and views that still tie sort by id, so the order never depends on which
+ * plugin happened to load first.
  *
  * `hosted` is already narrowed by main to the plugins this project may see;
  * `null` (no snapshot yet) offers the worktree list alone.
@@ -75,14 +76,38 @@ export function resolveSidebarViewOptions(
     if (a.priority !== b.priority) return b.priority - a.priority;
     if (a.view === null) return -1;
     if (b.view === null) return 1;
+    const aProject = isProjectSidebarView(a.view);
+    if (aProject !== isProjectSidebarView(b.view)) return aProject ? -1 : 1;
     return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
   });
 }
 
-/** The view to show: the chosen one while it is on offer, otherwise the worktree list. */
+/** Whether a sidebar view comes from a project plugin rather than an installed one. */
+export function isProjectSidebarView(view: Pick<PluginHostedViewDescriptor, "pluginId">): boolean {
+  return projectIdFromPluginInstanceKey(view.pluginId) !== null;
+}
+
+/**
+ * The view a project opens on when the user hasn't picked: the highest-priority
+ * option, skipping installed plugins' views. Those are only offered in the
+ * switcher; the user accepts one by picking it.
+ */
+export function resolveDefaultSidebarView(
+  options: readonly SidebarViewOption[]
+): SidebarViewOption {
+  return (
+    options.find((option) => option.view === null || isProjectSidebarView(option.view)) ??
+    BUILT_IN_OPTION
+  );
+}
+
+/** The user's pick while it is on offer, otherwise the default. */
 export function resolveActiveSidebarView(
   options: readonly SidebarViewOption[],
-  chosen: string
+  chosen: string | null
 ): SidebarViewOption {
-  return options.find((option) => option.id === chosen) ?? BUILT_IN_OPTION;
+  return (
+    (chosen === null ? undefined : options.find((option) => option.id === chosen)) ??
+    resolveDefaultSidebarView(options)
+  );
 }

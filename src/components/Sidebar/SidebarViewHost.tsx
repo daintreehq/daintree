@@ -3,11 +3,12 @@ import { FolderGit2, FolderOpen } from "lucide-react";
 import { PluginHostedView } from "@/components/Plugin/PluginHostedView";
 import { useSidebarViewOptions } from "@/hooks/useSidebarViews";
 import { useWorkspaceRoot } from "@/hooks/useWorkspaceRoot";
-import { resolveActiveSidebarView } from "@/lib/sidebarViews";
+import { isProjectSidebarView, resolveActiveSidebarView } from "@/lib/sidebarViews";
 import { cn } from "@/lib/utils";
 import { useMacroFocusStore } from "@/store/macroFocusStore";
 import { useSidebarViewStore, WORKTREES_SIDEBAR_VIEW_ID } from "@/store/sidebarViewStore";
 import { SIDEBAR_HEADER_ROW } from "./sidebarHeader";
+import { SidebarDefaultNotice } from "./SidebarDefaultNotice";
 import {
   SidebarViewHeading,
   getMountedSidebarViewTrigger,
@@ -36,6 +37,8 @@ export function SidebarViewHost({ children }: { children: ReactNode }) {
   const chosen = useSidebarViewStore((s) => s.chosenSidebarView);
   const chooseSidebarView = useSidebarViewStore((s) => s.chooseSidebarView);
   const setActiveSidebarView = useSidebarViewStore((s) => s.setActiveSidebarView);
+  const defaultAnswers = useSidebarViewStore((s) => s.defaultAnswers);
+  const answerDefaultView = useSidebarViewStore((s) => s.answerDefaultView);
   const active = resolveActiveSidebarView(options, chosen);
   const activeView = active.view;
   const workspace = useWorkspaceRoot();
@@ -69,6 +72,15 @@ export function SidebarViewHost({ children }: { children: ReactNode }) {
     requestSidebarViewFocusHandOff();
     chooseSidebarView(WORKTREES_SIDEBAR_VIEW_ID);
   }, [chooseSidebarView]);
+
+  // Asked when a project plugin's view is showing because it is the default,
+  // not because the user picked it. An installed plugin's view only shows by
+  // pick, so it never asks.
+  const askAboutDefault =
+    activeView !== null &&
+    isProjectSidebarView(activeView) &&
+    chosen !== active.id &&
+    defaultAnswers[active.id] === undefined;
 
   const { markFocus } = useSidebarViewFocusHandOff(active.id);
 
@@ -104,6 +116,20 @@ export function SidebarViewHost({ children }: { children: ReactNode }) {
                 {activeView.title}
               </SidebarViewHeading>
             </div>
+            {askAboutDefault && (
+              <SidebarDefaultNotice
+                view={activeView}
+                builtInTitle={model.builtIn.title}
+                onKeep={() => {
+                  answerDefaultView(active.id, "keep");
+                  focusSidebarSwitcher(undefined);
+                }}
+                onShowBuiltIn={() => {
+                  requestSidebarViewFocusHandOff();
+                  answerDefaultView(active.id, "worktrees");
+                }}
+              />
+            )}
             <PluginHostedView
               key={active.id}
               source={{ from: "hosted", view: activeView }}

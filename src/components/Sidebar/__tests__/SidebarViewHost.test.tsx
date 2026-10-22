@@ -2,7 +2,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { createPortal } from "react-dom";
-import type { PluginSidebarHostedViewDescriptor } from "@shared/types/plugin";
+import {
+  makeProjectPluginInstanceKey,
+  type PluginSidebarHostedViewDescriptor,
+} from "@shared/types/plugin";
 import { resolveSidebarViewOptions, type SidebarViewOption } from "@/lib/sidebarViews";
 
 interface HostedMountProps {
@@ -111,6 +114,7 @@ beforeEach(() => {
   h.mounts = [];
   useSidebarViewStore.setState({
     chosenSidebarView: WORKTREES_SIDEBAR_VIEW_ID,
+    defaultAnswers: {},
     activeSidebarView: WORKTREES_SIDEBAR_VIEW_ID,
   });
 });
@@ -407,5 +411,83 @@ describe("SidebarViewHost", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("SidebarViewHost default view", () => {
+  const PROJECT_BOARD_ID = "project:acme.beads.board";
+  const projectBoard = (priority = 10): PluginSidebarHostedViewDescriptor => ({
+    ...board(priority),
+    pluginId: makeProjectPluginInstanceKey("p1", "acme.beads"),
+  });
+
+  beforeEach(() => {
+    useSidebarViewStore.setState({ chosenSidebarView: null });
+  });
+
+  it("opens on a project plugin's view that outranks worktrees, and asks once", () => {
+    offer([projectBoard()]);
+    render(ui());
+    expect(screen.queryByTestId("sidebar-plugin-view")).not.toBeNull();
+    expect(useSidebarViewStore.getState().activeSidebarView).toBe(PROJECT_BOARD_ID);
+    expect(useSidebarViewStore.getState().chosenSidebarView).toBeNull();
+    expect(screen.getByRole("status").textContent).toContain("Acme Beads set up this project");
+  });
+
+  it("keeps the view and stops asking when the user answers Keep", () => {
+    offer([projectBoard()]);
+    render(ui());
+    fireEvent.click(screen.getByRole("button", { name: "Keep" }));
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.queryByTestId("sidebar-plugin-view")).not.toBeNull();
+    expect(useSidebarViewStore.getState().defaultAnswers).toEqual({ [PROJECT_BOARD_ID]: "keep" });
+    expect(useSidebarViewStore.getState().chosenSidebarView).toBeNull();
+  });
+
+  it("shows worktrees as the user's own pick when they answer Show worktrees", () => {
+    offer([projectBoard()]);
+    render(ui());
+    fireEvent.click(screen.getByRole("button", { name: "Show worktrees" }));
+    expect(screen.queryByTestId("sidebar-plugin-view")).toBeNull();
+    expect(useSidebarViewStore.getState().chosenSidebarView).toBe(WORKTREES_SIDEBAR_VIEW_ID);
+    expect(useSidebarViewStore.getState().defaultAnswers[PROJECT_BOARD_ID]).toBe("worktrees");
+  });
+
+  it("does not ask again about a view already answered", () => {
+    useSidebarViewStore.setState({ defaultAnswers: { [PROJECT_BOARD_ID]: "keep" } });
+    offer([projectBoard()]);
+    render(ui());
+    expect(screen.queryByTestId("sidebar-plugin-view")).not.toBeNull();
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("only offers an installed plugin's view: worktrees stay until the user picks it", async () => {
+    offer([board(100)]);
+    render(ui());
+    expect(screen.queryByTestId("sidebar-plugin-view")).toBeNull();
+    expect(screen.queryByRole("status")).toBeNull();
+
+    const items = await openSwitcher();
+    fireEvent.click(items.find((item) => item.textContent?.includes("Board"))!);
+    expect(useSidebarViewStore.getState().chosenSidebarView).toBe(BOARD_ID);
+    expect(screen.queryByTestId("sidebar-plugin-view")).not.toBeNull();
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("never asks when the user's own pick is what shows", () => {
+    useSidebarViewStore.setState({ chosenSidebarView: PROJECT_BOARD_ID });
+    offer([projectBoard()]);
+    render(ui());
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("falls back to worktrees at once when the project plugin's view is withdrawn", () => {
+    offer([projectBoard()]);
+    const { rerender } = render(ui());
+    offer([]);
+    rerender(ui());
+    expect(screen.queryByTestId("sidebar-plugin-view")).toBeNull();
+    expect(useSidebarViewStore.getState().activeSidebarView).toBe(WORKTREES_SIDEBAR_VIEW_ID);
+    expect(useSidebarViewStore.getState().chosenSidebarView).toBeNull();
   });
 });

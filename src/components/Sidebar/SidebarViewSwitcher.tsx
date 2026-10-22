@@ -125,7 +125,12 @@ function SidebarViewSwitcher({ model, title }: { model: SidebarViewSwitcherModel
 
   const handleValueChange = useCallback(
     (viewId: string) => {
-      if (viewId === activeId) return;
+      // The shown view may be the default rather than a pick; choosing it is
+      // what makes it the user's own.
+      if (viewId === activeId) {
+        choose(viewId);
+        return;
+      }
       const activeIsBuiltIn = activeId === WORKTREES_SIDEBAR_VIEW_ID;
       const nextIsBuiltIn = viewId === WORKTREES_SIDEBAR_VIEW_ID;
       if (activeIsBuiltIn || nextIsBuiltIn) {
