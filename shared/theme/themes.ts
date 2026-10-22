@@ -837,7 +837,9 @@ export function getAppThemeFallbackType(
   systemPrefersDark: boolean
 ): AppColorScheme["type"] {
   const target = id.trim();
-  const holds = (slot: string | undefined) => target !== "" && slot?.trim() === target;
+  // Slots are read from persisted settings, which are not validated at runtime.
+  const holds = (slot: unknown) =>
+    target !== "" && typeof slot === "string" && slot.trim() === target;
   const isPreferredLight = holds(preferences.preferredLightSchemeId);
   const isPreferredDark = holds(preferences.preferredDarkSchemeId);
   if (isPreferredLight !== isPreferredDark) return isPreferredLight ? "light" : "dark";

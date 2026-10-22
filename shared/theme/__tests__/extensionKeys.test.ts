@@ -120,7 +120,10 @@ describe("isCssDeclarationValue", () => {
     "url(data:image/png;base64,AAAA)",
     "linear-gradient(180deg, #1a2027, #0f1115)",
     "'a;b' 'c}d'",
-    "\\31 0px",
+    '"a\\"b"',
+    "URL(data:image/png;base64,AAAA)",
+    'url( "a;b" )',
+    "url()",
   ])("accepts %s", (value) => {
     expect(isCssDeclarationValue(value)).toBe(true);
   });
@@ -133,8 +136,13 @@ describe("isCssDeclarationValue", () => {
     "calc(1px",
     "1px)",
     '"unterminated',
-    "red\\",
+    '"red\\',
     "red\nblue",
+    "\\31 0px",
+    'url(a"); } :root { --theme-text-primary: #202020 !important; } #x { --y: url("b)',
+    'u\\72l(a"); } :root { color: red; } #x { --y: url("b)',
+    "url(a b)",
+    "url(a",
   ])("rejects %s", (value) => {
     expect(isCssDeclarationValue(value)).toBe(false);
   });
@@ -170,6 +178,14 @@ describe("resolveAppTheme fallback polarity", () => {
     expect(getAppThemeFallbackType("mine", both, false)).toBe("light");
     expect(getAppThemeFallbackType("mine", both, true)).toBe("dark");
     expect(getAppThemeFallbackType("", { preferredLightSchemeId: "" }, true)).toBe("dark");
+  });
+
+  it("ignores a slot persisted with a non-string value", () => {
+    const corrupt: { preferredLightSchemeId?: string } = JSON.parse(
+      '{"preferredLightSchemeId":42}'
+    );
+
+    expect(getAppThemeFallbackType("mine", corrupt, true)).toBe("dark");
   });
 
   it("matches a slot regardless of surrounding whitespace", () => {
