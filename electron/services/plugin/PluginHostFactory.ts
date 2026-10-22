@@ -2426,7 +2426,17 @@ export function createHost(
       }
       let validated: PluginToolbarButtonRuntimeState | null = null;
       if (state !== null && state !== undefined) {
-        const parsed = PluginToolbarButtonRuntimeStateSchema.safeParse(state);
+        let parsed: ReturnType<typeof PluginToolbarButtonRuntimeStateSchema.safeParse>;
+        try {
+          parsed = PluginToolbarButtonRuntimeStateSchema.safeParse(state);
+        } catch (err) {
+          // A throwing getter escapes safeParse; it still has to reject.
+          return Promise.reject(
+            new Error(
+              `Plugin "${pluginId}" setToolbarButtonState: invalid state — ${formatErrorMessage(err, "unreadable")}`
+            )
+          );
+        }
         if (!parsed.success) {
           return Promise.reject(
             new Error(

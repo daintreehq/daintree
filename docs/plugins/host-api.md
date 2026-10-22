@@ -1063,7 +1063,7 @@ The label never changes: a toggle reads the same name on and off and announces i
 
 State only governs the button. The action it dispatches stays reachable from the palette, keybindings and `host.dispatch`, so check your own preconditions in the handler too. A button hidden by its `when` clause keeps its state and shows it when it comes back.
 
-State is keyed by `(pluginId, buttonId)`, cleared on unload and whenever your worker is replaced, and `busy` is also dropped when an idle worker is shut down. Republish after a restart. Not revoke-guarded, and a silent no-op once the plugin unloads. An empty or foreign `buttonId`, or an invalid state, rejects on both hosts. `createMockHost` records calls in `setToolbarButtonStateCalls` and validates them as the host does; pass its `toolbarButtonIds` option to reject a foreign id.
+State is keyed by `(pluginId, buttonId)` and cleared on unload and whenever your worker is replaced or shut down, so republish it from `activate()`. Not revoke-guarded, and a silent no-op once the plugin unloads. An empty or foreign `buttonId`, or an invalid state, rejects on both hosts. `createMockHost` records calls in `setToolbarButtonStateCalls` and validates them as the host does; pass its `toolbarButtonIds` option to reject a foreign id.
 
 ## `setContext`
 

@@ -10,6 +10,8 @@ const setPluginButtonPromotedMock = vi.fn();
 const refreshRuntimeMock = vi.fn();
 
 let mockPinnedButtons: Record<string, boolean> = {};
+// Whether the last row selection was cancelled, which keeps a real Radix menu open.
+let lastSelectPrevented = false;
 let mockPluginMetaById = new Map<string, { devMode: boolean; displayName: string }>();
 
 vi.mock("@/services/ActionService", () => ({
@@ -98,7 +100,11 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
       role="menuitem"
       tabIndex={0}
       data-keybinding={keybinding}
-      onClick={() => onSelect?.(new Event("select"))}
+      onClick={() => {
+        const event = new Event("select", { cancelable: true });
+        onSelect?.(event);
+        lastSelectPrevented = event.defaultPrevented;
+      }}
       onKeyDown={onKeyDown}
       {...props}
     >
@@ -120,7 +126,8 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
   ),
   DropdownMenuSeparator: () => <hr data-testid="menu-separator" />,
 }));
-const { PluginToolbarButton, PluginTrayButton } = await import("../PluginTrayButton");
+const { PluginToolbarButton, PluginTrayButton, PluginOverflowItem } =
+  await import("../PluginTrayButton");
 const { usePluginToolbarStateStore, _resetPluginToolbarStateStoreForTest } =
   await import("@/store/pluginToolbarStateStore");
 const { act } = await import("@testing-library/react");
@@ -145,6 +152,7 @@ function setStates(states: Record<string, Record<string, PluginToolbarButtonRunt
 beforeEach(() => {
   vi.clearAllMocks();
   mockPinnedButtons = {};
+  lastSelectPrevented = false;
   mockPluginMetaById = new Map();
   _resetPluginToolbarStateStoreForTest();
 });
@@ -219,6 +227,13 @@ describe("PluginTrayButton rows under runtime state (#13785)", () => {
     return container.querySelector(`[data-testid="plugin-tray-row-${sync.id}"]`)!;
   }
 
+  it("dispatches and closes on selecting a row with no state", () => {
+    const { container } = render(<PluginTrayButton configs={configs} />);
+    fireEvent.click(row(container));
+    expect(dispatchMock).toHaveBeenCalledTimes(1);
+    expect(lastSelectPrevented).toBe(false);
+  });
+
   it("makes a toggle row a checked menu item and leaves a plain row alone", () => {
     const { container } = render(<PluginTrayButton configs={configs} />);
     expect(row(container).getAttribute("role")).toBe("menuitem");
@@ -238,8 +253,29 @@ describe("PluginTrayButton rows under runtime state (#13785)", () => {
     expect(row(container).textContent).toContain("Sign in to sync");
     fireEvent.click(row(container));
     expect(dispatchMock).not.toHaveBeenCalled();
+    expect(lastSelectPrevented).toBe(true);
 
     fireEvent.click(container.querySelector(`[data-testid="plugin-tray-pin-${sync.id}"]`)!);
     expect(setPluginButtonPromotedMock).toHaveBeenCalledWith(sync.id, true);
+  });
+});
+
+describe("PluginOverflowItem under runtime state (#13785)", () => {
+  const sync = config("sync");
+
+  it("ignores selection while busy and runs once it clears", () => {
+    const onSelect = vi.fn();
+    setStates({ "acme.beads": { sync: { busy: true } } });
+    const { getByRole } = render(<PluginOverflowItem config={sync} onSelect={onSelect} />);
+    const item = getByRole("menuitem");
+
+    expect(item.getAttribute("aria-disabled")).toBe("true");
+    expect(item.textContent).toContain("busy");
+    fireEvent.click(item);
+    expect(onSelect).not.toHaveBeenCalled();
+
+    setStates({});
+    fireEvent.click(item);
+    expect(onSelect).toHaveBeenCalledTimes(1);
   });
 });

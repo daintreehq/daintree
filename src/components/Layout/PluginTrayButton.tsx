@@ -235,7 +235,13 @@ export function PluginOverflowItem({
       className={cn(presentation.blocked && ARIA_DISABLED_CLASSES)}
     >
       <PluginMenuRowIcon presentation={presentation} />
-      <span className="flex-1">{config.label}</span>
+      <TruncatedTooltip
+        content={presentation.tooltip}
+        isTruncated={presentation.tooltip !== config.label}
+        focusable={false}
+      >
+        <span className="flex-1">{config.label}</span>
+      </TruncatedTooltip>
       <PluginMenuRowState presentation={presentation} />
       {badge && (
         <>
@@ -338,8 +344,11 @@ function PluginTrayRow({
     >
       <PluginMenuRowIcon presentation={presentation} />
 
+      {/* The plugin's tooltip or disabled reason shows on hover whether or not
+          the label is cut off; with neither, only a truncated label does. */}
       <TruncatedTooltip
-        content={presentation.tooltip === config.label ? config.label : presentation.tooltip}
+        content={presentation.tooltip}
+        isTruncated={presentation.tooltip !== config.label ? true : undefined}
         focusable={false}
       >
         <span className="min-w-0 flex-1 truncate">{config.label}</span>

@@ -835,7 +835,7 @@ function validateToolbarButtonState(state: PluginToolbarButtonRuntimeState): voi
   const fail = (message: string): never => {
     throw new Error(`setToolbarButtonState: invalid state — ${message}`);
   };
-  if (!state || typeof state !== "object") fail("state must be an object");
+  if (!state || typeof state !== "object" || Array.isArray(state)) fail("state must be an object");
   for (const key of Object.keys(state)) {
     if (!TOOLBAR_STATE_KEYS.has(key)) fail(`${key}: unrecognized key`);
   }

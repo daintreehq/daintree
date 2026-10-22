@@ -1501,7 +1501,27 @@ describe("PluginDevWorkerHostProxy setToolbarButtonState (#13785)", () => {
     await expect(
       proxy.host.setToolbarButtonState("sync", { tooltip: (() => "x") as never })
     ).rejects.toThrow(/setToolbarButtonState: invalid state — tooltip/);
+    await expect(proxy.host.setToolbarButtonState("sync", [] as never)).rejects.toThrow(
+      /state must be an object/
+    );
+    const throwing = {
+      get tooltip(): string {
+        throw new Error("boom");
+      },
+    };
+    let call: Promise<void> | undefined;
+    expect(() => {
+      call = proxy.host.setToolbarButtonState("sync", throwing);
+    }).not.toThrow();
+    await expect(call).rejects.toThrow(/invalid state — boom/);
     expect(sent.find((m) => m.type === "host-call")).toBeUndefined();
+  });
+
+  it("carries an unknown key to main even when it is undefined, so the strict schema refuses it", () => {
+    const { proxy, sent } = makeProxy();
+    void proxy.host.setToolbarButtonState("sync", { label: undefined } as never).catch(() => {});
+    const call = sent.find((m) => m.type === "host-call" && m.method === "setToolbarButtonState");
+    expect(Object.keys(call?.params.state ?? {})).toEqual(["label"]);
   });
 
   it("resolves once the proxy is disposed, like the in-process no-op after unload", async () => {

@@ -7148,28 +7148,7 @@ export class PluginService {
     runUnloadStep(pluginId, "cancelUiPrompts", () =>
       this.promptDispatcher.cancelForPlugin(pluginId)
     );
-    // The button stays, and so does a toggle's state, but no work the dead
-    // worker was running survives it — a busy left behind would block the
-    // button that re-forks the worker.
-    runUnloadStep(pluginId, "clearToolbarBusy", () => this.clearPluginToolbarBusy(pluginId));
     return true;
-  }
-
-  /** Drop `busy` from every one of a plugin's toolbar-button states, publishing once if any changed. */
-  private clearPluginToolbarBusy(pluginId: string): void {
-    const buttonMap = this.pluginToolbarStates.get(pluginId);
-    if (!buttonMap) return;
-    let changed = false;
-    for (const [buttonId, state] of buttonMap) {
-      if (state.busy === undefined) continue;
-      changed = true;
-      const { busy: _busy, ...rest } = state;
-      if (Object.keys(rest).length === 0) buttonMap.delete(buttonId);
-      else buttonMap.set(buttonId, rest);
-    }
-    if (!changed) return;
-    if (buttonMap.size === 0) this.pluginToolbarStates.delete(pluginId);
-    this.emitToolbarStates(pluginId);
   }
 
   /**
@@ -8086,11 +8065,20 @@ export class PluginService {
     for (const pluginId of this.pluginToolbarStates.keys()) {
       const owningProjectId = projectIdFromPluginInstanceKey(pluginId);
       if (owningProjectId !== null && !inView(owningProjectId)) continue;
+      const envelope = {
+        name: "plugin:toolbar-states-changed",
+        payload: { pluginId, states: this.serializePluginToolbarStates(pluginId) },
+      };
+      // A local view bound to a remote host shows that host's buttons, so this
+      // machine's state for a same-named plugin would disable or press them.
+      if (
+        projectId === undefined &&
+        isWithheldFromView(webContents.id, CHANNELS.EVENTS_PUSH, [envelope])
+      ) {
+        continue;
+      }
       try {
-        webContents.send(CHANNELS.EVENTS_PUSH, {
-          name: "plugin:toolbar-states-changed",
-          payload: { pluginId, states: this.serializePluginToolbarStates(pluginId) },
-        });
+        webContents.send(CHANNELS.EVENTS_PUSH, envelope);
       } catch {
         // Silently ignore send failures during window initialization/disposal.
       }

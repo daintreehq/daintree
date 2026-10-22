@@ -1272,21 +1272,33 @@ export class PluginDevWorkerHostProxy {
             )
           );
         }
-        // Every valid field is a boolean or a string, so a plain copy of the
+        // Every valid field is a boolean or a string, so a copy of the
         // primitive fields is all main needs — and all the port can clone.
-        let copy: Record<string, string | boolean | number> | null = null;
+        // Unknown keys travel too, even undefined ones, so main's strict
+        // schema refuses them exactly as it does in process.
+        let copy: Record<string, string | boolean | number | undefined> | null = null;
         if (state !== null && state !== undefined) {
-          if (typeof state !== "object") {
+          if (typeof state !== "object" || Array.isArray(state)) {
             return Promise.reject(
               new Error(
                 `Plugin "${this.pluginId}" setToolbarButtonState: invalid state — state must be an object`
               )
             );
           }
+          let entries: [string, unknown][];
+          try {
+            entries = Object.entries(state);
+          } catch (err) {
+            return Promise.reject(
+              new Error(
+                `Plugin "${this.pluginId}" setToolbarButtonState: invalid state — ${formatErrorMessage(err, "unreadable")}`
+              )
+            );
+          }
           copy = {};
-          for (const [key, value] of Object.entries(state)) {
-            if (value === undefined) continue;
+          for (const [key, value] of entries) {
             if (
+              value !== undefined &&
               typeof value !== "string" &&
               typeof value !== "boolean" &&
               typeof value !== "number"

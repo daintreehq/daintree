@@ -815,6 +815,19 @@ describe("createHost (plugin activation API)", () => {
       await expect(
         host.setToolbarButtonState("sync", { tooltip: "x".repeat(201) })
       ).rejects.toThrow(/setToolbarButtonState: invalid state/);
+      await expect(host.setToolbarButtonState("sync", [])).rejects.toThrow(
+        /setToolbarButtonState: invalid state/
+      );
+      const throwing = {
+        get tooltip(): string {
+          throw new Error("boom");
+        },
+      };
+      let call: Promise<void> | undefined;
+      expect(() => {
+        call = host.setToolbarButtonState("sync", throwing);
+      }).not.toThrow();
+      await expect(call).rejects.toThrow(/setToolbarButtonState: invalid state — boom/);
       expect(() => host.setToolbarButtonState("", null).catch(() => {})).not.toThrow();
       expect(toolbarStateEvents()).toEqual([]);
     });

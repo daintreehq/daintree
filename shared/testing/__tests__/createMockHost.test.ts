@@ -516,6 +516,9 @@ describe("createMockHost", () => {
     await expect(host.setToolbarButtonState("sync", { label: "Renamed" } as never)).rejects.toThrow(
       /label: unrecognized key/
     );
+    await expect(host.setToolbarButtonState("sync", [] as never)).rejects.toThrow(
+      /state must be an object/
+    );
     await expect(host.setToolbarButtonState("sync", { tooltip: "x".repeat(201) })).rejects.toThrow(
       /tooltip: must be a non-empty string/
     );

@@ -5494,12 +5494,10 @@ export interface PluginHostApi extends PluginActivationApi {
    * dispatchable from keybindings, the palette and `host.dispatch`. The label
    * never changes with state.
    *
-   * Like {@link setToolbarButtonBadge} this is NOT revoke-guarded, becomes a
-   * silent no-op once the plugin is unloaded (all of its button state is cleared
-   * on unload and whenever its worker is replaced), and rejects an empty or
-   * foreign `buttonId` or an invalid state. (In the hot-reload worker an empty
-   * `buttonId` still rejects; a foreign id or malformed state is logged in the
-   * host instead.)
+   * Like {@link setToolbarButtonBadge} this is NOT revoke-guarded and becomes a
+   * silent no-op once the plugin is unloaded; all of its button state is cleared
+   * on unload and whenever its worker is replaced or shut down. An empty or
+   * foreign `buttonId` or an invalid state rejects, in a worker as in process.
    */
   setToolbarButtonState(
     buttonId: string,
