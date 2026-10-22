@@ -2117,9 +2117,17 @@ export function Toolbar({
   const leftVisibleSet = useMemo(() => new Set<AnyToolbarButtonId>(leftVisible), [leftVisible]);
   const rightVisibleSet = useMemo(() => new Set<AnyToolbarButtonId>(rightVisible), [rightVisible]);
 
-  // Close open dropdowns when their buttons move into overflow
+  // Close open dropdowns when their buttons move into overflow. Keyed on the
+  // overflow hook's own results and the demoted set, not the merged lists:
+  // those are rebuilt whenever the button registry is (a problem count, the
+  // copy-tree hover), and re-running on each would shut a forge dropdown the
+  // user just opened from the `…` menu of a project that demotes the pill.
   useEffect(() => {
-    const overflowSet = new Set<AnyToolbarButtonId>([...leftOverflow, ...rightOverflow]);
+    const overflowSet = new Set<AnyToolbarButtonId>([
+      ...measuredLeftOverflow,
+      ...measuredRightOverflow,
+      ...demotedIds,
+    ]);
     if (overflowSet.has("forge-stats")) {
       forgeStatsRef.current?.closeAll();
     }
@@ -2148,7 +2156,7 @@ export function Toolbar({
       // `.focus()` at this point is bounced straight back inside. The move
       // happens in the menu's own onCloseAutoFocus, once the trap has let go.
       if (focusWasInPanel) {
-        const side = rightOverflow.includes("copy-tree") ? "right" : "left";
+        const side = measuredRightOverflow.includes("copy-tree") ? "right" : "left";
         copyTreeEvictionFocusRef.current =
           toolbarRef.current?.querySelector<HTMLElement>(
             `[data-toolbar-overflow-trigger][data-toolbar-overflow-side="${side}"][data-visible="true"]`
@@ -2156,7 +2164,7 @@ export function Toolbar({
       }
       setCopyTreeOpen(false);
     }
-  }, [leftOverflow, rightOverflow]);
+  }, [measuredLeftOverflow, measuredRightOverflow, demotedIds]);
 
   const renderGroupedButtons = (
     buttonIds: AnyToolbarButtonId[],

@@ -35,8 +35,9 @@ function readSuggestion(projectId: string): Promise<PresentationSuggestion | nul
 
 /**
  * Built from the store as it stands NOW, after any await: two windows writing
- * at once each publish what is on disk at that moment, so the later push can
- * never carry an older profile than the one before it.
+ * at once each publish what is on disk at that moment, so a later push never
+ * carries an older profile than the one before it. The revision covers what
+ * this cannot — a push and a reply reaching a view out of order.
  */
 function snapshotOf(
   projectId: string,
@@ -48,6 +49,7 @@ function snapshotOf(
     levels: stored.levels,
     suggestion,
     suggestionAnswer: answerFor(stored, suggestion),
+    revision: stored.revision,
   };
 }
 

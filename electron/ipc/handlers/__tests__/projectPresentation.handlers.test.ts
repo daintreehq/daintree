@@ -101,6 +101,7 @@ describe("project-presentation:get", () => {
       levels: {},
       suggestion: { levels: HIDDEN, hash: hashPresentationLevels(HIDDEN) },
       suggestionAnswer: null,
+      revision: 0,
     });
   });
 
@@ -120,11 +121,33 @@ describe("project-presentation:set-level", () => {
     )) as ProjectPresentationSnapshot;
 
     expect(snapshot.levels).toEqual({ forgeStats: "demoted" });
+    expect(snapshot.revision).toBe(1);
     expect(broadcastMock).toHaveBeenCalledWith(
       PROJECT_A,
       CHANNELS.PROJECT_PRESENTATION_CHANGED,
       snapshot
     );
+  });
+
+  it("never publishes an older profile after a newer one when two writes interleave", async () => {
+    const reads: Array<(value: unknown) => void> = [];
+    readSuggestionMock.mockImplementation(() => new Promise((resolve) => reads.push(resolve)));
+
+    const first = invoke("project-presentation:set-level", "forgeStats", "demoted");
+    const second = invoke("project-presentation:set-level", "forgeStats", "hidden");
+    // The second write's file read finishes first.
+    reads[1]!(null);
+    await second;
+    reads[0]!(null);
+    await first;
+
+    const published = broadcastMock.mock.calls.map(
+      ([, , snapshot]) => snapshot as ProjectPresentationSnapshot
+    );
+    expect(published.map((s) => [s.revision, s.levels.forgeStats])).toEqual([
+      [2, "hidden"],
+      [2, "hidden"],
+    ]);
   });
 
   it("refuses a feature outside the vocabulary and a level the feature does not offer", async () => {

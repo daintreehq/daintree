@@ -71,7 +71,11 @@ function button(label: string): HTMLElement {
 function renderNotice() {
   return render(
     <TooltipProvider>
-      <ProjectPresentationNotice />
+      {/* The panel grid region the notice sits in, as in the content grids. */}
+      <div role="region" aria-label="Panels" tabIndex={-1}>
+        <ProjectPresentationNotice />
+      </div>
+      <button type="button">Elsewhere</button>
     </TooltipProvider>
   );
 }
@@ -83,6 +87,7 @@ beforeEach(() => {
     levels: { forgeStats: "hidden" },
     suggestion: { levels: { forgeStats: "hidden" }, hash: HASH },
     suggestionAnswer: { hash: HASH, answer: "accepted", decidedAt: 1 },
+    revision: 1,
   });
   Object.defineProperty(window, "electron", {
     configurable: true,
@@ -179,5 +184,45 @@ describe("ProjectPresentationNotice", () => {
       fireEvent.click(button("Retry"));
     });
     expect(answerSuggestion).toHaveBeenLastCalledWith(HASH, "declined");
+  });
+
+  it("hands focus to the panel region when answering removes the notice from under it", async () => {
+    adopt();
+    renderNotice();
+    const keep = button("Keep current");
+    keep.focus();
+    fireEvent.keyDown(keep, { key: "Enter" });
+
+    await act(async () => {
+      fireEvent.click(keep);
+    });
+
+    expect(screen.queryByText(QUESTION)).toBeNull();
+    expect(document.activeElement).toBe(screen.getByRole("region", { name: "Panels" }));
+  });
+
+  it("leaves focus alone once the user has moved it elsewhere", async () => {
+    let finish: (value: unknown) => void = () => {};
+    answerSuggestion.mockImplementationOnce(() => new Promise((resolve) => (finish = resolve)));
+    adopt();
+    renderNotice();
+    const keep = button("Keep current");
+    keep.focus();
+    fireEvent.click(keep);
+
+    const elsewhere = button("Elsewhere");
+    elsewhere.focus();
+    await act(async () => {
+      finish({
+        projectId: PROJECT,
+        levels: {},
+        suggestion: { levels: { forgeStats: "hidden" }, hash: HASH },
+        suggestionAnswer: { hash: HASH, answer: "declined", decidedAt: 1 },
+        revision: 1,
+      });
+    });
+
+    expect(screen.queryByText(QUESTION)).toBeNull();
+    expect(document.activeElement).toBe(elsewhere);
   });
 });

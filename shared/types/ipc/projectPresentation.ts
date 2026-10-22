@@ -27,4 +27,10 @@ export interface ProjectPresentationSnapshot {
   levels: PresentationLevels;
   suggestion: PresentationSuggestion | null;
   suggestionAnswer: PresentationSuggestionAnswerRecord | null;
+  /**
+   * The stored profile's write count, which only grows. A view drops a
+   * snapshot older than the one it holds: a push and an invoke reply can
+   * arrive out of order, and either could otherwise roll it back.
+   */
+  revision: number;
 }

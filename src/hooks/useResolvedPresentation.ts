@@ -46,10 +46,17 @@ export function useResolvedPresentation(): ResolvedPresentation {
   const loaded = useProjectPresentationStore((s) => s.loaded);
   const profileProjectId = useProjectPresentationStore((s) => s.projectId);
   const init = useProjectPresentationStore((s) => s.init);
+  const ensureLoaded = useProjectPresentationStore((s) => s.ensureLoaded);
 
   useEffect(() => {
     init();
   }, [init]);
+
+  // The view learning its project is the renderer's sign that main has bound
+  // it, so a profile that could not be read before gets another read now.
+  useEffect(() => {
+    if (projectId !== undefined) ensureLoaded();
+  }, [projectId, ensureLoaded]);
 
   return useMemo(
     () =>

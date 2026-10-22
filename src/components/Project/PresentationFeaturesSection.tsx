@@ -41,6 +41,7 @@ export function PresentationFeaturesSection({ isOpen }: { isOpen: boolean }) {
   const refresh = useProjectPresentationStore((s) => s.refresh);
   const levels = useProjectPresentationStore((s) => s.levels);
   const loaded = useProjectPresentationStore((s) => s.loaded);
+  const loadFailed = useProjectPresentationStore((s) => s.loadFailed);
   const profileProjectId = useProjectPresentationStore((s) => s.projectId);
   const failedSave = useProjectPresentationStore((s) => s.failedSave);
   const setLevel = useProjectPresentationStore((s) => s.setLevel);
@@ -94,7 +95,9 @@ export function PresentationFeaturesSection({ isOpen }: { isOpen: boolean }) {
                 if (level === resolved[id]) return;
                 void setLevel(id, level === fallback ? null : level);
               }}
-              isModified={applies && available && levels[id] !== undefined}
+              // A stored choice stays visible even where it can't apply: it
+              // takes effect the day the folder becomes a repository.
+              isModified={applies && levels[id] !== undefined}
               onReset={() => void setLevel(id, null)}
               disabled={!applies || !available}
               disabledReason={
@@ -119,6 +122,19 @@ export function PresentationFeaturesSection({ isOpen }: { isOpen: boolean }) {
               </Button>
             )}
           />
+        )}
+        {loadFailed && !applies && (
+          <SettingsEmptyRow
+            action={
+              <Button variant="outline" size="sm" onClick={refresh}>
+                Retry
+              </Button>
+            }
+          >
+            <InlineError as="span" role="alert">
+              Couldn&apos;t read this project&apos;s features
+            </InlineError>
+          </SettingsEmptyRow>
         )}
         {failedSave !== null && (
           <SettingsEmptyRow

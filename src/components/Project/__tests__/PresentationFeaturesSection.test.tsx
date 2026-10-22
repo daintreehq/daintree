@@ -16,6 +16,7 @@ const snapshot = (levels: PresentationLevels): ProjectPresentationSnapshot => ({
   levels,
   suggestion: null,
   suggestionAnswer: null,
+  revision: 0,
 });
 
 const get = vi.fn<() => Promise<ProjectPresentationSnapshot | null>>();
@@ -191,5 +192,31 @@ describe("PresentationFeaturesSection", () => {
     });
     expect(setLevel).toHaveBeenLastCalledWith("forgeStats", "demoted");
     expect(screen.queryByText("Couldn't save the change")).toBeNull();
+  });
+
+  it("says when the profile could not be read and reads it again on Retry", async () => {
+    vi.useFakeTimers();
+    try {
+      get.mockRejectedValue(new Error("host unreachable"));
+      render(
+        <TooltipProvider>
+          <PresentationFeaturesSection isOpen />
+        </TooltipProvider>
+      );
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+      expect(screen.getByText("Couldn't read this project's features")).not.toBeNull();
+
+      get.mockResolvedValue(snapshot({ forgeStats: "demoted" }));
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(screen.queryByText("Couldn't read this project's features")).toBeNull();
+      expect(radio("Demoted").getAttribute("aria-checked")).toBe("true");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

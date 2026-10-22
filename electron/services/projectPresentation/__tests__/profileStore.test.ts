@@ -48,8 +48,19 @@ describe("project presentation levels", () => {
 
     setProjectPresentationLevel(PROJECT_A, "forgeStats", null);
     expect(getProjectPresentation(PROJECT_A).levels).toEqual({});
-    // A project left with nothing set takes no room in the store.
-    expect(storeMock.data.get("projectPresentation")).toEqual({});
+  });
+
+  it("counts every write in a revision that never goes back, even once nothing is set", () => {
+    expect(getProjectPresentation(PROJECT_A).revision).toBe(0);
+    setProjectPresentationLevel(PROJECT_A, "forgeStats", "demoted");
+    setProjectPresentationLevel(PROJECT_A, "forgeStats", null);
+    // Dropping the emptied entry would restart the count below what an open
+    // view already holds, and that view would refuse every later snapshot.
+    expect(getProjectPresentation(PROJECT_A).revision).toBe(2);
+    const suggestion = suggest({ forgeStats: "hidden" });
+    answerProjectPresentationSuggestion(PROJECT_A, suggestion, suggestion.hash, "declined");
+    expect(getProjectPresentation(PROJECT_A).revision).toBe(3);
+    expect(getProjectPresentation(PROJECT_B).revision).toBe(0);
   });
 
   it("refuses unknown features, unsupported levels and non-project ids before writing", () => {
@@ -73,7 +84,11 @@ describe("project presentation levels", () => {
     setProjectPresentationLevel(PROJECT_A, "forgeStats", "hidden");
 
     expect(storeMock.data.get("projectPresentation")).toEqual({
-      [PROJECT_A]: { levels: { futureFeature: "hidden", forgeStats: "hidden" }, extra: 1 },
+      [PROJECT_A]: {
+        levels: { futureFeature: "hidden", forgeStats: "hidden" },
+        extra: 1,
+        revision: 1,
+      },
     });
     expect(getProjectPresentation(PROJECT_A).levels).toEqual({ forgeStats: "hidden" });
   });
@@ -178,6 +193,31 @@ describe("answering the repository's suggestion", () => {
     expect(Object.keys(stored.suggestionAnswers)).toHaveLength(MAX_REMEMBERED_ANSWERS);
     expect(Object.hasOwn(stored.suggestionAnswers, "old-0")).toBe(false);
     expect(answerFor(stored, suggestion)?.decidedAt).toBe(1000);
+  });
+
+  it("never drops the answer just given, whatever timestamps an edited file holds", () => {
+    const suggestion = suggest({ forgeStats: "hidden" });
+    storeMock.data.set("projectPresentation", {
+      [PROJECT_A]: {
+        suggestionAnswers: Object.fromEntries(
+          Array.from({ length: MAX_REMEMBERED_ANSWERS }, (_, i) => [
+            `future-${i}`,
+            { answer: "declined", decidedAt: 1e15 + i },
+          ])
+        ),
+      },
+    });
+
+    const stored = answerProjectPresentationSuggestion(
+      PROJECT_A,
+      suggestion,
+      suggestion.hash,
+      "accepted",
+      5
+    );
+
+    expect(answerFor(stored, suggestion)?.answer).toBe("accepted");
+    expect(Object.keys(stored.suggestionAnswers)).toHaveLength(MAX_REMEMBERED_ANSWERS);
   });
 
   it("refuses an answer about a suggestion the file no longer makes", () => {

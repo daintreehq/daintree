@@ -18,6 +18,7 @@ const snapshot = (
   levels,
   suggestion: null,
   suggestionAnswer: null,
+  revision: 0,
   ...overrides,
 });
 
@@ -33,11 +34,14 @@ function installBridge(
   } = {}
 ) {
   const listeners: ChangedCallback[] = [];
+  let revision = 0;
   const get = vi.fn(options.get ?? (() => Promise.resolve(snapshot())));
   const setLevel = vi.fn(
     options.setLevel ??
       ((_feature: string, level: PresentationLevel | null) =>
-        Promise.resolve(snapshot(level === null ? {} : { forgeStats: level })))
+        Promise.resolve(
+          snapshot(level === null ? {} : { forgeStats: level }, { revision: ++revision })
+        ))
   );
   const answerSuggestion = vi.fn(() => Promise.resolve(snapshot()));
   const onChanged = vi.fn((cb: ChangedCallback) => {
@@ -122,7 +126,46 @@ describe("projectPresentationStore", () => {
       state().init();
       await vi.advanceTimersByTimeAsync(60_000);
       expect(bridge.get).toHaveBeenCalledTimes(4);
-      expect(state().loaded).toBe(false);
+      expect(state()).toMatchObject({ loaded: false, loadFailed: true });
+
+      // The view learning its project asks once more, with fresh retries.
+      bridge.get.mockResolvedValueOnce(snapshot({ forgeStats: "hidden" }));
+      state().ensureLoaded();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(state()).toMatchObject({ loaded: true, loadFailed: false });
+      state().ensureLoaded();
+      expect(bridge.get).toHaveBeenCalledTimes(5);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("retries a read that failed outright, not just one that came back unbound", async () => {
+    vi.useFakeTimers();
+    try {
+      const bridge = installBridge();
+      bridge.get.mockRejectedValueOnce(new Error("host restarting"));
+      state().init();
+      await vi.advanceTimersByTimeAsync(250);
+      expect(bridge.get).toHaveBeenCalledTimes(2);
+      expect(state().loaded).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops a pending re-read once a push has delivered the profile", async () => {
+    vi.useFakeTimers();
+    try {
+      const bridge = installBridge({ get: () => Promise.resolve(null) });
+      state().init();
+      await vi.advanceTimersByTimeAsync(0);
+
+      bridge.listeners[0]!(snapshot({ forgeStats: "demoted" }, { revision: 1 }));
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      expect(bridge.get).toHaveBeenCalledTimes(1);
+      expect(state().levels).toEqual({ forgeStats: "demoted" });
     } finally {
       vi.useRealTimers();
     }
@@ -152,11 +195,24 @@ describe("projectPresentationStore", () => {
     const bridge = installBridge({ get: () => pending.promise });
     state().init();
 
-    bridge.listeners[0]!(snapshot({ forgeStats: "demoted" }));
+    bridge.listeners[0]!(snapshot({ forgeStats: "demoted" }, { revision: 1 }));
     pending.resolve(snapshot());
     await flush();
 
     expect(state().levels).toEqual({ forgeStats: "demoted" });
+  });
+
+  it("drops a snapshot older than the one it holds, whichever lane it came on", async () => {
+    const bridge = installBridge();
+    state().init();
+    await flush();
+
+    // A remote view's push and invoke reply travel separately; the reply for a
+    // newer write can land first.
+    await state().setLevel("forgeStats", "hidden");
+    expect(state().revision).toBe(1);
+    bridge.listeners[0]!(snapshot({ forgeStats: "demoted" }, { revision: 0 }));
+    expect(state().levels).toEqual({ forgeStats: "hidden" });
   });
 
   it("adopts what main recorded, and keeps a failed write for a retry", async () => {
@@ -173,8 +229,32 @@ describe("projectPresentationStore", () => {
     expect(state().levels).toEqual({ forgeStats: "hidden" });
     expect(state().failedSave).toEqual({ kind: "level", feature: "forgeStats", level: "demoted" });
 
+    // A plain read records nothing, so the Retry stays.
+    state().refresh();
+    await flush();
+    expect(state().failedSave).not.toBeNull();
+
     // Any write main records afterwards is newer than the one that failed.
-    bridge.listeners[0]!(snapshot({ forgeStats: "shown" }));
+    bridge.listeners[0]!(snapshot({ forgeStats: "shown" }, { revision: 5 }));
+    expect(state().failedSave).toBeNull();
+  });
+
+  it("re-reads after a refused answer and drops a Retry that could never succeed", async () => {
+    const stale = { levels: { forgeStats: "hidden" as const }, hash: "old" };
+    const current = { levels: { forgeStats: "demoted" as const }, hash: "new" };
+    const bridge = installBridge({
+      get: () => Promise.resolve(snapshot({}, { suggestion: stale })),
+    });
+    state().init();
+    await flush();
+
+    bridge.get.mockResolvedValue(snapshot({}, { suggestion: current }));
+    bridge.answerSuggestion.mockRejectedValueOnce(new Error("suggestion has changed"));
+    await state().answerSuggestion("old", "accepted");
+    await flush();
+
+    expect(bridge.get).toHaveBeenCalledTimes(2);
+    expect(state().suggestion).toEqual(current);
     expect(state().failedSave).toBeNull();
   });
 

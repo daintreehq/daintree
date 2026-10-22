@@ -37,13 +37,28 @@ export interface StoredProjectPresentation {
   levels: PresentationLevels;
   /** Suggestion hash → the user's answer to it. */
   suggestionAnswers: Record<string, AnswerEntry>;
+  /**
+   * Bumped on every write and kept on disk, so it only ever grows — across
+   * restarts too. A view drops any snapshot older than one it already holds:
+   * pushes and invoke replies reach a remote view on separate lanes, and an
+   * older push can land after a newer reply.
+   */
+  revision: number;
+}
+
+function isTimestamp(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0;
 }
 
 function parseAnswer(value: unknown): AnswerEntry | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const { answer, decidedAt } = value as Record<string, unknown>;
   if (answer !== "accepted" && answer !== "declined") return null;
-  return { answer, decidedAt: typeof decidedAt === "number" ? decidedAt : 0 };
+  return { answer, decidedAt: isTimestamp(decidedAt) ? decidedAt : 0 };
+}
+
+function parseRevision(value: unknown): number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : 0;
 }
 
 function parseAnswers(value: unknown): Record<string, AnswerEntry> {
@@ -60,12 +75,13 @@ function parseAnswers(value: unknown): Record<string, AnswerEntry> {
 /** The file is user-editable, so every level is checked and anything malformed is skipped. */
 function parseEntry(value: unknown): StoredProjectPresentation {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return { levels: {}, suggestionAnswers: parseAnswers(undefined) };
+    return { levels: {}, suggestionAnswers: parseAnswers(undefined), revision: 0 };
   }
   const entry = value as Record<string, unknown>;
   return {
     levels: parsePresentationLevels(entry.levels),
     suggestionAnswers: parseAnswers(entry.suggestionAnswers),
+    revision: parseRevision(entry.revision),
   };
 }
 
@@ -102,23 +118,21 @@ function rawLevels(entry: Record<string, unknown>): Record<string, unknown> {
 }
 
 /**
- * Write one project's entry back. Whole-key rewrite: electron-store
- * dot-notation would nest on a key containing dots, and a project id is
- * opaque. A read failure has already propagated by now — writing from a map we
- * could not read would delete every other project's profile.
+ * Write one project's entry back, one revision on. Whole-key rewrite:
+ * electron-store dot-notation would nest on a key containing dots, and a
+ * project id is opaque. A read failure has already propagated by now — writing
+ * from a map we could not read would delete every other project's profile.
+ *
+ * The entry is kept even with nothing set, for its revision: dropping it would
+ * start the count again, below what an open view already holds.
  */
 function writeEntry(
   all: Record<string, unknown>,
   projectId: string,
   entry: Record<string, unknown>
 ): StoredProjectPresentation {
-  const next = { ...all };
-  if (Object.keys(entry).length === 0) {
-    delete next[projectId];
-  } else {
-    next[projectId] = entry;
-  }
-  store.set(STORE_KEY, next);
+  entry.revision = parseRevision(entry.revision) + 1;
+  store.set(STORE_KEY, { ...all, [projectId]: entry });
   return parseEntry(entry);
 }
 
@@ -203,12 +217,15 @@ export function answerProjectPresentationSuggestion(
   if (answer === "accepted") {
     entry.levels = { ...rawLevels(entry), ...suggestion.levels };
   }
-  const answers = { ...parseEntry(entry).suggestionAnswers };
-  delete answers[hash];
-  answers[hash] = { answer, decidedAt: now };
-  const kept = Object.entries(answers)
+  // The answer just given always survives the cap, whatever timestamps an
+  // edited file carries; the rest keep their most recent.
+  const others = Object.entries(parseEntry(entry).suggestionAnswers)
+    .filter(([key]) => key !== hash)
     .sort(([, a], [, b]) => a.decidedAt - b.decidedAt)
-    .slice(-MAX_REMEMBERED_ANSWERS);
-  entry.suggestionAnswers = Object.fromEntries(kept);
+    .slice(-(MAX_REMEMBERED_ANSWERS - 1));
+  entry.suggestionAnswers = Object.fromEntries([
+    ...others,
+    [hash, { answer, decidedAt: isTimestamp(now) ? now : 0 }],
+  ]);
   return writeEntry(all, projectId, entry);
 }

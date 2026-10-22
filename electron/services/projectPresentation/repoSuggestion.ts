@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
@@ -43,6 +44,30 @@ export function parsePresentationSuggestion(raw: unknown): PresentationSuggestio
   return { levels, hash: hashPresentationLevels(levels) };
 }
 
+/**
+ * The file's bytes, or null when it is not a plain file within the cap by the
+ * time it is opened. The checks above are a fast path; this is the bound: the
+ * file is opened without following a final link where the platform allows it,
+ * checked through the handle, and never read past the cap even if it grows.
+ */
+async function readCapped(filePath: string): Promise<Buffer | null> {
+  const handle = await fs.open(filePath, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0));
+  try {
+    const stat = await handle.stat();
+    if (!stat.isFile() || stat.size > MAX_FILE_BYTES) return null;
+    const buffer = Buffer.alloc(MAX_FILE_BYTES + 1);
+    let length = 0;
+    while (length < buffer.length) {
+      const { bytesRead } = await handle.read(buffer, length, buffer.length - length, length);
+      if (bytesRead === 0) break;
+      length += bytesRead;
+    }
+    return length > MAX_FILE_BYTES ? null : buffer.subarray(0, length);
+  } finally {
+    await handle.close();
+  }
+}
+
 /** The project's suggestion, or null when it has none this build can use. */
 export async function readPresentationSuggestion(
   projectRoot: string | null | undefined
@@ -57,9 +82,9 @@ export async function readPresentationSuggestion(
     if (!dirStat.isDirectory()) return null;
     const stat = await fs.lstat(filePath);
     if (!stat.isFile() || stat.size > MAX_FILE_BYTES) return null;
-    let content = await fs.readFile(filePath, "utf-8");
-    // The file can grow between the lstat and the read.
-    if (Buffer.byteLength(content, "utf-8") > MAX_FILE_BYTES) return null;
+    const bytes = await readCapped(filePath);
+    if (bytes === null) return null;
+    let content = bytes.toString("utf-8");
     if (content.charCodeAt(0) === 0xfeff) content = content.slice(1);
     return parsePresentationSuggestion(JSON.parse(content));
   } catch (err) {

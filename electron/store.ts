@@ -693,6 +693,8 @@ export interface StoreSchema {
       levels?: Record<string, string>;
       /** Suggestion hash → answer, the most recent few (`profileStore.ts`). */
       suggestionAnswers?: Record<string, { answer: "accepted" | "declined"; decidedAt: number }>;
+      /** Bumped on every write; views drop snapshots older than one they hold. */
+      revision?: number;
     }
   >;
 

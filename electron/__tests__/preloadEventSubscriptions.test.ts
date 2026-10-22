@@ -48,9 +48,14 @@ interface PluginBridge {
   onWorktreeCardStatusesChanged: (cb: (payload: unknown) => void) => () => void;
 }
 
+interface ProjectPresentationBridge {
+  onChanged: (cb: (payload: unknown) => void) => () => void;
+}
+
 const originalWindow = (globalThis as { window?: unknown }).window;
 let terminal: TerminalBridge;
 let plugin: PluginBridge;
+let projectPresentation: ProjectPresentationBridge;
 
 beforeAll(async () => {
   const fakeWindow = {
@@ -80,10 +85,17 @@ beforeAll(async () => {
     module,
     module.exports
   );
-  const api = exposed.electron as { terminal?: TerminalBridge; plugin?: PluginBridge } | undefined;
+  const api = exposed.electron as
+    | {
+        terminal?: TerminalBridge;
+        plugin?: PluginBridge;
+        projectPresentation?: ProjectPresentationBridge;
+      }
+    | undefined;
   expect(api?.terminal, "preload did not expose window.electron.terminal").toBeDefined();
   terminal = api!.terminal!;
   plugin = api!.plugin!;
+  projectPresentation = api!.projectPresentation!;
 });
 
 afterAll(() => {
@@ -176,5 +188,17 @@ describe("preload event subscriptions", () => {
       { pluginId: "p1", projectId: "A", statuses: {} },
     ]);
     dispose();
+  });
+
+  it("delivers each project-presentation:changed push once and detaches on dispose", () => {
+    const received: unknown[] = [];
+    const dispose = projectPresentation.onChanged((payload) => received.push(payload));
+    ipcRenderer.emit("project-presentation:changed", {}, { projectId: "p1" });
+    expect(received).toEqual([{ projectId: "p1" }]);
+
+    dispose();
+    ipcRenderer.emit("project-presentation:changed", {}, { projectId: "p2" });
+    expect(received).toEqual([{ projectId: "p1" }]);
+    expect(ipcRenderer.listenerCount("project-presentation:changed")).toBe(0);
   });
 });

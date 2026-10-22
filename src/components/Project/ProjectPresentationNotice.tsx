@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
 import { LayoutTemplate } from "lucide-react";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
@@ -125,33 +125,80 @@ function NoticeBody() {
   const dismissFailedSave = useProjectPresentationStore((s) => s.dismissFailedSave);
   const pending = usePendingSuggestion();
   const wrapperRef = useRef<HTMLDivElement>(null);
+  const regionRef = useRef<HTMLElement | null>(null);
+  const focusInsideRef = useRef(false);
+  /** Whether the last input here was a pointer, so a handed-off focus draws no ring for it. */
+  const viaPointerRef = useRef(false);
 
   useEffect(() => {
     init();
   }, [init]);
 
-  /**
-   * Every control here removes the notice by succeeding, and focus left on a
-   * control that unmounts falls to <body>. The panel region the notice sits in
-   * outlives it, so hand focus there — but only if it was in the notice.
-   */
-  const settle = async (run: () => Promise<void>) => {
-    const wrapper = wrapperRef.current;
-    const region = wrapper?.closest<HTMLElement>('[role="region"]') ?? null;
-    const hadFocus = wrapper?.contains(document.activeElement) ?? false;
-    await run();
-    if (hadFocus && region !== null && !region.contains(document.activeElement)) {
-      region.focus({ preventScroll: true });
-    }
-  };
-
   const failedAnswer: Extract<PresentationFailedSave, { kind: "answer" }> | null =
     failedSave?.kind === "answer" ? failedSave : null;
-  if (pending === null) return null;
+  const banner: "error" | "question" | null =
+    pending === null
+      ? null
+      : failedAnswer !== null && failedAnswer.hash === pending.hash
+        ? "error"
+        : pending.answer !== null || deferredHash === pending.hash
+          ? null
+          : "question";
 
-  if (failedAnswer !== null && failedAnswer.hash === pending.hash) {
-    return (
-      <div ref={wrapperRef} className="mx-1 mt-1 shrink-0">
+  /**
+   * A banner here leaves by succeeding — an answer, a deferral, or another
+   * window's answer arriving by push — and focus on a control that unmounts
+   * falls to <body>. When that strands focus that was inside, hand it on: to
+   * a failed save's Retry, or else to the panel region the notice sits in,
+   * which outlives it. Never onto a fresh question's answers, where a second
+   * Enter would accept a suggestion nobody has read yet. Focus the user has
+   * already moved elsewhere stays where it is.
+   */
+  useLayoutEffect(() => {
+    const wrapper = wrapperRef.current;
+    if (wrapper !== null) {
+      regionRef.current = wrapper.closest<HTMLElement>('[role="region"]') ?? regionRef.current;
+    }
+    if (!focusInsideRef.current) return;
+    const active = document.activeElement;
+    if (active !== null && active !== document.body) return;
+    const options = { preventScroll: true, focusVisible: !viaPointerRef.current };
+    if (banner === "error") {
+      wrapper?.querySelector<HTMLElement>("button:not([disabled])")?.focus(options);
+      return;
+    }
+    focusInsideRef.current = false;
+    regionRef.current?.focus(options);
+  }, [banner]);
+
+  if (banner === null || pending === null) return null;
+
+  const busy = answering !== null;
+  const { hash, changes } = pending;
+  return (
+    <div
+      ref={wrapperRef}
+      className="mx-1 mt-1 shrink-0"
+      onFocus={() => {
+        focusInsideRef.current = true;
+      }}
+      onBlur={(event) => {
+        // Only a move to another element counts as leaving; a control
+        // unmounting under focus blurs to nothing, and that is the case the
+        // hand-off above exists for.
+        const next = event.relatedTarget;
+        if (next instanceof Node && !event.currentTarget.contains(next)) {
+          focusInsideRef.current = false;
+        }
+      }}
+      onPointerDownCapture={() => {
+        viaPointerRef.current = true;
+      }}
+      onKeyDownCapture={() => {
+        viaPointerRef.current = false;
+      }}
+    >
+      {banner === "error" && failedAnswer !== null ? (
         <InlineStatusBanner
           title="Couldn't save the layout choice"
           severity="error"
@@ -160,59 +207,50 @@ function NoticeBody() {
             id: "retry",
             label: "Retry",
             variant: "primary",
-            onClick: () =>
-              void settle(() => answerSuggestion(failedAnswer.hash, failedAnswer.answer)),
+            onClick: () => void answerSuggestion(failedAnswer.hash, failedAnswer.answer),
           }}
           onClose={dismissFailedSave}
           className="rounded-[var(--radius-sm)] border border-border-default bg-surface-panel"
         />
-      </div>
-    );
-  }
-
-  if (pending.answer !== null || deferredHash === pending.hash) return null;
-
-  const busy = answering !== null;
-  const { hash, changes } = pending;
-  return (
-    <div ref={wrapperRef} className="mx-1 mt-1 shrink-0">
-      <InlineStatusBanner
-        icon={LayoutTemplate}
-        layout="strip"
-        title={noticeTitle(changes)}
-        description={
-          changes.length === 1
-            ? "Project settings can change it back at any time."
-            : `${describeChanges(changes)}. Project settings can change them back at any time.`
-        }
-        severity="neutral"
-        role="status"
-        // Equal weight: both answers are one settings row away from undone,
-        // so promoting either one would be picking for the user.
-        actions={[
-          {
-            id: "accept",
-            label: "Apply suggestion",
-            variant: "primary",
-            onClick: () => void settle(() => answerSuggestion(hash, "accepted")),
-            loading: answering === "accepted",
-            disabled: busy && answering !== "accepted",
-          },
-          {
-            id: "decline",
-            label: "Keep current",
-            variant: "primary",
-            onClick: () => void settle(() => answerSuggestion(hash, "declined")),
-            loading: answering === "declined",
-            disabled: busy && answering !== "declined",
-          },
-        ]}
-        className="rounded-[var(--radius-sm)] border border-border-default bg-surface-panel"
-        onClose={() => void settle(async () => deferSuggestion(hash))}
-        closeDisabled={busy}
-        closeAriaLabel="Decide later"
-        closeTitle="Decide later — Project settings keeps the suggestion"
-      />
+      ) : (
+        <InlineStatusBanner
+          icon={LayoutTemplate}
+          layout="strip"
+          title={noticeTitle(changes)}
+          description={
+            changes.length === 1
+              ? "Project settings can change it back at any time."
+              : `${describeChanges(changes)}. Project settings can change them back at any time.`
+          }
+          severity="neutral"
+          role="status"
+          // Equal weight: both answers are one settings row away from undone,
+          // so promoting either one would be picking for the user.
+          actions={[
+            {
+              id: "accept",
+              label: "Apply suggestion",
+              variant: "primary",
+              onClick: () => void answerSuggestion(hash, "accepted"),
+              loading: answering === "accepted",
+              disabled: busy && answering !== "accepted",
+            },
+            {
+              id: "decline",
+              label: "Keep current",
+              variant: "primary",
+              onClick: () => void answerSuggestion(hash, "declined"),
+              loading: answering === "declined",
+              disabled: busy && answering !== "declined",
+            },
+          ]}
+          className="rounded-[var(--radius-sm)] border border-border-default bg-surface-panel"
+          onClose={() => deferSuggestion(hash)}
+          closeDisabled={busy}
+          closeAriaLabel="Decide later"
+          closeTitle="Decide later — Project settings keeps the suggestion"
+        />
+      )}
     </div>
   );
 }
