@@ -1,5 +1,6 @@
 import { beforeAll, afterAll, describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { z } from "zod";
+import { createHash } from "node:crypto";
 
 const hintMocks = vi.hoisted(() => {
   const mockShow = vi.fn();
@@ -1350,6 +1351,154 @@ describe("ActionService", () => {
       } finally {
         restore();
       }
+    });
+
+    describe("plugin attribution (#13759)", () => {
+      function register(
+        id: string,
+        {
+          pluginId,
+          danger = "safe",
+          denyPluginDispatch,
+          run = vi.fn().mockResolvedValue(undefined),
+        }: {
+          pluginId?: string;
+          danger?: ActionDefinition["danger"];
+          denyPluginDispatch?: boolean;
+          run?: ActionDefinition["run"];
+        } = {}
+      ) {
+        service.register({
+          id,
+          title: "T",
+          description:
+            "Test action with a short title for verifying title/description field propagation in manifest entries.",
+          category: "test",
+          kind: "command",
+          danger,
+          scope: "renderer",
+          ...(pluginId ? { pluginId } : {}),
+          ...(denyPluginDispatch ? { denyPluginDispatch } : {}),
+          run,
+        });
+      }
+
+      async function emitted(emit: ReturnType<typeof vi.fn>): Promise<unknown> {
+        await vi.waitFor(() => expect(emit).toHaveBeenCalledTimes(1));
+        return emit.mock.calls[0]![1];
+      }
+
+      it("attributes a plugin's dispatch of a built-in action to the caller, hashing the redacted args", async () => {
+        const emit = vi.fn().mockResolvedValue(undefined);
+        const restore = installEmit(emit);
+        try {
+          register("actions.list");
+          await service.dispatch(
+            "actions.list",
+            { apiToken: "s3cret", nested: { password: "hunter2", name: "n" }, count: 2 },
+            { source: "plugin", callerPluginId: "acme.caller" }
+          );
+          const redacted = {
+            apiToken: "[REDACTED]",
+            nested: { password: "[REDACTED]", name: "n" },
+            count: 2,
+          };
+          expect(await emitted(emit)).toMatchObject({
+            source: "plugin",
+            pluginId: "acme.caller",
+            args: redacted,
+            argsHash: createHash("sha256").update(JSON.stringify(redacted)).digest("hex"),
+          });
+        } finally {
+          restore();
+        }
+      });
+
+      it("attributes a plugin's dispatch of another plugin's action to the caller", async () => {
+        const emit = vi.fn().mockResolvedValue(undefined);
+        const restore = installEmit(emit);
+        try {
+          register("actions.list", { pluginId: "acme.owner" });
+          await service.dispatch("actions.list", undefined, {
+            source: "plugin",
+            callerPluginId: "acme.caller",
+          });
+          expect(await emitted(emit)).toMatchObject({ pluginId: "acme.caller" });
+        } finally {
+          restore();
+        }
+      });
+
+      it.each([
+        ["no caller", undefined],
+        ["an empty caller", ""],
+      ])("keeps the owning plugin when a plugin dispatch carries %s", async (_label, caller) => {
+        const emit = vi.fn().mockResolvedValue(undefined);
+        const restore = installEmit(emit);
+        try {
+          register("actions.list", { pluginId: "acme.owner" });
+          await service.dispatch("actions.list", undefined, {
+            source: "plugin",
+            callerPluginId: caller,
+          });
+          expect(await emitted(emit)).toMatchObject({ pluginId: "acme.owner" });
+        } finally {
+          restore();
+        }
+      });
+
+      it("ignores callerPluginId for non-plugin sources", async () => {
+        const emit = vi.fn().mockResolvedValue(undefined);
+        const restore = installEmit(emit);
+        try {
+          register("actions.list");
+          await service.dispatch("actions.list", undefined, {
+            source: "agent",
+            callerPluginId: "acme.caller",
+          });
+          const payload = await emitted(emit);
+          expect(payload).not.toHaveProperty("pluginId");
+          expect(payload).not.toHaveProperty("argsHash");
+        } finally {
+          restore();
+        }
+      });
+
+      it("emits nothing for an attributed plugin dispatch that is refused or fails", async () => {
+        const emit = vi.fn().mockResolvedValue(undefined);
+        const restore = installEmit(emit);
+        // Emission starts hashing attributed args synchronously inside
+        // dispatch, so a refused dispatch that reached it shows here with no
+        // need to wait on digests that settle in no particular order.
+        const digest = vi.spyOn(globalThis.crypto.subtle, "digest");
+        try {
+          register("test.confirm", { danger: "confirm" });
+          register("test.denied", { denyPluginDispatch: true });
+          register("test.throws", { run: vi.fn().mockRejectedValue(new Error("boom")) });
+          register("actions.list");
+          const options = { source: "plugin", callerPluginId: "acme.caller" } as const;
+
+          const refused = await Promise.all(
+            ["test.confirm", "test.denied", "test.throws"].map((id) =>
+              service.dispatch(id, { q: 1 }, options)
+            )
+          );
+          expect(refused.map((r) => (r.ok ? "ok" : r.error.code))).toEqual([
+            "CONFIRMATION_REQUIRED",
+            "RESTRICTED",
+            "EXECUTION_ERROR",
+          ]);
+          expect(digest).not.toHaveBeenCalled();
+
+          // The same dispatch that succeeds does reach the hash.
+          await service.dispatch("actions.list", { q: 1 }, options);
+          expect(digest).toHaveBeenCalledTimes(1);
+          expect(await emitted(emit)).toMatchObject({ actionId: "actions.list" });
+        } finally {
+          digest.mockRestore();
+          restore();
+        }
+      });
     });
 
     it("does not emit action:dispatched when run throws", async () => {

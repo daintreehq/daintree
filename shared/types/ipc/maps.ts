@@ -1638,6 +1638,8 @@ export interface IpcEventMap {
     requestId: string;
     actionId: string;
     args: unknown;
+    /** The calling plugin, from its host's closure; absent for host-internal dispatches. */
+    pluginId?: string;
   };
 
   /**

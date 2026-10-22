@@ -58,7 +58,11 @@ export interface PluginActionAuditRecord {
   id: string;
   /** Wall-clock epoch millis the event was recorded. */
   ts: number;
-  /** Contributing plugin id (`ActionDefinition.pluginId`). */
+  /**
+   * The plugin the record is attributed to: on an `action-dispatch` record from
+   * a `"plugin"` source, the plugin that made the call; otherwise the
+   * contributing plugin (`ActionDefinition.pluginId`).
+   */
   pluginId: string;
   /**
    * For `action-dispatch`: the plugin-registered open-union `ActionId`.

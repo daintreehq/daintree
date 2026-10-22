@@ -320,12 +320,13 @@ function lastDispatchRequest(wc: FakeWebContents): {
   requestId: string;
   actionId: string;
   args?: unknown;
+  pluginId?: string;
 } {
   const call = [...wc.send.mock.calls]
     .reverse()
     .find((c) => c[0] === CHANNELS.PLUGIN_DISPATCH_ACTION_REQUEST);
   if (!call) throw new Error("no PLUGIN_DISPATCH_ACTION_REQUEST send recorded");
-  return call[1] as { requestId: string; actionId: string; args?: unknown };
+  return call[1] as { requestId: string; actionId: string; args?: unknown; pluginId?: string };
 }
 
 describe("createHost — dispatch", () => {
@@ -390,6 +391,8 @@ describe("createHost — dispatch", () => {
     expect(req.actionId).toBe("acme.dispatch-ok.doThing");
     expect(req.args).toEqual({ count: 3 });
     expect(typeof req.requestId).toBe("string");
+    // The host's own closure names the caller, so the renderer can audit it (#13759).
+    expect(req.pluginId).toBe("acme.dispatch-ok");
 
     ipcMainMock._emit(
       CHANNELS.PLUGIN_DISPATCH_ACTION_RESPONSE,

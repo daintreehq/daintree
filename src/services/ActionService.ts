@@ -776,7 +776,11 @@ export class ActionService {
         danger: definition.danger,
         safeArgs: this.extractSafeBreadcrumbArgs(args, definition),
         confirmed: options?.confirmed,
-        pluginId: definition.pluginId,
+        // A plugin's dispatch is audited under the plugin that made it rather
+        // than the action's owner, which a built-in action doesn't have (#13759).
+        pluginId:
+          (source === "plugin" && options?.callerPluginId ? options.callerPluginId : undefined) ??
+          definition.pluginId,
       });
       if (!definition.suppressShortcutHint)
         this.emitShortcutHint(actionId, source, overlayEpochBeforeRun);
@@ -1127,9 +1131,9 @@ export class ActionService {
   }): Promise<void> {
     if (!isElectronApiAvailable()) return;
 
-    // Plugin actions feed the plugin-action audit log: compute the SHA-256
-    // digest of the (already redacted) args in the renderer so raw args need
-    // never cross IPC for fingerprinting. Built-in actions skip this entirely.
+    // Plugin-attributed dispatches feed the plugin-action audit log: compute
+    // the SHA-256 digest of the (already redacted) args in the renderer so raw
+    // args need never cross IPC for fingerprinting. Everything else skips it.
     const argsHash = payload.pluginId !== undefined ? await sha256Hex(payload.args) : undefined;
 
     try {

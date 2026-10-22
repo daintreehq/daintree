@@ -178,7 +178,7 @@ describe("events IPC handler — action:dispatched", () => {
     const { emit, cleanup } = setup();
     ipcMainMock._invoke("events:emit", "action:dispatched", {
       ...base,
-      pluginId: "x".repeat(200),
+      pluginId: "x".repeat(257),
       argsHash: "not-hex",
     });
 
@@ -207,6 +207,56 @@ describe("events IPC handler — action:dispatched", () => {
     expect((emit.mock.calls[0]![1] as Record<string, unknown>).pluginId).toBe("acme.plugin");
     cleanup();
   });
+
+  it("forwards a plugin-sourced dispatch with its caller pluginId and argsHash (#13759)", () => {
+    const { emit, cleanup } = setup();
+    const hash = "b".repeat(64);
+    ipcMainMock._invoke("events:emit", "action:dispatched", {
+      ...base,
+      actionId: "terminal.new",
+      source: "plugin",
+      pluginId: "acme.caller",
+      argsHash: hash,
+    });
+
+    expect(emit).toHaveBeenCalledTimes(1);
+    const normalized = emit.mock.calls[0]![1] as Record<string, unknown>;
+    expect(normalized.source).toBe("plugin");
+    expect(normalized.pluginId).toBe("acme.caller");
+    expect(normalized.argsHash).toBe(hash);
+    cleanup();
+  });
+
+  it("keeps a project plugin's instance id, which runs past 100 characters", () => {
+    const { emit, cleanup } = setup();
+    const instanceId = `project__${"f".repeat(64)}__acme-corp.release-dashboard`;
+    ipcMainMock._invoke("events:emit", "action:dispatched", {
+      ...base,
+      source: "plugin",
+      pluginId: instanceId,
+    });
+
+    expect(emit.mock.calls[0]![1]).toMatchObject({ pluginId: instanceId });
+    cleanup();
+  });
+
+  it("keeps a pluginId at the 256-character cap", () => {
+    const { emit, cleanup } = setup();
+    const atCap = "x".repeat(256);
+    ipcMainMock._invoke("events:emit", "action:dispatched", { ...base, pluginId: atCap });
+    expect(emit.mock.calls[0]![1]).toMatchObject({ pluginId: atCap });
+    cleanup();
+  });
+
+  it.each(["mcp", "constructor", "toString", "__proto__"])(
+    "rejects %j, which is not an ActionSource",
+    (source) => {
+      const { emit, cleanup } = setup();
+      ipcMainMock._invoke("events:emit", "action:dispatched", { ...base, source });
+      expect(emit).not.toHaveBeenCalled();
+      cleanup();
+    }
+  );
 
   it("rejects invalid action payloads (non-string actionId)", () => {
     const { emit, cleanup } = setup();

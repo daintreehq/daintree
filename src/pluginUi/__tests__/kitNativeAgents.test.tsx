@@ -123,7 +123,7 @@ describe("ActionButton", () => {
     expect(dispatch).toHaveBeenCalledWith(
       "worktree.refresh",
       { force: true },
-      { source: "plugin" }
+      { source: "plugin", callerPluginId: "acme.board" }
     );
     expect(onDispatched).toHaveBeenCalledWith({ ok: true });
   });
@@ -211,7 +211,7 @@ describe("ActionButton", () => {
     expect(dispatch).toHaveBeenCalledWith(
       "agent.launch",
       { agentId: "claude", prompt: "Write the script" },
-      { source: "plugin" }
+      { source: "plugin", callerPluginId: "acme.board" }
     );
   });
 
@@ -383,7 +383,23 @@ describe("action menu entries", () => {
     expect(item.querySelector("[data-menu-icon]")).not.toBeNull();
     fireEvent.click(item);
     await flush();
-    expect(dispatch).toHaveBeenCalledWith("worktree.refresh", undefined, { source: "plugin" });
+    expect(dispatch).toHaveBeenCalledWith("worktree.refresh", undefined, {
+      source: "plugin",
+      callerPluginId: "acme.board",
+    });
+  });
+
+  it("leaves a remote host's view unattributed, since its id has no provenance here", async () => {
+    addAction({ id: "worktree.refresh" });
+    window.__DAINTREE_HOST_ID__ = { id: "studio-01" };
+    try {
+      render(inView(createElement(kit.ActionButton, { actionId: "worktree.refresh" })));
+      fireEvent.click(screen.getByRole("button", { name: "Refresh worktrees" }));
+      await flush();
+      expect(dispatch).toHaveBeenCalledWith("worktree.refresh", undefined, { source: "plugin" });
+    } finally {
+      delete window.__DAINTREE_HOST_ID__;
+    }
   });
 
   it("draws a refused row as the host draws its unavailable rows", async () => {

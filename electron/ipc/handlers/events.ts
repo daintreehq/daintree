@@ -2,6 +2,7 @@ import { CHANNELS } from "../channels.js";
 import type { HandlerDependencies } from "../types.js";
 import type { DaintreeEventMap } from "../../services/events.js";
 import type { IpcEventBusMap } from "../../../shared/types/ipc/maps.js";
+import type { ActionSource } from "../../../shared/types/actions.js";
 import { broadcastToRenderer, typedHandle } from "../utils.js";
 
 const ALLOWED_RENDERER_EVENTS: ReadonlySet<keyof DaintreeEventMap> = new Set(["action:dispatched"]);
@@ -154,6 +155,7 @@ function safeJsonSize(value: unknown): number | null {
 }
 
 const RESERVED_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+const MAX_PLUGIN_ID_LENGTH = 256;
 const SAFE_ARGS_MAX_BYTES = 1024;
 
 /**
@@ -185,6 +187,21 @@ function sanitizeSafeArgs(value: unknown): Record<string, unknown> | undefined {
   return result;
 }
 
+// A Record rather than a list so a new ActionSource member fails typecheck here
+// instead of being silently dropped at the IPC boundary (#13759).
+const ACTION_SOURCES: Record<ActionSource, true> = {
+  user: true,
+  keybinding: true,
+  menu: true,
+  agent: true,
+  "context-menu": true,
+  plugin: true,
+};
+
+function isActionSource(value: unknown): value is ActionSource {
+  return typeof value === "string" && Object.hasOwn(ACTION_SOURCES, value);
+}
+
 function normalizeActionDispatchedPayload(
   payload: unknown
 ): DaintreeEventMap["action:dispatched"] | null {
@@ -194,15 +211,7 @@ function normalizeActionDispatchedPayload(
   if (typeof actionId !== "string" || !actionId.trim() || actionId.length > 200) return null;
 
   const source = payload.source;
-  if (
-    source !== "user" &&
-    source !== "keybinding" &&
-    source !== "menu" &&
-    source !== "agent" &&
-    source !== "context-menu"
-  ) {
-    return null;
-  }
+  if (!isActionSource(source)) return null;
 
   const timestampRaw = payload.timestamp;
   const timestamp =
@@ -252,11 +261,15 @@ function normalizeActionDispatchedPayload(
     typeof payload.confirmed === "boolean" ? payload.confirmed : undefined;
 
   // Plugin-action audit fields. Both are renderer-controlled strings crossing
-  // a trust boundary, so cap/shape them: `pluginId` to a sane length and
-  // `argsHash` to a strict 64-char lowercase-hex SHA-256 digest.
+  // a trust boundary, so cap/shape them: `pluginId` to the plugin-id bound the
+  // remote frontend contract uses (a project plugin's instance id carries a
+  // 64-char project hash, so it routinely exceeds 100) and `argsHash` to a
+  // strict 64-char lowercase-hex SHA-256 digest.
   const pluginIdRaw = payload.pluginId;
   const pluginId =
-    typeof pluginIdRaw === "string" && pluginIdRaw.trim().length > 0 && pluginIdRaw.length <= 100
+    typeof pluginIdRaw === "string" &&
+    pluginIdRaw.trim().length > 0 &&
+    pluginIdRaw.length <= MAX_PLUGIN_ID_LENGTH
       ? pluginIdRaw
       : undefined;
 
