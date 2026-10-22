@@ -36,7 +36,14 @@ export function evaluateWhenClause(
 ): boolean {
   if (!expression) return true;
   const ast = compile(expression);
-  return ast !== null && evaluate(ast, context);
+  if (ast === null) return false;
+  try {
+    return evaluate(ast, context);
+  } catch {
+    // A long `a && b && …` chain parses iteratively into a left-deep tree that
+    // the recursive evaluator can still overflow.
+    return false;
+  }
 }
 
 /** Test-only: drop every cached parse. */

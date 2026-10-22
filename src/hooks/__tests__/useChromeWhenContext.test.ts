@@ -74,24 +74,41 @@ describe("useWhenClause", () => {
     expect(result.current).toBe(false);
   });
 
-  it("follows whether the project is git-backed and what kind of workspace it is", () => {
+  it("follows whether the project is git-backed", () => {
     const repo = project("a".repeat(64), true);
     act(() => {
       useProjectStore.setState({ currentProject: repo });
     });
-    const { result } = renderHook(() => useWhenClause("isGitBacked && workspaceKind == 'project'"));
+    const { result } = renderHook(() => useWhenClause("isGitBacked"));
     expect(result.current).toBe(true);
 
     act(() => {
       useProjectStore.setState({ currentProject: { ...repo, gitBacked: false } });
     });
     expect(result.current).toBe(false);
+  });
+
+  it("follows what kind of workspace the view has, empty once there is none", () => {
+    act(() => {
+      useProjectStore.setState({ currentProject: project("a".repeat(64), false) });
+    });
+    const { result } = renderHook(() => ({
+      project: useWhenClause("workspaceKind == 'project'"),
+      scratch: useWhenClause("workspaceKind == 'scratch'"),
+      none: useWhenClause("workspaceKind == ''"),
+    }));
+    expect(result.current).toEqual({ project: true, scratch: false, none: false });
 
     act(() => {
       useProjectStore.setState({ currentProject: null });
       useScratchStore.setState({ currentScratch: scratch("scratch-1") });
     });
-    expect(result.current).toBe(false);
+    expect(result.current).toEqual({ project: false, scratch: true, none: false });
+
+    act(() => {
+      useScratchStore.setState({ currentScratch: null });
+    });
+    expect(result.current).toEqual({ project: false, scratch: false, none: true });
   });
 
   it("follows a presentation level main sends for this project", () => {
@@ -112,7 +129,7 @@ describe("useWhenClause", () => {
     expect(result.current).toBe(false);
   });
 
-  it("reads the presentation profile of this view's project while another is current", () => {
+  it("follows this view's own project while another is current", () => {
     const own = project("a".repeat(64), true);
     const other = project("b".repeat(64), false);
     seedView(own.id);
@@ -129,6 +146,38 @@ describe("useWhenClause", () => {
       useWhenClause("isGitBacked && presentationForgeStats == 'demoted'")
     );
     expect(result.current).toBe(true);
+
+    // The globally current project moving changes nothing here.
+    act(() => {
+      useProjectStore.setState({
+        projects: [own, { ...other, gitBacked: true }],
+        currentProject: { ...other, gitBacked: true },
+      });
+    });
+    expect(result.current).toBe(true);
+
+    act(() => {
+      useProjectStore.setState({
+        projects: [{ ...own, gitBacked: false }, other],
+        currentProject: other,
+      });
+    });
+    expect(result.current).toBe(false);
+  });
+
+  it("drops this view's project once it is closed", () => {
+    const own = project("a".repeat(64), true);
+    seedView(own.id);
+    act(() => {
+      useProjectStore.setState({ projects: [own], currentProject: null });
+    });
+    const { result } = renderHook(() => useWhenClause("workspaceKind == 'project'"));
+    expect(result.current).toBe(true);
+
+    act(() => {
+      useProjectStore.setState({ projects: [{ ...own, status: "closed" }] });
+    });
+    expect(result.current).toBe(false);
   });
 
   it("fails closed on a clause that does not parse", () => {

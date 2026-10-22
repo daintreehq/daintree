@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { buildPluginWhenContext } from "../../pluginContextKeys.js";
 
 const { parseSpy } = vi.hoisted(() => ({ parseSpy: vi.fn() }));
 
@@ -29,9 +30,22 @@ describe("evaluateWhenClause", () => {
     expect(evaluateWhenClause("path =~ /x/", { path: "x" })).toBe(false);
   });
 
+  it("fails closed on a clause that parses but is too deep to evaluate", () => {
+    const clause = `${"a && ".repeat(200_000)}a`;
+    expect(evaluateWhenClause(clause, { a: true })).toBe(false);
+    expect(parseSpy).toHaveReturned();
+  });
+
   it("hides on an unset key and keeps negation of one permissive", () => {
     expect(evaluateWhenClause("isGitBacked", {})).toBe(false);
     expect(evaluateWhenClause("!isGitBacked", {})).toBe(true);
+  });
+
+  it("never treats a plugin's namespace object as a truthy key", () => {
+    const ctx = buildPluginWhenContext({ "acme.beads": { ready: true } });
+    expect(evaluateWhenClause("acme.beads.ready", ctx)).toBe(true);
+    expect(evaluateWhenClause("acme", ctx)).toBe(false);
+    expect(evaluateWhenClause("acme.beads", ctx)).toBe(false);
   });
 
   it("re-evaluates a cached clause against each new context", () => {
