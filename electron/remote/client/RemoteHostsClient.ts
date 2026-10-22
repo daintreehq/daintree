@@ -29,6 +29,8 @@ import type { IpcContext } from "../../ipc/types.js";
 import type { RemoteRouter } from "../../ipc/endpoint.js";
 import { AppError } from "../../utils/errorTypes.js";
 import { sshAccessDenied } from "./sshAccessError.js";
+import { hostModeOff, hostRestarting } from "./hostModeOffError.js";
+import { HostModeOffRedial } from "./hostModeOffRedial.js";
 import { rememberRemoteWorkspaceTitle } from "../../window/windowTitle.js";
 import { discardFromAllProjectHistories } from "../../services/ProjectHistoryService.js";
 import { getRemoteService } from "../runtime.js";
@@ -306,16 +308,27 @@ export class RemoteHostsClient {
       resync: (hostId) =>
         this.options.emit({ type: "resync-required", hostId, reason: "reconnected" }),
     });
+    const shown = (hostId: HostId) => options.bindings.windowsOn(hostId).length > 0;
+    const redial = new HostModeOffRedial({
+      isShown: shown,
+      // Being removed or re-pointed: a link dialled now would be to the old machine.
+      redial: (hostId) => {
+        if (!this.retiring.has(hostId)) this.options.manager.get(hostId)?.retryNow();
+      },
+    });
     this.unsubscribe.push(
       // A window on the host is using it, whether or not its view has called through yet.
-      options.manager.addUseCheck((hostId) => options.bindings.windowsOn(hostId).length > 0),
+      options.manager.addUseCheck(shown),
       options.registry.onChange(() =>
         this.options.emit({ type: "hosts-changed", hosts: this.list() })
       ),
       options.manager.onStateChange((hostId, connection) => {
         this.options.emit({ type: "connection-changed", hostId, connection });
         this.detached.onConnectionState(hostId, connection);
-      })
+        redial.onConnection(hostId, connection);
+      }),
+      options.bindings.onChange(() => redial.onWindowsChanged()),
+      () => redial.dispose()
     );
   }
 
@@ -848,8 +861,10 @@ export class RemoteHostsClient {
       const stale = superseded();
       if (stale || readiness === ABANDONED) return stale ?? { outcome: "superseded", hostId };
       if (readiness === "version-mismatch") throw versionMismatch(hostId);
-      if (readiness === "host-mode-off")
-        throw hostModeOff(this.options.registry.get(hostId)?.name ?? hostId);
+      if (readiness === "host-mode-off") {
+        const descriptor = this.options.registry.get(hostId);
+        throw hostModeOff(descriptor?.name ?? hostId, (descriptor?.lastSeenAt ?? null) !== null);
+      }
       if (readiness === "stopped-retrying") {
         // ssh couldn't log in (Host mode off is ruled out above). It won't
         // change by waiting, and a new window could never show the host either.
@@ -863,6 +878,9 @@ export class RemoteHostsClient {
         // A new window can show the host's project list while it connects;
         // anything that has to find a project there needs the host's answer.
         if (projectId !== undefined || !newWindow) {
+          if (hostConnection.restarting) {
+            throw hostRestarting(hostId, this.options.registry.get(hostId)?.name ?? hostId);
+          }
           throw new AppError({
             code: "HOST_DISCONNECTED",
             message: `Host ${hostId} did not connect (${readiness})`,
@@ -1419,14 +1437,6 @@ function unreachableLookup(hostId: HostId, error: unknown): AppError {
     message: `Host ${hostId} could not answer a project lookup`,
     userMessage: "Couldn't reach this host. Check that it is on and try again.",
     cause: error instanceof Error ? error : undefined,
-  });
-}
-
-function hostModeOff(hostName: string): AppError {
-  return new AppError({
-    code: "HOST_MODE_OFF",
-    message: `Daintree isn't running in Host mode on ${hostName}`,
-    userMessage: `Daintree isn't running in Host mode on ${hostName}. Set it up to work there.`,
   });
 }
 

@@ -72,7 +72,20 @@ describe("connectionLabel", () => {
         detail: "Daintree isn't running in Host mode there (no host.json).",
         hostModeOff: true,
       })
-    ).toBe("Daintree isn't running in Host mode there");
+    ).toBe("Daintree isn't listening there · never seen");
+    const now = Date.UTC(2026, 9, 22, 12);
+    expect(
+      connectionLabel(
+        {
+          status: "unreachable",
+          lastSeenAt: now - 7 * 60_000,
+          detail: "Daintree isn't running in Host mode there (no host.json).",
+          hostModeOff: true,
+          stoppedRetrying: true,
+        },
+        now
+      )
+    ).toBe("Daintree isn't listening there · last seen 7 minutes ago");
   });
 
   it("says when a link has stopped retrying until the user connects", () => {

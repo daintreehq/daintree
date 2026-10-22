@@ -27,6 +27,23 @@ describe("createHostSwitchService", () => {
     });
   });
 
+  it("doesn't ask to set up a host it has reached before: its Daintree isn't listening", async () => {
+    const service = createHostSwitchService({
+      client: {
+        connectAndWait: vi.fn(async () => "host-mode-off" as never),
+        getWindowHost: vi.fn(() => ({ hostId: "local" }) as never),
+        list: vi.fn(
+          () => [{ descriptor: { id: "studio-03", name: "Studio 3", lastSeenAt: 1_000 } }] as never
+        ),
+      },
+      sessionFor: () => null,
+    });
+    await expect(service.pickerRoots({ toHostId: "studio-03" })).rejects.toMatchObject({
+      code: "HOST_MODE_OFF",
+      userMessage: "Daintree isn't listening on Studio 3. Try again once it's running there.",
+    });
+  });
+
   it("says ssh couldn't log in, in its own words, rather than unreachable", async () => {
     const service = createHostSwitchService({
       client: {

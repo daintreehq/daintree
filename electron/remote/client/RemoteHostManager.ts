@@ -228,6 +228,11 @@ export class HostConnection {
     return this.link.lastSessionId;
   }
 
+  /** See {@link LinkClient.restarting}. */
+  get restarting(): boolean {
+    return this.link.restarting;
+  }
+
   get hostInfo(): HostInfo | null {
     return this.info;
   }
@@ -1095,6 +1100,7 @@ export class RemoteHostManager {
           session: this.options.session,
           backoff: this.options.backoff,
           now: this.options.now,
+          lastSeenAt: () => this.options.registry.get(hostId)?.lastSeenAt ?? null,
         },
         this.options.views,
         this.options.reverseRequests ?? null

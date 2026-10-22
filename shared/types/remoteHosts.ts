@@ -323,7 +323,9 @@ export type HostConnectionState =
       hostModeOff?: true;
       /**
        * Not retrying on its own: what was seen (ssh couldn't log in, Host mode
-       * is off) doesn't change by trying again, so it waits for a Connect.
+       * is off) doesn't change by trying again soon, so it waits for a
+       * Connect. A host a window shows whose Daintree isn't listening is
+       * still checked now and then, so the window comes back with it.
        */
       stoppedRetrying?: true;
     }

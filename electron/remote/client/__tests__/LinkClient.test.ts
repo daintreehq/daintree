@@ -178,6 +178,63 @@ describe("LinkClient backoff", () => {
     });
   });
 
+  it("reads a new link's Host mode off as a restart while the host was heard from moments ago", async () => {
+    const now = 10 * 60_000;
+    const transport = {
+      opens: 0,
+      async open(): Promise<never> {
+        transport.opens++;
+        throw new HostModeOffError("Daintree isn't running in Host mode there (no host.json).");
+      },
+    };
+    client = new LinkClient({
+      transport,
+      handshake: TEST_HANDSHAKE,
+      client: { clientId: "c", clientName: "n", platform: "linux" },
+      backoff: { initialMs: 1, maxMs: 1, jitter: 0 },
+      random: () => 0,
+      now: () => now,
+      // An earlier link, released or from before this launch, heard it 30 s ago.
+      lastSeenAt: () => now - 30_000,
+    });
+    client.start();
+    await waitFor(() => transport.opens >= 3);
+    await waitFor(() => client!.getState().status === "unreachable");
+    expect(client.getState()).toMatchObject({ hostModeOff: true, retryAt: expect.any(Number) });
+    expect(client.restarting).toBe(true);
+  });
+
+  it("parks a new link once the host was last heard from longer ago than a restart takes", async () => {
+    const now = 10 * 60_000;
+    const transport = {
+      opens: 0,
+      async open(): Promise<never> {
+        transport.opens++;
+        throw new HostModeOffError("Daintree isn't running in Host mode there (no host.json).");
+      },
+    };
+    for (const lastSeenAt of [now - 2 * 60_000, now + 60 * 60_000]) {
+      transport.opens = 0;
+      client = new LinkClient({
+        transport,
+        handshake: TEST_HANDSHAKE,
+        client: { clientId: "c", clientName: "n", platform: "linux" },
+        backoff: { initialMs: 1, maxMs: 1, jitter: 0 },
+        random: () => 0,
+        now: () => now,
+        // An hour ahead is a clock that moved back: it proves nothing about a restart.
+        lastSeenAt: () => lastSeenAt,
+      });
+      client.start();
+      await waitFor(() => client!.getState().status === "unreachable");
+      expect(client.getState()).toMatchObject({ hostModeOff: true, retryAt: null });
+      expect(client.restarting).toBe(false);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(transport.opens).toBe(1);
+      await client.stop();
+    }
+  });
+
   it("stops retrying when ssh can't log in, until asked to try again", async () => {
     const transport = {
       opens: 0,

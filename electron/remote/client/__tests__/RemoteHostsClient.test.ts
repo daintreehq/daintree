@@ -40,6 +40,8 @@ function fakeManager() {
       lastActiveProject: ReturnType<typeof vi.fn>;
       noteActiveProject: ReturnType<typeof vi.fn>;
       whenReady: ReturnType<typeof vi.fn>;
+      retryNow: ReturnType<typeof vi.fn>;
+      restarting: boolean;
       boundViews: () => number[];
       hasLiveAssistant: (webContentsId: number) => boolean;
       hasActiveAgent: (webContentsId: number) => boolean;
@@ -78,6 +80,8 @@ function fakeManager() {
           lastActiveProject: vi.fn(async () => manager.last),
           noteActiveProject: vi.fn(),
           whenReady: vi.fn(async () => manager.readiness),
+          retryNow: vi.fn(),
+          restarting: false,
           boundViews: () => [...manager.bound],
           hasLiveAssistant: (webContentsId: number) =>
             manager.liveAssistants.get(hostId)?.has(webContentsId) === true,
@@ -796,7 +800,39 @@ describe("RemoteHostsClient", () => {
       manager.readiness = "host-mode-off";
       await expect(
         client.switchWindowHost(ctxFor(5, 1), { hostId: "studio-01", newWindow: false })
-      ).rejects.toMatchObject({ code: "HOST_MODE_OFF" });
+      ).rejects.toMatchObject({
+        code: "HOST_MODE_OFF",
+        userMessage: "Daintree isn't running in Host mode on studio-01. Set it up to work there.",
+      });
+      expect(bindings.get(1)).toBe("local");
+    });
+
+    it("doesn't ask to set up a host this machine has worked with: its Daintree isn't listening", async () => {
+      manager.readiness = "host-mode-off";
+      registry.recordObservation("studio-01", { lastSeenAt: 1_000 });
+      const failure = await client
+        .switchWindowHost(ctxFor(5, 1), { hostId: "studio-01", newWindow: false })
+        .catch((error: unknown) => error);
+      expect(failure).toMatchObject({
+        code: "HOST_MODE_OFF",
+        userMessage: "Daintree isn't listening on studio-01. Try again once it's running there.",
+      });
+    });
+
+    it("says the host may be restarting when its Daintree stopped listening moments ago", async () => {
+      manager.readiness = "timeout";
+      manager.connect("studio-01").restarting = true;
+      await expect(
+        client.switchWindowHost(ctxFor(5, 1), {
+          hostId: "studio-01",
+          newWindow: false,
+          projectId: "proj-1",
+        })
+      ).rejects.toMatchObject({
+        code: "HOST_DISCONNECTED",
+        userMessage:
+          "Daintree on studio-01 stopped listening moments ago and hasn't come back yet. If it's restarting, try again in a moment.",
+      });
       expect(bindings.get(1)).toBe("local");
     });
 
@@ -2176,6 +2212,113 @@ describe("RemoteHostsClient", () => {
       manager.emit("studio-01", connected);
       await new Promise((resolve) => setTimeout(resolve, 0));
       expect(resyncs()).toHaveLength(0);
+    });
+  });
+  describe("a window on a host whose Daintree isn't listening", () => {
+    const parked: HostConnectionState = {
+      status: "unreachable",
+      lastSeenAt: 1_000,
+      detail: "Daintree isn't running in Host mode there (no host.json).",
+      hostModeOff: true,
+      stoppedRetrying: true,
+    };
+    const connected: HostConnectionState = {
+      status: "connected",
+      rttMs: 1,
+      handshake: {} as never,
+    };
+    /** The check the window's link made, failing the same way. */
+    function checkedAgain() {
+      manager.emit("studio-01", { status: "connecting", attempt: 2 });
+      manager.emit("studio-01", parked);
+    }
+
+    it("checks back on the host now and then, backing off while it stays away", async () => {
+      vi.useFakeTimers();
+      try {
+        const link = manager.connect("studio-01");
+        bindings.set(1, "studio-01");
+        manager.emit("studio-01", parked);
+        vi.advanceTimersByTime(29_999);
+        expect(link.retryNow).not.toHaveBeenCalled();
+        vi.advanceTimersByTime(1);
+        expect(link.retryNow).toHaveBeenCalledTimes(1);
+
+        checkedAgain();
+        vi.advanceTimersByTime(59_999);
+        expect(link.retryNow).toHaveBeenCalledTimes(1);
+        vi.advanceTimersByTime(1);
+        expect(link.retryNow).toHaveBeenCalledTimes(2);
+
+        // However long it stays away, it is checked at least every five minutes.
+        for (let i = 0; i < 6; i++) {
+          checkedAgain();
+          vi.advanceTimersByTime(5 * 60_000);
+        }
+        expect(link.retryNow).toHaveBeenCalledTimes(8);
+
+        // Back, and away again later: the wait starts over.
+        manager.emit("studio-01", connected);
+        manager.emit("studio-01", parked);
+        vi.advanceTimersByTime(30_000);
+        expect(link.retryNow).toHaveBeenCalledTimes(9);
+      } finally {
+        await client.dispose();
+        vi.useRealTimers();
+      }
+    });
+
+    it("never dials a host no window shows, and stops once the last one leaves", async () => {
+      vi.useFakeTimers();
+      try {
+        const link = manager.connect("studio-01");
+        manager.emit("studio-01", parked);
+        vi.advanceTimersByTime(60 * 60_000);
+        expect(link.retryNow).not.toHaveBeenCalled();
+
+        bindings.set(1, "studio-01");
+        bindings.set(2, "studio-01");
+        vi.advanceTimersByTime(30_000);
+        expect(link.retryNow).toHaveBeenCalledTimes(1);
+
+        // One of two windows closing leaves the other still waiting on it.
+        checkedAgain();
+        bindings.release(1);
+        vi.advanceTimersByTime(60_000);
+        expect(link.retryNow).toHaveBeenCalledTimes(2);
+
+        checkedAgain();
+        bindings.set(2, "local");
+        vi.advanceTimersByTime(60 * 60_000);
+        expect(link.retryNow).toHaveBeenCalledTimes(2);
+      } finally {
+        await client.dispose();
+        vi.useRealTimers();
+      }
+    });
+
+    it("leaves a link alone that stopped for any other reason", async () => {
+      vi.useFakeTimers();
+      try {
+        const link = manager.connect("studio-01");
+        bindings.set(1, "studio-01");
+        // ssh refused the login: a check would knock on sshd for nothing.
+        manager.emit("studio-01", {
+          status: "unreachable",
+          lastSeenAt: 1_000,
+          detail: "Permission denied (publickey).",
+          stoppedRetrying: true,
+        });
+        vi.advanceTimersByTime(60 * 60_000);
+        // Parked, then let go (removed, disconnected): nothing left to check.
+        manager.emit("studio-01", parked);
+        manager.emit("studio-01", { status: "disconnected" });
+        vi.advanceTimersByTime(60 * 60_000);
+        expect(link.retryNow).not.toHaveBeenCalled();
+      } finally {
+        await client.dispose();
+        vi.useRealTimers();
+      }
     });
   });
 });

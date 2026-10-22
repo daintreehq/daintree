@@ -26,6 +26,12 @@ function hostName(hostId: HostId): string {
   return entry?.descriptor.name ?? hostId;
 }
 
+/** This machine has had a link up to the host at some point. */
+function everReached(hostId: HostId): boolean {
+  const entry = getHostListSnapshot().hosts.find((candidate) => candidate.descriptor.id === hostId);
+  return (entry?.descriptor.lastSeenAt ?? null) !== null;
+}
+
 /**
  * Where a switch that named no project lands when the host had nothing to
  * return to: that host's project list, shown in this window to pick from.
@@ -46,8 +52,8 @@ export function followSwitchResult(result: SwitchWindowHostResult | null | undef
  * The one way a failed switch to another host reads, whichever control started
  * it: the host's own words for what went wrong (never the IPC wire prefix), and
  * the one recovery that gets that host back — an update for a host on another
- * build, setting up Host mode where it's off, the host's details where ssh
- * couldn't log in, otherwise trying the same switch again.
+ * build, setting up Host mode on a host never reached, the host's details
+ * where ssh couldn't log in, otherwise trying the same switch again.
  */
 export function notifyHostSwitchFailure(
   hostId: HostId,
@@ -61,10 +67,12 @@ export function notifyHostSwitchFailure(
     isClientAppError(error) && error.code === "HOST_VERSION_MISMATCH"
       ? getHostListSnapshot().hosts.find((candidate) => candidate.descriptor.id === hostId)
       : undefined;
-  // Host mode off there: setting it up is what gets this host working.
+  // Host mode off on a host this machine has never reached: setting it up is
+  // what gets it working. One it has reached is set up already, and its
+  // Daintree not listening is retried once it is running there again.
   const update = entry
     ? hostUpdateOffer(entry)
-    : isClientAppError(error) && error.code === "HOST_MODE_OFF"
+    : isClientAppError(error) && error.code === "HOST_MODE_OFF" && !everReached(hostId)
       ? { hostId, target: "host" as const, label: "Set up…" }
       : null;
   // The host said the project is gone: trying again can't help, picking another

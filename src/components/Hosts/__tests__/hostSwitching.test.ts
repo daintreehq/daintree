@@ -136,6 +136,34 @@ describe("switchToHost", () => {
     expect(takePendingHostUpdate()).toBe("h1");
   });
 
+  it("offers a retry, not setting up, when Host mode is off on a host this machine has reached", async () => {
+    const entry = studio({
+      status: "unreachable",
+      lastSeenAt: 1_000,
+      detail: null,
+      hostModeOff: true,
+    });
+    entry.descriptor.lastSeenAt = 1_000;
+    m.hosts = [entry];
+    m.switchWindowHost.mockRejectedValue(
+      new ClientAppError(
+        "HOST_MODE_OFF",
+        "Daintree isn't running in Host mode on studio-01",
+        "Daintree isn't listening on studio-01. Try again once it's running there."
+      )
+    );
+    await switchToHost("h1", false, "p1");
+    const toast: { message: string; actions: Array<{ label: string; onClick: () => void }> } =
+      m.notify.mock.calls[0]![0];
+    expect(toast.message).toBe(
+      "Daintree isn't listening on studio-01. Try again once it's running there."
+    );
+    expect(toast.actions.map((action) => action.label)).toEqual(["Retry"]);
+    m.switchWindowHost.mockClear();
+    toast.actions[0]!.onClick();
+    await vi.waitFor(() => expect(m.switchWindowHost).toHaveBeenCalledTimes(1));
+  });
+
   it("says what ssh said and offers the host's settings when ssh couldn't log in", async () => {
     m.hosts = [
       studio({

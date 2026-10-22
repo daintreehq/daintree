@@ -121,9 +121,15 @@ export function getHostConnectionBannerCopy(
         description: HOST_READ_ONLY_DESCRIPTION,
       };
     case "host-mode-off":
+      // No Daintree listening there: quit, not started since a reboot, or
+      // never set up all look the same from here, so say only what was seen.
       return {
-        title: `Daintree isn't running in Host mode on ${hostName}`,
-        description: "Terminals are read-only until it is set up there.",
+        title:
+          lastSeenAt === null
+            ? `Daintree isn't listening on ${hostName}`
+            : `Daintree isn't listening on ${hostName} · last seen ${formatRelativeTime(lastSeenAt, now)}`,
+        description:
+          "This window reconnects once Daintree is running there again. Terminals are read-only until then.",
       };
     case "access-denied": {
       const said = sshRefusalLine(detail);
