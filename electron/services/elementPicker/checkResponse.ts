@@ -8,6 +8,7 @@ import type {
   HeldTarget,
   ResolutionResult,
   SourceFileRef,
+  SourceMapProvenance,
 } from "../../../shared/elementPicker/resolution.js";
 import type { SourceClaimKind } from "../../../shared/elementPicker/source.js";
 import { observationCandidates } from "./outcomes.js";
@@ -18,6 +19,8 @@ export interface ResponseAuthority {
   roots: SourceRoots;
   /** The revision main served for a path in this job, if it served one. */
   servedRevision: (path: string) => FileRevision | undefined;
+  /** Whether main served this map in this job. */
+  servedMap: (mapUrl: string | null, revision: FileRevision) => boolean;
 }
 
 /** A file named with a revision: the revision must be one main served for it. */
@@ -47,12 +50,32 @@ function namedFiles(result: ResolutionResult): NamedFile[] {
 }
 
 /**
+ * The maps a result says it was mapped through in this job. What a stale
+ * result held is history, like its held revision, so it names none.
+ */
+function citedMaps(result: ResolutionResult): SourceMapProvenance[] {
+  const cited = (target: HeldTarget) =>
+    "sourceMap" in target && target.sourceMap ? [target.sourceMap] : [];
+  switch (result.state) {
+    case "mapped":
+    case "verified":
+      return cited(result);
+    case "ambiguous":
+      return result.alternatives.flatMap(cited);
+    case "observed":
+    case "stale":
+    case "unavailable":
+      return [];
+  }
+}
+
+/**
  * The host's answer, if it answers this request. Well formed is not enough: it
  * must be for this request and epoch, speak only of the elements and
  * candidates the request carried, keep each candidate's claim, name files only
- * inside the request's own workspace and app, and claim only revisions main
- * actually served in this job. Anything else is a resolver bug, and none of it
- * is passed on.
+ * inside the request's own workspace and app, and claim only revisions and
+ * maps main actually served in this job. Anything else is a resolver bug, and
+ * none of it is passed on.
  */
 export function checkResolveResponse(
   request: ResolveRequest,
@@ -92,6 +115,8 @@ export function checkResolveResponse(
       if (results.has(result.candidateId)) return null;
       results.add(result.candidateId);
       if (!namedFiles(result).every(owned)) return null;
+      const maps = citedMaps(result);
+      if (!maps.every((map) => authority.servedMap(map.mapUrl, map.mapRevision))) return null;
     }
   }
   return response;

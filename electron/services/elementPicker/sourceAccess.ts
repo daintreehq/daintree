@@ -3,7 +3,6 @@ import { createHash } from "node:crypto";
 import fs, { type FileHandle } from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
 import { readBoundedFromHandle } from "../../utils/boundedRead.js";
-import { utf8ByteLength } from "../../../shared/utils/boundedOutput.js";
 import {
   SourceFileRefSchema,
   type FileRevision,
@@ -16,6 +15,8 @@ import type {
   RevisionedSourceMap,
   SourceAccessResult,
 } from "../../../shared/elementPicker/resolver.js";
+import { hasControlCharacter, isStrictlyInside } from "./containment.js";
+import { locateMapSource } from "./sourceLocator.js";
 
 /**
  * Main's half of `ResolverSourceAccess`: everything the host process may read
@@ -26,30 +27,16 @@ export function revisionOf(bytes: Uint8Array): FileRevision {
   return `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
 }
 
+function mapKey(mapUrl: string | null, revision: FileRevision): string {
+  return `${revision} ${mapUrl ?? ""}`;
+}
+
 /** Both canonical: realpathed once, when the workspace was registered. */
 export interface SourceRoots {
   /** What a `SourceFileRef.path` is relative to. */
   readonly worktreePath: string;
   /** What a read must stay inside. The worktree itself, or an app within it. */
   readonly appRoot: string;
-}
-
-export function isStrictlyInside(parent: string, child: string): boolean {
-  const relative = path.relative(parent, child);
-  return (
-    relative !== "" &&
-    relative !== ".." &&
-    !relative.startsWith(`..${path.sep}`) &&
-    !path.isAbsolute(relative)
-  );
-}
-
-function hasControlCharacter(value: string): boolean {
-  for (let index = 0; index < value.length; index++) {
-    const code = value.charCodeAt(index);
-    if (code < 0x20 || code === 0x7f) return true;
-  }
-  return false;
 }
 
 type Contained = { ok: true; absolute: string } | { ok: false; reason: UnavailableReason };
@@ -141,20 +128,33 @@ export async function readSourceRevision(
   return read?.status === "ok" ? revisionOf(read.bytes) : null;
 }
 
+/** One job's network allowance, spent as the work happens so a failed fetch still pays for what it moved. */
+export interface NetworkAllowance {
+  /** Spends one request, a redirect hop included; false when none is left. */
+  request(): boolean;
+  /** Spends bytes as they arrive; false once they pass what the job may move. */
+  bytes(count: number): boolean;
+}
+
+export interface ServedSourceMap extends RevisionedSourceMap {
+  /** What the map's relative sources resolve against: its own URL, or the module's, after redirects, for an inline map. */
+  base: string;
+}
+
 /**
- * Finds the map for a generated module. Main-only, and given the request's
- * remaining network allowance; the host still counts what it returns.
+ * Finds the map for a generated module. Main-only: it holds the origin the
+ * workspace was registered with and spends the job's allowance, so it alone
+ * decides what is fetched from where.
  */
 export type SourceMapProvider = (
-  request: { workspaceId: string; generatedUrl: string; maxBytes: number },
+  request: {
+    workspaceId: string;
+    previewOrigin: string;
+    generatedUrl: string;
+    allowance: NetworkAllowance;
+  },
   signal: AbortSignal
-) => Promise<SourceAccessResult<RevisionedSourceMap>>;
-
-/** No fetching yet: symbolication brings its own provider. */
-export const unsupportedSourceMaps: SourceMapProvider = async () => ({
-  ok: false,
-  reason: "unsupported",
-});
+) => Promise<SourceAccessResult<ServedSourceMap>>;
 
 export interface JobSourceAccessOptions {
   workspaceId: string;
@@ -164,6 +164,8 @@ export interface JobSourceAccessOptions {
   signal: AbortSignal;
   /** Whether an abort was the deadline, which reads as `budget-exhausted` rather than `cancelled`. */
   expired: () => boolean;
+  /** Where the workspace's preview is served from; null refuses every fetch. */
+  previewOrigin: string | null;
   sourceMaps: SourceMapProvider;
   /** A file this job read, for the workspace's tracker. */
   onRead: (absolute: string, file: SourceFileRef, revision: FileRevision) => void;
@@ -173,21 +175,41 @@ export interface JobSourceAccessOptions {
  * One job's reads, under its budget. A file is read at most once per job and
  * every later read of it is answered from that first one, so one resolve sees
  * one revision of each file and repeat reads cost nothing against `maxFiles`.
- * A read is charged when it starts, failed or not.
+ * A read is charged when it starts, failed or not. A map is the same: fetched
+ * once per generated URL, whichever resolver asks, so every resolver in the
+ * job sees the same map for a module.
  */
 export class JobSourceAccess {
   private readonly reads = new Map<string, Promise<SourceAccessResult<RevisionedSource>>>();
   private readonly served = new Map<string, FileRevision>();
+  private readonly maps = new Map<string, Promise<SourceAccessResult<ServedSourceMap>>>();
+  private readonly servedMaps = new Set<string>();
   private networkRequests = 0;
   private networkBytes = 0;
-  /** One fetch at a time, so each is handed what the ones before it left of the byte budget. */
+  /** One fetch at a time, so each starts with what the ones before it left of the allowance. */
   private fetching: Promise<unknown> = Promise.resolve();
+  private readonly allowance: NetworkAllowance = {
+    request: () => {
+      if (this.networkRequests >= this.options.budget.maxNetworkRequests) return false;
+      this.networkRequests += 1;
+      return true;
+    },
+    bytes: (count) => {
+      this.networkBytes += count;
+      return this.networkBytes <= this.options.budget.maxNetworkBytes;
+    },
+  };
 
   constructor(private readonly options: JobSourceAccessOptions) {}
 
   /** The revision this job served for a path, if it served one: a resolver may claim no other. */
   servedRevision(relative: string): FileRevision | undefined {
     return this.served.get(relative);
+  }
+
+  /** Whether this job served the map a result says it was mapped through. */
+  servedMap(mapUrl: string | null, revision: FileRevision): boolean {
+    return this.servedMaps.has(mapKey(mapUrl, revision));
   }
 
   readSource(file: unknown): Promise<SourceAccessResult<RevisionedSource>> {
@@ -209,27 +231,69 @@ export class JobSourceAccess {
   }
 
   fetchSourceMap(generatedUrl: string): Promise<SourceAccessResult<RevisionedSourceMap>> {
-    const { budget } = this.options;
-    if (!this.stopped() && this.networkRequests < budget.maxNetworkRequests) {
-      this.networkRequests += 1;
-    } else {
-      return Promise.resolve(this.stopped() ?? { ok: false, reason: "budget-exhausted" });
+    const stopped = this.stopped();
+    if (stopped) return Promise.resolve(stopped);
+    let fetched = this.maps.get(generatedUrl);
+    if (!fetched) {
+      fetched = this.fetching.then(() => this.fetch(generatedUrl));
+      this.fetching = fetched.catch(() => undefined);
+      this.maps.set(generatedUrl, fetched);
     }
-    const fetched = this.fetching.then(() => this.fetch(generatedUrl));
-    this.fetching = fetched.catch(() => undefined);
-    return fetched;
+    return fetched.then((result) => {
+      if (!result.ok) return result;
+      const { url, revision, text } = result.value;
+      return { ok: true, value: { url, revision, text } };
+    });
   }
 
-  private async fetch(generatedUrl: string): Promise<SourceAccessResult<RevisionedSourceMap>> {
+  /**
+   * The workspace file a source names in the map this job fetched for
+   * `generatedUrl`. Only a map this job served gives a source its base, so a
+   * resolver cannot pick what a relative source resolves against.
+   */
+  async locateSource(
+    generatedUrl: string,
+    source: string,
+    sourceRoot: string | null
+  ): Promise<SourceAccessResult<SourceFileRef>> {
     const stopped = this.stopped();
     if (stopped) return stopped;
-    const { budget } = this.options;
-    const maxBytes = budget.maxNetworkBytes - this.networkBytes;
-    if (maxBytes <= 0) return { ok: false, reason: "budget-exhausted" };
-    let result: SourceAccessResult<RevisionedSourceMap>;
+    const fetched = await this.maps.get(generatedUrl);
+    const late = this.stopped();
+    if (late) return late;
+    if (!fetched) return { ok: false, reason: "map-missing" };
+    // Whatever kept the map from this job keeps its sources from it too.
+    if (!fetched.ok) return fetched;
+    const { previewOrigin } = this.options;
+    if (previewOrigin === null) return { ok: false, reason: "unsupported" };
+    return locateMapSource(source, sourceRoot, {
+      workspaceId: this.options.workspaceId,
+      roots: this.options.roots,
+      previewOrigin,
+      base: fetched.value.base,
+    });
+  }
+
+  private async fetch(generatedUrl: string): Promise<SourceAccessResult<ServedSourceMap>> {
+    const stopped = this.stopped();
+    if (stopped) return stopped;
+    const { budget, previewOrigin } = this.options;
+    if (previewOrigin === null) return { ok: false, reason: "unsupported" };
+    if (
+      this.networkRequests >= budget.maxNetworkRequests ||
+      this.networkBytes >= budget.maxNetworkBytes
+    ) {
+      return { ok: false, reason: "budget-exhausted" };
+    }
+    let result: SourceAccessResult<ServedSourceMap>;
     try {
       result = await this.options.sourceMaps(
-        { workspaceId: this.options.workspaceId, generatedUrl, maxBytes },
+        {
+          workspaceId: this.options.workspaceId,
+          previewOrigin,
+          generatedUrl,
+          allowance: this.allowance,
+        },
         this.options.signal
       );
     } catch {
@@ -237,10 +301,7 @@ export class JobSourceAccess {
     }
     const late = this.stopped();
     if (late) return late;
-    if (!result.ok) return result;
-    this.networkBytes += utf8ByteLength(result.value.text);
-    if (this.networkBytes > budget.maxNetworkBytes)
-      return { ok: false, reason: "budget-exhausted" };
+    if (result.ok) this.servedMaps.add(mapKey(result.value.url, result.value.revision));
     return result;
   }
 

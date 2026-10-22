@@ -19,14 +19,14 @@ import { checkResolveResponse, relabelCancelled } from "./checkResponse.js";
 import { ElementPickerHostError, type ElementPickerHostErrorCode } from "./errors.js";
 import { HostOutboundSchema, type HostInbound } from "./hostProtocol.js";
 import { unavailableResponse } from "./outcomes.js";
+import { isStrictlyInside } from "./containment.js";
 import {
   JobSourceAccess,
-  isStrictlyInside,
   readSourceRevision,
-  unsupportedSourceMaps,
   type SourceMapProvider,
   type SourceRoots,
 } from "./sourceAccess.js";
+import { createSourceMapProvider } from "./sourceMapFetcher.js";
 import { SourceTracker, type SourceChange, type SourceTrackerOptions } from "./sourceTracker.js";
 import { WorkspaceRegistry, type PickerWorkspace } from "./workspaceRegistry.js";
 
@@ -89,10 +89,34 @@ export interface ElementPickerHostOptions {
 export interface RegisterWorkspaceOptions {
   /** The worktree `SourceFileRef` paths are relative to. */
   worktreePath: string;
-  /** The app inside it that reads are contained to; the worktree when omitted. */
+  /**
+   * The app inside it that reads are contained to; the worktree when omitted.
+   * Also the directory the preview's dev server serves from, which is what a
+   * root-relative source in a map is read against.
+   */
   appRoot?: string;
+  /**
+   * The dev server's origin. Source maps are fetched from here and nowhere
+   * else, redirects included; without one, nothing is fetched at all.
+   */
+  previewOrigin?: string;
   /** A file a resolve read changed on disk. */
   onSourceChanged: (change: SourceChange) => void;
+}
+
+/** An HTTP(S) origin with no credentials in it, or null when there is none to authorise. */
+function previewOriginOf(value: string | undefined): string | null {
+  if (value === undefined) return null;
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw hostError("INVALID_REQUEST", "the preview origin is not a URL");
+  }
+  if ((url.protocol !== "http:" && url.protocol !== "https:") || url.username || url.password) {
+    throw hostError("INVALID_REQUEST", "the preview origin is not a plain HTTP(S) origin");
+  }
+  return url.origin;
 }
 
 function defaultFork(): HostChild {
@@ -183,7 +207,7 @@ export class ElementPickerHost {
     this.fork = options.fork ?? defaultFork;
     this.kill = options.kill ?? defaultKill;
     this.watch = options.watch ?? ((directory, onChange) => watchShared(directory, onChange));
-    this.sourceMaps = options.sourceMaps ?? unsupportedSourceMaps;
+    this.sourceMaps = options.sourceMaps ?? createSourceMapProvider();
     this.idleMs = options.idleMs ?? HOST_IDLE_MS;
     this.startTimeoutMs = options.startTimeoutMs ?? HOST_START_TIMEOUT_MS;
     this.cancelGraceMs = options.cancelGraceMs ?? HOST_CANCEL_GRACE_MS;
@@ -202,6 +226,7 @@ export class ElementPickerHost {
    */
   async registerWorkspace(options: RegisterWorkspaceOptions): Promise<string> {
     if (this.disposed) throw hostError("HOST_DISPOSED", "the source host is shutting down");
+    const previewOrigin = previewOriginOf(options.previewOrigin);
     let worktreePath: string;
     let appRoot: string;
     try {
@@ -228,6 +253,7 @@ export class ElementPickerHost {
     this.workspaces.add({
       id,
       roots: { worktreePath, appRoot },
+      previewOrigin,
       lifetime: new AbortController(),
       tracker,
     });
@@ -348,6 +374,7 @@ export class ElementPickerHost {
           budget: request.budget,
           signal,
           expired,
+          previewOrigin: workspace.previewOrigin,
           sourceMaps: this.sourceMaps,
           onRead: (absolute, file, revision) => workspace.tracker.observe(absolute, file, revision),
         }),
@@ -514,6 +541,7 @@ export class ElementPickerHost {
         const response = checkResolveResponse(job.request, message.response, {
           roots: job.roots,
           servedRevision: (file) => job.access.servedRevision(file),
+          servedMap: (mapUrl, revision) => job.access.servedMap(mapUrl, revision),
         });
         job.settle(
           response
@@ -531,16 +559,23 @@ export class ElementPickerHost {
           ?.settle({ ok: false, error: hostError("RESOLVER_FAILED", message.message) });
         return;
       case "read-source":
-      case "fetch-source-map": {
+      case "fetch-source-map":
+      case "locate-source": {
         const job = generation.jobs.get(message.jobId);
         // A job already settled still gets an answer, so the host's read never hangs.
         const result = !job
           ? Promise.resolve({ ok: false as const, reason: "cancelled" as const })
           : message.type === "read-source"
             ? job.access.readSource(message.file)
-            : job.access.fetchSourceMap(message.generatedUrl);
+            : message.type === "fetch-source-map"
+              ? job.access.fetchSourceMap(message.generatedUrl)
+              : job.access.locateSource(message.generatedUrl, message.source, message.sourceRoot);
         const unreadable: UnavailableReason =
-          message.type === "read-source" ? "file-missing" : "map-missing";
+          message.type === "read-source"
+            ? "file-missing"
+            : message.type === "fetch-source-map"
+              ? "map-missing"
+              : "unsupported";
         void result
           .catch((error: unknown) => {
             logWarn(`${P} Source access failed`, {

@@ -11,6 +11,7 @@ function workspace(id: string): PickerWorkspace & { dispose: ReturnType<typeof v
   return {
     id,
     roots: { worktreePath: "/repo", appRoot: "/repo" },
+    previewOrigin: null,
     lifetime: new AbortController(),
     tracker: { dispose } as unknown as SourceTracker,
     dispose,

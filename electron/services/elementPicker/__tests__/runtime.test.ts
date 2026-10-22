@@ -105,6 +105,76 @@ describe("host runtime", () => {
     });
   });
 
+  it("asks main where a map's source is, and hands the resolver main's answer", async () => {
+    const located: unknown[] = [];
+    const { subject, next } = runtime({
+      react: async () => ({
+        framework: "react",
+        resolve: async (req, access, signal) => {
+          located.push(
+            await access.locateSource(
+              { generatedUrl: "http://localhost:5173/src/A.tsx", source: "A.tsx", sourceRoot: "/" },
+              signal
+            )
+          );
+          return { requestId: req.requestId, documentEpoch: req.documentEpoch, outcomes: [] };
+        },
+      }),
+    });
+    subject.handle({
+      type: "resolve",
+      jobId: 8,
+      request: request("ws", [observation("el-1", [candidate("c-1", "a.tsx", "react")])]),
+    });
+    const ask = await next("locate-source");
+    expect(ask).toMatchObject({
+      jobId: 8,
+      generatedUrl: "http://localhost:5173/src/A.tsx",
+      source: "A.tsx",
+      sourceRoot: "/",
+    });
+    const value = { workspaceId: "ws", path: "src/A.tsx" };
+    subject.handle({
+      type: "access-result",
+      jobId: 8,
+      accessId: ask.type === "locate-source" ? ask.accessId : 0,
+      result: { ok: true, value },
+    });
+    await next("resolved");
+    expect(located).toEqual([{ ok: true, value }]);
+  });
+
+  it("refuses an access too long for the wire instead of sending it", async () => {
+    const answers: unknown[] = [];
+    const long = `http://localhost:5173/${"a".repeat(4096)}`;
+    const { subject, sent, next } = runtime({
+      react: async () => ({
+        framework: "react",
+        resolve: async (req, access, signal) => {
+          answers.push(
+            await access.fetchSourceMap(long, signal),
+            await access.locateSource(
+              { generatedUrl: "http://localhost:5173/a.js", source: long + long, sourceRoot: null },
+              signal
+            )
+          );
+          return { requestId: req.requestId, documentEpoch: req.documentEpoch, outcomes: [] };
+        },
+      }),
+    });
+    subject.handle({
+      type: "resolve",
+      jobId: 9,
+      request: request("ws", [observation("el-1", [candidate("c-1", "a.tsx", "react")])]),
+    });
+    await next("resolved");
+    expect(answers).toEqual([
+      { ok: false, reason: "map-missing" },
+      { ok: false, reason: "unsupported" },
+    ]);
+    expect(sent.map((message) => message.type)).toEqual([]);
+  });
+
   it("answers a cancelled job with every unanswered candidate cancelled", async () => {
     const { subject, next } = runtime({ svelte: async () => stubResolver() });
     subject.handle({
