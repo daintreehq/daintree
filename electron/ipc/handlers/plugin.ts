@@ -71,6 +71,8 @@ import {
   selectContributionsForProject,
 } from "../../services/plugin/PluginContributionBroadcaster.js";
 import type { PluginCustomIconAsset } from "../../../shared/config/pluginCustomIcon.js";
+import { getPluginThemeSchemes } from "../../services/plugin/PluginThemeRegistry.js";
+import type { AppColorScheme } from "../../../shared/theme/types.js";
 import { getPluginAgentRegistry } from "../../../shared/config/pluginAgentRegistry.js";
 import type { AgentConfig } from "../../../shared/config/agentRegistry.js";
 import type { PluginRecipeMetadataPatch, TerminalRecipe } from "../../../shared/types/project.js";
@@ -1206,6 +1208,15 @@ async function handleHostedViewsGet(ctx: IpcContext): Promise<PluginHostedViewDe
   return getPluginHostedViewsForProject(ctx.projectId);
 }
 
+/**
+ * Every theme an installed plugin offers (#13832). Not project-scoped: the
+ * app theme is one machine-wide selection.
+ */
+async function handleThemesGet(): Promise<AppColorScheme[]> {
+  await (await getPluginService()).waitForInit();
+  return getPluginThemeSchemes();
+}
+
 async function handleIconsGet(ctx: IpcContext): Promise<PluginCustomIconAsset[]> {
   await (await getPluginService()).waitForInit();
   return getPluginCustomIconsForProject(ctx.projectId);
@@ -2236,6 +2247,7 @@ export const pluginNamespace = defineIpcNamespace({
       withContext: true,
     }),
     getIcons: op(PLUGIN_METHOD_CHANNELS.getIcons, handleIconsGet, { withContext: true }),
+    getThemes: op(PLUGIN_METHOD_CHANNELS.getThemes, handleThemesGet),
     recordRecipeUse: op(PLUGIN_METHOD_CHANNELS.recordRecipeUse, handleRecipeRecordUse, {
       withContext: true,
     }),

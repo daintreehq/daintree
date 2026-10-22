@@ -8,6 +8,7 @@ import {
   getAppThemeFallbackType,
   normalizeAccentHex,
   normalizeAppColorScheme,
+  readPluginThemeSnapshot,
 } from "@shared/theme";
 import type { AppColorScheme, AppThemeConfig } from "@shared/types/appTheme";
 import type { ColorVisionMode } from "@shared/types";
@@ -41,6 +42,10 @@ export function useAppThemeConfig() {
       if (normalizedAccent || config.accentColorOverride === null) {
         useAppThemeStore.setState({ accentColorOverride: normalizedAccent });
       }
+
+      // Before the selection, which it may name: a selected plugin theme paints
+      // from its persisted snapshot until its plugin has loaded (#13832).
+      useAppThemeStore.setState({ pluginSnapshotScheme: readPluginThemeSnapshot(config) });
 
       if (typeof config.colorSchemeId === "string" && config.colorSchemeId.trim()) {
         const schemeId = config.colorSchemeId.trim();

@@ -1885,6 +1885,10 @@ export interface GeneratedIpcInvokeMap {
     ];
     result: void;
   };
+  "plugin:themes-get": {
+    args: [];
+    result: import("../../theme/types.js").AppColorScheme[];
+  };
   "plugin:toolbar-buttons": {
     args: [];
     result: import("../../config/toolbarButtonRegistry.js").ToolbarButtonConfig[];

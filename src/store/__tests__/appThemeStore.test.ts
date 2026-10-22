@@ -2,6 +2,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BUILT_IN_APP_SCHEMES, DEFAULT_APP_SCHEME_ID } from "@/config/appColorSchemes";
 import { flushPendingTheme, injectSchemeToDOM, useAppThemeStore } from "../appThemeStore";
+import type { AppColorScheme } from "@shared/theme";
+import { selectSelectableSchemes } from "@/theme/selectableSchemes";
+import { resolveAppTheme } from "@shared/theme";
 
 describe("appThemeStore.recentSchemeIds LRU", () => {
   beforeEach(() => {
@@ -391,5 +394,188 @@ describe("setSelectedSchemeIdSilent crossfade option", () => {
     expect(useAppThemeStore.getState().selectedSchemeId).toBe("svalbard");
     flushPendingTheme();
     expect(canvasToken()).toBe(svalbard.tokens["surface-canvas"]);
+  });
+});
+
+describe("plugin themes (#13832)", () => {
+  const daintree = BUILT_IN_APP_SCHEMES.find((s) => s.id === "daintree")!;
+  const bondi = BUILT_IN_APP_SCHEMES.find((s) => s.id === "bondi")!;
+  const pluginTheme = (id: string, base = daintree, canvas = "#123456"): AppColorScheme => ({
+    ...base,
+    id,
+    name: "Midnight",
+    builtin: false,
+    tokens: { ...base.tokens, "surface-canvas": canvas },
+    plugin: { id: "acme.themes", name: "Acme Themes" },
+  });
+  const MIDNIGHT_ID = "plugin:acme.themes:midnight";
+  const canvasToken = () =>
+    document.documentElement.style.getPropertyValue("--theme-surface-canvas");
+
+  beforeEach(() => {
+    flushPendingTheme();
+    // jsdom has no matchMedia; reduced motion takes the crossfade's direct path.
+    Reflect.deleteProperty(window, "matchMedia");
+    useAppThemeStore.setState({
+      selectedSchemeId: DEFAULT_APP_SCHEME_ID,
+      customSchemes: [],
+      pluginSchemes: [],
+      pluginSnapshotScheme: null,
+      previewSchemeId: null,
+      colorVisionMode: "default",
+      accentColorOverride: null,
+      recentSchemeIds: [],
+    });
+    injectSchemeToDOM(daintree, { immediate: true });
+  });
+
+  afterEach(() => {
+    flushPendingTheme();
+  });
+
+  it("selects a theme from the plugin catalog", () => {
+    useAppThemeStore.setState({ pluginSchemes: [pluginTheme(MIDNIGHT_ID)] });
+    useAppThemeStore.getState().setSelectedSchemeId(MIDNIGHT_ID);
+    flushPendingTheme();
+
+    expect(useAppThemeStore.getState().selectedSchemeId).toBe(MIDNIGHT_ID);
+    expect(canvasToken()).toBe("#123456");
+  });
+
+  it("paints a persisted plugin theme before its plugin has loaded", () => {
+    useAppThemeStore.setState({ pluginSnapshotScheme: pluginTheme(MIDNIGHT_ID) });
+    useAppThemeStore.getState().setSelectedSchemeIdSilent(MIDNIGHT_ID);
+    flushPendingTheme();
+
+    expect(useAppThemeStore.getState().selectedSchemeId).toBe(MIDNIGHT_ID);
+    expect(canvasToken()).toBe("#123456");
+  });
+
+  it("never lets a plugin theme shadow an imported theme with the same id", () => {
+    useAppThemeStore.setState({
+      customSchemes: [pluginTheme(MIDNIGHT_ID, daintree, "#abcdef")],
+      pluginSchemes: [pluginTheme(MIDNIGHT_ID)],
+    });
+    useAppThemeStore.getState().setSelectedSchemeId(MIDNIGHT_ID);
+    flushPendingTheme();
+
+    expect(canvasToken()).toBe("#abcdef");
+  });
+
+  it("repaints the selected plugin theme when its plugin updates the palette", () => {
+    useAppThemeStore.setState({ pluginSchemes: [pluginTheme(MIDNIGHT_ID)] });
+    useAppThemeStore.getState().setSelectedSchemeId(MIDNIGHT_ID);
+    flushPendingTheme();
+
+    useAppThemeStore.getState().setPluginSchemes([pluginTheme(MIDNIGHT_ID, daintree, "#654321")]);
+    flushPendingTheme();
+
+    expect(canvasToken()).toBe("#654321");
+  });
+
+  it("leaves the DOM to an open preview when the catalog changes", () => {
+    useAppThemeStore.setState({
+      pluginSchemes: [pluginTheme(MIDNIGHT_ID)],
+      selectedSchemeId: MIDNIGHT_ID,
+      previewSchemeId: "bondi",
+    });
+    injectSchemeToDOM(bondi, { immediate: true });
+
+    useAppThemeStore.getState().setPluginSchemes([pluginTheme(MIDNIGHT_ID, daintree, "#654321")]);
+    flushPendingTheme();
+
+    expect(canvasToken()).toBe(bondi.tokens["surface-canvas"]);
+  });
+
+  it("keeps a plugin theme picked this session painted while its plugin reloads", () => {
+    useAppThemeStore.setState({ pluginSchemes: [pluginTheme(MIDNIGHT_ID)] });
+    useAppThemeStore.getState().setSelectedSchemeId(MIDNIGHT_ID);
+    flushPendingTheme();
+
+    useAppThemeStore.getState().setPluginSchemes([]);
+    flushPendingTheme();
+
+    expect(useAppThemeStore.getState().selectedSchemeId).toBe(MIDNIGHT_ID);
+    expect(canvasToken()).toBe("#123456");
+  });
+
+  it("stops offering a plugin theme the user moved off once its plugin goes", () => {
+    useAppThemeStore.setState({ pluginSnapshotScheme: pluginTheme(MIDNIGHT_ID) });
+    useAppThemeStore.getState().setSelectedSchemeIdSilent(MIDNIGHT_ID);
+    useAppThemeStore.getState().setSelectedSchemeId("bondi");
+
+    expect(useAppThemeStore.getState().pluginSnapshotScheme).toBeNull();
+    expect(selectSelectableSchemes(useAppThemeStore.getState())).toEqual([]);
+  });
+
+  it("leaves an open preview on screen when main replaces the committed theme", () => {
+    useAppThemeStore.setState({
+      pluginSnapshotScheme: pluginTheme(MIDNIGHT_ID),
+      selectedSchemeId: MIDNIGHT_ID,
+      previewSchemeId: "bondi",
+    });
+    injectSchemeToDOM(bondi, { immediate: true });
+
+    useAppThemeStore.getState().applyPluginThemeFallback("svalbard");
+    flushPendingTheme();
+
+    const state = useAppThemeStore.getState();
+    expect(state.selectedSchemeId).toBe("svalbard");
+    expect(state.previewSchemeId).toBe("bondi");
+    expect(canvasToken()).toBe(bondi.tokens["surface-canvas"]);
+  });
+
+  it("keeps the palette of a plugin theme main fell back to while a preview is open", () => {
+    const NOIR_ID = "plugin:acme.themes:noir";
+    useAppThemeStore.setState({
+      pluginSchemes: [pluginTheme(NOIR_ID, daintree, "#0a0a0a")],
+      pluginSnapshotScheme: pluginTheme(MIDNIGHT_ID),
+      selectedSchemeId: MIDNIGHT_ID,
+      previewSchemeId: "bondi",
+    });
+
+    useAppThemeStore.getState().applyPluginThemeFallback(NOIR_ID);
+    // Noir's plugin reloads before the preview ends.
+    useAppThemeStore.getState().setPluginSchemes([]);
+    useAppThemeStore.getState().setPreviewSchemeId(null);
+    const state = useAppThemeStore.getState();
+    injectSchemeToDOM(resolveAppTheme(state.selectedSchemeId, selectSelectableSchemes(state)), {
+      immediate: true,
+    });
+
+    expect(state.selectedSchemeId).toBe(NOIR_ID);
+    expect(canvasToken()).toBe("#0a0a0a");
+  });
+
+  it("ends a preview of a plugin theme that stops being offered", () => {
+    useAppThemeStore.setState({
+      pluginSchemes: [pluginTheme(MIDNIGHT_ID)],
+      selectedSchemeId: "bondi",
+      previewSchemeId: MIDNIGHT_ID,
+    });
+    injectSchemeToDOM(pluginTheme(MIDNIGHT_ID), { immediate: true });
+
+    useAppThemeStore.getState().setPluginSchemes([]);
+    flushPendingTheme();
+
+    expect(useAppThemeStore.getState().previewSchemeId).toBeNull();
+    expect(canvasToken()).toBe(bondi.tokens["surface-canvas"]);
+  });
+
+  it("moves to main's fallback and forgets the vanished theme", () => {
+    useAppThemeStore.setState({
+      pluginSnapshotScheme: pluginTheme(MIDNIGHT_ID),
+      selectedSchemeId: MIDNIGHT_ID,
+      recentSchemeIds: [MIDNIGHT_ID, "svalbard"],
+    });
+
+    useAppThemeStore.getState().applyPluginThemeFallback("bondi");
+    flushPendingTheme();
+
+    const state = useAppThemeStore.getState();
+    expect(state.selectedSchemeId).toBe("bondi");
+    expect(state.pluginSnapshotScheme).toBeNull();
+    expect(state.recentSchemeIds).toEqual(["svalbard"]);
+    expect(canvasToken()).toBe(bondi.tokens["surface-canvas"]);
   });
 });

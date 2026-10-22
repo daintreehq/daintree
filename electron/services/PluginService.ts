@@ -278,6 +278,13 @@ import {
 import { loadPluginCustomIcons } from "./plugin/pluginIconAssets.js";
 import { registerPluginSkills, unregisterPluginSkills } from "./plugin/PluginSkillRegistry.js";
 import {
+  loadPluginThemes,
+  registerPluginThemes,
+  unregisterPluginThemes,
+  type PluginThemeLoadResult,
+} from "./plugin/PluginThemeRegistry.js";
+import { reconcilePluginThemeSelection } from "./appThemePluginSelection.js";
+import {
   getPluginRecipe,
   getPluginRecipeOwner,
   getPluginRecipeQualifiedIdsByPlugin,
@@ -1170,6 +1177,21 @@ export class PluginService {
   private disposed = false;
   private readonly disposeRegistrySubscriptions: () => void;
   /**
+   * Set once a startup scan has enumerated every plugin root, which is what
+   * makes the theme catalog authoritative: before it, or after a scan that
+   * threw, a selected plugin theme missing from the catalog may simply not
+   * have loaded yet, so it is replaced only when its own plugin is known to
+   * have loaded without it or to have been removed (#13832).
+   */
+  private pluginThemeCatalogReady = false;
+  private pluginThemeSyncQueued = false;
+  /** Theme-bearing plugins between `unloadPlugin(id, { reload: true })` and its settle. */
+  private readonly pluginThemeReloads = new Set<string>();
+  /** Theme-bearing plugins an unload removed for good since the last sync. */
+  private readonly pluginThemeRemovals = new Set<string>();
+  /** Whether the catalog changed since renderers were last sent it. */
+  private pluginThemeCatalogDirty = false;
+  /**
    * Resolves once {@link initialize} and {@link activateStartupFinishedPlugins}
    * have both settled (or {@link dispose} has run). Renderer pull-on-mount IPC
    * handlers await this so a fresh `getActions` / `getPanelKinds` /
@@ -1615,6 +1637,10 @@ export class PluginService {
       // installed-id set is authoritative. A partial inventory would read as
       // "uninstalled" and delete live metadata (#6110).
       await this.reconcilePluginRecipeMetadata();
+      // The same holds for the theme catalog: a selected plugin theme it lacks
+      // now is genuinely gone.
+      this.pluginThemeCatalogReady = true;
+      this.schedulePluginThemeSync();
     } finally {
       // Idempotency must hold even when a scan throws (e.g. EACCES on the
       // user dir): a retry would re-run the built-in scan and trigger
@@ -2403,6 +2429,21 @@ export class PluginService {
       await registerPluginSkills(pluginId, pluginDir, manifest.contributes.skills);
     }
 
+    // Themes (#13832) are read, validated and contrast-gated here, before the
+    // commit, and registered after it so a refusal can be written to the
+    // committed instance's log. Project plugins can't declare them (the schema
+    // refuses the group).
+    const themeContributions = manifest.contributes.themes ?? [];
+    let themeLoad: PluginThemeLoadResult | null = null;
+    if (themeContributions.length > 0) {
+      themeLoad = await loadPluginThemes(
+        pluginId,
+        manifest.displayName ?? manifest.name,
+        pluginDir,
+        themeContributions
+      );
+    }
+
     if (manifest.contributes.agents.length > 0) {
       registerPluginAgents(pluginId, manifest.contributes.agents, pluginDir);
       this.broadcaster.scheduleAgentsBroadcast(false);
@@ -2455,6 +2496,19 @@ export class PluginService {
     if (customIconAssets.length > 0) {
       registerPluginCustomIcons(pluginId, customIconAssets);
       this.broadcaster.schedulePluginIconsBroadcast();
+    }
+    if (themeLoad) {
+      registerPluginThemes(pluginId, themeLoad.accepted);
+      this.pluginThemeCatalogDirty = true;
+      for (const { themeId, reason } of themeLoad.refused) {
+        this.recordPluginLog(
+          plugin,
+          pluginId,
+          "warn",
+          `Theme "${themeId}" isn't offered: ${reason}`
+        );
+      }
+      this.schedulePluginThemeSync();
     }
 
     // The host's read-only database endpoint, bound with the plugin rather than
@@ -6625,6 +6679,10 @@ export class PluginService {
    * persisted intent is read here too.
    */
   private settlePluginReload(pluginId: string): void {
+    // A settled reload speaks for its plugin's themes whether or not anything
+    // loaded, so it counts as a removal for the sync it schedules.
+    if (this.pluginThemeReloads.delete(pluginId)) this.pluginThemeRemovals.add(pluginId);
+    this.schedulePluginThemeSync();
     const current = this.records.getDisabledIds().has(pluginId)
       ? undefined
       : this.plugins.get(pluginId);
@@ -6632,6 +6690,38 @@ export class PluginService {
       pluginId,
       current ? agentMcpSurfaceOf(current.manifest) : null
     );
+  }
+
+  /**
+   * Settle the theme selection against the catalog and publish the catalog,
+   * once per turn however many plugins changed (#13832). Deferred so a disable
+   * has finished moving the plugin aside before the selection is judged, and
+   * skipped after {@link dispose}, whose unload sweep must not read as every
+   * plugin going away.
+   */
+  private schedulePluginThemeSync(): void {
+    if (this.disposed || this.pluginThemeSyncQueued) return;
+    this.pluginThemeSyncQueued = true;
+    queueMicrotask(() => {
+      this.pluginThemeSyncQueued = false;
+      if (this.disposed) return;
+      const removals = new Set(this.pluginThemeRemovals);
+      this.pluginThemeRemovals.clear();
+      let fallbackSchemeId: string | null = null;
+      try {
+        fallbackSchemeId = reconcilePluginThemeSelection(
+          (owner) =>
+            !this.pluginThemeReloads.has(owner) &&
+            (this.pluginThemeCatalogReady || this.plugins.has(owner) || removals.has(owner))
+        );
+      } catch (err) {
+        console.error("[PluginService] Failed to settle the plugin theme selection:", err);
+      }
+      // Renderers pull the catalog on mount, so only a change is worth a push.
+      if (!this.pluginThemeCatalogDirty && fallbackSchemeId === null) return;
+      this.pluginThemeCatalogDirty = false;
+      this.broadcaster.scheduleThemesBroadcast(fallbackSchemeId);
+    });
   }
 
   unloadPlugin(pluginId: string, options?: { reload: true }): void {
@@ -6763,6 +6853,13 @@ export class PluginService {
       unregisterFileDecorationProviderImpls(pluginId)
     );
     runUnloadStep(pluginId, "unregisterPluginSkills", () => unregisterPluginSkills(pluginId));
+    runUnloadStep(pluginId, "unregisterPluginThemes", () => {
+      if (!unregisterPluginThemes(pluginId)) return;
+      this.pluginThemeCatalogDirty = true;
+      if (options?.reload) this.pluginThemeReloads.add(pluginId);
+      else this.pluginThemeRemovals.add(pluginId);
+      this.schedulePluginThemeSync();
+    });
     // Recipes retract on unload/disable/reload, but their sidecar metadata does
     // NOT — only an explicit successful uninstall purges that (#11860).
     runUnloadStep(pluginId, "unregisterPluginRecipes", () => unregisterPluginRecipes(pluginId));

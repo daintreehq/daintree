@@ -3809,6 +3809,12 @@ function buildElectronApi(): ElectronAPI {
           views: import("../shared/types/plugin.js").PluginHostedViewDescriptor[];
         }) => void
       ) => _eventBusOn("plugin:hosted-views-changed", callback),
+      onThemesChanged: (
+        callback: (payload: {
+          themes: import("../shared/types/appTheme.js").AppColorScheme[];
+          fallbackSchemeId?: string;
+        }) => void
+      ) => _eventBusOn("plugin:themes-changed", callback),
       onIconsChanged: (
         callback: (payload: {
           icons: import("../shared/config/pluginCustomIcon.js").PluginCustomIconAsset[];

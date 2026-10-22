@@ -11,6 +11,7 @@ import { notify } from "@/lib/notify";
 import { keybindingService } from "@/services/KeybindingService";
 import { actionService } from "@/services/ActionService";
 import { getBuiltInAppSchemeForType, resolveAppTheme } from "@shared/theme";
+import { selectSelectableSchemes } from "@/theme/selectableSchemes";
 import { logError } from "@/utils/logger";
 import { IMPORT_CONFIG_EVENT } from "@/components/Config/importConfigEvent";
 import { pluralize } from "@/lib/pluralize";
@@ -256,14 +257,15 @@ export function registerAppActions(actions: ActionRegistry, callbacks: ActionCal
     scope: "renderer",
     keywords: ["appearance", "mode", "dark", "light"],
     run: async () => {
+      const state = useAppThemeStore.getState();
       const {
         selectedSchemeId,
         customSchemes,
         preferredDarkSchemeId,
         preferredLightSchemeId,
         setSelectedSchemeId,
-      } = useAppThemeStore.getState();
-      const current = resolveAppTheme(selectedSchemeId, customSchemes);
+      } = state;
+      const current = resolveAppTheme(selectedSchemeId, selectSelectableSchemes(state));
       const targetType: "dark" | "light" = current.type === "light" ? "dark" : "light";
       const preferredTargetId =
         targetType === "dark" ? preferredDarkSchemeId : preferredLightSchemeId;

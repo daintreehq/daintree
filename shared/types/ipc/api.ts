@@ -2615,6 +2615,13 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     onHostedViewsChanged(
       callback: (payload: { views: import("../plugin.js").PluginHostedViewDescriptor[] }) => void
     ): () => void;
+    /** Subscribe to the plugin theme catalog (#13832). Returns a cleanup. */
+    onThemesChanged(
+      callback: (payload: {
+        themes: import("../appTheme.js").AppColorScheme[];
+        fallbackSchemeId?: string;
+      }) => void
+    ): () => void;
     /** Subscribe to plugin custom-icon snapshot changes (#13143). Returns a cleanup. */
     onIconsChanged(
       callback: (payload: {

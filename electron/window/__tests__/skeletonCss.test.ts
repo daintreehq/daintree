@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveAppTheme } from "../../../shared/theme/index.js";
+import { BUILT_IN_THEME_SOURCES } from "../../../shared/theme/builtInThemes/index.js";
 
 const storeMock = vi.hoisted(() => ({
   get: vi.fn((key: string): unknown => {
@@ -121,6 +122,40 @@ describe("resolveInitialCanvasBackgroundColor (#9573)", () => {
       return undefined;
     });
     expect(resolveInitialCanvasBackgroundColor()).toBe("#fafafa");
+  });
+
+  it("paints a selected plugin theme from its snapshot before any plugin loads (#13832)", () => {
+    const bondi = BUILT_IN_THEME_SOURCES.find((source) => source.id === "bondi")!;
+    const palette = {
+      ...bondi.palette,
+      surfaces: { ...bondi.palette.surfaces, canvas: "#fdfcf8" },
+    };
+    const snapshot = {
+      version: 1,
+      id: "plugin:acme.themes:dawn",
+      name: "Dawn",
+      type: "light",
+      pluginId: "acme.themes",
+      pluginName: "Acme Themes",
+      palette,
+    };
+    storeMock.get.mockImplementation((key: string) => {
+      if (key === "appTheme") {
+        return { colorSchemeId: snapshot.id, pluginThemeSnapshot: snapshot };
+      }
+      return undefined;
+    });
+    expect(resolveInitialCanvasBackgroundColor()).toBe("#fdfcf8");
+    expect(buildSkeletonCss()).toContain("--theme-surface-canvas: #fdfcf8;");
+
+    // A snapshot that no longer names the selection paints nothing of its own.
+    storeMock.get.mockImplementation((key: string) => {
+      if (key === "appTheme") return { colorSchemeId: "daintree", pluginThemeSnapshot: snapshot };
+      return undefined;
+    });
+    expect(resolveInitialCanvasBackgroundColor()).toBe(
+      resolveAppTheme("daintree", []).tokens["surface-canvas"]
+    );
   });
 });
 

@@ -18,6 +18,7 @@ import {
 import { cn } from "@/lib/utils";
 import { BUILT_IN_APP_SCHEMES, DEFAULT_APP_SCHEME_ID } from "@/config/appColorSchemes";
 import { injectSchemeToDOM, useAppThemeStore } from "@/store/appThemeStore";
+import { selectSelectableSchemes } from "@/theme/selectableSchemes";
 import { appThemeClient } from "@/clients/appThemeClient";
 import { runThemeReveal } from "@/lib/appThemeViewTransition";
 import {
@@ -188,6 +189,7 @@ interface SaveError {
 export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
   const selectedSchemeId = useAppThemeStore((s) => s.selectedSchemeId);
   const customSchemes = useAppThemeStore((s) => s.customSchemes);
+  const selectableSchemes = useAppThemeStore(selectSelectableSchemes);
   const commitSchemeSelection = useAppThemeStore((s) => s.commitSchemeSelection);
   const addCustomScheme = useAppThemeStore((s) => s.addCustomScheme);
   const followSystem = useAppThemeStore((s) => s.followSystem);
@@ -284,13 +286,22 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
     }
   };
 
-  const allSchemes = useMemo(() => [...BUILT_IN_APP_SCHEMES, ...customSchemes], [customSchemes]);
-  const darkSchemes = useMemo(() => allSchemes.filter((s) => s.type !== "light"), [allSchemes]);
-  const lightSchemes = useMemo(() => allSchemes.filter((s) => s.type === "light"), [allSchemes]);
+  // Plugin themes are chosen directly but never fill a follow-system slot, so
+  // the slot pickers list only built-in and imported themes (#13832).
+  const slotSchemes = useMemo(() => [...BUILT_IN_APP_SCHEMES, ...customSchemes], [customSchemes]);
+  const allSchemes = useMemo(
+    () => [...BUILT_IN_APP_SCHEMES, ...selectableSchemes],
+    [selectableSchemes]
+  );
+  const darkSchemes = useMemo(() => slotSchemes.filter((s) => s.type !== "light"), [slotSchemes]);
+  const lightSchemes = useMemo(() => slotSchemes.filter((s) => s.type === "light"), [slotSchemes]);
   const selectedScheme = useMemo(
     () => allSchemes.find((s) => s.id === selectedSchemeId) ?? allSchemes[0]!,
     [allSchemes, selectedSchemeId]
   );
+  const selectedSchemeSource =
+    selectedScheme.location ??
+    (selectedScheme.plugin ? `From ${selectedScheme.plugin.name}` : null);
 
   const {
     imgRef: heroImgRef,
@@ -371,7 +382,7 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
     if (storeFollowSystem) setFollowSystem(false);
     commitSchemeSelection(id);
     const targetRecents = useAppThemeStore.getState().recentSchemeIds;
-    const scheme = resolveAppTheme(id, useAppThemeStore.getState().customSchemes);
+    const scheme = resolveAppTheme(id, selectSelectableSchemes(useAppThemeStore.getState()));
     runThemeReveal(origin ?? null, () => injectSchemeToDOM(scheme, { immediate: true }));
 
     const restoreConfirmed = () => {
@@ -385,7 +396,10 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
       commitSchemeSelection(confirmed.selectedSchemeId);
       setRecentSchemeIds(confirmed.recentSchemeIds);
       injectSchemeToDOM(
-        resolveAppTheme(confirmed.selectedSchemeId, useAppThemeStore.getState().customSchemes),
+        resolveAppTheme(
+          confirmed.selectedSchemeId,
+          selectSelectableSchemes(useAppThemeStore.getState())
+        ),
         { immediate: true }
       );
     };
@@ -554,7 +568,10 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
     const otherIds = allSchemes.map((s) => s.id).filter((id) => id !== selectedSchemeId);
     if (otherIds.length === 0) return;
 
-    shuffleQueueRef.current = shuffleQueueRef.current.filter((id) => id !== selectedSchemeId);
+    // Plugin themes can leave between clicks, so the queue keeps only what is
+    // still on offer.
+    const offered = new Set(otherIds);
+    shuffleQueueRef.current = shuffleQueueRef.current.filter((id) => offered.has(id));
 
     if (shuffleQueueRef.current.length === 0) {
       shuffleQueueRef.current = shuffleArray(otherIds);
@@ -602,9 +619,9 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
           <span className="text-sm font-medium text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.5)]">
             {selectedScheme.name}
           </span>
-          {selectedScheme.location && (
+          {selectedSchemeSource && (
             <span className="min-w-0 truncate text-2xs text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.5)]">
-              {selectedScheme.location}
+              {selectedSchemeSource}
             </span>
           )}
         </div>

@@ -25,6 +25,21 @@ describe("appThemeImporter", () => {
     expect(result.warnings).toEqual([]);
   });
 
+  it("keeps a file's own id but never one in the plugin theme namespace (#13832)", () => {
+    const tokens = { "surface-canvas": "#101820", "text-primary": "#f0f0f0" };
+    const own = parseAppThemeContent(
+      JSON.stringify({ id: "harbour", name: "Harbour", type: "dark", tokens }),
+      "harbour.json"
+    );
+    expect(own.ok && own.scheme.id).toBe("harbour");
+
+    const claimed = parseAppThemeContent(
+      JSON.stringify({ id: "plugin:acme.themes:midnight", name: "Harbour", type: "dark", tokens }),
+      "harbour.json"
+    );
+    expect(claimed.ok && claimed.scheme.id).toBe("custom-harbour");
+  });
+
   it("infers theme type from surface-canvas when missing and warns", () => {
     const result = parseAppThemeContent(
       JSON.stringify({

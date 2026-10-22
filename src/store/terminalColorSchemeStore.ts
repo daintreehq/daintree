@@ -13,6 +13,7 @@ import {
   type TerminalColorScheme,
 } from "@/config/terminalColorSchemes";
 import { useAppThemeStore } from "@/store/appThemeStore";
+import { selectSelectableSchemes } from "@/theme/selectableSchemes";
 import { getTerminalThemeFromCSS } from "@/utils/terminalTheme";
 
 const RECENT_SCHEMES_LIMIT = 5;
@@ -64,7 +65,7 @@ export function selectWrapperBackground(state: TerminalColorSchemeState): string
 
   if (activeId === "app-preview") {
     const appPreviewId = useAppThemeStore.getState().previewSchemeId;
-    const appCustomSchemes = useAppThemeStore.getState().customSchemes;
+    const appCustomSchemes = selectSelectableSchemes(useAppThemeStore.getState());
     const appScheme = resolveAppTheme(appPreviewId ?? DEFAULT_APP_SCHEME_ID, appCustomSchemes);
     return appScheme.tokens["terminal-background"] ?? "var(--theme-surface-canvas)";
   }
@@ -78,7 +79,7 @@ export function selectWrapperBackground(state: TerminalColorSchemeState): string
 
   if (scheme.id === DEFAULT_SCHEME_ID) {
     const appThemeId = useAppThemeStore.getState().selectedSchemeId;
-    const appCustomSchemes = useAppThemeStore.getState().customSchemes;
+    const appCustomSchemes = selectSelectableSchemes(useAppThemeStore.getState());
     const appScheme = resolveAppTheme(appThemeId, appCustomSchemes);
     return appScheme.tokens["terminal-background"] ?? "var(--theme-surface-canvas)";
   }
@@ -99,7 +100,7 @@ function computeEffectiveTheme(
 
   if (scheme.id === DEFAULT_SCHEME_ID) {
     const appThemeId = useAppThemeStore.getState().selectedSchemeId;
-    const appCustomSchemes = useAppThemeStore.getState().customSchemes;
+    const appCustomSchemes = selectSelectableSchemes(useAppThemeStore.getState());
     const appScheme = resolveAppTheme(appThemeId, appCustomSchemes);
     return getTerminalThemeFromAppScheme(appScheme);
   }
@@ -146,7 +147,7 @@ export function clearThemeCache(): void {
 export function selectEffectiveTheme(state: TerminalColorSchemeState): ITheme {
   const appThemeId = useAppThemeStore.getState().selectedSchemeId;
   const appPreviewSchemeId = useAppThemeStore.getState().previewSchemeId;
-  const appCustomSchemes = useAppThemeStore.getState().customSchemes;
+  const appCustomSchemes = selectSelectableSchemes(useAppThemeStore.getState());
   const colorVisionMode = useAppThemeStore.getState().colorVisionMode;
   const activeId = resolveActiveSchemeId(state);
 
@@ -221,7 +222,7 @@ export const useTerminalColorSchemeStore = create<TerminalColorSchemeState>()((s
 
     if (activeId === "app-preview") {
       const appPreviewSchemeId = useAppThemeStore.getState().previewSchemeId;
-      const appCustomSchemes = useAppThemeStore.getState().customSchemes;
+      const appCustomSchemes = selectSelectableSchemes(useAppThemeStore.getState());
       return computeAppPreviewTheme(
         appPreviewSchemeId ?? DEFAULT_APP_SCHEME_ID,
         appCustomSchemes as AppColorScheme[]
@@ -236,7 +237,9 @@ useAppThemeStore.subscribe((state, prev) => {
   if (
     state.selectedSchemeId !== prev.selectedSchemeId ||
     state.previewSchemeId !== prev.previewSchemeId ||
-    state.customSchemes !== prev.customSchemes
+    state.customSchemes !== prev.customSchemes ||
+    state.pluginSchemes !== prev.pluginSchemes ||
+    state.pluginSnapshotScheme !== prev.pluginSnapshotScheme
   ) {
     useTerminalColorSchemeStore.setState((s) => ({ appThemeVersion: s.appThemeVersion + 1 }));
   }

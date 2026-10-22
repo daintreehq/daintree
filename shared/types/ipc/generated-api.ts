@@ -874,6 +874,9 @@ export interface GeneratedElectronAPI {
     getSettingValues(
       ...args: IpcInvokeMap["plugin:settings-get-values"]["args"]
     ): Promise<IpcInvokeMap["plugin:settings-get-values"]["result"]>;
+    getThemes(
+      ...args: IpcInvokeMap["plugin:themes-get"]["args"]
+    ): Promise<IpcInvokeMap["plugin:themes-get"]["result"]>;
     getTours(
       ...args: IpcInvokeMap["plugin:tours-get"]["args"]
     ): Promise<IpcInvokeMap["plugin:tours-get"]["result"]>;

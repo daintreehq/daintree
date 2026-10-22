@@ -9,6 +9,8 @@ import {
   resolveAppTheme,
   normalizeAccentHex,
 } from "../../../shared/theme/index.js";
+import { isPluginThemeId, withSelectedPluginTheme } from "../../../shared/theme/pluginThemes.js";
+import { persistColorSchemeSelection } from "../../services/appThemePluginSelection.js";
 import { typedHandle, typedHandleWithContext, typedSend } from "../utils.js";
 import { setTitleBarOverlayTheme } from "../../window/titleBarOverlay.js";
 import {
@@ -91,12 +93,21 @@ export function refreshTitleBarOverlayTheme(): void {
   const config = getAppThemeConfig();
   const scheme = resolveAppTheme(
     config.colorSchemeId,
-    config.customSchemes ?? [],
+    withSelectedPluginTheme(config.customSchemes ?? [], config),
     getAppThemeFallbackType(config.colorSchemeId, config, nativeTheme.shouldUseDarkColors)
   );
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed()) setTitleBarOverlayTheme(win, scheme.tokens);
   }
+}
+
+/**
+ * Plugin themes are chosen directly, never as a follow-system slot: a slot is
+ * applied by an OS appearance change at any moment, including before the
+ * plugin that owns the theme has loaded, and nothing persists its palette.
+ */
+function isPreferredSlotId(schemeId: unknown): schemeId is string {
+  return typeof schemeId === "string" && !!schemeId.trim() && !isPluginThemeId(schemeId.trim());
 }
 
 export function registerAppThemeHandlers(mainWindow?: BrowserWindow): () => void {
@@ -110,7 +121,9 @@ export function registerAppThemeHandlers(mainWindow?: BrowserWindow): () => void
         console.warn("Invalid app theme colorSchemeId:", schemeId);
         return;
       }
-      store.set("appTheme.colorSchemeId", schemeId.trim());
+      // Throws for a plugin theme no loaded plugin offers, so the picker
+      // restores the theme that is actually saved.
+      persistColorSchemeSelection(schemeId.trim());
       refreshTitleBarOverlayTheme();
     })
   );
@@ -209,14 +222,14 @@ export function registerAppThemeHandlers(mainWindow?: BrowserWindow): () => void
 
   handlers.push(
     typedHandle(CHANNELS.APP_THEME_SET_PREFERRED_DARK_SCHEME, async (schemeId: string) => {
-      if (typeof schemeId !== "string" || !schemeId.trim()) return;
+      if (!isPreferredSlotId(schemeId)) return;
       store.set("appTheme.preferredDarkSchemeId", schemeId.trim());
     })
   );
 
   handlers.push(
     typedHandle(CHANNELS.APP_THEME_SET_PREFERRED_LIGHT_SCHEME, async (schemeId: string) => {
-      if (typeof schemeId !== "string" || !schemeId.trim()) return;
+      if (!isPreferredSlotId(schemeId)) return;
       store.set("appTheme.preferredLightSchemeId", schemeId.trim());
     })
   );

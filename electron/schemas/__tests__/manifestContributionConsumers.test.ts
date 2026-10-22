@@ -31,6 +31,7 @@ import {
   SettingDefinitionObjectSchema,
   SkillContributionSchema,
   SurfaceContributionsSchema,
+  ThemeContributionSchema,
   SurfaceViewSlotSchema,
   ToolbarButtonContributionSchema,
   TourCaptionSchema,
@@ -96,6 +97,7 @@ const AGENT_REGISTRY = "shared/config/pluginAgentRegistry.ts";
 const MCP_SUPERVISOR = "electron/services/PluginMcpSupervisor.ts";
 const PLUGIN_SCHEMA = "electron/schemas/plugin.ts";
 const SKILL_REGISTRY = "electron/services/plugin/PluginSkillRegistry.ts";
+const THEME_REGISTRY = "electron/services/plugin/PluginThemeRegistry.ts";
 const RECIPE_REGISTRY = "electron/services/plugin/PluginRecipeRegistry.ts";
 const TOUR_REGISTRY = "electron/services/plugin/PluginTourRegistry.ts";
 const PLUGIN_TOURS = "src/components/Tour/pluginTours.tsx";
@@ -133,6 +135,7 @@ const SWEPT_SCHEMAS = {
   views: ViewContributionSchema,
   mcpServers: McpServerContributionSchema,
   skills: SkillContributionSchema,
+  themes: ThemeContributionSchema,
   forgeProviders: ForgeProviderContributionSchema,
   fileDecorationProviders: FileDecorationContributionSchema,
   fileEditors: FileEditorContributionSchema,
@@ -177,6 +180,7 @@ const TOP_LEVEL_GROUPS = [
   "views",
   "mcpServers",
   "skills",
+  "themes",
   "forgeProviders",
   "fileDecorationProviders",
   "fileEditors",
@@ -222,6 +226,7 @@ type FieldConsumerCoverage = {
   views: Record<keyof z.infer<typeof ViewContributionSchema>, ConsumerDescriptor>;
   mcpServers: Record<keyof z.infer<typeof McpServerContributionSchema>, ConsumerDescriptor>;
   skills: Record<keyof z.infer<typeof SkillContributionSchema>, ConsumerDescriptor>;
+  themes: Record<keyof z.infer<typeof ThemeContributionSchema>, ConsumerDescriptor>;
   forgeProviders: Record<keyof z.infer<typeof ForgeProviderContributionSchema>, ConsumerDescriptor>;
   fileDecorationProviders: Record<
     keyof z.infer<typeof FileDecorationContributionSchema>,
@@ -691,6 +696,35 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       mode: "verbatim",
       consumers: [{ file: SKILL_REGISTRY, symbol: "searchPluginSkills (trigger tokens)" }],
       note: "Tokenized into the skills.search keyword haystack.",
+    },
+  },
+  themes: {
+    id: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: THEME_REGISTRY,
+          symbol: "loadPluginThemes (makePluginThemeId → `plugin:${pluginId}:${id}`)",
+        },
+      ],
+      note: "Namespaced into the offered theme's id, which the selection persists.",
+    },
+    name: {
+      mode: "verbatim",
+      consumers: [{ file: THEME_REGISTRY, symbol: "loadPluginThemes → compilePluginTheme" }],
+      note: "The theme's name in Appearance, the theme palette and the fallback notice.",
+    },
+    type: {
+      mode: "verbatim",
+      consumers: [{ file: THEME_REGISTRY, symbol: "loadPluginThemes → parsePluginThemeFile" }],
+      note: "The polarity the palette must declare; sorts the theme into Dark or Light.",
+    },
+    path: {
+      mode: "verbatim",
+      consumers: [
+        { file: THEME_REGISTRY, symbol: "readThemeFile (resolveContainedPath → readFile)" },
+      ],
+      note: "Resolved against the plugin dir, realpath-contained, and read as the theme JSON.",
     },
   },
   forgeProviders: {

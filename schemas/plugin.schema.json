@@ -716,6 +716,45 @@
             "additionalProperties": false
           }
         },
+        "themes": {
+          "default": [],
+          "maxItems": 20,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64,
+                "pattern": "^[a-zA-Z0-9._-]+$"
+              },
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "dark",
+                  "light"
+                ]
+              },
+              "path": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "type",
+              "path"
+            ],
+            "additionalProperties": false
+          }
+        },
         "forgeProviders": {
           "default": [],
           "maxItems": 20,

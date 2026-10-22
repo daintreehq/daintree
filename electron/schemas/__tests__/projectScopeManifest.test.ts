@@ -172,6 +172,7 @@ const UNSCOPED_SAMPLES: Record<UnscopedGroup, unknown[]> = {
       chapters: [{ id: "intro", duration: 5, audioUrl: null, narrationHash: "0a1b2c3d" }],
     },
   ],
+  themes: [{ id: "midnight", name: "Midnight", type: "dark", path: "themes/midnight.json" }],
 };
 
 type UnscopedGroup = (typeof PROJECT_SCOPE_UNSCOPED_CONTRIBUTIONS)[number][0];
