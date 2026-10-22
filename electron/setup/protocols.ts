@@ -48,6 +48,7 @@ import { readBoundedFromHandle } from "../utils/boundedRead.js";
 import { isPluginDirResolverLive, markPluginDirResolverLive } from "./pluginProtocolReadiness.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { isValidRemoteHostId } from "../../shared/types/remoteHosts.js";
+import { PREVIEW_REFUSAL_HEADER } from "../../shared/types/ipc/files.js";
 import { parseRemotePluginAssetPath } from "../../shared/types/pluginRemoteView.js";
 
 /**
@@ -824,9 +825,18 @@ function createDaintreeFileProtocolHandler() {
     // every path (success and error alike) — a blocked error response would
     // otherwise surface as an opaque TypeError instead of a readable status.
     const corsOrigin = trustedAppCorsOrigin(request);
-    if (corsOrigin) response.headers.set("Access-Control-Allow-Origin", corsOrigin);
+    if (corsOrigin) grantAppCors(response, corsOrigin);
     return response;
   };
+}
+
+/**
+ * Let the app read a response, including why a remote window's host refused
+ * it: a header the viewer's probe can't see unless it is exposed.
+ */
+function grantAppCors(response: Response, corsOrigin: string): void {
+  response.headers.set("Access-Control-Allow-Origin", corsOrigin);
+  response.headers.set("Access-Control-Expose-Headers", PREVIEW_REFUSAL_HEADER);
 }
 
 /** The daintree-file:// request core, minus the CORS header pass. */
@@ -1375,7 +1385,7 @@ function createDaintreePdfProtocolHandler() {
       (await answerHostScopedRequest("daintree-pdf", request)) ??
       (await respondToDaintreePdfRequest(request));
     const corsOrigin = trustedAppCorsOrigin(request);
-    if (corsOrigin) response.headers.set("Access-Control-Allow-Origin", corsOrigin);
+    if (corsOrigin) grantAppCors(response, corsOrigin);
     return response;
   };
 }

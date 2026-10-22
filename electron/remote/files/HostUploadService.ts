@@ -42,6 +42,11 @@ export interface HostUploadServiceOptions {
   /** The project's current drive lease, which a replace token is bound to; null when none. */
   leaseIdFor?(projectId: string): number | null;
   inbox: HostInbox;
+  /**
+   * An inbox file now stands for this endpoint's upload, placed or reused:
+   * that endpoint may open exactly it (and no one else's) from then on.
+   */
+  onInboxFile?(endpoint: HostFileEndpoint, projectId: string, hostPath: string): void;
   maxUploadBytes?: number;
   /** Bytes free for a new file in `dir`, or null when unknown. */
   freeBytes?(dir: string): Promise<number | null>;
@@ -569,7 +574,13 @@ export class HostUploadService {
         payload.sha256,
         payload.size
       );
-      if (duplicate) return { status: "duplicate", hostPath: duplicate };
+      if (duplicate) {
+        // Reused for bytes this endpoint proved it has, and only while it still asks for this project.
+        if (!endpoint.isClosed() && endpoint.projectId === projectId) {
+          this.options.onInboxFile?.(endpoint, projectId, duplicate);
+        }
+        return { status: "duplicate", hostPath: duplicate };
+      }
       if (!(await this.hasRoom(this.options.inbox.root, payload.size))) {
         return { status: "refused", reason: "no-space" };
       }
@@ -961,6 +972,9 @@ export class HostUploadService {
           // A replacement can't be taken back; it stands, and a retry is told where it went.
           outcome = placed;
           if (aborted) throw new Error("cancelled");
+          if (target.kind === "inbox") {
+            this.options.onInboxFile?.(pending.endpoint, pending.projectId, placed);
+          }
           return placed;
         } finally {
           settleOutcome(outcome);

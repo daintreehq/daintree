@@ -8,6 +8,7 @@ import {
   resolveContainedRealPath,
   serveOpenedContainedFile,
 } from "../../setup/protocols.js";
+import { PREVIEW_REFUSAL_HEADER, type PreviewRefusal } from "../../../shared/types/ipc/files.js";
 import { AppError } from "../../utils/errorTypes.js";
 import { logWarn } from "../../utils/logger.js";
 import type { LinkSession } from "../link/session.js";
@@ -41,7 +42,9 @@ import {
  * opened ({@link openBeneath}), with the local handlers' MIME gates, caps and
  * Range handling ({@link serveOpenedContainedFile}). The only file outside a
  * project a view may download is a CopyTree bundle the host generated for that
- * same endpoint and project ({@link HostFileService.recordBundle}).
+ * same endpoint and project ({@link HostFileService.recordBundle}), and a file it
+ * uploaded into the host inbox itself, which it may also preview and read
+ * ({@link HostFileService.recordUpload}).
  *
  * Capacity (requests, open streams, buffered bytes, downloads) is reserved
  * before any filesystem work and released on every path. Streams and
@@ -72,6 +75,8 @@ export interface HostFileServiceOptions {
   maxDownloadBytes?: number;
   /** How long a recorded CopyTree bundle stays downloadable. */
   bundleTtlMs?: number;
+  /** How long a view's own inbox upload stays readable by it. */
+  uploadTtlMs?: number;
 }
 
 const DEFAULT_MAX_STREAMS_PER_SESSION = 32;
@@ -82,8 +87,11 @@ const DEFAULT_MAX_DOWNLOADS_PER_SESSION = 2;
 const DEFAULT_STREAM_IDLE_MS = 60_000;
 const DEFAULT_MAX_DOWNLOAD_BYTES = 2 * 1024 * 1024 * 1024;
 const DEFAULT_BUNDLE_TTL_MS = 10 * 60 * 1000;
+// The inbox keeps an upload for a day, so its uploader's grant lasts as long.
+const DEFAULT_UPLOAD_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_BUNDLES_PER_ENDPOINT = 8;
-const MAX_BUNDLE_ENDPOINTS = 256;
+const MAX_UPLOADS_PER_ENDPOINT = 64;
+const MAX_GRANT_ENDPOINTS = 256;
 const MAX_ERROR_TEXT = 1024;
 
 interface SessionFiles {
@@ -151,21 +159,41 @@ interface RecordedBundle {
   identity: Promise<FileIdentity | null>;
 }
 
+/**
+ * A file a view uploaded into the inbox, by the inode it was placed as. Only
+ * device and inode: the inbox touches a file's times when another upload of
+ * the same bytes reuses it, and that mustn't revoke the first uploader's read.
+ */
+interface RecordedUpload {
+  projectId: string;
+  expiresAt: number;
+  inode: Promise<{ dev: bigint; ino: bigint } | null>;
+}
+
 interface Located {
   anchor: string;
   components: string[];
   /** Other spellings of the anchor an absolute symlink target may use (e.g. /tmp for /private/tmp). */
   anchorSpellings?: string[];
-  /** For a recorded bundle: the file it must still be. */
-  identity?: FileIdentity | null;
+  /** For a recorded file: whether the opened file is still the one recorded. */
+  isRecorded?: (stats: import("node:fs").BigIntStats) => boolean;
 }
 
 function newId(): string {
   return crypto.randomBytes(16).toString("hex");
 }
 
-function errorResponse(status: number, text: string): FileResponse {
-  return { status, headers: buildDaintreeFileErrorHeaders(), text, streamId: null };
+function errorResponse(status: number, text: string, refusal?: PreviewRefusal): FileResponse {
+  const headers: Record<string, string> = buildDaintreeFileErrorHeaders();
+  if (refusal) headers[PREVIEW_REFUSAL_HEADER] = refusal;
+  return { status, headers, text, streamId: null };
+}
+
+/** Keep one entry per key, newest last, dropping the oldest past `max`. */
+function boundedSet<K, V>(map: Map<K, V>, key: K, value: V, max: number): void {
+  map.delete(key);
+  if (map.size >= max) map.delete(map.keys().next().value!);
+  map.set(key, value);
 }
 
 function concat(chunks: Uint8Array[], total: number): Uint8Array {
@@ -246,6 +274,8 @@ export class HostFileService {
   private readonly endpointSubscriptions = new Map<string, { dispose(): void }>();
   /** Host endpoint id → the bundles generated for it, by exact path. */
   private readonly bundles = new Map<string, Map<string, RecordedBundle>>();
+  /** Host endpoint id → the inbox files it uploaded itself, by exact path. */
+  private readonly uploads = new Map<string, Map<string, RecordedUpload>>();
   private bufferedBytes = 0;
   private disposed = false;
 
@@ -262,6 +292,7 @@ export class HostFileService {
         endpoint.onClose(() => {
           this.endpointSubscriptions.delete(endpoint.endpointId);
           this.bundles.delete(endpoint.endpointId);
+          this.uploads.delete(endpoint.endpointId);
           this.revokeWhere((entry) => entry.endpoint === endpoint);
           files.endpoints.delete(endpoint.clientEndpointId);
         })
@@ -277,26 +308,66 @@ export class HostFileService {
    */
   recordBundle(endpoint: Pick<ClientEndpoint, "endpointId" | "projectId">, filePath: string): void {
     if (this.disposed || !endpoint.projectId || !isRequestPath(filePath)) return;
-    let recorded = this.bundles.get(endpoint.endpointId);
-    if (!recorded) {
-      if (this.bundles.size >= MAX_BUNDLE_ENDPOINTS) {
-        this.bundles.delete(this.bundles.keys().next().value!);
-      }
-      recorded = new Map();
-      this.bundles.set(endpoint.endpointId, recorded);
-    }
     const key = path.normalize(filePath);
-    recorded.delete(key);
-    if (recorded.size >= MAX_BUNDLES_PER_ENDPOINT) recorded.delete(recorded.keys().next().value!);
     const identity = fs
       .lstat(key, { bigint: true })
       .then((stats): FileIdentity | null => (stats.isFile() ? identityOf(stats) : null))
       .catch(() => null);
-    recorded.set(key, {
-      projectId: endpoint.projectId,
-      expiresAt: Date.now() + (this.options.bundleTtlMs ?? DEFAULT_BUNDLE_TTL_MS),
-      identity,
-    });
+    boundedSet(
+      this.grantsFor(this.bundles, endpoint.endpointId),
+      key,
+      {
+        projectId: endpoint.projectId,
+        expiresAt: Date.now() + (this.options.bundleTtlMs ?? DEFAULT_BUNDLE_TTL_MS),
+        identity,
+      },
+      MAX_BUNDLES_PER_ENDPOINT
+    );
+  }
+
+  /**
+   * A view uploaded this file into the host inbox for its project. That exact
+   * file, and nothing else in the inbox (which holds every Shell's uploads),
+   * becomes previewable, readable and downloadable by the same endpoint while
+   * it stays on that project.
+   */
+  recordUpload(
+    endpoint: Pick<HostFileEndpoint, "endpointId">,
+    projectId: string,
+    filePath: string
+  ): void {
+    if (this.disposed || !isRequestPath(filePath)) return;
+    const key = path.normalize(filePath);
+    const inode = fs
+      .lstat(key, { bigint: true })
+      .then((stats) => (stats.isFile() ? { dev: stats.dev, ino: stats.ino } : null))
+      .catch(() => null);
+    boundedSet(
+      this.grantsFor(this.uploads, endpoint.endpointId),
+      key,
+      {
+        projectId,
+        expiresAt: Date.now() + (this.options.uploadTtlMs ?? DEFAULT_UPLOAD_TTL_MS),
+        inode,
+      },
+      MAX_UPLOADS_PER_ENDPOINT
+    );
+  }
+
+  /**
+   * Whether `filePath` is a file this endpoint uploaded for its current
+   * project, still the very file it placed: what lets a text read reach it
+   * outside the project's folders.
+   */
+  async holdsUpload(
+    endpoint: Pick<ClientEndpoint, "endpointId" | "projectId">,
+    filePath: string
+  ): Promise<boolean> {
+    if (this.disposed || !endpoint.projectId || !isRequestPath(filePath)) return false;
+    const located = await this.locateUpload(endpoint.endpointId, endpoint.projectId, filePath);
+    if (!located) return false;
+    const stats = await fs.lstat(path.normalize(filePath), { bigint: true }).catch(() => null);
+    return stats !== null && located.isRecorded!(stats);
   }
 
   /**
@@ -350,6 +421,16 @@ export class HostFileService {
     for (const subscription of this.endpointSubscriptions.values()) subscription.dispose();
     this.endpointSubscriptions.clear();
     this.bundles.clear();
+    this.uploads.clear();
+  }
+
+  private grantsFor<T>(grants: Map<string, Map<string, T>>, endpointId: string): Map<string, T> {
+    let recorded = grants.get(endpointId);
+    if (!recorded) {
+      recorded = new Map();
+      boundedSet(grants, endpointId, recorded, MAX_GRANT_ENDPOINTS);
+    }
+    return recorded;
   }
 
   private sessionFiles(session: LinkSession): SessionFiles {
@@ -453,7 +534,55 @@ export class HostFileService {
     const identity = await bundle.identity;
     if (identity === null) return null;
     const anchor = await fs.realpath(path.dirname(key)).catch(() => null);
-    return anchor === null ? null : { anchor, components: [path.basename(key)], identity };
+    return anchor === null
+      ? null
+      : {
+          anchor,
+          components: [path.basename(key)],
+          isRecorded: (stats) => sameFile(identityOf(stats), identity),
+        };
+  }
+
+  /** The inbox file this endpoint uploaded for this project at exactly this path, if still fresh. */
+  private async locateUpload(
+    endpointId: string,
+    projectId: string,
+    hostPath: string,
+    within?: string
+  ): Promise<Located | null> {
+    const recorded = this.uploads.get(endpointId);
+    const key = path.normalize(hostPath);
+    const upload = recorded?.get(key);
+    if (!upload) return null;
+    if (upload.expiresAt <= Date.now()) {
+      recorded!.delete(key);
+      return null;
+    }
+    if (upload.projectId !== projectId) return null;
+    if (within !== undefined && componentsBelow(within, key) === null) return null;
+    const inode = await upload.inode;
+    if (inode === null) return null;
+    const anchor = await fs.realpath(path.dirname(key)).catch(() => null);
+    return anchor === null
+      ? null
+      : {
+          anchor,
+          components: [path.basename(key)],
+          isRecorded: (stats) =>
+            stats.isFile() && stats.dev === inode.dev && stats.ino === inode.ino,
+        };
+  }
+
+  /** Close what was opened for a recorded file that isn't that file any more. */
+  private async stillRecorded(
+    located: Located,
+    opened: { handle: OpenedHostFile }
+  ): Promise<boolean> {
+    if (!located.isRecorded) return true;
+    const now = await opened.handle.stat({ bigint: true }).catch(() => null);
+    if (now && located.isRecorded(now)) return true;
+    await opened.handle.close().catch(() => {});
+    return false;
   }
 
   /** Whether what was admitted still holds after the awaits that followed admission. */
@@ -500,13 +629,21 @@ export class HostFileService {
       const admitted = this.admit(files, payload.endpointId);
       if ("refused" in admitted) {
         return admitted.refused === "driven-elsewhere"
-          ? errorResponse(403, "Forbidden")
+          ? errorResponse(403, "Forbidden", "driven-elsewhere")
           : errorResponse(404, "Not Found");
       }
-      const located = await this.locate(admitted.projectId, payload.path, payload.root);
-      const opened =
-        located && (await openBeneath(located.anchor, located.components, located.anchorSpellings));
+      const located =
+        (await this.locate(admitted.projectId, payload.path, payload.root)) ??
+        (await this.locateUpload(
+          admitted.endpoint.endpointId,
+          admitted.projectId,
+          payload.path,
+          payload.root
+        ));
+      if (!located) return errorResponse(404, "Not Found", "outside-project");
+      const opened = await openBeneath(located.anchor, located.components, located.anchorSpellings);
       if (!opened || opened === "not-a-file") return errorResponse(404, "Not Found");
+      if (!(await this.stillRecorded(located, opened))) return errorResponse(404, "Not Found");
 
       const request = new Request(
         buildContainedFileUrl(payload.scheme, payload.path, payload.root),
@@ -527,7 +664,9 @@ export class HostFileService {
       );
       if (!this.stillAdmitted(files, admitted.endpoint, admitted.projectId)) {
         await response.body?.cancel().catch(() => {});
-        return errorResponse(403, "Forbidden");
+        return this.options.isDriving(admitted.projectId, admitted.endpoint)
+          ? errorResponse(403, "Forbidden")
+          : errorResponse(403, "Forbidden", "driven-elsewhere");
       }
       const headers: Record<string, string> = {};
       response.headers.forEach((value, key) => {
@@ -668,20 +807,18 @@ export class HostFileService {
       }
       const located =
         (await this.locateBundle(admitted.endpoint, admitted.projectId, payload.hostPath)) ??
-        (await this.locate(admitted.projectId, payload.hostPath));
+        (await this.locate(admitted.projectId, payload.hostPath)) ??
+        (await this.locateUpload(
+          admitted.endpoint.endpointId,
+          admitted.projectId,
+          payload.hostPath
+        ));
       const opened =
         located && (await openBeneath(located.anchor, located.components, located.anchorSpellings));
       if (opened === "not-a-file") {
         throw new AppError({ code: "NOT_A_FILE", message: "Only files can be downloaded" });
       }
-      if (!opened) throw notInProject();
-      if (located?.identity) {
-        const now = await opened.handle.stat({ bigint: true }).catch(() => null);
-        if (!now || !sameFile(identityOf(now), located.identity)) {
-          await opened.handle.close().catch(() => {});
-          throw notInProject();
-        }
-      }
+      if (!opened || !(await this.stillRecorded(located!, opened))) throw notInProject();
       const source = await downloadSourceFrom(
         opened.handle,
         this.options.maxDownloadBytes ?? DEFAULT_MAX_DOWNLOAD_BYTES

@@ -72,6 +72,25 @@ describe("host file previews", () => {
     expect(image.headers.get("content-security-policy")).toBe("sandbox; default-src 'none'");
   });
 
+  it("passes on why the host refused, only when it is a reason it knows", async () => {
+    const refused = (refusal: string): FileResponse => ({
+      status: 403,
+      headers: { "X-Daintree-Refusal": refusal, "x-frame-options": "ALLOW" },
+      text: "Forbidden",
+      streamId: null,
+    });
+    const known = await proxyFor(refused("driven-elsewhere")).ask("daintree-file", "/p/a.png", {
+      method: "HEAD",
+    });
+    expect(known.status).toBe(403);
+    expect(known.headers.get("x-daintree-refusal")).toBe("driven-elsewhere");
+    expect(known.headers.get("x-frame-options")).toBeNull();
+
+    const unknown = await proxyFor(refused("<script>")).ask("daintree-file", "/p/a.png");
+    expect(unknown.status).toBe(403);
+    expect(unknown.headers.get("x-daintree-refusal")).toBeNull();
+  });
+
   it("refuses what a local preview would, before asking the host", async () => {
     const { ask } = proxyFor(streamed(200, hostile));
     expect((await ask("daintree-media", "/p/a.html")).status).toBe(404);

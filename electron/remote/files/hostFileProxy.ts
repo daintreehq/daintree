@@ -7,6 +7,7 @@ import {
   isMediaMimeType,
   previewByteCeiling,
 } from "../../setup/protocols.js";
+import { isPreviewRefusal, PREVIEW_REFUSAL_HEADER } from "../../../shared/types/ipc/files.js";
 import { AppError } from "../../utils/errorTypes.js";
 import type { ClientFileTransport } from "./ClientFileTransport.js";
 import { getMimeType } from "../../utils/appProtocol.js";
@@ -177,6 +178,10 @@ export function createHostFileProxy(
       // A 416 says how long the file is, so a player can ask again.
       const range = answer.status === 416 ? unsatisfiedRange(answer.headers) : null;
       if (range) failed.headers.set("Content-Range", range);
+      // Why the host refused, when it was another window's control or a file
+      // outside the project: the one other thing passed on, and only its known values.
+      const refusal = headerValue(answer.headers, PREVIEW_REFUSAL_HEADER.toLowerCase());
+      if (isPreviewRefusal(refusal)) failed.headers.set(PREVIEW_REFUSAL_HEADER, refusal);
       return failed;
     }
     // A preview is the file or a range of it: nothing else a host answers is passed on.

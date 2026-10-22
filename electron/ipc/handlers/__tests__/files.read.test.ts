@@ -215,6 +215,49 @@ describe("files:read handler", () => {
       expect(fsMock.open).not.toHaveBeenCalled();
     });
 
+    describe("outside its project", () => {
+      const inboxFolder = path.resolve("/tmp/daintree-inbox/files/20261022-101500-abc123");
+      const upload = path.join(inboxFolder, "notes.html");
+
+      it("reads a file it uploaded itself, from that file's own folder, with no page preview", async () => {
+        const holdsUpload = vi.fn(async () => true);
+        registerRemoteService("hostFileService", {
+          holdsRoot: vi.fn(async () => false),
+          holdsUpload,
+        } as never);
+        registerFilesHandlers();
+
+        const result = await getReadHandler()(remote, {
+          path: upload,
+          rootPath: inboxFolder,
+          htmlPreview: true,
+        });
+        expect(result.content).toBe("hello\n");
+        // A preview token would open the whole inbox folder, not just this file.
+        expect(result.htmlPreviewUrl).toBeUndefined();
+        expect(holdsUpload).toHaveBeenCalledWith(remote.endpoint, upload);
+      });
+
+      it("refuses an inbox file it didn't upload, and any root but the file's own folder", async () => {
+        const holdsUpload = vi.fn(async () => false);
+        registerRemoteService("hostFileService", {
+          holdsRoot: vi.fn(async () => false),
+          holdsUpload,
+        } as never);
+        registerFilesHandlers();
+
+        await expect(
+          getReadHandler()(remote, { path: upload, rootPath: inboxFolder })
+        ).rejects.toMatchObject({ code: "OUTSIDE_ROOT" });
+        holdsUpload.mockClear();
+        await expect(
+          getReadHandler()(remote, { path: upload, rootPath: path.dirname(inboxFolder) })
+        ).rejects.toMatchObject({ code: "OUTSIDE_ROOT" });
+        expect(holdsUpload).not.toHaveBeenCalled();
+        expect(fsMock.open).not.toHaveBeenCalled();
+      });
+    });
+
     it("leaves a local view free to name any root", async () => {
       const holdsRoot = vi.fn(async () => false);
       registerRemoteService("hostFileService", { holdsRoot } as never);

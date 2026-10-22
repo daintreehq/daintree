@@ -44,6 +44,20 @@ export type FileReadErrorCode = _AssertSubset<
 >;
 
 /**
+ * Why a remote window's host refused a preview when the file itself isn't the
+ * problem: another window has control of the project, or the file is outside
+ * it. Sent as a header, since the refusal a preview probes is a HEAD answer
+ * with no body.
+ */
+export type PreviewRefusal = "driven-elsewhere" | "outside-project";
+
+export const PREVIEW_REFUSAL_HEADER = "X-Daintree-Refusal";
+
+export function isPreviewRefusal(value: unknown): value is PreviewRefusal {
+  return value === "driven-elsewhere" || value === "outside-project";
+}
+
+/**
  * What the bytes on disk were, observed before decoding. `content` is always
  * decoded as UTF-8, so a BOM survives as U+FEFF and invalid sequences become
  * U+FFFD — neither of which the renderer can tell apart from text that really

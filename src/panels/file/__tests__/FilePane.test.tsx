@@ -336,6 +336,11 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { FILE_READ_ERROR_MESSAGES } from "@/components/FileViewer/fileReadErrors";
 import { revealCopy } from "@/components/FileViewer/revealCopy";
 import { ClientAppError } from "@/utils/clientAppError";
+import type { DriveLeaseView } from "@shared/types/ipc/driveLease";
+import {
+  _resetTerminalInputGateForTesting,
+  setDriveLeaseSnapshot,
+} from "@/services/terminal/inputGate";
 
 /**
  * An element of the SVG FileImagePreview shows, read back from the data URL of
@@ -4196,5 +4201,91 @@ describe("FilePane file menu on its content (#13423)", () => {
         expect.anything()
       )
     );
+  });
+});
+
+describe("FilePane in a remote window (#13925)", () => {
+  const fetchMock = vi.fn();
+  const realFetch = globalThis.fetch;
+  const lease = (drivingHere: boolean): DriveLeaseView => ({
+    projectId: "proj-1",
+    holder: {
+      leaseId: 3,
+      endpointId: "view-9",
+      clientId: "shell-b",
+      clientName: "greg-mbp",
+      isHostLocal: false,
+      acquiredAt: 1,
+    },
+    drivingHere,
+    isHolderEndpoint: drivingHere,
+    viewerIsHostLocal: false,
+  });
+
+  beforeEach(() => {
+    window.__DAINTREE_HOST_ID__ = { id: "studio-01" };
+    (window as { __DAINTREE_INITIAL_PROJECT__?: { id: string } }).__DAINTREE_INITIAL_PROJECT__ = {
+      id: "proj-1",
+    };
+    vi.stubGlobal("fetch", fetchMock);
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.stubGlobal("fetch", realFetch);
+    fetchMock.mockReset();
+    _resetTerminalInputGateForTesting();
+    delete (window as { __DAINTREE_HOST_ID__?: unknown }).__DAINTREE_HOST_ID__;
+    delete (window as { __DAINTREE_INITIAL_PROJECT__?: unknown }).__DAINTREE_INITIAL_PROJECT__;
+  });
+
+  function renderRemote(filePath: string) {
+    panelsById["file-1"] = { id: "file-1", kind: "file", filePath };
+    return render(
+      <TooltipProvider>
+        <FilePane
+          id="file-1"
+          title={filePath.split("/").pop() ?? filePath}
+          isFocused={false}
+          location="grid"
+          onFocus={() => {}}
+          onClose={() => {}}
+        />
+      </TooltipProvider>
+    );
+  }
+
+  it("says another window has control of a refused image, and loads it once this view drives", async () => {
+    setDriveLeaseSnapshot(lease(false));
+    fetchMock.mockResolvedValue({
+      ok: false,
+      status: 403,
+      headers: new Headers({ "x-daintree-refusal": "driven-elsewhere" }),
+    });
+    const { container } = renderRemote("/srv/app/assets/logo.png");
+    const image = await waitFor(() => {
+      const found = container.querySelector("img");
+      if (!found) throw new Error("image not rendered");
+      return found;
+    });
+    act(() => {
+      image.dispatchEvent(new Event("error"));
+    });
+
+    await screen.findByText("Another window has control");
+    expect(container.textContent).toContain("greg-mbp has control of this project");
+    expect(container.textContent).not.toMatch(/damaged/);
+    expect(screen.getByRole("button", { name: "Take control" })).toBeTruthy();
+    expect(container.querySelector("img")).toBeNull();
+
+    act(() => setDriveLeaseSnapshot(lease(true)));
+    await waitFor(() => expect(container.querySelector("img")).not.toBeNull());
+  });
+
+  it("offers a copy saved here instead of the default app for a file it can't play", async () => {
+    const { container } = renderRemote("/srv/app/media/demo.mov");
+    await act(async () => {});
+    expect(screen.getByRole("button", { name: /^Save to this/ })).toBeTruthy();
+    expect(container.textContent).not.toMatch(/default app/);
   });
 });

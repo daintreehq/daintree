@@ -39,6 +39,24 @@ export async function remoteCallerHoldsRoot(ctx: IpcContext, root: string): Prom
   return files.holdsRoot(projectId, root);
 }
 
+/**
+ * A remote Shell's view reading a file it uploaded into this host's inbox
+ * itself, from that file's own folder. The inbox holds every Shell's uploads,
+ * so this is that one file, never the folder: the read below still has to
+ * resolve to a file inside the folder, and this one has to be the file the
+ * view placed.
+ */
+export async function remoteCallerOwnsUpload(
+  ctx: IpcContext,
+  filePath: string,
+  root: string
+): Promise<boolean> {
+  if (ctx.endpoint?.kind !== "remote-view" || !ctx.endpoint.projectId) return false;
+  const files = getRemoteService("hostFileService");
+  if (!files || path.dirname(path.normalize(filePath)) !== path.normalize(root)) return false;
+  return files.holdsUpload(ctx.endpoint, filePath);
+}
+
 export function registerFilesHandlers(): () => void {
   const handlers: Array<() => void> = [];
 
@@ -79,12 +97,16 @@ export function registerFilesHandlers(): () => void {
         context: { filePath, rootPath },
       });
     }
+    let ownUpload = false;
     if (!(await remoteCallerHoldsRoot(ctx, rootPath))) {
-      throw new AppError({
-        code: "OUTSIDE_ROOT",
-        message: "Root is outside the calling view's project",
-        context: { rootPath },
-      });
+      ownUpload = await remoteCallerOwnsUpload(ctx, filePath, rootPath);
+      if (!ownUpload) {
+        throw new AppError({
+          code: "OUTSIDE_ROOT",
+          message: "Root is outside the calling view's project",
+          context: { rootPath },
+        });
+      }
     }
 
     // Map fs errors uniformly across realpath/stat/open — the file can
@@ -289,9 +311,10 @@ export function registerFilesHandlers(): () => void {
     // #11191: on opt-in, mint a sandboxed-iframe preview URL for HTML files. The
     // token maps to the canonical root; the daintree-html:// handler re-applies
     // full containment, so this never widens access. realRoot/realFile are
-    // already realpath-resolved and contained above.
+    // already realpath-resolved and contained above. Never for an upload: its
+    // root is an inbox folder, which a token would open to the whole folder.
     const htmlPreviewUrl =
-      htmlPreview && /\.html?$/i.test(realFile)
+      htmlPreview && !ownUpload && /\.html?$/i.test(realFile)
         ? (buildHtmlPreviewUrl(realRoot, realFile) ?? undefined)
         : undefined;
 
