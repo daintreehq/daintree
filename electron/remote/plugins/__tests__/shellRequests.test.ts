@@ -601,6 +601,8 @@ describe("host plugin toasts", () => {
     expect(wc.send.mock.calls[0]![1]).toMatchObject({
       rateLimitKey: `plugin:${HOST}:${instanceKey}`,
       rateLimitLabel: "acme.deploy",
+      // A project plugin's row files under the host project its key names (#13818).
+      context: { projectId: PROJECT, plugin: { id: instanceKey, name: "acme.deploy" } },
     });
   });
 

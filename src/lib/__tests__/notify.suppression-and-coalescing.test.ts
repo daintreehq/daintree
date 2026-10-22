@@ -813,6 +813,17 @@ describe("per-source rate-limit", () => {
     }
     expect(useNotificationHistoryStore.getState().entries[0]!.context).toEqual({ plugin });
 
+    // Another host's plugin buckets as `plugin:<host>:<id>`, and is still that one plugin.
+    for (let i = 0; i < 4; i++) {
+      notify({
+        type: "info",
+        message: `Remote ${i}`,
+        rateLimitKey: `plugin:studio-01:${plugin.id}`,
+        context: { plugin },
+      });
+    }
+    expect(useNotificationHistoryStore.getState().entries[0]!.context).toEqual({ plugin });
+
     // A bucket that isn't that plugin's alone says nothing about which plugin.
     for (let i = 0; i < 4; i++) {
       notify({

@@ -672,6 +672,23 @@ describe("delivery order and paging (#13818)", () => {
     expect(toastBodies()).toEqual([]);
   });
 
+  it("pages nothing for an instance replaced while the pager loaded", async () => {
+    grants.hasGrant.mockReturnValue(true);
+    const deps = makeDeps(["notification:os"]);
+    const plugins = deps.plugins as Map<string, LoadedPlugin>;
+    const { host } = createHost(deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING);
+    // The push is the last thing before the pager's import; replace the
+    // instance there, as an unload and reload under the same id would.
+    ipcUtilsMock.broadcastToRenderer.mockImplementationOnce(() => {
+      plugins.set(PLUGIN_ID, { ...plugins.get(PLUGIN_ID)! } as LoadedPlugin);
+    });
+
+    await expect(host.notify({ title: "t", body: "b", os: true })).resolves.toEqual({
+      id: expect.any(String),
+    });
+    expect(pager.pagePluginNotification).not.toHaveBeenCalled();
+  });
+
   it("pages under the project an app-wide plugin's worktree belongs to", async () => {
     grants.hasGrant.mockReturnValue(true);
     const deps = makeDeps(["notification:os"]);

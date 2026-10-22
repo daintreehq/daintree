@@ -805,10 +805,16 @@ function checkAndApplyRateLimit(payload: NotifyPayload): boolean {
     // like "Mute project X" would dispatch against the first overflow's
     // project and silently mute the wrong target on later events. A
     // worktree-keyed bucket is about one worktree, so the row files under it.
-    // A plugin's bucket is that one plugin's, so its row keeps the plugin: a
-    // noisy plugin's summary is exactly where "Silence <Plugin>" is wanted.
+    // A plugin's bucket is that one plugin's (on another host, `plugin:<host>:<id>`),
+    // so its row keeps the plugin: a noisy plugin's summary is exactly where
+    // "Silence <Plugin>" is wanted.
     const plugin = payload.context?.plugin;
-    const bucketPlugin = plugin && key === `plugin:${plugin.id}` ? plugin : undefined;
+    const bucketPlugin =
+      plugin &&
+      (key === `plugin:${plugin.id}` ||
+        (key.startsWith("plugin:") && key.endsWith(`:${plugin.id}`)))
+        ? plugin
+        : undefined;
     bucket.overflowEntryId = historyStore.addEntry({
       type: payload.type,
       title: payload.title,

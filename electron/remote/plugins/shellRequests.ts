@@ -374,6 +374,7 @@ export function installPluginShellRequests(deps: PluginShellRequestDeps = {}): (
     // key out of the overflow summary.
     const pluginName =
       displaySafeText(pluginDisplayName ?? "").trim() || pluginManifestIdFromInstanceKey(pluginId);
+    const pluginProjectId = projectIdFromPluginInstanceKey(pluginId);
     // Straight to the one view: the push filter keeps this machine's own
     // toasts out of a host's window, and this one is the host's.
     wc.send(CHANNELS.NOTIFICATION_SHOW_TOAST, {
@@ -387,7 +388,12 @@ export function installPluginShellRequests(deps: PluginShellRequestDeps = {}): (
       ...(passive === true ? { priority: "low" as const } : {}),
       // The row names the host's plugin and offers its "Silence <Plugin>",
       // which this view's plugin IPC carries back to the host that keeps it.
-      context: { plugin: { id: pluginId, name: pluginName } },
+      // A project plugin's instance key names the host project it belongs to,
+      // whose ids are the ones this host-bound view knows.
+      context: {
+        ...(pluginProjectId !== null ? { projectId: pluginProjectId } : {}),
+        plugin: { id: pluginId, name: pluginName },
+      },
     });
     return null;
   };

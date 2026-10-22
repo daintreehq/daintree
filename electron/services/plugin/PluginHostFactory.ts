@@ -3441,7 +3441,7 @@ export function createHost(
           (replaceKey !== undefined && deps.declaredCapabilities(pluginId).has("notification:os"))
         ) {
           const pager = await import("./pluginNotificationPager.js");
-          if (!deps.plugins.has(pluginId)) return { id };
+          if (!isBound()) return { id };
           if (pages) {
             // The project the notification is about, so the banner's focus check
             // and its click land where the inbox row files it.
