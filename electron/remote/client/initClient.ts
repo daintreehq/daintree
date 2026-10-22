@@ -406,12 +406,19 @@ function createWindowControl(hooks: RemoteHostsClientHooks): WindowControl {
         if (wc && !wc.isDestroyed()) hooks.onLocalViewActivated?.(windowId, wc);
       });
     },
-    async restoreRemoteProjectInBackground(windowId, hostId, projectId, projectPath, lastUsed) {
+    async restoreRemoteProjectInBackground(
+      windowId,
+      hostId,
+      projectId,
+      projectPath,
+      { lastUsed, stillWanted }
+    ) {
       // First, as the local restore queue does: the kernel pressure reading
       // its admission works from may hold nothing yet at startup (#13530).
       await checkKernelPressureCritical();
       const pvm = getWindowRegistry()?.getByWindowId(windowId)?.services.projectViewManager;
-      if (!pvm || pvm.disposed) return "cancelled";
+      // A quit, or the host removed or re-pointed, while the reading was taken.
+      if (!pvm || pvm.disposed || !stillWanted()) return "cancelled";
       const key = toHostScopedKey(hostId, projectId);
       // Asked again after the reading, in the same tick the view is registered.
       if (otherOwnerOf(key, windowId)) return "owned-elsewhere";

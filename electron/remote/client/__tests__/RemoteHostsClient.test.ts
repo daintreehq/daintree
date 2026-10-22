@@ -220,7 +220,10 @@ describe("RemoteHostsClient", () => {
       ).resolves.toBe("restored");
       expect(manager.connect).toHaveBeenCalledWith("studio-01");
       expect(installRouter).toHaveBeenCalledWith(router);
-      expect(restore).toHaveBeenCalledWith(1, "studio-01", "proj-1", "/srv/proj-1", 42);
+      expect(restore).toHaveBeenCalledWith(1, "studio-01", "proj-1", "/srv/proj-1", {
+        lastUsed: 42,
+        stillWanted: expect.any(Function),
+      });
       expect(bindings.get(1)).toBe("local");
       expect(windows.openRemoteProject).not.toHaveBeenCalled();
       expect(manager.connect("studio-01").noteActiveProject).not.toHaveBeenCalled();
@@ -267,6 +270,18 @@ describe("RemoteHostsClient", () => {
       await expect(
         client.restoreHostProjectInBackground(1, "studio-01", "proj-1", { lastUsed: 1 })
       ).rejects.toMatchObject({ code: "HOST_DISCONNECTED" });
+    });
+
+    it("hands the window a check that still holds the caller's wish", async () => {
+      let wanted = true;
+      await client.restoreHostProjectInBackground(1, "studio-01", "proj-1", {
+        lastUsed: 1,
+        stillWanted: () => wanted,
+      });
+      const [, , , , { stillWanted }] = restore.mock.calls[0]!;
+      expect(stillWanted()).toBe(true);
+      wanted = false;
+      expect(stillWanted()).toBe(false);
     });
 
     it("gives up once it is no longer wanted", async () => {

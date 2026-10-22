@@ -205,6 +205,9 @@ export function buildOpenWindowRecords(
   const windows: Array<{ windowId: number; projectId: string | null; pvm?: ProjectViewManager }> =
     [];
   const claimed = new Set<string>();
+  // Every window's views, so a project one window is only waiting to bring
+  // back never takes the place of the window actually holding it.
+  const held = new Set<string>();
 
   for (const ctx of registry.focusOrder()) {
     if (ctx.windowId === excludeWindowId) continue;
@@ -234,6 +237,11 @@ export function buildOpenWindowRecords(
     }
 
     if (projectId !== null) claimed.add(projectId);
+    try {
+      for (const view of pvm?.getAllViews() ?? []) held.add(view.projectId);
+    } catch {
+      // Its own background read below fails the same way and costs only that list.
+    }
     windows.push({ windowId: ctx.windowId, projectId, pvm });
     if (windows.length >= MAX_RESTORED_WINDOWS) break;
   }
@@ -242,7 +250,7 @@ export function buildOpenWindowRecords(
   for (const win of windows) {
     let backgroundProjectIds: string[];
     try {
-      backgroundProjectIds = collectWindowBackgroundIds(win.pvm, win.windowId, claimed);
+      backgroundProjectIds = collectWindowBackgroundIds(win.pvm, win.windowId, claimed, held);
     } catch {
       backgroundProjectIds = [];
     }
@@ -267,12 +275,14 @@ export function buildOpenWindowRecords(
  * signal `EvictionController` scores against, so the projects the manifest
  * keeps under the per-window caps are the ones the user actually rotates
  * through. Pending restores follow the live views and hold their persisted
- * order, which is already a recency ordering from the previous session.
+ * order, which is already a recency ordering from the previous session; one
+ * any window has a view of by now is that window's.
  */
 function collectWindowBackgroundIds(
   pvm: ProjectViewManager | undefined,
   windowId: number,
-  claimed: ReadonlySet<string>
+  claimed: ReadonlySet<string>,
+  held: ReadonlySet<string>
 ): string[] {
   const ids: string[] = [];
   const seen = new Set<string>();
@@ -287,8 +297,11 @@ function collectWindowBackgroundIds(
   for (const entry of [...views].sort((a, b) => b.lastUsed - a.lastUsed)) {
     push(entry.projectId);
   }
-  for (const id of pendingBackgroundRestores.get(windowId) ?? []) push(id);
-  for (const id of pendingRemoteBackgroundRestores.get(windowId) ?? []) push(id);
+  const pending = [
+    ...(pendingBackgroundRestores.get(windowId) ?? []),
+    ...(pendingRemoteBackgroundRestores.get(windowId) ?? []),
+  ];
+  for (const id of pending) if (!held.has(id)) push(id);
 
   return capBackgroundProjectIds(ids);
 }

@@ -133,14 +133,15 @@ export interface WindowControl {
    * Load `(hostId, projectId)` into the window's cache as a view that is
    * never shown, as a relaunch brings back a window's background projects.
    * Nothing the window shows changes, and a project another window has by
-   * then is left to it.
+   * then is left to it. `stillWanted` is asked again just before the view is
+   * made.
    */
   restoreRemoteProjectInBackground?(
     windowId: number,
     hostId: HostId,
     projectId: string,
     projectPath: string,
-    lastUsed: number
+    options: { lastUsed: number; stillWanted: () => boolean }
   ): Promise<HostBackgroundRestoreOutcome>;
   /**
    * Whether a switch the user asked for may start a renderer at critical
@@ -737,7 +738,10 @@ export class RemoteHostsClient {
       description.name || projectId,
       hostId
     );
-    return restore(windowId, hostId, projectId, description.path, lastUsed);
+    return restore(windowId, hostId, projectId, description.path, {
+      lastUsed,
+      stillWanted: () => stale() === null,
+    });
   }
 
   /**

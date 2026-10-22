@@ -3,7 +3,6 @@ import {
   MAX_BACKGROUND_HOST_PROJECTS_PER_WINDOW,
   MAX_BACKGROUND_PROJECTS_PER_WINDOW,
   MAX_RESTORED_WINDOWS,
-  capBackgroundProjectIds,
   OPEN_WINDOWS_MANIFEST_VERSION,
   filterRestorableWindows,
   isReadableOpenWindowsManifest,
@@ -348,7 +347,16 @@ describe("background host projects (#13932)", () => {
       new Set([LOCAL_A, LOCAL_B])
     );
     expect(restorable).toEqual([
-      { projectId: host("studio-02", "e".repeat(64)), backgroundProjectIds },
+      {
+        projectId: host("studio-02", "e".repeat(64)),
+        backgroundProjectIds: [
+          LOCAL_A,
+          LOCAL_B,
+          host("studio-01"),
+          host("studio-03"),
+          host("studio-02"),
+        ],
+      },
     ]);
   });
 
@@ -367,7 +375,21 @@ describe("background host projects (#13932)", () => {
     const parsed = parseOpenWindowsManifest(
       manifestJson([{ projectId: null, backgroundProjectIds: [...remote, ...local] }])
     );
-    expect(parsed[0].backgroundProjectIds).toEqual([...remote, ...local]);
+    expect(parsed[0].backgroundProjectIds).toEqual([...local, ...remote]);
+  });
+
+  it("writes this machine's projects first, so a build with one shared cap still finds them all", () => {
+    const local = locals(MAX_BACKGROUND_PROJECTS_PER_WINDOW);
+    const written = JSON.parse(
+      serializeOpenWindowsManifest([
+        { projectId: null, backgroundProjectIds: [...hosts(3), ...local] },
+      ])
+    ) as { windows: OpenWindowRecord[] };
+    // What a build before #13932 kept: the first 8 entries, host keys then dropped.
+    const olderRead = written.windows[0]
+      .backgroundProjectIds!.slice(0, 8)
+      .filter((id) => !isRemoteWorkspaceKey(id));
+    expect(olderRead).toEqual(local);
   });
 
   it("caps each kind on its own, keeping the most recent of each", () => {
@@ -385,19 +407,20 @@ describe("background host projects (#13932)", () => {
     );
   });
 
-  it("writes the same two caps", () => {
+  it("writes the same two caps, without the window's own project or duplicates", () => {
     const local = locals(MAX_BACKGROUND_PROJECTS_PER_WINDOW + 1);
     const remote = hosts(MAX_BACKGROUND_HOST_PROJECTS_PER_WINDOW + 1);
     const written = JSON.parse(
       serializeOpenWindowsManifest([
-        { projectId: LOCAL_A, backgroundProjectIds: [...remote, ...local] },
+        {
+          projectId: LOCAL_A,
+          backgroundProjectIds: [LOCAL_A, ...remote, remote[0]!, ...local, local[0]!],
+        },
       ])
     ) as { windows: OpenWindowRecord[] };
-    expect(written.windows[0].backgroundProjectIds).toEqual(
-      capBackgroundProjectIds([...remote, ...local], LOCAL_A)
-    );
-    expect(written.windows[0].backgroundProjectIds).toHaveLength(
-      MAX_BACKGROUND_PROJECTS_PER_WINDOW + MAX_BACKGROUND_HOST_PROJECTS_PER_WINDOW
-    );
+    expect(written.windows[0].backgroundProjectIds).toEqual([
+      ...local.slice(0, MAX_BACKGROUND_PROJECTS_PER_WINDOW),
+      ...remote.slice(0, MAX_BACKGROUND_HOST_PROJECTS_PER_WINDOW),
+    ]);
   });
 });

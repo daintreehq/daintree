@@ -674,11 +674,32 @@ describe("background host projects (#13932)", () => {
     ];
     const registry = makeRegistry([{ windowId: 1, projectId: "a", views: [...remote, ...local] }]);
     expect(buildOpenWindowRecords(registry)[0].backgroundProjectIds).toEqual([
+      ...local.map(([id]) => id),
       host("studio-01"),
       host("studio-02"),
-      ...local.map(([id]) => id),
     ]);
   });
+
+  it.each([
+    ["first", [1, 2]],
+    ["second", [2, 1]],
+  ])(
+    "leaves a waiting host project to the window holding its view, focused %s",
+    (_label, order) => {
+      // Window 1 never got to it; the person opened it in window 2 meanwhile.
+      const wins: Record<number, FakeWindow> = {
+        1: { windowId: 1, projectId: "a" },
+        2: { windowId: 2, projectId: "b", views: [[host("studio-01"), 10]] },
+      };
+      addPendingRemoteBackgroundRestores(1, [host("studio-01")]);
+      const records = buildOpenWindowRecords(makeRegistry(order.map((id) => wins[id]!)));
+      expect(records.find((r) => r.projectId === "a")).toEqual({ projectId: "a" });
+      expect(records.find((r) => r.projectId === "b")).toEqual({
+        projectId: "b",
+        backgroundProjectIds: [host("studio-01")],
+      });
+    }
+  );
 
   it("keeps naming a window's waiting host projects until each is let go", () => {
     const registry = makeRegistry([{ windowId: 1, projectId: "a", views: [["warm", 10]] }]);

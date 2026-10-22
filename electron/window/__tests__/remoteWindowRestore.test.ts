@@ -703,16 +703,22 @@ describe("a window's background projects on hosts (#13932)", () => {
 
   it("stops at the window's warm-view ceiling, keeping the rest for the next launch", async () => {
     const client = fakeClient(async () => ({ outcome: "switched" }));
-    client.restoreHostProjectInBackground.mockResolvedValueOnce("deferred");
-    takeHostBackgroundRestores(3, [BG_1, BG_2]);
+    const BG_OTHER = bg("studio-02", "e");
+    client.list.mockReturnValue(hosts("studio-01", "studio-02") as never);
+    let reachOther: (outcome: string) => void = () => {};
+    client.restoreHostProjectInBackground.mockImplementation(async (_w, hostId) =>
+      hostId === "studio-01" ? "deferred" : new Promise<string>((resolve) => (reachOther = resolve))
+    );
+    takeHostBackgroundRestores(3, [BG_1, BG_OTHER, BG_2]);
     remoteWindowReady(3);
     await restoreRemoteWindows(deps(new Set()).d);
-    await vi.waitFor(() => expect(client.restoreHostProjectInBackground).toHaveBeenCalledTimes(1));
-    client.changed("studio-01", "disconnected");
-    client.changed("studio-01", "connected");
-    await Promise.resolve();
-    expect(client.restoreHostProjectInBackground).toHaveBeenCalledTimes(1);
-    expect(getPendingRemoteBackgroundRestores(3)).toEqual([BG_1, BG_2]);
+    await vi.waitFor(() => expect(client.restoreHostProjectInBackground).toHaveBeenCalledTimes(2));
+    // The rest of that host's wait, and a window full now takes nothing more.
+    reachOther("restored");
+    takeHostBackgroundRestores(3, [bg("studio-01", "f")]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(restoredKeys(client)).toEqual([`3/${BG_1}`, `3/${BG_OTHER}`]);
+    expect(getPendingRemoteBackgroundRestores(3)).toEqual([BG_1, BG_2, bg("studio-01", "f")]);
   });
 
   it("forgets a removed host's waiting projects and stops dialling it", async () => {

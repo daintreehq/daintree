@@ -193,38 +193,38 @@ function parseBackgroundProjectIds(raw: unknown, foregroundId: string | null): s
 
 /**
  * A window's background list as the manifest keeps it: empty ids, duplicates
- * and `foregroundId` dropped, order kept, and the most recent
+ * and `foregroundId` dropped, and the most recent
  * {@link MAX_BACKGROUND_PROJECTS_PER_WINDOW} of this machine's workspaces kept
- * alongside the most recent {@link MAX_BACKGROUND_HOST_PROJECTS_PER_WINDOW} of
- * other machines', each kind filling its own slots.
+ * apart from the most recent {@link MAX_BACKGROUND_HOST_PROJECTS_PER_WINDOW} of
+ * other machines', each kind in its own order. This machine's come first, so a
+ * build that predates the split (one cap of 8 across both) still reads every
+ * local one; the two are restored apart, so nothing ranks one kind against
+ * the other.
  */
 export function capBackgroundProjectIds(
   ids: Iterable<string>,
   foregroundId: string | null = null
 ): string[] {
   const seen = new Set<string>();
-  const kept: string[] = [];
-  let local = 0;
-  let remote = 0;
+  const local: string[] = [];
+  const remote: string[] = [];
   for (const id of ids) {
     if (id.length === 0 || id === foregroundId || seen.has(id)) continue;
     seen.add(id);
-    if (isRemoteWorkspaceKey(id)) {
-      if (remote >= MAX_BACKGROUND_HOST_PROJECTS_PER_WINDOW) continue;
-      remote += 1;
-    } else {
-      if (local >= MAX_BACKGROUND_PROJECTS_PER_WINDOW) continue;
-      local += 1;
-    }
-    kept.push(id);
+    const kind = isRemoteWorkspaceKey(id) ? remote : local;
+    const cap =
+      kind === remote
+        ? MAX_BACKGROUND_HOST_PROJECTS_PER_WINDOW
+        : MAX_BACKGROUND_PROJECTS_PER_WINDOW;
+    if (kind.length < cap) kind.push(id);
     if (
-      local >= MAX_BACKGROUND_PROJECTS_PER_WINDOW &&
-      remote >= MAX_BACKGROUND_HOST_PROJECTS_PER_WINDOW
+      local.length >= MAX_BACKGROUND_PROJECTS_PER_WINDOW &&
+      remote.length >= MAX_BACKGROUND_HOST_PROJECTS_PER_WINDOW
     ) {
       break;
     }
   }
-  return kept;
+  return [...local, ...remote];
 }
 
 /**
