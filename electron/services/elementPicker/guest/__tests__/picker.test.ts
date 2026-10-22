@@ -817,6 +817,14 @@ describe("createPicker", () => {
     expect(selectedCapabilities()).toEqual(every({ state: "unknown" }));
   });
 
+  it("keeps the answer open for a reader that answered before the host recorded it", () => {
+    answerEmpty("solid");
+    const handle = start();
+    handle.setAvailability(SETTLED);
+    document.getElementById("first")!.click();
+    expect(selectedCapabilities()).toEqual(every({ state: "unknown" }));
+  });
+
   it("keeps a reader's word for its own framework open while another's reader could still answer", () => {
     const solid = {
       names: { state: "unavailable", reason: "not-exposed" },
@@ -1472,7 +1480,7 @@ describe("the bridge's element exchanges", () => {
       }),
       locate: () => ({ elements: roots, data: { complete: true } }),
     });
-    start();
+    const handle = start();
     roots[0]!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
     expect(ofType("selectionChanged").at(-1)?.observations[0]?.context).toBeDefined();
 
@@ -1488,6 +1496,14 @@ describe("the bridge's element exchanges", () => {
       code: "capacity",
       detail: expect.stringContaining("markup and styles left out"),
     });
+
+    // A change only to the markup the fit leaves out tells the host nothing new.
+    const sent = ofType("selectionChanged").length;
+    const notices = ofType("runtimeIssue").length;
+    roots[0]!.setAttribute("aria-x0", "€".repeat(159) + "x");
+    handle.setAvailability(SETTLED);
+    expect(ofType("selectionChanged")).toHaveLength(sent);
+    expect(ofType("runtimeIssue")).toHaveLength(notices);
   });
 
   it("goes back to element scope when the component is no longer described", () => {

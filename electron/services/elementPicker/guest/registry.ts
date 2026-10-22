@@ -64,6 +64,12 @@ export interface ElementPickerExtractor {
     refs: ElementRefs
   ): ExtractorContribution | null;
   /**
+   * True for a reader that reads nothing on hover. Its null there is a choice,
+   * not a look, so the registry leaves it out of a hover's reply altogether
+   * rather than report it as having found nothing.
+   */
+  selectionOnly?: boolean;
+  /**
    * A user's pick of `hit`: the element it stands for, described. Only for a
    * framework that selects something other than the node the pointer landed
    * on; without it a pick is `extract(hit, "selection", refs)`. The registry
@@ -250,6 +256,7 @@ function createRegistry(channel: string): Registry {
     // and whichever it is, its tokens are this request's.
     const refs = createRefTable();
     for (const [framework, extractor] of extractors) {
+      if (request.phase === "hover" && extractor.selectionOnly === true) continue;
       let data: ExtractorContribution | null;
       // Each contribution names its own pick: the bootstrap reads the one it adopts.
       let token: string | null = null;

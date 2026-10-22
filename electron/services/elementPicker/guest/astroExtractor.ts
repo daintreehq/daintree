@@ -212,7 +212,9 @@ export function describeAstro(element: Element): ExtractorContribution {
 /**
  * Selection only: everything here is attribute reads and a bounded walk, but
  * none of it improves a hover label, which the neutral picker already draws.
+ * Declared, so a hover's silence is not taken for finding nothing.
  */
 export const astroExtractor: ElementPickerExtractor = {
+  selectionOnly: true,
   extract: (element, phase) => (phase === "selection" ? describeAstro(element) : null),
 };

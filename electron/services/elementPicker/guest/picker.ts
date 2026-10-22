@@ -165,10 +165,12 @@ interface Extraction {
   /** Every framework's answer this side could take, in install order. */
   contributions: readonly Extracted[];
   /** Frameworks whose reader looked and found nothing. */
-  empty: ReadonlySet<string>;
+  empty: ReadonlySet<ElementPickerFramework>;
 }
 
 const NO_ANSWER: Extraction = { contributions: [], empty: new Set() };
+
+type SelectionEvent = Extract<ElementPickerEvent, { type: "selectionChanged" }>;
 
 /** Bootstrap-worded, so nothing the page writes reaches a notice the host shows. */
 const NOTICE_ISSUES: Record<
@@ -613,10 +615,12 @@ export function createPicker(host: PickerHost): PickerHandle {
     for (const text of received.replies) {
       const parsed = parseReply(text, id);
       if (parsed === null || !Array.isArray(parsed.contributions)) continue;
-      const empty = new Set<string>();
+      const empty = new Set<ElementPickerFramework>();
       if (Array.isArray(parsed.empty)) {
         for (const name of parsed.empty.slice(0, FRAMEWORKS.size)) {
-          if (typeof name === "string" && FRAMEWORKS.has(name)) empty.add(name);
+          if (typeof name === "string" && FRAMEWORKS.has(name)) {
+            empty.add(name as ElementPickerFramework);
+          }
         }
       }
       const contributions: Extracted[] = [];
@@ -665,7 +669,9 @@ export function createPicker(host: PickerHost): PickerHandle {
       Object.keys(availability.extractors) as ElementPickerFramework[]
     );
     for (const entry of detections) frameworks.add(entry.framework);
+    // A reader that answered, even with nothing, is a framework on the page.
     for (const contribution of extraction.contributions) frameworks.add(contribution.framework);
+    for (const framework of extraction.empty) frameworks.add(framework);
     if (frameworks.size === 0) return { state: "unavailable", reason: "no-framework" };
     for (const framework of frameworks) {
       if (framework === speaker) continue;
@@ -842,12 +848,13 @@ export function createPicker(host: PickerHost): PickerHandle {
    * Fit the selection into one envelope: whole if it fits, else with every
    * framework's ancestry shortened and each chain cut to the records the
    * selection names. The prelude would otherwise swap an oversized event for a
-   * capacity issue while this side went on believing it had been sent.
+   * capacity issue while this side went on believing it had been sent. What was
+   * cut is the caller's to report, with the event it explains.
    */
   function fitSelection(
-    event: Extract<ElementPickerEvent, { type: "selectionChanged" }>
-  ): Extract<ElementPickerEvent, { type: "selectionChanged" }> | null {
-    if (byteLength(event) <= LIMITS.eventBytes) return event;
+    event: SelectionEvent
+  ): { event: SelectionEvent; cut: string | null } | null {
+    if (byteLength(event) <= LIMITS.eventBytes) return { event, cut: null };
     const scoped = event.scope.kind === "component" ? event.scope.componentId : null;
     const shortened = {
       ...event,
@@ -863,12 +870,7 @@ export function createPicker(host: PickerHost): PickerHandle {
       })),
     };
     if (byteLength(shortened) <= LIMITS.eventBytes) {
-      host.post({
-        type: "runtimeIssue",
-        code: "capacity",
-        detail: "ancestry shortened to fit the selection into one envelope",
-      });
-      return shortened;
+      return { event: shortened, cut: "ancestry shortened to fit the selection into one envelope" };
     }
     // Each element's markup and styles are bounded on their own, not across a
     // component's every root; the description goes before the selection does.
@@ -879,13 +881,10 @@ export function createPicker(host: PickerHost): PickerHandle {
       ),
     };
     if (byteLength(bare) > LIMITS.eventBytes) return null;
-    host.post({
-      type: "runtimeIssue",
-      code: "capacity",
-      detail:
-        "ancestry shortened and element markup and styles left out to fit the selection into one envelope",
-    });
-    return bare;
+    return {
+      event: bare,
+      cut: "ancestry shortened and element markup and styles left out to fit the selection into one envelope",
+    };
   }
 
   /** Keeps the nearest and scoped records, and drops edges to anything it let go. */
@@ -982,17 +981,19 @@ export function createPicker(host: PickerHost): PickerHandle {
         }
       });
     }
-    const text = serialize({ observations, scope: reportedScope });
-    if (onlyIfChanged && text !== null && text === lastSelection) {
-      return { sent: false, detections };
-    }
-    const event = fitSelection({
+    const fitted = fitSelection({
       type: "selectionChanged",
       observations,
       cause,
       scope: reportedScope,
     });
-    if (event === null) return { sent: false, failure: "capacity", detections };
+    if (fitted === null) return { sent: false, failure: "capacity", detections };
+    const { event, cut } = fitted;
+    // What the host would be told, after the fit: a change only to what it cuts is no change.
+    const text = serialize({ observations: event.observations, scope: event.scope });
+    if (onlyIfChanged && text !== null && text === lastSelection) {
+      return { sent: false, detections };
+    }
     // The picker went away while page code ran inside one of the exchanges.
     if (disposed) return { sent: false, failure: "failed", detections };
     selection.forEach((entry, index) => {
@@ -1004,6 +1005,7 @@ export function createPicker(host: PickerHost): PickerHandle {
     if (reportedScope.kind === "element") scope = ELEMENT_SCOPE;
     selectedChain = chain;
     lastSelection = text;
+    if (cut !== null) host.post({ type: "runtimeIssue", code: "capacity", detail: cut });
     host.post(event);
     return { sent: true, detections };
   }

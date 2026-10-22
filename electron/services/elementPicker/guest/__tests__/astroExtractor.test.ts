@@ -450,6 +450,24 @@ describe("a page with islands in two frameworks", () => {
     }
   );
 
+  it("leaves a hover's capabilities open rather than taking Astro's skipped hover for a look", () => {
+    install(["astro", "react", "svelte"]);
+    picker?.setAvailability({
+      detection: "settled",
+      extractors: { astro: "installed", react: "installed", svelte: "installed" },
+    });
+    byId("title").dispatchEvent(new MouseEvent("pointermove", { bubbles: true, composed: true }));
+    for (const frame of frames.splice(0)) frame(0);
+    const [hover] = events.flatMap((event) =>
+      event.type === "hoverChanged" && event.observation !== null ? [event.observation] : []
+    );
+    expect(hover?.tagName).toBe("h1");
+    expect(hover?.capabilities.file).toEqual({ state: "unknown" });
+    expect(hover?.capabilities.line).toEqual({ state: "unknown" });
+    // Selected, the same element's location is Astro's to give.
+    expect(select("title").capabilities.line).toEqual({ state: "available" });
+  });
+
   it("leaves the hover label to the island's renderer, with nothing of Astro's in it", () => {
     install(["astro", "react", "svelte"]);
     for (const id of ["buy", "title"]) {

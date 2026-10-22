@@ -286,6 +286,37 @@ describe("element refs", () => {
     expect(reply).toEqual({ id: 9, contributions: [], empty: [] });
   });
 
+  it("leaves a selection-only reader out of a hover's reply, and asks it about a selection", () => {
+    document.body.innerHTML = '<a id="hit"></a>';
+    const hit = document.getElementById("hit")!;
+    const phases: string[] = [];
+    install("astro", {
+      selectionOnly: true,
+      extract: (_element, phase) => {
+        phases.push(phase);
+        return null;
+      },
+    });
+    install("solid", { extract: () => null });
+    const bootstrap = listenAsBootstrap();
+    hit.dispatchEvent(
+      new CustomEvent(channelEvent(CHANNEL, "extract"), {
+        detail: JSON.stringify({ id: 10, phase: "hover" }),
+        composed: true,
+      })
+    );
+    request(hit, 11);
+    bootstrap.stop();
+
+    const [hover, selection] = bootstrap.log
+      .filter((entry) => entry.type === "extracted")
+      .map((entry) => JSON.parse(entry.detail as string) as ExtractReply);
+    // Its null on hover would be a choice, not a look, so it is in neither list.
+    expect(hover).toEqual({ id: 10, contributions: [], empty: ["solid"] });
+    expect(selection).toEqual({ id: 11, contributions: [], empty: ["astro", "solid"] });
+    expect(phases).toEqual(["selection"]);
+  });
+
   it("names what a locate found by token, before its reply, and says when some could not be", () => {
     document.body.innerHTML = '<p id="a"></p><p id="b"></p>';
     const a = document.getElementById("a")!;
