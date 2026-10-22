@@ -24,6 +24,7 @@ import {
 import type { LinkSession, LinkSessionOptions } from "../link/session.js";
 import {
   EndpointAgentActivityPayloadSchema,
+  EndpointResidencyPayloadSchema,
   EndpointAssistantPayloadSchema,
   EndpointResyncPayloadSchema,
   HostInfoSchema,
@@ -199,6 +200,12 @@ export class HostConnection {
   private readonly activeAgentViews = new Set<number>();
   /** Push names from a host on another build that this build doesn't know, logged once per host build. */
   private readonly unknownPushNames = new Set<string>();
+  /**
+   * Views whose project the user granted residency on this host (#13933). The
+   * grant is the host's, so the eviction pass reads it here rather than from
+   * this machine's store. Kept through a dropped link like `activeAgentViews`.
+   */
+  private readonly residentViews = new Set<number>();
   private readonly readyWaiters = new Set<() => void>();
   private info: HostInfo | null = null;
   private started = false;
@@ -600,6 +607,11 @@ export class HostConnection {
     return this.activeAgentViews.has(webContentsId) && this.endpoints.has(webContentsId);
   }
 
+  /** Whether the host last said the user granted this view's project residency there. */
+  hasKeepResident(webContentsId: number): boolean {
+    return this.residentViews.has(webContentsId) && this.endpoints.has(webContentsId);
+  }
+
   /** The view now belongs to another host (or this machine): close its endpoint here. */
   retireView(webContentsId: number): void {
     this.closeEndpoint(webContentsId, "view-moved");
@@ -671,6 +683,21 @@ export class HostConnection {
           if (this.endpoints.get(webContentsId)?.projectId !== projectId) continue;
           if (active) this.activeAgentViews.add(webContentsId);
           else this.activeAgentViews.delete(webContentsId);
+        }
+        return null;
+      }
+    );
+    session.registerCallHandler(
+      LinkMethod.ENDPOINT_RESIDENCY,
+      EndpointResidencyPayloadSchema,
+      ({ endpoints }) => {
+        for (const { endpointId, projectId, keepResident } of endpoints) {
+          const webContentsId = this.viewsByEndpoint.get(endpointId);
+          if (webContentsId === undefined) continue;
+          // Said about a binding the view has since left.
+          if (this.endpoints.get(webContentsId)?.projectId !== projectId) continue;
+          if (keepResident) this.residentViews.add(webContentsId);
+          else this.residentViews.delete(webContentsId);
         }
         return null;
       }
@@ -758,6 +785,7 @@ export class HostConnection {
         this.liveAssistants.delete(webContentsId);
         // The old project's agents say nothing about the new one's.
         this.activeAgentViews.delete(webContentsId);
+        this.residentViews.delete(webContentsId);
       }
       return open.endpointId;
     }
@@ -793,6 +821,7 @@ export class HostConnection {
     this.viewsByEndpoint.delete(open.endpointId);
     this.liveAssistants.delete(webContentsId);
     this.activeAgentViews.delete(webContentsId);
+    this.residentViews.delete(webContentsId);
     const posted = this.postClose(this.session, open.endpointId);
     if (!posted) this.pendingCloses.add(open.endpointId);
     this.logEndpointClosed(webContentsId, open, cause, { closeQueued: !posted });
@@ -884,6 +913,7 @@ export class HostConnection {
     this.viewsByEndpoint.clear();
     this.liveAssistants.clear();
     this.activeAgentViews.clear();
+    this.residentViews.clear();
   }
 
   /**

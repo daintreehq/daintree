@@ -14,6 +14,11 @@ const residencyMock = vi.hoisted(() => ({
 
 vi.mock("../../../services/workspaceResidency.js", () => residencyMock);
 
+const remoteMock = vi.hoisted(() => ({ refreshResidency: vi.fn() }));
+vi.mock("../../../remote/runtime.js", () => ({
+  getRemoteService: vi.fn((key: string) => (key === "sessionHost" ? remoteMock : undefined)),
+}));
+
 import { ipcMain } from "electron";
 import { registerWorkspaceResidencyHandlers } from "../workspaceResidency.js";
 
@@ -49,6 +54,19 @@ describe("workspace residency IPC (#12313)", () => {
 
     await set(EVENT, { workspaceId: WORKSPACE, keepResident: false });
     expect(residencyMock.setWorkspaceKeepResident).toHaveBeenCalledWith(WORKSPACE, false);
+  });
+
+  it("tells attached Shells after the grant is stored, not before (#13933)", async () => {
+    const order: string[] = [];
+    residencyMock.setWorkspaceKeepResident.mockImplementation(() => void order.push("write"));
+    remoteMock.refreshResidency.mockImplementation(() => void order.push("refresh"));
+
+    await getHandler("workspace-residency:set")(EVENT, {
+      workspaceId: WORKSPACE,
+      keepResident: true,
+    });
+
+    expect(order).toEqual(["write", "refresh"]);
   });
 
   it("rejects a malformed payload at the boundary", async () => {

@@ -433,7 +433,7 @@ export const CHANNEL_LOCALITY = {
   "help:list-past-sessions": "host",
   "help:list-pending-hibernation-slots": "host",
   "help:mark-terminal": "host",
-  "help:open-assistant-content-folder": "shell",
+  "help:open-assistant-content-folder": "host",
   "help:peek-pending-hibernation": "host",
   "help:provision-session": "host",
   "help:report-panel-open": "host",

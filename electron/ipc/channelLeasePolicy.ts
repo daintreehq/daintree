@@ -315,6 +315,7 @@ export const CHANNEL_LEASE_POLICY = {
   "help:list-past-sessions": "free",
   "help:list-pending-hibernation-slots": "free",
   "help:mark-terminal": "free",
+  "help:open-assistant-content-folder": "free",
   "help:peek-pending-hibernation": "free",
   "help:provision-session": "driver",
   "help:report-panel-open": "free",

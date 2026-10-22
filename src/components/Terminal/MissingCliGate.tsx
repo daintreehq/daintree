@@ -8,6 +8,7 @@ import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { systemClient } from "@/clients/systemClient";
 import { getAgentConfig } from "@/config/agents";
 import { isHostLinux, isHostMac } from "@/hooks/useHostPlatform";
+import { useRemoteHostName } from "@/hooks/useSettingsOwner";
 import { cn } from "@/lib/utils";
 import { SEVERITY_VISUAL, type StatusSeverity } from "@/lib/statusSeverity";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
@@ -42,7 +43,12 @@ function severityIcon(severity: StatusSeverity): ReactNode {
 // Each title names what the probe observed for this agent, not a cause: a denied
 // exec is reported as denied, never as "blocked by security software", which
 // would send the user into endpoint settings on a guess.
-function getGateCopy(agentName: string, detail: AgentCliDetail): GateCopy {
+function getGateCopy(
+  agentName: string,
+  detail: AgentCliDetail,
+  hostName: string | null
+): GateCopy {
+  const where = hostName ?? "this machine";
   // Paths and probe messages are unbroken tokens that would push a narrow pane
   // sideways, so the description may break anywhere inside them.
   const path = detail.resolvedPath ? (
@@ -73,7 +79,7 @@ function getGateCopy(agentName: string, detail: AgentCliDetail): GateCopy {
         title: `${agentName} CLI not found`,
         description: (
           <span className="wrap-anywhere">
-            {detail.message ?? `No ${agentName} executable was found on this machine.`}
+            {detail.message ?? `No ${agentName} executable was found on ${where}.`}
             {lastPath}
           </span>
         ),
@@ -83,7 +89,7 @@ function getGateCopy(agentName: string, detail: AgentCliDetail): GateCopy {
         return {
           icon: severityIcon("warning"),
           title: `${agentName} found only in WSL`,
-          description: `Found in ${detail.wslDistro ?? "a WSL distro"}, but only binaries on this machine can be launched directly. Install it natively, or run it anyway if you use a wrapper.`,
+          description: `Found in ${detail.wslDistro ?? "a WSL distro"}, but only binaries on ${where} can be launched directly. Install it natively, or run it anyway if you use a wrapper.`,
         };
       }
       return {
@@ -181,6 +187,7 @@ export function MissingCliGate({
   const agentConfig = getAgentConfig(agentId);
   const agentName = agentConfig?.name ?? agentId;
   const state = detail.state;
+  const hostName = useRemoteHostName();
 
   const refresh = useCliAvailabilityStore((s) => s.refresh);
   const isRefreshing = useCliAvailabilityStore((s) => s.isRefreshing);
@@ -236,7 +243,7 @@ export function MissingCliGate({
   const troubleshooting = agentConfig?.install?.troubleshooting;
   const docsUrl = agentConfig?.install?.docsUrl;
 
-  const copy = getGateCopy(agentName, detail);
+  const copy = getGateCopy(agentName, detail, hostName);
   const launchable = isAgentLaunchable(state);
   const isWsl = state === "installed" && detail.via === "wsl";
   // WSL needs the same native install as a missing CLI; a wrapper or a denied
@@ -291,7 +298,8 @@ export function MissingCliGate({
                 <div>
                   <p className="text-sm font-medium text-text-primary">Install on {getOsLabel()}</p>
                   <p className="text-xs text-text-secondary">
-                    Run one of these in your terminal, then check again.
+                    Run one of these in {hostName ? `a terminal on ${hostName}` : "your terminal"},
+                    then check again.
                   </p>
                 </div>
                 <InstallCommands blocks={installBlocks} />

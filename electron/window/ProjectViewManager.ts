@@ -246,6 +246,12 @@ export interface ProjectViewManagerOptions {
    */
   remoteAgentActive?: (webContentsId: number) => boolean;
   /**
+   * The residency tier for a view of a host's project (#13933). The user's
+   * grant is in the host's store, not this machine's, so the host tells the
+   * Shell. Absent, no remote view is granted residency.
+   */
+  remoteKeepResident?: (webContentsId: number) => boolean;
+  /**
    * Why MCP needs this view kept running right now (#11790) — a live session
    * binding, an in-flight dispatch, or neither. Injected from the composition
    * root for the same reason as `assistantBackendsForProject`: electron/window/
@@ -387,6 +393,7 @@ export class ProjectViewManager {
   isTerminalLive?: (terminalId: string) => boolean;
   remoteAssistantLive?: (webContentsId: number) => boolean;
   remoteAgentActive?: (webContentsId: number) => boolean;
+  remoteKeepResident?: (webContentsId: number) => boolean;
   mcpViewActivity?: (workspaceId: string, webContentsId: number) => McpViewActivity | null;
   windowRegistry?: import("./WindowRegistry.js").WindowRegistry;
   private switchChain: Promise<void> = Promise.resolve();
@@ -476,6 +483,7 @@ export class ProjectViewManager {
     this.isTerminalLive = opts.isTerminalLive;
     this.remoteAssistantLive = opts.remoteAssistantLive;
     this.remoteAgentActive = opts.remoteAgentActive;
+    this.remoteKeepResident = opts.remoteKeepResident;
     this.mcpViewActivity = opts.mcpViewActivity;
     this.windowRegistry = opts.windowRegistry;
     if (opts.cachedProjectViews != null) {

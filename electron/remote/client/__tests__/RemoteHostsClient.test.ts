@@ -45,6 +45,7 @@ function fakeManager() {
       boundViews: () => number[];
       hasLiveAssistant: (webContentsId: number) => boolean;
       hasActiveAgent: (webContentsId: number) => boolean;
+      hasKeepResident: (webContentsId: number) => boolean;
     }
   >();
   const listeners = new Set<(hostId: string, state: HostConnectionState) => void>();
@@ -56,6 +57,7 @@ function fakeManager() {
     liveAssistants: new Map<string, Set<number>>(),
     /** Views a host says have an active agent in their project, by host. */
     activeAgents: new Map<string, Set<number>>(),
+    residentViews: new Map<string, Set<number>>(),
     /** What the host remembers this Shell last showed there. */
     last: null as { projectId: string; path: string; name: string } | null,
     touch: vi.fn(),
@@ -87,6 +89,8 @@ function fakeManager() {
             manager.liveAssistants.get(hostId)?.has(webContentsId) === true,
           hasActiveAgent: (webContentsId: number) =>
             manager.activeAgents.get(hostId)?.has(webContentsId) === true,
+          hasKeepResident: (webContentsId: number) =>
+            manager.residentViews.get(hostId)?.has(webContentsId) === true,
         };
         connections.set(hostId, connection);
       }
@@ -432,6 +436,20 @@ describe("RemoteHostsClient", () => {
     expect(client.viewHasActiveAgent(7)).toBe(false);
     expect(client.viewHasActiveAgent(8)).toBe(false);
     expect(client.viewHasActiveAgent(9)).toBe(false);
+  });
+
+  it("asks a view's own host whether its project is granted residency, and no host for a local view (#13933)", () => {
+    manager.connect("studio-01");
+    manager.residentViews.set("studio-01", new Set([6, 8]));
+    keys.set(6, "studio-01:proj-1");
+    keys.set(7, "studio-01:proj-2");
+    keys.set(8, "proj-1");
+    keys.set(9, "studio-02:proj-1");
+
+    expect(client.viewKeepsResident(6)).toBe(true);
+    expect(client.viewKeepsResident(7)).toBe(false);
+    expect(client.viewKeepsResident(8)).toBe(false);
+    expect(client.viewKeepsResident(9)).toBe(false);
   });
 
   it("puts the binding back when the view can't be moved, so the two never name different hosts", async () => {

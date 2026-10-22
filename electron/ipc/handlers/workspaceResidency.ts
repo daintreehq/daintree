@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { defineIpcNamespace, opValidated } from "../define.js";
+import { getRemoteService } from "../../remote/runtime.js";
 import { WORKSPACE_RESIDENCY_METHOD_CHANNELS } from "./workspaceResidency.preload.js";
 import {
   isWorkspaceKeepResident,
@@ -36,6 +37,8 @@ export const workspaceResidencyNamespace = defineIpcNamespace({
         // would make the toggle fail during a project move, when the id is
         // stable but the record is briefly in flight.
         setWorkspaceKeepResident(workspaceId, keepResident);
+        // A Remote Shell's eviction pass reads this grant from the host's answer.
+        getRemoteService("sessionHost")?.refreshResidency();
       }
     ),
   },

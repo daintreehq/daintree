@@ -132,6 +132,17 @@ export function hasLiveAssistantBackend(
 }
 
 /**
+ * The user's residency grant for a cached view. A view of a host's project is
+ * asked of its host (#13933): the grant is stored there, and this machine's
+ * store says nothing about it.
+ */
+function viewKeepsResident(host: ProjectViewManager, projectId: string, entry: ViewEntry): boolean {
+  if (isLocalViewKey(projectId)) return isWorkspaceKeepResident(projectId);
+  const wc = entry.view.webContents;
+  return !wc.isDestroyed() && host.remoteKeepResident?.(wc.id) === true;
+}
+
+/**
  * The active-agent rank of a cached view. A view of a host's project is asked
  * of its host (#13359): its agents run there, so this machine's agent-state
  * cache never sees them, and without the host's answer every such view ranked
@@ -488,7 +499,7 @@ export function evictStaleViews(
     // this is also the liveness half (#11162) — the preference record is keyed
     // by workspace id and nothing prunes it when a project is deleted, so a
     // stale entry only ever meets this loop for a view that actually exists.
-    const keepResident = isWorkspaceKeepResident(projectId);
+    const keepResident = viewKeepsResident(host, projectId, entry);
     const base = { projectId, entry, activeAgent, boundMcpSession, keepResident };
     if (hasLiveAssistantBackend(host, projectId, entry)) {
       assistantProtected.push({ ...base, liveAssistantBackend: true });

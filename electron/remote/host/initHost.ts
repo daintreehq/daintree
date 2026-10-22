@@ -4,6 +4,7 @@ import { helpSessionService } from "../../services/HelpSessionService.js";
 import { projectStore } from "../../services/ProjectStore.js";
 import type { PtyClient } from "../../services/PtyClient.js";
 import { scratchStore } from "../../services/ScratchStore.js";
+import { isWorkspaceKeepResident } from "../../services/workspaceResidency.js";
 import { events } from "../../services/events.js";
 import { setAttachedFrontendCount } from "../../services/PowerSaveBlockerService.js";
 import { getPtyClient } from "../../window/serviceRefs.js";
@@ -70,6 +71,8 @@ export function initRemoteHostsHost(
     assistantLive: assistantLiveFor,
     agentActive: (endpoint) =>
       endpoint.projectId !== null && agents.isProjectActive(endpoint.projectId),
+    keepResident: (endpoint) =>
+      endpoint.projectId !== null && isWorkspaceKeepResident(endpoint.projectId),
     ...overrides,
   });
   const unregister = registerRemoteService("sessionHost", sessionHost);
@@ -104,6 +107,7 @@ export function initRemoteHostsHost(
     refresh();
     agents.reconcile();
     sessionHost.refreshAgentActivity();
+    sessionHost.refreshResidency();
   }, ASSISTANT_SWEEP_MS);
   sweep.unref?.();
   return {

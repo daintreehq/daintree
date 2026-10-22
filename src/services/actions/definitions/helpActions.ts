@@ -3,6 +3,7 @@ import { AgentIdSchema } from "./schemas";
 import { z } from "zod";
 import { suppressSidebarResizes } from "@/lib/sidebarToggle";
 import { notify } from "@/lib/notify";
+import { currentHostId, getHostPlatformInfo, isRemoteWindow } from "@/hooks/useHostPlatform";
 import { actionService } from "@/services/ActionService";
 import { useAgentPreferencesStore } from "@/store/agentPreferencesStore";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
@@ -1005,21 +1006,28 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
     mcpVisibility: "hidden",
     keywords: ["custom", "skills", "slash", "prompts", "assistant", "commands"],
     run: async () => {
+      // The folder is the host's: its channel runs there, not on this machine.
+      const hostName = isRemoteWindow()
+        ? (getHostPlatformInfo().hostName ?? currentHostId())
+        : null;
       const result = await window.electron.help.openAssistantContentFolder();
       if (!result) {
         // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
         notify({
           type: "error",
           title: "Couldn't open commands folder",
-          message:
-            "Daintree couldn't create ~/.daintree/assistant. Check that your home folder is writable, then try again.",
+          message: hostName
+            ? `Daintree couldn't create ~/.daintree/assistant on ${hostName}. Check that its home folder is writable, then try again.`
+            : "Daintree couldn't create ~/.daintree/assistant. Check that your home folder is writable, then try again.",
         });
       } else if (!result.opened) {
         // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
         notify({
           type: "error",
           title: "Couldn't open commands folder",
-          message: `The folder is ready at ${result.path} — open it manually in your file manager.`,
+          message: hostName
+            ? `The folder is ready at ${result.path} on ${hostName} — open it there in a file manager.`
+            : `The folder is ready at ${result.path} — open it manually in your file manager.`,
         });
       }
     },
