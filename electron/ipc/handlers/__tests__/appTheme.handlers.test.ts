@@ -86,6 +86,7 @@ vi.mock("../../../../shared/theme/index.js", () => ({
       "status-success": "#30a46c",
     },
   })),
+  getAppThemeFallbackType: vi.fn(() => "dark"),
   normalizeAppColorScheme: vi.fn((s: unknown) => s),
   normalizeAccentHex: vi.fn((value: unknown): string | null => {
     if (typeof value !== "string") return null;
@@ -141,6 +142,7 @@ import { ipcMain, dialog, BrowserWindow } from "electron";
 import { CHANNELS } from "../../channels.js";
 import { registerAppThemeHandlers } from "../appTheme.js";
 import { typedSend } from "../../utils.js";
+import { resolveAppTheme } from "../../../../shared/theme/index.js";
 import {
   seedTitleBarOverlay,
   setTitleBarOverlayBannerSeverity,
@@ -435,6 +437,27 @@ describe("appTheme handlers", () => {
     vi.advanceTimersByTime(300);
 
     expect(mockWindow.setBackgroundColor).toHaveBeenCalledWith("#1a1a2e");
+  });
+
+  it("nativeTheme updated falls back to the appearance the OS switched to", () => {
+    const mockWindow = {
+      isDestroyed: () => false,
+      setBackgroundColor: vi.fn(),
+      setTitleBarOverlay: vi.fn(),
+    };
+    storeState.data.appTheme = {
+      colorSchemeId: "daintree",
+      followSystem: true,
+      preferredLightSchemeId: "custom-deleted",
+    };
+    nativeThemeMock.shouldUseDarkColors = false;
+
+    registerAppThemeHandlers(mockWindow as never);
+
+    getNativeThemeHandler()();
+    vi.advanceTimersByTime(300);
+
+    expect(resolveAppTheme).toHaveBeenCalledWith("custom-deleted", [], "light");
   });
 
   it("nativeTheme updated does not send when window is destroyed", () => {

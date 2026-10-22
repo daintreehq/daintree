@@ -35,8 +35,14 @@ interface AppThemeState {
    * theme (OS appearance switch, first-run auto-select) so the swap fades
    * rather than cutting. Startup hydration leaves it unset on purpose — there
    * is no prior theme to fade from, only the placeholder default.
+   *
+   * `fallbackType` picks the built-in used when `id` names no scheme; both
+   * callers resolve persisted or OS-chosen ids, which can outlive their scheme.
    */
-  setSelectedSchemeIdSilent: (id: string, opts?: { crossfade?: boolean }) => void;
+  setSelectedSchemeIdSilent: (
+    id: string,
+    opts?: { crossfade?: boolean; fallbackType?: AppColorScheme["type"] }
+  ) => void;
   addCustomScheme: (scheme: AppColorScheme) => void;
   removeCustomScheme: (id: string) => void;
   injectTheme: (scheme: AppColorScheme) => void;
@@ -154,7 +160,7 @@ export const useAppThemeStore = create<AppThemeState>()((set) => ({
 
   setSelectedSchemeIdSilent: (id, opts) => {
     const { customSchemes, selectedSchemeId: previousSchemeId } = useAppThemeStore.getState();
-    const scheme = resolveAppTheme(id, customSchemes);
+    const scheme = resolveAppTheme(id, customSchemes, opts?.fallbackType);
     set({ selectedSchemeId: scheme.id });
 
     // Only transition on a real change. `nativeTheme` can re-fire for OS changes that

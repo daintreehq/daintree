@@ -4,7 +4,11 @@ import { promises as fs } from "node:fs";
 import { CHANNELS } from "../channels.js";
 import { store } from "../../store.js";
 import { parseAppThemeFile } from "../../utils/appThemeImporter.js";
-import { resolveAppTheme, normalizeAccentHex } from "../../../shared/theme/index.js";
+import {
+  getAppThemeFallbackType,
+  resolveAppTheme,
+  normalizeAccentHex,
+} from "../../../shared/theme/index.js";
 import { typedHandle, typedHandleWithContext, typedSend } from "../utils.js";
 import { setTitleBarOverlayTheme } from "../../window/titleBarOverlay.js";
 import {
@@ -85,7 +89,11 @@ function getAppThemeConfig(): AppThemeConfig {
 export function refreshTitleBarOverlayTheme(): void {
   if (process.platform !== "win32") return;
   const config = getAppThemeConfig();
-  const scheme = resolveAppTheme(config.colorSchemeId, config.customSchemes ?? []);
+  const scheme = resolveAppTheme(
+    config.colorSchemeId,
+    config.customSchemes ?? [],
+    getAppThemeFallbackType(config.colorSchemeId, config, nativeTheme.shouldUseDarkColors)
+  );
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed()) setTitleBarOverlayTheme(win, scheme.tokens);
   }
@@ -265,7 +273,7 @@ export function registerAppThemeHandlers(mainWindow?: BrowserWindow): () => void
       typedSend(win, "app-theme:system-appearance-changed", { isDark, schemeId });
 
       const customSchemes = config.customSchemes ?? [];
-      const scheme = resolveAppTheme(schemeId, customSchemes);
+      const scheme = resolveAppTheme(schemeId, customSchemes, isDark ? "dark" : "light");
       win.setBackgroundColor(scheme.tokens["surface-canvas"]);
 
       // Hand the new tokens to the overlay owner rather than writing the native

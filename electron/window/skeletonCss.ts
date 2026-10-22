@@ -12,7 +12,9 @@ import { store } from "../store.js";
 import {
   resolveAppTheme,
   getAppThemeCssVariables,
+  getAppThemeFallbackType,
   applyAccentOverrideToScheme,
+  isCssDeclarationValue,
 } from "../../shared/theme/index.js";
 import type { AppColorScheme, AppThemeConfig } from "../../shared/theme/index.js";
 import type { Project } from "../../shared/types/project.js";
@@ -115,9 +117,29 @@ export function resolveInitialColorSchemeId(
   ) {
     return themeConfig.colorSchemeId.trim();
   }
-  return process.env.DAINTREE_SCREENSHOT_SCALE || nativeTheme.shouldUseDarkColors
-    ? "daintree"
-    : "bondi";
+  return systemPrefersDark() ? "daintree" : "bondi";
+}
+
+/** The OS appearance as the boot paths read it; screenshot runs are pinned to dark. */
+function systemPrefersDark(): boolean {
+  return Boolean(process.env.DAINTREE_SCREENSHOT_SCALE) || nativeTheme.shouldUseDarkColors;
+}
+
+/**
+ * Resolves the persisted scheme for a boot paint. An id that names no scheme
+ * (a custom theme since deleted, or dropped as invalid) falls back to a
+ * built-in of the polarity the user was on rather than always the dark one.
+ */
+export function resolveInitialAppScheme(
+  colorSchemeId: string,
+  themeConfig: Partial<AppThemeConfig> | undefined,
+  customSchemes: AppColorScheme[]
+): AppColorScheme {
+  return resolveAppTheme(
+    colorSchemeId,
+    customSchemes,
+    getAppThemeFallbackType(colorSchemeId, themeConfig ?? {}, systemPrefersDark())
+  );
 }
 
 /**
@@ -140,7 +162,7 @@ export function resolveInitialCanvasBackgroundColor(): string {
     );
     customSchemes = result.schemes;
   }
-  const scheme = resolveAppTheme(colorSchemeId, customSchemes);
+  const scheme = resolveInitialAppScheme(colorSchemeId, themeConfig, customSchemes);
   return scheme.tokens["surface-canvas"];
 }
 
@@ -187,7 +209,7 @@ export function buildSkeletonCss(
       }
     }
   }
-  const scheme = resolveAppTheme(colorSchemeId, customSchemes);
+  const scheme = resolveInitialAppScheme(colorSchemeId, themeConfig, customSchemes);
   // Paint the destination project's accent on cold starts. Safe to call
   // unconditionally — a missing or invalid color returns the scheme unchanged.
   const themedScheme = applyAccentOverrideToScheme(scheme, project?.color);
@@ -207,8 +229,12 @@ export function buildSkeletonCss(
   // sibling of `#startup-skeleton`, so the app never inherits this block.
   const lines: string[] = ["#startup-skeleton {"];
 
-  // Theme tokens (--theme-surface-canvas, --theme-border-default, etc.)
+  // Theme tokens (--theme-surface-canvas, --theme-border-default, etc.).
+  // Values are written into stylesheet text, so one that could end its
+  // declaration or the rule is left out; the renderer sets every variable
+  // inline once it mounts.
   for (const [prop, value] of Object.entries(themeVars)) {
+    if (!isCssDeclarationValue(value)) continue;
     lines.push(`  ${prop}: ${value};`);
   }
 

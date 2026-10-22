@@ -4,6 +4,8 @@
  */
 
 import { z } from "zod";
+import { sanitizeThemeExtensions } from "../../shared/theme/extensionKeys.js";
+
 const appColorSchemeTokenSchema = z.record(z.string(), z.string());
 
 const themeStrategySchema = z.object({
@@ -92,7 +94,9 @@ export const appColorSchemeSchema = z.object({
   builtin: z.boolean(),
   tokens: appColorSchemeTokenSchema,
   palette: themePaletteSchema.optional(),
-  extensions: z.record(z.string(), z.string()).optional(),
+  // Unregistered keys are stripped rather than rejected: failing the entry
+  // would make migrateCustomSchemes drop the user's whole theme.
+  extensions: z.record(z.string(), z.string()).transform(sanitizeThemeExtensions).optional(),
   location: z.string().optional(),
   heroImage: z.string().optional(),
 });

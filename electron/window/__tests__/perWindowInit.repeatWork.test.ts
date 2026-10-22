@@ -83,7 +83,7 @@ vi.mock("../portDistribution.js", () => ({
   distributePortsToView: vi.fn(),
   releaseAllTerminalWorkerPorts: vi.fn(),
 }));
-vi.mock("../skeletonCss.js", () => ({ resolveInitialColorSchemeId: () => "daintree" }));
+vi.mock("../skeletonCss.js", () => ({ resolveInitialCanvasBackgroundColor: () => "#000000" }));
 vi.mock("../../../shared/theme/index.js", () => ({
   resolveAppTheme: () => ({ tokens: { "surface-canvas": "#000" } }),
 }));

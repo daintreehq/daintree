@@ -365,6 +365,20 @@ function refusedNotificationReason(key: string): string {
     : "Not a supported notification setting";
 }
 
+/**
+ * A custom scheme as it would be stored, or null when it fails validation. The
+ * incoming object is kept rather than the parse, so a newer build's fields
+ * survive; only its extensions take the parsed form, which strips the keys
+ * that could shadow a theme token. Every compare against the stored scheme
+ * uses this form, so a re-imported bundle converges on unchanged.
+ */
+function toStoredScheme(scheme: Record<string, unknown>): Record<string, unknown> | null {
+  const parsed = appCustomSchemesWriteSchema.safeParse([scheme]);
+  if (!parsed.success) return null;
+  const extensions = parsed.data[0]?.extensions;
+  return extensions === undefined ? scheme : { ...scheme, extensions };
+}
+
 function recipeRefusal(recipe: Record<string, unknown>): string | null {
   if (typeof recipe.name !== "string" || !recipe.name.trim()) return "Recipe has no name";
   if (!Array.isArray(recipe.terminals)) return "Recipe has no terminals";
@@ -1150,7 +1164,8 @@ export class ConfigBundleService {
             const key = `theme:${String(scheme.id)}`;
             const existing = currentById.get(String(scheme.id));
             if (!existing) result.add.push(key);
-            else if (sameValue(scheme, existing)) result.unchanged.push(key);
+            else if (sameValue(toStoredScheme(scheme) ?? scheme, existing))
+              result.unchanged.push(key);
             else result.update.push(key);
           }
         }
@@ -1168,10 +1183,9 @@ export class ConfigBundleService {
           );
           for (const scheme of incoming.customSchemes.filter(isRecord)) {
             const id = String(scheme.id);
-            if (sameValue(scheme, currentById.get(id))) continue;
-            if (!appCustomSchemesWriteSchema.safeParse([scheme]).success) {
-              check.skipped.set(`theme:${id}`, "Theme definition is not valid");
-            }
+            const stored = toStoredScheme(scheme);
+            if (sameValue(stored ?? scheme, currentById.get(id))) continue;
+            if (!stored) check.skipped.set(`theme:${id}`, "Theme definition is not valid");
           }
         }
         for (const field of SCALAR_FIELDS) {
@@ -1207,17 +1221,18 @@ export class ConfigBundleService {
           const pending = new Map<string, Record<string, unknown>>();
           for (const scheme of incomingSchemes) {
             const id = String(scheme.id);
-            if (sameValue(scheme, mergedById.get(id))) {
+            const stored = toStoredScheme(scheme);
+            if (sameValue(stored ?? scheme, mergedById.get(id))) {
               results.push(unchangedLeaf(`theme:${id}`));
               continue;
             }
-            if (!appCustomSchemesWriteSchema.safeParse([scheme]).success) {
+            if (!stored) {
               results.push(skippedLeaf(`theme:${id}`, "Theme definition is not valid"));
               continue;
             }
             // Last one wins if the bundle repeats an id, so each id reports once.
-            mergedById.set(id, scheme);
-            pending.set(id, scheme);
+            mergedById.set(id, stored);
+            pending.set(id, stored);
           }
 
           if (pending.size > 0) {

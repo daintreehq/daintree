@@ -53,6 +53,17 @@ describe("appThemeStore.recentSchemeIds LRU", () => {
     expect(recent).not.toContain("bondi");
   });
 
+  it("setSelectedSchemeIdSilent resolves a missing id to a built-in of the fallback type", () => {
+    useAppThemeStore
+      .getState()
+      .setSelectedSchemeIdSilent("custom-deleted", { fallbackType: "light" });
+    flushPendingTheme();
+
+    const selectedId = useAppThemeStore.getState().selectedSchemeId;
+    expect(BUILT_IN_APP_SCHEMES.find((scheme) => scheme.id === selectedId)?.type).toBe("light");
+    expect(document.documentElement.dataset.colorMode).toBe("light");
+  });
+
   it("setSelectedSchemeIdSilent does NOT mutate recentSchemeIds", () => {
     useAppThemeStore.getState().setSelectedSchemeId("svalbard");
     expect(useAppThemeStore.getState().recentSchemeIds).toEqual(["svalbard"]);

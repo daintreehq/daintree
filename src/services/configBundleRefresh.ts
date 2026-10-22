@@ -2,6 +2,8 @@ import { appThemeClient } from "@/clients/appThemeClient";
 import { useAppThemeStore } from "@/store/appThemeStore";
 import { useNotificationSettingsStore } from "@/store/notificationSettingsStore";
 import { logError } from "@/utils/logger";
+import { systemPrefersDark } from "@/theme/applyAppTheme";
+import { getAppThemeFallbackType } from "@shared/theme";
 
 /**
  * Bring the renderer's mirrors back in line after a configuration bundle was
@@ -46,7 +48,10 @@ async function refreshTheme(): Promise<void> {
     // Always re-inject, even when the bundle carried no scheme id: imported
     // custom schemes can change how the *current* id resolves, and skipping the
     // injection would leave the DOM painted with the pre-import palette.
-    next.setSelectedSchemeIdSilent(config.colorSchemeId || next.selectedSchemeId);
+    const schemeId = config.colorSchemeId || next.selectedSchemeId;
+    next.setSelectedSchemeIdSilent(schemeId, {
+      fallbackType: getAppThemeFallbackType(schemeId, next, systemPrefersDark()),
+    });
     // After the injection, so it layers onto the new scheme rather than the old.
     next.setColorVisionMode(config.colorVisionMode ?? "default");
   } catch (error) {
