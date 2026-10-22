@@ -207,14 +207,19 @@ export function readActionState(actionId: string, args: unknown, revision = 0): 
   };
 }
 
-/** Runs an action as `host.dispatch` would, never throwing. */
+/**
+ * Runs an action as `host.dispatch` would, never throwing. `owner` is the
+ * plugin whose view rendered the control, so the dispatch is audited under it.
+ */
 export async function dispatchActionFromView(
   actionId: string,
-  args: unknown
+  args: unknown,
+  owner: string | null
 ): Promise<PluginActionDispatchOutcome> {
   try {
     const result = await getPluginKitHost().dispatchAction(actionId as ActionId, args, {
       source: "plugin",
+      callerPluginId: owner ?? undefined,
     });
     if (result.ok) return { ok: true };
     return { ok: false, error: { code: result.error.code, message: result.error.message } };
@@ -361,7 +366,7 @@ function KitActionButton(props: PluginActionButtonProps) {
   const onClick = () => {
     if (blocked || pending) return;
     setPending(true);
-    void dispatchActionFromView(id, args).then((outcome) => {
+    void dispatchActionFromView(id, args, owner).then((outcome) => {
       if (!mounted.current) return;
       setPending(false);
       refresh();
@@ -502,7 +507,7 @@ export function useActionMenuRow(entry: PluginActionMenuItem): KitActionMenuRowM
     icon: field(entry, "icon"),
     shortcut: combo,
     onSelect: () => {
-      void dispatchActionFromView(id, args).then((outcome) =>
+      void dispatchActionFromView(id, args, owner).then((outcome) =>
         reportOutcome(owner, id, state.title, outcome, onDispatched)
       );
     },

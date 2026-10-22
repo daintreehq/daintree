@@ -587,6 +587,15 @@ export interface ActionDispatchOptions {
    * bridge, from the preview the approver actually read.
    */
   hostApprovedRecipeRun?: HostApprovedRecipeRun;
+  /**
+   * The plugin making a `source: "plugin"` dispatch — NOT a plugin-supplied
+   * value. Set by the host from the plugin host's own closure (the
+   * `host.dispatch` bridge) or the view it rendered (the plugin kit). It
+   * attributes the `action:dispatched` event, and so the plugin audit record,
+   * to the caller even when the action is built-in (#13759). Ignored for every
+   * other source.
+   */
+  callerPluginId?: string;
 }
 
 export interface ActionDispatchPayload {

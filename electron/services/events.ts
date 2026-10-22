@@ -8,6 +8,7 @@ import type {
 } from "../../shared/types/pty-host.js";
 import type { ExitReason } from "./pty/types.js";
 import type { AgentEndObservation } from "../../shared/types/ipc/agent.js";
+import type { ActionSource } from "../../shared/types/actions.js";
 
 export type { EventCategory };
 
@@ -285,7 +286,7 @@ export const EVENT_META: Record<keyof DaintreeEventMap, EventMetadata> = {
     category: "ui",
     requiresContext: false,
     requiresTimestamp: true,
-    description: "Action dispatched by user, keybinding, menu, or agent",
+    description: "Action dispatched by user, keybinding, menu, context menu, agent, or plugin",
   },
 
   // Terminal events
@@ -835,7 +836,7 @@ export type DaintreeEventMap = {
 
   /**
    * Emitted after an action completes successfully from the renderer.
-   * Tracks user actions, keybindings, menu actions, context menus, and agent-driven actions.
+   * Tracks user actions, keybindings, menu actions, context menus, agent-driven and plugin-driven actions.
    */
   "action:dispatched": {
     actionId: string;
@@ -846,7 +847,7 @@ export type DaintreeEventMap = {
      * redacted but not allowlisted.
      */
     safeArgs?: Record<string, unknown>;
-    source: "user" | "keybinding" | "menu" | "agent" | "context-menu";
+    source: ActionSource;
     context: {
       projectId?: string;
       activeWorktreeId?: string;
@@ -859,15 +860,17 @@ export type DaintreeEventMap = {
     /** True when an agent explicitly confirmed a danger:"confirm" action. Absent for user-source and safe actions. */
     confirmed?: boolean;
     /**
-     * Contributing plugin id when this action was registered by a plugin
-     * (`ActionDefinition.pluginId`). Absent for built-in actions. Drives the
-     * plugin-action audit log — the main-side `PluginActionAuditService`
-     * appends a record only when this is present.
+     * The plugin this dispatch is audited under: for a `"plugin"` source the
+     * plugin that made the call, whoever owns the action; otherwise the plugin
+     * that registered the action (`ActionDefinition.pluginId`). Absent for a
+     * built-in action no plugin dispatched. Drives the plugin-action audit
+     * log — the main-side `PluginActionAuditService` appends a record only
+     * when this is present.
      */
     pluginId?: string;
     /**
      * SHA-256 hex digest of the (redacted) dispatch args, computed in the
-     * renderer. Only set for plugin actions. Persisted in the audit record
+     * renderer. Set whenever `pluginId` is. Persisted in the audit record
      * so raw args need never cross IPC for fingerprinting.
      */
     argsHash?: string;

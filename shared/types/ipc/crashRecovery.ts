@@ -1,6 +1,6 @@
-import type { ActionDanger } from "../actions.js";
+import type { ActionDanger, ActionSource } from "../actions.js";
 
-export type ActionBreadcrumbSource = "user" | "keybinding" | "menu" | "agent" | "context-menu";
+export type ActionBreadcrumbSource = ActionSource;
 
 export interface ActionBreadcrumb {
   id: string;

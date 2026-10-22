@@ -123,7 +123,7 @@ describe("ActionButton", () => {
     expect(dispatch).toHaveBeenCalledWith(
       "worktree.refresh",
       { force: true },
-      { source: "plugin" }
+      { source: "plugin", callerPluginId: "acme.board" }
     );
     expect(onDispatched).toHaveBeenCalledWith({ ok: true });
   });
@@ -211,7 +211,7 @@ describe("ActionButton", () => {
     expect(dispatch).toHaveBeenCalledWith(
       "agent.launch",
       { agentId: "claude", prompt: "Write the script" },
-      { source: "plugin" }
+      { source: "plugin", callerPluginId: "acme.board" }
     );
   });
 
@@ -383,7 +383,10 @@ describe("action menu entries", () => {
     expect(item.querySelector("[data-menu-icon]")).not.toBeNull();
     fireEvent.click(item);
     await flush();
-    expect(dispatch).toHaveBeenCalledWith("worktree.refresh", undefined, { source: "plugin" });
+    expect(dispatch).toHaveBeenCalledWith("worktree.refresh", undefined, {
+      source: "plugin",
+      callerPluginId: "acme.board",
+    });
   });
 
   it("draws a refused row as the host draws its unavailable rows", async () => {

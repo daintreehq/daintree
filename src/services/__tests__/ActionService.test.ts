@@ -1352,6 +1352,92 @@ describe("ActionService", () => {
       }
     });
 
+    describe("plugin attribution (#13759)", () => {
+      function register(pluginId?: string) {
+        service.register({
+          id: "actions.list" as ActionId,
+          title: "T",
+          description:
+            "Test action with a short title for verifying title/description field propagation in manifest entries.",
+          category: "test",
+          kind: "command",
+          danger: "safe",
+          scope: "renderer",
+          ...(pluginId ? { pluginId } : {}),
+          run: vi.fn().mockResolvedValue(undefined),
+        });
+      }
+
+      async function emitted(emit: ReturnType<typeof vi.fn>): Promise<unknown> {
+        await vi.waitFor(() => expect(emit).toHaveBeenCalledTimes(1));
+        return emit.mock.calls[0]![1];
+      }
+
+      it("attributes a plugin's dispatch of a built-in action to the caller, with an argsHash", async () => {
+        const emit = vi.fn().mockResolvedValue(undefined);
+        const restore = installEmit(emit);
+        try {
+          register();
+          await service.dispatch(
+            "actions.list" as ActionId,
+            { q: 1 },
+            { source: "plugin", callerPluginId: "acme.caller" }
+          );
+          expect(await emitted(emit)).toMatchObject({
+            source: "plugin",
+            pluginId: "acme.caller",
+            argsHash: expect.stringMatching(/^[0-9a-f]{64}$/),
+          });
+        } finally {
+          restore();
+        }
+      });
+
+      it("attributes a plugin's dispatch of another plugin's action to the caller", async () => {
+        const emit = vi.fn().mockResolvedValue(undefined);
+        const restore = installEmit(emit);
+        try {
+          register("acme.owner");
+          await service.dispatch("actions.list" as ActionId, undefined, {
+            source: "plugin",
+            callerPluginId: "acme.caller",
+          });
+          expect(await emitted(emit)).toMatchObject({ pluginId: "acme.caller" });
+        } finally {
+          restore();
+        }
+      });
+
+      it("keeps the owning plugin when a plugin dispatch carries no caller", async () => {
+        const emit = vi.fn().mockResolvedValue(undefined);
+        const restore = installEmit(emit);
+        try {
+          register("acme.owner");
+          await service.dispatch("actions.list" as ActionId, undefined, { source: "plugin" });
+          expect(await emitted(emit)).toMatchObject({ pluginId: "acme.owner" });
+        } finally {
+          restore();
+        }
+      });
+
+      it("ignores callerPluginId for non-plugin sources", async () => {
+        const emit = vi.fn().mockResolvedValue(undefined);
+        const restore = installEmit(emit);
+        try {
+          register();
+          await service.dispatch("actions.list" as ActionId, undefined, {
+            source: "agent",
+            callerPluginId: "acme.caller",
+          });
+          const payload = await emitted(emit);
+          expect(payload).not.toHaveProperty("pluginId");
+          expect(payload).not.toHaveProperty("argsHash");
+        } finally {
+          restore();
+        }
+      });
+    });
+
     it("does not emit action:dispatched when run throws", async () => {
       const emit = vi.fn().mockResolvedValue(undefined);
       const restore = installEmit(emit);

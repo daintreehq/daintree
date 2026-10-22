@@ -159,6 +159,23 @@ describe("PluginRendererDispatcher", () => {
       expect(registryMock.getWebContentsForProject).not.toHaveBeenCalled();
     });
 
+    it("names the calling plugin on the request so the renderer can attribute it (#13759)", async () => {
+      const wc = makeWebContents(7);
+      setFocusedWebContents(wc);
+      const d = new PluginRendererDispatcher({ isDisposed: () => false });
+
+      void d.sendDispatchToRenderer("terminal.new", null, undefined, "acme.caller");
+      void d.sendDispatchToRenderer("plugin.openSettings", null);
+      await flushThaw();
+
+      const requests = wc.send.mock.calls
+        .filter((c) => c[0] === CHANNELS.PLUGIN_DISPATCH_ACTION_REQUEST)
+        .map((c) => c[1] as Record<string, unknown>);
+      expect(requests[0]).toMatchObject({ actionId: "terminal.new", pluginId: "acme.caller" });
+      expect(requests[1]).not.toHaveProperty("pluginId");
+      d.dispose();
+    });
+
     it("resolves an EXECUTION_ERROR envelope (never rejects) when no renderer is available", async () => {
       setFocusedWebContents(null);
       const d = new PluginRendererDispatcher({ isDisposed: () => false });

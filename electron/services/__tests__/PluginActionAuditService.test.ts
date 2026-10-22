@@ -313,6 +313,25 @@ describe("PluginActionAuditService", () => {
       });
     });
 
+    it("records a plugin's dispatch of a built-in action under the calling plugin (#13759)", () => {
+      service.initialize({ isPlaintextEnabled: () => false });
+      emitDispatch({
+        actionId: "terminal.new",
+        source: "plugin",
+        pluginId: "acme.caller",
+        argsHash: "c".repeat(64),
+      });
+      expect(service.getRecords()).toEqual([
+        expect.objectContaining({
+          pluginId: "acme.caller",
+          actionId: "terminal.new",
+          recordType: "action-dispatch",
+          source: "plugin",
+          argsHash: "c".repeat(64),
+        }),
+      ]);
+    });
+
     it("persists plaintext args only when the developer opts in", () => {
       let plaintext = false;
       service.initialize({ isPlaintextEnabled: () => plaintext });

@@ -279,7 +279,7 @@ export class PluginRendererDispatcher {
         },
       });
     }
-    const sent = this.sendDispatchToWebContents(webContents, actionId, args);
+    const sent = this.sendDispatchToWebContents(webContents, actionId, args, pluginId);
     // A project-bound plugin gets the uniform miss for a terminal in another
     // project, as a bound MCP session does (#13120).
     return projectId != null ? sent.then(maskTerminalInOtherProject) : sent;
@@ -347,11 +347,17 @@ export class PluginRendererDispatcher {
    * Send a plugin-sourced action dispatch to one renderer and await its
    * response. The Shell uses this directly for a host's plugin, having already
    * scoped the view to the host and project that asked.
+   *
+   * `pluginId` is the calling plugin, taken from its host's closure and never
+   * from the plugin's own payload. The renderer stamps it on the
+   * `action:dispatched` event, so a dispatch of a built-in action still lands
+   * in the plugin audit log under the plugin that made it (#13759).
    */
   sendDispatchToWebContents(
     webContents: Electron.WebContents,
     actionId: string,
-    args: unknown
+    args: unknown,
+    pluginId?: string
   ): Promise<ActionDispatchResult> {
     return new Promise((resolve) => {
       if (this.deps.isDisposed()) {
@@ -420,6 +426,7 @@ export class PluginRendererDispatcher {
               requestId,
               actionId,
               args,
+              ...(pluginId !== undefined ? { pluginId } : {}),
             });
           } catch {
             clearTimeout(timer);

@@ -40,7 +40,8 @@ function toPluginManifestEntry(entry: ActionManifestEntry): PluginActionManifest
  *
  * Listens for plugin-sourced requests from the main process and answers them
  * against the renderer-only `ActionService`:
- * - `host.dispatch()` → `actionService.dispatch` with `source: "plugin"`. Unlike
+ * - `host.dispatch()` → `actionService.dispatch` with `source: "plugin"` and
+ *   the caller's id, which main sets from the plugin host. Unlike
  *   the MCP bridge there is no confirmation intercept: plugins cannot bypass
  *   confirm-gating, so `danger:"confirm"` returns `CONFIRMATION_REQUIRED` and
  *   `danger:"restricted"` returns `RESTRICTED` directly from ActionService.
@@ -65,10 +66,11 @@ export function usePluginBridge(): void {
     let disposed = false;
 
     const cleanupDispatch = window.electron.pluginBridge.onDispatchActionRequest(
-      async ({ requestId, actionId, args }) => {
+      async ({ requestId, actionId, args, pluginId }) => {
         try {
           const result = await actionService.dispatch(actionId as ActionId, args, {
             source: "plugin",
+            callerPluginId: pluginId,
           });
           if (disposed) return;
           window.electron.pluginBridge.sendDispatchActionResponse({ requestId, result });

@@ -395,7 +395,12 @@ export function installPluginShellRequests(deps: PluginShellRequestDeps = {}): (
         },
       };
     }
-    return actions.sendDispatchToWebContents(wc, parsed.data.actionId, parsed.data.args);
+    return actions.sendDispatchToWebContents(
+      wc,
+      parsed.data.actionId,
+      parsed.data.args,
+      parsed.data.pluginId
+    );
   };
 
   /** The catalog a host's plugin sees is the one it may dispatch from. */

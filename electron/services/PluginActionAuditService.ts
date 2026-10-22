@@ -63,8 +63,9 @@ const defaultLogStore: PluginAuditLogStore = {
  * flush) without its anomaly-detection surface — plugin audit is a plain
  * chronological dispatch trail.
  *
- * Records are appended from the `action:dispatched` bus event whenever the
- * dispatched action carries a `pluginId`. Config flags are wired to the
+ * Records are appended from the `action:dispatched` bus event whenever it
+ * carries a `pluginId`: a plugin-contributed action, or any action a plugin
+ * dispatched. Config flags are wired to the
  * `plugins` store slice via the `saveConfig`/`readConfig` callbacks and the
  * ring to the audit-logs store via `logStore`, so the service stays decoupled
  * from the concrete store module.
@@ -83,7 +84,7 @@ export class PluginActionAuditService {
 
   /**
    * Subscribe to the action-dispatch bus. Records are appended only for
-   * plugin-contributed actions (`payload.pluginId` set). `isPlaintextEnabled`
+   * plugin-attributed dispatches (`payload.pluginId` set). `isPlaintextEnabled`
    * gates whether the redacted plaintext args are persisted alongside the hash.
    */
   initialize(opts: { isPlaintextEnabled: () => boolean }, bus: TypedEventBus = events): void {

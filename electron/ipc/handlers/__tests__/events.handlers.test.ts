@@ -178,7 +178,7 @@ describe("events IPC handler — action:dispatched", () => {
     const { emit, cleanup } = setup();
     ipcMainMock._invoke("events:emit", "action:dispatched", {
       ...base,
-      pluginId: "x".repeat(200),
+      pluginId: "x".repeat(257),
       argsHash: "not-hex",
     });
 
@@ -205,6 +205,45 @@ describe("events IPC handler — action:dispatched", () => {
     expect((emit.mock.calls[1]![1] as Record<string, unknown>).argsHash).toBeUndefined();
     // pluginId is still forwarded even when argsHash is dropped.
     expect((emit.mock.calls[0]![1] as Record<string, unknown>).pluginId).toBe("acme.plugin");
+    cleanup();
+  });
+
+  it("forwards a plugin-sourced dispatch with its caller pluginId and argsHash (#13759)", () => {
+    const { emit, cleanup } = setup();
+    const hash = "b".repeat(64);
+    ipcMainMock._invoke("events:emit", "action:dispatched", {
+      ...base,
+      actionId: "terminal.new",
+      source: "plugin",
+      pluginId: "acme.caller",
+      argsHash: hash,
+    });
+
+    expect(emit).toHaveBeenCalledTimes(1);
+    const normalized = emit.mock.calls[0]![1] as Record<string, unknown>;
+    expect(normalized.source).toBe("plugin");
+    expect(normalized.pluginId).toBe("acme.caller");
+    expect(normalized.argsHash).toBe(hash);
+    cleanup();
+  });
+
+  it("keeps a project plugin's instance id, which runs past 100 characters", () => {
+    const { emit, cleanup } = setup();
+    const instanceId = `project__${"f".repeat(64)}__acme-corp.release-dashboard`;
+    ipcMainMock._invoke("events:emit", "action:dispatched", {
+      ...base,
+      source: "plugin",
+      pluginId: instanceId,
+    });
+
+    expect(emit.mock.calls[0]![1]).toMatchObject({ pluginId: instanceId });
+    cleanup();
+  });
+
+  it("rejects a source outside ActionSource", () => {
+    const { emit, cleanup } = setup();
+    ipcMainMock._invoke("events:emit", "action:dispatched", { ...base, source: "mcp" });
+    expect(emit).not.toHaveBeenCalled();
     cleanup();
   });
 

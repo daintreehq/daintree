@@ -3631,7 +3631,12 @@ function buildElectronApi(): ElectronAPI {
 
     pluginBridge: {
       onDispatchActionRequest: (
-        callback: (payload: { requestId: string; actionId: string; args?: unknown }) => void
+        callback: (payload: {
+          requestId: string;
+          actionId: string;
+          args?: unknown;
+          pluginId?: string;
+        }) => void
       ) => _typedOn(CHANNELS.PLUGIN_DISPATCH_ACTION_REQUEST, callback),
 
       sendDispatchActionResponse: (payload: {
