@@ -1914,6 +1914,23 @@ describe("plugin-declared resume (#13687)", () => {
     ]);
     expect(buildResumeLatestCommand("pi")).toBe("pi --continue");
   });
+
+  it("keeps a plugin's default option and its value together on a resume-latest (#13847)", () => {
+    registerPluginAgents("me.extra-agents", [
+      {
+        ...plugin,
+        id: "pi",
+        command: "pi",
+        args: ["--profile", "latest"],
+        resume: { kind: "project-scoped", args: ["--resume", "latest"] },
+      },
+    ]);
+    // The fallback's own `latest` must not stand in for the profile's value.
+    expect(buildResumeLatestCommand("pi")).toBe("pi --profile 'latest' --resume latest");
+    expect(buildResumeLatestCommand("pi", ["--profile", "latest", "--fast"])).toBe(
+      "pi --profile 'latest' --fast --resume latest"
+    );
+  });
 });
 
 describe("stripConversationSelectorFlags (#13746)", () => {

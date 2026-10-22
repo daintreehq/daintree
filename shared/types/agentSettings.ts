@@ -1162,6 +1162,16 @@ export function buildResumeCommand(
   return parts.join(" ");
 }
 
+/** Whether `run` appears in `tokens` as one contiguous sequence. Empty is always present. */
+function containsTokenRun(tokens: readonly string[] | undefined, run: readonly string[]): boolean {
+  if (run.length === 0) return true;
+  if (!tokens) return false;
+  for (let i = 0; i + run.length <= tokens.length; i++) {
+    if (run.every((token, offset) => tokens[i + offset] === token)) return true;
+  }
+  return false;
+}
+
 /**
  * Builds a "resume the most recent session" launch command for agents whose
  * `session-id` resume config declares `resumeLatestArgs`, or whose resume is
@@ -1209,9 +1219,13 @@ export function buildResumeLatestCommand(
   // off the user's history), but a pane whose captured flags were voided — a
   // deleted preset, a snapshot from before flags were kept — hands over none.
   // A fresh launch builds them in, so the resume standing in for one must too.
-  for (const arg of agentConfig.args ?? []) {
-    if (launchFlags?.includes(arg) || fallbackArgs.includes(arg)) continue;
-    parts.push(isSafeShellOption(arg) ? arg : quoteAgentArg(arg));
+  // Matched as one run, never token by token: a plugin's `--profile latest`
+  // would otherwise lose its value to a fallback that also says `latest`.
+  const defaults = agentConfig.args ?? [];
+  if (!containsTokenRun(launchFlags, defaults) && !containsTokenRun(fallbackArgs, defaults)) {
+    for (const arg of defaults) {
+      parts.push(isSafeShellOption(arg) ? arg : quoteAgentArg(arg));
+    }
   }
 
   if (launchFlags?.length) {
