@@ -1,4 +1,5 @@
 import {
+  TERMINAL_LINK_SCAN_MAX_CHARS,
   compileTerminalLinkPattern,
   findTerminalLinkMatches,
   type TerminalLinkPatternMatch,
@@ -25,7 +26,7 @@ export type TerminalLinkMatchMessage =
       id: number;
       type: "done";
       matches: Record<string, TerminalLinkPatternMatch[]>;
-      /** Patterns that finished, but slowly enough to switch off. */
+      /** Patterns to switch off: they finished too slowly, or threw. */
       slowKeys: string[];
     };
 
@@ -55,7 +56,20 @@ export function createTerminalLinkMatchHandler(
       if (regex === null) continue;
       post({ id: request.id, type: "start", key: matcher.key });
       const started = now();
-      matches[matcher.key] = findTerminalLinkMatches(regex, request.text);
+      try {
+        // Every match in the scan window, not the row cap's worth: the cap
+        // counts links kept after overlaps are settled across plugins, and a
+        // match another plugin's overlaps would never count against it.
+        matches[matcher.key] = findTerminalLinkMatches(
+          regex,
+          request.text,
+          TERMINAL_LINK_SCAN_MAX_CHARS
+        );
+      } catch {
+        // One pattern failing costs that pattern, not every plugin's.
+        slowKeys.push(matcher.key);
+        continue;
+      }
       if (now() - started > SLOW_TERMINAL_LINK_MATCHER_MS) slowKeys.push(matcher.key);
     }
     post({ id: request.id, type: "done", matches, slowKeys });

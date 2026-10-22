@@ -117,6 +117,29 @@ let pullSeq = 0;
 // routine in dev).
 let committedSeq = 0;
 
+function sameSet(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean {
+  return a.size === b.size && [...a].every((id) => b.has(id));
+}
+
+function sameMeta(
+  a: ReadonlyMap<string, PluginRuntimeMeta>,
+  b: ReadonlyMap<string, PluginRuntimeMeta>
+): boolean {
+  if (a.size !== b.size) return false;
+  for (const [id, meta] of a) {
+    const other = b.get(id);
+    if (
+      other === undefined ||
+      other.devMode !== meta.devMode ||
+      other.displayName !== meta.displayName ||
+      !sameSet(meta.previewToolIds ?? new Set(), other.previewToolIds ?? new Set())
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
 async function pullPluginRuntimeSnapshot(
   set: (state: Partial<PluginRuntimeState>) => void,
   get: () => PluginRuntimeState
@@ -184,16 +207,22 @@ async function pullPluginRuntimeSnapshot(
     }
     // One commit: a consumer must never read a plugin's dev-mode flag from a
     // different snapshot than the disabled set it renders against.
-    // An unchanged list keeps its identity: every picker opening refreshes, and
-    // a new array would rebuild the picker's rows and reset its highlight.
-    const next: Partial<PluginRuntimeState> = { disabledPluginIds, pluginMetaById };
-    if (JSON.stringify(promptTemplates) !== JSON.stringify(get().promptTemplates)) {
+    // An unchanged slice keeps its identity: pulls run on every action change
+    // and every picker opening, and a new object re-renders whatever reads it
+    // (a new template array would also reset the picker's highlight).
+    const current = get();
+    const next: Partial<PluginRuntimeState> = {};
+    if (!sameSet(disabledPluginIds, current.disabledPluginIds)) {
+      next.disabledPluginIds = disabledPluginIds;
+    }
+    if (!sameMeta(pluginMetaById, current.pluginMetaById)) next.pluginMetaById = pluginMetaById;
+    if (JSON.stringify(promptTemplates) !== JSON.stringify(current.promptTemplates)) {
       next.promptTemplates = promptTemplates;
     }
-    if (JSON.stringify(terminalLinks) !== JSON.stringify(get().terminalLinks)) {
+    if (JSON.stringify(terminalLinks) !== JSON.stringify(current.terminalLinks)) {
       next.terminalLinks = terminalLinks;
     }
-    set(next);
+    if (Object.keys(next).length > 0) set(next);
   } catch (err) {
     logError("Failed to load plugin runtime state", err);
   }

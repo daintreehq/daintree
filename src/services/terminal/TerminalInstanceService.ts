@@ -1975,19 +1975,18 @@ class TerminalInstanceService {
     let builtInAdded = false;
     if (!managed.commandLinksDisposable) {
       try {
-        builtInAdded = true;
         managed.commandLinksDisposable = createSuggestedCommandLinksAddon(
           managed.terminal,
           () => isSuggestedCommandSource(id, this.instances.get(id)?.runtimeAgentId),
           (command) => runSuggestedCommand(id, command)
         );
+        builtInAdded = true;
       } catch (err) {
         logWarn("Failed to create SuggestedCommandLinksAddon", { id, error: err });
       }
     }
     if (!managed.fileLinksDisposable) {
       try {
-        builtInAdded = true;
         managed.fileLinksDisposable = createFileLinksAddon(
           managed.terminal,
           () => (this.cwdProviders.get(id) ?? (() => ""))(),
@@ -1997,6 +1996,7 @@ class TerminalInstanceService {
             current.hoveredLink = link;
           }
         );
+        builtInAdded = true;
       } catch (err) {
         logWarn("Failed to create FileLinksAddon", { id, error: err });
       }
@@ -2014,7 +2014,6 @@ class TerminalInstanceService {
       selectSlotForTerminal(useHelpPanelStore.getState(), id) !== null
     ) {
       try {
-        builtInAdded = true;
         managed.imageLinksDisposable = createImageLinksAddon(
           managed.terminal,
           () => {
@@ -2032,13 +2031,13 @@ class TerminalInstanceService {
             state.activateFigure(slot, figureNumber, openLightbox);
           }
         );
+        builtInAdded = true;
       } catch (err) {
         logWarn("Failed to create ImageLinksAddon", { id, error: err });
       }
     }
     if (!managed.webLinksAddon) {
       try {
-        builtInAdded = true;
         managed.webLinksAddon = createWebLinksAddon(
           managed.terminal,
           (event, uri) => {
@@ -2061,6 +2060,7 @@ class TerminalInstanceService {
             },
           }
         );
+        builtInAdded = true;
       } catch (err) {
         logWarn("Failed to create WebLinksAddon", { id, error: err });
       }

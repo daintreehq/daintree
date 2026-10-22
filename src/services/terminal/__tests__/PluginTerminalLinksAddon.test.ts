@@ -143,6 +143,22 @@ describe("PluginTerminalLinksAddon", () => {
     expect(callback).not.toHaveBeenCalled();
   });
 
+  it("answers nothing once disposed, and its earlier links go inert", async () => {
+    const { addon, handlers } = setup("INV-1");
+    const link = (await provide(addon))![0]!;
+    addon.dispose();
+    const callback = vi.fn();
+    addon.provideLinks(1, callback);
+    addon.provideLinks(0, callback);
+    expect(callback).not.toHaveBeenCalled();
+
+    const event = new MouseEvent("click");
+    link.hover?.(event, link.text);
+    link.activate(event, link.text);
+    expect(handlers.hover).not.toHaveBeenCalled();
+    expect(handlers.activate).not.toHaveBeenCalled();
+  });
+
   it("routes activation, hover and leave to the handlers with the match", async () => {
     const { addon, handlers } = setup("INV-1");
     const link = (await provide(addon))![0]!;

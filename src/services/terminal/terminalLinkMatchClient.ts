@@ -157,8 +157,14 @@ export class TerminalLinkMatchClient {
     if (this.failed) return null;
     try {
       const worker = this.createWorker();
-      worker.onmessage = (event) => this.onMessage(event.data);
-      worker.onerror = (event) => this.fail(event);
+      // Only the current worker speaks: Chromium can still deliver an error
+      // from one already terminated, which must not take its replacement down.
+      worker.onmessage = (event) => {
+        if (this.worker === worker) this.onMessage(event.data);
+      };
+      worker.onerror = (event) => {
+        if (this.worker === worker) this.fail(event);
+      };
       this.worker = worker;
       return worker;
     } catch (error) {

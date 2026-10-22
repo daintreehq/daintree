@@ -131,4 +131,20 @@ describe("TerminalLinkMatchClient", () => {
     old.reply({ id: old.requests[0]!.id, type: "done", matches: {}, slowKeys: ["a"] });
     expect(client.isSlow("a")).toBe(false);
   });
+
+  it("ignores an error a terminated worker delivers late", async () => {
+    const { client, workers } = setup();
+    const stuck = client.match("A-1", [SPEC_A]);
+    const old = workers[0]!;
+    old.reply({ id: old.requests[0]!.id, type: "start", key: "a" });
+    await vi.advanceTimersByTimeAsync(1_000);
+    await expect(stuck).resolves.toBeNull();
+
+    const next = client.match("B-2", [SPEC_B]);
+    old.onerror?.(new Event("error"));
+    const current = workers[1]!;
+    expect(current.terminated).toBe(false);
+    current.reply({ id: current.requests[0]!.id, type: "done", matches: {}, slowKeys: [] });
+    await expect(next).resolves.toEqual({});
+  });
 });

@@ -121,6 +121,18 @@ describe("findPluginPatternLinks", () => {
     ]);
   });
 
+  it("keeps a later plugin's link past a run of matches another plugin's link overlapped", async () => {
+    setLinks([
+      entry("a", { id: "run", pattern: "x{32}" }),
+      entry("b", { id: "either", pattern: "x|y" }),
+    ]);
+    const found = await findPluginPatternLinks(`${"x".repeat(32)} y`);
+    expect(found.map((m) => [m.entry.pluginId, m.text])).toEqual([
+      ["a", "x".repeat(32)],
+      ["b", "y"],
+    ]);
+  });
+
   it("never runs a pattern that fails the safety check", async () => {
     setLinks([entry("bad", { id: "x", pattern: "(a+)+b" })]);
     expect(await findPluginPatternLinks("aaaaaaaaaaaaaaaaaaaaaaaaaaab")).toEqual([]);

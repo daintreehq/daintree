@@ -74,6 +74,7 @@ export class PluginTerminalLinksAddon implements ILinkProvider {
   ) {}
 
   provideLinks(bufferLineNumber: number, callback: (links: ILink[] | undefined) => void): void {
+    if (this.disposed) return;
     const row = bufferLineNumber < 1 ? null : readRow(this.terminal, bufferLineNumber);
     if (!row || row.text.trim() === "") {
       callback(undefined);
@@ -97,7 +98,7 @@ export class PluginTerminalLinksAddon implements ILinkProvider {
               start: { x: row.startColumns[match.index]! + 1, y: bufferLineNumber },
               end: { x: row.endColumns[last]! + 1, y: bufferLineNumber },
             };
-            return new PluginPatternLink(range, match, this.handlers);
+            return new PluginPatternLink(range, match, this.handlers, () => this.disposed);
           })
         );
       },
@@ -114,6 +115,9 @@ export class PluginTerminalLinksAddon implements ILinkProvider {
 
 // No `hoveredLink` either: that feeds the context menu's "Open link" and "Copy
 // link address", and a plugin's identifier is neither a URL nor a path.
+// Inert once its provider is disposed: xterm keeps a row's links until the
+// pointer leaves the row, and the provider is replaced (re-registered after a
+// late built-in) without xterm forgetting them.
 class PluginPatternLink implements ILink {
   readonly decorations = { pointerCursor: true, underline: true };
   readonly text: string;
@@ -121,17 +125,18 @@ class PluginPatternLink implements ILink {
   constructor(
     readonly range: IBufferRange,
     private readonly match: PluginPatternLinkMatch,
-    private readonly handlers: PluginTerminalLinkHandlers
+    private readonly handlers: PluginTerminalLinkHandlers,
+    private readonly isDisposed: () => boolean
   ) {
     this.text = match.text;
   }
 
   activate(event: MouseEvent): void {
-    this.handlers.activate(this.match, event);
+    if (!this.isDisposed()) this.handlers.activate(this.match, event);
   }
 
   hover(event: MouseEvent): void {
-    this.handlers.hover?.(this.match, event);
+    if (!this.isDisposed()) this.handlers.hover?.(this.match, event);
   }
 
   leave(): void {
