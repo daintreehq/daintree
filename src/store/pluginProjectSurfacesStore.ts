@@ -97,11 +97,14 @@ let adoptions = 0;
 // The highest main revision adopted, so a read or save answered before a newer
 // one can never roll it back.
 let adoptedRevision = -1;
-// The highest revision main has announced. A snapshot older than that describes
-// a state main has already moved past — a read that started before a release,
-// say — so it is never adopted, even after the read that the announcement
-// triggered has failed and cleared the canvas.
-let announcedRevision = -1;
+// The highest revision main has announced, per project. A snapshot older than
+// its project's describes a state main has already moved past — a read that
+// started before a release, say — so it is never adopted, even after the read
+// the announcement triggered has failed and cleared the canvas. Keyed by
+// project because a view that does not know its project yet can still be sent
+// another project's push (main falls back to every view while none is
+// registered), and that project's revisions say nothing about this one's.
+const announcedRevisions = new Map<string, number>();
 
 function sameRecord(
   a: ProjectSurfaceChoices[ProjectSurfaceSlot],
@@ -184,7 +187,8 @@ export const usePluginProjectSurfacesStore = create<PluginProjectSurfacesState>(
   const adopt = (snapshot: ProjectSurfacesSnapshot): boolean => {
     const owner = get().choicesProjectId;
     if (owner !== null && owner !== snapshot.projectId) return false;
-    if (snapshot.revision < Math.max(adoptedRevision, announcedRevision)) return false;
+    const announced = announcedRevisions.get(snapshot.projectId) ?? -1;
+    if (snapshot.revision < Math.max(adoptedRevision, announced)) return false;
     adoptedRevision = snapshot.revision;
     ++adoptions;
     const next: Partial<PluginProjectSurfacesState> = {
@@ -316,7 +320,10 @@ export const usePluginProjectSurfacesStore = create<PluginProjectSurfacesState>(
               const owner = get().choicesProjectId;
               if (owner !== null && owner !== payload.projectId) return;
               if (payload.revision <= adoptedRevision) return;
-              announcedRevision = Math.max(announcedRevision, payload.revision);
+              announcedRevisions.set(
+                payload.projectId,
+                Math.max(announcedRevisions.get(payload.projectId) ?? -1, payload.revision)
+              );
               pull();
             })
           );
@@ -348,7 +355,7 @@ export function _resetPluginProjectSurfacesStoreForTest(): void {
   pullSeq = 0;
   adoptions = 0;
   adoptedRevision = -1;
-  announcedRevision = -1;
+  announcedRevisions.clear();
   usePluginProjectSurfacesStore.setState({
     slots: {},
     surfaces: {},

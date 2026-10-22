@@ -641,6 +641,60 @@ describe("pluginProjectSurfacesStore", () => {
     expect(state().choicesProjectId).toBeNull();
   });
 
+  it("lets another project's push before binding hold back nothing of this one's", async () => {
+    let bound = false;
+    const bridge = installBridge(() =>
+      Promise.resolve(bound ? snapshot({ revision: 20, slots: ownedBy() }) : null)
+    );
+    state().init();
+    await flush();
+
+    // Main falls back to every view while none is registered, so a view that
+    // doesn't know its project yet can hear another project's change.
+    bridge.surfaceListeners[0]?.({ projectId: "p-other", revision: 100 });
+    await flush();
+
+    bound = true;
+    bridge.listeners[0]?.();
+    await flush();
+
+    expect(state().choicesProjectId).toBe(PROJECT);
+    expect(state().surfaces).toEqual({ emptyCanvas: claim });
+  });
+
+  it("ignores a save that settles after a reset, answered or failed", async () => {
+    const answered = deferred<ProjectSurfacesSnapshot>();
+    let failSave!: (error: Error) => void;
+    const failed = new Promise<ProjectSurfacesSnapshot>((_resolve, reject) => {
+      failSave = reject;
+    });
+    let saves = 0;
+    installBridge(null, {
+      setChoice: () => {
+        saves += 1;
+        return saves === 1 ? answered.promise : failed;
+      },
+    });
+    usePluginProjectSurfacesStore.setState({ surfaces: { emptyCanvas: claim } });
+    const first = state().setSurfaceChoice("emptyCanvas", "stock");
+    const second = state().setSurfaceChoice("emptyCanvas", "surface");
+
+    _resetPluginProjectSurfacesStoreForTest();
+    answered.resolve(
+      snapshot({
+        revision: 5,
+        slots: ownedBy(),
+        choices: { emptyCanvas: record("acme.dash", "stock") },
+      })
+    );
+    failSave(new Error("ENOSPC"));
+    await Promise.all([first, second]);
+
+    expect(state().choices).toEqual({});
+    expect(state().choicesProjectId).toBeNull();
+    expect(state().failedSave).toBeNull();
+  });
+
   it("refuses a snapshot naming a different project", async () => {
     let current = snapshot({ revision: 1, slots: ownedBy() });
     const bridge = installBridge(() => Promise.resolve(current));
