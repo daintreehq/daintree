@@ -41,12 +41,18 @@ export interface ProjectHost {
   projectIds: readonly string[];
   /** Null until the host's first list lands, and while it is away. */
   entries: readonly HostWorktreeEntry[] | null;
+  /** The host's list couldn't be read, and no earlier read of this match is there to keep showing. */
+  readFailed: boolean;
 }
 
-/** A host's last read, with the match it was read for: one read for another match never stands in. */
+/**
+ * A host's last read, with the match it was read for: one read for another
+ * match never stands in. `entries` is null when the read failed with nothing
+ * of this match read before it.
+ */
 interface Read {
   ids: string;
-  entries: readonly HostWorktreeEntry[];
+  entries: readonly HostWorktreeEntry[] | null;
 }
 
 interface Remembered {
@@ -229,6 +235,15 @@ export function useProjectHosts(projectId: string | null): ProjectHost[] {
         })
         .catch((error: unknown) => {
           logWarn("[Hosts] Couldn't list a host's worktrees", { hostId, error });
+          if (!live || latest.get(hostId) !== seq) return;
+          const ids = [...projectIds].join(",");
+          // A failed read keeps what was shown; with nothing shown, it says so
+          // rather than reading as a lookup still out.
+          setLists((previous) => {
+            const shown = previous.get(hostId);
+            if (shown?.ids === ids && shown.entries) return previous;
+            return new Map(previous).set(hostId, { ids, entries: null });
+          });
         });
     };
     const off = api.onEvent((event) => {
@@ -265,8 +280,8 @@ export function useProjectHosts(projectId: string | null): ProjectHost[] {
     // A read for another match (another project, another checkout) never
     // stands in for this one: until this match's own read lands, nothing is.
     const read = lists.get(row.hostId);
-    const entries =
-      talking && state === "has" && read?.ids === projectIds.join(",") ? read.entries : null;
+    const ownRead = talking && state === "has" && read?.ids === projectIds.join(",") ? read : null;
+    const entries = ownRead?.entries ?? null;
     return {
       hostId: row.hostId,
       hostName: row.name,
@@ -278,6 +293,7 @@ export function useProjectHosts(projectId: string | null): ProjectHost[] {
       presence: state,
       projectIds,
       entries,
+      readFailed: ownRead !== null && ownRead.entries === null,
     };
   });
 }

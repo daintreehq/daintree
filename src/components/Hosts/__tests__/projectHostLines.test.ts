@@ -21,6 +21,7 @@ function projectHost(row: Partial<HostMenuRow> = {}, rest: Partial<ProjectHost> 
     presence: "has",
     projectIds: ["p"],
     entries: null,
+    readFailed: false,
     ...rest,
   };
 }
@@ -117,6 +118,15 @@ describe("hostRowTooltip", () => {
     );
     expect(hostRowTooltip(host, null, "Cmd", NOW).lines).toEqual([
       "No reply · last heard 2 minutes ago",
+    ]);
+  });
+
+  it("says a host's list couldn't be read rather than that it is still being checked", () => {
+    const host = projectHost({}, { readFailed: true });
+    expect(hostRowStatus(host, null)).toEqual({ kind: "note", text: "Couldn't read" });
+    expect(hostRowLabel(host, null)).toBe("studio-01, couldn't read");
+    expect(hostRowTooltip(host, null, "Cmd", NOW).lines).toEqual([
+      "Couldn't read this host's worktrees",
     ]);
   });
 

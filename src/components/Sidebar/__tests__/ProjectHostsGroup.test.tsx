@@ -382,8 +382,10 @@ describe("ProjectHostsGroup", () => {
     rerender(<ProjectHostsGroup projectId={PROJECT} />);
     await waitFor(() => expect(locate).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(countsShown(rowFor("linux"))).toBe(""));
-    // The old checkout's read is not this one's, so it isn't "No worktrees" either: still checking.
-    expect(rowFor("linux").dataset.status).toBe("checking");
+    // The old checkout's read is not this one's, so it isn't "No worktrees"
+    // either; and the new one failed, which is not "still checking".
+    await waitFor(() => expect(rowFor("linux").textContent).toContain("Couldn't read"));
+    expect(rowFor("linux").dataset.status).toBe("note");
   });
 
   it("never carries the last project's counts over to a new one while its own answer is out", async () => {
@@ -617,6 +619,7 @@ describe("ProjectHostsGroup", () => {
         rows().map((row) => row.closest("[data-host-id]")?.getAttribute("data-host-id"))
       ).toEqual(["local", "h1", "h6", "h2", "h3"]);
       expect(more.textContent).toContain("2 more hosts");
+      expect(more.getAttribute("aria-label")).toBe("2 more hosts");
       expect(more.getAttribute("aria-expanded")).toBe("false");
 
       fireEvent.click(more);
@@ -624,6 +627,7 @@ describe("ProjectHostsGroup", () => {
       expect(more.getAttribute("aria-expanded")).toBe("true");
       // The label stays; the folded counts go once their hosts are showing.
       expect(more.textContent).toContain("2 more hosts");
+      expect(more.getAttribute("aria-label")).toBe("2 more hosts");
       expect(more.querySelector("[data-band]")).toBeNull();
       expect(localStorage.getItem(PROJECT_HOSTS_ALL_SHOWN_KEY)).toBe("true");
     });
@@ -740,6 +744,10 @@ describe("ProjectHostsGroup", () => {
     fireEvent.click(toggle);
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
     expect(rows()).toHaveLength(0);
+    // The list it controls stays in the tree, hidden and empty, so the reference holds.
+    const controlled = document.getElementById(toggle.getAttribute("aria-controls") ?? "");
+    expect(controlled?.hidden).toBe(true);
+    expect(controlled?.querySelector("ul")).toBeNull();
     expect(localStorage.getItem(PROJECT_HOSTS_EXPANDED_KEY)).toBe("false");
     // One asking and two working on linux; this machine's own working agent isn't counted.
     const totals = screen.getByTestId("project-hosts-totals");
@@ -757,6 +765,19 @@ describe("ProjectHostsGroup", () => {
     });
     expect(toggle.getAttribute("aria-expanded")).toBe("true");
     expect(rows()).toHaveLength(3);
+  });
+
+  it("marks the collapsed asking total blocked when another host has a blocked agent", async () => {
+    const blocked = { terminalId: "b1", band: "blocked", agentState: "waiting" } as const;
+    lists.linux = [worktree("remote-p", "feature/a", [waiting("w1"), blocked])];
+    render(<ProjectHostsGroup projectId={PROJECT} />);
+    await waitFor(() => expect(count(rowFor("linux"), "asking")).toBe("2"));
+    fireEvent.click(screen.getByTestId("project-hosts-toggle"));
+    const mark = screen
+      .getByTestId("project-hosts-totals")
+      .querySelector('[data-total="asking"] [data-mark]')
+      ?.getAttribute("data-mark");
+    expect(mark).toBe("blocked");
   });
 
   it("shows no totals when collapsed if only this machine has agents", async () => {

@@ -117,12 +117,13 @@ function GlyphSlot({ children }: { children?: ReactNode }) {
 
 /**
  * A row's tooltip, read top to bottom: the full name, what is going on there,
- * then what a click does. It stays while the row is hovered or focused: its
- * body is the row's detail, not a passing hint.
+ * then what a click does. It keeps the primitive's display window: a click
+ * here swaps the project view, and coming back to that view hands focus back
+ * to the row, which must not pin its tooltip open.
  */
 function RowTooltip({ tooltip, children }: { tooltip: HostTooltip; children: ReactNode }) {
   return (
-    <Tooltip autoDismiss={false}>
+    <Tooltip>
       <TooltipTrigger asChild>{children}</TooltipTrigger>
       <TooltipContent side="right">
         <span className="flex flex-col gap-0.5">

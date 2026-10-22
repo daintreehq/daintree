@@ -31,6 +31,7 @@ export function hostRowStatus(
     case "has":
       break;
   }
+  if (host.readFailed) return { kind: "note", text: "Couldn't read" };
   if (!summary) return { kind: "checking" };
   // What the host listed, said as listed: a host also lists nothing for a
   // project it couldn't read, so an empty list is not "closed there".
@@ -101,6 +102,7 @@ export function hostRowTooltip(
   if (trouble) lines.push(trouble);
   else if (host.presence === "none") lines.push("No project here shares this repository");
   else if (host.presence === "unknown") lines.push("Couldn't check for this project");
+  else if (host.readFailed) lines.push("Couldn't read this host's worktrees");
   else if (host.presence === "pending" || !summary) lines.push("Checking for this project…");
   else if (summary.worktreeCount === 0) lines.push("No worktrees listed");
   else {
