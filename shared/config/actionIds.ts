@@ -667,4 +667,7 @@ export const DENY_PLUGIN_DISPATCH_ACTION_IDS = [
   // Replays the user's last action as a keybinding, which would carry a plugin
   // past every other entry in this list (#13494).
   "action.repeatLast",
+  // Persists custom flags, bypass mode and presets into every later launch of
+  // that agent: the configuration a plugin's own agent.launch is refused (#13762).
+  "agentSettings.set",
 ] as const satisfies readonly BuiltInRuntimeActionId[];

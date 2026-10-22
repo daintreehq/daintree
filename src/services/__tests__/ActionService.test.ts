@@ -34,6 +34,7 @@ vi.mock("@/lib/notify", () => ({ notify: notifyMock }));
 import { ActionService } from "../ActionService";
 import { useUIStore } from "@/store/uiStore";
 import type { ActionDefinition, ActionId } from "@shared/types/actions";
+import { AGENT_LAUNCH_CONFIG_DISPATCH_DANGER_RATIONALE } from "../actions/effectiveDanger";
 import { ConfirmationStagedError } from "../actions/confirmationStaged";
 import { TerminalInOtherProjectError } from "@shared/utils/terminalInOtherProject";
 
@@ -309,6 +310,92 @@ describe("ActionService", () => {
       );
       expect(approved.ok).toBe(true);
       expect(mockRun).toHaveBeenCalledTimes(1);
+    });
+
+    it("refuses a plugin agent.launch that configures the agent, and runs a plain one (#13762)", async () => {
+      const mockRun = vi.fn().mockResolvedValue(undefined);
+      service.register({
+        id: "agent.launch" as ActionId,
+        title: "Launch agent",
+        description:
+          "A test action for validating ActionService dispatch, registration, and manifest entry generation.",
+        category: "agent",
+        kind: "command",
+        danger: "safe",
+        scope: "renderer",
+        argsSchema: z.object({
+          agentId: z.string(),
+          cwd: z.string().optional(),
+          prompt: z.string().optional(),
+          interactive: z.boolean().optional(),
+          systemPrompt: z.string().optional(),
+          presetId: z.string().nullable().optional(),
+          env: z.record(z.string(), z.string()).optional(),
+          agentLaunchFlags: z.array(z.string()).optional(),
+        }),
+        run: mockRun,
+      });
+
+      const variants = [
+        { agentLaunchFlags: ["--dangerously-skip-permissions"] },
+        { env: { FOO: "1" } },
+        { systemPrompt: "Be brief." },
+        { presetId: "auto-approve" },
+        { prompt: "--dangerously-skip-permissions" },
+      ];
+      for (const extra of variants) {
+        for (const confirmed of [false, true]) {
+          const blocked = await service.dispatch(
+            "agent.launch",
+            { agentId: "claude", ...extra },
+            { source: "plugin", confirmed }
+          );
+          expect(blocked.ok).toBe(false);
+          if (!blocked.ok) {
+            expect(blocked.error.code).toBe("CONFIRMATION_REQUIRED");
+            // Names what to drop, not a confirmation a plugin can never give.
+            expect(blocked.error.message).toMatch(/agentLaunchFlags, env, systemPrompt, presetId/);
+          }
+        }
+      }
+      expect(mockRun).not.toHaveBeenCalled();
+
+      const plain = await service.dispatch(
+        "agent.launch",
+        {
+          agentId: "claude",
+          cwd: "/videos/ep-1",
+          prompt: "Write the script",
+          interactive: true,
+          agentLaunchFlags: [],
+          env: {},
+        },
+        { source: "plugin" }
+      );
+      expect(plain.ok).toBe(true);
+      for (const source of ["user", "keybinding", "agent"] as const) {
+        const result = await service.dispatch(
+          "agent.launch",
+          { agentId: "claude", ...variants[0], ...variants[1], ...variants[3] },
+          { source }
+        );
+        expect(result.ok).toBe(true);
+      }
+      expect(mockRun).toHaveBeenCalledTimes(4);
+
+      // getDispatchMeta reads the same rule, with the launch's own rationale.
+      const meta = service.getDispatchMeta("agent.launch" as ActionId, {
+        source: "plugin",
+        args: { agentId: "claude", env: { FOO: "1" } },
+      });
+      expect(meta?.danger).toBe("confirm");
+      expect(meta?.dangerRationale).toBe(AGENT_LAUNCH_CONFIG_DISPATCH_DANGER_RATIONALE);
+      expect(
+        service.getDispatchMeta("agent.launch" as ActionId, {
+          source: "plugin",
+          args: { agentId: "claude", prompt: "Write the script" },
+        })?.danger
+      ).toBe("safe");
     });
 
     it("leaves the same action ungated for an agent dispatch that names no recipe (#11860)", async () => {

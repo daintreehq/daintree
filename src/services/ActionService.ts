@@ -29,7 +29,11 @@ import {
   toNonRendererOwnedTools,
 } from "@shared/config/helpAssistantTierAllowlists";
 import { deriveBand } from "../../shared/utils/actionRiskBand.js";
-import { elevatedDangerRationale, resolveEffectiveActionDanger } from "./actions/effectiveDanger";
+import {
+  AGENT_LAUNCH_ACTION_ID,
+  elevatedDangerRationale,
+  resolveEffectiveActionDanger,
+} from "./actions/effectiveDanger";
 
 /**
  * Fields that should be redacted from event payloads to prevent secret leakage.
@@ -662,9 +666,15 @@ export class ActionService {
       effectiveDanger === "confirm" &&
       (source === "plugin" || (source === "agent" && !options?.confirmed))
     ) {
+      // A plugin has no confirmation to give, so the configured-launch refusal
+      // names what to drop rather than pointing at a dialog it can't reach.
+      const pluginLaunchConfig =
+        source === "plugin" && actionId === AGENT_LAUNCH_ACTION_ID && definition.danger === "safe";
       const error: ActionError = {
         code: "CONFIRMATION_REQUIRED",
-        message: `Action "${actionId}" requires explicit confirmation from ${source} sources.`,
+        message: pluginLaunchConfig
+          ? `Action "${actionId}" can't take agentLaunchFlags, env, systemPrompt, presetId, or a prompt or model starting with "-" from a plugin: plugins can give an agent a task, not choose how it runs.`
+          : `Action "${actionId}" requires explicit confirmation from ${source} sources.`,
       };
       return { ok: false, error };
     }

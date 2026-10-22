@@ -1,3 +1,4 @@
+import { AGENT_LAUNCH_ACTION_ID } from "@shared/utils/dispatchAgentLaunch";
 import { dispatchCarriesRecipeId } from "@shared/utils/dispatchRecipeId";
 import {
   dispatchCarriesTerminalCommand,
@@ -5,6 +6,15 @@ import {
 } from "@shared/utils/dispatchTerminalCommand";
 import { CLOSE_ALL_ACTION_ID } from "@shared/utils/effectiveActionDanger";
 
+export {
+  AGENT_LAUNCH_ACTION_ID,
+  dispatchCarriesAgentLaunchEnv,
+  dispatchCarriesAgentLaunchFlags,
+  dispatchCarriesAgentPreset,
+  dispatchCarriesAgentSystemPrompt,
+  dispatchCarriesOptionLikeValue,
+  dispatchConfiguresAgentLaunch,
+} from "@shared/utils/dispatchAgentLaunch";
 export { dispatchCarriesRecipeId, readDispatchRecipeId } from "@shared/utils/dispatchRecipeId";
 export {
   CLOSE_ALL_ACTION_ID,
@@ -25,6 +35,7 @@ export {
  */
 export function elevatedDangerRationale(actionId: string, args: unknown): string {
   if (actionId === CLOSE_ALL_ACTION_ID) return CLOSE_ALL_DISPATCH_DANGER_RATIONALE;
+  if (actionId === AGENT_LAUNCH_ACTION_ID) return AGENT_LAUNCH_CONFIG_DISPATCH_DANGER_RATIONALE;
   if (dispatchCarriesRecipeId(args)) return RECIPE_DISPATCH_DANGER_RATIONALE;
   return terminalLaunchDangerRationale(args) ?? RECIPE_DISPATCH_DANGER_RATIONALE;
 }
@@ -54,6 +65,10 @@ export const TERMINAL_COMMAND_DISPATCH_DANGER_RATIONALE =
 /** Counterpart for an agent closing every panel in the worktree. */
 export const CLOSE_ALL_DISPATCH_DANGER_RATIONALE =
   "This closes every panel in the active worktree, including your own shells and other agents' terminals, not just ones the assistant opened. Most go to the trash briefly; after that their processes are gone.";
+
+/** Counterpart for a plugin choosing how the agent it launches runs. */
+export const AGENT_LAUNCH_CONFIG_DISPATCH_DANGER_RATIONALE =
+  "This call launches an agent with its own CLI flags, environment variables, system prompt or preset, or with a prompt or model the CLI may read as an option. Those change what the agent may do and how it runs rather than only giving it a task, so a plugin can't choose them.";
 
 /** Counterpart for a dispatch that only chooses where the terminal opens. */
 export const TERMINAL_CWD_DISPATCH_DANGER_RATIONALE =
