@@ -57,7 +57,11 @@ import { isSmokeTest } from "../setup/environment.js";
 import { stopPerformanceTraceIfActive } from "../utils/performanceTrace.js";
 import { getProcessDeathLogger } from "../services/ProcessDeathLogger.js";
 import { isSignalShutdown, clearSafetyBeltTimer } from "./signalShutdownState.js";
-import { getAttachedShells, isExitConfirmationPending } from "./attachedShells.js";
+import {
+  getAttachedShells,
+  isExitConfirmationPending,
+  setExitConfirmationPending,
+} from "./attachedShells.js";
 import {
   noteChildProcessGone,
   noteRendererGone,
@@ -157,7 +161,8 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
     const canShowDialog =
       !isE2EMode && !isSignalShutdown() && deps.windowRegistry?.getPrimary()?.browserWindow != null;
 
-    if (isConfirmingQuit || isExitConfirmationPending()) {
+    // A signal never waits on the update dialog.
+    if (isConfirmingQuit || (isExitConfirmationPending() && !isSignalShutdown())) {
       event.preventDefault();
       return;
     }
@@ -169,6 +174,7 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
       const attachedShells = getAttachedShells();
       if (activeCount > 0 || attachedShells.length > 0) {
         isConfirmingQuit = true;
+        setExitConfirmationPending(true);
         let confirmed = false;
         try {
           const primaryWindow = deps.windowRegistry?.getPrimary()?.browserWindow ?? null;
@@ -181,6 +187,7 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
           console.error("[MAIN] Error showing quit warning:", error);
         } finally {
           isConfirmingQuit = false;
+          setExitConfirmationPending(false);
         }
 
         if (!confirmed) {

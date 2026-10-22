@@ -562,6 +562,47 @@ describe("registerShutdownHandler", () => {
     }
   });
 
+  it("holds the shared confirmation flag while the quit dialog is open", async () => {
+    const { isExitConfirmationPending } = await import("../attachedShells.js");
+    let answer: (confirmed: boolean) => void = () => {};
+    quitWarningMock.getActiveAgentCount.mockReturnValue(1);
+    quitWarningMock.showQuitWarning.mockReturnValue(
+      new Promise<boolean>((resolve) => {
+        answer = resolve;
+      })
+    );
+
+    const { beforeQuitCb } = await setup({
+      windowRegistry: {
+        getPrimary: () => ({ browserWindow: {} as Electron.BrowserWindow }),
+      } as unknown as ShutdownDeps["windowRegistry"],
+    });
+    const pending = beforeQuitCb(makeEvent());
+    expect(isExitConfirmationPending()).toBe(true);
+    answer(false);
+    await pending;
+    expect(isExitConfirmationPending()).toBe(false);
+  });
+
+  it("does not let a pending update dialog hold back a signal shutdown", async () => {
+    const { setExitConfirmationPending } = await import("../attachedShells.js");
+    signalShutdownMock.isSignalShutdown.mockReturnValue(true);
+    setExitConfirmationPending(true);
+
+    try {
+      const { beforeQuitCb } = await setup();
+      const exited = new Promise<void>((resolve) => {
+        appMock.exit.mockImplementationOnce(() => resolve());
+      });
+      await beforeQuitCb(makeEvent());
+      await exited;
+
+      expect(crashRecoveryMock.cleanupOnExit).toHaveBeenCalled();
+    } finally {
+      setExitConfirmationPending(false);
+    }
+  });
+
   it("does not ask about attached Shells when there is no window to ask in", async () => {
     const { setAttachedShellsProvider } = await import("../attachedShells.js");
     setAttachedShellsProvider(() => [{ clientName: "MacBook Pro" }]);
