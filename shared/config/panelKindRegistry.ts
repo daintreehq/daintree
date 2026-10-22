@@ -173,6 +173,14 @@ export interface PanelKindConfig {
    */
   stateVersion?: number;
   /**
+   * `contributes.panels[].scope` (#13778). `"project"` means a panel of this
+   * kind is opened with no worktree, so it is one panel for the whole project:
+   * the dock and dialogs show a worktree-less panel in every worktree
+   * (`panelMatchesWorktreeScope`). Absent (or `"worktree"`) ties each panel to
+   * the worktree it was opened in. Read through `panelKindIsProjectScoped`.
+   */
+  scope?: "worktree" | "project";
+  /**
    * Tour the kind's menus offer as "{name} Welcome Tour", played through
    * `help.tour.show`. A plugin sets it by declaring a tour with this kind as its
    * `panelKind`; absent means the menus offer no tour.
@@ -796,6 +804,16 @@ export function panelKindIsDockable(kind: PanelKind): boolean {
   const config = getPanelKindConfig(kind);
   if (!config) return false;
   return config.dockable !== false;
+}
+
+/**
+ * Whether a panel of `kind` belongs to the project rather than a worktree
+ * (`contributes.panels[].scope: "project"`, #13778). Such a panel is opened
+ * with no worktree, which is what puts its dock chip and dialog in every
+ * worktree. An unregistered kind is never project-scoped.
+ */
+export function panelKindIsProjectScoped(kind: PanelKind): boolean {
+  return getPanelKindConfig(kind)?.scope === "project";
 }
 
 /**

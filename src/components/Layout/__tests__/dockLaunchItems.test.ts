@@ -260,6 +260,17 @@ describe("buildDockLaunchModel — panel offering", () => {
     }
   });
 
+  it("offers a project-scoped plugin kind under the dock on either surface (#13778)", () => {
+    // `launchPanelKind` always puts one in the dock, so the grid heading would lie.
+    registerPluginKind(PLUGIN_DOCKABLE, { scope: "project" });
+
+    for (const surface of ["grid", "dock"] as const) {
+      const model = build({ surface });
+      expect(model.dockPanels.map((p) => p.kindId)).toContain(PLUGIN_DOCKABLE);
+      expect(model.gridPanels.map((p) => p.kindId)).not.toContain(PLUGIN_DOCKABLE);
+    }
+  });
+
   it("keeps the dock destination for dockable kinds on a dock surface", () => {
     const dock = build({ surface: "dock" });
     // Same kinds, opposite surface — proves the split is surface-driven and not

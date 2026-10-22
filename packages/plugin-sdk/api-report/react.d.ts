@@ -7349,6 +7349,26 @@ interface PanelViewProps {
      */
     readonly setMenuItems?: (items: readonly PanelMenuItemContribution[] | null) => void;
     /**
+     * Names this panel: the title shown on its tab, its header, its dock chip and
+     * its dialog. Use it when one kind shows different things, so three record
+     * panels read "Record #42", "Record #43" and "Record #44" rather than three
+     * copies of the kind's `name`. `null` (or a blank string) goes back to the
+     * kind's name.
+     *
+     * The title belongs to the panel, not the view: it is saved with the panel,
+     * so it survives the view unmounting, a reload and a restart, and unmounting
+     * leaves it alone. A name the user typed wins: once they rename the panel,
+     * this does nothing until they clear their rename. Control characters are
+     * dropped and the title is cut at 80 characters.
+     *
+     * Only ever titles this panel. The setter belongs to the attempt that
+     * received it: a call held past this attempt's teardown does nothing.
+     *
+     * Absent where the host has no panel to name (a project surface, a settings
+     * view), so call it optionally.
+     */
+    readonly setTitle?: (title: string | null) => void;
+    /**
      * Your actions whose handlers are running right now, by `actionId` as the
      * manifest writes it — however they were dispatched: the palette, a menu,
      * the panel toolbar, a keybinding or an agent. A new array when the set

@@ -2559,6 +2559,7 @@ export class PluginService {
         // handed over unjudged, and defaulting to 1 here would start refusing
         // bags on a promise the author never made (#12280).
         ...(panel.stateVersion !== undefined ? { stateVersion: panel.stateVersion } : {}),
+        ...(panel.scope !== undefined ? { scope: panel.scope } : {}),
         ...(tourId !== undefined ? { tourId } : {}),
         // Authored in the manifest namespace, dispatched in the instance's —
         // the same rewrite the toolbar and menu contributions above get.

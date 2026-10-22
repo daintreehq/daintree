@@ -9,7 +9,11 @@ import { usePluginPanelOpenRequestStore } from "@/store/pluginPanelOpenRequestSt
 import type { DialogSize } from "@/components/ui/AppDialog";
 import { focusPanelInput } from "@/components/Panel/panelFocusRegistry";
 import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
-import { getPanelKindConfig } from "@shared/config/panelKindRegistry";
+import {
+  getPanelKindConfig,
+  panelKindIsDockable,
+  panelKindIsProjectScoped,
+} from "@shared/config/panelKindRegistry";
 
 const PLUGIN_PANEL_DIALOG_SIZES = [
   "sm",
@@ -28,10 +32,10 @@ const openPluginPanelArgsSchema = z.object({
   worktreeId: z.string().optional(),
   reuseExisting: z.boolean().optional(),
   presentation: z
-    .enum(["panel", "dialog"])
+    .enum(["panel", "dock", "dialog"])
     .optional()
     .describe(
-      "Default `panel`. `dialog` presents the view as a modal, replacing any panel dialog already open; when one of this kind is already open for the worktree, returns its id instead. PTY-backed kinds can't be presented as a dialog."
+      "Where the view opens. Default `panel` (the grid), or `dock` for a kind declaring `scope: \"project\"`, which never opens in the grid. `dock` opens it as a dock chip and shows it. `dialog` presents the view as a modal, replacing any panel dialog already open; when one of this kind is already open for the worktree, returns its id instead. PTY-backed kinds can't be presented as a dialog."
     ),
   size: z
     .enum(PLUGIN_PANEL_DIALOG_SIZES)
@@ -194,7 +198,7 @@ export function registerPanelCoreActions(
     id: "panel.openPluginPanel",
     title: "Open plugin panel",
     description:
-      "Spawn (or focus an existing) plugin-contributed panel kind, handing it an initial argument. Args: `kind` (required) — the plugin panel kind id from `contributes.panels`; `initialArgs` (optional) — an opaque bag delivered to the view as `PanelViewProps.initialArgs` (e.g. `{ path }` to open a file), or as `PanelViewProps.openRequest` to a panel or dialog the open reuses; `worktreeId` (optional) — target worktree, which must belong to the current project; `reuseExisting` (optional, default true) — focus an existing panel of this kind in the worktree instead of spawning a second one; `presentation`, `size`, `toggle` (optional) — present the view as a modal dialog instead, which is ephemeral: closing it removes the panel and its persisted view state. Returns `{ panelId }`. Errors when `kind` is not a registered plugin panel kind, when `worktreeId` belongs to another project, or — transiently, retry — when the project's worktrees haven't loaded yet.",
+      "Spawn (or focus an existing) plugin-contributed panel kind, handing it an initial argument. Args: `kind` (required) — the plugin panel kind id from `contributes.panels`; `initialArgs` (optional) — an opaque bag delivered to the view as `PanelViewProps.initialArgs` (e.g. `{ path }` to open a file), or as `PanelViewProps.openRequest` to a panel or dialog the open reuses; `worktreeId` (optional) — target worktree, which must belong to the current project; `reuseExisting` (optional, default true) — focus an existing panel of this kind in the worktree instead of spawning a second one; `presentation` (optional) — `dock` opens it as a dock chip, and `dialog` (with `size`, `toggle`) presents it as a modal, which is ephemeral: closing it removes the panel and its persisted view state. A kind declared `scope: \"project\"` opens with no worktree, in the dock by default, and shows in every worktree. Returns `{ panelId }`. Errors when `kind` is not a registered plugin panel kind, when `worktreeId` belongs to another project or is given for a project-scoped kind, or — transiently, retry — when the project's worktrees haven't loaded yet.",
     category: "panel",
     kind: "command",
     danger: "safe",
@@ -208,6 +212,29 @@ export function registerPanelCoreActions(
       // no `extensionId` and have their own dedicated spawn actions.
       if (!kindConfig || kindConfig.extensionId === undefined) {
         throw new Error(`"${kind}" is not a registered plugin panel kind`);
+      }
+
+      // A project-scoped kind is one panel for the whole project (#13778). It
+      // is opened with no worktree, which is what puts its dock chip and its
+      // dialog in every worktree. A worktree named for it would be dropped, and
+      // a silent drop on a named target is the class of bug #7880 banned. The
+      // grid draws only the active worktree's panels, so a worktree-less panel
+      // there would be invisible: an explicit `panel` is refused, and an open
+      // that names no presentation goes to the dock.
+      const projectScoped = panelKindIsProjectScoped(kind);
+      if (projectScoped && worktreeId !== undefined) {
+        throw new Error(
+          `"${kind}" belongs to the project rather than a worktree, so it takes no \`worktreeId\``
+        );
+      }
+      if (projectScoped && presentation === "panel") {
+        throw new Error(`"${kind}" belongs to the project and opens in the dock or a dialog`);
+      }
+      const placement = presentation ?? (projectScoped ? "dock" : "panel");
+      // `addPanel` would quietly put a non-dockable kind in the grid instead
+      // (#11059), which answers "open it in the dock" with a pane somewhere else.
+      if (placement === "dock" && !panelKindIsDockable(kind)) {
+        throw new Error(`"${kind}" opts out of the dock and can't be opened there`);
       }
 
       // A supplied worktreeId must belong to the dispatching renderer's own
@@ -239,9 +266,11 @@ export function registerPanelCoreActions(
       }
 
       const state = usePanelStore.getState();
-      const targetWorktreeId = worktreeId ?? callbacks.getActiveWorktreeId();
+      const targetWorktreeId = projectScoped
+        ? undefined
+        : (worktreeId ?? callbacks.getActiveWorktreeId());
 
-      if (presentation === "dialog") {
+      if (placement === "dialog") {
         // A PTY-backed kind commits its record only after the spawn resolves,
         // and the dialog host reads a missing record as a removal — the
         // reservation would be dropped before the terminal ever appeared.
@@ -281,9 +310,9 @@ export function registerPanelCoreActions(
       }
 
       if (reuseExisting !== false) {
-        const existing = state.panelIds
+        const live = state.panelIds
           .map((id) => state.panelsById[id])
-          .find(
+          .filter(
             (p): p is PanelInstance =>
               p !== undefined &&
               p.kind === kind &&
@@ -291,9 +320,15 @@ export function registerPanelCoreActions(
               // Never reuse an ephemeral dialog panel as a grid/dock target —
               // it is uncounted and unpersisted, so adopting it would leak a
               // panel the grid can't account for.
-              p.location !== "dialog" &&
-              (p.worktreeId ?? undefined) === (targetWorktreeId ?? undefined)
+              p.location !== "dialog"
           );
+        const inTarget = live.find(
+          (p) => (p.worktreeId ?? undefined) === (targetWorktreeId ?? undefined)
+        );
+        // A project-scoped kind's panel is the project's wherever it is. One the
+        // user moved into a worktree's grid is still that panel, and reusing it
+        // where it sits honours the move rather than opening a second.
+        const existing = inTarget ?? (projectScoped ? live[0] : undefined);
         if (existing) {
           deliverOpenRequest(existing.id, kind, initialArgs);
           state.activateTerminal(existing.id);
@@ -311,7 +346,10 @@ export function registerPanelCoreActions(
         {
           kind,
           worktreeId: targetWorktreeId,
-          location: "grid",
+          location: placement === "dock" ? "dock" : "grid",
+          // Shown, as a reused dock panel is by `activateTerminal`. Folded into
+          // the commit so the offscreen host can't close it in between (#6590).
+          ...(placement === "dock" && { activateDockOnCreate: true }),
           extensionState: initialArgs,
         } as Parameters<typeof state.addPanel>[0]
       );

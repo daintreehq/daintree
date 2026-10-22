@@ -317,6 +317,17 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       consumers: [{ file: PLUGIN_SERVICE, symbol: "loadPlugin (panels loop) → registerPanelKind" }],
       note: "Registered as the panel kind's extensionState schema version; stamped onto the panel record at the write gate (setPanelExtensionState) and enforced on restore by decodePanelExtensionState, which refuses a bag written above it (#12280).",
     },
+    scope: {
+      mode: "verbatim",
+      consumers: [
+        { file: PLUGIN_SERVICE, symbol: "loadPlugin (panels loop) → registerPanelKind" },
+        {
+          file: "src/services/actions/definitions/panelCoreActions.ts",
+          symbol: "panel.openPluginPanel (panelKindIsProjectScoped)",
+        },
+      ],
+      note: "Registered as the panel kind's scope; panel.openPluginPanel opens a project-scoped kind with no worktree (dock by default), which the dock and dialogs show in every worktree (#13778).",
+    },
     menu: {
       mode: "verbatim",
       consumers: [

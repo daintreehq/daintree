@@ -37,6 +37,7 @@ let _getWorktreePathIndex: (() => ReadonlyMap<string, string> | null) | null = n
 let _getProjectPathIndex: (() => ReadonlyMap<string, string> | null) | null = null;
 let _setPanelExtensionState: ((panelId: string, patch: Record<string, unknown>) => boolean) | null =
   null;
+let _setPanelTitle: ((panelId: string, title: string) => void) | null = null;
 let _clearPanelStoreForSwitch: (() => void) | null = null;
 let _clearFleetArming: (() => void) | null = null;
 let _getFleetArmedIds: (() => Set<string>) | null = null;
@@ -163,6 +164,21 @@ export function persistPanelExtensionStateThroughAccessor(
   return _setPanelExtensionState?.(panelId, patch) ?? false;
 }
 
+/**
+ * Lets a plugin view name its own panel (`PanelViewProps.setTitle`) without the
+ * plugin view host importing the panel store, for the reason
+ * {@link setPanelExtensionStateAccessor} gives. The registered setter writes as
+ * automation, so a name the user typed is never overwritten.
+ */
+export function setPanelTitleAccessor(setter: (panelId: string, title: string) => void): void {
+  _setPanelTitle = setter;
+}
+
+/** A blank `title` goes back to the kind's default. Does nothing before registration. */
+export function setPanelTitleThroughAccessor(panelId: string, title: string): void {
+  _setPanelTitle?.(panelId, title);
+}
+
 export function setPanelStoreClearForSwitchAccessor(callback: () => void): void {
   _clearPanelStoreForSwitch = callback;
 }
@@ -203,6 +219,7 @@ export function resetStoreAccessorsForTesting(): void {
   _getWorktreePathIndex = null;
   _getProjectPathIndex = null;
   _setPanelExtensionState = null;
+  _setPanelTitle = null;
   _clearPanelStoreForSwitch = null;
   _clearFleetArming = null;
   _getFleetArmedIds = null;

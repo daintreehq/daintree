@@ -11,6 +11,7 @@ import {
   onPanelKindUnregistered,
   panelKindUsesTerminalUi,
   panelKindIsDockable,
+  panelKindIsProjectScoped,
   normalizeDockLocation,
   normalizeGroupDockLocation,
   registerPanelKind,
@@ -510,6 +511,28 @@ describe("panelKindIsDockable", () => {
 
   it("unknown kinds are not dockable", () => {
     expect(panelKindIsDockable("no-such-kind")).toBe(false);
+  });
+});
+
+describe("panelKindIsProjectScoped (#13778)", () => {
+  afterEach(() => {
+    clearPanelKindRegistry();
+  });
+
+  it("is true only for a kind that declares scope: project", () => {
+    registerPanelKind({ ...makeExtensionConfig("ext-a.records", "ext-a"), scope: "project" });
+    registerPanelKind({ ...makeExtensionConfig("ext-a.notes", "ext-a"), scope: "worktree" });
+    registerPanelKind(makeExtensionConfig("ext-a.viewer", "ext-a"));
+
+    expect(panelKindIsProjectScoped("ext-a.records")).toBe(true);
+    expect(panelKindIsProjectScoped("ext-a.notes")).toBe(false);
+    expect(panelKindIsProjectScoped("ext-a.viewer")).toBe(false);
+  });
+
+  it("leaves built-in and unknown kinds tied to a worktree", () => {
+    expect(panelKindIsProjectScoped("terminal")).toBe(false);
+    expect(panelKindIsProjectScoped("browser")).toBe(false);
+    expect(panelKindIsProjectScoped("no-such-kind")).toBe(false);
   });
 });
 

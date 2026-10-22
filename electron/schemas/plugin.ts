@@ -143,6 +143,12 @@ export const PanelContributionObjectSchema = z
     // a NEWER build of the plugin rather than let it be misread and rewritten.
     // Bump it when the shape changes incompatibly, never for an additive key.
     stateVersion: z.number().int().min(1).max(1_000_000).optional(),
+    // What one panel of this kind belongs to (#13778). Absent means
+    // `"worktree"`: each panel is tied to the worktree it was opened in.
+    // `"project"` opens it with no worktree, so one panel serves the whole
+    // project — its dock chip and its dialog show in every worktree. No default,
+    // for the same reason as `dockable`: absence flows through as `undefined`.
+    scope: z.enum(["worktree", "project"]).optional(),
     // The plugin's own actions on this panel's ⋯ and right-click menus, in
     // declared order. Which actions may appear is checked at manifest level,
     // where the plugin's namespace and declared commands are known.
@@ -165,6 +171,10 @@ export const PanelContributionObjectSchema = z
  * are allowed: the terminal's right-click menu draws the kind's own group
  * (#13213). `hasPty` has already defaulted to `false` here, so an omitted
  * `hasPty` never trips either.
+ *
+ * `scope: "project"` is rejected beside `hasPty` (the collapse to `terminal`
+ * loses the kind, so nothing could keep the panel project-wide) and beside
+ * `dockable: false` (a project panel lives in the dock, #13778).
  */
 export const PanelContributionSchema = PanelContributionObjectSchema.superRefine((panel, ctx) => {
   if (panel.hasPty === true && panel.dockable === false) {
@@ -174,6 +184,24 @@ export const PanelContributionSchema = PanelContributionObjectSchema.superRefine
       message:
         "A PTY-backed panel (hasPty: true) cannot opt out of the dock with dockable: false — plugin PTY panels render as terminals, which are always dockable. Remove the dockable flag.",
       params: { errorCode: "pty_panel_dock_opt_out_unsupported" },
+    });
+  }
+  if (panel.scope === "project" && panel.hasPty === true) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["scope"],
+      message:
+        'A PTY-backed panel (hasPty: true) can\'t be scope: "project" — plugin PTY panels become ordinary terminals, which belong to a worktree. Remove the scope, or put the view on a panel without a PTY.',
+      params: { errorCode: "pty_panel_project_scope_unsupported" },
+    });
+  }
+  if (panel.scope === "project" && panel.dockable === false) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["scope"],
+      message:
+        'A scope: "project" panel opens in the dock, so it can\'t opt out of the dock with dockable: false. Remove one of the two.',
+      params: { errorCode: "project_panel_dock_opt_out_unsupported" },
     });
   }
   if (panel.hasPty === true && panel.toolbar !== undefined && panel.toolbar.length > 0) {

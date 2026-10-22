@@ -1174,3 +1174,67 @@ describe("setMenuItems (#13213)", () => {
     expect(listOf()).toBeUndefined();
   });
 });
+
+describe("setTitle (#13778)", () => {
+  async function mountWithTitle(props: Partial<PluginViewContentProps> = {}) {
+    const setPanelTitle = vi.fn<(title: string) => void>();
+    const mounted = await mountContent({ setPanelTitle, ...props });
+    return { ...mounted, setPanelTitle };
+  }
+
+  it("is withheld where the host has no panel to name", async () => {
+    await mountContent();
+    expect(latest().setTitle).toBeUndefined();
+  });
+
+  it("names the panel with a vetted title, and null goes back to the kind's name", async () => {
+    const { setPanelTitle } = await mountWithTitle();
+
+    act(() => latest().setTitle?.("  Record\n#42 "));
+    act(() => latest().setTitle?.(null));
+
+    expect(setPanelTitle.mock.calls).toEqual([["Record #42"], [""]]);
+  });
+
+  it("ignores a value that is not a title", async () => {
+    const { setPanelTitle } = await mountWithTitle();
+    act(() => (latest().setTitle as unknown as (title: unknown) => void)(42));
+    expect(setPanelTitle).not.toHaveBeenCalled();
+  });
+
+  it("keeps the title through a reload and ignores the old attempt's setter", async () => {
+    const { setPanelTitle } = await mountWithTitle();
+    const stale = latest();
+    act(() => stale.setTitle?.("Record #42"));
+
+    await requestReload();
+    await settlePluginViewLoad(() => expect(h.mounts).toHaveLength(2));
+    expect(setPanelTitle.mock.calls).toEqual([["Record #42"]]);
+
+    act(() => stale.setTitle?.("Record #1"));
+    act(() => latest().setTitle?.("Record #43"));
+    expect(setPanelTitle.mock.calls).toEqual([["Record #42"], ["Record #43"]]);
+  });
+
+  it("lands a title the view sets from its mount effect under StrictMode", async () => {
+    h.onMountEffect = (props) => props.setTitle?.("Record #42");
+    const setPanelTitle = vi.fn<(title: string) => void>();
+    await mountContent({ setPanelTitle }, { strict: true });
+
+    expect(setPanelTitle).toHaveBeenCalled();
+    expect(new Set(setPanelTitle.mock.calls.map(([title]) => title))).toEqual(
+      new Set(["Record #42"])
+    );
+  });
+
+  it("does nothing once the view has unmounted", async () => {
+    const { setPanelTitle, unmount } = await mountWithTitle();
+    const held = latest();
+
+    unmount();
+    await act(async () => {});
+    act(() => held.setTitle?.("Record #42"));
+
+    expect(setPanelTitle).not.toHaveBeenCalled();
+  });
+});

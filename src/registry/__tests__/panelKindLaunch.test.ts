@@ -176,6 +176,51 @@ describe("launchPanelKind", () => {
     expect(outcome).toMatchObject({ route: "panel" });
   });
 
+  it("puts a project-scoped plugin kind in the dock with no worktree, from any surface (#13778)", async () => {
+    registerPanelKind({
+      id: PLUGIN_KIND,
+      name: "Records",
+      iconId: "box",
+      color: "#fff",
+      hasPty: false,
+      canRestart: false,
+      canConvert: false,
+      extensionId: "acme",
+      scope: "project",
+    });
+
+    for (const location of ["grid", "dock"] as const) {
+      addPanelMock.mockClear();
+      await launch({ kindId: PLUGIN_KIND, location, worktreeId: "wt-1" });
+
+      const opts = addPanelMock.mock.calls[0]![0];
+      expect(opts).toMatchObject({ kind: PLUGIN_KIND, location: "dock", activateDockOnCreate: true });
+      expect(opts.worktreeId).toBeUndefined();
+    }
+  });
+
+  it("leaves a worktree-scoped plugin kind where the surface asked, in its worktree", async () => {
+    registerPanelKind({
+      id: PLUGIN_KIND,
+      name: "Notes",
+      iconId: "box",
+      color: "#fff",
+      hasPty: false,
+      canRestart: false,
+      canConvert: false,
+      extensionId: "acme",
+      scope: "worktree",
+    });
+
+    await launch({ kindId: PLUGIN_KIND, location: "grid", worktreeId: "wt-1" });
+
+    expect(addPanelMock.mock.calls[0]![0]).toMatchObject({
+      location: "grid",
+      worktreeId: "wt-1",
+      activateDockOnCreate: false,
+    });
+  });
+
   it("creates an unregistered kind generically rather than throwing", async () => {
     const outcome = await launch({ kindId: "not-a-registered-kind" });
 

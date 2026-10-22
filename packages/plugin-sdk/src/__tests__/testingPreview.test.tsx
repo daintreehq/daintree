@@ -207,6 +207,7 @@ describe("createPreviewPanelController", () => {
       props.setHasUnsavedChanges,
       props.setToolbarItemState,
       props.setMenuItems,
+      props.setTitle,
     ]) {
       expect(typeof callback).toBe("function");
     }
@@ -286,6 +287,25 @@ describe("createPreviewPanelController", () => {
     expect(panel.rejectedMenuItems).toHaveLength(1);
     props.setMenuItems?.([{ actionId: "acme.p.run", label: "Run" }]);
     expect(panel.menuItems).toEqual([{ actionId: "acme.p.run", label: "Run" }]);
+  });
+
+  it("vets a title the way the host does, keeping it through a remount", () => {
+    const panel = createPreviewPanelController();
+    expect(panel.title).toBe(null);
+
+    const first = panel.props();
+    first.setTitle?.(" Record\n#42 ");
+    expect(panel.title).toBe("Record #42");
+    (first.setTitle as unknown as (value: unknown) => void)(42);
+    expect(panel.title).toBe("Record #42");
+
+    // The title belongs to the panel, so a new attempt neither clears nor
+    // answers to the old one's setter.
+    const second = panel.props();
+    first.setTitle?.("Record #1");
+    expect(panel.title).toBe("Record #42");
+    second.setTitle?.(null);
+    expect(panel.title).toBe(null);
   });
 
   it("reads versions through the host's decoder", () => {

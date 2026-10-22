@@ -13,6 +13,7 @@ import { logWarn } from "@/utils/logger";
 import {
   getPanelStoreSnapshot,
   persistPanelExtensionStateThroughAccessor,
+  setPanelTitleThroughAccessor,
 } from "@/store/storeAccessors";
 import {
   decodePanelExtensionState,
@@ -126,6 +127,13 @@ export function makePluginViewHost(config: PanelKindConfig): ComponentType<Plugi
         persistPanelExtensionStateThroughAccessor(panelId, patch),
       [panelId]
     );
+    // The view's name for this panel (`PanelViewProps.setTitle`), bound to this
+    // panel id so a view can only ever title its own. Through the accessor for
+    // the same reason as `persistState`.
+    const setPanelTitle = useCallback(
+      (title: string) => setPanelTitleThroughAccessor(panelId, title),
+      [panelId]
+    );
     // What recovery restores, read at the moment it starts rather than at mount
     // (#12278). The props above are a snapshot of the record as of THIS render,
     // and a view that persisted state after mounting has moved on from them —
@@ -204,6 +212,7 @@ export function makePluginViewHost(config: PanelKindConfig): ComponentType<Plugi
             // toolbar, so a view there is not handed a setter for buttons the
             // user cannot see.
             offerToolbar={panelProps.location !== "dialog"}
+            setPanelTitle={setPanelTitle}
           />
         ) : (
           <PluginViewLoadError

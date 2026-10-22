@@ -151,6 +151,35 @@ describe("usePluginPanelKinds", () => {
     clearPanelKindRegistry();
   });
 
+  it("re-registers a kind when a push changes only its scope (#13778)", async () => {
+    // `panel.openPluginPanel` reads `scope` off the registered config, so a
+    // stale entry would keep opening a now project-scoped kind in a worktree.
+    let emit: ((payload: { kinds: PanelKindConfig[] }) => void) | null = null;
+    onPanelKindsChangedMock.mockImplementation(
+      (cb: (payload: { kinds: PanelKindConfig[] }) => void) => {
+        emit = cb;
+        return () => {};
+      }
+    );
+
+    const { getPanelKindConfig, clearPanelKindRegistry } =
+      await import("@shared/config/panelKindRegistry");
+    const { usePluginPanelKinds } = await import("../usePluginPanelKinds");
+
+    renderHook(() => usePluginPanelKinds());
+    await waitFor(() => expect(onPanelKindsChangedMock).toHaveBeenCalled());
+
+    const records = pluginKind({ id: "acme.records", hasPty: false, componentPath: "./r.js" });
+    act(() => emit!({ kinds: [records] }));
+    expect(getPanelKindConfig(records.id)).toBeDefined();
+    expect(getPanelKindConfig(records.id)?.scope).toBeUndefined();
+
+    act(() => emit!({ kinds: [{ ...records, scope: "project" }] }));
+    expect(getPanelKindConfig(records.id)?.scope).toBe("project");
+
+    clearPanelKindRegistry();
+  });
+
   it("re-registers a kind when a push changes only its tour (#12774)", async () => {
     let emit: ((payload: { kinds: PanelKindConfig[] }) => void) | null = null;
     onPanelKindsChangedMock.mockImplementation(

@@ -739,3 +739,55 @@ describe("panel contribution PTY / dockable cross-field rule (#11375)", () => {
     expect(result.success).toBe(true);
   });
 });
+
+describe("panel contribution scope (#13778)", () => {
+  const validBase = { name: "acme.panels", version: "1.0.0" };
+  const basePanel = { id: "records", name: "Records", iconId: "puzzle", color: "#123456" };
+
+  function parsePanel(panel: Record<string, unknown>) {
+    return getPluginManifestSchema("user").safeParse({
+      ...validBase,
+      contributes: { panels: [{ ...basePanel, ...panel }] },
+    });
+  }
+
+  function scopeIssue(panel: Record<string, unknown>) {
+    const result = parsePanel(panel);
+    expect(result.success).toBe(false);
+    return result.success
+      ? undefined
+      : result.error.issues.find((i) => i.path.includes("panels") && i.path.includes("scope"));
+  }
+
+  it("accepts both scopes and leaves an omitted one undefined", () => {
+    for (const scope of ["worktree", "project"]) {
+      const result = parsePanel({ scope });
+      expect(result.success).toBe(true);
+      if (result.success) expect(result.data.contributes.panels[0]?.scope).toBe(scope);
+    }
+    const omitted = parsePanel({});
+    expect(omitted.success).toBe(true);
+    if (omitted.success) {
+      expect(Object.prototype.hasOwnProperty.call(omitted.data.contributes.panels[0], "scope")).toBe(
+        false
+      );
+    }
+  });
+
+  it("rejects a scope it doesn't know", () => {
+    expect(parsePanel({ scope: "window" }).success).toBe(false);
+  });
+
+  it("rejects a project-scoped PTY panel, which would become a worktree terminal", () => {
+    expect(scopeIssue({ scope: "project", hasPty: true })?.message).toContain("PTY-backed");
+  });
+
+  it("rejects a project-scoped panel that opts out of the dock it opens in", () => {
+    expect(scopeIssue({ scope: "project", dockable: false })?.message).toContain("dockable");
+  });
+
+  it("leaves a worktree-scoped PTY or non-dockable panel alone", () => {
+    expect(parsePanel({ scope: "worktree", hasPty: true }).success).toBe(true);
+    expect(parsePanel({ scope: "worktree", dockable: false }).success).toBe(true);
+  });
+});
