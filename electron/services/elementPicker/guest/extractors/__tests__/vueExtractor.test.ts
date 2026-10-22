@@ -306,9 +306,32 @@ describe("the Vue extractor against a dev build", () => {
     expect(clause.__vueParentComponent).toBeUndefined();
     const observation = pick("p.clause-5");
     expect(chainNames(observation)).toEqual([null, "App"]);
-    expect(evidenceOf(observation).instanceLookup).toBe("ancestor");
-    // No vnode of its own, so no owner to name its file.
-    expect(observation.sourceCandidates).toEqual([]);
+    expect(evidenceOf(observation)).toMatchObject({
+      instanceLookup: "ancestor",
+      elementSource: "static-block",
+    });
+    // The block's own vnode still says whose template it came from.
+    expect(observation.sourceCandidates).toEqual([
+      expect.objectContaining({
+        kind: "file-hint",
+        file: `${VITE_ROOT}/src/Legal.vue`,
+        extraction: { kind: "runtime-field", field: "staticVNode.ctx.type.__file" },
+      }),
+    ]);
+  });
+
+  it("finds a component whose whole root is a static block below the node it was found through", async () => {
+    await mountVite();
+    // No node of Glossary's is marked, so the nearest marked one is App's <main>.
+    expect(
+      (query("p.term-3") as unknown as Record<string, unknown>).__vueParentComponent
+    ).toBeUndefined();
+    const observation = pick("p.term-3");
+    expect(chainNames(observation)).toEqual(["Glossary", "App"]);
+    expect(evidenceOf(observation).elementSource).toBe("static-block");
+    expect(observation.sourceCandidates).toEqual([
+      expect.objectContaining({ kind: "file-hint", file: `${VITE_ROOT}/src/Glossary.vue` }),
+    ]);
   });
 
   it("gives nothing for a node outside every Vue app", async () => {
@@ -413,6 +436,19 @@ describe("the Vue extractor with vite-plugin-vue-inspector's stamps", () => {
     });
   });
 
+  it("holds a static block's stamps to the component that wrote it, not the one it was found through", async () => {
+    await mountVite({ inspector: "recorded" });
+    const observation = pick("p.term-3");
+    expect(observation.sourceCandidates[0]).toMatchObject({
+      kind: "template-location",
+      extraction: { kind: "attribute", attribute: "data-v-inspector" },
+      ...stampedAt(
+        stampFor("src/Glossary.vue", fixtureSource("Glossary.vue"), '<p class="term term-3"'),
+        `${VITE_ROOT}/src/Glossary.vue`
+      ),
+    });
+  });
+
   it("reads version 7's hidden stamps, which never reach the DOM", async () => {
     await mountVite({ inspector: "recorded" });
     expect(query("button.cta").hasAttribute("data-v-inspector")).toBe(false);
@@ -454,7 +490,8 @@ describe("the Vue extractor with vite-plugin-vue-inspector's stamps", () => {
   it("takes a stamp off markup a static block inserted, where the attribute survives", async () => {
     await mountVite({ inspector: "recorded" });
     const observation = pick("p.clause-5");
-    expect(observation.sourceCandidates).toEqual([
+    expect(kinds(observation.sourceCandidates)).toEqual(["template-location", "file-hint"]);
+    expect(observation.sourceCandidates.slice(0, 1)).toEqual([
       expect.objectContaining({
         kind: "template-location",
         extraction: { kind: "attribute", attribute: "data-v-inspector" },

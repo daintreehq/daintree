@@ -149,8 +149,9 @@ export function invocationStamp(instance: VueInstance): Stamp | null {
  */
 export function anchorStamp(stamp: Stamp, templateFile: string | null): Stamp | null {
   if (templateFile === null) return stamp;
-  const owner = templateFile.replaceAll("\\", "/");
-  const reported = stamp.file.replaceAll("\\", "/");
+  // Compared as a case-insensitive filesystem would: one spelling must not cost a real stamp.
+  const owner = templateFile.replaceAll("\\", "/").toLowerCase();
+  const reported = stamp.file.replaceAll("\\", "/").toLowerCase();
   if (owner === reported) return stamp;
   // A file outside the working directory is written up out of it first.
   const tail = reported.replace(/^(?:\.\.?\/)+/, "");

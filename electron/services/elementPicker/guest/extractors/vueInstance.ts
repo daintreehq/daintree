@@ -87,16 +87,26 @@ function instanceAt(node: Node): VueInstance | null {
 }
 
 /**
- * The vnode Vue mounted `node` from, when that is the node's own element
- * vnode. While a component waits to hydrate (an async one, or one hydrated
- * lazily) its root node holds the component's vnode instead, which describes
- * the tag that used the component, not the node.
+ * What Vue says it mounted `node` from, by the vnode it left there:
+ *
+ * - `element`: the node's own element vnode.
+ * - `static`: the first node of a static block a server render hydrated,
+ *   which holds the block's vnode; nothing in a static block is a component.
+ * - `pending`: a component's vnode, which a node holds while the component
+ *   waits to hydrate there (an async one, or one hydrated lazily), and which
+ *   describes the tag that used the component rather than the node.
  */
-export function elementVNodeAt(node: Node): VNode | null {
+export type OwnVNode =
+  { kind: "element"; vnode: VNode } | { kind: "static"; vnode: VNode } | { kind: "pending" };
+
+export function ownVNodeAt(node: Node): OwnVNode | null {
   const vnode = field(node, "__vnode");
   if (!isVNode(vnode) || field(vnode, "el") !== node) return null;
   const shape = field(vnode, "shapeFlag");
-  return typeof shape === "number" && shape & SHAPE.element ? vnode : null;
+  const flags = typeof shape === "number" ? shape : 0;
+  if (flags & SHAPE.element) return { kind: "element", vnode };
+  if (flags & COMPONENT_SHAPE) return { kind: "pending" };
+  return field(vnode, "type") === STATIC ? { kind: "static", vnode } : null;
 }
 
 function appAt(node: Node): Record<string, unknown> | null {
@@ -104,15 +114,26 @@ function appAt(node: Node): Record<string, unknown> | null {
   return typeof app === "object" && app !== null ? (app as Record<string, unknown>) : null;
 }
 
-const FOREIGN_PREFIXES = ["__reactFiber$", "__reactContainer$"];
 const FOREIGN_NAMES = ["__svelte_meta", "__ngContext__"];
 
-/** Another framework rendered this node, or mounts into it: below it is that framework's to describe. */
-function isForeign(node: Node): boolean {
+/** Another framework rendered this node itself. */
+function renderedByForeign(node: Node): boolean {
   try {
     if (FOREIGN_NAMES.some((name) => Object.hasOwn(node, name))) return true;
-    return Object.keys(node).some((key) =>
-      FOREIGN_PREFIXES.some((prefix) => key.startsWith(prefix))
+    return Object.keys(node).some(
+      (key) => key.startsWith("__reactFiber$") && field(node, key) != null
+    );
+  } catch {
+    return false;
+  }
+}
+
+/** The node holds a live React root: what is inside it is React's, whoever rendered the node. */
+function hostsForeign(node: Node): boolean {
+  try {
+    // React leaves the key behind, emptied, when the root unmounts.
+    return Object.keys(node).some(
+      (key) => key.startsWith("__reactContainer$") && field(node, key) != null
     );
   } catch {
     return false;
@@ -139,9 +160,9 @@ export type Lookup =
  * (`v-html`, a static block, a widget's DOM) still belongs to that component.
  * The walk stops at the first app container above the node, element or shadow
  * root, so a nested app built without dev metadata never borrows an outer
- * app's instance, and at the first node another framework rendered, which is
- * that framework's whatever Vue rendered around it. A container itself is not
- * part of the app inside it.
+ * app's instance, and at the first node another framework rendered or holds a
+ * live root of, since what is in there is that framework's whatever Vue
+ * rendered around it. A container itself is not part of the app inside it.
  */
 export function lookUp(node: Element): Lookup | null {
   let current: Node | null = node;
@@ -151,10 +172,11 @@ export function lookUp(node: Element): Lookup | null {
       if (depth === 0 && instance !== null) {
         return { kind: "instance", instance, own: true, node: current };
       }
+      if (depth > 0 && hostsForeign(current)) return null;
       const app = depth === 0 ? null : appAt(current);
       if (app !== null) return { kind: "app", app, container: current };
       if (instance !== null) return { kind: "instance", instance, own: false, node: current };
-      if (isForeign(current)) return null;
+      if (renderedByForeign(current)) return null;
     }
     const parent = parentNodeOf(current);
     if (parent instanceof ShadowRoot) {
@@ -464,4 +486,75 @@ export function renderedRoots(instance: VueInstance, limit: number, budget: Budg
     complete = false;
   }
   return { elements, complete };
+}
+
+/**
+ * The static block `node` sits in, if it sits in one, and the component whose
+ * output holds it: a run of markup Vue inserted whole and left unmarked, whose
+ * vnode still says which component's template wrote it. A component whose
+ * whole root is such a run marks no node of its own, so the nearest marked
+ * node above it is its parent's; the search goes down from there through child
+ * components' output to find it.
+ */
+export function staticBlockOf(
+  instance: VueInstance,
+  node: Node,
+  budget: Budget
+): { vnode: VNode; instance: VueInstance } | null {
+  const subTree = field(instance, "subTree");
+  if (!isVNode(subTree)) return null;
+  const pending: Array<{ list: unknown[]; next: number; owner: VueInstance }> = [
+    { list: [subTree], next: 0, owner: instance },
+  ];
+  while (pending.length > 0) {
+    const frame = pending[pending.length - 1]!;
+    let vnode: unknown;
+    try {
+      if (frame.next >= frame.list.length) {
+        pending.pop();
+        continue;
+      }
+      vnode = frame.list[frame.next];
+    } catch {
+      pending.pop();
+      continue;
+    }
+    frame.next += 1;
+    if (!budget.spend()) return null;
+    if (!isVNode(vnode)) continue;
+    const shape = field(vnode, "shapeFlag");
+    const flags = typeof shape === "number" ? shape : 0;
+    // Page values: a `contains` on a hostile one can throw.
+    try {
+      if (flags & COMPONENT_SHAPE) {
+        const component = field(vnode, "component");
+        const child = field(component, "subTree");
+        if (isInstance(component) && isVNode(child)) {
+          pending.push({ list: [child], next: 0, owner: component });
+        }
+        continue;
+      }
+      if (flags & SHAPE.suspense) {
+        const branch = field(field(vnode, "suspense"), "activeBranch");
+        if (isVNode(branch)) pending.push({ list: [branch], next: 0, owner: frame.owner });
+        continue;
+      }
+      if (field(vnode, "type") === STATIC) {
+        const last = field(vnode, "anchor");
+        let current = field(vnode, "el");
+        while (current instanceof Node) {
+          if (!budget.spend()) return null;
+          if (current === node || current.contains(node)) return { vnode, instance: frame.owner };
+          if (current === last) break;
+          current = current.nextSibling;
+        }
+        continue;
+      }
+      const children = field(vnode, "children");
+      if (Array.isArray(children)) pending.push({ list: children, next: 0, owner: frame.owner });
+    } catch {
+      // A block that cannot be read is not the one.
+    }
+  }
+  return null;
 }

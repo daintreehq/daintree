@@ -8,7 +8,7 @@ import type { ElementRefs } from "../../registry.js";
 import type { ExtractorContribution } from "../../types.js";
 import { createVueExtractor } from "../vueExtractor.js";
 import { Budget, renderedRoots, type VueInstance } from "../vueInstance.js";
-import { anchorStamp, invocationStamp, parseStamp } from "../vueStamps.js";
+import { anchorStamp, elementStamp, invocationStamp, parseStamp } from "../vueStamps.js";
 
 /**
  * What the Vue extractor makes of page data no stock Vue 3.5 build produces:
@@ -428,6 +428,42 @@ describe("the Vue extractor at the edges of what Vue owns", () => {
     expect(names(select(host))).toEqual(["Host"]);
   });
 
+  it("reads a hydrated static block's first node through the block's vnode", () => {
+    const author = instance({ type: { __name: "Legal", __file: "/app/src/Legal.vue" } });
+    const block = document.createElement("div");
+    block.setAttribute("data-v-inspector", "src/Legal.vue:2:3");
+    document.body.append(block);
+    mark(block, author, vnode({ type: Symbol.for("v-stc"), el: block, ctx: author }));
+    expect(select(block).sourceCandidates).toEqual([
+      expect.objectContaining({ kind: "template-location", file: "/app/src/Legal.vue" }),
+      expect.objectContaining({ kind: "file-hint", file: "/app/src/Legal.vue" }),
+    ]);
+  });
+
+  it("stops below a Vue element only while it holds a live React root", () => {
+    const host = document.createElement("div");
+    mark(host, instance({ type: { __name: "Host" } }));
+    const inserted = document.createElement("span");
+    host.append(inserted);
+    document.body.append(host);
+    const key = "__reactContainer$k2";
+    (host as unknown as Shape)[key] = {};
+    expect(createVueExtractor().extract(inserted, "selection", refTable())).toBeNull();
+    // React empties the key when its root unmounts, and the node is Vue's again.
+    (host as unknown as Shape)[key] = null;
+    expect(names(select(inserted))).toEqual(["Host"]);
+  });
+
+  it("still describes a node Vue rendered that a React root mounts into", () => {
+    const outer = document.createElement("section");
+    mark(outer, instance({ type: { __name: "Page" } }));
+    const container = document.createElement("div");
+    (container as unknown as Shape)["__reactContainer$k3"] = {};
+    outer.append(container);
+    document.body.append(outer);
+    expect(names(select(container))).toEqual(["Page"]);
+  });
+
   it("says nothing about a mount container itself, which the app inside it did not render", () => {
     const container = document.createElement("div");
     (container as unknown as Shape).__vue_app__ = { _container: container, _instance: null };
@@ -518,6 +554,27 @@ describe("invocationStamp", () => {
   });
 });
 
+describe("elementStamp", () => {
+  it("drops an attribute a component passed down through a dev build's commented root", () => {
+    // Same file, so no path check could catch it: a component used inside its own template.
+    const element = document.createElement("li");
+    element.setAttribute("data-v-inspector", "src/Tree.vue:6:5");
+    const own = elementVNode(element);
+    const tree = instance({
+      type: { __name: "Tree", __file: "/app/src/Tree.vue" },
+      subTree: vnode({
+        type: Symbol.for("v-fgt"),
+        patchFlag: 2048,
+        children: [vnode({ type: Symbol.for("v-cmt"), children: " branch " }), own],
+      }),
+      vnode: vnode({ type: {}, shapeFlag: 4, props: { "data-v-inspector": "src/Tree.vue:6:5" } }),
+    });
+    expect(elementStamp(element, own, tree as VueInstance)).toBeNull();
+    element.setAttribute("data-v-inspector", "src/Tree.vue:3:3");
+    expect(elementStamp(element, own, tree as VueInstance)).toMatchObject({ line: 3, column: 3 });
+  });
+});
+
 describe("anchorStamp", () => {
   const stamp = parseStamp("src/App.vue:3:5", {
     kind: "attribute",
@@ -537,6 +594,11 @@ describe("anchorStamp", () => {
   it("drops a stamp naming another file than the template its tag is in", () => {
     expect(anchorStamp(stamp, "/projects/shop/src/Other.vue")).toBeNull();
     expect(anchorStamp(stamp, "/projects/shop/notsrc/App.vue")).toBeNull();
+  });
+
+  it("matches a file spelled in another case, as a case-insensitive filesystem would", () => {
+    const windows = parseStamp("src/App.vue:3:5", stamp.extraction)!;
+    expect(anchorStamp(windows, "C:/Repo/SRC/app.vue")?.file).toBe("C:/Repo/SRC/app.vue");
   });
 
   it("keeps a stamp as read when no component names a file", () => {

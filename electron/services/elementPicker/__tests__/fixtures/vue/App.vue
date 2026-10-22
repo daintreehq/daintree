@@ -1,6 +1,7 @@
 <script setup>
 import Badge from "./Badge.vue";
 import Card from "./Card.vue";
+import Glossary from "./Glossary.vue";
 import Legal from "./Legal.vue";
 import Modal from "./Modal.vue";
 import Note from "./Note.vue";
@@ -23,5 +24,6 @@ import Wrapper from "./Wrapper.vue";
     <Nothing />
     <Words />
     <Legal />
+    <Glossary />
   </main>
 </template>

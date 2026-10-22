@@ -30,7 +30,7 @@ import {
   appVersion,
   componentFile,
   componentName,
-  elementVNodeAt,
+  ownVNodeAt,
   field,
   instanceApp,
   isInstance,
@@ -39,6 +39,7 @@ import {
   ownerOf,
   parentOf,
   renderedRoots,
+  staticBlockOf,
   type Lookup,
   type VueInstance,
 } from "./vueInstance.js";
@@ -54,6 +55,8 @@ const STEPS = {
   roots: 32_768,
   /** One component's share of `roots`, so an app-sized outer component cannot starve the rest. */
   rootsPerRecord: 4_096,
+  /** Looking for the static block a node Vue left unmarked came from. */
+  staticSearch: 4_096,
 } as const;
 
 /** Paths are the bulk of a reply, and a reply over the bridge's ceiling is dropped whole. */
@@ -164,6 +167,13 @@ class CandidateWriter {
   }
 }
 
+/**
+ * Where the element's own facts were read: its element vnode, the static
+ * vnode on a hydrated block's first node, the static block it sits in, an
+ * ancestor with nothing more, a component waiting to hydrate on it, or none.
+ */
+type ElementSource = "element" | "static" | "static-block" | "ancestor" | "pending" | "none";
+
 function present<T>(values: Array<T | null>): T[] {
   return values.filter((value): value is T => value !== null);
 }
@@ -238,11 +248,18 @@ function selectionOf(
     return records.length - 1;
   };
 
+  // Markup Vue left unmarked may sit in a static block of a component below
+  // the instance it was found through; that component is the nearest one.
+  const block = found.own
+    ? null
+    : staticBlockOf(found.instance, element, new Budget(STEPS.staticSearch));
+  const nearest = block?.instance ?? found.instance;
+
   // Render ancestry, innermost first. Each record's render parent is the next.
-  add(found.instance);
+  add(nearest);
   const ancestry = new Budget(STEPS.ancestry);
   let reachedRoot = false;
-  for (let current = found.instance; ;) {
+  for (let current = nearest; ;) {
     const parent = parentOf(current);
     if (parent === null) {
       reachedRoot = true;
@@ -301,23 +318,32 @@ function selectionOf(
   });
 
   const writer = new CandidateWriter();
-  // The element's own vnode says who wrote it. Without one (markup Vue
-  // inserted as a block, or never mounted) only a stamp on the element itself
-  // can say where it is written, held to the file of the template around it.
-  // An instance with no element vnode of its own is a component still waiting
-  // to hydrate on this node: nothing here is the element's yet.
-  const vnode = found.own ? elementVNodeAt(element) : null;
-  const pending = found.own && vnode === null;
-  const owner = field(found.own ? vnode : elementVNodeAt(found.node), "ctx");
-  const templateFile = isInstance(owner) ? componentFile(owner) : null;
-  const read = pending ? null : elementStamp(element, vnode, found.own ? found.instance : null);
+  // Which template the element is written in: its own vnode's author, or, for
+  // markup a static block inserted, the block's. A stamp is held to that
+  // template's file. A node a component is still waiting to hydrate on has
+  // nothing of its own yet.
+  const own = found.own ? ownVNodeAt(element) : null;
+  const source: ElementSource =
+    own?.kind ?? (block !== null ? "static-block" : found.own ? "none" : "ancestor");
+  const authorVNode =
+    own?.kind === "element" || own?.kind === "static" ? own.vnode : (block?.vnode ?? null);
+  const author = field(authorVNode, "ctx");
+  const templateFile = isInstance(author) ? componentFile(author) : null;
+  const readable = source !== "pending" && source !== "none";
+  // Only an element vnode carries props a component could have handed down.
+  const elementVNode = own?.kind === "element" ? own.vnode : null;
+  const read = readable
+    ? elementStamp(element, elementVNode, elementVNode ? found.instance : null)
+    : null;
   const stamp = read === null ? null : anchorStamp(read, templateFile);
-  const ownerFile = found.own && !pending ? templateFile : null;
   const elementCandidates = present([
     stamp === null ? null : writer.stamp("template-location", stamp),
-    ownerFile === null
+    templateFile === null
       ? null
-      : writer.fileHint(ownerFile, { kind: "runtime-field", field: "__vnode.ctx.type.__file" }),
+      : writer.fileHint(templateFile, {
+          kind: "runtime-field",
+          field: block === null ? "__vnode.ctx.type.__file" : "staticVNode.ctx.type.__file",
+        }),
   ]);
   records.forEach((record, index) => {
     const instance = instances[index]!;
@@ -373,7 +399,7 @@ function selectionOf(
           { name: "instanceLookup", value: lookup },
           { name: "version", value: version },
           { name: "hmrRuntime", value: dev },
-          { name: "elementVNode", value: vnode !== null },
+          { name: "elementSource", value: source },
           { name: "elementStamp", value: stamp === null ? null : stamp.extraction.kind },
           { name: "claimsOmitted", value: omitted },
         ]),
