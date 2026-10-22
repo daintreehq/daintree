@@ -539,7 +539,8 @@ export class ElementPickerHost {
           : message.type === "read-source"
             ? job.access.readSource(message.file)
             : job.access.fetchSourceMap(message.generatedUrl);
-        const unreadable = message.type === "read-source" ? "file-missing" : "map-missing";
+        const unreadable: UnavailableReason =
+          message.type === "read-source" ? "file-missing" : "map-missing";
         void result
           .catch((error: unknown) => {
             logWarn(`${P} Source access failed`, {
