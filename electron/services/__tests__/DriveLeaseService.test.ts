@@ -1456,8 +1456,9 @@ describe("DriveLeaseService and a relaunched Shell (#13909)", () => {
       registry.add(driver);
       note(driver, "greg-studio", INSTALL);
       await settle();
+      const { tenureId } = service.getHolder("p")!;
       expect(saved.at(-1)).toEqual({
-        p: { clientId: "launch-1", clientName: "greg-studio", deviceId: INSTALL },
+        p: { clientId: "launch-1", clientName: "greg-studio", deviceId: INSTALL, tenureId },
       });
     });
 
@@ -1466,11 +1467,14 @@ describe("DriveLeaseService and a relaunched Shell (#13909)", () => {
       const driver = remote("s1:e1", "launch-1");
       registry.add(driver);
       await settle();
-      expect(saved.at(-1)).toEqual({ p: { clientId: "launch-1", clientName: "launch-1" } });
+      const { tenureId } = service.getHolder("p")!;
+      expect(saved.at(-1)).toEqual({
+        p: { clientId: "launch-1", clientName: "launch-1", tenureId },
+      });
 
       note(driver, "launch-1", INSTALL);
       expect(saved.at(-1)).toEqual({
-        p: { clientId: "launch-1", clientName: "launch-1", deviceId: INSTALL },
+        p: { clientId: "launch-1", clientName: "launch-1", deviceId: INSTALL, tenureId },
       });
     });
 
