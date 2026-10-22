@@ -428,7 +428,6 @@ async function collectGit() {
 
 const SAFE_STORE_KEYS = [
   "appState",
-  "hibernation",
   "terminalConfig",
   "keybindingOverrides",
   "worktreeConfig",
@@ -694,16 +693,10 @@ async function collectMemoryAttribution(deps: HandlerDependencies) {
   }
 }
 
-// Hibernation + resource-profile runtime state. Both are global singletons
-// reached via their own getters — not threaded through HandlerDependencies.
+// Resource-profile runtime state. A global singleton reached via its own
+// getter — not threaded through HandlerDependencies.
 async function collectResourceState() {
   const result: Record<string, unknown> = {};
-  try {
-    const { getHibernationService } = await import("./HibernationService.js");
-    result.hibernation = getHibernationService().getSnapshot();
-  } catch {
-    result.hibernation = { error: "Failed to get hibernation state" };
-  }
   try {
     const { getResourceProfileService } = await import("../window/serviceRefs.js");
     const svc = getResourceProfileService();

@@ -36,7 +36,7 @@ const GOLDEN_QUERIES = [
   { query: "voice", expectedTopResults: ["tab-nav-voice", "voice-enable"] },
   { query: "microphone", expectedTopResults: ["tab-nav-voice", "voice-enable"] },
   { query: "appearance", expectedTopResults: ["tab-nav-terminalAppearance", "appearance-theme"] },
-  { query: "hibernate", expectedTopResults: ["general-hibernation"] },
+  { query: "reclaim", expectedTopResults: ["general-idle-background-auto-close"] },
   { query: "github", expectedTopResults: ["forge-access-token", "tab-nav-code-forge"] },
   { query: "remote resources", expectedTopResults: ["tab-nav-project:environments"] },
   { query: "docker akash", expectedTopResults: ["tab-nav-project:environments"] },
@@ -134,9 +134,9 @@ describe("filterSettings", () => {
   });
 
   it("matches by keyword", () => {
-    const results = filterSettings(SETTINGS_SEARCH_INDEX, "hibernate");
+    const results = filterSettings(SETTINGS_SEARCH_INDEX, "caffeinate");
     expect(results.length).toBeGreaterThan(0);
-    // All matching entries should be in general (hibernate keyword only on general entries)
+    // "caffeinate" is only ever a keyword, on a general entry
     expect(results.some((r) => r.tab === "general")).toBe(true);
   });
 

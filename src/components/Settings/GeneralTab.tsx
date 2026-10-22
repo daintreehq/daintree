@@ -23,7 +23,6 @@ import { KbdChord } from "@/components/ui/Kbd";
 import { Badge } from "@/components/ui/badge";
 import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
 import type {
-  HibernationConfig,
   SessionRestoreConfig,
   IdleTerminalNotifyConfig,
   IdleBackgroundAutoCloseConfig,
@@ -47,7 +46,7 @@ import { useRemoteHostName, useSettingsOwnerMarker } from "@/hooks/useSettingsOw
 
 const GENERAL_SUBTABS: SettingsSubtabItem[] = [
   { id: "overview", label: "Overview" },
-  { id: "hibernation", label: "Hibernation" },
+  { id: "background", label: "Background" },
   { id: "display", label: "Display" },
 ];
 
@@ -86,13 +85,6 @@ const CURATED_SHORTCUTS = [
   },
 ];
 
-const THRESHOLD_PRESETS = [
-  { value: 12, label: "12h" },
-  { value: 24, label: "24h" },
-  { value: 48, label: "48h" },
-  { value: 72, label: "72h" },
-] as const;
-
 const IDLE_TERMINAL_THRESHOLD_PRESETS = [
   { value: 30, label: "30m" },
   { value: 60, label: "1h" },
@@ -108,7 +100,6 @@ const IDLE_BACKGROUND_THRESHOLD_PRESETS = [
 ] as const;
 
 // Mirrors the electron-store defaults, so a row can say when it has moved off them.
-const DEFAULT_HIBERNATION_THRESHOLD_HOURS = 24;
 const DEFAULT_IDLE_TERMINAL_THRESHOLD_MINUTES = 60;
 const DEFAULT_IDLE_BACKGROUND_THRESHOLD_MINUTES = 15;
 const DEFAULT_UPDATE_CHANNEL = "stable";
@@ -134,7 +125,7 @@ function describeUpdateChannel(
   return base.endsWith(".") ? `${base} ${checked}` : `${base}. ${checked}`;
 }
 
-type SaveTarget = "sessionRestore" | "updates" | "idleNotify" | "idleAutoClose" | "hibernation";
+type SaveTarget = "sessionRestore" | "updates" | "idleNotify" | "idleAutoClose";
 
 interface ShortcutDisplay {
   actionId: string;
@@ -168,7 +159,6 @@ export function GeneralTab({
 
   const [isShortcutsOpen, setIsShortcutsOpen] = useState(false);
   const [showReadyAgents, setShowReadyAgents] = useState(false);
-  const [hibernationConfig, setHibernationConfig] = useState<HibernationConfig | null>(null);
   const [sessionRestoreConfig, setSessionRestoreConfig] = useState<SessionRestoreConfig | null>(
     null
   );
@@ -178,8 +168,6 @@ export function GeneralTab({
   const [idleAutoCloseConfig, setIdleAutoCloseConfig] =
     useState<IdleBackgroundAutoCloseConfig | null>(null);
   const [isIdleAutoCloseSaving, setIsIdleAutoCloseSaving] = useState(false);
-  const [isSaving, setIsSaving] = useState(false);
-  const [configError, setConfigError] = useState<string | null>(null);
   const [cliAvailability, setCliAvailability] = useState<CliAvailability | null>(null);
   // Past the Doherty threshold only, like every settings list's bones.
   const showAgentsLoading = useDeferredLoading(cliAvailability === null, UI_DOHERTY_THRESHOLD);
@@ -191,7 +179,7 @@ export function GeneralTab({
    * simply did not render, on the reasoning that a missing card beats a wrong explanation.
    * But a missing card IS an explanation — the user reads it as "this app has no such
    * setting" — and it is the wrong one. Each section now keeps its own message so it can
-   * say what failed and offer a way back, without borrowing hibernation's wording.
+   * say what failed and offer a way back.
    */
   const [sectionErrors, setSectionErrors] = useState<Record<string, string | null>>({});
   const [configRetryNonce, setConfigRetryNonce] = useState(0);
@@ -399,29 +387,6 @@ export function GeneralTab({
 
   useEffect(() => {
     let cancelled = false;
-    const timer = setTimeout(() => {
-      if (!cancelled) {
-        setConfigError("Settings load timed out");
-      }
-    }, 10_000);
-
-    actionService
-      .dispatch("hibernation.getConfig", undefined, { source: "user" })
-      .then((result) => {
-        clearTimeout(timer);
-        if (cancelled) return;
-        if (!result.ok) {
-          throw new Error(result.error.message);
-        }
-        setHibernationConfig(result.result as HibernationConfig);
-        setConfigError(null);
-      })
-      .catch((error) => {
-        clearTimeout(timer);
-        if (cancelled) return;
-        logError("Failed to load hibernation config", error);
-        setConfigError(formatErrorMessage(error, "Failed to load hibernation settings"));
-      });
 
     actionService
       .dispatch("sessionRestore.getConfig", undefined, { source: "user" })
@@ -482,7 +447,6 @@ export function GeneralTab({
 
     return () => {
       cancelled = true;
-      clearTimeout(timer);
     };
   }, [configRetryNonce]);
 
@@ -584,35 +548,6 @@ export function GeneralTab({
       unsubscribe();
     };
   }, []);
-  const handleHibernationToggle = async () => {
-    if (!hibernationConfig || isSaving) return;
-    const prev = hibernationConfig;
-    clearSaveFailure("hibernation");
-    setHibernationConfig({ ...prev, enabled: !prev.enabled });
-    setIsSaving(true);
-    try {
-      const result = await actionService.dispatch(
-        "hibernation.updateConfig",
-        { enabled: !prev.enabled },
-        { source: "user" }
-      );
-      if (!isMountedRef.current) return;
-      if (!result.ok) {
-        throw new Error(result.error.message);
-      }
-      setHibernationConfig(result.result as HibernationConfig);
-      clearSaveFailure("hibernation");
-    } catch (error) {
-      if (!isMountedRef.current) return;
-      setHibernationConfig(prev);
-      logError("Failed to update hibernation config", error);
-      recordSaveFailure("hibernation", () => handleHibernationToggle());
-    } finally {
-      if (isMountedRef.current) {
-        setIsSaving(false);
-      }
-    }
-  };
 
   const handleSessionRestoreToggle = async () => {
     if (!sessionRestoreConfig || isSessionRestoreSaving) return;
@@ -764,35 +699,6 @@ export function GeneralTab({
     }
   };
 
-  const handleThresholdChange = async (value: number) => {
-    if (!hibernationConfig || isSaving) return;
-    const prev = hibernationConfig;
-    clearSaveFailure("hibernation");
-    setHibernationConfig({ ...prev, inactiveThresholdHours: value });
-    setIsSaving(true);
-    try {
-      const result = await actionService.dispatch(
-        "hibernation.updateConfig",
-        { inactiveThresholdHours: value },
-        { source: "user" }
-      );
-      if (!isMountedRef.current) return;
-      if (!result.ok) {
-        throw new Error(result.error.message);
-      }
-      setHibernationConfig(result.result as HibernationConfig);
-      clearSaveFailure("hibernation");
-    } catch (error) {
-      if (!isMountedRef.current) return;
-      setHibernationConfig(prev);
-      logError("Failed to update hibernation threshold", error);
-      recordSaveFailure("hibernation", () => handleThresholdChange(value));
-    } finally {
-      if (isMountedRef.current) {
-        setIsSaving(false);
-      }
-    }
-  };
 
   return (
     <div className="space-y-6">
@@ -1254,13 +1160,13 @@ export function GeneralTab({
           </>
         )}
 
-        {effectiveSubtab === "hibernation" && (
+        {effectiveSubtab === "background" && (
           <>
             {/* Every group renders before its config arrives. Until the stored value is
                 known each switch shows the default, disabled, and each threshold shows no
                 selection — a load error sits on the group it belongs to, with Retry. */}
             {/* One section for everything Daintree does about projects left in the
-                background: remind, close, or stop their processes. Idle-terminal reminders
+                background: remind about them, or close them. Idle-terminal reminders
                 were a section of their own whose only row repeated its heading. */}
             <SettingsSection
               title="Background projects"
@@ -1353,47 +1259,6 @@ export function GeneralTab({
                         DEFAULT_IDLE_BACKGROUND_THRESHOLD_MINUTES
                       )
                     }
-                  />
-                </SettingsDependents>
-              </SettingsGroup>
-              {configError && (
-                <SettingsLoadErrorBanner
-                  title="Couldn't load hibernation settings"
-                  message={configError}
-                  onRetry={() => setConfigRetryNonce((n) => n + 1)}
-                />
-              )}
-              {saveFailureBanner("hibernation")}
-              <SettingsGroup id="general-hibernation">
-                <SettingsSwitchCard
-                  title="Hibernate inactive projects"
-                  subtitle="Stops their terminals and dev servers to free resources; the project reopens where you left it"
-                  isEnabled={hibernationConfig?.enabled ?? false}
-                  onChange={handleHibernationToggle}
-                  disabled={!hibernationConfig}
-                  isModified={!!hibernationConfig?.enabled}
-                  onReset={() => void handleHibernationToggle()}
-                />
-                <SettingsDependents
-                  disabled={!hibernationConfig?.enabled}
-                  reason={
-                    hibernationConfig ? "Turn on hibernation to choose when it happens" : undefined
-                  }
-                >
-                  <SettingsPresetGroup<number>
-                    id="general-hibernation-threshold"
-                    label="Hibernate after"
-                    description="How long a project sits idle before its processes are stopped"
-                    options={THRESHOLD_PRESETS}
-                    value={hibernationConfig?.inactiveThresholdHours ?? null}
-                    onChange={(v) => void handleThresholdChange(v)}
-                    disabled={isSaving}
-                    isModified={
-                      !!hibernationConfig &&
-                      hibernationConfig.inactiveThresholdHours !==
-                        DEFAULT_HIBERNATION_THRESHOLD_HOURS
-                    }
-                    onReset={() => void handleThresholdChange(DEFAULT_HIBERNATION_THRESHOLD_HOURS)}
                   />
                 </SettingsDependents>
               </SettingsGroup>

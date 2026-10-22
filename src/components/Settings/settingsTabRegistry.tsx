@@ -333,7 +333,7 @@ export const SETTINGS_REGISTRY = [
     icon: <Settings2 className="w-4 h-4" />,
     importKind: "eager",
     Component: GeneralTab,
-    searchNavDescription: "About, system status, hibernation, and display settings",
+    searchNavDescription: "About, system status, background projects, and display settings",
     searchNavKeywords: ["general", "settings", "about", "status"],
     sections: [
       {
@@ -447,28 +447,9 @@ export const SETTINGS_REGISTRY = [
         ],
       },
       {
-        id: "general-hibernation",
-        subtab: "hibernation",
-        subtabLabel: "Hibernation",
-        section: "Background projects",
-        title: "Hibernate inactive projects",
-        description:
-          "Automatically stop terminals and servers for inactive projects. Reduces system resource usage.",
-        keywords: ["hibernate", "sleep", "inactive", "stop", "resources", "idle", "auto"],
-      },
-      {
-        id: "general-hibernation-threshold",
-        subtab: "hibernation",
-        subtabLabel: "Hibernation",
-        section: "Background projects",
-        title: "Hibernate after",
-        description: "How long before a project is hibernated: 12h, 24h, 48h, or 72h",
-        keywords: ["hibernate", "threshold", "hours", "timeout", "inactivity"],
-      },
-      {
         id: "general-idle-terminal-notify",
-        subtab: "hibernation",
-        subtabLabel: "Hibernation",
+        subtab: "background",
+        subtabLabel: "Background",
         section: "Background projects",
         title: "Notify me about idle terminals",
         description:
@@ -477,8 +458,8 @@ export const SETTINGS_REGISTRY = [
       },
       {
         id: "general-idle-terminal-threshold",
-        subtab: "hibernation",
-        subtabLabel: "Hibernation",
+        subtab: "background",
+        subtabLabel: "Background",
         section: "Background projects",
         title: "Remind after",
         description: "Minutes of inactivity before notifying: 30m, 1h, 2h, or 4h",
@@ -486,8 +467,8 @@ export const SETTINGS_REGISTRY = [
       },
       {
         id: "general-idle-background-auto-close",
-        subtab: "hibernation",
-        subtabLabel: "Hibernation",
+        subtab: "background",
+        subtabLabel: "Background",
         section: "Background projects",
         title: "Close idle projects automatically",
         description:
@@ -496,8 +477,8 @@ export const SETTINGS_REGISTRY = [
       },
       {
         id: "general-idle-background-threshold",
-        subtab: "hibernation",
-        subtabLabel: "Hibernation",
+        subtab: "background",
+        subtabLabel: "Background",
         section: "Background projects",
         title: "Close after",
         description: "Minutes of inactivity before auto-closing: 15m, 30m, 1h, or 2h",

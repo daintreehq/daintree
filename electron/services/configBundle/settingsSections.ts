@@ -39,9 +39,8 @@ import {
 
 /**
  * The sections added for Copy settings (#13346). Each writes through the
- * setter its Settings page uses, so a running service (the hibernation timer,
- * the idle checks, the plugin update checker) changes with it rather than on
- * the next launch.
+ * setter its Settings page uses, so a running service (the idle checks, the
+ * plugin update checker) changes with it rather than on the next launch.
  */
 
 const hours = (value: unknown) =>
@@ -50,25 +49,6 @@ const minutes = (value: unknown) => (typeof value === "number" ? `${value} min` 
 
 function agentName(agentId: string): string {
   return getEffectiveAgentConfig(agentId)?.name ?? agentId;
-}
-
-export function hibernationSection(): SectionHandler {
-  return scalarSection({
-    id: "hibernation",
-    fields: {
-      enabled: { label: "Hibernate unused projects", normalize: asBoolean },
-      inactiveThresholdHours: {
-        label: "Hibernate after",
-        normalize: boundedInteger(1, 168),
-        display: hours,
-      },
-    },
-    read: () => store.get("hibernation"),
-    write: async (patch) => {
-      const { getHibernationService } = await import("../HibernationService.js");
-      getHibernationService().updateConfig(patch);
-    },
-  });
 }
 
 export function sessionRestoreSection(): SectionHandler {

@@ -105,6 +105,8 @@ type LegacyStoreV0 = Omit<
     /** Retired by migration 019. */
     fleetDeckOpen: boolean;
   };
+  /** Retired by migration 035. */
+  hibernation: { enabled: boolean; inactiveThresholdHours: number };
   notificationSettings: Omit<
     StoreSchema["notificationSettings"],
     | "completedSoundFile"

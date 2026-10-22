@@ -261,7 +261,7 @@ export class IdleTerminalNotificationService {
    * project-scoped cleanup callbacks (e.g. DevPreview session teardown) run and
    * the renderer sees the standard hibernation event. Passes `"user-initiated"`
    * so this explicit action also evicts the project's cached renderer (#10668) —
-   * unlike the silent scheduled/memory-pressure paths, which leave it warm.
+   * unlike the silent memory-pressure path, which leaves it warm.
    */
   async closeProject(projectId: string): Promise<number> {
     if (!projectId) return 0;

@@ -1253,12 +1253,6 @@ describe("McpServerService", () => {
         kind: "query",
       }),
       createManifestEntry({
-        id: "hibernation.getConfig" as ActionId,
-        title: "Get Hibernation Config",
-        description: "Read auto-hibernation configuration",
-        kind: "query",
-      }),
-      createManifestEntry({
         id: "project.update" as ActionId,
         title: "Update Project",
         description: "Update project metadata",
@@ -1818,7 +1812,6 @@ describe("McpServerService", () => {
       "keybinding.getOverrides",
       "system.getResourceProfileSnapshot",
       "cliAvailability.get",
-      "hibernation.getConfig",
       "project.update",
       "project.saveSettings",
       "project.muteNotifications",

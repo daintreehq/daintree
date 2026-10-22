@@ -1370,8 +1370,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
   keepAwake: GeneratedElectronAPI["keepAwake"] & {
     onStateChanged(callback: (state: KeepAwakeState) => void): () => void;
   };
-  // Invoke methods come from GeneratedElectronAPI; the rest are renderer-only subscriptions.
-  hibernation: GeneratedElectronAPI["hibernation"] & {
+  hibernation: {
     onProjectHibernated(
       callback: (payload: HibernationProjectHibernatedPayload) => void
     ): () => void;

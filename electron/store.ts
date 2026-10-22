@@ -101,10 +101,6 @@ export interface StoreSchema {
     customSchemes?: TerminalConfig["customSchemes"];
     recentSchemeIds?: TerminalConfig["recentSchemeIds"];
   };
-  hibernation: {
-    enabled: boolean;
-    inactiveThresholdHours: number;
-  };
   /**
    * Whether a relaunch brings back every project that was live, or only the one
    * each window was showing (#12320). Read once in main before the window fleet
@@ -803,10 +799,6 @@ const storeOptions = {
       hybridInputEnabled: true,
       hybridInputAutoFocus: true,
       screenReaderMode: "auto" as const,
-    },
-    hibernation: {
-      enabled: false,
-      inactiveThresholdHours: 24,
     },
     // Defaults ON, unlike the opt-in lifecycle toggles around it: every editor
     // that restores a session at all does it without being asked, and the cost

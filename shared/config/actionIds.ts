@@ -127,10 +127,6 @@ export const BUILT_IN_ACTION_IDS = [
   "windowOpening.getConfig",
   "windowOpening.updateConfig",
 
-  // -- hibernationActions --
-  "hibernation.getConfig",
-  "hibernation.updateConfig",
-
   // -- idleTerminalNotifyActions --
   "idleTerminalNotify.getConfig",
   "idleTerminalNotify.updateConfig",

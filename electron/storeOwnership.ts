@@ -21,7 +21,6 @@ export const STORE_KEY_OWNERSHIP = {
   _schemaVersion: "device",
   windowState: "device",
   terminalConfig: "split",
-  hibernation: "host",
   sessionRestore: "host",
   windowOpening: "device",
   // Each machine holds its own power assertion for its own agents; a remote

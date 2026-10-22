@@ -35,7 +35,6 @@ const mockStore = vi.hoisted(() => {
 });
 
 const services = vi.hoisted(() => ({
-  hibernation: { updateConfig: vi.fn() },
   idleNotify: { updateConfig: vi.fn() },
   idleClose: { updateConfig: vi.fn() },
   pluginChecks: { updateSettings: vi.fn() },
@@ -57,9 +56,6 @@ vi.mock("../keybindingOverridesStore.js", () => ({
 vi.mock("../getSoundService.js", () => ({ getAllowedSoundFiles: async () => new Set<string>() }));
 vi.mock("../ProjectStore.js", () => ({
   projectStore: { getGlobalRecipes: vi.fn(async () => []) },
-}));
-vi.mock("../HibernationService.js", () => ({
-  getHibernationService: () => services.hibernation,
 }));
 vi.mock("../IdleTerminalNotificationService.js", () => ({
   getIdleTerminalNotificationService: () => services.idleNotify,
@@ -96,9 +92,6 @@ function agents(): Record<string, Record<string, unknown>> {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  services.hibernation.updateConfig.mockImplementation((patch: Record<string, unknown>) =>
-    mockStore.set("hibernation", { ...(mockStore.get("hibernation") as object), ...patch })
-  );
   services.idleNotify.updateConfig.mockImplementation((patch: Record<string, unknown>) =>
     mockStore.set("idleTerminalNotify", {
       ...(mockStore.get("idleTerminalNotify") as object),
@@ -125,7 +118,6 @@ beforeEach(() => {
       },
     },
     helpAssistant: { bypassPermissions: false, modelIds: { claude: "claude-sonnet-4-6" } },
-    hibernation: { enabled: false, inactiveThresholdHours: 24 },
     idleTerminalNotify: { enabled: true, thresholdMinutes: 60 },
     pluginBackgroundUpdateCheck: { enabled: false, lastCheckedAt: 42 },
     agentUpdateSettings: { autoCheck: true, checkFrequencyHours: 24, lastAutoCheck: 1234 },
@@ -360,13 +352,23 @@ describe("global environment", () => {
 describe("service-backed settings", () => {
   it("writes through the service setter, clamped the way the service clamps", async () => {
     const report = await makeService().apply({
-      hibernation: { enabled: true, inactiveThresholdHours: 500 },
+      idleTerminalNotify: { enabled: false, thresholdMinutes: 5000 },
     });
-    expect(services.hibernation.updateConfig).toHaveBeenCalledWith({
-      enabled: true,
-      inactiveThresholdHours: 168,
+    expect(services.idleNotify.updateConfig).toHaveBeenCalledWith({
+      enabled: false,
+      thresholdMinutes: 1440,
     });
-    expect(report.sections.find((s) => s.section === "hibernation")?.applied).toBe(2);
+    expect(report.sections.find((s) => s.section === "idleTerminalNotify")?.applied).toBe(2);
+  });
+
+  it("never applies the retired hibernation setting from an older bundle (#13840)", async () => {
+    const report = await makeService().apply({
+      hibernation: { enabled: true, inactiveThresholdHours: 24 },
+      idleTerminalNotify: { enabled: false },
+    } as Parameters<ReturnType<typeof makeService>["apply"]>[0]);
+    expect(storeState.current).not.toHaveProperty("hibernation");
+    expect(report.sections.map((s) => s.section)).not.toContain("hibernation");
+    expect(services.idleNotify.updateConfig).toHaveBeenCalledWith({ enabled: false });
   });
 
   it("skips a field this version doesn't have and a value it can't store", async () => {

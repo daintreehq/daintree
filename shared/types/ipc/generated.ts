@@ -1149,14 +1149,6 @@ export interface GeneratedIpcInvokeMap {
     args: [terminalId: string];
     result: void;
   };
-  "hibernation:get-config": {
-    args: [];
-    result: import("./hibernation.js").HibernationConfig;
-  };
-  "hibernation:update-config": {
-    args: [config: Partial<import("./hibernation.js").HibernationConfig>];
-    result: import("./hibernation.js").HibernationConfig;
-  };
   "host-files:get-picker-roots": {
     args: [];
     result: import("./hostFiles.js").HostPickerRoots;
@@ -2795,7 +2787,7 @@ export interface GeneratedIpcInvokeMap {
           sourcePrNumber?: number | undefined;
           sourcePrTitle?: string | undefined;
           sourcePrUrl?: string | undefined;
-          sourcePrState?: "merged" | "open" | "closed" | undefined;
+          sourcePrState?: "open" | "closed" | "merged" | undefined;
           sourcePrLinkedIssueNumber?: number | undefined;
           submoduleInit?: "inherit" | "all" | "none" | undefined;
           collisionPolicy?: "error" | "suffix" | undefined;

@@ -207,7 +207,7 @@ vi.mock("../../services/HelpSessionService.js", () => ({
   helpSessionService: helpSessionMock,
 }));
 
-const hibernationMock = vi.hoisted(() => ({ stop: vi.fn() }));
+const hibernationMock = vi.hoisted(() => ({ setPtyClient: vi.fn() }));
 vi.mock("../../services/HibernationService.js", () => ({
   getHibernationService: vi.fn(() => hibernationMock),
 }));
@@ -963,7 +963,7 @@ describe("registerShutdownHandler", () => {
         expect(appMock.exit).toHaveBeenCalledWith(0);
       });
 
-      expect(hibernationMock.stop).toHaveBeenCalledTimes(1);
+      expect(hibernationMock.setPtyClient).toHaveBeenCalledExactlyOnceWith(null);
       expect(idleTerminalMock.stop).toHaveBeenCalledTimes(1);
       expect(systemSleepMock.dispose).toHaveBeenCalledTimes(1);
       expect(connectivityRegistryMock.dispose).toHaveBeenCalledTimes(1);
@@ -1066,7 +1066,7 @@ describe("registerShutdownHandler", () => {
     });
 
     it("still exits cleanly when a moved disposal throws", async () => {
-      hibernationMock.stop.mockImplementationOnce(() => {
+      hibernationMock.setPtyClient.mockImplementationOnce(() => {
         throw new Error("hibernation boom");
       });
       const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -1079,7 +1079,7 @@ describe("registerShutdownHandler", () => {
       });
 
       expect(warnSpy).toHaveBeenCalledWith(
-        "[MAIN] HibernationService.stop failed:",
+        "[MAIN] HibernationService teardown failed:",
         expect.any(Error)
       );
       // Sibling disposals still run.
