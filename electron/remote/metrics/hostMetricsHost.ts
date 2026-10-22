@@ -1,5 +1,6 @@
 import type {
   HostFleetTargetList,
+  HostLinkActivity,
   HostWorktreeEntry,
 } from "../../../shared/types/ipc/hostMetrics.js";
 import type { NotificationSettings } from "../../../shared/types/ipc/api.js";
@@ -257,6 +258,26 @@ export function installHostMetricsHostWith(
     offWorktrees();
     worktrees.dispose();
   };
+}
+
+/**
+ * Answer every attached Shell's `LINK_ACTIVITY`: what this host saw happen to
+ * its links, who drives each project, and who is attached. Installed apart
+ * from the summaries because what it reads exists only once the listener has
+ * its leases and sessions wired.
+ */
+export function installLinkActivityHost(
+  server: MetricsSessionSource,
+  read: () => HostLinkActivity
+): () => void {
+  const wired = new WeakSet<LinkSession>();
+  const wire = ({ session }: MetricsSessionContext): void => {
+    if (wired.has(session)) return;
+    wired.add(session);
+    session.registerCallHandler(MetricsLinkMethod.LINK_ACTIVITY, EmptyPayloadSchema, read);
+  };
+  for (const ctx of server.sessions) wire(ctx);
+  return server.onSession(wire);
 }
 
 /** Wire the real sampler, fleet and worktree reads and agent-state events into a host server. */

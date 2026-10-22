@@ -13,6 +13,7 @@ import { HOST_METRICS_HISTORY_SIZE } from "@/store/hostMetricsStore";
 import {
   cpuSeries,
   describeDriver,
+  describeDriverDetail,
   describeMemory,
   describeObservedAgents,
   describeProjects,
@@ -285,7 +286,13 @@ export function HostCard({
         {summary && <Fact label="Memory" value={describeMemory(summary)} />}
         {summary && <Fact label="Swap" value={describeSwap(summary)} />}
         {summary && <Fact label="Thermal" value={describeThermal(summary)} />}
-        {summary && <Fact label="Driving" value={describeDriver(summary)} />}
+        {summary && (
+          <Fact
+            label="Driving"
+            value={describeDriver(summary)}
+            detail={describeDriverDetail(summary)}
+          />
+        )}
         <Fact label="Platform" value={row.platform ? PLATFORM_LABEL[row.platform] : null} />
         <Fact label="Link" value={describeRtt(row)} />
       </dl>

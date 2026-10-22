@@ -2,7 +2,11 @@ import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import type { AgentId } from "../../../shared/types/agent.js";
-import type { DriveLeaseHolder, HostPlatform } from "../../../shared/types/remoteHosts.js";
+import type {
+  DriveLeaseHolder,
+  HostDriverObservation,
+  HostPlatform,
+} from "../../../shared/types/remoteHosts.js";
 import { getAgentAvailabilityStore } from "../../services/AgentAvailabilityStore.js";
 import { peekDriveLeaseService } from "../../services/DriveLeaseService.js";
 import { helpSessionService } from "../../services/HelpSessionService.js";
@@ -21,6 +25,8 @@ import {
 import { executableForSpawn } from "../../utils/windowsExecutable.js";
 import { getSanitizedProcessEnv } from "../../utils/gitEnv.js";
 import { createForgeObserver } from "./hostForges.js";
+import { nameLeases } from "./driverObservations.js";
+import { DriveLeaseHolderSchema } from "../link/schemas.js";
 import type { HostSampleSources, ObservedAgents, SampleReaders } from "./sampler.js";
 
 type ProjectInventory = ReturnType<typeof projectStore.getAllProjects>;
@@ -169,7 +175,28 @@ async function countWorktrees(
   }
 }
 
-/** The most recent holder across this host's projects, when anyone drives one. */
+/**
+ * Each of this host's projects someone drives, newest control first, and
+ * whether its holder is there. Read without settling any lease, so it adds no
+ * moves or grace to what {@link currentDriver}'s reads already do.
+ */
+function currentDrivers(
+  projects: () => ProjectInventory = () => projectStore.getAllProjects()
+): HostDriverObservation[] {
+  const lease = peekDriveLeaseService();
+  if (!lease) return [];
+  const names = new Map(projects().map((project) => [project.id, project.name]));
+  return nameLeases(
+    lease.snapshotLeases().filter((observation) => names.has(observation.projectId)),
+    (projectId) => names.get(projectId) ?? null
+  );
+}
+
+/**
+ * The most recent holder across this host's projects, when anyone drives one.
+ * One a Shell's schema would refuse (an id from a reservation file longer than
+ * the link carries) is passed over, or the whole summary would be.
+ */
 function currentDriver(
   projects: () => ProjectInventory = () => projectStore.getAllProjects()
 ): DriveLeaseHolder | null {
@@ -178,7 +205,8 @@ function currentDriver(
   let latest: DriveLeaseHolder | null = null;
   for (const project of projects()) {
     const holder = lease.getHolder(project.id);
-    if (holder && (!latest || holder.acquiredAt > latest.acquiredAt)) latest = holder;
+    if (!holder || !DriveLeaseHolderSchema.safeParse(holder).success) continue;
+    if (!latest || holder.acquiredAt > latest.acquiredAt) latest = holder;
   }
   return latest;
 }
@@ -216,6 +244,7 @@ export function createHostSampleSources(now: () => number = Date.now): HostSampl
     agents: () => observeAgents({ readTerminals: getSharedTerminalSnapshot }),
     projects: () => projectsSample(openProjects()),
     driver: () => currentDriver(),
+    drivers: () => currentDrivers(),
     beginSample(): SampleReaders {
       // One project list per sample, failure included: a store that threw for
       // one reader is unknown to all three, and the next sample asks again.
@@ -239,6 +268,7 @@ export function createHostSampleSources(now: () => number = Date.now): HostSampl
           }),
         projects: async () => projectsSample(openProjects(inventory())),
         driver: () => currentDriver(inventory),
+        drivers: () => currentDrivers(inventory),
       };
     },
     async agentClis() {

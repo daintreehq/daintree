@@ -535,6 +535,9 @@ export interface GeneratedElectronAPI {
     getSnapshots(
       ...args: IpcInvokeMap["host-metrics:get-snapshots"]["args"]
     ): Promise<IpcInvokeMap["host-metrics:get-snapshots"]["result"]>;
+    linkActivity(
+      ...args: IpcInvokeMap["host-metrics:link-activity"]["args"]
+    ): Promise<IpcInvokeMap["host-metrics:link-activity"]["result"]>;
     listFleetTargets(
       ...args: IpcInvokeMap["host-metrics:list-fleet-targets"]["args"]
     ): Promise<IpcInvokeMap["host-metrics:list-fleet-targets"]["result"]>;

@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { DriveLeaseHolder } from "../../../../shared/types/remoteHosts.js";
 
 const workspace = vi.hoisted(() => ({
   client: null as null | { getAllStatesForProjectResultAsync: ReturnType<typeof vi.fn> },
@@ -30,7 +31,7 @@ vi.mock("../../../window/serviceRefs.js", () => ({
   getWorkspaceClientRef: () => workspace.client,
 }));
 const store = vi.hoisted(() => ({
-  projects: [] as Array<{ id: string; path: string; status: string }>,
+  projects: [] as Array<{ id: string; path: string; status: string; name?: string }>,
 }));
 const DEFAULT_PROJECTS = [
   { id: "p1", path: "/p1", status: "active" },
@@ -51,11 +52,33 @@ vi.mock("../../../services/AgentAvailabilityStore.js", () => ({
   getAgentAvailabilityStore: () => ({ isHelpTerminal: () => false }),
 }));
 const lease = vi.hoisted(() => ({
-  holders: null as null | Record<string, { acquiredAt: number }>,
+  holders: null as null | Record<string, DriveLeaseHolder>,
+  away: new Set<string>(),
 }));
+function holder(acquiredAt: number, clientId = `c${acquiredAt}`): DriveLeaseHolder {
+  return {
+    leaseId: acquiredAt,
+    endpointId: `s${acquiredAt}:e1`,
+    clientId,
+    clientName: "greg-mbp",
+    isHostLocal: false,
+    acquiredAt,
+  };
+}
 vi.mock("../../../services/DriveLeaseService.js", () => ({
   peekDriveLeaseService: () =>
-    lease.holders ? { getHolder: (id: string) => lease.holders?.[id] ?? null } : null,
+    lease.holders
+      ? {
+          getHolder: (id: string) => lease.holders?.[id] ?? null,
+          snapshotLeases: () =>
+            Object.entries(lease.holders ?? {}).map(([projectId, holder]) => ({
+              projectId,
+              holder,
+              state: lease.away.has(projectId) ? "away" : "live",
+              awayUntil: lease.away.has(projectId) ? 99 : null,
+            })),
+        }
+      : null,
 }));
 const computeProjectAgentCounts = vi.hoisted(() =>
   vi.fn(
@@ -85,6 +108,7 @@ beforeEach(() => {
   getAllProjects.mockReset();
   getAllProjects.mockImplementation(() => store.projects);
   lease.holders = null;
+  lease.away.clear();
   scratches.list = [];
   computeProjectAgentCounts.mockClear();
   workspace.client = null;
@@ -265,16 +289,42 @@ describe("one host-summary sample", () => {
   it("lists the projects once for its agents, projects and driver", async () => {
     store.projects = [...DEFAULT_PROJECTS, { id: "p3", path: "/p3", status: "closed" }];
     scratches.list = [{ id: "s1" }];
-    lease.holders = { p2: { acquiredAt: 5 }, p3: { acquiredAt: 9 } };
+    lease.holders = { p2: holder(5), p3: holder(9) };
     await expect(sampleOnce()).resolves.toEqual({
       agents: { working: 1, waiting: 0, idle: 0 },
       projects: { projectCount: 2, worktreeCount: null },
       // A closed project's lease still counts, as it did when each reader listed its own.
-      driver: { acquiredAt: 9 },
+      driver: holder(9),
     });
     expect(getAllProjects).toHaveBeenCalledTimes(1);
     // Every registered project and scratch, not only the open ones.
     expect(computeProjectAgentCounts.mock.calls[0]![0]).toEqual(["p1", "p2", "p3", "s1"]);
+  });
+
+  it("names every driven project it lists, newest control first, away holders included", async () => {
+    store.projects = [
+      { id: "p1", path: "/p1", status: "active", name: "daintree" },
+      { id: "p2", path: "/p2", status: "background", name: "site" },
+    ];
+    // A reservation for a project since removed isn't this host's to report.
+    lease.holders = { p1: holder(5), p2: holder(9), gone: holder(12) };
+    lease.away.add("p1");
+    const readers = createHostSampleSources().beginSample!();
+    expect(readers.drivers!()).toEqual([
+      { projectId: "p2", projectName: "site", holder: holder(9), state: "live", awayUntil: null },
+      { projectId: "p1", projectName: "daintree", holder: holder(5), state: "away", awayUntil: 99 },
+    ]);
+    expect(readers.driver()).toEqual(holder(9));
+    expect(getAllProjects).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes over a holder the link couldn't carry, rather than losing the whole summary", async () => {
+    const restored = holder(12, "c".repeat(256));
+    restored.endpointId = `restored:${restored.clientId}`;
+    lease.holders = { p1: holder(5), p2: restored };
+    const readers = createHostSampleSources().beginSample!();
+    expect(readers.driver()).toEqual(holder(5));
+    expect(readers.drivers!().map((driver) => driver.projectId)).toEqual(["p1"]);
   });
 
   it("lists them again next sample, so a change shows", async () => {
@@ -289,7 +339,7 @@ describe("one host-summary sample", () => {
   });
 
   it("is unknown everywhere the list was needed when the store fails, and asks once", async () => {
-    lease.holders = { p1: { acquiredAt: 1 } };
+    lease.holders = { p1: holder(1) };
     getAllProjects.mockImplementationOnce(() => {
       throw new Error("db locked");
     });

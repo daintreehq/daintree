@@ -1,5 +1,6 @@
-import type { HostId, HostMetricsSummary } from "@shared/types/remoteHosts";
+import type { HostDriverObservation, HostId, HostMetricsSummary } from "@shared/types/remoteHosts";
 import type { HostMenuRow } from "../hostModel";
+import { formatHostTime } from "../hostTime";
 import { formatBytes } from "@/lib/formatBytes";
 import { pluralize } from "@/lib/pluralize";
 
@@ -58,10 +59,91 @@ export function describeProjects(summary: HostMetricsSummary): string {
   return `${open} · ${worktrees}`;
 }
 
+interface DriverLaunch {
+  clientId: string;
+  name: string;
+  isHostLocal: boolean;
+  /** Away from every project it holds. */
+  away: boolean;
+  /** When it first took control of one of them. */
+  since: number;
+}
+
+/** One entry per launch: two windows of one launch drive as one, two launches of a machine as two. */
+function driverLaunches(drivers: readonly HostDriverObservation[]): DriverLaunch[] {
+  const byClient = new Map<string, DriverLaunch>();
+  for (const { holder, state } of drivers) {
+    const known = byClient.get(holder.clientId);
+    if (known) {
+      known.away = known.away && state === "away";
+      known.since = Math.min(known.since, holder.acquiredAt);
+      continue;
+    }
+    byClient.set(holder.clientId, {
+      clientId: holder.clientId,
+      name: holder.clientName,
+      isHostLocal: holder.isHostLocal,
+      away: state === "away",
+      since: holder.acquiredAt,
+    });
+  }
+  return [...byClient.values()];
+}
+
+function launchLabel(launch: DriverLaunch, all: readonly DriverLaunch[], now: number): string {
+  if (launch.isHostLocal) return launch.away ? "its own screen (away)" : "its own screen";
+  const notes: string[] = [];
+  if (launch.away) notes.push("away");
+  // Two launches of one machine share its name; when each took control tells them apart.
+  const namesake = (other: DriverLaunch) =>
+    other.clientId !== launch.clientId && !other.isHostLocal && other.name === launch.name;
+  if (all.some(namesake)) {
+    notes.push(`since ${formatHostTime(launch.since, now)}`);
+  }
+  return notes.length > 0 ? `${launch.name} (${notes.join(", ")})` : launch.name;
+}
+
+function joinNames(names: readonly string[]): string {
+  if (names.length <= 1) return names.join("");
+  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+}
+
+/**
+ * Who drives the host: every launch holding one of its projects, once, and
+ * whether it is away inside its reservation. A host from before `drivers`
+ * names only its newest holder.
+ */
 export function describeDriver(summary: HostMetricsSummary): string | null {
-  const driver = summary.driver;
-  if (!driver) return null;
-  return driver.isHostLocal ? "Driven from its own screen" : `Driven from ${driver.clientName}`;
+  const drivers = summary.drivers;
+  if (!drivers) {
+    const driver = summary.driver;
+    if (!driver) return null;
+    return driver.isHostLocal ? "Driven from its own screen" : `Driven from ${driver.clientName}`;
+  }
+  const launches = driverLaunches(drivers);
+  if (launches.length === 0) return null;
+  const labels = launches.map((launch) => launchLabel(launch, launches, summary.sampledAt));
+  return `Driven from ${joinNames(labels)}`;
+}
+
+/** Each driven project and who holds it, for the full wording behind {@link describeDriver}. */
+export function describeDriverDetail(summary: HostMetricsSummary): string | undefined {
+  const drivers = summary.drivers;
+  if (!drivers || drivers.length === 0) return undefined;
+  const launches = driverLaunches(drivers);
+  return drivers
+    .map(({ projectName, holder, state, awayUntil }) => {
+      const launch = launches.find((entry) => entry.clientId === holder.clientId)!;
+      const who = launchLabel({ ...launch, away: false }, launches, summary.sampledAt);
+      const away =
+        state !== "away"
+          ? ""
+          : awayUntil === null
+            ? ", away"
+            : `, away until ${formatHostTime(awayUntil, summary.sampledAt)}`;
+      return `${projectName ?? "Unknown project"}: ${who}${away}`;
+    })
+    .join("; ");
 }
 
 export function describeRtt(row: HostMenuRow): string | null {

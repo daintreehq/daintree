@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { IpcEnvelope } from "../../../shared/types/ipc/errors.js";
 import { MAX_TERMINAL_GRID_DIMENSION } from "../../../shared/types/terminal.js";
+import { MAX_HOST_SUMMARY_DRIVERS } from "../../../shared/types/remoteHosts.js";
 import { BULK_CHUNK_BYTES, Lane, type LinkFrame } from "./frames.js";
 import {
   BulkKind,
@@ -27,6 +28,8 @@ const shortText = z.string().max(4096);
 const channel = z.string().min(1).max(256);
 const args = z.array(z.unknown()).max(64);
 const epochMs = z.number().finite();
+/** A project name a host sends: longer ones are cut there, since a body over its bounds ends the session. */
+export const MAX_PROJECT_NAME_CHARS = 1024;
 
 export const HandshakeSchema = z.object({
   version: z.string().min(1).max(64),
@@ -75,7 +78,7 @@ const EndpointSchema = z.object({ endpointId: id, projectId: id.nullable() });
 const EndpointOpenSchema = EndpointSchema.extend({ openId: id.optional() });
 const EndpointCloseSchema = z.object({ endpointId: id });
 
-const DriveLeaseHolderSchema = z.object({
+export const DriveLeaseHolderSchema = z.object({
   leaseId: u32,
   tenureId: id.optional(),
   endpointId: id,
@@ -88,6 +91,15 @@ const DriveLeaseHolderSchema = z.object({
 const DriveLeaseStateSchema = z.object({
   projectId: id,
   holder: DriveLeaseHolderSchema.nullable(),
+});
+
+/** One project's lease as its host sees it; summaries and the activity read both carry these. */
+export const DriverObservationSchema = z.object({
+  projectId: id,
+  projectName: z.string().max(MAX_PROJECT_NAME_CHARS).nullable(),
+  holder: DriveLeaseHolderSchema,
+  state: z.enum(["live", "away"]),
+  awayUntil: epochMs.nullable(),
 });
 
 const nullableCount = z.number().finite().min(0).nullable();
@@ -109,6 +121,7 @@ const HostSummarySchema = z.object({
   projectCount: count.nullable(),
   worktreeCount: count.nullable(),
   driver: DriveLeaseHolderSchema.nullable(),
+  drivers: z.array(DriverObservationSchema).max(MAX_HOST_SUMMARY_DRIVERS).nullable().optional(),
   agentClis: z.array(z.object({ agentId: id, version: z.string().max(256).nullable() })).max(256),
   forges: z
     .array(

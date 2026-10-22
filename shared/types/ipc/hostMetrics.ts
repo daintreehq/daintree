@@ -1,5 +1,5 @@
 import type { AgentState } from "../agent.js";
-import type { HostId, HostMetricsSummary } from "../remoteHosts.js";
+import type { HostDriverObservation, HostId, HostMetricsSummary } from "../remoteHosts.js";
 import type { FleetBand } from "../../utils/fleetBands.js";
 
 export interface HostMetricsSnapshot {
@@ -109,3 +109,106 @@ export interface HostWorktreeRun extends HostWorktreeObservation {
   /** The agent's terminal on that host, which a switch there can focus. */
   terminalId: string;
 }
+
+/** Why a Shell that asked to resume its session got a fresh one instead. */
+export type HostLinkResumeRefusal = "session-unknown" | "secret-mismatch" | "client-mismatch";
+
+/** What a host told a Shell it turned away at the handshake. */
+export type HostLinkRefusalReason =
+  "unauthorized" | "version-mismatch" | "protocol" | "busy" | "shutting-down";
+
+/** Why a host ended a session for good: nothing can resume it after this. */
+export type HostLinkEndCause =
+  | "goodbye"
+  | "protocol-error"
+  | "grace-expired"
+  | "session-cap"
+  | "session-replaced"
+  | "host-shutdown";
+
+interface HostLinkEventBase {
+  /** By the host's clock. */
+  at: number;
+  /** The Shell's launch: a relaunch of the same machine has a new one. */
+  clientId: string;
+  clientName: string;
+}
+
+/**
+ * One thing a host's listener saw happen to a link, in its own terms: what
+ * was said or observed, never a guess at why.
+ */
+export type HostLinkEvent =
+  | (HostLinkEventBase & {
+      kind: "session-started";
+      sessionId: string;
+      /** The Shell asked to resume a session and got this one instead. */
+      previousNotResumed: HostLinkResumeRefusal | null;
+    })
+  | (HostLinkEventBase & {
+      kind: "session-resumed";
+      sessionId: string;
+      /** The old link hadn't been seen to drop yet; this one replaced it. */
+      overLiveLink: boolean;
+    })
+  | (HostLinkEventBase & {
+      kind: "link-dropped";
+      sessionId: string;
+      /** The link's own close reason, such as "socket closed" or "idle timeout". */
+      reason: string;
+      by: "local" | "remote" | "transport";
+    })
+  | (HostLinkEventBase & {
+      kind: "session-ended";
+      sessionId: string;
+      cause: HostLinkEndCause;
+      /** The close reason, when the link closing is what ended it. */
+      reason: string | null;
+    })
+  | (HostLinkEventBase & {
+      kind: "refused";
+      reason: HostLinkRefusalReason;
+      detail: string | null;
+      /** The same refusal to the same launch, retried with nothing admitted between. */
+      count: number;
+      lastAt: number;
+    });
+
+/** A Shell launch attached to a host right now, one per session. */
+export interface HostAttachedShell {
+  sessionId: string;
+  clientId: string;
+  clientName: string;
+  platform: "darwin" | "linux" | "win32";
+  /** When this session first connected, by the host's clock; a resume keeps it. */
+  connectedAt: number;
+  /** Projects this launch holds the lease for. */
+  drivingProjectIds: string[];
+}
+
+/** What a host reports about its links: recent events, who drives what, and who is attached. */
+export interface HostLinkActivity {
+  /** The host's clock when it answered. */
+  observedAt: number;
+  /** When this host's listener started taking connections; null when it isn't. */
+  listeningSince: number | null;
+  /** The build that listener runs. */
+  version: string;
+  commit: string;
+  /** Newest first. */
+  events: HostLinkEvent[];
+  /** Older events were let go to keep the list bounded. */
+  eventsTruncated: boolean;
+  drivers: HostDriverObservation[];
+  attached: HostAttachedShell[];
+}
+
+export type HostLinkActivityResult =
+  | {
+      supported: true;
+      activity: HostLinkActivity;
+      /** This Shell's own launch, so its rows can say so. */
+      self: { clientId: string; clientName: string } | null;
+    }
+  /** A host from before it could report this. */
+  | { supported: false };

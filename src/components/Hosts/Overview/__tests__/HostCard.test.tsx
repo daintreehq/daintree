@@ -43,6 +43,40 @@ describe("HostCard", () => {
     expect(screen.getAllByTestId("host-sparkline")).toHaveLength(2);
   });
 
+  it("names every launch driving the host, not only the newest", () => {
+    const holder = (clientId: string, clientName: string) => ({
+      leaseId: 1,
+      endpointId: `${clientId}:e`,
+      clientId,
+      clientName,
+      isHostLocal: false,
+      acquiredAt: 1,
+    });
+    const summary = makeSummary({
+      driver: holder("c2", "studio-02"),
+      drivers: [
+        {
+          projectId: "p2",
+          projectName: "site",
+          holder: holder("c2", "studio-02"),
+          state: "live",
+          awayUntil: null,
+        },
+        {
+          projectId: "p1",
+          projectName: "daintree",
+          holder: holder("c1", "greg-mbp"),
+          state: "away",
+          awayUntil: 5,
+        },
+      ],
+    });
+    render(<HostCard row={makeRow({ summary })} history={[summary]} onSwitch={() => {}} />);
+    expect(fact(screen.getByTestId("host-overview-card"), "Driving")).toBe(
+      "Driven from studio-02 and greg-mbp (away)"
+    );
+  });
+
   it("draws no trend until it has a few samples", () => {
     const summary = makeSummary();
     render(<HostCard row={makeRow({ summary })} history={[summary]} onSwitch={() => {}} />);

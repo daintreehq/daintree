@@ -183,6 +183,87 @@ describe("DriveLeaseService", () => {
     expect(changes.map((change) => change.holder?.clientId)).toEqual(["local"]);
   });
 
+  it("reports each lease live, or away with the deadline its grace set, and lets it pass on", async () => {
+    let now = 1_000;
+    const own = new DriveLeaseService({
+      registry,
+      releaseGraceMs: GRACE_MS,
+      now: () => now,
+      applyDriveLeases: () => {},
+    });
+    const laptop = remote("s1:e1", "c1");
+    const studio = remote("s2:e1", "c2", "q");
+    registry.add(laptop);
+    registry.add(studio);
+    await settle();
+    expect(own.snapshotLeases()).toEqual([
+      {
+        projectId: "p",
+        holder: expect.objectContaining({ clientId: "c1", endpointId: "s1:e1" }),
+        state: "live",
+        awayUntil: null,
+      },
+      {
+        projectId: "q",
+        holder: expect.objectContaining({ clientId: "c2", endpointId: "s2:e1" }),
+        state: "live",
+        awayUntil: null,
+      },
+    ]);
+
+    own.noteEndpointTransport([laptop.endpointId], false);
+    now = 1_500;
+    // Read again and again, the reservation still ends when the drop set it to.
+    for (let i = 0; i < 3; i++) {
+      expect(own.snapshotLeases()[0]).toMatchObject({
+        projectId: "p",
+        state: "away",
+        awayUntil: 1_000 + GRACE_MS,
+      });
+    }
+    vi.advanceTimersByTime(GRACE_MS);
+    expect(own.snapshotLeases().map((lease) => lease.projectId)).toEqual(["q"]);
+    own.dispose();
+  });
+
+  it("settles nothing when its leases are read, where a getter would (#13939)", async () => {
+    const own = new DriveLeaseService({
+      registry,
+      releaseGraceMs: GRACE_MS,
+      now: () => 1_000,
+      applyDriveLeases: () => {},
+    });
+    const ownChanges: DriveLeaseState[] = [];
+    own.onChange((state) => ownChanges.push(state));
+    const hostWindow = local(1);
+    const other = local(2);
+    registry.add(hostWindow);
+    registry.add(other);
+    registry.add(remote("s1:e1", "greg-mbp-id"));
+    await settle();
+    own.takeOver("p", hostWindow);
+    ownChanges.length = 0;
+    const timers = vi.getTimerCount();
+
+    // The holder moved off the project without the registry hearing of it.
+    hostWindow.projectId = "q";
+    expect(own.snapshotLeases()).toEqual([
+      {
+        projectId: "p",
+        holder: expect.objectContaining({ endpointId: "local:1" }),
+        state: "away",
+        awayUntil: null,
+      },
+    ]);
+    expect(ownChanges).toEqual([]);
+    expect(vi.getTimerCount()).toBe(timers);
+
+    // A getter settles it onto the holder's other window; the read above didn't.
+    expect(own.getHolder("p")?.endpointId).toBe("local:2");
+    expect(ownChanges).toHaveLength(1);
+    own.dispose();
+  });
+
   it("settles a lease nobody holds when views come back after it was released (#13285)", async () => {
     const a = remote("s1:e1", "c1");
     const b = remote("s2:e1", "c2");

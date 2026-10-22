@@ -9,8 +9,59 @@ import {
   messageToFrame,
 } from "../messages.js";
 import { parseInboundFrame } from "../schemas.js";
+import { MAX_HOST_SUMMARY_DRIVERS } from "../../../../shared/types/remoteHosts.js";
 
 describe("link messages", () => {
+  it("carries a summary's drivers, and one from a host that sends none, within its bound", () => {
+    const summary = (extra: object) =>
+      parseInboundFrame(
+        messageToFrame({
+          lane: Lane.CONTROL,
+          kind: ControlKind.HOST_SUMMARY,
+          body: {
+            hostId: "local",
+            sampledAt: 1,
+            platform: "linux",
+            cpuPercent: null,
+            memoryPressure: null,
+            memoryUsedBytes: null,
+            memoryTotalBytes: null,
+            swapUsedBytes: null,
+            swapTotalBytes: null,
+            thermal: null,
+            cpuPressure: null,
+            agentsObserved: null,
+            projectCount: null,
+            worktreeCount: null,
+            driver: null,
+            agentClis: [],
+            ...extra,
+          },
+        } as never)
+      ).body as { drivers?: unknown };
+    const holder = {
+      leaseId: 1,
+      endpointId: "s1:e1",
+      clientId: "c1",
+      clientName: "greg-mbp",
+      isHostLocal: false,
+      acquiredAt: 1,
+    };
+    const driver = {
+      projectId: "p1",
+      projectName: "daintree",
+      holder,
+      state: "away",
+      awayUntil: 9,
+    };
+    expect(summary({ drivers: [driver] }).drivers).toEqual([driver]);
+    expect(summary({})).not.toHaveProperty("drivers");
+    expect(summary({ drivers: null }).drivers).toBeNull();
+    expect(() =>
+      summary({ drivers: Array.from({ length: MAX_HOST_SUMMARY_DRIVERS + 1 }, () => driver) })
+    ).toThrow();
+  });
+
   it("round-trips a structured message through frame bytes", () => {
     const frame = messageToFrame({
       lane: Lane.RPC,

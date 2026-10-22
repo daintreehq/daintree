@@ -1,10 +1,11 @@
 import type {
   DriveLeaseHolder,
+  HostDriverObservation,
   HostForgeObservation,
   HostMetricsSummary,
   HostPlatform,
 } from "../../../shared/types/remoteHosts.js";
-import { LOCAL_HOST_ID } from "../../../shared/types/remoteHosts.js";
+import { LOCAL_HOST_ID, MAX_HOST_SUMMARY_DRIVERS } from "../../../shared/types/remoteHosts.js";
 import {
   cpuPercentBetween,
   parseCgroupMemory,
@@ -46,6 +47,8 @@ export interface HostSampleSources {
   agents(): Promise<ObservedAgents | null>;
   projects(): Promise<{ projectCount: number | null; worktreeCount: number | null }>;
   driver(): DriveLeaseHolder | null;
+  /** Every project someone drives, newest control first; absent where nothing reports it. */
+  drivers?(): HostDriverObservation[];
   agentClis(): Promise<Array<{ agentId: string; version: string | null }>>;
   /** This host's forge providers and their sign-in state; absent where nothing reports it. */
   forges?(): Promise<HostForgeObservation[]>;
@@ -58,7 +61,7 @@ export interface HostSampleSources {
   now(): number;
 }
 
-export type SampleReaders = Pick<HostSampleSources, "agents" | "projects" | "driver">;
+export type SampleReaders = Pick<HostSampleSources, "agents" | "projects" | "driver" | "drivers">;
 
 const LINUX_THERMAL_DIR = "/sys/class/thermal";
 
@@ -120,6 +123,13 @@ export class HostMetricsSampler {
     } catch {
       driver = null;
     }
+    // A failed read is unknown, never "nobody drives".
+    let drivers: HostDriverObservation[] | null | undefined;
+    try {
+      drivers = readers.drivers?.().slice(0, MAX_HOST_SUMMARY_DRIVERS);
+    } catch {
+      drivers = null;
+    }
 
     return {
       hostId: LOCAL_HOST_ID,
@@ -131,6 +141,7 @@ export class HostMetricsSampler {
       projectCount: projects.projectCount,
       worktreeCount: projects.worktreeCount,
       driver,
+      ...(drivers !== undefined ? { drivers } : {}),
       agentClis,
       ...(forges !== undefined ? { forges } : {}),
     };

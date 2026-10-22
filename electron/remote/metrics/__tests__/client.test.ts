@@ -125,6 +125,7 @@ function harness(hosts: HostDescriptor[]) {
             }
           : undefined,
       connectionState: (hostId) => states.get(hostId) ?? { status: "disconnected" },
+      localClient: { clientId: "launch-me", clientName: "greg-mbp" },
       onSessionOpened(listener) {
         sessionListeners.add(listener);
         return () => sessionListeners.delete(listener);
@@ -176,6 +177,85 @@ function harness(hosts: HostDescriptor[]) {
 }
 
 describe("HostMetricsClient", () => {
+  it("reads a host's link activity, names this launch, and shows its words as plain text", async () => {
+    const h = harness([descriptor("studio")]);
+    h.hook.call = async () => ({
+      observedAt: 10,
+      listeningSince: 1,
+      version: "0.46.0",
+      commit: "abc",
+      events: [
+        {
+          kind: "link-dropped",
+          at: 9,
+          clientId: "launch-me",
+          clientName: "greg\u202e-mbp",
+          sessionId: "s1",
+          reason: "socket\nclosed",
+          by: "transport",
+        },
+      ],
+      eventsTruncated: false,
+      drivers: [
+        {
+          projectId: "p1",
+          projectName: "dain\u200btree",
+          holder: {
+            leaseId: 1,
+            endpointId: "s1:e1",
+            clientId: "launch-me",
+            clientName: "greg-mbp",
+            isHostLocal: false,
+            acquiredAt: 2,
+          },
+          state: "away",
+          awayUntil: 25,
+        },
+      ],
+      attached: [],
+      unknownField: true,
+    });
+    const result = await h.client.linkActivity({ hostId: "studio" });
+    expect(h.calls).toEqual([
+      { hostId: "studio", method: MetricsLinkMethod.LINK_ACTIVITY, payload: null },
+    ]);
+    expect(result).toMatchObject({
+      supported: true,
+      self: { clientId: "launch-me", clientName: "greg-mbp" },
+      activity: {
+        events: [{ clientName: "greg-mbp", reason: "socket closed" }],
+        drivers: [{ projectName: "daintree", state: "away", awayUntil: 25 }],
+      },
+    });
+    expect(result.supported && result.activity).not.toHaveProperty("unknownField");
+  });
+
+  it("never asks this machine's own link activity over a link", async () => {
+    const h = harness([descriptor("studio")]);
+    await expect(h.client.linkActivity({ hostId: "local" })).rejects.toMatchObject({
+      code: "VALIDATION",
+    });
+    expect(h.calls).toEqual([]);
+  });
+
+  it("says a host from before link activity can't report it, and passes other failures on", async () => {
+    const h = harness([descriptor("old")]);
+    h.hook.call = async () => {
+      throw Object.assign(new Error("Unknown method"), { code: "UNSUPPORTED" });
+    };
+    await expect(h.client.linkActivity({ hostId: "old" })).resolves.toEqual({ supported: false });
+
+    h.hook.call = async () => ({ observedAt: "soon" });
+    await expect(h.client.linkActivity({ hostId: "old" })).rejects.toMatchObject({
+      code: "INTERNAL",
+    });
+
+    h.hook.down.add("old");
+    await expect(h.client.linkActivity({ hostId: "old" })).rejects.toMatchObject({
+      code: "HOST_DISCONNECTED",
+    });
+  });
+
   it("dials only hosts whose notifications are on, once each", () => {
     const h = harness([descriptor("studio-01", true), descriptor("studio-02")]);
     h.client.start();

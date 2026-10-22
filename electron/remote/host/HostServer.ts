@@ -14,6 +14,11 @@ import { assertSocketPathFits, type HostSocketLocation } from "./hostSocketPath.
 import { removeDiscoveryFile, tokensEqual, writeDiscoveryFile } from "./discoveryFile.js";
 import { processStartTime, withHostSocketLock } from "./hostSocketLock.js";
 import { LOCAL_CLIENT_ID, type RemoteSessionExpiryCause } from "../../ipc/endpoint.js";
+import type {
+  HostLinkEvent,
+  HostLinkRefusalReason,
+} from "../../../shared/types/ipc/hostMetrics.js";
+import { LinkHistory, historyText } from "./linkHistory.js";
 import { createLogger } from "../../utils/logger.js";
 
 const logger = createLogger("main:HostServer");
@@ -83,6 +88,8 @@ export interface HostServerOptions {
 interface Resumable {
   sessionId: string;
   clientId: string;
+  /** Kept so the session's end can still name its Shell. */
+  clientName: string;
   /** The Shell install its HELLO named, if it did. */
   deviceId?: string;
   parkedAt: number;
@@ -151,6 +158,8 @@ export class HostServer {
   private readonly detachedListeners = new Set<(info: HostSessionDetached) => void>();
   /** The last refusal logged per client id, until that client gets a session. */
   private readonly loggedRefusals = new Map<string, string>();
+  private readonly history = new LinkHistory();
+  private startedListeningAt: number | null = null;
   private readonly now: () => number;
 
   constructor(private readonly options: HostServerOptions) {
@@ -169,6 +178,16 @@ export class HostServer {
   /** Authenticated sessions currently attached. */
   get sessions(): HostSessionContext[] {
     return [...this.live.values()];
+  }
+
+  /** When this server last started taking connections; null while it isn't. */
+  get listeningSince(): number | null {
+    return this.startedListeningAt;
+  }
+
+  /** What this server saw happen to its links since it was made, newest first. */
+  linkHistory(): { events: HostLinkEvent[]; truncated: boolean } {
+    return this.history.list();
   }
 
   onSession(listener: (ctx: HostSessionContext) => void): () => void {
@@ -218,6 +237,7 @@ export class HostServer {
     this.starting = null;
     const server = this.server;
     this.server = null;
+    this.startedListeningAt = null;
     const previous = this.stopping;
     const stop = (async () => {
       await previous?.catch(() => {});
@@ -288,6 +308,7 @@ export class HostServer {
     // Published in the same tick as the last generation check, so a close()
     // from here on sees the listener it has to tear down.
     this.server = server;
+    this.startedListeningAt = this.now();
   }
 
   private async teardown(server: net.Server | null): Promise<void> {
@@ -401,7 +422,11 @@ export class HostServer {
    * Ids and names only: a HELLO also carries the token and the resume secret.
    * A Shell retrying into the same refusal (busy, a stale token) logs it once.
    */
-  private logRefused(hello: HelloMessage, reason: string, extra: { detail?: string } = {}): void {
+  private logRefused(
+    hello: HelloMessage,
+    reason: HostLinkRefusalReason,
+    extra: { detail?: string } = {}
+  ): void {
     const clientId = hello.client.clientId;
     const signature = `${reason}|${extra.detail ?? ""}`;
     const repeat = this.loggedRefusals.get(clientId) === signature;
@@ -421,6 +446,16 @@ export class HostServer {
     };
     if (repeat) logger.debug("Remote Shell refused at handshake", line);
     else logger.info("Remote Shell refused at handshake", line);
+    this.history.refused(
+      {
+        at: this.now(),
+        clientId,
+        clientName: hello.client.clientName,
+        reason,
+        detail: extra.detail === undefined ? null : historyText(extra.detail),
+      },
+      repeat
+    );
   }
 
   private onHello(session: LinkSession, hello: HelloMessage): void {
@@ -538,6 +573,12 @@ export class HostServer {
       // Let in best effort: a channel either build lacks fails on the other.
       ...(mismatch ? { buildMismatch: mismatch } : {}),
     };
+    const seen = { at: this.now(), sessionId: id, clientId, clientName: hello.client.clientName };
+    this.history.record(
+      resumed
+        ? { ...seen, kind: "session-resumed", overLiveLink: resumedFrom === "live-link" }
+        : { ...seen, kind: "session-started", previousNotResumed: refusal }
+    );
     if (resumedFrom === "live-link") {
       logger.info("Remote session resumed over a new link", { ...who, replacedLiveLink: true });
     } else if (resumedFrom) {
@@ -578,11 +619,14 @@ export class HostServer {
       if (oldest.done) return false;
       clearTimeout(oldest.value.timer);
       this.resumable.delete(oldest.value.sessionId);
-      this.expire({
-        sessionId: oldest.value.sessionId,
-        clientId: oldest.value.clientId,
-        cause: "session-cap",
-      });
+      this.expire(
+        {
+          sessionId: oldest.value.sessionId,
+          clientId: oldest.value.clientId,
+          cause: "session-cap",
+        },
+        oldest.value.clientName
+      );
     }
     return true;
   }
@@ -596,7 +640,7 @@ export class HostServer {
     this.live.delete(ctx.sessionId);
     if (this.closing) return;
     const { sessionId } = ctx;
-    const clientId = ctx.client.clientId;
+    const { clientId, clientName } = ctx.client;
     // It spoke after its WELCOME, so it holds the newest secret: the one before is spent.
     const secrets = this.resumeSecrets.get(sessionId);
     if (secrets && ctx.session.framesSinceOpen > 0) secrets.previous = null;
@@ -616,7 +660,10 @@ export class HostServer {
           ? "session-replaced"
           : null;
     if (deliberate) {
-      this.expire({ sessionId, clientId, cause: deliberate, reason: close.reason, by: close.by });
+      this.expire(
+        { sessionId, clientId, cause: deliberate, reason: close.reason, by: close.by },
+        clientName
+      );
       return;
     }
     const grace = this.options.resumeGraceMs ?? DEFAULT_RESUME_GRACE_MS;
@@ -627,17 +674,27 @@ export class HostServer {
       by: close.by,
       graceMs: grace,
     });
+    this.history.record({
+      kind: "link-dropped",
+      at: this.now(),
+      sessionId,
+      clientId,
+      clientName,
+      reason: historyText(close.reason),
+      by: close.by,
+    });
     // The timer closes over ids only, never ctx, so the dropped session can be collected.
     const timer = setTimeout(() => {
       if (this.resumable.get(sessionId)?.timer !== timer) return;
       this.resumable.delete(sessionId);
-      this.expire({ sessionId, clientId, cause: "grace-expired" });
+      this.expire({ sessionId, clientId, cause: "grace-expired" }, clientName);
     }, grace);
     timer.unref?.();
     const deviceId = ctx.client.deviceId;
     this.resumable.set(sessionId, {
       sessionId,
       clientId,
+      clientName,
       ...(deviceId ? { deviceId } : {}),
       parkedAt: this.now(),
       timer,
@@ -659,13 +716,25 @@ export class HostServer {
     }
     clearTimeout(parked.timer);
     this.resumable.delete(sessionId);
-    this.expire({ sessionId, clientId: parked.clientId, cause: "session-replaced" });
+    this.expire(
+      { sessionId, clientId: parked.clientId, cause: "session-replaced" },
+      parked.clientName
+    );
     return true;
   }
 
-  private expire(info: HostSessionExpired): void {
+  private expire(info: HostSessionExpired, clientName: string): void {
     this.resumeSecrets.delete(info.sessionId);
     logger.info("Remote session expired", { ...info });
+    this.history.record({
+      kind: "session-ended",
+      at: this.now(),
+      sessionId: info.sessionId,
+      clientId: info.clientId,
+      clientName,
+      cause: info.cause,
+      reason: info.reason === undefined ? null : historyText(info.reason),
+    });
     for (const listener of this.expiredListeners) {
       try {
         listener(info);

@@ -1470,6 +1470,7 @@ export const CHANNELS = {
   HOST_METRICS_LIST_FLEET_TARGETS: "host-metrics:list-fleet-targets",
   HOST_METRICS_SUBMIT_FLEET: "host-metrics:submit-fleet",
   HOST_METRICS_LIST_WORKTREES: "host-metrics:list-worktrees",
+  HOST_METRICS_LINK_ACTIVITY: "host-metrics:link-activity",
   HOST_METRICS_EVENT: "host-metrics:event",
 
   // Remote Hosts: canopyHost (shell).
