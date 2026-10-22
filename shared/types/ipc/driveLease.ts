@@ -43,8 +43,9 @@ export interface DriveLeaseReportNavigationPayload extends DriveLeaseProjectPayl
 /** A project's drive lease as one renderer sees it. */
 export interface DriveLeaseView extends DriveLeaseState {
   /**
-   * This renderer's client drives the project (or nobody does), so it may type
-   * and resize. Enforced per client: every window of the driving machine drives.
+   * This renderer drives the project (or nobody does), so it may type
+   * and resize. For a remote client only the holder endpoint drives; the exceptions
+   * are a Canopy viewer on the holder's client and the host's own windows.
    */
   drivingHere: boolean;
   /** This renderer is the holder itself: MCP dispatch and plugin prompts land here. */

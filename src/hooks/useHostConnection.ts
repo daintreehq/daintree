@@ -53,8 +53,9 @@ export function getViewHostId(): HostId | null {
 
 /**
  * Who drives this view's project from another machine, or null when this view
- * may type. The host answers per view: `drivingHere` is true for every window
- * of the holder's machine, so only a holder elsewhere locks input.
+ * may type. The host answers per view: `drivingHere` is true only for the holder
+ * endpoint (plus a Canopy viewer on its client and the host's own windows), so
+ * any other holder locks input.
  */
 export function drivenElsewhereBy(lease: DriveLeaseView | null): string | null {
   const holder = lease?.holder ?? null;
