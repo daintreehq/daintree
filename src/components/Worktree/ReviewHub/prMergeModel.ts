@@ -30,6 +30,8 @@ export type PrMergeControlModel =
 export const AUTO_MERGE_OFF_REASON =
   "Auto-merge is off for this repository (Settings › General › Allow auto-merge)";
 
+export const MERGE_SETTINGS_UNREAD_REASON = "Couldn't read this repository's merge methods";
+
 export const CANNOT_CANCEL_REASON =
   "GitHub doesn't let you cancel this merge — only its author and people with write access can";
 
@@ -80,6 +82,17 @@ export function derivePrMergeControl(
   if (!immediate && !metadata.autoMergeSupported) return { kind: "hidden" };
 
   const settings = metadata.mergeSettings;
+  // No silent default: without the repository's own list there is no method
+  // to preview, so a non-queue merge waits rather than guessing one.
+  if (!queue && (!settings || settings.allowedMethods.length === 0)) {
+    return {
+      kind: immediate ? "merge" : "arm",
+      queue,
+      methods: [],
+      defaultMethod: null,
+      disabledReason: MERGE_SETTINGS_UNREAD_REASON,
+    };
+  }
   const allowed = settings?.allowedMethods ?? [];
   const methods = queue || allowed.length < 2 ? [] : allowed;
   const defaultMethod = queue
@@ -93,6 +106,30 @@ export function derivePrMergeControl(
     !immediate && !queue && settings?.autoMergeAllowed === false ? AUTO_MERGE_OFF_REASON : null;
 
   return { kind: immediate ? "merge" : "arm", queue, methods, defaultMethod, disabledReason };
+}
+
+/**
+ * Why the confirm can't go ahead on this read, or `null`. A D2 confirm previews
+ * what lands; a preview missing any part of it — the repository, the head, the
+ * commits, the method — blocks the write rather than proceeding on less.
+ */
+export function confirmBlockReason(
+  pr: PR,
+  mode: PrMergeMode,
+  context: { repository: string | null; method: PRMergeMethod | null }
+): string | null {
+  if (pr.state !== "open" || pr.merged) return "This pull request is no longer open";
+  if (mode === "cancel") {
+    return pr.viewerCanDisableAutoMerge === false ? CANNOT_CANCEL_REASON : null;
+  }
+  if (pr.isDraft) return "This pull request is a draft";
+  if (pr.mergeStatus === "dirty") return "This pull request conflicts with its base branch";
+  if (!pr.headSha) return "GitHub didn't report the head commit";
+  if (!pr.commits) return "GitHub didn't list the commits this would merge";
+  if (!context.repository) return "The repository couldn't be identified";
+  if (pr.mergeQueueRequired !== true && context.method === null)
+    return MERGE_SETTINGS_UNREAD_REASON;
+  return null;
 }
 
 export function mergeActionLabel(mode: PrMergeMode, intent?: PRMergeIntent | null): string {

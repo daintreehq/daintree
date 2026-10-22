@@ -1892,7 +1892,8 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     /** Fetch a single normalized issue, or `null` when it doesn't exist. */
     getIssue(payload: { cwd: string; issueNumber: number }): Promise<Issue | null>;
     /** Fetch a single normalized PR, or `null` when it doesn't exist. */
-    getPR(payload: { cwd: string; prNumber: number }): Promise<PR | null>;
+    /** `fresh` reads past the provider's response cache, for a confirm about to act on it. */
+    getPR(payload: { cwd: string; prNumber: number; fresh?: boolean }): Promise<PR | null>;
     /**
      * Fetch the roll-up CI status for one PR, or `null` when the PR doesn't
      * exist. The provider's transport fields (`rawData`, `freshnessToken`,

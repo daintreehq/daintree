@@ -320,6 +320,11 @@ interface ListOptions {
 interface FetchOptions {
     /** Opaque freshness token from a prior response; advisory (see above). */
     ifNotChangedSince?: string;
+    /**
+     * Read past any provider-side response cache. Set when the caller is about to
+     * act on the answer — a confirm previewing what a write will touch.
+     */
+    fresh?: boolean;
 }
 /**
  * One page of results. `nextCursor` is `null` when there are no more pages.

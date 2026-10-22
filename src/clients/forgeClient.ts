@@ -154,8 +154,12 @@ export const forgeClient = {
     return window.electron.forge.getIssue({ cwd, issueNumber });
   },
 
-  getPR: (cwd: string, prNumber: number): Promise<PR | null> => {
-    return window.electron.forge.getPR({ cwd, prNumber });
+  getPR: (cwd: string, prNumber: number, options?: { fresh?: boolean }): Promise<PR | null> => {
+    return window.electron.forge.getPR({
+      cwd,
+      prNumber,
+      ...(options?.fresh ? { fresh: true } : {}),
+    });
   },
 
   getCIStatus: (cwd: string, prNumber: number): Promise<ForgeCIStatusSummary | null> => {

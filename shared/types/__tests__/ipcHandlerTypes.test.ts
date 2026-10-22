@@ -39,7 +39,7 @@ describe("hand-typed IPC handler contracts", () => {
 
     it("forge:get-pr — args + result", () => {
       expectTypeOf<InvokeArgs<"forge:get-pr">>().toEqualTypeOf<
-        [payload: { cwd: string; prNumber: number }]
+        [payload: { cwd: string; prNumber: number; fresh?: boolean }]
       >();
       expectTypeOf<InvokeResult<"forge:get-pr">>().toEqualTypeOf<PR | null>();
     });

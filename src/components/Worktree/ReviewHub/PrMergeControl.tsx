@@ -49,7 +49,8 @@ export function PrMergeControl({
     const requestId = (requestIdRef.current += 1);
     setState({ kind: "loading" });
     Promise.all([
-      forgeClient.getPR(worktreePath, prNumber),
+      // Fresh: the labels this row offers are decided by this read.
+      forgeClient.getPR(worktreePath, prNumber, { fresh: true }),
       forgeClient.getRepoMetadata(worktreePath),
     ]).then(
       ([pr, metadata]) => {

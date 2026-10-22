@@ -1173,7 +1173,7 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     result: Issue | null;
   };
   "forge:get-pr": {
-    args: [payload: { cwd: string; prNumber: number }];
+    args: [payload: { cwd: string; prNumber: number; fresh?: boolean }];
     result: PR | null;
   };
   "forge:get-repo-metadata": {

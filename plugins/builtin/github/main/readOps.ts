@@ -2,6 +2,7 @@ import type { GraphQlQueryResponseData } from "@octokit/graphql";
 import type {
   CheckRun,
   CIStatus,
+  FetchOptions,
   Issue,
   IssueComment,
   IssueTooltipData,
@@ -643,9 +644,16 @@ export async function getIssueImpl(repo: RepoRef, number: number): Promise<Issue
   });
 }
 
-export async function getPRImpl(repo: RepoRef, number: number): Promise<PR | null> {
+export async function getPRImpl(
+  repo: RepoRef,
+  number: number,
+  options?: FetchOptions
+): Promise<PR | null> {
+  const fresh = options?.fresh === true;
   const key = `${repo.owner}/${repo.repo}:${number}`;
-  return dedupe(getPRInflight, key, false, async () => {
+  // A fresh read never joins one already in flight: that one may predate a
+  // write the caller is about to preview against.
+  return dedupe(getPRInflight, key, fresh, async () => {
     const requestedAt = Date.now();
     const response = await runQuery(
       GET_PR_QUERY,
@@ -654,7 +662,8 @@ export async function getPRImpl(repo: RepoRef, number: number): Promise<PR | nul
         repo: repo.repo,
         number,
       },
-      "GET_PR_QUERY"
+      "GET_PR_QUERY",
+      fresh
     );
     const pr = (response?.repository as Record<string, unknown> | undefined)?.pullRequest as
       Record<string, unknown> | null | undefined;

@@ -1939,7 +1939,11 @@ class PullRequestService {
           if (mergeChanged === undefined) {
             const intentBefore = detectedPR.mergeIntent;
             const movedBefore = detectedPR.headMovedWhileArmed;
-            applyMergeObservation(detectedPR, detectedPR, pr.mergeIntent, pr.headSha);
+            // The probe's REST head is fresh where the GraphQL read may be up to
+            // a minute old, and once the probe's markers advance nothing re-reads
+            // — so a push the cached read missed would never be seen.
+            const head = changedSnapshotByNumber.get(prNumber)?.headSha ?? pr.headSha;
+            applyMergeObservation(detectedPR, detectedPR, pr.mergeIntent, head);
             mergeChanged =
               !mergeIntentEqual(intentBefore, detectedPR.mergeIntent) ||
               movedBefore !== detectedPR.headMovedWhileArmed;
@@ -2393,9 +2397,17 @@ class PullRequestService {
           providerId,
           stagnantPollCount: 0,
         };
-        const samePRPrior = worktreeIds
-          .map((worktreeId) => this.detectedPRs.get(worktreeId))
-          .find((prior) => prior?.number === internalPR.number && prior.providerId === providerId);
+        // Any entry for this PR carries the episode, not just this lookup's own
+        // worktrees: a sibling resolved earlier may already have seen the head
+        // move, and a worktree joining later must not reset that to a clean
+        // baseline. The strongest observation wins.
+        let samePRPrior: InternalLinkedPR | undefined;
+        for (const prior of this.detectedPRs.values()) {
+          if (prior.number !== internalPR.number || prior.providerId !== providerId) continue;
+          if (!samePRPrior || (prior.headMovedWhileArmed && !samePRPrior.headMovedWhileArmed)) {
+            samePRPrior = prior;
+          }
+        }
         applyMergeObservation(internalPR, samePRPrior, pr.mergeIntent, pr.headSha);
         // A refresh must not forget what the post-push guards rely on: which
         // head the PR is on, which it moved off, whether it has CI at all, and

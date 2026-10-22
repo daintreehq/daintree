@@ -4,6 +4,8 @@ import type { ForgeRepoMetadataPayload } from "@shared/types/ipc/forge";
 import {
   AUTO_MERGE_OFF_REASON,
   CANNOT_CANCEL_REASON,
+  MERGE_SETTINGS_UNREAD_REASON,
+  confirmBlockReason,
   derivePrMergeControl,
   effectiveMergeMode,
 } from "../prMergeModel";
@@ -120,5 +122,36 @@ describe("derivePrMergeControl", () => {
     expect(effectiveMergeMode(pr({ mergeStatus: "clean" }), "arm")).toBe("merge");
     expect(effectiveMergeMode(pr({ mergeStatus: "blocked" }), "merge")).toBe("arm");
     expect(effectiveMergeMode(pr({ mergeStatus: "clean" }), "cancel")).toBe("cancel");
+  });
+
+  it("never guesses a method when the repository's list wasn't read", () => {
+    expect(derivePrMergeControl(pr(), meta({ mergeSettings: undefined }))).toMatchObject({
+      kind: "arm",
+      defaultMethod: null,
+      disabledReason: MERGE_SETTINGS_UNREAD_REASON,
+    });
+    // A queue branch needs no method of ours.
+    expect(
+      derivePrMergeControl(pr({ mergeQueueRequired: true }), meta({ mergeSettings: undefined }))
+    ).toMatchObject({ kind: "arm", disabledReason: null });
+  });
+});
+
+describe("confirmBlockReason", () => {
+  const ok = { repository: "o/r", method: "squash" as const };
+
+  it("lets a complete preview through", () => {
+    expect(confirmBlockReason(pr({ commits: { totalCount: 0, items: [] } }), "arm", ok)).toBeNull();
+  });
+
+  it("re-checks eligibility against the confirm's own read", () => {
+    const withCommits = { commits: { totalCount: 0, items: [] } };
+    expect(confirmBlockReason(pr({ ...withCommits, isDraft: true }), "merge", ok)).toMatch(/draft/);
+    expect(confirmBlockReason(pr({ ...withCommits, state: "closed" }), "merge", ok)).toMatch(
+      /no longer open/
+    );
+    expect(confirmBlockReason(pr({ viewerCanDisableAutoMerge: false }), "cancel", ok)).toBe(
+      CANNOT_CANCEL_REASON
+    );
   });
 });

@@ -221,7 +221,9 @@ export function PrChecksPopover({
           type="button"
           data-testid="pr-checks-trigger"
           aria-label={triggerLabel}
-          {...{ [PR_CHECKS_OPEN_ATTR]: open ? "true" : undefined }}
+          // Also held while the merge confirm is up: the hub's Escape would
+          // otherwise close the whole hub out from under the dialog.
+          {...{ [PR_CHECKS_OPEN_ATTR]: open || mergeRequest !== null ? "true" : undefined }}
           className={cn(
             "group/pr-checks inline-flex items-center rounded-sm cursor-pointer",
             FOCUS_RING

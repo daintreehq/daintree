@@ -19,6 +19,7 @@ import { actionService } from "@/services/ActionService";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { describeMergeIntent, mergeMethodLabel } from "@shared/utils/prMergeIntent";
 import {
+  confirmBlockReason,
   effectiveMergeMode,
   mergeActionLabel,
   type PrMergeMode,
@@ -42,6 +43,7 @@ interface PrMergeConfirmDialogProps {
 }
 
 const SHORT_SHA = 7;
+const MODE_COOLDOWN_MS = 600;
 
 /** "owner/repo" from a forge PR URL; the PR's own record names no repository. */
 function repositoryFromUrl(url: string): string | null {
@@ -75,16 +77,16 @@ export function PrMergeConfirmDialog({
   const [preview, setPreview] = useState<PreviewState>({ kind: "loading" });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // Set when the forge declined to arm because the PR can merge now.
-  const [forcedMerge, setForcedMerge] = useState(false);
   const generationRef = useRef(0);
 
   const isOpen = request !== null;
 
+  // Always past the provider's cache: a minute-old read could preview a base
+  // the PR has since been retargeted off, and the head pin wouldn't catch it.
   const load = useCallback(() => {
     const generation = (generationRef.current += 1);
     setPreview({ kind: "loading" });
-    forgeClient.getPR(worktreePath, prNumber).then(
+    forgeClient.getPR(worktreePath, prNumber, { fresh: true }).then(
       (pr) => {
         if (generationRef.current !== generation) return;
         setPreview(pr ? { kind: "loaded", pr } : { kind: "missing" });
@@ -103,7 +105,6 @@ export function PrMergeConfirmDialog({
     if (!isOpen) return;
     setBusy(false);
     setError(null);
-    setForcedMerge(false);
     load();
     return () => void (generationRef.current += 1);
   }, [isOpen, load]);
@@ -111,20 +112,18 @@ export function PrMergeConfirmDialog({
   if (!request) return null;
 
   const pr = preview.kind === "loaded" ? preview.pr : null;
-  const mode: PrMergeMode = forcedMerge
-    ? "merge"
-    : pr
-      ? effectiveMergeMode(pr, request.mode)
-      : request.mode;
+  // Decided by the latest read alone. An arm GitHub declined as already
+  // mergeable reloads, and the read then says so — no override that could
+  // outlive the state it described.
+  const mode: PrMergeMode = pr ? effectiveMergeMode(pr, request.mode) : request.mode;
   const changedMode = mode !== request.mode;
   const queue = pr?.mergeQueueRequired === true;
   const method = queue ? null : request.method;
   const headSha = pr?.headSha ?? null;
-  const prOpen = pr !== null && pr.state === "open" && !pr.merged;
-  const needsHead = mode !== "cancel";
-  const confirmDisabled = busy || !pr || !prOpen || (needsHead && !headSha);
   const repository = pr ? repositoryFromUrl(pr.url) : null;
   const commits = pr?.commits;
+  const blockReason = pr ? confirmBlockReason(pr, mode, { repository, method }) : null;
+  const confirmDisabled = busy || !pr || blockReason !== null;
 
   const handleConfirm = async () => {
     if (confirmDisabled || !pr) return;
@@ -157,8 +156,7 @@ export function PrMergeConfirmDialog({
         ? result.result.outcome
         : undefined;
     if (outcome === "already-mergeable") {
-      // Ask again as a merge, against a fresh read of what would land.
-      setForcedMerge(true);
+      // Ask again, against a fresh read of what would land now.
       load();
       return;
     }
@@ -180,11 +178,7 @@ export function PrMergeConfirmDialog({
   const variantProps =
     mode === "cancel" ? ({ variant: "default" } as const) : ({ variant: "destructive" } as const);
 
-  const methodText = queue
-    ? "Set by the merge queue"
-    : method
-      ? mergeMethodLabel(method)
-      : "Repository default";
+  const methodText = queue ? "Set by the merge queue" : method ? mergeMethodLabel(method) : "—";
 
   return (
     <ConfirmDialog
@@ -199,16 +193,13 @@ export function PrMergeConfirmDialog({
       isBusy={busy}
       isConfirmLoading={busy}
       confirmDisabled={confirmDisabled}
+      // A mode that changes under the user — arm turned into Merge — earns a
+      // fresh read-time gate, so a double-click aimed at the first can't land
+      // on the second.
+      confirmCooldownMs={MODE_COOLDOWN_MS}
+      cooldownKey={mode}
       restoreFocusTo={restoreFocusTo}
-      hint={
-        preview.kind === "loading"
-          ? "Reading the pull request…"
-          : pr && !prOpen
-            ? "This pull request is no longer open"
-            : pr && needsHead && !headSha
-              ? "GitHub didn't report the head commit"
-              : null
-      }
+      hint={preview.kind === "loading" ? "Reading the pull request…" : blockReason}
     >
       <div className="space-y-3 text-xs text-text-primary">
         {mode === "arm" && (

@@ -3387,7 +3387,7 @@ function buildElectronApi(): ElectronAPI {
         _unwrappingInvoke(CHANNELS.FORGE_LIST_PRS, payload),
       getIssue: (payload: { cwd: string; issueNumber: number }) =>
         _unwrappingInvoke(CHANNELS.FORGE_GET_ISSUE, payload),
-      getPR: (payload: { cwd: string; prNumber: number }) =>
+      getPR: (payload: { cwd: string; prNumber: number; fresh?: boolean }) =>
         _unwrappingInvoke(CHANNELS.FORGE_GET_PR, payload),
       getCIStatus: (payload: { cwd: string; prNumber: number }) =>
         _unwrappingInvoke(CHANNELS.FORGE_GET_CI_STATUS, payload),

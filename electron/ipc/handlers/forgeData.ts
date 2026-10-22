@@ -388,28 +388,35 @@ export function registerForgeDataHandlers(): () => void {
   );
 
   cleanups.push(
-    typedHandle(CHANNELS.FORGE_GET_PR, async (payload: { cwd: string; prNumber: number }) => {
-      checkRateLimit(CHANNELS.FORGE_GET_PR, 25, 10_000);
-      if (!payload || typeof payload !== "object") {
-        throw new Error("Invalid payload");
+    typedHandle(
+      CHANNELS.FORGE_GET_PR,
+      async (payload: { cwd: string; prNumber: number; fresh?: boolean }) => {
+        checkRateLimit(CHANNELS.FORGE_GET_PR, 25, 10_000);
+        if (!payload || typeof payload !== "object") {
+          throw new Error("Invalid payload");
+        }
+        const cwd = requireCwd(payload.cwd);
+        const prNumber = requirePositiveInt(payload.prNumber, "PR number");
+        const fresh = payload.fresh === true;
+        return coalesce(`${cwd}::getPR::${prNumber}${fresh ? "::fresh" : ""}`, async () => {
+          const { impl, repoRef, namespaceId } = await resolveForCwd(cwd);
+          return auditForgeCall(
+            {
+              providerId: namespaceId,
+              methodName: "getPR",
+              repoOwner: repoRef.owner,
+              repoName: repoRef.repo,
+              argsSummary: summarizeForgeArgs("getPR", prNumber),
+            },
+            () =>
+              fresh
+                ? impl.getPR(repoRef, prNumber, { fresh: true })
+                : impl.getPR(repoRef, prNumber),
+            (value) => (value === null ? "not-found" : "success")
+          );
+        });
       }
-      const cwd = requireCwd(payload.cwd);
-      const prNumber = requirePositiveInt(payload.prNumber, "PR number");
-      return coalesce(`${cwd}::getPR::${prNumber}`, async () => {
-        const { impl, repoRef, namespaceId } = await resolveForCwd(cwd);
-        return auditForgeCall(
-          {
-            providerId: namespaceId,
-            methodName: "getPR",
-            repoOwner: repoRef.owner,
-            repoName: repoRef.repo,
-            argsSummary: summarizeForgeArgs("getPR", prNumber),
-          },
-          () => impl.getPR(repoRef, prNumber),
-          (value) => (value === null ? "not-found" : "success")
-        );
-      });
-    })
+    )
   );
 
   cleanups.push(
