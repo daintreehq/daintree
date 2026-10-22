@@ -158,10 +158,6 @@ describe("the Element Picker host boundary", () => {
     expect(reachable).toContain(`${RESOLVERS_DIR}react.ts`);
     expect(reachable.some(isJsParser)).toBe(true);
     expect(eager.filter(isJsParser)).toEqual([]);
-    // So are the Preact resolver and the JavaScript parser it checks a position with.
-    expect(reachable).toContain(`${RESOLVERS_DIR}preact.ts`);
-    expect(reachable.some(isJsxParser)).toBe(true);
-    expect(eager.filter(isJsxParser)).toEqual([]);
     // Bytes come from main; nothing the host runs can open a file or a socket itself.
     expect(authorityImports(metafile)).toEqual([]);
     // Project adapters walk directories, which is main's authority, never the host's.
@@ -203,6 +199,19 @@ describe("the Element Picker host boundary", () => {
     const metafile = await metafileOf(entry, NATIVE_EXTERNAL);
     const reachable = Object.keys(metafile.inputs);
     expect(reachable).toContain(`${RESOLVERS_DIR}astroSource.ts`);
+    expect(scanForbiddenModules(reachable)).toEqual([]);
+    expect(authorityImports(metafile)).toEqual([]);
+    expect(
+      reachable.filter((file) => file.startsWith("electron/") && !file.startsWith(HOST_DIR))
+    ).toEqual([]);
+  }, 60_000);
+
+  it("holds Preact's resolver, which the registry does not list yet either, to the same rule", async () => {
+    // Its parser comes with it, to load when the registry first asks for it once #13888 lists it.
+    const entry = `${RESOLVERS_DIR}preact.ts`;
+    const metafile = await metafileOf(entry, NATIVE_EXTERNAL);
+    const reachable = Object.keys(metafile.inputs);
+    expect(reachable.some(isJsxParser)).toBe(true);
     expect(scanForbiddenModules(reachable)).toEqual([]);
     expect(authorityImports(metafile)).toEqual([]);
     expect(

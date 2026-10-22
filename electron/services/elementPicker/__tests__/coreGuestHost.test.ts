@@ -183,15 +183,17 @@ class FakeWebContents extends EventEmitter {
 let shipped: Record<string, string> = {};
 /** The same, with the contributing fixture standing in for React's extractor. */
 let assets: Record<string, string> = {};
-/** Built as the app would build it, but kept out of the shipped catalog until #13888 lists it. */
+/** Built as the app would build them, but kept out of the shipped catalog until #13888 lists them. */
 let astroAsset = "";
 /** Likewise Angular's, which #13888 lists too. */
 let angularAsset = "";
+let preactAsset = "";
 
 beforeAll(() => {
   const {
     "extractor:astro": astro,
     "extractor:angular": angular,
+    "extractor:preact": preact,
     ...built
   } = buildCoreGuestAssets([
     {
@@ -203,10 +205,12 @@ beforeAll(() => {
       id: "extractor:angular",
       entry: "electron/services/elementPicker/guest/extractors/angular.ts",
     },
+    { id: "extractor:preact", entry: "electron/services/elementPicker/guest/extractors/preact.ts" },
   ]);
   shipped = built;
   astroAsset = astro ?? "";
   angularAsset = angular ?? "";
+  preactAsset = preact ?? "";
   assets = { ...shipped, "extractor:react": shipped["fixture:react"]! };
 }, 60_000);
 
@@ -1091,7 +1095,7 @@ describe("DOM-level picking on a page with no component information", () => {
   });
 });
 
-describe("the shipped Preact extractor", () => {
+describe("the Preact extractor as the app builds it", () => {
   it("is installed on a page Preact rendered, and describes a selection in terms the host admits", async () => {
     document.body.innerHTML = '<div id="root"></div>';
     const root = document.getElementById("root")!;
@@ -1100,7 +1104,7 @@ describe("the shipped Preact extractor", () => {
     const Label = () => preactElement("button", { id: "cta" }, "Go");
     renderPreact(preactElement(Card, null, preactElement(Label, null)), root);
     try {
-      const h = makeHarness({ catalog: shipped });
+      const h = makeHarness({ catalog: { ...shipped, "extractor:preact": preactAsset } });
       const state = await h.bind();
       await settle();
       // Found by the render container's own `__k`; no node Preact drew carries one.
@@ -1143,6 +1147,6 @@ describe("the shipped Preact extractor", () => {
 
   it("carries none of the shared schemas into the page", () => {
     // That it bundles nothing of Preact's is core-picker-assets.test.mjs's to prove, from the bundler's graph.
-    expect(shipped["extractor:preact"]).not.toMatch(/ZodError|\$ZodType/);
+    expect(preactAsset).not.toMatch(/ZodError|\$ZodType/);
   });
 });

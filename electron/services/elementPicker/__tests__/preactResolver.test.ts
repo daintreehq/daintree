@@ -2,8 +2,6 @@ import { transformWithOxc } from "vite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { SelectionObservation } from "../../../../shared/elementPicker/observation.js";
 import { FIXTURE_SOURCE } from "../guest/__tests__/preactFixture.js";
-import { RESOLVER_LOADERS } from "../worker/resolverRegistry.js";
-import { preactResolver } from "../worker/resolvers/preact.js";
 import {
   at,
   component,
@@ -399,10 +397,5 @@ describe("the Preact resolver", () => {
     expect(
       results.map((result) => (result.state === "unavailable" ? result.reason : result.state))
     ).toEqual(["cancelled", "cancelled"]);
-  });
-
-  it("is the resolver the host loads for a Preact candidate", async () => {
-    await expect(RESOLVER_LOADERS.preact?.()).resolves.toBe(preactResolver);
-    expect(preactResolver.framework).toBe("preact");
   });
 });

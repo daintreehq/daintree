@@ -11,8 +11,10 @@ import { dialectOf, namesElement, tagAt } from "./preact/jsx.js";
 
 /**
  * The Preact resolver: the jsx-source positions a Preact page reported,
- * checked against the file each names. This module and the JavaScript parser
- * it checks with load only when a request carries a Preact candidate.
+ * checked against the file each names. Not in `RESOLVER_LOADERS` yet: #13888
+ * lists it with the other wave-three frameworks, and from then this module and
+ * the JavaScript parser it checks with load only when a request carries a
+ * Preact candidate.
  *
  * What it reads in a request, as the Preact extractor reports it:
  *
