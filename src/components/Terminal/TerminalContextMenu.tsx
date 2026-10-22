@@ -645,9 +645,19 @@ function TerminalContextMenuBody({
     });
   }, [terminalId]);
 
+  const panelKind = terminal?.kind;
+  const panelWorktreeId = terminal?.worktreeId;
   const pluginMenuContext = useMemo<WhenClauseContext>(
-    () => ({ panelId: terminalId, panelKind: terminal?.kind }),
-    [terminalId, terminal?.kind]
+    () => ({ panelId: terminalId, panelKind, worktreeId: panelWorktreeId }),
+    [terminalId, panelKind, panelWorktreeId]
+  );
+  const pluginDispatchArgs = useMemo(
+    () => ({
+      panelId: terminalId,
+      panelKind,
+      ...(panelWorktreeId && { worktreeId: panelWorktreeId }),
+    }),
+    [terminalId, panelKind, panelWorktreeId]
   );
   const pluginItems = usePluginContextMenuItems("terminal", pluginMenuContext);
 
@@ -2035,7 +2045,7 @@ function TerminalContextMenuBody({
             <OctagonX className={ICON_CLASS} aria-hidden="true" />
             Kill terminal
           </ContextMenuItem>
-          <PluginContextMenuSection items={pluginItems} />
+          <PluginContextMenuSection items={pluginItems} dispatchArgs={pluginDispatchArgs} />
         </ContextMenuContent>
         {movePicker}
       </ContextMenu>

@@ -86,6 +86,18 @@ describe("PluginContextMenuSection", () => {
     expect(dispatchMock.mock.calls[0]![1]).not.toBeUndefined();
   });
 
+  it.each([
+    ["worktree", { worktreeId: "wt-1" }],
+    ["terminal", { panelId: "p-1", panelKind: "terminal", worktreeId: "wt-1" }],
+    ["browser", { panelId: "p-2", panelKind: "dev-preview", url: "http://localhost:3000/" }],
+  ])("hands a %s item its clicked subject", (_location, args) => {
+    render(
+      <PluginContextMenuSection items={[entry("acme", "Go", "acme.go")]} dispatchArgs={args} />
+    );
+    fireEvent.click(screen.getByText("Go"));
+    expect(dispatchMock).toHaveBeenCalledWith("acme.go", args, { source: "user" });
+  });
+
   it("renders through injected components so a dropdown surface gets the same section", () => {
     const DropdownItem = ({
       children,
