@@ -49,7 +49,7 @@ describe("sidebarViewStore", () => {
       })
     );
     window.__DAINTREE_HOST_ID__ = { id: "studio" };
-    const { useSidebarViewStore, WORKTREES_SIDEBAR_VIEW_ID } = await loadStore();
+    const { useSidebarViewStore } = await loadStore();
     expect(useSidebarViewStore.getState().chosenSidebarView).toBeNull();
     useSidebarViewStore.getState().chooseSidebarView("acme.remote.view");
     const local: unknown = JSON.parse(localStorage.getItem(KEY) ?? "null");
@@ -98,12 +98,14 @@ describe("sidebarViewStore", () => {
     useSidebarViewStore.getState().answerDefaultView("project:acme.beads.docs", "worktrees");
     expect(useSidebarViewStore.getState().chosenSidebarView).toBe("worktrees");
 
-    const stored = JSON.parse(localStorage.getItem(KEY) ?? "null") as {
-      state: { defaultAnswers: unknown };
-    };
-    expect(stored.state.defaultAnswers).toEqual({
-      "project:acme.beads.board": "keep",
-      "project:acme.beads.docs": "worktrees",
+    const stored: unknown = JSON.parse(localStorage.getItem(KEY) ?? "null");
+    expect(stored).toMatchObject({
+      state: {
+        defaultAnswers: {
+          "project:acme.beads.board": "keep",
+          "project:acme.beads.docs": "worktrees",
+        },
+      },
     });
   });
 

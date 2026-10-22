@@ -1,6 +1,7 @@
 import { SettingsSection } from "@/components/Settings/SettingsSection";
 import { SettingsGroup, SettingsRow } from "@/components/Settings/SettingsGroup";
 import { useSidebarViewOptions } from "@/hooks/useSidebarViews";
+import { useWorkspaceRoot } from "@/hooks/useWorkspaceRoot";
 import { isProjectSidebarView, resolveActiveSidebarView } from "@/lib/sidebarViews";
 import { useSidebarViewStore } from "@/store/sidebarViewStore";
 
@@ -15,12 +16,15 @@ export function SidebarDefaultViewSection() {
   const answered = useSidebarViewStore((s) => Object.keys(s.defaultAnswers).length > 0);
   const resetDefaultView = useSidebarViewStore((s) => s.resetDefaultView);
 
+  const workspace = useWorkspaceRoot();
+  const builtInTitle = workspace !== null && !workspace.isGitBacked ? "Workspace" : "Worktrees";
+
   const modified = chosen !== null || answered;
   if (options.length <= 1 && !modified) return null;
 
   const active = resolveActiveSidebarView(options, chosen);
   const pickIsOffered = chosen !== null && options.some((option) => option.id === chosen);
-  const title = active.view?.title ?? "Worktrees";
+  const title = active.view?.title ?? builtInTitle;
   const origin =
     active.view === null
       ? ""
