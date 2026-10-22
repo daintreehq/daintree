@@ -28,4 +28,4 @@ Expect batches to be heavy-weighted: on 2026-10-22, 36 of a ready frontier came 
 
 ## Launching
 
-Pass the unit's model as `"model"` on every launch (`sonnet`, `opus`: the aliases `agent.listModels` lists), and keep it in the unit. On one machine, the same split chooses each launch's model. Check the banner on the first launch of each model per batch (`workers.md`, Calling a worker).
+Pass the unit's model as `"model"` on every launch (`sonnet`, `opus`: the aliases `agent.listModels` lists), and keep it in the unit. On one machine, ask for the same split anyway, as two instances with the hand-back of `workers.md`'s pick: instance 1 is the Sonnet side and instance 2 the Opus side, with the user's caps for each, else the batch size split evenly. The instance an issue comes back in is its model; never size issues yourself. Check the banner on the first launch of each model per batch (`workers.md`, Calling a worker).
