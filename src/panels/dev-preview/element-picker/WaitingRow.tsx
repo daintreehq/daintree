@@ -1,4 +1,4 @@
-import { Spinner } from "@daintreehq/plugin-ui";
+import { Spinner } from "@/components/ui/Spinner";
 import { useDeferredLoading, useDohertyGate } from "@/hooks/useDeferredLoading";
 import { UI_STILL_WORKING_MS } from "@/lib/animationUtils";
 

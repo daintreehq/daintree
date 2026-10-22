@@ -1,8 +1,8 @@
 import { ChevronRight } from "lucide-react";
-import type { AncestryEntry, SelectedNode } from "../shared/model.js";
+import type { AncestryEntry, SelectedNode } from "./legacyBridge.js";
 import type { ReactElement } from "react";
 import { cn } from "@/lib/utils";
-import { Tooltip } from "@daintreehq/plugin-ui";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 /**
  * One definition of "where this element sits", shared by the strip and the
@@ -225,8 +225,11 @@ export function SelectionTrail({
 function CrumbFile({ file, children }: { file: string | null; children: ReactElement }) {
   if (!file) return children;
   return (
-    <Tooltip content={file} side="bottom" align="start">
-      {children}
+    <Tooltip>
+      <TooltipTrigger asChild>{children}</TooltipTrigger>
+      <TooltipContent side="bottom" align="start">
+        {file}
+      </TooltipContent>
     </Tooltip>
   );
 }

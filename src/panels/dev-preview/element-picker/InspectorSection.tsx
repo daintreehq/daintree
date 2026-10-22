@@ -1,5 +1,6 @@
 import { type ComponentType, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
+import { SECTION_LABEL_CLASS } from "@/components/ui/sectionLabel";
 
 /**
  * The drawer's one section grammar.
@@ -39,7 +40,7 @@ export function InspectorSection({
  *
  * There is no collapsible variant. The drawer had one, and it was how the panel
  * came to let the user fold away the only thing it does — see the composer's
- * own note in `SiteBuilderSurfaces`. What is left in here is either a
+ * own note in `ElementPickerSurfaces`. What is left in here is either a
  * project-level report ("Site source") the user reads and acts on, or nothing.
  */
 export function SectionHeader({
@@ -53,7 +54,7 @@ export function SectionHeader({
 }) {
   return (
     <div className="flex h-7 shrink-0 items-center justify-between gap-2">
-      <h3 className="flex min-w-0 items-center gap-1 text-2xs font-medium uppercase tracking-wide text-text-secondary">
+      <h3 className={cn("flex min-w-0 items-center gap-1", SECTION_LABEL_CLASS)}>
         {Icon ? <Icon className="h-3 w-3 shrink-0" aria-hidden="true" /> : null}
         <span className="truncate">{title}</span>
       </h3>
@@ -101,7 +102,7 @@ export function PropertyRow({
         // took 72 of the 255px a control has to live in, which is what pushed
         // the scope segments into an `overflow-hidden` wrapper and took a scope
         // out of reach. Narrow, the label sits above its control, 2px off it as
-        // the kit's property row does, and the control gets the whole width.
+        // a property row does, and the control gets the whole width.
         //
         // Wide, the column is sized against that floor. One pixel past the
         // switch the control has 316px less the column and its gap, and under

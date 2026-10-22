@@ -8,7 +8,7 @@ import {
 } from "@/services/agentRequests";
 import { useDevPreviewToolStore } from "@/store/devPreviewToolStore";
 import { usePanelStore } from "@/store/panelStore";
-import { BUILDER_TOOL_ID } from "../shared/protocol.js";
+import { LEGACY_TOOL_ID } from "./legacyBridge.js";
 import {
   putComposerDelivery,
   readComposerMemory,
@@ -42,7 +42,7 @@ export function removeAgentRequest(memoryKey: string, id: string): void {
 const launchedSessions = new Map<string, { terminalId: string; at: number }>();
 
 /**
- * End every request still waiting for this preview's agent: the builder was
+ * End every request still waiting for this preview's agent: the picker was
  * switched off, the preview removed or moved, or the plugin disabled. A session
  * that becomes ready afterwards must not receive a request nobody is watching.
  * Every worktree the preview has been in, hence the prefix — the owner key is
@@ -55,12 +55,12 @@ export function cancelAgentRequests(previewPanelId: string): void {
   }
 }
 
-/** The request belongs to this preview, in this worktree, with the builder on. */
+/** The request belongs to this preview, in this worktree, with the picker on. */
 function stillOwned(previewPanelId: string, worktreeId: string | null): boolean {
   const panel = usePanelStore.getState().panelsById[previewPanelId];
   if (!panel || panel.location === "trash") return false;
   if ((panel.worktreeId ?? null) !== worktreeId) return false;
-  return useDevPreviewToolStore.getState().activeByPanel[previewPanelId] === BUILDER_TOOL_ID;
+  return useDevPreviewToolStore.getState().activeByPanel[previewPanelId] === LEGACY_TOOL_ID;
 }
 
 function sameDelivery(a: ComposerDelivery | undefined, b: AgentRequestDelivery): boolean {
@@ -74,16 +74,16 @@ function sameDelivery(a: ComposerDelivery | undefined, b: AgentRequestDelivery):
 }
 
 function destinationKey(destination: AgentRequestDestination): string {
-  return destination.kind === "terminal"
-    ? `terminal:${destination.terminalId}`
-    : `launch:${destination.agentId}`;
+  return destination.kind === "launch"
+    ? `launch:${destination.agentId}`
+    : `terminal:${destination.terminalId}`;
 }
 
 /**
  * Hand one request to the host's delivery service and keep the preview's
  * composer memory in step with it. Everything generic — the launch, readiness,
  * ownership, submission and receipt — is the host's; what stays here is the
- * builder's own state: which destination the composer points at, and the draft
+ * picker's own state: which destination the composer points at, and the draft
  * it may now clear.
  */
 export function deliverAgentRequest({

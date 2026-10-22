@@ -1,7 +1,5 @@
 import type { AgentState } from "@shared/types/agent";
-import type { SiteSelection } from "../shared/model.js";
-import type { RouteNode } from "../shared/protocol.js";
-import { untestedVersionNotes } from "../shared/project/versions.js";
+import { untestedVersionNotes, type RouteNode, type SiteSelection } from "./legacyBridge.js";
 import { untestedToolchainPromptLine } from "./copy.js";
 import {
   isPageSelection,
@@ -361,14 +359,14 @@ export function buildAgentTaskPrompt(context: AgentTaskContext): string {
   const lines: string[] = [];
 
   lines.push(context.instruction.trim());
-  // A Markdown rule between what the user wrote and what the builder added, so
+  // A Markdown rule between what the user wrote and what the picker added, so
   // an agent reading the prompt can tell the request from its context at a
   // glance instead of inferring the boundary from a blank line.
   lines.push("");
   lines.push("---");
   lines.push("");
   lines.push(
-    "Context from Daintree's SvelteKit Tools — file references only; read the files for the code:"
+    "Context from Daintree's element picker — file references only; read the files for the code:"
   );
   // The quotes are the boundary: everything the page said about itself is a
   // JSON string, everything resolved from the worktree is bare. Said once, in

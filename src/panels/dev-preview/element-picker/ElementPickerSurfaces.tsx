@@ -20,23 +20,17 @@ import {
   Unplug,
 } from "lucide-react";
 import type { DevPreviewToolSurfaceProps } from "@/registry/devPreviewToolRegistry";
-import type { SelectedNode } from "../shared/model.js";
-import {
-  Badge,
-  Button,
-  DismissButton,
-  IconButton,
-  Kbd,
-  KbdChord,
-  ScrollShadow,
-  SegmentedControl,
-  Tooltip,
-  TruncatedTooltip,
-} from "@daintreehq/plugin-ui";
+import type { SelectedNode } from "./legacyBridge.js";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { DismissButton } from "@/components/ui/DismissButton";
+import { KBD_COMPACT_CLASS, KbdChord } from "@/components/ui/Kbd";
+import { ScrollShadow } from "@/components/ui/ScrollShadow";
+import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { cn } from "@/lib/utils";
 import { useToolbarRoving } from "@/hooks/useToolbarRoving";
-// The host Select: this one's items take their own class and title, which the
-// kit Select's `options` cannot carry.
 import {
   Select,
   SelectContent,
@@ -75,26 +69,21 @@ import {
 } from "./copy.js";
 import { middleTruncatePath } from "@/utils/textParsing";
 import { SelectionTrail, trailFor, type PickedCrumb } from "./SelectionTrail.js";
+import { PickerIconButton } from "./PickerIconButton.js";
 
 const MODE_OPTIONS = [
   { value: "browse" as const, label: "Browse" },
   { value: "select" as const, label: "Inspect" },
 ];
 
-type CanvasMode = (typeof MODE_OPTIONS)[number]["value"];
-
-function isCanvasMode(value: string): value is CanvasMode {
-  return MODE_OPTIONS.some((option) => option.value === value);
-}
-
 /**
- * The builder for the dev preview hosting it: the host's session for this
+ * The picker for the dev preview hosting it: the host's session for this
  * preview, shared by the strip and the drawer and outliving both. The host
- * creates it when the builder is switched on, keeps it telling the controller
- * which worktree and page the preview is on, and disposes it when the builder,
+ * creates it when the picker is switched on, keeps it telling the controller
+ * which worktree and page the preview is on, and disposes it when the picker,
  * the preview or the plugin ends — so a surface only reads it.
  */
-function useBuilder(props: DevPreviewToolSurfaceProps<InspectorController>): {
+function useInspectorSession(props: DevPreviewToolSurfaceProps<InspectorController>): {
   controller: InspectorController | null;
   state: InspectorState;
 } {
@@ -213,8 +202,8 @@ function drawerLanding(root: HTMLElement): HTMLElement | null {
 }
 
 /** The strip under the browser toolbar: mode, what is selected, and close. */
-export function SiteBuilderToolbar(props: DevPreviewToolSurfaceProps<InspectorController>) {
-  const { controller, state } = useBuilder(props);
+export function ElementPickerToolbar(props: DevPreviewToolSurfaceProps<InspectorController>) {
+  const { controller, state } = useInspectorSession(props);
   const bound = state.binding.status === "bound";
   // The APG toolbar contract: the whole row is one tab stop, Left/Right move
   // between its controls. The row claimed `role="toolbar"` while every control
@@ -251,14 +240,12 @@ export function SiteBuilderToolbar(props: DevPreviewToolSurfaceProps<InspectorCo
       onKeyDown={onStripKeyDown}
       className="@container/strip flex h-8 shrink-0 items-center gap-2 border-b border-overlay bg-surface px-2"
     >
-      <SegmentedControl
+      <SegmentedRadioGroup
         density="compact"
         aria-label="Canvas mode"
         options={MODE_OPTIONS}
         value={state.mode}
-        onValueChange={(mode) => {
-          if (isCanvasMode(mode)) void controller.setMode(mode);
-        }}
+        onChange={(mode) => void controller.setMode(mode)}
       />
       <div aria-hidden="true" className="toolbar-divider h-4 w-px shrink-0" />
       <div className="flex min-w-0 flex-1 items-center gap-1.5 text-xs text-text-secondary">
@@ -274,7 +261,7 @@ export function SiteBuilderToolbar(props: DevPreviewToolSurfaceProps<InspectorCo
       <DismissButton
         aria-label="Close Element Picker"
         tooltip="Close Element Picker"
-        onClick={props.onClose}
+        onClick={() => props.onClose()}
       />
     </div>
   );
@@ -293,13 +280,11 @@ export function SiteBuilderToolbar(props: DevPreviewToolSurfaceProps<InspectorCo
 function DrawerToggle({ panelId, expanded }: { panelId: string; expanded: boolean }) {
   const collapsed = useDrawerCollapsed(panelId);
   return (
-    <IconButton
+    <PickerIconButton
       icon={
         collapsed ? <PanelRightOpen aria-hidden="true" /> : <PanelRightClose aria-hidden="true" />
       }
-      size="xs"
-      tooltipSide="bottom"
-      aria-label="Site Builder details"
+      aria-label="Element Picker details"
       aria-expanded={expanded}
       onClick={() => setDrawerCollapsed(panelId, !collapsed)}
     />
@@ -316,9 +301,7 @@ function KeyHints() {
     <span className="ml-auto hidden shrink-0 items-center gap-2 text-3xs text-text-secondary @[640px]/strip:flex">
       <span className="flex items-center gap-1">
         {/* Sans, as KbdChord sets its arrows: the mono face has no arrow glyphs. */}
-        <Kbd density="compact" className="font-sans">
-          ↑↓←→
-        </Kbd>
+        <kbd className={cn(KBD_COMPACT_CLASS, "font-sans")}>↑↓←→</kbd>
         move
       </span>
       <span className="flex items-center gap-1">
@@ -475,7 +458,7 @@ function StripStatus({
         </StripMessage>
       );
     }
-    // One sentence, whatever the project's Svelte version: what the builder
+    // One sentence, whatever the project's Svelte version: what the picker
     // offers is the same for every app it can trace.
     return (
       <StripMessage icon={SquareDashedMousePointer}>
@@ -515,8 +498,11 @@ function StripMessage({
   );
   if (!title) return message;
   return (
-    <Tooltip content={title} side="bottom" align="start">
-      {message}
+    <Tooltip>
+      <TooltipTrigger asChild>{message}</TooltipTrigger>
+      <TooltipContent side="bottom" align="start">
+        {title}
+      </TooltipContent>
     </Tooltip>
   );
 }
@@ -557,8 +543,8 @@ function StripTrail({
  * The drawer beside the page. Closed until there is something to show, so the
  * site keeps its full width while you browse and pick.
  */
-export function SiteBuilderDrawer(props: DevPreviewToolSurfaceProps<InspectorController>) {
-  const { controller, state } = useBuilder(props);
+export function ElementPickerDrawer(props: DevPreviewToolSurfaceProps<InspectorController>) {
+  const { controller, state } = useInspectorSession(props);
   const memoryKey = composerMemoryKey(props.panelId, props.worktreeId);
   // A draft or an agent request outlives the selection it was about; keep
   // both reachable.
@@ -628,7 +614,7 @@ export function SiteBuilderDrawer(props: DevPreviewToolSurfaceProps<InspectorCon
         {selection.status === "ready" ? null : <SelectionBody state={state} />}
 
         {/* The panel's one route, and therefore not a section of it. There is no
-          header, no glyph and no disclosure: this plugin exists to hand a
+          header, no glyph and no disclosure: the picker exists to hand a
           selection to an agent, so the composer is what the drawer *is* below
           its identity. A header would have named the obvious and spent 32px of
           a 360px panel doing it; a disclosure would have let the user fold away
@@ -665,7 +651,7 @@ function workspaceNeedsAttention(state: InspectorState): boolean {
   // diagnostic nobody has to act on does not earn opening the drawer: it waits
   // in Site source for something else to open it. It used to also raise whether
   // direct editing and class completion were available here — neither of which
-  // the builder does, so their absence is not a gap the user can do anything
+  // the picker does, so their absence is not a gap the user can do anything
   // about, and saying so was a warning about a road that isn't there.
   if (workspace.status === "ready") return workspace.appRoots.length > 1;
   // No SvelteKit app is the ordinary case for every other framework: the
@@ -757,19 +743,26 @@ function SiteSourceBody({
               const relative = relativeTo(worktreePath, appRoot);
               return (
                 <li key={appRoot}>
-                  <Tooltip content={appRoot} side="bottom" align="start">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-7 w-full justify-between gap-2 px-2 font-mono text-xs font-normal"
-                      onClick={() => void controller.openWorkspace(appRoot)}
-                    >
-                      <span className="min-w-0 truncate">{relative === "." ? "./" : relative}</span>
-                      <ChevronRight
-                        className="h-3.5 w-3.5 shrink-0 text-text-secondary"
-                        aria-hidden="true"
-                      />
-                    </Button>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 w-full justify-between gap-2 px-2 font-mono text-xs font-normal"
+                        onClick={() => void controller.openWorkspace(appRoot)}
+                      >
+                        <span className="min-w-0 truncate">
+                          {relative === "." ? "./" : relative}
+                        </span>
+                        <ChevronRight
+                          className="h-3.5 w-3.5 shrink-0 text-text-secondary"
+                          aria-hidden="true"
+                        />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom" align="start">
+                      {appRoot}
+                    </TooltipContent>
                   </Tooltip>
                 </li>
               );
@@ -806,13 +799,13 @@ function SiteSourceBody({
             // What the bundled compiler was tested against, said once and left
             // alone: an observation, so `info` and no action. It does not open
             // the drawer by itself — nothing about the app is worse for it, and
-            // the builder offers exactly what it offers either way.
+            // the picker offers exactly what it offers either way.
             <InspectorNotice tone="info" title={UNTESTED_TOOLCHAIN_TITLE} density="compact">
               {untestedToolchainDetail(untested)}
             </InspectorNotice>
           ) : null}
           {/* Choosing the wrong app has to be recoverable from where the
-              choice shows, not by closing the builder to be asked again. */}
+              choice shows, not by closing the picker to be asked again. */}
           {workspace.appRoots.length > 1 ? (
             <PropertyRow label="App">
               <Select
@@ -943,7 +936,7 @@ function SelectionHeader({
  * `SelectionIdentity` exactly (28/24/20), which is what keeps the sections
  * below from moving when the answer lands.
  *
- * Presentational: `SiteBuilderDrawer` owns the gate and the display floor,
+ * Presentational: `ElementPickerDrawer` owns the gate and the display floor,
  * because this unmounts the moment the source lands and a floor kept here
  * would never get to hold anything.
  */

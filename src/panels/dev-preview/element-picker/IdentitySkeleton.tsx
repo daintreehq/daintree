@@ -1,4 +1,4 @@
-import { Skeleton, SkeletonBone } from "@daintreehq/plugin-ui";
+import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 
 /**
  * The identity block's shape, held while its source is being resolved.

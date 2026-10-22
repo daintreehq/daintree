@@ -1333,34 +1333,6 @@ export default tseslint.config(
         allow: { "@/components/Terminal/InlineStatusBanner": ["InlineStatusBanner"] },
         gap: "the conflict strip's Compare must stay focusable while unavailable, and a kit Button can only be natively disabled",
       },
-      {
-        file: "plugins/builtin/sveltekit-builder/renderer/AgentComposer.tsx",
-        allow: {
-          "@/components/ui/select": [
-            "Select",
-            "SelectTrigger",
-            "SelectValue",
-            "SelectContent",
-            "SelectItem",
-            "SelectGroup",
-            "SelectLabel",
-          ],
-        },
-        gap: "the kit Select's options cannot carry item markup (agent marks, two-line call sites) or a content width",
-      },
-      {
-        file: "plugins/builtin/sveltekit-builder/renderer/SiteBuilderSurfaces.tsx",
-        allow: {
-          "@/components/ui/select": [
-            "Select",
-            "SelectTrigger",
-            "SelectValue",
-            "SelectContent",
-            "SelectItem",
-          ],
-        },
-        gap: "the kit Select's options cannot carry a per-item class and title, or a content width",
-      },
     ];
 
     const restrict = (entries) => [

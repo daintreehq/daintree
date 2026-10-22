@@ -1,8 +1,8 @@
 import type { ReactNode } from "react";
-import { DismissButton } from "@daintreehq/plugin-ui";
+import { DismissButton } from "@/components/ui/DismissButton";
 import { cn } from "@/lib/utils";
-// Callout's tokens, not the component: the kit Callout has no dismiss control,
-// no `role`, and puts its action beside the message rather than under it.
+// Callout's tokens, not the component: Callout has no dismiss control and puts
+// its action beside the message rather than under it.
 import {
   CALLOUT_ICON,
   CALLOUT_ICON_TONE,
@@ -80,7 +80,7 @@ export function InspectorNotice({
             // its 24px box back onto the title's optical line.
             <DismissButton
               aria-label="Dismiss"
-              onClick={onDismiss}
+              onClick={() => onDismiss()}
               className="-mr-1 -mt-1 shrink-0"
             />
           ) : null}

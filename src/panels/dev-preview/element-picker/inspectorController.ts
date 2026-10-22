@@ -24,8 +24,6 @@ import {
 } from "./agentTask.js";
 import { forgetComposerMemories } from "./composerMemory.js";
 import { isRemoteWindow } from "@/hooks/useHostPlatform";
-import { redactUrl } from "../shared/redactUrl.js";
-import { singleLineLabel } from "../shared/protocol.js";
 import { unionBounds, type PageScreenshot, type PageSelection } from "./pageSelection.js";
 import { mismatchMessage, wireFailureMessage } from "./copy.js";
 import { usePanelStore } from "@/store/panelStore";
@@ -42,17 +40,21 @@ import {
   SelectionResolveResultSchema,
   SourceChangedPushSchema,
   WorkspaceOpenResultSchema,
+  loadRouteMatch,
+  redactUrl,
+  singleLineLabel,
   type ProjectModel,
   type RouteNode,
+  type SiteSelection,
   type SupportVerdict,
-} from "../shared/protocol.js";
-import type { SiteSelection, Viewport } from "../shared/model.js";
+  type Viewport,
+} from "./legacyBridge.js";
 
 /**
- * One controller per dev preview with SvelteKit Tools switched on — the
+ * One controller per dev preview with the Element Picker switched on — the
  * host's tool session for that preview. It holds the preview binding, the
  * source workspace and the selection, and lives exactly as long as the host
- * keeps the builder on for the preview, surfaces or no surfaces.
+ * keeps the picker on for the preview, surfaces or no surfaces.
  *
  * Every piece of preview state is keyed on the document epoch an observation
  * carries, never on arrival order: a reinstalled runtime's `documentReady` can
@@ -307,7 +309,7 @@ export interface FollowedSelection {
 }
 
 /**
- * The one thing the builder can do about an issue, recorded where the operation
+ * The one thing the picker can do about an issue, recorded where the operation
  * is known rather than guessed at by the surface. Data, not a thunk: the state
  * stays comparable, the controller owns the operation and the notice owns the
  * words.
@@ -386,7 +388,7 @@ export interface InspectorState {
 
 export const INITIAL_INSPECTOR_STATE: InspectorState = {
   binding: { status: "idle" },
-  // Turning the builder on is asking to pick something.
+  // Turning the picker on is asking to pick something.
   mode: "select",
   modePending: false,
   epoch: null,
@@ -414,16 +416,16 @@ const RUNTIME_ISSUE_COPY: Record<string, string> = {
     "This page carries no Svelte source locations. Run the app with the Vite dev server to select elements.",
   "not-dev-build": "This preview is a production build, so elements can't be traced to source",
   "overlay-blocked": "The page blocked the selection overlay",
-  capacity: "This was past a limit the builder works within, so part of it was left out",
+  capacity: "This was past a limit the Element Picker works within, so part of it was left out",
   internal: "The inspector hit a problem inside the page",
   "metadata-shape":
-    "This page's Svelte metadata has a shape the builder doesn't recognise, so elements can't be traced to source. Check the Svelte version against the supported baseline.",
+    "This page's Svelte metadata has a shape the Element Picker doesn't recognise, so elements can't be traced to source. Check the Svelte version against the supported baseline.",
   [ANCESTRY_ISSUE]:
     "This Svelte version reports where elements come from but not the components above them, so the trail names elements only.",
 };
 
 /**
- * The host services for the builder of one dev preview. Pushes are subscribed
+ * The host services for the picker of one dev preview. Pushes are subscribed
  * per panel: main addresses each one to the preview whose workspace it is
  * about, so nothing another preview's workspace reports arrives here.
  */
@@ -470,20 +472,26 @@ export function selectionHasNoSource(nodes: readonly SiteGuestNodeObservation[])
   );
 }
 
+/** The directory a panel's process runs from, when the panel says. */
+function panelCwd(panel: unknown): string | null {
+  if (typeof panel !== "object" || panel === null || !("cwd" in panel)) return null;
+  return typeof panel.cwd === "string" && panel.cwd.length > 0 ? panel.cwd : null;
+}
+
 /**
  * The preview's dev server runs from a directory known to be beside every one
  * of `appRoots`: neither inside one nor above one. A missing directory, or a
  * monorepo root script above them, says nothing about which app is showing.
  */
 export function previewBesideApps(appRoots: readonly string[], panel: unknown): boolean {
-  const cwd = (panel as { cwd?: unknown } | undefined)?.cwd;
-  if (typeof cwd !== "string" || cwd.length === 0 || appRoots.length === 0) return false;
+  const cwd = panelCwd(panel);
+  if (cwd === null || appRoots.length === 0) return false;
   return appRoots.every((root) => !isWithin(root, cwd) && !isWithin(cwd, root));
 }
 
 export function appRunningIn(appRoots: readonly string[], panel: unknown): string | null {
-  const cwd = (panel as { kind?: string; cwd?: unknown } | undefined)?.cwd;
-  if (typeof cwd !== "string" || cwd.length === 0) return null;
+  const cwd = panelCwd(panel);
+  if (cwd === null) return null;
   const directory = trimSlash(cwd);
   let best: string | null = null;
   for (const appRoot of appRoots) {
@@ -608,8 +616,8 @@ export class InspectorController implements DevPreviewToolSession {
 
   /**
    * {@link DevPreviewToolSession}: the host says what this preview is showing,
-   * for as long as the builder is switched on for it — including while none of
-   * the builder's surfaces are mounted, which is when a bind that failed for
+   * for as long as the picker is switched on for it — including while none of
+   * the picker's surfaces are mounted, which is when a bind that failed for
    * want of a page gets its retry.
    */
   update(context: DevPreviewToolSessionContext): void {
@@ -680,9 +688,8 @@ export class InspectorController implements DevPreviewToolSession {
     const request = ++this.workspaceRequest;
     // A preview moved between worktrees keeps running its server from the old
     // one: the page would show one checkout while the agent works in another.
-    const cwd = (usePanelStore.getState().panelsById[this.panelId] as { cwd?: unknown } | undefined)
-      ?.cwd;
-    if (typeof cwd === "string" && cwd.length > 0 && !isWithin(worktreePath, cwd)) {
+    const cwd = panelCwd(usePanelStore.getState().panelsById[this.panelId]);
+    if (cwd !== null && !isWithin(worktreePath, cwd)) {
       this.patchState({
         workspace: {
           status: "failed",
@@ -760,7 +767,7 @@ export class InspectorController implements DevPreviewToolSession {
   }
 
   /**
-   * Point the builder at another app in the same worktree. The selection was
+   * Point the picker at another app in the same worktree. The selection was
    * proven against the old one, so it belongs to it and goes.
    */
   switchApp(appRoot: string): void {
@@ -1015,7 +1022,7 @@ export class InspectorController implements DevPreviewToolSession {
     if (this.warnedUnusableGuestEvent) return;
     this.warnedUnusableGuestEvent = true;
     console.warn(
-      `[site-builder] dropped a guest "${type}" event whose payload did not match the adapter schema; further ones are silent`
+      `[element-picker] dropped a guest "${type}" event whose payload did not match the adapter schema; further ones are silent`
     );
   }
 
@@ -1862,7 +1869,7 @@ export class InspectorController implements DevPreviewToolSession {
     if (files.length === 0) return true;
     const now = await this.readRevisions(files);
     // The app may have been switched while the read was out: its answer is
-    // about files the builder no longer has open.
+    // about files the picker no longer has open.
     const after = this.state.workspace;
     if (after.status !== "ready" || after.workspaceSessionId !== workspace.workspaceSessionId) {
       return false;
@@ -2095,7 +2102,7 @@ export class InspectorController implements DevPreviewToolSession {
       } catch {
         return null;
       }
-      const { matchRoute } = await import("../shared/project/routeMatch.js");
+      const { matchRoute } = await loadRouteMatch();
       const worktreePath = this.context.worktreePath;
       return {
         appPath: worktreePath
@@ -2274,7 +2281,7 @@ export class InspectorController implements DevPreviewToolSession {
 
   dispose(): void {
     if (this.disposed) return;
-    // The builder is really over for this preview: nothing typed or in flight
+    // The picker is really over for this preview: nothing typed or in flight
     // for it may outlive it.
     cancelAgentRequests(this.panelId);
     forgetComposerMemories(this.panelId);
@@ -2296,12 +2303,12 @@ export class InspectorController implements DevPreviewToolSession {
 }
 
 /**
- * The builder for one dev preview, as the host's session for SvelteKit
- * Tools. The host owns its lifetime — created when the builder is switched on,
+ * The picker for one dev preview, as the host's session for the Element
+ * Picker. The host owns its lifetime — created when the picker is switched on,
  * kept across surface unmounts, disposed when the tool goes off or the preview
  * or plugin does — so nothing here reconstructs those events.
  */
-export function createBuilderSession(
+export function createElementPickerSession(
   context: DevPreviewToolSessionContext,
   deps: (previewPanelId: string) => InspectorDeps = defaultInspectorDeps
 ): InspectorController {

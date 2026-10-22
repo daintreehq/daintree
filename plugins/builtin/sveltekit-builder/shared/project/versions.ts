@@ -238,11 +238,11 @@ export function assessSupport(
     }
     if (major < tested) {
       reasons.push(
-        `${pkg} ${installed} is installed; this builder is tested against ${pkg} ${tested}`
+        `${pkg} ${installed} is installed; the Element Picker is tested against ${pkg} ${tested}`
       );
     } else if (major > tested) {
       reasons.push(
-        `${pkg} ${installed} is newer than this builder was tested against (${pkg} ${tested})`
+        `${pkg} ${installed} is newer than the Element Picker was tested against (${pkg} ${tested})`
       );
     }
   }

@@ -1,6 +1,6 @@
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { SitePreviewDetachReason } from "@shared/types/ipc/sitePreview";
-import type { SelectionMismatch } from "../shared/protocol.js";
+import type { SelectionMismatch } from "./legacyBridge.js";
 import type { StaleReason } from "./inspectorController.js";
 
 /**
@@ -38,7 +38,7 @@ export const DETACH_COPY: Record<SitePreviewDetachReason, string> = {
 };
 
 /**
- * The strip while the preview shows a page outside the builder's origins — an
+ * The strip while the preview shows a page outside the picker's origins — an
  * external site the app linked to, an OAuth provider. Says what the host
  * checked, the address, not who served it (a tunnel or a custom domain in
  * front of the same dev server reads as foreign too). An observation with
@@ -46,10 +46,6 @@ export const DETACH_COPY: Record<SitePreviewDetachReason, string> = {
  * its own, so no action and no warning tone.
  */
 export const ORIGIN_SUSPENDED_COPY = "Paused — this page isn't at a local address";
-
-export function plural(count: number, one: string, many: string): string {
-  return `${count} ${count === 1 ? one : many}`;
-}
 
 export function basename(path: string): string {
   const index = path.lastIndexOf("/");
@@ -128,7 +124,7 @@ export function mismatchMessage(mismatch: SelectionMismatch): string {
  * It is an observation about our bundled compiler, never a limitation of the
  * user's app — tracing an element and handing it to an agent work the same
  * either way — so it stays at the lowest signal tier: neutral, no accent, no
- * action, and nothing about what the builder won't do.
+ * action, and nothing about what the picker won't do.
  */
 export const UNTESTED_TOOLCHAIN_TITLE = "Toolchain not verified";
 

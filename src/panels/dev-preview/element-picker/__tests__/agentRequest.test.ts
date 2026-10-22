@@ -16,7 +16,7 @@ import {
   readComposerMemory,
   updateComposerMemory,
 } from "../composerMemory";
-import { BUILDER_TOOL_ID } from "../../shared/protocol";
+import { LEGACY_TOOL_ID } from "../legacyBridge";
 import { useDevPreviewToolStore } from "@/store/devPreviewToolStore";
 import { usePanelStore } from "@/store/panelStore";
 
@@ -88,7 +88,7 @@ function send(overrides: { subjectKey?: string; prompt?: string; words?: string 
 beforeEach(() => {
   vi.useFakeTimers();
   previewIn("wt-1");
-  useDevPreviewToolStore.setState({ activeByPanel: { "preview-1": BUILDER_TOOL_ID } });
+  useDevPreviewToolStore.setState({ activeByPanel: { "preview-1": LEGACY_TOOL_ID } });
 });
 
 afterEach(() => {
@@ -107,7 +107,7 @@ describe("deliverAgentRequest", () => {
     await vi.advanceTimersByTimeAsync(1_000);
     expect(last()?.state.status).toBe("queued");
 
-    // Nothing of the builder is mounted to notice the move; the run must.
+    // Nothing of the picker is mounted to notice the move; the run must.
     previewIn("wt-2");
     agent.setState("waiting");
     await vi.advanceTimersByTimeAsync(2_000);

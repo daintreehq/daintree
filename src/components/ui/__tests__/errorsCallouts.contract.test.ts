@@ -50,7 +50,7 @@ const MIGRATED_FILES = [
   "src/components/Project/EnvironmentVariablesEditor.tsx",
   "src/components/Plugin/PluginMcpConfirmDialog.tsx",
   "src/components/Project/ProjectSwitcherPalette.tsx",
-  "plugins/builtin/sveltekit-builder/renderer/InspectorNotice.tsx",
+  "src/panels/dev-preview/element-picker/InspectorNotice.tsx",
 ];
 
 /**

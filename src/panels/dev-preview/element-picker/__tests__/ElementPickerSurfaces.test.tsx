@@ -1,14 +1,14 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const context = vi.hoisted(() => ({
   current: { projectId: "p1", worktreeId: "wt-1", worktreePath: "/repo" },
 }));
 
-import { SiteBuilderDrawer, SiteBuilderToolbar } from "../SiteBuilderSurfaces";
+import { ElementPickerDrawer, ElementPickerToolbar } from "../ElementPickerSurfaces";
 import {
-  createBuilderSession,
+  createElementPickerSession,
   HMR_SETTLE_MS,
   type InspectorController,
 } from "../inspectorController";
@@ -23,12 +23,12 @@ import {
   registerDevPreviewTool,
 } from "@/registry/devPreviewToolRegistry";
 import {
-  BUILDER_TOOL_ID,
+  LEGACY_TOOL_ID,
   CHANNELS,
   GUEST_ADAPTER_ID,
   PLUGIN_ID,
   PUSH_CHANNELS,
-} from "../../shared/protocol";
+} from "../legacyBridge";
 import { _resetPluginRuntimeStoreForTest, usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 import { useDevPreviewToolStore } from "@/store/devPreviewToolStore";
 import {
@@ -39,11 +39,10 @@ import {
   updateComposerMemory,
 } from "../composerMemory";
 import { usePanelStore } from "@/store/panelStore";
-// The plugin renders inside the app's TooltipProvider (App.tsx); its segmented
+// The picker renders inside the app's TooltipProvider (App.tsx); its segmented
 // controls carry Radix tooltips, so the harness supplies the same ancestor.
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
-import { whenPluginUiReady } from "@daintreehq/plugin-ui";
 import { __resetAgentRequestsForTests } from "@/services/agentRequests";
 import {
   FILE,
@@ -66,30 +65,30 @@ function hostContext() {
   };
 }
 
-/** The builder's session, which the host owns for as long as the tool is on. */
+/** The picker's session, which the host owns for as long as the tool is on. */
 function session(): InspectorController {
   const live = peekDevPreviewToolSession("preview-1");
-  if (!live) throw new Error("no builder session for preview-1");
+  if (!live) throw new Error("no picker session for preview-1");
   return live as InspectorController;
 }
 
 /**
- * Switch the builder on the way the dev preview does — through the real host
+ * Switch the picker on the way the dev preview does — through the real host
  * session manager, so the surfaces below are fed the session it built.
  */
 function switchOn() {
   startDevPreviewToolSessions();
   publishDevPreviewToolContext(hostContext());
-  useDevPreviewToolStore.getState().setActive("preview-1", BUILDER_TOOL_ID);
+  useDevPreviewToolStore.getState().setActive("preview-1", LEGACY_TOOL_ID);
 }
 
-/** What the dev preview mounts while SvelteKit Tools is switched on. */
-function Builder() {
+/** What the dev preview mounts while the Element Picker is switched on. */
+function PickerHarness() {
   const props = { ...hostContext(), session: session(), onClose: () => {} };
   return (
     <>
-      <SiteBuilderToolbar {...props} />
-      <SiteBuilderDrawer {...props} />
+      <ElementPickerToolbar {...props} />
+      <ElementPickerDrawer {...props} />
     </>
   );
 }
@@ -109,7 +108,7 @@ function boundState(request: { panelId: string; mode?: "browse" | "select" }) {
 
 function mount() {
   switchOn();
-  return render(<Builder />, { wrapper: TooltipProvider });
+  return render(<PickerHarness />, { wrapper: TooltipProvider });
 }
 
 async function mountBound() {
@@ -139,8 +138,6 @@ function text(): string {
   return document.body.textContent ?? "";
 }
 
-beforeAll(() => whenPluginUiReady(), 30_000);
-
 beforeEach(() => {
   context.current = { projectId: "p1", worktreeId: "wt-1", worktreePath: "/repo" };
   // The host only keeps a tool switched on for a preview the panel store
@@ -158,18 +155,18 @@ beforeEach(() => {
         {
           devMode: false,
           displayName: "Element Picker",
-          previewToolIds: new Set([BUILDER_TOOL_ID]),
+          previewToolIds: new Set([LEGACY_TOOL_ID]),
         },
       ],
     ]),
     disabledPluginIds: new Set(),
   });
   registerDevPreviewTool({
-    id: BUILDER_TOOL_ID,
+    id: LEGACY_TOOL_ID,
     pluginId: PLUGIN_ID,
     label: "Element Picker",
     Button: () => null,
-    createSession: (toolContext) => createBuilderSession(toolContext),
+    createSession: (toolContext) => createElementPickerSession(toolContext),
   });
 });
 
@@ -322,7 +319,7 @@ describe("page verdicts", () => {
   it("warns up front when the page's metadata cannot be read at all", async () => {
     await mountBound();
     await act(async () => metadataProbed(false, false));
-    expect(text()).toContain("shape the builder doesn't recognise");
+    expect(text()).toContain("shape the Element Picker doesn't recognise");
   });
 
   it("keeps a verdict that a traced element says nothing about", async () => {
@@ -498,12 +495,12 @@ describe("preview binding", () => {
       appRoot: "/repo",
       support: {
         level: "untested",
-        reasons: ["svelte 4.2.1 is installed; this builder is tested against svelte 5"],
+        reasons: ["svelte 4.2.1 is installed; the Element Picker is tested against svelte 5"],
       },
     }));
     await mountBound();
     // The verdict costs the user nothing, so it does not open the drawer and
-    // does not touch the strip: what the builder offers — trace an element,
+    // does not touch the strip: what the picker offers — trace an element,
     // hand it to an agent — is the same either way.
     expect(screen.queryByRole("region", { name: "Site source" })).toBeNull();
     expect(screen.queryByText(/tested against svelte 5/)).toBeNull();
@@ -808,7 +805,7 @@ describe("starting a fresh agent", () => {
           },
         } as never,
       });
-      useDevPreviewToolStore.setState({ activeByPanel: { "preview-1": BUILDER_TOOL_ID } });
+      useDevPreviewToolStore.setState({ activeByPanel: { "preview-1": LEGACY_TOOL_ID } });
       const { actionService } = await import("@/services/ActionService");
       const dispatch = vi
         .spyOn(actionService, "dispatch")
@@ -1107,7 +1104,7 @@ describe("stale selections", () => {
         "preview-1": { id: "preview-1", kind: "dev-preview", location: "grid", worktreeId: "wt-1" },
       } as never,
     });
-    useDevPreviewToolStore.setState({ activeByPanel: { "preview-1": BUILDER_TOOL_ID } });
+    useDevPreviewToolStore.setState({ activeByPanel: { "preview-1": LEGACY_TOOL_ID } });
     const { actionService } = await import("@/services/ActionService");
     const sent: string[] = [];
     const dispatch = vi.spyOn(actionService, "dispatch").mockImplementation((async (
@@ -1634,7 +1631,7 @@ describe("stale selections", () => {
         "preview-1": { id: "preview-1", kind: "dev-preview", location: "grid", worktreeId: "wt-1" },
       } as never,
     });
-    useDevPreviewToolStore.setState({ activeByPanel: { "preview-1": BUILDER_TOOL_ID } });
+    useDevPreviewToolStore.setState({ activeByPanel: { "preview-1": LEGACY_TOOL_ID } });
     const { actionService } = await import("@/services/ActionService");
     const sent: string[] = [];
     vi.spyOn(actionService, "dispatch").mockImplementation((async (
@@ -2053,7 +2050,7 @@ describe("lifetime", () => {
     // What the host does: the slot resolves to nothing while the plugin is disabled.
     function Gated() {
       const disabled = usePluginRuntimeStore((state) => state.disabledPluginIds.has(PLUGIN_ID));
-      return disabled ? null : <Builder />;
+      return disabled ? null : <PickerHarness />;
     }
     switchOn();
     render(<Gated />, { wrapper: TooltipProvider });
@@ -2111,7 +2108,7 @@ describe("lifetime", () => {
     expect(host.sitePreview.bind).toHaveBeenCalledTimes(1);
   });
 
-  it("releases the preview and workspace once the builder is switched off", async () => {
+  it("releases the preview and workspace once the picker is switched off", async () => {
     await mountSelected();
     cleanup();
     await act(async () => useDevPreviewToolStore.getState().setActive("preview-1", null));
@@ -2205,7 +2202,7 @@ describe("preview reattach", () => {
   });
 });
 
-describe("builder lifetime while switched on", () => {
+describe("picker lifetime while switched on", () => {
   afterEach(() => {
     useDevPreviewToolStore.setState({ activeByPanel: {} });
     usePanelStore.setState({ panelsById: {} as never });
@@ -2235,8 +2232,8 @@ describe("builder lifetime while switched on", () => {
       });
       startDevPreviewToolSessions();
       publishDevPreviewToolContext({ ...hostContext(), isWebviewReady: false });
-      useDevPreviewToolStore.getState().setActive("preview-1", BUILDER_TOOL_ID);
-      render(<Builder />, { wrapper: TooltipProvider });
+      useDevPreviewToolStore.getState().setActive("preview-1", LEGACY_TOOL_ID);
+      render(<PickerHarness />, { wrapper: TooltipProvider });
       await screen.findByText("Waiting for the page to load");
       // A cold dev server: long enough for the backoff to reach its long steps.
       await act(async () => {
@@ -2299,8 +2296,8 @@ describe("builder lifetime while switched on", () => {
       });
       startDevPreviewToolSessions();
       publishDevPreviewToolContext({ ...hostContext(), isWebviewReady: false });
-      useDevPreviewToolStore.getState().setActive("preview-1", BUILDER_TOOL_ID);
-      render(<Builder />, { wrapper: TooltipProvider });
+      useDevPreviewToolStore.getState().setActive("preview-1", LEGACY_TOOL_ID);
+      render(<PickerHarness />, { wrapper: TooltipProvider });
       await screen.findByText("Waiting for the page to load");
       // Through every step but the last, whose attempt is the one held open.
       await act(async () => {
@@ -2343,7 +2340,7 @@ describe("builder lifetime while switched on", () => {
   });
 });
 
-describe("delivery across the builder's lifetime", () => {
+describe("delivery across the picker's lifetime", () => {
   /** The panel store the composer needs: the preview, and optionally an agent beside it. */
   function panels(withTerminal: boolean) {
     usePanelStore.setState({
@@ -2436,7 +2433,7 @@ describe("delivery across the builder's lifetime", () => {
 
   it("types nothing into the agent when the plugin is disabled during the readiness wait", async () => {
     // The request is waiting on an agent that has shown no sign it can take
-    // input. Nothing of the builder is mounted to notice the plugin going away,
+    // input. Nothing of the picker is mounted to notice the plugin going away,
     // so the run itself has to stop — and a session that reaches its prompt
     // afterwards must not be typed into.
     panels(true);
@@ -2487,7 +2484,7 @@ describe("delivery across the builder's lifetime", () => {
   });
 
   it("launches once and sends once across a remount, and shows the receipt after it", async () => {
-    // Starting an agent re-lays the grid, which remounts the builder — the
+    // Starting an agent re-lays the grid, which remounts the picker — the
     // remount used to cancel the very request that caused it. The run lives
     // with the host, so it survives, and the surface picks the receipt back up.
     panels(false);
@@ -2582,7 +2579,7 @@ describe("issue recovery", () => {
       })
     );
 
-    await waitFor(() => expect(text()).toContain("past a limit the builder works within"));
+    await waitFor(() => expect(text()).toContain("past a limit the Element Picker works within"));
     // The page's own words survive under ours, so the notice says which limit.
     expect(text()).toContain("capped at 24 nodes");
     expect(screen.queryByRole("alert")).toBeNull();
@@ -2616,7 +2613,7 @@ describe("issue recovery", () => {
 
 describe("details disclosure", () => {
   function toggle(): HTMLElement {
-    return screen.getByRole("button", { name: "Site Builder details" });
+    return screen.getByRole("button", { name: "Element Picker details" });
   }
 
   it("names the thing it discloses and carries the state on aria-expanded", async () => {
@@ -2634,9 +2631,9 @@ describe("details disclosure", () => {
     fireEvent.click(toggle());
     await waitFor(() => expect(toggle().getAttribute("aria-expanded")).toBe("false"));
     // The name held still across both flips; only the state moved.
-    expect(toggle().getAttribute("aria-label")).toBe("Site Builder details");
+    expect(toggle().getAttribute("aria-label")).toBe("Element Picker details");
     fireEvent.focus(toggle());
-    expect((await screen.findByRole("tooltip")).textContent).toContain("Site Builder details");
+    expect((await screen.findByRole("tooltip")).textContent).toContain("Element Picker details");
     expect(screen.queryByRole("region", { name: "Selected element" })).toBeNull();
   });
 });
@@ -3107,7 +3104,7 @@ describe("an element with nothing Svelte to trace, in a worktree that holds a Sv
     expect(prompt).toContain("/tmp/daintree-clipboard/element-1.png");
     expect(prompt).not.toContain("- App:");
     expect(prompt).not.toContain("apps/docs");
-    expect(prompt).not.toContain("SvelteKit Tools");
+    expect(prompt).not.toContain("file references only");
     expect(host.calls(CHANNELS.selectionResolve)).toEqual([]);
   });
 

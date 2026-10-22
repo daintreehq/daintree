@@ -94,7 +94,10 @@ const BUTTON = `${PLUGIN}renderer/SiteBuilderButton.tsx`;
 // Deliberately NOT external: every module named here must be visible in the
 // build, or its absence from the eager set would mean nothing.
 const LAZY_ONLY = [
-  { label: "SiteBuilderSurfaces", test: (file: string) => file.includes("SiteBuilderSurfaces") },
+  {
+    label: "ElementPickerSurfaces",
+    test: (file: string) => file.includes("ElementPickerSurfaces"),
+  },
   { label: "inspectorController", test: (file: string) => file.includes("inspectorController") },
   { label: "routeMatch", test: (file: string) => file.includes("shared/project/routeMatch") },
   { label: "protocol", test: (file: string) => file.endsWith(`${PLUGIN}shared/protocol.ts`) },

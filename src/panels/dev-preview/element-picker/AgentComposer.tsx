@@ -16,18 +16,14 @@ import { isAgentLaunchable } from "@shared/utils/agentAvailability";
 import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
 import { actionService } from "@/services/ActionService";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
-import {
-  Button,
-  Kbd,
-  SegmentedControl,
-  Textarea,
-  Tooltip,
-  TruncatedTooltip,
-} from "@daintreehq/plugin-ui";
+import { Button } from "@/components/ui/button";
+import { KBD_COMPACT_CLASS } from "@/components/ui/Kbd";
+import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup";
+import { Textarea } from "@/components/ui/textarea";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { cn } from "@/lib/utils";
 import { PropertyRow } from "./InspectorSection.js";
-// The host Select: these items carry their own markup (agent marks, two-line
-// call sites), which the kit Select's `options` cannot.
 import {
   Select,
   SelectContent,
@@ -183,7 +179,7 @@ const SUBJECT_UNSETTLED =
 /**
  * Hand the selection to an agent — one already running in this worktree, or a
  * fresh session of any agent the launcher offers, on the user's own account — with
- * the source identity the builder resolved. The terminal stays the agent: this
+ * the source identity the picker resolved. The terminal stays the agent: this
  * composes and delivers one request, then reports what the host can prove.
  */
 export function AgentComposer({
@@ -234,9 +230,9 @@ export function AgentComposer({
     ...launchable,
   ];
   const keyOf = (destination: Destination): string =>
-    destination.kind === "terminal"
-      ? `terminal:${destination.target.terminalId}`
-      : `launch:${destination.agentId}`;
+    destination.kind === "launch"
+      ? `launch:${destination.agentId}`
+      : `terminal:${destination.target.terminalId}`;
   // Once the user has committed to an agent, never swap it for another behind
   // their back: a vanished choice blocks sending until they pick again.
   const committed =
@@ -417,9 +413,9 @@ export function AgentComposer({
       // a different prompt, so it must not be folded into a run already going.
       subjectKey: `${made.selection.selectionId}\n${made.scope}\n${JSON.stringify(made.revisions)}`,
       destination:
-        target.kind === "terminal"
-          ? { kind: "terminal", terminalId: target.target.terminalId, title: target.target.title }
-          : { kind: "launch", agentId: target.agentId, title: target.name },
+        target.kind === "launch"
+          ? { kind: "launch", agentId: target.agentId, title: target.name }
+          : { kind: "terminal", terminalId: target.target.terminalId, title: target.target.title },
       settled: () => resolve() !== "pending",
       // Locations in the prompt are only true of the bytes they were read from,
       // and an agent can take minutes to reach its prompt. Checked right before
@@ -568,7 +564,7 @@ export function AgentComposer({
             // the control does not shrink; the wrapper keeps any overflow
             // inside the column instead of past the drawer's edge.
             <div className="flex w-fit min-w-0 max-w-full overflow-hidden">
-              <SegmentedControl
+              <SegmentedRadioGroup
                 // Default density is 28px, matching the destination picker in the
                 // footer and the property rows above: a 24px track read as a
                 // different kind of control sitting in the same column.
@@ -581,7 +577,7 @@ export function AgentComposer({
                   ...(scope.kind === "component" && scope.file ? { tooltip: scope.file } : {}),
                 }))}
                 value={String(subject.scope)}
-                onValueChange={(value) => chooseScope(Number(value))}
+                onChange={(value) => chooseScope(Number(value))}
                 className="min-w-0 max-w-full shrink"
               />
             </div>
@@ -641,7 +637,7 @@ export function AgentComposer({
         maxLength={MAX_INSTRUCTION_CHARS}
         value={draft}
         disabled={destinations.length === 0}
-        onValueChange={onDraftChange}
+        onChange={(event) => onDraftChange(event.target.value)}
         onKeyDown={onKeyDown}
         className="placeholder:text-text-secondary"
       />
@@ -721,22 +717,25 @@ export function AgentComposer({
         ) : (
           <span />
         )}
-        <Tooltip side="top" content="Send to agent">
-          <Button
-            variant="contrast"
-            size="xs"
-            disabled={!canSend}
-            onClick={() => send()}
-            aria-label="Send to agent"
-            // Disabled is quiet, not faded: a faded contrast fill is still the
-            // heaviest object in the drawer (and white-on-grey on a light theme).
-            className="gap-1.5 disabled:bg-overlay-subtle disabled:text-text-secondary disabled:opacity-100 disabled:shadow-none disabled:ring-0"
-          >
-            Send
-            <Kbd density="compact" className="bg-transparent text-inherit opacity-70">
-              ⏎
-            </Kbd>
-          </Button>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="contrast"
+              size="xs"
+              disabled={!canSend}
+              onClick={() => send()}
+              aria-label="Send to agent"
+              // Disabled is quiet, not faded: a faded contrast fill is still the
+              // heaviest object in the drawer (and white-on-grey on a light theme).
+              className="gap-1.5 disabled:bg-overlay-subtle disabled:text-text-secondary disabled:opacity-100 disabled:shadow-none disabled:ring-0"
+            >
+              Send
+              <kbd className={cn(KBD_COMPACT_CLASS, "bg-transparent text-inherit opacity-70")}>
+                ⏎
+              </kbd>
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="top">Send to agent</TooltipContent>
         </Tooltip>
       </div>
 
@@ -762,15 +761,18 @@ export function AgentComposer({
           {intents.map((intent) => (
             // The words that will actually land in the draft, for anyone who
             // wants them before committing.
-            <Tooltip key={intent.label} side="bottom" content={intent.prompt}>
-              <Button
-                variant="pill"
-                size="xs"
-                className="min-w-0 justify-start font-normal text-text-secondary"
-                onClick={() => applyIntent(intent.prompt)}
-              >
-                <span className="truncate">{intent.label}</span>
-              </Button>
+            <Tooltip key={intent.label}>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="pill"
+                  size="xs"
+                  className="min-w-0 justify-start font-normal text-text-secondary"
+                  onClick={() => applyIntent(intent.prompt)}
+                >
+                  <span className="truncate">{intent.label}</span>
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">{intent.prompt}</TooltipContent>
             </Tooltip>
           ))}
         </div>
