@@ -863,7 +863,9 @@ describe("HibernationService", () => {
     type ProjectViewManagerMock = {
       getActiveProjectId: Mock<() => string | null>;
       getOutgoingBridgeProjectId: Mock<() => string | null>;
-      destroyView: Mock<(projectId: string) => boolean>;
+      destroyView: Mock<
+        (projectId: string, options?: { protectMcpDispatch?: boolean }) => boolean
+      >;
     };
 
     function makeManager(
@@ -896,6 +898,22 @@ describe("HibernationService", () => {
 
       expect(background.destroyView).toHaveBeenCalledWith("proj-1");
       expect(alsoBackground.destroyView).toHaveBeenCalledWith("proj-1");
+    });
+
+    it("hands an automatic sleep's MCP-dispatch guard to every window (#13845)", () => {
+      const background = makeManager("other-proj");
+      const alsoBackground = makeManager(null);
+      background.destroyView.mockReturnValue(false);
+      const service = makeServiceWithManagers([background, alsoBackground]);
+
+      const evicted = service.evictProjectRenderer("proj-1", { protectMcpDispatch: true });
+
+      // A window that kept its view because a dispatch is waiting on it doesn't count.
+      expect(evicted).toBe(1);
+      expect(background.destroyView).toHaveBeenCalledWith("proj-1", { protectMcpDispatch: true });
+      expect(alsoBackground.destroyView).toHaveBeenCalledWith("proj-1", {
+        protectMcpDispatch: true,
+      });
     });
 
     it("skips the window where the project is the active/foreground view", async () => {
@@ -1077,7 +1095,9 @@ describe("HibernationService", () => {
     type PvmMock = {
       getActiveProjectId: Mock<() => string | null>;
       getOutgoingBridgeProjectId: Mock<() => string | null>;
-      destroyView: Mock<(projectId: string) => boolean>;
+      destroyView: Mock<
+        (projectId: string, options?: { protectMcpDispatch?: boolean }) => boolean
+      >;
     };
 
     function makePvm(

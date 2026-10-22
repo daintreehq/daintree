@@ -463,8 +463,8 @@ describe("project:sleep", () => {
 
     it("announces the sleep on its own event, not just the status change", async () => {
       // A window showing this project drops to no-project off THIS event.
-      // Inferring it from a `closed` status would also fire for relocation,
-      // project adoption and the idle sweep, blanking windows that shouldn't be.
+      // Inferring it from a `closed` status would also fire for relocation and
+      // project adoption, blanking windows that shouldn't be.
       const { invoke } = setup();
 
       await invoke("proj-1");

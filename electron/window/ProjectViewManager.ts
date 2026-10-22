@@ -1581,10 +1581,31 @@ export class ProjectViewManager {
     return true;
   }
 
-  /** Returns true if a cached view existed for the project and was torn down. */
-  destroyView(projectId: string): boolean {
+  /**
+   * Whether an MCP dispatch is in flight against this project's view, or can't
+   * be ruled out. The test an automatic teardown must pass before destroying
+   * the view (#13845): LRU eviction already skips a leased view, and a
+   * teardown nobody asked for can wait for the lease to lapse just as well.
+   * Unlike pressure eviction, unreadable activity counts as a dispatch — an
+   * automatic sleep relieves no emergency, so it has no OOM to weigh against.
+   */
+  isMcpDispatchProtected(projectId: string): boolean {
+    const wc = this.views.get(projectId)?.view.webContents;
+    // Electron 41+ hands back undefined for a destroyed view's webContents.
+    if (!wc || wc.isDestroyed()) return false;
+    const mcp = this.mcpActivityFor(projectId, wc);
+    return mcp.dispatchLease || mcp.unknown;
+  }
+
+  /**
+   * Returns true if a cached view existed for the project and was torn down.
+   * `protectMcpDispatch` leaves a view an MCP dispatch is waiting on alone and
+   * returns false — automatic callers pass it, an explicit user action doesn't.
+   */
+  destroyView(projectId: string, options?: { protectMcpDispatch?: boolean }): boolean {
     const entry = this.views.get(projectId);
     if (!entry) return false;
+    if (options?.protectMcpDispatch && this.isMcpDispatchProtected(projectId)) return false;
 
     if (this.activeProjectId === projectId) {
       this.activeProjectId = null;

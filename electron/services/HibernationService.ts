@@ -43,13 +43,14 @@ export class HibernationService {
   // backgrounded project's terminals are never torn down by the *background*
   // path — memory pressure (hibernateUnderMemoryPressure, which skips its whole
   // sweep rather than running it to a no-op on every tier-2 pass, #12517).
-  // User-initiated closes (#10831 — the idle "Close Them" action) deliberately
-  // bypass this guard and DO kill, since the user explicitly asked for it; see the
-  // `reason !== "user-initiated"` check in hibernateProject(). Every kill
-  // funnels through the single `gracefulKillByProject` chokepoint there,
-  // guarded below. On the paths that still reach it, the rest of the flow
-  // (callbacks, the project-hibernated event, and the user-initiated
-  // WebContentsView eviction we KEEP) is preserved. Typed
+  // A user-initiated `hibernateProjectOnDemand` (#10831) deliberately bypasses
+  // this guard and DOES kill, since the user explicitly asked for it; see the
+  // `reason !== "user-initiated"` check in hibernateProject(). The idle
+  // reminder's action no longer lands here — it runs Sleep (`./projectSleep.ts`,
+  // #13845). Every kill funnels through the single `gracefulKillByProject`
+  // chokepoint there, guarded below. On the paths that still reach it, the rest
+  // of the flow (callbacks, the project-hibernated event, and the
+  // user-initiated WebContentsView eviction we KEEP) is preserved. Typed
   // `boolean` (not the `true` literal) so the kill branch stays type-reachable
   // for the step-7 deletion; flip to `false` to revert.
   private static readonly EXPERIMENT_HIBERNATION_DISABLED: boolean = true;
@@ -262,15 +263,13 @@ export class HibernationService {
   }
 
   /**
-   * Public entry point for hibernating a project on demand (e.g. from the
-   * idle-terminal "Close Them" action). Routes through the injected PtyClient
-   * so DevPreview callbacks fire and the renderer sees the standard
-   * `hibernation:project-hibernated` event. No-op if the PtyClient has not been
-   * injected yet.
+   * Hibernate one project directly, through the same flow the memory-pressure
+   * sweep uses. No-op if the PtyClient has not been injected yet.
    *
-   * Defaults to `"user-initiated"` — this entry point is only reached through
-   * explicit user actions, which (unlike memory-pressure hibernation) also
-   * evict the project's cached renderer (#10668).
+   * Not a user teardown: the idle-terminal reminder's action used to land here,
+   * and lost the agents' session ids, the assistant, the workspace host and the
+   * plugins on the way (#13845). Anything that stops a project because someone
+   * asked for it goes through `sleepProject` (`./projectSleep.ts`) instead.
    */
   async hibernateProjectOnDemand(
     projectId: string,
@@ -302,12 +301,10 @@ export class HibernationService {
 
     // EXPERIMENT (hibernation removal, step 4): skip the PTY-kill so backgrounded
     // projects' terminals stay fully alive; report 0 killed. Scoped to the
-    // background paths only — a user-initiated close (#10831, the idle "Close
-    // Them" action) bypasses the guard and actually kills, because the user
-    // explicitly requested it and the idle notification only surfaces when every
-    // terminal is below the active-agent states. `preserveSession: true` flushes
-    // scrollback before kill, so `.restore` files survive and terminals come back
-    // on next project open.
+    // background path only — a user-initiated close (#10831) bypasses the guard
+    // and actually kills, because the user explicitly requested it.
+    // `preserveSession: true` flushes scrollback before kill, so `.restore`
+    // files survive and terminals come back on next project open.
     const results =
       assistantProtected ||
       (HibernationService.EXPERIMENT_HIBERNATION_DISABLED && reason !== "user-initiated")
@@ -365,12 +362,13 @@ export class HibernationService {
    * either would expose a blank/unpainted frame. Both guards are per-manager —
    * each window tracks its own active and outgoing project.
    *
-   * Public so the user-initiated `project:free-memory` IPC handler can reclaim
-   * the renderer directly without routing through the (experiment-gated)
-   * `hibernateProject` PTY-kill path. Returns the number of windows whose
-   * cached view was torn down.
+   * Public so Sleep (`./projectSleep.ts`) can reclaim the renderer without
+   * routing through the (experiment-gated) `hibernateProject` PTY-kill path.
+   * An automatic sleep passes `protectMcpDispatch`, which leaves a view an MCP
+   * dispatch is waiting on in place (#13845). Returns the number of windows
+   * whose cached view was torn down.
    */
-  evictProjectRenderer(projectId: string): number {
+  evictProjectRenderer(projectId: string, options?: { protectMcpDispatch?: boolean }): number {
     const provider = this.projectViewManagersProvider;
     if (!provider) return 0;
 
@@ -392,7 +390,10 @@ export class HibernationService {
         ) {
           continue;
         }
-        if (manager.destroyView(projectId)) {
+        const destroyed = options
+          ? manager.destroyView(projectId, options)
+          : manager.destroyView(projectId);
+        if (destroyed) {
           evictedViewCount++;
         }
       } catch (error) {

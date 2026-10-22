@@ -241,9 +241,9 @@ export function registerAppConfigActions(
 
   actions.set("idleTerminalNotify.closeProject", () => ({
     id: "idleTerminalNotify.closeProject",
-    title: "Close idle terminals",
+    title: "Sleep idle project",
     description:
-      "Close (hibernate) the idle terminals in a background project. Args: { projectId }. Used as the recovery action on an idle-terminal inbox notification.",
+      "Put a background project whose terminals have gone idle to sleep: its terminals stop with their sessions saved, and reopening it resumes them. Args: { projectId }. Used as the recovery action on an idle-terminal inbox notification.",
     category: "terminal",
     kind: "command",
     danger: "safe",

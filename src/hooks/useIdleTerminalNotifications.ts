@@ -41,7 +41,7 @@ export function useIdleTerminalNotifications(): void {
           // equivalent toast-path handler (unused while priority is "low").
           actions: [
             {
-              label: "Close them",
+              label: "Sleep project",
               variant: "primary" as const,
               actionId: "idleTerminalNotify.closeProject",
               actionArgs: { projectId: project.projectId },

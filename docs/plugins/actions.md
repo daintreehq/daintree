@@ -432,7 +432,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `fleet.scope.enter` | Fleet: enter scope mode | safe | — |
 | `fleet.scope.exit` | Fleet: exit scope mode | safe | — |
 | `fleet.trash` | Fleet: trash | confirm | `confirmed?` |
-| `idleTerminalNotify.closeProject` | Close idle terminals | safe | `projectId` |
+| `idleTerminalNotify.closeProject` | Sleep idle project | safe | `projectId` |
 | `idleTerminalNotify.muteProject` | Mute idle terminal notifications | safe | `projectId` |
 | `panel.gridLayout.setStrategy` | Set grid layout strategy | safe | `strategy` |
 | `panel.gridLayout.setValue` | Set grid layout value | safe | `value` |

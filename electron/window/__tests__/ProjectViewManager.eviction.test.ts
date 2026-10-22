@@ -4242,6 +4242,58 @@ describe("ProjectViewManager — MCP bound sessions and dispatch leases (#11790)
     });
   });
 
+  // `destroyView` was the one teardown that didn't look (#13845): an automatic
+  // sleep could take the view a dispatch was waiting on, leaving that session
+  // failing SESSION_BINDING_GONE until the project reopened.
+  describe("destroying a view for an automatic sleep", () => {
+    it("leaves a view alone while a dispatch is in flight against it", async () => {
+      const mgr = makeManager(3);
+      await seedThreeViews(mgr);
+      leasedWebContentsIds.add(webContentsIdFor(mgr, "proj-a"));
+
+      expect(mgr.isMcpDispatchProtected("proj-a")).toBe(true);
+      expect(mgr.destroyView("proj-a", { protectMcpDispatch: true })).toBe(false);
+      expect(mgr.getAllViews().map((v) => v.projectId)).toContain("proj-a");
+
+      // The lease is per-dispatch: once it lapses, the same sleep goes through.
+      leasedWebContentsIds.clear();
+      expect(mgr.destroyView("proj-a", { protectMcpDispatch: true })).toBe(true);
+      expect(mgr.getAllViews().map((v) => v.projectId)).not.toContain("proj-a");
+    });
+
+    it("holds a quiet bound session to nothing — only a dispatch protects", async () => {
+      const mgr = makeManager(3);
+      await seedThreeViews(mgr);
+      boundWorkspaces.add("proj-a");
+
+      expect(mgr.isMcpDispatchProtected("proj-a")).toBe(false);
+      expect(mgr.destroyView("proj-a", { protectMcpDispatch: true })).toBe(true);
+    });
+
+    it("waits out activity it can't read, unlike pressure eviction", async () => {
+      const mgr = makeManager(3);
+      await seedThreeViews(mgr);
+      activityThrowsFor.add("proj-a");
+
+      expect(mgr.destroyView("proj-a", { protectMcpDispatch: true })).toBe(false);
+      expect(mgr.getAllViews().map((v) => v.projectId)).toContain("proj-a");
+    });
+
+    it("still destroys a leased view when a user asked", async () => {
+      const mgr = makeManager(3);
+      await seedThreeViews(mgr);
+      leasedWebContentsIds.add(webContentsIdFor(mgr, "proj-a"));
+
+      expect(mgr.destroyView("proj-a")).toBe(true);
+      expect(mgr.getAllViews().map((v) => v.projectId)).not.toContain("proj-a");
+    });
+
+    it("reads a project it holds no view for as unprotected", () => {
+      const mgr = makeManager(3);
+      expect(mgr.isMcpDispatchProtected("proj-z")).toBe(false);
+    });
+  });
+
   describe("an activity callback that throws", () => {
     it("never becomes an absolute exclusion — a broken callback must not pin the cache", async () => {
       // The dangerous direction: if unknown granted the lease exclusion, one

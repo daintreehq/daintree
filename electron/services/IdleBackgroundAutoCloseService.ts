@@ -11,11 +11,9 @@ import { projectVisibilityClock, type ProjectVisibilityClock } from "./projectVi
 import { getPtyClient, getWorkspaceClientRef } from "../window/serviceRefs.js";
 import { store } from "../store.js";
 import { projectStore } from "./ProjectStore.js";
-import { getHibernationService } from "./HibernationService.js";
 import { helpSessionService } from "./HelpSessionService.js";
-import { writeHibernatedMarker } from "./pty/terminalSessionPersistence.js";
+import { sleepProject } from "./projectSleep.js";
 import { getSystemSleepService } from "./SystemSleepService.js";
-import { notifyProjectPluginsClosed } from "../window/projectPluginLifecycle.js";
 import { logInfo, logError } from "../utils/logger.js";
 import { broadcastToRenderer } from "../ipc/utils.js";
 import { CHANNELS } from "../ipc/channels.js";
@@ -37,8 +35,8 @@ type BlockingReason = "terminal" | "assistant";
 /**
  * IdleBackgroundAutoCloseService — Auto-closes background projects that have
  * been idle past a configurable threshold (default 15 min) AND hold zero
- * terminals, reclaiming their resident memory the same way the manual
- * "Close (free memory)" action (#10829) does.
+ * terminals, putting them to sleep through the same teardown the manual
+ * Sleep project runs (#13845).
  *
  * @pattern Factory/Accessor Methods (Pattern C)
  *
@@ -496,10 +494,12 @@ export class IdleBackgroundAutoCloseService {
   }
 
   /**
-   * Tear down a single background project — the same reclamation sequence as the
-   * manual `project:free-memory` action (#10829): graceful session-preserving
-   * PTY kill, cached renderer eviction, workspace-host eviction, then mark
-   * `closed` with the `autoParkedAt` marker so the switcher labels it distinctly.
+   * Put a single background project to sleep — the same Sleep the user's
+   * Sleep project runs (#13845), so an auto-closed project keeps its agents'
+   * sessions and reopens exactly as a manually slept one does, but as a
+   * POLICY: it re-asks eligibility at every await, never destroys a view an
+   * MCP dispatch is waiting on, and stamps `autoParkedAt` so the switcher
+   * labels it distinctly.
    */
   private async closeProject(
     projectId: string,
@@ -517,6 +517,7 @@ export class IdleBackgroundAutoCloseService {
     const fresh = this.readEligibleProject(projectId, now, thresholdMs);
     if (!fresh) return null;
 
+    const client = this.ptyClient;
     const liveTerminals = await this.readTerminals();
     // Re-read `enabled` after the await too: `stop()` nulls the client, and
     // without this a toggle-off landing mid-request would sail past every
@@ -526,92 +527,34 @@ export class IdleBackgroundAutoCloseService {
     if (!project) return null;
     if (this.blockingReason(projectId, liveTerminals)) return null;
 
-    // The gate above floors a live assistant, so this revoke settles whatever
-    // non-live session records the project has left: one whose terminal exited
-    // under its own steam (nothing drops that binding), or one provisioned but
-    // never bound because the renderer crashed or the spawn failed. Only a
-    // previously bound record has a conversation to keep, and only that case
-    // writes the pending-hibernation entry that resumes on the next open. Await
-    // it so the records are settled before the project-wide kill below; a
-    // failure degrades to that kill, losing only the resume entry.
-    try {
-      await helpSessionService.revokeByProjectId(projectId);
-    } catch (error) {
-      logError("idle-background-auto-close-help-revoke-failed", error, { projectId });
-    }
-
-    // The capture-revoke's gracefulKill can take seconds — long enough for the
-    // user to switch to this project, spawn a real terminal in it, or reopen the
-    // assistant panel. Re-verify eligibility once more before the irreversible
-    // teardown; bailing here is safe because the revoke above already persisted
-    // the assistant's pending-hibernation entry, so a reopened panel still
-    // resumes.
-    if (!this.readEligibleProject(projectId, now, thresholdMs)) return null;
-    const postRevokeTerminals = await this.readTerminals();
-    // The snapshot is itself an await, so a window can activate the project
-    // while it is in flight (#13570) — the row and active set need re-reading.
-    if (!postRevokeTerminals) return null;
-    if (!this.readEligibleProject(projectId, now, thresholdMs)) return null;
-    if (this.blockingReason(projectId, postRevokeTerminals)) return null;
-
-    // Graceful, session-preserving kill — scrollback survives via hibernation
-    // markers so a later reopen restores panels instead of starting cold. For a
-    // zero-terminal project this returns `[]`, but call it for correctness.
-    const results =
-      (await this.ptyClient?.gracefulKillByProject(projectId, {
-        preserveSession: true,
-      })) ?? [];
-    for (const result of results) {
-      writeHibernatedMarker(result.id);
-    }
-
-    // The kill is the slowest await of all. A project a window activated (or a
-    // toggle-off) meanwhile keeps its markers (its PTYs are gone either way, and the markers
-    // let the panels restore) but must not be evicted, marked closed, or have
-    // its plugins unloaded under it (#13570). Nothing awaits between this
-    // check and the status write below, so activation cannot slip in between.
-    if (!this.readEligibleProject(projectId, now, thresholdMs)) {
-      logInfo("idle-background-auto-close-ineligible-after-kill", {
-        projectId,
-        terminalsKilled: results.length,
-      });
-      return null;
-    }
-
-    // Tear down the cached WebContentsView across every window (guarded inside
-    // the service — no-ops where the project is on-screen).
-    getHibernationService().evictProjectRenderer(projectId);
-
-    // Drop the workspace-host process (skips when another window still holds it).
-    getWorkspaceClientRef()?.evictProject(project.path);
-
-    // Keep the project in the list as `closed` WITHOUT clearProjectState, so its
-    // panel/terminal layout survives a non-destructive reopen. The autoParkedAt
-    // marker distinguishes this from a manual close in the switcher.
-    projectStore.updateProjectStatus(projectId, "closed", {
-      autoParkedAt: now,
-    });
-
-    // Reclaiming the project's memory has to include its plugins: without this
-    // the sweep leaves the workers, startup timers, spawned children and the
-    // native watcher resident, which is the opposite of what an auto-close is
-    // for. Fire-and-forget and self-logging, so a plugin's teardown cannot fail
-    // the sweep. The controller's next-switch sweep stays as defence in depth —
-    // a duplicate close is a no-op.
-    notifyProjectPluginsClosed(projectId);
-
-    const updated = projectStore.getProjectById(projectId);
-    if (updated) {
-      try {
-        broadcastToRenderer(CHANNELS.PROJECT_UPDATED, updated);
-      } catch {
-        // Window may be closing.
+    // From here Sleep owns the order. Its capture-revoke settles whatever
+    // non-live session records the project has left — the gate above floors a
+    // live assistant — and every later await is followed by these same two
+    // questions: is the project still a candidate (a window can activate it,
+    // #13570, and `stop()` can clear the client), and do the terminals the
+    // kill is about to take still leave it empty? A degraded snapshot can't
+    // answer the second, so it reads as no.
+    const outcome = await sleepProject(
+      projectId,
+      {
+        initiator: "policy",
+        autoParkedAt: now,
+        isStillEligible: () =>
+          this.ptyClient === client && this.readEligibleProject(projectId, now, thresholdMs) !== null,
+        allowsTerminals: (snapshot) =>
+          !snapshot.degraded && this.blockingReason(projectId, snapshot.terminals) === null,
+      },
+      {
+        ptyClient: client,
+        workspaceClient: getWorkspaceClientRef(),
+        projectViewManagers: this.projectViewManagersProvider ?? (() => []),
       }
-    }
+    );
+    if (outcome.status !== "slept") return null;
 
     logInfo("idle-background-auto-close-closed", {
       projectId,
-      terminalsKilled: results.length,
+      terminalsKilled: outcome.terminalsKilled,
     });
 
     return { projectId, projectName: project.name };

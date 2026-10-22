@@ -48,14 +48,21 @@ interface FakeTerminal {
 
 function makePtyClient(config: {
   terminals?: FakeTerminal[] | (() => Promise<FakeTerminal[]>);
+  /** A host shard didn't answer the completeness-aware read. */
+  degraded?: boolean;
   outcome: { confirmed: boolean; sessions: Array<{ id: string; agentSessionId: string | null }> };
 }): { client: PtyClient; gracefulKillByProjectConfirmed: ReturnType<typeof vi.fn> } {
   const gracefulKillByProjectConfirmed = vi.fn(async () => config.outcome);
   const getAllTerminalsAsync = vi.fn(async () =>
     typeof config.terminals === "function" ? await config.terminals() : (config.terminals ?? [])
   );
+  const getAllTerminalsWithCompletenessAsync = vi.fn(async () => ({
+    terminals: await getAllTerminalsAsync(),
+    degraded: config.degraded ?? false,
+  }));
   const client = {
     getAllTerminalsAsync,
+    getAllTerminalsWithCompletenessAsync,
     gracefulKillByProjectConfirmed,
   } as unknown as PtyClient;
   return { client, gracefulKillByProjectConfirmed };
@@ -348,6 +355,76 @@ describe("gracefulTeardownAndJournalProject", () => {
 
     expect(result).toMatchObject({ confirmed: true, terminalsKilled: 0 });
     expect(journalMock.journalAgentSession).not.toHaveBeenCalled();
+  });
+
+  describe("a beforeKill guard", () => {
+    const TERMINALS: FakeTerminal[] = [
+      { id: "t1", projectId: "proj", launchAgentId: "claude", cwd: "/a", spawnedAt: 1 },
+      { id: "t2", projectId: "other", cwd: "/b", spawnedAt: 1 },
+    ];
+
+    it("sees the scope's pre-kill snapshot and can refuse the kill outright", async () => {
+      const { client, gracefulKillByProjectConfirmed } = makePtyClient({
+        terminals: TERMINALS,
+        outcome: { confirmed: true, sessions: [{ id: "t1", agentSessionId: "s1" }] },
+      });
+      const beforeKill = vi.fn(() => false);
+
+      const result = await gracefulTeardownAndJournalProject("proj", client, undefined, {
+        preserveSession: true,
+        writeBackSessionIds: true,
+        beforeKill,
+      });
+
+      expect(beforeKill).toHaveBeenCalledWith({
+        terminals: [expect.objectContaining({ id: "t1" })],
+        degraded: false,
+      });
+      expect(result).toEqual({ confirmed: false, aborted: true, terminalsKilled: 0, sessions: [] });
+      expect(gracefulKillByProjectConfirmed).not.toHaveBeenCalled();
+      expect(projectStoreMock.enqueueProjectStateUpdate).not.toHaveBeenCalled();
+      expect(journalMock.journalAgentSession).not.toHaveBeenCalled();
+    });
+
+    it("kills and journals as usual when the guard allows it", async () => {
+      const { client, gracefulKillByProjectConfirmed } = makePtyClient({
+        terminals: TERMINALS,
+        outcome: { confirmed: true, sessions: [{ id: "t1", agentSessionId: "s1" }] },
+      });
+
+      const result = await gracefulTeardownAndJournalProject("proj", client, undefined, {
+        beforeKill: () => true,
+      });
+
+      expect(result).toMatchObject({ confirmed: true, aborted: false, terminalsKilled: 1 });
+      expect(gracefulKillByProjectConfirmed).toHaveBeenCalledTimes(1);
+      expect(journalMock.journalAgentSession).toHaveBeenCalledTimes(1);
+    });
+
+    it("is told when the snapshot may be missing terminals", async () => {
+      const { client } = makePtyClient({
+        terminals: TERMINALS,
+        degraded: true,
+        outcome: { confirmed: true, sessions: [] },
+      });
+      const beforeKill = vi.fn(() => true);
+
+      await gracefulTeardownAndJournalProject("proj", client, undefined, { beforeKill });
+
+      expect(beforeKill).toHaveBeenCalledWith(expect.objectContaining({ degraded: true }));
+    });
+
+    it("reads a snapshot that failed outright as degraded, not empty", async () => {
+      const { client } = makePtyClient({
+        terminals: () => Promise.reject(new Error("host unreachable")),
+        outcome: { confirmed: true, sessions: [] },
+      });
+      const beforeKill = vi.fn(() => true);
+
+      await gracefulTeardownAndJournalProject("proj", client, undefined, { beforeKill });
+
+      expect(beforeKill).toHaveBeenCalledWith({ terminals: [], degraded: true });
+    });
   });
 
   it("survives a failed terminal snapshot (best-effort) and still reports the kill", async () => {
