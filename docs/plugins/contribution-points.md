@@ -769,6 +769,8 @@ Keybindings map a key combination to an action.
 | `activeSidebarView` | string | The sidebar view the project shows: `"worktrees"` for the built-in worktree list, or a [sidebar view](#views--shipped)'s id. It names the view showing whether or not the sidebar is visible, and falls back to `"worktrees"` while a chosen plugin view doesn't apply. |
 | `presentationForgeStats` | string | How this project presents the toolbar's forge stats pill: `"shown"`, `"demoted"` (in the toolbar's `…` menu) or `"hidden"`. Always `"hidden"` in a folder without a git repository. |
 | `presentationGitDetail` | string | How this project presents git detail on worktree cards: `"shown"` or `"demoted"` (labelled Quiet in settings). Quiet moves the branch, issue and PR detail and the sync line into the card's expanded details, with the headline's tooltip naming what it displaced, drops the resting last-activity chip, and gathers the card menu's git rows under its Git submenu; failing CI, a head that moved under an armed merge, drift and fetch failures stay on the card. Always `"hidden"` in a folder without a git repository. |
+| `presentationLauncherAgents` | string | How this project's launcher presents its agent group: `"shown"` or `"demoted"` (folded into the launcher's collapsed More row, where search still finds every agent). |
+| `presentationLauncherPanels` | string | How this project's launcher presents its built-in panel groups: `"shown"` or `"demoted"`, as for agents. |
 
 A `when` turns one entry on or off. It never gates the action behind it, which still runs from anywhere else that offers it.
 
@@ -787,6 +789,8 @@ Keybindings also see the focus and UI keys:
 | `canopyHidden`     | boolean | The user hid Canopy; its panel cannot open.                    |
 
 The `presentation*` keys come from the project's presentation profile, which the user sets in Project settings → General → Features. A repository can suggest one by committing `.daintree/presentation.json` — `{ "features": { "forgeStats": "hidden", "gitDetail": "demoted" } }` — and the suggestion applies only once the user accepts it when the project opens. Daintree reads that file and never writes it, unknown features and levels are ignored, and no plugin API changes a level.
+
+The profile also arranges the launcher. Once it demotes a launcher group or features an entry, the project's own plugin groups lead the launcher; installed plugins keep their name order. `.daintree/presentation.json` can suggest a featured entry with `"featuredLaunchEntry": "publisher.name.entry-id"`, naming one of the project plugin's own [launch entries](#launch-entries--shipped) by its manifest name and entry id. The featured entry is preselected when the launcher opens, so Enter runs it; featuring never runs anything by itself, and an entry that is hidden, filtered out by its `when` or not loaded leaves the first row selected. The user's group order, set in Project settings → General → Launcher, wins over the profile's.
 
 A plugin adds keys of its own with [`host.setContext`](./host-api.md#setcontext). They sit under its manifest name — `setContext("needsYou", true)` from `digitalfrontier.beads` reads as `digitalfrontier.beads.needsYou` — so a binding can stay off until the plugin has something to act on. Manifest names with hyphens or leading digits (`acme.linear-planner`, `3m.tools`) parse as paths. Every renderer `when` sees these keys too, like the project keys.
 

@@ -18,6 +18,8 @@ const snapshot = (levels: PresentationLevels): ProjectPresentationSnapshot => ({
   suggestionAnswer: null,
   useProjectToolbar: null,
   promotedPluginButtons: [],
+  launcherGroupOrder: [],
+  featuredLaunchEntry: null,
   revision: 0,
 });
 
@@ -163,6 +165,13 @@ describe("PresentationFeaturesSection", () => {
     });
     // "Quiet" is this feature's word for the shared demoted level.
     expect(setLevel).toHaveBeenLastCalledWith("gitDetail", "demoted");
+  });
+
+  it("leaves the launcher's features to the Launcher section", async () => {
+    await renderSection();
+    expect(document.getElementById("project-feature-forgeStats")).not.toBeNull();
+    expect(document.getElementById("project-feature-launcherAgents")).toBeNull();
+    expect(document.getElementById("project-feature-launcherPanels")).toBeNull();
   });
 
   it("takes no input until main has answered for the project", () => {

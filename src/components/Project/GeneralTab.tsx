@@ -32,6 +32,7 @@ import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { useProjectRelocationStore } from "@/store/projectRelocationStore";
 import { findDevServerCandidate } from "@/utils/devServerDetection";
 import { PresentationFeaturesSection } from "./PresentationFeaturesSection";
+import { LauncherPresentationSection } from "./LauncherPresentationSection";
 
 const DAINTREE_MCP_TIER_OPTIONS: readonly ChoiceboxOption<DaintreeMcpTier>[] = [
   {
@@ -636,6 +637,8 @@ export function GeneralTab({
       )}
 
       {currentProject && <PresentationFeaturesSection isOpen={isOpen} />}
+
+      {currentProject && <LauncherPresentationSection />}
 
       <SettingsSection
         id="project-dev-server"

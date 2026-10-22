@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -50,6 +51,47 @@ describe("parsePresentationSuggestion", () => {
     });
     expect(a?.hash).toBe(b?.hash);
     expect(a?.hash).not.toBe(hashPresentationLevels({ forgeStats: "hidden" }));
+  });
+});
+
+describe("featured launcher entry (#13791)", () => {
+  it("is a suggestion on its own, and rides beside levels", () => {
+    expect(parsePresentationSuggestion({ featuredLaunchEntry: "acme.records.new" })).toEqual({
+      levels: {},
+      featuredLaunchEntry: "acme.records.new",
+      hash: hashPresentationLevels({}, "acme.records.new"),
+    });
+    expect(
+      parsePresentationSuggestion({
+        features: { launcherAgents: "demoted" },
+        featuredLaunchEntry: "acme.records.new",
+      })?.featuredLaunchEntry
+    ).toBe("acme.records.new");
+  });
+
+  it("ignores a malformed entry and keeps the levels", () => {
+    const suggestion = parsePresentationSuggestion({
+      features: { forgeStats: "hidden" },
+      featuredLaunchEntry: "project__abc__acme.records.new",
+    });
+    expect(suggestion).toEqual({
+      levels: { forgeStats: "hidden" },
+      hash: hashPresentationLevels({ forgeStats: "hidden" }),
+    });
+    expect(parsePresentationSuggestion({ featuredLaunchEntry: 7 })).toBeNull();
+  });
+
+  it("hashes a file without one exactly as before, so its answers still count", () => {
+    const legacy = createHash("sha256")
+      .update(JSON.stringify([["forgeStats", "hidden"]]))
+      .digest("hex");
+    expect(parsePresentationSuggestion({ features: { forgeStats: "hidden" } })?.hash).toBe(legacy);
+    expect(
+      parsePresentationSuggestion({
+        features: { forgeStats: "hidden" },
+        featuredLaunchEntry: "acme.records.new",
+      })?.hash
+    ).not.toBe(legacy);
   });
 });
 

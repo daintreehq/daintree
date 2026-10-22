@@ -117,6 +117,15 @@ describe("suggestedChanges", () => {
     ).toEqual([]);
   });
 
+  it("names a featured launcher entry beside the levels", () => {
+    expect(
+      describeChanges([
+        { feature: "launcherAgents", level: "demoted" },
+        { feature: "featuredLaunchEntry", entry: "acme.notes.board" },
+      ])
+    ).toBe("Launcher agents demoted, Launcher entry featured");
+  });
+
   it("calls quiet git detail by its own name", () => {
     expect(describeChanges([{ feature: "gitDetail", level: "demoted" }])).toBe("Git detail quiet");
   });
@@ -135,6 +144,23 @@ describe("ProjectPresentationNotice", () => {
     adopt({ suggestion: { levels: { gitDetail: "demoted" }, hash: HASH } });
     renderNotice();
     expect(screen.getByText("This repository suggests quieting git detail")).not.toBeNull();
+  });
+
+  it("asks about a suggestion that only features a launcher entry (#13791)", () => {
+    adopt({
+      suggestion: { levels: {}, featuredLaunchEntry: "acme.notes.board", hash: HASH },
+    });
+    renderNotice();
+    expect(screen.getByText("This repository suggests featuring a launcher entry")).not.toBeNull();
+  });
+
+  it("asks nothing about a featured entry the project already features", () => {
+    adopt({
+      featuredLaunchEntry: "acme.notes.board",
+      suggestion: { levels: {}, featuredLaunchEntry: "acme.notes.board", hash: HASH },
+    });
+    renderNotice();
+    expect(screen.queryByText("This repository suggests featuring a launcher entry")).toBeNull();
   });
 
   it("asks nothing when the user already has what the repository suggests", () => {

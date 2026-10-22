@@ -15,6 +15,10 @@ import {
   type PresentationLevel,
   type PresentationLevels,
 } from "../../../shared/config/presentationProfile.js";
+import {
+  isFeaturedLaunchEntryRef,
+  parseLauncherGroupOrder,
+} from "../../../shared/config/launcherArrangement.js";
 import type {
   PresentationSuggestion,
   PresentationSuggestionAnswer,
@@ -48,6 +52,10 @@ export interface StoredProjectPresentation {
   useProjectToolbar: boolean | null;
   /** This project's own plugin buttons promoted onto its toolbar, in the order promoted. */
   promotedPluginButtons: string[];
+  /** The user's order for the launcher's groups (#13791); empty for never set. */
+  launcherGroupOrder: string[];
+  /** The project plugin entry the launcher preselects, or `null`. */
+  featuredLaunchEntry: string | null;
   /**
    * Bumped on every write and kept on disk, so it only ever grows — across
    * restarts too. A view drops any snapshot older than one it already holds:
@@ -121,6 +129,8 @@ function parseEntry(projectId: string, value: unknown): StoredProjectPresentatio
       suggestionAnswers: parseAnswers(undefined),
       useProjectToolbar: null,
       promotedPluginButtons: [],
+      launcherGroupOrder: [],
+      featuredLaunchEntry: null,
       revision: 0,
     };
   }
@@ -131,6 +141,10 @@ function parseEntry(projectId: string, value: unknown): StoredProjectPresentatio
     useProjectToolbar:
       typeof entry.useProjectToolbar === "boolean" ? entry.useProjectToolbar : null,
     promotedPluginButtons: parsePromoted(projectId, entry.promotedPluginButtons),
+    launcherGroupOrder: parseLauncherGroupOrder(entry.launcherGroupOrder),
+    featuredLaunchEntry: isFeaturedLaunchEntryRef(entry.featuredLaunchEntry)
+      ? entry.featuredLaunchEntry
+      : null,
     revision: parseRevision(entry.revision),
   };
 }
@@ -240,7 +254,8 @@ export function setProjectPresentationLevel(
 
 /**
  * Record the user's answer to the repository's suggestion. Accepting copies
- * the suggested levels into the user's own profile — from then on they are the
+ * the suggested levels, and any featured launcher entry, into the user's own
+ * profile — from then on they are the
  * user's, edited and reset like any other — and declining changes no level.
  * Either way the answer is remembered against the suggestion's hash, so the
  * question comes back only when the repository suggests something new, and a
@@ -270,6 +285,9 @@ export function answerProjectPresentationSuggestion(
     entry.levels = { ...rawLevels(entry), ...suggestion.levels };
     if (Object.keys(suggestion.levels).some((id) => isToolbarPresentationFeature(id as never))) {
       delete entry.useProjectToolbar;
+    }
+    if (suggestion.featuredLaunchEntry !== undefined) {
+      entry.featuredLaunchEntry = suggestion.featuredLaunchEntry;
     }
   }
   // The answer just given always survives the cap, whatever timestamps an
@@ -363,5 +381,56 @@ export function resetProjectToolbar(projectId: string): StoredProjectPresentatio
   }
   delete entry.promotedPluginButtons;
   delete entry.useProjectToolbar;
+  return writeEntry(all, projectId, entry);
+}
+
+/**
+ * Set the user's order for the launcher's groups (#13791), or with `[]` hand
+ * the order back to the profile. Replaced whole: the order is one choice made
+ * in one list, and ids it names that are not drawn right now are the
+ * renderer's to keep.
+ */
+export function setProjectLauncherGroupOrder(
+  projectId: string,
+  order: readonly string[]
+): StoredProjectPresentation {
+  assertProjectId(projectId);
+  if (!Array.isArray(order)) {
+    throw new Error("project presentation: order must be an array");
+  }
+  const parsed = parseLauncherGroupOrder(order);
+  if (parsed.length !== order.length) {
+    throw new Error("project presentation: order holds an invalid or repeated group");
+  }
+  const all = readAll();
+  const entry = rawEntry(all, projectId);
+  if (parsed.length === 0) {
+    delete entry.launcherGroupOrder;
+  } else {
+    entry.launcherGroupOrder = parsed;
+  }
+  return writeEntry(all, projectId, entry);
+}
+
+/**
+ * Feature one launcher entry (#13791), or with `null` feature none. Shape only
+ * here; the handler checks the entry is the project's own. Clearing takes no
+ * check, so an entry whose plugin has gone can still be let go.
+ */
+export function setProjectFeaturedLaunchEntry(
+  projectId: string,
+  ref: string | null
+): StoredProjectPresentation {
+  assertProjectId(projectId);
+  if (ref !== null && !isFeaturedLaunchEntryRef(ref)) {
+    throw new Error("project presentation: featured entry must be {publisher.name}.{entry id}");
+  }
+  const all = readAll();
+  const entry = rawEntry(all, projectId);
+  if (ref === null) {
+    delete entry.featuredLaunchEntry;
+  } else {
+    entry.featuredLaunchEntry = ref;
+  }
   return writeEntry(all, projectId, entry);
 }

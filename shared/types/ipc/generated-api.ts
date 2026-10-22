@@ -1222,6 +1222,12 @@ export interface GeneratedElectronAPI {
     resetToolbar(
       ...args: IpcInvokeMap["project-presentation:reset-toolbar"]["args"]
     ): Promise<IpcInvokeMap["project-presentation:reset-toolbar"]["result"]>;
+    setFeaturedLaunchEntry(
+      ...args: IpcInvokeMap["project-presentation:set-featured-launch-entry"]["args"]
+    ): Promise<IpcInvokeMap["project-presentation:set-featured-launch-entry"]["result"]>;
+    setLauncherGroupOrder(
+      ...args: IpcInvokeMap["project-presentation:set-launcher-group-order"]["args"]
+    ): Promise<IpcInvokeMap["project-presentation:set-launcher-group-order"]["result"]>;
     setLevel(
       ...args: IpcInvokeMap["project-presentation:set-level"]["args"]
     ): Promise<IpcInvokeMap["project-presentation:set-level"]["result"]>;

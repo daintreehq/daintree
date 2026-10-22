@@ -766,6 +766,8 @@ export const CHANNEL_LOCALITY = {
   "project-presentation:changed": "host",
   "project-presentation:get": "host",
   "project-presentation:reset-toolbar": "host",
+  "project-presentation:set-featured-launch-entry": "host",
+  "project-presentation:set-launcher-group-order": "host",
   "project-presentation:set-level": "host",
   "project-presentation:set-plugin-button-promoted": "host",
   "project-presentation:set-toolbar-enabled": "host",

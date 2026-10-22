@@ -14,6 +14,7 @@ import { useShallow } from "zustand/react/shallow";
 import Fuse, { type IFuseOptions } from "fuse.js";
 import {
   ChevronRight,
+  Ellipsis,
   EyeOff,
   Keyboard,
   Pin,
@@ -88,7 +89,9 @@ import {
   activateDockLaunchItem,
   buildPresetChoices,
   insertExpandedPresetRows,
+  insertMoreRows,
   rowHasPresets,
+  MORE_ROW_KEY,
   useDockLaunchModel,
   DOCK_LAUNCH_CATEGORY_LABELS,
   DOCK_LAUNCH_CUE_LABELS,
@@ -224,6 +227,9 @@ export function DockLaunchButton({
   // copy the user acted on.
   const [expandedPresetParentKey, setExpandedPresetParentKey] = useState<string | null>(null);
   const [capturingRowKey, setCapturingRowKey] = useState<string | null>(null);
+  // Whether the groups this project demotes (#13791) are open under More. Shut
+  // again on every close, so each open starts as the project arranged it.
+  const [moreOpen, setMoreOpen] = useState(false);
 
   /** Pointer half of the Right/Left Arrow expansion. */
   const toggleExpanded = useCallback((rowKey: string) => {
@@ -454,24 +460,30 @@ export function DockLaunchButton({
     observer.observe(layoutNode);
     return () => observer.disconnect();
   }, [layoutNode]);
+  // Laid out with More shut, so opening it adds rows under it in its column
+  // rather than rebalancing the columns under the pointer.
   const arranged = useMemo(
-    () => layoutLauncherColumns(model.browseRows, twoColumns),
-    [model.browseRows, twoColumns]
+    () => layoutLauncherColumns(model.browseRows, twoColumns, { fixedOrder: model.fixedOrder }),
+    [model.browseRows, model.fixedOrder, twoColumns]
   );
   const browseRows = useMemo(
-    () => insertExpandedPresetRows(arranged.rows, expandedPresetParentKey),
-    [arranged.rows, expandedPresetParentKey]
+    () =>
+      insertExpandedPresetRows(
+        insertMoreRows(arranged.rows, model.moreRows, moreOpen),
+        expandedPresetParentKey
+      ),
+    [arranged.rows, model.moreRows, moreOpen, expandedPresetParentKey]
   );
   // Recency is a fact about the agent, not about the band a row sits in, so it
   // survives search collapsing every row into one results band.
   const recentKeys = useMemo(
     () =>
       new Set(
-        model.browseRows.flatMap((row) =>
+        [...model.browseRows, ...model.moreRows].flatMap((row) =>
           row.kind === "item" && row.band === "recent" ? [row.item.key] : []
         )
       ),
-    [model.browseRows]
+    [model.browseRows, model.moreRows]
   );
 
   // One flat row list drives selection in both modes: browsing renders the
@@ -552,7 +564,10 @@ export function DockLaunchButton({
   useEffect(() => {
     const pending = pendingExpandRef.current;
     if (!pending) return;
-    const index = results.findIndex((row) => row.kind === "preset" && row.parentRowKey === pending);
+    const index =
+      pending === MORE_ROW_KEY
+        ? firstMoreChildIndex(results)
+        : results.findIndex((row) => row.kind === "preset" && row.parentRowKey === pending);
     if (index < 0) return;
     pendingExpandRef.current = null;
     setSelectedIndex(index);
@@ -585,11 +600,21 @@ export function DockLaunchButton({
   // `setSelectedIndex` takes a new identity every render (the hook's results
   // memo keys on an inline `getItemId`), and resetting on each of those would
   // undo the deliberate follow-the-selection behaviour while typing.
+  //
+  // A featured entry (#13791) is where the selection starts, so Enter runs it;
+  // selecting it is all that happens. Looked up by row key in the rows this
+  // opening shows, and only here: an entry that turns up later never takes
+  // the selection from under the user.
   const wasOpenRef = useRef(false);
+  const featuredRowKey = model.featuredRowKey;
   useEffect(() => {
-    if (open && !wasOpenRef.current) setSelectedIndex(0);
+    if (open && !wasOpenRef.current) {
+      const featured =
+        featuredRowKey === null ? -1 : results.findIndex((row) => row.rowKey === featuredRowKey);
+      setSelectedIndex(Math.max(0, featured));
+    }
     wasOpenRef.current = open;
-  }, [open, setSelectedIndex]);
+  }, [open, setSelectedIndex, featuredRowKey, results]);
 
   // Keep the active option in view as the selection moves. `getElementById`
   // rather than a `#id` query: both `useId()` and the item keys contain colons,
@@ -635,6 +660,7 @@ export function DockLaunchButton({
       // a half-open capture or expansion can't survive into the next open.
       setExpandedPresetParentKey(null);
       setCapturingRowKey(null);
+      setMoreOpen(false);
       pendingExpandRef.current = null;
       setOpen(false);
     },
@@ -687,6 +713,11 @@ export function DockLaunchButton({
 
   const activateRow = useCallback(
     (row: DockLaunchRow) => {
+      // More opens in place, and runs nothing.
+      if (row.kind === "cue" && row.cue === "more") {
+        setMoreOpen((current) => !current);
+        return;
+      }
       if (row.kind === "cue") {
         closeLauncher();
         activateDockLaunchCue(row.cue, activeWorktreeId, "menu", row.pluginGroup);
@@ -793,6 +824,29 @@ export function DockLaunchButton({
         !caretOwnsEvent || (!hasTextSelection && input.selectionStart === input.value.length);
       const caretAtStart = !caretOwnsEvent || (!hasTextSelection && input.selectionStart === 0);
 
+      if (
+        event.key === "ArrowRight" &&
+        selectedRow?.rowKey === MORE_ROW_KEY &&
+        !moreOpen &&
+        caretAtEnd
+      ) {
+        event.preventDefault();
+        event.stopPropagation();
+        pendingExpandRef.current = MORE_ROW_KEY;
+        setMoreOpen(true);
+        return;
+      }
+      if (
+        event.key === "ArrowLeft" &&
+        selectedRow?.rowKey === MORE_ROW_KEY &&
+        moreOpen &&
+        caretAtStart
+      ) {
+        event.preventDefault();
+        event.stopPropagation();
+        setMoreOpen(false);
+        return;
+      }
       if (event.key === "ArrowRight" && selectedRow && rowHasPresets(selectedRow) && caretAtEnd) {
         event.preventDefault();
         event.stopPropagation();
@@ -883,6 +937,7 @@ export function DockLaunchButton({
       capturingRowKey,
       collapsePresets,
       expandedPresetParentKey,
+      moreOpen,
       results.length,
       selectedPinTarget,
       selectedRow,
@@ -929,7 +984,9 @@ export function DockLaunchButton({
           isSelected={index === activeIndex}
           optionId={getOptionId(row.rowKey)}
           pinTarget={resolvePinTarget(row)}
-          isExpanded={expandedPresetParentKey === row.rowKey}
+          isExpanded={
+            row.rowKey === MORE_ROW_KEY ? moreOpen : expandedPresetParentKey === row.rowKey
+          }
           onPointerMove={handleRowPointerMove}
           onActivate={activateRow}
           onTogglePin={togglePin}
@@ -1217,12 +1274,13 @@ function splitIntoColumns(
   let previous: IndexedRow[] = start;
   rows.forEach((row, index) => {
     // An expanded agent's presets sit in whichever column their parent does,
-    // and in search every row is in the one list.
+    // as an open More's groups sit in More's, and in search every row is in the
+    // one list.
     const column =
-      row.kind === "preset"
-        ? previous
-        : row.band === "actions"
-          ? footer
+      row.band === "actions"
+        ? footer
+        : row.kind === "preset" || !columnOf.has(row.rowKey)
+          ? previous
           : columnOf.get(row.rowKey) === 1
             ? end
             : start;
@@ -1230,6 +1288,13 @@ function splitIntoColumns(
     previous = column;
   });
   return { start, end, footer };
+}
+
+/** Where ArrowRight on More lands: its first group's first row, once it is open. */
+function firstMoreChildIndex(rows: ReadonlyArray<DockLaunchRow>): number {
+  const at = rows.findIndex((row) => row.rowKey === MORE_ROW_KEY);
+  const next = at >= 0 ? rows[at + 1] : undefined;
+  return next !== undefined && next.band !== "actions" ? at + 1 : -1;
 }
 
 /** The built-in agent whose `agent.<id>` binding a row can edit, if any. */
@@ -1255,8 +1320,9 @@ function shouldShowBandLabel(rows: ReadonlyArray<DockLaunchRow>, index: number):
   if (!row) return false;
   // The presets block gets exactly one heading, on its first row.
   if (row.kind === "preset") return rows[index - 1]?.kind !== "preset";
-  // The footer's two actions are labelled by where they sit, not by a heading.
-  if (row.band === "actions") return false;
+  // The footer's two actions are labelled by where they sit, not by a heading,
+  // and More names itself.
+  if (row.band === "actions" || row.band === "more") return false;
   let previous = index - 1;
   while (previous >= 0 && rows[previous]?.kind === "preset") previous -= 1;
   const prior = rows[previous];
@@ -1477,11 +1543,12 @@ function DockLaunchOption({
   // all — because the accessible name is a contract: `e2e/helpers/panels.ts`
   // matches rows by the `[aria-label^="Name,"]` prefix, and a listener who
   // cannot see the band heading has nothing else to place the row with.
+  const isMore = row.kind === "cue" && row.cue === "more";
   const spokenQualifier =
     row.kind === "cue"
       ? // The hide row sits under its plugin's heading, which a listener never
-        // hears, so it names the plugin itself.
-        (row.pluginGroup?.pluginName ?? "Action")
+        // hears, so it names the plugin itself; More names what it holds.
+        (row.pluginGroup?.pluginName ?? row.contents ?? "Action")
       : row.kind === "preset"
         ? // From the preset's own data, never from whether a heading happened to
           // render above it: only the first row of a named group carries one.
@@ -1527,7 +1594,7 @@ function DockLaunchOption({
   // Enter does, which is the second question this palette exists to answer.
   const visualQualifier =
     row.kind === "cue"
-      ? undefined
+      ? row.contents
       : row.kind === "preset"
         ? // The provenance heading is rendered directly above this row, so the
           // group name here is the same word twice. "Current" is not.
@@ -1626,7 +1693,11 @@ function DockLaunchOption({
         : "Press Right Arrow for presets"
       : row.kind === "preset"
         ? "Press Left Arrow to close presets"
-        : undefined,
+        : isMore
+          ? isExpanded
+            ? "Press Left Arrow to close"
+            : "Press Right Arrow to open"
+          : undefined,
     pinTarget
       ? `Press ${describeChord("Alt+P", isMac())} to ${pinTarget.onToolbar ? "unpin from" : "pin to"} toolbar`
       : undefined,
@@ -1671,7 +1742,9 @@ function DockLaunchOption({
         // the warning is announced once and still shows as the mouse tooltip.
         aria-label={optionLabel}
         aria-keyshortcuts={comboToAriaKeyshortcuts(effectiveCombo, isMac())}
-        aria-expanded={row.kind === "item" && rowHasPresets(row) ? isExpanded : undefined}
+        aria-expanded={
+          (row.kind === "item" && rowHasPresets(row)) || isMore ? isExpanded : undefined
+        }
         title={title}
         // Keeps DOM focus on the search box when a row is clicked or hovered,
         // so typing never lands anywhere else. preventDefault only — stopping
@@ -1725,6 +1798,24 @@ function DockLaunchOption({
                   event.stopPropagation();
                   onToggleExpanded(row.rowKey);
                 }}
+              >
+                <ChevronRight
+                  data-animated-chevron
+                  aria-hidden
+                  className={cn(
+                    "h-3 w-3 text-text-secondary transition-transform duration-150 ease-out",
+                    isExpanded && "rotate-90"
+                  )}
+                />
+              </span>
+            )}
+            {/* More toggles from anywhere on its row, so its chevron is a
+                picture of the state and nothing more. */}
+            {isMore && (
+              <span
+                role="presentation"
+                data-launcher-disclosure=""
+                className="inline-flex items-center justify-center"
               >
                 <ChevronRight
                   data-animated-chevron
@@ -1919,6 +2010,7 @@ const DOCK_LAUNCH_CUE_ICONS: Record<DockLaunchCueId, LucideIcon> = {
   "manage-agents": Settings2,
   "customize-toolbar": TOOLBAR_CUSTOMIZE_ICON,
   "hide-plugin-group": EyeOff,
+  more: Ellipsis,
 };
 
 function DockLaunchOptionIcon({

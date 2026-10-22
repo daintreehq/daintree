@@ -7,6 +7,10 @@ import {
   type PresentationLevels,
   type ResolvedPresentation,
 } from "@shared/config/presentationProfile";
+import {
+  STOCK_LAUNCHER_ARRANGEMENT,
+  type LauncherArrangement,
+} from "@shared/config/launcherArrangement";
 import { useProjectStore } from "@/store/projectStore";
 import { useProjectPresentationStore } from "@/store/projectPresentationStore";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
@@ -14,6 +18,7 @@ import { selectViewProject } from "@/store/viewWorkspace";
 
 const NO_LEVELS: PresentationLevels = {};
 const NO_PROMOTED: readonly string[] = [];
+const NO_ORDER: readonly string[] = [];
 
 interface ProfileForView {
   levels: PresentationLevels;
@@ -22,6 +27,8 @@ interface ProfileForView {
   /** Absent reads as never set, so the toolbar follows whether the profile places anything. */
   useProjectToolbar?: boolean | null;
   promotedPluginButtons?: readonly string[];
+  launcherGroupOrder?: readonly string[];
+  featuredLaunchEntry?: string | null;
 }
 
 /**
@@ -183,5 +190,59 @@ export function useProjectToolbarOverlay(): ProjectToolbarOverlay {
         promotedPluginButtons,
       }),
     [projectId, levels, loaded, profileProjectId, useProjectToolbar, promotedPluginButtons]
+  );
+}
+
+/**
+ * How `project` arranges its launcher (#13791), resolved like its levels:
+ * stock until main has answered for this same project.
+ */
+export function launcherArrangementFor(
+  project: Pick<Project, "id" | "gitBacked"> | null | undefined,
+  profile: ProfileForView
+): LauncherArrangement {
+  if (project == null || !profileAppliesTo(project, profile)) return STOCK_LAUNCHER_ARRANGEMENT;
+  const resolved = resolvePresentationFor(project, profile);
+  return {
+    projectId: project.id,
+    demoted: {
+      agents: resolved.launcherAgents === "demoted",
+      panels: resolved.launcherPanels === "demoted",
+    },
+    groupOrder: profile.launcherGroupOrder ?? NO_ORDER,
+    featuredEntry: profile.featuredLaunchEntry ?? null,
+  };
+}
+
+/** This view's launcher arrangement (#13791); starts following main on first use. */
+export function useLauncherArrangement(): LauncherArrangement {
+  const viewWorkspaceId = getViewWorkspaceId();
+  const projectId = useProjectStore((s) => selectViewProject(viewWorkspaceId, s)?.id);
+  const gitBacked = useProjectStore((s) => selectViewProject(viewWorkspaceId, s)?.gitBacked);
+  const levels = useProjectPresentationStore((s) => s.levels);
+  const loaded = useProjectPresentationStore((s) => s.loaded);
+  const profileProjectId = useProjectPresentationStore((s) => s.projectId);
+  const launcherGroupOrder = useProjectPresentationStore((s) => s.launcherGroupOrder);
+  const featuredLaunchEntry = useProjectPresentationStore((s) => s.featuredLaunchEntry);
+  useFollowPresentationProfile(projectId);
+
+  return useMemo(
+    () =>
+      launcherArrangementFor(projectId === undefined ? null : { id: projectId, gitBacked }, {
+        levels,
+        loaded,
+        projectId: profileProjectId,
+        launcherGroupOrder,
+        featuredLaunchEntry,
+      }),
+    [
+      projectId,
+      gitBacked,
+      levels,
+      loaded,
+      profileProjectId,
+      launcherGroupOrder,
+      featuredLaunchEntry,
+    ]
   );
 }

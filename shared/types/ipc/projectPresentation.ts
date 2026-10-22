@@ -3,7 +3,9 @@ import type { PresentationLevels } from "../../config/presentationProfile.js";
 /** What `.daintree/presentation.json` suggests, as this build reads it. */
 export interface PresentationSuggestion {
   levels: PresentationLevels;
-  /** Identity of the suggested levels; an answer only counts for the suggestion it was about. */
+  /** The launcher entry it suggests featuring, `{publisher.name}.{entry id}` (#13791). */
+  featuredLaunchEntry?: string;
+  /** Identity of what it suggests; an answer only counts for the suggestion it was about. */
   hash: string;
 }
 
@@ -40,6 +42,18 @@ export interface ProjectPresentationSnapshot {
    * until it is.
    */
   promotedPluginButtons: string[];
+  /**
+   * The user's order for the launcher's groups (#13791): `agents`, `panels`,
+   * `recipes` and `plugin:{pluginId}`. Groups it does not name follow the
+   * profile's order. May name groups that are not there right now.
+   */
+  launcherGroupOrder: string[];
+  /**
+   * The project plugin entry the launcher preselects, `{publisher.name}.{entry
+   * id}`, or `null`. Selecting is all it does; an entry that is not there
+   * right now leaves the launcher's first row selected.
+   */
+  featuredLaunchEntry: string | null;
   /**
    * The stored profile's write count, which only grows. A view drops a
    * snapshot older than the one it holds: a push and an invoke reply can

@@ -20,6 +20,8 @@ const snapshot = (
   suggestionAnswer: null,
   useProjectToolbar: null,
   promotedPluginButtons: [],
+  launcherGroupOrder: [],
+  featuredLaunchEntry: null,
   revision: 0,
   ...overrides,
 });
@@ -355,5 +357,40 @@ describe("projectPresentationStore toolbar writes (#13783)", () => {
     expect(state().loaded).toBe(true);
     expect(state().useProjectToolbar).toBeNull();
     expect(state().promotedPluginButtons).toEqual([]);
+    expect(state().launcherGroupOrder).toEqual([]);
+    expect(state().featuredLaunchEntry).toBeNull();
+  });
+});
+
+describe("projectPresentationStore launcher writes (#13791)", () => {
+  it("adopts the launcher fields main records, and retries a failed write as it was", async () => {
+    const setOrder = vi
+      .fn<(order: string[]) => Promise<ProjectPresentationSnapshot>>()
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockResolvedValueOnce(snapshot({}, { revision: 4, launcherGroupOrder: ["recipes"] }));
+    const setFeatured = vi.fn<(ref: string | null) => Promise<ProjectPresentationSnapshot>>(() =>
+      Promise.resolve(
+        snapshot({}, { revision: 5, launcherGroupOrder: ["recipes"], featuredLaunchEntry: "a.b.c" })
+      )
+    );
+    installBridge({
+      extra: { setLauncherGroupOrder: setOrder, setFeaturedLaunchEntry: setFeatured },
+    });
+    state().init();
+    await flush();
+
+    expect(await state().setLauncherGroupOrder(["recipes"])).toBe(false);
+    expect(state().failedSave).toEqual({ kind: "launcherGroupOrder", order: ["recipes"] });
+    expect(state().launcherGroupOrder).toEqual([]);
+
+    state().retryFailedSave();
+    await flush();
+    expect(setOrder).toHaveBeenLastCalledWith(["recipes"]);
+    expect(state().failedSave).toBeNull();
+    expect(state().launcherGroupOrder).toEqual(["recipes"]);
+
+    expect(await state().setFeaturedLaunchEntry("a.b.c")).toBe(true);
+    expect(setFeatured).toHaveBeenCalledWith("a.b.c");
+    expect(state().featuredLaunchEntry).toBe("a.b.c");
   });
 });

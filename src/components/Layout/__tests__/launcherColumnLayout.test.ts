@@ -146,6 +146,22 @@ describe("layoutLauncherColumns", () => {
     expect(layout.continuedKeys.size).toBe(0);
   });
 
+  it("keeps an arranged order whole and only chooses the break", () => {
+    // The order that recipes joining two agents would otherwise beat.
+    const input = [
+      ...rows("plugin-entries", 2),
+      ...rows("recipes", 1),
+      ...rows("grid-panels", 6),
+      ...rows("agents", 2),
+      ...rows("more", 1),
+      ...rows("actions", 2),
+    ];
+    const layout = layoutLauncherColumns(input, true, { fixedOrder: true });
+    expect(layout.rows).toEqual(input);
+    expect(layout.columnOf.get(input[0]!.rowKey)).toBe(0);
+    expect(new Set(layout.columnOf.values())).toEqual(new Set([0, 1]));
+  });
+
   it("keeps the model's order in one column", () => {
     const input = inventory({ agents: 17, grid: 6, recipes: 3 });
     const layout = layoutLauncherColumns(input, false);
