@@ -44,6 +44,13 @@ export interface AddPanelOptionsBase {
    */
   backgroundRestoreLocation?: "grid" | "dock";
   /**
+   * Set while a plugin panel the user docked sits in the grid only because its
+   * kind wasn't registered when it was restored (#13907). The value is the
+   * worktree it was docked with: `null` for none (a `scope: "project"` panel).
+   * `undefined` means no dock restore is pending.
+   */
+  pendingDockWorktreeId?: string | null;
+  /**
    * Opt-in placement hint: land the new panel immediately after this one
    * instead of at the end. Resolved against live store state at commit time,
    * never precomputed as a numeric index — `addPanel` has async gaps (agent

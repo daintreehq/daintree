@@ -46,6 +46,7 @@ const BASE_PANEL_FIELDS = [
   "worktreeGitDir",
   "location",
   "backgroundRestoreLocation",
+  "pendingDockWorktreeId",
   "extensionState",
   "extensionStateVersion",
   "pluginId",
@@ -143,6 +144,12 @@ function buildPanelSnapshot(
     ...(t.location === "background" && {
       backgroundRestoreLocation: t.backgroundRestoreLocation === "dock" ? "dock" : "grid",
     }),
+    // Survives a save made before the plugin registers, so the next boot still
+    // knows the grid placement is a stopgap (#13907).
+    ...(t.location === "grid" &&
+      t.pendingDockWorktreeId !== undefined && {
+        pendingDockWorktreeId: t.pendingDockWorktreeId,
+      }),
     ...(t.extensionState !== undefined && { extensionState: t.extensionState }),
     // Written only alongside a bag, and only ever the version the record
     // already carries. Re-deriving it from the registry here would re-stamp a

@@ -150,6 +150,9 @@ export const createOrderingActions = (
       // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- spread preserves the panel's discriminant; overrides are base-field-compatible
       const updatedTerminal = {
         ...terminal,
+        // An explicit placement settles where the panel lives, so a dock
+        // restore left over from a boot-time rescue must not undo it (#13907).
+        pendingDockWorktreeId: undefined,
         ...(adoptedWorktreeId !== null && { worktreeId: adoptedWorktreeId }),
         location: effectiveLocation,
         isVisible,

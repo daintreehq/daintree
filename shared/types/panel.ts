@@ -316,6 +316,13 @@ interface BasePanelData {
    * record it and a reloaded view can rebuild the restore entry.
    */
   backgroundRestoreLocation?: "grid" | "dock";
+  /**
+   * Set while a plugin panel the user docked sits in the grid only because its
+   * kind wasn't registered when it was restored (#13907). The value is the
+   * worktree it was docked with: `null` for none (a `scope: "project"` panel).
+   * `undefined` means no dock restore is pending.
+   */
+  pendingDockWorktreeId?: string | null;
   /** ID of the worktree this panel is associated with */
   worktreeId?: string;
   /** Whether the panel pane is currently visible in the viewport */
@@ -1182,6 +1189,8 @@ export interface TerminalInstance {
   lastCommand?: string;
   location: PanelLocation;
   backgroundRestoreLocation?: "grid" | "dock";
+  /** See `BasePanelData.pendingDockWorktreeId`. */
+  pendingDockWorktreeId?: string | null;
   command?: string;
   isVisible?: boolean;
   restartKey?: number;
