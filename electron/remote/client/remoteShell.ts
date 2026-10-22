@@ -34,12 +34,7 @@ export interface HostCommandChannel {
  */
 export function remoteShellArgs(target: string, controlPath: string, script: string): string[] {
   if (script.includes("\n")) throw new Error("Remote scripts must be a single line");
-  return [
-    ...sshCommonArgs(controlPath),
-    "--",
-    target,
-    `sh -c ${shellQuote(script)}`,
-  ];
+  return [...sshCommonArgs(controlPath), "--", target, `sh -c ${shellQuote(script)}`];
 }
 
 /**
