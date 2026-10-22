@@ -53,7 +53,9 @@ export interface ElementRefs {
 /**
  * One framework's reader. `extract` must be synchronous and bounded: it runs
  * inside a pointer move when the phase is `hover`, so it reads only what labels
- * a highlight there and saves anything costly for `selection`.
+ * a highlight there and saves anything costly for `selection`. Null says it
+ * looked and found nothing of its framework's; a reader that cannot look
+ * throws instead, and gives no answer either way.
  */
 export interface ElementPickerExtractor {
   extract(
@@ -61,6 +63,12 @@ export interface ElementPickerExtractor {
     phase: ExtractionPhase,
     refs: ElementRefs
   ): ExtractorContribution | null;
+  /**
+   * True for a reader that reads nothing on hover. Its null there is a choice,
+   * not a look, so the registry leaves it out of a hover's reply altogether
+   * rather than report it as having found nothing.
+   */
+  selectionOnly?: boolean;
   /**
    * A user's pick of `hit`: the element it stands for, described. Only for a
    * framework that selects something other than the node the pointer landed
@@ -242,12 +250,14 @@ function createRegistry(channel: string): Registry {
     if (request === null) return;
     const target = targetOf(event);
     if (target === null) return;
-    const reply: ExtractReply = { id: request.id, contributions: [] };
+    const empty: string[] = [];
+    const reply: ExtractReply = { id: request.id, contributions: [], empty };
     // One table for the whole reply: the bootstrap adopts one contribution,
     // and whichever it is, its tokens are this request's.
     const refs = createRefTable();
     for (const [framework, extractor] of extractors) {
-      let data: ExtractorContribution | null = null;
+      if (request.phase === "hover" && extractor.selectionOnly === true) continue;
+      let data: ExtractorContribution | null;
       // Each contribution names its own pick: the bootstrap reads the one it adopts.
       let token: string | null = null;
       try {
@@ -264,9 +274,14 @@ function createRegistry(channel: string): Registry {
           data = extractor.extract(target, request.phase, refs);
         }
       } catch {
-        // One framework's reader failing must not cost the others their answer.
+        // One framework's reader failing must not cost the others their answer,
+        // and is no answer of its own.
+        continue;
       }
-      if (data === null || data === undefined) continue;
+      if (data === null || data === undefined) {
+        empty.push(framework);
+        continue;
+      }
       reply.contributions.push(
         token === null ? { framework, data } : { framework, data, target: token }
       );

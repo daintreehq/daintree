@@ -77,8 +77,16 @@ describe("detectGlobals", () => {
 
   it("ignores a devtools hook, which says the extension is there, not the framework", () => {
     const set = new DetectionSet();
-    detectGlobals({ __REACT_DEVTOOLS_GLOBAL_HOOK__: {} }, set);
+    detectGlobals({ __REACT_DEVTOOLS_GLOBAL_HOOK__: {}, SolidDevtools$$: {} }, set);
     expect(set.size).toBe(0);
+  });
+
+  it("finds a client-rendered Solid dev build, which has no hydration marks to find", () => {
+    const set = new DetectionSet();
+    detectGlobals({ Solid$$: true }, set);
+    expect(set.toArray()).toEqual([
+      { framework: "solid", signals: [{ via: "global", name: "Solid$$" }] },
+    ]);
   });
 
   it("survives a hostile global object", () => {

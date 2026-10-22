@@ -4,10 +4,15 @@ import {
   ElementPickerEventSchema,
   type ElementPickerEvent,
 } from "../../../../../shared/elementPicker/protocol.js";
+import {
+  OBSERVATION_LIMITS,
+  type Capabilities,
+  type Capability,
+} from "../../../../../shared/elementPicker/observation.js";
 import { EXTRACTOR_REGISTRY_GLOBAL, channelEvent } from "../../guestChannel.js";
 import { createPicker, type PickerHandle } from "../picker.js";
 import { installExtractor } from "../registry.js";
-import type { PickerMode } from "../types.js";
+import type { PickerAvailability, PickerMode } from "../types.js";
 
 const CHANNEL = "test-channel";
 
@@ -60,6 +65,46 @@ function press(
 
 function selectedTag(): string | undefined {
   return ofType("selectionChanged").at(-1)?.observations[0]?.tagName;
+}
+
+function selectedLabel(): string | undefined {
+  return ofType("selectionChanged").at(-1)?.observations[0]?.label;
+}
+
+function selectedCapabilities(): Capabilities | undefined {
+  return ofType("selectionChanged").at(-1)?.observations[0]?.capabilities;
+}
+
+function every(capability: Capability): Capabilities {
+  return {
+    names: capability,
+    chain: capability,
+    componentSelection: capability,
+    file: capability,
+    line: capability,
+    exactRange: capability,
+  };
+}
+
+const SETTLED: PickerAvailability = { detection: "settled", extractors: {} };
+
+/** Stands in for the main-world registry: every request gets `reply(id)`'s answer. */
+function answerWith(reply: (id: number) => unknown): void {
+  document.addEventListener(
+    channelEvent(CHANNEL, "extract"),
+    (event) => {
+      const { id } = JSON.parse((event as CustomEvent<string>).detail) as { id: number };
+      document.dispatchEvent(
+        new CustomEvent(channelEvent(CHANNEL, "extracted"), { detail: JSON.stringify(reply(id)) })
+      );
+    },
+    { capture: true, signal: testListeners.signal }
+  );
+}
+
+/** Installed readers for `frameworks` that looked and found nothing. */
+function answerEmpty(...frameworks: string[]): void {
+  answerWith((id) => ({ id, contributions: [], empty: frameworks }));
 }
 
 beforeEach(() => {
@@ -694,11 +739,13 @@ describe("createPicker", () => {
     });
   });
 
-  it("describes the selection again when the host asks, and reports one the document removed", () => {
+  it("describes the selection again when the host's account changes it, and reports one the document removed", () => {
     const handle = start();
     const target = document.getElementById("first")!;
     target.click();
-    handle.refresh();
+    handle.setAvailability(SETTLED);
+    // The same account again says nothing new about the element.
+    handle.setAvailability(SETTLED);
     target.remove();
     runFrames();
     expect(ofType("selectionChanged").map((event) => event.cause)).toEqual([
@@ -707,6 +754,304 @@ describe("createPicker", () => {
       "document",
     ]);
     expect(ofType("selectionChanged").at(-1)?.observations).toEqual([]);
+  });
+
+  it("reports nothing as unavailable until the host's first look at the page finished", () => {
+    const handle = start();
+    document.getElementById("first")!.click();
+    expect(selectedCapabilities()).toEqual(every({ state: "unknown" }));
+
+    handle.setAvailability(SETTLED);
+    expect(selectedCapabilities()).toEqual(every({ state: "unavailable", reason: "no-framework" }));
+    pointAt(document.getElementById("second")!);
+    runFrames();
+    expect(ofType("hoverChanged")[0]?.observation?.capabilities).toEqual(
+      every({ state: "unavailable", reason: "no-framework" })
+    );
+  });
+
+  it.each([
+    ["still loading", "pending", { state: "unknown" }],
+    ["one this build does not ship", "unavailable", { state: "unknown" }],
+    ["one that failed to install", "failed", { state: "unknown" }],
+    [
+      "one that ran and found nothing",
+      "installed",
+      { state: "unavailable", reason: "not-exposed" },
+    ],
+  ] as const)(
+    "leaves capabilities for a framework whose reader is %s at %j",
+    (_label, state, expected) => {
+      answerEmpty("solid");
+      const handle = start();
+      handle.setAvailability({ detection: "settled", extractors: { solid: state } });
+      document.getElementById("first")!.click();
+      expect(selectedCapabilities()).toEqual(every(expected));
+    }
+  );
+
+  it("keeps the answer open for a framework the selection names that the host has not heard of yet", () => {
+    document.body.innerHTML = '<div data-hk="0"><button id="hydrated">Go</button></div>';
+    answerEmpty("solid");
+    const handle = start();
+    handle.setAvailability(SETTLED);
+    document.getElementById("hydrated")!.click();
+    expect(ofType("selectionChanged")[0]?.observations[0]?.detections).toEqual([
+      { framework: "solid", signals: [{ via: "attribute", name: "data-hk" }] },
+    ]);
+    expect(selectedCapabilities()).toEqual(every({ state: "unknown" }));
+
+    handle.setAvailability({ detection: "settled", extractors: { solid: "installed" } });
+    expect(selectedCapabilities()).toEqual(every({ state: "unavailable", reason: "not-exposed" }));
+  });
+
+  it.each([
+    ["said nothing at all", null],
+    ["threw, so is in neither list", { contributions: [] }],
+    ["answered for another framework", { contributions: [], empty: ["vue"] }],
+  ])("keeps an installed reader that %s from becoming a claim about the page", (_label, reply) => {
+    if (reply !== null) answerWith((id) => ({ id, ...reply }));
+    const handle = start();
+    handle.setAvailability({ detection: "settled", extractors: { solid: "installed" } });
+    document.getElementById("first")!.click();
+    expect(selectedCapabilities()).toEqual(every({ state: "unknown" }));
+  });
+
+  it("keeps the answer open for a reader that answered before the host recorded it", () => {
+    answerEmpty("solid");
+    const handle = start();
+    handle.setAvailability(SETTLED);
+    document.getElementById("first")!.click();
+    expect(selectedCapabilities()).toEqual(every({ state: "unknown" }));
+  });
+
+  it("keeps a reader's word for its own framework open while another's reader could still answer", () => {
+    const solid = {
+      names: { state: "unavailable", reason: "not-exposed" },
+      chain: { state: "unavailable", reason: "not-exposed" },
+      componentSelection: { state: "unavailable", reason: "not-exposed" },
+      file: { state: "available" },
+      line: { state: "available" },
+      exactRange: { state: "unavailable", reason: "not-exposed" },
+    } as const;
+    answerWith((id) => ({
+      id,
+      contributions: [{ framework: "solid", data: { capabilities: solid } }],
+      empty: [],
+    }));
+    const handle = start();
+    // An Astro page with a Solid island: Astro has no reader in this build.
+    handle.setAvailability({
+      detection: "settled",
+      extractors: { astro: "unavailable", solid: "installed" },
+    });
+    document.getElementById("first")!.click();
+    expect(selectedCapabilities()).toEqual({
+      ...every({ state: "unknown" }),
+      file: { state: "available" },
+      line: { state: "available" },
+    });
+
+    handle.setAvailability({ detection: "settled", extractors: { solid: "installed" } });
+    expect(selectedCapabilities()).toEqual(solid);
+  });
+
+  it("leaves capabilities open when an extractor answers without saying what it offers", () => {
+    answerWith((id) => ({ id, contributions: [{ framework: "solid", data: {} }] }));
+    const handle = start();
+    handle.setAvailability({ detection: "settled", extractors: { solid: "installed" } });
+    document.getElementById("first")!.click();
+    expect(selectedCapabilities()).toEqual(every({ state: "unknown" }));
+  });
+
+  it("takes an outranked reader's answer as its look, so the describing reader's word holds", () => {
+    const astro = {
+      ...every({ state: "unavailable", reason: "not-exposed" }),
+      file: { state: "available" },
+      line: { state: "available" },
+    } as const;
+    answerWith((id) => ({
+      id,
+      contributions: [
+        { framework: "react", data: { capabilities: every({ state: "available" }) } },
+        { framework: "astro", data: { ownership: "direct", capabilities: astro } },
+      ],
+      empty: ["svelte"],
+    }));
+    const handle = start();
+    const installed = { astro: "installed", react: "installed", svelte: "installed" } as const;
+    handle.setAvailability({ detection: "settled", extractors: installed });
+    document.getElementById("first")!.click();
+    expect(selectedCapabilities()).toEqual(astro);
+
+    // A reader the host has not confirmed has not looked, whatever it answered.
+    handle.setAvailability({
+      detection: "settled",
+      extractors: { ...installed, react: "pending" },
+    });
+    expect(selectedCapabilities()).toEqual({
+      ...every({ state: "unknown" }),
+      file: { state: "available" },
+      line: { state: "available" },
+    });
+  });
+
+  it("keeps the answer open beside a reader that sent evidence alone", () => {
+    const island = {
+      kind: "generic",
+      framework: "astro",
+      fields: [{ name: "islandRenderer", value: "svelte" }],
+    };
+    answerWith((id) => ({
+      id,
+      contributions: [{ framework: "astro", data: { frameworkEvidence: [island] } }],
+      empty: ["svelte"],
+    }));
+    const handle = start();
+    handle.setAvailability({
+      detection: "settled",
+      extractors: { astro: "installed", svelte: "installed" },
+    });
+    document.getElementById("first")!.click();
+    expect(selectedCapabilities()).toEqual(every({ state: "unknown" }));
+    expect(ofType("selectionChanged").at(-1)?.observations[0]?.frameworkEvidence).toEqual([island]);
+  });
+
+  it("describes a hover again when the host's account changes what it says, without the pointer moving", () => {
+    const handle = start();
+    pointAt(document.getElementById("second")!);
+    runFrames();
+    handle.setAvailability(SETTLED);
+    handle.setAvailability(SETTLED);
+    const hovers = ofType("hoverChanged");
+    expect(hovers).toHaveLength(2);
+    expect(hovers[1]?.observation?.capabilities).toEqual(
+      every({ state: "unavailable", reason: "no-framework" })
+    );
+  });
+
+  it("reports a selection the page removed while it was being described again", () => {
+    const handle = start();
+    const target = document.getElementById("first")!;
+    target.click();
+    runFrames();
+    // The page's own listener on the extract request takes the element away.
+    answerWith((id) => {
+      target.remove();
+      return { id, contributions: [], empty: [] };
+    });
+    handle.setAvailability(SETTLED);
+    runFrames();
+    expect(target.isConnected).toBe(false);
+    expect(ofType("selectionChanged").at(-1)).toMatchObject({
+      cause: "document",
+      observations: [],
+    });
+  });
+
+  it("reports a selection the page removed while described again in browse mode, where no frame runs", () => {
+    const handle = start();
+    const target = document.getElementById("first")!;
+    target.click();
+    handle.setMode("browse");
+    answerWith((id) => {
+      target.remove();
+      return { id, contributions: [], empty: [] };
+    });
+    handle.setAvailability(SETTLED);
+    expect(ofType("selectionChanged").at(-1)).toMatchObject({
+      cause: "document",
+      observations: [],
+    });
+  });
+
+  it("describes a selection from the DOM, and never pays for that on hover", () => {
+    start();
+    const target = document.getElementById("second")!;
+    pointAt(target);
+    runFrames();
+    target.click();
+    expect(ofType("hoverChanged")[0]?.observation).not.toHaveProperty("context");
+    expect(ofType("selectionChanged")[0]?.observations[0]?.context).toMatchObject({
+      selector: "#second",
+      markup: '<a id="second">Two</a>',
+      shadowHosts: [],
+    });
+  });
+
+  it("names the hosts of the shadow roots around a selection, innermost first", () => {
+    document.body.innerHTML = '<app-shell id="shell"></app-shell>';
+    const shell = document.getElementById("shell")!;
+    const outer = shell.attachShadow({ mode: "open" });
+    outer.innerHTML = '<x-card class="hero"></x-card>';
+    const card = outer.querySelector("x-card")!;
+    card.attachShadow({ mode: "open" }).innerHTML = '<button class="action">Open</button>';
+    start();
+    card.shadowRoot!.querySelector("button")!.click();
+    const context = ofType("selectionChanged").at(-1)?.observations[0]?.context;
+    expect(context?.selector).toBe("button.action");
+    expect(context?.shadowHosts?.map(({ tagName, label }) => ({ tagName, label }))).toEqual([
+      { tagName: "x-card", label: "x-card.hero" },
+      { tagName: "app-shell", label: "app-shell#shell" },
+    ]);
+    expect(context).not.toHaveProperty("shadowHostsTruncated");
+
+    // The host's id is the one the picker gives it when it is selected itself.
+    press("ArrowUp");
+    expect(ofType("selectionChanged").at(-1)?.observations[0]?.elementId).toBe(
+      context?.shadowHosts?.[0]?.elementId
+    );
+  });
+
+  it("says when more shadow roots enclose a selection than it names, keeping the innermost", () => {
+    document.body.innerHTML = '<x-level id="level-0"></x-level>';
+    let host = document.getElementById("level-0")!;
+    const limit = OBSERVATION_LIMITS.shadowHosts;
+    for (let level = 1; level <= limit + 1; level += 1) {
+      const root = host.attachShadow({ mode: "open" });
+      root.innerHTML = `<x-level id="level-${level}"></x-level>`;
+      host = root.getElementById(`level-${level}`)!;
+    }
+    start();
+    host.click();
+    const context = ofType("selectionChanged").at(-1)?.observations[0]?.context;
+    expect(context?.shadowHosts).toHaveLength(limit);
+    expect(context?.shadowHosts?.[0]?.label).toBe(`x-level#level-${limit}`);
+    expect(context?.shadowHostsTruncated).toBe(true);
+  });
+
+  it("walks no further into a slot that has only text assigned to it", () => {
+    document.body.innerHTML = '<x-label id="label">Just text</x-label>';
+    const root = document.getElementById("label")!.attachShadow({ mode: "open" });
+    root.innerHTML = '<slot id="slot"><b id="hidden">fallback</b></slot>';
+    start();
+    root.getElementById("slot")!.click();
+    const before = ofType("selectionChanged").length;
+    press("ArrowDown");
+    // The fallback is not rendered while the text is, so there is nothing to walk into.
+    expect(ofType("selectionChanged")).toHaveLength(before);
+  });
+
+  it("walks a slot's assigned elements as its children, and a slotted element's slot as its parent", () => {
+    document.body.innerHTML =
+      '<x-list id="list"><p id="a">A</p><p id="b">B</p></x-list><x-empty id="empty"></x-empty>';
+    const root = document.getElementById("list")!.attachShadow({ mode: "open" });
+    root.innerHTML = '<ul id="frame"><slot id="slot"><i>fallback</i></slot></ul>';
+    document.getElementById("empty")!.attachShadow({ mode: "open" }).innerHTML =
+      '<slot id="spare"><i id="shown">fallback</i></slot>';
+    start();
+    root.getElementById("slot")!.click();
+    press("ArrowDown");
+    expect(selectedLabel()).toBe("p#a");
+    press("ArrowRight");
+    expect(selectedLabel()).toBe("p#b");
+    press("ArrowUp");
+    expect(selectedLabel()).toBe("slot#slot");
+
+    // Nothing assigned: the fallback content is what renders.
+    document.getElementById("empty")!.shadowRoot!.getElementById("spare")!.click();
+    press("ArrowDown");
+    expect(selectedLabel()).toBe("i#shown");
   });
 
   it("answers the handshake on its own channel only", () => {
@@ -814,6 +1159,39 @@ describe("the bridge's element exchanges", () => {
     expect(selectedTag()).toBe("a");
   });
 
+  it("judges what is absent about the element a pick stands for, not the one it landed on", () => {
+    const react = {
+      ...every({ state: "unavailable", reason: "not-exposed" }),
+      names: { state: "available" },
+    } as const;
+    let standIn: Element = document.getElementById("first")!;
+    installReact({
+      extract: () => ({}),
+      pick: () => ({ target: standIn, data: { capabilities: react } }),
+    });
+    installExtractor(
+      { channel: CHANNEL, framework: "solid", installed: false },
+      { extract: () => null }
+    );
+    const handle = start();
+    const settled = {
+      detection: "settled",
+      extractors: { react: "installed", solid: "installed" },
+    } as const;
+    handle.setAvailability(settled);
+    document.getElementById("first")!.click();
+    expect(selectedCapabilities()).toEqual(react);
+
+    // Solid looked only at the hit, so what React calls unavailable on the list stays open.
+    standIn = document.getElementById("list")!;
+    handle.setAvailability(settled);
+    expect(selectedTag()).toBe("section");
+    expect(selectedCapabilities()).toEqual({
+      ...every({ state: "unknown" }),
+      names: { state: "available" },
+    });
+  });
+
   it("gathers evidence only from frameworks that saw the element a pick stands for", () => {
     const first = document.getElementById("first")!;
     const list = document.getElementById("list")!;
@@ -845,7 +1223,7 @@ describe("the bridge's element exchanges", () => {
 
     // React's pick now stands for the list; Astro only looked at the hit.
     standIn = list;
-    handle.refresh();
+    handle.setAvailability(SETTLED);
     expect(selectedTag()).toBe("section");
     expect(gathered()).toEqual(["react"]);
   });
@@ -1073,6 +1451,61 @@ describe("the bridge's element exchanges", () => {
     expect(widened.observations[0]?.componentChain.components[0]?.rootsComplete).toBe(false);
   });
 
+  it("leaves each root's markup and styles out of a widened selection that cannot fit them", () => {
+    const list = document.getElementById("list")!;
+    // Three UTF-8 bytes a character: every root's markup is within its own
+    // ceiling, and 32 of them are past one envelope.
+    const attributes = Array.from(
+      { length: 16 },
+      (_, index) => `aria-x${index}="${"€".repeat(160)}"`
+    ).join(" ");
+    list.innerHTML = Array.from(
+      { length: 32 },
+      (_, index) => `<p id="p${index}" ${attributes}></p>`
+    ).join("");
+    const roots = Array.from(list.children);
+    installReact({
+      extract: () => ({
+        componentChain: { nearestId: "c1", components: [record], truncated: false },
+        frameworkEvidence: [
+          {
+            kind: "generic",
+            framework: "react",
+            fields: Array.from({ length: 4 }, (_, index) => ({
+              name: "f" + index,
+              value: "€".repeat(256),
+            })),
+          },
+        ],
+      }),
+      locate: () => ({ elements: roots, data: { complete: true } }),
+    });
+    const handle = start();
+    roots[0]!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    expect(ofType("selectionChanged").at(-1)?.observations[0]?.context).toBeDefined();
+
+    press("ArrowUp", { altKey: true });
+
+    const widened = ofType("selectionChanged").at(-1)!;
+    expect(widened.scope).toEqual({ kind: "component", componentId: "c1" });
+    expect(widened.observations).toHaveLength(32);
+    expect(widened.observations.some((observation) => observation.context !== undefined)).toBe(
+      false
+    );
+    expect(ofType("runtimeIssue").at(-1)).toMatchObject({
+      code: "capacity",
+      detail: expect.stringContaining("markup and styles left out"),
+    });
+
+    // A change only to the markup the fit leaves out tells the host nothing new.
+    const sent = ofType("selectionChanged").length;
+    const notices = ofType("runtimeIssue").length;
+    roots[0]!.setAttribute("aria-x0", "€".repeat(159) + "x");
+    handle.setAvailability(SETTLED);
+    expect(ofType("selectionChanged")).toHaveLength(sent);
+    expect(ofType("runtimeIssue")).toHaveLength(notices);
+  });
+
   it("goes back to element scope when the component is no longer described", () => {
     const first = document.getElementById("first")!;
     const second = document.getElementById("second")!;
@@ -1090,12 +1523,12 @@ describe("the bridge's element exchanges", () => {
     expect(ofType("selectionChanged").at(-1)?.scope.kind).toBe("component");
 
     described = false;
-    handle.refresh();
+    handle.setAvailability(SETTLED);
     expect(ofType("selectionChanged").at(-1)?.scope).toEqual({ kind: "element" });
 
     // Described again, the selection stays what the host was told it is.
     described = true;
-    handle.refresh();
+    handle.setAvailability(SETTLED);
     expect(ofType("selectionChanged").at(-1)?.scope).toEqual({ kind: "element" });
 
     // Widening starts again from the innermost component, not past the old scope.
@@ -1108,7 +1541,7 @@ describe("the bridge's element exchanges", () => {
     });
   });
 
-  it("adopts a pick's new answer on a refresh, and walks on from it", () => {
+  it("adopts a pick's new answer when described again, and walks on from it", () => {
     const first = document.getElementById("first")!;
     const list = document.getElementById("list")!;
     let standIn: Element = first;
@@ -1118,7 +1551,7 @@ describe("the bridge's element exchanges", () => {
     expect(selectedTag()).toBe("a");
 
     standIn = list;
-    handle.refresh();
+    handle.setAvailability(SETTLED);
     expect(selectedTag()).toBe("section");
     press("ArrowRight");
     expect(selectedTag()).toBe("input");

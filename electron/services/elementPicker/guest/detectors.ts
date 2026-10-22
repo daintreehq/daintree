@@ -49,7 +49,11 @@ const GLOBAL_MARKERS: readonly GlobalMarker[] = [
   { framework: "react", name: "__next_f" },
   { framework: "vue", name: "__VUE__" },
   { framework: "vue", name: "__NUXT__" },
+  // Hydration only: a client-rendered Solid app never sets it.
   { framework: "solid", name: "_$HY" },
+  // Solid's dev build guards against a second copy of itself with this, and
+  // it is the only mark a client-rendered app leaves.
+  { framework: "solid", name: "Solid$$" },
 ];
 
 interface ExpandoMarker {

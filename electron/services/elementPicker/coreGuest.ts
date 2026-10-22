@@ -42,13 +42,14 @@ import { EXTRACTOR_INSTALL_STATUS } from "./guestChannel.js";
 import {
   buildBootstrapSource,
   buildExtractorSource,
+  buildPickerAvailabilitySource,
   buildPickerClearHoverSource,
   buildPickerClearSelectionSource,
   buildPickerDisposeSource,
   buildPickerModeSource,
-  buildPickerRefreshSource,
   buildProbeSource,
 } from "./guestSources.js";
+import type { ExtractorAvailability, PickerAvailability } from "./guest/types.js";
 import type { ElementPickerPushPayload } from "./types.js";
 
 /**
@@ -59,12 +60,6 @@ import type { ElementPickerPushPayload } from "./types.js";
 export const LATE_PROBE_DELAY_MS = 2_500;
 
 const ProbeResultSchema = z.array(FrameworkDetectionSchema).max(OBSERVATION_LIMITS.detections);
-
-/**
- * `unavailable`: allowed by the enum but not shipped by this build yet — a
- * fact about the app, not a failure of the page.
- */
-type ExtractorState = "pending" | "installed" | "failed" | "unavailable";
 
 export interface CoreGuestDeps {
   sessionId: string;
@@ -116,7 +111,9 @@ export class CoreGuest {
   private channel: string | null = null;
   /** The epoch everything below describes, or -1 once nothing may act on it. */
   private epoch = -1;
-  private readonly extractors = new Map<ElementPickerFramework, ExtractorState>();
+  private readonly extractors = new Map<ElementPickerFramework, ExtractorAvailability>();
+  /** Whether the last scheduled look at this document has come back; until it has, nothing is known to be absent. */
+  private detection: PickerAvailability["detection"] = "pending";
   private probedEpoch = -1;
   private lateProbe: unknown = null;
   /** The lease's document generation when this install's world was created. */
@@ -147,6 +144,10 @@ export class CoreGuest {
     this.epoch = -1;
     this.generation = null;
     this.extractors.clear();
+    this.detection = "pending";
+    // A reinstall into the same document probes it again: what the last
+    // install found went with that install's readers.
+    this.probedEpoch = -1;
     if (this.lateProbe !== null) {
       (this.deps.clearTimer ?? ((handle) => clearTimeout(handle as NodeJS.Timeout)))(
         this.lateProbe
@@ -271,14 +272,14 @@ export class CoreGuest {
     if (event.type === "documentReady") {
       this.onDocumentReady(epoch);
     } else if (event.type === "frameworksDetected") {
-      this.requestExtractors(epoch, event.detections);
+      if (this.requestExtractors(epoch, event.detections)) void this.publishAvailability(epoch);
     }
   }
 
   private onDocumentReady(epoch: number): void {
     if (this.probedEpoch === epoch) return;
     this.probedEpoch = epoch;
-    this.queueProbe(epoch);
+    this.queueProbe(epoch, false);
     // Exactly one more look per document, for a page that mounts after it
     // reported ready. A page that never hydrates must not be probed forever.
     const setTimer =
@@ -286,17 +287,17 @@ export class CoreGuest {
       ((callback: () => void, ms: number) => setTimeout(callback, ms).unref?.());
     this.lateProbe = setTimer(() => {
       this.lateProbe = null;
-      this.queueProbe(epoch);
+      this.queueProbe(epoch, true);
     }, LATE_PROBE_DELAY_MS);
   }
 
-  private queueProbe(epoch: number): void {
+  private queueProbe(epoch: number, late: boolean): void {
     // Queued, never awaited from the caller: an event handled while the
     // install is still evaluating would otherwise wait on itself.
-    void this.deps.enqueue(() => this.probe(epoch)).catch((err) => this.warn("probe", err));
+    void this.deps.enqueue(() => this.probe(epoch, late)).catch((err) => this.warn("probe", err));
   }
 
-  private async probe(epoch: number): Promise<void> {
+  private async probe(epoch: number, late: boolean): Promise<void> {
     const channel = this.channel;
     if (!this.isCurrent(epoch) || channel === null) return;
     const body = await this.deps.loadAsset("probe");
@@ -316,35 +317,69 @@ export class CoreGuest {
       return;
     }
     if (!this.isCurrent(epoch) || evaluated?.exceptionDetails) return;
-    // Ran in the page's world: the page could have shaped any of it.
+    // Ran in the page's world: the page could have shaped any of it. A result
+    // that fails the schema is no evidence the page has no framework either.
     const parsed = ProbeResultSchema.safeParse(evaluated?.result?.value);
-    if (!parsed.success || parsed.data.length === 0) return;
-    this.deps.emit({
-      kind: "frameworks-probed",
-      sessionId: this.deps.sessionId,
-      projectId: this.deps.projectId,
-      documentEpoch: epoch,
-      detections: parsed.data,
-    });
-    this.requestExtractors(epoch, parsed.data);
+    if (!parsed.success) return;
+    // Settled by the last look, not the first: an app that mounts after the
+    // document reported ready would otherwise read as having no framework
+    // until it did. Settled even when empty: a bounded look that found no
+    // framework we read is the answer a plain page gets.
+    const settles = late && this.detection === "pending";
+    if (settles) this.detection = "settled";
+    if (parsed.data.length > 0) {
+      this.deps.emit({
+        kind: "frameworks-probed",
+        sessionId: this.deps.sessionId,
+        projectId: this.deps.projectId,
+        documentEpoch: epoch,
+        detections: parsed.data,
+      });
+    }
+    if (this.requestExtractors(epoch, parsed.data) || settles) {
+      await this.publishAvailability(epoch);
+    }
+  }
+
+  /**
+   * Tell the picker what is now known about the document's readers. Every
+   * call carries the whole state, so whichever arrives last is right.
+   */
+  private async publishAvailability(epoch: number): Promise<void> {
+    if (!this.isCurrent(epoch)) return;
+    const availability: PickerAvailability = {
+      detection: this.detection,
+      extractors: Object.fromEntries(this.extractors),
+    };
+    await this.callBootstrap(buildPickerAvailabilitySource(this.installId, availability));
   }
 
   /**
    * Reserve each framework's slot synchronously, before the queued install
    * runs, so a detection repeated while the first is in flight finds it taken.
-   * The enum bounds the attempts per document at its size.
+   * The enum bounds the attempts per document at its size. True when any
+   * framework was new, which the picker has to hear about.
    */
-  private requestExtractors(epoch: number, detections: readonly FrameworkDetection[]): void {
+  private requestExtractors(epoch: number, detections: readonly FrameworkDetection[]): boolean {
+    let added = false;
     for (const { framework } of detections) {
       if (!this.isCurrent(epoch) || this.extractors.has(framework)) continue;
       this.extractors.set(framework, "pending");
+      added = true;
       void this.deps
         .enqueue(() => this.installExtractor(epoch, framework))
         .catch((err) => this.warn("extractor install", err));
     }
+    return added;
   }
 
+  /** Whatever the attempt came to, the picker hears it, so a selection made meanwhile is described again. */
   private async installExtractor(epoch: number, framework: ElementPickerFramework): Promise<void> {
+    await this.loadExtractor(epoch, framework);
+    await this.publishAvailability(epoch);
+  }
+
+  private async loadExtractor(epoch: number, framework: ElementPickerFramework): Promise<void> {
     const channel = this.channel;
     if (!this.isCurrent(epoch) || channel === null) return;
     if (this.extractors.get(framework) !== "pending") return;
@@ -376,8 +411,11 @@ export class CoreGuest {
         timeout: this.deps.evaluateTimeoutMs,
       })) as EvaluateResult | undefined;
     } catch (err) {
-      if (!this.isCurrent(epoch) || isGoneContextError(err)) return;
-      this.fail(epoch, framework, "the extractor could not be evaluated");
+      if (!this.isCurrent(epoch)) return;
+      // The page's world went with its document, which the bridge has not
+      // retired yet: nobody's failure, and nothing to report, but over.
+      if (isGoneContextError(err)) this.extractors.set(framework, "failed");
+      else this.fail(epoch, framework, "the extractor could not be evaluated");
       return;
     }
     if (!this.isCurrent(epoch)) return;
@@ -391,8 +429,6 @@ export class CoreGuest {
         documentEpoch: epoch,
         framework,
       });
-      // The selection on screen was described before this extractor existed.
-      await this.callBootstrap(buildPickerRefreshSource(this.installId));
       return;
     }
     if (status === EXTRACTOR_INSTALL_STATUS.absent) {

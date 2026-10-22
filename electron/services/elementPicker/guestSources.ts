@@ -25,6 +25,7 @@ import {
 } from "../../../shared/elementPicker/protocol.js";
 import { buildOriginGuardSource, type GuestOriginPolicy } from "../sitePreview/originPolicy.js";
 import { BOOTSTRAP_GLOBAL, EXTRACTOR_INSTALL_STATUS, channelEvent } from "./guestChannel.js";
+import type { PickerAvailability } from "./guest/types.js";
 
 /**
  * Fixed, unlike the per-install channel: a newer bootstrap must reach every
@@ -109,7 +110,7 @@ export function buildBootstrapSource(params: BootstrapSourceParams): string {
     setMode(next) { api.mode = next; },
     clearSelection() {},
     clearHover() {},
-    refresh() {},
+    setAvailability() {},
     reselect() { return false; },
     dispose: null,
     retire,
@@ -194,8 +195,16 @@ export function buildPickerClearHoverSource(installId: number): string {
   return bootstrapCall(installId, "api.clearHover();");
 }
 
-export function buildPickerRefreshSource(installId: number): string {
-  return bootstrapCall(installId, "api.refresh();");
+/**
+ * The host's account of the document's readers. Host-authored from its own
+ * state — the framework enum and fixed state words — so nothing the page said
+ * reaches the literal.
+ */
+export function buildPickerAvailabilitySource(
+  installId: number,
+  availability: PickerAvailability
+): string {
+  return bootstrapCall(installId, `api.setAvailability(${JSON.stringify(availability)});`);
 }
 
 /**

@@ -26,6 +26,7 @@ export const CORE_GUEST_ASSET_FILES: Readonly<Partial<Record<CoreGuestAssetId, s
   probe: "probe.js",
   "extractor:svelte": "extractors/svelte.js",
   "extractor:react": "extractors/react.js",
+  "extractor:solid": "extractors/solid.js",
 };
 
 /** Same ceiling as a plugin guest adapter's body. */

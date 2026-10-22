@@ -70,6 +70,23 @@ describe("observations", () => {
     ).toBe(false);
   });
 
+  it("names a shadow host by element id and tag, bounded, and nothing more", () => {
+    const over = (patch: Partial<ElementContext>) =>
+      SelectionObservationSchema.safeParse(selection({ context: { ...context, ...patch } }))
+        .success;
+    const host = { elementId: "el-1", tagName: "x-card", label: "x-card#hero" };
+    expect(over({ shadowHosts: [] })).toBe(true);
+    expect(over({ shadowHosts: [host], shadowHostsTruncated: true })).toBe(true);
+    expect(
+      over({
+        shadowHosts: Array.from({ length: OBSERVATION_LIMITS.shadowHosts + 1 }, () => host),
+      })
+    ).toBe(false);
+    expect(over({ shadowHosts: [{ ...host, tagName: "" }] })).toBe(false);
+    expect(over({ shadowHosts: [{ ...host, framework: "lit" }] as never })).toBe(false);
+    expect(over({ shadowHostsTruncated: false as never })).toBe(false);
+  });
+
   it("bounds geometry, candidates and detections", () => {
     const rect = { x: 0, y: 0, width: 1, height: 1 };
     expect(

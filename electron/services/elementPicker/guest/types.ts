@@ -7,7 +7,10 @@ import type { ComponentChain } from "../../../../shared/elementPicker/component.
 import type { FrameworkEvidence } from "../../../../shared/elementPicker/evidence.js";
 import type { Capabilities } from "../../../../shared/elementPicker/observation.js";
 import type { ElementPickerEvent } from "../../../../shared/elementPicker/protocol.js";
-import type { SourceCandidate } from "../../../../shared/elementPicker/source.js";
+import type {
+  ElementPickerFramework,
+  SourceCandidate,
+} from "../../../../shared/elementPicker/source.js";
 
 export type PickerMode = "browse" | "select";
 
@@ -18,6 +21,24 @@ export type PickerMode = "browse" | "select";
  * of a better one. Unmarked sits between them.
  */
 export type ExtractorOwnership = "direct" | "fallback";
+
+/**
+ * Where a framework's reader stands in this document. `unavailable` is a
+ * framework the enum allows but this build ships no reader for — a fact about
+ * the app, not a failure of the page.
+ */
+export type ExtractorAvailability = "pending" | "installed" | "unavailable" | "failed";
+
+/**
+ * What the host has established about this document's readers, which the
+ * isolated picker cannot see for itself: whether its first look at the page
+ * finished, and what became of each framework it found. Until then, nothing
+ * the picker could not read is reported as absent.
+ */
+export interface PickerAvailability {
+  detection: "pending" | "settled";
+  extractors: Partial<Record<ElementPickerFramework, ExtractorAvailability>>;
+}
 
 /**
  * What one framework's extractor adds to an observation. Every field is
@@ -49,8 +70,8 @@ export interface BootstrapHostApi {
   setMode(mode: PickerMode): void;
   clearSelection(): void;
   clearHover(): void;
-  /** Describe the selection again; the host calls it after installing an extractor. */
-  refresh(): void;
+  /** The host's account of this document's readers, replacing the last one. */
+  setAvailability(availability: PickerAvailability): void;
   /** Select again by element id or a framework's locator; false when nothing was found. */
   reselect(request: unknown): boolean;
   dispose: (() => void) | null;

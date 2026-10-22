@@ -17,7 +17,13 @@ import { buildPickerReselectSource } from "../guestSources.js";
 import type { ElementPickerPushPayload } from "../types.js";
 import type { SitePreviewPushPayload } from "../../../../shared/types/ipc/sitePreview.js";
 import { ELEMENT_PICKER_PROTOCOL_VERSION } from "../../../../shared/elementPicker/protocol.js";
+import type {
+  Capabilities,
+  Capability,
+  SelectionObservation,
+} from "../../../../shared/elementPicker/observation.js";
 import { buildCoreGuestAssets } from "./buildCoreGuestAssets.js";
+import { LIT_CARD_TAG, mountLitPage, mountSolidPage, mountStaticPage } from "./fixtures/pages.js";
 
 /**
  * The acceptance tests for detection-gated loading, run through the real
@@ -773,5 +779,215 @@ describe("the shipped Svelte extractor", () => {
 
   it("carries none of the shared schemas into the page", () => {
     expect(assets["extractor:svelte"]).not.toMatch(/ZodError|\$ZodType/);
+  });
+});
+
+type Observed = SelectionObservation;
+
+function lastObservation(h: ReturnType<typeof makeHarness>): Observed | undefined {
+  const event = h.pickerEvents("selectionChanged").at(-1)?.event as
+    { observations: Observed[] } | undefined;
+  return event?.observations[0];
+}
+
+function everyCapability(capability: Capability): Capabilities {
+  return {
+    names: capability,
+    chain: capability,
+    componentSelection: capability,
+    file: capability,
+    line: capability,
+    exactRange: capability,
+  };
+}
+
+describe("DOM-level picking on a page with no component information", () => {
+  const cleanups: Array<() => void> = [];
+  afterEach(() => {
+    while (cleanups.length > 0) cleanups.pop()?.();
+  });
+
+  it("settles a static page as having no framework, and describes the element from the DOM", async () => {
+    const page = mountStaticPage();
+    cleanups.push(page.cleanup);
+    const h = makeHarness();
+    await h.bind();
+    await settle();
+    await vi.advanceTimersByTimeAsync(LATE_PROBE_DELAY_MS);
+    await settle();
+
+    (page.target as HTMLElement).click();
+    await settle();
+
+    const observation = lastObservation(h)!;
+    expect(observation.capabilities).toEqual(
+      everyCapability({ state: "unavailable", reason: "no-framework" })
+    );
+    expect(observation.componentChain).toEqual({
+      nearestId: null,
+      components: [],
+      truncated: false,
+    });
+    expect(observation.sourceCandidates).toEqual([]);
+    expect(observation.detections).toEqual([]);
+    expect(observation.context?.selector).toBe("button.cta.primary");
+    expect(observation.context?.markup).toBe(
+      '<button type="button" class="cta primary">Get started</button>'
+    );
+    expect(observation.context?.styles.map((entry) => entry.property)).toContain("display");
+    expect(observation.context?.shadowHosts).toEqual([]);
+  });
+
+  it.each([
+    ["client-rendered", {}],
+    ["server-rendered and hydrated", { hydrated: true }],
+  ])(
+    "reads a stock %s Solid 1.9 page as Solid whose components and source are not exposed",
+    async (_label, options) => {
+      const page = mountSolidPage(options);
+      cleanups.push(page.cleanup);
+      const h = makeHarness();
+      await h.bind();
+      await settle();
+      await vi.advanceTimersByTimeAsync(LATE_PROBE_DELAY_MS);
+      await settle();
+      expect(h.wc.debugger.evaluates().filter((entry) => entry.kind === "extractor")).toEqual([
+        { kind: "extractor", framework: "solid" },
+      ]);
+
+      (page.target as HTMLElement).click();
+      await settle();
+
+      const observation = lastObservation(h)!;
+      expect(observation.capabilities).toEqual(
+        everyCapability({ state: "unavailable", reason: "not-exposed" })
+      );
+      expect(observation.componentChain.components).toEqual([]);
+      expect(observation.sourceCandidates).toEqual([]);
+      expect(observation.context?.selector).toBe("button.increment");
+      expect(observation.context?.markup).toContain("Count: 0");
+    }
+  );
+
+  it("takes the creation site solid-devtools left on the element, and never calls the debugger", async () => {
+    const page = mountSolidPage({ devtools: true });
+    cleanups.push(page.cleanup);
+    const h = makeHarness();
+    let release!: () => void;
+    h.extractorLoad.gate = new Promise((resolve) => {
+      release = resolve;
+    });
+    await h.bind();
+    await settle();
+    await vi.advanceTimersByTimeAsync(LATE_PROBE_DELAY_MS);
+    await settle();
+
+    // Pointed at before Solid's reader arrived: nothing is claimed either way.
+    (page.target as HTMLElement).click();
+    await settle();
+    expect(lastObservation(h)!.capabilities).toEqual(everyCapability({ state: "unknown" }));
+
+    release();
+    await settle();
+    // The install held the binding's queue, so the page's late look came after
+    // it: the creation site arrives first, and what Solid does not expose is
+    // only said once that look has also come back.
+    const selections = h
+      .pickerEvents("selectionChanged")
+      .map((entry) => entry.event as { cause: string; observations: Observed[] });
+    expect(selections.map((event) => event.cause)).toEqual(["user", "reselect", "reselect"]);
+    expect(selections[1]!.observations[0]!.capabilities).toEqual({
+      ...everyCapability({ state: "unknown" }),
+      file: { state: "available" },
+      line: { state: "available" },
+    });
+    const observation = lastObservation(h)!;
+    expect(observation.sourceCandidates).toEqual([
+      {
+        kind: "element-creation",
+        candidateId: "solid-source-loc",
+        framework: "solid",
+        extraction: { kind: "attribute", attribute: "data-source-loc" },
+        file: "src/components/Counter.tsx",
+        location: { lineBase: 1, columnBase: 0, columnUnit: "utf16", line: 14, column: 8 },
+      },
+    ]);
+    expect(observation.componentChain.components).toEqual([]);
+    expect(observation.capabilities).toEqual({
+      ...everyCapability({ state: "unavailable", reason: "not-exposed" }),
+      file: { state: "available" },
+      line: { state: "available" },
+    });
+    expect(page.debuggerTouches()).toBe(0);
+  });
+
+  it("keeps Svelte's reader, finding nothing of its own, from shadowing Solid's creation site on a mixed page", async () => {
+    const page = mountSolidPage({ devtools: true });
+    cleanups.push(page.cleanup);
+    // Detected first, so Svelte's reader registers before Solid's.
+    scope.__svelte = {};
+    cleanups.push(() => delete scope.__svelte);
+    const h = makeHarness();
+    await h.bind();
+    await settle();
+    await vi.advanceTimersByTimeAsync(LATE_PROBE_DELAY_MS);
+    await settle();
+    expect(h.kinds("extractor-installed").map((entry) => entry.framework)).toEqual([
+      "svelte",
+      "solid",
+    ]);
+
+    (page.target as HTMLElement).click();
+    await settle();
+    const observation = lastObservation(h)!;
+    expect(observation.sourceCandidates.map((candidate) => candidate.framework)).toEqual(["solid"]);
+    // Svelte's reader looked at the element and found nothing of Svelte's, so
+    // what Solid says it lacks is what the page has to offer.
+    expect(observation.capabilities).toEqual({
+      ...everyCapability({ state: "unavailable", reason: "not-exposed" }),
+      file: { state: "available" },
+      line: { state: "available" },
+    });
+  });
+
+  it("picks inside a Lit element by the DOM alone, naming its shadow host and no framework", async () => {
+    const page = mountLitPage();
+    cleanups.push(page.cleanup);
+    const h = makeHarness();
+    await h.bind();
+    await settle();
+    await vi.advanceTimersByTimeAsync(LATE_PROBE_DELAY_MS);
+    await settle();
+    expect(h.wc.debugger.evaluates().some((entry) => entry.kind === "extractor")).toBe(false);
+
+    (page.target as HTMLElement).click();
+    await settle();
+    const inside = lastObservation(h)!;
+    expect(inside.detections).toEqual([]);
+    expect(inside.capabilities).toEqual(
+      everyCapability({ state: "unavailable", reason: "no-framework" })
+    );
+    expect(inside.componentChain.components).toEqual([]);
+    expect(inside.context?.selector).toBe("button.action");
+    expect(inside.context?.shadowHosts).toEqual([
+      { elementId: expect.any(String), tagName: LIT_CARD_TAG, label: `${LIT_CARD_TAG}#hero` },
+    ]);
+    // Lit's version globals identify nothing about the element, so nothing of them is sent.
+    expect(JSON.stringify(inside)).not.toMatch(/Versions|4\.2\.0|3\.3\.0/);
+
+    window.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true, cancelable: true })
+    );
+    window.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true, cancelable: true })
+    );
+    await settle();
+    const host = lastObservation(h)!;
+    expect(host.elementId).toBe(inside.context?.shadowHosts?.[0]?.elementId);
+    expect(host.context?.markup).toBe(
+      `<${LIT_CARD_TAG} id="hero"><template shadowrootmode="open"><article class="card">` +
+        '<h2 class="heading">…</h2><div class="body">…</div><button class="action">…</button>' +
+        `</article></template><p class="projected">Slotted copy</p></${LIT_CARD_TAG}>`
+    );
   });
 });
