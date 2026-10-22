@@ -17,18 +17,21 @@ export function useDockChipBadge(panelId: string): DockChipBadgeModel | null {
 
   const badges = usePanelBadges(panelId);
   const owner = usePanelOwnerPluginId(panelId);
-  const metaById = usePluginRuntimeStore((s) => s.pluginMetaById);
-
-  return useMemo(
-    () =>
-      foldDockChipBadges(
-        Object.entries(badges),
-        owner,
-        (pluginId) =>
-          metaById.get(pluginId)?.displayName ?? pluginManifestIdFromInstanceKey(pluginId)
-      ),
-    [badges, owner, metaById]
+  // Names as one primitive so a chip re-renders only when a name it shows
+  // changes, not on every runtime pull that rebuilds the whole meta map.
+  const pluginIds = useMemo(() => Object.keys(badges), [badges]);
+  const names = usePluginRuntimeStore((s) =>
+    pluginIds.map((id) => s.pluginMetaById.get(id)?.displayName ?? "").join("\u0000")
   );
+
+  return useMemo(() => {
+    const byId = new Map(pluginIds.map((id, i) => [id, names.split("\u0000")[i] ?? ""]));
+    return foldDockChipBadges(
+      Object.entries(badges),
+      owner,
+      (pluginId) => byId.get(pluginId) || pluginManifestIdFromInstanceKey(pluginId)
+    );
+  }, [badges, owner, pluginIds, names]);
 }
 
 /**
