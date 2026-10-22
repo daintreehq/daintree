@@ -17,6 +17,7 @@ import { SettingsSubpageProvider, type SettingsSubpage } from "./SettingsSubpage
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { isPointerClaimed } from "@/lib/pointerClaim";
 import { logError } from "@/utils/logger";
+import { actionService } from "@/services/ActionService";
 import {
   usePortalStore,
   usePerformanceModeStore,
@@ -65,7 +66,8 @@ import {
   type SettingsScope,
   type LazySettingsTabEntry,
 } from "./settingsTabRegistry";
-import { SETTINGS_SEARCH_INDEX } from "./settingsSearchIndex";
+import { SETTINGS_SEARCH_INDEX, type SettingsSearchEntry } from "./settingsSearchIndex";
+import { usePluginSettingsSearchIndex } from "./pluginSettingsSearch";
 import { landOnSettingsElement } from "./settingsLanding";
 import {
   filterSettings,
@@ -529,15 +531,16 @@ function SettingsDialogInner({
   // Filtered in the keystroke's own render, not behind useDeferredValue: the
   // index is ~150 entries and a pass costs about a millisecond, so deferring
   // it only painted the search mode a frame before its results.
+  const searchIndex = usePluginSettingsSearchIndex(isOpen);
   const searchResults = useMemo(
     () =>
-      filterSettings(SETTINGS_SEARCH_INDEX, searchQuery, {
+      filterSettings(searchIndex, searchQuery, {
         modifiedTabs,
         modifiedSettingIds,
         scope: activeScope,
         hasProject,
       }),
-    [searchQuery, modifiedTabs, modifiedSettingIds, activeScope, hasProject]
+    [searchIndex, searchQuery, modifiedTabs, modifiedSettingIds, activeScope, hasProject]
   );
 
   const cleanSearchQuery = useMemo(() => parseQuery(searchQuery).cleanQuery, [searchQuery]);
@@ -556,10 +559,36 @@ function SettingsDialogInner({
   // even when its parent was already on.
   const pendingRequirementRef = useRef<{ settingId: string; label: string } | null>(null);
 
+  // A plugin's setting lives in the plugin manager or Project settings → Plugins,
+  // so it goes through the action `host.settings.open` uses instead of a tab here.
+  const openPluginSetting = async (plugin: NonNullable<SettingsSearchEntry["plugin"]>) => {
+    // The action may open the plugin manager over this dialog, which closes it
+    // without passing through the dialog's own close flush.
+    await flushDialog();
+    const result = await actionService.dispatch(
+      "plugin.openSettings",
+      { pluginId: plugin.instanceId, key: plugin.settingId },
+      { source: "user" }
+    );
+    if (!result.ok) {
+      logError("Failed to open plugin setting from search", undefined, { error: result.error });
+      return;
+    }
+    setSearchQuery("");
+    setHiddenSettingBanner(null);
+    pendingRequirementRef.current = null;
+    searchInputRef.current?.blur();
+  };
+
   const handleResultClick = (
     { tab, subtab, sectionId }: SettingsNavTarget,
-    requiresEnabled?: { settingId: string; label: string }
+    requiresEnabled?: { settingId: string; label: string },
+    plugin?: SettingsSearchEntry["plugin"]
   ) => {
+    if (plugin) {
+      void openPluginSetting(plugin);
+      return;
+    }
     markTabVisited(tab);
     setSearchQuery("");
     setHiddenSettingBanner(null);
@@ -614,7 +643,8 @@ function SettingsDialogInner({
     if (result) {
       handleResultClick(
         { tab: result.tab, subtab: result.subtab, sectionId: result.id },
-        result.requiresEnabled
+        result.requiresEnabled,
+        result.plugin
       );
     }
   };
@@ -1971,7 +2001,8 @@ interface SearchResultsProps {
   cleanQuery: string;
   onResultClick: (
     target: SettingsNavTarget,
-    requiresEnabled?: { settingId: string; label: string }
+    requiresEnabled?: { settingId: string; label: string },
+    plugin?: SettingsSearchEntry["plugin"]
   ) => void;
   activeIndex?: number;
   /** Moves the active result to the row under the pointer — one cursor for pointer and keys. */
@@ -2076,7 +2107,8 @@ export function SearchResults({
               onClick={() =>
                 onResultClick(
                   { tab: result.tab, subtab: result.subtab, sectionId: result.id },
-                  result.requiresEnabled
+                  result.requiresEnabled,
+                  result.plugin
                 )
               }
               className={cn(
@@ -2098,6 +2130,8 @@ export function SearchResults({
                         scope={result.effectScope ?? result.scope}
                         projectLabel={projectLabel}
                         crossScope={
+                          // A plugin result opens its own surface, not the other scope's pages.
+                          !result.plugin &&
                           result.scope !== activeScope &&
                           (result.effectScope ?? result.scope) === result.scope
                         }
