@@ -60,6 +60,7 @@ import {
   _resetReverseRequestMethodsForTesting,
   answerReverseRequest,
 } from "../../client/reverseRequests.js";
+import { PLUGIN_PANEL_RELOAD_SHELL_BUDGET_MS } from "../../../services/plugin/PluginPanelReloadDispatcher.js";
 import {
   PluginFrontendMethod,
   REMOTE_CLIPBOARD_TIMEOUT_MS,
@@ -232,6 +233,62 @@ describe("Shell answers for a host's plugins", () => {
     const result = (await answer) as { agents: unknown[] };
     expect(result.agents).toHaveLength(1);
     expect(result.agents[0]).toMatchObject({ terminalId: "t-1", agentId: "claude" });
+  });
+
+  it("reloads a host plugin's panel in the driving view and relays the acknowledgment", async () => {
+    const wc = makeView();
+    const answer = ask(PluginFrontendMethod.PANEL_RELOAD, {
+      pluginId: "acme.deploy",
+      panelId: "p1",
+    });
+    await Promise.resolve();
+    const [channel, sent] = wc.send.mock.calls[0]!;
+    expect(channel).toBe(CHANNELS.PLUGIN_PANEL_RELOAD_REQUEST);
+    expect(sent).toMatchObject({ panelId: "p1", pluginId: "acme.deploy" });
+    // The view's deadline falls inside the host's own wait.
+    expect(sent.expiresAt - Date.now()).toBeLessThanOrEqual(PLUGIN_PANEL_RELOAD_SHELL_BUDGET_MS);
+    expect(sent.expiresAt - Date.now()).toBeGreaterThan(
+      PLUGIN_PANEL_RELOAD_SHELL_BUDGET_MS - 2_000
+    );
+    electronMock.emit(
+      CHANNELS.PLUGIN_PANEL_RELOAD_RESPONSE,
+      { sender: { id: WC_ID } },
+      { requestId: sent.requestId, result: "scheduled" }
+    );
+    await expect(answer).resolves.toEqual({ result: "scheduled" });
+  });
+
+  it("relays a view's refusal of a panel the plugin doesn't own", async () => {
+    const wc = makeView();
+    const answer = ask(PluginFrontendMethod.PANEL_RELOAD, {
+      pluginId: "acme.deploy",
+      panelId: "p1",
+    });
+    await Promise.resolve();
+    const sent = wc.send.mock.calls[0]![1];
+    electronMock.emit(
+      CHANNELS.PLUGIN_PANEL_RELOAD_RESPONSE,
+      { sender: { id: WC_ID } },
+      { requestId: sent.requestId, rejected: "foreign" }
+    );
+    await expect(answer).resolves.toEqual({ rejected: "foreign" });
+  });
+
+  it("answers unavailable for a cached view without messaging it", async () => {
+    const wc = makeView();
+    registry.cached.add(WC_ID);
+    await expect(
+      ask(PluginFrontendMethod.PANEL_RELOAD, { pluginId: "acme.deploy", panelId: "p1" })
+    ).resolves.toEqual({ result: "unavailable" });
+    expect(wc.send).not.toHaveBeenCalled();
+  });
+
+  it("refuses a panel reload for a view bound to another host", async () => {
+    const wc = makeView(`other-host:${PROJECT}`);
+    await expect(
+      ask(PluginFrontendMethod.PANEL_RELOAD, { pluginId: "acme.deploy", panelId: "p1" })
+    ).rejects.toMatchObject({ code: "VALIDATION" });
+    expect(wc.send).not.toHaveBeenCalled();
   });
 
   it("refuses an agents list for a view bound to another host", async () => {

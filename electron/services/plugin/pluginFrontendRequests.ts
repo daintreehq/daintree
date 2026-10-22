@@ -40,6 +40,8 @@ export const PluginFrontendMethod = {
   ACTIONS_GET: "plugin.actions-get",
   /** `host.agents.list()`: the driving view's agent panes; answers `{ agents }`. */
   AGENTS_LIST: "plugin.agents-list",
+  /** `host.reloadPanel()`: reload one plugin panel in the driving view; answers a result or a rejection. */
+  PANEL_RELOAD: "plugin.panel-reload",
 } as const;
 
 /** A remote clipboard image must fit one link frame with room to spare. */
@@ -196,6 +198,17 @@ export const PluginActionsListPayloadSchema = z.object({ pluginId });
 export const PluginActionsGetPayloadSchema = z.object({ pluginId, actionId });
 
 export const PluginAgentsListPayloadSchema = z.object({ pluginId });
+
+export const PluginPanelReloadPayloadSchema = z.object({
+  pluginId,
+  panelId: z.string().min(1).max(512),
+});
+
+/** The view's answer to a panel reload: its acknowledgment, or why the panel isn't the plugin's to reload. */
+export const RemotePanelReloadAnswerSchema = z.union([
+  z.object({ result: z.enum(["scheduled", "not-mounted", "rate-limited", "unavailable"]) }),
+  z.object({ rejected: z.enum(["foreign", "non-plugin"]) }),
+]);
 
 /**
  * A driving view's answer to a plugin dispatch, checked before the plugin
