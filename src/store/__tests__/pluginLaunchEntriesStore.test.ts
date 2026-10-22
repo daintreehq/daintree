@@ -126,4 +126,15 @@ describe("pluginLaunchEntriesStore (#13788)", () => {
       expect(usePluginLaunchEntriesStore.getState().hiddenPluginIds).toEqual(["acme.records"])
     );
   });
+
+  it("reports the hidden groups as loaded once main answers, and even when it fails", async () => {
+    expect(usePluginLaunchEntriesStore.getState().hiddenLoaded).toBe(false);
+    usePluginLaunchEntriesStore.getState().init();
+    await vi.waitFor(() => expect(usePluginLaunchEntriesStore.getState().hiddenLoaded).toBe(true));
+
+    resetPluginLaunchEntriesStoreForTests();
+    getHiddenLaunchGroups.mockRejectedValueOnce(new Error("offline"));
+    usePluginLaunchEntriesStore.getState().init();
+    await vi.waitFor(() => expect(usePluginLaunchEntriesStore.getState().hiddenLoaded).toBe(true));
+  });
 });

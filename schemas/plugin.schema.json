@@ -480,6 +480,9 @@
                 "type": "string",
                 "minLength": 1
               },
+              "showInEmptyState": {
+                "type": "boolean"
+              },
               "panel": {
                 "type": "object",
                 "properties": {

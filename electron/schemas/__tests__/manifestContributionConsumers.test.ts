@@ -578,6 +578,14 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       ],
       note: "Evaluated live against the chrome context; a false clause drops the row without unpinning it.",
     },
+    showInEmptyState: {
+      mode: "verbatim",
+      consumers: [
+        { file: PLUGIN_SERVICE, symbol: "loadPlugin → registerPluginLaunchEntry" },
+        { file: DOCK_LAUNCH_ITEMS, symbol: "buildEmptyCanvasPluginGroups" },
+      ],
+      note: 'Opts the entry into the stock empty-canvas launcher\'s "From <plugin>" band; only an explicit true does.',
+    },
     panel: {
       mode: "derived-input",
       consumers: [

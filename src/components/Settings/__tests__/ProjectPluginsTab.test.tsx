@@ -345,7 +345,7 @@ describe("ProjectPluginsTab", () => {
     );
     // The row stays, switched on, so the control the user just used is still
     // there to undo it with; only the reset goes, as nothing is left to reset.
-    await waitFor(() => expect(row.textContent).toContain("Its rows are back"));
+    await waitFor(() => expect(row.textContent).toContain("empty-canvas tiles are back"));
     expect(
       within(row).queryByRole("button", { name: "Reset Acme Dashboard's launch entries" })
     ).toBeNull();

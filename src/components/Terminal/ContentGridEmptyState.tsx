@@ -16,6 +16,7 @@ import { useRecipeStore } from "@/store/recipeStore";
 import { formatPath, middleTruncatePath, shortSha } from "@/utils/textParsing";
 import { RotatingTip } from "./contentGridTips";
 import { RecipeRunner } from "./RecipeRunner/RecipeRunner";
+import { PluginLaunchBand } from "./PluginLaunchBand";
 import { ResumeSessionLine } from "./ResumeSessionLine";
 import { LauncherQuickActions } from "./LauncherQuickActions";
 import { TourInviteCard } from "@/components/Tour/TourInviteCard";
@@ -492,6 +493,17 @@ export function ContentGridEmptyState({
               >
                 <RecipeRunner activeWorktreeId={activeWorktreeId} defaultCwd={defaultCwd} />
               </div>
+            )}
+
+            {/* Shares the recipes' step: the band renders nothing for most
+                projects, and a step of its own would leave a hole in the
+                ladder whenever it is absent. */}
+            {hasLaunchTarget && hasProjectContext && (
+              <PluginLaunchBand
+                activeWorktreeId={activeWorktreeId}
+                cwd={defaultCwd}
+                className={cn("w-full", SECTION_ENTRY, SECTION_ENTRY_DELAY_3)}
+              />
             )}
 
             {showProjectPulse && hasLaunchTarget && activeWorktreeId && (

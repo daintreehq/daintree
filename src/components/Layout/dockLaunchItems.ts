@@ -640,6 +640,21 @@ export function buildPluginGroups(
 }
 
 /**
+ * The plugin groups the stock empty-canvas launcher lists: `buildPluginGroups`
+ * over only the entries that opted in with `showInEmptyState`. Kept apart from
+ * `buildDockLaunchModel` so opting in never changes the launcher's own rows.
+ */
+export function buildEmptyCanvasPluginGroups(
+  entries: ReadonlyArray<PluginLaunchEntryConfig>,
+  options: Parameters<typeof buildPluginGroups>[1]
+): DockLaunchModel["pluginGroups"] {
+  return buildPluginGroups(
+    entries.filter((entry) => entry.showInEmptyState === true),
+    options
+  );
+}
+
+/**
  * Capped frecency band, newest-first as the MRU store already sorted it. Drops
  * cold-start seeds (never launched), non-agent keys, and entries whose agent is
  * no longer registered.
@@ -1281,7 +1296,7 @@ function activatePluginLaunchEntry(
  * Hide a plugin's group in this project. The launcher closes on select, so a
  * write main refused would otherwise look like the click did nothing.
  */
-function hidePluginGroup(group: DockLaunchPluginGroup): void {
+export function hidePluginGroup(group: DockLaunchPluginGroup): void {
   void usePluginLaunchEntriesStore
     .getState()
     .setGroupHidden(group.pluginId, true)

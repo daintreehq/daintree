@@ -17,6 +17,8 @@ interface PluginLaunchEntriesState {
   entries: readonly PluginLaunchEntryConfig[];
   /** Plugin instance ids whose launcher group this project hides. */
   hiddenPluginIds: readonly string[];
+  /** Whether main has answered the hidden-groups read at least once (success or failure). */
+  hiddenLoaded: boolean;
   /** The last hide or show main could not record, so a surface can say so. */
   saveError: string | null;
   init: () => void;
@@ -52,15 +54,17 @@ export const usePluginLaunchEntriesStore = create<PluginLaunchEntriesState>((set
     if (typeof bridge?.getHiddenLaunchGroups !== "function") return;
     bridge
       .getHiddenLaunchGroups()
-      .then((ids) => set({ hiddenPluginIds: ids.length > 0 ? ids : EMPTY_IDS }))
-      .catch((error: unknown) =>
-        logWarn("[PluginLaunchEntries] Failed to read hidden launcher groups", { error })
-      );
+      .then((ids) => set({ hiddenPluginIds: ids.length > 0 ? ids : EMPTY_IDS, hiddenLoaded: true }))
+      .catch((error: unknown) => {
+        set({ hiddenLoaded: true });
+        logWarn("[PluginLaunchEntries] Failed to read hidden launcher groups", { error });
+      });
   };
 
   return {
     entries: EMPTY_ENTRIES,
     hiddenPluginIds: EMPTY_IDS,
+    hiddenLoaded: false,
     saveError: null,
 
     init: () => {

@@ -360,6 +360,7 @@ export const LaunchEntryContributionSchema = z
       .union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5)])
       .optional(),
     when: z.string().min(1).optional(),
+    showInEmptyState: z.boolean().optional(),
     panel: LaunchEntryPanelTargetSchema.optional(),
     command: LaunchEntryCommandTargetSchema.optional(),
     agent: LaunchEntryAgentTargetSchema.optional(),
