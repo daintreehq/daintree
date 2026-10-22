@@ -46,6 +46,7 @@ import {
   activateDockLaunchCue,
   activateDockLaunchItem,
   buildDockLaunchModel,
+  buildEmptyCanvasPluginGroups,
   dockLaunchBandLabel,
   type ActivateDockLaunchItemContext,
   type DockLaunchPluginEntryItem,
@@ -292,6 +293,42 @@ describe("plugin launch entries — groups", () => {
     expect(itemFor(entries, `${RECORDS}.dialog`, "grid").presentation).toBe("dialog");
     expect(itemFor(entries, `${RECORDS}.grid`, "dock").presentation).toBe("panel");
     expect(itemFor(entries, `${NOTES}.board`, "grid").presentation).toBe("dock");
+  });
+});
+
+describe("plugin launch entries — empty canvas", () => {
+  const entries = [
+    entry({ id: "listed", showInEmptyState: true }),
+    entry({ id: "unlisted" }),
+    entry({ id: "off", showInEmptyState: false }),
+    entry({
+      id: "other",
+      pluginId: NOTES,
+      pluginName: "Notes",
+      showInEmptyState: true,
+      target: { type: "panel", panelKindId: NOTES_KIND },
+    }),
+  ];
+
+  it("lists only the entries that opted in, one group per plugin", () => {
+    const groups = buildEmptyCanvasPluginGroups(entries, { surface: "grid" });
+    expect(groups.map((g) => [g.pluginName, g.items.map((i) => i.entryId)])).toEqual([
+      ["Notes", ["other"]],
+      ["Records", ["listed"]],
+    ]);
+  });
+
+  it("honours a hidden plugin and a false when clause", () => {
+    const groups = buildEmptyCanvasPluginGroups(
+      [...entries, entry({ id: "gated", showInEmptyState: true, when: "isGitBacked" })],
+      { surface: "grid", hiddenPluginIds: [NOTES], whenContext: { isGitBacked: false } }
+    );
+    expect(groups.flatMap((g) => g.items.map((i) => i.entryId))).toEqual(["listed"]);
+  });
+
+  it("leaves the launcher's own model listing every entry", () => {
+    const model = build({ launchEntries: entries, surface: "grid" });
+    expect(model.pluginGroups.flatMap((g) => g.items).map((i) => i.entryId)).toHaveLength(4);
   });
 });
 

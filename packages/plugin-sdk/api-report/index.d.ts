@@ -2377,6 +2377,8 @@ interface PluginLaunchEntryContribution {
     /** Order within the plugin's group, 1 first. Default 3. */
     priority?: 1 | 2 | 3 | 4 | 5;
     when?: string;
+    /** Also list this entry as a tile in the empty canvas's "From <plugin>" band. */
+    showInEmptyState?: boolean;
     panel?: PluginLaunchEntryPanelTarget;
     command?: PluginLaunchEntryCommandTarget;
     agent?: PluginLaunchEntryAgentTarget;

@@ -218,4 +218,12 @@ describe("launch entries", () => {
     expect(parseAs("user", entries).success).toBe(false);
     expect(parseAs("user", entries.slice(1)).success).toBe(true);
   });
+
+  it("takes showInEmptyState as a boolean and nothing else", () => {
+    const panel = { panel: { id: "records" } };
+    expect(parse({ ...panel }).success).toBe(true);
+    expect(parse({ ...panel, showInEmptyState: true }).success).toBe(true);
+    expect(parse({ ...panel, showInEmptyState: false }).success).toBe(true);
+    expect(parse({ ...panel, showInEmptyState: "yes" }).success).toBe(false);
+  });
 });

@@ -17,6 +17,8 @@ interface PluginLaunchEntriesState {
   entries: readonly PluginLaunchEntryConfig[];
   /** Plugin instance ids whose launcher group this project hides. */
   hiddenPluginIds: readonly string[];
+  /** Whether main has answered the hidden-groups read at least once (success or failure). */
+  hiddenLoaded: boolean;
   /** The last hide or show main could not record, so a surface can say so. */
   saveError: string | null;
   init: () => void;
@@ -46,21 +48,31 @@ let initialized = false;
 
 let writeSeq = 0;
 
+let readSeq = 0;
+
 export const usePluginLaunchEntriesStore = create<PluginLaunchEntriesState>((set, get) => {
   const readHidden = () => {
     const bridge = window.electron?.plugin;
     if (typeof bridge?.getHiddenLaunchGroups !== "function") return;
+    // Only the newest read answers: one made before the view was bound to its
+    // project can land after the replay's and would put its [] back.
+    const read = ++readSeq;
     bridge
       .getHiddenLaunchGroups()
-      .then((ids) => set({ hiddenPluginIds: ids.length > 0 ? ids : EMPTY_IDS }))
-      .catch((error: unknown) =>
-        logWarn("[PluginLaunchEntries] Failed to read hidden launcher groups", { error })
-      );
+      .then((ids) => {
+        if (read !== readSeq) return;
+        set({ hiddenPluginIds: ids.length > 0 ? ids : EMPTY_IDS, hiddenLoaded: true });
+      })
+      .catch((error: unknown) => {
+        if (read === readSeq) set({ hiddenLoaded: true });
+        logWarn("[PluginLaunchEntries] Failed to read hidden launcher groups", { error });
+      });
   };
 
   return {
     entries: EMPTY_ENTRIES,
     hiddenPluginIds: EMPTY_IDS,
+    hiddenLoaded: false,
     saveError: null,
 
     init: () => {
@@ -81,8 +93,15 @@ export const usePluginLaunchEntriesStore = create<PluginLaunchEntriesState>((set
         );
 
       bridge.onLaunchEntriesChanged?.((payload) => {
+        // The first push is the replay that binds the view, so whatever was
+        // read as hidden before it answered for no project: not loaded again
+        // until the read below lands.
+        const firstPush = !pushReceived;
         pushReceived = true;
-        set({ entries: acceptEntries(payload.entries) });
+        set({
+          entries: acceptEntries(payload.entries),
+          ...(firstPush ? { hiddenLoaded: false } : {}),
+        });
         // A view is bound to its project when main replays its snapshot to it,
         // which is this push. A read made before that answered for no project,
         // so it is made again now rather than trusted.

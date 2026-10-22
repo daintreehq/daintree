@@ -126,4 +126,46 @@ describe("pluginLaunchEntriesStore (#13788)", () => {
       expect(usePluginLaunchEntriesStore.getState().hiddenPluginIds).toEqual(["acme.records"])
     );
   });
+
+  it("reports the hidden groups as loaded once main answers, and even when it fails", async () => {
+    expect(usePluginLaunchEntriesStore.getState().hiddenLoaded).toBe(false);
+    usePluginLaunchEntriesStore.getState().init();
+    await vi.waitFor(() => expect(usePluginLaunchEntriesStore.getState().hiddenLoaded).toBe(true));
+
+    resetPluginLaunchEntriesStoreForTests();
+    getHiddenLaunchGroups.mockRejectedValueOnce(new Error("offline"));
+    usePluginLaunchEntriesStore.getState().init();
+    await vi.waitFor(() => expect(usePluginLaunchEntriesStore.getState().hiddenLoaded).toBe(true));
+  });
+
+  it("stays unloaded after the binding replay until the hidden groups are re-read", async () => {
+    const early = deferred<string[]>();
+    const replay = deferred<string[]>();
+    getHiddenLaunchGroups.mockReturnValueOnce(early.promise).mockReturnValueOnce(replay.promise);
+    usePluginLaunchEntriesStore.getState().init();
+    early.resolve([]);
+    await vi.waitFor(() => expect(usePluginLaunchEntriesStore.getState().hiddenLoaded).toBe(true));
+
+    push!({ entries: [entry("new")] });
+    expect(usePluginLaunchEntriesStore.getState().hiddenLoaded).toBe(false);
+
+    replay.resolve(["acme.records"]);
+    await vi.waitFor(() => expect(usePluginLaunchEntriesStore.getState().hiddenLoaded).toBe(true));
+    expect(usePluginLaunchEntriesStore.getState().hiddenPluginIds).toEqual(["acme.records"]);
+  });
+
+  it("ignores a hidden-groups read that answers after a newer one", async () => {
+    const early = deferred<string[]>();
+    getHiddenLaunchGroups
+      .mockReturnValueOnce(early.promise)
+      .mockResolvedValueOnce(["acme.records"]);
+    usePluginLaunchEntriesStore.getState().init();
+    push!({ entries: [] });
+    await vi.waitFor(() =>
+      expect(usePluginLaunchEntriesStore.getState().hiddenPluginIds).toEqual(["acme.records"])
+    );
+    early.resolve([]);
+    await Promise.resolve();
+    expect(usePluginLaunchEntriesStore.getState().hiddenPluginIds).toEqual(["acme.records"]);
+  });
 });

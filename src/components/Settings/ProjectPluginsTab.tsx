@@ -363,7 +363,7 @@ function HiddenLauncherGroupsSection() {
     <div data-testid="project-plugins-hidden-launch-groups">
       <SettingsSection
         title="Hidden from the launcher"
-        description="Plugins whose launch entries this project's launcher leaves out"
+        description="Plugins whose launch entries this project's launcher and empty canvas leave out"
       >
         <SettingsGroup>
           {listed.map((pluginId) => {
@@ -375,8 +375,8 @@ function HiddenLauncherGroupsSection() {
                 label={name}
                 description={
                   hidden
-                    ? "Its rows are left out of this project's launcher"
-                    : "Its rows are back in this project's launcher"
+                    ? "Its rows and empty-canvas tiles are left out of this project"
+                    : "Its rows and empty-canvas tiles are back in this project"
                 }
                 rootAttributes={{ "data-testid": `hidden-launch-group-${pluginId}` }}
                 isModified={hidden}

@@ -2507,6 +2507,7 @@ export class PluginService {
         ...(entry.description !== undefined ? { description: entry.description } : {}),
         priority: entry.priority ?? 3,
         ...(entry.when !== undefined ? { when: entry.when } : {}),
+        ...(entry.showInEmptyState === true ? { showInEmptyState: true } : {}),
         target,
       });
       trackPluginExpression(pluginId, entry.when);
