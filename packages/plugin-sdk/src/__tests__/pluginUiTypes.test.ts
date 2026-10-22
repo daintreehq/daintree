@@ -35,6 +35,7 @@ import {
   type DropdownMenuEntry,
   type DaintreeTheme,
   VirtualList,
+  VirtualGrid,
   DataTable,
   LogView,
   PaneHeader,
@@ -53,6 +54,7 @@ import {
   ListRow,
   SeverityIcon,
   useListNavigation,
+  useSelection,
   formatTimeAgo,
   formatRelativeTime,
   formatBytes,
@@ -67,6 +69,9 @@ import {
   type VirtualListProps,
   type VirtualListItemsProps,
   type VirtualListCountProps,
+  type VirtualGridProps,
+  type VirtualGridCountProps,
+  type VirtualGridItemState,
   type LogEntry,
   type Severity,
 } from "@daintreehq/plugin-ui";
@@ -162,6 +167,53 @@ export const countProps: VirtualListCountProps = {
 // A wrapper forwarding the general props still compiles.
 export const forwarded = (props: VirtualListProps<Issue>) => createElement(VirtualList, props);
 export const narrowed = (props: VirtualListItemsProps<Issue>) => createElement(VirtualList<Issue>, props);
+
+interface Photo { id: string; src: string; }
+const photoItems: Photo[] = [{ id: "a", src: "a.png" }];
+// With \`items\` a card is handed its item and its cursor and selection state.
+export const photoGrid = createElement(VirtualGrid<Photo>, {
+  items: photoItems,
+  "aria-label": "Photos",
+  minColumnWidth: 120,
+  maxColumns: 6,
+  gap: "sm",
+  itemKey: (_index, photo) => photo.id,
+  renderItem: (_index, photo, state: VirtualGridItemState) => (state.selected ? photo.src : photo.id),
+  onItemActivate: (_index, photo) => void photo.src,
+  onEndReached: (lastIndex: number) => void lastIndex,
+});
+// @ts-expect-error a grid needs an accessible name
+export const unnamedGrid = createElement(VirtualGrid, { count: 3, renderItem: () => null });
+// @ts-expect-error cards are typed through the generic
+export const badCard = createElement(VirtualGrid<Photo>, { items: photoItems, "aria-label": "x", renderItem: (_i, photo) => photo.missing });
+// @ts-expect-error the gap is a step of the layout scale
+export const badGap = createElement(VirtualGrid, { count: 3, "aria-label": "Cards", gap: 7, renderItem: () => null });
+export const countGrid = createElement(VirtualGrid, {
+  count: 3,
+  "aria-label": "Cards",
+  renderItem: (index) => index,
+});
+export const countGridProps: VirtualGridCountProps = {
+  count: 3,
+  "aria-label": "Cards",
+  renderItem: (_index, item) => {
+    const none: undefined = item;
+    return none;
+  },
+};
+// A useSelection result over the cards' keys drives the grid as it is.
+export function SelectableGrid() {
+  const selection = useSelection({ ids: photoItems.map((photo) => photo.id) });
+  return createElement(VirtualGrid<Photo>, {
+    items: photoItems,
+    "aria-label": "Photos",
+    "aria-multiselectable": true,
+    selection,
+    itemKey: (_index, photo) => photo.id,
+    renderItem: (_index, photo) => photo.src,
+  });
+}
+export const forwardedGrid = (props: VirtualGridProps<Photo>) => createElement(VirtualGrid, props);
 
 const columns: DataTableColumn<Issue>[] = [
   { id: "title", header: "Title", sortable: true, render: (issue) => issue.title },

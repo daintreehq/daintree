@@ -186,6 +186,12 @@ declare module "@daintreehq/plugin-ui" {
     PluginToolbarProps,
     PluginTooltipProps,
     PluginTruncatedTooltipProps,
+    PluginVirtualGridComponent,
+    PluginVirtualGridCountProps,
+    PluginVirtualGridItemState,
+    PluginVirtualGridItemsProps,
+    PluginVirtualGridProps,
+    PluginVirtualGridSelection,
     PluginVirtualListComponent,
     PluginVirtualListCountProps,
     PluginVirtualListItemsProps,
@@ -372,6 +378,11 @@ declare module "@daintreehq/plugin-ui" {
   export type VirtualListProps<T = unknown> = PluginVirtualListProps<T>;
   export type VirtualListItemsProps<T = unknown> = PluginVirtualListItemsProps<T>;
   export type VirtualListCountProps = PluginVirtualListCountProps;
+  export type VirtualGridProps<T = unknown> = PluginVirtualGridProps<T>;
+  export type VirtualGridItemsProps<T = unknown> = PluginVirtualGridItemsProps<T>;
+  export type VirtualGridCountProps = PluginVirtualGridCountProps;
+  export type VirtualGridItemState = PluginVirtualGridItemState;
+  export type VirtualGridSelection = PluginVirtualGridSelection;
   export type DataTableProps<T = unknown> = PluginDataTableProps<T>;
   export type DataTableColumn<T = unknown> = PluginDataTableColumn<T>;
   export type DataTableRowKey<T = unknown> = PluginDataTableRowKey<T>;
@@ -696,6 +707,14 @@ declare module "@daintreehq/plugin-ui" {
    * `activeIndex`, and render each row as a `ListRow` with `getRowProps(index)`.
    */
   export const VirtualList: PluginVirtualListComponent;
+  /**
+   * Cards in as many equal columns as fit (`minColumnWidth`, `maxColumns`),
+   * windowed by row so thousands cost what a screenful does. It fills its
+   * container's height. With `selection` (a `useSelection` result) or
+   * `onItemActivate` it is a keyboard grid: the arrow keys move a cursor in two
+   * dimensions and clicks and keys select as a `DataTable` row does.
+   */
+  export const VirtualGrid: PluginVirtualGridComponent;
   /**
    * A table with a sticky header and a body virtualised by default
    * (`virtualize={false}` draws a plain table). Sorting is controlled: the
