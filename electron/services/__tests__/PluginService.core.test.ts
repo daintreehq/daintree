@@ -242,7 +242,10 @@ vi.mock("../plugin/PluginDevWorkerMainBridge.js", () => ({
 }));
 
 import { PluginService } from "../PluginService.js";
-import { type PluginIpcContext } from "../../../shared/types/plugin.js";
+import {
+  SIDEBAR_VIEW_DEFAULT_PRIORITY,
+  type PluginIpcContext,
+} from "../../../shared/types/plugin.js";
 import { registerPanelKind } from "../../../shared/config/panelKindRegistry.js";
 import { registerToolbarButton } from "../../../shared/config/toolbarButtonRegistry.js";
 import { registerPluginMenuItem } from "../pluginMenuRegistry.js";
@@ -550,6 +553,72 @@ describe("PluginService", () => {
     // Unloading withdraws it.
     service.unloadPlugin("acme.settings-plugin");
     expect(getPluginHostedViews().some((v) => v.pluginId === "acme.settings-plugin")).toBe(false);
+  });
+
+  it("serves sidebar views as hosted views carrying their switcher entry", async () => {
+    await writePlugin("sidebar-plugin", {
+      name: "acme.sidebar-plugin",
+      displayName: "Acme Beads",
+      version: "1.0.0",
+      contributes: {
+        views: [
+          {
+            id: "board",
+            componentPath: "dist/board.js",
+            location: "sidebar",
+            name: "Board",
+            iconId: "list",
+            priority: 250,
+            when: "isGitBacked",
+          },
+          { id: "docs", componentPath: "dist/docs.js", location: "sidebar", name: "Docs" },
+        ],
+      },
+    });
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    // A sidebar view is never a panel kind, so nothing can spawn one.
+    expect(
+      vi
+        .mocked(registerPanelKind)
+        .mock.calls.some((call) => String(call[0]?.id).startsWith("acme.sidebar-plugin."))
+    ).toBe(false);
+    const hosted = getPluginHostedViews().filter((v) => v.pluginId === "acme.sidebar-plugin");
+    expect(hosted).toEqual([
+      {
+        id: "plugin-view:acme.sidebar-plugin/board",
+        pluginId: "acme.sidebar-plugin",
+        viewId: "board",
+        location: "sidebar",
+        name: "Acme Beads Board",
+        title: "Board",
+        pluginName: "Acme Beads",
+        iconId: "list",
+        priority: 250,
+        when: "isGitBacked",
+        componentPath: expect.stringMatching(/^plugin:\/\/.*dist\/board\.js$/),
+      },
+      {
+        id: "plugin-view:acme.sidebar-plugin/docs",
+        pluginId: "acme.sidebar-plugin",
+        viewId: "docs",
+        location: "sidebar",
+        name: "Acme Beads Docs",
+        title: "Docs",
+        pluginName: "Acme Beads",
+        // Undeclared, it sorts below the worktree list.
+        priority: SIDEBAR_VIEW_DEFAULT_PRIORITY,
+        componentPath: expect.stringMatching(/^plugin:\/\/.*dist\/docs\.js$/),
+      },
+    ]);
+    await expect(
+      service.activatePluginForView("plugin-view:acme.sidebar-plugin/board", true)
+    ).resolves.toMatchObject({
+      ok: true,
+      recoveryComponentPath: expect.stringMatching(/dist\/board\.js$/),
+    });
   });
 
   it("skips directories without plugin.json", async () => {

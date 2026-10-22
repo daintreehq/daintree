@@ -37,6 +37,8 @@ export interface PluginViewDiagnosticsFallbackProps {
    * rendered inert.
    */
   onRequestClose?: () => void;
+  /** What the `onRequestClose` button says; a host that closes no panel names its own way out. */
+  requestCloseLabel?: string;
 }
 
 /**
@@ -68,6 +70,7 @@ export function PluginViewDiagnosticsFallback({
   componentPath,
   devMode,
   onRequestClose,
+  requestCloseLabel = "Close panel",
 }: PluginViewDiagnosticsFallbackProps) {
   const { copied, copy } = useCopyWithFeedback({ announcement: "Diagnostics copied" });
   // Only a refusal the document runtime itself issued is unrecoverable by a
@@ -182,8 +185,9 @@ export function PluginViewDiagnosticsFallback({
             {onRequestClose && (
               // No confirmation: the grid/dock close trashes the panel, which the
               // trash bin restores — a D0 reversible action, same as the header's
-              // own close control. Neutral styling keeps "Try again" the single
-              // emphasized action in this region.
+              // own close control (the sidebar's "Show worktrees" only navigates).
+              // Neutral styling keeps "Try again" the single emphasized action in
+              // this region.
               <Button
                 type="button"
                 variant="subtle"
@@ -197,7 +201,7 @@ export function PluginViewDiagnosticsFallback({
                 onClick={() => onRequestClose()}
                 data-testid="plugin-view-diagnostics-close"
               >
-                Close panel
+                {requestCloseLabel}
               </Button>
             )}
             <Button

@@ -389,7 +389,7 @@ None of these needs wiring in your view, and none can be removed from a manifest
 
 ## Views — _Shipped_
 
-Views are the React components a plugin renders. A `location: "panel"` view binds to a panel slot declared in `contributes.panels` by matching its bare `id`; at plugin load the matching panel kind gains a `componentPath` resolved to a `plugin://` URL. The renderer host (`PluginViewHost`) lazy-imports the module over Daintree's `plugin://` protocol and mounts it under an `ErrorBoundary` + `Suspense`. A `location: "settings"` view is the plugin's custom settings section instead (below). `"sidebar"` is rejected at manifest validation because the sidebar host does not exist yet. The contribution key is `views` (it was `experimental_views` until #10466 — the old key is still accepted as a deprecated alias that logs a warning). [Views: what you get in the DOM](./views.md) is the authoring guide.
+Views are the React components a plugin renders. A `location: "panel"` view binds to a panel slot declared in `contributes.panels` by matching its bare `id`; at plugin load the matching panel kind gains a `componentPath` resolved to a `plugin://` URL. The renderer host (`PluginViewHost`) lazy-imports the module over Daintree's `plugin://` protocol and mounts it under an `ErrorBoundary` + `Suspense`. A `location: "settings"` view is the plugin's custom settings section instead, and a `location: "sidebar"` view one of the sidebar's views (both below). The contribution key is `views` (it was `experimental_views` until #10466 — the old key is still accepted as a deprecated alias that logs a warning). [Views: what you get in the DOM](./views.md) is the authoring guide.
 
 ```json
 {
@@ -410,18 +410,48 @@ Views are the React components a plugin renders. A `location: "panel"` view bind
 
 **A settings view** — `location: "settings"` is the one exception to the pairing below. It names no panel: its `id` may not match a panel's (`settings_view_panel_id_collision`), a plugin declares at most one (`settings_view_duplicate`), and a surface can't claim it (`surface_view_ref_settings`). The host mounts it in the plugin's settings home, below the generated [settings](#settings-schema--shipped) fields, with `settingsContext` and without the panel-record props. See [Settings → A custom section](#a-custom-settings-section) and [Views → A settings section](./views.md#a-settings-section).
 
+**A sidebar view** — `location: "sidebar"` puts the view in the sidebar, beside the built-in worktree list (the workspace, in a folder without git). Like a settings view it names no panel: its `id` may not match a panel's (`sidebar_view_panel_id_collision`) and a surface can't claim it (`surface_view_ref_sidebar`). A plugin may declare several.
+
+```json
+{
+  "contributes": {
+    "views": [
+      {
+        "id": "board",
+        "componentPath": "./dist/board.js",
+        "location": "sidebar",
+        "name": "Board",
+        "iconId": "list",
+        "priority": 10,
+        "when": "isGitBacked"
+      }
+    ]
+  }
+}
+```
+
+- **The switcher.** While at least one plugin sidebar view applies to the project, the sidebar's heading becomes a dropdown listing every view, highest `priority` first, each plugin's entry attributed to the plugin. With none, the heading stays a plain title. The worktree list is always in the list, and its entry keeps the count of agents waiting on the user while a plugin view shows.
+- **Priority.** An integer from `-1000` to `1000`, default `0`. The worktree list's priority is fixed at `0` and it wins a tie, so a view lists above it only with a positive priority; views that tie each other sort by id. Priority orders the list and nothing else: the sidebar opens on the worktree list until the user picks a view.
+- **The choice** is remembered per project. If the chosen view stops applying (its plugin stops, is hidden in this project, or its `when` turns false), the sidebar shows the worktree list until the view applies again, then returns to it.
+- **`when`** is evaluated live against the [project keys](#keybindings--shipped) and your plugin's own [`host.setContext`](./host-api.md#setcontext) keys. It may not read `activeSidebarView` (`sidebar_view_when_reads_active_view`): which view shows is decided from which ones apply.
+- **`activeSidebarView`** names the view showing: `<manifest name>.<view id>` for an installed plugin's view, `project:<manifest name>.<view id>` for a project plugin's (an installed and a project copy of one plugin can both load, and each keeps its own entry). The `ui.sidebar.switchView` action takes the same id.
+- **What the view gets.** The standard view props and error boundary, with `hostContext.kind === "sidebar"`, mounted in the region below the header. The header holds only the switcher, so draw your own controls inside the view, and lay it out for the sidebar's minimum width of 200px. When the view fails, its error pane offers **Show worktrees** beside **Try again**. A right-click inside the view reaches the view and never opens the sidebar's own menu. The view unmounts when the user switches away, which fires `disposeSignal`.
+
 **Pairing with `contributes.panels`** — a panel view binds to a panel by matching its bare `id` (pre-namespace) to a panel `id`. A view whose `id` matches no panel is rejected at manifest validation (`view_panel_ref_unknown`) — it would otherwise never render, so it's a hard load error rather than a silent runtime skip. A view targeting a panel with `hasPty: true` is skipped — PTY panels render through `TerminalPane` and cannot host a plugin module.
 
 **Fields:**
 
 | Field | Required | Notes |
 | --- | --- | --- |
-| `id` | yes | For a panel view, the panel `id` it provides a component for; for a settings view, an id of its own. Letters, digits, `.`, `_` and `-`, at most 64 characters. |
+| `id` | yes | For a panel view, the panel `id` it provides a component for; for a settings or sidebar view, an id of its own. Letters, digits, `.`, `_` and `-`, at most 64 characters. |
 | `componentPath` | yes | POSIX-relative path to an ESM module inside the plugin (`.js` or `.mjs`). The module's default export is a React component. Absolute paths, backslashes, URL schemes, `?`, `#` and `..` segments are rejected at manifest validation. |
-| `location` | yes | `"panel"` (rendered in the panel of the same id, in the grid, the dock or a dialog), or `"settings"` for the plugin's custom settings section. `"sidebar"` is rejected at manifest validation — the sidebar host does not exist yet. |
-| `iconId` | no | Accepted for compatibility but **ignored at runtime** — the matching `contributes.panels` entry owns the rendered icon. Set it there instead. |
+| `location` | yes | `"panel"` (rendered in the panel of the same id, in the grid, the dock or a dialog), `"settings"` for the plugin's custom settings section, or `"sidebar"` for a sidebar view. |
+| `iconId` | no | A sidebar view's glyph in the switcher: a plugin icon id or a `./…svg` [custom icon](#custom-icons). On a panel or settings view it is accepted for compatibility but **ignored at runtime** — the matching `contributes.panels` entry owns the rendered icon. |
+| `name` | sidebar only | The sidebar view's name in the switcher and the header, at most 40 characters. Required for a sidebar view. |
+| `priority` | sidebar only | Integer from `-1000` to `1000`, default `0`; orders the switcher against the worktree list's `0`. |
+| `when` | sidebar only | Shows the view only while the expression holds. |
 
-The view schema is strict and carries no `name` or `description`: the matching panel is the single source of truth for a view's display metadata, so those fields were removed (#10888) rather than validate values the runtime ignores.
+The view schema is strict and carries no `description`, and a panel or settings view takes no `name`, `priority` or `when`: the matching panel is the single source of truth for a panel view's display metadata, so those fields were removed (#10888) rather than validate values the runtime ignores. A sidebar view has no panel to borrow them from, so it carries its own.
 
 **Bundling** — the host serves the module as-is and compiles nothing, so a view is either hand-written browser ESM (the zero-build path: `createElement`, no JSX, bare imports limited to the host import map) or a bundle `@daintreehq/plugin-vite` produces with the right externals for sharing the host's React 19. See [Views → Getting data in](./views.md#getting-data-in) for what the import map serves and [Architecture → Renderer host](./architecture.md#renderer-host) for the internals.
 
@@ -640,7 +670,7 @@ Keybindings map a key combination to an action.
 | --- | --- | --- |
 | `isGitBacked` | boolean | The project is a git repository. `false` in a folder opened without git, in a scratch workspace, and when no workspace is open. |
 | `workspaceKind` | string | `"project"`, `"scratch"`, or `""` when no workspace is open. |
-| `activeSidebarView` | string | The sidebar view the project shows: `"worktrees"` for the built-in worktree list. It names the selected view whether or not the sidebar is visible. |
+| `activeSidebarView` | string | The sidebar view the project shows: `"worktrees"` for the built-in worktree list, or a [sidebar view](#views--shipped)'s id. It names the view showing whether or not the sidebar is visible, and falls back to `"worktrees"` while a chosen plugin view doesn't apply. |
 | `presentationForgeStats` | string | How this project presents the toolbar's forge stats pill: `"shown"`, `"demoted"` (in the toolbar's `…` menu) or `"hidden"`. Always `"hidden"` in a folder without a git repository. |
 | `presentationGitDetail` | string | How this project presents git detail on worktree cards: `"shown"` or `"demoted"` (labelled Quiet in settings). Quiet moves the branch, issue and PR detail and the sync line into the card's expanded details, with the headline's tooltip naming what it displaced, drops the resting last-activity chip, and gathers the card menu's git rows under its Git submenu; failing CI, a head that moved under an armed merge, drift and fetch failures stay on the card. Always `"hidden"` in a folder without a git repository. |
 

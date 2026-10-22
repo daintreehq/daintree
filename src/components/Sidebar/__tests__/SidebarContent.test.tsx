@@ -766,7 +766,9 @@ describe("SidebarContent initial loading skeleton — issues #7215, #8804", () =
     const branchStart = source.indexOf("if (isLoading && worktrees.length === 0)");
     const branchEnd = source.indexOf("if (worktrees.length === 0)", branchStart);
     const branch = source.slice(branchStart, branchEnd);
-    expect(branch).toMatch(/<h2[^>]*>\s*Worktrees\s*<\/h2>/);
+    // The shared heading draws the same `<h2>` (or the view switcher inside
+    // one, once a plugin adds a sidebar view), so loading keeps the title too.
+    expect(branch).toMatch(/<SidebarViewHeading[^>]*>\s*Worktrees\s*<\/SidebarViewHeading>/);
     // The loading header must be the same height as the loaded one, or the bar
     // changes size when worktrees finish loading and the list jumps (#10318).
     // Both draw the shared sidebar header row, whose height is fixed in one

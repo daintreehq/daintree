@@ -246,6 +246,16 @@ describe("PluginViewDiagnosticsFallback", () => {
     expect(onRequestClose).toHaveBeenCalledTimes(1);
   });
 
+  it("words the way out as the host names it, keeping Close panel for a panel", () => {
+    const panel = renderFallback({ onRequestClose: vi.fn() });
+    expect(screen.getByTestId("plugin-view-diagnostics-close").textContent).toBe("Close panel");
+    panel.unmount();
+
+    renderFallback({ onRequestClose: vi.fn(), requestCloseLabel: "Show worktrees" });
+    expect(screen.getByTestId("plugin-view-diagnostics-close").textContent).toBe("Show worktrees");
+    expect(screen.getByTestId("plugin-view-diagnostics-retry").textContent).toBe("Try again");
+  });
+
   it("omits Close panel entirely when the host offers no close", () => {
     renderFallback();
 

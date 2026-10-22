@@ -125,6 +125,7 @@ const HOST_CONTEXTS: Readonly<Record<PluginViewHostKind, PluginViewHostContext>>
   panel: Object.freeze({ kind: "panel" }),
   surface: Object.freeze({ kind: "surface" }),
   settings: Object.freeze({ kind: "settings" }),
+  sidebar: Object.freeze({ kind: "sidebar" }),
 };
 
 /** The stable {@link PanelViewProps.hostContext} for a host kind. */
@@ -170,6 +171,12 @@ export interface PluginViewContentProps {
    * the button is not rendered.
    */
   onRequestClose?: () => void;
+  /**
+   * What the recovery button that calls `onRequestClose` says. Defaults to the
+   * panel wording; a host whose recovery is not closing a panel names its own
+   * (the sidebar's is "Show worktrees").
+   */
+  requestCloseLabel?: string;
   /** The worktree owning the panel instance, forwarded to the view as
    * `PanelViewProps.worktreeId` so it can reconstruct its own context (#11297). */
   worktreeId?: string;
@@ -283,7 +290,10 @@ function isImportStageFailure(err: unknown): boolean {
  * a content instance mounted without a host (tests, a future embedder) simply
  * renders no close button.
  */
-const PluginViewCloseContext = createContext<{ onRequestClose?: () => void }>({});
+const PluginViewCloseContext = createContext<{
+  onRequestClose?: () => void;
+  requestCloseLabel?: string;
+}>({});
 
 /**
  * One attempt's load timings, filled in by its load and completed by the paint
@@ -419,7 +429,7 @@ export function makePluginViewContent(
   // through context instead of a prop — a closure over `onRequestClose` would
   // change the component type on every render of the owning panel.
   function PluginViewFallback({ error, errorInfo, resetError, incidentId }: ErrorFallbackProps) {
-    const { onRequestClose } = useContext(PluginViewCloseContext);
+    const { onRequestClose, requestCloseLabel } = useContext(PluginViewCloseContext);
     // Two primitive selectors rather than one object selector: the meta record
     // is rebuilt on every provenance pull, so selecting it whole would re-render
     // the pane on pulls that changed nothing about this plugin.
@@ -458,6 +468,7 @@ export function makePluginViewContent(
           kind={kindId}
           pluginDisplayName={pluginDisplayName}
           onRemove={onRequestClose}
+          {...(requestCloseLabel !== undefined ? { removeLabel: requestCloseLabel } : {})}
         />
       );
     }
@@ -475,6 +486,7 @@ export function makePluginViewContent(
         componentPath={componentPath}
         devMode={devMode}
         onRequestClose={onRequestClose}
+        {...(requestCloseLabel !== undefined ? { requestCloseLabel } : {})}
       />
     );
   }
@@ -1029,6 +1041,7 @@ export function makePluginViewContent(
     stateVersion,
     persistState,
     onRequestClose,
+    requestCloseLabel,
     worktreeId,
     panelRemovedSignal: panelRemovedSignalOverride,
     readRecoveryState,
@@ -1210,7 +1223,10 @@ export function makePluginViewContent(
     // which is what makes a non-panel host's content get swept as removed.
     const panelRemovedSignal = panelRemovedSignalOverride ?? getPanelRemovedSignal(panelId);
 
-    const closeContextValue = useMemo(() => ({ onRequestClose }), [onRequestClose]);
+    const closeContextValue = useMemo(
+      () => ({ onRequestClose, requestCloseLabel }),
+      [onRequestClose, requestCloseLabel]
+    );
 
     // Whether the error the boundary is currently showing came from the module
     // fetch, which is what decides if "Try again" needs a fresh specifier from

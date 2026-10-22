@@ -16,6 +16,7 @@ interface ContentMountProps {
   offerRequestReload?: boolean;
   offerToolbar?: boolean;
   onRequestClose?: () => void;
+  requestCloseLabel?: string;
 }
 
 const h = vi.hoisted(() => ({
@@ -115,6 +116,25 @@ describe("PluginHostedView", () => {
     expect(mount.offerRequestReload).toBeFalsy();
     expect(mount.offerToolbar).toBeFalsy();
     expect(mount.onRequestClose).toBeUndefined();
+  });
+
+  it("passes a host's way out of a broken view, in the host's words", () => {
+    const showWorktrees = vi.fn();
+    render(
+      <PluginHostedView
+        source={hosted()}
+        host="sidebar"
+        mountId="sidebar:acme.tools.prefs"
+        onRequestClose={showWorktrees}
+        requestCloseLabel="Show worktrees"
+      />
+    );
+
+    const mount = h.mounts.at(-1)!;
+    expect(mount.hostContext?.kind).toBe("sidebar");
+    expect(mount.requestCloseLabel).toBe("Show worktrees");
+    mount.onRequestClose?.();
+    expect(showWorktrees).toHaveBeenCalledTimes(1);
   });
 
   it("loads a hosted view standalone, and a panel kind under its own teardown", () => {

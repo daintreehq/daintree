@@ -111,6 +111,7 @@ import { SidebarWorktreeRow } from "./SidebarWorktreeRow";
 import { WorktreeLoadErrorBanner } from "./WorktreeLoadErrorBanner";
 import { StaticWorktreeRow } from "./StaticWorktreeRow";
 import { WorkspaceRootSidebar } from "./WorkspaceRootSidebar";
+import { SidebarViewHeading } from "./SidebarViewSwitcher";
 import { WorktreeCardPlaceholder } from "./WorktreeCardPlaceholder";
 import { useWorkspaceRoot } from "@/hooks/useWorkspaceRoot";
 import { useShouldSkipMotion } from "@/hooks/useShouldSkipMotion";
@@ -1693,9 +1694,9 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     return (
       <div className="flex flex-col h-full">
         <div className={cn(SIDEBAR_HEADER_ROW, "border-b border-divider")}>
-          <h2 className="truncate text-text-primary font-semibold text-sm tracking-wide">
+          <SidebarViewHeading className="truncate text-text-primary font-semibold text-sm tracking-wide">
             Worktrees
-          </h2>
+          </SidebarViewHeading>
         </div>
         <div className="flex-1 min-h-0 relative overflow-hidden pb-8">
           <Skeleton label="Loading worktrees">
@@ -1728,9 +1729,9 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       <>
         <div className="flex flex-col h-full">
           <div className={cn(SIDEBAR_HEADER_ROW, "border-b border-divider")}>
-            <h2 className="truncate text-text-primary font-semibold text-sm tracking-wide">
+            <SidebarViewHeading className="truncate text-text-primary font-semibold text-sm tracking-wide">
               Worktrees
-            </h2>
+            </SidebarViewHeading>
           </div>
           {errorBanner}
           {worktreeLoadErrorBanner}
@@ -1832,14 +1833,14 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         <div className="flex min-w-0 flex-1 items-baseline gap-1.5">
           {/* Heading navigation lands here, not on the tag, so the host rides in
               the heading's name, and stays there when the tag hides. */}
-          <h2
+          <SidebarViewHeading
             className="shrink-0 text-text-primary font-semibold text-sm tracking-wide"
             aria-label={
               remoteHostName === null ? undefined : `Worktrees, on host ${remoteHostName}`
             }
           >
             Worktrees
-          </h2>
+          </SidebarViewHeading>
           {remoteHostParts && !showReconnecting && (
             // These checkouts live on the host, not here: the list says where,
             // in the remote hue the toolbar above it wears. It repeats the host

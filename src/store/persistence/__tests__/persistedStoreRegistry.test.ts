@@ -135,6 +135,7 @@ const EXPECTED_STORE_IDS = [
   "diffNotesStore",
   "forgeTokenCalloutStore",
   "projectHomeStore",
+  "sidebarViewStore",
 ] as const;
 
 const EXPECTED_STORAGE_KEYS: Record<(typeof EXPECTED_STORE_IDS)[number], string> = {
@@ -153,6 +154,8 @@ const EXPECTED_STORAGE_KEYS: Record<(typeof EXPECTED_STORE_IDS)[number], string>
   diffNotesStore: "daintree-diff-notes",
   forgeTokenCalloutStore: "daintree-forge-token-callout",
   projectHomeStore: "daintree-project-home",
+  // One key per workspace; a test view has none.
+  sidebarViewStore: "daintree-sidebar-view:default",
 };
 
 describe("persisted store inventory", () => {
@@ -175,6 +178,7 @@ describe("persisted store inventory", () => {
       import("../../diffNotesStore"),
       import("../../forgeTokenCalloutStore"),
       import("../../projectHomeStore"),
+      import("../../sidebarViewStore"),
     ]);
   });
 

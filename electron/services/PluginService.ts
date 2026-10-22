@@ -161,6 +161,8 @@ import {
   pluginHostedViewKindId,
   pluginManifestIdFromInstanceKey,
   projectIdFromPluginInstanceKey,
+  SIDEBAR_VIEW_DEFAULT_PRIORITY,
+  type PluginHostedViewDescriptor,
 } from "../../shared/types/plugin.js";
 import {
   PluginPanelLifecycleBroker,
@@ -2650,29 +2652,39 @@ export class PluginService {
       this.broadcaster.scheduleToursBroadcast();
     }
 
-    // Views that mount outside the panel grid (#13770) — today the settings
-    // section. Registered here, after the map commit and with no await since,
-    // for the same addressability reason as the panel kinds above: the URL is
-    // only resolvable once the protocol handler can see this load's authority.
-    // Never registered as panel kinds, so nothing can spawn one.
-    const hostedViews = manifest.contributes.views.flatMap((view) =>
-      view.location === "panel"
-        ? []
-        : [
-            {
-              id: pluginHostedViewKindId(pluginId, view.id),
-              pluginId,
-              viewId: view.id,
-              location: view.location,
-              name: `${manifest.displayName ?? manifest.name} ${view.location}`,
-              componentPath: buildPluginViewUrl(
-                authority,
-                view.componentPath,
-                plugin.viewGeneration
-              ),
-            },
-          ]
-    );
+    // Views that mount outside the panel grid (#13770) — the settings section
+    // and sidebar views. Registered here, after the map commit and with no
+    // await since, for the same addressability reason as the panel kinds above:
+    // the URL is only resolvable once the protocol handler can see this load's
+    // authority. Never registered as panel kinds, so nothing can spawn one.
+    const pluginName = manifest.displayName ?? manifest.name;
+    const hostedViews = manifest.contributes.views.flatMap((view): PluginHostedViewDescriptor[] => {
+      if (view.location === "panel") return [];
+      const base = {
+        id: pluginHostedViewKindId(pluginId, view.id),
+        pluginId,
+        viewId: view.id,
+        componentPath: buildPluginViewUrl(authority, view.componentPath, plugin.viewGeneration),
+      };
+      if (view.location === "settings") {
+        return [{ ...base, location: "settings", name: `${pluginName} settings` }];
+      }
+      // The schema requires a sidebar view's name; the id stands in only for
+      // a manifest that skipped validation.
+      const title = view.name ?? view.id;
+      return [
+        {
+          ...base,
+          location: "sidebar",
+          name: `${pluginName} ${title}`,
+          title,
+          pluginName,
+          ...(view.iconId !== undefined ? { iconId: resolveIconId(view.iconId) } : {}),
+          priority: view.priority ?? SIDEBAR_VIEW_DEFAULT_PRIORITY,
+          ...(view.when !== undefined ? { when: view.when } : {}),
+        },
+      ];
+    });
     if (hostedViews.length > 0) {
       registerPluginHostedViews(pluginId, hostedViews);
       this.broadcaster.scheduleHostedViewsBroadcast();

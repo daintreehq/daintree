@@ -20,6 +20,9 @@ import {
   PLUGIN_TOOLBAR_BUTTON_STATE_TEXT_MAX,
   PROJECT_SURFACE_SLOT_CATALOGUE,
   PROJECT_SURFACE_SLOTS,
+  SIDEBAR_VIEW_NAME_MAX_LENGTH,
+  SIDEBAR_VIEW_PRIORITY_MAX,
+  SIDEBAR_VIEW_PRIORITY_MIN,
 } from "../../shared/types/plugin.js";
 import { isBuiltInAgentId } from "../../shared/config/agentIds.js";
 import { MAX_TERMINALS_PER_RECIPE } from "../../shared/utils/recipeSanitizer.js";
@@ -36,6 +39,8 @@ import {
   DENY_PLUGIN_DISPATCH_ACTION_IDS,
 } from "../../shared/config/actionIds.js";
 import { KEY_ACTION_VALUES } from "../../shared/types/keymap.js";
+import { parse as parseWhenClause } from "../../shared/utils/whenClause/parser.js";
+import type { ASTNode as WhenClauseNode } from "../../shared/utils/whenClause/types.js";
 import type {
   PluginManifest,
   PluginOrigin,
@@ -368,6 +373,29 @@ function isSafePluginAssetPath(componentPath: string): boolean {
   return !componentPath.split("/").includes("..");
 }
 
+/** Whether a `when` expression reads `key`; an unparseable one reads nothing. */
+function whenClauseReads(expression: string, key: string): boolean {
+  let root: WhenClauseNode;
+  try {
+    root = parseWhenClause(expression);
+  } catch {
+    return false;
+  }
+  const visit = (node: WhenClauseNode): boolean => {
+    switch (node.kind) {
+      case "identifier":
+        return node.path[0] === key;
+      case "unary":
+        return visit(node.operand);
+      case "binary":
+        return visit(node.left) || visit(node.right);
+      default:
+        return false;
+    }
+  };
+  return visit(root);
+}
+
 /**
  * View contribution. A `location: "panel"` view renders into a
  * `contributes.panels` entry with a matching `id`; at plugin load
@@ -376,11 +404,12 @@ function isSafePluginAssetPath(componentPath: string): boolean {
  * is rejected by the manifest-level `superRefine` (#10620) — it would otherwise
  * silently never render. A `location: "settings"` view is the plugin's custom
  * settings section instead: it names no panel, and a manifest may declare at
- * most one. `"sidebar"` is rejected at the schema boundary: the sidebar host does not
- * exist yet, so accepting it would validate a manifest the runtime cannot
- * honor. Contributed via the stable `contributes.views` key (the pre-1.0
- * `experimental_views` name is still accepted as a deprecated alias). See
- * `docs/plugins/architecture.md`.
+ * most one. A `location: "sidebar"` view is one of the sidebar's views, chosen
+ * from the header switcher beside the built-in worktree list; it names no
+ * panel either, and it alone carries the display fields a switcher entry
+ * needs (`name`, `iconId`, `priority`, `when`). Contributed via the stable
+ * `contributes.views` key (the pre-1.0 `experimental_views` name is still
+ * accepted as a deprecated alias). See `docs/plugins/architecture.md`.
  */
 export const ViewContributionSchema = z
   .object({
@@ -392,15 +421,26 @@ export const ViewContributionSchema = z
     // `"settings"` is the plugin's custom settings section: tied to no panel,
     // at most one per manifest (both checked in the manifest `superRefine`),
     // and mounted in the plugin's settings home below its declared fields.
-    location: z.enum(["panel", "settings"]),
-    // `iconId` is advisory only — the SDK `validate` command flags an
-    // unrenderable id, but at runtime the matching `contributes.panels` entry
-    // owns the rendered icon (the panels loop reads `panel.iconId`, never the
-    // view's). No `name`/`description` here: the matching panel is the single
-    // source of truth for a view's display metadata, so those fields had no
-    // runtime consumer and were removed (#10888) rather than validate a value
-    // the runtime silently ignores.
+    // `"sidebar"` mounts below the sidebar header when chosen in its switcher.
+    location: z.enum(["panel", "settings", "sidebar"]),
+    // For a panel view `iconId` is advisory only — the SDK `validate` command
+    // flags an unrenderable id, but at runtime the matching `contributes.panels`
+    // entry owns the rendered icon (the panels loop reads `panel.iconId`, never
+    // the view's). A sidebar view has no panel, so its own `iconId` is the
+    // switcher entry's glyph.
     iconId: z.string().min(1).optional(),
+    // Sidebar views only (the manifest `superRefine` rejects them elsewhere): a
+    // panel's display metadata belongs to the matching panel, which is why
+    // these were removed from panel views in #10888, but a sidebar view has no
+    // panel to borrow them from. `name` is required there.
+    name: z.string().trim().min(1).max(SIDEBAR_VIEW_NAME_MAX_LENGTH).optional(),
+    priority: z
+      .number()
+      .int()
+      .min(SIDEBAR_VIEW_PRIORITY_MIN)
+      .max(SIDEBAR_VIEW_PRIORITY_MAX)
+      .optional(),
+    when: z.string().min(1).optional(),
   })
   .strict();
 
@@ -3191,6 +3231,9 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
       const settingsViewIds = new Set(
         manifest.contributes.views.filter((view) => view.location === "settings").map((v) => v.id)
       );
+      const sidebarViewIds = new Set(
+        manifest.contributes.views.filter((view) => view.location === "sidebar").map((v) => v.id)
+      );
       const panelIds = new Set(manifest.contributes.panels.map((panel) => panel.id));
 
       // `forgeProvider.settingsScopeRef` → a declared setting; `viewRefs[]` →
@@ -3247,6 +3290,15 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
           });
           continue;
         }
+        if (sidebarViewIds.has(claim.viewId)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["contributes", "surfaces", slot, "viewId"],
+            message: `surfaces.${slot}.viewId "${claim.viewId}" names a location: "sidebar" view — a surface draws a panel view, and a sidebar view renders only in the sidebar.`,
+            params: { errorCode: "surface_view_ref_sidebar" },
+          });
+          continue;
+        }
         // A PTY panel is rendered by TerminalPane, so its matching view is
         // ignored at load and no component path is ever attached. The claim
         // would then hold the project's slot against every other plugin while
@@ -3283,6 +3335,48 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
       // view), and a second one has nowhere to go.
       let settingsViewSeen = false;
       manifest.contributes.views.forEach((view, index) => {
+        if (view.location === "sidebar") {
+          if (view.name === undefined) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: ["contributes", "views", index, "name"],
+              message: `Sidebar view "${view.id}" has no name — the sidebar switcher lists it by name.`,
+              params: { errorCode: "sidebar_view_name_missing" },
+            });
+          }
+          // Same reason as a settings view: the panels loop would attach it as
+          // that panel's view.
+          if (panelIds.has(view.id)) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: ["contributes", "views", index, "id"],
+              message: `Sidebar view "${view.id}" shares its id with a contributes.panels entry — a sidebar view renders in the sidebar, not a panel, so give it an id of its own.`,
+              params: { errorCode: "sidebar_view_panel_id_collision" },
+            });
+          }
+          // Which sidebar view shows is decided from which ones apply, so one
+          // whose availability hangs on that answer has no stable answer.
+          if (view.when !== undefined && whenClauseReads(view.when, "activeSidebarView")) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: ["contributes", "views", index, "when"],
+              message: `Sidebar view "${view.id}" has a when that reads activeSidebarView — which sidebar view shows depends on which ones apply, so a sidebar view's own when can't depend on it.`,
+              params: { errorCode: "sidebar_view_when_reads_active_view" },
+            });
+          }
+          return;
+        }
+        // Display fields only a sidebar switcher entry reads; elsewhere the
+        // runtime would silently ignore them (#10888).
+        for (const field of ["name", "priority", "when"] as const) {
+          if (view[field] === undefined) continue;
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["contributes", "views", index, field],
+            message: `View "${view.id}" sets ${field}, which only a location: "sidebar" view uses — a ${view.location} view takes its display from ${view.location === "panel" ? "the matching panel" : "the plugin's settings home"}.`,
+            params: { errorCode: "view_sidebar_field_misplaced" },
+          });
+        }
         if (view.location === "settings") {
           if (settingsViewSeen) {
             ctx.addIssue({

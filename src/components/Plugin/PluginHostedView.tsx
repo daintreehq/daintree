@@ -168,8 +168,10 @@ export function _pluginHostedViewRemovalSignalForTest(id: string): AbortSignal |
  * `disposeSignal` and style root. The host adds only what a panel record would
  * otherwise supply — an opaque `mountId` for `panelId`, and a removal signal
  * that outlives remounts (see {@link retireStaleRuntimes}) — plus the
- * `hostContext` naming where the view is. No `onRequestClose`, reload or
- * toolbar: those police a panel record a hosted view doesn't have.
+ * `hostContext` naming where the view is. No reload or toolbar: those police a
+ * panel record a hosted view doesn't have. A host with a way out of a broken
+ * view (the sidebar's "Show worktrees") passes it as `onRequestClose` with
+ * the words for its button.
  *
  * The box isolates and contains the plugin's layout: `isolate` caps its
  * z-indexes in its own stacking context, and `contain: layout paint` with
@@ -183,6 +185,8 @@ export function PluginHostedView({
   host,
   mountId,
   settingsContext,
+  onRequestClose,
+  requestCloseLabel,
   className,
   testId,
 }: {
@@ -194,6 +198,9 @@ export function PluginHostedView({
    */
   mountId: string;
   settingsContext?: PluginSettingsViewContext;
+  /** The failure fallback's way out, beside "Try again"; omitted, there is none. */
+  onRequestClose?: () => void;
+  requestCloseLabel?: string;
   className?: string;
   testId?: string;
 }) {
@@ -209,6 +216,8 @@ export function PluginHostedView({
         panelRemovedSignal={removal.signal}
         hostContext={pluginViewHostContext(host)}
         {...(settingsContext ? { settingsContext } : {})}
+        {...(onRequestClose ? { onRequestClose } : {})}
+        {...(requestCloseLabel !== undefined ? { requestCloseLabel } : {})}
       />
     </div>
   );

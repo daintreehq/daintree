@@ -109,7 +109,7 @@ import { voiceRecordingService } from "./services/VoiceRecordingService";
 import { useRenderProfiler } from "./utils/renderProfiler";
 import { logError } from "./utils/logger";
 
-import { SidebarContent, E2EFaultInjector } from "./components/Sidebar";
+import { SidebarContent, SidebarViewHost, E2EFaultInjector } from "./components/Sidebar";
 import { ensureHydrationBootstrap } from "./utils/stateHydration/bootstrapGuard";
 
 // Kick the hydration-bootstrap IPC pair (keybinding overrides + user-agent
@@ -527,7 +527,11 @@ function AppInner() {
               <CopyFlash />
               <Profiler id="app-layout" onRender={onLayoutRender}>
                 <AppLayout
-                  sidebarContent={<SidebarContent onOpenOverview={openWorktreeOverview} />}
+                  sidebarContent={
+                    <SidebarViewHost>
+                      <SidebarContent onOpenOverview={openWorktreeOverview} />
+                    </SidebarViewHost>
+                  }
                   onLaunchAgent={handleLaunchAgent}
                   onSettings={handleSettings}
                   onPreloadSettings={handlePreloadSettings}
