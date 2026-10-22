@@ -582,7 +582,7 @@ export class DriveLeaseService {
   private successor(projectId: string, lease: ProjectLease | null): ClientEndpoint | undefined {
     const attached = this.presentFor(projectId);
     return (
-      (lease ? this.continuer(attached, lease) : undefined) ??
+      (lease ? this.continuer(attached, lease, true) : undefined) ??
       attached.find((endpoint) => this.hostScreenShows(endpoint)) ??
       attached[0]
     );
@@ -590,21 +590,30 @@ export class DriveLeaseService {
 
   /**
    * Who carries on for a holder that has gone: another window of its client,
-   * else, once the holder's endpoint is gone for good (closed, its session
-   * ended, or restored after a restart), one of the same Shell install on a
-   * new launch. A holder whose link merely dropped keeps its grace for a
-   * resume, even from another launch sharing its install's id. The install is
-   * the Shell's own word, which hands over nothing Take control doesn't.
+   * else, with `byInstall`, one of the same Shell install on a new launch. The
+   * install is the Shell's own word, which hands over nothing Take control
+   * doesn't.
    */
-  private continuer(attached: ClientEndpoint[], lease: ProjectLease): ClientEndpoint | undefined {
+  private continuer(
+    attached: ClientEndpoint[],
+    lease: ProjectLease,
+    byInstall: boolean
+  ): ClientEndpoint | undefined {
     const { holder, holderDeviceId } = lease;
-    const sameClient = attached.find((endpoint) => endpoint.clientId === holder.clientId);
-    if (sameClient || holderDeviceId === null) return sameClient;
-    const holderEndpoint = this.registry.get(holder.endpointId);
-    if (holderEndpoint && !holderEndpoint.isClosed()) return undefined;
-    return attached.find(
-      (endpoint) => this.clients.get(endpoint.endpointId)?.deviceId === holderDeviceId
+    return (
+      attached.find((endpoint) => endpoint.clientId === holder.clientId) ??
+      (byInstall && holderDeviceId !== null
+        ? attached.find(
+            (endpoint) => this.clients.get(endpoint.endpointId)?.deviceId === holderDeviceId
+          )
+        : undefined)
     );
+  }
+
+  /** The holder's endpoint won't come back: closed, its session ended, or restored after a restart. */
+  private holderIsGone(lease: ProjectLease): boolean {
+    const endpoint = this.registry.get(lease.holder.endpointId);
+    return endpoint === undefined || endpoint.isClosed();
   }
 
   private hostScreenShows(endpoint: ClientEndpoint): boolean {
@@ -661,10 +670,12 @@ export class DriveLeaseService {
       }
       return;
     }
-    // Another window of the same client, or the same install relaunched,
-    // carries on driving without a gap. The same machine keeps the project, so
-    // a read may do this much.
-    const continuer = this.continuer(this.presentFor(projectId), lease);
+    // Another window of the same client carries on driving without a gap, and
+    // so does the same install relaunched once the holder's endpoint is gone
+    // for good: one whose link merely dropped keeps its grace for a resume,
+    // even from another launch sharing its install's id. The same machine
+    // keeps the project, so a read may do this much.
+    const continuer = this.continuer(this.presentFor(projectId), lease, this.holderIsGone(lease));
     if (continuer) {
       this.grant(projectId, continuer);
       return;

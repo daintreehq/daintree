@@ -1205,6 +1205,28 @@ describe("DriveLeaseService and a relaunched Shell (#13909)", () => {
     expect(service.getHolder("p")?.endpointId).toBe("s2:e1");
   });
 
+  it("hands it to its install, over an earlier watcher, when a dropped holder's grace runs out", async () => {
+    const before = remote("s1:e1", "launch-1");
+    registry.add(before);
+    note(before, "greg-studio", INSTALL);
+    await settle();
+    const watcher = remote("s9:e1", "ana-launch");
+    registry.add(watcher);
+    note(watcher, "ana-mbp", OTHER_INSTALL);
+    await settle();
+    // The host only sees the crashed launch's link die after the relaunch said HELLO.
+    const after = remote("s2:e1", "launch-2");
+    registry.add(after);
+    note(after, "greg-studio", INSTALL);
+    service.noteEndpointTransport([before.endpointId], false);
+    await settle();
+    expect(service.getHolder("p")?.endpointId).toBe("s1:e1");
+
+    vi.advanceTimersByTime(GRACE_MS);
+    expect(service.getHolder("p")?.endpointId).toBe("s2:e1");
+    expect(service.isDriving("p", watcher)).toBe(false);
+  });
+
   it.each([
     ["another install", INSTALL, OTHER_INSTALL],
     ["a newcomer that names no install", INSTALL, undefined],
