@@ -238,10 +238,14 @@ const PopoverTrigger = React.forwardRef<
     };
 
     if (!radix) {
+      // Consumer first, then the queued open only if nobody prevented it, as
+      // Radix's own trigger composes its toggle. An `asChild` child's handler
+      // has already run by now: Slot calls the child's before its own.
       const intentClick: React.MouseEventHandler<HTMLButtonElement> = (event) => {
         primeOnEvent();
-        requestOpen?.(true);
         onClick?.(event);
+        if (event.defaultPrevented) return;
+        requestOpen?.(true);
       };
       if (asChild) {
         return (
