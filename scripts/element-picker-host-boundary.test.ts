@@ -182,6 +182,16 @@ describe("the Element Picker host boundary", () => {
     ).toEqual([]);
   }, 60_000);
 
+  it("holds Angular's resolver, which also waits on #13888, to the same rule", async () => {
+    const metafile = await metafileOf(`${RESOLVERS_DIR}angular.ts`, NATIVE_EXTERNAL);
+    const reachable = Object.keys(metafile.inputs);
+    expect(scanForbiddenModules(reachable)).toEqual([]);
+    expect(authorityImports(metafile)).toEqual([]);
+    expect(
+      reachable.filter((file) => file.startsWith("electron/") && !file.startsWith(HOST_DIR))
+    ).toEqual([]);
+  }, 60_000);
+
   it("holds a resolver the registry does not list yet to the same rule", async () => {
     // Astro's waits for #13888 to register it, so the walk above cannot reach it.
     const entry = `${RESOLVERS_DIR}astro.ts`;
