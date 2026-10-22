@@ -11,6 +11,7 @@
 
 import {
   PLUGIN_NOTIFY_MAX_ACTIONS,
+  PLUGIN_TERMINAL_STATUS_MAX_PER_PROJECT,
   pluginManifestIdFromInstanceKey,
   projectIdFromPluginInstanceKey,
 } from "../types/plugin.js";
@@ -2381,7 +2382,17 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
         );
       }
       if (entry.status === null) terminalStatuses.delete(entry.terminalId);
-      else terminalStatuses.set(entry.terminalId, entry.status);
+      else {
+        if (
+          !terminalStatuses.has(entry.terminalId) &&
+          terminalStatuses.size >= PLUGIN_TERMINAL_STATUS_MAX_PER_PROJECT
+        ) {
+          throw new Error(
+            `setTerminalStatus: at most ${PLUGIN_TERMINAL_STATUS_MAX_PER_PROJECT} terminals can hold a status at once`
+          );
+        }
+        terminalStatuses.set(entry.terminalId, entry.status);
+      }
       setTerminalStatusCalls.push({ terminalId: entry.terminalId, status: entry.status });
     },
     setPanelMenuItems(panelId, items) {

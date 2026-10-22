@@ -2562,6 +2562,40 @@ describe("createHost setTerminalStatus", () => {
     });
   });
 
+  it("drops a chip whose terminal has left the list, freeing its slot", async () => {
+    const h = makeHarness();
+    const emitted = withEmitter(h);
+    sees(h, PROJECT_A, "gone", "kept");
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+    await host.setTerminalStatus("gone", { label: "x" });
+    await host.setTerminalStatus("kept", { label: "y" });
+    emitted.mockClear();
+
+    sees(h, PROJECT_A, "kept");
+    await host.setTerminalStatus("kept", { label: "y" });
+
+    expect([...h.deps.pluginTerminalStatuses.get(PLUGIN_ID)!.get(PROJECT_A)!.keys()]).toEqual([
+      "kept",
+    ]);
+    expect(emitted).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects, rather than throws, when the status cannot be read", async () => {
+    const h = makeHarness();
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+    const hostile = new Proxy(
+      {},
+      {
+        ownKeys() {
+          throw new Error("boom");
+        },
+      }
+    );
+    await expect(host.setTerminalStatus("term-1", hostile as never)).rejects.toThrow(
+      /could not be read/
+    );
+  });
+
   it("caps the terminals one plugin may mark in a project", async () => {
     const h = makeHarness();
     withEmitter(h);

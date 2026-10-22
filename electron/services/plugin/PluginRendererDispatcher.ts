@@ -20,6 +20,7 @@ import type {
 } from "../../../shared/types/actions.js";
 import type { PluginAgentPane } from "../../../shared/types/plugin.js";
 import { maskTerminalInOtherProject } from "../../../shared/utils/terminalInOtherProject.js";
+import { isLocalHostId, parseHostScopedKey } from "../../../shared/types/remoteHosts.js";
 import { z } from "zod";
 
 /** More panes than any grid holds; a longer answer is truncated, not trusted. */
@@ -534,13 +535,26 @@ export class PluginRendererDispatcher {
     if (projectId != null) {
       return { projectId, agents: await this.sendAgentsListToRenderer(projectId, pluginId) };
     }
-    if (this.routedFrontend(null, pluginId) !== null || this.deps.isDisposed()) {
+    const frontend = this.routedFrontend(null, pluginId);
+    if ((frontend !== null && frontend.kind !== "local") || this.deps.isDisposed()) {
       return { projectId: null, agents: [] };
     }
     const webContents = resolveTargetWebContents(null, "Plugin agents.list");
     if (!webContents) return { projectId: null, agents: [] };
-    const owner = getProjectForWebContents(webContents.id);
-    const { agents } = await this.sendAgentsListToWebContents(webContents);
+    const viewKey = getProjectForWebContents(webContents.id);
+    // A view bound to another machine's host is keyed `<hostId>:<projectId>`;
+    // this machine's plugins have no business filing statuses against it.
+    const owner =
+      viewKey !== null && isLocalHostId(parseHostScopedKey(viewKey).hostId) ? viewKey : null;
+    // Same response shape as `sendAgentsListToRenderer`: the channel's listener
+    // keeps the first extractor registered, so the two must agree.
+    const agents = await this.requestFromWebContents<PluginAgentPane[]>(webContents, {
+      requestChannel: CHANNELS.PLUGIN_AGENTS_LIST_REQUEST,
+      responseChannel: CHANNELS.PLUGIN_AGENTS_LIST_RESPONSE,
+      buildRequest: (requestId) => ({ requestId }),
+      extract: (payload) => projectAgentPanes((payload as { agents?: unknown }).agents),
+      fallback: [],
+    });
     return { projectId: owner, agents };
   }
 

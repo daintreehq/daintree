@@ -49,11 +49,9 @@ beforeEach(() => {
   Reflect.set(window, "electron", { plugin: { onTerminalStatusesChanged: () => () => {} } });
 });
 
-function seed(projectId: string, pluginId: string, statuses: Record<string, PluginTerminalStatus>) {
+function seed(byProject: Record<string, Record<string, Record<string, PluginTerminalStatus>>>) {
   act(() => {
-    usePluginTerminalStatusStore.setState({
-      statusesByProject: { [projectId]: { [pluginId]: statuses } },
-    });
+    usePluginTerminalStatusStore.setState({ statusesByProject: byProject });
   });
 }
 
@@ -67,14 +65,25 @@ function renderChips(worktreeId?: string) {
 
 describe("TerminalPluginStatusChips", () => {
   it("draws nothing for a terminal with no status, or another project's", () => {
-    seed("proj-b", "acme.tracker", { "term-1": { label: "x" } });
-    seed("proj-a", "acme.tracker", { "term-2": { label: "y" } });
+    seed({
+      "proj-b": { "acme.tracker": { "term-1": { label: "x" } } },
+      "proj-a": { "acme.tracker": { "term-2": { label: "y" } } },
+    });
     const { container } = renderChips();
     expect(container.textContent).toBe("");
+
+    act(() => {
+      useProjectStore.setState({
+        currentProject: { id: "proj-b", name: "B", path: "/work/b", emoji: "", lastOpened: 0 },
+      });
+    });
+    expect(container.textContent).toBe("x");
   });
 
   it("names the plugin in the accessible name and shows plugin, label and detail in the tooltip", async () => {
-    seed("proj-a", "acme.tracker", { "term-1": { label: "INV-0042", tooltip: "Checkout bug" } });
+    seed({
+      "proj-a": { "acme.tracker": { "term-1": { label: "INV-0042", tooltip: "Checkout bug" } } },
+    });
     renderChips();
 
     const chip = screen.getByRole("button");
@@ -86,7 +95,9 @@ describe("TerminalPluginStatusChips", () => {
   });
 
   it("stays a plain status until its command is registered, then runs it with the terminal's ids", () => {
-    seed("proj-a", "acme.tracker", { "term-1": { label: "INV", command: "acme.tracker.open" } });
+    seed({
+      "proj-a": { "acme.tracker": { "term-1": { label: "INV", command: "acme.tracker.open" } } },
+    });
     renderChips("wt-1");
 
     fireEvent.click(screen.getByRole("button"));
@@ -102,8 +113,12 @@ describe("TerminalPluginStatusChips", () => {
   });
 
   it("omits worktreeId when the terminal has none, and refuses a foreign command", () => {
-    seed("proj-a", "acme.tracker", {
-      "term-1": { label: "INV", command: "acme.tracker.open" },
+    seed({
+      "proj-a": {
+        "acme.tracker": {
+          "term-1": { label: "INV", command: "acme.tracker.open" },
+        },
+      },
     });
     act(() => publishRegisteredPluginActions([["acme.tracker.open", ""] as const]));
     renderChips();
@@ -115,14 +130,16 @@ describe("TerminalPluginStatusChips", () => {
     );
 
     dispatchMock.mockClear();
-    seed("proj-a", "acme.tracker", { "term-1": { label: "INV", command: "other.plugin.x" } });
+    seed({
+      "proj-a": { "acme.tracker": { "term-1": { label: "INV", command: "other.plugin.x" } } },
+    });
     act(() => publishRegisteredPluginActions([["other.plugin.x", ""] as const]));
     fireEvent.click(screen.getByRole("button"));
     expect(dispatchMock).not.toHaveBeenCalled();
   });
 
   it("keeps a press from reaching the header", () => {
-    seed("proj-a", "acme.tracker", { "term-1": { label: "INV" } });
+    seed({ "proj-a": { "acme.tracker": { "term-1": { label: "INV" } } } });
     const onHeader = vi.fn();
     render(
       <TooltipProvider delayDuration={0}>

@@ -494,6 +494,12 @@ describe("createMockHost", () => {
     await expect(host.setTerminalStatus("term-1", { label: "" })).rejects.toThrow(
       /setTerminalStatus: status.label/
     );
+    const many = createMockHost({
+      agents: Array.from({ length: 257 }, (_, i) => ({ ...pane, terminalId: `t-${i}` })),
+    });
+    for (let i = 0; i < 256; i++) await many.setTerminalStatus(`t-${i}`, { label: "x" });
+    await expect(many.setTerminalStatus("t-256", { label: "x" })).rejects.toThrow(/at most 256/);
+    await expect(many.setTerminalStatus("t-0", { label: "y" })).resolves.toBeUndefined();
     await expect(
       createMockHost({ agents: [pane], capabilities: ["agent:input"] }).setTerminalStatus(
         "term-1",

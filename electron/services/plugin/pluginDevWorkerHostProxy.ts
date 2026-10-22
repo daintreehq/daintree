@@ -1440,7 +1440,16 @@ export class PluginDevWorkerHostProxy {
       // agents.list read.
       setTerminalStatus: (terminalId, status) => {
         if (this.disposed) return Promise.resolve();
-        const entry = validatePluginTerminalStatus(terminalId, status, manifestId, manifestId);
+        let entry: ReturnType<typeof validatePluginTerminalStatus>;
+        try {
+          entry = validatePluginTerminalStatus(terminalId, status, manifestId, manifestId);
+        } catch (err) {
+          return Promise.reject(
+            new Error(`Plugin "${this.pluginId}" setTerminalStatus: status could not be read`, {
+              cause: err,
+            })
+          );
+        }
         if (!entry.ok) {
           return Promise.reject(
             new Error(`Plugin "${this.pluginId}" setTerminalStatus: ${entry.error}`)

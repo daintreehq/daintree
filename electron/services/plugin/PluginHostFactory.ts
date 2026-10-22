@@ -2729,7 +2729,18 @@ export function createHost(
           )
         );
       }
-      const entry = validatePluginTerminalStatus(terminalId, status, manifestId, pluginId);
+      let entry: ReturnType<typeof validatePluginTerminalStatus>;
+      try {
+        entry = validatePluginTerminalStatus(terminalId, status, manifestId, pluginId);
+      } catch (err) {
+        // A hostile status object can make the validator throw; this method
+        // must still reject (#10617).
+        return Promise.reject(
+          new Error(`Plugin "${pluginId}" setTerminalStatus: status could not be read`, {
+            cause: err,
+          })
+        );
+      }
       if (!entry.ok) {
         // Reject (not sync throw): runtime-surface Promise method (#10617).
         return Promise.reject(new Error(`Plugin "${pluginId}" setTerminalStatus: ${entry.error}`));
@@ -2765,16 +2776,45 @@ export function createHost(
         }
         let byProject = deps.pluginTerminalStatuses.get(pluginId);
         let statuses = byProject?.get(projectId);
+        // The list just named a live terminal, so it is a real read: a chip on
+        // a terminal that has since left it (closed, exited) is dropped here
+        // rather than holding a slot of the cap for good.
+        let changed = false;
+        if (statuses) {
+          const live = new Set(read.agents.map((a) => a.terminalId));
+          for (const held of [...statuses.keys()]) {
+            if (live.has(held)) continue;
+            statuses.delete(held);
+            changed = true;
+          }
+          if (statuses.size === 0) {
+            byProject!.delete(projectId);
+            if (byProject!.size === 0) deps.pluginTerminalStatuses.delete(pluginId);
+            byProject = deps.pluginTerminalStatuses.get(pluginId);
+            statuses = byProject?.get(projectId);
+          }
+        }
+        const publish = (): void => {
+          flushPluginPushes();
+          deps.emitTerminalStatuses(pluginId, projectId);
+        };
         if (entry.status === null) {
-          if (!statuses?.delete(entry.terminalId)) return;
+          if (!statuses?.delete(entry.terminalId)) {
+            if (changed) publish();
+            return;
+          }
           if (statuses.size === 0) byProject!.delete(projectId);
           if (byProject!.size === 0) deps.pluginTerminalStatuses.delete(pluginId);
         } else {
-          if (sameTerminalStatus(statuses?.get(entry.terminalId), entry.status)) return;
+          if (sameTerminalStatus(statuses?.get(entry.terminalId), entry.status)) {
+            if (changed) publish();
+            return;
+          }
           if (
             !statuses?.has(entry.terminalId) &&
             (statuses?.size ?? 0) >= PLUGIN_TERMINAL_STATUS_MAX_PER_PROJECT
           ) {
+            if (changed) publish();
             throw new Error(
               `Plugin "${pluginId}" setTerminalStatus: at most ${PLUGIN_TERMINAL_STATUS_MAX_PER_PROJECT} terminals can hold a status at once`
             );
@@ -2789,8 +2829,7 @@ export function createHost(
           }
           statuses.set(entry.terminalId, entry.status);
         }
-        flushPluginPushes();
-        deps.emitTerminalStatuses(pluginId, projectId);
+        publish();
       };
       // Serialized, so a set followed by a clear lands in call order.
       const next = terminalStatusChain.then(run);

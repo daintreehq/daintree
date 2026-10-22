@@ -71,7 +71,7 @@ function PluginTerminalStatusChip({
             HEADER_CHIP_CLASS,
             HEADER_CHIP_SURFACE,
             HEADER_CHIP_FOCUS_CLASS,
-            "min-w-0 max-w-[140px] shrink select-none",
+            "min-w-0 max-w-[140px] shrink select-none @max-[420px]/header:hidden",
             runnable
               ? cn(HEADER_CHIP_TRIGGER_CLASS, "cursor-pointer hover:text-text-primary")
               : "cursor-default"
