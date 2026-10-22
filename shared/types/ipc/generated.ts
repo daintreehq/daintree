@@ -1783,7 +1783,7 @@ export interface GeneratedIpcInvokeMap {
   };
   "plugin:project-surface-choice-set": {
     args: [
-      slot: "emptyCanvas",
+      slot: "emptyCanvas" | "projectHome",
       choice: import("../plugin.js").ProjectSurfaceChoice | null,
       optionId?: string | undefined,
     ];
@@ -2083,7 +2083,8 @@ export interface GeneratedIpcInvokeMap {
         | "fileBrowser"
         | "browser"
         | "devServer"
-        | "branchChip",
+        | "branchChip"
+        | "gitDetail",
       level: "hidden" | "shown" | "demoted" | null,
     ];
     result: import("./projectPresentation.js").ProjectPresentationSnapshot;
