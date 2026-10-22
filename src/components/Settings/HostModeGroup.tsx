@@ -1,7 +1,8 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { AlertTriangle } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { CopyableCommand } from "@/components/Setup/CopyableCommand";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
 import { SettingsSwitch } from "@/components/Settings/SettingsSwitch";
@@ -14,7 +15,7 @@ import {
 import { SettingsLoadErrorBanner } from "@/components/Settings/SettingsLoadErrorBanner";
 import { useHostMode } from "@/hooks/useHostMode";
 import { isMac } from "@/lib/platform";
-import type { HostModeStatusRow } from "@shared/types/ipc/hostMode";
+import type { HostModeStatusRow, SetHostModePayload } from "@shared/types/ipc/hostMode";
 
 function rowById(rows: readonly HostModeStatusRow[] | undefined, id: HostModeStatusRow["id"]) {
   return rows?.find((row) => row.id === id) ?? null;
@@ -73,6 +74,7 @@ function StatusRow({
  */
 export default function HostModeGroup() {
   const host = useHostMode();
+  const [confirmingOff, setConfirmingOff] = useState(false);
   if (!host.supported) return null;
 
   const { status, pending, saveFailure } = host;
@@ -85,6 +87,21 @@ export default function HostModeGroup() {
   const rows = status?.rows;
   const startRow = rowById(rows, "start-at-login");
   const mac = isMac();
+  const attachedNames = [
+    ...new Set(
+      (status?.attachedClients ?? []).map((c) => c.clientName.trim() || "Another machine")
+    ),
+  ];
+
+  // Turning hosting off disconnects whoever is attached, so that asks first;
+  // with nobody attached it applies at once.
+  const requestEnabled = (payload: SetHostModePayload) => {
+    if (!payload.enabled && attachedNames.length > 0) {
+      setConfirmingOff(true);
+      return;
+    }
+    void host.setEnabled(payload);
+  };
   const showStatus = status !== null && status.enabled && pending === null;
 
   const startAtLoginDescription =
@@ -114,7 +131,7 @@ export default function HostModeGroup() {
           title="Allow this machine to be a host"
           subtitle="Listens on a socket only you can open; other machines reach it through SSH"
           isEnabled={enabled}
-          onChange={() => void host.setEnabled({ enabled: !enabled })}
+          onChange={() => requestEnabled({ enabled: !enabled })}
           disabled={locked}
         />
         <SettingsDependents
@@ -184,9 +201,21 @@ export default function HostModeGroup() {
               : "Couldn't turn off Host mode"
           }
           message={saveFailure.message}
-          onRetry={() => void host.setEnabled(saveFailure.payload)}
+          onRetry={() => requestEnabled(saveFailure.payload)}
         />
       )}
+      <ConfirmDialog
+        isOpen={confirmingOff}
+        variant="destructive"
+        onClose={() => setConfirmingOff(false)}
+        onConfirm={() => {
+          setConfirmingOff(false);
+          void host.setEnabled({ enabled: false });
+        }}
+        title="Turn off hosting?"
+        description={`${attachedNames.join(", ")} ${attachedNames.length > 1 ? "are" : "is"} attached to this machine. Turning hosting off disconnects ${attachedNames.length > 1 ? "them" : "it"} and ends the work ${attachedNames.length > 1 ? "they have" : "it has"} open here.`}
+        confirmLabel="Turn off hosting"
+      />
     </SettingsSection>
   );
 }

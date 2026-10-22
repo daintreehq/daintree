@@ -122,7 +122,7 @@ function handleUpdateMenuClick(): void {
   void import("./services/AutoUpdaterService.js")
     .then(({ autoUpdaterService }) => {
       if (autoUpdaterService.getMenuState() === "ready") {
-        autoUpdaterService.quitAndInstallIfReady();
+        void autoUpdaterService.confirmAndQuitAndInstall();
       } else {
         autoUpdaterService.checkForUpdatesManually();
       }

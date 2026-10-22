@@ -1,12 +1,19 @@
 // eager-import-allow: reads updater config via store.get and the staged installer via sync fs
 import { existsSync, readFileSync } from "fs";
 import path from "path";
-import { app, ipcMain } from "electron";
+import { app, BrowserWindow, dialog, ipcMain } from "electron";
 import electronUpdater from "electron-updater";
 import type { UpdateInfo, ProgressInfo } from "electron-updater";
 import * as semver from "semver";
 import { CHANNELS } from "../ipc/channels.js";
 import { broadcastToRenderer } from "../ipc/utils.js";
+import {
+  getAttachedShells,
+  type AttachedShell,
+  isExitConfirmationPending,
+  setExitConfirmationPending,
+} from "../lifecycle/attachedShells.js";
+import { showUpdateWarning } from "../utils/quitWarning.js";
 import { requestGracefulShutdownForUpdate } from "../lifecycle/shutdownCoordinator.js";
 import { getSystemSleepService } from "./SystemSleepService.js";
 import { trackEvent } from "./TelemetryService.js";
@@ -495,6 +502,34 @@ class AutoUpdaterService {
         data: MANUAL_DOWNLOAD_URL,
       },
     });
+  }
+
+  /**
+   * The user-facing "Restart to update" asks first when other machines are
+   * attached to this host, since the restart disconnects them. The dialog
+   * must come before the install — on macOS Squirrel closes every window
+   * ahead of `before-quit`. Cancelling leaves the update staged.
+   */
+  private async confirmAttachedShells(shells: AttachedShell[]): Promise<boolean> {
+    if (this.installInFlight || isExitConfirmationPending()) return false;
+    setExitConfirmationPending(true);
+    try {
+      const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0] ?? null;
+      return await showUpdateWarning(shells, dialog.showMessageBox, win);
+    } catch (error) {
+      console.error("[MAIN] Error showing update warning:", error);
+      return false;
+    } finally {
+      setExitConfirmationPending(false);
+    }
+  }
+
+  async confirmAndQuitAndInstall(): Promise<boolean> {
+    if (isWindowsStoreBuild()) return false;
+    if (this.menuState !== "ready" || !this.updateDownloaded) return false;
+    const shells = getAttachedShells();
+    if (shells.length > 0 && !(await this.confirmAttachedShells(shells))) return false;
+    return this.quitAndInstallIfReady();
   }
 
   quitAndInstallIfReady(): boolean {
@@ -1158,7 +1193,14 @@ class AutoUpdaterService {
           console.warn("[MAIN] Quit-and-install called before download completed");
           return;
         }
-        this.startQuitAndInstall();
+        const shells = getAttachedShells();
+        if (shells.length === 0) {
+          this.startQuitAndInstall();
+          return;
+        }
+        void this.confirmAttachedShells(shells).then((confirmed) => {
+          if (confirmed && this.updateDownloaded) this.startQuitAndInstall();
+        });
       });
 
       // Handle manual check-for-updates request from renderer

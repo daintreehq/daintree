@@ -536,6 +536,46 @@ describe("registerShutdownHandler", () => {
     expect(appMock.exit).not.toHaveBeenCalled();
   });
 
+  it("asks before quitting when a Shell is attached, even with no agents working", async () => {
+    quitWarningMock.getActiveAgentCount.mockReturnValue(0);
+    quitWarningMock.showQuitWarning.mockResolvedValue(false);
+    const { setAttachedShellsProvider } = await import("../attachedShells.js");
+    setAttachedShellsProvider(() => [{ clientName: "MacBook Pro" }]);
+
+    try {
+      const { beforeQuitCb } = await setup({
+        windowRegistry: {
+          getPrimary: () => ({ browserWindow: {} as Electron.BrowserWindow }),
+        } as unknown as ShutdownDeps["windowRegistry"],
+      });
+      const event = makeEvent();
+      await beforeQuitCb(event);
+
+      expect(quitWarningMock.showQuitWarning).toHaveBeenCalledWith(
+        { activeAgents: 0, attachedShells: [{ clientName: "MacBook Pro" }] },
+        expect.anything(),
+        expect.anything()
+      );
+      expect(appMock.exit).not.toHaveBeenCalled();
+    } finally {
+      setAttachedShellsProvider(null);
+    }
+  });
+
+  it("does not ask about attached Shells when there is no window to ask in", async () => {
+    const { setAttachedShellsProvider } = await import("../attachedShells.js");
+    setAttachedShellsProvider(() => [{ clientName: "MacBook Pro" }]);
+
+    try {
+      const { beforeQuitCb } = await setup();
+      await beforeQuitCb(makeEvent());
+
+      expect(quitWarningMock.showQuitWarning).not.toHaveBeenCalled();
+    } finally {
+      setAttachedShellsProvider(null);
+    }
+  });
+
   it("halts the deferred init queue before the cleanup chain starts", async () => {
     const { drainRateLimitQueues } = await import("../../ipc/utils.js");
     const { beforeQuitCb } = await setup();

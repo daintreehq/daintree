@@ -236,10 +236,12 @@ describe("HostModeService enable and disable", () => {
     await waitFor(() => client.getState().status === "connected");
     const attached = await service.getStatus();
     expect(attached.attachedClients.map((c) => c.clientName)).toEqual(["greg-mbp"]);
+    expect(service.getAttachedClients().map((c) => c.clientName)).toEqual(["greg-mbp"]);
     expect(row(attached, "drivers")).toMatchObject({ state: "ok", detail: "greg-mbp" });
 
     const off = await service.setEnabled({ enabled: false });
     expect(off).toMatchObject({ enabled: false, listening: false, attachedClients: [] });
+    expect(service.getAttachedClients()).toEqual([]);
     expect(settings()).toEqual({ enabled: false, startAtLogin: false, advertise: true });
     expect(existsSync(location.socketPath)).toBe(false);
     expect(existsSync(location.discoveryPath)).toBe(false);

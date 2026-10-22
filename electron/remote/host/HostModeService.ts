@@ -1,5 +1,9 @@
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
-import type { HostModeStatus, SetHostModePayload } from "../../../shared/types/ipc/hostMode.js";
+import type {
+  AttachedClientInfo,
+  HostModeStatus,
+  SetHostModePayload,
+} from "../../../shared/types/ipc/hostMode.js";
 import type { HostModeObservation } from "../../../shared/types/ipc/remoteHosts.js";
 import type { AdvertiseState } from "./advertise.js";
 import type { CommandResult, CommandRunner } from "./hostCommands.js";
@@ -179,6 +183,11 @@ export class HostModeService {
     }
     await this.observe();
     this.push();
+  }
+
+  /** The machines attached right now, read without the observations `getStatus` makes. */
+  getAttachedClients(): AttachedClientInfo[] {
+    return this.listener?.isListening() === true ? this.listener.attachedClients() : [];
   }
 
   getStatus(): Promise<HostModeStatus> {
@@ -383,7 +392,7 @@ export class HostModeService {
   private snapshot(): HostModeStatus {
     const settings = this.deps.readSettings();
     const listening = this.listener?.isListening() === true;
-    const attachedClients = listening ? (this.listener?.attachedClients() ?? []) : [];
+    const attachedClients = this.getAttachedClients();
     const keychain =
       this.keychainCheck ?? classifyKeychainWithoutTrial(this.deps.platform, this.deps.keychain);
     return {
