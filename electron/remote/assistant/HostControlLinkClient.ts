@@ -16,6 +16,9 @@ import {
   type RelayNoticeStatusPayload,
   type RelayNoticesPayload,
 } from "./linkMethods.js";
+import { createLogger } from "../../utils/logger.js";
+
+const logger = createLogger("main:HostControlLinkClient");
 
 /** What takes a host's notices, and follows the calls they belong to (#13500, #13930). */
 export interface RelayNoticeReceiver {
@@ -210,7 +213,7 @@ export class HostControlLinkClient {
     } catch (error) {
       // A host from before this can't say; its link still stays open for them.
       if (codeOf(error) === "UNSUPPORTED") return;
-      console.warn("[HostControl] Couldn't ask a host after its notices:", error);
+      logger.warn("Couldn't ask a host after its notices", { error });
     }
   }
 

@@ -1,4 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
+
+const loggerMock = vi.hoisted(() => ({
+  debug: vi.fn(),
+  info: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
+}));
+
+vi.mock("../../../utils/logger.js", () => ({
+  createLogger: () => loggerMock,
+}));
 import { AppError } from "../../../utils/errorTypes.js";
 import type { LinkSession } from "../../link/session.js";
 import { HostControlLinkClient, type RelayNoticeReceiver } from "../HostControlLinkClient.js";
@@ -268,7 +279,8 @@ describe("HostControlLinkClient relay notices (#13500)", () => {
   });
 
   it("leaves an older host that can't say alone, and holds nothing it couldn't read", async () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const warn = loggerMock.warn;
+    warn.mockClear();
     try {
       const old = receiver(AWAITED);
       const unsupported = opened(old, (method) => {
@@ -291,7 +303,6 @@ describe("HostControlLinkClient relay notices (#13500)", () => {
       expect(garbled.receiveNoticeStatus).not.toHaveBeenCalled();
       invalid.relay.dispose();
     } finally {
-      warn.mockRestore();
     }
   });
 });

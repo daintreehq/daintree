@@ -425,7 +425,7 @@ export function installHostMcpRelay(
         try {
           read = (await deps.watchingNoticeCalls?.(senderId, helpSessionId)) ?? new Set();
         } catch (error) {
-          console.warn("[HostMcpRelay] Couldn't read a relay principal's notices:", error);
+          logger.warn("Couldn't read a relay principal's notices", { error });
           read = null;
         }
         armed.set(helpSessionId, read);
