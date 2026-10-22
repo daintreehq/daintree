@@ -141,6 +141,35 @@ describe("detectExpandos", () => {
       render(null, container);
     }
   });
+
+  it("finds Vue's expandos, which a dev build defines non-enumerable", () => {
+    const node = document.createElement("div");
+    for (const name of ["__vnode", "__vueParentComponent"]) {
+      Object.defineProperty(node, name, { value: {}, enumerable: false, configurable: true });
+    }
+    expect(Object.keys(node)).toEqual([]);
+    const set = new DetectionSet();
+    detectExpandos(node, set);
+    expect(set.toArray()).toEqual([
+      {
+        framework: "vue",
+        signals: [
+          { via: "expando", name: "__vueParentComponent" },
+          { via: "expando", name: "__vnode" },
+        ],
+      },
+    ]);
+  });
+
+  it("does not take an inherited property for an expando", () => {
+    const proto = Object.create(HTMLDivElement.prototype) as object;
+    Object.defineProperty(proto, "__vnode", { value: {} });
+    const node = document.createElement("div");
+    Object.setPrototypeOf(node, proto);
+    const set = new DetectionSet();
+    detectExpandos(node, set);
+    expect(set.size).toBe(0);
+  });
 });
 
 describe("detectMarkup", () => {

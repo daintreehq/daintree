@@ -18,6 +18,8 @@ export const COORDINATE_CONVENTIONS = {
   sourceMap: { lineBase: 1, columnBase: 0 },
   /** `data-astro-source-loc`, as Astro's compiler writes it. */
   astroSourceLoc: { lineBase: 1, columnBase: 1 },
+  /** `vite-plugin-vue-inspector`'s `data-v-inspector`: Vue's template parser positions, over the whole `.vue` file. */
+  vueInspector: { lineBase: 1, columnBase: 1 },
 } as const;
 
 /** Far past any real file; it exists so a page cannot hand the host an unbounded number. */

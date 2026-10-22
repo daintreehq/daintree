@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
 import { EventEmitter } from "node:events";
+import { createRequire } from "node:module";
 import { act, createElement, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { h as preactElement, render as renderPreact, type ComponentChildren } from "preact";
+import type { Component } from "vue";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("electron", () => ({
@@ -185,15 +187,17 @@ let shipped: Record<string, string> = {};
 let assets: Record<string, string> = {};
 /** Built as the app would build them, but kept out of the shipped catalog until #13888 lists them. */
 let astroAsset = "";
-/** Likewise Angular's, which #13888 lists too. */
+/** Likewise Angular's and Vue's, which #13888 lists too. */
 let angularAsset = "";
 let preactAsset = "";
+let vueAsset = "";
 
 beforeAll(() => {
   const {
     "extractor:astro": astro,
     "extractor:angular": angular,
     "extractor:preact": preact,
+    "extractor:vue": vue,
     ...built
   } = buildCoreGuestAssets([
     {
@@ -206,11 +210,13 @@ beforeAll(() => {
       entry: "electron/services/elementPicker/guest/extractors/angular.ts",
     },
     { id: "extractor:preact", entry: "electron/services/elementPicker/guest/extractors/preact.ts" },
+    { id: "extractor:vue", entry: "electron/services/elementPicker/guest/extractors/vue.ts" },
   ]);
   shipped = built;
   astroAsset = astro ?? "";
   angularAsset = angular ?? "";
   preactAsset = preact ?? "";
+  vueAsset = vue ?? "";
   assets = { ...shipped, "extractor:react": shipped["fixture:react"]! };
 }, 60_000);
 
@@ -824,6 +830,74 @@ describe("core Element Picker guest loading", () => {
       expect(app!.rootElementIds).toEqual([await hostId("app-root")]);
     } finally {
       vi.unstubAllGlobals();
+    }
+  });
+
+  it("describes a Vue selection with the built Vue extractor: names, owner, roots, and a file without a line", async () => {
+    // Taken before the runtime loads, which sets them as it evaluates.
+    const globals = ["__VUE__", "__VUE_HMR_RUNTIME__"].filter((name) => !(name in scope));
+    const vue = (await import(
+      /* @vite-ignore */ createRequire(import.meta.url).resolve("vue/dist/vue.esm-browser.js")
+    )) as typeof import("vue");
+    document.body.innerHTML = '<div id="app"></div>';
+    // As `@vitejs/plugin-vue` leaves components in dev; `withCtx` is what a compiled slot is wrapped in.
+    const Card = {
+      name: "Card",
+      __file: "/projects/shop/src/Card.vue",
+      render(this: { $slots: { default?: () => unknown[] } }) {
+        return vue.h("section", { class: "card" }, this.$slots.default?.() as never);
+      },
+    } as unknown as Component;
+    const App = {
+      __name: "App",
+      __file: "/projects/shop/src/App.vue",
+      render: () =>
+        vue.h(Card, null, { default: vue.withCtx(() => [vue.h("button", { id: "cta" }, "Go")]) }),
+    } as unknown as Component;
+    const app = vue.createApp(App);
+    app.mount("#app");
+    try {
+      const h = makeHarness({ catalog: { ...shipped, "extractor:vue": vueAsset } });
+      await h.bind();
+      await settle();
+      expect(h.kinds("extractor-installed")).toEqual([
+        expect.objectContaining({ framework: "vue" }),
+      ]);
+
+      document.getElementById("cta")!.click();
+      await settle();
+      const observation = (
+        h.pickerEvents("selectionChanged").at(-1)!.event as {
+          observations: Array<{
+            componentChain: {
+              nearestId: string;
+              components: Array<{
+                componentId: string;
+                name: { value: string } | null;
+                renderParentId?: string | null;
+                ownerId?: string | null;
+                rootElementIds: string[];
+              }>;
+            };
+            sourceCandidates: Array<{ kind: string; file: string; location?: unknown }>;
+          }>;
+        }
+      ).observations[0]!;
+      const records = observation.componentChain.components;
+      expect(records.map((record) => record.name?.value)).toEqual(["Card", "App"]);
+      const [card, root] = records;
+      expect(observation.componentChain.nearestId).toBe(card!.componentId);
+      expect(card!.renderParentId).toBe(root!.componentId);
+      expect(card!.ownerId).toBe(root!.componentId);
+      expect(card!.rootElementIds).toHaveLength(1);
+      // Written in App, rendered by Card: the file is App's, and only a file.
+      expect(observation.sourceCandidates).toEqual([
+        expect.objectContaining({ kind: "file-hint", file: "/projects/shop/src/App.vue" }),
+      ]);
+      expect(observation.sourceCandidates[0]).not.toHaveProperty("location");
+    } finally {
+      app.unmount();
+      for (const name of globals) delete scope[name];
     }
   });
 });
