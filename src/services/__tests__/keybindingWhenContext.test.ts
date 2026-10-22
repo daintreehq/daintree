@@ -15,6 +15,7 @@ import {
   useProjectPresentationStore,
 } from "@/store/projectPresentationStore";
 import type { Project } from "@shared/types/project";
+import { useSidebarViewStore, WORKTREES_SIDEBAR_VIEW_ID } from "@/store/sidebarViewStore";
 
 function makeAgent(id: string, overrides: Partial<PtyPanelData> = {}): PtyPanelData {
   return {
@@ -45,6 +46,7 @@ afterEach(() => {
   usePluginContextKeyStore.setState({ keysByPlugin: {}, whenContext: {} });
   useProjectStore.setState({ currentProject: null });
   _resetProjectPresentationStoreForTest();
+  useSidebarViewStore.setState({ activeSidebarView: WORKTREES_SIDEBAR_VIEW_ID });
   document.body.innerHTML = "";
 });
 
@@ -191,5 +193,18 @@ describe("buildKeybindingWhenContext", () => {
       currentProject: repoProject(false),
     });
     expect(buildKeybindingWhenContext(eventFrom(null)).presentationForgeStats).toBe("hidden");
+  });
+
+  it("carries the project facts every plugin chrome `when` sees", () => {
+    const holds = (when: string) =>
+      evaluate(parse(when), buildKeybindingWhenContext(eventFrom(null)));
+    expect(holds("workspaceKind || isGitBacked")).toBe(false);
+    expect(holds("activeSidebarView == 'worktrees'")).toBe(true);
+
+    useProjectStore.setState({ currentProject: repoProject(true) });
+    useSidebarViewStore.getState().setActiveSidebarView("acme.beads.board");
+    expect(
+      holds("isGitBacked && workspaceKind == 'project' && activeSidebarView == 'acme.beads.board'")
+    ).toBe(true);
   });
 });

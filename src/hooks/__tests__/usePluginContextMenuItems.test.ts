@@ -288,4 +288,46 @@ describe("usePluginContextMenuItems", () => {
     act(() => emitKeys!({ pluginId: "acme.beads", keys: null }));
     expect(uncontested.current.map((e) => e.item.label)).toEqual(["Mine", "Clash"]);
   });
+
+  it("re-filters on the host's project facts without a new push", async () => {
+    contextMenuItemsMock.mockResolvedValue([
+      entry("acme.beads", "Always", "worktree"),
+      entry("acme.beads", "Board", "worktree", {
+        when: "activeSidebarView == 'acme.beads.board'",
+      }),
+      entry("acme.beads", "Repo", "worktree", {
+        when: "isGitBacked && workspaceKind == 'project'",
+      }),
+    ]);
+    const { usePluginContextMenuItems } = await import("../usePluginContextMenuItems");
+    const { useSidebarViewStore } = await import("@/store/sidebarViewStore");
+    const { useProjectStore } = await import("@/store/projectStore");
+    const repo = {
+      id: "a".repeat(64),
+      name: "Repo",
+      path: "/repo",
+      emoji: "",
+      lastOpened: 0,
+      gitBacked: true,
+    };
+    act(() => {
+      useProjectStore.setState({ currentProject: repo });
+    });
+    const { result } = renderHook(() => usePluginContextMenuItems("worktree"));
+
+    await waitFor(() =>
+      expect(result.current.map((e) => e.item.label)).toEqual(["Always", "Repo"])
+    );
+
+    act(() => {
+      useSidebarViewStore.getState().setActiveSidebarView("acme.beads.board");
+    });
+    expect(result.current.map((e) => e.item.label)).toEqual(["Always", "Board", "Repo"]);
+
+    act(() => {
+      useProjectStore.setState({ currentProject: { ...repo, gitBacked: false } });
+    });
+    expect(result.current.map((e) => e.item.label)).toEqual(["Always", "Board"]);
+    expect(contextMenuItemsMock).toHaveBeenCalledTimes(1);
+  });
 });
