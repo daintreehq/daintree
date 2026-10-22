@@ -376,23 +376,34 @@ describe("createMockHost", () => {
       /exactly one action/
     );
     await expect(
-      host.notify({ title: "t", body: "b", severity: "error", actions: [retry, { ...retry, id: "again" }] })
+      host.notify({
+        title: "t",
+        body: "b",
+        severity: "error",
+        actions: [retry, { ...retry, id: "again" }],
+      })
     ).rejects.toThrow(/exactly one action/);
     await expect(
-      host.notify({ title: "t", body: "b", severity: "error", delivery: "passive", actions: [retry] })
+      host.notify({
+        title: "t",
+        body: "b",
+        severity: "error",
+        delivery: "passive",
+        actions: [retry],
+      })
     ).rejects.toThrow(/can't be passive/);
     await expect(
       host.notify({ title: "t", body: "b", delivery: "passive", os: true })
     ).rejects.toThrow(/can't page the OS/);
-    await expect(host.notify({ title: "t", body: "b", severity: "fatal" as never })).rejects.toThrow(
-      /severity/
-    );
+    await expect(
+      host.notify({ title: "t", body: "b", severity: "fatal" as never })
+    ).rejects.toThrow(/severity/);
     await expect(
       host.notify({ title: "t", body: "b", target: { panelId: "p", worktreeId: "w" } as never })
     ).rejects.toThrow(/target/);
-    await expect(
-      host.notify({ title: "t", body: "b", target: { panelId: "" } })
-    ).rejects.toThrow(/target/);
+    await expect(host.notify({ title: "t", body: "b", target: { panelId: "" } })).rejects.toThrow(
+      /target/
+    );
     expect(host.notifications).toEqual([]);
 
     await host.notify({ title: "t", body: "b", severity: "error", actions: [retry] });

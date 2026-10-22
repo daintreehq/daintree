@@ -3435,7 +3435,8 @@ export function createHost(
         // The pager is loaded only here, since it pulls in the notification and
         // window services that nothing else in the host needs.
         const frontend = resolvePluginFrontend(boundProjectId, pluginId);
-        const pages = os === true && frontend.kind !== "remote" && hasOsNotificationsGrant(pluginId);
+        const pages =
+          os === true && frontend.kind !== "remote" && hasOsNotificationsGrant(pluginId);
         if (
           pages ||
           (replaceKey !== undefined && deps.declaredCapabilities(pluginId).has("notification:os"))

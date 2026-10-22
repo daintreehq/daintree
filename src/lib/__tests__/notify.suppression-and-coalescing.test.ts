@@ -808,7 +808,7 @@ describe("per-source rate-limit", () => {
         message: `Synced ${i}`,
         rateLimitKey: `plugin:${plugin.id}`,
         rateLimitLabel: "Acme Records",
-        context: { projectId: "p1", plugin },
+        context: { projectId: "p1", eventKind: "agent", plugin },
       });
     }
     expect(useNotificationHistoryStore.getState().entries[0]!.context).toEqual({ plugin });
@@ -819,7 +819,7 @@ describe("per-source rate-limit", () => {
         type: "info",
         message: `Remote ${i}`,
         rateLimitKey: `plugin:studio-01:${plugin.id}`,
-        context: { plugin },
+        context: { eventKind: "agent", plugin },
       });
     }
     expect(useNotificationHistoryStore.getState().entries[0]!.context).toEqual({ plugin });
@@ -830,7 +830,7 @@ describe("per-source rate-limit", () => {
         type: "info",
         message: `m${i}`,
         rateLimitKey: "shared-source",
-        context: { plugin },
+        context: { eventKind: "agent", plugin },
       });
     }
     expect(useNotificationHistoryStore.getState().entries[0]!.context).toBeUndefined();

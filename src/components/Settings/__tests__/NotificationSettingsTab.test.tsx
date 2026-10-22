@@ -353,7 +353,9 @@ describe("NotificationSettingsTab silenced plugins (#13818)", () => {
     render(<NotificationSettingsTab />);
     await waitFor(() => expect(getNotificationSilences).toHaveBeenCalled());
     expect(screen.getByText("Silenced plugins")).toBeTruthy();
-    expect(screen.getByText(/Silence a plugin from the menu on one of its notifications/)).toBeTruthy();
+    expect(
+      screen.getByText(/Silence a plugin from the menu on one of its notifications/)
+    ).toBeTruthy();
   });
 
   it("takes one Unsilence at a time, so each answer is the whole list", async () => {
@@ -371,7 +373,7 @@ describe("NotificationSettingsTab silenced plugins (#13818)", () => {
       fireEvent.click(tools);
     });
     const records = screen.getByRole("button", { name: "Unsilence Acme Records" });
-    expect((records as HTMLButtonElement).disabled).toBe(true);
+    expect(records.hasAttribute("disabled")).toBe(true);
     fireEvent.click(records);
     expect(setNotificationSilenced).toHaveBeenCalledTimes(1);
 
@@ -380,7 +382,7 @@ describe("NotificationSettingsTab silenced plugins (#13818)", () => {
     });
     await waitFor(() => expect(screen.queryByTestId("silenced-plugin-acme.tools")).toBeNull());
     expect(
-      (screen.getByRole("button", { name: "Unsilence Acme Records" }) as HTMLButtonElement).disabled
+      screen.getByRole("button", { name: "Unsilence Acme Records" }).hasAttribute("disabled")
     ).toBe(false);
   });
 

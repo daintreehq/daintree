@@ -108,9 +108,9 @@ describe("NotificationCenterEntry plugin provenance (#13818)", () => {
   beforeEach(() => {
     useProjectStore.setState({
       projects: [
-        { id: "p1", name: "Helios" },
-        { id: PROJECT_A, name: "Atlas" },
-      ] as never,
+        { id: "p1", path: "/repos/helios", name: "Helios", emoji: "🌲", lastOpened: 0 },
+        { id: PROJECT_A, path: "/repos/atlas", name: "Atlas", emoji: "🌲", lastOpened: 0 },
+      ],
     });
   });
   afterEach(() => {

@@ -644,13 +644,15 @@ export function registerPluginActions(actions: ActionRegistry, callbacks: Action
             priority: "high",
             title: silenced ? "Couldn't silence plugin" : "Couldn't unsilence plugin",
             message: formatErrorMessage(error, "The setting wasn't saved."),
+            context: { eventKind: "settings" },
             action: { label: "Try again", onClick: retry },
           });
           throw error;
         }
         if (!silenced) return;
         const silence = silences.find((entry) => entry.pluginId === pluginId);
-        const name = silence?.name ?? parseProjectPluginInstanceKey(pluginId)?.manifestId ?? pluginId;
+        const name =
+          silence?.name ?? parseProjectPluginInstanceKey(pluginId)?.manifestId ?? pluginId;
         const projectId = silence?.projectId ?? null;
         const projectName = projectId
           ? useProjectStore.getState().projects.find((p) => p.id === projectId)?.name
