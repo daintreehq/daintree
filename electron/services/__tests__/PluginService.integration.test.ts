@@ -543,6 +543,30 @@ describe("PluginService integration — toolbar button contributions", () => {
     });
   });
 
+  it("registers a popover button against its view's panel kind, with no action", async () => {
+    await writePlugin("acme.inbox", {
+      name: "acme.inbox",
+      version: "1.0.0",
+      contributes: {
+        panels: [{ id: "inbox", name: "Inbox", iconId: "list", color: "#abc" }],
+        views: [{ id: "inbox", componentPath: "dist/inbox.js", location: "panel" }],
+        toolbarButtons: [
+          { id: "open", label: "Inbox", iconId: "list", popover: { viewId: "inbox" } },
+        ],
+      },
+    });
+
+    const service = new PluginService(tmpDir, "0.0.0");
+    await service.initialize();
+
+    const config = getToolbarButtonConfig("acme.inbox.open");
+    expect(config?.popover?.viewId).toBe("inbox");
+    // The kind the popover mounts is the one this plugin's own panel registered.
+    const panelKindId = config?.popover?.panelKindId ?? "";
+    expect(getPanelKindConfig(panelKindId)?.extensionId).toBe("acme.inbox");
+    expect(config).not.toHaveProperty("actionId");
+  });
+
   it("defaults priority to 3 when omitted", async () => {
     await writePlugin("acme.default-prio", {
       name: "acme.default-prio",

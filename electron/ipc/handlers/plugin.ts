@@ -742,7 +742,8 @@ async function handleValidateActionIds(actionIds: string[]): Promise<void> {
 
   for (const id of getPluginToolbarButtonIds()) {
     const config = getToolbarButtonConfig(id);
-    if (!config) continue;
+    // A popover button dispatches nothing.
+    if (!config || config.actionId === undefined) continue;
     if (!knownIds.has(config.actionId)) {
       console.warn(
         `[Plugin] Unknown actionId "${config.actionId}" on toolbar button "${config.id}" (plugin: ${config.pluginId})`

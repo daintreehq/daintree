@@ -1,8 +1,15 @@
 // @vitest-environment jsdom
-import { cleanup, render, act } from "@testing-library/react";
+import * as React from "react";
+import { cleanup, render, act, fireEvent } from "@testing-library/react";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import * as PopoverPrimitive from "@radix-ui/react-popover";
-import { Popover, PopoverContent, PopoverTrigger, getPopoverAvailableWidth } from "../popover";
+import {
+  Popover,
+  PopoverAnchor,
+  PopoverContent,
+  PopoverTrigger,
+  getPopoverAvailableWidth,
+} from "../popover";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../tooltip";
 import { primeRadix } from "../radix-loader";
 
@@ -191,5 +198,52 @@ describe("PopoverTrigger inside a Tooltip trigger", () => {
     const trigger = getByRole("button", { name: "Sort" });
     expect(trigger.getAttribute("aria-expanded")).toBe("false");
     expect(trigger.hasAttribute("aria-controls")).toBe(false);
+  });
+});
+
+// A popover opened from somewhere other than its own trigger — a menu row on
+// another control — has no trigger for Radix to restore to. `restoreFocus`
+// names the anchor as the stand-in.
+function AnchoredPopover({ restoreFocus }: { restoreFocus: boolean }) {
+  const [open, setOpen] = React.useState(false);
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverAnchor asChild restoreFocus={restoreFocus}>
+        <button type="button" onClick={() => setOpen(true)}>
+          Menu
+        </button>
+      </PopoverAnchor>
+      <PopoverContent>
+        <input aria-label="Field" />
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+async function openThenEscape(getByRole: ReturnType<typeof render>["getByRole"]) {
+  await act(async () => {
+    fireEvent.click(getByRole("button", { name: "Menu" }));
+  });
+  const field = getByRole("textbox", { name: "Field" });
+  await act(async () => {
+    field.focus();
+    fireEvent.keyDown(field, { key: "Escape" });
+  });
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+}
+
+describe("PopoverAnchor restoreFocus", () => {
+  it("hands a keyboard close back to the anchor", async () => {
+    const { getByRole } = render(<AnchoredPopover restoreFocus />);
+    await openThenEscape(getByRole);
+    expect(document.activeElement).toBe(getByRole("button", { name: "Menu" }));
+  });
+
+  it("leaves an anchor that did not opt in alone", async () => {
+    const { getByRole } = render(<AnchoredPopover restoreFocus={false} />);
+    await openThenEscape(getByRole);
+    expect(document.activeElement).not.toBe(getByRole("button", { name: "Menu" }));
   });
 });

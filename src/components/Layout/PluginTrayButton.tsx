@@ -5,6 +5,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { ROW_CONTROL_CLASS, RowControlTooltip } from "@/components/ui/RowControl";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
+import { PopoverAnchor, PopoverTrigger } from "@/components/ui/popover";
 import {
   DropdownMenu,
   DropdownMenuActionItem,
@@ -31,6 +32,7 @@ import { useToolbarPreferencesStore } from "@/store/toolbarPreferencesStore";
 import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 import { useProjectPresentationStore } from "@/store/projectPresentationStore";
 import { useProjectToolbarOverlay } from "@/hooks/useResolvedPresentation";
+import { usePluginToolbarPopoverStore } from "@/store/pluginToolbarPopoverStore";
 import { MAX_PROMOTED_PLUGIN_BUTTONS } from "@shared/config/presentationProfile";
 import {
   pluginManifestIdFromInstanceKey,
@@ -55,6 +57,7 @@ import {
 } from "./pluginToolbarBadge";
 import { presentPluginToolbarButton } from "./pluginToolbarButtonState";
 import { usePluginToolbarButtonState } from "@/store/pluginToolbarStateStore";
+import { PluginToolbarPopover } from "./PluginToolbarPopover";
 
 export type PluginToolbarConfigs = ReadonlyMap<string, ToolbarButtonConfig>;
 
@@ -116,8 +119,10 @@ export function PluginToolbarButton({
   config: ToolbarButtonConfig;
   "data-toolbar-item"?: string;
 }) {
-  const hover = useShortcutHintHover(config.actionId);
-  const ariaShortcut = useAriaKeyshortcuts(config.actionId);
+  // A popover button dispatches no action, so it has no shortcut to hint.
+  const hover = useShortcutHintHover(config.actionId ?? "");
+  const ariaShortcut = useAriaKeyshortcuts(config.actionId ?? "");
+  const ownConfig = useMemo(() => new Map([[config.id, config]]), [config]);
   const setPluginButtonPromoted = useToolbarPreferencesStore((s) => s.setPluginButtonPromoted);
   const appPromoted = useToolbarPreferencesStore((s) => s.layout.pinnedButtons[pluginId] === true);
   const projectPromoted = useProjectToolbarOverlay().promotedPluginButtons.includes(pluginId);
@@ -137,57 +142,68 @@ export function PluginToolbarButton({
   const badgeColor = shownBadge?.color ?? "default";
   const name = badge ? `${config.label}, ${describeToolbarBadge(badge)}` : config.label;
   const tooltipText = badge ? `${tooltip}, ${describeToolbarBadge(badge)}` : tooltip;
+  // Never both: a popover button's click is its `PopoverTrigger`'s.
+  const actionId = config.popover ? undefined : config.actionId;
 
-  return (
+  const button = (
+    <Button
+      {...hover}
+      variant="ghost"
+      size="icon"
+      data-toolbar-item={dataToolbarItem}
+      loading={busy}
+      onClick={(event) => {
+        // Announced unavailable rather than natively disabled, so the
+        // reason's tooltip still opens and the veto happens here. Preventing
+        // the click is also what keeps a popover button's trigger shut.
+        if (blocked) {
+          event.preventDefault();
+          return;
+        }
+        if (actionId === undefined) return;
+        void actionService.dispatch(
+          actionId as Parameters<typeof actionService.dispatch>[0],
+          undefined,
+          { source: "user" }
+        );
+      }}
+      className={cn(
+        "toolbar-icon-button text-text-primary relative",
+        disabled && !busy && ARIA_DISABLED_CLASSES
+      )}
+      aria-label={name}
+      // A toggle keeps one name; aria-pressed announces the state.
+      aria-pressed={pressed}
+      aria-disabled={disabled || undefined}
+      aria-describedby={disabled ? reasonId : undefined}
+      aria-keyshortcuts={ariaShortcut}
+    >
+      <span className="relative inline-flex">
+        <Icon />
+        <span
+          aria-hidden="true"
+          data-testid={`plugin-toolbar-badge-${config.id}`}
+          data-visible={badge !== null}
+          className={cn(
+            countGlyph !== null ? "toolbar-count" : "toolbar-pip",
+            "toolbar-badge",
+            PLUGIN_BADGE_DOT_COLOR[badgeColor]
+          )}
+          data-badge-color={badgeColor}
+        >
+          {countGlyph}
+        </span>
+      </span>
+    </Button>
+  );
+
+  const body = (
     <ContextMenu>
       <ContextMenuTrigger asChild>
         <span className="inline-flex">
           <Tooltip>
             <TooltipTrigger asChild>
-              <Button
-                {...hover}
-                variant="ghost"
-                size="icon"
-                data-toolbar-item={dataToolbarItem}
-                loading={busy}
-                onClick={() => {
-                  // Announced unavailable rather than natively disabled, so the
-                  // reason's tooltip still opens and the veto happens here.
-                  if (blocked) return;
-                  void actionService.dispatch(
-                    config.actionId as Parameters<typeof actionService.dispatch>[0],
-                    undefined,
-                    { source: "user" }
-                  );
-                }}
-                className={cn(
-                  "toolbar-icon-button text-text-primary relative",
-                  disabled && !busy && ARIA_DISABLED_CLASSES
-                )}
-                aria-label={name}
-                // A toggle keeps one name; aria-pressed announces the state.
-                aria-pressed={pressed}
-                aria-disabled={disabled || undefined}
-                aria-describedby={disabled ? reasonId : undefined}
-                aria-keyshortcuts={ariaShortcut}
-              >
-                <span className="relative inline-flex">
-                  <Icon />
-                  <span
-                    aria-hidden="true"
-                    data-testid={`plugin-toolbar-badge-${config.id}`}
-                    data-visible={badge !== null}
-                    className={cn(
-                      countGlyph !== null ? "toolbar-count" : "toolbar-pip",
-                      "toolbar-badge",
-                      PLUGIN_BADGE_DOT_COLOR[badgeColor]
-                    )}
-                    data-badge-color={badgeColor}
-                  >
-                    {countGlyph}
-                  </span>
-                </span>
-              </Button>
+              {config.popover ? <PopoverTrigger asChild>{button}</PopoverTrigger> : button}
             </TooltipTrigger>
             <TooltipContent side="bottom">{tooltipText}</TooltipContent>
           </Tooltip>
@@ -217,6 +233,13 @@ export function PluginToolbarButton({
         />
       </ContextMenuContent>
     </ContextMenu>
+  );
+
+  if (!config.popover) return body;
+  return (
+    <PluginToolbarPopover origin="button" buttonId={config.id} configs={ownConfig}>
+      {body}
+    </PluginToolbarPopover>
   );
 }
 
@@ -470,6 +493,13 @@ export function PluginTrayButton({
   const isRestoringFocusRef = useRef(false);
   const wasPointerCloseRef = useRef(false);
   const lastPinActionAt = useRef(0);
+  // A popover row records its button here and the menu's close hook spends
+  // it. Opening straight from the row would raise the popover while the menu
+  // still holds focus, and the menu's own focus return would then pull focus
+  // back out of the popover onto this button — which reads as an outside focus
+  // and dismisses it.
+  const pendingPopoverRef = useRef<string | null>(null);
+  const openPopover = usePluginToolbarPopoverStore((s) => s.open);
 
   const groups = useMemo(
     () =>
@@ -518,6 +548,10 @@ export function PluginTrayButton({
     setTooltipOpen(false);
     setOpen(next);
     if (!next) return;
+    // A menu reopened inside its exit animation never unmounts, so the close
+    // hook never ran for that close; drop the intent rather than let it open
+    // the popover on some later, unrelated close.
+    pendingPopoverRef.current = null;
     // A dev-attached plugin registers its buttons without broadcasting
     // provenance, so the runtime store can be missing its display name at
     // this point — pull once on open rather than rendering a raw plugin id.
@@ -525,6 +559,10 @@ export function PluginTrayButton({
   };
 
   const handleSelect = (config: ToolbarButtonConfig) => {
+    if (config.popover) {
+      pendingPopoverRef.current = config.id;
+      return;
+    }
     void actionService.dispatch(
       config.actionId as Parameters<typeof actionService.dispatch>[0],
       undefined,
@@ -554,99 +592,122 @@ export function PluginTrayButton({
   };
 
   return (
-    <DropdownMenu open={open} onOpenChange={handleOpenChange}>
-      <ContextMenu>
-        <ContextMenuTrigger asChild>
-          <span className="inline-flex">
-            <Tooltip
-              open={tooltipOpen}
-              onOpenChange={(next) => {
-                if (next && isRestoringFocusRef.current) return;
-                setTooltipOpen(next);
-              }}
-            >
-              <TooltipTrigger asChild>
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    data-toolbar-item={dataToolbarItem}
-                    className="toolbar-icon-button text-text-primary relative"
-                    aria-label={trayName}
-                    onPointerEnter={() => {
-                      isRestoringFocusRef.current = false;
-                    }}
-                  >
-                    <span className="relative inline-flex">
-                      <Package />
-                      <span
-                        aria-hidden="true"
-                        data-testid="plugin-tray-badge"
-                        data-visible={trayBadgeColor !== null}
-                        data-badge-color={shownTrayColor ?? "default"}
-                        className={cn(
-                          "toolbar-pip toolbar-badge",
-                          PLUGIN_BADGE_DOT_COLOR[shownTrayColor ?? "default"]
-                        )}
-                      />
-                    </span>
-                  </Button>
-                </DropdownMenuTrigger>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">{trayName}</TooltipContent>
-            </Tooltip>
-          </span>
-        </ContextMenuTrigger>
-        <ContextMenuContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
-          <ToolbarContextMenuItems buttonId="plugin-tray" side="right" />
-        </ContextMenuContent>
-      </ContextMenu>
-      <DropdownMenuContent
-        align="end"
-        sideOffset={4}
-        className="min-w-[16rem] max-w-[22rem]"
-        onPointerDownOutside={() => {
-          wasPointerCloseRef.current = true;
-        }}
-        onCloseAutoFocus={(e) => {
-          setTooltipOpen(false);
-          isRestoringFocusRef.current = true;
-          // Skip focus restoration for pointer dismissals so the trigger
-          // doesn't keep a focus-visible ring the user never asked for;
-          // keyboard close still returns focus for WAI-ARIA.
-          if (wasPointerCloseRef.current) {
-            e.preventDefault();
-            wasPointerCloseRef.current = false;
-          }
-        }}
-      >
-        {groups.map((group, index) => (
-          <DropdownMenuGroup key={group.pluginId}>
-            {index > 0 && <DropdownMenuSeparator />}
-            <DropdownMenuLabel>{group.displayName}</DropdownMenuLabel>
-            {group.buttons.map((config) => (
-              <PluginTrayRow
-                key={config.id}
-                config={config}
-                promoted={isPromoted(config.id)}
-                pinDisabled={!isPromoted(config.id) && atProjectCap && isProjectPromotable(config)}
-                onSelect={handleSelect}
-                onTogglePin={handleTogglePin}
-              />
-            ))}
-          </DropdownMenuGroup>
-        ))}
+    <PluginToolbarPopover origin="tray" configs={configs}>
+      <DropdownMenu open={open} onOpenChange={handleOpenChange}>
+        <ContextMenu>
+          <ContextMenuTrigger asChild>
+            <span className="inline-flex">
+              <Tooltip
+                open={tooltipOpen}
+                onOpenChange={(next) => {
+                  if (next && isRestoringFocusRef.current) return;
+                  setTooltipOpen(next);
+                }}
+              >
+                <TooltipTrigger asChild>
+                  <DropdownMenuTrigger asChild>
+                    {/* Also where a popover picked from one of the rows hangs,
+                      and where focus goes when it closes: the row is gone with
+                      the menu. */}
+                    <PopoverAnchor asChild restoreFocus>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        data-toolbar-item={dataToolbarItem}
+                        className="toolbar-icon-button text-text-primary relative"
+                        aria-label={trayName}
+                        onPointerEnter={() => {
+                          isRestoringFocusRef.current = false;
+                        }}
+                      >
+                        <span className="relative inline-flex">
+                          <Package />
+                          <span
+                            aria-hidden="true"
+                            data-testid="plugin-tray-badge"
+                            data-visible={trayBadgeColor !== null}
+                            data-badge-color={shownTrayColor ?? "default"}
+                            className={cn(
+                              "toolbar-pip toolbar-badge",
+                              PLUGIN_BADGE_DOT_COLOR[shownTrayColor ?? "default"]
+                            )}
+                          />
+                        </span>
+                      </Button>
+                    </PopoverAnchor>
+                  </DropdownMenuTrigger>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">{trayName}</TooltipContent>
+              </Tooltip>
+            </span>
+          </ContextMenuTrigger>
+          <ContextMenuContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
+            <ToolbarContextMenuItems buttonId="plugin-tray" side="right" />
+          </ContextMenuContent>
+        </ContextMenu>
+        <DropdownMenuContent
+          align="end"
+          sideOffset={4}
+          className="min-w-[16rem] max-w-[22rem]"
+          onPointerDownOutside={() => {
+            wasPointerCloseRef.current = true;
+          }}
+          onCloseAutoFocus={(e) => {
+            setTooltipOpen(false);
+            isRestoringFocusRef.current = true;
+            const pendingPopover = pendingPopoverRef.current;
+            pendingPopoverRef.current = null;
+            if (pendingPopover !== null) {
+              // The popover takes focus into itself; returning it to this button
+              // first would only flash a ring on the way.
+              e.preventDefault();
+              wasPointerCloseRef.current = false;
+              openPopover(pendingPopover, "tray");
+              return;
+            }
+            // Skip focus restoration for pointer dismissals so the trigger
+            // doesn't keep a focus-visible ring the user never asked for;
+            // keyboard close still returns focus for WAI-ARIA.
+            if (wasPointerCloseRef.current) {
+              e.preventDefault();
+              wasPointerCloseRef.current = false;
+            }
+          }}
+        >
+          {groups.map((group, index) => (
+            <DropdownMenuGroup key={group.pluginId}>
+              {index > 0 && <DropdownMenuSeparator />}
+              <DropdownMenuLabel>{group.displayName}</DropdownMenuLabel>
+              {group.buttons.map((config) => (
+                <PluginTrayRow
+                  key={config.id}
+                  config={config}
+                  promoted={isPromoted(config.id)}
+                  pinDisabled={
+                    !isPromoted(config.id) && atProjectCap && isProjectPromotable(config)
+                  }
+                  onSelect={handleSelect}
+                  onTogglePin={handleTogglePin}
+                />
+              ))}
+            </DropdownMenuGroup>
+          ))}
 
-        <DropdownMenuSeparator />
-        <DropdownMenuActionItem actionId="app.pluginManager">
-          <Package data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
-          Manage plugins
-        </DropdownMenuActionItem>
-        <DropdownMenuActionItem actionId="app.settings.openTab" args={{ tab: "toolbar" }}>
-          <TOOLBAR_CUSTOMIZE_ICON data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
-          {TOOLBAR_CUSTOMIZE_LABEL}
-        </DropdownMenuActionItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
+          <DropdownMenuSeparator />
+          <DropdownMenuActionItem actionId="app.pluginManager">
+            <Package data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+            Manage plugins
+          </DropdownMenuActionItem>
+          <DropdownMenuActionItem actionId="app.settings.openTab" args={{ tab: "toolbar" }}>
+            <TOOLBAR_CUSTOMIZE_ICON
+              data-menu-icon
+              className="mr-2 h-3.5 w-3.5"
+              aria-hidden="true"
+            />
+            {TOOLBAR_CUSTOMIZE_LABEL}
+          </DropdownMenuActionItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </PluginToolbarPopover>
   );
 }

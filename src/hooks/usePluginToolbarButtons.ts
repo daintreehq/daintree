@@ -9,6 +9,7 @@ import { useToolbarPreferencesStore } from "@/store";
 import { logWarn } from "@/utils/logger";
 import { usePluginToolbarBadgeStore } from "@/store/pluginToolbarBadgeStore";
 import { usePluginToolbarStateStore } from "@/store/pluginToolbarStateStore";
+import { usePluginToolbarPopoverStore } from "@/store/pluginToolbarPopoverStore";
 
 export interface PluginToolbarButtonState {
   buttonIds: PluginToolbarButtonId[];
@@ -47,10 +48,21 @@ export function usePluginToolbarButtons(): PluginToolbarButtonState {
       const map = new Map<string, ToolbarButtonConfig>();
       const remote = pluginViewHostId() !== null;
       for (const btn of buttons) {
-        if (remote && !isRemoteContributionActionAllowed(btn.pluginId, btn.actionId)) continue;
+        // A popover button names a view, not an action; the popover only mounts
+        // a panel kind its own plugin registered, which is that button's check.
+        if (
+          remote &&
+          btn.actionId !== undefined &&
+          !isRemoteContributionActionAllowed(btn.pluginId, btn.actionId)
+        ) {
+          continue;
+        }
         map.set(btn.id, btn);
       }
       setConfigs(map);
+      // A popover whose button went away (its plugin unloaded or stopped
+      // showing in this project) closes with it.
+      usePluginToolbarPopoverStore.getState().retain(new Set(map.keys()));
       if (complete) {
         useToolbarPreferencesStore.getState().sweepStalePluginPinnedButtons(Array.from(map.keys()));
       }

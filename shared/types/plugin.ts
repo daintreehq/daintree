@@ -363,12 +363,30 @@ export const PANEL_MENU_LABEL_MAX = 80;
 /** Most characters a title set through `PanelViewProps.setTitle` may carry; a longer one is cut. */
 export const PANEL_VIEW_TITLE_MAX = 80;
 
+/**
+ * What a toolbar button opens instead of dispatching an action: an anchored
+ * popover the host draws, filled by one of the plugin's own views.
+ */
+export interface ToolbarButtonPopover {
+  /**
+   * A `contributes.views[].id` with `location: "panel"` whose panel is not
+   * `hasPty`. The same view stays spawnable as a panel; in the popover it sees
+   * `hostContext.kind === "popover"` and can close it with `hostContext.close`.
+   */
+  viewId: string;
+}
+
+/**
+ * A toolbar button does exactly one thing on click: dispatch `actionId`, or
+ * open `popover`. Declaring neither or both is a manifest error.
+ */
 export interface ToolbarButtonContribution {
   id: string;
   label: string;
   /** A generic plugin icon id, or a `./…svg` path to the plugin's own icon (#13143). */
   iconId: string;
-  actionId: ActionId;
+  actionId?: ActionId;
+  popover?: ToolbarButtonPopover;
   priority?: 1 | 2 | 3 | 4 | 5;
 }
 
@@ -636,16 +654,26 @@ export interface PluginSettingsViewContext {
  * plugin's panel views in place of the host's own content — so the same view
  * can see both and lay itself out for each. `"settings"` is the plugin's custom
  * settings section. `"sidebar"` is a sidebar view, below the sidebar header and
- * as narrow as the sidebar's minimum width.
+ * as narrow as the sidebar's minimum width. `"fileEditor"` is a view-backed
+ * file editor inside the file panel. `"popover"` is the anchored popover
+ * a toolbar button opens (`contributes.toolbarButtons[].popover`), again one of
+ * the plugin's panel views.
  *
- * Open-ended: hosts added later (a popover, an editor) arrive as new members,
- * so a view that switches on this must give unknown kinds a sensible default
- * rather than treat the list as exhaustive.
+ * Open-ended: hosts added later arrive as new members, so a view that switches
+ * on this must give unknown kinds a sensible default rather than treat the list
+ * as exhaustive.
  */
-export type PluginViewHostKind = "panel" | "surface" | "settings" | "fileEditor" | "sidebar";
+export type PluginViewHostKind =
+  "panel" | "surface" | "settings" | "sidebar" | "fileEditor" | "popover";
 
 export interface PluginViewHostContext {
   readonly kind: PluginViewHostKind;
+  /**
+   * Dismiss the host the view is in. Present only where the view may end its
+   * own mount — today the toolbar popover, after a "quick add" submits, say.
+   * Focus goes back to the button that opened it.
+   */
+  readonly close?: () => void;
 }
 
 /**

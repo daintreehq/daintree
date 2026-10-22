@@ -128,6 +128,7 @@ const HOST_CONTEXTS: Readonly<Record<PluginViewHostKind, PluginViewHostContext>>
   settings: Object.freeze({ kind: "settings" }),
   fileEditor: Object.freeze({ kind: "fileEditor" }),
   sidebar: Object.freeze({ kind: "sidebar" }),
+  popover: Object.freeze({ kind: "popover" }),
 };
 
 /** The stable {@link PanelViewProps.hostContext} for a host kind. */

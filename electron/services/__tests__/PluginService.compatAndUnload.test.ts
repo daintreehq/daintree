@@ -235,7 +235,10 @@ import {
   getProjectSurfaceRefusals,
   getProjectSurfaceSlots,
 } from "../plugin/PluginSurfaceRegistry.js";
-import { unregisterPluginToolbarButtons } from "../../../shared/config/toolbarButtonRegistry.js";
+import {
+  registerToolbarButton,
+  unregisterPluginToolbarButtons,
+} from "../../../shared/config/toolbarButtonRegistry.js";
 import { unregisterPluginMenuItems } from "../pluginMenuRegistry.js";
 import { unregisterForgeProviders } from "../forgeProviderRegistry.js";
 import { CHANNELS } from "../../ipc/channels.js";
@@ -682,6 +685,75 @@ describe("Project surface claims", () => {
       service.dispose();
       warn.mockRestore();
     }
+  });
+});
+
+describe("Project toolbar popover buttons", () => {
+  const PROJECT = "proj-a";
+  const INSTANCE = "project__proj-a__acme.inbox";
+
+  async function loadInboxPlugin(service: PluginService): Promise<unknown> {
+    const projectRoot = path.join(tmpDir, "project-a");
+    const pluginsParent = path.join(projectRoot, ".daintree", "plugins");
+    const dir = path.join(pluginsParent, "acme.inbox");
+    await fs.mkdir(path.join(dir, "dist"), { recursive: true });
+    await fs.writeFile(path.join(dir, "dist", "inbox.js"), "export default () => null;\n");
+    await fs.writeFile(
+      path.join(dir, "plugin.json"),
+      JSON.stringify({
+        name: "acme.inbox",
+        version: "1.0.0",
+        scope: "project",
+        engines: { daintree: ">=0.1.0" },
+        contributes: {
+          panels: [{ id: "inbox", name: "Inbox", iconId: "list", color: "#000" }],
+          views: [{ id: "inbox", componentPath: "dist/inbox.js", location: "panel" }],
+          toolbarButtons: [
+            { id: "open", label: "Inbox", iconId: "list", popover: { viewId: "inbox" } },
+          ],
+        },
+      })
+    );
+    const seam = service as unknown as {
+      loadPlugin(
+        root: string,
+        dirName: string,
+        opts: {
+          isBuiltin: boolean;
+          disabled: Set<string>;
+          origin: "project";
+          instanceKey: string;
+          binding: { projectId: string; projectRoot: string };
+        }
+      ): Promise<unknown>;
+    };
+    return seam.loadPlugin(pluginsParent, "acme.inbox", {
+      isBuiltin: false,
+      disabled: new Set(),
+      origin: "project",
+      instanceKey: INSTANCE,
+      binding: { projectId: PROJECT, projectRoot },
+    });
+  }
+
+  it("registers the popover against the project-qualified panel kind its view loads under", async () => {
+    vi.mocked(registerToolbarButton).mockClear();
+    vi.mocked(registerPanelKind).mockClear();
+    const service = new PluginService(path.join(tmpDir, "installed"), "1.0.0");
+    expect(await loadInboxPlugin(service)).not.toBeNull();
+
+    const config = vi
+      .mocked(registerToolbarButton)
+      .mock.calls.map(([registered]) => registered)
+      .find((registered) => registered.id === `${INSTANCE}.open`);
+    const kindIds = vi.mocked(registerPanelKind).mock.calls.map(([kind]) => kind.id);
+    // The id the panels loop registered this project's view under, so the
+    // popover never mounts a same-named installed plugin's kind.
+    expect(config?.popover?.viewId).toBe("inbox");
+    expect(config?.popover?.panelKindId).toBe(`project:${PROJECT}/acme.inbox/inbox`);
+    expect(kindIds).toContain(config?.popover?.panelKindId);
+    expect(config?.pluginId).toBe(INSTANCE);
+    expect(config).not.toHaveProperty("actionId");
   });
 });
 

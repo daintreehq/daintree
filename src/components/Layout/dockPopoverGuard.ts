@@ -1,7 +1,7 @@
 import { markEscapeYieldedToDialog, ESCAPE_BACKSTOP_DIALOG_ATTR } from "@/lib/dialogEscapeBackstop";
 import { APP_DIALOG_SURFACE_ATTR } from "@/lib/appDialogSurface";
 
-type RadixOutsideEvent = Event & {
+export type RadixOutsideEvent = Event & {
   preventDefault: () => void;
   detail?: {
     originalEvent?: Event;
@@ -44,18 +44,8 @@ export function handleDockInteractOutside(
     return;
   }
 
-  // Guard 3: Click landed in an `AppDialog` this popover spawned. The dialog
-  // portals to the body, so every click inside it is "outside" this popover,
-  // and it must stay open behind the dialog it opened (#11505) — the Escape
-  // path guards the same invariant in `handleDockEscapeKeyDown`. This used to
-  // hold by accident: the dialog panel stops click propagation, and Radix reads
-  // a click that never reaches `document` as intercepted and cancels the
-  // dismissal. `DialogDismissSurface` deliberately undoes that, so the
-  // invariant now has to be stated.
-  if (target.closest(`[${APP_DIALOG_SURFACE_ATTR}]`)) {
-    event.preventDefault();
-    return;
-  }
+  // Guard 3: Click landed in an `AppDialog` this popover spawned (#11505).
+  if (keepOpenBehindAppDialog(event)) return;
 
   // Guard 4: Focus-driven dismissal (Radix FocusOutsideEvent) while focus lives
   // inside the portal. Typing into the portaled xterm/CodeMirror surface emits
@@ -88,14 +78,42 @@ export function handleDockEscapeKeyDown(
   }
   // A dialog opened from inside this popover (a file viewer, a kill
   // confirmation) portals to the body and traps focus, so the check above
-  // misses it and Radix would dismiss the popover out from under a dialog the
-  // user is looking at. The focused dialog owns Escape: block the dock's
-  // dismissal and hand the keypress to `AppDialog`'s backstop, which otherwise
-  // stands down on seeing this popover open (#11505).
-  if (isFocusInsideBackstopDialog()) {
-    event.preventDefault();
-    markEscapeYieldedToDialog(event);
-  }
+  // misses it (#11505).
+  yieldEscapeToFocusedDialog(event);
+}
+
+/**
+ * Keeps a Radix popover open when an outside interaction landed in an
+ * `AppDialog`, vetoing the dismissal. The dialog portals to the body, so every
+ * click inside one the popover spawned is "outside" it, and the popover must
+ * stay open behind the dialog it opened (#11505) — the Escape half is
+ * {@link yieldEscapeToFocusedDialog}. This used to hold by accident: the
+ * dialog panel stops click propagation, and Radix reads a click that never
+ * reaches `document` as intercepted and cancels the dismissal.
+ * `DialogDismissSurface` deliberately undoes that, so the invariant has to be
+ * stated. Returns whether it vetoed.
+ */
+export function keepOpenBehindAppDialog(event: RadixOutsideEvent): boolean {
+  const target = getOutsideEventTarget(event);
+  if (!target?.closest(`[${APP_DIALOG_SURFACE_ATTR}]`)) return false;
+  event.preventDefault();
+  return true;
+}
+
+/**
+ * Hands Escape to a focused `AppDialog` instead of letting a Radix popover
+ * under it dismiss. The dialog is not a Radix layer, so the popover is the
+ * highest one Radix knows about and would close on the keypress — taking a
+ * dialog its own content opened down with it. The focused dialog owns Escape:
+ * block the popover's dismissal and hand the keypress to `AppDialog`'s
+ * backstop, which otherwise stands down on seeing a Radix layer open.
+ */
+export function yieldEscapeToFocusedDialog(
+  event: KeyboardEvent & { preventDefault: () => void }
+): void {
+  if (!isFocusInsideBackstopDialog()) return;
+  event.preventDefault();
+  markEscapeYieldedToDialog(event);
 }
 
 /**

@@ -407,7 +407,8 @@ describe("Toolbar shortcut tooltips — issue #3443", () => {
   // tray that now owns un-promoted contributions.
   describe("PluginToolbarButton aria-keyshortcuts — issue #8938", () => {
     it("calls useAriaKeyshortcuts with the plugin actionId", () => {
-      expect(pluginTraySource).toContain("useAriaKeyshortcuts(config.actionId)");
+      // A popover button has none (#13784), so the empty id names no binding.
+      expect(pluginTraySource).toContain('useAriaKeyshortcuts(config.actionId ?? "")');
     });
 
     it("renders aria-keyshortcuts on the plugin Button", () => {

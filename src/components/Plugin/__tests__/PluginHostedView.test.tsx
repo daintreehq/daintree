@@ -11,7 +11,7 @@ import type { PluginHostedViewDescriptor } from "@shared/types/plugin";
 interface ContentMountProps {
   panelId: string;
   panelRemovedSignal?: AbortSignal;
-  hostContext?: { kind: string };
+  hostContext?: { kind: string; close?: () => void };
   settingsContext?: unknown;
   offerRequestReload?: boolean;
   offerToolbar?: boolean;
@@ -231,6 +231,38 @@ describe("PluginHostedView", () => {
       unregisterPanelKind(KIND_ID);
     });
     expect(signal?.aborted).toBe(true);
+  });
+
+  it("hands a dismissible host's close to the view, per mount and stable across renders", () => {
+    const close = vi.fn();
+    const { rerender } = render(
+      <PluginHostedView
+        source={{ from: "panel-kind", config: panelKind() }}
+        host="popover"
+        mountId="toolbar-popover:a"
+        onClose={close}
+      />
+    );
+    const first = h.mounts.at(-1)?.hostContext;
+    expect(first?.kind).toBe("popover");
+    first?.close?.();
+    expect(close).toHaveBeenCalledTimes(1);
+
+    rerender(
+      <PluginHostedView
+        source={{ from: "panel-kind", config: panelKind() }}
+        host="popover"
+        mountId="toolbar-popover:a"
+        onClose={close}
+      />
+    );
+    // The same object while the callback is unchanged, so a view memoizing on
+    // it doesn't churn.
+    expect(h.mounts.at(-1)?.hostContext).toBe(first);
+
+    // A host with nothing to dismiss hands no close.
+    render(<PluginHostedView source={hosted()} host="settings" mountId="b" />);
+    expect(h.mounts.at(-1)?.hostContext).not.toHaveProperty("close");
   });
 
   it("contains the view in its own flex column, sized by the caller", () => {
