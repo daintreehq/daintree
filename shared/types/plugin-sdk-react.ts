@@ -5605,6 +5605,21 @@ export interface PluginMarkdownEditorProps extends PluginRootAttributes {
    * editor is at least 720px wide.
    */
   layout?: "tabs" | "split" | "auto";
+  /**
+   * Fills the height its parent gives it instead of growing with its text, for
+   * an editor that is a whole pane's document. The source and the preview each
+   * scroll inside the editor, `minRows` and `maxRows` no longer apply, and
+   * with a side-by-side `layout` the two scroll in step. The parent needs a
+   * definite height: a `PaneLayout` with `scroll="none"`, or a flex column with a bounded height.
+   */
+  fill?: boolean;
+  /**
+   * A slot above the field, for what describes the document rather than being
+   * its text: front matter edited as a `SchemaForm`, say. It keeps its own
+   * height, scrolls once it passes 40% of a `fill` editor, and is yours to
+   * disable, like the rest of what you put in it.
+   */
+  header?: ReactNode;
   /** Cmd+Enter (Ctrl+Enter), with the source: post the comment, save the note. */
   onSubmit?: (value: string) => void;
   /** Escape in the text area: close the composer. */
