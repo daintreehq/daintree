@@ -8,6 +8,7 @@ import { z } from "zod";
 import { terminalClient } from "@/clients";
 import { terminalInstanceService } from "@/services/terminal/TerminalInstanceService";
 import { flushOptimisticCloses, requestPanelClose } from "@/services/terminal/optimisticPanelClose";
+import { consultPanelCloseGuards, hasPanelCloseGuard } from "@/services/panelCloseGuard";
 import { fireWatchNotification } from "@/lib/watchNotification";
 import { usePanelStore } from "@/store/panelStore";
 import { useRateLimitObservationStore } from "@/store/rateLimitObservationStore";
@@ -358,6 +359,10 @@ export function registerTerminalLifecycleActions(
             hideIds: [targetId],
             commit: () => usePanelStore.getState().trashPanel(targetId),
           });
+        } else if (hasPanelCloseGuard(targetId)) {
+          // A docked panel with unsaved work still asks before it is trashed.
+          const proceed = await consultPanelCloseGuards([targetId]);
+          if (proceed) usePanelStore.getState().trashPanel(targetId);
         } else {
           state.trashPanel(targetId);
         }
