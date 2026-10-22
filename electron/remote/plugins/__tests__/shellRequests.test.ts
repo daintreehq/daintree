@@ -496,7 +496,7 @@ describe("host plugin toasts", () => {
       type: "success",
       message: "Deploy: shipped",
       duration: undefined,
-      rateLimitKey: `plugin:${HOST}:acme.deploy:success`,
+      rateLimitKey: `plugin:${HOST}:acme.deploy`,
     });
   });
 

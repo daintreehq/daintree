@@ -27,6 +27,7 @@ import {
 } from "../plugin-capability/instances.js";
 import { resolveContainedPath, PluginPathNotAllowedError } from "./pluginFsContainment.js";
 import { PluginHostGit, resolveAddPathspecs, type HostGitFactory } from "./pluginHostGit.js";
+import { admitPluginToast } from "./pluginToastBudget.js";
 import {
   pluginManifestIdFromInstanceKey,
   projectIdFromPluginInstanceKey,
@@ -249,6 +250,18 @@ const MAX_FILE_DECORATION_PATHS = 1000;
  * windows, so a plugin that never clears is bounded rather than trusted.
  */
 const PLUGIN_PANEL_MENUS_MAX_PANELS = 256;
+/** Most panels one plugin may badge at once, for the same reason as its menus. */
+const PLUGIN_PANEL_BADGES_MAX_PANELS = 256;
+
+/** An omitted colour is `default`, so it is the same badge as one that says so. */
+function samePanelBadge(a: PluginPanelBadge, b: PluginPanelBadge): boolean {
+  return (
+    a.kind === b.kind &&
+    (a.color ?? "default") === (b.color ?? "default") &&
+    a.tooltip === b.tooltip &&
+    (a.kind !== "label" || (b.kind === "label" && a.text === b.text))
+  );
+}
 /**
  * Ceiling for a `host.fs.watch` `debounceMs`. Node clamps any timer delay past
  * 2^31-1 ms to 1 ms, so an unbounded value would turn "almost never" into
@@ -2285,12 +2298,25 @@ export function createHost(
         validated = parsed.data;
       }
       let panelMap = deps.pluginBadges.get(pluginId);
+      const previous = panelMap?.get(panelId);
       if (validated === null) {
         // Clear: drop just this panel's badge; prune the plugin's map when empty.
-        if (!panelMap || !panelMap.has(panelId)) return Promise.resolve();
+        if (!panelMap || previous === undefined) return Promise.resolve();
         panelMap.delete(panelId);
         if (panelMap.size === 0) deps.pluginBadges.delete(pluginId);
       } else {
+        // A badge set again from a timer or a subscription would otherwise send
+        // the plugin's whole map to every renderer for no change.
+        if (previous !== undefined && samePanelBadge(previous, validated)) {
+          return Promise.resolve();
+        }
+        if (previous === undefined && (panelMap?.size ?? 0) >= PLUGIN_PANEL_BADGES_MAX_PANELS) {
+          return Promise.reject(
+            new Error(
+              `Plugin "${pluginId}" setPanelBadge: badges are already set on ${PLUGIN_PANEL_BADGES_MAX_PANELS} panels — clear a closed panel's with null`
+            )
+          );
+        }
         if (!panelMap) {
           panelMap = new Map<string, PluginPanelBadge>();
           deps.pluginBadges.set(pluginId, panelMap);
@@ -2548,16 +2574,19 @@ export function createHost(
       // shown (#12211).
       //
       // rateLimitKey keeps the raw id: it is a bucket key, never rendered, and
-      // two plugins may legitimately share a display name. It scopes the
-      // rate-limit bucket per plugin+type — without it plugin toasts fall into
-      // the global type-keyed bucket and a burst of unrelated system toasts
-      // could silently suppress a plugin's toast.
+      // two plugins may legitimately share a display name. It gives the plugin
+      // one renderer bucket shared with `notify`, whatever the tone — without
+      // it plugin toasts fall into the global type-keyed bucket and a burst of
+      // unrelated system toasts could silently suppress a plugin's toast.
+      // Past main's own budget the toast is dropped quietly, here and for a
+      // remote window alike.
+      if (!admitPluginToast(pluginId)) return;
       const message = `${deps.pluginDisplayName(pluginId)}: ${parsed.data.message}`;
       pushToRenderers(CHANNELS.NOTIFICATION_SHOW_TOAST, {
         type: parsed.data.type,
         message,
         duration: parsed.data.durationMs,
-        rateLimitKey: `plugin:${pluginId}:${parsed.data.type}`,
+        rateLimitKey: `plugin:${pluginId}`,
       });
       // A toast is the Shell's to show, so a push never reaches a window on
       // another machine; the one driving the project is asked to show it.
@@ -2625,13 +2654,16 @@ export function createHost(
         );
       }
 
+      // The same budget as showToast. A call past it does nothing at all — no
+      // toast, no banner, no retired banner — as if it was never made.
+      if (!admitPluginToast(pluginId)) return { id };
       const displayTitle = `${deps.pluginDisplayName(pluginId)}: ${title}`;
       const replaceKey = dedupeKey !== undefined ? `plugin:${pluginId}:${dedupeKey}` : undefined;
       pushToRenderers(CHANNELS.NOTIFICATION_SHOW_TOAST, {
         type: "info",
         title: displayTitle,
         message: body,
-        rateLimitKey: `plugin:${pluginId}:notify`,
+        rateLimitKey: `plugin:${pluginId}`,
         ...(actions.length > 0 ? { pluginActions: actions } : {}),
         ...(replaceKey !== undefined ? { replaceKey } : {}),
       });

@@ -210,6 +210,10 @@ export interface ToolbarButtonContribution {
  * leaves it there, and the host cannot know what a given plugin means by
  * success, so it renders as emphasis on the neutral ramp instead of a health
  * hue (#12002) — still visually distinct from `"default"`, just not green.
+ *
+ * Only a panel of a kind the plugin contributed draws the color. On any other
+ * panel the badge is drawn as `"default"` and its tooltip names the plugin, so
+ * it can't pass for a failure Daintree observed (#13766).
  */
 export type PluginPanelBadgeColor = "default" | "success" | "warning" | "error";
 
@@ -5097,7 +5101,12 @@ export interface PluginHostApi extends PluginActivationApi {
    * given `panelId` — a status `dot` or a short `label` — so per-worktree /
    * per-agent state surfaces without opening the panel. Pass `null` to clear
    * this plugin's badge on that panel. Badges are keyed by `(pluginId, panelId)`,
-   * so plugins never clobber each other's badge on the same panel.
+   * so plugins never clobber each other's badge on the same panel. Any panel id
+   * is accepted, but a badge on a panel of a kind this plugin did not contribute
+   * is drawn neutral and names the plugin (see {@link PluginPanelBadgeColor}).
+   * Setting the badge a panel already carries sends nothing. A plugin badges at
+   * most 256 panels at once: a new panel past that rejects, while an update or
+   * a clear always goes through.
    *
    * Like {@link invalidateFileDecorations} this is NOT revoke-guarded: plugins
    * call it from post-activation subscription callbacks and timers, and it
@@ -5256,7 +5265,9 @@ export interface PluginHostApi extends PluginActivationApi {
    * the id itself is never shown, since a project plugin's id is an instance
    * key. Display names need not be unique. Routes
    * through the app's `notify()` path so rate-limit, quiet-hours, and
-   * inbox-history semantics apply identically to plugin toasts.
+   * inbox-history semantics apply identically to plugin toasts. One rate limit
+   * covers all of a plugin's toasts, whatever their `type`, and its
+   * {@link notify} calls; past it in main a toast is dropped quietly.
    *
    * Like {@link invalidateFileDecorations} this is NOT revoke-guarded: plugins
    * call it from post-activation subscription callbacks and timers. It becomes
@@ -5268,8 +5279,9 @@ export interface PluginHostApi extends PluginActivationApi {
    * Raise a notification with up to {@link PLUGIN_NOTIFY_MAX_ACTIONS} buttons,
    * each running one of the caller's own actions (#13505). It routes through
    * the app's notification path like {@link showToast} — inbox, focus, quiet
-   * hours, session mute and the plugin's rate limit — and the title carries
-   * the plugin's display name for provenance.
+   * hours, session mute and the plugin's rate limit, shared with its toasts —
+   * and the title carries the plugin's display name for provenance. A call
+   * past that limit shows, pages and replaces nothing.
    *
    * `os: true` also asks for an OS banner. Banners carry no buttons: clicking
    * one brings the plugin's project forward and runs the first action. The

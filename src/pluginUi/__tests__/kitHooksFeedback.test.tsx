@@ -274,7 +274,7 @@ describe("useToast", () => {
     const sent = payload();
     expect(sent.type).toBe("success");
     expect(sent.message).toBe("Snippets Manager: Snippet copied");
-    expect(sent.rateLimitKey).toBe("plugin:acme.snippets:success");
+    expect(sent.rateLimitKey).toBe("plugin:acme.snippets");
     expect(sent.duration).toBe(60_000);
     expect(sent.priority).toBeUndefined();
     const action = actionOf(sent);
@@ -282,6 +282,15 @@ describe("useToast", () => {
     action.onClick();
     action.onClick();
     expect(onClick).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps every tone in the one bucket, so a noisy view can't spread over several (#13766)", () => {
+    const { result } = renderHook(() => kit.useToast(), { wrapper: owned });
+    act(() => {
+      result.current.show({ message: "Saved", tone: "success" });
+      result.current.show({ message: "Sync failed", tone: "error" });
+    });
+    expect(payload(1).rateLimitKey).toBe(payload(0).rateLimitKey);
   });
 
   it("shows the app's Undo toast and calls back once", () => {

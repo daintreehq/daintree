@@ -50,6 +50,11 @@ vi.mock("../pluginNotificationPager.js", () => pager);
 import { createHost, type PluginHostFactoryDeps } from "../PluginHostFactory.js";
 import { CHANNELS } from "../../../ipc/channels.js";
 import { resetPluginPushBatcherForTests } from "../pluginPushBatcher.js";
+import {
+  PLUGIN_TOAST_BURST,
+  PLUGIN_TOAST_REFILL_MS,
+  resetPluginToastBudget,
+} from "../pluginToastBudget.js";
 import { UNBOUND_PLUGIN_HOST_BINDING } from "../../../../shared/types/plugin.js";
 import type { PluginHostBinding } from "../../../../shared/types/plugin.js";
 import type { LoadedPlugin } from "../PluginServiceTypes.js";
@@ -122,6 +127,7 @@ function lastToast(): Record<string, unknown> {
 beforeEach(() => {
   vi.clearAllMocks();
   resetPluginPushBatcherForTests();
+  resetPluginToastBudget();
   grants.hasGrant.mockReturnValue(false);
 });
 
@@ -141,7 +147,7 @@ describe("host.notify", () => {
       type: "info",
       title: "Acme: Run needs you",
       message: "Approve the plan",
-      rateLimitKey: "plugin:acme:notify",
+      rateLimitKey: "plugin:acme",
       pluginActions: [{ label: "Open", actionId: "acme.openRun", args: { runId: "r1" } }],
       replaceKey: "plugin:acme:run-r1",
     });
@@ -273,6 +279,58 @@ describe("host.notify", () => {
 
     expect(pager.retirePluginNotification).toHaveBeenCalledWith("plugin:acme:k");
     expect(pager.pagePluginNotification).not.toHaveBeenCalled();
+  });
+
+  it("shares one budget with showToast, and past it shows, pages and retires nothing (#13766)", async () => {
+    const { host } = createHost(
+      makeDeps(["notification:os"]),
+      PLUGIN_ID,
+      UNBOUND_PLUGIN_HOST_BINDING
+    );
+    grants.hasGrant.mockReturnValue(true);
+    const toastCount = () =>
+      [
+        ...ipcUtilsMock.broadcastToRenderer.mock.calls,
+        ...ipcUtilsMock.broadcastToProjectRenderers.mock.calls.map((c) => c.slice(1)),
+      ].filter((c) => c[0] === CHANNELS.NOTIFICATION_SHOW_TOAST).length;
+
+    let clock = 5_000_000;
+    const now = vi.spyOn(Date, "now").mockImplementation(() => clock);
+    try {
+      for (let n = 0; n < PLUGIN_TOAST_BURST; n++) {
+        if (n % 2 === 0) await host.showToast({ message: `toast ${n}`, type: "error" });
+        else await host.notify({ title: "t", body: `notify ${n}` });
+      }
+      expect(toastCount()).toBe(PLUGIN_TOAST_BURST);
+
+      const over = await host.notify({ title: "t", body: "over", os: true, dedupeKey: "k" });
+      expect(typeof over.id).toBe("string");
+      await host.showToast({ message: "over too", type: "warning" });
+      expect(toastCount()).toBe(PLUGIN_TOAST_BURST);
+      expect(pager.pagePluginNotification).not.toHaveBeenCalled();
+      expect(pager.retirePluginNotification).not.toHaveBeenCalled();
+
+      clock += PLUGIN_TOAST_REFILL_MS;
+      await host.notify({ title: "t", body: "refilled" });
+      expect(toastCount()).toBe(PLUGIN_TOAST_BURST + 1);
+      expect(lastToast()).toMatchObject({ message: "refilled", rateLimitKey: "plugin:acme" });
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it("charges nothing for a call it rejects", async () => {
+    const { host } = createHost(makeDeps(), PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING);
+    const now = vi.spyOn(Date, "now").mockReturnValue(5_000_000);
+    try {
+      for (let n = 0; n < PLUGIN_TOAST_BURST * 2; n++) {
+        await expect(host.notify({ title: "", body: "b" })).rejects.toThrow(/notify: invalid/);
+      }
+      await host.notify({ title: "t", body: "valid" });
+      expect(lastToast()).toMatchObject({ message: "valid" });
+    } finally {
+      now.mockRestore();
+    }
   });
 
   it("shows nothing once the plugin is unloaded", async () => {

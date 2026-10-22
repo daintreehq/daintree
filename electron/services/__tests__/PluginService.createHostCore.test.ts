@@ -245,6 +245,7 @@ vi.mock("../plugin/PluginDevWorkerMainBridge.js", () => ({
 
 import { PluginService } from "../PluginService.js";
 import { getPluginPushBatcher } from "../plugin/pluginPushBatcher.js";
+import { PLUGIN_TOAST_BURST, resetPluginToastBudget } from "../plugin/pluginToastBudget.js";
 
 const flushPushes = (): void => getPluginPushBatcher().flush();
 import { PluginProcessManager, type ManagedChildProcess } from "../plugin/PluginProcessManager.js";
@@ -284,6 +285,7 @@ beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-plugin-test-"));
   vi.clearAllMocks();
   storeMock._state.clear();
+  resetPluginToastBudget();
 });
 
 afterEach(async () => {
@@ -584,6 +586,70 @@ describe("createHost (plugin activation API)", () => {
 
     // Liveness no-op stays a silent resolve even with an otherwise-invalid badge.
     await expect(host.setPanelBadge("", { kind: "bogus" })).resolves.toBeUndefined();
+  });
+
+  it("host.setPanelBadge sends nothing for a badge the panel already carries (#13766)", async () => {
+    await writePlugin("badge-same", { name: "acme.badge-same", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: CreateHostShape }).createHost(
+      "acme.badge-same"
+    );
+    const badgeEvents = () =>
+      broadcastToRendererMock.mock.calls.filter(
+        (call) =>
+          call[0] === CHANNELS.EVENTS_PUSH &&
+          (call[1] as { name: string }).name === "plugin:panel-badges-changed"
+      );
+
+    broadcastToRendererMock.mockClear();
+    await host.setPanelBadge("panel-a", { kind: "dot", color: "warning", tooltip: "2 failing" });
+    await host.setPanelBadge("panel-a", { kind: "dot", color: "warning", tooltip: "2 failing" });
+    // An omitted colour is the default one, so it is the same badge too.
+    await host.setPanelBadge("panel-b", { kind: "label", text: "3" });
+    await host.setPanelBadge("panel-b", { kind: "label", text: "3", color: "default" });
+    expect(badgeEvents()).toHaveLength(2);
+
+    await host.setPanelBadge("panel-a", { kind: "dot", color: "error", tooltip: "2 failing" });
+    expect(badgeEvents()).toHaveLength(3);
+  });
+
+  it("host.setPanelBadge caps how many panels one plugin badges, and still updates and clears past it (#13766)", async () => {
+    await writePlugin("badge-cap", { name: "acme.badge-cap", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: CreateHostShape }).createHost(
+      "acme.badge-cap"
+    );
+
+    let cap = 0;
+    for (;;) {
+      const outcome = await host.setPanelBadge(`panel-${cap}`, { kind: "dot" }).then(
+        () => "ok",
+        (err: Error) => err.message
+      );
+      if (outcome !== "ok") {
+        expect(outcome).toMatch(/setPanelBadge: .* clear a closed panel's with null/);
+        break;
+      }
+      cap += 1;
+      if (cap > 10_000) throw new Error("setPanelBadge has no cap");
+    }
+    expect(cap).toBeGreaterThan(0);
+
+    broadcastToRendererMock.mockClear();
+    // A panel already badged can still change, and a clear frees a slot.
+    await expect(
+      host.setPanelBadge("panel-0", { kind: "dot", color: "warning" })
+    ).resolves.toBeUndefined();
+    await expect(host.setPanelBadge("panel-1", null)).resolves.toBeUndefined();
+    await expect(host.setPanelBadge(`panel-${cap + 1}`, { kind: "dot" })).resolves.toBeUndefined();
+    await expect(host.setPanelBadge(`panel-${cap + 2}`, { kind: "dot" })).rejects.toThrow(
+      /setPanelBadge: /
+    );
+    expect(broadcastToRendererMock).toHaveBeenCalledTimes(3);
   });
 
   describe("host.setToolbarButtonBadge (#13503)", () => {
@@ -1331,7 +1397,7 @@ describe("createHost — showToast", () => {
       type: "success",
       message: "acme.toast-test: Synced 12 issues",
       duration: undefined,
-      rateLimitKey: "plugin:acme.toast-test:success",
+      rateLimitKey: "plugin:acme.toast-test",
     });
   });
 
@@ -1360,7 +1426,7 @@ describe("createHost — showToast", () => {
       duration: undefined,
       // The bucket key stays the raw id: never rendered, and two plugins may
       // share a display name.
-      rateLimitKey: "plugin:acme.toast-named:success",
+      rateLimitKey: "plugin:acme.toast-named",
     });
   });
 
@@ -1380,7 +1446,7 @@ describe("createHost — showToast", () => {
       type: "success",
       message: "acme.toast-duration: Saved",
       duration: 3000,
-      rateLimitKey: "plugin:acme.toast-duration:success",
+      rateLimitKey: "plugin:acme.toast-duration",
     });
   });
 
@@ -1487,7 +1553,7 @@ describe("createHost — showToast", () => {
       type: "info",
       message: "acme.toast-revoke: Still alive",
       duration: undefined,
-      rateLimitKey: "plugin:acme.toast-revoke:info",
+      rateLimitKey: "plugin:acme.toast-revoke",
     });
   });
 
@@ -1510,6 +1576,44 @@ describe("createHost — showToast", () => {
       (call: unknown[]) => call[0] === CHANNELS.NOTIFICATION_SHOW_TOAST
     );
     expect(toastBroadcasts).toHaveLength(0);
+  });
+
+  it("draws every tone from one budget per plugin before the push, leaving others theirs (#13766)", async () => {
+    await writePlugin("toast-budget", { name: "acme.toast-budget", version: "1.0.0" });
+    await writePlugin("toast-bystander", { name: "acme.toast-bystander", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const hosts = service as unknown as { createHost: ToastHostShape };
+    const { host } = hosts.createHost("acme.toast-budget");
+    const { host: bystander } = hosts.createHost("acme.toast-bystander");
+    const toasts = () =>
+      broadcastToRendererMock.mock.calls
+        .filter((call: unknown[]) => call[0] === CHANNELS.NOTIFICATION_SHOW_TOAST)
+        .map((call: unknown[]) => call[1] as { message: string; rateLimitKey: string });
+
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+    try {
+      broadcastToRendererMock.mockClear();
+      const tones = ["info", "success", "warning", "error"] as const;
+      for (let n = 0; n < PLUGIN_TOAST_BURST * 3; n++) {
+        await expect(
+          host.showToast({ message: `burst ${n}`, type: tones[n % tones.length] })
+        ).resolves.toBeUndefined();
+      }
+      await bystander.showToast({ message: "still mine" });
+
+      const delivered = toasts();
+      expect(delivered.filter((t) => t.rateLimitKey === "plugin:acme.toast-budget")).toHaveLength(
+        PLUGIN_TOAST_BURST
+      );
+      expect(delivered.at(-1)).toMatchObject({
+        message: "acme.toast-bystander: still mine",
+        rateLimitKey: "plugin:acme.toast-bystander",
+      });
+    } finally {
+      now.mockRestore();
+    }
   });
 });
 
