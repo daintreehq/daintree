@@ -1212,18 +1212,21 @@ async function handleIconsGet(ctx: IpcContext): Promise<PluginCustomIconAsset[]>
 /**
  * A metadata write names its recipe by id, so it gets the same narrowing as
  * `plugin:recipes-get`: a recipe the sender's project cannot see — another
- * project's plugin's, or one hidden here — is not found, before the write and
- * in the recipe handed back after it (#13796).
+ * project's plugin's, or one hidden here — is not found (#13796). Checked
+ * before the write only. A project plugin's scope is fixed for its instance,
+ * so the one thing that can change mid-write is an installed plugin being
+ * hidden, and the scoped push that follows removes it from the sender anyway;
+ * failing a write that already persisted would only report a false failure.
  */
 function assertRecipeVisibleToSender(
-  recipe: TerminalRecipe | undefined,
+  recipes: readonly TerminalRecipe[],
   recipeId: string,
   projectId: string | null
-): TerminalRecipe {
+): void {
+  const recipe = recipes.find((candidate) => candidate.id === recipeId);
   if (!recipe || selectContributionsForProject([recipe], recipeOwner, projectId).length === 0) {
     throw new Error(`Plugin recipe ${recipeId} not found`);
   }
-  return recipe;
 }
 
 async function handleRecipeRecordUse(
@@ -1237,10 +1240,8 @@ async function handleRecipeRecordUse(
     throw new Error("timestamp must be a positive finite number");
   }
   const id = assertQualifiedRecipeId(recipeId);
-  const current = service.getPluginRecipes().find((recipe) => recipe.id === id);
-  assertRecipeVisibleToSender(current, id, ctx.projectId);
-  const updated = await service.recordPluginRecipeUse(id, timestamp);
-  return assertRecipeVisibleToSender(updated, id, ctx.projectId);
+  assertRecipeVisibleToSender(service.getPluginRecipes(), id, ctx.projectId);
+  return service.recordPluginRecipeUse(id, timestamp);
 }
 
 async function handleRecipeMetadataUpdate(
@@ -1252,10 +1253,8 @@ async function handleRecipeMetadataUpdate(
   await service.waitForInit();
   const id = assertQualifiedRecipeId(recipeId);
   const patch = parseRecipeMetadataPatch(updates);
-  const current = service.getPluginRecipes().find((recipe) => recipe.id === id);
-  assertRecipeVisibleToSender(current, id, ctx.projectId);
-  const updated = await service.updatePluginRecipeMetadata(id, patch);
-  return assertRecipeVisibleToSender(updated, id, ctx.projectId);
+  assertRecipeVisibleToSender(service.getPluginRecipes(), id, ctx.projectId);
+  return service.updatePluginRecipeMetadata(id, patch);
 }
 
 /**

@@ -651,20 +651,31 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
         return next;
       };
 
+      // A preference edit is an explicit user action, so a failed one rolls back
+      // and surfaces — unlike a frecency stamp, which fails silently. Only the
+      // fields this edit touched, on whatever the row is by then: a push that
+      // landed meanwhile (the plugin disabled, hidden, untrusted or reloaded) is
+      // newer than anything captured here and must not be undone (#13796).
       const previous = get().pluginRecipes.find((r) => r.id === id);
+      const revertPatch = (target: TerminalRecipe): TerminalRecipe => {
+        const next = { ...target };
+        if (patch.showInEmptyState !== undefined) {
+          if (previous?.showInEmptyState === undefined) delete next.showInEmptyState;
+          else next.showInEmptyState = previous.showInEmptyState;
+        }
+        if (patch.autoAssign !== undefined) {
+          if (previous?.autoAssign === undefined) delete next.autoAssign;
+          else next.autoAssign = previous.autoAssign;
+        }
+        return next;
+      };
+
       get().setPluginRecipes(get().pluginRecipes.map((r) => (r.id === id ? applyPatch(r) : r)));
       try {
         const persisted = await pluginRecipesClient.updateMetadata(id, patch);
         get().setPluginRecipes(get().pluginRecipes.map((r) => (r.id === id ? persisted : r)));
       } catch (error) {
-        // A preference edit is an explicit user action, so it rolls back and
-        // surfaces — unlike a frecency stamp, which fails silently. Only this
-        // row, and only if it is still listed: a push that landed meanwhile
-        // (the plugin disabled, hidden or untrusted) is newer than the snapshot
-        // taken before the write and must not be undone (#13796).
-        if (previous) {
-          get().setPluginRecipes(get().pluginRecipes.map((r) => (r.id === id ? previous : r)));
-        }
+        get().setPluginRecipes(get().pluginRecipes.map((r) => (r.id === id ? revertPatch(r) : r)));
         logError("Failed to persist plugin recipe preference", error);
         throw error;
       }

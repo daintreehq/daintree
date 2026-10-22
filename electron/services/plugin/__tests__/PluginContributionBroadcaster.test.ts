@@ -1012,6 +1012,59 @@ describe("per-project visibility of installed plugins", () => {
         { recipes: [globalRecipe], complete: false },
       ]);
     });
+
+    it("live-broadcasts a project plugin's recipes to its own project only, and withdraws them (#13796)", async () => {
+      // No visibility override anywhere: ownership alone has to do the narrowing.
+      setPluginContributionScope(PROJECT_PLUGIN_A, VIS_PROJECT_A);
+      const localRecipe = {
+        id: "acme.local-a.build",
+        origin: { kind: "plugin", pluginId: PROJECT_PLUGIN_A, contributionId: "build" },
+      };
+      contributionsMock.recipes = [globalRecipe, localRecipe];
+      const owner = fakeWebContents(51);
+      const other = fakeWebContents(52);
+      const unbound = fakeWebContents(53);
+      registryMock.getRegisteredProjectViews.mockReturnValue([
+        { webContents: owner, projectId: VIS_PROJECT_A },
+        { webContents: other, projectId: VIS_PROJECT_B },
+      ]);
+      registryMock.getAllAppWebContents.mockReturnValue([owner, other, unbound]);
+      const b = makeBroadcaster();
+      const projectPushes = () =>
+        ipcUtilsMock.broadcastToProjectRenderers.mock.calls.map((call) => [call[0], call[2]]);
+
+      b.scheduleRecipesBroadcast(true);
+      await flush();
+
+      expect(projectPushes()).toEqual([
+        [
+          VIS_PROJECT_A,
+          {
+            name: "plugin:recipes-changed",
+            payload: { recipes: [globalRecipe, localRecipe], complete: true },
+          },
+        ],
+        [
+          VIS_PROJECT_B,
+          { name: "plugin:recipes-changed", payload: { recipes: [globalRecipe], complete: true } },
+        ],
+      ]);
+      expect(sentPayloads(unbound, "plugin:recipes-changed")).toEqual([
+        { recipes: [globalRecipe], complete: true },
+      ]);
+
+      // The plugin is switched off: its recipes leave the registry and the
+      // owner's next snapshot is authoritative without them.
+      ipcUtilsMock.broadcastToProjectRenderers.mockClear();
+      contributionsMock.recipes = [globalRecipe];
+      b.scheduleRecipesBroadcast(true);
+      await flush();
+
+      expect(projectPushes()[0]).toEqual([
+        VIS_PROJECT_A,
+        { name: "plugin:recipes-changed", payload: { recipes: [globalRecipe], complete: true } },
+      ]);
+    });
   });
 
   describe("file decorations (#13765)", () => {

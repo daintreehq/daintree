@@ -3852,6 +3852,29 @@ describe("recipeStore", () => {
       expect(useRecipeStore.getState().recipes.map((r) => r.id)).not.toContain("acme.tools.deploy");
     });
 
+    it("rolls back only the pin when the plugin reloaded the recipe mid-write (#13796)", async () => {
+      useRecipeStore.getState().setPluginRecipes([pluginRecipe({ showInEmptyState: false })]);
+      let rejectWrite: (error: Error) => void = () => {};
+      pluginUpdateMetadataMock.mockReturnValueOnce(
+        new Promise((_, reject) => (rejectWrite = reject))
+      );
+
+      const pending = useRecipeStore
+        .getState()
+        .updateRecipe("acme.tools.deploy", { showInEmptyState: true });
+      // A dev reload replaces the recipe's content under the same id.
+      const reloaded = [{ type: "terminal" as const, command: "npm run build" }];
+      useRecipeStore
+        .getState()
+        .setPluginRecipes([pluginRecipe({ showInEmptyState: true, terminals: reloaded })]);
+      rejectWrite(new Error("disk full"));
+      await expect(pending).rejects.toThrow(/disk full/);
+
+      const [row] = useRecipeStore.getState().pluginRecipes;
+      expect(row?.showInEmptyState).toBe(false);
+      expect(row?.terminals).toEqual(reloaded);
+    });
+
     it("names a project plugin by its manifest id in edit and delete refusals (#13796)", async () => {
       const instanceKey = "project__0123abcd__acme.local";
       useRecipeStore.getState().setPluginRecipes([

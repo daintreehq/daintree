@@ -2759,21 +2759,6 @@ describe("plugin install jobs (#11302)", () => {
       await expect(recordUse(sender, local.id, 1)).resolves.toEqual(local);
       await expect(update(sender, local.id, { showInEmptyState: true })).resolves.toEqual(local);
     });
-
-    it("does not hand back a recipe its plugin withdrew from the sender's project mid-write (#13796)", async () => {
-      mockGetPluginRecipes.mockReturnValue([registered]);
-      mockGetProjectForWebContents.mockReturnValue("project-a");
-      mockUpdatePluginRecipeMetadata.mockImplementation(async () => {
-        hidePluginInProject("project-a", "acme.tools");
-        return registered;
-      });
-
-      await expect(
-        getHandler("plugin:recipe-metadata-update")(sender, registered.id, {
-          showInEmptyState: true,
-        })
-      ).rejects.toThrow(/not found/);
-    });
   });
 });
 
