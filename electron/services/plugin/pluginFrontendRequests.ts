@@ -174,6 +174,12 @@ export const PluginToastPayloadSchema = z.object({
   /** Already prefixed with the plugin's name by the host. */
   message: z.string().min(1).max(2400),
   durationMs: z.number().int().positive().max(60_000).optional(),
+  /**
+   * Names the plugin in an overflow summary. Absent from an older host, and
+   * one that is unusable (a manifest's display name is unbounded) is dropped
+   * rather than costing the toast.
+   */
+  pluginDisplayName: z.string().min(1).max(256).optional().catch(undefined),
 });
 export type PluginToastPayload = z.infer<typeof PluginToastPayloadSchema>;
 

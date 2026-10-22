@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import path from "path";
 
 const ipcUtilsMock = vi.hoisted(() => ({
@@ -50,6 +50,12 @@ vi.mock("../pluginNotificationPager.js", () => pager);
 import { createHost, type PluginHostFactoryDeps } from "../PluginHostFactory.js";
 import { CHANNELS } from "../../../ipc/channels.js";
 import { resetPluginPushBatcherForTests } from "../pluginPushBatcher.js";
+import {
+  _resetPluginFrontendRoutingForTesting,
+  setPluginFrontendRouter,
+} from "../pluginFrontendRouting.js";
+import { PluginFrontendMethod } from "../pluginFrontendRequests.js";
+import type { ClientEndpoint } from "../../../ipc/endpoint.js";
 import {
   PLUGIN_TOAST_BURST,
   PLUGIN_TOAST_REFILL_MS,
@@ -148,6 +154,7 @@ describe("host.notify", () => {
       title: "Acme: Run needs you",
       message: "Approve the plan",
       rateLimitKey: "plugin:acme",
+      rateLimitLabel: "Acme",
       pluginActions: [{ label: "Open", actionId: "acme.openRun", args: { runId: "r1" } }],
       replaceKey: "plugin:acme:run-r1",
     });
@@ -342,5 +349,51 @@ describe("host.notify", () => {
       id: expect.any(String),
     });
     expect(lastToast()).toBeUndefined();
+  });
+});
+
+describe("overflow label (#13760)", () => {
+  afterEach(() => {
+    _resetPluginFrontendRoutingForTesting();
+  });
+
+  it("keys a project instance's toasts by its instance key but labels them by display name", async () => {
+    const instanceId = `project__${PROJECT_A}__acme`;
+    const deps = makeDeps();
+    (deps.plugins as Map<string, LoadedPlugin>).set(instanceId, deps.plugins.get(PLUGIN_ID)!);
+    const { host } = createHost(deps, instanceId, BOUND);
+
+    await host.showToast({ message: "Synced", type: "success" });
+    expect(lastToast()).toMatchObject({
+      rateLimitKey: `plugin:${instanceId}`,
+      rateLimitLabel: "Acme",
+    });
+
+    await host.notify({ title: "t", body: "b" });
+    expect(lastToast()).toMatchObject({
+      rateLimitKey: `plugin:${instanceId}`,
+      rateLimitLabel: "Acme",
+    });
+  });
+
+  it("sends the display name with a toast for a window on another machine", async () => {
+    const request = vi.fn((_method: string, _payload: unknown) => Promise.resolve(null));
+    setPluginFrontendRouter({
+      resolve: () => ({
+        kind: "remote",
+        endpoint: { request, isClosed: () => false } as unknown as ClientEndpoint,
+      }),
+      onChange: () => () => {},
+    });
+    const { host } = createHost(makeDeps(), PLUGIN_ID, BOUND);
+
+    await host.showToast({ message: "Synced", type: "success" });
+    await host.notify({ title: "t", body: "b" });
+
+    const toasts = request.mock.calls.filter(([method]) => method === PluginFrontendMethod.TOAST);
+    expect(toasts.map(([, payload]) => payload)).toEqual([
+      expect.objectContaining({ message: "Acme: Synced", pluginDisplayName: "Acme" }),
+      expect.objectContaining({ message: "Acme: t — b", pluginDisplayName: "Acme" }),
+    ]);
   });
 });

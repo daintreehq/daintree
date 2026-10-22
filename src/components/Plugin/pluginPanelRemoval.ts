@@ -51,6 +51,7 @@ export function announcePluginRemovedFromHost(
     title: "Plugin removed",
     message: `${pluginName} was removed from ${hostName}. Its panels stay open until you close them.`,
     rateLimitKey: `plugin-removed-from-host:${pluginId}`,
+    rateLimitLabel: pluginName,
     context: { eventKind: "connectivity" },
   });
   return true;

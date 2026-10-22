@@ -37,6 +37,7 @@ type ToastCallback = (payload: {
   message: string;
   duration?: number;
   rateLimitKey?: string;
+  rateLimitLabel?: string;
   priority?: "high" | "low" | "watch";
   action?: { label: string; ipcChannel: string; data?: string };
   hostSwitchFailure?: { hostId: string; projectId: string; code: string | null };
@@ -218,6 +219,26 @@ describe("useMainProcessToastListener", () => {
     });
 
     expect(notifyMock).toHaveBeenCalledWith(expect.objectContaining({ priority: "low" }));
+  });
+
+  it("threads the overflow label beside the rate-limit key (#13760)", () => {
+    renderHook(() => useMainProcessToastListener());
+
+    act(() => {
+      capturedCallback!({
+        type: "info",
+        message: "Acme Records: Synced",
+        rateLimitKey: "plugin:project__abc__acme.records",
+        rateLimitLabel: "Acme Records",
+      });
+    });
+
+    expect(notifyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        rateLimitKey: "plugin:project__abc__acme.records",
+        rateLimitLabel: "Acme Records",
+      })
+    );
   });
 
   it("calls notify with an action that triggers checkForUpdates", () => {

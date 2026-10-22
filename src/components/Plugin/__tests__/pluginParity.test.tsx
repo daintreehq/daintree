@@ -175,6 +175,7 @@ describe("PluginNotOnHostPlaceholder", () => {
     expect(notifyMock.mock.calls[0]![0]).toMatchObject({
       title: "Plugin removed",
       message: expect.stringContaining("Markdown Preview was removed from studio-01"),
+      rateLimitLabel: "Markdown Preview",
     });
 
     notifyMock.mockClear();

@@ -1904,11 +1904,13 @@ export class PluginService {
     // distributions never register it, so point at the download page instead.
     // The Store owns installs there, so a daintree.org download is wrong.
     const offerDownload = mismatch === "app-too-old" && !isWindowsStoreBuild();
+    const name = manifest.displayName || manifest.name;
     const payload = {
       type: "warning" as const,
       title: "Plugin version mismatch",
-      message: `"${manifest.displayName ?? manifest.name}" targets Daintree ${requiredRange} and may not work on ${this.appVersion}.${remedy}`,
+      message: `"${name}" targets Daintree ${requiredRange} and may not work on ${this.appVersion}.${remedy}`,
       rateLimitKey: `plugin-engine:${pluginId}`,
+      rateLimitLabel: name,
       // An action would otherwise make the toast sticky, and several mismatched
       // plugins at launch would stack up.
       duration: 8000,
@@ -7199,7 +7201,7 @@ export class PluginService {
   getPluginDisplayName(pluginId: string): string {
     const manifest = this.plugins.get(pluginId)?.manifest;
     if (!manifest) return pluginManifestIdFromInstanceKey(pluginId);
-    return manifest.displayName ?? manifest.name;
+    return manifest.displayName || manifest.name;
   }
 
   /**

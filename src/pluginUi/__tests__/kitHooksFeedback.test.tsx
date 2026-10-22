@@ -275,6 +275,7 @@ describe("useToast", () => {
     expect(sent.type).toBe("success");
     expect(sent.message).toBe("Snippets Manager: Snippet copied");
     expect(sent.rateLimitKey).toBe("plugin:acme.snippets");
+    expect(sent.rateLimitLabel).toBe("Snippets Manager");
     expect(sent.duration).toBe(60_000);
     expect(sent.priority).toBeUndefined();
     const action = actionOf(sent);
@@ -361,6 +362,19 @@ describe("useToast", () => {
 
   it("never shows a project plugin's instance key", () => {
     expect(pluginDisplayName("project__p123__acme.notes")).toBe("acme.notes");
+  });
+
+  it("labels a project plugin's overflow by name while keying it by instance (#13760)", () => {
+    const projectOwned = ({ children }: { children: ReactNode }) =>
+      createElement(
+        PluginKitOwnerContext.Provider,
+        { value: "project__p123__acme.notes" },
+        children
+      );
+    const { result } = renderHook(() => kit.useToast(), { wrapper: projectOwned });
+    act(() => void result.current.show({ message: "Saved" }));
+    expect(payload().rateLimitKey).toBe("plugin:project__p123__acme.notes");
+    expect(payload().rateLimitLabel).toBe("acme.notes");
   });
 });
 

@@ -1398,6 +1398,7 @@ describe("createHost — showToast", () => {
       message: "acme.toast-test: Synced 12 issues",
       duration: undefined,
       rateLimitKey: "plugin:acme.toast-test",
+      rateLimitLabel: "acme.toast-test",
     });
   });
 
@@ -1424,10 +1425,36 @@ describe("createHost — showToast", () => {
       type: "success",
       message: "Video Manager: Synced 12 videos",
       duration: undefined,
-      // The bucket key stays the raw id: never rendered, and two plugins may
-      // share a display name.
+      // The bucket key stays the raw id, since two plugins may share a
+      // display name; an overflow summary prints the label (#13760).
       rateLimitKey: "plugin:acme.toast-named",
+      rateLimitLabel: "Video Manager",
     });
+  });
+
+  it("names a plugin with a blank displayName by its manifest name (#13760)", async () => {
+    await writePlugin("toast-blank", {
+      name: "acme.toast-blank",
+      version: "1.0.0",
+      displayName: "",
+    });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: ToastHostShape }).createHost(
+      "acme.toast-blank"
+    );
+
+    broadcastToRendererMock.mockClear();
+    await host.showToast({ message: "Synced", type: "success" });
+
+    expect(broadcastToRendererMock).toHaveBeenCalledWith(
+      CHANNELS.NOTIFICATION_SHOW_TOAST,
+      expect.objectContaining({
+        message: "acme.toast-blank: Synced",
+        rateLimitLabel: "acme.toast-blank",
+      })
+    );
   });
 
   it("forwards durationMs as duration", async () => {
@@ -1447,6 +1474,7 @@ describe("createHost — showToast", () => {
       message: "acme.toast-duration: Saved",
       duration: 3000,
       rateLimitKey: "plugin:acme.toast-duration",
+      rateLimitLabel: "acme.toast-duration",
     });
   });
 
@@ -1554,6 +1582,7 @@ describe("createHost — showToast", () => {
       message: "acme.toast-revoke: Still alive",
       duration: undefined,
       rateLimitKey: "plugin:acme.toast-revoke",
+      rateLimitLabel: "acme.toast-revoke",
     });
   });
 
