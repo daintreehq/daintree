@@ -2536,6 +2536,18 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       }) => void
     ): () => void;
     /**
+     * Subscribe to plugin terminal header statuses (#13802). The callback fires
+     * with one plugin's COMPLETE map for one project (terminalId → status); an
+     * empty map clears that plugin's statuses there. Returns a cleanup.
+     */
+    onTerminalStatusesChanged(
+      callback: (payload: {
+        pluginId: string;
+        projectId: string;
+        statuses: Record<string, import("../plugin.js").PluginTerminalStatus>;
+      }) => void
+    ): () => void;
+    /**
      * Subscribe to plugin runtime panel menus (#13213). The callback fires with
      * one plugin's COMPLETE current map (`panelId → items`); an empty map clears
      * that plugin's lists, as on unload. Returns a cleanup.

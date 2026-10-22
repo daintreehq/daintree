@@ -49,6 +49,7 @@ import type {
   SetContextParams,
   SetWorktreeCardStatusParams,
   SetWorktreeReviewChecksParams,
+  SetTerminalStatusParams,
   SetPanelMenuItemsParams,
   RegisterActionParams,
   RegisterFileDecorationProviderParams,
@@ -864,6 +865,11 @@ export class PluginDevWorkerMainBridge {
       case "setWorktreeReviewChecks": {
         const p = params as SetWorktreeReviewChecksParams;
         await this.host.setWorktreeReviewChecks(p.worktreeId, p.checks);
+        return undefined;
+      }
+      case "setTerminalStatus": {
+        const p = params as SetTerminalStatusParams;
+        await this.host.setTerminalStatus(p.terminalId, p.status);
         return undefined;
       }
       case "restartWorker":

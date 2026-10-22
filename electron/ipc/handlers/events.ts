@@ -119,6 +119,8 @@ const EVENT_BUS_BRIDGED_MANIFEST = {
   // PluginService sends this itself, to the status's own project only.
   "plugin:worktree-card-statuses-changed": "external",
   "plugin:worktree-review-checks-changed": "external",
+  // PluginService sends this itself, to the status's own project only.
+  "plugin:terminal-statuses-changed": "external",
   // Project-local plugin events: ProjectPluginController sends them itself via
   // `broadcastToProjectRenderers`, so only that project's views receive them.
   // Relaying here would fan them out to every window.

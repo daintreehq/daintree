@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { CHANNELS } from "../../ipc/channels.js";
 import { getWindowRegistry, getProjectViewManager } from "../../window/windowRef.js";
 import { onWebContentsDestroyed } from "../../window/webContentsDestroyed.js";
+import { getProjectForWebContents } from "../../window/webContentsRegistry.js";
 import { resolveTargetWebContents, type PluginTargetProjectId } from "./rendererTargeting.js";
 import { thawThenSend } from "../../utils/thawThenSend.js";
 import type { ClientEndpoint } from "../../ipc/endpoint.js";
@@ -19,6 +20,7 @@ import type {
 } from "../../../shared/types/actions.js";
 import type { PluginAgentPane } from "../../../shared/types/plugin.js";
 import { maskTerminalInOtherProject } from "../../../shared/utils/terminalInOtherProject.js";
+import { isLocalHostId, parseHostScopedKey } from "../../../shared/types/remoteHosts.js";
 import { z } from "zod";
 
 /** More panes than any grid holds; a longer answer is truncated, not trusted. */
@@ -517,6 +519,43 @@ export class PluginRendererDispatcher {
       projectId,
       detail: "Plugin agents.list",
     });
+  }
+
+  /**
+   * {@link sendAgentsListToRenderer} that also names the project the panes came
+   * from (#13802), taken from the very view that answered so a focus change
+   * mid-read cannot attribute them to another project. `projectId` is `null`
+   * when no local view answered (Host-mode routing, no view): the panes carry
+   * no project of their own, so a caller must not file anything against them.
+   */
+  async sendAgentsListWithProject(
+    projectId?: PluginTargetProjectId,
+    pluginId?: string
+  ): Promise<{ projectId: string | null; agents: PluginAgentPane[] }> {
+    if (projectId != null) {
+      return { projectId, agents: await this.sendAgentsListToRenderer(projectId, pluginId) };
+    }
+    const frontend = this.routedFrontend(null, pluginId);
+    if ((frontend !== null && frontend.kind !== "local") || this.deps.isDisposed()) {
+      return { projectId: null, agents: [] };
+    }
+    const webContents = resolveTargetWebContents(null, "Plugin agents.list");
+    if (!webContents) return { projectId: null, agents: [] };
+    const viewKey = getProjectForWebContents(webContents.id);
+    // A view bound to another machine's host is keyed `<hostId>:<projectId>`;
+    // this machine's plugins have no business filing statuses against it.
+    const owner =
+      viewKey !== null && isLocalHostId(parseHostScopedKey(viewKey).hostId) ? viewKey : null;
+    // Same response shape as `sendAgentsListToRenderer`: the channel's listener
+    // keeps the first extractor registered, so the two must agree.
+    const agents = await this.requestFromWebContents<PluginAgentPane[]>(webContents, {
+      requestChannel: CHANNELS.PLUGIN_AGENTS_LIST_REQUEST,
+      responseChannel: CHANNELS.PLUGIN_AGENTS_LIST_RESPONSE,
+      buildRequest: (requestId) => ({ requestId }),
+      extract: (payload) => projectAgentPanes((payload as { agents?: unknown }).agents),
+      fallback: [],
+    });
+    return { projectId: owner, agents };
   }
 
   /**

@@ -1173,6 +1173,27 @@ The `worktree.reviewReadiness` tool lists them in a separate `pluginChecks` arra
 
 Checks are not persisted. They are cleared when the worktree is removed, when its project closes, and when your plugin unloads or its worker is replaced, so republish them after a restart. Not revoke-guarded, and a silent no-op once the plugin unloads. `createMockHost` applies the same checks against its seeded worktrees, records accepted calls in `setWorktreeReviewChecksCalls`, and holds the current lists in `worktreeReviewChecks`.
 
+## `setTerminalStatus`
+
+Show a short status of your own on one agent terminal's header: the ticket an agent is working on, or the draft it is editing. It is the terminal twin of [`setWorktreeCardStatus`](#setworktreecardstatus), with the same `label`, `tooltip` and `command` and the same limits. Pass `null` to clear it.
+
+```ts
+const panes = await host.agents.list();
+for (const pane of panes) {
+  const ticket = ticketFor(pane);
+  await host.setTerminalStatus(
+    pane.terminalId,
+    ticket ? { label: ticket.key, tooltip: ticket.title, command: "acme.tracker.openTicket" } : null
+  );
+}
+```
+
+The call needs `agent:read`, and `terminalId` is the `terminalId` of an entry in your own `host.agents.list()` at the moment of the call. A project plugin reaches only its own project's agent terminals, and an app-global plugin only the focused project's. An id outside that set rejects, and so does a call made while the list cannot be read, which leaves what is already shown alone. A plugin holds one status per terminal, up to 256 terminals per project.
+
+A click on a chip with a registered `command` dispatches it with `{ terminalId, worktreeId? }`, the terminal's id and the worktree it sits in, when it has one. Until the command is registered the chip stays a plain status.
+
+The chip sits in the terminal's header beside the other metadata chips, named after its plugin in its tooltip and accessible name. It takes no colour and no glyph: the pane's accent belongs to agent state. Statuses are not persisted. They are cleared when the project closes and when the plugin unloads or its worker is replaced, so republish them after a restart.
+
 ## `setPanelMenuItems`
 
 Publish the contextual actions that the ⋯ and right-click menus of one of your panels offer right now. It is the backend twin of the view's `setMenuItems`, and the only way a PTY-backed panel, which has no view, gets entries of its own:

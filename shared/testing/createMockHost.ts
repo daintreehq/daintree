@@ -11,6 +11,7 @@
 
 import {
   PLUGIN_NOTIFY_MAX_ACTIONS,
+  PLUGIN_TERMINAL_STATUS_MAX_PER_PROJECT,
   pluginManifestIdFromInstanceKey,
   projectIdFromPluginInstanceKey,
 } from "../types/plugin.js";
@@ -29,6 +30,7 @@ import { normalizePanelMenuItems } from "../utils/pluginPanelMenuItems.js";
 import { applyPluginContextEntry, validatePluginContextEntry } from "../utils/pluginContextKeys.js";
 import { validatePluginWorktreeCardStatus } from "../utils/pluginWorktreeCardStatus.js";
 import { validatePluginWorktreeReviewChecks } from "../utils/pluginWorktreeReviewChecks.js";
+import { validatePluginTerminalStatus } from "../utils/pluginTerminalStatus.js";
 import {
   PLUGIN_INVOKE_MAX_RESULT_BYTES,
   PLUGIN_SUBSCRIPTION_DEFAULT_DEBOUNCE_MS,
@@ -108,6 +110,7 @@ import type {
   PluginContextValue,
   PluginWorktreeCardStatus,
   PluginWorktreeReviewCheck,
+  PluginTerminalStatus,
   SettingDefinition,
   SettingsApi,
   StorageApi,
@@ -246,6 +249,12 @@ export interface SetWorktreeCardStatusRecord {
   status: PluginWorktreeCardStatus | null;
 }
 
+/** Captured `host.setTerminalStatus(terminalId, status)` calls. `null` clears. */
+export interface SetTerminalStatusRecord {
+  terminalId: string;
+  status: PluginTerminalStatus | null;
+}
+
 /** Captured `host.setPanelBadge(panelId, badge)` calls. `null` clears. */
 export interface SetPanelBadgeRecord {
   panelId: string;
@@ -337,6 +346,10 @@ export interface MockHostState {
   readonly setWorktreeReviewChecksCalls: ReadonlyArray<SetWorktreeReviewChecksRecord>;
   /** The readiness checks this plugin shows right now, keyed by worktree `id`. */
   readonly worktreeReviewChecks: ReadonlyMap<string, readonly PluginWorktreeReviewCheck[]>;
+  /** Accepted `host.setTerminalStatus` calls, in order. */
+  readonly setTerminalStatusCalls: ReadonlyArray<SetTerminalStatusRecord>;
+  /** The terminal chips this plugin shows right now, keyed by `terminalId`. */
+  readonly terminalStatuses: ReadonlyMap<string, PluginTerminalStatus>;
   readonly setPanelMenuItemsCalls: ReadonlyArray<SetPanelMenuItemsRecord>;
   /**
    * Panel ids passed to `host.reloadPanel(panelId)`, in order (#12610). Only
@@ -1144,6 +1157,8 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
   const worktreeCardStatuses = new Map<string, PluginWorktreeCardStatus>();
   const setWorktreeReviewChecksCalls: SetWorktreeReviewChecksRecord[] = [];
   const worktreeReviewChecks = new Map<string, readonly PluginWorktreeReviewCheck[]>();
+  const setTerminalStatusCalls: SetTerminalStatusRecord[] = [];
+  const terminalStatuses = new Map<string, PluginTerminalStatus>();
   const setPanelMenuItemsCalls: SetPanelMenuItemsRecord[] = [];
   const reloadPanelCalls: string[] = [];
   const restartWorkerCalls: WorkerRestartResult[] = [];
@@ -2351,6 +2366,35 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
       else worktreeReviewChecks.set(target.id, entry.checks);
       setWorktreeReviewChecksCalls.push({ worktreeId: target.id, checks: entry.checks });
     },
+    async setTerminalStatus(terminalId, status) {
+      // Same order as production: capability, then the shared validator, then
+      // membership in whatever `agents.list()` answers right now.
+      if (!capabilities.has("agent:read")) {
+        throw new Error(
+          'PERMISSION_REQUIRED: setTerminalStatus requires "agent:read", which is not declared in manifest.capabilities'
+        );
+      }
+      const entry = validatePluginTerminalStatus(terminalId, status, mockManifestId, pluginId);
+      if (!entry.ok) throw new Error(`setTerminalStatus: ${entry.error}`);
+      if (!agentPanes.some((pane) => pane.terminalId === entry.terminalId)) {
+        throw new Error(
+          `setTerminalStatus: "${entry.terminalId}" is not a terminal this plugin can see`
+        );
+      }
+      if (entry.status === null) terminalStatuses.delete(entry.terminalId);
+      else {
+        if (
+          !terminalStatuses.has(entry.terminalId) &&
+          terminalStatuses.size >= PLUGIN_TERMINAL_STATUS_MAX_PER_PROJECT
+        ) {
+          throw new Error(
+            `setTerminalStatus: at most ${PLUGIN_TERMINAL_STATUS_MAX_PER_PROJECT} terminals can hold a status at once`
+          );
+        }
+        terminalStatuses.set(entry.terminalId, entry.status);
+      }
+      setTerminalStatusCalls.push({ terminalId: entry.terminalId, status: entry.status });
+    },
     setPanelMenuItems(panelId, items) {
       // Vetted by the host's own normalizer, so a list the real host refuses
       // rejects here too.
@@ -3021,6 +3065,8 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
     worktreeCardStatuses,
     setWorktreeReviewChecksCalls,
     worktreeReviewChecks,
+    setTerminalStatusCalls,
+    terminalStatuses,
     setPanelMenuItemsCalls,
     reloadPanelCalls,
     restartWorkerCalls,

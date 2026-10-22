@@ -117,6 +117,7 @@ interface Harness {
   sendActionsListToRenderer: ReturnType<typeof vi.fn>;
   sendActionsGetToRenderer: ReturnType<typeof vi.fn>;
   requestPrompt: ReturnType<typeof vi.fn>;
+  sendAgentsListWithProject: ReturnType<typeof vi.fn>;
   handlers: Map<string, WorktreeHandler[]>;
 }
 
@@ -131,6 +132,10 @@ function makeHarness(): Harness {
   const sendActionsListToRenderer = vi.fn(async () => []);
   const sendActionsGetToRenderer = vi.fn(async () => null);
   const requestPrompt = vi.fn(async () => undefined);
+  const sendAgentsListWithProject = vi.fn(async (projectId?: string | null) => ({
+    projectId: projectId ?? null,
+    agents: [] as Array<{ terminalId: string }>,
+  }));
 
   const deps = {
     plugins,
@@ -152,11 +157,17 @@ function makeHarness(): Harness {
     worktreeReviewChecksGeneration: () => 0,
     worktreeCardTargetRevision: () => 0,
     isWorktreeCardTargetRetired: () => false,
+    pluginTerminalStatuses: new Map(),
+    emitTerminalStatuses: () => {},
+    terminalStatusGeneration: () => 0,
+    terminalStatusCloseRevision: () => 0,
+    isTerminalStatusProjectClosed: () => false,
     pluginPanelMenus: new Map(),
     pluginFsWatchers: new Map(),
     broadcaster: { schedulePluginActionsBroadcast: vi.fn() },
     panelLifecycleBroker: { subscribe: vi.fn(() => () => {}) },
     dispatcher: {
+      sendAgentsListWithProject,
       sendDispatchToRenderer,
       sendActionsListToRenderer,
       sendActionsGetToRenderer,
@@ -198,6 +209,7 @@ function makeHarness(): Harness {
     sendActionsListToRenderer,
     sendActionsGetToRenderer,
     requestPrompt,
+    sendAgentsListWithProject,
     handlers,
   };
 }
@@ -2375,5 +2387,224 @@ describe("createHost setWorktreeReviewChecks", () => {
     await expect(stale).resolves.toBeUndefined();
     expect(h.deps.pluginWorktreeReviewChecks.size).toBe(0);
     expect(emitted).not.toHaveBeenCalled();
+  });
+});
+
+describe("createHost setTerminalStatus", () => {
+  function withEmitter(h: Harness): ReturnType<typeof vi.fn> {
+    const emitted = vi.fn();
+    h.deps.emitTerminalStatuses = emitted;
+    return emitted;
+  }
+
+  function sees(h: Harness, projectId: string | null, ...terminalIds: string[]): void {
+    h.sendAgentsListWithProject.mockResolvedValue({
+      projectId,
+      agents: terminalIds.map((terminalId) => ({ terminalId })),
+    });
+  }
+
+  it("marks a terminal the bound project's agents.list names, and publishes that project", async () => {
+    const h = makeHarness();
+    const emitted = withEmitter(h);
+    sees(h, PROJECT_A, "term-1");
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+
+    await host.setTerminalStatus("term-1", { label: "INV-0042", tooltip: "Checkout" });
+
+    expect(h.sendAgentsListWithProject).toHaveBeenCalledWith(PROJECT_A, PLUGIN_ID);
+    expect(h.deps.pluginTerminalStatuses.get(PLUGIN_ID)?.get(PROJECT_A)?.get("term-1")).toEqual({
+      label: "INV-0042",
+      tooltip: "Checkout",
+    });
+    expect(emitted).toHaveBeenCalledWith(PLUGIN_ID, PROJECT_A);
+  });
+
+  it("files an app-global plugin's status under the project the answering view belongs to", async () => {
+    const h = makeHarness();
+    withEmitter(h);
+    sees(h, "project-focused", "term-1");
+    const { host } = createHost(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING);
+
+    await host.setTerminalStatus("term-1", { label: "x" });
+
+    expect(h.deps.pluginTerminalStatuses.get(PLUGIN_ID)?.has("project-focused")).toBe(true);
+  });
+
+  it("rejects without agent:read, before reading anything", async () => {
+    const h = makeHarness();
+    h.deps.declaredCapabilities = () => new Set();
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+
+    await expect(host.setTerminalStatus("term-1", { label: "x" })).rejects.toThrow(
+      /PERMISSION_REQUIRED/
+    );
+    expect(h.sendAgentsListWithProject).not.toHaveBeenCalled();
+  });
+
+  it("rejects a terminal the list does not name and stores nothing", async () => {
+    const h = makeHarness();
+    const emitted = withEmitter(h);
+    sees(h, PROJECT_A, "term-1");
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+
+    await expect(host.setTerminalStatus("term-elsewhere", { label: "x" })).rejects.toThrow(
+      /not a terminal this plugin can see/
+    );
+    expect(h.deps.pluginTerminalStatuses.size).toBe(0);
+    expect(emitted).not.toHaveBeenCalled();
+  });
+
+  it("rejects when no view answered, and leaves a shown status alone", async () => {
+    const h = makeHarness();
+    const emitted = withEmitter(h);
+    sees(h, PROJECT_A, "term-1");
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+    await host.setTerminalStatus("term-1", { label: "up" });
+    emitted.mockClear();
+
+    sees(h, null);
+    await expect(host.setTerminalStatus("term-1", null)).rejects.toThrow(/unavailable/);
+    expect(h.deps.pluginTerminalStatuses.get(PLUGIN_ID)?.get(PROJECT_A)?.size).toBe(1);
+    expect(emitted).not.toHaveBeenCalled();
+  });
+
+  it("rejects an invalid status before reading anything", async () => {
+    const h = makeHarness();
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+
+    await expect(host.setTerminalStatus("term-1", { label: "" })).rejects.toThrow(
+      /setTerminalStatus: status.label must not be empty/
+    );
+    expect(h.sendAgentsListWithProject).not.toHaveBeenCalled();
+  });
+
+  it("clears, and sends nothing for an unchanged status", async () => {
+    const h = makeHarness();
+    const emitted = withEmitter(h);
+    sees(h, PROJECT_A, "term-1");
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+
+    await host.setTerminalStatus("term-1", { label: "up" });
+    await host.setTerminalStatus("term-1", { label: "up" });
+    expect(emitted).toHaveBeenCalledTimes(1);
+
+    await host.setTerminalStatus("term-1", null);
+    expect(h.deps.pluginTerminalStatuses.size).toBe(0);
+    expect(emitted).toHaveBeenCalledTimes(2);
+  });
+
+  it("drops a call whose plugin generation was cleared while it read", async () => {
+    const h = makeHarness();
+    const emitted = withEmitter(h);
+    let generation = 0;
+    h.deps.terminalStatusGeneration = () => generation;
+    h.sendAgentsListWithProject.mockImplementation(async () => {
+      generation += 1;
+      return { projectId: PROJECT_A, agents: [{ terminalId: "term-1" }] };
+    });
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+
+    await host.setTerminalStatus("term-1", { label: "x" });
+
+    expect(h.deps.pluginTerminalStatuses.size).toBe(0);
+    expect(emitted).not.toHaveBeenCalled();
+  });
+
+  it("refuses a call whose project closed while it read", async () => {
+    const h = makeHarness();
+    withEmitter(h);
+    sees(h, PROJECT_A, "term-1");
+    h.deps.isTerminalStatusProjectClosed = () => true;
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+
+    await expect(host.setTerminalStatus("term-1", { label: "x" })).rejects.toThrow(/closed/);
+    expect(h.deps.pluginTerminalStatuses.size).toBe(0);
+  });
+
+  it("keeps a set then a clear in call order", async () => {
+    const h = makeHarness();
+    withEmitter(h);
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+    let releaseFirst: (() => void) | undefined;
+    h.sendAgentsListWithProject
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            releaseFirst = () =>
+              resolve({ projectId: PROJECT_A, agents: [{ terminalId: "term-1" }] });
+          })
+      )
+      .mockResolvedValue({ projectId: PROJECT_A, agents: [{ terminalId: "term-1" }] });
+
+    const set = host.setTerminalStatus("term-1", { label: "x" });
+    const clear = host.setTerminalStatus("term-1", null);
+    await flush();
+    releaseFirst?.();
+    await Promise.all([set, clear]);
+
+    expect(h.deps.pluginTerminalStatuses.size).toBe(0);
+  });
+
+  it("stores a project plugin's command in its instance namespace", async () => {
+    const instance = `project__${PROJECT_A}__acme.status`;
+    const h = makeHarness();
+    withEmitter(h);
+    h.deps.plugins.set(instance, fakePlugin());
+    sees(h, PROJECT_A, "term-1");
+    const { host } = createHost(h.deps, instance, BOUND);
+
+    await host.setTerminalStatus("term-1", { label: "Draft", command: "acme.status.open" });
+
+    expect(h.deps.pluginTerminalStatuses.get(instance)?.get(PROJECT_A)?.get("term-1")).toEqual({
+      label: "Draft",
+      command: `${instance}.open`,
+    });
+  });
+
+  it("keeps a chip the list omits until the cap needs its slot", async () => {
+    const h = makeHarness();
+    withEmitter(h);
+    const ids = Array.from({ length: 256 }, (_, i) => `t-${i}`);
+    sees(h, PROJECT_A, ...ids, "new");
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+    for (const id of ids) await host.setTerminalStatus(id, { label: "x" });
+
+    sees(h, PROJECT_A, ...ids.slice(1), "new");
+    await host.setTerminalStatus("t-1", { label: "y" });
+    expect(h.deps.pluginTerminalStatuses.get(PLUGIN_ID)!.get(PROJECT_A)!.has("t-0")).toBe(true);
+
+    await host.setTerminalStatus("new", { label: "z" });
+    const held = h.deps.pluginTerminalStatuses.get(PLUGIN_ID)!.get(PROJECT_A)!;
+    expect(held.has("t-0")).toBe(false);
+    expect(held.get("new")).toEqual({ label: "z" });
+  });
+
+  it("rejects, rather than throws, when the status cannot be read", async () => {
+    const h = makeHarness();
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+    const hostile = new Proxy(
+      {},
+      {
+        ownKeys() {
+          throw new Error("boom");
+        },
+      }
+    );
+    await expect(host.setTerminalStatus("term-1", hostile as never)).rejects.toThrow(
+      /could not be read/
+    );
+  });
+
+  it("caps the terminals one plugin may mark in a project", async () => {
+    const h = makeHarness();
+    withEmitter(h);
+    const ids = Array.from({ length: 257 }, (_, i) => `t-${i}`);
+    sees(h, PROJECT_A, ...ids);
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+    for (const id of ids.slice(0, 256)) await host.setTerminalStatus(id, { label: "x" });
+
+    await expect(host.setTerminalStatus("t-256", { label: "x" })).rejects.toThrow(/at most 256/);
+    await expect(host.setTerminalStatus("t-0", { label: "y" })).resolves.toBeUndefined();
   });
 });

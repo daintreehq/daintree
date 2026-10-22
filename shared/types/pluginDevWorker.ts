@@ -35,6 +35,7 @@ import type {
   PluginContextValue,
   PluginWorktreeCardStatus,
   PluginWorktreeReviewCheck,
+  PluginTerminalStatus,
   PanelMenuItemContribution,
   BuiltInPluginCapability,
   PluginFsWriteOptions,
@@ -74,6 +75,8 @@ export type PluginHostCallMethod =
   // reach is main's answer, and its refusal has to reach the caller (#13704).
   | "setWorktreeCardStatus"
   | "setWorktreeReviewChecks"
+  // Likewise: main decides whether the terminal is one the plugin may reach (#13802).
+  | "setTerminalStatus"
   | "actions.list"
   | "actions.get"
   | "settings.get"
@@ -473,6 +476,12 @@ export interface SetWorktreeCardStatusParams {
 export interface SetWorktreeReviewChecksParams {
   worktreeId: string;
   checks: readonly PluginWorktreeReviewCheck[] | null;
+}
+
+/** Params for `setTerminalStatus` (`host-call`). `null` clears the status. */
+export interface SetTerminalStatusParams {
+  terminalId: string;
+  status: PluginTerminalStatus | null;
 }
 
 /** Params for `setPanelMenuItems` (`host-notify`). `null` clears the list. */
