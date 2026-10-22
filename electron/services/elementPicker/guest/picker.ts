@@ -518,14 +518,10 @@ export function createPicker(host: PickerHost): PickerHandle {
     const rect = node.getBoundingClientRect();
     const label = document.createElement("div");
     label.textContent = describe(node);
-    let top = rect.top - LABEL_HEIGHT - 2;
-    if (top < 0) top = rect.bottom + 2;
-    if (top + LABEL_HEIGHT > innerHeight) top = Math.max(0, rect.top) + 2;
-    top = Math.max(0, Math.min(top, innerHeight - LABEL_HEIGHT));
     style(label, [
       ["position", "fixed"],
       ["left", "0px"],
-      ["top", (top - transform.y) / transform.sy + "px"],
+      ["top", "0px"],
       ["max-width", "320px"],
       ["overflow", "hidden"],
       ["text-overflow", "ellipsis"],
@@ -538,9 +534,20 @@ export function createPicker(host: PickerHost): PickerHandle {
       ["pointer-events", "none"],
     ]);
     layer.appendChild(label);
-    const width = label.getBoundingClientRect().width;
+    // Measured as rendered, so a scaled root's larger label is placed by its
+    // real size; the fallback is for a document with no layout to measure.
+    const measured = label.getBoundingClientRect();
+    const width = measured.width;
+    const height = measured.height > 0 ? measured.height : LABEL_HEIGHT;
+    let top = rect.top - height - 2;
+    if (top < 0) top = rect.bottom + 2;
+    if (top + height > innerHeight) top = Math.max(0, rect.top) + 2;
+    top = Math.max(0, Math.min(top, innerHeight - height));
     const left = Math.max(0, Math.min(rect.left, innerWidth - width));
-    style(label, [["left", (left - transform.x) / transform.sx + "px"]]);
+    style(label, [
+      ["left", (left - transform.x) / transform.sx + "px"],
+      ["top", (top - transform.y) / transform.sy + "px"],
+    ]);
   }
 
   function paint(): void {
@@ -670,9 +677,15 @@ export function createPicker(host: PickerHost): PickerHandle {
     }
     listen(window, "scroll", schedule, passiveCapture, selectTeardown);
     listen(window, "resize", schedule, { passive: true }, selectTeardown);
+    // An image or font arriving, or a transition ending, moves an element
+    // without resizing it or touching the DOM. None of these bubble; all of
+    // them pass `window` in the capture phase.
+    for (const type of ["load", "transitionend", "animationend"]) {
+      listen(window, type, schedule, passiveCapture, selectTeardown);
+    }
     // Layout and structure move with no event at all — an HMR patch, a class
-    // flip, an image arriving. One frame absorbs any number of records, and
-    // neither observer sees the overlay, which lives in a shadow root.
+    // flip. One frame absorbs any number of records, and neither observer
+    // sees the overlay, which lives in a shadow root.
     const mutations = new MutationObserver(schedule);
     mutations.observe(document.documentElement ?? document, {
       childList: true,
@@ -692,10 +705,16 @@ export function createPicker(host: PickerHost): PickerHandle {
     }
   }
 
-  /** Re-observing makes the observer report again, so only when the outlined set changed. */
+  /**
+   * Re-observing makes the observer report again, so only when the outlined
+   * set changed. The root is always watched: the page growing above an
+   * element moves it.
+   */
   function trackOutlined(): void {
     if (resizes === null) return;
-    const next = [selected, hovered].filter((node): node is Element => node !== null);
+    const next = [document.documentElement, selected, hovered].filter(
+      (node): node is Element => node !== null
+    );
     if (next.length === tracked.length && next.every((node, index) => node === tracked[index])) {
       return;
     }

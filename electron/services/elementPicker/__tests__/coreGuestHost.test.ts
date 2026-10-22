@@ -61,19 +61,28 @@ class FakeDebugger extends EventEmitter {
     });
   }
 
+  /** Set by a navigation: the new main world is announced before the next command's reply. */
+  private announcePending = false;
+
   /**
-   * A cross-document navigation as CDP reports it, and — unless `observed` is
-   * false, standing in for Electron's event arriving late — as Electron does.
+   * A cross-document navigation in the order Electron 42 delivers it: CDP
+   * clears the contexts, Electron reports `did-navigate` — unless
+   * `observed` is false, standing in for that event arriving late — and the
+   * new document's main world is announced ahead of the next command's reply.
    */
   navigate(wc: EventEmitter, observed = true): void {
     this.emit("message", {} as Electron.Event, "Runtime.executionContextsCleared", {});
     this.mainWorld += 1;
-    this.announceMainWorld();
+    this.announcePending = true;
     if (observed) wc.emit("did-navigate");
   }
 
   async sendCommand(method: string, params: Record<string, unknown> = {}): Promise<unknown> {
     this.commands.push({ method, params });
+    if (this.announcePending) {
+      this.announcePending = false;
+      this.announceMainWorld();
+    }
     switch (method) {
       case "Runtime.enable":
         // The replay of contexts that already exist.
