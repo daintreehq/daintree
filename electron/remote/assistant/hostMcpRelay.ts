@@ -6,15 +6,22 @@ import type { LinkSession } from "../link/session.js";
 import type { MetricsSessionContext, MetricsSessionSource } from "../metrics/hostMetricsHost.js";
 import {
   AssistantLinkMethod,
+  MAX_RELAY_NOTICE_STATUS_CALLS,
   MAX_RELAY_RESULT_BYTES,
   McpCallPayloadSchema,
+  RELAY_NOTICE_WINDOW_MS,
+  RelayNoticeStatusPayloadSchema,
   type McpCallAnswer,
   type McpCallPayload,
+  type RelayNoticeStatusAnswer,
 } from "./linkMethods.js";
 import { RelayCallLedger } from "./relayCallLedger.js";
 import { RelayNoticeOutbox } from "./relayNoticeOutbox.js";
 import type { SenderSessions } from "./senderSessions.js";
-import type { RelayedNotice } from "../../services/mcp-server/terminalNotify.js";
+import {
+  relayCallArmsNotice,
+  type RelayedNotice,
+} from "../../services/mcp-server/terminalNotify.js";
 import type { ViewlessApprovalDecision } from "../../services/viewless/index.js";
 import { askShellApproval, type RelayApprovalAsk } from "./relayApprovals.js";
 
@@ -54,7 +61,7 @@ export interface RelayMcpSession {
 
 export interface HostMcpRelayDeps {
   /** Read at each call: the sender host registers it with the authenticate call. */
-  senders(): Pick<SenderSessions, "senderOf"> | undefined;
+  senders(): Pick<SenderSessions, "senderOf" | "senderOfSessionId"> | undefined;
   /** This machine's own consent to tools run for other machines' assistants, read at each call. */
   acceptsRemoteControl(): boolean;
   hasProject(projectId: string): Promise<boolean>;
@@ -65,8 +72,14 @@ export interface HostMcpRelayDeps {
    * enough or crowded out; the terminals and worktrees themselves stay.
    */
   retirePrincipal?(senderId: string, helpSessionId: string): void;
-  /** A Shell's link session ended for good: the notices armed over it go (#13500). */
-  dropLinkNotices?(linkSessionId: string): void;
+  /**
+   * The calls of a relay principal that still have notices armed or waiting
+   * in this host's notice service (#13930); absent, none do.
+   */
+  watchingNoticeCalls?(
+    senderId: string,
+    helpSessionId: string
+  ): ReadonlySet<string> | Promise<ReadonlySet<string>>;
   now?: () => number;
   /** How long an unused session stays open. */
   idleMs?: number;
@@ -84,6 +97,18 @@ const RELAY_PRINCIPAL_RETENTION_MS = 24 * 60 * 60_000;
 const RELAY_PRINCIPALS_PER_SENDER = 64;
 /** Ended links remembered, for calls still being admitted when theirs went. */
 const MAX_EXPIRED_LINKS = 256;
+/**
+ * How long a call that asked for notices is remembered past the window its
+ * Shell takes them for, so clocks a little apart never read it as forgotten.
+ */
+const NOTICE_CALL_MARGIN_MS = 60 * 60_000;
+
+/** A call relayed here that asked for notices (#13930), while its Shell may still ask after it. */
+interface NoticeCall {
+  helpSessionId: string;
+  at: number;
+  running: number;
+}
 
 interface CachedSession {
   linkSessionId: string;
@@ -185,9 +210,13 @@ export function installHostMcpRelay(
   const now = deps.now ?? Date.now;
   const idleMs = deps.idleMs ?? RELAY_SESSION_IDLE_MS;
   const ledger = new RelayCallLedger<McpCallAnswer>({ now });
-  // What relayed calls ask to hear about goes back over the link each came in on.
-  const notices = new RelayNoticeOutbox({ server, now });
-  const deliverNotices = (fired: readonly RelayedNotice[]): void => notices.enqueue(fired);
+  // What relayed calls ask to hear about goes back to their Shell's sender,
+  // over whichever of its sessions is open when it fires.
+  const notices = new RelayNoticeOutbox({ server, senders: () => deps.senders(), now });
+  // The calls that asked for notices, by sender then callId, least recent
+  // first: a call a Shell still follows that is missing here is one whose
+  // notices this host lost, as by restarting.
+  const noticeCalls = new Map<string, Map<string, NoticeCall>>();
   const sessions = new Map<string, CachedSession>();
   // Links that can't resume, for a call that was still being admitted when its link went.
   const expiredLinks = new Set<string>();
@@ -207,6 +236,12 @@ export function installHostMcpRelay(
     const held = principals.get(senderId);
     held?.delete(helpSessionId);
     if (held?.size === 0) principals.delete(senderId);
+    // Its notices go with its hold: a Shell still following one hears it is gone.
+    const calls = noticeCalls.get(senderId);
+    for (const [callId, call] of calls ?? []) {
+      if (call.helpSessionId === helpSessionId && call.running === 0) calls!.delete(callId);
+    }
+    if (calls?.size === 0) noticeCalls.delete(senderId);
     try {
       deps.retirePrincipal?.(senderId, helpSessionId);
     } catch (error) {
@@ -310,16 +345,76 @@ export function installHostMcpRelay(
     return { cached, session: opened };
   };
 
+  /** Remembered from when it runs: a resend of one this host never ran arms nothing. */
+  const noteNoticeCall = (senderId: string, helpSessionId: string, callId: string): NoticeCall => {
+    let calls = noticeCalls.get(senderId);
+    if (!calls) {
+      calls = new Map();
+      noticeCalls.set(senderId, calls);
+    }
+    const call = calls.get(callId) ?? { helpSessionId, at: now(), running: 0 };
+    calls.delete(callId);
+    calls.set(callId, call);
+    // As many as the Shell follows; one still running stays.
+    for (const [oldId, old] of calls) {
+      if (calls.size <= MAX_RELAY_NOTICE_STATUS_CALLS) break;
+      if (old.running === 0) calls.delete(oldId);
+    }
+    return call;
+  };
+
   const execute = async (
     spec: RelayMcpSessionSpec,
     payload: McpCallPayload
   ): Promise<McpCallAnswer> => {
     const release = holdPrincipal(spec.senderId, spec.helpSessionId);
+    const noticeCall = relayCallArmsNotice(payload.tool, payload.args)
+      ? noteNoticeCall(spec.senderId, spec.helpSessionId, payload.callId)
+      : null;
+    if (noticeCall) noticeCall.running += 1;
     try {
       return await executeHeld(spec, payload);
     } finally {
+      if (noticeCall) noticeCall.running -= 1;
       release();
     }
+  };
+
+  /** Whether this host holds anything more for each of a sender's calls (#13930). */
+  const noticeStatus = async (
+    senderId: string,
+    calls: ReadonlyArray<{ helpSessionId: string; callId: string }>
+  ): Promise<RelayNoticeStatusAnswer> => {
+    const armed = new Map<string, ReadonlySet<string> | null>();
+    const armedFor = async (helpSessionId: string): Promise<ReadonlySet<string> | null> => {
+      if (!armed.has(helpSessionId)) {
+        let read: ReadonlySet<string> | null;
+        try {
+          read = (await deps.watchingNoticeCalls?.(senderId, helpSessionId)) ?? new Set();
+        } catch (error) {
+          console.warn("[HostMcpRelay] Couldn't read a relay principal's notices:", error);
+          read = null;
+        }
+        armed.set(helpSessionId, read);
+      }
+      return armed.get(helpSessionId)!;
+    };
+    const answered: RelayNoticeStatusAnswer["calls"] = [];
+    for (const { helpSessionId, callId } of calls) {
+      const call = noticeCalls.get(senderId)?.get(callId);
+      let status: RelayNoticeStatusAnswer["calls"][number]["status"];
+      if (call === undefined || call.helpSessionId !== helpSessionId) {
+        status = "unknown";
+      } else if (call.running > 0 || notices.waitingCalls(senderId, helpSessionId).has(callId)) {
+        status = "watching";
+      } else {
+        // Unreadable reads as still watching: holding a link open costs less than a lost notice.
+        const watching = await armedFor(helpSessionId);
+        status = watching === null || watching.has(callId) ? "watching" : "settled";
+      }
+      answered.push({ helpSessionId, callId, status });
+    }
+    return { calls: answered };
   };
 
   const executeHeld = async (
@@ -367,6 +462,8 @@ export function installHostMcpRelay(
         if (disposed) throw noSender();
         const senderId = deps.senders()?.senderOf(session);
         if (!senderId) throw noSender();
+        // This session proved the sender, so what waited for it can go over it.
+        notices.flushSender(senderId);
         const spec: RelayMcpSessionSpec = {
           linkSessionId: sessionId,
           senderId,
@@ -374,7 +471,7 @@ export function installHostMcpRelay(
           projectId: payload.projectId,
           tier: payload.tier,
           shellName: client?.clientName || "Remote Shell",
-          deliverNotices,
+          deliverNotices: (fired) => notices.enqueue(senderId, fired),
           // Asked over whichever session is live for this link when the call needs it.
           requestApproval: (ask) =>
             askShellApproval(liveLink(sessionId), {
@@ -397,6 +494,17 @@ export function installHostMcpRelay(
         return answer.value;
       }
     );
+    session.registerCallHandler(
+      AssistantLinkMethod.RELAY_NOTICE_STATUS,
+      RelayNoticeStatusPayloadSchema,
+      (payload) => {
+        if (disposed) throw noSender();
+        const senderId = deps.senders()?.senderOf(session);
+        if (!senderId) throw noSender();
+        notices.flushSender(senderId);
+        return noticeStatus(senderId, payload.calls);
+      }
+    );
   };
 
   // An unused session goes; one still running a call stays, however long it runs.
@@ -404,6 +512,13 @@ export function installHostMcpRelay(
     const cutoff = now() - idleMs;
     for (const [key, cached] of sessions) {
       if (cached.inFlight === 0 && cached.usedAt < cutoff) closeCached(key, cached);
+    }
+    const forgotten = now() - RELAY_NOTICE_WINDOW_MS - NOTICE_CALL_MARGIN_MS;
+    for (const [senderId, calls] of [...noticeCalls]) {
+      for (const [callId, call] of [...calls]) {
+        if (call.running === 0 && call.at < forgotten) calls.delete(callId);
+      }
+      if (calls.size === 0) noticeCalls.delete(senderId);
     }
     const stale = now() - RELAY_PRINCIPAL_RETENTION_MS;
     for (const [senderId, held] of [...principals]) {
@@ -422,16 +537,12 @@ export function installHostMcpRelay(
   const offSession = server.onSession(wire);
   // A Shell that can't resume its link takes its sessions with it; a new one opens its
   // own. A call still running finishes first, so a resend can still read its answer.
+  // The notices its calls armed stay: they belong to its sender and help session,
+  // which the Shell's next session proves again (#13930).
   const offExpired = server.onSessionExpired(({ sessionId }) => {
     expiredLinks.add(sessionId);
     if (expiredLinks.size > MAX_EXPIRED_LINKS) {
       expiredLinks.delete(expiredLinks.values().next().value!);
-    }
-    notices.endLink(sessionId);
-    try {
-      deps.dropLinkNotices?.(sessionId);
-    } catch (error) {
-      console.warn("[HostMcpRelay] Couldn't drop an ended link's notices:", error);
     }
     for (const [key, cached] of [...sessions]) {
       if (cached.linkSessionId !== sessionId) continue;
@@ -454,6 +565,7 @@ export function installHostMcpRelay(
         for (const helpSessionId of [...held.keys()]) retire(senderId, helpSessionId);
       }
       ledger.clear();
+      noticeCalls.clear();
     },
   };
 }

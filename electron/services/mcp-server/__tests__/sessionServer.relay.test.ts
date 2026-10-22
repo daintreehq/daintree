@@ -174,7 +174,6 @@ describe("a relayed session (#13493)", () => {
     const routePane = (): OwnPane =>
       relayNoticePane("relay-principal", {
         projectId: "project-1",
-        linkSessionId: "link-1",
         helpSessionId: "help-1",
         deliver: vi.fn(),
       });
@@ -207,7 +206,7 @@ describe("a relayed session (#13493)", () => {
 
       expect(result.isError).not.toBe(true);
       const [pane] = handlers.prepareLaunch.mock.calls[0]!;
-      expect(pane.relay).toMatchObject({ linkSessionId: "link-1", callId: "call-9" });
+      expect(pane.relay).toMatchObject({ helpSessionId: "help-1", callId: "call-9" });
       expect(relay.deps.dispatchAction).toHaveBeenCalledTimes(1);
       expect(pending.complete).toHaveBeenCalledWith({ ran: true });
     });

@@ -21,6 +21,7 @@ import {
   NOTIFY_KEY_TOOLS,
   NOTIFY_PROMPT_TOOLS,
   TERMINAL_NOTIFY_WHEN_IDLE_TOOL,
+  relayCallArmsNotice,
   type FiredNotice,
   type LaneWake,
   type LaneWakeCheck,
@@ -30,11 +31,14 @@ import type { HostControlLinkClient } from "./HostControlLinkClient.js";
 import {
   MAX_RELAY_ARGS_BYTES,
   MAX_RELAY_RUN_MS,
+  RELAY_NOTICE_WINDOW_MS,
   type McpCallAnswer,
   type McpCallPayload,
   type RelayApproveAnswer,
   type RelayApprovePayload,
   type RelayNotice,
+  type RelayNoticeStatusAnswer,
+  type RelayNoticeStatusPayload,
   type RelayNoticesPayload,
   type RelayRefusal,
 } from "./linkMethods.js";
@@ -112,10 +116,11 @@ const NOT_ELIGIBLE_MESSAGE =
 
 /** Calls whose notices this Shell still takes, the oldest forgotten first (#13500). */
 const MAX_NOTICE_PINS = 256;
-/** How long a call's notices are taken: as long as its host holds what the call made. */
-const NOTICE_PIN_TTL_MS = 24 * 60 * 60_000;
-/** How long a call's notices keep its host's link open when nothing else does. */
-const NOTICE_LINK_HOLD_MS = 2 * 60 * 60_000;
+/**
+ * How long a call's notices are taken, and keep its host's link open when
+ * nothing else does: as long as its host holds what the call made.
+ */
+const NOTICE_PIN_TTL_MS = RELAY_NOTICE_WINDOW_MS;
 /** Notices already queued, remembered so a host's resend is typed once. */
 const MAX_SEEN_NOTICES = 1024;
 /** Host terminals whose recent prompts from here are remembered, for superseding. */
@@ -199,10 +204,22 @@ interface NoticePin {
   armedAt: number;
   /** `terminal.notifyWhenIdle`'s note, kept here rather than read back from the host. */
   note?: string;
+  /** The host terminals it asked about: named by its arguments, or a launch's result. */
+  terminalIds: string[];
+  /** The host answered it, so it holds a record of the call (#13930). */
+  answered?: boolean;
+  /** The host has nothing more for it: its link need not stay open for it. */
+  settled?: boolean;
 }
 
-function armsNotice(tool: string, args: Record<string, unknown>): boolean {
-  return tool === TERMINAL_NOTIFY_WHEN_IDLE_TOOL || args.notify === true;
+/** The host terminals a call asking for notices names, as far as its arguments say. */
+function noticeTargets(tool: string, args: Record<string, unknown>): string[] {
+  if (tool === "terminal.sendCommandMany" && Array.isArray(args.sends)) {
+    return args.sends
+      .map((send) => (send as { terminalId?: unknown } | null)?.terminalId)
+      .filter((id): id is string => typeof id === "string");
+  }
+  return typeof args.terminalId === "string" ? [args.terminalId] : [];
 }
 
 /** A prompt sent from here to a host terminal; until its call answers, it may not have run. */
@@ -214,8 +231,8 @@ interface PromptMark {
 
 /** What a call settles as, once its host has answered or not. */
 interface NotedCall {
-  /** The host ran it, or may have. */
-  ran(): void;
+  /** The host ran it, or may have; `result` when it answered with one. */
+  ran(result?: Extract<McpCallAnswer, { status: "done" }>["result"]): void;
   /** The host is known not to have run it. */
   notRun(): void;
 }
@@ -408,18 +425,86 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
   }
 
   /**
-   * Whether a recent call to `hostId` from an assistant still running here
-   * may yet send a notice (#13500). A link closed as idle can't be resumed,
-   * and what its calls armed would go with it.
+   * Whether a call to `hostId` from an assistant still running here may yet
+   * send a notice (#13500). The host can't dial this Shell, so its link stays
+   * open for as long as the call's notices are taken, unless the host said it
+   * has nothing more for it (#13930).
    */
   awaitsNotices(hostId: HostId): boolean {
-    const holdFrom = this.now() - NOTICE_LINK_HOLD_MS;
-    for (const pin of this.noticePins.values()) {
-      if (pin.hostId === hostId && pin.armedAt >= holdFrom && this.stillRunning(pin.run)) {
-        return true;
+    return this.followedPins(hostId).length > 0;
+  }
+
+  /** The calls to `hostId` whose notices this Shell still waits for, to ask the host after. */
+  noticeCalls(hostId: HostId): RelayNoticeStatusPayload["calls"] {
+    return this.followedPins(hostId)
+      .filter(([callId]) => !this.callsInFlight.has(callId))
+      .map(([callId, pin]) => ({ helpSessionId: pin.run.sessionId, callId }));
+  }
+
+  private followedPins(hostId: HostId): Array<[string, NoticePin]> {
+    const from = this.now() - NOTICE_PIN_TTL_MS;
+    return [...this.noticePins].filter(
+      ([, pin]) =>
+        pin.hostId === hostId &&
+        pin.settled !== true &&
+        pin.armedAt >= from &&
+        this.stillRunning(pin.run)
+    );
+  }
+
+  /**
+   * What a host said of the calls this Shell waits for notices from (#13930).
+   * `settled`: it has nothing more for the call, so the link need not stay
+   * open for it. `unknown` for a call it answered: it no longer holds what the
+   * call asked for, as after a restart, so nothing will come; the run that
+   * made it is told once, naming the terminals, while it is the one running.
+   * The host is the connection's, never the payload's.
+   */
+  receiveNoticeStatus(hostId: HostId, answer: RelayNoticeStatusAnswer): void {
+    const queue = this.deps.queueNotice;
+    if (this.disposed) return;
+    const lost = new Map<string, { run: OpenRun; terminalIds: Set<string> }>();
+    for (const { helpSessionId, callId, status } of answer.calls) {
+      const pin = this.noticePins.get(callId);
+      if (pin === undefined || pin.hostId !== hostId || pin.run.sessionId !== helpSessionId) {
+        continue;
       }
+      if (status === "watching") continue;
+      pin.settled = true;
+      // One the host never answered may never have reached it: nothing was lost.
+      if (status !== "unknown" || pin.answered !== true || this.callsInFlight.has(callId)) {
+        continue;
+      }
+      this.noticePins.delete(callId);
+      if (!this.stillRunning(pin.run)) continue;
+      const key = `${pin.run.sessionId}\u0000${pin.run.terminalId}\u0000${pin.run.launchGeneration}`;
+      const entry = lost.get(key) ?? { run: pin.run, terminalIds: new Set<string>() };
+      for (const terminalId of pin.terminalIds) entry.terminalIds.add(terminalId);
+      lost.set(key, entry);
     }
-    return false;
+    if (queue === undefined || lost.size === 0) return;
+    const hostName =
+      this.deps.hosts().find((host) => host.hostId === hostId)?.name ?? "remote host";
+    for (const { run, terminalIds } of lost.values()) {
+      const check = (): LaneWakeCheck => {
+        if (!this.stillRunning(run)) return { kind: "unavailable", reason: "relaunched" };
+        return this.deps.controlEnabled?.(hostId) === true
+          ? { kind: "ready" }
+          : { kind: "unavailable", reason: "control-off" };
+      };
+      if (check().kind !== "ready") continue;
+      queue(
+        { helpSessionId: run.sessionId, terminalId: run.terminalId, projectId: run.projectId },
+        {
+          id: this.newId(),
+          kind: "lost",
+          lostNotices: { hostName, terminalIds: [...terminalIds] },
+          recheck: check,
+          beforeType: () => true,
+          report: () => {},
+        }
+      );
+    }
   }
 
   /**
@@ -592,25 +677,35 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
       marks.push(mark);
       keys.push(key);
     }
-    const pinned = armsNotice(tool, args);
+    const pinned = relayCallArmsNotice(tool, args);
+    let pin: NoticePin | undefined;
     if (pinned) {
       const note =
         tool === TERMINAL_NOTIFY_WHEN_IDLE_TOOL && typeof args.note === "string"
           ? sanitizeNotifyNote(args.note)
           : undefined;
-      remember(
-        this.noticePins,
-        callId,
-        { hostId, run: { ...run }, armedAt: this.now(), ...(note !== undefined ? { note } : {}) },
-        MAX_NOTICE_PINS
-      );
+      pin = {
+        hostId,
+        run: { ...run },
+        armedAt: this.now(),
+        ...(note !== undefined ? { note } : {}),
+        terminalIds: noticeTargets(tool, args),
+      };
+      remember(this.noticePins, callId, pin, MAX_NOTICE_PINS);
     }
     let settled = false;
     return {
-      ran: () => {
+      ran: (result) => {
         if (settled) return;
         settled = true;
         for (const mark of marks) mark.ran = true;
+        if (pin === undefined || result === undefined) return;
+        pin.answered = true;
+        // A launch names the terminal it made only in its result.
+        const launched = result.structured?.terminalId;
+        if (typeof launched === "string" && !pin.terminalIds.includes(launched)) {
+          pin.terminalIds.push(launched);
+        }
       },
       notRun: () => {
         if (settled) return;
@@ -756,7 +851,7 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
       switch (answer.status) {
         // A tool error may still have run some of a batch before it failed.
         case "done":
-          noted.ran();
+          noted.ran(answer.result);
           return { ...this.ok(), callId, result: answer.result };
         case "unknown":
           noted.ran();

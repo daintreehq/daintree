@@ -1,12 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 import { AppError } from "../../../utils/errorTypes.js";
 import type { LinkSession } from "../../link/session.js";
-import { HostControlLinkClient } from "../HostControlLinkClient.js";
+import { HostControlLinkClient, type RelayNoticeReceiver } from "../HostControlLinkClient.js";
 import {
   AssistantLinkMethod,
   type McpCallPayload,
   type RelayApproveAnswer,
   type RelayApprovePayload,
+  type RelayNoticeStatusAnswer,
   type RelayNoticesPayload,
 } from "../linkMethods.js";
 
@@ -109,13 +110,28 @@ describe("HostControlLinkClient.relayCall (#13493)", () => {
 });
 
 describe("HostControlLinkClient relay notices (#13500)", () => {
-  function opened(receiver?: {
-    receiveNotices(hostId: string, payload: RelayNoticesPayload): null;
-  }) {
+  type Receiver = RelayNoticeReceiver;
+
+  function receiver(calls: ReturnType<Receiver["noticeCalls"]> = []) {
+    return {
+      receiveNotices: vi.fn((_hostId: string, _payload: RelayNoticesPayload): null => null),
+      noticeCalls: vi.fn((_hostId: string) => calls),
+      receiveNoticeStatus: vi.fn((_hostId: string, _answer: RelayNoticeStatusAnswer) => {}),
+    } satisfies Receiver;
+  }
+
+  function opened(
+    taker?: Receiver,
+    answer: (method: string, payload: unknown) => unknown = () => null
+  ) {
     const handlers = new Map<string, (payload: unknown) => unknown>();
+    const calls: Array<{ method: string; payload: unknown }> = [];
     const session = {
       isOpen: true,
-      call: vi.fn(async () => null),
+      call: vi.fn(async (method: string, payload: unknown) => {
+        calls.push({ method, payload });
+        return answer(method, payload);
+      }),
       registerCallHandler: (
         method: string,
         schema: { parse(v: unknown): unknown },
@@ -132,11 +148,12 @@ describe("HostControlLinkClient relay notices (#13500)", () => {
         open = listener;
         return () => {};
       },
-      ...(receiver ? { noticeReceiver: () => receiver } : {}),
+      noticeStatusDelayMs: 1_000,
+      ...(taker ? { noticeReceiver: () => taker } : {}),
     });
     relay.start();
     open("studio", session);
-    return { relay, handlers };
+    return { relay, handlers, calls };
   }
 
   const PAYLOAD_NOTICES = {
@@ -150,12 +167,18 @@ describe("HostControlLinkClient relay notices (#13500)", () => {
       },
     ],
   };
+  const AWAITED = [{ helpSessionId: "help-1", callId: "call-1" }];
+  const STATUS: RelayNoticeStatusAnswer = {
+    calls: [{ helpSessionId: "help-1", callId: "call-1", status: "unknown" }],
+  };
+  const statusAnswer = (method: string) =>
+    method === AssistantLinkMethod.RELAY_NOTICE_STATUS ? STATUS : null;
 
   it("hands a host's notices on with the host the connection names", () => {
-    const receiveNotices = vi.fn((_hostId: string, _payload: RelayNoticesPayload): null => null);
-    const { relay, handlers } = opened({ receiveNotices });
+    const taker = receiver();
+    const { relay, handlers } = opened(taker);
     expect(handlers.get(AssistantLinkMethod.RELAY_NOTICES)!(PAYLOAD_NOTICES)).toBeNull();
-    expect(receiveNotices).toHaveBeenCalledWith("studio", PAYLOAD_NOTICES);
+    expect(taker.receiveNotices).toHaveBeenCalledWith("studio", PAYLOAD_NOTICES);
     relay.dispose();
   });
 
@@ -163,6 +186,78 @@ describe("HostControlLinkClient relay notices (#13500)", () => {
     const { relay, handlers } = opened();
     expect(handlers.get(AssistantLinkMethod.RELAY_NOTICES)!(PAYLOAD_NOTICES)).toBeNull();
     relay.dispose();
+  });
+
+  it("proves its sender on a new session and asks after the calls it still awaits (#13930)", async () => {
+    const taker = receiver(AWAITED);
+    const { relay, calls } = opened(taker, statusAnswer);
+
+    await vi.waitFor(() => expect(taker.receiveNoticeStatus).toHaveBeenCalledWith("studio", STATUS));
+    expect(calls).toEqual([
+      { method: AssistantLinkMethod.AUTHENTICATE, payload: { credential: CREDENTIAL } },
+      { method: AssistantLinkMethod.RELAY_NOTICE_STATUS, payload: { calls: AWAITED } },
+    ]);
+    relay.dispose();
+  });
+
+  it("asks nothing of a new session while it awaits no notices there", async () => {
+    const taker = receiver();
+    const { relay, calls } = opened(taker);
+    await Promise.resolve();
+    expect(taker.noticeCalls).toHaveBeenCalledWith("studio");
+    expect(calls).toEqual([]);
+    relay.dispose();
+  });
+
+  it("asks once after a burst of notices, a little later", async () => {
+    vi.useFakeTimers();
+    try {
+      const taker = receiver();
+      const { relay, handlers, calls } = opened(taker, statusAnswer);
+      await vi.advanceTimersByTimeAsync(0);
+      taker.noticeCalls.mockReturnValue(AWAITED);
+      handlers.get(AssistantLinkMethod.RELAY_NOTICES)!(PAYLOAD_NOTICES);
+      handlers.get(AssistantLinkMethod.RELAY_NOTICES)!(PAYLOAD_NOTICES);
+      expect(calls).toEqual([]);
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(calls.map((call) => call.method)).toEqual([
+        AssistantLinkMethod.AUTHENTICATE,
+        AssistantLinkMethod.RELAY_NOTICE_STATUS,
+      ]);
+      expect(taker.receiveNoticeStatus).toHaveBeenCalledTimes(1);
+      relay.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("leaves an older host that can't say alone, and holds nothing it couldn't read", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const old = receiver(AWAITED);
+      const unsupported = opened(old, (method) => {
+        if (method === AssistantLinkMethod.RELAY_NOTICE_STATUS) {
+          throw new AppError({ code: "UNSUPPORTED", message: "no such method" });
+        }
+        return null;
+      });
+      await vi.waitFor(() => expect(unsupported.calls).toHaveLength(2));
+      await Promise.resolve();
+      expect(old.receiveNoticeStatus).not.toHaveBeenCalled();
+      expect(warn).not.toHaveBeenCalled();
+      unsupported.relay.dispose();
+
+      const garbled = receiver(AWAITED);
+      const invalid = opened(garbled, (method) =>
+        method === AssistantLinkMethod.RELAY_NOTICE_STATUS ? { calls: "nope" } : null
+      );
+      await vi.waitFor(() => expect(warn).toHaveBeenCalled());
+      expect(garbled.receiveNoticeStatus).not.toHaveBeenCalled();
+      invalid.relay.dispose();
+    } finally {
+      warn.mockRestore();
+    }
   });
 });
 

@@ -34,6 +34,14 @@ export const AssistantLinkMethod = {
    */
   RELAY_NOTICES: "assistant.relay-notices",
   /**
+   * Shell → Host: whether this host still holds notices the Shell's calls
+   * asked for (#13930), by callId: `watching` while it does, `settled` once it
+   * has nothing more for that call, `unknown` for a call it has no record of,
+   * as after a restart. Also sends at once what waits for this sender. A host
+   * from before this answers UNSUPPORTED.
+   */
+  RELAY_NOTICE_STATUS: "assistant.relay-notice-status",
+  /**
    * Host → Shell: ask the person about one confirm-gated call a Shell
    * assistant is making through MCP_CALL, while no view here can (#13501).
    * Bound to that call, its action and exact arguments, and answered once;
@@ -249,6 +257,32 @@ export const RelayNoticesPayloadSchema = z
   .object({ notices: z.array(RelayNoticeSchema).min(1).max(MAX_RELAY_NOTICES_PER_CALL) })
   .strip();
 export type RelayNoticesPayload = z.infer<typeof RelayNoticesPayloadSchema>;
+
+/**
+ * How long a relayed call's notices are taken (#13500), and so how long its
+ * host keeps them for the Shell, across any session the Shell holds (#13930).
+ */
+export const RELAY_NOTICE_WINDOW_MS = 24 * 60 * 60_000;
+/** Calls one notice-status ask names: as many as a Shell follows notices for. */
+export const MAX_RELAY_NOTICE_STATUS_CALLS = 256;
+
+const relayNoticeCallSchema = z.object({ helpSessionId: id, callId: id }).strip();
+
+export const RelayNoticeStatusPayloadSchema = z
+  .object({ calls: z.array(relayNoticeCallSchema).min(1).max(MAX_RELAY_NOTICE_STATUS_CALLS) })
+  .strip();
+export type RelayNoticeStatusPayload = z.infer<typeof RelayNoticeStatusPayloadSchema>;
+
+export const RelayNoticeStatusAnswerSchema = z
+  .object({
+    calls: z
+      .array(
+        relayNoticeCallSchema.extend({ status: z.enum(["watching", "settled", "unknown"]) }).strip()
+      )
+      .max(MAX_RELAY_NOTICE_STATUS_CALLS),
+  })
+  .strip();
+export type RelayNoticeStatusAnswer = z.infer<typeof RelayNoticeStatusAnswerSchema>;
 
 /** Lines a relayed approval's preview may carry, and how long each may be. */
 export const MAX_RELAY_APPROVAL_LINES = 200;

@@ -5,17 +5,17 @@ import type { MetricsSessionSource } from "../metrics/hostMetricsHost.js";
 import {
   AssistantLinkMethod,
   MAX_RELAY_NOTICES_PER_CALL,
+  RELAY_NOTICE_WINDOW_MS,
   type RelayNotice,
 } from "./linkMethods.js";
+import type { SenderSessions } from "./senderSessions.js";
 
-/** How long a notice waits for its Shell: as long as a dropped link may take to resume. */
-export const RELAY_NOTICE_TTL_MS = 10 * 60_000;
-/** Notices waiting for one link session; the oldest go first. */
-export const MAX_RELAY_NOTICES_PER_LINK = 64;
-/** Notices waiting across every link; the oldest go first. */
+/** How long a notice waits for its Shell: as long as that Shell takes a call's notices. */
+export const RELAY_NOTICE_TTL_MS = RELAY_NOTICE_WINDOW_MS;
+/** Notices waiting for one Shell's sender; the oldest go first. */
+export const MAX_RELAY_NOTICES_PER_SENDER = 64;
+/** Notices waiting across every sender; the oldest go first. */
 const MAX_RELAY_NOTICES_TOTAL = 1024;
-/** Ended link sessions remembered, for notices armed before theirs went. */
-const MAX_ENDED_LINKS = 256;
 const CALL_TIMEOUT_MS = 15_000;
 const RETRY_MS = 15_000;
 
@@ -27,7 +27,7 @@ interface Entry {
   expiresAt: number;
 }
 
-interface LinkQueue {
+interface SenderQueue {
   entries: Entry[];
   sending: boolean;
   retryAt: number;
@@ -35,6 +35,8 @@ interface LinkQueue {
 
 export interface RelayNoticeOutboxDeps {
   server: MetricsSessionSource;
+  /** Read at each send: the sender each session proved, by its transport or its session id. */
+  senders(): Pick<SenderSessions, "senderOf" | "senderOfSessionId"> | undefined;
   now?: () => number;
   newId?: () => string;
   ttlMs?: number;
@@ -49,14 +51,15 @@ function codeOf(error: unknown): string | null {
 
 /**
  * The notices this host's relayed calls armed (#13500), on their way back to
- * the Shell that made each call. A notice goes only over the link session its
- * call came in on, which a resume keeps: one that can't resume takes its
- * notices with it, and none waits longer than a dropped link may take to come
- * back. In memory and best effort, since a Shell also polls what it started.
+ * the Shell that made each call. A notice goes only to the sender its call
+ * proved, over whichever open session proved that sender: a resumed one by
+ * its session id, a new one once it authenticates again. So a link that
+ * can't resume doesn't take its notices with it (#13930); none waits longer
+ * than the Shell takes them. In memory and best effort, since a Shell also
+ * polls what it started.
  */
 export class RelayNoticeOutbox {
-  private readonly queues = new Map<string, LinkQueue>();
-  private readonly ended = new Set<string>();
+  private readonly queues = new Map<string, SenderQueue>();
   private readonly now: () => number;
   private readonly newId: () => string;
   private readonly ttlMs: number;
@@ -72,26 +75,22 @@ export class RelayNoticeOutbox {
     this.ttlMs = deps.ttlMs ?? RELAY_NOTICE_TTL_MS;
     this.retryMs = deps.retryMs ?? RETRY_MS;
     this.timeoutMs = deps.callTimeoutMs ?? CALL_TIMEOUT_MS;
-    // A resumed session keeps its id: what waited while it was away goes now.
-    this.offSession = deps.server.onSession(({ sessionId }) => {
-      const queue = this.queues.get(sessionId);
-      if (queue === undefined) return;
-      queue.retryAt = 0;
-      this.flush(sessionId);
+    // A resumed session keeps its id and the sender it proved: what waited goes now.
+    this.offSession = deps.server.onSession(() => {
+      for (const senderId of [...this.queues.keys()]) this.flushSender(senderId);
     });
   }
 
-  enqueue(notices: readonly RelayedNotice[]): void {
-    if (this.disposed) return;
-    const touched = new Set<string>();
+  /** Notices a call relayed for `senderId` armed, for that Shell. */
+  enqueue(senderId: string, notices: readonly RelayedNotice[]): void {
+    if (this.disposed || notices.length === 0) return;
     const expiresAt = this.now() + this.ttlMs;
+    let queue = this.queues.get(senderId);
+    if (queue === undefined) {
+      queue = { entries: [], sending: false, retryAt: 0 };
+      this.queues.set(senderId, queue);
+    }
     for (const notice of notices) {
-      if (this.ended.has(notice.linkSessionId)) continue;
-      let queue = this.queues.get(notice.linkSessionId);
-      if (queue === undefined) {
-        queue = { entries: [], sending: false, retryAt: 0 };
-        this.queues.set(notice.linkSessionId, queue);
-      }
       queue.entries.push({
         notice: {
           noticeId: this.newId(),
@@ -103,18 +102,28 @@ export class RelayNoticeOutbox {
         },
         expiresAt,
       });
-      if (queue.entries.length > MAX_RELAY_NOTICES_PER_LINK) queue.entries.shift();
-      touched.add(notice.linkSessionId);
+      if (queue.entries.length > MAX_RELAY_NOTICES_PER_SENDER) queue.entries.shift();
     }
     while (this.waiting() > MAX_RELAY_NOTICES_TOTAL) this.dropOldest();
-    for (const linkSessionId of touched) this.flush(linkSessionId);
+    this.flush(senderId);
   }
 
-  /** The link session can't resume: what waits for it goes, and nothing more is queued for it. */
-  endLink(linkSessionId: string): void {
-    this.ended.add(linkSessionId);
-    if (this.ended.size > MAX_ENDED_LINKS) this.ended.delete(this.ended.values().next().value!);
-    this.queues.delete(linkSessionId);
+  /** A session just proved `senderId`: what waits for it goes now. */
+  flushSender(senderId: string): void {
+    const queue = this.queues.get(senderId);
+    if (queue === undefined) return;
+    queue.retryAt = 0;
+    this.flush(senderId);
+  }
+
+  /** The calls of one of a sender's help sessions with notices still waiting here. */
+  waitingCalls(senderId: string, helpSessionId: string): Set<string> {
+    const calls = new Set<string>();
+    const now = this.now();
+    for (const { notice, expiresAt } of this.queues.get(senderId)?.entries ?? []) {
+      if (expiresAt > now && notice.helpSessionId === helpSessionId) calls.add(notice.callId);
+    }
+    return calls;
   }
 
   dispose(): void {
@@ -125,17 +134,17 @@ export class RelayNoticeOutbox {
     this.queues.clear();
   }
 
-  private flush(linkSessionId: string): void {
-    const queue = this.queues.get(linkSessionId);
+  private flush(senderId: string): void {
+    const queue = this.queues.get(senderId);
     if (this.disposed || queue === undefined || queue.sending) return;
     const now = this.now();
     queue.entries = queue.entries.filter((entry) => entry.expiresAt > now);
     if (queue.entries.length === 0) {
-      this.queues.delete(linkSessionId);
+      this.queues.delete(senderId);
       this.schedule();
       return;
     }
-    const session = this.sessionFor(linkSessionId);
+    const session = this.sessionFor(senderId);
     if (session === null || queue.retryAt > now) {
       this.schedule();
       return;
@@ -158,12 +167,12 @@ export class RelayNoticeOutbox {
       )
       .finally(() => {
         queue.sending = false;
-        if (this.queues.get(linkSessionId) === queue) this.flush(linkSessionId);
+        if (this.queues.get(senderId) === queue) this.flush(senderId);
       });
   }
 
   /** Take a batch the Shell answered for out of its queue; an expiry meanwhile may have taken some. */
-  private settle(queue: LinkQueue, batch: readonly Entry[]): void {
+  private settle(queue: SenderQueue, batch: readonly Entry[]): void {
     const sent = new Set(batch);
     queue.entries = queue.entries.filter((entry) => !sent.has(entry));
     queue.retryAt = 0;
@@ -176,7 +185,7 @@ export class RelayNoticeOutbox {
   }
 
   private dropOldest(): void {
-    let oldest: LinkQueue | null = null;
+    let oldest: SenderQueue | null = null;
     for (const queue of this.queues.values()) {
       const head = queue.entries[0];
       if (
@@ -189,9 +198,14 @@ export class RelayNoticeOutbox {
     oldest?.entries.shift();
   }
 
-  private sessionFor(linkSessionId: string): LinkSession | null {
+  /** An open session that proved `senderId`: its transport did, or the session it resumes did. */
+  private sessionFor(senderId: string): LinkSession | null {
+    const senders = this.deps.senders();
+    if (senders === undefined) return null;
     for (const ctx of this.deps.server.sessions) {
-      if (ctx.sessionId === linkSessionId && ctx.session.isOpen) return ctx.session;
+      if (!ctx.session.isOpen) continue;
+      const proved = senders.senderOf(ctx.session) ?? senders.senderOfSessionId(ctx.sessionId);
+      if (proved === senderId) return ctx.session;
     }
     return null;
   }
@@ -202,17 +216,17 @@ export class RelayNoticeOutbox {
     this.timer = null;
     if (this.disposed) return;
     let soonest: number | null = null;
-    for (const [linkSessionId, queue] of this.queues) {
+    for (const [senderId, queue] of this.queues) {
       if (queue.sending || queue.entries.length === 0) continue;
       let due = queue.entries[0]!.expiresAt;
-      if (this.sessionFor(linkSessionId) !== null) due = Math.min(due, queue.retryAt);
+      if (this.sessionFor(senderId) !== null) due = Math.min(due, queue.retryAt);
       soonest = soonest === null ? due : Math.min(soonest, due);
     }
     if (soonest === null) return;
     this.timer = setTimeout(
       () => {
         this.timer = null;
-        for (const linkSessionId of [...this.queues.keys()]) this.flush(linkSessionId);
+        for (const senderId of [...this.queues.keys()]) this.flush(senderId);
       },
       Math.max(0, soonest - this.now())
     );

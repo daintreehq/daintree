@@ -2702,13 +2702,13 @@ export class HttpLifecycle {
       // binding follows the PTY that currently serves it.
       resolveOwnPane: () => {
         if (relay) {
-          // Its pane is on the Shell (#13500): notices go back over the link,
-          // held under the relay principal so the session closing keeps them.
+          // Its pane is on the Shell (#13500): notices go back to its sender,
+          // held under the relay principal so neither this session closing
+          // nor the link it came over ending loses them (#13930).
           const deliver = relay.deliverNotices;
           if (deliver === undefined || boundWorkspaceId === null) return null;
           return relayNoticePane(relayOwnershipPrincipal(relay.senderId, relay.helpSessionId), {
             projectId: boundWorkspaceId,
-            linkSessionId: relay.linkSessionId,
             helpSessionId: relay.helpSessionId,
             deliver,
           });

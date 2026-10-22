@@ -219,12 +219,9 @@ async function buildHostListener(
           console.warn("[RemoteHosts] Couldn't retire a relay principal:", error);
         });
     },
-    dropLinkNotices: (linkSessionId) => {
-      void import("../../services/McpServerService.js")
-        .then(({ mcpServerService }) => mcpServerService.dropRelayLinkNotices(linkSessionId))
-        .catch((error: unknown) => {
-          console.warn("[RemoteHosts] Couldn't drop an ended link's notices:", error);
-        });
+    watchingNoticeCalls: async (senderId, helpSessionId) => {
+      const { mcpServerService } = await import("../../services/McpServerService.js");
+      return mcpServerService.relayNoticeCallsWatching(senderId, helpSessionId);
     },
   });
   teardowns.push(() => relay.dispose());

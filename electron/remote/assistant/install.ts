@@ -21,7 +21,12 @@ declare module "../runtime.js" {
     /** What a host's dialogs are checked against: whether this Shell has a call out to it. */
     hostCallRelayClient: Pick<
       HostCallRuntime,
-      "hasCallInFlight" | "awaitsNotices" | "receiveNotices" | "receiveApproval"
+      | "hasCallInFlight"
+      | "awaitsNotices"
+      | "receiveNotices"
+      | "noticeCalls"
+      | "receiveNoticeStatus"
+      | "receiveApproval"
     >;
     hostControlLinkClient: HostControlLinkClient;
   }
@@ -281,7 +286,8 @@ export function installHostControlLinkClient(deps: HostControlLinkClientInstallD
   });
   client.start();
   // Bounded by each relayed call while it runs, and by the notices those
-  // calls armed (#13500). Holding the link never keeps the host awake.
+  // calls armed until their host has nothing more for them (#13500, #13930).
+  // Holding the link never keeps the host awake.
   const offUseCheck =
     deps.addUseCheck?.((hostId) => {
       const relay = getRemoteService("hostCallRelayClient");

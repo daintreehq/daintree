@@ -50,14 +50,14 @@ export interface OwnPane {
 }
 
 /**
- * Where a relayed call's notices go (#13500): back over the link it came in
- * on, to be typed on its Shell into the run that armed them. Nothing here
- * types them, so there is no pane of this machine's to read or gate.
+ * Where a relayed call's notices go (#13500): back to its Shell, over
+ * whichever of that Shell's sessions is current when they fire (#13930), to
+ * be typed there into the run that armed them. Nothing here types them, so
+ * there is no pane of this machine's to read or gate.
  */
 export interface RelayNoticeRoute {
   /** The project the relayed session is bound to; its targets must be in it. */
   projectId: string;
-  linkSessionId: string;
   helpSessionId: string;
   /** The call arming the notice, which the Shell pinned to its run. Absent, none is armed. */
   callId?: string;
@@ -66,7 +66,6 @@ export interface RelayNoticeRoute {
 
 /** A relayed call's fired notice, as it leaves for its Shell: observations only. */
 export interface RelayedNotice {
-  linkSessionId: string;
   helpSessionId: string;
   callId: string;
   terminalId: string;
@@ -74,7 +73,7 @@ export interface RelayedNotice {
   awaitingHandback?: boolean;
 }
 
-type RelayTag = Pick<RelayedNotice, "linkSessionId" | "helpSessionId" | "callId">;
+type RelayTag = Pick<RelayedNotice, "helpSessionId" | "callId">;
 
 // NUL-led so a pane principal and a help session id can never spell the same key.
 export function paneNotifyKey(principal: string): string {
@@ -101,11 +100,7 @@ export function relayNoticePane(principal: string, route: RelayNoticeRoute): Own
 function relayTagOf(pane: OwnPane): RelayTag | undefined {
   const relay = pane.relay;
   if (relay?.callId === undefined) return undefined;
-  return {
-    linkSessionId: relay.linkSessionId,
-    helpSessionId: relay.helpSessionId,
-    callId: relay.callId,
-  };
+  return { helpSessionId: relay.helpSessionId, callId: relay.callId };
 }
 
 /** The slice of a pty-host terminal record the notify service reads. */
@@ -662,6 +657,32 @@ export function formatHostNoticeLine(hostName: string, notices: readonly FiredNo
 }
 
 /**
+ * A host that no longer holds the notices one of this Shell's runs asked it
+ * for (#13930), as when it restarted: they won't come. Fixed wording, the
+ * host's name as this Shell knows it, and the terminals those calls named.
+ */
+export function formatHostNoticesLostLine(
+  hostName: string,
+  terminalIds: readonly string[]
+): string {
+  const where = `host "${displayNoticeHostName(hostName)}"`;
+  const shown = terminalIds.slice(0, MAX_DETAILED_NOTICES_PER_LINE).map(displayNoticeTerminalId);
+  const rest = terminalIds.length - shown.length;
+  const more = rest > 0 ? ` and ${rest} more` : "";
+  const about =
+    terminalIds.length === 0
+      ? ""
+      : terminalIds.length === 1
+        ? ` about terminal ${shown[0]}`
+        : ` about terminals ${shown.join(", ")}${more}`;
+  const check =
+    terminalIds.length === 1
+      ? "Check it with terminal.getStatus through host.call"
+      : "Check them with terminal.getStatus through host.call";
+  return `Daintree: ${where} no longer holds the notices you asked it for${about}, so they won't come. ${check}, and ask again if you still want to hear.`;
+}
+
+/**
  * Whether a pty-host record is a live agent a notice can follow. A detected
  * agent is. A launched one that has not been detected yet is, while it boots;
  * once an agent has been detected and gone, the launch hint is stale — what is
@@ -697,9 +718,10 @@ export interface LaneWake {
    * `notice` carries what a Remote Host saw of a terminal a relayed call asked
    * about (#13500), in {@link LaneWake.hostNotice}; `retired` says which
    * messages this Shell sent through the retired inbox will get no reply
-   * (#13496), in {@link LaneWake.retired}.
+   * (#13496), in {@link LaneWake.retired}; `lost` says a host no longer holds
+   * notices the run asked it for (#13930), in {@link LaneWake.lostNotices}.
    */
-  kind: "notice" | "retired";
+  kind: "notice" | "retired" | "lost";
   /**
    * A `notice`'s observation. Only the host's name as this Shell knows it and
    * the host's observations: the line is still Daintree's own wording.
@@ -707,6 +729,8 @@ export interface LaneWake {
   hostNotice?: { hostName: string; notice: FiredNotice };
   /** A `retired` line's hosts, by the name this Shell knows each by, and how many each held. */
   retired?: ReadonlyArray<{ hostName: string; count: number }>;
+  /** A `lost` line's host, by the name this Shell knows it by, and the terminals its calls named. */
+  lostNotices?: { hostName: string; terminalIds: readonly string[] };
   /** Asked synchronously immediately before the line is typed, and while it waits. */
   recheck(): LaneWakeCheck;
   /**
@@ -941,8 +965,6 @@ export class TerminalNotifyService {
   private readonly teardownEpochs = new Map<string, number>();
   /** Notices whose history is being replayed into them right now. */
   private readonly replaying = new Set<Notice>();
-  /** Shells' link sessions that ended for good, so nothing more is armed for them. */
-  private readonly endedRelayLinks = new Map<string, true>();
   private globalTeardownEpoch = 0;
   private epoch = 0;
   private disposed = false;
@@ -1116,7 +1138,7 @@ export class TerminalNotifyService {
           result !== null &&
           (result as Record<string, unknown>).launched === true &&
           (result as Record<string, unknown>).spawnStatus == null;
-        if (owner.disposed || !launched || terminalId === undefined || this.relayEnded(pane)) {
+        if (owner.disposed || !launched || terminalId === undefined) {
           this.maybeDispose(owner);
           if (!owner.disposed) this.publish(owner);
           return;
@@ -1301,21 +1323,21 @@ export class TerminalNotifyService {
   }
 
   /**
-   * A Shell's link session ended for good (#13500). What its calls armed has
-   * nowhere left to go, so it stops taking a relay principal's notice slots.
+   * The relayed calls a relay principal still has notices armed or waiting
+   * for here (#13930): its Shell keeps the link open for them, and reads a
+   * call its host has no record of as a watch the host lost.
    */
-  dropRelayLink(linkSessionId: string): void {
-    // Remembered, so a call still being admitted over it, or a launch still
-    // running, arms nothing for it afterwards.
-    remember(this.endedRelayLinks, linkSessionId, true);
-    for (const owner of [...this.ownersByKey.values()]) {
-      if (owner.relay === undefined) continue;
-      for (const notice of [...owner.notices.values()]) {
-        if (notice.relay?.linkSessionId === linkSessionId) this.removeNotice(owner, notice);
-      }
-      owner.fired = owner.fired.filter((entry) => entry.relay?.linkSessionId !== linkSessionId);
-      this.maybeDispose(owner);
+  relayCallsWatching(key: string): Set<string> {
+    const calls = new Set<string>();
+    const owner = this.ownersByKey.get(key);
+    if (owner === undefined || owner.disposed || owner.relay === undefined) return calls;
+    for (const notice of owner.notices.values()) {
+      if (notice.relay !== undefined) calls.add(notice.relay.callId);
     }
+    for (const entry of owner.fired) {
+      if (entry.relay !== undefined) calls.add(entry.relay.callId);
+    }
+    return calls;
   }
 
   /** The MCP server was turned off, or the service is shutting down. */
@@ -1388,12 +1410,6 @@ export class TerminalNotifyService {
           "This pane's notices were stopped while this one was being set up."
         );
       }
-      if (this.relayEnded(pane)) {
-        throw new TerminalNotifyError(
-          NOTIFY_NOT_ELIGIBLE,
-          "The link this call came over ended, so its notice could not reach the assistant that asked."
-        );
-      }
       let projectId: string;
       if (relay !== undefined) {
         projectId = relay.projectId;
@@ -1457,10 +1473,6 @@ export class TerminalNotifyService {
     // Never pruned under an admission still reading: evicting its pane's mark
     // would let it bring the notices back.
     remember(this.teardownEpochs, mark, ++this.epoch, this.pendingAdmissions === 0);
-  }
-
-  private relayEnded(pane: OwnPane): boolean {
-    return pane.relay !== undefined && this.endedRelayLinks.has(pane.relay.linkSessionId);
   }
 
   private torndownSince(pane: OwnPane, epoch: number): boolean {
@@ -2505,6 +2517,11 @@ export class TerminalNotifyService {
     const lines = [
       ...(retired.length > 0 ? [formatRetiredExchangesLine(retired)] : []),
       ...[...hostNotices].map(([hostName, notices]) => formatHostNoticeLine(hostName, notices)),
+      ...wakes.flatMap(({ wake }) =>
+        wake.kind === "lost" && wake.lostNotices !== undefined
+          ? [formatHostNoticesLostLine(wake.lostNotices.hostName, wake.lostNotices.terminalIds)]
+          : []
+      ),
       ...(entries.length > 0
         ? [
             formatNoticeLine(
@@ -2809,6 +2826,15 @@ function publicDelivery(delivery: DeliveryState): TerminalNotifyDelivery {
 }
 
 export const TERMINAL_NOTIFY_WHEN_IDLE_TOOL = "terminal.notifyWhenIdle";
+
+/**
+ * Whether a call relayed to a host asks it for notices (#13500): the Shell
+ * pins what such a call arms to its run, and the host remembers having taken
+ * it, so a host that has no record of it later is one that lost its notices.
+ */
+export function relayCallArmsNotice(tool: string, args: Record<string, unknown>): boolean {
+  return tool === TERMINAL_NOTIFY_WHEN_IDLE_TOOL || args.notify === true;
+}
 
 /** The closes after which a pane's own notice for the target is dropped. */
 export const NOTIFY_CLOSE_TOOLS: ReadonlySet<string> = new Set([
