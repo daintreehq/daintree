@@ -1125,7 +1125,8 @@ describe("stopScript pid identity", () => {
       expect(sleeper.killed).toBe(false);
       expect(() => process.kill(sleeper.pid!, 0)).not.toThrow();
       const real = processStartTime(sleeper.pid!)?.replace(/\s+/g, " ");
-      if (real) {
+      if (process.platform === "darwin" || process.platform === "linux") {
+        expect(real).toBeTruthy();
         const matching = stopScript("linux", sleeper.pid!, false, real);
         spawnSync("sh", [
           "-c",

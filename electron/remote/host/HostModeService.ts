@@ -269,7 +269,9 @@ export class HostModeService {
     await this.starting?.catch(() => {});
     // Before the socket closes: a Shell that sees the drop and looks finds a
     // host that quit on purpose, and doesn't start it again.
-    if (this.recordedStatus !== null) await this.recordStatus({ stopped: true });
+    // A listener whose first record is still waiting on the restore counts as recorded too.
+    if (this.recordedStatus !== null || this.listener !== null)
+      await this.recordStatus({ stopped: true });
     const listener = this.listener;
     this.listener = null;
     this.offListener?.();

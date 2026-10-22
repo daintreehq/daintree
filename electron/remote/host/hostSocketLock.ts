@@ -125,6 +125,8 @@ export function processStartTime(pid: number): string | null {
     try {
       const started = execFileSync("/bin/ps", ["-o", "lstart=", "-p", String(pid)], {
         encoding: "utf8",
+        // The probe's shell reads the same field under LC_ALL=C.
+        env: { ...process.env, LC_ALL: "C" },
         timeout: 2_000,
         stdio: ["ignore", "pipe", "ignore"],
       }).trim();

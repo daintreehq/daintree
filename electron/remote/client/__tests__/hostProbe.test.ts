@@ -94,7 +94,8 @@ describe("buildHostProbeScript", () => {
     const sleeper = spawn("sleep", ["30"], { stdio: "ignore" });
     try {
       const expected = processStartTime(sleeper.pid!)?.replace(/\s+/g, " ");
-      if (!expected) return;
+      if (process.platform !== "darwin" && process.platform !== "linux") return;
+      expect(expected).toBeTruthy();
       const out = spawnSync(
         "sh",
         ["-c", `p=${sleeper.pid}; ${processStartShell("p", "n")}; printf %s "$n"`],
