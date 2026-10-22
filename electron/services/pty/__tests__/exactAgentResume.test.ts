@@ -22,6 +22,8 @@ function claudePane(overrides: Partial<ExactResumeTerminal> = {}): ExactResumeTe
     cwd: "/work/app",
     launchAgentId: "claude",
     detectedAgentId: "claude",
+    everDetectedAgent: true,
+    agentState: "idle",
     agentSessionId: SESSION,
     agentIncarnation: 0,
     hasPty: true,
@@ -127,6 +129,15 @@ describe("observeExactAgentResume", () => {
     ["the relaunch count wasn't observed", { agentIncarnation: undefined }],
     ["the PTY isn't confirmed live", { hasPty: undefined }],
     ["the process exited", { isExited: true }],
+    ["the agent was seen to exit", { agentState: "exited" as const }],
+    [
+      "the agent exited and left its shell",
+      { detectedAgentId: undefined, everDetectedAgent: true, agentState: "exited" as const },
+    ],
+    [
+      "detection cleared after the agent was seen",
+      { detectedAgentId: undefined, everDetectedAgent: true },
+    ],
   ])("refuses the launch id when %s", async (_label, overrides) => {
     const checker = fakeChecker("present");
     await expect(
@@ -137,9 +148,12 @@ describe("observeExactAgentResume", () => {
 
   it("keeps launch affinity while nothing has been detected yet", async () => {
     await expect(
-      observeExactAgentResume(claudePane({ detectedAgentId: undefined }), {
-        checkers: { claude: fakeChecker("present") },
-      })
+      observeExactAgentResume(
+        claudePane({ detectedAgentId: undefined, everDetectedAgent: false }),
+        {
+          checkers: { claude: fakeChecker("present") },
+        }
+      )
     ).resolves.toEqual({ resumesExactly: true });
   });
 });

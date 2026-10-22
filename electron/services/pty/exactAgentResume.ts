@@ -14,6 +14,11 @@
  * message can create the transcript right after a `no-transcript`, and the
  * CLI's own retention can remove one after a yes. It says nothing about whether
  * interrupting the agent is a good idea; that stays the caller's call.
+ *
+ * A yes is about the id, not the screen. Claude's own `/clear` and `/resume`
+ * move a running CLI to another conversation without telling Daintree, and the
+ * reopen then resumes the assigned id's conversation — the one teardown has
+ * always returned for a preassigned pane — rather than the one on screen.
  */
 
 import { getEffectiveAgentConfig, type AgentResume } from "../../../shared/config/agentRegistry.js";
@@ -37,6 +42,8 @@ export type ExactResumeTerminal = Pick<
   | "agentIncarnation"
   | "hasPty"
   | "isExited"
+  | "agentState"
+  | "everDetectedAgent"
 >;
 
 /**
@@ -109,10 +116,15 @@ function refuse(reason: ExactResumeRefusal): ExactResumeVerdict {
  * The id was minted for the agent this terminal launched, so it only names the
  * running conversation while that same launch is still the one running: no
  * other agent detected, no relaunch observed in the PTY (an unobserved count is
- * not zero), and a live process.
+ * not zero), the agent not seen to exit, and a live process. A detection that
+ * went away is an exit the shell outlived, not the boot window before the
+ * first one.
  */
 function holdsLaunchSession(terminal: ExactResumeTerminal): boolean {
-  if (terminal.detectedAgentId && terminal.detectedAgentId !== terminal.launchAgentId) {
+  if (terminal.agentState === "exited") return false;
+  if (terminal.detectedAgentId) {
+    if (terminal.detectedAgentId !== terminal.launchAgentId) return false;
+  } else if (terminal.everDetectedAgent) {
     return false;
   }
   return terminal.agentIncarnation === 0 && terminal.hasPty === true && terminal.isExited !== true;
