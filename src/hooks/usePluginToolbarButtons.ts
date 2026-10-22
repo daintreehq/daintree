@@ -121,7 +121,7 @@ export function useVisiblePluginToolbarButtons(): PluginToolbarButtonState {
   const context = useChromeWhenContext();
   const { configs } = all;
 
-  return useMemo(() => {
+  const shown = useMemo(() => {
     let hidden = false;
     const visible = new Map<string, ToolbarButtonConfig>();
     for (const [id, config] of configs) {
@@ -135,4 +135,12 @@ export function useVisiblePluginToolbarButtons(): PluginToolbarButtonState {
       isRegistered: (id: string) => visible.has(id),
     };
   }, [all, configs, context]);
+
+  // A popover whose button a false clause hid closes with it, as one whose
+  // button went away does, rather than springing back open once it holds again.
+  useEffect(() => {
+    usePluginToolbarPopoverStore.getState().retain(new Set(shown.configs.keys()));
+  }, [shown.configs]);
+
+  return shown;
 }

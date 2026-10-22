@@ -71,6 +71,8 @@ const { PluginToolbarButton, PluginTrayButton } = await import("../PluginTrayBut
 const { usePluginToolbarPopoverStore } = await import("@/store/pluginToolbarPopoverStore");
 const { closePluginToolbarPopoverIfHidden } = await import("../PluginToolbarPopover");
 const { isTooltipSuppressedForElement } = await import("@/lib/tooltipFocusSuppression");
+const { usePluginToolbarStateStore, _resetPluginToolbarStateStoreForTest } =
+  await import("@/store/pluginToolbarStateStore");
 
 const KIND_ID = "acme.inbox.inbox";
 
@@ -158,6 +160,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  _resetPluginToolbarStateStoreForTest();
   unregisterPanelKind(KIND_ID);
   for (const el of document.querySelectorAll("[data-test-overlay]")) el.remove();
 });
@@ -184,6 +187,44 @@ describe("plugin toolbar popover (#13784)", () => {
     });
     expect(popovers()).toHaveLength(0);
     expect(usePluginToolbarPopoverStore.getState().opening).toBeNull();
+  });
+
+  it("won't open from a promoted button the plugin made busy or disabled", async () => {
+    render(
+      <PluginToolbarButton pluginId={"acme.inbox.open"} config={popoverButton("acme.inbox.open")} />
+    );
+    const button = screen.getByRole("button", { name: "Inbox" });
+
+    act(() => {
+      usePluginToolbarStateStore.setState({
+        statesByPlugin: { "acme.inbox": { open: { disabled: true, disabledReason: "Sign in" } } },
+      });
+    });
+    await act(async () => {
+      fireEvent.click(button);
+    });
+    expect(button.getAttribute("aria-disabled")).toBe("true");
+    expect(popovers()).toHaveLength(0);
+    expect(usePluginToolbarPopoverStore.getState().opening).toBeNull();
+
+    act(() => {
+      usePluginToolbarStateStore.setState({
+        statesByPlugin: { "acme.inbox": { open: { busy: true } } },
+      });
+    });
+    await act(async () => {
+      fireEvent.click(button);
+    });
+    expect(popovers()).toHaveLength(0);
+
+    act(() => {
+      usePluginToolbarStateStore.setState({ statesByPlugin: {} });
+    });
+    await act(async () => {
+      fireEvent.click(button);
+    });
+    expect(popovers()).toHaveLength(1);
+    expect(h.dispatch).not.toHaveBeenCalled();
   });
 
   it("toggles closed on a second click of the promoted button", async () => {

@@ -88,6 +88,25 @@ describe("useVisiblePluginToolbarButtons (#13785)", () => {
     expect(result.current.buttonIds).toEqual(["acme.always"]);
   });
 
+  it("closes a hidden button's popover, and leaves it closed when the button returns", async () => {
+    toolbarButtonsMock.mockResolvedValue([pluginButton("acme.git", "isGitBacked")]);
+    setWhenContext({ isGitBacked: true });
+    const { useVisiblePluginToolbarButtons } = await import("../usePluginToolbarButtons");
+    const { usePluginToolbarPopoverStore } = await import("@/store/pluginToolbarPopoverStore");
+    const { result } = renderHook(() => useVisiblePluginToolbarButtons());
+
+    await waitFor(() => expect(result.current.buttonIds).toEqual(["acme.git"]));
+    act(() => usePluginToolbarPopoverStore.getState().open("acme.git", "button"));
+    expect(usePluginToolbarPopoverStore.getState().opening?.buttonId).toBe("acme.git");
+
+    act(() => setWhenContext({ isGitBacked: false }));
+    expect(usePluginToolbarPopoverStore.getState().opening).toBeNull();
+
+    act(() => setWhenContext({ isGitBacked: true }));
+    expect(result.current.buttonIds).toEqual(["acme.git"]);
+    expect(usePluginToolbarPopoverStore.getState().opening).toBeNull();
+  });
+
   it("hides a button whose clause doesn't parse, without touching the others", async () => {
     toolbarButtonsMock.mockResolvedValue([
       pluginButton("acme.ok"),
