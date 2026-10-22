@@ -30,6 +30,7 @@ import {
   debugApi,
   hostedOn,
   isAngularNode,
+  isDocumentElement,
   isProductionBuild,
   observedName,
   parentOf,
@@ -288,7 +289,7 @@ function selectionOf(
     const parent = parentOf(node);
     if (parent === null) {
       // A detached subtree ends without reaching the document, so its top has no observed parent.
-      reachedTop = node === node.ownerDocument.documentElement;
+      reachedTop = isDocumentElement(node);
       break;
     }
     node = parent;
@@ -304,6 +305,15 @@ function selectionOf(
   // its declarer's subtree is too, so an owner can sit outside the chain.
   let templateOwnerId: string | null = null;
   if (api.owners) {
+    // The template the element itself is written in, read first so its own
+    // owners are walked like any other record's. Kept apart from the chain:
+    // for projected content it is not the component it renders inside.
+    const elementOwner = api.ownerOf(element);
+    if (elementOwner !== undefined && elementOwner !== null) {
+      const ownerIndex = add(elementOwner, null);
+      if (ownerIndex === null) truncated = true;
+      else templateOwnerId = records[ownerIndex]!.componentId;
+    }
     const owners = new Steps(STEPS.owners);
     for (let index = 0; index < records.length; index += 1) {
       if (!owners.spend()) {
@@ -324,17 +334,6 @@ function selectionOf(
       if (ownerIndex !== index) records[index]!.ownerId = records[ownerIndex]!.componentId;
     }
     if (cutOwnerCycles(records)) truncated = true;
-
-    // The template the element itself is written in. Kept apart from the
-    // chain: for projected content it is not the component it renders inside.
-    if (lookup !== "host") {
-      const owner = api.ownerOf(element);
-      if (owner !== undefined && owner !== null) {
-        const ownerIndex = add(owner, null);
-        if (ownerIndex === null) truncated = true;
-        else templateOwnerId = records[ownerIndex]!.componentId;
-      }
-    }
   }
 
   // A component's rendered root is its host element.

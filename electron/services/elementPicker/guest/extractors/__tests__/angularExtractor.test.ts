@@ -102,11 +102,14 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
-/** Bootstraps `spec` as a dev build does, publishing `ng` (or the given stand-in for it, or none for null). */
+/**
+ * Bootstraps `spec` as a dev build does, publishing `ng` (or the given stand-in
+ * for it) and `ngDevMode`; null leaves either global undefined.
+ */
 function mount(spec: ComponentSpec, ng: unknown = angular.ng, devMode: unknown = {}): void {
   angular.bootstrap(spec, query("#root"));
   if (ng !== null) vi.stubGlobal("ng", ng);
-  if (devMode !== undefined) vi.stubGlobal("ngDevMode", devMode);
+  if (devMode !== null) vi.stubGlobal("ngDevMode", devMode);
   installExtractor(
     { channel: CHANNEL, framework: "angular", installed: false },
     createAngularExtractor()
@@ -227,10 +230,11 @@ describe("the Angular extractor", () => {
   it("selects a component by its host element", () => {
     mount(App);
     const observation = pick("app-button");
-    expect(diagnostics(observation)).toMatchObject({
-      componentLookup: "host",
-      templateOwnerId: null,
-    });
+    expect(diagnostics(observation).componentLookup).toBe("host");
+    // The host element is written in the app's template, as the button's owner edge says too.
+    expect(nameOf(observation, diagnostics(observation).templateOwnerId as string)).toBe(
+      "AppComponent"
+    );
     expect(nameOf(observation, observation.componentChain.nearestId)).toBe("ButtonComponent");
     const roots = Object.fromEntries(
       observation.componentChain.components.map((entry) => [entry.name?.value, entry])
@@ -428,6 +432,76 @@ describe("the Angular extractor", () => {
     expect(pickNode(first!).componentChain.nearestId).toBe(a);
   });
 
+  it("keys the nodes a real Angular 22.2.3 app keyed on the same markup", () => {
+    mount(App);
+    const keyed = [...query("#root").querySelectorAll("*")]
+      .filter((node) => Object.prototype.hasOwnProperty.call(node, "__ngContext__"))
+      .map(
+        (node) =>
+          node.localName + (node.getAttribute("class") ? `.${node.getAttribute("class")}` : "")
+      );
+    // Read off a zoneless app bootstrapped from this template; the card's inner div is not keyed.
+    expect(keyed).toEqual([
+      "app-root",
+      "main.app",
+      "app-card",
+      "section.card",
+      "app-button",
+      "button.go",
+      "span.projected",
+    ]);
+  });
+
+  it("walks the owners of a template owner found outside the host chain", () => {
+    const Frame: ComponentSpec = {
+      selector: "app-frame",
+      className: "_FrameComponent",
+      debugInfo: { className: "FrameComponent" },
+      template: [{ component: Card, children: [{ tag: "span", attrs: { class: "moved" } }] }],
+    };
+    mount(appOf([{ component: Frame }]));
+    // Written in the frame's template, then moved where no host encloses it.
+    document.body.appendChild(query("span.moved"));
+    const observation = pick("span.moved");
+    expect(observation.componentChain.nearestId).toBeNull();
+    const frame = record(observation, "FrameComponent");
+    expect(diagnostics(observation).templateOwnerId).toBe(frame.componentId);
+    expect(nameOf(observation, frame.ownerId)).toBe("AppComponent");
+    expect(record(observation, "AppComponent").ownerId).toBeNull();
+  });
+
+  it("gives every file hint its line exactly once, across as many entries as it takes", () => {
+    let inner: ComponentSpec = Button;
+    for (let depth = 20; depth > 0; depth -= 1) {
+      inner = {
+        selector: `app-c${depth}`,
+        className: `_C${depth}`,
+        debugInfo: {
+          className: `C${depth}`,
+          filePath: `src/app/c${depth}.ts`,
+          lineNumber: depth * 3,
+        },
+        template: [{ component: inner }],
+      };
+    }
+    mount(appOf([{ component: inner }]));
+    const observation = pick("button.go");
+    const lines = classLines(observation);
+    const sent = observation.frameworkEvidence
+      .slice(1)
+      .reduce((count, entry) => count + (entry as GenericEvidence).fields.length - 2, 0);
+    expect(observation.frameworkEvidence.length).toBeGreaterThan(2);
+    expect(sent).toBe(lines.size);
+    const expected = new Map(
+      observation.componentChain.components.map((entry) => {
+        const depth = /^C(\d+)$/.exec(entry.name!.value)?.[1];
+        const line = entry.name!.value === "ButtonComponent" ? 12 : depth ? Number(depth) * 3 : 20;
+        return [entry.sourceCandidates[0]!.candidateId, line];
+      })
+    );
+    expect(lines).toEqual(expected);
+  });
+
   it("describes the components around a node Angular did not render, and contributes nothing outside them", () => {
     mount(App);
     const widget = document.createElement("canvas");
@@ -537,26 +611,130 @@ describe("the Angular extractor on a debug API it cannot fully trust", () => {
     expect(record(observation, "AppComponent")).not.toHaveProperty("ownerId");
   });
 
-  it("says a page with no debug API is a production build", () => {
-    mount(App, null, false);
+  it.each([
+    ["off", false],
+    ["undefined", null],
+  ])(
+    "says a page with no debug API is a production build when ngDevMode is %s",
+    (_label, devMode) => {
+      mount(App, null, devMode);
+      for (const observation of [hover("button.go"), pick("button.go")]) {
+        expect(observation.componentChain.components).toEqual([]);
+        expect(observation.capabilities).toEqual({
+          names: { state: "unavailable", reason: "production-build" },
+          chain: { state: "unavailable", reason: "production-build" },
+          componentSelection: { state: "unavailable", reason: "production-build" },
+          file: { state: "unavailable", reason: "production-build" },
+          line: { state: "unavailable", reason: "production-build" },
+          exactRange: { state: "unavailable", reason: "production-build" },
+        });
+      }
+    }
+  );
+
+  it.each([
+    ["missing", null],
+    ["not Angular's", { getComponent: "not a function" }],
+  ])("says only that the API is not there when it is %s in a dev build", (_label, ng) => {
+    mount(App, ng, {});
     for (const observation of [hover("button.go"), pick("button.go")]) {
       expect(observation.componentChain.components).toEqual([]);
-      expect(observation.capabilities).toEqual({
-        names: { state: "unavailable", reason: "production-build" },
-        chain: { state: "unavailable", reason: "production-build" },
-        componentSelection: { state: "unavailable", reason: "production-build" },
-        file: { state: "unavailable", reason: "production-build" },
-        line: { state: "unavailable", reason: "production-build" },
-        exactRange: { state: "unavailable", reason: "production-build" },
-      });
+      expect(Object.values(observation.capabilities)).toEqual(
+        Array(6).fill({ state: "unavailable", reason: "not-exposed" })
+      );
     }
   });
 
-  it("says only that the API is not there when the build is in dev mode without it", () => {
-    mount(App, { getComponent: "not a function" });
+  it("reads the API afresh, so one published or replaced after a first look is the one used", () => {
+    mount(App, null, {});
+    expect(pick("button.go").componentChain.components).toEqual([]);
+    vi.stubGlobal("ng", angular.ng);
+    expect(chainNames(pick("button.go"))).toEqual([
+      "ButtonComponent",
+      "CardComponent",
+      "AppComponent",
+    ]);
+    vi.stubGlobal("ng", { getComponent: angular.ng.getComponent });
+    expect(diagnostics(pick("button.go")).owningComponentApi).toBe(false);
+  });
+
+  it("treats an answer of the wrong shape as Angular not saying", () => {
+    mount(App);
+    const { proxy, revoke } = Proxy.revocable({}, {});
+    revoke();
+    vi.stubGlobal(
+      "ng",
+      ngWith({
+        getComponent: (element: unknown) =>
+          element instanceof Element && element.localName === "app-card"
+            ? (42 as never)
+            : angular.ng.getComponent(element),
+        getOwningComponent: (target: unknown) =>
+          target instanceof Element
+            ? ("AppComponent" as never)
+            : angular.ng.getOwningComponent(target),
+        // A revoked proxy throws on the `instanceof` that would check it.
+        getHostElement: () => proxy as never,
+      })
+    );
     const observation = pick("button.go");
-    expect(observation.componentChain.components).toEqual([]);
-    expect(observation.capabilities.names).toEqual({ state: "unavailable", reason: "not-exposed" });
+    // The card's answer is a gap: the button gets no render parent across it.
+    expect(chainNames(observation)).toEqual(["ButtonComponent", "AppComponent"]);
+    expect(record(observation, "ButtonComponent")).not.toHaveProperty("renderParentId");
+    expect(diagnostics(observation).templateOwnerId).toBeNull();
+    // Reached by its owner edge, its host was Angular's to name, and was no element.
+    expect(record(observation, "AppComponent")).toMatchObject({
+      rootElementIds: [],
+      rootsComplete: false,
+    });
+  });
+
+  it("names nothing it cannot read off an instance", () => {
+    mount(App);
+    const hostile = new Proxy(
+      {},
+      {
+        get(_target, key) {
+          if (key === "constructor") throw new Error("no constructor for you");
+          return undefined;
+        },
+      }
+    );
+    vi.stubGlobal(
+      "ng",
+      ngWith({
+        getComponent: (element: unknown) =>
+          element instanceof Element && element.localName === "app-button"
+            ? hostile
+            : angular.ng.getComponent(element),
+      })
+    );
+    // The host itself, so its template owner is the app rather than the real instance behind it.
+    const observation = pick("app-button");
+    expect(chainNames(observation)).toEqual([null, "CardComponent", "AppComponent"]);
+    expect(observation.componentChain.components[0]!.sourceCandidates).toEqual([]);
+  });
+
+  it("ends a detached subtree's chain at its top without claiming it reached the document", () => {
+    const detached = document.createElement("div");
+    angular.bootstrap(App, detached);
+    vi.stubGlobal("ng", angular.ng);
+    vi.stubGlobal("ngDevMode", {});
+    const contribution = createAngularExtractor().extract(
+      detached.querySelector("button.go")!,
+      "selection",
+      { ref: () => null }
+    );
+    const records = contribution!.componentChain!.components;
+    expect(records.map((entry) => entry.name?.value)).toEqual([
+      "ButtonComponent",
+      "CardComponent",
+      "AppComponent",
+    ]);
+    expect(records[2]).not.toHaveProperty("renderParentId");
+    expect(
+      records.every((entry) => entry.rootElementIds.length === 0 && !entry.rootsComplete)
+    ).toBe(true);
   });
 });
 
@@ -628,5 +806,78 @@ describe("the Angular extractor's bounds", () => {
     expect(diagnostics(observation).claimsOmitted).toBeGreaterThan(0);
     expect(observation.capabilities.file).toEqual({ state: "unknown" });
     expect(new TextEncoder().encode(JSON.stringify(observation)).length).toBeLessThan(128 * 1024);
+  });
+
+  it("looks for Angular's key only as far up as a hover walks", () => {
+    const nest = (depth: number, leaf: TemplateNode): TemplateNode => {
+      let node = leaf;
+      for (let level = 0; level < depth; level += 1) node = { tag: "div", children: [node] };
+      return node;
+    };
+    // Below the app's keyed <main>: one inside the bound, one past it.
+    mount(
+      appOf([
+        nest(250, { tag: "i", attrs: { class: "near" } }),
+        nest(300, { tag: "i", attrs: { class: "far" } }),
+      ])
+    );
+    expect(chainNames(pick("i.near"))).toEqual(["AppComponent"]);
+    expect(
+      createAngularExtractor().extract(query("i.far"), "selection", { ref: () => null })
+    ).toBeNull();
+  });
+
+  it("drops every claim, and the lines beside them, before a record when the reply would pass its ceiling", () => {
+    let inner: ComponentSpec = Button;
+    for (let depth = 16; depth > 0; depth -= 1) {
+      inner = {
+        selector: `app-wide-${depth}`,
+        className: `_Wide${depth}`,
+        // Three UTF-8 bytes a character: the claims fit their share in characters, not in bytes.
+        debugInfo: {
+          className: `${"€".repeat(250)}${depth}`,
+          filePath: `src/${"€".repeat(2030)}${depth}.ts`,
+          lineNumber: depth,
+        },
+        template: [{ component: inner }],
+      };
+    }
+    mount(appOf([{ component: inner }]));
+    const observation = pick("button.go");
+    const records = observation.componentChain.components;
+    expect(records).toHaveLength(18);
+    expect(observation.componentChain.truncated).toBe(false);
+    expect(records.every((entry) => entry.sourceCandidates.length === 0)).toBe(true);
+    expect(observation.frameworkEvidence).toHaveLength(1);
+    expect(diagnostics(observation).claimsOmitted).toBe(18);
+    // Held back for size, the files and lines are still ones the build exposed.
+    expect(observation.capabilities.file).toEqual({ state: "unknown" });
+    expect(observation.capabilities.line).toEqual({ state: "unknown" });
+  });
+
+  it("drops the outermost records last, leaving no edge or template owner pointing at them", () => {
+    // JSON escapes each control character to six bytes.
+    const noisy = (depth: number) => `${"\u0001".repeat(250)}${depth}`;
+    let content: TemplateNode[] = [{ tag: "span", attrs: { class: "deep" } }];
+    for (let depth = 60; depth > 0; depth -= 1) {
+      const level: ComponentSpec = {
+        selector: `app-noisy-${depth}`,
+        className: noisy(depth),
+        template: [{ projection: true }],
+      };
+      // All written in the app's template, each projected into the one around it.
+      content = [{ component: level, children: content }];
+    }
+    mount(appOf(content));
+    const observation = pick("span.deep");
+    const records = observation.componentChain.components;
+    expect(records.length).toBeLessThan(61);
+    expect(observation.componentChain.truncated).toBe(true);
+    expect(observation.componentChain.nearestId).toBe(records[0]!.componentId);
+    expect(records[0]!.name?.value.endsWith("60")).toBe(true);
+    // Every owner was the app, whose record went.
+    expect(records.some((entry) => "ownerId" in entry)).toBe(false);
+    expect(records.at(-1)).not.toHaveProperty("renderParentId");
+    expect(diagnostics(observation).templateOwnerId).toBeNull();
   });
 });

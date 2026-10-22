@@ -2,15 +2,20 @@
 /**
  * What an Angular 22 dev build shows the extractor, without Angular in the
  * repo: the three debug functions it publishes as `window.ng` and the
- * `__ngContext__` keys it sets, each answering as `@angular/core` 22's own
- * does. `getComponent` throws on a non-element and names only a host's
- * component; `getOwningComponent` names the component whose template declared
- * an element or a component, null for a root, and throws for an instance no
- * live view holds; `getHostElement` throws for one too. Angular keys a view's
- * top-level elements and every host, not the elements nested inside them.
+ * `__ngContext__` keys it sets, each answering as `@angular/core` 22.2.3's own
+ * does for elements and component instances. `getComponent` throws on a
+ * non-element and names only a host's component; `getOwningComponent` names
+ * the component whose template declared an element or a component, null for a
+ * root, and throws for anything else; `getHostElement` throws for an instance
+ * it does not know. Angular keys a view's top-level elements, every host, and
+ * the top-level nodes of content it projects, not the elements nested inside
+ * them; the keys a real 22.2.3 app set on the same markup are pinned in
+ * `angularExtractor.test.ts`.
  *
- * Zone and zoneless apps publish the same functions with the same answers:
- * change detection never enters into what they read.
+ * Only the answers are modelled, not how Angular finds them: no embedded
+ * views, and `destroy` is a synthetic invalidation rather than a view
+ * teardown. Zone and zoneless apps publish the same functions with the same
+ * answers: change detection never enters into what they read.
  */
 
 export interface DebugInfo {
@@ -146,9 +151,10 @@ export class FakeAngular {
       return;
     }
     if ("projection" in node) {
-      // Projected nodes stay their declaring template's: owner, view and depth.
+      // Projected nodes stay their declaring template's, and Angular keys the
+      // top-level ones with that template's view as it inserts them.
       for (const child of slot.nodes) {
-        this.render(child, into, slot.owner, slot.view, false, slot.outer ?? slot);
+        this.render(child, into, slot.owner, slot.view, true, slot.outer ?? slot);
       }
       return;
     }

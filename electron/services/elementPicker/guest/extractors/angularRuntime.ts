@@ -16,8 +16,13 @@ const MAX_NAME_CHARS = 256;
 
 /** Set by Angular on every root node of a view and every directive host, in production builds too. */
 const CONTEXT_KEY = "__ngContext__";
-/** How far up the picked element Angular's key is looked for: the detector's ancestry bound. */
-const OWNERSHIP_DEPTH = 64;
+/**
+ * How far up the picked element Angular's key is looked for. Only a view's
+ * top-level nodes and hosts carry it, so markup nested deep in one template,
+ * or a library's DOM inside a component, can sit far below the nearest: as far
+ * as a hover walks for its label.
+ */
+const OWNERSHIP_DEPTH = 256;
 
 /** Stamped by the compiler's opt-in `enableTemplateSourceLocations`; absent by default. */
 export const SOURCE_LOCATION_ATTRIBUTE = "data-ng-source-location";
@@ -61,6 +66,15 @@ function isInstance(value: unknown): value is object {
   return typeof value === "object" && value !== null;
 }
 
+/** A page value can be a revoked proxy, which throws on `instanceof` itself. */
+function isElement(value: unknown): value is Element {
+  try {
+    return value instanceof Element;
+  } catch {
+    return false;
+  }
+}
+
 /** One published function, called on `ng` as Angular calls it; undefined for a throw or a missing function. */
 function bind(ng: unknown, name: string): ((argument: unknown) => unknown) | undefined {
   const fn = read(ng, name);
@@ -97,7 +111,7 @@ export function debugApi(): DebugApi | null {
     },
     hostOf(instance) {
       const host = getHostElement?.(instance);
-      return host instanceof Element ? host : undefined;
+      return isElement(host) ? host : undefined;
     },
     owners: getOwningComponent !== undefined,
     hosts: getHostElement !== undefined,
@@ -132,6 +146,15 @@ export function parentOf(node: Element): Element | null {
     // A node whose parent cannot be read ends the walk.
   }
   return null;
+}
+
+/** Whether a walk that ran out of parents at `node` reached the document rather than the top of a detached subtree. */
+export function isDocumentElement(node: Element): boolean {
+  try {
+    return node === node.ownerDocument.documentElement;
+  } catch {
+    return false;
+  }
 }
 
 /** Whether Angular rendered the element: it or an ancestor carries the key Angular sets on what it renders. */
@@ -211,13 +234,14 @@ export interface TemplateLocation {
 
 /** The compiler's stamp of where an element is written in its template: a character offset, and a 0-based line and column. */
 export function templateLocation(element: Element): TemplateLocation | null {
-  let value: string | null;
+  let value: unknown;
   try {
     value = element.getAttribute(SOURCE_LOCATION_ATTRIBUTE);
   } catch {
     return null;
   }
-  if (value === null || value.length > MAX_FILE_CHARS + 64) return null;
+  // Page code can replace `getAttribute`; only a string is a stamp.
+  if (typeof value !== "string" || value.length > MAX_FILE_CHARS + 64) return null;
   const match = SOURCE_LOCATION_VALUE.exec(value);
   if (match === null) return null;
   const [, file, offset, line, column] = match as unknown as [

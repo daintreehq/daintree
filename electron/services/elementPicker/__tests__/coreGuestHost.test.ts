@@ -794,10 +794,18 @@ describe("core Element Picker guest loading", () => {
       expect(label!.sourceCandidates).toEqual([
         expect.objectContaining({ kind: "file-hint", file: "src/app/label.component.ts" }),
       ]);
-      // Each root is a host, arrived as the picker's own id for it.
-      const ids = new Set(records.flatMap((record) => record.rootElementIds));
-      expect(ids.size).toBe(3);
-      expect(records.every((record) => record.rootElementIds.length === 1)).toBe(true);
+      // Each root is that component's host, arrived as the picker's own id for it.
+      const hostId = async (selector: string): Promise<string> => {
+        (document.querySelector(selector) as HTMLElement).click();
+        await settle();
+        const event = h.pickerEvents("selectionChanged").at(-1)!.event as {
+          observations: Array<{ elementId: string }>;
+        };
+        return event.observations[0]!.elementId;
+      };
+      expect(label!.rootElementIds).toEqual([await hostId("app-label")]);
+      expect(card!.rootElementIds).toEqual([await hostId("app-card")]);
+      expect(app!.rootElementIds).toEqual([await hostId("app-root")]);
     } finally {
       vi.unstubAllGlobals();
     }
