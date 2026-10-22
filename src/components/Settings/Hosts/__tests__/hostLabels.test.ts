@@ -9,6 +9,7 @@ import {
   restartConfirmLabel,
   restartImpactLines,
   restartTerminalCount,
+  shellWord,
   sshRefusalAdvice,
 } from "../hostLabels";
 
@@ -194,6 +195,14 @@ describe("sshRefusalAdvice", () => {
     ).toBe("changed-host-key");
   });
 
+  it("doesn't read a stray 'has changed' as a changed host key", () => {
+    expect(
+      sshRefusalAdvice(
+        "Your password has changed.\ngreg@studio: Permission denied (publickey,password)."
+      )
+    ).toBe("login-refused");
+  });
+
   it("names a refused login", () => {
     expect(sshRefusalAdvice("greg@studio: Permission denied (publickey,password).")).toBe(
       "login-refused"
@@ -203,5 +212,12 @@ describe("sshRefusalAdvice", () => {
   it("stays quiet for other failures", () => {
     expect(sshRefusalAdvice(null)).toBeNull();
     expect(sshRefusalAdvice("ssh: connect to host studio port 22: Connection refused")).toBeNull();
+  });
+});
+
+describe("shellWord", () => {
+  it("leaves plain targets alone and quotes the ones a shell would glob", () => {
+    expect(shellWord("greg@studio.local")).toBe("greg@studio.local");
+    expect(shellWord("greg@[studio]")).toBe("'greg@[studio]'");
   });
 });

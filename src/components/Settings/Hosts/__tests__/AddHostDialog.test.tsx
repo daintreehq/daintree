@@ -182,11 +182,11 @@ describe("AddHostDialog", () => {
   });
 
   it.each([
-    ["Host key verification failed.", "Trust the host key", "ssh greg@studio"],
+    ["Host key verification failed.", "Connect once", "ssh greg@studio"],
     [
       "Host key for studio has changed and you have requested strict checking.\nHost key verification failed.",
-      "Remove the old host key",
-      "ssh-keygen -R studio",
+      "known_hosts line ssh named",
+      "differs from the one on file",
     ],
     [
       "greg@studio: Permission denied (publickey,password).",

@@ -50,6 +50,7 @@ import {
   defaultHostName,
   deliveryLabel,
   localNameSuggestion,
+  shellWord,
   sshRefusalAdvice,
   hostModeSwitchedOn,
   installLabel,
@@ -833,26 +834,20 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
               {refusal === "untrusted-host-key" && (
                 <>
                   <p className="text-xs text-text-secondary">
-                    ssh doesn&apos;t trust this machine&apos;s host key yet, and Daintree never
-                    accepts one for you. Connect once in a terminal and answer yes, then check
-                    again.
+                    ssh couldn&apos;t verify this machine&apos;s host key, and Daintree never
+                    accepts one for you. If you recognise the machine, connect once in a terminal
+                    and answer yes to trust it, then check again.
                   </p>
-                  <HostCommand label="Trust the host key" command={`ssh ${target.trim()}`} />
+                  <HostCommand label="Connect once" command={`ssh ${shellWord(target.trim())}`} />
                 </>
               )}
               {refusal === "changed-host-key" && (
-                <>
-                  <p className="text-xs text-text-secondary">
-                    ssh says this machine&apos;s host key differs from the one on file. If you
-                    didn&apos;t expect that, stop here. If you did, remove the old key, connect once
-                    to trust the new one, then check again.
-                  </p>
-                  <HostCommand
-                    label="Remove the old host key"
-                    command={`ssh-keygen -R ${target.trim().slice(target.trim().lastIndexOf("@") + 1)}`}
-                  />
-                  <HostCommand label="Trust the new host key" command={`ssh ${target.trim()}`} />
-                </>
+                <p className="text-xs text-text-secondary">
+                  ssh says this machine&apos;s host key differs from the one on file. If you
+                  didn&apos;t expect that, stop here. If you did, remove the old entry from the
+                  known_hosts line ssh named above, connect once in a terminal to trust the new key,
+                  then check again.
+                </p>
               )}
               {refusal === "login-refused" && (
                 <>
@@ -860,7 +855,10 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
                     This machine refused the login, and Daintree can&apos;t type a password. Set up
                     key login so your own ssh gets in, then check again.
                   </p>
-                  <HostCommand label="Set up key login" command={`ssh-copy-id ${target.trim()}`} />
+                  <HostCommand
+                    label="Set up key login"
+                    command={`ssh-copy-id ${shellWord(target.trim())}`}
+                  />
                 </>
               )}
             </div>

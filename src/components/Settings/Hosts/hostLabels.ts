@@ -150,6 +150,11 @@ export function localNameSuggestion(sshTarget: string, sshError: string | null):
   return `${sshTarget.slice(0, at + 1)}${host}.local`;
 }
 
+/** A target as one shell word: the host list accepts `[` and `]`, which a shell reads as a glob. */
+export function shellWord(target: string): string {
+  return /^[\w@.%+-]+$/.test(target) ? target : `'${target}'`;
+}
+
 export type SshRefusalAdvice = "untrusted-host-key" | "changed-host-key" | "login-refused";
 
 /**
@@ -160,7 +165,11 @@ export type SshRefusalAdvice = "untrusted-host-key" | "changed-host-key" | "logi
  */
 export function sshRefusalAdvice(sshError: string | null): SshRefusalAdvice | null {
   if (!sshError) return null;
-  if (/has changed|REMOTE HOST IDENTIFICATION|Offending \S+ key/i.test(sshError)) {
+  if (
+    /^Host key for \S+ has changed\b|REMOTE HOST IDENTIFICATION HAS CHANGED|^Offending \S+ key in /im.test(
+      sshError
+    )
+  ) {
     return "changed-host-key";
   }
   if (/Host key verification failed|No \S+ host key is known/i.test(sshError)) {
