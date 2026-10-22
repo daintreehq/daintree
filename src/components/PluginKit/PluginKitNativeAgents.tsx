@@ -33,6 +33,7 @@ import type {
   PluginShortcutHintProps,
   PluginTerminalSnapshotProps,
 } from "@shared/types/plugin-sdk-react";
+import { AGENT_LAUNCH_ACTION_ID } from "@shared/utils/dispatchAgentLaunch";
 import { resolveEffectiveActionDanger } from "@shared/utils/effectiveActionDanger";
 import {
   setAgentContextDragData,
@@ -111,6 +112,8 @@ const AGENT_STATES = ["idle", "working", "waiting", "directing", "completed", "e
 const UNKNOWN_ACTION_REASON = "Not available in this version of Daintree";
 const PLUGIN_BLOCKED_REASON = "Plugins can't run this action";
 const CONFIRM_REASON = "Asks for confirmation, so run it from Daintree itself";
+const AGENT_LAUNCH_CONFIG_REASON =
+  "Plugins can launch an agent with a prompt, not with its own flags, environment or system prompt";
 const DISABLED_FALLBACK_REASON = "Not available right now";
 const PLUGIN_BLOCKED_META = "Not for plugins";
 const CONFIRM_META = "Needs confirmation";
@@ -179,6 +182,10 @@ export function readActionState(actionId: string, args: unknown, revision = 0): 
   } catch {
     // The declared danger stands; dispatch re-checks with validated arguments.
   }
+  // Raised by its arguments, not its tier: "run it from Daintree" would be
+  // wrong advice for a launch the same control could make with a prompt alone.
+  if (danger === "confirm" && entry.danger === "safe" && actionId === AGENT_LAUNCH_ACTION_ID)
+    return blocked(AGENT_LAUNCH_CONFIG_REASON, PLUGIN_BLOCKED_META);
   if (danger !== "safe")
     return danger === "confirm"
       ? blocked(CONFIRM_REASON, CONFIRM_META)

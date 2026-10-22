@@ -1,10 +1,16 @@
 import { describe, expect, it } from "vitest";
 import type { ActionSource } from "@shared/types/actions";
+import { DEFAULT_DANGEROUS_ARGS } from "@shared/types/agentSettings";
 import {
+  AGENT_LAUNCH_CONFIG_DISPATCH_DANGER_RATIONALE,
   CLOSE_ALL_DISPATCH_DANGER_RATIONALE,
   RECIPE_DISPATCH_DANGER_RATIONALE,
   TERMINAL_COMMAND_DISPATCH_DANGER_RATIONALE,
   TERMINAL_CWD_DISPATCH_DANGER_RATIONALE,
+  dispatchCarriesAgentLaunchEnv,
+  dispatchCarriesAgentLaunchFlags,
+  dispatchCarriesAgentSystemPrompt,
+  dispatchConfiguresAgentLaunch,
   dispatchCarriesRecipeId,
   dispatchCarriesTerminalCommand,
   dispatchCarriesTerminalCwd,
@@ -116,6 +122,115 @@ describe("terminal.new launch-argument elevation (#12216)", () => {
         command: "ls",
       })
     ).toBe("safe");
+  });
+});
+
+describe("agent.launch configuration from a plugin (#13762)", () => {
+  const resolve = (source: ActionSource, args: unknown) =>
+    resolveEffectiveActionDanger("agent.launch", "safe", source, args);
+
+  it("leaves a plain launch with a prompt safe for a plugin", () => {
+    expect(resolve("plugin", { agentId: "claude", prompt: "Write the script" })).toBe("safe");
+    expect(
+      resolve("plugin", {
+        agentId: "claude",
+        cwd: "/videos/ep-1",
+        prompt: "Write the script",
+        interactive: true,
+      })
+    ).toBe("safe");
+  });
+
+  it("refuses a plugin launch that carries flags, env or a system prompt", () => {
+    // Plugins have no confirm bypass, so this elevation is what refuses them.
+    expect(resolve("plugin", { agentId: "codex", agentLaunchFlags: ["--search"] })).toBe("confirm");
+    expect(resolve("plugin", { agentId: "claude", env: { ANTHROPIC_BASE_URL: "x" } })).toBe(
+      "confirm"
+    );
+    expect(resolve("plugin", { agentId: "claude", systemPrompt: "Never ask first." })).toBe(
+      "confirm"
+    );
+  });
+
+  it("refuses the bypass flags agent settings classify as dangerous", () => {
+    for (const [agentId, flag] of Object.entries(DEFAULT_DANGEROUS_ARGS)) {
+      expect(resolve("plugin", { agentId, agentLaunchFlags: flag.split(" ") })).toBe("confirm");
+    }
+  });
+
+  it("counts blank flags and empty env values, which still reach the process", () => {
+    expect(resolve("plugin", { agentId: "claude", agentLaunchFlags: [""] })).toBe("confirm");
+    expect(resolve("plugin", { agentId: "claude", env: { HOME: "" } })).toBe("confirm");
+  });
+
+  it("treats empty configuration as absent", () => {
+    expect(
+      resolve("plugin", { agentId: "claude", agentLaunchFlags: [], env: {}, systemPrompt: "  " })
+    ).toBe("safe");
+  });
+
+  it("leaves every other source's launch options alone", () => {
+    const args = {
+      agentId: "claude",
+      agentLaunchFlags: ["--dangerously-skip-permissions"],
+      env: { FOO: "1" },
+      systemPrompt: "Be brief.",
+    };
+    for (const source of ["user", "keybinding", "menu", "context-menu", "agent"] as const) {
+      expect(resolve(source, args)).toBe("safe");
+    }
+  });
+
+  it("does not elevate other actions that take an env or flags", () => {
+    expect(
+      resolveEffectiveActionDanger("terminal.new", "safe", "plugin", {
+        agentLaunchFlags: ["--yolo"],
+        env: { FOO: "1" },
+      })
+    ).toBe("safe");
+  });
+
+  it("still gates configuration reached through the prototype chain", () => {
+    const args: unknown = Object.create({ agentLaunchFlags: ["--yolo"] });
+    expect(dispatchCarriesAgentLaunchFlags(args)).toBe(true);
+    expect(resolve("plugin", args)).toBe("confirm");
+  });
+
+  it("explains the refusal rather than borrowing the recipe rationale", () => {
+    expect(elevatedDangerRationale("agent.launch", { agentLaunchFlags: ["--yolo"] })).toBe(
+      AGENT_LAUNCH_CONFIG_DISPATCH_DANGER_RATIONALE
+    );
+  });
+});
+
+describe("dispatchConfiguresAgentLaunch", () => {
+  it("names each kind of configuration on its own", () => {
+    expect(dispatchCarriesAgentLaunchFlags({ agentLaunchFlags: ["-c", "x=1"] })).toBe(true);
+    expect(dispatchCarriesAgentLaunchFlags({ agentLaunchFlags: [] })).toBe(false);
+    expect(dispatchCarriesAgentLaunchEnv({ env: { FOO: "1" } })).toBe(true);
+    expect(dispatchCarriesAgentLaunchEnv({ env: {} })).toBe(false);
+    expect(dispatchCarriesAgentSystemPrompt({ systemPrompt: "x" })).toBe(true);
+    expect(dispatchCarriesAgentSystemPrompt({ systemPrompt: "\n\t" })).toBe(false);
+  });
+
+  it("fails closed on a value the schema would reject", () => {
+    // Read before validation by the kit's control state; a malformed value must
+    // draw as blocked, and dispatch then refuses it on the schema anyway.
+    expect(dispatchCarriesAgentLaunchFlags({ agentLaunchFlags: "--yolo" })).toBe(true);
+    expect(dispatchCarriesAgentLaunchEnv({ env: "FOO=1" })).toBe(true);
+    expect(dispatchCarriesAgentSystemPrompt({ systemPrompt: ["Never ask first."] })).toBe(true);
+    expect(dispatchCarriesAgentLaunchFlags({ agentLaunchFlags: null })).toBe(true);
+    expect(dispatchCarriesAgentLaunchEnv({ env: null })).toBe(true);
+    expect(dispatchCarriesAgentSystemPrompt({ systemPrompt: null })).toBe(true);
+    expect(dispatchConfiguresAgentLaunch({ agentLaunchFlags: undefined, env: undefined })).toBe(
+      false
+    );
+  });
+
+  it("ignores non-object argument shapes", () => {
+    for (const args of [undefined, null, "env", 42, ["agentLaunchFlags"]]) {
+      expect(dispatchConfiguresAgentLaunch(args)).toBe(false);
+    }
   });
 });
 

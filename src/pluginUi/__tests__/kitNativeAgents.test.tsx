@@ -175,6 +175,46 @@ describe("ActionButton", () => {
     expect(document.body.textContent).not.toContain("Quit");
   });
 
+  it("refuses an agent launch its arguments configure, and runs one with only a prompt (#13762)", async () => {
+    addAction({ id: "agent.launch", title: "Launch agent" });
+    render(
+      inView(
+        createElement(
+          "div",
+          null,
+          createElement(kit.ActionButton, {
+            actionId: "agent.launch",
+            args: { agentId: "claude", agentLaunchFlags: ["--dangerously-skip-permissions"] },
+            "aria-label": "Launch configured",
+          }),
+          createElement(kit.ActionButton, {
+            actionId: "agent.launch",
+            args: { agentId: "claude", prompt: "Write the script" },
+            "aria-label": "Launch plain",
+          })
+        )
+      )
+    );
+    const configured = screen.getByRole("button", { name: "Launch configured" });
+    expect(configured.getAttribute("aria-disabled")).toBe("true");
+    const reason = document.getElementById(
+      configured.getAttribute("aria-describedby") ?? ""
+    )?.textContent;
+    expect(reason).toMatch(/with a prompt/);
+    expect(reason).not.toMatch(/confirmation/);
+    fireEvent.click(configured);
+    await flush();
+    expect(dispatch).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Launch plain" }));
+    await flush();
+    expect(dispatch).toHaveBeenCalledWith(
+      "agent.launch",
+      { agentId: "claude", prompt: "Write the script" },
+      { source: "plugin" }
+    );
+  });
+
   it("keeps the author's own name and description beside the refusal reason", () => {
     addAction({ id: "worktree.refresh", enabled: false, disabledReason: "Offline" });
     render(

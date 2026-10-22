@@ -311,6 +311,54 @@ describe("ActionService", () => {
       expect(mockRun).toHaveBeenCalledTimes(1);
     });
 
+    it("refuses a plugin agent.launch that configures the agent, and runs a plain one (#13762)", async () => {
+      const mockRun = vi.fn().mockResolvedValue(undefined);
+      service.register({
+        id: "agent.launch" as ActionId,
+        title: "Launch agent",
+        description:
+          "A test action for validating ActionService dispatch, registration, and manifest entry generation.",
+        category: "agent",
+        kind: "command",
+        danger: "safe",
+        scope: "renderer",
+        argsSchema: z.object({
+          agentId: z.string(),
+          prompt: z.string().optional(),
+          agentLaunchFlags: z.array(z.string()).optional(),
+        }),
+        run: mockRun,
+      });
+
+      const configured = {
+        agentId: "claude",
+        agentLaunchFlags: ["--dangerously-skip-permissions"],
+      };
+      for (const confirmed of [false, true]) {
+        const blocked = await service.dispatch("agent.launch", configured, {
+          source: "plugin",
+          confirmed,
+        });
+        expect(blocked.ok).toBe(false);
+        if (!blocked.ok) {
+          expect(blocked.error.code).toBe("CONFIRMATION_REQUIRED");
+          // Names what to drop, not a confirmation a plugin can never give.
+          expect(blocked.error.message).toMatch(/agentLaunchFlags, env or systemPrompt/);
+        }
+      }
+      expect(mockRun).not.toHaveBeenCalled();
+
+      const plain = await service.dispatch(
+        "agent.launch",
+        { agentId: "claude", prompt: "Write the script" },
+        { source: "plugin" }
+      );
+      expect(plain.ok).toBe(true);
+      const fromAgent = await service.dispatch("agent.launch", configured, { source: "agent" });
+      expect(fromAgent.ok).toBe(true);
+      expect(mockRun).toHaveBeenCalledTimes(2);
+    });
+
     it("leaves the same action ungated for an agent dispatch that names no recipe (#11860)", async () => {
       const mockRun = vi.fn().mockResolvedValue(undefined);
       service.register({

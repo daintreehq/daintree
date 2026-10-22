@@ -1,4 +1,5 @@
 import type { ActionDanger, ActionSource } from "../types/actions.js";
+import { AGENT_LAUNCH_ACTION_ID, dispatchConfiguresAgentLaunch } from "./dispatchAgentLaunch.js";
 import { dispatchCarriesRecipeId } from "./dispatchRecipeId.js";
 import {
   dispatchCarriesTerminalCommand,
@@ -66,6 +67,21 @@ export function resolveEffectiveActionDanger(
     actionId === TERMINAL_LAUNCH_ACTION_ID &&
     (source === "agent" || source === "plugin") &&
     (dispatchCarriesTerminalCommand(args) || dispatchCarriesTerminalCwd(args))
+  ) {
+    return "confirm";
+  }
+  // `agent.launch` from a PLUGIN carrying flags, env or a system prompt
+  // (#13762). The plugin path is documented as `{ agentId, prompt }`: a fresh
+  // agent the user can see, given a task. These arguments configure the agent
+  // instead — what it may do, what it runs with — and include the bypass flags
+  // agent settings classify as dangerous, so with no confirm bypass for plugins
+  // this refuses them, dangerous or not. Plugin-only: an MCP agent's launch
+  // options are part of the orchestration surface it was granted, and a user's
+  // are their own choice.
+  if (
+    actionId === AGENT_LAUNCH_ACTION_ID &&
+    source === "plugin" &&
+    dispatchConfiguresAgentLaunch(args)
   ) {
     return "confirm";
   }
