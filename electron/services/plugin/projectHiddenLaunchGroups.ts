@@ -18,12 +18,20 @@ const STORE_KEY = "projectHiddenLaunchGroups";
 /** Most groups one project may hide; the file is user-editable, so it is bounded on read too. */
 const MAX_HIDDEN_GROUPS = 200;
 
-/** The file is user-editable, so anything that isn't a non-empty string id is skipped. */
+/** Longest plugin id a hidden group may name, on read and on write alike. */
+export const MAX_HIDDEN_GROUP_ID_LENGTH = 300;
+
+/** Whether `id` can name a hidden group: what is read back must be something a reset can send. */
+export function isHiddenGroupId(id: unknown): id is string {
+  return typeof id === "string" && id.length > 0 && id.length <= MAX_HIDDEN_GROUP_ID_LENGTH;
+}
+
+/** The file is user-editable, so anything that isn't a well-formed id is skipped. */
 function parseHidden(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   const ids = new Set<string>();
   for (const id of value) {
-    if (typeof id === "string" && id.length > 0) ids.add(id);
+    if (isHiddenGroupId(id)) ids.add(id);
     if (ids.size >= MAX_HIDDEN_GROUPS) break;
   }
   return [...ids];
@@ -40,7 +48,11 @@ export function getProjectHiddenLaunchGroups(projectId: string): string[] {
   return parseHidden(readAll()[projectId]);
 }
 
-/** Hide or show one plugin's launcher group in `projectId`. Returns the project's hidden ids. */
+/**
+ * Hide or show one plugin's launcher group in `projectId`. Returns the
+ * project's hidden ids. Throws rather than quietly keeping a group visible
+ * when the project already hides as many as it may.
+ */
 export function setProjectLaunchGroupHidden(
   projectId: string,
   pluginId: string,
@@ -49,9 +61,10 @@ export function setProjectLaunchGroupHidden(
   const all = readAll();
   const current = parseHidden(all[projectId]);
   if (current.includes(pluginId) === hidden) return current;
-  const next = hidden
-    ? [...current, pluginId].slice(0, MAX_HIDDEN_GROUPS)
-    : current.filter((id) => id !== pluginId);
+  if (hidden && current.length >= MAX_HIDDEN_GROUPS) {
+    throw new Error(`launch group: this project already hides ${MAX_HIDDEN_GROUPS} groups`);
+  }
+  const next = hidden ? [...current, pluginId] : current.filter((id) => id !== pluginId);
   const updated = { ...all };
   if (next.length === 0) delete updated[projectId];
   else updated[projectId] = next;

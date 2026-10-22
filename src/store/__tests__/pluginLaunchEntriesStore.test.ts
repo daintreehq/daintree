@@ -108,12 +108,16 @@ describe("pluginLaunchEntriesStore (#13788)", () => {
 
   it("keeps main's answer after a hide, and reports a write that failed", async () => {
     setLaunchGroupHidden.mockResolvedValueOnce(["acme.records"]);
-    await usePluginLaunchEntriesStore.getState().setGroupHidden("acme.records", true);
+    expect(await usePluginLaunchEntriesStore.getState().setGroupHidden("acme.records", true)).toBe(
+      true
+    );
     expect(usePluginLaunchEntriesStore.getState().hiddenPluginIds).toEqual(["acme.records"]);
     expect(setLaunchGroupHidden).toHaveBeenCalledWith("acme.records", true);
 
     setLaunchGroupHidden.mockRejectedValueOnce(new Error("disk full"));
-    await usePluginLaunchEntriesStore.getState().setGroupHidden("acme.records", false);
+    expect(await usePluginLaunchEntriesStore.getState().setGroupHidden("acme.records", false)).toBe(
+      false
+    );
     expect(usePluginLaunchEntriesStore.getState().hiddenPluginIds).toEqual(["acme.records"]);
     expect(usePluginLaunchEntriesStore.getState().saveError).toBe("acme.records");
   });

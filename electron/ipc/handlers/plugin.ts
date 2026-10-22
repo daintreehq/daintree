@@ -65,6 +65,7 @@ import {
 } from "../../services/plugin/projectFileEditorChoices.js";
 import {
   getProjectHiddenLaunchGroups,
+  isHiddenGroupId,
   setProjectLaunchGroupHidden,
 } from "../../services/plugin/projectHiddenLaunchGroups.js";
 import { pluginInstallJobs } from "../../services/plugin/PluginInstallJobRegistry.js";
@@ -740,9 +741,7 @@ async function handleLaunchGroupHiddenSet(
   hidden: boolean
 ): Promise<string[]> {
   if (!ctx.projectId) throw new Error("launch group: sender has no project");
-  if (typeof pluginId !== "string" || pluginId.length === 0 || pluginId.length > 300) {
-    throw new Error("launch group: malformed plugin id");
-  }
+  if (!isHiddenGroupId(pluginId)) throw new Error("launch group: malformed plugin id");
   if (typeof hidden !== "boolean") throw new Error("launch group: malformed hidden flag");
   return setProjectLaunchGroupHidden(ctx.projectId, pluginId, hidden);
 }

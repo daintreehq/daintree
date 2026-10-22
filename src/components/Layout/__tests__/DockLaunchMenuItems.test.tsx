@@ -147,7 +147,7 @@ describe("DockLaunchMenuItems", () => {
 
   it("lists a plugin's entries under its name, ended by the item that hides the group (#13788)", () => {
     actionDispatchMock.mockResolvedValue({ ok: true, result: null });
-    const setGroupHidden = vi.fn();
+    const setGroupHidden = vi.fn().mockResolvedValue(true);
     usePluginLaunchEntriesStore.setState({
       entries: [
         {

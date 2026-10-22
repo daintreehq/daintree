@@ -24,6 +24,12 @@ import { getRecipeScope } from "@/utils/recipeScope";
 import { logError } from "@/utils/logger";
 import { isAgentLaunchable } from "@shared/utils/agentAvailability";
 import { isOwnPluginAction } from "@shared/utils/remotePluginContributions";
+import { isBuiltInActionId } from "@shared/utils/builtInActionIds";
+import {
+  getPluginAgentRegistrySnapshot,
+  subscribeToPluginAgentRegistry,
+} from "@shared/config/pluginAgentRegistry";
+import { useUserAgentRegistryStore } from "@/store/userAgentRegistryStore";
 import { evaluateWhenClause } from "@shared/utils/whenClause";
 import { useChromeWhenContext } from "@/hooks/useChromeWhenContext";
 import { usePluginLaunchEntriesStore } from "@/store/pluginLaunchEntriesStore";
@@ -522,6 +528,15 @@ function toPanelItem(
 }
 
 /**
+ * Whether a command entry dispatches its own plugin's action. A built-in is
+ * never one, even when its id starts with the plugin's name — a plugin named
+ * `env.global` does not own `env.global.set`.
+ */
+function isOwnLaunchCommand(pluginId: string, actionId: string): boolean {
+  return isOwnPluginAction(pluginId, actionId) && !isBuiltInActionId(actionId);
+}
+
+/**
  * Where a panel entry opens from `surface`. An explicit placement is the
  * author's, already checked against the panel at the manifest gate; without
  * one it lands where this surface lands a panel row of the same kind.
@@ -563,7 +578,7 @@ function toPluginEntryItem(
     searchAliases: [entry.pluginName, "plugin"],
   };
   if (target.type === "command") {
-    return isOwnPluginAction(entry.pluginId, target.actionId) ? base : null;
+    return isOwnLaunchCommand(entry.pluginId, target.actionId) ? base : null;
   }
   if (target.type === "agent") {
     return getAgentConfig(target.agentId)
@@ -931,6 +946,14 @@ export function useDockLaunchModel(options: {
   // The map is a stable reference that changes identity on every recorded use,
   // which is exactly the invalidation signal the getter cannot provide.
   const actionUsageEntries = useActionMruStore((s) => s.actionUsageEntries);
+  // An agent entry is disabled while its agent isn't registered, and the
+  // agent can arrive later from another plugin or the user's own agents.
+  const pluginAgentRegistry = useSyncExternalStore(
+    subscribeToPluginAgentRegistry,
+    getPluginAgentRegistrySnapshot,
+    getPluginAgentRegistrySnapshot
+  );
+  const userAgentRegistry = useUserAgentRegistryStore((s) => s.registry);
   const launchEntries = usePluginLaunchEntriesStore((s) => s.entries);
   const hiddenPluginIds = usePluginLaunchEntriesStore((s) => s.hiddenPluginIds);
   const initLaunchEntries = usePluginLaunchEntriesStore((s) => s.init);
@@ -940,8 +963,13 @@ export function useDockLaunchModel(options: {
   }, [initLaunchEntries]);
 
   const stable = useMemo(
-    () =>
-      buildDockLaunchModel({
+    () => {
+      // Referenced rather than only listed: `getAgentConfig` reads both
+      // registries itself, and a dependency the body never mentions is one the
+      // React Compiler may drop.
+      void pluginAgentRegistry;
+      void userAgentRegistry;
+      return buildDockLaunchModel({
         agents,
         pinnedCount,
         activeWorktreeId,
@@ -954,7 +982,8 @@ export function useDockLaunchModel(options: {
         hiddenPluginIds,
         whenContext,
         mruEntries: [],
-      }),
+      });
+    },
     // The two registry snapshots are read for invalidation only — the builder
     // pulls the live registries itself.
     [
@@ -969,6 +998,8 @@ export function useDockLaunchModel(options: {
       launchEntries,
       hiddenPluginIds,
       whenContext,
+      pluginAgentRegistry,
+      userAgentRegistry,
       kindRegistry,
       definitionRegistry,
     ]
@@ -1067,9 +1098,7 @@ export function activateDockLaunchCue(
     case "hide-plugin-group":
       // Remembered per project in Daintree's settings, with the way back in
       // Project settings → Plugins.
-      if (pluginGroup) {
-        void usePluginLaunchEntriesStore.getState().setGroupHidden(pluginGroup.pluginId, true);
-      }
+      if (pluginGroup) hidePluginGroup(pluginGroup);
       return;
     case "create-recipe":
       activateCreateRecipeCue(activeWorktreeId, source);
@@ -1208,7 +1237,7 @@ function activatePluginLaunchEntry(
       { source: ctx.source }
     );
   } else {
-    if (!isOwnPluginAction(item.pluginId, target.actionId)) return;
+    if (!isOwnLaunchCommand(item.pluginId, target.actionId)) return;
     dispatched = actionService.dispatch(target.actionId, target.args, { source: ctx.source });
   }
 
@@ -1229,4 +1258,25 @@ function activatePluginLaunchEntry(
       });
     })
     .catch((error) => logError("Plugin launch entry failed", error));
+}
+
+/**
+ * Hide a plugin's group in this project. The launcher closes on select, so a
+ * write main refused would otherwise look like the click did nothing.
+ */
+function hidePluginGroup(group: DockLaunchPluginGroup): void {
+  void usePluginLaunchEntriesStore
+    .getState()
+    .setGroupHidden(group.pluginId, true)
+    .then((saved) => {
+      if (saved) return;
+      notify({
+        type: "error",
+        title: `Couldn't hide ${group.pluginName}`,
+        message: "The change wasn't saved to this project's settings, so its entries still show.",
+        priority: "high",
+        context: { eventKind: "uiFeedback" },
+        action: { label: "Retry", onClick: () => hidePluginGroup(group) },
+      });
+    });
 }

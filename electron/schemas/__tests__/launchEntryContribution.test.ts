@@ -117,6 +117,19 @@ describe("launch entries", () => {
     }
   });
 
+  it("refuses a built-in whose id starts with the plugin's name", () => {
+    const result = getPluginManifestSchema("user").safeParse({
+      name: "env.global",
+      version: "1.0.0",
+      contributes: {
+        launchEntries: [
+          { id: "e", label: "Set env", iconId: "plus", command: { actionId: "env.global.set" } },
+        ],
+      },
+    });
+    expect(issuesFor(result, "launch_entry_command_not_own")).toHaveLength(1);
+  });
+
   it("checks an own command against the declared commands only when some are declared", () => {
     expect(parse({ command: { actionId: "acme.records.anything" } }).success).toBe(true);
     const typo = parse({ command: { actionId: "acme.records.pubish" } }, { commands: [command] });
@@ -159,7 +172,10 @@ describe("launch entries", () => {
     expect(issuesFor(result, "launch_entry_panel_args_pty")).toHaveLength(1);
   });
 
-  it("bounds a target's args", () => {
+  it("bounds a target's args by their UTF-8 size", () => {
+    // Under the limit in UTF-16 units, over it in bytes.
+    const wide = { blob: "界".repeat(Math.ceil(LAUNCH_ENTRY_ARGS_MAX_BYTES / 2)) };
+    expect(parse({ panel: { id: "records", args: wide } }).success).toBe(false);
     const big = { blob: "x".repeat(LAUNCH_ENTRY_ARGS_MAX_BYTES) };
     expect(parse({ panel: { id: "records", args: big } }).success).toBe(false);
     expect(parse({ command: { actionId: "acme.records.run", args: big } }).success).toBe(false);

@@ -1261,8 +1261,9 @@ function shouldShowBandLabel(rows: ReadonlyArray<DockLaunchRow>, index: number):
   while (previous >= 0 && rows[previous]?.kind === "preset") previous -= 1;
   const prior = rows[previous];
   if (previous < 0 || !prior || headingBand(prior.band) !== headingBand(row.band)) return true;
-  // Plugin groups share one band and are told apart by plugin, each under its
-  // own name.
+  // Plugin groups share one browse band and are told apart by plugin, each
+  // under its own name. Search results are one flat list with one heading.
+  if (row.band !== "plugin-entries") return false;
   return (
     getDockLaunchRowPluginGroup(prior)?.pluginId !== getDockLaunchRowPluginGroup(row)?.pluginId
   );
@@ -1491,11 +1492,12 @@ function DockLaunchOption({
           ]
             .filter(Boolean)
             .join(" · ")
-        : disabledReason !== undefined
-          ? disabledReason
-          : item!.category === "plugin-entry"
-            ? // The heading's attribution, for a listener who never sees it.
-              item!.pluginName
+        : item!.category === "plugin-entry"
+          ? // The heading's attribution, for a listener who never sees it —
+            // kept beside a disabled reason rather than replaced by it.
+            [item!.pluginName, disabledReason].filter(Boolean).join(" · ")
+          : disabledReason !== undefined
+            ? disabledReason
             : item!.category === "panel"
               ? item!.location === "dock"
                 ? "Dock"

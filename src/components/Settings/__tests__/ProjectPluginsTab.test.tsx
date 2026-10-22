@@ -338,13 +338,23 @@ describe("ProjectPluginsTab", () => {
     expect(row.textContent).toContain("Acme Dashboard");
 
     fireEvent.click(
-      within(row).getByRole("button", { name: "Show Acme Dashboard in the launcher" })
+      within(row).getByRole("button", { name: "Reset Acme Dashboard's launch entries" })
     );
     await waitFor(() =>
       expect(pluginApi.setLaunchGroupHidden).toHaveBeenCalledWith(CANVAS_OWNER, false)
     );
+    // The row stays, switched on, so the control the user just used is still
+    // there to undo it with; only the reset goes, as nothing is left to reset.
+    await waitFor(() => expect(row.textContent).toContain("Its rows are back"));
+    expect(
+      within(row).queryByRole("button", { name: "Reset Acme Dashboard's launch entries" })
+    ).toBeNull();
+    const toggle = screen.getByTestId(`hidden-launch-group-switch-${CANVAS_OWNER}`);
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
+
+    fireEvent.click(toggle);
     await waitFor(() =>
-      expect(screen.queryByTestId("project-plugins-hidden-launch-groups")).toBeNull()
+      expect(pluginApi.setLaunchGroupHidden).toHaveBeenCalledWith(CANVAS_OWNER, true)
     );
   });
 

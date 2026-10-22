@@ -20,7 +20,8 @@ interface PluginLaunchEntriesState {
   /** The last hide or show main could not record, so a surface can say so. */
   saveError: string | null;
   init: () => void;
-  setGroupHidden: (pluginId: string, hidden: boolean) => Promise<void>;
+  /** Resolves `false` when main couldn't record it; `saveError` then names the plugin. */
+  setGroupHidden: (pluginId: string, hidden: boolean) => Promise<boolean>;
 }
 
 const EMPTY_ENTRIES: readonly PluginLaunchEntryConfig[] = [];
@@ -91,13 +92,15 @@ export const usePluginLaunchEntriesStore = create<PluginLaunchEntriesState>((set
 
     setGroupHidden: async (pluginId, hidden) => {
       const bridge = window.electron?.plugin;
-      if (typeof bridge?.setLaunchGroupHidden !== "function") return;
+      if (typeof bridge?.setLaunchGroupHidden !== "function") return false;
       try {
         const ids = await bridge.setLaunchGroupHidden(pluginId, hidden);
         set({ hiddenPluginIds: ids.length > 0 ? ids : EMPTY_IDS, saveError: null });
+        return true;
       } catch (error) {
         logWarn("[PluginLaunchEntries] Failed to save a launcher group", { error });
         set({ saveError: pluginId });
+        return false;
       }
     },
   };

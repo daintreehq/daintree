@@ -290,9 +290,11 @@ export const LAUNCH_ENTRY_ARGS_MAX_BYTES = 8192;
 /** The launch kinds `agent.launch` takes that are panels, not agents. */
 const NON_AGENT_LAUNCH_IDS: ReadonlySet<string> = new Set(["terminal", "browser", "dev-preview"]);
 
+const utf8 = new TextEncoder();
+
 const LaunchEntryArgsSchema = z
   .record(z.string(), z.unknown())
-  .refine((args) => JSON.stringify(args).length <= LAUNCH_ENTRY_ARGS_MAX_BYTES, {
+  .refine((args) => utf8.encode(JSON.stringify(args)).length <= LAUNCH_ENTRY_ARGS_MAX_BYTES, {
     message: `args must be at most ${LAUNCH_ENTRY_ARGS_MAX_BYTES} bytes of JSON`,
   });
 
@@ -3830,10 +3832,13 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
         if (entry.command !== undefined) {
           const { actionId } = entry.command;
           const actionPath = [...path, "command", "actionId"];
+          // A built-in is refused even when it starts with the plugin's name: a
+          // plugin named `env.global` must not reach `env.global.set` this way.
           if (
             !actionId.startsWith(ownNamespacePrefix) ||
             actionId.length === ownNamespacePrefix.length ||
-            !PANEL_MENU_ACTION_ID.test(actionId)
+            !PANEL_MENU_ACTION_ID.test(actionId) ||
+            BUILT_IN_ACTION_ID_SET.has(actionId)
           ) {
             ctx.addIssue({
               code: z.ZodIssueCode.custom,

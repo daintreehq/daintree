@@ -47,9 +47,18 @@ describe("projectHiddenLaunchGroups (#13788)", () => {
     expect(storeMock.set).not.toHaveBeenCalled();
   });
 
+  it("refuses a hide past the cap rather than dropping it", () => {
+    storeMock.data.set("projectHiddenLaunchGroups", {
+      p1: Array.from({ length: 200 }, (_, i) => `plugin.n${i}`),
+    });
+    expect(() => setProjectLaunchGroupHidden("p1", "one.more", true)).toThrow();
+    expect(getProjectHiddenLaunchGroups("p1")).not.toContain("one.more");
+    expect(setProjectLaunchGroupHidden("p1", "plugin.n0", false)).toHaveLength(199);
+  });
+
   it("skips malformed entries in a hand-edited store", () => {
     storeMock.data.set("projectHiddenLaunchGroups", {
-      p1: ["acme.records", 42, "", "acme.records", "project__p1__acme.notes"],
+      p1: ["acme.records", 42, "", "acme.records", "x".repeat(301), "project__p1__acme.notes"],
       p2: "not a list",
     });
     expect(getProjectHiddenLaunchGroups("p1")).toEqual(["acme.records", "project__p1__acme.notes"]);

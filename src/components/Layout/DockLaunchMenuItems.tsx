@@ -155,6 +155,10 @@ export function DockLaunchMenuItems({
     <C.Item
       key={item.key}
       className={item.disabled ? "text-text-secondary" : undefined}
+      // The group label isn't tied to its items, so the item names its plugin
+      // itself: two plugins' "New record…" must not read the same.
+      aria-label={[item.name, item.pluginName, item.disabled?.reason].filter(Boolean).join(", ")}
+      title={item.description}
       onSelect={() => activate(item)}
     >
       <PanelKindIcon iconId={item.iconId} size={14} className="mr-2" />

@@ -226,6 +226,20 @@ describe("plugin launch entries — groups", () => {
     ]);
   });
 
+  it("drops a built-in command even when its id starts with the plugin's name", () => {
+    const model = build({
+      launchEntries: [
+        entry({
+          id: "env.global.set-env",
+          pluginId: "env.global",
+          pluginName: "Env",
+          target: { type: "command", actionId: "env.global.set" },
+        }),
+      ],
+    });
+    expect(model.pluginGroups).toEqual([]);
+  });
+
   it("disables an agent entry whose agent isn't registered, keeping it listed", () => {
     const entries = [
       entry({ id: `${RECORDS}.ok`, target: { type: "agent", agentId: "claude", prompt: "hi" } }),
@@ -345,11 +359,27 @@ describe("plugin launch entries — activation", () => {
   });
 
   it("hides a group from its cue", () => {
+    setGroupHiddenMock.mockResolvedValue(true);
     activateDockLaunchCue("hide-plugin-group", null, "menu", {
       pluginId: RECORDS,
       pluginName: "Records",
     });
     expect(setGroupHiddenMock).toHaveBeenCalledWith(RECORDS, true);
+  });
+
+  it("says so when a hide couldn't be saved, with one way to retry", async () => {
+    setGroupHiddenMock.mockResolvedValue(false);
+    activateDockLaunchCue("hide-plugin-group", null, "menu", {
+      pluginId: RECORDS,
+      pluginName: "Records",
+    });
+    await vi.waitFor(() => expect(notifyMock).toHaveBeenCalledTimes(1));
+    expect(notifyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: "Couldn't hide Records",
+        action: expect.objectContaining({ label: "Retry" }),
+      })
+    );
   });
 });
 
