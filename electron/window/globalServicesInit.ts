@@ -83,13 +83,18 @@ import {
 } from "../ipc/handlers/projectCrud/index.js";
 import { findCoordinationHold } from "../services/coordinationHolds.js";
 import { registerDeferredTask } from "./deferredInitQueue.js";
-import { collectActiveProjectIds, projectViewManagersFrom } from "./activeProjectIds.js";
+import {
+  collectActiveProjectIds,
+  collectShownProjectIds,
+  projectViewManagersFrom,
+} from "./activeProjectIds.js";
 import { isSmokeTest } from "../setup/environment.js";
 import { setPluginDirResolver, setPluginTourAudioResolver } from "../setup/protocols.js";
 import { isE2EFaultMode, isE2EMode } from "../setup/runtimeFlags.js";
 import { activateOpenFileInstaller } from "../setup/openFileInstall.js";
 import { projectStore } from "../services/ProjectStore.js";
 import { trackProjectVisibility } from "../services/projectVisibilityClock.js";
+import { getProjectPresenceTracker } from "../services/ProjectPresenceTracker.js";
 import { getCompositeMemorySnapshot } from "../services/memoryAccounting.js";
 import { scratchStore } from "../services/ScratchStore.js";
 import { registerCommands } from "../services/commands/index.js";
@@ -558,6 +563,14 @@ export async function initGlobalServices(
   getPluginActionAuditService().initialize({
     isPlaintextEnabled: () => store.get("appState")?.developerMode?.pluginAuditPlaintext === true,
   });
+
+  // Where each project is shown, for plugins (#13813). Not deferred: the plugin
+  // lifecycle seam loads a project's own plugins on the first switch, without
+  // waiting for the plugin host task, and they read this on activation.
+  const presenceViews = projectViewManagersFrom(windowRegistry);
+  getProjectPresenceTracker().setShownReader(() =>
+    collectShownProjectIds(presenceViews, "project-presence")
+  );
 
   // ── Group 1: cheap synchronous wires ──
   // These were previously run on the same tick as loadRenderer(), contending

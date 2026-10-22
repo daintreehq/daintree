@@ -127,6 +127,7 @@ const SUBSCRIPTION_KINDS = {
   "agent-state": true,
   "all-agents": true,
   "focused-panel": true,
+  "project-presence": true,
   "panel-lifecycle": true,
   "system-wake": true,
   "push-listeners": true,

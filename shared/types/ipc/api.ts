@@ -2605,6 +2605,15 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      */
     reportFocusedPanel(report: import("../plugin.js").PluginFocusedPanel): void;
     /**
+     * Subscribe to presence changes pushed to this view's project (#13813) —
+     * the view half of `host.onDidChangeProjectPresence`, behind the SDK's
+     * `useProjectPresence()`. Read `getProjectPresence()` for the current
+     * state. Returns a cleanup.
+     */
+    onProjectPresenceChanged(
+      callback: (presence: import("../plugin.js").PluginProjectPresence) => void
+    ): () => void;
+    /**
      * Subscribe to per-plugin perf snapshots, pushed at most once a second and
      * only while at least one listener is attached (worker memory is sampled
      * only then). Each push carries every tracked plugin; read

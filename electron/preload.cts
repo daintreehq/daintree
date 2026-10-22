@@ -66,6 +66,7 @@ import { buildPluginMcpPreloadBindings } from "./ipc/handlers/pluginMcp.preload.
 import { buildPluginCapabilityPreloadBindings } from "./ipc/handlers/pluginCapability.preload.js";
 import { buildPluginProcessPreloadBindings } from "./ipc/handlers/pluginProcess.preload.js";
 import { buildPluginPanelCapturePreloadBindings } from "./ipc/handlers/pluginPanelCapture.preload.js";
+import { buildPluginProjectPresencePreloadBindings } from "./ipc/handlers/pluginProjectPresence.preload.js";
 import { buildPluginMetricsPreloadBindings } from "./ipc/handlers/pluginMetrics.preload.js";
 import { buildScratchPreloadBindings } from "./ipc/handlers/scratch/preload.js";
 import { buildMcpServerPreloadBindings } from "./ipc/handlers/mcpServer.preload.js";
@@ -228,6 +229,7 @@ import type {
   PluginWorktreeReviewCheck,
   PluginTerminalStatus,
   PluginFocusedPanel,
+  PluginProjectPresence,
 } from "../shared/types/plugin.js";
 import type { PanelKindConfig } from "../shared/config/panelKindRegistry.js";
 import type { PublishedPanelMenuItem } from "../shared/utils/pluginPanelMenuItems.js";
@@ -3747,6 +3749,12 @@ function buildElectronApi(): ElectronAPI {
       ...buildPluginPreloadBindings(_pluginInvoke),
       ...buildPluginMetricsPreloadBindings(_unwrappingInvoke),
       ...buildPluginPanelCapturePreloadBindings(_unwrappingInvoke),
+      ...buildPluginProjectPresencePreloadBindings(_unwrappingInvoke),
+
+      // This view's project presence changed (#13813). Pushed per project, so
+      // the payload names it; `getProjectPresence()` answers for this view.
+      onProjectPresenceChanged: (callback: (presence: PluginProjectPresence) => void) =>
+        _typedOn(CHANNELS.PLUGIN_PROJECT_PRESENCE_CHANGED, callback),
 
       // Fire-and-forget: renderer-side view cost observations, drained in batches.
       reportViewMetrics: (reports: PluginRendererMetricsEnvelope[]) => {

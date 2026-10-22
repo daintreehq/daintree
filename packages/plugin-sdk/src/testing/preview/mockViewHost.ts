@@ -1,9 +1,15 @@
+import type {
+  PluginProjectPresence,
+  PluginProjectPresenceState,
+} from "../../../../../shared/types/plugin.js";
+
 /**
  * A fixture-driven stand-in for the two bridges a plugin view talks to:
- * `window.electron.plugin` (`invoke`, `on`, `onPanel`) and the view-lifecycle
- * half of `window.electron.app`. Every SDK view hook reaches the host through
- * those two (`react/hostBridge.ts`), so installing this is enough to run a real
- * panel view outside Daintree — in a plain browser page or in vitest/jsdom.
+ * `window.electron.plugin` (`invoke`, `on`, `onPanel`, project presence) and
+ * the view-lifecycle half of `window.electron.app`. Every SDK view hook reaches
+ * the host through those two (`react/hostBridge.ts`), so installing this is
+ * enough to run a real panel view outside Daintree — in a plain browser page or
+ * in vitest/jsdom.
  *
  * Browser-safe by construction: no Node import anywhere on this path.
  */
@@ -73,6 +79,11 @@ export interface MockViewHostOptions {
   channels?: Record<string, ChannelFixture>;
   /** Start as a cached (hidden, background) project view. */
   viewCached?: boolean;
+  /**
+   * Where the view's project starts, as `useProjectPresence()` reads it.
+   * Defaults to `"foreground"`; `null` is a view with no project.
+   */
+  projectPresence?: PluginProjectPresenceState | null;
 }
 
 /** The bridge objects, in the shape `react/hostBridge.ts` reads them. */
@@ -86,6 +97,8 @@ export interface MockViewHostBridges {
       panelId: string,
       callback: (payload: unknown) => void
     ): () => void;
+    getProjectPresence(): Promise<PluginProjectPresence | null>;
+    onProjectPresenceChanged(callback: (presence: PluginProjectPresence) => void): () => void;
   };
   app: {
     isViewCached(): boolean;
@@ -115,6 +128,13 @@ export interface MockViewHost {
    * warm-activated edge). A no-op when the state already matches.
    */
   setViewCached(cached: boolean): void;
+  /** Where the view's project currently is; `null` for a view with no project. */
+  readonly projectPresence: PluginProjectPresenceState | null;
+  /**
+   * Move the view's project and push the change, as main does. A no-op when it
+   * already matches, or for a view with no project.
+   */
+  setProjectPresence(state: PluginProjectPresenceState): void;
   /**
    * Put the bridges on `globalThis.electron`, where the SDK looks for them.
    * Returns the restore function, which puts back whatever was there before.
@@ -154,6 +174,9 @@ function listen(set: Set<() => void>, callback: () => void): () => void {
   };
 }
 
+/** The project a previewed view belongs to, as `getProjectPresence()` names it. */
+const MOCK_VIEW_PROJECT_ID = "preview-project";
+
 export function createMockViewHost(options: MockViewHostOptions = {}): MockViewHost {
   const channels = new Map<string, ChannelFixture>(Object.entries(options.channels ?? {}));
   const calls: MockViewHostCall[] = [];
@@ -161,6 +184,9 @@ export function createMockViewHost(options: MockViewHostOptions = {}): MockViewH
   const cachedListeners = new Set<() => void>();
   const warmListeners = new Set<() => void>();
   let viewCached = options.viewCached === true;
+  let projectPresence =
+    options.projectPresence === undefined ? "foreground" : options.projectPresence;
+  const presenceListeners = new Set<(presence: PluginProjectPresence) => void>();
 
   function subscribe(subscriber: Subscriber): () => void {
     subscribers.add(subscriber);
@@ -204,6 +230,20 @@ export function createMockViewHost(options: MockViewHostOptions = {}): MockViewH
       onPanel(pluginId, channel, panelId, callback) {
         calls.push({ kind: "onPanel", pluginId, channel, panelId });
         return subscribe({ pluginId, channel, panelId, callback });
+      },
+      getProjectPresence() {
+        return Promise.resolve(
+          projectPresence === null
+            ? null
+            : { projectId: MOCK_VIEW_PROJECT_ID, state: projectPresence }
+        );
+      },
+      onProjectPresenceChanged(callback) {
+        const entry = (presence: PluginProjectPresence) => callback(presence);
+        presenceListeners.add(entry);
+        return () => {
+          presenceListeners.delete(entry);
+        };
       },
     },
     app: {
@@ -253,6 +293,21 @@ export function createMockViewHost(options: MockViewHostOptions = {}): MockViewH
       if (cached === viewCached) return;
       viewCached = cached;
       for (const listener of [...(cached ? cachedListeners : warmListeners)]) listener();
+    },
+    get projectPresence() {
+      return projectPresence;
+    },
+    setProjectPresence(state) {
+      if (projectPresence === null || state === projectPresence) return;
+      projectPresence = state;
+      const presence = { projectId: MOCK_VIEW_PROJECT_ID, state };
+      for (const listener of [...presenceListeners]) {
+        try {
+          listener({ ...presence });
+        } catch (error) {
+          console.error("[plugin preview] a project presence subscriber threw", error);
+        }
+      }
     },
     install(target = globalThis) {
       const previous = Object.getOwnPropertyDescriptor(target, "electron");

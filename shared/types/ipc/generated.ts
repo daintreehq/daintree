@@ -1809,6 +1809,10 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("../plugin.js").ProjectPluginInfo[];
   };
+  "plugin:project-presence-get": {
+    args: [];
+    result: import("../plugin.js").PluginProjectPresence | null;
+  };
   "plugin:project-reload": {
     args: [];
     result: void;

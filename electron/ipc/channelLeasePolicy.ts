@@ -446,6 +446,8 @@ export const CHANNEL_LEASE_POLICY = {
   "plugin:perf-snapshots-subscribe": "free",
   "plugin:perf-snapshots-unsubscribe": "free",
   "plugin:report-focused-panel": "free",
+  "plugin:project-presence-changed": "free",
+  "plugin:project-presence-get": "free",
   "plugin:report-push-listeners": "free",
   "plugin:report-view-metrics": "free",
   "plugin:tours-get": "free",

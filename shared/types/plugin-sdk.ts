@@ -62,6 +62,10 @@ export type {
 
 export type { PluginFocusedPanel, PluginFocusedPanelKind } from "./plugin.js";
 
+// ── Project presence (worker-facing) ────────────────────────────────
+
+export type { PluginProjectPresence, PluginProjectPresenceState } from "./plugin.js";
+
 // ── System wake (worker-facing) ─────────────────────────────────────
 
 export type { PluginSystemWakeEvent } from "./plugin.js";

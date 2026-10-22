@@ -656,6 +656,8 @@ export const CHANNEL_LOCALITY = {
   "plugin:perf-snapshots-subscribe": "hybrid",
   "plugin:perf-snapshots-unsubscribe": "hybrid",
   "plugin:report-focused-panel": "hybrid",
+  "plugin:project-presence-changed": "host",
+  "plugin:project-presence-get": "host",
   "plugin:report-push-listeners": "host",
   "plugin:report-view-metrics": "host",
   "plugin:tours-get": "host",

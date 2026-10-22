@@ -80,6 +80,7 @@ import { validatePluginWorktreeCardStatus } from "../../../shared/utils/pluginWo
 import { validatePluginWorktreeReviewChecks } from "../../../shared/utils/pluginWorktreeReviewChecks.js";
 import { validatePluginTerminalStatus } from "../../../shared/utils/pluginTerminalStatus.js";
 import { toPluginFocusedPanel } from "../../../shared/utils/pluginFocusedPanel.js";
+import { toPluginProjectPresence } from "../../../shared/utils/pluginProjectPresence.js";
 import {
   normalizePluginAllAgentsSnapshot,
   UNAVAILABLE_PLUGIN_ALL_AGENTS_SNAPSHOT,
@@ -1070,6 +1071,22 @@ export class PluginDevWorkerHostProxy {
         const dispose = this.subscribe(
           "focused-panel",
           (payload) => callback(toPluginFocusedPanel(payload)),
+          undefined,
+          undefined,
+          options?.debounceMs
+        );
+        return Promise.resolve(dispose);
+      },
+      onDidChangeProjectPresence: (callback, options) => {
+        this.assertActivationOpen("onDidChangeProjectPresence");
+        // Rebuilt and re-frozen on arrival, like focused-panel above. Main only
+        // ever sends a valid presence, so a malformed one is dropped, not guessed.
+        const dispose = this.subscribe(
+          "project-presence",
+          (payload) => {
+            const presence = toPluginProjectPresence(payload);
+            if (presence) callback(presence);
+          },
           undefined,
           undefined,
           options?.debounceMs

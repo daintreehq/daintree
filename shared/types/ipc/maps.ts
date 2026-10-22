@@ -1824,6 +1824,9 @@ export interface IpcEventMap {
   // most once a second. Carries every tracked plugin, not just the changed ones.
   "plugin:perf-snapshots-changed": import("../pluginMetrics.js").PluginPerfSnapshot[];
 
+  // A project's presence changed (#13813), pushed to that project's renderers.
+  "plugin:project-presence-changed": import("../plugin.js").PluginProjectPresence;
+
   // System events
   "system:wake": SystemWakePayload;
   // Sustained system memory pressure opened or cleared (window-scoped)

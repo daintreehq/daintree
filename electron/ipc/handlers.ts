@@ -118,6 +118,7 @@ import { registerPluginMetricsHandlers } from "./handlers/pluginMetrics.js";
 import { registerPluginPanelCaptureHandlers } from "./handlers/pluginPanelCapture.js";
 import { registerPluginPushListenerHandlers } from "./handlers/pluginPushListeners.js";
 import { registerPluginFocusedPanelHandlers } from "./handlers/pluginFocusedPanel.js";
+import { registerPluginProjectPresenceHandlers } from "./handlers/pluginProjectPresence.js";
 import { registerConnectivityHandlers } from "./handlers/connectivity.js";
 import { registerAgentDefaultsHandlers } from "./handlers/agentDefaults.js";
 import { registerProjectPresenceHandlers } from "./handlers/projectPresence.js";
@@ -273,6 +274,7 @@ export function registerIpcHandlers(deps: HandlerDependencies): () => void {
     register(() => registerPluginPanelCaptureHandlers(deps));
     register(() => registerPluginPushListenerHandlers());
     register(() => registerPluginFocusedPanelHandlers());
+    register(() => registerPluginProjectPresenceHandlers());
     register(() => registerPerfHandlers(deps));
     register(() => registerConnectivityHandlers());
     register(() => registerAgentDefaultsHandlers());

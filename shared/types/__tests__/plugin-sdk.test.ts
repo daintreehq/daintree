@@ -28,6 +28,8 @@ import type {
   PanelReloadResult,
   WorkerRestartResult,
   PluginSystemWakeEvent,
+  PluginProjectPresence,
+  PluginProjectPresenceState,
   McpServerContribution,
   PluginCapability,
   BuiltInPluginCapability,
@@ -690,6 +692,19 @@ describe("plugin-sdk boundary", () => {
       const activation = {} as PluginActivationApi;
       expectTypeOf(activation.onDidWake).toBeFunction();
       expectTypeOf(activation.onDidWake).returns.toEqualTypeOf<Promise<() => void>>();
+    });
+
+    it("exposes project presence as named SDK types (#13813)", () => {
+      const presence = {} as PluginProjectPresence;
+      expectTypeOf(presence.projectId).toEqualTypeOf<string>();
+      expectTypeOf(presence.state).toEqualTypeOf<PluginProjectPresenceState>();
+      expectTypeOf<PluginProjectPresenceState>().toEqualTypeOf<
+        "foreground" | "background" | "closed"
+      >();
+      const activation = {} as PluginActivationApi;
+      expectTypeOf(activation.onDidChangeProjectPresence).returns.toEqualTypeOf<
+        Promise<() => void>
+      >();
     });
 
     it("PluginIpcContext has required fields", () => {

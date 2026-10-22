@@ -171,6 +171,7 @@ export type PluginWorkerSubscriptionKind =
   | "agent-state"
   | "all-agents"
   | "focused-panel"
+  | "project-presence"
   | "panel-lifecycle"
   | "system-wake"
   | "push-listeners"

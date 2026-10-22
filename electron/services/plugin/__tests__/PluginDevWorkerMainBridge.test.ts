@@ -2666,6 +2666,34 @@ describe("PluginDevWorkerMainBridge focused-panel subscription", () => {
   });
 });
 
+describe("PluginDevWorkerMainBridge project-presence subscription", () => {
+  it("subscribes project-presence through the host with the caller's window and pushes each change", async () => {
+    const { host, workerHost } = makeBridge();
+    let deliver: ((presence: unknown) => void) | undefined;
+    (host as any).onDidChangeProjectPresence = vi.fn(async (cb: (presence: unknown) => void) => {
+      deliver = cb;
+      return vi.fn();
+    });
+    workerHost.emit("worker-message", {
+      type: "subscribe",
+      subscriptionId: "s-presence",
+      kind: "project-presence",
+      debounceMs: 400,
+    });
+    await flush();
+
+    expect((host as any).onDidChangeProjectPresence).toHaveBeenCalledWith(expect.any(Function), {
+      debounceMs: 400,
+    });
+    const presence = { projectId: "p1", state: "background" };
+    deliver?.(presence);
+    const evt = workerHost.sent.find(
+      (m: any) => m.type === "subscription-event" && m.subscriptionId === "s-presence"
+    );
+    expect(evt.payload).toEqual(presence);
+  });
+});
+
 describe("PluginDevWorkerMainBridge coalesced subscriptions and readFiles", () => {
   it("passes an absent debounceMs through as undefined so the host default applies", async () => {
     const { host, workerHost } = makeBridge({ capabilities: ["agent:read"] });

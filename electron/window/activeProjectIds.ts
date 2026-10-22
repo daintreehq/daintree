@@ -63,6 +63,35 @@ export function collectActiveProjectIds(
   fallbackProjectId: string | null,
   source: string
 ): Set<string> {
+  const activeIds = collect(provider, true, source);
+  if (fallbackProjectId) activeIds.add(fallbackProjectId);
+  return activeIds;
+}
+
+/**
+ * The workspaces each window has switched to, plus what a remote Shell shows
+ * from this machine — what a plugin is told is in the foreground (#13813).
+ *
+ * Narrower than {@link collectActiveProjectIds} on purpose. That one errs
+ * towards "visible" because it guards reclaims; this one is reported as a fact,
+ * and both of its extras would misreport. The outgoing bridge changes without
+ * announcing itself on the presence bus, so a project read during one could
+ * stay "foreground" long after its view went, and the DB pointer names the
+ * last-focused window's project even once that window shows something else.
+ * Ids are the managers' own view keys: scratches and remote-host views included.
+ */
+export function collectShownProjectIds(
+  provider: ProjectViewManagersProvider | null,
+  source: string
+): Set<string> {
+  return collect(provider, false, source);
+}
+
+function collect(
+  provider: ProjectViewManagersProvider | null,
+  includeOutgoingBridge: boolean,
+  source: string
+): Set<string> {
   const activeIds = new Set<string>();
 
   if (provider) {
@@ -79,6 +108,7 @@ export function collectActiveProjectIds(
       try {
         const activeId = manager.getActiveProjectId();
         if (activeId) activeIds.add(activeId);
+        if (!includeOutgoingBridge) continue;
         const outgoingId = manager.getOutgoingBridgeProjectId();
         if (outgoingId) activeIds.add(outgoingId);
       } catch (error) {
@@ -96,8 +126,6 @@ export function collectActiveProjectIds(
       logError("active-project-ids-remote-failed", error, { source });
     }
   }
-
-  if (fallbackProjectId) activeIds.add(fallbackProjectId);
 
   return activeIds;
 }

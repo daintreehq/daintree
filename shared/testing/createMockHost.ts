@@ -25,6 +25,7 @@ import { databaseError, openPluginDatabase } from "../utils/pluginDatabaseHandle
 import { validateAgentContextPayload } from "../utils/agentContextDrag.js";
 import { normalizePluginAllAgentsSnapshot } from "../utils/pluginAllAgentsSnapshot.js";
 import { pluginFocusedPanelEquals, toPluginFocusedPanel } from "../utils/pluginFocusedPanel.js";
+import { toPluginProjectPresence } from "../utils/pluginProjectPresence.js";
 import { toRuntimePanelKindId } from "../config/panelKindRegistry.js";
 import { normalizePanelMenuItems } from "../utils/pluginPanelMenuItems.js";
 import { applyPluginContextEntry, validatePluginContextEntry } from "../utils/pluginContextKeys.js";
@@ -95,6 +96,8 @@ import type {
   PluginAgentPane,
   PluginAllAgentsSnapshot,
   PluginFocusedPanel,
+  PluginProjectPresence,
+  PluginProjectPresenceState,
   PluginSendToAgentOptions,
   PluginSendToAgentResult,
   PluginRunRecipeOptions,
@@ -307,7 +310,13 @@ export interface FsWriteRecord {
 
 /** A coalesced host subscription, with the window the host resolves for it. */
 export interface MockSubscriptionRecord {
-  kind: "worktrees" | "active-worktree" | "agent-state" | "all-agents" | "focused-panel";
+  kind:
+    | "worktrees"
+    | "active-worktree"
+    | "agent-state"
+    | "all-agents"
+    | "focused-panel"
+    | "project-presence";
   /** Effective window in ms: the 100ms default (250ms for `focused-panel`), `0` for raw, else clamped to 50–60000. */
   debounceMs: number;
 }
@@ -516,6 +525,15 @@ export interface MockHostState {
    */
   simulateFocusedPanelChange(focus: PluginFocusedPanel): void;
   /**
+   * Move a project and push it, frozen, to every `onDidChangeProjectPresence`
+   * subscriber that sees it — a project plugin only its own project. `"closed"`
+   * drops it from what a later subscription replays. A state equal to the one
+   * a subscriber last received for that project is not repeated, and an
+   * installed plugin is not told a project it never saw open has closed, as in
+   * production.
+   */
+  simulateProjectPresenceChange(presence: PluginProjectPresence): void;
+  /**
    * Configure what the user picks when `sendToAgent` is called without a
    * `terminalId`: a pane id drafts there, `null` (the default) dismisses the
    * picker and resolves `{ status: "cancelled" }`.
@@ -670,6 +688,13 @@ export interface CreateMockHostOptions {
    * its own project; `"portal"` reads as `kind: null`, as in production.
    */
   focusedPanel?: PluginFocusedPanel;
+  /**
+   * The open projects `onDidChangeProjectPresence` replays on subscribe. A
+   * project plugin's mock defaults to its own project in the foreground and
+   * replays its own project only, `"closed"` when it is not listed; an
+   * installed plugin's defaults to none.
+   */
+  projectPresence?: PluginProjectPresence[];
   /**
    * What `terminals.readScreen` finds, by terminal id. An id not listed reads
    * `not-found`. Defaults to none. The mock neither rate limits nor applies
@@ -1579,6 +1604,13 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
     projectId: mockProjectId,
     projectRoot: mockProjectRoot,
   });
+  const projectPresence = new Map<string, PluginProjectPresenceState>();
+  for (const entry of options.projectPresence ??
+    (mockProjectId === null ? [] : [{ projectId: mockProjectId, state: "foreground" as const }])) {
+    const open = toPluginProjectPresence(entry);
+    if (open && open.state !== "closed") projectPresence.set(open.projectId, open.state);
+  }
+  const projectPresenceSubs = new Set<(presence: PluginProjectPresence) => void>();
 
   // Same gates as production: `agent:read`, and never for a project plugin.
   const assertMockCanReadAllAgents = (method: string): void => {
@@ -2124,6 +2156,53 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
         if (disposed) return;
         disposed = true;
         focusedPanelSubs.delete(subscription);
+      };
+      return Promise.resolve(dispose);
+    },
+    onDidChangeProjectPresence(callback, subscribeOptions) {
+      subscriptionOptions.push({
+        kind: "project-presence",
+        debounceMs: mockResolveSubscriptionDebounceMs(subscribeOptions?.debounceMs),
+      });
+      const delivered = new Map<string, PluginProjectPresenceState>();
+      let disposed = false;
+      const subscription = (presence: PluginProjectPresence) => {
+        if (disposed) return;
+        if (mockProjectId !== null && presence.projectId !== mockProjectId) return;
+        const previous = delivered.get(presence.projectId);
+        if (previous === presence.state) return;
+        if (presence.state === "closed" && mockProjectId === null) {
+          if (previous === undefined) return;
+          delivered.delete(presence.projectId);
+        } else {
+          delivered.set(presence.projectId, presence.state);
+        }
+        // Logged and swallowed, sync or async, as the host does for a listener.
+        const report = (err: unknown) =>
+          console.error("[createMockHost] onDidChangeProjectPresence callback failed:", err);
+        try {
+          const result: unknown = callback(presence);
+          if (result instanceof Promise) result.catch(report);
+        } catch (err) {
+          report(err);
+        }
+      };
+      projectPresenceSubs.add(subscription);
+      // The current state is replayed, asynchronously like production.
+      queueMicrotask(() => {
+        if (mockProjectId !== null) {
+          const state = projectPresence.get(mockProjectId) ?? "closed";
+          subscription(Object.freeze({ projectId: mockProjectId, state }));
+          return;
+        }
+        for (const [projectId, state] of projectPresence) {
+          subscription(Object.freeze({ projectId, state }));
+        }
+      });
+      const dispose = () => {
+        if (disposed) return;
+        disposed = true;
+        projectPresenceSubs.delete(subscription);
       };
       return Promise.resolve(dispose);
     },
@@ -3255,6 +3334,17 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
     simulateFocusedPanelChange(focus) {
       focusedPanel = toPluginFocusedPanel(focus);
       for (const cb of [...focusedPanelSubs]) cb(focusedPanel);
+    },
+    simulateProjectPresenceChange(change) {
+      const presence = toPluginProjectPresence(change);
+      if (!presence) {
+        throw new Error(
+          "simulateProjectPresenceChange: expected { projectId, state: foreground | background | closed }"
+        );
+      }
+      if (presence.state === "closed") projectPresence.delete(presence.projectId);
+      else projectPresence.set(presence.projectId, presence.state);
+      for (const cb of [...projectPresenceSubs]) cb(presence);
     },
     simulateSendToAgentPick(terminalId) {
       sendToAgentPick = terminalId;
