@@ -3541,6 +3541,13 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
             message: `toolbarButtons "${button.id}" popover.viewId "${viewId}" names a location: "sidebar" view — a popover draws a panel view, and a sidebar view renders only in the sidebar.`,
             params: { errorCode: "toolbar_popover_view_sidebar" },
           });
+        } else if (fileEditorViewIds.has(viewId)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: viewPath,
+            message: `toolbarButtons "${button.id}" popover.viewId "${viewId}" names a location: "fileEditor" view — a popover draws a panel view, and a file editor view renders only in the file panel.`,
+            params: { errorCode: "toolbar_popover_view_file_editor" },
+          });
         } else if (ptyPanelIds.has(viewId)) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,

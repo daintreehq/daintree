@@ -106,6 +106,18 @@ describe("toolbar button popover", () => {
     expect(issue?.path).toEqual(["contributes", "toolbarButtons", 0, "popover", "viewId"]);
   });
 
+  it("rejects a popover naming a file editor view, which has no panel to mount", () => {
+    const result = parse(
+      { popover: { viewId: "notes" } },
+      {
+        views: [view, { id: "notes", componentPath: "dist/notes.js", location: "fileEditor" }],
+      }
+    );
+    expect(result.success).toBe(false);
+    const [issue] = issuesFor(result, "toolbar_popover_view_file_editor");
+    expect(issue?.path).toEqual(["contributes", "toolbarButtons", 0, "popover", "viewId"]);
+  });
+
   it("rejects a popover naming a PTY panel, whose view never loads", () => {
     const result = parse(
       { popover: { viewId: "inbox" } },
