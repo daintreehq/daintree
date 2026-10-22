@@ -265,6 +265,7 @@ export const ToolbarButtonContributionSchema = z
     iconId: z.string().min(1),
     actionId: z.string().min(1).optional(),
     popover: ToolbarButtonPopoverSchema.optional(),
+    menu: z.array(PanelMenuItemSchema).max(PANEL_MENU_MAX_ITEMS).optional(),
     priority: z
       .union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5)])
       .optional(),
@@ -2111,6 +2112,9 @@ export const PluginToolbarButtonRuntimeStateSchema = z
     busy: z.boolean().optional(),
     tooltip: PluginToolbarButtonStateTextSchema,
     iconId: z.string().min(1).max(256).optional(),
+    // Items are vetted (own namespace, no repeats) by `normalizePanelMenuItems`
+    // at the call site, which also rewrites them into the instance namespace.
+    menu: z.array(PanelMenuItemSchema).max(PANEL_MENU_MAX_ITEMS).optional(),
   })
   .strict()
   .superRefine((state, ctx) => {
@@ -3497,15 +3501,67 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
       // the other.
       manifest.contributes.toolbarButtons.forEach((button, index) => {
         const path = ["contributes", "toolbarButtons", index] as const;
-        if (button.actionId === undefined && button.popover === undefined) {
+        const menu = button.menu ?? [];
+        // A menu is the button's whole behaviour when it has no action: the
+        // button opens it instead of dispatching.
+        if (button.actionId === undefined && button.popover === undefined && menu.length === 0) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
             path: [...path],
-            message: `Toolbar button "${button.id}" declares neither actionId nor popover — give it one, or it does nothing when clicked.`,
+            message: `Toolbar button "${button.id}" declares none of actionId, popover or menu — give it one, or it does nothing when clicked.`,
             params: { errorCode: "toolbar_button_behavior_missing" },
           });
           return;
         }
+        if (button.popover !== undefined && menu.length > 0) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [...path, "menu"],
+            message: `Toolbar button "${button.id}" declares both popover and menu — a popover button's click opens its popover, so keep one.`,
+            params: { errorCode: "toolbar_button_menu_popover_conflict" },
+          });
+          return;
+        }
+        // Held to the plugin's own actions exactly as a panel's menu is: each
+        // item is dispatched on its own, with nothing the plugin supplies.
+        const seenMenuActions = new Set<string>();
+        let menuRejected = false;
+        menu.forEach((item, itemIndex) => {
+          const { actionId } = item;
+          const issuePath = [...path, "menu", itemIndex, "actionId"];
+          if (
+            !actionId.startsWith(ownNamespacePrefix) ||
+            actionId.length === ownNamespacePrefix.length ||
+            !PANEL_MENU_ACTION_ID.test(actionId)
+          ) {
+            menuRejected = true;
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: issuePath,
+              message: `Toolbar button menu actionId "${actionId}" must be one of this plugin's own actions, written "${manifest.name}.<id>" — a button's menu can't offer built-in or other plugins' actions.`,
+              params: { errorCode: "toolbar_button_menu_action_not_own" },
+            });
+            return;
+          }
+          if (declaredCommandActionIds.size > 0 && !declaredCommandActionIds.has(actionId)) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: issuePath,
+              message: `Toolbar button menu actionId "${actionId}" is in this plugin's "${manifest.name}" namespace but matches no entry in contributes.commands — likely a typo for a declared command.`,
+              params: { errorCode: "action_id_undeclared_command" },
+            });
+          }
+          if (seenMenuActions.has(actionId)) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: issuePath,
+              message: `Duplicate menu action "${actionId}" — each action appears at most once in a button's menu.`,
+              params: { errorCode: "toolbar_button_menu_duplicate_action" },
+            });
+          }
+          seenMenuActions.add(actionId);
+        });
+        if (menuRejected) return;
         if (button.actionId !== undefined && button.popover !== undefined) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,

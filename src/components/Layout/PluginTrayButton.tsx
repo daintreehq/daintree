@@ -1,5 +1,5 @@
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from "react";
-import { Check, Pin } from "lucide-react";
+import { Check, ChevronDown, Pin } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
@@ -14,6 +14,9 @@ import {
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { ToolbarContextMenuItems } from "./ToolbarContextMenuItems";
@@ -56,6 +59,7 @@ import {
   toolbarBadgeCountGlyph,
 } from "./pluginToolbarBadge";
 import { presentPluginToolbarButton } from "./pluginToolbarButtonState";
+import { usePluginToolbarMenu, type PluginToolbarMenuEntry } from "./pluginToolbarMenu";
 import { usePluginToolbarButtonState } from "@/store/pluginToolbarStateStore";
 import {
   PluginToolbarPopover,
@@ -149,6 +153,11 @@ export function PluginToolbarButton({
   const tooltipText = badge ? `${tooltip}, ${describeToolbarBadge(badge)}` : tooltip;
   // Never both: a popover button's click is its `PopoverTrigger`'s.
   const actionId = config.popover ? undefined : config.actionId;
+  const menuEntries = usePluginToolbarMenu(config);
+  // With an action the menu is a chevron beside the button; without one the
+  // button itself opens it. A popover button carries no menu.
+  const hasMenu = !config.popover && menuEntries.length > 0;
+  const opensMenu = hasMenu && actionId === undefined && !blocked;
 
   const button = (
     <Button
@@ -174,6 +183,7 @@ export function PluginToolbarButton({
       }}
       className={cn(
         "toolbar-icon-button text-text-primary relative",
+        hasMenu && actionId !== undefined && "rounded-r-none",
         disabled && !busy && ARIA_DISABLED_CLASSES
       )}
       aria-label={name}
@@ -208,10 +218,24 @@ export function PluginToolbarButton({
         <span className="inline-flex">
           <Tooltip>
             <TooltipTrigger asChild>
-              {config.popover ? <PopoverTrigger asChild>{button}</PopoverTrigger> : button}
+              {config.popover ? (
+                <PopoverTrigger asChild>{button}</PopoverTrigger>
+              ) : opensMenu ? (
+                <DropdownMenuTrigger asChild>{button}</DropdownMenuTrigger>
+              ) : (
+                button
+              )}
             </TooltipTrigger>
             <TooltipContent side="bottom">{tooltipText}</TooltipContent>
           </Tooltip>
+          {hasMenu && actionId !== undefined && (
+            <PluginToolbarMenuChevron
+              config={config}
+              entries={menuEntries}
+              blocked={blocked}
+              dataToolbarItem={dataToolbarItem}
+            />
+          )}
           {disabled && (
             <span id={reasonId} className="sr-only">
               {tooltip}
@@ -240,11 +264,126 @@ export function PluginToolbarButton({
     </ContextMenu>
   );
 
+  if (opensMenu) {
+    return (
+      <DropdownMenu>
+        {body}
+        <DropdownMenuContent
+          align="start"
+          sideOffset={4}
+          className="min-w-[12rem] max-h-[var(--radix-dropdown-menu-content-available-height)] overflow-y-auto"
+        >
+          <PluginToolbarMenuItems entries={menuEntries} blocked={blocked} />
+        </DropdownMenuContent>
+      </DropdownMenu>
+    );
+  }
   if (!config.popover) return body;
   return (
     <PluginToolbarPopover origin="button" buttonId={config.id} configs={ownConfig}>
       {body}
     </PluginToolbarPopover>
+  );
+}
+
+function dispatchPluginMenuEntry(actionId: string): void {
+  // Only the action: nothing the plugin supplies travels with the click.
+  void actionService.dispatch(actionId as Parameters<typeof actionService.dispatch>[0], undefined, {
+    source: "user",
+  });
+}
+
+/** A plugin toolbar button's menu rows, each dispatching its own action. */
+function PluginToolbarMenuItems({
+  entries,
+  blocked = false,
+}: {
+  entries: readonly PluginToolbarMenuEntry[];
+  /** The button went busy or disabled while its menu was open: selecting does nothing. */
+  blocked?: boolean;
+}) {
+  return (
+    <>
+      {entries.map((entry) => (
+        <DropdownMenuItem
+          key={entry.actionId}
+          onSelect={(event) => {
+            if (blocked) {
+              event.preventDefault();
+              return;
+            }
+            dispatchPluginMenuEntry(entry.actionId);
+          }}
+          aria-disabled={blocked || undefined}
+          keybinding={entry.actionId}
+          data-testid={`plugin-toolbar-menu-item-${entry.actionId}`}
+        >
+          <span className="min-w-0 flex-1 truncate">{entry.label}</span>
+        </DropdownMenuItem>
+      ))}
+    </>
+  );
+}
+
+/**
+ * The chevron half of a split plugin button: the button's own click stays its
+ * action and this opens the plugin's menu. A busy or disabled button blocks the
+ * chevron too, announced rather than natively disabled so its reason still shows.
+ */
+function PluginToolbarMenuChevron({
+  config,
+  entries,
+  blocked,
+  dataToolbarItem,
+}: {
+  config: ToolbarButtonConfig;
+  entries: readonly PluginToolbarMenuEntry[];
+  blocked: boolean;
+  dataToolbarItem?: string;
+}) {
+  const label = `${config.label} menu`;
+  return (
+    <DropdownMenu>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="ghost"
+              aria-label={label}
+              aria-disabled={blocked || undefined}
+              onPointerDown={(e) => {
+                if (blocked) e.preventDefault();
+              }}
+              onKeyDown={(e) => {
+                if (blocked && (e.key === "Enter" || e.key === " " || e.key === "ArrowDown")) {
+                  e.preventDefault();
+                }
+              }}
+              data-toolbar-item={dataToolbarItem}
+              data-testid={`plugin-toolbar-menu-chevron-${config.id}`}
+              className={cn(
+                "group/split-toggle toolbar-icon-button text-text-secondary aria-expanded:text-text-primary rounded-l-none",
+                "h-8 w-6 p-0 flex items-center justify-center",
+                blocked && ARIA_DISABLED_CLASSES
+              )}
+            >
+              <ChevronDown
+                className="h-3 w-3 transition-transform duration-150 ease-out group-aria-expanded/split-toggle:rotate-180"
+                aria-hidden="true"
+              />
+            </Button>
+          </DropdownMenuTrigger>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">{label}</TooltipContent>
+      </Tooltip>
+      <DropdownMenuContent
+        align="start"
+        sideOffset={4}
+        className="min-w-[12rem] max-h-[var(--radix-dropdown-menu-content-available-height)] overflow-y-auto"
+      >
+        <PluginToolbarMenuItems entries={entries} blocked={blocked} />
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
@@ -264,6 +403,43 @@ export function PluginOverflowItem({
 }) {
   const presentation = presentPluginToolbarButton(config, usePluginToolbarButtonState(config));
   const badge = usePluginToolbarBadge(config);
+  const menuEntries = usePluginToolbarMenu(config);
+  if (!config.popover && menuEntries.length > 0 && !presentation.blocked) {
+    // Same shape as a tray row: the row opens the submenu, and a button with
+    // an action lists that action first.
+    return (
+      <DropdownMenuSub>
+        <DropdownMenuSubTrigger>
+          <PluginMenuRowIcon presentation={presentation} />
+          <span className="min-w-0 flex-1 truncate">{config.label}</span>
+          <PluginMenuRowState presentation={presentation} />
+          {badge && (
+            <>
+              <span className="ml-2 inline-flex shrink-0 items-center">
+                <PluginBadgeIndicator pluginId={config.pluginId} badge={badge} live={false} />
+              </span>
+              <span className="sr-only">, {describeToolbarBadge(badge)}</span>
+            </>
+          )}
+        </DropdownMenuSubTrigger>
+        <DropdownMenuSubContent className="min-w-[12rem]">
+          {config.actionId !== undefined && (
+            <>
+              <DropdownMenuItem
+                onSelect={onSelect}
+                keybinding={config.actionId}
+                {...menuToggleProps(presentation.pressed)}
+              >
+                <span className="min-w-0 flex-1 truncate">{config.label}</span>
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+            </>
+          )}
+          <PluginToolbarMenuItems entries={menuEntries} />
+        </DropdownMenuSubContent>
+      </DropdownMenuSub>
+    );
+  }
   return (
     <DropdownMenuItem
       onClick={(event) => {
@@ -361,6 +537,10 @@ function PluginTrayRow({
 }) {
   const presentation = presentPluginToolbarButton(config, usePluginToolbarButtonState(config));
   const badge = usePluginToolbarBadge(config);
+  const menuEntries = usePluginToolbarMenu(config);
+  // A menu turns the row into a submenu: a button with an action lists that
+  // action first, since the row itself opens the submenu rather than running it.
+  const asSubmenu = !config.popover && menuEntries.length > 0 && !presentation.blocked;
 
   const handleKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     if (e.key === "p" || e.key === "P") {
@@ -370,25 +550,8 @@ function PluginTrayRow({
     }
   };
 
-  return (
-    <DropdownMenuItem
-      // Not Radix's `disabled`: that would skip the row in keyboard navigation
-      // and take its pin control with it. The row stays reachable, says why,
-      // and only selecting it is vetoed — the menu stays open.
-      onSelect={(event) => {
-        if (presentation.blocked) {
-          event.preventDefault();
-          return;
-        }
-        onSelect(config);
-      }}
-      onKeyDown={handleKeyDown}
-      {...menuToggleProps(presentation.pressed)}
-      aria-disabled={presentation.blocked || undefined}
-      className={cn("group", presentation.blocked && ARIA_DISABLED_CLASSES)}
-      data-testid={`plugin-tray-row-${config.id}`}
-      keybinding={config.actionId}
-    >
+  const content = (
+    <>
       <PluginMenuRowIcon presentation={presentation} />
 
       {/* The plugin's tooltip or disabled reason shows on hover whether or not
@@ -452,6 +615,59 @@ function PluginTrayRow({
           </span>
         </RowControlTooltip>
       )}
+    </>
+  );
+
+  if (asSubmenu) {
+    return (
+      <DropdownMenuSub>
+        <DropdownMenuSubTrigger
+          onKeyDown={handleKeyDown}
+          className="group"
+          data-testid={`plugin-tray-row-${config.id}`}
+        >
+          {content}
+        </DropdownMenuSubTrigger>
+        <DropdownMenuSubContent className="min-w-[12rem]">
+          {config.actionId !== undefined && (
+            <>
+              <DropdownMenuItem
+                onSelect={() => onSelect(config)}
+                keybinding={config.actionId}
+                {...menuToggleProps(presentation.pressed)}
+                data-testid={`plugin-tray-primary-${config.id}`}
+              >
+                <span className="min-w-0 flex-1 truncate">{config.label}</span>
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+            </>
+          )}
+          <PluginToolbarMenuItems entries={menuEntries} />
+        </DropdownMenuSubContent>
+      </DropdownMenuSub>
+    );
+  }
+
+  return (
+    <DropdownMenuItem
+      // Not Radix's `disabled`: that would skip the row in keyboard navigation
+      // and take its pin control with it. The row stays reachable, says why,
+      // and only selecting it is vetoed — the menu stays open.
+      onSelect={(event) => {
+        if (presentation.blocked) {
+          event.preventDefault();
+          return;
+        }
+        onSelect(config);
+      }}
+      onKeyDown={handleKeyDown}
+      {...menuToggleProps(presentation.pressed)}
+      aria-disabled={presentation.blocked || undefined}
+      className={cn("group", presentation.blocked && ARIA_DISABLED_CLASSES)}
+      data-testid={`plugin-tray-row-${config.id}`}
+      keybinding={config.actionId}
+    >
+      {content}
     </DropdownMenuItem>
   );
 }
@@ -567,6 +783,8 @@ export function PluginTrayButton({
       deferPopover(config.id, "tray");
       return;
     }
+    // A menu button whose items are gone has nothing left to run.
+    if (config.actionId === undefined) return;
     void actionService.dispatch(
       config.actionId as Parameters<typeof actionService.dispatch>[0],
       undefined,

@@ -540,6 +540,30 @@ describe("createMockHost", () => {
     expect(host.setToolbarButtonStateCalls).toEqual([]);
   });
 
+  it("setToolbarButtonState vets a menu as the real host does (#13786)", async () => {
+    const host = createMockHost({ pluginId: "acme", toolbarButtonIds: ["sync"] });
+    await host.setToolbarButtonState("sync", { menu: [{ actionId: "acme.pull" }] });
+    await host.setToolbarButtonState("sync", { menu: [] });
+    await expect(
+      host.setToolbarButtonState("sync", { menu: [{ actionId: "other.run" }] })
+    ).rejects.toThrow(/menu: .*own actions/);
+    await expect(
+      host.setToolbarButtonState("sync", {
+        menu: Array.from({ length: 6 }, (_, i) => ({ actionId: `acme.cmd${i}` })),
+      })
+    ).rejects.toThrow(/menu: at most 5/);
+    await expect(host.setToolbarButtonState("sync", { menu: null } as never)).rejects.toThrow(
+      /menu: must be an array/
+    );
+    await expect(
+      host.setToolbarButtonState("sync", { menu: [{ actionId: "acme.pull", args: 1 }] } as never)
+    ).rejects.toThrow(/args: unrecognized key/);
+    await expect(
+      host.setToolbarButtonState("sync", { menu: [{ actionId: "acme.pull", label: " " }] })
+    ).rejects.toThrow(/label: must be a non-empty string/);
+    expect(host.setToolbarButtonStateCalls).toHaveLength(2);
+  });
+
   it("records reloadPanel calls and answers from simulated lifecycle phases (#12610)", async () => {
     const host = createMockHost({ pluginId: "acme" });
     await expect(host.reloadPanel("p1")).resolves.toBe("not-mounted");

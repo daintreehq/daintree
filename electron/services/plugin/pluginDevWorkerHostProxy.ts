@@ -176,6 +176,7 @@ const TOOLBAR_STATE_FIELDS: readonly string[] = [
   "busy",
   "tooltip",
   "iconId",
+  "menu",
 ] satisfies readonly (keyof PluginToolbarButtonRuntimeState)[];
 
 interface ListenerState {
@@ -1320,7 +1321,31 @@ export class PluginDevWorkerHostProxy {
               )
             );
           }
+          // `menu` is the one structured field: a list of plain entries, each
+          // copied as own data so the port clones it and main's schema vets it.
+          try {
+            entries = entries.map(([key, value]): [string, unknown] => {
+              if (key !== "menu" || !Array.isArray(value)) return [key, value];
+              return [
+                key,
+                value.map((item: unknown) =>
+                  item !== null && typeof item === "object" && !Array.isArray(item)
+                    ? Object.fromEntries(
+                        Object.keys(item).map((k) => [k, (item as Record<string, unknown>)[k]])
+                      )
+                    : item
+                ),
+              ];
+            });
+          } catch (err) {
+            return Promise.reject(
+              new Error(
+                `Plugin "${this.pluginId}" setToolbarButtonState: invalid state — ${formatErrorMessage(err, "unreadable")}`
+              )
+            );
+          }
           for (const [key, value] of entries) {
+            if (key === "menu" && Array.isArray(value)) continue;
             if (
               value !== undefined &&
               typeof value !== "string" &&

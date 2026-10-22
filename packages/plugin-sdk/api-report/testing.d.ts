@@ -1873,6 +1873,13 @@ interface PluginToolbarButtonRuntimeState {
     tooltip?: string;
     /** Replaces the icon, using the same ids as the manifest `iconId`. Unknown ids keep the manifest icon. */
     iconId?: string;
+    /**
+     * Replaces the button's manifest `menu` (#13786); `[]` removes it. Each
+     * `actionId` must be one of this plugin's own actions, written
+     * `"{manifestId}.{id}"`, at most {@link PANEL_MENU_MAX_ITEMS} of them. Not
+     * for a button that opens a popover.
+     */
+    menu?: PanelMenuItemContribution[];
 }
 /**
  * A short status a plugin shows on one worktree's card via

@@ -460,6 +460,18 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       ],
       note: "Exclusive with actionId. Registered as the popover the button opens instead of dispatching, drawn by the host around the named view (#13784).",
     },
+    menu: {
+      mode: "derived-input",
+      consumers: [
+        { file: PLUGIN_SCHEMA, symbol: "manifest superRefine (toolbar_button_menu_*)" },
+        { file: PLUGIN_SERVICE, symbol: "loadPlugin → registerToolbarButton" },
+        {
+          file: "src/components/Layout/pluginToolbarMenu.ts",
+          symbol: "resolvePluginToolbarMenu",
+        },
+      ],
+      note: "Qualified into the plugin instance's namespace and registered on the button; the toolbar draws it as a split button's chevron menu or a menu button, and the tray as a submenu, each item shown while its action is registered (#13786).",
+    },
     priority: {
       mode: "verbatim",
       consumers: [

@@ -10,14 +10,24 @@ export interface ToolbarButtonPopoverConfig {
   panelKindId: string;
 }
 
+export interface ToolbarButtonMenuItemConfig {
+  actionId: string;
+  label?: string;
+}
+
 export interface ToolbarButtonConfig {
   id: PluginToolbarButtonId;
   label: string;
   iconId: string;
-  /** Dispatched on click. Exactly one of this and {@link popover} is set. */
+  /** Dispatched on click. Never set with {@link popover}; with neither, the button opens its {@link menu}. */
   actionId?: string;
   /** Opened on click, in place of an action (#13784). */
   popover?: ToolbarButtonPopoverConfig;
+  /**
+   * Own-namespace actions the button offers beside its click (#13786), already
+   * qualified to the plugin instance. Shown while each action is registered.
+   */
+  menu?: ToolbarButtonMenuItemConfig[];
   priority: ToolbarButtonPriority;
   pluginId: string;
   /** Visibility clause, evaluated live against the renderer's chrome context. */

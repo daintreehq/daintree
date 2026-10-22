@@ -2370,6 +2370,14 @@ export class PluginService {
         priority: btn.priority ?? 3,
         pluginId,
         ...(btn.when !== undefined ? { when: btn.when } : {}),
+        ...(btn.menu !== undefined && btn.menu.length > 0
+          ? {
+              menu: btn.menu.map((item) => ({
+                actionId: qualifyActionId(item.actionId),
+                ...(item.label !== undefined ? { label: item.label } : {}),
+              })),
+            }
+          : {}),
       };
       if (btn.popover !== undefined) {
         // The popover mounts the view's panel kind, so it carries the RUNTIME
@@ -2394,6 +2402,8 @@ export class PluginService {
         });
       } else if (btn.actionId !== undefined) {
         registerToolbarButton({ ...base, actionId: qualifyActionId(btn.actionId) });
+      } else if (base.menu !== undefined) {
+        registerToolbarButton(base);
       }
       trackPluginExpression(pluginId, btn.when);
     }

@@ -271,7 +271,10 @@ function sameToolbarButtonState(
     a.disabledReason === b.disabledReason &&
     a.busy === b.busy &&
     a.tooltip === b.tooltip &&
-    a.iconId === b.iconId
+    a.iconId === b.iconId &&
+    (a.menu === undefined
+      ? b.menu === undefined
+      : b.menu !== undefined && samePanelMenuItems(a.menu, b.menu))
   );
 }
 
@@ -2460,6 +2463,29 @@ export function createHost(
         // renderer knows it by the runtime key the manifest's icons load under.
         if (isPluginCustomIconRef(validated.iconId)) {
           validated = { ...validated, iconId: makePluginCustomIconKey(pluginId, validated.iconId) };
+        }
+        if (validated.menu !== undefined) {
+          const button = boundPlugin.manifest.contributes.toolbarButtons.find(
+            (btn) => btn.id === buttonId
+          );
+          if (button?.popover !== undefined) {
+            return Promise.reject(
+              new Error(
+                `Plugin "${pluginId}" setToolbarButtonState: invalid state — menu: "${buttonId}" opens a popover and can't carry a menu`
+              )
+            );
+          }
+          // Own namespace and no repeats, as a panel's runtime menu; the items
+          // come back in the instance's namespace, where they dispatch.
+          const menu = normalizePanelMenuItems(validated.menu, manifestId, pluginId);
+          if (!menu.ok) {
+            return Promise.reject(
+              new Error(
+                `Plugin "${pluginId}" setToolbarButtonState: invalid state — menu: ${menu.error}`
+              )
+            );
+          }
+          validated = { ...validated, menu: [...menu.items] };
         }
         // An empty state is the manifest default, the same as a clear.
         if (Object.keys(validated).length === 0) validated = null;
