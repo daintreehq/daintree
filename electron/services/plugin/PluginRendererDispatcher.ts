@@ -351,7 +351,8 @@ export class PluginRendererDispatcher {
    * `pluginId` is the calling plugin, taken from its host's closure and never
    * from the plugin's own payload. The renderer stamps it on the
    * `action:dispatched` event, so a dispatch of a built-in action still lands
-   * in the plugin audit log under the plugin that made it (#13759).
+   * in the plugin audit log under the plugin that made it (#13759). The Shell
+   * passes none for a host's plugin: that id has no provenance on this machine.
    */
   sendDispatchToWebContents(
     webContents: Electron.WebContents,

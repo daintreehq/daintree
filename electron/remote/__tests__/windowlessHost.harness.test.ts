@@ -529,14 +529,12 @@ describe("host handlers with no window here, over the real link", () => {
         "the dispatch in the driving view"
       );
       const [request] = eventsOn(view, CHANNELS.PLUGIN_DISPATCH_ACTION_REQUEST)[0] as [
-        { requestId: string; actionId: string; args: unknown; pluginId?: string },
+        { requestId: string; actionId: string; args: unknown },
       ];
-      // The Shell names the host's plugin, so the driving view audits it (#13759).
-      expect(request).toMatchObject({
-        actionId: "worktree.refresh",
-        args: { worktreeId: "wt-1" },
-        pluginId: "acme.graph",
-      });
+      expect(request).toMatchObject({ actionId: "worktree.refresh", args: { worktreeId: "wt-1" } });
+      // A host's plugin id carries no host provenance here, so the Shell's own
+      // audit log never files a record under it (#13759).
+      expect(request).not.toHaveProperty("pluginId");
       r.send(CHANNELS.PLUGIN_DISPATCH_ACTION_RESPONSE, view, {
         requestId: request.requestId,
         result: { ok: true, result: "refreshed" },

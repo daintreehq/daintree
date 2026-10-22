@@ -779,7 +779,8 @@ export class ActionService {
         // A plugin's dispatch is audited under the plugin that made it rather
         // than the action's owner, which a built-in action doesn't have (#13759).
         pluginId:
-          (source === "plugin" ? options?.callerPluginId : undefined) ?? definition.pluginId,
+          (source === "plugin" && options?.callerPluginId ? options.callerPluginId : undefined) ??
+          definition.pluginId,
       });
       if (!definition.suppressShortcutHint)
         this.emitShortcutHint(actionId, source, overlayEpochBeforeRun);

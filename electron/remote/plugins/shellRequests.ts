@@ -395,12 +395,11 @@ export function installPluginShellRequests(deps: PluginShellRequestDeps = {}): (
         },
       };
     }
-    return actions.sendDispatchToWebContents(
-      wc,
-      parsed.data.actionId,
-      parsed.data.args,
-      parsed.data.pluginId
-    );
+    // Unattributed on purpose: `events:emit` is local, so naming the host's
+    // plugin would file its audit record in this machine's log under a bare id
+    // with no host provenance, beside local plugins that may share it, and
+    // nowhere the remote window's Host-routed audit viewer reads.
+    return actions.sendDispatchToWebContents(wc, parsed.data.actionId, parsed.data.args);
   };
 
   /** The catalog a host's plugin sees is the one it may dispatch from. */

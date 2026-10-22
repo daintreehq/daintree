@@ -160,20 +160,34 @@ describe("PluginRendererDispatcher", () => {
     });
 
     it("names the calling plugin on the request so the renderer can attribute it (#13759)", async () => {
-      const wc = makeWebContents(7);
-      setFocusedWebContents(wc);
+      const focused = makeWebContents(7);
+      const bound = makeWebContents(8);
+      setFocusedWebContents(focused);
+      setProjectViews({ A: [bound] });
       const d = new PluginRendererDispatcher({ isDisposed: () => false });
+      try {
+        void d.sendDispatchToRenderer("terminal.new", null, undefined, "acme.caller");
+        void d.sendDispatchToRenderer("worktree.refresh", null, "A", "acme.bound");
+        void d.sendDispatchToRenderer("plugin.openSettings", null);
+        await flushThaw();
 
-      void d.sendDispatchToRenderer("terminal.new", null, undefined, "acme.caller");
-      void d.sendDispatchToRenderer("plugin.openSettings", null);
-      await flushThaw();
-
-      const requests = wc.send.mock.calls
-        .filter((c) => c[0] === CHANNELS.PLUGIN_DISPATCH_ACTION_REQUEST)
-        .map((c) => c[1] as Record<string, unknown>);
-      expect(requests[0]).toMatchObject({ actionId: "terminal.new", pluginId: "acme.caller" });
-      expect(requests[1]).not.toHaveProperty("pluginId");
-      d.dispose();
+        const sent = (wc: FakeWebContents) =>
+          wc.send.mock.calls
+            .filter((c) => c[0] === CHANNELS.PLUGIN_DISPATCH_ACTION_REQUEST)
+            .map((c) => c[1]);
+        expect(sent(focused)[0]).toMatchObject({
+          actionId: "terminal.new",
+          pluginId: "acme.caller",
+        });
+        expect(sent(bound)[0]).toMatchObject({
+          actionId: "worktree.refresh",
+          pluginId: "acme.bound",
+        });
+        expect(sent(focused)[1]).not.toHaveProperty("pluginId");
+      } finally {
+        // Settles all three requests, so a failed assertion strands no timer.
+        d.dispose();
+      }
     });
 
     it("resolves an EXECUTION_ERROR envelope (never rejects) when no renderer is available", async () => {

@@ -1,5 +1,6 @@
 import { beforeAll, afterAll, describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { z } from "zod";
+import { createHash } from "node:crypto";
 
 const hintMocks = vi.hoisted(() => {
   const mockShow = vi.fn();
@@ -1353,18 +1354,32 @@ describe("ActionService", () => {
     });
 
     describe("plugin attribution (#13759)", () => {
-      function register(pluginId?: string) {
+      function register(
+        id: string,
+        {
+          pluginId,
+          danger = "safe",
+          denyPluginDispatch,
+          run = vi.fn().mockResolvedValue(undefined),
+        }: {
+          pluginId?: string;
+          danger?: ActionDefinition["danger"];
+          denyPluginDispatch?: boolean;
+          run?: ActionDefinition["run"];
+        } = {}
+      ) {
         service.register({
-          id: "actions.list" as ActionId,
+          id,
           title: "T",
           description:
             "Test action with a short title for verifying title/description field propagation in manifest entries.",
           category: "test",
           kind: "command",
-          danger: "safe",
+          danger,
           scope: "renderer",
           ...(pluginId ? { pluginId } : {}),
-          run: vi.fn().mockResolvedValue(undefined),
+          ...(denyPluginDispatch ? { denyPluginDispatch } : {}),
+          run,
         });
       }
 
@@ -1373,20 +1388,26 @@ describe("ActionService", () => {
         return emit.mock.calls[0]![1];
       }
 
-      it("attributes a plugin's dispatch of a built-in action to the caller, with an argsHash", async () => {
+      it("attributes a plugin's dispatch of a built-in action to the caller, hashing the redacted args", async () => {
         const emit = vi.fn().mockResolvedValue(undefined);
         const restore = installEmit(emit);
         try {
-          register();
+          register("actions.list");
           await service.dispatch(
-            "actions.list" as ActionId,
-            { q: 1 },
+            "actions.list",
+            { apiToken: "s3cret", nested: { password: "hunter2", name: "n" }, count: 2 },
             { source: "plugin", callerPluginId: "acme.caller" }
           );
+          const redacted = {
+            apiToken: "[REDACTED]",
+            nested: { password: "[REDACTED]", name: "n" },
+            count: 2,
+          };
           expect(await emitted(emit)).toMatchObject({
             source: "plugin",
             pluginId: "acme.caller",
-            argsHash: expect.stringMatching(/^[0-9a-f]{64}$/),
+            args: redacted,
+            argsHash: createHash("sha256").update(JSON.stringify(redacted)).digest("hex"),
           });
         } finally {
           restore();
@@ -1397,8 +1418,8 @@ describe("ActionService", () => {
         const emit = vi.fn().mockResolvedValue(undefined);
         const restore = installEmit(emit);
         try {
-          register("acme.owner");
-          await service.dispatch("actions.list" as ActionId, undefined, {
+          register("actions.list", { pluginId: "acme.owner" });
+          await service.dispatch("actions.list", undefined, {
             source: "plugin",
             callerPluginId: "acme.caller",
           });
@@ -1408,12 +1429,18 @@ describe("ActionService", () => {
         }
       });
 
-      it("keeps the owning plugin when a plugin dispatch carries no caller", async () => {
+      it.each([
+        ["no caller", undefined],
+        ["an empty caller", ""],
+      ])("keeps the owning plugin when a plugin dispatch carries %s", async (_label, caller) => {
         const emit = vi.fn().mockResolvedValue(undefined);
         const restore = installEmit(emit);
         try {
-          register("acme.owner");
-          await service.dispatch("actions.list" as ActionId, undefined, { source: "plugin" });
+          register("actions.list", { pluginId: "acme.owner" });
+          await service.dispatch("actions.list", undefined, {
+            source: "plugin",
+            callerPluginId: caller,
+          });
           expect(await emitted(emit)).toMatchObject({ pluginId: "acme.owner" });
         } finally {
           restore();
@@ -1424,14 +1451,44 @@ describe("ActionService", () => {
         const emit = vi.fn().mockResolvedValue(undefined);
         const restore = installEmit(emit);
         try {
-          register();
-          await service.dispatch("actions.list" as ActionId, undefined, {
+          register("actions.list");
+          await service.dispatch("actions.list", undefined, {
             source: "agent",
             callerPluginId: "acme.caller",
           });
           const payload = await emitted(emit);
           expect(payload).not.toHaveProperty("pluginId");
           expect(payload).not.toHaveProperty("argsHash");
+        } finally {
+          restore();
+        }
+      });
+
+      it("emits nothing for an attributed plugin dispatch that is refused or fails", async () => {
+        const emit = vi.fn().mockResolvedValue(undefined);
+        const restore = installEmit(emit);
+        try {
+          register("test.confirm", { danger: "confirm" });
+          register("test.denied", { denyPluginDispatch: true });
+          register("test.throws", { run: vi.fn().mockRejectedValue(new Error("boom")) });
+          register("actions.list");
+          const options = { source: "plugin", callerPluginId: "acme.caller" } as const;
+
+          const refused = await Promise.all(
+            ["test.confirm", "test.denied", "test.throws"].map((id) =>
+              service.dispatch(id, { q: 1 }, options)
+            )
+          );
+          expect(refused.map((r) => (r.ok ? "ok" : r.error.code))).toEqual([
+            "CONFIRMATION_REQUIRED",
+            "RESTRICTED",
+            "EXECUTION_ERROR",
+          ]);
+
+          // A later success is the settle point: anything the failures emitted
+          // would have been hashed and sent before it.
+          await service.dispatch("actions.list", { q: 1 }, options);
+          expect(await emitted(emit)).toMatchObject({ actionId: "actions.list" });
         } finally {
           restore();
         }

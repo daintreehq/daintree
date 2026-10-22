@@ -240,12 +240,23 @@ describe("events IPC handler — action:dispatched", () => {
     cleanup();
   });
 
-  it("rejects a source outside ActionSource", () => {
+  it("keeps a pluginId at the 256-character cap", () => {
     const { emit, cleanup } = setup();
-    ipcMainMock._invoke("events:emit", "action:dispatched", { ...base, source: "mcp" });
-    expect(emit).not.toHaveBeenCalled();
+    const atCap = "x".repeat(256);
+    ipcMainMock._invoke("events:emit", "action:dispatched", { ...base, pluginId: atCap });
+    expect(emit.mock.calls[0]![1]).toMatchObject({ pluginId: atCap });
     cleanup();
   });
+
+  it.each(["mcp", "constructor", "toString", "__proto__"])(
+    "rejects %j, which is not an ActionSource",
+    (source) => {
+      const { emit, cleanup } = setup();
+      ipcMainMock._invoke("events:emit", "action:dispatched", { ...base, source });
+      expect(emit).not.toHaveBeenCalled();
+      cleanup();
+    }
+  );
 
   it("rejects invalid action payloads (non-string actionId)", () => {
     const { emit, cleanup } = setup();
