@@ -611,9 +611,10 @@ describe("AddHostDialog", () => {
       expect(remoteHosts.install).toHaveBeenLastCalledWith(
         expect.objectContaining({ allowDowngrade: true, whileWorking: "refuse" })
       );
-      // The restart it needs is confirmed as any other, and stays a downgrade.
-      fireEvent.click(await screen.findByRole("button", { name: "Update now…" }));
-      fireEvent.click(await screen.findByRole("button", { name: "Update and end 3 terminals" }));
+      // The restart it needs is confirmed as any other, named as the downgrade it is.
+      fireEvent.click(await screen.findByRole("button", { name: "Downgrade now…" }));
+      expect(await screen.findByText("Downgrade 'studio' now?")).toBeTruthy();
+      fireEvent.click(screen.getByRole("button", { name: "Downgrade and end 3 terminals" }));
       await waitFor(() => expect(remoteHosts.install).toHaveBeenCalledTimes(2));
       expect(remoteHosts.install).toHaveBeenLastCalledWith(
         expect.objectContaining({ allowDowngrade: true, whileWorking: "proceed" })
@@ -648,6 +649,58 @@ describe("AddHostDialog", () => {
           confirmed: IMPACT,
         })
       );
+    });
+
+    it("offers to check again when installing the downloaded update fails", async () => {
+      remoteHosts.probe!.mockResolvedValue(
+        probeResult({
+          matchesClient: false,
+          hostBuild: { version: "1.3.0", commit: "0123456", order: "older" },
+          stagedUpdate: { version: "1.4.0", installsOnQuit: true, ready: true },
+        })
+      );
+      remoteHosts
+        .install!.mockResolvedValueOnce({ status: "needs-confirmation", impact: IMPACT })
+        .mockRejectedValueOnce(
+          Object.assign(new Error("The host now has Daintree 1.4.1 downloaded"), {
+            userMessage:
+              "The host now has Daintree 1.4.1 downloaded, not 1.4.0. Check again to see it.",
+          })
+        );
+      render(<AddHostDialog isOpen onClose={() => {}} existing={EXISTING} />);
+      fireEvent.click(screen.getByRole("button", { name: "Check host" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Install downloaded update" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Update now…" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Update and end 3 terminals" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Check again" }));
+      await waitFor(() => expect(remoteHosts.probe).toHaveBeenCalledTimes(2));
+    });
+
+    it("lets a plan refused for a newer host go on to the downgrade, or check again", async () => {
+      remoteHosts.probe!.mockResolvedValue(probeResult({ matchesClient: false }));
+      remoteHosts
+        .planInstall!.mockResolvedValueOnce({
+          ...UPDATE_PLAN,
+          kind: "host-newer",
+          delivery: null,
+          packaging: null,
+          restartsHost: false,
+          reason: "The host has Daintree 1.5.0, which is newer than 1.4.0 here.",
+        })
+        .mockResolvedValueOnce({ ...UPDATE_PLAN, downgrade: true });
+      render(<AddHostDialog isOpen onClose={() => {}} existing={EXISTING} />);
+      fireEvent.click(screen.getByRole("button", { name: "Check host" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Plan update" }));
+      expect(await screen.findByText(/newer than 1\.4\.0 here/)).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Update this machine" })).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Check again" })).toBeTruthy();
+      fireEvent.click(screen.getByRole("button", { name: "Downgrade studio…" }));
+      await waitFor(() =>
+        expect(remoteHosts.planInstall).toHaveBeenLastCalledWith(
+          expect.objectContaining({ allowDowngrade: true })
+        )
+      );
+      expect(await screen.findByTestId("add-host-downgrade")).toBeTruthy();
     });
 
     it("waits while the host is still preparing its update", async () => {

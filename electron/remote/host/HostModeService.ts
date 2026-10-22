@@ -123,6 +123,8 @@ export class HostModeService {
   private recordedStatus: string | null = null;
   private statusWrite: Promise<void> = Promise.resolve();
   private recordTimer: ReturnType<typeof setTimeout> | null = null;
+  /** A record has been written (or tried) this run, so it is kept current from here on. */
+  private recording = false;
   private offRuntime: (() => void) | null = null;
 
   constructor(private readonly deps: HostModeServiceDeps) {
@@ -411,6 +413,7 @@ export class HostModeService {
   private writeRecordedStatus(extra: { stopped?: true }): Promise<void> {
     const write = this.deps.writeStatus;
     if (!write) return Promise.resolve();
+    this.recording = true;
     const settings = this.deps.readSettings();
     const keychain =
       this.keychainCheck ?? classifyKeychainWithoutTrial(this.deps.platform, this.deps.keychain);
@@ -513,7 +516,7 @@ export class HostModeService {
    * Only once a record is kept this run: a machine that never hosted gets none.
    */
   private recordSoon(): void {
-    if (this.disposed || this.recordTimer || this.recordedStatus === null) return;
+    if (this.disposed || this.recordTimer || !this.recording) return;
     this.recordTimer = setTimeout(() => {
       this.recordTimer = null;
       if (!this.disposed) void this.recordStatus();

@@ -216,6 +216,10 @@ class AutoUpdaterService {
   private errorHandler: ((err: Error) => void) | null = null;
   private progressHandler: ((progress: ProgressInfo) => void) | null = null;
   private nativeDownloadedHandler: (() => void) | null = null;
+  // Downloads handed to macOS's own updater that it hasn't said it has yet. A
+  // staged update is ready only once none is outstanding, so an earlier
+  // handoff finishing late never vouches for a later download.
+  private nativeHandoffsPending = 0;
   private downloadedHandler: ((info: UpdateInfo) => void) | null = null;
 
   // Persist how far an install attempt got, for the next boot to act on.
@@ -820,7 +824,10 @@ class AutoUpdaterService {
     // during the await window and install the old channel's payload.
     autoUpdater.autoInstallOnAppQuit = false;
     this.updateDownloaded = false;
-    setStagedUpdate(null);
+    // macOS's own updater keeps whatever it was handed and installs it on
+    // quit; nothing here takes that back, so a Shell restarting this host must
+    // still be told. Elsewhere the cleared download installs nothing.
+    if (process.platform !== "darwin") setStagedUpdate(null);
     this.lastBroadcastVersion = null;
     // The staged payload belongs to the channel being left; a renderer that
     // mounts before the new channel's first check must not be handed it.
@@ -1164,6 +1171,7 @@ class AutoUpdaterService {
         this.forgetInstallStage();
         // A Mac hands the download to its native updater after this event;
         // quitting installs it only once that says it has it (below).
+        if (process.platform === "darwin") this.nativeHandoffsPending += 1;
         setStagedUpdate({
           version: info.version,
           installsOnQuit: installsOnQuit(),
@@ -1176,8 +1184,11 @@ class AutoUpdaterService {
 
       if (process.platform === "darwin") {
         this.nativeDownloadedHandler = () => {
+          this.nativeHandoffsPending = Math.max(0, this.nativeHandoffsPending - 1);
           const staged = getStagedUpdate();
-          if (staged && !staged.ready) setStagedUpdate({ ...staged, ready: true });
+          if (staged && !staged.ready && this.nativeHandoffsPending === 0) {
+            setStagedUpdate({ ...staged, ready: true });
+          }
         };
         nativeAutoUpdater.on("update-downloaded", this.nativeDownloadedHandler);
       }
@@ -1362,6 +1373,7 @@ class AutoUpdaterService {
       nativeAutoUpdater.off("update-downloaded", this.nativeDownloadedHandler);
       this.nativeDownloadedHandler = null;
     }
+    this.nativeHandoffsPending = 0;
     setStagedUpdate(null);
 
     try {

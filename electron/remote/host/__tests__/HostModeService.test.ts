@@ -816,6 +816,29 @@ describe("HostModeService recording what the process is doing", () => {
     expect(recorded.at(-1)).toMatchObject({ windows: true, stagedUpdate: STAGED });
   });
 
+  it("records the next change after a write that failed", async () => {
+    const runtime = fakeRuntime({ windows: false, stagedUpdate: null });
+    const recorded: Array<Record<string, unknown>> = [];
+    let fail = false;
+    const { service } = makeService({
+      runtime,
+      writeStatus: async (observation) => {
+        if (fail) throw new Error("disk full");
+        recorded.push(observation);
+      },
+    });
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    await service.setEnabled({ enabled: true });
+    await waitFor(() => recorded.length > 0);
+    fail = true;
+    runtime.set({ windows: true, stagedUpdate: null });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    fail = false;
+    runtime.set({ windows: true, stagedUpdate: STAGED });
+    await waitFor(() => recorded.at(-1)?.stagedUpdate !== undefined);
+    expect(recorded.at(-1)).toMatchObject({ windows: true, stagedUpdate: STAGED });
+  });
+
   it("records nothing for a change before Host mode kept any record", async () => {
     const runtime = fakeRuntime({ windows: false, stagedUpdate: null });
     const writeStatus = vi.fn(async () => {});

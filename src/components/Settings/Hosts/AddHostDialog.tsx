@@ -201,7 +201,6 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
   /** The user chose to put this machine's older build over the host's newer one. */
   const [downgrading, setDowngrading] = useState(false);
   const [confirmDowngrade, setConfirmDowngrade] = useState(false);
-  const [localUpdateRequested, setLocalUpdateRequested] = useState(false);
   /** Linux: the host refused `loginctl enable-linger`, in its words. */
   const [lingerRefused, setLingerRefused] = useState<string | null>(null);
   /**
@@ -344,6 +343,8 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
     const id = mintOperationId();
     useRemoteHostsStore.getState().trackInstall(id, connectionFor());
     setOpId(id);
+    // A refusal from an earlier attempt says nothing about this one.
+    setInstallResult(null);
     run(
       () =>
         remoteHostsClient.install({
@@ -380,8 +381,8 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
     startInstall("refuse", undefined, staged);
   };
 
+  // This machine's own updater says what it found, as from its menu.
   const updateThisMachine = () => {
-    setLocalUpdateRequested(true);
     safeFireAndForget(window.electron.update.checkForUpdates(), {
       context: "Checking for an update to match a newer host",
     });
@@ -434,6 +435,9 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
   // Work that changes the host settles with the dialog in view: closing it left
   // an install or Host mode setup running with nothing to say how it ended.
   const locked = busy && (step === "install" || step === "enable" || step === "advise");
+
+  // A restart for a downgrade is named as one, wherever it is confirmed.
+  const restartVerb: "Update" | "Downgrade" = !applying && plan?.downgrade ? "Downgrade" : "Update";
 
   let primary: DialogAction | undefined;
   // Once the host is saved, closing keeps it: nothing is cancelled any more.
@@ -848,12 +852,6 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
                   {hostLabel} has Daintree {probe.hostBuild?.version ?? "a later release"}, which is
                   newer than this machine&apos;s build. Update this machine to match it.
                 </p>
-                {localUpdateRequested && (
-                  <p className="text-xs text-text-secondary" aria-live="polite">
-                    Checking for an update here. Once it&apos;s downloaded, restart Daintree to
-                    install it.
-                  </p>
-                )}
                 <p className="text-xs text-text-secondary">
                   Installing this machine&apos;s build there instead is a downgrade: settings and
                   data the newer build saved may not open in an older one.
@@ -968,7 +966,7 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
       primary = {
         label: "Update this machine",
         onClick: updateThisMachine,
-        disabled: busy || localUpdateRequested,
+        disabled: busy,
       };
       leading = { label: "Continue anyway", onClick: () => toEnable(probe), disabled: busy };
     } else if (probe && applyIsPrimary) {
@@ -1027,7 +1025,22 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
               Installs Daintree {applying.version}, which {hostLabel} already downloaded, by
               restarting Daintree there.
             </p>
-          ) : !plan ? null : plan.kind === "unsupported" || plan.kind === "host-newer" ? (
+          ) : !plan ? null : plan.kind === "host-newer" ? (
+            <div className="space-y-2">
+              <p className="text-sm text-text-secondary">{plan.reason}</p>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={busy}
+                onClick={() => {
+                  setDowngrading(true);
+                  loadPlan(linuxPackage, true);
+                }}
+              >
+                Downgrade {hostLabel}…
+              </Button>
+            </div>
+          ) : plan.kind === "unsupported" ? (
             <p className="text-sm text-text-secondary">{plan.reason}</p>
           ) : plan.kind === "up-to-date" ? (
             <p className="text-sm text-text-secondary">The host already runs this build.</p>
@@ -1085,7 +1098,8 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
           {installResult?.status === "needs-confirmation" && (
             <div className="space-y-2" data-testid="host-restart-impact">
               <p className="text-sm text-text-primary">
-                Updating restarts Daintree on {hostLabel}, which ends:
+                {restartVerb === "Downgrade" ? "Downgrading" : "Updating"} restarts Daintree on{" "}
+                {hostLabel}, which ends:
               </p>
               <ul className="list-disc space-y-1 pl-5 text-sm text-text-secondary">
                 {restartImpactLines(installResult.impact).map((line, index) => (
@@ -1102,11 +1116,11 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
                     size="sm"
                     onClick={() => startInstall("wait-for-idle", installResult.impact)}
                   >
-                    Update when idle
+                    {restartVerb} when idle
                   </Button>
                 )}
                 <Button variant="outline" size="sm" onClick={() => setConfirmProceed(true)}>
-                  Update now…
+                  {restartVerb} now…
                 </Button>
               </div>
             </div>
@@ -1138,8 +1152,9 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
       primary = {
         label: "Update this machine",
         onClick: updateThisMachine,
-        disabled: busy || localUpdateRequested,
+        disabled: busy,
       };
+      leading = { label: "Check again", onClick: () => check(), disabled: busy };
     } else if (plan?.kind === "install" && installResult?.status !== "needs-confirmation") {
       primary = plan.downgrade
         ? {
@@ -1321,16 +1336,18 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
         onClose={() => setConfirmProceed(false)}
         zIndex="nested"
         variant="destructive"
-        title={`Update '${hostLabel}' now?`}
+        title={`${restartVerb} '${hostLabel}' now?`}
         description={
           confirmTerminals === null
-            ? `Daintree on ${hostLabel} restarts to update. Every terminal there ends, and any agent in one stops mid-task.`
+            ? `Daintree on ${hostLabel} restarts to ${restartVerb.toLowerCase()}. Every terminal there ends, and any agent in one stops mid-task.`
             : confirmTerminals === 0
-              ? `Daintree on ${hostLabel} restarts to update, which ends everything listed. If anything new starts before the restart, the update stops and asks again.`
-              : `Daintree on ${hostLabel} restarts to update. ${pluralize(confirmTerminals, "terminal")} there ${confirmTerminals === 1 ? "ends" : "end"}, and any agent in one stops mid-task. If anything new starts before the restart, the update stops and asks again.`
+              ? `Daintree on ${hostLabel} restarts to ${restartVerb.toLowerCase()}, which ends everything listed. If anything new starts before the restart, the ${restartVerb.toLowerCase()} stops and asks again.`
+              : `Daintree on ${hostLabel} restarts to ${restartVerb.toLowerCase()}. ${pluralize(confirmTerminals, "terminal")} there ${confirmTerminals === 1 ? "ends" : "end"}, and any agent in one stops mid-task. If anything new starts before the restart, the ${restartVerb.toLowerCase()} stops and asks again.`
         }
         confirmLabel={
-          confirmImpact ? restartConfirmLabel(confirmImpact) : "Update and end terminals"
+          confirmImpact
+            ? restartConfirmLabel(confirmImpact, restartVerb)
+            : `${restartVerb} and end terminals`
         }
         onConfirm={() => {
           setConfirmProceed(false);

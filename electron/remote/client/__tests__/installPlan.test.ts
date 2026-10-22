@@ -266,16 +266,14 @@ describe("planInstall while the host holds a downloaded update", () => {
     expect(plan.reason).toContain("1.3.5");
   });
 
-  it("goes ahead where nothing restarts, or the update only installs on request", () => {
-    expect(
-      planInstall({ client: macClient, probe: probe({ stagedUpdate: staged(true) }) }).kind
-    ).toBe("install");
+  it("goes ahead where the update only installs on request: a package's Restart to update", () => {
     const deb = planInstall({
       client: macClient,
       probe: probe({
         platform: "linux",
         arch: "x64",
         appRunning: true,
+        hostModeListening: true,
         install: { path: "/opt/Daintree", version: "1.3.0", commit: null, packaging: "deb" },
         stagedUpdate: staged(false),
       }),

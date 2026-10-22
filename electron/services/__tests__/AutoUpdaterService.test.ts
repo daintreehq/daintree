@@ -1677,10 +1677,29 @@ describe("AutoUpdaterService", () => {
       expect(getStagedUpdate()).toEqual({ version: "2.0.0", installsOnQuit: true, ready: true });
     });
 
-    it("forgets it when the channel changes or the service goes", async () => {
+    it("waits for every download handed to macOS before calling the latest ready", () => {
+      const nativeDownloaded = () =>
+        (
+          (nativeUpdaterMock.on as Mock).mock.calls.find(
+            (args) => args[0] === "update-downloaded"
+          )![1] as () => void
+        )();
+      downloadedHandler({ version: "2.0.0" });
+      downloadedHandler({ version: "2.0.1" });
+      // The first handoff finishing says nothing about the second.
+      nativeDownloaded();
+      expect(getStagedUpdate()).toMatchObject({ version: "2.0.1", ready: false });
+      nativeDownloaded();
+      expect(getStagedUpdate()).toMatchObject({ version: "2.0.1", ready: true });
+    });
+
+    it("keeps a Mac's staged update across a channel change, which can't take it back", async () => {
       downloadedHandler({ version: "2.0.0" });
       await setChannelHandler(null, "nightly");
-      expect(getStagedUpdate()).toBeNull();
+      expect(getStagedUpdate()).toMatchObject({ version: "2.0.0" });
+    });
+
+    it("forgets it when the service goes", () => {
       downloadedHandler({ version: "2.0.1" });
       autoUpdaterService.dispose();
       expect(getStagedUpdate()).toBeNull();

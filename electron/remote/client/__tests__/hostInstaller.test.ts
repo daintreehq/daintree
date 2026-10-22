@@ -327,6 +327,8 @@ describe("runHostInstall", () => {
       shell,
       probes: [
         macProbe({ build: OLD_BUILD, hostMode: true }),
+        // Looked at again right before the stop.
+        macProbe({ build: OLD_BUILD, hostMode: true }),
         macProbe({ build: NEW_BUILD, hostMode: false }),
         macProbe({ build: NEW_BUILD, hostMode: true }),
       ],
@@ -815,6 +817,8 @@ describe("runHostInstall", () => {
       shell,
       probes: [
         macProbe({ build: OLD_BUILD, hostMode: true }),
+        // Looked at again right before the stop.
+        macProbe({ build: OLD_BUILD, hostMode: true }),
         // Version right, but no marker to read the commit from.
         macProbe({ build: null, hostMode: true }).replace(
           "@@dt:running",
@@ -835,6 +839,8 @@ describe("runHostInstall", () => {
     const deps = makeDeps({
       shell,
       probes: [
+        macProbe({ build: OLD_BUILD, hostMode: true }),
+        // Looked at again right before the stop.
         macProbe({ build: OLD_BUILD, hostMode: true }),
         ...Array.from({ length: 200 }, () => macProbe({ build: NEW_BUILD, hostMode: false })),
         macProbe({ build: OLD_BUILD, hostMode: true }),
@@ -901,6 +907,8 @@ describe("runHostInstall", () => {
     const deps = makeDeps({
       shell,
       probes: [
+        macProbe({ build: OLD_BUILD, hostMode: true }),
+        // Looked at again right before the stop.
         macProbe({ build: OLD_BUILD, hostMode: true }),
         macProbe({ build: NEW_BUILD, hostMode: true }),
         macProbe({ build: OLD_BUILD, hostMode: true }),
@@ -1199,6 +1207,8 @@ describe("runHostInstall: how a restarted host comes back", () => {
     const deps = makeDeps({
       shell,
       probes: [
+        macProbe({ build: OLD_BUILD, hostMode: true }),
+        // What the host says right before the stop decides how it comes back.
         macProbe({ build: OLD_BUILD, hostMode: true, record: { windows: true } }),
         macProbe({ build: NEW_BUILD, hostMode: true }),
       ],
@@ -1222,7 +1232,7 @@ describe("runHostInstall: how a restarted host comes back", () => {
     );
     const deps = makeDeps({
       shell,
-      probes: [before, macProbe({ build: NEW_BUILD, hostMode: true })],
+      probes: [before, before, macProbe({ build: NEW_BUILD, hostMode: true })],
     });
     await install(deps, { hostId: "studio" });
     expect(openScripts(shell)).toEqual([
@@ -1245,6 +1255,27 @@ describe("runHostInstall: a host on a later release", () => {
       status: "installed",
     });
     expect(shell.scripts.some((s) => s.includes("Daintree.app.old"))).toBe(true);
+  });
+
+  it("stops before the swap when the host downloads an update while this one is staged", async () => {
+    const shell = fakeShell();
+    const deps = makeDeps({
+      shell,
+      probes: [
+        macProbe({ build: OLD_BUILD, hostMode: true }),
+        macProbe({
+          build: OLD_BUILD,
+          hostMode: true,
+          record: { stagedUpdate: { version: "1.3.5", installsOnQuit: true, ready: false } },
+        }),
+      ],
+    });
+    await expect(install(deps, { hostId: "studio", whileWorking: "proceed" })).rejects.toThrow(
+      /has just downloaded Daintree 1\.3\.5/
+    );
+    expect(shell.scripts.some((s) => s.includes("@@dt:stopped"))).toBe(false);
+    // The build staged for it doesn't stay behind.
+    expect(shell.scripts.at(-1)).toBe("rm -rf '/tmp/daintree-stage.abc123'");
   });
 
   it("won't swap in a build while the host holds an update that installs when it stops", async () => {
@@ -1282,7 +1313,8 @@ describe("runHostInstall applying the host's own downloaded update", () => {
 
   it("restarts a Mac into it once macOS has installed it, copying nothing", async () => {
     const shell = fakeShell();
-    const deps = makeDeps({ shell, probes: [before(), installed, back()] });
+    // Checked, looked at again right before the stop, installed, back.
+    const deps = makeDeps({ shell, probes: [before(), before(), installed, back()] });
     const result = await install(deps, { hostId: "studio", applyStaged: { version: "1.4.0" } });
     expect(result).toMatchObject({ status: "staged-applied", reconnected: true });
     expect(shell.uploads).toEqual([]);
@@ -1299,7 +1331,13 @@ describe("runHostInstall applying the host's own downloaded update", () => {
     const shell = fakeShell();
     const deps = makeDeps({
       shell,
-      probes: [before(), macProbe({ build: OLD_BUILD, hostMode: false }), installed, back()],
+      probes: [
+        before(),
+        before(),
+        macProbe({ build: OLD_BUILD, hostMode: false }),
+        installed,
+        back(),
+      ],
     });
     let probesAtStart: number | null = null;
     let probes = 0;
@@ -1314,8 +1352,8 @@ describe("runHostInstall applying the host's own downloaded update", () => {
       return exec(script, options);
     };
     await install(deps, { hostId: "studio", applyStaged: { version: "1.4.0" } });
-    // The check before, one still reading the old app, then the one reading the new.
-    expect(probesAtStart).toBe(3);
+    // The two looks before the stop, one still reading the old app, then the one reading the new.
+    expect(probesAtStart).toBe(4);
   });
 
   it("counts a host now on a newer build than this machine as updated", async () => {
@@ -1324,6 +1362,7 @@ describe("runHostInstall applying the host's own downloaded update", () => {
     const deps = makeDeps({
       shell,
       probes: [
+        before(staged),
         before(staged),
         macProbe({ build: NEWER_BUILD, hostMode: false }),
         back({ version: "1.5.0", commit: "fedcba9876" }, NEWER_BUILD),
@@ -1380,11 +1419,13 @@ describe("runHostInstall applying the host's own downloaded update", () => {
   it("starts the old build again and says so when the update didn't install", async () => {
     const shell = fakeShell();
     const stillOld = back(OLD_RUNNING, OLD_BUILD);
-    const deps = makeDeps({ shell, probes: [before(), stillOld] });
+    const deps = makeDeps({ shell, probes: [before(), before(), stillOld] });
     deps.stagedInstallTimeoutMs = 5_000;
     await expect(
       install(deps, { hostId: "studio", applyStaged: { version: "1.4.0" } })
-    ).rejects.toThrow(/still runs 1\.3\.0: the downloaded update wasn't installed/);
+    ).rejects.toThrow(
+      /still runs 1\.3\.0: the downloaded update wasn't installed\. Daintree is running on the host again/
+    );
     expect(shell.scripts).toContain("open -g -a '/Applications/Daintree.app' --args --host-mode");
   });
 
@@ -1416,7 +1457,11 @@ describe("runHostInstall applying the host's own downloaded update", () => {
     const deps = makeDeps({
       shell,
       client: { ...CLIENT, platform: "linux", arch: "x64", bundle: { kind: "none" } },
-      probes: [linux(77, record(77, OLD_RUNNING, STAGED)), linux(78, record(78, NEW_RUNNING))],
+      probes: [
+        linux(77, record(77, OLD_RUNNING, STAGED)),
+        linux(77, record(77, OLD_RUNNING, STAGED)),
+        linux(78, record(78, NEW_RUNNING)),
+      ],
     });
     await expect(
       install(deps, { hostId: "studio", applyStaged: { version: "1.4.0" } })
@@ -1424,5 +1469,83 @@ describe("runHostInstall applying the host's own downloaded update", () => {
     const stop = shell.scripts.find((s) => s.includes("@@dt:stopped"))!;
     expect(stop).toContain("systemctl --user stop daintree-host.service");
     expect(shell.scripts).toContain("systemctl --user start daintree-host.service");
+  });
+
+  it("waits for the restarted host's own record, not just its socket", async () => {
+    const shell = fakeShell();
+    // Listening already, but the file is still the one the old process left on its way out.
+    const socketOnly = macProbe({
+      build: NEW_BUILD,
+      hostMode: true,
+      hostPid: 5151,
+      record: { build: OLD_RUNNING },
+    }).replace('"pid":5151', '"pid":0');
+    const deps = makeDeps({ shell, probes: [before(), before(), installed, socketOnly, back()] });
+    await expect(
+      install(deps, { hostId: "studio", applyStaged: { version: "1.4.0" } })
+    ).resolves.toMatchObject({ status: "staged-applied" });
+  });
+
+  it("starts Daintree there again when the first start fails", async () => {
+    let starts = 0;
+    const shell = fakeShell((script) =>
+      script.startsWith("open ") && ++starts === 1
+        ? {
+            code: 1,
+            stdout: "",
+            stderr: "LSOpenURLsWithRole() failed",
+            spawnError: null,
+            timedOut: false,
+          }
+        : ok()
+    );
+    const deps = makeDeps({ shell, probes: [before(), before(), installed, back()] });
+    await expect(
+      install(deps, { hostId: "studio", applyStaged: { version: "1.4.0" } })
+    ).rejects.toThrow(
+      /Couldn't start Daintree on the host: LSOpenURLsWithRole\(\) failed\. Daintree is running on the host again/
+    );
+    expect(starts).toBe(2);
+    expect(shell.scripts.some((s) => s.includes("@@dt:rolledback"))).toBe(false);
+  });
+
+  it("says so when Daintree can't be started there again", async () => {
+    const shell = fakeShell((script) =>
+      script.startsWith("open ")
+        ? { code: 1, stdout: "", stderr: "no session", spawnError: null, timedOut: false }
+        : ok()
+    );
+    const deps = makeDeps({ shell, probes: [before(), before(), installed] });
+    await expect(
+      install(deps, { hostId: "studio", applyStaged: { version: "1.4.0" } })
+    ).rejects.toThrow(/couldn't be started again on the host; start it at the machine/);
+  });
+
+  it("stops nothing when cancelled before the stop", async () => {
+    const shell = fakeShell();
+    const controller = new AbortController();
+    const deps = makeDeps({ shell, probes: [before()] });
+    let checks = 0;
+    deps.restartImpact = async () => {
+      // The look right before the restart is where the cancel lands.
+      if (++checks === 2) controller.abort();
+      return impactOf(0);
+    };
+    await expect(
+      install(deps, { hostId: "studio", applyStaged: { version: "1.4.0" } }, controller.signal)
+    ).rejects.toMatchObject({ code: "CANCELLED" });
+    expect(shell.scripts).toEqual([]);
+  });
+
+  it("stops nothing when the update changed while it waited", async () => {
+    const shell = fakeShell();
+    const deps = makeDeps({
+      shell,
+      probes: [before(), before({ ...STAGED, version: "1.4.1" })],
+    });
+    await expect(
+      install(deps, { hostId: "studio", applyStaged: { version: "1.4.0" } })
+    ).rejects.toThrow(/now has Daintree 1\.4\.1 downloaded/);
+    expect(shell.scripts).toEqual([]);
   });
 });
