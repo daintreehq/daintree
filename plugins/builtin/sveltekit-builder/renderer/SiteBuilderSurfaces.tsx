@@ -463,7 +463,9 @@ function StripStatus({
     // the drawer says the source could not be opened is two surfaces telling
     // two stories. The workspace's state is the strip's state too.
     const workspace = state.workspace;
-    if (workspace.status === "ambiguous") {
+    // A page selection is sendable without one, so the choice isn't asked for.
+    const pagePicked = selection.status === "observed" && selection.page !== null;
+    if (workspace.status === "ambiguous" && !pagePicked) {
       return <StripMessage icon={FolderTree}>Choose which app this preview shows</StripMessage>;
     }
     if (workspace.status === "failed") {
@@ -632,7 +634,11 @@ export function SiteBuilderDrawer(props: DevPreviewToolSurfaceProps<InspectorCon
           a 360px panel doing it; a disclosure would have let the user fold away
           the only thing here. `aria-label` on the composer keeps the grouping
           for assistive technology without drawing one. */}
-        {(state.workspace.status === "ready" || state.workspace.status === "no-app") &&
+        {/* A page selection names no app, so choosing one is for tracing
+          Svelte elements, never a toll on sending what the page shows. */}
+        {(state.workspace.status === "ready" ||
+          state.workspace.status === "no-app" ||
+          state.workspace.status === "ambiguous") &&
         (selection.status === "ready" ||
           (selection.status === "observed" && selection.page !== null) ||
           composer.draft.trim() !== "" ||
