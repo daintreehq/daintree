@@ -9,7 +9,7 @@ import type {
 import { AppError } from "../../utils/errorTypes.js";
 import { createLogger } from "../../utils/logger.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
-import { acceptHostPush } from "../hybrid/eventsPush.js";
+import { acceptHostPush, unclassifiedPushName } from "../hybrid/eventsPush.js";
 import { CANOPY_VIEWER_ENDPOINT_PREFIX, isCanopyViewerEndpointId } from "../canopy/linkMethods.js";
 import { appErrorEnvelope, hostDisconnectedEnvelope } from "../link/envelopes.js";
 import { Lane } from "../link/frames.js";
@@ -43,9 +43,12 @@ import {
   type ViewResyncReason,
 } from "./reconnect/ResyncCoordinator.js";
 import { LinkClient, type LinkClientOptions, type LinkClientState } from "./LinkClient.js";
+import { explainMissingChannel } from "./missingChannel.js";
 import type { LinkTransport } from "./transport.js";
 
 const logger = createLogger("main:RemoteHostManager");
+
+const MAX_UNKNOWN_PUSH_NAMES = 64;
 
 /**
  * Why this Shell closed a view's endpoint on a host. The host only hears that
@@ -194,6 +197,8 @@ export class HostConnection {
    * agents run on regardless, and a resumed session repeats every answer.
    */
   private readonly activeAgentViews = new Set<number>();
+  /** Push names from a host on another build that this build doesn't know, logged once per host build. */
+  private readonly unknownPushNames = new Set<string>();
   private readonly readyWaiters = new Set<() => void>();
   private info: HostInfo | null = null;
   private started = false;
@@ -467,7 +472,16 @@ export class HostConnection {
     if (!endpointId) {
       return Promise.resolve(hostDisconnectedEnvelope("the endpoint could not be opened"));
     }
-    return session.invoke(endpointId, channel, args);
+    const call = session.invoke(endpointId, channel, args);
+    // The builds of the session the call went out on: a reconnect before the
+    // answer may be to another build.
+    const link = this.link.getState();
+    if (link.status !== "connected" || link.buildMismatch === null) return call;
+    const { buildMismatch, handshake } = link;
+    const hostName = this.descriptor()?.name ?? this.hostId;
+    return call.then((envelope) =>
+      explainMissingChannel(envelope, channel, hostName, buildMismatch, handshake)
+    );
   }
 
   send(webContentsId: number, projectId: string | null, channel: string, args: unknown[]): void {
@@ -906,7 +920,10 @@ export class HostConnection {
    * taken from a host.
    */
   private deliver(event: EventMessage): void {
-    if (!acceptHostPush(event.channel, event.args)) return;
+    if (!acceptHostPush(event.channel, event.args)) {
+      this.noteUnknownPush(event);
+      return;
+    }
     // A Canopy panel reading this host from a view bound elsewhere.
     if (event.endpointId?.startsWith(CANOPY_VIEWER_ENDPOINT_PREFIX)) {
       for (const listener of [...this.viewerEventListeners]) {
@@ -930,6 +947,32 @@ export class HostConnection {
     if (webContentsId !== undefined && this.isBoundHere(webContentsId)) {
       this.views.send(webContentsId, event.channel, event.args);
     }
+  }
+
+  /**
+   * A host on another build pushed something this build never classified, so
+   * it is dropped rather than guessed at. Said once per name, with both
+   * builds, since whatever listens for it here stays as it was.
+   */
+  private noteUnknownPush(event: EventMessage): void {
+    const state = this.link.getState();
+    if (state.status !== "connected" || state.buildMismatch === null) return;
+    const name = unclassifiedPushName(event.channel, event.args);
+    if (name === null) return;
+    // Per host build: one that moves on may send it for a different reason.
+    const key = `${state.handshake.version}\u0000${state.handshake.commit}\u0000${name}`;
+    // A host can name anything: past the budget the rest go unsaid, rather
+    // than forgetting what was said and saying it all again.
+    if (this.unknownPushNames.has(key) || this.unknownPushNames.size >= MAX_UNKNOWN_PUSH_NAMES) {
+      return;
+    }
+    this.unknownPushNames.add(key);
+    logger.warn("Dropped a push from a host on another build that this build doesn't know", {
+      hostId: this.hostId,
+      channel: event.channel,
+      name,
+      buildMismatch: state.buildMismatch,
+    });
   }
 }
 

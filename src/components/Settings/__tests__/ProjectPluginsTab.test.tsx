@@ -13,6 +13,7 @@ import {
   usePluginProjectSurfacesStore,
 } from "@/store/pluginProjectSurfacesStore";
 import { usePluginManagerStore } from "@/store/pluginManagerStore";
+import { useHostConnectionStore } from "@/store/hostConnectionStore";
 import { registerPanelKind, unregisterPanelKind } from "@shared/config/panelKindRegistry";
 import type {
   LoadedPluginInfo,
@@ -26,6 +27,9 @@ import type {
 } from "@shared/types/plugin";
 
 const PROJECT_ID = "a".repeat(64);
+
+const runHostUpdate = vi.hoisted(() => vi.fn());
+vi.mock("@/components/Hosts/hostUpdate", () => ({ runHostUpdate }));
 
 vi.mock("@/store/projectStore", () => ({
   useProjectStore: (selector: (s: unknown) => unknown) =>
@@ -217,6 +221,7 @@ afterEach(() => {
   cleanup();
   __resetProjectPluginStoreForTesting();
   _resetPluginProjectSurfacesStoreForTest();
+  useHostConnectionStore.getState().reset();
   unregisterPanelKind(CANVAS_KIND_ID);
 });
 
@@ -433,6 +438,37 @@ describe("ProjectPluginsTab", () => {
     await waitFor(() => expect(pluginApi.list).toHaveBeenCalled());
 
     expect(screen.queryByTestId("project-plugins-surfaces")).toBeNull();
+  });
+
+  it("says why it can't list slots when the host's build lacks the read, with the update", async () => {
+    seed([projectPlugin()]);
+    const why =
+      "studio-01 runs Daintree 0.47.0 and this machine runs 0.46.0. This needs both on the same build.";
+    act(() => {
+      useHostConnectionStore.setState({
+        hostId: "studio-01",
+        hostName: "studio-01",
+        connection: {
+          status: "connected",
+          rttMs: null,
+          handshake: {
+            version: "0.47.0",
+            commit: "c0ffee0",
+            protocolVersion: 1,
+            platform: "darwin",
+            arch: "arm64",
+          },
+          buildMismatch: { kind: "version", local: "0.46.0", remote: "0.47.0" },
+        },
+      });
+      usePluginProjectSurfacesStore.setState({ readFailure: why });
+    });
+    render(<ProjectPluginsTab />);
+
+    const section = await screen.findByTestId("project-plugins-surfaces");
+    expect(section.textContent).toContain(why);
+    fireEvent.click(within(section).getByRole("button", { name: "Update this machine" }));
+    expect(runHostUpdate).toHaveBeenCalledWith("local", "studio-01");
   });
 
   it("describes the empty canvas only once its answer is known and the claim can render", async () => {

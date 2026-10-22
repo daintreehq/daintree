@@ -449,6 +449,20 @@ describe("projectClient.addBrowserAllowedHost", () => {
     });
   });
 
+  it("saves the settings whole when the Shell says the host's build lacks the channel", async () => {
+    addHostMock.mockRejectedValue(
+      new Error(
+        "[AppError|HOST_BUILD_SKEW|studio-01%20runs%20Daintree%200.44.0] Channel project:add-browser-allowed-host is not classified: studio-01 runs 0.44.0, this machine runs 0.47.0"
+      )
+    );
+
+    await expect(client.addBrowserAllowedHost("proj-1", "example.com")).resolves.toEqual([
+      "internal.corp.test",
+      "example.com",
+    ]);
+    expect(saveSettingsMock).toHaveBeenCalledTimes(1);
+  });
+
   it("passes any other failure on without saving", async () => {
     addHostMock.mockRejectedValue(
       new Error("[AppError|DRIVEN_ELSEWHERE] Another window drives it")

@@ -2,6 +2,8 @@ import { useEffect, useId, useMemo, useState } from "react";
 import { FolderOpen, RefreshCw } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Callout } from "@/components/ui/Callout";
+import { useBuildSkewUpdate } from "@/components/Hosts/buildSkew";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
 import {
   SETTINGS_CONTROL_WIDTH,
@@ -188,12 +190,38 @@ function ProjectSurfacesSection() {
   const init = usePluginProjectSurfacesStore((s) => s.init);
   const slots = usePluginProjectSurfacesStore((s) => s.slots);
   const choicesLoaded = usePluginProjectSurfacesStore((s) => s.choicesLoaded);
+  const readFailure = usePluginProjectSurfacesStore((s) => s.readFailure);
+  const update = useBuildSkewUpdate();
   const registry = usePanelKindRegistry();
 
   useEffect(() => {
     init();
   }, [init]);
 
+  // Nothing here can say what plugins set up, so it says why instead of
+  // leaving the page to look as if they set up nothing.
+  if (readFailure !== null) {
+    return (
+      <div data-testid="project-plugins-surfaces">
+        <SettingsSection title="Set up by plugins">
+          <Callout
+            severity="warning"
+            role="status"
+            title="Couldn't read what plugins set up here"
+            action={
+              update && (
+                <Button type="button" variant="outline" size="sm" onClick={update.onClick}>
+                  {update.label}
+                </Button>
+              )
+            }
+          >
+            <p className="select-text">{readFailure}</p>
+          </Callout>
+        </SettingsSection>
+      </div>
+    );
+  }
   if (!choicesLoaded) return null;
   const listed = PROJECT_SURFACE_SLOTS.filter((slot) => {
     const state = slots[slot];

@@ -55,6 +55,21 @@ export function acceptHostPush(channel: string, args: readonly unknown[]): boole
 }
 
 /**
+ * The event or channel name of a push this build never classified, as a host
+ * on another build sends one it added; null for every push this build knows,
+ * including the Shell-owned ones {@link acceptHostPush} drops on purpose.
+ */
+export function unclassifiedPushName(channel: string, args: readonly unknown[]): string | null {
+  if (channel !== CHANNELS.EVENTS_PUSH) {
+    return getChannelLocality(channel) === null ? channel : null;
+  }
+  const envelope = args[0];
+  if (!envelope || typeof envelope !== "object") return null;
+  const name = (envelope as { name?: unknown }).name;
+  return typeof name === "string" && !Object.hasOwn(EVENT_LOCALITY, name) ? name : null;
+}
+
+/**
  * A push produced on this machine, about to reach a view bound to a remote
  * host. This machine's agents, terminals and projects are not that view's,
  * so only Shell-owned pushes reach it. A channel with no classification

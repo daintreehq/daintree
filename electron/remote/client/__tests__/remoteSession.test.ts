@@ -58,6 +58,7 @@ import {
   broadcastToRenderer,
   typedHandleWithContext,
 } from "../../../ipc/utils.js";
+import { CHANNELS } from "../../../ipc/channels.js";
 import { getIpcDispatcher } from "../../../ipc/dispatcher.js";
 import {
   getEndpointRegistry,
@@ -100,6 +101,8 @@ import { ControlKind } from "../../link/messages.js";
 const HOST_CHANNEL = "git:get-file-diff";
 const SHELL_CHANNEL = "window:new";
 const EVENT_CHANNEL = "terminal:data";
+// A host channel the harness host never registers, as one build's host lacks a newer one's.
+const MISSING_ON_HOST = "plugin:project-surfaces-get";
 const HOST_ID = "studio-01";
 
 const VIEW_A = 11; // studio-01:proj-1
@@ -625,6 +628,90 @@ describe("remote session wiring", () => {
     const envelope = await invoke(HOST_CHANNEL, VIEW_A, {});
     expect(envelope.ok).toBe(true);
     expect(hostContexts).toHaveLength(1);
+  });
+
+  /** A second Shell, on an older build than the harness host, routing this test's views. */
+  async function connectOlderShell() {
+    const registry = new HostRegistry(memoryStore());
+    registry.add({ name: HOST_ID, connection: { kind: "ssh", target: "studio.example" } });
+    const sink = recordingSink();
+    const older = new RemoteHostManager({
+      registry,
+      createTransport: () =>
+        createDirectTransport({ socketPath: h.server.socketPath, token: h.server.token }),
+      handshake: () => ({ ...TEST_HANDSHAKE, version: "0.9.0" }),
+      client: { clientId: "client-2", clientName: "other", platform: "darwin" },
+      views: sink.sink,
+      session: { pingIntervalMs: 0, idleTimeoutMs: 0 },
+    });
+    cleanups.push(() => older.disposeAll());
+    getIpcDispatcher().setRemoteRouter(
+      new RemoteRouterImpl(older, new WindowHostBinding(), {
+        projectKeyFor: (id) => projectKeys.get(id) ?? null,
+        windowIdFor: () => null,
+      })
+    );
+    older.connect(HOST_ID);
+    await waitFor(() => older.connectionState(HOST_ID).status === "connected");
+    return sink;
+  }
+
+  it("names the host and both builds when a host on another build doesn't have a channel (#13918)", async () => {
+    await startHarness();
+    // This Shell's build has the channel; the host's never registered it.
+    ipcMainMock.handle(MISSING_ON_HOST, () => "answered here");
+    await connectOlderShell();
+
+    const envelope = await invoke(MISSING_ON_HOST, VIEW_A);
+    expect(envelope.ok).toBe(false);
+    if (envelope.ok) return;
+    expect(envelope.error.code).toBe("HOST_BUILD_SKEW");
+    for (const text of [envelope.error.message, envelope.error.userMessage]) {
+      expect(text).toContain(HOST_ID);
+      expect(text).toContain("1.2.3");
+      expect(text).toContain("0.9.0");
+    }
+  });
+
+  it("logs once, with both builds, an event a host on another build sends that this build doesn't know", async () => {
+    await startHarness();
+    const sink = await connectOlderShell();
+    await invoke(HOST_CHANNEL, VIEW_A, {});
+    logBuffer.clear();
+
+    broadcastToRenderer(CHANNELS.EVENTS_PUSH, { name: "made:up", payload: {} });
+    broadcastToRenderer(CHANNELS.EVENTS_PUSH, { name: "made:up", payload: {} });
+    // Shell-owned: dropped on purpose, not for want of knowing it.
+    broadcastToRenderer(CHANNELS.EVENTS_PUSH, { name: "system:wake", payload: {} });
+    broadcastToRenderer(EVENT_CHANNEL, "term-all", "hi");
+    await waitFor(() => (sink.delivered.get(VIEW_A)?.length ?? 0) === 1);
+
+    const drops = logBuffer
+      .getFiltered({ sources: ["main:RemoteHostManager"] })
+      .filter((entry) => entry.message.startsWith("Dropped a push"))
+      .map((entry) => entry.context);
+    expect(drops).toEqual([
+      expect.objectContaining({
+        hostId: HOST_ID,
+        name: "made:up",
+        buildMismatch: { kind: "version", local: "0.9.0", remote: "1.2.3" },
+      }),
+    ]);
+  });
+
+  it("keeps the plain refusal when the builds match", async () => {
+    await startHarness();
+    ipcMainMock.handle(MISSING_ON_HOST, () => "answered here");
+    await connect();
+
+    const envelope = await invoke(MISSING_ON_HOST, VIEW_A);
+    expect(envelope.ok).toBe(false);
+    if (envelope.ok) return;
+    expect(envelope.error).toMatchObject({
+      code: "CHANNEL_NOT_REMOTABLE",
+      message: `Channel ${MISSING_ON_HOST} has no context handler on this host`,
+    });
+    expect(envelope.error.userMessage).toBeUndefined();
   });
 
   it("records when the host was last seen and its handshake", async () => {

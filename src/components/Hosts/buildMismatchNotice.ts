@@ -27,8 +27,8 @@ function alreadyNoticed(key: string): boolean {
 }
 
 /**
- * Once per host build on this machine: a view connected to a host running a
- * different version or commit. The link stays up best effort, so this warns
+ * Once per pair of builds on this machine: a view connected to a host running
+ * a different version or commit. The link stays up best effort, so this warns
  * and offers the update rather than blocking.
  */
 export function noticeBuildMismatch(
@@ -37,8 +37,10 @@ export function noticeBuildMismatch(
   mismatch: HandshakeMismatch,
   remote: HostHandshakeInfo
 ): void {
-  // The host's whole build: a new commit behind an unchanged version is news too.
-  const key = `${hostId}\u0000${remote.version}\u0000${remote.commit}`;
+  // The host's whole build: a new commit behind an unchanged version is news
+  // too. And this machine's side of the gap (its version, or its commit when
+  // only that differs), since updating it can open a different one.
+  const key = `${hostId}\u0000${remote.version}\u0000${remote.commit}\u0000${mismatch.local}`;
   if (alreadyNoticed(key)) return;
   notify({
     type: "warning",

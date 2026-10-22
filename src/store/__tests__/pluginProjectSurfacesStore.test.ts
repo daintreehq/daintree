@@ -19,6 +19,12 @@ import {
   surfaceSlotChoice,
   usePluginProjectSurfacesStore,
 } from "../pluginProjectSurfacesStore";
+import { notifyHostResync } from "../hostResyncSignal";
+
+const noticeBuildSkew = vi.hoisted(() =>
+  vi.fn<(title: string, message: string, stillTrue?: () => boolean) => void>()
+);
+vi.mock("@/components/Hosts/buildSkew", () => ({ noticeBuildSkew }));
 
 const PROJECT = "p1";
 const claim = { pluginId: "project__p1__acme.dash", panelKindId: "project:p1/acme.dash/overview" };
@@ -134,6 +140,7 @@ const canvasChoice = () => selectSurfaceChoice(state(), "emptyCanvas");
 
 beforeEach(() => {
   _resetPluginProjectSurfacesStoreForTest();
+  noticeBuildSkew.mockReset();
 });
 
 afterEach(() => {
@@ -270,6 +277,69 @@ describe("pluginProjectSurfacesStore", () => {
     await flush();
 
     expect(state().surfaces).toEqual({});
+  });
+
+  it("says why when the host's build doesn't have the read, and forgets it once a read works", async () => {
+    const why =
+      "studio-01 runs Daintree 0.47.0 and this machine runs 0.46.0. This needs both on the same build.";
+    let fail = true;
+    const bridge = installBridge(() =>
+      fail
+        ? Promise.reject(
+            // What the preload rebuilds from the Shell's account of the refusal.
+            new Error(
+              `[AppError|HOST_BUILD_SKEW|${encodeURIComponent(why)}] Channel plugin:project-surfaces-get is not classified: studio-01 runs 0.47.0, this machine runs 0.46.0`
+            )
+          )
+        : Promise.resolve(snapshot({ slots: ownedBy() }))
+    );
+
+    state().init();
+    await vi.waitFor(() => expect(noticeBuildSkew).toHaveBeenCalledTimes(1));
+
+    expect(state().readFailure).toBe(why);
+    expect(state().surfaces).toEqual({});
+    expect(noticeBuildSkew).toHaveBeenCalledWith(
+      "Plugin setup unavailable",
+      why,
+      expect.any(Function)
+    );
+    const stands = noticeBuildSkew.mock.calls[0]![2]!;
+    expect(stands()).toBe(true);
+
+    fail = false;
+    bridge.listeners[0]?.();
+    await flush();
+
+    expect(state().readFailure).toBeNull();
+    expect(state().surfaces).toEqual({ emptyCanvas: claim });
+    // A notice still waiting on the view's link takes it back.
+    expect(stands()).toBe(false);
+  });
+
+  it("keeps any other read failure to the log", async () => {
+    installBridge(() =>
+      Promise.reject(new Error("[AppError|CHANNEL_NOT_REMOTABLE] Channel x is not classified"))
+    );
+
+    state().init();
+    await flush();
+    await flush();
+
+    expect(state().readFailure).toBeNull();
+    expect(noticeBuildSkew).not.toHaveBeenCalled();
+  });
+
+  it("reads again when the host link comes back", async () => {
+    const bridge = installBridge(snapshot());
+
+    state().init();
+    await flush();
+    expect(bridge.getProjectSurfaces).toHaveBeenCalledTimes(1);
+
+    notifyHostResync();
+    await flush();
+    expect(bridge.getProjectSurfaces).toHaveBeenCalledTimes(2);
   });
 
   it("clears a stale claim when a later read fails", async () => {

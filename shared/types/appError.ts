@@ -86,6 +86,9 @@ export type AppErrorCode =
   | "NO_FRONTEND_ATTACHED"
   // A channel reached a host over the link that has no host-side meaning.
   | "CHANNEL_NOT_REMOTABLE"
+  // The window's host refused a channel its build doesn't have, while its build
+  // differs from this machine's. The link stays up; only that call fails.
+  | "HOST_BUILD_SKEW"
   // Another frontend holds the drive lease for this project.
   | "DRIVEN_ELSEWHERE"
   | "INTERNAL";

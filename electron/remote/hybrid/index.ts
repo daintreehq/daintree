@@ -7,7 +7,12 @@ import { HYBRID_HOST_LEGS, HYBRID_SPLITS } from "./splits.js";
 import { installHostSendRelay } from "./hostSendRelay.js";
 import { installEndpointVisibility } from "./visibility.js";
 
-export { acceptHostPush, acceptLocalPushForRemoteView, eventsPushSource } from "./eventsPush.js";
+export {
+  acceptHostPush,
+  acceptLocalPushForRemoteView,
+  eventsPushSource,
+  unclassifiedPushName,
+} from "./eventsPush.js";
 export { NOTIFICATION_SHOW_METHOD, showHostNotification } from "./notifications.js";
 export { ViewVisibilityReporter } from "./visibility.js";
 

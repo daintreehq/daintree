@@ -15,7 +15,10 @@ import {
   type ProjectSurfaceSnapshot,
   type ProjectSurfacesSnapshot,
 } from "@shared/types/plugin";
+import { onHostResync } from "@/store/hostResyncSignal";
+import { clientErrorCode, clientErrorText } from "@/utils/clientAppError";
 import { logWarn } from "@/utils/logger";
+import { safeFireAndForget } from "@/utils/safeFireAndForget";
 
 /**
  * Renderer mirror of THIS view's project slots (§7.8): which plugin holds each
@@ -73,6 +76,12 @@ interface PluginProjectSurfacesState {
    * slot can say so and retry it. Read it through {@link selectFailedSave}.
    */
   failedSave: FailedSurfaceSave | null;
+  /**
+   * Why the last read failed, when it was the host's build: it doesn't have
+   * the read, and the slots show stock content until both sides match. The
+   * Shell's own words, naming the host and both builds.
+   */
+  readFailure: string | null;
   /** Answer for whichever plugin owns `slot` now, or forget the answer with `null`. */
   setSurfaceChoice: (
     slot: ProjectSurfaceSlot,
@@ -301,6 +310,7 @@ export const usePluginProjectSurfacesStore = create<PluginProjectSurfacesState>(
       slots: snapshot.slots,
       surfaces: projectSurfaces(snapshot.slots),
       choicesProjectId: snapshot.projectId,
+      readFailure: null,
     };
     if (snapshot.choices === null) {
       // Main could not read the answers. Unknown, not "never answered": the
@@ -353,8 +363,20 @@ export const usePluginProjectSurfacesStore = create<PluginProjectSurfacesState>(
         // host's own canvas is always safe; showing a plugin's is not. Answers
         // are left alone: with no claim there is nothing for them to apply to,
         // and the next read replaces them.
-        set({ slots: {}, surfaces: {} });
+        const skew = clientErrorCode(error) === "HOST_BUILD_SKEW" ? clientErrorText(error, "") : "";
+        set({ slots: {}, surfaces: {}, readFailure: skew || null });
         logWarn("[pluginProjectSurfacesStore] Failed to fetch project surfaces", { error });
+        // Stock content alone would read as the plugin having nothing here.
+        if (skew) {
+          safeFireAndForget(
+            import("@/components/Hosts/buildSkew").then(({ noticeBuildSkew }) => {
+              // Until it is said, a read that works or a reset takes it back.
+              const stands = () => started.generation === generation && get().readFailure === skew;
+              if (stands()) noticeBuildSkew("Plugin setup unavailable", skew, stands);
+            }),
+            { context: "Saying why a host's plugin setup isn't showing" }
+          );
+        }
       }
     );
   };
@@ -366,6 +388,7 @@ export const usePluginProjectSurfacesStore = create<PluginProjectSurfacesState>(
     choicesLoaded: false,
     choicesProjectId: null,
     failedSave: null,
+    readFailure: null,
     setSurfaceChoice: (slot, choice) => {
       // An answer names the plugin it is about; forgetting one is about nobody.
       const owner = get().slots[slot]?.defaultOptionId ?? null;
@@ -429,8 +452,9 @@ export const usePluginProjectSurfacesStore = create<PluginProjectSurfacesState>(
       }
 
       // Subscribe before the first read, so a change that lands while it is in
-      // flight still triggers a read of its own.
-      const subscriptions = [plugin.onPanelKindsChanged(() => pull())];
+      // flight still triggers a read of its own. A host link that comes back
+      // may be to a host on another build, one that has the read again.
+      const subscriptions = [plugin.onPanelKindsChanged(() => pull()), onHostResync(() => pull())];
       try {
         const events = window.electron?.events;
         if (typeof events?.on === "function") {
@@ -487,5 +511,6 @@ export function _resetPluginProjectSurfacesStoreForTest(): void {
     choicesLoaded: false,
     choicesProjectId: null,
     failedSave: null,
+    readFailure: null,
   });
 }

@@ -62,6 +62,7 @@ import {
   admitHybridHostLegs,
   installHybridSplits,
   showHostNotification,
+  unclassifiedPushName,
 } from "../index.js";
 import { NOTIFICATION_SHOW_METHOD } from "../notifications.js";
 import { resetHostNoticeBudget } from "../hostNoticeBudget.js";
@@ -279,6 +280,17 @@ describe("events:push split", () => {
     expect(acceptHostPush(CHANNELS.EVENTS_PUSH, push("made:up"))).toBe(false);
     expect(acceptLocalPushForRemoteView(CHANNELS.EVENTS_PUSH, push("made:up"))).toBe(false);
     expect(acceptHostPush(CHANNELS.EVENTS_PUSH, [null])).toBe(false);
+  });
+
+  it("names only the pushes this build never classified, not the ones it drops on purpose", () => {
+    expect(unclassifiedPushName(CHANNELS.EVENTS_PUSH, push("made:up"))).toBe("made:up");
+    expect(unclassifiedPushName("made:up-channel", [{}])).toBe("made:up-channel");
+    expect(unclassifiedPushName(CHANNELS.EVENTS_PUSH, push("system:wake"))).toBeNull();
+    expect(unclassifiedPushName(CHANNELS.EVENTS_PUSH, push("agent:state-changed"))).toBeNull();
+    expect(unclassifiedPushName(CHANNELS.REMOTE_HOSTS_EVENT, [{}])).toBeNull();
+    expect(unclassifiedPushName(CHANNELS.KEEP_AWAKE_STATE_CHANGED, [{}])).toBeNull();
+    expect(unclassifiedPushName(CHANNELS.EVENTS_PUSH, [null])).toBeNull();
+    expect(unclassifiedPushName(CHANNELS.EVENTS_PUSH, [{ name: 7 }])).toBeNull();
   });
 
   it("routes the other hybrid pushes by owner", () => {
