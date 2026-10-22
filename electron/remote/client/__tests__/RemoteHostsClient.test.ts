@@ -2297,6 +2297,37 @@ describe("RemoteHostsClient", () => {
       }
     });
 
+    it("keeps the wait already under way when another window comes to the host", async () => {
+      vi.useFakeTimers();
+      try {
+        const link = manager.connect("studio-01");
+        bindings.set(1, "studio-01");
+        manager.emit("studio-01", parked);
+        vi.advanceTimersByTime(20_000);
+        bindings.set(2, "studio-01");
+        vi.advanceTimersByTime(10_000);
+        expect(link.retryNow).toHaveBeenCalledTimes(1);
+      } finally {
+        await client.dispose();
+        vi.useRealTimers();
+      }
+    });
+
+    it("dials nothing once the client is disposed with a check pending", async () => {
+      vi.useFakeTimers();
+      try {
+        const link = manager.connect("studio-01");
+        bindings.set(1, "studio-01");
+        manager.emit("studio-01", parked);
+        vi.advanceTimersByTime(10_000);
+        await client.dispose();
+        vi.advanceTimersByTime(60 * 60_000);
+        expect(link.retryNow).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it("leaves a link alone that stopped for any other reason", async () => {
       vi.useFakeTimers();
       try {

@@ -284,6 +284,8 @@ export class LinkClient {
       await connection.dispose().catch(() => {});
       return;
     }
+    // Something is listening there again, whatever its handshake says.
+    this.restartSeen = false;
     this.connection = connection;
 
     const session = new LinkSession(connection.socket, { ...this.options.session, role: "client" });

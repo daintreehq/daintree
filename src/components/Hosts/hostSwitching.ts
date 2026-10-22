@@ -26,10 +26,14 @@ function hostName(hostId: HostId): string {
   return entry?.descriptor.name ?? hostId;
 }
 
-/** This machine has had a link up to the host at some point. */
-function everReached(hostId: HostId): boolean {
+/**
+ * The host list says this machine has never had a link up to the host. A host
+ * the list doesn't have yet (it loads after a restore's toast can arrive) is
+ * not known to be new.
+ */
+function neverReached(hostId: HostId): boolean {
   const entry = getHostListSnapshot().hosts.find((candidate) => candidate.descriptor.id === hostId);
-  return (entry?.descriptor.lastSeenAt ?? null) !== null;
+  return entry !== undefined && entry.descriptor.lastSeenAt === null;
 }
 
 /**
@@ -72,7 +76,7 @@ export function notifyHostSwitchFailure(
   // Daintree not listening is retried once it is running there again.
   const update = entry
     ? hostUpdateOffer(entry)
-    : isClientAppError(error) && error.code === "HOST_MODE_OFF" && !everReached(hostId)
+    : isClientAppError(error) && error.code === "HOST_MODE_OFF" && neverReached(hostId)
       ? { hostId, target: "host" as const, label: "Set up…" }
       : null;
   // The host said the project is gone: trying again can't help, picking another

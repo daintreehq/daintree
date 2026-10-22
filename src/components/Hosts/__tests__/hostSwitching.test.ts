@@ -164,6 +164,21 @@ describe("switchToHost", () => {
     await vi.waitFor(() => expect(m.switchWindowHost).toHaveBeenCalledTimes(1));
   });
 
+  it("offers a retry when the host list hasn't said whether it was ever reached", async () => {
+    // A restore's toast can come before the host list has loaded.
+    m.hosts = [];
+    m.switchWindowHost.mockRejectedValue(
+      new ClientAppError(
+        "HOST_MODE_OFF",
+        "Daintree isn't running in Host mode on studio-01",
+        "Daintree isn't listening on studio-01. Try again once it's running there."
+      )
+    );
+    await switchToHost("h1", false, "p1");
+    const toast: { actions: Array<{ label: string }> } = m.notify.mock.calls[0]![0];
+    expect(toast.actions.map((action) => action.label)).toEqual(["Retry"]);
+  });
+
   it("says what ssh said and offers the host's settings when ssh couldn't log in", async () => {
     m.hosts = [
       studio({

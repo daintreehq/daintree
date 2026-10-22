@@ -145,7 +145,7 @@ describe("describeHostRowStatus", () => {
     expect(text).not.toMatch(/asleep|timeout/i);
   });
 
-  it("says Host mode is off on a host that answered, rather than unreachable", () => {
+  it("says no Daintree is listening on a host that answered, rather than unreachable", () => {
     const [, row] = rowsFor([
       entry("h1", "studio-03", {
         status: "unreachable",
@@ -154,8 +154,30 @@ describe("describeHostRowStatus", () => {
         hostModeOff: true,
       }),
     ]);
-    expect(describeHostRowStatus(row!, now)).toBe("Host mode off");
-    expect(describeHostMenuState(row!, now)).toEqual({ state: "Host mode off", note: null });
+    expect(describeHostRowStatus(row!, now)).toBe("Not listening");
+    expect(describeHostMenuState(row!, now)).toEqual({ state: "Not listening", note: null });
+
+    // A host it has reached before (rebooted, Daintree quit there) says when.
+    const lastSeen = now - 20 * 60 * 1000;
+    const [, seen] = rowsFor([
+      entry(
+        "h1",
+        "studio-03",
+        {
+          status: "unreachable",
+          lastSeenAt: lastSeen,
+          detail: "Daintree isn't running in Host mode there (no host.json).",
+          hostModeOff: true,
+        },
+        null,
+        { lastSeenAt: lastSeen }
+      ),
+    ]);
+    expect(describeHostRowStatus(seen!, now)).toBe("Not listening · last seen 20 minutes ago");
+    expect(describeHostMenuState(seen!, now)).toEqual({
+      state: "Not listening",
+      note: "Last seen 20 minutes ago",
+    });
   });
 
   it("says a host connected best effort runs a different build, with or without numbers", () => {
@@ -256,7 +278,7 @@ describe("hostChipStatus", () => {
       stoppedRetrying: true,
     };
     expect(hostChipStatus(false, hostModeOff, null)).toBe("host-mode-off");
-    expect(hostChipStatusText(hostChipStatus(false, hostModeOff, null))).toBe("host mode off");
+    expect(hostChipStatusText(hostChipStatus(false, hostModeOff, null))).toBe("not listening");
     expect(hostChipStatus(false, refused, null)).toBe("access-denied");
     expect(hostChipStatusText(hostChipStatus(false, refused, null))).toBe("can't log in");
   });
