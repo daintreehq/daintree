@@ -304,6 +304,43 @@ describe("contributes.surfaces", () => {
     expect(result.success).toBe(true);
   });
 
+  it("accepts a projectHome claim naming a declared view", () => {
+    const result = parse("project", withSurface({ projectHome: { viewId: "overview" } }));
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects a projectHome viewId matching no declared view", () => {
+    const result = parse("project", withSurface({ projectHome: { viewId: "nope" } }));
+    expect(result.success).toBe(false);
+    expect(errorCodes(result)).toContain("surface_view_ref_unknown");
+  });
+
+  it("rejects a projectHome claim from an installed plugin", () => {
+    const result = getPluginManifestSchema("user").safeParse({
+      name: "acme.installed",
+      version: "1.0.0",
+      contributes: {
+        panels: [panel],
+        views: [view],
+        surfaces: { projectHome: { viewId: "overview" } },
+      },
+    });
+    expect(result.success).toBe(false);
+    expect(errorCodes(result)).toContain("surfaces_project_scope_only");
+  });
+
+  it("rejects a projectHome claim on a PTY panel", () => {
+    const result = parse("project", {
+      scope: "project",
+      contributes: {
+        panels: [{ ...panel, hasPty: true }],
+        views: [view],
+        surfaces: { projectHome: { viewId: "overview" } },
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+
   it("rejects an emptyCanvas viewId matching no declared view", () => {
     const result = parse("project", withSurface({ emptyCanvas: { viewId: "nope" } }));
     expect(result.success).toBe(false);
@@ -362,9 +399,9 @@ describe("contributes.surfaces", () => {
   });
 
   it("rejects an unknown surface slot", () => {
-    // The three-slot design is a closed set: a typo (or a slot from a later
+    // The slot catalogue is a closed set: a typo (or a slot from a later
     // phase) must fail loudly rather than validate and never render.
-    const result = parse("project", withSurface({ projectHome: { viewId: "overview" } }));
+    const result = parse("project", withSurface({ defaultLayout: { viewId: "overview" } }));
     expect(result.success).toBe(false);
   });
 

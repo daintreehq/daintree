@@ -1,14 +1,14 @@
 import { create } from "zustand";
 import { usePanelStore } from "./panelStore";
 import type { TabGroup, TabGroupLocation } from "@shared/types";
-import type { PanelKind, PanelLocation } from "@shared/types/panel";
+import { isGridPanelLocation, type PanelKind, type PanelLocation } from "@shared/types/panel";
 import {
   normalizeDockLocation,
   normalizeGroupDockLocation,
   panelKindHasPty,
   panelKindIsDockable,
 } from "@shared/config/panelKindRegistry";
-import { getWorktreeSelectionSnapshot } from "@/store/storeAccessors";
+import { exitProjectHome, getWorktreeSelectionSnapshot } from "@/store/storeAccessors";
 import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
 import { buildWorktreeIndex } from "@/store/slices/panelRegistry/worktreeIndex";
 import {
@@ -240,6 +240,16 @@ function applySnapshot(snapshot: LayoutSnapshot): boolean {
       restoredMaximizedId === null && { maximizeTarget: null, preMaximizeLayout: null }),
     activeDockTerminalId: activeDockStillValid ? restoredActiveDock : null,
   });
+
+  // An undo that hands focus back to a grid panel is a restore the user asked
+  // for, so it has to be on screen rather than behind the project's Home.
+  const restoredFocusId = layoutPointer(snapshot.focusedId);
+  if (
+    restoredFocusId !== null &&
+    isGridPanelLocation(newTerminalsById[restoredFocusId]?.location)
+  ) {
+    exitProjectHome();
+  }
 
   // A bulk restore rewrites `worktreeId` with a raw `setState`, so it bypasses
   // the move choke point entirely. Without this pass an undone cross-worktree

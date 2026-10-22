@@ -6,8 +6,8 @@ import {
   EMPTY_CONTEXT,
   eventForCombo,
   FULL_CONTEXT,
-  HOST_GATED_ACTION_IDS,
-  isHostGatedActionId,
+  CONTEXT_GATED_ACTION_IDS,
+  isContextGatedActionId,
   loadActionModules,
   PROBE_CONFIRM_ID,
   PROBE_DISABLED_REASON,
@@ -158,11 +158,11 @@ describe("action dispatch perf bundle", () => {
         catalog.service.list(FULL_CONTEXT, { includeSchemas: false }).map((entry) => entry.id)
       );
       expect(catalog.registeredIds.filter((id) => !listedIds.has(id))).toEqual(
-        catalog.registeredIds.filter((id) => isHostGatedActionId(id))
+        catalog.registeredIds.filter((id) => isContextGatedActionId(id))
       );
-      expect([...listedIds].filter((id) => isHostGatedActionId(id))).toEqual([]);
+      expect([...listedIds].filter((id) => isContextGatedActionId(id))).toEqual([]);
       expect(catalog.listedIds).toEqual(
-        catalog.registeredIds.filter((id) => !HOST_GATED_ACTION_IDS.has(id))
+        catalog.registeredIds.filter((id) => !CONTEXT_GATED_ACTION_IDS.has(id))
       );
 
       const declaringInput = [...catalog.expectations.values()].filter(
@@ -184,16 +184,16 @@ describe("action dispatch perf bundle", () => {
   );
 
   it(
-    "names only host-gated actions that exist, and gates clones of them too",
+    "names only context-gated actions that exist, and gates clones of them too",
     async () => {
       const mods = await loadActionModules();
       // A stale entry here would quietly excuse an action from every listing oracle.
-      for (const id of HOST_GATED_ACTION_IDS) {
+      for (const id of CONTEXT_GATED_ACTION_IDS) {
         expect(mods.BUILT_IN_ACTION_IDS).toContain(id);
       }
-      expect(isHostGatedActionId("host.switch#perfclone3")).toBe(true);
-      expect(isHostGatedActionId("host.add")).toBe(false);
-      expect(isHostGatedActionId("terminal.getOutput#perfclone3")).toBe(false);
+      expect(isContextGatedActionId("host.switch#perfclone3")).toBe(true);
+      expect(isContextGatedActionId("host.add")).toBe(false);
+      expect(isContextGatedActionId("terminal.getOutput#perfclone3")).toBe(false);
     },
     BUNDLE_TIMEOUT_MS
   );

@@ -4,6 +4,7 @@ import { FolderX, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { usePanelStore } from "@/store/panelStore";
+import { exitProjectHome } from "@/store/storeAccessors";
 import {
   getDeletedWorktreeTerminalIds,
   useWorktreeSelectionStore,
@@ -135,6 +136,8 @@ export function DeletedWorktreeCard({
       if (terminal.location === "dock") {
         openDockTerminal(terminal.id);
       } else {
+        // A grid pane is hidden while the project's Home shows.
+        exitProjectHome();
         setFocused(terminal.id);
       }
       pingTerminal(terminal.id);

@@ -2,6 +2,7 @@ import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { z } from "zod";
 import type { ActionId } from "@shared/types/actions";
 import { usePanelStore } from "@/store/panelStore";
+import { exitProjectHome } from "@/store/storeAccessors";
 import { terminalInstanceService } from "@/services/terminal/TerminalInstanceService";
 export function registerTerminalNavigationActions(
   actions: ActionRegistry,
@@ -247,10 +248,12 @@ export function registerTerminalNavigationActions(
     // Update active tab in the group
     state.setActiveTab(group.id, nextPanel.id);
 
-    // Handle dock vs grid differently
+    // Handle dock vs grid differently. A grid tab is hidden while the
+    // project's Home shows; the dock stays on screen beside it.
     if (nextPanel.location === "dock") {
       state.openDockTerminal(nextPanel.id);
     } else {
+      exitProjectHome();
       state.setFocused(nextPanel.id);
     }
   };

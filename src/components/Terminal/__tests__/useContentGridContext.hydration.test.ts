@@ -86,3 +86,15 @@ describe("useContentGridContext diagnostics dock remeasure (issue #12264)", () =
     expect(disposeIndex).toBeGreaterThan(subscribeIndex);
   });
 });
+
+// #13781 — leaving the project's Home remounts the grid and moves none of the
+// measurement effect's other deps, so the effect has to key off the container
+// node itself or it keeps observing the detached grid.
+describe("useContentGridContext measurement follows the grid node (#13781)", () => {
+  it("observes the bound container node and re-runs when it changes", async () => {
+    const content = await readFile(HOOK_PATH, "utf-8");
+    expect(content).toContain("setGridContainerNode(node);");
+    expect(content).toContain("const container = gridContainerNode;");
+    expect(content).toMatch(/\[\s*setGridDimensions,\s*gridContainerNode,/);
+  });
+});

@@ -152,6 +152,7 @@ const SWEPT_SCHEMAS = {
   "panels.toolbar": PanelToolbarItemSchema,
   "agents.detection": AgentDetectionConfigSchema,
   "surfaces.emptyCanvas": SurfaceViewSlotSchema,
+  "surfaces.projectHome": SurfaceViewSlotSchema,
   "recipes.terminals": RecipeContributionTerminalSchema,
   "forgeProviders.credentialFields": CredentialFieldSchema,
   "forgeProviders.slots": ForgeProviderContributionSchema.shape.slots,
@@ -248,6 +249,7 @@ type FieldConsumerCoverage = {
   "panels.toolbar": Record<keyof z.infer<typeof PanelToolbarItemSchema>, ConsumerDescriptor>;
   "agents.detection": Record<keyof z.infer<typeof AgentDetectionConfigSchema>, ConsumerDescriptor>;
   "surfaces.emptyCanvas": Record<keyof z.infer<typeof SurfaceViewSlotSchema>, ConsumerDescriptor>;
+  "surfaces.projectHome": Record<keyof z.infer<typeof SurfaceViewSlotSchema>, ConsumerDescriptor>;
   "recipes.terminals": Record<
     keyof z.infer<typeof RecipeContributionTerminalSchema>,
     ConsumerDescriptor
@@ -1363,6 +1365,17 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       ],
       note: "Claims the project's empty-canvas slot at load; the renderer draws the claimed view in place of the stock launcher.",
     },
+    projectHome: {
+      mode: "verbatim",
+      consumers: [
+        { file: PLUGIN_SERVICE, symbol: "loadPlugin (surfaces loop → claimProjectSurface)" },
+        {
+          file: "src/components/Terminal/ContentGrid.tsx",
+          symbol: "ContentGrid (useProjectSurface → ContentGridProjectHome)",
+        },
+      ],
+      note: "Claims the project's Home slot at load; the main area offers a Home/Grid switch and draws the claimed view as the project's Home.",
+    },
   },
   "surfaces.emptyCanvas": {
     viewId: {
@@ -1375,6 +1388,19 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
         { file: PLUGIN_SERVICE, symbol: "loadPlugin (toRuntimePanelKindId → claimProjectSurface)" },
       ],
       note: "Cross-checked against declared contributes.views, then resolved to the runtime panel-kind id the surface mounts.",
+    },
+  },
+  "surfaces.projectHome": {
+    viewId: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: PLUGIN_SCHEMA,
+          symbol: "getPluginManifestSchema superRefine (surface_view_ref_unknown)",
+        },
+        { file: PLUGIN_SERVICE, symbol: "loadPlugin (toRuntimePanelKindId → claimProjectSurface)" },
+      ],
+      note: "Cross-checked against declared contributes.views, then resolved to the runtime panel-kind id the Home view mounts.",
     },
   },
   tours: {

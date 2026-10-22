@@ -2,6 +2,21 @@ import { notify } from "@/lib/notify";
 import { panelNotificationAddress } from "@/lib/notificationAddress";
 import { usePanelStore } from "@/store/panelStore";
 import { useUIStore } from "@/store/uiStore";
+import { exitProjectHome } from "@/store/storeAccessors";
+
+/**
+ * "Go to terminal": focus the panel and make sure it is on screen. A grid
+ * panel is hidden while the project's Home shows, so leave Home for one; the
+ * dock stays visible beside it.
+ */
+function goToPanel(panelId: string): void {
+  const state = usePanelStore.getState();
+  const panel = state.panelsById[panelId];
+  if (panel !== undefined && (panel.location === "grid" || panel.location === undefined)) {
+    exitProjectHome();
+  }
+  state.setFocused(panelId, true);
+}
 
 export function fireWatchNotification(
   panelId: string,
@@ -27,7 +42,7 @@ export function fireWatchNotification(
         label: "Go to terminal",
         successLabel: "Opened",
         onClick: () => {
-          usePanelStore.getState().setFocused(panelId, true);
+          goToPanel(panelId);
         },
         actionId: "panel.focus",
         actionArgs: { panelId },
@@ -50,7 +65,7 @@ export function fireWatchNotification(
         label: "Go to terminal",
         successLabel: "Opened",
         onClick: () => {
-          usePanelStore.getState().setFocused(panelId, true);
+          goToPanel(panelId);
         },
         actionId: "panel.focus",
         actionArgs: { panelId },
@@ -72,7 +87,7 @@ export function fireWatchNotification(
       label: "Go to terminal",
       successLabel: "Opened",
       onClick: () => {
-        usePanelStore.getState().setFocused(panelId, true);
+        goToPanel(panelId);
       },
       actionId: "panel.focus",
       actionArgs: { panelId },

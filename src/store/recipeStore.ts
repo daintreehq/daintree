@@ -4,6 +4,7 @@ import { isPluginRecipe } from "@shared/types/project";
 import { pluginManifestIdFromInstanceKey } from "@shared/types/plugin";
 import type { PluginRecipeMetadataPatch } from "@shared/types/project";
 import { usePanelStore } from "./panelStore";
+import { exitProjectHome } from "./storeAccessors";
 import { useToolbarPreferencesStore } from "./toolbarPreferencesStore";
 import { launcherItemToolbarButtonId } from "@shared/types/toolbar";
 import { recipeToolbarSourceId } from "@/utils/recipeScope";
@@ -15,6 +16,7 @@ import { isMcpSpawnFocusSuppressed } from "./mcpSpawnFocusGuard";
 import { isAssistantFocused } from "./macroFocusStore";
 import {
   isDevPreviewPanel,
+  isGridPanelLocation,
   isPtyPanel,
   type DevPreviewPanelData,
   type PtyPanelData,
@@ -1445,6 +1447,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
       const committed = usePanelStore.getState().panelsById[focusId];
       if (committed !== undefined && committed.location !== "dock") {
         terminalStore.exitMaximize();
+        if (isGridPanelLocation(committed.location)) exitProjectHome();
       }
       terminalStore.setFocused(focusId);
     }

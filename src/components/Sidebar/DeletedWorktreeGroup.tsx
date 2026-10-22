@@ -12,6 +12,7 @@ import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable"
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { usePanelStore } from "@/store/panelStore";
+import { exitProjectHome } from "@/store/storeAccessors";
 import { usePreferencesStore } from "@/store/preferencesStore";
 import { useVisibilityAwareInterval } from "@/hooks/useVisibilityAwareInterval";
 import {
@@ -160,6 +161,8 @@ export function DeletedWorktreeGroup({ worktrees, homeDir }: DeletedWorktreeGrou
       if (terminal.location === "dock") {
         openDockTerminal(terminal.id);
       } else {
+        // A grid pane is hidden while the project's Home shows.
+        exitProjectHome();
         setFocused(terminal.id);
       }
       pingTerminal(terminal.id);

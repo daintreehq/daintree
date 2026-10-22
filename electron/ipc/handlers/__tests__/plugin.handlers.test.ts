@@ -218,6 +218,7 @@ import {
   registerPluginHostedViews,
 } from "../../../services/plugin/PluginHostedViewRegistry.js";
 import type { PluginHostedViewDescriptor } from "../../../../shared/types/plugin.js";
+import { PROJECT_SURFACE_SLOTS } from "../../../../shared/types/plugin.js";
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -2889,7 +2890,7 @@ describe("project-local plugin handlers", () => {
     mockGetProjectForWebContents.mockReturnValue(PROJECT);
     const set = getHandler("plugin:project-surface-choice-set");
 
-    await expect(set({ sender: { id: 1 } }, "projectHome", "stock")).rejects.toThrow(
+    await expect(set({ sender: { id: 1 } }, "defaultLayout", "stock")).rejects.toThrow(
       /unknown surface slot/
     );
     await expect(set({ sender: { id: 1 } }, "emptyCanvas", "hidden")).rejects.toThrow(
@@ -2943,10 +2944,11 @@ describe("project-local plugin handlers", () => {
 
     await expect(set({ sender: { id: 1 } }, [])).rejects.toThrow(/at least one slot/);
     await expect(set({ sender: { id: 1 } }, "emptyCanvas")).rejects.toThrow(/at least one slot/);
-    await expect(set({ sender: { id: 1 } }, [ok, ok])).rejects.toThrow(/more updates than/);
+    const oneTooMany = Array.from({ length: PROJECT_SURFACE_SLOTS.length + 1 }, () => ok);
+    await expect(set({ sender: { id: 1 } }, oneTooMany)).rejects.toThrow(/more updates than/);
     await expect(set({ sender: { id: 1 } }, [null])).rejects.toThrow(/must be an object/);
     await expect(
-      set({ sender: { id: 1 } }, [{ slot: "projectHome", choice: "stock" }])
+      set({ sender: { id: 1 } }, [{ slot: "defaultLayout", choice: "stock" }])
     ).rejects.toThrow(/unknown surface slot/);
     await expect(
       set({ sender: { id: 1 } }, [{ slot: "emptyCanvas", choice: "hidden" }])

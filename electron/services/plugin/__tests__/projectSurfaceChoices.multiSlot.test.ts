@@ -13,33 +13,6 @@ const storeMock = vi.hoisted(() => {
 
 vi.mock("../../../store.js", () => ({ store: storeMock }));
 
-/**
- * Only `emptyCanvas` is catalogued, so this file declares a second slot for
- * itself: an answer covering several slots — what a plugin's consent notice
- * sends — is the case the batch write exists for.
- */
-vi.mock("../../../../shared/types/plugin.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../../shared/types/plugin.js")>();
-  const catalogue = {
-    ...actual.PROJECT_SURFACE_SLOT_CATALOGUE,
-    projectHome: {
-      mode: "exclusive",
-      claim: "view",
-      label: "Home",
-      stockLabel: "Overview",
-      noun: "home",
-      switchPlacement: "above",
-    },
-  };
-  const slots = Object.keys(catalogue);
-  return {
-    ...actual,
-    PROJECT_SURFACE_SLOT_CATALOGUE: catalogue,
-    PROJECT_SURFACE_SLOTS: slots,
-    isProjectSurfaceSlot: (value: unknown) => slots.some((slot) => slot === value),
-  };
-});
-
 import {
   makeProjectPluginInstanceKey,
   type ProjectSurfaceSlot,
@@ -50,7 +23,7 @@ import { getProjectSurfaceChoices, setProjectSurfaceChoices } from "../projectSu
 const PROJECT = "a".repeat(64);
 const ACME = makeProjectPluginInstanceKey(PROJECT, "acme.dash");
 const OTHER = makeProjectPluginInstanceKey(PROJECT, "acme.other");
-const HOME = "projectHome" as unknown as ProjectSurfaceSlot;
+const HOME: ProjectSurfaceSlot = "projectHome";
 
 function claim(slot: ProjectSurfaceSlot, pluginId: string) {
   claimProjectSurface(PROJECT, slot, {
@@ -83,13 +56,8 @@ describe("an answer about several slots", () => {
       4
     );
 
-    // Built from entries: `HOME` types as the one catalogued slot, so a literal
-    // naming both would read as one key twice.
     const answer = { pluginId: "acme.dash", choice: "stock", decidedAt: 4 };
-    const expected = Object.fromEntries([
-      ["emptyCanvas", answer],
-      [HOME, answer],
-    ]);
+    const expected = { emptyCanvas: answer, projectHome: answer };
     expect(returned).toEqual(expected);
     expect(getProjectSurfaceChoices(PROJECT)).toEqual(expected);
     expect(storeMock.set).toHaveBeenCalledTimes(1);

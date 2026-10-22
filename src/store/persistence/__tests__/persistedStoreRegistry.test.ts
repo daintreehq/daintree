@@ -134,6 +134,7 @@ const EXPECTED_STORE_IDS = [
   "notificationHistoryStore",
   "diffNotesStore",
   "forgeTokenCalloutStore",
+  "projectHomeStore",
 ] as const;
 
 const EXPECTED_STORAGE_KEYS: Record<(typeof EXPECTED_STORE_IDS)[number], string> = {
@@ -151,6 +152,7 @@ const EXPECTED_STORAGE_KEYS: Record<(typeof EXPECTED_STORE_IDS)[number], string>
   notificationHistoryStore: "daintree-notification-history",
   diffNotesStore: "daintree-diff-notes",
   forgeTokenCalloutStore: "daintree-forge-token-callout",
+  projectHomeStore: "daintree-project-home",
 };
 
 describe("persisted store inventory", () => {
@@ -172,6 +174,7 @@ describe("persisted store inventory", () => {
       import("../../slices/notificationHistorySlice"),
       import("../../diffNotesStore"),
       import("../../forgeTokenCalloutStore"),
+      import("../../projectHomeStore"),
     ]);
   });
 

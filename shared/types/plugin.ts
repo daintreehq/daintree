@@ -550,8 +550,8 @@ export interface ProjectSurfaceSlotDescriptor {
  * the same way an action id is.
  *
  * See `SurfaceContributionsSchema` in `electron/schemas/plugin.ts` for why
- * `projectHome` and `defaultLayout` are not here yet: a slot joins the
- * catalogue with the consumer that renders it.
+ * `defaultLayout` is not here yet: a slot joins the catalogue with the
+ * consumer that renders it.
  */
 export const PROJECT_SURFACE_SLOT_CATALOGUE = {
   emptyCanvas: {
@@ -561,6 +561,17 @@ export const PROJECT_SURFACE_SLOT_CATALOGUE = {
     stockLabel: "Launcher",
     noun: "canvas",
     switchPlacement: "above",
+  },
+  // Below, because the main area's Home/Grid switch already sits above the
+  // view: the strip that says whose home this is stays clear of the one that
+  // says where the user is.
+  projectHome: {
+    mode: "exclusive",
+    claim: "view",
+    label: "Project home",
+    stockLabel: "No home",
+    noun: "home",
+    switchPlacement: "below",
   },
 } as const satisfies Record<string, ProjectSurfaceSlotDescriptor>;
 
@@ -578,6 +589,7 @@ export interface SurfaceViewSlot {
 /** The `contributes.surfaces` block of a project plugin's manifest. */
 export interface SurfaceContributions {
   emptyCanvas?: SurfaceViewSlot;
+  projectHome?: SurfaceViewSlot;
 }
 
 /**

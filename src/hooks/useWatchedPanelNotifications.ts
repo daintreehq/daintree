@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { usePanelStore } from "@/store/panelStore";
+import { exitProjectHome } from "@/store/storeAccessors";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { fireWatchNotification } from "@/lib/watchNotification";
 import { isPtyPanel } from "@shared/types/panel";
@@ -135,6 +136,11 @@ export function useWatchedPanelNotifications(): void {
         const { panelId, worktreeId } = context;
         if (worktreeId) {
           useWorktreeSelectionStore.getState().setActiveWorktree(worktreeId);
+        }
+        // A grid panel is hidden while the project's Home shows.
+        const panel = usePanelStore.getState().panelsById[panelId];
+        if (panel !== undefined && (panel.location === "grid" || panel.location === undefined)) {
+          exitProjectHome();
         }
         usePanelStore.getState().setFocused(panelId, true);
       });

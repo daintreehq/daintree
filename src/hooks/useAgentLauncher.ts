@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef } from "react";
 import { usePanelStore, type AddPanelOptions } from "@/store/panelStore";
+import { exitProjectHome } from "@/store/storeAccessors";
 import type { PanelLimitSnapshot } from "@/store/panelLimitStore";
 import type { PtyPanelData } from "@shared/types/panel";
 import { useProjectStore } from "@/store/projectStore";
@@ -653,6 +654,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
               !(focusPolicy === undefined && isAssistantFocused());
             if (takesFocus) {
               usePanelStore.getState().exitMaximize();
+              exitProjectHome();
               usePanelStore.getState().setFocused(resolvedGateId);
             }
             return {

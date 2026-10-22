@@ -1161,8 +1161,9 @@ Available to `"scope": "project"` plugins alone. An installed plugin is bound to
 | Slot | Replaces |
 | --- | --- |
 | `emptyCanvas` | What the content grid draws when the project has no panels open — the region the stock launcher lives in |
+| `projectHome` | Nothing: it adds a Home the main area can switch to beside the grid, behind a host-drawn Home/Grid switch, remembered per project |
 
-`emptyCanvas` is the only slot the schema accepts today.
+Fleet scope and a maximized panel still draw over Home, and focusing, spawning, moving or restoring a grid panel returns to the grid. On Home the slot's own strip sits below the view, and its "No home" choice removes the Home entry. Home is a route, not a URL.
 
 Rules:
 
@@ -1172,7 +1173,7 @@ Rules:
 - **At most one plugin per slot per project.** The lower manifest id wins, independent of load order; the other claimant is refused and named alongside the winner in the log, Project settings → Plugins, the Plugin Manager and `daintree-plugin doctor`, so the author can tell which manifest to change. Never a silent last-wins. The refused plugin still loads and its other contributions work, and its claim is remembered — it inherits the slot if the winner later unloads.
 - The surface view receives the standard `PanelViewProps` (`panelId`, `pluginId`, `disposeSignal`) and sits inside the standard plugin error boundary, so a crash falls back with a working "Try again" rather than a blank region.
 
-`projectHome` (a persistent project-owned entry in the primary navigation) and `defaultLayout` (the arrangement opened on a cold first open) appear in this feature's design notes and are **not implemented** — the schema rejects them. There is no per-project routing a persistent home surface could live at yet, and a recipe is launched against a worktree rather than against a project cold open.
+`defaultLayout` (the arrangement opened on a cold first open) appears in this feature's design notes and is **not implemented** — the schema rejects it. A recipe is launched against a worktree rather than against a project cold open.
 
 ## Themes — _Future_
 
