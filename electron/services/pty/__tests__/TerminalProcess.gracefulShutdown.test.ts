@@ -486,6 +486,25 @@ describe("TerminalProcess.gracefulShutdown — input-clear prelude", () => {
     expect(terminal.getInfo().agentSessionId).toBeUndefined();
   });
 
+  it("quits Cursor without scraping an id it never prints (#13847)", async () => {
+    // Cursor resumes by `--continue` alone, so resume-looking output during its
+    // teardown must not be taken for a captured chat id.
+    const handles = createMockPty();
+    const terminal = createAgentTerminal(handles, "cursor");
+
+    const shutdownPromise = terminal.gracefulShutdown();
+    await vi.advanceTimersByTimeAsync(GRACEFUL_SHUTDOWN_CLEAR_DELAY_MS);
+    await vi.advanceTimersByTimeAsync(SUBMIT_ENTER_DELAY_MS);
+
+    expect(handles.writeMock.mock.calls.map((c) => c[0]).join("")).toContain("/quit");
+
+    handles.emitData("cursor-agent --resume chat-looks-like-an-id\n");
+    handles.emitExit(0);
+
+    await expect(shutdownPromise).resolves.toBeNull();
+    expect(terminal.getInfo().agentSessionId).toBeUndefined();
+  });
+
   it("skips Enter when the split-write agent demotes during the quit-submit delay", async () => {
     // Mid-flight liveness guard for the split-write path only — a readline/
     // Ratatui CLI writes the body and Enter as separate PTY writes with a delay
@@ -1346,10 +1365,10 @@ describe("TerminalProcess.gracefulShutdown — outcome logging", () => {
       return soleOutcome();
     },
 
-    // Cursor is registered but ships no resume config at all.
+    // Crush is registered but ships no resume config at all.
     async noResumeConfig() {
       const handles = createMockPty();
-      const terminal = createAgentTerminal(handles, "cursor");
+      const terminal = createAgentTerminal(handles, "crush");
       await expect(terminal.gracefulShutdown()).resolves.toBeNull();
       return soleOutcome();
     },

@@ -108,7 +108,8 @@ export const config: AgentConfig = {
   },
   // Amp resumes a thread by ID via `amp threads continue <id>`. There's no
   // session-ID emission on quit and no slash-quit command — Ctrl+C is the
-  // graceful exit signal.
+  // graceful exit signal. Without an id, `threads continue` takes the account's
+  // latest thread from any folder, so there's no resume-latest form to restore.
   resume: {
     kind: "named-target",
     argsForTarget: (target: string) => ["threads", "continue", target],

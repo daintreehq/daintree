@@ -123,6 +123,8 @@ export const config: AgentConfig = {
     args: (sessionId: string) => ["--resume=" + sessionId],
     quitCommand: "/exit",
     sessionIdPattern: "copilot --resume=([\\w-]+)",
+    // No `resumeLatestArgs`: `--continue` can land on a session from another
+    // folder, which would reopen another project's conversation here.
   },
   authCheck: {
     // GitHub Copilot CLI primarily stores auth in the OS keychain

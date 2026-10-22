@@ -75,6 +75,17 @@ export const config: AgentConfig = {
     fallbackConfidence: 0.7,
     promptConfidence: 0.85,
   },
+  // Cursor prints no chat id on exit (it's only reachable through
+  // `/copy-conversation-id`), so there's no pattern to scrape and the restore
+  // falls back to `--continue`, an alias for `--resume=-1`. Chats are filed per
+  // workspace, so that's the latest one in the launch directory. Bare `--resume`
+  // opens a picker.
+  resume: {
+    kind: "session-id",
+    args: (sessionId: string) => ["--resume", sessionId],
+    quitCommand: "/quit",
+    resumeLatestArgs: ["--continue"],
+  },
   authCheck: {
     // Cursor may store tokens in OS Keychain on newer versions; file check
     // is best-effort. Misses leave `authConfirmed: false` so the Settings

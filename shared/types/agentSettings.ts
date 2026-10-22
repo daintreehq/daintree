@@ -1165,7 +1165,8 @@ export function buildResumeCommand(
 /**
  * Builds a "resume the most recent session" launch command for agents whose
  * `session-id` resume config declares `resumeLatestArgs`, or whose resume is
- * `project-scoped` (its args are already the latest-in-directory form). Used as a fallback
+ * `project-scoped` or `rolling-history` (their args are already the
+ * latest-in-directory form). Used as a fallback
  * when the graceful-shutdown pattern-match capture loop failed to harvest a
  * session ID — instead of launching fresh and losing the user's context, the
  * CLI's own "continue last" flag picks up the prior conversation in the
@@ -1178,7 +1179,7 @@ export function buildResumeCommand(
  *
  * @returns The resume-latest command string, or `undefined` if the agent
  *   has no resume config, or is a `session-id` agent without
- *   `resumeLatestArgs`, or is a `rolling-history` / `named-target` agent.
+ *   `resumeLatestArgs`, or is a `named-target` agent, or its args are empty.
  */
 export function buildResumeLatestCommand(
   agentId: string,
@@ -1188,14 +1189,16 @@ export function buildResumeLatestCommand(
   const agentConfig = getEffectiveAgentConfig(agentId);
   const resume = agentConfig?.resume;
   if (!agentConfig || !resume) return undefined;
-  // A `project-scoped` resume IS the latest-in-directory form — it captures no
-  // id, so without this a restore had nothing to rebuild for it (#13687). It
-  // shares the restore election with `resumeLatestArgs`, so a second pane in
-  // the same directory starts fresh instead of reopening the same session.
+  // A `project-scoped` or `rolling-history` resume IS the latest-in-directory
+  // form — it captures no id, so without this a restore had nothing to rebuild
+  // for it (#13687, #13847). It shares the restore election with
+  // `resumeLatestArgs`, so a second pane in the same directory starts fresh
+  // instead of reopening the same session. `named-target` has no latest form:
+  // its args need the target it names.
   const fallbackArgs =
     resume.kind === "session-id"
       ? resume.resumeLatestArgs
-      : resume.kind === "project-scoped"
+      : resume.kind === "project-scoped" || resume.kind === "rolling-history"
         ? resume.args()
         : undefined;
   if (!fallbackArgs || fallbackArgs.length === 0) return undefined;
