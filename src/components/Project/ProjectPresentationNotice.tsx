@@ -19,11 +19,13 @@ import {
   type ResolvedPresentation,
 } from "@shared/config/presentationProfile";
 import type { PresentationSuggestionAnswer } from "@shared/types/ipc/projectPresentation";
+import { featuredRefForLaunchEntry } from "@shared/config/launcherArrangement";
+import { usePluginLaunchEntriesStore } from "@/store/pluginLaunchEntriesStore";
 
 export type SuggestedChange =
   | { feature: PresentationFeatureId; level: PresentationLevel }
-  /** A launcher entry to feature (#13791). */
-  | { feature: "featuredLaunchEntry"; entry: string };
+  /** A launcher entry to feature (#13791), named by its label once its plugin is loaded. */
+  | { feature: "featuredLaunchEntry"; entry: string; label: string };
 
 /** The features accepting would actually change, by their effect, not by what the file names. */
 export function suggestedChanges(
@@ -40,7 +42,8 @@ export function suggestedChanges(
 export function describeChanges(changes: readonly SuggestedChange[]): string {
   return changes
     .map((change) => {
-      if (change.feature === "featuredLaunchEntry") return "Launcher entry featured";
+      if (change.feature === "featuredLaunchEntry")
+        return `${change.label} featured in the launcher`;
       const definition: PresentationFeatureDefinition = PRESENTATION_FEATURES[change.feature];
       const word = definition.levelWords?.[change.level]?.label.toLowerCase() ?? change.level;
       return `${definition.label} ${word}`;
@@ -58,7 +61,7 @@ function noticeTitle(changes: readonly SuggestedChange[]): string {
   if (changes.length === 1) {
     const change = changes[0]!;
     if (change.feature === "featuredLaunchEntry") {
-      return "This repository suggests featuring a launcher entry";
+      return `This repository suggests featuring ${change.label} in the launcher`;
     }
     const definition: PresentationFeatureDefinition = PRESENTATION_FEATURES[change.feature];
     const verb = definition.levelWords?.[change.level]?.verb ?? LEVEL_VERBS[change.level];
@@ -88,6 +91,7 @@ export function usePendingSuggestion(): {
   const useProjectToolbar = useProjectPresentationStore((s) => s.useProjectToolbar);
   const promotedPluginButtons = useProjectPresentationStore((s) => s.promotedPluginButtons);
   const featuredLaunchEntry = useProjectPresentationStore((s) => s.featuredLaunchEntry);
+  const launchEntries = usePluginLaunchEntriesStore((s) => s.entries);
 
   if (project == null || !loaded || profileProjectId !== project.id || suggestion === null) {
     return null;
@@ -109,7 +113,14 @@ export function usePendingSuggestion(): {
   // applies once the plugin is.
   const featured = suggestion.featuredLaunchEntry;
   if (featured !== undefined && featured !== featuredLaunchEntry) {
-    changes.push({ feature: "featuredLaunchEntry", entry: featured });
+    const loaded = launchEntries.find(
+      (entry) => featuredRefForLaunchEntry(entry, project.id) === featured
+    );
+    changes.push({
+      feature: "featuredLaunchEntry",
+      entry: featured,
+      label: loaded?.label ?? featured,
+    });
   }
   if (changes.length === 0) return null;
   return {

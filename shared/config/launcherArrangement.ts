@@ -59,6 +59,29 @@ export function parseLauncherGroupOrder(value: unknown): string[] {
   return [...ids];
 }
 
+/**
+ * The order to store after the user reorders the groups drawn right now.
+ * Groups the stored order names but nothing draws — a plugin unloaded or
+ * hidden for now — keep their place, each after the drawn group it followed,
+ * so one coming back lands where the user put it.
+ */
+export function mergeLauncherGroupOrder(
+  drawn: readonly string[],
+  stored: readonly string[]
+): string[] {
+  const shown = new Set(drawn);
+  const after = new Map<string | null, string[]>();
+  let anchor: string | null = null;
+  for (const id of stored) {
+    if (shown.has(id)) {
+      anchor = id;
+    } else {
+      after.set(anchor, [...(after.get(anchor) ?? []), id]);
+    }
+  }
+  return [...(after.get(null) ?? []), ...drawn.flatMap((id) => [id, ...(after.get(id) ?? [])])];
+}
+
 /** Plugin groups in the launcher's stock order: by name, so a plugin can't buy its way up. */
 export function compareLauncherPluginGroups(
   a: { pluginId: string; pluginName: string },

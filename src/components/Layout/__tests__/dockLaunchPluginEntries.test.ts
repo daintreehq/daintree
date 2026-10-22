@@ -558,6 +558,25 @@ describe("project arrangement (#13791)", () => {
     ).toBeNull();
   });
 
+  it("features nothing while the featured entry cannot launch", () => {
+    const unavailable = [
+      ...entries,
+      entry({
+        id: `${NOTES}.ask`,
+        pluginId: NOTES,
+        pluginName: "Notes",
+        target: { type: "agent", agentId: "not-installed" },
+      }),
+    ];
+    const model = build({
+      launchEntries: unavailable,
+      arrangement: arrangement({ featuredEntry: "acme.notes.ask" }),
+    });
+    const notes = model.pluginGroups.find((group) => group.pluginId === NOTES);
+    expect(notes?.items.some((item) => item.disabled !== undefined)).toBe(true);
+    expect(model.featuredRowKey).toBeNull();
+  });
+
   it("opens More in place, under its row", () => {
     const model = build({
       launchEntries: entries,

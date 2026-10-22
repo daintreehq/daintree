@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { ChevronDown, ChevronUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { InlineError } from "@/components/ui/field";
@@ -20,6 +20,7 @@ import {
   compareLauncherPluginGroups,
   featuredRefForLaunchEntry,
   launcherPluginGroupId,
+  mergeLauncherGroupOrder,
 } from "@shared/config/launcherArrangement";
 
 const LAUNCHER_FEATURES = [
@@ -109,14 +110,27 @@ export function LauncherPresentationSection() {
     if (target < 0 || target >= groups.length) return false;
     return layout.demoted.includes(groups[index]!) === layout.demoted.includes(groups[target]!);
   };
-  const move = (index: number, by: -1 | 1) => {
-    if (!canMove(index, by)) return;
-    const next = [...groups];
-    [next[index], next[index + by]] = [next[index + by]!, next[index]!];
-    // Groups not drawn right now keep their place in the stored order, so a
-    // plugin that comes back lands where the user put it.
-    const dormant = launcherGroupOrder.filter((id) => !next.includes(id));
-    void setLauncherGroupOrder([...next, ...dormant]);
+  // Writes land only once main replies, so a move made before the last one
+  // has landed builds on the order still being saved; built on the drawn one,
+  // it would put the earlier move back.
+  const pendingRef = useRef<{ drawn: string[]; stored: string[] } | null>(null);
+  const move = (id: string, by: -1 | 1) => {
+    const base = pendingRef.current ?? { drawn: groups, stored: launcherGroupOrder };
+    const index = base.drawn.indexOf(id);
+    const target = index + by;
+    if (index < 0 || target < 0 || target >= base.drawn.length) return;
+    if (layout.demoted.includes(id) !== layout.demoted.includes(base.drawn[target]!)) return;
+    const drawn = [...base.drawn];
+    [drawn[index], drawn[target]] = [drawn[target]!, drawn[index]!];
+    const pending = { drawn, stored: mergeLauncherGroupOrder(drawn, base.stored) };
+    pendingRef.current = pending;
+    void setLauncherGroupOrder(pending.stored).finally(() => {
+      if (pendingRef.current === pending) pendingRef.current = null;
+    });
+  };
+  const resetOrder = () => {
+    pendingRef.current = null;
+    void setLauncherGroupOrder([]);
   };
 
   const ownEntries = project
@@ -200,7 +214,7 @@ export function LauncherPresentationSection() {
           description="Your order wins over the project's. Groups in More keep their order inside it."
           layout="stacked"
           isModified={applies && launcherGroupOrder.length > 0}
-          onReset={() => void setLauncherGroupOrder([])}
+          onReset={resetOrder}
           resetAriaLabel="Reset group order"
           disabled={!applies}
           control={({ labelId, disabled }) => (
@@ -219,7 +233,7 @@ export function LauncherPresentationSection() {
                     <Button
                       variant="ghost"
                       size="icon-sm"
-                      onClick={() => move(index, -1)}
+                      onClick={() => move(id, -1)}
                       disabled={disabled || !canMove(index, -1)}
                       aria-label={`Move ${label} up`}
                     >
@@ -228,7 +242,7 @@ export function LauncherPresentationSection() {
                     <Button
                       variant="ghost"
                       size="icon-sm"
-                      onClick={() => move(index, 1)}
+                      onClick={() => move(id, 1)}
                       disabled={disabled || !canMove(index, 1)}
                       aria-label={`Move ${label} down`}
                     >

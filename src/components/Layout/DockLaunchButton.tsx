@@ -474,6 +474,10 @@ export function DockLaunchButton({
       ),
     [arranged.rows, model.moreRows, moreOpen, expandedPresetParentKey]
   );
+  const moreRowKeys = useMemo(
+    () => new Set(model.moreRows.map((row) => row.rowKey)),
+    [model.moreRows]
+  );
   // Recency is a fact about the agent, not about the band a row sits in, so it
   // survives search collapsing every row into one results band.
   const recentKeys = useMemo(
@@ -865,6 +869,26 @@ export function DockLaunchButton({
           return;
         }
       }
+      // From anywhere inside an open More, the Left Arrow shuts it and goes
+      // back to its row, as it does from an agent's presets.
+      if (
+        event.key === "ArrowLeft" &&
+        moreOpen &&
+        selectedRow &&
+        moreRowKeys.has(selectedRow.rowKey) &&
+        caretAtStart
+      ) {
+        event.preventDefault();
+        event.stopPropagation();
+        setMoreOpen(false);
+        setSelectedIndex(
+          Math.max(
+            0,
+            results.findIndex((row) => row.rowKey === MORE_ROW_KEY)
+          )
+        );
+        return;
+      }
       if (event.key === "Enter") {
         // No rows at all: swallow the key rather than letting it escape to
         // whatever is behind the launcher.
@@ -938,7 +962,8 @@ export function DockLaunchButton({
       collapsePresets,
       expandedPresetParentKey,
       moreOpen,
-      results.length,
+      moreRowKeys,
+      results,
       selectedPinTarget,
       selectedRow,
       selectNext,

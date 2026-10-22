@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, fireEvent, createEvent, waitFor, act } from "@testing-library/react";
+import { render, fireEvent, createEvent, waitFor, act, cleanup } from "@testing-library/react";
 import type { ReactNode } from "react";
 import {
   getPanelKindIds,
@@ -3118,6 +3118,8 @@ describe("DockLaunchButton — project arrangement (#13791)", () => {
   });
 
   afterEach(() => {
+    // Unmounted first, so resetting the store notifies nothing still mounted.
+    cleanup();
     usePluginLaunchEntriesStore.setState({ entries: [], hiddenPluginIds: [] });
     mockLauncherArrangement = arranged({ projectId: null });
   });
@@ -3187,9 +3189,31 @@ describe("DockLaunchButton — project arrangement (#13791)", () => {
     expect(moreRow(container)!.getAttribute("aria-expanded")).toBe("true");
     expect(options(container).indexOf(selectedOption(container)!)).toBe(moreIndex + 1);
 
+    // From a row inside it, straight back to More.
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    fireEvent.keyDown(input, { key: "ArrowLeft" });
+    expect(moreRow(container)!.getAttribute("aria-expanded")).toBe("false");
+    expect(selectedOption(container)).toBe(moreRow(container));
+
+    fireEvent.keyDown(input, { key: "ArrowRight" });
     fireEvent.keyDown(input, { key: "ArrowUp" });
     fireEvent.keyDown(input, { key: "ArrowLeft" });
     expect(moreRow(container)!.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("keeps a recently launched agent with the other agents, once, inside More", () => {
+    mockMruEntries = [{ id: "agent.claude", score: 1, lastAccessedAt: 1000 }];
+    mockLauncherArrangement = arranged({ demoted: { agents: true, panels: false } });
+    const { container } = renderButton();
+    act(() => popoverOpenChangeSpy!(true));
+    expect(recentRows(container)).toEqual([]);
+
+    fireEvent.click(moreRow(container)!);
+    const claude = options(container).filter((row) =>
+      row.getAttribute("aria-label")?.startsWith("Claude,")
+    );
+    expect(claude).toHaveLength(1);
+    expect(recentRows(container)).toEqual(claude);
   });
 
   it("still finds a demoted agent by search", () => {

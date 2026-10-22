@@ -6,6 +6,7 @@ import {
   featuredRefForLaunchEntry,
   isFeaturedLaunchEntryRef,
   isOwnProjectPlugin,
+  mergeLauncherGroupOrder,
   parseLauncherGroupOrder,
   resolveLauncherGroupOrder,
 } from "../launcherArrangement.js";
@@ -127,17 +128,42 @@ describe("arrangeLauncherGroups", () => {
     expect(layout.fixedOrder).toBe(true);
   });
 
-  it("keeps the user's order inside More and skips demoted groups with nothing in them", () => {
+  it("keeps the user's order inside More", () => {
+    const layout = arrangeLauncherGroups(groups, {
+      projectId: PROJECT,
+      demoted: { agents: true, panels: true },
+      groupOrder: ["panels", "agents"],
+      featuredEntry: null,
+    });
+    expect(layout.demoted).toEqual(["panels", "agents"]);
+  });
+
+  it("leaves a demoted group with nothing in it out of More", () => {
     const layout = arrangeLauncherGroups(
       groups,
       {
         projectId: PROJECT,
         demoted: { agents: true, panels: true },
-        groupOrder: ["panels", "agents"],
+        groupOrder: [],
         featuredEntry: null,
       },
       (id) => id !== "agents"
     );
     expect(layout.demoted).toEqual(["panels"]);
+  });
+});
+
+describe("mergeLauncherGroupOrder", () => {
+  it("keeps a group nothing draws right now where the user put it", () => {
+    expect(
+      mergeLauncherGroupOrder(
+        ["panels", "agents", "recipes"],
+        ["plugin:gone", "agents", "plugin:later", "panels", "recipes"]
+      )
+    ).toEqual(["plugin:gone", "panels", "agents", "plugin:later", "recipes"]);
+  });
+
+  it("is the drawn order when nothing is dormant", () => {
+    expect(mergeLauncherGroupOrder(["recipes", "agents"], [])).toEqual(["recipes", "agents"]);
   });
 });

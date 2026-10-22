@@ -165,14 +165,51 @@ describe("LauncherPresentationSection", () => {
     await renderSection(snapshot({}, { launcherGroupOrder: ["plugin:gone.plugin"] }));
     fireEvent.click(groupRow("panels").getByLabelText("Move Panels up"));
     await act(async () => {});
+    // A group the stored order put first, and nothing draws now, stays first.
     expect(setLauncherGroupOrder).toHaveBeenCalledWith([
+      "plugin:gone.plugin",
       "panels",
       "agents",
       `plugin:${NOTES}`,
       `plugin:${TOOLS}`,
       "recipes",
-      "plugin:gone.plugin",
     ]);
+  });
+
+  it("keeps a group that is not drawn right now in the place the user gave it", async () => {
+    await renderSection(
+      snapshot({}, { launcherGroupOrder: ["plugin:gone.plugin", "agents", "panels"] })
+    );
+    fireEvent.click(groupRow("panels").getByLabelText("Move Panels up"));
+    await act(async () => {});
+    expect(setLauncherGroupOrder).toHaveBeenLastCalledWith([
+      "plugin:gone.plugin",
+      "panels",
+      "agents",
+      `plugin:${NOTES}`,
+      `plugin:${TOOLS}`,
+      "recipes",
+    ]);
+  });
+
+  it("builds a second move on the first while the first is still saving", async () => {
+    let resolveFirst!: (value: ProjectPresentationSnapshot) => void;
+    setLauncherGroupOrder.mockImplementationOnce(
+      () => new Promise<ProjectPresentationSnapshot>((resolve) => (resolveFirst = resolve))
+    );
+    await renderSection();
+    fireEvent.click(groupRow("recipes").getByLabelText("Move Recipes up"));
+    fireEvent.click(groupRow("recipes").getByLabelText("Move Recipes up"));
+    expect(setLauncherGroupOrder).toHaveBeenLastCalledWith([
+      "agents",
+      "panels",
+      "recipes",
+      `plugin:${NOTES}`,
+      `plugin:${TOOLS}`,
+    ]);
+    await act(async () => {
+      resolveFirst(snapshot({}, { revision: 1 }));
+    });
   });
 
   it("resets the order back to the project's", async () => {
@@ -187,6 +224,30 @@ describe("LauncherPresentationSection", () => {
     await renderSection(snapshot({}, { featuredLaunchEntry: "acme.notes.board" }));
     const row = document.getElementById("project-launcher-featured");
     expect(row?.textContent).toContain("board");
+  });
+
+  it("keeps a featured entry whose plugin is not loaded, and lets it go", async () => {
+    await renderSection(snapshot({}, { featuredLaunchEntry: "acme.gone.entry" }));
+    const row = document.getElementById("project-launcher-featured");
+    expect(row?.textContent).toContain("acme.gone.entry");
+    fireEvent.click(within(row!).getByRole("button", { name: /reset/i }));
+    await act(async () => {});
+    expect(setFeaturedLaunchEntry).toHaveBeenCalledWith(null);
+  });
+
+  it("says when a change could not be saved and retries it", async () => {
+    setFeaturedLaunchEntry.mockRejectedValueOnce(new Error("offline"));
+    await renderSection(snapshot({}, { featuredLaunchEntry: "acme.notes.board" }));
+    const row = document.getElementById("project-launcher-featured");
+    fireEvent.click(within(row!).getByRole("button", { name: /reset/i }));
+    await act(async () => {});
+    expect(screen.getByText("Couldn't save the change")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await act(async () => {});
+    expect(setFeaturedLaunchEntry).toHaveBeenCalledTimes(2);
+    expect(setFeaturedLaunchEntry).toHaveBeenLastCalledWith(null);
+    expect(screen.queryByText("Couldn't save the change")).toBeNull();
   });
 
   it("offers nothing to feature when only installed plugins add entries", async () => {
