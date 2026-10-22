@@ -137,6 +137,7 @@ vi.mock("node:fs", () => ({
 vi.mock("../../../utils/logger.js", () => ({
   getLogFilePath: () => "/logs/daintree.log",
   getLogDirectory: () => "/logs",
+  createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
 
 const getVersionFirstRunBoundaryMock = vi.hoisted(() =>

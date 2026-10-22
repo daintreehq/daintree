@@ -41,6 +41,9 @@ import type { SenderLookup } from "./RemoteRouter.js";
 import type { WindowHostBinding } from "./WindowHostBinding.js";
 import { DetachedViewRegistry } from "./reconnect/DetachedViewRegistry.js";
 import type { SwitchRequestOptions } from "../../window/ProjectViewManagerTypes.js";
+import { createLogger } from "../../utils/logger.js";
+
+const logger = createLogger("main:RemoteHostsClient");
 
 /** What the client needs from the window layer, kept narrow so it can be faked in tests. */
 export interface WindowControl {
@@ -434,7 +437,7 @@ export class RemoteHostsClient {
       // Anything dialled it meanwhile without asking: the link goes with the record.
       await this.options.manager.disconnect(hostId);
       await this.options.onForget?.(descriptor).catch((error: unknown) => {
-        console.warn("[RemoteHosts] Cleanup after forgetting a host failed:", error);
+        logger.warn("Cleanup after forgetting a host failed", { error });
       });
     } finally {
       this.retiring.delete(hostId);
@@ -482,7 +485,7 @@ export class RemoteHostsClient {
         const replace = () =>
           (this.options.windows.replaceWithLocalWindow?.(windowId) ?? Promise.resolve()).catch(
             (error: unknown) => {
-              console.warn("[RemoteHosts] Couldn't replace a host's window:", error);
+              logger.warn("Couldn't replace a host's window", { error });
             }
           );
         const moved =
@@ -500,7 +503,7 @@ export class RemoteHostsClient {
                     ? replace()
                     : undefined,
                 (error: unknown) => {
-                  console.warn("[RemoteHosts] Couldn't bring a window back from a host:", error);
+                  logger.warn("Couldn't bring a window back from a host", { error });
                   // The switch home itself failed, so the host's view may be back on
                   // screen whatever the binding says: a local window replaces it,
                   // unless the person has since sent the window to another host.
@@ -1401,7 +1404,7 @@ export class RemoteHostsClient {
     try {
       this.options.windows.notifyWindow?.(windowId, { type: "switch-pending", pending });
     } catch (error) {
-      console.warn("[RemoteHosts] Couldn't tell a window about its pending switch:", error);
+      logger.warn("Couldn't tell a window about its pending switch", { error });
     }
   }
 

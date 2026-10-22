@@ -1,5 +1,10 @@
 import type { HostMetricsSummary } from "../../../shared/types/remoteHosts.js";
 import { HOST_METRICS_INTERVAL_MS } from "./sampler.js";
+import { createLogger } from "../../utils/logger.js";
+import { createKeyedLogLimiter } from "../../utils/keyedLogLimiter.js";
+
+const logger = createLogger("main:summaryLoop");
+const logLimiter = createKeyedLogLimiter();
 
 export interface SummarySource {
   sample(): Promise<HostMetricsSummary>;
@@ -60,7 +65,10 @@ export class SummaryLoop {
         }
       }
     } catch (error) {
-      console.warn("[HostMetrics] Sampling failed:", error);
+      const suppressedCount = logLimiter.take("sampling");
+      if (suppressedCount !== null) {
+        logger.warn("Sampling failed", { error, suppressedCount });
+      }
     } finally {
       this.inFlight = false;
     }

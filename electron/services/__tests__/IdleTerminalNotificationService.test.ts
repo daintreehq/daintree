@@ -46,7 +46,11 @@ const sleepProjectMock = vi.hoisted(() =>
   vi.fn<(projectId: string, options: unknown, deps: unknown) => Promise<SleepOutcome>>()
 );
 
-vi.mock("../../utils/logger.js", () => ({ logInfo: vi.fn(), logError: vi.fn() }));
+vi.mock("../../utils/logger.js", () => ({
+  logInfo: vi.fn(),
+  logError: vi.fn(),
+  createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
+}));
 
 vi.mock("../../ipc/utils.js", () => ({
   broadcastToRenderer: broadcastToRendererMock,

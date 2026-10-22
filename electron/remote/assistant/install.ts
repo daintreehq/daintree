@@ -15,6 +15,9 @@ import { HostCallRuntime, type ObservedHost, type OpenRun } from "./HostCallRunt
 import { HostControlLinkClient } from "./HostControlLinkClient.js";
 import { forgetRetiredSends, readRetiredSends } from "./retiredSends.js";
 import { AssistantSenderCredentials } from "./senderCredentials.js";
+import { createLogger } from "../../utils/logger.js";
+
+const logger = createLogger("main:install");
 
 declare module "../runtime.js" {
   interface RemoteServices {
@@ -176,7 +179,7 @@ export function installRetiredSendsNotice(
     pending = readRetiredSends(sqlite);
     if (pending.length === 0) forgetRetiredSends(sqlite);
   } catch (error) {
-    console.warn("[HostControl] Couldn't read the retired inbox's sends:", error);
+    logger.warn("Couldn't read the retired inbox's sends", { error });
     return () => {};
   }
   if (pending.length === 0) return () => {};
@@ -218,7 +221,7 @@ export function installRetiredSendsNotice(
             try {
               forgetRetiredSends(sqlite);
             } catch (error) {
-              console.warn("[HostControl] Couldn't forget the retired inbox's sends:", error);
+              logger.warn("Couldn't forget the retired inbox's sends", { error });
             }
             finish();
           }
@@ -266,7 +269,7 @@ function openDatabase(): Database.Database | null {
 export function installHostControlLinkClient(deps: HostControlLinkClientInstallDeps): () => void {
   const sqlite = openDatabase();
   if (!sqlite) {
-    console.warn("[HostControl] No database; this Shell's assistants can't reach its hosts");
+    logger.warn("No database; this Shell's assistants can't reach its hosts");
     return () => {};
   }
   const credentials = new AssistantSenderCredentials(sqlite);

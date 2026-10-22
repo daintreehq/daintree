@@ -74,6 +74,7 @@ vi.mock("../../../services/DiagnosticsCollector.js", () => ({
 
 vi.mock("../../../utils/logger.js", () => ({
   getLogFilePath: vi.fn(() => "/tmp/daintree/logs/main.log"),
+  createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
 
 vi.mock("../../../../shared/config/devServer.js", async () => {

@@ -13,6 +13,8 @@ import { Lane } from "../link/frames.js";
 import { InteractiveKind } from "../link/messages.js";
 import { terminalFlow, type LinkSession } from "../link/session.js";
 import type { EnqueueResult } from "../link/scheduler.js";
+import { createLogger } from "../../utils/logger.js";
+import { createKeyedLogLimiter } from "../../utils/keyedLogLimiter.js";
 import { safePost, type PortLike } from "./ports.js";
 import {
   TERMINAL_RESUME_METHOD,
@@ -94,6 +96,20 @@ export interface TerminalStreamBridgeOptions {
   maxStreams?: number;
 }
 
+const logger = createLogger("main:TerminalStreamBridge");
+const logLimiter = createKeyedLogLimiter();
+
+type ResetReason =
+  | "pty-port-replaced"
+  | "stream-missing"
+  | "client-requested"
+  | "incarnation-mismatch"
+  | "client-ahead"
+  | "ring-gap"
+  | "outstanding-bytes"
+  | "aggregate-outstanding-bytes"
+  | "ack-timeout";
+
 interface StreamState {
   id: string;
   incarnation: number;
@@ -109,6 +125,8 @@ interface StreamState {
   /** Order of last output, for retiring the least recently active stream. */
   lastActivity: number;
   needsReset: boolean;
+  /** Why the reset that is owed was first asked for; kept until one lands. */
+  resetReason: ResetReason | null;
   resetting: boolean;
   /**
    * Owed a repaint because the pty-host connection it streamed on was
@@ -283,7 +301,7 @@ export class TerminalStreamBridge {
     for (const stream of this.streams.values()) {
       this.setOutstanding(stream, 0);
       if (replaced) {
-        stream.needsReset = true;
+        this.markReset(stream, "pty-port-replaced");
         stream.owedReplacement = true;
       }
     }
@@ -362,7 +380,7 @@ export class TerminalStreamBridge {
         // carried (the host's listener restarted, or the stream was retired),
         // so nothing here can show what it missed: repaint from a snapshot.
         stream = this.createStream(entry.id, this.incarnationOf(entry.id));
-        stream.needsReset = true;
+        this.markReset(stream, "stream-missing");
       }
       if (!stream || !this.owns(entry.id)) {
         if (stream) this.retire(stream, true);
@@ -383,9 +401,19 @@ export class TerminalStreamBridge {
       if (replayable) {
         stream.sentSeq = entry.lastSeq;
         stream.needsReset = false;
+        stream.resetReason = null;
         outcomes.push({ id: entry.id, outcome: "replayed" });
       } else {
-        stream.needsReset = true;
+        this.markReset(
+          stream,
+          entry.reset === true
+            ? "client-requested"
+            : stream.incarnation !== entry.incarnation
+              ? "incarnation-mismatch"
+              : entry.lastSeq > stream.seq
+                ? "client-ahead"
+                : "ring-gap"
+        );
         outcomes.push({ id: entry.id, outcome: "reset" });
       }
     }
@@ -397,6 +425,7 @@ export class TerminalStreamBridge {
         this.settleOutstanding(stream);
         stream.sentSeq = stream.seq;
         stream.needsReset = false;
+        stream.resetReason = null;
         stream.owedReplacement = false;
       }
     }
@@ -408,6 +437,19 @@ export class TerminalStreamBridge {
     for (const id of mentioned) {
       const stream = this.streams.get(id);
       if (stream) this.pump(stream);
+    }
+    const unknown = outcomes.filter((entry) => entry.outcome === "unknown").length;
+    if (unknown > 0) {
+      const suppressedCount = logLimiter.take(`resume-unknown:${this.endpointId}`);
+      if (suppressedCount !== null) {
+        logger.info("Terminal resume named terminals this host has no stream for", {
+          endpointId: this.endpointId,
+          projectId: this.projectId,
+          requested: request.terminals.length,
+          unknown,
+          suppressedCount,
+        });
+      }
     }
     return { terminals: outcomes };
   }
@@ -540,7 +582,7 @@ export class TerminalStreamBridge {
         return;
       }
       stream = this.createStream(id, incarnation);
-      stream.needsReset = owed;
+      if (owed) this.markReset(stream, "pty-port-replaced");
       stream.owedReplacement = owed;
     }
     stream.seq++;
@@ -559,11 +601,11 @@ export class TerminalStreamBridge {
     if (stream.outstanding > this.maxOutstanding) {
       // Far enough behind that the pty-host would soon pause the PTY for
       // everyone; resync it from a snapshot instead.
-      stream.needsReset = true;
+      this.markReset(stream, "outstanding-bytes");
     } else if (this.totalOutstanding > this.maxTotalOutstanding) {
       // Same for the pty-host's aggregate watermark across this endpoint.
       const busiest = this.busiestStream();
-      busiest.needsReset = true;
+      this.markReset(busiest, "aggregate-outstanding-bytes");
       if (busiest !== stream) this.pump(busiest);
     }
     this.pump(stream);
@@ -592,6 +634,7 @@ export class TerminalStreamBridge {
       owedSince: 0,
       lastActivity: 0,
       needsReset: false,
+      resetReason: null,
       resetting: false,
       owedReplacement: false,
     };
@@ -642,6 +685,7 @@ export class TerminalStreamBridge {
       const frame: RingFrame | null = stream.ring.get(stream.sentSeq + 1);
       if (!frame) {
         // Evicted before it could be sent: the gap can only be closed by a snapshot.
+        this.markReset(stream, "ring-gap");
         this.reset(stream);
         return;
       }
@@ -688,6 +732,7 @@ export class TerminalStreamBridge {
    */
   private reset(stream: StreamState): void {
     if (stream.resetting) return;
+    this.logReset(stream);
     stream.resetting = true;
     stream.needsReset = false;
     this.behind.delete(stream);
@@ -697,7 +742,7 @@ export class TerminalStreamBridge {
     const requestId = ++this.nextFenceId;
     const timer = setTimeout(() => {
       const fence = this.fences.get(requestId);
-      if (fence) this.completeFence(requestId, fence, null);
+      if (fence) this.completeFence(requestId, fence, null, true);
     }, this.opts.snapshotTimeoutMs ?? DEFAULT_SNAPSHOT_TIMEOUT_MS);
     timer.unref?.();
     this.fences.set(requestId, { stream, boundary: null, timer });
@@ -713,7 +758,8 @@ export class TerminalStreamBridge {
   private completeFence(
     requestId: number,
     fence: PendingFence,
-    received: SerializedTerminalSnapshot | null
+    received: SerializedTerminalSnapshot | null,
+    timedOut = false
   ): void {
     clearTimeout(fence.timer);
     this.fences.delete(requestId);
@@ -730,9 +776,18 @@ export class TerminalStreamBridge {
     const covered = fence.boundary !== null;
     const boundary = fence.boundary ?? stream.seq;
     let snapshot = covered ? received : null;
+    let snapshotLost: string | null = timedOut
+      ? "timeout"
+      : covered
+        ? received
+          ? null
+          : "snapshot-missing"
+        : "fence-marker-missing";
     if (snapshot !== null && Buffer.byteLength(snapshot.data, "utf8") > this.maxSnapshotBytes) {
       snapshot = null;
+      snapshotLost = "snapshot-too-large";
     }
+    if (snapshotLost !== null) this.logSnapshotLost(stream, snapshotLost);
     const result = this.postReset(stream, boundary, snapshot);
     if (result === "refused") {
       stream.needsReset = true;
@@ -740,8 +795,45 @@ export class TerminalStreamBridge {
       return;
     }
     stream.owedReplacement = false;
+    stream.resetReason = null;
     stream.sentSeq = boundary;
     this.pump(stream);
+  }
+
+  /** Records why a reset is owed; the first reason stands until a reset lands. */
+  private markReset(stream: StreamState, reason: ResetReason): void {
+    stream.needsReset = true;
+    stream.resetReason ??= reason;
+  }
+
+  private logReset(stream: StreamState): void {
+    const reason = stream.resetReason ?? "unknown";
+    const suppressedCount = logLimiter.take(`reset:${this.endpointId}:${stream.id}:${reason}`);
+    if (suppressedCount === null) return;
+    logger.info("Terminal stream reset", {
+      endpointId: this.endpointId,
+      projectId: this.projectId,
+      terminalId: stream.id,
+      incarnation: stream.incarnation,
+      reason,
+      seq: stream.seq,
+      sentSeq: stream.sentSeq,
+      outstandingBytes: stream.outstanding,
+      ringFirstSeq: stream.ring.firstSeq,
+      ringBytes: stream.ring.sizeBytes,
+      suppressedCount,
+    });
+  }
+
+  private logSnapshotLost(stream: StreamState, reason: string): void {
+    const suppressedCount = logLimiter.take(`snapshot:${this.endpointId}:${stream.id}:${reason}`);
+    if (suppressedCount === null) return;
+    logger.info("Terminal stream reset goes out without a snapshot", {
+      endpointId: this.endpointId,
+      terminalId: stream.id,
+      reason,
+      suppressedCount,
+    });
   }
 
   /** Give up on outstanding fences; `resync` asks for another reset once possible. */
@@ -749,7 +841,7 @@ export class TerminalStreamBridge {
     for (const fence of this.fences.values()) {
       clearTimeout(fence.timer);
       fence.stream.resetting = false;
-      if (resync) fence.stream.needsReset = true;
+      if (resync) this.markReset(fence.stream, "pty-port-replaced");
     }
     this.fences.clear();
   }
@@ -817,7 +909,19 @@ export class TerminalStreamBridge {
     // Only the driver types into or sizes the PTY; anyone else's input would
     // interleave with it and anyone else's grid would fight it.
     const leaseId = this.opts.driveLease ? this.opts.driveLease() : null;
-    if (leaseId === false) return;
+    if (leaseId === false) {
+      const suppressedCount = logLimiter.take(`input-refused:${this.endpointId}`);
+      if (suppressedCount !== null) {
+        logger.info("Terminal input refused: another window drives the project", {
+          code: "DRIVEN_ELSEWHERE",
+          endpointId: this.endpointId,
+          projectId: this.projectId,
+          terminalId: message.id,
+          suppressedCount,
+        });
+      }
+      return;
+    }
     safePost(this.port, leaseId === null ? message : { ...message, leaseId });
     this.opts.onInput?.();
   }
@@ -862,7 +966,7 @@ export class TerminalStreamBridge {
     for (const stream of [...this.streams.values()]) {
       if (stream.outstanding === 0) continue;
       if (now - stream.owedSince >= this.ackTimeoutMs) {
-        stream.needsReset = true;
+        this.markReset(stream, "ack-timeout");
         this.pump(stream);
       } else {
         earliest = Math.min(earliest, stream.owedSince);

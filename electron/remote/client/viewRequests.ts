@@ -17,6 +17,9 @@ import {
   HOST_DISPATCHABLE_ACTION_IDS,
 } from "./hostDispatchableActions.js";
 import { registerReverseRequestMethod } from "./reverseRequests.js";
+import { createLogger } from "../../utils/logger.js";
+
+const logger = createLogger("main:viewRequests");
 
 export { HOST_DISPATCHABLE_ACTION_IDS };
 
@@ -242,10 +245,7 @@ export async function askHostApprovalInWindow(
     );
     return envelope.confirmationDecision ?? null;
   } catch (error) {
-    console.warn(
-      "[RemoteHosts] Couldn't ask about a host's call in its assistant's window:",
-      error
-    );
+    logger.warn("Couldn't ask about a host's call in its assistant's window", { error });
     return null;
   }
 }

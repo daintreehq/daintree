@@ -9,6 +9,9 @@ import {
   type RelayNotice,
 } from "./linkMethods.js";
 import type { SenderSessions } from "./senderSessions.js";
+import { createLogger } from "../../utils/logger.js";
+
+const logger = createLogger("main:RelayNoticeOutbox");
 
 /** How long a notice waits for its Shell: as long as that Shell takes a call's notices. */
 export const RELAY_NOTICE_TTL_MS = RELAY_NOTICE_WINDOW_MS;
@@ -213,7 +216,7 @@ export class RelayNoticeOutbox {
     try {
       this.deps.onDropped?.(senderId, [entry!.notice]);
     } catch (error) {
-      console.warn("[RelayNoticeOutbox] Couldn't report a notice crowded out:", error);
+      logger.warn("Couldn't report a notice crowded out", { error });
     }
   }
 

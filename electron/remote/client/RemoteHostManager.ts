@@ -8,6 +8,7 @@ import type {
 } from "../../../shared/types/remoteHosts.js";
 import { AppError } from "../../utils/errorTypes.js";
 import { createLogger } from "../../utils/logger.js";
+import { createKeyedLogLimiter } from "../../utils/keyedLogLimiter.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { acceptHostPush, unclassifiedPushName } from "../hybrid/eventsPush.js";
 import { CANOPY_VIEWER_ENDPOINT_PREFIX, isCanopyViewerEndpointId } from "../canopy/linkMethods.js";
@@ -48,6 +49,7 @@ import { explainMissingChannel } from "./missingChannel.js";
 import type { LinkTransport } from "./transport.js";
 
 const logger = createLogger("main:RemoteHostManager");
+const droppedSendLimiter = createKeyedLogLimiter();
 
 const MAX_UNKNOWN_PUSH_NAMES = 64;
 
@@ -497,7 +499,15 @@ export class HostConnection {
     const endpointId = this.ensureEndpoint(session, webContentsId, projectId);
     if (!endpointId) return;
     if (session.send(endpointId, channel, args) === "refused") {
-      console.warn(`[RemoteHosts] Dropped send on ${channel}: link queue is full`);
+      const suppressedCount = droppedSendLimiter.take(`${this.hostId}:${channel}`);
+      if (suppressedCount !== null) {
+        logger.info("Remote host send dropped", {
+          hostId: this.hostId,
+          channel,
+          reason: "queue-full",
+          suppressedCount,
+        });
+      }
     }
   }
 

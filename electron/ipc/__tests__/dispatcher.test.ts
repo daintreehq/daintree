@@ -34,6 +34,17 @@ const { appMock, handlers, onListeners, ipcMainMock, getWindowMock, getProjectMo
   }
 );
 
+const loggerMock = vi.hoisted(() => ({
+  debug: vi.fn(),
+  info: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
+}));
+
+vi.mock("../../utils/logger.js", () => ({
+  createLogger: () => loggerMock,
+}));
+
 vi.mock("electron", () => ({
   app: appMock,
   ipcMain: ipcMainMock,
@@ -359,7 +370,6 @@ describe("invokeForEndpoint", () => {
     const listener = vi.fn();
     cleanups.push(getIpcDispatcher().registerSend("terminal:input", listener));
     const { endpoint } = makeRemoteEndpoint();
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
 
     getIpcDispatcher().sendForEndpoint({ endpoint, client: REMOTE_CLIENT }, "terminal:input", [
       "id",
@@ -373,8 +383,10 @@ describe("invokeForEndpoint", () => {
         "id",
         "ls"
       );
-      expect(warn).toHaveBeenCalledWith(expect.stringContaining("terminal:resize"));
-      warn.mockRestore();
+      expect(loggerMock.info).toHaveBeenCalledWith(
+        "Channel refused for remote routing",
+        expect.objectContaining({ code: "CHANNEL_NOT_REMOTABLE", channel: "terminal:resize" })
+      );
     });
   });
 });
@@ -509,7 +521,6 @@ describe("remote router", () => {
     ipcMainMock.on("terminal:input", hostB);
     ipcMainMock.on(SHELL_CHANNEL, shell);
     ipcMainMock.on(UNCLASSIFIED_CHANNEL, unknown);
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
 
     const event = makeEvent();
     for (const listener of onListeners.get("terminal:input")!) listener(event, "id", "ls");
@@ -522,8 +533,10 @@ describe("remote router", () => {
     expect(hostB).not.toHaveBeenCalled();
     expect(shell).toHaveBeenCalledTimes(1);
     expect(unknown).not.toHaveBeenCalled();
-    expect(warn).toHaveBeenCalled();
-    warn.mockRestore();
+    expect(loggerMock.info).toHaveBeenCalledWith(
+      "Send dropped",
+      expect.objectContaining({ channel: UNCLASSIFIED_CHANNEL, code: "CHANNEL_NOT_REMOTABLE" })
+    );
   });
 
   it("changes nothing once the router is removed", async () => {
@@ -687,14 +700,12 @@ describe("drive-lease gate", () => {
     cleanups.push(onWithContext("terminal:update-title", listener));
     const { endpoint } = makeRemoteEndpoint(-4, "proj-1");
     installGate(new Map([["proj-1", { endpointId: "remote:-9", clientId: "client-c" }]]));
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     getIpcDispatcher().sendForEndpoint(
       { endpoint, client: REMOTE_CLIENT },
       "terminal:update-title",
       [{ id: "t1", title: "x", titleMode: "user" }]
     );
     expect(listener).not.toHaveBeenCalled();
-    warn.mockRestore();
   });
 
   it("checks the project a call targets, not the one its caller is showing", async () => {
@@ -776,7 +787,6 @@ describe("drive-lease gate", () => {
     const listener = vi.fn();
     cleanups.push(onWithContext("terminal:update-title", listener));
     const { endpoint } = makeRemoteEndpoint(-4, "proj-1");
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     for (const id of ["t1", "t2"]) {
       getIpcDispatcher().sendForEndpoint(
         { endpoint, client: REMOTE_CLIENT },
@@ -786,7 +796,6 @@ describe("drive-lease gate", () => {
     }
     await vi.waitFor(() => expect(listener).toHaveBeenCalledTimes(1));
     expect(listener.mock.calls[0]![1]).toMatchObject({ id: "t1" });
-    warn.mockRestore();
   });
 
   it("lets a view end a terminal the host no longer has while another drives a project here", async () => {

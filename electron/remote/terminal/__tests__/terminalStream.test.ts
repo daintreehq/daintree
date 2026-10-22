@@ -1,4 +1,16 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const loggerMock = vi.hoisted(() => ({
+  debug: vi.fn(),
+  info: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
+}));
+
+vi.mock("../../../utils/logger.js", () => ({
+  createLogger: () => loggerMock,
+}));
+
 import { Lane } from "../../link/frames.js";
 import { InteractiveKind } from "../../link/messages.js";
 import type { LinkSession } from "../../link/session.js";
@@ -32,6 +44,7 @@ let dir: string;
 const cleanups: (() => void)[] = [];
 
 beforeEach(async () => {
+  loggerMock.info.mockClear();
   dir = await makeTempDir();
 });
 
@@ -276,6 +289,11 @@ describe("terminal stream over the link", () => {
       snapshot: { data: "SNAPSHOT-OF-T1", cols: 100, rows: 30 },
     });
     expect(h.resets[0]).toMatchObject({ terminalId: "t1", seq: 11, incarnation: 1 });
+    expect(loggerMock.info).toHaveBeenCalledWith(
+      "Terminal stream reset",
+      expect.objectContaining({ terminalId: "t1", reason: "ring-gap", endpointId: ENDPOINT })
+    );
+    expect(JSON.stringify(loggerMock.info.mock.calls)).not.toContain("chunk-");
 
     h.pty().emit("t1", "after");
     await waitFor(() => rendererData(h).includes("after"));
@@ -354,6 +372,10 @@ describe("terminal stream over the link", () => {
     await waitFor(() => h.pty().ackedBytes() >= 100);
     expect(h.pty().ackedBytes()).toBeLessThanOrEqual(produced);
     expect(h.renderer().ofType("reset")[0]!.snapshot).toMatchObject({ data: "RESYNC" });
+    expect(loggerMock.info).toHaveBeenCalledWith(
+      "Terminal stream reset",
+      expect.objectContaining({ terminalId: "t1", reason: "outstanding-bytes" })
+    );
   });
 
   it("enforces the host-wide ring cap across terminals", async () => {
@@ -561,6 +583,10 @@ describe("terminal stream over the link", () => {
     });
     expect(result).toEqual({ terminals: [{ id: "t1", outcome: "reset" }] });
     await waitFor(() => h.renderer().ofType("reset").length === 1);
+    expect(loggerMock.info).toHaveBeenCalledWith(
+      "Terminal stream reset",
+      expect.objectContaining({ terminalId: "t1", reason: "client-requested" })
+    );
   });
 
   it("fences a reset so output around the snapshot is neither repeated nor lost", async () => {

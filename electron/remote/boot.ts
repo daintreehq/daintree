@@ -49,6 +49,9 @@ import {
   installWorktreePortRedelivery,
   redeliverClientWorktreePort,
 } from "./worktreePort/attach.js";
+import { createLogger } from "../utils/logger.js";
+
+const logger = createLogger("main:boot");
 
 // The composition root owns window creation; it installs the opener through this module.
 export { setRemoteHostsWindowOpener } from "./client/initClient.js";
@@ -335,7 +338,7 @@ export async function startRemoteHosts(options: StartRemoteHostsOptions): Promis
     try {
       await ensureWorkspaceClient({});
     } catch (error) {
-      console.warn("[RemoteHosts] Workspace client failed; remote worktree ports are off:", error);
+      logger.warn("Workspace client failed; remote worktree ports are off", { error });
     }
   }
   if (!started) return;

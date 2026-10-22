@@ -18,6 +18,11 @@ import {
   SubmitFleetPayloadSchema,
   type AttentionPayload,
 } from "./linkMethods.js";
+import { createLogger } from "../../utils/logger.js";
+import { createKeyedLogLimiter } from "../../utils/keyedLogLimiter.js";
+
+const logger = createLogger("main:hostMetricsHost");
+const logLimiter = createKeyedLogLimiter();
 
 /** The slice of the host server this needs: every attached session, now and later. */
 export interface MetricsSessionContext {
@@ -101,7 +106,10 @@ function postSummary(session: LinkSession, summary: HostMetricsSummary): void {
     // A full queue drops this frame; the next one follows in a few seconds.
     session.post({ lane: Lane.CONTROL, kind: ControlKind.HOST_SUMMARY, body: summary });
   } catch (error) {
-    console.warn("[HostMetrics] Couldn't post a summary:", error);
+    const suppressedCount = logLimiter.take("post-summary");
+    if (suppressedCount !== null) {
+      logger.warn("Couldn't post a summary", { error, suppressedCount });
+    }
   }
 }
 
@@ -218,7 +226,10 @@ export function installHostMetricsHostWith(
     try {
       policy = waitingPolicy(deps.notificationSettings(), new Date(now));
     } catch (error) {
-      console.warn("[HostMetrics] Couldn't read notification settings:", error);
+      const suppressedCount = logLimiter.take("read-notification-settings");
+      if (suppressedCount !== null) {
+        logger.warn("Couldn't read notification settings", { error, suppressedCount });
+      }
       return;
     }
     if (policy === "silent") return;

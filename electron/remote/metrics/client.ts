@@ -32,6 +32,11 @@ import { EmptyPayloadSchema } from "../host/linkMethods.js";
 import { connectionKey } from "../client/connection.js";
 import { admitHostNotice } from "../hybrid/hostNoticeBudget.js";
 import { displaySafeText } from "../../../shared/utils/displaySafeText.js";
+import { createLogger } from "../../utils/logger.js";
+import { createKeyedLogLimiter } from "../../utils/keyedLogLimiter.js";
+
+const logger = createLogger("main:client");
+const logLimiter = createKeyedLogLimiter();
 
 /** ~15 minutes of summaries at the sample cadence. */
 export const HOST_METRICS_RING_SIZE = Math.ceil((15 * 60_000) / HOST_METRICS_INTERVAL_MS);
@@ -362,7 +367,14 @@ export class HostMetricsClient {
       try {
         this.options.manager.connect(host.id);
       } catch (error) {
-        console.warn(`[HostMetrics] Couldn't dial ${host.id} for notifications:`, error);
+        const suppressedCount = logLimiter.take("dial-notifications");
+        if (suppressedCount !== null) {
+          logger.warn("Couldn't dial a host for notifications", {
+            hostId: host.id,
+            error,
+            suppressedCount,
+          });
+        }
       }
     }
     if (hosts.length > 0 && !this.stopLocal && this.options.localLoop) {

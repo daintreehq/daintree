@@ -38,7 +38,11 @@ vi.mock("../ProjectViewEvictionController.js", () => ({
 
 vi.mock("../powerPolicyDelivery.js", () => ({ deliverPowerPolicy: vi.fn() }));
 
-const loggerMock = vi.hoisted(() => ({ logError: vi.fn(), logWarn: vi.fn() }));
+const loggerMock = vi.hoisted(() => ({
+  logError: vi.fn(),
+  logWarn: vi.fn(),
+  createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
+}));
 vi.mock("../../utils/logger.js", () => loggerMock);
 
 import {

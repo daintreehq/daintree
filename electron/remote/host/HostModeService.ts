@@ -26,6 +26,9 @@ import {
   type KeychainProbe,
 } from "./keychainPreflight.js";
 import type { StartAtLoginController, StartAtLoginObservation } from "./startAtLogin.js";
+import { createLogger } from "../../utils/logger.js";
+
+const logger = createLogger("main:HostModeService");
 
 declare module "../runtime.js" {
   interface RemoteServices {
@@ -216,7 +219,7 @@ export class HostModeService {
     try {
       await startAtLogin.install();
     } catch (error) {
-      console.warn("[RemoteHosts] Refreshing start at login failed:", messageOf(error));
+      logger.warn("Refreshing start at login failed", { error: messageOf(error) });
       return;
     }
     await this.observe();
@@ -387,7 +390,7 @@ export class HostModeService {
           { cause: error }
         );
       }
-      console.warn("[RemoteHosts] Removing start at login failed:", messageOf(error));
+      logger.warn("Removing start at login failed", { error: messageOf(error) });
     }
   }
 
@@ -442,7 +445,7 @@ export class HostModeService {
       .catch((error: unknown) => {
         // Written again on the next change.
         this.recordedStatus = null;
-        console.warn("[RemoteHosts] Recording Host mode status failed:", messageOf(error));
+        logger.warn("Recording Host mode status failed", { error: messageOf(error) });
       });
     return this.statusWrite;
   }
@@ -496,7 +499,7 @@ export class HostModeService {
       try {
         this.deps.broadcast(this.snapshot());
       } catch (error) {
-        console.warn("[RemoteHosts] Host mode status push failed:", messageOf(error));
+        logger.warn("Host mode status push failed", { error: messageOf(error) });
       }
       void this.recordStatus();
     });

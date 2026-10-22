@@ -106,6 +106,8 @@ import {
   WorkspaceBindingError,
 } from "./rendererBridge.js";
 import { getExternalBaseManifest } from "./baseManifest.js";
+import { createLogger } from "../../utils/logger.js";
+import { createKeyedLogLimiter } from "../../utils/keyedLogLimiter.js";
 import {
   buildDedupKey,
   canonicalArgsHash,
@@ -198,6 +200,9 @@ import {
   type AssistantTarget,
   type AssistantTerminalControl,
 } from "../assistants/AssistantTerminalControl.js";
+
+const bindingLogger = createLogger("main:McpSessionServer");
+const bindingGoneLogLimiter = createKeyedLogLimiter();
 
 /**
  * Backstop on the `actions.list` page walk. The registry is a few hundred
@@ -2491,7 +2496,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
                 ? ` Status for specific terminals can still be read while the workspace is closed — call '${actionId}' again with an explicit 'terminalIds' array.`
                 : "";
             return buildToolError({
-              code: SESSION_BINDING_GONE,
+              code: bindingGoneCode(err),
               message: `${err.message}${viewlessHint}`,
               retriable: err.retriable,
             });
@@ -2889,7 +2894,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         outcome = { kind: "throw", error: err };
         if (err instanceof McpRouteBindingError) {
           return buildToolError({
-            code: SESSION_BINDING_GONE,
+            code: bindingGoneCode(err),
             message: err.message,
             retriable: err.retriable,
           });
@@ -2996,7 +3001,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           outcome = { kind: "throw", error: err };
           return {
             refusal: buildToolError({
-              code: SESSION_BINDING_GONE,
+              code: bindingGoneCode(err),
               message: err.message,
               retriable: err.retriable,
             }),
@@ -4187,7 +4192,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           // first — but reachable if the route is lost between the two.
           outcome = { kind: "throw", error: err };
           return buildToolError({
-            code: SESSION_BINDING_GONE,
+            code: bindingGoneCode(err),
             message: err.message,
             retriable: err.retriable,
           });
@@ -4469,7 +4474,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           }
           if (err instanceof McpRouteBindingError) {
             return buildToolError({
-              code: SESSION_BINDING_GONE,
+              code: bindingGoneCode(err),
               message: err.message,
               // Instance-derived: a workspace the user can reopen is retriable,
               // a destroyed pinned view never is, and both report this code.
@@ -5300,6 +5305,24 @@ async function collectPromptContext(
 }
 
 /**
+ * The code a route-binding failure reaches the client as, noted in the log on
+ * the way: the client's own transcript is otherwise the only place a refusal
+ * like this shows. A session retrying one call logs it once a window.
+ */
+function bindingGoneCode(err: McpRouteBindingError): typeof SESSION_BINDING_GONE {
+  const suppressedCount = bindingGoneLogLimiter.take(`${err.constructor.name}:${err.retriable}`);
+  if (suppressedCount !== null) {
+    bindingLogger.info("MCP session binding is gone", {
+      code: SESSION_BINDING_GONE,
+      kind: err.constructor.name,
+      retriable: err.retriable,
+      suppressedCount,
+    });
+  }
+  return SESSION_BINDING_GONE;
+}
+
+/**
  * The structured envelope a route-binding failure must reach the client as
  * (#12082).
  *
@@ -5316,7 +5339,7 @@ function routeBindingMcpError(err: unknown): McpError | null {
     ErrorCode.InternalError,
     err.message,
     buildMcpErrorPayload({
-      code: SESSION_BINDING_GONE,
+      code: bindingGoneCode(err),
       message: err.message,
       retriable: err.retriable,
     })

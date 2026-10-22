@@ -12,6 +12,9 @@ import {
 import type { WorktreePortBroker, WorktreePortHost } from "../../services/WorktreePortBroker.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { getWorkspaceClientRef, getWorktreePortBrokerRef } from "../../window/serviceRefs.js";
+import { createLogger } from "../../utils/logger.js";
+
+const logger = createLogger("main:residency");
 
 /** The host waits as long for the view's receipt as a worktree Retry does. */
 const REDELIVER_TIMEOUT_MS = 10_000;
@@ -120,7 +123,7 @@ export function installRemoteProjectResidency(options: RemoteResidencyOptions = 
     try {
       return brokerOf()?.connectEndpointPort(host, endpoint.handle) ?? false;
     } catch (error) {
-      console.warn("[RemoteHosts] Couldn't reconnect a remote view's worktree port:", error);
+      logger.warn("Couldn't reconnect a remote view's worktree port", { error });
       return false;
     }
   };
@@ -140,14 +143,14 @@ export function installRemoteProjectResidency(options: RemoteResidencyOptions = 
       .then(
         (confirmed) => {
           if (confirmed === true && stranded.get(handle) === projectId) stranded.delete(handle);
-          console.log("[RemoteHosts] Reconnected a remote view to its re-spawned workspace host", {
+          logger.info("Reconnected a remote view to its re-spawned workspace host", {
             endpointHandle: handle,
             projectId,
             confirmed: confirmed === true,
           });
         },
         (error: unknown) => {
-          console.warn("[RemoteHosts] Couldn't redeliver a remote view's worktree port:", error);
+          logger.warn("Couldn't redeliver a remote view's worktree port", { error });
         }
       )
       .finally(() => redelivering.delete(handle));

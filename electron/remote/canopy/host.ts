@@ -9,6 +9,11 @@ import {
   CanopyReleasePayloadSchema,
 } from "./linkMethods.js";
 import type { CanopyViewers } from "./viewer.js";
+import { createLogger } from "../../utils/logger.js";
+import { createKeyedLogLimiter } from "../../utils/keyedLogLimiter.js";
+
+const logger = createLogger("main:CanopyHost");
+const logLimiter = createKeyedLogLimiter();
 
 /** How often, and how far apart, a lost-viewer notice the Shell didn't take is sent again. */
 export const VIEWER_LOST_RETRIES = 5;
@@ -114,7 +119,10 @@ export function installCanopyHostWith(
                         body: { endpointId, channel: pushed, args: [payload] },
                       });
               } catch (error) {
-                console.warn("[CanopyHost] Couldn't push to a Shell's viewer:", error);
+                const suppressedCount = logLimiter.take("push-viewer");
+                if (suppressedCount !== null) {
+                  logger.warn("Couldn't push to a Shell's viewer", { error, suppressedCount });
+                }
                 result = "refused";
               }
               if (result === "refused") lose(viewerId);

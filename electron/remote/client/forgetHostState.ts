@@ -1,4 +1,7 @@
 import type { HostId } from "../../../shared/types/remoteHosts.js";
+import { createLogger } from "../../utils/logger.js";
+
+const logger = createLogger("main:forgetHostState");
 
 /** One kind of state this device keeps under a host's id. */
 export interface HostStateCleanup {
@@ -21,7 +24,11 @@ export async function forgetHostState(
     try {
       await cleanup.run(hostId);
     } catch (error) {
-      console.warn(`[RemoteHosts] Couldn't clear ${cleanup.name} for a removed host:`, error);
+      logger.warn("Couldn't clear a removed host's state", {
+        hostId,
+        cleanup: cleanup.name,
+        error,
+      });
     }
   }
 }

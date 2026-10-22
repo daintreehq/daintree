@@ -420,7 +420,7 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
       const terminal = await ptyClient.getTerminalAsync(terminalId);
 
       if (!terminal) {
-        logWarn(`terminal:reconnect: Terminal ${terminalId} not found`);
+        logDebug("terminal:reconnect: terminal not found", { terminalId });
         return { exists: false };
       }
 

@@ -2,6 +2,9 @@ import { lstat } from "node:fs/promises";
 import type { HostDescriptor, HostId } from "../../../shared/types/remoteHosts.js";
 import { events } from "../../services/events.js";
 import { withTimeout } from "../../utils/withTimeout.js";
+import { createLogger } from "../../utils/logger.js";
+
+const logger = createLogger("main:ownedHostCleanup");
 
 const WORKTREE_GONE_PROBE_TIMEOUT_MS = 5000;
 /** A removal refused while the host is installing or being re-pointed is tried again this often. */
@@ -71,7 +74,7 @@ export function watchOwnedHostCleanup(options: OwnedHostCleanupOptions): () => v
         for (const host of targets()) {
           await options.forget(host.id).catch((error: unknown) => {
             refused.add(host.id);
-            console.warn("[RemoteHosts] Removing a worktree's resource host failed:", error);
+            logger.warn("Removing a worktree's resource host failed", { error });
           });
         }
       } finally {
