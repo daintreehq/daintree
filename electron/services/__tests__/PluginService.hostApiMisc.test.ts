@@ -222,6 +222,7 @@ vi.mock("../plugin/PluginDevWorkerMainBridge.js", () => ({
 }));
 
 import { PluginService } from "../PluginService.js";
+import { setWorktreeCustomTitle } from "../worktreeCustomTitles.js";
 
 let tmpDir: string;
 
@@ -1007,6 +1008,7 @@ describe("Plugin worktree host API", () => {
       "behindCount",
       "branch",
       "createdAt",
+      "customTitle",
       "gitOperation",
       "headOid",
       "id",
@@ -1034,5 +1036,49 @@ describe("Plugin worktree host API", () => {
     ]) {
       expect(removed in active).toBe(false);
     }
+  });
+
+  it("projects the custom title main holds for the read's project (#14022)", async () => {
+    storeMock._state.set("worktreeCustomTitles", {
+      "project-1": { titles: { b: "Release prep" }, revision: 1 },
+      "project-2": { titles: { a: "Another project's title" }, revision: 1 },
+    });
+    const { host } = await setup([mkSnap({ id: "a" }), mkSnap({ id: "b", isCurrent: true })]);
+
+    const active = (await host.getActiveWorktree()) as Record<string, unknown>;
+    expect(active.customTitle).toBe("Release prep");
+    const list = (await host.getWorktrees()) as Array<Record<string, unknown>>;
+    expect(list.map((w) => [w.id, w.customTitle])).toEqual([
+      ["a", null],
+      ["b", "Release prep"],
+    ]);
+  });
+
+  it("reads no titles rather than failing the read when the store can't be read", async () => {
+    const { host } = await setup([mkSnap({ id: "a", isCurrent: true })]);
+    storeMock.get.mockImplementation((key: string) => {
+      if (key === "worktreeCustomTitles") throw new Error("disk gone");
+      return storeMock._state.get(key);
+    });
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const list = (await host.getWorktrees()) as Array<Record<string, unknown>>;
+      expect(list.map((w) => [w.id, w.customTitle])).toEqual([["a", null]]);
+    } finally {
+      // clearAllMocks keeps implementations, so the next test would inherit this one.
+      storeMock.get.mockImplementation((key: string) => storeMock._state.get(key));
+      consoleError.mockRestore();
+    }
+  });
+
+  it("re-delivers the worktree set when a custom title changes (#14022)", async () => {
+    const { host, revoke } = await setup([mkSnap({ id: "a", isCurrent: true })]);
+    const cb = vi.fn();
+    await host.onDidChangeWorktrees(cb);
+    revoke();
+
+    setWorktreeCustomTitle("f".repeat(64), "a", "Release prep");
+
+    await vi.waitFor(() => expect(cb).toHaveBeenCalledTimes(1));
   });
 });

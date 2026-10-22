@@ -1074,6 +1074,12 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       callback: (change: import("./projectTheme.js").ProjectThemeChange) => void
     ): () => void;
   };
+  // hydrate / set come from GeneratedElectronAPI; onChanged is a renderer-only subscription.
+  worktreeTitles: GeneratedElectronAPI["worktreeTitles"] & {
+    onChanged(
+      callback: (snapshot: import("./worktreeTitles.js").WorktreeTitlesSnapshot) => void
+    ): () => void;
+  };
   // ensure / restart / stop / getState etc. come from GeneratedElectronAPI;
   // onStateChanged is a renderer-only subscription.
   devPreview: GeneratedElectronAPI["devPreview"] & {

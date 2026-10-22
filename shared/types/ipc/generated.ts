@@ -2884,6 +2884,14 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: { worktreeId: string; enabled: boolean }];
     result: void;
   };
+  "worktree-titles:hydrate": {
+    args: [legacyTitles: Record<string, string>];
+    result: import("./worktreeTitles.js").WorktreeTitlesSnapshot | null;
+  };
+  "worktree-titles:set": {
+    args: [worktreeId: string, title: string | null];
+    result: import("./worktreeTitles.js").WorktreeTitlesSnapshot;
+  };
   "worktree:attach-issue": {
     args: [payload: import("./worktree.js").AttachIssuePayload];
     result: void;

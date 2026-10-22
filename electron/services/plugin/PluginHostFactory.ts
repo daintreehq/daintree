@@ -791,6 +791,14 @@ export interface PluginHostFactoryDeps {
     projectId: string,
     projectRoot: string
   ) => Promise<PluginWorktreeSnapshotFetchResult>;
+  /**
+   * One project's custom worktree titles, keyed by worktree id (#14022). They
+   * live in main, never in the workspace host, so every projection overlays
+   * them. Never throws: an unreadable store reads as no titles.
+   */
+  getWorktreeCustomTitles: (projectId: string) => Readonly<Record<string, string>>;
+  /** Called with the project id after any of its custom titles changes. Returns the disposer. */
+  subscribeWorktreeCustomTitles: (listener: (projectId: string) => void) => () => void;
   recordPluginLog: (
     boundPlugin: LoadedPlugin,
     pluginId: string,
@@ -993,6 +1001,22 @@ export function createHost(
   const fetchWorktreeSnapshots = async (): Promise<WorktreeSnapshot[]> => {
     const result = await fetchWorktreeSnapshotsResult();
     return result.status === "ok" ? result.snapshots : [];
+  };
+
+  /**
+   * The plugin projection for one successful read, carrying each worktree's
+   * custom title. Titles are keyed by the project the read landed on, which for
+   * an unbound host is the focused window's — the project these worktrees are.
+   */
+  const pluginProjectionFor = (
+    result: Extract<PluginWorktreeSnapshotFetchResult, { status: "ok" }>
+  ) => {
+    const titles = deps.getWorktreeCustomTitles(result.projectId);
+    return (snapshot: WorktreeSnapshot) =>
+      toPluginWorktreeSnapshot(
+        snapshot,
+        Object.hasOwn(titles, snapshot.id) ? (titles[snapshot.id] ?? null) : null
+      );
   };
 
   /**
@@ -1201,7 +1225,7 @@ export function createHost(
       return {
         status: "ok",
         projectId: result.projectId,
-        worktrees: result.snapshots.map(toPluginWorktreeSnapshot),
+        worktrees: result.snapshots.map(pluginProjectionFor(result)),
       };
     } catch {
       return isBound()
@@ -1837,12 +1861,17 @@ export function createHost(
           chain = chain.then(async () => {
             if (!isBound() || disposed) return;
             try {
-              const snapshots = await fetchWorktreeSnapshots();
+              const result = await fetchWorktreeSnapshotsResult();
               // Re-check after the async fetch so a racing unload, or a
               // same-id reload, doesn't fire into the retired closure.
               if (!isBound() || disposed) return;
-              const active = snapshots.find((s) => s.isCurrent === true);
-              callback(active ? toPluginWorktreeSnapshot(active) : null);
+              const active =
+                result.status === "ok"
+                  ? result.snapshots.find((s) => s.isCurrent === true)
+                  : undefined;
+              callback(
+                active && result.status === "ok" ? pluginProjectionFor(result)(active) : null
+              );
             } catch (err) {
               console.error(
                 `[PluginService] onDidChangeActiveWorktree callback for "${pluginId}" failed:`,
@@ -1887,9 +1916,10 @@ export function createHost(
       const runEmit = async (): Promise<void> => {
         if (!isBound() || disposed) return;
         try {
-          const snapshots = await fetchWorktreeSnapshots();
+          const result = await fetchWorktreeSnapshotsResult();
           if (!isBound() || disposed) return;
-          const list = snapshots.map(toPluginWorktreeSnapshot);
+          const list =
+            result.status === "ok" ? result.snapshots.map(pluginProjectionFor(result)) : [];
           callback(list, tracker.next(list));
         } catch (err) {
           console.error(
@@ -1917,11 +1947,23 @@ export function createHost(
       // correct after deletions. One coalescer spans both event kinds.
       const disposeUpdate = deps.subscribeWorktreeEvent(pluginId, "worktree-update", emit);
       const disposeRemove = deps.subscribeWorktreeEvent(pluginId, "worktree-removed", emit);
+      // A rename never reaches the workspace host, so main says so itself
+      // (#14022). Same filter as `emit`, by id since that is what titles key on.
+      const disposeTitles = deps.subscribeWorktreeCustomTitles((projectId) => {
+        if (
+          boundProjectId !== null &&
+          (boundProjectRoot === null || projectId !== boundProjectId)
+        ) {
+          return;
+        }
+        coalescer.push();
+      });
       const dispose = trackPluginDisposer(deps.pluginEventCleanups, pluginId, () => {
         disposed = true;
         coalescer.dispose();
         disposeUpdate();
         disposeRemove();
+        disposeTitles();
       });
       return Promise.resolve(dispose);
     },

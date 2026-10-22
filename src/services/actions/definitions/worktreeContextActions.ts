@@ -48,7 +48,7 @@ import {
   WORKTREE_CUSTOM_TITLE_MAX_LENGTH,
   isWorktreeCustomTitleTooLong,
   normalizeWorktreeCustomTitle,
-} from "@/lib/worktreeCustomTitle";
+} from "@shared/utils/worktreeCustomTitle";
 import {
   deriveReviewReadiness,
   REVIEW_READINESS_ITEM_IDS,
@@ -674,7 +674,9 @@ export function registerWorktreeContextActions(
           throw new Error(`Title is longer than ${WORKTREE_CUSTOM_TITLE_MAX_LENGTH} characters`);
         }
         const { useWorktreeFilterStore } = await import("@/store/worktreeFilterStore");
-        useWorktreeFilterStore.getState().setWorktreeCustomTitle(worktreeId, normalized || null);
+        await useWorktreeFilterStore
+          .getState()
+          .setWorktreeCustomTitle(worktreeId, normalized || null);
       },
     })
   );

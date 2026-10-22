@@ -18,6 +18,7 @@ const sampleSnapshot: PluginWorktreeSnapshot = {
   worktreeId: "wt-1",
   path: "/tmp/repo",
   name: "main",
+  customTitle: null,
   isCurrent: true,
   linked: null,
   status: null,
@@ -31,6 +32,7 @@ const otherSnapshot: PluginWorktreeSnapshot = {
   worktreeId: "wt-2",
   path: "/tmp/repo-feature",
   name: "feature",
+  customTitle: null,
   isCurrent: false,
   linked: null,
   status: null,
@@ -765,6 +767,20 @@ describe("createMockHost", () => {
       removed: [],
       changed: [],
     });
+  });
+
+  it("reports a custom title rename and clear as a changed worktree", async () => {
+    const host = createMockHost();
+    const cb = vi.fn();
+    await host.onDidChangeWorktrees(cb);
+    host.simulateWorktreesChange([sampleSnapshot]);
+    host.simulateWorktreesChange([{ ...sampleSnapshot, customTitle: "Release prep" }]);
+    host.simulateWorktreesChange([sampleSnapshot]);
+    expect(cb.mock.calls.map(([, change]) => change.changed)).toEqual([
+      [],
+      [sampleSnapshot.id],
+      [sampleSnapshot.id],
+    ]);
   });
 
   it("delivers agent-state updates and reflects the last one in getAgentState", async () => {

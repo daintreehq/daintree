@@ -119,11 +119,16 @@ interface Harness {
   requestPrompt: ReturnType<typeof vi.fn>;
   sendAgentsListWithProject: ReturnType<typeof vi.fn>;
   handlers: Map<string, WorktreeHandler[]>;
+  /** Project id → worktree id → custom title, as main's store holds them. */
+  titles: Map<string, Record<string, string>>;
+  titleListeners: Set<(projectId: string) => void>;
 }
 
 function makeHarness(): Harness {
   const plugins = new Map<string, LoadedPlugin>([[PLUGIN_ID, fakePlugin()]]);
   const handlers = new Map<string, WorktreeHandler[]>();
+  const titles = new Map<string, Record<string, string>>();
+  const titleListeners = new Set<(projectId: string) => void>();
 
   const ambientFetch = vi.fn(async (): Promise<PluginWorktreeSnapshotFetchResult> => okFetch([]));
   const projectFetch = vi.fn(async (): Promise<PluginWorktreeSnapshotFetchResult> => okFetch([]));
@@ -193,6 +198,11 @@ function makeHarness(): Harness {
       handlers.set(event, list);
       return () => {};
     }),
+    getWorktreeCustomTitles: (projectId: string) => titles.get(projectId) ?? {},
+    subscribeWorktreeCustomTitles: (listener: (projectId: string) => void) => {
+      titleListeners.add(listener);
+      return () => titleListeners.delete(listener);
+    },
     registerHandler: vi.fn(),
     validateAndBuildActionDescriptor: vi.fn(),
     safeAppendAudit: vi.fn(),
@@ -211,11 +221,21 @@ function makeHarness(): Harness {
     requestPrompt,
     sendAgentsListWithProject,
     handlers,
+    titles,
+    titleListeners,
   };
 }
 
 function emit(h: Harness, event: string, payload?: { projectPath?: string }): void {
   for (const handler of h.handlers.get(event) ?? []) handler(payload);
+}
+
+function renameIn(h: Harness, projectId: string, worktreeId: string, title: string | null): void {
+  const next = { ...(h.titles.get(projectId) ?? {}) };
+  if (title === null) delete next[worktreeId];
+  else next[worktreeId] = title;
+  h.titles.set(projectId, next);
+  for (const listener of [...h.titleListeners]) listener(projectId);
 }
 
 /**
@@ -499,6 +519,84 @@ describe("createHost worktree subscriptions", () => {
     emit(h, "worktree-update", { projectPath: ROOT_B });
     await flush();
     expect(callback).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("createHost custom worktree titles (#14022)", () => {
+  it("projects the bound project's title on every worktree surface", async () => {
+    const h = makeHarness();
+    h.titles.set(PROJECT_A, { "wt-a": "Release prep" });
+    h.titles.set("project-b", { "wt-b": "Not this one" });
+    h.projectFetch.mockResolvedValue(
+      okFetch([worktree({ id: "wt-a", isCurrent: true }), worktree({ id: "wt-b" })])
+    );
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+
+    expect((await host.getWorktrees()).map((w) => [w.id, w.customTitle])).toEqual([
+      ["wt-a", "Release prep"],
+      ["wt-b", null],
+    ]);
+    expect((await host.getActiveWorktree())?.customTitle).toBe("Release prep");
+
+    const active = vi.fn();
+    await host.onDidChangeActiveWorktree(active, { debounceMs: 0 });
+    emit(h, "worktree-activated", { projectPath: ROOT_A });
+    await flush();
+    expect(active.mock.calls[0][0]?.customTitle).toBe("Release prep");
+  });
+
+  it("keys an unbound host's titles by the project its read landed on", async () => {
+    const h = makeHarness();
+    h.titles.set(PROJECT_A, { "wt-focus": "Focused title" });
+    h.titles.set("project-b", { "wt-focus": "Other project's title" });
+    h.ambientFetch.mockResolvedValue(okFetch([worktree({ id: "wt-focus", isCurrent: true })]));
+    const { host } = createHost(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING);
+
+    expect((await host.getActiveWorktree())?.customTitle).toBe("Focused title");
+  });
+
+  it("reports a rename in its own project as a changed worktree", async () => {
+    const h = makeHarness();
+    h.projectFetch.mockResolvedValue(okFetch([worktree({ id: "wt-a" })]));
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+    const callback = vi.fn();
+    await host.onDidChangeWorktrees(callback, { debounceMs: 0 });
+
+    emit(h, "worktree-update", { projectPath: ROOT_A });
+    await flush();
+    renameIn(h, PROJECT_A, "wt-a", "Release prep");
+    await flush();
+    renameIn(h, PROJECT_A, "wt-a", null);
+    await flush();
+
+    expect(callback).toHaveBeenCalledTimes(3);
+    expect(callback.mock.calls[1][0][0].customTitle).toBe("Release prep");
+    expect(callback.mock.calls[1][1].changed).toEqual(["wt-a"]);
+    expect(callback.mock.calls[2][0][0].customTitle).toBeNull();
+    expect(callback.mock.calls[2][1].changed).toEqual(["wt-a"]);
+  });
+
+  it("does not wake a bound host for another project's rename", async () => {
+    const h = makeHarness();
+    h.projectFetch.mockResolvedValue(okFetch([worktree({ id: "wt-a" })]));
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+    const callback = vi.fn();
+    await host.onDidChangeWorktrees(callback, { debounceMs: 0 });
+
+    renameIn(h, "project-b", "wt-b", "Elsewhere");
+    await flush();
+    expect(callback).not.toHaveBeenCalled();
+    expect(h.projectFetch).not.toHaveBeenCalled();
+  });
+
+  it("drops the title listener when the subscription is disposed", async () => {
+    const h = makeHarness();
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+    const dispose = await host.onDidChangeWorktrees(vi.fn(), { debounceMs: 0 });
+    expect(h.titleListeners.size).toBe(1);
+
+    dispose();
+    expect(h.titleListeners.size).toBe(0);
   });
 });
 

@@ -3,7 +3,7 @@ import {
   isWorktreeCustomTitleTooLong,
   normalizeWorktreeCustomTitle,
   worktreeCustomTitleLength,
-} from "../worktreeCustomTitle";
+} from "../worktreeCustomTitle.js";
 
 describe("normalizeWorktreeCustomTitle", () => {
   it("collapses whitespace runs, including newlines and tabs, and trims", () => {

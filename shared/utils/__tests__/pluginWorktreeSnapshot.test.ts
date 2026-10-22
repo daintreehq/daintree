@@ -523,3 +523,19 @@ describe("toPluginWorktreeSnapshot — HEAD, git operation and setup (#13804)", 
     expect(toPluginWorktreeSnapshot(makeSnapshot()).setup).toBeNull();
   });
 });
+
+describe("toPluginWorktreeSnapshot — custom title (#14022)", () => {
+  it("carries the title the caller holds, and null when it holds none", () => {
+    expect(toPluginWorktreeSnapshot(makeSnapshot(), "Release prep").customTitle).toBe(
+      "Release prep"
+    );
+    expect(toPluginWorktreeSnapshot(makeSnapshot(), null).customTitle).toBeNull();
+    expect(toPluginWorktreeSnapshot(makeSnapshot()).customTitle).toBeNull();
+  });
+
+  it("is an own field of the frozen projection even when null", () => {
+    const out = toPluginWorktreeSnapshot(makeSnapshot(), null);
+    expect(Object.hasOwn(out, "customTitle")).toBe(true);
+    expect(Object.isFrozen(out)).toBe(true);
+  });
+});

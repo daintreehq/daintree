@@ -101,6 +101,7 @@ import { buildConnectivityPreloadBindings } from "./ipc/handlers/connectivity.pr
 import { buildProjectPresencePreloadBindings } from "./ipc/handlers/projectPresence.preload.js";
 import { buildProjectPresentationPreloadBindings } from "./ipc/handlers/projectPresentation.preload.js";
 import { buildProjectThemePreloadBindings } from "./ipc/handlers/projectTheme.preload.js";
+import { buildWorktreeTitlesPreloadBindings } from "./ipc/handlers/worktreeTitles.preload.js";
 import { buildDiffMediaPreloadBindings } from "./ipc/handlers/diffMedia.preload.js";
 import { buildFileDocumentPreloadBindings } from "./ipc/handlers/fileDocument.preload.js";
 import { buildFileBrowserPreloadBindings } from "./ipc/handlers/fileBrowser.preload.js";
@@ -2501,6 +2502,14 @@ function buildElectronApi(): ElectronAPI {
 
       onChanged: (callback: (change: IpcEventMap["project-theme:changed"]) => void) =>
         _typedOn(CHANNELS.PROJECT_THEME_CHANGED, callback),
+    },
+
+    // The sender project's custom worktree titles (#14022)
+    worktreeTitles: {
+      ...buildWorktreeTitlesPreloadBindings(_unwrappingInvoke),
+
+      onChanged: (callback: (snapshot: IpcEventMap["worktree-titles:changed"]) => void) =>
+        _typedOn(CHANNELS.WORKTREE_TITLES_CHANGED, callback),
     },
 
     // Dev Preview API

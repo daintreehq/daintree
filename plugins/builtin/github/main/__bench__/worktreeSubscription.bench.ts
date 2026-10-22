@@ -209,6 +209,8 @@ async function runScenario(): Promise<Metrics> {
       if (event === "worktree-update") handlers.push(handler);
       return () => {};
     },
+    getWorktreeCustomTitles: () => ({}),
+    subscribeWorktreeCustomTitles: () => () => {},
   } as unknown as PluginHostFactoryDeps;
 
   const { host } = createHost(deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING);

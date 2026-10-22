@@ -61,6 +61,7 @@ import {
   useCanopySeenTracking,
   useCanopySnapshotSync,
   useCanopyDoubleShift,
+  useWorktreeCustomTitlesSync,
 } from "./hooks/app";
 import { useResourceProfile } from "./hooks/useResourceProfile";
 import { AppLayout } from "./components/Layout";
@@ -241,6 +242,7 @@ function AppInner() {
   const { activeWorktreeId: liveActiveWorktreeId, defaultTerminalCwd } = useActiveWorktreeSync();
   useAgentActivityBroadcast();
   useCanopySnapshotSync();
+  useWorktreeCustomTitlesSync();
   useCanopySeenTracking();
   useCanopyDoubleShift();
   const resumeSession = useResumeAgentSession();
