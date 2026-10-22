@@ -639,13 +639,13 @@ export class IdleBackgroundAutoCloseService {
   }
 
   /**
-   * The project host's worktree states, `"no-host"` when the project has no
-   * workspace host at all, or `null` when there's no answer.
+   * The project host's worktree states, or `null` when there's no answer. A
+   * project whose host has been reclaimed has none, and stays awake: a setup
+   * command it started can outlive it, and only it knows the worktree list.
    */
   private async readWorkspace(projectPath: string, projectId: string) {
     const workspaceClient = getWorkspaceClientRef();
     if (!workspaceClient) return null;
-    if (!workspaceClient.getHostForProject(projectPath)) return "no-host" as const;
     try {
       return await withTimeout(
         workspaceClient.getAllStatesWithGitBackedForProjectAsync(projectPath, projectId),
@@ -679,30 +679,23 @@ export class IdleBackgroundAutoCloseService {
    * census together, so the census the kill trusts is the last thing read
    * before it. Sleep's own kill snapshot is then held to the exact terminals
    * vetted here, still quiet, so a shell opened or typed into after this point
-   * stops it.
-   *
-   * Lifecycle scripts and resource actions only ever run inside the workspace
-   * host, so a project whose host has been reclaimed has none in flight; its
-   * resource config and repository are read from disk either way, since the
-   * host's own view of both is a cache.
+   * stops it. Resource config and the repository are read from disk rather
+   * than from the host, whose view of both is a cache.
    */
   private async closeShellProject(projectId: string): Promise<ShellCloseResult> {
     const project = this.readEligibleShellProject(projectId);
     if (!project) return { status: "ineligible" };
 
     const read = await this.readWorkspace(project.path, projectId);
-    let worktreePaths: string[] = [];
-    if (read !== "no-host") {
-      const workspace = evaluateWorkspace(read);
-      if (!workspace.ok) return { status: "skipped", reason: workspace.reason };
-      worktreePaths = workspace.value;
-    }
+    const workspace = evaluateWorkspace(read);
+    if (!workspace.ok) return { status: "skipped", reason: workspace.reason };
+    const worktreePaths = workspace.value;
     const resources = await probeResourceConfig(project.path, worktreePaths);
     if (resources === "configured") return { status: "skipped", reason: "resource-configured" };
     if (resources === "unknown") return { status: "skipped", reason: "resource-unknown" };
     const gitBlock = evaluateGit(
       await probeRepositorySleepSafety([project.path, ...worktreePaths], {
-        missingRepoIsClear: read !== "no-host" && read?.gitBacked === false,
+        missingRepoIsClear: read?.gitBacked === false,
       })
     );
     if (gitBlock) return { status: "skipped", reason: gitBlock };

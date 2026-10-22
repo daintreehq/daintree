@@ -54,7 +54,6 @@ const snapshotDegraded = vi.hoisted(() => ({ value: false }));
 
 const workspaceClientMock = vi.hoisted(() => ({
   evictProject: vi.fn<(p: string) => boolean>(() => true),
-  getHostForProject: vi.fn<(path: string) => object | undefined>(() => ({})),
   getAllStatesWithGitBackedForProjectAsync: vi.fn<
     (path: string, id: string) => Promise<{ states: unknown[]; gitBacked: boolean | null }>
   >(async (path) => ({ states: [{ path }], gitBacked: true })),
@@ -329,7 +328,6 @@ describe("IdleBackgroundAutoCloseService", () => {
     remoteViewProjects.clear();
     gitSafetyMock.probeRepositorySleepSafety.mockResolvedValue({ state: "clear" });
     resourceProbeMock.probeResourceConfig.mockResolvedValue("none");
-    workspaceClientMock.getHostForProject.mockReturnValue({});
     workspaceClientMock.getAllStatesWithGitBackedForProjectAsync.mockImplementation(
       async (path) => ({ states: [{ path }], gitBacked: true })
     );
@@ -1655,24 +1653,6 @@ describe("IdleBackgroundAutoCloseService", () => {
       expect(ptyClientMock.gracefulKillByProject).not.toHaveBeenCalled();
       expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
       expect(skipLog()).toEqual({ [reason]: ["proj-1"] });
-    });
-
-    it("sleeps a project whose workspace host was already reclaimed", async () => {
-      enableShells();
-      const service = setUpIdleShellProject();
-      // No host means no lifecycle script or resource action can be running;
-      // config and the repository are still read from disk.
-      workspaceClientMock.getHostForProject.mockReturnValue(undefined);
-      await runCheck(service);
-
-      expect(workspaceClientMock.getAllStatesWithGitBackedForProjectAsync).not.toHaveBeenCalled();
-      expect(resourceProbeMock.probeResourceConfig).toHaveBeenCalledWith("/projects/proj-1", []);
-      expect(gitSafetyMock.probeRepositorySleepSafety).toHaveBeenCalledWith(["/projects/proj-1"], {
-        missingRepoIsClear: false,
-      });
-      expect(ptyClientMock.gracefulKillByProject).toHaveBeenCalledWith("proj-1", {
-        preserveSession: true,
-      });
     });
 
     it("won't kill a terminal it never vetted", async () => {

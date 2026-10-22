@@ -20,6 +20,9 @@ const SLEEP_BLOCKING_MARKERS = [...OPERATION_SENTINEL_NAMES, "index.lock"] as co
 
 const DEFAULT_TIMEOUT_MS = 5_000;
 
+/** How many submodule directories one probe will walk before giving up as unknown. */
+const MAX_MODULE_DIRS = 256;
+
 function isMissing(error: unknown): boolean {
   return (error as NodeJS.ErrnoException)?.code === "ENOENT";
 }
@@ -52,24 +55,53 @@ async function resolveCommonDir(gitDir: string): Promise<string> {
   }
 }
 
-/**
- * Every git directory of the repository a checkout belongs to: the main one
- * and one per linked worktree, read from disk rather than from any cached
- * worktree list, so a worktree created outside Daintree is covered too.
- */
-async function repositoryGitDirs(checkoutPath: string): Promise<string[]> {
-  const gitDir = await resolveGitDir(checkoutPath);
-  const commonDir = await resolveCommonDir(gitDir);
-  const dirs = [gitDir, commonDir];
+async function subdirectories(dir: string): Promise<string[]> {
   try {
-    const linked = await readdir(path.join(commonDir, "worktrees"), { withFileTypes: true });
-    for (const entry of linked) {
-      if (entry.isDirectory()) dirs.push(path.join(commonDir, "worktrees", entry.name));
-    }
+    const entries = await readdir(dir, { withFileTypes: true });
+    return entries
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => path.join(dir, entry.name));
   } catch (error) {
-    if (!isMissing(error)) throw error;
+    if (isMissing(error)) return [];
+    throw error;
+  }
+}
+
+/**
+ * A repository's own git directory plus every git directory nested under it:
+ * one per linked worktree (`worktrees/<name>`) and one per absorbed submodule
+ * (`modules/<path>`, whose name can itself span directories, and which can
+ * have worktrees and submodules of its own).
+ */
+async function nestedGitDirs(commonDir: string, budget: { left: number }): Promise<string[]> {
+  const dirs = [commonDir, ...(await subdirectories(path.join(commonDir, "worktrees")))];
+  const pending = await subdirectories(path.join(commonDir, "modules"));
+  for (let dir = pending.pop(); dir !== undefined; dir = pending.pop()) {
+    if (--budget.left < 0) throw new Error("too many submodule directories");
+    let isGitDir = false;
+    try {
+      isGitDir = (await stat(path.join(dir, "HEAD"))).isFile();
+    } catch (error) {
+      if (!isMissing(error)) throw error;
+    }
+    if (isGitDir) dirs.push(...(await nestedGitDirs(dir, budget)));
+    else pending.push(...(await subdirectories(dir)));
   }
   return dirs;
+}
+
+/**
+ * Every git directory of the repository a checkout belongs to, read from disk
+ * rather than from any cached worktree list, so a worktree created outside
+ * Daintree, or a submodule paused mid-rebase, is covered too.
+ */
+async function repositoryGitDirs(
+  checkoutPath: string,
+  budget: { left: number }
+): Promise<string[]> {
+  const gitDir = await resolveGitDir(checkoutPath);
+  const commonDir = await resolveCommonDir(gitDir);
+  return [gitDir, ...(await nestedGitDirs(commonDir, budget))];
 }
 
 async function probe(
@@ -77,9 +109,10 @@ async function probe(
   missingRepoIsClear: boolean
 ): Promise<GitSleepSafety> {
   const gitDirs = new Set<string>();
+  const budget = { left: MAX_MODULE_DIRS };
   for (const checkoutPath of checkoutPaths) {
     try {
-      for (const dir of await repositoryGitDirs(checkoutPath)) gitDirs.add(dir);
+      for (const dir of await repositoryGitDirs(checkoutPath, budget)) gitDirs.add(dir);
     } catch (error) {
       if (missingRepoIsClear && isMissing(error)) continue;
       throw error;

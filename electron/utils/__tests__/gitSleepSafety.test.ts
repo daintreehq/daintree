@@ -59,6 +59,20 @@ describe("probeRepositorySleepSafety", () => {
     });
   });
 
+  it("finds an operation paused inside an absorbed submodule", async () => {
+    // Nested name, as `git submodule absorbgitdirs` lays out `libs/vendor`.
+    const moduleDir = path.join(repo, ".git", "modules", "libs", "vendor");
+    mkdirSync(moduleDir, { recursive: true });
+    writeFileSync(path.join(moduleDir, "HEAD"), "ref: refs/heads/main\n");
+    expect(await probeRepositorySleepSafety([repo])).toEqual({ state: "clear" });
+
+    mkdirSync(path.join(moduleDir, "rebase-merge"));
+    expect(await probeRepositorySleepSafety([repo])).toEqual({
+      state: "busy",
+      marker: "rebase-merge",
+    });
+  });
+
   it("follows a linked worktree's .git file and commondir back to the main repository", async () => {
     const { worktree } = linkedWorktree("feature");
     writeFileSync(path.join(repo, ".git", "MERGE_HEAD"), "");

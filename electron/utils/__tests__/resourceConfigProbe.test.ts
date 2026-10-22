@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
+import { execFileSync } from "child_process";
+import { chmodSync, closeSync, mkdirSync, mkdtempSync, openSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import path from "path";
 import { probeResourceConfig } from "../resourceConfigProbe.js";
@@ -62,6 +63,19 @@ describe("probeResourceConfig", () => {
     arrange();
     expect(await probe()).toBe("configured");
   });
+
+  it.skipIf(process.platform === "win32")(
+    "is unknown when a read stalls past the deadline",
+    async () => {
+      // A FIFO with no writer blocks its reader, as a hung mount would.
+      mkdirSync(path.join(project, ".daintree"), { recursive: true });
+      const fifo = path.join(project, ".daintree", "config.json");
+      execFileSync("mkfifo", [fifo]);
+      expect(await probeResourceConfig(project, [worktree], home, 50)).toBe("unknown");
+      // Release the stalled read so it doesn't pin a threadpool slot.
+      closeSync(openSync(fifo, "w"));
+    }
+  );
 
   it("is unknown when a config file can't be parsed", async () => {
     write(project, "config.json", "{ not json");

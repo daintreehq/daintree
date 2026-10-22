@@ -35,7 +35,7 @@ async function readCandidate(filePath: string): Promise<ResourceConfigProbe> {
 /**
  * Whether the project declares a resource environment anywhere the workspace
  * host would load one from: the user's per-project config and settings, the
- * repository's, and each worktree's config.
+ * repository's, and each worktree's config. A stalled read is `unknown`.
  *
  * Read here rather than taken from the host's snapshot, whose
  * `hasResourceConfig` is filled in asynchronously after the monitor starts and
@@ -45,7 +45,8 @@ async function readCandidate(filePath: string): Promise<ResourceConfigProbe> {
 export async function probeResourceConfig(
   projectRoot: string,
   worktreePaths: readonly string[],
-  homeDir: string = os.homedir()
+  homeDir: string = os.homedir(),
+  timeoutMs: number = 5_000
 ): Promise<ResourceConfigProbe> {
   const userDir = path.join(homeDir, ".daintree", "projects", sanitizePathSegment(projectRoot));
   const candidates = new Set([
@@ -55,8 +56,16 @@ export async function probeResourceConfig(
     path.join(projectRoot, ".daintree", "settings.json"),
     ...worktreePaths.map((worktreePath) => path.join(worktreePath, ".daintree", "config.json")),
   ]);
-  const results = await Promise.all([...candidates].map(readCandidate));
-  if (results.includes("configured")) return "configured";
-  if (results.includes("unknown")) return "unknown";
-  return "none";
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<ResourceConfigProbe[]>((resolve) => {
+    timer = setTimeout(() => resolve(["unknown"]), timeoutMs);
+  });
+  try {
+    const results = await Promise.race([Promise.all([...candidates].map(readCandidate)), timeout]);
+    if (results.includes("configured")) return "configured";
+    if (results.includes("unknown")) return "unknown";
+    return "none";
+  } finally {
+    clearTimeout(timer);
+  }
 }
