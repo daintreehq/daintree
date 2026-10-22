@@ -180,7 +180,7 @@ interface PluginHostApi {
   // A short status of yours on one worktree's card
   setWorktreeCardStatus(
     worktreeId: string,
-    status: { label: string; tooltip?: string } | null
+    status: { label: string; tooltip?: string; command?: string } | null
   ): Promise<void>;
 
   // Contextual entries on one of your panels' ⋯ and right-click menus
@@ -1073,7 +1073,27 @@ if (result.status === "ok") {
 
 `label` is one line of 1–32 characters after trimming (`PLUGIN_WORKTREE_CARD_STATUS_LABEL_MAX`). The optional `tooltip` is plain text of up to 512 characters (`PLUGIN_WORKTREE_CARD_STATUS_TOOLTIP_MAX`) and may span lines. Any other field rejects. Both render as text, never markup, and neither takes a colour: the card's accent belongs to agent state, so a plugin status always reads as secondary metadata.
 
-Statuses sit in their own row under an expanded card's header, one chip per plugin, named after the plugin in its tooltip and accessible name, so two plugins never hide each other; the row wraps rather than crowding the card. A collapsed card leaves them out. Each chip is focusable, and its tooltip opens on keyboard focus as well as hover.
+The optional `command` makes the chip open something: name one of your own actions, written `"{manifestId}.{id}"` as in the manifest, and a click dispatches it with `{ worktreeId }`, the card's own `id`. A command in another namespace, or one that names a built-in action, rejects. It need not be registered when you set the status; until it is, the chip stays a plain status, and once it is, the chip's tooltip ends with the action's title so the user can see what a click runs. An action that declares an `inputSchema` must accept `worktreeId`. The click goes through the action's own danger tier like any other dispatch.
+
+```ts
+await host.registerAction(
+  {
+    id: "showContainers",
+    title: "Show containers",
+    description: "Open the containers panel for one worktree.",
+    category: "Docker",
+    kind: "command",
+    danger: "safe",
+  },
+  async (args) => openContainersPanel((args as { worktreeId: string }).worktreeId)
+);
+await host.setWorktreeCardStatus(wt.id, {
+  label: `${running} up`,
+  command: "acme.docker.showContainers",
+});
+```
+
+Statuses sit in their own row under an expanded card's header, one chip per plugin, named after the plugin in its tooltip and accessible name, so two plugins never hide each other; the row wraps rather than crowding the card. A collapsed card leaves them out. The worktree overview shows the same chips under each worktree's branch line, where F2 reaches them with the row's other controls and a chip that ran its command closes the overview. Each chip is focusable, and its tooltip opens on keyboard focus as well as hover.
 
 Statuses are not persisted. They are cleared when the worktree is removed, when its project closes, and when your plugin unloads or its worker is replaced, so republish them after a restart, for example from `onDidChangeWorktrees`. Not revoke-guarded, and a silent no-op once the plugin unloads. `createMockHost` applies the same checks against its seeded worktrees, records accepted calls in `setWorktreeCardStatusCalls`, and holds the current statuses in `worktreeCardStatuses`.
 

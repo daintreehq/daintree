@@ -465,6 +465,21 @@ describe("createMockHost", () => {
     expect(host.setWorktreeCardStatusCalls).toEqual([]);
   });
 
+  it("setWorktreeCardStatus qualifies a command and refuses another namespace's (#13776)", async () => {
+    const host = createMockHost({
+      pluginId: "project__proj-a__acme.status",
+      worktrees: [sampleSnapshot],
+    });
+    await host.setWorktreeCardStatus("wt-1", { label: "Draft", command: "acme.status.open" });
+    expect([...host.worktreeCardStatuses]).toEqual([
+      ["wt-1", { label: "Draft", command: "project__proj-a__acme.status.open" }],
+    ]);
+    await expect(
+      host.setWorktreeCardStatus("wt-1", { label: "x", command: "acme.other.open" })
+    ).rejects.toThrow(/setWorktreeCardStatus: status.command "acme.other.open" must be one of/);
+    expect(host.setWorktreeCardStatusCalls).toHaveLength(1);
+  });
+
   it("records setToolbarButtonBadge calls, normalizing a cleared badge to null (#13503)", async () => {
     const host = createMockHost();
     await host.setToolbarButtonBadge("needs", { kind: "label", text: "12", color: "warning" });

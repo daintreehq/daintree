@@ -2,7 +2,7 @@
  * @vitest-environment jsdom
  */
 import { describe, it, expect, vi, beforeAll, beforeEach } from "vitest";
-import { render, screen, fireEvent, renderHook } from "@testing-library/react";
+import { act, render, screen, fireEvent, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
@@ -11,7 +11,11 @@ import {
   _resetPluginWorktreeCardStatusStoreForTest,
   usePluginWorktreeCardStatusStore,
 } from "@/store/pluginWorktreeCardStatusStore";
+import { publishRegisteredPluginActions } from "@/services/plugin/registeredPluginActions";
 import { WorktreePluginStatusChips, useWorktreePluginStatuses } from "../WorktreePluginStatusChips";
+
+const { dispatchMock } = vi.hoisted(() => ({ dispatchMock: vi.fn() }));
+vi.mock("@/services/ActionService", () => ({ actionService: { dispatch: dispatchMock } }));
 
 vi.mock("react-dom", async () => {
   const actual = await vi.importActual<typeof import("react-dom")>("react-dom");
@@ -34,6 +38,9 @@ const onWorktreeCardStatusesChanged = vi.fn(() => () => {});
 
 beforeEach(() => {
   _resetPluginWorktreeCardStatusStoreForTest();
+  publishRegisteredPluginActions([]);
+  dispatchMock.mockReset();
+  dispatchMock.mockResolvedValue({ ok: true, result: undefined });
   onWorktreeCardStatusesChanged.mockClear();
   usePluginRuntimeStore.setState({ pluginMetaById: new Map() });
   useProjectStore.setState({
@@ -42,10 +49,15 @@ beforeEach(() => {
   Reflect.set(window, "electron", { plugin: { onWorktreeCardStatusesChanged } });
 });
 
-function renderChips(statuses: Parameters<typeof WorktreePluginStatusChips>[0]["statuses"]) {
+type ChipProps = Parameters<typeof WorktreePluginStatusChips>[0];
+
+function renderChips(
+  statuses: ChipProps["statuses"],
+  props: Omit<ChipProps, "statuses" | "worktreeId"> = {}
+) {
   return render(
     <TooltipProvider delayDuration={0}>
-      <WorktreePluginStatusChips statuses={statuses} />
+      <WorktreePluginStatusChips worktreeId="/wt" statuses={statuses} {...props} />
     </TooltipProvider>
   );
 }
@@ -100,7 +112,10 @@ describe("WorktreePluginStatusChips", () => {
     render(
       <TooltipProvider delayDuration={0}>
         <div onClick={onCardClick}>
-          <WorktreePluginStatusChips statuses={[{ pluginId: "acme.x", status: { label: "up" } }]} />
+          <WorktreePluginStatusChips
+            worktreeId="/wt"
+            statuses={[{ pluginId: "acme.x", status: { label: "up" } }]}
+          />
         </div>
       </TooltipProvider>
     );
@@ -117,6 +132,79 @@ describe("WorktreePluginStatusChips", () => {
   it("renders nothing without statuses", () => {
     const { container } = renderChips([]);
     expect(container.querySelector("button")).toBeNull();
+  });
+});
+
+describe("WorktreePluginStatusChips commands (#13776)", () => {
+  const docker = { pluginId: "acme.docker", status: { label: "2 up", command: "acme.docker.show" } };
+
+  it("runs its plugin's registered command with the card's worktree, never selecting the card", () => {
+    publishRegisteredPluginActions([["acme.docker.show", "Show containers"]]);
+    const onCardClick = vi.fn();
+    render(
+      <TooltipProvider delayDuration={0}>
+        <div onClick={onCardClick}>
+          <WorktreePluginStatusChips worktreeId="/repo/wt-a" statuses={[docker]} />
+        </div>
+      </TooltipProvider>
+    );
+
+    fireEvent.click(screen.getByRole("button"));
+
+    expect(dispatchMock).toHaveBeenCalledWith(
+      "acme.docker.show",
+      { worktreeId: "/repo/wt-a" },
+      { source: "user" }
+    );
+    expect(onCardClick).not.toHaveBeenCalled();
+  });
+
+  it("says in its tooltip what a click runs", async () => {
+    publishRegisteredPluginActions([["acme.docker.show", "Show containers"]]);
+    renderChips([docker]);
+    fireEvent.focus(screen.getByRole("button"));
+    expect((await screen.findByRole("tooltip")).textContent).toContain("Click: Show containers");
+  });
+
+  it("stays a plain status until its command registers, then becomes runnable", async () => {
+    renderChips([docker]);
+
+    // Read the tooltip before any click: a press on a trigger closes it.
+    fireEvent.focus(screen.getByRole("button"));
+    expect((await screen.findByRole("tooltip")).textContent).not.toContain("Click");
+    fireEvent.click(screen.getByRole("button"));
+    expect(dispatchMock).not.toHaveBeenCalled();
+
+    act(() => publishRegisteredPluginActions([["acme.docker.show", "Show containers"]]));
+    fireEvent.click(screen.getByRole("button"));
+    expect(dispatchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("never runs a command outside its own plugin's namespace, even a registered one", () => {
+    publishRegisteredPluginActions([["acme.other.show", "Other"]]);
+    renderChips([{ pluginId: "acme.docker", status: { label: "x", command: "acme.other.show" } }]);
+    fireEvent.click(screen.getByRole("button"));
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
+  it("reports a command that ran, and only one that ran", async () => {
+    publishRegisteredPluginActions([["acme.docker.show", "Show containers"]]);
+    const onDispatched = vi.fn();
+    renderChips([docker], { onDispatched });
+
+    fireEvent.click(screen.getByRole("button"));
+    await waitFor(() => expect(onDispatched).toHaveBeenCalledTimes(1));
+
+    dispatchMock.mockResolvedValueOnce({ ok: false, error: { code: "EXECUTION_ERROR" } });
+    fireEvent.click(screen.getByRole("button"));
+    await waitFor(() => expect(dispatchMock).toHaveBeenCalledTimes(2));
+    await Promise.resolve();
+    expect(onDispatched).toHaveBeenCalledTimes(1);
+  });
+
+  it("takes the tab order it is given", () => {
+    renderChips([docker], { tabIndex: -1 });
+    expect(screen.getByRole("button").tabIndex).toBe(-1);
   });
 });
 

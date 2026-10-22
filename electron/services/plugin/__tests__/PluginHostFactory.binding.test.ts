@@ -2041,6 +2041,51 @@ describe("createHost setWorktreeCardStatus", () => {
     expect(h.projectFetch).not.toHaveBeenCalled();
   });
 
+  it("stores a project plugin's command in its instance namespace (#13776)", async () => {
+    const instance = `project__${PROJECT_A}__acme.status`;
+    const h = makeHarness();
+    withEmitter(h);
+    h.deps.plugins.set(instance, fakePlugin());
+    h.projectFetch.mockResolvedValue(okFetch([worktree({ id: "wt-a" })]));
+    const { host } = createHost(h.deps, instance, BOUND);
+
+    await host.setWorktreeCardStatus("wt-a", { label: "Draft", command: "acme.status.open" });
+
+    expect(h.deps.pluginWorktreeCardStatuses.get(instance)?.get(PROJECT_A)?.get("wt-a")).toEqual({
+      label: "Draft",
+      command: `${instance}.open`,
+    });
+  });
+
+  it("rejects another namespace's command before reading anything", async () => {
+    const h = makeHarness();
+    withEmitter(h);
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+
+    await expect(
+      host.setWorktreeCardStatus("wt-a", { label: "x", command: "other.open" })
+    ).rejects.toThrow(/setWorktreeCardStatus: status.command "other.open" must be one of/);
+    expect(h.projectFetch).not.toHaveBeenCalled();
+    expect(h.deps.pluginWorktreeCardStatuses.size).toBe(0);
+  });
+
+  it("republishes when only the command changes", async () => {
+    const h = makeHarness();
+    const emitted = withEmitter(h);
+    h.projectFetch.mockResolvedValue(okFetch([worktree({ id: "wt-a" })]));
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+
+    await host.setWorktreeCardStatus("wt-a", { label: "up" });
+    await host.setWorktreeCardStatus("wt-a", { label: "up", command: "acme.open" });
+    await host.setWorktreeCardStatus("wt-a", { label: "up", command: "acme.open" });
+
+    expect(emitted).toHaveBeenCalledTimes(2);
+    expect(h.deps.pluginWorktreeCardStatuses.get(PLUGIN_ID)?.get(PROJECT_A)?.get("wt-a")).toEqual({
+      label: "up",
+      command: "acme.open",
+    });
+  });
+
   it("replaces, skips an identical republish, and clears down to nothing", async () => {
     const h = makeHarness();
     const emitted = withEmitter(h);

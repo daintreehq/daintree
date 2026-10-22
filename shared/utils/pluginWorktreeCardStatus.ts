@@ -3,12 +3,16 @@ import {
   PLUGIN_WORKTREE_CARD_STATUS_TOOLTIP_MAX,
   type PluginWorktreeCardStatus,
 } from "../types/plugin.js";
+import { isBuiltInActionId } from "./builtInActionIds.js";
 
 export type PluginWorktreeCardStatusResult =
   | { ok: true; worktreeId: string; status: PluginWorktreeCardStatus | null }
   | { ok: false; error: string };
 
-const ALLOWED_KEYS = new Set(["label", "tooltip"]);
+const ALLOWED_KEYS = new Set(["label", "tooltip", "command"]);
+
+/** The authored form a plugin writes its own action ids in, `"{manifestId}.{id}"`. */
+const AUTHORED_ACTION_ID = /^[a-z0-9][a-z0-9_-]*\.[a-z0-9][a-zA-Z0-9._-]*$/;
 
 /**
  * Vet one `host.setWorktreeCardStatus(worktreeId, status)` call (#13704).
@@ -17,10 +21,18 @@ const ALLOWED_KEYS = new Set(["label", "tooltip"]);
  * host, the worker proxy and the mock host so every host accepts and refuses
  * exactly the same calls. Whether the worktree is one the plugin may reach is
  * the host's check, not this one's.
+ *
+ * A `command` (#13776) must be one of the plugin's own actions in its authored
+ * namespace, and is rewritten into the instance's, as a panel menu's entries
+ * are, so a project plugin's chip runs its own action rather than a same-named
+ * installed plugin's. A click runs with the user's authority, so neither form
+ * may name a built-in (a manifest name can spell a built-in's prefix).
  */
 export function validatePluginWorktreeCardStatus(
   worktreeId: unknown,
-  status: unknown
+  status: unknown,
+  manifestId: string,
+  instanceId: string
 ): PluginWorktreeCardStatusResult {
   if (typeof worktreeId !== "string" || worktreeId.length === 0) {
     return { ok: false, error: "worktreeId must be a non-empty string" };
@@ -33,7 +45,7 @@ export function validatePluginWorktreeCardStatus(
   if (unknownKey !== undefined) {
     return { ok: false, error: `status has an unsupported field "${unknownKey}"` };
   }
-  const { label, tooltip } = status as Record<string, unknown>;
+  const { label, tooltip, command } = status as Record<string, unknown>;
   if (typeof label !== "string") return { ok: false, error: "status.label must be a string" };
   const trimmed = label.trim();
   if (trimmed.length === 0) return { ok: false, error: "status.label must not be empty" };
@@ -44,21 +56,49 @@ export function validatePluginWorktreeCardStatus(
       error: `status.label must be at most ${PLUGIN_WORKTREE_CARD_STATUS_LABEL_MAX} characters`,
     };
   }
-  if (tooltip === undefined || tooltip === null) {
-    return { ok: true, worktreeId, status: { label: trimmed } };
+  let detail: string | undefined;
+  if (tooltip !== undefined && tooltip !== null) {
+    if (typeof tooltip !== "string") return { ok: false, error: "status.tooltip must be a string" };
+    if (tooltip.length > PLUGIN_WORKTREE_CARD_STATUS_TOOLTIP_MAX) {
+      return {
+        ok: false,
+        error: `status.tooltip must be at most ${PLUGIN_WORKTREE_CARD_STATUS_TOOLTIP_MAX} characters`,
+      };
+    }
+    detail = tooltip.trim() || undefined;
   }
-  if (typeof tooltip !== "string") return { ok: false, error: "status.tooltip must be a string" };
-  if (tooltip.length > PLUGIN_WORKTREE_CARD_STATUS_TOOLTIP_MAX) {
-    return {
-      ok: false,
-      error: `status.tooltip must be at most ${PLUGIN_WORKTREE_CARD_STATUS_TOOLTIP_MAX} characters`,
-    };
+  let actionId: string | undefined;
+  if (command !== undefined && command !== null) {
+    const ownPrefix = `${manifestId}.`;
+    if (
+      typeof command !== "string" ||
+      !command.startsWith(ownPrefix) ||
+      command.length === ownPrefix.length ||
+      !AUTHORED_ACTION_ID.test(command)
+    ) {
+      const named =
+        typeof command === "string" ? `"${command.slice(0, 200)}"` : `of type ${typeof command}`;
+      return {
+        ok: false,
+        error: `status.command ${named} must be one of this plugin's own actions, written "${manifestId}.<id>"`,
+      };
+    }
+    actionId = `${instanceId}.${command.slice(ownPrefix.length)}`;
+    if (isBuiltInActionId(command) || isBuiltInActionId(actionId)) {
+      return {
+        ok: false,
+        error: `status.command "${command}" is a built-in action, not one of this plugin's own`,
+      };
+    }
   }
-  const detail = tooltip.trim();
   return {
     ok: true,
     worktreeId,
-    status: detail.length > 0 ? { label: trimmed, tooltip: detail } : { label: trimmed },
+    status: {
+      label: trimmed,
+      ...(detail !== undefined ? { tooltip: detail } : {}),
+      ...(actionId !== undefined ? { command: actionId } : {}),
+    },
   };
 }
 
@@ -67,5 +107,7 @@ export function sameWorktreeCardStatus(
   a: PluginWorktreeCardStatus | undefined,
   b: PluginWorktreeCardStatus
 ): boolean {
-  return a !== undefined && a.label === b.label && a.tooltip === b.tooltip;
+  return (
+    a !== undefined && a.label === b.label && a.tooltip === b.tooltip && a.command === b.command
+  );
 }

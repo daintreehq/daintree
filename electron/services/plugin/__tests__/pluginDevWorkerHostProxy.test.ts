@@ -1502,7 +1502,29 @@ describe("PluginDevWorkerHostProxy setWorktreeCardStatus (#13704)", () => {
     await expect(
       proxy.host.setWorktreeCardStatus("/wt", { label: "x", color: "red" } as never)
     ).rejects.toThrow(/setWorktreeCardStatus: status has an unsupported field/);
+    await expect(
+      proxy.host.setWorktreeCardStatus("/wt", { label: "x", command: "other.open" })
+    ).rejects.toThrow(/setWorktreeCardStatus: status.command "other.open" must be one of/);
     expect(sent.find((m) => m.type === "host-call")).toBeUndefined();
+  });
+
+  it("sends a project plugin's command in its authored form, for main to qualify (#13776)", () => {
+    const sent: any[] = [];
+    const instanceId = "project__proj-a__acme.demo";
+    const proxy = new PluginDevWorkerHostProxy(instanceId, (msg: any) => sent.push(msg), {
+      instanceId,
+      manifestId: "acme.demo",
+      origin: "project",
+      projectId: "proj-a",
+      projectRoot: "/repo",
+    });
+    void proxy.host.setWorktreeCardStatus("/repo/wt", { label: "up", command: "acme.demo.open" });
+    const call = sent.find((m) => m.type === "host-call" && m.method === "setWorktreeCardStatus");
+    expect(call?.params).toEqual({
+      worktreeId: "/repo/wt",
+      status: { label: "up", command: "acme.demo.open" },
+    });
+    proxy.dispose();
   });
 
   it("resolves once the proxy is disposed, like the in-process no-op after unload", async () => {

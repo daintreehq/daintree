@@ -46,6 +46,10 @@ import { actionService } from "@/services/ActionService";
 import { suppressPaletteFocusRestore } from "@/components/ui/paletteFocusRestore";
 import { copyContextWithFeedback } from "@/hooks/useWorktreeActions";
 import { FocusHandoffGuard } from "./FocusHandoffGuard";
+import {
+  WorktreePluginStatusChips,
+  useWorktreePluginStatuses,
+} from "./WorktreeCard/WorktreePluginStatusChips";
 import { getAgentConfig } from "@/config/agents";
 import type { ChipState } from "./utils/computeChipState";
 import { BranchLabel } from "./BranchLabel";
@@ -279,6 +283,7 @@ export function WorktreeOverviewRow({
   onFocusLost,
 }: WorktreeOverviewRowProps) {
   const marks = useSessionMarks(worktree.id);
+  const pluginStatuses = useWorktreePluginStatuses(worktree.id);
   const customTitle = useWorktreeFilterStore((state) => state.worktreeCustomTitles[worktree.id]);
   const headline = getWorktreeHeadline(worktree, customTitle);
   const branchLabel = getWorktreeBranchLabel(worktree);
@@ -550,6 +555,25 @@ export function WorktreeOverviewRow({
                   </span>
                 )}
               </div>
+              {/* Plugin statuses, the card's own chips (#13776). Aligned with
+                  the line above's text, past the chip's own padding. A chip
+                  that ran its command gets the overview out of the way, as a
+                  session does once it is focused. */}
+              {pluginStatuses.length > 0 && (
+                <FocusHandoffGuard onFocusLeaving={onFocusLost}>
+                  <div className="mt-1 flex min-w-0 flex-wrap items-center gap-1 pl-5">
+                    <WorktreePluginStatusChips
+                      worktreeId={worktree.id}
+                      statuses={pluginStatuses}
+                      tabIndex={-1}
+                      onDispatched={() => {
+                        suppressPaletteFocusRestore();
+                        onBeforeMenuAction();
+                      }}
+                    />
+                  </div>
+                </FocusHandoffGuard>
+              )}
             </div>
 
             {/* Sessions, as the sidebar draws them. Up to three are listed in
