@@ -39,6 +39,7 @@ import type {
   PluginPanelActivity,
   PanelMenuItemContribution,
   BuiltInPluginCapability,
+  PluginActionResultSchema,
   PluginFsWriteOptions,
   PluginMcpCaller,
   PluginMcpJsonSchema,
@@ -452,6 +453,8 @@ export interface RegisterActionParams {
     when?: string;
     enablement?: string;
     inputSchema?: Record<string, unknown>;
+    /** Crosses explicitly, like `requires`; main compiles and enforces it. */
+    resultSchema?: PluginActionResultSchema;
     /**
      * Per-action capability intent (#11299). Must cross the port explicitly:
      * the bridge reconstructs the descriptor field by field, so an omitted

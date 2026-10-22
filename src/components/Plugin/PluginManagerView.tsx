@@ -57,6 +57,7 @@ import { PluginCatalog } from "./PluginCatalog";
 import { PluginIconTile } from "./pluginIcons";
 import { pluginSignalFor } from "./pluginStatus";
 import { ProjectPluginSection, ProjectPluginDetailPane } from "./ProjectPluginSection";
+import { buildWorksWithPeers } from "./PluginWorksWith";
 import { groupPluginsByCategory } from "./pluginGrouping";
 import { filterPlugins, isQueryActive, parsePluginQuery } from "@/lib/pluginSearch";
 import { PLUGIN_CATEGORIES } from "@shared/config/pluginCategoryRegistry";
@@ -342,6 +343,10 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
     selectedProjectPluginId === null
       ? null
       : (projectPlugins.find((p) => p.id === selectedProjectPluginId) ?? null);
+  const worksWithPeers = useMemo(
+    () => buildWorksWithPeers(pm.plugins, projectPlugins),
+    [pm.plugins, projectPlugins]
+  );
 
   // Row elements keyed by plugin name, so a `daintree://plugin/open` (#9559) can
   // scroll its target into view.
@@ -1054,7 +1059,10 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
           )}
         >
           {selectedProjectPlugin ? (
-            <ProjectPluginDetailPane plugin={selectedProjectPlugin} />
+            <ProjectPluginDetailPane
+              plugin={selectedProjectPlugin}
+              worksWithPeers={worksWithPeers}
+            />
           ) : selectedPlugin ? (
             <PluginDetailPane
               plugin={selectedPlugin}
@@ -1071,6 +1079,7 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
                   : null
               }
               onSettingsRequestHandled={consumeSettingsRequest}
+              worksWithPeers={worksWithPeers}
             />
           ) : hasPlugins ? (
             // Catalog home — the marketplace face of the manager. Clicking a

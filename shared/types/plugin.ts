@@ -2727,6 +2727,13 @@ export interface PluginManifest {
    */
   authors?: PluginAuthor[];
   /**
+   * Manifest ids (`publisher.name`) of other plugins this one works with, shown
+   * in the plugin manager with whether each is installed. Disclosure and an
+   * install hint only: nothing is installed, loaded or ordered from it, and a
+   * listed plugin that is missing changes nothing about how this one runs.
+   */
+  worksWith?: string[];
+  /**
    * Declared catalog category. Optional — when absent the manager derives one
    * from `contributes` (see `resolvePluginCategory`).
    */
@@ -7523,6 +7530,16 @@ export interface PluginActionContribution {
   keywords?: string[];
   inputSchema?: Record<string, unknown>;
   /**
+   * JSON Schema the action's result must match, with `type: "object"` at the
+   * root. Compiled when the action registers (JSON Schema 2020-12 unless
+   * `$schema` names draft-07; references resolve only inside the schema) and
+   * refused there if it can't be enforced as written. Each result is checked as
+   * returned, never coerced, defaulted or stripped; one that does not match
+   * fails the dispatch with `RESULT_VALIDATION_ERROR`. Published to callers as
+   * the catalog entry's `outputSchema`, and to agents as the MCP tool's.
+   */
+  resultSchema?: PluginActionResultSchema;
+  /**
    * `when` clause over the plugin's own context keys (`host.setContext`). While
    * it is false the command is left out of the command palette. Palette-only:
    * keybindings, context menus, MCP and `host.dispatch` never evaluate it, so it
@@ -7562,8 +7579,16 @@ export interface PluginActionContribution {
   requires?: readonly BuiltInPluginCapability[];
 }
 
+/** A {@link PluginActionContribution.resultSchema}: a JSON Schema whose root is an object. */
+export type PluginActionResultSchema = { type: "object" } & Record<string, unknown>;
+
 export interface PluginActionDescriptor extends PluginActionContribution {
   pluginId: string;
+  /**
+   * The providing plugin's name, set by the host from its manifest
+   * (`displayName`, else `name`) — never from the contribution.
+   */
+  pluginName?: string;
   /**
    * Host-authoritative danger classification, computed in the main process by
    * {@link PluginService.registerPluginAction} from the plugin's declared
@@ -7809,6 +7834,8 @@ export interface ProjectPluginInfo {
   description?: string;
   /** Declared capabilities, disclosed in the manager. Never a consent gate. */
   capabilities: PluginCapability[];
+  /** The manifest's `worksWith`, disclosed in the manager. Absent when it lists none. */
+  worksWith?: string[];
   /** Declared `contributes.databases`, disclosed in the manager. */
   databases?: PluginDatabaseContribution[];
   /**

@@ -1082,6 +1082,17 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       consumers: [{ file: PLUGIN_SERVICE, symbol: "validateAndBuildActionDescriptor" }],
       note: "Copied into the action descriptor inputSchema for arg validation.",
     },
+    resultSchema: {
+      mode: "derived-input",
+      consumers: [
+        {
+          file: "electron/services/plugin/pluginActionResultSchema.ts",
+          symbol: "compilePluginActionResultSchema",
+        },
+        { file: PLUGIN_SERVICE, symbol: "dispatchHandlerUnmetered (assertPluginActionResult)" },
+      ],
+      note: "Compiled at registration; every result is checked against it, and the host's copy is published as the catalog and MCP outputSchema.",
+    },
     requires: {
       mode: "derived-input",
       consumers: [

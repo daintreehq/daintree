@@ -8,7 +8,7 @@ import type {
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { handlePanelReloadRequest } from "@/services/plugin/pluginPanelReload";
 import type { PluginPanelReloadResponse } from "@shared/types/pluginPanelReload";
-import type { PluginAgentPane } from "@shared/types/plugin";
+import { pluginManifestIdFromInstanceKey, type PluginAgentPane } from "@shared/types/plugin";
 import { listAgentPanes } from "@/services/agentHandoff/agentDraft";
 
 /**
@@ -16,8 +16,13 @@ import { listAgentPanes } from "@/services/agentHandoff/agentDraft";
  * {@link PluginActionManifestEntry} exposed to plugins via `host.actions.*`
  * (#10561). Deliberately an explicit allowlist — palette state, live-context
  * fields (`enabled`/`disabledReason`), and MCP-internal classification
- * (`name`/`mcpVisibility`/`band`/`pluginId`) are dropped so internal manifest
- * shape changes don't leak across the plugin boundary.
+ * (`name`/`mcpVisibility`/`band`) are dropped so internal manifest shape
+ * changes don't leak across the plugin boundary.
+ *
+ * The provider is named by its manifest id, not the instance key the action is
+ * registered under: a project plugin's key carries a machine-local project id,
+ * and the manifest id is the one another plugin can match against its own
+ * `worksWith`.
  */
 function toPluginManifestEntry(entry: ActionManifestEntry): PluginActionManifestEntry {
   return {
@@ -28,10 +33,17 @@ function toPluginManifestEntry(entry: ActionManifestEntry): PluginActionManifest
     kind: entry.kind,
     danger: entry.danger,
     inputSchema: entry.inputSchema,
+    outputSchema: entry.outputSchema,
     requiresArgs: entry.requiresArgs,
     keywords: entry.keywords,
     examples: entry.examples,
     dangerRationale: entry.dangerRationale,
+    ...(entry.pluginId
+      ? {
+          pluginId: pluginManifestIdFromInstanceKey(entry.pluginId),
+          ...(entry.pluginName ? { pluginName: entry.pluginName } : {}),
+        }
+      : {}),
   };
 }
 

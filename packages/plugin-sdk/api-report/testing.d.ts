@@ -98,10 +98,9 @@ interface ActionError {
  * via `host.actions.list()` / `host.actions.get()` (#10561). Deliberately drops
  * the fields that have no meaning across the plugin boundary: palette state
  * (`paletteHidden`/`paletteRedirectTo`/…), live renderer-context state
- * (`enabled`/`disabledReason`), the MCP-internal classification (`name`,
- * `mcpVisibility`, `mcpAnnotations`, `band`), and `pluginId`. Every field is a
- * plain JSON value so the entry survives Electron's structured-clone IPC
- * boundary unchanged.
+ * (`enabled`/`disabledReason`), and the MCP-internal classification (`name`,
+ * `mcpVisibility`, `mcpAnnotations`, `band`). Every field is a plain JSON value
+ * so the entry survives Electron's structured-clone IPC boundary unchanged.
  */
 interface PluginActionManifestEntry {
     /** The action id to pass to `host.dispatch()`. */
@@ -120,8 +119,21 @@ interface PluginActionManifestEntry {
     danger: ActionDanger;
     /** JSON Schema for the action's args, or undefined when it takes none. */
     inputSchema?: Record<string, unknown>;
+    /**
+     * JSON Schema the action's result is held to, when it publishes one. A
+     * result that doesn't match never reaches the caller: `dispatch()` returns
+     * `RESULT_VALIDATION_ERROR` instead.
+     */
+    outputSchema?: Record<string, unknown>;
     /** True when the action's schema rejects an empty args object. */
     requiresArgs: boolean;
+    /**
+     * Manifest id (`publisher.name`) of the plugin that provides the action.
+     * Absent for a built-in. Dispatch by {@link id}, never by this.
+     */
+    pluginId?: string;
+    /** The providing plugin's name from its manifest. Set with {@link pluginId}. */
+    pluginName?: string;
     /** Synonyms / alternative mental-model terms, when the action declares them. */
     keywords?: string[];
     /** Concrete usage examples pairing args with a short description. */
@@ -5801,6 +5813,16 @@ interface PluginActionContribution {
     keywords?: string[];
     inputSchema?: Record<string, unknown>;
     /**
+     * JSON Schema the action's result must match, with `type: "object"` at the
+     * root. Compiled when the action registers (JSON Schema 2020-12 unless
+     * `$schema` names draft-07; references resolve only inside the schema) and
+     * refused there if it can't be enforced as written. Each result is checked as
+     * returned, never coerced, defaulted or stripped; one that does not match
+     * fails the dispatch with `RESULT_VALIDATION_ERROR`. Published to callers as
+     * the catalog entry's `outputSchema`, and to agents as the MCP tool's.
+     */
+    resultSchema?: PluginActionResultSchema;
+    /**
      * `when` clause over the plugin's own context keys (`host.setContext`). While
      * it is false the command is left out of the command palette. Palette-only:
      * keybindings, context menus, MCP and `host.dispatch` never evaluate it, so it
@@ -5839,6 +5861,10 @@ interface PluginActionContribution {
      */
     requires?: readonly BuiltInPluginCapability[];
 }
+/** A {@link PluginActionContribution.resultSchema}: a JSON Schema whose root is an object. */
+type PluginActionResultSchema = {
+    type: "object";
+} & Record<string, unknown>;
 
 /**
  * In-memory `PluginHostApi` implementation for unit tests. Records every host

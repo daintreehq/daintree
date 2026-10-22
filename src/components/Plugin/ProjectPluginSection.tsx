@@ -11,6 +11,7 @@ import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { useTruncationDetection } from "@/hooks/useTruncationDetection";
 import { PluginGlyphTile } from "@/components/Plugin/pluginIcons";
 import { PluginDatabasesSection } from "@/components/Plugin/PluginDatabasesSection";
+import { PluginWorksWith, type WorksWithPeer } from "@/components/Plugin/PluginWorksWith";
 import {
   PluginPerformanceSection,
   PluginStylesSection,
@@ -193,6 +194,8 @@ export function ProjectPluginSection({
   );
 }
 
+const NO_PEERS: ReadonlyMap<string, WorksWithPeer> = new Map();
+
 /**
  * Detail for one project plugin.
  *
@@ -202,7 +205,14 @@ export function ProjectPluginSection({
  * commits against exactly that. The only real control is the folder-level one
  * at the bottom, which is why it says what it actually does.
  */
-export function ProjectPluginDetailPane({ plugin }: { plugin: ProjectPluginInfo }) {
+export function ProjectPluginDetailPane({
+  plugin,
+  worksWithPeers = NO_PEERS,
+}: {
+  plugin: ProjectPluginInfo;
+  /** What is installed here, for the manifest's `worksWith`; see `buildWorksWithPeers`. */
+  worksWithPeers?: ReadonlyMap<string, WorksWithPeer>;
+}) {
   const trust = useProjectPluginStore((s) => s.trust);
   const deciding = useProjectPluginStore((s) => s.deciding);
   const activating = useProjectPluginStore((s) => s.activating);
@@ -336,6 +346,10 @@ export function ProjectPluginDetailPane({ plugin }: { plugin: ProjectPluginInfo 
 
       {plugin.databases && plugin.databases.length > 0 && (
         <PluginDatabasesSection databases={plugin.databases} origin="project" />
+      )}
+
+      {plugin.worksWith && plugin.worksWith.length > 0 && (
+        <PluginWorksWith ids={plugin.worksWith} peers={worksWithPeers} />
       )}
 
       {logs.hasLogged && (

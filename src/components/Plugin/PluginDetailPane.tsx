@@ -41,6 +41,7 @@ import {
   type PluginInstallSource,
 } from "@shared/types/plugin";
 import { PluginDatabasesSection } from "./PluginDatabasesSection";
+import { PluginWorksWith, type WorksWithPeer } from "./PluginWorksWith";
 import { SECTION_LABEL_CLASS } from "@/components/ui/sectionLabel";
 import { Badge } from "@/components/ui/badge";
 
@@ -430,7 +431,11 @@ interface PluginDetailPaneProps {
   settingsRequest?: { key?: string; nonce: number } | null;
   /** Told once `settingsRequest` has been applied, so its source can drop it. */
   onSettingsRequestHandled?: (nonce: number) => void;
+  /** What is installed here, for the manifest's `worksWith`; see `buildWorksWithPeers`. */
+  worksWithPeers?: ReadonlyMap<string, WorksWithPeer>;
 }
+
+const NO_PEERS: ReadonlyMap<string, WorksWithPeer> = new Map();
 
 /**
  * Detail pane for the selected plugin (#9555, #9558). Owns the full provenance
@@ -462,6 +467,7 @@ export function PluginDetailPane({
   onCheckForUpdate,
   settingsRequest = null,
   onSettingsRequestHandled,
+  worksWithPeers = NO_PEERS,
 }: PluginDetailPaneProps) {
   const label = pluginLabel(plugin);
   const restartRequired = plugin.pendingRestart === true;
@@ -852,6 +858,10 @@ export function PluginDetailPane({
 
             {databases.length > 0 && (
               <PluginDatabasesSection databases={databases} origin={plugin.origin} />
+            )}
+
+            {plugin.manifest.worksWith && plugin.manifest.worksWith.length > 0 && (
+              <PluginWorksWith ids={plugin.manifest.worksWith} peers={worksWithPeers} />
             )}
 
             {plugin.manifest.authors && plugin.manifest.authors.length > 0 && (

@@ -1026,6 +1026,7 @@ export class PluginDevWorkerHostProxy {
               when: descriptor.when,
               enablement: descriptor.enablement,
               inputSchema: descriptor.inputSchema,
+              resultSchema: descriptor.resultSchema,
               requires: descriptor.requires,
             },
           },

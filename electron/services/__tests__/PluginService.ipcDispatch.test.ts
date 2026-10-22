@@ -705,6 +705,75 @@ describe("Plugin IPC handler registration", () => {
     });
   });
 
+  describe("dispatchHandler result validation", () => {
+    const ACTION = "acme.test-plugin.report";
+    const registerReport = () =>
+      service.registerPluginAction("acme.test-plugin", {
+        id: ACTION,
+        title: "Report",
+        description: "Report action",
+        category: "test",
+        kind: "query",
+        danger: "safe",
+        resultSchema: {
+          type: "object",
+          properties: { total: { type: "integer" } },
+          required: ["total"],
+          additionalProperties: false,
+        },
+      });
+    const dispatch = () =>
+      service.dispatchHandler("acme.test-plugin", ACTION, makeCtx("acme.test-plugin"), []);
+
+    it("holds a channel handler backing the action to the action's resultSchema", async () => {
+      registerReport();
+      const handler = vi.fn().mockResolvedValueOnce({ total: 4 });
+      handler.mockResolvedValueOnce({ total: 4, secretKey: "x" });
+      service.registerHandler("acme.test-plugin", ACTION, handler);
+      await expect(dispatch()).resolves.toEqual({ total: 4 });
+
+      const failure = await dispatch().then(
+        () => null,
+        (err: unknown) => err as { code?: unknown; message: string }
+      );
+      expect(failure?.code).toBe("RESULT_VALIDATION_ERROR");
+      // What the result held stays in the main log, never in the caller's error.
+      expect(failure?.message).not.toContain("secretKey");
+    });
+
+    it("records no success for a rejected result and leaves its failure to the invoke boundary", async () => {
+      const appendSpy = vi
+        .spyOn(getPluginActionAuditService(), "append")
+        .mockImplementation(() => {});
+      try {
+        registerReport();
+        service.registerHandler("acme.test-plugin", ACTION, vi.fn().mockResolvedValue({}));
+        const failure = await dispatch().then(
+          () => null,
+          (err: unknown) => err
+        );
+        expect(failure).not.toBeNull();
+        expect(appendSpy).not.toHaveBeenCalled();
+        expect(isAuditedHandlerFailure(failure)).toBe(false);
+      } finally {
+        appendSpy.mockRestore();
+      }
+    });
+
+    it("leaves a channel no action descriptor names unchecked", async () => {
+      registerReport();
+      service.registerHandler("acme.test-plugin", "raw-channel", vi.fn().mockResolvedValue("text"));
+      await expect(
+        service.dispatchHandler(
+          "acme.test-plugin",
+          "raw-channel",
+          makeCtx("acme.test-plugin"),
+          []
+        )
+      ).resolves.toBe("text");
+    });
+  });
+
   describe("typed channel registration (registerHandler schema overload)", () => {
     let typedService: PluginService;
 

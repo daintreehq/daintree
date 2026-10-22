@@ -453,6 +453,8 @@ export interface ActionManifestEntry {
   mcpAnnotations?: ActionMcpAnnotations;
   /** Set when this action was registered by a plugin (not a built-in). */
   pluginId?: string;
+  /** The registering plugin's name, from its manifest. Set with {@link pluginId}. */
+  pluginName?: string;
   /** Concrete usage examples surfaced to MCP clients via `_meta.examples`. */
   examples?: readonly ActionExample[];
   /** Human-readable rationale for the action's `danger` rating. */
@@ -643,10 +645,9 @@ export interface ActionUsageEntry {
  * via `host.actions.list()` / `host.actions.get()` (#10561). Deliberately drops
  * the fields that have no meaning across the plugin boundary: palette state
  * (`paletteHidden`/`paletteRedirectTo`/…), live renderer-context state
- * (`enabled`/`disabledReason`), the MCP-internal classification (`name`,
- * `mcpVisibility`, `mcpAnnotations`, `band`), and `pluginId`. Every field is a
- * plain JSON value so the entry survives Electron's structured-clone IPC
- * boundary unchanged.
+ * (`enabled`/`disabledReason`), and the MCP-internal classification (`name`,
+ * `mcpVisibility`, `mcpAnnotations`, `band`). Every field is a plain JSON value
+ * so the entry survives Electron's structured-clone IPC boundary unchanged.
  */
 export interface PluginActionManifestEntry {
   /** The action id to pass to `host.dispatch()`. */
@@ -665,8 +666,21 @@ export interface PluginActionManifestEntry {
   danger: ActionDanger;
   /** JSON Schema for the action's args, or undefined when it takes none. */
   inputSchema?: Record<string, unknown>;
+  /**
+   * JSON Schema the action's result is held to, when it publishes one. A
+   * result that doesn't match never reaches the caller: `dispatch()` returns
+   * `RESULT_VALIDATION_ERROR` instead.
+   */
+  outputSchema?: Record<string, unknown>;
   /** True when the action's schema rejects an empty args object. */
   requiresArgs: boolean;
+  /**
+   * Manifest id (`publisher.name`) of the plugin that provides the action.
+   * Absent for a built-in. Dispatch by {@link id}, never by this.
+   */
+  pluginId?: string;
+  /** The providing plugin's name from its manifest. Set with {@link pluginId}. */
+  pluginName?: string;
   /** Synonyms / alternative mental-model terms, when the action declares them. */
   keywords?: string[];
   /** Concrete usage examples pairing args with a short description. */
