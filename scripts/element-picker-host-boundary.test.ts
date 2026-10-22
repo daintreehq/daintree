@@ -114,14 +114,13 @@ describe("the Element Picker host boundary", () => {
     expect(authorityImports(metafile)).toContain(`${HOST_DIR}sourceAccess.ts -> node:fs/promises`);
   }, 60_000);
 
-  it("loads project context on its first request, and an adapter only for an app it detects", async () => {
+  it("loads an adapter's code only for an app its registration detects", async () => {
+    // The context service is small and comes with the host; no adapter does.
     const service = `${HOST_DIR}ElementPickerHost.ts`;
     const hostGraph = await metafileOf(service, NATIVE_EXTERNAL);
-    expect(
-      [...walkEagerGraph(hostGraph, service)].filter((file) => file.startsWith(ADAPTERS_DIR))
-    ).toEqual([]);
-    // Not a vacuous pass: the context service is in the build, behind its import.
-    expect(Object.keys(hostGraph.inputs)).toContain(`${ADAPTERS_DIR}projectContext.ts`);
+    const eagerHost = [...walkEagerGraph(hostGraph, service)];
+    expect(eagerHost).toContain(`${ADAPTERS_DIR}projectContext.ts`);
+    expect(eagerHost.filter((file) => file.startsWith(`${ADAPTERS_DIR}sveltekit/`))).toEqual([]);
 
     // Detection reads a manifest; the route parser and config readers wait for `load()`.
     const registration = `${ADAPTERS_DIR}sveltekit/registration.ts`;

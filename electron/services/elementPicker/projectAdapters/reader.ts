@@ -35,7 +35,13 @@ function outsideWorkspace(): Error {
  */
 export function createWorkspaceReader(root: string, signal?: AbortSignal): ProjectFileReader {
   const within = (candidate: string) => candidate === root || isStrictlyInside(root, candidate);
-  const signalOf = (options?: ProjectReadOptions) => options?.signal ?? signal;
+  // A caller's own signal narrows the bound one, never replaces it: a closed
+  // workspace ends a read whatever the call was handed.
+  const signalOf = (options?: ProjectReadOptions) => {
+    const own = options?.signal;
+    if (!own || !signal || own === signal) return own ?? signal;
+    return AbortSignal.any([own, signal]);
+  };
 
   const contain = async (target: string, active: AbortSignal | undefined): Promise<string> => {
     active?.throwIfAborted();
@@ -67,9 +73,33 @@ export function createWorkspaceReader(root: string, signal?: AbortSignal): Proje
       throw error;
     }
     try {
-      const opened = await handle.stat();
+      // What was opened must be what containment resolved. Windows has no
+      // O_NOFOLLOW, so a leaf swapped for a link out of the worktree is caught
+      // by comparing the descriptor with what stands at the path; an ancestor
+      // swapped and left in place, by resolving the path again. As in
+      // `readBoundedSource`, a swap undone between the two is not caught.
+      const [opened, entry, again] = await Promise.all([
+        handle.stat({ bigint: true }),
+        fs.lstat(real, { bigint: true }).catch(() => null),
+        fs.realpath(real).catch(() => null),
+      ]);
+      active?.throwIfAborted();
+      if (
+        !entry ||
+        entry.isSymbolicLink() ||
+        entry.dev !== opened.dev ||
+        entry.ino !== opened.ino ||
+        again !== real
+      ) {
+        throw outsideWorkspace();
+      }
       if (!opened.isFile()) return { status: "not-a-file" };
-      const bytes = await readBoundedFromHandle(handle, opened.size, options.limitBytes, active);
+      const bytes = await readBoundedFromHandle(
+        handle,
+        Number(opened.size),
+        options.limitBytes,
+        active
+      );
       if (bytes === null) return { status: "too-large" };
       const text = decoder.decode(bytes);
       // A BOM would fail `JSON.parse`; every other caller reads config text.

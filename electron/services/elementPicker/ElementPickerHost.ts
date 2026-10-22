@@ -21,7 +21,7 @@ import { ElementPickerHostError, type ElementPickerHostErrorCode } from "./error
 import { HostOutboundSchema, type HostInbound } from "./hostProtocol.js";
 import { unavailableResponse } from "./outcomes.js";
 import { isStrictlyInside } from "./containment.js";
-import type { ProjectContextService } from "./projectAdapters/projectContext.js";
+import { ProjectContextService } from "./projectAdapters/projectContext.js";
 import type { ProjectAdapterRegistration } from "./projectAdapters/types.js";
 import {
   JobSourceAccess,
@@ -205,7 +205,7 @@ export class ElementPickerHost {
   private readonly disposeKillMs: number;
   private readonly projectAdapters: readonly ProjectAdapterRegistration[] | undefined;
   private readonly projectContextDeadlineMs: number | undefined;
-  private projectContext: Promise<ProjectContextService> | null = null;
+  private projectContext: ProjectContextService | null = null;
   private current: Generation | null = null;
   private generations = 0;
   private nextJobId = 1;
@@ -350,28 +350,13 @@ export class ElementPickerHost {
     if (this.disposed) return { status: "unavailable", reason: "cancelled" };
     const workspace = this.workspaces.get(workspaceId);
     if (!workspace) return { status: "unavailable", reason: "unknown-workspace" };
-    let service: ProjectContextService;
-    try {
-      service = await this.loadProjectContext();
-    } catch (error) {
-      logWarn(`${P} Project context failed to load`, { error: String(error) });
-      return { status: "unavailable", reason: "failed" };
-    }
-    return service.describe(workspace, url, options.signal);
-  }
-
-  /** Loaded on the first request for context, so a picker that never asks for it pays nothing. */
-  private loadProjectContext(): Promise<ProjectContextService> {
-    this.projectContext ??= import("./projectAdapters/projectContext.js").then(
-      ({ ProjectContextService: Service }) =>
-        new Service({ adapters: this.projectAdapters, deadlineMs: this.projectContextDeadlineMs }),
-      (error: unknown) => {
-        // Not cached: a failed load must not disable project context for the session.
-        this.projectContext = null;
-        throw error;
-      }
-    );
-    return this.projectContext;
+    // The service is small and loads with the host; what each adapter brings
+    // loads behind its registration, only for an app that adapter detects.
+    this.projectContext ??= new ProjectContextService({
+      adapters: this.projectAdapters,
+      deadlineMs: this.projectContextDeadlineMs,
+    });
+    return this.projectContext.describe(workspace, url, options.signal);
   }
 
   /**

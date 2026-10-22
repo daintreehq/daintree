@@ -176,34 +176,44 @@ describe("ProjectContextService", () => {
   });
 
   it("aborts the adapter's reads once the request has settled", async () => {
-    let signal: AbortSignal | undefined;
-    await service(
+    let entered!: (signal: AbortSignal) => void;
+    const entry = new Promise<AbortSignal>((resolve) => (entered = resolve));
+    const caller = new AbortController();
+    const pending = service(
       registration(async (request) => {
-        signal = request.signal;
+        entered(request.signal);
         return never();
-      }),
-      50
-    ).describe(workspaceAt(), "http://localhost/");
+      })
+    ).describe(workspaceAt(), "http://localhost/", caller.signal);
 
-    expect(signal?.aborted).toBe(true);
+    const signal = await entry;
+    expect(signal.aborted).toBe(false);
+    caller.abort();
+
+    await expect(pending).resolves.toEqual({ status: "unavailable", reason: "cancelled" });
+    expect(signal.aborted).toBe(true);
   });
 
   it("frees a hung adapter's slot at the deadline, so hangs cannot wedge later requests", async () => {
-    let calls = 0;
-    const hangsThenAnswers = service(
-      registration(async () =>
-        ++calls <= PROJECT_CONTEXT_ADMISSION.concurrent ? never() : CONTEXT
-      ),
-      50
+    let entered = 0;
+    const hangs = service(
+      registration(async ({ pathname }) => {
+        if (pathname !== "/hang") return CONTEXT;
+        entered += 1;
+        return never();
+      }),
+      1_000
     );
     const hung = Array.from({ length: PROJECT_CONTEXT_ADMISSION.concurrent }, () =>
-      hangsThenAnswers.describe(workspaceAt(), "http://localhost/")
+      hangs.describe(workspaceAt(), "http://localhost/hang")
     );
+    // Every slot is held by an adapter that will never answer.
+    await vi.waitFor(() => expect(entered).toBe(PROJECT_CONTEXT_ADMISSION.concurrent));
 
     await expect(Promise.all(hung)).resolves.toEqual(
       hung.map(() => ({ status: "unavailable", reason: "budget-exhausted" }))
     );
-    await expect(hangsThenAnswers.describe(workspaceAt(), "http://localhost/")).resolves.toEqual({
+    await expect(hangs.describe(workspaceAt(), "http://localhost/")).resolves.toEqual({
       status: "described",
       context: CONTEXT,
     });

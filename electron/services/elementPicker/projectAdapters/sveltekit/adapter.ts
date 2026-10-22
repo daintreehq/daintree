@@ -12,6 +12,11 @@ import type { ProjectAdapter } from "../types.js";
 import { inspectProject } from "./index.js";
 import type { ProjectModel, RouteNode } from "./model.js";
 
+/** Prose only: a path or a route id is never shortened into one that names something else. */
+function clip(text: string, limit: number): string {
+  return text.length <= limit ? text : `${text.slice(0, limit - 1)}…`;
+}
+
 function isTruncated(model: ProjectModel): boolean {
   return (
     model.routeDiagnostics?.some((diagnostic) => diagnostic.code === "traversal-truncated") ?? false
@@ -61,10 +66,12 @@ export const sveltekitAdapter: ProjectAdapter = {
       signal,
     });
     const match = routeFor(model, pathname);
-    const route: ProjectRoute | null = match && {
-      routeId: match.routeId,
-      files: routeFiles(match, roots, workspaceId),
-    };
+    // A route id too long for the contract is withheld, not cut: the rest of
+    // the context still stands without it.
+    const route: ProjectRoute | null =
+      match && match.routeId.length <= PROJECT_CONTEXT_LIMITS.routeIdLength
+        ? { routeId: match.routeId, files: routeFiles(match, roots, workspaceId) }
+        : null;
     return {
       adapter: "sveltekit",
       appPath: toWorktreeRelative(roots.worktreePath, roots.appRoot),
@@ -78,17 +85,19 @@ export const sveltekitAdapter: ProjectAdapter = {
       toolchain: {
         versions: model.versions,
         verdict: support.verdict.level,
-        reasons: (support.verdict.level === "untested" ? support.verdict.reasons : []).slice(
-          0,
-          PROJECT_CONTEXT_LIMITS.reasons
-        ),
+        reasons: (support.verdict.level === "untested" ? support.verdict.reasons : [])
+          .slice(0, PROJECT_CONTEXT_LIMITS.reasons)
+          .map((reason) => clip(reason, PROJECT_CONTEXT_LIMITS.reasonLength)),
         missingInstall: support.missingInstall,
       },
       diagnostics: (model.routeDiagnostics ?? [])
         .slice(0, PROJECT_CONTEXT_LIMITS.diagnostics)
         .map((diagnostic) => ({
-          ...diagnostic,
-          files: diagnostic.files.slice(0, PROJECT_CONTEXT_LIMITS.diagnosticFiles),
+          code: diagnostic.code,
+          message: clip(diagnostic.message, PROJECT_CONTEXT_LIMITS.messageLength),
+          files: diagnostic.files
+            .filter((file) => file.length <= PROJECT_CONTEXT_LIMITS.pathLength)
+            .slice(0, PROJECT_CONTEXT_LIMITS.diagnosticFiles),
         })),
     };
   },

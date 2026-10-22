@@ -701,24 +701,30 @@ describe("ElementPickerHost project context", () => {
 
   it("answers a selection while a project adapter hangs, and settles the hang at its deadline", async () => {
     fs.writeFileSync(path.join(root, "app", "package.json"), kitManifest);
+    let entered!: () => void;
+    const adapterRunning = new Promise<void>((resolve) => (entered = resolve));
     const { host } = harness(undefined, {
-      projectAdapters: adapters(() => new Promise<never>(() => {})),
-      projectContextDeadlineMs: 300,
+      projectAdapters: adapters(() => {
+        entered();
+        return new Promise<never>(() => {});
+      }),
+      projectContextDeadlineMs: 1_000,
     });
     const id = await workspace(host);
-    const settled: string[] = [];
+    let contextSettled = false;
+    const context = host.describeProject(id, "http://localhost:5173/blog").finally(() => {
+      contextSettled = true;
+    });
+    // The adapter is inside its walk, holding a context slot, before the selection arrives.
+    await adapterRunning;
 
-    const context = host
-      .describeProject(id, "http://localhost:5173/blog")
-      .then((outcome) => (settled.push("context"), outcome));
     const response = await host.resolve(
       request(id, [observation("el-1", [candidate("c-1", "app/src/App.svelte")])])
     );
-    settled.push("resolve");
 
     expect(results(response)[0]).toMatchObject({ state: "verified", candidateId: "c-1" });
+    expect(contextSettled).toBe(false);
     await expect(context).resolves.toEqual({ status: "unavailable", reason: "budget-exhausted" });
-    expect(settled).toEqual(["resolve", "context"]);
   });
 
   it("reads context without starting the resolver process, and a resolve never consults it", async () => {

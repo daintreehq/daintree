@@ -96,4 +96,16 @@ describe("createWorkspaceReader", () => {
     ).rejects.toBeDefined();
     await expect(reader.readdir(root)).rejects.toBeDefined();
   });
+
+  it("stops at the bound signal even when a call hands over a live one of its own", async () => {
+    const workspace = new AbortController();
+    const reader = createWorkspaceReader(root, workspace.signal);
+    workspace.abort();
+    const live = new AbortController().signal;
+
+    await expect(
+      readTextFile(reader, path.join(root, "app", "package.json"), { signal: live })
+    ).rejects.toBeDefined();
+    await expect(reader.stat(root, { signal: live })).rejects.toBeDefined();
+  });
 });

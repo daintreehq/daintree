@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { join } from "node:path";
-import { ProjectContextSchema } from "../../../../../../shared/elementPicker/projectContext.js";
+import {
+  PROJECT_CONTEXT_LIMITS,
+  ProjectContextSchema,
+} from "../../../../../../shared/elementPicker/projectContext.js";
 import type { ProjectFileReader } from "../../fs.js";
 import { sveltekitAdapter } from "../adapter.js";
 import { sveltekitProjectAdapter } from "../registration.js";
@@ -114,6 +117,26 @@ describe("the SvelteKit project adapter", () => {
 
     expect(context.toolchain.verdict).toBe("untested");
     expect(context.toolchain.missingInstall.length).toBeGreaterThan(0);
+  });
+
+  it("stays inside the contract when the project hands it strings longer than the contract allows", async () => {
+    const segment = "a".repeat(PROJECT_CONTEXT_LIMITS.routeIdLength);
+    const range = `^2.0.0 || ${"x".repeat(PROJECT_CONTEXT_LIMITS.reasonLength)}`;
+    const reader = createMemoryReader({
+      "/repo/package.json": JSON.stringify({ devDependencies: { "@sveltejs/kit": range } }),
+      "/repo/src/routes/+page.svelte": "<h1>Home</h1>",
+      [`/repo/src/routes/${segment}/+page.svelte`]: "<h1>Long</h1>",
+    });
+
+    const long = await describeApp("/repo", `/${segment}`, { reader });
+    const home = await describeApp("/repo", "/", { reader });
+
+    expect(ProjectContextSchema.safeParse(long).success).toBe(true);
+    // Withheld rather than cut short into the id of some other route.
+    expect(long.route).toBeNull();
+    expect(home.route?.routeId).toBe("/");
+    const declared = long.toolchain.reasons.find((reason) => reason.includes("@sveltejs/kit"));
+    expect(declared?.endsWith("…")).toBe(true);
   });
 
   it("ends as an abort rather than as an empty reading", async () => {
