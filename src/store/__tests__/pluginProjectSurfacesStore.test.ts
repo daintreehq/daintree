@@ -895,6 +895,32 @@ describe("a save that fails after something newer", () => {
     expect(canvasChoice()).toBe("surface");
   });
 
+  it("still offers the retry when only an unrelated change landed meanwhile", async () => {
+    let current = snapshot({ revision: 1, slots: ownedBy() });
+    let fail!: (error: Error) => void;
+    const bridge = installBridge(() => Promise.resolve(current), {
+      setChoice: () =>
+        new Promise<ProjectSurfacesSnapshot>((_resolve, reject) => {
+          fail = reject;
+        }),
+    });
+    state().init();
+    await flush();
+
+    const pending = state().setSurfaceChoice("emptyCanvas", "stock");
+    // Another plugin's claim was refused while the save was in flight: the
+    // slot state moved, the answers did not.
+    current = snapshot({ revision: 2, slots: ownedBy() });
+    bridge.surfaceListeners[0]?.({ projectId: PROJECT, revision: 2 });
+    await flush();
+    fail(new Error("ENOSPC"));
+    await pending;
+
+    expect(selectFailedSave(state(), "emptyCanvas")?.updates).toEqual([
+      { slot: "emptyCanvas", choice: "stock", ownerId: claim.pluginId },
+    ]);
+  });
+
   it("keeps the retry of the latest save when an earlier one fails after it", async () => {
     let failFirst!: (error: Error) => void;
     let saves = 0;

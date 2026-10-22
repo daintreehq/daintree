@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { StrictMode } from "react";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, render, screen, within } from "@testing-library/react";
 import { registerPanelKind, unregisterPanelKind } from "@shared/config/panelKindRegistry";
@@ -173,15 +174,18 @@ function seed(choices: ProjectSurfaceChoices = {}, homeOwner = OWNER) {
   });
 }
 
-function Frames({ slots }: { slots: ProjectSurfaceSlot[] }) {
+/** Frames for `slots`, keyed by `keys` when given so a test can drop any one of them. */
+function Frames({ slots, keys }: { slots: ProjectSurfaceSlot[]; keys?: string[] }) {
   return (
-    <TooltipProvider>
-      {slots.map((slot, index) => (
-        <ProjectSurfaceFrame key={`${slot}-${index}`} slot={slot}>
-          <div />
-        </ProjectSurfaceFrame>
-      ))}
-    </TooltipProvider>
+    <StrictMode>
+      <TooltipProvider>
+        {slots.map((slot, index) => (
+          <ProjectSurfaceFrame key={keys?.[index] ?? `${slot}-${index}`} slot={slot}>
+            <div />
+          </ProjectSurfaceFrame>
+        ))}
+      </TooltipProvider>
+    </StrictMode>
   );
 }
 
@@ -261,15 +265,21 @@ describe("the shared consent notice", () => {
     expect(frames()[0]?.notice?.textContent).toContain("set up this project: Empty canvas, Home");
   });
 
-  it("asks once when the same slot is framed twice, and keeps asking when one goes", () => {
+  it("asks once when the same slot is framed twice, and hands it on when the asking frame goes", () => {
     seed(Object.fromEntries([[HOME, kept]]));
-    const { rerender } = render(<Frames slots={["emptyCanvas", "emptyCanvas"]} />);
+    const { rerender } = render(
+      <Frames slots={["emptyCanvas", "emptyCanvas"]} keys={["first", "second"]} />
+    );
 
+    // StrictMode replays every effect: the registry must still see two frames.
     expect(screen.getAllByRole("status")).toHaveLength(1);
     expect(frames()[0]?.notice).not.toBeNull();
+    expect(frames()[1]?.notice).toBeNull();
 
-    rerender(<Frames slots={["emptyCanvas"]} />);
+    // The frame asking goes; the one left behind takes the question over.
+    rerender(<Frames slots={["emptyCanvas"]} keys={["second"]} />);
     expect(screen.getAllByRole("status")).toHaveLength(1);
+    expect(frames()[0]?.notice).not.toBeNull();
 
     rerender(<Frames slots={[]} />);
     expect(screen.queryByRole("status")).toBeNull();
