@@ -79,16 +79,38 @@ interface IdentityState {
   loadRequest: number;
   /** The draft text recovery storage last acknowledged or handed back. */
   storedDraftText: string | null;
+  /** Puts minted at or below this were overtaken by a delete, so their acknowledgement is void. */
+  clearedAtGeneration: number;
 }
 const identities = new Map<string, IdentityState>();
 
 function identityState(key: string): IdentityState {
   let shared = identities.get(key);
   if (!shared) {
-    shared = { generation: 0, controllers: new Set(), loadRequest: 0, storedDraftText: null };
+    shared = {
+      generation: 0,
+      controllers: new Set(),
+      loadRequest: 0,
+      storedDraftText: null,
+      clearedAtGeneration: Number.NEGATIVE_INFINITY,
+    };
     identities.set(key, shared);
   }
   return shared;
+}
+
+function acknowledgeStored(key: string, text: string, generation: number): void {
+  const shared = identityState(key);
+  if (generation <= shared.clearedAtGeneration) return;
+  shared.storedDraftText = text;
+  for (const controller of shared.controllers) controller.publishProjection();
+}
+
+function invalidateStored(key: string, generation: number): void {
+  const shared = identityState(key);
+  shared.storedDraftText = null;
+  shared.clearedAtGeneration = Math.max(shared.clearedAtGeneration, generation);
+  for (const controller of shared.controllers) controller.publishProjection();
 }
 
 /** A controller still bound to this document, if any. */
@@ -275,7 +297,7 @@ export class DocumentController {
     }
   }
 
-  private publishProjection(): void {
+  publishProjection(): void {
     if (this.disposed) return;
     const record = this.record();
     useFileDocumentStore.getState().setFileDocument(this.panelId, {
@@ -743,19 +765,14 @@ export class DocumentController {
     const draft = this.draftRecord(this.record());
     if (this.disposed || !draft) return;
     let result: DraftPutResult;
+    const generation = this.nextGeneration();
     try {
-      result = await invoke<DraftPutResult>(CHANNELS.draftPut, {
-        record: draft,
-        generation: this.nextGeneration(),
-      });
+      result = await invoke<DraftPutResult>(CHANNELS.draftPut, { record: draft, generation });
     } catch (error) {
       result = { status: "error", message: formatErrorMessage(error, "Draft could not be stored") };
     }
+    if (result.status === "stored") acknowledgeStored(this.key, draft.draftText, generation);
     if (this.disposed) return;
-    if (result.status === "stored") {
-      identityState(this.key).storedDraftText = draft.draftText;
-      this.publishProjection();
-    }
     const warning =
       result.status === "full"
         ? "Draft recovery storage is full, so this draft lives only in this panel until you save it"
@@ -769,10 +786,12 @@ export class DocumentController {
 
   /** Remove the recovery record. Resolves false when main could not. */
   private async deleteStoredDraft(): Promise<boolean> {
+    const generation = this.nextGeneration();
+    invalidateStored(this.key, generation);
     try {
       await invoke(CHANNELS.draftDelete, {
         identity: this.identity,
-        generation: this.nextGeneration(),
+        generation,
       });
       return true;
     } catch (error) {
@@ -820,8 +839,10 @@ export class DocumentController {
     const record = useDocumentStateStore.getState().records[this.key];
     const draft = record ? this.draftRecord(record) : null;
     if (!draft) return;
+    const generation = mintGeneration(this.key);
     try {
-      await invoke(CHANNELS.draftPut, { record: draft, generation: mintGeneration(this.key) });
+      const result = await invoke<DraftPutResult>(CHANNELS.draftPut, { record: draft, generation });
+      if (result.status === "stored") acknowledgeStored(this.key, draft.draftText, generation);
     } catch (error) {
       logError("[markdown-editor] final draft persist failed", error);
     }

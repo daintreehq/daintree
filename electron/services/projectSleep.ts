@@ -250,6 +250,16 @@ async function runSleep(
       }
     }
 
+    // A draft can start in the seconds the kill took, and the view it lives in
+    // is about to be destroyed. The terminals are already gone, so a hold here
+    // leaves the project open with the same restore markers a refusal after
+    // the kill always leaves.
+    const panelHoldBeforeEviction = await panelRefusal();
+    if (panelHoldBeforeEviction) {
+      logInfo("project-sleep-panel-hold-after-kill", { projectId, terminalsKilled });
+      return skip(panelHoldBeforeEviction);
+    }
+
     // A policy asks once more after the slowest await of all. A project picked
     // up (or leased) meanwhile keeps its markers — its PTYs are gone either
     // way, and the markers let the panels restore — but is not evicted, closed
@@ -266,18 +276,6 @@ async function runSleep(
     // bookkeeping, and letting one of them throw would strand the row as
     // "open" with dead terminals behind it. Each is isolated, and the status
     // write + broadcast below always run.
-    // A draft can start in the seconds the kill took, and the view it lives in
-    // is about to be destroyed. The terminals are already gone, so a hold here
-    // leaves the project open with the same restore markers a refusal after
-    // the kill always leaves.
-    const panelHoldBeforeEviction = await panelRefusal();
-    if (panelHoldBeforeEviction) {
-      logInfo("project-sleep-panel-hold-after-kill", { projectId, terminalsKilled });
-      return skip(panelHoldBeforeEviction);
-    }
-    const refusedAfterPanelRecheck = policyRefusal();
-    if (refusedAfterPanelRecheck) return skip(refusedAfterPanelRecheck);
-
     let rendererViewsEvicted = 0;
     try {
       // Skips a window where the project is on screen (guarded inside the

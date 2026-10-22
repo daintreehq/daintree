@@ -596,6 +596,31 @@ describe("DocumentController (#12323)", () => {
     expect(getFileDocumentProjection("panel-1")?.recoveryStored).toBe(false);
   });
 
+  it("drops the acknowledgement when the recovery record is deleted, so a retyped draft is not vouched for", async () => {
+    const controller = await open();
+    const recoverable = (id = "panel-1") => getFileDocumentProjection(id)?.recoveryStored;
+    controller.setText("# Plan\n\none\n");
+    await flush(1000);
+    expect(recoverable()).toBe(true);
+    controller.setText("# Plan\n");
+    await flush();
+    main.overrides.set(CHANNELS.draftPut, () => ({ status: "ignored" }));
+    controller.setText("# Plan\n\none\n");
+    await flush(1000);
+    expect(recoverable()).toBe(false);
+  });
+
+  it("republishes every panel on the document once recovery storage acknowledges the draft", async () => {
+    const first = await open();
+    const second = DocumentController.acquire({ ...PROPS, panelId: "panel-2" });
+    await flush();
+    first.setText("# Plan\n\nshared\n");
+    await flush(1000);
+    expect(getFileDocumentProjection("panel-1")?.recoveryStored).toBe(true);
+    expect(getFileDocumentProjection("panel-2")?.recoveryStored).toBe(true);
+    second.release();
+  });
+
   it("refuses a draft that grew past the byte ceiling and says so", async () => {
     const controller = await open();
     controller.setText("x".repeat(2 * 1024 * 1024 + 1));
