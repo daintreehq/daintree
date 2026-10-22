@@ -16,6 +16,7 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Skeleton, SkeletonText } from "@/components/ui/Skeleton";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { WorktreeDeleteNotes } from "@/components/Worktree/WorktreeDeleteNotes";
 import { isCautionPreviewLine, stripCautionPrefix } from "@/lib/mcpPreviewLines";
 import {
   MAIN_DISPATCH_DEADLINE_MS,
@@ -397,6 +398,16 @@ export function McpConfirmDialog() {
           title={current.previewTitle ?? "Working tree changes"}
           state={previewState}
           lines={current.preview ?? []}
+        />
+      )}
+
+      {current.worktreeDeleteNotesTargetId !== undefined && (
+        // Keyed per request so a promoted request asks afresh and a late
+        // answer for the previous one has nowhere to land.
+        <WorktreeDeleteNotes
+          key={`notes:${current.requestId}`}
+          worktreeId={current.worktreeDeleteNotesTargetId}
+          heading="Notes from plugins"
         />
       )}
 

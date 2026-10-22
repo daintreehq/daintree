@@ -367,6 +367,62 @@ describe("viewless actions", () => {
       expect(ask.lines[0]).toMatch(/Could not verify current changes/);
       expect(ask.lines.some((line) => /teardown may also run/.test(line))).toBe(true);
     });
+
+    it("puts the plugins' notes to the person alongside the host's preview (#13805)", async () => {
+      const { deps, hosts } = setup();
+      const collectWorktreeDeleteNotes = vi.fn(async () => [
+        {
+          pluginId: "acme.sync",
+          pluginName: "Acme Sync",
+          answer: {
+            status: "answered" as const,
+            notes: [{ severity: "info" as const, text: "Last synced an hour ago" }],
+          },
+        },
+        {
+          pluginId: "acme.deploy",
+          pluginName: "Acme Deploy",
+          answer: { status: "no-answer" as const },
+        },
+      ]);
+      const requestApproval = vi.fn(async (_ask: ViewlessApprovalAsk) => ({
+        decision: "rejected" as const,
+      }));
+
+      await executeViewlessAction(
+        { ...request("worktree.delete", deleteArgs), requestApproval },
+        { ...deps, collectWorktreeDeleteNotes }
+      );
+
+      expect(collectWorktreeDeleteNotes).toHaveBeenCalledWith(PROJECT.id, "/repo-wt/feature");
+      const [ask] = requestApproval.mock.calls[0]!;
+      expect(ask.lines).toEqual([
+        "No uncommitted changes.",
+        "Acme Sync: Last synced an hour ago",
+        "Acme Deploy didn't answer.",
+      ]);
+
+      // A foreign worktree is refused before any plugin is told about it.
+      collectWorktreeDeleteNotes.mockClear();
+      hosts.isWorktreeOwnedByProject.mockResolvedValueOnce(false);
+      await executeViewlessAction(
+        { ...request("worktree.delete", deleteArgs), requestApproval },
+        { ...deps, collectWorktreeDeleteNotes }
+      );
+      expect(collectWorktreeDeleteNotes).not.toHaveBeenCalled();
+    });
+
+    it("still asks when the notes can't be collected", async () => {
+      const { deps } = setup();
+      const requestApproval = vi.fn(async (_ask: ViewlessApprovalAsk) => ({
+        decision: "rejected" as const,
+      }));
+      await executeViewlessAction(
+        { ...request("worktree.delete", deleteArgs), requestApproval },
+        { ...deps, collectWorktreeDeleteNotes: async () => Promise.reject(new Error("down")) }
+      );
+      expect(requestApproval.mock.calls[0]![0].lines).toEqual(["No uncommitted changes."]);
+    });
   });
 
   it("answers null for a workspace that is not a registered project", async () => {

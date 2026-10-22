@@ -735,6 +735,14 @@ export interface StoreSchema {
   pluginContextProvidersOff?: string[];
 
   /**
+   * Plugin instance ids whose worktree delete notes the user turned off
+   * (#13805). Read and written only through
+   * `services/plugin/pluginWorktreeDeleteNoteMutes.ts`. Same scoping and
+   * additive-key convention as `pluginNotificationSilences`.
+   */
+  pluginWorktreeDeleteNoteMutes?: string[];
+
+  /**
    * Per-project presentation profiles (#13771): the levels the user set or
    * accepted for each built-in surface, and their answer to the repository's
    * `.daintree/presentation.json` suggestion. Read and written only through
@@ -1089,6 +1097,7 @@ const storeOptions = {
     pluginNotificationSilences: [],
     hiddenSearchProviders: [],
     pluginContextProvidersOff: [],
+    pluginWorktreeDeleteNoteMutes: [],
     projectPresentation: {},
     worktreeCustomTitles: {},
     projectAgentMcpEnablement: {},

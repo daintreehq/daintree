@@ -114,6 +114,11 @@ import {
   scopeMatchesPattern,
 } from "../fileDecorationRegistry.js";
 import {
+  registerWorktreeDeleteNotesBinding,
+  unregisterWorktreeDeleteNotesBinding,
+  type WorktreeDeleteNotesBinding,
+} from "./worktreeDeleteNotesRegistry.js";
+import {
   isWorktreeSetupStepDeclared,
   registerWorktreeSetupStepHandler,
   unregisterWorktreeSetupStepHandler,
@@ -2573,6 +2578,53 @@ export function createHost(
         unregisterFileDecorationProviderImpl(pluginId, contributionId, impl)
       );
       return Promise.resolve(dispose);
+    },
+    registerWorktreeDeleteNotesProvider: (descriptor, impl) => {
+      if (revoked) {
+        throw new Error(
+          `Plugin "${pluginId}" host revoked: registerWorktreeDeleteNotesProvider called after activate() returned or timed out`
+        );
+      }
+      if (!descriptor || typeof descriptor !== "object") {
+        throw new Error(
+          `Plugin "${pluginId}" registerWorktreeDeleteNotesProvider: descriptor must be an object`
+        );
+      }
+      if (typeof descriptor.id !== "string" || descriptor.id.length === 0) {
+        throw new Error(
+          `Plugin "${pluginId}" registerWorktreeDeleteNotesProvider: descriptor.id must be a non-empty string`
+        );
+      }
+      if (!impl || typeof impl !== "object" || typeof impl.provideNotes !== "function") {
+        throw new Error(
+          `Plugin "${pluginId}" registerWorktreeDeleteNotesProvider: impl must expose provideNotes()`
+        );
+      }
+      // The manifest is how the host knows to ask (and activate) this plugin
+      // when a delete is confirmed, so a check it doesn't declare could never
+      // be reached. Refuse it rather than hold an orphan.
+      const contributionId = descriptor.id;
+      const declared = deps.plugins
+        .get(pluginId)
+        ?.manifest.contributes.worktreeDeleteNotes?.some((c) => c.id === contributionId);
+      if (!declared) {
+        throw new Error(
+          `Plugin "${pluginId}" registerWorktreeDeleteNotesProvider: descriptor.id "${contributionId}" is not declared in contributes.worktreeDeleteNotes`
+        );
+      }
+      // The second argument is the host's deadline. Only a worker plugin's
+      // bridge proxy reads it, to release its pending invoke; the public impl
+      // takes the worktree alone.
+      const provideNotes = impl.provideNotes as WorktreeDeleteNotesBinding["provideNotes"];
+      const binding: WorktreeDeleteNotesBinding = {
+        contributionId,
+        provideNotes: (worktree, signal) => provideNotes.call(impl, worktree, signal),
+      };
+      registerWorktreeDeleteNotesBinding(pluginId, binding);
+      // Not tracked with the plugin's event subscriptions: those hold a worker
+      // against idle disposal, and the check exists so the plugin need not stay
+      // loaded. Unload and worker teardown clear the binding instead.
+      return Promise.resolve(() => unregisterWorktreeDeleteNotesBinding(pluginId, binding));
     },
     registerWorktreeSetupStep: (stepId, handler) => {
       if (revoked) {

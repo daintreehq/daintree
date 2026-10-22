@@ -22,6 +22,7 @@ import type {
 } from "../../../shared/types/worktree.js";
 import type { WorktreeChanges } from "../../../shared/types/git.js";
 import type { SubmoduleDeleteRisk } from "../../../shared/types/submodule.js";
+import type { WorktreeDeleteNotesReport } from "../../../shared/types/plugin.js";
 import { getDefaultPanelTitle, panelKindHasPty } from "../../../shared/config/panelKindRegistry.js";
 import {
   readDispatchTerminalCommand,
@@ -195,6 +196,11 @@ export interface ViewlessDeps {
   hostPlatform: ViewlessHostPlatform;
   /** Pacing for key presses and readiness polls; real timers outside tests. */
   sleep(ms: number): Promise<void>;
+  /** The plugins' notes on a worktree about to be deleted, each bounded by its deadline (#13805). */
+  collectWorktreeDeleteNotes(
+    projectId: string,
+    worktreeId: string
+  ): Promise<WorktreeDeleteNotesReport[]>;
 }
 
 export interface ViewlessActionRequest {

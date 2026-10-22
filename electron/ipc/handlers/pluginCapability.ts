@@ -22,7 +22,10 @@ import {
   PluginConsentOutcomeSchema,
   PluginFrontendMethod,
 } from "../../services/plugin/pluginFrontendRequests.js";
-import { projectIdFromPluginInstanceKey } from "../../services/plugin/projectPluginIdentity.js";
+import {
+  isSafePluginInstanceId,
+  projectIdFromPluginInstanceKey,
+} from "../../services/plugin/projectPluginIdentity.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import {
   EXTERNAL_LINK_CONSENT,
@@ -36,7 +39,13 @@ import {
   type PluginOsNotificationsUpdate,
   type PluginProjectTargetingQuery,
   type PluginProjectTargetingUpdate,
+  type PluginWorktreeDeleteNotesQuery,
+  type PluginWorktreeDeleteNotesUpdate,
 } from "../../../shared/types/pluginCapabilityConsent.js";
+import {
+  isWorktreeDeleteNotesMuted,
+  setWorktreeDeleteNotesEnabled,
+} from "../../services/plugin/pluginWorktreeDeleteNoteMutes.js";
 
 // --- Consent bridge (main → renderer prompt, renderer → main decision) --------
 //
@@ -429,6 +438,31 @@ export async function handleSetOsNotifications(
   return store.hasGrant(identity);
 }
 
+function worktreeDeleteNotesPluginId(pluginId: unknown): string {
+  if (typeof pluginId !== "string" || !isSafePluginInstanceId(pluginId)) {
+    throw new Error("pluginId must be a plugin instance id");
+  }
+  return pluginId;
+}
+
+/** Read a plugin's "Show notes when deleting a worktree" switch (#13805). On unless turned off. */
+export async function handleGetWorktreeDeleteNotes(
+  input: PluginWorktreeDeleteNotesQuery
+): Promise<boolean> {
+  return !isWorktreeDeleteNotesMuted(worktreeDeleteNotesPluginId(input?.pluginId));
+}
+
+/** Flip a plugin's "Show notes when deleting a worktree" switch (#13805) and return it as stored. */
+export async function handleSetWorktreeDeleteNotes(
+  input: PluginWorktreeDeleteNotesUpdate
+): Promise<boolean> {
+  const pluginId = worktreeDeleteNotesPluginId(input?.pluginId);
+  if (typeof input.enabled !== "boolean") {
+    throw new Error("enabled must be a boolean");
+  }
+  return setWorktreeDeleteNotesEnabled(pluginId, input.enabled);
+}
+
 export const pluginCapabilityNamespace = defineIpcNamespace({
   name: "pluginCapability",
   ops: {
@@ -455,6 +489,14 @@ export const pluginCapabilityNamespace = defineIpcNamespace({
     setOsNotifications: op(
       PLUGIN_CAPABILITY_METHOD_CHANNELS.setOsNotifications,
       handleSetOsNotifications
+    ),
+    getWorktreeDeleteNotes: op(
+      PLUGIN_CAPABILITY_METHOD_CHANNELS.getWorktreeDeleteNotes,
+      handleGetWorktreeDeleteNotes
+    ),
+    setWorktreeDeleteNotes: op(
+      PLUGIN_CAPABILITY_METHOD_CHANNELS.setWorktreeDeleteNotes,
+      handleSetWorktreeDeleteNotes
     ),
   },
 });

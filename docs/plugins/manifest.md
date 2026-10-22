@@ -341,7 +341,7 @@ List `"onStartupFinished"` to opt a plugin into eager activation when it genuine
 
 ### `contributes`
 
-Object containing an array per contribution type (`panels`, `toolbarButtons`, `menuItems`, `keybindings`, `contextMenus`, `commands`, `views`, `mcpServers`, `agentMcp`, `databases`, `tours`, `skills`, `forgeProviders`, `fileDecorationProviders`, `agents`, `processTools`, `settings`, `recipes`, `promptTemplates`, `worktreeSetupSteps`, `terminalLinks`, `contextProviders`, and the built-in-only `fileEditors`, `previewTools`, `guestAdapters`) — plus the non-array `surfaces` and `account` objects. All are optional; unlisted types default to empty. Each array has an upper bound (`MANIFEST_CONTRIBUTION_CAPS` in `electron/schemas/plugin.ts`) generous for any real plugin and there to reject pathological manifests:
+Object containing an array per contribution type (`panels`, `toolbarButtons`, `menuItems`, `keybindings`, `contextMenus`, `commands`, `views`, `mcpServers`, `agentMcp`, `databases`, `tours`, `skills`, `forgeProviders`, `fileDecorationProviders`, `worktreeDeleteNotes`, `agents`, `processTools`, `settings`, `recipes`, `promptTemplates`, `worktreeSetupSteps`, `terminalLinks`, `contextProviders`, and the built-in-only `fileEditors`, `previewTools`, `guestAdapters`) — plus the non-array `surfaces` and `account` objects. All are optional; unlisted types default to empty. Each array has an upper bound (`MANIFEST_CONTRIBUTION_CAPS` in `electron/schemas/plugin.ts`) generous for any real plugin and there to reject pathological manifests:
 
 | Contribution              | Max entries                               |
 | ------------------------- | ----------------------------------------- |
@@ -364,6 +364,7 @@ Object containing an array per contribution type (`panels`, `toolbarButtons`, `m
 | `tours`                   | 10                                        |
 | `forgeProviders`          | 20                                        |
 | `fileDecorationProviders` | 50                                        |
+| `worktreeDeleteNotes`     | 1                                         |
 | `agents`                  | 50                                        |
 | `processTools`            | 100                                       |
 | `settings`                | 200                                       |
@@ -389,6 +390,7 @@ A few notes on individual points; the [Contribution points reference](./contribu
 - `contextProviders` — an `@{prefix}:` the agent composer offers, answered by `host.registerContextProvider` from `activate()` and read when the user sends. No capability. See [Context providers](./contribution-points.md#context-providers--shipped).
 - `skills` and `recipes` — declarative content, requiring no capability. Skills are markdown served to agents through Daintree's own MCP server; recipes are named multi-terminal launch layouts, registered app-wide and immutable to the user. See [Skills](./contribution-points.md#skills--shipped) and [Recipes](./contribution-points.md#recipes--shipped).
 - `agents` — registers a launchable agent CLI as a selectable agent. Requires the `agent:register` capability; the schema rejects the contribution without it. An optional `detection` block wires it into the same agent-state UI built-in agents use.
+- `worktreeDeleteNotes` — one check that adds the plugin's notes to a worktree's delete confirmation, bound in `activate()` through [`host.registerWorktreeDeleteNotesProvider`](./host-api.md#registerworktreedeletenotesprovider). Declaring it is what lets a confirmation find, and activate, the plugin. Notes only annotate; they never change the delete. Requires no capability; allowed under `scope: "project"`. See [Worktree delete notes](./contribution-points.md#worktree-delete-notes--shipped).
 - `forgeProviders` and `fileDecorationProviders` — the manifest entry is read eagerly so the host's routing tables are populated before any plugin code runs; the implementation binds lazily in `activate()`. Forge providers are **built-in plugins only** — their host methods are synchronous and cannot cross the plugin worker's message port.
 - `surfaces` — **project-scope only.** An object, not an array: fixed slots a project-local plugin claims to replace one of the host's own surfaces for its own project. `emptyCanvas`, `projectHome` and `worktreeCreate` (each `{ "viewId": "..." }`) are the slots accepted today; `viewId` must name a declared `contributes.views` entry, and at most one plugin holds a slot per project: project plugins first, then the lower manifest id, whatever order they load in. A manifest without `"scope": "project"` that declares any surface is rejected. See [Project-local plugins → Surfaces](./project-local.md#surfaces).
 

@@ -74,8 +74,9 @@ function grantedCapabilities(plugin: LoadedPluginInfo) {
  * `LoadedPluginInfo`; this only presents it so users can audit what an installed
  * plugin is allowed to do without re-opening the install dialog.
  *
- * Only rendered when `granted` is non-empty (#11302) — a plugin that declares no
- * capabilities has no Permissions tab at all, so there's no empty branch here.
+ * Only rendered when `granted` is non-empty (#11302). A plugin that declares no
+ * capabilities has no Permissions tab unless it adds worktree delete notes,
+ * and then the tab holds that switch alone, so there's no empty branch here.
  */
 function PluginCapabilityList({
   plugin,
@@ -127,6 +128,15 @@ function PluginCapabilityList({
   );
 }
 
+interface GrantSwitchSpec {
+  label: string;
+  description: string;
+  read: (pluginId: string) => Promise<boolean>;
+  write: (pluginId: string, enabled: boolean) => Promise<boolean>;
+  /** What a failed "off" means, when it isn't "still on in memory, back after a restart". */
+  offFailedText?: string;
+}
+
 const GRANT_SWITCHES = {
   "project-targeting": {
     label: "Allow project targeting",
@@ -144,7 +154,19 @@ const GRANT_SWITCHES = {
     write: (pluginId: string, enabled: boolean) =>
       window.electron.pluginCapability.setOsNotifications({ pluginId, enabled }),
   },
-} as const;
+  // On by default, unlike the grants above: a note only annotates a delete the
+  // user still decides. Off means the plugin isn't asked at all (#13805).
+  "worktree-delete-notes": {
+    label: "Show notes when deleting a worktree",
+    description:
+      "Lets this plugin add notes to the confirmation when you delete a worktree. Notes never stop a delete.",
+    read: (pluginId: string) =>
+      window.electron.pluginCapability.getWorktreeDeleteNotes({ pluginId }),
+    write: (pluginId: string, enabled: boolean) =>
+      window.electron.pluginCapability.setWorktreeDeleteNotes({ pluginId, enabled }),
+    offFailedText: "Couldn't turn this off.",
+  },
+} satisfies Record<string, GrantSwitchSpec>;
 
 /**
  * A per-plugin grant the user turns on from the Plugin Manager: "Allow project
@@ -152,7 +174,8 @@ const GRANT_SWITCHES = {
  * capability only lets a plugin ask; this is the grant, off until the user
  * turns it on. Deliberately not a first-use prompt: the plugins that want them
  * orchestrate agents unattended, and a dialog at 3am would stall every launch
- * behind it.
+ * behind it. "Show notes when deleting a worktree" (#13805) shares the row but
+ * starts on.
  */
 function GrantSwitch({
   pluginId,
@@ -161,7 +184,7 @@ function GrantSwitch({
   pluginId: string;
   grant: keyof typeof GRANT_SWITCHES;
 }) {
-  const { label, description, read, write } = GRANT_SWITCHES[grant];
+  const { label, description, read, write, offFailedText }: GrantSwitchSpec = GRANT_SWITCHES[grant];
   const [enabled, setEnabled] = useState<boolean | null>(null);
   const [busy, setBusy] = useState(true);
   const [readFailed, setReadFailed] = useState(false);
@@ -219,7 +242,7 @@ function GrantSwitch({
   const errorId = `${switchId}-error`;
   const errorText =
     unsaved === false
-      ? "Couldn't save turning this off, so it will be back on after a restart."
+      ? (offFailedText ?? "Couldn't save turning this off, so it will be back on after a restart.")
       : unsaved === true
         ? "Couldn't turn this on."
         : readFailed
@@ -487,6 +510,7 @@ export function PluginDetailPane({
   const mcpServers = plugin.manifest.contributes.mcpServers ?? [];
   const hasMcpServers = mcpServers.length > 0;
   const granted = grantedCapabilities(plugin);
+  const hasWorktreeDeleteNotes = (plugin.manifest.contributes.worktreeDeleteNotes?.length ?? 0) > 0;
   const commands = plugin.manifest.contributes.commands ?? [];
   const panels = plugin.manifest.contributes.panels ?? [];
   const agents = plugin.manifest.contributes.agents ?? [];
@@ -543,7 +567,9 @@ export function PluginDetailPane({
   const tabs: SettingsSubtabItem[] = [
     { id: "overview", label: "Overview" },
     ...(hasSettings ? [{ id: "settings", label: "Settings" }] : []),
-    ...(granted.length > 0 ? [{ id: "capabilities", label: "Permissions" }] : []),
+    ...(granted.length > 0 || hasWorktreeDeleteNotes
+      ? [{ id: "capabilities", label: "Permissions" }]
+      : []),
     // Only plugins that actually contribute MCP servers get the runtime tab —
     // it surfaces subprocess health and restart, which is meaningless otherwise.
     ...(hasMcpServers ? [{ id: "mcp-servers", label: "MCP servers" }] : []),
@@ -889,7 +915,12 @@ export function PluginDetailPane({
         )}
 
         {currentTab === "capabilities" && (
-          <PluginCapabilityList plugin={plugin} granted={granted} />
+          <div className="space-y-2">
+            {granted.length > 0 && <PluginCapabilityList plugin={plugin} granted={granted} />}
+            {hasWorktreeDeleteNotes && (
+              <GrantSwitch pluginId={plugin.instanceId} grant="worktree-delete-notes" />
+            )}
+          </div>
         )}
 
         {currentTab === "mcp-servers" && hasMcpServers && (

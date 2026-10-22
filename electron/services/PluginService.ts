@@ -177,6 +177,9 @@ import {
   projectIdFromPluginInstanceKey,
   SIDEBAR_VIEW_DEFAULT_PRIORITY,
   type PluginHostedViewDescriptor,
+  type WorktreeDeleteNoteSource,
+  type WorktreeDeleteNotesAnswer,
+  type WorktreeDeleteNotesReport,
 } from "../../shared/types/plugin.js";
 import {
   PluginPanelLifecycleBroker,
@@ -301,6 +304,16 @@ import {
   unregisterFileDecorationProviderImpls,
   unregisterFileDecorationProviders,
 } from "./fileDecorationRegistry.js";
+import { unregisterWorktreeDeleteNotesBinding } from "./plugin/worktreeDeleteNotesRegistry.js";
+import {
+  collectWorktreeDeleteNotes as collectDeleteNotes,
+  getWorktreeDeleteNotes as getDeleteNotes,
+  listWorktreeDeleteNoteSources as listDeleteNoteSources,
+  type WorktreeDeleteNotesHost,
+  type WorktreeDeleteNotesTarget,
+} from "./plugin/worktreeDeleteNotes.js";
+import { isWorktreeDeleteNotesMuted } from "./plugin/pluginWorktreeDeleteNoteMutes.js";
+import { toPluginWorktreeSnapshot } from "../../shared/utils/pluginWorktreeSnapshot.js";
 import {
   registerWorktreeSetupSteps,
   unregisterWorktreeSetupStepHandlers,
@@ -4313,6 +4326,70 @@ export class PluginService {
     await Promise.allSettled(visible.map((id) => this.activatePlugin(id)));
   }
 
+  private worktreeDeleteNotesHost(): WorktreeDeleteNotesHost {
+    return {
+      plugins: this.plugins,
+      activatePlugin: (pluginId) => this.activatePlugin(pluginId),
+      readWorktree: (projectId, worktreeId) =>
+        this.readWorktreeForDeleteNotes(projectId, worktreeId),
+      isMuted: isWorktreeDeleteNotesMuted,
+    };
+  }
+
+  /** The plugins a delete confirmation in `projectId` asks for notes (#13805). */
+  listWorktreeDeleteNoteSources(projectId: string): WorktreeDeleteNoteSource[] {
+    return listDeleteNoteSources(this.worktreeDeleteNotesHost(), projectId);
+  }
+
+  /** One plugin's notes on one of `projectId`'s worktrees, activating it if need be (#13805). */
+  getWorktreeDeleteNotes(
+    projectId: string,
+    pluginId: string,
+    worktreeId: string
+  ): Promise<WorktreeDeleteNotesAnswer | null> {
+    return getDeleteNotes(this.worktreeDeleteNotesHost(), projectId, pluginId, worktreeId);
+  }
+
+  /** Every source's notes on one worktree, for a confirmation that can't stream (#13805). */
+  collectWorktreeDeleteNotes(
+    projectId: string,
+    worktreeId: string
+  ): Promise<WorktreeDeleteNotesReport[]> {
+    return collectDeleteNotes(this.worktreeDeleteNotesHost(), projectId, worktreeId);
+  }
+
+  /**
+   * The worktree a note check asks about, read from the confirmation's own
+   * project — never the ambient one an installed plugin's getters follow, which
+   * may be another window's.
+   */
+  private async readWorktreeForDeleteNotes(
+    projectId: string,
+    worktreeId: string
+  ): Promise<WorktreeDeleteNotesTarget> {
+    let projectRoot: string | undefined;
+    try {
+      const row = projectStore.getProjectById(projectId);
+      projectRoot = row?.status === "closed" ? undefined : row?.path;
+    } catch {
+      return { status: "unavailable" };
+    }
+    if (typeof projectRoot !== "string" || projectRoot.length === 0) return { status: "missing" };
+    const result = await this.fetchWorktreeSnapshotsForProjectResult(projectId, projectRoot);
+    if (result.status !== "ok") return { status: "unavailable" };
+    const snapshot = result.snapshots.find(
+      (candidate) => candidate.id === worktreeId || candidate.worktreeId === worktreeId
+    );
+    if (!snapshot) return { status: "missing" };
+    try {
+      const titles = this.readWorktreeCustomTitles(projectId);
+      const customTitle = Object.hasOwn(titles, snapshot.id) ? (titles[snapshot.id] ?? null) : null;
+      return { status: "ok", worktree: toPluginWorktreeSnapshot(snapshot, customTitle) };
+    } catch {
+      return { status: "unavailable" };
+    }
+  }
+
   /**
    * Append one line to a plugin's diagnostic ring buffer and mirror it to the
    * host console. `boundPlugin` is the {@link LoadedPlugin} the calling host
@@ -7556,6 +7633,9 @@ export class PluginService {
     runUnloadStep(pluginId, "unregisterContextProviderImpls", () =>
       unregisterContextProviderImpls(pluginId)
     );
+    runUnloadStep(pluginId, "unregisterWorktreeDeleteNotesBinding", () =>
+      unregisterWorktreeDeleteNotesBinding(pluginId)
+    );
     runUnloadStep(pluginId, "unregisterPluginSkills", () => unregisterPluginSkills(pluginId));
     runUnloadStep(pluginId, "unregisterPluginThemes", () => {
       if (!unregisterPluginThemes(pluginId)) return;
@@ -7981,6 +8061,9 @@ export class PluginService {
     );
     runUnloadStep(pluginId, "unregisterContextProviderImpls", () =>
       unregisterContextProviderImpls(pluginId)
+    );
+    runUnloadStep(pluginId, "unregisterWorktreeDeleteNotesBinding", () =>
+      unregisterWorktreeDeleteNotesBinding(pluginId)
     );
     runUnloadStep(pluginId, "cancelUiPrompts", () =>
       this.promptDispatcher.cancelForPlugin(pluginId)

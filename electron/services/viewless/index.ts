@@ -105,6 +105,11 @@ async function loadLiveDeps(): Promise<ViewlessDeps> {
       totalMemoryBytes: os.totalmem(),
     },
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    collectWorktreeDeleteNotes: async (projectId, worktreeId) => {
+      const { pluginService } = await import("../PluginService.js");
+      await pluginService.waitForInit();
+      return pluginService.collectWorktreeDeleteNotes(projectId, worktreeId);
+    },
   };
 }
 

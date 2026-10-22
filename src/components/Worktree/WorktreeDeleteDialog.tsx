@@ -5,6 +5,7 @@ import { TypedNameConfirmInput } from "@/components/ui/TypedNameConfirmInput";
 import { TitleEntity } from "@/components/ui/TitleEntity";
 import { AlertTriangle, Trash2 } from "lucide-react";
 import { PathText } from "@/components/Worktree/PathText";
+import { WorktreeDeleteNotes } from "@/components/Worktree/WorktreeDeleteNotes";
 import { useWorktreeTerminals } from "@/hooks/useWorktreeTerminals";
 import { collectRunningAgentTerminals } from "@/utils/destructiveSessionConfirm";
 import { deriveEffectiveTier } from "@/services/actions/deriveEffectiveTier";
@@ -1343,6 +1344,16 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
                 ))}
               </ul>
             </div>
+          )}
+
+          {/* What plugins know that Daintree doesn't (#13805). Asked once the
+              dialog opens and filled in as each answers; never part of the
+              consequences above, the tier or the typed name. */}
+          {!isBlocked && (
+            <WorktreeDeleteNotes
+              worktreeId={isOpen ? worktree.id : null}
+              heading="Notes from plugins"
+            />
           )}
 
           {isHighTier && (

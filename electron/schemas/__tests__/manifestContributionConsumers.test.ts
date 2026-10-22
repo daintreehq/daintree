@@ -15,6 +15,7 @@ import {
   DatabaseQueryParamSchema,
   FileDecorationContributionSchema,
   ContextProviderContributionSchema,
+  WorktreeDeleteNotesContributionSchema,
   FileEditorContributionSchema,
   ForgeProviderContributionSchema,
   getPluginManifestSchema,
@@ -180,6 +181,7 @@ const SWEPT_SCHEMAS = {
   contextProviders: ContextProviderContributionSchema,
   forgeProviders: ForgeProviderContributionSchema,
   fileDecorationProviders: FileDecorationContributionSchema,
+  worktreeDeleteNotes: WorktreeDeleteNotesContributionSchema,
   fileEditors: FileEditorContributionSchema,
   previewTools: PreviewToolContributionSchema,
   guestAdapters: GuestAdapterContributionSchema,
@@ -240,6 +242,7 @@ const TOP_LEVEL_GROUPS = [
   "contextProviders",
   "forgeProviders",
   "fileDecorationProviders",
+  "worktreeDeleteNotes",
   "fileEditors",
   "previewTools",
   "guestAdapters",
@@ -324,6 +327,10 @@ type FieldConsumerCoverage = {
   forgeProviders: Record<keyof z.infer<typeof ForgeProviderContributionSchema>, ConsumerDescriptor>;
   fileDecorationProviders: Record<
     keyof z.infer<typeof FileDecorationContributionSchema>,
+    ConsumerDescriptor
+  >;
+  worktreeDeleteNotes: Record<
+    keyof z.infer<typeof WorktreeDeleteNotesContributionSchema>,
     ConsumerDescriptor
   >;
   fileEditors: Record<keyof z.infer<typeof FileEditorContributionSchema>, ConsumerDescriptor>;
@@ -1454,6 +1461,18 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       mode: "verbatim",
       consumers: [{ file: PLUGIN_SERVICE, symbol: "scopeMatchesPattern routing" }],
       note: "Matched to route renderer decoration pulls to the provider.",
+    },
+  },
+  worktreeDeleteNotes: {
+    id: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: "electron/services/plugin/PluginHostFactory.ts",
+          symbol: "registerWorktreeDeleteNotesProvider (declared-id check)",
+        },
+      ],
+      note: "Names the check a plugin binds; declaring it is what lets a delete confirmation ask the plugin.",
     },
   },
   fileEditors: {

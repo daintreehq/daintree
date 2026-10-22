@@ -127,6 +127,8 @@ import type {
   PluginContextValue,
   PluginWorktreeCardStatus,
   PluginWorktreeReviewCheck,
+  WorktreeDeleteNotesProviderDescriptor,
+  WorktreeDeleteNotesProviderImpl,
   PluginTerminalStatus,
   PluginPanelActivity,
   SettingDefinition,
@@ -242,6 +244,11 @@ export interface RegisteredContextProviderRecord {
 export interface RegisteredWorktreeSetupStepRecord {
   stepId: string;
   handler: PluginWorktreeSetupStepHandler;
+}
+
+export interface RegisteredWorktreeDeleteNotesProviderRecord {
+  descriptor: WorktreeDeleteNotesProviderDescriptor;
+  impl: WorktreeDeleteNotesProviderImpl;
 }
 
 /**
@@ -390,6 +397,8 @@ export interface MockHostState {
   /** Live `host.registerSearchProvider` bindings, one per provider id. */
   readonly registeredSearchProviders: ReadonlyArray<RegisteredSearchProviderRecord>;
   readonly registeredContextProviders: ReadonlyArray<RegisteredContextProviderRecord>;
+  /** Live `host.registerWorktreeDeleteNotesProvider` bindings, one per id. */
+  readonly registeredWorktreeDeleteNotesProviders: ReadonlyArray<RegisteredWorktreeDeleteNotesProviderRecord>;
   /** Live `host.mcp.registerTools` rosters, one per endpoint id. */
   readonly registeredMcpTools: ReadonlyArray<RegisteredMcpToolsRecord>;
   readonly invalidationCalls: ReadonlyArray<InvalidationRecord>;
@@ -1311,6 +1320,7 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
   const registeredWorktreeSetupSteps: RegisteredWorktreeSetupStepRecord[] = [];
   const registeredSearchProviders: RegisteredSearchProviderRecord[] = [];
   const registeredContextProviders: RegisteredContextProviderRecord[] = [];
+  const registeredWorktreeDeleteNotesProviders: RegisteredWorktreeDeleteNotesProviderRecord[] = [];
   const registeredMcpTools: RegisteredMcpToolsRecord[] = [];
   const invalidationCalls: InvalidationRecord[] = [];
   const setPanelBadgeCalls: SetPanelBadgeRecord[] = [];
@@ -2561,6 +2571,41 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
         if (i >= 0) registeredContextProviders.splice(i, 1);
       };
     },
+    registerWorktreeDeleteNotesProvider(descriptor, impl) {
+      // Structural checks in production's order. The manifest-declared-id
+      // check is skipped: the mock has no manifest model (#9878). Re-registering
+      // an id replaces the binding, and the replaced one's disposer is inert.
+      if (!descriptor || typeof descriptor !== "object") {
+        throw new Error("registerWorktreeDeleteNotesProvider: descriptor must be an object");
+      }
+      if (typeof descriptor.id !== "string" || descriptor.id.length === 0) {
+        throw new Error(
+          "registerWorktreeDeleteNotesProvider: descriptor.id must be a non-empty string"
+        );
+      }
+      if (!impl || typeof impl !== "object" || typeof impl.provideNotes !== "function") {
+        throw new Error("registerWorktreeDeleteNotesProvider: impl must expose provideNotes()");
+      }
+      const contributionId = descriptor.id;
+      const existing = registeredWorktreeDeleteNotesProviders.findIndex(
+        (r) => r.descriptor.id === contributionId
+      );
+      if (existing >= 0) {
+        registeredWorktreeDeleteNotesProviders[existing] = { descriptor, impl };
+      } else {
+        registeredWorktreeDeleteNotesProviders.push({ descriptor, impl });
+      }
+      let disposed = false;
+      const dispose = () => {
+        if (disposed) return;
+        disposed = true;
+        const i = registeredWorktreeDeleteNotesProviders.findIndex(
+          (r) => r.descriptor.id === contributionId && r.impl === impl
+        );
+        if (i >= 0) registeredWorktreeDeleteNotesProviders.splice(i, 1);
+      };
+      return Promise.resolve(dispose);
+    },
     mcp: {
       registerTools(endpointId, tools) {
         // Structural checks only. The mock has no manifest model (#9878), so the
@@ -3486,6 +3531,7 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
     registeredWorktreeSetupSteps,
     registeredSearchProviders,
     registeredContextProviders,
+    registeredWorktreeDeleteNotesProviders,
     registeredMcpTools,
     invalidationCalls,
     setPanelBadgeCalls,

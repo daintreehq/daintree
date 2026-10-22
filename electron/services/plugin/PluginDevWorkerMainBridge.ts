@@ -32,6 +32,8 @@ import type {
   PluginWorktreeSetupStepContext,
   PluginSearchProvider,
   PluginSearchResult,
+  PluginWorktreeDeleteNote,
+  PluginWorktreeSnapshot,
 } from "../../../shared/types/plugin.js";
 import { SEARCH_PROVIDER_MAX_RESPONSE_BYTES } from "../../../shared/config/pluginSearchProviders.js";
 import type { FileDecoration, FileDecorationProviderImpl } from "../../../shared/types/forge.js";
@@ -65,6 +67,7 @@ import type {
   RegisterActionParams,
   RegisterContextProviderParams,
   RegisterFileDecorationProviderParams,
+  RegisterWorktreeDeleteNotesProviderParams,
   RegisterHandlerParams,
   RegisterMcpToolsParams,
   SettingsGetParams,
@@ -81,6 +84,7 @@ import type {
   ShowConfirmParams,
   UnregisterContextProviderParams,
   UnregisterFileDecorationProviderParams,
+  UnregisterWorktreeDeleteNotesProviderParams,
   UnregisterMcpToolsParams,
   WorktreeSetupStepRegistrationParams,
   WorktreeSetupStepWireContext,
@@ -187,6 +191,7 @@ type InvokeTarget =
   | { kind: "command"; namespacedId: string; resolvedPath: string; args: unknown }
   | { kind: "handler"; channel: string; ctx: PluginIpcContext; args: unknown[] }
   | { kind: "file-decoration-method"; providerId: string; method: string; args: unknown[] }
+  | { kind: "worktree-delete-notes"; providerId: string; worktree: PluginWorktreeSnapshot }
   | {
       kind: "context-provider-method";
       providerId: string;
@@ -331,6 +336,9 @@ export class PluginDevWorkerMainBridge {
    * id. Torn down on reload and dispose so a reloaded generation re-registers
    * cleanly. */
   private readonly providerDisposers = new Map<string, () => void>();
+  /** The same for worktree delete notes providers (#13805). Kept apart from
+   * decoration providers so the two kinds can share an id. */
+  private readonly worktreeDeleteNotesDisposers = new Map<string, () => void>();
   /** Disposers for the `agentMcp` rosters the worker bound, keyed by endpoint id.
    * Retired with the generation like providers: the roster's `execute`s live in
    * the outgoing worker, and the replacement re-registers its own on activate. */
@@ -474,6 +482,7 @@ export class PluginDevWorkerMainBridge {
   private disposeProviders(): void {
     for (const dispose of [
       ...this.providerDisposers.values(),
+      ...this.worktreeDeleteNotesDisposers.values(),
       ...this.mcpRosterDisposers.values(),
       ...this.setupStepDisposers.values(),
       ...this.searchProviderDisposers.values(),
@@ -485,6 +494,7 @@ export class PluginDevWorkerMainBridge {
       }
     }
     this.providerDisposers.clear();
+    this.worktreeDeleteNotesDisposers.clear();
     this.mcpRosterDisposers.clear();
     this.setupStepDisposers.clear();
     this.searchProviderDisposers.clear();
@@ -1422,6 +1432,48 @@ export class PluginDevWorkerMainBridge {
         }
         return;
       }
+      case "registerWorktreeDeleteNotesProvider": {
+        const { descriptor } = params as RegisterWorktreeDeleteNotesProviderParams;
+        const providerId = descriptor.id;
+        const prior = this.worktreeDeleteNotesDisposers.get(providerId);
+        if (prior) {
+          try {
+            prior();
+          } catch {
+            // best-effort
+          }
+        }
+        // The impl lives in the worker. The host hands this proxy its deadline
+        // as a second argument, so a missed deadline cancels the invoke rather
+        // than leaving it pending until the worker answers.
+        const proxyImpl = {
+          provideNotes: (worktree: PluginWorktreeSnapshot, signal?: AbortSignal) =>
+            this.invoke({ kind: "worktree-delete-notes", providerId, worktree }, signal) as Promise<
+              PluginWorktreeDeleteNote[]
+            >,
+        };
+        const generation = this.reloadGeneration;
+        const dispose = await this.host.registerWorktreeDeleteNotesProvider(descriptor, proxyImpl);
+        if (this.disposed || generation !== this.reloadGeneration) {
+          try {
+            dispose();
+          } catch {
+            // best-effort
+          }
+          return;
+        }
+        this.worktreeDeleteNotesDisposers.set(providerId, dispose);
+        return;
+      }
+      case "unregisterWorktreeDeleteNotesProvider": {
+        const { providerId } = params as UnregisterWorktreeDeleteNotesProviderParams;
+        const dispose = this.worktreeDeleteNotesDisposers.get(providerId);
+        if (dispose) {
+          this.worktreeDeleteNotesDisposers.delete(providerId);
+          dispose();
+        }
+        return;
+      }
       case "registerWorktreeSetupStep": {
         const { stepId } = params as WorktreeSetupStepRegistrationParams;
         if (typeof stepId !== "string" || stepId.length === 0) {
@@ -1992,6 +2044,14 @@ export class PluginDevWorkerMainBridge {
           providerId: target.providerId,
           method: target.method,
           args: target.args,
+        });
+      } else if (target.kind === "worktree-delete-notes") {
+        sent = this.workerHost.send({
+          type: "invoke",
+          requestId,
+          kind: "worktree-delete-notes",
+          providerId: target.providerId,
+          worktree: target.worktree,
         });
       } else {
         sent = this.workerHost.send({

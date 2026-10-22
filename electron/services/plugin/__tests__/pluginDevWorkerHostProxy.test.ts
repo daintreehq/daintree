@@ -130,6 +130,117 @@ describe("PluginDevWorkerHostProxy context providers (#13795)", () => {
   });
 });
 
+describe("PluginDevWorkerHostProxy worktree delete notes providers (#13805)", () => {
+  beforeEach(() => vi.clearAllMocks());
+  afterEach(() => vi.restoreAllMocks());
+
+  it("registers with main and answers an invoke from the impl kept in the worker", async () => {
+    const { proxy, sent } = makeProxy();
+    const impl = { provideNotes: vi.fn(async () => [{ severity: "info" as const, text: "hi" }]) };
+    await proxy.host.registerWorktreeDeleteNotesProvider({ id: "notes" }, impl);
+    expect(sent.find((m) => m.type === "host-notify")).toMatchObject({
+      method: "registerWorktreeDeleteNotesProvider",
+      registrationKey: "worktreeDeleteNotesProvider:notes",
+      params: { descriptor: { id: "notes" } },
+    });
+
+    proxy.handleMessage({
+      type: "invoke",
+      requestId: "n1",
+      kind: "worktree-delete-notes",
+      providerId: "notes",
+      worktree: { id: "/repo/wt" },
+    } as any);
+    await flush();
+    expect(impl.provideNotes).toHaveBeenCalledWith({ id: "/repo/wt" });
+    expect(sent.find((m) => m.type === "invoke-result" && m.requestId === "n1")).toMatchObject({
+      ok: true,
+      result: [{ severity: "info", text: "hi" }],
+    });
+  });
+
+  it("a replaced binding's disposer neither drops its successor nor tells main to", async () => {
+    const { proxy, sent } = makeProxy();
+    const first = { provideNotes: vi.fn(async () => []) };
+    const second = { provideNotes: vi.fn(async () => []) };
+    const disposeFirst = await proxy.host.registerWorktreeDeleteNotesProvider(
+      { id: "notes" },
+      first
+    );
+    const disposeSecond = await proxy.host.registerWorktreeDeleteNotesProvider(
+      { id: "notes" },
+      second
+    );
+    disposeFirst();
+    expect(
+      sent.some(
+        (m) => m.type === "host-notify" && m.method === "unregisterWorktreeDeleteNotesProvider"
+      )
+    ).toBe(false);
+
+    proxy.handleMessage({
+      type: "invoke",
+      requestId: "n2",
+      kind: "worktree-delete-notes",
+      providerId: "notes",
+      worktree: { id: "/repo/wt" },
+    } as any);
+    await flush();
+    expect(second.provideNotes).toHaveBeenCalled();
+
+    disposeSecond();
+    expect(
+      sent.find(
+        (m) => m.type === "host-notify" && m.method === "unregisterWorktreeDeleteNotesProvider"
+      )
+    ).toMatchObject({ params: { providerId: "notes" } });
+  });
+
+  it("refuses an answer that breaks the note rules before it crosses the port", async () => {
+    const { proxy, sent } = makeProxy();
+    await proxy.host.registerWorktreeDeleteNotesProvider(
+      { id: "notes" },
+      { provideNotes: async () => [{ severity: "info" as const, text: "x".repeat(100_000) }] }
+    );
+    proxy.handleMessage({
+      type: "invoke",
+      requestId: "n3",
+      kind: "worktree-delete-notes",
+      providerId: "notes",
+      worktree: { id: "/repo/wt" },
+    } as any);
+    await flush();
+    const result = sent.find((m) => m.type === "invoke-result" && m.requestId === "n3");
+    expect(result).toMatchObject({ ok: false });
+    expect(result.error).toMatch(/at most 200 characters/);
+  });
+
+  it("keeps a second registration of the same impl when the first's disposer runs", async () => {
+    const { proxy, sent } = makeProxy();
+    const impl = { provideNotes: vi.fn(async () => []) };
+    const disposeFirst = await proxy.host.registerWorktreeDeleteNotesProvider(
+      { id: "notes" },
+      impl
+    );
+    await proxy.host.registerWorktreeDeleteNotesProvider({ id: "notes" }, impl);
+    disposeFirst();
+    expect(
+      sent.some(
+        (m) => m.type === "host-notify" && m.method === "unregisterWorktreeDeleteNotesProvider"
+      )
+    ).toBe(false);
+  });
+
+  it("accepts the register and unregister notifications on the worker port", () => {
+    for (const method of [
+      "registerWorktreeDeleteNotesProvider",
+      "unregisterWorktreeDeleteNotesProvider",
+    ]) {
+      expect(parseWorkerToHostMessage({ type: "host-notify", method, params: {} }).ok).toBe(true);
+    }
+  });
+});
+
 describe("PluginDevWorkerHostProxy file decoration providers", () => {
   beforeEach(() => vi.clearAllMocks());
   afterEach(() => vi.restoreAllMocks());

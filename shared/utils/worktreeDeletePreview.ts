@@ -1,4 +1,5 @@
 import type { FileChangeDetail } from "../types/git.js";
+import type { WorktreeDeleteNotesReport } from "../types/plugin.js";
 import type { SubmoduleDeleteRisk, SubmoduleEntry } from "../types/submodule.js";
 import type { WorktreeTeardownPhasePreview, WorktreeTeardownPreview } from "../types/worktree.js";
 import { MCP_PREVIEW_CAUTION_PREFIX } from "./mcpPreviewLines.js";
@@ -539,6 +540,29 @@ export function formatTeardownPreviewLines(
     }
     lines.push(`${noun} will run first (the delete continues if it fails):`);
     for (const command of phase.commands) lines.push(`  ${command}`);
+  }
+  return lines;
+}
+
+/**
+ * Plugin notes as preview lines (#13805), for the confirmations that show
+ * text rather than the dialog's rows: each note names its plugin, a warning
+ * carries the caution prefix, and a plugin that didn't answer says so rather
+ * than falling silent.
+ */
+export function formatWorktreeDeleteNoteLines(
+  reports: readonly WorktreeDeleteNotesReport[]
+): string[] {
+  const lines: string[] = [];
+  for (const { pluginName, answer } of reports) {
+    if (answer.status === "no-answer") {
+      lines.push(`${pluginName} didn't answer.`);
+      continue;
+    }
+    for (const note of answer.notes) {
+      const prefix = note.severity === "warning" ? MCP_PREVIEW_CAUTION_PREFIX : "";
+      lines.push(`${prefix}${pluginName}: ${note.text}`);
+    }
   }
   return lines;
 }

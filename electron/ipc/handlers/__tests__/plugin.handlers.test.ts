@@ -135,6 +135,8 @@ vi.mock("../../../services/PluginService.js", () => ({
     // No-op for tests that don't care about implicit activation; the IPC
     // handler awaits it before resolving the impl set.
     activatePluginsForFileDecorationScope: vi.fn().mockResolvedValue(undefined),
+    listWorktreeDeleteNoteSources: vi.fn(() => []),
+    getWorktreeDeleteNotes: vi.fn().mockResolvedValue(null),
     // The three pull handlers (getActions / getPanelKinds / toolbarButtons)
     // await waitForInit() so a renderer that mounts before startup activation
     // settles still gets a populated snapshot — resolved-immediately in tests
@@ -2038,6 +2040,56 @@ describe("PLUGIN_FORGE_PROVIDERS_GET handler", () => {
     releaseGate();
     await inFlight;
     expect(mockGetRegisteredForgeProviders).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("worktree delete notes handlers (#13805)", () => {
+  const SENDER = { sender: { id: 1 } };
+
+  function handlerFor(channel: string) {
+    registerPluginHandlers();
+    return mockIpcMainHandle.mock.calls.find((c: unknown[]) => c[0] === channel)![1] as (
+      ...args: unknown[]
+    ) => unknown;
+  }
+
+  it("asks only about the sender's own project, never one the payload names", async () => {
+    const { pluginService } = await import("../../../services/PluginService.js");
+    mockGetProjectForWebContents.mockReturnValue("project-b");
+    vi.mocked(pluginService.getWorktreeDeleteNotes).mockResolvedValueOnce({ status: "no-answer" });
+
+    await handlerFor("plugin:worktree-delete-note-sources-get")(SENDER);
+    expect(pluginService.listWorktreeDeleteNoteSources).toHaveBeenCalledWith("project-b");
+
+    await expect(
+      handlerFor("plugin:worktree-delete-notes-get")(SENDER, {
+        worktreeId: "/repo/wt",
+        pluginId: "acme.sync",
+        projectId: "project-a",
+      })
+    ).resolves.toEqual({ status: "no-answer" });
+    expect(pluginService.getWorktreeDeleteNotes).toHaveBeenCalledWith(
+      "project-b",
+      "acme.sync",
+      "/repo/wt"
+    );
+  });
+
+  it("has nothing to ask from a sender with no project, and refuses a malformed request", async () => {
+    const { pluginService } = await import("../../../services/PluginService.js");
+    mockGetProjectForWebContents.mockReturnValue(null);
+    await expect(handlerFor("plugin:worktree-delete-note-sources-get")(SENDER)).resolves.toEqual(
+      []
+    );
+    await expect(
+      handlerFor("plugin:worktree-delete-notes-get")(SENDER, { worktreeId: "/wt", pluginId: "a" })
+    ).resolves.toBeNull();
+    expect(pluginService.listWorktreeDeleteNoteSources).not.toHaveBeenCalled();
+
+    mockGetProjectForWebContents.mockReturnValue("project-b");
+    await expect(
+      handlerFor("plugin:worktree-delete-notes-get")(SENDER, { worktreeId: "", pluginId: "a" })
+    ).rejects.toThrow(/worktreeId/);
   });
 });
 

@@ -1450,6 +1450,17 @@ export const FileDecorationContributionSchema = z
   .strict();
 
 /**
+ * `worktreeDeleteNotes` manifest entry (#13805). Declared so the host can find,
+ * and activate, the plugin that adds notes to a worktree's delete confirmation
+ * before any of its code has run.
+ */
+export const WorktreeDeleteNotesContributionSchema = z
+  .object({
+    id: z.string().min(1).max(64).regex(SAFE_ID_PATTERN),
+  })
+  .strict();
+
+/**
  * Largest file a `contributes.fileEditors` entry may claim. Above this the
  * renderer holds the whole document in a CodeMirror buffer plus a draft copy,
  * so the ceiling is a memory bound, not a product limit — the built-in
@@ -2713,6 +2724,9 @@ export const MANIFEST_CONTRIBUTION_CAPS = {
   contextProviders: 10,
   forgeProviders: 20,
   fileDecorationProviders: 50,
+  // One check per plugin: the confirmation shows one attributed answer (or one
+  // "didn't answer") per plugin, never a partial answer.
+  worktreeDeleteNotes: 1,
   fileEditors: 10,
   previewTools: 10,
   guestAdapters: 10,
@@ -3189,6 +3203,10 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
               .array(FileDecorationContributionSchema)
               .max(MANIFEST_CONTRIBUTION_CAPS.fileDecorationProviders)
               .default([]),
+            worktreeDeleteNotes: z
+              .array(WorktreeDeleteNotesContributionSchema)
+              .max(MANIFEST_CONTRIBUTION_CAPS.worktreeDeleteNotes)
+              .default([]),
             fileEditors: z
               .array(FileEditorContributionSchema)
               .max(MANIFEST_CONTRIBUTION_CAPS.fileEditors)
@@ -3268,6 +3286,7 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
             contextProviders: [],
             forgeProviders: [],
             fileDecorationProviders: [],
+            worktreeDeleteNotes: [],
             fileEditors: [],
             previewTools: [],
             guestAdapters: [],

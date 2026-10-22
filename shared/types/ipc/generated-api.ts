@@ -921,6 +921,12 @@ export interface GeneratedElectronAPI {
     getTours(
       ...args: IpcInvokeMap["plugin:tours-get"]["args"]
     ): Promise<IpcInvokeMap["plugin:tours-get"]["result"]>;
+    getWorktreeDeleteNotes(
+      ...args: IpcInvokeMap["plugin:worktree-delete-notes-get"]["args"]
+    ): Promise<IpcInvokeMap["plugin:worktree-delete-notes-get"]["result"]>;
+    getWorktreeDeleteNoteSources(
+      ...args: IpcInvokeMap["plugin:worktree-delete-note-sources-get"]["args"]
+    ): Promise<IpcInvokeMap["plugin:worktree-delete-note-sources-get"]["result"]>;
     getWorktreeStatus(
       ...args: IpcInvokeMap["plugin:worktree-status-get"]["args"]
     ): Promise<IpcInvokeMap["plugin:worktree-status-get"]["result"]>;
@@ -1072,6 +1078,9 @@ export interface GeneratedElectronAPI {
     getProjectTargeting(
       ...args: IpcInvokeMap["plugin-capability:get-project-targeting"]["args"]
     ): Promise<IpcInvokeMap["plugin-capability:get-project-targeting"]["result"]>;
+    getWorktreeDeleteNotes(
+      ...args: IpcInvokeMap["plugin-capability:get-worktree-delete-notes"]["args"]
+    ): Promise<IpcInvokeMap["plugin-capability:get-worktree-delete-notes"]["result"]>;
     resolveConsent(
       ...args: IpcInvokeMap["plugin-capability:resolve-consent"]["args"]
     ): Promise<IpcInvokeMap["plugin-capability:resolve-consent"]["result"]>;
@@ -1081,6 +1090,9 @@ export interface GeneratedElectronAPI {
     setProjectTargeting(
       ...args: IpcInvokeMap["plugin-capability:set-project-targeting"]["args"]
     ): Promise<IpcInvokeMap["plugin-capability:set-project-targeting"]["result"]>;
+    setWorktreeDeleteNotes(
+      ...args: IpcInvokeMap["plugin-capability:set-worktree-delete-notes"]["args"]
+    ): Promise<IpcInvokeMap["plugin-capability:set-worktree-delete-notes"]["result"]>;
   };
   pluginMcp: {
     callTool(

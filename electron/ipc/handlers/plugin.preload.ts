@@ -68,6 +68,8 @@ export const PLUGIN_METHOD_CHANNELS = {
   updateRecipeMetadata: "plugin:recipe-metadata-update",
   getForgeProviders: "plugin:forge-providers-get",
   getDecorations: "plugin:file-decorations-get",
+  getWorktreeDeleteNoteSources: "plugin:worktree-delete-note-sources-get",
+  getWorktreeDeleteNotes: "plugin:worktree-delete-notes-get",
   getWorktreeStatus: "plugin:worktree-status-get",
   getAuditRecords: "plugin:get-audit-records",
   getAuditConfig: "plugin:get-audit-config",
