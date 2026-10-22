@@ -264,6 +264,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 
 | Action | Title | Danger | Arguments |
 | --- | --- | --- | --- |
+| `layout.apply` | Apply layout | safe | `layoutId` |
 | `notifications.toggle` | Toggle notification inbox | safe | — |
 | `panel.focus` | Focus panel | safe | `panelId` |
 | `panel.focusIndex` | Focus panel by index | safe | `index` |

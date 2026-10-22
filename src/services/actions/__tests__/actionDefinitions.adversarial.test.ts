@@ -704,6 +704,7 @@ describe("terminal action hardening", () => {
         tabGroups: new Map(),
         focusedId: null,
         maximizedId: null,
+        maximizeTarget: null,
         activeDockTerminalId: null,
       };
       useLayoutUndoStore.setState({ undoStack: [], redoStack: [pendingRedo] });

@@ -491,6 +491,7 @@ export const CHANNEL_LEASE_POLICY = {
   "plugin:account-disconnect": "free",
   "plugin:toolbar-buttons": "free",
   "plugin:launch-entries": "free",
+  "plugin:layouts": "free",
   "plugin:launch-groups-hidden-get": "free",
   "plugin:launch-group-hidden-set": "driver",
   "plugin:uninstall": "free",

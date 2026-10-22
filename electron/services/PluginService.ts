@@ -86,6 +86,7 @@ import type {
   PluginPanelBadge,
   PluginToolbarButtonRuntimeState,
   PluginLaunchEntryTarget,
+  PluginLayoutEntry,
   PluginContextValue,
   PluginWorktreeCardStatus,
   PluginWorktreeReviewCheck,
@@ -249,6 +250,10 @@ import {
   registerPluginLaunchEntry,
   unregisterPluginLaunchEntries,
 } from "../../shared/config/pluginLaunchEntryRegistry.js";
+import {
+  registerPluginLayout,
+  unregisterPluginLayouts,
+} from "../../shared/config/pluginLayoutRegistry.js";
 import { registerPluginMenuItem, unregisterPluginMenuItems } from "./pluginMenuRegistry.js";
 import {
   registerPluginKeybinding,
@@ -2621,6 +2626,74 @@ export class PluginService {
       }
       registerPluginRecipes(pluginId, manifest.contributes.recipes, ownedAgentIds, ownedPanelKinds);
       this.broadcaster.scheduleRecipesBroadcast(false);
+    }
+
+    // Layouts (#13780) resolve to runtime ids the same way launch entries do: a
+    // panel names the kind as the panels loop registers it, a recipe the
+    // qualified id `registerPluginRecipes` gave it. The schema already held
+    // both to this plugin's own and settled each entry's default location.
+    // Registered after recipes so an entry naming a recipe the sanitizer
+    // rejected is dropped here rather than failing every apply.
+    const layouts = manifest.contributes.layouts ?? [];
+    for (const layout of layouts) {
+      const entries: PluginLayoutEntry[] = [];
+      for (const entry of layout.entries) {
+        const placement = {
+          ...(entry.tabGroup !== undefined ? { tabGroup: entry.tabGroup } : {}),
+          ...(entry.maximized === true ? { maximized: true } : {}),
+        };
+        if (entry.panel !== undefined) {
+          const panel = manifest.contributes.panels.find((p) => p.id === entry.panel);
+          const panelKindId = isProject
+            ? toRuntimePanelKindId(
+                { origin: "project", pluginId: manifest.name, kindId: entry.panel },
+                binding.projectId
+              )
+            : `${manifest.name}.${entry.panel}`;
+          if (panelKindId === null) {
+            console.error(
+              `[PluginService] Plugin "${manifest.name}": cannot qualify layout panel "${entry.panel}" without an owning project — skipping layout "${layout.id}"`
+            );
+            entries.length = 0;
+            break;
+          }
+          entries.push({
+            target: { type: "panel", panelKindId },
+            location: entry.location ?? (panel?.scope === "project" ? "dock" : "grid"),
+            ...placement,
+          });
+        } else if (entry.browser !== undefined) {
+          entries.push({
+            target: { type: "browser", url: entry.browser },
+            location: entry.location ?? "grid",
+            ...placement,
+          });
+        } else if (entry.recipe !== undefined) {
+          const recipeId = `${pluginId}.${entry.recipe}`;
+          if (getPluginRecipe(recipeId) === undefined) {
+            console.error(
+              `[PluginService] Plugin "${manifest.name}": layout "${layout.id}" names recipe "${entry.recipe}", which was not registered — dropping that entry`
+            );
+            continue;
+          }
+          entries.push({
+            target: { type: "recipe", recipeId },
+            location: entry.location ?? "grid",
+            ...placement,
+          });
+        }
+      }
+      if (entries.length === 0) continue;
+      registerPluginLayout({
+        id: `${pluginId}.${layout.id}`,
+        pluginId,
+        pluginName: manifest.displayName ?? manifest.name,
+        name: layout.name,
+        entries,
+      });
+    }
+    if (layouts.length > 0) {
+      this.broadcaster.scheduleLayoutsBroadcast();
     }
 
     if (manifest.contributes.processTools.length > 0) {
@@ -7118,6 +7191,10 @@ export class PluginService {
     );
     runUnloadStep(pluginId, "scheduleLaunchEntriesBroadcast", () =>
       this.broadcaster.scheduleLaunchEntriesBroadcast()
+    );
+    runUnloadStep(pluginId, "unregisterPluginLayouts", () => unregisterPluginLayouts(pluginId));
+    runUnloadStep(pluginId, "scheduleLayoutsBroadcast", () =>
+      this.broadcaster.scheduleLayoutsBroadcast()
     );
     runUnloadStep(pluginId, "unregisterPluginPanelKinds", () =>
       unregisterPluginPanelKinds(pluginId)

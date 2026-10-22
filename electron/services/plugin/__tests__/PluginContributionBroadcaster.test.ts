@@ -15,6 +15,7 @@ const contributionsMock = vi.hoisted(() => ({
   panelKinds: [] as Array<{ id: string; extensionId?: string }>,
   toolbarButtons: [] as Array<{ id: string; pluginId: string }>,
   launchEntries: [] as Array<{ id: string; pluginId: string }>,
+  layouts: [] as Array<{ id: string; pluginId: string }>,
   keybindings: [] as Array<{ pluginId: string; item: { key: string } }>,
   contextMenuItems: [] as Array<{ pluginId: string; item: { label: string } }>,
   agents: {} as Record<string, unknown>,
@@ -42,6 +43,9 @@ vi.mock("../../../../shared/config/toolbarButtonRegistry.js", () => ({
 }));
 vi.mock("../../../../shared/config/pluginLaunchEntryRegistry.js", () => ({
   getAllPluginLaunchEntries: () => contributionsMock.launchEntries,
+}));
+vi.mock("../../../../shared/config/pluginLayoutRegistry.js", () => ({
+  getAllPluginLayouts: () => contributionsMock.layouts,
 }));
 vi.mock("../../pluginKeybindingRegistry.js", () => ({
   getPluginKeybindings: () => contributionsMock.keybindings,
@@ -160,6 +164,7 @@ beforeEach(() => {
   contributionsMock.panelKinds = [{ id: "acme.global.panel", extensionId: GLOBAL_PLUGIN }];
   contributionsMock.toolbarButtons = [{ id: "acme.global.btn", pluginId: GLOBAL_PLUGIN }];
   contributionsMock.launchEntries = [];
+  contributionsMock.layouts = [];
   contributionsMock.keybindings = [{ pluginId: GLOBAL_PLUGIN, item: { key: "Ctrl+G" } }];
   contributionsMock.contextMenuItems = [{ pluginId: GLOBAL_PLUGIN, item: { label: "Global" } }];
   contributionsMock.agents = { "acme.agent": { id: "acme.agent" } };
@@ -535,17 +540,18 @@ describe("project-scoped mutation broadcasts", () => {
 });
 
 describe("pushSnapshotTo", () => {
-  it("replays the eleven channels in order with unfiltered payloads when nothing is scoped", async () => {
+  it("replays the twelve channels in order with unfiltered payloads when nothing is scoped", async () => {
     const wc = fakeWebContents(11);
     const b = makeBroadcaster();
     await b.pushSnapshotTo(wc as unknown as Electron.WebContents);
 
-    expect(wc.send).toHaveBeenCalledTimes(11);
+    expect(wc.send).toHaveBeenCalledTimes(12);
     expect(wc.send.mock.calls.map((c) => (c[1] as { name: string }).name)).toEqual([
       "plugin:actions-changed",
       "plugin:panel-kinds-changed",
       "plugin:toolbar-buttons-changed",
       "plugin:launch-entries-changed",
+      "plugin:layouts-changed",
       "plugin:keybindings-changed",
       "plugin:context-menu-items-changed",
       "plugin:agents-changed",
@@ -559,6 +565,7 @@ describe("pushSnapshotTo", () => {
       { kinds: contributionsMock.panelKinds },
       { buttons: contributionsMock.toolbarButtons, complete: false },
       { entries: contributionsMock.launchEntries },
+      { layouts: contributionsMock.layouts },
       { keybindings: contributionsMock.keybindings, complete: true },
       { items: contributionsMock.contextMenuItems, complete: false },
       { agents: contributionsMock.agents, complete: false },
@@ -695,7 +702,7 @@ describe("pushSnapshotTo", () => {
     });
     const b = makeBroadcaster();
     await b.pushSnapshotTo(wc as unknown as Electron.WebContents);
-    expect(wc.send).toHaveBeenCalledTimes(11);
+    expect(wc.send).toHaveBeenCalledTimes(12);
   });
 
   it("skips a destroyed webContents and a disposed service", async () => {
@@ -945,6 +952,40 @@ describe("per-project visibility of installed plugins", () => {
       .map((call) => call[1] as { name: string; payload: unknown })
       .find((event) => event.name === "plugin:launch-entries-changed");
     expect(replayed?.payload).toEqual({ entries: [globalEntry] });
+  });
+
+  it("keeps a project plugin's layouts inside its own project (#13780)", async () => {
+    setPluginContributionScope(PROJECT_PLUGIN_A, VIS_PROJECT_A);
+    const globalLayout = { id: `${GLOBAL_PLUGIN}.workspace`, pluginId: GLOBAL_PLUGIN };
+    const localLayout = { id: `${PROJECT_PLUGIN_A}.records`, pluginId: PROJECT_PLUGIN_A };
+    contributionsMock.layouts = [globalLayout, localLayout];
+    const owner = fakeWebContents(63);
+    const other = fakeWebContents(64);
+    registryMock.getRegisteredProjectViews.mockReturnValue([
+      { webContents: owner, projectId: VIS_PROJECT_A },
+      { webContents: other, projectId: VIS_PROJECT_B },
+    ]);
+
+    const b = makeBroadcaster();
+    b.scheduleLayoutsBroadcast();
+    b.scheduleLayoutsBroadcast();
+    await flush();
+
+    expect(
+      ipcUtilsMock.broadcastToProjectRenderers.mock.calls.map((call) => [call[0], call[2]])
+    ).toEqual([
+      [
+        VIS_PROJECT_A,
+        { name: "plugin:layouts-changed", payload: { layouts: [globalLayout, localLayout] } },
+      ],
+      [VIS_PROJECT_B, { name: "plugin:layouts-changed", payload: { layouts: [globalLayout] } }],
+    ]);
+
+    await b.pushSnapshotTo(other as unknown as Electron.WebContents, VIS_PROJECT_B);
+    const replayed = other.send.mock.calls
+      .map((call) => call[1] as { name: string; payload: unknown })
+      .find((event) => event.name === "plugin:layouts-changed");
+    expect(replayed?.payload).toEqual({ layouts: [globalLayout] });
   });
 
   describe("recipes (#13765)", () => {

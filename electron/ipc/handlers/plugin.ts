@@ -78,6 +78,7 @@ import {
   getPluginCustomIconsForProject,
   getPluginHostedViewsForProject,
   getPluginLaunchEntriesForProject,
+  getPluginLayoutsForProject,
   recipeOwner,
   selectContributionsForProject,
 } from "../../services/plugin/PluginContributionBroadcaster.js";
@@ -127,6 +128,7 @@ import type {
   FileEditorChoiceKey,
   FileEditorChoices,
   PluginLaunchEntryConfig,
+  PluginLayoutConfig,
 } from "../../../shared/types/plugin.js";
 import {
   PROJECT_SURFACE_SLOTS,
@@ -723,6 +725,12 @@ async function handleToolbarButtons(ctx: IpcContext): Promise<ToolbarButtonConfi
 async function handleLaunchEntries(ctx: IpcContext): Promise<PluginLaunchEntryConfig[]> {
   await (await getPluginService()).waitForInit();
   return getPluginLaunchEntriesForProject(ctx.projectId);
+}
+
+/** The SENDER's project's layouts (#13780), behind the same init guard as toolbar buttons. */
+async function handleLayouts(ctx: IpcContext): Promise<PluginLayoutConfig[]> {
+  await (await getPluginService()).waitForInit();
+  return getPluginLayoutsForProject(ctx.projectId);
 }
 
 /** The plugin ids whose launcher group the SENDER's project hides; empty for a view with no project. */
@@ -2231,6 +2239,9 @@ export const pluginNamespace = defineIpcNamespace({
       withContext: true,
     }),
     launchEntries: op(PLUGIN_METHOD_CHANNELS.launchEntries, handleLaunchEntries, {
+      withContext: true,
+    }),
+    layouts: op(PLUGIN_METHOD_CHANNELS.layouts, handleLayouts, {
       withContext: true,
     }),
     getHiddenLaunchGroups: op(

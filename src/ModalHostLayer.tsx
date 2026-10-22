@@ -58,6 +58,7 @@ import {
   LazyPluginManagerView,
   LazyMcpConfirmDialog,
   LazyPluginConfirmDialog,
+  LazyLayoutApplyConfirmDialog,
   LazyPluginArchiveInstallConfirmDialog,
   LazyPluginMcpConfirmDialog,
   LazyPluginQuickPickDialog,
@@ -799,6 +800,13 @@ export function ModalHostLayer({
         <ErrorBoundary variant="component" componentName="PluginInputBoxDialog">
           <Suspense fallback={null}>
             <LazyPluginInputBoxDialog />
+          </Suspense>
+        </ErrorBoundary>
+      )}
+      {isStateLoaded && (
+        <ErrorBoundary variant="component" componentName="LayoutApplyConfirmDialog">
+          <Suspense fallback={null}>
+            <LazyLayoutApplyConfirmDialog />
           </Suspense>
         </ErrorBoundary>
       )}

@@ -27,6 +27,7 @@ import { usePluginPanelMenuSubscription } from "./store/pluginPanelMenuStore";
 import { usePluginAgents } from "./hooks/usePluginAgents";
 import { usePluginRecipes } from "./hooks/usePluginRecipes";
 import { usePluginTours } from "./hooks/usePluginTours";
+import { usePluginLayouts } from "./hooks/usePluginLayouts";
 import { usePluginThemes } from "./hooks/usePluginThemes";
 import { usePluginIcons } from "./hooks/usePluginIcons";
 import { usePluginKeybindings } from "./hooks/usePluginKeybindings";
@@ -408,6 +409,7 @@ function AppInner() {
   usePluginAgents();
   usePluginRecipes();
   usePluginTours();
+  usePluginLayouts();
   usePluginIcons();
   usePluginKeybindings();
   usePluginMcpConsentBridge();

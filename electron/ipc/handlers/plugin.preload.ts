@@ -17,6 +17,7 @@ export const PLUGIN_METHOD_CHANNELS = {
   checkForUpdate: "plugin:check-for-update",
   toolbarButtons: "plugin:toolbar-buttons",
   launchEntries: "plugin:launch-entries",
+  layouts: "plugin:layouts",
   getHiddenLaunchGroups: "plugin:launch-groups-hidden-get",
   setLaunchGroupHidden: "plugin:launch-group-hidden-set",
   keybindings: "plugin:keybindings",

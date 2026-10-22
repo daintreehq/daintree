@@ -1091,6 +1091,7 @@ export const CHANNELS = {
   PLUGIN_INVOKE: "plugin:invoke",
   PLUGIN_TOOLBAR_BUTTONS: "plugin:toolbar-buttons",
   PLUGIN_LAUNCH_ENTRIES: "plugin:launch-entries",
+  PLUGIN_LAYOUTS: "plugin:layouts",
   PLUGIN_LAUNCH_GROUPS_HIDDEN_GET: "plugin:launch-groups-hidden-get",
   PLUGIN_LAUNCH_GROUP_HIDDEN_SET: "plugin:launch-group-hidden-set",
   PLUGIN_KEYBINDINGS: "plugin:keybindings",

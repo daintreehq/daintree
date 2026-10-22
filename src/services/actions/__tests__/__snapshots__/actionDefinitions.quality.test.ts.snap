@@ -3038,6 +3038,18 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "title": "Set keybinding override",
   },
   {
+    "category": "panel",
+    "danger": "safe",
+    "dangerRationale": undefined,
+    "description": "Open or move the panels a plugin's named layout lists, leaving every other panel where it is. A layout that runs a recipe asks the user first. A plugin applies only its own layouts. Undo with layout.undo.",
+    "examples": undefined,
+    "id": "layout.apply",
+    "keywords": undefined,
+    "kind": "command",
+    "requiresArgs": true,
+    "title": "Apply layout",
+  },
+  {
     "category": "terminal",
     "danger": "safe",
     "dangerRationale": undefined,
