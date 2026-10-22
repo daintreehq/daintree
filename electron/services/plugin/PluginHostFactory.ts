@@ -77,7 +77,10 @@ import {
   openPluginDatabase,
   resolvePluginDatabaseLocation,
 } from "./pluginDatabase.js";
-import type { PluginDatabaseApi } from "../../../shared/types/plugin.js";
+import {
+  PLUGIN_TERMINAL_STATUS_MAX_PER_PROJECT,
+  type PluginDatabaseApi,
+} from "../../../shared/types/plugin.js";
 import {
   databaseBackupApprovers,
   fsWriteApprovers,
@@ -147,6 +150,10 @@ import {
   sameWorktreeReviewChecks,
   validatePluginWorktreeReviewChecks,
 } from "../../../shared/utils/pluginWorktreeReviewChecks.js";
+import {
+  sameTerminalStatus,
+  validatePluginTerminalStatus,
+} from "../../../shared/utils/pluginTerminalStatus.js";
 import { makeForgeProviderId } from "../../../shared/utils/forgeProviderIds.js";
 import { forgeProviderRoles } from "../../../shared/utils/forgeProviderRoles.js";
 import {
@@ -233,6 +240,7 @@ import type {
   PluginContextValue,
   PluginWorktreeCardStatus,
   PluginWorktreeReviewCheck,
+  PluginTerminalStatus,
   PluginHostBinding,
   PluginMcpCaller,
   PluginMcpToolDefinition,
@@ -648,6 +656,19 @@ export interface PluginHostFactoryDeps {
     worktreeId: string,
     since: { revision: number; at: number }
   ) => boolean;
+  /**
+   * Terminal header statuses set via `host.setTerminalStatus`, `pluginId →
+   * projectId → terminalId → status` (#13802).
+   */
+  pluginTerminalStatuses: Map<string, Map<string, Map<string, PluginTerminalStatus>>>;
+  /** Publish one plugin's complete terminal-status map for one project to that project's views. */
+  emitTerminalStatuses: (pluginId: string, projectId: string) => void;
+  /** Bumped whenever a plugin's terminal statuses are cleared (unload, worker swap). */
+  terminalStatusGeneration: (pluginId: string) => number;
+  /** Bumped on every project close. */
+  terminalStatusCloseRevision: () => number;
+  /** Whether the project closed after the call taken at `sinceRevision`. */
+  isTerminalStatusProjectClosed: (projectId: string, sinceRevision: number) => boolean;
   /** Runtime panel menus set via `host.setPanelMenuItems`, `pluginId → panelId → items`. */
   pluginPanelMenus: Map<string, Map<string, readonly PublishedPanelMenuItem[]>>;
   pluginFsWatchers: Map<string, Set<() => void>>;
@@ -1113,6 +1134,7 @@ export function createHost(
 
   let worktreeCardStatusChain: Promise<void> = Promise.resolve();
   let worktreeReviewChecksChain: Promise<void> = Promise.resolve();
+  let terminalStatusChain: Promise<void> = Promise.resolve();
 
   // Identity is derived once, here, from the id and binding this host was built
   // with. Deriving it host-side — through the canonical parser that owns the key
@@ -2692,6 +2714,87 @@ export function createHost(
       };
       const next = worktreeReviewChecksChain.then(run);
       worktreeReviewChecksChain = next.catch(() => {});
+      return next;
+    },
+    // NOT revoke-guarded, like setWorktreeCardStatus. The terminal must be one
+    // this host's own agents.list names (so it needs `agent:read`, and a project
+    // plugin stays on its own project's panes); an unreadable list refuses and
+    // never prunes what is already shown (#13802).
+    setTerminalStatus: (terminalId, status) => {
+      if (!isBound()) return Promise.resolve();
+      if (!deps.declaredCapabilities(pluginId).has("agent:read")) {
+        return Promise.reject(
+          new Error(
+            `PERMISSION_REQUIRED: plugin "${pluginId}" setTerminalStatus requires "agent:read", which is not declared in manifest.capabilities`
+          )
+        );
+      }
+      const entry = validatePluginTerminalStatus(terminalId, status, manifestId, pluginId);
+      if (!entry.ok) {
+        // Reject (not sync throw): runtime-surface Promise method (#10617).
+        return Promise.reject(new Error(`Plugin "${pluginId}" setTerminalStatus: ${entry.error}`));
+      }
+      const generation = deps.terminalStatusGeneration(pluginId);
+      const closeRevision = deps.terminalStatusCloseRevision();
+      const run = async (): Promise<void> => {
+        let read: Awaited<ReturnType<typeof dispatcher.sendAgentsListWithProject>>;
+        try {
+          read = await dispatcher.sendAgentsListWithProject(boundProjectId, pluginId);
+        } catch (err) {
+          if (isProjectViewUnavailable(err)) {
+            throw new Error(
+              `Plugin "${pluginId}" setTerminalStatus: terminals are unavailable (project view not open)`,
+              { cause: err }
+            );
+          }
+          throw err;
+        }
+        if (!isBound() || deps.terminalStatusGeneration(pluginId) !== generation) return;
+        const projectId = read.projectId;
+        if (projectId === null) {
+          throw new Error(`Plugin "${pluginId}" setTerminalStatus: terminals are unavailable`);
+        }
+        const pane = read.agents.find((a) => a.terminalId === entry.terminalId);
+        if (!pane) {
+          throw new Error(
+            `Plugin "${pluginId}" setTerminalStatus: "${entry.terminalId}" is not a terminal this plugin can see`
+          );
+        }
+        if (deps.isTerminalStatusProjectClosed(projectId, closeRevision)) {
+          throw new Error(`Plugin "${pluginId}" setTerminalStatus: the project was closed`);
+        }
+        let byProject = deps.pluginTerminalStatuses.get(pluginId);
+        let statuses = byProject?.get(projectId);
+        if (entry.status === null) {
+          if (!statuses?.delete(entry.terminalId)) return;
+          if (statuses.size === 0) byProject!.delete(projectId);
+          if (byProject!.size === 0) deps.pluginTerminalStatuses.delete(pluginId);
+        } else {
+          if (sameTerminalStatus(statuses?.get(entry.terminalId), entry.status)) return;
+          if (
+            !statuses?.has(entry.terminalId) &&
+            (statuses?.size ?? 0) >= PLUGIN_TERMINAL_STATUS_MAX_PER_PROJECT
+          ) {
+            throw new Error(
+              `Plugin "${pluginId}" setTerminalStatus: at most ${PLUGIN_TERMINAL_STATUS_MAX_PER_PROJECT} terminals can hold a status at once`
+            );
+          }
+          if (!byProject) {
+            byProject = new Map();
+            deps.pluginTerminalStatuses.set(pluginId, byProject);
+          }
+          if (!statuses) {
+            statuses = new Map();
+            byProject.set(projectId, statuses);
+          }
+          statuses.set(entry.terminalId, entry.status);
+        }
+        flushPluginPushes();
+        deps.emitTerminalStatuses(pluginId, projectId);
+      };
+      // Serialized, so a set followed by a clear lands in call order.
+      const next = terminalStatusChain.then(run);
+      terminalStatusChain = next.catch(() => {});
       return next;
     },
     // NOT revoke-guarded, like setPanelBadge: a plugin republishes its menu

@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { CHANNELS } from "../../ipc/channels.js";
 import { getWindowRegistry, getProjectViewManager } from "../../window/windowRef.js";
 import { onWebContentsDestroyed } from "../../window/webContentsDestroyed.js";
+import { getProjectForWebContents } from "../../window/webContentsRegistry.js";
 import { resolveTargetWebContents, type PluginTargetProjectId } from "./rendererTargeting.js";
 import { thawThenSend } from "../../utils/thawThenSend.js";
 import type { ClientEndpoint } from "../../ipc/endpoint.js";
@@ -517,6 +518,30 @@ export class PluginRendererDispatcher {
       projectId,
       detail: "Plugin agents.list",
     });
+  }
+
+  /**
+   * {@link sendAgentsListToRenderer} that also names the project the panes came
+   * from (#13802), taken from the very view that answered so a focus change
+   * mid-read cannot attribute them to another project. `projectId` is `null`
+   * when no local view answered (Host-mode routing, no view): the panes carry
+   * no project of their own, so a caller must not file anything against them.
+   */
+  async sendAgentsListWithProject(
+    projectId?: PluginTargetProjectId,
+    pluginId?: string
+  ): Promise<{ projectId: string | null; agents: PluginAgentPane[] }> {
+    if (projectId != null) {
+      return { projectId, agents: await this.sendAgentsListToRenderer(projectId, pluginId) };
+    }
+    if (this.routedFrontend(null, pluginId) !== null || this.deps.isDisposed()) {
+      return { projectId: null, agents: [] };
+    }
+    const webContents = resolveTargetWebContents(null, "Plugin agents.list");
+    if (!webContents) return { projectId: null, agents: [] };
+    const owner = getProjectForWebContents(webContents.id);
+    const { agents } = await this.sendAgentsListToWebContents(webContents);
+    return { projectId: owner, agents };
   }
 
   /**

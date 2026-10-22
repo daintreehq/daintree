@@ -89,6 +89,7 @@ import type {
   PluginContextValue,
   PluginWorktreeCardStatus,
   PluginWorktreeReviewCheck,
+  PluginTerminalStatus,
   PluginRuntimeStatus,
   PluginWorkerStatus,
   PluginWorkerState,
@@ -838,6 +839,21 @@ export class PluginService {
     string,
     Map<string, Map<string, PluginWorktreeCardStatus>>
   >();
+  /**
+   * Terminal header statuses set via `host.setTerminalStatus`, keyed `pluginId
+   * → projectId → terminalId → status` (#13802). Held, scoped and replayed like
+   * {@link pluginWorktreeCardStatuses}: each bucket reaches only its own
+   * project's views.
+   */
+  private pluginTerminalStatuses = new Map<
+    string,
+    Map<string, Map<string, PluginTerminalStatus>>
+  >();
+  /** Bumped per plugin on each clear of its terminal statuses. */
+  private terminalStatusGenerations = new Map<string, number>();
+  /** Bumped on every project close, so a setter still reading terminals can tell. */
+  private terminalStatusCloseRevision = 0;
+  private closedTerminalStatusProjects = new Map<string, number>();
   /** Bumped per plugin on each clear of its statuses; see `worktreeCardStatusGeneration`. */
   private worktreeCardStatusGenerations = new Map<string, number>();
   /**
@@ -3448,6 +3464,7 @@ export class PluginService {
         this.resetPluginContextKeys(pluginId);
         this.clearPluginWorktreeCardStatuses(pluginId);
         this.clearPluginWorktreeReviewChecks(pluginId);
+        this.clearPluginTerminalStatuses(pluginId);
       },
       // A protocol violation terminates the worker for good (#12276). Provenance
       // is already recorded by `onActivationResult`; this releases the runtime
@@ -4217,6 +4234,12 @@ export class PluginService {
       worktreeReviewChecksGeneration: (pluginId) =>
         this.worktreeReviewChecksGenerations.get(pluginId) ?? 0,
       worktreeCardTargetRevision: () => this.worktreeCardTargetRevision,
+      pluginTerminalStatuses: this.pluginTerminalStatuses,
+      emitTerminalStatuses: (pluginId, projectId) => this.emitTerminalStatuses(pluginId, projectId),
+      terminalStatusGeneration: (pluginId) => this.terminalStatusGenerations.get(pluginId) ?? 0,
+      terminalStatusCloseRevision: () => this.terminalStatusCloseRevision,
+      isTerminalStatusProjectClosed: (projectId, sinceRevision) =>
+        (this.closedTerminalStatusProjects.get(projectId) ?? 0) > sinceRevision,
       isWorktreeCardTargetRetired: (projectId, worktreeId, since) =>
         this.isWorktreeCardTargetRetired(projectId, worktreeId, since),
       pluginPanelMenus: this.pluginPanelMenus,
@@ -6010,6 +6033,22 @@ export class PluginService {
     });
   }
 
+  /**
+   * Publish one plugin's complete terminal statuses for one project, to that
+   * project's views only. An empty map clears them (#13802).
+   */
+  private emitTerminalStatuses(pluginId: string, projectId: string): void {
+    if (this.disposed) return;
+    broadcastToProjectRenderers(projectId, CHANNELS.EVENTS_PUSH, {
+      name: "plugin:terminal-statuses-changed" as const,
+      payload: {
+        pluginId,
+        projectId,
+        statuses: this.serializePluginTerminalStatuses(pluginId, projectId),
+      },
+    });
+  }
+
   /** One plugin's readiness checks in one project (`worktreeId → checks`), empty when none. */
   private serializePluginWorktreeReviewChecks(
     pluginId: string,
@@ -6030,6 +6069,27 @@ export class PluginService {
     if (!byProject) return;
     this.pluginWorktreeReviewChecks.delete(pluginId);
     for (const projectId of byProject.keys()) this.emitWorktreeReviewChecks(pluginId, projectId);
+  }
+
+  private serializePluginTerminalStatuses(
+    pluginId: string,
+    projectId: string
+  ): Record<string, PluginTerminalStatus> {
+    const statuses = this.pluginTerminalStatuses.get(pluginId)?.get(projectId);
+    if (!statuses || statuses.size === 0) return {};
+    return Object.fromEntries(statuses);
+  }
+
+  /** Drop a plugin's terminal statuses everywhere, clearing each project's views. */
+  private clearPluginTerminalStatuses(pluginId: string): void {
+    this.terminalStatusGenerations.set(
+      pluginId,
+      (this.terminalStatusGenerations.get(pluginId) ?? 0) + 1
+    );
+    const byProject = this.pluginTerminalStatuses.get(pluginId);
+    if (!byProject) return;
+    this.pluginTerminalStatuses.delete(pluginId);
+    for (const projectId of byProject.keys()) this.emitTerminalStatuses(pluginId, projectId);
   }
 
   private retireWorktreeCardTarget(key: string): void {
@@ -6513,6 +6573,13 @@ export class PluginService {
       if (!byProject.delete(projectId)) continue;
       if (byProject.size === 0) this.pluginWorktreeReviewChecks.delete(pluginId);
       this.emitWorktreeReviewChecks(pluginId, projectId);
+    }
+    // Terminal chips likewise: the panes they marked went with the project.
+    this.closedTerminalStatusProjects.set(projectId, ++this.terminalStatusCloseRevision);
+    for (const [pluginId, byProject] of [...this.pluginTerminalStatuses]) {
+      if (!byProject.delete(projectId)) continue;
+      if (byProject.size === 0) this.pluginTerminalStatuses.delete(pluginId);
+      this.emitTerminalStatuses(pluginId, projectId);
     }
     if (!this.projectPluginController) return;
     await this.projectPluginController.onProjectClosed(projectId);
@@ -7268,6 +7335,10 @@ export class PluginService {
 
     runUnloadStep(pluginId, "clearWorktreeReviewChecks", () =>
       this.clearPluginWorktreeReviewChecks(pluginId)
+    );
+
+    runUnloadStep(pluginId, "clearTerminalStatuses", () =>
+      this.clearPluginTerminalStatuses(pluginId)
     );
 
     runUnloadStep(pluginId, "clearPanelMenus", () => this.clearPluginPanelMenus(pluginId));
@@ -8536,6 +8607,30 @@ export class PluginService {
             pluginId,
             projectId: checksProjectId,
             checks: this.serializePluginWorktreeReviewChecks(pluginId, checksProjectId),
+          },
+        };
+        if (
+          projectId === undefined &&
+          isWithheldFromView(webContents.id, CHANNELS.EVENTS_PUSH, [envelope])
+        ) {
+          continue;
+        }
+        try {
+          webContents.send(CHANNELS.EVENTS_PUSH, envelope);
+        } catch {
+          // Silently ignore send failures during window initialization/disposal.
+        }
+      }
+    }
+    for (const [pluginId, byProject] of this.pluginTerminalStatuses) {
+      for (const statusProjectId of byProject.keys()) {
+        if (!inView(statusProjectId)) continue;
+        const envelope = {
+          name: "plugin:terminal-statuses-changed",
+          payload: {
+            pluginId,
+            projectId: statusProjectId,
+            statuses: this.serializePluginTerminalStatuses(pluginId, statusProjectId),
           },
         };
         if (

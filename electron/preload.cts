@@ -225,6 +225,7 @@ import type {
   PluginContextValue,
   PluginWorktreeCardStatus,
   PluginWorktreeReviewCheck,
+  PluginTerminalStatus,
   PluginFocusedPanel,
 } from "../shared/types/plugin.js";
 import type { PanelKindConfig } from "../shared/config/panelKindRegistry.js";
@@ -998,6 +999,8 @@ const _eventBusReplayable: ReadonlySet<keyof IpcEventBusMap> = new Set([
   "plugin:worktree-card-statuses-changed",
   // Same replay, for the Review Hub's checks store (#13806).
   "plugin:worktree-review-checks-changed",
+  // Same replay, for the terminal header chips (#13802).
+  "plugin:terminal-statuses-changed",
 ]);
 // Replayable events that accumulate instead of superseding. A double-clicked
 // `.dntr` archive (#11280) is one decision per file, so collapsing two
@@ -1018,6 +1021,7 @@ const _eventBusFifoReplay: ReadonlySet<keyof IpcEventBusMap> = new Set([
   "plugin:context-keys-changed",
   "plugin:worktree-card-statuses-changed",
   "plugin:worktree-review-checks-changed",
+  "plugin:terminal-statuses-changed",
 ]);
 // FIFO events whose every payload is one plugin's whole map: a newer one for the
 // same plugin supersedes the buffered one. A payload that also names a project
@@ -1029,6 +1033,7 @@ const _eventBusPerPluginLatest: ReadonlySet<keyof IpcEventBusMap> = new Set([
   "plugin:context-keys-changed",
   "plugin:worktree-card-statuses-changed",
   "plugin:worktree-review-checks-changed",
+  "plugin:terminal-statuses-changed",
 ]);
 const _eventBusBuffered = new Map<keyof IpcEventBusMap, unknown[]>();
 
@@ -3885,6 +3890,13 @@ function buildElectronApi(): ElectronAPI {
           checks: Record<string, PluginWorktreeReviewCheck[]>;
         }) => void
       ) => _eventBusOn("plugin:worktree-review-checks-changed", callback),
+      onTerminalStatusesChanged: (
+        callback: (payload: {
+          pluginId: string;
+          projectId: string;
+          statuses: Record<string, PluginTerminalStatus>;
+        }) => void
+      ) => _eventBusOn("plugin:terminal-statuses-changed", callback),
       onPanelMenusChanged: (
         callback: (payload: {
           pluginId: string;

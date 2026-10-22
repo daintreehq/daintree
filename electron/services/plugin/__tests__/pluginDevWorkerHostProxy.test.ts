@@ -1632,6 +1632,33 @@ describe("PluginDevWorkerHostProxy setWorktreeReviewChecks (#13806)", () => {
   });
 });
 
+describe("PluginDevWorkerHostProxy setTerminalStatus (#13802)", () => {
+  it("relays the vetted status as a call and passes main's refusal back", async () => {
+    const { proxy, sent } = makeProxy();
+    const set = proxy.host.setTerminalStatus("term-1", { label: " up ", tooltip: "" });
+    const call = sent.find((m) => m.type === "host-call" && m.method === "setTerminalStatus");
+    expect(call?.params).toEqual({ terminalId: "term-1", status: { label: "up" } });
+    proxy.handleMessage({
+      type: "host-result",
+      requestId: call.requestId,
+      ok: false,
+      error: 'Plugin "acme" setTerminalStatus: "term-1" is not a terminal this plugin can see',
+    });
+    await expect(set).rejects.toThrow(/is not a terminal this plugin can see/);
+  });
+
+  it("rejects a bad id or status without crossing the port", async () => {
+    const { proxy, sent } = makeProxy();
+    await expect(proxy.host.setTerminalStatus("", { label: "x" })).rejects.toThrow(
+      /setTerminalStatus: terminalId/
+    );
+    await expect(
+      proxy.host.setTerminalStatus("t", { label: "x", command: "other.open" })
+    ).rejects.toThrow(/setTerminalStatus: status.command "other.open" must be one of/);
+    expect(sent.find((m) => m.type === "host-call")).toBeUndefined();
+  });
+});
+
 describe("PluginDevWorkerHostProxy setWorktreeCardStatus (#13704)", () => {
   beforeEach(() => vi.clearAllMocks());
   afterEach(() => vi.restoreAllMocks());

@@ -78,6 +78,7 @@ import { normalizePanelMenuItems } from "../../../shared/utils/pluginPanelMenuIt
 import { validatePluginContextEntry } from "../../../shared/utils/pluginContextKeys.js";
 import { validatePluginWorktreeCardStatus } from "../../../shared/utils/pluginWorktreeCardStatus.js";
 import { validatePluginWorktreeReviewChecks } from "../../../shared/utils/pluginWorktreeReviewChecks.js";
+import { validatePluginTerminalStatus } from "../../../shared/utils/pluginTerminalStatus.js";
 import { toPluginFocusedPanel } from "../../../shared/utils/pluginFocusedPanel.js";
 import {
   normalizePluginAllAgentsSnapshot,
@@ -1431,6 +1432,23 @@ export class PluginDevWorkerHostProxy {
         return this.callWithGrace<void>(
           "setWorktreeReviewChecks",
           { worktreeId: entry.worktreeId, checks: entry.checks },
+          undefined
+        );
+      },
+      // Same shape as setWorktreeCardStatus (#13802): vetted here so a mistake
+      // rejects to the caller, then main checks the terminal against its own
+      // agents.list read.
+      setTerminalStatus: (terminalId, status) => {
+        if (this.disposed) return Promise.resolve();
+        const entry = validatePluginTerminalStatus(terminalId, status, manifestId, manifestId);
+        if (!entry.ok) {
+          return Promise.reject(
+            new Error(`Plugin "${this.pluginId}" setTerminalStatus: ${entry.error}`)
+          );
+        }
+        return this.callWithGrace<void>(
+          "setTerminalStatus",
+          { terminalId: entry.terminalId, status: entry.status },
           undefined
         );
       },

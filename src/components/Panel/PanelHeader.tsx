@@ -78,6 +78,7 @@ import {
 } from "@/components/Worktree/terminalStateConfig";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { PluginPanelBadges } from "@/components/Panel/PluginPanelBadges";
+import { TerminalPluginStatusChips } from "@/components/Terminal/TerminalPluginStatusChips";
 import { BellDot, FolderGit2, NotebookPen } from "@/components/icons";
 import { useDragHandle } from "@/components/DragDrop/DragHandleContext";
 import { makeSortableAnnouncements } from "@/components/DragDrop/sortableAnnouncements";
@@ -1378,6 +1379,9 @@ function PanelHeaderComponent({
 
             {/* Live plugin-contributed badges (host.setPanelBadge) for this panel */}
             <PluginPanelBadges panelId={id} />
+
+            {/* Attributed, colourless plugin status chips (host.setTerminalStatus) */}
+            <TerminalPluginStatusChips terminalId={id} worktreeId={currentWorktreeId} />
 
             {/* Worktree branch badge — shown when multiple worktrees are active */}
             {worktreeBranch && worktreeAccentColor && (

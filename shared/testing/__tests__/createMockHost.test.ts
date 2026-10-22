@@ -468,6 +468,42 @@ describe("createMockHost", () => {
     expect(host.setWorktreeReviewChecksCalls).toEqual([]);
   });
 
+  it("setTerminalStatus records calls for terminals agents.list names, with production's gates (#13802)", async () => {
+    const pane = {
+      terminalId: "term-1",
+      title: "Claude",
+      agentId: "claude",
+      worktree: null,
+      isFocused: true,
+      canDraft: true,
+    };
+    const host = createMockHost({ agents: [pane] });
+    await host.setTerminalStatus("term-1", { label: " INV-1 ", tooltip: "detail" });
+    await host.setTerminalStatus("term-1", { label: "INV-2" });
+    expect(host.setTerminalStatusCalls).toEqual([
+      { terminalId: "term-1", status: { label: "INV-1", tooltip: "detail" } },
+      { terminalId: "term-1", status: { label: "INV-2" } },
+    ]);
+    expect([...host.terminalStatuses]).toEqual([["term-1", { label: "INV-2" }]]);
+
+    await host.setTerminalStatus("term-1", null);
+    expect(host.terminalStatuses.size).toBe(0);
+    await expect(host.setTerminalStatus("term-9", { label: "x" })).rejects.toThrow(
+      /not a terminal this plugin can see/
+    );
+    await expect(host.setTerminalStatus("term-1", { label: "" })).rejects.toThrow(
+      /setTerminalStatus: status.label/
+    );
+    await expect(
+      createMockHost({ agents: [pane], capabilities: ["agent:input"] }).setTerminalStatus(
+        "term-1",
+        {
+          label: "x",
+        }
+      )
+    ).rejects.toThrow(/PERMISSION_REQUIRED/);
+  });
+
   it("setWorktreeCardStatus keys a status by the snapshot id, whichever id is passed (#13704)", async () => {
     const host = createMockHost({
       worktrees: [{ ...sampleSnapshot, id: "/tmp/repo", worktreeId: "wt-stable" }],

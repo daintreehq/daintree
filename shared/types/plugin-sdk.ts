@@ -92,6 +92,7 @@ export type {
   PluginContextValue,
   PluginWorktreeCardStatus,
   PluginWorktreeReviewCheck,
+  PluginTerminalStatus,
   PluginPanelBadgeColor,
   PluginPanelToolbarItemState,
   PluginQuickPickItem,

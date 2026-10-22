@@ -48,6 +48,7 @@ const HOST_CALL_DEADLINES = {
   setToolbarButtonState: DEFAULT,
   setWorktreeCardStatus: DEFAULT,
   setWorktreeReviewChecks: DEFAULT,
+  setTerminalStatus: DEFAULT,
   "actions.list": DEFAULT,
   "actions.get": DEFAULT,
   "settings.get": INTERACTIVE,

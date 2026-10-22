@@ -590,6 +590,31 @@ export const PLUGIN_WORKTREE_REVIEW_CHECK_DETAIL_MAX = 2048;
 /** Most checks one plugin may hold on one worktree, enforced host-side. */
 export const PLUGIN_WORKTREE_REVIEW_CHECKS_MAX = 10;
 
+/**
+ * A short status a plugin shows on one terminal's header via
+ * {@link PluginHostApi.setTerminalStatus} (#13802): the same shape as a
+ * worktree card's, drawn as a colourless chip named after the plugin.
+ */
+export interface PluginTerminalStatus {
+  label: string;
+  tooltip?: string;
+  /**
+   * One of this plugin's own actions, written `"{manifestId}.{id}"` as in the
+   * manifest, dispatched with `{ terminalId, worktreeId? }` when the chip is
+   * clicked. The chip stays a plain status until the action is registered.
+   */
+  command?: string;
+}
+
+/** Max length of a {@link PluginTerminalStatus} `label`, enforced host-side. */
+export const PLUGIN_TERMINAL_STATUS_LABEL_MAX = PLUGIN_WORKTREE_CARD_STATUS_LABEL_MAX;
+
+/** Max length of a {@link PluginTerminalStatus} `tooltip`, enforced host-side. */
+export const PLUGIN_TERMINAL_STATUS_TOOLTIP_MAX = PLUGIN_WORKTREE_CARD_STATUS_TOOLTIP_MAX;
+
+/** Most terminals one plugin may hold a status on at once, per project. */
+export const PLUGIN_TERMINAL_STATUS_MAX_PER_PROJECT = 256;
+
 /** Value a plugin publishes to `when` clauses via {@link PluginHostApi.setContext}. */
 export type PluginContextValue = boolean | string;
 
@@ -6185,6 +6210,36 @@ export interface PluginHostApi extends PluginActivationApi {
     worktreeId: string,
     checks: readonly PluginWorktreeReviewCheck[] | null
   ): Promise<void>;
+  /**
+   * Show (or clear) this plugin's status chip on one terminal's header (#13802)
+   * — a short one-line `label` with an optional `tooltip` for the detail. Pass
+   * `null` to clear it. A plugin holds one status per terminal, so a second
+   * call replaces the first; every plugin that marks a terminal gets its own
+   * chip, named after the plugin. The chip is colourless: the pane's accent
+   * and glyphs stay with agent state.
+   *
+   * Requires `agent:read`. `terminalId` is the `terminalId` of an entry in
+   * {@link PluginAgentsApi.list} right now, so a project plugin only ever
+   * reaches its own project's agent terminals. The call rejects when the id is
+   * not one of them, when the host cannot read the list, when the plugin holds
+   * the maximum of {@link PLUGIN_TERMINAL_STATUS_MAX_PER_PROJECT} statuses in
+   * the project, or when the label is empty, multi-line or longer than
+   * {@link PLUGIN_TERMINAL_STATUS_LABEL_MAX} characters or the tooltip longer
+   * than {@link PLUGIN_TERMINAL_STATUS_TOOLTIP_MAX}.
+   *
+   * An optional `command` makes the chip a button for one of the plugin's own
+   * actions, written `"{manifestId}.{id}"`: a click dispatches it with
+   * `{ terminalId, worktreeId? }` (the terminal's worktree, when it has one),
+   * so a declared `inputSchema` must accept that. A command in any other
+   * namespace, or one that names a built-in action, rejects. It need not be
+   * registered yet; until it is, the chip stays a plain status.
+   *
+   * Statuses are not persisted. They are cleared when the project closes and
+   * when the plugin unloads or its worker is replaced, so republish them after
+   * a restart. Like {@link setPanelBadge} this is NOT revoke-guarded and
+   * becomes a silent no-op once the plugin is unloaded.
+   */
+  setTerminalStatus(terminalId: string, status: PluginTerminalStatus | null): Promise<void>;
   /**
    * Publish the contextual actions the ⋯ and right-click menus of one of this
    * plugin's own panels offer right now — the backend-side twin of the view's
