@@ -394,7 +394,7 @@ export function registerWorktreeResourceActions(
       nonRepeatable: true,
       // Its confirmation lives on the card's environment popover, the one
       // place a person reaches it from; a palette run would skip it.
-      paletteHidden: true,
+      palette: { mode: "hidden" },
       argsSchema: z
         .object({
           worktreeId: z

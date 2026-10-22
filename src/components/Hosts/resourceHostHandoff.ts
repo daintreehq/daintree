@@ -131,6 +131,19 @@ export async function openResourceBoxOnHost(box: ResourceBox): Promise<ResourceH
       connection,
       ownerWorktreeId: box.worktreeId,
     }));
+  // Removed while the list was read or the host was added: main's cleanup has
+  // already run for it, so a host added here would have nothing to remove it.
+  const cancel = async (): Promise<never> => {
+    if (!existing) {
+      try {
+        await remoteHostsClient.forget(host.id);
+      } catch {
+        // Left in Settings → Hosts to remove by hand; the handoff still stops.
+      }
+    }
+    throw gone();
+  };
+  if (!stillCurrent()) return cancel();
 
   const setup = (): ResourceHandoffOutcome => {
     requestHostUpdate(host.id);
@@ -139,8 +152,8 @@ export async function openResourceBoxOnHost(box: ResourceBox): Promise<ResourceH
   };
   if (!probe.hostModeListening) return setup();
   const state = await remoteHostsClient.connectAndSettle(host.id);
+  if (!stillCurrent()) return cancel();
   if (!isUsable(state)) return setup();
-  if (!stillCurrent()) throw gone();
 
   const requestId = requestHostSwitch({
     toHostId: host.id,

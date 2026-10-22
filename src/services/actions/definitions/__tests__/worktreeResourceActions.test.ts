@@ -106,7 +106,7 @@ describe("worktree resource action definitions", () => {
     expect(def.isEnabled!({ activeWorktreeId: "/plain" })).toBe(false);
     expect(def.disabledReason!({})).toMatch(/can't open/);
     mockCanOfferResourceBoxHandoff.mockReturnValue(true);
-    expect(def.paletteHidden).toBe(true);
+    expect(def.palette).toEqual({ mode: "hidden" });
   });
 
   it("openOnHost shows ssh's own words when the machine can't be reached", async () => {

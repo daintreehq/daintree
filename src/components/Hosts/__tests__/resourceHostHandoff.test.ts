@@ -205,8 +205,25 @@ describe("resource box handoff", () => {
     expect(client.add).not.toHaveBeenCalled();
   });
 
-  it("places nothing once the worktree's machine changed while connecting", async () => {
+  it("takes back the host it added when the worktree went away meanwhile", async () => {
     client.probe.mockResolvedValue(probeResult({ hostModeListening: true }));
+    let current = true;
+    client.add.mockImplementation(async (payload: { name: string; ownerWorktreeId?: string }) => {
+      current = false;
+      return descriptor(payload.name, box.sshTarget, payload.ownerWorktreeId);
+    });
+
+    await expect(openResourceBoxOnHost({ ...box, isCurrent: () => current })).rejects.toMatchObject(
+      { code: "CANCELLED" }
+    );
+    expect(client.forget).toHaveBeenCalledWith("dt-feature-x");
+    expect(client.connectAndSettle).not.toHaveBeenCalled();
+    expect(requestHostUpdate).not.toHaveBeenCalled();
+  });
+
+  it("places nothing, and leaves the user's own host, when the machine changed while connecting", async () => {
+    client.probe.mockResolvedValue(probeResult({ hostModeListening: true }));
+    client.list.mockResolvedValue([entry(descriptor("my-box", "dt-feature-x"))]);
     let current = true;
     client.connectAndSettle.mockImplementation(async () => {
       current = false;
@@ -217,6 +234,7 @@ describe("resource box handoff", () => {
       { code: "CANCELLED" }
     );
     expect(requestHostSwitch).not.toHaveBeenCalled();
+    expect(client.forget).not.toHaveBeenCalled();
   });
 
   it("keeps a numbered name inside the host list's 64 characters", () => {

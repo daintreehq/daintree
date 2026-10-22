@@ -136,6 +136,29 @@ describe("watchOwnedHostCleanup", () => {
     warn.mockRestore();
   });
 
+  it("retries only the host it was removing, never one added later for a new box", async () => {
+    const hosts = [host("box-a", "/wt/a")];
+    let installing = true;
+    const forget = vi.fn(async (hostId: string) => {
+      if (installing) throw new Error("installing");
+      const at = hosts.findIndex((entry) => entry.id === hostId);
+      if (at >= 0) hosts.splice(at, 1);
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    stop = watchOwnedHostCleanup({ list: () => hosts, forget, probe: enoent, retryDelayMs: 5 });
+
+    finishTeardown("/wt/a");
+    await vi.waitFor(() => expect(forget).toHaveBeenCalledTimes(1));
+    hosts.push(host("box-b", "/wt/a"));
+    installing = false;
+
+    await vi.waitFor(() => expect(forget).toHaveBeenCalledTimes(2));
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(forget.mock.calls.map(([hostId]) => hostId)).toEqual(["box-a", "box-a"]);
+    expect(hosts.map((entry) => entry.id)).toEqual(["box-b"]);
+    warn.mockRestore();
+  });
+
   it("stops retrying once the host is gone some other way", async () => {
     const hosts = [host("box-a", "/wt/a")];
     const forget = vi.fn(async () => {

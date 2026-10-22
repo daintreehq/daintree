@@ -48,18 +48,29 @@ export function watchOwnedHostCleanup(options: OwnedHostCleanupOptions): () => v
   const ownedBy = (worktreeId: string) =>
     options.list().filter((host) => host.ownerWorktreeId === worktreeId);
 
-  const forgetOwned = (worktreeId: string, confirm?: () => Promise<boolean>, attempt = 0): void => {
+  /**
+   * `only` narrows a retry to the hosts the original cleanup was for: a host
+   * added afterwards, for the box a reprovision brought up, isn't this one's.
+   */
+  const forgetOwned = (
+    worktreeId: string,
+    confirm?: () => Promise<boolean>,
+    attempt = 0,
+    only?: ReadonlySet<HostId>
+  ): void => {
+    const targets = () =>
+      ownedBy(worktreeId).filter((host) => only === undefined || only.has(host.id));
     if (disposed || pending.has(worktreeId)) return;
-    if (ownedBy(worktreeId).length === 0) return;
+    if (targets().length === 0) return;
     pending.add(worktreeId);
     void (async () => {
-      let refused = false;
+      const refused = new Set<HostId>();
       try {
         if (confirm && !(await confirm())) return;
         // Read again: the list may have changed while the folder was checked.
-        for (const host of ownedBy(worktreeId)) {
+        for (const host of targets()) {
           await options.forget(host.id).catch((error: unknown) => {
-            refused = true;
+            refused.add(host.id);
             console.warn("[RemoteHosts] Removing a worktree's resource host failed:", error);
           });
         }
@@ -68,10 +79,10 @@ export function watchOwnedHostCleanup(options: OwnedHostCleanupOptions): () => v
       }
       // Refused while installing or being re-pointed: the box is still gone, so
       // try again once that settles rather than leave a host nothing removes.
-      if (refused && !disposed && attempt < MAX_RETRIES && !retryTimers.has(worktreeId)) {
+      if (refused.size > 0 && !disposed && attempt < MAX_RETRIES && !retryTimers.has(worktreeId)) {
         const timer = setTimeout(() => {
           retryTimers.delete(worktreeId);
-          forgetOwned(worktreeId, undefined, attempt + 1);
+          forgetOwned(worktreeId, undefined, attempt + 1, refused);
         }, retryDelayMs);
         timer.unref?.();
         retryTimers.set(worktreeId, timer);
