@@ -463,7 +463,9 @@ function StripStatus({
     // the drawer says the source could not be opened is two surfaces telling
     // two stories. The workspace's state is the strip's state too.
     const workspace = state.workspace;
-    if (workspace.status === "ambiguous") {
+    // A page selection is sendable without one, so the choice isn't asked for.
+    const pagePicked = selection.status === "observed" && selection.page !== null;
+    if (workspace.status === "ambiguous" && !pagePicked) {
       return <StripMessage icon={FolderTree}>Choose which app this preview shows</StripMessage>;
     }
     if (workspace.status === "failed") {
@@ -636,9 +638,7 @@ export function SiteBuilderDrawer(props: DevPreviewToolSurfaceProps<InspectorCon
           Svelte elements, never a toll on sending what the page shows. */}
         {(state.workspace.status === "ready" ||
           state.workspace.status === "no-app" ||
-          (state.workspace.status === "ambiguous" &&
-            selection.status === "observed" &&
-            selection.page !== null)) &&
+          state.workspace.status === "ambiguous") &&
         (selection.status === "ready" ||
           (selection.status === "observed" && selection.page !== null) ||
           composer.draft.trim() !== "" ||

@@ -3120,7 +3120,9 @@ describe("an element with nothing Svelte to trace, in a worktree that holds a Sv
     const sent = await recordSends();
     await mountBound();
     await waitFor(() => expect(session().getSnapshot().workspace.status).toBe("ambiguous"));
-    await act(async () => host.select(0, [PAGE_NODE]));
+    // `unmapped` is the page's verdict on the audit, not on this element: an
+    // element with nothing Svelte at or above it is the page's either way.
+    await act(async () => host.select(0, [{ ...PAGE_NODE, unmapped: false }]));
 
     const prompt = await sendRequest(sent);
     expect(prompt).toContain('- Selector: "main > button.cta"');
@@ -3130,6 +3132,27 @@ describe("an element with nothing Svelte to trace, in a worktree that holds a Sv
       true
     );
     expect(session().getSnapshot().workspace.status).toBe("ambiguous");
+    // The choice is there for tracing, not asked for before this can be sent.
+    expect(text()).not.toContain("Choose which app this preview shows");
+  });
+
+  it("keeps a request being written about a page selection when the selection clears", async () => {
+    host.handlers.set(CHANNELS.workspaceOpen, () => ({
+      status: "ambiguous",
+      appRoots: ["/repo/apps/docs", "/repo/apps/admin"],
+    }));
+    withPreviewIn("/repo/apps/web");
+    await mountBound();
+    await waitFor(() => expect(session().getSnapshot().workspace.status).toBe("ambiguous"));
+    await act(async () => host.select(0, [PAGE_NODE]));
+    const request = await screen.findByRole("textbox", { name: "Request for the agent" });
+    fireEvent.change(request, { target: { value: "Make this bigger" } });
+    await act(async () => host.select(0, []));
+    expect(session().getSnapshot().selection.status).toBe("none");
+    const kept = screen.getByRole("textbox", {
+      name: "Request for the agent",
+    }) as HTMLTextAreaElement;
+    expect(kept.value).toBe("Make this bigger");
   });
 
   it.each([
@@ -3186,6 +3209,20 @@ describe("an element with nothing Svelte to trace, in a worktree that holds a Sv
     await waitFor(() => expect(session().getSnapshot().workspace.status).toBe("ready"));
     await act(async () =>
       pushGuest(2, { type: "metadataProbed", locations: false, ancestry: false })
+    );
+    expect(session().getSnapshot().issue).toBeNull();
+  });
+
+  it("doesn't warn when the preview runs beside every app it could have been", async () => {
+    host.handlers.set(CHANNELS.workspaceOpen, () => ({
+      status: "ambiguous",
+      appRoots: ["/repo/apps/docs", "/repo/apps/admin"],
+    }));
+    withPreviewIn("/repo/apps/web");
+    await mountBound();
+    await waitFor(() => expect(session().getSnapshot().workspace.status).toBe("ambiguous"));
+    await act(async () =>
+      pushGuest(2, { type: "runtimeIssue", code: "not-dev-build", detail: "" })
     );
     expect(session().getSnapshot().issue).toBeNull();
   });
