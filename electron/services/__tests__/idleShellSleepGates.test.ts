@@ -44,6 +44,7 @@ function agent(id: string, overrides: Partial<SleepGateTerminal> = {}): SleepGat
     lastTypedInputAt: NOW - 3 * HOUR_MS,
     lastOutputChangeAt: NOW - 2 * HOUR_MS,
     hasPendingSubmission: false,
+    analysisLive: true,
     ...overrides,
   });
 }
@@ -224,6 +225,8 @@ describe("evaluateShellTerminals with agents (#13854)", () => {
     ["a recent visible change", { lastOutputChangeAt: NOW - 60_000 }, "terminal-activity"],
     ["a fresh spawn", { spawnedAt: NOW - 60_000 }, "terminal-activity"],
     ["no visible-change reading", { lastOutputChangeAt: undefined }, "terminal-unknown"],
+    ["a mirror that stopped reading it", { analysisLive: false }, "terminal-unknown"],
+    ["a host that can't say whether it reads it", { analysisLive: undefined }, "terminal-unknown"],
     ["missing input time", { lastInputTime: undefined }, "terminal-unknown"],
   ])("blocks on %s", (_case, overrides, reason) => {
     expect(evaluate([agent("c", overrides)], atRest())).toEqual({ ok: false, reason });
@@ -282,6 +285,11 @@ describe("terminalsStillVetted", () => {
       ["a turn begun", { agentState: "working", lastStateChange: NOW - 1_000 }],
       ["a submission queued", { hasPendingSubmission: true }],
       ["typing since the screen", { lastTypedInputAt: NOW - 1_000, lastInputTime: NOW - 1_000 }],
+      [
+        "a draft left since it settled, however old",
+        { lastStateChange: NOW - 3 * HOUR_MS, lastTypedInputAt: NOW - 2 * HOUR_MS },
+      ],
+      ["its mirror detached since the screen", { analysisLive: false }],
       ["a visible change since the screen", { lastOutputChangeAt: NOW - 1_000 }],
     ])("refuses %s", (_case, overrides) => {
       expect(checkAgent(agent("c", overrides))).toBe(false);

@@ -476,6 +476,10 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
     };
   }
 
+  isLive(): boolean {
+    return !this.inactive();
+  }
+
   release(): void {
     if (this.released) return;
     this.released = true;

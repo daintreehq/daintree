@@ -543,8 +543,11 @@ export class TerminalInputController {
       return;
     }
     // Its requester took it back — the user stopped the pane's notices, or
-    // turned the MCP server off — while the body waited for its Enter.
+    // turned the MCP server off — while the body waited for its Enter. The
+    // body stays in the composer unsent, which is a draft from here on, as a
+    // staged line is.
     if (ctx?.isWithdrawn?.() === true) {
+      this.host.terminalInfo.lastTypedInputAt = Date.now();
       return;
     }
 

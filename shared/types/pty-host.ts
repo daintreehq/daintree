@@ -1146,6 +1146,11 @@ export interface PtyHostTerminalInfo {
   lastOutputTime?: number;
   /** A submission is queued or still being written; absent from older hosts. */
   hasPendingSubmission?: boolean;
+  /**
+   * A mirror still reads this terminal's output, so its agent state and
+   * visible-change stamp can still move; absent from older hosts.
+   */
+  analysisLive?: boolean;
   spawnedAt: number;
   isTrashed?: boolean;
   trashExpiresAt?: number;

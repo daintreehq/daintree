@@ -26,10 +26,10 @@ export interface ProcessTreeSample {
 /**
  * What a launched agent's process tree held at the last census, read by the
  * host from every process in it (#13854):
- * - `runtime-and-servers`: the launch shell, the agent alone under it, and no
- *   shell under the agent.
- * - `other`: something else — a shell under the agent, a second process under
- *   the launch shell, or a root that isn't that shell and agent.
+ * - `runtime-and-servers`: the launch shell, the agent alone under it, and
+ *   nothing under the agent but MCP servers and its own helpers.
+ * - `other`: something else — any other process under the agent, a second
+ *   process under the launch shell, or a root that isn't that shell and agent.
  * - `unknown`: the census couldn't say, or this agent's tree shape hasn't been
  *   checked.
  */

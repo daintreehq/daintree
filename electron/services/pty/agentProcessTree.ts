@@ -51,26 +51,45 @@ export function isPlainShellName(comm: string): boolean {
  */
 const VERIFIED_AGENT_TREES: ReadonlySet<string> = new Set(["claude"]);
 
+/** What the runtime itself runs beside its servers: Claude's sleep assertion on macOS. */
+const RUNTIME_HELPERS: ReadonlySet<string> = new Set(["caffeinate"]);
+
+/**
+ * A stdio MCP server names itself on its command line — its package
+ * (`@playwright/mcp`, `@modelcontextprotocol/server-memory`), image
+ * (`mcp/fetch`) or binary (`github-mcp-server`), through whatever launcher
+ * (`npx`, `uvx`, `docker run -i`) started it.
+ */
+const MCP_SERVER_COMMAND = /mcp|modelcontextprotocol/i;
+
 /** The slice of the census a classification reads. */
 export interface AgentTreeCensus {
   getProcess(pid: number): Pick<ProcessInfo, "pid" | "comm" | "command"> | undefined;
   getChildPids(pid: number): number[];
 }
 
+/** The launched agent itself, never a shell script that launches it. */
 function runsAgent(proc: Pick<ProcessInfo, "comm" | "command">, agentId: string): boolean {
+  if (isPlainShellName(proc.comm)) return false;
   const name = stripCommandExecutableExtension(executableName(proc.comm));
   if (AGENT_CLI_NAMES[name] === agentId) return true;
   return detectCommandIdentity(proc.command)?.agentType === agentId;
 }
 
+function isServerOrHelper(proc: Pick<ProcessInfo, "comm" | "command">): boolean {
+  if (RUNTIME_HELPERS.has(executableName(proc.comm))) return true;
+  return MCP_SERVER_COMMAND.test(proc.command);
+}
+
 /**
  * What a launched agent's terminal holds, read from the full census rather
  * than the capped resource breakdown (#13854). The PTY root is the launch
- * wrapper shell, and the agent its only child. Below the agent, a shell is
- * work the agent started (a tool call, a background shell, a Monitor) that
- * dies with it and doesn't come back on resume; anything else is an MCP
- * server or the runtime's own helper. A server's own launcher may run
- * through `sh -c` (`npm exec` does), so nothing below a server is read.
+ * wrapper shell, and the agent its only child. Every process directly under
+ * the agent has to name itself an MCP server or be the runtime's own helper;
+ * anything else — a shell running a tool call, a background shell or a
+ * Monitor, or a job that replaced its shell with `exec` — is work that dies
+ * with the agent and doesn't come back on resume. A server's own launcher may
+ * run through `sh -c` (`npm exec` does), so nothing below a server is read.
  */
 export function classifyAgentTree(
   census: AgentTreeCensus,
@@ -89,7 +108,7 @@ export function classifyAgentTree(
   for (const pid of census.getChildPids(runtime.pid)) {
     const child = census.getProcess(pid);
     if (!child?.comm) return "unknown";
-    if (isPlainShellName(child.comm)) return "other";
+    if (isPlainShellName(child.comm) || !isServerOrHelper(child)) return "other";
   }
   return "runtime-and-servers";
 }

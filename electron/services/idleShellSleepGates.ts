@@ -57,13 +57,14 @@ export type VettedTerminals = ReadonlyMap<string, SleepGateTerminal>;
  * The gates an agent's own record answers (#13854), asked at the screen and
  * again against the kill's snapshot. Null when it passes.
  *
- * Only the agent Daintree launched, still the one detected, can be held to its
- * own session. It has to be waiting at a plain prompt (the wake gate's reading:
- * an approval, question or error, a turn, the boot window and no reading all
- * fail) with nothing typed since it settled there, nothing queued to submit,
- * and no input or visible change for the whole threshold. The visible-change
- * stamp ignores spinner and status redraws; without one there is no reading,
- * since raw output would count those redraws and nothing else is quiet proof.
+ * Only the agent Daintree launched, still the one detected and still read by a
+ * live mirror, can be held to its own session. It has to be waiting at a plain
+ * prompt (the wake gate's reading: an approval, question or error, a turn, the
+ * boot window and no reading all fail) with nothing typed since it settled
+ * there, nothing queued to submit, and no input or visible change for the
+ * whole threshold. The visible-change stamp ignores spinner and status
+ * redraws; without one there is no reading, since raw output would count those
+ * redraws and nothing else is quiet proof.
  */
 function agentRecordBlock(
   terminal: SleepGateTerminal,
@@ -74,6 +75,9 @@ function agentRecordBlock(
   if (!terminal.launchAgentId || terminal.detectedAgentId !== terminal.launchAgentId) {
     return "agent-resume-unproven";
   }
+  // With no mirror reading its output, the agent's state and visible-change
+  // stamp are frozen at whatever they last were.
+  if (terminal.analysisLive !== true) return "terminal-unknown";
   const prompt = evaluateWakeGate(terminal);
   if (prompt.kind === "hold" && prompt.reason === "typing") return "agent-input-pending";
   if (prompt.kind !== "ready") return "agent-not-at-prompt";

@@ -85,6 +85,13 @@ export interface AnalysisBackend {
   /** Drain pending parses, then capture both preserved + persistence forms. */
   captureFinalSnapshot(): Promise<AnalysisFinalCapture>;
 
+  /**
+   * Whether a mirror still reads this terminal's output. False once a worker
+   * backend has no worker left: agent state and the visible-change stamp stop
+   * moving then, and their last readings are no longer evidence of quiet.
+   */
+  isLive(): boolean;
+
   /** Free the analysis resources (worker slot / headless instance). Idempotent. */
   release(): void;
 }

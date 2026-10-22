@@ -117,6 +117,32 @@ describe("classifyAgentTree (#13854)", () => {
       ],
     ],
     [
+      "a background job that replaced its shell with exec",
+      [
+        LAUNCH_SHELL,
+        NATIVE_CLAUDE,
+        { pid: 30, ppid: 11, comm: "python3", command: "python3 worker.py --watch" },
+      ],
+    ],
+    [
+      "a child that doesn't name itself an MCP server",
+      [
+        LAUNCH_SHELL,
+        NATIVE_CLAUDE,
+        { pid: 20, ppid: 11, comm: "node", command: "node /opt/homebrew/bin/ask-google-mcp" },
+        { pid: 31, ppid: 11, comm: "rg", command: "rg --files" },
+      ],
+    ],
+    [
+      "a shell script that launches the agent, whatever runs under the agent",
+      [
+        LAUNCH_SHELL,
+        { pid: 11, ppid: 10, comm: "bash", command: "bash /Users/me/bin/claude" },
+        { pid: 12, ppid: 11, comm: "claude", command: "/Users/me/.local/bin/claude" },
+        { pid: 13, ppid: 12, comm: "bash", command: "bash -c sleep 600" },
+      ],
+    ],
+    [
       "a second process under the launch shell",
       [LAUNCH_SHELL, NATIVE_CLAUDE, { pid: 12, ppid: 10, comm: "gitstatusd" }],
     ],

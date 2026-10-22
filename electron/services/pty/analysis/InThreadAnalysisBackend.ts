@@ -114,6 +114,10 @@ export class InThreadAnalysisBackend implements AnalysisBackend {
     return this.host.captureFinalSnapshot();
   }
 
+  isLive(): boolean {
+    return true;
+  }
+
   release(): void {
     this.host.releaseHeadless();
   }

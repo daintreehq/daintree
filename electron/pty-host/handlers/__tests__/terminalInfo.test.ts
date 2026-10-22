@@ -9,6 +9,7 @@ function createCtx(overrides: Partial<HostContext> = {}): HostContext {
     getActivityTier: vi.fn(() => "active" as const),
     getSubmission: vi.fn(() => undefined),
     hasPendingSubmission: vi.fn(() => false),
+    isAnalysisLive: vi.fn(() => true),
   } as unknown as HostContext["ptyManager"];
 
   return {
@@ -106,6 +107,7 @@ describe("mapTerminalInfo", () => {
         isInTrash,
         getActivityTier: vi.fn(() => "active" as const),
         hasPendingSubmission: vi.fn(() => false),
+        isAnalysisLive: vi.fn(() => true),
       } as unknown as HostContext["ptyManager"],
     });
 
@@ -125,6 +127,7 @@ describe("mapTerminalInfo", () => {
         isInTrash: vi.fn(() => false),
         getActivityTier: vi.fn(() => "active" as const),
         hasPendingSubmission: vi.fn(() => false),
+        isAnalysisLive: vi.fn(() => true),
       } as unknown as HostContext["ptyManager"],
     });
 
@@ -196,10 +199,26 @@ describe("mapTerminalInfo", () => {
         isInTrash: vi.fn(() => false),
         getActivityTier: vi.fn(() => "active" as const),
         hasPendingSubmission,
+        isAnalysisLive: vi.fn(() => true),
       } as unknown as HostContext["ptyManager"],
     });
     expect(mapTerminalInfo(makeTerminal({ id: "busy" }), ctx).hasPendingSubmission).toBe(true);
     expect(mapTerminalInfo(makeTerminal({ id: "idle" }), ctx).hasPendingSubmission).toBe(false);
+  });
+
+  it("reports whether a mirror still reads the terminal, keeping an explicit false (#13854)", () => {
+    // A detached analysis backend freezes agent state and the visible-change
+    // stamp; auto-sleep must see that rather than read the frozen values.
+    const ctx = createCtx({
+      ptyManager: {
+        isInTrash: vi.fn(() => false),
+        getActivityTier: vi.fn(() => "active" as const),
+        hasPendingSubmission: vi.fn(() => false),
+        isAnalysisLive: vi.fn((id: string) => id !== "detached"),
+      } as unknown as HostContext["ptyManager"],
+    });
+    expect(mapTerminalInfo(makeTerminal({ id: "live" }), ctx).analysisLive).toBe(true);
+    expect(mapTerminalInfo(makeTerminal({ id: "detached" }), ctx).analysisLive).toBe(false);
   });
 
   it("emits exactly the field set the host response type declares", () => {
@@ -279,6 +298,7 @@ describe("mapTerminalInfo submission projection (#12337)", () => {
         getActivityTier: vi.fn(() => "active" as const),
         getSubmission,
         hasPendingSubmission: vi.fn(() => false),
+        isAnalysisLive: vi.fn(() => true),
       } as unknown as HostContext["ptyManager"],
     });
   }
