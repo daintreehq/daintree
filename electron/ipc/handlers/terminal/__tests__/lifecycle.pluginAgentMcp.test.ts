@@ -855,27 +855,20 @@ describe("terminal spawn handler - plugin MCP servers for agent launches", () =>
       expect(pluginMcpGrantRegistry.listForTerminal("term-help")).toEqual([]);
     });
 
-    it("holds a restarted Assistant, which arrives with no help token, to the Assistant's answer", async () => {
+    it("gives a restarted Assistant, which arrives with no help token, no plugin servers", async () => {
       setProjectAgentMcpAccess(PROJECT_A, "acme.ledger", "read-write");
-      setProjectAssistantAgentMcpAccess(PROJECT_A, "acme.ledger", "read-only");
+      setProjectAssistantAgentMcpAccess(PROJECT_A, "acme.ledger", "read-write");
       mockIsHelpTerminal.mockImplementation((terminalId) => terminalId === "term-help");
 
       await spawn({ id: "term-help" });
 
-      const [grant] = pluginMcpGrantRegistry.listForTerminal("term-help");
-      expect(grant).toMatchObject({ scope: { databases: true }, consumer: "assistant" });
-
-      setProjectAssistantAgentMcpAccess(PROJECT_A, "acme.ledger", "off");
+      expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
+      expect(ptyClient.spawn.mock.calls[0][1].command).toBe("claude");
       expect(pluginMcpGrantRegistry.listForTerminal("term-help")).toEqual([]);
-    });
 
-    it("mints nothing for a restarted Assistant whose answer is off", async () => {
-      setProjectAgentMcpAccess(PROJECT_A, "acme.ledger", "read-write");
-      mockIsHelpTerminal.mockImplementation((terminalId) => terminalId === "term-help");
-
-      await spawn({ id: "term-help" });
-
-      expect(pluginMcpGrantRegistry.listForTerminal("term-help")).toEqual([]);
+      // An ordinary pane in the same project still gets them.
+      await spawn({ id: "term-agent" });
+      expect(pluginMcpGrantRegistry.listForTerminal("term-agent")).toHaveLength(1);
     });
 
     it("launches the Assistant without plugin tools when preparing them fails", async () => {

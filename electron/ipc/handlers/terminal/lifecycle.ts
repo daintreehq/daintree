@@ -983,17 +983,15 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
           });
         const tier = resolveDaintreeMcpTier(projSettings);
         // A restart respawns an Assistant's pane under the same id with no help
-        // token (`buildRestartEnv`), so it lands here rather than above; its
-        // plugin servers stay the Assistant's, held to the Assistant's answer.
-        const pluginConsumer = helpSessionService.isHelpTerminal(id) ? "assistant" : undefined;
-        const pluginServers = await resolvePluginMcpServers(
-          resolvedProject.id,
-          resolvedProject.path,
-          pluginConsumer
-        );
+        // token (`buildRestartEnv`), so it lands here rather than above, with
+        // none of the session's own wiring either. Plugin servers reach the
+        // Assistant only through its own launch, checked against its session
+        // and its answer, so this one gets none.
+        const pluginServers = helpSessionService.isHelpTerminal(id)
+          ? []
+          : await resolvePluginMcpServers(resolvedProject.id, resolvedProject.path);
         if (tier !== "off" || pluginServers.length > 0) {
           const mcpServerService = await getMcpServerService();
-          if (pluginConsumer !== undefined) wireAssistantPluginActivity(mcpServerService);
           const ready = mcpServerService.isRunning || (await mcpServerService.ensureReady());
           if (!ready) {
             console.warn(
@@ -1015,11 +1013,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
                       projectId: resolvedProject.id,
                       servers: pluginServers,
                       launchAgentIdHint: launchAgentId,
-                      isEligible: isPluginMcpServerStillEligible(
-                        resolvedProject.id,
-                        pluginConsumer
-                      ),
-                      ...(pluginConsumer !== undefined ? { consumer: pluginConsumer } : {}),
+                      isEligible: isPluginMcpServerStillEligible(resolvedProject.id),
                     },
                   }
                 : {}),
