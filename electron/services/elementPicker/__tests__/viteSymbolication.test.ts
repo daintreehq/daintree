@@ -72,7 +72,7 @@ function symbolicatingResolver(): HostSourceResolver {
             elementId: obs.elementId,
             results: await Promise.all(
               observationCandidates(obs).map(async (candidate) =>
-                candidate.kind === "file-hint"
+                candidate.kind === "file-hint" || candidate.location === null
                   ? unavailableResult(candidate, "unsupported")
                   : symbolicatedResult(
                       candidate,

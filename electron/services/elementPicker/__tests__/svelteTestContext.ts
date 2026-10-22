@@ -301,6 +301,7 @@ export async function resolveIn(
     checkResolveResponse(request, response, {
       roots: sandbox.roots,
       servedRevision: (file) => job.servedRevision(file),
+      servedMap: (mapUrl, revision) => job.servedMap(mapUrl, revision),
     })
   ).toEqual(response);
   controller.abort();

@@ -128,8 +128,13 @@ function fake(
     const bytes = new TextEncoder().encode(content);
     return { ok: true as const, value: { file, revision: revisionOf(bytes), bytes } };
   });
+  // Symbolication never locates a page-reported path; only a map's sources.
+  const locateFile = vi.fn(async (): Promise<SourceAccessResult<SourceFileRef>> => ({
+    ok: false,
+    reason: "outside-workspace",
+  }));
   return {
-    access: { fetchSourceMap, locateSource, readSource } as ResolverSourceAccess,
+    access: { fetchSourceMap, locateSource, locateFile, readSource } as ResolverSourceAccess,
     fetchSourceMap,
     locateSource,
     readSource,
