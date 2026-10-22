@@ -77,6 +77,7 @@ const EndpointCloseSchema = z.object({ endpointId: id });
 
 const DriveLeaseHolderSchema = z.object({
   leaseId: u32,
+  tenureId: id.optional(),
   endpointId: id,
   clientId: id,
   clientName: z.string().max(256),

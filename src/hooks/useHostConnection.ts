@@ -23,6 +23,8 @@ import {
 import { notifyHostResync } from "@/store/hostResyncSignal";
 import {
   dropDeferredHostOwnedWrites,
+  holdHostOwnedWrites,
+  releaseHostOwnedWrites,
   setHostOwnedWriteFlushBarrier,
 } from "@/store/persistence/hostOwnedWrites";
 import {
@@ -37,7 +39,7 @@ import {
 } from "@/services/terminal/inputGate";
 import { ClientAppError } from "@/utils/clientAppError";
 import { isUnknownOutcomeError, resolveUnknownOutcome } from "@/utils/resolveUnknownOutcome";
-import { logWarn } from "@/utils/logger";
+import { logInfo, logWarn } from "@/utils/logger";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { primeHostPreviewCapability } from "@/components/FileViewer/filePreviewKinds";
 import { watchHostConnectionAnnouncements } from "@/components/Recovery/hostConnectionAnnouncements";
@@ -123,6 +125,7 @@ export function resyncFromHost(options: ResyncFromHostOptions = {}): Promise<voi
 async function runResyncPass(projectState: boolean): Promise<void> {
   const projectId = getViewWorkspaceId();
   const generation = resyncGeneration;
+  const readBacks = readBacksStarted;
   const isCurrent = () => generation === resyncGeneration && getViewWorkspaceId() === projectId;
   const lease = refreshLease();
   const terminals = projectId ? resyncHostTerminals(projectId, { isCurrent }) : Promise.resolve();
@@ -154,8 +157,10 @@ async function runResyncPass(projectState: boolean): Promise<void> {
         // And after the worktrees, so the saved active worktree can be found.
         await Promise.allSettled([terminals, lease, worktrees]);
         // A view that watches reads it back by following the driver, which
-        // the lease just read has set going.
+        // the lease just read has set going; one back over another driver's
+        // state reads it back as authoritative instead.
         if (!isCurrent() || watches(projectId)) return;
+        if (readBackOwed || readBacksStarted !== readBacks) return;
         await rehydrateHostProjectState(projectId, { isCurrent, authoritative: false });
       },
     ]);
@@ -171,8 +176,34 @@ async function runResyncPass(projectState: boolean): Promise<void> {
 
 /** Bumped by every lease event and by teardown, so a slower lookup never overrides either. */
 let leaseGeneration = 0;
-/** Bumped by every takeover and by teardown: only the latest takeover reads the host's state back. */
+/**
+ * Bumped by every takeover, every read-back after a lost link and by teardown:
+ * only the latest of them reads the host's state back.
+ */
 let takeOverGeneration = 0;
+
+/**
+ * The lease as this view last knew it when its link went down, until the host
+ * answers again: whether the lease it gets back is of the same tenure tells a
+ * blip from a project someone else may have driven meanwhile. Undefined while
+ * this view sees every change.
+ */
+let leaseBeforeGap: DriveLeaseView | undefined;
+/**
+ * This view came back to drive over state someone else may have saved and
+ * hasn't read the host's back yet; its own saves stay held until it has.
+ */
+let readBackOwed = false;
+/** The lease a read-back in flight is for, so a second answer naming it starts no other. */
+let readBackLeaseId: number | null | undefined = undefined;
+/** Counts read-backs after a lost link, so a resync pass knows one started under it. */
+let readBacksStarted = 0;
+/** Bumped each time the link goes down: nothing begun before an outage settles what it holds. */
+let gapGeneration = 0;
+/** Asks the host again while an answer about a lost link is still owed and the link is up. */
+let leaseRecheckTimer: ReturnType<typeof setTimeout> | null = null;
+let leaseRecheckAttempt = 0;
+const LEASE_RECHECK_DELAYS_MS = [1_000, 3_000, 10_000, 30_000];
 
 let followRunning: Promise<void> | null = null;
 let followAgain = false;
@@ -408,13 +439,180 @@ async function refreshLease(): Promise<void> {
     state = await lease.get({ projectId });
   } catch {
     // An unanswered lookup says nothing new: whatever block (or unknown
-    // ownership) this view already has stays until the host does answer.
+    // ownership) this view already has stays until the host does answer. One
+    // still owed an answer about a lost link asks again.
+    if (leaseBeforeGap !== undefined || readBackOwed) scheduleLeaseRecheck();
     return;
   }
   if (generation === leaseGeneration) applyLease(state);
 }
 
-function applyLease(lease: DriveLeaseView): void {
+/**
+ * Ask the host again, backing off, while this view still owes an answer about
+ * a lost link and the link is up: its saves stay held until one comes, and a
+ * quiet link may never prompt another lookup on its own.
+ */
+function scheduleLeaseRecheck(): void {
+  if (leaseRecheckTimer !== null || syncRefs === 0) return;
+  const delays = LEASE_RECHECK_DELAYS_MS;
+  const delay = delays[Math.min(leaseRecheckAttempt, delays.length - 1)];
+  leaseRecheckAttempt += 1;
+  leaseRecheckTimer = setTimeout(() => {
+    leaseRecheckTimer = null;
+    if (syncRefs === 0 || (leaseBeforeGap === undefined && !readBackOwed)) return;
+    // A link that is down asks again once it is back.
+    if (!isHostLinkUp(useHostConnectionStore.getState())) return;
+    void refreshLease();
+  }, delay);
+}
+
+function cancelLeaseRecheck(): void {
+  if (leaseRecheckTimer !== null) clearTimeout(leaseRecheckTimer);
+  leaseRecheckTimer = null;
+  leaseRecheckAttempt = 0;
+}
+
+/**
+ * The link to the host went down: until the host answers again this view
+ * can't see the lease move, so its saves are held whatever the gate says.
+ */
+function noteLeaseOutOfSight(): void {
+  // However often the link flaps before the host answers, what it is
+  // compared with is the lease this view had when it first lost sight of it.
+  const lease = leaseBeforeGap ?? getDriveLeaseSnapshot();
+  // A lease never known is settled by the claim on open.
+  if (lease === null) return;
+  leaseBeforeGap = lease;
+  // Nothing begun before the link went down answers for after it: not a
+  // lookup, nor a read-back, which the host's next answer starts afresh.
+  leaseGeneration += 1;
+  gapGeneration += 1;
+  readBackLeaseId = undefined;
+  cancelLeaseRecheck();
+  holdHostOwnedWrites();
+}
+
+/**
+ * Whether `after` is the lease this view drove under before the link went
+ * down, or one the host kept for its client meanwhile (a fresh session, a
+ * Host restart). One that watched then never kept it.
+ */
+function keptThroughGap(before: DriveLeaseView, after: DriveLeaseView): boolean {
+  const was = before.holder;
+  const is = after.holder;
+  if (!before.drivingHere || !was || !is) return false;
+  // A Host that predates tenures: only the very same lease is sure to be a blip.
+  if (was.tenureId === undefined || is.tenureId === undefined) {
+    return was.leaseId === is.leaseId && was.endpointId === is.endpointId;
+  }
+  return was.tenureId === is.tenureId;
+}
+
+/**
+ * What an answer from the host means to a view back from a lost link: what
+ * it held goes out (it kept the project) or the gate skips it (someone else
+ * drives), or it comes back to drive over someone else's state and reads the
+ * host's back first. Nothing at all for a view that saw every change.
+ */
+function backFromGap(lease: DriveLeaseView): "none" | "release" | "read-back" {
+  if (leaseBeforeGap === undefined && !readBackOwed) return "none";
+  const before = leaseBeforeGap;
+  leaseBeforeGap = undefined;
+  if (!lease.drivingHere) {
+    // It watches, following the driver's state as it is.
+    readBackOwed = false;
+    cancelLeaseRecheck();
+    return "release";
+  }
+  if (!readBackOwed && before !== undefined && keptThroughGap(before, lease)) {
+    cancelLeaseRecheck();
+    return "release";
+  }
+  readBackOwed = true;
+  const leaseId = lease.holder?.leaseId ?? null;
+  if (readBackLeaseId === leaseId) return "none";
+  logInfo("[HostConnection] Driving again after a lost link, maybe over another driver's state", {
+    projectId: lease.projectId,
+    leaseId,
+    leaseIdBefore: before?.holder?.leaseId ?? null,
+    watchedBefore: before?.drivingHere === false,
+  });
+  return "read-back";
+}
+
+/**
+ * This view took the project over, and its takeover reads the host's state
+ * back. Saves a lost link left held stay held until that read is done, as
+ * they would for a read-back after the gap. Returns whether they are.
+ */
+function takeOverDuringGap(lease: DriveLeaseView): boolean {
+  const held = leaseBeforeGap !== undefined || readBackOwed;
+  leaseBeforeGap = undefined;
+  readBackOwed = held;
+  readBackLeaseId = held ? (lease.holder?.leaseId ?? null) : undefined;
+  if (held) readBacksStarted += 1;
+  return held;
+}
+
+/**
+ * Back from a lost link to drive a project someone else may have driven
+ * meanwhile: the host's state is read back as a takeover reads it, and this
+ * view's saves stay held until it has been.
+ */
+function readBackAfterGap(lease: DriveLeaseView, settling: symbol): void {
+  readBackLeaseId = lease.holder?.leaseId ?? null;
+  readBacksStarted += 1;
+  settleReadBack(
+    readBackAsDriver(lease.projectId, lease, settling, "after the link came back", {
+      refreshWorktrees: true,
+    })
+  );
+}
+
+/**
+ * Once the host's state has been read back, what was held while it was read
+ * goes: it carries the state from before. The hold ends too, unless the link
+ * went down again meanwhile, when the host's next answer says what becomes of
+ * what that outage holds. A read that failed is tried again.
+ */
+function settleReadBack(done: Promise<boolean>): void {
+  const generation = takeOverGeneration;
+  const gap = gapGeneration;
+  void done.then((read) => {
+    if (generation !== takeOverGeneration) return;
+    readBackLeaseId = undefined;
+    if (!readBackOwed) return;
+    if (!read) {
+      if (gap === gapGeneration) scheduleLeaseRecheck();
+      return;
+    }
+    readBackOwed = false;
+    const reason = "they were made before the host's state was read back";
+    if (gap !== gapGeneration) {
+      dropDeferredHostOwnedWrites(reason);
+      return;
+    }
+    cancelLeaseRecheck();
+    releaseHostOwnedWrites(reason);
+  });
+}
+
+/**
+ * Apply the host's word on the lease. A takeover's own answer says
+ * `"take-over"`: it reads the host's state back itself (see
+ * {@link takeOverDuringGap}).
+ */
+function applyLease(lease: DriveLeaseView, source: "answer" | "take-over" = "answer"): void {
+  const back = source === "take-over" ? "none" : backFromGap(lease);
+  const settling = back === "read-back" ? Symbol("read-back") : null;
+  if (settling) {
+    dropDeferredHostOwnedWrites(
+      "the project may have been driven elsewhere while the link was down"
+    );
+    // Where it is gets said once it has moved to where the last driver was.
+    takeOversSettling.add(settling);
+    handoffOwed = true;
+  }
   setDriveLeaseSnapshot(lease);
   noteLeaseNavigation(lease);
   if (!lease.drivingHere) void followHostPanels();
@@ -434,6 +632,8 @@ function applyLease(lease: DriveLeaseView): void {
           driverAway: lease.holderAwayMs !== undefined,
         }
   );
+  if (back === "release") releaseHostOwnedWrites();
+  if (settling) readBackAfterGap(lease, settling);
 }
 
 function hostDisplayName(fallback: string): string {
@@ -490,12 +690,33 @@ export async function takeOverDrive(
   // The host's state is read back as authoritative below; a save held from
   // before the takeover must not land on top of it.
   dropDeferredHostOwnedWrites("this view took the project over");
-  applyLease(view);
+  const heldForGap = takeOverDuringGap(view);
+  applyLease(view, "take-over");
   // The previous driver's terminals and saved layout are the project's now;
-  // this view's were stale while it was displaced. The terminals first, so the
-  // saved order also places the ones just adopted.
+  // this view's were stale while it was displaced.
+  const done = readBackAsDriver(projectId, view, settling, "after taking over", {
+    refreshWorktrees: heldForGap,
+  });
+  if (heldForGap) settleReadBack(done);
+}
+
+/**
+ * Read the project back as the driver before this view left it, once it
+ * drives under `view`: the host's terminals first, so the saved order also
+ * places the ones just adopted, then its saved state as authoritative, then
+ * where that driver was. Resolves whether everything was read (the
+ * terminals, the worktrees when asked, the saved state); this view reports
+ * its own navigation only once `settling` is let go, at the end.
+ */
+function readBackAsDriver(
+  projectId: string,
+  view: DriveLeaseView,
+  settling: symbol,
+  occasion: string,
+  options: { refreshWorktrees?: boolean } = {}
+): Promise<boolean> {
   // Current while this view still drives the project: the host's own event
-  // about this very takeover may land after its answer, and changes nothing.
+  // about this very lease may land after the answer, and changes nothing.
   const generation = ++takeOverGeneration;
   const isCurrent = () =>
     generation === takeOverGeneration &&
@@ -509,12 +730,27 @@ export async function takeOverDrive(
   // Lost and won back meanwhile, the project's navigation is a later driver's.
   const stillThisLease = () => (getDriveLeaseSnapshot()?.holder?.leaseId ?? null) === leaseId;
   let handedOver = navigation === null;
-  void (async () => {
+  let read = false;
+  return (async () => {
+    // The saved active worktree may be one the last driver made meanwhile,
+    // which this view only learns of from the refresh.
+    const worktrees = options.refreshWorktrees
+      ? window.electron.worktree.refresh().then(
+          () => true,
+          (error: unknown) => {
+            logWarn(`[HostConnection] Couldn't refresh the worktrees ${occasion}`, { error });
+            return false;
+          }
+        )
+      : Promise.resolve(true);
+    let terminalsRead = false;
     try {
       await resyncHostTerminals(projectId, { isCurrent, follow: true });
+      terminalsRead = true;
     } catch (error) {
-      logWarn("[HostConnection] Couldn't read the host's terminals after taking over", { error });
+      logWarn(`[HostConnection] Couldn't read the host's terminals ${occasion}`, { error });
     }
+    const worktreesRead = await worktrees;
     if (!isCurrent()) return;
     try {
       await rehydrateHostProjectState(projectId, {
@@ -523,10 +759,11 @@ export async function takeOverDrive(
         follow: true,
         keepActiveWorktree: navigation !== null,
       });
+      // Without the terminals, the panels a later save sends would miss the
+      // ones the last driver opened; without the worktrees, its active one.
+      read = terminalsRead && worktreesRead && isCurrent();
     } catch (error) {
-      logWarn("[HostConnection] Couldn't read the project's saved state after taking over", {
-        error,
-      });
+      logWarn(`[HostConnection] Couldn't read the project's saved state ${occasion}`, { error });
     }
     // Even without the saved state: what this view showed while displaced is
     // not where the driver was.
@@ -536,17 +773,16 @@ export async function takeOverDrive(
     }
   })()
     .catch((error: unknown) => {
-      logWarn("[HostConnection] Couldn't move to where the driver was after taking over", {
-        error,
-      });
+      logWarn(`[HostConnection] Couldn't move to where the driver was ${occasion}`, { error });
     })
-    .finally(() => {
+    .then(() => {
       // A later takeover settles for itself, and one overtaken by another
       // driver leaves the handoff to the lease as it now stands.
       if (generation === takeOverGeneration && handedOver && stillThisLease()) {
         handoffOwed = false;
       }
       settleTakeOver(settling, projectId);
+      return read;
     });
 }
 
@@ -765,6 +1001,9 @@ function beginSync(): () => void {
           if (getLeaseInputBlock()?.kind === "lease-unknown") {
             setLeaseInputBlock({ kind: "lease-unknown", hostName: hostLabel() });
           }
+          // Down from up, or first seen down by a view that already knows the lease.
+          const wasUp = isHostLinkUp(prev) || prev.connection === null;
+          if (wasUp && !isHostLinkUp(next) && next.connection !== null) noteLeaseOutOfSight();
         }
         if (next.connection?.status === "disconnected" && next.everConnected) {
           resyncPending = true;
@@ -785,7 +1024,13 @@ function beginSync(): () => void {
             resyncPending = false;
             // After an explicit disconnect the link that comes back is a new session.
             void resyncFromHost({ freshSession: true });
-          } else if (!claimOutstanding && getLeaseInputBlock()?.kind === "lease-unknown") {
+          } else if (
+            !claimOutstanding &&
+            (getLeaseInputBlock()?.kind === "lease-unknown" ||
+              leaseBeforeGap !== undefined ||
+              readBackOwed)
+          ) {
+            // Whether this view kept the project decides what becomes of its held saves.
             void refreshLease();
           }
           // A view whose claim on open hasn't gone through yet makes it now.
@@ -843,6 +1088,16 @@ function beginSync(): () => void {
     driverNavigation = null;
     navigationLeaseId = undefined;
     handoffOwed = false;
+    // Held while the host hadn't said whether this view still drives: never
+    // let out unconfirmed as the gates open below.
+    const unconfirmed = readBackOwed || leaseBeforeGap !== undefined;
+    leaseBeforeGap = undefined;
+    readBackOwed = false;
+    readBackLeaseId = undefined;
+    cancelLeaseRecheck();
+    releaseHostOwnedWrites(
+      unconfirmed ? "the host never confirmed this view kept the project" : undefined
+    );
     setHostInputBlock(null);
     setLeaseInputBlock(null);
     setDriveLeaseSnapshot(null);
@@ -952,6 +1207,11 @@ export function _reloadHostConnectionSyncForTesting(): void {
   navigationAgain = false;
   takeOversSettling.clear();
   handoffOwed = false;
+  leaseBeforeGap = undefined;
+  readBackOwed = false;
+  readBackLeaseId = undefined;
+  readBacksStarted = 0;
+  cancelLeaseRecheck();
   Object.assign(openClaim, { projectId: null, done: false, inFlight: false, owed: false });
 }
 

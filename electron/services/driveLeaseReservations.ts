@@ -6,6 +6,8 @@ import type { DriveLeaseReservation, DriveLeaseReservationStore } from "./DriveL
 /** More than any Host has projects; a file past it is not one this app wrote. */
 const MAX_RESERVATIONS = 512;
 const MAX_FIELD_LENGTH = 512;
+/** The longest tenure the link carries to a Shell; anything longer starts afresh. */
+const MAX_TENURE_LENGTH = 256;
 
 function isField(value: unknown): value is string {
   return typeof value === "string" && value !== "" && value.length <= MAX_FIELD_LENGTH;
@@ -25,13 +27,17 @@ export function parseReservations(raw: string): Record<string, DriveLeaseReserva
   for (const [projectId, value] of Object.entries(parsed as Record<string, unknown>)) {
     if (count >= MAX_RESERVATIONS) break;
     if (!isField(projectId) || !value || typeof value !== "object") continue;
-    const { clientId, clientName, deviceId } = value as Record<string, unknown>;
+    const { clientId, clientName, deviceId, tenureId } = value as Record<string, unknown>;
     if (!isField(clientId) || !isField(clientName)) continue;
-    // One saved before installs were recorded, or with a damaged install,
-    // still holds the project for its client.
-    out[projectId] = isField(deviceId)
-      ? { clientId, clientName, deviceId }
-      : { clientId, clientName };
+    // One saved before installs were recorded, or with a damaged install or
+    // tenure, still holds the project for its client.
+    const tenure = isField(tenureId) && tenureId.length <= MAX_TENURE_LENGTH ? tenureId : null;
+    out[projectId] = {
+      clientId,
+      clientName,
+      ...(isField(deviceId) ? { deviceId } : {}),
+      ...(tenure !== null ? { tenureId: tenure } : {}),
+    };
     count++;
   }
   return out;

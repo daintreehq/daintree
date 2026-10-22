@@ -355,6 +355,14 @@ export interface HostRecentUse {
 export interface DriveLeaseHolder {
   /** Increases on every grant; work stamped with an older lease is stale after a takeover. */
   leaseId: number;
+  /**
+   * The same while one client holds the project, across its windows, its
+   * reconnects and a restart of the Host; new whenever another client gets it
+   * or nobody held it. A view back from a lost link compares it to tell a
+   * blip from a project someone else may have driven meanwhile. Absent from
+   * Hosts that predate it.
+   */
+  tenureId?: string;
   /** The one renderer that drives: MCP dispatch, plugin prompts and terminal resize target it. */
   endpointId: string;
   clientId: string;
