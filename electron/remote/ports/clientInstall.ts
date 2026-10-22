@@ -328,9 +328,9 @@ export function installPortForwardClient(deps: PortForwardClientDeps): () => Pro
         channel === CHANNELS.DEV_PREVIEW_STOP_DEV_SERVER_BY_WORKTREE
       ) {
         if (worktreeId === null) return;
-        const key = worktreeKey(project, worktreeId);
-        for (const subdomain of previewWorktrees.get(key) ?? []) forwards.releasePreview(subdomain);
-        previewWorktrees.delete(key);
+        // Kept: a restart from the dashboard brings them back with no ensure to note them again.
+        const previews = previewWorktrees.get(worktreeKey(project, worktreeId)) ?? [];
+        for (const subdomain of previews) forwards.releasePreview(subdomain);
         return;
       }
       const panelId = request?.panelId;

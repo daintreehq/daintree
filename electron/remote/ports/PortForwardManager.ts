@@ -155,6 +155,8 @@ interface ActiveForward {
 interface Recreation {
   forwardId: string;
   stopped: boolean;
+  /** Why a Stop that landed meanwhile didn't take: ssh kept the port. */
+  stopError?: AppError;
   done: Promise<void>;
   finish(): void;
 }
@@ -512,6 +514,7 @@ export class PortForwardManager {
       this.holds.delete(recreating[0]);
       recreating[1].stopped = true;
       await recreating[1].done;
+      if (recreating[1].stopError) throw recreating[1].stopError;
       return;
     }
     const entry = [...this.forwards.entries()].find(([, f]) => f.info.forwardId === forwardId);
@@ -524,11 +527,7 @@ export class PortForwardManager {
       // ssh still holds the port: keep it listed so it can be stopped again.
       this.forwards.set(key, forward);
       if (hold && !this.holds.has(key)) this.holds.set(key, hold);
-      throw new AppError({
-        code: "INTERNAL",
-        message: `ssh refused to cancel the forward of port ${forward.info.remotePort}`,
-        userMessage: "Couldn't stop forwarding this port. Try again.",
-      });
+      throw this.cancelRefused(forward);
     }
     this.previewCache.clear();
     this.emit();
@@ -946,9 +945,13 @@ export class PortForwardManager {
     const stopped = () => new AppError({ code: "CANCELLED", message: "Port forward stopped" });
     const moving = (async (): Promise<PortForward> => {
       if (!(await this.releaseSshListener(forward))) {
-        // ssh kept it: it stays on the master, on the idle clock alone.
+        // ssh kept it: it stays on the master, on the idle clock alone, and
+        // stays listed for a Stop that couldn't take to be tried again.
         this.forwards.set(key, forward);
-        if (recreation.stopped) throw stopped();
+        if (recreation.stopped) {
+          recreation.stopError = this.cancelRefused(forward);
+          throw stopped();
+        }
         this.touch(forward);
         return { ...forward.info };
       }
@@ -971,7 +974,14 @@ export class PortForwardManager {
     this.pending.set(key, moving);
     moving
       .catch(() => {
-        if (!this.forwards.has(key) && !isLasting(this.holds.get(key))) this.holds.delete(key);
+        if (this.forwards.has(key) || recreation.stopped || this.disposed) return;
+        if (!isLasting(this.holds.get(key))) {
+          this.holds.delete(key);
+          return;
+        }
+        // Something took the port mid-move. A panel's page lost its address
+        // either way; what still holds it gets the forward back, on a free port.
+        void this.acquire(key, { ...forward.info, samePort: false }).catch(() => {});
       })
       .finally(() => {
         if (this.pending.get(key) === moving) this.pending.delete(key);
@@ -1005,6 +1015,14 @@ export class PortForwardManager {
     if (forward.info.origin === origin) return false;
     forward.info.origin = origin;
     return true;
+  }
+
+  private cancelRefused(forward: ActiveForward): AppError {
+    return new AppError({
+      code: "INTERNAL",
+      message: `ssh refused to cancel the forward of port ${forward.info.remotePort}`,
+      userMessage: "Couldn't stop forwarding this port. Try again.",
+    });
   }
 
   /** The port is taken here; when one of these forwards has it, say which host's. */
@@ -1081,9 +1099,14 @@ export class PortForwardManager {
         { hostId, remotePort: resolution.port, origin: "dev-preview", label: "Dev preview" },
         owner
       );
-      if (current()) this.notePreviewForward(subdomain, key);
-      // Overtaken meanwhile: the newer lookup's forward is the one the preview holds.
-      else if (this.previewKeys.get(subdomain) !== key) this.dropOwnerAt(key, owner);
+      if (current()) {
+        this.notePreviewForward(subdomain, key);
+      } else {
+        // Overtaken meanwhile: once the newer lookup has settled on another
+        // forward, this one is let go; until then, the newer lookup lets go of it.
+        const latest = this.previewKeys.get(subdomain);
+        if (latest !== undefined && latest !== key) this.dropOwnerAt(key, owner);
+      }
       return {
         kind: "ok",
         port: forward.localPort,

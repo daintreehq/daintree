@@ -373,13 +373,21 @@ describe("installPortForwardClient", () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(service.list()).toHaveLength(1);
 
-    hooks.forwarded!({
-      hostId: HOST,
-      webContentsId: 9,
-      hostProjectId: "proj",
-      channel: "dev-preview:stop-dev-server-by-worktree",
-      args: [{ worktreeId: "wt-1" }],
-    });
+    const stopWorktree = () =>
+      hooks.forwarded!({
+        hostId: HOST,
+        webContentsId: 9,
+        hostProjectId: "proj",
+        channel: "dev-preview:stop-dev-server-by-worktree",
+        args: [{ worktreeId: "wt-1" }],
+      });
+    stopWorktree();
+    await waitFor(() => service.list().length === 0, 3_000);
+
+    // Restarted from the dashboard (no ensure), loaded, and stopped again.
+    await (hooks.resolver!("dp-proj-panel") as Promise<unknown>);
+    expect(service.list()).toHaveLength(1);
+    stopWorktree();
     await waitFor(() => service.list().length === 0, 3_000);
   });
 
