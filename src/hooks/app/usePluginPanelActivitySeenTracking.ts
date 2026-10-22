@@ -22,9 +22,10 @@ interface Unseen {
  * been in front of the user (#13820), by the rule an agent's hand-back is held
  * to: the focused pane, while its view can be seen, its window has focus and
  * Canopy is not open over it, for `HAND_BACK_SEEN_DWELL_MS`. Opening a docked
- * panel focuses it, so a look in the dock counts the same; the project's Home
- * hides the grid, focused panel and all, so nothing counts while it shows. Seen is this view's
- * own record — nothing is told to main, and no agent read mark moves.
+ * panel focuses it, so a look in the dock counts the same. The project's Home
+ * covers the grid but not the dock, so while it shows only an open dock
+ * popover counts. Seen is this view's own record — nothing is told to main,
+ * and no agent read mark moves.
  */
 export function usePluginPanelActivitySeenTracking(): void {
   useEffect(() => {
@@ -32,9 +33,12 @@ export function usePluginPanelActivitySeenTracking(): void {
 
     const unseenInFront = (): Unseen | null => {
       if (!canopyViewIsWatched() || useCanopyStore.getState().isOpen) return null;
-      if (useProjectHomeStore.getState().presented) return null;
-      const { focusedId, panelsById } = usePanelStore.getState();
+      const { focusedId, panelsById, activeDockTerminalId } = usePanelStore.getState();
       if (focusedId === null) return null;
+      // Home covers the grid, not the dock: only an open dock popover is seen.
+      if (useProjectHomeStore.getState().presented && activeDockTerminalId !== focusedId) {
+        return null;
+      }
       const panel = panelsById[focusedId];
       if (!panel || panel.location === "trash") return null;
       const activity = usePluginPanelActivityStore.getState();
@@ -76,7 +80,13 @@ export function usePluginPanelActivitySeenTracking(): void {
     sync();
 
     const offPanels = usePanelStore.subscribe((state, prev) => {
-      if (state.focusedId !== prev.focusedId || state.panelsById !== prev.panelsById) sync();
+      if (
+        state.focusedId !== prev.focusedId ||
+        state.panelsById !== prev.panelsById ||
+        state.activeDockTerminalId !== prev.activeDockTerminalId
+      ) {
+        sync();
+      }
     });
     const offActivity = usePluginPanelActivityStore.subscribe((state, prev) => {
       if (

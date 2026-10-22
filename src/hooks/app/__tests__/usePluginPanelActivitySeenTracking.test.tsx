@@ -237,6 +237,30 @@ describe("usePluginPanelActivitySeenTracking", () => {
     }
   });
 
+  it("still counts a docked panel opened over the project's Home", () => {
+    act(() => {
+      useProjectHomeStore.getState().setPresented(true);
+      usePanelStore.setState({
+        panelsById: { ...usePanelStore.getState().panelsById, d: panel("d", "acme.chat", "dock") },
+        focusedId: "d",
+        activeDockTerminalId: "d",
+      });
+    });
+    try {
+      renderHook(() => usePluginPanelActivitySeenTracking());
+      report({ d: { state: "finished", revision: 1 } });
+      act(() => {
+        vi.advanceTimersByTime(HAND_BACK_SEEN_DWELL_MS);
+      });
+      expect(seen().d).toBe(1);
+    } finally {
+      act(() => {
+        useProjectHomeStore.getState().setPresented(false);
+        usePanelStore.setState({ activeDockTerminalId: null });
+      });
+    }
+  });
+
   it("restarts the dwell when a new completion replaces one mid-dwell", () => {
     renderHook(() => usePluginPanelActivitySeenTracking());
     report({ a: { state: "finished", revision: 1 } });
