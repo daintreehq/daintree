@@ -427,7 +427,7 @@ function parseHooksConfig(raw: string, filePath: string): Record<string, unknown
 // marks are dropped, since they can reorder or hide the text a card shows
 // while the original sequence is what gets sent. ZWJ/ZWNJ stay for emoji.
 const CONTROL_CHARS = /[\p{Cc}\u2028\u2029]/gu;
-const INVISIBLE_MARKS = /[\u200b\u200e\u200f\u202a-\u202e\u2060\u2066-\u2069\ufeff]/gu;
+const INVISIBLE_MARKS = /[\u061c\u200b\u200e\u200f\u202a-\u202e\u2060\u2066-\u2069\ufeff]/gu;
 
 /**
  * Starter prompts a project offers on the assistant's empty state. They are

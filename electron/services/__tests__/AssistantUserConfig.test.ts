@@ -530,7 +530,13 @@ describe("project starter prompts", () => {
     await write(
       projectDir,
       "starter-prompts.json",
-      JSON.stringify(["\u200b", "\u202e\u200b ", "Fix\u202e the\u2028bug\u200b", "Fix the bug"])
+      JSON.stringify([
+        "\u200b",
+        "\u061c",
+        "\u202e\u200b ",
+        "Fix\u202e the\u2028bug\u200b",
+        "Fix the bug",
+      ])
     );
     expect(await loadProjectStarterPrompts(projectPath)).toEqual(["Fix the bug"]);
   });
