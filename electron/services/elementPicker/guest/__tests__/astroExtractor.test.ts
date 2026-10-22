@@ -277,8 +277,9 @@ describe("the Astro extractor, toolbar on", () => {
   });
 
   it("does nothing on hover", () => {
-    expect(astroExtractor.extract(byId("title"), "hover")).toBeNull();
-    expect(astroExtractor.extract(byId("buy"), "hover")).toBeNull();
+    const refs = { ref: () => null };
+    expect(astroExtractor.extract(byId("title"), "hover", refs)).toBeNull();
+    expect(astroExtractor.extract(byId("buy"), "hover", refs)).toBeNull();
   });
 });
 
