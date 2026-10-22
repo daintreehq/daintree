@@ -26,6 +26,7 @@ import { validateAgentContextPayload } from "../utils/agentContextDrag.js";
 import { normalizePluginAllAgentsSnapshot } from "../utils/pluginAllAgentsSnapshot.js";
 import { pluginFocusedPanelEquals, toPluginFocusedPanel } from "../utils/pluginFocusedPanel.js";
 import { toPluginProjectPresence } from "../utils/pluginProjectPresence.js";
+import { isProjectWorkspaceId } from "../utils/workspaceIds.js";
 import { toRuntimePanelKindId } from "../config/panelKindRegistry.js";
 import { normalizePanelMenuItems } from "../utils/pluginPanelMenuItems.js";
 import { applyPluginContextEntry, validatePluginContextEntry } from "../utils/pluginContextKeys.js";
@@ -2168,7 +2169,10 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
       let disposed = false;
       const subscription = (presence: PluginProjectPresence) => {
         if (disposed) return;
+        // A project plugin sees its own project only; an installed one every
+        // project and never a scratch, as in production.
         if (mockProjectId !== null && presence.projectId !== mockProjectId) return;
+        if (mockProjectId === null && !isProjectWorkspaceId(presence.projectId)) return;
         const previous = delivered.get(presence.projectId);
         if (previous === presence.state) return;
         if (presence.state === "closed" && mockProjectId === null) {

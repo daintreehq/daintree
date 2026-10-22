@@ -1,5 +1,13 @@
 import type { PluginProjectPresence, PluginProjectPresenceState } from "../types/plugin.js";
 
+/**
+ * Dispatched on a remote view's `window` when its link came back and pushes
+ * from its host may have been lost, so `useProjectPresence()` reads again. A
+ * host-internal edge, like the `window.electron.app` cache edges: an event
+ * rather than an import because a bundled view carries its own copy of the SDK.
+ */
+export const PLUGIN_VIEW_RESYNC_EVENT = "daintree:plugin-view-resync";
+
 export function isPluginProjectPresenceState(value: unknown): value is PluginProjectPresenceState {
   return value === "foreground" || value === "background" || value === "closed";
 }

@@ -1765,6 +1765,19 @@ describe("createMockHost production-parity validation (#10617)", () => {
       ).toThrow(/simulateProjectPresenceChange/);
     });
 
+    it("onDidChangeProjectPresence never shows an installed plugin a scratch", async () => {
+      const scratch = "11111111-2222-4333-8444-555555555555";
+      const host = createMockHost({
+        projectPresence: [{ projectId: scratch, state: "foreground" }],
+      });
+      const received: unknown[] = [];
+      await host.onDidChangeProjectPresence((p) => received.push(p));
+      await Promise.resolve();
+      host.simulateProjectPresenceChange({ projectId: scratch, state: "background" });
+
+      expect(received).toEqual([]);
+    });
+
     it("onDidChangeProjectPresence shows a project plugin its own project only", async () => {
       const own = "a".repeat(64);
       const host = createMockHost({ pluginId: `project__${own}__acme.board` });

@@ -384,7 +384,7 @@ useEffect(() => {
 }, [pluginId, inFront]);
 ```
 
-The mount pull is not redundant with the return: under memory pressure the host destroys a backgrounded project view outright, and the user's next switch back is a cold mount whose presence starts out `"foreground"`, with no change to catch. Route both through one function and the two cannot drift.
+The mount pull is not redundant with the return: under memory pressure the host destroys a backgrounded project view outright, and the user's next switch back is a cold mount whose presence goes from `null` straight to `"foreground"`, never through `"background"`, so there is no return to catch. Route both through one function and the two cannot drift.
 
 Periodic work in the view is the other half. For the two common cases the SDK already does it: `useNow` (a clock) and `useAnimationFrame` (a canvas loop) both pause while the project view is cached or the document hidden — see [Clocks](#clocks-and-relative-times) and [Canvas](#draw-on-a-canvas). Anything else keys off presence, ANDed with document visibility, which covers the window being minimised while your project is the one it shows: presence is where the project is, not whether anyone is looking.
 

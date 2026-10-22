@@ -1,6 +1,9 @@
 import { useSyncExternalStore } from "react";
 import type { PluginProjectPresenceState } from "../../../../shared/types/plugin.js";
-import { toPluginProjectPresence } from "../../../../shared/utils/pluginProjectPresence.js";
+import {
+  PLUGIN_VIEW_RESYNC_EVENT,
+  toPluginProjectPresence,
+} from "../../../../shared/utils/pluginProjectPresence.js";
 import { getPluginHostBridge, type PluginHostBridge } from "./hostBridge.js";
 
 // One store per view document: every component asking shares one bridge
@@ -31,30 +34,38 @@ function start(bridge: PluginHostBridge): () => void {
   }
   let live = true;
   let reading = false;
-  // Pushes since the last read began. One that lands before main has named the
-  // project cannot be attributed, so it costs another read instead.
+  let again = false;
+  // A push is never older than a read it raced — any change after it pushes
+  // again — so pushes win. These count this project's pushes since the read in
+  // flight began, and keep, per project, the latest push that landed while main
+  // had not named this view's project, to apply once it has.
   let pushes = 0;
+  const unattributed = new Map<string, PluginProjectPresenceState>();
   const read = (): void => {
-    if (reading) return;
+    if (reading) {
+      again = true;
+      return;
+    }
     reading = true;
+    again = false;
     const seen = pushes;
     getProjectPresence.call(bridge).then(
       (value) => {
         reading = false;
         if (!live) return;
         const presence = toPluginProjectPresence(value);
-        const first = projectId === undefined;
         projectId = presence?.projectId ?? null;
-        if (pushes !== seen) {
-          // A push already answered with something newer than this read.
-          if (!first) return;
-          read();
-        }
-        publish(presence?.state ?? null);
+        const pushed = presence ? unattributed.get(presence.projectId) : undefined;
+        unattributed.clear();
+        if (pushed !== undefined) publish(pushed);
+        else if (pushes === seen) publish(presence?.state ?? null);
+        if (again) read();
       },
       () => {
-        // A failed read is no answer: keep the last one rather than guess.
+        // A failed read is no answer: keep the last one rather than guess, and
+        // let the next push or resync ask again.
         reading = false;
+        if (live && again) read();
       }
     );
   };
@@ -63,20 +74,29 @@ function start(bridge: PluginHostBridge): () => void {
     if (!live) return;
     const presence = toPluginProjectPresence(payload);
     if (!presence) return;
-    if (projectId === undefined) {
+    if (typeof projectId === "string") {
+      if (presence.projectId !== projectId) return;
       pushes += 1;
-      if (!reading) read();
+      publish(presence.state);
       return;
     }
-    if (presence.projectId !== projectId) return;
-    pushes += 1;
-    publish(presence.state);
+    // Not attributable yet: main has not answered, or answered before this
+    // view was registered to a project, which a view that loads first outgrows.
+    unattributed.set(presence.projectId, presence.state);
+    if (!reading) read();
   });
+  // A remote view's link dropped pushes on the way: read again once it is back.
+  const onResync = (): void => {
+    if (live) read();
+  };
+  const target = typeof window === "undefined" ? null : window;
+  target?.addEventListener(PLUGIN_VIEW_RESYNC_EVENT, onResync);
   // Re-read on every first subscriber: pushes are not heard while nobody is.
   read();
   return () => {
     live = false;
     off();
+    target?.removeEventListener(PLUGIN_VIEW_RESYNC_EVENT, onResync);
   };
 }
 

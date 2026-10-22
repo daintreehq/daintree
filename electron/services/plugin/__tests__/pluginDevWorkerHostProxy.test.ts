@@ -367,6 +367,28 @@ describe("PluginDevWorkerHostProxy agent handoff", () => {
     expect(Object.isFrozen(presence)).toBe(true);
   });
 
+  it("catches an async presence callback's rejection rather than leaving it unhandled", async () => {
+    const { proxy, sent } = makeProxy();
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    await proxy.host.onDidChangeProjectPresence(async () => {
+      throw new Error("async boom");
+    });
+    const sub = sent.find((m) => m.type === "subscribe" && m.kind === "project-presence");
+    proxy.handleMessage({
+      type: "subscription-event",
+      subscriptionId: sub.subscriptionId,
+      payload: { projectId: "p1", state: "background" },
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(error).toHaveBeenCalledWith(
+      expect.stringContaining("subscription callback threw"),
+      expect.any(Error)
+    );
+    error.mockRestore();
+  });
+
   it("relays terminals.readScreen and resolves with the screen", async () => {
     const { proxy, sent } = makeProxy();
     const promise = proxy.host.terminals.readScreen("t-1", { lines: 5 });

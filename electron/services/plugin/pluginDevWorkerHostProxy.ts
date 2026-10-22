@@ -1085,7 +1085,8 @@ export class PluginDevWorkerHostProxy {
           "project-presence",
           (payload) => {
             const presence = toPluginProjectPresence(payload);
-            if (presence) callback(presence);
+            // Returned, so the dispatcher can catch an async callback's rejection.
+            return presence ? callback(presence) : undefined;
           },
           undefined,
           undefined,

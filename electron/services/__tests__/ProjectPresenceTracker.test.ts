@@ -79,7 +79,7 @@ describe("ProjectPresenceTracker", () => {
     expect(tracker.getOpen()).toEqual([]);
   });
 
-  it("lets a close outrank a window still pointing at the project, until the pointer moves", () => {
+  it("keeps a closed project closed while a window still points at it, until it reopens", () => {
     const { tracker, changes, show } = setup();
     show(ALPHA);
     changes.length = 0;
@@ -87,15 +87,46 @@ describe("ProjectPresenceTracker", () => {
     tracker.markClosed(ALPHA);
     expect(tracker.getState(ALPHA)).toBe("closed");
     show(ALPHA);
-    expect(tracker.getState(ALPHA)).toBe("closed");
-
+    // A failed switch away puts the pointer straight back at the closed project.
     show(BETA);
     show(ALPHA);
+    expect(tracker.getState(ALPHA)).toBe("closed");
+
+    tracker.markOpened(ALPHA);
     expect(tracker.getState(ALPHA)).toBe("foreground");
     expect(changes.flat().filter((change) => change.projectId === ALPHA)).toEqual([
       { projectId: ALPHA, state: "closed" },
       { projectId: ALPHA, state: "foreground" },
     ]);
+  });
+
+  it("runs a refresh a listener causes after the current one, so no listener sees batches out of order", () => {
+    const { tracker, show } = setup();
+    tracker.markOpened(ALPHA);
+    tracker.markOpened(BETA);
+    show(ALPHA);
+    const first: PluginProjectPresence[][] = [];
+    const second: PluginProjectPresence[][] = [];
+    tracker.subscribe((batch) => {
+      first.push([...batch]);
+      if (batch.some((change) => change.projectId === BETA && change.state === "foreground")) {
+        tracker.markClosed(ALPHA);
+      }
+    });
+    tracker.subscribe((batch) => second.push([...batch]));
+
+    show(BETA);
+
+    const expected = [
+      [
+        { projectId: BETA, state: "foreground" },
+        { projectId: ALPHA, state: "background" },
+      ],
+      [{ projectId: ALPHA, state: "closed" }],
+    ];
+    expect(first).toEqual(expected);
+    expect(second).toEqual(expected);
+    expect(tracker.getState(ALPHA)).toBe("closed");
   });
 
   it("clears a close when the seam reopens the project", () => {

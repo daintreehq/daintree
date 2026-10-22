@@ -29,7 +29,8 @@ function presence(projectId: string, state: PluginProjectPresenceState): PluginP
  * means to them: closed, removed or slept. Eviction, hibernation and losing a
  * window are not closes, and leave the project in the background. A workspace
  * is open from the first time the seam opens it or a window shows it, since a
- * remote Shell shows projects the seam never hears about.
+ * remote Shell shows projects the seam never hears about — unless it was
+ * closed since its last open.
  *
  * What is shown is re-read whole on every presence invalidation rather than
  * told by each writer what moved (#10808).
@@ -37,15 +38,17 @@ function presence(projectId: string, state: PluginProjectPresenceState): PluginP
 export class ProjectPresenceTracker {
   private readonly opened = new Set<string>();
   /**
-   * Closed while a window still pointed at them. A close that kills terminals
-   * runs against the project on screen, and the pointer only moves once the
-   * renderer switches away, so the close has to outrank a pointer it outlived.
-   * Released when the pointer moves off, or by the next open.
+   * Closed since their last open. A close that kills terminals runs against
+   * the project on screen and leaves the window pointing at its welcome view,
+   * and a failed switch away puts the pointer straight back, so only an open
+   * may undo a close; a pointer naming the project proves nothing.
    */
-  private readonly closedWhileShown = new Set<string>();
+  private readonly closed = new Set<string>();
   private states = new Map<string, OpenPresenceState>();
   private readonly listeners = new Set<ProjectPresenceListener>();
   private readShown: () => Iterable<string>;
+  private emitting = false;
+  private refreshOwed = false;
 
   constructor(readShown: () => Iterable<string> = () => []) {
     this.readShown = readShown;
@@ -60,14 +63,14 @@ export class ProjectPresenceTracker {
   markOpened(projectId: string): void {
     if (!isLocalWorkspaceId(projectId)) return;
     this.opened.add(projectId);
-    this.closedWhileShown.delete(projectId);
+    this.closed.delete(projectId);
     this.refresh();
   }
 
   markClosed(projectId: string): void {
     if (!isLocalWorkspaceId(projectId)) return;
     this.opened.delete(projectId);
-    this.closedWhileShown.add(projectId);
+    this.closed.add(projectId);
     this.refresh();
   }
 
@@ -90,6 +93,20 @@ export class ProjectPresenceTracker {
   }
 
   refresh(): void {
+    // A listener that opens or closes a project re-enters here mid-emission.
+    // Running that refresh after this one finishes keeps every listener seeing
+    // the batches in order, never an older one after a newer.
+    if (this.emitting) {
+      this.refreshOwed = true;
+      return;
+    }
+    do {
+      this.refreshOwed = false;
+      this.recompute();
+    } while (this.refreshOwed);
+  }
+
+  private recompute(): void {
     let shown: Set<string>;
     try {
       shown = new Set([...this.readShown()].filter(isLocalWorkspaceId));
@@ -99,12 +116,9 @@ export class ProjectPresenceTracker {
       console.error("[ProjectPresenceTracker] reading shown projects failed:", err);
       return;
     }
-    for (const id of this.closedWhileShown) {
-      if (!shown.has(id)) this.closedWhileShown.delete(id);
-    }
     const next = new Map<string, OpenPresenceState>();
     for (const id of shown) {
-      if (this.closedWhileShown.has(id)) continue;
+      if (this.closed.has(id)) continue;
       this.opened.add(id);
       next.set(id, "foreground");
     }
@@ -122,14 +136,19 @@ export class ProjectPresenceTracker {
     this.states = next;
     if (changes.length === 0) return;
     const frozen = Object.freeze(changes);
-    for (const listener of [...this.listeners]) {
-      try {
-        listener(frozen);
-      } catch (err) {
-        // Refreshes run inside view-manager mutations; a listener must never
-        // abort one halfway.
-        console.error("[ProjectPresenceTracker] listener failed:", err);
+    this.emitting = true;
+    try {
+      for (const listener of [...this.listeners]) {
+        try {
+          listener(frozen);
+        } catch (err) {
+          // Refreshes run inside view-manager mutations; a listener must never
+          // abort one halfway.
+          console.error("[ProjectPresenceTracker] listener failed:", err);
+        }
       }
+    } finally {
+      this.emitting = false;
     }
   }
 }

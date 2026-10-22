@@ -16,6 +16,7 @@ import { PERF_MARKS } from "../../shared/perf/marks.js";
 import { markPerformance, withPerformanceSpan } from "../utils/performance.js";
 import { buildSwitchHydrateResult } from "./AppHydrationService.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
+import { getProjectPresenceTracker } from "./ProjectPresenceTracker.js";
 
 export class ProjectSwitchService {
   private deps: HandlerDependencies;
@@ -400,6 +401,9 @@ export function getHostResidentProject(residentId: number): string | null {
 function markProjectActiveOnHost(projectId: string): void {
   try {
     projectStore.recordRemoteActivation(projectId);
+    // A remote view opening it here reopens a project closed since; plugins
+    // hear it shown once the Shell reports the view visible.
+    getProjectPresenceTracker().markOpened(projectId);
     broadcastProjectSwitchUpdates(null, projectId);
   } catch (error) {
     console.warn("[ProjectSwitch] Failed to record remote activation:", error);

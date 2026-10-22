@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, renderHook } from "@testing-library/react";
 import { useProjectPresence } from "../react/useProjectPresence.js";
 import type { PluginProjectPresence } from "../../../../shared/types/plugin.js";
+import { PLUGIN_VIEW_RESYNC_EVENT } from "../../../../shared/utils/pluginProjectPresence.js";
 
 const OWN = "a".repeat(64);
 const OTHER = "b".repeat(64);
@@ -93,34 +94,85 @@ describe("useProjectPresence", () => {
     again.unmount();
   });
 
-  it("reads again when a push arrived before main had named the project", async () => {
+  it("lets a push that landed before main named the project win over the read it raced", async () => {
     const { reads, push, answer } = installBridge();
     const { result, unmount } = renderHook(() => useProjectPresence());
+    push({ projectId: OTHER, state: "foreground" });
     push({ projectId: OWN, state: "background" });
     await answer(0, { projectId: OWN, state: "foreground" });
-    expect(reads).toHaveLength(2);
-    await answer(1, { projectId: OWN, state: "background" });
 
     expect(result.current).toBe("background");
+    expect(reads).toHaveLength(1);
     unmount();
   });
 
-  it("keeps the last answer when a read fails, and stays null for a view with no project", async () => {
+  it("keeps the last answer when a read fails", async () => {
     const { reads, answer } = installBridge();
     const { unmount } = renderHook(() => useProjectPresence());
     await answer(0, { projectId: OWN, state: "background" });
     unmount();
     const again = renderHook(() => useProjectPresence());
     await act(async () => reads[1].reject(new Error("link down")));
+
     expect(again.result.current).toBe("background");
     again.unmount();
+  });
 
-    const unbound = installBridge();
-    const view = renderHook(() => useProjectPresence());
-    await unbound.answer(0, null);
-    unbound.push({ projectId: OWN, state: "foreground" });
-    expect(view.result.current).toBeNull();
-    view.unmount();
+  it("asks again on the next push after a failed first read, keeping that push", async () => {
+    const { reads, push, answer } = installBridge();
+    const { result, unmount } = renderHook(() => useProjectPresence());
+    await act(async () => reads[0].reject(new Error("link down")));
+    push({ projectId: OWN, state: "background" });
+    expect(reads).toHaveLength(2);
+    await answer(1, { projectId: OWN, state: "foreground" });
+
+    expect(result.current).toBe("background");
+    unmount();
+  });
+
+  it("asks again after a null answer, for a view registered to its project late", async () => {
+    const { reads, push, answer } = installBridge();
+    const { result, unmount } = renderHook(() => useProjectPresence());
+    await answer(0, null);
+    expect(result.current).toBeNull();
+
+    push({ projectId: OWN, state: "foreground" });
+    expect(result.current).toBeNull();
+    expect(reads).toHaveLength(2);
+    await answer(1, { projectId: OWN, state: "foreground" });
+    expect(result.current).toBe("foreground");
+
+    push({ projectId: OWN, state: "background" });
+    expect(result.current).toBe("background");
+    unmount();
+  });
+
+  it("stays null in a view main says has no project", async () => {
+    const { push, answer } = installBridge();
+    const { result, unmount } = renderHook(() => useProjectPresence());
+    await answer(0, null);
+    push({ projectId: OWN, state: "foreground" });
+    await answer(1, null);
+
+    expect(result.current).toBeNull();
+    unmount();
+  });
+
+  it("reads again when the host resyncs a remote view", async () => {
+    const { reads, answer } = installBridge();
+    const { result, unmount } = renderHook(() => useProjectPresence());
+    await answer(0, { projectId: OWN, state: "foreground" });
+
+    act(() => {
+      window.dispatchEvent(new Event(PLUGIN_VIEW_RESYNC_EVENT));
+    });
+    expect(reads).toHaveLength(2);
+    await answer(1, { projectId: OWN, state: "background" });
+    expect(result.current).toBe("background");
+
+    unmount();
+    window.dispatchEvent(new Event(PLUGIN_VIEW_RESYNC_EVENT));
+    expect(reads).toHaveLength(2);
   });
 
   it("survives StrictMode's double subscribe", async () => {
@@ -129,6 +181,9 @@ describe("useProjectPresence", () => {
     const { result, unmount } = renderHook(() => useProjectPresence(), { wrapper });
     await answer(reads.length - 1, { projectId: OWN, state: "foreground" });
     expect(listeners.size).toBe(1);
+    // The abandoned first subscription's read lands late and must change nothing.
+    if (reads.length > 1) await answer(0, { projectId: OWN, state: "closed" });
+    expect(result.current).toBe("foreground");
 
     push({ projectId: OWN, state: "background" });
     expect(result.current).toBe("background");
