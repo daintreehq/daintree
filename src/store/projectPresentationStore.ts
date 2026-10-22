@@ -69,6 +69,13 @@ let unsubscribe: (() => void) | null = null;
 // Only the latest pull may land; an older one finishing late is dropped.
 let pullSeq = 0;
 let pullInFlight = false;
+// Snapshots taken so far. A pull that saw none land while it was in flight is
+// the newest word there is, so it may move the revision down — the way back
+// for a view whose store main reset under it.
+let adoptions = 0;
+// The revision held when the last write failed: only a later write recorded
+// anywhere makes that failed attempt's Retry obsolete.
+let failedAtRevision = 0;
 // A relaunch restores the last project before main has registered its view,
 // so the first read can come back unbound (or fail). A view that never loads
 // keeps every surface at its default, so a read that comes back empty-handed
@@ -84,21 +91,34 @@ function cancelRetry(): void {
 
 export const useProjectPresentationStore = create<ProjectPresentationState>((set, get) => {
   /**
-   * Take a snapshot unless it is older than the one held. `acknowledgesWrites`
-   * is for a write's own reply and for pushes: either means a write was
-   * recorded, which is newer than any attempt that failed before it, so the
-   * failed attempt's Retry would overwrite it. A plain read records nothing and
-   * keeps that Retry — unless it was an answer about a suggestion the file no
-   * longer makes, which can never succeed.
+   * Take a snapshot unless it is older than the one held, or it is
+   * `authoritative`: a read nothing else overtook. `acknowledgesWrites` is for
+   * a write's own reply and for pushes: either means a write was recorded, and
+   * one recorded after an attempt failed makes that attempt's Retry obsolete —
+   * retrying would overwrite it. A plain read records nothing and keeps the
+   * Retry, unless it was an answer about a suggestion the file no longer makes,
+   * which can never succeed.
    */
-  const adopt = (snapshot: ProjectPresentationSnapshot, acknowledgesWrites: boolean): void => {
+  const adopt = (
+    snapshot: ProjectPresentationSnapshot,
+    acknowledgesWrites: boolean,
+    authoritative = false
+  ): void => {
     const held = get();
-    if (held.projectId === snapshot.projectId && snapshot.revision < held.revision) return;
+    if (
+      !authoritative &&
+      held.projectId === snapshot.projectId &&
+      snapshot.revision < held.revision
+    ) {
+      return;
+    }
+    ++adoptions;
     cancelRetry();
     retries = 0;
     const failed = held.failedSave;
     const failedSave =
-      acknowledgesWrites || (failed?.kind === "answer" && failed.hash !== snapshot.suggestion?.hash)
+      (acknowledgesWrites && snapshot.revision > failedAtRevision) ||
+      (failed?.kind === "answer" && failed.hash !== snapshot.suggestion?.hash)
         ? null
         : failed;
     set({
@@ -133,6 +153,7 @@ export const useProjectPresentationStore = create<ProjectPresentationState>((set
     if (typeof api?.get !== "function") return;
     cancelRetry();
     const seq = ++pullSeq;
+    const adoptionsAtStart = adoptions;
     pullInFlight = true;
     void api.get().then(
       (snapshot) => {
@@ -140,7 +161,7 @@ export const useProjectPresentationStore = create<ProjectPresentationState>((set
         pullInFlight = false;
         // `!= null`: a stubbed bridge answers `undefined`.
         if (snapshot != null) {
-          adopt(snapshot, false);
+          adopt(snapshot, false, adoptions === adoptionsAtStart);
           return;
         }
         // Unbound: stay unloaded — surfaces keep their defaults and nobody is
@@ -170,6 +191,7 @@ export const useProjectPresentationStore = create<ProjectPresentationState>((set
       adopt(await call(), true);
       return true;
     } catch (error) {
+      failedAtRevision = get().revision;
       set({ failedSave: failed });
       logWarn("[projectPresentationStore] Failed to save the presentation profile", {
         kind: failed.kind,
@@ -254,6 +276,8 @@ export function _resetProjectPresentationStoreForTest(): void {
   initialized = false;
   pullSeq = 0;
   pullInFlight = false;
+  adoptions = 0;
+  failedAtRevision = 0;
   retries = 0;
   cancelRetry();
   useProjectPresentationStore.setState({

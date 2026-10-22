@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { constants as fsConstants } from "node:fs";
+import { constants as fsConstants, type Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
@@ -45,16 +45,22 @@ export function parsePresentationSuggestion(raw: unknown): PresentationSuggestio
 }
 
 /**
- * The file's bytes, or null when it is not a plain file within the cap by the
- * time it is opened. The checks above are a fast path; this is the bound: the
- * file is opened without following a final link where the platform allows it,
- * checked through the handle, and never read past the cap even if it grows.
+ * The file's bytes, or null when what was opened is not the plain file the
+ * checks above inspected, or not within the cap. Those checks are a fast path;
+ * this is the bound. The open neither follows a final link where the platform
+ * allows it nor blocks on a FIFO swapped in after the check, the handle must be
+ * the very file inspected — which also catches a link swapped in at either
+ * level on a platform without no-follow — and nothing is read past the cap,
+ * even if the file grows.
  */
-async function readCapped(filePath: string): Promise<Buffer | null> {
-  const handle = await fs.open(filePath, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0));
+async function readCapped(filePath: string, inspected: Stats): Promise<Buffer | null> {
+  const flags =
+    fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0);
+  const handle = await fs.open(filePath, flags);
   try {
     const stat = await handle.stat();
     if (!stat.isFile() || stat.size > MAX_FILE_BYTES) return null;
+    if (stat.dev !== inspected.dev || stat.ino !== inspected.ino) return null;
     const buffer = Buffer.alloc(MAX_FILE_BYTES + 1);
     let length = 0;
     while (length < buffer.length) {
@@ -82,7 +88,7 @@ export async function readPresentationSuggestion(
     if (!dirStat.isDirectory()) return null;
     const stat = await fs.lstat(filePath);
     if (!stat.isFile() || stat.size > MAX_FILE_BYTES) return null;
-    const bytes = await readCapped(filePath);
+    const bytes = await readCapped(filePath, stat);
     if (bytes === null) return null;
     let content = bytes.toString("utf-8");
     if (content.charCodeAt(0) === 0xfeff) content = content.slice(1);

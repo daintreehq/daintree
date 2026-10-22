@@ -229,14 +229,39 @@ describe("projectPresentationStore", () => {
     expect(state().levels).toEqual({ forgeStats: "hidden" });
     expect(state().failedSave).toEqual({ kind: "level", feature: "forgeStats", level: "demoted" });
 
-    // A plain read records nothing, so the Retry stays.
+    // A plain read records nothing, so the Retry stays — and the read did land.
+    bridge.get.mockResolvedValue(
+      snapshot({ forgeStats: "hidden" }, { revision: 1, suggestion: { levels: {}, hash: "s" } })
+    );
     state().refresh();
     await flush();
+    expect(state().suggestion?.hash).toBe("s");
+    expect(state().failedSave).not.toBeNull();
+
+    // A push for the write that already landed says nothing about the later
+    // failure, even though it arrives after it.
+    bridge.listeners[0]!(snapshot({ forgeStats: "hidden" }, { revision: 1 }));
     expect(state().failedSave).not.toBeNull();
 
     // Any write main records afterwards is newer than the one that failed.
     bridge.listeners[0]!(snapshot({ forgeStats: "shown" }, { revision: 5 }));
     expect(state().failedSave).toBeNull();
+  });
+
+  it("lets a read nothing overtook move the revision down, so a reset store can't wedge a view", async () => {
+    const bridge = installBridge({
+      get: () => Promise.resolve(snapshot({ forgeStats: "hidden" }, { revision: 9 })),
+    });
+    state().init();
+    await flush();
+    expect(state().revision).toBe(9);
+
+    // Main's store was reset; its count starts again.
+    bridge.get.mockResolvedValue(snapshot({}, { revision: 0 }));
+    state().refresh();
+    await flush();
+
+    expect(state()).toMatchObject({ revision: 0, levels: {} });
   });
 
   it("re-reads after a refused answer and drops a Retry that could never succeed", async () => {
