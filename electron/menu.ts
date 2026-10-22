@@ -136,6 +136,54 @@ function handleUpdateMenuClick(): void {
 // rebuilds — a stale listener would mutate items that no longer exist.
 let unsubscribeUpdateMenuState: (() => void) | null = null;
 
+/**
+ * Which plugins a menu built for `projectId` leaves out, as a comparable key.
+ * Empty in an app where nobody has hidden a plugin, which is every app that
+ * never touches the setting, so the rebuild check below costs nothing there.
+ */
+function hiddenMenuPluginsKey(projectId: string | null): string {
+  const hidden = new Set<string>();
+  for (const { pluginId } of getPluginMenuItems()) {
+    if (!isPluginVisibleInProject(pluginId, projectId)) hidden.add(pluginId);
+  }
+  for (const { pluginId, panelKind } of getPluginTours()) {
+    if (panelKind !== undefined) continue;
+    if (!isPluginVisibleInProject(pluginId, projectId)) hidden.add(pluginId);
+  }
+  return [...hidden].sort().join("\n");
+}
+
+/** {@link hiddenMenuPluginsKey} of the menu currently installed. */
+let builtHiddenMenuPluginsKey = "";
+
+/**
+ * The project whose plugin choices the menu shows: the most recently focused
+ * window's, not necessarily the window a caller rebuilt the menu for. Several
+ * rebuilds (a keybinding override, an agent config reload, CLI or plugin init)
+ * name a fixed window, and the menu bar is process-global.
+ */
+function menuProjectIdFor(win: BrowserWindow): string | null {
+  const primary = getWindowRegistry()?.getPrimary()?.browserWindow;
+  const shown = primary && !primary.isDestroyed() ? primary : win;
+  return shown.isDestroyed() ? null : getProjectForWebContents(getAppWebContents(shown).id);
+}
+
+/**
+ * Rebuild the menu for `win` only if its project would show a different set of
+ * plugin items and tours than the installed menu does. The menu is
+ * process-global but filtered by one window's project, so a project switch or a
+ * focus change can leave it showing another project's choices — yet a rebuild
+ * dismisses an open menu, so it must not happen on every switch.
+ */
+export function rebuildApplicationMenuIfPluginVisibilityChanged(
+  win: BrowserWindow,
+  cliAvailabilityService?: CliAvailabilityService
+): void {
+  if (win.isDestroyed()) return;
+  if (hiddenMenuPluginsKey(menuProjectIdFor(win)) === builtHiddenMenuPluginsKey) return;
+  createApplicationMenu(win, cliAvailabilityService);
+}
+
 export function createApplicationMenu(
   mainWindow: BrowserWindow,
   cliAvailabilityService?: CliAvailabilityService
@@ -214,10 +262,16 @@ export function createApplicationMenu(
     return items;
   };
 
+  // A plugin hidden in this window's project has withdrawn its contributions
+  // from the view, so its menu items and Help tours leave the menu too.
+  const menuProjectId = menuProjectIdFor(mainWindow);
+  builtHiddenMenuPluginsKey = hiddenMenuPluginsKey(menuProjectId);
+
   const buildPluginMenuItems = (location: string): Electron.MenuItemConstructorOptions[] => {
     const items: Electron.MenuItemConstructorOptions[] = [];
-    for (const { item } of getPluginMenuItems()) {
+    for (const { pluginId, item } of getPluginMenuItems()) {
       if (item.location !== location) continue;
+      if (!isPluginVisibleInProject(pluginId, menuProjectId)) continue;
       if (!evaluateWhen(item.when, {})) continue;
       items.push({
         label: item.label,
@@ -235,12 +289,7 @@ export function createApplicationMenu(
   const terminalPluginItems = buildPluginMenuItems("terminal");
   const helpPluginItems = buildPluginMenuItems("help");
   // Plugin tours sit beside the Daintree Tour, named "<plugin>: <tour>". Panel
-  // tours are opened from their panel, not from Help, and a plugin hidden in
-  // this window's project has withdrawn its tours from the view, so Help drops
-  // them too.
-  const menuProjectId = mainWindow.isDestroyed()
-    ? null
-    : getProjectForWebContents(getAppWebContents(mainWindow).id);
+  // tours are opened from their panel, not from Help.
   const pluginTourItems: Electron.MenuItemConstructorOptions[] = getPluginTours()
     .filter(
       (tour) =>

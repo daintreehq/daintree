@@ -14,7 +14,10 @@ vi.mock("electron", () => ({
 vi.mock("../../ipc/handlers.js", async () => ({
   sendToRenderer: (await import("../../ipc/utils.js")).sendToRenderer,
 }));
-vi.mock("../../menu.js", () => ({ createApplicationMenu: vi.fn() }));
+vi.mock("../../menu.js", () => ({
+  createApplicationMenu: vi.fn(),
+  rebuildApplicationMenuIfPluginVisibilityChanged: vi.fn(),
+}));
 vi.mock("../../setup/environment.js", () => ({ isDemoMode: false }));
 vi.mock("../../services/PtyClient.js", () => ({ PtyClient: class {} }));
 vi.mock("../../services/CliAvailabilityService.js", () => ({ CliAvailabilityService: class {} }));

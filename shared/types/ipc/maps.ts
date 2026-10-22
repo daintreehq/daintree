@@ -2071,10 +2071,10 @@ export interface IpcEventMap {
   };
 
   // Plugin recipe registry events (main → renderer, #11860). Carries the full
-  // effective plugin recipe list — manifest content with the user's sidecar
-  // metadata already overlaid — so the renderer replaces its plugin tier
-  // wholesale rather than reconciling per-plugin. Same `complete` flag
-  // semantics as toolbar buttons.
+  // effective plugin recipe list the receiving view's project shows (#13765) —
+  // manifest content with the user's sidecar metadata already overlaid — so the
+  // renderer replaces its plugin tier wholesale rather than reconciling
+  // per-plugin. Same `complete` flag semantics as toolbar buttons.
   "plugin:recipes-changed": {
     recipes: import("../project.js").TerminalRecipe[];
     complete: boolean;

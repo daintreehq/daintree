@@ -118,6 +118,7 @@ import {
 import {
   setPluginContributionScope,
   clearPluginContributionScope,
+  selectContributionsForProject,
 } from "./plugin/PluginContributionBroadcaster.js";
 import {
   bumpProjectSurfaceRevision,
@@ -3697,20 +3698,28 @@ export class PluginService {
    * filter so the activation set is exactly the impl set that will be queried
    * once activation resolves. Runs activations in parallel — one slow plugin
    * must not stall an entire decoration pull.
+   *
+   * `projectId` is the requesting view's project, and is required for the
+   * same reason the handler's impl filter needs it: a plugin that project
+   * hides must not be started by its file views.
    */
-  async activatePluginsForFileDecorationScope(scope: string): Promise<void> {
+  async activatePluginsForFileDecorationScope(
+    scope: string,
+    projectId: string | null
+  ): Promise<void> {
     if (typeof scope !== "string" || scope.length === 0) return;
-    const targets = new Set<string>();
+    const targets: string[] = [];
     for (const [pluginId, plugin] of this.plugins) {
       for (const contribution of plugin.manifest.contributes.fileDecorationProviders) {
         if (contribution.scopes.some((pattern) => scopeMatchesPattern(scope, pattern))) {
-          targets.add(pluginId);
+          targets.push(pluginId);
           break;
         }
       }
     }
-    if (targets.size === 0) return;
-    await Promise.allSettled([...targets].map((id) => this.activatePlugin(id)));
+    const visible = selectContributionsForProject(targets, (id) => id, projectId);
+    if (visible.length === 0) return;
+    await Promise.allSettled(visible.map((id) => this.activatePlugin(id)));
   }
 
   /**

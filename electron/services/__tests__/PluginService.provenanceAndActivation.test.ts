@@ -241,6 +241,10 @@ import {
 import { toRuntimePanelKindId } from "../../../shared/config/panelKindRegistry.js";
 import { registerPanelKind } from "../../../shared/config/panelKindRegistry.js";
 import { stripPluginViewGeneration } from "../../../shared/utils/pluginViewUrl.js";
+import {
+  __resetProjectPluginVisibilityForTesting,
+  setProjectPluginVisibility,
+} from "../plugin/projectPluginVisibility.js";
 
 function makeCtx(pluginId: string, overrides: Partial<PluginIpcContext> = {}): PluginIpcContext {
   return {
@@ -722,6 +726,42 @@ describe("Deferred activation — activatePlugin", () => {
       expect((globalThis as Record<string, unknown>).__viewOwnerActivated).toBe(true);
     } finally {
       delete (globalThis as Record<string, unknown>).__viewOwnerActivated;
+    }
+  });
+
+  it("a decoration pull from a project that hides the plugin does not activate it (#13765)", async () => {
+    const hiddenIn = "a".repeat(64);
+    const shownIn = "b".repeat(64);
+    const pluginDir = path.join(tmpDir, "decorator");
+    await fs.mkdir(pluginDir);
+    await fs.writeFile(
+      path.join(pluginDir, "plugin.json"),
+      JSON.stringify({
+        name: "acme.decorator",
+        version: "1.0.0",
+        main: "main.mjs",
+        contributes: { fileDecorationProviders: [{ id: "badges", scopes: ["s:1"] }] },
+      })
+    );
+    await fs.writeFile(
+      path.join(pluginDir, "main.mjs"),
+      "globalThis.__decoratorActivated = true; export function activate() {}"
+    );
+
+    try {
+      const service = new PluginService(tmpDir);
+      openedServices.push(service);
+      await service.initialize();
+      setProjectPluginVisibility(hiddenIn, "acme.decorator", false);
+
+      await service.activatePluginsForFileDecorationScope("s:1", hiddenIn);
+      expect((globalThis as Record<string, unknown>).__decoratorActivated).toBeUndefined();
+
+      await service.activatePluginsForFileDecorationScope("s:1", shownIn);
+      expect((globalThis as Record<string, unknown>).__decoratorActivated).toBe(true);
+    } finally {
+      delete (globalThis as Record<string, unknown>).__decoratorActivated;
+      __resetProjectPluginVisibilityForTesting();
     }
   });
 
