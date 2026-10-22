@@ -433,6 +433,53 @@ describe("WorktreeDetailsSection activity chip (collapsed row)", () => {
   });
 });
 
+describe("WorktreeDetailsSection — quiet git detail (#13777)", () => {
+  const quietDetail = <div data-testid="quiet-git-detail">git identity</div>;
+  const worktree = {
+    ...withChanges({ lastCommitTimestampMs: Date.now() - 120_000, lastCommitMessage: "fix: x" }),
+  };
+
+  it("leaves the activity to the expanded panel's own last-active line", () => {
+    const resting = renderSection({ worktree, quietGitDetail: quietDetail });
+    expect(screen.queryByRole("group", { name: "Last activity" })).toBeNull();
+    expect(screen.queryByTestId("quiet-git-detail")).toBeNull();
+    resting.unmount();
+
+    renderSection({ worktree, quietGitDetail: quietDetail, isExpanded: true });
+    expect(screen.getByTestId("quiet-git-detail")).not.toBeNull();
+    // Exactly one: the panel's line, not a second chip beside it.
+    expect(screen.getAllByRole("group", { name: "Last activity" })).toHaveLength(1);
+  });
+
+  it("keeps the dirty-state summary on the resting row", () => {
+    const { container } = renderSection({ worktree, quietGitDetail: quietDetail });
+    expect(container.textContent).toContain("3 files");
+  });
+
+  it("takes the Review Hub shortcut off the resting row", () => {
+    renderSection({
+      reviewState: "has-changes",
+      onOpenReviewHub: vi.fn(),
+      quietGitDetail: quietDetail,
+    });
+    expect(screen.queryByLabelText("Open Review & commit")).toBeNull();
+  });
+
+  it("keeps the shortcut while the worktree is conflicted, where it is the way out", () => {
+    renderSection({
+      reviewState: "conflicted",
+      onOpenReviewHub: vi.fn(),
+      quietGitDetail: quietDetail,
+      worktree: withChanges({
+        changedFileCount: 1,
+        changes: [{ path: "a.ts", status: "conflicted", insertions: null, deletions: null }],
+      }),
+    });
+    expect(screen.getByText("Conflicts need review")).not.toBeNull();
+    expect(screen.getByLabelText("Open Review & commit")).not.toBeNull();
+  });
+});
+
 // Issue #12087 — the banners mount as bare siblings of the card's `relative
 // z-10` content column, under a full-card select overlay whose click handler
 // selects the worktree. Their buttons have to reach the user AND stop the click

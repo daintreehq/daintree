@@ -228,6 +228,82 @@ describe("WorktreeMenuItems — Launch", () => {
   });
 });
 
+describe("WorktreeMenuItems — quiet git detail", () => {
+  function subRows(container: HTMLElement, label: string): Array<string | undefined> {
+    const sub = Array.from(container.querySelectorAll("[data-menu-sub]")).find(
+      (node) => node.firstElementChild?.textContent?.trim() === label
+    );
+    return Array.from(
+      sub
+        ?.querySelector("[data-menu-subcontent]")
+        ?.querySelectorAll("[data-menu-item], [data-menu-separator]") ?? []
+    ).map((n) => (n.hasAttribute("data-menu-separator") ? "—" : n.textContent?.trim()));
+  }
+
+  it("folds Review and the issue and PR rows into the one Git submenu", () => {
+    const { container } = renderWorktreeMenu({ ...fullyPopulated(), quietGit: true });
+
+    expect(rootRowLabels(container)).toEqual([
+      "Launch",
+      "Open",
+      "Git",
+      "Sessions",
+      "Recipes",
+      "Runtime",
+      "Copy",
+      "Organize",
+      "Extensions",
+      "Delete worktree…",
+    ]);
+    const git = subRows(container, "Git");
+    expect(git.slice(0, 3)).toEqual([
+      "Review worktree",
+      "View uncommitted changes0",
+      "Compare with another worktree…",
+    ]);
+    expect(git).toContain("Fetch");
+    expect(git).toContain("Force push with lease…");
+    expect(git.slice(-6)).toEqual([
+      "—",
+      "Open issue #42",
+      "Open PR #7",
+      "—",
+      "Change linked issue…",
+      "Unlink issue #42",
+    ]);
+    // The worktree's own plan file is not git, so it moves to Open.
+    expect(subRows(container, "Open")).toContain("View plan");
+    expect(git).not.toContain("View plan");
+  });
+
+  it("never doubles or strands a separator inside Git", () => {
+    const { container } = renderWorktreeMenu({ ...fullyPopulated(), quietGit: true });
+    const git = subRows(container, "Git");
+
+    expect(git[0]).not.toBe("—");
+    expect(git[git.length - 1]).not.toBe("—");
+    git.forEach((row, i) => {
+      if (row === "—") expect(git[i + 1]).not.toBe("—");
+    });
+  });
+
+  it("keeps View plan in Linked work while git detail is shown", () => {
+    const { container } = renderWorktreeMenu(fullyPopulated());
+
+    expect(subRows(container, "Linked work")[0]).toBe("View plan");
+    expect(subRows(container, "Open")).not.toContain("View plan");
+  });
+
+  it("dispatches a folded row exactly as the shown menu does", () => {
+    const onOpenReviewHub = vi.fn();
+    renderWorktreeMenu({ ...fullyPopulated(), onOpenReviewHub, quietGit: true });
+
+    fireEvent.click(screen.getByText("Review worktree"));
+
+    expect(onOpenReviewHub).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("WorktreeMenuItems — Git", () => {
   it("leads with Fetch and Fetch and prune, then the base-integration rows", () => {
     const { container } = renderWorktreeMenu({});

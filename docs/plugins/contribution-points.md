@@ -621,6 +621,7 @@ Keybindings map a key combination to an action.
 | `workspaceKind` | string | `"project"`, `"scratch"`, or `""` when no workspace is open. |
 | `activeSidebarView` | string | The sidebar view the project shows: `"worktrees"` for the built-in worktree list. It names the selected view whether or not the sidebar is visible. |
 | `presentationForgeStats` | string | How this project presents the toolbar's forge stats pill: `"shown"`, `"demoted"` (in the toolbar's `…` menu) or `"hidden"`. Always `"hidden"` in a folder without a git repository. |
+| `presentationGitDetail` | string | How this project presents git detail on worktree cards: `"shown"` or `"demoted"` (labelled Quiet in settings: branch, issue and PR detail and the last-activity chip move into the card's tooltip and expanded details, and the card menu's git rows gather under its Git submenu). Always `"hidden"` in a folder without a git repository. |
 
 A `when` turns one entry on or off. It never gates the action behind it, which still runs from anywhere else that offers it.
 
@@ -638,7 +639,7 @@ Keybindings also see the focus and UI keys:
 | `sidebarVisible`   | boolean | The worktree sidebar is currently visible.                     |
 | `canopyHidden`     | boolean | The user hid Canopy; its panel cannot open.                    |
 
-The `presentation*` keys come from the project's presentation profile, which the user sets in Project settings → General → Features. A repository can suggest one by committing `.daintree/presentation.json` — `{ "features": { "forgeStats": "hidden" } }` — and the suggestion applies only once the user accepts it when the project opens. Daintree reads that file and never writes it, unknown features and levels are ignored, and no plugin API changes a level.
+The `presentation*` keys come from the project's presentation profile, which the user sets in Project settings → General → Features. A repository can suggest one by committing `.daintree/presentation.json` — `{ "features": { "forgeStats": "hidden", "gitDetail": "demoted" } }` — and the suggestion applies only once the user accepts it when the project opens. Daintree reads that file and never writes it, unknown features and levels are ignored, and no plugin API changes a level.
 
 A plugin adds keys of its own with [`host.setContext`](./host-api.md#setcontext). They sit under its manifest name — `setContext("needsYou", true)` from `digitalfrontier.beads` reads as `digitalfrontier.beads.needsYou` — so a binding can stay off until the plugin has something to act on. Manifest names with hyphens or leading digits (`acme.linear-planner`, `3m.tools`) parse as paths. Every renderer `when` sees these keys too, like the project keys.
 

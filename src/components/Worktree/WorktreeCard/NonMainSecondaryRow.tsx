@@ -35,6 +35,13 @@ interface NonMainSecondaryRowProps {
    */
   isPrOriginated: boolean;
   hasPlanFile: boolean;
+  /**
+   * The project's presentation profile quiets git detail (#13777): branch,
+   * issue and PR identity move to the card's expanded details, and only what
+   * is a warning stays here — failing CI, a head that moved under an armed
+   * merge, drift behind upstream or base, and a failed fetch.
+   */
+  quietGit?: boolean;
   badges: {
     onOpenIssue?: () => void;
     onOpenPR?: () => void;
@@ -54,6 +61,7 @@ export function NonMainSecondaryRow({
   hasCustomTitle = false,
   isPrOriginated,
   hasPlanFile,
+  quietGit = false,
   badges,
 }: NonMainSecondaryRowProps) {
   // The issue badge carries its title wherever it stands in for a headline:
@@ -116,42 +124,66 @@ export function NonMainSecondaryRow({
     baseBehindCount: worktree.baseBehindCount,
   }).tier;
   const upstreamFirst = upstreamTier > prTier;
+  // The PR the worktree was created from carries its own CI and merge marks
+  // when a custom title displaced it from the headline, so it is held to the
+  // same rule as the subordinate badge.
+  const livePr =
+    worktree.linked?.pr &&
+    worktree.linked.pr.state !== "closed" &&
+    worktree.linked.pr.state !== "declined"
+      ? worktree.linked.pr
+      : undefined;
+  const prHasAlarm =
+    computeAlarmTier({ ciState: livePr?.ciStatus?.state }).tier > 0 ||
+    Boolean(livePr?.headMovedWhileArmed);
+  const upstreamHasAlarm =
+    upstreamTier > 0 || Boolean(worktree.fetchAuthFailed || worktree.fetchNetworkFailed);
 
-  const prBadge = showPRBadge ? (
-    <PRBadge
-      prNumber={worktree.linked!.pr!.ref.number}
-      prState={worktree.linked!.pr!.state}
-      prCiStatus={worktree.linked!.pr!.ciStatus}
-      mergeIntent={worktree.linked!.pr!.mergeIntent}
-      headMovedWhileArmed={worktree.linked!.pr!.headMovedWhileArmed}
-      isSubordinate={!!worktree.issueNumber}
-      worktreePath={worktree.path}
-      onOpen={badges.onOpenPR}
-      isActive={isActive}
-      underlineOnHover={underlineOnHover}
-      prDetectionPaused={prDetectionPaused}
-    />
-  ) : null;
+  // The PR a worktree was created from leads this stack when a custom title
+  // displaced it. Quiet also displaces a titled PR headline into the tooltip,
+  // so a failing one comes back here — only while it is a warning.
+  const sourcePrDisplaced =
+    hasCustomTitle || (quietGit && Boolean(worktree.linked?.pr?.title ?? worktree.prTitle));
+  const showSourcePrBadge =
+    isPrOriginated && Boolean(sourcePrNumber) && sourcePrDisplaced && (!quietGit || prHasAlarm);
 
-  const upstreamBadge = showUpstreamBadge ? (
-    <UpstreamSyncBadge
-      aheadCount={worktree.aheadCount}
-      behindCount={worktree.behindCount}
-      isFetchInFlight={Boolean(worktree.isFetchInFlight)}
-      lastFetchedAt={worktree.lastFetchedAt}
-      fetchAuthFailed={Boolean(worktree.fetchAuthFailed)}
-      fetchNetworkFailed={Boolean(worktree.fetchNetworkFailed)}
-      hasAuthFailedSignIn={hasAuthFailedSignIn}
-      authProviderId={worktree.matchedForgeProviderId ?? worktree.linked?.providerId ?? null}
-      containerGapClass="gap-1.5"
-      baseBranchName={worktree.baseBranchName}
-      baseAheadCount={worktree.baseAheadCount}
-      baseBehindCount={worktree.baseBehindCount}
-      baseMatchesUpstream={worktree.baseMatchesUpstream}
-      baseCompareRef={worktree.baseCompareRef}
-      hasNoUpstream={hasNoUpstream}
-    />
-  ) : null;
+  const prBadge =
+    showPRBadge && (!quietGit || prHasAlarm) ? (
+      <PRBadge
+        prNumber={worktree.linked!.pr!.ref.number}
+        prState={worktree.linked!.pr!.state}
+        prCiStatus={worktree.linked!.pr!.ciStatus}
+        mergeIntent={worktree.linked!.pr!.mergeIntent}
+        headMovedWhileArmed={worktree.linked!.pr!.headMovedWhileArmed}
+        isSubordinate={!!worktree.issueNumber}
+        worktreePath={worktree.path}
+        onOpen={badges.onOpenPR}
+        isActive={isActive}
+        underlineOnHover={underlineOnHover}
+        prDetectionPaused={prDetectionPaused}
+      />
+    ) : null;
+
+  const upstreamBadge =
+    showUpstreamBadge && (!quietGit || upstreamHasAlarm) ? (
+      <UpstreamSyncBadge
+        aheadCount={worktree.aheadCount}
+        behindCount={worktree.behindCount}
+        isFetchInFlight={Boolean(worktree.isFetchInFlight)}
+        lastFetchedAt={worktree.lastFetchedAt}
+        fetchAuthFailed={Boolean(worktree.fetchAuthFailed)}
+        fetchNetworkFailed={Boolean(worktree.fetchNetworkFailed)}
+        hasAuthFailedSignIn={hasAuthFailedSignIn}
+        authProviderId={worktree.matchedForgeProviderId ?? worktree.linked?.providerId ?? null}
+        containerGapClass="gap-1.5"
+        baseBranchName={worktree.baseBranchName}
+        baseAheadCount={worktree.baseAheadCount}
+        baseBehindCount={worktree.baseBehindCount}
+        baseMatchesUpstream={worktree.baseMatchesUpstream}
+        baseCompareRef={worktree.baseCompareRef}
+        hasNoUpstream={hasNoUpstream}
+      />
+    ) : null;
 
   return (
     // gap-0.5 inside, mt-2.5 outside. These lines are one thing — branch,
@@ -172,10 +204,10 @@ export function NonMainSecondaryRow({
     // have something to say, and the badge decides whether it does; a row
     // whose every child rendered nothing must not leave its margin behind.
     <div className="flex flex-col gap-0.5 mt-2.5 px-1 empty:hidden">
-      {hasCustomTitle && isPrOriginated && sourcePrNumber && (
+      {showSourcePrBadge && (
         <PRBadge
-          prNumber={sourcePrNumber}
-          prTitle={worktree.linked?.pr?.title ?? worktree.prTitle}
+          prNumber={sourcePrNumber!}
+          prTitle={quietGit ? undefined : (worktree.linked?.pr?.title ?? worktree.prTitle)}
           prState={worktree.linked?.pr?.state}
           prCiStatus={worktree.linked?.pr?.ciStatus}
           mergeIntent={worktree.linked?.pr?.mergeIntent}
@@ -188,23 +220,25 @@ export function NonMainSecondaryRow({
           prDetectionPaused={prDetectionPaused}
         />
       )}
-      {worktree.issueNumber && (isPrOriginated || !hasDisplayTitle || hasCustomTitle) && (
-        <IssueBadge
-          issueNumber={worktree.issueNumber}
-          issueTitle={issueBadgeTitle}
-          provenance={worktree}
-          worktreePath={worktree.path}
-          onOpen={badges.onOpenIssue}
-          isActive={isActive}
-          underlineOnHover={underlineOnHover}
-        />
-      )}
+      {!quietGit &&
+        worktree.issueNumber &&
+        (isPrOriginated || !hasDisplayTitle || hasCustomTitle) && (
+          <IssueBadge
+            issueNumber={worktree.issueNumber}
+            issueTitle={issueBadgeTitle}
+            provenance={worktree}
+            worktreePath={worktree.path}
+            onOpen={badges.onOpenIssue}
+            isActive={isActive}
+            underlineOnHover={underlineOnHover}
+          />
+        )}
       {/* Branch before upstream delta: the branch is identity, the delta is
           state, and the card answers "which worktree is this?" before "how far
           has it drifted?". The upstream/PR pair still swaps between itself by
           alarm tier — that ordering is about which alarm outranks which, not
           about outranking the branch name. */}
-      {(hasDisplayTitle || hasCustomTitle) && (
+      {!quietGit && (hasDisplayTitle || hasCustomTitle) && (
         <BranchLabel label={branchLabel} isActive={isActive} isMuted={isMuted} />
       )}
       {upstreamFirst ? upstreamBadge : prBadge}

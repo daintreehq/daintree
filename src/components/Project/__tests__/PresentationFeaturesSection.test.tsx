@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Project } from "@shared/types/project";
 import type { PresentationLevel, PresentationLevels } from "@shared/config/presentationProfile";
@@ -57,6 +57,13 @@ function radio(label: string): HTMLElement {
   return match;
 }
 
+/** One feature's row, so a query never answers for the wrong feature. */
+function featureRow(feature: string) {
+  const row = document.getElementById(`project-feature-${feature}`);
+  if (!row) throw new Error(`no row for "${feature}"`);
+  return within(row);
+}
+
 async function renderSection(levels: PresentationLevels = {}) {
   get.mockResolvedValue(snapshot(levels));
   render(
@@ -98,7 +105,7 @@ describe("PresentationFeaturesSection", () => {
     await renderSection({ forgeStats: "demoted" });
 
     expect(radio("Demoted").getAttribute("aria-checked")).toBe("true");
-    expect(screen.getByText(/Default: Shown/)).not.toBeNull();
+    expect(featureRow("forgeStats").getByText(/Default: Shown/)).not.toBeNull();
     expect(screen.getByRole("button", { name: "Reset Forge stats to default" })).not.toBeNull();
   });
 
@@ -134,9 +141,24 @@ describe("PresentationFeaturesSection", () => {
     await renderSection({ forgeStats: "shown" });
 
     expect(radio("Hidden").getAttribute("aria-checked")).toBe("true");
-    expect(screen.getByText(/Default: Hidden/)).not.toBeNull();
-    expect(screen.getByText(/Needs a git repository/)).not.toBeNull();
+    expect(featureRow("forgeStats").getByText(/Default: Hidden/)).not.toBeNull();
+    expect(featureRow("forgeStats").getByText(/Needs a git repository/)).not.toBeNull();
     expect(radio("Shown").hasAttribute("disabled")).toBe(true);
+  });
+
+  it("offers git detail as shown or quiet, never hidden", async () => {
+    await renderSection();
+    const row = featureRow("gitDetail");
+
+    expect(row.getAllByRole("radio").map((el) => el.textContent?.trim())).toEqual([
+      "Shown",
+      "Quiet",
+    ]);
+    await act(async () => {
+      fireEvent.click(row.getByRole("radio", { name: "Quiet" }));
+    });
+    // "Quiet" is this feature's word for the shared demoted level.
+    expect(setLevel).toHaveBeenLastCalledWith("gitDetail", "demoted");
   });
 
   it("takes no input until main has answered for the project", () => {
