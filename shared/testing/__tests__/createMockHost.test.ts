@@ -21,6 +21,9 @@ const sampleSnapshot: PluginWorktreeSnapshot = {
   isCurrent: true,
   linked: null,
   status: null,
+  headOid: null,
+  gitOperation: null,
+  setup: null,
 };
 
 const otherSnapshot: PluginWorktreeSnapshot = {
@@ -31,6 +34,9 @@ const otherSnapshot: PluginWorktreeSnapshot = {
   isCurrent: false,
   linked: null,
   status: null,
+  headOid: null,
+  gitOperation: null,
+  setup: null,
 };
 
 const safeCatalogEntry: PluginActionManifestEntry = {

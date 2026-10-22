@@ -39,6 +39,10 @@ import type {
   PluginWorktreeStatus,
   PluginWorktreeStatusFile,
   PluginWorktreeFileState,
+  PluginWorktreeGitOperation,
+  PluginWorktreeSetup,
+  PluginWorktreeSetupState,
+  PluginWorktreeSetupStage,
   PluginIpcContext,
   PluginIpcHandler,
   PluginProcessApi,
@@ -159,6 +163,15 @@ describe("plugin-sdk boundary", () => {
       expectTypeOf<PluginWorktreeStatus>().toMatchTypeOf<object>();
       expectTypeOf<PluginWorktreeStatusFile>().toMatchTypeOf<object>();
       expectTypeOf<PluginWorktreeFileState>().toMatchTypeOf<string>();
+      expectTypeOf<PluginWorktreeGitOperation>().toMatchTypeOf<string>();
+      expectTypeOf<PluginWorktreeSetup>().toMatchTypeOf<object>();
+      expectTypeOf<PluginWorktreeSetupState>().toMatchTypeOf<string>();
+      expectTypeOf<PluginWorktreeSetupStage>().toMatchTypeOf<string>();
+      expectTypeOf<PluginWorktreeSnapshot["headOid"]>().toEqualTypeOf<string | null>();
+      expectTypeOf<
+        PluginWorktreeSnapshot["gitOperation"]
+      >().toEqualTypeOf<PluginWorktreeGitOperation | null>();
+      expectTypeOf<PluginWorktreeSnapshot["setup"]>().toEqualTypeOf<PluginWorktreeSetup | null>();
     });
 
     it("exports forge provider contract", () => {

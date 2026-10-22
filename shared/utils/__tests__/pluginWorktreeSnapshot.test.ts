@@ -444,3 +444,81 @@ describe("toPluginWorktreeStatus — changed-file projection", () => {
     expect(toPluginWorktreeSnapshot(makeSnapshot()).status).toBeNull();
   });
 });
+
+describe("toPluginWorktreeSnapshot — HEAD, git operation and setup (#13804)", () => {
+  it("takes headOid from the polled changes, not the detached-only head field", () => {
+    const attached = toPluginWorktreeSnapshot(
+      makeSnapshot({ worktreeChanges: { ...makeChanges([]), headOid: "abc123" } })
+    );
+    expect(attached.headOid).toBe("abc123");
+
+    const detached = toPluginWorktreeSnapshot(
+      makeSnapshot({
+        isDetached: true,
+        head: "def456",
+        worktreeChanges: { ...makeChanges([]), headOid: "def456" },
+      })
+    );
+    expect(detached.headOid).toBe("def456");
+  });
+
+  it("yields headOid: null before the first poll and on an unborn HEAD", () => {
+    expect(toPluginWorktreeSnapshot(makeSnapshot({ head: "def456" })).headOid).toBeNull();
+    expect(
+      toPluginWorktreeSnapshot(makeSnapshot({ worktreeChanges: makeChanges([]) })).headOid
+    ).toBeNull();
+  });
+
+  it("carries the oid only, never the last commit's message, body, author or time", () => {
+    const out = toPluginWorktreeSnapshot(
+      makeSnapshot({
+        worktreeChanges: {
+          ...makeChanges([]),
+          headOid: "abc123",
+          lastCommitMessage: "secret subject",
+          lastCommitBody: "secret body",
+          lastCommitAuthor: { name: "Ada", email: "ada@example.com" },
+          lastCommitTimestampMs: 1_700_000_000_000,
+        },
+      })
+    );
+    const serialized = JSON.stringify(out);
+    for (const leaked of ["secret subject", "secret body", "Ada", "ada@example.com"]) {
+      expect(serialized).not.toContain(leaked);
+    }
+  });
+
+  it("maps each blocking operation and reads CLEAN, DIRTY and absent as null", () => {
+    const op = (repoState: WorktreeSnapshot["repoState"]) =>
+      toPluginWorktreeSnapshot(makeSnapshot({ repoState })).gitOperation;
+    expect(op("MERGING")).toBe("merge");
+    expect(op("REBASING")).toBe("rebase");
+    expect(op("CHERRY_PICKING")).toBe("cherry-pick");
+    expect(op("REVERTING")).toBe("revert");
+    expect(op("CLEAN")).toBeNull();
+    expect(op("DIRTY")).toBeNull();
+    expect(op(undefined)).toBeNull();
+  });
+
+  it("projects setup as state and stage only, frozen, without the error text or timestamps", () => {
+    const setupStatus = {
+      state: "failed" as const,
+      stage: "setup-script" as const,
+      startedAt: 1,
+      completedAt: 2,
+      error: "npm install exited 1",
+    };
+    const out = toPluginWorktreeSnapshot(makeSnapshot({ setupStatus }));
+    expect(out.setup).toEqual({ state: "failed", stage: "setup-script" });
+    expect(Object.isFrozen(out.setup)).toBe(true);
+    expect(Object.isFrozen(setupStatus)).toBe(false);
+  });
+
+  it("reads an absent stage as null and absent setup as unknown, never ready", () => {
+    expect(
+      toPluginWorktreeSnapshot(makeSnapshot({ setupStatus: { state: "ready", startedAt: 1 } }))
+        .setup
+    ).toEqual({ state: "ready", stage: null });
+    expect(toPluginWorktreeSnapshot(makeSnapshot()).setup).toBeNull();
+  });
+});

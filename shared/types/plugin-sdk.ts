@@ -215,6 +215,10 @@ export type {
   PluginWorktreeStatus,
   PluginWorktreeStatusFile,
   PluginWorktreeFileState,
+  PluginWorktreeGitOperation,
+  PluginWorktreeSetup,
+  PluginWorktreeSetupState,
+  PluginWorktreeSetupStage,
 } from "./plugin.js";
 
 // ── Agent observability ─────────────────────────────────────────────

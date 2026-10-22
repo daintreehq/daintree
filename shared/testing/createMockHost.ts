@@ -1049,6 +1049,7 @@ function mockResolveSubscriptionDebounceMs(
 /** The host's worktree fingerprint, duplicated for the same reason and pinned the same way. */
 function mockWorktreeFingerprint(snapshot: PluginWorktreeSnapshot): string {
   const status = snapshot.status;
+  const setup = snapshot.setup;
   return JSON.stringify([
     snapshot.worktreeId,
     snapshot.path,
@@ -1069,6 +1070,9 @@ function mockWorktreeFingerprint(snapshot: PluginWorktreeSnapshot): string {
           status.counts,
           status.files.map((file) => `${file.state}\u0000${file.path}`),
         ],
+    snapshot.headOid ?? null,
+    snapshot.gitOperation ?? null,
+    setup == null ? null : [setup.state, setup.stage ?? null],
   ]);
 }
 
