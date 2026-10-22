@@ -1,0 +1,46 @@
+{
+  "name": "daintree.linear",
+  "version": "0.1.0",
+  "displayName": "Linear",
+  "description": "First-party Linear issues provider — pick Linear issues for worktrees, use Linear's branch names, and assign issues to yourself, while your code forge keeps pull requests and CI.",
+  "tagline": "Linear issues for your worktrees, alongside your code forge",
+  "category": "forge",
+  "main": "main/index.js",
+  "engines": {
+    "daintree": ">=0.11.0"
+  },
+  "capabilities": [],
+  "contributes": {
+    "settings": [
+      {
+        "id": "teamKey",
+        "type": "string",
+        "label": "Linear team key",
+        "description": "The key of the Linear team this project's issues live in, as it appears in issue IDs (ENG for ENG-123).",
+        "scope": "project"
+      }
+    ],
+    "forgeProviders": [
+      {
+        "id": "linear",
+        "name": "Linear",
+        "matches": [],
+        "roles": ["issues"],
+        "capabilities": ["issues", "assignees", "identity"],
+        "credentialFields": [
+          {
+            "id": "token",
+            "label": "Personal API key",
+            "type": "password",
+            "placeholder": "lin_api_…",
+            "helpText": "Create under Linear → Settings → Security & access → Personal API keys."
+          }
+        ],
+        "settingsScopeRef": "teamKey",
+        "slots": {
+          "icon": "linear.providerIcon"
+        }
+      }
+    ]
+  }
+}

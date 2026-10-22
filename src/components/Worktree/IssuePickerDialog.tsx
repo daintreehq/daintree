@@ -24,10 +24,17 @@ import { keyBelongsToField, stepListboxCursor } from "@/hooks/useListboxCursor";
 interface IssuePickerDialogProps {
   isOpen: boolean;
   onClose: () => void;
-  worktree: WorktreeState;
+  /**
+   * What the picker lists issues for and compares the current link against.
+   * A worktree card passes its worktree; the New Worktree form, which has no
+   * worktree yet, passes the project path and the issue it has picked so far.
+   */
+  worktree: Pick<WorktreeState, "path" | "issueProviderId" | "issueKey">;
   currentIssueNumber?: number;
   onAttach: (issue: Issue) => void;
   onDetach: () => void;
+  /** `"nested"` when opened from inside another dialog, so it layers above it. */
+  zIndex?: "modal" | "nested";
 }
 
 type StateFilter = "open" | "closed" | "all";
@@ -129,6 +136,7 @@ export function IssuePickerDialog({
   currentIssueNumber,
   onAttach,
   onDetach,
+  zIndex,
 }: IssuePickerDialogProps) {
   const [search, setSearch] = useState("");
   const [stateFilter, setStateFilter] = useState<StateFilter>("open");
@@ -414,6 +422,7 @@ export function IssuePickerDialog({
     <AppDialog
       isOpen={isOpen}
       onClose={onClose}
+      zIndex={zIndex}
       size="md"
       maxHeight="max-h-[70vh]"
       // A fixed height keeps the search field still while the body swaps

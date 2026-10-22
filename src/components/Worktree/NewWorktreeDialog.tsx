@@ -1255,7 +1255,9 @@ export function NewWorktreeDialog({
     </span>
   );
 
-  const showIssueRow = !initialPR && !!forgeEntry?.contribution.slots?.issueSelector;
+  // Any issues provider gets the row: one without an `issueSelector` slot is
+  // served by the host's own picker over `listIssues`.
+  const showIssueRow = !initialPR && !!forgeEntry;
   // Without saved recipes the layout silently defaults to a clone of the
   // current one, which can itself start an agent — so once an agent is picked
   // the layout choice is shown too.
