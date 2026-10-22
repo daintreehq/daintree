@@ -107,6 +107,38 @@ describe("usePluginThemes (#13832)", () => {
     expect(useAppThemeStore.getState().pluginSnapshotScheme).toBeNull();
   });
 
+  it("finishes the read-back even when an unrelated push lands meanwhile", async () => {
+    useAppThemeStore.setState({ selectedSchemeId: MIDNIGHT_ID, pluginSnapshotScheme: midnight });
+    let resolveConfig: (config: { colorSchemeId: string }) => void = () => {};
+    getConfigMock.mockReturnValue(new Promise((resolve) => (resolveConfig = resolve)));
+    renderHook(() => usePluginThemes());
+    await waitFor(() => expect(getConfigMock).toHaveBeenCalled());
+
+    const other = {
+      ...midnight,
+      id: "plugin:other.themes:noir",
+      plugin: { id: "other.themes", name: "Other" },
+    };
+    act(() => push!({ themes: [other] }));
+    await act(async () => resolveConfig({ colorSchemeId: "bondi" }));
+
+    expect(useAppThemeStore.getState().selectedSchemeId).toBe("bondi");
+  });
+
+  it("stays on a plugin theme whose plugin is only reloading", async () => {
+    useAppThemeStore.setState({ selectedSchemeId: MIDNIGHT_ID, pluginSnapshotScheme: midnight });
+    getThemesMock.mockResolvedValue([midnight]);
+    getConfigMock.mockResolvedValue({ colorSchemeId: MIDNIGHT_ID });
+    renderHook(() => usePluginThemes());
+    await waitFor(() => expect(useAppThemeStore.getState().pluginSchemes).toEqual([midnight]));
+
+    act(() => push!({ themes: [] }));
+    await waitFor(() => expect(getConfigMock).toHaveBeenCalled());
+
+    expect(useAppThemeStore.getState().selectedSchemeId).toBe(MIDNIGHT_ID);
+    expect(useAppThemeStore.getState().pluginSnapshotScheme).toEqual(midnight);
+  });
+
   it("keeps a selected plugin theme the catalog still offers", async () => {
     useAppThemeStore.setState({ selectedSchemeId: MIDNIGHT_ID, pluginSnapshotScheme: midnight });
     getThemesMock.mockResolvedValue([midnight]);

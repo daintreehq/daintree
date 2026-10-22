@@ -129,6 +129,32 @@ describe("parsePluginThemeFile", () => {
     expect(tokens.ok).toBe(false);
   });
 
+  it("refuses a value that would fetch anything but an embedded image", () => {
+    const beacon = 'url("https://example.com/beacon.png")';
+    for (const overrides of [
+      { tokens: { "chrome-noise-texture": beacon } },
+      { tokens: { "chrome-noise-texture": "url(https://example.com/a.png)" } },
+      { extensions: { "grain-image": beacon } },
+      { extensions: { "grain-image": 'image-set("https://example.com/a.png" 1x)' } },
+      { extensions: { "grain-image": "linear-gradient(red, blue), url(//example.com/a.png)" } },
+    ]) {
+      const result = parsePluginThemeFile({ palette: DAINTREE.palette, ...overrides }, "dark");
+      expect(result.ok, JSON.stringify(overrides)).toBe(false);
+    }
+
+    const embedded = parsePluginThemeFile(
+      {
+        palette: DAINTREE.palette,
+        tokens: {
+          "chrome-noise-texture":
+            "url(\"data:image/svg+xml,%3Csvg filter='url(%23grain)'/%3E\"), radial-gradient(red, transparent)",
+        },
+      },
+      "dark"
+    );
+    expect(embedded.ok).toBe(true);
+  });
+
   it("refuses a strategy value of the wrong type", () => {
     const palette = {
       ...DAINTREE.palette,

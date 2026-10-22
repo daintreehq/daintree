@@ -111,6 +111,16 @@ function ThemeListItem({
   );
 }
 
+/**
+ * The saved theme, read when it is restored rather than when the palette
+ * opened: it can change underneath an open palette, as when the plugin that
+ * offered it goes away and main moves the selection.
+ */
+function committedScheme(): AppColorScheme {
+  const state = useAppThemeStore.getState();
+  return resolveAppTheme(state.selectedSchemeId, selectSelectableSchemes(state));
+}
+
 export function ThemePalette({ isOpen, onClose }: ThemePaletteProps) {
   const selectedSchemeId = useAppThemeStore((s) => s.selectedSchemeId);
   const selectableSchemes = useAppThemeStore(selectSelectableSchemes);
@@ -180,13 +190,8 @@ export function ThemePalette({ isOpen, onClose }: ThemePaletteProps) {
     if (!isOpen && wasOpenRef.current) {
       wasOpenRef.current = false;
       livePreviewReadyRef.current = false;
-      const originalId = originalSchemeIdRef.current;
-      if (!committedRef.current && originalId) {
-        const originalScheme = resolveAppTheme(
-          originalId,
-          selectSelectableSchemes(useAppThemeStore.getState())
-        );
-        injectSchemeToDOM(originalScheme);
+      if (!committedRef.current && originalSchemeIdRef.current) {
+        injectSchemeToDOM(committedScheme());
       }
       originalSchemeIdRef.current = null;
       committedRef.current = false;
@@ -201,11 +206,8 @@ export function ThemePalette({ isOpen, onClose }: ThemePaletteProps) {
     if (results.length === 0) {
       // Nothing left to try, so go back to the saved theme rather than keep
       // painting one the filter has hidden, which no row or footer could name.
-      const originalId = originalSchemeIdRef.current;
-      if (livePreviewReadyRef.current && originalId) {
-        injectSchemeToDOM(
-          resolveAppTheme(originalId, selectSelectableSchemes(useAppThemeStore.getState()))
-        );
+      if (livePreviewReadyRef.current && originalSchemeIdRef.current) {
+        injectSchemeToDOM(committedScheme());
       }
       return;
     }

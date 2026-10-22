@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BUILT_IN_APP_SCHEMES, DEFAULT_APP_SCHEME_ID } from "@/config/appColorSchemes";
 import { flushPendingTheme, injectSchemeToDOM, useAppThemeStore } from "../appThemeStore";
 import type { AppColorScheme } from "@shared/theme";
+import { selectSelectableSchemes } from "@/theme/selectableSchemes";
 
 describe("appThemeStore.recentSchemeIds LRU", () => {
   beforeEach(() => {
@@ -482,6 +483,59 @@ describe("plugin themes (#13832)", () => {
     useAppThemeStore.getState().setPluginSchemes([pluginTheme(MIDNIGHT_ID, daintree, "#654321")]);
     flushPendingTheme();
 
+    expect(canvasToken()).toBe(bondi.tokens["surface-canvas"]);
+  });
+
+  it("keeps a plugin theme picked this session painted while its plugin reloads", () => {
+    useAppThemeStore.setState({ pluginSchemes: [pluginTheme(MIDNIGHT_ID)] });
+    useAppThemeStore.getState().setSelectedSchemeId(MIDNIGHT_ID);
+    flushPendingTheme();
+
+    useAppThemeStore.getState().setPluginSchemes([]);
+    flushPendingTheme();
+
+    expect(useAppThemeStore.getState().selectedSchemeId).toBe(MIDNIGHT_ID);
+    expect(canvasToken()).toBe("#123456");
+  });
+
+  it("stops offering a plugin theme the user moved off once its plugin goes", () => {
+    useAppThemeStore.setState({ pluginSnapshotScheme: pluginTheme(MIDNIGHT_ID) });
+    useAppThemeStore.getState().setSelectedSchemeIdSilent(MIDNIGHT_ID);
+    useAppThemeStore.getState().setSelectedSchemeId("bondi");
+
+    expect(useAppThemeStore.getState().pluginSnapshotScheme).toBeNull();
+    expect(selectSelectableSchemes(useAppThemeStore.getState())).toEqual([]);
+  });
+
+  it("leaves an open preview on screen when main replaces the committed theme", () => {
+    useAppThemeStore.setState({
+      pluginSnapshotScheme: pluginTheme(MIDNIGHT_ID),
+      selectedSchemeId: MIDNIGHT_ID,
+      previewSchemeId: "bondi",
+    });
+    injectSchemeToDOM(bondi, { immediate: true });
+
+    useAppThemeStore.getState().applyPluginThemeFallback("svalbard");
+    flushPendingTheme();
+
+    const state = useAppThemeStore.getState();
+    expect(state.selectedSchemeId).toBe("svalbard");
+    expect(state.previewSchemeId).toBe("bondi");
+    expect(canvasToken()).toBe(bondi.tokens["surface-canvas"]);
+  });
+
+  it("ends a preview of a plugin theme that stops being offered", () => {
+    useAppThemeStore.setState({
+      pluginSchemes: [pluginTheme(MIDNIGHT_ID)],
+      selectedSchemeId: "bondi",
+      previewSchemeId: MIDNIGHT_ID,
+    });
+    injectSchemeToDOM(pluginTheme(MIDNIGHT_ID), { immediate: true });
+
+    useAppThemeStore.getState().setPluginSchemes([]);
+    flushPendingTheme();
+
+    expect(useAppThemeStore.getState().previewSchemeId).toBeNull();
     expect(canvasToken()).toBe(bondi.tokens["surface-canvas"]);
   });
 

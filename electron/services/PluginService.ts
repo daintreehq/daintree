@@ -1180,12 +1180,15 @@ export class PluginService {
    * Set once a startup scan has enumerated every plugin root, which is what
    * makes the theme catalog authoritative: before it, or after a scan that
    * threw, a selected plugin theme missing from the catalog may simply not
-   * have loaded yet, so it is never replaced (#13832).
+   * have loaded yet, so it is replaced only when its own plugin is known to
+   * have loaded without it or to have been removed (#13832).
    */
   private pluginThemeCatalogReady = false;
   private pluginThemeSyncQueued = false;
-  /** Plugins between `unloadPlugin(id, { reload: true })` and its settle. */
+  /** Theme-bearing plugins between `unloadPlugin(id, { reload: true })` and its settle. */
   private readonly pluginThemeReloads = new Set<string>();
+  /** Theme-bearing plugins an unload removed for good since the last sync. */
+  private readonly pluginThemeRemovals = new Set<string>();
   /**
    * Resolves once {@link initialize} and {@link activateStartupFinishedPlugins}
    * have both settled (or {@link dispose} has run). Renderer pull-on-mount IPC
@@ -6697,13 +6700,17 @@ export class PluginService {
     queueMicrotask(() => {
       this.pluginThemeSyncQueued = false;
       if (this.disposed) return;
+      const removals = new Set(this.pluginThemeRemovals);
+      this.pluginThemeRemovals.clear();
       let fallbackSchemeId: string | null = null;
-      if (this.pluginThemeCatalogReady) {
-        try {
-          fallbackSchemeId = reconcilePluginThemeSelection((id) => this.pluginThemeReloads.has(id));
-        } catch (err) {
-          console.error("[PluginService] Failed to settle the plugin theme selection:", err);
-        }
+      try {
+        fallbackSchemeId = reconcilePluginThemeSelection(
+          (owner) =>
+            !this.pluginThemeReloads.has(owner) &&
+            (this.pluginThemeCatalogReady || this.plugins.has(owner) || removals.has(owner))
+        );
+      } catch (err) {
+        console.error("[PluginService] Failed to settle the plugin theme selection:", err);
       }
       this.broadcaster.scheduleThemesBroadcast(fallbackSchemeId);
     });
@@ -6839,8 +6846,10 @@ export class PluginService {
     );
     runUnloadStep(pluginId, "unregisterPluginSkills", () => unregisterPluginSkills(pluginId));
     runUnloadStep(pluginId, "unregisterPluginThemes", () => {
+      if (!unregisterPluginThemes(pluginId)) return;
       if (options?.reload) this.pluginThemeReloads.add(pluginId);
-      if (unregisterPluginThemes(pluginId)) this.schedulePluginThemeSync();
+      else this.pluginThemeRemovals.add(pluginId);
+      this.schedulePluginThemeSync();
     });
     // Recipes retract on unload/disable/reload, but their sidecar metadata does
     // NOT — only an explicit successful uninstall purges that (#11860).

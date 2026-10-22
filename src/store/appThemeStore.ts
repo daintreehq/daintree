@@ -19,8 +19,10 @@ interface AppThemeState {
   /** Themes installed plugins offer, as main last published them (#13832). */
   pluginSchemes: AppColorScheme[];
   /**
-   * The selected plugin theme as persisted, so it resolves before its plugin
-   * loads. Cleared when main replaces the selection.
+   * The selected theme when it is a plugin's, kept so it still resolves while
+   * the catalog lacks it: at boot before plugins load (seeded from the persisted
+   * snapshot) and between a reload's unload and load. Null otherwise, so a
+   * theme the user moved off can't linger as selectable once its plugin goes.
    */
   pluginSnapshotScheme: AppColorScheme | null;
   colorVisionMode: ColorVisionMode;
@@ -75,6 +77,11 @@ interface AppThemeState {
   setPreferredLightSchemeId: (id: string) => void;
   setRecentSchemeIds: (ids: string[]) => void;
   setAccentColorOverride: (color: string | null) => void;
+}
+
+/** What `pluginSnapshotScheme` holds once `scheme` is the selection. */
+function retainedPluginScheme(scheme: AppColorScheme): AppColorScheme | null {
+  return scheme.plugin ? scheme : null;
 }
 
 let pendingScheme: AppColorScheme | null = null;
@@ -162,6 +169,7 @@ export const useAppThemeStore = create<AppThemeState>()((set) => ({
     const scheme = resolveAppTheme(id, selectSelectableSchemes(useAppThemeStore.getState()));
     set((state) => ({
       selectedSchemeId: scheme.id,
+      pluginSnapshotScheme: retainedPluginScheme(scheme),
       recentSchemeIds: [scheme.id, ...state.recentSchemeIds.filter((x) => x !== scheme.id)].slice(
         0,
         RECENT_SCHEMES_LIMIT
@@ -174,6 +182,7 @@ export const useAppThemeStore = create<AppThemeState>()((set) => ({
     const scheme = resolveAppTheme(id, selectSelectableSchemes(useAppThemeStore.getState()));
     set((state) => ({
       selectedSchemeId: scheme.id,
+      pluginSnapshotScheme: retainedPluginScheme(scheme),
       recentSchemeIds: [scheme.id, ...state.recentSchemeIds.filter((x) => x !== scheme.id)].slice(
         0,
         RECENT_SCHEMES_LIMIT
@@ -185,7 +194,7 @@ export const useAppThemeStore = create<AppThemeState>()((set) => ({
     const state = useAppThemeStore.getState();
     const previousSchemeId = state.selectedSchemeId;
     const scheme = resolveAppTheme(id, selectSelectableSchemes(state), opts?.fallbackType);
-    set({ selectedSchemeId: scheme.id });
+    set({ selectedSchemeId: scheme.id, pluginSnapshotScheme: retainedPluginScheme(scheme) });
 
     // Only transition on a real change. `nativeTheme` can re-fire for OS changes that
     // don't move the light/dark bucket, and crossfading there would skipTransition() an
@@ -206,19 +215,47 @@ export const useAppThemeStore = create<AppThemeState>()((set) => ({
   },
 
   setPluginSchemes: (schemes) => {
-    set({ pluginSchemes: schemes });
+    const { selectedSchemeId, previewSchemeId, pluginSnapshotScheme } = useAppThemeStore.getState();
+    // An update to the selected theme replaces the retained copy; a catalog
+    // that lacks it keeps the copy until main says the theme is gone.
+    const offered = schemes.find((scheme) => scheme.id === selectedSchemeId);
+    set({ pluginSchemes: schemes, pluginSnapshotScheme: offered ?? pluginSnapshotScheme });
     const state = useAppThemeStore.getState();
-    // A preview owns the DOM until it ends, and restores the selection itself.
-    if (state.previewSchemeId !== null || !isPluginThemeId(state.selectedSchemeId)) return;
-    injectSchemeToDOM(resolveAppTheme(state.selectedSchemeId, selectSelectableSchemes(state)));
+    const selectable = selectSelectableSchemes(state);
+    if (previewSchemeId !== null) {
+      // A preview owns the DOM and restores the selection when it ends, unless
+      // the theme it shows has just gone.
+      if (!isPluginThemeId(previewSchemeId) || selectable.some((s) => s.id === previewSchemeId)) {
+        return;
+      }
+      set({ previewSchemeId: null });
+    } else if (!isPluginThemeId(selectedSchemeId)) {
+      return;
+    }
+    injectSchemeToDOM(resolveAppTheme(selectedSchemeId, selectable));
   },
 
   applyPluginThemeFallback: (schemeId) => {
-    const { selectedSchemeId: lostId, setSelectedSchemeIdSilent } = useAppThemeStore.getState();
+    const {
+      selectedSchemeId: lostId,
+      previewSchemeId,
+      setSelectedSchemeIdSilent,
+    } = useAppThemeStore.getState();
     set((state) => ({
       pluginSnapshotScheme: null,
       recentSchemeIds: state.recentSchemeIds.filter((id) => id !== lostId),
     }));
+    if (previewSchemeId !== null && previewSchemeId !== lostId) {
+      // A preview owns the DOM and paints the committed theme when it ends,
+      // which is now the fallback.
+      const fallback = resolveAppTheme(
+        schemeId,
+        selectSelectableSchemes(useAppThemeStore.getState())
+      );
+      set({ selectedSchemeId: fallback.id });
+      return;
+    }
+    if (previewSchemeId !== null) set({ previewSchemeId: null });
     // The vanished theme is on screen, so fade off it rather than cut.
     setSelectedSchemeIdSilent(schemeId, { crossfade: true });
   },

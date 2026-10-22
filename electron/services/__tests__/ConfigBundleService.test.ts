@@ -385,6 +385,26 @@ describe("ConfigBundleService.apply", () => {
     expect(statusFor(again, "appTheme", "theme:mine")?.status).toBe("unchanged");
   });
 
+  it("keeps plugin theme ids out of imported themes and uninstalled selections (#13832)", async () => {
+    mockStore.set("appTheme", { colorSchemeId: "daintree" });
+    const { service } = makeService();
+
+    const report = await service.apply({
+      appTheme: {
+        customSchemes: [{ id: "plugin:acme.themes:midnight", name: "Midnight" }],
+        colorSchemeId: "plugin:acme.themes:midnight",
+        preferredDarkSchemeId: "plugin:acme.themes:midnight",
+      },
+    });
+
+    expect(statusFor(report, "appTheme", "theme:plugin:acme.themes:midnight")?.status).toBe(
+      "skipped"
+    );
+    expect(statusFor(report, "appTheme", "colorSchemeId")?.status).toBe("skipped");
+    expect(statusFor(report, "appTheme", "preferredDarkSchemeId")?.status).toBe("skipped");
+    expect(mockStore.get("appTheme")).toEqual({ colorSchemeId: "daintree" });
+  });
+
   it("keeps a pre-existing theme that the current schema would reject", async () => {
     const legacy = { id: "legacy", somethingOld: true }; // no name -> invalid today
     const fresh = { id: "fresh", name: "Fresh" };

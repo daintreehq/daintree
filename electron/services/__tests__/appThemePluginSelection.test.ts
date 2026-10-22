@@ -28,7 +28,7 @@ vi.mock("../../store.js", () => ({
 }));
 
 const broadcastToRenderer = vi.hoisted(() => vi.fn());
-vi.mock("../../ipc/utils.js", () => ({ broadcastToRenderer }));
+vi.mock("../../ipc/utils.js", () => ({ broadcastToVisibleRenderersOrAll: broadcastToRenderer }));
 
 const setTitleBarOverlayTheme = vi.hoisted(() => vi.fn());
 vi.mock("../../window/titleBarOverlay.js", () => ({ setTitleBarOverlayTheme }));
@@ -46,6 +46,7 @@ import {
 import { BUILT_IN_THEME_SOURCES } from "../../../shared/theme/builtInThemes/index.js";
 import type { PluginThemeSource } from "../../../shared/theme/types.js";
 import { CHANNELS } from "../../ipc/channels.js";
+import { store } from "../../store.js";
 
 const DAINTREE = BUILT_IN_THEME_SOURCES.find((source) => source.id === "daintree")!;
 const BONDI = BUILT_IN_THEME_SOURCES.find((source) => source.id === "bondi")!;
@@ -75,7 +76,7 @@ function appTheme(): Record<string, unknown> {
   return storeState.data.appTheme as Record<string, unknown>;
 }
 
-const notReloading = () => false;
+const settles = () => true;
 
 describe("plugin theme selection (#13832)", () => {
   beforeEach(() => {
@@ -99,6 +100,10 @@ describe("plugin theme selection (#13832)", () => {
       colorSchemeId: source.id,
       pluginThemeSnapshot: toPluginThemeSnapshot(source),
     });
+    expect(vi.mocked(store.set).mock.calls.map(([key]) => key)).toEqual([
+      "appTheme.pluginThemeSnapshot",
+      "appTheme.colorSchemeId",
+    ]);
   });
 
   it("leaves a built-in selection's stale snapshot alone, where it no longer applies", () => {
@@ -113,7 +118,7 @@ describe("plugin theme selection (#13832)", () => {
 
   it("does nothing while a built-in or imported theme is selected", () => {
     storeState.data.appTheme = { colorSchemeId: "custom-ocean" };
-    expect(reconcilePluginThemeSelection(notReloading)).toBeNull();
+    expect(reconcilePluginThemeSelection(settles)).toBeNull();
     expect(broadcastToRenderer).not.toHaveBeenCalled();
   });
 
@@ -126,7 +131,7 @@ describe("plugin theme selection (#13832)", () => {
       pluginThemeSnapshot: toPluginThemeSnapshot(before),
     };
 
-    expect(reconcilePluginThemeSelection(notReloading)).toBeNull();
+    expect(reconcilePluginThemeSelection(settles)).toBeNull();
     expect(appTheme().pluginThemeSnapshot).toEqual(toPluginThemeSnapshot(after));
     expect(broadcastToRenderer).not.toHaveBeenCalled();
   });
@@ -141,7 +146,7 @@ describe("plugin theme selection (#13832)", () => {
       recentSchemeIds: [lost.id, "daintree"],
     };
 
-    expect(reconcilePluginThemeSelection(notReloading)).toBe(LIGHT_BUILT_IN.id);
+    expect(reconcilePluginThemeSelection(settles)).toBe(LIGHT_BUILT_IN.id);
     expect(appTheme()).toMatchObject({
       colorSchemeId: LIGHT_BUILT_IN.id,
       recentSchemeIds: ["daintree"],
@@ -165,32 +170,38 @@ describe("plugin theme selection (#13832)", () => {
       pluginThemeSnapshot: toPluginThemeSnapshot(lost),
       preferredLightSchemeId: "custom-paper",
     };
-    expect(reconcilePluginThemeSelection(notReloading)).toBe("bondi");
+    expect(reconcilePluginThemeSelection(settles)).toBe("bondi");
 
     storeState.data.appTheme = {
       colorSchemeId: lost.id,
       pluginThemeSnapshot: toPluginThemeSnapshot(lost),
       preferredLightSchemeId: "daintree",
     };
-    expect(reconcilePluginThemeSelection(notReloading)).toBe("bondi");
+    expect(reconcilePluginThemeSelection(settles)).toBe("bondi");
+  });
+
+  it("refuses a plugin theme no loaded plugin offers, writing nothing", () => {
+    storeState.data.appTheme = { colorSchemeId: "daintree" };
+    expect(() => persistColorSchemeSelection(makePluginThemeId("acme.themes", "gone"))).toThrow();
+    expect(appTheme()).toEqual({ colorSchemeId: "daintree" });
   });
 
   it("falls back by system appearance when no snapshot says which polarity was lost", () => {
     nativeThemeMock.shouldUseDarkColors = false;
     storeState.data.appTheme = { colorSchemeId: makePluginThemeId("acme.themes", "gone") };
 
-    expect(reconcilePluginThemeSelection(notReloading)).toBe("bondi");
+    expect(reconcilePluginThemeSelection(settles)).toBe("bondi");
     expect(broadcastToRenderer).toHaveBeenCalledWith(
       CHANNELS.NOTIFICATION_SHOW_TOAST,
       expect.objectContaining({ message: expect.stringContaining("The plugin theme you chose") })
     );
   });
 
-  it("waits out a reload of the plugin that owns the selection", () => {
+  it("waits while the catalog can't speak for the plugin that owns the selection", () => {
     const lost = themeSource("midnight", DAINTREE);
     storeState.data.appTheme = { colorSchemeId: lost.id };
 
-    expect(reconcilePluginThemeSelection((pluginId) => pluginId === "acme.themes")).toBeNull();
+    expect(reconcilePluginThemeSelection((pluginId) => pluginId !== "acme.themes")).toBeNull();
     expect(appTheme().colorSchemeId).toBe(lost.id);
     expect(broadcastToRenderer).not.toHaveBeenCalled();
   });

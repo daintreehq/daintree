@@ -139,6 +139,40 @@ const themeFileSchema = z.strictObject({
 
 const TOKEN_KEY_SET: ReadonlySet<string> = new Set<string>(APP_THEME_TOKEN_KEYS);
 
+/** CSS functions that can load an image or other resource. */
+const RESOURCE_FUNCTION = /^(?:-webkit-image-set|image-set|cross-fade|element|image|url|src)\s*\(/i;
+
+/**
+ * Whether `value` could make the app fetch something. A theme is colours and
+ * lengths; the only resource it may carry is an embedded `data:image/` texture,
+ * which the built-ins use for grain. Text inside a quoted string is skipped, so
+ * an SVG data URL's own `url(#filter)` reference doesn't count.
+ */
+function loadsResource(value: string): boolean {
+  for (let i = 0; i < value.length; i++) {
+    const char = value[i]!;
+    if (char === '"' || char === "'") {
+      for (i++; i < value.length && value[i] !== char; i++) {
+        if (value[i] === "\\") i++;
+      }
+      continue;
+    }
+    if (i > 0 && /[\w-]/.test(value[i - 1]!)) continue;
+    const match = RESOURCE_FUNCTION.exec(value.slice(i));
+    if (!match) continue;
+    if (!/^url/i.test(match[0])) return true;
+    const rest = value.slice(i + match[0].length).trimStart();
+    const argument = /^["']/.test(rest) ? rest.slice(1) : rest;
+    if (!/^data:image\//i.test(argument)) return true;
+  }
+  return false;
+}
+
+/** A plugin-authored token or extension value: one CSS value, loading nothing. */
+function isPluginThemeValue(value: string): boolean {
+  return isCssDeclarationValue(value) && !loadsResource(value);
+}
+
 export interface PluginThemeFile {
   palette: ThemePalette;
   tokens?: Record<string, string>;
@@ -158,7 +192,8 @@ function ownKeys(value: unknown): string[] {
  * Validate a plugin theme file's contents against the polarity its manifest
  * entry declares. Strict throughout: a missing palette field, an unknown key,
  * a token or extension outside the registered sets, or a value that is not a
- * single CSS value is an error, never silently dropped — the author has no
+ * single CSS value or that would load anything but an embedded image is an
+ * error, never silently dropped — the author has no
  * other way to learn their theme is not what they wrote.
  */
 export function parsePluginThemeFile(raw: unknown, type: "dark" | "light"): PluginThemeFileResult {
@@ -188,10 +223,12 @@ export function parsePluginThemeFile(raw: unknown, type: "dark" | "light"): Plug
     const validation = validateImportedThemeData({ tokens });
     if (!validation.valid) errors.push(...validation.errors);
     const unsafe = Object.entries(tokens)
-      .filter(([, value]) => !isCssDeclarationValue(value))
+      .filter(([, value]) => !isPluginThemeValue(value))
       .map(([key]) => key);
     if (unsafe.length > 0) {
-      errors.push(`Tokens whose value is not a single CSS value: ${unsafe.sort().join(", ")}`);
+      errors.push(
+        `Tokens that aren't a single CSS value or that load a resource: ${unsafe.sort().join(", ")}`
+      );
     }
   }
 
@@ -201,10 +238,12 @@ export function parsePluginThemeFile(raw: unknown, type: "dark" | "light"): Plug
   }
   if (extensions) {
     const unsafe = Object.entries(extensions)
-      .filter(([, value]) => !isCssDeclarationValue(value))
+      .filter(([, value]) => !isPluginThemeValue(value))
       .map(([key]) => key);
     if (unsafe.length > 0) {
-      errors.push(`Extensions whose value is not a single CSS value: ${unsafe.sort().join(", ")}`);
+      errors.push(
+        `Extensions that aren't a single CSS value or that load a resource: ${unsafe.sort().join(", ")}`
+      );
     }
   }
 

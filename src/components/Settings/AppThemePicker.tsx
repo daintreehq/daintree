@@ -568,7 +568,10 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
     const otherIds = allSchemes.map((s) => s.id).filter((id) => id !== selectedSchemeId);
     if (otherIds.length === 0) return;
 
-    shuffleQueueRef.current = shuffleQueueRef.current.filter((id) => id !== selectedSchemeId);
+    // Plugin themes can leave between clicks, so the queue keeps only what is
+    // still on offer.
+    const offered = new Set(otherIds);
+    shuffleQueueRef.current = shuffleQueueRef.current.filter((id) => offered.has(id));
 
     if (shuffleQueueRef.current.length === 0) {
       shuffleQueueRef.current = shuffleArray(otherIds);

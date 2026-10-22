@@ -38,12 +38,13 @@ vi.mock("electron", () => ({
 vi.mock("../../ipc/utils.js", () => ({
   broadcastToRenderer: vi.fn(),
   broadcastToProjectRenderers: vi.fn(),
+  broadcastToVisibleRenderersOrAll: vi.fn(),
   isWithheldFromView: vi.fn(() => false),
 }));
 vi.mock("../../store.js", () => ({ store: storeMock }));
 
 import { PluginService } from "../PluginService.js";
-import { broadcastToRenderer } from "../../ipc/utils.js";
+import { broadcastToRenderer, broadcastToVisibleRenderersOrAll } from "../../ipc/utils.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import { clearPluginThemeRegistry, getPluginThemeSchemes } from "../plugin/PluginThemeRegistry.js";
 import { BUILT_IN_THEME_SOURCES } from "../../../shared/theme/builtInThemes/index.js";
@@ -57,7 +58,7 @@ const DAWN_ID = `plugin:${PLUGIN_ID}:dawn`;
 let tmpDir: string;
 let service: PluginService | null;
 
-async function writeThemePlugin(): Promise<void> {
+async function writeThemePlugin(themes = ["dawn", "murky"]): Promise<void> {
   const dir = path.join(tmpDir, PLUGIN_ID);
   await fs.mkdir(path.join(dir, "themes"), { recursive: true });
   await fs.writeFile(
@@ -70,7 +71,7 @@ async function writeThemePlugin(): Promise<void> {
         themes: [
           { id: "dawn", name: "Dawn", type: "light", path: "./themes/dawn.json" },
           { id: "murky", name: "Murky", type: "dark", path: "./themes/murky.json" },
-        ],
+        ].filter((theme) => themes.includes(theme.id)),
       },
     })
   );
@@ -106,7 +107,7 @@ function themePushes(): Array<{ themes: Array<{ id: string }>; fallbackSchemeId?
 
 function fallbackToasts(): unknown[] {
   return vi
-    .mocked(broadcastToRenderer)
+    .mocked(broadcastToVisibleRenderersOrAll)
     .mock.calls.filter(
       ([channel, payload]) =>
         channel === CHANNELS.NOTIFICATION_SHOW_TOAST &&
@@ -135,6 +136,7 @@ beforeEach(async () => {
   storeState.data = {};
   service = null;
   vi.mocked(broadcastToRenderer).mockClear();
+  vi.mocked(broadcastToVisibleRenderersOrAll).mockClear();
 });
 
 afterEach(async () => {
@@ -222,7 +224,7 @@ describe("PluginService plugin themes (#13832)", () => {
     expect(fallbackToasts()).toEqual([]);
   });
 
-  it("keeps the selection across a reload of the owning plugin", async () => {
+  it("keeps the selection while a reload is between its unload and load", async () => {
     await writeThemePlugin();
     selectDawn();
     service = new PluginService(tmpDir, "0.0.0");
@@ -233,5 +235,35 @@ describe("PluginService plugin themes (#13832)", () => {
     await settle();
     expect((storeState.data.appTheme as Record<string, unknown>).colorSchemeId).toBe(DAWN_ID);
     expect(fallbackToasts()).toEqual([]);
+  });
+
+  it("keeps the selection through a reload that still offers the theme", async () => {
+    await writeThemePlugin();
+    selectDawn();
+    service = new PluginService(tmpDir, "0.0.0");
+    await service.initialize();
+    await settle();
+
+    await service.loadDevPlugin(PLUGIN_ID);
+    await settle();
+
+    expect((storeState.data.appTheme as Record<string, unknown>).colorSchemeId).toBe(DAWN_ID);
+    expect(getPluginThemeSchemes().map((scheme) => scheme.id)).toEqual([DAWN_ID]);
+    expect(fallbackToasts()).toEqual([]);
+  });
+
+  it("falls back once a reload settles without the selected theme", async () => {
+    await writeThemePlugin();
+    selectDawn();
+    service = new PluginService(tmpDir, "0.0.0");
+    await service.initialize();
+    await settle();
+
+    await writeThemePlugin(["murky"]);
+    await service.loadDevPlugin(PLUGIN_ID);
+    await settle();
+
+    expect((storeState.data.appTheme as Record<string, unknown>).colorSchemeId).toBe("bondi");
+    expect(fallbackToasts()).toHaveLength(1);
   });
 });

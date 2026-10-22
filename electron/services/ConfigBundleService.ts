@@ -27,6 +27,8 @@ import type { CliAvailability } from "../../shared/types/ipc/system.js";
 import { buildDefaultKeybindings } from "../../shared/config/defaultKeybindings.js";
 import { BUILT_IN_APP_SCHEMES } from "../../shared/theme/themes.js";
 import { isPluginThemeId } from "../../shared/theme/pluginThemes.js";
+import { getPluginTheme } from "./plugin/PluginThemeRegistry.js";
+import { persistColorSchemeSelection } from "./appThemePluginSelection.js";
 import type { TerminalRecipe, UserAgentConfig } from "../../shared/types/index.js";
 import {
   validatePathPattern,
@@ -1092,6 +1094,7 @@ export class ConfigBundleService {
   }
 
   private appThemeSection(): SectionHandler {
+    const RESERVED_THEME_ID = "That id is reserved for plugin themes";
     const SCALAR_FIELDS = [
       "colorSchemeId",
       "followSystem",
@@ -1111,7 +1114,12 @@ export class ConfigBundleService {
     const validateScalar = (field: string, value: unknown): string | null => {
       switch (field) {
         case "colorSchemeId":
-          return typeof value === "string" && value.trim() !== "" ? null : "Not a valid theme id";
+          if (typeof value !== "string" || value.trim() === "") return "Not a valid theme id";
+          // A plugin theme travels as an id only; it applies where the plugin
+          // offering it is installed, and its palette is persisted from there.
+          return isPluginThemeId(value.trim()) && !getPluginTheme(value.trim())
+            ? "The plugin that offers this theme isn't installed"
+            : null;
         case "preferredDarkSchemeId":
         case "preferredLightSchemeId":
           if (typeof value !== "string" || value.trim() === "") return "Not a valid theme id";
@@ -1187,6 +1195,10 @@ export class ConfigBundleService {
           );
           for (const scheme of incoming.customSchemes.filter(isRecord)) {
             const id = String(scheme.id);
+            if (isPluginThemeId(id)) {
+              check.skipped.set(`theme:${id}`, RESERVED_THEME_ID);
+              continue;
+            }
             const stored = toStoredScheme(scheme);
             if (sameValue(stored ?? scheme, currentById.get(id))) continue;
             if (!stored) check.skipped.set(`theme:${id}`, "Theme definition is not valid");
@@ -1225,6 +1237,12 @@ export class ConfigBundleService {
           const pending = new Map<string, Record<string, unknown>>();
           for (const scheme of incomingSchemes) {
             const id = String(scheme.id);
+            // Imported themes resolve before plugin themes, so one under a
+            // plugin theme's id would stand in for it.
+            if (isPluginThemeId(id)) {
+              results.push(skippedLeaf(`theme:${id}`, RESERVED_THEME_ID));
+              continue;
+            }
             const stored = toStoredScheme(scheme);
             if (sameValue(stored ?? scheme, mergedById.get(id))) {
               results.push(unchangedLeaf(`theme:${id}`));
@@ -1276,7 +1294,12 @@ export class ConfigBundleService {
           }
           const normalized =
             typeof value === "string" && field !== "accentColorOverride" ? value.trim() : value;
-          store.set(`appTheme.${field}` as never, normalized as never);
+          if (field === "colorSchemeId" && isPluginThemeId(normalized)) {
+            // Writes the palette beside the id, so the next boot paints it.
+            persistColorSchemeSelection(normalized);
+          } else {
+            store.set(`appTheme.${field}` as never, normalized as never);
+          }
           wrote = true;
           results.push(
             sameValue(readTheme()[field], normalized)

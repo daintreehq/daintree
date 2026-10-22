@@ -1233,7 +1233,7 @@ The file holds a `palette` in the same shape as Daintree's built-in theme source
 }
 ```
 
-Validation is strict. A missing palette field, an unknown key, a token or extension outside the registered sets, or a value that isn't a single CSS value refuses the theme rather than being dropped.
+Validation is strict. A missing palette field, an unknown key, a token or extension outside the registered sets, or a value that isn't a single CSS value refuses the theme rather than being dropped. A theme can't load anything: the only resource a value may carry is an embedded `url("data:image/…")` texture, like the built-in grain.
 
 **The contrast checks are a gate, not a warning.** A theme is offered only if it passes every check an imported theme is warned about: the text, accent, status, terminal, syntax and overlay contrast pairs that Daintree's built-in themes are held to. A pair the checks can't evaluate fails too. That covers a non-hex value, and a light theme that leaves the engine's `color-mix()` overlay tokens in place. Set those tokens to hex values, as the built-in light themes do. A refused theme never appears in Appearance, and the reason is written to the plugin's log in the Plugin Manager. The plugin's other contributions are unaffected.
 

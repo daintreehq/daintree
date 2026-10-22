@@ -2,7 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { BrowserWindow, nativeTheme } from "electron";
 import { store } from "../store.js";
 import { CHANNELS } from "../ipc/channels.js";
-import { broadcastToRenderer } from "../ipc/utils.js";
+import { broadcastToVisibleRenderersOrAll } from "../ipc/utils.js";
 import { setTitleBarOverlayTheme } from "../window/titleBarOverlay.js";
 import { getPluginTheme } from "./plugin/PluginThemeRegistry.js";
 import {
@@ -90,7 +90,9 @@ function notifyFallback(lost: AppColorScheme | null, fallback: AppColorScheme): 
   const message = lost?.plugin
     ? `"${lost.name}" from ${lost.plugin.name} isn't available anymore. Now using "${fallback.name}".`
     : `The plugin theme you chose isn't available anymore. Now using "${fallback.name}".`;
-  broadcastToRenderer(CHANNELS.NOTIFICATION_SHOW_TOAST, {
+  // One machine-wide change, so one notice: cached project views would each
+  // raise their own copy from their own notification state.
+  broadcastToVisibleRenderersOrAll(CHANNELS.NOTIFICATION_SHOW_TOAST, {
     type: "info",
     title: "Theme switched",
     message,
@@ -99,23 +101,23 @@ function notifyFallback(lost: AppColorScheme | null, fallback: AppColorScheme): 
 }
 
 /**
- * Settle the selection against the plugin theme catalog. Call only when the
- * catalog is authoritative: never mid-scan, and never for a plugin whose
- * reload has yet to settle (`isReloading`), since a theme absent between a
- * reload's unload and load has not gone anywhere.
+ * Settle the selection against the plugin theme catalog. `canSettle` says
+ * whether the catalog speaks for a plugin right now: not while a startup scan
+ * might still load it, and not between a reload's unload and load, when its
+ * theme is absent without having gone anywhere.
  *
  * A selected theme that is still offered has its snapshot refreshed, which
  * picks up an update to the plugin's palette. One that is gone is replaced.
  * Returns the id it fell back to, or null when the selection stands.
  */
 export function reconcilePluginThemeSelection(
-  isReloading: (pluginId: string) => boolean
+  canSettle: (pluginId: string) => boolean
 ): string | null {
   const config = readThemeRecord();
   const selectedId = typeof config.colorSchemeId === "string" ? config.colorSchemeId.trim() : "";
   if (!isPluginThemeId(selectedId)) return null;
-  const owner = parsePluginThemeId(selectedId)?.pluginId;
-  if (owner !== undefined && isReloading(owner)) return null;
+  // A malformed id has no owner to wait for; only a complete catalog settles it.
+  if (!canSettle(parsePluginThemeId(selectedId)?.pluginId ?? "")) return null;
 
   const offered = getPluginTheme(selectedId);
   if (offered) {
