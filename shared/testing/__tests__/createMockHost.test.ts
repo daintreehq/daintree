@@ -927,6 +927,64 @@ describe("createMockHost", () => {
     expect(cb).toHaveBeenCalledTimes(1);
   });
 
+  describe("onDidChangeTerminalLifecycle (#13814)", () => {
+    const spawned = {
+      type: "spawned" as const,
+      terminalId: "term-1",
+      workspaceId: "proj-a",
+      kind: "shell" as const,
+      timestamp: 3,
+    };
+
+    it("delivers frozen events through the production allowlist and stops on dispose", async () => {
+      const host = createMockHost();
+      const cb = vi.fn();
+      const dispose = await host.onDidChangeTerminalLifecycle(cb);
+
+      host.simulateTerminalLifecycleChange({
+        ...spawned,
+        ...({ cwd: "/secret" } as object),
+      });
+      expect(cb).toHaveBeenCalledTimes(1);
+      expect(cb.mock.calls[0]?.[0]).toEqual(spawned);
+      expect(Object.isFrozen(cb.mock.calls[0]?.[0])).toBe(true);
+
+      dispose();
+      dispose(); // no-op
+      host.simulateTerminalLifecycleChange(spawned);
+      expect(cb).toHaveBeenCalledTimes(1);
+    });
+
+    it("rejects PERMISSION_REQUIRED without agent:read", () => {
+      const host = createMockHost({ capabilities: [] });
+      expect(() => host.onDidChangeTerminalLifecycle(vi.fn())).toThrow(/PERMISSION_REQUIRED/);
+    });
+
+    it("scopes a project plugin to its own project, failing closed", async () => {
+      const host = createMockHost({ pluginId: "project__proj-a__acme.status" });
+      const cb = vi.fn();
+      await host.onDidChangeTerminalLifecycle(cb);
+
+      host.simulateTerminalLifecycleChange({ ...spawned, workspaceId: "proj-b" });
+      host.simulateTerminalLifecycleChange({
+        type: "spawned",
+        terminalId: "term-2",
+        kind: "shell",
+        timestamp: 4,
+      });
+      host.simulateTerminalLifecycleChange(spawned);
+
+      expect(cb.mock.calls.map(([event]) => event.workspaceId)).toEqual(["proj-a"]);
+    });
+
+    it("throws on a malformed event instead of delivering it", async () => {
+      const host = createMockHost();
+      expect(() =>
+        host.simulateTerminalLifecycleChange({ ...spawned, type: "exited" } as never)
+      ).toThrow(/well-formed/);
+    });
+  });
+
   it("does not replay an earlier wake to a later onDidWake subscriber", async () => {
     const host = createMockHost();
     host.simulateSystemWake({ sleepDuration: 42_000, timestamp: 1234 });

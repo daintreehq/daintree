@@ -60,7 +60,7 @@ export const CAPABILITY_META = {
   },
   "agent:read": {
     label: "Read agent activity",
-    description: "Observe running agent sessions",
+    description: "Observe agent sessions and when terminals start and exit",
     severity: "neutral",
   },
   "agent:register": {

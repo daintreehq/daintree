@@ -28,6 +28,9 @@ import type {
   PanelReloadResult,
   WorkerRestartResult,
   PluginSystemWakeEvent,
+  PluginTerminalKind,
+  PluginTerminalLifecycleEvent,
+  PluginTerminalLifecycleEventType,
   PluginProjectPresence,
   PluginProjectPresenceState,
   McpServerContribution,
@@ -692,6 +695,37 @@ describe("plugin-sdk boundary", () => {
       const activation = {} as PluginActivationApi;
       expectTypeOf(activation.onDidWake).toBeFunction();
       expectTypeOf(activation.onDidWake).returns.toEqualTypeOf<Promise<() => void>>();
+    });
+
+    it("exposes terminal lifecycle as a named, narrowable SDK union (#13814)", () => {
+      const event = {} as PluginTerminalLifecycleEvent;
+      expectTypeOf(event.terminalId).toEqualTypeOf<string>();
+      expectTypeOf(event.kind).toEqualTypeOf<PluginTerminalKind>();
+      expectTypeOf(event.workspaceId).toEqualTypeOf<string | undefined>();
+      expectTypeOf<PluginTerminalLifecycleEventType>().toEqualTypeOf<
+        "spawned" | "exited" | "trashed" | "restored" | "rate-limit-observed"
+      >();
+      if (event.type === "exited") {
+        expectTypeOf(event.exitCode).toEqualTypeOf<number>();
+        expectTypeOf(event.signal).toEqualTypeOf<number | undefined>();
+      }
+      if (event.type === "rate-limit-observed") {
+        expectTypeOf(event.observedAt).toEqualTypeOf<number>();
+      }
+      // Metadata only: nothing a terminal's screen or launch line could leak through.
+      expectTypeOf<PluginTerminalLifecycleEvent>().not.toHaveProperty("cwd");
+      expectTypeOf<PluginTerminalLifecycleEvent>().not.toHaveProperty("title");
+    });
+
+    it("PluginActivationApi revoke-guards the terminal lifecycle subscription", () => {
+      const activation = {} as PluginActivationApi;
+      expectTypeOf(activation.onDidChangeTerminalLifecycle).toBeFunction();
+      expectTypeOf(activation.onDidChangeTerminalLifecycle).parameters.toEqualTypeOf<
+        [(event: PluginTerminalLifecycleEvent) => void]
+      >();
+      expectTypeOf(activation.onDidChangeTerminalLifecycle).returns.toEqualTypeOf<
+        Promise<() => void>
+      >();
     });
 
     it("exposes project presence as named SDK types (#13813)", () => {

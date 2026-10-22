@@ -240,6 +240,12 @@ export type {
 
 export type { PluginAgentSnapshot } from "./plugin.js";
 export type { AgentState, WaitingReason } from "./agent.js";
+export type {
+  PluginTerminalKind,
+  PluginTerminalLifecycleEvent,
+  PluginTerminalLifecycleEventBase,
+  PluginTerminalLifecycleEventType,
+} from "./plugin.js";
 
 // ── Reading terminal screens (host.terminals) ───────────────────────
 

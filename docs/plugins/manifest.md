@@ -269,7 +269,7 @@ Array of capability tokens the plugin wants. The model is **disclosure-first wit
 | `fs:user-data-write` | Write user-data-class paths, including the plugin's own data directory |
 | `network:fetch` | Make outbound HTTP requests. Disclosure and danger input only — no host API is gated on it |
 | `agent:invoke` | Drive AI agents from plugin code. Disclosure and confirm elevation only — no host API is gated on it |
-| `agent:read` | Observe agent state (`host.getAgentState`, `host.onDidChangeAgentState`: lifecycle phase, session cost/tokens on completion) and list the project's agent panes (`host.agents.list`); installed and built-in plugins can also list every agent in every open project (`host.agents.listAll`, `host.onDidChangeAllAgents`) |
+| `agent:read` | Observe agent state (`host.getAgentState`, `host.onDidChangeAgentState`: lifecycle phase, session cost/tokens on completion), observe terminals starting, exiting, being trashed and restored (`host.onDidChangeTerminalLifecycle`: metadata only) and list the project's agent panes (`host.agents.list`); installed and built-in plugins can also list every agent in every open project (`host.agents.listAll`, `host.onDidChangeAllAgents`) |
 | `agent:register` | Register a launchable agent CLI as a selectable agent |
 | `terminal:read` | Read a terminal's current screen as plain text (`host.terminals.readScreen`). Terminals show secrets, so this is separate from `agent:read` and asks for JIT consent on first use |
 | `agent:input` | Send text to the active agent terminal (`host.sendToActiveAgent`) or append it to a chosen agent's draft (`host.sendToAgent`); JIT consent on first use |

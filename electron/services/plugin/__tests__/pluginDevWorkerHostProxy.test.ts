@@ -943,6 +943,82 @@ describe("PluginDevWorkerHostProxy system wake (#12175)", () => {
   });
 });
 
+describe("PluginDevWorkerHostProxy terminal lifecycle (#13814)", () => {
+  beforeEach(() => vi.clearAllMocks());
+  afterEach(() => vi.restoreAllMocks());
+
+  const subscribeLifecycle = async (onEvent: (e: unknown) => void) => {
+    const { proxy, sent } = makeProxy();
+    const dispose = await proxy.host.onDidChangeTerminalLifecycle(onEvent);
+    const sub = sent.find((m) => m.type === "subscribe" && m.kind === "terminal-lifecycle");
+    const deliver = (payload: unknown) =>
+      proxy.handleMessage({
+        type: "subscription-event",
+        subscriptionId: sub.subscriptionId,
+        payload,
+      } as any);
+    return { proxy, sent, sub, dispose, deliver };
+  };
+
+  it("opens a terminal-lifecycle subscription with no window and unsubscribes on dispose", async () => {
+    const { sent, sub, dispose } = await subscribeLifecycle(vi.fn());
+
+    expect(sub).toBeDefined();
+    expect(sub.debounceMs).toBeUndefined();
+    dispose();
+    expect(
+      sent.find((m) => m.type === "unsubscribe" && m.subscriptionId === sub.subscriptionId)
+    ).toBeDefined();
+  });
+
+  it("re-applies the allowlist and the freeze the port hop strips", async () => {
+    const received: any[] = [];
+    const { deliver } = await subscribeLifecycle((e) => received.push(e));
+
+    deliver({
+      type: "exited",
+      terminalId: "t1",
+      workspaceId: "project-1",
+      kind: "agent",
+      agentId: "claude",
+      exitCode: 1,
+      timestamp: 7,
+      recentOutput: "secret",
+      cwd: "/secret",
+    });
+
+    expect(received).toHaveLength(1);
+    expect(received[0]).toEqual({
+      type: "exited",
+      terminalId: "t1",
+      workspaceId: "project-1",
+      kind: "agent",
+      agentId: "claude",
+      exitCode: 1,
+      timestamp: 7,
+    });
+    expect(Object.isFrozen(received[0])).toBe(true);
+  });
+
+  it("drops a payload that is not a well-formed event", async () => {
+    const onEvent = vi.fn();
+    const { deliver } = await subscribeLifecycle(onEvent);
+
+    deliver({ type: "exited", terminalId: "t1", kind: "agent", timestamp: 7 });
+    deliver(null);
+
+    expect(onEvent).not.toHaveBeenCalled();
+  });
+
+  it("rejects a subscription opened after the activation window closes", async () => {
+    const { proxy } = makeProxy();
+    proxy.revoke();
+    expect(() => proxy.host.onDidChangeTerminalLifecycle(vi.fn())).toThrow(
+      /onDidChangeTerminalLifecycle/
+    );
+  });
+});
+
 describe("PluginDevWorkerHostProxy host.fs.watch (#10526)", () => {
   beforeEach(() => vi.clearAllMocks());
   afterEach(() => vi.restoreAllMocks());

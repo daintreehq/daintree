@@ -1173,6 +1173,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
         env: spawnEnv,
         kind,
         launchAgentId,
+        pluginPanelKindId: validatedOptions.pluginPanelKindId,
         title,
         titleMode: validatedOptions.titleMode,
         projectId,

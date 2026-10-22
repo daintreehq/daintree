@@ -1019,6 +1019,7 @@ export const createRestartActions = (
         // IPC handler does not treat them as agent spawns (issue #5764).
         kind: "terminal",
         launchAgentId: isAgent ? currentTerminal.launchAgentId : undefined,
+        pluginPanelKindId: currentTerminal.pluginPanelKindId,
         // Keep the ownership rung across restart so the backend's own
         // default-title rewrites stay gated for pinned/user titles.
         ...restartTitle,
@@ -1737,6 +1738,7 @@ async function respawnAgentOnPreset(
       rows: spawnRows,
       kind: "terminal",
       launchAgentId: terminal.launchAgentId,
+      pluginPanelKindId: terminal.pluginPanelKindId,
       // Carried with the title, never without it: a title that arrives
       // unaccompanied re-stamps as "default" and the next detection sweep
       // overwrites the user's rename (#10794).

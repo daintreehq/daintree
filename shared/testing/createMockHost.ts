@@ -27,6 +27,7 @@ import { validateAgentContextPayload } from "../utils/agentContextDrag.js";
 import { normalizePluginAllAgentsSnapshot } from "../utils/pluginAllAgentsSnapshot.js";
 import { pluginFocusedPanelEquals, toPluginFocusedPanel } from "../utils/pluginFocusedPanel.js";
 import { toPluginProjectPresence } from "../utils/pluginProjectPresence.js";
+import { toPluginTerminalLifecycleEvent } from "../utils/pluginTerminalLifecycle.js";
 import { isProjectWorkspaceId } from "../utils/workspaceIds.js";
 import { toRuntimePanelKindId } from "../config/panelKindRegistry.js";
 import { normalizePanelMenuItems } from "../utils/pluginPanelMenuItems.js";
@@ -102,6 +103,7 @@ import type {
   PluginFsWalkResult,
   PluginWorktreesResult,
   PluginAgentSnapshot,
+  PluginTerminalLifecycleEvent,
   PluginAgentPane,
   PluginAllAgentsSnapshot,
   PluginFocusedPanel,
@@ -478,6 +480,14 @@ export interface MockHostState {
    * drive a plugin that routes by where the transition came from.
    */
   simulateAgentStateChange(snapshot: PluginAgentSnapshot): void;
+
+  /**
+   * Push a terminal lifecycle event to every `onDidChangeTerminalLifecycle`
+   * subscriber, frozen and re-projected through the production allowlist. A
+   * project plugin's mock drops events from any other workspace, as the real
+   * host does — and, failing closed, events with no `workspaceId` at all.
+   */
+  simulateTerminalLifecycleChange(event: PluginTerminalLifecycleEvent): void;
 
   /**
    * Push a panel lifecycle transition to every `onDidChangePanelLifecycle`
@@ -1344,6 +1354,7 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
 
   let lastAgentSnapshot: PluginAgentSnapshot | null = null;
   const agentStateSubs = new Set<(snapshot: PluginAgentSnapshot) => void>();
+  const terminalLifecycleSubs = new Set<(event: PluginTerminalLifecycleEvent) => void>();
   const panelLifecycleSubs = new Set<(event: PluginPanelLifecycleEvent) => void>();
   const systemWakeSubs = new Set<(event: PluginSystemWakeEvent) => void>();
   const accountSubs = new Set<(state: PluginAccountState) => unknown>();
@@ -2198,6 +2209,24 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
         if (disposed) return;
         disposed = true;
         agentStateSubs.delete(callback);
+      };
+      return Promise.resolve(dispose);
+    },
+    onDidChangeTerminalLifecycle(callback) {
+      if (!capabilities.has("agent:read")) {
+        throw new Error(
+          `PERMISSION_REQUIRED: onDidChangeTerminalLifecycle requires "agent:read", which is not declared in manifest.capabilities`
+        );
+      }
+      // A wrapper per subscription, so the same callback subscribed twice is
+      // two independent subscriptions, as in production.
+      const subscription = (event: PluginTerminalLifecycleEvent) => callback(event);
+      terminalLifecycleSubs.add(subscription);
+      let disposed = false;
+      const dispose = () => {
+        if (disposed) return;
+        disposed = true;
+        terminalLifecycleSubs.delete(subscription);
       };
       return Promise.resolve(dispose);
     },
@@ -3469,6 +3498,14 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
     simulateAgentStateChange(snapshot) {
       lastAgentSnapshot = snapshot;
       for (const cb of agentStateSubs) cb(snapshot);
+    },
+    simulateTerminalLifecycleChange(event) {
+      const projected = toPluginTerminalLifecycleEvent(event);
+      if (projected === null) {
+        throw new Error("simulateTerminalLifecycleChange: not a well-formed lifecycle event");
+      }
+      if (mockProjectId !== null && projected.workspaceId !== mockProjectId) return;
+      for (const cb of [...terminalLifecycleSubs]) cb(projected);
     },
     simulatePanelLifecycleChange(event) {
       // Frozen like production delivery, so a plugin that mutates the event

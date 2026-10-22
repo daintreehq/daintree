@@ -12,7 +12,7 @@ This page is the reference: every member, its gates and its failure modes. For a
 
 - Conventions: [Calling conventions](#calling-conventions) · [Activation](#activation) · [`PluginHostApi`](#pluginhostapi) · [Errors and error codes](#errors-and-error-codes) · [Capabilities and consent](#capabilities-and-consent) · [Identity](#identity--pluginid-plugininfo-panelkindid)
 - Registration: [`registerAction`](#registeraction) · [`registerHandler` and `broadcastToRenderer`](#registerhandler-and-broadcasttorenderer) · [Deadlines and size limits](#deadlines-and-size-limits) · [`postToPanel`](#posttopanel) · [Push delivery](#push-delivery) · [Listener hints](#listener-hints--haslisteners-ondidchangelisteners) · [`registerForgeProvider`](#registerforgeprovider) · [File decorations](#registerfiledecorationprovider-and-invalidatefiledecorations) · [Worktree setup steps](#worktree-setup-steps) · [`mcp.registerTools`](#mcpregistertools)
-- Observation: [Worktrees](#worktree-observation) · [Agent state](#agent-observation) · [Focused panel](#ondidchangefocusedpanel) · [Panel lifecycle](#ondidchangepanellifecycle) · [`onDidWake`](#ondidwake)
+- Observation: [Worktrees](#worktree-observation) · [Agent state](#agent-observation) · [Terminal lifecycle](#ondidchangeterminallifecycle) · [Focused panel](#ondidchangefocusedpanel) · [Panel lifecycle](#ondidchangepanellifecycle) · [`onDidWake`](#ondidwake)
 - Panels and actions: [`reloadPanel`](#reloadpanel) · [`restartWorker`](#restartworker) · [`setPanelBadge`](#setpanelbadge) · [`setToolbarButtonBadge`](#settoolbarbuttonbadge) · [`setToolbarButtonState`](#settoolbarbuttonstate) · [`setContext`](#setcontext) · [`setWorktreeCardStatus`](#setworktreecardstatus) · [`setWorktreeReviewChecks`](#setworktreereviewchecks) · [`setPanelMenuItems`](#setpanelmenuitems) · [`dispatch`](#dispatch) · [`actions`](#actions--built-in-action-catalog)
 - Agents: [`sendToActiveAgent`](#sendtoactiveagent--inject-text-into-the-active-agent) · [`sendToAgent`](#sendtoagent--hand-work-to-an-agents-draft) · [`runRecipe`](#runrecipe--offer-to-run-one-of-your-recipes) · [`agents.list`](#agentslist--the-projects-agent-panes) · [`agents.listAll`](#agentslistall--every-agent-in-every-open-project) · [`terminals.readScreen`](#terminalsreadscreen--what-a-terminal-shows)
 - State: [`settings`](#settings) · [`storage`](#storage--private-keyvalue-storage) · [`db`](#db--host-managed-sqlite)
@@ -32,7 +32,7 @@ Every callback a plugin hands the host has a fixed shape, and the one for `regis
 | `registerHandler(channel, schema, handler, options?)` (typed) | `(ctx, args)` | Same order; `args` is the single, schema-parsed payload. `options.timeoutMs` sets the invoke deadline for either overload ([Deadlines and size limits](#deadlines-and-size-limits)). |
 | `postToPanel(channel, payload)` | view: `on(pluginId, channel, cb)` receives `payload` | Broadcast. Subscriptions are keyed by plugin and channel only, so it reaches every `on` subscriber your plugin has on that channel, across all of its panel kinds. `usePluginEvent` in a view. |
 | `postToPanel(channel, payload, panelId)` | view: `onPanel(pluginId, channel, panelId, cb)` receives `payload` | One instance only, disjoint from the broadcast. `usePluginPanelEvent` in a view. |
-| `onDidChangeActiveWorktree`, `onDidChangeAgentState`, `onDidChangeAllAgents`, `onDidChangeFocusedPanel`, `onDidChangeProjectPresence`, `onDidChangePanelLifecycle`, `onDidWake`, `settings.onDidChange`, `storage.onDidChange` | `(event)` | One argument — for `settings.onDidChange` and `storage.onDidChange`, registered as `(key, callback, scope?)`, it is the new value rather than an event object. A listener that throws is logged; see [Disposables](#disposables) for which ones are unsubscribed after three failures in a row. The first five coalesce bursts by default ([`PluginHostSubscriptionOptions`](#pluginhostapi)). |
+| `onDidChangeActiveWorktree`, `onDidChangeAgentState`, `onDidChangeAllAgents`, `onDidChangeFocusedPanel`, `onDidChangeProjectPresence`, `onDidChangeTerminalLifecycle`, `onDidChangePanelLifecycle`, `onDidWake`, `settings.onDidChange`, `storage.onDidChange` | `(event)` | One argument — for `settings.onDidChange` and `storage.onDidChange`, registered as `(key, callback, scope?)`, it is the new value rather than an event object. A listener that throws is logged; see [Disposables](#disposables) for which ones are unsubscribed after three failures in a row. The first five coalesce bursts by default ([`PluginHostSubscriptionOptions`](#pluginhostapi)). |
 | `onDidChangeWorktrees` | `(snapshots, change)` | The full list, then `{ added, removed, changed }` snapshot ids since this subscription's previous delivery. Coalesced by default. |
 | `onDidChangeListeners(channel, cb)` | `(hasListeners)` | A boolean. Returns its disposer synchronously. |
 | `db` handle `onDidChange(cb)` | `({ origin })` | Frozen, and at most one per 50 ms window. Returns its disposer synchronously, not a Promise. |
@@ -136,6 +136,10 @@ interface PluginHostApi {
   onDidChangeAgentState(
     callback: (snapshot: PluginAgentSnapshot) => void,
     options?: PluginHostSubscriptionOptions
+  ): Promise<() => void>;
+  // Terminals starting, exiting, trashed and restored — `agent:read`; every event, in order
+  onDidChangeTerminalLifecycle(
+    callback: (event: PluginTerminalLifecycleEvent) => void
   ): Promise<() => void>;
   // Every agent in every open project — `agent:read`, installed and built-in plugins only
   onDidChangeAllAgents(
@@ -395,7 +399,7 @@ A capability is declared in `manifest.capabilities` and checked on every call �
 
 | Capability | Unlocks | Consent |
 | --- | --- | --- |
-| `agent:read` | `getAgentState`, `onDidChangeAgentState`, `agents.list`, `agents.listAll`, `onDidChangeAllAgents` (the last two refused to a project plugin) | — |
+| `agent:read` | `getAgentState`, `onDidChangeAgentState`, `onDidChangeTerminalLifecycle`, `agents.list`, `agents.listAll`, `onDidChangeAllAgents` (the last two refused to a project plugin) | — |
 | `agent:register` | `contributes.agents` — required by the manifest check | — |
 | `agent:input` | `sendToActiveAgent`, `sendToAgent` | First use |
 | `terminal:read` | `terminals.readScreen` | First use. Not granted by `agent:read`. |
@@ -810,6 +814,40 @@ export async function activate(host: PluginHostApi) {
 **Coalesced by default, per terminal.** Agents change state many times a second, so within one window (100 ms unless you pass `debounceMs`) only each terminal's latest transition is delivered: one callback per terminal, in the order of those latest transitions. The final state of every terminal always arrives; the transitions in between may be skipped, so a delivered snapshot's `previousState` is the state just before that last transition, not necessarily the one you were last told about. Pass `{ debounceMs: 0 }` to receive every transition.
 
 `getAgentState` returns the latest transition this host has recorded since you subscribed with `onDidChangeAgentState`, from any terminal in scope and before coalescing. The host keeps no history from before the subscription, so without one it always resolves `null`. It is NOT revoke-guarded (callable from timers, resolves `null` after unload); `onDidChangeAgentState` is — subscribe during `activate()`. A throwing listener is logged; see [Disposables](#disposables) for when it is unsubscribed.
+
+## `onDidChangeTerminalLifecycle`
+
+Observe terminals coming and going — plain shells as well as agents — in the plugin's project. Gated on `agent:read`, like agent state; a plugin that didn't declare it gets a `PERMISSION_REQUIRED:` rejection.
+
+```ts
+export async function activate(host: PluginHostApi) {
+  await host.onDidChangeTerminalLifecycle((event) => {
+    if (event.type === "exited" && event.kind === "agent" && event.exitCode !== 0) {
+      void host.showToast({ message: `A ${event.agentId ?? "agent"} pane exited with ${event.exitCode}` });
+    }
+  });
+}
+```
+
+Each event is a frozen `PluginTerminalLifecycleEvent`, narrowed on `type`:
+
+| Field | Notes |
+| --- | --- |
+| `type` | `spawned` — the process started. `exited` — it ended. `trashed` — the user moved the terminal to the trash. `restored` — it came back out of the trash. `rate-limit-observed` — its output showed an agent rate-limit banner. |
+| `terminalId` | The same id `agents.list()` and agent-state snapshots report. A restarted terminal comes back under the same id. |
+| `workspaceId` | The project or scratch that owns the terminal. Opaque. A project plugin only ever sees its own project's id. |
+| `worktreeId` | The worktree the terminal is filed under, when it has one. Follows a move to another worktree. |
+| `kind` | `agent` (launched to run an agent CLI), `plugin` (a plugin-contributed terminal panel) or `shell` (anything else, dev servers included). Fixed at launch. |
+| `agentId` | The agent an `agent` terminal was launched to run. A fact about the launch, not about what is running now — read [agent state](#agent-observation) for that. |
+| `exitCode`, `signal` | On `exited` only. The terminal process's code, which for an agent pane is the shell the agent ran in. `signal` only when one ended it; never on Windows. |
+| `observedAt` | On `rate-limit-observed` only. An observation that the agent hit a limit, not a reading of the account's quota. |
+| `timestamp` | Epoch milliseconds when the host saw the change. |
+
+**Metadata only.** No command line, working directory, title, environment or output ever rides on an event; the host's own exit record, which carries recent output, never reaches this path.
+
+**Every event, in order.** Nothing is coalesced and there is no `debounceMs`: a terminal that starts and exits inside a few milliseconds still reports both. `spawned` can repeat for the same `terminalId` with no `exited` in between — a restart or a recovery from a terminal-host crash replaces the process under the same id. Nothing is replayed on subscribe; call `agents.list()` for what is already open. Reopening a project after a restart starts its terminals afresh and reports `spawned`, not `restored`.
+
+An installed plugin hears about every workspace's terminals; a project plugin only about its own project's, and never about a terminal the host could not attribute to it. Subscribing is revoke-guarded — subscribe during `activate()`. A throwing listener is logged; see [Disposables](#disposables) for when it is unsubscribed.
 
 ## `onDidChangeFocusedPanel`
 
@@ -2450,6 +2488,7 @@ Calls that fail validation, and prompts or `sendToAgent` calls whose signal was 
 | `simulateWorktreesChange(snapshots)` | Replaces the list and notifies `onDidChangeWorktrees` at once, with the same `{ added, removed, changed }` change argument the host computes per subscription. |
 | `simulateWorktreesResult(result \| null)` | Forces what `getWorktreesResult()` answers; `null` goes back to deriving it. Notifies nobody. |
 | `simulateAgentStateChange(snapshot)` | Sets what `getAgentState()` returns and notifies `onDidChangeAgentState`. |
+| `simulateTerminalLifecycleChange(event)` | Notifies `onDidChangeTerminalLifecycle` with the event re-projected through the production allowlist and frozen; a project plugin hears only events whose `workspaceId` is its own project. Throws on a malformed event. |
 | `simulateAgentsChange(panes)` | Replaces what `agents.list()` returns. |
 | `simulateAllAgentsChange(snapshot)` | Replaces what `agents.listAll()` returns and notifies `onDidChangeAllAgents` at once, ignoring its window. |
 | `simulateFocusedPanelChange(focus)` | Moves focus and notifies `onDidChangeFocusedPanel` at once, ignoring its window. A value equal to the one a subscriber last received is not repeated, as in production. |

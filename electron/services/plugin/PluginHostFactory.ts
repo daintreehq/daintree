@@ -186,6 +186,10 @@ import {
   type AgentStateChangePayload,
 } from "../../../shared/utils/pluginAgentSnapshot.js";
 import {
+  toPluginTerminalLifecycleEvent,
+  type TerminalLifecycleObservation,
+} from "../../../shared/utils/pluginTerminalLifecycle.js";
+import {
   toPluginAllAgentsSnapshot,
   UNAVAILABLE_PLUGIN_ALL_AGENTS_SNAPSHOT,
 } from "../../../shared/utils/pluginAllAgentsSnapshot.js";
@@ -2138,6 +2142,45 @@ export function createHost(
         active = false;
         coalescer.dispose();
         pending.clear();
+        unsub();
+      });
+      return Promise.resolve(dispose);
+    },
+    onDidChangeTerminalLifecycle: (callback) => {
+      if (revoked) {
+        throw new Error(
+          `Plugin "${pluginId}" host revoked: onDidChangeTerminalLifecycle called after activate() returned or timed out`
+        );
+      }
+      if (!deps.declaredCapabilities(pluginId).has("agent:read")) {
+        throw new Error(
+          `PERMISSION_REQUIRED: plugin "${pluginId}" onDidChangeTerminalLifecycle requires "agent:read", which is not declared in manifest.capabilities`
+        );
+      }
+      // Delivered one event at a time, never coalesced: these are discrete
+      // facts, and a window keyed by terminal would let a short-lived
+      // terminal's exit erase its spawn.
+      const failures = createListenerFailureState();
+      let active = true;
+      const handler = (observation: TerminalLifecycleObservation): void => {
+        if (!active || !isBound()) return;
+        // The observer recorded the owning project at launch: the client's own
+        // record is already gone by the time an exit arrives.
+        const workspaceId = observation.projectId ?? null;
+        if (!isAgentEventForBoundProject(workspaceId)) return;
+        const event = toPluginTerminalLifecycleEvent(observation, { workspaceId });
+        if (event === null) return;
+        invokeTrackedListener(
+          failures,
+          pluginId,
+          "onDidChangeTerminalLifecycle",
+          () => callback(event),
+          () => dispose()
+        );
+      };
+      const unsub = events.on("terminal:lifecycle", handler);
+      const dispose = trackPluginDisposer(deps.pluginEventCleanups, pluginId, () => {
+        active = false;
         unsub();
       });
       return Promise.resolve(dispose);

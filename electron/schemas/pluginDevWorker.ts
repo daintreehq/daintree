@@ -132,6 +132,7 @@ const SUBSCRIPTION_KINDS = {
   storage: true,
   account: true,
   "agent-state": true,
+  "terminal-lifecycle": true,
   "all-agents": true,
   "focused-panel": true,
   "project-presence": true,

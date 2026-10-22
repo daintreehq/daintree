@@ -302,6 +302,13 @@ export const EVENT_META: Record<keyof DaintreeEventMap, EventMetadata> = {
     requiresTimestamp: false,
     description: "Terminal restored from trash",
   },
+  "terminal:lifecycle": {
+    category: "agent",
+    requiresContext: false,
+    requiresTimestamp: true,
+    description:
+      "A terminal spawned, exited, was trashed or restored, or showed a rate-limit banner — metadata only",
+  },
   "terminal:park-changed": {
     category: "agent",
     requiresContext: false,
@@ -894,6 +901,17 @@ export type DaintreeEventMap = {
   };
 
   /**
+   * One change in a terminal's life, with the routing metadata recorded at its
+   * launch (#13814). Main-only: published by `TerminalLifecycleObserver` from
+   * the PTY client's spawn/exit stream and the trash, restore, worktree and
+   * rate-limit events, and read by the plugin host's
+   * `onDidChangeTerminalLifecycle`. Never carries a command line, cwd, title or
+   * output — the pty-host's `terminal:exited` (with `recentOutput`) is never
+   * bridged here.
+   */
+  "terminal:lifecycle": import("../../shared/utils/pluginTerminalLifecycle.js").TerminalLifecycleObservation;
+
+  /**
    * Emitted whenever a run's park record is created, replaced or removed —
    * by the user or by an automatic release. Attention projections
    * (`FleetSnapshotService`) subscribe to recompute; the payload deliberately
@@ -1149,6 +1167,7 @@ export const ALL_EVENT_TYPES: Array<keyof DaintreeEventMap> = [
   "action:dispatched",
   "terminal:trashed",
   "terminal:restored",
+  "terminal:lifecycle",
   "terminal:park-changed",
   "terminal:park-released",
   "terminal:title-changed",

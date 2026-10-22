@@ -1733,6 +1733,8 @@ export class PluginDevWorkerMainBridge {
         dispose = await this.host.onDidChangeAgentState((snapshot) => push(snapshot), {
           debounceMs: msg.debounceMs,
         });
+      } else if (kind === "terminal-lifecycle") {
+        dispose = await this.host.onDidChangeTerminalLifecycle((event) => push(event));
       } else if (kind === "all-agents") {
         dispose = await this.host.onDidChangeAllAgents((snapshot) => push(snapshot), {
           debounceMs: msg.debounceMs,

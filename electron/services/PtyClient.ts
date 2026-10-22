@@ -87,6 +87,7 @@ import { getEnvVar, hasEnvVar } from "./pty/EnvironmentFilter.js";
 import { BrokerError } from "./rpc/index.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { routeHostEvent, type PtyEventRouterDeps } from "./pty/PtyEventRouter.js";
+import type { TerminalLaunchAttribution } from "./pty/TerminalLifecycleObserver.js";
 import { sendPtyHostRpc } from "./pty/PtyHostRpcFacade.js";
 import { mergeFlowControlSnapshots, mergeMemoryRollups } from "./pty/rollupMerge.js";
 import { HostSignalAggregator, type HostMemoryWarningPayload } from "./pty/HostSignalAggregator.js";
@@ -2260,6 +2261,26 @@ export class PtyClient extends EventEmitter {
   getTerminalProjectId(id: string): string | null {
     const projectId = this.pendingSpawns.get(id)?.projectId;
     return typeof projectId === "string" && projectId.length > 0 ? projectId : null;
+  }
+
+  /**
+   * The routing facts the terminal under `id` was launched with, read off its
+   * cached spawn options for the lifecycle observer (#13814). Explicit fields
+   * only — never the command, cwd, env or title. `null` once the record is
+   * gone, which a natural exit does before its event is emitted.
+   */
+  getTerminalLaunchAttribution(id: string): TerminalLaunchAttribution | null {
+    const options = this.pendingSpawns.get(id);
+    if (!options) return null;
+    return {
+      projectId: options.projectId,
+      worktreeId: options.worktreeId,
+      kind: options.kind,
+      launchAgentId: options.launchAgentId,
+      pluginPanelKindId: options.pluginPanelKindId,
+      launchGeneration: options.launchGeneration,
+      isAssistantTerminal: options.isAssistantTerminal,
+    };
   }
 
   /**
