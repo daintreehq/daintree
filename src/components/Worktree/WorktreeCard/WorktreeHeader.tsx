@@ -27,7 +27,7 @@ import { WorktreeActionsToolbar } from "./WorktreeActionsToolbar";
 import { MainWorktreeSecondaryRow } from "./MainWorktreeSecondaryRow";
 import { NonMainSecondaryRow } from "./NonMainSecondaryRow";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { computeAlarmTier, formatAlarmDetail } from "@/lib/worktreeAlarmTier";
+import { computeAlarmTier, formatAlarmDetail, isPullRequestWarning } from "@/lib/worktreeAlarmTier";
 import { PathSegments } from "@/components/ui/PathSegments";
 
 export interface WorktreeHeaderProps {
@@ -230,8 +230,13 @@ export function WorktreeHeader({
 
   // Quiet git detail (#13777) keeps the headline's words and moves the issue or
   // PR mark and the branch into its tooltip. A cold PR headline with no title
-  // yet has no words to keep, so it stays the badge until the title arrives.
-  const quietHeadlineTitle = quietGit && !hasCustomTitle ? displayTitle : undefined;
+  // yet has no words to keep, so it stays the badge until the title arrives,
+  // and so does a PR headline that warns: on a collapsed card nothing else
+  // would show that its head moved under an armed merge.
+  const quietHeadlineTitle =
+    quietGit && !hasCustomTitle && !(isPrOriginated && isPullRequestWarning(worktree.linked?.pr))
+      ? displayTitle
+      : undefined;
   // A custom title's displaced headline already carries the mark.
   const quietDisplaced = [
     hasCustomTitle

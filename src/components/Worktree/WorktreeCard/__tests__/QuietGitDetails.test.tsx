@@ -109,6 +109,7 @@ describe("QuietGitDetails", () => {
   it("measures a detached HEAD against no base, as the header does", () => {
     renderDetails({ isDetached: true });
 
-    expect(upstreamBadgeProps[0]?.baseBranchName).toBeUndefined();
+    expect(upstreamBadgeProps).toHaveLength(1);
+    expect(upstreamBadgeProps[0]!.baseBranchName).toBeUndefined();
   });
 });

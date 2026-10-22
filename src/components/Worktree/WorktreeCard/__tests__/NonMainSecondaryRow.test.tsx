@@ -412,9 +412,21 @@ describe("NonMainSecondaryRow — quiet git detail (#13777)", () => {
     expect(queryByTestId("pr-badge")).not.toBeNull();
   });
 
-  it("keeps a PR whose head moved under an armed merge when quiet", () => {
+  it("drops a PR whose head moved with no merge armed, which is no warning", () => {
     const { queryByTestId } = renderRow({
       worktree: withPr({ headMovedWhileArmed: true }),
+      quietGit: true,
+    });
+
+    expect(queryByTestId("pr-badge")).toBeNull();
+  });
+
+  it("keeps a PR whose head moved under an armed merge when quiet", () => {
+    const { queryByTestId } = renderRow({
+      worktree: withPr({
+        mergeIntent: { kind: "auto-merge", method: null, enabledAt: null },
+        headMovedWhileArmed: true,
+      }),
       quietGit: true,
     });
 

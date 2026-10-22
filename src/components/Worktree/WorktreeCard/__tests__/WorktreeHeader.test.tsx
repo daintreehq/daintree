@@ -1552,36 +1552,54 @@ describe("WorktreeHeader quiet git detail (#13777)", () => {
     expect(screen.queryByText("develop")).toBeNull();
   });
 
-  it("keeps a failing PR that was the headline, beside its quieted title", () => {
+  function originatedFrom(
+    pr: Partial<NonNullable<NonNullable<WorktreeState["linked"]>["pr"]>>
+  ): WorktreeState {
     const { linked } = prLinked(314);
-    renderHeader({
-      worktree: {
-        ...baseWorktree,
-        sourcePrNumber: 314,
-        linked: {
-          ...linked,
-          pr: {
-            ...linked.pr,
-            title: "Fix flaky terminal search",
-            ciStatus: {
-              state: "failure",
-              total: 2,
-              passed: 1,
-              failed: 1,
-              pending: 0,
-              rawData: null,
-            },
-          },
-        },
-      },
-      quietGit: true,
-      badges: { onOpenPR: noop },
-    });
+    return {
+      ...baseWorktree,
+      sourcePrNumber: 314,
+      linked: { ...linked, pr: { ...linked.pr, title: "Fix flaky terminal search", ...pr } },
+    };
+  }
+
+  it("quiets a PR headline that has nothing to warn about", () => {
+    renderHeader({ worktree: originatedFrom({}), quietGit: true, badges: { onOpenPR: noop } });
 
     expect(screen.getByTestId("worktree-custom-title").textContent).toBe(
       "Fix flaky terminal search"
     );
+    expect(screen.queryByRole("button", { name: /pull request #314/ })).toBeNull();
+  });
+
+  it("keeps a failing PR headline as the badge, once", () => {
+    renderHeader({
+      worktree: originatedFrom({
+        ciStatus: { state: "failure", total: 2, passed: 1, failed: 1, pending: 0, rawData: null },
+      }),
+      quietGit: true,
+      badges: { onOpenPR: noop },
+    });
+
+    expect(screen.queryByTestId("worktree-custom-title")).toBeNull();
     expect(screen.getAllByRole("button", { name: /pull request #314/ })).toHaveLength(1);
+  });
+
+  it("keeps the badge on a collapsed card whose head moved under an armed merge", () => {
+    // The collapsed alarm pill has no word for this, so the headline is the
+    // only place the warning can be.
+    renderHeader({
+      worktree: originatedFrom({
+        mergeIntent: { kind: "auto-merge", method: null, enabledAt: null },
+        headMovedWhileArmed: true,
+      }),
+      isCollapsed: true,
+      quietGit: true,
+      badges: { onOpenPR: noop },
+    });
+
+    expect(screen.queryByTestId("worktree-custom-title")).toBeNull();
+    expect(screen.getByTestId("pr-badge-merge-intent")).not.toBeNull();
   });
 
   it("leaves conflicts and other repository state in the title row", () => {

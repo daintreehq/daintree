@@ -621,7 +621,7 @@ Keybindings map a key combination to an action.
 | `workspaceKind` | string | `"project"`, `"scratch"`, or `""` when no workspace is open. |
 | `activeSidebarView` | string | The sidebar view the project shows: `"worktrees"` for the built-in worktree list. It names the selected view whether or not the sidebar is visible. |
 | `presentationForgeStats` | string | How this project presents the toolbar's forge stats pill: `"shown"`, `"demoted"` (in the toolbar's `…` menu) or `"hidden"`. Always `"hidden"` in a folder without a git repository. |
-| `presentationGitDetail` | string | How this project presents git detail on worktree cards: `"shown"` or `"demoted"` (labelled Quiet in settings: branch, issue and PR detail and the last-activity chip move into the card's tooltip and expanded details, and the card menu's git rows gather under its Git submenu). Always `"hidden"` in a folder without a git repository. |
+| `presentationGitDetail` | string | How this project presents git detail on worktree cards: `"shown"` or `"demoted"` (labelled Quiet in settings). Quiet moves the branch, issue and PR detail and the sync line into the card's expanded details, with the headline's tooltip naming what it displaced, drops the resting last-activity chip, and gathers the card menu's git rows under its Git submenu; failing CI, a head that moved under an armed merge, drift and fetch failures stay on the card. Always `"hidden"` in a folder without a git repository. |
 
 A `when` turns one entry on or off. It never gates the action behind it, which still runs from anywhere else that offers it.
 

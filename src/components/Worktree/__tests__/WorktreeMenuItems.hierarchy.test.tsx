@@ -276,15 +276,27 @@ describe("WorktreeMenuItems — quiet git detail", () => {
     expect(git).not.toContain("View plan");
   });
 
-  it("never doubles or strands a separator inside Git", () => {
-    const { container } = renderWorktreeMenu({ ...fullyPopulated(), quietGit: true });
+  it.each([
+    ["fully populated", () => fullyPopulated()],
+    // Review and Linked work both empty: only the git rows themselves fold in.
+    ["sparse", () => ({})],
+  ])("never doubles or strands a separator inside Git (%s)", (_label, props) => {
+    const { container } = renderWorktreeMenu({ ...props(), quietGit: true });
     const git = subRows(container, "Git");
 
+    expect(git.length).toBeGreaterThan(0);
     expect(git[0]).not.toBe("—");
     expect(git[git.length - 1]).not.toBe("—");
     git.forEach((row, i) => {
       if (row === "—") expect(git[i + 1]).not.toBe("—");
     });
+  });
+
+  it("gives a workspace root no Git submenu, quiet or not", () => {
+    const { container } = renderWorkspaceRootMenu({ quietGit: true, onOpenReviewHub: vi.fn() });
+
+    expect(rootRowLabels(container)).not.toContain("Git");
+    expect(rootRowLabels(container)).not.toContain("Review");
   });
 
   it("keeps View plan in Linked work while git detail is shown", () => {

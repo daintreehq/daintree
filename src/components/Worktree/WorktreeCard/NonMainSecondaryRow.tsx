@@ -7,7 +7,7 @@ import { FileText } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { WorktreeState } from "@/types";
 import { usePRCircuitBreakerStore } from "@/store/prCircuitBreakerStore";
-import { computeAlarmTier } from "@/lib/worktreeAlarmTier";
+import { computeAlarmTier, isPullRequestWarning } from "@/lib/worktreeAlarmTier";
 
 interface NonMainSecondaryRowProps {
   worktree: WorktreeState;
@@ -124,28 +124,14 @@ export function NonMainSecondaryRow({
     baseBehindCount: worktree.baseBehindCount,
   }).tier;
   const upstreamFirst = upstreamTier > prTier;
-  // The PR the worktree was created from carries its own CI and merge marks
-  // when a custom title displaced it from the headline, so it is held to the
-  // same rule as the subordinate badge.
-  const livePr =
-    worktree.linked?.pr &&
-    worktree.linked.pr.state !== "closed" &&
-    worktree.linked.pr.state !== "declined"
-      ? worktree.linked.pr
-      : undefined;
-  const prHasAlarm =
-    computeAlarmTier({ ciState: livePr?.ciStatus?.state }).tier > 0 ||
-    Boolean(livePr?.headMovedWhileArmed);
+  const prHasAlarm = isPullRequestWarning(worktree.linked?.pr);
   const upstreamHasAlarm =
     upstreamTier > 0 || Boolean(worktree.fetchAuthFailed || worktree.fetchNetworkFailed);
 
   // The PR a worktree was created from leads this stack when a custom title
-  // displaced it. Quiet also displaces a titled PR headline into the tooltip,
-  // so a failing one comes back here — only while it is a warning.
-  const sourcePrDisplaced =
-    hasCustomTitle || (quietGit && Boolean(worktree.linked?.pr?.title ?? worktree.prTitle));
+  // displaced it from the headline, and quiet keeps it only while it warns.
   const showSourcePrBadge =
-    isPrOriginated && Boolean(sourcePrNumber) && sourcePrDisplaced && (!quietGit || prHasAlarm);
+    hasCustomTitle && isPrOriginated && Boolean(sourcePrNumber) && (!quietGit || prHasAlarm);
 
   const prBadge =
     showPRBadge && (!quietGit || prHasAlarm) ? (
@@ -207,7 +193,7 @@ export function NonMainSecondaryRow({
       {showSourcePrBadge && (
         <PRBadge
           prNumber={sourcePrNumber!}
-          prTitle={quietGit ? undefined : (worktree.linked?.pr?.title ?? worktree.prTitle)}
+          prTitle={worktree.linked?.pr?.title ?? worktree.prTitle}
           prState={worktree.linked?.pr?.state}
           prCiStatus={worktree.linked?.pr?.ciStatus}
           mergeIntent={worktree.linked?.pr?.mergeIntent}
