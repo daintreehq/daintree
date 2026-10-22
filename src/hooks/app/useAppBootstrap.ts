@@ -17,7 +17,7 @@ import { useMissingPrerequisiteWarning } from "./useMissingPrerequisiteWarning";
 import { useUpdateListener } from "@/hooks/useUpdateListener";
 import { removeStartupSkeleton } from "@/utils/removeStartupSkeleton";
 import { useNotificationSettingsStore, usePluginManagerStore } from "@/store";
-import { preloadNewWorktreeDialog } from "@/components/Sidebar";
+import { preloadNewWorktreeDialog } from "@/components/Layout/ProjectDialogHost";
 import { primeRadix } from "@/components/ui/radix-loader";
 import {
   preloadActionPalette,

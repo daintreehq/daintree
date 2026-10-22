@@ -74,6 +74,19 @@ describe("AppLayout sidebar visibility — issue #5023 hide on welcome screen", 
     expect(source).toContain("hasWorkspace={hasWorkspace}");
   });
 
+  it("mounts the project dialogs beside the toolbar, not inside the sidebar (issue #13773)", () => {
+    // worktree.createDialog.open, the recipe events and the fleet picker must
+    // answer whatever the sidebar is showing — another view, a collapsed
+    // sidebar, a workspace with no git worktrees — so the host hangs off the
+    // workspace and hydration gates alone, outside both the sidebar subtree and
+    // the inert chrome wrappers. Neither sidebar visibility nor git may gate it.
+    const mount = source.indexOf("{hasWorkspace && isHydrated && <ProjectDialogHost />}");
+    expect(mount).toBeGreaterThan(-1);
+    expect(mount).toBeGreaterThan(source.indexOf("<ImportConfigDialog />"));
+    expect(mount).toBeLessThan(source.indexOf("<Sidebar\n"));
+    expect(source.match(/<ProjectDialogHost\b/g)).toHaveLength(1);
+  });
+
   it("uses showSidebar for the macro-focus sidebar visibility effect", () => {
     expect(source).toContain('setVisibility("sidebar", showSidebar)');
     expect(source).toContain("[showSidebar]");

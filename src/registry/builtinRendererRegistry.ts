@@ -5,7 +5,7 @@ import type { PanelViewProps } from "@shared/types/plugin";
 
 /**
  * Slot registry for renderer-side views contributed by built-in plugins. The
- * registry exists so host-owned surfaces (NewWorktreeDialog, SidebarContent,
+ * registry exists so host-owned surfaces (NewWorktreeDialog, ProjectDialogHost,
  * CodeForgeSettingsTab, ForgeStatsToolbarButton) can render plugin-contributed
  * components without importing them directly, preserving the plugin boundary.
  * Slot ids are dot-namespaced by plugin (`github.bulkCreateWorktreeDialog`) so

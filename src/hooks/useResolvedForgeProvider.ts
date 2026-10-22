@@ -60,7 +60,7 @@ const lastIssuesProvider = new Map<string, string | null>();
 // resolve. This guard is shared across hook instances, so it must only gate
 // the shared cache — never an instance's own setState. Several instances
 // resolve the same project concurrently on every provenance event (Toolbar,
-// ForgeStatsToolbarButton, SidebarContent, useRepositoryStats); if the shared
+// ForgeStatsToolbarButton, ProjectDialogHost, useRepositoryStats); if the shared
 // seq gated setState, every instance except the last to increment would
 // discard its response and keep a stale entry — a live plugin disable left
 // the stats pill mounted while only the stats instance saw the change.

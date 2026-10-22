@@ -9,6 +9,7 @@ const {
   addNotificationMock,
   updateNotificationMock,
   addErrorStoreMock,
+  generateRecipeMock,
 } = vi.hoisted(() => ({
   dispatchMock: vi.fn(),
   addErrorMock: vi.fn(),
@@ -18,6 +19,7 @@ const {
   addNotificationMock: vi.fn<(notification: { message: string }) => string>(() => "toast-123"),
   updateNotificationMock: vi.fn(),
   addErrorStoreMock: vi.fn(),
+  generateRecipeMock: vi.fn((): unknown[] => []),
 }));
 
 vi.mock("@/services/ActionService", () => ({
@@ -46,7 +48,7 @@ vi.mock("@/store/notificationStore", () => ({
 vi.mock("@/store/recipeStore", () => ({
   useRecipeStore: {
     getState: () => ({
-      generateRecipeFromActiveTerminals: vi.fn(() => []),
+      generateRecipeFromActiveTerminals: generateRecipeMock,
     }),
   },
 }));
@@ -94,6 +96,47 @@ describe("useWorktreeActions", () => {
     );
     expect(addNotificationMock).not.toHaveBeenCalled();
     expect(updateNotificationMock).not.toHaveBeenCalled();
+  });
+
+  describe("handleSaveLayout", () => {
+    function captureEditorRequests() {
+      const details: unknown[] = [];
+      const listener = (event: Event) => {
+        if (event instanceof CustomEvent) details.push(event.detail);
+      };
+      window.addEventListener("daintree:open-recipe-editor", listener);
+      return {
+        details,
+        stop: () => window.removeEventListener("daintree:open-recipe-editor", listener),
+      };
+    }
+
+    it("hands the live layout to the recipe editor through its open event (#13773)", () => {
+      // The editor mounts in the project dialog host, so the handoff can't be a
+      // callback threaded down from whichever surface offered Save Layout.
+      const terminals = [{ type: "terminal" }, { type: "claude" }];
+      generateRecipeMock.mockReturnValueOnce(terminals);
+      const requests = captureEditorRequests();
+      const { result } = renderHook(() => useWorktreeActions());
+
+      result.current.handleSaveLayout(worktree);
+      requests.stop();
+
+      expect(generateRecipeMock).toHaveBeenCalledWith("wt-1");
+      expect(requests.details).toEqual([{ worktreeId: "wt-1", initialTerminals: terminals }]);
+      expect(addErrorMock).not.toHaveBeenCalled();
+    });
+
+    it("reports an empty layout instead of opening an empty draft", () => {
+      const requests = captureEditorRequests();
+      const { result } = renderHook(() => useWorktreeActions());
+
+      result.current.handleSaveLayout(worktree);
+      requests.stop();
+
+      expect(requests.details).toEqual([]);
+      expect(addErrorMock).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("copies the workspace root when handed no worktree (#13210)", async () => {
