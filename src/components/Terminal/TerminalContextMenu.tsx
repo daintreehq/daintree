@@ -71,6 +71,11 @@ import { usePluginContextMenuItems } from "@/hooks/usePluginContextMenuItems";
 import { PluginContextMenuSection } from "@/components/Plugin/PluginContextMenuSection";
 import type { WhenClauseContext } from "@shared/utils/whenClause";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import {
+  RestartOnPresetConfirmDialog,
+  RestartOnPresetSubmenu,
+  type RestartOnPresetRequest,
+} from "@/components/Terminal/RestartOnPreset";
 import { closeAndAnnounce } from "@/lib/accessibility";
 import { terminalHasRunningAgentSession } from "@/utils/destructiveSessionConfirm";
 import {
@@ -659,6 +664,9 @@ function TerminalContextMenuBody({
   const [destructiveConfirm, setDestructiveConfirm] = useState<
     ({ kind: "kill" | "restart" } & DestructiveConfirmCopy) | null
   >(null);
+  const [restartOnPresetRequest, setRestartOnPresetRequest] =
+    useState<RestartOnPresetRequest | null>(null);
+  const closeRestartOnPreset = useCallback(() => setRestartOnPresetRequest(null), []);
 
   // Recent dictation targets surfaced in the context menu must resolve to a
   // live, non-trashed PTY panel that isn't the current one. Persisted entries
@@ -1667,6 +1675,11 @@ function TerminalContextMenuBody({
   return (
     <>
       {destructiveConfirmDialog}
+      <RestartOnPresetConfirmDialog
+        request={restartOnPresetRequest}
+        onClose={closeRestartOnPreset}
+        sourceRef={sourceRef}
+      />
       {handOverRequest !== null && (
         <TerminalHandOverDialog
           key={handOverRequest.id}
@@ -1893,6 +1906,20 @@ function TerminalContextMenuBody({
               <RotateCw className={ICON_CLASS} aria-hidden="true" />
               Restart terminal
             </ContextMenuItem>
+          )}
+          {terminalPty?.launchAgentId && !terminalPty.restoreRecovery && (
+            <RestartOnPresetSubmenu
+              agentId={terminalPty.launchAgentId}
+              currentPresetId={terminalPty.agentPresetId}
+              onPick={(preset) =>
+                setRestartOnPresetRequest({
+                  terminalId,
+                  terminalTitle: terminalPty.title,
+                  agentWorking: terminalHasRunningAgentSession(terminalPty),
+                  preset,
+                })
+              }
+            />
           )}
           {isPaused && (
             <ContextMenuItem onSelect={() => handleAction("force-resume")}>

@@ -16,6 +16,21 @@ import { applyPresetBehaviorOverrides, getMergedPreset, sanitizeAgentEnv } from 
 import { sanitizeTerminalName } from "./agentLaunchValidation.js";
 import { isAbsolute, isPathInside, pathComparisonKey } from "./path.js";
 
+/**
+ * The title a launch on `preset` is stamped with: an explicit `displayTitle`
+ * wins verbatim; otherwise the agent name with the preset in brackets
+ * ("Claude [Z.ai]") so the active preset is visible next to the agent name.
+ * `undefined` when the preset contributes no title.
+ */
+export function agentPresetTitle(
+  baseTitle: string,
+  preset: Pick<AgentPreset, "name" | "displayTitle"> | undefined
+): string | undefined {
+  const presetName = preset?.name?.trim();
+  if (!presetName) return undefined;
+  return preset?.displayTitle?.trim() ? preset.displayTitle : `${baseTitle} [${presetName}]`;
+}
+
 /** What a caller asked of one launch, as the launcher's options carry it. */
 export interface AgentLaunchPlanOptions {
   /** `null` launches the bare agent; omitted, the saved preset for the worktree applies. */
@@ -225,20 +240,9 @@ export async function buildAgentLaunchPlan(input: AgentLaunchPlanInput): Promise
       ? getAgentDisplayTitle(agentId, options.modelId)
       : (agentConfig?.name ?? "Terminal");
 
-  // Preset title: an explicit `displayTitle` wins verbatim; otherwise compose
-  // the agent name with the preset in brackets ("Claude [Z.ai]") so the active
-  // preset is visible next to the agent name.
-  let presetTitle = baseTitle;
-  let hasPresetTitle = false;
-  if (isAgent && preset) {
-    const presetName = preset.name?.trim();
-    if (presetName) {
-      hasPresetTitle = true;
-      presetTitle = preset.displayTitle?.trim()
-        ? preset.displayTitle
-        : `${baseTitle} [${presetName}]`;
-    }
-  }
+  const stampedPresetTitle = isAgent ? agentPresetTitle(baseTitle, preset) : undefined;
+  const presetTitle = stampedPresetTitle ?? baseTitle;
+  const hasPresetTitle = stampedPresetTitle !== undefined;
   // A caller-supplied name overrides the computed title. Empty after
   // sanitizing is treated as no name.
   const trimmedName = options?.name ? sanitizeTerminalName(options.name) : undefined;

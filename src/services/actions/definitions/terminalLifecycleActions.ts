@@ -10,6 +10,7 @@ import { terminalInstanceService } from "@/services/terminal/TerminalInstanceSer
 import { flushOptimisticCloses, requestPanelClose } from "@/services/terminal/optimisticPanelClose";
 import { fireWatchNotification } from "@/lib/watchNotification";
 import { usePanelStore } from "@/store/panelStore";
+import { useRateLimitObservationStore } from "@/store/rateLimitObservationStore";
 import { isPtyPanel } from "@shared/types/panel";
 import {
   useTerminalPendingDestructiveActionStore,
@@ -88,6 +89,15 @@ function clearPendingIf(kind: TerminalPendingDestructiveActionKind): void {
     useTerminalPendingDestructiveActionStore.getState().clear();
   }
 }
+
+const RestartOnPresetArgsSchema = z.object({
+  terminalId: z.string().optional(),
+  presetId: z.string().min(1).describe("Preset of the terminal's own agent to respawn on."),
+  confirmed: z
+    .boolean()
+    .optional()
+    .describe("Confirms ending the conversation. Without it the terminal is left alone."),
+});
 
 const PanelCloseResultSchema = z.object({
   closedIds: z
@@ -590,6 +600,43 @@ export function registerTerminalLifecycleActions(
       }
       clearPendingIf("restart");
       state.restartTerminal(targetId);
+    },
+  }));
+
+  actions.set("terminal.restartOnPreset", () => ({
+    id: "terminal.restartOnPreset",
+    title: "Restart agent on preset",
+    description:
+      "Respawn an agent terminal in place on another preset of the same agent. Always starts a new conversation and discards the scrollback, so it runs only when confirmed.",
+    category: "terminal",
+    kind: "command",
+    danger: "confirm",
+    scope: "renderer",
+    dangerRationale:
+      "Ends the agent's conversation and respawns it on another preset. Scrollback is lost.",
+    keywords: ["preset", "account", "switch", "relaunch", "rate limit"],
+    // Needs a preset the palette has no way to ask for; the pane menu and the
+    // rate-limit chip carry their own picker and confirm.
+    palette: { mode: "hidden" },
+    argsSchema: RestartOnPresetArgsSchema,
+    run: async (args: unknown, ctx) => {
+      const { terminalId, presetId } = RestartOnPresetArgsSchema.parse(args);
+      requireExplicitTerminalIdForAgentDispatch("terminal.restartOnPreset", terminalId, ctx);
+      // Unlike terminal.restart, this asks whatever the agent is doing: the
+      // conversation can't follow the pane to another preset's home, and a
+      // rate-limited agent is rarely `working` (#13746).
+      if (!isConfirmed(args, ctx)) {
+        throw new Error("Restarting on another preset ends the conversation; pass confirmed: true");
+      }
+      const state = usePanelStore.getState();
+      const targetId = terminalId ?? state.focusedId;
+      if (!targetId) return;
+      const result = await state.restartTerminalOnPreset(targetId, presetId);
+      if (!result.success) {
+        throw new Error(result.error ?? "Couldn't restart the terminal on that preset");
+      }
+      // The chip reported this pane's old account; the new one hasn't said anything yet.
+      useRateLimitObservationStore.getState().clearObservation(targetId);
     },
   }));
 

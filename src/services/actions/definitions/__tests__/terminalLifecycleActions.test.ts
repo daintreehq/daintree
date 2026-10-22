@@ -431,6 +431,7 @@ function setRichPanelState(options: { focusedId?: string | null; panels: AgentPa
   for (const p of panels) panelsById[p.id] = p;
   const removePanel = vi.fn();
   const restartTerminal = vi.fn();
+  const restartTerminalOnPreset = vi.fn().mockResolvedValue({ success: true });
   const bulkRestartAll = vi.fn().mockResolvedValue(undefined);
   const bulkRestartByWorktree = vi.fn().mockResolvedValue(undefined);
   panelStoreMock.getState.mockImplementation(() => ({
@@ -439,10 +440,11 @@ function setRichPanelState(options: { focusedId?: string | null; panels: AgentPa
     panelsById,
     removePanel,
     restartTerminal,
+    restartTerminalOnPreset,
     bulkRestartAll,
     bulkRestartByWorktree,
   }));
-  return { removePanel, restartTerminal, bulkRestartAll };
+  return { removePanel, restartTerminal, restartTerminalOnPreset, bulkRestartAll };
 }
 
 describe("terminal.kill confirm gate", () => {
@@ -854,6 +856,52 @@ describe("terminal.killBatch", () => {
       failedIds: [],
     });
     expect(removePanel).not.toHaveBeenCalled();
+  });
+});
+
+describe("terminal.restartOnPreset (#13746)", () => {
+  it("refuses without confirmation even when the agent is idle", async () => {
+    // A rate-limited agent is rarely working, and the conversation is lost
+    // whatever its state, so the working-only gate of terminal.restart can't apply.
+    const { restartTerminalOnPreset } = setRichPanelState({
+      focusedId: "p1",
+      panels: [{ id: "p1", location: "grid", detectedAgentId: "codex", agentState: "idle" }],
+    });
+    const run = setupActions();
+
+    await expect(
+      run("terminal.restartOnPreset", { terminalId: "p1", presetId: "work" })
+    ).rejects.toThrow(/confirmed/);
+
+    expect(restartTerminalOnPreset).not.toHaveBeenCalled();
+  });
+
+  it("restarts the pane on the preset once confirmed, and drops its rate-limit chip", async () => {
+    const { useRateLimitObservationStore } = await import("@/store/rateLimitObservationStore");
+    useRateLimitObservationStore.setState({ observedAtByTerminalId: { p1: Date.now() } });
+    const { restartTerminalOnPreset } = setRichPanelState({
+      focusedId: "p1",
+      panels: [{ id: "p1", location: "grid", detectedAgentId: "codex", agentState: "waiting" }],
+    });
+    const run = setupActions();
+
+    await run("terminal.restartOnPreset", { terminalId: "p1", presetId: "work", confirmed: true });
+
+    expect(restartTerminalOnPreset).toHaveBeenCalledWith("p1", "work");
+    expect(useRateLimitObservationStore.getState().observedAtByTerminalId.p1).toBeUndefined();
+  });
+
+  it("reports a respawn that failed instead of claiming success", async () => {
+    const { restartTerminalOnPreset } = setRichPanelState({
+      focusedId: "p1",
+      panels: [{ id: "p1", location: "grid", detectedAgentId: "codex", agentState: "waiting" }],
+    });
+    restartTerminalOnPreset.mockResolvedValue({ success: false, error: 'preset "work" not found' });
+    const run = setupActions();
+
+    await expect(
+      run("terminal.restartOnPreset", { terminalId: "p1", presetId: "work", confirmed: true })
+    ).rejects.toThrow(/not found/);
   });
 });
 

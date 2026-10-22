@@ -422,6 +422,7 @@ export const BUILT_IN_ACTION_IDS = [
 
   // -- terminalLifecycleActions --
   "terminal.restart",
+  "terminal.restartOnPreset",
   "terminal.redraw",
   "terminal.forceResume",
   "terminal.toggleInputLock",

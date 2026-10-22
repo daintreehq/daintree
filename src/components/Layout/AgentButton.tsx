@@ -24,6 +24,14 @@ import { getAgentConfig, getMergedPresets } from "@/config/agents";
 import { useAriaKeyshortcuts, useEffectiveCombo, useShortcutHintHover } from "@/hooks";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { ROW_CONTROL_CLASS, RowControlTooltip } from "@/components/ui/RowControl";
+import {
+  PresetSwitchNoticeItems,
+  PresetSwitchRestartDialog,
+  buildPresetSwitchRestartRequest,
+  usePanesLeftOnPreset,
+  type PresetSwitchNoticeState,
+  type PresetSwitchRestartRequest,
+} from "./PresetSwitchNotice";
 import { useWorktrees } from "@/hooks/useWorktrees";
 import { actionService } from "@/services/ActionService";
 import {
@@ -226,6 +234,12 @@ export function AgentButton({
   // express — controlled state is the only lever that lets one row both
   // close (launch) and stay open (set default). See issue #10720.
   const [dropdownOpen, setDropdownOpen] = useState(false);
+  // Raised by a default pick in this picker and dropped when it closes: the
+  // offer is said once, at the moment of the change (#13746).
+  const [presetNotice, setPresetNotice] = useState<PresetSwitchNoticeState | null>(null);
+  const [presetRestartRequest, setPresetRestartRequest] =
+    useState<PresetSwitchRestartRequest | null>(null);
+  const panesLeftOnPreset = usePanesLeftOnPreset(type, presetNotice);
   const isRestoringFocusRef = useRef(false);
   // Set in onPointerDownOutside, read in onCloseAutoFocus. Lets us
   // preventDefault() the focus restoration only for pointer dismissals so the
@@ -304,9 +318,9 @@ export function AgentButton({
   const activePreset = savedPresetId ? presets.find((p) => p.id === savedPresetId) : undefined;
   // CCR presets carry the routing prefix in their stored name; strip it for
   // display so the tooltip and menu surfaces show the same human label.
-  const activePresetName = activePreset
-    ? (activePreset.displayTitle ?? activePreset.name.replace(/^CCR:\s*/, ""))
-    : null;
+  const presetDisplayName = (preset: { name: string; displayTitle?: string }) =>
+    preset.displayTitle ?? preset.name.replace(/^CCR:\s*/, "");
+  const activePresetName = activePreset ? presetDisplayName(activePreset) : null;
   // Group by source. Project presets are identified by membership so that a
   // project preset whose id happens to start with "ccr-" still lands in
   // "Project shared" rather than being stolen by the CCR group. Everything
@@ -421,7 +435,27 @@ export function AgentButton({
   // global scope.
   const persistWorktreePick = (presetId: string | undefined) => {
     if (!activeWorktreeId) return;
-    void useAgentSettingsStore.getState().updateWorktreePreset(type, activeWorktreeId, presetId);
+    const worktreeId = activeWorktreeId;
+    const previous = savedPresetId ? activePreset : undefined;
+    const next = presetId ? presets.find((p) => p.id === presetId) : undefined;
+    // Only a move onto a named preset is offered: the restart respawns on a
+    // preset, never back to the bare agent.
+    const notice: PresetSwitchNoticeState | null =
+      next && next.id !== savedPresetId
+        ? {
+            worktreeId,
+            fromPresetId: previous?.id,
+            fromName: previous ? presetDisplayName(previous) : `${config.name} default`,
+            toPresetId: next.id,
+            toName: presetDisplayName(next),
+          }
+        : null;
+    setPresetNotice(null);
+    void useAgentSettingsStore
+      .getState()
+      .updateWorktreePreset(type, worktreeId, presetId)
+      .then(() => setPresetNotice(notice))
+      .catch(() => setPresetNotice(null));
   };
 
   // The agent-default row clears BOTH scopes: the worktree override and the
@@ -670,324 +704,347 @@ export function AgentButton({
   }
 
   return (
-    <ContextMenu
-      onOpenChange={(open) => {
-        if (open) {
-          setPrimaryTooltipOpen(false);
-          setChevronTooltipOpen(false);
-        }
-      }}
-    >
-      <ContextMenuTrigger asChild>
-        {/* One control at rest: no seam, the chevron tucked against its own
-            brand mark and a little extra room after it, so it can only be read
-            as this agent's. The partition and the shared wash appear on hover
-            or focus, when which half does what actually matters. */}
-        <span className="toolbar-agent-split mr-1 inline-flex" data-split-live={isSplitLive}>
-          <Tooltip open={primaryTooltipOpen} onOpenChange={handlePrimaryTooltipOpenChange}>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={handleClick}
-                aria-disabled={isLoading || undefined}
-                data-toolbar-item={dataToolbarItem}
-                onPointerEnter={(e) => {
-                  clearFocusRestoreSuppression();
-                  hover.onPointerEnter(e);
-                }}
-                onPointerLeave={hover.onPointerLeave}
-                onPointerDown={hover.onPointerDown}
-                onFocus={hover.onFocus}
-                onBlur={hover.onBlur}
-                className={cn(
-                  "toolbar-agent-button text-text-primary rounded-r-none relative",
-                  needsSetup && "opacity-50",
-                  "aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
-                )}
-                aria-label={ariaLabel}
-                // The tooltip names the preset a click will use; the name stays
-                // stable for selectors and voice control, so the preset rides in
-                // the description instead.
-                aria-description={
-                  isLaunchable && activePresetName ? `Preset: ${activePresetName}` : undefined
-                }
-                aria-keyshortcuts={ariaShortcut}
-              >
-                {iconElement}
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">
-              {createTooltipContent(tooltipLabel, tooltipShortcut)}
-            </TooltipContent>
-          </Tooltip>
-          <DropdownMenu
-            open={dropdownOpen}
-            onOpenChange={(open) => {
-              setDropdownOpen(open);
-              if (open) {
-                setPrimaryTooltipOpen(false);
-                setChevronTooltipOpen(false);
-              }
-            }}
-          >
-            <Tooltip open={chevronTooltipOpen} onOpenChange={handleChevronTooltipOpenChange}>
-              <TooltipTrigger asChild>
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    aria-disabled={isChevronDisabled || undefined}
-                    onPointerDown={(e) => {
-                      if (isChevronDisabled) e.preventDefault();
-                    }}
-                    onKeyDown={(e) => {
-                      if (
-                        isChevronDisabled &&
-                        (e.key === "Enter" || e.key === " " || e.key === "ArrowDown")
-                      ) {
-                        e.preventDefault();
-                      }
-                    }}
-                    onClick={(e) => {
-                      if (isChevronDisabled) e.preventDefault();
-                    }}
-                    data-toolbar-item={dataToolbarItem}
-                    onPointerEnter={clearFocusRestoreSuppression}
-                    className={cn(
-                      "group/split-toggle toolbar-agent-button toolbar-agent-split-toggle text-text-secondary aria-expanded:text-text-primary rounded-l-none",
-                      // 24px keeps the target at the WCAG 2.5.8 minimum; the
-                      // glyph sits at its leading edge so it reads as part of
-                      // the mark beside it rather than centred between agents.
-                      "h-8 w-6 p-0 pl-0.5 flex items-center justify-start",
-                      "aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
-                    )}
-                    aria-label={chevronTooltip}
-                  >
-                    {/* Keyed off aria-expanded, not data-state: the tooltip
-                        trigger stamps its own data-state over the menu's. */}
-                    <ChevronDown
-                      data-animated-chevron
-                      className="h-3 w-3 transition-transform duration-150 ease-out group-aria-expanded/split-toggle:rotate-180"
-                      aria-hidden="true"
-                    />
-                  </Button>
-                </DropdownMenuTrigger>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">{chevronTooltip}</TooltipContent>
-            </Tooltip>
-            <DropdownMenuContent
-              align="start"
-              sideOffset={4}
-              className="min-w-[12rem] max-h-[var(--radix-dropdown-menu-content-available-height)] overflow-y-auto"
-              onPointerDownOutside={() => {
-                wasPointerCloseRef.current = true;
-              }}
-              onCloseAutoFocus={(e) => {
-                suppressTooltipsDuringFocusRestore();
-                if (wasPointerCloseRef.current) {
-                  e.preventDefault();
-                  wasPointerCloseRef.current = false;
-                }
-              }}
-            >
-              <DropdownMenuItem
-                className="group/preset-row items-stretch py-0 pr-2.5 pl-0"
-                onSelect={(e) => e.preventDefault()}
-                onKeyDown={(e) => setDefaultOnKey(e, clearDefaultPick)}
-                onClick={(e) => {
-                  // Element (not HTMLElement) so a gutter SVG-icon click still
-                  // resolves; closest() lives on Element.
-                  if (e.target instanceof Element && e.target.closest('[data-zone="gutter"]')) {
-                    clearDefaultPick();
-                    return;
-                  }
-                  launchWithPreset(null);
-                }}
-              >
-                <RowControlTooltip
-                  label={!savedPresetId ? "Current default" : "Set as default"}
-                  shortcut={!savedPresetId ? undefined : "D"}
-                >
-                  <span
-                    data-zone="gutter"
-                    // The whole gutter is the hit zone (the row's onClick routes it by
-                    // `data-zone`); the fill is a standard row control centred in it, so
-                    // hover reads as a button rather than a full-height band.
-                    className="group/gutter flex w-8 shrink-0 cursor-pointer items-center justify-center self-stretch"
-                  >
-                    <span
-                      aria-hidden="true"
-                      className={cn(
-                        ROW_CONTROL_CLASS,
-                        "group-hover/gutter:bg-overlay-hover group-hover/gutter:text-text-primary"
-                      )}
-                    >
-                      {!savedPresetId ? (
-                        <Check className="h-3.5 w-3.5" aria-hidden="true" />
-                      ) : (
-                        <Circle
-                          className="h-2.5 w-2.5 opacity-0 transition-opacity duration-150 group-hover/preset-row:opacity-40 group-data-[highlighted]/preset-row:opacity-40"
-                          aria-hidden="true"
-                        />
-                      )}
-                    </span>
-                  </span>
-                </RowControlTooltip>
-                <span data-zone="label" className="flex min-w-0 flex-1 items-center py-1.5">
-                  <span className="inline-flex h-4 w-4 items-center justify-center shrink-0 mr-1.5">
-                    <BrandMark brandColor={getBrandColorHex(type)}>
-                      <config.icon />
-                    </BrandMark>
-                  </span>
-                  Agent default
-                </span>
-                {renderDefaultHint(!savedPresetId)}
-              </DropdownMenuItem>
-              {ccrPresetGroup.length > 0 && (
-                <>
-                  {hasMultiplePresetGroups && <DropdownMenuSeparator />}
-                  {hasMultiplePresetGroups && <DropdownMenuLabel>CCR routes</DropdownMenuLabel>}
-                  {ccrPresetGroup.map((preset) => renderPresetRow(preset))}
-                </>
-              )}
-              {projectPresetGroup.length > 0 && (
-                <>
-                  {hasMultiplePresetGroups && <DropdownMenuSeparator />}
-                  {hasMultiplePresetGroups && <DropdownMenuLabel>Project shared</DropdownMenuLabel>}
-                  {projectPresetGroup.map((preset) => renderPresetRow(preset))}
-                </>
-              )}
-              {customPresetGroup.length > 0 && (
-                <>
-                  {hasMultiplePresetGroups && <DropdownMenuSeparator />}
-                  {hasMultiplePresetGroups && <DropdownMenuLabel>Custom</DropdownMenuLabel>}
-                  {customPresetGroup.map((preset) => renderPresetRow(preset))}
-                </>
-              )}
-              <DropdownMenuSeparator />
-              {/* Inset past the default-pick gutter so the icon and label sit in
-                  the preset rows' columns. */}
-              <DropdownMenuItem
-                inset
-                onSelect={() =>
-                  void actionService.dispatch(
-                    "app.settings.openTab",
-                    { tab: "agents", subtab: type, sectionId: "agents-presets" },
-                    { source: "user" }
-                  )
-                }
-              >
-                <Settings2 className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
-                Manage presets…
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </span>
-      </ContextMenuTrigger>
-      <ContextMenuContent
-        className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto"
-        onPointerDownOutside={() => {
-          wasPointerCloseRef.current = true;
-        }}
-        onCloseAutoFocus={(e) => {
-          suppressTooltipsDuringFocusRestore();
-          if (wasPointerCloseRef.current) {
-            e.preventDefault();
-            wasPointerCloseRef.current = false;
+    <>
+      <ContextMenu
+        onOpenChange={(open) => {
+          if (open) {
+            setPrimaryTooltipOpen(false);
+            setChevronTooltipOpen(false);
           }
         }}
       >
-        <ContextMenuActionItem actionId="agent.launch" args={{ agentId: type }}>
-          {agentMenuMark}
-          Launch {config.name}
-        </ContextMenuActionItem>
-        <ContextMenuActionItem actionId="agent.launch" args={{ agentId: type, location: "dock" }}>
-          <PanelBottom data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
-          Launch {config.name} in dock
-        </ContextMenuActionItem>
-        {hasPresets && (
-          <ContextMenuSub>
-            <ContextMenuSubTrigger disabled={!isLaunchable}>
-              <Bookmark data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
-              Launch with preset
-            </ContextMenuSubTrigger>
-            <ContextMenuSubContent
-              data-testid="context-submenu-content"
-              className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto"
+        <ContextMenuTrigger asChild>
+          {/* One control at rest: no seam, the chevron tucked against its own
+            brand mark and a little extra room after it, so it can only be read
+            as this agent's. The partition and the shared wash appear on hover
+            or focus, when which half does what actually matters. */}
+          <span className="toolbar-agent-split mr-1 inline-flex" data-split-live={isSplitLive}>
+            <Tooltip open={primaryTooltipOpen} onOpenChange={handlePrimaryTooltipOpenChange}>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={handleClick}
+                  aria-disabled={isLoading || undefined}
+                  data-toolbar-item={dataToolbarItem}
+                  onPointerEnter={(e) => {
+                    clearFocusRestoreSuppression();
+                    hover.onPointerEnter(e);
+                  }}
+                  onPointerLeave={hover.onPointerLeave}
+                  onPointerDown={hover.onPointerDown}
+                  onFocus={hover.onFocus}
+                  onBlur={hover.onBlur}
+                  className={cn(
+                    "toolbar-agent-button text-text-primary rounded-r-none relative",
+                    needsSetup && "opacity-50",
+                    "aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
+                  )}
+                  aria-label={ariaLabel}
+                  // The tooltip names the preset a click will use; the name stays
+                  // stable for selectors and voice control, so the preset rides in
+                  // the description instead.
+                  aria-description={
+                    isLaunchable && activePresetName ? `Preset: ${activePresetName}` : undefined
+                  }
+                  aria-keyshortcuts={ariaShortcut}
+                >
+                  {iconElement}
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">
+                {createTooltipContent(tooltipLabel, tooltipShortcut)}
+              </TooltipContent>
+            </Tooltip>
+            <DropdownMenu
+              open={dropdownOpen}
+              onOpenChange={(open) => {
+                setDropdownOpen(open);
+                if (!open) setPresetNotice(null);
+                if (open) {
+                  setPrimaryTooltipOpen(false);
+                  setChevronTooltipOpen(false);
+                }
+              }}
             >
-              <ContextMenuRadioGroup value={savedPresetId ?? ""}>
-                <MenuActionSourceContext.Consumer>
-                  {(menuSource) => (
-                    <ContextMenuRadioItem
-                      value=""
-                      onSelect={() => {
-                        clearDefaultPick();
-                        void actionService.dispatch(
-                          "agent.launch",
-                          { agentId: type, presetId: null },
-                          { source: menuSource ?? "user" }
-                        );
+              <Tooltip open={chevronTooltipOpen} onOpenChange={handleChevronTooltipOpenChange}>
+                <TooltipTrigger asChild>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      aria-disabled={isChevronDisabled || undefined}
+                      onPointerDown={(e) => {
+                        if (isChevronDisabled) e.preventDefault();
                       }}
+                      onKeyDown={(e) => {
+                        if (
+                          isChevronDisabled &&
+                          (e.key === "Enter" || e.key === " " || e.key === "ArrowDown")
+                        ) {
+                          e.preventDefault();
+                        }
+                      }}
+                      onClick={(e) => {
+                        if (isChevronDisabled) e.preventDefault();
+                      }}
+                      data-toolbar-item={dataToolbarItem}
+                      onPointerEnter={clearFocusRestoreSuppression}
+                      className={cn(
+                        "group/split-toggle toolbar-agent-button toolbar-agent-split-toggle text-text-secondary aria-expanded:text-text-primary rounded-l-none",
+                        // 24px keeps the target at the WCAG 2.5.8 minimum; the
+                        // glyph sits at its leading edge so it reads as part of
+                        // the mark beside it rather than centred between agents.
+                        "h-8 w-6 p-0 pl-0.5 flex items-center justify-start",
+                        "aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
+                      )}
+                      aria-label={chevronTooltip}
                     >
-                      Agent default
-                    </ContextMenuRadioItem>
-                  )}
-                </MenuActionSourceContext.Consumer>
-                <MenuActionSourceContext.Consumer>
-                  {(menuSource) => (
-                    <>
-                      {presets.map((preset) => (
-                        <ContextMenuRadioItem
-                          key={preset.id}
-                          value={preset.id}
-                          onSelect={() => {
-                            persistWorktreePick(preset.id);
-                            void actionService.dispatch(
-                              "agent.launch",
-                              { agentId: type, presetId: preset.id },
-                              { source: menuSource ?? "user" }
-                            );
-                          }}
-                        >
-                          {preset.displayTitle ?? preset.name.replace(/^CCR:\s*/, "")}
-                        </ContextMenuRadioItem>
-                      ))}
-                    </>
-                  )}
-                </MenuActionSourceContext.Consumer>
-              </ContextMenuRadioGroup>
-            </ContextMenuSubContent>
-          </ContextMenuSub>
-        )}
-        {hasWorktrees && (
-          <ContextMenuSub>
-            <ContextMenuSubTrigger>
-              <FolderGit2 data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
-              Launch in worktree
-            </ContextMenuSubTrigger>
-            <ContextMenuSubContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
-              <WorktreeMenuItems agentType={type} />
-            </ContextMenuSubContent>
-          </ContextMenuSub>
-        )}
-        <ContextMenuSeparator />
-        <ToolbarContextMenuItems buttonId={type} side="left" onUnpin={handleUnpinFromToolbar} />
-        <ContextMenuActionItem
-          actionId="app.settings.openTab"
-          args={{ tab: "agents", subtab: type, sectionId: "agents-presets" }}
+                      {/* Keyed off aria-expanded, not data-state: the tooltip
+                        trigger stamps its own data-state over the menu's. */}
+                      <ChevronDown
+                        data-animated-chevron
+                        className="h-3 w-3 transition-transform duration-150 ease-out group-aria-expanded/split-toggle:rotate-180"
+                        aria-hidden="true"
+                      />
+                    </Button>
+                  </DropdownMenuTrigger>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">{chevronTooltip}</TooltipContent>
+              </Tooltip>
+              <DropdownMenuContent
+                align="start"
+                sideOffset={4}
+                className="min-w-[12rem] max-h-[var(--radix-dropdown-menu-content-available-height)] overflow-y-auto"
+                onPointerDownOutside={() => {
+                  wasPointerCloseRef.current = true;
+                }}
+                onCloseAutoFocus={(e) => {
+                  suppressTooltipsDuringFocusRestore();
+                  if (wasPointerCloseRef.current) {
+                    e.preventDefault();
+                    wasPointerCloseRef.current = false;
+                  }
+                }}
+              >
+                <DropdownMenuItem
+                  className="group/preset-row items-stretch py-0 pr-2.5 pl-0"
+                  onSelect={(e) => e.preventDefault()}
+                  onKeyDown={(e) => setDefaultOnKey(e, clearDefaultPick)}
+                  onClick={(e) => {
+                    // Element (not HTMLElement) so a gutter SVG-icon click still
+                    // resolves; closest() lives on Element.
+                    if (e.target instanceof Element && e.target.closest('[data-zone="gutter"]')) {
+                      clearDefaultPick();
+                      return;
+                    }
+                    launchWithPreset(null);
+                  }}
+                >
+                  <RowControlTooltip
+                    label={!savedPresetId ? "Current default" : "Set as default"}
+                    shortcut={!savedPresetId ? undefined : "D"}
+                  >
+                    <span
+                      data-zone="gutter"
+                      // The whole gutter is the hit zone (the row's onClick routes it by
+                      // `data-zone`); the fill is a standard row control centred in it, so
+                      // hover reads as a button rather than a full-height band.
+                      className="group/gutter flex w-8 shrink-0 cursor-pointer items-center justify-center self-stretch"
+                    >
+                      <span
+                        aria-hidden="true"
+                        className={cn(
+                          ROW_CONTROL_CLASS,
+                          "group-hover/gutter:bg-overlay-hover group-hover/gutter:text-text-primary"
+                        )}
+                      >
+                        {!savedPresetId ? (
+                          <Check className="h-3.5 w-3.5" aria-hidden="true" />
+                        ) : (
+                          <Circle
+                            className="h-2.5 w-2.5 opacity-0 transition-opacity duration-150 group-hover/preset-row:opacity-40 group-data-[highlighted]/preset-row:opacity-40"
+                            aria-hidden="true"
+                          />
+                        )}
+                      </span>
+                    </span>
+                  </RowControlTooltip>
+                  <span data-zone="label" className="flex min-w-0 flex-1 items-center py-1.5">
+                    <span className="inline-flex h-4 w-4 items-center justify-center shrink-0 mr-1.5">
+                      <BrandMark brandColor={getBrandColorHex(type)}>
+                        <config.icon />
+                      </BrandMark>
+                    </span>
+                    Agent default
+                  </span>
+                  {renderDefaultHint(!savedPresetId)}
+                </DropdownMenuItem>
+                {ccrPresetGroup.length > 0 && (
+                  <>
+                    {hasMultiplePresetGroups && <DropdownMenuSeparator />}
+                    {hasMultiplePresetGroups && <DropdownMenuLabel>CCR routes</DropdownMenuLabel>}
+                    {ccrPresetGroup.map((preset) => renderPresetRow(preset))}
+                  </>
+                )}
+                {projectPresetGroup.length > 0 && (
+                  <>
+                    {hasMultiplePresetGroups && <DropdownMenuSeparator />}
+                    {hasMultiplePresetGroups && (
+                      <DropdownMenuLabel>Project shared</DropdownMenuLabel>
+                    )}
+                    {projectPresetGroup.map((preset) => renderPresetRow(preset))}
+                  </>
+                )}
+                {customPresetGroup.length > 0 && (
+                  <>
+                    {hasMultiplePresetGroups && <DropdownMenuSeparator />}
+                    {hasMultiplePresetGroups && <DropdownMenuLabel>Custom</DropdownMenuLabel>}
+                    {customPresetGroup.map((preset) => renderPresetRow(preset))}
+                  </>
+                )}
+                {presetNotice && (
+                  <PresetSwitchNoticeItems
+                    agentName={config.name}
+                    notice={presetNotice}
+                    paneIds={panesLeftOnPreset}
+                    onRestart={() => {
+                      setPresetRestartRequest(
+                        buildPresetSwitchRestartRequest(presetNotice, panesLeftOnPreset)
+                      );
+                      setPresetNotice(null);
+                    }}
+                    onKeep={() => setPresetNotice(null)}
+                  />
+                )}
+                <DropdownMenuSeparator />
+                {/* Inset past the default-pick gutter so the icon and label sit in
+                  the preset rows' columns. */}
+                <DropdownMenuItem
+                  inset
+                  onSelect={() =>
+                    void actionService.dispatch(
+                      "app.settings.openTab",
+                      { tab: "agents", subtab: type, sectionId: "agents-presets" },
+                      { source: "user" }
+                    )
+                  }
+                >
+                  <Settings2 className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+                  Manage presets…
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </span>
+        </ContextMenuTrigger>
+        <ContextMenuContent
+          className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto"
+          onPointerDownOutside={() => {
+            wasPointerCloseRef.current = true;
+          }}
+          onCloseAutoFocus={(e) => {
+            suppressTooltipsDuringFocusRestore();
+            if (wasPointerCloseRef.current) {
+              e.preventDefault();
+              wasPointerCloseRef.current = false;
+            }
+          }}
         >
-          <Settings2 data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
-          Manage {config.name} presets…
-        </ContextMenuActionItem>
-        <ContextMenuActionItem
-          actionId="app.settings.openTab"
-          args={{ tab: "agents", subtab: type }}
-        >
-          <Plug data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
-          {config.name} settings…
-        </ContextMenuActionItem>
-        <AgentExternalLinkItems links={config.externalLinks} />
-      </ContextMenuContent>
-    </ContextMenu>
+          <ContextMenuActionItem actionId="agent.launch" args={{ agentId: type }}>
+            {agentMenuMark}
+            Launch {config.name}
+          </ContextMenuActionItem>
+          <ContextMenuActionItem actionId="agent.launch" args={{ agentId: type, location: "dock" }}>
+            <PanelBottom data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+            Launch {config.name} in dock
+          </ContextMenuActionItem>
+          {hasPresets && (
+            <ContextMenuSub>
+              <ContextMenuSubTrigger disabled={!isLaunchable}>
+                <Bookmark data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+                Launch with preset
+              </ContextMenuSubTrigger>
+              <ContextMenuSubContent
+                data-testid="context-submenu-content"
+                className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto"
+              >
+                <ContextMenuRadioGroup value={savedPresetId ?? ""}>
+                  <MenuActionSourceContext.Consumer>
+                    {(menuSource) => (
+                      <ContextMenuRadioItem
+                        value=""
+                        onSelect={() => {
+                          clearDefaultPick();
+                          void actionService.dispatch(
+                            "agent.launch",
+                            { agentId: type, presetId: null },
+                            { source: menuSource ?? "user" }
+                          );
+                        }}
+                      >
+                        Agent default
+                      </ContextMenuRadioItem>
+                    )}
+                  </MenuActionSourceContext.Consumer>
+                  <MenuActionSourceContext.Consumer>
+                    {(menuSource) => (
+                      <>
+                        {presets.map((preset) => (
+                          <ContextMenuRadioItem
+                            key={preset.id}
+                            value={preset.id}
+                            onSelect={() => {
+                              persistWorktreePick(preset.id);
+                              void actionService.dispatch(
+                                "agent.launch",
+                                { agentId: type, presetId: preset.id },
+                                { source: menuSource ?? "user" }
+                              );
+                            }}
+                          >
+                            {preset.displayTitle ?? preset.name.replace(/^CCR:\s*/, "")}
+                          </ContextMenuRadioItem>
+                        ))}
+                      </>
+                    )}
+                  </MenuActionSourceContext.Consumer>
+                </ContextMenuRadioGroup>
+              </ContextMenuSubContent>
+            </ContextMenuSub>
+          )}
+          {hasWorktrees && (
+            <ContextMenuSub>
+              <ContextMenuSubTrigger>
+                <FolderGit2 data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+                Launch in worktree
+              </ContextMenuSubTrigger>
+              <ContextMenuSubContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
+                <WorktreeMenuItems agentType={type} />
+              </ContextMenuSubContent>
+            </ContextMenuSub>
+          )}
+          <ContextMenuSeparator />
+          <ToolbarContextMenuItems buttonId={type} side="left" onUnpin={handleUnpinFromToolbar} />
+          <ContextMenuActionItem
+            actionId="app.settings.openTab"
+            args={{ tab: "agents", subtab: type, sectionId: "agents-presets" }}
+          >
+            <Settings2 data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+            Manage {config.name} presets…
+          </ContextMenuActionItem>
+          <ContextMenuActionItem
+            actionId="app.settings.openTab"
+            args={{ tab: "agents", subtab: type }}
+          >
+            <Plug data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+            {config.name} settings…
+          </ContextMenuActionItem>
+          <AgentExternalLinkItems links={config.externalLinks} />
+        </ContextMenuContent>
+      </ContextMenu>
+      <PresetSwitchRestartDialog
+        request={presetRestartRequest}
+        onClose={() => setPresetRestartRequest(null)}
+      />
+    </>
   );
 }

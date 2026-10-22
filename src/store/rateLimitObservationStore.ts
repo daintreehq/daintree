@@ -15,6 +15,8 @@ interface RateLimitObservationState {
    */
   observedAtByTerminalId: Record<string, number>;
   recordObservation: (terminalId: string, observedAt: number, now?: number) => void;
+  /** Forget a pane's observation, for a pane now running somewhere the banner wasn't seen. */
+  clearObservation: (terminalId: string) => void;
 }
 
 export const useRateLimitObservationStore = create<RateLimitObservationState>((set) => ({
@@ -27,6 +29,13 @@ export const useRateLimitObservationStore = create<RateLimitObservationState>((s
       }
       const previous = next[terminalId];
       if (previous === undefined || observedAt > previous) next[terminalId] = observedAt;
+      return { observedAtByTerminalId: next };
+    }),
+  clearObservation: (terminalId) =>
+    set((state) => {
+      if (!(terminalId in state.observedAtByTerminalId)) return state;
+      const next = { ...state.observedAtByTerminalId };
+      delete next[terminalId];
       return { observedAtByTerminalId: next };
     }),
 }));

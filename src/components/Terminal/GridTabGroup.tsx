@@ -103,6 +103,7 @@ export const GridTabGroup = React.memo(function GridTabGroup({
       const pty = isPtyPanel(p) ? p : null;
       let presetColor = pty?.agentPresetColor;
       let fallbackTooltip: string | undefined;
+      let presetName: string | undefined;
       if (pty?.launchAgentId && pty.agentPresetId) {
         const presets = getMergedPresets(
           pty.launchAgentId,
@@ -111,7 +112,10 @@ export const GridTabGroup = React.memo(function GridTabGroup({
           projectPresetsByAgent[pty.launchAgentId]
         );
         const live = presets.find((f) => f.id === pty.agentPresetId);
-        if (live) presetColor = live.color ?? presetColor;
+        if (live) {
+          presetColor = live.color ?? presetColor;
+          presetName = live.name;
+        }
         if (pty.isUsingFallback && pty.originalPresetId) {
           const original = presets.find((f) => f.id === pty.originalPresetId);
           const originalName = original?.name ?? pty.originalPresetId;
@@ -147,6 +151,7 @@ export const GridTabGroup = React.memo(function GridTabGroup({
         presetColor,
         isUsingFallback: pty?.isUsingFallback,
         fallbackTooltip,
+        presetName,
         hasDangerousFlags,
       };
     });

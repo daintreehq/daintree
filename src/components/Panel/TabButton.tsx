@@ -45,6 +45,8 @@ export interface TabInfo {
   presetColor?: string;
   isUsingFallback?: boolean;
   fallbackTooltip?: string;
+  /** Name of the preset the pane is live on, whatever its title says (#13746). */
+  presetName?: string;
   hasDangerousFlags?: boolean;
 }
 
@@ -64,6 +66,8 @@ export interface TabButtonProps {
   onRename?: (newTitle: string) => void;
   isUsingFallback?: boolean;
   fallbackTooltip?: string;
+  /** Name of the preset the pane is live on; shown unless the title already says it. */
+  presetName?: string;
   hasDangerousFlags?: boolean;
   /** The id of the region this tab switches — `aria-controls`, per the APG tabs pattern. */
   tabPanelId?: string;
@@ -99,6 +103,7 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
     onRename,
     isUsingFallback,
     fallbackTooltip,
+    presetName,
     hasDangerousFlags,
     tabPanelId,
     parked = false,
@@ -412,6 +417,15 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
                     </m.span>
                   )}
                 </AnimatePresence>
+              )}
+
+              {presetName && !(fullTitle ?? title).includes(presetName) && (
+                <span
+                  className="max-w-24 shrink-0 truncate text-xs text-text-secondary"
+                  data-testid="tab-preset-name"
+                >
+                  {presetName}
+                </span>
               )}
 
               {isUsingFallback && (
