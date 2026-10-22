@@ -1007,6 +1007,8 @@ describe("Plugin worktree host API", () => {
       "behindCount",
       "branch",
       "createdAt",
+      "gitOperation",
+      "headOid",
       "id",
       "isCurrent",
       "isMainWorktree",
@@ -1015,6 +1017,7 @@ describe("Plugin worktree host API", () => {
       "mood",
       "name",
       "path",
+      "setup",
       "status",
       "worktreeId",
     ];
