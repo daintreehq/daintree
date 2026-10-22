@@ -35,6 +35,11 @@ export interface SettingsSearchEntry {
   title: string;
   description: string;
   keywords?: string[];
+  /**
+   * Set on a plugin's declared setting. Opening it goes through `plugin.openSettings`,
+   * the same landing as `host.settings.open(key)`, instead of tab navigation.
+   */
+  plugin?: { instanceId: string; settingId: string };
   /** When set, indicates this setting is only visible when a parent setting is enabled. */
   requiresEnabled?: {
     /** id of the gate entry in the search index (e.g. "mcp-server-enable") */
