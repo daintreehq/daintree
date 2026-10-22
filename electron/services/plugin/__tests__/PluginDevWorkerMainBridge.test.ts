@@ -417,10 +417,14 @@ describe("PluginDevWorkerMainBridge", () => {
       type: "host-call",
       requestId: "c-ws",
       method: "setWorktreeCardStatus",
-      params: { worktreeId: "/repo/wt", status: { label: "up" } },
+      params: { worktreeId: "/repo/wt", status: { label: "up", command: "acme.demo.open" } },
     });
     await flush();
-    expect(host.setWorktreeCardStatus).toHaveBeenCalledWith("/repo/wt", { label: "up" });
+    // Relayed as sent: the host qualifies the command, as it vets the rest.
+    expect(host.setWorktreeCardStatus).toHaveBeenCalledWith("/repo/wt", {
+      label: "up",
+      command: "acme.demo.open",
+    });
     const ok = workerHost.sent.find((m) => m.type === "host-result" && m.requestId === "c-ws");
     expect(ok).toMatchObject({ ok: true });
 

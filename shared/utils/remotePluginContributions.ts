@@ -1,8 +1,7 @@
-import { BUILT_IN_ACTION_IDS, DENY_PLUGIN_DISPATCH_ACTION_IDS } from "../config/actionIds.js";
-import { KEY_ACTION_VALUES } from "../types/keymap.js";
+import { DENY_PLUGIN_DISPATCH_ACTION_IDS } from "../config/actionIds.js";
+import { isBuiltInActionId } from "./builtInActionIds.js";
 
 const DENIED: ReadonlySet<string> = new Set(DENY_PLUGIN_DISPATCH_ACTION_IDS);
-const BUILT_IN: ReadonlySet<string> = new Set([...BUILT_IN_ACTION_IDS, ...KEY_ACTION_VALUES]);
 
 /**
  * Whether a keybinding, toolbar button or context-menu item a host's plugin
@@ -14,7 +13,7 @@ const BUILT_IN: ReadonlySet<string> = new Set([...BUILT_IN_ACTION_IDS, ...KEY_AC
  */
 export function isRemoteContributionActionAllowed(pluginId: string, actionId: string): boolean {
   if (DENIED.has(actionId)) return false;
-  if (BUILT_IN.has(actionId)) return true;
+  if (isBuiltInActionId(actionId)) return true;
   return isOwnPluginAction(pluginId, actionId);
 }
 

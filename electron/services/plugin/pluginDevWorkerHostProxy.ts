@@ -1279,9 +1279,11 @@ export class PluginDevWorkerHostProxy {
       // Vetted here with the host's own rules, then sent as a call: only main
       // knows which worktrees this plugin may reach, and that refusal has to
       // reach the caller's `await`. Resolves once torn down, like setContext.
+      // A command stays in the authored namespace (instance = manifest), as a
+      // panel menu's does, so main's own qualification still applies.
       setWorktreeCardStatus: (worktreeId, status) => {
         if (this.disposed) return Promise.resolve();
-        const entry = validatePluginWorktreeCardStatus(worktreeId, status);
+        const entry = validatePluginWorktreeCardStatus(worktreeId, status, manifestId, manifestId);
         if (!entry.ok) {
           // Reject (not sync throw): runtime-surface Promise method (#10617).
           return Promise.reject(

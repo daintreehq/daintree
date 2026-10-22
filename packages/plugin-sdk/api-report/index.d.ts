@@ -2230,11 +2230,18 @@ type PluginPanelBadge = {
 /**
  * A short status a plugin shows on one worktree's card via
  * {@link PluginHostApi.setWorktreeCardStatus} (#13704): a one-line `label`
- * drawn as quiet metadata, and an optional `tooltip` with the detail.
+ * drawn as quiet metadata, an optional `tooltip` with the detail, and an
+ * optional `command` the chip runs when clicked.
  */
 interface PluginWorktreeCardStatus {
     label: string;
     tooltip?: string;
+    /**
+     * One of this plugin's own actions, written `"{manifestId}.{id}"` as in the
+     * manifest, dispatched with `{ worktreeId }` when the chip is clicked
+     * (#13776). The chip stays a plain status until the action is registered.
+     */
+    command?: string;
 }
 /** Value a plugin publishes to `when` clauses via {@link PluginHostApi.setContext}. */
 type PluginContextValue = boolean | string;
@@ -6159,6 +6166,13 @@ interface PluginHostApi extends PluginActivationApi {
      * the label is empty, multi-line or longer than
      * {@link PLUGIN_WORKTREE_CARD_STATUS_LABEL_MAX} characters, or the tooltip
      * longer than {@link PLUGIN_WORKTREE_CARD_STATUS_TOOLTIP_MAX}.
+     *
+     * An optional `command` makes the chip a button for one of the plugin's own
+     * actions, written `"{manifestId}.{id}"`: a click dispatches it with
+     * `{ worktreeId }`, the card's own id, so a declared `inputSchema` must
+     * accept that. A command in any other namespace, or one that names a
+     * built-in action, rejects. It need not be registered yet; until it is, the
+     * chip stays a plain status.
      *
      * Statuses are not persisted. They are cleared when the worktree is
      * removed, when its project closes, and when the plugin unloads or its

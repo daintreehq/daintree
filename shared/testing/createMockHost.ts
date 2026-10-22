@@ -2151,7 +2151,7 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
     async setWorktreeCardStatus(worktreeId, status) {
       // The host's own validator and worktree check, against whatever
       // `getWorktreesResult()` answers right now.
-      const entry = validatePluginWorktreeCardStatus(worktreeId, status);
+      const entry = validatePluginWorktreeCardStatus(worktreeId, status, mockManifestId, pluginId);
       if (!entry.ok) throw new Error(`setWorktreeCardStatus: ${entry.error}`);
       const result: PluginWorktreesResult = worktreesResult ?? {
         status: "ok",

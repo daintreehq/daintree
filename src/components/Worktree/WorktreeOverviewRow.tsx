@@ -43,9 +43,16 @@ import {
 } from "@/components/ui/context-menu";
 import { useWorktreeTerminals } from "@/hooks/useWorktreeTerminals";
 import { actionService } from "@/services/ActionService";
-import { suppressPaletteFocusRestore } from "@/components/ui/paletteFocusRestore";
+import {
+  deferPaletteFocusRestore,
+  suppressPaletteFocusRestore,
+} from "@/components/ui/paletteFocusRestore";
 import { copyContextWithFeedback } from "@/hooks/useWorktreeActions";
 import { FocusHandoffGuard } from "./FocusHandoffGuard";
+import {
+  WorktreePluginStatusChips,
+  useWorktreePluginStatuses,
+} from "./WorktreeCard/WorktreePluginStatusChips";
 import { getAgentConfig } from "@/config/agents";
 import type { ChipState } from "./utils/computeChipState";
 import { BranchLabel } from "./BranchLabel";
@@ -279,6 +286,7 @@ export function WorktreeOverviewRow({
   onFocusLost,
 }: WorktreeOverviewRowProps) {
   const marks = useSessionMarks(worktree.id);
+  const pluginStatuses = useWorktreePluginStatuses(worktree.id);
   const customTitle = useWorktreeFilterStore((state) => state.worktreeCustomTitles[worktree.id]);
   const headline = getWorktreeHeadline(worktree, customTitle);
   const branchLabel = getWorktreeBranchLabel(worktree);
@@ -550,6 +558,27 @@ export function WorktreeOverviewRow({
                   </span>
                 )}
               </div>
+              {/* Plugin statuses, the card's own chips (#13776). Aligned with
+                  the line above's text, past the chip's own padding. A chip
+                  that runs its command gets the overview out of the way as
+                  it starts, as the row's context-menu actions do. */}
+              {pluginStatuses.length > 0 && (
+                <div className="mt-1 flex min-w-0 flex-wrap items-center gap-1 pl-5">
+                  <WorktreePluginStatusChips
+                    worktreeId={worktree.id}
+                    statuses={pluginStatuses}
+                    tabIndex={-1}
+                    onBeforeRun={() => {
+                      // The palette refocuses its opener after its exit
+                      // animation, which would pull the keyboard off a view
+                      // the command just opened; restore only if nothing took it.
+                      deferPaletteFocusRestore((restore) => restore());
+                      onBeforeMenuAction();
+                    }}
+                    onFocusLost={onFocusLost}
+                  />
+                </div>
+              )}
             </div>
 
             {/* Sessions, as the sidebar draws them. Up to three are listed in

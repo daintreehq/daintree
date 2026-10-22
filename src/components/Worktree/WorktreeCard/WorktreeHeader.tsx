@@ -491,7 +491,7 @@ export function WorktreeHeader({
           without squeezing the headline out of the row above. */}
       {!isCollapsed && pluginStatuses.length > 0 && (
         <div className="mt-1.5 flex flex-wrap items-center gap-1 px-1">
-          <WorktreePluginStatusChips statuses={pluginStatuses} />
+          <WorktreePluginStatusChips worktreeId={worktree.id} statuses={pluginStatuses} />
         </div>
       )}
     </div>

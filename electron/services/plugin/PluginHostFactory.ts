@@ -2418,7 +2418,7 @@ export function createHost(
     // than guessing, and never prunes what is already shown.
     setWorktreeCardStatus: (worktreeId, status) => {
       if (!isBound()) return Promise.resolve();
-      const entry = validatePluginWorktreeCardStatus(worktreeId, status);
+      const entry = validatePluginWorktreeCardStatus(worktreeId, status, manifestId, pluginId);
       if (!entry.ok) {
         // Reject (not sync throw): runtime-surface Promise method (#10617).
         return Promise.reject(
