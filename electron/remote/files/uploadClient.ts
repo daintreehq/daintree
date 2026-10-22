@@ -393,7 +393,9 @@ export function createHostUploadClient(deps: HostUploadClientDeps): HostUploadCl
             if (code === "RATE_LIMITED" && busyRetries < MAX_BUSY_RETRIES) {
               const ceiling = Math.min(BUSY_RETRY_CAP_MS, BUSY_RETRY_BASE_MS * 2 ** busyRetries);
               busyRetries += 1;
-              if (!(await pause(Math.floor(random() * ceiling), controller.signal))) throw error;
+              if (!(await pause(Math.floor(random() * ceiling), controller.signal))) {
+                throw cancelled();
+              }
               continue;
             }
             // The link dropped mid-upload, or after the last byte with the
@@ -412,7 +414,7 @@ export function createHostUploadClient(deps: HostUploadClientDeps): HostUploadCl
                 controller.signal
               ))
             ) {
-              throw error;
+              throw controller.signal.aborted ? cancelled() : error;
             }
             reconciled += 1;
           }

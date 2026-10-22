@@ -1,4 +1,5 @@
 import type { HostId } from "../../../shared/types/remoteHosts.js";
+import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import type { TransferDestination, UploadResult } from "../../../shared/types/ipc/fileTransfer.js";
 import { AppError } from "../../utils/errorTypes.js";
 import type { LinkSession } from "../link/session.js";
@@ -92,40 +93,41 @@ function errorCode(error: unknown): string | null {
 
 /** A transfer-layer failure, restated for the person who dropped the file. */
 function sendFailure(error: unknown, name: string, hostLabel: string): Error {
+  // A failed prepare arrives rebuilt by the session rather than as this
+  // process's AppError; its code still decides whether the upload is resumed.
+  const message = formatErrorMessage(error, "Upload failed");
+  switch (errorCode(error)) {
+    case "CANCELLED":
+      return error instanceof AppError ? error : new AppError({ code: "CANCELLED", message });
+    case "HOST_DISCONNECTED":
+      return notConnected(hostLabel);
+    case "OUTCOME_UNKNOWN":
+      return new AppError({
+        code: "OUTCOME_UNKNOWN",
+        message,
+        userMessage: `The connection to ${hostLabel} dropped as ${name} finished sending. Drop it again to be sure it arrived.`,
+      });
+    case "RATE_LIMITED":
+      return new AppError({
+        code: "RATE_LIMITED",
+        message,
+        userMessage: `${hostLabel} is busy receiving other files. Try again in a moment.`,
+      });
+  }
   if (!(error instanceof AppError)) {
-    if (errorCode(error) === "HOST_DISCONNECTED") return notConnected(hostLabel);
     return new AppError({
       code: "INTERNAL",
       message: "Upload failed",
       userMessage: `Couldn't send ${name} to ${hostLabel}.`,
     });
   }
-  switch (error.code) {
-    case "CANCELLED":
-      return error;
-    case "HOST_DISCONNECTED":
-      return notConnected(hostLabel);
-    case "OUTCOME_UNKNOWN":
-      return new AppError({
-        code: "OUTCOME_UNKNOWN",
-        message: error.message,
-        userMessage: `The connection to ${hostLabel} dropped as ${name} finished sending. Drop it again to be sure it arrived.`,
-      });
-    case "RATE_LIMITED":
-      return new AppError({
-        code: "RATE_LIMITED",
-        message: error.message,
-        userMessage: `${hostLabel} is busy receiving other files. Try again in a moment.`,
-      });
-    default:
-      return new AppError({
-        code: error.code,
-        message: error.message,
-        userMessage: /checksum/i.test(error.message)
-          ? `${name} was damaged on the way to ${hostLabel}. Try again.`
-          : `Couldn't save ${name} on ${hostLabel}.`,
-      });
-  }
+  return new AppError({
+    code: error.code,
+    message: error.message,
+    userMessage: /checksum/i.test(error.message)
+      ? `${name} was damaged on the way to ${hostLabel}. Try again.`
+      : `Couldn't save ${name} on ${hostLabel}.`,
+  });
 }
 
 export class ClientUploadTransport {

@@ -584,15 +584,22 @@ describe("a busy or dropped host", () => {
     expect(upload).toHaveBeenCalledTimes(calls);
   });
 
-  it("stops waiting on a busy host when the upload is cancelled", async () => {
-    const { client, upload } = setup({ random: () => 0.99 });
-    upload.mockImplementation(failWith("RATE_LIMITED"));
-    const pending = send(client, "op-busy");
-    await vi.waitFor(() => expect(upload).toHaveBeenCalledTimes(1));
-    expect(client.cancel("op-busy", 7)).toBe(true);
-    await expect(pending).rejects.toBeTruthy();
-    await new Promise((resolve) => setTimeout(resolve, 600));
-    expect(upload).toHaveBeenCalledTimes(1);
+  it("stops waiting on a busy host the moment the upload is cancelled", async () => {
+    vi.useFakeTimers();
+    try {
+      const { client, upload } = setup({ random: () => 0.99 });
+      upload.mockImplementation(failWith("RATE_LIMITED"));
+      const outcome = send(client, "op-busy").catch((error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(upload).toHaveBeenCalledTimes(1);
+      expect(client.cancel("op-busy", 7)).toBe(true);
+      // Settles with the clock standing still: the retry wait is cut short, not waited out.
+      await expect(outcome).resolves.toMatchObject({ code: "CANCELLED" });
+      expect(vi.getTimerCount()).toBe(0);
+      expect(upload).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("resumes an upload its link cut off once the host is back, under the same id", async () => {
@@ -616,6 +623,57 @@ describe("a busy or dropped host", () => {
     upload.mockImplementation(failWith("HOST_DISCONNECTED"));
     await expect(send(client, "op-cut")).rejects.toMatchObject({ code: "HOST_DISCONNECTED" });
     expect(upload).toHaveBeenCalledTimes(1);
+  });
+
+  it("shares one budget between a dropped link and a lost answer", async () => {
+    const alone = setup({ whenReachable: async () => true });
+    alone.upload.mockImplementation(failWith("HOST_DISCONNECTED"));
+    await expect(send(alone.client, "op-cut")).rejects.toMatchObject({
+      code: "HOST_DISCONNECTED",
+    });
+
+    const { client, upload } = setup({ whenReachable: async () => true });
+    let calls = 0;
+    upload.mockImplementation(async () => {
+      calls += 1;
+      const code = calls % 2 === 1 ? "HOST_DISCONNECTED" : "OUTCOME_UNKNOWN";
+      throw Object.assign(new Error(code), { code });
+    });
+    await expect(send(client, "op-flaky")).rejects.toBeTruthy();
+    expect(upload).toHaveBeenCalledTimes(alone.upload.mock.calls.length);
+    expect(new Set(upload.mock.calls.map(([, , opts]) => opts.opId))).toEqual(
+      new Set(["op-flaky"])
+    );
+  });
+
+  it("starts queued uploads in the order they came", async () => {
+    const { upload } = setup();
+    const held = heldUploads(upload);
+    const uploads = createHostUploadClient({
+      transport: { upload },
+      hostForView: () => "studio-01",
+      hostLabel: (hostId) => hostId,
+      sendToView: () => {},
+      localLabel: "This Mac",
+      maxConcurrentPerHost: 1,
+    });
+    const outcomes = ["op-a", "op-b", "op-c", "op-d"].map((opId) =>
+      uploads.uploadBytes(7, bytesFor(opId)).catch((error: unknown) => error)
+    );
+    await vi.waitFor(() => expect(held.running()).toEqual(["op-a"]));
+    expect(uploads.cancel("op-c", 7)).toBe(true);
+    held.finish("op-a");
+    await vi.waitFor(() => expect(held.running()).toEqual(["op-a", "op-b"]));
+    held.finish("op-b");
+    await vi.waitFor(() => expect(held.running()).toEqual(["op-a", "op-b", "op-d"]));
+    held.finish("op-d");
+    const settled = await Promise.all(outcomes);
+    expect(settled[2]).toMatchObject({ code: "CANCELLED" });
+    expect([settled[0], settled[1], settled[3]]).toEqual([
+      expect.objectContaining({ hostPath: "/tmp/op-a.bin" }),
+      expect.objectContaining({ hostPath: "/tmp/op-b.bin" }),
+      expect.objectContaining({ hostPath: "/tmp/op-d.bin" }),
+    ]);
   });
 
   it("gives up on a link that keeps dropping", async () => {
