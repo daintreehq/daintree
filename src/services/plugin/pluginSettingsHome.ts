@@ -34,8 +34,21 @@ export function pluginDeclaresSettingsView(plugin: LoadedPluginInfo): boolean {
  */
 export function pluginHasSettings(plugin: LoadedPluginInfo): boolean {
   return (
-    (plugin.manifest.contributes.settings?.length ?? 0) > 0 || pluginDeclaresSettingsView(plugin)
+    (plugin.manifest.contributes.settings?.length ?? 0) > 0 ||
+    pluginDeclaresSettingsView(plugin) ||
+    plugin.manifest.contributes.account !== undefined
   );
+}
+
+/**
+ * Where a plugin's `contributes.account` row lives, or `null` when it declares
+ * none. A project plugin's account belongs to its project; an installed
+ * plugin's is this machine's, so it sits with the plugin's own settings in the
+ * plugin manager.
+ */
+export function accountHomeOf(plugin: LoadedPluginInfo): PluginSettingsHome | null {
+  if (plugin.manifest.contributes.account === undefined) return null;
+  return plugin.origin === "project" ? "project" : "manager";
 }
 
 /**
@@ -112,7 +125,9 @@ export function resolvePluginSettingsTarget(
     home = settingScopeOf(def) === "user" ? "manager" : "project";
   } else {
     const managerHasContent =
-      settingsForHome(plugin, "manager").length > 0 || pluginDeclaresSettingsView(plugin);
+      settingsForHome(plugin, "manager").length > 0 ||
+      pluginDeclaresSettingsView(plugin) ||
+      accountHomeOf(plugin) === "manager";
     home = managerHasContent ? "manager" : "project";
   }
   if (home === "project" && projectId === null) return { ok: false, reason: "needs-project" };

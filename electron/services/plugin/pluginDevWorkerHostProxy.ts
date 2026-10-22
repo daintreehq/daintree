@@ -23,6 +23,8 @@ import type {
   PluginIpcHandler,
   PluginMcpToolDefinition,
   PluginSettingsScope,
+  PluginAccountAccessToken,
+  PluginAccountState,
   PluginStorageScope,
   PluginToastOptions,
   PluginNotifyOptions,
@@ -343,7 +345,13 @@ export class PluginDevWorkerHostProxy {
         const cb = this.subscriptions.get(msg.subscriptionId);
         if (cb) {
           try {
-            cb(msg.payload);
+            const result: unknown = cb(msg.payload);
+            // An async callback's rejection is the same failure as a throw.
+            if (result instanceof Promise) {
+              result.catch((err: unknown) =>
+                console.error(`[plugin-dev:${this.pluginId}] subscription callback threw:`, err)
+              );
+            }
           } catch (err) {
             console.error(`[plugin-dev:${this.pluginId}] subscription callback threw:`, err);
           }
@@ -1721,6 +1729,20 @@ export class PluginDevWorkerHostProxy {
       documents: {
         renderPdf: (options) =>
           this.call<PluginRenderPdfResult>("documents.renderPdf", { options }),
+      },
+      account: {
+        getState: () => this.call<PluginAccountState>("account.getState", {}),
+        getAccessToken: () =>
+          this.call<PluginAccountAccessToken | null>("account.getAccessToken", {}),
+        onDidChange: (callback) => {
+          if (typeof callback !== "function") {
+            throw new Error(
+              `Plugin "${this.pluginId}" account.onDidChange: callback must be a function`
+            );
+          }
+          if (this.disposed) return () => {};
+          return this.subscribe("account", (payload) => callback(payload as PluginAccountState));
+        },
       },
       settings: {
         // Forward an omitted scope as `undefined` (not a defaulted "user") so the

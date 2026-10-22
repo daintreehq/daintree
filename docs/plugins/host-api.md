@@ -1376,6 +1376,20 @@ A project plugin's `"project"` and `"local"` scopes always mean its own project.
 
 **Your own settings view.** A setting declared `editor: "view"` is left out of the generated form and edited by your `location: "settings"` view instead, through the same `get` and `set` — see [Views → A settings section](./views.md#a-settings-section).
 
+## `account` — host-managed sign-in
+
+For a plugin that declares [`contributes.account`](./manifest.md#contributes). The user connects and disconnects from the row the host draws in the plugin's settings; nothing on `host.account` can start a sign-in or store a token.
+
+| Member | Returns |
+| --- | --- |
+| `getState()` | `{ connected, identity }` — `identity` is the reported name or `null` |
+| `getAccessToken()` | `{ accessToken, expiresAt }` or `null` when not connected |
+| `onDidChange(callback)` | A disposer. Called with the new state on connect, disconnect and a new identity |
+
+Ask `getAccessToken()` each time you need a token rather than keeping one. Within 60 seconds of expiry the host refreshes it first, one refresh per account however many callers ask. A refresh the service refuses with `invalid_grant` disconnects the account and resolves `null`; a refresh that fails for a reason that may pass (offline, a server error) rejects and leaves the account connected. `expiresAt` is epoch milliseconds, or `null` when the service gave no lifetime. The refresh token never leaves the host, and an account connected under an earlier `contributes.account` (a different token URL, client id or scopes) reads as disconnected until the user connects again.
+
+`getState()` and `getAccessToken()` reject when the manifest declares no account, and after the plugin unloads; `onDidChange` then never calls back. An installed plugin has one account on the machine; a project plugin's account belongs to its project.
+
 ## `storage` — private key/value storage
 
 The machine-owned counterpart to `settings`: persist a plugin's own working state without declaring every key in `contributes.settings` and without it surfacing in the settings UI.

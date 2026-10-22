@@ -781,6 +781,9 @@ export interface GeneratedElectronAPI {
     backupDatabases(
       ...args: IpcInvokeMap["plugin:backup-databases"]["args"]
     ): Promise<IpcInvokeMap["plugin:backup-databases"]["result"]>;
+    cancelAccountConnect(
+      ...args: IpcInvokeMap["plugin:account-cancel-connect"]["args"]
+    ): Promise<IpcInvokeMap["plugin:account-cancel-connect"]["result"]>;
     cancelInstall(
       ...args: IpcInvokeMap["plugin:cancel-install"]["args"]
     ): Promise<IpcInvokeMap["plugin:cancel-install"]["result"]>;
@@ -793,15 +796,24 @@ export interface GeneratedElectronAPI {
     clearAuditLog(
       ...args: IpcInvokeMap["plugin:clear-audit-log"]["args"]
     ): Promise<IpcInvokeMap["plugin:clear-audit-log"]["result"]>;
+    connectAccount(
+      ...args: IpcInvokeMap["plugin:account-connect"]["args"]
+    ): Promise<IpcInvokeMap["plugin:account-connect"]["result"]>;
     contextMenuItems(
       ...args: IpcInvokeMap["plugin:context-menu-items"]["args"]
     ): Promise<IpcInvokeMap["plugin:context-menu-items"]["result"]>;
     deleteSettingValue(
       ...args: IpcInvokeMap["plugin:settings-delete-value"]["args"]
     ): Promise<IpcInvokeMap["plugin:settings-delete-value"]["result"]>;
+    disconnectAccount(
+      ...args: IpcInvokeMap["plugin:account-disconnect"]["args"]
+    ): Promise<IpcInvokeMap["plugin:account-disconnect"]["result"]>;
     exportAuditLog(
       ...args: IpcInvokeMap["plugin:export-audit-log"]["args"]
     ): Promise<IpcInvokeMap["plugin:export-audit-log"]["result"]>;
+    getAccountStatus(
+      ...args: IpcInvokeMap["plugin:account-status"]["args"]
+    ): Promise<IpcInvokeMap["plugin:account-status"]["result"]>;
     getActions(
       ...args: IpcInvokeMap["plugin:actions-get"]["args"]
     ): Promise<IpcInvokeMap["plugin:actions-get"]["result"]>;
@@ -913,6 +925,9 @@ export interface GeneratedElectronAPI {
     revealSecretSetting(
       ...args: IpcInvokeMap["plugin:settings-reveal-secret"]["args"]
     ): Promise<IpcInvokeMap["plugin:settings-reveal-secret"]["result"]>;
+    setAccountToken(
+      ...args: IpcInvokeMap["plugin:account-set-token"]["args"]
+    ): Promise<IpcInvokeMap["plugin:account-set-token"]["result"]>;
     setAuditEnabled(
       ...args: IpcInvokeMap["plugin:set-audit-enabled"]["args"]
     ): Promise<IpcInvokeMap["plugin:set-audit-enabled"]["result"]>;

@@ -2068,6 +2068,40 @@ interface PluginMcpApi {
      */
     registerTools(endpointId: string, tools: Record<string, PluginMcpToolDefinition>): Promise<() => void>;
 }
+/** What a plugin hears about its account. Never carries a token. */
+interface PluginAccountState {
+    connected: boolean;
+    /** The name the service reported, when the manifest declares `identity` and it answered. */
+    identity: string | null;
+}
+/** A current access token for the plugin's account. The refresh token never leaves the host. */
+interface PluginAccountAccessToken {
+    accessToken: string;
+    /** Epoch ms the token expires at, or `null` when the service didn't say. */
+    expiresAt: number | null;
+}
+/**
+ * `host.account` — the plugin's side of its host-managed account. Signing in
+ * and out happens only from the host's own settings row.
+ */
+interface PluginAccountApi {
+    /** Whether the account is connected, and as whom. */
+    getState(): Promise<PluginAccountState>;
+    /**
+     * A current access token, refreshed first when it is about to expire, or
+     * `null` when the account isn't connected (including after the service
+     * refused a refresh, which disconnects it). Ask each time you need one;
+     * don't keep it. Rejects when the plugin declares no `contributes.account`,
+     * or when a refresh fails for a reason that may pass (offline, server error).
+     */
+    getAccessToken(): Promise<PluginAccountAccessToken | null>;
+    /**
+     * Called when the account connects, disconnects or reports a new identity.
+     * Returns a disposer; every subscription is disposed when the plugin unloads.
+     * Without a declared account nothing ever changes, so the callback never runs.
+     */
+    onDidChange(callback: (state: PluginAccountState) => void | Promise<void>): () => void;
+}
 /**
  * Field control kind for a {@link SettingDefinition}. Drives which input the
  * generated settings form renders (#9301):
@@ -5049,6 +5083,13 @@ interface PluginHostApi extends PluginActivationApi {
      */
     readonly settings: SettingsApi;
     /**
+     * The host-managed account declared in `contributes.account`. See
+     * {@link PluginAccountApi}. NOT revoke-guarded: plugins ask for a token from
+     * timers and callbacks. `getState` and `getAccessToken` reject when the
+     * manifest declares no account, and once the plugin is unloaded.
+     */
+    readonly account: PluginAccountApi;
+    /**
      * Private, plugin-scoped key/value storage — the machine-owned counterpart to
      * {@link settings}. Values never surface in the settings UI and are not gated
      * by `contributes.settings` declarations. Plaintext JSON, three scopes
@@ -5473,6 +5514,17 @@ interface MockHostState {
      */
     simulateListenersChange(channel: string, hasListeners: boolean): void;
     /**
+     * Connect or disconnect the plugin's `host.account` as the user would from
+     * the settings row, and call every `account.onDidChange` subscriber. Pass an
+     * `accessToken` to change what `getAccessToken()` answers while connected.
+     */
+    simulateAccountChange(account: ({
+        connected: true;
+        identity?: string | null;
+    } & Partial<PluginAccountAccessToken>) | {
+        connected: false;
+    }): void;
+    /**
      * Pre-seed a deterministic `dispatch()` result for one action id. Overrides
      * the default in-memory routing (which resolves the registered handler).
      */
@@ -5604,6 +5656,15 @@ interface CreateMockHostOptions {
      * by default (the mock has no manifest model), which accepts any non-empty id.
      */
     toolbarButtonIds?: readonly string[];
+    /**
+     * Seed `host.account`. Omitted, the account starts disconnected. The mock
+     * models a plugin that declares `contributes.account`.
+     */
+    account?: {
+        identity?: string | null;
+        accessToken?: string;
+        expiresAt?: number | null;
+    };
     /** Pre-seed private `host.storage` values per scope. */
     storage?: {
         user?: Record<string, unknown>;

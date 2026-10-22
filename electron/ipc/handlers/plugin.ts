@@ -98,6 +98,8 @@ import type {
   PluginBackgroundUpdateCheckSettings,
   PluginSettingsScope,
   PluginSettingsUiValues,
+  PluginAccountConnectResult,
+  PluginAccountUiStatus,
   PluginRequiredSettingsStatus,
   PluginPickPathRequest,
   PluginWorktreeStatus,
@@ -1789,6 +1791,71 @@ async function handleSettingsRevealSecret(
 }
 
 /**
+ * The account channels name only the plugin. A project plugin's account
+ * belongs to its project, so only that project's views may see or change it;
+ * an installed plugin's account is this machine's, like its user settings.
+ */
+function assertSenderOwnsAccount(ctx: IpcContext, pluginId: unknown): asserts pluginId is string {
+  if (typeof pluginId !== "string" || !isSafePluginInstanceId(pluginId)) {
+    throw new Error("plugin account rejected: invalid plugin id");
+  }
+  const boundProjectId = projectIdFromPluginInstanceKey(pluginId);
+  if (boundProjectId !== null && boundProjectId !== ctx.projectId) {
+    throw new Error("plugin account rejected: plugin belongs to a different project");
+  }
+}
+
+async function handleAccountStatus(
+  ctx: IpcContext,
+  pluginId: string
+): Promise<PluginAccountUiStatus | null> {
+  assertSenderOwnsAccount(ctx, pluginId);
+  return (await getPluginService()).getAccountStatusForUi(pluginId);
+}
+
+/**
+ * Signing in needs the browser and the keychain on one machine. The channels
+ * are hybrid with no split, so the dispatcher already refuses a remote-bound
+ * window; this holds for a link call that reaches the handler anyway.
+ */
+function assertLocalSignIn(ctx: IpcContext): void {
+  if (isRemoteCaller(ctx)) {
+    throw new Error(
+      "Connect this account from a Daintree window on the machine the plugin runs on"
+    );
+  }
+}
+
+async function handleAccountConnect(
+  ctx: IpcContext,
+  pluginId: string
+): Promise<PluginAccountConnectResult> {
+  assertSenderOwnsAccount(ctx, pluginId);
+  assertLocalSignIn(ctx);
+  return (await getPluginService()).connectAccountFromUi(pluginId);
+}
+
+async function handleAccountCancelConnect(ctx: IpcContext, pluginId: string): Promise<void> {
+  assertSenderOwnsAccount(ctx, pluginId);
+  (await getPluginService()).cancelAccountConnectFromUi(pluginId);
+}
+
+async function handleAccountSetToken(
+  ctx: IpcContext,
+  pluginId: string,
+  token: string
+): Promise<PluginAccountUiStatus> {
+  assertSenderOwnsAccount(ctx, pluginId);
+  assertLocalSignIn(ctx);
+  return (await getPluginService()).setAccountTokenFromUi(pluginId, token);
+}
+
+async function handleAccountDisconnect(ctx: IpcContext, pluginId: string): Promise<void> {
+  assertSenderOwnsAccount(ctx, pluginId);
+  await (await getPluginService()).disconnectAccountFromUi(pluginId);
+}
+
+/**
  * Which declared `required` settings `pluginId` still has unset (and which
  * couldn't be read), against the sender's own project. Ids only — never a value
  * — so this is safe to poll from every open panel of the plugin.
@@ -2213,6 +2280,23 @@ export const pluginNamespace = defineIpcNamespace({
       handleSettingsRequiredStatus,
       { withContext: true }
     ),
+    getAccountStatus: op(PLUGIN_METHOD_CHANNELS.getAccountStatus, handleAccountStatus, {
+      withContext: true,
+    }),
+    connectAccount: op(PLUGIN_METHOD_CHANNELS.connectAccount, handleAccountConnect, {
+      withContext: true,
+    }),
+    cancelAccountConnect: op(
+      PLUGIN_METHOD_CHANNELS.cancelAccountConnect,
+      handleAccountCancelConnect,
+      { withContext: true }
+    ),
+    setAccountToken: op(PLUGIN_METHOD_CHANNELS.setAccountToken, handleAccountSetToken, {
+      withContext: true,
+    }),
+    disconnectAccount: op(PLUGIN_METHOD_CHANNELS.disconnectAccount, handleAccountDisconnect, {
+      withContext: true,
+    }),
     pickPath: op(PLUGIN_METHOD_CHANNELS.pickPath, handlePickPath, { withContext: true }),
     pathExists: op(PLUGIN_METHOD_CHANNELS.pathExists, handlePathExists),
     backupDatabases: op(PLUGIN_METHOD_CHANNELS.backupDatabases, handleBackupDatabases, {

@@ -1609,6 +1609,26 @@ export interface GeneratedIpcInvokeMap {
     args: [pluginId?: string | undefined];
     result: import("./pluginProcess.js").PluginProcessInfo[];
   };
+  "plugin:account-cancel-connect": {
+    args: [pluginId: string];
+    result: void;
+  };
+  "plugin:account-connect": {
+    args: [pluginId: string];
+    result: import("../plugin.js").PluginAccountConnectResult;
+  };
+  "plugin:account-disconnect": {
+    args: [pluginId: string];
+    result: void;
+  };
+  "plugin:account-set-token": {
+    args: [pluginId: string, token: string];
+    result: import("../plugin.js").PluginAccountUiStatus;
+  };
+  "plugin:account-status": {
+    args: [pluginId: string];
+    result: import("../plugin.js").PluginAccountUiStatus | null;
+  };
   "plugin:actions-get": {
     args: [];
     result: import("../plugin.js").PluginActionDescriptor[];
