@@ -527,9 +527,9 @@ function KitMarkdownEditor({
       spellCheck
       onChange={(event: ChangeEvent<HTMLTextAreaElement>) => setText(event.target.value)}
       onKeyDown={onKeyDown}
-      // The frame draws the field's ring; the text area is its content.
-      // eslint-disable-next-line component-contract/no-unpaired-outline-suppression -- the frame rings it through has-[textarea:focus-visible]
       className={cn(
+        // The frame draws the field's ring; the text area is its content.
+        // eslint-disable-next-line component-contract/no-unpaired-outline-suppression -- the frame rings it through has-[textarea:focus-visible]
         "block rounded-none border-0 bg-transparent focus-visible:outline-hidden disabled:opacity-100",
         filling && "h-full overflow-y-auto"
       )}
