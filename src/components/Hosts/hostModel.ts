@@ -280,10 +280,10 @@ export function hostMenuNoteAge(row: HostMenuRow): { prefix: string; at: number 
   if (connection.status === "connected" && connection.quietSince !== undefined) {
     return { prefix: "Last heard ", at: connection.quietSince };
   }
+  // The same rows describeHostMenuState gives a last-seen note: not one ssh refused.
   if (
     connection.status === "unreachable" &&
-    !connection.hostModeOff &&
-    !connection.stoppedRetrying &&
+    (connection.hostModeOff === true || !connection.stoppedRetrying) &&
     row.lastSeenAt !== null
   ) {
     return { prefix: "Last seen ", at: row.lastSeenAt };

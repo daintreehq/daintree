@@ -13,6 +13,7 @@ import {
   describeHostRowStatus,
   hostChipStatus,
   hostChipStatusText,
+  hostMenuNoteAge,
   updateActionLabel,
   updateTargetFor,
 } from "../hostModel";
@@ -178,6 +179,9 @@ describe("describeHostRowStatus", () => {
       state: "Not listening",
       note: "Last seen 20 minutes ago",
     });
+    // Drawn as a live time like an unreachable host's, never as frozen text.
+    expect(hostMenuNoteAge(seen!)).toEqual({ prefix: "Last seen ", at: lastSeen });
+    expect(hostMenuNoteAge(row!)).toBeNull();
   });
 
   it("says a host connected best effort runs a different build, with or without numbers", () => {
