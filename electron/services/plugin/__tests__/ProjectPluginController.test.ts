@@ -170,18 +170,161 @@ describe("trust gate", () => {
     expect(h.controller.getTrustState(PROJECT_A).persisted).toBe(false);
   });
 
-  it("a session grant does not survive a close", async () => {
+  it("a session grant survives a close, a sleep or an idle auto-close (#13843)", async () => {
     h.setDiscovery(ROOT_A, [discovered("acme.dashboard")]);
     await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
     await h.controller.setTrust(PROJECT_A, "session");
+
+    for (let reopen = 0; reopen < 2; reopen++) {
+      // A second close notification for the same project finds no entry and
+      // must leave the retained grant alone.
+      await h.controller.onProjectClosed(PROJECT_A);
+      await h.controller.onProjectClosed(PROJECT_A);
+      expect(h.controller.getTrustState(PROJECT_A)).toEqual({
+        projectId: PROJECT_A,
+        decision: "session",
+        enabled: true,
+        persisted: false,
+      });
+
+      h.deps.loadProjectPlugin.mockClear();
+      h.events.length = 0;
+      await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+
+      expect(h.deps.loadProjectPlugin).toHaveBeenCalledTimes(1);
+      expect(h.events.some((e) => e.name === "plugin:project-trust-prompt")).toBe(false);
+      expect(h.controller.getTrustState(PROJECT_A).decision).toBe("session");
+    }
+    expect(h.deps.writeTrust).not.toHaveBeenCalled();
+  });
+});
+
+describe("a session grant across a close (#13843)", () => {
+  function loadedNames(): string[] {
+    return h.deps.loadProjectPlugin.mock.calls.map(
+      (call) => (call[0] as { manifest: PluginManifest }).manifest.name
+    );
+  }
+
+  async function grantSessionThenClose(plugins: DiscoveredProjectPlugin[]): Promise<void> {
+    h.setDiscovery(ROOT_A, plugins);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    await h.controller.setTrust(PROJECT_A, "session");
+    await h.controller.onProjectClosed(PROJECT_A);
+    h.deps.loadProjectPlugin.mockClear();
+    h.events.length = 0;
+  }
+
+  it("stages a plugin that appeared while the project was closed", async () => {
+    await grantSessionThenClose([discovered("acme.dashboard")]);
+
+    h.setDiscovery(ROOT_A, [discovered("acme.dashboard"), discovered("acme.newcomer")]);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+
+    expect(loadedNames()).toEqual(["acme.dashboard"]);
+    const staged = h.events.filter((e) => e.name === "plugin:project-plugin-staged");
+    expect(staged.map((e) => (e.payload as { pluginId: string }).pluginId)).toEqual([
+      "acme.newcomer",
+    ]);
+    expect(h.events.some((e) => e.name === "plugin:project-trust-prompt")).toBe(false);
+
+    // The stage is part of the grant now: declined, it stays declined.
+    await h.controller.onProjectClosed(PROJECT_A);
+    h.events.length = 0;
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    expect(h.events.some((e) => e.name === "plugin:project-plugin-staged")).toBe(false);
+    expect(h.deps.writeTrust).not.toHaveBeenCalled();
+  });
+
+  it("keeps a muted plugin muted", async () => {
+    h.setDiscovery(ROOT_A, [discovered("acme.dashboard"), discovered("acme.deploy")]);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    await h.controller.setTrust(PROJECT_A, "session");
+    await h.controller.setMuted(PROJECT_A, "acme.dashboard", true);
     await h.controller.onProjectClosed(PROJECT_A);
 
+    h.deps.loadProjectPlugin.mockClear();
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+
+    expect(loadedNames()).toEqual(["acme.deploy"]);
+  });
+
+  it("outranks a remembered no without overwriting it", async () => {
+    const disabled: ProjectPluginTrustRecord = {
+      decision: "disabled",
+      decidedAt: 1,
+      knownPluginIds: ["acme.dashboard"],
+      stagedPluginIds: [],
+      mutedPluginIds: [],
+    };
+    h.trust.set(PROJECT_A, disabled);
+    await grantSessionThenClose([discovered("acme.dashboard")]);
+
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+
+    expect(loadedNames()).toEqual(["acme.dashboard"]);
+    expect(h.trust.get(PROJECT_A)).toEqual(disabled);
+  });
+
+  it("survives the sweep of a project closed behind the controller's back", async () => {
+    await grantSessionThenClose([discovered("acme.dashboard")]);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+
+    h.setDiscovery(ROOT_B, []);
+    h.deps.isProjectClosed.mockImplementation((id: string) => id === PROJECT_A);
+    await h.controller.onProjectOpened(PROJECT_B, ROOT_B);
+    expect(h.controller.loadedInstanceKeys()).toEqual([]);
+
+    h.deps.isProjectClosed.mockReturnValue(false);
     h.deps.loadProjectPlugin.mockClear();
     h.events.length = 0;
     await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
 
+    expect(loadedNames()).toEqual(["acme.dashboard"]);
+    expect(h.events.some((e) => e.name === "plugin:project-trust-prompt")).toBe(false);
+  });
+
+  it("is forgotten by a revoke that lands after the close", async () => {
+    h.setDiscovery(ROOT_A, [discovered("acme.dashboard")]);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    await h.controller.setTrust(PROJECT_A, "session");
+
+    // The close is queued first, so the revoke's task finds no entry — only
+    // the grant the close set aside.
+    const closing = h.controller.onProjectClosed(PROJECT_A);
+    const revoking = h.controller.setTrust(PROJECT_A, "disabled");
+    await closing;
+    await revoking;
+
+    expect(h.controller.getTrustState(PROJECT_A).decision).toBe("disabled");
+    h.deps.loadProjectPlugin.mockClear();
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
     expect(h.deps.loadProjectPlugin).not.toHaveBeenCalled();
-    expect(h.events.some((e) => e.name === "plugin:project-trust-prompt")).toBe(true);
+  });
+
+  it("is not created by a session click that loses to a close", async () => {
+    h.setDiscovery(ROOT_A, [discovered("acme.dashboard")]);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+
+    const closing = h.controller.onProjectClosed(PROJECT_A);
+    const granting = h.controller.setTrust(PROJECT_A, "session");
+    await closing;
+    await expect(granting).rejects.toThrow(/closed before the decision was saved/);
+
+    expect(h.controller.getTrustState(PROJECT_A).decision).toBeNull();
+  });
+
+  it("ends with the controller", async () => {
+    await grantSessionThenClose([discovered("acme.dashboard")]);
+
+    h.controller.dispose();
+
+    expect(h.controller.getTrustState(PROJECT_A)).toEqual({
+      projectId: PROJECT_A,
+      decision: null,
+      enabled: false,
+      persisted: false,
+    });
   });
 });
 
