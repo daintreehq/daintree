@@ -57,9 +57,11 @@ import {
   panelHoldKey,
 } from "@/store/memoryPressureWaitStore";
 import {
+  cancelDriveLeaseHold,
   clearPanelDriveLeaseMark,
   drivesProject,
   holdForDriveLease,
+  markPanelDriveLeaseLaunch,
   watchesProject,
 } from "@/store/driveLeaseWaitStore";
 import { getDriveLeaseSnapshot } from "@/services/terminal/inputGate";
@@ -1134,6 +1136,9 @@ export const createAddPanelActions = (
       spawnedBy: options.spawnedBy,
       resumedFromSessionId: options.agentSessionId,
     });
+    // A launch of this id supersedes any earlier one still waiting for control.
+    cancelDriveLeaseHold(id);
+    clearPanelDriveLeaseMark(id);
     if (isReconnect) {
       // Mark this generation as restore-born so the stale-restore guard above
       // can tell an idempotent re-merge from a clobbering one.
@@ -1326,6 +1331,9 @@ export const createAddPanelActions = (
     // offers.
     const holdsForMemoryPressure =
       Boolean(launchAgentId) && location !== "overlay" && location !== "dialog";
+    // Any pane waits for control of its project (#13913), save the assistant
+    // and dialog panes, whose own surfaces handle a launch that didn't start.
+    const holdsForDriveLease = location !== "overlay" && location !== "dialog";
     const isStillStarting = (): boolean => {
       const current = get().panelsById[id];
       return (
@@ -1367,13 +1375,15 @@ export const createAddPanelActions = (
         controlArrived = false
       ): Promise<void> {
         if (resumed) clearPanelMemoryPressureMark(id);
+        // Set once this run hands the launch on (to a hold or a retry), which
+        // then owns the pane's mark.
+        let handedOn = false;
         // Held outside the queue until this view drives the project (#13913):
         // the host refuses a spawn from a view that only watches, and a refusal
         // left standing would cost a restore its resume. It continues with the
         // launch it was given, command and session id included.
-        let waiting = false;
         const waitForControl = (projectId: string): void => {
-          waiting = true;
+          handedOn = true;
           holdForDriveLease(id, {
             projectId,
             resume: () => terminalStartupQueue.requeue(() => startPty(launchAnyway, false, true)),
@@ -1388,9 +1398,17 @@ export const createAddPanelActions = (
         // successor's mark, and gone before the attach wait, which needs the
         // terminal on screen.
         const settleControl = (): void => {
-          if (controlArrived && !waiting && agentLifecycleLedger.isCurrent(id, launchGeneration)) {
+          if (controlArrived && !handedOn && agentLifecycleLedger.isCurrent(id, launchGeneration)) {
             clearPanelDriveLeaseMark(id);
           }
+        };
+        // A released launch whose pane was closed before its turn goes back to
+        // waiting in the trash rather than starting unseen.
+        const waitInTrash = (): boolean => {
+          if (!controlArrived || !capturedWorkspaceId) return false;
+          if (get().panelsById[id]?.location !== "trash") return false;
+          waitForControl(capturedWorkspaceId);
+          return true;
         };
         const _p0 = get().panelsById[id];
         if (!_p0 || !isPtyPanel(_p0) || _p0.spawnStatus !== "spawning") {
@@ -1437,21 +1455,33 @@ export const createAddPanelActions = (
             }
           }
 
-          if (controlArrived) {
-            // The driver may have started this very terminal while the launch
-            // waited (its own restore of the same pane): attach to it rather
-            // than spawn over it. A failed probe says nothing, so the spawn goes.
+          if (waitInTrash()) return;
+          // A launch that waited, for control or for memory, in a view that
+          // follows a drive lease: the driver may have started this very
+          // terminal meanwhile (its own restore of the same pane), so attach to
+          // it rather than spawn over it. A failed probe says nothing, so the
+          // spawn goes.
+          if (
+            holdsForDriveLease &&
+            (controlArrived || resumed) &&
+            getDriveLeaseSnapshot() !== null
+          ) {
             const onHost = await terminalClient.reconnect(id).catch(() => null);
             if (!isStillStarting()) return;
             if (onHost?.exists && onHost.hasPty !== false && onHost.isTrashed !== true) {
               adoptHostTerminal();
               return;
             }
+            if (waitInTrash()) return;
           }
           // Another screen has control of the project, so the host would refuse
           // the spawn: it waits for control instead of failing.
           leaseAtSpawn = getDriveLeaseSnapshot();
-          if (capturedWorkspaceId && watchesProject(leaseAtSpawn, capturedWorkspaceId)) {
+          if (
+            holdsForDriveLease &&
+            capturedWorkspaceId &&
+            watchesProject(leaseAtSpawn, capturedWorkspaceId)
+          ) {
             if (isStillStarting()) waitForControl(capturedWorkspaceId);
             return;
           }
@@ -1610,6 +1640,7 @@ export const createAddPanelActions = (
           // nothing on screen would explain the wait. Control that arrived
           // while the refusal travelled gets one more attempt at once.
           if (
+            holdsForDriveLease &&
             isClientAppError(error) &&
             error.code === "DRIVEN_ELSEWHERE" &&
             capturedWorkspaceId &&
@@ -1621,6 +1652,9 @@ export const createAddPanelActions = (
               return;
             }
             if (lease !== leaseAtSpawn) {
+              // Marked until the retry has its answer, as a released launch is.
+              handedOn = true;
+              markPanelDriveLeaseLaunch(id);
               terminalStartupQueue.requeue(() => startPty(launchAnyway, false, true));
               return;
             }

@@ -240,6 +240,8 @@ export const createCorePanelActions = (
 
       if (panelKindHasPty(terminal.kind ?? "terminal")) {
         recordLedgerClose(id, "trash-emptied");
+        cancelDriveLeaseHold(id);
+        clearPanelDriveLeaseMark(id);
         terminalClient.kill(id).catch((error) => {
           logError("[TerminalStore] Failed to kill terminal", error);
         });

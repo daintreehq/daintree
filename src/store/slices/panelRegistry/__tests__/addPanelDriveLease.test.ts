@@ -44,8 +44,9 @@ vi.mock("@/clients", () => ({
   },
 }));
 
+const isMemoryPressureCriticalMock = vi.hoisted(() => vi.fn<() => Promise<boolean>>());
 vi.mock("@/clients/systemClient", () => ({
-  systemClient: { isMemoryPressureCritical: vi.fn().mockResolvedValue(false) },
+  systemClient: { isMemoryPressureCritical: isMemoryPressureCriticalMock },
 }));
 
 vi.mock("@/services/TerminalInstanceService", () => ({
@@ -98,6 +99,8 @@ const { resetDriveLeaseHoldsForTesting, useDriveLeaseWaitStore } =
   await import("@/store/driveLeaseWaitStore");
 const { ClientAppError } = await import("@/utils/clientAppError");
 const { terminalInstanceService } = await import("@/services/TerminalInstanceService");
+const { launchDespiteMemoryPressure, panelHoldKey, resetMemoryPressureHoldsForTesting } =
+  await import("@/store/memoryPressureWaitStore");
 
 function getPtyPanel(id: string): PtyPanelData | undefined {
   const panel = usePanelStore.getState().panelsById[id];
@@ -165,9 +168,13 @@ describe("launches the drive lease blocks (#13913)", () => {
     terminalClient.reconnect.mockResolvedValue({ exists: false });
     terminalClient.kill.mockClear();
     vi.mocked(terminalInstanceService.fetchAndRestore).mockClear();
+    isMemoryPressureCriticalMock.mockReset();
+    isMemoryPressureCriticalMock.mockResolvedValue(false);
+    resetMemoryPressureHoldsForTesting();
   });
 
   afterEach(() => {
+    resetMemoryPressureHoldsForTesting();
     resetDriveLeaseHoldsForTesting();
     _resetTerminalInputGateForTesting();
   });
@@ -404,6 +411,116 @@ describe("launches the drive lease blocks (#13913)", () => {
 
     expect(spawnedIds()).toEqual(["crossed-1", "crossed-1"]);
     expect(getPtyPanel("crossed-1")?.spawnStatus).toBe("ready");
+  });
+
+  it("keeps a restart off the retry of a refusal that crossed control on its way", async () => {
+    // Nothing known about the lease yet, so the first attempt goes out unmarked.
+    let refuse: () => void = () => {};
+    terminalClient.spawn.mockImplementationOnce(
+      () =>
+        new Promise((_resolve, reject) => {
+          refuse = () => reject(refusal());
+        })
+    );
+    await restoreAgent("crossed-2");
+    await drainMicrotasks();
+    setDriveLeaseSnapshot(lease(true));
+
+    let finishRetry: () => void = () => {};
+    terminalClient.spawn.mockImplementationOnce(
+      ({ id }) =>
+        new Promise((resolve) => {
+          finishRetry = () => resolve(id ?? "crossed-2");
+        })
+    );
+    refuse();
+    await drainMicrotasks();
+    expect(spawnedIds()).toEqual(["crossed-2", "crossed-2"]);
+
+    await usePanelStore.getState().restartTerminal("crossed-2");
+    await drainMicrotasks();
+    expect(spawnedIds()).toEqual(["crossed-2", "crossed-2"]);
+    expect(terminalClient.kill).not.toHaveBeenCalled();
+
+    finishRetry();
+    await drainMicrotasks();
+    expect(getPtyPanel("crossed-2")?.spawnStatus).toBe("ready");
+    expect(isWaiting("crossed-2")).toBe(false);
+  });
+
+  it("puts a released launch closed before its turn back to waiting in the trash", async () => {
+    terminalClient.spawn.mockRejectedValueOnce(refusal());
+    await restoreAgent("queued-1");
+    await drainMicrotasks();
+    expect(isWaiting("queued-1")).toBe(true);
+
+    // A shell occupies the queue, so the launch control releases waits behind it.
+    let releaseBlocker: () => void = () => {};
+    terminalClient.spawn.mockImplementationOnce(async ({ id }) => {
+      await new Promise<void>((resolve) => {
+        releaseBlocker = resolve;
+      });
+      return id ?? "blocker";
+    });
+    await usePanelStore.getState().addPanel({
+      kind: "terminal",
+      requestedId: "blocker",
+      cwd: "/",
+      bypassLimits: true,
+    });
+    await drainMicrotasks();
+    setDriveLeaseSnapshot(lease(true));
+    await drainMicrotasks();
+
+    usePanelStore.getState().trashPanel("queued-1");
+    releaseBlocker();
+    await drainMicrotasks();
+
+    expect(spawnedIds()).toEqual(["queued-1", "blocker"]);
+    expect(isWaiting("queued-1")).toBe(true);
+
+    usePanelStore.getState().restoreTerminal("queued-1");
+    await drainMicrotasks();
+    expect(spawnedIds()).toEqual(["queued-1", "blocker", "queued-1"]);
+  });
+
+  it("attaches after a memory-pressure wait to a terminal the driver started meanwhile", async () => {
+    setDriveLeaseSnapshot(lease(true));
+    isMemoryPressureCriticalMock.mockResolvedValue(true);
+    await restoreAgent("memory-1");
+    await drainMicrotasks();
+    expect(terminalClient.spawn).not.toHaveBeenCalled();
+
+    terminalClient.reconnect.mockResolvedValue({ exists: true, id: "memory-1", hasPty: true });
+    launchDespiteMemoryPressure(panelHoldKey("memory-1"));
+    await drainMicrotasks();
+
+    expect(terminalClient.spawn).not.toHaveBeenCalled();
+    expect(getPtyPanel("memory-1")?.spawnStatus).toBe("ready");
+  });
+
+  it("leaves the assistant's launch to fail as before", async () => {
+    setDriveLeaseSnapshot(lease(false));
+
+    await restoreAgent("assistant-1", { location: "overlay" });
+    await drainMicrotasks();
+
+    expect(spawnedIds()).toEqual(["assistant-1"]);
+    expect(isWaiting("assistant-1")).toBe(false);
+  });
+
+  it("forgets the wait of a pane whose trash is emptied", async () => {
+    setDriveLeaseSnapshot(lease(false));
+    await restoreAgent("emptied-1");
+    await drainMicrotasks();
+    usePanelStore.getState().trashPanel("emptied-1");
+
+    usePanelStore.getState().emptyTrash(["emptied-1"]);
+    setDriveLeaseSnapshot(lease(true));
+    await drainMicrotasks();
+
+    expect(terminalClient.spawn).not.toHaveBeenCalled();
+    expect(isWaiting("emptied-1")).toBe(false);
   });
 
   it("drops the launch of a pane removed while it waited", async () => {

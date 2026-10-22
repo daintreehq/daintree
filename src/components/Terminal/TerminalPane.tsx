@@ -578,7 +578,10 @@ function TerminalPaneComponent({
   const isHeldForMemoryPressure = useMemoryPressureWaitStore(
     (state) => state.heldPanelIds[id] === true
   );
-  const isWaitingForControl = useDriveLeaseWaitStore((state) => state.heldPanelIds[id] === true);
+  const isMarkedWaitingForControl = useDriveLeaseWaitStore(
+    (state) => state.heldPanelIds[id] === true
+  );
+  const isWaitingForControl = isMarkedWaitingForControl && spawnStatus === "spawning";
   // Each hold replaces the terminal with a gate of its own, so focus, find
   // and the composer all treat them alike.
   const isHeldPane = isHeldForRecovery || isHeldForMemoryPressure || isWaitingForControl;

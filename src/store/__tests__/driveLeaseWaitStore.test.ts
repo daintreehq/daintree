@@ -139,7 +139,7 @@ describe("drive lease holds", () => {
     expect(second).toHaveBeenCalledTimes(1);
   });
 
-  it("stops following the lease once nothing is held", () => {
+  it("hears the lease again for a hold made after every earlier one was cancelled", () => {
     const resume = vi.fn();
     holdForDriveLease("a", { projectId: "p1", resume });
     cancelDriveLeaseHold("a");

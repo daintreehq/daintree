@@ -107,7 +107,12 @@ export function cancelDriveLeaseHold(panelId: string): boolean {
   return take(panelId) !== undefined;
 }
 
-/** Called by a resumed launch as it starts, whatever it then does. */
+/** Mark a launch on its way after control arrived, so a restart stays off it until it settles. */
+export function markPanelDriveLeaseLaunch(panelId: string): void {
+  setPanelHeld(panelId, true);
+}
+
+/** Called by a released launch once its spawn has an answer, whatever it was. */
 export function clearPanelDriveLeaseMark(panelId: string): void {
   setPanelHeld(panelId, false);
 }
