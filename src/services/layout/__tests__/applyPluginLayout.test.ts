@@ -255,6 +255,7 @@ describe("applyPluginLayout", () => {
   it("doesn't toggle a maximize that is already in place", async () => {
     seed([{ id: "records", kind: "acme.records", location: "grid", worktreeId: "wt-1" }]);
     maximizedId = "records";
+    maximizeTarget = { type: "panel", id: "records" };
     usePluginLayoutsStore.setState({
       layouts: [
         layout({
@@ -270,6 +271,38 @@ describe("applyPluginLayout", () => {
     });
     await applyPluginLayout("acme.workspace", userCtx);
     expect(toggleMaximize).not.toHaveBeenCalled();
+  });
+
+  it("widens a panel maximized alone to the group the layout puts it in", async () => {
+    seed([{ id: "records", kind: "acme.records", location: "grid", worktreeId: "wt-1" }]);
+    maximizedId = "records";
+    maximizeTarget = { type: "panel", id: "records" };
+    usePluginLayoutsStore.setState({
+      layouts: [
+        layout({
+          entries: [
+            {
+              target: { type: "panel", panelKindId: "acme.records" },
+              location: "grid",
+              tabGroup: "main",
+            },
+            {
+              target: { type: "panel", panelKindId: "acme.notes" },
+              location: "grid",
+              tabGroup: "main",
+              maximized: true,
+            },
+          ],
+        }),
+      ],
+    });
+
+    await applyPluginLayout("acme.workspace", userCtx);
+
+    const [group] = [...groups.values()];
+    expect(maximizeTarget).toEqual({ type: "group", id: group?.id });
+    expect(group?.activeTabId).toBe("new-1");
+    expect(setFocused).toHaveBeenCalledWith("new-1");
   });
 
   it("keeps an unlisted panel maximized when regrouping dissolves its group", async () => {
@@ -489,6 +522,10 @@ describe("applyPluginLayout", () => {
       const result = await pending;
       expect(dispatch).not.toHaveBeenCalled();
       expect(result.status === "applied" && result.failures[0]).toMatch(/changed since/);
+      // Refused before `recipe.run` ran, so nothing else has told the user.
+      expect(notify).toHaveBeenCalledWith(
+        expect.objectContaining({ title: "Layout partly applied" })
+      );
     });
 
     it("declines a confirmation whose layout was withdrawn", async () => {
@@ -505,6 +542,27 @@ describe("applyPluginLayout", () => {
       await expect(applyPluginLayout("acme.workspace", userCtx)).rejects.toThrow(/isn't available/);
       expect(useLayoutApplyConfirmStore.getState().current).toBeNull();
     });
+  });
+
+  it("reads a plugin's bare id before a qualified reading of the same string", async () => {
+    usePluginLayoutsStore.setState({
+      layouts: [
+        layout(),
+        layout({
+          id: "acme.acme.workspace",
+          entries: [
+            { target: { type: "browser", url: "http://localhost:4000/" }, location: "grid" },
+          ],
+        }),
+      ],
+    });
+
+    await applyPluginLayout("acme.workspace", { dispatchSource: "plugin", callerPluginId: "acme" });
+
+    expect(addPanel).toHaveBeenCalledTimes(1);
+    expect(addPanel).toHaveBeenCalledWith(
+      expect.objectContaining({ browserUrl: "http://localhost:4000/" })
+    );
   });
 
   it("holds a plugin to its own layouts", async () => {

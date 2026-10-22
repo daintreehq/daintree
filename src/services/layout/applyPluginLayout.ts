@@ -19,6 +19,9 @@ import { recipeApprovalDigest } from "@/utils/recipeApprovalDigest";
 import { notify } from "@/lib/notify";
 import { logWarn } from "@/utils/logger";
 
+/** A failure `recipe.run` has already told the user about. */
+class ReportedRecipeFailure extends Error {}
+
 export type LayoutApplyResult =
   | {
       status: "applied";
@@ -34,17 +37,19 @@ export type LayoutApplyResult =
 /**
  * Find the layout a dispatch names. A plugin reaches only its own: `layoutId`
  * may be its bare manifest id or the qualified one, and either resolves inside
- * the caller's namespace alone.
+ * the caller's namespace alone. Ids may contain dots, so a bare id is tried
+ * first and wins over a qualified reading of the same string.
  */
 function resolveLayout(layoutId: string, ctx: ActionContext): PluginLayoutConfig {
   const layouts = usePluginLayoutsStore.getState().layouts;
   if (ctx.dispatchSource === "plugin") {
     const caller = ctx.callerPluginId;
-    const qualified =
-      caller !== undefined && !layoutId.startsWith(`${caller}.`)
-        ? `${caller}.${layoutId}`
-        : layoutId;
-    const own = layouts.find((layout) => layout.id === qualified && layout.pluginId === caller);
+    const ownWithId = (id: string) =>
+      layouts.find((layout) => layout.id === id && layout.pluginId === caller);
+    const own =
+      caller === undefined
+        ? undefined
+        : (ownWithId(`${caller}.${layoutId}`) ?? ownWithId(layoutId));
     if (caller === undefined || own === undefined) {
       throw new Error(`"${layoutId}" is not one of this plugin's layouts in this project`);
     }
@@ -176,7 +181,7 @@ async function openEntry(
     },
     { source: "user" }
   );
-  if (!result.ok) throw new Error(result.error.message);
+  if (!result.ok) throw new ReportedRecipeFailure(result.error.message);
   const value: unknown = result.result;
   return typeof value === "object" &&
     value !== null &&
@@ -266,13 +271,15 @@ function arrange(placed: ReadonlyArray<{ entry: PluginLayoutEntry; ids: string[]
   const maximized = placed.find(({ entry, ids }) => entry.maximized === true && ids.length > 0);
   const targetId = maximized?.ids[0];
   if (targetId === undefined || store().panelsById[targetId]?.location !== "grid") return;
-  const { maximizedId, getPanelGroup } = store();
+  const { maximizeTarget, getPanelGroup } = store();
   const group = getPanelGroup(targetId);
   // A maximized group shows its active tab, so the requested panel has to be it.
   if (group && group.activeTabId !== targetId) store().setActiveTab(group.id, targetId);
-  const alreadyMaximized =
-    maximizedId !== null && (maximizedId === targetId || group?.panelIds.includes(maximizedId));
-  if (!alreadyMaximized) {
+  // What fills the grid has to be exactly the panel or its group: a panel
+  // maximized alone and now grouped would otherwise keep hiding its new tabs.
+  const wanted = group ? { type: "group", id: group.id } : { type: "panel", id: targetId };
+  if (maximizeTarget?.type !== wanted.type || maximizeTarget.id !== wanted.id) {
+    store().exitMaximize();
     const { gridCols, gridItemCount } = getGridLayoutSnapshot();
     store().toggleMaximize(targetId, gridCols, gridItemCount, getPanelGroup);
   }
@@ -295,7 +302,8 @@ async function applyResolved(
 
   const placed: Array<{ entry: PluginLayoutEntry; ids: string[] }> = [];
   const failures: string[] = [];
-  // `recipe.run` already tells the user about its own failures.
+  // `recipe.run` already tells the user about its own failures; one refused
+  // before it ran, such as a recipe that changed since approval, it never saw.
   const unreported: string[] = [];
   for (const entry of layout.entries) {
     try {
@@ -303,7 +311,7 @@ async function applyResolved(
     } catch (error) {
       const reason = formatErrorMessage(error, "Couldn't open a layout entry");
       failures.push(reason);
-      if (entry.target.type !== "recipe") unreported.push(reason);
+      if (!(error instanceof ReportedRecipeFailure)) unreported.push(reason);
     }
   }
   arrange(placed);
