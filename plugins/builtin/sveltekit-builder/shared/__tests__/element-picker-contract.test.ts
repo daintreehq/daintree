@@ -87,7 +87,7 @@ function fromNeutral(observation: SelectionObservation): GuestNodeObservation {
   return {
     runtimeOccurrenceId: observation.elementId,
     loc:
-      loc && "location" in loc
+      loc && "location" in loc && loc.location !== null
         ? { file: loc.file, line: loc.location.line, column: loc.location.column }
         : null,
     ancestry: evidence.ancestry,

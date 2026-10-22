@@ -204,6 +204,46 @@ describe("JobSourceAccess", () => {
     });
   });
 
+  it("locates a reported path against the app root, or as an absolute path, as a worktree ref", () => {
+    const { access: job } = access();
+    const located = { ok: true, value: ref("app/src/A.svelte") };
+    expect(job.locateFile("src/A.svelte")).toEqual(located);
+    expect(job.locateFile("./src/lib/../A.svelte")).toEqual(located);
+    expect(job.locateFile(path.join(root, "app", "src", "A.svelte"))).toEqual(located);
+  });
+
+  it("locates nothing outside the app, and nothing a page could spell to smuggle", () => {
+    const { access: job } = access();
+    for (const reported of [
+      "../outside/secret.txt",
+      "src/../../outside/secret.txt",
+      path.join(root, "outside", "secret.txt"),
+      path.join(root, "app"),
+      "",
+      "src/A.svelte\nother",
+      "src/A\0.svelte",
+      42,
+    ]) {
+      expect(job.locateFile(reported)).toEqual({ ok: false, reason: "outside-workspace" });
+    }
+  });
+
+  it("locates without touching the disk or the file budget", async () => {
+    const realpath = vi.spyOn(fs.promises, "realpath");
+    const { access: job } = access({ budget: { ...fullBudget, maxFiles: 1 } });
+    expect(job.locateFile("src/A.svelte")).toMatchObject({ ok: true });
+    expect(job.locateFile("src/Missing.svelte")).toMatchObject({ ok: true });
+    expect(realpath).not.toHaveBeenCalled();
+    realpath.mockRestore();
+    await expect(job.readSource(ref("app/src/A.svelte"))).resolves.toMatchObject({ ok: true });
+  });
+
+  it("locates nothing once the job is stopped", () => {
+    const { access: job, controller } = access();
+    controller.abort();
+    expect(job.locateFile("src/A.svelte")).toEqual({ ok: false, reason: "cancelled" });
+  });
+
   it("reports cancelled, or budget-exhausted once the deadline is what stopped it", async () => {
     const cancelled = access();
     cancelled.controller.abort();

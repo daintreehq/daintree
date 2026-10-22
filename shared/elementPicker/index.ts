@@ -58,6 +58,7 @@ export {
   type SelectionObservation,
 } from "./observation.js";
 export {
+  ComponentDefinitionSchema,
   FileRevisionSchema,
   HeldTargetSchema,
   RESOLUTION_LIMITS,
@@ -68,6 +69,7 @@ export {
   SourceTargetSchema,
   StaleReasonSchema,
   UnavailableReasonSchema,
+  type ComponentDefinition,
   type FileRevision,
   type HeldTarget,
   type ResolutionResult,

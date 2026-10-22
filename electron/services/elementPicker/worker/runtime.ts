@@ -50,6 +50,8 @@ interface RuntimeJob {
  */
 const URL_LIMIT = 2048;
 const SOURCE_LIMIT = 4096;
+/** What a page may report as a file, and so the longest path the wire carries. */
+const REPORTED_FILE_LIMIT = 2048;
 
 function fitsWire(value: string, limit: number): boolean {
   return value.length > 0 && value.length <= limit;
@@ -191,6 +193,13 @@ export function createHostRuntime(
                 source,
                 sourceRoot,
               }),
+              signal
+            ),
+      locateFile: (reported, signal) =>
+        !fitsWire(reported, REPORTED_FILE_LIMIT)
+          ? Promise.resolve({ ok: false, reason: "outside-workspace" })
+          : ask<SourceFileRef>(
+              (accessId) => ({ type: "locate-file", jobId, accessId, reported }),
               signal
             ),
     };

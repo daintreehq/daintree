@@ -107,7 +107,30 @@ const VerifiedTargetSchema = z.strictObject({
   fileRevision: FileRevisionSchema,
   /** Present when mapping came before the check. */
   sourceMap: SourceMapProvenanceSchema.optional(),
+  /**
+   * Present when the location is not the one the candidate reported but was
+   * found from the structure the observation's framework evidence describes,
+   * then checked at `fileRevision`: a Svelte element the page stamped with a
+   * neighbour's position, or with none. Whatever the page counted against its
+   * stamp, such as how many nodes share it, describes some other node.
+   */
+  placedBy: z.literal("structure").optional(),
 });
+
+/**
+ * Where the component a verified call site invokes is written: followed from
+ * the call site's own bytes, the result's `fileRevision`, through the import
+ * that is the tag's one binding there. A file and nothing finer, and present
+ * only when that binding is proven; a rendered parent chain is never the
+ * evidence, since a wrapper or a snippet makes it name a plausible wrong file.
+ */
+export const ComponentDefinitionSchema = z.strictObject({
+  file: SourceFileRefSchema,
+  fileRevision: FileRevisionSchema,
+  /** The import specifier as the call site's file spells it. */
+  specifier: z.string().min(1).max(1024),
+});
+export type ComponentDefinition = z.infer<typeof ComponentDefinitionSchema>;
 
 /**
  * A target and how far it got: reported as-is, mapped through a named source
@@ -144,7 +167,10 @@ export const ResolutionResultSchema = z
   .discriminatedUnion("state", [
     ObservedTargetSchema.extend(claimFields),
     MappedTargetSchema.extend(claimFields),
-    VerifiedTargetSchema.extend(claimFields),
+    VerifiedTargetSchema.extend({
+      ...claimFields,
+      definition: ComponentDefinitionSchema.optional(),
+    }),
     z.strictObject({
       state: z.literal("ambiguous"),
       ...claimFields,
@@ -171,6 +197,17 @@ export const ResolutionResultSchema = z
   .superRefine((result, ctx) => {
     if (result.state === "unavailable" && result.reason === "mismatch" && !result.read) {
       ctx.addIssue({ code: "custom", path: ["read"], message: "a mismatch names what was read" });
+    }
+    if (
+      result.state === "verified" &&
+      result.definition &&
+      result.claim !== "component-invocation"
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["definition"],
+        message: "only a component invocation names the definition it invokes",
+      });
     }
     if (result.claim !== "file-hint") return;
     const targets =

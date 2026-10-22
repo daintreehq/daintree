@@ -122,6 +122,15 @@ describe("the Element Picker host boundary", () => {
     const eager = [...walkEagerGraph(metafile, BOOTSTRAP), ...walkEagerGraph(metafile, HOST_ENTRY)];
     expect(eager.filter((file) => file.startsWith(RESOLVERS_DIR))).toEqual([]);
     expect(scanForbiddenModules(eager)).toEqual([]);
+
+    // Not a vacuous pass: the Svelte resolver, the source model and the
+    // compiler are all in this build, each behind the registry's dynamic
+    // import. Asserted apart, since the model alone would satisfy a joint check
+    // once the compiler stopped being bundled.
+    expect(reachable).toContain(`${RESOLVERS_DIR}svelte.ts`);
+    const behind = scanForbiddenModules(reachable);
+    expect(behind.filter((m) => m.label === "Svelte compiler").length).toBeGreaterThan(0);
+    expect(behind.filter((m) => m.label === "svelte-source-model").length).toBeGreaterThan(0);
     // Bytes come from main; nothing the host runs can open a file or a socket itself.
     expect(authorityImports(metafile)).toEqual([]);
     // Nor reach main-side services, which would bring their authority with them.

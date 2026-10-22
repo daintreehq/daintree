@@ -37,8 +37,14 @@ function namedFiles(result: ResolutionResult): NamedFile[] {
   switch (result.state) {
     case "observed":
     case "mapped":
-    case "verified":
       return [heldFile(result)];
+    case "verified":
+      return result.definition
+        ? [
+            heldFile(result),
+            { file: result.definition.file, revision: result.definition.fileRevision },
+          ]
+        : [heldFile(result)];
     case "ambiguous":
       return result.alternatives.map(heldFile);
     case "stale":

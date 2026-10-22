@@ -141,6 +141,8 @@ function defaultKill(pid: number): void {
   }
 }
 
+type AccessResult = Extract<HostInbound, { type: "access-result" }>["result"];
+
 type JobOutcome = { ok: true; response: ResolveResponse } | { ok: false; error: Error };
 
 interface Job {
@@ -560,22 +562,27 @@ export class ElementPickerHost {
         return;
       case "read-source":
       case "fetch-source-map":
-      case "locate-source": {
+      case "locate-source":
+      case "locate-file": {
         const job = generation.jobs.get(message.jobId);
         // A job already settled still gets an answer, so the host's read never hangs.
-        const result = !job
+        const result: Promise<AccessResult> = !job
           ? Promise.resolve({ ok: false as const, reason: "cancelled" as const })
           : message.type === "read-source"
             ? job.access.readSource(message.file)
             : message.type === "fetch-source-map"
               ? job.access.fetchSourceMap(message.generatedUrl)
-              : job.access.locateSource(message.generatedUrl, message.source, message.sourceRoot);
+              : message.type === "locate-source"
+                ? job.access.locateSource(message.generatedUrl, message.source, message.sourceRoot)
+                : Promise.resolve(job.access.locateFile(message.reported));
         const unreadable: UnavailableReason =
           message.type === "read-source"
             ? "file-missing"
             : message.type === "fetch-source-map"
               ? "map-missing"
-              : "unsupported";
+              : message.type === "locate-source"
+                ? "unsupported"
+                : "outside-workspace";
         void result
           .catch((error: unknown) => {
             logWarn(`${P} Source access failed`, {
