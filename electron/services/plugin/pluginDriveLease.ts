@@ -1,4 +1,5 @@
 import { AppError } from "../../utils/errorTypes.js";
+import type { LeaseTargetResolvers } from "../driveLeaseTargets.js";
 import { getPluginInvokeOrigin } from "./pluginFrontendRouting.js";
 
 /** What a plugin's host call is about to change: paths on disk, or a terminal it types into. */
@@ -34,27 +35,39 @@ export async function assertPluginCallerDrives(
 
   const what = `plugin "${pluginId}" ${op}`;
   const { createLeaseTargetResolvers } = await import("../driveLeaseTargetResolvers.js");
-  const resolvers = createLeaseTargetResolvers();
-  let projectIds: readonly (string | null)[];
+  let traced: readonly string[] | { readonly unresolved: string };
   try {
-    projectIds =
-      "paths" in target
-        ? (await Promise.all(target.paths.map((p) => resolvers.projectsForPath(p)))).flat()
-        : [await resolvers.projectForTerminal(target.terminalId)];
+    traced = await projectsChangedBy(createLeaseTargetResolvers(), target);
   } catch {
     throw forPlugin(unmatchedTargetError(what, "a record that couldn't be read"));
   }
+  if ("unresolved" in traced) throw forPlugin(unmatchedTargetError(what, traced.unresolved));
 
   // Judged against the leases as they stand once the lookup answered: a
   // takeover while it ran counts.
   const elsewhere = lease.projectsDrivenElsewhere(origin.endpoint);
-  for (const projectId of projectIds) {
-    if (projectId === null) {
-      throw forPlugin(unmatchedTargetError(what, "a terminal with no owning project"));
-    }
+  for (const projectId of traced) {
     const holder = elsewhere.get(projectId);
     if (holder) throw forPlugin(drivenElsewhereError(what, projectId, holder));
   }
+}
+
+/**
+ * The projects a write changes. A terminal the host doesn't have, or can't
+ * place in a project, is refused as the dispatcher's gate refuses one: nothing
+ * vouches that the write wouldn't land in a project someone else drives.
+ */
+async function projectsChangedBy(
+  resolvers: LeaseTargetResolvers,
+  target: PluginWriteTarget
+): Promise<readonly string[] | { readonly unresolved: string }> {
+  if ("paths" in target) {
+    return (await Promise.all(target.paths.map((p) => resolvers.projectsForPath(p)))).flat();
+  }
+  const record = await resolvers.describeTerminal(target.terminalId);
+  if (record === "missing") return { unresolved: "a terminal this host doesn't have" };
+  if (record.projectId === null) return { unresolved: "a terminal with no owning project" };
+  return [record.projectId];
 }
 
 /**

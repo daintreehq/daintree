@@ -3,11 +3,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fs from "fs/promises";
 import os from "os";
 import path from "path";
+import type { TerminalRecord } from "../../driveLeaseTargets.js";
 
 const { owners } = vi.hoisted(() => ({
   owners: {
     projectsForPath: (_p: string): readonly string[] | Promise<readonly string[]> => [],
-    projectForTerminal: (_id: string): string | null | Promise<string | null> => null,
+    describeTerminal: (_id: string): TerminalRecord | Promise<TerminalRecord> => "missing",
   },
 }));
 
@@ -27,7 +28,7 @@ vi.mock("electron", () => ({
 vi.mock("../../driveLeaseTargetResolvers.js", () => ({
   createLeaseTargetResolvers: () => ({
     projectsForPath: (p: string) => owners.projectsForPath(p),
-    projectForTerminal: (id: string) => owners.projectForTerminal(id),
+    describeTerminal: (id: string) => owners.describeTerminal(id),
     projectsForOperation: () => [],
     projectsForDevPreviewPanel: () => [],
     projectsForHelpSession: () => [],
@@ -252,7 +253,14 @@ describe("plugin writes from a view that doesn't drive the project", () => {
 describe("assertPluginCallerDrives", () => {
   beforeEach(() => {
     setPluginFrontendRouter({ resolve: () => ({ kind: "local" }), onChange: () => () => {} });
-    owners.projectForTerminal = (id) => (id === "t1" ? "p1" : id === "t2" ? "p2" : null);
+    owners.describeTerminal = (id) =>
+      id === "t1"
+        ? { projectId: "p1" }
+        : id === "t2"
+          ? { projectId: "p2" }
+          : id === "unowned"
+            ? { projectId: null }
+            : "missing";
   });
 
   afterEach(() => {
@@ -275,8 +283,21 @@ describe("assertPluginCallerDrives", () => {
 
   it("refuses a terminal it can't place while another screen drives a project here", async () => {
     installLeases(new Map([["p2", HOLDER]]));
+    const unmatched = {
+      code: "DRIVEN_ELSEWHERE",
+      userMessage: expect.stringMatching(/couldn't be matched to a project\. Take control first\./),
+    };
 
-    await expect(check(WATCHER, "gone")).rejects.toMatchObject({
+    // One the host confirms it doesn't have, and one it has with no project.
+    await expect(check(WATCHER, "gone")).rejects.toMatchObject(unmatched);
+    await expect(check(WATCHER, "unowned")).rejects.toMatchObject(unmatched);
+  });
+
+  it("refuses when the terminal lookup fails rather than letting the typing through", async () => {
+    installLeases(new Map([["p2", HOLDER]]));
+    owners.describeTerminal = () => Promise.reject(new Error("pty-host timed out"));
+
+    await expect(check(WATCHER, "t1")).rejects.toMatchObject({
       code: "DRIVEN_ELSEWHERE",
       userMessage: expect.stringMatching(/couldn't be matched to a project\. Take control first\./),
     });
@@ -284,7 +305,7 @@ describe("assertPluginCallerDrives", () => {
 
   it("looks nothing up while nobody else drives a project here", async () => {
     installLeases(new Map([["p1", WATCHER]]));
-    owners.projectForTerminal = () => {
+    owners.describeTerminal = () => {
       throw new Error("looked up");
     };
 
