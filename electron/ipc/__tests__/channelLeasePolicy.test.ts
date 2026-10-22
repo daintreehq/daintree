@@ -89,10 +89,30 @@ describe("channel lease policy", () => {
       { from: "path", at: [0, "rootPath"] },
     ]);
     expect(getChannelLeaseTarget("git:commit")).toEqual([{ from: "path", at: [0, "cwd"] }]);
-    expect(getChannelLeaseTarget("terminal:kill")).toEqual([{ from: "terminal", at: [0] }]);
+    expect(getChannelLeaseTarget("terminal:restore")).toEqual([{ from: "terminal", at: [0] }]);
     expect(getChannelLeaseTarget("worktree:delete")).toEqual([
       { from: "worktree", at: [0, "worktreeId"] },
     ]);
+  });
+
+  it("lets only a call that ends a terminal pass for one this Host no longer has", () => {
+    for (const channel of ["terminal:kill", "terminal:graceful-kill", "terminal:trash"]) {
+      expect(getChannelLeaseTarget(channel), channel).toEqual([
+        { from: "terminal", at: [0], missing: "allow" },
+      ]);
+    }
+    for (const channel of [
+      "terminal:restore",
+      "terminal:update-title",
+      "terminal:update-worktree-id",
+      "agent-session:prepare-bookmark",
+    ]) {
+      const target = getChannelLeaseTarget(channel)!;
+      expect(
+        target.some((source) => "missing" in source),
+        channel
+      ).toBe(false);
+    }
   });
 
   it("gates bookmarking a live agent, which kills it to capture its session", () => {
