@@ -1189,6 +1189,8 @@ export class PluginService {
   private readonly pluginThemeReloads = new Set<string>();
   /** Theme-bearing plugins an unload removed for good since the last sync. */
   private readonly pluginThemeRemovals = new Set<string>();
+  /** Whether the catalog changed since renderers were last sent it. */
+  private pluginThemeCatalogDirty = false;
   /**
    * Resolves once {@link initialize} and {@link activateStartupFinishedPlugins}
    * have both settled (or {@link dispose} has run). Renderer pull-on-mount IPC
@@ -2497,6 +2499,7 @@ export class PluginService {
     }
     if (themeLoad) {
       registerPluginThemes(pluginId, themeLoad.accepted);
+      this.pluginThemeCatalogDirty = true;
       for (const { themeId, reason } of themeLoad.refused) {
         this.recordPluginLog(
           plugin,
@@ -6714,6 +6717,9 @@ export class PluginService {
       } catch (err) {
         console.error("[PluginService] Failed to settle the plugin theme selection:", err);
       }
+      // Renderers pull the catalog on mount, so only a change is worth a push.
+      if (!this.pluginThemeCatalogDirty && fallbackSchemeId === null) return;
+      this.pluginThemeCatalogDirty = false;
       this.broadcaster.scheduleThemesBroadcast(fallbackSchemeId);
     });
   }
@@ -6849,6 +6855,7 @@ export class PluginService {
     runUnloadStep(pluginId, "unregisterPluginSkills", () => unregisterPluginSkills(pluginId));
     runUnloadStep(pluginId, "unregisterPluginThemes", () => {
       if (!unregisterPluginThemes(pluginId)) return;
+      this.pluginThemeCatalogDirty = true;
       if (options?.reload) this.pluginThemeReloads.add(pluginId);
       else this.pluginThemeRemovals.add(pluginId);
       this.schedulePluginThemeSync();
