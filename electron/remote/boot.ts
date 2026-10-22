@@ -81,10 +81,21 @@ export interface StartRemoteHostsOptions {
 }
 
 type Teardown = () => void | Promise<void>;
+type Role = "shell" | "host";
 
-/** Run in reverse on stop, so each piece goes before what it was built on. */
-let teardowns: Teardown[] = [];
+/**
+ * Run in reverse on stop, so each piece goes before what it was built on. Each
+ * names its role, so the Shell alone can be stopped and started again against
+ * a Host that stays up (the integration harness's relaunch).
+ */
+let ledger: Array<{ role: Role; teardown: Teardown }> = [];
 let started = false;
+/** The running Shell; one that has stopped installs nothing on a late first use. */
+let shellLaunch: object | null = null;
+
+function ownedBy(role: Role): { push(teardown: Teardown): void } {
+  return { push: (teardown) => ledger.push({ role, teardown }) };
+}
 
 /** Each ssh master may take this long to answer `-O exit` at quit; they are asked together. */
 const MASTER_EXIT_TIMEOUT_MS = 1_000;
@@ -92,6 +103,9 @@ const MASTER_EXIT_TIMEOUT_MS = 1_000;
 const HOST_CALL_CONNECT_MS = 10_000;
 
 function startClient(options: StartRemoteHostsOptions): void {
+  const launch = {};
+  shellLaunch = launch;
+  const teardowns = ownedBy("shell");
   // First in, so it runs last: port forwards and links are cancelled on the
   // masters first. ControlPersist keeps a master across reconnects while the
   // app runs; on stop, every master this process used is told to exit, so no
@@ -120,7 +134,7 @@ function startClient(options: StartRemoteHostsOptions): void {
   // Everything a remote view needs beyond the host list, installed the first
   // time a host is actually used so a user who never adds one runs none of it.
   const activate = (): void => {
-    if (activated || !started) return;
+    if (activated || shellLaunch !== launch) return;
     activated = true;
     teardowns.push(installClientTerminalPortOverride(hostForView));
     teardowns.push(installClientWorktreePortOverride(hostForView));
@@ -364,20 +378,43 @@ export async function startRemoteHosts(options: StartRemoteHostsOptions): Promis
   startClient(options);
   if (__DAINTREE_REMOTE_HOST_ROLE__ && isRemoteHostSupported()) {
     const { startHostRole } = await import("./hostBoot.js");
-    const listenError = await startHostRole(options, (teardown) => teardowns.push(teardown));
+    const host = ownedBy("host");
+    const listenError = await startHostRole(options, (teardown) => host.push(teardown));
     if (listenError) throw new HostModeListenError(listenError.error);
   }
 }
 
-export async function stopRemoteHosts(): Promise<void> {
-  started = false;
-  const pending = teardowns;
-  teardowns = [];
-  for (const teardown of pending.reverse()) {
+async function drain(role?: Role): Promise<void> {
+  const pending = ledger.filter((entry) => role === undefined || entry.role === role);
+  ledger = role === undefined ? [] : ledger.filter((entry) => entry.role !== role);
+  for (const { teardown } of pending.reverse()) {
     try {
       await teardown();
     } catch (error) {
       console.error("[RemoteHosts] Teardown step failed:", error);
     }
   }
+}
+
+export async function stopRemoteHosts(): Promise<void> {
+  started = false;
+  shellLaunch = null;
+  await drain();
+}
+
+/**
+ * @internal Tests only: the Shell quits, as the app's own stop takes it down
+ * (its links say GOODBYE), while the Host in this process keeps running.
+ */
+export async function _stopRemoteShellForTesting(): Promise<void> {
+  shellLaunch = null;
+  await drain("shell");
+}
+
+/** @internal Tests only: the Shell launches again beside the Host that stayed up. */
+export function _startRemoteShellForTesting(options: StartRemoteHostsOptions): void {
+  if (!started || shellLaunch !== null) {
+    throw new Error("Only a stopped Shell beside a running Host can start again");
+  }
+  startClient(options);
 }
