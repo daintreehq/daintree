@@ -133,17 +133,25 @@ describe("idle corpus", () => {
     expect(rowsFor("no-terminals")).toEqual([]);
     expect(rowsFor("pty-less").every((row) => row.hasPty === false)).toBe(true);
     expect(
-      rowsFor("unknown-activity").every(
-        (row) => row.lastInputTime === undefined && row.lastOutputTime === undefined
+      rowsFor("fresh-spawn").every(
+        (row) =>
+          row.lastTypedInputAt === undefined &&
+          row.lastOutputChangeAt === undefined &&
+          nowMs - row.spawnedAt < 3_600_000
       )
     ).toBe(true);
     expect(rowsFor("active-agent").some((row) => row.agentState === "working")).toBe(true);
     expect(
-      rowsFor("recently-active").some((row) => nowMs - (row.lastOutputTime ?? 0) < 3_600_000)
+      rowsFor("recently-active").some((row) => nowMs - (row.lastOutputChangeAt ?? 0) < 3_600_000)
     ).toBe(true);
-    expect(rowsFor("eligible").every((row) => nowMs - (row.lastOutputTime ?? 0) >= 3_600_000)).toBe(
+    const lastRealActivity = (row: (typeof corpus.terminals)[number]) =>
+      Math.max(row.lastTypedInputAt ?? 0, row.lastOutputChangeAt ?? 0);
+    expect(rowsFor("eligible").every((row) => nowMs - lastRealActivity(row) >= 3_600_000)).toBe(
       true
     );
+    // A repainting status line keeps the raw output clock current on every row,
+    // so a sweep that read it would find nothing idle (#13845).
+    expect(corpus.terminals.every((row) => row.lastOutputTime === nowMs)).toBe(true);
   });
 
   it("names the on-screen and dismissed projects it expects the sweep to skip", () => {

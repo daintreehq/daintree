@@ -61,7 +61,9 @@ vi.mock("../ProjectStore.js", () => ({ projectStore: projectStoreMock }));
 
 const broadcastToRendererMock = vi.hoisted(() => vi.fn());
 const writeHibernatedMarkerMock = vi.hoisted(() => vi.fn());
-const evictProjectRendererMock = vi.hoisted(() => vi.fn<(id: string) => number>(() => 1));
+const evictProjectRendererMock = vi.hoisted(() =>
+  vi.fn<(id: string, options?: { protectMcpDispatch?: boolean }) => number>(() => 1)
+);
 
 const logInfoMock = vi.hoisted(() => vi.fn());
 vi.mock("../../utils/logger.js", () => ({ logInfo: logInfoMock, logError: vi.fn() }));
@@ -74,7 +76,64 @@ vi.mock("../../ipc/channels.js", () => ({
   CHANNELS: {
     IDLE_BACKGROUND_CLOSED: "idle-background:closed",
     PROJECT_UPDATED: "project:updated",
+    PROJECT_SLEPT: "project:slept",
   },
+}));
+
+/** Whether the host acknowledges the fake kill below — false models a timeout. */
+const killConfirmed = vi.hoisted(() => ({ value: true }));
+
+// Sleep's kill runs through the journal helper, whose real module boots the
+// agent journal and lifecycle ledger. Faked over the PtyClient mock instead, so
+// every kill assertion below still reads `gracefulKillByProject` — and faithful
+// to the parts of its contract a policy leans on: a `beforeKill` guard sees the
+// scope's terminals from a completeness-aware snapshot (a failed read counts as
+// degraded) and can refuse, and the kill reports whether the host confirmed it.
+vi.mock("../pty/projectSessionJournal.js", () => ({
+  gracefulTeardownAndJournalProject: vi.fn(
+    async (
+      scopeId: string,
+      client: {
+        getAllTerminalsWithCompletenessAsync: () => Promise<{
+          terminals: unknown[];
+          degraded: boolean;
+        }>;
+        gracefulKillByProject: (
+          id: string,
+          opts?: { preserveSession?: boolean }
+        ) => Promise<Array<{ id: string }>>;
+      },
+      _workspaceClient: unknown,
+      options: {
+        preserveSession?: boolean;
+        beforeKill?: (snapshot: { terminals: unknown[]; degraded: boolean }) => boolean;
+      } = {}
+    ) => {
+      if (options.beforeKill) {
+        let snapshot: { terminals: unknown[]; degraded: boolean };
+        try {
+          snapshot = await client.getAllTerminalsWithCompletenessAsync();
+        } catch {
+          snapshot = { terminals: [], degraded: true };
+        }
+        const terminals = snapshot.terminals.filter(
+          (t) => (t as { projectId?: string }).projectId === scopeId
+        );
+        if (!options.beforeKill({ terminals, degraded: snapshot.degraded })) {
+          return { confirmed: false, aborted: true, terminalsKilled: 0, sessions: [] };
+        }
+      }
+      const sessions = await client.gracefulKillByProject(scopeId, {
+        preserveSession: options.preserveSession,
+      });
+      return {
+        confirmed: killConfirmed.value,
+        aborted: false,
+        terminalsKilled: sessions.length,
+        sessions,
+      };
+    }
+  ),
 }));
 
 vi.mock("../pty/terminalSessionPersistence.js", () => ({
@@ -197,10 +256,15 @@ function staleAssistant(projectId: string, terminalId = `t-help-${projectId}`): 
 }
 
 /** A ProjectViewManager mock whose active project is `activeId`. */
-function makePvm(activeId: string | null, outgoingId: string | null = null): ProjectViewManager {
+function makePvm(
+  activeId: string | null,
+  outgoingId: string | null = null,
+  mcpDispatchFor: ReadonlySet<string> = new Set()
+): ProjectViewManager {
   return {
     getActiveProjectId: () => activeId,
     getOutgoingBridgeProjectId: () => outgoingId,
+    isMcpDispatchProtected: (projectId: string) => mcpDispatchFor.has(projectId),
   } as unknown as ProjectViewManager;
 }
 
@@ -223,6 +287,7 @@ describe("IdleBackgroundAutoCloseService", () => {
     }));
     ptyClientMock.getAllTerminalsAsync.mockResolvedValue([]);
     ptyClientMock.gracefulKillByProject.mockResolvedValue([]);
+    killConfirmed.value = true;
     evictProjectRendererMock.mockReturnValue(1);
     workspaceClientMock.evictProject.mockReturnValue(true);
     assistantBackends.clear();
@@ -286,7 +351,8 @@ describe("IdleBackgroundAutoCloseService", () => {
       expect(ptyClientMock.gracefulKillByProject).toHaveBeenCalledWith("proj-1", {
         preserveSession: true,
       });
-      expect(evictProjectRendererMock).toHaveBeenCalledWith("proj-1");
+      // An automatic sleep never destroys a view an MCP dispatch is waiting on.
+      expect(evictProjectRendererMock).toHaveBeenCalledWith("proj-1", { protectMcpDispatch: true });
       expect(workspaceClientMock.evictProject).toHaveBeenCalledWith("/projects/proj-1");
       expect(projectStoreMock.updateProjectStatus).toHaveBeenCalledWith("proj-1", "closed", {
         autoParkedAt: expect.any(Number),
@@ -787,6 +853,7 @@ describe("IdleBackgroundAutoCloseService", () => {
           throw new Error("PVM disposing");
         },
         getOutgoingBridgeProjectId: () => null,
+        isMcpDispatchProtected: () => false,
       } as unknown as ProjectViewManager;
       const service = makeService();
       // A healthy PVM marks active-1 as foreground; the throwing one must not
@@ -1157,7 +1224,7 @@ describe("IdleBackgroundAutoCloseService", () => {
       );
     });
 
-    it("isolates a failure at the renderer-eviction step and continues the sweep", async () => {
+    it("still closes a project whose renderer eviction fails, and carries on", async () => {
       enable();
       projectStoreMock.getAllProjects.mockReturnValue([
         makeIdleProject("bad-1"),
@@ -1169,14 +1236,31 @@ describe("IdleBackgroundAutoCloseService", () => {
       });
       const service = makeService();
       await runCheck(service);
-      expect(projectStoreMock.updateProjectStatus).toHaveBeenCalledWith(
-        "good-1",
-        "closed",
-        expect.anything()
-      );
-      expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalledWith(
-        "bad-1",
-        "closed",
+      // Sleep's contract (#13845): once the kill is confirmed the sleep is
+      // committed, and a failed reclaim step must not strand the row "open"
+      // with its terminals gone.
+      for (const id of ["bad-1", "good-1"]) {
+        expect(projectStoreMock.updateProjectStatus).toHaveBeenCalledWith(
+          id,
+          "closed",
+          expect.anything()
+        );
+      }
+    });
+
+    it("leaves a project open when the host can't confirm its kill (#11340)", async () => {
+      enable();
+      projectStoreMock.getAllProjects.mockReturnValue([makeIdleProject("proj-1")]);
+      killConfirmed.value = false;
+      const service = makeService();
+      await runCheck(service);
+
+      expect(ptyClientMock.gracefulKillByProject).toHaveBeenCalledTimes(1);
+      expect(writeHibernatedMarkerMock).not.toHaveBeenCalled();
+      expect(evictProjectRendererMock).not.toHaveBeenCalled();
+      expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
+      expect(broadcastToRendererMock).not.toHaveBeenCalledWith(
+        "idle-background:closed",
         expect.anything()
       );
     });
@@ -1189,6 +1273,48 @@ describe("IdleBackgroundAutoCloseService", () => {
       await runCheck(service);
       expect(writeHibernatedMarkerMock).toHaveBeenCalledWith("t1");
       expect(writeHibernatedMarkerMock).toHaveBeenCalledWith("t2");
+    });
+  });
+
+  // An automatic close must never take the view an MCP client is waiting on:
+  // that session fails SESSION_BINDING_GONE until the project reopens (#13845).
+  describe("MCP dispatch leases", () => {
+    it("never starts a sleep while a dispatch is waiting on the project's view", async () => {
+      enable();
+      projectStoreMock.getAllProjects.mockReturnValue([makeIdleProject("proj-1")]);
+      const service = makeService();
+      service.setProjectViewManagersProvider(() => [makePvm("other", null, new Set(["proj-1"]))]);
+      await runCheck(service);
+
+      expect(helpSessionServiceMock.revokeByProjectId).not.toHaveBeenCalled();
+      expect(ptyClientMock.gracefulKillByProject).not.toHaveBeenCalled();
+      expect(evictProjectRendererMock).not.toHaveBeenCalled();
+      expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
+    });
+
+    it("abandons the close when a dispatch starts during the kill", async () => {
+      enable();
+      projectStoreMock.getAllProjects.mockReturnValue([makeIdleProject("proj-1")]);
+      const leased = new Set<string>();
+      let releaseKill!: (value: Array<{ id: string }>) => void;
+      ptyClientMock.gracefulKillByProject.mockReturnValueOnce(
+        new Promise((resolve) => {
+          releaseKill = resolve;
+        })
+      );
+      const service = makeService();
+      service.setProjectViewManagersProvider(() => [makePvm("other", null, leased)]);
+
+      const sweep = runCheck(service);
+      await vi.waitFor(() => expect(ptyClientMock.gracefulKillByProject).toHaveBeenCalledTimes(1));
+      leased.add("proj-1");
+      releaseKill([{ id: "t-killed" }]);
+      await sweep;
+
+      expect(writeHibernatedMarkerMock).toHaveBeenCalledWith("t-killed");
+      expect(evictProjectRendererMock).not.toHaveBeenCalled();
+      expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
+      expect(pluginLifecycleMock.notifyProjectPluginsClosed).not.toHaveBeenCalled();
     });
   });
 

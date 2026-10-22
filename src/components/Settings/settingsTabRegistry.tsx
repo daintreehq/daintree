@@ -453,8 +453,17 @@ export const SETTINGS_REGISTRY = [
         section: "Background projects",
         title: "Notify me about idle terminals",
         description:
-          "Notify when background project terminals have been idle past a threshold. Includes Close Them / Mute project actions.",
-        keywords: ["idle", "notify", "terminal", "background", "reminder", "inactive", "close"],
+          "Notify when background project terminals have been idle past a threshold. Includes Sleep project / Mute project actions.",
+        keywords: [
+          "idle",
+          "notify",
+          "terminal",
+          "background",
+          "reminder",
+          "inactive",
+          "close",
+          "sleep",
+        ],
       },
       {
         id: "general-idle-terminal-threshold",

@@ -30,6 +30,23 @@ export interface ProjectTeardownOptions {
    * record it is about to delete.
    */
   writeBackSessionIds?: boolean;
+  /**
+   * Last word on whether the kill goes ahead, asked synchronously after the
+   * pre-kill snapshot and immediately before the kill request. Nothing awaits
+   * in between, so whatever it checks still holds when the kill is sent.
+   * Returning false skips the kill and everything after it (`aborted`). When
+   * set, the snapshot is read with its completeness, so the guard can refuse a
+   * reading that may be missing terminals.
+   */
+  beforeKill?: (snapshot: ProjectTeardownSnapshot) => boolean;
+}
+
+/** What a {@link ProjectTeardownOptions.beforeKill} guard is shown. */
+export interface ProjectTeardownSnapshot {
+  /** The scope's terminals, read just before the kill. */
+  terminals: TerminalInfo[];
+  /** A host shard didn't answer (or the read failed), so `terminals` may be short. */
+  degraded: boolean;
 }
 
 /** One terminal the host reported tearing down. */
@@ -76,17 +93,28 @@ export async function gracefulTeardownAndJournalProject(
   options: ProjectTeardownOptions = {}
 ): Promise<{
   confirmed: boolean;
+  /** `beforeKill` refused, so nothing was killed. */
+  aborted: boolean;
   terminalsKilled: number;
   sessions: CapturedProjectSession[];
 }> {
   // Snapshot terminal infos for this scope BEFORE the kill — info is gone once
   // the PTY exits. Best-effort: a failed snapshot just skips journaling.
   let infoById = new Map<string, TerminalInfo>();
+  let degraded = false;
   try {
-    const all = await ptyClient.getAllTerminalsAsync();
+    let all: TerminalInfo[];
+    if (options.beforeKill) {
+      const snapshot = await ptyClient.getAllTerminalsWithCompletenessAsync();
+      all = snapshot.terminals;
+      degraded = snapshot.degraded;
+    } else {
+      all = await ptyClient.getAllTerminalsAsync();
+    }
     infoById = new Map(all.filter((t) => t.projectId === scopeId).map((t) => [t.id, t]));
   } catch {
     // Snapshot is best-effort; the journal loop below skips when info is absent.
+    degraded = true;
   }
 
   // Freeze each terminal's launch generation alongside the info snapshot, before
@@ -105,6 +133,10 @@ export async function gracefulTeardownAndJournalProject(
   // asking a session service after the fact would answer "not the assistant".
   const isAssistant = (id: string): boolean =>
     isAssistantTerminalRecord(infoById.get(id) ?? { id });
+
+  if (options.beforeKill && !options.beforeKill({ terminals: [...infoById.values()], degraded })) {
+    return { confirmed: false, aborted: true, terminalsKilled: 0, sessions: [] };
+  }
 
   const outcome = await ptyClient.gracefulKillByProjectConfirmed(
     scopeId,
@@ -209,6 +241,7 @@ export async function gracefulTeardownAndJournalProject(
 
   return {
     confirmed: outcome.confirmed,
+    aborted: false,
     terminalsKilled: outcome.sessions.length,
     sessions: outcome.sessions,
   };

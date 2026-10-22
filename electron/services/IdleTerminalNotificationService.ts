@@ -8,7 +8,7 @@ import type {
 import type { PtyClient } from "./PtyClient.js";
 import type { ProjectViewManagersProvider } from "../window/activeProjectIds.js";
 import { collectActiveProjectIds } from "../window/activeProjectIds.js";
-import { getPtyClient } from "../window/serviceRefs.js";
+import { getPtyClient, getWorkspaceClientRef } from "../window/serviceRefs.js";
 import { store } from "../store.js";
 import { projectStore } from "./ProjectStore.js";
 import { getSystemSleepService } from "./SystemSleepService.js";
@@ -26,6 +26,27 @@ const MAX_THRESHOLD_MINUTES = 1440; // 24h
 const MIN_COOLDOWN_MINUTES = 60;
 
 const ACTIVE_AGENT_STATES: ReadonlySet<AgentState> = new Set(["working", "waiting", "directing"]);
+
+type IdleTerminalInfo = Awaited<ReturnType<PtyClient["getAllTerminalsAsync"]>>[number];
+
+/**
+ * When someone last did something in this terminal: typed into it, or saw its
+ * screen change. 0 when that can't be told.
+ *
+ * Deliberately not `lastOutputTime` or `lastInputTime` (#13845). The raw output
+ * clock moves on every byte, so a spinner or a TUI repainting its status line
+ * keeps a quiet agent looking busy forever, and the raw input clock moves on
+ * the focus and mouse reports xterm sends by itself.
+ *
+ * A terminal with neither has done nothing since it spawned, so it has been
+ * idle that long. That is the common case, not an edge: a shell whose prompt
+ * lands inside the first fit's resize window is re-baselined without a stamp,
+ * and an untouched prompt never changes again.
+ */
+function lastRealActivity(terminal: IdleTerminalInfo): number {
+  const observed = Math.max(terminal.lastTypedInputAt ?? 0, terminal.lastOutputChangeAt ?? 0);
+  return observed || terminal.spawnedAt || 0;
+}
 
 /**
  * IdleTerminalNotificationService — Notifies users when background-project terminals
@@ -257,25 +278,27 @@ export class IdleTerminalNotificationService {
   }
 
   /**
-   * "Close Them" action handler. Delegates to HibernationService so that
-   * project-scoped cleanup callbacks (e.g. DevPreview session teardown) run and
-   * the renderer sees the standard hibernation event. Passes `"user-initiated"`
-   * so this explicit action also evicts the project's cached renderer (#10668) —
-   * unlike the silent memory-pressure path, which leaves it warm.
+   * The reminder's Sleep project button. The same Sleep the project switcher
+   * runs (#13845) — sessions captured and written back, the assistant, the
+   * workspace host and the plugins all reclaimed, the row left `closed` — and
+   * user-initiated, because the user pressed it, even though the reminder
+   * that offered it was automatic.
    */
   async closeProject(projectId: string): Promise<number> {
     if (!projectId) return 0;
 
-    const project = projectStore.getAllProjects().find((p) => p.id === projectId);
-    const projectName = project?.name ?? projectId;
-
     try {
-      const { getHibernationService } = await import("./HibernationService.js");
-      const terminalsKilled = await getHibernationService().hibernateProjectOnDemand(
+      const { sleepProject } = await import("./projectSleep.js");
+      const outcome = await sleepProject(
         projectId,
-        projectName,
-        "user-initiated"
+        { initiator: "user" },
+        {
+          ptyClient: this.ptyClient ?? getPtyClient(),
+          workspaceClient: getWorkspaceClientRef(),
+          projectViewManagers: this.projectViewManagersProvider ?? (() => []),
+        }
       );
+      const terminalsKilled = outcome.status === "slept" ? outcome.terminalsKilled : 0;
 
       // Only burn a cooldown slot if we actually acted on something — otherwise
       // an empty project would silently suppress future legitimate notifications.
@@ -422,7 +445,7 @@ export class IdleTerminalNotificationService {
       const allIdle =
         projectTerminals.length > 0 &&
         projectTerminals.every((t) => {
-          const lastActivity = Math.max(t.lastInputTime ?? 0, t.lastOutputTime ?? 0);
+          const lastActivity = lastRealActivity(t);
           if (!lastActivity) return false; // unknown activity — be conservative
           return now - lastActivity >= thresholdMs;
         });
@@ -444,7 +467,7 @@ export class IdleTerminalNotificationService {
 
       // Compute idle minutes from the *most recently active* terminal
       const newestActivity = projectTerminals.reduce(
-        (max, t) => Math.max(max, t.lastInputTime ?? 0, t.lastOutputTime ?? 0),
+        (max, t) => Math.max(max, lastRealActivity(t)),
         0
       );
       const idleMinutes = newestActivity > 0 ? Math.floor((now - newestActivity) / 60000) : 0;

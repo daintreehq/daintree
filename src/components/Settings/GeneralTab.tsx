@@ -1182,7 +1182,7 @@ export function GeneralTab({
               <SettingsGroup id="general-idle-terminal-notify">
                 <SettingsSwitchCard
                   title="Notify me about idle terminals"
-                  subtitle="A reminder when terminals in background projects go quiet, offering to close them — nothing closes on its own"
+                  subtitle="A reminder when terminals in background projects go quiet, offering to put the project to sleep — nothing sleeps on its own"
                   isEnabled={idleNotifyConfig?.enabled ?? true}
                   onChange={handleIdleNotifyToggle}
                   disabled={!idleNotifyConfig}

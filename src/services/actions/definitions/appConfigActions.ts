@@ -11,6 +11,7 @@ import {
   worktreeConfigClient,
 } from "@/clients";
 import { dispatchEscape } from "@/lib/escapeStack";
+import { sleepIdleTerminalProject } from "@/lib/sleepIdleTerminalProject";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { OPEN_FOLDERS_IN_NEW_WINDOW_VALUES } from "@shared/types/windowOpen";
 import { RESUME_ON_RESTART_VALUES } from "@shared/types/agentSettings";
@@ -241,9 +242,9 @@ export function registerAppConfigActions(
 
   actions.set("idleTerminalNotify.closeProject", () => ({
     id: "idleTerminalNotify.closeProject",
-    title: "Close idle terminals",
+    title: "Sleep idle project",
     description:
-      "Close (hibernate) the idle terminals in a background project. Args: { projectId }. Used as the recovery action on an idle-terminal inbox notification.",
+      "Put a background project whose terminals have gone idle to sleep: its terminals stop with their sessions saved, and reopening it resumes them. Args: { projectId }. Used as the recovery action on an idle-terminal inbox notification.",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -257,7 +258,7 @@ export function registerAppConfigActions(
     argsSchema: ProjectIdArgsSchema,
     run: async (args: unknown) => {
       const { projectId } = ProjectIdArgsSchema.parse(args);
-      await idleTerminalClient.closeProject(projectId);
+      await sleepIdleTerminalProject(projectId);
     },
   }));
 
