@@ -270,7 +270,7 @@ Declaring a database or an endpoint exposes nothing. A plugin's server reaches a
 | Qwen Code | `--mcp-config <file>` |
 | Mistral Vibe | `VIBE_MCP_SERVERS`, each bearer read from its own environment variable |
 
-These eight formats are the only ones, and the built-in entries above are the ones that declare them. Cursor, Grok, Kimi Code, Antigravity, Crush, Kiro, Goose, Aider and Open Interpreter have no launch-time mechanism that adds to the user's servers without replacing them, so they are not handed plugin servers; nor are the in-app Daintree Assistant and help sessions, or an agent CLI a plugin contributes through `contributes.agents` unless it declares a `launchMcp` format (see [Agents](./contribution-points.md#agents)). Gemini CLI starts no MCP server at all in a folder the user has not trusted.
+These eight formats are the only ones, and the built-in entries above are the ones that declare them. Cursor, Grok, Kimi Code, Antigravity, Crush, Kiro, Goose, Aider and Open Interpreter have no launch-time mechanism that adds to the user's servers without replacing them, so they are not handed plugin servers; nor are the in-app Daintree Assistant and help sessions, or an agent CLI a plugin contributes through `contributes.agents` unless it declares a `launchMcp` format (see [Agents](./contribution-points.md#agents--shipped-minimal-tier)). Gemini CLI starts no MCP server at all in a folder the user has not trusted.
 
 Even a CLI from the table is handed no plugin servers when:
 
