@@ -53,12 +53,14 @@ export function isCssDeclarationValue(value: string): boolean {
   return quote === null && closers.length === 0;
 }
 
-const NAME_CHAR = /[\w\u0080-\uffff-]/;
+// Characters that fold a following `url` into a longer token: name characters
+// make it part of an ident or dimension, `#` a hash and `@` an at-keyword.
+const URL_PREFIX_JOINER = /[\w\u0080-\uffff#@-]/;
 
 /** Whether the `(` at `open` follows the bare ident `url`, which CSS tokenizes as a URL. */
 function isUrlFunction(value: string, open: number): boolean {
   if (open < 3 || value.slice(open - 3, open).toLowerCase() !== "url") return false;
-  return open === 3 || !NAME_CHAR.test(value[open - 4]!);
+  return open === 3 || !URL_PREFIX_JOINER.test(value[open - 4]!);
 }
 
 /**

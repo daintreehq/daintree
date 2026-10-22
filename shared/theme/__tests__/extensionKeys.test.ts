@@ -143,6 +143,8 @@ describe("isCssDeclarationValue", () => {
     'u\\72l(a"); } :root { color: red; } #x { --y: url("b)',
     "url(a b)",
     "url(a",
+    "#URL(r{)",
+    "@url(x})",
   ])("rejects %s", (value) => {
     expect(isCssDeclarationValue(value)).toBe(false);
   });
