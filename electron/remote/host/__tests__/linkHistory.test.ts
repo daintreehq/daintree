@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { LinkHistory, MAX_LINK_HISTORY_TEXT, historyText } from "../linkHistory.js";
+import { LinkHistory, historyText } from "../linkHistory.js";
+import { MAX_LINK_HISTORY_TEXT } from "../../metrics/linkMethods.js";
 
 const started = (at: number, clientId = "a") => ({
   kind: "session-started" as const,

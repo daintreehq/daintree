@@ -25,7 +25,7 @@ import {
 import { executableForSpawn } from "../../utils/windowsExecutable.js";
 import { getSanitizedProcessEnv } from "../../utils/gitEnv.js";
 import { createForgeObserver } from "./hostForges.js";
-import { nameLeases } from "../host/linkActivity.js";
+import { nameLeases } from "./driverObservations.js";
 import { DriveLeaseHolderSchema } from "../link/schemas.js";
 import type { HostSampleSources, ObservedAgents, SampleReaders } from "./sampler.js";
 

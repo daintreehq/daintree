@@ -1,9 +1,5 @@
 import type { HostLinkEvent } from "../../../shared/types/ipc/hostMetrics.js";
-
-/** Enough for the last few sessions of every Shell a host serves, not a log. */
-export const MAX_LINK_HISTORY = 100;
-/** Reasons and details as a person reads them; a peer's GOODBYE can say more. */
-export const MAX_LINK_HISTORY_TEXT = 256;
+import { MAX_LINK_HISTORY, MAX_LINK_HISTORY_TEXT } from "../metrics/linkMethods.js";
 
 type Refusal = Extract<HostLinkEvent, { kind: "refused" }>;
 

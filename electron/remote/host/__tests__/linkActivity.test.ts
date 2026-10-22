@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { DriveLeaseObservation } from "../../../../shared/types/remoteHosts.js";
-import { composeLinkActivity, nameLeases } from "../linkActivity.js";
+import { composeLinkActivity } from "../linkActivity.js";
+import { nameLeases } from "../../metrics/driverObservations.js";
 import { LinkActivitySchema, MAX_ACTIVITY_DRIVERS } from "../../metrics/linkMethods.js";
 import { MAX_PROJECT_NAME_CHARS } from "../../link/schemas.js";
 

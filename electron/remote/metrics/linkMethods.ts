@@ -1,7 +1,6 @@
 import { z } from "zod";
 import { FLEET_BANDS } from "../../../shared/utils/fleetBands.js";
 import { DriverObservationSchema } from "../link/schemas.js";
-import { MAX_LINK_HISTORY, MAX_LINK_HISTORY_TEXT } from "../host/linkHistory.js";
 
 /** Bounds on what one host answers, so a busy host can't flood a Shell. */
 export const MAX_FLEET_TARGETS = 500;
@@ -171,6 +170,10 @@ export const RestartImpactSchema = z
 /** Bounds on a link-activity answer: a page for a person to read, not an inventory. */
 export const MAX_ACTIVITY_DRIVERS = 200;
 export const MAX_ACTIVITY_SHELLS = 64;
+/** Enough for the last few sessions of every Shell a host serves, not a log. */
+export const MAX_LINK_HISTORY = 100;
+/** Reasons and details as a person reads them; a peer's GOODBYE can say more. */
+export const MAX_LINK_HISTORY_TEXT = 256;
 
 const epochMs = z.number().finite();
 const clientName = z.string().max(256);
