@@ -273,7 +273,7 @@ export function PluginToolbarButton({
           sideOffset={4}
           className="min-w-[12rem] max-h-[var(--radix-dropdown-menu-content-available-height)] overflow-y-auto"
         >
-          <PluginToolbarMenuItems entries={menuEntries} />
+          <PluginToolbarMenuItems entries={menuEntries} blocked={blocked} />
         </DropdownMenuContent>
       </DropdownMenu>
     );
@@ -294,13 +294,27 @@ function dispatchPluginMenuEntry(actionId: string): void {
 }
 
 /** A plugin toolbar button's menu rows, each dispatching its own action. */
-function PluginToolbarMenuItems({ entries }: { entries: readonly PluginToolbarMenuEntry[] }) {
+function PluginToolbarMenuItems({
+  entries,
+  blocked = false,
+}: {
+  entries: readonly PluginToolbarMenuEntry[];
+  /** The button went busy or disabled while its menu was open: selecting does nothing. */
+  blocked?: boolean;
+}) {
   return (
     <>
       {entries.map((entry) => (
         <DropdownMenuItem
           key={entry.actionId}
-          onSelect={() => dispatchPluginMenuEntry(entry.actionId)}
+          onSelect={(event) => {
+            if (blocked) {
+              event.preventDefault();
+              return;
+            }
+            dispatchPluginMenuEntry(entry.actionId);
+          }}
+          aria-disabled={blocked || undefined}
           keybinding={entry.actionId}
           data-testid={`plugin-toolbar-menu-item-${entry.actionId}`}
         >
@@ -367,7 +381,7 @@ function PluginToolbarMenuChevron({
         sideOffset={4}
         className="min-w-[12rem] max-h-[var(--radix-dropdown-menu-content-available-height)] overflow-y-auto"
       >
-        <PluginToolbarMenuItems entries={entries} />
+        <PluginToolbarMenuItems entries={entries} blocked={blocked} />
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -399,11 +413,23 @@ export function PluginOverflowItem({
           <PluginMenuRowIcon presentation={presentation} />
           <span className="min-w-0 flex-1 truncate">{config.label}</span>
           <PluginMenuRowState presentation={presentation} />
+          {badge && (
+            <>
+              <span className="ml-2 inline-flex shrink-0 items-center">
+                <PluginBadgeIndicator pluginId={config.pluginId} badge={badge} live={false} />
+              </span>
+              <span className="sr-only">, {describeToolbarBadge(badge)}</span>
+            </>
+          )}
         </DropdownMenuSubTrigger>
         <DropdownMenuSubContent className="min-w-[12rem]">
           {config.actionId !== undefined && (
             <>
-              <DropdownMenuItem onSelect={onSelect} keybinding={config.actionId}>
+              <DropdownMenuItem
+                onSelect={onSelect}
+                keybinding={config.actionId}
+                {...menuToggleProps(presentation.pressed)}
+              >
                 <span className="min-w-0 flex-1 truncate">{config.label}</span>
               </DropdownMenuItem>
               <DropdownMenuSeparator />
@@ -608,6 +634,7 @@ function PluginTrayRow({
               <DropdownMenuItem
                 onSelect={() => onSelect(config)}
                 keybinding={config.actionId}
+                {...menuToggleProps(presentation.pressed)}
                 data-testid={`plugin-tray-primary-${config.id}`}
               >
                 <span className="min-w-0 flex-1 truncate">{config.label}</span>
@@ -756,6 +783,8 @@ export function PluginTrayButton({
       deferPopover(config.id, "tray");
       return;
     }
+    // A menu button whose items are gone has nothing left to run.
+    if (config.actionId === undefined) return;
     void actionService.dispatch(
       config.actionId as Parameters<typeof actionService.dispatch>[0],
       undefined,

@@ -552,6 +552,15 @@ describe("createMockHost", () => {
         menu: Array.from({ length: 6 }, (_, i) => ({ actionId: `acme.cmd${i}` })),
       })
     ).rejects.toThrow(/menu: at most 5/);
+    await expect(host.setToolbarButtonState("sync", { menu: null } as never)).rejects.toThrow(
+      /menu: must be an array/
+    );
+    await expect(
+      host.setToolbarButtonState("sync", { menu: [{ actionId: "acme.pull", args: 1 }] } as never)
+    ).rejects.toThrow(/args: unrecognized key/);
+    await expect(
+      host.setToolbarButtonState("sync", { menu: [{ actionId: "acme.pull", label: " " }] })
+    ).rejects.toThrow(/label: must be a non-empty string/);
     expect(host.setToolbarButtonStateCalls).toHaveLength(2);
   });
 

@@ -889,6 +889,21 @@ function validateToolbarButtonState(
     fail("iconId: must be a non-empty string at most 256 characters");
   }
   if (state.menu !== undefined) {
+    if (!Array.isArray(state.menu)) fail("menu: must be an array");
+    // Production's strict item schema: only `actionId` and a 1 to 80 character label.
+    for (const item of state.menu) {
+      if (item === null || typeof item !== "object" || Array.isArray(item)) continue;
+      for (const key of Object.keys(item)) {
+        if (key !== "actionId" && key !== "label") fail(`menu: ${key}: unrecognized key`);
+      }
+      const label = (item as { label?: unknown }).label;
+      if (
+        label !== undefined &&
+        (typeof label !== "string" || label.trim().length < 1 || label.trim().length > 80)
+      ) {
+        fail("menu: label: must be a non-empty string at most 80 characters");
+      }
+    }
     // The host's own vetting, so a menu it refuses rejects here too.
     const menu = normalizePanelMenuItems(state.menu, manifestId, pluginId);
     if (!menu.ok) fail(`menu: ${menu.error}`);
