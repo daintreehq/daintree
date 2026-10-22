@@ -430,6 +430,9 @@ export class IdleTerminalNotificationService {
       // activity below and clears the throttle through the ineligible path.
       if (activeIds.has(pid)) continue;
 
+      // Opted out of automatic sleep, so the "Sleep project" suggestion is noise.
+      if (project.neverAutoSleep) continue;
+
       // Any remaining non-qualifying reason (no terminals, active agent, recent
       // activity) means the project has left the idle state, so its notified
       // throttle is cleared — a later idle period then notifies fresh. The

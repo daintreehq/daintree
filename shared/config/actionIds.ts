@@ -288,6 +288,7 @@ export const BUILT_IN_ACTION_IDS = [
   "project.openInNewWindow",
   "project.switch",
   "project.update",
+  "project.toggleNeverAutoSleep",
   "project.remove",
   "project.archive",
   "project.unarchive",

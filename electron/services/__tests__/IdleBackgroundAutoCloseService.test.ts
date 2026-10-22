@@ -468,6 +468,47 @@ describe("IdleBackgroundAutoCloseService", () => {
       ]);
     });
 
+    it("never closes a project that opted out of automatic sleep", async () => {
+      enable();
+      projectStoreMock.getAllProjects.mockReturnValue([
+        makeIdleProject("proj-1", { neverAutoSleep: true }),
+        makeIdleProject("proj-2"),
+      ]);
+      const service = makeService();
+      await runCheck(service);
+
+      expect(ptyClientMock.gracefulKillByProject).not.toHaveBeenCalledWith(
+        "proj-1",
+        expect.anything()
+      );
+      expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalledWith(
+        "proj-1",
+        "closed",
+        expect.anything()
+      );
+      expect(projectStoreMock.updateProjectStatus).toHaveBeenCalledWith("proj-2", "closed", {
+        autoParkedAt: expect.any(Number),
+      });
+    });
+
+    it("halts an in-flight close when the project opts out during the snapshot await", async () => {
+      enable();
+      projectStoreMock.getAllProjects.mockReturnValue([makeIdleProject("proj-1")]);
+      ptyClientMock.getAllTerminalsWithCompletenessAsync
+        .mockResolvedValueOnce({ terminals: [], degraded: false, shardsTotal: 2, shardsFailed: 0 })
+        .mockImplementationOnce(async () => {
+          projectStoreMock.getProjectById.mockImplementation((id) =>
+            makeIdleProject(id, { neverAutoSleep: true })
+          );
+          return { terminals: [], degraded: false, shardsTotal: 2, shardsFailed: 0 };
+        });
+      const service = makeService();
+      await runCheck(service);
+
+      expect(helpSessionServiceMock.revokeByProjectId).not.toHaveBeenCalled();
+      expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
+    });
+
     it("skips a project that still has a terminal", async () => {
       enable();
       projectStoreMock.getAllProjects.mockReturnValue([makeIdleProject("proj-1")]);
@@ -1520,6 +1561,33 @@ describe("IdleBackgroundAutoCloseService", () => {
         "idle-background:closed",
         expect.objectContaining({ projects: [{ projectId: "proj-1", projectName: "proj-1" }] })
       );
+    });
+
+    it("leaves an idle shell project that opted out of automatic sleep awake", async () => {
+      enableShells();
+      const service = setUpIdleShellProject();
+      const lastOpened = Date.now() - 3 * HOUR_MS;
+      projectStoreMock.getAllProjects.mockReturnValue([
+        makeIdleProject("proj-1", { lastOpened, neverAutoSleep: true }),
+      ]);
+      await runCheck(service);
+      expect(ptyClientMock.gracefulKillByProject).not.toHaveBeenCalled();
+      expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
+    });
+
+    it("halts an idle shell close when the project opts out mid-sweep", async () => {
+      enableShells();
+      const service = setUpIdleShellProject();
+      const lastOpened = Date.now() - 3 * HOUR_MS;
+      ptyClientMock.getProcessInventory.mockImplementation(async () => {
+        projectStoreMock.getProjectById.mockImplementation((id) =>
+          makeIdleProject(id, { lastOpened, neverAutoSleep: true })
+        );
+        return census("proj-1");
+      });
+      await runCheck(service);
+      expect(ptyClientMock.gracefulKillByProject).not.toHaveBeenCalled();
+      expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
     });
 
     it("leaves shell projects alone until they are opted in", async () => {

@@ -557,14 +557,46 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
         emoji: z.string().optional(),
         color: z.string().optional(),
         pinned: z.boolean().optional(),
+        neverAutoSleep: z.boolean().optional(),
       }),
     }),
     run: async (args: unknown) => {
       const { projectId, updates } = args as {
         projectId: string;
-        updates: { name?: string; emoji?: string; color?: string; pinned?: boolean };
+        updates: {
+          name?: string;
+          emoji?: string;
+          color?: string;
+          pinned?: boolean;
+          neverAutoSleep?: boolean;
+        };
       };
       await useProjectStore.getState().updateProject(projectId, updates);
+    },
+  }));
+
+  const neverAutoSleepArgs = z.object({
+    projectId: z.string().optional(),
+    enabled: z.boolean().optional(),
+  });
+
+  actions.set("project.toggleNeverAutoSleep", () => ({
+    id: "project.toggleNeverAutoSleep",
+    title: "Never sleep automatically",
+    description:
+      "Exempt a project from automatic sleep, so the idle background sweep never closes it. Manual Sleep project still works on it. Defaults to the current project; pass enabled to set the exemption explicitly, or omit it to flip the current state. This is unrelated to the system Keep awake setting and to pinning.",
+    category: "project",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    argsSchema: neverAutoSleepArgs,
+    run: async ({ projectId, enabled }: z.infer<typeof neverAutoSleepArgs>) => {
+      const store = useProjectStore.getState();
+      const id = projectId ?? store.currentProject?.id;
+      if (!id) throw new Error("No project given and no project is open");
+      const project = store.projects.find((p) => p.id === id);
+      if (!project) throw new Error(`Project not found: ${id}`);
+      await store.updateProject(id, { neverAutoSleep: enabled ?? !project.neverAutoSleep });
     },
   }));
 

@@ -271,6 +271,8 @@ export interface SearchableProject extends WorkspaceRowStatusFields {
   status: Project["status"];
   /** Set when the project was auto-closed by the background-idle sweep (#10830). */
   autoParkedAt?: number;
+  /** Opted out of the background-idle sweep; manual Sleep still works. */
+  neverAutoSleep?: boolean;
   /**
    * How many saved agent panels this project would restore if opened (#11801).
    * Main derives it from the persisted state, so the row draws its dot without
@@ -1090,6 +1092,7 @@ function toSearchableProject(
     lastOpened: p.lastOpened ?? 0,
     status: p.status,
     autoParkedAt: p.autoParkedAt,
+    neverAutoSleep: p.neverAutoSleep,
     // Passed through as-is. Coercing an absent count to 0 here would turn
     // "not computed yet" into "restores nothing" — the one distinction the
     // dot depends on.

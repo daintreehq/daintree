@@ -10,6 +10,7 @@ export * from "./brands";
 // Each was chosen to fit the metaphor.
 export {
   Activity, // project pulse / live activity heartbeat
+  AlarmClockOff, // a project exempt from automatic sleep — the idle timer never runs out on it
   AppWindow, // where an opened folder or host lands — a window of its own or the current one
   Archive, // file a project away — out of the switcher's main list, everything about it kept
   ArchiveRestore, // bring an archived project back to where it was filed
