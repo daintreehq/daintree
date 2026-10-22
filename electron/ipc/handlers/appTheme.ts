@@ -4,15 +4,16 @@ import { promises as fs } from "node:fs";
 import { CHANNELS } from "../channels.js";
 import { store } from "../../store.js";
 import { parseAppThemeFile } from "../../utils/appThemeImporter.js";
-import {
-  getAppThemeFallbackType,
-  resolveAppTheme,
-  normalizeAccentHex,
-} from "../../../shared/theme/index.js";
-import { isPluginThemeId, withSelectedPluginTheme } from "../../../shared/theme/pluginThemes.js";
+import { normalizeAccentHex } from "../../../shared/theme/index.js";
+import { isPluginThemeId } from "../../../shared/theme/pluginThemes.js";
 import { persistColorSchemeSelection } from "../../services/appThemePluginSelection.js";
 import { typedHandle, typedHandleWithContext, typedSend } from "../utils.js";
-import { setTitleBarOverlayTheme } from "../../window/titleBarOverlay.js";
+import {
+  repaintAllWindowThemes,
+  repaintWindowTheme,
+  visibleProjectIdOf,
+} from "../../window/projectThemeChrome.js";
+import { getWindowRegistry } from "../../window/windowRef.js";
 import {
   appCustomSchemesReadSchema,
   appCustomSchemesWriteSchema,
@@ -90,15 +91,8 @@ function getAppThemeConfig(): AppThemeConfig {
  */
 export function refreshTitleBarOverlayTheme(): void {
   if (process.platform !== "win32") return;
-  const config = getAppThemeConfig();
-  const scheme = resolveAppTheme(
-    config.colorSchemeId,
-    withSelectedPluginTheme(config.customSchemes ?? [], config),
-    getAppThemeFallbackType(config.colorSchemeId, config, nativeTheme.shouldUseDarkColors)
-  );
-  for (const win of BrowserWindow.getAllWindows()) {
-    if (!win.isDestroyed()) setTitleBarOverlayTheme(win, scheme.tokens);
-  }
+  // Per window: a window showing a project with its own theme keeps it (#13833).
+  repaintAllWindowThemes();
 }
 
 /**
@@ -285,14 +279,13 @@ export function registerAppThemeHandlers(mainWindow?: BrowserWindow): () => void
 
       typedSend(win, "app-theme:system-appearance-changed", { isDark, schemeId });
 
-      const customSchemes = config.customSchemes ?? [];
-      const scheme = resolveAppTheme(schemeId, customSchemes, isDark ? "dark" : "light");
-      win.setBackgroundColor(scheme.tokens["surface-canvas"]);
-
-      // Hand the new tokens to the overlay owner rather than writing the native
-      // strip here: it re-tints in place when a global banner currently holds
-      // the caption band, instead of reverting it to bare canvas (#11766).
-      setTitleBarOverlayTheme(win, scheme.tokens);
+      // The overlay owner re-tints in place when a global banner currently
+      // holds the caption band, instead of reverting it to bare canvas
+      // (#11766). A project with its own theme keeps it (#13833).
+      repaintWindowTheme(
+        win,
+        visibleProjectIdOf(getWindowRegistry()?.getByWindowId(win.id)?.services.projectViewManager)
+      );
     }, 300);
   };
 

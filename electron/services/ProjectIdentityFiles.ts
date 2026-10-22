@@ -14,6 +14,8 @@ import { UTF8_BOM, isValidProjectId } from "./projectStorePaths.js";
 import { safeRecipeFilename } from "../utils/recipeFilename.js";
 import { stripUtf8Bom } from "../utils/stripUtf8Bom.js";
 import { TerminalRecipeSchema } from "../schemas/ipc.js";
+import { BUILT_IN_APP_SCHEMES } from "../../shared/theme/themes.js";
+import { isPluginThemeId, parsePluginThemeId } from "../../shared/theme/pluginThemes.js";
 import {
   sanitizeRecipeTerminals,
   MAX_TERMINALS_PER_RECIPE,
@@ -107,10 +109,35 @@ function buildShareableTerminalSettings(
   return Object.keys(result).length > 0 ? result : undefined;
 }
 
+/** What `.daintree/project.json` says about the project, as this build reads it. */
+export interface InRepoProjectIdentity {
+  id?: string;
+  name?: string;
+  emoji?: string;
+  color?: string;
+  /** The theme the repository suggests: a built-in id or `plugin:{pluginId}:{themeId}`. */
+  theme?: string;
+  found: boolean;
+}
+
+const MAX_THEME_ID_LENGTH = 200;
+
+/**
+ * A suggested theme id, or undefined for one the repository cannot name. An
+ * imported theme lives on one machine under an id nobody else has, so only a
+ * built-in or a plugin theme can be suggested; whether it exists here is
+ * decided where it would be shown.
+ */
+function parseSuggestedThemeId(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const id = value.trim();
+  if (!id || id.length > MAX_THEME_ID_LENGTH) return undefined;
+  if (isPluginThemeId(id)) return parsePluginThemeId(id) ? id : undefined;
+  return BUILT_IN_APP_SCHEMES.some((scheme) => scheme.id === id) ? id : undefined;
+}
+
 export class ProjectIdentityFiles {
-  async readInRepoProjectIdentity(
-    projectPath: string
-  ): Promise<{ id?: string; name?: string; emoji?: string; color?: string; found: boolean }> {
+  async readInRepoProjectIdentity(projectPath: string): Promise<InRepoProjectIdentity> {
     const filePath = path.join(projectPath, DAINTREE_PROJECT_JSON);
     try {
       let content = await fs.readFile(filePath, "utf-8");
@@ -127,10 +154,7 @@ export class ProjectIdentityFiles {
         return { found: false };
       }
 
-      const result: { id?: string; name?: string; emoji?: string; color?: string; found: boolean } =
-        {
-          found: true,
-        };
+      const result: InRepoProjectIdentity = { found: true };
 
       // The move anchor (#11282). A malformed id is dropped without discarding
       // the rest of the identity — a hand-edited or truncated value must not
@@ -150,6 +174,10 @@ export class ProjectIdentityFiles {
       if (typeof parsed.color === "string" && parsed.color.trim().length > 0) {
         result.color = parsed.color.trim();
       }
+
+      // A suggestion only (#13833): nothing applies it until the user accepts.
+      const theme = parseSuggestedThemeId(parsed.theme);
+      if (theme !== undefined) result.theme = theme;
 
       return result;
     } catch {
@@ -184,19 +212,28 @@ export class ProjectIdentityFiles {
     // does not supply would be *erased* by any ordinary name/emoji/color edit —
     // silently disarming move detection (#11282). Carry the on-disk value
     // forward whenever the caller doesn't name one.
+    //
+    // The suggested theme (#13833) is the repository's, never edited from
+    // Daintree, so it is always carried forward the same way.
     let id = data.id !== undefined && isValidProjectId(data.id) ? data.id : undefined;
-    if (id === undefined) {
-      const existing = await this.readInRepoProjectIdentity(projectPath);
-      id = existing.id;
-    }
+    const existing = await this.readInRepoProjectIdentity(projectPath);
+    if (id === undefined) id = existing.id;
 
-    const payload: { version: 1; id?: string; name?: string; emoji?: string; color?: string } = {
+    const payload: {
+      version: 1;
+      id?: string;
+      name?: string;
+      emoji?: string;
+      color?: string;
+      theme?: string;
+    } = {
       version: 1,
     };
     if (id !== undefined) payload.id = id;
     if (data.name !== undefined) payload.name = data.name;
     if (data.emoji !== undefined) payload.emoji = data.emoji;
     if (data.color !== undefined) payload.color = data.color;
+    if (existing.theme !== undefined) payload.theme = existing.theme;
 
     const attemptWrite = async (ensureDir: boolean): Promise<void> => {
       if (ensureDir) {

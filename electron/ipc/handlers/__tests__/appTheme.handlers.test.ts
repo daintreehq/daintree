@@ -142,7 +142,7 @@ import { ipcMain, dialog, BrowserWindow } from "electron";
 import { CHANNELS } from "../../channels.js";
 import { registerAppThemeHandlers } from "../appTheme.js";
 import { typedSend } from "../../utils.js";
-import { resolveAppTheme } from "../../../../shared/theme/index.js";
+import { getAppThemeFallbackType, resolveAppTheme } from "../../../../shared/theme/index.js";
 import {
   seedTitleBarOverlay,
   setTitleBarOverlayBannerSeverity,
@@ -517,7 +517,13 @@ describe("appTheme handlers", () => {
     getNativeThemeHandler()();
     vi.advanceTimersByTime(300);
 
-    expect(resolveAppTheme).toHaveBeenCalledWith("custom-deleted", [], "light");
+    // The polarity comes from the light slot the id holds and the light OS appearance.
+    expect(getAppThemeFallbackType).toHaveBeenCalledWith(
+      "custom-deleted",
+      expect.objectContaining({ preferredLightSchemeId: "custom-deleted" }),
+      false
+    );
+    expect(resolveAppTheme).toHaveBeenCalledWith("custom-deleted", [], "dark");
   });
 
   it("nativeTheme updated does not send when window is destroyed", () => {

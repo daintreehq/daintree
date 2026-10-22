@@ -2132,7 +2132,7 @@ export const PROJECT_SETTINGS_SECTIONS: Readonly<
   "project:general": {
     tabLabel: "General",
     searchNavDescription: "Project name, emoji, color, icon, and dev server configuration",
-    searchNavKeywords: ["project", "name", "emoji", "color", "icon", "dev server"],
+    searchNavKeywords: ["project", "name", "emoji", "color", "icon", "theme", "dev server"],
     sections: [
       {
         id: "project-name",
@@ -2140,6 +2140,13 @@ export const PROJECT_SETTINGS_SECTIONS: Readonly<
         title: "Project name",
         description: "Display name for the project",
         keywords: ["name", "title", "label"],
+      },
+      {
+        id: "project-theme",
+        section: "Project identity",
+        title: "Theme",
+        description: "Show this project in its own theme instead of the global one",
+        keywords: ["theme", "appearance", "colors", "dark", "light", "suggested"],
       },
       {
         id: "project-features",

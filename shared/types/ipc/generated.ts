@@ -2153,6 +2153,22 @@ export interface GeneratedIpcInvokeMap {
     args: [request: import("../projectRelocation.js").RelocationRequest];
     result: import("../projectRelocation.js").RelocationPreview;
   };
+  "project-theme:answer-suggestion": {
+    args: [schemeId: string, answer: import("../../theme/types.js").ProjectThemeSuggestionAnswer];
+    result: import("./projectTheme.js").ProjectThemeSnapshot;
+  };
+  "project-theme:get": {
+    args: [];
+    result: import("./projectTheme.js").ProjectThemeSnapshot | null;
+  };
+  "project-theme:reset-suggestion": {
+    args: [];
+    result: import("./projectTheme.js").ProjectThemeSnapshot;
+  };
+  "project-theme:set-theme": {
+    args: [schemeId: string | null];
+    result: import("./projectTheme.js").ProjectThemeSnapshot;
+  };
   "project:add-browser-allowed-host": {
     args: [payload: { projectId: string; hostname: string }];
     result: string[];

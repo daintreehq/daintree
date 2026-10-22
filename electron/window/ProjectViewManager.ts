@@ -51,6 +51,7 @@ import { PERF_MARKS } from "../../shared/perf/marks.js";
 import { toHostScopedKey, type HostId } from "../../shared/types/remoteHosts.js";
 import { markPerformance } from "../utils/performance.js";
 import { collectGuestPids } from "./ProjectViewLifecycleController.js";
+import { repaintWindowTheme, visibleProjectIdOf } from "./projectThemeChrome.js";
 
 // Trailing-edge debounce on freeze entry: the lag-pressure path can flip
 // efficiency on/off without going through the 30 s downgrade hysteresis, so
@@ -356,6 +357,29 @@ export class ProjectViewManager {
     if (projectId === this.activeProjectIdValue) return;
     this.activeProjectIdValue = projectId;
     notifyProjectPresenceChanged();
+    this.repaintThemeChrome();
+  }
+
+  private themeChromeRepaintQueued = false;
+
+  /**
+   * The window chrome follows the project on screen (#13833). Every writer of
+   * `activeProjectId` lands here, as do a settling paint gate and the end of a
+   * cold switch, when the outgoing view stops covering the incoming one.
+   *
+   * Deferred to a microtask, coalesced: a switch moves `activeProjectId` to the
+   * incoming project a few statements BEFORE it arms the bridge that keeps the
+   * outgoing view on screen, so painting synchronously would recolour the
+   * chrome for a project the user cannot see yet.
+   */
+  repaintThemeChrome(): void {
+    if (this.disposed || this.themeChromeRepaintQueued) return;
+    this.themeChromeRepaintQueued = true;
+    queueMicrotask(() => {
+      this.themeChromeRepaintQueued = false;
+      if (this.disposed) return;
+      repaintWindowTheme(this.win, visibleProjectIdOf(this));
+    });
   }
   maxCachedViews = 1;
   memoryPressurePolicy: MemoryPressurePolicy | null = null;

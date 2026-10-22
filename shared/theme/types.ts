@@ -442,6 +442,23 @@ export interface AppThemeConfig {
   accentColorOverride?: string | null;
   /** Applies only while its `id` equals `colorSchemeId`; anything else is stale. */
   pluginThemeSnapshot?: PluginThemeSnapshot;
+  /** Each project's own theme choices (#13833), by project id. */
+  projectThemes?: Record<string, ProjectThemeChoice>;
+}
+
+export type ProjectThemeSuggestionAnswer = "accepted" | "declined";
+
+/**
+ * One project's theme, kept in Daintree's store and never in the repository.
+ * Shaped like the global selection so the plugin snapshot helpers read it too.
+ */
+export interface ProjectThemeChoice {
+  /** The theme this project shows instead of the global one; absent follows global. */
+  colorSchemeId?: string;
+  /** Applies only while its `id` equals `colorSchemeId`, as the global snapshot does. */
+  pluginThemeSnapshot?: PluginThemeSnapshot;
+  /** The answer to the repository's suggested theme, remembered against the theme it named. */
+  suggestionAnswer?: { schemeId: string; answer: ProjectThemeSuggestionAnswer };
 }
 
 /**

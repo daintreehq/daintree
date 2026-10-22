@@ -304,6 +304,56 @@ describe("buildSkeletonCss pre-read theme config (#10393)", () => {
   });
 });
 
+describe("a project's own theme (#13833)", () => {
+  const PROJECT_THEME_CONFIG = {
+    colorSchemeId: "daintree",
+    projectThemes: {
+      "project-a": { colorSchemeId: "bondi" },
+      "project-gone": { colorSchemeId: "custom-deleted" },
+    },
+  };
+  const canvasOf = (id: string) => resolveAppTheme(id, []).tokens["surface-canvas"];
+
+  beforeEach(() => {
+    storeMock.get.mockReset();
+    storeMock.get.mockImplementation((key: string) => {
+      if (key === "appState") return { sidebarWidth: 350, focusMode: false };
+      if (key === "appTheme") return PROJECT_THEME_CONFIG;
+      return undefined;
+    });
+  });
+
+  afterEach(() => {
+    storeMock.get.mockImplementation((key: string) => {
+      if (key === "appState") return { sidebarWidth: 350, focusMode: false };
+      if (key === "appTheme") return { colorSchemeId: "daintree" };
+      return undefined;
+    });
+  });
+
+  it("seeds a view of that project with its theme, and every other view with the global one", () => {
+    expect(resolveInitialColorSchemeId(undefined, "project-a")).toBe("bondi");
+    expect(resolveInitialColorSchemeId(undefined, "project-b")).toBe("daintree");
+    expect(resolveInitialColorSchemeId()).toBe("daintree");
+  });
+
+  it("paints the view background in the project's theme", () => {
+    expect(resolveInitialCanvasBackgroundColor("project-a")).toBe(canvasOf("bondi"));
+    expect(resolveInitialCanvasBackgroundColor("project-b")).toBe(canvasOf("daintree"));
+  });
+
+  it("paints the skeleton in the project's theme", () => {
+    const css = buildSkeletonCss(null, undefined, { projectId: "project-a" });
+    expect(css).toContain(`--theme-surface-canvas: ${canvasOf("bondi")};`);
+    expect(buildSkeletonCss(null)).toContain(`--theme-surface-canvas: ${canvasOf("daintree")};`);
+  });
+
+  it("falls back to the global theme when the project's theme no longer exists", () => {
+    expect(resolveInitialColorSchemeId(undefined, "project-gone")).toBe("daintree");
+    expect(resolveInitialCanvasBackgroundColor("project-gone")).toBe(canvasOf("daintree"));
+  });
+});
+
 describe("buildSkeletonCss instantReveal (entrance bypass for project switches)", () => {
   beforeEach(() => {
     storeMock.get.mockReset();

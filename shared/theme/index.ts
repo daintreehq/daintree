@@ -6,6 +6,7 @@ export * from "./entityColors.js";
 export * from "./extensionKeys.js";
 export * from "./palette.js";
 export * from "./pluginThemes.js";
+export * from "./projectThemes.js";
 export * from "./semantic.js";
 export * from "./terminal.js";
 export * from "./themes.js";

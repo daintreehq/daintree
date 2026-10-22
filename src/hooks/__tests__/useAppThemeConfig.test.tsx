@@ -1,11 +1,13 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderHook, waitFor } from "@testing-library/react";
 import type { AppThemeConfig } from "@shared/types/appTheme";
 
 const setSelectedSchemeIdSilent = vi.fn();
+const setProjectTheme = vi.fn();
 const storeActions = {
   setSelectedSchemeIdSilent,
+  setProjectTheme,
   addCustomScheme: vi.fn(),
   setColorVisionMode: vi.fn(),
   setFollowSystem: vi.fn(),
@@ -111,6 +113,57 @@ describe("useAppThemeConfig", () => {
     expect(setSelectedSchemeIdSilent).toHaveBeenCalledWith("custom-deleted", {
       crossfade: true,
       fallbackType: "light",
+    });
+  });
+
+  describe("a project's own theme (#13833)", () => {
+    let projectThemeListener: ((change: { projectId: string; choice: unknown }) => void) | null =
+      null;
+
+    beforeEach(() => {
+      projectThemeListener = null;
+      Object.assign(window, {
+        __DAINTREE_INITIAL_PROJECT__: { id: "p1" },
+        electron: {
+          ...(window as { electron?: object }).electron,
+          projectTheme: {
+            onChanged: (cb: (change: { projectId: string; choice: unknown }) => void) => {
+              projectThemeListener = cb;
+              return () => {};
+            },
+          },
+        },
+      });
+    });
+
+    afterEach(() => {
+      Reflect.deleteProperty(window, "__DAINTREE_INITIAL_PROJECT__");
+    });
+
+    it("seeds this view's project choice before the selection paints", async () => {
+      bootWith({
+        colorSchemeId: "daintree",
+        projectThemes: { p1: { colorSchemeId: "bondi" }, p2: { colorSchemeId: "namib" } },
+      });
+
+      renderHook(() => useAppThemeConfig());
+
+      await waitFor(() => expect(setSelectedSchemeIdSilent).toHaveBeenCalled());
+      expect(setProjectTheme).toHaveBeenCalledWith({ colorSchemeId: "bondi" });
+      expect(setProjectTheme.mock.invocationCallOrder[0]).toBeLessThan(
+        setSelectedSchemeIdSilent.mock.invocationCallOrder[0]!
+      );
+    });
+
+    it("follows main's pushes for this view's project only, crossfading", () => {
+      renderHook(() => useAppThemeConfig());
+      expect(projectThemeListener).not.toBeNull();
+
+      projectThemeListener!({ projectId: "p2", choice: { colorSchemeId: "namib" } });
+      expect(setProjectTheme).not.toHaveBeenCalled();
+
+      projectThemeListener!({ projectId: "p1", choice: null });
+      expect(setProjectTheme).toHaveBeenCalledWith(null, { crossfade: true });
     });
   });
 

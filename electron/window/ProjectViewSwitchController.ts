@@ -848,6 +848,8 @@ export async function performSwitch(
     // restored as the active view (rollback), so it no longer needs the
     // bridge protections.
     host.pendingColdSwitch = null;
+    // The chrome held on the outgoing project while it covered this one.
+    host.repaintThemeChrome();
   }
 
   // Explicit focus after swap

@@ -10,12 +10,11 @@ import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { Check } from "lucide-react";
 import { useSearchablePalette } from "@/hooks/useSearchablePalette";
 import { useEffectiveCombo } from "@/hooks/useKeybinding";
-import { useAppThemeStore, injectSchemeToDOM } from "@/store/appThemeStore";
+import { useAppThemeStore, injectSchemeToDOM, resolveCommittedScheme } from "@/store/appThemeStore";
 import { selectSelectableSchemes } from "@/theme/selectableSchemes";
 import { notify } from "@/lib/notify";
 import { appThemeClient } from "@/clients/appThemeClient";
 import { BUILT_IN_APP_SCHEMES } from "@/config/appColorSchemes";
-import { resolveAppTheme } from "@shared/theme";
 import type { AppColorScheme } from "@shared/types/appTheme";
 import type { FuseResultMatch } from "@/hooks/useSearchablePalette";
 import { THEME_MODE_LABEL, searchThemes } from "./themeSearch";
@@ -114,11 +113,11 @@ function ThemeListItem({
 /**
  * The saved theme, read when it is restored rather than when the palette
  * opened: it can change underneath an open palette, as when the plugin that
- * offered it goes away and main moves the selection.
+ * offered it goes away and main moves the selection. In a project with its own
+ * theme that is the project's.
  */
 function committedScheme(): AppColorScheme {
-  const state = useAppThemeStore.getState();
-  return resolveAppTheme(state.selectedSchemeId, selectSelectableSchemes(state));
+  return resolveCommittedScheme(useAppThemeStore.getState());
 }
 
 export function ThemePalette({ isOpen, onClose }: ThemePaletteProps) {

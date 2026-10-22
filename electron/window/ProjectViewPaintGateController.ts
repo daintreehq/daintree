@@ -121,10 +121,13 @@ export function waitForPaint(
         settled = true;
         clearTimeout(gate.softTimeout);
         clearTimeout(gate.hardTimeout);
-        if (host.pendingPaintGate === gate) {
-          host.pendingPaintGate = null;
-        }
+        const releasedBridge = host.pendingPaintGate === gate;
+        if (releasedBridge) host.pendingPaintGate = null;
         resolveOuter(reason);
+        // A warm switch's bridge ends here; the chrome follows what is revealed.
+        // Queued after the switch's own continuation, so a rollback has put
+        // the outgoing project back before the repaint reads which one shows.
+        if (releasedBridge) host.repaintThemeChrome();
       },
     };
     host.pendingPaintGate = gate;

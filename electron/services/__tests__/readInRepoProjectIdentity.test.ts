@@ -147,4 +147,29 @@ describe("readInRepoProjectIdentity", () => {
     const result = await identityFiles.readInRepoProjectIdentity(tmpDir);
     expect(result).toEqual({ found: true });
   });
+
+  describe("suggested theme (#13833)", () => {
+    async function readTheme(theme: unknown): Promise<string | undefined> {
+      await writeProjectJson(JSON.stringify({ version: 1, name: "App", theme }));
+      const result = await identityFiles.readInRepoProjectIdentity(tmpDir);
+      expect(result.name).toBe("App");
+      return result.theme;
+    }
+
+    it("reads a built-in theme id", async () => {
+      expect(await readTheme(" bondi ")).toBe("bondi");
+    });
+
+    it("reads a plugin theme id", async () => {
+      expect(await readTheme("plugin:acme.themes:midnight")).toBe("plugin:acme.themes:midnight");
+    });
+
+    it("drops an id no repository can name, keeping the rest of the identity", async () => {
+      // An imported theme only exists on the machine that imported it.
+      expect(await readTheme("custom-1700000000000")).toBeUndefined();
+      expect(await readTheme("plugin:")).toBeUndefined();
+      expect(await readTheme(42)).toBeUndefined();
+      expect(await readTheme("")).toBeUndefined();
+    });
+  });
 });

@@ -13,7 +13,7 @@ import { Badge } from "@/components/ui/badge";
 import { OVERLAY_SHEET_SHADOW_CLASS } from "@/components/ui/floatingSurface";
 import { pluralize } from "@/lib/pluralize";
 import { BUILT_IN_APP_SCHEMES } from "@/config/appColorSchemes";
-import { injectSchemeToDOM, useAppThemeStore } from "@/store/appThemeStore";
+import { injectSchemeToDOM, resolveCommittedScheme, useAppThemeStore } from "@/store/appThemeStore";
 import { selectSelectableSchemes } from "@/theme/selectableSchemes";
 import { useThemeBrowserStore } from "@/store/themeBrowserStore";
 import { logError } from "@/utils/logger";
@@ -312,7 +312,7 @@ export function ThemeBrowser() {
   const revertPreview = useCallback(() => {
     const state = useAppThemeStore.getState();
     if (state.previewSchemeId !== null) {
-      const committed = resolveAppTheme(state.selectedSchemeId, selectSelectableSchemes(state));
+      const committed = resolveCommittedScheme(state);
       setPreviewSchemeId(null);
       injectSchemeToDOM(committed, { immediate: true });
     }
@@ -323,7 +323,9 @@ export function ThemeBrowser() {
     (id: string, debounceAnnounce?: boolean) => {
       const state = useAppThemeStore.getState();
       if (state.previewSchemeId === id) return;
-      if (state.previewSchemeId === null && state.selectedSchemeId === id) return;
+      // Nothing to preview when it is already on screen, which in a project with
+      // its own theme is not the global selection.
+      if (state.previewSchemeId === null && resolveCommittedScheme(state).id === id) return;
       const scheme = resolveAppTheme(id, selectSelectableSchemes(state));
       setPreviewSchemeId(id);
       injectSchemeToDOM(scheme);
@@ -371,8 +373,11 @@ export function ThemeBrowser() {
     clearPendingAnnouncement();
 
     commitSchemeSelection(targetId);
-    const scheme = resolveAppTheme(targetId, selectSelectableSchemes(useAppThemeStore.getState()));
-    runThemeReveal(origin, () => injectSchemeToDOM(scheme, { immediate: true }));
+    // A project with its own theme keeps showing it; the pick is the global theme.
+    // Resolved when the reveal paints, so a project theme pushed meanwhile wins.
+    runThemeReveal(origin, () =>
+      injectSchemeToDOM(resolveCommittedScheme(useAppThemeStore.getState()), { immediate: true })
+    );
 
     // Close the browser synchronously after the reveal fires — the Settings
     // reopen effect keys on this store transition, so deferring it until after
@@ -425,7 +430,7 @@ export function ThemeBrowser() {
       clearAnnouncementTimer();
       const state = useAppThemeStore.getState();
       if (state.previewSchemeId !== null) {
-        const committed = resolveAppTheme(state.selectedSchemeId, selectSelectableSchemes(state));
+        const committed = resolveCommittedScheme(state);
         useAppThemeStore.getState().setPreviewSchemeId(null);
         injectSchemeToDOM(committed, { immediate: true });
       }

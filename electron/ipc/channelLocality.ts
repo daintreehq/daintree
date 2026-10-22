@@ -771,6 +771,12 @@ export const CHANNEL_LOCALITY = {
   "project-presentation:set-toolbar-enabled": "host",
   "project-relocation:apply": "host",
   "project-relocation:preview": "host",
+  // Beside the global theme in this machine's store: how this screen paints.
+  "project-theme:answer-suggestion": "shell",
+  "project-theme:changed": "shell",
+  "project-theme:get": "shell",
+  "project-theme:reset-suggestion": "shell",
+  "project-theme:set-theme": "shell",
   "project:add": "host",
   "project:add-browser-allowed-host": "host",
   "project:add-recipe": "host",

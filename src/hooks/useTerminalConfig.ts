@@ -7,7 +7,7 @@ import {
   useTerminalColorSchemeStore,
   selectEffectiveTheme,
 } from "@/store/terminalColorSchemeStore";
-import { useAppThemeStore } from "@/store/appThemeStore";
+import { resolveCommittedScheme, useAppThemeStore } from "@/store/appThemeStore";
 import { terminalConfigClient } from "@/clients/terminalConfigClient";
 
 /**
@@ -98,7 +98,8 @@ export function useTerminalConfig() {
   }, []);
 
   const colorVisionMode = useAppThemeStore((state) => state.colorVisionMode);
-  const appThemeId = useAppThemeStore((state) => state.selectedSchemeId);
+  // The app theme on screen: the project's own when it has one.
+  const appThemeId = useAppThemeStore((state) => resolveCommittedScheme(state).id);
   const appPreviewSchemeId = useAppThemeStore((state) => state.previewSchemeId);
 
   useEffect(() => {
