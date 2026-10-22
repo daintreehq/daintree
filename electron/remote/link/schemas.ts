@@ -71,6 +71,8 @@ const RejectSchema = z.object({
 const PingSchema = z.object({ sentAt: epochMs });
 
 const EndpointSchema = z.object({ endpointId: id, projectId: id.nullable() });
+// An older host reads OPEN with `EndpointSchema`, which strips `openId`.
+const EndpointOpenSchema = EndpointSchema.extend({ openId: id.optional() });
 const EndpointCloseSchema = z.object({ endpointId: id });
 
 const DriveLeaseHolderSchema = z.object({
@@ -208,7 +210,7 @@ const BODY_SCHEMAS: Record<number, Record<number, z.ZodType>> = {
     [ControlKind.REJECT]: RejectSchema,
     [ControlKind.PING]: PingSchema,
     [ControlKind.PONG]: PingSchema,
-    [ControlKind.ENDPOINT_OPEN]: EndpointSchema,
+    [ControlKind.ENDPOINT_OPEN]: EndpointOpenSchema,
     [ControlKind.ENDPOINT_REBIND]: EndpointSchema,
     [ControlKind.ENDPOINT_CLOSE]: EndpointCloseSchema,
     [ControlKind.HOST_SUMMARY]: HostSummarySchema,

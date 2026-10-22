@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { FrameDecoder, Lane, encodeFrame } from "../frames.js";
 import { BulkKind, ControlKind, RpcKind, frameToMessage, messageToFrame } from "../messages.js";
+import { parseInboundFrame } from "../schemas.js";
 
 describe("link messages", () => {
   it("round-trips a structured message through frame bytes", () => {
@@ -32,6 +33,32 @@ describe("link messages", () => {
     expect(frame.payload).toBe(bytes);
     const msg = frameToMessage(frame);
     expect(msg).toMatchObject({ kind: BulkKind.TRANSFER_CHUNK, streamId: 42 });
+  });
+
+  it("carries an open's openId, and takes an open from a Shell that names none", () => {
+    const open = (body: object) =>
+      parseInboundFrame(
+        messageToFrame({ lane: Lane.CONTROL, kind: ControlKind.ENDPOINT_OPEN, body } as never)
+      ).body;
+    expect(open({ endpointId: "view-1", projectId: "p", openId: "o1" })).toEqual({
+      endpointId: "view-1",
+      projectId: "p",
+      openId: "o1",
+    });
+    expect(open({ endpointId: "view-1", projectId: null })).toEqual({
+      endpointId: "view-1",
+      projectId: null,
+    });
+  });
+
+  it("lets a host that reads opens without openId take one that names it", () => {
+    // Such a host reads OPEN with the shape REBIND still has.
+    const frame = messageToFrame({
+      lane: Lane.CONTROL,
+      kind: ControlKind.ENDPOINT_REBIND,
+      body: { endpointId: "view-1", projectId: "p", openId: "o1" },
+    } as never);
+    expect(parseInboundFrame(frame).body).toEqual({ endpointId: "view-1", projectId: "p" });
   });
 
   it("uses distinct kind codes within each lane", () => {

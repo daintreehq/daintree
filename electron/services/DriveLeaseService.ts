@@ -692,7 +692,13 @@ export class DriveLeaseService {
 
   private holderIsPresent(projectId: string, lease: ProjectLease): boolean {
     const endpoint = this.registry.get(lease.holder.endpointId);
-    return endpoint !== undefined && this.isPresent(endpoint, projectId);
+    // A remote view closed and opened again under its id is a new endpoint
+    // with its own pty-host connection, which the old lease doesn't name.
+    return (
+      endpoint !== undefined &&
+      endpoint.handle === lease.holderHandle &&
+      this.isPresent(endpoint, projectId)
+    );
   }
 
   /** Fenced on the lease id: a grace that outlived a takeover, or a resume, releases nothing. */

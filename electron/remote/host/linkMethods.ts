@@ -18,6 +18,12 @@ export const LinkMethod = {
   NOTE_ACTIVE_PROJECT: "host.note-active-project",
   /** Shell → Host: the project this Shell last showed here, if the Host still has it. */
   LAST_ACTIVE_PROJECT: "host.last-active-project",
+  /**
+   * Shell → Host, on a resumed session: the endpoints this Shell holds. Any
+   * other the Host kept for it, and not opened again since, was closed in a
+   * frame still queued when the link dropped.
+   */
+  ENDPOINT_RECONCILE: "endpoint.reconcile",
   /** Host → Shell: these endpoints missed events; repaint them from a fresh snapshot. */
   ENDPOINT_RESYNC: "endpoint.resync",
   /** Host → Shell: whether a live Daintree Assistant is pinned to each of these endpoints. */
@@ -46,6 +52,10 @@ export type EndpointResyncReason = "overflow" | "reattached";
 export interface EndpointResyncPayload {
   endpointIds: string[];
   reason: EndpointResyncReason;
+}
+
+export interface EndpointReconcilePayload {
+  endpointIds: string[];
 }
 
 /**
@@ -118,6 +128,10 @@ export const HostProjectListSchema = z
 export const EndpointResyncPayloadSchema = z.object({
   endpointIds: z.array(endpointId).max(4096),
   reason: z.enum(["overflow", "reattached"]),
+});
+
+export const EndpointReconcilePayloadSchema = z.object({
+  endpointIds: z.array(endpointId).max(4096),
 });
 
 export const EndpointAssistantPayloadSchema = z.object({

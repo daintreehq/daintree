@@ -129,6 +129,12 @@ export interface PingMessage {
 export interface EndpointOpenMessage {
   endpointId: string;
   projectId: string | null;
+  /**
+   * Names this open of `endpointId`, so a view closed and opened again under
+   * the same id can be told from one that never closed. A Shell from before
+   * it sends none, and a host from before it drops it.
+   */
+  openId?: string;
 }
 
 export interface EndpointRebindMessage {
