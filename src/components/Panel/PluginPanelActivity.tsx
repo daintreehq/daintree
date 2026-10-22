@@ -33,22 +33,38 @@ export type { PluginPanelActivityPresentation } from "@/lib/pluginPanelActivityP
 
 // The agent glyphs, so a plugin's work reads like an agent's at a glance; the
 // words always say whose report it is. Failed takes the blocked ring a stopped
-// subagent wears, not anything an agent's own state draws.
-const GLYPHS: Record<PluginPanelActivityShown, ComponentType<{ className?: string }>> = {
-  working: SpinnerCircle,
-  waiting: HollowCircle,
-  unread: UnreadCircle,
-  finished: DoneCircle,
-  failed: BlockedCircle,
-};
+// subagent wears, not anything an agent's own state draws. Resolved per render
+// rather than in module-level maps, so the many suites that mock the icon or
+// state modules without these exports still load PanelHeader and the dock.
+function glyphFor(shown: PluginPanelActivityShown): ComponentType<{ className?: string }> {
+  switch (shown) {
+    case "working":
+      return SpinnerCircle;
+    case "waiting":
+      return HollowCircle;
+    case "unread":
+      return UnreadCircle;
+    case "finished":
+      return DoneCircle;
+    case "failed":
+      return BlockedCircle;
+  }
+}
 
-const COLORS: Record<PluginPanelActivityShown, string> = {
-  working: STATE_COLORS.working,
-  waiting: STATE_COLORS.waiting,
-  unread: SESSION_COLORS.unread,
-  finished: STATE_COLORS.completed,
-  failed: "text-status-error",
-};
+function colorFor(shown: PluginPanelActivityShown): string {
+  switch (shown) {
+    case "working":
+      return STATE_COLORS.working;
+    case "waiting":
+      return STATE_COLORS.waiting;
+    case "unread":
+      return SESSION_COLORS.unread;
+    case "finished":
+      return STATE_COLORS.completed;
+    case "failed":
+      return "text-status-error";
+  }
+}
 
 /**
  * The activity the owning plugin reports on this panel, ready to draw, or null.
@@ -103,7 +119,7 @@ function ActivityGlyph({
   shown: PluginPanelActivityShown;
   className: string;
 }) {
-  const Glyph = GLYPHS[shown];
+  const Glyph = glyphFor(shown);
   return (
     <Glyph
       className={cn(
@@ -129,7 +145,7 @@ export function PluginPanelActivityIndicator({ panelId }: { panelId: string }) {
           role="status"
           aria-label={activity.description}
           data-plugin-panel-activity={activity.shown}
-          className={cn("inline-flex items-center shrink-0", COLORS[activity.shown])}
+          className={cn("inline-flex items-center shrink-0", colorFor(activity.shown))}
         >
           <ActivityGlyph shown={activity.shown} className="h-3 w-3" />
         </span>
@@ -154,7 +170,7 @@ export function PluginPanelActivityDockCue({
         <div
           aria-hidden="true"
           data-plugin-panel-activity={activity.shown}
-          className={cn("ml-1.5 flex items-center shrink-0", COLORS[activity.shown])}
+          className={cn("ml-1.5 flex items-center shrink-0", colorFor(activity.shown))}
         >
           <ActivityGlyph shown={activity.shown} className={DOCK_STATE_GLYPH_CLASS} />
         </div>
