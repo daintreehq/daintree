@@ -97,6 +97,24 @@ describe("pluginServerKeysFor", () => {
     expectSafe(keys);
   });
 
+  it("never names a plugin after the Daintree Assistant's own servers", () => {
+    const keys = pluginServerKeysFor([
+      installed("acme.docs"),
+      project(PROJECT_A, "acme.runbooks"),
+      installed("zeta.notes", "docs"),
+    ]);
+
+    expect(keys.get("acme.docs")).toBe(`daintree-docs-${hash("global\0acme.docs")}`);
+    expect(keys.get(makeProjectPluginInstanceKey(PROJECT_A, "acme.runbooks"))).toBe(
+      `daintree-runbook-${hash("project\0acme.runbooks")}`
+    );
+    expect(keys.get("zeta.notes")).toBe(`daintree-docs-${hash("global\0zeta.notes")}`);
+    for (const key of keys.values()) {
+      expect(["daintree", "daintree-docs", "daintree-runbooks"]).not.toContain(key);
+    }
+    expectSafe(keys);
+  });
+
   it("leaves room for a 32-character tool name inside Claude's 64-character limit", () => {
     const keys = pluginServerKeysFor([
       installed("acme.an-extremely-long-plugin-manifest-name"),

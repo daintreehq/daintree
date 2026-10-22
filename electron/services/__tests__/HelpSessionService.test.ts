@@ -154,6 +154,7 @@ import {
   projectRuleRoots,
 } from "../HelpSessionService.js";
 import type { RunbooksHostsState } from "../helpSessionRunbooks.js";
+import { pluginMcpGrantRegistry } from "../pluginAgentMcp/grantRegistry.js";
 import { parse as parseToml } from "smol-toml";
 
 async function makeBundledHelpFolder(root: string): Promise<string> {
@@ -2352,6 +2353,132 @@ describe("HelpSessionService", () => {
   // must track the PTY's whole lifetime — not just its spawn — and must carry
   // the pinned WebContents so only the view that would do the killing is
   // protected.
+  describe("plugin tools for the Assistant (#13827)", () => {
+    const PLUGIN_PROJECT = "c".repeat(64);
+
+    function grantFor(terminalId: string) {
+      return pluginMcpGrantRegistry.issue({
+        pluginInstanceId: "acme.ledger",
+        scope: { databases: true },
+        serverName: "daintree-ledger",
+        projectId: PLUGIN_PROJECT,
+        terminalId,
+        consumer: "assistant",
+      }).grant;
+    }
+
+    afterEach(() => {
+      pluginMcpGrantRegistry.revokeAll();
+    });
+
+    it("names the project and every server name the session already has", async () => {
+      mockLoadAssistantUserConfig.mockResolvedValue(
+        emptyUserConfig({
+          mcpServers: {
+            "daintree-ledger": {
+              type: "stdio",
+              command: "npx",
+              args: ["-y", "ledger-mcp"],
+              env: {},
+            },
+          },
+        })
+      );
+      const result = await service.provisionSession(provisionInput());
+      if (!result) throw new Error("expected result");
+
+      const context = service.getPluginLaunchContext(result.token);
+      expect(context?.projectId).toBe("proj-1");
+      expect(context?.projectPath).toBe("/tmp/project");
+      expect([...(context?.serverNamesInUse ?? [])].sort()).toEqual([
+        "daintree",
+        "daintree-docs",
+        "daintree-ledger",
+        "daintree-runbooks",
+      ]);
+      expect(service.getPluginLaunchContext("not-a-token")).toBeNull();
+
+      await service.revokeSession(result.sessionId);
+      expect(service.getPluginLaunchContext(result.token)).toBeNull();
+    });
+
+    it("names the lane a terminal serves, for its plugin tool calls, until it stops serving it", async () => {
+      const result = await service.provisionSession(provisionInput());
+      if (!result) throw new Error("expected result");
+      expect(service.getAssistantPluginLane("term-1")).toBeNull();
+      expect(service.markTerminalForToken(result.token, "term-1")).toBe(true);
+
+      expect(service.getAssistantPluginLane("term-1")).toEqual({
+        helpSessionId: result.sessionId,
+        webContentsId: 42,
+        tier: "core",
+      });
+
+      await service.revokeSession(result.sessionId);
+      expect(service.getAssistantPluginLane("term-1")).toBeNull();
+    });
+
+    it("revokes the lane's plugin grants when the session is revoked, before the capture finishes", async () => {
+      let resolveKill!: (id: string | null) => void;
+      mockPtyGracefulKill.mockImplementationOnce(
+        () => new Promise<string | null>((resolve) => (resolveKill = resolve))
+      );
+      const result = await service.provisionSession(provisionInput());
+      if (!result) throw new Error("expected result");
+      expect(service.markTerminalForToken(result.token, "term-1")).toBe(true);
+      const lane = grantFor("term-1");
+      const other = grantFor("term-other");
+
+      const revoke = service.revokeSession(result.sessionId, { captureHibernation: true });
+      expect(pluginMcpGrantRegistry.isLive(lane.credentialId)).toBe(false);
+      expect(pluginMcpGrantRegistry.isLive(other.credentialId)).toBe(true);
+      resolveKill(null);
+      await revoke;
+    });
+
+    it("revokes the grants of a PTY that bound to the session while its capture ran", async () => {
+      let resolveKill!: (id: string | null) => void;
+      mockPtyGracefulKill.mockImplementationOnce(
+        () => new Promise<string | null>((resolve) => (resolveKill = resolve))
+      );
+      const result = await service.provisionSession(provisionInput());
+      if (!result) throw new Error("expected result");
+      expect(service.markTerminalForToken(result.token, "term-1")).toBe(true);
+
+      const revoke = service.revokeSession(result.sessionId, { captureHibernation: true });
+      expect(service.markTerminalForToken(result.token, "term-2")).toBe(true);
+      const late = grantFor("term-2");
+      resolveKill(null);
+      await revoke;
+
+      expect(pluginMcpGrantRegistry.isLive(late.credentialId)).toBe(false);
+    });
+
+    it("revokes a displaced lane's plugin grants", async () => {
+      const first = await service.provisionSession(provisionInput());
+      if (!first) throw new Error("expected first provision");
+      expect(service.markTerminalForToken(first.token, "term-1")).toBe(true);
+      const lane = grantFor("term-1");
+
+      await service.provisionSession(provisionInput());
+
+      expect(pluginMcpGrantRegistry.isLive(lane.credentialId)).toBe(false);
+    });
+
+    it("revokes the old PTY's plugin grants when the session moves to a new one, and keeps the new one's", async () => {
+      const result = await service.provisionSession(provisionInput());
+      if (!result) throw new Error("expected result");
+      expect(service.markTerminalForToken(result.token, "term-1")).toBe(true);
+      const old = grantFor("term-1");
+      const fresh = grantFor("term-2");
+
+      expect(service.markTerminalForToken(result.token, "term-2")).toBe(true);
+
+      expect(pluginMcpGrantRegistry.isLive(old.credentialId)).toBe(false);
+      expect(pluginMcpGrantRegistry.isLive(fresh.credentialId)).toBe(true);
+    });
+  });
+
   describe("session-ended listeners (#13332)", () => {
     function listen() {
       const events: Array<{ projectId: string; slot: number; sessionId: string; reason: string }> =

@@ -6,7 +6,12 @@ import {
   type SegmentedRadioOption,
 } from "@/components/ui/SegmentedRadioGroup";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
-import { SettingsGroup, SettingsRow } from "@/components/Settings/SettingsGroup";
+import {
+  SettingsDependents,
+  SettingsGroup,
+  SettingsRow,
+} from "@/components/Settings/SettingsGroup";
+import { SettingsSwitch } from "@/components/Settings/SettingsSwitch";
 import { TriangleAlert } from "lucide-react";
 import { pluginAgentMcpClient } from "@/clients/pluginAgentMcpClient";
 import { useProjectPluginStore } from "@/store/projectPluginStore";
@@ -172,11 +177,118 @@ function PluginDescription({ plugin }: { plugin: ProjectAgentToolPlugin }) {
   );
 }
 
+/** The plugin has something only read and write reaches: its own tools, or the changes it declares. */
+function offersChanges(plugin: ProjectAgentToolPlugin): boolean {
+  return plugin.pluginTools !== undefined || plugin.hasDatabaseWrites === true;
+}
+
+/** What allowing changes adds for the Assistant, named the way the plugin's row names it. */
+function changesDescription(plugin: ProjectAgentToolPlugin): string {
+  if (plugin.pluginTools && plugin.hasDatabaseWrites) {
+    return `Adds the changes it declares and ${plugin.pluginTools.name}`;
+  }
+  if (plugin.pluginTools) return `Adds ${plugin.pluginTools.name}`;
+  return "Adds the changes it declares";
+}
+
+/**
+ * Whether this project's Daintree Assistant may use the plugin's tools: a
+ * switch that starts it at read only, and under it a second, separate choice
+ * for the tools that change things. Neither goes past what the project's
+ * agents have, and an answer that is on stays switchable off whatever happens
+ * to the agents' access or the plugin.
+ */
+function AssistantAccessRows({
+  plugin,
+  busy,
+  onChange,
+}: {
+  plugin: ProjectAgentToolPlugin;
+  busy: boolean;
+  onChange: (access: AgentMcpAccess) => void;
+}) {
+  const on = plugin.assistantAccess !== "off";
+  const changesOn = plugin.assistantAccess === "read-write";
+  const blocked = !plugin.available
+    ? "Not offered here right now"
+    : plugin.access === "off"
+      ? "Agents in this project have no access to it, and the Assistant never gets more than they do"
+      : null;
+  const changesBlocked = changesOn
+    ? null
+    : !on
+      ? "Let the Assistant use its tools first"
+      : (blocked ??
+        (plugin.access !== "read-write"
+          ? "Agents in this project can only read it, and the Assistant never gets more than they do"
+          : null));
+
+  const lines = [
+    "Read only to start. What its tools return reaches an Assistant that can act across this project, so the plugin's data could steer what it does.",
+  ];
+  if (!plugin.hasDatabases && offersChanges(plugin)) {
+    lines.push(
+      "It has no read-only tools, so the Assistant reaches nothing here until changes are allowed."
+    );
+  }
+  if (on && plugin.access === "off") {
+    lines.push("Agents here have no access to it now, so the Assistant has none either.");
+  }
+
+  return (
+    <SettingsDependents disabled={!on && blocked !== null} reason={blocked ?? undefined}>
+      <SettingsRow
+        label="Daintree Assistant can use this plugin's tools"
+        description={
+          <>
+            {lines.map((line) => (
+              <span key={line} className="block">
+                {line}
+              </span>
+            ))}
+          </>
+        }
+        disabled={busy}
+        control={({ labelId, descriptionId, disabled }) => (
+          <SettingsSwitch
+            checked={on}
+            disabled={disabled}
+            onCheckedChange={(checked) => onChange(checked ? "read-only" : "off")}
+            aria-labelledby={labelId}
+            aria-describedby={descriptionId}
+            data-testid="project-agent-tool-assistant"
+          />
+        )}
+      />
+      {offersChanges(plugin) && (
+        <SettingsDependents disabled={changesBlocked !== null} reason={changesBlocked ?? undefined}>
+          <SettingsRow
+            label="Allow tools that change things"
+            description={changesDescription(plugin)}
+            disabled={busy}
+            control={({ labelId, descriptionId, disabled }) => (
+              <SettingsSwitch
+                checked={changesOn}
+                disabled={disabled}
+                onCheckedChange={(checked) => onChange(checked ? "read-write" : "read-only")}
+                aria-labelledby={labelId}
+                aria-describedby={descriptionId}
+                data-testid="project-agent-tool-assistant-changes"
+              />
+            )}
+          />
+        </SettingsDependents>
+      )}
+    </SettingsDependents>
+  );
+}
+
 /**
  * How much of each plugin's agent tools this project's agents may use: off,
  * read only (the host's tools for the plugin's databases) or read and write
  * (the writes it declares and the plugin's own tools as well). An installed plugin's choice can be made
  * the default for every project, which a project's own choice still overrides.
+ * Under each, whether the project's Daintree Assistant may use them too.
  *
  * Enabling a plugin never exposes its tools to agents by itself; this is the
  * separate, revocable answer. Rendered only when some running plugin offers
@@ -341,7 +453,11 @@ export function ProjectAgentToolsSection() {
               plugin.allProjectsAccess !== "off" &&
               !plugin.available;
             return (
-              <div key={key} data-testid="project-agent-tool-row">
+              <div
+                key={key}
+                data-testid="project-agent-tool-row"
+                className="divide-y divide-border-subtle"
+              >
                 <SettingsRow
                   label={plugin.pluginDisplayName}
                   labelText={plugin.pluginDisplayName}
@@ -432,6 +548,19 @@ export function ProjectAgentToolsSection() {
                     />
                   )}
                 />
+                {(plugin.available || plugin.assistantAccess !== "off") && (
+                  <AssistantAccessRows
+                    plugin={plugin}
+                    busy={busy}
+                    onChange={(access) =>
+                      void setAccess(plugin, {
+                        pluginInstanceId: key,
+                        access,
+                        scope: "assistant",
+                      })
+                    }
+                  />
+                )}
               </div>
             );
           })}

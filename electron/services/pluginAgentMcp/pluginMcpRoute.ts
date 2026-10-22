@@ -17,7 +17,7 @@ import {
   type PluginMcpGrantRegistry,
 } from "./grantRegistry.js";
 import { isPluginMcpGrantAllowed } from "./projectEnablement.js";
-import { createPluginSessionServer } from "./pluginSessionServer.js";
+import { createPluginSessionServer, type PluginToolCallObserver } from "./pluginSessionServer.js";
 import { PLUGIN_MCP_ROUTE_PREFIX, type PluginMcpRouteHandler } from "./types.js";
 import { createLogger } from "../../utils/logger.js";
 
@@ -84,6 +84,11 @@ export interface PluginMcpRouteDeps {
   reloadWaitMs?: number;
   callTimeoutMs?: number;
   maxResultBytes?: number;
+  /** Watches each tool call made with a grant, for the activity of whoever holds it. */
+  observeToolCall?: (
+    grant: PluginMcpGrant,
+    ...call: Parameters<PluginToolCallObserver>
+  ) => ReturnType<PluginToolCallObserver>;
 }
 
 interface PluginMcpSession {
@@ -190,6 +195,7 @@ export class PluginMcpRoute implements PluginMcpRouteHandler {
   private readonly parked = new Map<string, Set<AbortController>>();
   private readonly callTimeoutMs: number | undefined;
   private readonly maxResultBytes: number | undefined;
+  private readonly observeToolCall: PluginMcpRouteDeps["observeToolCall"];
   private readonly offRevoked: () => void;
   private readonly offKept: () => void;
   /** When each kind of rejection or eviction was last logged, by kind and credential. */
@@ -211,6 +217,7 @@ export class PluginMcpRoute implements PluginMcpRouteHandler {
     this.reloadWaitMs = deps.reloadWaitMs ?? PLUGIN_MCP_RELOAD_WAIT_MS;
     this.callTimeoutMs = deps.callTimeoutMs;
     this.maxResultBytes = deps.maxResultBytes;
+    this.observeToolCall = deps.observeToolCall;
     // Grants are deleted before this fires, so any request racing the close
     // already fails authentication; this only has to reap what is open.
     this.offRevoked = this.grants.onRevoked((revoked) => {
@@ -576,6 +583,12 @@ export class PluginMcpRoute implements PluginMcpRouteHandler {
       endpointRegistry: this.endpoints,
       ...(this.callTimeoutMs !== undefined ? { callTimeoutMs: this.callTimeoutMs } : {}),
       ...(this.maxResultBytes !== undefined ? { maxResultBytes: this.maxResultBytes } : {}),
+      ...(this.observeToolCall !== undefined
+        ? {
+            observeToolCall: (toolName: string, argNames: readonly string[]) =>
+              this.observeToolCall?.(grant, toolName, argNames),
+          }
+        : {}),
     });
 
     // enableDnsRebindingProtection / allowedHosts / allowedOrigins are

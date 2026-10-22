@@ -2809,7 +2809,10 @@ export function describeManifestIssues(
   return `${where}${first?.message ?? "manifest failed validation"}`;
 }
 
-const PLUGIN_MCP_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,15}$/;
+// `docs` and `runbooks` would name a plugin's server `daintree-docs` or
+// `daintree-runbooks`, the Daintree Assistant's own servers. Excluded in the
+// pattern itself, not a refinement, so the generated JSON Schema rejects them too.
+const PLUGIN_MCP_NAME_PATTERN = /^(?!(?:docs|runbooks)$)[a-z0-9][a-z0-9-]{0,15}$/;
 
 function buildPluginManifestSchema(origin: PluginOrigin) {
   return z
@@ -2836,7 +2839,7 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
         .string()
         .regex(PLUGIN_MCP_NAME_PATTERN, {
           error:
-            "mcpName must be 1-16 lowercase letters, digits or hyphens, starting with a letter or digit",
+            'mcpName must be 1-16 lowercase letters, digits or hyphens, starting with a letter or digit, and not "docs" or "runbooks"',
         })
         .optional(),
       description: z.string().optional(),

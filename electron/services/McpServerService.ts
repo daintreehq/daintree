@@ -66,6 +66,10 @@ import { AbusePolicy } from "./mcp-server/abusePolicy.js";
 import { WorkspaceViewLeaseRegistry } from "./mcp-server/workspaceViewLease.js";
 import { routedViewWorktreePort } from "./mcp-server/worktreeViewPort.js";
 import { createPluginMcpRoute } from "./pluginAgentMcp/pluginMcpRoute.js";
+import {
+  observeAssistantPluginToolCall,
+  type AssistantPluginLane,
+} from "./mcp-server/assistantPluginActivity.js";
 import type * as PluginServiceModule from "./PluginService.js";
 import { getPtyClient, setMcpServerServiceRef } from "../window/serviceRefs.js";
 import { machineDisplayName } from "../utils/machineName.js";
@@ -128,6 +132,13 @@ export class McpServerService {
    * import `HelpSessionService` (which would create a cycle).
    */
   private getSessionIdForTerminal: (terminalId: string) => string | null = () => null;
+  /**
+   * The Daintree Assistant lane a terminal serves, for reporting its plugin
+   * tool calls. Injected by whoever launches the Assistant, for the same
+   * reason as the resolver above.
+   */
+  private resolveAssistantPluginLane: (terminalId: string) => AssistantPluginLane | null = () =>
+    null;
   private readonly pendingManifests = new Map<string, PendingRequest<ActionManifestEntry[]>>();
   private readonly pendingDispatches = new Map<string, PendingRequest<DispatchEnvelope>>();
   private readonly cleanupListeners: Array<() => void> = [];
@@ -458,6 +469,26 @@ export class McpServerService {
           (await loadPluginService()).hasPlugin(pluginInstanceId),
         activatePlugin: async (pluginInstanceId) =>
           (await loadPluginService()).activatePlugin(pluginInstanceId),
+        observeToolCall: (grant, toolName, argNames) =>
+          observeAssistantPluginToolCall(
+            {
+              resolveLane: (terminalId) => this.resolveAssistantPluginLane(terminalId),
+              getCurrentTurnId: (helpSessionId) =>
+                this.turnOutcomeService.getCurrentTurnIdForSession(helpSessionId),
+              appendAuditRecord: (input) => this.auditService.appendRecord(input),
+              send: (webContentsId, channel, buildPayload) => {
+                sendToPinnedView(
+                  webContentsId,
+                  channel,
+                  buildPayload,
+                  "assistant-plugin-tool-call"
+                );
+              },
+            },
+            grant,
+            toolName,
+            argNames
+          ),
       })
     );
 
@@ -1041,6 +1072,12 @@ export class McpServerService {
    */
   setSessionIdResolver(resolver: (terminalId: string) => string | null): void {
     this.getSessionIdForTerminal = resolver;
+  }
+
+  setAssistantPluginLaneResolver(
+    resolver: (terminalId: string) => AssistantPluginLane | null
+  ): void {
+    this.resolveAssistantPluginLane = resolver;
   }
 
   setSessionTier(

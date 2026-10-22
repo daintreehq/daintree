@@ -95,6 +95,7 @@ export const STORE_KEY_OWNERSHIP = {
   projectAgentMcpEnablement: "host",
   projectAgentMcpAccess: "host",
   pluginAgentMcpAccess: "host",
+  projectAssistantAgentMcpAccess: "host",
   workspaceKeepResident: "host",
   // Dev servers run on the host, so a user Stop is recorded where the panel's server lives.
   devPreviewUserStopped: "host",

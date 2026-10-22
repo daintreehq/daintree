@@ -66,9 +66,11 @@ import { pluginMcpGrantRegistry } from "../../../services/pluginAgentMcp/grantRe
 import { _resetProjectMcpDefaultsForTests } from "../../../services/pluginAgentMcp/projectDefaults.js";
 import {
   allProjectsAgentMcpAccess,
+  assistantAgentMcpAccess,
   projectAgentMcpAccessAnswer,
   setAllProjectsAgentMcpAccess,
   setProjectAgentMcpAccess,
+  setProjectAssistantAgentMcpAccess,
 } from "../../../services/pluginAgentMcp/projectEnablement.js";
 
 type Handler = (event: Electron.IpcMainInvokeEvent, ...args: unknown[]) => Promise<unknown>;
@@ -220,6 +222,7 @@ describe("plugin agent MCP access IPC", () => {
             pluginTools: { name: "Household ledger", description: "Reads entries" },
             access: "off",
             source: "default",
+            assistantAccess: "off",
             allProjectsAccess: "off",
             available: true,
           },
@@ -917,6 +920,121 @@ describe("plugin agent MCP access IPC", () => {
         /IPC validation failed/
       );
 
+      expect(storeData.size).toBe(0);
+    });
+  });
+
+  describe("the Daintree Assistant's access (#13827)", () => {
+    const assistant = (access: string, pluginInstanceId = "acme.ledger") =>
+      set({ pluginInstanceId, access, scope: "assistant" });
+    const rowOf = (snapshot: ProjectAgentToolsSnapshot, id = "acme.ledger") =>
+      snapshot.plugins.find((p) => p.pluginInstanceId === id);
+
+    it("records the user's answer for the sender's project and reports it", async () => {
+      setProjectAgentMcpAccess(PROJECT, "acme.ledger", "read-write");
+
+      const snapshot = await assistant("read-only");
+
+      expect(rowOf(snapshot)).toMatchObject({ access: "read-write", assistantAccess: "read-only" });
+      expect(assistantAgentMcpAccess(PROJECT, "acme.ledger")).toBe("read-only");
+      expect(assistantAgentMcpAccess(OTHER_PROJECT, "acme.ledger")).toBe("off");
+    });
+
+    it("never accepts more than the project's agents have", async () => {
+      await expect(assistant("read-only")).rejects.toThrow(
+        /more access than this project's agents/
+      );
+
+      setProjectAgentMcpAccess(PROJECT, "acme.ledger", "read-only");
+      await expect(assistant("read-write")).rejects.toThrow(
+        /more access than this project's agents/
+      );
+      expect(assistantAgentMcpAccess(PROJECT, "acme.ledger")).toBe("off");
+
+      await assistant("read-only");
+      expect(assistantAgentMcpAccess(PROJECT, "acme.ledger")).toBe("read-only");
+    });
+
+    it("counts the repository's default toward the cap, without answering for the Assistant", async () => {
+      mocks.listPlugins.mockReturnValue([projectLedger()]);
+      await writeRepositoryDefaults({ "acme.ledger": "read-write" });
+
+      expect(rowOf(await list(), PROJECT_LEDGER)).toMatchObject({
+        access: "read-write",
+        assistantAccess: "off",
+      });
+      const snapshot = await assistant("read-write", PROJECT_LEDGER);
+      expect(rowOf(snapshot, PROJECT_LEDGER)?.assistantAccess).toBe("read-write");
+    });
+
+    it("accepts read only for a plugin with no database tools, which reaches nothing yet", async () => {
+      mocks.listPlugins.mockReturnValue([plugin({ databases: false })]);
+      setProjectAgentMcpAccess(PROJECT, "acme.ledger", "read-write");
+
+      expect(rowOf(await assistant("read-only"))?.assistantAccess).toBe("read-only");
+    });
+
+    it("refuses read and write for a plugin with nothing it would allow", async () => {
+      mocks.listPlugins.mockReturnValue([plugin({ agentMcp: null })]);
+      setProjectAgentMcpAccess(PROJECT, "acme.ledger", "read-only");
+
+      await expect(assistant("read-write")).rejects.toThrow(/nothing for "read-write" to allow/);
+    });
+
+    it("refuses anything but off for a plugin that is not running here", async () => {
+      setProjectAgentMcpAccess(PROJECT, "acme.ledger", "read-write");
+      mocks.hasPlugin.mockReturnValue(false);
+
+      await expect(assistant("read-only")).rejects.toThrow(/no running plugin/);
+    });
+
+    it("keeps an answer for a plugin that went away listed, and clearable", async () => {
+      setProjectAssistantAgentMcpAccess(PROJECT, "acme.gone", "read-only");
+
+      expect(rowOf(await list(), "acme.gone")).toMatchObject({
+        available: false,
+        access: "off",
+        assistantAccess: "read-only",
+      });
+      const snapshot = await assistant("off", "acme.gone");
+      expect(rowOf(snapshot, "acme.gone")).toBeUndefined();
+    });
+
+    it("revokes the Assistant's grants switching it off takes away, and only those", async () => {
+      setProjectAgentMcpAccess(PROJECT, "acme.ledger", "read-write");
+      await assistant("read-only");
+      const assistantGrant = pluginMcpGrantRegistry.issue({
+        pluginInstanceId: "acme.ledger",
+        scope: { databases: true },
+        serverName: "daintree-ledger",
+        projectId: PROJECT,
+        terminalId: "help-term",
+        consumer: "assistant",
+      }).grant;
+      const agentGrant = issueGrant({ databases: true }, { terminalId: "agent-term" });
+
+      await assistant("off");
+
+      expect(pluginMcpGrantRegistry.isLive(assistantGrant.credentialId)).toBe(false);
+      expect(pluginMcpGrantRegistry.isLive(agentGrant.credentialId)).toBe(true);
+    });
+
+    it("always lets the Assistant's access be lowered, after the agents lost theirs or the plugin went away", async () => {
+      setProjectAgentMcpAccess(PROJECT, "acme.ledger", "read-write");
+      await assistant("read-write");
+
+      setProjectAgentMcpAccess(PROJECT, "acme.ledger", "off");
+      expect(rowOf(await assistant("read-only"))?.assistantAccess).toBe("read-only");
+
+      mocks.hasPlugin.mockReturnValue(false);
+      await assistant("off");
+      expect(assistantAgentMcpAccess(PROJECT, "acme.ledger")).toBe("off");
+    });
+
+    it("rejects an Assistant answer that clears instead of choosing", async () => {
+      await expect(
+        set({ pluginInstanceId: "acme.ledger", access: null, scope: "assistant" })
+      ).rejects.toThrow(/IPC validation failed/);
       expect(storeData.size).toBe(0);
     });
   });

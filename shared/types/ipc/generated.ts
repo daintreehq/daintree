@@ -1541,11 +1541,17 @@ export interface GeneratedIpcInvokeMap {
   };
   "plugin-agent-mcp:set-plugin-access": {
     args: [
-      payload: {
-        pluginInstanceId: string;
-        access: "off" | "read-only" | "read-write" | null;
-        scope: "project" | "all-projects";
-      },
+      payload:
+        | {
+            pluginInstanceId: string;
+            access: "off" | "read-only" | "read-write" | null;
+            scope: "project" | "all-projects";
+          }
+        | {
+            pluginInstanceId: string;
+            access: "off" | "read-only" | "read-write";
+            scope: "assistant";
+          },
     ];
     result: import("./pluginAgentMcp.js").ProjectAgentToolsSnapshot;
   };

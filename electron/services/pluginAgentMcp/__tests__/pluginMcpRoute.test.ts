@@ -435,6 +435,27 @@ describe("PluginMcpRoute", () => {
     expect(JSON.stringify(caller)).not.toContain(token);
   });
 
+  it("tells the call observer which grant made each call, and how it ended", async () => {
+    const settled: string[] = [];
+    const observeToolCall = vi.fn<NonNullable<PluginMcpRouteDeps["observeToolCall"]>>(
+      () => (outcome) => {
+        settled.push(outcome);
+      }
+    );
+    route.dispose();
+    await listener.close();
+    route = makeRoute({ observeToolCall });
+    listener = await startListener(route);
+
+    const { grant, token } = issue({ terminalId: "help-term" });
+    const { client } = await connect(token);
+    await client.callTool({ name: "lookup", arguments: { id: "r-1" } });
+
+    expect(observeToolCall).toHaveBeenCalledTimes(1);
+    expect(observeToolCall).toHaveBeenCalledWith(grant, "lookup", ["id"]);
+    expect(settled).toEqual(["ok"]);
+  });
+
   it("answers arguments that break the input schema with a tool error, over HTTP too", async () => {
     const { token } = issue();
     const { client } = await connect(token);

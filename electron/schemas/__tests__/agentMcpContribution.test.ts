@@ -78,3 +78,31 @@ describe("contributes.agentMcp", () => {
     expect(result.success).toBe(false);
   });
 });
+
+describe("mcpName", () => {
+  const parse = (origin: "user" | "project", mcpName: string) =>
+    getPluginManifestSchema(origin).safeParse(
+      manifestWith({ mcpName, ...(origin === "project" ? { scope: "project" } : {}) })
+    );
+
+  it.each(["user", "project"] as const)("accepts a short lowercase name (%s)", (origin) => {
+    expect(parse(origin, "books").success).toBe(true);
+  });
+
+  it.each(["docs", "runbooks"])(
+    "rejects %s, which would name the server after one of the Daintree Assistant's own",
+    (mcpName) => {
+      for (const origin of ["user", "project"] as const) {
+        const result = parse(origin, mcpName);
+        expect(result.success).toBe(false);
+        expect(JSON.stringify(result.error?.issues)).toContain("mcpName");
+      }
+    }
+  );
+
+  it("still accepts names that only start with a reserved one", () => {
+    const schema = getPluginManifestSchema("user");
+    expect(schema.safeParse(manifestWith({ mcpName: "docs-index" })).success).toBe(true);
+    expect(schema.safeParse(manifestWith({ mcpName: "runbooks2" })).success).toBe(true);
+  });
+});

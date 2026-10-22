@@ -30,6 +30,8 @@ import {
 import type { ActionContext } from "../../shared/types/actions.js";
 import type { PtyClient } from "./PtyClient.js";
 import { ASSISTANT_SCRATCH_ENV_VAR, getScratchDirForSession } from "./AssistantScratchService.js";
+import { pluginMcpGrantRegistry } from "./pluginAgentMcp/grantRegistry.js";
+import { RESERVED_PLUGIN_SERVER_KEYS } from "./pluginAgentMcp/serverKeys.js";
 import {
   CONFIRMATIONS_BLOCK_END,
   CONFIRMATIONS_BLOCK_START,
@@ -414,6 +416,11 @@ interface HelpSessionRecord {
   laneMcpConfigPath?: string;
   /** Computed at provision for claude sessions; consumed by lifecycle.ts. */
   claudeLaunchArgs?: string[];
+  /**
+   * The MCP server names the user's assistant folder handed this session, so
+   * no plugin server is handed over under one of them.
+   */
+  userMcpServerNames: readonly string[];
   /**
    * Per-session scratch directory under
    * `userData/assistant-scratch/<instanceId>/<sessionId>/`. Cleared on every
@@ -1062,9 +1069,11 @@ export class HelpSessionService {
     const priorTerminal = this.terminalBySessionId.get(record.sessionId);
     const existingTerminal = this.activeHelpTerminalBySlotKey.get(slotKey);
     if (existingTerminal && existingTerminal !== terminalId) {
+      this.revokeLanePluginGrants(existingTerminal);
       this.killTerminal(existingTerminal, "help-session-displaced");
       this.removeTerminalFromMaps(existingTerminal);
     }
+    if (priorTerminal && priorTerminal !== terminalId) this.revokeLanePluginGrants(priorTerminal);
 
     this.activeHelpTerminalBySlotKey.set(slotKey, terminalId);
     this.terminalBySessionId.set(record.sessionId, terminalId);
@@ -1755,6 +1764,7 @@ export class HelpSessionService {
       copilotLaunchArgs,
       laneMcpConfigPath,
       claudeLaunchArgs,
+      userMcpServerNames: Object.keys(userConfig.mcpServers),
       scratchPath,
     };
 
@@ -1921,6 +1931,54 @@ export class HelpSessionService {
     return record.copilotLaunchArgs ?? [];
   }
 
+  /**
+   * What a launch needs to hand a live session the plugin servers the user let
+   * the project's Assistant use: its project, and every server name it already
+   * has — Daintree's own and its assistant folder's — so none is merged into
+   * one of those. Null for an unknown, revoked or ending session.
+   */
+  getPluginLaunchContext(
+    token: string
+  ): { projectId: string; projectPath: string; serverNamesInUse: ReadonlySet<string> } | null {
+    if (!token) return null;
+    const record = this.sessionsByToken.get(token);
+    if (!record || record.revoked || record.ending) return null;
+    return {
+      projectId: record.projectId,
+      projectPath: record.projectPath,
+      serverNamesInUse: new Set([...RESERVED_PLUGIN_SERVER_KEYS, ...record.userMcpServerNames]),
+    };
+  }
+
+  /**
+   * The lane a terminal serves, as its plugin tool calls are reported to its
+   * panel: the session, the view showing it now, and its tool set. Null when
+   * the terminal serves no live lane.
+   */
+  getAssistantPluginLane(
+    terminalId: string
+  ): { helpSessionId: string; webContentsId: number; tier: HelpAssistantTier } | null {
+    const sessionId = this.getSessionIdForTerminal(terminalId);
+    if (sessionId === null) return null;
+    const record = this.sessionsById.get(sessionId);
+    if (!record || record.revoked) return null;
+    return {
+      helpSessionId: record.sessionId,
+      webContentsId: record.projectViewWebContentsId,
+      tier: record.tier,
+    };
+  }
+
+  /**
+   * Revoke the plugin grants a lane's PTY was launched with. They are keyed by
+   * its terminal id and go when the PTY exits anyway, but a session that ends
+   * must not wait on that: a capture keeps the PTY up while the agent flushes,
+   * and a kill can be lost.
+   */
+  private revokeLanePluginGrants(terminalId: string | undefined): void {
+    if (terminalId) pluginMcpGrantRegistry.revokeTerminal(terminalId);
+  }
+
   /** The project a live session was provisioned for; null for an unknown or revoked one. */
   getSessionProjectId(sessionId: string): string | null {
     const record = this.sessionsById.get(sessionId);
@@ -1985,6 +2043,8 @@ export class HelpSessionService {
 
     const terminalId = this.terminalBySessionId.get(sessionId);
     const slotKey = assistantSlotKey(record.projectId, record.slot);
+    // Before the capture too: flushing a transcript needs no plugin tools.
+    this.revokeLanePluginGrants(terminalId);
 
     // Capture FIRST (while the session record is still valid for token
     // lookups by the agent process). gracefulKill resolves with the agent's
@@ -2051,6 +2111,10 @@ export class HelpSessionService {
         );
       }
     }
+
+    // A launch that bound to this session while the capture ran got plugin
+    // grants of its own; the session ends here either way.
+    this.revokeLanePluginGrants(this.terminalBySessionId.get(sessionId));
 
     // Race guard: a same-project re-provision can call `displacePriorSessions`
     // during the `gracefulKill` await above, which marks our record revoked
@@ -2537,6 +2601,7 @@ export class HelpSessionService {
       const terminalId = this.terminalBySessionId.get(prior.sessionId);
       if (terminalId) {
         this.terminalBySessionId.delete(prior.sessionId);
+        this.revokeLanePluginGrants(terminalId);
         this.killTerminal(terminalId, "help-session-displaced");
       }
       // Tear down the displaced session's live MCP transport too (#9151).
