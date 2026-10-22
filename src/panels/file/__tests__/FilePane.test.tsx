@@ -322,12 +322,16 @@ vi.mock("@/registry/fileEditorRegistry", async (importOriginal) => ({
             extensions: ["md"],
             maxBytes: fileEditorState.resolved.maxBytes,
           },
-          Component: (props: Record<string, unknown>) => {
-            fileEditorState.renderedProps.push(props);
-            return <div data-testid="file-editor-mock" />;
-          },
+          Component: FileEditorMock,
         },
 }));
+
+// One component for every render, as a real registration's is: a fresh one per
+// render would remount the editor each time the pane re-renders.
+function FileEditorMock(props: Record<string, unknown>) {
+  fileEditorState.renderedProps.push(props);
+  return <div data-testid="file-editor-mock" />;
+}
 
 import { FilePane } from "../FilePane";
 import { useFileDocumentStore } from "@/store/fileDocumentStore";
@@ -3877,6 +3881,23 @@ describe("FilePane edit mode (#12323)", () => {
       });
       expect(toggleLabels()).toEqual(["Source", "Rendered", "Edit"]);
       expect(await screen.findByTestId("file-editor-mock")).toBeTruthy();
+    });
+
+    it("keeps an open editor with nothing published yet until the pane leaves Edit", async () => {
+      seedWorktree();
+      const view = await renderPane({ fileViewMode: "edit" });
+      const editor = await screen.findByTestId("file-editor-mock");
+      await act(async () => {
+        seedDriveLeaseView(drivenElsewhere);
+      });
+      // Same node: a composition or an unpublished keystroke in it survives.
+      expect(screen.getByTestId("file-editor-mock")).toBe(editor);
+      expect(toggleLabels()).toEqual(["Source", "Rendered", "Edit"]);
+
+      panelsById["file-1"] = { ...(panelsById["file-1"] as object), fileViewMode: "source" };
+      view.rerender(paneElement());
+      await act(async () => {});
+      expect(toggleLabels()).toEqual(["Source", "Rendered"]);
     });
 
     it("keeps the editor and its draft when control is taken mid-edit", async () => {

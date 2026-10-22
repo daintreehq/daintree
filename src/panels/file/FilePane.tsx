@@ -105,8 +105,7 @@ import { useFileEditorChoicesStore } from "@/store/fileEditorChoicesStore";
 import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 import { FileEditorPicker, type FileEditorPickerOption } from "./FileEditorPicker";
 import { FileEditorBanner } from "@/components/FileViewer/FileEditorBanner";
-import { useDriveLeaseView } from "@/components/Recovery/driveLeaseState";
-import { drivenElsewhereBy } from "@/hooks/useHostConnection";
+import { useFileEditLock } from "@/hooks/useFileEditLock";
 import {
   useFileDocumentDraftText,
   useFileDocumentFlags,
@@ -599,18 +598,19 @@ export function FilePane({
   // missing, still reaches the editor's own unavailable state rather than a
   // read-only error that hides the draft. The editor refuses what it cannot
   // edit (binary, oversized, undecodable) itself.
-  //
-  // While another screen drives the project the host refuses a save from
-  // here, so Edit isn't offered; a standing draft keeps it, so the draft
-  // stays in view rather than vanishing with the mode.
+  // While another screen drives the project, only what is already open keeps
+  // it (see useFileEditLock).
   const requestedMode = panel?.fileViewMode ?? "source";
-  const editLockedBy = drivenElsewhereBy(useDriveLeaseView());
-  const isEditable =
+  const canEdit =
     (builtinEditor !== null || pluginEditor !== null) &&
     location !== "dialog" &&
     isInsideGovernedRoot &&
-    (editLockedBy === null || isDirty) &&
     (loadState === "loaded" || requestedMode === "edit" || isDirty);
+  const { lockedBy: editLockedBy, mayEdit } = useFileEditLock(
+    canEdit && requestedMode === "edit",
+    isDirty
+  );
+  const isEditable = canEdit && mayEdit;
   // A plugin viewer fills Rendered for a type the host can't render.
   const hasPluginRendered = pluginViewer !== null;
 

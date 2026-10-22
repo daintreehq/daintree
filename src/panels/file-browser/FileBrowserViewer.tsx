@@ -27,8 +27,7 @@ import { Button } from "@/components/ui/button";
 import { actionService } from "@/services/ActionService";
 import { CodeViewer, type CodeViewerHandle } from "@/components/FileViewer/CodeViewer";
 import { FileEditorBanner } from "@/components/FileViewer/FileEditorBanner";
-import { useDriveLeaseView } from "@/components/Recovery/driveLeaseState";
-import { drivenElsewhereBy } from "@/hooks/useHostConnection";
+import { useFileEditLock } from "@/hooks/useFileEditLock";
 import {
   FileViewerToolbar,
   TOOLBAR_ICON_CLASS,
@@ -390,17 +389,20 @@ export function FileBrowserViewer({
     () => (state.status === "text" ? new TextEncoder().encode(state.content).byteLength : null),
     [state]
   );
-  // The host refuses a save while another screen drives the project; a
-  // standing draft keeps Edit, so the draft stays in view.
-  const editLockedBy = drivenElsewhereBy(useDriveLeaseView());
-  const canEdit =
+  const editable =
     !!editorContext &&
     !!editor &&
     pluginKnown &&
-    (editLockedBy === null || draftText !== null) &&
     (explicitRenderMode === "edit" ||
       draftText !== null ||
       (contentBytes !== null && contentBytes <= editor.registration.maxBytes));
+  // While another screen drives the project, only what is already open keeps
+  // Edit (see useFileEditLock).
+  const { lockedBy: editLockedBy, mayEdit } = useFileEditLock(
+    editable && explicitRenderMode === "edit",
+    draftText !== null
+  );
+  const canEdit = editable && mayEdit;
   // The open file's git status, read off the same worktree-relative list the
   // summary renders — never `change.path`, which is absolute at runtime. The
   // first row wins when a path is listed twice (staged and unstaged), matching

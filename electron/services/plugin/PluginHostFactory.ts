@@ -3660,13 +3660,17 @@ function buildProcessApi(
       throw new Error(`Plugin "${pluginId}" process.spawn: plugin is no longer loaded`);
     }
     // A process started in a project works on it, as a terminal spawned there
-    // does, so a call from a view must drive it.
-    await assertPluginCallerDrives(pluginId, "process.spawn", {
-      paths: cwd === undefined ? [] : [path.resolve(cwd)],
-    });
-    if (!deps.plugins.has(pluginId)) {
-      throw new Error(`Plugin "${pluginId}" process.spawn: plugin is no longer loaded`);
-    }
+    // does, so a call from a view must drive it: judged before the consent
+    // prompt and again after it, which can outlast a takeover.
+    const requireCallerDrives = async () => {
+      await assertPluginCallerDrives(pluginId, "process.spawn", {
+        paths: cwd === undefined ? [] : [path.resolve(cwd)],
+      });
+      if (!deps.plugins.has(pluginId)) {
+        throw new Error(`Plugin "${pluginId}" process.spawn: plugin is no longer loaded`);
+      }
+    };
+    await requireCallerDrives();
     // JIT consent fires LAST, right before the spawn — first use prompts the
     // user; the grant covers every later spawn by this plugin. Throws
     // PERMISSION_REQUIRED on denial. Re-check membership after the prompt await.
@@ -3674,6 +3678,7 @@ function buildProcessApi(
     if (!deps.plugins.has(pluginId)) {
       throw new Error(`Plugin "${pluginId}" process.spawn: plugin is no longer loaded`);
     }
+    await requireCallerDrives();
 
     const handle = await deps
       .getProcessManager()
@@ -4266,8 +4271,8 @@ function buildFsApi(
   };
   const containWithClass = (targetPath: string) =>
     containToDeclaredRoots(deps, pluginId, targetPath, workspaceScope);
-  // The plugin's own data dir is no project's; anything else a call writes is
-  // held to the lease of the view that made the call.
+  // A write a call makes into a project is held to the lease of the view that
+  // made the call; one into no project (the plugin's own data) passes.
   const requireCallerDrives = async (op: string, resolved: string): Promise<void> => {
     await assertPluginCallerDrives(pluginId, `fs.${op}`, { paths: [resolved] });
     requireLoaded(op);
@@ -4300,6 +4305,9 @@ function buildFsApi(
       requireWriteCapForClass(op, "user-data");
       await ensureCapabilityConsent(deps, pluginId, writeCap);
       requireLoaded(op);
+      // A data dir is normally in no project, but nothing stops one sitting
+      // inside a registered folder: judge it before anything is created there.
+      await requireCallerDrives(op, dataDir);
       await createDirectoryChain(
         pluginId,
         op,
@@ -4312,9 +4320,10 @@ function buildFsApi(
     const { resolved, rootClass } = await containWithClass(targetPath);
     requireLoaded(op);
     requireWriteCapForClass(op, rootClass);
+    // Before consent, so a write the lease refuses never banks a grant; the
+    // resolved target, since a link inside the data dir can lead into a project.
+    await requireCallerDrives(op, resolved);
     if (!isDataDirTarget) {
-      // Before consent, so a write the lease refuses never banks a grant.
-      await requireCallerDrives(op, resolved);
       await ensureCapabilityConsent(deps, pluginId, writeCap);
       requireLoaded(op);
     }
@@ -4398,7 +4407,7 @@ function buildFsApi(
     const { resolved, isDataDirTarget } = await gateMutation(op, targetPath, writeCap);
     if (isDataDirTarget) await createDataDirParents(op, resolved);
     // The approval is the last this host sees of the write: judge it after the consent wait.
-    else await requireCallerDrives(op, resolved);
+    await requireCallerDrives(op, resolved);
     await refuseSymlinkLeaf(op, targetPath);
     // Recorded when approved: the write itself happens in the plugin's own
     // process, which the audit trail cannot see.
@@ -4573,7 +4582,7 @@ function buildFsApi(
         requireLoaded("writeFile");
         await recheckContained("writeFile", filePath, resolved);
         // The queue wait can outlast a takeover, too.
-        if (!isDataDirTarget) await requireCallerDrives("writeFile", resolved);
+        await requireCallerDrives("writeFile", resolved);
         const leafStat = await refuseSymlinkLeaf("writeFile", filePath);
         const bytes = Buffer.from(contents, "utf-8");
         if (expected === null) {
@@ -4659,13 +4668,13 @@ function buildFsApi(
       // Containment realpaths the deepest existing ancestor and re-appends the
       // missing tail, so an existing ancestor that is a symlink out of every
       // root is refused here, before anything is created.
-      const { resolved, isDataDirTarget } = await gateMutation("mkdir", dirPath, writeCap);
+      const { resolved } = await gateMutation("mkdir", dirPath, writeCap);
       // Only what this call made is audited; an existing directory changed
       // nothing.
       await runExclusive(resolved, async () => {
         requireLoaded("mkdir");
         await recheckContained("mkdir", dirPath, resolved);
-        if (!isDataDirTarget) await requireCallerDrives("mkdir", resolved);
+        await requireCallerDrives("mkdir", resolved);
         await createDirectoryChain(
           pluginId,
           "mkdir",
@@ -4689,7 +4698,7 @@ function buildFsApi(
       await runExclusive(resolved, async () => {
         requireLoaded("appendFile");
         await recheckContained("appendFile", filePath, resolved);
-        if (!isDataDirTarget) await requireCallerDrives("appendFile", resolved);
+        await requireCallerDrives("appendFile", resolved);
         const leafStat = await refuseSymlinkLeaf("appendFile", filePath);
         // A FIFO or device is refused before the open, which on a FIFO with
         // no reader would otherwise block.

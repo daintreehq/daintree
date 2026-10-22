@@ -194,6 +194,16 @@ describe("plugin writes from a view that doesn't drive the project", () => {
     expect(await fs.readFile(draft, "utf-8")).toBe("{}");
   });
 
+  it("refuses a write through a link in the plugin's data dir that leads into the project", async () => {
+    installLeases(new Map([["p1", HOLDER]]));
+    await fs.symlink(projectRoot, path.join(dataDir, "into-project"));
+
+    await expect(
+      asCaller(WATCHER, () => api().writeFile(path.join(dataDir, "into-project", "notes.md"), "x"))
+    ).rejects.toMatchObject({ code: "DRIVEN_ELSEWHERE" });
+    expect(await fs.readFile(target, "utf-8")).toBe("original");
+  });
+
   it("leaves a write that belongs to no call, and one with no lease service, as they were", async () => {
     installLeases(new Map([["p1", HOLDER]]));
     await api().writeFile(target, "background");
