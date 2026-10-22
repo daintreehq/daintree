@@ -149,7 +149,16 @@ async function readIssueOverrideCount(
   cwd: string,
   mainWorktreePath: string | undefined,
   bypassCache: boolean
-): Promise<{ count: number | null; clean: boolean; issuesUrl?: string } | undefined> {
+): Promise<
+  | {
+      count: number | null;
+      clean: boolean;
+      issuesUrl?: string;
+      /** When the issues provider last read this count, not when it was served. */
+      refreshedAt?: number;
+    }
+  | undefined
+> {
   let context: Awaited<ReturnType<typeof resolveIssueOverrideForCwd>>;
   try {
     context = await resolveIssueOverrideForCwd(cwd, mainWorktreePath);
@@ -167,10 +176,12 @@ async function readIssueOverrideCount(
   try {
     if (impl.repoStats) {
       const snapshot = await impl.repoStats.getRepoStats(repoRef, { bypassCache });
+      const refreshedAt = snapshot.counts.issueCountRefreshedAt ?? snapshot.counts.lastUpdated;
       return {
         count: snapshot.counts.issueCount,
         clean: !snapshot.counts.stale && !snapshot.counts.error && snapshot.source !== "disk",
         issuesUrl,
+        ...(refreshedAt !== undefined ? { refreshedAt } : {}),
       };
     }
     // A page without a total can't be counted from its length — that's the
@@ -178,7 +189,7 @@ async function readIssueOverrideCount(
     const page = await impl.listIssues(repoRef, { state: "open", perPage: 1, bypassCache });
     return page.totalCount === undefined
       ? { count: null, clean: false, issuesUrl }
-      : { count: page.totalCount, clean: true, issuesUrl };
+      : { count: page.totalCount, clean: true, issuesUrl, refreshedAt: Date.now() };
   } catch {
     return { count: null, clean: false, issuesUrl };
   }
@@ -530,6 +541,9 @@ async function handleForgeGetRepoStats(payload: {
         counts: {
           ...codeSnapshot.counts,
           issueCount: overrideIssues.count,
+          // The code forge's read time says nothing about when the issues
+          // provider last counted: a count it served from memory is that old.
+          issueCountRefreshedAt: overrideIssues.refreshedAt,
           // The renderer reads freshness off the result, so an issues count
           // that isn't a fresh observation must not ride in as one.
           ...(overrideClean ? {} : { stale: true }),

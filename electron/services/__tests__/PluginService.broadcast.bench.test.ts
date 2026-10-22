@@ -1,9 +1,10 @@
 // Benchmark for plugin contribution broadcasting at startup.
 // Prints metrics with PLUGIN_BROADCAST_BENCH=1; the assertions pin the batched shape:
-// initialize() over the four real builtins plus N fixture plugins sends one
+// initialize() over the real builtins plus N fixture plugins sends one
 // `broadcastToRenderer` snapshot per contribution channel.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fs from "fs/promises";
+import { existsSync, readdirSync } from "fs";
 import path from "path";
 import os from "os";
 import { performance } from "perf_hooks";
@@ -64,6 +65,10 @@ import {
 const REPORT = process.env.PLUGIN_BROADCAST_BENCH === "1";
 const BUILTIN_ROOT = path.resolve(__dirname, "../../../plugins/builtin");
 const FIXTURE_PLUGINS = 20;
+// Every shipped builtin loads, enabled or not, so the count follows the tree.
+const BUILTIN_PLUGINS = readdirSync(BUILTIN_ROOT).filter((name) =>
+  existsSync(path.join(BUILTIN_ROOT, name, "plugin.json"))
+).length;
 
 let tmpDir: string;
 const services: PluginService[] = [];
@@ -153,7 +158,7 @@ afterEach(async () => {
 });
 
 describe("plugin broadcast benchmark", () => {
-  it(`initialize() with 4 builtins + ${FIXTURE_PLUGINS} fixtures sends one snapshot per channel`, async () => {
+  it(`initialize() with ${BUILTIN_PLUGINS} builtins + ${FIXTURE_PLUGINS} fixtures sends one snapshot per channel`, async () => {
     const root = path.join(tmpDir, "user");
     for (let i = 0; i < FIXTURE_PLUGINS; i++) await writeFixturePlugin(root, i);
     const service = makeService(root, BUILTIN_ROOT);
@@ -169,7 +174,7 @@ describe("plugin broadcast benchmark", () => {
     const bytes = calls.reduce((sum, c) => sum + c.bytes, 0);
     report("initialize", { total: calls.length, bytes, initMs, ...perChannel });
 
-    expect(service.listPlugins()).toHaveLength(4 + FIXTURE_PLUGINS);
+    expect(service.listPlugins()).toHaveLength(BUILTIN_PLUGINS + FIXTURE_PLUGINS);
     const contributionChannels = [
       "plugin:actions-changed",
       "plugin:panel-kinds-changed",

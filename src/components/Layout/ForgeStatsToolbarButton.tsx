@@ -758,8 +758,9 @@ export const ForgeStatsToolbarButton = memo(
         if (e.pointerType !== "mouse") return;
         // No dropdown view (provider contributes no statsDropdown slot) means
         // no consumer for the warmed list — a click opens the forge website
-        // instead, so prefetching would be pure wasted quota.
-        if (!DropdownView) return;
+        // instead, so prefetching would be pure wasted quota. Each segment
+        // checks the provider that renders it: issues may come from another.
+        if (!(type === "issue" ? IssuesDropdownView : DropdownView)) return;
         const isOpen = type === "issue" ? issuesOpen : prsOpen;
         if (isOpen) return;
         // Fire immediately — no debounce. The in-flight + freshness guards in
@@ -768,7 +769,7 @@ export const ForgeStatsToolbarButton = memo(
         // cursor lands buys the maximum head-start before the click.
         prefetchResourceList(type);
       },
-      [DropdownView, issuesOpen, prsOpen, prefetchResourceList]
+      [DropdownView, IssuesDropdownView, issuesOpen, prsOpen, prefetchResourceList]
     );
 
     // Delta check for the digit-pulse animation and the activity chips. Each
@@ -929,9 +930,9 @@ export const ForgeStatsToolbarButton = memo(
             openSettingsForToken();
             return;
           }
-          // No dropdown view for this provider — route to the forge website,
+          // No dropdown view for the issues provider — route to its website,
           // mirroring the pill's own click handling.
-          if (!DropdownView) {
+          if (!IssuesDropdownView) {
             setIssuesPulseAt(null);
             void actionService.dispatch(
               "forge.openIssues",
@@ -968,7 +969,14 @@ export const ForgeStatsToolbarButton = memo(
         },
         stats,
       }),
-      [stats, isTokenError, openSettingsForToken, DropdownView, currentProject?.path]
+      [
+        stats,
+        isTokenError,
+        openSettingsForToken,
+        DropdownView,
+        IssuesDropdownView,
+        currentProject?.path,
+      ]
     );
 
     // No project: nothing to count. While provider resolution is in flight,
@@ -1084,10 +1092,11 @@ export const ForgeStatsToolbarButton = memo(
                 openSettingsForToken();
                 return;
               }
-              // Provider contributes no dropdown view — route the click to
-              // the forge's own issues page instead of toggling an empty
-              // popover shell.
-              if (!DropdownView) {
+              // The issues provider contributes no dropdown view — route the
+              // click to its own issues page instead of toggling an empty
+              // popover shell. The code forge's view says nothing here: the
+              // segment renders the issues provider's (#13700).
+              if (!IssuesDropdownView) {
                 setIssuesOpen(false);
                 setIssuesPulseAt(null);
                 void actionService.dispatch(

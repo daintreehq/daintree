@@ -1108,17 +1108,18 @@ export class PluginDevWorkerHostProxy {
       },
       registerForgeProvider: (descriptor: ForgeProviderDescriptor, _impl: ForgeProviderImpl) => {
         this.assertActivationOpen("registerForgeProvider");
-        // Forge providers can't run from the worker: `ForgeProviderImpl`'s
-        // required `parseRemote` (the routing gate), URL builders, and
-        // `classifyPushError` are SYNCHRONOUS — the host calls them and uses the
-        // return value immediately — but every worker host call is async over
-        // this MessagePort. A partial async-only proxy would be worse than
-        // honest: the provider would never become routable because
-        // `parseRemote` resolves to a Promise. This is the ONE permanent
-        // dev/prod-identical gap — both run in the worker, so neither supports
-        // it; a fix needs the forge API's sync surface to change.
+        // Forge providers don't run from the worker yet, in dev or prod. A
+        // provider serving code can't: its `parseRemote` (the routing gate), URL
+        // builders and `classifyPushError` are SYNCHRONOUS, and every worker
+        // host call is async over this MessagePort. An issues-only provider
+        // (`roles: ["issues"]`) is nearly async already — only `buildIssueUrl`
+        // and `buildIssuesUrl` are synchronous, and their callers are async —
+        // so the gap there is a missing bridge, not a contract: proxying
+        // `ForgeIssueProviderImpl`, delivering `setCredentials` over the port
+        // and mirroring or dropping `healthEvents`. Until that lands, issue
+        // trackers ship as built-ins (Linear does).
         console.warn(
-          `[plugin:${this.pluginId}] registerForgeProvider("${descriptor?.id}") is not supported — forge providers require synchronous host methods (parseRemote, URL builders) that can't cross the worker's async boundary.`
+          `[plugin:${this.pluginId}] registerForgeProvider("${descriptor?.id}") is not supported from a plugin worker yet — forge providers currently run only as built-in plugins.`
         );
         return Promise.resolve(() => {});
       },

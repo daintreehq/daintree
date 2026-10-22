@@ -1,6 +1,7 @@
 // Forges
 export { GitHubIcon } from "./GitHubIcon";
 export { GitLabIcon } from "./GitLabIcon";
+export { LinearIcon } from "./LinearIcon";
 
 // AI Agent icons
 export { ClaudeIcon } from "./ClaudeIcon";
