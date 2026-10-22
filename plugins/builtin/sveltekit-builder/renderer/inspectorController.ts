@@ -455,6 +455,32 @@ function isWithin(root: string, path: string): boolean {
   return target === base || target.startsWith(`${base}/`);
 }
 
+/**
+ * Nothing Svelte at or above any node: no location, no template shape and no
+ * component chain. Raw `{@html}` markup keeps its `structure`, and a canvas or
+ * shadow root reports its nearest stamped ancestor, so both stay traced; one
+ * traced node keeps a whole multi-selection traced.
+ */
+export function selectionHasNoSource(nodes: readonly SiteGuestNodeObservation[]): boolean {
+  return (
+    nodes.length > 0 &&
+    nodes.every(
+      (node) => node.loc === null && node.structure === undefined && node.ancestry.length === 0
+    )
+  );
+}
+
+/**
+ * The preview's dev server runs from a directory known to be beside every one
+ * of `appRoots`: neither inside one nor above one. A missing directory, or a
+ * monorepo root script above them, says nothing about which app is showing.
+ */
+export function previewBesideApps(appRoots: readonly string[], panel: unknown): boolean {
+  const cwd = (panel as { cwd?: unknown } | undefined)?.cwd;
+  if (typeof cwd !== "string" || cwd.length === 0 || appRoots.length === 0) return false;
+  return appRoots.every((root) => !isWithin(root, cwd) && !isWithin(cwd, root));
+}
+
 export function appRunningIn(appRoots: readonly string[], panel: unknown): string | null {
   const cwd = (panel as { kind?: string; cwd?: unknown } | undefined)?.cwd;
   if (typeof cwd !== "string" || cwd.length === 0) return null;
@@ -691,6 +717,7 @@ export class InspectorController implements DevPreviewToolSession {
               appRoots: this.knownAppRoots.includes(result.appRoot) ? this.knownAppRoots : [],
             },
           });
+          this.dropMootMappingIssue();
           return;
         case "ambiguous": {
           this.knownAppRoots = result.appRoots;
@@ -704,6 +731,7 @@ export class InspectorController implements DevPreviewToolSession {
             return;
           }
           this.patchState({ workspace: { status: "ambiguous", appRoots: result.appRoots } });
+          this.dropMootMappingIssue();
           return;
         }
         case "no-app": {
@@ -1136,7 +1164,7 @@ export class InspectorController implements DevPreviewToolSession {
       case "runtimeIssue":
         // A page with no Svelte metadata is only news where there is Svelte
         // source to trace it to; anywhere else it is every page there is.
-        if (MAPPING_ISSUES.has(event.code) && this.isSourceless()) return;
+        if (MAPPING_ISSUES.has(event.code) && this.mappingIssuesMoot()) return;
         this.patchState({
           issue: {
             severity: event.code === "internal" ? "error" : "warning",
@@ -1182,6 +1210,10 @@ export class InspectorController implements DevPreviewToolSession {
         // than discovered click by click; a chain it could not follow narrows
         // the trail and says why.
         if (!event.locations) {
+          if (this.mappingIssuesMoot()) {
+            this.patchState(patch);
+            return;
+          }
           patch.issue = {
             severity: "warning",
             message: RUNTIME_ISSUE_COPY["metadata-shape"]!,
@@ -1332,10 +1364,17 @@ export class InspectorController implements DevPreviewToolSession {
     // An untested toolchain is still traced, and its selection can still go to
     // an agent: the verdict is about which compiler proved the range, not about
     // what the drawer offers.
-    if (workspace.status !== "ready" || binding.status !== "bound") {
+    // What a selection is about is decided per selection: a click with nothing
+    // Svelte to trace is a page selection whichever app the worktree holds,
+    // and asking main would name that app's files for an element it never drew.
+    const untraceable = !reproving && selectionHasNoSource(nodes);
+    if (untraceable || workspace.status !== "ready" || binding.status !== "bound") {
       if (!reproving) this.lastObserved = { epoch, nodes };
       const described =
-        !reproving && this.isSourceless() && binding.status === "bound" && page?.epoch === epoch
+        !reproving &&
+        (untraceable || this.isSourceless()) &&
+        binding.status === "bound" &&
+        page?.epoch === epoch
           ? this.pageSelectionOf(binding.panelId, epoch, page, nodes)
           : null;
       // The picture first: publishing the selection opens the drawer, which
@@ -2113,6 +2152,32 @@ export class InspectorController implements DevPreviewToolSession {
   private isSourceless(): boolean {
     const status = this.state.workspace.status;
     return status === "no-app" || status === "no-worktree";
+  }
+
+  /**
+   * Whether the page's verdict on its Svelte metadata is beside the point: no
+   * source here at all, or the preview is known to run some other app. "Run the
+   * app with the Vite dev server" is advice for a misconfigured Svelte app,
+   * not for a Next.js one sitting next to it.
+   */
+  private mappingIssuesMoot(): boolean {
+    if (this.isSourceless()) return true;
+    const workspace = this.state.workspace;
+    const appRoots =
+      workspace.status === "ready"
+        ? [workspace.appRoot]
+        : workspace.status === "ambiguous"
+          ? workspace.appRoots
+          : [];
+    return previewBesideApps(appRoots, usePanelStore.getState().panelsById[this.panelId]);
+  }
+
+  /** A verdict reached before the workspace said which app this is, and now moot. */
+  private dropMootMappingIssue(): void {
+    const code = this.state.issue?.code;
+    if (code !== undefined && MAPPING_ISSUES.has(code) && this.mappingIssuesMoot()) {
+      this.patchState({ issue: null });
+    }
   }
 
   private pageSelectionOf(

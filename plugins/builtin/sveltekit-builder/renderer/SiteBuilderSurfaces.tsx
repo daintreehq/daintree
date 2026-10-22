@@ -632,7 +632,13 @@ export function SiteBuilderDrawer(props: DevPreviewToolSurfaceProps<InspectorCon
           a 360px panel doing it; a disclosure would have let the user fold away
           the only thing here. `aria-label` on the composer keeps the grouping
           for assistive technology without drawing one. */}
-        {(state.workspace.status === "ready" || state.workspace.status === "no-app") &&
+        {/* A page selection names no app, so choosing one is for tracing
+          Svelte elements, never a toll on sending what the page shows. */}
+        {(state.workspace.status === "ready" ||
+          state.workspace.status === "no-app" ||
+          (state.workspace.status === "ambiguous" &&
+            selection.status === "observed" &&
+            selection.page !== null)) &&
         (selection.status === "ready" ||
           (selection.status === "observed" && selection.page !== null) ||
           composer.draft.trim() !== "" ||

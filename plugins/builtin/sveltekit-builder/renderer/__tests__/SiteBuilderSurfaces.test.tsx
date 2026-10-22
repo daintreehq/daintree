@@ -2813,31 +2813,96 @@ describe("resolving skeleton", () => {
   });
 });
 
-describe("a worktree with no SvelteKit app", () => {
-  /**
-   * The ordinary case for every other framework: nothing to trace an element
-   * to, and the picker works all the same — the request carries what the page
-   * shows instead of a source location.
-   */
-  const PAGE_NODE = {
-    ...OBSERVATION,
-    loc: null,
-    locIndex: 0,
-    sameLocCount: 1,
-    tagName: "BUTTON",
-    label: "button.cta",
-    bounds: [{ x: 40, y: 80, width: 120, height: 40 }],
-    unmapped: true,
-    context: {
-      selector: "main > button.cta",
-      markup: '<button class="cta" type="button">Start Pro</button>',
-      styles: [
-        { property: "display", value: "inline-flex" },
-        { property: "padding", value: "8px 16px" },
-      ],
-    },
-  };
+/**
+ * An element with nothing Svelte at or above it: every other framework's, or
+ * another app's beside a SvelteKit one. The picker works all the same — the
+ * request carries what the page shows instead of a source location.
+ */
+const PAGE_NODE = {
+  ...OBSERVATION,
+  loc: null,
+  locIndex: 0,
+  sameLocCount: 1,
+  tagName: "BUTTON",
+  label: "button.cta",
+  bounds: [{ x: 40, y: 80, width: 120, height: 40 }],
+  unmapped: true,
+  context: {
+    selector: "main > button.cta",
+    markup: '<button class="cta" type="button">Start Pro</button>',
+    styles: [
+      { property: "display", value: "inline-flex" },
+      { property: "padding", value: "8px 16px" },
+    ],
+  },
+};
 
+/**
+ * An agent beside the preview. Each test names its own: delivery remembers,
+ * per terminal, that it just typed into one, and holds the next request
+ * until that agent has been seen at work.
+ */
+function withAgent(terminalId: string, cwd?: string) {
+  usePanelStore.setState({
+    panelIds: ["preview-1", terminalId],
+    panelsById: {
+      "preview-1": {
+        id: "preview-1",
+        kind: "dev-preview",
+        location: "grid",
+        worktreeId: "wt-1",
+        ...(cwd ? { cwd } : {}),
+      },
+      [terminalId]: {
+        id: terminalId,
+        kind: "terminal",
+        location: "grid",
+        worktreeId: "wt-1",
+        hasPty: true,
+        title: "claude · react app",
+        launchAgentId: "claude",
+        detectedAgentId: "claude",
+        agentState: "waiting",
+      },
+    } as never,
+  });
+}
+
+async function recordSends() {
+  const { actionService } = await import("@/services/ActionService");
+  const sent: string[] = [];
+  vi.spyOn(actionService, "dispatch").mockImplementation((async (
+    id: string,
+    args: Record<string, unknown>
+  ) => {
+    switch (id) {
+      case "terminal.getStatus":
+        return {
+          ok: true,
+          result: {
+            terminals: [
+              {
+                terminalId: (args.terminalIds as string[])[0],
+                agentId: "claude",
+                spawnedAt: 1_000,
+                agentIncarnation: 0,
+                agentState: "waiting",
+                ...(args.submissionToken ? { submission: { phase: "pty_written" } } : {}),
+              },
+            ],
+          },
+        };
+      case "terminal.sendCommand":
+        sent.push(String(args.command));
+        return { ok: true, result: { submissionToken: `token-${sent.length}` } };
+      default:
+        return { ok: false, error: { message: `unexpected ${id}` } };
+    }
+  }) as never);
+  return sent;
+}
+
+describe("a worktree with no SvelteKit app", () => {
   afterEach(() => {
     // Delivery remembers each terminal it typed into; these tests really send.
     __resetAgentRequestsForTests();
@@ -2850,65 +2915,6 @@ describe("a worktree with no SvelteKit app", () => {
     await waitFor(() => expect(host.calls(CHANNELS.workspaceOpen).length).toBeGreaterThan(0));
     await screen.findByRole("radio", { name: "Browse" });
     await act(async () => host.documentReady(0));
-  }
-
-  /**
-   * An agent beside the preview. Each test names its own: delivery remembers,
-   * per terminal, that it just typed into one, and holds the next request
-   * until that agent has been seen at work.
-   */
-  function withAgent(terminalId: string) {
-    usePanelStore.setState({
-      panelIds: ["preview-1", terminalId],
-      panelsById: {
-        "preview-1": { id: "preview-1", kind: "dev-preview", location: "grid", worktreeId: "wt-1" },
-        [terminalId]: {
-          id: terminalId,
-          kind: "terminal",
-          location: "grid",
-          worktreeId: "wt-1",
-          hasPty: true,
-          title: "claude · react app",
-          launchAgentId: "claude",
-          detectedAgentId: "claude",
-          agentState: "waiting",
-        },
-      } as never,
-    });
-  }
-
-  async function recordSends() {
-    const { actionService } = await import("@/services/ActionService");
-    const sent: string[] = [];
-    vi.spyOn(actionService, "dispatch").mockImplementation((async (
-      id: string,
-      args: Record<string, unknown>
-    ) => {
-      switch (id) {
-        case "terminal.getStatus":
-          return {
-            ok: true,
-            result: {
-              terminals: [
-                {
-                  terminalId: (args.terminalIds as string[])[0],
-                  agentId: "claude",
-                  spawnedAt: 1_000,
-                  agentIncarnation: 0,
-                  agentState: "waiting",
-                  ...(args.submissionToken ? { submission: { phase: "pty_written" } } : {}),
-                },
-              ],
-            },
-          };
-        case "terminal.sendCommand":
-          sent.push(String(args.command));
-          return { ok: true, result: { submissionToken: `token-${sent.length}` } };
-        default:
-          return { ok: false, error: { message: `unexpected ${id}` } };
-      }
-    }) as never);
-    return sent;
   }
 
   it("invites a click rather than reporting a missing app", async () => {
@@ -2986,13 +2992,15 @@ describe("a worktree with no SvelteKit app", () => {
     await act(async () => host.documentReady(0));
     await act(async () => host.select(0, [PAGE_NODE]));
     expect(screen.queryByRole("textbox", { name: "Request for the agent" })).toBeNull();
-    expect(host.captureElement).not.toHaveBeenCalled();
+    // Nothing on the element is Svelte's, so it is a page selection whatever
+    // the search finds, and its picture is taken at the click.
+    expect(host.captureElement).toHaveBeenCalledTimes(1);
 
     await act(async () => answer({ status: "no-app", scanComplete: true }));
     await screen.findByRole("textbox", { name: "Request for the agent" });
     // The boxes are from the click, and the page may have moved since: no
-    // picture is taken of whatever sits there now.
-    expect(host.captureElement).not.toHaveBeenCalled();
+    // second picture is taken of whatever sits there now.
+    expect(host.captureElement).toHaveBeenCalledTimes(1);
   });
 
   it("doesn't say the page's components went untraced where there is nothing to trace", async () => {
@@ -3022,6 +3030,195 @@ describe("a worktree with no SvelteKit app", () => {
         documentEpoch: 0,
         sequence: 2,
         event: { type: "runtimeIssue", code: "no-svelte-meta", detail: "" },
+      })
+    );
+    expect(session().getSnapshot().issue).toBeNull();
+  });
+});
+
+describe("an element with nothing Svelte to trace, in a worktree that holds a SvelteKit app", () => {
+  afterEach(() => {
+    __resetAgentRequestsForTests();
+  });
+
+  function openOnly(appRoot: string) {
+    host.handlers.set(CHANNELS.workspaceOpen, () => ({
+      status: "ready",
+      workspaceSessionId: "ws-1",
+      appRoot,
+      support: { level: "tested" },
+    }));
+  }
+
+  function withPreviewIn(cwd: string | undefined) {
+    usePanelStore.setState({
+      panelsById: {
+        "preview-1": {
+          id: "preview-1",
+          kind: "dev-preview",
+          location: "grid",
+          ...(cwd === undefined ? {} : { cwd }),
+        },
+      } as never,
+    });
+  }
+
+  async function sendRequest(sent: string[]): Promise<string> {
+    const request = await screen.findByRole("textbox", { name: "Request for the agent" });
+    fireEvent.change(request, { target: { value: "Make this bigger" } });
+    const send = () => screen.getByRole("button", { name: "Send to agent" }) as HTMLButtonElement;
+    await waitFor(() => expect(send().disabled).toBe(false));
+    fireEvent.click(send());
+    await waitFor(() => expect(sent).toHaveLength(1), { timeout: 4000 });
+    return sent[0]!;
+  }
+
+  function pushGuest(sequence: number, event: Record<string, unknown>) {
+    host.pushPreview({
+      kind: "guest-event",
+      sessionId: "session-1",
+      panelId: "preview-1",
+      projectId: "p1",
+      documentEpoch: 0,
+      sequence,
+      event: event as never,
+    });
+  }
+
+  it("sends what the page shows, naming no app, when the preview runs another app", async () => {
+    openOnly("/repo/apps/docs");
+    withAgent("term-beside", "/repo/apps/web");
+    const sent = await recordSends();
+    await mountBound();
+    await waitFor(() => expect(session().getSnapshot().workspace.status).toBe("ready"));
+    await act(async () => host.select(0, [PAGE_NODE]));
+
+    await screen.findByRole("textbox", { name: "Request for the agent" });
+    expect(screen.getByRole("region", { name: "Selected element" }).textContent).toContain(
+      "main > button.cta"
+    );
+    expect(host.captureElement).toHaveBeenCalledWith("preview-1", {
+      rect: { x: 40, y: 80, width: 120, height: 40 },
+      viewportWidth: 800,
+      viewportHeight: 600,
+    });
+    const prompt = await sendRequest(sent);
+    expect(prompt).toContain('- Selector: "main > button.cta"');
+    expect(prompt).toContain("/tmp/daintree-clipboard/element-1.png");
+    expect(prompt).not.toContain("- App:");
+    expect(prompt).not.toContain("apps/docs");
+    expect(prompt).not.toContain("SvelteKit Tools");
+    expect(host.calls(CHANNELS.selectionResolve)).toEqual([]);
+  });
+
+  it("sends what the page shows without choosing an app when several could be it", async () => {
+    host.handlers.set(CHANNELS.workspaceOpen, () => ({
+      status: "ambiguous",
+      appRoots: ["/repo/apps/docs", "/repo/apps/admin"],
+    }));
+    withAgent("term-ambiguous", "/repo/apps/web");
+    const sent = await recordSends();
+    await mountBound();
+    await waitFor(() => expect(session().getSnapshot().workspace.status).toBe("ambiguous"));
+    await act(async () => host.select(0, [PAGE_NODE]));
+
+    const prompt = await sendRequest(sent);
+    expect(prompt).toContain('- Selector: "main > button.cta"');
+    expect(prompt).not.toContain("- App:");
+    expect(host.calls(CHANNELS.selectionResolve)).toEqual([]);
+    expect(host.calls(CHANNELS.workspaceOpen).every((args) => args.appRoot === undefined)).toBe(
+      true
+    );
+    expect(session().getSnapshot().workspace.status).toBe("ambiguous");
+  });
+
+  it.each([
+    ["a traced element beside it", [OBSERVATION, PAGE_NODE]],
+    ["an unstamped element listed first", [PAGE_NODE, OBSERVATION]],
+    [
+      "raw {@html} markup, which keeps its template's shape",
+      [
+        {
+          ...PAGE_NODE,
+          unmapped: false,
+          structure: { file: FILE, path: [{ tag: "p", index: 0 }] },
+        },
+      ],
+    ],
+    [
+      "a component chain above it",
+      [{ ...PAGE_NODE, ancestry: [{ type: "component", file: FILE, line: 1, column: 0 }] }],
+    ],
+  ])("still traces a selection with %s", async (_name, nodes) => {
+    await mountBound();
+    await act(async () => host.select(0, nodes as never));
+    await waitFor(() => expect(host.calls(CHANNELS.selectionResolve)).toHaveLength(1));
+    const resolved = host.calls(CHANNELS.selectionResolve)[0]!.nodes as Record<string, unknown>[];
+    expect(resolved).toHaveLength(nodes.length);
+    expect(resolved.some((node) => "context" in node)).toBe(false);
+    expect(host.captureElement).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["another app beside it", "/repo/apps/web", null],
+    ["a sibling whose name starts the same", "/repo/apps/docs-old", null],
+    ["the app itself", "/repo/apps/docs/src", "no-svelte-meta"],
+    ["a monorepo root script above it", "/repo", "no-svelte-meta"],
+    ["nowhere it says", undefined, "no-svelte-meta"],
+  ])(
+    "warns that the page has no Svelte metadata only where the preview could be the app: %s",
+    async (_name, cwd, expected) => {
+      openOnly("/repo/apps/docs");
+      withPreviewIn(cwd);
+      await mountBound();
+      await waitFor(() => expect(session().getSnapshot().workspace.status).toBe("ready"));
+      await act(async () =>
+        pushGuest(2, { type: "runtimeIssue", code: "no-svelte-meta", detail: "" })
+      );
+      expect(session().getSnapshot().issue?.code ?? null).toBe(expected);
+    }
+  );
+
+  it("says nothing of an unreadable metadata shape on a page from another app", async () => {
+    openOnly("/repo/apps/docs");
+    withPreviewIn("/repo/apps/web");
+    await mountBound();
+    await waitFor(() => expect(session().getSnapshot().workspace.status).toBe("ready"));
+    await act(async () =>
+      pushGuest(2, { type: "metadataProbed", locations: false, ancestry: false })
+    );
+    expect(session().getSnapshot().issue).toBeNull();
+  });
+
+  it("keeps the warning where the preview could be one of several apps", async () => {
+    host.handlers.set(CHANNELS.workspaceOpen, () => ({
+      status: "ambiguous",
+      appRoots: ["/repo/apps/docs", "/repo/apps/admin"],
+    }));
+    withPreviewIn("/repo");
+    await mountBound();
+    await waitFor(() => expect(session().getSnapshot().workspace.status).toBe("ambiguous"));
+    await act(async () =>
+      pushGuest(2, { type: "runtimeIssue", code: "not-dev-build", detail: "" })
+    );
+    expect(session().getSnapshot().issue?.code).toBe("not-dev-build");
+  });
+
+  it("drops a warning given before the search showed the preview runs another app", async () => {
+    let answer: (result: unknown) => void = () => {};
+    host.handlers.set(CHANNELS.workspaceOpen, () => new Promise((resolve) => (answer = resolve)));
+    withPreviewIn("/repo/apps/web");
+    await mountBound();
+    await act(async () =>
+      pushGuest(2, { type: "runtimeIssue", code: "no-svelte-meta", detail: "" })
+    );
+    expect(session().getSnapshot().issue?.code).toBe("no-svelte-meta");
+    await act(async () =>
+      answer({
+        status: "ready",
+        workspaceSessionId: "ws-1",
+        appRoot: "/repo/apps/docs",
+        support: { level: "tested" },
       })
     );
     expect(session().getSnapshot().issue).toBeNull();
