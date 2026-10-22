@@ -6,13 +6,12 @@ import {
   type MouseEvent,
   type ReactNode,
 } from "react";
-import { ChevronDown, ChevronRight, ChevronUp } from "lucide-react";
+import { ChevronRight } from "lucide-react";
 import type { HostId } from "@shared/types/remoteHosts";
 import { PilotRunState } from "@/components/Pilot/PilotRunState";
-import { ScrollPill } from "@/components/ui/ScrollPill";
-import { useAnimatedPresence } from "@/hooks/useAnimatedPresence";
-import { pluralize } from "@/lib/pluralize";
+import { pluralize, pluralNoun } from "@/lib/pluralize";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { LIST_DETAIL_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { Server } from "@/components/icons";
 import { HostNameText } from "@/components/Hosts/HostNameText";
 import { PlatformGlyph } from "@/components/Hosts/PlatformGlyph";
@@ -25,7 +24,12 @@ import {
   type HostProjectSummary,
   type RowBand,
 } from "@/components/Hosts/projectHostSummary";
-import { hostRowLabel, hostRowStatus, hostRowTooltip } from "@/components/Hosts/projectHostLines";
+import {
+  hostRowLabel,
+  hostRowStatus,
+  hostRowTooltip,
+  type HostTooltip,
+} from "@/components/Hosts/projectHostLines";
 import {
   handOffOrder,
   isOrderSettled,
@@ -33,6 +37,8 @@ import {
   useOrderPatience,
   useSteadyOrder,
 } from "@/components/Hosts/projectHostOrder";
+import { useDeferredLoading } from "@/hooks/useDeferredLoading";
+import { UI_INLINE_LOADING_GATE_MS } from "@/lib/animationUtils";
 import { useProjectStore } from "@/store/projectStore";
 import { isMac } from "@/lib/platform";
 import { cn } from "@/lib/utils";
@@ -59,15 +65,31 @@ interface ProjectHostsGroupProps {
   projectId: string | null;
 }
 
-/** Rows tighten below 15rem of sidebar (its minimum is 200px), so a host name keeps room beside its counts. */
-const ROW_CLASS = cn(
-  "flex w-full min-w-0 items-center gap-2 px-2 py-1 text-left text-xs @[15rem]/hosts:px-3",
-  "transition-colors hover:bg-overlay-subtle",
-  "focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-selection-outline"
-);
+/**
+ * Every row of the section sits on the sidebar footer's grid, at every width:
+ * the footer's 16px inset, its 12px glyph column, then the text, and the Run
+ * command toggle's 12px on the right. So the header's chevron, each host's
+ * platform mark and the footer's status dot share one column, and the header,
+ * the host names and "N projects active" start on one edge.
+ */
+const GRID_CLASS = "flex w-full min-w-0 items-center gap-2 pl-4 pr-3 text-left";
 
-/** The window's own host: the selection lift. */
-const CURRENT_ROW_CLASS = "bg-overlay-soft hover:bg-overlay-soft";
+const FOCUS_CLASS =
+  "outline-hidden focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-selection-outline";
+
+/**
+ * A host row, and the fold row with it: the list-detail row, so the window's
+ * own host takes the one highlighted-row fill the app uses for "the row you
+ * are on" and the pointer a lighter step that never paints over it.
+ */
+const ROW_CLASS = cn(
+  GRID_CLASS,
+  LIST_DETAIL_ROW_CLASS,
+  // Without the palette row's 1px transparent border, which would set every
+  // name 1px right of the header and the footer.
+  "border-0 py-1 text-xs",
+  FOCUS_CLASS
+);
 
 /**
  * One fixed-width cell per counted column, the same columns on every row, so
@@ -75,7 +97,7 @@ const CURRENT_ROW_CLASS = "bg-overlay-soft hover:bg-overlay-soft";
  * glyph and two digits.
  */
 const CELL_CLASS =
-  "flex w-7.5 shrink-0 items-center justify-end gap-0.5 tabular-nums text-text-primary @[15rem]/hosts:w-8";
+  "flex w-7.5 shrink-0 items-center justify-end gap-0.5 tabular-nums @[15rem]/hosts:w-8";
 
 /** Rows the section's own arrow keys move between, header included. */
 const NAV_SELECTOR = "[data-project-hosts-nav]";
@@ -84,30 +106,41 @@ function newWindowKey(): string {
   return isMac() ? "Cmd" : "Ctrl";
 }
 
-/** The glyph column every row shares, so names start on one edge. */
+/** The footer's glyph column, so a row's mark sits over its status dot. */
 function GlyphSlot({ children }: { children?: ReactNode }) {
   return (
-    <span aria-hidden="true" className="flex size-3.5 shrink-0 items-center justify-center">
+    <span aria-hidden="true" className="flex w-3 shrink-0 items-center justify-center">
       {children}
     </span>
   );
 }
 
-/** A row's full text, on hover and on focus alike. */
-function RowTooltip({ lines, children }: { lines: readonly string[]; children: ReactNode }) {
-  const last = lines.length - 1;
+/**
+ * A row's tooltip, read top to bottom: the full name, what is going on there,
+ * then what a click does. It stays while the row is hovered or focused: its
+ * body is the row's detail, not a passing hint.
+ */
+function RowTooltip({ tooltip, children }: { tooltip: HostTooltip; children: ReactNode }) {
   return (
-    <Tooltip>
+    <Tooltip autoDismiss={false}>
       <TooltipTrigger asChild>{children}</TooltipTrigger>
       <TooltipContent side="right">
-        {lines.map((line, i) => (
-          <div
-            key={`${i}:${line}`}
-            className={cn("[overflow-wrap:anywhere]", i === last && "text-text-secondary")}
-          >
-            {line}
-          </div>
-        ))}
+        <span className="flex flex-col gap-0.5">
+          <span className="flex items-baseline gap-1.5">
+            <span className="font-medium [overflow-wrap:anywhere]">{tooltip.title}</span>
+            {tooltip.note && (
+              <span className="shrink-0 text-2xs text-text-secondary">{tooltip.note}</span>
+            )}
+          </span>
+          {tooltip.lines.map((line) => (
+            <span key={line} className="text-text-secondary">
+              {line}
+            </span>
+          ))}
+          {tooltip.hint && (
+            <span className="mt-1 text-2xs text-text-secondary">{tooltip.hint}</span>
+          )}
+        </span>
       </TooltipContent>
     </Tooltip>
   );
@@ -132,16 +165,19 @@ function addCounts(a: Counts, b: Counts): Counts {
  * row's first count are left out, so its name runs across them, and below
  * 15rem the empty cells between two counts go too, so names keep their tails.
  * The empty cells after a row's last count stay: they are what keep that
- * count in its column.
+ * count in its column. A summary of other rows (the fold) draws its numbers
+ * in secondary ink, so it never reads as one more host.
  */
 function CountCells({
   counts,
   askingBand,
   columns,
+  summary = false,
 }: {
   counts: Counts;
   askingBand: "blocked" | "needs-you";
   columns: readonly RowBand[];
+  summary?: boolean;
 }) {
   const first = columns.findIndex((band) => counts[band] > 0);
   let last = -1;
@@ -149,7 +185,10 @@ function CountCells({
     if (counts[band] > 0) last = i;
   });
   return (
-    <span aria-hidden="true" className="ml-auto flex shrink-0">
+    <span
+      aria-hidden="true"
+      className={cn("ml-auto flex shrink-0", summary ? "text-text-secondary" : "text-text-primary")}
+    >
       {columns.slice(Math.max(first, 0)).map((band, i) => {
         const n = counts[band];
         const gap = n === 0 && Math.max(first, 0) + i < last;
@@ -179,6 +218,8 @@ function CountCells({
 interface Totals {
   asking: number;
   working: number;
+  /** Whether any of the asking agents is blocked, so the total wears that mark as a row would. */
+  blocked: boolean;
 }
 
 const BAND_WORDS: Record<RowBand, string> = {
@@ -203,12 +244,13 @@ function describeTotals(totals: Totals): string {
   return `${parts.join(", ")} on other hosts (observed)`;
 }
 
+/** The collapsed header's totals, in the footer readout's type so the two rows read as a pair. */
 function CollapsedTotals({ totals }: { totals: Totals }) {
   if (totals.asking === 0 && totals.working === 0) return null;
   return (
     <span
       data-testid="project-hosts-totals"
-      className="flex shrink-0 items-center gap-2 text-xs tabular-nums text-text-primary"
+      className="flex shrink-0 items-center gap-2 text-2xs font-medium tabular-nums text-text-primary"
     >
       {/* The toggle's name never changes with its state; the totals describe it instead. */}
       <span id={TOTALS_ID} className="sr-only">
@@ -216,7 +258,7 @@ function CollapsedTotals({ totals }: { totals: Totals }) {
       </span>
       {totals.asking > 0 && (
         <span aria-hidden="true" data-total="asking" className="flex items-center gap-0.5">
-          <PilotRunState band="needs-you" agentState={undefined} />
+          <PilotRunState band={totals.blocked ? "blocked" : "needs-you"} agentState={undefined} />
           {totals.asking}
         </span>
       )}
@@ -227,119 +269,6 @@ function CollapsedTotals({ totals }: { totals: Totals }) {
         </span>
       )}
     </span>
-  );
-}
-
-interface HiddenPast {
-  rows: number;
-  /** The row to bring into view: the nearest one past the edge. */
-  nearest: HTMLElement | null;
-}
-
-interface HiddenEdges {
-  above: HiddenPast;
-  below: HiddenPast;
-}
-
-const NOTHING_PAST: HiddenPast = { rows: 0, nearest: null };
-const NOTHING_HIDDEN: HiddenEdges = { above: NOTHING_PAST, below: NOTHING_PAST };
-
-function samePast(a: HiddenPast, b: HiddenPast): boolean {
-  return a.rows === b.rows && a.nearest === b.nearest;
-}
-
-/** How many rows the section's own scroll has past each edge, kept current as it scrolls, resizes and changes. */
-function useHiddenEdges(el: HTMLUListElement | null): HiddenEdges {
-  const [hidden, setHidden] = useState<HiddenEdges>(NOTHING_HIDDEN);
-  useEffect(() => {
-    if (!el) {
-      setHidden(NOTHING_HIDDEN);
-      return;
-    }
-    const measure = () => {
-      const top = el.scrollTop;
-      const bottom = top + el.clientHeight;
-      let above = 0;
-      let below = 0;
-      let nearestAbove: HTMLElement | null = null;
-      let nearestBelow: HTMLElement | null = null;
-      for (const row of el.querySelectorAll<HTMLElement>("[data-project-hosts-row]")) {
-        // A row more than half past an edge is one the eye can't read.
-        const middle = row.offsetTop + row.offsetHeight / 2;
-        if (middle < top) {
-          above += 1;
-          nearestAbove = row;
-        } else if (middle > bottom) {
-          below += 1;
-          if (nearestBelow === null) nearestBelow = row;
-        }
-      }
-      const next: HiddenEdges = {
-        above: { rows: above, nearest: nearestAbove },
-        below: { rows: below, nearest: nearestBelow },
-      };
-      setHidden((previous) =>
-        samePast(previous.above, next.above) && samePast(previous.below, next.below)
-          ? previous
-          : next
-      );
-    };
-    measure();
-    el.addEventListener("scroll", measure, { passive: true });
-    const resized = new ResizeObserver(measure);
-    resized.observe(el);
-    const changed = new MutationObserver(measure);
-    changed.observe(el, { childList: true, subtree: true });
-    return () => {
-      el.removeEventListener("scroll", measure);
-      resized.disconnect();
-      changed.disconnect();
-    };
-  }, [el]);
-  return hidden;
-}
-
-/**
- * The sidebar's own scroll pill, for this section's overflow: how many rows
- * are past the edge. Rows stay in Tab order, which scrolls them in, so the
- * pill is the pointer's shortcut and stays out of the accessibility tree.
- */
-function OverflowCue({ direction, past }: { direction: "above" | "below"; past: HiddenPast }) {
-  const { isVisible, shouldRender } = useAnimatedPresence({ isOpen: past.rows > 0 });
-  // Fading out, it keeps saying what it last said rather than "0".
-  const [lastShown, setLastShown] = useState<HiddenPast>(past);
-  if (past.rows > 0 && !samePast(past, lastShown)) setLastShown(past);
-  const shown = past.rows > 0 ? past : lastShown;
-  if (!shouldRender) return null;
-  const Chevron = direction === "above" ? ChevronUp : ChevronDown;
-  return (
-    <div
-      aria-hidden="true"
-      data-project-hosts-overflow={direction}
-      className={cn(
-        "pointer-events-none absolute right-0 left-0 z-10 flex justify-end pr-3",
-        direction === "above" ? "top-0 pt-1.5" : "bottom-0 pb-1.5"
-      )}
-    >
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <ScrollPill
-            isVisible={isVisible}
-            translateDirection={direction === "above" ? "up" : "down"}
-            tabIndex={-1}
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => shown.nearest?.scrollIntoView({ block: "nearest" })}
-            className="flex items-center gap-1.5 px-2.5 py-1"
-          >
-            <Chevron className="h-3 w-3" />
-            <span className="font-medium tabular-nums">{shown.rows}</span>
-          </ScrollPill>
-        </TooltipTrigger>
-        <TooltipContent side="right" className="text-xs">
-          {pluralize(shown.rows, "more host", "more hosts")} {direction}
-        </TooltipContent>
-      </Tooltip>
-    </div>
   );
 }
 
@@ -360,6 +289,68 @@ function moveFocus(event: KeyboardEvent<HTMLElement>): void {
   rows[next]?.focus();
 }
 
+interface HostRowProps {
+  host: ProjectHost;
+  summary: HostProjectSummary | null;
+  columns: readonly RowBand[];
+  newWindowKey: string;
+  onOpen: (host: ProjectHost, event: MouseEvent) => void;
+}
+
+/** One host: its mark, its name, and its counts or the phrase standing in for them. */
+function HostRow({ host, summary, columns, newWindowKey: key, onOpen }: HostRowProps) {
+  const status = hostRowStatus(host, summary);
+  // A lookup or a read still out says so only once it is slow enough to notice.
+  const showChecking = useDeferredLoading(status.kind === "checking", UI_INLINE_LOADING_GATE_MS);
+  return (
+    <li data-host-id={host.hostId}>
+      <RowTooltip tooltip={hostRowTooltip(host, summary, key)}>
+        <button
+          type="button"
+          data-testid="project-hosts-host-row"
+          data-project-hosts-row="host"
+          data-project-hosts-nav=""
+          data-status={status.kind}
+          data-selected={host.isCurrent ? "true" : undefined}
+          aria-current={host.isCurrent ? "true" : undefined}
+          aria-label={hostRowLabel(host, summary)}
+          onClick={(event) => onOpen(host, event)}
+          className={ROW_CLASS}
+        >
+          <GlyphSlot>
+            {host.platform ? (
+              <PlatformGlyph platform={host.platform} className="text-text-secondary" />
+            ) : (
+              <Server className="size-3 text-text-secondary" />
+            )}
+          </GlyphSlot>
+          <span className="min-w-0 flex-1 overflow-hidden">
+            <HostNameText
+              name={host.hostName}
+              title={false}
+              // At the sidebar's minimum the tail, which tells hosts apart, outranks the head.
+              headFloor="min-w-[2ch] @[15rem]/hosts:min-w-[4ch]"
+              // Primary in every state: a host that is down is still a row you can click.
+              className="font-medium text-text-primary"
+            />
+          </span>
+          {status.kind === "counts" && summary ? (
+            <CountCells counts={summary.counts} askingBand={summary.askingBand} columns={columns} />
+          ) : status.kind === "away" || status.kind === "note" ? (
+            <span aria-hidden="true" className="shrink-0 whitespace-nowrap text-text-secondary">
+              {status.text}
+            </span>
+          ) : showChecking ? (
+            <span aria-hidden="true" className="shrink-0 whitespace-nowrap text-text-secondary">
+              Checking…
+            </span>
+          ) : null}
+        </button>
+      </RowTooltip>
+    </li>
+  );
+}
+
 /**
  * This project on every host, the window's own included, one row per host: a
  * quick way to get to any of them. Each row shows how many of this project's
@@ -375,16 +366,14 @@ function moveFocus(event: KeyboardEvent<HTMLElement>): void {
  * switch, so a row never moves under a click. The first few show; the rest
  * fold into one row. The header names the project and collapses the section,
  * once for every window on every host; collapsed, it keeps the totals for the
- * other machines.
+ * other machines. It sits directly on the sidebar footer and is built on the
+ * footer's grid, so the two read as one stack of 28px rows.
  */
 export function ProjectHostsGroup({ projectId }: ProjectHostsGroupProps) {
   const hosts = useProjectHosts(projectId);
   const projectName = useProjectStore((state) => state.currentProject?.name ?? null);
   const expanded = useProjectHostsExpanded();
   const [section, setSection] = useState<HTMLElement | null>(null);
-  // State, not a ref: the list mounts only once a host is there, after the first render.
-  const [scroller, setScroller] = useState<HTMLUListElement | null>(null);
-  const edges = useHiddenEdges(scroller);
   // Unknown until the section is there to ask: a view opened by a click on
   // this section opens under a pointer that hasn't moved, and must not
   // reorder before it knows.
@@ -429,7 +418,7 @@ export function ProjectHostsGroup({ projectId }: ProjectHostsGroupProps) {
   const columns = ROW_BANDS.filter((band) =>
     [...summaries.values()].some((summary) => summary.counts[band] > 0)
   );
-  let otherTotals: Totals = { asking: 0, working: 0 };
+  let otherTotals: Totals = { asking: 0, working: 0, blocked: false };
   let foldedCounts = NO_COUNTS;
   let foldedBlocked = false;
   for (const host of ordered) {
@@ -439,6 +428,7 @@ export function ProjectHostsGroup({ projectId }: ProjectHostsGroupProps) {
       otherTotals = {
         asking: otherTotals.asking + summary.counts.asking,
         working: otherTotals.working + summary.counts.running,
+        blocked: otherTotals.blocked || summary.askingBand === "blocked",
       };
     }
     if (folded.includes(host)) {
@@ -468,65 +458,24 @@ export function ProjectHostsGroup({ projectId }: ProjectHostsGroupProps) {
   };
 
   const title = projectName ?? "This project";
-  const hostRow = (host: ProjectHost) => {
-    const summary = summaries.get(host.hostId) ?? null;
-    const status = hostRowStatus(host, summary);
-    return (
-      <li key={host.hostId} data-host-id={host.hostId}>
-        <RowTooltip lines={hostRowTooltip(host, summary, key)}>
-          <button
-            type="button"
-            data-testid="project-hosts-host-row"
-            data-project-hosts-row="host"
-            data-project-hosts-nav=""
-            data-status={status.kind}
-            aria-current={host.isCurrent ? "true" : undefined}
-            aria-label={hostRowLabel(host, summary)}
-            onClick={(event) => openHost(host, event)}
-            className={cn(ROW_CLASS, host.isCurrent && CURRENT_ROW_CLASS)}
-          >
-            <GlyphSlot>
-              {host.platform ? (
-                <PlatformGlyph platform={host.platform} className="text-text-secondary" />
-              ) : (
-                <Server className="size-3 text-text-secondary" />
-              )}
-            </GlyphSlot>
-            <span className="min-w-0 flex-1 overflow-hidden">
-              <HostNameText
-                name={host.hostName}
-                title={false}
-                // At the sidebar's minimum the tail, which tells hosts apart, outranks the head.
-                headFloor="min-w-[2ch] @[15rem]/hosts:min-w-[4ch]"
-                className={cn(
-                  "font-medium",
-                  host.away ? "text-text-secondary" : "text-text-primary"
-                )}
-              />
-            </span>
-            {status.kind === "counts" && summary ? (
-              <CountCells
-                counts={summary.counts}
-                askingBand={summary.askingBand}
-                columns={columns}
-              />
-            ) : status.kind === "away" || status.kind === "note" ? (
-              <span aria-hidden="true" className="shrink-0 whitespace-nowrap text-text-secondary">
-                {status.text}
-              </span>
-            ) : null}
-          </button>
-        </RowTooltip>
-      </li>
-    );
-  };
+  const hostRow = (host: ProjectHost) => (
+    <HostRow
+      key={host.hostId}
+      host={host}
+      summary={summaries.get(host.hostId) ?? null}
+      columns={columns}
+      newWindowKey={key}
+      onOpen={openHost}
+    />
+  );
 
   return (
     <section
       ref={setSection}
       aria-label={`${title} across hosts`}
       // At most half the sidebar, so the local worktrees always keep the rest.
-      className="@container/hosts flex max-h-[50%] shrink-0 flex-col border-t border-border-default"
+      // The footer's divider, so the stack under the worktree list reads as one family.
+      className="@container/hosts flex max-h-[50%] shrink-0 flex-col border-t border-divider"
       data-testid="project-hosts-group"
       onKeyDown={moveFocus}
       onPointerEnter={() => setPointerIn(true)}
@@ -534,40 +483,43 @@ export function ProjectHostsGroup({ projectId }: ProjectHostsGroupProps) {
       onFocus={() => setFocusIn(true)}
       onBlur={onBlur}
     >
+      {/* The footer's row: its height, its type, its glyph column and its hover. */}
       <button
         type="button"
         data-project-hosts-nav=""
         data-testid="project-hosts-toggle"
         aria-expanded={expanded}
-        aria-controls={expanded ? LIST_ID : undefined}
+        aria-controls={LIST_ID}
         aria-label={`${title} across hosts`}
         aria-describedby={
           !expanded && (otherTotals.asking > 0 || otherTotals.working > 0) ? TOTALS_ID : undefined
         }
         onClick={() => setProjectHostsExpanded(!expanded)}
         className={cn(
-          "group/toggle flex w-full shrink-0 items-center gap-1 px-2 pt-2 pb-1 text-left @[15rem]/hosts:px-3",
-          !expanded && "pb-2",
-          "outline-hidden focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-selection-outline"
+          GRID_CLASS,
+          "group/toggle min-h-7 shrink-0 transition-colors hover:bg-overlay-subtle",
+          FOCUS_CLASS
         )}
       >
-        <ChevronRight
-          data-animated-chevron
-          aria-hidden="true"
-          className={cn(
-            "size-3 shrink-0 text-text-secondary transition-transform duration-150 ease-out",
-            expanded && "rotate-90"
-          )}
-        />
+        <GlyphSlot>
+          <ChevronRight
+            data-animated-chevron
+            className={cn(
+              "size-3 text-text-secondary transition-transform duration-150 ease-out",
+              expanded && "rotate-90"
+            )}
+          />
+        </GlyphSlot>
         <span className="flex min-w-0 flex-1 text-2xs font-medium text-text-secondary select-none group-hover/toggle:text-text-primary">
           <span className="min-w-0 truncate">{title}</span>
           <span className="shrink-0 whitespace-pre"> across hosts</span>
         </span>
         {!expanded && <CollapsedTotals totals={otherTotals} />}
       </button>
-      {expanded && (
-        <div className="relative flex min-h-0 flex-col">
-          <ul id={LIST_ID} ref={setScroller} className="relative min-h-0 overflow-y-auto pb-2">
+      {/* Always in the tree, so the header's aria-controls names it open or closed. */}
+      <div id={LIST_ID} hidden={!expanded} className="flex min-h-0 flex-col">
+        {expanded && (
+          <ul className="min-h-0 overflow-y-auto pb-1.5">
             {shown.map(hostRow)}
             {folds && (
               <li>
@@ -577,6 +529,7 @@ export function ProjectHostsGroup({ projectId }: ProjectHostsGroupProps) {
                   data-project-hosts-row="more"
                   data-project-hosts-nav=""
                   aria-expanded={allShown}
+                  aria-label={pluralize(folded.length, "more host", "more hosts")}
                   aria-describedby={!allShown && foldedCounted ? FOLDED_ID : undefined}
                   onClick={() => {
                     setAllShown(!allShown);
@@ -593,8 +546,12 @@ export function ProjectHostsGroup({ projectId }: ProjectHostsGroupProps) {
                       )}
                     />
                   </GlyphSlot>
-                  <span className="min-w-0 flex-1 truncate text-text-secondary">
-                    {pluralize(folded.length, "more host", "more hosts")}
+                  {/* "5 more" at the sidebar's narrowest, so the label never clips before its counts. */}
+                  <span aria-hidden="true" className="min-w-0 flex-1 truncate text-text-secondary">
+                    {folded.length} more
+                    <span className="@max-[15rem]/hosts:hidden">
+                      {` ${pluralNoun(folded.length, "host")}`}
+                    </span>
                   </span>
                   {!allShown && foldedCounted && (
                     <>
@@ -605,6 +562,7 @@ export function ProjectHostsGroup({ projectId }: ProjectHostsGroupProps) {
                         counts={foldedCounts}
                         askingBand={foldedBlocked ? "blocked" : "needs-you"}
                         columns={columns}
+                        summary
                       />
                     </>
                   )}
@@ -613,10 +571,8 @@ export function ProjectHostsGroup({ projectId }: ProjectHostsGroupProps) {
             )}
             {allShown && folded.map(hostRow)}
           </ul>
-          <OverflowCue direction="above" past={edges.above} />
-          <OverflowCue direction="below" past={edges.below} />
-        </div>
-      )}
+        )}
+      </div>
     </section>
   );
 }

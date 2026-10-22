@@ -64,8 +64,11 @@ export function summarizeHostProject(entries: readonly HostWorktreeEntry[]): Hos
 }
 
 /** "3 working, 1 waiting, 2 finished": every band the host observed, worst first. */
-export function describeObserved(observed: ReadonlyMap<FleetBand, number>): string {
+export function describeObserved(
+  observed: ReadonlyMap<FleetBand, number>,
+  separator = ", "
+): string {
   return [...observed]
     .map(([band, n]) => `${n} ${bandLabel(band, { agentState: undefined }).toLowerCase()}`)
-    .join(", ");
+    .join(separator);
 }

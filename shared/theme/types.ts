@@ -339,6 +339,7 @@ export const EXTENSION_KEYS = [
   "sidebar-card-bg",
   "sidebar-card-shadow",
   "sidebar-hover-bg",
+  "sidebar-row-highlight-bg",
 
   // Toolbar
   "toolbar-agent-hover-bg",

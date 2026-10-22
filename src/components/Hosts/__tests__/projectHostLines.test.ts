@@ -59,38 +59,37 @@ const entries = [
 ];
 
 describe("hostRowTooltip", () => {
-  it("leads with the project there, then the machine, then what a click does", () => {
+  it("reads who, what is going on there, then what a click does", () => {
     const summary = summarizeHostProject(entries);
-    expect(hostRowTooltip(projectHost(), summary, "Cmd", NOW)).toEqual([
-      "studio-01",
-      "Connected · 12 ms",
-      "2 worktrees",
-      "1 waiting, 1 working, 1 finished (observed)",
-      "Latest worktree activity 4 minutes ago",
-      "Host-wide: CPU 20% · memory normal",
-      "Click to switch · Cmd-click for a new window",
-    ]);
+    expect(hostRowTooltip(projectHost(), summary, "Cmd", NOW)).toEqual({
+      title: "studio-01",
+      note: null,
+      // A healthy link says nothing about itself, and the machine's own load is not this project's.
+      lines: [
+        "1 waiting · 1 working · 1 finished (observed)",
+        "2 worktrees · active 4 minutes ago",
+      ],
+      hint: "Click to switch · Cmd-click: new window",
+    });
   });
 
-  it("marks the window's own host and says a click stays put", () => {
+  it("marks the window's own host, where a click does nothing", () => {
     const host = projectHost({ isCurrent: true, isLocal: true, name: "This Mac" });
-    const lines = hostRowTooltip(host, summarizeHostProject(entries), "Cmd", NOW);
-    expect(lines[0]).toBe("This Mac · this window");
-    // This machine has no link to describe.
-    expect(lines[1]).toBe("2 worktrees");
-    expect(lines.at(-1)).toBe("Showing in this window");
+    const tooltip = hostRowTooltip(host, summarizeHostProject(entries), "Cmd", NOW);
+    expect(tooltip.title).toBe("This Mac");
+    expect(tooltip.note).toBe("This window");
+    expect(tooltip.hint).toBeNull();
   });
 
   it("says a host has no copy, and that a click opens the project there", () => {
     const host = projectHost({}, { presence: "none", projectIds: [] });
     expect(hostRowStatus(host, null)).toEqual({ kind: "note", text: "Not added" });
-    expect(hostRowTooltip(host, null, "Ctrl", NOW)).toEqual([
-      "studio-01",
-      "Connected · 12 ms",
-      "No project here shares this repository",
-      "Host-wide: CPU 20% · memory normal",
-      "Click to open this project there · Ctrl-click for a new window",
-    ]);
+    expect(hostRowTooltip(host, null, "Ctrl", NOW)).toEqual({
+      title: "studio-01",
+      note: null,
+      lines: ["No project here shares this repository"],
+      hint: "Click to open it there · Ctrl-click: new window",
+    });
   });
 
   it("gives a disconnected host's last sighting and nothing it said while connected", () => {
@@ -99,11 +98,8 @@ describe("hostRowTooltip", () => {
       { away: "Not connected" }
     );
     expect(hostRowLabel(host, null)).toBe("studio-01, not connected");
-    expect(hostRowTooltip(host, summarizeHostProject(entries), "Cmd", NOW)).toEqual([
-      "studio-01",
+    expect(hostRowTooltip(host, summarizeHostProject(entries), "Cmd", NOW).lines).toEqual([
       "Not connected · last seen 3 hours ago",
-      "Agents not shown while not connected",
-      "Click to switch · Cmd-click for a new window",
     ]);
   });
 
@@ -119,6 +115,15 @@ describe("hostRowTooltip", () => {
       },
       { away: "No reply" }
     );
-    expect(hostRowTooltip(host, null, "Cmd", NOW)[1]).toBe("No reply · last heard 2 minutes ago");
+    expect(hostRowTooltip(host, null, "Cmd", NOW).lines).toEqual([
+      "No reply · last heard 2 minutes ago",
+    ]);
+  });
+
+  it("says a host is being checked while its answer is out", () => {
+    const host = projectHost({}, { presence: "pending", projectIds: [] });
+    expect(hostRowStatus(host, null)).toEqual({ kind: "checking" });
+    expect(hostRowLabel(host, null)).toBe("studio-01, checking");
+    expect(hostRowTooltip(host, null, "Cmd", NOW).lines).toEqual(["Checking for this project…"]);
   });
 });

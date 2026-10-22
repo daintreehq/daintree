@@ -382,8 +382,8 @@ describe("ProjectHostsGroup", () => {
     rerender(<ProjectHostsGroup projectId={PROJECT} />);
     await waitFor(() => expect(locate).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(countsShown(rowFor("linux"))).toBe(""));
-    // The old checkout's read is not this one's, so it isn't "No worktrees" either: nothing yet.
-    expect(rowFor("linux").dataset.status).toBe("none");
+    // The old checkout's read is not this one's, so it isn't "No worktrees" either: still checking.
+    expect(rowFor("linux").dataset.status).toBe("checking");
   });
 
   it("never carries the last project's counts over to a new one while its own answer is out", async () => {
@@ -421,12 +421,14 @@ describe("ProjectHostsGroup", () => {
     expect(openProjectOnHost).toHaveBeenLastCalledWith("linux", PROJECT, true, "user");
   });
 
-  it("shows nothing for a host while its first answer is out", async () => {
+  it("says a host is being checked only once its first answer is slow to come", async () => {
     locate.mockImplementationOnce(() => new Promise<HostProjectPresence[]>(() => {}));
     render(<ProjectHostsGroup projectId={PROJECT} />);
     await waitFor(() => expect(count(rowFor("local"), "running")).toBe("1"));
-    expect(rowFor("linux").dataset.status).toBe("none");
-    expect(rowFor("linux").textContent).toBe("name-linux");
+    expect(rowFor("linux").dataset.status).toBe("checking");
+    expect(rowFor("linux").getAttribute("aria-label")).toBe("name-linux, checking");
+    // Nothing for an answer that comes quickly, then the word once it is slow.
+    await waitFor(() => expect(rowFor("linux").textContent).toBe("name-linuxChecking…"));
   });
 
   it("asks nothing while the window's own host is away, and asks once it is back", async () => {

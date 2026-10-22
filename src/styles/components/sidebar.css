@@ -1,3 +1,16 @@
+/* The row you are on, inside the sidebar (the current host in the hosts
+   section, any list-detail selection drawn on the sidebar's chrome): the
+   theme's own highlight unless the theme names a sidebar one. A light theme
+   tunes its highlight plane for white popovers, and that plane can land on
+   its sidebar's own colour (Hokkaido's raised plane is the sidebar lavender),
+   so such a theme names the lift its sidebar already selects with. Menus and
+   popovers portal out of the sidebar and keep the theme's plane. A rule
+   rather than a variable: the colour utilities are `@theme inline`, so
+   `bg-overlay-highlight` reads `--theme-overlay-highlight` directly. */
+.sidebar-root .palette-row:is([aria-selected="true"], [data-selected="true"]) {
+  background-color: var(--sidebar-row-highlight-bg, var(--theme-overlay-highlight));
+}
+
 /* Every palette gives the idle card a real plane: light themes an opaque lift
    via --sidebar-card-bg, dark themes the additive fallback below.
 
