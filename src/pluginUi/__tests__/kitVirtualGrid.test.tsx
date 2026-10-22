@@ -11,12 +11,15 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { VirtuosoMockContext, type VirtuosoHandle, type VirtuosoProps } from "react-virtuoso";
 
-// jsdom lays nothing out, so Virtuoso neither scrolls there nor reports the end
-// again after its first render. The grid's props to it and its scroll requests
-// are recorded instead, passing through unchanged.
+// jsdom lays nothing out, so Virtuoso never scrolls there and reports its
+// rendered range only as its mock context dictates. The grid's props to it and
+// its scroll requests are recorded instead, passing through unchanged, and a
+// test can report a range of its own.
 interface RecordedProps {
-  endReached: ((index: number) => void) | undefined;
-  rows: readonly unknown[];
+  rangeChanged: ((range: { startIndex: number; endIndex: number }) => void) | undefined;
+  totalCount: number | undefined;
+  defaultItemHeight: number | undefined;
+  increaseViewportBy: unknown;
 }
 
 const virtuoso = vi.hoisted(() => ({
@@ -32,7 +35,12 @@ vi.mock("react-virtuoso", async (importOriginal) => {
   }: VirtuosoProps<unknown, unknown> & { ref?: Ref<VirtuosoHandle> }) {
     const inner = useRef<VirtuosoHandle>(null);
     useLayoutEffect(() => {
-      virtuoso.props.push({ endReached: rest.endReached, rows: rest.data ?? [] });
+      virtuoso.props.push({
+        rangeChanged: rest.rangeChanged,
+        totalCount: rest.totalCount,
+        defaultItemHeight: rest.defaultItemHeight,
+        increaseViewportBy: rest.increaseViewportBy,
+      });
     });
     useImperativeHandle(ref, () => ({
       scrollToIndex: (location) => inner.current?.scrollToIndex(location),
@@ -52,12 +60,17 @@ vi.mock("react-virtuoso", async (importOriginal) => {
 
 const lastProps = (): RecordedProps => virtuoso.props[virtuoso.props.length - 1]!;
 
+/** Reports the rows Virtuoso has mounted, as it would after a scroll. */
+function mountedRows(startIndex: number, endIndex: number) {
+  act(() => lastProps().rangeChanged?.({ startIndex, endIndex }));
+}
+
 vi.mock("@/services/ActionService", () => ({
   actionService: { dispatch: vi.fn(() => Promise.resolve()) },
 }));
 
 import * as kit from "@daintreehq/plugin-ui";
-import { gridColumns, gridRows, gridStep } from "@/components/PluginKit/PluginKitVirtualGrid";
+import { gridColumns, gridStep } from "@/components/PluginKit/PluginKitVirtualGrid";
 
 // A ResizeObserver that reports when the test says the layout changed, with
 // an entry per observed element: Virtuoso's own observers read the target.
@@ -159,6 +172,13 @@ describe("gridColumns", () => {
     expect(gridColumns(1000, 240, undefined, 0)).toBe(4);
   });
 
+  it("never draws columns narrower than its floor, whatever the minimum asked", () => {
+    const floor = gridColumns(1000, 16, undefined, 0);
+    expect(gridColumns(1000, 1, undefined, 0)).toBe(floor);
+    expect(gridColumns(1000, 0.5, undefined, 0)).toBe(floor);
+    expect(gridColumns(1000, 17, undefined, 0)).toBeLessThan(floor);
+  });
+
   it("caps at maxColumns and draws one column until measured", () => {
     expect(gridColumns(2000, 180, 3, 12)).toBe(3);
     expect(gridColumns(200, 180, 3, 12)).toBe(1);
@@ -174,17 +194,6 @@ describe("gridColumns", () => {
     for (const bad of [0, -1, 2.5, "3"]) {
       expect(gridColumns(1000, 180, bad, 12)).toBe(gridColumns(1000, 180, undefined, 12));
     }
-  });
-});
-
-describe("gridRows", () => {
-  it("splits the items into rows, the last one short", () => {
-    expect(gridRows(10, 4)).toEqual([
-      { start: 0, end: 4 },
-      { start: 4, end: 8 },
-      { start: 8, end: 10 },
-    ]);
-    expect(gridRows(0, 4)).toEqual([]);
   });
 });
 
@@ -437,7 +446,7 @@ describe("VirtualGrid", () => {
     expect(onItemActivate).toHaveBeenLastCalledWith(2, { id: "p2", title: "Photo 2" });
   });
 
-  it("follows a controlled cursor and reports where it moves", () => {
+  it("follows a controlled cursor and reports where it moves, scrolling once per move", () => {
     const onActiveIndexChange = vi.fn();
     function Photos() {
       const [active, setActive] = useState(4);
@@ -458,54 +467,36 @@ describe("VirtualGrid", () => {
     mount(<Photos />);
     const grid = screen.getByRole("grid", { name: "Photos" });
     expect(activeTitle(grid)).toBe("#4");
+    virtuoso.scrolls.length = 0;
     fireEvent.keyDown(grid, { key: "ArrowUp" });
     expect(onActiveIndexChange).toHaveBeenLastCalledWith(2);
     expect(activeTitle(grid)).toBe("#2");
+    // The key scrolled to the cursor's row; the echo of its report does not again.
+    expect(virtuoso.scrolls).toEqual([1]);
   });
 
-  it("reports the last item once per item count, also when a page only fills out the last row", () => {
-    const onEndReached = vi.fn();
-    const grid = (items: Photo[]) => (
+  it("keeps a plain grid's activeIndex in view as it changes, within a row too", () => {
+    const grid = (active: number) => (
       <VirtuosoMockContext.Provider value={{ viewportHeight: 600, itemHeight: 100 }}>
         <div style={{ height: 600 }}>
           <kit.VirtualGrid
             aria-label="Photos"
-            items={items}
-            itemKey={(_index, photo) => photo.id}
-            onEndReached={onEndReached}
-            renderItem={(_index, photo) => photo.title}
+            count={40}
+            activeIndex={active}
+            renderItem={(index) => `#${index}`}
           />
         </div>
       </VirtuosoMockContext.Provider>
     );
-    const view = render(grid(photos(9)));
-    const endOf = () => lastProps().endReached!;
-    const before = lastProps().rows;
-    expect(before).toHaveLength(5);
-    act(() => endOf()(4));
-    expect(onEndReached).toHaveBeenCalledTimes(1);
-    expect(onEndReached).toHaveBeenLastCalledWith(8);
-
-    // Still five rows of two, the last one now full. The rows array is a new
-    // one, which is what makes Virtuoso report the end again; it does so
-    // through the callback it already holds, from the render before.
-    const stale = endOf();
-    view.rerender(grid(photos(10)));
-    const after = lastProps().rows;
-    expect(after).toHaveLength(5);
-    expect(after).not.toBe(before);
-    act(() => stale(4));
-    expect(onEndReached).toHaveBeenCalledTimes(2);
-    expect(onEndReached).toHaveBeenLastCalledWith(9);
-
-    // A regroup changes the rows, not the items: nothing new to load.
-    resizeTo(800);
-    expect(lastProps().rows).toHaveLength(3);
-    act(() => endOf()(2));
-    expect(onEndReached).toHaveBeenCalledTimes(2);
+    const view = render(grid(30));
+    // Item 30 of 40 in two columns is on row 15.
+    expect(virtuoso.scrolls).toContain(15);
+    virtuoso.scrolls.length = 0;
+    view.rerender(grid(31));
+    expect(virtuoso.scrolls).toEqual([15]);
   });
 
-  it("scrolls the cursor's row into view, by row", () => {
+  it("drops aria-activedescendant while the cursor's row is scrolled out of the mounted rows", () => {
     mount(
       <kit.VirtualGrid
         aria-label="Photos"
@@ -516,14 +507,198 @@ describe("VirtualGrid", () => {
     );
     const grid = screen.getByRole("grid", { name: "Photos" });
     act(() => grid.focus());
+    mountedRows(0, 8);
+    expect(activeTitle(grid)).toBe("#0");
+    mountedRows(6, 14);
+    expect(grid.hasAttribute("aria-activedescendant")).toBe(false);
+    // The next key brings the cursor's row back into view.
     virtuoso.scrolls.length = 0;
+    fireEvent.keyDown(grid, { key: "ArrowRight" });
+    expect(virtuoso.scrolls).toEqual([0]);
+  });
+
+  it("leaves a press to place the cursor, and still finds it from the keyboard", () => {
+    const onItemActivate = vi.fn();
+    mount(
+      <kit.VirtualGrid
+        aria-label="Photos"
+        count={12}
+        onItemActivate={onItemActivate}
+        renderItem={(index) => `#${index}`}
+      />
+    );
+    const grid = screen.getByRole("grid", { name: "Photos" });
+    virtuoso.scrolls.length = 0;
+    // A press between cards focuses the grid without a cursor or a scroll.
+    fireEvent.pointerDown(grid);
+    act(() => grid.focus());
+    fireEvent.pointerUp(grid);
+    expect(grid.hasAttribute("aria-activedescendant")).toBe(false);
+    expect(virtuoso.scrolls).toEqual([]);
+    // End keeps its destination even with no cursor yet; an arrow finds the first card.
+    fireEvent.keyDown(grid, { key: "End", ctrlKey: true });
+    expect(activeTitle(grid)).toBe("#11");
+
+    // A press that never lands (a cancelled touch) does not hide the next focus.
+    act(() => grid.blur());
+    fireEvent.pointerDown(grid);
+    fireEvent.pointerCancel(grid);
+    act(() => grid.focus());
+    expect(activeTitle(grid)).toBe("#11");
+
+    fireEvent.click(screen.getByText("#3"));
+    expect(activeTitle(grid)).toBe("#3");
+    expect(onItemActivate).toHaveBeenLastCalledWith(3, undefined);
+    fireEvent.keyDown(grid, { key: " " });
+    expect(onItemActivate).toHaveBeenCalledTimes(2);
+  });
+
+  it("starts the keyboard on the first card when focus arrives from the keyboard", () => {
+    mount(
+      <kit.VirtualGrid
+        aria-label="Photos"
+        count={4}
+        onItemActivate={() => {}}
+        renderItem={(index) => `#${index}`}
+      />
+    );
+    const grid = screen.getByRole("grid", { name: "Photos" });
+    // A press that ended elsewhere: the grid's focus later is the keyboard's.
+    fireEvent.pointerDown(grid);
+    fireEvent.pointerCancel(grid);
+    act(() => grid.focus());
+    expect(activeTitle(grid)).toBe("#0");
+  });
+
+  it("clamps the cursor when the items shrink under it", () => {
+    const grid = (n: number) => (
+      <VirtuosoMockContext.Provider value={{ viewportHeight: 600, itemHeight: 100 }}>
+        <div style={{ height: 600 }}>
+          <kit.VirtualGrid
+            aria-label="Photos"
+            items={photos(n)}
+            itemKey={(_index, photo) => photo.id}
+            onItemActivate={() => {}}
+            renderItem={(_index, photo) => photo.title}
+          />
+        </div>
+      </VirtuosoMockContext.Provider>
+    );
+    const view = render(grid(10));
+    const photoGrid = screen.getByRole("grid", { name: "Photos" });
+    act(() => photoGrid.focus());
+    fireEvent.keyDown(photoGrid, { key: "End", ctrlKey: true });
+    expect(activeTitle(photoGrid)).toBe("Photo 9");
+    view.rerender(grid(5));
+    expect(activeTitle(photoGrid)).toBe("Photo 4");
+  });
+
+  it("reports the last item once per item count while the last row is mounted", () => {
+    const onEndReached = vi.fn();
+    const grid = (n: number) => (
+      <VirtuosoMockContext.Provider value={{ viewportHeight: 600, itemHeight: 100 }}>
+        <div style={{ height: 600 }}>
+          <kit.VirtualGrid
+            aria-label="Photos"
+            items={photos(n)}
+            itemKey={(_index, photo) => photo.id}
+            onEndReached={onEndReached}
+            renderItem={(_index, photo) => photo.title}
+          />
+        </div>
+      </VirtuosoMockContext.Provider>
+    );
+    const view = render(grid(9));
+    expect(lastProps().totalCount).toBe(5);
+    mountedRows(0, 4);
+    expect(onEndReached).toHaveBeenCalledTimes(1);
+    expect(onEndReached).toHaveBeenLastCalledWith(8);
+
+    // A page that only fills out the last row adds no row to report.
+    view.rerender(grid(10));
+    expect(lastProps().totalCount).toBe(5);
+    expect(onEndReached).toHaveBeenCalledTimes(2);
+    expect(onEndReached).toHaveBeenLastCalledWith(9);
+
+    // A regroup changes the rows, not the items: nothing new to load.
+    resizeTo(800);
+    mountedRows(0, 2);
+    expect(onEndReached).toHaveBeenCalledTimes(2);
+
+    // A page that adds rows waits for its last row to be mounted.
+    view.rerender(grid(200));
+    expect(onEndReached).toHaveBeenCalledTimes(2);
+    mountedRows(42, 49);
+    expect(onEndReached).toHaveBeenCalledTimes(3);
+    expect(onEndReached).toHaveBeenLastCalledWith(199);
+
+    // Emptied and filled again, the same count is news.
+    view.rerender(grid(0));
+    view.rerender(grid(200));
+    mountedRows(42, 49);
+    expect(onEndReached).toHaveBeenCalledTimes(4);
+    expect(onEndReached).toHaveBeenLastCalledWith(199);
+  });
+
+  it("does not report the end of ten thousand cards from the top", () => {
+    const onEndReached = vi.fn();
+    mount(
+      <kit.VirtualGrid
+        aria-label="Photos"
+        count={10_000}
+        onEndReached={onEndReached}
+        renderItem={(index) => `#${index}`}
+      />
+    );
+    mountedRows(0, 8);
+    expect(onEndReached).not.toHaveBeenCalled();
+  });
+
+  it("sizes its rows from estimatedItemSize, gap and overscan", () => {
+    mount(
+      <kit.VirtualGrid
+        aria-label="Photos"
+        count={10}
+        gap="none"
+        estimatedItemSize={100}
+        overscan={3}
+        renderItem={(index) => `#${index}`}
+      />
+    );
+    expect(lastProps().defaultItemHeight).toBe(100);
+    expect(lastProps().increaseViewportBy).toBe(300);
+  });
+
+  it("keeps the cursor's row in view through a regroup only while the grid has focus", () => {
+    render(
+      <VirtuosoMockContext.Provider value={{ viewportHeight: 600, itemHeight: 100 }}>
+        <button type="button">Elsewhere</button>
+        <div style={{ height: 600 }}>
+          <kit.VirtualGrid
+            aria-label="Photos"
+            count={40}
+            onItemActivate={() => {}}
+            renderItem={(index) => `#${index}`}
+          />
+        </div>
+      </VirtuosoMockContext.Provider>
+    );
+    const grid = screen.getByRole("grid", { name: "Photos" });
+    act(() => grid.focus());
     fireEvent.keyDown(grid, { key: "End", ctrlKey: true });
     // Item 39 of 40 in two columns is on row 19.
     expect(virtuoso.scrolls).toContain(19);
+
+    act(() => screen.getByRole("button", { name: "Elsewhere" }).focus());
     virtuoso.scrolls.length = 0;
     resizeTo(800);
-    // Four columns now: the same item sits on row 9.
-    expect(virtuoso.scrolls).toContain(9);
+    expect(virtuoso.scrolls).toEqual([]);
+
+    act(() => grid.focus());
+    virtuoso.scrolls.length = 0;
+    resizeTo(400);
+    // Two columns again: back on row 19.
+    expect(virtuoso.scrolls).toEqual([19]);
   });
 
   it("puts the plugin's id and test id on the element with the role and name", () => {

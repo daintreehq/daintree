@@ -1093,7 +1093,7 @@ export interface PluginVirtualGridSelection {
  */
 export interface PluginVirtualGridBaseProps extends PluginAriaRootAttributes {
   /**
-   * The narrowest a column may get, in px (up to 4096). Defaults to 180. A
+   * The narrowest a column may get, in px (16 to 4096). Defaults to 180. A
    * grid narrower than this draws one column at its own width.
    */
   minColumnWidth?: number;
@@ -1114,7 +1114,10 @@ export interface PluginVirtualGridBaseProps extends PluginAriaRootAttributes {
   activeIndex?: number;
   /** The cursor moved, by keyboard or click. */
   onActiveIndexChange?: (index: number) => void;
-  /** A `useSelection` result over the items' keys. */
+  /**
+   * A `useSelection` result over the items' keys. Pass `aria-multiselectable`
+   * too unless it is `mode: "single"`.
+   */
   selection?: PluginVirtualGridSelection;
   /** Edge fades that show there is more above or below, as `ScrollShadow` draws. */
   shadows?: boolean;

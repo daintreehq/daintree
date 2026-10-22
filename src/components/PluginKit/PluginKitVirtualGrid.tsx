@@ -2,7 +2,6 @@ import {
   useEffect,
   useId,
   useLayoutEffect,
-  useMemo,
   useRef,
   useState,
   type FocusEvent,
@@ -28,12 +27,17 @@ import { LIST_ROW_HOVER_CLASS, PALETTE_ROW_CLASS } from "@/components/ui/palette
 import { useScrollShadowOverlays } from "@/components/ui/ScrollShadow";
 import { isMac } from "@/lib/platform";
 import { cn } from "@/lib/utils";
+import { guardCallbacks } from "./kitDiagnostics";
 import { field, fn, node, pickRootProps, positive, str } from "./kitProps";
 import { AUTO_GRID_DEFAULT_MIN_PX, AUTO_GRID_LIMIT_PX, GAP_PX, gapOf } from "./PluginKitLayoutCore";
 import { activeMounted, fromCellControl, reactKey, SCROLLER_RING_INSET } from "./PluginKitLists";
 
 const DEFAULT_ITEM_PX = 180;
 const DEFAULT_OVERSCAN_ROWS = 2;
+// Narrower columns would only put more cards in every mounted row.
+const MIN_COLUMN_PX = 16;
+
+const attempt = guardCallbacks("VirtualGrid");
 
 // The grid is as tall as all its rows, so its own ring would be clipped by the
 // scroller; the cursor cell is the indicator instead, the one accent in the
@@ -53,27 +57,16 @@ export function gridColumns(
   maxColumns: unknown,
   gapPx: number
 ): number {
-  const min = positive(minColumnWidth, AUTO_GRID_LIMIT_PX) ?? AUTO_GRID_DEFAULT_MIN_PX;
+  const min = Math.max(
+    positive(minColumnWidth, AUTO_GRID_LIMIT_PX) ?? AUTO_GRID_DEFAULT_MIN_PX,
+    MIN_COLUMN_PX
+  );
   const fit = width > 0 ? Math.max(1, Math.floor((width + gapPx) / (min + gapPx))) : 1;
   const max =
     typeof maxColumns === "number" && Number.isInteger(maxColumns) && maxColumns >= 1
       ? maxColumns
       : undefined;
   return max === undefined ? fit : Math.min(fit, max);
-}
-
-interface RowRange {
-  start: number;
-  end: number;
-}
-
-/** Each row's item range. A new array whenever the count or columns change. Exported for tests. */
-export function gridRows(total: number, columns: number): RowRange[] {
-  const rows: RowRange[] = [];
-  for (let start = 0; start < total; start += columns) {
-    rows.push({ start, end: Math.min(start + columns, total) });
-  }
-  return rows;
 }
 
 /**
@@ -119,14 +112,19 @@ function count(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0;
 }
 
-/** A `useSelection` result read defensively; `undefined` unless it can at least select. */
+/**
+ * A `useSelection` result read defensively; `undefined` unless it can at
+ * least select. A method that throws is reported and does nothing.
+ */
 function readSelection(value: unknown): PluginVirtualGridSelection | undefined {
   if (typeof value !== "object" || value === null) return undefined;
   const isSelected = field(value, "isSelected");
   const handleSelect = field(value, "handleSelect");
   if (typeof isSelected !== "function" || typeof handleSelect !== "function") return undefined;
   const call = (method: unknown, args: unknown[]): unknown =>
-    typeof method === "function" ? Reflect.apply(method, value, args) : undefined;
+    typeof method === "function"
+      ? attempt(() => Reflect.apply(method, value, args), undefined)
+      : undefined;
   const anchor = field(value, "anchor");
   return {
     count: count(field(value, "count")),
@@ -139,13 +137,6 @@ function readSelection(value: unknown): PluginVirtualGridSelection | undefined {
     selectAll: () => void call(field(value, "selectAll"), []),
     clear: () => void call(field(value, "clear"), []),
   };
-}
-
-/** The scroller's width less its padding: what the columns share. */
-function contentWidth(element: HTMLElement): number {
-  const style = getComputedStyle(element);
-  const padding = (parseFloat(style.paddingLeft) || 0) + (parseFloat(style.paddingRight) || 0);
-  return Math.floor(element.clientWidth - padding);
 }
 
 interface GridContext {
@@ -191,7 +182,7 @@ function GridRow({
   item: _item,
   style,
   ...props
-}: ItemProps<RowRange> & { context: GridContext }) {
+}: ItemProps<unknown> & { context: GridContext }) {
   const row = props["data-index"];
   return (
     <div
@@ -248,12 +239,14 @@ function KitVirtualGrid(props: PluginVirtualGridProps) {
   const [width, setWidth] = useState(0);
   // Before paint, so the first frame already has its columns: Virtuoso hands
   // out its scroller only from a passive effect, so it is found in the frame.
-  // A hidden pane reads 0 and keeps the columns it had.
+  // The rows span the scroller's client width (its viewport is absolutely
+  // placed, so padding does not inset them). A hidden pane reads 0 and keeps
+  // the columns it had.
   useLayoutEffect(() => {
     const scroller = frame.current?.querySelector<HTMLElement>("[data-virtuoso-scroller]");
     if (!scroller) return;
     const measure = () => {
-      const next = contentWidth(scroller);
+      const next = scroller.clientWidth;
       if (next > 0) setWidth((previous) => (previous === next ? previous : next));
     };
     measure();
@@ -263,7 +256,7 @@ function KitVirtualGrid(props: PluginVirtualGridProps) {
     return () => observer.disconnect();
   }, []);
   const columns = gridColumns(width, minColumnWidth, maxColumns, gapPx);
-  const rows = useMemo(() => gridRows(total, columns), [total, columns]);
+  const rowCount = Math.ceil(total / columns);
 
   const keyOf = (index: number): string | number =>
     keyFn ? reactKey(keyFn(index, data?.[index]), index) : index;
@@ -271,24 +264,52 @@ function KitVirtualGrid(props: PluginVirtualGridProps) {
   // A controlled cursor, else the grid's own; in a plain grid only the item
   // to keep in view. Clamped at read time, so a shrinking list never points
   // past its end.
+  const given =
+    typeof activeIndex === "number" && Number.isInteger(activeIndex) ? activeIndex : undefined;
   const [cursor, setCursor] = useState(-1);
-  const requested =
-    typeof activeIndex === "number" && Number.isInteger(activeIndex)
-      ? activeIndex
-      : interactive
-        ? cursor
-        : -1;
+  const requested = given ?? (interactive ? cursor : -1);
   const current = total === 0 || requested < 0 ? -1 : Math.min(requested, total - 1);
   const currentRow = current >= 0 ? Math.floor(current / columns) : -1;
 
   const handle = useRef<VirtuosoHandle>(null);
-  // Also after a regroup, so a resize keeps the cursor's row in view.
-  useEffect(() => {
-    if (currentRow >= 0) handle.current?.scrollIntoView({ index: currentRow });
-  }, [currentRow]);
+  const reveal = (index: number) =>
+    handle.current?.scrollIntoView({ index: Math.floor(index / columns) });
   const [range, setRange] = useState<ListRange | null>(null);
 
+  // The plugin's own `activeIndex` is kept in view as it changes; one that
+  // only echoes the cursor this grid just reported is already where the key
+  // or click put it.
+  const echoed = useRef<number | null>(null);
+  const columnsNow = useRef(columns);
+  useLayoutEffect(() => {
+    columnsNow.current = columns;
+  });
+  const controlled = given !== undefined && current >= 0 ? current : -1;
+  // Not before the first measurement: until then there is one column, and
+  // the row would be the wrong one.
+  const measured = width > 0;
+  useEffect(() => {
+    if (!measured) return;
+    const echo = echoed.current;
+    echoed.current = null;
+    if (controlled < 0 || controlled === echo) return;
+    handle.current?.scrollIntoView({ index: Math.floor(controlled / columnsNow.current) });
+  }, [controlled, measured]);
+
+  // A regroup moves the cursor's card to another row; keep it in view while
+  // the grid has focus, and leave the scroll alone when it does not.
+  const lastColumns = useRef(columns);
+  useEffect(() => {
+    if (lastColumns.current === columns) return;
+    lastColumns.current = columns;
+    const root = frame.current;
+    if (currentRow >= 0 && root !== null && root.contains(document.activeElement)) {
+      handle.current?.scrollIntoView({ index: currentRow });
+    }
+  }, [columns, currentRow]);
+
   const moveCursor = (index: number) => {
+    echoed.current = index;
     setCursor(index);
     onActiveChange?.(index);
   };
@@ -314,13 +335,13 @@ function KitVirtualGrid(props: PluginVirtualGridProps) {
       return;
     }
     const step = gridStep(event.key, current, total, columns, event.metaKey || event.ctrlKey);
-    // Focus that came from a press between cards left no cursor: the first
-    // move finds it rather than stepping past it.
-    const next = step !== null && current < 0 ? 0 : step;
+    // With no cursor yet (focus came from a press between cards), an arrow
+    // finds the first item rather than stepping past it.
+    const next = step !== null && current < 0 && event.key.startsWith("Arrow") ? 0 : step;
     if (next !== null) {
       event.preventDefault();
       moveCursor(next);
-      handle.current?.scrollIntoView({ index: Math.floor(next / columns) });
+      reveal(next);
       if (event.shiftKey && selection) {
         // A range needs somewhere to start: the item the cursor left.
         if (selection.anchor === null && current >= 0) selection.handleSelect(keyOf(current));
@@ -359,12 +380,15 @@ function KitVirtualGrid(props: PluginVirtualGridProps) {
   // Spread first so the grid's own attributes win over a plugin's.
   const identity = pickRootProps(rest, { aria: true });
   const label = str(props["aria-label"]) ?? "";
+  const release = () => {
+    pressed.current = false;
+  };
   const rootProps: Record<string, unknown> = interactive
     ? {
         ...identity,
         role: "grid",
         "aria-label": label,
-        "aria-rowcount": rows.length,
+        "aria-rowcount": rowCount,
         "aria-colcount": columns,
         tabIndex: 0,
         // Never at a cell scrolled out of the mounted window; the next arrow
@@ -375,17 +399,19 @@ function KitVirtualGrid(props: PluginVirtualGridProps) {
         onPointerDown: () => {
           pressed.current = true;
         },
-        onPointerUp: () => {
-          pressed.current = false;
+        onPointerUp: release,
+        onPointerCancel: release,
+        onBlur: (event: FocusEvent<HTMLDivElement>) => {
+          const to = event.relatedTarget;
+          if (!(to instanceof Node && event.currentTarget.contains(to))) release();
         },
         onFocus: (event: FocusEvent<HTMLDivElement>) => {
           const fromPress = pressed.current;
-          pressed.current = false;
+          release();
           if (event.target !== event.currentTarget || total === 0 || fromPress) return;
+          const at = current < 0 ? 0 : current;
           if (current < 0) moveCursor(0);
-          else if (!activeMounted(currentRow, range)) {
-            handle.current?.scrollIntoView({ index: currentRow });
-          }
+          if (!activeMounted(Math.floor(at / columns), range)) reveal(at);
         },
       }
     : { ...identity, role: "list", "aria-label": label };
@@ -420,20 +446,19 @@ function KitVirtualGrid(props: PluginVirtualGridProps) {
     );
   };
 
-  // Virtuoso can report the end through the callback of the render before,
-  // holding that render's count, so a report only marks it and the count is
-  // read once committed. Once per count: a regroup changes the rows array,
-  // which Virtuoso reports again, without a single item arriving.
-  const atEnd = useRef(false);
-  const [endSignal, setEndSignal] = useState(0);
+  // Paging follows the mounted range, the same rendered rows Virtuoso's own
+  // end detection reads: once the last row is mounted, each new item count is
+  // reported once, including a page that only fills out the last row, which
+  // adds no row for Virtuoso to report. A count that drops is reported again
+  // when it grows back.
+  const lastRowMounted = rowCount > 0 && range !== null && range.endIndex >= rowCount - 1;
   const reported = useRef(-1);
   useEffect(() => {
-    if (!atEnd.current) return;
-    atEnd.current = false;
-    if (total === 0 || reported.current === total) return;
+    if (total < reported.current) reported.current = -1;
+    if (!endReached || !lastRowMounted || total === 0 || reported.current === total) return;
     reported.current = total;
-    endReached?.(total - 1);
-  }, [endSignal, total, endReached]);
+    endReached(total - 1);
+  }, [endReached, lastRowMounted, total]);
 
   const { ref: shadowRef, topShadow, bottomShadow } = useScrollShadowOverlays();
   const withShadows = shadows === true;
@@ -455,22 +480,15 @@ function KitVirtualGrid(props: PluginVirtualGridProps) {
         style={{ height: "100%" }}
         context={context}
         components={GRID_COMPONENTS}
-        data={rows}
+        totalCount={rowCount}
         defaultItemHeight={rowPx}
         increaseViewportBy={overscanRows * rowPx}
-        itemContent={(_row, span) => {
+        itemContent={(row) => {
           const cells = [];
-          for (let index = span.start; index < span.end; index++) cells.push(cell(index));
+          const end = Math.min((row + 1) * columns, total);
+          for (let index = row * columns; index < end; index++) cells.push(cell(index));
           return cells;
         }}
-        endReached={
-          endReached
-            ? () => {
-                atEnd.current = true;
-                setEndSignal((signal) => signal + 1);
-              }
-            : undefined
-        }
         rangeChanged={setRange}
       />
     </div>

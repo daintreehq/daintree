@@ -214,6 +214,17 @@ export function SelectableGrid() {
   });
 }
 export const forwardedGrid = (props: VirtualGridProps<Photo>) => createElement(VirtualGrid, props);
+// A selection over number ids fits as one over strings does.
+export function NumberedGrid() {
+  const selection = useSelection<number>({ ids: [1, 2, 3] });
+  return createElement(VirtualGrid, {
+    count: 3,
+    "aria-label": "Cards",
+    selection,
+    itemKey: (index) => index + 1,
+    renderItem: (index) => index,
+  });
+}
 
 const columns: DataTableColumn<Issue>[] = [
   { id: "title", header: "Title", sortable: true, render: (issue) => issue.title },
