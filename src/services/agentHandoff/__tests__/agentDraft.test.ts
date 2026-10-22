@@ -183,6 +183,11 @@ describe("draftAgentContextReference (#13795)", () => {
     drafts.set("proj-1:a", "```daintree-context\nunfinished");
     draftAgentContextReference("a", { prefix: "rec", id: "2" });
     expect(drafts.get("proj-1:a")).toBe("```daintree-context\nunfinished\n```\n@rec:2 ");
+
+    // A closing fence with a trailing space doesn't close the block.
+    drafts.set("proj-1:a", "```daintree-context\ncard\n``` ");
+    draftAgentContextReference("a", { prefix: "rec", id: "3" });
+    expect(drafts.get("proj-1:a")).toBe("```daintree-context\ncard\n``` \n```\n@rec:3 ");
   });
 
   it("refuses a prefix no provider here holds, and the draft gate's refusals", () => {

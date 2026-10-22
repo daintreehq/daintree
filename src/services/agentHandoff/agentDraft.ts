@@ -7,7 +7,6 @@ import {
   AGENT_CONTEXT_FENCE_INFO,
   agentContextBlockRanges,
   appendAgentContextToDraft,
-  closingFenceForOpenBlock,
   formatAgentContextBlock,
   type AgentContextReferenceDragPayload,
 } from "@shared/utils/agentContextDrag";
@@ -174,12 +173,16 @@ export function draftAgentContext(
 function referenceSeparator(draft: string): string {
   if (draft.length === 0) return "";
   if (draft.includes(AGENT_CONTEXT_FENCE_INFO)) {
+    // Judged by the rule `agentContextBlockRanges` keeps the block literal by:
+    // only a line that is exactly the opening fence closes it.
     const last = agentContextBlockRanges(draft).at(-1);
-    const closer =
-      last !== undefined && last[1] === draft.length
-        ? closingFenceForOpenBlock(draft.slice(last[0]))
-        : null;
-    if (closer !== null) return `${draft.endsWith("\n") ? "" : "\n"}${closer}\n`;
+    if (last !== undefined && last[1] === draft.length) {
+      const lines = draft.slice(last[0]).split("\n");
+      const fence = /^(`{3,})/.exec(lines[0] ?? "")?.[1];
+      if (fence !== undefined && !lines.slice(1).includes(fence)) {
+        return `${draft.endsWith("\n") ? "" : "\n"}${fence}\n`;
+      }
+    }
   }
   const lastLine = draft.slice(draft.lastIndexOf("\n") + 1);
   if (/^ {0,3}(`{3,}|~{3,})/.test(lastLine)) return "\n";

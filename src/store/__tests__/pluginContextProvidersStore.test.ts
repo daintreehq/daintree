@@ -103,4 +103,19 @@ describe("pluginContextProvidersStore (#13795)", () => {
     expect(state.saveError).toEqual({ pluginId: "acme.kanban", enabled: false });
     expect(state.entries[0]!.status).toBe("active");
   });
+
+  it("still undoes a failed switch when a refresh started meanwhile and failed", async () => {
+    usePluginContextProvidersStore.getState().init();
+    await flush();
+    let refuse!: (error: Error) => void;
+    setContextProvidersEnabled.mockReturnValue(new Promise((_, reject) => (refuse = reject)));
+    getContextProviders.mockRejectedValue(new Error("main is busy"));
+
+    const saved = usePluginContextProvidersStore.getState().setEnabled("acme.kanban", false);
+    usePluginContextProvidersStore.getState().refresh();
+    await flush();
+    refuse(new Error("disk full"));
+    expect(await saved).toBe(false);
+    expect(usePluginContextProvidersStore.getState().entries[0]!.status).toBe("active");
+  });
 });

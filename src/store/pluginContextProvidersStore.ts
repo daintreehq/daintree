@@ -35,6 +35,11 @@ let unsubscribe: (() => void) | null = null;
 // Only the newest pull or write answers: a slow older one must not put back a
 // snapshot the user has since changed.
 let seq = 0;
+// Writes alone, and answers from main that actually landed: a failed write is
+// undone unless a newer write began or main's state arrived since it did. A
+// pull that merely started, then failed, settles nothing.
+let writes = 0;
+let landed = 0;
 
 function sameEntries(a: readonly ContextProviderEntry[], b: readonly ContextProviderEntry[]) {
   return JSON.stringify(a) === JSON.stringify(b);
@@ -55,7 +60,9 @@ export const usePluginContextProvidersStore = create<PluginContextProvidersState
     bridge
       .getContextProviders()
       .then((entries) => {
-        if (pullSeq === seq) commit(entries);
+        if (pullSeq !== seq) return;
+        landed++;
+        commit(entries);
       })
       .catch((error: unknown) =>
         logWarn("[PluginContextProviders] Failed to read context providers", { error })
@@ -103,16 +110,22 @@ export const usePluginContextProvidersStore = create<PluginContextProvidersState
         ),
       });
       const writeSeq = ++seq;
+      const write = ++writes;
+      const landedAtStart = landed;
       try {
         const entries = await bridge.setContextProvidersEnabled(pluginId, enabled);
-        if (writeSeq === seq) commit(entries);
+        if (writeSeq === seq) {
+          landed++;
+          commit(entries);
+        }
         if (get().saveError?.pluginId === pluginId) set({ saveError: null });
         return true;
       } catch (error) {
         logWarn("[PluginContextProviders] Failed to save a context provider switch", { error });
+        const superseded = write !== writes || landed !== landedAtStart;
         set({
           saveError: { pluginId, enabled },
-          ...(writeSeq === seq ? { entries: before } : {}),
+          ...(superseded ? {} : { entries: before }),
         });
         pull();
         return false;
@@ -136,5 +149,7 @@ export function resetPluginContextProvidersStoreForTests(): void {
   unsubscribe = null;
   initialized = false;
   seq = 0;
+  writes = 0;
+  landed = 0;
   usePluginContextProvidersStore.setState(INITIAL_STATE, true);
 }
