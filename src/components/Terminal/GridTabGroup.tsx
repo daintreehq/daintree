@@ -254,18 +254,22 @@ export const GridTabGroup = React.memo(function GridTabGroup({
 
   const handleTabClose = useCallback(
     (tabId: string) => {
-      if (tabId === activeTabId) {
-        const currentIndex = panels.findIndex((p) => p.id === tabId);
-        const nextPanel = panels[currentIndex + 1] ?? panels[currentIndex - 1];
-        if (nextPanel) {
-          setActiveTab(group.id, nextPanel.id);
-          setFocused(nextPanel.id);
-        }
-      }
       requestPanelClose({
         hideIds: [tabId],
         commit: () => {
           trashPanel(tabId);
+        },
+        // Switching tabs unmounts the closing view, so it waits for a guarded
+        // close to be approved: a cancelled close must leave the view, and any
+        // unsaved work in it, where it was.
+        onOutcome: (closing) => {
+          if (!closing || tabId !== activeTabId) return;
+          const currentIndex = panels.findIndex((p) => p.id === tabId);
+          const nextPanel = panels[currentIndex + 1] ?? panels[currentIndex - 1];
+          if (nextPanel) {
+            setActiveTab(group.id, nextPanel.id);
+            setFocused(nextPanel.id);
+          }
         },
       });
     },

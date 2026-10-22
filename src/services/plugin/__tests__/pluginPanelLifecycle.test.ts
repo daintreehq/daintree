@@ -15,6 +15,8 @@ import {
   resetViewReloadBudget,
   requestUserViewReload,
   setViewUnsavedChanges,
+  subscribeViewUnsavedChanges,
+  getViewUnsavedPanelIds,
   syncPluginPanels,
   type PluginPanelSnapshotEntry,
 } from "@/services/plugin/pluginPanelLifecycle";
@@ -420,5 +422,36 @@ describe("unsaved changes (#12611)", () => {
     syncPluginPanels([], new Set());
 
     expect(hasViewUnsavedChanges("p1")).toBe(false);
+  });
+});
+
+describe("view unsaved-change signal (#13815)", () => {
+  it("notifies only when a panel's unsaved status flips", () => {
+    const listener = vi.fn();
+    const unsubscribe = subscribeViewUnsavedChanges(listener);
+    const a = {};
+    const b = {};
+    setViewUnsavedChanges("p1", a, true);
+    setViewUnsavedChanges("p1", b, true);
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(getViewUnsavedPanelIds()).toEqual(["p1"]);
+    setViewUnsavedChanges("p1", a, false);
+    expect(listener).toHaveBeenCalledTimes(1);
+    setViewUnsavedChanges("p1", b, false);
+    expect(listener).toHaveBeenCalledTimes(2);
+    expect(getViewUnsavedPanelIds()).toEqual([]);
+    unsubscribe();
+    setViewUnsavedChanges("p1", a, true);
+    expect(listener).toHaveBeenCalledTimes(2);
+  });
+
+  it("notifies when a removed panel drops its flag", () => {
+    syncPluginPanels([{ panelId: "p1", kindId: "k", pluginId: "x", location: "grid" }]);
+    setViewUnsavedChanges("p1", {}, true);
+    const listener = vi.fn();
+    subscribeViewUnsavedChanges(listener);
+    syncPluginPanels([], new Set());
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(getViewUnsavedPanelIds()).toEqual([]);
   });
 });

@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { buildPanelProps } from "@/utils/panelProps";
 import { actionService } from "@/services/ActionService";
+import { consultPanelCloseGuards } from "@/services/panelCloseGuard";
 import {
   GENERIC_PANEL_RELOAD_ACTION_ID,
   canReloadPanelKind,
@@ -79,10 +80,13 @@ function PanelDialogFrame({
   // churns on every panel update and would re-render the dialog with it.
   const panel = usePanelStore(useCallback((state) => state.panelsById[panelId], [panelId]));
 
-  const handleClose = useCallback(
-    () => closePanelDialogById(panelId),
-    [closePanelDialogById, panelId]
-  );
+  // A dialog-hosted panel with a close guard (unsaved plugin work) asks first;
+  // the store's own close path stays unguarded for bulk and teardown callers.
+  const handleClose = useCallback(() => {
+    void consultPanelCloseGuards([panelId]).then((proceed) => {
+      if (proceed) closePanelDialogById(panelId);
+    });
+  }, [closePanelDialogById, panelId]);
 
   const handlePromote = useCallback(() => {
     // A refused promotion (panel limit reached) leaves the dialog open and

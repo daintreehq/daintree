@@ -70,6 +70,7 @@ import { terminalInstanceService } from "@/services/terminal/TerminalInstanceSer
 import { unlockSidebarHydration } from "@/lib/layoutTransitionLock";
 import { logError } from "@/utils/logger";
 import { FileDocumentCloseGuardHost } from "@/panels/file/FileDocumentCloseGuardHost";
+import { PluginPanelCloseGuardHost } from "@/components/Plugin/PluginPanelCloseGuardHost";
 import { onHelpPanelRuntimeRequested } from "@/lib/helpPanelRuntimeGate";
 import { sendHostOwnedWrite } from "@/store/persistence/hostOwnedWrites";
 
@@ -964,6 +965,8 @@ export function AppLayout({
           pane so an unmounted (inactive-tab, maximised-away) panel keeps its
           guard (#12323). */}
       <FileDocumentCloseGuardHost />
+      {/* Discard / Cancel for a plugin panel whose view reports unsaved work (#13815). */}
+      <PluginPanelCloseGuardHost />
       {/* Wraps the coordinator and nothing else so its height IS the banner
           height, which useGlobalBannerHeightVar measures (#11893). shrink-0
           keeps #9530's guarantee that the banner's height is subtracted from

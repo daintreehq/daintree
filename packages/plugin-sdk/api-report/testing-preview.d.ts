@@ -467,14 +467,15 @@ interface PanelViewProps {
      */
     readonly requestReload?: () => void;
     /**
-     * Tell the host whether this view holds work that a reload would lose
-     * (#12611).
+     * Tell the host whether this view holds work that a reload or a close would
+     * lose (#12611, #13815).
      *
      * The user can reload a plugin panel from its menus, and an agent can do the
      * same through the host's tools. Neither asks first by default, because what
      * you accepted through {@link persistState} comes back. While this is set to
-     * `true`, both ask the user to confirm before discarding the view. Set it
-     * back to `false` once the work is saved or dropped.
+     * `true`, both ask the user to confirm before discarding the view, and so
+     * does closing the panel with its close button or menu. Set it back to
+     * `false` once the work is saved or dropped.
      *
      * Your own {@link requestReload} is never held up by it. The setter belongs to
      * the attempt that received it: one held past this attempt's teardown does
