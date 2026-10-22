@@ -3,9 +3,15 @@ import { actionService } from "@/services/ActionService";
 import { isLocalhostUrl, normalizeBrowserUrl } from "@/components/Browser/browserUtils";
 import { usePanelStore } from "@/store/panelStore";
 import { isMac } from "@/lib/platform";
+import { notify } from "@/lib/notify";
 import { logError } from "@/utils/logger";
 import { isPtyPanel } from "@shared/types/panel";
-import { remoteHostOfView, resolveTerminalLinkForView } from "./remoteLoopbackLinks";
+import {
+  hostForwardFailure,
+  parseLoopbackLink,
+  remoteHostOfView,
+  resolveTerminalLinkForView,
+} from "./remoteLoopbackLinks";
 
 export class TerminalLinkHandler {
   openLink(url: string, terminalId: string, event?: MouseEvent): void {
@@ -14,9 +20,27 @@ export class TerminalLinkHandler {
       this.openResolvedLink(url, terminalId, isModifierPressed);
       return;
     }
+    // A panel keeps the host's address and forwards the port itself; handing it
+    // the rewritten local port would forward that port from the host instead.
+    if (
+      isModifierPressed &&
+      parseLoopbackLink(url) !== null &&
+      usePanelStore.getState().panelsById[terminalId]
+    ) {
+      this.openResolvedLink(url, terminalId, true);
+      return;
+    }
     resolveTerminalLinkForView(url).then(
       (resolved) => this.openResolvedLink(resolved, terminalId, isModifierPressed),
-      (error: unknown) => logError("[TerminalLinkHandler] Failed to forward the link's port", error)
+      (error: unknown) => {
+        logError("[TerminalLinkHandler] Failed to forward the link's port", error);
+        // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
+        notify({
+          type: "error",
+          title: "Couldn't open link",
+          message: hostForwardFailure(url, error),
+        });
+      }
     );
   }
 
@@ -41,6 +65,16 @@ export class TerminalLinkHandler {
       if (existingBrowser) {
         store.setBrowserUrl(existingBrowser.id, normalized.url);
         store.activateTerminal(existingBrowser.id);
+        // The store only records the address; the pane navigates (and, on a host, forwards) on this.
+        actionService
+          .dispatch(
+            "browser.navigate",
+            { url: normalized.url, terminalId: existingBrowser.id },
+            { source: "user" }
+          )
+          .catch((error) =>
+            logError("[TerminalLinkHandler] Failed to navigate the browser", error)
+          );
       } else {
         void store.addPanel({
           kind: "browser",
