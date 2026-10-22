@@ -364,6 +364,28 @@ describe("pluginProjectSurfacesStore", () => {
     expect(state().choicesLoaded).toBe(true);
   });
 
+  it("treats answers as unknown again when a newer read can't see them", async () => {
+    let current = snapshot({
+      revision: 1,
+      slots: ownedBy(),
+      choices: { emptyCanvas: record("acme.dash", "surface") },
+    });
+    const bridge = installBridge(() => Promise.resolve(current));
+    state().init();
+    await flush();
+    expect(state().choicesLoaded).toBe(true);
+
+    // Another view may have just answered; this read can't say. Keeping the
+    // old answer would act on one that may be gone, so the canvas goes stock
+    // and nobody is asked until a read works.
+    current = snapshot({ revision: 2, slots: ownedBy(), choices: null });
+    bridge.surfaceListeners[0]?.({ projectId: PROJECT, revision: 2 });
+    await flush();
+
+    expect(state().choicesLoaded).toBe(false);
+    expect(state().surfaces).toEqual({ emptyCanvas: claim });
+  });
+
   it("honours an answer only for the plugin that owns the slot now", () => {
     usePluginProjectSurfacesStore.setState({
       surfaces: { emptyCanvas: claim },
@@ -556,6 +578,67 @@ describe("pluginProjectSurfacesStore", () => {
     await pending;
 
     expect(canvasChoice()).toBe("surface");
+  });
+
+  it("never restores a claim from a read older than a change main announced", async () => {
+    const first = deferred<Read>();
+    let calls = 0;
+    const bridge = installBridge(() => {
+      calls += 1;
+      return calls === 1 ? first.promise : Promise.reject(new Error("nope"));
+    });
+
+    state().init();
+    // The plugin unloads while the first read is in flight, and the read that
+    // announcement triggers fails, leaving the canvas on stock.
+    bridge.surfaceListeners[0]?.({ projectId: PROJECT, revision: 2 });
+    await flush();
+    expect(state().surfaces).toEqual({});
+
+    // The first read lands late with the claim as it was before the release.
+    first.resolve(snapshot({ revision: 1, slots: ownedBy() }));
+    await flush();
+
+    expect(state().surfaces).toEqual({});
+  });
+
+  it("keeps a save's snapshot when the read started before it fails", async () => {
+    let failPending!: (error: Error) => void;
+    const pending = new Promise<Read>((_resolve, reject) => {
+      failPending = reject;
+    });
+    let calls = 0;
+    const bridge = installBridge(() => {
+      calls += 1;
+      return calls === 1 ? Promise.resolve(snapshot({ revision: 1, slots: ownedBy() })) : pending;
+    });
+    state().init();
+    await flush();
+
+    bridge.surfaceListeners[0]?.({ projectId: PROJECT, revision: 2 });
+    await state().setSurfaceChoice("emptyCanvas", "stock");
+    expect(canvasChoice()).toBe("stock");
+
+    // The save is at least as new as anything that read would have seen, so
+    // its failure must not clear what the save just put on screen.
+    failPending(new Error("nope"));
+    await flush();
+
+    expect(state().surfaces).toEqual({ emptyCanvas: claim });
+    expect(canvasChoice()).toBe("stock");
+  });
+
+  it("ignores a read that settles after a reset", async () => {
+    const read = deferred<Read>();
+    installBridge(() => read.promise);
+    state().init();
+
+    _resetPluginProjectSurfacesStoreForTest();
+    read.resolve(snapshot({ revision: 1, slots: ownedBy(), projectId: "p-old" }));
+    await flush();
+
+    expect(state().surfaces).toEqual({});
+    expect(state().choicesProjectId).toBeNull();
   });
 
   it("refuses a snapshot naming a different project", async () => {

@@ -1,8 +1,15 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { execa } from "execa";
+const sendCliRequest = vi.hoisted(() => vi.fn());
+
+vi.mock("../ipc/client.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../ipc/client.js")>()),
+  sendCliRequest,
+}));
+
 import { describeHostSurfaceRefusals, runDoctor } from "../commands/doctor.js";
 
 let projectRoot: string;
@@ -310,5 +317,68 @@ describe("describeHostSurfaceRefusals", () => {
       "surfaces.emptyCanvas is not showing: the view it names registered nothing Daintree can show",
     ]);
     expect(notes.size).toBe(1);
+  });
+});
+
+describe("runDoctor with a running host", () => {
+  const hostPlugins = [
+    {
+      id: "acme.board",
+      instanceId: "project__p__acme.board",
+      dirName: "board",
+      displayName: "Acme Board",
+      state: "active",
+    },
+    { id: "zeta.board", instanceId: "project__p__zeta.board", dirName: "zeta", state: "active" },
+  ];
+
+  beforeEach(async () => {
+    sendCliRequest.mockReset();
+    await writePlugin("board", { ...VALID_MANIFEST, name: "acme.board" });
+    await writePlugin("zeta", { ...VALID_MANIFEST, name: "zeta.board" });
+  });
+
+  const byDir = (result: Awaited<ReturnType<typeof runDoctor>>, dirName: string) =>
+    result.plugins.find((plugin) => plugin.dirName === dirName);
+
+  it("warns the refused plugin about the slot the host gave to another", async () => {
+    sendCliRequest.mockResolvedValue({
+      known: true,
+      trust: { decision: "enabled", enabled: true },
+      plugins: hostPlugins,
+      surfaceRefusals: [
+        {
+          slot: "emptyCanvas",
+          pluginId: "project__p__zeta.board",
+          reason: "outranked",
+          heldBy: "project__p__acme.board",
+        },
+      ],
+    });
+
+    const result = await runDoctor(projectRoot, { lint: false });
+
+    expect(byDir(result, "zeta")?.warnings).toContain(
+      "surfaces.emptyCanvas is not showing: Acme Board also claims it in this project, and only one plugin can — Acme Board keeps it because its plugin id sorts first"
+    );
+    expect(byDir(result, "board")?.warnings.some((w) => w.startsWith("surfaces."))).toBe(false);
+    // A lost slot is a warning: the plugin still loads, so it doesn't fail doctor.
+    expect(byDir(result, "zeta")?.errors.some((e) => e.startsWith("surfaces."))).toBe(false);
+  });
+
+  it("reads an older host that sends no refusals as having none", async () => {
+    sendCliRequest.mockResolvedValue({
+      known: true,
+      trust: { decision: "enabled", enabled: true },
+      plugins: hostPlugins,
+    });
+
+    const result = await runDoctor(projectRoot, { lint: false });
+
+    expect(result.host.reachable).toBe(true);
+    expect(byDir(result, "zeta")?.hostState).toBe("active");
+    for (const plugin of result.plugins) {
+      expect(plugin.warnings.some((w) => w.startsWith("surfaces."))).toBe(false);
+    }
   });
 });

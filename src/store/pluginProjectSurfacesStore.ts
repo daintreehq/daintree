@@ -85,12 +85,23 @@ interface PluginProjectSurfacesState {
 
 let initialized = false;
 let unsubscribers: Array<() => void> = [];
+// Bumped on reset, so a read or save still in flight from before it can never
+// write into the state that replaced it.
+let generation = 0;
 // Monotonic read sequence, so a slow read that FAILS can never clear state a
 // newer read already adopted. Successful reads are ordered by revision instead.
 let pullSeq = 0;
+// Bumped on every adoption, so a read that fails after something newer was
+// adopted leaves it alone.
+let adoptions = 0;
 // The highest main revision adopted, so a read or save answered before a newer
 // one can never roll it back.
 let adoptedRevision = -1;
+// The highest revision main has announced. A snapshot older than that describes
+// a state main has already moved past — a read that started before a release,
+// say — so it is never adopted, even after the read that the announcement
+// triggered has failed and cleared the canvas.
+let announcedRevision = -1;
 
 function sameRecord(
   a: ProjectSurfaceChoices[ProjectSurfaceSlot],
@@ -173,18 +184,21 @@ export const usePluginProjectSurfacesStore = create<PluginProjectSurfacesState>(
   const adopt = (snapshot: ProjectSurfacesSnapshot): boolean => {
     const owner = get().choicesProjectId;
     if (owner !== null && owner !== snapshot.projectId) return false;
-    if (snapshot.revision < adoptedRevision) return false;
+    if (snapshot.revision < Math.max(adoptedRevision, announcedRevision)) return false;
     adoptedRevision = snapshot.revision;
+    ++adoptions;
     const next: Partial<PluginProjectSurfacesState> = {
       slots: snapshot.slots,
       surfaces: projectSurfaces(snapshot.slots),
       choicesProjectId: snapshot.projectId,
     };
     if (snapshot.choices === null) {
-      // Main could not read the answers. Stay as loaded as we were rather than
-      // read the failure as "never answered": nobody is asked a question they
-      // may already have answered, and until an answer is known the canvas
-      // stays stock, the safe side.
+      // Main could not read the answers. Unknown, not "never answered": the
+      // canvas goes to stock and nobody is asked a question they may already
+      // have answered, until a later read works. Keeping the last answers
+      // instead would act on ones a newer change may have replaced — another
+      // view's answer arrives only through this read.
+      next.choicesLoaded = false;
       logWarn("[pluginProjectSurfacesStore] Main could not read project surface choices");
     } else {
       next.choices = snapshot.choices;
@@ -208,20 +222,26 @@ export const usePluginProjectSurfacesStore = create<PluginProjectSurfacesState>(
     const plugin = window.electron?.plugin;
     if (typeof plugin?.getProjectSurfaces !== "function") return;
     const seq = ++pullSeq;
+    const started = { generation, adoptions };
     void plugin.getProjectSurfaces().then(
       (snapshot) => {
+        if (started.generation !== generation) return;
         // An unbound sender: nothing to adopt yet, and the next push reads
         // again once main has bound this view to its project.
         if (snapshot !== null) adopt(snapshot);
       },
       (error: unknown) => {
-        if (seq !== pullSeq) return;
+        if (started.generation !== generation) return;
+        // Only the latest read, and only while nothing newer has been adopted
+        // since it started — a save answered meanwhile is at least as fresh.
+        if (seq !== pullSeq || adoptions !== started.adoptions) return;
         // Clear the claims rather than keep the last ones. A retained claim
         // outlives the plugin that made it: if the same runtime kind id is
         // later re-registered without a claim behind it, a stale snapshot
         // would resurrect a surface main no longer owns. Falling back to the
         // host's own canvas is always safe; showing a plugin's is not. Answers
-        // are kept, for the reason `adopt` keeps them on an unreadable store.
+        // are left alone: with no claim there is nothing for them to apply to,
+        // and the next read replaces them.
         set({ slots: {}, surfaces: {} });
         logWarn("[pluginProjectSurfacesStore] Failed to fetch project surfaces", { error });
       }
@@ -239,13 +259,16 @@ export const usePluginProjectSurfacesStore = create<PluginProjectSurfacesState>(
       const plugin = window.electron?.plugin;
       if (typeof plugin?.setProjectSurfaceChoice !== "function") return;
       set({ failedSave: null });
+      const startedIn = generation;
       try {
         // Not applied ahead of the round trip. Main records answers in the
         // order they arrive and bumps the revision for each, so adopting only
         // what main returns keeps every view in step with disk with nothing to
         // reconcile — and the round trip is one store write.
-        adopt(await plugin.setProjectSurfaceChoice(slot, choice));
+        const snapshot = await plugin.setProjectSurfaceChoice(slot, choice);
+        if (startedIn === generation) adopt(snapshot);
       } catch (err) {
+        if (startedIn !== generation) return;
         const claim = get().surfaces[slot];
         set({
           failedSave: {
@@ -293,6 +316,7 @@ export const usePluginProjectSurfacesStore = create<PluginProjectSurfacesState>(
               const owner = get().choicesProjectId;
               if (owner !== null && owner !== payload.projectId) return;
               if (payload.revision <= adoptedRevision) return;
+              announcedRevision = Math.max(announcedRevision, payload.revision);
               pull();
             })
           );
@@ -312,13 +336,19 @@ export const usePluginProjectSurfacesStore = create<PluginProjectSurfacesState>(
   };
 });
 
-/** Test-only: reset the module-level init guard, read sequence, revision, and state. */
+/**
+ * Test-only: reset the module-level init guard, read sequence, revisions, and
+ * state, and orphan any read or save still in flight.
+ */
 export function _resetPluginProjectSurfacesStoreForTest(): void {
   for (const unsubscribe of unsubscribers) unsubscribe();
   unsubscribers = [];
   initialized = false;
+  generation += 1;
   pullSeq = 0;
+  adoptions = 0;
   adoptedRevision = -1;
+  announcedRevision = -1;
   usePluginProjectSurfacesStore.setState({
     slots: {},
     surfaces: {},
