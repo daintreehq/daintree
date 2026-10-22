@@ -1002,6 +1002,8 @@ async function buildHarness(): Promise<MigrationHarness> {
       }
       const mcpServer = asRecord(config.mcpServer);
       if (mcpServer === null || "fullToolSurface" in mcpServer) scalarMigrationMisses += 1;
+      // 035 drops the retired hibernation setting outright.
+      if ("hibernation" in config) scalarMigrationMisses += 1;
       // 029 keys the single tour record to the built-in tour and hoists mute.
       const onboarding = asRecord(config.onboarding);
       if (onboarding === null || "tour" in onboarding) scalarMigrationMisses += 1;
