@@ -1,4 +1,4 @@
-import { Suspense, lazy, useEffect } from "react";
+import { Suspense, lazy, useCallback, useEffect } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { lazyWithPreload } from "@/lib/lazyWithPreload";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
@@ -45,6 +45,7 @@ function ProjectDialogHost() {
     createDialog,
     closeCreateDialog,
     showStockCreateDialog,
+    closeSurfaceCreateDialog,
     bulkCreateDialog,
     closeBulkCreateDialog,
   } = useWorktreeSelectionStore(
@@ -52,6 +53,7 @@ function ProjectDialogHost() {
       createDialog: state.createDialog,
       closeCreateDialog: state.closeCreateDialog,
       showStockCreateDialog: state.showStockCreateDialog,
+      closeSurfaceCreateDialog: state.closeSurfaceCreateDialog,
       bulkCreateDialog: state.bulkCreateDialog,
       closeBulkCreateDialog: state.closeBulkCreateDialog,
     }))
@@ -70,6 +72,21 @@ function ProjectDialogHost() {
       ? worktreeCreateSurface.config
       : null;
   const isStockCreateOpen = createDialog.isOpen && pluginCreateConfig === null;
+  // A claim that stops rendering mid-opening hands that opening to stock for
+  // good: if the same claim came back, swapping a fresh plugin view in would
+  // tear down a stock form the user may already be filling.
+  const lostClaim =
+    createDialog.isOpen &&
+    createDialog.surfacePanelKindId !== undefined &&
+    pluginCreateConfig === null;
+  useEffect(() => {
+    if (lostClaim) showStockCreateDialog();
+  }, [lostClaim, showStockCreateDialog]);
+  const openingId = createDialog.openingId;
+  const closePluginCreateDialog = useCallback(
+    () => closeSurfaceCreateDialog(openingId),
+    [closeSurfaceCreateDialog, openingId]
+  );
   const shouldMountNewWorktreeDialog = useKeepMounted(isStockCreateOpen);
 
   // Resolved reactively from the active provider's slot so the dialog drops
@@ -178,7 +195,7 @@ function ProjectDialogHost() {
           <ProjectWorktreeCreateDialog
             config={pluginCreateConfig}
             isOpen
-            onClose={closeCreateDialog}
+            onClose={closePluginCreateDialog}
             onUseStock={showStockCreateDialog}
           />
         </ErrorBoundary>

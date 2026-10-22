@@ -25,6 +25,8 @@ import {
   supersedeDeferredHostOwnedWrite,
 } from "@/store/persistence/hostOwnedWrites";
 
+let createDialogOpenings = 0;
+
 interface CreateDialogState {
   isOpen: boolean;
   initialIssue: Issue | null;
@@ -41,6 +43,8 @@ interface CreateDialogState {
    * dialog shows.
    */
   surfacePanelKindId?: string;
+  /** Identifies this opening, so a plugin view's late `close()` can't end a later one. */
+  openingId?: number;
 }
 
 /** What a failed creation's Retry reopens the dialog with. The prompt stays in memory only. */
@@ -409,6 +413,8 @@ interface WorktreeSelectionState {
   ) => void;
   /** Moves the open create dialog to the stock dialog, keeping what it was opened with. */
   showStockCreateDialog: () => void;
+  /** Closes the plugin-owned create dialog only if it is still the opening `openingId`. */
+  closeSurfaceCreateDialog: (openingId: number | undefined) => void;
   openCreateDialogForPR: (pr: PR) => void;
   closeCreateDialog: () => void;
   openBulkCreateDialog: (selectedIssues: Issue[], onComplete?: () => void) => void;
@@ -1242,8 +1248,21 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
         initialPrompt: options?.initialPrompt ?? null,
         onCreated: options?.onCreated,
         surfacePanelKindId: options?.surfacePanelKindId,
+        openingId: ++createDialogOpenings,
       },
     });
+  },
+
+  closeSurfaceCreateDialog: (openingId) => {
+    const { createDialog } = get();
+    if (
+      !createDialog.isOpen ||
+      createDialog.surfacePanelKindId === undefined ||
+      createDialog.openingId !== openingId
+    ) {
+      return;
+    }
+    get().closeCreateDialog();
   },
 
   showStockCreateDialog: () =>

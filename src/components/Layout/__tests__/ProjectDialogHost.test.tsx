@@ -298,6 +298,50 @@ describe("ProjectDialogHost", () => {
       expect(await screen.findByTestId("plugin-create-dialog")).toBeDefined();
     });
 
+    it("keeps an opening on stock once its claim is lost, even if the claim comes back", async () => {
+      surfaceState.current = { config: { id: PLUGIN_KIND } };
+      const { rerender } = render(<ProjectDialogHost />);
+      act(() =>
+        useWorktreeSelectionStore.getState().openCreateDialog(null, {
+          surfacePanelKindId: PLUGIN_KIND,
+        })
+      );
+      await screen.findByTestId("plugin-create-dialog");
+
+      surfaceState.current = null;
+      rerender(<ProjectDialogHost />);
+      expect((await screen.findByTestId("new-worktree-dialog")).dataset.open).toBe("true");
+
+      surfaceState.current = { config: { id: PLUGIN_KIND } };
+      rerender(<ProjectDialogHost />);
+      expect(screen.queryByTestId("plugin-create-dialog")).toBeNull();
+      expect(screen.getByTestId("new-worktree-dialog").dataset.open).toBe("true");
+    });
+
+    it("ignores a close from a plugin view whose opening has ended", async () => {
+      surfaceState.current = { config: { id: PLUGIN_KIND } };
+      render(<ProjectDialogHost />);
+      act(() =>
+        useWorktreeSelectionStore.getState().openCreateDialog(null, {
+          surfacePanelKindId: PLUGIN_KIND,
+        })
+      );
+      const staleClose = await screen.findByText("close plugin");
+      const firstOpening = useWorktreeSelectionStore.getState().createDialog.openingId;
+      act(() => useWorktreeSelectionStore.getState().closeCreateDialog());
+      act(() =>
+        useWorktreeSelectionStore.getState().openCreateDialog(null, {
+          surfacePanelKindId: PLUGIN_KIND,
+        })
+      );
+      expect(useWorktreeSelectionStore.getState().createDialog.openingId).not.toBe(firstOpening);
+
+      act(() => useWorktreeSelectionStore.getState().closeSurfaceCreateDialog(firstOpening));
+
+      expect(useWorktreeSelectionStore.getState().createDialog.isOpen).toBe(true);
+      expect(staleClose).toBeDefined();
+    });
+
     it("closes the opening when the plugin's view closes", async () => {
       surfaceState.current = { config: { id: PLUGIN_KIND } };
       render(<ProjectDialogHost />);

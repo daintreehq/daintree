@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { FolderGit2 } from "lucide-react";
 import type { PanelKindConfig } from "@shared/config/panelKindRegistry";
 import { ProjectSurfaceFrame } from "@/components/Plugin/ProjectSurfaceFrame";
@@ -30,10 +31,16 @@ export function ProjectWorktreeCreateDialog({
 }) {
   "use memo";
 
+  // The stock dialog opens once this one has finished closing and handed focus
+  // back: opened in the same commit, it would capture the control that is
+  // unmounting as its opener, and closing it would land focus nowhere.
+  const [leaving, setLeaving] = useState(false);
+
   return (
     <AppDialog
-      isOpen={isOpen}
+      isOpen={isOpen && !leaving}
       onClose={onClose}
+      onCloseComplete={leaving ? onUseStock : undefined}
       size="4xl"
       data-testid="plugin-worktree-create-dialog"
     >
@@ -47,7 +54,7 @@ export function ProjectWorktreeCreateDialog({
         <ProjectSurfaceFrame
           slot="worktreeCreate"
           surfaceActions={
-            <Button variant="ghost" size="xs" onClick={onUseStock}>
+            <Button variant="ghost" size="xs" onClick={() => setLeaving(true)}>
               Standard dialog…
             </Button>
           }
