@@ -33,6 +33,7 @@ import { deriveTerminalChrome, type TerminalChromeDescriptor } from "@/utils/ter
 import { getTerminalAgentDisplayState } from "@/utils/terminalAgentDisplayState";
 import { getTerminalDisplayTitle } from "@/utils/terminalTitleDisplay";
 import { tabDomId } from "./TabButton";
+import { usePluginPanelActivity } from "./PluginPanelActivity";
 import { isBuiltInPanelKind, isPtyPanel } from "@shared/types/panel";
 
 /**
@@ -440,6 +441,13 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
   const effectiveAgentState = ambientAgentState ?? ownAgentState;
   const blockedState = useDockBlockedState(effectiveAgentState);
   const isWorkingState = effectiveAgentState === "working";
+  // The owning plugin's own report takes the same borders under the same
+  // setting, but only the border: it never becomes this panel's agent state,
+  // which also drives the header chip and `data-agent-state` (#13820). An agent
+  // Daintree observes in a PTY-backed plugin panel keeps the border, as it
+  // keeps the dock chip's glyph.
+  const reportedActivity = usePluginPanelActivity(id);
+  const pluginActivity = headerAgentState || ambientAgentState ? null : reportedActivity;
 
   // Auto-construct the terminal header for PTY-backed terminals when no custom
   // headerContent is provided. One gate covers both the metadata and the status
@@ -666,8 +674,8 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
             showSelectedChrome,
             showGridAgentHighlights,
             isVoiceArming,
-            isWaiting: blockedState === "waiting",
-            isWorkingState,
+            isWaiting: blockedState === "waiting" || pluginActivity?.shown === "waiting",
+            isWorkingState: isWorkingState || pluginActivity?.shown === "working",
             isHibernated,
           }),
         location === "grid" && isMaximized && "border-0 rounded-none z-[var(--z-maximized)]",

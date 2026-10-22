@@ -304,6 +304,8 @@ function PluginContributedCommands({ commands }: { commands: PluginActionContrib
  * names the panel you can open instead of leaving you to discover it. Panels
  * hidden from the palette (`showInPalette: false`) are still listed — the plugin
  * opens those itself — but labelled accurately so the row isn't a dead end.
+ * A kind that reports its own activity (#13820) says so, since its marks will
+ * show on the grid and the dock in the plugin's name.
  */
 function PluginContributedPanels({ panels }: { panels: PanelContribution[] }) {
   return (
@@ -318,6 +320,9 @@ function PluginContributedPanels({ panels }: { panels: PanelContribution[] }) {
                 ? "Opened by the plugin"
                 : "Open it from the new-panel menu"}
             </div>
+            {panel.reportsActivity === true && (
+              <div className="text-2xs text-text-secondary mt-0.5">Reports activity</div>
+            )}
           </li>
         ))}
       </ul>

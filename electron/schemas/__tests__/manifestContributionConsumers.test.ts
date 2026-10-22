@@ -398,6 +398,25 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       ],
       note: "Registered as the panel kind's scope; panel.openPluginPanel opens a project-scoped kind with no worktree (dock by default), which the dock and dialogs show in every worktree (#13778).",
     },
+    reportsActivity: {
+      mode: "verbatim",
+      consumers: [
+        { file: PLUGIN_SERVICE, symbol: "loadPlugin (panels loop) → registerPanelKind" },
+        {
+          file: "electron/services/plugin/PluginHostFactory.ts",
+          symbol: "setPanelActivity (declaration and panel-kind gate)",
+        },
+        {
+          file: "src/lib/pluginPanelActivityPresentation.ts",
+          symbol: "resolveActivityReporter",
+        },
+        {
+          file: "src/components/Plugin/PluginDetailPane.tsx",
+          symbol: "PluginContributedPanels (Reports activity)",
+        },
+      ],
+      note: "Registered as the panel kind's activity opt-in; host.setPanelActivity refuses a plugin with no declaring kind and a known panel of an undeclared kind, the renderer draws a report only on a declaring kind, and the plugin manager lists the kind as reporting activity (#13820).",
+    },
     menu: {
       mode: "verbatim",
       consumers: [

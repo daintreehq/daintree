@@ -79,6 +79,7 @@ import { validatePluginContextEntry } from "../../../shared/utils/pluginContextK
 import { validatePluginWorktreeCardStatus } from "../../../shared/utils/pluginWorktreeCardStatus.js";
 import { validatePluginWorktreeReviewChecks } from "../../../shared/utils/pluginWorktreeReviewChecks.js";
 import { validatePluginTerminalStatus } from "../../../shared/utils/pluginTerminalStatus.js";
+import { validatePluginPanelActivity } from "../../../shared/utils/pluginPanelActivity.js";
 import { toPluginFocusedPanel } from "../../../shared/utils/pluginFocusedPanel.js";
 import { toPluginProjectPresence } from "../../../shared/utils/pluginProjectPresence.js";
 import {
@@ -1477,6 +1478,31 @@ export class PluginDevWorkerHostProxy {
         return this.callWithGrace<void>(
           "setTerminalStatus",
           { terminalId: entry.terminalId, status: entry.status },
+          undefined
+        );
+      },
+      // Same shape (#13820): vetted here so a mistake rejects to the caller,
+      // then main settles whether the panel is this plugin's own.
+      setPanelActivity: (panelId, activity) => {
+        if (this.disposed) return Promise.resolve();
+        let entry: ReturnType<typeof validatePluginPanelActivity>;
+        try {
+          entry = validatePluginPanelActivity(panelId, activity);
+        } catch (err) {
+          return Promise.reject(
+            new Error(`Plugin "${this.pluginId}" setPanelActivity: activity could not be read`, {
+              cause: err,
+            })
+          );
+        }
+        if (!entry.ok) {
+          return Promise.reject(
+            new Error(`Plugin "${this.pluginId}" setPanelActivity: ${entry.error}`)
+          );
+        }
+        return this.callWithGrace<void>(
+          "setPanelActivity",
+          { panelId: entry.panelId, activity: entry.activity },
           undefined
         );
       },

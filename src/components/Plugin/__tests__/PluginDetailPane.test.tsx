@@ -663,6 +663,20 @@ describe("PluginDetailPane overview contributions (#11302)", () => {
     expect(screen.getByText("Opened by the plugin")).toBeTruthy();
   });
 
+  it("says which panels report their own activity (#13820)", () => {
+    renderOverview(
+      withContributes({
+        panels: [
+          { ...PANEL, reportsActivity: true },
+          { ...PANEL, id: "acme.demo.notes", name: "Demo notes", reportsActivity: false },
+        ],
+      })
+    );
+    expect(screen.getAllByText("Reports activity")).toHaveLength(1);
+    const row = screen.getByText("Demo board").closest("li");
+    expect(row && within(row).queryByText("Reports activity")).toBeTruthy();
+  });
+
   it("omits both sections entirely when the plugin contributes neither", () => {
     renderOverview(makePlugin());
     expect(screen.queryByText("Commands")).toBeNull();

@@ -223,6 +223,7 @@ import type {
   PluginArchiveInstallIntent,
   PluginDeepLinkIntent,
   PluginPanelBadge,
+  PluginPanelActivityReport,
   PluginToolbarButtonRuntimeState,
   PluginContextValue,
   PluginWorktreeCardStatus,
@@ -1004,6 +1005,8 @@ const _eventBusReplayable: ReadonlySet<keyof IpcEventBusMap> = new Set([
   "plugin:worktree-review-checks-changed",
   // Same replay, for the terminal header chips (#13802).
   "plugin:terminal-statuses-changed",
+  // Same replay, for the panel activity marks (#13820).
+  "plugin:panel-activity-changed",
 ]);
 // Replayable events that accumulate instead of superseding. A double-clicked
 // `.dntr` archive (#11280) is one decision per file, so collapsing two
@@ -1025,6 +1028,7 @@ const _eventBusFifoReplay: ReadonlySet<keyof IpcEventBusMap> = new Set([
   "plugin:worktree-card-statuses-changed",
   "plugin:worktree-review-checks-changed",
   "plugin:terminal-statuses-changed",
+  "plugin:panel-activity-changed",
 ]);
 // FIFO events whose every payload is one plugin's whole map: a newer one for the
 // same plugin supersedes the buffered one. A payload that also names a project
@@ -1037,6 +1041,7 @@ const _eventBusPerPluginLatest: ReadonlySet<keyof IpcEventBusMap> = new Set([
   "plugin:worktree-card-statuses-changed",
   "plugin:worktree-review-checks-changed",
   "plugin:terminal-statuses-changed",
+  "plugin:panel-activity-changed",
 ]);
 const _eventBusBuffered = new Map<keyof IpcEventBusMap, unknown[]>();
 
@@ -3890,6 +3895,12 @@ function buildElectronApi(): ElectronAPI {
       ) => _eventBusOn("plugin:panel-badges-changed", callback),
       onPanelBadgesCleared: (callback: (payload: { pluginId: string }) => void) =>
         _eventBusOn("plugin:panel-badges-cleared", callback),
+      onPanelActivityChanged: (
+        callback: (payload: {
+          pluginId: string;
+          activity: Record<string, PluginPanelActivityReport>;
+        }) => void
+      ) => _eventBusOn("plugin:panel-activity-changed", callback),
       onToolbarBadgesChanged: (
         callback: (payload: { pluginId: string; badges: Record<string, PluginPanelBadge> }) => void
       ) => _eventBusOn("plugin:toolbar-badges-changed", callback),

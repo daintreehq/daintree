@@ -32,7 +32,10 @@ import {
   pluginManifestIdFromInstanceKey,
   projectIdFromPluginInstanceKey,
 } from "./projectPluginIdentity.js";
-import { toRuntimePanelKindId } from "../../../shared/config/panelKindRegistry.js";
+import {
+  getPanelKindConfig,
+  toRuntimePanelKindId,
+} from "../../../shared/config/panelKindRegistry.js";
 import {
   isPluginCustomIconRef,
   makePluginCustomIconKey,
@@ -79,8 +82,10 @@ import {
   resolvePluginDatabaseLocation,
 } from "./pluginDatabase.js";
 import {
+  PLUGIN_PANEL_ACTIVITY_MAX_PANELS,
   PLUGIN_TERMINAL_STATUS_MAX_PER_PROJECT,
   type PluginDatabaseApi,
+  type PluginPanelActivityReport,
 } from "../../../shared/types/plugin.js";
 import {
   databaseBackupApprovers,
@@ -155,6 +160,10 @@ import {
   sameTerminalStatus,
   validatePluginTerminalStatus,
 } from "../../../shared/utils/pluginTerminalStatus.js";
+import {
+  samePanelActivity,
+  validatePluginPanelActivity,
+} from "../../../shared/utils/pluginPanelActivity.js";
 import { makeForgeProviderId } from "../../../shared/utils/forgeProviderIds.js";
 import { forgeProviderRoles } from "../../../shared/utils/forgeProviderRoles.js";
 import {
@@ -693,6 +702,12 @@ export interface PluginHostFactoryDeps {
   pluginToolbarBadges: Map<string, Map<string, PluginPanelBadge>>;
   /** Publish one plugin's complete toolbar-badge map to the views entitled to it. */
   emitToolbarBadges: (pluginId: string) => void;
+  /** Activity reports set via `host.setPanelActivity`, `pluginId → panelId → report` (#13820). */
+  pluginPanelActivity: Map<string, Map<string, PluginPanelActivityReport>>;
+  /** Publish one plugin's complete activity map to the views entitled to it. */
+  emitPanelActivity: (pluginId: string) => void;
+  /** A revision for an accepted activity change, never handed out twice in this process. */
+  nextPanelActivityRevision: () => number;
   /** Live toolbar-button state set via `host.setToolbarButtonState`, `pluginId → buttonId → state`. */
   pluginToolbarStates: Map<string, Map<string, PluginToolbarButtonRuntimeState>>;
   /** Publish one plugin's complete toolbar-state map to the views entitled to it. */
@@ -2591,6 +2606,117 @@ export function createHost(
         name: "plugin:panel-badges-changed",
         payload: { pluginId, badges: deps.serializePluginBadges(pluginId) },
       });
+      return Promise.resolve();
+    },
+    // NOT revoke-guarded, like setPanelBadge: work is reported from callbacks
+    // long after activate(). Unlike a badge, a report only ever lands on this
+    // plugin's own panels of a kind declaring `reportsActivity`, settled
+    // against main's kind registry rather than anything the caller says
+    // (#13820). An id no renderer has reported yet is held, since
+    // `panel.openPluginPanel` hands one back before the view reports it, and
+    // the renderer draws it only once the panel is this plugin's.
+    setPanelActivity: (panelId, activity) => {
+      // Identity, not id membership: a callback left over from before a same-id
+      // reload must not report on its successor's panels.
+      if (!isBound() || !boundPlugin) return Promise.resolve();
+      let entry: ReturnType<typeof validatePluginPanelActivity>;
+      try {
+        entry = validatePluginPanelActivity(panelId, activity);
+      } catch (err) {
+        // A hostile activity object can make the validator throw; this method
+        // must still reject (#10617).
+        return Promise.reject(
+          new Error(`Plugin "${pluginId}" setPanelActivity: activity could not be read`, {
+            cause: err,
+          })
+        );
+      }
+      if (!entry.ok) {
+        // Reject (not sync throw): runtime-surface Promise method (#10617).
+        return Promise.reject(new Error(`Plugin "${pluginId}" setPanelActivity: ${entry.error}`));
+      }
+      const target = entry.panelId;
+      let panelMap = deps.pluginPanelActivity.get(pluginId);
+      const previous = panelMap?.get(target);
+      const publish = (): void => {
+        flushPluginPushes();
+        deps.emitPanelActivity(pluginId);
+      };
+      const drop = (): void => {
+        if (!panelMap || previous === undefined) return;
+        panelMap.delete(target);
+        if (panelMap.size === 0) deps.pluginPanelActivity.delete(pluginId);
+        publish();
+      };
+      // A clear only ever touches this plugin's own report, so it needs no
+      // ownership answer and survives the kind dropping its declaration.
+      if (entry.activity === null) {
+        drop();
+        return Promise.resolve();
+      }
+      if (
+        !boundPlugin.manifest.contributes.panels.some((panel) => panel.reportsActivity === true)
+      ) {
+        return Promise.reject(
+          new Error(
+            `Plugin "${pluginId}" setPanelActivity: none of this plugin's contributes.panels declares reportsActivity: true`
+          )
+        );
+      }
+      const ownership = deps.panelLifecycleBroker.ownership(target, pluginId);
+      switch (ownership.kind) {
+        case "foreign":
+          return Promise.reject(
+            new Error(
+              `Plugin "${pluginId}" setPanelActivity: panel "${target}" belongs to another plugin`
+            )
+          );
+        case "non-plugin":
+          return Promise.reject(
+            new Error(
+              `Plugin "${pluginId}" setPanelActivity: panel "${target}" is not a plugin panel`
+            )
+          );
+        case "unavailable":
+          return Promise.reject(
+            new Error(
+              `Plugin "${pluginId}" setPanelActivity: whose panel "${target}" is cannot be settled right now`
+            )
+          );
+        case "owned":
+          if (getPanelKindConfig(ownership.panelKindId)?.reportsActivity !== true) {
+            return Promise.reject(
+              new Error(
+                `Plugin "${pluginId}" setPanelActivity: panel kind "${ownership.panelKindId}" does not declare reportsActivity: true`
+              )
+            );
+          }
+          break;
+        case "missing":
+          // Closed for good: nothing will draw it, so holding it would only
+          // spend a slot under the cap.
+          if (deps.panelLifecycleBroker.pushTargetsFor(target, pluginId) === "closed") {
+            drop();
+            return Promise.resolve();
+          }
+          break;
+      }
+      // Reported again from a timer or a subscription, the same state would
+      // otherwise send the plugin's whole map to every view for no change.
+      if (samePanelActivity(previous, entry.activity)) return Promise.resolve();
+      if (previous === undefined && (panelMap?.size ?? 0) >= PLUGIN_PANEL_ACTIVITY_MAX_PANELS) {
+        return Promise.reject(
+          new Error(
+            `Plugin "${pluginId}" setPanelActivity: activity is already reported on ${PLUGIN_PANEL_ACTIVITY_MAX_PANELS} panels — clear a closed panel's with null`
+          )
+        );
+      }
+      if (!panelMap) {
+        panelMap = new Map();
+        deps.pluginPanelActivity.set(pluginId, panelMap);
+      }
+      panelMap.set(target, { ...entry.activity, revision: deps.nextPanelActivityRevision() });
+      publish();
       return Promise.resolve();
     },
     // NOT revoke-guarded, like setPanelBadge: a count is set from the same

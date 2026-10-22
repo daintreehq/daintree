@@ -176,6 +176,10 @@ export const PanelContributionObjectSchema = z
     // project — its dock chip and its dialog show in every worktree. No default,
     // for the same reason as `dockable`: absence flows through as `undefined`.
     scope: z.enum(["worktree", "project"]).optional(),
+    // Whether the plugin reports its own activity on panels of this kind
+    // through `host.setPanelActivity` (#13820). Only `true` opens the method,
+    // and the plugin manager says so; no default, like `dockable`.
+    reportsActivity: z.boolean().optional(),
     // The plugin's own actions on this panel's ⋯ and right-click menus, in
     // declared order. Which actions may appear is checked at manifest level,
     // where the plugin's namespace and declared commands are known.

@@ -2488,6 +2488,17 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      */
     onPanelBadgesCleared(callback: (payload: { pluginId: string }) => void): () => void;
     /**
+     * Subscribe to plugin panel activity reports (#13820). The callback fires
+     * with one plugin's COMPLETE current map (`panelId → report`); an empty map
+     * clears that plugin's reports. Returns a cleanup.
+     */
+    onPanelActivityChanged(
+      callback: (payload: {
+        pluginId: string;
+        activity: Record<string, import("../plugin.js").PluginPanelActivityReport>;
+      }) => void
+    ): () => void;
+    /**
      * Subscribe to plugin toolbar-button badges (#13503). The callback fires with
      * one plugin's COMPLETE current map (manifest button id → badge); an empty
      * map clears that plugin's badges, as on unload. Returns a cleanup.

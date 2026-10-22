@@ -91,6 +91,7 @@ import type {
   PluginWorktreeCardStatus,
   PluginWorktreeReviewCheck,
   PluginTerminalStatus,
+  PluginPanelActivityReport,
   PluginRuntimeStatus,
   PluginWorkerStatus,
   PluginWorkerState,
@@ -819,6 +820,14 @@ export class PluginService {
    * buttons only exist in that project's views.
    */
   private pluginToolbarBadges = new Map<string, Map<string, PluginPanelBadge>>();
+  /**
+   * Activity reports set via `host.setPanelActivity`, keyed `pluginId →
+   * panelId → report` (#13820). Scoped like {@link pluginToolbarBadges}: a
+   * project plugin's panels only exist in that project's views.
+   */
+  private pluginPanelActivity = new Map<string, Map<string, PluginPanelActivityReport>>();
+  /** Last revision handed to an accepted activity report; never reset. */
+  private panelActivityRevision = 0;
   /**
    * Live toolbar-button state set via `host.setToolbarButtonState`, keyed
    * `pluginId → buttonId → state` (#13785). Held, scoped, cleared and replayed
@@ -2864,6 +2873,7 @@ export class PluginService {
         // bags on a promise the author never made (#12280).
         ...(panel.stateVersion !== undefined ? { stateVersion: panel.stateVersion } : {}),
         ...(panel.scope !== undefined ? { scope: panel.scope } : {}),
+        ...(panel.reportsActivity !== undefined ? { reportsActivity: panel.reportsActivity } : {}),
         ...(tourId !== undefined ? { tourId } : {}),
         // Authored in the manifest namespace, dispatched in the instance's —
         // the same rewrite the toolbar and menu contributions above get.
@@ -3549,6 +3559,9 @@ export class PluginService {
         this.clearPluginPanelMenus(pluginId);
         if (this.pluginToolbarBadges.delete(pluginId)) this.emitToolbarBadges(pluginId);
         if (this.pluginToolbarStates.delete(pluginId)) this.emitToolbarStates(pluginId);
+        // What the retiring backend said it was doing is not what the next one
+        // is doing; it reports afresh (#13820).
+        if (this.pluginPanelActivity.delete(pluginId)) this.emitPanelActivity(pluginId);
         this.resetPluginContextKeys(pluginId);
         this.clearPluginWorktreeCardStatuses(pluginId);
         this.clearPluginWorktreeReviewChecks(pluginId);
@@ -4307,6 +4320,9 @@ export class PluginService {
       pluginBadges: this.pluginBadges,
       pluginToolbarBadges: this.pluginToolbarBadges,
       emitToolbarBadges: (pluginId) => this.emitToolbarBadges(pluginId),
+      pluginPanelActivity: this.pluginPanelActivity,
+      emitPanelActivity: (pluginId) => this.emitPanelActivity(pluginId),
+      nextPanelActivityRevision: () => ++this.panelActivityRevision,
       pluginToolbarStates: this.pluginToolbarStates,
       emitToolbarStates: (pluginId) => this.emitToolbarStates(pluginId),
       pluginContextKeys: this.pluginContextKeys,
@@ -6048,6 +6064,32 @@ export class PluginService {
     broadcastToProjectRenderers(owningProjectId, CHANNELS.EVENTS_PUSH, event);
   }
 
+  /**
+   * Publish one plugin's complete activity map, scoped like
+   * {@link emitToolbarBadges}. An empty map clears the plugin's reports (#13820).
+   */
+  private emitPanelActivity(pluginId: string): void {
+    if (this.disposed) return;
+    const event = {
+      name: "plugin:panel-activity-changed" as const,
+      payload: { pluginId, activity: this.serializePluginPanelActivity(pluginId) },
+    };
+    const owningProjectId = projectIdFromPluginInstanceKey(pluginId);
+    if (owningProjectId === null) {
+      broadcastToRenderer(CHANNELS.EVENTS_PUSH, event);
+      return;
+    }
+    broadcastToProjectRenderers(owningProjectId, CHANNELS.EVENTS_PUSH, event);
+  }
+
+  private serializePluginPanelActivity(
+    pluginId: string
+  ): Record<string, PluginPanelActivityReport> {
+    const panelMap = this.pluginPanelActivity.get(pluginId);
+    if (!panelMap || panelMap.size === 0) return {};
+    return Object.fromEntries(panelMap);
+  }
+
   /** Publish one plugin's complete toolbar-button state, scoped like {@link emitToolbarBadges}. */
   private emitToolbarStates(pluginId: string): void {
     if (this.disposed) return;
@@ -7417,6 +7459,10 @@ export class PluginService {
       runUnloadStep(pluginId, "clearToolbarStates", () => this.emitToolbarStates(pluginId));
     }
 
+    if (this.pluginPanelActivity.delete(pluginId)) {
+      runUnloadStep(pluginId, "clearPanelActivity", () => this.emitPanelActivity(pluginId));
+    }
+
     if (this.pluginContextKeys.delete(pluginId)) {
       runUnloadStep(pluginId, "clearContextKeys", () => this.emitContextKeys(pluginId));
     }
@@ -8631,6 +8677,27 @@ export class PluginService {
       };
       // A local view bound to a remote host shows that host's buttons, so this
       // machine's state for a same-named plugin would disable or press them.
+      if (
+        projectId === undefined &&
+        isWithheldFromView(webContents.id, CHANNELS.EVENTS_PUSH, [envelope])
+      ) {
+        continue;
+      }
+      try {
+        webContents.send(CHANNELS.EVENTS_PUSH, envelope);
+      } catch {
+        // Silently ignore send failures during window initialization/disposal.
+      }
+    }
+    for (const pluginId of this.pluginPanelActivity.keys()) {
+      const owningProjectId = projectIdFromPluginInstanceKey(pluginId);
+      if (owningProjectId !== null && !inView(owningProjectId)) continue;
+      const envelope = {
+        name: "plugin:panel-activity-changed",
+        payload: { pluginId, activity: this.serializePluginPanelActivity(pluginId) },
+      };
+      // A local view bound to a remote host shows that host's panels, never
+      // this machine's same-named plugin's reports.
       if (
         projectId === undefined &&
         isWithheldFromView(webContents.id, CHANNELS.EVENTS_PUSH, [envelope])

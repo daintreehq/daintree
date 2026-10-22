@@ -270,6 +270,13 @@ export interface PanelContribution {
    */
   scope?: "worktree" | "project";
   /**
+   * Set `true` to report your own work on panels of this kind with
+   * `host.setPanelActivity` (working, waiting, finished, failed). The host
+   * draws it the way it draws agent activity, attributed to your plugin, and
+   * the plugin manager lists the kind as reporting activity.
+   */
+  reportsActivity?: boolean;
+  /**
    * Up to five of your own actions, offered in this panel's ⋯ and right-click
    * menus in the order given. Each is dispatched with `{ panelId }` naming the
    * panel the menu was opened on.
@@ -684,6 +691,35 @@ export const PLUGIN_TERMINAL_STATUS_TOOLTIP_MAX = PLUGIN_WORKTREE_CARD_STATUS_TO
 
 /** Most terminals one plugin may hold a status on at once, per project. */
 export const PLUGIN_TERMINAL_STATUS_MAX_PER_PROJECT = 256;
+
+/** What a plugin says one of its own panels is doing, via {@link PluginHostApi.setPanelActivity}. */
+export type PluginPanelActivityState = "working" | "waiting" | "finished" | "failed";
+
+/**
+ * A plugin's report of its own work on one of its own panels (#13820): its
+ * state and an optional one-line `reason` ("Importing 3 of 12", "Pick a
+ * branch to sync"). Drawn the way agent activity is drawn, always attributed
+ * to the plugin.
+ */
+export interface PluginPanelActivity {
+  state: PluginPanelActivityState;
+  reason?: string;
+}
+
+/**
+ * A {@link PluginPanelActivity} as main holds and sends it: `revision` is
+ * assigned per accepted change, so a view can tell a replay of the report it
+ * already showed from a new one. Never authored by a plugin.
+ */
+export interface PluginPanelActivityReport extends PluginPanelActivity {
+  revision: number;
+}
+
+/** Max length of a {@link PluginPanelActivity} `reason`, enforced host-side. */
+export const PLUGIN_PANEL_ACTIVITY_REASON_MAX = 120;
+
+/** Most panels one plugin may hold an activity report on at once. */
+export const PLUGIN_PANEL_ACTIVITY_MAX_PANELS = 256;
 
 /** Value a plugin publishes to `when` clauses via {@link PluginHostApi.setContext}. */
 export type PluginContextValue = boolean | string;
@@ -6528,6 +6564,31 @@ export interface PluginHostApi extends PluginActivationApi {
    * becomes a silent no-op once the plugin is unloaded.
    */
   setTerminalStatus(terminalId: string, status: PluginTerminalStatus | null): Promise<void>;
+  /**
+   * Report (or clear) what this plugin is doing on one of its own panels
+   * (#13820): `working`, `waiting` on the user, `finished` or `failed`, with an
+   * optional one-line `reason`. Pass `null` to clear it. The host draws it the
+   * way it draws agent activity — working and waiting borders in the grid
+   * (when the user's grid highlights are on), a glyph in the panel header and
+   * on the dock chip — and every mark reads "Reported by" your plugin. A
+   * `finished` report draws as unread until the panel has been in front of the
+   * user; a `failed` one stays until you change or clear it.
+   *
+   * Only panels of a kind this plugin contributes with `reportsActivity: true`.
+   * The call rejects for another plugin's panel, a built-in panel, a kind that
+   * does not declare `reportsActivity`, a `reason` that is empty, multi-line or
+   * longer than {@link PLUGIN_PANEL_ACTIVITY_REASON_MAX} characters, or a new
+   * panel past {@link PLUGIN_PANEL_ACTIVITY_MAX_PANELS} reports. A panel id
+   * the host has not seen yet (one `panel.openPluginPanel` just returned) is
+   * accepted and drawn once the panel shows up as yours; a report on a panel
+   * that has closed is dropped. Reporting the state a panel already shows
+   * sends nothing.
+   *
+   * Reports are not persisted, and are cleared when the plugin unloads or its
+   * worker is replaced. Like {@link setPanelBadge} this is NOT revoke-guarded
+   * and becomes a silent no-op once the plugin is unloaded.
+   */
+  setPanelActivity(panelId: string, activity: PluginPanelActivity | null): Promise<void>;
   /**
    * Publish the contextual actions the ⋯ and right-click menus of one of this
    * plugin's own panels offer right now — the backend-side twin of the view's

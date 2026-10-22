@@ -1179,6 +1179,7 @@ export const EVENT_LOCALITY: Readonly<Record<string, ChannelLocality>> = {
   "plugin:keybindings-changed": "host",
   "plugin:panel-badges-changed": "host",
   "plugin:panel-badges-cleared": "host",
+  "plugin:panel-activity-changed": "host",
   "plugin:panel-kinds-changed": "host",
   "plugin:panel-menus-changed": "host",
   "plugin:project-plugin-staged": "host",

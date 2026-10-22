@@ -51,6 +51,7 @@ import type {
   SetWorktreeCardStatusParams,
   SetWorktreeReviewChecksParams,
   SetTerminalStatusParams,
+  SetPanelActivityParams,
   SetPanelMenuItemsParams,
   RegisterActionParams,
   RegisterFileDecorationProviderParams,
@@ -871,6 +872,11 @@ export class PluginDevWorkerMainBridge {
       case "setTerminalStatus": {
         const p = params as SetTerminalStatusParams;
         await this.host.setTerminalStatus(p.terminalId, p.status);
+        return undefined;
+      }
+      case "setPanelActivity": {
+        const p = params as SetPanelActivityParams;
+        await this.host.setPanelActivity(p.panelId, p.activity);
         return undefined;
       }
       case "restartWorker":

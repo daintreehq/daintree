@@ -36,6 +36,7 @@ import type {
   PluginWorktreeCardStatus,
   PluginWorktreeReviewCheck,
   PluginTerminalStatus,
+  PluginPanelActivity,
   PanelMenuItemContribution,
   BuiltInPluginCapability,
   PluginFsWriteOptions,
@@ -79,6 +80,8 @@ export type PluginHostCallMethod =
   | "setWorktreeReviewChecks"
   // Likewise: main decides whether the terminal is one the plugin may reach (#13802).
   | "setTerminalStatus"
+  // Likewise: main decides whether the panel is one of this plugin's (#13820).
+  | "setPanelActivity"
   | "actions.list"
   | "actions.get"
   | "settings.get"
@@ -485,6 +488,12 @@ export interface SetWorktreeReviewChecksParams {
 export interface SetTerminalStatusParams {
   terminalId: string;
   status: PluginTerminalStatus | null;
+}
+
+/** Params for `setPanelActivity` (`host-call`). `null` clears the report. */
+export interface SetPanelActivityParams {
+  panelId: string;
+  activity: PluginPanelActivity | null;
 }
 
 /** Params for `setPanelMenuItems` (`host-notify`). `null` clears the list. */

@@ -545,8 +545,20 @@ export const SETTINGS_REGISTRY = [
         subtabLabel: "Display",
         section: "Interface elements",
         title: "Grid panel agent highlights",
-        description: "Show waiting and working state borders on grid panels",
-        keywords: ["agent", "highlight", "border", "waiting", "working", "grid", "panel", "state"],
+        description:
+          "Show waiting and working state borders on grid panels, including plugin-reported activity",
+        keywords: [
+          "agent",
+          "highlight",
+          "border",
+          "waiting",
+          "working",
+          "grid",
+          "panel",
+          "state",
+          "plugin",
+          "activity",
+        ],
       },
       {
         id: "general-dock-agent-highlights",

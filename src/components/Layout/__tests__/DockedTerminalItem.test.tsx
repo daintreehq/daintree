@@ -20,6 +20,7 @@ const moveTerminalToGridMock = vi.fn();
 let mockActiveDockTerminalId: string | null = null;
 let mockDockAgentState: string | undefined = undefined;
 let mockIsAgent = false;
+let mockPluginActivity: { pluginId: string; shown: string; description: string } | null = null;
 let capturedOnOpenChange: ((open: boolean) => void) | null = null;
 let capturedOnOpenAutoFocus: ((event: { preventDefault: () => void }) => void) | null = null;
 let capturedOnFocusOutside: ((event: { preventDefault: () => void }) => void) | null = null;
@@ -77,6 +78,16 @@ vi.mock("@/services/TerminalInstanceService", () => ({
 vi.mock("../DockChipBadge", () => ({
   useDockChipBadge: () => null,
   DockChipBadge: () => null,
+}));
+
+// The activity hook reads the real panel, registry and plugin stores too.
+vi.mock("@/components/Panel/PluginPanelActivity", () => ({
+  usePluginPanelActivity: () => mockPluginActivity,
+  PluginPanelActivityDockCue: ({ activity }: { activity: { shown: string } }) => (
+    <span data-plugin-panel-activity={activity.shown} />
+  ),
+  pluginPanelActivityLabelSuffix: (activity: { description: string } | null) =>
+    activity ? ` — ${activity.description}` : "",
 }));
 
 vi.mock("../dockPanelPortalContext", () => ({
@@ -298,6 +309,36 @@ describe("DockedTerminalItem plain-terminal activity cue (#11187)", () => {
   beforeEach(() => {
     mockActiveDockTerminalId = null;
     mockDockAgentState = undefined;
+    mockPluginActivity = null;
+  });
+
+  it("gives a PTY plugin panel's own report the cue slot and the accessible name (#13820)", () => {
+    mockPluginActivity = {
+      pluginId: "acme",
+      shown: "waiting",
+      description: "Reported by Acme: Waiting — Pick a branch",
+    };
+    const { container } = render(
+      <DockedTerminalItem terminal={makeTerminal({ id: "t-1", activityStatus: "working" })} />
+    );
+    expect(container.querySelector('[data-plugin-panel-activity="waiting"]')).not.toBeNull();
+    expect(container.querySelector("[data-dock-activity-state]")).toBeNull();
+    expect(
+      screen.getByRole("button", { name: /— Reported by Acme: Waiting — Pick a branch/ })
+    ).not.toBeNull();
+  });
+
+  it("never lets a plugin's report displace an observed agent state", () => {
+    mockDockAgentState = "working";
+    mockPluginActivity = {
+      pluginId: "acme",
+      shown: "failed",
+      description: "Reported by Acme: Failed",
+    };
+    const { container } = render(<DockedTerminalItem terminal={makeTerminal({ id: "t-1" })} />);
+    expect(container.querySelector("[data-plugin-panel-activity]")).toBeNull();
+    expect(screen.getByRole("button", { name: /— agent working/ })).not.toBeNull();
+    expect(screen.queryByRole("button", { name: /Reported by/ })).toBeNull();
   });
 
   it("shows a running spinner and 'command running' accessible name while a plain command runs", () => {

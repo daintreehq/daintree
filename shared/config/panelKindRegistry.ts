@@ -173,6 +173,12 @@ export interface PanelKindConfig {
    */
   stateVersion?: number;
   /**
+   * `contributes.panels[].reportsActivity` (#13820). Only a kind declaring
+   * `true` may carry its plugin's `host.setPanelActivity` reports: main checks
+   * it before storing one and the renderer again before drawing one.
+   */
+  reportsActivity?: boolean;
+  /**
    * `contributes.panels[].scope` (#13778). `"project"` means a panel of this
    * kind is opened with no worktree, so it is one panel for the whole project:
    * the dock and dialogs show a worktree-less panel in every worktree

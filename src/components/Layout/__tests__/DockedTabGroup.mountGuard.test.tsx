@@ -102,6 +102,12 @@ vi.mock("../DockChipBadge", () => ({
   DockChipBadge: () => null,
 }));
 
+vi.mock("@/components/Panel/PluginPanelActivity", () => ({
+  usePluginPanelActivity: () => null,
+  PluginPanelActivityDockCue: () => null,
+  pluginPanelActivityLabelSuffix: () => "",
+}));
+
 vi.mock("../dockPanelPortalContext", () => ({
   useDockPanelPortal: () => vi.fn(),
 }));

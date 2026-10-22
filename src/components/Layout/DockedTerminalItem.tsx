@@ -25,6 +25,11 @@ import { useSessionPresentation } from "@/hooks/useRunHandBackState";
 import { TerminalRefreshTier } from "@/types";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { DockActivityCue } from "./DockActivityCue";
+import {
+  PluginPanelActivityDockCue,
+  pluginPanelActivityLabelSuffix,
+  usePluginPanelActivity,
+} from "@/components/Panel/PluginPanelActivity";
 import { DockChipBadge, useDockChipBadge } from "./DockChipBadge";
 import { dockChipBadgeLabelSuffix } from "./dockChipBadgeModel";
 import { useDockPanelPortal } from "./dockPanelPortalContext";
@@ -332,6 +337,10 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
   const plainActivityState = getDockDisplayActivityState(terminal);
   const showFinishedCue = useTransientDockFinishedCue(plainActivityState, terminal.id);
   const plainWorking = plainActivityState === "working";
+  // A PTY-backed plugin panel's own report, in the plain cue's slot: only where
+  // no agent glyph is drawn, and never folded into the agent state (#13820).
+  const reportedActivity = usePluginPanelActivity(terminal.id);
+  const pluginActivity = displayAgentState ? null : reportedActivity;
   const badge = useDockChipBadge(terminal.id);
   const showDockAgentHighlights = usePreferencesStore((s) => s.showDockAgentHighlights);
   // Use shortened title without command summary for dock items
@@ -374,7 +383,7 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
                   isOpen && DOCK_CHIP_OPEN_CLASS,
                   !isOpen &&
                     showDockAgentHighlights &&
-                    blockedState === "waiting" &&
+                    (blockedState === "waiting" || pluginActivity?.shown === "waiting") &&
                     DOCK_CHIP_WAITING_CLASS,
                   isDeprioritized && "border-transparent"
                 )}
@@ -394,7 +403,7 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
                   e.stopPropagation();
                   handleMoveToGrid();
                 }}
-                aria-label={`${terminal.title}${displayAgentState ? (stateLabel ? ` — agent ${stateLabel}` : "") : plainWorking ? " — command running" : ""}${dockChipBadgeLabelSuffix(badge)} - Click to preview, double-click to move to grid, drag to reorder`}
+                aria-label={`${terminal.title}${displayAgentState ? (stateLabel ? ` — agent ${stateLabel}` : "") : pluginActivity ? pluginPanelActivityLabelSuffix(pluginActivity) : plainWorking ? " — command running" : ""}${dockChipBadgeLabelSuffix(badge)} - Click to preview, double-click to move to grid, drag to reorder`}
               >
                 <div className="flex items-center justify-center shrink-0">
                   <TerminalIcon kind={terminal.kind} chrome={chrome} className="w-3.5 h-3.5" />
@@ -418,8 +427,13 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
                   </>
                 )}
 
-                {!displayAgentState && (plainWorking || showFinishedCue) && (
-                  <DockActivityCue state={plainWorking ? "working" : "finished"} />
+                {pluginActivity ? (
+                  <PluginPanelActivityDockCue activity={pluginActivity} />
+                ) : (
+                  !displayAgentState &&
+                  (plainWorking || showFinishedCue) && (
+                    <DockActivityCue state={plainWorking ? "working" : "finished"} />
+                  )
                 )}
 
                 {/* State icon (compact spacing from title) */}

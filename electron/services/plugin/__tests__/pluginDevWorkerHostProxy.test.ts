@@ -1706,6 +1706,43 @@ describe("PluginDevWorkerHostProxy setTerminalStatus (#13802)", () => {
   });
 });
 
+describe("PluginDevWorkerHostProxy setPanelActivity (#13820)", () => {
+  it("relays the vetted report as a call and passes main's refusal back", async () => {
+    const { proxy, sent } = makeProxy();
+    const set = proxy.host.setPanelActivity("panel-1", { state: "waiting", reason: " Pick one " });
+    const call = sent.find((m) => m.type === "host-call" && m.method === "setPanelActivity");
+    expect(call?.params).toEqual({
+      panelId: "panel-1",
+      activity: { state: "waiting", reason: "Pick one" },
+    });
+    proxy.handleMessage({
+      type: "host-result",
+      requestId: call.requestId,
+      ok: false,
+      error: 'Plugin "acme" setPanelActivity: panel "panel-1" belongs to another plugin',
+    });
+    await expect(set).rejects.toThrow(/belongs to another plugin/);
+  });
+
+  it("relays a clear as a null report", () => {
+    const { proxy, sent } = makeProxy();
+    void proxy.host.setPanelActivity("panel-1", null);
+    const call = sent.find((m) => m.type === "host-call" && m.method === "setPanelActivity");
+    expect(call?.params).toEqual({ panelId: "panel-1", activity: null });
+  });
+
+  it("rejects a bad id or report without crossing the port", async () => {
+    const { proxy, sent } = makeProxy();
+    await expect(proxy.host.setPanelActivity("", { state: "working" })).rejects.toThrow(
+      /setPanelActivity: panelId/
+    );
+    await expect(
+      proxy.host.setPanelActivity("p", { state: "working", reason: "a\nb" })
+    ).rejects.toThrow(/setPanelActivity: activity\.reason must be a single line/);
+    expect(sent.find((m) => m.type === "host-call")).toBeUndefined();
+  });
+});
+
 describe("PluginDevWorkerHostProxy setWorktreeCardStatus (#13704)", () => {
   beforeEach(() => vi.clearAllMocks());
   afterEach(() => vi.restoreAllMocks());

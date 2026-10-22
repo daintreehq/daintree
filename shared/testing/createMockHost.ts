@@ -11,6 +11,7 @@
 
 import {
   PLUGIN_NOTIFY_MAX_ACTIONS,
+  PLUGIN_PANEL_ACTIVITY_MAX_PANELS,
   PLUGIN_TERMINAL_STATUS_MAX_PER_PROJECT,
   pluginManifestIdFromInstanceKey,
   projectIdFromPluginInstanceKey,
@@ -33,6 +34,7 @@ import { applyPluginContextEntry, validatePluginContextEntry } from "../utils/pl
 import { validatePluginWorktreeCardStatus } from "../utils/pluginWorktreeCardStatus.js";
 import { validatePluginWorktreeReviewChecks } from "../utils/pluginWorktreeReviewChecks.js";
 import { validatePluginTerminalStatus } from "../utils/pluginTerminalStatus.js";
+import { validatePluginPanelActivity } from "../utils/pluginPanelActivity.js";
 import {
   PLUGIN_INVOKE_MAX_RESULT_BYTES,
   PLUGIN_SUBSCRIPTION_DEFAULT_DEBOUNCE_MS,
@@ -117,6 +119,7 @@ import type {
   PluginWorktreeCardStatus,
   PluginWorktreeReviewCheck,
   PluginTerminalStatus,
+  PluginPanelActivity,
   SettingDefinition,
   SettingsApi,
   StorageApi,
@@ -268,6 +271,12 @@ export interface SetTerminalStatusRecord {
   status: PluginTerminalStatus | null;
 }
 
+/** Captured `host.setPanelActivity(panelId, activity)` calls. `null` clears. */
+export interface SetPanelActivityRecord {
+  panelId: string;
+  activity: PluginPanelActivity | null;
+}
+
 /** Captured `host.setPanelBadge(panelId, badge)` calls. `null` clears. */
 export interface SetPanelBadgeRecord {
   panelId: string;
@@ -371,6 +380,10 @@ export interface MockHostState {
   readonly setTerminalStatusCalls: ReadonlyArray<SetTerminalStatusRecord>;
   /** The terminal chips this plugin shows right now, keyed by `terminalId`. */
   readonly terminalStatuses: ReadonlyMap<string, PluginTerminalStatus>;
+  /** Accepted `host.setPanelActivity` calls, in order. */
+  readonly setPanelActivityCalls: ReadonlyArray<SetPanelActivityRecord>;
+  /** The activity this plugin reports right now, keyed by `panelId`. */
+  readonly panelActivity: ReadonlyMap<string, PluginPanelActivity>;
   readonly setPanelMenuItemsCalls: ReadonlyArray<SetPanelMenuItemsRecord>;
   /**
    * Panel ids passed to `host.reloadPanel(panelId)`, in order (#12610). Only
@@ -618,6 +631,14 @@ export interface CreateMockHostOptions {
    * by default (the mock has no manifest model), which accepts any non-empty id.
    */
   toolbarButtonIds?: readonly string[];
+  /**
+   * Opt-in `contributes.panels[].id` list of the kinds declaring
+   * `reportsActivity: true`, so `setPanelActivity` rejects when none does, or
+   * when a panel pushed through `simulatePanelLifecycleChange` is of another
+   * kind, as the real host does. Omitted by default (the mock has no manifest
+   * model), which accepts any panel not reported as another plugin's.
+   */
+  reportsActivityPanelIds?: readonly string[];
   /**
    * Seed `host.account`. Omitted, the account starts disconnected. The mock
    * models a plugin that declares `contributes.account`.
@@ -1207,6 +1228,8 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
   const worktreeReviewChecks = new Map<string, readonly PluginWorktreeReviewCheck[]>();
   const setTerminalStatusCalls: SetTerminalStatusRecord[] = [];
   const terminalStatuses = new Map<string, PluginTerminalStatus>();
+  const setPanelActivityCalls: SetPanelActivityRecord[] = [];
+  const panelActivity = new Map<string, PluginPanelActivity>();
   const setPanelMenuItemsCalls: SetPanelMenuItemsRecord[] = [];
   const reloadPanelCalls: string[] = [];
   const restartWorkerCalls: WorkerRestartResult[] = [];
@@ -2525,6 +2548,48 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
       }
       setTerminalStatusCalls.push({ terminalId: entry.terminalId, status: entry.status });
     },
+    async setPanelActivity(panelId, activity) {
+      // Same order as production: the shared validator, then the declaration,
+      // then whose the panel is as far as the simulated lifecycle says.
+      const entry = validatePluginPanelActivity(panelId, activity);
+      if (!entry.ok) throw new Error(`setPanelActivity: ${entry.error}`);
+      if (entry.activity === null) {
+        panelActivity.delete(entry.panelId);
+        setPanelActivityCalls.push({ panelId: entry.panelId, activity: null });
+        return;
+      }
+      const declared = options.reportsActivityPanelIds;
+      if (declared && declared.length === 0) {
+        throw new Error(
+          "setPanelActivity: none of this plugin's contributes.panels declares reportsActivity: true"
+        );
+      }
+      const known = panelPhases.get(entry.panelId);
+      if (known && known.pluginId !== pluginId) {
+        throw new Error(`setPanelActivity: panel "${entry.panelId}" belongs to another plugin`);
+      }
+      if (
+        known &&
+        declared &&
+        !declared.some(
+          (id) => known.panelKindId === id || known.panelKindId === `${mockManifestId}.${id}`
+        )
+      ) {
+        throw new Error(
+          `setPanelActivity: panel kind "${known.panelKindId}" does not declare reportsActivity: true`
+        );
+      }
+      if (
+        !panelActivity.has(entry.panelId) &&
+        panelActivity.size >= PLUGIN_PANEL_ACTIVITY_MAX_PANELS
+      ) {
+        throw new Error(
+          `setPanelActivity: activity is already reported on ${PLUGIN_PANEL_ACTIVITY_MAX_PANELS} panels — clear a closed panel's with null`
+        );
+      }
+      panelActivity.set(entry.panelId, entry.activity);
+      setPanelActivityCalls.push({ panelId: entry.panelId, activity: entry.activity });
+    },
     setPanelMenuItems(panelId, items) {
       // Vetted by the host's own normalizer, so a list the real host refuses
       // rejects here too.
@@ -3198,6 +3263,8 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
     worktreeReviewChecks,
     setTerminalStatusCalls,
     terminalStatuses,
+    setPanelActivityCalls,
+    panelActivity,
     setPanelMenuItemsCalls,
     reloadPanelCalls,
     restartWorkerCalls,
