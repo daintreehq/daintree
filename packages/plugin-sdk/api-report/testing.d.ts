@@ -2098,8 +2098,9 @@ interface PluginAccountApi {
     /**
      * Called when the account connects, disconnects or reports a new identity.
      * Returns a disposer; every subscription is disposed when the plugin unloads.
+     * Without a declared account nothing ever changes, so the callback never runs.
      */
-    onDidChange(callback: (state: PluginAccountState) => void): () => void;
+    onDidChange(callback: (state: PluginAccountState) => void | Promise<void>): () => void;
 }
 /**
  * Field control kind for a {@link SettingDefinition}. Drives which input the
@@ -5084,8 +5085,8 @@ interface PluginHostApi extends PluginActivationApi {
     /**
      * The host-managed account declared in `contributes.account`. See
      * {@link PluginAccountApi}. NOT revoke-guarded: plugins ask for a token from
-     * timers and callbacks. Every member rejects (or, for `onDidChange`, throws)
-     * when the manifest declares no account.
+     * timers and callbacks. `getState` and `getAccessToken` reject when the
+     * manifest declares no account, and once the plugin is unloaded.
      */
     readonly account: PluginAccountApi;
     /**
@@ -5517,10 +5518,10 @@ interface MockHostState {
      * the settings row, and call every `account.onDidChange` subscriber. Pass an
      * `accessToken` to change what `getAccessToken()` answers while connected.
      */
-    simulateAccountChange(account: {
+    simulateAccountChange(account: ({
         connected: true;
         identity?: string | null;
-    } & Partial<PluginAccountAccessToken> | {
+    } & Partial<PluginAccountAccessToken>) | {
         connected: false;
     }): void;
     /**
