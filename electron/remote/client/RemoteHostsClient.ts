@@ -1376,6 +1376,13 @@ export class RemoteHostsClient {
     return this.options.manager.get(hostId)?.hasActiveAgent(webContentsId) === true;
   }
 
+  /** Whether the view's host says the user granted its project residency there. */
+  viewKeepsResident(webContentsId: number): boolean {
+    const hostId = this.viewHost(webContentsId);
+    if (isLocalHostId(hostId)) return false;
+    return this.options.manager.get(hostId)?.hasKeepResident(webContentsId) === true;
+  }
+
   /** A view's host: a project view's is in its key, and a view with no project follows its window. */
   viewHost(webContentsId: number): HostId {
     const key = this.options.senders.projectKeyFor(webContentsId);

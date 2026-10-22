@@ -960,6 +960,85 @@ describe("SessionHost assistant liveness (#13349)", () => {
   });
 });
 
+describe("SessionHost residency (#13933)", () => {
+  /** Projects the user granted residency on this host. */
+  let granted: Set<string>;
+  let sessions: SessionHost;
+  let fake: ReturnType<typeof fakeServer>;
+
+  beforeEach(() => {
+    granted = new Set();
+    fake = fakeServer();
+    sessions = new SessionHost(fake, {
+      dispatcher: { invokeForEndpoint: async () => wrapSuccess(null), sendForEndpoint: () => {} },
+      registry: new EndpointRegistryImpl(),
+      keepResident: (endpoint) => granted.has(endpoint.projectId ?? ""),
+    });
+  });
+
+  afterEach(() => sessions.dispose());
+
+  const residencyCalls = (link: ReturnType<typeof fakeLink>) =>
+    link.call.mock.calls
+      .filter(([method]) => method === LinkMethod.ENDPOINT_RESIDENCY)
+      .map(([, payload]) => payload);
+
+  it("answers a view that opens onto a granted project, and only changes after", () => {
+    granted.add("p1");
+    const link = fakeLink();
+    fake.attach("s1", link);
+    open(link, "view-1", "p1");
+    open(link, "view-2", "p2");
+    expect(residencyCalls(link)).toEqual([
+      { endpoints: [{ endpointId: "view-1", projectId: "p1", keepResident: true }] },
+      { endpoints: [{ endpointId: "view-2", projectId: "p2", keepResident: false }] },
+    ]);
+
+    sessions.refreshResidency();
+    expect(residencyCalls(link)).toHaveLength(2);
+
+    granted.delete("p1");
+    granted.add("p2");
+    sessions.refreshResidency();
+    expect(residencyCalls(link).at(-1)).toEqual({
+      endpoints: [
+        { endpointId: "view-1", projectId: "p1", keepResident: false },
+        { endpointId: "view-2", projectId: "p2", keepResident: true },
+      ],
+    });
+  });
+
+  it("answers again for a view that moved between two granted projects", () => {
+    granted.add("p1");
+    granted.add("p2");
+    const link = fakeLink();
+    fake.attach("s1", link);
+    open(link, "view-1", "p1");
+
+    link.emit(Lane.CONTROL, ControlKind.ENDPOINT_REBIND, { endpointId: "view-1", projectId: "p2" });
+
+    expect(residencyCalls(link).at(-1)).toEqual({
+      endpoints: [{ endpointId: "view-1", projectId: "p2", keepResident: true }],
+    });
+  });
+
+  it("tells a resumed Shell every view's answer, including a grant made while it was away", () => {
+    const first = fakeLink();
+    fake.attach("s1", first);
+    open(first, "view-1", "p1");
+    first.drop();
+
+    granted.add("p1");
+    sessions.refreshResidency();
+
+    const second = fakeLink();
+    fake.attach("s1", second, true);
+    expect(residencyCalls(second)).toEqual([
+      { endpoints: [{ endpointId: "view-1", projectId: "p1", keepResident: true }] },
+    ]);
+  });
+});
+
 describe("SessionHost agent activity (#13359)", () => {
   /** Projects with an agent working, waiting or directing here. */
   let activeProjects: Set<string>;

@@ -232,6 +232,10 @@ const remoteAssistantLive = (webContentsId: number): boolean => liveRemoteViews.
 // And the views whose host says an agent in their project is active there (#13359).
 const activeRemoteViews = new Set<number>();
 const remoteAgentActive = (webContentsId: number): boolean => activeRemoteViews.has(webContentsId);
+// And the views whose host says the user granted their project residency there (#13933).
+const residentRemoteViews = new Set<number>();
+const remoteKeepResident = (webContentsId: number): boolean =>
+  residentRemoteViews.has(webContentsId);
 
 import { ProjectViewManager } from "../ProjectViewManager.js";
 import { events } from "../../services/events.js";
@@ -336,6 +340,8 @@ describe("ProjectViewManager — eviction safety", () => {
     liveTerminals.clear();
     liveRemoteViews.clear();
     activeRemoteViews.clear();
+    residentRemoteViews.clear();
+    residentWorkspaces.clear();
     win = createMockWindow();
     manager = new ProjectViewManager(win as never, {
       dirname: "/test",
@@ -715,6 +721,7 @@ describe("ProjectViewManager — eviction safety", () => {
         isTerminalLive,
         remoteAssistantLive,
         remoteAgentActive,
+        remoteKeepResident,
       });
     }
 
@@ -1104,6 +1111,42 @@ describe("ProjectViewManager — eviction safety", () => {
 
         expect(evictedProjectIds()).toEqual(["proj-a"]);
         expect(askHost).not.toHaveBeenCalled();
+      });
+
+      describe("with residency granted on its host (#13933)", () => {
+        it("keeps it past a more recently used ordinary local view", async () => {
+          const managerWithLimit = makeManager(2);
+          const wcR = await withRemoteView(managerWithLimit);
+          residentRemoteViews.add(wcR.id);
+
+          await leaveFor(managerWithLimit, "proj-b", "proj-c");
+
+          expect(managerWithLimit.getAllViews().map((v) => v.projectId)).toContain(remoteKey);
+          expect(wcR.close).not.toHaveBeenCalled();
+          expect(evictedProjectIds()).toEqual(["proj-a", "proj-b"]);
+        });
+
+        it("ignores a grant this machine holds for the same key", async () => {
+          const managerWithLimit = makeManager(2);
+          const wcR = await withRemoteView(managerWithLimit);
+          residentWorkspaces.add(remoteKey);
+
+          await leaveFor(managerWithLimit, "proj-b", "proj-c");
+
+          expect(wcR.close).toHaveBeenCalled();
+          expect(evictedProjectIds()).toContain(remoteKey);
+        });
+
+        it("still yields to the forced reclaim", async () => {
+          const managerWithLimit = makeManager(3);
+          const wcR = await withRemoteView(managerWithLimit);
+          await leaveFor(managerWithLimit, "proj-b");
+          residentRemoteViews.add(wcR.id);
+
+          managerWithLimit.reclaimCachedViewsUnderPressure();
+
+          expect(managerWithLimit.getAllViews().map((v) => v.projectId)).toEqual(["proj-b"]);
+        });
       });
 
       describe("with agents active on its host (#13359)", () => {

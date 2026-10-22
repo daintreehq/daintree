@@ -25,6 +25,7 @@ import {
   LinkMethod,
   MAX_LISTED_PROJECTS,
   type EndpointAgentActivityPayload,
+  type EndpointResidencyPayload,
   type EndpointAssistantPayload,
   type EndpointResyncPayload,
   type EndpointResyncReason,
@@ -97,6 +98,13 @@ export interface SessionHostOptions {
    * endpoint reads as having none.
    */
   agentActive?: (endpoint: RemoteViewEndpoint) => boolean;
+  /**
+   * Whether the user granted this endpoint's project residency on this host.
+   * The grant lives in this host's store, so the Shell's eviction pass can only
+   * honour it if this host tells it (#13933). Read synchronously on every
+   * refresh; absent, every endpoint reads as having none.
+   */
+  keepResident?: (endpoint: RemoteViewEndpoint) => boolean;
   describeProject?: (projectId: string) => ProjectDescription | null;
   listProjects?: () => HostProjectList;
   eventsHighWaterBytes?: number;
@@ -135,11 +143,12 @@ const MAX_REMEMBERED_CLIENTS = 64;
 
 /**
  * What the host tells a Shell about each of its views, for the Shell's
- * eviction pass: a live assistant pinned to the view (#13349), and an active
- * agent in the view's project (#13359).
+ * eviction pass: a live assistant pinned to the view (#13349), an active
+ * agent in the view's project (#13359), and the user's keep-resident grant for
+ * the view's project (#13933).
  */
-type EndpointAnswer = "assistant" | "agents";
-const ENDPOINT_ANSWERS: readonly EndpointAnswer[] = ["assistant", "agents"];
+type EndpointAnswer = "assistant" | "agents" | "resident";
+const ENDPOINT_ANSWERS: readonly EndpointAnswer[] = ["assistant", "agents", "resident"];
 
 interface SessionState {
   sessionId: string;
@@ -361,6 +370,15 @@ export class SessionHost {
     for (const state of this.states.values()) this.announce(state, "agents");
   }
 
+  /**
+   * A residency grant may have been set or cleared: tell each attached Shell
+   * about every endpoint whose answer changed since it was last told.
+   */
+  refreshResidency(): void {
+    if (this.disposed) return;
+    for (const state of this.states.values()) this.announce(state, "resident");
+  }
+
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
@@ -399,8 +417,8 @@ export class SessionHost {
         openedOnLink: new Set(),
         createdOnLink: new Set(),
         refusedOnLink: new Map(),
-        told: { assistant: new Map(), agents: new Map() },
-        answerRetry: { assistant: null, agents: null },
+        told: { assistant: new Map(), agents: new Map(), resident: new Map() },
+        answerRetry: { assistant: null, agents: null, resident: null },
         overHighWaterTimer: null,
         handle: undefined as unknown as EndpointSessionHandle,
         lastActiveAt: null,
@@ -603,6 +621,7 @@ export class SessionHost {
     state.lastActiveAt = Date.now();
     this.publishFrontendCount();
     this.announce(state, "agents");
+    this.announce(state, "resident");
     for (const listener of [...this.openedListeners]) {
       try {
         listener(endpoint, state.handle);
@@ -634,6 +653,7 @@ export class SessionHost {
     // drops both answers when the view moves, so the new project's agents are
     // owed one even when it reads the same as the old project's.
     state.told.agents.delete(clientEndpointId);
+    state.told.resident.delete(clientEndpointId);
     for (const answer of ENDPOINT_ANSWERS) this.announce(state, answer);
   }
 
@@ -796,7 +816,12 @@ export class SessionHost {
   }
 
   private announce(state: SessionState, answer: EndpointAnswer): void {
-    const read = answer === "assistant" ? this.options.assistantLive : this.options.agentActive;
+    const read =
+      answer === "assistant"
+        ? this.options.assistantLive
+        : answer === "agents"
+          ? this.options.agentActive
+          : this.options.keepResident;
     const link = state.link;
     if (!read || !link || !link.isOpen) return;
     const told = state.told[answer];
@@ -824,13 +849,21 @@ export class SessionHost {
               live: value,
             })),
           } satisfies EndpointAssistantPayload)
-        : link.call(LinkMethod.ENDPOINT_AGENT_ACTIVITY, {
-            endpoints: changed.map(({ endpointId, projectId, value }) => ({
-              endpointId,
-              projectId,
-              active: value,
-            })),
-          } satisfies EndpointAgentActivityPayload);
+        : answer === "agents"
+          ? link.call(LinkMethod.ENDPOINT_AGENT_ACTIVITY, {
+              endpoints: changed.map(({ endpointId, projectId, value }) => ({
+                endpointId,
+                projectId,
+                active: value,
+              })),
+            } satisfies EndpointAgentActivityPayload)
+          : link.call(LinkMethod.ENDPOINT_RESIDENCY, {
+              endpoints: changed.map(({ endpointId, projectId, value }) => ({
+                endpointId,
+                projectId,
+                keepResident: value,
+              })),
+            } satisfies EndpointResidencyPayload);
     void call.catch((error: unknown) => {
       // A Shell from before this call refuses it, and always will.
       const code = (error as { code?: unknown } | null)?.code;

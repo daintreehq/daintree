@@ -30,6 +30,8 @@ export const LinkMethod = {
   ENDPOINT_ASSISTANT: "endpoint.assistant",
   /** Host → Shell: whether an agent in each of these endpoints' projects is active here. */
   ENDPOINT_AGENT_ACTIVITY: "endpoint.agent-activity",
+  /** Host → Shell: whether the user granted each of these endpoints' projects residency here. */
+  ENDPOINT_RESIDENCY: "endpoint.residency",
 } as const;
 
 export interface HostInfo {
@@ -85,6 +87,20 @@ export interface EndpointAgentActivityState {
 
 export interface EndpointAgentActivityPayload {
   endpoints: EndpointAgentActivityState[];
+}
+
+/**
+ * The host-side "keep this workspace resident" grant for an endpoint's project.
+ * Same `projectId` rule as {@link EndpointAssistantState}.
+ */
+export interface EndpointResidencyState {
+  endpointId: string;
+  projectId: string | null;
+  keepResident: boolean;
+}
+
+export interface EndpointResidencyPayload {
+  endpoints: EndpointResidencyState[];
 }
 
 const endpointId = z.string().min(1).max(256);
@@ -153,6 +169,18 @@ export const EndpointAgentActivityPayloadSchema = z.object({
         endpointId,
         projectId: z.string().min(1).max(256).nullable(),
         active: z.boolean(),
+      })
+    )
+    .max(4096),
+});
+
+export const EndpointResidencyPayloadSchema = z.object({
+  endpoints: z
+    .array(
+      z.object({
+        endpointId,
+        projectId: z.string().min(1).max(256).nullable(),
+        keepResident: z.boolean(),
       })
     )
     .max(4096),

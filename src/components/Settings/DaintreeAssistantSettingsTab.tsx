@@ -16,6 +16,7 @@ import { actionService } from "@/services/ActionService";
 import { Button } from "@/components/ui/button";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
+import { useRemoteHostName } from "@/hooks/useSettingsOwner";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { SettingsSection } from "./SettingsSection";
 import {
@@ -1009,6 +1010,7 @@ export function DaintreeAssistantSettingsTab() {
     );
   };
 
+  const remoteHostName = useRemoteHostName();
   const handleOpenCommandsFolder = () => {
     void actionService.dispatch("help.openCommandsFolder", undefined, { source: "user" });
   };
@@ -1488,7 +1490,7 @@ export function DaintreeAssistantSettingsTab() {
             control={
               <Button variant="outline" size="sm" onClick={handleOpenCommandsFolder}>
                 <FolderOpen />
-                Open folder
+                {remoteHostName ? `Open folder on ${remoteHostName}` : "Open folder"}
               </Button>
             }
           />

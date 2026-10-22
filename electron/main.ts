@@ -655,6 +655,8 @@ if (!gotTheLock) {
       // machine's agent-state cache; the host says which views have one active.
       remoteAgentActive: (webContentsId) =>
         getRemoteService("windowHosts")?.viewHasActiveAgent?.(webContentsId) === true,
+      remoteKeepResident: (webContentsId) =>
+        getRemoteService("windowHosts")?.viewKeepsResident?.(webContentsId) === true,
       // Keeps a workspace an MCP session is bound to out of the freeze sweep,
       // and out of eviction entirely while a dispatch is in flight (#11790).
       // A bound session drives a *background* workspace by design, and a frozen
