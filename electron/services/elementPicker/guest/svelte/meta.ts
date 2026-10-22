@@ -13,7 +13,12 @@ export const SVELTE_LIMITS = {
   ancestry: 64,
   /** Parent links walked per read, however few of them are usable. */
   links: 512,
+  /** DOM ancestors walked looking for a stamp; real nesting is far shallower. */
+  ancestors: 512,
+  /** A frame's or a structure's file: the evidence schema's bound. */
   file: 1024,
+  /** An element's own template location: the source candidate schema's bound. */
+  locFile: 2048,
   type: 32,
   componentTag: 128,
   tag: 64,
@@ -79,18 +84,16 @@ function coordinate(value: unknown, min: number): number | null {
  * A source path is identity, not display text: a clamped one would name a
  * different file. Reported whole or not at all.
  */
-function file(value: unknown): string | null {
-  return typeof value === "string" && value.length > 0 && value.length <= SVELTE_LIMITS.file
-    ? value
-    : null;
+function file(value: unknown, max: number): string | null {
+  return typeof value === "string" && value.length > 0 && value.length <= max ? value : null;
 }
 
 function name(value: unknown, max: number): string | null {
   return typeof value === "string" && value.length > 0 && value.length <= max ? value : null;
 }
 
-function readPosition(source: unknown): SvelteLoc | null {
-  const path = file(field(source, "file"));
+function readPosition(source: unknown, maxFile: number): SvelteLoc | null {
+  const path = file(field(source, "file"), maxFile);
   const line = coordinate(field(source, "line"), 1);
   const column = coordinate(field(source, "column"), 0);
   if (path === null || line === null || column === null) return null;
@@ -100,7 +103,7 @@ function readPosition(source: unknown): SvelteLoc | null {
 /** The element's own template location, when its stamp has a usable one. */
 export function readLoc(node: Element): SvelteLoc | null {
   const meta = readMeta(node);
-  return meta === null ? null : readPosition(field(meta, "loc"));
+  return meta === null ? null : readPosition(field(meta, "loc"), SVELTE_LIMITS.locFile);
 }
 
 export function sameLoc(a: SvelteLoc, b: SvelteLoc): boolean {
@@ -114,7 +117,7 @@ export function locKey(loc: SvelteLoc): string {
 /** One frame in the shape the evidence schema takes, or null when any part of it is unusable. */
 export function readFrame(frame: object): SvelteFrame | null {
   const type = name(field(frame, "type"), SVELTE_LIMITS.type);
-  const position = readPosition(frame);
+  const position = readPosition(frame, SVELTE_LIMITS.file);
   if (type === null || position === null) return null;
   const componentTag = name(field(frame, "componentTag"), SVELTE_LIMITS.componentTag);
   return componentTag === null ? { type, ...position } : { type, ...position, componentTag };
@@ -127,9 +130,12 @@ export function parentOf(node: Element): Element | null {
   return root instanceof ShadowRoot ? root.host : null;
 }
 
+/** Bounded, so deep generated markup costs a hover no more than a fixed walk. */
 export function nearestMapped(start: Element | null): Element | null {
-  for (let node = start; node !== null; node = parentOf(node)) {
+  let node = start;
+  for (let depth = 0; node !== null && depth < SVELTE_LIMITS.ancestors; depth += 1) {
     if (readLoc(node) !== null) return node;
+    node = parentOf(node);
   }
   return null;
 }

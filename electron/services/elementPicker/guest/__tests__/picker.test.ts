@@ -721,6 +721,115 @@ describe("the bridge's element exchanges", () => {
     expect(ofType("selectionChanged").at(-1)?.observations[0]?.label).toBe("a#second");
   });
 
+  it("lets page code inside an exchange start no selection of its own", () => {
+    const first = document.getElementById("first")!;
+    const list = document.getElementById("list")!;
+    installReact({
+      extract: (element, phase) => {
+        // The page, running inside the bootstrap's dispatch, clicks elsewhere.
+        if (element === first && phase === "selection") list.click();
+        return {};
+      },
+    });
+    start();
+
+    first.click();
+
+    expect(ofType("selectionChanged").map((event) => event.observations[0]?.label)).toEqual([
+      "a#first",
+    ]);
+    // The guest is on the selection the host was told about.
+    press("ArrowRight");
+    expect(ofType("selectionChanged").at(-1)?.observations[0]?.label).toBe("a#second");
+  });
+
+  it("takes a locate's answer only from a locate reply, and only the elements before it", () => {
+    const first = document.getElementById("first")!;
+    const second = document.getElementById("second")!;
+    document.addEventListener(
+      channelEvent(CHANNEL, "locate"),
+      (event) => {
+        const { id } = JSON.parse((event as CustomEvent<string>).detail) as { id: number };
+        const point = (node: Element) =>
+          node.dispatchEvent(
+            new CustomEvent(channelEvent(CHANNEL, "point"), { detail: String(id), composed: true })
+          );
+        point(first);
+        // Shaped like an extract reply: not the answer a locate waits for.
+        document.dispatchEvent(
+          new CustomEvent(channelEvent(CHANNEL, "extracted"), {
+            detail: JSON.stringify({ id, contributions: [], data: {} }),
+          })
+        );
+        document.dispatchEvent(
+          new CustomEvent(channelEvent(CHANNEL, "located"), {
+            detail: JSON.stringify({ id, data: {}, truncated: false }),
+          })
+        );
+        point(second);
+      },
+      { capture: true, signal: testListeners.signal }
+    );
+    const handle = start();
+
+    expect(handle.reselect({ framework: "react", locator: {} })).toBe(true);
+    expect(
+      ofType("selectionChanged")
+        .at(-1)
+        ?.observations.map((entry) => entry.label)
+    ).toEqual(["a#first"]);
+  });
+
+  it("does not call a component's roots complete when some were never shown to it", () => {
+    const list = document.getElementById("list")!;
+    list.innerHTML = Array.from({ length: 33 }, (_, index) => `<b id="b${index}"></b>`).join("");
+    const roots = Array.from(list.children);
+    installReact({
+      extract: () => ({
+        componentChain: { nearestId: "c1", components: [record], truncated: false },
+      }),
+      locate: () => ({ elements: roots, data: { complete: true } }),
+    });
+    start();
+    roots[0]!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+
+    press("ArrowUp", { altKey: true });
+
+    const widened = ofType("selectionChanged").at(-1)!;
+    expect(widened.observations).toHaveLength(32);
+    expect(widened.observations[0]?.componentChain.components[0]?.rootsComplete).toBe(false);
+  });
+
+  it("goes back to element scope when the component is no longer described", () => {
+    const first = document.getElementById("first")!;
+    const second = document.getElementById("second")!;
+    let described = true;
+    installReact({
+      extract: () =>
+        described
+          ? { componentChain: { nearestId: "c1", components: [record], truncated: false } }
+          : {},
+      locate: () => ({ elements: [first, second], data: { complete: true } }),
+    });
+    const handle = start();
+    first.click();
+    press("ArrowUp", { altKey: true });
+    expect(ofType("selectionChanged").at(-1)?.scope.kind).toBe("component");
+
+    described = false;
+    handle.refresh();
+    expect(ofType("selectionChanged").at(-1)?.scope).toEqual({ kind: "element" });
+
+    // Widening starts again from the innermost component, not past the old scope.
+    described = true;
+    handle.refresh();
+    press("ArrowUp", { altKey: true });
+    expect(ofType("selectionChanged").at(-1)?.scope).toEqual({
+      kind: "component",
+      componentId: "c1",
+    });
+  });
+
   it("selects again by the id it reported, while that is still the same node", () => {
     const handle = start();
     const first = document.getElementById("first")!;

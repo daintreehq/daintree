@@ -172,6 +172,9 @@ export function createMetadataAudit(notify: (notice: ExtractorNotice) => void): 
       clearAuditTimer();
       return;
     }
+    // Stamps seen on any look are remembered: hydration can replace a node
+    // that carried one before the verdict comes due.
+    probe();
     // A page that has not finished loading, or a document too big to sweep,
     // is not evidence of a production build. Stay silent and look again.
     if (scan.complete && document.readyState === "complete" && auditTimer === null) {

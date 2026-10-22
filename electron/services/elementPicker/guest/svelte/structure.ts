@@ -97,6 +97,8 @@ function structurePath(target: Element): SvelteStructure | undefined {
   const anchorLoc = readLoc(anchor);
   const meta = readMeta(anchor);
   if (anchorLoc === null || meta === null) return undefined;
+  // A location the evidence cannot carry whole is not one to place against.
+  if (anchorLoc.file.length > SVELTE_LIMITS.file) return undefined;
   const frame = parentFrame(meta);
   const frameOf = (node: Element): Kinship => {
     const other = readMeta(node);

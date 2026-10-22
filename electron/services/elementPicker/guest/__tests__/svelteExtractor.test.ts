@@ -224,6 +224,23 @@ describe("source metadata", () => {
     expect(node?.componentChain.components).toEqual([]);
   });
 
+  it("keeps a long template location whole rather than call the element unstamped", () => {
+    document.body.innerHTML = '<div id="outer"><p id="deep">x</p></div>';
+    const long = "src/" + "nested/".repeat(200) + "Deep.svelte";
+    setMeta(document.getElementById("outer")!, loc(1));
+    setMeta(document.getElementById("deep")!, loc(4, 2, long));
+    const { events } = start();
+
+    click(document.getElementById("deep")!);
+    const [node] = lastSelection(events);
+
+    expect(long.length).toBeGreaterThan(1024);
+    expect(node?.tagName).toBe("p");
+    expect(locOf(node)).toEqual(loc(4, 2, long));
+    // The evidence cannot carry the path, so it places nothing by it.
+    expect(evidenceOf(node).structure).toBeUndefined();
+  });
+
   it("re-counts occurrences once the document's structure has changed", async () => {
     document.body.innerHTML = "<u></u><u></u>";
     for (const node of document.body.querySelectorAll("u")) setMeta(node, loc(60));
@@ -371,6 +388,35 @@ describe("metadata capabilities", () => {
 });
 
 describe("hover", () => {
+  it("shortens an oversized chain rather than lose the hover's answer", () => {
+    document.body.innerHTML = '<p id="one">a</p>';
+    // Each quote doubles in JSON: well inside the schema, past the bridge's ceiling.
+    const file = '"'.repeat(1000);
+    let chain: Record<string, unknown> | undefined;
+    for (let depth = 0; depth < 64; depth += 1) {
+      chain = {
+        type: "component",
+        file,
+        line: depth + 1,
+        column: 0,
+        componentTag: "C" + depth,
+        parent: chain,
+      };
+    }
+    setMeta(document.getElementById("one")!, loc(3), chain);
+    const { events } = start();
+
+    document
+      .getElementById("one")!
+      .dispatchEvent(new MouseEvent("pointermove", { bubbles: true, composed: true }));
+    runFrames();
+
+    const hover = ofType(events, "hoverChanged").at(-1)?.observation;
+    expect(componentNames(hover)[0]).toBe("C63");
+    expect(hover?.componentChain.truncated).toBe(true);
+    expect(locOf(hover)).toEqual(loc(3));
+  });
+
   it("names the location and component without sweeping the document", () => {
     document.body.innerHTML = '<p id="one">a</p>';
     const card = {

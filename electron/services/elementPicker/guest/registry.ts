@@ -304,15 +304,21 @@ function createRegistry(channel: string): Registry {
       seen.add(element);
       point(element, request.id);
     }
-    const reply: LocatedReply = { id: request.id, data: found.data ?? null };
+    // An element the bootstrap was not shown makes whatever list it was part of incomplete.
+    const reply: LocatedReply = {
+      id: request.id,
+      data: found.data ?? null,
+      truncated: seen.size < new Set(found.elements).size,
+    };
+    const bare = (): string =>
+      JSON.stringify({ id: request.id, data: null, truncated: reply.truncated });
     let text: string;
     try {
       text = JSON.stringify(reply);
     } catch {
-      text = JSON.stringify({ id: request.id, data: null });
+      text = bare();
     }
-    if (text.length > MAX_LOCATED_REPLY_CHARS)
-      text = JSON.stringify({ id: request.id, data: null });
+    if (text.length > MAX_LOCATED_REPLY_CHARS) text = bare();
     document.dispatchEvent(new CustomEvent(locatedEvent, { detail: text }));
   };
 

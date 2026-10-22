@@ -196,15 +196,20 @@ describe("reselect", () => {
   });
 
   it("changes nothing and says so when no element carries that location", () => {
+    document.body.innerHTML = '<button id="one"></button><button id="two"></button>';
+    setMeta(document.getElementById("one")!, loc(6));
+    setMeta(document.getElementById("two")!, loc(7));
     const { picker, events } = start();
-    const target = document.createElement("button");
-    setMeta(target, loc(6));
-    document.body.appendChild(target);
+    click(document.getElementById("one")!);
+    const before = ofType(events, "selectionChanged").length;
 
     expect(picker.reselect({ framework: "svelte", locator: { loc: loc(99), index: 0 } })).toBe(
       false
     );
-    expect(ofType(events, "selectionChanged")).toHaveLength(0);
+    expect(ofType(events, "selectionChanged")).toHaveLength(before);
+    // Still the click's selection, so the next walk starts from it.
+    key({ key: "ArrowRight" });
+    expect(locOf(lastSelection(events)[0])).toEqual(loc(7));
   });
 
   it("does nothing in browse mode", () => {
@@ -253,6 +258,20 @@ describe("reselect", () => {
     two!.remove();
     runFrames();
     expect(lastSelectionEvent(events)).toMatchObject({ cause: "document", observations: [] });
+  });
+
+  it("counts a root whose own location does not read among the invocation's roots", () => {
+    document.body.innerHTML = '<main id="main"><h2 id="title">T</h2><p id="body">B</p></main>';
+    const card = { ...page, line: 6, column: 6, componentTag: "Card", parent: page };
+    setMeta(document.getElementById("main")!, loc(1), page);
+    setMeta(document.getElementById("title")!, loc(2, 0, "src/lib/Card.svelte"), card);
+    setMeta(document.getElementById("body")!, { file: "", line: 0, column: 0 }, card);
+    const { events } = start();
+    click(document.getElementById("title")!);
+
+    key({ key: "ArrowUp", altKey: true });
+
+    expect(lastSelection(events).map((observation) => observation.tagName)).toEqual(["h2", "p"]);
   });
 
   it("keeps a widened component through a reselect, for the invocation that was edited", () => {
@@ -424,6 +443,20 @@ describe("notices about the page's metadata", () => {
     const { events } = start("select");
 
     vi.advanceTimersByTime(AUDIT_DEV_SETTLE_MS * 2);
+    expect(ofType(events, "runtimeIssue")).toEqual([]);
+  });
+
+  it("remembers a stamp it saw even when hydration replaced its node before the verdict", async () => {
+    vi.useFakeTimers();
+    document.body.innerHTML = "<main><p>live</p></main>";
+    const paragraph = document.body.querySelector("p")!;
+    setMeta(paragraph, { file: "", line: "5", column: null });
+    const { events } = start("browse");
+
+    paragraph.remove();
+    await Promise.resolve();
+    vi.advanceTimersByTime(AUDIT_DEV_SETTLE_MS * 2);
+
     expect(ofType(events, "runtimeIssue")).toEqual([]);
   });
 

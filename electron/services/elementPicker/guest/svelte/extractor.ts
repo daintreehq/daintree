@@ -89,7 +89,7 @@ const unavailable = (reason: "not-exposed" | "unmapped"): Capability => ({
 function parseLoc(value: unknown): SvelteLoc | null {
   if (value === null || typeof value !== "object") return null;
   const { file, line, column } = value as Record<string, unknown>;
-  if (typeof file !== "string" || file.length === 0 || file.length > SVELTE_LIMITS.file) {
+  if (typeof file !== "string" || file.length === 0 || file.length > SVELTE_LIMITS.locFile) {
     return null;
   }
   if (typeof line !== "number" || !Number.isSafeInteger(line) || line < 1) return null;
@@ -149,10 +149,12 @@ function placeableOf(node: Element): SvelteStructure | undefined {
   return readLoc(node) === null && !isUnmapped(node, true) ? structureOf(node) : undefined;
 }
 
-/** Any stamp at all, readable or not, on the node or above it. */
+/** Any stamp at all, readable or not, on the node or within a bounded walk above it. */
 function hasStampAbove(node: Element): boolean {
-  for (let current: Element | null = node; current !== null; current = parentOf(current)) {
+  let current: Element | null = node;
+  for (let depth = 0; current !== null && depth < SVELTE_LIMITS.ancestors; depth += 1) {
     if (readMeta(current) !== null) return true;
+    current = parentOf(current);
   }
   return false;
 }
@@ -376,7 +378,7 @@ export function createSvelteExtractor(): ElementPickerExtractor {
             },
           ];
     if (phase === "hover") {
-      return {
+      return withinBudget({
         componentChain: chain,
         sourceCandidates,
         capabilities: capabilitiesOf(
@@ -384,7 +386,7 @@ export function createSvelteExtractor(): ElementPickerExtractor {
           { loc: loc !== null, structure: false, unmapped: false },
           chain
         ),
-      };
+      });
     }
     // The frames are the template's, which an unstamped element inherits.
     const ancestry = readAncestry(readMeta(target) ?? readMeta(nearestMapped(target) ?? target));
@@ -411,12 +413,18 @@ export function createSvelteExtractor(): ElementPickerExtractor {
     return componentFrames(anchor).find((frame) => componentIds.get(frame) === componentId) ?? null;
   }
 
-  /** The outermost connected elements an invocation rendered, from one it rendered. */
+  /**
+   * The outermost connected elements an invocation rendered, from one it
+   * rendered. Membership is the stamp's frame, not a readable location: a root
+   * whose `loc` is malformed was still rendered by the invocation.
+   */
   function componentRoots(frame: object, start: Element): { roots: Element[]; complete: boolean } {
     const belongs = (node: Element): boolean =>
-      readLoc(node) !== null && componentFrames(node).includes(frame);
+      readMeta(node) !== null && componentFrames(node).includes(frame);
     let root: Element = start;
-    for (let parent = parentOf(root); parent !== null && belongs(parent); parent = parentOf(root)) {
+    for (let depth = 0; depth < SVELTE_LIMITS.ancestors; depth += 1) {
+      const parent = parentOf(root);
+      if (parent === null || !belongs(parent)) break;
       root = parent;
     }
     const container = parentOf(root);

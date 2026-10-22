@@ -131,6 +131,8 @@ export interface LocateRequest {
 export interface LocatedReply {
   id: number;
   data: Record<string, unknown> | null;
+  /** Some of what the extractor found was not pointed at: past the ceiling, or not in the document. */
+  truncated: boolean;
 }
 
 /**

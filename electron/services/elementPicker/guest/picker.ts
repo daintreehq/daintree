@@ -254,7 +254,10 @@ export function createPicker(host: PickerHost): PickerHandle {
   let nextId = 0;
   let nextRequest = 0;
   let awaitingRequest = 0;
-  let replies: string[] = [];
+  /** The terminal event the pending request is answered by; any other is not its answer. */
+  let awaitingReply: "extracted" | "located" | null = null;
+  /** Each reply with how many points had arrived before it: later ones are not its elements. */
+  let replies: Array<{ text: string; points: number }> = [];
   /**
    * The elements the pending request's reply names, by the token it names
    * them with; null where two events claimed one token for different nodes.
@@ -262,6 +265,8 @@ export function createPicker(host: PickerHost): PickerHandle {
   let named = new Map<string, Element | null>();
   let namingEvents = 0;
   let pointed: Element[] = [];
+  /** A selection being described: page code that runs inside it cannot start another. */
+  let emitting = false;
   /** Notices already turned into issues in this document, by framework and code. */
   const noticed = new Set<string>();
   /** Frameworks this document already reported from a selection, so a walk is not re-sent on every click. */
@@ -296,6 +301,9 @@ export function createPicker(host: PickerHost): PickerHandle {
       nextId += 1;
       id = "el-" + nextId;
       ids.set(node, id);
+      hold(id, node);
+    } else if (!held.has(id)) {
+      // Reported again after its lookup was let go: the host may ask for it now.
       hold(id, node);
     }
     return id;
@@ -414,12 +422,18 @@ export function createPicker(host: PickerHost): PickerHandle {
     target: EventTarget,
     type: string,
     detail: string,
-    id: number
-  ): { replies: string[]; pointed: Element[]; named: Map<string, Element | null> } {
+    id: number,
+    reply: "extracted" | "located"
+  ): {
+    replies: Array<{ text: string; points: number }>;
+    pointed: Element[];
+    named: Map<string, Element | null>;
+  } {
     // Page code runs inside the dispatch and can set off another request; that
     // one goes unanswered rather than taking over this one's replies.
     if (awaitingRequest !== 0) return { replies: [], pointed: [], named: new Map() };
     awaitingRequest = id;
+    awaitingReply = reply;
     replies = [];
     pointed = [];
     named = new Map();
@@ -430,6 +444,7 @@ export function createPicker(host: PickerHost): PickerHandle {
       // A node that refuses the event has nothing more to say about itself.
     } finally {
       awaitingRequest = 0;
+      awaitingReply = null;
     }
     const received = { replies, pointed, named };
     replies = [];
@@ -456,19 +471,23 @@ export function createPicker(host: PickerHost): PickerHandle {
     nextRequest += 1;
     const id = nextRequest;
     const request: ExtractRequest = pick ? { id, phase, pick: true } : { id, phase };
-    const received = exchange(node, extractEvent, JSON.stringify(request), id);
-    for (const text of received.replies) {
-      const parsed = parseReply(text, id);
+    const received = exchange(node, extractEvent, JSON.stringify(request), id, "extracted");
+    for (const reply of received.replies) {
+      const parsed = parseReply(reply.text, id);
       if (parsed === null || !Array.isArray(parsed.contributions)) continue;
       for (const entry of parsed.contributions.slice(0, FRAMEWORKS.size)) {
         if (!isPlainObject(entry) || typeof entry.framework !== "string") continue;
         if (!FRAMEWORKS.has(entry.framework) || !isPlainObject(entry.data)) continue;
         adoptRoots(entry.data.componentChain, received.named);
-        const target = received.pointed[0];
+        const target = pick
+          ? received.pointed
+              .slice(0, reply.points)
+              .find((candidate) => usable(candidate) && candidate !== node)
+          : undefined;
         return {
           framework: entry.framework,
           data: entry.data as ExtractorContribution,
-          pointed: pick && usable(target) && target !== node ? target : null,
+          pointed: target ?? null,
         };
       }
       return null;
@@ -484,7 +503,7 @@ export function createPicker(host: PickerHost): PickerHandle {
     framework: string,
     query: unknown,
     anchor: Element | null
-  ): { elements: Element[]; data: Record<string, unknown> } | null {
+  ): { elements: Element[]; data: Record<string, unknown>; truncated: boolean } | null {
     nextRequest += 1;
     const id = nextRequest;
     const request: LocateRequest = { id, framework, query };
@@ -495,15 +514,22 @@ export function createPicker(host: PickerHost): PickerHandle {
       return null;
     }
     if (detail.length > MAX_LOCATE_REQUEST_CHARS) return null;
-    const received = exchange(anchor ?? document, locateEvent, detail, id);
-    for (const text of received.replies) {
-      const parsed = parseReply(text, id);
+    const received = exchange(anchor ?? document, locateEvent, detail, id, "located");
+    for (const reply of received.replies) {
+      const parsed = parseReply(reply.text, id);
       if (parsed === null) continue;
       const elements: Element[] = [];
-      for (const node of received.pointed) {
-        if (usable(node) && !elements.includes(node)) elements.push(node);
+      let omitted = parsed.truncated === true;
+      for (const node of received.pointed.slice(0, reply.points)) {
+        if (elements.includes(node)) continue;
+        if (usable(node)) elements.push(node);
+        else omitted = true;
       }
-      return { elements, data: isPlainObject(parsed.data) ? parsed.data : {} };
+      return {
+        elements,
+        data: isPlainObject(parsed.data) ? parsed.data : {},
+        truncated: omitted,
+      };
     }
     return null;
   }
@@ -587,8 +613,9 @@ export function createPicker(host: PickerHost): PickerHandle {
       observations: event.observations.map((observation) => ({
         ...observation,
         componentChain: shortenChain(observation.componentChain, scoped),
+        // Page data in the declared shape, unchecked below the entry.
         frameworkEvidence: observation.frameworkEvidence.map((entry) =>
-          entry.kind === "svelte"
+          entry.kind === "svelte" && Array.isArray(entry.ancestry)
             ? { ...entry, ancestry: entry.ancestry.slice(0, SHORTENED_ANCESTRY) }
             : entry
         ),
@@ -626,46 +653,68 @@ export function createPicker(host: PickerHost): PickerHandle {
 
   /**
    * Describe and send the selection. A pick is asked again, so the element it
-   * stands for is the one its framework names now. False when it would not fit
-   * one envelope, with nothing sent.
+   * stands for is the one its framework names now — adopted only once the
+   * description is sent. `capacity` when it would not fit one envelope and
+   * `failed` when it could not be described at all, with nothing sent.
    */
   function emitSelection(cause: "user" | "document" | "reselect"): {
     sent: boolean;
+    failure?: "capacity" | "failed";
+    detections: FrameworkDetection[];
+  } {
+    if (emitting) return { sent: false, failure: "failed", detections: [] };
+    emitting = true;
+    try {
+      return describeSelection(cause);
+    } catch {
+      return { sent: false, failure: "failed", detections: [] };
+    } finally {
+      emitting = false;
+    }
+  }
+
+  function describeSelection(cause: "user" | "document" | "reselect"): {
+    sent: boolean;
+    failure?: "capacity" | "failed";
     detections: FrameworkDetection[];
   } {
     const observations: SelectionObservation[] = [];
+    const targets: Element[] = [];
+    const chains: Array<{ framework: string; chain: ComponentChain } | null> = [];
     let detections: FrameworkDetection[] = [];
-    let chain: { framework: string; chain: ComponentChain } | null = null;
     for (const entry of selection) {
       const extracted = entry.picked
         ? extract(entry.hit, "selection", true)
         : extract(entry.target, "selection");
-      if (entry.picked) entry.target = extracted?.pointed ?? entry.hit;
-      const entryDetections = ancestryDetections(entry.target);
-      const fields = fieldsFor(entry.target, entryDetections, extracted?.data ?? null);
-      if (observations.length === 0) {
-        detections = entryDetections;
-        chain =
-          extracted === null
-            ? null
-            : { framework: extracted.framework, chain: fields.componentChain };
-      }
+      const target = entry.picked ? (extracted?.pointed ?? entry.hit) : entry.target;
+      targets.push(target);
+      const entryDetections = ancestryDetections(target);
+      const fields = fieldsFor(target, entryDetections, extracted?.data ?? null);
+      if (observations.length === 0) detections = entryDetections;
       // A pick that lands where another entry already is says nothing new.
       if (observations.some((observation) => observation.elementId === fields.elementId)) continue;
       observations.push({ phase: "selection", ...fields });
+      chains.push(
+        extracted === null ? null : { framework: extracted.framework, chain: fields.componentChain }
+      );
     }
+    // Widening steps out from the chain the selection is scoped in, or the
+    // primary element's when it is one element.
+    let chain = chains[0] ?? null;
     let reportedScope: SelectionScope = { kind: "element" };
-    if (scope.kind === "component") {
-      const componentId = scope.componentId;
+    const scoped = scope;
+    if (scoped.kind === "component") {
+      const componentId = scoped.componentId;
       const rootIds = observations.map((observation) => observation.elementId);
-      for (const observation of observations) {
+      observations.forEach((observation, index) => {
         for (const record of observation.componentChain.components) {
           if (record.componentId !== componentId) continue;
           record.rootElementIds = rootIds.slice(0, MAX_POINTED_ELEMENTS);
-          record.rootsComplete = scope.rootsComplete && rootIds.length <= MAX_POINTED_ELEMENTS;
+          record.rootsComplete = scoped.rootsComplete && rootIds.length <= MAX_POINTED_ELEMENTS;
+          if (reportedScope.kind === "element") chain = chains[index] ?? null;
           reportedScope = { kind: "component", componentId };
         }
-      }
+      });
     }
     const event = fitSelection({
       type: "selectionChanged",
@@ -673,7 +722,16 @@ export function createPicker(host: PickerHost): PickerHandle {
       cause,
       scope: reportedScope,
     });
-    if (event === null) return { sent: false, detections };
+    if (event === null) return { sent: false, failure: "capacity", detections };
+    // The picker went away while page code ran inside one of the exchanges.
+    if (disposed) return { sent: false, failure: "failed", detections };
+    selection.forEach((entry, index) => {
+      const target = targets[index];
+      if (target !== undefined) entry.target = target;
+    });
+    // A component no observation names any more is not a selection the host
+    // was told about: what it was told is element scope.
+    if (reportedScope.kind === "element") scope = ELEMENT_SCOPE;
     selectedChain = chain;
     host.post(event);
     return { sent: true, detections };
@@ -701,6 +759,7 @@ export function createPicker(host: PickerHost): PickerHandle {
     next: ScopeState,
     cause: "user" | "reselect"
   ): boolean {
+    if (emitting || disposed) return false;
     const previous = { selection, scope, selectedChain };
     selection = entries;
     scope = next;
@@ -709,11 +768,13 @@ export function createPicker(host: PickerHost): PickerHandle {
       selection = previous.selection;
       scope = previous.scope;
       selectedChain = previous.selectedChain;
-      host.post({
-        type: "runtimeIssue",
-        code: "capacity",
-        detail: "selection left unchanged: the observation did not fit one envelope",
-      });
+      if (result.failure === "capacity") {
+        host.post({
+          type: "runtimeIssue",
+          code: "capacity",
+          detail: "selection left unchanged: the observation did not fit one envelope",
+        });
+      }
       return false;
     }
     if (cause === "user") reportDetections(result.detections);
@@ -730,6 +791,7 @@ export function createPicker(host: PickerHost): PickerHandle {
    * What is left is described as it is; nothing is kept alive for the rest.
    */
   function dropDetached(): void {
+    if (emitting) return;
     const live = selection.filter((entry) => entry.target.isConnected && entry.hit.isConnected);
     if (live.length === selection.length) return;
     selection = live;
@@ -764,7 +826,7 @@ export function createPicker(host: PickerHost): PickerHandle {
           kind: "component",
           componentId: record.componentId,
           framework,
-          rootsComplete: found.data.complete === true,
+          rootsComplete: found.data.complete === true && !found.truncated,
         },
         "user"
       );
@@ -1202,7 +1264,9 @@ export function createPicker(host: PickerHost): PickerHandle {
 
   function refresh(): void {
     if (disposed || selection.length === 0) return;
-    emitSelection("reselect");
+    // A pick asked again may stand for another element now, which is outlined
+    // only once the host has been told.
+    if (emitSelection("reselect").sent) schedule();
   }
 
   function heldElement(id: unknown): Element | null {
@@ -1244,7 +1308,7 @@ export function createPicker(host: PickerHost): PickerHandle {
           kind: "component",
           componentId,
           framework,
-          rootsComplete: roots.data.complete === true,
+          rootsComplete: roots.data.complete === true && !roots.truncated,
         };
       }
     }
@@ -1370,10 +1434,10 @@ export function createPicker(host: PickerHost): PickerHandle {
       document,
       extractedEvent,
       (event) => {
-        if (awaitingRequest === 0 || replies.length >= MAX_REPLIES) return;
+        if (awaitingReply !== "extracted" || replies.length >= MAX_REPLIES) return;
         const detail = (event as CustomEvent).detail;
         if (typeof detail === "string" && detail.length <= MAX_BRIDGE_MESSAGE_CHARS) {
-          replies.push(detail);
+          replies.push({ text: detail, points: pointed.length });
         }
       },
       {},
@@ -1383,10 +1447,10 @@ export function createPicker(host: PickerHost): PickerHandle {
       document,
       locatedEvent,
       (event) => {
-        if (awaitingRequest === 0 || replies.length >= MAX_REPLIES) return;
+        if (awaitingReply !== "located" || replies.length >= MAX_REPLIES) return;
         const detail = (event as CustomEvent).detail;
         if (typeof detail === "string" && detail.length <= MAX_LOCATED_REPLY_CHARS) {
-          replies.push(detail);
+          replies.push({ text: detail, points: pointed.length });
         }
       },
       {},
