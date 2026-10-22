@@ -116,7 +116,12 @@ vi.mock("@/clients/systemClient", () => ({
 }));
 
 vi.mock("@/clients/forgeClient", () => ({
-  forgeClient: { classifyPushError: classifyPushErrorMock, getChecks: getChecksMock },
+  forgeClient: {
+    classifyPushError: classifyPushErrorMock,
+    getChecks: getChecksMock,
+    getPR: () => Promise.resolve(null),
+    getRepoMetadata: () => Promise.resolve(null),
+  },
 }));
 
 vi.mock("@/services/ActionService", () => ({

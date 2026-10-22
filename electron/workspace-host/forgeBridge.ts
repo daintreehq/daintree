@@ -7,6 +7,7 @@ import type {
 } from "../../shared/types/workspace-host.js";
 import type {
   CIStatus,
+  FetchOptions,
   Issue,
   PR,
   PRListProbeResult,
@@ -92,12 +93,14 @@ export class ForgeBridge {
   findPRsByNumbers(
     namespacedId: string,
     repo: RepoRef,
-    prNumbers: number[]
+    prNumbers: number[],
+    options?: FetchOptions
   ): Promise<Map<number, PR | null> | null> {
-    return this.invoke<Map<number, PR | null> | null>("findPRsByNumbers", namespacedId, [
-      repo,
-      prNumbers,
-    ]);
+    return this.invoke<Map<number, PR | null> | null>(
+      "findPRsByNumbers",
+      namespacedId,
+      options ? [repo, prNumbers, options] : [repo, prNumbers]
+    );
   }
 
   getPR(namespacedId: string, repo: RepoRef, prNumber: number): Promise<PR | null> {

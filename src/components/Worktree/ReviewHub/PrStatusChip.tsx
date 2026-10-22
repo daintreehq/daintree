@@ -1,6 +1,12 @@
-import { ChevronDown, ExternalLink, GitPullRequest } from "lucide-react";
+import { AlertTriangle, ChevronDown, ExternalLink, GitPullRequest } from "lucide-react";
+import { GitMerge } from "@/components/icons";
 import { getPrStateColor, getPrStateGlyph } from "@/lib/prStateGlyph";
-import type { CIStatus, NormalizedPRState } from "@shared/types/forge";
+import type { CIStatus, NormalizedPRState, PRMergeIntent } from "@shared/types/forge";
+import {
+  describeMergeIntent,
+  HEAD_MOVED_WHILE_ARMED_TEXT,
+  mergeIntentLabel,
+} from "@shared/utils/prMergeIntent";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -12,6 +18,8 @@ interface WorktreePR {
   prUrl: string;
   prState: NormalizedPRState;
   prCiStatus?: CIStatus;
+  mergeIntent?: PRMergeIntent | null;
+  headMovedWhileArmed?: boolean;
 }
 
 interface PrStatusChipProps {
@@ -40,9 +48,15 @@ export function PrStatusChip({
     // The badge is no longer the accessible element — the disclosure button
     // wrapping it is — so the name lives on the trigger. Two elements carrying
     // it would make "CI failing" match twice and name neither one usefully.
+    // Only an open PR can still merge; a stale intent on a merged one is noise.
+    const mergeIntent = worktreePR.prState === "open" ? (worktreePR.mergeIntent ?? null) : null;
+    const headMoved = mergeIntent !== null && worktreePR.headMovedWhileArmed === true;
+    const mergeIntentText = mergeIntent
+      ? ` — ${describeMergeIntent(mergeIntent)}${headMoved ? `. ${HEAD_MOVED_WHILE_ARMED_TEXT}` : ""}`
+      : "";
     const triggerLabel = ciVisual
-      ? `Pull request #${worktreePR.prNumber} ${prStateLabel} — CI ${ciVisual.shortLabel}. Show CI checks`
-      : `Pull request #${worktreePR.prNumber} ${prStateLabel}. Show CI checks`;
+      ? `Pull request #${worktreePR.prNumber} ${prStateLabel} — CI ${ciVisual.shortLabel}${mergeIntentText}. Show CI checks`
+      : `Pull request #${worktreePR.prNumber} ${prStateLabel}${mergeIntentText}. Show CI checks`;
     return (
       <>
         {/* Available whatever the roll-up says, including when it says nothing:
@@ -98,6 +112,22 @@ export function PrStatusChip({
                     )}
                   </span>
                   <span className="text-text-secondary">{ciVisual.shortLabel}</span>
+                </span>
+              </>
+            )}
+            {mergeIntent && (
+              <>
+                <span className="text-text-muted">·</span>
+                <span className="inline-flex items-center gap-1" data-testid="pr-merge-intent">
+                  {headMoved ? (
+                    <AlertTriangle
+                      className="w-3 h-3 shrink-0 text-status-warning"
+                      aria-hidden="true"
+                    />
+                  ) : (
+                    <GitMerge className="w-3 h-3 shrink-0 text-text-secondary" aria-hidden="true" />
+                  )}
+                  <span className="text-text-secondary">{mergeIntentLabel(mergeIntent)}</span>
                 </span>
               </>
             )}

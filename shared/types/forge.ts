@@ -109,6 +109,48 @@ export interface RateLimitInfo {
  */
 export type PRMergeState = "conflicts";
 
+/** Merge strategy shared across forges. */
+export type PRMergeMethod = "merge" | "squash" | "rebase";
+
+/**
+ * Where the forge says a PR stands on merging right now, in GitHub's
+ * `mergeStateStatus` vocabulary. `clean`, `unstable` and `has_hooks` can merge
+ * immediately; `blocked` and `behind` are waiting on requirements; `unknown`
+ * means the forge hasn't computed it yet and must never read as mergeable.
+ */
+export type PRMergeStatus =
+  "clean" | "unstable" | "has_hooks" | "blocked" | "behind" | "dirty" | "unknown";
+
+/**
+ * A merge the forge itself has been asked to carry out later, whoever asked.
+ * `auto-merge`: armed to merge once requirements pass (`method` is `null` when
+ * a merge queue decides it). `queued`: already in the base branch's merge
+ * queue. The host only reports this — the forge decides if and when it lands.
+ */
+export type PRMergeIntent =
+  | {
+      kind: "auto-merge";
+      method: PRMergeMethod | null;
+      /** Epoch milliseconds, or `null` when the forge reported no time. */
+      enabledAt: number | null;
+      /** Login of whoever armed it, when the forge reports one. */
+      enabledBy?: string;
+    }
+  | {
+      kind: "queued";
+      /** 1-based queue position, or `null` when unreported. */
+      position: number | null;
+    };
+
+/** One commit a pull request would merge, for previews. */
+export interface PRCommitSummary {
+  sha: string;
+  /** First line of the commit message. */
+  subject: string;
+  /** Commit author as the forge names them, when reported. */
+  author?: string;
+}
+
 /**
  * Boolean-ish CI roll-up. The host renders a summary; it does not graph checks.
  * Callers needing the individual checks behind this verdict read
@@ -228,11 +270,23 @@ export interface RepoMetadata {
   description?: string | null;
   license?: string | null;
   topics?: string[];
+  /** How pull requests may merge here, when the provider reports it. */
+  mergeSettings?: RepoMergeSettings;
   /** Opaque freshness token the host round-trips; see {@link FetchOptions}. */
   freshnessToken?: string;
   /** `true` when unchanged since `ifNotChangedSince`; see {@link FetchOptions}. */
   notModified?: boolean;
   rawData: unknown;
+}
+
+/** Repository merge settings, as the forge reports them. */
+export interface RepoMergeSettings {
+  /** Methods the repository allows, in the forge's own order. */
+  allowedMethods: PRMergeMethod[];
+  /** The method the forge would preselect for the viewer, when reported. */
+  viewerDefaultMethod?: PRMergeMethod;
+  /** Whether the repository lets anyone arm auto-merge at all. */
+  autoMergeAllowed: boolean;
 }
 
 /**
@@ -289,6 +343,11 @@ export interface ListOptions {
 export interface FetchOptions {
   /** Opaque freshness token from a prior response; advisory (see above). */
   ifNotChangedSince?: string;
+  /**
+   * Read past any provider-side response cache. Set when the caller is about to
+   * act on the answer — a confirm previewing what a write will touch.
+   */
+  fresh?: boolean;
 }
 
 /**
@@ -428,6 +487,63 @@ export interface MergePRInput {
   mergeMethod?: "merge" | "squash" | "rebase";
   commitTitle?: string;
   commitMessage?: string;
+  /**
+   * Head commit the caller reviewed. When set, the forge refuses the merge if
+   * the PR's head has moved since, rather than merging commits nobody saw.
+   */
+  expectedHeadSha?: string;
+  /**
+   * Base branch the caller previewed. When set, the provider re-reads the PR
+   * and refuses the merge if it has been retargeted since.
+   */
+  expectedBaseRef?: string;
+}
+
+/** Input for {@link AutoMergeCapability.enable}. */
+export interface EnableAutoMergeInput {
+  /** Ignored by forges whose merge queue picks the method. */
+  mergeMethod?: PRMergeMethod;
+  /**
+   * Head commit the caller reviewed. Required: the forge must refuse to arm a
+   * head that moved between review and click.
+   */
+  expectedHeadSha: string;
+  /** Base branch the caller previewed; the provider refuses if the PR was retargeted. */
+  expectedBaseRef?: string;
+}
+
+/**
+ * Outcome of {@link AutoMergeCapability.enable}. `already-mergeable`: the forge
+ * declined to arm because the PR can merge now — the caller must ask the user
+ * again before any immediate merge, never fall through to one. Every other
+ * failure rejects.
+ */
+export type EnableAutoMergeResult =
+  | { prNumber: number; outcome: "armed"; mergeIntent: PRMergeIntent | null }
+  | { prNumber: number; outcome: "already-mergeable"; message: string };
+
+/**
+ * Outcome of {@link AutoMergeCapability.disable}: `disarmed` cancelled an armed
+ * auto-merge, `dequeued` removed the PR from a merge queue, `not-pending` found
+ * nothing to cancel by the time the request ran.
+ */
+export interface DisableAutoMergeResult {
+  prNumber: number;
+  outcome: "disarmed" | "dequeued" | "not-pending";
+}
+
+/**
+ * Optional capability: ask the forge to merge a PR once its requirements pass
+ * ("merge when ready"), or cancel that request. The forge decides if and when
+ * the merge happens; the host never polls and merges on its behalf.
+ */
+export interface AutoMergeCapability {
+  enable(
+    repo: RepoRef,
+    prNumber: number,
+    input: EnableAutoMergeInput
+  ): Promise<EnableAutoMergeResult>;
+  disable(repo: RepoRef, prNumber: number): Promise<DisableAutoMergeResult>;
 }
 
 /**
@@ -505,6 +621,27 @@ export interface PR {
    * the forge hasn't computed yet — never that the branch merges cleanly.
    */
   mergeState?: PRMergeState;
+  /**
+   * The forge's current merge-readiness verdict, when the read carried it. See
+   * {@link PRMergeStatus}; absent means unreported, not mergeable.
+   */
+  mergeStatus?: PRMergeStatus;
+  /**
+   * A merge the forge has been asked to carry out later. `null`: the forge
+   * reported nothing pending. Absent: the read didn't carry it.
+   */
+  mergeIntent?: PRMergeIntent | null;
+  /** Head commit the forge reports for the PR, when the read carried it. */
+  headSha?: string;
+  /** Whether the base branch merges through a merge queue, when reported. */
+  mergeQueueRequired?: boolean;
+  /** Whether the viewer may cancel a pending auto-merge, when reported. */
+  viewerCanDisableAutoMerge?: boolean;
+  /**
+   * The commits this PR would merge, newest last — single-PR reads only.
+   * `items` can hold fewer than `totalCount` when the forge capped the read.
+   */
+  commits?: { totalCount: number; items: PRCommitSummary[] };
   /** Epoch milliseconds. */
   createdAt: number;
   /** Epoch milliseconds. */
@@ -815,7 +952,11 @@ export type PRListProbeResult =
  */
 export interface BatchLookupCapability {
   getCIStatuses?(repo: RepoRef, prNumbers: number[]): Promise<Map<number, CIStatus | null>>;
-  findPRsByNumbers?(repo: RepoRef, prNumbers: number[]): Promise<Map<number, PR | null>>;
+  findPRsByNumbers?(
+    repo: RepoRef,
+    prNumbers: number[],
+    options?: FetchOptions
+  ): Promise<Map<number, PR | null>>;
   findIssuesByNumbers?(repo: RepoRef, issueNumbers: number[]): Promise<Map<number, Issue | null>>;
   /**
    * Optional cheap conditional probe of the repo's open-PR list. Given the
@@ -1519,6 +1660,7 @@ export interface ForgeCodeProviderImpl extends ForgeProviderBaseImpl {
   reviews?: ReviewCapability;
   checks?: ChecksCapability;
   approvals?: ApprovalCapability;
+  autoMerge?: AutoMergeCapability;
   releases?: ReleaseCapability;
   tooltips?: Pick<TooltipCapability, "getPRTooltip">;
   projectHealth?: ProjectHealthCapability;

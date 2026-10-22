@@ -623,7 +623,30 @@ describe("registerForgeDataHandlers", () => {
     const result = await findHandler("forge:get-repo-metadata")(null, { cwd: "/repo" });
 
     expect(fakeImpl.getRepoMetadata).toHaveBeenCalledWith(repoRef);
-    expect(result).toEqual(meta);
+    expect(result).toEqual({ ...meta, autoMergeSupported: false });
+  });
+
+  it("getRepoMetadata reports autoMerge support from the implementation, not a hint (#13747)", async () => {
+    fakeImpl.getRepoMetadata.mockResolvedValue({
+      defaultBranch: "main",
+      isPrivate: false,
+      isFork: false,
+      isArchived: false,
+      rawData: null,
+    });
+    resolveForCwdMock.mockResolvedValue({
+      namespaceId: "fake.provider",
+      repoRef,
+      impl: {
+        ...fakeImpl,
+        autoMerge: { enable: vi.fn(), disable: vi.fn() },
+      } as unknown as ForgeProviderImpl,
+    });
+    registerForgeDataHandlers();
+
+    const result = await findHandler("forge:get-repo-metadata")(null, { cwd: "/repo" });
+
+    expect(result).toMatchObject({ autoMergeSupported: true });
   });
 
   it("getRepoStats short-circuits to a zero snapshot when the project directory is gone (#10663)", async () => {

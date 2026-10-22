@@ -86,6 +86,8 @@ export function summarizeForgeArgs(
     case "closePR":
     case "reopenPR":
     case "mergePR":
+    case "enableAutoMerge":
+    case "disableAutoMerge":
     case "convertPRToDraft":
     case "markPRReadyForReview":
     case "commentOnPR":

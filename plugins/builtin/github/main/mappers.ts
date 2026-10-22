@@ -11,7 +11,11 @@ import type {
   NormalizedReviewDecision,
   NormalizedReviewState,
   PR,
+  PRCommitSummary,
+  PRMergeIntent,
+  PRMergeMethod,
   PRMergeState,
+  PRMergeStatus,
   PullRequestReview,
 } from "../../../../shared/types/forge.js";
 import type {
@@ -393,6 +397,11 @@ export function toForgePR(node: Record<string, unknown>): PR {
   const comments = node.comments as { totalCount?: unknown } | undefined;
   const commentCount = typeof comments?.totalCount === "number" ? comments.totalCount : undefined;
   const mergeState = mapMergeStateStatus(node.mergeStateStatus);
+  const mergeStatus = mapMergeStatus(node.mergeStateStatus);
+  const mergeIntent = mapMergeIntent(node);
+  const headSha =
+    typeof node.headRefOid === "string" && node.headRefOid ? node.headRefOid : undefined;
+  const commitPreview = mapCommitPreview(node.commits);
   return {
     number: node.number as number,
     title: (node.title as string) ?? "",
@@ -410,6 +419,16 @@ export function toForgePR(node: Record<string, unknown>): PR {
     ...(commentCount !== undefined ? { commentCount } : {}),
     ...(ciStatus ? { ciStatus } : {}),
     ...(mergeState ? { mergeState } : {}),
+    ...(mergeStatus ? { mergeStatus } : {}),
+    ...(mergeIntent !== undefined ? { mergeIntent } : {}),
+    ...(headSha ? { headSha } : {}),
+    ...(typeof node.isMergeQueueEnabled === "boolean"
+      ? { mergeQueueRequired: node.isMergeQueueEnabled }
+      : {}),
+    ...(typeof node.viewerCanDisableAutoMerge === "boolean"
+      ? { viewerCanDisableAutoMerge: node.viewerCanDisableAutoMerge }
+      : {}),
+    ...(commitPreview ? { commits: commitPreview } : {}),
     createdAt: isoToMs(node.createdAt ?? node.updatedAt),
     updatedAt: isoToMs(node.updatedAt),
     closedAt: isoToMsOrNull(node.closedAt),
@@ -438,6 +457,91 @@ function mapListCIStatus(raw: GitHubPRCIStatus | undefined): CIStatusState | und
  */
 export function mapMergeStateStatus(raw: unknown): PRMergeState | undefined {
   return typeof raw === "string" && raw.toUpperCase() === "DIRTY" ? "conflicts" : undefined;
+}
+
+const MERGE_STATUSES: ReadonlySet<string> = new Set<PRMergeStatus>([
+  "clean",
+  "unstable",
+  "has_hooks",
+  "blocked",
+  "behind",
+  "dirty",
+  "unknown",
+]);
+
+/**
+ * GitHub `mergeStateStatus` → {@link PRMergeStatus}. The deprecated `DRAFT`
+ * value and anything unrecognised read as `unknown`, never as mergeable.
+ */
+export function mapMergeStatus(raw: unknown): PRMergeStatus | undefined {
+  if (typeof raw !== "string") return undefined;
+  const lowered = raw.toLowerCase();
+  return MERGE_STATUSES.has(lowered) ? (lowered as PRMergeStatus) : "unknown";
+}
+
+/** GitHub `PullRequestMergeMethod` → {@link PRMergeMethod}. */
+export function mapMergeMethod(raw: unknown): PRMergeMethod | null {
+  if (raw === "MERGE") return "merge";
+  if (raw === "SQUASH") return "squash";
+  if (raw === "REBASE") return "rebase";
+  return null;
+}
+
+/**
+ * GitHub's pending-merge fields → {@link PRMergeIntent}. A queued PR reads as
+ * `queued` whether or not auto-merge put it there. `undefined` when the read
+ * selected none of the fields, so a query without them can't clear a state
+ * another query reported.
+ */
+export function mapMergeIntent(node: Record<string, unknown>): PRMergeIntent | null | undefined {
+  const hasQueueField = typeof node.isInMergeQueue === "boolean";
+  const hasAutoMergeField = "autoMergeRequest" in node;
+  if (!hasQueueField && !hasAutoMergeField) return undefined;
+  if (node.isInMergeQueue === true) {
+    const entry = node.mergeQueueEntry;
+    const position = isRecord(entry) && typeof entry.position === "number" ? entry.position : null;
+    return { kind: "queued", position };
+  }
+  const request = node.autoMergeRequest;
+  if (!isRecord(request)) return null;
+  const enabledBy =
+    isRecord(request.enabledBy) && typeof request.enabledBy.login === "string"
+      ? request.enabledBy.login
+      : undefined;
+  return {
+    kind: "auto-merge",
+    method: mapMergeMethod(request.mergeMethod),
+    enabledAt: isoToMsOrNull(request.enabledAt),
+    ...(enabledBy ? { enabledBy } : {}),
+  };
+}
+
+/**
+ * The single-PR read's `commits(last: N) { totalCount nodes { commit { oid
+ * messageHeadline } } }` selection → a commit preview. List queries select
+ * `commits` only for the CI roll-up and carry no `totalCount`, so they map to
+ * `undefined` rather than an empty preview.
+ */
+function mapCommitPreview(
+  raw: unknown
+): { totalCount: number; items: PRCommitSummary[] } | undefined {
+  if (!isRecord(raw) || typeof raw.totalCount !== "number") return undefined;
+  const items: PRCommitSummary[] = [];
+  for (const entry of Array.isArray(raw.nodes) ? raw.nodes : []) {
+    const commit = isRecord(entry) ? entry.commit : undefined;
+    if (!isRecord(commit) || typeof commit.oid !== "string") continue;
+    const author = isRecord(commit.author) ? commit.author : undefined;
+    const authorName =
+      (isRecord(author?.user) && typeof author.user.login === "string" && author.user.login) ||
+      (typeof author?.name === "string" && author.name) ||
+      undefined;
+    items.push({
+      sha: commit.oid,
+      subject: typeof commit.messageHeadline === "string" ? commit.messageHeadline : "",
+      ...(authorName ? { author: authorName } : {}),
+    });
+  }
+  return { totalCount: raw.totalCount, items };
 }
 
 function gitHubUserToForgeUser(user: GitHubUser): ForgeUser {

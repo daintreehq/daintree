@@ -8,6 +8,7 @@ import type {
 } from "../../shared/types/workspace-host.js";
 import type {
   CIStatus,
+  FetchOptions,
   ForgeProviderImpl,
   Issue,
   PR,
@@ -395,9 +396,11 @@ async function invokeFindPRsByNumbers(
   impl: ForgeProviderImpl,
   args: unknown[]
 ): Promise<Map<number, PR | null> | null> {
-  const [repo, prNumbers] = args as [RepoRef, number[]];
+  const [repo, prNumbers, options] = args as [RepoRef, number[], FetchOptions | undefined];
   if (!impl.batchLookups?.findPRsByNumbers) return null;
-  return impl.batchLookups.findPRsByNumbers(repo, prNumbers);
+  return options
+    ? impl.batchLookups.findPRsByNumbers(repo, prNumbers, options)
+    : impl.batchLookups.findPRsByNumbers(repo, prNumbers);
 }
 
 function invokeGetPR(impl: ForgeProviderImpl, args: unknown[]): Promise<PR | null> {

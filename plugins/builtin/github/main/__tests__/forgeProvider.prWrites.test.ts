@@ -384,6 +384,221 @@ describe("mergePR", () => {
   });
 });
 
+describe("mergePR head pin and merge queues (#13747)", () => {
+  const HEAD = "a".repeat(40);
+
+  it("sends the reviewed head as REST sha so a moved head is refused", async () => {
+    const fetchMock = mockFetch({ ok: true, status: 200, body: { sha: "m", merged: true } });
+    await githubForgeProvider.mergePR(repo, 42, { mergeMethod: "squash", expectedHeadSha: HEAD });
+    expect(JSON.parse((fetchMock.mock.calls[0]?.[1] as RequestInit).body as string)).toEqual({
+      merge_method: "squash",
+      sha: HEAD,
+    });
+  });
+
+  it("re-reads the base before merging and refuses a retargeted PR", async () => {
+    const fetchMock = mockFetch({ ok: true, status: 200, body: { sha: "m", merged: true } });
+    mockGraphQLClient.mockResolvedValueOnce({
+      repository: { pullRequest: { id: "PR_42", baseRefName: "main" } },
+    });
+    await expect(
+      githubForgeProvider.mergePR(repo, 42, { expectedHeadSha: HEAD, expectedBaseRef: "develop" })
+    ).rejects.toThrow(/no longer targets develop/);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("merges when the previewed base still holds", async () => {
+    const fetchMock = mockFetch({ ok: true, status: 200, body: { sha: "m", merged: true } });
+    mockGraphQLClient.mockResolvedValueOnce({
+      repository: { pullRequest: { id: "PR_42", baseRefName: "develop" } },
+    });
+    await githubForgeProvider.mergePR(repo, 42, {
+      expectedHeadSha: HEAD,
+      expectedBaseRef: "develop",
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("names the merge queue when a 405 comes from a queue-required branch", async () => {
+    mockFetch({ ok: false, status: 405, text: "Not allowed" });
+    mockGraphQLClient.mockResolvedValueOnce({
+      repository: { pullRequest: { id: "PR_42", isMergeQueueEnabled: true } },
+    });
+    await expect(githubForgeProvider.mergePR(repo, 42)).rejects.toThrow(/merge queue/i);
+  });
+
+  it("keeps the generic 405 message when the branch has no queue", async () => {
+    mockFetch({ ok: false, status: 405, text: "Not allowed" });
+    mockGraphQLClient.mockResolvedValueOnce({
+      repository: { pullRequest: { id: "PR_42", isMergeQueueEnabled: false } },
+    });
+    await expect(githubForgeProvider.mergePR(repo, 42)).rejects.toThrow(/not mergeable/i);
+  });
+});
+
+describe("autoMerge capability (#13747)", () => {
+  const HEAD = "b".repeat(40);
+  const autoMerge = githubForgeProvider.autoMerge!;
+
+  function mergeState(overrides: Record<string, unknown> = {}) {
+    return {
+      repository: {
+        pullRequest: {
+          id: "PR_42",
+          headRefOid: HEAD,
+          baseRefName: "develop",
+          mergeStateStatus: "BLOCKED",
+          isInMergeQueue: false,
+          isMergeQueueEnabled: false,
+          autoMergeRequest: null,
+          ...overrides,
+        },
+      },
+    };
+  }
+
+  it("arms against the reviewed head with the chosen method", async () => {
+    const fetchMock = mockFetch({ ok: true, status: 200 });
+    mockGraphQLClient.mockResolvedValueOnce(mergeState()).mockResolvedValueOnce({
+      enablePullRequestAutoMerge: {
+        pullRequest: {
+          id: "PR_42",
+          isInMergeQueue: false,
+          autoMergeRequest: {
+            enabledAt: "2026-10-22T00:00:00Z",
+            mergeMethod: "SQUASH",
+            enabledBy: { login: "octocat" },
+          },
+        },
+      },
+    });
+
+    const result = await autoMerge.enable(repo, 42, {
+      mergeMethod: "squash",
+      expectedHeadSha: HEAD,
+    });
+
+    const vars = mockGraphQLClient.mock.calls[1]?.[1] as Record<string, unknown>;
+    expect(vars).toMatchObject({ id: "PR_42", expectedHeadOid: HEAD, mergeMethod: "SQUASH" });
+    expect(result).toEqual({
+      prNumber: 42,
+      outcome: "armed",
+      mergeIntent: {
+        kind: "auto-merge",
+        method: "squash",
+        enabledAt: Date.parse("2026-10-22T00:00:00Z"),
+        enabledBy: "octocat",
+      },
+    });
+    // Arming never touches the REST merge endpoint.
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("omits the method on a merge-queue branch, where the queue picks it", async () => {
+    mockGraphQLClient
+      .mockResolvedValueOnce(mergeState({ isMergeQueueEnabled: true, mergeStateStatus: "CLEAN" }))
+      .mockResolvedValueOnce({
+        enablePullRequestAutoMerge: { pullRequest: { isInMergeQueue: true } },
+      });
+
+    const result = await autoMerge.enable(repo, 42, {
+      mergeMethod: "rebase",
+      expectedHeadSha: HEAD,
+    });
+
+    expect(
+      (mockGraphQLClient.mock.calls[1]?.[1] as Record<string, unknown>).mergeMethod
+    ).toBeNull();
+    expect(result).toMatchObject({ outcome: "armed", mergeIntent: { kind: "queued" } });
+  });
+
+  it.each(["CLEAN", "HAS_HOOKS", "UNSTABLE"])(
+    "returns already-mergeable for a %s PR without arming or merging",
+    async (status) => {
+      const fetchMock = mockFetch({ ok: true, status: 200 });
+      mockGraphQLClient.mockResolvedValueOnce(mergeState({ mergeStateStatus: status }));
+
+      const result = await autoMerge.enable(repo, 42, { expectedHeadSha: HEAD });
+
+      expect(result.outcome).toBe("already-mergeable");
+      expect(mockGraphQLClient).toHaveBeenCalledTimes(1);
+      expect(fetchMock).not.toHaveBeenCalled();
+    }
+  );
+
+  it("classifies a rejected arm by what the PR reports now, not the error text", async () => {
+    const fetchMock = mockFetch({ ok: true, status: 200 });
+    mockGraphQLClient
+      .mockResolvedValueOnce(mergeState())
+      .mockRejectedValueOnce(new Error("something GitHub said"))
+      .mockResolvedValueOnce(mergeState({ mergeStateStatus: "CLEAN" }));
+
+    const result = await autoMerge.enable(repo, 42, { expectedHeadSha: HEAD });
+
+    expect(result.outcome).toBe("already-mergeable");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses to arm when the head moved since review", async () => {
+    mockGraphQLClient.mockResolvedValueOnce(mergeState({ headRefOid: "c".repeat(40) }));
+    await expect(autoMerge.enable(repo, 42, { expectedHeadSha: HEAD })).rejects.toThrow(
+      /new commits/i
+    );
+    expect(mockGraphQLClient).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses to arm a PR retargeted since the preview", async () => {
+    mockGraphQLClient.mockResolvedValueOnce(mergeState({ baseRefName: "main" }));
+    await expect(
+      autoMerge.enable(repo, 42, { expectedHeadSha: HEAD, expectedBaseRef: "develop" })
+    ).rejects.toThrow(/no longer targets develop/);
+    expect(mockGraphQLClient).toHaveBeenCalledTimes(1);
+  });
+
+  it("rethrows a rejection the fresh read can't explain", async () => {
+    mockGraphQLClient
+      .mockResolvedValueOnce(mergeState())
+      .mockRejectedValueOnce(new Error("Auto merge is not allowed for this repository"))
+      .mockResolvedValueOnce(mergeState());
+    await expect(autoMerge.enable(repo, 42, { expectedHeadSha: HEAD })).rejects.toThrow(
+      /not allowed/i
+    );
+  });
+
+  it("dequeues a queued PR by its node id", async () => {
+    mockGraphQLClient
+      .mockResolvedValueOnce(
+        mergeState({ isInMergeQueue: true, autoMergeRequest: { enabledAt: null } })
+      )
+      .mockResolvedValueOnce({ dequeuePullRequest: { mergeQueueEntry: { id: "MQE" } } });
+
+    const result = await autoMerge.disable(repo, 42);
+
+    expect(result).toEqual({ prNumber: 42, outcome: "dequeued" });
+    expect(String(mockGraphQLClient.mock.calls[1]?.[0])).toContain("dequeuePullRequest");
+    expect((mockGraphQLClient.mock.calls[1]?.[1] as Record<string, unknown>).id).toBe("PR_42");
+  });
+
+  it("disarms an armed PR that isn't queued", async () => {
+    mockGraphQLClient
+      .mockResolvedValueOnce(
+        mergeState({ autoMergeRequest: { enabledAt: "2026-10-22T00:00:00Z" } })
+      )
+      .mockResolvedValueOnce({ disablePullRequestAutoMerge: { pullRequest: { id: "PR_42" } } });
+
+    const result = await autoMerge.disable(repo, 42);
+
+    expect(result).toEqual({ prNumber: 42, outcome: "disarmed" });
+    expect(String(mockGraphQLClient.mock.calls[1]?.[0])).toContain("disablePullRequestAutoMerge");
+  });
+
+  it("reports not-pending without writing when nothing is armed", async () => {
+    mockGraphQLClient.mockResolvedValueOnce(mergeState());
+    expect(await autoMerge.disable(repo, 42)).toEqual({ prNumber: 42, outcome: "not-pending" });
+    expect(mockGraphQLClient).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("convertPRToDraft / markPRReadyForReview (GraphQL)", () => {
   it("convertPRToDraft resolves the node id then runs the GraphQL mutation", async () => {
     mockGraphQLClient

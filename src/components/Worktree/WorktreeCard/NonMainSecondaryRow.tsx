@@ -122,6 +122,8 @@ export function NonMainSecondaryRow({
       prNumber={worktree.linked!.pr!.ref.number}
       prState={worktree.linked!.pr!.state}
       prCiStatus={worktree.linked!.pr!.ciStatus}
+      mergeIntent={worktree.linked!.pr!.mergeIntent}
+      headMovedWhileArmed={worktree.linked!.pr!.headMovedWhileArmed}
       isSubordinate={!!worktree.issueNumber}
       worktreePath={worktree.path}
       onOpen={badges.onOpenPR}
@@ -176,6 +178,8 @@ export function NonMainSecondaryRow({
           prTitle={worktree.linked?.pr?.title ?? worktree.prTitle}
           prState={worktree.linked?.pr?.state}
           prCiStatus={worktree.linked?.pr?.ciStatus}
+          mergeIntent={worktree.linked?.pr?.mergeIntent}
+          headMovedWhileArmed={worktree.linked?.pr?.headMovedWhileArmed}
           isSubordinate={false}
           worktreePath={worktree.path}
           onOpen={badges.onOpenPR}

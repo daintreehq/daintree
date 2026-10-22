@@ -388,28 +388,38 @@ export function registerForgeDataHandlers(): () => void {
   );
 
   cleanups.push(
-    typedHandle(CHANNELS.FORGE_GET_PR, async (payload: { cwd: string; prNumber: number }) => {
-      checkRateLimit(CHANNELS.FORGE_GET_PR, 25, 10_000);
-      if (!payload || typeof payload !== "object") {
-        throw new Error("Invalid payload");
+    typedHandle(
+      CHANNELS.FORGE_GET_PR,
+      async (payload: { cwd: string; prNumber: number; fresh?: boolean }) => {
+        checkRateLimit(CHANNELS.FORGE_GET_PR, 25, 10_000);
+        if (!payload || typeof payload !== "object") {
+          throw new Error("Invalid payload");
+        }
+        const cwd = requireCwd(payload.cwd);
+        const prNumber = requirePositiveInt(payload.prNumber, "PR number");
+        const fresh = payload.fresh === true;
+        const read = async () => {
+          const { impl, repoRef, namespaceId } = await resolveForCwd(cwd);
+          return auditForgeCall(
+            {
+              providerId: namespaceId,
+              methodName: "getPR",
+              repoOwner: repoRef.owner,
+              repoName: repoRef.repo,
+              argsSummary: summarizeForgeArgs("getPR", prNumber),
+            },
+            () =>
+              fresh
+                ? impl.getPR(repoRef, prNumber, { fresh: true })
+                : impl.getPR(repoRef, prNumber),
+            (value) => (value === null ? "not-found" : "success")
+          );
+        };
+        // A fresh read joins nothing: an earlier caller's answer, even one
+        // still retained, may predate the write this caller is about to make.
+        return fresh ? read() : coalesce(`${cwd}::getPR::${prNumber}`, read);
       }
-      const cwd = requireCwd(payload.cwd);
-      const prNumber = requirePositiveInt(payload.prNumber, "PR number");
-      return coalesce(`${cwd}::getPR::${prNumber}`, async () => {
-        const { impl, repoRef, namespaceId } = await resolveForCwd(cwd);
-        return auditForgeCall(
-          {
-            providerId: namespaceId,
-            methodName: "getPR",
-            repoOwner: repoRef.owner,
-            repoName: repoRef.repo,
-            argsSummary: summarizeForgeArgs("getPR", prNumber),
-          },
-          () => impl.getPR(repoRef, prNumber),
-          (value) => (value === null ? "not-found" : "success")
-        );
-      });
-    })
+    )
   );
 
   cleanups.push(
@@ -427,7 +437,10 @@ export function registerForgeDataHandlers(): () => void {
           repoOwner: repoRef.owner,
           repoName: repoRef.repo,
         },
-        () => impl.getRepoMetadata(repoRef)
+        async () => ({
+          ...(await impl.getRepoMetadata(repoRef)),
+          autoMergeSupported: Boolean(impl.autoMerge),
+        })
       );
     })
   );
@@ -862,6 +875,7 @@ function projectCIStatus(status: CIStatus): ForgeCIStatusSummary {
     ...(status.requiredChecksPassing !== undefined
       ? { requiredChecksPassing: status.requiredChecksPassing }
       : {}),
+    ...(status.headSha ? { headSha: status.headSha } : {}),
   };
 }
 

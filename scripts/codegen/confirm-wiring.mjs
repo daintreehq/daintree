@@ -68,6 +68,8 @@ const EXPECTED_CONFIRM_DANGER = new Set([
   "forge.closePR",
   "forge.reopenPR",
   "forge.mergePR",
+  "forge.enableAutoMerge",
+  "forge.disableAutoMerge",
   "forge.convertPRToDraft",
   "forge.markPRReadyForReview",
   "forge.commentOnPR",
@@ -104,6 +106,11 @@ const CONFIRMED_WIRED = [
   "recipe.delete",
   "devPreview.restartAndClearCache",
   "devPreview.reinstallAndRestart",
+  // The Review Hub's merge confirm (#13747): PrMergeConfirmDialog previews
+  // what lands and dispatches all three from the same file.
+  "forge.mergePR",
+  "forge.enableAutoMerge",
+  "forge.disableAutoMerge",
 ];
 
 // Actions whose confirmation uses a non-ConfirmDialog-family pattern. These are
@@ -147,7 +154,6 @@ const BYPASS_WIRED = new Set([
   "forge.createPR",
   "forge.closePR",
   "forge.reopenPR",
-  "forge.mergePR",
   "forge.convertPRToDraft",
   "forge.markPRReadyForReview",
   "forge.commentOnPR",

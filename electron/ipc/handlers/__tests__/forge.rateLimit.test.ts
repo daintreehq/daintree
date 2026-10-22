@@ -50,6 +50,7 @@ const fakeImpl = vi.hoisted(() => ({
   repoStats: { getRepoStats: vi.fn() },
   issueComments: { listIssueComments: vi.fn() },
   checks: { getChecks: vi.fn() },
+  autoMerge: { enable: vi.fn(), disable: vi.fn() },
   avatars: { resolveAuthorAvatar: vi.fn() },
   reviews: {
     getReviewThreads: vi.fn(),
@@ -346,6 +347,55 @@ describe("forge handlers — rate limiting", () => {
 
       expect(checkRateLimitMock).toHaveBeenCalledWith(CHANNELS.FORGE_MERGE_PR, 5, 10_000);
       expect(fakeImpl.mergePR).toHaveBeenCalledWith(repoRef, 7, { mergeMethod: "squash" });
+    });
+
+    it("mergePR forwards a reviewed head and rejects a malformed one", async () => {
+      const handler = getInvokeHandler(CHANNELS.FORGE_MERGE_PR);
+      await handler({}, { cwd: "/tmp/project", prNumber: 7, expectedHeadSha: "a".repeat(40) });
+      expect(fakeImpl.mergePR).toHaveBeenCalledWith(repoRef, 7, {
+        expectedHeadSha: "a".repeat(40),
+      });
+      await expect(
+        handler({}, { cwd: "/tmp/project", prNumber: 7, expectedHeadSha: "abc" })
+      ).rejects.toThrow(/head commit/i);
+    });
+
+    it("enableAutoMerge uses mutation limits and pins the reviewed head", async () => {
+      const handler = getInvokeHandler(CHANNELS.FORGE_ENABLE_AUTO_MERGE);
+      await handler(
+        {},
+        { cwd: "/tmp/project", prNumber: 7, mergeMethod: "squash", expectedHeadSha: "a".repeat(40) }
+      );
+      expect(checkRateLimitMock).toHaveBeenCalledWith(CHANNELS.FORGE_ENABLE_AUTO_MERGE, 5, 10_000);
+      expect(fakeImpl.autoMerge.enable).toHaveBeenCalledWith(repoRef, 7, {
+        mergeMethod: "squash",
+        expectedHeadSha: "a".repeat(40),
+      });
+    });
+
+    it("enableAutoMerge refuses to arm without a reviewed head", async () => {
+      const handler = getInvokeHandler(CHANNELS.FORGE_ENABLE_AUTO_MERGE);
+      await expect(handler({}, { cwd: "/tmp/project", prNumber: 7 })).rejects.toThrow(
+        /head commit/i
+      );
+      expect(fakeImpl.autoMerge.enable).not.toHaveBeenCalled();
+    });
+
+    it("auto-merge handlers reject a provider without the capability", async () => {
+      // The handler reads the impl through `getImplForNamespace`, which returns
+      // `fakeImpl` itself — so the capability is removed there.
+      const capability = fakeImpl.autoMerge;
+      (fakeImpl as { autoMerge?: unknown }).autoMerge = undefined;
+      try {
+        await expect(
+          getInvokeHandler(CHANNELS.FORGE_DISABLE_AUTO_MERGE)(
+            {},
+            { cwd: "/tmp/project", prNumber: 7 }
+          )
+        ).rejects.toThrow(/does not support merge when ready/);
+      } finally {
+        fakeImpl.autoMerge = capability;
+      }
     });
 
     it("mergePR rejects an invalid merge method", async () => {
@@ -676,6 +726,16 @@ describe("forge handlers — rate limiting", () => {
         invoke: (h) => h({}, { cwd, prNumber: 1 }),
       },
       {
+        channel: CHANNELS.FORGE_ENABLE_AUTO_MERGE,
+        maxCalls: 5,
+        invoke: (h) => h({}, { cwd, prNumber: 1, expectedHeadSha: "a".repeat(40) }),
+      },
+      {
+        channel: CHANNELS.FORGE_DISABLE_AUTO_MERGE,
+        maxCalls: 5,
+        invoke: (h) => h({}, { cwd, prNumber: 1 }),
+      },
+      {
         channel: CHANNELS.FORGE_CONVERT_PR_TO_DRAFT,
         maxCalls: 5,
         invoke: (h) => h({}, { cwd, prNumber: 1 }),
@@ -753,12 +813,12 @@ describe("forge handlers — rate limiting", () => {
       },
     ];
 
-    it("registers all forge channels (49 rate-limited + 2 unrated probes)", () => {
-      expect(specs).toHaveLength(49);
+    it("registers all forge channels (51 rate-limited + 2 unrated probes)", () => {
+      expect(specs).toHaveLength(51);
       // FORGE_GET_CURRENT_USER and FORGE_GET_TOKEN_HEALTH are intentionally
       // unrated replay/identity probes with no checkRateLimit, so they register
       // handlers but stay out of `specs`.
-      expect(ipcMainMock.handle).toHaveBeenCalledTimes(51);
+      expect(ipcMainMock.handle).toHaveBeenCalledTimes(53);
     });
 
     it.each(specs)(
@@ -819,6 +879,11 @@ describe("forge write handlers forward the provider result (#11546)", () => {
     requestChanges: { sentinel: "requestChanges" },
     dismissReview: { sentinel: "dismissReview" },
     requestReviewers: { prNumber: 1, requestedUsers: ["u"], requestedTeams: [] },
+  } as const;
+
+  const autoMergeSentinels = {
+    enable: { prNumber: 1, outcome: "armed", mergeIntent: null },
+    disable: { prNumber: 1, outcome: "disarmed" },
   } as const;
 
   const cases: Array<{
@@ -899,6 +964,18 @@ describe("forge write handlers forward the provider result (#11546)", () => {
       expected: reviewSentinels.requestReviewers,
       invoke: (h) => h({}, { cwd: "/repo", prNumber: 1, users: ["octocat"] }),
     },
+    {
+      name: "enableAutoMerge",
+      channel: CHANNELS.FORGE_ENABLE_AUTO_MERGE,
+      expected: autoMergeSentinels.enable,
+      invoke: (h) => h({}, { cwd: "/repo", prNumber: 1, expectedHeadSha: "a".repeat(40) }),
+    },
+    {
+      name: "disableAutoMerge",
+      channel: CHANNELS.FORGE_DISABLE_AUTO_MERGE,
+      expected: autoMergeSentinels.disable,
+      invoke: (h) => h({}, { cwd: "/repo", prNumber: 1 }),
+    },
   ];
 
   beforeEach(() => {
@@ -920,6 +997,8 @@ describe("forge write handlers forward the provider result (#11546)", () => {
     for (const [method, value] of Object.entries(reviewSentinels)) {
       (fakeImpl.reviews[method as keyof typeof reviewSentinels] as Mock).mockResolvedValue(value);
     }
+    fakeImpl.autoMerge.enable.mockResolvedValue(autoMergeSentinels.enable);
+    fakeImpl.autoMerge.disable.mockResolvedValue(autoMergeSentinels.disable);
     registerForgeHandlers();
   });
 

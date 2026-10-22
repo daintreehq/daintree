@@ -189,6 +189,10 @@ function freezeLinked(linked: PluginWorktreeLinked): PluginWorktreeLinked {
       state: linked.pr.state,
       ...(linked.pr.ciStatus ? { ciStatus: linked.pr.ciStatus } : {}),
       ...(linked.pr.baseRef ? { baseRef: linked.pr.baseRef } : {}),
+      ...(linked.pr.mergeIntent !== undefined
+        ? { mergeIntent: linked.pr.mergeIntent && Object.freeze({ ...linked.pr.mergeIntent }) }
+        : {}),
+      ...(linked.pr.headMovedWhileArmed ? { headMovedWhileArmed: true } : {}),
     });
   }
 

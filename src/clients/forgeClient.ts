@@ -9,13 +9,14 @@ import type {
   EditIssueInput,
   IssueCloseReason,
   MergePRResult,
+  EnableAutoMergeResult,
+  DisableAutoMergeResult,
   PR,
   PRDraftStateResult,
   PRLookupResult,
   PullRequestReview,
   RequestReviewersResult,
   Page,
-  RepoMetadata,
   ListOptions,
   IssueTooltipData,
   PRTooltipData,
@@ -26,6 +27,7 @@ import type {
 import type {
   ForgeCheckRun,
   ForgeCIStatusSummary,
+  ForgeRepoMetadataPayload,
   ForgeRepositoryStats,
   ForgeRepoStatsAndPagePayload,
   ForgeRepoCountsUpdatedPayload,
@@ -152,15 +154,19 @@ export const forgeClient = {
     return window.electron.forge.getIssue({ cwd, issueNumber });
   },
 
-  getPR: (cwd: string, prNumber: number): Promise<PR | null> => {
-    return window.electron.forge.getPR({ cwd, prNumber });
+  getPR: (cwd: string, prNumber: number, options?: { fresh?: boolean }): Promise<PR | null> => {
+    return window.electron.forge.getPR({
+      cwd,
+      prNumber,
+      ...(options?.fresh ? { fresh: true } : {}),
+    });
   },
 
   getCIStatus: (cwd: string, prNumber: number): Promise<ForgeCIStatusSummary | null> => {
     return window.electron.forge.getCIStatus({ cwd, prNumber });
   },
 
-  getRepoMetadata: (cwd: string): Promise<RepoMetadata> => {
+  getRepoMetadata: (cwd: string): Promise<ForgeRepoMetadataPayload> => {
     return window.electron.forge.getRepoMetadata({ cwd });
   },
 
@@ -276,9 +282,27 @@ export const forgeClient = {
       mergeMethod?: "merge" | "squash" | "rebase";
       commitTitle?: string;
       commitMessage?: string;
+      expectedHeadSha?: string;
+      expectedBaseRef?: string;
     }
   ): Promise<MergePRResult> => {
     return window.electron.forge.mergePR({ cwd, prNumber, ...input });
+  },
+
+  enableAutoMerge: (
+    cwd: string,
+    prNumber: number,
+    input: {
+      mergeMethod?: "merge" | "squash" | "rebase";
+      expectedHeadSha: string;
+      expectedBaseRef?: string;
+    }
+  ): Promise<EnableAutoMergeResult> => {
+    return window.electron.forge.enableAutoMerge({ cwd, prNumber, ...input });
+  },
+
+  disableAutoMerge: (cwd: string, prNumber: number): Promise<DisableAutoMergeResult> => {
+    return window.electron.forge.disableAutoMerge({ cwd, prNumber });
   },
 
   convertPRToDraft: (cwd: string, prNumber: number): Promise<PRDraftStateResult> => {

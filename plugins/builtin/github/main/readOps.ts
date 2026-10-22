@@ -2,6 +2,7 @@ import type { GraphQlQueryResponseData } from "@octokit/graphql";
 import type {
   CheckRun,
   CIStatus,
+  FetchOptions,
   Issue,
   IssueComment,
   IssueTooltipData,
@@ -9,10 +10,12 @@ import type {
   Page,
   PR,
   PRListProbeResult,
+  PRMergeMethod,
   PRSnapshot,
   PRTooltipData,
   PushErrorClassification,
   RateLimitInfo,
+  RepoMergeSettings,
   RepoMetadata,
   RepoRef,
   ReviewThread,
@@ -64,6 +67,7 @@ import {
 } from "./GitHubPRs.js";
 import {
   mapIssueGraphQLStates,
+  mapMergeMethod,
   mapPRGraphQLStates,
   toForgeIssue,
   toForgeIssueComment,
@@ -640,9 +644,16 @@ export async function getIssueImpl(repo: RepoRef, number: number): Promise<Issue
   });
 }
 
-export async function getPRImpl(repo: RepoRef, number: number): Promise<PR | null> {
+export async function getPRImpl(
+  repo: RepoRef,
+  number: number,
+  options?: FetchOptions
+): Promise<PR | null> {
+  const fresh = options?.fresh === true;
   const key = `${repo.owner}/${repo.repo}:${number}`;
-  return dedupe(getPRInflight, key, false, async () => {
+  // A fresh read never joins one already in flight: that one may predate a
+  // write the caller is about to preview against.
+  return dedupe(getPRInflight, key, fresh, async () => {
     const requestedAt = Date.now();
     const response = await runQuery(
       GET_PR_QUERY,
@@ -651,7 +662,8 @@ export async function getPRImpl(repo: RepoRef, number: number): Promise<PR | nul
         repo: repo.repo,
         number,
       },
-      "GET_PR_QUERY"
+      "GET_PR_QUERY",
+      fresh
     );
     const pr = (response?.repository as Record<string, unknown> | undefined)?.pullRequest as
       Record<string, unknown> | null | undefined;
@@ -764,13 +776,15 @@ export async function findPRByBranchImpl(repo: RepoRef, branchName: string): Pro
 
 export async function findPRsByNumbersImpl(
   repo: RepoRef,
-  prNumbers: number[]
+  prNumbers: number[],
+  options?: FetchOptions
 ): Promise<Map<number, PR | null>> {
   const unique = uniquePositiveIntegers(prNumbers);
   if (unique.length === 0) return new Map<number, PR | null>();
+  const fresh = options?.fresh === true;
 
   const inflightKey = buildNumberBatchInflightKey(repo, unique);
-  return dedupe(findPRsByNumbersInflight, inflightKey, false, async () => {
+  return dedupe(findPRsByNumbersInflight, inflightKey, fresh, async () => {
     const result = new Map<number, PR | null>();
 
     const block = gitHubRateLimitService.shouldBlockRequest("graphql");
@@ -784,7 +798,7 @@ export async function findPRsByNumbersImpl(
 
       let response: GraphQlQueryResponseData;
       try {
-        response = await runQuery(query, {}, "BATCH_PRS_QUERY");
+        response = await runQuery(query, {}, "BATCH_PRS_QUERY", fresh);
       } catch {
         // Omit this chunk so callers treat it as transient and keep stale data.
         continue;
@@ -1107,6 +1121,7 @@ export async function getRepoMetadataImpl(repo: RepoRef): Promise<RepoMetadata> 
     .map((n) => (typeof n.topic?.name === "string" ? n.topic.name : null))
     .filter((s): s is string => s !== null);
 
+  const mergeSettings = toRepoMergeSettings(repository);
   return {
     defaultBranch,
     isPrivate: repository.isPrivate === true,
@@ -1115,7 +1130,27 @@ export async function getRepoMetadataImpl(repo: RepoRef): Promise<RepoMetadata> 
     description: (repository.description as string | null | undefined) ?? null,
     license,
     topics,
+    ...(mergeSettings ? { mergeSettings } : {}),
     rawData: repository,
+  };
+}
+
+/**
+ * The repository's merge flags → {@link RepoMergeSettings}. `undefined` when
+ * the response carried none of them, so an older cached shape can't read as
+ * "nothing allowed".
+ */
+function toRepoMergeSettings(repository: Record<string, unknown>): RepoMergeSettings | undefined {
+  if (typeof repository.autoMergeAllowed !== "boolean") return undefined;
+  const allowedMethods: PRMergeMethod[] = [];
+  if (repository.mergeCommitAllowed === true) allowedMethods.push("merge");
+  if (repository.squashMergeAllowed === true) allowedMethods.push("squash");
+  if (repository.rebaseMergeAllowed === true) allowedMethods.push("rebase");
+  const viewerDefaultMethod = mapMergeMethod(repository.viewerDefaultMergeMethod);
+  return {
+    allowedMethods,
+    ...(viewerDefaultMethod ? { viewerDefaultMethod } : {}),
+    autoMergeAllowed: repository.autoMergeAllowed,
   };
 }
 

@@ -155,9 +155,11 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `forge.convertPRToDraft` | Convert pull request to draft | confirm | `prNumber`, `cwd?`, `worktreeId?`, `worktreePath?` |
 | `forge.createIssue` | Create issue | confirm | `title`, `body?`, `cwd?`, `labels?`, `worktreeId?`, `worktreePath?` |
 | `forge.createPR` | Create pull request | confirm | `base`, `head`, `title`, `body?`, `cwd?`, `draft?`, `worktreeId?`, `worktreePath?` |
+| `forge.disableAutoMerge` | Cancel merge when ready | confirm | `prNumber`, `worktreeId?`, `worktreePath?` |
 | `forge.dismissReview` | Dismiss pull request review | confirm | `message`, `prNumber`, `reviewId`, `cwd?`, `worktreeId?`, `worktreePath?` |
 | `forge.editIssue` | Edit issue | confirm | `issueNumber`, `body?`, `cwd?`, `title?`, `worktreeId?`, `worktreePath?` |
 | `forge.editPR` | Edit pull request | confirm | `prNumber`, `body?`, `cwd?`, `title?`, `worktreeId?`, `worktreePath?` |
+| `forge.enableAutoMerge` | Merge pull request when ready | confirm | `expectedHeadSha`, `prNumber`, `expectedBaseRef?`, `mergeMethod?`, `worktreeId?`, `worktreePath?` |
 | `forge.getChecks` | Get CI checks | safe | `prNumber`, `cwd?`, `worktreeId?`, `worktreePath?` |
 | `forge.getCIStatus` | Get CI status | safe | `prNumber`, `cwd?`, `worktreeId?`, `worktreePath?` |
 | `forge.getIssue` | Get issue | safe | `issueNumber`, `cwd?`, `worktreeId?`, `worktreePath?` |
@@ -168,7 +170,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `forge.listIssues` | List issues | safe | `bypassCache?`, `cursor?`, `cwd?`, `direction?`, `perPage?`, `search?`, `sort?`, `state?`, `view?`, `worktreeId?`, `worktreePath?` |
 | `forge.listPRs` | List pull requests | safe | `bypassCache?`, `cursor?`, `cwd?`, `direction?`, `perPage?`, `search?`, `sort?`, `state?`, `view?`, `worktreeId?`, `worktreePath?` |
 | `forge.markPRReadyForReview` | Mark pull request ready for review | confirm | `prNumber`, `cwd?`, `worktreeId?`, `worktreePath?` |
-| `forge.mergePR` | Merge pull request | confirm | `prNumber`, `commitMessage?`, `commitTitle?`, `cwd?`, `mergeMethod?`, `worktreeId?`, `worktreePath?` |
+| `forge.mergePR` | Merge pull request | confirm | `prNumber`, `commitMessage?`, `commitTitle?`, `cwd?`, `expectedBaseRef?`, `expectedHeadSha?`, `mergeMethod?`, `worktreeId?`, `worktreePath?` |
 | `forge.openCommits` | Open commits | safe | `branch?`, `projectId?`, `projectPath?` |
 | `forge.openIssue` | Open issue | safe | `issueNumber`, `cwd?`, `worktreeId?`, `worktreePath?` |
 | `forge.openIssues` | Open issues | safe | `projectId?`, `projectPath?`, `query?`, `state?` |

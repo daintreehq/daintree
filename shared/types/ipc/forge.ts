@@ -8,6 +8,7 @@ import type {
   PR,
   ProjectHealthSnapshot,
   RateLimitInfo,
+  RepoMetadata,
   StatsPage,
 } from "../forge.js";
 
@@ -103,7 +104,19 @@ export interface ForgeCIStatusSummary {
   pending: number;
   /** Whether required-checks gating is satisfied. Omitted if the provider doesn't gate. */
   requiredChecksPassing?: boolean;
+  /** Commit this verdict was read from, when the provider reports it. */
+  headSha?: string;
 }
+
+/**
+ * `forge:get-repo-metadata` result: the provider's metadata plus which
+ * optional write capabilities the active provider implements, decided by the
+ * host from the implementation itself — manifest hints never gate behaviour.
+ */
+export type ForgeRepoMetadataPayload = RepoMetadata & {
+  /** The provider implements `autoMerge` (arm or cancel "merge when ready"). */
+  autoMergeSupported: boolean;
+};
 
 /**
  * Renderer-facing projection of {@link import("../forge.js").CheckRun}, used by
@@ -320,6 +333,8 @@ export type ForgeProviderMethodName =
   | "closePR"
   | "reopenPR"
   | "mergePR"
+  | "enableAutoMerge"
+  | "disableAutoMerge"
   | "convertPRToDraft"
   | "markPRReadyForReview"
   | "commentOnPR"

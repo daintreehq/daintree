@@ -291,6 +291,41 @@ const ForgeMergePRResultSchema = z.object({
   message: z.string(),
 });
 
+const ForgeMergeMethodSchema = z.enum(["merge", "squash", "rebase"]);
+
+const ForgeMergeIntentSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("auto-merge"),
+    method: ForgeMergeMethodSchema.nullable().describe("null when a merge queue picks the method"),
+    enabledAt: z.number().nullable(),
+    enabledBy: z.string().optional(),
+  }),
+  z.object({ kind: z.literal("queued"), position: z.number().nullable() }),
+]);
+
+const ForgeEnableAutoMergeResultSchema = z.object({
+  prNumber: z.number(),
+  outcome: z
+    .enum(["armed", "already-mergeable"])
+    .describe(
+      "armed: the forge will merge once requirements pass; already-mergeable: nothing was armed because the PR can merge now"
+    ),
+  mergeIntent: ForgeMergeIntentSchema.nullable().optional(),
+  message: z.string().optional(),
+});
+
+const ForgeDisableAutoMergeResultSchema = z.object({
+  prNumber: z.number(),
+  outcome: z.enum(["disarmed", "dequeued", "not-pending"]),
+});
+
+// Full object id of the head the caller reviewed — forges match the pin exactly.
+const HeadShaSchema = z
+  .string()
+  .regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i, "Expected a full commit SHA");
+
+const BaseRefSchema = z.string().min(1).max(255);
+
 // Draft state a PR ended in after a draft-toggle action.
 const ForgePRDraftStateResultSchema = z.object({
   prNumber: z.number(),
@@ -1102,11 +1137,25 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
           .describe("Merge strategy (provider default when omitted)"),
         commitTitle: z.string().optional().describe("Override the merge commit title"),
         commitMessage: z.string().optional().describe("Override the merge commit message"),
+        expectedHeadSha: HeadShaSchema.optional().describe(
+          "Head commit you reviewed; the forge refuses the merge if the PR has moved past it"
+        ),
+        expectedBaseRef: BaseRefSchema.optional().describe(
+          "Base branch you reviewed; the merge is refused if the PR has been retargeted"
+        ),
       }),
       resultSchema: ForgeMergePRResultSchema,
       mcpOutputSchema: true,
       run: async (
-        { prNumber, mergeMethod, commitTitle, commitMessage, ...location },
+        {
+          prNumber,
+          mergeMethod,
+          commitTitle,
+          commitMessage,
+          expectedHeadSha,
+          expectedBaseRef,
+          ...location
+        },
         ctx: ActionContext
       ) => {
         const resolvedCwd = requireWorktreePath(location, ctx);
@@ -1115,7 +1164,80 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
             mergeMethod,
             commitTitle,
             commitMessage,
+            ...(expectedHeadSha ? { expectedHeadSha } : {}),
+            ...(expectedBaseRef ? { expectedBaseRef } : {}),
           })
+        );
+      },
+    })
+  );
+
+  // The two "merge when ready" writes are on no MCP tier and hidden from
+  // discovery: their caller is the Review Hub's confirm, and an agent that
+  // wants this already has `gh pr merge --auto` in its own shell (#13747).
+  actions.set("forge.enableAutoMerge", () =>
+    defineAction({
+      id: "forge.enableAutoMerge",
+      title: "Merge pull request when ready",
+      description:
+        "Ask the forge to merge a pull request once its required checks and reviews pass, pinned to the head commit you reviewed. The forge decides if and when it merges; on a merge-queue branch this adds the pull request to the queue. Never merges immediately: a pull request that can already merge comes back already-mergeable, and nothing is armed.",
+      category: "forge",
+      kind: "command",
+      danger: "confirm",
+      dangerRationale:
+        "Arming auto-merge lets the forge write this pull request into the shared base branch later, without another prompt.",
+      mcpVisibility: "hidden",
+      scope: "renderer",
+      argsSchema: z.object({
+        ...worktreeLocationShape(),
+        prNumber: z.number().int().positive().describe("Pull request number to arm"),
+        mergeMethod: ForgeMergeMethodSchema.optional().describe(
+          "Merge strategy (provider default when omitted; ignored on merge-queue branches)"
+        ),
+        expectedHeadSha: HeadShaSchema.describe("Head commit you reviewed"),
+        expectedBaseRef: BaseRefSchema.optional().describe(
+          "Base branch you reviewed; arming is refused if the PR has been retargeted"
+        ),
+      }),
+      resultSchema: ForgeEnableAutoMergeResultSchema,
+      run: async (
+        { prNumber, mergeMethod, expectedHeadSha, expectedBaseRef, ...location },
+        ctx: ActionContext
+      ) => {
+        const resolvedCwd = requireWorktreePath(location, ctx);
+        return ForgeEnableAutoMergeResultSchema.parse(
+          await forgeClient.enableAutoMerge(resolvedCwd, prNumber, {
+            ...(mergeMethod ? { mergeMethod } : {}),
+            expectedHeadSha,
+            ...(expectedBaseRef ? { expectedBaseRef } : {}),
+          })
+        );
+      },
+    })
+  );
+
+  actions.set("forge.disableAutoMerge", () =>
+    defineAction({
+      id: "forge.disableAutoMerge",
+      title: "Cancel merge when ready",
+      description:
+        "Cancel a pull request's pending auto-merge, or take it out of the merge queue if it is already queued. Reads the pull request when it runs, so it cancels whichever form the request is in by then.",
+      category: "forge",
+      kind: "command",
+      danger: "confirm",
+      dangerRationale:
+        "Cancelling stops a merge someone else may have armed, and a queued pull request loses its place in the queue.",
+      mcpVisibility: "hidden",
+      scope: "renderer",
+      argsSchema: z.object({
+        ...worktreeLocationShape(),
+        prNumber: z.number().int().positive().describe("Pull request number"),
+      }),
+      resultSchema: ForgeDisableAutoMergeResultSchema,
+      run: async ({ prNumber, ...location }, ctx: ActionContext) => {
+        const resolvedCwd = requireWorktreePath(location, ctx);
+        return ForgeDisableAutoMergeResultSchema.parse(
+          await forgeClient.disableAutoMerge(resolvedCwd, prNumber)
         );
       },
     })
