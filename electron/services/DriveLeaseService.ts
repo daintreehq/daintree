@@ -78,6 +78,8 @@ export interface DriveLeaseServiceOptions {
 export interface DriveLeaseReservation {
   clientId: string;
   clientName: string;
+  /** Its Shell's install, when its HELLO named one: a relaunch of it takes the project back. */
+  deviceId?: string;
 }
 
 export interface DriveLeaseReservationStore {
@@ -97,6 +99,12 @@ interface ProjectLease {
   holder: DriveLeaseHolder;
   /** The holder endpoint's handle, which is its pty-host port connection id. */
   holderHandle: number;
+  /**
+   * The Shell install the holder's HELLO named, kept here rather than on the
+   * holder every Shell sees: a relaunch of that install, with a new client
+   * id, carries on driving as another window of the holder's client does.
+   */
+  holderDeviceId: string | null;
   /** Set while the holder is away and the lease waits for it, or its client, to come back. */
   releaseTimer: ReturnType<typeof setTimeout> | null;
   /** When that wait runs out, by this machine's clock; null while the holder is there. */
@@ -193,6 +201,7 @@ export class DriveLeaseService {
       const lease: ProjectLease = {
         holder,
         holderHandle: RESTORED_HOLDER_CONNECTION,
+        holderDeviceId: reservation.deviceId ?? null,
         releaseTimer: null,
         awayUntil: this.now() + this.restoredReservationGraceMs,
       };
@@ -211,9 +220,13 @@ export class DriveLeaseService {
     const out: Record<string, DriveLeaseReservation> = {};
     const projectIds = [...this.leases.keys()].sort();
     for (const projectId of projectIds) {
-      const { holder } = this.leases.get(projectId)!;
+      const { holder, holderDeviceId } = this.leases.get(projectId)!;
       if (holder.clientId === LOCAL_CLIENT_ID) continue;
-      out[projectId] = { clientId: holder.clientId, clientName: holder.clientName };
+      out[projectId] = {
+        clientId: holder.clientId,
+        clientName: holder.clientName,
+        ...(holderDeviceId ? { deviceId: holderDeviceId } : {}),
+      };
     }
     return out;
   }
@@ -234,19 +247,27 @@ export class DriveLeaseService {
 
   /**
    * Record who a remote endpoint belongs to, so the holder can name the
-   * machine. The remote session layer calls it when an endpoint opens; the
-   * entry goes when the endpoint closes.
+   * machine and a relaunch of its install can be told from another Shell.
+   * The remote session layer calls it when an endpoint opens; the entry goes
+   * when the endpoint closes.
    */
   noteEndpointClient(endpointId: string, client: ClientRef): void {
     if (this.disposed) return;
     this.clients.set(endpointId, client);
-    // A lease granted before the note arrived names the machine by its id.
+    // A lease granted before the note arrived names the machine by its id,
+    // and doesn't know its install.
     for (const [projectId, lease] of this.leases) {
       const { holder } = lease;
-      if (holder.endpointId !== endpointId || holder.clientName === client.clientName) continue;
+      if (holder.endpointId !== endpointId) continue;
+      if (client.deviceId) lease.holderDeviceId = client.deviceId;
+      if (holder.clientName === client.clientName) continue;
       lease.holder = { ...holder, clientName: client.clientName };
       this.publish(projectId, lease.holder);
     }
+    if (!client.deviceId) return;
+    this.saveReservations();
+    // Its install may be the one a lease whose holder has gone waits for.
+    this.queueReconcile();
   }
 
   /**
@@ -284,8 +305,8 @@ export class DriveLeaseService {
    * The project's holder. Reading never gives it to another machine: a
    * metrics sample, a fleet check or a view looking at the lease must not make
    * a window that merely shows the project its driver. A read only moves it
-   * to another window of the holder's own client, and starts (or stops) the
-   * grace of a holder that has gone. May name an endpoint that has just closed
+   * to another window of the holder's own client or install, and starts (or
+   * stops) the grace of a holder that has gone. May name an endpoint that has just closed
    * while its client's reservation runs; use {@link getHolderEndpoint} to
    * reach it.
    */
@@ -555,18 +576,44 @@ export class DriveLeaseService {
 
   /**
    * Who a lease goes to when its holder has gone or nobody holds it: another
-   * window of the holder's own client, then the Host's own screen while it is
-   * in use, then whoever is attached.
+   * window of the holder's own client or install, then the Host's own screen
+   * while it is in use, then whoever is attached.
    */
-  private successor(projectId: string, clientId: string | null): ClientEndpoint | undefined {
+  private successor(projectId: string, lease: ProjectLease | null): ClientEndpoint | undefined {
     const attached = this.presentFor(projectId);
     return (
-      (clientId !== null
-        ? attached.find((endpoint) => endpoint.clientId === clientId)
-        : undefined) ??
+      (lease ? this.continuer(attached, lease, true) : undefined) ??
       attached.find((endpoint) => this.hostScreenShows(endpoint)) ??
       attached[0]
     );
+  }
+
+  /**
+   * Who carries on for a holder that has gone: another window of its client,
+   * else, with `byInstall`, one of the same Shell install on a new launch. The
+   * install is the Shell's own word, which hands over nothing Take control
+   * doesn't.
+   */
+  private continuer(
+    attached: ClientEndpoint[],
+    lease: ProjectLease,
+    byInstall: boolean
+  ): ClientEndpoint | undefined {
+    const { holder, holderDeviceId } = lease;
+    return (
+      attached.find((endpoint) => endpoint.clientId === holder.clientId) ??
+      (byInstall && holderDeviceId !== null
+        ? attached.find(
+            (endpoint) => this.clients.get(endpoint.endpointId)?.deviceId === holderDeviceId
+          )
+        : undefined)
+    );
+  }
+
+  /** The holder's endpoint won't come back: closed, its session ended, or restored after a restart. */
+  private holderIsGone(lease: ProjectLease): boolean {
+    const endpoint = this.registry.get(lease.holder.endpointId);
+    return endpoint === undefined || endpoint.isClosed();
   }
 
   private hostScreenShows(endpoint: ClientEndpoint): boolean {
@@ -600,8 +647,8 @@ export class DriveLeaseService {
   /**
    * Settle a project's lease against who is attached. Only a change in who is
    * attached may grant a lease nobody holds (`mayGrant`); a read only moves a
-   * held lease between windows of its own client and keeps the grace of a
-   * holder that has gone running.
+   * held lease between windows of its own client or install and keeps the
+   * grace of a holder that has gone running.
    */
   private reconcileProject(projectId: string, mayGrant = true): void {
     if (this.disposed) return;
@@ -623,13 +670,14 @@ export class DriveLeaseService {
       }
       return;
     }
-    // Another window of the same client carries on driving without a gap. The
-    // same machine keeps the project, so a read may do this much.
-    const sameClient = this.presentFor(projectId).find(
-      (endpoint) => endpoint.clientId === lease.holder.clientId
-    );
-    if (sameClient) {
-      this.grant(projectId, sameClient);
+    // Another window of the same client carries on driving without a gap, and
+    // so does the same install relaunched once the holder's endpoint is gone
+    // for good: one whose link merely dropped keeps its grace for a resume,
+    // even from another launch sharing its install's id. The same machine
+    // keeps the project, so a read may do this much.
+    const continuer = this.continuer(this.presentFor(projectId), lease, this.holderIsGone(lease));
+    if (continuer) {
+      this.grant(projectId, continuer);
       return;
     }
     if (lease.releaseTimer) return;
@@ -657,7 +705,7 @@ export class DriveLeaseService {
       this.sendViews(projectId, lease.holder);
       return;
     }
-    const next = this.successor(projectId, lease.holder.clientId);
+    const next = this.successor(projectId, lease);
     if (next) {
       this.grant(projectId, next);
       return;
@@ -681,6 +729,7 @@ export class DriveLeaseService {
     this.leases.set(projectId, {
       holder,
       holderHandle: endpoint.handle,
+      holderDeviceId: client?.deviceId ?? null,
       releaseTimer: null,
       awayUntil: null,
     });

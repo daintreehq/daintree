@@ -75,13 +75,16 @@ export interface HostServerOptions {
 }
 
 /**
- * What a parked session keeps: only what a resume has to match, and when it
- * was parked. The dropped LinkSession and its context are not retained, so a
- * parked slot costs a few strings and a timer however much the session carried.
+ * What a parked session keeps: what a resume has to match, the install a
+ * fresh session of the same Shell ends it by, and when it was parked. The
+ * dropped LinkSession and its context are not retained, so a parked slot
+ * costs a few strings and a timer however much the session carried.
  */
 interface Resumable {
   sessionId: string;
   clientId: string;
+  /** The Shell install its HELLO named, if it did. */
+  deviceId?: string;
   parkedAt: number;
   timer: ReturnType<typeof setTimeout>;
 }
@@ -487,6 +490,16 @@ export class HostServer {
           : mayResume
             ? "client-mismatch"
             : "secret-mismatch";
+    // A fresh session from a Shell install ends the ones it left parked: a
+    // relaunch can't resume them, and held for the grace they would keep their
+    // views' drive leases and the assistants pinned to them. An attached one
+    // is left alone, since it may be another launch sharing the install's id.
+    const deviceId = hello.client.deviceId;
+    if (!resumed && deviceId) {
+      for (const parked of [...this.resumable.values()]) {
+        if (parked.deviceId === deviceId) this.supersede(parked.sessionId);
+      }
+    }
     if (!resumed && !this.makeRoomForSession()) {
       this.logRefused(hello, "busy");
       session.reject({ reason: "busy", handshake: null, detail: null });
@@ -613,12 +626,19 @@ export class HostServer {
       this.expire({ sessionId, clientId, cause: "grace-expired" });
     }, grace);
     timer.unref?.();
-    this.resumable.set(sessionId, { sessionId, clientId, parkedAt: this.now(), timer });
+    const deviceId = ctx.client.deviceId;
+    this.resumable.set(sessionId, {
+      sessionId,
+      clientId,
+      ...(deviceId ? { deviceId } : {}),
+      parkedAt: this.now(),
+      timer,
+    });
   }
 
   /**
-   * The Shell that owned this session proved itself on a newer one (#13392):
-   * nothing will resume it, and held for the grace window it would keep its
+   * The Shell that owned this session came back on a newer one (#13392,
+   * #13909): nothing will resume it, and held for the grace window it would keep its
    * views' drive leases and the assistants pinned to them. Parked, it ends at
    * once; still attached (the host hasn't seen its link die yet), it ends the
    * moment it parks instead of being held. Answers whether it ended now.

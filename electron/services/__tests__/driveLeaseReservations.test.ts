@@ -48,4 +48,31 @@ describe("drive lease reservations on disk", () => {
     expect(parseReservations("[]")).toEqual({});
     expect(parseReservations("null")).toEqual({});
   });
+
+  it("keeps a holder's install, and a reservation whose install is missing or damaged (#13909)", () => {
+    dir = mkdtempSync(path.join(os.tmpdir(), "dlr-"));
+    const store = createFileReservationStore(dir);
+    store.save({ p1: { clientId: "c1", clientName: "laptop", deviceId: "install-1" } });
+    expect(store.load()).toEqual({
+      p1: { clientId: "c1", clientName: "laptop", deviceId: "install-1" },
+    });
+
+    expect(
+      parseReservations(
+        JSON.stringify({
+          saved: { clientId: "c", clientName: "n", deviceId: "d" },
+          older: { clientId: "c", clientName: "n" },
+          wrongType: { clientId: "c", clientName: "n", deviceId: 7 },
+          empty: { clientId: "c", clientName: "n", deviceId: "" },
+          long: { clientId: "c", clientName: "n", deviceId: "x".repeat(600) },
+        })
+      )
+    ).toEqual({
+      saved: { clientId: "c", clientName: "n", deviceId: "d" },
+      older: { clientId: "c", clientName: "n" },
+      wrongType: { clientId: "c", clientName: "n" },
+      empty: { clientId: "c", clientName: "n" },
+      long: { clientId: "c", clientName: "n" },
+    });
+  });
 });
