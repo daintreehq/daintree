@@ -798,6 +798,10 @@ export interface GeneratedIpcInvokeMap {
     ];
     result: import("../forge.js").PR;
   };
+  "forge:disable-auto-merge": {
+    args: [payload: { cwd: string; prNumber: number }];
+    result: import("../forge.js").DisableAutoMergeResult;
+  };
   "forge:dismiss-review": {
     args: [payload: { cwd: string; prNumber: number; reviewId: number; message: string }];
     result: import("../forge.js").PullRequestReview;
@@ -818,6 +822,17 @@ export interface GeneratedIpcInvokeMap {
       },
     ];
     result: import("../forge.js").PR;
+  };
+  "forge:enable-auto-merge": {
+    args: [
+      payload: {
+        cwd: string;
+        prNumber: number;
+        mergeMethod?: "merge" | "squash" | "rebase" | undefined;
+        expectedHeadSha: string;
+      },
+    ];
+    result: import("../forge.js").EnableAutoMergeResult;
   };
   "forge:get-checks": {
     args: [payload: { cwd: string; prNumber: number }];
@@ -893,6 +908,7 @@ export interface GeneratedIpcInvokeMap {
         mergeMethod?: "merge" | "squash" | "rebase" | undefined;
         commitTitle?: string | undefined;
         commitMessage?: string | undefined;
+        expectedHeadSha?: string | undefined;
       },
     ];
     result: import("../forge.js").MergePRResult;

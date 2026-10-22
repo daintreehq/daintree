@@ -271,6 +271,8 @@ export const BUILT_IN_ACTION_IDS = [
   "forge.closePR",
   "forge.reopenPR",
   "forge.mergePR",
+  "forge.enableAutoMerge",
+  "forge.disableAutoMerge",
   "forge.convertPRToDraft",
   "forge.markPRReadyForReview",
   "forge.commentOnPR",

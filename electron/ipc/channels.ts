@@ -1034,6 +1034,8 @@ export const CHANNELS = {
   FORGE_CLOSE_PR: "forge:close-pr",
   FORGE_REOPEN_PR: "forge:reopen-pr",
   FORGE_MERGE_PR: "forge:merge-pr",
+  FORGE_ENABLE_AUTO_MERGE: "forge:enable-auto-merge",
+  FORGE_DISABLE_AUTO_MERGE: "forge:disable-auto-merge",
   FORGE_CONVERT_PR_TO_DRAFT: "forge:convert-pr-to-draft",
   FORGE_MARK_PR_READY_FOR_REVIEW: "forge:mark-pr-ready-for-review",
   FORGE_COMMENT_ON_PR: "forge:comment-on-pr",

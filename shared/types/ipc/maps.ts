@@ -145,7 +145,6 @@ import type {
   Issue,
   PR,
   Page,
-  RepoMetadata,
   ListOptions,
   ForgeUser,
 } from "../forge.js";
@@ -1179,7 +1178,7 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
   };
   "forge:get-repo-metadata": {
     args: [payload: { cwd: string }];
-    result: RepoMetadata;
+    result: import("./forge.js").ForgeRepoMetadataPayload;
   };
   "forge:get-current-user": {
     args: [payload: { cwd: string }];

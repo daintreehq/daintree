@@ -936,8 +936,16 @@ describe("forge tool exposure (#11585)", () => {
    * credential has to be composed in the model channel to be sent at all. Token
    * entry stays a UI-owned flow — the provider settings tab dispatches it as
    * `source: "user"`, which no tier gates.
+   *
+   * `forge.enableAutoMerge` / `forge.disableAutoMerge` arm or cancel a merge the
+   * forge carries out later, with no prompt when it lands. Their caller is the
+   * Review Hub's D2 confirm; an agent already has `gh pr merge --auto` (#13747).
    */
-  const FORGE_ACTIONS_OFF_EVERY_TIER = new Set(["forge.validateToken"]);
+  const FORGE_ACTIONS_OFF_EVERY_TIER = new Set([
+    "forge.validateToken",
+    "forge.enableAutoMerge",
+    "forge.disableAutoMerge",
+  ]);
 
   it("keeps the exempted forge actions off every tier and out of every listing", () => {
     // Membership alone would be a weak exemption: a tool can be off a tier and

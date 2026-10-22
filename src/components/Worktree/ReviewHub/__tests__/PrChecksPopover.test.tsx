@@ -7,12 +7,18 @@ import { primeRadix } from "@/components/ui/radix-loader";
 import type { ForgeCheckRun } from "@shared/types/ipc/forge";
 
 const getChecksMock = vi.fn();
+const getPRMock = vi.fn<(cwd: string, prNumber: number) => Promise<unknown>>();
+const getRepoMetadataMock = vi.fn<(cwd: string) => Promise<unknown>>();
 // Typed rather than bare `vi.fn()`: an untyped mock returns `any`, and the cast
 // back at the call site is exactly what `no-unsafe-type-assertion` flags.
 const openSendToAgentMock = vi.fn<(text: string, sourceTerminalId?: string) => boolean>();
 
 vi.mock("@/clients/forgeClient", () => ({
-  forgeClient: { getChecks: (cwd: string, prNumber: number) => getChecksMock(cwd, prNumber) },
+  forgeClient: {
+    getChecks: (cwd: string, prNumber: number) => getChecksMock(cwd, prNumber),
+    getPR: (cwd: string, prNumber: number) => getPRMock(cwd, prNumber),
+    getRepoMetadata: (cwd: string) => getRepoMetadataMock(cwd),
+  },
 }));
 
 vi.mock("@/hooks/useSendToAgentPalette", () => ({
@@ -35,6 +41,10 @@ beforeAll(async () => {
 beforeEach(() => {
   vi.stubGlobal("ResizeObserver", StubResizeObserver);
   getChecksMock.mockReset();
+  getPRMock.mockReset();
+  getPRMock.mockResolvedValue(null);
+  getRepoMetadataMock.mockReset();
+  getRepoMetadataMock.mockResolvedValue(null);
   openSendToAgentMock.mockReset();
   openSendToAgentMock.mockReturnValue(true);
 });
@@ -536,5 +546,82 @@ describe("PrChecksPopover", () => {
     await screen.findByTestId("pr-checks-error");
     fireEvent.click(screen.getByTestId("pr-checks-open-pr"));
     expect(onOpenExternal).toHaveBeenCalledWith("https://github.com/o/r/pull/42");
+  });
+
+  describe("merge control (#13747)", () => {
+    const openPR = {
+      number: 42,
+      title: "t",
+      body: "",
+      state: "open",
+      rawState: "OPEN",
+      isDraft: false,
+      merged: false,
+      url: "https://github.com/o/r/pull/42",
+      baseRef: "develop",
+      headRef: "feature",
+      createdAt: 0,
+      updatedAt: 0,
+      mergeStatus: "blocked",
+      mergeIntent: null,
+      headSha: "a".repeat(40),
+      rawData: null,
+    };
+    const metadata = {
+      defaultBranch: "develop",
+      isPrivate: false,
+      isFork: false,
+      isArchived: false,
+      mergeSettings: {
+        allowedMethods: ["merge", "squash"],
+        viewerDefaultMethod: "squash",
+        autoMergeAllowed: true,
+      },
+      autoMergeSupported: true,
+      rawData: null,
+    };
+
+    it("reads the PR when the popover opens and hands the request to the confirm", async () => {
+      getChecksMock.mockResolvedValue({ checks: [check()] });
+      getPRMock.mockResolvedValue(openPR);
+      getRepoMetadataMock.mockResolvedValue(metadata);
+      renderPopover();
+
+      await openAndSettle();
+      const action = await screen.findByTestId("pr-merge-action");
+      expect(action.textContent).toBe("Merge when ready");
+      expect(screen.getByTestId("pr-merge-method-squash").getAttribute("aria-checked")).toBe(
+        "true"
+      );
+
+      fireEvent.click(action);
+
+      // The popover closes and the confirm, mounted outside it, opens.
+      await waitFor(() => expect(screen.queryByTestId("pr-checks-popover")).toBeNull());
+      expect(await screen.findByRole("button", { name: "Merge when ready" })).toBeTruthy();
+    });
+
+    it("explains a disabled arm instead of hiding it", async () => {
+      getChecksMock.mockResolvedValue({ checks: [check()] });
+      getPRMock.mockResolvedValue(openPR);
+      getRepoMetadataMock.mockResolvedValue({
+        ...metadata,
+        mergeSettings: { ...metadata.mergeSettings, autoMergeAllowed: false },
+      });
+      renderPopover();
+
+      await openAndSettle();
+      const action = await screen.findByTestId("pr-merge-action");
+      expect(action.hasAttribute("disabled")).toBe(true);
+      expect(screen.getByTestId("pr-merge-control-reason").textContent).toMatch(/Allow auto-merge/);
+    });
+
+    it("shows no merge row when the PR can't be read", async () => {
+      getChecksMock.mockResolvedValue({ checks: [check()] });
+      renderPopover();
+      await openAndSettle();
+      await screen.findByTestId("pr-checks-list");
+      expect(screen.queryByTestId("pr-merge-control")).toBeNull();
+    });
   });
 });

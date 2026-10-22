@@ -2,6 +2,8 @@ import { events } from "./events.js";
 import { logInfo, logWarn, logDebug } from "../utils/logger.js";
 import type { WorktreeSnapshot as WorktreeState } from "../../shared/types/workspace-host.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
+import { mergeIntentEqual } from "../../shared/utils/prMergeIntent.js";
+import { applyMergeObservation } from "./prMergeObservation.js";
 import { createHardenedGit } from "../utils/hardenedGit.js";
 import { getForgeBridge } from "../workspace-host/forgeBridge.js";
 import { BatchLoader } from "../workspace-host/batchLoader.js";
@@ -13,6 +15,7 @@ import type {
   CIStatus,
   CIStatusState,
   NormalizedPRState,
+  PRMergeIntent,
 } from "../../shared/types/forge.js";
 
 // Focus-aware polling cadence: faster when any Daintree window is focused so
@@ -279,6 +282,13 @@ interface InternalLinkedPR {
   // `displacedHeadSha` was last set by a local move, so undoing the move must
   // drop it too — a head only a local sighting displaced may be the real one.
   displacedByLocalMove?: boolean;
+  // The pending forge-side merge GitHub last reported (auto-merge or queue).
+  mergeIntent?: PRMergeIntent | null;
+  // The forge's head when this host first saw the current arming episode, and
+  // whether a later read found another one. A push by anyone with write access
+  // leaves auto-merge armed, so a moved head is a commit that may land unseen.
+  armedHeadSha?: string;
+  headMovedWhileArmed?: boolean;
 }
 
 export interface PRDetectionResult {
@@ -592,6 +602,8 @@ class PullRequestService {
         owner: repo.owner,
         repo: repo.repo,
         baseRef: detected.baseRef,
+        mergeIntent: detected.mergeIntent,
+        headMovedWhileArmed: detected.headMovedWhileArmed,
         timestamp: Date.now(),
       });
     }
@@ -1409,6 +1421,8 @@ class PullRequestService {
         owner: repo.owner,
         repo: repo.repo,
         baseRef: detected.baseRef,
+        mergeIntent: detected.mergeIntent,
+        headMovedWhileArmed: detected.headMovedWhileArmed,
         timestamp: Date.now(),
       });
     }
@@ -1854,6 +1868,9 @@ class PullRequestService {
       }
 
       const enrichedPRNumbers = new Set<number>();
+      // Once per entry, like the head move below: siblings can share one, and
+      // a second pass would see its own update and report no change.
+      const mergeChangedByEntry = new Map<InternalLinkedPR, boolean>();
 
       // Decided per PR number before any entry's snapshot advances below:
       // sibling worktrees can share one entry, and the first iteration would
@@ -1918,6 +1935,17 @@ class PullRequestService {
             detectedPR.url !== pr.url ||
             detectedPR.baseRef !== pr.baseRef;
 
+          let mergeChanged = mergeChangedByEntry.get(detectedPR);
+          if (mergeChanged === undefined) {
+            const intentBefore = detectedPR.mergeIntent;
+            const movedBefore = detectedPR.headMovedWhileArmed;
+            applyMergeObservation(detectedPR, detectedPR, pr.mergeIntent, pr.headSha);
+            mergeChanged =
+              !mergeIntentEqual(intentBefore, detectedPR.mergeIntent) ||
+              movedBefore !== detectedPR.headMovedWhileArmed;
+            mergeChangedByEntry.set(detectedPR, mergeChanged);
+          }
+
           const snap = changedSnapshotByNumber.get(prNumber);
           const headMoved = movedHeadNumbers.has(prNumber);
 
@@ -1961,7 +1989,7 @@ class PullRequestService {
           // Checks for a closed or merged PR are never waited on.
           if (detectedPR.state !== "open") detectedPR.ciGraceUntil = undefined;
 
-          if (prChanged || headMoved) {
+          if (prChanged || headMoved || mergeChanged) {
             events.emit("sys:pr:detected", {
               worktreeId,
               prNumber: pr.number,
@@ -1985,6 +2013,8 @@ class PullRequestService {
               owner: repo.owner,
               repo: repo.repo,
               baseRef: pr.baseRef,
+              mergeIntent: detectedPR.mergeIntent,
+              headMovedWhileArmed: detectedPR.headMovedWhileArmed,
               timestamp: Date.now(),
             });
           }
@@ -2363,6 +2393,10 @@ class PullRequestService {
           providerId,
           stagnantPollCount: 0,
         };
+        const samePRPrior = worktreeIds
+          .map((worktreeId) => this.detectedPRs.get(worktreeId))
+          .find((prior) => prior?.number === internalPR.number && prior.providerId === providerId);
+        applyMergeObservation(internalPR, samePRPrior, pr.mergeIntent, pr.headSha);
         // A refresh must not forget what the post-push guards rely on: which
         // head the PR is on, which it moved off, whether it has CI at all, and
         // a wait already under way (whose deadline it must not restart).
@@ -2392,7 +2426,9 @@ class PullRequestService {
             prior.url === internalPR.url &&
             prior.isDraft === internalPR.isDraft &&
             prior.baseRef === internalPR.baseRef &&
-            prior.providerId === internalPR.providerId;
+            prior.providerId === internalPR.providerId &&
+            mergeIntentEqual(prior.mergeIntent, internalPR.mergeIntent) &&
+            prior.headMovedWhileArmed === internalPR.headMovedWhileArmed;
           this.resolvedWorktrees.add(worktreeId);
           this.detectedPRs.set(worktreeId, internalPR);
           this.announcedNoPR.delete(worktreeId);
@@ -2426,6 +2462,8 @@ class PullRequestService {
             owner: repo.owner,
             repo: repo.repo,
             baseRef: pr.baseRef,
+            mergeIntent: internalPR.mergeIntent,
+            headMovedWhileArmed: internalPR.headMovedWhileArmed,
             timestamp: Date.now(),
           });
         }
@@ -2621,6 +2659,8 @@ class PullRequestService {
               repo: repo.repo,
               ciStatus: pr._ciStatus,
               baseRef: detected.baseRef,
+              mergeIntent: detected.mergeIntent,
+              headMovedWhileArmed: detected.headMovedWhileArmed,
               timestamp: Date.now(),
             });
           }

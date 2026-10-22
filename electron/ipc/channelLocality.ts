@@ -355,6 +355,8 @@ export const CHANNEL_LOCALITY = {
   "forge:list-prs": "host",
   "forge:mark-pr-ready-for-review": "host",
   "forge:merge-pr": "host",
+  "forge:enable-auto-merge": "host",
+  "forge:disable-auto-merge": "host",
   // The URL is the host's to build, the browser the caller's (see the split).
   "forge:open-commits": "hybrid",
   "forge:open-issue": "hybrid",

@@ -1,7 +1,9 @@
 import { cn } from "@/lib/utils";
-import { CloudOff, CornerDownRight } from "lucide-react";
+import { AlertTriangle, CloudOff, CornerDownRight } from "lucide-react";
+import { GitMerge } from "@/components/icons";
+import { describeMergeIntent, HEAD_MOVED_WHILE_ARMED_TEXT } from "@shared/utils/prMergeIntent";
 import { getPrStateColor, getPrStateGlyph } from "@/lib/prStateGlyph";
-import type { CIStatus } from "@shared/types/forge";
+import type { CIStatus, PRMergeIntent } from "@shared/types/forge";
 import type { NormalizedPRState } from "@shared/types/forge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip";
 import { usePRTooltip } from "@/hooks/useForgeTooltip";
@@ -22,6 +24,10 @@ interface PRBadgeProps {
   prNumber: number;
   prState?: NormalizedPRState;
   prCiStatus?: CIStatus | null;
+  /** A merge the forge was asked to carry out later, whoever asked. */
+  mergeIntent?: PRMergeIntent | null;
+  /** The head moved while auto-merge stayed armed — commits that may land unreviewed. */
+  headMovedWhileArmed?: boolean;
   isSubordinate: boolean;
   worktreePath: string;
   onOpen?: () => void;
@@ -46,6 +52,8 @@ export function PRBadge({
   prNumber,
   prState,
   prCiStatus,
+  mergeIntent,
+  headMovedWhileArmed,
   isSubordinate,
   worktreePath,
   onOpen,
@@ -89,6 +97,11 @@ export function PRBadge({
         : "open";
 
   const ciVisual = getCIStatusVisual(prCiStatus);
+  const pendingMerge = prState === "open" ? (mergeIntent ?? null) : null;
+  const headMoved = pendingMerge !== null && headMovedWhileArmed === true;
+  const mergeNote = pendingMerge
+    ? `${describeMergeIntent(pendingMerge)}${headMoved ? `. ${HEAD_MOVED_WHILE_ARMED_TEXT}` : ""}`
+    : null;
 
   const showPausedGlyph =
     (freshnessCause === "rate-limit" ||
@@ -101,6 +114,7 @@ export function PRBadge({
     : `Open ${prStateLabel} pull request #${prNumber}` +
       (prTitle ? `: ${prTitle}` : "") +
       (ciVisual ? ` — ${ciVisual.ariaLabel}` : "") +
+      (mergeNote ? ` — ${mergeNote}` : "") +
       (freshnessCause === "rate-limit"
         ? " — forge rate limited"
         : freshnessCause === "circuit-breaker" || (prDetectionPaused ?? false)
@@ -207,6 +221,19 @@ export function PRBadge({
               )}
             </span>
           )}
+          {pendingMerge && !missingCredential && (
+            <span
+              className="inline-flex items-center justify-center w-3 h-3 shrink-0"
+              aria-hidden="true"
+              data-testid="pr-badge-merge-intent"
+            >
+              {headMoved ? (
+                <AlertTriangle className="w-3 h-3 text-status-warning" />
+              ) : (
+                <GitMerge className="w-3 h-3 text-text-secondary" />
+              )}
+            </span>
+          )}
           {showPausedGlyph && (
             <CloudOff className="w-3 h-3 shrink-0 text-text-secondary" aria-hidden="true" />
           )}
@@ -227,6 +254,9 @@ export function PRBadge({
             : undefined
         }
       >
+        {mergeNote && !missingCredential && (
+          <p className="mb-2 max-w-xs text-xs text-text-secondary">{mergeNote}</p>
+        )}
         {missingCredential ? (
           <TokenMissingTooltip type="pr" />
         ) : data ? (

@@ -2791,6 +2791,16 @@ export interface PluginWorktreeLinkedPR {
   readonly ciStatus?: import("./forge.js").CIStatus;
   /** Branch this PR merges into (e.g. "develop"). Drives base-branch divergence display. */
   readonly baseRef?: string;
+  /**
+   * A merge the forge was asked to carry out later (auto-merge or merge queue),
+   * whoever asked. `null`: the forge reported nothing pending.
+   */
+  readonly mergeIntent?: import("./forge.js").PRMergeIntent | null;
+  /**
+   * The PR's head moved while this host watched auto-merge stay armed — a
+   * later push the forge may merge unreviewed. Observed this session only.
+   */
+  readonly headMovedWhileArmed?: boolean;
 }
 
 export interface PluginWorktreeLinked {

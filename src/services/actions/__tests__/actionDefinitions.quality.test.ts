@@ -1093,6 +1093,8 @@ const EXPECTED_CONFIRM_DANGER: ReadonlyArray<ActionId> = [
   "forge.closePR",
   "forge.reopenPR",
   "forge.mergePR",
+  "forge.enableAutoMerge",
+  "forge.disableAutoMerge",
   "forge.convertPRToDraft",
   "forge.markPRReadyForReview",
   "forge.commentOnPR",
@@ -1138,6 +1140,11 @@ const CONFIRMED_WIRED: ReadonlyArray<ActionId> = [
   "recipe.delete",
   "devPreview.restartAndClearCache",
   "devPreview.reinstallAndRestart",
+  // The Review Hub's merge confirm (#13747): PrMergeConfirmDialog previews
+  // what lands and dispatches all three from the same file.
+  "forge.mergePR",
+  "forge.enableAutoMerge",
+  "forge.disableAutoMerge",
 ];
 
 /**
@@ -1216,7 +1223,6 @@ const BYPASS_WIRED: ReadonlyArray<ActionId> = [
   "forge.createPR",
   "forge.closePR",
   "forge.reopenPR",
-  "forge.mergePR",
   "forge.convertPRToDraft",
   "forge.markPRReadyForReview",
   "forge.commentOnPR",
@@ -1315,6 +1321,8 @@ describe("destructive-action danger metadata", () => {
       cwd: "/placeholder",
       // forge.* PR write actions require these before the confirm gate runs.
       prNumber: 1,
+      // forge.enableAutoMerge pins a full head commit before its confirm gate runs.
+      expectedHeadSha: "a".repeat(40),
       head: "feature-branch",
       base: "main",
       title: "placeholder",

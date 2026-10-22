@@ -264,6 +264,8 @@ export function WorktreeHeader({
                 prTitle={displayTitle}
                 prState={worktree.linked?.pr?.state}
                 prCiStatus={worktree.linked?.pr?.ciStatus}
+                mergeIntent={worktree.linked?.pr?.mergeIntent}
+                headMovedWhileArmed={worktree.linked?.pr?.headMovedWhileArmed}
                 isSubordinate={false}
                 worktreePath={worktree.path}
                 onOpen={badges.onOpenPR}

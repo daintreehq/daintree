@@ -796,6 +796,8 @@ export function ReviewHubContent({
                 prUrl: wt.linked.pr.url,
                 prState: wt.linked.pr.state,
                 prCiStatus: wt.linked.pr.ciStatus,
+                mergeIntent: wt.linked.pr.mergeIntent,
+                headMovedWhileArmed: wt.linked.pr.headMovedWhileArmed,
               }
             : null;
         }

@@ -400,6 +400,66 @@ describe("PullRequestService", () => {
     pullRequestService.destroy();
   });
 
+  it("re-emits when revalidation finds auto-merge armed, and flags a head that moved while armed (#13747)", async () => {
+    const H1 = "1".repeat(40);
+    const H2 = "2".repeat(40);
+    const armed = { kind: "auto-merge" as const, method: "squash" as const, enabledAt: 1 };
+    // What GitHub reports right now, for detection and revalidation alike.
+    let current: Partial<ForgePR> = { mergeIntent: null, headSha: H1 };
+    const mockImpl = mockForgeProviderResolved(async () => makeMockForgePR(current));
+    mockImpl.batchLookups = {
+      findPRsByNumbers: vi.fn(async (_repo: RepoRef, prNumbers: number[]) => {
+        const map = new Map<number, ForgePR | null>();
+        for (const n of prNumbers) map.set(n, makeMockForgePR({ number: n, ...current }));
+        return map;
+      }),
+    };
+
+    const { pullRequestService } = await import("../PullRequestService.js");
+    const { events } = await import("../events.js");
+    const detected: DaintreeEventMap["sys:pr:detected"][] = [];
+    const unsubscribe = events.on("sys:pr:detected", (payload) => detected.push(payload));
+    const revalidate = () =>
+      (
+        pullRequestService as unknown as { revalidateResolvedPRs: () => Promise<void> }
+      ).revalidateResolvedPRs();
+
+    pullRequestService.initialize("/repo", "test-project-id");
+    events.emit(
+      "sys:worktree:update",
+      makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/a" })
+    );
+    await pullRequestService.refresh();
+    await flushLoaders();
+    expect(detected.every((p) => p.mergeIntent === null)).toBe(true);
+
+    current = { mergeIntent: armed, headSha: H1 };
+    let before = detected.length;
+    await revalidate();
+    await flushLoaders();
+    expect(detected.slice(before).map((p) => p.mergeIntent)).toContainEqual(armed);
+    expect(detected.at(-1)?.headMovedWhileArmed).toBeUndefined();
+
+    // Same episode, new head: a push GitHub may now merge unreviewed.
+    current = { mergeIntent: armed, headSha: H2 };
+    before = detected.length;
+    await revalidate();
+    await flushLoaders();
+    expect(detected.length).toBeGreaterThan(before);
+    expect(detected.at(-1)?.headMovedWhileArmed).toBe(true);
+
+    // A full detection pass on the same episode keeps the observation.
+    before = detected.length;
+    await pullRequestService.refresh();
+    await flushLoaders();
+    const later = detected.slice(before);
+    expect(later.length).toBeGreaterThan(0);
+    expect(later.every((p) => p.headMovedWhileArmed === true)).toBe(true);
+
+    unsubscribe();
+    pullRequestService.destroy();
+  });
+
   it("clears provider PR caches through the forge bridge on manual refresh", async () => {
     mockForgeProviderResolved();
 

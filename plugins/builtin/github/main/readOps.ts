@@ -9,10 +9,12 @@ import type {
   Page,
   PR,
   PRListProbeResult,
+  PRMergeMethod,
   PRSnapshot,
   PRTooltipData,
   PushErrorClassification,
   RateLimitInfo,
+  RepoMergeSettings,
   RepoMetadata,
   RepoRef,
   ReviewThread,
@@ -64,6 +66,7 @@ import {
 } from "./GitHubPRs.js";
 import {
   mapIssueGraphQLStates,
+  mapMergeMethod,
   mapPRGraphQLStates,
   toForgeIssue,
   toForgeIssueComment,
@@ -1107,6 +1110,7 @@ export async function getRepoMetadataImpl(repo: RepoRef): Promise<RepoMetadata> 
     .map((n) => (typeof n.topic?.name === "string" ? n.topic.name : null))
     .filter((s): s is string => s !== null);
 
+  const mergeSettings = toRepoMergeSettings(repository);
   return {
     defaultBranch,
     isPrivate: repository.isPrivate === true,
@@ -1115,7 +1119,27 @@ export async function getRepoMetadataImpl(repo: RepoRef): Promise<RepoMetadata> 
     description: (repository.description as string | null | undefined) ?? null,
     license,
     topics,
+    ...(mergeSettings ? { mergeSettings } : {}),
     rawData: repository,
+  };
+}
+
+/**
+ * The repository's merge flags → {@link RepoMergeSettings}. `undefined` when
+ * the response carried none of them, so an older cached shape can't read as
+ * "nothing allowed".
+ */
+function toRepoMergeSettings(repository: Record<string, unknown>): RepoMergeSettings | undefined {
+  if (typeof repository.autoMergeAllowed !== "boolean") return undefined;
+  const allowedMethods: PRMergeMethod[] = [];
+  if (repository.mergeCommitAllowed === true) allowedMethods.push("merge");
+  if (repository.squashMergeAllowed === true) allowedMethods.push("squash");
+  if (repository.rebaseMergeAllowed === true) allowedMethods.push("rebase");
+  const viewerDefaultMethod = mapMergeMethod(repository.viewerDefaultMergeMethod);
+  return {
+    allowedMethods,
+    ...(viewerDefaultMethod ? { viewerDefaultMethod } : {}),
+    autoMergeAllowed: repository.autoMergeAllowed,
   };
 }
 

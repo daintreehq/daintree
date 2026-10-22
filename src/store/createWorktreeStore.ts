@@ -16,6 +16,7 @@ import { notify } from "@/lib/notify";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { NESTED_WORKTREE_DELETE_MARKER } from "@shared/utils/nestedWorktrees";
 import { issueNumberBelongsToLinkedPr } from "@shared/utils/worktreeIssueProjection";
+import { mergeIntentEqual } from "@shared/utils/prMergeIntent";
 import { worktreeNameFromId } from "@/lib/notificationSourceLabel";
 import { WORKTREE_BRANCH_KEPT_MARKER } from "@shared/utils/worktreeSummary";
 
@@ -2408,7 +2409,8 @@ function ciStatusEqual(
     a.passed === b.passed &&
     a.failed === b.failed &&
     a.pending === b.pending &&
-    a.requiredChecksPassing === b.requiredChecksPassing
+    a.requiredChecksPassing === b.requiredChecksPassing &&
+    a.headSha === b.headSha
   );
 }
 
@@ -2426,6 +2428,8 @@ function linkedEqual(
     a.pr?.title === b.pr?.title &&
     a.pr?.baseRef === b.pr?.baseRef &&
     ciStatusEqual(a.pr?.ciStatus, b.pr?.ciStatus) &&
+    mergeIntentEqual(a.pr?.mergeIntent, b.pr?.mergeIntent) &&
+    a.pr?.headMovedWhileArmed === b.pr?.headMovedWhileArmed &&
     a.issue?.ref.number === b.issue?.ref.number &&
     a.issue?.title === b.issue?.title
   );

@@ -392,6 +392,9 @@ export const SEARCH_QUERY = `
           reviewDecision
           baseRefName
           headRefName
+          headRefOid
+          isInMergeQueue
+          autoMergeRequest { enabledAt mergeMethod enabledBy { login } }
           headRepository {
             nameWithOwner
           }
@@ -596,6 +599,16 @@ export const GET_PR_QUERY = `
         mergedAt
         baseRefName
         headRefName
+        headRefOid
+        isInMergeQueue
+        isMergeQueueEnabled
+        mergeQueueEntry { position }
+        autoMergeRequest { enabledAt mergeMethod enabledBy { login } }
+        viewerCanDisableAutoMerge
+        commits(last: 100) {
+          totalCount
+          nodes { commit { oid messageHeadline author { name user { login } } } }
+        }
         headRepository {
           nameWithOwner
         }
@@ -833,6 +846,9 @@ export function buildBatchBranchPRQuery(owner: string, repo: string, branches: s
             mergeStateStatus
             baseRefName
             headRefName
+            headRefOid
+            isInMergeQueue
+            autoMergeRequest { enabledAt mergeMethod enabledBy { login } }
             createdAt
             updatedAt
             closedAt
@@ -985,6 +1001,9 @@ export function buildBatchPRsQuery(owner: string, repo: string, numbers: number[
         mergedAt
         baseRefName
         headRefName
+        headRefOid
+        isInMergeQueue
+        autoMergeRequest { enabledAt mergeMethod enabledBy { login } }
         headRepository {
           nameWithOwner
         }
@@ -1113,6 +1132,59 @@ export const MARK_PR_READY_FOR_REVIEW_MUTATION = `
   }
 `;
 
+// "Merge when ready". On a merge-queue branch the same mutation enqueues a
+// ready PR or arms the queue, and GitHub ignores `mergeMethod` there.
+// `expectedHeadOid` makes GitHub refuse to arm a head nobody reviewed.
+export const ENABLE_PR_AUTO_MERGE_MUTATION = `
+  mutation EnablePRAutoMerge($id: ID!, $expectedHeadOid: GitObjectID!, $mergeMethod: PullRequestMergeMethod) {
+    enablePullRequestAutoMerge(
+      input: { pullRequestId: $id, expectedHeadOid: $expectedHeadOid, mergeMethod: $mergeMethod }
+    ) {
+      pullRequest {
+        id
+        isInMergeQueue
+        mergeQueueEntry { position }
+        autoMergeRequest { enabledAt mergeMethod enabledBy { login } }
+      }
+    }
+  }
+`;
+
+export const DISABLE_PR_AUTO_MERGE_MUTATION = `
+  mutation DisablePRAutoMerge($id: ID!) {
+    disablePullRequestAutoMerge(input: { pullRequestId: $id }) {
+      pullRequest { id }
+    }
+  }
+`;
+
+// `disablePullRequestAutoMerge` leaves a queued PR in the queue; only this
+// takes it out. Its `id` is the pull request's node id.
+export const DEQUEUE_PR_MUTATION = `
+  mutation DequeuePR($id: ID!) {
+    dequeuePullRequest(input: { id: $id }) {
+      mergeQueueEntry { id }
+    }
+  }
+`;
+
+// Read at the moment a write needs it, never from a poll or cache: a PR moves
+// from armed to queued, or from blocked to clean, between polls.
+export const GET_PR_MERGE_STATE_QUERY = `
+  query GetPRMergeState($owner: String!, $repo: String!, $number: Int!) {
+    repository(owner: $owner, name: $repo) {
+      pullRequest(number: $number) {
+        id
+        headRefOid
+        mergeStateStatus
+        isInMergeQueue
+        isMergeQueueEnabled
+        autoMergeRequest { enabledAt }
+      }
+    }
+  }
+`;
+
 export const REPO_METADATA_QUERY = `
   query GetRepoMetadata($owner: String!, $repo: String!) {
     repository(owner: $owner, name: $repo) {
@@ -1120,6 +1192,11 @@ export const REPO_METADATA_QUERY = `
       isPrivate
       isFork
       isArchived
+      mergeCommitAllowed
+      squashMergeAllowed
+      rebaseMergeAllowed
+      autoMergeAllowed
+      viewerDefaultMergeMethod
       description
       licenseInfo { name }
       repositoryTopics(first: 20) { nodes { topic { name } } }

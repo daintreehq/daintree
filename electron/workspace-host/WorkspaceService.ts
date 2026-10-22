@@ -106,7 +106,7 @@ import type {
   PluginWorktreeLinkedPR,
 } from "../../shared/types/plugin.js";
 import type { GitOperationReason } from "../../shared/types/ipc/errors.js";
-import type { CIStatus, NormalizedPRState } from "../../shared/types/forge.js";
+import type { CIStatus, NormalizedPRState, PRMergeIntent } from "../../shared/types/forge.js";
 import type { WorktreeChanges } from "../../shared/types/git.js";
 import type {
   SubmoduleAtRiskCommit,
@@ -868,6 +868,8 @@ export class WorkspaceService {
             state: data.prState,
             ciStatus: resolvedCiStatus,
             baseRef: data.baseRef,
+            mergeIntent: data.mergeIntent,
+            headMovedWhileArmed: data.headMovedWhileArmed,
           },
           issue:
             data.issueNumber && data.issueTitle
@@ -2350,6 +2352,8 @@ export class WorkspaceService {
       state: NormalizedPRState;
       ciStatus?: CIStatus;
       baseRef?: string;
+      mergeIntent?: PRMergeIntent | null;
+      headMovedWhileArmed?: boolean;
     };
     issue?: { number: number; title?: string };
   }): PluginWorktreeLinked {
@@ -2368,6 +2372,8 @@ export class WorkspaceService {
         state: params.pr.state,
         ...(params.pr.ciStatus ? { ciStatus: params.pr.ciStatus } : {}),
         ...(params.pr.baseRef ? { baseRef: params.pr.baseRef } : {}),
+        ...(params.pr.mergeIntent !== undefined ? { mergeIntent: params.pr.mergeIntent } : {}),
+        ...(params.pr.headMovedWhileArmed ? { headMovedWhileArmed: true } : {}),
       };
     }
     if (params.issue) {

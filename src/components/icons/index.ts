@@ -51,6 +51,7 @@ export {
   Gauge, // git that could run faster on this worktree — the suggestion to route a WSL checkout's git through WSL
   GitBranch, // the branch a folder has checked out — where an agent's work is going, and what continues on another host
   GitBranchPlus, // per-project worktree setup — creating branches, not browsing them
+  GitMerge, // a merge the forge will carry out later — auto-merge armed, or the PR waiting in the merge queue
   GitMergeConflict, // a PR whose branch the forge reports as conflicting with its base — takes the CI glyph's place, since the conflict has to be resolved first
   GitPullRequest, // forge provider / code-host plugin category
   HardDriveDownload, // a backup branch (backup/) — a stored snapshot, kept apart from archiving a project

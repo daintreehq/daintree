@@ -427,7 +427,10 @@ export function registerForgeDataHandlers(): () => void {
           repoOwner: repoRef.owner,
           repoName: repoRef.repo,
         },
-        () => impl.getRepoMetadata(repoRef)
+        async () => ({
+          ...(await impl.getRepoMetadata(repoRef)),
+          autoMergeSupported: Boolean(impl.autoMerge),
+        })
       );
     })
   );
@@ -862,6 +865,7 @@ function projectCIStatus(status: CIStatus): ForgeCIStatusSummary {
     ...(status.requiredChecksPassing !== undefined
       ? { requiredChecksPassing: status.requiredChecksPassing }
       : {}),
+    ...(status.headSha ? { headSha: status.headSha } : {}),
   };
 }
 

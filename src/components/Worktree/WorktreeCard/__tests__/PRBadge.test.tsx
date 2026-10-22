@@ -190,3 +190,34 @@ describe("PRBadge CI rollup mark", () => {
     expect(button.querySelector(".status-mark")).toBeNull();
   });
 });
+
+describe("PRBadge pending merge (#13747)", () => {
+  beforeEach(() => {
+    mockMissingCredential = false;
+    mockFreshnessCause = undefined;
+  });
+
+  it("marks a PR GitHub will merge later and says who armed it", () => {
+    renderBadge({
+      mergeIntent: { kind: "auto-merge", method: "squash", enabledAt: 1, enabledBy: "octocat" },
+    });
+    expect(screen.getByTestId("pr-badge-merge-intent")).toBeTruthy();
+    expect(screen.getByRole("button").getAttribute("aria-label")).toMatch(/armed by octocat/);
+  });
+
+  it("warns when the head moved while armed", () => {
+    const { container } = renderBadge({
+      mergeIntent: { kind: "auto-merge", method: null, enabledAt: null },
+      headMovedWhileArmed: true,
+    });
+    expect(
+      container.querySelector('[data-testid="pr-badge-merge-intent"] .text-status-warning')
+    ).not.toBeNull();
+    expect(screen.getByRole("button").getAttribute("aria-label")).toMatch(/without another review/);
+  });
+
+  it("shows nothing once the PR is no longer open", () => {
+    renderBadge({ prState: "merged", mergeIntent: { kind: "queued", position: null } });
+    expect(screen.queryByTestId("pr-badge-merge-intent")).toBeNull();
+  });
+});

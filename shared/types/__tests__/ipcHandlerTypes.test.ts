@@ -1,6 +1,7 @@
 import { describe, it, expectTypeOf } from "vitest";
 import type { IpcInvokeMap } from "../ipc/maps.js";
-import type { Issue, ListOptions, Page, PR, RepoMetadata } from "../forge.js";
+import type { Issue, ListOptions, Page, PR } from "../forge.js";
+import type { ForgeRepoMetadataPayload } from "../ipc/forge.js";
 import type { StagingStatus } from "../git.js";
 import type { KeyAction } from "../keymap.js";
 import type { WorktreeConfig } from "../ipc/worktree.js";
@@ -47,7 +48,9 @@ describe("hand-typed IPC handler contracts", () => {
       expectTypeOf<InvokeArgs<"forge:get-repo-metadata">>().toEqualTypeOf<
         [payload: { cwd: string }]
       >();
-      expectTypeOf<InvokeResult<"forge:get-repo-metadata">>().toEqualTypeOf<RepoMetadata>();
+      expectTypeOf<
+        InvokeResult<"forge:get-repo-metadata">
+      >().toEqualTypeOf<ForgeRepoMetadataPayload>();
     });
   });
 

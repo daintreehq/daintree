@@ -44,6 +44,10 @@ export interface PRIntegrationCallbacks {
       ciStatus?: import("../../shared/types/forge.js").CIStatus;
       /** Branch the PR merges into (e.g. "develop"); drives base-branch divergence display. */
       baseRef?: string;
+      /** Pending forge-side merge (auto-merge or queue); `null` when none is pending. */
+      mergeIntent?: import("../../shared/types/forge.js").PRMergeIntent | null;
+      /** The PR's head moved while auto-merge stayed armed (observed this session). */
+      headMovedWhileArmed?: boolean;
     }
   ): void;
   onPRCleared(worktreeId: string, data: { branchName?: string; providerId?: string }): void;
@@ -148,6 +152,8 @@ export class PRIntegrationService {
           repo: data.repo,
           ciStatus: data.ciStatus,
           baseRef: data.baseRef,
+          mergeIntent: data.mergeIntent,
+          headMovedWhileArmed: data.headMovedWhileArmed,
         });
       })
     );

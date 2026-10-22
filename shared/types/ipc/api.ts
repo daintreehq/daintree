@@ -30,7 +30,6 @@ import type {
   PR,
   PRLookupResult,
   Page,
-  RepoMetadata,
   ListOptions,
   ForgeUser,
   ForgeLabel,
@@ -1905,7 +1904,9 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       prNumber: number;
     }): Promise<import("./forge.js").ForgeCIStatusSummary | null>;
     /** Fetch the normalized repository metadata roll-up. */
-    getRepoMetadata(payload: { cwd: string }): Promise<RepoMetadata>;
+    getRepoMetadata(payload: {
+      cwd: string;
+    }): Promise<import("./forge.js").ForgeRepoMetadataPayload>;
     /**
      * Resolve the active forge provider's current authenticated viewer for a
      * project, used by the renderer to drive provider-agnostic "assign issue
@@ -2065,7 +2066,25 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       mergeMethod?: "merge" | "squash" | "rebase";
       commitTitle?: string;
       commitMessage?: string;
+      /** Head commit the caller reviewed; the forge refuses the merge if it moved. */
+      expectedHeadSha?: string;
     }): Promise<MergePRResult>;
+    /**
+     * Ask the forge to merge a pull request once its requirements pass, pinned
+     * to the reviewed head. Never merges immediately: a PR that can already
+     * merge comes back `already-mergeable`.
+     */
+    enableAutoMerge(payload: {
+      cwd: string;
+      prNumber: number;
+      mergeMethod?: "merge" | "squash" | "rebase";
+      expectedHeadSha: string;
+    }): Promise<import("../forge.js").EnableAutoMergeResult>;
+    /** Cancel a pull request's pending auto-merge, or take it out of the merge queue. */
+    disableAutoMerge(payload: {
+      cwd: string;
+      prNumber: number;
+    }): Promise<import("../forge.js").DisableAutoMergeResult>;
     /** Convert an open pull request to a draft, returning its resulting draft state. */
     convertPRToDraft(payload: { cwd: string; prNumber: number }): Promise<PRDraftStateResult>;
     /** Mark a draft pull request ready for review, returning its resulting draft state. */

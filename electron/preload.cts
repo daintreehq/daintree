@@ -3459,7 +3459,16 @@ function buildElectronApi(): ElectronAPI {
         mergeMethod?: "merge" | "squash" | "rebase";
         commitTitle?: string;
         commitMessage?: string;
+        expectedHeadSha?: string;
       }) => _unwrappingInvoke(CHANNELS.FORGE_MERGE_PR, payload),
+      enableAutoMerge: (payload: {
+        cwd: string;
+        prNumber: number;
+        mergeMethod?: "merge" | "squash" | "rebase";
+        expectedHeadSha: string;
+      }) => _unwrappingInvoke(CHANNELS.FORGE_ENABLE_AUTO_MERGE, payload),
+      disableAutoMerge: (payload: { cwd: string; prNumber: number }) =>
+        _unwrappingInvoke(CHANNELS.FORGE_DISABLE_AUTO_MERGE, payload),
       convertPRToDraft: (payload: { cwd: string; prNumber: number }) =>
         _unwrappingInvoke(CHANNELS.FORGE_CONVERT_PR_TO_DRAFT, payload),
       markPRReadyForReview: (payload: { cwd: string; prNumber: number }) =>
