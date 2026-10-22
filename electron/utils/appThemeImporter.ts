@@ -7,6 +7,7 @@ import {
   getAppThemeWarnings,
   getBuiltInAppSchemeForType,
   inferAppThemeTypeFromTokens,
+  isExtensionKey,
   normalizeAppColorScheme,
   validateImportedThemeData,
   type AppThemeImportResult,
@@ -167,6 +168,22 @@ export function parseAppThemeContent(content: string, filename: string): AppThem
         message: `Ignored unknown tokens: ${unknownTokens.join(", ")}`,
       });
     }
+  }
+
+  // Read the names off the raw JSON: zod skips a `__proto__` record key, so
+  // the parsed object would hide it from the report.
+  const rawExtensions = (rawData as Record<string, unknown>).extensions;
+  const unknownExtensions =
+    rawExtensions && typeof rawExtensions === "object" && !Array.isArray(rawExtensions)
+      ? Object.keys(rawExtensions)
+          .filter((key) => !isExtensionKey(key))
+          .sort()
+      : [];
+  if (unknownExtensions.length > 0) {
+    warnings.push({
+      kind: "unknown-tokens",
+      message: `Ignored unknown extensions: ${unknownExtensions.join(", ")}`,
+    });
   }
 
   warnings.push(...getAppThemeWarnings(scheme));

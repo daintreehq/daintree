@@ -10,8 +10,7 @@ import {
 } from "./webContentsRegistry.js";
 import { getFocusedPanelTracker } from "../services/FocusedPanelTracker.js";
 import { distributePortsToView, releaseAllTerminalWorkerPorts } from "./portDistribution.js";
-import { resolveInitialColorSchemeId } from "./skeletonCss.js";
-import { resolveAppTheme } from "../../shared/theme/index.js";
+import { resolveInitialCanvasBackgroundColor } from "./skeletonCss.js";
 import { PtyClient } from "../services/PtyClient.js";
 import type { MainProcessWatchdogClient } from "../services/MainProcessWatchdogClient.js";
 import { CliAvailabilityService } from "../services/CliAvailabilityService.js";
@@ -224,12 +223,9 @@ export async function initPerWindowServices(
   ctx.services.eventBuffer.start();
   // Match the main app view's background color so portal WebContentsView's
   // first paint blends with the window chrome instead of flashing white when a
-  // tab is created or returned to after an overlay (#9207). Custom-scheme
-  // precision isn't load-bearing here — the goal is "not white", so we resolve
-  // the base scheme without threading customSchemes through this code path.
-  const portalBackgroundColor = resolveAppTheme(resolveInitialColorSchemeId(), []).tokens[
-    "surface-canvas"
-  ];
+  // tab is created or returned to after an overlay (#9207). Resolved with the
+  // custom schemes, so a custom light theme doesn't get a dark built-in canvas.
+  const portalBackgroundColor = resolveInitialCanvasBackgroundColor();
   ctx.services.portalManager = new PortalManager(win, portalBackgroundColor);
   // OS foreground for the plugin focus tracker (#13221). The window's own
   // focus/blur, because a child view's webContents doesn't reliably blur when

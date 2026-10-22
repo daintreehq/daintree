@@ -34,7 +34,7 @@ vi.mock("@/utils/logger", () => ({ logError: vi.fn() }));
 import { useAppThemeConfig } from "../useAppThemeConfig";
 
 /** Captures the listener the hook registers, so tests can fire an OS appearance change. */
-let appearanceListener: ((payload: { schemeId: string }) => void) | null = null;
+let appearanceListener: ((payload: { isDark: boolean; schemeId: string }) => void) | null = null;
 const unsubscribe = vi.fn();
 
 function bootWith(appTheme: Partial<AppThemeConfig>) {
@@ -53,7 +53,9 @@ describe("useAppThemeConfig", () => {
     Object.assign(window, {
       electron: {
         appTheme: {
-          onSystemAppearanceChanged: (cb: (payload: { schemeId: string }) => void) => {
+          onSystemAppearanceChanged: (
+            cb: (payload: { isDark: boolean; schemeId: string }) => void
+          ) => {
             appearanceListener = cb;
             return unsubscribe;
           },
@@ -72,16 +74,44 @@ describe("useAppThemeConfig", () => {
     await waitFor(() => expect(setSelectedSchemeIdSilent).toHaveBeenCalled());
     // Startup has no prior theme to fade from — only the placeholder default, so
     // hydration must stay an instant swap rather than animating that placeholder out.
-    expect(setSelectedSchemeIdSilent).toHaveBeenCalledWith("bondi");
+    expect(setSelectedSchemeIdSilent).toHaveBeenCalledWith(
+      "bondi",
+      expect.not.objectContaining({ crossfade: true })
+    );
+  });
+
+  it("hydrates a missing scheme held in the light slot with a light fallback", async () => {
+    bootWith({ colorSchemeId: "custom-deleted", preferredLightSchemeId: "custom-deleted" });
+
+    renderHook(() => useAppThemeConfig());
+
+    await waitFor(() => expect(setSelectedSchemeIdSilent).toHaveBeenCalled());
+    expect(setSelectedSchemeIdSilent).toHaveBeenCalledWith("custom-deleted", {
+      fallbackType: "light",
+    });
   });
 
   it("crossfades an OS appearance change", async () => {
     renderHook(() => useAppThemeConfig());
 
     expect(appearanceListener).not.toBeNull();
-    appearanceListener!({ schemeId: "daintree" });
+    appearanceListener!({ isDark: true, schemeId: "daintree" });
 
-    expect(setSelectedSchemeIdSilent).toHaveBeenCalledWith("daintree", { crossfade: true });
+    expect(setSelectedSchemeIdSilent).toHaveBeenCalledWith("daintree", {
+      crossfade: true,
+      fallbackType: "dark",
+    });
+  });
+
+  it("falls back to the appearance the OS just switched to", async () => {
+    renderHook(() => useAppThemeConfig());
+
+    appearanceListener!({ isDark: false, schemeId: "custom-deleted" });
+
+    expect(setSelectedSchemeIdSilent).toHaveBeenCalledWith("custom-deleted", {
+      crossfade: true,
+      fallbackType: "light",
+    });
   });
 
   it("unsubscribes from the appearance listener on unmount", () => {

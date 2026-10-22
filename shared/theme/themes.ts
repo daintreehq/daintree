@@ -1,12 +1,14 @@
 import type {
   AppColorScheme,
   AppColorSchemeTokens,
+  AppThemeConfig,
   AppThemeTokenKey,
   AppThemeValidationWarning,
 } from "./types.js";
 import type { ThemePalette, ThemeStrategy } from "./palette.js";
 import type { ExtensionKey } from "./types.js";
 import { getThemeContrastWarnings } from "./contrast.js";
+import { sanitizeThemeExtensions } from "./extensionKeys.js";
 import { BUILT_IN_THEME_SOURCES, type BuiltInThemeSource } from "./builtInThemeSources.js";
 
 export const DEFAULT_APP_SCHEME_ID = "daintree";
@@ -815,8 +817,29 @@ export function getBuiltInAppSchemeForType(type: "dark" | "light"): AppColorSche
   );
 }
 
-export function resolveAppTheme(id: string, customSchemes: AppColorScheme[] = []): AppColorScheme {
-  return getAppThemeById(id, customSchemes) ?? BUILT_IN_APP_SCHEMES[0]!;
+export function resolveAppTheme(
+  id: string,
+  customSchemes: AppColorScheme[] = [],
+  fallbackType: AppColorScheme["type"] = "dark"
+): AppColorScheme {
+  return getAppThemeById(id, customSchemes) ?? getBuiltInAppSchemeForType(fallbackType);
+}
+
+/**
+ * The polarity to fall back to when `id` names no scheme, such as a custom
+ * theme that was deleted or failed validation. Nothing records a missing
+ * scheme's type, but a theme the user assigned to exactly one appearance slot
+ * says which one it was; anything else follows the system appearance.
+ */
+export function getAppThemeFallbackType(
+  id: string,
+  preferences: Pick<Partial<AppThemeConfig>, "preferredDarkSchemeId" | "preferredLightSchemeId">,
+  systemPrefersDark: boolean
+): AppColorScheme["type"] {
+  const isPreferredLight = preferences.preferredLightSchemeId === id;
+  const isPreferredDark = preferences.preferredDarkSchemeId === id;
+  if (isPreferredLight !== isPreferredDark) return isPreferredLight ? "light" : "dark";
+  return systemPrefersDark ? "dark" : "light";
 }
 
 /** The light bevel: a true white top lip, the right elevation direction on near-white chrome. */
@@ -858,11 +881,13 @@ export function getAppThemeCssVariables(scheme: AppColorScheme): Record<string, 
   const variables = Object.fromEntries(entries);
   variables["--theme-color-mode"] = scheme.type;
   Object.assign(variables, APP_THEME_POLARITY_VARIABLES[scheme.type]);
-  if (scheme.extensions) {
-    for (const [extensionName, extensionValue] of Object.entries(scheme.extensions)) {
-      if (typeof extensionValue === "string" && extensionValue.trim()) {
-        variables[`--${extensionName}`] = extensionValue;
-      }
+  // Sanitized again here, not only at import and store boundaries: a scheme
+  // built in memory reaches this function without passing through either.
+  for (const [extensionName, extensionValue] of Object.entries(
+    sanitizeThemeExtensions(scheme.extensions)
+  )) {
+    if (extensionValue.trim()) {
+      variables[`--${extensionName}`] = extensionValue;
     }
   }
   return variables;
@@ -1113,7 +1138,10 @@ export function normalizeAppColorScheme(
         `color-mix(in oklab, ${normalizedTokens["status-info"]} 90%, ${tint})`;
     }
   }
-  const normalizedExtensions = resolveStrategyExtensions(palette, maybeScheme.extensions);
+  const normalizedExtensions = resolveStrategyExtensions(
+    palette,
+    maybeScheme.extensions ? sanitizeThemeExtensions(maybeScheme.extensions) : undefined
+  );
   const result: AppColorScheme = {
     id:
       typeof maybeScheme.id === "string" && maybeScheme.id.trim() ? maybeScheme.id : baseScheme.id,

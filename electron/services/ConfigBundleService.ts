@@ -1213,13 +1213,19 @@ export class ConfigBundleService {
               results.push(unchangedLeaf(`theme:${id}`));
               continue;
             }
-            if (!appCustomSchemesWriteSchema.safeParse([scheme]).success) {
+            const parsed = appCustomSchemesWriteSchema.safeParse([scheme]);
+            if (!parsed.success) {
               results.push(skippedLeaf(`theme:${id}`, "Theme definition is not valid"));
               continue;
             }
+            // The incoming object is stored, not the parse, so a newer build's
+            // fields survive; only its extensions take the parsed form, which
+            // has the keys that could shadow a theme token stripped.
+            const extensions = parsed.data[0]?.extensions;
+            const stored = extensions === undefined ? scheme : { ...scheme, extensions };
             // Last one wins if the bundle repeats an id, so each id reports once.
-            mergedById.set(id, scheme);
-            pending.set(id, scheme);
+            mergedById.set(id, stored);
+            pending.set(id, stored);
           }
 
           if (pending.size > 0) {

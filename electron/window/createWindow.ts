@@ -14,7 +14,6 @@ import type { ProjectViewManager } from "./ProjectViewManager.js";
 import path from "path";
 import { createWindowWithState, disposeWindowStateTracking } from "../windowState.js";
 import { store } from "../store.js";
-import { resolveAppTheme } from "../../shared/theme/index.js";
 import type { AppColorScheme } from "../../shared/theme/index.js";
 import {
   appCustomSchemesReadSchema,
@@ -37,6 +36,7 @@ import {
   insertSkeletonCss,
   injectSkeletonCss,
   injectSkeletonProjectIdentity,
+  resolveInitialAppScheme,
   resolveInitialColorSchemeId,
   resolveE2EPreloadArgs,
   resolveInstanceRole,
@@ -222,7 +222,7 @@ export function setupBrowserWindow(
     }
   }
 
-  const scheme = resolveAppTheme(colorSchemeId, customSchemes);
+  const scheme = resolveInitialAppScheme(colorSchemeId, themeConfig, customSchemes);
   const windowBg = scheme.tokens["surface-canvas"];
 
   // ── Create BrowserWindow as a thin host ──

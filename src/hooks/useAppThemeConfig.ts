@@ -3,11 +3,19 @@ import { useAppThemeStore } from "@/store/appThemeStore";
 import { appThemeClient } from "@/clients/appThemeClient";
 import { getSafeBootPromise } from "@/lib/bootPromise";
 import { logError } from "@/utils/logger";
-import { normalizeAccentHex, normalizeAppColorScheme } from "@shared/theme";
+import {
+  getAppThemeFallbackType,
+  normalizeAccentHex,
+  normalizeAppColorScheme,
+} from "@shared/theme";
 import type { AppColorScheme, AppThemeConfig } from "@shared/types/appTheme";
 import type { ColorVisionMode } from "@shared/types";
 
 const VALID_COLOR_VISION_MODES: ColorVisionMode[] = ["default", "red-green", "blue-yellow"];
+
+function systemPrefersDark(): boolean {
+  return window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? true;
+}
 
 export function useAppThemeConfig() {
   const setSelectedSchemeIdSilent = useAppThemeStore((state) => state.setSelectedSchemeIdSilent);
@@ -38,7 +46,10 @@ export function useAppThemeConfig() {
       }
 
       if (typeof config.colorSchemeId === "string" && config.colorSchemeId.trim()) {
-        setSelectedSchemeIdSilent(config.colorSchemeId.trim());
+        const schemeId = config.colorSchemeId.trim();
+        setSelectedSchemeIdSilent(schemeId, {
+          fallbackType: getAppThemeFallbackType(schemeId, config, systemPrefersDark()),
+        });
       }
 
       if (Array.isArray(config.recentSchemeIds)) {
@@ -101,11 +112,14 @@ export function useAppThemeConfig() {
   ]);
 
   useEffect(() => {
-    return window.electron.appTheme.onSystemAppearanceChanged(({ schemeId }) => {
+    return window.electron.appTheme.onSystemAppearanceChanged(({ isDark, schemeId }) => {
       // OS-driven follow-system changes must not populate the recently-used list.
       // The app has already painted the outgoing theme, so crossfade rather than
       // cut — but without the directional wipe, which signals a deliberate pick.
-      setSelectedSchemeIdSilent(schemeId, { crossfade: true });
+      setSelectedSchemeIdSilent(schemeId, {
+        crossfade: true,
+        fallbackType: isDark ? "dark" : "light",
+      });
     });
   }, [setSelectedSchemeIdSilent]);
 }

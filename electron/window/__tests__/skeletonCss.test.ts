@@ -73,6 +73,69 @@ describe("resolveInitialCanvasBackgroundColor (#9573)", () => {
     // shouldUseDarkColors is true in this test environment → defaults to "daintree"
     expect(color).toBe(resolveAppTheme("daintree", []).tokens["surface-canvas"]);
   });
+
+  it("falls back to a light canvas for a missing scheme held in the light slot", () => {
+    storeMock.get.mockImplementation((key: string) => {
+      if (key === "appTheme") {
+        return { colorSchemeId: "custom-deleted", preferredLightSchemeId: "custom-deleted" };
+      }
+      return undefined;
+    });
+    const color = resolveInitialCanvasBackgroundColor();
+    expect(color).toBe(resolveAppTheme("bondi", []).tokens["surface-canvas"]);
+  });
+
+  it("falls back to the OS appearance for a missing scheme in no slot", () => {
+    storeMock.get.mockImplementation((key: string) => {
+      if (key === "appTheme") return { colorSchemeId: "custom-deleted" };
+      return undefined;
+    });
+    nativeThemeMock.shouldUseDarkColors = false;
+    try {
+      const color = resolveInitialCanvasBackgroundColor();
+      expect(color).toBe(resolveAppTheme("bondi", []).tokens["surface-canvas"]);
+    } finally {
+      nativeThemeMock.shouldUseDarkColors = true;
+    }
+  });
+
+  it("paints a stored custom theme's canvas, not a built-in's", () => {
+    const custom = {
+      id: "custom-light",
+      name: "Custom light",
+      type: "light",
+      builtin: false,
+      tokens: { ...resolveAppTheme("bondi", []).tokens, "surface-canvas": "#fafafa" },
+    };
+    storeMock.get.mockImplementation((key: string) => {
+      if (key === "appTheme") return { colorSchemeId: "custom-light", customSchemes: [custom] };
+      return undefined;
+    });
+    expect(resolveInitialCanvasBackgroundColor()).toBe("#fafafa");
+  });
+});
+
+describe("buildSkeletonCss extension keys (#13761)", () => {
+  it("never seeds a stored extension that names a theme token", () => {
+    const custom = {
+      id: "custom-shadowing",
+      name: "Custom shadowing",
+      type: "dark" as const,
+      builtin: false,
+      tokens: resolveAppTheme("daintree", []).tokens,
+      extensions: { "theme-text-primary": "#202020", "panel-grid-bg": "#101010" },
+    };
+    const css = buildSkeletonCss(undefined, {
+      colorSchemeId: "custom-shadowing",
+      customSchemes: [custom as never],
+    });
+
+    expect(css).toContain(
+      `--theme-text-primary: ${resolveAppTheme("daintree", []).tokens["text-primary"]};`
+    );
+    expect(css).not.toContain("#202020");
+    expect(css).toContain("--panel-grid-bg: #101010;");
+  });
 });
 
 describe("injectSkeletonCss accent override (#9162)", () => {

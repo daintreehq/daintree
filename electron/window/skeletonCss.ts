@@ -12,6 +12,7 @@ import { store } from "../store.js";
 import {
   resolveAppTheme,
   getAppThemeCssVariables,
+  getAppThemeFallbackType,
   applyAccentOverrideToScheme,
 } from "../../shared/theme/index.js";
 import type { AppColorScheme, AppThemeConfig } from "../../shared/theme/index.js";
@@ -115,9 +116,29 @@ export function resolveInitialColorSchemeId(
   ) {
     return themeConfig.colorSchemeId.trim();
   }
-  return process.env.DAINTREE_SCREENSHOT_SCALE || nativeTheme.shouldUseDarkColors
-    ? "daintree"
-    : "bondi";
+  return systemPrefersDark() ? "daintree" : "bondi";
+}
+
+/** The OS appearance as the boot paths read it; screenshot runs are pinned to dark. */
+function systemPrefersDark(): boolean {
+  return Boolean(process.env.DAINTREE_SCREENSHOT_SCALE) || nativeTheme.shouldUseDarkColors;
+}
+
+/**
+ * Resolves the persisted scheme for a boot paint. An id that names no scheme
+ * (a custom theme since deleted, or dropped as invalid) falls back to a
+ * built-in of the polarity the user was on rather than always the dark one.
+ */
+export function resolveInitialAppScheme(
+  colorSchemeId: string,
+  themeConfig: Partial<AppThemeConfig> | undefined,
+  customSchemes: AppColorScheme[]
+): AppColorScheme {
+  return resolveAppTheme(
+    colorSchemeId,
+    customSchemes,
+    getAppThemeFallbackType(colorSchemeId, themeConfig ?? {}, systemPrefersDark())
+  );
 }
 
 /**
@@ -140,7 +161,7 @@ export function resolveInitialCanvasBackgroundColor(): string {
     );
     customSchemes = result.schemes;
   }
-  const scheme = resolveAppTheme(colorSchemeId, customSchemes);
+  const scheme = resolveInitialAppScheme(colorSchemeId, themeConfig, customSchemes);
   return scheme.tokens["surface-canvas"];
 }
 
@@ -187,7 +208,7 @@ export function buildSkeletonCss(
       }
     }
   }
-  const scheme = resolveAppTheme(colorSchemeId, customSchemes);
+  const scheme = resolveInitialAppScheme(colorSchemeId, themeConfig, customSchemes);
   // Paint the destination project's accent on cold starts. Safe to call
   // unconditionally — a missing or invalid color returns the scheme unchanged.
   const themedScheme = applyAccentOverrideToScheme(scheme, project?.color);
