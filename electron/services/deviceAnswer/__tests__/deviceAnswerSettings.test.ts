@@ -35,4 +35,27 @@ describe("sanitizeDeviceAnswerSettings", () => {
     });
     expect(JSON.stringify(settings)).not.toContain("abcdef123456");
   });
+
+  it("keeps the host an answer went to, and drops a host it can't read", () => {
+    const entry = {
+      at: 1,
+      deviceId: "dev-1",
+      deviceName: "Phone",
+      runId: "run-1",
+      label: "Yes",
+      outcome: "answered",
+    };
+    const settings = sanitizeDeviceAnswerSettings({
+      answers: [
+        { ...entry, hostId: "studio-03", hostName: "studio-03" },
+        { ...entry, hostId: 7, hostName: { name: "studio-04" } },
+        { ...entry, hostId: "studio-05" },
+      ],
+    });
+    expect(settings.answers[0]).toMatchObject({ hostId: "studio-03", hostName: "studio-03" });
+    for (const answer of settings.answers.slice(1)) {
+      expect(answer).not.toHaveProperty("hostId");
+      expect(answer).not.toHaveProperty("hostName");
+    }
+  });
 });

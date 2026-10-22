@@ -61,14 +61,25 @@ const SCRIPT = String.raw`
     return m < 60 ? m + " min" : Math.round(m / 60) + " h";
   };
 
-  const render = (runs) => {
+  const render = (runs, hosts) => {
     const list = $("runs");
     list.replaceChildren();
     $("empty").hidden = runs.length > 0;
+    const notes = $("hosts");
+    notes.replaceChildren();
+    for (const host of hosts) {
+      if (host.status === "ok") continue;
+      notes.append(el("div", "", host.status === "needs-update"
+        ? host.host + " needs a newer Daintree to show its waiting agents here."
+        : "Couldn't read the waiting agents on " + host.host + "."));
+    }
+    // Machines are named once there is more than one to tell apart.
+    const named = hosts.length > 0;
     for (const run of runs) {
       const card = el("section", "run");
       const head = el("div", "head");
       head.append(el("strong", "", run.project || "Unknown project"));
+      if (named && run.host) head.append(el("span", "host", run.host));
       if (run.title) head.append(el("span", "title", run.title));
       card.append(head);
       const state = [run.agentId, run.agentState, run.waitingReason].filter(Boolean).join(" · ");
@@ -99,10 +110,16 @@ const SCRIPT = String.raw`
     const result = card.querySelector(".result");
     result.textContent = "Pressing…";
     try {
-      const r = await call("POST", "/api/answer", { runId: run.runId, spawnedAt: run.spawnedAt, label });
+      const r = await call("POST", "/api/answer", {
+        hostId: run.hostId,
+        runId: run.runId,
+        spawnedAt: run.spawnedAt,
+        label,
+      });
       result.textContent = r.ok ? "Picked “" + label + "”." : (r.data && r.data.error) || "Nothing was pressed.";
     } catch {
-      result.textContent = "Couldn't reach Daintree. Nothing was pressed.";
+      // The request may have arrived before the reply was lost.
+      result.textContent = "Couldn't hear back from Daintree. It may have been pressed, so check before answering again.";
     } finally {
       busy = false;
       setTimeout(poll, 600);
@@ -122,7 +139,7 @@ const SCRIPT = String.raw`
           // An answer began while this was in flight; the next read shows its result.
         } else if (r.ok && r.data) {
           $("status").textContent = "";
-          render(r.data.runs);
+          render(r.data.runs, r.data.hosts || []);
         } else if (r.status !== 401) {
           $("status").textContent = (r.data && r.data.error) || "Couldn't read the waiting agents.";
         }
@@ -190,7 +207,7 @@ button:disabled { opacity: 0.5; }
 form button { margin-top: 16px; width: 100%; }
 .run { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 12px; margin: 0 0 12px; }
 .head { display: flex; gap: 8px; flex-wrap: wrap; align-items: baseline; }
-.title, .meta, .note, .result, #status, #empty { color: var(--muted); font-size: 13px; }
+.title, .host, .meta, .note, .result, #status, #hosts, #empty { color: var(--muted); font-size: 13px; }
 .screen { background: var(--screen); border-radius: 6px; padding: 8px; margin: 8px 0; font: 12px/1.35 ui-monospace, Menlo, monospace; white-space: pre-wrap; word-break: break-word; max-height: 40vh; overflow: auto; }
 .actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .result { margin-top: 8px; min-height: 1em; }
@@ -225,7 +242,7 @@ export const DEVICE_PAGE_HTML = `<!doctype html>
 <body>
 <div id="pair" hidden>
   <h1>Pair with Daintree</h1>
-  <p>Pairing lets this device see the screens of agents waiting on that computer and pick the options they show. It can't type, start agents or read anything else. You can remove it any time in Daintree's settings.</p>
+  <p>Pairing lets this device see the screens of agents waiting on that computer, and on the hosts it's connected to, and pick the options they show. It can't type, start agents or read anything else. You can remove it any time in Daintree's settings.</p>
   <form id="pair-form" autocomplete="off">
     <label for="code">Pairing code</label>
     <input id="code" inputmode="text" autocapitalize="characters" spellcheck="false" maxlength="16" required>
@@ -238,6 +255,7 @@ export const DEVICE_PAGE_HTML = `<!doctype html>
 <main id="main" hidden>
   <div class="bar"><h1>Waiting agents</h1><button id="forget" type="button">Unpair</button></div>
   <div id="status" role="status"></div>
+  <div id="hosts"></div>
   <div id="empty" hidden>No agent is waiting.</div>
   <div id="runs"></div>
 </main>

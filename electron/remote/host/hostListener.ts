@@ -38,6 +38,7 @@ import type { HostSocketLocation } from "./hostSocketPath.js";
 import { initRemoteHostsHost } from "./initHost.js";
 import { installHostMetricsHost } from "../metrics/hostMetricsHost.js";
 import { installCanopyHost } from "../canopy/hostInstall.js";
+import { installDeviceAnswerHost } from "../deviceAnswer/hostInstall.js";
 import { installAssistantSenderHost } from "../assistant/hostSenders.js";
 import { installHostMcpRelay } from "../assistant/hostMcpRelay.js";
 import { getHelpAssistantSettings } from "../../ipc/handlers/helpAssistant.js";
@@ -174,6 +175,8 @@ async function buildHostListener(
   teardowns.push(await installHostMetricsHost(server));
   // Canopy for Shells reading this host from a view bound elsewhere.
   teardowns.push(installCanopyHost(server));
+  // Devices paired with those Shells answering this host's agents, under its own lease.
+  teardowns.push(installDeviceAnswerHost(server));
   // The sender each Shell proves, for the tools this host runs for its
   // assistants, and what v0.44 Shells still read of their retired exchanges (#13496).
   teardowns.push(await installAssistantSenderHost(server));

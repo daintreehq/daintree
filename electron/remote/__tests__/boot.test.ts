@@ -419,6 +419,24 @@ vi.mock("../canopy/clientInstall.js", () => ({
 vi.mock("../canopy/hostInstall.js", () => ({
   installCanopyHost: canopy.installCanopyHost,
 }));
+const deviceAnswer = vi.hoisted(() => ({
+  uninstallClient: vi.fn(),
+  uninstallHost: vi.fn(),
+  installDeviceAnswerHostsClient: vi.fn(),
+  installDeviceAnswerHost: vi.fn(),
+}));
+vi.mock("../deviceAnswer/clientInstall.js", () => ({
+  installDeviceAnswerHostsClient: vi.fn((deps: unknown) => {
+    deviceAnswer.installDeviceAnswerHostsClient(deps);
+    return deviceAnswer.uninstallClient;
+  }),
+}));
+vi.mock("../deviceAnswer/hostInstall.js", () => ({
+  installDeviceAnswerHost: vi.fn((server: unknown) => {
+    deviceAnswer.installDeviceAnswerHost(server);
+    return deviceAnswer.uninstallHost;
+  }),
+}));
 const control = vi.hoisted(() => {
   const uninstall = vi.fn();
   const uninstallLink = vi.fn();
@@ -991,6 +1009,26 @@ describe("startRemoteHosts", () => {
     expect(m.uninstallProjectsHost).toHaveBeenCalledTimes(1);
     expect(m.uninstallPluginHost).toHaveBeenCalledTimes(1);
     expect(m.uninstallPluginParityHost).toHaveBeenCalledTimes(1);
+  });
+
+  it("answers connected hosts' agents for paired devices from start, and serves a Shell's devices only while listening", async () => {
+    await startRemoteHosts({ hostMode: false });
+    expect(m.client.client.connect).not.toHaveBeenCalled();
+    expect(deviceAnswer.installDeviceAnswerHostsClient).toHaveBeenCalledWith({
+      registry: m.client.registry,
+      manager: m.client.manager,
+      sessionFor: m.client.sessionFor,
+    });
+    expect(deviceAnswer.installDeviceAnswerHost).not.toHaveBeenCalled();
+
+    const hostMode = getRemoteService("hostMode")!;
+    await hostMode.startListening();
+    expect(deviceAnswer.installDeviceAnswerHost).toHaveBeenCalledWith(m.server);
+    await hostMode.stopListening();
+    expect(deviceAnswer.uninstallHost).toHaveBeenCalledTimes(1);
+
+    await stopRemoteHosts();
+    expect(deviceAnswer.uninstallClient).toHaveBeenCalledTimes(1);
   });
 
   it("serves plugin assets for opened endpoints and moves them to a resumed link", async () => {

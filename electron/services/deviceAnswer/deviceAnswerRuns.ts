@@ -31,6 +31,26 @@ export interface WaitingRunView {
   choices: string[];
 }
 
+/** A waiting run with the machine it waits on, as the page lists it. */
+export interface DeviceWaitingRun extends WaitingRunView {
+  /** `LOCAL_HOST_ID` for this machine's own runs. */
+  hostId: string;
+  /** The machine's name, as the person knows it. */
+  host: string;
+}
+
+/** How reading one connected host's runs went. */
+export interface DeviceWaitingHost {
+  hostId: string;
+  host: string;
+  status: "ok" | "unreachable" | "needs-update";
+}
+
+export interface DeviceWaitingList {
+  runs: DeviceWaitingRun[];
+  hosts: DeviceWaitingHost[];
+}
+
 export interface DeviceAnswerRunsDeps {
   fleet: () => FleetSnapshot | null;
   pty: () => AnswerPtyClient | null;

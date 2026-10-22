@@ -731,6 +731,44 @@ describe("DriveLeaseService and a Canopy panel reading this host (#13387)", () =
   });
 });
 
+describe("DriveLeaseService and a device paired with a Shell answering this host (#13941)", () => {
+  // Never registered: only ever asked whether it drives.
+  const deviceThrough = (clientId: string) => ({ endpointId: "device-answer:1", clientId });
+  const laptopClient = {
+    clientId: "greg-mbp-id",
+    clientName: "greg-mbp",
+    platform: "darwin" as const,
+    kind: "remote" as const,
+  };
+
+  it("presses where its Shell's window holds the project, and nowhere another screen does", async () => {
+    const hostWindow = local(1);
+    const laptopWindow = remote("s1:e1", "greg-mbp-id");
+    const studioWindow = remote("s2:e1", "studio-id");
+    for (const endpoint of [hostWindow, laptopWindow, studioWindow]) registry.add(endpoint);
+    service.noteEndpointClient(laptopWindow.endpointId, laptopClient);
+    service.noteEndpointClient(studioWindow.endpointId, {
+      ...laptopClient,
+      clientId: "studio-id",
+      clientName: "studio",
+    });
+    await settle();
+    const device = deviceThrough("greg-mbp-id");
+
+    const holder = service.takeOver("p", laptopWindow);
+    expect(service.isDriving("p", device)).toBe(true);
+    // Answering through its Shell's lease is not holding it.
+    expect(service.getHolder("p")).toEqual(holder);
+
+    service.takeOver("p", studioWindow);
+    expect(service.isDriving("p", device)).toBe(false);
+
+    // The host's own screen holds it: the Shell couldn't type there either.
+    service.takeOver("p", hostWindow);
+    expect(service.isDriving("p", device)).toBe(false);
+  });
+});
+
 describe("DriveLeaseService panel notices", () => {
   const panelNotices = (endpoint: FakeEndpoint) =>
     endpoint.allEvents().filter((event) => event.type === "panels-changed");
