@@ -108,8 +108,9 @@ export function idleBackgroundAutoCloseSection(): SectionHandler {
     // Defaults filled in, so a snapshot of a pre-#13849 object still restores
     // the shell opt-in to off rather than leaving an imported value in place.
     read: () => {
-      const stored: Partial<ReturnType<typeof readIdleBackgroundAutoClose>> =
+      const stored: Partial<ReturnType<typeof readIdleBackgroundAutoClose>> | undefined =
         readIdleBackgroundAutoClose();
+      if (!stored) return stored;
       return {
         ...stored,
         includeIdleShells: stored.includeIdleShells ?? false,

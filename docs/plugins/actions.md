@@ -379,7 +379,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `env.project.get` | Get project environment variables | safe | `projectId` |
 | `env.project.set` | Set project environment variables | safe | `projectId`, `variables` |
 | `idleBackgroundAutoClose.getConfig` | Get idle background auto-close config | safe | — |
-| `idleBackgroundAutoClose.updateConfig` | Update idle background auto-close config | safe | `enabled?`, `thresholdMinutes?` |
+| `idleBackgroundAutoClose.updateConfig` | Update idle background auto-close config | safe | `enabled?`, `idleShellThresholdMinutes?`, `includeIdleShells?`, `thresholdMinutes?` |
 | `idleTerminalNotify.getConfig` | Get idle terminal notification config | safe | — |
 | `idleTerminalNotify.updateConfig` | Update idle terminal notification config | safe | `enabled?`, `thresholdMinutes?` |
 | `keybinding.getOverrides` | Get keybinding overrides | safe | — |
