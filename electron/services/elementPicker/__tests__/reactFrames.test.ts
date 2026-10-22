@@ -106,7 +106,10 @@ class DevServer {
     throw new Error(`${call} is not called ${nth + 1} times in ${path}`);
   }
 
+  /** One job's access: what it served is all that job's response may cite. */
   access(): ResolverSourceAccess {
+    this.servedRevisions.clear();
+    this.servedMaps.clear();
     return {
       fetchSourceMap: async (url) => {
         this.fetched.push(url);
@@ -886,6 +889,39 @@ describe("a component's definition", () => {
     // Inside the receiver, or past the name, is no call.
     expect(parsed.definitionAt({ line, column: column("rows?.") + 1 })).toBeNull();
     expect(parsed.definitionAt({ line, column: column("map(") + 1 })).toBeNull();
+  });
+
+  it("takes the frame of a computed, optional or parenthesised call, or a tagged template, where V8 and a map put it", () => {
+    const lines = [
+      "export function Card({ helpers, key, fn, obj, tag, styled }) {",
+      "  helpers[key]();",
+      "  obj?.[key]?.();",
+      "  (0, fn)();",
+      "  tag`x`;",
+      "  styled.div`x`;",
+      "  return null;",
+      "}",
+      "",
+    ];
+    const source = lines.join("\n");
+    const parsed = parseSource("src/Card.jsx", source)!;
+    const declaration = rangeOf(source, "export function Card", "\n}");
+    // Measured with V8 and Vite's transform: the call's `(`, its last `?.`, the
+    // callee's closing `)`, and each template's backtick.
+    const places: Array<[number, string]> = [
+      [2, "]()"],
+      [3, "?.()"],
+      [4, ")()"],
+      [5, "`x`"],
+      [6, "`x`"],
+    ];
+    for (const [line, needle] of places) {
+      const column = lines[line - 1]!.indexOf(needle) + (needle === "]()" ? 1 : 0);
+      expect(parsed.definitionAt({ line, column }), `${line}:${needle}`).toEqual(declaration);
+    }
+    // Within an argument list, or past the call, is not where any frame stands.
+    expect(parsed.definitionAt({ line: 2, column: lines[1]!.indexOf("]()") + 3 })).toBeNull();
+    expect(parsed.definitionAt({ line: 7, column: 2 })).toBeNull();
   });
 
   it("is the default export, named, wrapped or anonymous", async () => {

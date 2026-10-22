@@ -161,32 +161,60 @@ function startsAt(node: unknown, position: Position): boolean {
   return !!start && start.line === position.line && start.column === position.column;
 }
 
+/** Whether `position` is at or after `from` and at or before `to`. */
+function within(position: Position, from: Position | undefined, to: Position | undefined): boolean {
+  return !!from && !!to && !before(position, from) && !before(to, position);
+}
+
+const endOf = (node: unknown) => (isNode(node) ? node.loc?.end : undefined);
+const startOf = (node: unknown) => (isNode(node) ? node.loc?.start : undefined);
+
 /** Whether `position` lies from the end of the object a method is called on to the start of its name. */
 function atMethod(callee: unknown, position: Position): boolean {
   if (!isNode(callee) || !/MemberExpression$/.test(callee.type)) return false;
-  const from = isNode(callee.object) ? callee.object.loc?.end : undefined;
-  const to = isNode(callee.property) ? callee.property.loc?.start : undefined;
-  return !!from && !!to && !before(position, from) && !before(to, position);
+  return within(position, endOf(callee.object), startOf(callee.property));
+}
+
+/**
+ * Whether `position` is on what stands between a call's callee and its
+ * arguments: a parenthesised callee's `)`, an optional call's `?.`, the `(`.
+ * Nothing but a call has any of these.
+ */
+function atArguments(call: AstNode, position: Position): boolean {
+  const from = endOf(call.callee);
+  const end = endOf(call);
+  if (!from || !end || before(position, from) || !before(position, end)) return false;
+  const first = Array.isArray(call.arguments) ? startOf(call.arguments[0]) : undefined;
+  return first === undefined || before(position, first);
 }
 
 /**
  * Whether `node` is a call a stack frame can stand at. V8 places a frame at
  * the call it was making, and a map takes that back to a JSX element's `<`,
- * to the callee, or to the property a method is called through: its name, or
- * the `.` before it, where a compiled call's map can put it. Anywhere else is
- * a position from some other version of the file.
+ * to the callee, to the property a method is called through (its name, or
+ * the `.` before it, where a compiled call's map can put it), to what is
+ * between a callee and its arguments, or to a tagged template's backtick.
+ * Anywhere else is a position from some other version of the file.
  */
 function isCallAt(node: AstNode, position: Position): boolean {
   switch (node.type) {
     case "JSXElement":
       return startsAt(node, position);
-    case "NewExpression":
-      return startsAt(node, position) || startsAt(node.callee, position);
     case "TaggedTemplateExpression":
-      return startsAt(node.tag, position);
+      return (
+        startsAt(node.tag, position) ||
+        atMethod(node.tag, position) ||
+        startsAt(node.quasi, position)
+      );
+    case "NewExpression":
     case "CallExpression":
     case "OptionalCallExpression":
-      return startsAt(node.callee, position) || atMethod(node.callee, position);
+      return (
+        startsAt(node, position) ||
+        startsAt(node.callee, position) ||
+        atMethod(node.callee, position) ||
+        atArguments(node, position)
+      );
     default:
       return false;
   }

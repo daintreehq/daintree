@@ -7,6 +7,8 @@ import {
   cloneElement,
   createElement,
   createRef,
+  forwardRef,
+  memo,
   use,
   useEffect,
   useState,
@@ -543,6 +545,40 @@ describe("the React extractor on an element one component made and another clone
     const observation = pick("i.cloned");
     expect(kinds(record(observation, "Slot"))).not.toContain("component-definition");
     expect(kinds(record(observation, "Parent"))).toContain("component-definition");
+  });
+
+  it("tells a clone from the cloner's own element by its stack, not by a name both may lack", () => {
+    // Both anonymous, as Radix's SlotClone and a `memo(() => …)` page are.
+    const Slot = forwardRef<HTMLElement, { children: ReactElement }>((props, ref) =>
+      cloneElement(props.children, { ref } as Record<string, unknown>)
+    );
+    Slot.displayName = "Slot";
+    const Page = memo(() => createElement(Slot, null, createElement("i", { className: "anon" })));
+    Page.displayName = "Page";
+    mountTree(createElement(Page));
+    const observation = pick("i.anon");
+    expect(kinds(record(observation, "Slot"))).not.toContain("component-definition");
+    expect(kinds(record(observation, "Page"))).toContain("component-definition");
+  });
+
+  it("looks past a clone to an element the component made itself", () => {
+    function Both({ children }: { children: ReactElement }) {
+      return [
+        cloneElement(children, { key: "clone", ref: createRef<HTMLElement>() } as Record<
+          string,
+          unknown
+        >),
+        createElement("span", { key: "own", className: "own" }),
+      ];
+    }
+    function Host() {
+      return createElement(Both, null, createElement("i", { className: "handed" }));
+    }
+    mountTree(createElement(Host));
+    const both = record(pick("i.handed"), "Both");
+    const span = pick("span.own");
+    // Its own <span> says where Both is written: the same frame as the span's own creation.
+    expect(locationOf(definitionOf(both))).toEqual(locationOf(span.sourceCandidates[0]));
   });
 });
 

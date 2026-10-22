@@ -39,7 +39,8 @@ import {
   parentOf,
   tagOf,
   canonicalFiber,
-  ownedElementFiber,
+  readOwnedElement,
+  receivedStacks,
   renderFunction,
   type Fiber,
 } from "./reactFiber.js";
@@ -128,10 +129,17 @@ function cutOwnerCycles(records: ComponentRecord[]): boolean {
   return cut;
 }
 
-/** Whether a frame V8 named `frameName` is a call of `render`: by its name, a class's method, or anonymous. */
+/**
+ * Whether a frame V8 named `frameName` could be a call of `render`: by its
+ * name, a class's method, or anonymous. A consistency check, not identity:
+ * two functions can share a name, which is why clones are told apart by
+ * their stacks first.
+ */
 function ranAs(frameName: string | null, render: unknown): boolean {
-  const name = field(render, "name");
-  if (typeof name !== "string") return false;
+  const raw = field(render, "name");
+  if (typeof raw !== "string") return false;
+  // V8 prints a bound function's frame under the target's own name.
+  const name = raw.replace(/^(?:bound )+/, "");
   if (name === "") return frameName === null;
   return frameName === name || (frameName?.startsWith(`${name}.`) ?? false);
 }
@@ -161,14 +169,20 @@ class CandidateWriter {
    * Where `component` is written, from an element its own render made, and
    * nothing when it made none. React makes an element whose ref another
    * component overrides with `cloneElement` that component's own while
-   * keeping the stack it was first made with, so the frame counts only when
-   * V8 named it for the function React renders the component with.
+   * keeping the stack it was first made with, so an element that is a copy of
+   * one it was handed is passed over, and a frame counts only when V8 named
+   * it for the function React renders the component with.
    */
   writeDefinition(component: Fiber, budget: Budget): SourceCandidate[] {
-    const owned = ownedElementFiber(component, budget);
-    const frame = owned === null ? null : componentFrame(field(owned, "_debugStack"));
-    if (frame === null || !ranAs(frame.name, renderFunction(component))) return [];
-    const candidate = this.candidate("component-definition", frame);
+    const received = receivedStacks(component);
+    const render = renderFunction(component);
+    const frame = readOwnedElement(component, budget, (fiber) => {
+      const stack = field(fiber, "_debugStack");
+      if (received.has(stack)) return null;
+      const found = componentFrame(stack);
+      return found !== null && ranAs(found.name, render) ? found : null;
+    });
+    const candidate = frame === null ? null : this.candidate("component-definition", frame);
     return candidate === null ? [] : [candidate];
   }
 
