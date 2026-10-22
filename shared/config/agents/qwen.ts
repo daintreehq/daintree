@@ -106,6 +106,9 @@ export const config: AgentConfig = {
     args: (sessionId: string) => ["--resume", sessionId],
     quitCommand: "/quit",
     sessionIdPattern: "qwen --resume ([\\w-]+)",
+    // Sessions live under ~/.qwen/projects/<cwd>/chats, so this is the latest in
+    // the launch directory. Bare `--resume` opens a picker.
+    resumeLatestArgs: ["--continue"],
   },
   env: {
     QWEN_CLI_ALT_SCREEN: "false",

@@ -1744,6 +1744,31 @@ describe("restorePanelsPhase — one resume-latest per agent+cwd (issue #11461)"
     }
   });
 
+  it("elects one pane per directory for a rolling-history agent and for Cursor (#13847)", async () => {
+    // Neither captures an id, so each pane would otherwise reopen the same
+    // latest conversation in that directory.
+    const ctx = makeContext();
+    const agentPanel = (id: string, agentId: string, lastActiveAt: number) =>
+      panel(id, { kind: "agent", launchAgentId: agentId, lastActiveAt });
+
+    await restorePanelsPhase(
+      [
+        agentPanel("kimi-old", "kimi", 1),
+        agentPanel("kimi-new", "kimi", 2),
+        agentPanel("cursor-new", "cursor", 2),
+        agentPanel("cursor-old", "cursor", 1),
+      ],
+      ctx
+    );
+
+    expect(Object.fromEntries(allowanceById(ctx))).toEqual({
+      "kimi-old": false,
+      "kimi-new": true,
+      "cursor-new": true,
+      "cursor-old": false,
+    });
+  });
+
   it("scopes the slot per agent — different agents don't contend", async () => {
     const ctx = makeContext();
 

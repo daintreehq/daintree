@@ -102,6 +102,9 @@ export const config: AgentConfig = {
     fallbackConfidence: 0.7,
     promptConfidence: 0.85,
   },
+  // Empty on purpose: the only way back to a past conversation is the
+  // `--conversations` picker, which would sit on the restored PTY waiting for a
+  // choice, so a restore starts fresh instead.
   resume: {
     kind: "rolling-history",
     args: () => [],

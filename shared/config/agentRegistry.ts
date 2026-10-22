@@ -336,7 +336,10 @@ interface AgentSessionIdResumeBase {
    * ["resume", "--last"] for Codex). When present, the relaunch path uses
    * these args as a fallback when `sessionIdPattern` capture missed
    * (timeout, no match). Scoped to the launch CWD by the underlying CLI.
-   * Omit for agents that have no resume-latest flag.
+   * Omit for agents that have no resume-latest flag, or whose "latest" is
+   * machine-wide rather than per directory (Copilot `--continue`): the restore
+   * election hands out one fallback per agent and directory, so a global latest
+   * would reopen whichever project's conversation closed last.
    */
   resumeLatestArgs?: string[];
   /**
@@ -406,13 +409,16 @@ export type AgentSessionIdResume = AgentSessionIdResumeBase &
  * Discriminated union describing how an agent's prior session can be resumed.
  * The `kind` field selects the shape:
  *
- * - `session-id` — agent emits a session ID on quit (Claude/Gemini/Codex/etc.).
+ * - `session-id` — agent resumes an exact session by ID (Claude/Gemini/Codex/etc.).
  *   `quitCommand` is sent to the running process; `sessionIdPattern` (a regex
  *   with one capture group) is matched against the post-quit output to harvest
- *   the ID, which is then passed to `args(id)` on the next launch.
+ *   the ID, which is then passed to `args(id)` on the next launch. An agent that
+ *   prints no ID omits the pattern and resumes by `resumeLatestArgs` (Cursor).
  * - `rolling-history` — agent has no session model but records a chronological
  *   history that can be resumed in order. `args()` returns the resume flags;
- *   no ID is captured.
+ *   no ID is captured, so on restore they are the agent's resume-latest form
+ *   and must reopen the most recent history in the launch directory. Leave
+ *   them empty when the CLI only offers a picker.
  * - `named-target` — agent resumes a user-named target (e.g. a plan name).
  *   `argsForTarget(name)` produces the launch args for the chosen target.
  * - `project-scoped` — agent stores session state on disk keyed by project
