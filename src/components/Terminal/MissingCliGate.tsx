@@ -43,11 +43,7 @@ function severityIcon(severity: StatusSeverity): ReactNode {
 // Each title names what the probe observed for this agent, not a cause: a denied
 // exec is reported as denied, never as "blocked by security software", which
 // would send the user into endpoint settings on a guess.
-function getGateCopy(
-  agentName: string,
-  detail: AgentCliDetail,
-  hostName: string | null
-): GateCopy {
+function getGateCopy(agentName: string, detail: AgentCliDetail, hostName: string | null): GateCopy {
   const where = hostName ?? "this machine";
   // Paths and probe messages are unbroken tokens that would push a narrow pane
   // sideways, so the description may break anywhere inside them.

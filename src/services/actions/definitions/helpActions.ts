@@ -1029,6 +1029,14 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
             ? `The folder is ready at ${result.path} on ${hostName} — open it there in a file manager.`
             : `The folder is ready at ${result.path} — open it manually in your file manager.`,
         });
+      } else if (hostName) {
+        // The file manager opened on the host's screen, not this one.
+        // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
+        notify({
+          type: "info",
+          title: "Opened commands folder",
+          message: `The folder is open on ${hostName}, not on this machine.`,
+        });
       }
     },
   }));
