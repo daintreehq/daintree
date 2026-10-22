@@ -8,6 +8,7 @@ import { isAgentInstalled } from "../../../shared/utils/agentAvailability.js";
 import { isSensitiveEnvKey } from "../../../shared/utils/envVars.js";
 import { findSecretInValue } from "../../../shared/utils/secretScrubber.js";
 import type { ConfigImportLeafResult } from "../../../shared/types/configBundle.js";
+import { isIdleShellThresholdMinutes } from "../../../shared/types/ipc/idleBackgroundAutoClose.js";
 import { sanitizeModelId, sanitizeModelIdMap } from "../../utils/helpAssistantModels.js";
 import {
   asBoolean,
@@ -92,6 +93,13 @@ export function idleBackgroundAutoCloseSection(): SectionHandler {
       thresholdMinutes: {
         label: "Close after",
         normalize: boundedInteger(15, 1440),
+        display: minutes,
+      },
+      includeIdleShells: { label: "Include projects with idle shells", normalize: asBoolean },
+      idleShellThresholdMinutes: {
+        label: "Sleep shell projects after",
+        normalize: (value) => (isIdleShellThresholdMinutes(value) ? value : undefined),
+        invalidReason: "Not 60, 120, 240 or 480 minutes",
         display: minutes,
       },
     },

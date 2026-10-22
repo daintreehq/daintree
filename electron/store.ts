@@ -149,6 +149,9 @@ export interface StoreSchema {
   idleBackgroundAutoClose: {
     enabled: boolean;
     thresholdMinutes: number;
+    includeIdleShells: boolean;
+    /** One of `IDLE_SHELL_THRESHOLD_MINUTES`; the service normalizes anything else. */
+    idleShellThresholdMinutes: number;
   };
   pluginBackgroundUpdateCheck: {
     enabled: boolean;
@@ -830,6 +833,8 @@ const storeOptions = {
     idleBackgroundAutoClose: {
       enabled: false,
       thresholdMinutes: 15,
+      includeIdleShells: false,
+      idleShellThresholdMinutes: 60,
     },
     // Background plugin update checks default OFF (#10893): a periodic network
     // re-fetch of every URL-installed plugin is an opt-in behavior, not a default.

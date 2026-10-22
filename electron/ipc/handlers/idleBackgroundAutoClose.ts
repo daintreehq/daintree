@@ -1,5 +1,8 @@
 import type { IdleBackgroundAutoCloseService } from "../../services/IdleBackgroundAutoCloseService.js";
-import type { IdleBackgroundAutoCloseConfig } from "../../../shared/types/ipc/idleBackgroundAutoClose.js";
+import {
+  isIdleShellThresholdMinutes,
+  type IdleBackgroundAutoCloseConfig,
+} from "../../../shared/types/ipc/idleBackgroundAutoClose.js";
 import type { HandlerDependencies } from "../types.js";
 import { defineIpcNamespace, op } from "../define.js";
 import { IDLE_BACKGROUND_METHOD_CHANNELS } from "./idleBackgroundAutoClose.preload.js";
@@ -45,6 +48,18 @@ export const idleBackgroundAutoCloseNamespace = defineIpcNamespace({
           if (rounded < 15 || rounded > 1440) {
             throw new Error("thresholdMinutes must be between 15 and 1440");
           }
+        }
+        if (
+          config.includeIdleShells !== undefined &&
+          typeof config.includeIdleShells !== "boolean"
+        ) {
+          throw new Error("includeIdleShells must be a boolean");
+        }
+        if (
+          config.idleShellThresholdMinutes !== undefined &&
+          !isIdleShellThresholdMinutes(config.idleShellThresholdMinutes)
+        ) {
+          throw new Error("idleShellThresholdMinutes must be 60, 120, 240 or 480");
         }
         const service = await getService();
         return service.updateConfig(config);

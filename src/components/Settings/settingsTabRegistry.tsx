@@ -494,6 +494,25 @@ export const SETTINGS_REGISTRY = [
         keywords: ["idle", "threshold", "minutes", "auto-close", "memory", "background"],
       },
       {
+        id: "general-idle-background-include-shells",
+        subtab: "background",
+        subtabLabel: "Background",
+        section: "Background projects",
+        title: "Include projects with idle shells",
+        description:
+          "Also sleep projects whose terminals are plain shells with nothing running in them",
+        keywords: ["idle", "shell", "terminal", "sleep", "memory", "background", "project"],
+      },
+      {
+        id: "general-idle-shell-threshold",
+        subtab: "background",
+        subtabLabel: "Background",
+        section: "Background projects",
+        title: "Sleep after",
+        description: "Time off screen with no terminal activity before sleeping: 1h, 2h, 4h, or 8h",
+        keywords: ["idle", "shell", "threshold", "hours", "sleep", "memory", "background"],
+      },
+      {
         id: "general-project-pulse",
         subtab: "display",
         subtabLabel: "Display",

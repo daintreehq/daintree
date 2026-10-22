@@ -15,6 +15,10 @@ import { sleepIdleTerminalProject } from "@/lib/sleepIdleTerminalProject";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { OPEN_FOLDERS_IN_NEW_WINDOW_VALUES } from "@shared/types/windowOpen";
 import { RESUME_ON_RESTART_VALUES } from "@shared/types/agentSettings";
+import {
+  IDLE_SHELL_THRESHOLD_MINUTES,
+  type IdleBackgroundAutoCloseConfig,
+} from "@shared/types/ipc/idleBackgroundAutoClose";
 
 const ProjectIdArgsSchema = z.object({ projectId: z.string().min(1) });
 
@@ -22,6 +26,8 @@ const ProjectIdArgsSchema = z.object({ projectId: z.string().min(1) });
 const SessionRestoreConfigPatchSchema = z.object({ enabled: z.boolean().optional() });
 
 const OpenFoldersInNewWindowSchema = z.enum(OPEN_FOLDERS_IN_NEW_WINDOW_VALUES);
+
+const IdleShellThresholdSchema = z.literal(IDLE_SHELL_THRESHOLD_MINUTES);
 
 /** Shared by `windowOpening.updateConfig`'s declared schema and its body. */
 // Strict so a misspelt field fails validation instead of reaching main as an
@@ -291,6 +297,8 @@ export function registerAppConfigActions(
     resultSchema: z.object({
       enabled: z.boolean(),
       thresholdMinutes: z.number(),
+      includeIdleShells: z.boolean(),
+      idleShellThresholdMinutes: IdleShellThresholdSchema,
     }),
     run: async () => {
       return await idleBackgroundAutoCloseClient.getConfig();
@@ -311,9 +319,11 @@ export function registerAppConfigActions(
     argsSchema: z.object({
       enabled: z.boolean().optional(),
       thresholdMinutes: z.number().int().positive().optional(),
+      includeIdleShells: z.boolean().optional(),
+      idleShellThresholdMinutes: IdleShellThresholdSchema.optional(),
     }),
     run: async (args: unknown) => {
-      const config = args as { enabled?: boolean; thresholdMinutes?: number };
+      const config = args as Partial<IdleBackgroundAutoCloseConfig>;
       return await idleBackgroundAutoCloseClient.updateConfig(config);
     },
   }));
