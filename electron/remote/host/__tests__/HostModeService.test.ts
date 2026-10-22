@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { HostModeObservation } from "../../../../shared/types/ipc/remoteHosts.js";
 import type { HostModeStatus } from "../../../../shared/types/ipc/hostMode.js";
 import { LinkClient } from "../../client/LinkClient.js";
 import { createDirectTransport } from "../../client/transport.js";
@@ -557,7 +558,9 @@ describe("HostModeService status rows", () => {
       state: "unavailable",
       detail: NO_KEYRING_DETAIL,
     });
-    expect(row(await service.runKeychainPreflight(), "keychain").detail).toBe(NO_KEYRING_DETAIL);
+    expect(row(await service.runKeychainPreflight(), "keychain").detail).toMatch(
+      new RegExp(`^${NO_KEYRING_DETAIL.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} \\(last checked `)
+    );
     expect(encrypt).not.toHaveBeenCalled();
   });
 
@@ -618,6 +621,7 @@ describe("HostModeService enabling from host setup", () => {
         state: "ok",
         detail: "Keyring answered a test encrypt and decrypt",
         checked: true,
+        checkedAt: expect.any(Number),
       },
     });
   });
@@ -714,5 +718,64 @@ describe("HostModeService enabling from host setup", () => {
     await service.getStatus();
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(writeStatus).not.toHaveBeenCalled();
+  });
+});
+
+describe("HostModeService keychain history", () => {
+  const saved = (checkedAt?: number): HostModeObservation => ({
+    pid: 0,
+    stopped: true,
+    enabled: true,
+    startAtLogin: false,
+    startAtLoginInstalled: null,
+    startAtLoginError: null,
+    keychain: {
+      state: "ok",
+      detail: "Keychain answered a test encrypt and decrypt",
+      checked: true,
+      ...(checkedAt && { checkedAt }),
+    },
+  });
+
+  it("keeps showing the result an earlier run recorded, and when it was checked", async () => {
+    const { service } = makeService({
+      platform: "darwin",
+      readStatus: async () => saved(Date.UTC(2026, 9, 22, 10, 30)),
+    });
+    expect(row(await service.getStatus(), "keychain")).toMatchObject({
+      state: "ok",
+      detail: "Keychain answered a test encrypt and decrypt (last checked 2026-10-22 10:30 UTC)",
+    });
+  });
+
+  it("does not write 'not checked' over the earlier result before it is read back", async () => {
+    const writes: Array<Omit<HostModeObservation, "pid">> = [];
+    const { service } = makeService({
+      platform: "darwin",
+      readStatus: async () => saved(1_700_000_000_000),
+      writeStatus: async (observation) => void writes.push(observation),
+    });
+    await service.setEnabled({ enabled: false, startAtLogin: false });
+    await vi.waitFor(() => expect(writes.length).toBeGreaterThan(0));
+    for (const w of writes) {
+      expect(w.keychain).toMatchObject({
+        state: "ok",
+        checked: true,
+        checkedAt: 1_700_000_000_000,
+      });
+    }
+  });
+
+  it("leaves a run that has no earlier record at 'Not checked yet'", async () => {
+    const { service } = makeService({ platform: "darwin", readStatus: async () => null });
+    expect(row(await service.getStatus(), "keychain")).toMatchObject({ detail: "Not checked yet" });
+  });
+
+  it("stamps a finished check", async () => {
+    const { service } = makeService({ platform: "darwin", readStatus: async () => null });
+    const status = await service.runKeychainPreflight();
+    expect(row(status, "keychain").detail).toMatch(
+      /\(last checked \d{4}-\d\d-\d\d \d\d:\d\d UTC\)$/
+    );
   });
 });

@@ -19,6 +19,7 @@ import {
   LINUX_UNIT_NAME,
   MAC_APP_PATH,
   formatBuildInfo,
+  processStartShell,
   type ProbeOutcome,
 } from "./hostProbe.js";
 import { type ClientBuild, debInstallCommand, planInstall } from "./installPlan.js";
@@ -600,17 +601,26 @@ async function waitForIdle(
   }
 }
 
+/**
+ * Stop Daintree on the host. A pid from the discovery file is signalled only
+ * while it still started when that file says (`hostStartedAt`, confirmed live by
+ * the probe): a pid since reused by a stranger is left alone. With no pid, or an
+ * older host that recorded no start time, the user's own process named
+ * Daintree is the target.
+ */
 export function stopScript(
   platform: "darwin" | "linux",
   hostPid: number | null,
-  hasUnit: boolean
+  hasUnit: boolean,
+  hostStartedAt: string | null = null
 ): string {
   const name = platform === "darwin" ? "Daintree" : "daintree";
   const unitStop = hasUnit ? `systemctl --user stop ${LINUX_UNIT_NAME} 2>/dev/null; ` : "";
+  const byName = `pkill -TERM -u "$(id -u)" -o -x ${name}`;
   const signalIt =
-    hostPid !== null
-      ? `kill -TERM ${hostPid} 2>/dev/null || pkill -TERM -u "$(id -u)" -o -x ${name}`
-      : `pkill -TERM -u "$(id -u)" -o -x ${name}`;
+    hostPid !== null && Number.isInteger(hostPid) && hostPid > 0 && hostStartedAt
+      ? `hp=${hostPid}; ${processStartShell("hp", "hn")}; if [ "$hn" = ${sq(hostStartedAt)} ]; then kill -TERM "$hp" 2>/dev/null; fi`
+      : byName;
   return `${unitStop}if pgrep -u "$(id -u)" -x ${name} >/dev/null 2>&1; then ${signalIt}; fi; i=0; while pgrep -u "$(id -u)" -x ${name} >/dev/null 2>&1 && [ $i -lt 60 ]; do sleep 1; i=$((i+1)); done; if pgrep -u "$(id -u)" -x ${name} >/dev/null 2>&1; then echo "${MARK}stopped no"; else echo "${MARK}stopped yes"; fi`;
 }
 
@@ -622,8 +632,8 @@ function swapScript(
   marker: string | null
 ): string {
   if (plan.packaging === "app-bundle") {
-    const app = remotePath(MAC_APP_PATH);
-    const old = remotePath(`${MAC_APP_PATH}.old`);
+    const app = remotePath(target);
+    const old = remotePath(`${target}.old`);
     return `rm -rf ${old}; if [ -d ${app} ]; then mv ${app} ${old} || exit 1; fi; if mv ${remotePath(`${staged.dir}/x/Daintree.app`)} ${app}; then rm -rf ${remotePath(staged.dir)}; else if [ -d ${old} ]; then mv ${old} ${app}; fi; exit 1; fi`;
   }
   const t = remotePath(target);
@@ -637,8 +647,8 @@ function swapScript(
 /** Put the previous build (and its marker) back. Says what it did, so a restore is never assumed. */
 function rollbackScript(plan: HostInstallPlan, target: string): string {
   if (plan.packaging === "app-bundle") {
-    const app = remotePath(MAC_APP_PATH);
-    const old = remotePath(`${MAC_APP_PATH}.old`);
+    const app = remotePath(target);
+    const old = remotePath(`${target}.old`);
     return `if [ -d ${old} ]; then if rm -rf ${app} && mv ${old} ${app}; then echo "${MARK}rolledback yes"; else echo "${MARK}rolledback failed"; fi; else echo "${MARK}rolledback none"; fi`;
   }
   const t = remotePath(target);
@@ -650,15 +660,20 @@ function rollbackScript(plan: HostInstallPlan, target: string): string {
 
 function dropBackupScript(plan: HostInstallPlan, target: string): string {
   return plan.packaging === "app-bundle"
-    ? `rm -rf ${remotePath(`${MAC_APP_PATH}.old`)}`
+    ? `rm -rf ${remotePath(`${target}.old`)}`
     : `rm -f ${remotePath(`${target}.old`)} ${remotePath(`${target}${APPIMAGE_BUILD_INFO_SUFFIX}.old`)}`;
 }
 
-function startScript(plan: HostInstallPlan, hostMode: boolean, hasUnit: boolean): string | null {
+function startScript(
+  plan: HostInstallPlan,
+  hostMode: boolean,
+  hasUnit: boolean,
+  target: string
+): string | null {
   if (plan.packaging === "app-bundle") {
     return hostMode
-      ? `open -g -a ${remotePath(MAC_APP_PATH)} --args --host-mode`
-      : `open -g -a ${remotePath(MAC_APP_PATH)}`;
+      ? `open -g -a ${remotePath(target)} --args --host-mode`
+      : `open -g -a ${remotePath(target)}`;
   }
   // Never run the backend from this SSH session: only the user's own unit may start it.
   return hasUnit ? `systemctl --user start ${LINUX_UNIT_NAME}` : null;
@@ -790,7 +805,17 @@ export async function runHostInstall(
   const hasUnit = parsed.advice.hostModeUnit === true;
   const wasHostMode = parsed.hostModeListening;
   const wasRunning = parsed.appRunning || wasHostMode;
-  const start = wasRunning ? startScript(plan, wasHostMode, hasUnit) : null;
+  // An app bundle or AppImage is replaced where it is, so a unit or login item that runs it keeps working.
+  let target = MAC_APP_PATH;
+  if (plan.packaging === "app-bundle") {
+    if (probe.install?.packaging === "app-bundle") target = probe.install.path;
+  } else if (plan.packaging === "appimage") {
+    target =
+      probe.install?.packaging === "appimage"
+        ? probe.install.path
+        : `${await homeOf(deps, signal)}/Applications/Daintree.AppImage`;
+  }
+  const start = wasRunning ? startScript(plan, wasHostMode, hasUnit, target) : null;
   const dropStaged = () =>
     deps.shell.exec(`rm -rf ${remotePath(staged.dir)}`, { timeoutMs: 30_000 }).catch(() => {});
   if (wasRunning && start === null) {
@@ -801,14 +826,6 @@ export async function runHostInstall(
       userMessage:
         "Daintree is running on the host without its Host mode service, so it couldn't be restarted from here. Quit it there and try again.",
     });
-  }
-  // An AppImage replaces the one in use in place, so a unit that runs it keeps working.
-  let target = MAC_APP_PATH;
-  if (plan.packaging === "appimage") {
-    target =
-      probe.install?.packaging === "appimage"
-        ? probe.install.path
-        : `${await homeOf(deps, signal)}/Applications/Daintree.AppImage`;
   }
   if (signal.aborted) {
     await dropStaged();
@@ -903,7 +920,7 @@ export async function runHostInstall(
       report({ stage: "stopping", fraction: 0.7, message: "Stopping Daintree on the host" });
       const out = await exec(
         deps,
-        stopScript(platform, parsed.hostPid, hasUnit),
+        stopScript(platform, parsed.hostPid, hasUnit, parsed.hostStartedAt),
         settle,
         "Couldn't stop Daintree on the host"
       );

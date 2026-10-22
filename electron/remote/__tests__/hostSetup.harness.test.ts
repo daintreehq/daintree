@@ -135,7 +135,7 @@ import { defaultCommandRunner, type CommandResult } from "../client/commandRunne
 import {
   bootstrapHostMode,
   hostModeConfirmed,
-  MAC_ENABLE_SCRIPT,
+  macEnableScript,
 } from "../client/hostModeBootstrap.js";
 import { MAC_APP_PATH, probeHost } from "../client/hostProbe.js";
 import type { HostCommandChannel } from "../client/remoteShell.js";
@@ -179,7 +179,7 @@ function localHostChannel(home: string, app: string, onEnable: () => void): Host
     );
   return {
     async exec(script, options) {
-      if (script === MAC_ENABLE_SCRIPT) {
+      if (script === macEnableScript(undefined, app)) {
         onEnable();
         return OK;
       }
@@ -256,6 +256,7 @@ describe("host setup over the harness", () => {
           state: "unavailable",
           detail: "Keychain unavailable: plugin secrets can't be stored on this host",
           checked: true,
+          checkedAt: expect.any(Number),
         },
       });
       expect(result.probe.advice.startAtLoginInstalled).toBe(true);

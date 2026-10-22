@@ -67,6 +67,12 @@ export interface HostModeServiceDeps {
    * SSH (see hostModeStatusFile.ts). Written only when it changes.
    */
   writeStatus?(observation: Omit<HostModeObservation, "pid">): Promise<void>;
+  /**
+   * What an earlier process recorded there. Only its keychain result is taken
+   * back, so the row keeps saying when the check last ran instead of reverting
+   * to "not checked" on every restart.
+   */
+  readStatus?(): Promise<HostModeObservation | null>;
 }
 
 function messageOf(error: unknown): string {
@@ -91,6 +97,8 @@ export class HostModeService {
   private listenError: string | null = null;
   private installError: string | null = null;
   private keychainCheck: KeychainCheck | null = null;
+  private keychainCheckedAt: number | null = null;
+  private restored: Promise<void> = Promise.resolve();
   private preflight: Promise<void> | null = null;
   private observation: StartAtLoginObservation | null = null;
   private pmset: CommandResult | null = null;
@@ -105,6 +113,18 @@ export class HostModeService {
   constructor(private readonly deps: HostModeServiceDeps) {
     this.advertiser = deps.createAdvertiser(() => this.pushSoon());
     this.wsl = deps.wsl ?? isWslKernel(deps.platform);
+    if (deps.readStatus) {
+      this.restored = deps
+        .readStatus()
+        .then((previous) => {
+          const saved = previous?.keychain;
+          // A check run since construction is newer than anything on disk.
+          if (!saved?.checked || this.keychainCheck) return;
+          this.keychainCheck = { state: saved.state, detail: saved.detail };
+          this.keychainCheckedAt = saved.checkedAt ?? null;
+        })
+        .catch(() => {});
+    }
   }
 
   /** Listen for Shells; used at boot and by the switch. Concurrent calls share one start. */
@@ -221,9 +241,11 @@ export class HostModeService {
       .then(
         (check) => {
           this.keychainCheck = check;
+          this.keychainCheckedAt = Date.now();
         },
         (error: unknown) => {
           this.keychainCheck = { state: "unknown", detail: `Check failed: ${messageOf(error)}` };
+          this.keychainCheckedAt = Date.now();
         }
       )
       .finally(() => {
@@ -353,12 +375,18 @@ export class HostModeService {
         ? this.deps.run("pmset", ["-g"]).catch(() => null)
         : Promise.resolve(null),
     ]);
+    await this.restored;
     this.observation = observation;
     this.pmset = pmset;
     this.observed ??= Promise.resolve();
   }
 
   private recordStatus(extra: { stopped?: true } = {}): Promise<void> {
+    // Not before the earlier result is back: the file would lose it.
+    return this.restored.then(() => this.writeRecordedStatus(extra));
+  }
+
+  private writeRecordedStatus(extra: { stopped?: true }): Promise<void> {
     const write = this.deps.writeStatus;
     if (!write) return Promise.resolve();
     const settings = this.deps.readSettings();
@@ -374,6 +402,7 @@ export class HostModeService {
         state: keychain.state,
         detail: keychain.detail,
         checked: this.keychainCheck !== null,
+        ...(this.keychainCheckedAt !== null && { checkedAt: this.keychainCheckedAt }),
       },
     };
     const text = JSON.stringify(observation);
@@ -417,7 +446,7 @@ export class HostModeService {
           installError: this.installError,
           wsl: this.wsl,
         }),
-        keychainRow(keychain),
+        keychainRow(keychain, this.keychainCheckedAt),
         sleepRow(this.deps.platform, this.pmset, this.wsl),
         driversRow(attachedClients),
       ],

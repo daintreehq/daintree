@@ -1,9 +1,11 @@
+import { spawn, spawnSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CommandResult, CommandRunner } from "../commandRunner.js";
+import { processStartTime } from "../../host/hostSocketLock.js";
 import { probeHost } from "../hostProbe.js";
 import {
   busyAgents,
@@ -61,7 +63,9 @@ function macProbe(opts: { build: string | null; hostMode: boolean; running?: boo
         ]
       : []),
     ...(opts.running || opts.hostMode ? ["@@dt:running yes"] : []),
-    ...(opts.hostMode ? ["@@dt:listening yes", "@@dt:hostpid 4242"] : []),
+    ...(opts.hostMode
+      ? ["@@dt:listening yes", "@@dt:hostpid 4242", "@@dt:hoststart Wed Oct 22 10:00:00 2026"]
+      : []),
     "@@dt:download yes",
     "@@dt:end",
   ].join("\n");
@@ -287,7 +291,8 @@ describe("runHostInstall", () => {
     expect(result).toMatchObject({ status: "installed", reconnected: true });
     expect(deps.reconnect).toHaveBeenCalledWith("studio");
     const stop = shell.scripts.find((s) => s.includes("@@dt:stopped"))!;
-    expect(stop).toContain("kill -TERM 4242");
+    expect(stop).toContain("hp=4242");
+    expect(stop).toContain('kill -TERM "$hp"');
     expect(shell.scripts).toContain("open -g -a '/Applications/Daintree.app' --args --host-mode");
     expect(deps.progress.map((p) => p.stage)).toEqual(
       expect.arrayContaining([
@@ -1091,5 +1096,51 @@ describe("stopScript", () => {
     const calls = script.match(/\b(pgrep|pkill)\b[^;&|]*/g) ?? [];
     expect(calls.length).toBeGreaterThan(0);
     for (const call of calls) expect(call).toContain('-u "$(id -u)"');
+  });
+});
+
+describe("stopScript pid identity", () => {
+  it("signals a recorded pid only while it still started when the host said", () => {
+    const script = stopScript("linux", 4242, true, "Wed Oct 22 10:00:00 2026");
+    expect(script).toContain("hp=4242");
+    expect(script).toContain(`"$hn" = 'Wed Oct 22 10:00:00 2026'`);
+    expect(script).toContain('kill -TERM "$hp"');
+    // A pid that doesn't verify is never replaced by a signal to whatever else runs.
+    expect(script).not.toContain("pkill");
+  });
+
+  it("names the user's own process only when no pid is on record or it carries no start time", () => {
+    expect(stopScript("darwin", null, false)).toContain("pkill -TERM");
+    expect(stopScript("darwin", 4242, false, null)).toContain("pkill -TERM");
+    expect(stopScript("darwin", 4242, false, null)).not.toContain('kill -TERM "$hp"');
+  });
+
+  it("leaves a process alone whose start time differs", async () => {
+    const sleeper = spawn("sleep", ["30"], { stdio: "ignore" });
+    try {
+      const script = stopScript("linux", sleeper.pid!, false, "not the start time");
+      // Run only the signalling statement: the wait loop looks for a real Daintree.
+      const signal = script.slice(script.indexOf("hp="), script.indexOf("; fi; i=0"));
+      spawnSync("sh", ["-c", signal]);
+      expect(sleeper.killed).toBe(false);
+      expect(() => process.kill(sleeper.pid!, 0)).not.toThrow();
+      const real = processStartTime(sleeper.pid!)?.replace(/\s+/g, " ");
+      if (real) {
+        const matching = stopScript("linux", sleeper.pid!, false, real);
+        spawnSync("sh", [
+          "-c",
+          matching.slice(matching.indexOf("hp="), matching.indexOf("; fi; i=0")),
+        ]);
+        const code = await Promise.race([
+          new Promise<string>((resolve) =>
+            sleeper.once("exit", (_c, sig) => resolve(sig ?? "exit"))
+          ),
+          new Promise<string>((resolve) => setTimeout(() => resolve("alive"), 3_000)),
+        ]);
+        expect(code).toBe("SIGTERM");
+      }
+    } finally {
+      sleeper.kill("SIGKILL");
+    }
   });
 });

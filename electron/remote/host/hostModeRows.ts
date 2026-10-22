@@ -125,8 +125,11 @@ export function startAtLoginRow(input: {
   };
 }
 
-export function keychainRow(check: KeychainCheck): HostModeStatusRow {
-  return { id: "keychain", state: check.state, detail: check.detail };
+export function keychainRow(check: KeychainCheck, checkedAt?: number | null): HostModeStatusRow {
+  const when = checkedAt
+    ? ` (last checked ${new Date(checkedAt).toISOString().slice(0, 16).replace("T", " ")} UTC)`
+    : "";
+  return { id: "keychain", state: check.state, detail: `${check.detail}${when}` };
 }
 
 export interface PmsetValues {

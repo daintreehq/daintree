@@ -34,6 +34,7 @@ const ObservationSchema = z.object({
     state: z.enum(["ok", "warning", "unavailable", "unknown"]),
     detail: z.string().max(MAX_TEXT),
     checked: z.boolean(),
+    checkedAt: z.number().int().min(0).optional(),
   }),
 });
 
@@ -64,6 +65,15 @@ export function parseHostModeStatus(text: string): HostModeObservation | null {
   if (!parsed.success) return null;
   const { daintreeHostMode: _marker, ...observation } = parsed.data;
   return observation;
+}
+
+/** What the last process here recorded; null when there is no usable file. */
+export async function readHostModeStatusFile(dir: string): Promise<HostModeObservation | null> {
+  try {
+    return parseHostModeStatus(await fs.readFile(path.join(dir, HOST_MODE_STATUS_NAME), "utf8"));
+  } catch {
+    return null;
+  }
 }
 
 export async function writeHostModeStatusFile(
