@@ -177,3 +177,23 @@ export function selectHostBannerVariant(state: BannerInputs): HostBannerVariant 
 export function isHostLinkUp(state: Pick<HostConnectionStoreState, "hostId" | "connection">) {
   return state.hostId === null || state.connection?.status === "connected";
 }
+
+/** Resolves once this view's host link is up; immediately for a local view. */
+export function waitForHostConnected(signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const aborted = () => reject(new DOMException("Aborted", "AbortError"));
+    if (signal?.aborted) return aborted();
+    if (isHostLinkUp(useHostConnectionStore.getState())) return resolve();
+    const onAbort = () => {
+      unsubscribe();
+      aborted();
+    };
+    const unsubscribe = useHostConnectionStore.subscribe((state) => {
+      if (!isHostLinkUp(state)) return;
+      unsubscribe();
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    });
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}

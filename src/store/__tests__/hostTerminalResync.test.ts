@@ -48,6 +48,7 @@ vi.mock("@/utils/stateHydration/statePatcher", () => ({
 }));
 
 import { resyncHostTerminals } from "../hostTerminalResync";
+import { markSpawnUnconfirmed } from "../slices/panelRegistry/unconfirmedSpawn";
 import {
   holdForDriveLease,
   isHeldForDriveLease,
@@ -158,6 +159,33 @@ describe("resyncHostTerminals", () => {
     expect(reportLost).toHaveBeenCalledTimes(1);
     expect(reportLost).toHaveBeenCalledWith("t-gone", expect.any(String));
     expect(store.removePanel).toHaveBeenCalledWith("t-trashed", { backendAlreadyClosed: true });
+  });
+
+  it("never calls a pane that is still starting gone: its own spawn settles it (#13915)", async () => {
+    panel("t-starting", { spawnStatus: "spawning" });
+    getForProject.mockResolvedValue([]);
+    reconnectBulk.mockResolvedValue({ "t-starting": { exists: false } });
+
+    await resyncHostTerminals("proj-1", current);
+
+    expect(reconnectBulk).not.toHaveBeenCalled();
+    expect(store.setRuntimeStatus).not.toHaveBeenCalled();
+    expect(reportLost).not.toHaveBeenCalled();
+  });
+
+  it("leaves a terminal alone whose launch from this view is still being checked (#13915)", async () => {
+    // Its pane was closed while the link was down: the check ends the
+    // terminal, so adopting it would bring the closed pane back.
+    const settle = markSpawnUnconfirmed("t-lost");
+    try {
+      getForProject.mockResolvedValue([{ id: "t-lost", cwd: "/repo", spawnedAt: 1 }]);
+
+      await resyncHostTerminals("proj-1", current);
+
+      expect(store.addPanel).not.toHaveBeenCalled();
+    } finally {
+      settle();
+    }
   });
 
   it("never calls the assistant's own pane gone: its probe says so even while it runs (#13392)", async () => {

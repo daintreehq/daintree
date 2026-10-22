@@ -43,6 +43,11 @@ import { logDebug, logWarn, logError } from "@/utils/logger";
 import { markRendererPerformance } from "@/utils/performance";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { isClientAppError } from "@/utils/clientAppError";
+import { safeFireAndForget } from "@/utils/safeFireAndForget";
+import { isUnknownOutcomeError } from "@/utils/resolveUnknownOutcome";
+import { useHostConnectionStore, waitForHostConnected } from "@/store/hostConnectionStore";
+import { takeHostAgentState } from "@/store/hostTerminalResync";
+import { findSpawnOnHost, isLostSpawnReply, markSpawnUnconfirmed } from "./unconfirmedSpawn";
 import { collectPanelIdForBatch, isHydrationBatchActive } from "./hydrationBatch";
 import {
   addToWorktreeIndex,
@@ -1439,6 +1444,64 @@ export const createAddPanelActions = (
         markRendererPerformance("agentlaunch.task-start", { id });
         let leaseAtSpawn = getDriveLeaseSnapshot();
 
+        // A spawn the host refused, or one it never started. `keepObservedError`
+        // keeps a reason the host already reported for this launch.
+        const failSpawn = (error: unknown, keepObservedError = false): void => {
+          // Same staleness gate as the success path: never stamp a failure onto
+          // a successor incarnation that re-launched this id mid-flight.
+          if (!agentLifecycleLedger.recordSpawnResolved(id, launchGeneration, false).accepted) {
+            return;
+          }
+          const current = get().panelsById[id];
+          if (!current || !isPtyPanel(current) || current.spawnStatus !== "spawning") return;
+
+          // A refusal from main (a drive lease, a validation) arrives as an
+          // encoded AppError: its code is not a spawn errno, and the person
+          // reads its userMessage, never the wire prefix.
+          const appError = isClientAppError(error) ? error : null;
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- error shape from node-pty spawn rejection
+          const err = error as { code?: string; errno?: number; syscall?: string; path?: string };
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- SpawnError construction from caught IPC error
+          const spawnError = {
+            code: appError ? "UNKNOWN" : (err.code ?? "UNKNOWN"),
+            message: appError
+              ? (appError.userMessage ?? appError.message)
+              : formatErrorMessage(error, "Failed to start terminal process"),
+            errno: err.errno,
+            syscall: err.syscall,
+            path: err.path,
+          } as import("@shared/types/pty-host").SpawnError;
+
+          set((state) => {
+            const _current = state.panelsById[id];
+            if (!_current || !isPtyPanel(_current) || _current.spawnStatus !== "spawning")
+              return state;
+            // A launched agent that fails to start never produces a PTY exit, so
+            // its optimistic agentState would stay stuck (e.g. "working"). Mark it
+            // "exited" so terminal.list / terminal.getStatus report the crash
+            // instead of a phantom running agent (#10816). Plain shells have no
+            // launchAgentId and keep agentState undefined.
+            const agentPatch = _current.launchAgentId
+              ? { agentState: "exited" as const, lastStateChange: Date.now() }
+              : {};
+            return {
+              panelsById: {
+                ...state.panelsById,
+                [id]: {
+                  ..._current,
+                  spawnStatus: "failed",
+                  spawnError: (keepObservedError && _current.spawnError) || spawnError,
+                  runtimeStatus: "error",
+                  ...agentPatch,
+                },
+              },
+            };
+          });
+
+          const after = get();
+          saveNormalized(after.panelsById, after.panelIds);
+        };
+
         try {
           // Asked as each launch reaches the front, not when it was queued, so
           // a restore that tips the machine into critical holds the rest of
@@ -1509,142 +1572,279 @@ export const createAddPanelActions = (
           const attachedDims = getAttachedGridDims(id);
           const spawnCols = attachedDims?.cols ?? constructionDims?.cols ?? 80;
           const spawnRows = attachedDims?.rows ?? constructionDims?.rows ?? 24;
-          await terminalClient.spawn({
-            id,
-            projectId: capturedWorkspaceId,
-            cwd: options.cwd,
-            shell: options.shell,
-            cols: spawnCols,
-            rows: spawnRows,
-            command: commandToExecute,
-            kind,
-            launchAgentId,
-            // Read off the live panel, not the values captured before the
-            // queue wait: a rename landing while the spawn was queued reaches
-            // a pty-host that has no record yet and is dropped, so the spawn
-            // itself has to carry it or it is lost (#11830).
-            title: _p1.title,
-            titleMode: _p1.titleMode,
-            env: mergedEnv,
-            restore: options.restore,
-            spawnBatchId: options.spawnBatchId,
-            spawnBatchSize: options.spawnBatchSize,
-            agentLaunchFlags: options.agentLaunchFlags,
-            agentModelId: options.agentModelId,
-            // Known-at-launch session id (#11782) — either freshly minted and
-            // assigned to the CLI, or the one this launch resumes. Recorded on
-            // the terminal record at spawn so a kill path that never runs a
-            // capture (force quit, crash, SIGKILL) can't lose the conversation.
-            agentSessionId: options.agentSessionId,
-            // Live, for the same reason as `title` above: a move landing while
-            // the spawn was queued reaches a pty-host with no record yet and is
-            // dropped, so the spawn itself has to carry the current filing.
-            worktreeId: spawnWorktreeId,
-            agentPresetId: options.agentPresetId,
-            agentPresetColor: options.agentPresetColor,
-            originalAgentPresetId: options.originalPresetId ?? options.agentPresetId,
-            handbackCode: options.handbackCode,
-            // Launch-time context the pane's MCP session replays through its
-            // workspace binding (#12486): a caller may supply one, and a Claude
-            // pane's is captured here for its own worktree.
-            actionContext:
-              options.actionContext ??
-              buildAgentLaunchContext({
-                launchAgentId,
-                terminalId: id,
-                title: _p1.title,
-                worktreeId: spawnWorktreeId,
-              }),
-          });
 
-          markRendererPerformance("agentlaunch.spawn-ipc-resolved", { id });
-          settleControl();
+          // Everything after the host started the terminal, the same whether its
+          // answer came back or was found after the link lost it (#13915). True
+          // when the pane was promoted to ready.
+          const completeSpawn = async (waitForAttach: boolean): Promise<boolean> => {
+            // Reject a spawn resolution that no longer belongs to this incarnation:
+            // if a restart or hydration replay re-launched the id while our IPC was
+            // in flight, the successor owns spawnStatus now and its own resolution
+            // manages it. The ledger records the rejection as an anomaly. One
+            // carve-out: when the successor's panel is ALSO gone, the backend PTY
+            // this resolution just created has no owner at all — kill it, exactly
+            // like the orphan path below (killing the shared id is safe only when
+            // no live panel claims it).
+            if (!agentLifecycleLedger.recordSpawnResolved(id, launchGeneration, true).accepted) {
+              if (!get().panelsById[id]) {
+                terminalClient.kill(id).catch((killError) => {
+                  logWarn("[TerminalStore] Compensating kill after stale spawn resolution failed", {
+                    id,
+                    error: killError,
+                  });
+                });
+              }
+              return false;
+            }
 
-          // Reject a spawn resolution that no longer belongs to this incarnation:
-          // if a restart or hydration replay re-launched the id while our IPC was
-          // in flight, the successor owns spawnStatus now and its own resolution
-          // manages it. The ledger records the rejection as an anomaly. One
-          // carve-out: when the successor's panel is ALSO gone, the backend PTY
-          // this resolution just created has no owner at all — kill it, exactly
-          // like the orphan path below (killing the shared id is safe only when
-          // no live panel claims it).
-          if (!agentLifecycleLedger.recordSpawnResolved(id, launchGeneration, true).accepted) {
-            if (!get().panelsById[id]) {
+            // Promote spawnStatus to "ready" once the PTY is live. If the panel was
+            // removed during the spawn window, issue a compensating kill to avoid
+            // orphaning the freshly-spawned PTY (removePanel's kill IPC was a no-op
+            // at the time because the backend had no terminal yet).
+            let orphaned = false;
+            let mountedPanel = false;
+            set((state) => {
+              const current = state.panelsById[id];
+              if (!current) {
+                orphaned = true;
+                return state;
+              }
+              if (!isPtyPanel(current) || current.spawnStatus !== "spawning") return state;
+              mountedPanel = true;
+              return {
+                panelsById: { ...state.panelsById, [id]: { ...current, spawnStatus: "ready" } },
+              };
+            });
+            if (orphaned) {
               terminalClient.kill(id).catch((killError) => {
-                logWarn("[TerminalStore] Compensating kill after stale spawn resolution failed", {
+                logWarn("[TerminalStore] Compensating kill after orphan spawn failed", {
                   id,
                   error: killError,
                 });
               });
+            } else {
+              if (mountedPanel) markRendererPerformance("agentlaunch.ready", { id });
+              // Recover the same race on the worktree axis: main awaits admission
+              // and settings before it reaches `PtyClient.spawn`, and that call
+              // overwrites the replay cache — so a move landing in that window
+              // reached a host with no record and was then clobbered. Placed past
+              // the incarnation gate, so a successor's filing is never re-stamped
+              // from this resolution (#12060).
+              reconcileWorktreeAfterSpawn(id, spawnWorktreeId, get().panelsById[id]);
+              // Recover the attach-during-spawn race: a fit that ran while the
+              // spawn IPC was in flight had its PTY resize dropped (no terminal
+              // existed yet), which would strand the CLI at the spawn dims while
+              // xterm renders the fitted grid — the assistant's progressively
+              // garbled prompt (#10863). Re-assert the live grid now that the PTY
+              // exists. PTY-only and direct: xterm already shows these dims, and
+              // sendPtyResize would defer 500ms for a settled-strategy agent —
+              // exactly the window in which the CLI paints its banner at the
+              // stale spawn width. The backend dedupes when nothing drifted.
+              // Whatever a fit recorded as sent during the spawn never reached a
+              // PTY; forget it so a pane that detached before this point still
+              // re-asserts on its next fit.
+              terminalInstanceService.invalidatePtyGrid(id);
+              const settledDims = getAttachedGridDims(id);
+              if (
+                settledDims &&
+                (settledDims.cols !== spawnCols || settledDims.rows !== spawnRows)
+              ) {
+                terminalClient.resize(id, settledDims.cols, settledDims.rows);
+              }
             }
+
+            if (mountedPanel && waitForAttach) {
+              try {
+                await terminalInstanceService.waitForAttachSettled(id, {
+                  timeoutMs: TERMINAL_STARTUP_ATTACH_TIMEOUT_MS,
+                });
+              } catch (error) {
+                logWarn("[TerminalStore] Terminal did not attach before startup queue advanced", {
+                  id,
+                  error,
+                });
+              }
+            }
+            return mountedPanel;
+          };
+
+          // The answer was lost with the link, not refused: the host may well be
+          // running the terminal, so the pane stays starting until the host says
+          // whether it is. Followed outside the startup queue, so the launches
+          // queued behind this one aren't held while the link is down.
+          const followLostSpawnReply = (lostError: unknown): void => {
+            logWarn("[TerminalStore] Spawn answer lost with the link; checking with the host", {
+              id,
+            });
+            const settle = markSpawnUnconfirmed(id);
+            const endCheck = useHostConnectionStore.getState().beginCheck();
+            safeFireAndForget(
+              (async () => {
+                try {
+                  const found = await findSpawnOnHost(id);
+                  // A later launch under this id settles its own spawn.
+                  if (!agentLifecycleLedger.isCurrent(id, launchGeneration)) return;
+                  if (found.status === "absent") {
+                    const host = useHostConnectionStore.getState();
+                    const hostName = host.hostName ?? host.hostId ?? "The host";
+                    failSpawn(
+                      new Error(
+                        `${hostName} didn't start this terminal before the connection dropped.`
+                      ),
+                      true
+                    );
+                    return;
+                  }
+                  if (!get().panelsById[id]) {
+                    // Closed while it was being checked: end what the host
+                    // started, and only then let resync see the id, so it can't
+                    // adopt the terminal and bring the pane back. A kill the
+                    // link loses is sent again once it is back, while no later
+                    // launch has taken the id.
+                    agentLifecycleLedger.recordSpawnResolved(id, launchGeneration, true);
+                    for (;;) {
+                      try {
+                        await terminalClient.kill(id);
+                        break;
+                      } catch (killError) {
+                        if (!isUnknownOutcomeError(killError)) {
+                          logWarn(
+                            "[TerminalStore] Compensating kill after a closed lost spawn failed",
+                            {
+                              id,
+                              error: killError,
+                            }
+                          );
+                          break;
+                        }
+                        await waitForHostConnected();
+                        if (
+                          !agentLifecycleLedger.isCurrent(id, launchGeneration) ||
+                          get().panelsById[id]
+                        ) {
+                          break;
+                        }
+                      }
+                    }
+                    return;
+                  }
+                  const guessed = get().panelsById[id];
+                  takeHostAgentState(
+                    id,
+                    found.record,
+                    get(),
+                    terminalInstanceService,
+                    guessed !== undefined &&
+                      isPtyPanel(guessed) &&
+                      guessed.lastStateChange === lastStateChange
+                  );
+                  if (!(await completeSpawn(false))) return;
+                  const recovered = get().panelsById[id];
+                  if (!recovered || !isPtyPanel(recovered)) return;
+                  // The host has it, so an error reported while it was being asked
+                  // (its confirmation timing out) no longer stands.
+                  if (recovered.spawnError) get().clearSpawnError(id);
+                  if (found.record.hasPty === false) {
+                    // Started, and the PTY already went while the link was down.
+                    get().setRuntimeStatus(id, "exited");
+                    if (recovered.launchAgentId && recovered.agentState !== "exited") {
+                      terminalInstanceService.setAgentState(id, "exited");
+                      get().updateAgentState(id, "exited");
+                    }
+                  }
+                  // Trashed while it was being checked, when the host had nothing
+                  // to trash yet.
+                  if (recovered.location === "trash") {
+                    terminalClient.trash(id).catch((trashError: unknown) => {
+                      logWarn(
+                        "[TerminalStore] Couldn't trash a terminal found after a lost spawn",
+                        {
+                          id,
+                          error: trashError,
+                        }
+                      );
+                    });
+                  }
+                  // A pane on a running PTY starts with only what it prints next;
+                  // what it drew while the link was down comes from the host.
+                  safeFireAndForget(terminalInstanceService.fetchAndRestore(id), {
+                    context: "Restoring a terminal found after a lost spawn answer",
+                  });
+                } catch (error) {
+                  logWarn("[TerminalStore] Couldn't check a lost spawn with the host", {
+                    id,
+                    error,
+                  });
+                  failSpawn(lostError);
+                } finally {
+                  settle();
+                  endCheck();
+                }
+              })(),
+              { context: "Checking a lost spawn answer with the host" }
+            );
+          };
+
+          try {
+            await terminalClient.spawn({
+              id,
+              projectId: capturedWorkspaceId,
+              cwd: options.cwd,
+              shell: options.shell,
+              cols: spawnCols,
+              rows: spawnRows,
+              command: commandToExecute,
+              kind,
+              launchAgentId,
+              // Read off the live panel, not the values captured before the
+              // queue wait: a rename landing while the spawn was queued reaches
+              // a pty-host that has no record yet and is dropped, so the spawn
+              // itself has to carry it or it is lost (#11830).
+              title: _p1.title,
+              titleMode: _p1.titleMode,
+              env: mergedEnv,
+              restore: options.restore,
+              spawnBatchId: options.spawnBatchId,
+              spawnBatchSize: options.spawnBatchSize,
+              agentLaunchFlags: options.agentLaunchFlags,
+              agentModelId: options.agentModelId,
+              // Known-at-launch session id (#11782) — either freshly minted and
+              // assigned to the CLI, or the one this launch resumes. Recorded on
+              // the terminal record at spawn so a kill path that never runs a
+              // capture (force quit, crash, SIGKILL) can't lose the conversation.
+              agentSessionId: options.agentSessionId,
+              // Live, for the same reason as `title` above: a move landing while
+              // the spawn was queued reaches a pty-host with no record yet and is
+              // dropped, so the spawn itself has to carry the current filing.
+              worktreeId: spawnWorktreeId,
+              agentPresetId: options.agentPresetId,
+              agentPresetColor: options.agentPresetColor,
+              originalAgentPresetId: options.originalPresetId ?? options.agentPresetId,
+              handbackCode: options.handbackCode,
+              // Launch-time context the pane's MCP session replays through its
+              // workspace binding (#12486): a caller may supply one, and a Claude
+              // pane's is captured here for its own worktree.
+              actionContext:
+                options.actionContext ??
+                buildAgentLaunchContext({
+                  launchAgentId,
+                  terminalId: id,
+                  title: _p1.title,
+                  worktreeId: spawnWorktreeId,
+                }),
+            });
+          } catch (error) {
+            // The assistant's own terminal is never on the host's reconnect
+            // probe, so asking could only ever answer "absent"; its lane checks
+            // for itself (HelpSessionController).
+            if (!isLostSpawnReply(error) || location === "overlay") throw error;
+            followLostSpawnReply(error);
             return;
           }
 
-          // Promote spawnStatus to "ready" once the PTY is live. If the panel was
-          // removed during the spawn window, issue a compensating kill to avoid
-          // orphaning the freshly-spawned PTY (removePanel's kill IPC was a no-op
-          // at the time because the backend had no terminal yet).
-          let orphaned = false;
-          let mountedPanel = false;
-          set((state) => {
-            const current = state.panelsById[id];
-            if (!current) {
-              orphaned = true;
-              return state;
-            }
-            if (!isPtyPanel(current) || current.spawnStatus !== "spawning") return state;
-            mountedPanel = true;
-            return {
-              panelsById: { ...state.panelsById, [id]: { ...current, spawnStatus: "ready" } },
-            };
-          });
-          if (orphaned) {
-            terminalClient.kill(id).catch((killError) => {
-              logWarn("[TerminalStore] Compensating kill after orphan spawn failed", {
-                id,
-                error: killError,
-              });
-            });
-          } else {
-            if (mountedPanel) markRendererPerformance("agentlaunch.ready", { id });
-            // Recover the same race on the worktree axis: main awaits admission
-            // and settings before it reaches `PtyClient.spawn`, and that call
-            // overwrites the replay cache — so a move landing in that window
-            // reached a host with no record and was then clobbered. Placed past
-            // the incarnation gate, so a successor's filing is never re-stamped
-            // from this resolution (#12060).
-            reconcileWorktreeAfterSpawn(id, spawnWorktreeId, get().panelsById[id]);
-            // Recover the attach-during-spawn race: a fit that ran while the
-            // spawn IPC was in flight had its PTY resize dropped (no terminal
-            // existed yet), which would strand the CLI at the spawn dims while
-            // xterm renders the fitted grid — the assistant's progressively
-            // garbled prompt (#10863). Re-assert the live grid now that the PTY
-            // exists. PTY-only and direct: xterm already shows these dims, and
-            // sendPtyResize would defer 500ms for a settled-strategy agent —
-            // exactly the window in which the CLI paints its banner at the
-            // stale spawn width. The backend dedupes when nothing drifted.
-            // Whatever a fit recorded as sent during the spawn never reached a
-            // PTY; forget it so a pane that detached before this point still
-            // re-asserts on its next fit.
-            terminalInstanceService.invalidatePtyGrid(id);
-            const settledDims = getAttachedGridDims(id);
-            if (settledDims && (settledDims.cols !== spawnCols || settledDims.rows !== spawnRows)) {
-              terminalClient.resize(id, settledDims.cols, settledDims.rows);
-            }
-          }
-
-          if (mountedPanel && shouldWaitForVisibleAttach) {
-            try {
-              await terminalInstanceService.waitForAttachSettled(id, {
-                timeoutMs: TERMINAL_STARTUP_ATTACH_TIMEOUT_MS,
-              });
-            } catch (error) {
-              logWarn("[TerminalStore] Terminal did not attach before startup queue advanced", {
-                id,
-                error,
-              });
-            }
-          }
+          markRendererPerformance("agentlaunch.spawn-ipc-resolved", { id });
+          settleControl();
+          await completeSpawn(shouldWaitForVisibleAttach);
         } catch (error) {
           // Refused because another screen has control: the launch waits for
           // control rather than failing. A refusal while this view still reads
@@ -1672,59 +1872,7 @@ export const createAddPanelActions = (
             }
           }
           logError("[TerminalStore] Failed to spawn terminal", error);
-          // Same staleness gate as the success path: never stamp a failure onto
-          // a successor incarnation that re-launched this id mid-flight.
-          if (!agentLifecycleLedger.recordSpawnResolved(id, launchGeneration, false).accepted) {
-            return;
-          }
-          const current = get().panelsById[id];
-          if (!current || !isPtyPanel(current) || current.spawnStatus !== "spawning") return;
-
-          // A refusal from main (a drive lease, a validation) arrives as an
-          // encoded AppError: its code is not a spawn errno, and the person
-          // reads its userMessage, never the wire prefix.
-          const appError = isClientAppError(error) ? error : null;
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- error shape from node-pty spawn rejection
-          const err = error as { code?: string; errno?: number; syscall?: string; path?: string };
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- SpawnError construction from caught IPC error
-          const spawnError = {
-            code: appError ? "UNKNOWN" : (err.code ?? "UNKNOWN"),
-            message: appError
-              ? (appError.userMessage ?? appError.message)
-              : formatErrorMessage(error, "Failed to start terminal process"),
-            errno: err.errno,
-            syscall: err.syscall,
-            path: err.path,
-          } as import("@shared/types/pty-host").SpawnError;
-
-          set((state) => {
-            const _current = state.panelsById[id];
-            if (!_current || !isPtyPanel(_current) || _current.spawnStatus !== "spawning")
-              return state;
-            // A launched agent that fails to start never produces a PTY exit, so
-            // its optimistic agentState would stay stuck (e.g. "working"). Mark it
-            // "exited" so terminal.list / terminal.getStatus report the crash
-            // instead of a phantom running agent (#10816). Plain shells have no
-            // launchAgentId and keep agentState undefined.
-            const agentPatch = _current.launchAgentId
-              ? { agentState: "exited" as const, lastStateChange: Date.now() }
-              : {};
-            return {
-              panelsById: {
-                ...state.panelsById,
-                [id]: {
-                  ..._current,
-                  spawnStatus: "failed",
-                  spawnError,
-                  runtimeStatus: "error",
-                  ...agentPatch,
-                },
-              },
-            };
-          });
-
-          const after = get();
-          saveNormalized(after.panelsById, after.panelIds);
+          failSpawn(error);
         } finally {
           settleControl();
         }
