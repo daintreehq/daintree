@@ -788,7 +788,7 @@ export class DocumentController {
     if (this.revalidateTimer !== null) clearTimeout(this.revalidateTimer);
     for (const unsubscribe of this.unsubscribers.splice(0)) unsubscribe();
     controllers.delete(this.panelId);
-    useFileDocumentStore.getState().clearFileDocument(this.panelId);
+    useFileDocumentStore.getState().clearFileDocument(this.panelId, this.key);
     void invoke(CHANNELS.release, { identity: this.identity, panelId: this.panelId }).catch(
       () => {}
     );

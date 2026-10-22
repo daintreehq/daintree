@@ -81,7 +81,7 @@ function publish(record: DocumentRecord): void {
     // record's own projection and map entry go — a newer record for the same
     // panel and file may already hold both.
     if (record.projection !== null && store.byPanelId[record.panelId] === record.projection) {
-      store.clearFileDocument(record.panelId);
+      store.clearFileDocument(record.panelId, record.identityKey);
     }
     record.projection = null;
     if (records.get(record.key) === record) records.delete(record.key);

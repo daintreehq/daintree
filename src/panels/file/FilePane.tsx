@@ -622,8 +622,8 @@ export function FilePane({
         choiceKey: fileEditorChoiceKey("edit", filePath),
         value: editChoice,
         options: pickerOptions(
-          pluginEditCandidates,
-          editor
+          pluginEditCandidates.filter((candidate) => editOptions.includes(candidate.choiceId)),
+          editor && editOptions.includes(HOST_FILE_EDITOR_CHOICE)
             ? { value: HOST_FILE_EDITOR_CHOICE, label: builtinEditorName ?? "Built-in editor" }
             : null
         ),
@@ -634,7 +634,10 @@ export function FilePane({
         label: "View with…",
         choiceKey: fileEditorChoiceKey("view", filePath),
         value: viewChoice,
-        options: pickerOptions(pluginViewCandidates, null),
+        options: pickerOptions(
+          pluginViewCandidates.filter((candidate) => viewOptions.includes(candidate.choiceId)),
+          null
+        ),
       };
     }
     return null;
