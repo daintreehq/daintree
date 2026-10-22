@@ -192,7 +192,9 @@ describe("HostControlLinkClient relay notices (#13500)", () => {
     const taker = receiver(AWAITED);
     const { relay, calls } = opened(taker, statusAnswer);
 
-    await vi.waitFor(() => expect(taker.receiveNoticeStatus).toHaveBeenCalledWith("studio", STATUS));
+    await vi.waitFor(() =>
+      expect(taker.receiveNoticeStatus).toHaveBeenCalledWith("studio", STATUS)
+    );
     expect(calls).toEqual([
       { method: AssistantLinkMethod.AUTHENTICATE, payload: { credential: CREDENTIAL } },
       { method: AssistantLinkMethod.RELAY_NOTICE_STATUS, payload: { calls: AWAITED } },

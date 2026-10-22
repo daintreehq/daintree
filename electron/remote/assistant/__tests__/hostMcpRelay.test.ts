@@ -561,9 +561,9 @@ describe("installHostMcpRelay notices (#13500)", () => {
     opened[0]!.spec.deliverNotices([notice()]);
     await Promise.resolve();
     expect(next.sent).toEqual([]);
-    await expect(status(next, [{ helpSessionId: "help-1", callId: "call-1" }])).rejects.toMatchObject(
-      { code: "PERMISSION" }
-    );
+    await expect(
+      status(next, [{ helpSessionId: "help-1", callId: "call-1" }])
+    ).rejects.toMatchObject({ code: "PERMISSION" });
 
     senders.bind(next.ctx.session, "sender-a", "link-2");
     await status(next, [{ helpSessionId: "help-1", callId: "call-1" }]);

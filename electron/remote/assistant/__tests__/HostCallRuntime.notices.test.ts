@@ -373,7 +373,11 @@ describe("HostCallRuntime notices from hosts (#13500)", () => {
   it("tells the run once that a host lost its notices, naming the host and terminals (#13930)", async () => {
     relayCall.mockResolvedValueOnce({
       status: "done",
-      result: { isError: false, structured: { launched: true, terminalId: "host-t-9" }, text: null },
+      result: {
+        isError: false,
+        structured: { launched: true, terminalId: "host-t-9" },
+        text: null,
+      },
     } satisfies McpCallAnswer);
     await runtime.call("a", LAUNCH, { tier: "core" });
     await runtime.call(
@@ -439,7 +443,11 @@ describe("HostCallRuntime notices from hosts (#13500)", () => {
     await runtime.call("a", LAUNCH, { tier: "core" });
     relayCall.mockResolvedValueOnce({
       status: "done",
-      result: { isError: false, structured: { launched: true, terminalId: "host-t-9" }, text: null },
+      result: {
+        isError: false,
+        structured: { launched: true, terminalId: "host-t-9" },
+        text: null,
+      },
     } satisfies McpCallAnswer);
     await runtime.call("a", { ...LAUNCH, callId: "call-1" }, { tier: "core" });
 
@@ -503,7 +511,10 @@ describe("HostCallRuntime notices from hosts (#13500)", () => {
       ],
     });
     expect(queued.map(({ wake }) => wake.kind)).toEqual(["notice", "notice", "lost"]);
-    expect(queued[2]!.wake.lostNotices).toEqual({ hostName: "studio-01", terminalIds: ["host-t-2"] });
+    expect(queued[2]!.wake.lostNotices).toEqual({
+      hostName: "studio-01",
+      terminalIds: ["host-t-2"],
+    });
   });
 
   it("follows a batch by the items that ran, naming only those still missing", async () => {
@@ -522,7 +533,11 @@ describe("HostCallRuntime notices from hosts (#13500)", () => {
     } satisfies McpCallAnswer);
     await runtime.call(
       "a",
-      { ...LAUNCH, tool: "agent.launchMany", args: { agentIds: ["claude", "codex"], notify: true } },
+      {
+        ...LAUNCH,
+        tool: "agent.launchMany",
+        args: { agentIds: ["claude", "codex"], notify: true },
+      },
       { tier: "core" }
     );
     relayCall.mockResolvedValueOnce({

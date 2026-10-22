@@ -240,7 +240,9 @@ describe("RelayNoticeOutbox (#13500, #13930)", () => {
     expect(link.payloads).toHaveLength(1);
     outbox.enqueue(
       "sender-a",
-      Array.from({ length: MAX_RELAY_NOTICES_PER_SENDER }, (_, i) => notice(`t-${i + 1}`, `later-${i}`))
+      Array.from({ length: MAX_RELAY_NOTICES_PER_SENDER }, (_, i) =>
+        notice(`t-${i + 1}`, `later-${i}`)
+      )
     );
 
     expect(dropped).toEqual(["later-0"]);
