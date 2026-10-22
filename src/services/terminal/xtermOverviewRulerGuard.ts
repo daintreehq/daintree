@@ -17,7 +17,7 @@
  * decoration add/remove, resize, DPR and scrollbar options all call with a
  * flag, and a theme change that alters the border fails the comparison.
  *
- * Pinned to @xterm/xterm 6.1.0-beta.304, where the renderer's subscriptions
+ * Pinned to @xterm/xterm 6.1.0-beta.315, where the renderer's subscriptions
  * reach `_queueRefresh` and its frame callback reaches `_refreshDecorations`
  * through `this` at call time, so instance properties shadow both. Every
  * access fails open: on API drift the ruler keeps repainting, today's

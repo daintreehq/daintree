@@ -350,6 +350,21 @@ describe("ViewportSnapshotCache (PERF-035)", () => {
     }
   });
 
+  // The raw-row path falls back to per-cell reads silently when the buffer
+  // shape drifts (beta.315 dropped the `_line` wrapper), so pin the shape the
+  // fast path reads against the real pinned xterm.
+  it("finds raw cell storage on real xterm buffer lines", async () => {
+    await write(term, "hello world");
+    const line = term.buffer.active.getLine(0) as unknown as {
+      _line?: Record<string, unknown>;
+    } & Record<string, unknown>;
+    const raw = line._line ?? line;
+    expect(raw._data).toBeInstanceOf(Uint32Array);
+    expect(typeof raw.length).toBe("number");
+    expect(typeof raw._combined).toBe("object");
+    expect(typeof raw._extendedAttrs).toBe("object");
+  });
+
   it("preserves the legacy delta sequence while unchanged raw rows are reused", async () => {
     let previousLegacy = legacySnapshot(term);
     let previousCached = cache.read(term, 15)!;
