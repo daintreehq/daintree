@@ -106,19 +106,24 @@ describe("pluginLaunchEntriesStore (#13788)", () => {
     );
   });
 
-  it("keeps main's answer after a hide, and reports a write that failed", async () => {
-    setLaunchGroupHidden.mockResolvedValueOnce(["acme.records"]);
-    expect(await usePluginLaunchEntriesStore.getState().setGroupHidden("acme.records", true)).toBe(
-      true
-    );
+  it("hides at once, keeps main's answer, and re-reads main's after a write that failed", async () => {
+    let resolveHide!: (ids: string[]) => void;
+    setLaunchGroupHidden.mockReturnValueOnce(new Promise<string[]>((r) => (resolveHide = r)));
+    const hiding = usePluginLaunchEntriesStore.getState().setGroupHidden("acme.records", true);
+    // Optimistic: the launcher drops the group before main answers.
     expect(usePluginLaunchEntriesStore.getState().hiddenPluginIds).toEqual(["acme.records"]);
+    resolveHide(["acme.records"]);
+    expect(await hiding).toBe(true);
     expect(setLaunchGroupHidden).toHaveBeenCalledWith("acme.records", true);
 
     setLaunchGroupHidden.mockRejectedValueOnce(new Error("disk full"));
+    getHiddenLaunchGroups.mockResolvedValueOnce(["acme.records"]);
     expect(await usePluginLaunchEntriesStore.getState().setGroupHidden("acme.records", false)).toBe(
       false
     );
-    expect(usePluginLaunchEntriesStore.getState().hiddenPluginIds).toEqual(["acme.records"]);
     expect(usePluginLaunchEntriesStore.getState().saveError).toBe("acme.records");
+    await vi.waitFor(() =>
+      expect(usePluginLaunchEntriesStore.getState().hiddenPluginIds).toEqual(["acme.records"])
+    );
   });
 });

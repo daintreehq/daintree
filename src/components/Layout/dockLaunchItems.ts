@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
 import {
   getSpawnablePanelKinds,
   subscribeToPanelKindDefinitions,
@@ -33,7 +33,8 @@ import { useUserAgentRegistryStore } from "@/store/userAgentRegistryStore";
 import { evaluateWhenClause } from "@shared/utils/whenClause";
 import { useChromeWhenContext } from "@/hooks/useChromeWhenContext";
 import { usePluginLaunchEntriesStore } from "@/store/pluginLaunchEntriesStore";
-import { getAgentConfig } from "@/config/agents";
+import { isRegisteredAgent } from "@/config/agents";
+import { isBuiltInAgentId } from "@shared/config/agentIds";
 import { TOOLBAR_CUSTOMIZE_LABEL } from "./toolbarMenuStrings";
 import type { ActionSource, AgentAvailabilityState, TerminalRecipe } from "@shared/types";
 import type { PluginLaunchEntryConfig, PluginLaunchEntryTarget } from "@shared/types/plugin";
@@ -471,6 +472,8 @@ export interface BuildDockLaunchModelOptions extends DockLaunchPreconditions {
   hiddenPluginIds?: ReadonlyArray<string>;
   /** The live chrome context entries' `when` clauses are read against. Absent: every clause holds. */
   whenContext?: WhenClauseContext;
+  /** Whether an agent entry's agent is registered. Absent: the live effective registry. */
+  isAgentRegistered?: (agentId: string) => boolean;
 }
 
 /**
@@ -560,7 +563,8 @@ function entryPresentation(
  */
 function toPluginEntryItem(
   entry: PluginLaunchEntryConfig,
-  surface: DockLaunchSurface
+  surface: DockLaunchSurface,
+  isAgentRegistered: (agentId: string) => boolean
 ): DockLaunchPluginEntryItem | null {
   const { target } = entry;
   const base = {
@@ -581,7 +585,7 @@ function toPluginEntryItem(
     return isOwnLaunchCommand(entry.pluginId, target.actionId) ? base : null;
   }
   if (target.type === "agent") {
-    return getAgentConfig(target.agentId)
+    return isAgentRegistered(target.agentId)
       ? base
       : { ...base, disabled: { reason: "Agent not available" } };
   }
@@ -604,10 +608,12 @@ export function buildPluginGroups(
     surface,
     hiddenPluginIds = [],
     whenContext,
+    isAgentRegistered = isRegisteredAgent,
   }: {
     surface: DockLaunchSurface;
     hiddenPluginIds?: ReadonlyArray<string>;
     whenContext?: WhenClauseContext;
+    isAgentRegistered?: (agentId: string) => boolean;
   }
 ): DockLaunchModel["pluginGroups"] {
   const hidden = new Set(hiddenPluginIds);
@@ -617,7 +623,7 @@ export function buildPluginGroups(
     .filter((entry) => !whenContext || evaluateWhenClause(entry.when, whenContext))
     .sort((a, b) => a.priority - b.priority);
   for (const entry of shown) {
-    const item = toPluginEntryItem(entry, surface);
+    const item = toPluginEntryItem(entry, surface, isAgentRegistered);
     if (!item) continue;
     const group = groups.get(entry.pluginId);
     if (group) group.items.push(item);
@@ -700,6 +706,7 @@ export function buildDockLaunchModel({
   launchEntries = [],
   hiddenPluginIds,
   whenContext,
+  isAgentRegistered,
 }: BuildDockLaunchModelOptions): DockLaunchModel {
   const preconditions: DockLaunchPreconditions = { hasWorkspace, hasProject };
 
@@ -726,7 +733,12 @@ export function buildDockLaunchModel({
 
   const dockPanels = panelItems.filter((item) => item.location === "dock");
   const gridPanels = panelItems.filter((item) => item.location === "grid");
-  const pluginGroups = buildPluginGroups(launchEntries, { surface, hiddenPluginIds, whenContext });
+  const pluginGroups = buildPluginGroups(launchEntries, {
+    surface,
+    hiddenPluginIds,
+    whenContext,
+    isAgentRegistered,
+  });
 
   // Shadowed recipes stay listed (dimmed, marked "Overridden") rather than
   // vanishing — running one resolves to the winner, so hiding it only hides
@@ -962,14 +974,20 @@ export function useDockLaunchModel(options: {
     initLaunchEntries();
   }, [initLaunchEntries]);
 
+  // Read from the two snapshots themselves, the same tiers the effective
+  // registry merges, so the memo below sees them as inputs: an indirection
+  // through the global registry would be invisible to the React Compiler.
+  const isAgentRegistered = useCallback(
+    (agentId: string) =>
+      isBuiltInAgentId(agentId) ||
+      Object.hasOwn(pluginAgentRegistry, agentId) ||
+      (userAgentRegistry !== null && Object.hasOwn(userAgentRegistry, agentId)),
+    [pluginAgentRegistry, userAgentRegistry]
+  );
+
   const stable = useMemo(
-    () => {
-      // Referenced rather than only listed: `getAgentConfig` reads both
-      // registries itself, and a dependency the body never mentions is one the
-      // React Compiler may drop.
-      void pluginAgentRegistry;
-      void userAgentRegistry;
-      return buildDockLaunchModel({
+    () =>
+      buildDockLaunchModel({
         agents,
         pinnedCount,
         activeWorktreeId,
@@ -981,9 +999,9 @@ export function useDockLaunchModel(options: {
         launchEntries,
         hiddenPluginIds,
         whenContext,
+        isAgentRegistered,
         mruEntries: [],
-      });
-    },
+      }),
     // The two registry snapshots are read for invalidation only — the builder
     // pulls the live registries itself.
     [
@@ -998,8 +1016,7 @@ export function useDockLaunchModel(options: {
       launchEntries,
       hiddenPluginIds,
       whenContext,
-      pluginAgentRegistry,
-      userAgentRegistry,
+      isAgentRegistered,
       kindRegistry,
       definitionRegistry,
     ]

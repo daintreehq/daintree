@@ -39,7 +39,7 @@ vi.mock("@/store/pluginLaunchEntriesStore", () => ({
   },
 }));
 vi.mock("@/config/agents", () => ({
-  getAgentConfig: (id: string) => (knownAgents.has(id) ? { id, name: id } : undefined),
+  isRegisteredAgent: (id: string) => knownAgents.has(id),
 }));
 
 import {
@@ -247,6 +247,11 @@ describe("plugin launch entries — groups", () => {
     ];
     expect(itemFor(entries, `${RECORDS}.ok`).disabled).toBeUndefined();
     expect(itemFor(entries, `${RECORDS}.gone`).disabled?.reason).toBe("Agent not available");
+    // The hook hands the builder the registries it subscribes to, so an agent
+    // that registers later is what decides, not a stale global read.
+    const model = build({ launchEntries: entries, isAgentRegistered: (id) => id === "nope" });
+    const gone = model.pluginGroups[0]!.items.find((i) => i.entryId === `${RECORDS}.gone`);
+    expect(gone?.disabled).toBeUndefined();
   });
 
   it("lists each group under its plugin's name, ended by the row that hides it, before recipes", () => {

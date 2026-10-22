@@ -44,7 +44,9 @@ function acceptEntries(entries: readonly PluginLaunchEntryConfig[]): PluginLaunc
 
 let initialized = false;
 
-export const usePluginLaunchEntriesStore = create<PluginLaunchEntriesState>((set) => {
+let writeSeq = 0;
+
+export const usePluginLaunchEntriesStore = create<PluginLaunchEntriesState>((set, get) => {
   const readHidden = () => {
     const bridge = window.electron?.plugin;
     if (typeof bridge?.getHiddenLaunchGroups !== "function") return;
@@ -90,16 +92,32 @@ export const usePluginLaunchEntriesStore = create<PluginLaunchEntriesState>((set
       readHidden();
     },
 
+    // Optimistic, so the row (or the settings control) responds in the same
+    // render rather than after the round trip. A write main refused is undone
+    // by reading main's answer back, never by restoring a remembered list,
+    // which a later write in flight would make stale.
     setGroupHidden: async (pluginId, hidden) => {
       const bridge = window.electron?.plugin;
       if (typeof bridge?.setLaunchGroupHidden !== "function") return false;
+      const current = get().hiddenPluginIds;
+      if (current.includes(pluginId) !== hidden) {
+        set({
+          hiddenPluginIds: hidden
+            ? [...current, pluginId]
+            : current.filter((id) => id !== pluginId),
+        });
+      }
+      const write = ++writeSeq;
       try {
         const ids = await bridge.setLaunchGroupHidden(pluginId, hidden);
-        set({ hiddenPluginIds: ids.length > 0 ? ids : EMPTY_IDS, saveError: null });
+        if (write === writeSeq) {
+          set({ hiddenPluginIds: ids.length > 0 ? ids : EMPTY_IDS, saveError: null });
+        }
         return true;
       } catch (error) {
         logWarn("[PluginLaunchEntries] Failed to save a launcher group", { error });
         set({ saveError: pluginId });
+        readHidden();
         return false;
       }
     },
