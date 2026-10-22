@@ -30,12 +30,14 @@ import type { ProjectPluginVisibility } from "../../../shared/types/plugin.js";
  * with them.
  *
  * **Visibility only.** The plugin's worker stays global and keeps running — this
- * hides what a project's views see, it does not unload anything, and the
- * contribution families the broadcaster does not scope (agents, recipes, forge
- * providers) are unaffected. VS Code excludes a workspace-disabled extension
- * from activation outright; matching that here means per-project plugin
- * instances, which is a much larger change than the filter this module is. The
- * UI says which of the two it is doing rather than implying the stronger one.
+ * hides what a project's views see (including its recipes, app-menu items and
+ * file decorations, whose pulls also stop activating it there), it does not
+ * unload anything, and the families that are not shown per project (agents,
+ * forge providers) are unaffected. VS Code excludes a workspace-disabled
+ * extension from activation outright; matching that here means per-project
+ * plugin instances, which is a much larger change than the filter this module
+ * is. The UI says which of the two it is doing rather than implying the
+ * stronger one.
  */
 const OVERRIDES = new Map<string, Map<string, boolean>>();
 

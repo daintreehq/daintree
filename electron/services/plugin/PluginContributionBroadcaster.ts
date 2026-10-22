@@ -15,6 +15,7 @@ import { getPluginKeybindings } from "../pluginKeybindingRegistry.js";
 import { getPluginContextMenuItems } from "../pluginContextMenuRegistry.js";
 import { getPluginAgentRegistry } from "../../../shared/config/pluginAgentRegistry.js";
 import { getPluginRecipes } from "./PluginRecipeRegistry.js";
+import { getRegisteredFileDecorationProviders } from "../fileDecorationRegistry.js";
 import { getPluginTours, notifyPluginToursVisibilityChanged } from "./PluginTourRegistry.js";
 import { getPluginCustomIcons } from "../../../shared/config/pluginCustomIconRegistry.js";
 import {
@@ -23,6 +24,7 @@ import {
 } from "./projectPluginVisibility.js";
 import { projectIdFromPluginInstanceKey } from "../../../shared/types/plugin.js";
 import type { PluginActionDescriptor, PluginScopeKey } from "../../../shared/types/plugin.js";
+import type { TerminalRecipe } from "../../../shared/types/project.js";
 
 /**
  * Scope of a plugin's contributions: `"global"` for installed and builtin
@@ -210,6 +212,14 @@ export function getPluginCustomIconsForProject(projectId: string | null | undefi
   return selectContributionsForProject(getPluginCustomIcons(), (icon) => icon.pluginId, projectId);
 }
 
+/**
+ * A plugin recipe's owner. Read from `origin`, never split out of the id: a
+ * plugin id is itself dotted, so the qualified recipe id is ambiguous.
+ */
+export function recipeOwner(recipe: TerminalRecipe): string | undefined {
+  return recipe.origin?.pluginId;
+}
+
 /** Plugin context-menu items visible in a view of `projectId`. */
 export function getPluginContextMenuItemsForProject(projectId: string | null | undefined) {
   return selectContributionsForProject(
@@ -240,15 +250,15 @@ interface PluginContributionBroadcasterDeps {
 
 /**
  * Owns the coalesced per-tick microtask broadcasts for actions, panel kinds,
- * toolbar buttons, keybindings, and context-menu items, plus the cold-start
- * {@link PluginContributionBroadcaster.pushSnapshotTo} replay. Reads the global
- * registry getters, narrows each snapshot to the receiving view's project (see
- * {@link setPluginContributionScope}), and emits via {@link broadcastToRenderer}
- * or {@link broadcastToProjectRenderers}.
+ * toolbar buttons, keybindings, context-menu items and recipes, plus the
+ * cold-start {@link PluginContributionBroadcaster.pushSnapshotTo} replay. Reads
+ * the global registry getters, narrows each snapshot to the receiving view's
+ * project (see {@link setPluginContributionScope}), and emits via
+ * {@link broadcastToRenderer} or {@link broadcastToProjectRenderers}.
  *
- * Agents and recipes are deliberately NOT scoped: both are deferred to a later
- * phase, neither snapshot item carries an owning plugin id, and scoping them
- * would mean per-contribution-point code for a point nothing can reach yet.
+ * Agents are deliberately NOT scoped: the agent snapshot carries no owning
+ * plugin id, and a launched agent is a running process rather than something a
+ * project's views merely show.
  */
 export class PluginContributionBroadcaster {
   private readonly deps: PluginContributionBroadcasterDeps;
@@ -405,8 +415,21 @@ export class PluginContributionBroadcaster {
     this.scheduleContextMenuItemsBroadcast(true);
     this.scheduleToursBroadcast();
     this.schedulePluginIconsBroadcast();
-    // The native Help menu lists tours per project too; rebuild it.
+    this.scheduleRecipesBroadcast(true);
+    // The native menus list plugin items and tours per project too; rebuild them.
     notifyPluginToursVisibilityChanged();
+    // Decorations are pulled, not pushed, so each view re-pulls with its own
+    // sender context. Every declared scope rather than only bound ones: a
+    // plugin shown again may not have activated in this session yet.
+    const scopes = new Set(
+      getRegisteredFileDecorationProviders().flatMap(({ contribution }) => contribution.scopes)
+    );
+    for (const scope of scopes) {
+      broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
+        name: "plugin:decorations-changed",
+        payload: { scope },
+      });
+    }
   }
 
   /**
@@ -636,10 +659,10 @@ export class PluginContributionBroadcaster {
   }
 
   private broadcastPluginRecipes(complete: boolean): void {
-    broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
-      name: "plugin:recipes-changed",
-      payload: { recipes: getPluginRecipes(), complete },
-    });
+    this.emitScoped("plugin:recipes-changed", (projectId) => ({
+      recipes: forProject(getPluginRecipes(), recipeOwner, projectId),
+      complete,
+    }));
   }
 
   /** Coalesce tour registry mutations into one scoped snapshot per tick. */
@@ -750,7 +773,7 @@ export class PluginContributionBroadcaster {
       },
       {
         name: "plugin:recipes-changed",
-        payload: { recipes: getPluginRecipes(), complete: false },
+        payload: { recipes: forProject(getPluginRecipes(), recipeOwner, target), complete: false },
       },
       {
         name: "plugin:tours-changed",

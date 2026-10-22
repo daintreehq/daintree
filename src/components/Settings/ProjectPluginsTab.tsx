@@ -1060,7 +1060,7 @@ function InstalledPluginPane({
               <SettingsRow
                 label="Show in this project"
                 accessory={badges}
-                description="Hiding removes its panels, commands, buttons and shortcuts from this project. It stays installed and running, so background features such as agents, forge providers and file decorations carry on."
+                description="Hiding removes its panels, commands, buttons, shortcuts, recipes, menu items and file decorations from this project. It stays installed and running, so background features such as agents and forge providers carry on."
                 error={visibilityError}
                 control={({ descriptionId, disabled }) => (
                   <SettingsSwitch

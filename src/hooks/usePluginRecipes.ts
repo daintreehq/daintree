@@ -7,10 +7,12 @@ import { logWarn } from "@/utils/logger";
  * Mirror the main process's plugin-contributed recipe registry into the
  * renderer's recipe store as a fourth tier (#11860).
  *
- * Owned here rather than by `recipeStore.loadRecipes` on purpose: plugin
- * recipes are global, so folding them into the per-project load would re-fetch
- * them on every project switch and race the broadcast for no benefit. Keeping
- * them on their own channel also means a project-switch clear can't drop them.
+ * Owned here rather than by `recipeStore.loadRecipes` on purpose: main already
+ * narrows plugin recipes to this view's project (a plugin hidden here
+ * contributes none), and a view is bound to one project, so folding them into
+ * the per-project load would re-fetch them on every project switch and race the
+ * broadcast for no benefit. Keeping them on their own channel also means a
+ * project-switch clear can't drop them.
  *
  * Pull-on-mount is a safety net for cached `WebContentsView`s that may have
  * missed a broadcast; push-on-change is authoritative — once a push arrives, a

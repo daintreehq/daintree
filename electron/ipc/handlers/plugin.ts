@@ -66,6 +66,7 @@ import { getPluginKeybindings } from "../../services/pluginKeybindingRegistry.js
 import { getPluginContextMenuItems } from "../../services/pluginContextMenuRegistry.js";
 import {
   getPluginCustomIconsForProject,
+  recipeOwner,
   selectContributionsForProject,
 } from "../../services/plugin/PluginContributionBroadcaster.js";
 import type { PluginCustomIconAsset } from "../../../shared/config/pluginCustomIcon.js";
@@ -1141,9 +1142,10 @@ function parseRecipeMetadataPatch(value: unknown): PluginRecipeMetadataPatch {
   return patch;
 }
 
-async function handleRecipesGet(): Promise<TerminalRecipe[]> {
-  await (await getPluginService()).waitForInit();
-  return (await getPluginService()).getPluginRecipes();
+async function handleRecipesGet(ctx: IpcContext): Promise<TerminalRecipe[]> {
+  const service = await getPluginService();
+  await service.waitForInit();
+  return selectContributionsForProject(service.getPluginRecipes(), recipeOwner, ctx.projectId);
 }
 
 async function handleToursGet(ctx: IpcContext): Promise<PluginTourDescriptor[]> {
@@ -1237,6 +1239,7 @@ function presentString(value: unknown): string | undefined {
  * returned — a provider that decorates unrequested paths can't leak them.
  */
 async function handleFileDecorationsGet(
+  ctx: IpcContext,
   scope: string,
   paths: string[]
 ): Promise<Record<string, FileDecoration>> {
@@ -1251,9 +1254,15 @@ async function handleFileDecorationsGet(
   // Implicit activation: any plugin that declares a provider for this scope is
   // forced to `activate()` before the impl lookup, so providers bound during
   // activate() are queryable on the first pull. No-op once already activated.
-  await (await getPluginService()).activatePluginsForFileDecorationScope(scope);
+  // Only plugins the sender's project shows: a hidden plugin is not started by
+  // that project's file views, and its decorations stay out of them.
+  await (await getPluginService()).activatePluginsForFileDecorationScope(scope, ctx.projectId);
 
-  const impls = getFileDecorationImpls(scope);
+  const impls = selectContributionsForProject(
+    getFileDecorationImpls(scope),
+    (entry) => entry.pluginId,
+    ctx.projectId
+  );
   if (impls.length === 0) return {};
 
   const merged: Record<string, FileDecoration> = {};
@@ -2081,7 +2090,7 @@ export const pluginNamespace = defineIpcNamespace({
       withContext: true,
     }),
     getAgents: op(PLUGIN_METHOD_CHANNELS.getAgents, handleAgentsGet),
-    getRecipes: op(PLUGIN_METHOD_CHANNELS.getRecipes, handleRecipesGet),
+    getRecipes: op(PLUGIN_METHOD_CHANNELS.getRecipes, handleRecipesGet, { withContext: true }),
     getTours: op(PLUGIN_METHOD_CHANNELS.getTours, handleToursGet, { withContext: true }),
     getIcons: op(PLUGIN_METHOD_CHANNELS.getIcons, handleIconsGet, { withContext: true }),
     recordRecipeUse: op(PLUGIN_METHOD_CHANNELS.recordRecipeUse, handleRecipeRecordUse),
@@ -2090,7 +2099,9 @@ export const pluginNamespace = defineIpcNamespace({
       handleRecipeMetadataUpdate
     ),
     getForgeProviders: op(PLUGIN_METHOD_CHANNELS.getForgeProviders, handleForgeProvidersGet),
-    getDecorations: op(PLUGIN_METHOD_CHANNELS.getDecorations, handleFileDecorationsGet),
+    getDecorations: op(PLUGIN_METHOD_CHANNELS.getDecorations, handleFileDecorationsGet, {
+      withContext: true,
+    }),
     getWorktreeStatus: op(PLUGIN_METHOD_CHANNELS.getWorktreeStatus, handleWorktreeStatusGet),
     getAuditRecords: op(PLUGIN_METHOD_CHANNELS.getAuditRecords, handleGetAuditRecords),
     getAuditConfig: op(PLUGIN_METHOD_CHANNELS.getAuditConfig, handleGetAuditConfig),

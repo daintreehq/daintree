@@ -1973,6 +1973,8 @@ describe("PLUGIN_FORGE_PROVIDERS_GET handler", () => {
 });
 
 describe("PLUGIN_FILE_DECORATIONS_GET handler", () => {
+  const SENDER = { sender: { id: 1 } };
+
   function getHandler() {
     registerPluginHandlers();
     return mockIpcMainHandle.mock.calls.find(
@@ -1982,8 +1984,8 @@ describe("PLUGIN_FILE_DECORATIONS_GET handler", () => {
 
   it("returns {} for empty scope or empty paths without calling the registry", async () => {
     const handler = getHandler();
-    expect(await handler({}, "", ["a.ts"])).toEqual({});
-    expect(await handler({}, "worktree-diff:/r", [])).toEqual({});
+    expect(await handler(SENDER, "", ["a.ts"])).toEqual({});
+    expect(await handler(SENDER, "worktree-diff:/r", [])).toEqual({});
     expect(mockGetFileDecorationImpls).not.toHaveBeenCalled();
   });
 
@@ -2009,7 +2011,7 @@ describe("PLUGIN_FILE_DECORATIONS_GET handler", () => {
     };
     mockGetFileDecorationImpls.mockReturnValue([first, second]);
     const handler = getHandler();
-    const result = await handler({}, "worktree-diff:/r", ["a.ts", "b.ts"]);
+    const result = await handler(SENDER, "worktree-diff:/r", ["a.ts", "b.ts"]);
     expect(result).toEqual({
       "a.ts": { badge: "1", color: "text-status-warning", tooltip: "from second" },
       "b.ts": { badge: "2" },
@@ -2022,7 +2024,7 @@ describe("PLUGIN_FILE_DECORATIONS_GET handler", () => {
       { pluginId: "p", contributionId: "d", impl: { provideDecorations: provide } },
     ]);
     const handler = getHandler();
-    await handler({}, "s:1", ["a.ts", "a.ts", "b.ts"]);
+    await handler(SENDER, "s:1", ["a.ts", "a.ts", "b.ts"]);
     expect(provide).toHaveBeenCalledWith("s:1", ["a.ts", "b.ts"]);
   });
 
@@ -2043,7 +2045,7 @@ describe("PLUGIN_FILE_DECORATIONS_GET handler", () => {
     ]);
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const handler = getHandler();
-    expect(await handler({}, "s:1", ["a.ts"])).toEqual({ "a.ts": { badge: "3" } });
+    expect(await handler(SENDER, "s:1", ["a.ts"])).toEqual({ "a.ts": { badge: "3" } });
     warn.mockRestore();
   });
 
@@ -2064,7 +2066,7 @@ describe("PLUGIN_FILE_DECORATIONS_GET handler", () => {
     ]);
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const handler = getHandler();
-    await handler({}, "worktree-diff:/r", ["a.ts"]);
+    await handler(SENDER, "worktree-diff:/r", ["a.ts"]);
     // Healthy provider is not audited; only the rejecting one is.
     expect(mockAuditAppend).toHaveBeenCalledTimes(1);
     const record = mockAuditAppend.mock.calls[0][0];
@@ -2102,7 +2104,7 @@ describe("PLUGIN_FILE_DECORATIONS_GET handler", () => {
       ]);
       const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
       const handler = getHandler();
-      const promise = handler({}, "worktree-diff:/r", ["a.ts"]) as Promise<unknown>;
+      const promise = handler(SENDER, "worktree-diff:/r", ["a.ts"]) as Promise<unknown>;
       await vi.advanceTimersByTimeAsync(3000);
       await promise;
       expect(mockAuditAppend).toHaveBeenCalledTimes(1);
@@ -2134,7 +2136,7 @@ describe("PLUGIN_FILE_DECORATIONS_GET handler", () => {
       },
     ]);
     const handler = getHandler();
-    await handler({}, "worktree-diff:/r", ["a.ts"]);
+    await handler(SENDER, "worktree-diff:/r", ["a.ts"]);
     expect(mockAuditAppend).not.toHaveBeenCalled();
   });
 
@@ -2161,7 +2163,7 @@ describe("PLUGIN_FILE_DECORATIONS_GET handler", () => {
       ]);
       const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
       const handler = getHandler();
-      const promise = handler({}, "s:1", ["a.ts"]) as Promise<unknown>;
+      const promise = handler(SENDER, "s:1", ["a.ts"]) as Promise<unknown>;
       await vi.advanceTimersByTimeAsync(3000);
       await promise;
       expect(mockAuditAppend).toHaveBeenCalledTimes(2);
@@ -2192,7 +2194,7 @@ describe("PLUGIN_FILE_DECORATIONS_GET handler", () => {
       },
     ]);
     const handler = getHandler();
-    expect(await handler({}, "s:1", ["a.ts"])).toEqual({});
+    expect(await handler(SENDER, "s:1", ["a.ts"])).toEqual({});
   });
 
   // Issue #9953: the renderer reads `decoration.url` as the click target
@@ -2217,7 +2219,7 @@ describe("PLUGIN_FILE_DECORATIONS_GET handler", () => {
       },
     ]);
     const handler = getHandler();
-    const result = (await handler({}, "worktree-diff:/r", ["a.ts"])) as Record<
+    const result = (await handler(SENDER, "worktree-diff:/r", ["a.ts"])) as Record<
       string,
       { badge?: string; tooltip?: string; color?: string; url?: string }
     >;
@@ -2245,7 +2247,7 @@ describe("PLUGIN_FILE_DECORATIONS_GET handler", () => {
       },
     ]);
     const handler = getHandler();
-    expect(await handler({}, "s:1", ["a.ts"])).toEqual({
+    expect(await handler(SENDER, "s:1", ["a.ts"])).toEqual({
       "a.ts": { url: "https://example.test/run/42" },
     });
   });
@@ -2268,7 +2270,7 @@ describe("PLUGIN_FILE_DECORATIONS_GET handler", () => {
       },
     ]);
     const handler = getHandler();
-    expect(await handler({}, "s:1", ["a.ts"])).toEqual({
+    expect(await handler(SENDER, "s:1", ["a.ts"])).toEqual({
       "a.ts": { url: "https://example.test/replacement" },
     });
   });
@@ -2287,7 +2289,7 @@ describe("PLUGIN_FILE_DECORATIONS_GET handler", () => {
       },
     ]);
     const handler = getHandler();
-    expect(await handler({}, "s:1", ["a.ts"])).toEqual({ "a.ts": { badge: "7" } });
+    expect(await handler(SENDER, "s:1", ["a.ts"])).toEqual({ "a.ts": { badge: "7" } });
   });
 
   it("drops decorations for paths the caller did not request", async () => {
@@ -2304,7 +2306,7 @@ describe("PLUGIN_FILE_DECORATIONS_GET handler", () => {
       },
     ]);
     const handler = getHandler();
-    expect(await handler({}, "s:1", ["requested.ts"])).toEqual({
+    expect(await handler(SENDER, "s:1", ["requested.ts"])).toEqual({
       "requested.ts": { badge: "1" },
     });
   });
@@ -2327,12 +2329,50 @@ describe("PLUGIN_FILE_DECORATIONS_GET handler", () => {
         },
       ]);
       const handler = getHandler();
-      const promise = handler({}, "s:1", ["a.ts"]) as Promise<unknown>;
+      const promise = handler(SENDER, "s:1", ["a.ts"]) as Promise<unknown>;
       await vi.advanceTimersByTimeAsync(3000);
       expect(await promise).toEqual({ "a.ts": { badge: "4" } });
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  describe("scoped to the sender's project (#13765)", () => {
+    const LOCAL_A = "acme.local-a";
+    const localImpl = {
+      pluginId: LOCAL_A,
+      contributionId: "d",
+      impl: { provideDecorations: vi.fn().mockResolvedValue({ "a.ts": { badge: "A" } }) },
+    };
+    const globalImpl = {
+      pluginId: "acme.global",
+      contributionId: "d",
+      impl: { provideDecorations: vi.fn().mockResolvedValue({ "a.ts": { tooltip: "G" } }) },
+    };
+
+    it("activates and queries only the providers the sender's project can see", async () => {
+      const { pluginService } = await import("../../../services/PluginService.js");
+      setPluginContributionScope(LOCAL_A, "project-a");
+      mockGetProjectForWebContents.mockReturnValue("project-b");
+      mockGetFileDecorationImpls.mockReturnValue([localImpl, globalImpl]);
+
+      expect(await getHandler()(SENDER, "s:1", ["a.ts"])).toEqual({ "a.ts": { tooltip: "G" } });
+      expect(pluginService.activatePluginsForFileDecorationScope).toHaveBeenCalledWith(
+        "s:1",
+        "project-b"
+      );
+      expect(localImpl.impl.provideDecorations).not.toHaveBeenCalled();
+    });
+
+    it("still serves the owning project's own provider", async () => {
+      setPluginContributionScope(LOCAL_A, "project-a");
+      mockGetProjectForWebContents.mockReturnValue("project-a");
+      mockGetFileDecorationImpls.mockReturnValue([localImpl, globalImpl]);
+
+      expect(await getHandler()(SENDER, "s:1", ["a.ts"])).toEqual({
+        "a.ts": { badge: "A", tooltip: "G" },
+      });
+    });
   });
 });
 

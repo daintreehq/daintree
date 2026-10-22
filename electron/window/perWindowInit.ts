@@ -22,8 +22,9 @@ import { PortalManager } from "../services/PortalManager.js";
 import { EventBuffer } from "../services/EventBuffer.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { getEndpointRegistry } from "../ipc/endpointRegistry.js";
-import { createApplicationMenu } from "../menu.js";
+import { createApplicationMenu, rebuildApplicationMenuIfPluginVisibilityChanged } from "../menu.js";
 import { onPluginToursChanged } from "../services/plugin/PluginTourRegistry.js";
+import { onProjectPresenceChanged } from "./projectPresenceChanges.js";
 import { ProjectSwitchService } from "../services/ProjectSwitchService.js";
 import { notificationService } from "../services/NotificationService.js";
 import { projectStore } from "../services/ProjectStore.js";
@@ -157,28 +158,45 @@ export async function initPerWindowServices(
 
   // Plugin tours are listed in Help, and unlike other plugin menu items they
   // must leave it when their plugin is disabled or uninstalled (#12773), so the
-  // menu is rebuilt when the tour set changes. Debounced: one plugin load or
-  // unload can change it several times in a tick.
-  let tourMenuRebuild: ReturnType<typeof setTimeout> | null = null;
-  const unsubscribeTours = onPluginToursChanged(() => {
-    if (tourMenuRebuild) return;
-    tourMenuRebuild = setTimeout(() => {
-      tourMenuRebuild = null;
+  // menu is rebuilt when the tour set changes — which a per-project visibility
+  // change also signals. Plugin menu items and tours are filtered by this
+  // window's project too (#13765), so a project switch or a focus change may
+  // call for a different menu; those rebuild only when it actually differs,
+  // since a rebuild dismisses a menu the user has open. Debounced: one plugin
+  // load or unload can change the tour set several times in a tick.
+  let pluginMenuRebuild: ReturnType<typeof setTimeout> | null = null;
+  let pluginMenuRebuildForced = false;
+  const schedulePluginMenuRebuild = (force: boolean): void => {
+    if (force) pluginMenuRebuildForced = true;
+    if (pluginMenuRebuild) return;
+    pluginMenuRebuild = setTimeout(() => {
+      pluginMenuRebuild = null;
+      const forced = pluginMenuRebuildForced;
+      pluginMenuRebuildForced = false;
       if (win.isDestroyed()) return;
       // The menu is app-wide but built against one window's state; let the
-      // focused window build it when there is one.
+      // focused window build it when there is one. A context check needs the
+      // focused window outright: with none focused, every window would build
+      // the menu for its own project in turn.
       const focused = BrowserWindow.getFocusedWindow();
-      if (focused && focused !== win) return;
+      if (focused ? focused !== win : !forced) return;
       try {
-        createApplicationMenu(win, cliService);
+        if (forced) createApplicationMenu(win, cliService);
+        else rebuildApplicationMenuIfPluginVisibilityChanged(win, cliService);
       } catch (err) {
-        console.error("[MAIN] Plugin tour menu rebuild failed:", err);
+        console.error("[MAIN] Plugin menu rebuild failed:", err);
       }
     }, 50);
-  });
+  };
+  const unsubscribeTours = onPluginToursChanged(() => schedulePluginMenuRebuild(true));
+  const unsubscribePresence = onProjectPresenceChanged(() => schedulePluginMenuRebuild(false));
+  const onFocus = (): void => schedulePluginMenuRebuild(false);
+  win.on("focus", onFocus);
   win.once("closed", () => {
     unsubscribeTours();
-    if (tourMenuRebuild) clearTimeout(tourMenuRebuild);
+    unsubscribePresence();
+    win.removeListener("focus", onFocus);
+    if (pluginMenuRebuild) clearTimeout(pluginMenuRebuild);
   });
 
   // Arm the drain trigger immediately. All tasks for this window are now

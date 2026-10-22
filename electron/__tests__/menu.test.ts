@@ -274,7 +274,12 @@ vi.mock("../../shared/config/distribution.js", async (importOriginal) => ({
   isWindowsStoreBuild: isWindowsStoreBuildMock,
 }));
 
-import { createApplicationMenu, handleDirectoryOpen, buildAboutPanelOptions } from "../menu.js";
+import {
+  createApplicationMenu,
+  handleDirectoryOpen,
+  buildAboutPanelOptions,
+  rebuildApplicationMenuIfPluginVisibilityChanged,
+} from "../menu.js";
 import {
   getProjectHistory,
   disposeProjectHistory,
@@ -2328,6 +2333,83 @@ describe("Help menu plugin tours (#12773)", () => {
 
     getProjectForWebContentsMock.mockReturnValue("project-b");
     expect(helpItems().some((i) => i.label === "Acme Site Builder: Welcome Tour")).toBe(true);
+  });
+});
+
+describe("plugin menu items in a project that hides the plugin (#13765)", () => {
+  afterEach(() => {
+    vi.mocked(getPluginMenuItems).mockReturnValue([]);
+    getProjectForWebContentsMock.mockReturnValue(null);
+    isPluginVisibleInProjectMock.mockReturnValue(true);
+  });
+
+  function submenuLabels(role: string): unknown[] {
+    capturedTemplate = [];
+    createApplicationMenu(mockBrowserWindow as unknown as Electron.BrowserWindow);
+    const menu = capturedTemplate.find((m) => m.role === role);
+    return (menu!.submenu as Electron.MenuItemConstructorOptions[]).map((i) => i.label);
+  }
+
+  it("drops a hidden plugin's items from this window's menus and keeps them elsewhere", () => {
+    vi.mocked(getPluginMenuItems).mockReturnValue([
+      {
+        pluginId: "acme.site",
+        item: { label: "Acme Docs", actionId: "app.settings", location: "help" },
+      },
+      {
+        pluginId: "acme.other",
+        item: { label: "Other Docs", actionId: "app.settings", location: "help" },
+      },
+    ]);
+    getProjectForWebContentsMock.mockReturnValue("project-a");
+    isPluginVisibleInProjectMock.mockImplementation(
+      (pluginId, projectId) => !(pluginId === "acme.site" && projectId === "project-a")
+    );
+
+    const hiddenHere = submenuLabels("help");
+    expect(hiddenHere).not.toContain("Acme Docs");
+    expect(hiddenHere).toContain("Other Docs");
+
+    getProjectForWebContentsMock.mockReturnValue("project-b");
+    expect(submenuLabels("help")).toContain("Acme Docs");
+  });
+
+  it("rebuilds for a project switch or focus change only when it changes which plugins show", () => {
+    vi.mocked(getPluginMenuItems).mockReturnValue([
+      {
+        pluginId: "acme.site",
+        item: { label: "Acme Docs", actionId: "app.settings", location: "help" },
+      },
+    ]);
+    isPluginVisibleInProjectMock.mockImplementation(
+      (pluginId, projectId) => !(pluginId === "acme.site" && projectId === "project-a")
+    );
+    const win = mockBrowserWindow as unknown as Electron.BrowserWindow;
+    getProjectForWebContentsMock.mockReturnValue("project-b");
+    createApplicationMenu(win);
+    const builds = vi.mocked(Menu.setApplicationMenu);
+    builds.mockClear();
+
+    // Another project that hides nothing builds the same menu: leave it alone,
+    // so a switch never dismisses a menu the user has open for no reason.
+    getProjectForWebContentsMock.mockReturnValue("project-c");
+    rebuildApplicationMenuIfPluginVisibilityChanged(win);
+    expect(builds).not.toHaveBeenCalled();
+
+    getProjectForWebContentsMock.mockReturnValue("project-a");
+    rebuildApplicationMenuIfPluginVisibilityChanged(win);
+    expect(builds).toHaveBeenCalledTimes(1);
+    const help = capturedTemplate.find((m) => m.role === "help")!;
+    expect(
+      (help.submenu as Electron.MenuItemConstructorOptions[]).map((i) => i.label)
+    ).not.toContain("Acme Docs");
+
+    rebuildApplicationMenuIfPluginVisibilityChanged(win);
+    expect(builds).toHaveBeenCalledTimes(1);
+
+    getProjectForWebContentsMock.mockReturnValue("project-b");
+    rebuildApplicationMenuIfPluginVisibilityChanged(win);
+    expect(builds).toHaveBeenCalledTimes(2);
   });
 });
 

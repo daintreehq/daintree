@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const ipcUtilsMock = vi.hoisted(() => ({
   broadcastToRenderer: vi.fn(),
@@ -87,6 +87,10 @@ import {
   setProjectPluginVisibility,
 } from "../projectPluginVisibility.js";
 import { CHANNELS } from "../../../ipc/channels.js";
+import {
+  clearFileDecorationRegistry,
+  registerFileDecorationProviders,
+} from "../../fileDecorationRegistry.js";
 import type {
   PluginActionDescriptor,
   PluginRuntimeStatus,
@@ -299,14 +303,17 @@ describe("mutation broadcasts with nothing project-scoped", () => {
     ).toBe(contributionsMock.contextMenuItems);
   });
 
-  it("does not consult the view registry for the always-global agents and recipes channels", async () => {
+  it("does not consult the view registry for the always-global agents channel", async () => {
     setPluginContributionScope(PROJECT_PLUGIN_A, PROJECT_A);
+    registryMock.getRegisteredProjectViews.mockReturnValue([
+      { webContents: fakeWebContents(11), projectId: PROJECT_A },
+    ]);
     const b = makeBroadcaster();
     b.scheduleAgentsBroadcast(false);
-    b.scheduleRecipesBroadcast(false);
     await flush();
-    expect(ipcUtilsMock.broadcastToRenderer).toHaveBeenCalledTimes(2);
+    expect(ipcUtilsMock.broadcastToRenderer).toHaveBeenCalledTimes(1);
     expect(ipcUtilsMock.broadcastToProjectRenderers).not.toHaveBeenCalled();
+    expect(registryMock.getRegisteredProjectViews).not.toHaveBeenCalled();
   });
 });
 
@@ -850,5 +857,123 @@ describe("per-project visibility of installed plugins", () => {
         { name: "plugin:tours-changed", payload: { tours: contributionsMock.tours } },
       ],
     ]);
+  });
+
+  describe("recipes (#13765)", () => {
+    const globalRecipe = {
+      id: "acme.global.deploy",
+      origin: { kind: "plugin", pluginId: GLOBAL_PLUGIN, contributionId: "deploy" },
+    };
+
+    beforeEach(() => {
+      contributionsMock.recipes = [globalRecipe];
+    });
+
+    it("scopes the live recipes broadcast by the recipe's owning plugin", async () => {
+      setProjectPluginVisibility(VIS_PROJECT_A, GLOBAL_PLUGIN, false);
+      registryMock.getRegisteredProjectViews.mockReturnValue([
+        { webContents: fakeWebContents(31), projectId: VIS_PROJECT_A },
+        { webContents: fakeWebContents(32), projectId: VIS_PROJECT_B },
+      ]);
+
+      const b = makeBroadcaster();
+      b.scheduleRecipesBroadcast(true);
+      await flush();
+
+      expect(ipcUtilsMock.broadcastToRenderer).not.toHaveBeenCalled();
+      expect(
+        ipcUtilsMock.broadcastToProjectRenderers.mock.calls.map((call) => [call[0], call[2]])
+      ).toEqual([
+        [
+          VIS_PROJECT_A,
+          { name: "plugin:recipes-changed", payload: { recipes: [], complete: true } },
+        ],
+        [
+          VIS_PROJECT_B,
+          { name: "plugin:recipes-changed", payload: { recipes: [globalRecipe], complete: true } },
+        ],
+      ]);
+    });
+
+    it("drops a hidden plugin's recipes from the cold-restore snapshot", async () => {
+      setProjectPluginVisibility(VIS_PROJECT_A, GLOBAL_PLUGIN, false);
+      const wc = fakeWebContents(21);
+      registryMock.getProjectForWebContents.mockReturnValue(VIS_PROJECT_A);
+
+      await makeBroadcaster().pushSnapshotTo(wc as unknown as Electron.WebContents);
+
+      expect(sentPayloads(wc, "plugin:recipes-changed")).toEqual([
+        { recipes: [], complete: false },
+      ]);
+    });
+
+    it("re-sends recipes authoritatively when visibility changes", async () => {
+      setProjectPluginVisibility(VIS_PROJECT_A, GLOBAL_PLUGIN, false);
+      registryMock.getRegisteredProjectViews.mockReturnValue([
+        { webContents: fakeWebContents(23), projectId: VIS_PROJECT_A },
+      ]);
+
+      const b = makeBroadcaster();
+      b.broadcastVisibilityChanged();
+      await flush();
+
+      const sent = ipcUtilsMock.broadcastToProjectRenderers.mock.calls.map(
+        (call) => call[2] as { name: string; payload: unknown }
+      );
+      expect(sent.filter((e) => e.name === "plugin:recipes-changed")).toEqual([
+        { name: "plugin:recipes-changed", payload: { recipes: [], complete: true } },
+      ]);
+    });
+
+    it("keeps a project-local plugin's recipes inside its own project", async () => {
+      setPluginContributionScope(PROJECT_PLUGIN_A, VIS_PROJECT_A);
+      const localRecipe = {
+        id: "acme.local-a.build",
+        origin: { kind: "plugin", pluginId: PROJECT_PLUGIN_A, contributionId: "build" },
+      };
+      contributionsMock.recipes = [globalRecipe, localRecipe];
+      const wc = fakeWebContents(24);
+      registryMock.getProjectForWebContents.mockReturnValue(VIS_PROJECT_B);
+
+      await makeBroadcaster().pushSnapshotTo(wc as unknown as Electron.WebContents);
+
+      expect(sentPayloads(wc, "plugin:recipes-changed")).toEqual([
+        { recipes: [globalRecipe], complete: false },
+      ]);
+    });
+  });
+
+  describe("file decorations (#13765)", () => {
+    afterEach(() => {
+      clearFileDecorationRegistry();
+    });
+
+    it("invalidates every declared decoration scope once, so each view re-pulls", () => {
+      registerFileDecorationProviders(GLOBAL_PLUGIN, [
+        { id: "badges", scopes: ["worktree-diff:*", "file-tree:*"] },
+      ]);
+      registerFileDecorationProviders(PROJECT_PLUGIN_A, [
+        { id: "status", scopes: ["file-tree:*"] },
+      ]);
+
+      makeBroadcaster().broadcastVisibilityChanged();
+
+      const invalidated = ipcUtilsMock.broadcastToRenderer.mock.calls
+        .map((call) => call[1] as { name: string; payload: unknown })
+        .filter((e) => e.name === "plugin:decorations-changed")
+        .map((e) => e.payload);
+      // Path-less: the hook re-pulls every visible path, and the pull — not
+      // this broadcast — decides what the sender's project may see.
+      expect(invalidated).toEqual([{ scope: "worktree-diff:*" }, { scope: "file-tree:*" }]);
+    });
+
+    it("sends no invalidation when no plugin declares a decoration provider", () => {
+      makeBroadcaster().broadcastVisibilityChanged();
+      expect(
+        ipcUtilsMock.broadcastToRenderer.mock.calls.some(
+          (call) => (call[1] as { name: string }).name === "plugin:decorations-changed"
+        )
+      ).toBe(false);
+    });
   });
 });
