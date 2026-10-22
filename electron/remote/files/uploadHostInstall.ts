@@ -6,6 +6,9 @@ import { HostInbox } from "./hostInbox.js";
 import { projectFileRoots } from "./hostInstall.js";
 import type { HostFileEndpoint } from "./HostFileService.js";
 import { HostUploadService } from "./HostUploadService.js";
+import { createLogger } from "../../utils/logger.js";
+
+const logger = createLogger("main:uploadHostInstall");
 
 declare module "../runtime.js" {
   interface RemoteServices {
@@ -36,7 +39,7 @@ export function installHostUploadService(options: { inbox?: HostInbox } = {}): {
     .ensure()
     .then(() => inbox.cleanup())
     .catch((error: unknown) => {
-      console.warn("[RemoteHosts] Couldn't prepare the host inbox:", error);
+      logger.warn("Couldn't prepare the host inbox:", { error });
     });
   const unregister = registerRemoteService("hostUploadService", service);
   const unwatchLease = lease.onChange((state) => service.onLeaseChanged(state.projectId));

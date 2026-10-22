@@ -13,6 +13,9 @@ import {
   RetiredExchangeMethod,
   SendPayloadSchema,
 } from "./linkMethods.js";
+import { createLogger } from "../../utils/logger.js";
+
+const logger = createLogger("main:hostSenders");
 
 declare module "../runtime.js" {
   interface RemoteServices {
@@ -194,14 +197,14 @@ export async function installAssistantSenderHost(
           // Each batch ends what it read, so the next reads past it.
         }
       } catch (error) {
-        console.warn("[AssistantSenders] Couldn't end exchanges left open:", error);
+        logger.warn("Couldn't end exchanges left open:", { error });
       }
       try {
         for (let batch = 0; batch < MAX_SWEEP_BATCHES && retired.sweep().hasMore; batch++) {
           // Bounded: the next interval takes what's left.
         }
       } catch (error) {
-        console.warn("[AssistantSenders] Sweep failed:", error);
+        logger.warn("Sweep failed:", { error });
       }
     };
     maintain();

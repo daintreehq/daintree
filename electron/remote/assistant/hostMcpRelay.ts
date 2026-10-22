@@ -24,6 +24,9 @@ import {
 } from "../../services/mcp-server/terminalNotify.js";
 import type { ViewlessApprovalDecision } from "../../services/viewless/index.js";
 import { askShellApproval, type RelayApprovalAsk } from "./relayApprovals.js";
+import { createLogger } from "../../utils/logger.js";
+
+const logger = createLogger("main:hostMcpRelay");
 
 /** Who a relayed session acts for, as this host established it. */
 export interface RelayMcpSessionSpec {
@@ -258,7 +261,7 @@ export function installHostMcpRelay(
     try {
       deps.retirePrincipal?.(senderId, helpSessionId);
     } catch (error) {
-      console.warn("[HostMcpRelay] Couldn't retire a relay principal:", error);
+      logger.warn("Couldn't retire a relay principal:", { error });
     }
   };
   /** Retires the least recent of a sender's principals past its bound; one in use stays. */

@@ -5,8 +5,19 @@ const powerMonitorMock = vi.hoisted(() => ({
   off: vi.fn(),
 }));
 
+const loggerMock = vi.hoisted(() => ({
+  debug: vi.fn(),
+  info: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
+}));
+
 vi.mock("electron", () => ({
   powerMonitor: powerMonitorMock,
+}));
+
+vi.mock("../../utils/logger.js", () => ({
+  createLogger: () => loggerMock,
 }));
 
 import { SystemSleepService } from "../SystemSleepService.js";
@@ -129,5 +140,34 @@ describe("SystemSleepService", () => {
 
     expect(service.getMetrics().sleepPeriods).toHaveLength(1);
     expect(service.getTotalSleepTime()).toBe(5000);
+  });
+
+  it("logs suspend and wake with the sleep duration", () => {
+    const service = new SystemSleepService();
+    service.initialize();
+
+    getLatestRegisteredHandler("suspend")();
+    expect(loggerMock.info).toHaveBeenCalledWith("System suspending", {
+      sleepStart: Date.now(),
+    });
+
+    vi.advanceTimersByTime(30_000);
+    getLatestRegisteredHandler("resume")();
+    expect(loggerMock.info).toHaveBeenCalledWith(
+      "System resumed",
+      expect.objectContaining({ sleepDurationMs: 30_000, totalSleepMs: 30_000 })
+    );
+
+    service.dispose();
+  });
+
+  it("logs a resume that follows no suspend", () => {
+    const service = new SystemSleepService();
+    service.initialize();
+
+    getLatestRegisteredHandler("resume")();
+    expect(loggerMock.info).toHaveBeenCalledWith("System resumed with no suspend recorded");
+
+    service.dispose();
   });
 });

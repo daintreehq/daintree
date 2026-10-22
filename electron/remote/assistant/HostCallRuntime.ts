@@ -44,6 +44,9 @@ import {
 } from "./linkMethods.js";
 import { canonicalArgsHash } from "../../services/mcp-server/sessionDedup.js";
 import type { McpConfirmationDecision } from "../../../shared/types/ipc/mcpServer.js";
+import { createLogger } from "../../utils/logger.js";
+
+const logger = createLogger("main:HostCallRuntime");
 
 /** One host as this Shell observes it: its registry entry, its link, its last summary. */
 export interface ObservedHost {
@@ -584,7 +587,7 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
         lines: payload.lines,
       });
     } catch (error) {
-      console.warn("[HostCall] Asking about a host's call failed:", error);
+      logger.warn("Asking about a host's call failed:", { error });
       decision = null;
     }
     // The call can end, or its run be replaced, while the person decides.
@@ -867,7 +870,7 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
             }
             // Sent, then something unreadable came back: it may have run.
             noted.ran();
-            console.warn("[HostCall] A relayed call ended without a known outcome:", error);
+            logger.warn("A relayed call ended without a known outcome:", { error });
             return { ...this.outcomeWith("ambiguous", CALL_AMBIGUOUS_DETAIL), ...sent };
         }
       } finally {

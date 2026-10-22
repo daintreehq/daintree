@@ -10,6 +10,9 @@ import { resilientAtomicWriteFileSync } from "../../utils/fs.js";
 import { APPIMAGE_BUILD_INFO_SUFFIX, BUILD_INFO_PATTERN } from "../client/hostProbe.js";
 import { runCommand } from "./hostCommands.js";
 import { systemdQuote, systemdUnitName } from "./startAtLogin.js";
+import { createLogger } from "../../utils/logger.js";
+
+const logger = createLogger("main:appImageRelocation");
 
 /**
  * Two Host mode files name the AppImage by path: the `systemd --user` unit's
@@ -105,7 +108,7 @@ export function relocateHostAppImageSync(
       reloadUnits();
     }
   } catch (error) {
-    console.warn("[RemoteHosts] Couldn't point the Host mode unit at the updated AppImage:", error);
+    logger.warn("Couldn't point the Host mode unit at the updated AppImage:", { error });
   }
   try {
     const oldMarker = `${previous}${APPIMAGE_BUILD_INFO_SUFFIX}`;
@@ -119,7 +122,7 @@ export function relocateHostAppImageSync(
       fs.rmSync(oldMarker, { force: true });
     }
   } catch (error) {
-    console.warn("[RemoteHosts] Couldn't move the AppImage's build marker:", error);
+    logger.warn("Couldn't move the AppImage's build marker:", { error });
   }
 }
 
@@ -160,7 +163,7 @@ export async function reconcileHostAppImage(params: {
       }
     }
   } catch (error) {
-    console.warn("[RemoteHosts] Couldn't point the Host mode unit at this AppImage:", error);
+    logger.warn("Couldn't point the Host mode unit at this AppImage:", { error });
   }
   if (params.ownMarker === null || !OWN_MARKER.test(params.ownMarker)) return;
   try {
@@ -171,7 +174,7 @@ export async function reconcileHostAppImage(params: {
     if (Math.max(mtimeMs, ctimeMs) > params.startedAtMs) return;
     resilientAtomicWriteFileSync(markerFile, params.ownMarker, "utf-8", { mode: 0o644 });
   } catch (error) {
-    console.warn("[RemoteHosts] Couldn't refresh the AppImage's build marker:", error);
+    logger.warn("Couldn't refresh the AppImage's build marker:", { error });
   }
 }
 

@@ -1,5 +1,8 @@
 import type { HostMetricsSummary } from "../../../shared/types/remoteHosts.js";
 import { HOST_METRICS_INTERVAL_MS } from "./sampler.js";
+import { createLogger } from "../../utils/logger.js";
+
+const logger = createLogger("main:summaryLoop");
 
 export interface SummarySource {
   sample(): Promise<HostMetricsSummary>;
@@ -60,7 +63,7 @@ export class SummaryLoop {
         }
       }
     } catch (error) {
-      console.warn("[HostMetrics] Sampling failed:", error);
+      logger.warn("Sampling failed:", { error });
     } finally {
       this.inFlight = false;
     }

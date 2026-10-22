@@ -43,6 +43,9 @@ import { projectStore } from "../../services/ProjectStore.js";
 import { observeAgents } from "../metrics/hostSources.js";
 import type { RemoteViewEndpoint } from "./RemoteViewEndpoint.js";
 import { createRemoteScopeGate } from "../../ipc/channelRemoteScope.js";
+import { createLogger } from "../../utils/logger.js";
+
+const logger = createLogger("main:hostListener");
 
 declare module "../runtime.js" {
   interface RemoteServices {
@@ -90,12 +93,12 @@ function replaySnapshots(endpoint: RemoteViewEndpoint): void {
   void import("../../services/PluginService.js")
     .then((m) => m.pluginService.pushSnapshotToEndpoint(endpoint))
     .catch((error: unknown) => {
-      console.warn("[RemoteHosts] Plugin snapshot for a remote view failed:", error);
+      logger.warn("Plugin snapshot for a remote view failed:", { error });
     });
   void import("../../services/runHistory/runHistoryService.js")
     .then((m) => m.pushRunHistorySnapshotToEndpoint(endpoint))
     .catch((error: unknown) => {
-      console.warn("[RemoteHosts] Run history snapshot for a remote view failed:", error);
+      logger.warn("Run history snapshot for a remote view failed:", { error });
     });
 }
 
@@ -213,7 +216,7 @@ async function buildHostListener(
           mcpServerService.retireRelayPrincipal(senderId, helpSessionId)
         )
         .catch((error: unknown) => {
-          console.warn("[RemoteHosts] Couldn't retire a relay principal:", error);
+          logger.warn("Couldn't retire a relay principal:", { error });
         });
     },
     watchingNoticeCalls: async (senderId, helpSessionId) => {
