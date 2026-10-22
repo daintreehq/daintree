@@ -105,7 +105,8 @@ async function rawHello(token: string, clientId: string) {
 async function helloOn(
   server: HostServer,
   clientId: string,
-  resume: { id: string; secret: string } | null
+  resume: { id: string; secret: string } | null,
+  deviceId?: string
 ) {
   const raw = await rawConnect();
   raw.socket.write(
@@ -116,7 +117,12 @@ async function helloOn(
         body: {
           handshake: TEST_HANDSHAKE,
           token: server.token,
-          client: { clientId, clientName: "n", platform: "linux" },
+          client: {
+            clientId,
+            clientName: "n",
+            platform: "linux",
+            ...(deviceId ? { deviceId } : {}),
+          },
           resumeSessionId: resume?.id ?? null,
           resumeSecret: resume?.secret ?? null,
         },
@@ -1032,5 +1038,122 @@ describe("HostServer session cap", () => {
     expect(seen).toHaveLength(3);
     two.socket.destroy();
     three.socket.destroy();
+  });
+});
+
+describe("HostServer and a relaunched Shell (#13909)", () => {
+  const INSTALL = "5b1f6c3e-8d2a-4f4e-9c1b-0a7e2d9f3c41";
+  const OTHER_INSTALL = "c0e9a1d2-3b4c-4d5e-8f6a-7b8c9d0e1f2a";
+
+  async function watched(server: HostServer) {
+    const seen: HostSessionContext[] = [];
+    const parked: string[] = [];
+    const expired: Array<{ sessionId: string; clientId: string; cause: string }> = [];
+    server.onSession((ctx) => seen.push(ctx));
+    server.onSessionDetached((info) => parked.push(info.sessionId));
+    server.onSessionExpired((info) =>
+      expired.push({ sessionId: info.sessionId, clientId: info.clientId, cause: info.cause })
+    );
+    const park = async (opened: Awaited<ReturnType<typeof helloOn>>) => {
+      opened.raw.socket.destroy();
+      await waitFor(() => parked.includes(opened.welcome.sessionId));
+    };
+    return { seen, expired, park };
+  }
+
+  it("ends the install's parked session as soon as it starts a fresh one", async () => {
+    const server = await startServer({ resumeGraceMs: 60_000 });
+    const { expired, park } = await watched(server);
+    const crashed = await helloOn(server, "launch-1", null, INSTALL);
+    await park(crashed);
+    expect(expired).toEqual([]);
+
+    const relaunched = await helloOn(server, "launch-2", null, INSTALL);
+    expect(relaunched.welcome.resumed).toBe(false);
+    expect(expired).toEqual([
+      { sessionId: crashed.welcome.sessionId, clientId: "launch-1", cause: "session-replaced" },
+    ]);
+
+    // Ended for good: its secret resumes nothing.
+    const late = await helloOn(server, "launch-1", {
+      id: crashed.welcome.sessionId,
+      secret: crashed.welcome.resumeSecret,
+    });
+    expect(late.welcome.resumed).toBe(false);
+    expect(expired).toHaveLength(1);
+    relaunched.raw.socket.destroy();
+    late.raw.socket.destroy();
+  });
+
+  it("leaves other installs, Shells that name none, and a live session of the same install alone", async () => {
+    const server = await startServer({ resumeGraceMs: 60_000 });
+    const { seen, expired, park } = await watched(server);
+    const otherInstall = await helloOn(server, "ana-launch", null, OTHER_INSTALL);
+    await park(otherInstall);
+    const unnamed = await helloOn(server, "old-shell", null);
+    await park(unnamed);
+    const stale = [
+      await helloOn(server, "launch-0", null, INSTALL),
+      await helloOn(server, "launch-1", null, INSTALL),
+    ];
+    for (const opened of stale) await park(opened);
+    const sibling = await helloOn(server, "sibling-launch", null, INSTALL);
+    const siblingSession = seen.at(-1)!.session;
+
+    const relaunched = await helloOn(server, "launch-2", null, INSTALL);
+    expect(expired.map((info) => [info.clientId, info.cause])).toEqual([
+      ["launch-0", "session-replaced"],
+      ["launch-1", "session-replaced"],
+    ]);
+    expect(siblingSession.isOpen).toBe(true);
+    // Nothing marked it to end once it parks either: it is held for resume.
+    await park(sibling);
+    expect(expired).toHaveLength(2);
+
+    const back = await helloOn(server, "ana-launch", {
+      id: otherInstall.welcome.sessionId,
+      secret: otherInstall.welcome.resumeSecret,
+    });
+    expect(back.welcome.resumed).toBe(true);
+    relaunched.raw.socket.destroy();
+    back.raw.socket.destroy();
+  });
+
+  it("ends nothing for a resume or a refused HELLO naming the install", async () => {
+    const server = await startServer({ resumeGraceMs: 60_000 });
+    const { expired, park } = await watched(server);
+    const older = await helloOn(server, "launch-1", null, INSTALL);
+    await park(older);
+    const current = await helloOn(server, "launch-1b", null, INSTALL);
+    expect(expired).toHaveLength(1);
+    await park(current);
+
+    const intruder = await rawConnect();
+    intruder.socket.write(
+      encodeFrame(
+        messageToFrame({
+          lane: Lane.CONTROL,
+          kind: ControlKind.HELLO,
+          body: {
+            handshake: TEST_HANDSHAKE,
+            token: "not-the-token",
+            client: { clientId: "launch-x", clientName: "n", platform: "linux", deviceId: INSTALL },
+            resumeSessionId: null,
+          },
+        })
+      )
+    );
+    await closedSocket(intruder.socket);
+    expect(expired).toHaveLength(1);
+
+    const resumed = await helloOn(
+      server,
+      "launch-1b",
+      { id: current.welcome.sessionId, secret: current.welcome.resumeSecret },
+      INSTALL
+    );
+    expect(resumed.welcome.resumed).toBe(true);
+    expect(expired).toHaveLength(1);
+    resumed.raw.socket.destroy();
   });
 });

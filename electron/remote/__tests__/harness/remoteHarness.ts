@@ -59,6 +59,8 @@ export interface RemoteHarness {
   projects: Map<string, HarnessProject>;
   /** Each project's workspace host, by project id. */
   workspaceHosts: Map<string, FakeWorkspaceHost>;
+  /** Where Host mode listens, for a further Shell link of a test's own. */
+  hostLocation: HostSocketLocation;
   /** Host mode's server and session host, as boot registered them. */
   server(): HostServer;
   sessionHost(): SessionHost;
@@ -240,6 +242,7 @@ async function buildHarness(
     pty,
     projects: harnessState.projects,
     workspaceHosts,
+    hostLocation: location,
     server: () => requireRemoteService("hostServer"),
     sessionHost: () => requireRemoteService("sessionHost"),
     manager,

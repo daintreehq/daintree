@@ -10,6 +10,7 @@ import {
   DriveLeaseService,
   NAVIGATION_CHANGED_DELAY_MS,
   PANELS_CHANGED_DELAY_MS,
+  type DriveLeaseReservation,
 } from "../DriveLeaseService.js";
 import { EndpointRegistryImpl } from "../../ipc/endpointRegistry.js";
 import type { ClientEndpoint, Disposable, HostFrame } from "../../ipc/endpoint.js";
@@ -1125,5 +1126,223 @@ describe("DriveLeaseService across a restart of this app", () => {
     expect(service.getState("p").holder).toBeNull();
     expect(errors).toHaveBeenCalled();
     errors.mockRestore();
+  });
+});
+
+describe("DriveLeaseService and a relaunched Shell (#13909)", () => {
+  const INSTALL = "5b1f6c3e-8d2a-4f4e-9c1b-0a7e2d9f3c41";
+  const OTHER_INSTALL = "c0e9a1d2-3b4c-4d5e-8f6a-7b8c9d0e1f2a";
+
+  const note = (endpoint: FakeEndpoint, clientName: string, deviceId?: string) =>
+    service.noteEndpointClient(endpoint.endpointId, {
+      clientId: endpoint.clientId,
+      clientName,
+      platform: "darwin",
+      kind: "remote",
+      ...(deviceId ? { deviceId } : {}),
+    });
+
+  async function drivenThenGone(deviceId: string | undefined, gone: "quit" | "parked") {
+    const before = remote("s1:e1", "launch-1");
+    registry.add(before);
+    note(before, "greg-studio", deviceId);
+    await settle();
+    expect(service.getHolder("p")?.endpointId).toBe("s1:e1");
+    if (gone === "quit") before.close();
+    else service.noteEndpointTransport([before.endpointId], false);
+    await settle();
+    return before;
+  }
+
+  it("takes the project straight back for a relaunch of the install that drove it", async () => {
+    await drivenThenGone(INSTALL, "quit");
+    const hostWindow = local(1);
+    registry.add(hostWindow);
+    await settle();
+    expect(service.isDriving("p", hostWindow)).toBe(false);
+
+    const after = remote("s2:e1", "launch-2");
+    registry.add(after);
+    note(after, "greg-studio", INSTALL);
+    await settle();
+
+    expect(service.getHolder("p")).toMatchObject({ endpointId: "s2:e1", clientId: "launch-2" });
+    expect(service.getDriveTarget("p").kind).toBe("live");
+    expect(service.viewFor("p", after)).toMatchObject({
+      drivingHere: true,
+      isHolderEndpoint: true,
+      heldByThisClient: true,
+    });
+    expect(service.isDriving("p", hostWindow)).toBe(false);
+    expect(leaseTables.at(-1)).toEqual([
+      expect.objectContaining({ projectId: "p", holderConnection: after.handle }),
+    ]);
+    // The grace the old launch left running releases nothing.
+    vi.advanceTimersByTime(GRACE_MS * 2);
+    expect(service.getHolder("p")?.endpointId).toBe("s2:e1");
+  });
+
+  it("takes it back from a launch whose session the host still holds for resume", async () => {
+    const before = await drivenThenGone(INSTALL, "parked");
+
+    const after = remote("s2:e1", "launch-2");
+    registry.add(after);
+    note(after, "greg-studio", INSTALL);
+    await settle();
+    expect(service.getHolder("p")?.endpointId).toBe("s2:e1");
+
+    // The old link coming back observes; it doesn't take the project back.
+    service.noteEndpointTransport([before.endpointId], true);
+    expect(service.getHolder("p")?.endpointId).toBe("s2:e1");
+    expect(service.isDriving("p", before)).toBe(false);
+  });
+
+  it.each([
+    ["another install", INSTALL, OTHER_INSTALL],
+    ["a newcomer that names no install", INSTALL, undefined],
+    ["a holder that named no install", undefined, INSTALL],
+    ["neither naming one", undefined, undefined],
+  ])("waits out the grace for %s", async (_label, holderInstall, newcomerInstall) => {
+    await drivenThenGone(holderInstall, "quit");
+
+    const after = remote("s2:e1", "launch-2");
+    registry.add(after);
+    // Same machine name: a name never stands in for the install.
+    note(after, "greg-studio", newcomerInstall);
+    await settle();
+    expect(service.getHolder("p")?.clientId).toBe("launch-1");
+    expect(service.isDriving("p", after)).toBe(false);
+
+    vi.advanceTimersByTime(GRACE_MS);
+    expect(service.getHolder("p")?.endpointId).toBe("s2:e1");
+  });
+
+  it("never takes it from a holder still there, whichever install it names", async () => {
+    const first = remote("s1:e1", "launch-1");
+    const second = remote("s2:e1", "launch-2");
+    registry.add(first);
+    note(first, "greg-studio", INSTALL);
+    await settle();
+    registry.add(second);
+    note(second, "greg-studio", INSTALL);
+    await settle();
+
+    expect(service.getHolder("p")?.endpointId).toBe("s1:e1");
+    expect(service.isDriving("p", second)).toBe(false);
+    vi.advanceTimersByTime(GRACE_MS * 2);
+    expect(service.getHolder("p")?.endpointId).toBe("s1:e1");
+    // Taking control is still the explicit step.
+    expect(service.takeOver("p", second).endpointId).toBe("s2:e1");
+  });
+
+  it("hands it to the holder's own client before another launch of its install", async () => {
+    await drivenThenGone(INSTALL, "quit");
+    const sibling = remote("s2:e1", "launch-2");
+    const sameLaunch = remote("s1:e2", "launch-1");
+    registry.add(sibling);
+    note(sibling, "greg-studio", INSTALL);
+    registry.add(sameLaunch);
+    note(sameLaunch, "greg-studio", INSTALL);
+    await settle();
+
+    expect(service.getHolder("p")?.endpointId).toBe("s1:e2");
+  });
+
+  it("matches the install once it is noted, whichever order the note and the lease came in", async () => {
+    // Granted before its client was noted: the install is learned from the late note.
+    const before = remote("s1:e1", "launch-1");
+    registry.add(before);
+    await settle();
+    expect(service.getHolder("p")?.endpointId).toBe("s1:e1");
+    note(before, "greg-studio", INSTALL);
+    before.close();
+    await settle();
+
+    // A newcomer attached before its own note arrived takes it once the note says who it is.
+    const after = remote("s2:e1", "launch-2");
+    registry.add(after);
+    await settle();
+    expect(service.getHolder("p")?.clientId).toBe("launch-1");
+    note(after, "greg-studio", INSTALL);
+    await settle();
+    expect(service.getHolder("p")?.endpointId).toBe("s2:e1");
+  });
+
+  it("keeps the install id off everything other Shells see", async () => {
+    const watcher = remote("s9:e1", "ana-launch");
+    registry.add(watcher);
+    note(watcher, "ana-mbp", OTHER_INSTALL);
+    await settle();
+    const driver = remote("s1:e1", "launch-1");
+    registry.add(driver);
+    note(driver, "greg-studio", INSTALL);
+    await settle();
+    service.takeOver("p", driver);
+
+    const seen = JSON.stringify([
+      changes,
+      watcher.sent,
+      driver.sent,
+      service.getState("p"),
+      service.viewFor("p", watcher),
+    ]);
+    expect(seen).not.toContain(INSTALL);
+    expect(seen).not.toContain(OTHER_INSTALL);
+  });
+
+  describe("across a restart of this app", () => {
+    function restartedWith(initial: Record<string, DriveLeaseReservation>) {
+      const saved: Array<Record<string, DriveLeaseReservation>> = [];
+      service.dispose();
+      service = new DriveLeaseService({
+        registry,
+        releaseGraceMs: GRACE_MS,
+        restoredReservationGraceMs: GRACE_MS * 3,
+        now: () => 1_000,
+        applyDriveLeases: (leases) => leaseTables.push(leases),
+        reservations: { load: () => initial, save: (next) => saved.push(next) },
+      });
+      return saved;
+    }
+
+    it("saves the holder's install with its reservation", async () => {
+      const saved = restartedWith({});
+      const driver = remote("s1:e1", "launch-1");
+      registry.add(driver);
+      note(driver, "greg-studio", INSTALL);
+      await settle();
+      expect(saved.at(-1)).toEqual({
+        p: { clientId: "launch-1", clientName: "greg-studio", deviceId: INSTALL },
+      });
+    });
+
+    it("holds the project for its install, which takes it straight back on a new launch", async () => {
+      restartedWith({
+        p: { clientId: "launch-1", clientName: "greg-studio", deviceId: INSTALL },
+      });
+      const other = remote("s9:e1", "ana-launch");
+      registry.add(other);
+      note(other, "ana-mbp", OTHER_INSTALL);
+      await settle();
+      expect(service.getDriveTarget("p").kind).toBe("reserved");
+      expect(service.isDriving("p", other)).toBe(false);
+
+      const after = remote("s2:e1", "launch-2");
+      registry.add(after);
+      note(after, "greg-studio", INSTALL);
+      await settle();
+      expect(service.getHolder("p")?.endpointId).toBe("s2:e1");
+      expect(service.isDriving("p", other)).toBe(false);
+    });
+
+    it("leaves a reservation saved before installs were recorded to its client alone", async () => {
+      restartedWith({ p: { clientId: "launch-1", clientName: "greg-studio" } });
+      const after = remote("s2:e1", "launch-2");
+      registry.add(after);
+      note(after, "greg-studio", INSTALL);
+      await settle();
+      expect(service.getHolder("p")?.clientId).toBe("launch-1");
+      expect(service.isDriving("p", after)).toBe(false);
+    });
   });
 });
