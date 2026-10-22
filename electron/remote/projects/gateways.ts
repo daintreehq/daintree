@@ -180,7 +180,7 @@ export class LocalHostGateway implements HostGateway {
   }
 }
 
-/** Resolves the host's open session, dialing it first when needed. */
+/** Resolves the host's open session (dialling it first, for the resolvers that may). */
 export type SessionResolver = (hostId: HostId) => Promise<LinkSession>;
 
 export class RemoteHostGateway implements HostGateway {

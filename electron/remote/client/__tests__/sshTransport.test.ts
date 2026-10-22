@@ -10,6 +10,7 @@ import { LinkClient, type LinkClientState } from "../LinkClient.js";
 import { bridgeChild, type BridgeChild } from "../../__tests__/harness/bridgeChild.js";
 import {
   PROBE_COMMAND,
+  SSH_COMMAND_TIMEOUT_MS,
   SshTransport,
   attachCommandFor,
   buildAttachArgs,
@@ -49,6 +50,8 @@ const COMMON = [
   "RequestTTY=no",
   "-o",
   "BatchMode=yes",
+  "-o",
+  "ConnectTimeout=10",
   "-o",
   "ServerAliveInterval=15",
   "-o",
@@ -92,6 +95,29 @@ describe("ssh argument construction", () => {
     }
   });
 
+  // ssh's connect timeout applies per address, so a host whose IPv6 and IPv4
+  // routes both drop packets takes two of them: both must end before the
+  // command deadline, or the deadline cuts ssh off before it says why.
+  it("lets ssh give up on an unreachable host before the command deadline, on every call that can dial", () => {
+    const calls = [
+      buildProbeArgs("studio", "/cp/cm-%C"),
+      buildCatArgs("studio", "/cp/cm-%C", "/home/g/host.json"),
+      buildAttachArgs("studio", "/cp/cm-%C", "daintree --attach-stdio"),
+      buildStreamLocalCheckArgs("studio", "/cp/cm-%C", "/run/user/1/daintree/host.sock"),
+      buildForwardArgs("studio", "/l/l.sock", "/run/user/1/daintree/host.sock"),
+      remoteShellArgs("studio", "/cp/cm-%C", "true"),
+      scpArgs("studio", "/cp/cm-%C", "/tmp/a", "/tmp/b", "ssh"),
+    ];
+    for (const args of calls) {
+      const timeouts = args
+        .filter((arg) => arg.startsWith("ConnectTimeout="))
+        .map((arg) => Number(arg.slice("ConnectTimeout=".length)));
+      expect(timeouts).toHaveLength(1);
+      expect(timeouts[0]).toBeGreaterThan(0);
+      expect(2 * timeouts[0]! * 1000).toBeLessThan(SSH_COMMAND_TIMEOUT_MS);
+    }
+  });
+
   it("builds the probe, discovery read and forward commands", () => {
     expect(buildProbeArgs("studio", "/cp/cm-%C")).toEqual([
       ...COMMON,
@@ -130,6 +156,8 @@ describe("ssh argument construction", () => {
       "ForwardAgent=no",
       "-o",
       "ForwardX11=no",
+      "-o",
+      "ConnectTimeout=10",
       "-o",
       "ServerAliveInterval=15",
       "-o",

@@ -216,7 +216,7 @@ export function HostDetail({
     setConnectError(null);
     // Settled on what the link reports: dialling alone answers at once, so a
     // failure never rejected and "Couldn't connect" never showed.
-    remoteHostsClient.connectAndSettle(descriptor.id).then(
+    remoteHostsClient.connectAndSettle(descriptor.id, { restart: true }).then(
       (state) => {
         setConnecting(false);
         // Host mode off and a mismatched build have their own words and actions above.

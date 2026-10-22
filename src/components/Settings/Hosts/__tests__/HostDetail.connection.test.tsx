@@ -96,7 +96,8 @@ describe("HostDetail connection controls", () => {
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     });
-    expect(client.connectAndSettle).toHaveBeenCalledWith("studio-01");
+    // A person's Retry starts over, even with an attempt under way.
+    expect(client.connectAndSettle).toHaveBeenCalledWith("studio-01", { restart: true });
   });
 
   it("says a Connect failed when the link reports it unreachable, in ssh's words", async () => {

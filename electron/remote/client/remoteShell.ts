@@ -36,8 +36,6 @@ export function remoteShellArgs(target: string, controlPath: string, script: str
   if (script.includes("\n")) throw new Error("Remote scripts must be a single line");
   return [
     ...sshCommonArgs(controlPath),
-    "-o",
-    "ConnectTimeout=10",
     "--",
     target,
     `sh -c ${shellQuote(script)}`,

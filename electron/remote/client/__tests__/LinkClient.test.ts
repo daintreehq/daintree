@@ -666,3 +666,99 @@ describe("LinkClient host restart (#13392)", () => {
     }
   });
 });
+
+describe("LinkClient retry during an attempt (#13926)", () => {
+  it("leaves an attempt under way alone, and abandons it to start over when asked to restart", async () => {
+    // An ssh that never hears back from the host: it ends only when cancelled.
+    const signals: AbortSignal[] = [];
+    const transport: LinkTransport = {
+      open(signal) {
+        signals.push(signal);
+        return new Promise((_resolve, reject) => {
+          signal.addEventListener("abort", () =>
+            reject(new TransportError("Connection cancelled", null))
+          );
+        });
+      },
+    };
+    client = new LinkClient({
+      transport,
+      handshake: TEST_HANDSHAKE,
+      client: { clientId: "c", clientName: "n", platform: "linux" },
+    });
+    const seen: LinkClientState[] = [];
+    client.onStateChange((state) => seen.push(state));
+    client.start();
+    await waitFor(() => signals.length === 1);
+
+    // Anything asking for the link while it dials doesn't cut a slow host off.
+    client.retryNow();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(signals).toHaveLength(1);
+    expect(signals[0]!.aborted).toBe(false);
+
+    client.retryNow({ restart: true });
+    await waitFor(() => signals.length === 2);
+    expect(signals[0]!.aborted).toBe(true);
+    expect(signals[1]!.aborted).toBe(false);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    // Abandoning the attempt is not a failure: nothing reports the host unreachable.
+    expect(seen.map((state) => state.status)).toEqual(["connecting", "connecting"]);
+    expect(client.getState()).toEqual({ status: "connecting", attempt: 2 });
+  });
+
+  it("lets go of a connection abandoned mid-handshake, once, and dials afresh", async () => {
+    const dir = await makeTempDir();
+    const socketPath = path.join(dir, "h.sock");
+    // A host that accepts the socket and never answers HELLO.
+    const accepted: net.Socket[] = [];
+    const server = net.createServer((socket) => {
+      accepted.push(socket);
+    });
+    await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+    const direct = createDirectTransport({ socketPath, token: "t" });
+    const disposes: number[] = [];
+    let opens = 0;
+    const transport: LinkTransport = {
+      async open(signal) {
+        const index = opens++;
+        disposes[index] = 0;
+        const connection = await direct.open(signal);
+        return {
+          ...connection,
+          dispose: async () => {
+            disposes[index]!++;
+            await connection.dispose();
+          },
+        };
+      },
+    };
+    try {
+      client = new LinkClient({
+        transport,
+        handshake: TEST_HANDSHAKE,
+        client: { clientId: "c", clientName: "n", platform: "linux" },
+        session: { pingIntervalMs: 0, idleTimeoutMs: 0 },
+        quietAfterMs: 0,
+      });
+      client.start();
+      await waitFor(() => accepted.length === 1);
+
+      client.retryNow({ restart: true });
+      await waitFor(() => accepted.length === 2);
+      await waitFor(() => disposes[0] === 1);
+      expect(client.getState()).toEqual({ status: "connecting", attempt: 2 });
+
+      await client.stop();
+      client = null;
+      // Late enough for the abandoned handshakes to have settled and let go too.
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(disposes).toEqual([1, 1]);
+    } finally {
+      await client?.stop();
+      server.close();
+      for (const socket of accepted) socket.destroy();
+      await removeTempDir(dir);
+    }
+  });
+});

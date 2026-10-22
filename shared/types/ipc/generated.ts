@@ -2251,7 +2251,7 @@ export interface GeneratedIpcInvokeMap {
     result: boolean;
   };
   "remote-hosts:connect": {
-    args: [payload: { hostId: string }];
+    args: [payload: { hostId: string; restart?: boolean | undefined }];
     result: import("../remoteHosts.js").HostConnectionState;
   };
   "remote-hosts:disconnect": {

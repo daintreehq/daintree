@@ -927,11 +927,11 @@ export function useTerminalInputBlock(): TerminalInputBlock | null {
   return useSyncExternalStore(subscribeTerminalInputGate, getTerminalInputBlock);
 }
 
-/** Ask the host link to try again now rather than on its backoff. */
+/** Ask the host link to try again now, starting over if an attempt is stuck. */
 export function reconnectHost(): void {
   const hostId = useHostConnectionStore.getState().hostId;
   if (hostId === null) return;
-  safeFireAndForget(window.electron.remoteHosts.connect({ hostId }), {
+  safeFireAndForget(window.electron.remoteHosts.connect({ hostId, restart: true }), {
     context: "Reconnecting to the window's host",
   });
 }

@@ -49,6 +49,15 @@ function unreachable(
 
 /** Build the Shell's switch service on top of the remote-hosts client. */
 export function createHostSwitchService(deps: HostSwitchClientDeps): HostSwitchService {
+  const openSession = async (hostId: HostId): Promise<LinkSession> => {
+    const current = deps.sessionFor(hostId);
+    if (current?.isOpen) return current;
+    throw new AppError({
+      code: "HOST_DISCONNECTED",
+      message: `Host ${hostId} is not connected`,
+      userMessage: "Couldn't reach this host. Check that it is on and try again.",
+    });
+  };
   const resolveSession = async (hostId: HostId): Promise<LinkSession> => {
     const current = deps.sessionFor(hostId);
     if (current?.isOpen) return current;
@@ -71,6 +80,7 @@ export function createHostSwitchService(deps: HostSwitchClientDeps): HostSwitchS
   return new HostSwitchService({
     local: getProjectAcrossHostsService(),
     resolveSession,
+    openSession,
     hostOfSender: (ctx) => deps.client.getWindowHost(ctx).hostId,
     isKnownHost: (hostId) => deps.client.list().some((entry) => entry.descriptor.id === hostId),
     whenReconnected: async (hostId, timeoutMs) =>
