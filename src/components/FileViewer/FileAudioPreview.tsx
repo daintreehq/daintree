@@ -1,6 +1,7 @@
 import { useEffect, useEffectEvent, useRef } from "react";
 import { Skeleton, SkeletonBone, SkeletonHint } from "@/components/ui/Skeleton";
 import { useHorizontalScrollControls } from "@/hooks/useHorizontalScrollControls";
+import { mediaElementFailure } from "./previewRefusal";
 import { useMediaSourceUrl } from "./useMediaSourceUrl";
 import type { MediaPreviewError } from "./useMediaSourceUrl";
 import "./FileAudioPreview.css";
@@ -156,7 +157,7 @@ export function FileAudioPreview({
             // holding a player that stopped.
             onError={() => {
               onPlayingChange?.(false);
-              onError?.();
+              onError?.(mediaElementFailure());
             }}
           />
         ) : probing ? (

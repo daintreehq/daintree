@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render } from "@testing-library/react";
 import type { DriveLeaseView } from "@shared/types/ipc/driveLease";
-import { previewRefusalOf, useImageErrorHandler } from "../previewRefusal";
+import { mediaElementFailure, previewRefusalOf, useImageErrorHandler } from "../previewRefusal";
 import type { MediaPreviewError } from "../useMediaSourceUrl";
 import {
   _resetTerminalInputGateForTesting,
@@ -72,6 +72,17 @@ function Image({ src, onError }: { src: string; onError: (error?: MediaPreviewEr
   return <img alt="" data-testid="image" src={src} onError={handleError} />;
 }
 
+describe("mediaElementFailure", () => {
+  it("names control when a remote window's stream stopped while another window drives", () => {
+    setDriveLeaseSnapshot(lease(false));
+    expect(mediaElementFailure()).toBeUndefined();
+    window.__DAINTREE_HOST_ID__ = { id: "studio-01" };
+    expect(mediaElementFailure()).toMatchObject({ refusal: "driven-elsewhere" });
+    setDriveLeaseSnapshot(lease(true));
+    expect(mediaElementFailure()).toBeUndefined();
+  });
+});
+
 describe("useImageErrorHandler", () => {
   it("reports a failed image at once, unprobed, on this machine", () => {
     const onError = vi.fn();
@@ -101,5 +112,33 @@ describe("useImageErrorHandler", () => {
     settle(answer(403, { "x-daintree-refusal": "driven-elsewhere" }));
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(onError).not.toHaveBeenCalled();
+  });
+
+  it("drops an answer that arrives after the image is gone", async () => {
+    window.__DAINTREE_HOST_ID__ = { id: "studio-01" };
+    let settle!: (value: unknown) => void;
+    fetchMock.mockImplementation(() => new Promise((resolve) => (settle = resolve)));
+    const onError = vi.fn();
+    const { getByTestId, unmount } = render(<Image src="first" onError={onError} />);
+    getByTestId("image").dispatchEvent(new Event("error"));
+    unmount();
+    settle(answer(403, { "x-daintree-refusal": "driven-elsewhere" }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(onError).not.toHaveBeenCalled();
+  });
+
+  it("names control when control landed here between the failed load and the probe", async () => {
+    window.__DAINTREE_HOST_ID__ = { id: "studio-01" };
+    setDriveLeaseSnapshot(lease(false));
+    let settle!: (value: unknown) => void;
+    fetchMock.mockImplementation(() => new Promise((resolve) => (settle = resolve)));
+    const onError = vi.fn();
+    const { getByTestId } = render(<Image src="first" onError={onError} />);
+    getByTestId("image").dispatchEvent(new Event("error"));
+    setDriveLeaseSnapshot(lease(true));
+    settle(answer(200));
+    await vi.waitFor(() =>
+      expect(onError).toHaveBeenCalledWith(expect.objectContaining({ refusal: "driven-elsewhere" }))
+    );
   });
 });

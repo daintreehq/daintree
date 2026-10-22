@@ -1,6 +1,7 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Copy,
+  Download,
   ExternalLink,
   FileDiff as FileDiffIcon,
   FileText,
@@ -47,6 +48,7 @@ import {
   useRetryOnControl,
 } from "@/components/FileViewer/hostFileActions";
 import type { MediaPreviewError } from "@/components/FileViewer/useMediaSourceUrl";
+import { saveHostFile, saveHostFileLabel } from "@/services/hostFileSave";
 import { HtmlViewer } from "@/components/Html/HtmlViewer";
 import { isHtmlFilePath } from "@/components/Html/isHtmlFile";
 import { CodeViewer, type CodeViewerHandle } from "@/components/FileViewer/CodeViewer";
@@ -1325,6 +1327,16 @@ export function FilePane({
     [filePath, relativeFilePath, revealWorktreeId]
   );
 
+  // A browser here can't open a page on an ssh host: a copy saved here stands in for it.
+  const savesPageInstead = openTarget === "browser" && remoteFile?.saveTarget != null;
+  const runOpenTarget = () => {
+    if (savesPageInstead) {
+      if (filePath) void saveHostFile(filePath);
+      return;
+    }
+    void handleOpenExternal(openTarget);
+  };
+
   const isErrorTargetPending =
     externalError !== null && pendingTargets.includes(externalError.target);
   // Below the Doherty threshold a spinner is just a flash; `disabled` still
@@ -1489,10 +1501,18 @@ export function FilePane({
                   <FolderOpen className={TOOLBAR_ICON_CLASS} />
                 </FileViewerToolbar.IconButton>
                 <FileViewerToolbar.IconButton
-                  label={openTarget === "browser" ? "Open in browser" : "Open in editor"}
-                  onClick={() => void handleOpenExternal(openTarget)}
+                  label={
+                    savesPageInstead
+                      ? saveHostFileLabel()
+                      : openTarget === "browser"
+                        ? "Open in browser"
+                        : "Open in editor"
+                  }
+                  onClick={runOpenTarget}
                 >
-                  {openTarget === "browser" ? (
+                  {savesPageInstead ? (
+                    <Download className={TOOLBAR_ICON_CLASS} />
+                  ) : openTarget === "browser" ? (
                     <Globe className={TOOLBAR_ICON_CLASS} />
                   ) : (
                     <ExternalLink className={TOOLBAR_ICON_CLASS} />
@@ -1554,8 +1574,10 @@ export function FilePane({
                     <FolderOpen className="mr-2 h-3.5 w-3.5" aria-hidden="true" data-menu-icon />
                     {reveal.label}
                   </DropdownMenuItem>
-                  <DropdownMenuItem onSelect={() => void handleOpenExternal(openTarget)}>
-                    {openTarget === "browser" ? (
+                  <DropdownMenuItem onSelect={runOpenTarget}>
+                    {savesPageInstead ? (
+                      <Download className="mr-2 h-3.5 w-3.5" aria-hidden="true" data-menu-icon />
+                    ) : openTarget === "browser" ? (
                       <Globe className="mr-2 h-3.5 w-3.5" aria-hidden="true" data-menu-icon />
                     ) : (
                       <ExternalLink
@@ -1564,7 +1586,11 @@ export function FilePane({
                         data-menu-icon
                       />
                     )}
-                    {openTarget === "browser" ? "Open in browser" : "Open in editor"}
+                    {savesPageInstead
+                      ? saveHostFileLabel()
+                      : openTarget === "browser"
+                        ? "Open in browser"
+                        : "Open in editor"}
                   </DropdownMenuItem>
                 </FileViewerToolbar.MoreActions>
               </>

@@ -58,7 +58,8 @@ export function useRetryOnControl(refusedForControl: boolean, retry: () => void)
 }
 
 function takeControlOfThisProject(): void {
-  const projectId = getDriveLeaseSnapshot()?.projectId ?? getViewWorkspaceId();
+  // This view's own project: a lease snapshot can name another.
+  const projectId = getViewWorkspaceId();
   if (!projectId) return;
   // Loaded on use: the shared action reaches the panel store.
   void import("@/components/Recovery/takeControl").then(({ takeControl }) =>

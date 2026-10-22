@@ -218,42 +218,72 @@ describe("files:read handler", () => {
     describe("outside its project", () => {
       const inboxFolder = path.resolve("/tmp/daintree-inbox/files/20261022-101500-abc123");
       const upload = path.join(inboxFolder, "notes.html");
+      const placed = { dev: 1n, ino: 42n, size: BigInt(content.length) };
+
+      /** The descriptor the read opens, as the file it names now is. */
+      function opensAs(identity: { dev: number; ino: number }) {
+        // As the real realpath does, a trailing separator doesn't survive.
+        fsMock.realpath.mockImplementation(async (p: string) => p.replace(/(.)\/+$/, "$1"));
+        fsMock.stat.mockResolvedValue({ size: content.length, ...identity });
+        const handle = makeFileHandle(content);
+        handle.stat = vi.fn().mockResolvedValue({
+          isFile: () => true,
+          isDirectory: () => false,
+          size: content.length,
+          ...identity,
+        });
+        fsMock.open.mockResolvedValue(handle);
+      }
 
       it("reads a file it uploaded itself, from that file's own folder, with no page preview", async () => {
-        const holdsUpload = vi.fn(async () => true);
+        opensAs({ dev: 1, ino: 42 });
+        const uploadIdentity = vi.fn(async () => placed);
         registerRemoteService("hostFileService", {
           holdsRoot: vi.fn(async () => false),
-          holdsUpload,
+          uploadIdentity,
         } as never);
         registerFilesHandlers();
 
         const result = await getReadHandler()(remote, {
           path: upload,
-          rootPath: inboxFolder,
+          rootPath: `${inboxFolder}/`,
           htmlPreview: true,
         });
         expect(result.content).toBe("hello\n");
         // A preview token would open the whole inbox folder, not just this file.
         expect(result.htmlPreviewUrl).toBeUndefined();
-        expect(holdsUpload).toHaveBeenCalledWith(remote.endpoint, upload);
+        expect(uploadIdentity).toHaveBeenCalledWith(remote.endpoint, upload);
       });
 
-      it("refuses an inbox file it didn't upload, and any root but the file's own folder", async () => {
-        const holdsUpload = vi.fn(async () => false);
+      it("refuses to read a file swapped in after the upload was checked", async () => {
+        opensAs({ dev: 1, ino: 77 });
         registerRemoteService("hostFileService", {
           holdsRoot: vi.fn(async () => false),
-          holdsUpload,
+          uploadIdentity: vi.fn(async () => placed),
         } as never);
         registerFilesHandlers();
 
         await expect(
           getReadHandler()(remote, { path: upload, rootPath: inboxFolder })
         ).rejects.toMatchObject({ code: "OUTSIDE_ROOT" });
-        holdsUpload.mockClear();
+      });
+
+      it("refuses an inbox file it didn't upload, and any root but the file's own folder", async () => {
+        const uploadIdentity = vi.fn(async () => null);
+        registerRemoteService("hostFileService", {
+          holdsRoot: vi.fn(async () => false),
+          uploadIdentity,
+        } as never);
+        registerFilesHandlers();
+
+        await expect(
+          getReadHandler()(remote, { path: upload, rootPath: inboxFolder })
+        ).rejects.toMatchObject({ code: "OUTSIDE_ROOT" });
+        uploadIdentity.mockClear();
         await expect(
           getReadHandler()(remote, { path: upload, rootPath: path.dirname(inboxFolder) })
         ).rejects.toMatchObject({ code: "OUTSIDE_ROOT" });
-        expect(holdsUpload).not.toHaveBeenCalled();
+        expect(uploadIdentity).not.toHaveBeenCalled();
         expect(fsMock.open).not.toHaveBeenCalled();
       });
     });

@@ -44,7 +44,8 @@ export interface HostUploadServiceOptions {
   inbox: HostInbox;
   /**
    * An inbox file now stands for this endpoint's upload, placed or reused:
-   * that endpoint may open exactly it (and no one else's) from then on.
+   * that endpoint may open exactly it (and no one else's) from then on, while
+   * it is still open on that project.
    */
   onInboxFile?(endpoint: HostFileEndpoint, projectId: string, hostPath: string): void;
   maxUploadBytes?: number;
@@ -575,10 +576,8 @@ export class HostUploadService {
         payload.size
       );
       if (duplicate) {
-        // Reused for bytes this endpoint proved it has, and only while it still asks for this project.
-        if (!endpoint.isClosed() && endpoint.projectId === projectId) {
-          this.options.onInboxFile?.(endpoint, projectId, duplicate);
-        }
+        // Reused for bytes this endpoint proved it has: the candidate was re-hashed.
+        this.options.onInboxFile?.(endpoint, projectId, duplicate);
         return { status: "duplicate", hostPath: duplicate };
       }
       if (!(await this.hasRoom(this.options.inbox.root, payload.size))) {

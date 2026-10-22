@@ -850,9 +850,9 @@ export function FileBrowserViewer({
             ? "default-app"
             : "editor";
   const remoteFile = useRemoteFileContext();
-  // A default app here can't open a file on an ssh host, so a copy saved
-  // here stands in for it (a WSL distro's files open from this PC as they are).
-  const savesInstead = openTarget === "default-app" && remoteFile?.saveTarget != null;
+  // A default app or browser here can't open a file on an ssh host, so a copy
+  // saved here stands in for it (a WSL distro's files open from this PC as they are).
+  const savesInstead = openTarget !== "editor" && remoteFile?.saveTarget != null;
   const openAction = savesInstead
     ? { label: saveHostFileLabel(), icon: Download }
     : OPEN_ACTION_COPY[openTarget];

@@ -45,7 +45,8 @@ function controllerName(): string | null {
 }
 
 function takeControlOfThisProject(): void {
-  const projectId = getDriveLeaseSnapshot()?.projectId ?? getViewWorkspaceId();
+  // This view's own project: a lease snapshot can name another.
+  const projectId = getViewWorkspaceId();
   if (!projectId) return;
   void import("@/components/Recovery/takeControl").then(({ takeControl }) =>
     takeControl(projectId)

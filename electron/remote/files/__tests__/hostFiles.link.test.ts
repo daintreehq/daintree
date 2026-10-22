@@ -937,7 +937,7 @@ describe("a view's own inbox uploads", () => {
     const own = await preview(upload);
     expect(own.status).toBe(200);
     expect(await own.text()).toBe("my upload");
-    await expect(service.holdsUpload(endpoint, upload)).resolves.toBe(true);
+    await expect(service.uploadIdentity(endpoint, upload)).resolves.not.toBeNull();
     const saved = await transport.download(HOST, upload, {
       webContentsId: 7,
       destinationDir: downloads,
@@ -948,7 +948,7 @@ describe("a view's own inbox uploads", () => {
     expect(other.status).toBe(404);
     expect(other.headers.get("x-daintree-refusal")).toBe("outside-project");
     expect(await other.text()).not.toContain("someone else");
-    await expect(service.holdsUpload(endpoint, theirs)).resolves.toBe(false);
+    await expect(service.uploadIdentity(endpoint, theirs)).resolves.toBeNull();
   });
 
   it("is not a grant for another view, another project, or after it expires", async () => {
@@ -959,10 +959,10 @@ describe("a view's own inbox uploads", () => {
     service.recordUpload(endpoint, "p1", upload);
 
     expect((await preview(upload, second.cap)).status).toBe(404);
-    await expect(service.holdsUpload(second.endpoint, upload)).resolves.toBe(false);
+    await expect(service.uploadIdentity(second.endpoint, upload)).resolves.toBeNull();
 
     endpoint.projectId = "p2";
-    await expect(service.holdsUpload(endpoint, upload)).resolves.toBe(false);
+    await expect(service.uploadIdentity(endpoint, upload)).resolves.toBeNull();
     endpoint.projectId = "p1";
 
     await new Promise((resolve) => setTimeout(resolve, 80));
@@ -977,7 +977,7 @@ describe("a view's own inbox uploads", () => {
     await fs.rm(upload);
     await fs.writeFile(upload, "injected");
     expect((await preview(upload)).status).toBe(404);
-    await expect(service.holdsUpload(endpoint, upload)).resolves.toBe(false);
+    await expect(service.uploadIdentity(endpoint, upload)).resolves.toBeNull();
 
     await fs.rm(upload);
     await fs.writeFile(path.join(project, "secret.txt"), "secret");
@@ -985,7 +985,7 @@ describe("a view's own inbox uploads", () => {
     const linked = await preview(upload);
     expect(linked.status).toBe(404);
     expect(await linked.text()).not.toContain("secret");
-    await expect(service.holdsUpload(endpoint, upload)).resolves.toBe(false);
+    await expect(service.uploadIdentity(endpoint, upload)).resolves.toBeNull();
   });
 
   it("keeps an upload readable when the inbox touches its times for a duplicate", async () => {
@@ -997,12 +997,23 @@ describe("a view's own inbox uploads", () => {
     expect((await preview(upload)).status).toBe(200);
   });
 
-  it("forgets a view's uploads when its endpoint closes", async () => {
+  it("forgets a view's uploads when its endpoint closes, and records none after", async () => {
     const { service, endpoint, upload } = await uploadSetup();
     service.recordUpload(endpoint, "p1", upload);
-    await expect(service.holdsUpload(endpoint, upload)).resolves.toBe(true);
+    await expect(service.uploadIdentity(endpoint, upload)).resolves.not.toBeNull();
     endpoint.close();
-    await expect(service.holdsUpload(endpoint, upload)).resolves.toBe(false);
+    await expect(service.uploadIdentity(endpoint, upload)).resolves.toBeNull();
+    // A placement that finished after the close must not bring the grant back.
+    service.recordUpload(endpoint, "p1", upload);
+    await expect(service.uploadIdentity(endpoint, upload)).resolves.toBeNull();
+  });
+
+  it("records nothing for an endpoint that moved to another project meanwhile", async () => {
+    const { service, endpoint, upload } = await uploadSetup();
+    endpoint.projectId = "p2";
+    service.recordUpload(endpoint, "p1", upload);
+    endpoint.projectId = "p1";
+    await expect(service.uploadIdentity(endpoint, upload)).resolves.toBeNull();
   });
 });
 

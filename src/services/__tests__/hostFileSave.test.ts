@@ -143,6 +143,15 @@ describe("saveHostFile", () => {
     expect(notified()).toHaveLength(1);
   });
 
+  it("takes control of this view's own project, whatever project a stale lease names", async () => {
+    setDriveLeaseSnapshot(lease(true));
+    download.mockRejectedValue(new ClientAppError("DRIVEN_ELSEWHERE", "Another window drives"));
+    await saveHostFile("/srv/app/talk.mov");
+    setDriveLeaseSnapshot({ ...lease(false), projectId: "proj-2" });
+    notified().at(-1)?.action?.onClick();
+    await vi.waitFor(() => expect(takeControl).toHaveBeenCalledWith("proj-1"));
+  });
+
   it("explains control when the host refuses the download for it", async () => {
     setDriveLeaseSnapshot(lease(true));
     download.mockRejectedValue(new ClientAppError("DRIVEN_ELSEWHERE", "Another window drives"));

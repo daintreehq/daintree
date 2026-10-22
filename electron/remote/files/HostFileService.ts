@@ -160,14 +160,25 @@ interface RecordedBundle {
 }
 
 /**
- * A file a view uploaded into the inbox, by the inode it was placed as. Only
- * device and inode: the inbox touches a file's times when another upload of
- * the same bytes reuses it, and that mustn't revoke the first uploader's read.
+ * An inbox upload as it was placed. Not its times: the inbox touches them when
+ * another upload of the same bytes reuses the file, and that mustn't revoke
+ * the first uploader's read.
  */
+export type UploadIdentity = { dev: bigint; ino: bigint; size: bigint };
+
 interface RecordedUpload {
   projectId: string;
   expiresAt: number;
-  inode: Promise<{ dev: bigint; ino: bigint } | null>;
+  identity: Promise<UploadIdentity | null>;
+}
+
+function isUpload(stats: import("node:fs").BigIntStats, identity: UploadIdentity): boolean {
+  return (
+    stats.isFile() &&
+    stats.dev === identity.dev &&
+    stats.ino === identity.ino &&
+    stats.size === identity.size
+  );
 }
 
 interface Located {
@@ -332,15 +343,19 @@ export class HostFileService {
    * it stays on that project.
    */
   recordUpload(
-    endpoint: Pick<HostFileEndpoint, "endpointId">,
+    endpoint: Pick<HostFileEndpoint, "endpointId" | "projectId" | "isClosed">,
     projectId: string,
     filePath: string
   ): void {
-    if (this.disposed || !isRequestPath(filePath)) return;
+    // An endpoint that closed or moved while the upload was placed gets nothing.
+    if (this.disposed || endpoint.isClosed() || endpoint.projectId !== projectId) return;
+    if (!isRequestPath(filePath)) return;
     const key = path.normalize(filePath);
-    const inode = fs
+    const identity = fs
       .lstat(key, { bigint: true })
-      .then((stats) => (stats.isFile() ? { dev: stats.dev, ino: stats.ino } : null))
+      .then((stats): UploadIdentity | null =>
+        stats.isFile() ? { dev: stats.dev, ino: stats.ino, size: stats.size } : null
+      )
       .catch(() => null);
     boundedSet(
       this.grantsFor(this.uploads, endpoint.endpointId),
@@ -348,26 +363,29 @@ export class HostFileService {
       {
         projectId,
         expiresAt: Date.now() + (this.options.uploadTtlMs ?? DEFAULT_UPLOAD_TTL_MS),
-        inode,
+        identity,
       },
       MAX_UPLOADS_PER_ENDPOINT
     );
   }
 
   /**
-   * Whether `filePath` is a file this endpoint uploaded for its current
-   * project, still the very file it placed: what lets a text read reach it
-   * outside the project's folders.
+   * The identity of `filePath` when it is a file this endpoint uploaded for
+   * its current project and is still the very file it placed, else null: what
+   * lets a text read reach it outside the project's folders. The reader holds
+   * the descriptor it opens to this identity, so a file swapped in after this
+   * check isn't read.
    */
-  async holdsUpload(
+  async uploadIdentity(
     endpoint: Pick<ClientEndpoint, "endpointId" | "projectId">,
     filePath: string
-  ): Promise<boolean> {
-    if (this.disposed || !endpoint.projectId || !isRequestPath(filePath)) return false;
-    const located = await this.locateUpload(endpoint.endpointId, endpoint.projectId, filePath);
-    if (!located) return false;
+  ): Promise<UploadIdentity | null> {
+    if (this.disposed || !endpoint.projectId || !isRequestPath(filePath)) return null;
+    const upload = this.freshUpload(endpoint.endpointId, endpoint.projectId, filePath);
+    const identity = upload ? await upload.identity : null;
+    if (!identity) return null;
     const stats = await fs.lstat(path.normalize(filePath), { bigint: true }).catch(() => null);
-    return stats !== null && located.isRecorded!(stats);
+    return stats !== null && isUpload(stats, identity) ? identity : null;
   }
 
   /**
@@ -543,13 +561,12 @@ export class HostFileService {
         };
   }
 
-  /** The inbox file this endpoint uploaded for this project at exactly this path, if still fresh. */
-  private async locateUpload(
+  /** The upload this endpoint recorded for this project at exactly this path, if still fresh. */
+  private freshUpload(
     endpointId: string,
     projectId: string,
-    hostPath: string,
-    within?: string
-  ): Promise<Located | null> {
+    hostPath: string
+  ): RecordedUpload | null {
     const recorded = this.uploads.get(endpointId);
     const key = path.normalize(hostPath);
     const upload = recorded?.get(key);
@@ -558,18 +575,29 @@ export class HostFileService {
       recorded!.delete(key);
       return null;
     }
-    if (upload.projectId !== projectId) return null;
+    return upload.projectId === projectId ? upload : null;
+  }
+
+  /** Where to open the inbox file this endpoint uploaded for this project at exactly this path. */
+  private async locateUpload(
+    endpointId: string,
+    projectId: string,
+    hostPath: string,
+    within?: string
+  ): Promise<Located | null> {
+    const upload = this.freshUpload(endpointId, projectId, hostPath);
+    const key = path.normalize(hostPath);
+    if (!upload) return null;
     if (within !== undefined && componentsBelow(within, key) === null) return null;
-    const inode = await upload.inode;
-    if (inode === null) return null;
+    const identity = await upload.identity;
+    if (identity === null) return null;
     const anchor = await fs.realpath(path.dirname(key)).catch(() => null);
     return anchor === null
       ? null
       : {
           anchor,
           components: [path.basename(key)],
-          isRecorded: (stats) =>
-            stats.isFile() && stats.dev === inode.dev && stats.ino === inode.ino,
+          isRecorded: (stats) => isUpload(stats, identity),
         };
   }
 

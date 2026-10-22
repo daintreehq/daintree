@@ -14,6 +14,7 @@ import {
   type FileReadPayload,
 } from "../../schemas/ipc.js";
 import type { FileReadResult } from "../../../shared/types/ipc/files.js";
+import type { UploadIdentity } from "../../remote/files/HostFileService.js";
 import { AppError } from "../../utils/errorTypes.js";
 import { readBoundedFromHandle } from "../../utils/boundedRead.js";
 import { FILE_PREVIEW_MAX_BYTES } from "../../utils/fileLimits.js";
@@ -41,20 +42,20 @@ export async function remoteCallerHoldsRoot(ctx: IpcContext, root: string): Prom
 
 /**
  * A remote Shell's view reading a file it uploaded into this host's inbox
- * itself, from that file's own folder. The inbox holds every Shell's uploads,
- * so this is that one file, never the folder: the read below still has to
- * resolve to a file inside the folder, and this one has to be the file the
- * view placed.
+ * itself, from that file's own folder: the identity it was placed as, or null.
+ * The inbox holds every Shell's uploads, so this is that one file, never the
+ * folder: the read below still has to resolve to a file inside the folder, and
+ * the descriptor it opens has to be the file the view placed.
  */
-export async function remoteCallerOwnsUpload(
+export async function remoteCallerUpload(
   ctx: IpcContext,
   filePath: string,
   root: string
-): Promise<boolean> {
-  if (ctx.endpoint?.kind !== "remote-view" || !ctx.endpoint.projectId) return false;
+): Promise<UploadIdentity | null> {
+  if (ctx.endpoint?.kind !== "remote-view" || !ctx.endpoint.projectId) return null;
   const files = getRemoteService("hostFileService");
-  if (!files || path.dirname(path.normalize(filePath)) !== path.normalize(root)) return false;
-  return files.holdsUpload(ctx.endpoint, filePath);
+  if (!files || path.dirname(path.resolve(filePath)) !== path.resolve(root)) return null;
+  return files.uploadIdentity(ctx.endpoint, filePath);
 }
 
 export function registerFilesHandlers(): () => void {
@@ -97,9 +98,9 @@ export function registerFilesHandlers(): () => void {
         context: { filePath, rootPath },
       });
     }
-    let ownUpload = false;
+    let ownUpload: UploadIdentity | null = null;
     if (!(await remoteCallerHoldsRoot(ctx, rootPath))) {
-      ownUpload = await remoteCallerOwnsUpload(ctx, filePath, rootPath);
+      ownUpload = await remoteCallerUpload(ctx, filePath, rootPath);
       if (!ownUpload) {
         throw new AppError({
           code: "OUTSIDE_ROOT",
@@ -268,6 +269,18 @@ export function registerFilesHandlers(): () => void {
           context: { filePath, rootPath },
         });
       }
+      if (
+        ownUpload &&
+        (String(opened.ino) !== String(ownUpload.ino) ||
+          String(opened.dev) !== String(ownUpload.dev) ||
+          String(opened.size) !== String(ownUpload.size))
+      ) {
+        throw new AppError({
+          code: "OUTSIDE_ROOT",
+          message: "The upload is no longer the file this view placed",
+          context: { filePath, rootPath },
+        });
+      }
       // The stat above is only a hint: a writer can grow the file after it, so
       // the read itself holds the budget and never returns oversized text.
       const read = await readBoundedFromHandle(fileHandle, opened.size, FILE_PREVIEW_MAX_BYTES);
@@ -314,7 +327,7 @@ export function registerFilesHandlers(): () => void {
     // already realpath-resolved and contained above. Never for an upload: its
     // root is an inbox folder, which a token would open to the whole folder.
     const htmlPreviewUrl =
-      htmlPreview && !ownUpload && /\.html?$/i.test(realFile)
+      htmlPreview && ownUpload === null && /\.html?$/i.test(realFile)
         ? (buildHtmlPreviewUrl(realRoot, realFile) ?? undefined)
         : undefined;
 
