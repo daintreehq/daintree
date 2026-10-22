@@ -12,6 +12,12 @@ import {
  * read carry the title the user sees; each view keeps a copy it adopts from
  * here.
  *
+ * A cleared title is kept as `null` rather than dropped. Views hand over the
+ * titles they kept in localStorage before main held them, and a hand-over only
+ * fills worktrees main has no record of — so a title cleared here never comes
+ * back from a stale copy, while a worktree nobody has touched since still
+ * takes its old title, whichever view or window wrote first.
+ *
  * No in-memory copy: reads happen when a plugin reads worktrees, and writes on
  * a rename.
  */
@@ -21,13 +27,21 @@ const STORE_KEY = "worktreeCustomTitles";
 const MAX_WORKTREE_ID_LENGTH = 4096;
 
 export interface StoredWorktreeCustomTitles {
-  /** Worktree id → title, normalised. */
+  /** Worktree id → title, normalised. Cleared titles are left out. */
   titles: Record<string, string>;
   /**
    * Bumped on every write and kept on disk, so it only ever grows. A view drops
    * any snapshot older than one it already holds: pushes and invoke replies
    * reach a remote view on separate lanes.
    */
+  revision: number;
+}
+
+/** Worktree id → title, or `null` once the user cleared it. */
+type RecordedTitles = Record<string, string | null>;
+
+interface RecordedEntry {
+  recorded: RecordedTitles;
   revision: number;
 }
 
@@ -53,15 +67,36 @@ function parseRevision(value: unknown): number {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : 0;
 }
 
-/** Only titles that still normalise to something within the limit: the file is user-editable. */
-function parseTitles(value: unknown): Record<string, string> {
+function parseTitle(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  const title = normalizeWorktreeCustomTitle(raw);
+  return title && !isWorktreeCustomTitleTooLong(title) ? title : null;
+}
+
+/**
+ * Only titles that still normalise to something within the limit, plus the
+ * `null` of a cleared one: the file is user-editable.
+ */
+function parseRecorded(value: unknown): RecordedTitles {
   // Null prototype: the keys are worktree ids read from a user-editable file.
-  const titles = Object.create(null) as Record<string, string>;
-  if (!value || typeof value !== "object" || Array.isArray(value)) return titles;
+  const recorded = Object.create(null) as RecordedTitles;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return recorded;
   for (const [id, raw] of Object.entries(value as Record<string, unknown>)) {
-    if (!isWorktreeId(id) || typeof raw !== "string") continue;
-    const title = normalizeWorktreeCustomTitle(raw);
-    if (title && !isWorktreeCustomTitleTooLong(title)) titles[id] = title;
+    if (!isWorktreeId(id)) continue;
+    if (raw === null) {
+      recorded[id] = null;
+      continue;
+    }
+    const title = parseTitle(raw);
+    if (title !== null) recorded[id] = title;
+  }
+  return recorded;
+}
+
+function visibleTitles(recorded: RecordedTitles): Record<string, string> {
+  const titles = Object.create(null) as Record<string, string>;
+  for (const [id, title] of Object.entries(recorded)) {
+    if (title !== null) titles[id] = title;
   }
   return titles;
 }
@@ -77,17 +112,17 @@ function readAll(): Record<string, unknown> {
     : {};
 }
 
-/** `undefined` when the workspace has no entry yet, which is what lets a legacy hand-over land. */
-function rawEntry(all: Record<string, unknown>, workspaceId: string): unknown {
-  return Object.hasOwn(all, workspaceId) ? all[workspaceId] : undefined;
-}
-
-function parseEntry(entry: unknown): StoredWorktreeCustomTitles {
+function readEntry(all: Record<string, unknown>, workspaceId: string): RecordedEntry {
+  const entry = Object.hasOwn(all, workspaceId) ? all[workspaceId] : undefined;
   if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
-    return { titles: parseTitles(undefined), revision: 0 };
+    return { recorded: parseRecorded(undefined), revision: 0 };
   }
   const raw = entry as Record<string, unknown>;
-  return { titles: parseTitles(raw.titles), revision: parseRevision(raw.revision) };
+  return { recorded: parseRecorded(raw.titles), revision: parseRevision(raw.revision) };
+}
+
+function toStored(entry: RecordedEntry): StoredWorktreeCustomTitles {
+  return { titles: visibleTitles(entry.recorded), revision: entry.revision };
 }
 
 /**
@@ -97,11 +132,14 @@ function parseEntry(entry: unknown): StoredWorktreeCustomTitles {
 function writeEntry(
   all: Record<string, unknown>,
   workspaceId: string,
-  titles: Record<string, string>
+  entry: RecordedEntry
 ): StoredWorktreeCustomTitles {
-  const revision = parseEntry(rawEntry(all, workspaceId)).revision + 1;
-  store.set(STORE_KEY, { ...all, [workspaceId]: { titles: { ...titles }, revision } });
-  return { titles, revision };
+  const next: RecordedEntry = { recorded: entry.recorded, revision: entry.revision + 1 };
+  store.set(STORE_KEY, {
+    ...all,
+    [workspaceId]: { titles: { ...next.recorded }, revision: next.revision },
+  });
+  return toStored(next);
 }
 
 function notify(workspaceId: string): void {
@@ -114,18 +152,16 @@ function notify(workspaceId: string): void {
   }
 }
 
-/** One workspace's stored titles; empty with revision 0 before anything was stored. */
+/** One workspace's titles; empty with revision 0 before anything was stored. */
 export function getWorktreeCustomTitles(workspaceId: string): StoredWorktreeCustomTitles {
-  return parseEntry(rawEntry(readAll(), workspaceId));
+  return toStored(readEntry(readAll(), workspaceId));
 }
 
 /**
- * Hand over the titles a view kept in localStorage before main held them. Only
- * the first hand-over for a workspace lands: every view of it shares one
- * localStorage copy, so once the entry exists a later one is either the same
- * titles or older than what main has been told since — a title cleared here
- * must not come back from it. Check and write share one synchronous turn, so
- * two views handing over at once can't both land.
+ * Hand over the titles a view kept in localStorage before main held them. Each
+ * lands only for a worktree main has no record of, set or cleared, so a newer
+ * title or a clear made here wins over the copy. Check and write share one
+ * synchronous turn, so two views handing over at once can't both land one.
  */
 export function importLegacyWorktreeCustomTitles(
   workspaceId: string,
@@ -133,18 +169,23 @@ export function importLegacyWorktreeCustomTitles(
 ): StoredWorktreeCustomTitles {
   assertWorkspaceId(workspaceId);
   const all = readAll();
-  const existing = rawEntry(all, workspaceId);
-  if (existing !== undefined) return parseEntry(existing);
-  const titles = parseTitles(legacy);
-  const stored = writeEntry(all, workspaceId, titles);
-  if (Object.keys(titles).length > 0) notify(workspaceId);
+  const entry = readEntry(all, workspaceId);
+  let landed = false;
+  for (const [id, title] of Object.entries(visibleTitles(parseRecorded(legacy)))) {
+    if (Object.hasOwn(entry.recorded, id)) continue;
+    entry.recorded[id] = title;
+    landed = true;
+  }
+  if (!landed) return toStored(entry);
+  const stored = writeEntry(all, workspaceId, entry);
+  notify(workspaceId);
   return stored;
 }
 
 /**
  * Set one worktree's title, or with `null` or a blank title clear it. An
- * unchanged title writes nothing, so it neither bumps the revision nor wakes
- * a plugin.
+ * unchanged title, or a clear of none, writes nothing, so it neither bumps the
+ * revision nor wakes a plugin.
  */
 export function setWorktreeCustomTitle(
   workspaceId: string,
@@ -165,16 +206,32 @@ export function setWorktreeCustomTitle(
     );
   }
   const all = readAll();
-  const current = parseEntry(rawEntry(all, workspaceId));
-  const held = Object.hasOwn(current.titles, worktreeId) ? current.titles[worktreeId] : undefined;
-  if (next ? held === next : held === undefined) return current;
-  const titles = Object.assign(Object.create(null) as Record<string, string>, current.titles);
-  if (next) {
-    titles[worktreeId] = next;
-  } else {
-    delete titles[worktreeId];
+  const entry = readEntry(all, workspaceId);
+  const held = Object.hasOwn(entry.recorded, worktreeId) ? entry.recorded[worktreeId] : undefined;
+  if (next ? held === next : typeof held !== "string") return toStored(entry);
+  entry.recorded[worktreeId] = next || null;
+  const stored = writeEntry(all, workspaceId, entry);
+  notify(workspaceId);
+  return stored;
+}
+
+/** Clear several worktrees' titles in one write, as a prune of removed worktrees does. */
+export function clearWorktreeCustomTitles(
+  workspaceId: string,
+  worktreeIds: readonly string[]
+): StoredWorktreeCustomTitles {
+  assertWorkspaceId(workspaceId);
+  const all = readAll();
+  const entry = readEntry(all, workspaceId);
+  let cleared = false;
+  for (const id of worktreeIds) {
+    if (!isWorktreeId(id) || !Object.hasOwn(entry.recorded, id)) continue;
+    if (typeof entry.recorded[id] !== "string") continue;
+    entry.recorded[id] = null;
+    cleared = true;
   }
-  const stored = writeEntry(all, workspaceId, titles);
+  if (!cleared) return toStored(entry);
+  const stored = writeEntry(all, workspaceId, entry);
   notify(workspaceId);
   return stored;
 }

@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WorktreeTitlesSnapshot } from "@shared/types/ipc/worktreeTitles";
 
 const PROJECT = "a".repeat(64);
-const PROJECT_KEY = "daintree-worktree-filters:default";
+const LOCAL_KEY = "daintree-worktree-filters:default";
 
 type FilterStoreModule = typeof import("../worktreeFilterStore");
 type ChangedCallback = (snapshot: WorktreeTitlesSnapshot) => void;
@@ -14,31 +14,52 @@ const snapshot = (titles: Record<string, string>, revision: number): WorktreeTit
   revision,
 });
 
-/** Main's side of the bridge: a title map and revision the stub keeps like the real store. */
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
+
+/**
+ * Main's side of the bridge, kept like the real store: a hand-over fills only
+ * worktrees main has no record of, and a clear is remembered.
+ */
 function installBridge(
   options: {
     hydrate?: (legacy: Record<string, string>) => Promise<WorktreeTitlesSnapshot | null>;
   } = {}
 ) {
   const listeners: ChangedCallback[] = [];
-  let main: Record<string, string> | null = null;
+  const recorded: Record<string, string | null> = {};
   let revision = 0;
+  const visible = () =>
+    Object.fromEntries(
+      Object.entries(recorded).filter((entry): entry is [string, string] => entry[1] !== null)
+    );
   const hydrate = vi.fn(
     options.hydrate ??
       (async (legacy: Record<string, string>) => {
-        if (main === null) {
-          main = { ...legacy };
-          revision++;
+        let landed = false;
+        for (const [id, title] of Object.entries(legacy)) {
+          if (Object.hasOwn(recorded, id)) continue;
+          recorded[id] = title;
+          landed = true;
         }
-        return snapshot({ ...main }, revision);
+        if (landed) revision++;
+        return snapshot(visible(), revision);
       })
   );
   const set = vi.fn(async (id: string, title: string | null) => {
-    main = { ...(main ?? {}) };
-    if (title === null) delete main[id];
-    else main[id] = title;
+    recorded[id] = title;
     revision++;
-    return snapshot({ ...main }, revision);
+    return snapshot(visible(), revision);
+  });
+  const prune = vi.fn(async (ids: string[]) => {
+    for (const id of ids) recorded[id] = null;
+    revision++;
+    return snapshot(visible(), revision);
   });
   const onChanged = vi.fn((cb: ChangedCallback) => {
     listeners.push(cb);
@@ -50,22 +71,22 @@ function installBridge(
   // `defineProperty` rather than an assignment + cast: a partial stub of the
   // full `ElectronAPI` would need a type assertion the lint ratchet counts.
   Object.defineProperty(window, "electron", {
-    value: { worktreeTitles: { hydrate, set, onChanged } },
+    value: { worktreeTitles: { hydrate, set, prune, onChanged } },
     configurable: true,
     writable: true,
   });
   return {
     hydrate,
     set,
-    onChanged,
+    prune,
     listeners,
     push: (next: WorktreeTitlesSnapshot) => listeners.forEach((cb) => cb(next)),
   };
 }
 
-function seedLocalStorage(titles: Record<string, string>): void {
+function seedLocalStorage(key: string, titles: Record<string, string>): void {
   localStorage.setItem(
-    PROJECT_KEY,
+    key,
     JSON.stringify({ state: { worktreeCustomTitles: titles }, version: 2 })
   );
 }
@@ -76,21 +97,26 @@ async function loadStore(): Promise<FilterStoreModule> {
   return import("../worktreeFilterStore");
 }
 
-const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+const flush = () => vi.advanceTimersByTimeAsync(0);
 
 beforeEach(() => {
+  // Before the import, so the store's debounced persistence timers are fake
+  // too and can't land in a later test's storage.
+  vi.useFakeTimers();
   localStorage.clear();
 });
 
 afterEach(() => {
+  vi.clearAllTimers();
   vi.useRealTimers();
   Reflect.deleteProperty(window, "electron");
+  Reflect.deleteProperty(window, "__DAINTREE_HOST_ID__");
   localStorage.clear();
 });
 
 describe("custom worktree titles held by main (#14022)", () => {
   it("hands main the titles kept in localStorage, then adopts what main holds", async () => {
-    seedLocalStorage({ "wt-1": "Release prep" });
+    seedLocalStorage(LOCAL_KEY, { "wt-1": "Release prep" });
     const bridge = installBridge({
       hydrate: async () => snapshot({ "wt-1": "Release prep", "wt-2": "From main" }, 4),
     });
@@ -121,14 +147,34 @@ describe("custom worktree titles held by main (#14022)", () => {
     stop();
   });
 
+  it("holds a push that beats the hand-over, so the copy it hands over is the original", async () => {
+    seedLocalStorage(LOCAL_KEY, { "wt-1": "Legacy" });
+    const reply = deferred<WorktreeTitlesSnapshot | null>();
+    const bridge = installBridge({ hydrate: () => reply.promise });
+    const { startWorktreeCustomTitlesSync, useWorktreeFilterStore } = await loadStore();
+    const stop = startWorktreeCustomTitlesSync();
+
+    bridge.push(snapshot({ "wt-2": "Remote rename" }, 2));
+    expect(useWorktreeFilterStore.getState().worktreeCustomTitles).toEqual({ "wt-1": "Legacy" });
+
+    reply.resolve(snapshot({ "wt-1": "Legacy" }, 1));
+    await flush();
+
+    expect(bridge.hydrate).toHaveBeenCalledWith({ "wt-1": "Legacy" });
+    // The held push is newer than the reply, so it lands after it.
+    expect(useWorktreeFilterStore.getState().worktreeCustomTitles).toEqual({
+      "wt-2": "Remote rename",
+    });
+    stop();
+  });
+
   it("reads again while the view is still unbound, then settles", async () => {
-    vi.useFakeTimers();
     const replies: Array<WorktreeTitlesSnapshot | null> = [null, snapshot({ "wt-1": "Late" }, 1)];
     const bridge = installBridge({ hydrate: async () => replies.shift() ?? null });
     const { startWorktreeCustomTitlesSync, useWorktreeFilterStore } = await loadStore();
 
     const stop = startWorktreeCustomTitlesSync();
-    await vi.advanceTimersByTimeAsync(0);
+    await flush();
     expect(useWorktreeFilterStore.getState().worktreeCustomTitles).toEqual({});
 
     await vi.advanceTimersByTimeAsync(250);
@@ -137,8 +183,26 @@ describe("custom worktree titles held by main (#14022)", () => {
     stop();
   });
 
+  it("reads again, without handing anything over, when a remote view's link comes back", async () => {
+    const bridge = installBridge();
+    const { startWorktreeCustomTitlesSync, useWorktreeFilterStore } = await loadStore();
+    const { notifyHostResync } = await import("../hostResyncSignal");
+    const stop = startWorktreeCustomTitlesSync();
+    await flush();
+    bridge.hydrate.mockImplementationOnce(async () => snapshot({ "wt-1": "Missed rename" }, 7));
+
+    notifyHostResync();
+    await flush();
+
+    expect(bridge.hydrate).toHaveBeenLastCalledWith({});
+    expect(useWorktreeFilterStore.getState().worktreeCustomTitles).toEqual({
+      "wt-1": "Missed rename",
+    });
+    stop();
+  });
+
   it("hands over before the first write, and adopts main's reply", async () => {
-    seedLocalStorage({ "wt-1": "Kept" });
+    seedLocalStorage(LOCAL_KEY, { "wt-1": "Kept" });
     const bridge = installBridge();
     const { useWorktreeFilterStore } = await loadStore();
 
@@ -165,7 +229,7 @@ describe("custom worktree titles held by main (#14022)", () => {
   });
 
   it("rejects a write while main can't name the project, leaving the copy alone", async () => {
-    seedLocalStorage({ "wt-1": "Kept" });
+    seedLocalStorage(LOCAL_KEY, { "wt-1": "Kept" });
     const bridge = installBridge({ hydrate: async () => null });
     const { useWorktreeFilterStore } = await loadStore();
 
@@ -176,16 +240,45 @@ describe("custom worktree titles held by main (#14022)", () => {
     expect(useWorktreeFilterStore.getState().worktreeCustomTitles).toEqual({ "wt-1": "Kept" });
   });
 
-  it("clears a stale worktree's title through main rather than only in this view", async () => {
-    seedLocalStorage({ "wt-1": "Kept", "wt-gone": "Stale" });
+  it("asks main to prune a stale worktree's title rather than dropping it only here", async () => {
+    seedLocalStorage(LOCAL_KEY, { "wt-1": "Kept", "wt-gone": "Stale" });
     const bridge = installBridge();
     const { useWorktreeFilterStore } = await loadStore();
 
     useWorktreeFilterStore.getState().pruneStaleWorktreeIds(new Set(["wt-1"]));
     await flush();
 
-    expect(bridge.set).toHaveBeenCalledTimes(1);
-    expect(bridge.set).toHaveBeenCalledWith("wt-gone", null);
+    expect(bridge.prune).toHaveBeenCalledTimes(1);
+    expect(bridge.prune).toHaveBeenCalledWith(["wt-gone"]);
+    expect(bridge.set).not.toHaveBeenCalled();
     expect(useWorktreeFilterStore.getState().worktreeCustomTitles).toEqual({ "wt-1": "Kept" });
+  });
+
+  it("keeps a remote view's copy apart from the local project with the same id", async () => {
+    seedLocalStorage(LOCAL_KEY, { "wt-1": "This machine's" });
+    Object.defineProperty(window, "__DAINTREE_HOST_ID__", {
+      value: { id: "studio-mac" },
+      configurable: true,
+      writable: true,
+    });
+    const bridge = installBridge({
+      hydrate: async () => snapshot({ "wt-1": "The host's" }, 3),
+    });
+    const { startWorktreeCustomTitlesSync, useWorktreeFilterStore } = await loadStore();
+
+    expect(useWorktreeFilterStore.getState().worktreeCustomTitles).toEqual({});
+    const stop = startWorktreeCustomTitlesSync();
+    await flush();
+    expect(bridge.hydrate).toHaveBeenCalledWith({});
+    expect(useWorktreeFilterStore.getState().worktreeCustomTitles).toEqual({
+      "wt-1": "The host's",
+    });
+
+    // The adopted copy persists under the host's key, never the local one.
+    await vi.advanceTimersByTimeAsync(300);
+    expect(JSON.parse(localStorage.getItem(LOCAL_KEY)!).state.worktreeCustomTitles).toEqual({
+      "wt-1": "This machine's",
+    });
+    stop();
   });
 });

@@ -1318,6 +1318,7 @@ export const CHANNELS = {
   // The sender project's custom worktree titles (#14022)
   WORKTREE_TITLES_HYDRATE: "worktree-titles:hydrate",
   WORKTREE_TITLES_SET: "worktree-titles:set",
+  WORKTREE_TITLES_PRUNE: "worktree-titles:prune",
   WORKTREE_TITLES_CHANGED: "worktree-titles:changed",
 
   // Per-service connectivity channels

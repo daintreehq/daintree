@@ -21,6 +21,8 @@ import {
 } from "@shared/utils/worktreeCustomTitle";
 import type { WorktreeTitlesSnapshot } from "@shared/types/ipc/worktreeTitles";
 import { logWarn } from "@/utils/logger";
+import { hostScopedKey } from "@/hooks/useHostPlatform";
+import { onHostResync } from "./hostResyncSignal";
 
 export type OrderBy = "recent" | "created" | "alpha" | "manual";
 
@@ -237,7 +239,11 @@ function resolveProjectIdFromUrl(): string {
 }
 
 const _projectId = resolveProjectIdFromUrl();
-const PROJECT_KEY = `${GLOBAL_KEY}:${_projectId}`;
+// Host-scoped, because a remote host's project can carry the same id as a local
+// one and every view shares this storage; bare locally. Custom titles make it
+// load-bearing: a remote view's copy of its host's titles must never become the
+// hand-over a local view of the same id gives this machine's main (#14022).
+const PROJECT_KEY = `${GLOBAL_KEY}:${hostScopedKey(_projectId)}`;
 
 const GLOBAL_FIELD_KEYS = new Set<keyof WorktreeFilterStore>([
   "orderBy",
@@ -684,19 +690,22 @@ const _projectStore = create<ProjectScopedState>()(
 /**
  * Custom titles live in main (#14022), so the worktree snapshots plugins read
  * carry them; `worktreeCustomTitles` above is this view's copy of main's. The
- * localStorage blob stays as that copy's cache and as the hand-over: the first
- * hydrate of a project gives main the titles kept here before it held any.
+ * localStorage blob stays as that copy's cache and as the hand-over: this
+ * view's first pull gives main the titles kept here before it held any.
  */
 let titlesRevision = 0;
-let titlesHydrated = false;
-let titlesHydration: Promise<void> | null = null;
-// Snapshots adopted so far. A hydrate that saw none land while it was in
-// flight is the newest word there is, so it may move the revision down — the
-// way back for a view whose main store was reset under it.
+let titlesHandedOver = false;
+let titlesPull: Promise<void> | null = null;
+// Snapshots adopted so far. A pull that saw none land while it was in flight
+// is the newest word there is, so it may move the revision down — the way back
+// for a view whose main store was reset under it.
 let titlesAdoptions = 0;
+// A push that arrived before the hand-over landed, held until it does:
+// adopting it first would replace the copy the hand-over is made from.
+let titlesHeldPush: WorktreeTitlesSnapshot | null = null;
 // A relaunch restores the last project before main has registered its view,
-// so the first hydrate can come back unbound.
-const TITLES_HYDRATE_RETRY_MS = [250, 1000, 3000] as const;
+// and a slow start can register it well after the renderer loaded.
+const TITLES_PULL_RETRY_MS = [250, 1000, 3000, 10_000, 30_000] as const;
 
 /** Main has no project for this view yet, or never will (a view with no project open). */
 class WorktreeTitlesUnboundError extends Error {
@@ -719,44 +728,64 @@ function adoptWorktreeTitles(snapshot: WorktreeTitlesSnapshot, authoritative = f
   if (!authoritative && snapshot.revision < titlesRevision) return;
   ++titlesAdoptions;
   titlesRevision = snapshot.revision;
-  // Any snapshot means main holds an entry for this project, so a hand-over
-  // from here could no longer land.
-  titlesHydrated = true;
   const next = customTitlesOrUndefined(snapshot.titles) ?? {};
   if (sameTitles(_projectStore.getState().worktreeCustomTitles, next)) return;
   _projectStore.setState({ worktreeCustomTitles: next });
 }
 
-/**
- * Hand this view's titles to main and adopt what it holds. Shared while in
- * flight; rejects on an unbound or failed read so the caller can retry. The
- * persisted copy has hydrated by now: the storage reads synchronously.
- */
-function hydrateWorktreeTitles(): Promise<void> {
-  if (titlesHydration) return titlesHydration;
-  const api = worktreeTitlesBridge();
-  if (typeof api?.hydrate !== "function") return Promise.resolve();
-  const adoptionsAtStart = titlesAdoptions;
-  const legacyTitles = { ..._projectStore.getState().worktreeCustomTitles };
-  const attempt = api.hydrate(legacyTitles).then(
-    (snapshot) => {
-      if (titlesHydration === attempt) titlesHydration = null;
-      // `== null`: a stubbed bridge answers `undefined`.
-      if (snapshot == null) throw new WorktreeTitlesUnboundError();
-      adoptWorktreeTitles(snapshot, titlesAdoptions === adoptionsAtStart);
-    },
-    (error: unknown) => {
-      if (titlesHydration === attempt) titlesHydration = null;
-      throw error;
-    }
-  );
-  titlesHydration = attempt;
-  return attempt;
+function receiveWorktreeTitlesPush(snapshot: WorktreeTitlesSnapshot): void {
+  if (titlesHandedOver) {
+    adoptWorktreeTitles(snapshot);
+    return;
+  }
+  if (titlesHeldPush === null || snapshot.revision >= titlesHeldPush.revision) {
+    titlesHeldPush = snapshot;
+  }
 }
 
 /**
- * Follow main's titles for this view: pull once (retrying an unbound read a few
- * times), then adopt every push. Returns the disposer.
+ * Read main's titles and adopt them; the first pull that lands also hands over
+ * this view's copy. Shared while in flight; rejects on an unbound or failed
+ * read so the caller can retry. The persisted copy has hydrated by now: the
+ * storage reads synchronously.
+ */
+function pullWorktreeTitles(): Promise<void> {
+  if (titlesPull) return titlesPull;
+  const api = worktreeTitlesBridge();
+  if (typeof api?.hydrate !== "function") return Promise.resolve();
+  const adoptionsAtStart = titlesAdoptions;
+  const legacyTitles = titlesHandedOver ? {} : { ..._projectStore.getState().worktreeCustomTitles };
+  const attempt = api.hydrate(legacyTitles).then(
+    (snapshot) => {
+      if (titlesPull === attempt) titlesPull = null;
+      // `== null`: a stubbed bridge answers `undefined`.
+      if (snapshot == null) throw new WorktreeTitlesUnboundError();
+      adoptWorktreeTitles(snapshot, titlesAdoptions === adoptionsAtStart);
+      titlesHandedOver = true;
+      const held = titlesHeldPush;
+      titlesHeldPush = null;
+      if (held) adoptWorktreeTitles(held);
+    },
+    (error: unknown) => {
+      if (titlesPull === attempt) titlesPull = null;
+      throw error;
+    }
+  );
+  titlesPull = attempt;
+  return attempt;
+}
+
+async function pruneWorktreeTitlesInMain(staleTitleIds: string[]): Promise<void> {
+  const api = worktreeTitlesBridge();
+  if (typeof api?.prune !== "function") return;
+  if (!titlesHandedOver) await pullWorktreeTitles();
+  adoptWorktreeTitles(await api.prune(staleTitleIds));
+}
+
+/**
+ * Follow main's titles for this view: pull once (retrying an unbound read),
+ * adopt every push, and pull again when a remote view's link comes back, since
+ * pushes sent while it was down are gone. Returns the disposer.
  */
 export function startWorktreeCustomTitlesSync(): () => void {
   const api = worktreeTitlesBridge();
@@ -765,11 +794,11 @@ export function startWorktreeCustomTitlesSync(): () => void {
   let retries = 0;
   let retryTimer: ReturnType<typeof setTimeout> | null = null;
   // Main sends to every view of the project and only to them.
-  const unsubscribe = api.onChanged((snapshot) => adoptWorktreeTitles(snapshot));
+  const unsubscribe = api.onChanged(receiveWorktreeTitlesPush);
   const pull = (): void => {
-    hydrateWorktreeTitles().catch((error: unknown) => {
-      if (disposed || titlesHydrated) return;
-      const delay = TITLES_HYDRATE_RETRY_MS[retries++];
+    pullWorktreeTitles().catch((error: unknown) => {
+      if (disposed || titlesHandedOver) return;
+      const delay = TITLES_PULL_RETRY_MS[retries++];
       if (delay === undefined) {
         // Still unbound after the retries is a view with no project, not a fault.
         if (!(error instanceof WorktreeTitlesUnboundError)) {
@@ -783,11 +812,20 @@ export function startWorktreeCustomTitlesSync(): () => void {
       }, delay);
     });
   };
+  const offResync = onHostResync(() => {
+    if (disposed) return;
+    pullWorktreeTitles().catch((error: unknown) => {
+      logWarn("[worktreeFilterStore] Failed to read worktree titles after reconnecting", {
+        error,
+      });
+    });
+  });
   pull();
   return () => {
     disposed = true;
     if (retryTimer !== null) clearTimeout(retryTimer);
     unsubscribe();
+    offResync();
   };
 }
 
@@ -922,7 +960,7 @@ const _actions: WorktreeFilterActions = {
     if (typeof api?.set === "function") {
       // Not applied ahead of the round trip: main pushes each write to every
       // view of the project before replying, so they all stay in step with it.
-      if (!titlesHydrated) await hydrateWorktreeTitles();
+      if (!titlesHandedOver) await pullWorktreeTitles();
       adoptWorktreeTitles(await api.set(id, next || null));
       return;
     }
@@ -941,14 +979,17 @@ const _actions: WorktreeFilterActions = {
     _projectStore.setState({ manualOrder: order });
   },
   pruneStaleWorktreeIds: (validIds) => {
-    // Main holds the titles, so a stale one is cleared there and comes back to
-    // this view (and every other view of the project) in main's push.
-    const titlesInMain = typeof worktreeTitlesBridge()?.set === "function";
+    // Main holds the titles, so a stale one is cleared there, once the
+    // workspace host confirms the worktree is gone, and comes back to this view
+    // (and every other view of the project) in main's push.
+    const titlesInMain = typeof worktreeTitlesBridge()?.prune === "function";
     if (titlesInMain) {
-      for (const id of Object.keys(_projectStore.getState().worktreeCustomTitles)) {
-        if (validIds.has(id)) continue;
-        _actions.setWorktreeCustomTitle(id, null).catch((error: unknown) => {
-          logWarn("[worktreeFilterStore] Failed to clear a stale worktree title", { error });
+      const staleTitleIds = Object.keys(_projectStore.getState().worktreeCustomTitles).filter(
+        (id) => !validIds.has(id)
+      );
+      if (staleTitleIds.length > 0) {
+        pruneWorktreeTitlesInMain(staleTitleIds).catch((error: unknown) => {
+          logWarn("[worktreeFilterStore] Failed to clear stale worktree titles", { error });
         });
       }
     }

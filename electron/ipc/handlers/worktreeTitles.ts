@@ -3,7 +3,10 @@ import { defineIpcNamespace, op } from "../define.js";
 import type { IpcContext } from "../types.js";
 import { broadcastToProjectRenderers } from "../utils.js";
 import { WORKTREE_TITLES_METHOD_CHANNELS } from "./worktreeTitles.preload.js";
+import { projectStore } from "../../services/ProjectStore.js";
+import { getWorkspaceClientRef } from "../../window/serviceRefs.js";
 import {
+  clearWorktreeCustomTitles,
   getWorktreeCustomTitles,
   importLegacyWorktreeCustomTitles,
   setWorktreeCustomTitle,
@@ -17,14 +20,28 @@ import type { WorktreeTitlesSnapshot } from "../../../shared/types/ipc/worktreeT
  * only ever read or change the titles of the project it shows.
  */
 
+/** More stale ids than any sidebar holds; anything past it is not a prune. */
+const MAX_PRUNE_IDS = 1000;
+
 function snapshotOf(projectId: string, stored: StoredWorktreeCustomTitles): WorktreeTitlesSnapshot {
   return { projectId, titles: { ...stored.titles }, revision: stored.revision };
 }
 
-/** Every view of the project: the sidebar and the overview can sit in different windows. */
-function publish(snapshot: WorktreeTitlesSnapshot): WorktreeTitlesSnapshot {
-  broadcastToProjectRenderers(snapshot.projectId, CHANNELS.WORKTREE_TITLES_CHANGED, snapshot);
+/**
+ * Every view of the project gets the result of a write — the sidebar and the
+ * overview can sit in different windows — and the writer gets it as its reply.
+ */
+function reply(projectId: string, before: number, stored: StoredWorktreeCustomTitles) {
+  const snapshot = snapshotOf(projectId, stored);
+  if (stored.revision !== before) {
+    broadcastToProjectRenderers(projectId, CHANNELS.WORKTREE_TITLES_CHANGED, snapshot);
+  }
   return snapshot;
+}
+
+function requireProjectId(ctx: IpcContext): string {
+  if (!ctx.projectId) throw new Error("worktree titles: sender has no project");
+  return ctx.projectId;
 }
 
 /**
@@ -37,8 +54,25 @@ function fromRemoteView(ctx: IpcContext): boolean {
 }
 
 /**
- * Read the titles, handing over the ones the view kept in localStorage first
- * if this project has never had any here. `null` for a sender with no project
+ * The worktree ids the project's workspace host has right now, or `null` when
+ * it can't say (project closed, host not ready, a scratch with no project).
+ */
+async function liveWorktreeIds(projectId: string): Promise<Set<string> | null> {
+  const project = projectStore.getProjectById(projectId);
+  const client = getWorkspaceClientRef();
+  if (!project || !client) return null;
+  try {
+    const result = await client.getAllStatesForProjectResultAsync(project.path, projectId);
+    return result.status === "ok" ? new Set(result.states.map((state) => state.id)) : null;
+  } catch (error) {
+    console.error(`[worktreeTitles] Failed to list worktrees for project ${projectId}:`, error);
+    return null;
+  }
+}
+
+/**
+ * Read the titles, first handing over the ones the view kept in localStorage
+ * for any worktree main has no record of. `null` for a sender with no project
  * binding yet: a relaunch restores the last project before its view is
  * registered, so the view reads again rather than adopting an empty set.
  */
@@ -50,11 +84,7 @@ async function handleHydrate(
   const projectId = ctx.projectId;
   if (fromRemoteView(ctx)) return snapshotOf(projectId, getWorktreeCustomTitles(projectId));
   const before = getWorktreeCustomTitles(projectId).revision;
-  const stored = importLegacyWorktreeCustomTitles(projectId, legacyTitles);
-  const snapshot = snapshotOf(projectId, stored);
-  return stored.revision !== before && Object.keys(stored.titles).length > 0
-    ? publish(snapshot)
-    : snapshot;
+  return reply(projectId, before, importLegacyWorktreeCustomTitles(projectId, legacyTitles));
 }
 
 async function handleSet(
@@ -62,12 +92,36 @@ async function handleSet(
   worktreeId: string,
   title: string | null
 ): Promise<WorktreeTitlesSnapshot> {
-  if (!ctx.projectId) throw new Error("worktree titles: sender has no project");
-  const projectId = ctx.projectId;
+  const projectId = requireProjectId(ctx);
   const before = getWorktreeCustomTitles(projectId).revision;
-  const stored = setWorktreeCustomTitle(projectId, worktreeId, title);
-  const snapshot = snapshotOf(projectId, stored);
-  return stored.revision !== before ? publish(snapshot) : snapshot;
+  return reply(projectId, before, setWorktreeCustomTitle(projectId, worktreeId, title));
+}
+
+/**
+ * Clear the titles of worktrees the view no longer lists, but only those the
+ * workspace host confirms are gone. A view's list can lag a sibling's: a title
+ * pushed for a worktree it hasn't heard of yet is not stale, and a clear here
+ * would reach every view and every plugin. Nothing is cleared when the host
+ * can't answer.
+ */
+async function handlePrune(
+  ctx: IpcContext,
+  staleWorktreeIds: string[]
+): Promise<WorktreeTitlesSnapshot> {
+  const projectId = requireProjectId(ctx);
+  if (!Array.isArray(staleWorktreeIds) || staleWorktreeIds.length > MAX_PRUNE_IDS) {
+    throw new Error("worktree titles: staleWorktreeIds must be a list of worktree ids");
+  }
+  const held = getWorktreeCustomTitles(projectId);
+  const candidates = staleWorktreeIds.filter(
+    (id) => typeof id === "string" && Object.hasOwn(held.titles, id)
+  );
+  if (candidates.length === 0) return snapshotOf(projectId, held);
+  const live = await liveWorktreeIds(projectId);
+  // Re-read after the await, so the reply never carries an older set than a push sent meanwhile.
+  const before = getWorktreeCustomTitles(projectId).revision;
+  const gone = live === null ? [] : candidates.filter((id) => !live.has(id));
+  return reply(projectId, before, clearWorktreeCustomTitles(projectId, gone));
 }
 
 export const worktreeTitlesNamespace = defineIpcNamespace({
@@ -75,6 +129,7 @@ export const worktreeTitlesNamespace = defineIpcNamespace({
   ops: {
     hydrate: op(WORKTREE_TITLES_METHOD_CHANNELS.hydrate, handleHydrate, { withContext: true }),
     set: op(WORKTREE_TITLES_METHOD_CHANNELS.set, handleSet, { withContext: true }),
+    prune: op(WORKTREE_TITLES_METHOD_CHANNELS.prune, handlePrune, { withContext: true }),
   },
 });
 

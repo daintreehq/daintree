@@ -719,16 +719,16 @@ export interface StoreSchema {
   >;
 
   /**
-   * Per-project custom worktree titles (#14022): worktree id → title. Read and
-   * written only through `services/worktreeCustomTitles.ts`, which validates
-   * every entry. An entry exists once the project's views have handed over the
-   * titles they kept in localStorage before main held them, so it is kept even
-   * with no titles left. Same additive-key convention as `projectPresentation`.
+   * Per-workspace custom worktree titles (#14022): worktree id → title, or
+   * `null` for one the user cleared, kept so a view's stale localStorage copy
+   * can't bring it back. Read and written only through
+   * `services/worktreeCustomTitles.ts`, which validates every entry. Same
+   * additive-key convention as `projectPresentation`.
    */
   worktreeCustomTitles?: Record<
     string,
     {
-      titles?: Record<string, string>;
+      titles?: Record<string, string | null>;
       /** Bumped on every write; views drop snapshots older than one they hold. */
       revision?: number;
     }

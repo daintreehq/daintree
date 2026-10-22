@@ -14,6 +14,7 @@ const storeMock = vi.hoisted(() => {
 vi.mock("../../store.js", () => ({ store: storeMock }));
 
 import {
+  clearWorktreeCustomTitles,
   getWorktreeCustomTitles,
   importLegacyWorktreeCustomTitles,
   onWorktreeCustomTitlesChanged,
@@ -130,6 +131,41 @@ describe("worktree custom titles in main", () => {
   });
 });
 
+describe("clearing the titles of removed worktrees", () => {
+  it("clears every held title in one write and notifies once", () => {
+    setWorktreeCustomTitle(PROJECT_A, WT_1, "One");
+    setWorktreeCustomTitle(PROJECT_A, WT_2, "Two");
+    const listener = vi.fn();
+    const off = onWorktreeCustomTitlesChanged(listener);
+
+    expect(clearWorktreeCustomTitles(PROJECT_A, [WT_1, WT_2, "/never-titled"])).toEqual({
+      titles: {},
+      revision: 3,
+    });
+    expect(listener).toHaveBeenCalledTimes(1);
+    off();
+  });
+
+  it("keeps the clear on disk, so no hand-over brings the title back", () => {
+    setWorktreeCustomTitle(PROJECT_A, WT_1, "One");
+    clearWorktreeCustomTitles(PROJECT_A, [WT_1]);
+
+    expect(storeMock.data.get("worktreeCustomTitles")).toEqual({
+      [PROJECT_A]: { titles: { [WT_1]: null }, revision: 2 },
+    });
+    expect(importLegacyWorktreeCustomTitles(PROJECT_A, { [WT_1]: "One" }).titles).toEqual({});
+  });
+
+  it("writes nothing when none of the ids holds a title", () => {
+    setWorktreeCustomTitle(PROJECT_A, WT_1, "One");
+    clearWorktreeCustomTitles(PROJECT_A, [WT_1]);
+    storeMock.set.mockClear();
+
+    expect(clearWorktreeCustomTitles(PROJECT_A, [WT_1, WT_2]).revision).toBe(2);
+    expect(storeMock.set).not.toHaveBeenCalled();
+  });
+});
+
 describe("handing over the titles a view kept in localStorage", () => {
   it("adopts the first hand-over for a workspace, normalised, and notifies", () => {
     const listener = vi.fn();
@@ -145,14 +181,27 @@ describe("handing over the titles a view kept in localStorage", () => {
     off();
   });
 
-  it("records an empty hand-over without waking anyone, so a later one can't land", () => {
+  it("writes nothing for an empty hand-over, and a later one still lands", () => {
     const listener = vi.fn();
     const off = onWorktreeCustomTitlesChanged(listener);
 
-    expect(importLegacyWorktreeCustomTitles(PROJECT_A, {})).toEqual({ titles: {}, revision: 1 });
+    expect(importLegacyWorktreeCustomTitles(PROJECT_A, {})).toEqual({ titles: {}, revision: 0 });
+    expect(storeMock.set).not.toHaveBeenCalled();
     expect(listener).not.toHaveBeenCalled();
-    expect(importLegacyWorktreeCustomTitles(PROJECT_A, { [WT_1]: "Late" }).titles).toEqual({});
+    expect(importLegacyWorktreeCustomTitles(PROJECT_A, { [WT_1]: "Late" }).titles).toEqual({
+      [WT_1]: "Late",
+    });
     off();
+  });
+
+  it("still takes the copy's titles after a write that never touched them", () => {
+    // A remote view, which hands nothing over, renames another worktree first.
+    setWorktreeCustomTitle(PROJECT_A, WT_2, "Remote rename");
+
+    expect(importLegacyWorktreeCustomTitles(PROJECT_A, { [WT_1]: "Keep" })).toEqual({
+      titles: { [WT_1]: "Keep", [WT_2]: "Remote rename" },
+      revision: 2,
+    });
   });
 
   it("never brings back a title cleared in main from a stale copy", () => {
@@ -165,11 +214,19 @@ describe("handing over the titles a view kept in localStorage", () => {
     });
   });
 
-  it("keeps a title main already holds over the copy's", () => {
+  it("keeps a title main already holds over the copy's, and fills the rest", () => {
     setWorktreeCustomTitle(PROJECT_A, WT_1, "Newer");
     expect(
       importLegacyWorktreeCustomTitles(PROJECT_A, { [WT_1]: "Older", [WT_2]: "Other" })
-    ).toEqual({ titles: { [WT_1]: "Newer" }, revision: 1 });
+    ).toEqual({ titles: { [WT_1]: "Newer", [WT_2]: "Other" }, revision: 2 });
+  });
+
+  it("is a no-op for a copy main has already taken", () => {
+    importLegacyWorktreeCustomTitles(PROJECT_A, { [WT_1]: "Kept" });
+    storeMock.set.mockClear();
+
+    expect(importLegacyWorktreeCustomTitles(PROJECT_A, { [WT_1]: "Kept" }).revision).toBe(1);
+    expect(storeMock.set).not.toHaveBeenCalled();
   });
 
   it("ignores a malformed hand-over and keys nothing off a prototype", () => {

@@ -1116,6 +1116,7 @@ export const CHANNEL_LOCALITY = {
   "worktree-config:set-wsl-git": "host",
   "worktree-titles:changed": "host",
   "worktree-titles:hydrate": "host",
+  "worktree-titles:prune": "host",
   "worktree-titles:set": "host",
   "worktree:activated": "host",
   "worktree:attach-issue": "host",

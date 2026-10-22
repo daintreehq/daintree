@@ -3,6 +3,7 @@ import type { IpcInvokeMap } from "../../types/index.js";
 export const WORKTREE_TITLES_METHOD_CHANNELS = {
   hydrate: "worktree-titles:hydrate",
   set: "worktree-titles:set",
+  prune: "worktree-titles:prune",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof WORKTREE_TITLES_METHOD_CHANNELS;

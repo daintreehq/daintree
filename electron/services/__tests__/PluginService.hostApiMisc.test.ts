@@ -1071,14 +1071,24 @@ describe("Plugin worktree host API", () => {
     }
   });
 
-  it("re-delivers the worktree set when a custom title changes (#14022)", async () => {
-    const { host, revoke } = await setup([mkSnap({ id: "a", isCurrent: true })]);
+  it("re-delivers the worktree set with the new title when it changes (#14022)", async () => {
+    const projectId = "f".repeat(64);
+    const { host, client, revoke } = await setup([mkSnap({ id: "a", isCurrent: true })]);
+    client.getAllStatesResultAsync.mockImplementation(() =>
+      Promise.resolve({ status: "ok", projectId, states: [mkSnap({ id: "a", isCurrent: true })] })
+    );
     const cb = vi.fn();
     await host.onDidChangeWorktrees(cb);
     revoke();
 
-    setWorktreeCustomTitle("f".repeat(64), "a", "Release prep");
-
+    setWorktreeCustomTitle(projectId, "a", "Release prep");
     await vi.waitFor(() => expect(cb).toHaveBeenCalledTimes(1));
+    setWorktreeCustomTitle(projectId, "a", null);
+    await vi.waitFor(() => expect(cb).toHaveBeenCalledTimes(2));
+
+    const titles = cb.mock.calls.map(
+      ([list]) => (list as Array<Record<string, unknown>>)[0]!.customTitle
+    );
+    expect(titles).toEqual(["Release prep", null]);
   });
 });

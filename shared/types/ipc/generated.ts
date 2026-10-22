@@ -2888,6 +2888,10 @@ export interface GeneratedIpcInvokeMap {
     args: [legacyTitles: Record<string, string>];
     result: import("./worktreeTitles.js").WorktreeTitlesSnapshot | null;
   };
+  "worktree-titles:prune": {
+    args: [staleWorktreeIds: string[]];
+    result: import("./worktreeTitles.js").WorktreeTitlesSnapshot;
+  };
   "worktree-titles:set": {
     args: [worktreeId: string, title: string | null];
     result: import("./worktreeTitles.js").WorktreeTitlesSnapshot;
