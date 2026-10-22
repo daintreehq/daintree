@@ -95,6 +95,8 @@ const THREE_DOT_ALLOWED = new Set([
   "shared/utils/githubIssueUrl.ts",
   // Matches the dots an agent CLI prints after a truncated status title.
   "electron/services/pty/HandbackDetector.ts",
+  // Recognises a spread in a statically read `svelte.config.js`: JavaScript syntax, not copy.
+  "electron/services/elementPicker/projectAdapters/sveltekit/routes.ts",
 ]);
 
 const IN_APP_BROWSER_FILES = /^src\/components\/(Browser|Portal|DevPreview)\//;
