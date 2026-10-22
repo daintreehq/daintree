@@ -20,6 +20,8 @@ import {
   getProjectPresentation,
   isOwnProjectPluginButtonId,
   resetProjectToolbar,
+  setProjectFeaturedLaunchEntry,
+  setProjectLauncherGroupOrder,
   setProjectPluginButtonPromoted,
   setProjectPresentationLevel,
   setProjectToolbarEnabled,
@@ -347,5 +349,80 @@ describe("project toolbar (#13783)", () => {
       { levels?: Record<string, string> }
     >;
     expect(raw[PROJECT_A]?.levels).toEqual({ futureFeature: "demoted" });
+  });
+});
+
+describe("launcher arrangement (#13791)", () => {
+  it("stores the user's group order whole, and hands it back to the profile with []", () => {
+    const stored = setProjectLauncherGroupOrder(PROJECT_A, ["recipes", "plugin:acme.tools"]);
+    expect(stored.launcherGroupOrder).toEqual(["recipes", "plugin:acme.tools"]);
+    expect(getProjectPresentation(PROJECT_B).launcherGroupOrder).toEqual([]);
+    const cleared = setProjectLauncherGroupOrder(PROJECT_A, []);
+    expect(cleared.launcherGroupOrder).toEqual([]);
+    expect(cleared.revision).toBe(stored.revision + 1);
+    expect(storeMock.data.get("projectPresentation")).toEqual({
+      [PROJECT_A]: { revision: 2 },
+    });
+  });
+
+  it("refuses an order holding a malformed or repeated group", () => {
+    expect(() => setProjectLauncherGroupOrder(PROJECT_A, ["agents", "agents"])).toThrow();
+    expect(() => setProjectLauncherGroupOrder(PROJECT_A, ["agents", ""])).toThrow();
+    expect(storeMock.set).not.toHaveBeenCalled();
+  });
+
+  it("features one entry by its machine-independent name, and lets it go with null", () => {
+    expect(setProjectFeaturedLaunchEntry(PROJECT_A, "acme.records.new").featuredLaunchEntry).toBe(
+      "acme.records.new"
+    );
+    expect(() =>
+      setProjectFeaturedLaunchEntry(PROJECT_A, `project__${PROJECT_A}__acme.records.new`)
+    ).toThrow();
+    expect(setProjectFeaturedLaunchEntry(PROJECT_A, null).featuredLaunchEntry).toBeNull();
+  });
+
+  it("reads a hand-edited entry leniently", () => {
+    storeMock.data.set("projectPresentation", {
+      [PROJECT_A]: {
+        launcherGroupOrder: ["agents", 4, "agents", "plugin:x"],
+        featuredLaunchEntry: "not a ref",
+      },
+    });
+    const stored = getProjectPresentation(PROJECT_A);
+    expect(stored.launcherGroupOrder).toEqual(["agents", "plugin:x"]);
+    expect(stored.featuredLaunchEntry).toBeNull();
+  });
+
+  it("accepting a suggestion copies its featured entry, and one without leaves the choice", () => {
+    setProjectFeaturedLaunchEntry(PROJECT_A, "acme.records.old");
+    const levelsOnly = suggest({ launcherAgents: "demoted" });
+    expect(
+      answerProjectPresentationSuggestion(PROJECT_A, levelsOnly, levelsOnly.hash, "accepted")
+        .featuredLaunchEntry
+    ).toBe("acme.records.old");
+
+    const featured: PresentationSuggestion = {
+      levels: {},
+      featuredLaunchEntry: "acme.records.new",
+      hash: hashPresentationLevels({}, "acme.records.new"),
+    };
+    expect(
+      answerProjectPresentationSuggestion(PROJECT_A, featured, featured.hash, "declined")
+        .featuredLaunchEntry
+    ).toBe("acme.records.old");
+    expect(
+      answerProjectPresentationSuggestion(PROJECT_A, featured, featured.hash, "accepted")
+        .featuredLaunchEntry
+    ).toBe("acme.records.new");
+  });
+
+  it("keeps the launcher's choices through a toolbar reset", () => {
+    setProjectLauncherGroupOrder(PROJECT_A, ["recipes"]);
+    setProjectFeaturedLaunchEntry(PROJECT_A, "acme.records.new");
+    setProjectPresentationLevel(PROJECT_A, "launcherPanels", "demoted");
+    const stored = resetProjectToolbar(PROJECT_A);
+    expect(stored.launcherGroupOrder).toEqual(["recipes"]);
+    expect(stored.featuredLaunchEntry).toBe("acme.records.new");
+    expect(stored.levels).toEqual({ launcherPanels: "demoted" });
   });
 });

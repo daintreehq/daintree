@@ -8,6 +8,7 @@ import {
   parsePresentationLevels,
   type PresentationLevels,
 } from "../../../shared/config/presentationProfile.js";
+import { isFeaturedLaunchEntryRef } from "../../../shared/config/launcherArrangement.js";
 import type { PresentationSuggestion } from "../../../shared/types/ipc/projectPresentation.js";
 
 /**
@@ -15,8 +16,14 @@ import type { PresentationSuggestion } from "../../../shared/types/ipc/projectPr
  * `.daintree/presentation.json`:
  *
  * ```json
- * { "features": { "forgeStats": "hidden", "gitDetail": "demoted" } }
+ * {
+ *   "features": { "forgeStats": "hidden", "launcherAgents": "demoted" },
+ *   "featuredLaunchEntry": "acme.records.new-record"
+ * }
  * ```
+ *
+ * `featuredLaunchEntry` names one of the project plugin's own launch entries
+ * (#13791) as `{publisher.name}.{entry id}`; it only ever preselects a row.
  *
  * A suggestion, never a setting: nothing here changes what the project shows
  * until the user accepts it, and accepting copies the levels into the user's
@@ -28,20 +35,35 @@ const MAX_FILE_BYTES = 64 * 1024;
 
 /**
  * Identity of what the file suggests, not of its bytes: reformatting it, or
- * adding a feature this build does not know, asks nothing new.
+ * adding a feature this build does not know, asks nothing new. A file that
+ * features no launcher entry hashes exactly as it did before entries could be
+ * featured, so the answers already given to it still count.
  */
-export function hashPresentationLevels(levels: PresentationLevels): string {
-  const canonical = PRESENTATION_FEATURE_IDS.filter((id) => levels[id] !== undefined).map(
-    (id) => [id, levels[id]] as const
-  );
+export function hashPresentationLevels(
+  levels: PresentationLevels,
+  featuredLaunchEntry?: string
+): string {
+  const canonical: unknown[] = PRESENTATION_FEATURE_IDS.filter(
+    (id) => levels[id] !== undefined
+  ).map((id) => [id, levels[id]] as const);
+  if (featuredLaunchEntry !== undefined)
+    canonical.push(["featuredLaunchEntry", featuredLaunchEntry]);
   return createHash("sha256").update(JSON.stringify(canonical)).digest("hex");
 }
 
 export function parsePresentationSuggestion(raw: unknown): PresentationSuggestion | null {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
-  const levels = parsePresentationLevels((raw as Record<string, unknown>).features);
-  if (Object.keys(levels).length === 0) return null;
-  return { levels, hash: hashPresentationLevels(levels) };
+  const file = raw as Record<string, unknown>;
+  const levels = parsePresentationLevels(file.features);
+  const featured = isFeaturedLaunchEntryRef(file.featuredLaunchEntry)
+    ? file.featuredLaunchEntry
+    : undefined;
+  if (Object.keys(levels).length === 0 && featured === undefined) return null;
+  return {
+    levels,
+    ...(featured !== undefined && { featuredLaunchEntry: featured }),
+    hash: hashPresentationLevels(levels, featured),
+  };
 }
 
 /**

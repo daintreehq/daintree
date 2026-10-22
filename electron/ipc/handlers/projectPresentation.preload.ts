@@ -7,6 +7,8 @@ export const PROJECT_PRESENTATION_METHOD_CHANNELS = {
   setToolbarEnabled: "project-presentation:set-toolbar-enabled",
   setPluginButtonPromoted: "project-presentation:set-plugin-button-promoted",
   resetToolbar: "project-presentation:reset-toolbar",
+  setLauncherGroupOrder: "project-presentation:set-launcher-group-order",
+  setFeaturedLaunchEntry: "project-presentation:set-featured-launch-entry",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof PROJECT_PRESENTATION_METHOD_CHANNELS;

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, fireEvent, createEvent, waitFor, act } from "@testing-library/react";
+import { render, fireEvent, createEvent, waitFor, act, cleanup } from "@testing-library/react";
 import type { ReactNode } from "react";
 import {
   getPanelKindIds,
@@ -252,6 +252,18 @@ vi.mock("@/store/toolbarPreferencesStore", () => {
 // Radix's real focus/dismiss behaviour (mount autofocus winning the lazy-chunk
 // race, document-level Escape capture, the modal focus trap) is covered by
 // e2e/full/panels/core-dock-launcher-search.spec.ts.
+// The project's launcher arrangement (#13791), stock unless a test sets one.
+let mockLauncherArrangement: LauncherArrangement = {
+  projectId: null,
+  demoted: { agents: false, panels: false },
+  groupOrder: [],
+  featuredEntry: null,
+};
+vi.mock("@/hooks/useResolvedPresentation", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/hooks/useResolvedPresentation")>()),
+  useLauncherArrangement: () => mockLauncherArrangement,
+}));
+
 vi.mock("@/components/ui/tooltip", () => ({
   Tooltip: ({ children }: { children: ReactNode }) => <>{children}</>,
   TooltipContent: ({ children }: { children: ReactNode }) => (
@@ -375,6 +387,8 @@ vi.mock("@/components/ui/AppPaletteDialog", () => {
 });
 
 import { DockLaunchButton } from "../DockLaunchButton";
+import { usePluginLaunchEntriesStore } from "@/store/pluginLaunchEntriesStore";
+import type { LauncherArrangement } from "@shared/config/launcherArrangement";
 import { TOOLBAR_CUSTOMIZE_ICON, TOOLBAR_CUSTOMIZE_LABEL } from "../toolbarMenuStrings";
 import type { DockLaunchAgent } from "../DockLaunchMenuItems";
 import { comboToAriaKeyshortcuts, describeChord } from "@/lib/kbdShortcut";
@@ -3064,5 +3078,168 @@ describe("panel origin marker", () => {
     const { container } = renderButton({ hasProject: false });
 
     expect(qualifierTextOf(rowNamed(container, "Dev preview"))).toBe("Needs a project");
+  });
+});
+
+describe("DockLaunchButton — project arrangement (#13791)", () => {
+  const NOTES = "project__proj-1__acme.notes";
+  const arranged = (over: Partial<LauncherArrangement>): LauncherArrangement => ({
+    projectId: "proj-1",
+    demoted: { agents: false, panels: false },
+    groupOrder: [],
+    featuredEntry: null,
+    ...over,
+  });
+
+  beforeEach(() => {
+    usePluginLaunchEntriesStore.setState({
+      entries: [
+        {
+          id: `${NOTES}.board`,
+          pluginId: NOTES,
+          pluginName: "Notes",
+          label: "Open board",
+          iconId: "plus",
+          priority: 1,
+          target: { type: "command", actionId: `${NOTES}.board` },
+        },
+        {
+          id: `${NOTES}.new-note`,
+          pluginId: NOTES,
+          pluginName: "Notes",
+          label: "New note",
+          iconId: "plus",
+          priority: 2,
+          target: { type: "command", actionId: `${NOTES}.new-note` },
+        },
+      ],
+      hiddenPluginIds: [],
+    });
+  });
+
+  afterEach(() => {
+    // Unmounted first, so resetting the store notifies nothing still mounted.
+    cleanup();
+    usePluginLaunchEntriesStore.setState({ entries: [], hiddenPluginIds: [] });
+    mockLauncherArrangement = arranged({ projectId: null });
+  });
+
+  const moreRow = (container: HTMLElement) =>
+    options(container).find(
+      (row) => row.getAttribute("data-row-kind") === "cue" && row.textContent?.includes("More")
+    );
+
+  it("preselects the featured entry when it opens, and only Enter runs it", () => {
+    mockLauncherArrangement = arranged({ featuredEntry: "acme.notes.new-note" });
+    const { container } = renderButton();
+    act(() => popoverOpenChangeSpy!(true));
+
+    expect(selectedOption(container)?.getAttribute("aria-label")?.startsWith("New note,")).toBe(
+      true
+    );
+    expect(actionDispatchMock).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(searchInput(container), { key: "Enter" });
+    expect(actionDispatchMock).toHaveBeenCalledWith(`${NOTES}.new-note`, undefined, {
+      source: "menu",
+    });
+  });
+
+  it("leads with the project's plugin, and starts on its first row when the featured entry is gone", () => {
+    mockLauncherArrangement = arranged({ featuredEntry: "acme.notes.gone" });
+    const { container } = renderButton();
+    act(() => popoverOpenChangeSpy!(true));
+
+    expect(options(container)[0]!.getAttribute("aria-label")?.startsWith("Open board,")).toBe(true);
+    expect(selectedOption(container)).toBe(options(container)[0]);
+  });
+
+  it("folds demoted agents into More, which opens in place and runs nothing", () => {
+    mockLauncherArrangement = arranged({ demoted: { agents: true, panels: false } });
+    const { container, queryByText } = renderButton();
+    act(() => popoverOpenChangeSpy!(true));
+
+    expect(queryByText("Claude")).toBeNull();
+    const more = moreRow(container)!;
+    expect(more.getAttribute("aria-expanded")).toBe("false");
+    expect(qualifierTextOf(more)).toBe("Agents");
+    // The footer stays outside it.
+    expect(rowByName(container, "Manage agents")).toBeTruthy();
+
+    fireEvent.click(more);
+    expect(moreRow(container)!.getAttribute("aria-expanded")).toBe("true");
+    expect(queryByText("Claude")).not.toBeNull();
+    expect(actionDispatchMock).not.toHaveBeenCalled();
+
+    fireEvent.click(moreRow(container)!);
+    expect(queryByText("Claude")).toBeNull();
+  });
+
+  it("opens More with the Right Arrow onto its first row, and closes it with the Left", () => {
+    mockLauncherArrangement = arranged({ demoted: { agents: true, panels: true } });
+    const { container } = renderButton();
+    act(() => popoverOpenChangeSpy!(true));
+    const input = searchInput(container);
+
+    const moreIndex = options(container).indexOf(moreRow(container)!);
+    for (let i = 0; i < moreIndex; i++) fireEvent.keyDown(input, { key: "ArrowDown" });
+    expect(selectedOption(container)).toBe(moreRow(container));
+
+    fireEvent.keyDown(input, { key: "ArrowRight" });
+    expect(moreRow(container)!.getAttribute("aria-expanded")).toBe("true");
+    expect(options(container).indexOf(selectedOption(container)!)).toBe(moreIndex + 1);
+
+    // From a row inside it, straight back to More.
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    fireEvent.keyDown(input, { key: "ArrowLeft" });
+    expect(moreRow(container)!.getAttribute("aria-expanded")).toBe("false");
+    expect(selectedOption(container)).toBe(moreRow(container));
+
+    fireEvent.keyDown(input, { key: "ArrowRight" });
+    fireEvent.keyDown(input, { key: "ArrowUp" });
+    fireEvent.keyDown(input, { key: "ArrowLeft" });
+    expect(moreRow(container)!.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("keeps a recently launched agent with the other agents, once, inside More", () => {
+    mockMruEntries = [{ id: "agent.claude", score: 1, lastAccessedAt: 1000 }];
+    mockLauncherArrangement = arranged({ demoted: { agents: true, panels: false } });
+    const { container } = renderButton();
+    act(() => popoverOpenChangeSpy!(true));
+    expect(recentRows(container)).toEqual([]);
+
+    fireEvent.click(moreRow(container)!);
+    const claude = options(container).filter((row) =>
+      row.getAttribute("aria-label")?.startsWith("Claude,")
+    );
+    expect(claude).toHaveLength(1);
+    expect(recentRows(container)).toEqual(claude);
+  });
+
+  it("leaves the selection alone on the Left Arrow in search, with More left open", () => {
+    mockLauncherArrangement = arranged({ demoted: { agents: true, panels: true } });
+    const { container } = renderButton();
+    act(() => popoverOpenChangeSpy!(true));
+    fireEvent.click(moreRow(container)!);
+
+    // Browser and File browser: two demoted panels, so neither is first.
+    fireEvent.change(searchInput(container), { target: { value: "browser" } });
+    const rows = options(container);
+    expect(rows.length).toBeGreaterThan(1);
+    const chosen = rows[1]!;
+    movePointer(chosen, { x: 10, y: 40 });
+    expect(selectedOption(container)).toBe(chosen);
+
+    // From the results region, where the input's caret has no say.
+    fireEvent.keyDown(listbox(container), { key: "ArrowLeft" });
+    expect(selectedOption(container)).toBe(chosen);
+  });
+
+  it("still finds a demoted agent by search", () => {
+    mockLauncherArrangement = arranged({ demoted: { agents: true, panels: true } });
+    const { container, getByText } = renderButton();
+    fireEvent.change(searchInput(container), { target: { value: "claude" } });
+    expect(getByText("Claude")).toBeTruthy();
+    expect(moreRow(container)).toBeUndefined();
   });
 });

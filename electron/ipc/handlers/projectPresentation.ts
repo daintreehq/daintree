@@ -10,10 +10,17 @@ import {
   getProjectPresentation,
   isOwnProjectPluginButtonId,
   resetProjectToolbar,
+  setProjectFeaturedLaunchEntry,
+  setProjectLauncherGroupOrder,
   setProjectPluginButtonPromoted,
   setProjectPresentationLevel,
   setProjectToolbarEnabled,
 } from "../../services/projectPresentation/profileStore.js";
+import { getAllPluginLaunchEntries } from "../../../shared/config/pluginLaunchEntryRegistry.js";
+import {
+  featuredRefForLaunchEntry,
+  isFeaturedLaunchEntryRef,
+} from "../../../shared/config/launcherArrangement.js";
 import { getToolbarButtonConfig } from "../../../shared/config/toolbarButtonRegistry.js";
 import { projectIdFromPluginInstanceKey } from "../../../shared/types/plugin.js";
 import { readPresentationSuggestion } from "../../services/projectPresentation/repoSuggestion.js";
@@ -57,6 +64,8 @@ function snapshotOf(
     suggestionAnswer: answerFor(stored, suggestion),
     useProjectToolbar: stored.useProjectToolbar,
     promotedPluginButtons: stored.promotedPluginButtons,
+    launcherGroupOrder: stored.launcherGroupOrder,
+    featuredLaunchEntry: stored.featuredLaunchEntry,
     revision: stored.revision,
   };
 }
@@ -169,6 +178,42 @@ async function handleResetToolbar(ctx: IpcContext): Promise<ProjectPresentationS
   return publish(snapshotOf(projectId, await readSuggestion(projectId)));
 }
 
+async function handleSetLauncherGroupOrder(
+  ctx: IpcContext,
+  order: string[]
+): Promise<ProjectPresentationSnapshot> {
+  const projectId = requireProjectId(ctx);
+  setProjectLauncherGroupOrder(projectId, order);
+  return publish(snapshotOf(projectId, await readSuggestion(projectId)));
+}
+
+/**
+ * Featuring is checked against the live registry: the entry has to be
+ * registered right now by a plugin loaded for the sender's own project, so an
+ * installed plugin's entry is never featured from here. Clearing needs
+ * neither, so an entry whose plugin has gone can still be let go.
+ */
+async function handleSetFeaturedLaunchEntry(
+  ctx: IpcContext,
+  ref: string | null
+): Promise<ProjectPresentationSnapshot> {
+  const projectId = requireProjectId(ctx);
+  if (ref !== null) {
+    if (
+      !isFeaturedLaunchEntryRef(ref) ||
+      !getAllPluginLaunchEntries().some(
+        (entry) => featuredRefForLaunchEntry(entry, projectId) === ref
+      )
+    ) {
+      throw new Error(
+        "project presentation: only this project's own plugin entries can be featured"
+      );
+    }
+  }
+  setProjectFeaturedLaunchEntry(projectId, ref);
+  return publish(snapshotOf(projectId, await readSuggestion(projectId)));
+}
+
 export const projectPresentationNamespace = defineIpcNamespace({
   name: "projectPresentation",
   ops: {
@@ -194,6 +239,16 @@ export const projectPresentationNamespace = defineIpcNamespace({
     resetToolbar: op(PROJECT_PRESENTATION_METHOD_CHANNELS.resetToolbar, handleResetToolbar, {
       withContext: true,
     }),
+    setLauncherGroupOrder: op(
+      PROJECT_PRESENTATION_METHOD_CHANNELS.setLauncherGroupOrder,
+      handleSetLauncherGroupOrder,
+      { withContext: true }
+    ),
+    setFeaturedLaunchEntry: op(
+      PROJECT_PRESENTATION_METHOD_CHANNELS.setFeaturedLaunchEntry,
+      handleSetFeaturedLaunchEntry,
+      { withContext: true }
+    ),
   },
 });
 

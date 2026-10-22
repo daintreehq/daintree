@@ -6,6 +6,7 @@ import type { ProjectPresentationSnapshot } from "@shared/types/ipc/projectPrese
 import { resolvePresentation, type PresentationLevels } from "@shared/config/presentationProfile";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useProjectStore } from "@/store/projectStore";
+import { usePluginLaunchEntriesStore } from "@/store/pluginLaunchEntriesStore";
 import {
   _resetProjectPresentationStoreForTest,
   useProjectPresentationStore,
@@ -117,6 +118,15 @@ describe("suggestedChanges", () => {
     ).toEqual([]);
   });
 
+  it("names a featured launcher entry beside the levels", () => {
+    expect(
+      describeChanges([
+        { feature: "launcherAgents", level: "demoted" },
+        { feature: "featuredLaunchEntry", entry: "acme.notes.board", label: "Open board" },
+      ])
+    ).toBe("Launcher agents demoted, Open board featured in the launcher");
+  });
+
   it("calls quiet git detail by its own name", () => {
     expect(describeChanges([{ feature: "gitDetail", level: "demoted" }])).toBe("Git detail quiet");
   });
@@ -135,6 +145,46 @@ describe("ProjectPresentationNotice", () => {
     adopt({ suggestion: { levels: { gitDetail: "demoted" }, hash: HASH } });
     renderNotice();
     expect(screen.getByText("This repository suggests quieting git detail")).not.toBeNull();
+  });
+
+  it("asks about a suggestion that only features a launcher entry, naming it (#13791)", () => {
+    adopt({
+      suggestion: { levels: {}, featuredLaunchEntry: "acme.notes.board", hash: HASH },
+    });
+    renderNotice();
+    // Its plugin is not loaded, so the entry goes by its reference.
+    expect(
+      screen.getByText("This repository suggests featuring acme.notes.board in the launcher")
+    ).not.toBeNull();
+
+    act(() => {
+      usePluginLaunchEntriesStore.setState({
+        entries: [
+          {
+            id: `project__${PROJECT}__acme.notes.board`,
+            pluginId: `project__${PROJECT}__acme.notes`,
+            pluginName: "Notes",
+            label: "Open board",
+            iconId: "plus",
+            priority: 3,
+            target: { type: "command", actionId: `project__${PROJECT}__acme.notes.board` },
+          },
+        ],
+      });
+    });
+    expect(
+      screen.getByText("This repository suggests featuring Open board in the launcher")
+    ).not.toBeNull();
+    act(() => usePluginLaunchEntriesStore.setState({ entries: [] }));
+  });
+
+  it("asks nothing about a featured entry the project already features", () => {
+    adopt({
+      featuredLaunchEntry: "acme.notes.board",
+      suggestion: { levels: {}, featuredLaunchEntry: "acme.notes.board", hash: HASH },
+    });
+    renderNotice();
+    expect(screen.queryByText(/suggests featuring/)).toBeNull();
   });
 
   it("asks nothing when the user already has what the repository suggests", () => {

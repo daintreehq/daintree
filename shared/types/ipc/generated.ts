@@ -2143,6 +2143,14 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("./projectPresentation.js").ProjectPresentationSnapshot;
   };
+  "project-presentation:set-featured-launch-entry": {
+    args: [ref: string | null];
+    result: import("./projectPresentation.js").ProjectPresentationSnapshot;
+  };
+  "project-presentation:set-launcher-group-order": {
+    args: [order: string[]];
+    result: import("./projectPresentation.js").ProjectPresentationSnapshot;
+  };
   "project-presentation:set-level": {
     args: [
       feature:
@@ -2154,7 +2162,9 @@ export interface GeneratedIpcInvokeMap {
         | "browser"
         | "devServer"
         | "branchChip"
-        | "gitDetail",
+        | "gitDetail"
+        | "launcherAgents"
+        | "launcherPanels",
       level: "hidden" | "shown" | "demoted" | null,
     ];
     result: import("./projectPresentation.js").ProjectPresentationSnapshot;

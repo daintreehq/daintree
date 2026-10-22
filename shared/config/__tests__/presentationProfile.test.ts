@@ -7,6 +7,7 @@ import {
   hasProjectToolbarOverrides,
   isProjectToolbarActive,
   isToolbarPresentationFeature,
+  isLauncherPresentationFeature,
   defaultPresentationLevel,
   isLevelAllowed,
   isPresentationFeatureAvailable,
@@ -183,5 +184,41 @@ describe("buildPresentationWhenContext", () => {
     expect(context.presentationDevServer).toBe("demoted");
     expect(context.presentationCopyTree).toBe("shown");
     expect(context.presentationGitDetail).toBe("demoted");
+  });
+});
+
+describe("launcher features (#13791)", () => {
+  it("demote a launcher group but never hide one, and stay off the toolbar", () => {
+    for (const id of ["launcherAgents", "launcherPanels"] as const) {
+      expect(isLauncherPresentationFeature(id)).toBe(true);
+      expect(isToolbarPresentationFeature(id)).toBe(false);
+      expect(isLevelAllowed(id, "demoted")).toBe(true);
+      expect(isLevelAllowed(id, "hidden")).toBe(false);
+      expect(defaultPresentationLevel(id, { gitBacked: false })).toBe("shown");
+    }
+    expect(isLauncherPresentationFeature("copyTree")).toBe(false);
+    expect(
+      parsePresentationLevels({ launcherAgents: "hidden", launcherPanels: "demoted" })
+    ).toEqual({ launcherPanels: "demoted" });
+  });
+
+  it("don't turn the project's toolbar on, and hold while it is off", () => {
+    const profile = {
+      levels: { launcherAgents: "demoted" } as const,
+      useProjectToolbar: null,
+      promotedPluginButtons: [],
+    };
+    expect(hasProjectToolbarOverrides(profile)).toBe(false);
+    expect(isProjectToolbarActive(profile)).toBe(false);
+    const off = resolvePresentation(profile.levels, { gitBacked: false }, { toolbar: false });
+    expect(off.launcherAgents).toBe("demoted");
+  });
+
+  it("publish their levels as when clause keys", () => {
+    const context = buildPresentationWhenContext(
+      resolvePresentation({ launcherPanels: "demoted" }, { gitBacked: true })
+    );
+    expect(context.presentationLauncherAgents).toBe("shown");
+    expect(context.presentationLauncherPanels).toBe("demoted");
   });
 });

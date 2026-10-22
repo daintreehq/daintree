@@ -1313,6 +1313,8 @@ export const CHANNELS = {
   PROJECT_PRESENTATION_SET_PLUGIN_BUTTON_PROMOTED:
     "project-presentation:set-plugin-button-promoted",
   PROJECT_PRESENTATION_RESET_TOOLBAR: "project-presentation:reset-toolbar",
+  PROJECT_PRESENTATION_SET_LAUNCHER_GROUP_ORDER: "project-presentation:set-launcher-group-order",
+  PROJECT_PRESENTATION_SET_FEATURED_LAUNCH_ENTRY: "project-presentation:set-featured-launch-entry",
   PROJECT_PRESENTATION_CHANGED: "project-presentation:changed",
 
   // The sender project's own theme (#13833)

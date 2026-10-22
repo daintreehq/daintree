@@ -357,6 +357,8 @@ describe("leaf preload namespace bindings", () => {
       await bindings.setToolbarEnabled(false);
       await bindings.setPluginButtonPromoted("p.run", true);
       await bindings.resetToolbar();
+      await bindings.setLauncherGroupOrder(["recipes"]);
+      await bindings.setFeaturedLaunchEntry("acme.records.new");
 
       expect(invoke.mock.calls).toEqual([
         ["project-presentation:get"],
@@ -365,6 +367,8 @@ describe("leaf preload namespace bindings", () => {
         ["project-presentation:set-toolbar-enabled", false],
         ["project-presentation:set-plugin-button-promoted", "p.run", true],
         ["project-presentation:reset-toolbar"],
+        ["project-presentation:set-launcher-group-order", ["recipes"]],
+        ["project-presentation:set-featured-launch-entry", "acme.records.new"],
       ]);
     });
   });

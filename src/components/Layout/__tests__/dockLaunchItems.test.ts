@@ -79,7 +79,10 @@ import {
   getDockLaunchRowItem,
   insertExpandedPresetRows,
   rowHasPresets,
+  spliceRecentRows,
+  buildRecentBrowseRows,
   RECENCY_BAND_CAP,
+  MORE_ROW_KEY,
   type DockLaunchAgent,
   type DockLaunchItem,
   type DockLaunchPanelItem,
@@ -402,6 +405,49 @@ describe("buildDockLaunchModel — browse rows", () => {
     expect(claudeRows).toHaveLength(1);
     expect(claudeRows[0]!.band).toBe("recent");
     expect(model.browseRows[0]).toBe(claudeRows[0]);
+  });
+
+  it("moves recent agents into More with the rest of the agents when the project demotes them", () => {
+    const model = build({
+      mruEntries: mru,
+      arrangement: {
+        projectId: "p",
+        demoted: { agents: true, panels: false },
+        groupOrder: [],
+        featuredEntry: null,
+      },
+    });
+    expect(model.browseRows.some((row) => row.band === "recent" || row.band === "agents")).toBe(
+      false
+    );
+    expect(model.moreRows[0]!.band).toBe("recent");
+    expect(model.browseRows.find((row) => row.rowKey === MORE_ROW_KEY)).toMatchObject({
+      contents: "Agents",
+    });
+    // Demoted, never removed: search still has every agent.
+    expect(model.searchItems.filter((item) => item.category === "agent")).toHaveLength(
+      AGENTS.length
+    );
+  });
+
+  it("splices recent rows back at the head of the agents, wherever the agents sit", () => {
+    const stable = build({ recipes: [recipe({ id: "r-1", name: "Deploy" })] });
+    const agentItems = stable.searchItems.filter(
+      (item): item is Extract<DockLaunchItem, { category: "agent" }> => item.category === "agent"
+    );
+    const recentRows = buildRecentBrowseRows(agentItems, ["claude"]);
+    const moved = [
+      ...stable.browseRows.filter((row) => row.band === "recipes"),
+      ...stable.browseRows.filter((row) => row.band !== "recipes"),
+    ];
+    const spliced = spliceRecentRows(moved, recentRows);
+    const firstAgent = spliced.findIndex((row) => row.band === "recent");
+    expect(spliced[firstAgent - 1]!.band).toBe("recipes");
+    expect(spliced.filter((row) => getDockLaunchRowItem(row)?.key === "agent:claude")).toHaveLength(
+      1
+    );
+    const noAgents = stable.browseRows.filter((row) => row.band === "recipes");
+    expect(spliceRecentRows(noAgents, recentRows)).toEqual(noAgents);
   });
 
   it("gives every row a unique key so selection can never light two at once", () => {

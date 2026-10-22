@@ -70,11 +70,24 @@ vi.mock("@/services/ActionService", () => ({
 
 vi.mock("@/utils/recipeNotify", () => ({ notifyRecipeSpawnFailures: vi.fn() }));
 
+// The project's launcher arrangement (#13791), stock unless a test sets one.
+let mockLauncherArrangement: LauncherArrangement = {
+  projectId: null,
+  demoted: { agents: false, panels: false },
+  groupOrder: [],
+  featuredEntry: null,
+};
+vi.mock("@/hooks/useResolvedPresentation", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/hooks/useResolvedPresentation")>()),
+  useLauncherArrangement: () => mockLauncherArrangement,
+}));
+
 vi.mock("@/components/PanelPalette/PanelKindIcon", () => ({
   PanelKindIcon: ({ iconId }: { iconId: string }) => <span data-icon={iconId} />,
 }));
 
 import { DockLaunchMenuItems, type DockLaunchAgent } from "../DockLaunchMenuItems";
+import type { LauncherArrangement } from "@shared/config/launcherArrangement";
 import {
   resetPluginLaunchEntriesStoreForTests,
   usePluginLaunchEntriesStore,
@@ -177,6 +190,47 @@ describe("DockLaunchMenuItems", () => {
       expect(setGroupHidden).toHaveBeenCalledWith("acme.records", true);
     } finally {
       resetPluginLaunchEntriesStoreForTests();
+    }
+  });
+
+  it("follows the project's arrangement, with demoted groups last and still listed (#13791)", () => {
+    const NOTES = "project__proj-1__acme.notes";
+    usePluginLaunchEntriesStore.setState({
+      entries: [
+        {
+          id: `${NOTES}.board`,
+          pluginId: NOTES,
+          pluginName: "Notes",
+          label: "Open board",
+          iconId: "plus",
+          priority: 3,
+          target: { type: "command", actionId: `${NOTES}.board` },
+        },
+      ],
+    });
+    mockLauncherArrangement = {
+      projectId: "proj-1",
+      demoted: { agents: true, panels: false },
+      groupOrder: [],
+      featuredEntry: null,
+    };
+    try {
+      const { getAllByTestId, getByText } = renderItems();
+      expect(getAllByTestId("label").map((el) => el.textContent)).toEqual([
+        "Notes",
+        "Open in dock",
+        "Open in grid",
+        "Recipes",
+        "Agents",
+      ]);
+      expect(getByText("Claude")).toBeTruthy();
+    } finally {
+      resetPluginLaunchEntriesStoreForTests();
+      mockLauncherArrangement = {
+        ...mockLauncherArrangement,
+        projectId: null,
+        demoted: { agents: false, panels: false },
+      };
     }
   });
 

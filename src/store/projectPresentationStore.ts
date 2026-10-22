@@ -27,7 +27,9 @@ export type PresentationFailedSave =
   | { kind: "answer"; hash: string; answer: PresentationSuggestionAnswer }
   | { kind: "toolbarEnabled"; enabled: boolean }
   | { kind: "pluginPromotion"; buttonId: string; promoted: boolean }
-  | { kind: "resetToolbar" };
+  | { kind: "resetToolbar" }
+  | { kind: "launcherGroupOrder"; order: string[] }
+  | { kind: "featuredLaunchEntry"; ref: string | null };
 
 interface ProjectPresentationState {
   levels: PresentationLevels;
@@ -37,6 +39,10 @@ interface ProjectPresentationState {
   useProjectToolbar: boolean | null;
   /** This project's own plugin buttons its profile promotes onto the toolbar. */
   promotedPluginButtons: string[];
+  /** The user's order for the launcher's groups (#13791); empty for never set. */
+  launcherGroupOrder: string[];
+  /** The project plugin entry the launcher preselects (#13791), or `null`. */
+  featuredLaunchEntry: string | null;
   /** Main's write count for the profile held here; an older snapshot is dropped. */
   revision: number;
   /**
@@ -65,6 +71,9 @@ interface ProjectPresentationState {
   setToolbarEnabled: (enabled: boolean) => Promise<boolean>;
   setPluginButtonPromoted: (buttonId: string, promoted: boolean) => Promise<boolean>;
   resetToolbar: () => Promise<boolean>;
+  /** `[]` hands the launcher's order back to the profile. */
+  setLauncherGroupOrder: (order: string[]) => Promise<boolean>;
+  setFeaturedLaunchEntry: (ref: string | null) => Promise<boolean>;
   /** Make the last failed write again. */
   retryFailedSave: () => void;
   dismissFailedSave: () => void;
@@ -78,6 +87,7 @@ interface ProjectPresentationState {
 }
 
 const NO_PROMOTED: string[] = [];
+const NO_ORDER: string[] = [];
 
 let initialized = false;
 let unsubscribe: (() => void) | null = null;
@@ -143,6 +153,9 @@ export const useProjectPresentationStore = create<ProjectPresentationState>((set
       // `??`: a snapshot from a main that predates #13783 carries neither.
       useProjectToolbar: snapshot.useProjectToolbar ?? null,
       promotedPluginButtons: snapshot.promotedPluginButtons ?? NO_PROMOTED,
+      // Nor does one from before #13791 carry these.
+      launcherGroupOrder: snapshot.launcherGroupOrder ?? NO_ORDER,
+      featuredLaunchEntry: snapshot.featuredLaunchEntry ?? null,
       revision: snapshot.revision,
       projectId: snapshot.projectId,
       loaded: true,
@@ -231,6 +244,8 @@ export const useProjectPresentationStore = create<ProjectPresentationState>((set
     suggestionAnswer: null,
     useProjectToolbar: null,
     promotedPluginButtons: NO_PROMOTED,
+    launcherGroupOrder: NO_ORDER,
+    featuredLaunchEntry: null,
     revision: 0,
     loaded: false,
     loadFailed: false,
@@ -276,6 +291,16 @@ export const useProjectPresentationStore = create<ProjectPresentationState>((set
       if (typeof api?.resetToolbar !== "function") return false;
       return write({ kind: "resetToolbar" }, () => api.resetToolbar());
     },
+    setLauncherGroupOrder: async (order) => {
+      const api = window.electron?.projectPresentation;
+      if (typeof api?.setLauncherGroupOrder !== "function") return false;
+      return write({ kind: "launcherGroupOrder", order }, () => api.setLauncherGroupOrder(order));
+    },
+    setFeaturedLaunchEntry: async (ref) => {
+      const api = window.electron?.projectPresentation;
+      if (typeof api?.setFeaturedLaunchEntry !== "function") return false;
+      return write({ kind: "featuredLaunchEntry", ref }, () => api.setFeaturedLaunchEntry(ref));
+    },
     retryFailedSave: () => {
       const failed = get().failedSave;
       if (failed === null) return;
@@ -295,6 +320,12 @@ export const useProjectPresentationStore = create<ProjectPresentationState>((set
           return;
         case "resetToolbar":
           void state.resetToolbar();
+          return;
+        case "launcherGroupOrder":
+          void state.setLauncherGroupOrder(failed.order);
+          return;
+        case "featuredLaunchEntry":
+          void state.setFeaturedLaunchEntry(failed.ref);
           return;
       }
     },
@@ -345,6 +376,8 @@ export function _resetProjectPresentationStoreForTest(): void {
     suggestionAnswer: null,
     useProjectToolbar: null,
     promotedPluginButtons: NO_PROMOTED,
+    launcherGroupOrder: NO_ORDER,
+    featuredLaunchEntry: null,
     revision: 0,
     loaded: false,
     loadFailed: false,

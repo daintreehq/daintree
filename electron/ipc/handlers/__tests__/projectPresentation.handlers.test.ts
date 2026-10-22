@@ -59,6 +59,10 @@ import {
   unregisterPluginToolbarButtons,
 } from "../../../../shared/config/toolbarButtonRegistry.js";
 import type { PluginToolbarButtonId } from "../../../../shared/types/toolbar.js";
+import {
+  registerPluginLaunchEntry,
+  unregisterPluginLaunchEntries,
+} from "../../../../shared/config/pluginLaunchEntryRegistry.js";
 import { registerProjectPresentationHandlers } from "../projectPresentation.js";
 import { hashPresentationLevels } from "../../../services/projectPresentation/repoSuggestion.js";
 import type { ProjectPresentationSnapshot } from "../../../../shared/types/ipc/projectPresentation.js";
@@ -108,6 +112,8 @@ describe("project-presentation:get", () => {
       suggestionAnswer: null,
       useProjectToolbar: null,
       promotedPluginButtons: [],
+      launcherGroupOrder: [],
+      featuredLaunchEntry: null,
       revision: 0,
     });
   });
@@ -280,5 +286,73 @@ describe("project toolbar ops (#13783)", () => {
     )) as ProjectPresentationSnapshot;
     expect(reset.levels).toEqual({});
     expect(reset.useProjectToolbar).toBeNull();
+  });
+});
+
+describe("launcher ops (#13791)", () => {
+  const OWN_PLUGIN = `project__${PROJECT_A}__acme.records`;
+  const OTHER_PLUGIN = `project__${"b".repeat(64)}__acme.records`;
+
+  function register(pluginId: string, entryId: string) {
+    registerPluginLaunchEntry({
+      id: `${pluginId}.${entryId}`,
+      pluginId,
+      pluginName: "Records",
+      label: "New record",
+      iconId: "plus",
+      priority: 3,
+      target: { type: "command", actionId: `${pluginId}.new` },
+    });
+  }
+
+  afterEach(() => {
+    for (const pluginId of [OWN_PLUGIN, OTHER_PLUGIN, "acme.records"]) {
+      unregisterPluginLaunchEntries(pluginId);
+    }
+  });
+
+  it("features a registered entry of the sender's own project plugin", async () => {
+    register(OWN_PLUGIN, "new-record");
+    const snapshot = (await invoke(
+      "project-presentation:set-featured-launch-entry",
+      "acme.records.new-record"
+    )) as ProjectPresentationSnapshot;
+    expect(snapshot.featuredLaunchEntry).toBe("acme.records.new-record");
+    expect(broadcastMock).toHaveBeenCalledWith(
+      PROJECT_A,
+      CHANNELS.PROJECT_PRESENTATION_CHANGED,
+      snapshot
+    );
+  });
+
+  it("refuses an installed plugin's entry, another project's, or one not registered", async () => {
+    register("acme.records", "new-record");
+    register(OTHER_PLUGIN, "new-record");
+    await expect(
+      invoke("project-presentation:set-featured-launch-entry", "acme.records.new-record")
+    ).rejects.toThrow(/own plugin entries/);
+    expect(broadcastMock).not.toHaveBeenCalled();
+  });
+
+  it("lets a featured entry go after its plugin has unloaded", async () => {
+    register(OWN_PLUGIN, "new-record");
+    await invoke("project-presentation:set-featured-launch-entry", "acme.records.new-record");
+    unregisterPluginLaunchEntries(OWN_PLUGIN);
+    const snapshot = (await invoke(
+      "project-presentation:set-featured-launch-entry",
+      null
+    )) as ProjectPresentationSnapshot;
+    expect(snapshot.featuredLaunchEntry).toBeNull();
+  });
+
+  it("stores the sender's group order and refuses a malformed one", async () => {
+    const snapshot = (await invoke("project-presentation:set-launcher-group-order", [
+      "recipes",
+      "agents",
+    ])) as ProjectPresentationSnapshot;
+    expect(snapshot.launcherGroupOrder).toEqual(["recipes", "agents"]);
+    await expect(
+      invoke("project-presentation:set-launcher-group-order", "recipes")
+    ).rejects.toThrow();
   });
 });

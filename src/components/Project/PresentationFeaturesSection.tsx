@@ -16,6 +16,7 @@ import {
   PRESENTATION_FEATURE_IDS,
   PRESENTATION_FEATURES,
   defaultPresentationLevel,
+  isLauncherPresentationFeature,
   isPresentationFeatureAvailable,
   type PresentationFeatureDefinition,
   type PresentationFeatureId,
@@ -78,7 +79,8 @@ export function PresentationFeaturesSection({ isOpen }: { isOpen: boolean }) {
       description="How much room each built-in surface takes in this project. Demoted items move out of the way but stay one click away, and hidden ones keep their commands in the palette."
     >
       <SettingsGroup>
-        {PRESENTATION_FEATURE_IDS.map((id) => {
+        {/* The launcher's own features sit in its section below. */}
+        {PRESENTATION_FEATURE_IDS.filter((id) => !isLauncherPresentationFeature(id)).map((id) => {
           const feature = PRESENTATION_FEATURES[id];
           const fallback = defaultPresentationLevel(id, { gitBacked });
           const available = isPresentationFeatureAvailable(id, { gitBacked });
@@ -138,7 +140,8 @@ export function PresentationFeaturesSection({ isOpen }: { isOpen: boolean }) {
             </InlineError>
           </SettingsEmptyRow>
         )}
-        {(failedSave?.kind === "level" || failedSave?.kind === "answer") && (
+        {((failedSave?.kind === "level" && !isLauncherPresentationFeature(failedSave.feature)) ||
+          failedSave?.kind === "answer") && (
           <SettingsEmptyRow
             action={
               <Button variant="outline" size="sm" onClick={retryFailedSave}>

@@ -10,6 +10,10 @@ import type { ToolbarButtonId } from "../types/toolbar.js";
  * Project settings, the plugin manager and the launcher are never features,
  * so no profile, the user's or a repository's, can quiet them.
  *
+ * Launcher features (#13791) are groups inside the launcher, never the
+ * launcher itself, and they only ever demote: a demoted group folds into the
+ * launcher's collapsed More group, and search still finds every entry in it.
+ *
  * Toolbar features (#13783) only ever demote: a demoted button moves into the
  * toolbar's `…` overflow, where it still launches what it always did. The
  * toolbar buttons that carry state or reach the rest of the app — the app
@@ -68,6 +72,8 @@ export interface PresentationFeatureDefinition {
    * as the app-wide toolbar does.
    */
   toolbar?: ToolbarButtonId | true;
+  /** The launcher group this feature places (#13791). */
+  launcherGroup?: "agents" | "panels";
 }
 
 const DEMOTABLE: readonly PresentationLevel[] = ["shown", "demoted"];
@@ -164,6 +170,25 @@ export const PRESENTATION_FEATURES = {
     defaultLevel: ({ gitBacked }) => (gitBacked ? "shown" : "hidden"),
     requiresRepository: true,
   },
+  launcherAgents: {
+    label: "Launcher agents",
+    noun: "the launcher's agents",
+    description: "The launcher's agent group; demoted, it folds into the launcher's More group",
+    levels: DEMOTABLE,
+    contextKey: "presentationLauncherAgents",
+    defaultLevel: shownByDefault,
+    launcherGroup: "agents",
+  },
+  launcherPanels: {
+    label: "Launcher panels",
+    noun: "the launcher's panels",
+    description:
+      "The launcher's built-in panel groups; demoted, they fold into the launcher's More group",
+    levels: DEMOTABLE,
+    contextKey: "presentationLauncherPanels",
+    defaultLevel: shownByDefault,
+    launcherGroup: "panels",
+  },
 } as const satisfies Record<string, PresentationFeatureDefinition>;
 
 export type PresentationFeatureId = keyof typeof PRESENTATION_FEATURES;
@@ -230,6 +255,12 @@ export function isPresentationFeatureAvailable(
 export function isToolbarPresentationFeature(feature: PresentationFeatureId): boolean {
   const definition: PresentationFeatureDefinition = PRESENTATION_FEATURES[feature];
   return definition.toolbar !== undefined;
+}
+
+/** Whether `feature` places a launcher group (#13791). */
+export function isLauncherPresentationFeature(feature: PresentationFeatureId): boolean {
+  const definition: PresentationFeatureDefinition = PRESENTATION_FEATURES[feature];
+  return definition.launcherGroup !== undefined;
 }
 
 /** The toolbar features that place a button, keyed by that button's id. */

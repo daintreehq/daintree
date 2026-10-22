@@ -42,10 +42,14 @@ vi.mock("@/config/agents", () => ({
   isRegisteredAgent: (id: string) => knownAgents.has(id),
 }));
 
+import type { LauncherArrangement } from "@shared/config/launcherArrangement";
 import {
   activateDockLaunchCue,
   activateDockLaunchItem,
   buildDockLaunchModel,
+  getDockLaunchRowPluginGroup,
+  insertMoreRows,
+  MORE_ROW_KEY,
   buildEmptyCanvasPluginGroups,
   dockLaunchBandLabel,
   type ActivateDockLaunchItemContext,
@@ -463,5 +467,125 @@ describe("plugin launch entries — pins", () => {
       "New record… (Records)"
     );
     expect(resolveLauncherItemMetadata(pinned, [], null, [])).toBeUndefined();
+  });
+});
+
+describe("project arrangement (#13791)", () => {
+  // An installed plugin whose name sorts first, so stock order puts it first.
+  const ALPHA = "acme.alpha";
+  const entries = [
+    entry({
+      id: `${ALPHA}.open`,
+      pluginId: ALPHA,
+      pluginName: "Alpha",
+      target: { type: "command", actionId: `${ALPHA}.open` },
+    }),
+    entry({
+      id: `${NOTES}.board`,
+      pluginId: NOTES,
+      pluginName: "Notes",
+      target: { type: "panel", panelKindId: NOTES_KIND },
+    }),
+  ];
+  const arrangement = (over: Partial<LauncherArrangement> = {}): LauncherArrangement => ({
+    projectId: "proj-1",
+    demoted: { agents: false, panels: false },
+    groupOrder: [],
+    featuredEntry: null,
+    ...over,
+  });
+  const firstGroupOf = (model: ReturnType<typeof build>) =>
+    model.browseRows.map(getDockLaunchRowPluginGroup).find(Boolean)?.pluginName;
+
+  it("keeps stock order, with no More, until the project arranges it", () => {
+    const model = build({ launchEntries: entries, arrangement: arrangement() });
+    expect(model.browseRows[0]!.band).toBe("dock-panels");
+    expect(firstGroupOf(model)).toBe("Alpha");
+    expect(model.moreRows).toEqual([]);
+    expect(model.browseRows.some((row) => row.rowKey === MORE_ROW_KEY)).toBe(false);
+    expect(model.fixedOrder).toBe(false);
+  });
+
+  it("leads with the project's own plugin and folds demoted panels into More, still searchable", () => {
+    const model = build({
+      launchEntries: entries,
+      arrangement: arrangement({ demoted: { agents: false, panels: true } }),
+    });
+    expect(getDockLaunchRowPluginGroup(model.browseRows[0]!)?.pluginId).toBe(NOTES);
+    expect(model.browseRows.some((row) => row.band === "dock-panels")).toBe(false);
+    expect(model.moreRows.length).toBeGreaterThan(0);
+    expect(
+      model.moreRows.every((row) => row.band === "dock-panels" || row.band === "grid-panels")
+    ).toBe(true);
+    // More is the last body row, and the footer still follows it.
+    const more = model.browseRows.findIndex((row) => row.rowKey === MORE_ROW_KEY);
+    expect(model.browseRows.slice(more + 1).map((row) => row.rowKey)).toEqual([
+      "manage-agents",
+      "customize-toolbar",
+    ]);
+    expect(model.browseRows[more]).toMatchObject({ cue: "more", contents: "Panels" });
+    expect(model.searchItems.some((item) => item.category === "panel")).toBe(true);
+    expect(model.fixedOrder).toBe(true);
+  });
+
+  it("lets the user's group order win over the project's lead", () => {
+    const model = build({
+      launchEntries: entries,
+      arrangement: arrangement({
+        demoted: { agents: true, panels: false },
+        groupOrder: [`plugin:${ALPHA}`, "recipes"],
+      }),
+    });
+    expect(firstGroupOf(model)).toBe("Alpha");
+    expect(model.groupOrder.slice(0, 3)).toEqual([`plugin:${ALPHA}`, "recipes", `plugin:${NOTES}`]);
+  });
+
+  it("resolves the featured entry to its row only while it is listed", () => {
+    const featured = arrangement({ featuredEntry: "acme.notes.board" });
+    expect(build({ launchEntries: entries, arrangement: featured }).featuredRowKey).toBe(
+      `plugin-entry:${NOTES}.board`
+    );
+    // Hidden, or named for an installed plugin's entry: nothing is featured.
+    expect(
+      build({ launchEntries: entries, arrangement: featured, hiddenPluginIds: [NOTES] })
+        .featuredRowKey
+    ).toBeNull();
+    expect(
+      build({
+        launchEntries: entries,
+        arrangement: arrangement({ featuredEntry: "acme.alpha.open" }),
+      }).featuredRowKey
+    ).toBeNull();
+  });
+
+  it("features nothing while the featured entry cannot launch", () => {
+    const unavailable = [
+      ...entries,
+      entry({
+        id: `${NOTES}.ask`,
+        pluginId: NOTES,
+        pluginName: "Notes",
+        target: { type: "agent", agentId: "not-installed", prompt: "Summarise the board" },
+      }),
+    ];
+    const model = build({
+      launchEntries: unavailable,
+      arrangement: arrangement({ featuredEntry: "acme.notes.ask" }),
+    });
+    const notes = model.pluginGroups.find((group) => group.pluginId === NOTES);
+    expect(notes?.items.some((item) => item.disabled !== undefined)).toBe(true);
+    expect(model.featuredRowKey).toBeNull();
+  });
+
+  it("opens More in place, under its row", () => {
+    const model = build({
+      launchEntries: entries,
+      arrangement: arrangement({ demoted: { agents: false, panels: true } }),
+    });
+    expect(insertMoreRows(model.browseRows, model.moreRows, false)).toEqual(model.browseRows);
+    const open = insertMoreRows(model.browseRows, model.moreRows, true);
+    const more = open.findIndex((row) => row.rowKey === MORE_ROW_KEY);
+    expect(open.slice(more + 1, more + 1 + model.moreRows.length)).toEqual(model.moreRows);
+    expect(open.slice(-2).map((row) => row.rowKey)).toEqual(["manage-agents", "customize-toolbar"]);
   });
 });

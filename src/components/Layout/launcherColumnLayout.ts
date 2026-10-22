@@ -123,10 +123,13 @@ function scoreBreak(order: Section[], breakAt: number): number | null {
 /**
  * Lay the browse rows out. With `twoColumns` false (the popover has folded to
  * one column) the model's order stands and everything sits in the first column.
+ * With `fixedOrder` (the project or the user has ordered the groups, #13791)
+ * the order stands too, and only the break between the columns is chosen.
  */
 export function layoutLauncherColumns(
   rows: ReadonlyArray<DockLaunchRow>,
-  twoColumns: boolean
+  twoColumns: boolean,
+  { fixedOrder = false }: { fixedOrder?: boolean } = {}
 ): LauncherColumnLayout {
   const footer = rows.filter((row) => row.band === "actions");
   const body = rows.filter((row) => row.band !== "actions");
@@ -146,12 +149,14 @@ export function layoutLauncherColumns(
   const rest = lead ? sections.slice(1) : sections;
   // The panel sections keep their own relative order — dock before grid is how
   // both surfaces read — so a reorder can only move whole groups around them.
-  const orders = permutations(rest)
-    .filter((tail) => {
-      const panels = tail.filter((section) => PANEL_HEADINGS.has(section.heading));
-      return panels.every((section, i) => i === 0 || panels[i - 1]!.natural < section.natural);
-    })
-    .map((tail) => (lead ? [lead, ...tail] : tail));
+  const orders = fixedOrder
+    ? [sections]
+    : permutations(rest)
+        .filter((tail) => {
+          const panels = tail.filter((section) => PANEL_HEADINGS.has(section.heading));
+          return panels.every((section, i) => i === 0 || panels[i - 1]!.natural < section.natural);
+        })
+        .map((tail) => (lead ? [lead, ...tail] : tail));
 
   let best: Candidate | null = null;
   for (const order of orders) {
