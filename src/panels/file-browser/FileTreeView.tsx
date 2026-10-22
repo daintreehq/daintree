@@ -843,7 +843,7 @@ function FileTreeRow({ row, isSelected, isOpen, context }: FileTreeRowProps) {
         // Before the git marker, taking the trailing edge's `ml-auto`, so both
         // stay in their own column. The badge itself is presentational; the
         // provider's words ride the row's description.
-        <span className="ml-auto flex shrink-0 items-center">
+        <span className="ml-auto flex shrink-0 items-center" title={decorationView.label}>
           <span id={decorationMarkerId} className="sr-only">
             {decorationView.label}
           </span>
