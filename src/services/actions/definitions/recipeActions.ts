@@ -4,6 +4,7 @@ import { z } from "zod";
 import type { ActionContext } from "@shared/types/actions";
 import type { TerminalRecipe } from "@shared/types";
 import { isPluginRecipe } from "@shared/types/project";
+import { pluginManifestIdFromInstanceKey } from "@shared/types/plugin";
 import { isInRepoRecipeId } from "@shared/utils/recipeFilename";
 import { MAX_TERMINALS_PER_RECIPE } from "@shared/utils/recipeSanitizer";
 import { useRecipeStore } from "@/store/recipeStore";
@@ -121,7 +122,11 @@ export function registerRecipeActions(actions: ActionRegistry, _callbacks: Actio
   const describeRecipeOrigin = (
     recipe: TerminalRecipe
   ): { kind: "global" | "project" | "team" | "plugin"; pluginId: string | null } => {
-    if (isPluginRecipe(recipe)) return { kind: "plugin", pluginId: recipe.origin.pluginId };
+    if (isPluginRecipe(recipe)) {
+      // The manifest id, which `plugin.diagnose` takes: a project plugin's
+      // instance key carries a machine-local project id (#12211).
+      return { kind: "plugin", pluginId: pluginManifestIdFromInstanceKey(recipe.origin.pluginId) };
+    }
     if (isInRepoRecipeId(recipe)) return { kind: "team", pluginId: null };
     return { kind: recipe.projectId === undefined ? "global" : "project", pluginId: null };
   };

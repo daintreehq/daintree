@@ -1209,25 +1209,53 @@ async function handleIconsGet(ctx: IpcContext): Promise<PluginCustomIconAsset[]>
   return getPluginCustomIconsForProject(ctx.projectId);
 }
 
-async function handleRecipeRecordUse(recipeId: string, timestamp: number): Promise<TerminalRecipe> {
+/**
+ * A metadata write names its recipe by id, so it gets the same narrowing as
+ * `plugin:recipes-get`: a recipe the sender's project cannot see — another
+ * project's plugin's, or one hidden here — is not found, before the write and
+ * in the recipe handed back after it (#13796).
+ */
+function assertRecipeVisibleToSender(
+  recipe: TerminalRecipe | undefined,
+  recipeId: string,
+  projectId: string | null
+): TerminalRecipe {
+  if (!recipe || selectContributionsForProject([recipe], recipeOwner, projectId).length === 0) {
+    throw new Error(`Plugin recipe ${recipeId} not found`);
+  }
+  return recipe;
+}
+
+async function handleRecipeRecordUse(
+  ctx: IpcContext,
+  recipeId: string,
+  timestamp: number
+): Promise<TerminalRecipe> {
   const service = await getPluginService();
   await service.waitForInit();
   if (!Number.isFinite(timestamp) || timestamp <= 0) {
     throw new Error("timestamp must be a positive finite number");
   }
-  return service.recordPluginRecipeUse(assertQualifiedRecipeId(recipeId), timestamp);
+  const id = assertQualifiedRecipeId(recipeId);
+  const current = service.getPluginRecipes().find((recipe) => recipe.id === id);
+  assertRecipeVisibleToSender(current, id, ctx.projectId);
+  const updated = await service.recordPluginRecipeUse(id, timestamp);
+  return assertRecipeVisibleToSender(updated, id, ctx.projectId);
 }
 
 async function handleRecipeMetadataUpdate(
+  ctx: IpcContext,
   recipeId: string,
   updates: PluginRecipeMetadataPatch
 ): Promise<TerminalRecipe> {
   const service = await getPluginService();
   await service.waitForInit();
-  return service.updatePluginRecipeMetadata(
-    assertQualifiedRecipeId(recipeId),
-    parseRecipeMetadataPatch(updates)
-  );
+  const id = assertQualifiedRecipeId(recipeId);
+  const patch = parseRecipeMetadataPatch(updates);
+  const current = service.getPluginRecipes().find((recipe) => recipe.id === id);
+  assertRecipeVisibleToSender(current, id, ctx.projectId);
+  const updated = await service.updatePluginRecipeMetadata(id, patch);
+  return assertRecipeVisibleToSender(updated, id, ctx.projectId);
 }
 
 /**
@@ -2142,10 +2170,13 @@ export const pluginNamespace = defineIpcNamespace({
       withContext: true,
     }),
     getIcons: op(PLUGIN_METHOD_CHANNELS.getIcons, handleIconsGet, { withContext: true }),
-    recordRecipeUse: op(PLUGIN_METHOD_CHANNELS.recordRecipeUse, handleRecipeRecordUse),
+    recordRecipeUse: op(PLUGIN_METHOD_CHANNELS.recordRecipeUse, handleRecipeRecordUse, {
+      withContext: true,
+    }),
     updateRecipeMetadata: op(
       PLUGIN_METHOD_CHANNELS.updateRecipeMetadata,
-      handleRecipeMetadataUpdate
+      handleRecipeMetadataUpdate,
+      { withContext: true }
     ),
     getForgeProviders: op(PLUGIN_METHOD_CHANNELS.getForgeProviders, handleForgeProvidersGet),
     getDecorations: op(PLUGIN_METHOD_CHANNELS.getDecorations, handleFileDecorationsGet, {

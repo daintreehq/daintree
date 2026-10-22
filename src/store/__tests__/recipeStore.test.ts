@@ -3826,6 +3826,52 @@ describe("recipeStore", () => {
       expect(useRecipeStore.getState().pluginRecipes[0]?.showInEmptyState).toBe(false);
     });
 
+    it("does not bring back a recipe withdrawn while its pin write was in flight (#13796)", async () => {
+      const other = pluginRecipe({
+        id: "acme.other.boot",
+        origin: { kind: "plugin" as const, pluginId: "acme.other", contributionId: "boot" },
+      });
+      useRecipeStore
+        .getState()
+        .setPluginRecipes([pluginRecipe({ showInEmptyState: false }), other]);
+      let rejectWrite: (error: Error) => void = () => {};
+      pluginUpdateMetadataMock.mockReturnValueOnce(
+        new Promise((_, reject) => (rejectWrite = reject))
+      );
+
+      const pending = useRecipeStore
+        .getState()
+        .updateRecipe("acme.tools.deploy", { showInEmptyState: true });
+      // The plugin is switched off mid-write: main pushes a snapshot without it,
+      // and its write then fails because the recipe is gone.
+      useRecipeStore.getState().setPluginRecipes([other]);
+      rejectWrite(new Error("Plugin recipe acme.tools.deploy not found"));
+      await expect(pending).rejects.toThrow(/not found/);
+
+      expect(useRecipeStore.getState().pluginRecipes.map((r) => r.id)).toEqual(["acme.other.boot"]);
+      expect(useRecipeStore.getState().recipes.map((r) => r.id)).not.toContain("acme.tools.deploy");
+    });
+
+    it("names a project plugin by its manifest id in edit and delete refusals (#13796)", async () => {
+      const instanceKey = "project__0123abcd__acme.local";
+      useRecipeStore.getState().setPluginRecipes([
+        pluginRecipe({
+          id: `${instanceKey}.boot`,
+          origin: { kind: "plugin" as const, pluginId: instanceKey, contributionId: "boot" },
+        }),
+      ]);
+      const refusals = await Promise.allSettled([
+        useRecipeStore.getState().updateRecipe(`${instanceKey}.boot`, { name: "Mine now" }),
+        useRecipeStore.getState().deleteRecipe(`${instanceKey}.boot`),
+      ]);
+      for (const refusal of refusals) {
+        expect(refusal.status).toBe("rejected");
+        const message = refusal.status === "rejected" ? String(refusal.reason) : "";
+        expect(message).toContain("the acme.local plugin");
+        expect(message).not.toContain("0123abcd");
+      }
+    });
+
     it("rejects an edit to plugin-owned content", async () => {
       useRecipeStore.getState().setPluginRecipes([pluginRecipe()]);
       await expect(

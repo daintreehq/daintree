@@ -1,5 +1,6 @@
 import type { RecipeTerminal, TerminalRecipe } from "@shared/types";
 import { isInRepoRecipeId } from "@shared/utils/recipeFilename";
+import { pluginManifestIdFromInstanceKey } from "@shared/types/plugin";
 import { pluralize } from "@/lib/pluralize";
 
 /**
@@ -29,7 +30,9 @@ function truncate(value: string): string {
 
 /** Where the recipe came from, so an approver can tell a plugin's from their own. */
 export function recipeOriginLabel(recipe: TerminalRecipe): string {
-  if (recipe.origin?.kind === "plugin") return `from the ${recipe.origin.pluginId} plugin`;
+  if (recipe.origin?.kind === "plugin") {
+    return `from the ${pluginManifestIdFromInstanceKey(recipe.origin.pluginId)} plugin`;
+  }
   if (isInRepoRecipeId(recipe)) return "shared team recipe";
   return recipe.projectId === undefined ? "global recipe" : "project recipe";
 }

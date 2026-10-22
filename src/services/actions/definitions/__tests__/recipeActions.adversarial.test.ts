@@ -110,6 +110,7 @@ function setRecipeState(state: {
     worktreeId?: string;
     terminals?: unknown[];
     showInEmptyState?: boolean;
+    origin?: { kind: "plugin"; pluginId: string; contributionId: string };
   }>;
   isLoading?: boolean;
   currentProjectId?: string | null;
@@ -423,6 +424,26 @@ describe("recipeActions adversarial", () => {
 
     expect(result.recipes).toHaveLength(2);
     expect(result.recipes.find((r) => r.id === "g")?.worktreeId).toBeNull();
+  });
+
+  it("recipe.list reports a project plugin's recipe by manifest id, keeping its runnable id (#13796)", async () => {
+    const instanceKey = "project__0123abcd__acme.local";
+    setRecipeState({
+      recipes: [
+        {
+          id: `${instanceKey}.boot`,
+          name: "Boot",
+          terminals: [{}],
+          origin: { kind: "plugin", pluginId: instanceKey, contributionId: "boot" },
+        },
+      ],
+    });
+
+    const run = setupActions();
+    // The id is what `recipe.run` takes, so it stays the qualified one.
+    expect(await run("recipe.list")).toMatchObject({
+      recipes: [{ id: `${instanceKey}.boot`, origin: { kind: "plugin", pluginId: "acme.local" } }],
+    });
   });
 
   it("recipe.list reads the open project's recipes from disk before answering", async () => {

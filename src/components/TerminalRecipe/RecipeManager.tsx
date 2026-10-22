@@ -47,6 +47,7 @@ import { getRecipeScope, worktreeDisplayName } from "@/utils/recipeScope";
 import type { TerminalRecipe } from "@/types";
 import { isInRepoRecipeId } from "@shared/utils/recipeFilename";
 import { isPluginRecipe } from "@shared/types/project";
+import { pluginManifestIdFromInstanceKey } from "@shared/types/plugin";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { WorktreeSnapshot } from "@shared/types/workspace-host";
 import { pluralize } from "@/lib/pluralize";
@@ -303,6 +304,8 @@ export function RecipeManager({
     // "Save as team recipe" stays available: duplicating into a user-owned
     // tier is the sanctioned way to customise one.
     const fromPlugin = isPluginRecipe(recipe);
+    // Never the instance key: a project plugin's carries a machine-local project id (#12211).
+    const pluginLabel = fromPlugin ? pluginManifestIdFromInstanceKey(recipe.origin.pluginId) : null;
     // Only a project-local recipe can be overridden: `mergeRecipes` shadows
     // that tier alone, and a global recipe of the same name still launches as
     // itself.
@@ -343,8 +346,8 @@ export function RecipeManager({
           <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs text-text-secondary">
             {fromPlugin && (
               <>
-                <TruncatedTooltip content={recipe.origin.pluginId}>
-                  <span className="max-w-[40%] truncate">From {recipe.origin.pluginId}</span>
+                <TruncatedTooltip content={pluginLabel}>
+                  <span className="max-w-[40%] truncate">From {pluginLabel}</span>
                 </TruncatedTooltip>
                 <span aria-hidden>·</span>
               </>

@@ -2653,10 +2653,20 @@ describe("plugin install jobs (#11302)", () => {
       }
     });
 
+    // The metadata writes resolve the recipe through the sender's project view,
+    // so each starts from a registry that holds it and a sender to resolve.
+    const sender = { sender: { id: 1 } };
+    afterEach(() => {
+      mockGetPluginRecipes.mockReturnValue([]);
+      mockRecordPluginRecipeUse.mockReset();
+      mockUpdatePluginRecipeMetadata.mockReset();
+    });
+
     it("plugin:recipe-record-use forwards a valid id and timestamp", async () => {
+      mockGetPluginRecipes.mockReturnValue([registered]);
       const handler = getHandler("plugin:recipe-record-use");
       mockRecordPluginRecipeUse.mockResolvedValueOnce(registered);
-      await expect(handler({}, "acme.tools.deploy", 1234)).resolves.toEqual(registered);
+      await expect(handler(sender, "acme.tools.deploy", 1234)).resolves.toEqual(registered);
       expect(mockRecordPluginRecipeUse).toHaveBeenCalledWith("acme.tools.deploy", 1234);
     });
 
@@ -2664,6 +2674,7 @@ describe("plugin install jobs (#11302)", () => {
       // TS types are not runtime guarantees across contextBridge — a buggy or
       // hostile renderer can send anything, and a NaN timestamp would otherwise
       // be persisted as a run that sorts unpredictably forever.
+      mockGetPluginRecipes.mockReturnValue([registered]);
       const handler = getHandler("plugin:recipe-record-use");
       for (const args of [
         ["", 1] as const,
@@ -2673,16 +2684,17 @@ describe("plugin install jobs (#11302)", () => {
         ["acme.tools.deploy", -5] as const,
         ["acme.tools.deploy", "1234"] as const,
       ]) {
-        await expect(handler({}, ...args)).rejects.toThrow();
+        await expect(handler(sender, ...args)).rejects.toThrow();
       }
       expect(mockRecordPluginRecipeUse).not.toHaveBeenCalled();
     });
 
     it("plugin:recipe-metadata-update accepts only the two user-owned fields", async () => {
+      mockGetPluginRecipes.mockReturnValue([registered]);
       const handler = getHandler("plugin:recipe-metadata-update");
       mockUpdatePluginRecipeMetadata.mockResolvedValue(registered);
 
-      await handler({}, "acme.tools.deploy", { showInEmptyState: false, autoAssign: null });
+      await handler(sender, "acme.tools.deploy", { showInEmptyState: false, autoAssign: null });
       expect(mockUpdatePluginRecipeMetadata).toHaveBeenCalledWith("acme.tools.deploy", {
         showInEmptyState: false,
         autoAssign: null,
@@ -2691,11 +2703,12 @@ describe("plugin install jobs (#11302)", () => {
       // Provenance is resolved from the registry, never taken from the caller —
       // an unknown key is dropped rather than reaching the store.
       mockUpdatePluginRecipeMetadata.mockClear();
-      await handler({}, "acme.tools.deploy", { pluginId: "evil.plugin", terminals: [] });
+      await handler(sender, "acme.tools.deploy", { pluginId: "evil.plugin", terminals: [] });
       expect(mockUpdatePluginRecipeMetadata).toHaveBeenCalledWith("acme.tools.deploy", {});
     });
 
     it("plugin:recipe-metadata-update rejects malformed patch values", async () => {
+      mockGetPluginRecipes.mockReturnValue([registered]);
       const handler = getHandler("plugin:recipe-metadata-update");
       mockUpdatePluginRecipeMetadata.mockResolvedValue(registered);
       for (const patch of [
@@ -2704,9 +2717,62 @@ describe("plugin install jobs (#11302)", () => {
         { showInEmptyState: "yes" },
         { autoAssign: "sometimes" },
       ]) {
-        await expect(handler({}, "acme.tools.deploy", patch)).rejects.toThrow();
+        await expect(handler(sender, "acme.tools.deploy", patch)).rejects.toThrow();
       }
       expect(mockUpdatePluginRecipeMetadata).not.toHaveBeenCalled();
+    });
+
+    it("refuses a metadata write to a recipe the sender's project cannot see (#13796)", async () => {
+      const LOCAL = "project__project-a__acme.local";
+      const local = {
+        ...registered,
+        id: `${LOCAL}.boot`,
+        origin: { kind: "plugin" as const, pluginId: LOCAL, contributionId: "boot" },
+      };
+      setPluginContributionScope(LOCAL, "project-a");
+      hidePluginInProject("project-b", "acme.tools");
+      mockGetPluginRecipes.mockReturnValue([registered, local]);
+      mockRecordPluginRecipeUse.mockResolvedValue(local);
+      mockUpdatePluginRecipeMetadata.mockResolvedValue(local);
+      const recordUse = getHandler("plugin:recipe-record-use");
+      const update = getHandler("plugin:recipe-metadata-update");
+
+      // Another project's plugin recipe, from a foreign project and from a
+      // sender with no project at all.
+      for (const project of ["project-b", null]) {
+        mockGetProjectForWebContents.mockReturnValue(project);
+        await expect(recordUse(sender, local.id, 1)).rejects.toThrow(/not found/);
+        await expect(update(sender, local.id, { showInEmptyState: true })).rejects.toThrow(
+          /not found/
+        );
+      }
+      // An installed plugin hidden in the sender's project.
+      mockGetProjectForWebContents.mockReturnValue("project-b");
+      await expect(recordUse(sender, registered.id, 1)).rejects.toThrow(/not found/);
+      // An id the registry does not hold at all.
+      await expect(recordUse(sender, "acme.tools.missing", 1)).rejects.toThrow(/not found/);
+      expect(mockRecordPluginRecipeUse).not.toHaveBeenCalled();
+      expect(mockUpdatePluginRecipeMetadata).not.toHaveBeenCalled();
+
+      // The owning project writes through.
+      mockGetProjectForWebContents.mockReturnValue("project-a");
+      await expect(recordUse(sender, local.id, 1)).resolves.toEqual(local);
+      await expect(update(sender, local.id, { showInEmptyState: true })).resolves.toEqual(local);
+    });
+
+    it("does not hand back a recipe its plugin withdrew from the sender's project mid-write (#13796)", async () => {
+      mockGetPluginRecipes.mockReturnValue([registered]);
+      mockGetProjectForWebContents.mockReturnValue("project-a");
+      mockUpdatePluginRecipeMetadata.mockImplementation(async () => {
+        hidePluginInProject("project-a", "acme.tools");
+        return registered;
+      });
+
+      await expect(
+        getHandler("plugin:recipe-metadata-update")(sender, registered.id, {
+          showInEmptyState: true,
+        })
+      ).rejects.toThrow(/not found/);
     });
   });
 });

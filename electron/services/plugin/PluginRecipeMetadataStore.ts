@@ -5,6 +5,7 @@ import type {
   PluginRecipeMetadataPatch,
   RecipeAutoAssign,
 } from "../../../shared/types/project.js";
+import { parseProjectPluginInstanceKey } from "../../../shared/types/plugin.js";
 import { resilientAtomicWriteFile, resilientRename } from "../../utils/fs.js";
 
 /**
@@ -257,6 +258,10 @@ export class PluginRecipeMetadataStore {
    * - plugin installed but its recipe set is NOT known (disabled, blocked,
    *   engine-incompatible, or failed to parse) → keep. This is the case that
    *   makes disable non-destructive.
+   * - project plugin instance (#13796) → never "not installed". It lives in a
+   *   project's repository and loads only when that project opens, so no
+   *   startup inventory can vouch for its absence. Once loaded, its recipe set
+   *   is known and a dropped contribution id is still pruned.
    *
    * The caller must only pass an inventory built from a COMPLETE scan of every
    * plugin root; a partial inventory would read as "not installed" and delete
@@ -274,7 +279,12 @@ export class PluginRecipeMetadataStore {
     await this.enqueue(async (current) => {
       const next: Record<string, PluginRecipeMetadata> = {};
       for (const [key, entry] of Object.entries(current)) {
-        if (!input.installedPluginIds.has(entry.pluginId)) continue;
+        if (
+          !input.installedPluginIds.has(entry.pluginId) &&
+          parseProjectPluginInstanceKey(entry.pluginId) === null
+        ) {
+          continue;
+        }
         const known = input.knownQualifiedIdsByPlugin.get(entry.pluginId);
         if (known && !known.has(key)) continue;
         next[key] = entry;

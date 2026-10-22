@@ -2963,8 +2963,9 @@ interface RecipeContributionTerminal {
 /**
  * One `contributes.recipes` entry (#11860). A recipe is a named multi-terminal
  * launch layout the plugin ships; the host registers it under the qualified id
- * `{pluginId}.{id}` and merges it into the recipe list as a plugin-owned tier
- * available in every project.
+ * `{pluginId}.{id}` and merges it into the recipe list as a plugin-owned tier:
+ * in every project for an installed plugin, in its own project only for a
+ * `scope: "project"` one.
  *
  * Terminals are declared inline rather than pointing at a shipped JSON file so
  * the install-time confirmation can show what a recipe actually runs:
@@ -3361,7 +3362,8 @@ interface PluginManifest {
         settings?: SettingDefinition[];
         /**
          * Plugin-contributed recipes (#11860) — named multi-terminal launch layouts
-         * merged into the recipe list as a plugin-owned, globally-available tier.
+         * merged into the recipe list as a plugin-owned tier, shown in every
+         * project or, for a `scope: "project"` plugin, in its own project only.
          * Inert declarative content; no capability required. Content is immutable;
          * user-owned frecency and preferences live in a sidecar keyed by the
          * qualified id. Empty unless the plugin ships recipes.

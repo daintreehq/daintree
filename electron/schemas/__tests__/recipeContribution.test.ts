@@ -89,4 +89,18 @@ describe("contributes.recipes manifest shape (#11860)", () => {
       false
     );
   });
+
+  it("accepts recipes from a project plugin (#13796)", () => {
+    // The broadcaster narrows a recipe to its owning plugin's project, so a
+    // project plugin's recipes no longer leak into every project's launcher.
+    const result = getPluginManifestSchema("project").safeParse({
+      name: "acme.recipes-test",
+      version: "1.0.0",
+      scope: "project",
+      contributes: { recipes: [recipe(1, { showInEmptyState: true })] },
+    });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.data.contributes.recipes.map((r) => r.id)).toEqual(["recipe-1"]);
+  });
 });

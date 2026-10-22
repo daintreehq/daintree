@@ -21,6 +21,19 @@ describe("recipeOriginLabel (#11860)", () => {
     expect(label).not.toContain("global");
   });
 
+  it("names a project plugin by its manifest id, never its instance key (#13796)", () => {
+    const label = recipeOriginLabel(
+      recipe({
+        origin: {
+          kind: "plugin",
+          pluginId: "project__0123abcd__acme.local",
+          contributionId: "boot",
+        },
+      })
+    );
+    expect(label).toBe("from the acme.local plugin");
+  });
+
   it("distinguishes the three user tiers", () => {
     expect(recipeOriginLabel(recipe())).toContain("global");
     expect(recipeOriginLabel(recipe({ projectId: "p1" }))).toContain("project");
