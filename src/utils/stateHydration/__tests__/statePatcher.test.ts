@@ -1982,10 +1982,8 @@ describe("detectedAgentId propagation", () => {
 
 describe("buildArgsForNonPtyRecreation", () => {
   describe("docked plugin panel whose kind is not registered yet (#13907)", () => {
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension kind string is outside the built-in union
     const pluginKind = "ext-a.viewer" as Parameters<typeof buildArgsForNonPtyRecreation>[1];
     const savedPlugin = (extra: Record<string, unknown> = {}) =>
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension kind string is outside the built-in union
       ({
         id: "p1",
         kind: "ext-a.viewer",
