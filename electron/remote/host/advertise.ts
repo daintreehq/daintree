@@ -123,7 +123,6 @@ export class HostAdvertiser {
     const child = this.child;
     this.child = null;
     child?.kill();
-    if (child?.pid !== undefined) this.deps.record?.clear(child.pid);
     this.set({ status: "off" });
   }
 

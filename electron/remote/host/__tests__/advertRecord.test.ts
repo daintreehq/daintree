@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   advertRecordPath,
   clearAdvertRecord,
@@ -57,11 +57,39 @@ afterEach(() => {
 });
 
 describe("reapOrphanedAdvert", () => {
-  it("ends the advert a crashed launch left running, then drops the record", () => {
+  it("ends the advert a crashed launch left running, keeping the record until it is gone", () => {
     recordOrphan();
     reapOrphanedAdvert(dir, deps());
     expect(signals).toContainEqual([200, "SIGTERM"]);
+    expect(fs.existsSync(advertRecordPath(dir))).toBe(true);
+    alive.delete(200);
+    timers[0]!();
     expect(fs.existsSync(advertRecordPath(dir))).toBe(false);
+  });
+
+  it("keeps the record when the owner's start time can't be read right now", () => {
+    recordOrphan();
+    alive.set(100, { startTime: "10", argv: ["daintree"] });
+    reapOrphanedAdvert(
+      dir,
+      deps({ startTime: (pid) => (pid === 100 ? null : (alive.get(pid)?.startTime ?? null)) })
+    );
+    expect(signals.filter(([, s]) => s !== 0)).toEqual([]);
+    expect(fs.existsSync(advertRecordPath(dir))).toBe(true);
+  });
+
+  it("keeps the record when the advert's identity can't be read", () => {
+    recordOrphan();
+    reapOrphanedAdvert(dir, deps({ argv: () => null }));
+    expect(signals.filter(([, s]) => s !== 0)).toEqual([]);
+    expect(fs.existsSync(advertRecordPath(dir))).toBe(true);
+  });
+
+  it("reaps when this launch was handed the dead owner's reused pid", () => {
+    recordOrphan();
+    alive.set(100, { startTime: "88", argv: ["daintree"] });
+    reapOrphanedAdvert(dir, deps({ ownerPid: 100 }));
+    expect(signals).toContainEqual([200, "SIGTERM"]);
   });
 
   it("escalates to SIGKILL only if the same process is still there", () => {
@@ -163,5 +191,3 @@ describe("advert record file", () => {
     expect(fs.existsSync(advertRecordPath(dir))).toBe(false);
   });
 });
-
-void vi;

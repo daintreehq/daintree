@@ -164,19 +164,24 @@ export function clearAdvertRecord(dir: string, pid: number): void {
   removeFile(file);
 }
 
-function sameIdentity(
+type Match = "match" | "mismatch" | "unknown";
+
+/** `unknown` is a read that failed or a record without a start time: never grounds to signal. */
+function identityMatch(
   identity: ProcessIdentity,
   deps: AdvertRecordDeps,
   argv?: readonly string[]
-): boolean {
-  // Without a recorded start time the pid alone can't tell a stranger from the advert.
-  if (!identity.startTime) return false;
-  if (deps.startTime(identity.pid) !== identity.startTime) return false;
-  if (!argv) return true;
+): Match {
+  if (!identity.startTime) return "unknown";
+  const started = deps.startTime(identity.pid);
+  if (started === null) return "unknown";
+  if (started !== identity.startTime) return "mismatch";
+  if (!argv) return "match";
   const actual = deps.argv(identity.pid);
-  if (!actual) return false;
+  if (!actual) return "unknown";
   const expected = deps.platform === "darwin" ? [argv.join(" ")] : argv;
-  return actual.length === expected.length && actual.every((part, i) => part === expected[i]);
+  const same = actual.length === expected.length && actual.every((part, i) => part === expected[i]);
+  return same ? "match" : "mismatch";
 }
 
 function isAlive(pid: number, deps: AdvertRecordDeps): boolean {
@@ -206,22 +211,31 @@ export function reapOrphanedAdvert(
     return;
   }
   const { owner, child } = record;
-  // A live host that isn't this one keeps its advert, and its record.
-  if (owner.pid === deps.ownerPid) return;
-  if (isAlive(owner.pid, deps) && (!owner.startTime || sameIdentity(owner, deps))) return;
-  removeFile(file);
-  if (!isAlive(child.pid, deps) || !sameIdentity(child, deps, child.argv)) return;
+  // A live host that isn't this one keeps its advert, and its record. Only a
+  // definite mismatch (the pid was reused) or a dead owner frees it.
+  if (owner.pid === deps.ownerPid || isAlive(owner.pid, deps)) {
+    if (identityMatch(owner, deps) !== "mismatch") return;
+  }
+  const match = isAlive(child.pid, deps) ? identityMatch(child, deps, child.argv) : "mismatch";
+  if (match === "mismatch") {
+    removeFile(file);
+    return;
+  }
+  if (match === "unknown") return;
   try {
     deps.signal(child.pid, "SIGTERM");
   } catch {
     return;
   }
+  // The record stays until the advert is seen gone, so a crash before then still leaves a handle.
   deps.setTimer(() => {
-    if (!sameIdentity(child, deps, child.argv)) return;
-    try {
-      deps.signal(child.pid, "SIGKILL");
-    } catch {
-      // Gone between the check and the signal.
+    if (isAlive(child.pid, deps) && identityMatch(child, deps, child.argv) === "match") {
+      try {
+        deps.signal(child.pid, "SIGKILL");
+      } catch {
+        // Gone between the check and the signal.
+      }
     }
+    clearAdvertRecord(dir, child.pid);
   }, KILL_ESCALATION_MS);
 }

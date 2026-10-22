@@ -106,6 +106,7 @@ describe("HostAdvertiser", () => {
       expect.objectContaining({ pid: 321, file: "dns-sd", args: expect.arrayContaining(["-R"]) })
     );
     advertiser.stop();
+    first.exit({ code: null, notFound: false });
     expect(clear).toHaveBeenCalledWith(321);
 
     const second = Object.assign(fakeProcess(), { pid: 322 });
