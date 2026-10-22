@@ -14,6 +14,7 @@ import {
   normalizePanelMenuItems,
   type PublishedPanelMenuItem,
 } from "../../../../../shared/utils/pluginPanelMenuItems.js";
+import { normalizePluginPanelTitle } from "../../../../../shared/utils/pluginPanelTitle.js";
 
 /**
  * Names the plugin a style root belongs to. Mirrors the host's own stamp
@@ -49,8 +50,8 @@ export interface PreviewPanelPropsOptions {
   hostContext?: PluginViewHostContext;
   /**
    * Leave out the optional host callbacks (`persistState`, `requestReload`,
-   * `setHasUnsavedChanges`, `setToolbarItemState`, `setMenuItems`), as on a
-   * host surface that offers none of them.
+   * `setHasUnsavedChanges`, `setToolbarItemState`, `setMenuItems`, `setTitle`),
+   * as on a host surface that offers none of them.
    */
   withoutHostCallbacks?: boolean;
 }
@@ -88,6 +89,8 @@ export interface PreviewPanelController {
   readonly rejectedMenuItems: readonly string[];
   /** Toolbar button state by `actionId`, as last set. */
   readonly toolbarItems: ReadonlyMap<string, PluginPanelToolbarItemState>;
+  /** The title the view gave its panel, as the host vetted it, or `null` for the kind's name. */
+  readonly title: string | null;
   readonly hasUnsavedChanges: boolean;
   /** How many times a live attempt asked to be reloaded. */
   readonly reloadRequests: number;
@@ -137,6 +140,7 @@ export function createPreviewPanelController(
   let menuItems: readonly PublishedPanelMenuItem[] | null = null;
   const rejectedMenuItems: string[] = [];
   const toolbarItems = new Map<string, PluginPanelToolbarItemState>();
+  let title: string | null = null;
   let hasUnsavedChanges = false;
   let reloadRequests = 0;
   let attempt: AbortController | null = null;
@@ -210,6 +214,12 @@ export function createPreviewPanelController(
               }
               menuItems = result.items.length > 0 ? result.items : null;
             },
+            setTitle: (value: string | null) => {
+              if (!live()) return;
+              // The host's own vetting; a value that is no title is ignored.
+              const vetted = normalizePluginPanelTitle(value);
+              if (vetted !== null) title = vetted === "" ? null : vetted;
+            },
           };
       return {
         panelId,
@@ -242,6 +252,9 @@ export function createPreviewPanelController(
     },
     rejectedMenuItems,
     toolbarItems,
+    get title() {
+      return title;
+    },
     get hasUnsavedChanges() {
       return hasUnsavedChanges;
     },

@@ -231,6 +231,7 @@ vi.mock("@/registry", () => ({
 
 vi.mock("@shared/config/panelKindRegistry", () => ({
   panelKindIsDockable: () => true,
+  panelKindIsProjectScoped: () => false,
   getPanelKindConfig: () => undefined,
   subscribeToPanelKindRegistry: () => () => {},
   getPanelKindRegistrySnapshot: () => 0,

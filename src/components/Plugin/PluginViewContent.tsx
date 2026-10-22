@@ -80,6 +80,7 @@ import {
   usePluginPanelOpenRequestStore,
 } from "@/store/pluginPanelOpenRequestStore";
 import { normalizePanelMenuItems } from "@shared/utils/pluginPanelMenuItems";
+import { normalizePluginPanelTitle } from "@shared/utils/pluginPanelTitle";
 import { logWarn } from "@/utils/logger";
 import {
   isPluginNotOnHostError,
@@ -215,6 +216,13 @@ export interface PluginViewContentProps {
    * `toolbar` and `menu`. Project surfaces don't.
    */
   offerToolbar?: boolean;
+  /**
+   * Writes a title onto this panel's record, for a host that has one (grid,
+   * dock, dialog). The content hands the view `setTitle` only when it is
+   * supplied, vetted and bound to the current attempt. Project surfaces and
+   * settings views have no panel to name, so they leave it out.
+   */
+  setPanelTitle?: (title: string) => void;
   /** Forwarded as `PanelViewProps.settingsContext`, for a settings view's host only. */
   settingsContext?: PluginSettingsViewContext;
   /**
@@ -1026,6 +1034,7 @@ export function makePluginViewContent(
     readRecoveryState,
     offerRequestReload = false,
     offerToolbar = false,
+    setPanelTitle,
     settingsContext,
     hostContext = HOST_CONTEXTS.panel,
   }: PluginViewContentProps) {
@@ -1700,6 +1709,30 @@ export function makePluginViewContent(
           : undefined,
       [offerToolbar, setMenuItemsFor, retryCount]
     );
+    /**
+     * The view's name for its panel, held to the same attempt and teardown
+     * guards as the menu, so a `disposeSignal` listener of a view that is going
+     * away cannot rename a panel that lives on. Unlike the menu it is not
+     * cleared on a reload or a crash: the title is saved with the panel and
+     * outlives any one view.
+     */
+    const setTitleFor = useCallback(
+      (attempt: number, title: unknown): void => {
+        if (toolbarClosedRef.current) return;
+        if (attempt !== attemptRef.current || !setPanelTitle) return;
+        const normalized = normalizePluginPanelTitle(title);
+        if (normalized === null) {
+          logWarn(`[PluginViewContent] Plugin "${pluginId}" setTitle: expected a string or null`);
+          return;
+        }
+        setPanelTitle(normalized);
+      },
+      [setPanelTitle]
+    );
+    const setTitle = useMemo(
+      () => (setPanelTitle ? (title: string | null) => setTitleFor(retryCount, title) : undefined),
+      [setPanelTitle, setTitleFor, retryCount]
+    );
     const runningActions = useAuthoredRunningActions(pluginId);
 
     // The user's reload reaches this mount through the lifecycle service, which
@@ -1956,6 +1989,7 @@ export function makePluginViewContent(
                           setHasUnsavedChanges={setHasUnsavedChanges}
                           setToolbarItemState={setToolbarItemState}
                           setMenuItems={setMenuItems}
+                          setTitle={setTitle}
                           runningActions={runningActions}
                           worktreeId={worktreeId}
                           styleRootAttributes={styleRootProps}

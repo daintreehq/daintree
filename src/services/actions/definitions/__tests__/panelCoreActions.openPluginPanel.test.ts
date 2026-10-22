@@ -3,7 +3,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ActionCallbacks, ActionRegistry, AnyActionDefinition } from "../../actionTypes";
 
 const panelStoreMock = vi.hoisted(() => ({ getState: vi.fn() }));
-const registryMock = vi.hoisted(() => ({ getPanelKindConfig: vi.fn() }));
+/** The registry fields this action reads. */
+interface MockKindConfig {
+  id: string;
+  extensionId?: string;
+  hasPty?: boolean;
+  dockable?: boolean;
+  scope?: "worktree" | "project";
+}
+
+const registryMock = vi.hoisted(() => ({
+  getPanelKindConfig: vi.fn<(kind: string) => MockKindConfig | undefined>(),
+}));
 const focusPanelInput = vi.hoisted(() => vi.fn(() => true));
 
 vi.mock("@/store/panelStore", () => ({ usePanelStore: panelStoreMock }));
@@ -12,6 +23,13 @@ vi.mock("@/store/errorStore", () => ({ useErrorStore: { getState: vi.fn() } }));
 vi.mock("@/store/portalStore", () => ({ usePortalStore: { getState: vi.fn() } }));
 vi.mock("@shared/config/panelKindRegistry", () => ({
   getPanelKindConfig: registryMock.getPanelKindConfig,
+  // The real predicates, read off the mocked registry entry.
+  panelKindIsDockable: (kind: string) => {
+    const config = registryMock.getPanelKindConfig(kind);
+    return config !== undefined && config.dockable !== false;
+  },
+  panelKindIsProjectScoped: (kind: string) =>
+    registryMock.getPanelKindConfig(kind)?.scope === "project",
 }));
 vi.mock("@/components/Panel/panelFocusRegistry", () => ({ focusPanelInput }));
 
@@ -273,6 +291,208 @@ describe("panel.openPluginPanel", () => {
     await setup({ kind: "acme.dash" });
     expect(addPanel).toHaveBeenCalledTimes(1);
     expect(addPanel.mock.calls[0]![0].worktreeId).toBe("wt-active");
+  });
+});
+
+describe("panel.openPluginPanel in the dock and across worktrees (#13778)", () => {
+  const PROJECT_KIND: MockKindConfig = {
+    id: "acme.records",
+    extensionId: "acme",
+    scope: "project",
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    usePluginPanelOpenRequestStore.setState({ entriesByPanelId: {} });
+    worktrees = [{ id: "wt-active" }, { id: "wt-1" }];
+    addPanel.mockResolvedValue("panel-new");
+    panelStoreMock.getState.mockReturnValue({
+      panelIds: [],
+      panelsById: {},
+      addPanel,
+      activateTerminal,
+    });
+    registryMock.getPanelKindConfig.mockReturnValue({ id: "acme.dash", extensionId: "acme" });
+  });
+
+  it("opens a worktree kind as a dock chip in its worktree, shown", async () => {
+    const result = await setup({ kind: "acme.dash", presentation: "dock", worktreeId: "wt-1" });
+
+    expect(addPanel).toHaveBeenCalledTimes(1);
+    expect(addPanel.mock.calls[0]![0]).toMatchObject({
+      kind: "acme.dash",
+      worktreeId: "wt-1",
+      location: "dock",
+      activateDockOnCreate: true,
+    });
+    expect(result).toEqual({ panelId: "panel-new" });
+  });
+
+  it("does not ask the grid to show a panel it opens there", async () => {
+    await setup({ kind: "acme.dash" });
+    const opts = addPanel.mock.calls[0]![0];
+    expect(opts.location).toBe("grid");
+    expect(opts.activateDockOnCreate).toBeUndefined();
+  });
+
+  it("refuses the dock for a kind that opts out of it, rather than landing in the grid", async () => {
+    registryMock.getPanelKindConfig.mockReturnValue({
+      id: "acme.dash",
+      extensionId: "acme",
+      dockable: false,
+    });
+    await expect(setup({ kind: "acme.dash", presentation: "dock" })).rejects.toThrow(
+      /opts out of the dock/
+    );
+    expect(addPanel).not.toHaveBeenCalled();
+  });
+
+  it("refuses a dock it can't use before judging the worktree, and touches nothing", async () => {
+    registryMock.getPanelKindConfig.mockReturnValue({
+      id: "acme.dash",
+      extensionId: "acme",
+      dockable: false,
+    });
+    panelStoreMock.getState.mockReturnValue({
+      panelIds: ["p-existing"],
+      panelsById: {
+        "p-existing": { id: "p-existing", kind: "acme.dash", worktreeId: "wt-1", location: "grid" },
+      },
+      addPanel,
+      activateTerminal,
+    });
+
+    await expect(
+      setup({
+        kind: "acme.dash",
+        presentation: "dock",
+        worktreeId: "wt-elsewhere",
+        initialArgs: { id: 1 },
+      })
+    ).rejects.toThrow(/opts out of the dock/);
+    worktrees = [];
+    await expect(
+      setup({ kind: "acme.dash", presentation: "dock", worktreeId: "wt-1" })
+    ).rejects.toThrow(/opts out of the dock/);
+
+    expect(activateTerminal).not.toHaveBeenCalled();
+    expect(addPanel).not.toHaveBeenCalled();
+    expect(openRequestOf("p-existing")).toBeUndefined();
+  });
+
+  it("opens a project-scoped kind in the dock with no worktree by default", async () => {
+    registryMock.getPanelKindConfig.mockReturnValue(PROJECT_KIND);
+
+    await setup({ kind: "acme.records", initialArgs: { id: 42 } });
+
+    expect(addPanel.mock.calls[0]![0]).toMatchObject({
+      kind: "acme.records",
+      location: "dock",
+      activateDockOnCreate: true,
+      extensionState: { id: 42 },
+    });
+    expect(addPanel.mock.calls[0]![0].worktreeId).toBeUndefined();
+  });
+
+  function seedProjectPanels(panels: Array<{ id: string; worktreeId?: string; location: string }>) {
+    panelStoreMock.getState.mockReturnValue({
+      panelIds: panels.map((p) => p.id),
+      panelsById: Object.fromEntries(panels.map((p) => [p.id, { ...p, kind: "acme.records" }])),
+      addPanel,
+      activateTerminal,
+    });
+  }
+
+  it("reuses the project's dock panel before one the user moved into a worktree", async () => {
+    registryMock.getPanelKindConfig.mockReturnValue(PROJECT_KIND);
+    seedProjectPanels([
+      { id: "p-moved", worktreeId: "wt-1", location: "grid" },
+      { id: "p-project", location: "dock" },
+    ]);
+
+    const result = await setup({ kind: "acme.records", initialArgs: { id: 43 } });
+
+    expect(result).toEqual({ panelId: "p-project" });
+    expect(activateTerminal).toHaveBeenCalledWith("p-project");
+    expect(openRequestOf("p-project")?.args).toEqual({ id: 43 });
+    expect(addPanel).not.toHaveBeenCalled();
+  });
+
+  it("reuses a project panel the user moved into another worktree's grid, where it is", async () => {
+    registryMock.getPanelKindConfig.mockReturnValue(PROJECT_KIND);
+    seedProjectPanels([
+      { id: "p-trashed", location: "trash" },
+      { id: "p-moved", worktreeId: "wt-1", location: "grid" },
+    ]);
+
+    const result = await setup({ kind: "acme.records", initialArgs: { id: 7 } });
+
+    expect(result).toEqual({ panelId: "p-moved" });
+    expect(activateTerminal).toHaveBeenCalledWith("p-moved");
+    expect(openRequestOf("p-moved")?.args).toEqual({ id: 7 });
+    expect(addPanel).not.toHaveBeenCalled();
+  });
+
+  it("never reuses a parked panel, which activation would leave out of sight", async () => {
+    registryMock.getPanelKindConfig.mockReturnValue(PROJECT_KIND);
+    seedProjectPanels([
+      { id: "p-parked", location: "background" },
+      { id: "p-moved", worktreeId: "wt-1", location: "background" },
+    ]);
+
+    const result = await setup({ kind: "acme.records" });
+
+    expect(activateTerminal).not.toHaveBeenCalled();
+    expect(addPanel).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({ panelId: "panel-new" });
+  });
+
+  it("keeps a worktree kind's reuse to its own worktree", async () => {
+    panelStoreMock.getState.mockReturnValue({
+      panelIds: ["p-other"],
+      panelsById: {
+        "p-other": { id: "p-other", kind: "acme.dash", worktreeId: "wt-1", location: "dock" },
+      },
+      addPanel,
+      activateTerminal,
+    });
+
+    await setup({ kind: "acme.dash", presentation: "dock" });
+
+    expect(activateTerminal).not.toHaveBeenCalled();
+    expect(addPanel.mock.calls[0]![0]).toMatchObject({ worktreeId: "wt-active", location: "dock" });
+  });
+
+  it("presents a project-scoped kind's dialog with no worktree", async () => {
+    registryMock.getPanelKindConfig.mockReturnValue(PROJECT_KIND);
+    usePanelDialogStore.setState({ dialogStack: [], dialogFrames: {}, requestSeq: 0 });
+    addPanel.mockImplementation(async (options: { requestedId?: string }) => options.requestedId);
+
+    await setup({ kind: "acme.records", presentation: "dialog" });
+
+    expect(addPanel.mock.calls[0]![0].worktreeId).toBeUndefined();
+    const [panelId] = usePanelDialogStore.getState().dialogStack;
+    expect(panelId).toBeDefined();
+    expect(usePanelDialogStore.getState().dialogFrames[panelId!]).toEqual({
+      kind: "acme.records",
+    });
+    usePanelDialogStore.setState({ dialogStack: [], dialogFrames: {}, requestSeq: 0 });
+  });
+
+  it("refuses a worktree named for a project-scoped kind rather than dropping it", async () => {
+    registryMock.getPanelKindConfig.mockReturnValue(PROJECT_KIND);
+    await expect(setup({ kind: "acme.records", worktreeId: "wt-1" })).rejects.toThrow(
+      /belongs to the project/
+    );
+    expect(addPanel).not.toHaveBeenCalled();
+  });
+
+  it("refuses the grid for a project-scoped kind, where it would never show", async () => {
+    registryMock.getPanelKindConfig.mockReturnValue(PROJECT_KIND);
+    await expect(setup({ kind: "acme.records", presentation: "panel" })).rejects.toThrow(
+      /opens in the dock or a dialog/
+    );
+    expect(addPanel).not.toHaveBeenCalled();
   });
 });
 

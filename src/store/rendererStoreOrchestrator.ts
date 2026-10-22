@@ -29,6 +29,7 @@ import {
   setPanelStoreAccessor,
   setPanelStoreClearForSwitchAccessor,
   setPanelExtensionStateAccessor,
+  setPanelTitleAccessor,
   setWorktreeSelectionAccessor,
   setWorktreeIdSetAccessor,
   setWorktreeGitDirAccessor,
@@ -83,6 +84,9 @@ export function initStoreOrchestrator(): () => void {
   });
   setPanelExtensionStateAccessor((panelId, patch) =>
     usePanelStore.getState().setPanelExtensionState(panelId, patch)
+  );
+  setPanelTitleAccessor((panelId, title) =>
+    usePanelStore.getState().updateTitle(panelId, title, "automation")
   );
   setWorktreeSelectionAccessor(() => ({
     activeWorktreeId: useWorktreeSelectionStore.getState().activeWorktreeId,

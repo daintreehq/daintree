@@ -670,7 +670,23 @@ export default function VideoManager({ initialArgs, openRequest }: PanelViewProp
 }
 ```
 
-Or pass `reuseExisting: false`, which always adds a new panel to the grid with these `initialArgs`. A panel in another worktree is never reused. `host.panelKindId` qualifies your bare panel id for whichever origin you load under (`project:{projectId}/{manifestId}/{kindId}` for a project plugin). A `contextMenus` entry at `location: "file"` dispatches your command with `{ path, worktreePath, status }`, which is how "Show in Video Manager" appears on every file row.
+Or pass `reuseExisting: false`, which always adds a new panel with these `initialArgs`. A panel in another worktree is never reused, except for a [project-scoped kind](#open-it-in-the-dock). `host.panelKindId` qualifies your bare panel id for whichever origin you load under (`project:{projectId}/{manifestId}/{kindId}` for a project plugin). A `contextMenus` entry at `location: "file"` dispatches your command with `{ path, worktreePath, status }`, which is how "Show in Video Manager" appears on every file row.
+
+### Open it in the dock
+
+Pass `presentation: "dock"` to open the panel as a dock chip instead of a grid pane, and show it. A kind that declares `dockable: false` is refused rather than put in the grid. Reuse works as it does for the grid: a panel of the kind already open in the worktree is focused where it is.
+
+For a panel that should be the same in every worktree, such as a records list or a navigator, declare `"scope": "project"` on the panel contribution. A project panel opens with no worktree, in the dock by default, and its dock chip shows in every worktree; a reusing open finds it from any of them. Don't pass `worktreeId` for one, and don't ask for `presentation: "panel"`: the grid shows only the active worktree's panels, so both are refused. `presentation: "dialog"` works and is not tied to a worktree either. The launchers put a project panel in the dock too.
+
+Name each instance from its view with `setTitle`, so three record panels read "Record #42", "Record #43" and "Record #44" rather than three copies of the kind's name:
+
+```tsx
+export default function RecordView({ initialArgs, openRequest, setTitle }: PanelViewProps) {
+  const id = openRequest?.args.id ?? initialArgs?.id;
+  useEffect(() => setTitle?.(id === undefined ? null : `Record #${String(id)}`), [id, setTitle]);
+  // …
+}
+```
 
 ### Open it as a dialog
 

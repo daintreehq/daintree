@@ -254,6 +254,13 @@
                 "minimum": 1,
                 "maximum": 1000000
               },
+              "scope": {
+                "type": "string",
+                "enum": [
+                  "worktree",
+                  "project"
+                ]
+              },
               "menu": {
                 "maxItems": 5,
                 "type": "array",

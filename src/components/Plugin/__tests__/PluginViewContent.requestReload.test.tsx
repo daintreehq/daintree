@@ -1174,3 +1174,83 @@ describe("setMenuItems (#13213)", () => {
     expect(listOf()).toBeUndefined();
   });
 });
+
+describe("setTitle (#13778)", () => {
+  async function mountWithTitle(props: Partial<PluginViewContentProps> = {}) {
+    const setPanelTitle = vi.fn<(title: string) => void>();
+    const mounted = await mountContent({ setPanelTitle, ...props });
+    return { ...mounted, setPanelTitle };
+  }
+
+  it("is withheld where the host has no panel to name", async () => {
+    await mountContent();
+    expect(latest().setTitle).toBeUndefined();
+  });
+
+  it("names the panel with a vetted title, and null goes back to the kind's name", async () => {
+    const { setPanelTitle } = await mountWithTitle();
+
+    act(() => latest().setTitle?.("  Record\n#42 "));
+    act(() => latest().setTitle?.(null));
+
+    expect(setPanelTitle.mock.calls).toEqual([["Record #42"], [""]]);
+  });
+
+  it("ignores a value that is not a title", async () => {
+    const { setPanelTitle } = await mountWithTitle();
+    const { setTitle } = latest();
+    expect(setTitle).toBeTypeOf("function");
+    // A plugin's own code is untyped at runtime, so hand it what it might.
+    act(() => {
+      Reflect.apply(setTitle!, undefined, [42]);
+    });
+    expect(setPanelTitle).not.toHaveBeenCalled();
+  });
+
+  it("keeps the title through a reload and ignores the old attempt's setter", async () => {
+    const { setPanelTitle } = await mountWithTitle();
+    const stale = latest();
+    act(() => stale.setTitle?.("Record #42"));
+
+    await requestReload();
+    await settlePluginViewLoad(() => expect(h.mounts).toHaveLength(2));
+    expect(setPanelTitle.mock.calls).toEqual([["Record #42"]]);
+
+    act(() => stale.setTitle?.("Record #1"));
+    act(() => latest().setTitle?.("Record #43"));
+    expect(setPanelTitle.mock.calls).toEqual([["Record #42"], ["Record #43"]]);
+  });
+
+  it("lands a title the view sets from its mount effect under StrictMode", async () => {
+    // The replay re-sends what the first pass already set, so the panel ends
+    // up named however many of the two the host accepts.
+    h.onMountEffect = (props) => props.setTitle?.("Record #42");
+    const setPanelTitle = vi.fn<(title: string) => void>();
+    await mountContent({ setPanelTitle }, { strict: true });
+
+    expect(setPanelTitle.mock.calls[0]).toEqual(["Record #42"]);
+    expect(setPanelTitle.mock.calls.every(([title]) => title === "Record #42")).toBe(true);
+  });
+
+  it("ignores the outgoing view's dispose listener, which runs before the attempt retires", async () => {
+    h.onMountEffect = (props) =>
+      props.disposeSignal.addEventListener("abort", () => props.setTitle?.(null));
+    const { setPanelTitle, unmount } = await mountWithTitle();
+
+    unmount();
+    await act(async () => {});
+
+    expect(setPanelTitle).not.toHaveBeenCalled();
+  });
+
+  it("does nothing once the view has unmounted", async () => {
+    const { setPanelTitle, unmount } = await mountWithTitle();
+    const held = latest();
+
+    unmount();
+    await act(async () => {});
+    act(() => held.setTitle?.("Record #42"));
+
+    expect(setPanelTitle).not.toHaveBeenCalled();
+  });
+});

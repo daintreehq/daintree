@@ -6,6 +6,7 @@ import {
 } from "@/registry";
 import {
   panelKindIsDockable,
+  panelKindIsProjectScoped,
   getPanelKindConfig,
   getPanelKindOrigin,
   subscribeToPanelKindRegistry,
@@ -431,7 +432,12 @@ function toPanelItem(
   // A grid surface lands everything in the grid regardless of dockability — its
   // launch callback dispatches `location: "grid"`, so claiming "dock" there
   // would misstate the destination just as badly as the redirect this replaced.
-  const location = surface === "dock" && panelKindIsDockable(config.id) ? "dock" : "grid";
+  // The one exception is a project-scoped plugin kind, which `launchPanelKind`
+  // always puts in the dock (#13778).
+  const location =
+    panelKindIsProjectScoped(config.id) || (surface === "dock" && panelKindIsDockable(config.id))
+      ? "dock"
+      : "grid";
   return {
     category: "panel",
     key: `panel:${config.id}`,

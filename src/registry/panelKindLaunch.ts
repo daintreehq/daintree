@@ -1,4 +1,7 @@
-import { resolvePanelKindLaunchActionId } from "@shared/config/panelKindRegistry";
+import {
+  panelKindIsProjectScoped,
+  resolvePanelKindLaunchActionId,
+} from "@shared/config/panelKindRegistry";
 import { actionService } from "@/services/ActionService";
 import { usePanelStore } from "@/store/panelStore";
 import type { ActionSource, ActionDispatchResult } from "@shared/types";
@@ -56,7 +59,12 @@ export async function launchPanelKind({
   worktreeId,
   source,
 }: LaunchPanelKindOptions): Promise<PanelKindLaunchOutcome> {
-  const activateDockOnCreate = location === "dock";
+  // A project-scoped plugin kind is one panel for the whole project (#13778):
+  // it lands in the dock with no worktree whichever surface asked, because the
+  // grid draws only the active worktree's panels.
+  const projectScoped = panelKindIsProjectScoped(kindId);
+  const placement = projectScoped ? "dock" : location;
+  const activateDockOnCreate = placement === "dock";
   const actionId = resolvePanelKindLaunchActionId(kindId);
 
   if (actionId !== undefined) {
@@ -85,8 +93,8 @@ export async function launchPanelKind({
     cwd,
     // An empty id would place the panel in a bucket nothing renders, so it
     // means the same as an absent one.
-    worktreeId: worktreeId || undefined,
-    location,
+    worktreeId: projectScoped ? undefined : worktreeId || undefined,
+    location: placement,
     // Folds dock activation into the same set() that commits the panel, so the
     // offscreen-container watchdog can't close it in the render gap (#6590).
     activateDockOnCreate,

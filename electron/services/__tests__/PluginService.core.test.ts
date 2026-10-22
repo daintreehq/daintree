@@ -358,6 +358,31 @@ describe("PluginService", () => {
     expect(Object.prototype.hasOwnProperty.call(wideCall![0], "dockable")).toBe(false);
   });
 
+  it("forwards a panel contribution's scope into registerPanelKind, and nothing when omitted (#13778)", async () => {
+    await writePlugin("scope-plugin", {
+      name: "acme.scope-plugin",
+      version: "1.0.0",
+      contributes: {
+        panels: [
+          { id: "records", name: "Records", iconId: "eye", color: "#111", scope: "project" },
+          { id: "notes", name: "Notes", iconId: "eye", color: "#222" },
+        ],
+      },
+    });
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    expect(registerPanelKind).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "acme.scope-plugin.records", scope: "project" })
+    );
+    const notesCall = vi
+      .mocked(registerPanelKind)
+      .mock.calls.find((call) => call[0]?.id === "acme.scope-plugin.notes");
+    expect(notesCall).toBeDefined();
+    expect(Object.prototype.hasOwnProperty.call(notesCall![0], "scope")).toBe(false);
+  });
+
   it("stamps the first tour declared against a panel onto its kind as a qualified tourId (#12774)", async () => {
     const tour = (id: string, panelKind?: string) => ({
       id,
