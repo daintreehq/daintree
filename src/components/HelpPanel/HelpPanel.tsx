@@ -367,24 +367,37 @@ export function HelpPanel({
 
   // A project's own starter prompts replace the stock ones. Read on demand —
   // on open and on project switch — so an edit to the file shows up without a
-  // watcher; a stale list from another project is dropped before the refetch.
-  const [projectStarterPrompts, setProjectStarterPrompts] = useState<string[]>([]);
+  // watcher. `null` while the read is in flight: the cards stay hidden until it
+  // settles, so a stock card is never clickable while replacements are pending.
+  const [projectStarterPrompts, setProjectStarterPrompts] = useState<string[] | null>(null);
   useEffect(() => {
-    setProjectStarterPrompts([]);
-    if (!isOpen || !activeWorkspaceId) return;
+    setProjectStarterPrompts(null);
+    if (!isOpen) return;
+    if (!activeWorkspaceId) {
+      setProjectStarterPrompts([]);
+      return;
+    }
     let cancelled = false;
-    void window.electron.help
-      .getStarterPrompts?.(activeWorkspaceId)
-      ?.then((prompts) => {
+    const request =
+      window.electron.help.getStarterPrompts?.(activeWorkspaceId) ?? Promise.resolve([]);
+    void request
+      .then((prompts) => {
         if (!cancelled) setProjectStarterPrompts(prompts);
       })
-      .catch((err) => logWarn("HelpPanel: failed to load project starter prompts", err));
+      .catch((err) => {
+        logWarn("HelpPanel: failed to load project starter prompts", err);
+        if (!cancelled) setProjectStarterPrompts([]);
+      });
     return () => {
       cancelled = true;
     };
   }, [isOpen, activeWorkspaceId]);
   const starterPrompts =
-    projectStarterPrompts.length > 0 ? projectStarterPrompts : DEFAULT_STARTER_PROMPTS;
+    projectStarterPrompts === null
+      ? []
+      : projectStarterPrompts.length > 0
+        ? projectStarterPrompts
+        : DEFAULT_STARTER_PROMPTS;
 
   const focusedWorktreeId = useWorktreeSelectionStore((s) => s.focusedWorktreeId);
   const selectWorktree = useWorktreeSelectionStore((s) => s.selectWorktree);

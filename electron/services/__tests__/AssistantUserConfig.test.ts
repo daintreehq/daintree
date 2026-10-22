@@ -526,6 +526,15 @@ describe("project starter prompts", () => {
     expect(await loadProjectStarterPrompts(projectPath)).toEqual(["Spaced out", "A", "B", "C"]);
   });
 
+  it("drops invisible-only entries and strips bidi and zero-width marks", async () => {
+    await write(
+      projectDir,
+      "starter-prompts.json",
+      JSON.stringify(["\u200b", "\u202e\u200b ", "Fix\u202e the\u2028bug\u200b", "Fix the bug"])
+    );
+    expect(await loadProjectStarterPrompts(projectPath)).toEqual(["Fix the bug"]);
+  });
+
   it("returns nothing for malformed JSON or an unexpected shape", async () => {
     await write(projectDir, "starter-prompts.json", "{ nope");
     expect(await loadProjectStarterPrompts(projectPath)).toEqual([]);

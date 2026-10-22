@@ -164,7 +164,10 @@ async function readBoundedFile(
   }
   let handle;
   try {
-    handle = await fs.open(real, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0));
+    handle = await fs.open(
+      real,
+      fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0)
+    );
   } catch (err) {
     if (isAbsent(err)) return null;
     throw new Error(`Couldn't read ${filePath}`, { cause: err });
@@ -420,8 +423,11 @@ function parseHooksConfig(raw: string, filePath: string): Record<string, unknown
   return parsed.hooks;
 }
 
-// eslint-disable-next-line no-control-regex -- stripping control characters is the point
-const CONTROL_CHARS = /[\u0000-\u001f\u007f]/g;
+// Control characters and line separators become spaces; bidi and zero-width
+// marks are dropped, since they can reorder or hide the text a card shows
+// while the original sequence is what gets sent. ZWJ/ZWNJ stay for emoji.
+const CONTROL_CHARS = /[\p{Cc}\u2028\u2029]/gu;
+const INVISIBLE_MARKS = /[\u200b\u200e\u200f\u202a-\u202e\u2060\u2066-\u2069\ufeff]/gu;
 
 /**
  * Starter prompts a project offers on the assistant's empty state. They are
@@ -458,7 +464,11 @@ export async function loadProjectStarterPrompts(projectPath: string): Promise<st
   const prompts: string[] = [];
   for (const entry of list) {
     if (typeof entry !== "string") continue;
-    const prompt = entry.replace(CONTROL_CHARS, " ").replace(/ {2,}/g, " ").trim();
+    const prompt = entry
+      .replace(INVISIBLE_MARKS, "")
+      .replace(CONTROL_CHARS, " ")
+      .replace(/ {2,}/g, " ")
+      .trim();
     if (!prompt || prompt.length > MAX_STARTER_PROMPT_CHARS || !isWellFormed(prompt)) continue;
     if (prompts.includes(prompt)) continue;
     prompts.push(prompt);

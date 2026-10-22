@@ -756,6 +756,35 @@ describe("HelpPanel — empty state hero (Daintree-relevant entry points)", () =
     );
   });
 
+  it("shows no starter cards until the project's prompts have loaded", async () => {
+    helpPanelState.autoLaunchEnabled = false;
+    helpPanelState.preferredAgentId = "claude";
+    cliAvailabilityState.availability = { claude: "ready", codex: "ready" };
+    mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex"]);
+    let resolvePrompts: (prompts: string[]) => void = () => {};
+    Object.assign(window.electron.help, {
+      getStarterPrompts: vi.fn(
+        () =>
+          new Promise<string[]>((resolve) => {
+            resolvePrompts = resolve;
+          })
+      ),
+    });
+
+    render(<HelpPanel width={380} />);
+
+    expect(await screen.findByTestId("help-start-assistant")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /How do I set up a new worktree\?/i })).toBeNull();
+
+    await act(async () => {
+      resolvePrompts([]);
+    });
+
+    expect(
+      await screen.findByRole("button", { name: /How do I set up a new worktree\?/i })
+    ).toBeTruthy();
+  });
+
   it("drafts a starter into a session that went live after the card rendered, without launching", async () => {
     helpPanelState.autoLaunchEnabled = false;
     helpPanelState.preferredAgentId = "claude";
