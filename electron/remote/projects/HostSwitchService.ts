@@ -54,7 +54,13 @@ import { plainFolderName } from "../../services/projectAcrossHosts/destination.j
 export interface HostSwitchServiceOptions {
   /** This machine's host-side service (the "local" host). */
   local: ProjectAcrossHostsService;
+  /** The host's session, dialling it first when it isn't open. */
   resolveSession: SessionResolver;
+  /**
+   * The host's session only while it is open; never dials. A lookup a menu
+   * makes on its own must not bring back a host the Shell just released.
+   */
+  openSession: SessionResolver;
   /** The host the calling view belongs to: the source of any switch it asks for. */
   hostOfSender(ctx: IpcContext): HostId;
   isKnownHost(hostId: HostId): boolean;
@@ -123,7 +129,7 @@ export class HostSwitchService {
     this.now = options.now ?? Date.now;
   }
 
-  private gateway(hostId: HostId): HostGateway {
+  private gateway(hostId: HostId, resolve = this.options.resolveSession): HostGateway {
     if (isLocalHostId(hostId)) return new LocalHostGateway(LOCAL_HOST_ID, this.options.local);
     if (!this.options.isKnownHost(hostId)) {
       throw new AppError({
@@ -132,7 +138,7 @@ export class HostSwitchService {
         userMessage: "That host isn't in the host list.",
       });
     }
-    return new RemoteHostGateway(hostId, this.options.resolveSession);
+    return new RemoteHostGateway(hostId, resolve);
   }
 
   /** The source is the calling view's own host; the target is any other known host. */
@@ -151,12 +157,16 @@ export class HostSwitchService {
     return { from: this.gateway(fromHostId), to: this.gateway(toHostId) };
   }
 
-  private source(ctx: IpcContext, fromHostId: unknown): HostGateway {
+  private source(
+    ctx: IpcContext,
+    fromHostId: unknown,
+    resolve = this.options.resolveSession
+  ): HostGateway {
     if (typeof fromHostId !== "string") throw invalid("fromHostId is required");
     if (this.options.hostOfSender(ctx) !== fromHostId) {
       throw invalid("fromHostId must be the calling window's host");
     }
-    return this.gateway(fromHostId);
+    return this.gateway(fromHostId, resolve);
   }
 
   async prepare(ctx: IpcContext, payload: HostSwitchPlanPayload): Promise<HostSwitchPreparation> {
@@ -253,10 +263,11 @@ export class HostSwitchService {
    * Which of `toHostIds` already have the window's project, by repository
    * identity: registered projects there sharing a remote with it. A shared
    * name or a committed id alone never counts. Only registered projects are
-   * read (no disk scan), so a menu can ask each time it opens.
+   * read (no disk scan), so a menu can ask each time it opens. Only hosts
+   * already connected are asked: one that isn't answers `projects: null`.
    */
   async locate(ctx: IpcContext, payload: HostSwitchLocatePayload): Promise<HostProjectPresence[]> {
-    const from = this.source(ctx, payload?.fromHostId);
+    const from = this.source(ctx, payload?.fromHostId, this.options.openSession);
     if (!Array.isArray(payload.toHostIds)) throw invalid("toHostIds is required");
     const targets = [...new Set(payload.toHostIds)]
       .filter((id): id is HostId => typeof id === "string" && id !== from.hostId)
@@ -267,7 +278,7 @@ export class HostSwitchService {
       targets.map(async (hostId): Promise<HostProjectPresence> => {
         if (remoteUrls.length === 0) return { hostId, projects: [] };
         try {
-          const found = await this.gateway(hostId).find({
+          const found = await this.gateway(hostId, this.options.openSession).find({
             remoteUrls,
             committedProjectId: identity.committedProjectId,
           });

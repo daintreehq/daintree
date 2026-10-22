@@ -554,13 +554,14 @@ export class RemoteHostsClient {
     throw new AppError({ code: "VALIDATION", message, userMessage: message });
   }
 
-  connect(payload: { hostId: string }): HostConnectionState {
+  /** `restart` is a person's Retry: it abandons an attempt already under way and dials afresh. */
+  connect(payload: { hostId: string; restart?: boolean }): HostConnectionState {
     const hostId = hostIdOf(payload);
     // Being removed or re-pointed: a link dialled now would be to the old machine.
     if (this.retiring.has(hostId)) return this.options.manager.connectionState(hostId);
     this.ensureRouter();
     this.disconnectedByPerson.delete(hostId);
-    return this.options.manager.connect(hostId).state();
+    return this.options.manager.connect(hostId, { restart: payload.restart === true }).state();
   }
 
   /** Told whenever a host's connection state changes; returns the unsubscribe. */

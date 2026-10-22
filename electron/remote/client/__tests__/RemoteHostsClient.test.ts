@@ -2139,6 +2139,17 @@ describe("RemoteHostsClient", () => {
     });
   });
 
+  // A restart abandons an attempt under way: from a caller that only needs the
+  // link, it would keep cutting a slow host off before it could answer.
+  it("starts a link over only when a person asks to, never for a caller waiting on it", async () => {
+    client.connect({ hostId: "studio-01", restart: true });
+    expect(manager.connect).toHaveBeenLastCalledWith("studio-01", { restart: true });
+    client.connect({ hostId: "studio-01" });
+    expect(manager.connect).toHaveBeenLastCalledWith("studio-01", { restart: false });
+    await client.connectAndWait("studio-01", 1_000);
+    expect(manager.connect).toHaveBeenLastCalledWith("studio-01");
+  });
+
   it("fills each host's summary from the last frame host metrics holds", () => {
     const summary = { agentsObserved: { working: 2 } };
     registerRemoteService("hostMetrics", {

@@ -118,7 +118,7 @@ export const remoteHostsNamespace = defineIpcNamespace({
     ),
     connect: op(
       REMOTE_HOSTS_METHOD_CHANNELS.connect,
-      async (payload: { hostId: string }): Promise<HostConnectionState> =>
+      async (payload: { hostId: string; restart?: boolean }): Promise<HostConnectionState> =>
         requireRemoteService("remoteHostsClient").connect(payload)
     ),
     disconnect: op(

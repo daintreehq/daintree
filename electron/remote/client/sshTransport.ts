@@ -252,11 +252,24 @@ export const OWN_COMMAND_ARGS = [
   "RequestTTY=no",
 ];
 
+/**
+ * Left to the kernel, a host that's off or behind a route that drops packets
+ * takes 75 s to refuse on macOS, past the command deadline, which then cuts
+ * ssh off before it says why. It applies per address, so two that both drop
+ * packets still end inside {@link SSH_COMMAND_TIMEOUT_MS}; a reused master
+ * doesn't connect, so it never applies there.
+ */
+const CONNECT_TIMEOUT = ["-o", "ConnectTimeout=10"];
+
+/** How long one ssh command may run before it is stopped. */
+export const SSH_COMMAND_TIMEOUT_MS = 30_000;
+
 export function sshCommonArgs(controlPath: string, controlPersist = "10m"): string[] {
   return [
     ...OWN_COMMAND_ARGS,
     "-o",
     "BatchMode=yes",
+    ...CONNECT_TIMEOUT,
     ...KEEPALIVE,
     ...NO_FORWARDING,
     "-o",
@@ -354,6 +367,7 @@ export function buildForwardArgs(
     "ForwardAgent=no",
     "-o",
     "ForwardX11=no",
+    ...CONNECT_TIMEOUT,
     ...KEEPALIVE,
     "-o",
     "ControlPath=none",
@@ -804,7 +818,7 @@ export class SshTransport implements LinkTransport {
     }
     const transport = createCommandStreamTransport(
       () => this.spawnStream(buildAttachArgs(target, controlPath, command, controlPersist)),
-      { preambleTimeoutMs: this.options.commandTimeoutMs ?? 30_000 }
+      { preambleTimeoutMs: this.options.commandTimeoutMs ?? SSH_COMMAND_TIMEOUT_MS }
     );
     return transport.open(signal);
   }
@@ -838,6 +852,13 @@ export class SshTransport implements LinkTransport {
 
     let dispose: () => Promise<void>;
     const resolved = await this.resolveControlPath(controlPath, signal);
+    const cancelViaMaster = async () => {
+      await this.run(
+        buildCancelArgs(target, controlPath, localSocket, remoteSocket, resolved),
+        new AbortController().signal
+      ).catch(() => {});
+      await fs.rm(localSocket, { force: true }).catch(() => {});
+    };
     const viaMaster = await this.run(
       buildMuxForwardArgs(target, controlPath, localSocket, remoteSocket, resolved),
       signal
@@ -846,13 +867,7 @@ export class SshTransport implements LinkTransport {
       () => false
     );
     if (viaMaster) {
-      dispose = async () => {
-        await this.run(
-          buildCancelArgs(target, controlPath, localSocket, remoteSocket, resolved),
-          new AbortController().signal
-        ).catch(() => {});
-        await fs.rm(localSocket, { force: true }).catch(() => {});
-      };
+      dispose = cancelViaMaster;
       try {
         await waitForSocket(localSocket, this.options.forwardTimeoutMs ?? 15_000, signal);
       } catch (err) {
@@ -860,7 +875,11 @@ export class SshTransport implements LinkTransport {
         throw err;
       }
     } else {
-      if (signal.aborted) throw new TransportError("Connection cancelled", null);
+      if (signal.aborted) {
+        // Cancelled mid-request (a Retry, a stop): the master may hold the forward all the same.
+        await cancelViaMaster();
+        throw new TransportError("Connection cancelled", null);
+      }
       const forward = await this.startForward(
         buildForwardArgs(target, localSocket, remoteSocket),
         localSocket,
@@ -898,7 +917,7 @@ export class SshTransport implements LinkTransport {
   }
 
   private run(args: string[], signal: AbortSignal, timeoutOverrideMs?: number): Promise<RunResult> {
-    const timeoutMs = timeoutOverrideMs ?? this.options.commandTimeoutMs ?? 30_000;
+    const timeoutMs = timeoutOverrideMs ?? this.options.commandTimeoutMs ?? SSH_COMMAND_TIMEOUT_MS;
     return new Promise((resolve, reject) => {
       if (signal.aborted) {
         reject(new TransportError("Connection cancelled", null));
@@ -968,7 +987,8 @@ export class SshTransport implements LinkTransport {
     localSocket: string,
     signal: AbortSignal
   ): Promise<SshChild> {
-    const timeoutMs = this.options.forwardTimeoutMs ?? 15_000;
+    // It dials afresh, so it gets the deadline any other dialling command has.
+    const timeoutMs = this.options.forwardTimeoutMs ?? SSH_COMMAND_TIMEOUT_MS;
     return new Promise((resolve, reject) => {
       let child: SshChild;
       try {

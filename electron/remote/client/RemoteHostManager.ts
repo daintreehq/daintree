@@ -350,8 +350,8 @@ export class HostConnection {
     for (const check of [...this.readyWaiters]) check();
   }
 
-  retryNow(): void {
-    this.link.retryNow();
+  retryNow(options?: { restart?: boolean }): void {
+    this.link.retryNow(options);
   }
 
   /**
@@ -1186,8 +1186,12 @@ export class RemoteHostManager {
     return () => this.viewerEventListeners.delete(listener);
   }
 
-  /** Start (or nudge) the host's link. Resolves once the attempt is under way, not connected. */
-  connect(hostId: HostId): HostConnection {
+  /**
+   * Start (or nudge) the host's link. Resolves once the attempt is under way,
+   * not connected. `restart` abandons an attempt already under way: a
+   * person's Retry, never a caller that only needs the link.
+   */
+  connect(hostId: HostId, options?: { restart?: boolean }): HostConnection {
     const descriptor = this.options.registry.require(hostId);
     let connection = this.connections.get(hostId);
     if (!connection) {
@@ -1282,7 +1286,7 @@ export class RemoteHostManager {
     }
     this.lastUsed.set(hostId, this.now());
     this.ensureSweep();
-    if (connection.isStarted) connection.retryNow();
+    if (connection.isStarted) connection.retryNow(options);
     else connection.start();
     return connection;
   }

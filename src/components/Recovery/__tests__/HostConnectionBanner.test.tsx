@@ -120,7 +120,8 @@ describe("HostConnectionBanner", () => {
       "studio-01 is unreachable · last seen 2 minutes ago"
     );
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
-    expect(connect).toHaveBeenCalledWith({ hostId: "studio-01" });
+    // Starts over even when an attempt is stuck, rather than waiting it out.
+    expect(connect).toHaveBeenCalledWith({ hostId: "studio-01", restart: true });
   });
 
   it("is never a live region: back-off swaps would be read out on every cycle", () => {
@@ -140,7 +141,7 @@ describe("HostConnectionBanner", () => {
     // Not a prompt to install: the host may well be set up and on its way back.
     expect(screen.getByRole("status").textContent).not.toContain("set up there");
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
-    expect(connect).toHaveBeenCalledWith({ hostId: "studio-01" });
+    expect(connect).toHaveBeenCalledWith({ hostId: "studio-01", restart: true });
     expect(screen.getByRole("button", { name: "Set up…" })).toBeTruthy();
   });
 

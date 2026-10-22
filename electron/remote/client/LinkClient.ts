@@ -159,6 +159,7 @@ export class LinkClient {
   private lastLoggedFailure: string | null = null;
   private generation = 0;
   private readonly releasing = new Set<Promise<void>>();
+  private readonly released = new WeakMap<LinkTransportConnection, Promise<void>>();
   private readonly stateListeners = new Set<(state: LinkClientState) => void>();
   private readonly sessionListeners = new Set<(established: LinkSessionEstablished) => void>();
   private readonly now: () => number;
@@ -212,9 +213,20 @@ export class LinkClient {
     void this.connect();
   }
 
-  /** Try now instead of waiting for the backoff (also leaves a version mismatch). */
-  retryNow(): void {
-    if (!this.running || this.state.status === "connected" || this.attemptAbort) return;
+  /**
+   * Try now instead of waiting for the backoff (also leaves a version
+   * mismatch). An attempt under way is left to finish, so asking for the link
+   * while a slow host answers doesn't cut it off; `restart`, for a person's
+   * Retry, abandons it and dials afresh.
+   */
+  retryNow(options: { restart?: boolean } = {}): void {
+    if (!this.running || this.state.status === "connected") return;
+    if (this.attemptAbort) {
+      if (options.restart !== true) return;
+      // The next generation below makes it stale: it lets go of what it opened.
+      this.attemptAbort.abort();
+      this.attemptAbort = null;
+    }
     this.clearRetry();
     void this.connect();
   }
@@ -281,7 +293,7 @@ export class LinkClient {
       return;
     }
     if (stale()) {
-      await connection.dispose().catch(() => {});
+      await this.release(connection);
       return;
     }
     // Something is listening there again, whatever its handshake says.
@@ -289,11 +301,15 @@ export class LinkClient {
     this.connection = connection;
 
     const session = new LinkSession(connection.socket, { ...this.options.session, role: "client" });
+    // Past the transport, the signal reaches nothing: close the session the handshake waits on.
+    const abandon = () => session.close("client stopped");
+    abort.signal.addEventListener("abort", abandon, { once: true });
     const outcome = await this.handshake(session, connection.token);
+    abort.signal.removeEventListener("abort", abandon);
     if (this.attemptAbort === abort) this.attemptAbort = null;
     if (stale()) {
       session.close("client stopped");
-      await connection.dispose().catch(() => {});
+      await this.release(connection);
       return;
     }
 
@@ -501,9 +517,13 @@ export class LinkClient {
     session.releaseInbound();
   }
 
+  /** Dispose a connection once, however many paths let go of it (a stop and the attempt it abandoned). */
   private release(connection: LinkTransportConnection): Promise<void> {
     if (this.connection === connection) this.connection = null;
+    const pending = this.released.get(connection);
+    if (pending) return pending;
     const done = connection.dispose().catch(() => {});
+    this.released.set(connection, done);
     this.releasing.add(done);
     void done.finally(() => this.releasing.delete(done));
     return done;

@@ -11,6 +11,7 @@ import { LinkClient, type LinkClientState } from "../LinkClient.js";
 import { bridgeChild, type BridgeChild } from "../../__tests__/harness/bridgeChild.js";
 import {
   PROBE_COMMAND,
+  SSH_COMMAND_TIMEOUT_MS,
   SshTransport,
   attachCommandFor,
   buildAttachArgs,
@@ -51,6 +52,8 @@ const COMMON = [
   "RequestTTY=no",
   "-o",
   "BatchMode=yes",
+  "-o",
+  "ConnectTimeout=10",
   "-o",
   "ServerAliveInterval=15",
   "-o",
@@ -94,6 +97,29 @@ describe("ssh argument construction", () => {
     }
   });
 
+  // ssh's connect timeout applies per address, so a host whose IPv6 and IPv4
+  // routes both drop packets takes two of them: both must end before the
+  // command deadline, or the deadline cuts ssh off before it says why.
+  it("lets ssh give up on an unreachable host before the command deadline, on every call that can dial", () => {
+    const calls = [
+      buildProbeArgs("studio", "/cp/cm-%C"),
+      buildCatArgs("studio", "/cp/cm-%C", "/home/g/host.json"),
+      buildAttachArgs("studio", "/cp/cm-%C", "daintree --attach-stdio"),
+      buildStreamLocalCheckArgs("studio", "/cp/cm-%C", "/run/user/1/daintree/host.sock"),
+      buildForwardArgs("studio", "/l/l.sock", "/run/user/1/daintree/host.sock"),
+      remoteShellArgs("studio", "/cp/cm-%C", "true"),
+      scpArgs("studio", "/cp/cm-%C", "/tmp/a", "/tmp/b", "ssh"),
+    ];
+    for (const args of calls) {
+      const timeouts = args
+        .filter((arg) => arg.startsWith("ConnectTimeout="))
+        .map((arg) => Number(arg.slice("ConnectTimeout=".length)));
+      expect(timeouts).toHaveLength(1);
+      expect(timeouts[0]).toBeGreaterThan(0);
+      expect(2 * timeouts[0]! * 1000).toBeLessThan(SSH_COMMAND_TIMEOUT_MS);
+    }
+  });
+
   it("builds the probe, discovery read and forward commands", () => {
     expect(buildProbeArgs("studio", "/cp/cm-%C")).toEqual([
       ...COMMON,
@@ -132,6 +158,8 @@ describe("ssh argument construction", () => {
       "ForwardAgent=no",
       "-o",
       "ForwardX11=no",
+      "-o",
+      "ConnectTimeout=10",
       "-o",
       "ServerAliveInterval=15",
       "-o",
@@ -467,6 +495,37 @@ describe("SshTransport with an injected ssh", () => {
     await conn.dispose();
     expect(dedicated.killed).toBe(true);
     for (const p of proxies) p.close();
+  });
+
+  it("cancels the forward an attempt abandoned mid-request may have left on the master", async () => {
+    const calls: string[][] = [];
+    const abort = new AbortController();
+    const spawner: SshSpawner = (args) => {
+      calls.push(args);
+      const child = new FakeChild();
+      const command = args.at(-1)!;
+      if (command === PROBE_COMMAND) child.finish(0, "Darwin\n501\n/Users/g\n");
+      else if (command.startsWith("cat -- "))
+        child.finish(
+          0,
+          JSON.stringify({ version: 1, socketPath: DARWIN_SOCKET, token: "a".repeat(64), pid: 1 })
+        );
+      // The master takes the forward; its answer never reaches the abandoned attempt.
+      else if (args.includes("forward")) setImmediate(() => abort.abort());
+      else child.finish(0);
+      return child;
+    };
+    const transport = new SshTransport({
+      target: "studio",
+      clientDir: path.join(root, "c"),
+      spawn: spawner,
+    });
+    await expect(transport.open(abort.signal)).rejects.toThrow("Connection cancelled");
+    const forward = calls.find((args) => args.includes("forward"))!;
+    const cancel = calls.find((args) => args.includes("cancel"));
+    expect(cancel?.at(-3)).toBe(forward.at(-3));
+    // Nor does it start a dedicated forward for an attempt nobody is waiting on.
+    expect(calls.some((args) => args.includes("-N"))).toBe(false);
   });
 
   it("reports ssh's own stderr when the host cannot be reached", async () => {

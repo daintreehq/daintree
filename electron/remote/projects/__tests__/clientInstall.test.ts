@@ -1,7 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("../../../services/projectAcrossHosts/index.js", () => ({
-  getProjectAcrossHostsService: () => ({}),
+  getProjectAcrossHostsService: () => ({
+    identify: async () => ({
+      remotes: [{ name: "origin", url: "https://github.com/daintreehq/daintree.git" }],
+      committedProjectId: null,
+    }),
+  }),
 }));
 
 import { createHostSwitchService } from "../clientInstall.js";
@@ -78,5 +83,73 @@ describe("createHostSwitchService", () => {
     ).rejects.toMatchObject({
       code: "HOST_DISCONNECTED",
     });
+  });
+
+  // An idle release closes hosts one after another; a lookup that reaches
+  // one just closed must not dial it straight back (#13926).
+  it("asks only connected hosts which have the project, and never dials one that isn't", async () => {
+    const connectAndWait = vi.fn(async () => "ready" as never);
+    const studio3 = {
+      isOpen: true,
+      call: vi.fn(async () => [
+        {
+          projectId: "p3",
+          path: "/srv/daintree",
+          name: "daintree",
+          remotes: [{ name: "origin", url: "https://github.com/daintreehq/daintree.git" }],
+          source: "registered",
+          matchedBy: "remote-url",
+          lastOpenedAt: null,
+        },
+      ]),
+    };
+    const service = createHostSwitchService({
+      client: {
+        connectAndWait,
+        getWindowHost: vi.fn(() => ({ hostId: "local" }) as never),
+        list: vi.fn(
+          () =>
+            [
+              { descriptor: { id: "studio-03", name: "Studio 3" } },
+              { descriptor: { id: "studio-04", name: "Studio 4" } },
+            ] as never
+        ),
+      },
+      sessionFor: (hostId) => (hostId === "studio-03" ? (studio3 as never) : null),
+    });
+    await expect(
+      service.locate({ senderWebContentsId: 1 } as never, {
+        fromHostId: "local",
+        projectId: "p1",
+        toHostIds: ["studio-03", "studio-04"],
+      })
+    ).resolves.toEqual([
+      {
+        hostId: "studio-03",
+        projects: [{ projectId: "p3", name: "daintree", path: "/srv/daintree" }],
+      },
+      { hostId: "studio-04", projects: null },
+    ]);
+    expect(connectAndWait).not.toHaveBeenCalled();
+  });
+
+  it("doesn't dial the window's own host to say what its project is", async () => {
+    const connectAndWait = vi.fn(async () => "ready" as never);
+    const service = createHostSwitchService({
+      client: {
+        connectAndWait,
+        getWindowHost: vi.fn(() => ({ hostId: "studio-03" }) as never),
+        list: vi.fn(() => [{ descriptor: { id: "studio-03", name: "Studio 3" } }] as never),
+      },
+      sessionFor: () => null,
+    });
+    await expect(
+      service.locate({ senderWebContentsId: 1 } as never, {
+        fromHostId: "studio-03",
+        projectId: "p1",
+        toHostIds: ["local"],
+      })
+    ).rejects.toMatchObject({ code: "HOST_DISCONNECTED" });
+    expect(connectAndWait).not.toHaveBeenCalled();
   });
 });
