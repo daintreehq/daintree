@@ -30,6 +30,7 @@ import {
   appVersion,
   componentFile,
   componentName,
+  elementVNodeAt,
   field,
   instanceApp,
   isInstance,
@@ -38,11 +39,10 @@ import {
   ownerOf,
   parentOf,
   renderedRoots,
-  vnodeAt,
   type Lookup,
   type VueInstance,
 } from "./vueInstance.js";
-import { elementStamp, invocationStamp, type Stamp } from "./vueStamps.js";
+import { anchorStamp, elementStamp, invocationStamp, type Stamp } from "./vueStamps.js";
 
 /** Restated from `COMPONENT_LIMITS` and `OBSERVATION_LIMITS`: a value import would bundle zod into the page. */
 const LIMITS = { records: 64, roots: 32, candidates: 4 } as const;
@@ -301,13 +301,18 @@ function selectionOf(
   });
 
   const writer = new CandidateWriter();
-  // The element's own vnode says who wrote it; without one (markup Vue
-  // inserted as a block, or that it never mounted) only a stamp on the
-  // element itself can say where it is written.
-  const vnode = found.own ? vnodeAt(element) : null;
-  const stamp = elementStamp(element, vnode, found.own ? found.instance : null);
-  const owner = field(vnode, "ctx");
-  const ownerFile = isInstance(owner) ? componentFile(owner) : null;
+  // The element's own vnode says who wrote it. Without one (markup Vue
+  // inserted as a block, or never mounted) only a stamp on the element itself
+  // can say where it is written, held to the file of the template around it.
+  // An instance with no element vnode of its own is a component still waiting
+  // to hydrate on this node: nothing here is the element's yet.
+  const vnode = found.own ? elementVNodeAt(element) : null;
+  const pending = found.own && vnode === null;
+  const owner = field(found.own ? vnode : elementVNodeAt(found.node), "ctx");
+  const templateFile = isInstance(owner) ? componentFile(owner) : null;
+  const read = pending ? null : elementStamp(element, vnode, found.own ? found.instance : null);
+  const stamp = read === null ? null : anchorStamp(read, templateFile);
+  const ownerFile = found.own && !pending ? templateFile : null;
   const elementCandidates = present([
     stamp === null ? null : writer.stamp("template-location", stamp),
     ownerFile === null
@@ -316,7 +321,11 @@ function selectionOf(
   ]);
   records.forEach((record, index) => {
     const instance = instances[index]!;
-    const invocation = invocationStamp(instance);
+    const invoked = invocationStamp(instance);
+    // The tag that used a component is written in its owner's template.
+    const caller = ownerOf(instance);
+    const invocation =
+      invoked === null ? null : anchorStamp(invoked, caller ? componentFile(caller) : null);
     const file = componentFile(instance);
     record.sourceCandidates = present([
       invocation === null ? null : writer.stamp("component-invocation", invocation),
@@ -344,9 +353,12 @@ function selectionOf(
     const capabilities: Capabilities = {
       names: kept.some((record) => record.name !== null) ? AVAILABLE : NOT_EXPOSED,
       chain: kept.length > 0 ? AVAILABLE : NOT_EXPOSED,
+      // A walk cut short has not shown there is nothing to select.
       componentSelection: kept.some((record) => record.rootElementIds.length > 0)
         ? AVAILABLE
-        : NOT_EXPOSED,
+        : kept.some((record) => !record.rootsComplete)
+          ? UNKNOWN
+          : NOT_EXPOSED,
       file: all.length > 0 ? AVAILABLE : missing,
       line: positioned ? AVAILABLE : missing,
       // A stamp is where a tag opens; whether the host can find where it ends is the host's to say.
@@ -361,6 +373,7 @@ function selectionOf(
           { name: "instanceLookup", value: lookup },
           { name: "version", value: version },
           { name: "hmrRuntime", value: dev },
+          { name: "elementVNode", value: vnode !== null },
           { name: "elementStamp", value: stamp === null ? null : stamp.extraction.kind },
           { name: "claimsOmitted", value: omitted },
         ]),

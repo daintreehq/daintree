@@ -17,10 +17,18 @@
  * falls through to the component's root element and replaces that element's
  * own: the attribute on a root element can name where its component was
  * used. A stamp equal to one of those is never taken for the element's own.
+ * Roots are found as Vue finds them to pass attributes down, through the
+ * fragment a dev build wraps around a root that has comments beside it.
  */
 
 import type { Extraction } from "../../../../../shared/elementPicker/source.js";
-import { componentsRootedAt, field, type VNode, type VueInstance } from "./vueInstance.js";
+import {
+  componentsRootedAt,
+  effectiveRoot,
+  field,
+  type VNode,
+  type VueInstance,
+} from "./vueInstance.js";
 
 export const INSPECTOR_ATTRIBUTE = "data-v-inspector";
 export const INSPECTOR_PROP = "__v_inspector";
@@ -102,17 +110,49 @@ export function elementStamp(
 
 /**
  * Where a component was used, from the stamp on its own vnode: the parent's
- * tag for it. When it is its parent's root, a stamp equal to the parent's is
- * the parent's own call site, passed down, and says nothing about this one.
+ * tag for it. A hidden stamp is the vnode's own, even where a recursive
+ * component repeats one call site. An enumerable one equal to the parent's,
+ * on the vnode the parent's output is rooted at, is the parent's call site
+ * passed down, unless the parent passes no attributes on.
  */
 export function invocationStamp(instance: VueInstance): Stamp | null {
   const vnode = field(instance, "vnode");
-  const stamp = vnodeStamp(vnode, "vnode");
+  const props = field(vnode, "props");
+  const hidden = parseStamp(field(props, INSPECTOR_PROP), {
+    kind: "runtime-field",
+    field: `vnode.props.${INSPECTOR_PROP}`,
+  });
+  if (hidden !== null) return hidden;
+  const stamp = parseStamp(field(props, INSPECTOR_ATTRIBUTE), {
+    kind: "runtime-field",
+    field: `vnode.props.${INSPECTOR_ATTRIBUTE}`,
+  });
   if (stamp === null) return null;
   const parent = field(instance, "parent");
-  if (field(parent, "subTree") === vnode) {
-    const inherited = vnodeStamp(field(parent, "vnode"), "vnode");
-    if (inherited?.raw === stamp.raw) return null;
+  if (
+    effectiveRoot(field(parent, "subTree")) === vnode &&
+    field(field(parent, "type"), "inheritAttrs") !== false &&
+    vnodeStamp(field(parent, "vnode"), "vnode")?.raw === stamp.raw
+  ) {
+    return null;
   }
   return stamp;
+}
+
+/**
+ * A stamp's file in a spelling the host can find. The plugin writes it
+ * relative to the dev server's working directory, which the host is never
+ * told; the component whose template holds the tag names the same file
+ * absolute, as `type.__file`, so a stamp naming that file takes its absolute
+ * spelling. A stamp naming another file is not this tag's, and is dropped.
+ * `templateFile` is null when no component says, and the stamp stays as read.
+ */
+export function anchorStamp(stamp: Stamp, templateFile: string | null): Stamp | null {
+  if (templateFile === null) return stamp;
+  const owner = templateFile.replaceAll("\\", "/");
+  const reported = stamp.file.replaceAll("\\", "/");
+  if (owner === reported) return stamp;
+  // A file outside the working directory is written up out of it first.
+  const tail = reported.replace(/^(?:\.\.?\/)+/, "");
+  return tail.length > 0 && owner.endsWith(`/${tail}`) ? { ...stamp, file: templateFile } : null;
 }

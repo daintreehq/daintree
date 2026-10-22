@@ -56,7 +56,37 @@ interface ParsedNode {
   loc: { start: { line: number; column: number; offset: number }; end: { offset: number } };
 }
 
-type Template = { status: "ok"; root: ParsedNode } | { status: "unsupported" };
+/** Every tag in the template by where it opens, `line:column`. */
+type Template = { status: "ok"; tags: Map<string, TemplateTag> } | { status: "unsupported" };
+
+const at = (line: number, column: number) => `${line}:${column}`;
+
+/** One pass over the template, children taken one at a time: a file of wide sibling lists stays flat. */
+function indexTags(template: ParsedNode): Map<string, TemplateTag> {
+  const tags = new Map<string, TemplateTag>();
+  const pending: Array<{ list: ParsedNode[]; next: number }> = [
+    { list: template.children ?? [], next: 0 },
+  ];
+  while (pending.length > 0) {
+    const frame = pending[pending.length - 1]!;
+    if (frame.next >= frame.list.length) {
+      pending.pop();
+      continue;
+    }
+    const node = frame.list[frame.next]!;
+    frame.next += 1;
+    if (node.type !== NODE.element) continue;
+    const { start, end } = node.loc;
+    tags.set(at(start.line, start.column), {
+      tag: node.tag ?? "",
+      tagType: node.tagType ?? -1,
+      start: start.offset,
+      end: end.offset,
+    });
+    if (node.children && node.children.length > 0) pending.push({ list: node.children, next: 0 });
+  }
+  return tags;
+}
 
 function attribute(node: ParsedNode, name: string): string | null | undefined {
   const prop = node.props?.find((entry) => entry.type === NODE.attribute && entry.name === name);
@@ -87,7 +117,7 @@ function templateOf(compiler: Compiler, text: string): Template {
   const lang = attribute(template, "lang");
   if (lang !== undefined && lang !== "html") return { status: "unsupported" };
   if (attribute(template, "src") !== undefined) return { status: "unsupported" };
-  return { status: "ok", root: template };
+  return { status: "ok", tags: indexTags(template) };
 }
 
 /** One resolve's parses: a selection checks several tags in one file against the same text. */
@@ -107,25 +137,8 @@ export class TemplateIndex {
   async tagAt(text: string, line: number, column: number): Promise<TemplateLookup> {
     const template = await this.template(text);
     if (template.status !== "ok") return template;
-    const pending = [...(template.root.children ?? [])];
-    while (pending.length > 0) {
-      const node = pending.pop()!;
-      if (node.type !== NODE.element) continue;
-      const { start, end } = node.loc;
-      if (start.line === line && start.column === column) {
-        return {
-          status: "found",
-          tag: {
-            tag: node.tag ?? "",
-            tagType: node.tagType ?? -1,
-            start: start.offset,
-            end: end.offset,
-          },
-        };
-      }
-      if (node.children) pending.push(...node.children);
-    }
-    return { status: "absent" };
+    const tag = template.tags.get(at(line, column));
+    return tag === undefined ? { status: "absent" } : { status: "found", tag };
   }
 }
 

@@ -144,9 +144,13 @@ function kinds(candidates: SourceCandidate[]): string[] {
   return candidates.map((candidate) => candidate.kind);
 }
 
-/** The template-location a stamp turns into: 1-based line and column, as Vue's parser counts them. */
-function stampedAt(stamp: string) {
-  const [, file, line, column] = /^(.+):(\d+):(\d+)$/.exec(stamp)!;
+/**
+ * The claim a stamp turns into: its position as Vue's parser counts it, and
+ * the file it names, spelled as the component holding the tag reports it.
+ */
+function stampedAt(stamp: string, file: string) {
+  const [, relative, line, column] = /^(.+):(\d+):(\d+)$/.exec(stamp)!;
+  expect(file.endsWith(`/${relative}`)).toBe(true);
   return {
     file,
     location: {
@@ -360,7 +364,7 @@ describe("the Vue extractor with vite-plugin-vue-inspector's stamps", () => {
       candidateId: expect.any(String),
       framework: "vue",
       extraction: { kind: "attribute", attribute: "data-v-inspector" },
-      ...stampedAt(ownStamp),
+      ...stampedAt(ownStamp, ENTRY),
     });
     // The owner's file is a separate observation, and stays one.
     expect(kinds(observation.sourceCandidates)).toEqual(["template-location", "file-hint"]);
@@ -379,7 +383,7 @@ describe("the Vue extractor with vite-plugin-vue-inspector's stamps", () => {
       candidateId: expect.any(String),
       framework: "vue",
       extraction: { kind: "runtime-field", field: "vnode.props.data-v-inspector" },
-      ...stampedAt(badgeCall),
+      ...stampedAt(badgeCall, ENTRY),
     });
   });
 
@@ -392,7 +396,20 @@ describe("the Vue extractor with vite-plugin-vue-inspector's stamps", () => {
     expect(kinds(record(observation, "Badge").sourceCandidates)).toEqual(["file-hint"]);
     expect(record(observation, "Wrapper").sourceCandidates[0]).toMatchObject({
       kind: "component-invocation",
-      ...stampedAt(wrapperCall),
+      ...stampedAt(wrapperCall, ENTRY),
+    });
+  });
+
+  it("follows a stamp passed down through the fragment a dev build wraps around a commented root", async () => {
+    await mountVite({ inspector: "attribute" });
+    const noteCall = stampFor("src/App.vue", APP_SOURCE, '<Note class="noted"');
+    expect(query("p.note").getAttribute("data-v-inspector")).toBe(noteCall);
+    const observation = pick("p.note");
+    expect(chainNames(observation)).toEqual(["Note", "App"]);
+    expect(kinds(observation.sourceCandidates)).toEqual(["file-hint"]);
+    expect(record(observation, "Note").sourceCandidates[0]).toMatchObject({
+      kind: "component-invocation",
+      ...stampedAt(noteCall, ENTRY),
     });
   });
 
@@ -403,18 +420,21 @@ describe("the Vue extractor with vite-plugin-vue-inspector's stamps", () => {
     expect(button.sourceCandidates[0]).toMatchObject({
       kind: "template-location",
       extraction: { kind: "runtime-field", field: "__vnode.props.__v_inspector" },
-      ...stampedAt(ownStamp),
+      ...stampedAt(ownStamp, ENTRY),
     });
     // Hidden stamps never fall through, so the span keeps its own.
     const badge = pick("span.badge:not(.wrapped)");
     expect(badge.sourceCandidates[0]).toMatchObject({
       kind: "template-location",
-      ...stampedAt(stampFor("src/Badge.vue", BADGE_SOURCE, '<span class="badge"')),
+      ...stampedAt(
+        stampFor("src/Badge.vue", BADGE_SOURCE, '<span class="badge"'),
+        `${VITE_ROOT}/src/Badge.vue`
+      ),
     });
     expect(record(badge, "Badge").sourceCandidates[0]).toMatchObject({
       kind: "component-invocation",
       extraction: { kind: "runtime-field", field: "vnode.props.__v_inspector" },
-      ...stampedAt(badgeCall),
+      ...stampedAt(badgeCall, ENTRY),
     });
   });
 
@@ -427,7 +447,7 @@ describe("the Vue extractor with vite-plugin-vue-inspector's stamps", () => {
     expect(kinds(record(observation, "Badge").sourceCandidates)).toEqual(["file-hint"]);
     expect(record(observation, "Wrapper").sourceCandidates[0]).toMatchObject({
       kind: "component-invocation",
-      ...stampedAt(wrapperCall),
+      ...stampedAt(wrapperCall, ENTRY),
     });
   });
 
@@ -439,7 +459,8 @@ describe("the Vue extractor with vite-plugin-vue-inspector's stamps", () => {
         kind: "template-location",
         extraction: { kind: "attribute", attribute: "data-v-inspector" },
         ...stampedAt(
-          stampFor("src/Legal.vue", fixtureSource("Legal.vue"), '<p class="clause clause-5"')
+          stampFor("src/Legal.vue", fixtureSource("Legal.vue"), '<p class="clause clause-5"'),
+          `${VITE_ROOT}/src/Legal.vue`
         ),
       }),
     ]);
@@ -519,12 +540,12 @@ describe("the Vue extractor on a hydrated Nuxt 4 page", () => {
     expect(nameOf(observation, card.ownerId)).toBe("index");
     expect(observation.sourceCandidates[0]).toMatchObject({
       kind: "template-location",
-      ...stampedAt(stampFor("app/pages/index.vue", PAGE_SOURCE, '<button class="buy"')),
+      ...stampedAt(stampFor("app/pages/index.vue", PAGE_SOURCE, '<button class="buy"'), PAGE),
     });
     expect(observation.sourceCandidates[1]).toMatchObject({ kind: "file-hint", file: PAGE });
     expect(card.sourceCandidates[0]).toMatchObject({
       kind: "component-invocation",
-      ...stampedAt(stampFor("app/pages/index.vue", PAGE_SOURCE, "<ProductCard")),
+      ...stampedAt(stampFor("app/pages/index.vue", PAGE_SOURCE, "<ProductCard"), PAGE),
     });
     // Nuxt's own root reports its file in the dependency; the host decides what that is worth.
     expect(record(observation, "nuxt-root").sourceCandidates).toContainEqual(

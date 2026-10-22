@@ -113,8 +113,9 @@ const EXCLUDED_TAGS = new Set(["template", "script", "style"]);
 
 /**
  * The inspector's compile step, as its `compileTemplateFallback` does it: every
- * element and component tag gains `data-v-inspector` with the position Vue's
- * parser gives the tag, written after its last attribute or its name.
+ * element and component tag not already stamped gains `data-v-inspector` with
+ * the position Vue's parser gives the tag, written after its last attribute or
+ * its name.
  */
 function stampTemplate(source: string, relative: string): string {
   const { descriptor } = parse(source);
@@ -123,7 +124,14 @@ function stampTemplate(source: string, relative: string): string {
     for (const node of nodes) {
       if (node.type !== 1) continue;
       const element = node as ElementNode;
-      if (!EXCLUDED_TAGS.has(element.tag) && (element.tagType === 0 || element.tagType === 1)) {
+      const stamped = element.props.some(
+        (prop) => prop.type === 6 && prop.name === "data-v-inspector"
+      );
+      if (
+        !EXCLUDED_TAGS.has(element.tag) &&
+        !stamped &&
+        (element.tagType === 0 || element.tagType === 1)
+      ) {
         const at = element.props.length
           ? Math.max(...element.props.map((prop) => prop.loc.end.offset))
           : element.loc.start.offset + element.tag.length + 1;

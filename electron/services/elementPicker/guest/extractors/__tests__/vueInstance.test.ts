@@ -8,7 +8,7 @@ import type { ElementRefs } from "../../registry.js";
 import type { ExtractorContribution } from "../../types.js";
 import { createVueExtractor } from "../vueExtractor.js";
 import { Budget, renderedRoots, type VueInstance } from "../vueInstance.js";
-import { parseStamp } from "../vueStamps.js";
+import { anchorStamp, invocationStamp, parseStamp } from "../vueStamps.js";
 
 /**
  * What the Vue extractor makes of page data no stock Vue 3.5 build produces:
@@ -395,5 +395,182 @@ describe("parseStamp", () => {
     }
     expect(parseStamp(`${"a".repeat(2_049)}:1:1`, attribute)).toBeNull();
     expect(parseStamp(42, attribute)).toBeNull();
+  });
+});
+
+describe("the Vue extractor at the edges of what Vue owns", () => {
+  it("claims nothing on a node whose component is still waiting to hydrate there", () => {
+    // Vue puts the component's vnode on the root it will hydrate into, stamped
+    // with the tag that used the component.
+    const parent = instance({ type: { __name: "Page", __file: "/app/src/Page.vue" } });
+    const props = {};
+    Object.defineProperty(props, "__v_inspector", { value: "src/Page.vue:4:5" });
+    const root = document.createElement("section");
+    document.body.append(root);
+    mark(root, parent, vnode({ type: {}, shapeFlag: 4, el: root, props, ctx: parent }));
+    const contribution = select(root);
+    expect(names(contribution)).toEqual(["Page"]);
+    expect(contribution.sourceCandidates).toEqual([]);
+  });
+
+  it("leaves a node another framework rendered to that framework, whatever Vue rendered around it", () => {
+    const host = document.createElement("div");
+    mark(host, instance({ type: { __name: "Host" } }));
+    const reactRoot = document.createElement("div");
+    (reactRoot as unknown as Shape)["__reactFiber$x1"] = {};
+    const leaf = document.createElement("span");
+    reactRoot.append(leaf);
+    host.append(reactRoot);
+    document.body.append(host);
+    expect(createVueExtractor().extract(leaf, "selection", refTable())).toBeNull();
+    expect(createVueExtractor().extract(reactRoot, "selection", refTable())).toBeNull();
+    // The host Vue rendered is still Vue's.
+    expect(names(select(host))).toEqual(["Host"]);
+  });
+
+  it("says nothing about a mount container itself, which the app inside it did not render", () => {
+    const container = document.createElement("div");
+    (container as unknown as Shape).__vue_app__ = { _container: container, _instance: null };
+    document.body.append(container);
+    expect(createVueExtractor().extract(container, "selection", refTable())).toBeNull();
+  });
+
+  it("stops at an app mounted into a shadow root rather than borrowing the host's instance", () => {
+    const host = document.createElement("div");
+    mark(host, instance({ type: { __name: "Outer" } }));
+    document.body.append(host);
+    const shadow = host.attachShadow({ mode: "open" });
+    (shadow as unknown as Shape).__vue_app__ = { _container: shadow, _instance: null };
+    const button = document.createElement("button");
+    shadow.append(button);
+    expect(select(button)).toMatchObject({
+      componentChain: { components: [] },
+      capabilities: { chain: { state: "unavailable", reason: "production-build" } },
+    });
+  });
+
+  it("stops at an ancestor it cannot read past", () => {
+    const button = document.createElement("button");
+    Object.defineProperty(button, "parentNode", {
+      get() {
+        throw new Error("hostile");
+      },
+    });
+    expect(() => createVueExtractor().extract(button, "selection", refTable())).not.toThrow();
+  });
+
+  it("says a walk cut short has not shown there is nothing to select", () => {
+    const button = document.createElement("button");
+    document.body.append(button);
+    // A Vapor instance has no subtree to read roots from.
+    mark(button, instance({ type: { __name: "VaporLeaf" }, vapor: true }));
+    expect(select(button).capabilities?.componentSelection).toEqual({ state: "unknown" });
+  });
+});
+
+describe("invocationStamp", () => {
+  const stampProps = (value: string, hidden: boolean): Shape => {
+    const props: Shape = {};
+    if (hidden) Object.defineProperty(props, "__v_inspector", { value });
+    else props["data-v-inspector"] = value;
+    return props;
+  };
+
+  /** A component whose output is rooted at `child`'s vnode, both stamped `value`. */
+  function rooted(
+    value: string,
+    options: { hidden: boolean; inheritAttrs?: boolean; devRoot?: boolean }
+  ) {
+    const childVNode = vnode({ type: {}, shapeFlag: 4, props: stampProps(value, options.hidden) });
+    const subTree = options.devRoot
+      ? vnode({
+          type: Symbol.for("v-fgt"),
+          patchFlag: 2048,
+          children: [vnode({ type: Symbol.for("v-cmt"), children: " note " }), childVNode],
+        })
+      : childVNode;
+    const parent = instance({
+      type: options.inheritAttrs === false ? { inheritAttrs: false } : {},
+      subTree,
+      vnode: vnode({ type: {}, shapeFlag: 4, props: stampProps(value, options.hidden) }),
+    });
+    return instance({ parent, vnode: childVNode }) as VueInstance;
+  }
+
+  it("takes a stamp equal to its parent's for the parent's, passed down to the root", () => {
+    expect(invocationStamp(rooted("src/A.vue:3:5", { hidden: false }))).toBeNull();
+  });
+
+  it("looks for that root through the fragment a dev build wraps around a commented one", () => {
+    expect(invocationStamp(rooted("src/A.vue:3:5", { hidden: false, devRoot: true }))).toBeNull();
+  });
+
+  it("keeps an equal stamp a parent passing no attributes on could not have handed down", () => {
+    expect(
+      invocationStamp(rooted("src/A.vue:3:5", { hidden: false, inheritAttrs: false }))
+    ).toMatchObject({ file: "src/A.vue", line: 3, column: 5 });
+  });
+
+  it("keeps a hidden stamp, which never falls through, though a recursive component repeats it", () => {
+    expect(invocationStamp(rooted("src/Tree.vue:4:7", { hidden: true }))).toMatchObject({
+      extraction: { kind: "runtime-field", field: "vnode.props.__v_inspector" },
+    });
+  });
+});
+
+describe("anchorStamp", () => {
+  const stamp = parseStamp("src/App.vue:3:5", {
+    kind: "attribute",
+    attribute: "data-v-inspector",
+  })!;
+
+  it("takes the absolute spelling of the file the component holding the tag reports", () => {
+    expect(anchorStamp(stamp, "/projects/shop/src/App.vue")?.file).toBe(
+      "/projects/shop/src/App.vue"
+    );
+    const above = parseStamp("../packages/ui/Button.vue:1:1", stamp.extraction)!;
+    expect(anchorStamp(above, "/repo/packages/ui/Button.vue")?.file).toBe(
+      "/repo/packages/ui/Button.vue"
+    );
+  });
+
+  it("drops a stamp naming another file than the template its tag is in", () => {
+    expect(anchorStamp(stamp, "/projects/shop/src/Other.vue")).toBeNull();
+    expect(anchorStamp(stamp, "/projects/shop/notsrc/App.vue")).toBeNull();
+  });
+
+  it("keeps a stamp as read when no component names a file", () => {
+    expect(anchorStamp(stamp, null)).toBe(stamp);
+  });
+});
+
+describe("renderedRoots on what a page hands over", () => {
+  it("walks no further into a list than the budget allows, however long it says it is", () => {
+    const children: unknown[] = [];
+    children.length = 2 ** 32 - 1;
+    const started = Date.now();
+    const roots = renderedRoots(
+      instance({ subTree: vnode({ type: Symbol.for("v-fgt"), children }) }) as VueInstance,
+      32,
+      new Budget(1_000)
+    );
+    expect(roots.complete).toBe(false);
+    expect(Date.now() - started).toBeLessThan(1_000);
+  });
+
+  it("reads what a hydrating Suspense shows from its pending branch", () => {
+    const shown = document.createElement("div");
+    document.body.append(shown);
+    const roots = renderedRoots(
+      instance({
+        subTree: vnode({
+          shapeFlag: 128,
+          suspense: { isHydrating: true, activeBranch: null, pendingBranch: elementVNode(shown) },
+        }),
+      }) as VueInstance,
+      32,
+      new Budget(100)
+    );
+    expect(roots).toEqual({ elements: [shown], complete: true });
   });
 });

@@ -86,39 +86,84 @@ function instanceAt(node: Node): VueInstance | null {
   return isInstance(instance) ? instance : null;
 }
 
-export function vnodeAt(node: Node): VNode | null {
+/**
+ * The vnode Vue mounted `node` from, when that is the node's own element
+ * vnode. While a component waits to hydrate (an async one, or one hydrated
+ * lazily) its root node holds the component's vnode instead, which describes
+ * the tag that used the component, not the node.
+ */
+export function elementVNodeAt(node: Node): VNode | null {
   const vnode = field(node, "__vnode");
-  return isVNode(vnode) ? vnode : null;
+  if (!isVNode(vnode) || field(vnode, "el") !== node) return null;
+  const shape = field(vnode, "shapeFlag");
+  return typeof shape === "number" && shape & SHAPE.element ? vnode : null;
+}
+
+function appAt(node: Node): Record<string, unknown> | null {
+  const app = field(node, "__vue_app__");
+  return typeof app === "object" && app !== null ? (app as Record<string, unknown>) : null;
+}
+
+const FOREIGN_PREFIXES = ["__reactFiber$", "__reactContainer$"];
+const FOREIGN_NAMES = ["__svelte_meta", "__ngContext__"];
+
+/** Another framework rendered this node, or mounts into it: below it is that framework's to describe. */
+function isForeign(node: Node): boolean {
+  try {
+    if (FOREIGN_NAMES.some((name) => Object.hasOwn(node, name))) return true;
+    return Object.keys(node).some((key) =>
+      FOREIGN_PREFIXES.some((prefix) => key.startsWith(prefix))
+    );
+  } catch {
+    return false;
+  }
+}
+
+function parentNodeOf(node: Node): Node | null {
+  try {
+    return node.parentNode;
+  } catch {
+    return null;
+  }
 }
 
 export type Lookup =
-  /** `own`: the instance was read off the picked node itself, not an ancestor. */
-  | { kind: "instance"; instance: VueInstance; own: boolean }
+  /** `own`: the instance was read off the picked node itself; `node` is where it was read. */
+  | { kind: "instance"; instance: VueInstance; own: boolean; node: Element }
   /** Inside a mounted Vue app whose nodes carry no instance. */
-  | { kind: "app"; app: Record<string, unknown>; container: Element };
+  | { kind: "app"; app: Record<string, unknown>; container: Node };
 
 /**
  * The instance the picked node belongs to: its own, or its nearest mounted
  * ancestor's, since markup inside a component that Vue did not mount itself
  * (`v-html`, a static block, a widget's DOM) still belongs to that component.
- * The walk stops at the first app container above the node, so a nested app
- * built without dev metadata never borrows an outer app's instance.
+ * The walk stops at the first app container above the node, element or shadow
+ * root, so a nested app built without dev metadata never borrows an outer
+ * app's instance, and at the first node another framework rendered, which is
+ * that framework's whatever Vue rendered around it. A container itself is not
+ * part of the app inside it.
  */
 export function lookUp(node: Element): Lookup | null {
   let current: Node | null = node;
   for (let depth = 0; depth < MAX_DOM_ANCESTORS && current !== null; depth += 1) {
     if (current instanceof Element) {
-      // A container is rendered by the app around it, and holds the app inside it.
       const instance = instanceAt(current);
-      if (depth === 0 && instance !== null) return { kind: "instance", instance, own: true };
-      const app = field(current, "__vue_app__");
-      if (typeof app === "object" && app !== null) {
-        return { kind: "app", app: app as Record<string, unknown>, container: current };
+      if (depth === 0 && instance !== null) {
+        return { kind: "instance", instance, own: true, node: current };
       }
-      if (instance !== null) return { kind: "instance", instance, own: false };
+      const app = depth === 0 ? null : appAt(current);
+      if (app !== null) return { kind: "app", app, container: current };
+      if (instance !== null) return { kind: "instance", instance, own: false, node: current };
+      if (isForeign(current)) return null;
     }
-    const parent: Node | null = current.parentNode;
-    current = parent instanceof ShadowRoot ? parent.host : parent;
+    const parent = parentNodeOf(current);
+    if (parent instanceof ShadowRoot) {
+      const app = appAt(parent);
+      if (app !== null) return { kind: "app", app, container: parent };
+      current = parent.host;
+    } else {
+      current = parent;
+    }
   }
   return null;
 }
@@ -128,7 +173,7 @@ export function lookUp(node: Element): Lookup | null {
  * into this container, and the field only a dev or devtools build fills in on
  * mount is still empty. Missing instances alone do not say it.
  */
-export function isProductionApp(app: Record<string, unknown>, container: Element): boolean {
+export function isProductionApp(app: Record<string, unknown>, container: Node): boolean {
   return field(app, "_container") === container && field(app, "_instance") === null;
 }
 
@@ -211,9 +256,54 @@ export class InstanceIds {
   }
 }
 
-/** The element this instance's output starts at, when that is one element. */
+/** Vue's `PatchFlags.DEV_ROOT_FRAGMENT`. */
+const DEV_ROOT_FRAGMENT = 2048;
+/** A dev root's siblings are comments at the top of one template. */
+const MAX_ROOT_CHILDREN = 64;
+
+/**
+ * The vnode a component's output is rooted at, as Vue finds it to pass
+ * attributes down: in dev, a template whose root is one node among comments
+ * renders a fragment around it, and the node inside is the root.
+ */
+export function effectiveRoot(vnode: unknown): unknown {
+  let current = vnode;
+  try {
+    for (let depth = 0; depth < MAX_SHARED_ROOT_DEPTH; depth += 1) {
+      const flag = field(current, "patchFlag");
+      if (field(current, "type") !== FRAGMENT || typeof flag !== "number" || flag <= 0) {
+        return current;
+      }
+      if (!(flag & DEV_ROOT_FRAGMENT)) return current;
+      const children = field(current, "children");
+      if (!Array.isArray(children) || children.length > MAX_ROOT_CHILDREN) return current;
+      let single: unknown = undefined;
+      for (const child of children) {
+        if (!isVNode(child)) return current;
+        // `v-if` leaves a comment too, and that one is a root like any other.
+        if (field(child, "type") === COMMENT && field(child, "children") !== "v-if") continue;
+        if (single !== undefined) return current;
+        single = child;
+      }
+      if (single === undefined) return current;
+      current = single;
+    }
+  } catch {
+    // A shape that cannot be read is no root but its own.
+  }
+  return current;
+}
+
+/** The element an instance's output is, when that is one element, through any components rooted at it. */
 function rootElementOf(instance: VueInstance): unknown {
-  return field(field(instance, "subTree"), "el");
+  let vnode = effectiveRoot(field(instance, "subTree"));
+  for (let depth = 0; depth < MAX_SHARED_ROOT_DEPTH; depth += 1) {
+    const shape = field(vnode, "shapeFlag");
+    if (typeof shape !== "number") return null;
+    if (!(shape & COMPONENT_SHAPE)) return shape & SHAPE.element ? field(vnode, "el") : null;
+    vnode = effectiveRoot(field(field(vnode, "component"), "subTree"));
+  }
+  return null;
 }
 
 /**
@@ -255,6 +345,8 @@ function hasText(node: Text): boolean {
  * one has none), a static block whose range cannot be followed, or a walk cut
  * short by `limit` or the budget leaves the list incomplete rather than wrong.
  * A comment is no root: it is how Vue marks a `v-if` that rendered nothing.
+ * Children are taken one at a time, each from the budget, so no list a page
+ * hands over is walked further than the budget allows.
  */
 export function renderedRoots(instance: VueInstance, limit: number, budget: Budget): RenderedRoots {
   let elements: Element[] = [];
@@ -263,10 +355,17 @@ export function renderedRoots(instance: VueInstance, limit: number, budget: Budg
     elements.some((root) => root === node || root.contains(node));
   /** Text outside every root collected so far; a root found later can still cover it. */
   const loose: Text[] = [];
-  const pending: Array<{ vnode: unknown; cover: Element | null }> = [];
   const subTree = field(instance, "subTree");
   if (!isVNode(subTree)) return { elements, complete: false };
-  pending.push({ vnode: subTree, cover: null });
+  const pending: Array<{ list: unknown[]; next: number; cover: Element | null }> = [
+    { list: [subTree], next: 0, cover: null },
+  ];
+  const visit = (vnode: unknown, cover: Element | null): void => {
+    pending.push({ list: [vnode], next: 0, cover });
+  };
+  const visitAll = (children: unknown, cover: Element | null): void => {
+    if (Array.isArray(children)) pending.push({ list: children, next: 0, cover });
+  };
 
   const addRoot = (node: Element): boolean => {
     if (covered(node)) return true;
@@ -275,16 +374,24 @@ export function renderedRoots(instance: VueInstance, limit: number, budget: Budg
     elements.push(node);
     return true;
   };
-  const pushChildren = (children: unknown, cover: Element | null): void => {
-    if (!Array.isArray(children)) return;
-    for (let index = children.length - 1; index >= 0; index -= 1) {
-      pending.push({ vnode: children[index], cover });
-    }
-  };
 
   while (pending.length > 0) {
+    const frame = pending[pending.length - 1]!;
+    let vnode: unknown;
+    try {
+      if (frame.next >= frame.list.length) {
+        pending.pop();
+        continue;
+      }
+      vnode = frame.list[frame.next];
+    } catch {
+      pending.pop();
+      complete = false;
+      continue;
+    }
+    frame.next += 1;
     if (!budget.spend()) return { elements, complete: false };
-    const { vnode, cover } = pending.pop()!;
+    const cover = frame.cover;
     if (!isVNode(vnode)) {
       complete = false;
       continue;
@@ -296,15 +403,18 @@ export function renderedRoots(instance: VueInstance, limit: number, budget: Budg
     try {
       if (flags & COMPONENT_SHAPE) {
         const child = field(field(vnode, "component"), "subTree");
-        if (isVNode(child)) pending.push({ vnode: child, cover });
+        if (isVNode(child)) visit(child, cover);
         else complete = false;
       } else if (flags & SHAPE.suspense) {
-        const branch = field(field(vnode, "suspense"), "activeBranch");
-        if (isVNode(branch)) pending.push({ vnode: branch, cover });
+        const suspense = field(vnode, "suspense");
+        // While a server-rendered page hydrates, what it shows is the branch still pending.
+        const shown = field(suspense, "isHydrating") === true ? "pendingBranch" : "activeBranch";
+        const branch = field(suspense, shown);
+        if (isVNode(branch)) visit(branch, cover);
         else if (branch !== null) complete = false;
       } else if (flags & SHAPE.teleport) {
         // Its children land in its target, covered only if that is.
-        pushChildren(field(vnode, "children"), null);
+        visitAll(field(vnode, "children"), null);
       } else if (flags & SHAPE.element) {
         const node = field(vnode, "el");
         if (!(node instanceof Element)) {
@@ -312,9 +422,9 @@ export function renderedRoots(instance: VueInstance, limit: number, budget: Budg
           continue;
         }
         if (cover === null && !addRoot(node)) return { elements, complete: false };
-        if (flags & SHAPE.arrayChildren) pushChildren(field(vnode, "children"), cover ?? node);
+        if (flags & SHAPE.arrayChildren) visitAll(field(vnode, "children"), cover ?? node);
       } else if (type === FRAGMENT) {
-        pushChildren(field(vnode, "children"), cover);
+        visitAll(field(vnode, "children"), cover);
       } else if (type === TEXT) {
         const node = field(vnode, "el");
         if (cover === null && node instanceof Text && hasText(node)) loose.push(node);

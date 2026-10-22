@@ -834,10 +834,11 @@ describe("core Element Picker guest loading", () => {
   });
 
   it("describes a Vue selection with the built Vue extractor: names, owner, roots, and a file without a line", async () => {
+    // Taken before the runtime loads, which sets them as it evaluates.
+    const globals = ["__VUE__", "__VUE_HMR_RUNTIME__"].filter((name) => !(name in scope));
     const vue = (await import(
       /* @vite-ignore */ createRequire(import.meta.url).resolve("vue/dist/vue.esm-browser.js")
     )) as typeof import("vue");
-    const globals = ["__VUE__", "__VUE_HMR_RUNTIME__"].filter((name) => !(name in scope));
     document.body.innerHTML = '<div id="app"></div>';
     // As `@vitejs/plugin-vue` leaves components in dev; `withCtx` is what a compiled slot is wrapped in.
     const Card = {

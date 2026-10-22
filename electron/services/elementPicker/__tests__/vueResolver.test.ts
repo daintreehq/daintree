@@ -352,6 +352,49 @@ describe("the Vue resolver's element locations", () => {
     expect(result).toMatchObject({ state: "unavailable", reason: "mismatch" });
   });
 
+  it("vouches for no tag of the element's name that Vue's own rules read as a component", async () => {
+    // Which of these render a <button> is the project's compiler options' to say.
+    const source = [
+      "<template>",
+      "  <div>",
+      "    <Button>a</Button>",
+      '    <button is="vue:MyButton">b</button>',
+      "    <button>c</button>",
+      "  </div>",
+      "</template>",
+      "",
+    ].join("\n");
+    await write("src/Same.vue", source);
+    for (const marker of ["<Button>a", '<button is="vue:MyButton">']) {
+      const result = await resolveOne(
+        selection({ sourceCandidates: [templateLocation("src/Same.vue", stampAt(source, marker))] })
+      );
+      expect(result, marker).toMatchObject({
+        state: "unavailable",
+        reason: "unsupported",
+        read: { file: ref("src/Same.vue") },
+      });
+    }
+    const plain = await resolveOne(
+      selection({
+        sourceCandidates: [templateLocation("src/Same.vue", stampAt(source, "<button>c"))],
+      })
+    );
+    expect(plain).toMatchObject({ state: "verified" });
+  });
+
+  it("checks a stamp in a template of a hundred and fifty thousand siblings", async () => {
+    const source = `<template><div>${"<i/>".repeat(150_000)}<b>last</b></div></template>\n`;
+    await write("src/Wide.vue", source);
+    const result = await resolveOne(
+      selection({
+        tagName: "b",
+        sourceCandidates: [templateLocation("src/Wide.vue", stampAt(source, "<b>"))],
+      })
+    );
+    expect(result).toMatchObject({ state: "verified" });
+  });
+
   it("finds no tag where a stamp lands off one", async () => {
     const source = await text("src/App.vue");
     const inside = stampAt(source, 'class="cta"');

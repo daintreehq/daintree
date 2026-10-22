@@ -17,7 +17,9 @@ import { TAG_TYPE, TemplateIndex, rangeLocation, type TemplateTag } from "./vue/
  *
  * - An element's `template-location`: the position `vite-plugin-vue-inspector`
  *   stamped on it. Answered `verified` with the element's range once the
- *   file's template has a tag of the element's name opening exactly there.
+ *   file's template has an element tag of the element's name opening exactly
+ *   there; `unsupported` when the tag there is one Vue's own rules would read
+ *   as a component, which only the project's compiler options settle.
  * - A component record's `component-invocation`: the stamp on the tag that
  *   used it. Answered `verified` with the tag's range once a component tag
  *   opens exactly there; which file that tag binds to is not claimed.
@@ -44,6 +46,9 @@ export const vueResolver: HostSourceResolver = {
   },
 };
 
+/** Whether the tag found at a stamp is one the claim could be about. */
+type Witness = "match" | "uncertain" | "mismatch";
+
 const GENERATED_SEGMENTS: ReadonlySet<string> = new Set(["node_modules", ".nuxt", ".output"]);
 
 /** A string test, so it runs on the page's spelling and main's alike, on a case-insensitive filesystem too. */
@@ -63,10 +68,16 @@ async function resolveObservation(
   observation: SelectionObservation
 ): Promise<ResolutionResult[]> {
   const tagName = observation.tagName.toLowerCase();
-  const isElement = (tag: TemplateTag) =>
-    (tag.tagType === TAG_TYPE.element || tag.tagType === TAG_TYPE.component) &&
-    tag.tag.toLowerCase() === tagName;
-  const isComponent = (tag: TemplateTag) => tag.tagType === TAG_TYPE.component;
+  // A tag of the element's name that Vue's default rules read as a component
+  // (`<Button>`, `<button is="vue:…">`, a custom element) renders whichever
+  // the project's compiler options say, and those are not this resolver's to see.
+  const isElement = (tag: TemplateTag): Witness => {
+    if (tag.tag.toLowerCase() !== tagName) return "mismatch";
+    if (tag.tagType === TAG_TYPE.element) return "match";
+    return tag.tagType === TAG_TYPE.component ? "uncertain" : "mismatch";
+  };
+  const isComponent = (tag: TemplateTag): Witness =>
+    tag.tagType === TAG_TYPE.component ? "match" : "mismatch";
 
   // Work not begun when the job was withdrawn is `cancelled`, even where the
   // bytes it needs were already read: an answer is what the job finished.
@@ -116,7 +127,7 @@ async function resolveTag(
   job: SourceJob,
   templates: TemplateIndex,
   candidate: Extract<SourceCandidate, { kind: "template-location" | "component-invocation" }>,
-  witness: (tag: TemplateTag) => boolean
+  witness: (tag: TemplateTag) => Witness
 ): Promise<ResolutionResult> {
   const location = candidate.location;
   if (location === null) return unavailableResult(candidate, "unsupported");
@@ -136,8 +147,14 @@ async function resolveTag(
     location.column - location.columnBase + 1
   );
   if (found.status === "unsupported") return unreadableResult(candidate, "unsupported", source);
-  if (found.status === "absent" || !witness(found.tag)) {
-    return unreadableResult(candidate, "mismatch", source);
+  if (found.status === "absent") return unreadableResult(candidate, "mismatch", source);
+  const verdict = witness(found.tag);
+  if (verdict !== "match") {
+    return unreadableResult(
+      candidate,
+      verdict === "uncertain" ? "unsupported" : "mismatch",
+      source
+    );
   }
   return {
     state: "verified",
