@@ -1914,6 +1914,21 @@ interface PluginWorktreeReviewCheck {
      */
     command?: string;
 }
+/**
+ * A short status a plugin shows on one terminal's header via
+ * {@link PluginHostApi.setTerminalStatus} (#13802): the same shape as a
+ * worktree card's, drawn as a colourless chip named after the plugin.
+ */
+interface PluginTerminalStatus {
+    label: string;
+    tooltip?: string;
+    /**
+     * One of this plugin's own actions, written `"{manifestId}.{id}"` as in the
+     * manifest, dispatched with `{ terminalId, worktreeId? }` when the chip is
+     * clicked. The chip stays a plain status until the action is registered.
+     */
+    command?: string;
+}
 /** Value a plugin publishes to `when` clauses via {@link PluginHostApi.setContext}. */
 type PluginContextValue = boolean | string;
 declare const BUILT_IN_PLUGIN_CAPABILITIES: readonly ["fs:project-read", "fs:project-write", "fs:user-data-read", "fs:user-data-write", "network:fetch", "agent:invoke", "agent:read", "agent:register", "agent:input", "terminal:read", "git:read", "git:write", "clipboard:read", "clipboard:write", "shell:exec", "socket:connect", "mcp:expose", "project:dispatch", "panel:focus-read", "notification:os"];
@@ -4934,6 +4949,36 @@ interface PluginHostApi extends PluginActivationApi {
      */
     setWorktreeReviewChecks(worktreeId: string, checks: readonly PluginWorktreeReviewCheck[] | null): Promise<void>;
     /**
+     * Show (or clear) this plugin's status chip on one terminal's header (#13802)
+     * — a short one-line `label` with an optional `tooltip` for the detail. Pass
+     * `null` to clear it. A plugin holds one status per terminal, so a second
+     * call replaces the first; every plugin that marks a terminal gets its own
+     * chip, named after the plugin. The chip is colourless: the pane's accent
+     * and glyphs stay with agent state.
+     *
+     * Requires `agent:read`. `terminalId` is the `terminalId` of an entry in
+     * {@link PluginAgentsApi.list} right now, so a project plugin only ever
+     * reaches its own project's agent terminals. The call rejects when the id is
+     * not one of them, when the host cannot read the list, when the plugin holds
+     * the maximum of {@link PLUGIN_TERMINAL_STATUS_MAX_PER_PROJECT} statuses in
+     * the project, or when the label is empty, multi-line or longer than
+     * {@link PLUGIN_TERMINAL_STATUS_LABEL_MAX} characters or the tooltip longer
+     * than {@link PLUGIN_TERMINAL_STATUS_TOOLTIP_MAX}.
+     *
+     * An optional `command` makes the chip a button for one of the plugin's own
+     * actions, written `"{manifestId}.{id}"`: a click dispatches it with
+     * `{ terminalId, worktreeId? }` (the terminal's worktree, when it has one),
+     * so a declared `inputSchema` must accept that. A command in any other
+     * namespace, or one that names a built-in action, rejects. It need not be
+     * registered yet; until it is, the chip stays a plain status.
+     *
+     * Statuses are not persisted. They are cleared when the project closes and
+     * when the plugin unloads or its worker is replaced, so republish them after
+     * a restart. Like {@link setPanelBadge} this is NOT revoke-guarded and
+     * becomes a silent no-op once the plugin is unloaded.
+     */
+    setTerminalStatus(terminalId: string, status: PluginTerminalStatus | null): Promise<void>;
+    /**
      * Publish the contextual actions the ⋯ and right-click menus of one of this
      * plugin's own panels offer right now — the backend-side twin of the view's
      * `PanelViewProps.setMenuItems`, and the only way a PTY-backed panel (which
@@ -5425,6 +5470,11 @@ interface SetWorktreeCardStatusRecord {
     worktreeId: string;
     status: PluginWorktreeCardStatus | null;
 }
+/** Captured `host.setTerminalStatus(terminalId, status)` calls. `null` clears. */
+interface SetTerminalStatusRecord {
+    terminalId: string;
+    status: PluginTerminalStatus | null;
+}
 /** Captured `host.setPanelBadge(panelId, badge)` calls. `null` clears. */
 interface SetPanelBadgeRecord {
     panelId: string;
@@ -5508,6 +5558,10 @@ interface MockHostState {
     readonly setWorktreeReviewChecksCalls: ReadonlyArray<SetWorktreeReviewChecksRecord>;
     /** The readiness checks this plugin shows right now, keyed by worktree `id`. */
     readonly worktreeReviewChecks: ReadonlyMap<string, readonly PluginWorktreeReviewCheck[]>;
+    /** Accepted `host.setTerminalStatus` calls, in order. */
+    readonly setTerminalStatusCalls: ReadonlyArray<SetTerminalStatusRecord>;
+    /** The terminal chips this plugin shows right now, keyed by `terminalId`. */
+    readonly terminalStatuses: ReadonlyMap<string, PluginTerminalStatus>;
     readonly setPanelMenuItemsCalls: ReadonlyArray<SetPanelMenuItemsRecord>;
     /**
      * Panel ids passed to `host.reloadPanel(panelId)`, in order (#12610). Only
