@@ -300,7 +300,6 @@ describe("docked plugin panels across a cold restart (#13907)", () => {
   // Same path boot takes: the saved entry goes through the builder, then addPanel.
   const restore = (worktreeId?: string) => {
     const args = buildArgsForNonPtyRecreation(
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension kind string is outside the built-in union
       {
         id: "plugin-1",
         kind: "ext-a.viewer",
@@ -309,7 +308,6 @@ describe("docked plugin panels across a cold restart (#13907)", () => {
         pluginId: "ext-a",
         worktreeId,
       } as Parameters<typeof buildArgsForNonPtyRecreation>[0],
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension kind string is outside the built-in union
       "ext-a.viewer" as Parameters<typeof buildArgsForNonPtyRecreation>[1],
       "/project",
       "wt-active"
