@@ -570,6 +570,8 @@ describe("scaffoldPlugin --project", () => {
   it("ships the tour-authoring skill, since project plugins can contribute tours", async () => {
     const result = await scaffoldProject();
     expect(result.files).toContain(".claude/skills/daintree-tour/SKILL.md");
+    const gitignore = await fs.readFile(path.join(result.dir, ".gitignore"), "utf8");
+    expect(gitignore.split("\n")).toContain(".tour-preview/");
   });
 
   it("marks the manifest as project scope and passes the project-origin schema", async () => {

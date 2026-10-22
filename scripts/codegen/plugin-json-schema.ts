@@ -4,7 +4,7 @@
 //
 // Two files because the manifest schema is origin-keyed and the two origins
 // genuinely disagree: a project plugin must declare `scope` and is refused
-// eight contribution types an installed plugin may use. One merged file would
+// seven contribution types an installed plugin may use. One merged file would
 // have to accept the union, which is the one thing neither origin does.
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -37,7 +37,7 @@ const TARGETS: Target[] = [
     origin: "project",
     title: "Daintree project plugin manifest",
     intro:
-      'Manifest for a Daintree plugin committed into a project\'s .daintree/plugins/ directory. Such a plugin must declare "scope": "project", and eight contribution types available to installed plugins are refused here.',
+      'Manifest for a Daintree plugin committed into a project\'s .daintree/plugins/ directory. Such a plugin must declare "scope": "project", and seven contribution types available to installed plugins are refused here.',
   },
 ];
 
