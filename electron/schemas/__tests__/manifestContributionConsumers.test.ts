@@ -616,6 +616,36 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       consumers: [{ file: PLUGIN_SERVICE, symbol: "loadPlugin → trackPluginExpression" }],
       note: "Tracked and evaluated as the item's visibility expression.",
     },
+    kind: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: "electron/services/pluginContextMenuRegistry.ts",
+          symbol: "registerPluginContextMenuItem",
+        },
+      ],
+      note: "Registered whole and matched per row by the file menu: files or folders only.",
+    },
+    extensions: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: "electron/services/pluginContextMenuRegistry.ts",
+          symbol: "registerPluginContextMenuItem",
+        },
+      ],
+      note: "Registered whole and matched per row by the file menu against the file extension.",
+    },
+    paths: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: "electron/services/pluginContextMenuRegistry.ts",
+          symbol: "registerPluginContextMenuItem",
+        },
+      ],
+      note: "Registered whole and matched per row by the file menu against the worktree-relative path.",
+    },
   },
   commands: {
     id: {

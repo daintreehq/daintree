@@ -2451,6 +2451,12 @@ interface ContextMenuContribution {
     location: ContextMenuLocation;
     label: string;
     when?: string;
+    /** `location: "file"` only: restrict to files or folders. Omitted matches both. */
+    kind?: "file" | "folder";
+    /** `location: "file"` only: bare lower-case suffixes a file must carry. */
+    extensions?: string[];
+    /** `location: "file"` only: worktree-relative globs, any of which must match. */
+    paths?: string[];
 }
 /**
  * View contribution location.

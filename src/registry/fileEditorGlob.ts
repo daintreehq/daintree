@@ -61,3 +61,11 @@ export function relativeFilePath(rootPath: string, filePath: string): string | n
   if (relative.length === 0 || relative.split("/").includes("..")) return null;
   return relative;
 }
+
+export function extensionOf(filePath: string): string | null {
+  const name = filePath.split(/[/\\]/).pop() ?? "";
+  const dot = name.lastIndexOf(".");
+  // A dotfile (`.env`) and a bare name (`README`) have no extension to match.
+  if (dot <= 0 || dot === name.length - 1) return null;
+  return name.slice(dot + 1).toLowerCase();
+}

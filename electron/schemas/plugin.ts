@@ -322,6 +322,46 @@ export const KeybindingContributionSchema = z
   })
   .strict();
 
+/** Most `paths` patterns one `fileEditors` entry may declare. */
+export const FILE_EDITOR_MAX_PATH_PATTERNS = 20;
+
+/**
+ * A project-relative glob a project plugin's file editor claims (#13809).
+ * Forward slashes only, relative to the project or worktree root, and no way
+ * out of it: no leading `/`, no drive letter, no `..` segment, no backslash,
+ * no NUL, and no `!` negation (a claim says what it edits, never what it
+ * doesn't).
+ */
+export const FileEditorPathPatternSchema = z
+  .string()
+  .min(1)
+  .max(256)
+  .refine(
+    (pattern) =>
+      !pattern.startsWith("/") &&
+      !pattern.startsWith("!") &&
+      !/^[a-zA-Z]:/.test(pattern) &&
+      !pattern.includes("\\") &&
+      !pattern.includes("\0") &&
+      !pattern.split("/").includes(".."),
+    {
+      message:
+        "paths are project-relative globs with forward slashes — no leading /, drive letter, .. segment, backslash or ! negation",
+    }
+  );
+
+/** Bare lower-case suffixes without the dot, shared by `fileEditors` and file context-menu matching. */
+export const FileExtensionListSchema = z
+  .array(
+    z
+      .string()
+      .min(1)
+      .max(16)
+      .regex(/^[a-z0-9]+$/, "extensions are bare lower-case suffixes without the dot")
+  )
+  .min(1)
+  .max(20);
+
 export const ContextMenuContributionSchema = z
   .object({
     actionId: z.string().min(1),
@@ -331,8 +371,35 @@ export const ContextMenuContributionSchema = z
     location: z.enum(["worktree", "terminal", "file", "browser", "project"]),
     label: z.string().min(1),
     when: z.string().min(1).optional(),
+    // Host-evaluated row match for `location: "file"`, AND-ed with `when`.
+    // Omitted keys match everything.
+    kind: z.enum(["file", "folder"]).optional(),
+    extensions: FileExtensionListSchema.optional(),
+    paths: z
+      .array(FileEditorPathPatternSchema)
+      .min(1)
+      .max(FILE_EDITOR_MAX_PATH_PATTERNS)
+      .optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((item, ctx) => {
+    for (const key of ["kind", "extensions", "paths"] as const) {
+      if (item[key] !== undefined && item.location !== "file") {
+        ctx.addIssue({
+          code: "custom",
+          path: [key],
+          message: `"${key}" only applies to location "file"`,
+        });
+      }
+    }
+    if (item.kind === "folder" && item.extensions !== undefined) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["extensions"],
+        message: 'a folder has no extension — drop "extensions" or use kind "file"',
+      });
+    }
+  });
 
 /**
  * Declared here rather than beside the other manifest-level schemas because
@@ -1090,34 +1157,6 @@ export const FileDecorationContributionSchema = z
  */
 export const FILE_EDITOR_MAX_BYTES_CEILING = 64 * 1024 * 1024;
 
-/** Most `paths` patterns one `fileEditors` entry may declare. */
-export const FILE_EDITOR_MAX_PATH_PATTERNS = 20;
-
-/**
- * A project-relative glob a project plugin's file editor claims (#13809).
- * Forward slashes only, relative to the project or worktree root, and no way
- * out of it: no leading `/`, no drive letter, no `..` segment, no backslash,
- * no NUL, and no `!` negation (a claim says what it edits, never what it
- * doesn't).
- */
-const FileEditorPathPatternSchema = z
-  .string()
-  .min(1)
-  .max(256)
-  .refine(
-    (pattern) =>
-      !pattern.startsWith("/") &&
-      !pattern.startsWith("!") &&
-      !/^[a-zA-Z]:/.test(pattern) &&
-      !pattern.includes("\\") &&
-      !pattern.includes("\0") &&
-      !pattern.split("/").includes(".."),
-    {
-      message:
-        "paths are project-relative globs with forward slashes — no leading /, drive letter, .. segment, backslash or ! negation",
-    }
-  );
-
 /**
  * `fileEditors` manifest entry (#12323, #13809). Two forms, exactly one of
  * `slot` / `view`:
@@ -1141,17 +1180,7 @@ export const FileEditorContributionSchema = z
     slot: z.string().min(1).max(128).regex(SAFE_ID_PATTERN).optional(),
     view: z.string().min(1).max(64).regex(SAFE_ID_PATTERN).optional(),
     mode: z.enum(["edit", "view"]).optional(),
-    extensions: z
-      .array(
-        z
-          .string()
-          .min(1)
-          .max(16)
-          .regex(/^[a-z0-9]+$/, "extensions are bare lower-case suffixes without the dot")
-      )
-      .min(1)
-      .max(20)
-      .optional(),
+    extensions: FileExtensionListSchema.optional(),
     paths: z
       .array(FileEditorPathPatternSchema)
       .min(1)

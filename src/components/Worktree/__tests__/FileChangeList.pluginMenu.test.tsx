@@ -222,7 +222,37 @@ describe("FileChangeList — plugin items", () => {
       path: "/repo/src/index.ts",
       worktreePath: ROOT,
       status: "modified",
+      isDirectory: false,
+      relativePath: "src/index.ts",
     });
+  });
+
+  it("offers an item only on the rows its match admits", async () => {
+    itemsRef.current = [
+      {
+        pluginId: "acme",
+        item: {
+          label: "Validate record",
+          actionId: "acme.validate",
+          location: "file",
+          extensions: ["json"],
+          paths: ["records/**"],
+        },
+      },
+    ];
+    renderInWorktreeCard({
+      changes: [file("records/a.json"), file("src/index.ts")],
+    });
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Open src/index.ts" }));
+    const noMatch = await screen.findByRole("menu");
+    expect(within(noMatch).queryByRole("menuitem", { name: "Extensions" })).toBeNull();
+    fireEvent.keyDown(noMatch, { key: "Escape" });
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Open records/a.json" }));
+    const menu = await screen.findByRole("menu");
+    const extensions = await openSubmenu(menu, "Extensions");
+    expect(within(extensions).getByRole("menuitem", { name: "Validate record" })).toBeTruthy();
   });
 
   it("keeps an already-absolute change path absolute in the dispatched args", async () => {

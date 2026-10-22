@@ -672,7 +672,7 @@ export default function VideoManager({ initialArgs, openRequest }: PanelViewProp
 }
 ```
 
-Or pass `reuseExisting: false`, which always adds a new panel with these `initialArgs`. A panel in another worktree is never reused, except for a [project-scoped kind](#open-it-in-the-dock). `host.panelKindId` qualifies your bare panel id for whichever origin you load under (`project:{projectId}/{manifestId}/{kindId}` for a project plugin). A `contextMenus` entry at `location: "file"` dispatches your command with `{ path, worktreePath, status }`, which is how "Show in Video Manager" appears on every file row.
+Or pass `reuseExisting: false`, which always adds a new panel with these `initialArgs`. A panel in another worktree is never reused, except for a [project-scoped kind](#open-it-in-the-dock). `host.panelKindId` qualifies your bare panel id for whichever origin you load under (`project:{projectId}/{manifestId}/{kindId}` for a project plugin). A `contextMenus` entry at `location: "file"` dispatches your command with `{ path, isDirectory, relativePath, worktreePath, status }`, which is how "Show in Video Manager" appears on every file row.
 
 ### Open it in the dock
 

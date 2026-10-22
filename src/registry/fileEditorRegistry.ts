@@ -13,7 +13,7 @@ import {
 import { getBuiltinView, useBuiltinView } from "@/registry/builtinRendererRegistry";
 import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 import { usePluginHostedViewsStore } from "@/store/pluginHostedViewsStore";
-import { matchesFileEditorGlob, relativeFilePath } from "@/registry/fileEditorGlob";
+import { extensionOf, matchesFileEditorGlob, relativeFilePath } from "@/registry/fileEditorGlob";
 
 /**
  * Renderer-side registry for `contributes.fileEditors` (#12323): which
@@ -85,14 +85,6 @@ export function registerFileEditor(
     const index = REGISTRY.indexOf(entry);
     if (index >= 0) REGISTRY.splice(index, 1);
   };
-}
-
-function extensionOf(filePath: string): string | null {
-  const name = filePath.split(/[/\\]/).pop() ?? "";
-  const dot = name.lastIndexOf(".");
-  // A dotfile (`.env`) and a bare name (`README`) have no extension to match.
-  if (dot <= 0 || dot === name.length - 1) return null;
-  return name.slice(dot + 1).toLowerCase();
 }
 
 /**
