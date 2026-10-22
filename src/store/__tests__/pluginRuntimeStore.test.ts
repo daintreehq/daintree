@@ -455,7 +455,17 @@ describe("usePluginRuntimeStore", () => {
     listMock.mockResolvedValue([
       makePlugin({ id: "acme.a", displayName: "Acme A", terminalLinks: [invoice] }),
       makePlugin({ id: "acme.a", projectId: "p1", terminalLinks: [invoice] }),
-      makePlugin({ id: "acme.off", disabled: true, terminalLinks: [invoice] }),
+      // Each in its own namespace, so only being stopped keeps them out.
+      makePlugin({
+        id: "acme.off",
+        disabled: true,
+        terminalLinks: [{ ...invoice, actionId: "acme.off.open" }],
+      }),
+      makePlugin({
+        id: "acme.blocked",
+        blocklisted: true,
+        terminalLinks: [{ ...invoice, actionId: "acme.blocked.open" }],
+      }),
       // Outside its own namespace, so it could only have dodged the manifest gate.
       makePlugin({ id: "acme.rogue", terminalLinks: [invoice] }),
     ]);
@@ -471,5 +481,25 @@ describe("usePluginRuntimeStore", () => {
       ["acme.a::inv", "Acme A", null, "acme.a.open"],
       ["project__p1__acme.a::inv", "acme.a", "p1", "project__p1__acme.a.open"],
     ]);
+  });
+
+  it("pulls again when plugin actions change, which is all a dev-attached plugin announces", async () => {
+    let actionsChanged: (() => void) | undefined;
+    installBridge({
+      list: listMock,
+      onProvenanceChanged: onProvenanceChangedMock,
+      onActionsChanged: (cb: () => void) => {
+        actionsChanged = cb;
+        return () => {};
+      },
+    });
+    listMock.mockResolvedValue([]);
+    usePluginRuntimeStore.getState().init();
+    await vi.waitFor(() => expect(listMock).toHaveBeenCalledTimes(1));
+
+    const invoice = { id: "inv", pattern: "INV-\\d{1,4}", actionId: "acme.dev.open" };
+    listMock.mockResolvedValue([makePlugin({ id: "acme.dev", terminalLinks: [invoice] })]);
+    actionsChanged?.();
+    await vi.waitFor(() => expect(usePluginRuntimeStore.getState().terminalLinks).toHaveLength(1));
   });
 });

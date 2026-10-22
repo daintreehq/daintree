@@ -284,7 +284,11 @@ export function findTerminalLinkMatches(
   while (matches.length < limit && (match = regex.exec(scanned)) !== null) {
     const matched = match[0];
     if (matched.length === 0) {
-      regex.lastIndex++;
+      // A whole code point on: under the `u` flag, an index inside a surrogate
+      // pair is read from the pair's start, so stepping one unit would find
+      // this same empty match again, forever.
+      const codePoint = scanned.codePointAt(match.index) ?? 0;
+      regex.lastIndex = match.index + (codePoint > 0xffff ? 2 : 1);
       continue;
     }
     if (matched.length > TERMINAL_LINK_MATCH_MAX_LENGTH) continue;
@@ -345,6 +349,17 @@ export function checkTerminalLinkHost(host: string): string | null {
   if (isLocalHostname(host)) {
     return `host "${host}" is loopback, private or local-only, which plugins can't claim`;
   }
+  // The URL parser's reading has to be the host itself: `0x7f.0x1` passes the
+  // shape above but parses as 127.0.0.1, and would never match its own URLs.
+  let parsed: string;
+  try {
+    parsed = new URL(`https://${host}/`).hostname;
+  } catch {
+    return `host "${host}" isn't a domain name a URL can have`;
+  }
+  if (parsed !== host) {
+    return `host "${host}" isn't a plain domain name; a URL reads it as "${parsed}"`;
+  }
   return null;
 }
 
@@ -357,7 +372,10 @@ export function checkTerminalLinkPathPrefix(pathPrefix: string): string | null {
   if (!/^\/[A-Za-z0-9\-._~!$&'()*+,;=:@%/]*$/.test(pathPrefix)) {
     return "pathPrefix must be a URL path, with no query, fragment or spaces";
   }
-  if (pathPrefix.split("/").some((segment) => segment === "." || segment === "..")) {
+  // Encoded dots too: the URL parser resolves `%2e%2e` like `..`, so a prefix
+  // holding one could never match a parsed path.
+  const isDotSegment = (segment: string) => /^(?:\.|%2e){1,2}$/i.test(segment);
+  if (pathPrefix.split("/").some(isDotSegment)) {
     return 'pathPrefix must not contain "." or ".." segments';
   }
   return null;
@@ -372,7 +390,9 @@ export interface TerminalLinkUrlTarget {
 /**
  * Whether `url` is one `target` claims. The URL is parsed rather than compared
  * as text, and the host rules are checked again on what was parsed, so a
- * credential prefix, an explicit port or a lookalike spelling never matches.
+ * credential prefix, a non-default port or a lookalike spelling never matches.
+ * The check reads the URL alone: a name is never resolved, so a public-looking
+ * domain that a local DNS points at a private address can still be claimed.
  */
 export function urlMatchesTerminalLinkTarget(url: string, target: TerminalLinkUrlTarget): boolean {
   if (url.length > TERMINAL_LINK_URL_MAX_LENGTH) return false;

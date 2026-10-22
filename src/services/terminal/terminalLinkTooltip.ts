@@ -9,12 +9,20 @@ const TOOLTIP_CLASSES =
 
 const POINTER_GAP_PX = 16;
 
+// Anything the user does on the terminal ends the hover the hint describes:
+// a click, a right-click opening the menu, a scroll moving the text, a key.
+const DISMISS_EVENTS = ["pointerdown", "contextmenu", "wheel", "keydown"] as const;
+
+/** The part of an xterm `Terminal` the tooltip uses: the element it lives in. */
+type TooltipTerminal = Pick<Terminal, "element">;
+
 interface TooltipState {
   element?: HTMLElement;
   timer?: ReturnType<typeof setTimeout>;
+  detach: () => void;
 }
 
-const shown = new WeakMap<Terminal, TooltipState>();
+const shown = new WeakMap<TooltipTerminal, TooltipState>();
 
 /**
  * Show `label` beside the pointer after the app's tooltip delay, inside the
@@ -22,18 +30,29 @@ const shown = new WeakMap<Terminal, TooltipState>();
  * only, so a plugin's name can never be markup.
  */
 export function showTerminalLinkTooltip(
-  terminal: Terminal,
+  terminal: TooltipTerminal,
   event: MouseEvent,
   label: string
 ): void {
   hideTerminalLinkTooltip(terminal);
   const host = terminal.element;
   if (!host) return;
-  const state: TooltipState = {};
+  const dismiss = () => hideTerminalLinkTooltip(terminal);
+  for (const type of DISMISS_EVENTS) host.addEventListener(type, dismiss, true);
+  const state: TooltipState = {
+    detach: () => {
+      for (const type of DISMISS_EVENTS) host.removeEventListener(type, dismiss, true);
+    },
+  };
   shown.set(terminal, state);
   state.timer = setTimeout(() => {
     state.timer = undefined;
-    if (!host.isConnected) return;
+    // Parked offscreen or hidden since the hover began: there is no pointer
+    // over it for the hint to sit beside.
+    if (!host.isConnected || host.getClientRects().length === 0) {
+      hideTerminalLinkTooltip(terminal);
+      return;
+    }
     const element = document.createElement("div");
     element.className = TOOLTIP_CLASSES;
     element.setAttribute("role", "tooltip");
@@ -56,10 +75,11 @@ export function showTerminalLinkTooltip(
   }, UI_TOOLTIP_DELAY_DURATION);
 }
 
-export function hideTerminalLinkTooltip(terminal: Terminal): void {
+export function hideTerminalLinkTooltip(terminal: TooltipTerminal): void {
   const state = shown.get(terminal);
   if (!state) return;
   shown.delete(terminal);
   if (state.timer !== undefined) clearTimeout(state.timer);
+  state.detach();
   state.element?.remove();
 }

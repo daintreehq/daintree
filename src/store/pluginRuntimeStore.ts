@@ -234,9 +234,19 @@ function ensureSubscribed(
           void pullPluginRuntimeSnapshot(set, get);
         })
       : undefined;
+  // A dev-attached plugin (`daintree-plugin dev`) is loaded and reloaded with
+  // no provenance change either, but registers its actions once it is
+  // listable, so this is when its terminal links become known.
+  const offActions =
+    typeof plugin.onActionsChanged === "function"
+      ? plugin.onActionsChanged(() => {
+          void pullPluginRuntimeSnapshot(set, get);
+        })
+      : undefined;
   unsubscribe = () => {
     offProvenance();
     offProjectPlugins?.();
+    offActions?.();
   };
   return true;
 }

@@ -37,6 +37,9 @@ vi.mock("@/components/ui/context-menu", () => {
 
 const {
   dispatch,
+  hoveredUrl,
+  hoveredUrlPlugin,
+  openLink,
   hoveredFilePath,
   hoveredFileKind,
   reportFileLinkFailure,
@@ -51,6 +54,9 @@ const {
   pingTerminal,
 } = vi.hoisted(() => ({
   dispatch: vi.fn<(...args: unknown[]) => Promise<unknown>>(),
+  hoveredUrl: { current: null as string | null },
+  hoveredUrlPlugin: { current: null as string | null },
+  openLink: vi.fn(),
   hoveredFilePath: { current: null as string | null },
   hoveredFileKind: { current: "file" as "file" | "directory" | null },
   reportFileLinkFailure: vi.fn(),
@@ -82,8 +88,9 @@ vi.mock("@/services/TerminalInstanceService", () => ({
     get: () => ({ terminal: { getSelection: () => "" } }),
     getTerminal: () => undefined,
     getSelection: () => "",
-    getHoveredLinkText: () => null,
-    getHoveredLinkPluginName: () => null,
+    getHoveredLinkText: () => hoveredUrl.current,
+    getHoveredLinkPluginName: () => hoveredUrlPlugin.current,
+    openLink,
     getHoveredFilePath: () => hoveredFilePath.current,
     getHoveredFileKind: () => (hoveredFilePath.current ? hoveredFileKind.current : null),
     openHoveredLink: vi.fn(),
@@ -483,6 +490,38 @@ describe("TerminalContextMenu — open in file browser (#11483)", () => {
  */
 const parkRun = vi.fn(() => Promise.resolve({ parkedAt: 0 }));
 const unparkRun = vi.fn(() => Promise.resolve(true));
+
+describe("TerminalContextMenu — a URL a plugin claims (#13798)", () => {
+  const URL_TEXT = "https://records.example.com/r/42";
+
+  afterEach(() => {
+    hoveredUrl.current = null;
+    hoveredUrlPlugin.current = null;
+    openLink.mockReset();
+  });
+
+  it("names the plugin and still offers the external browser, for the URL captured on open", () => {
+    hoveredUrl.current = URL_TEXT;
+    hoveredUrlPlugin.current = "Acme Records";
+    openMenu({ hovered: null });
+    // The hover ends once the pointer reaches the menu.
+    hoveredUrl.current = null;
+
+    act(() => screen.getByText("Open in external browser").click());
+    expect(openLink).toHaveBeenLastCalledWith("panel-1", URL_TEXT, { external: true });
+
+    act(() => screen.getByText("Open with Acme Records").click());
+    expect(openLink).toHaveBeenLastCalledWith("panel-1", URL_TEXT);
+    expect(screen.queryByText("Open link")).toBeNull();
+  });
+
+  it("keeps the plain Open link item for a URL no plugin claims", () => {
+    hoveredUrl.current = URL_TEXT;
+    openMenu({ hovered: null });
+    expect(screen.getByText("Open link")).toBeTruthy();
+    expect(screen.queryByText("Open in external browser")).toBeNull();
+  });
+});
 
 describe("TerminalContextMenu — Park and Unpark", () => {
   beforeEach(() => {

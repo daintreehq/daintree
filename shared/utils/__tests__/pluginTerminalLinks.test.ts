@@ -73,6 +73,15 @@ describe("findTerminalLinkMatches", () => {
     expect(findTerminalLinkMatches(regex, "ab x cd").map((m) => m.text)).toEqual(["x"]);
   });
 
+  it("steps a whole code point past an empty match before an astral character", () => {
+    // One unit on would land inside the emoji's surrogate pair, which the `u`
+    // flag reads from the pair's start: the same empty match, forever.
+    const regex = compileTerminalLinkPattern("\\bx?")!;
+    expect(findTerminalLinkMatches(regex, "a😀 x😀")).toEqual([
+      { index: 4, text: "x", groups: [] },
+    ]);
+  });
+
   it("skips a match longer than the cap rather than truncating it", () => {
     const regex = compileTerminalLinkPattern("a{1,300}")!;
     const long = "a".repeat(TERMINAL_LINK_MATCH_MAX_LENGTH + 1);
@@ -114,6 +123,8 @@ describe("checkTerminalLinkHost", () => {
     "a.example.com:443",
     "a.example.com/path",
     "*.example.com",
+    "0x7f.0x1",
+    "example.0x1",
   ])("rejects %s", (host) => {
     expect(checkTerminalLinkHost(host)).not.toBeNull();
   });
@@ -123,7 +134,16 @@ describe("checkTerminalLinkPathPrefix", () => {
   it("accepts a path and rejects anything else", () => {
     expect(checkTerminalLinkPathPrefix("/records/")).toBeNull();
     expect(checkTerminalLinkPathPrefix("/r/%7Euser")).toBeNull();
-    for (const bad of ["records", "/a?b", "/a#b", "/a b", "/a/../b", "/./a"]) {
+    for (const bad of [
+      "records",
+      "/a?b",
+      "/a#b",
+      "/a b",
+      "/a/../b",
+      "/./a",
+      "/a/%2e%2E/b",
+      "/%2e/a",
+    ]) {
       expect(checkTerminalLinkPathPrefix(bad)).not.toBeNull();
     }
   });

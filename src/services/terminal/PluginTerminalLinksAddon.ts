@@ -4,7 +4,7 @@ import type { PluginPatternLinkMatch } from "./pluginTerminalLinks";
 
 export interface PluginTerminalLinkHandlers {
   /** The row's matches; empty when no plugin links are on offer. */
-  find: (text: string) => PluginPatternLinkMatch[];
+  find: (text: string) => Promise<PluginPatternLinkMatch[]>;
   activate: (match: PluginPatternLinkMatch, event: MouseEvent) => void;
   hover?: (match: PluginPatternLinkMatch, event: MouseEvent) => void;
   leave?: () => void;
@@ -33,8 +33,9 @@ interface RowText {
 
 /**
  * A row's text as cells, so a match maps back to the columns it was drawn in
- * even past a wide character. Reads at most {@link TERMINAL_LINK_SCAN_MAX_CHARS}
- * code units; empty cells read as spaces.
+ * even past a wide character. Reads just past {@link TERMINAL_LINK_SCAN_MAX_CHARS}
+ * code units, so the matcher can tell the row was cut and refuse a match the
+ * cut ended; empty cells read as spaces.
  */
 function readRow(terminal: PluginLinkTerminal, bufferLineNumber: number): RowText | null {
   const line = terminal.buffer.active.getLine(bufferLineNumber - 1);
@@ -42,7 +43,7 @@ function readRow(terminal: PluginLinkTerminal, bufferLineNumber: number): RowTex
   let text = "";
   const startColumns: number[] = [];
   const endColumns: number[] = [];
-  for (let x = 0; x < line.length && text.length < TERMINAL_LINK_SCAN_MAX_CHARS; x++) {
+  for (let x = 0; x < line.length && text.length <= TERMINAL_LINK_SCAN_MAX_CHARS; x++) {
     const cell = line.getCell(x);
     if (!cell) break;
     const width = cell.getWidth();
@@ -65,34 +66,50 @@ function readRow(terminal: PluginLinkTerminal, bufferLineNumber: number): RowTex
  * the matchers live through `find` on every ask.
  */
 export class PluginTerminalLinksAddon implements ILinkProvider {
+  private disposed = false;
+
   constructor(
     private readonly terminal: PluginLinkTerminal,
     private readonly handlers: PluginTerminalLinkHandlers
   ) {}
 
   provideLinks(bufferLineNumber: number, callback: (links: ILink[] | undefined) => void): void {
-    if (bufferLineNumber < 1) {
+    const row = bufferLineNumber < 1 ? null : readRow(this.terminal, bufferLineNumber);
+    if (!row || row.text.trim() === "") {
       callback(undefined);
       return;
     }
-    const row = readRow(this.terminal, bufferLineNumber);
-    const matches = row && row.text.trim() !== "" ? this.handlers.find(row.text) : [];
-    if (!row || matches.length === 0) {
-      callback(undefined);
-      return;
-    }
-    const links = matches.map((match) => {
-      const last = match.index + match.text.length - 1;
-      const range: IBufferRange = {
-        start: { x: row.startColumns[match.index]! + 1, y: bufferLineNumber },
-        end: { x: row.endColumns[last]! + 1, y: bufferLineNumber },
-      };
-      return new PluginPatternLink(range, match, this.handlers);
-    });
-    callback(links);
+    this.handlers.find(row.text).then(
+      (matches) => {
+        // Disposed while matching: the registration is gone, so the reply has
+        // no linkifier to serve.
+        if (this.disposed) return;
+        // Output may have rewritten the row while the worker ran; links worked
+        // out for the old text would underline the new.
+        if (matches.length === 0 || readRow(this.terminal, bufferLineNumber)?.text !== row.text) {
+          callback(undefined);
+          return;
+        }
+        callback(
+          matches.map((match) => {
+            const last = match.index + match.text.length - 1;
+            const range: IBufferRange = {
+              start: { x: row.startColumns[match.index]! + 1, y: bufferLineNumber },
+              end: { x: row.endColumns[last]! + 1, y: bufferLineNumber },
+            };
+            return new PluginPatternLink(range, match, this.handlers);
+          })
+        );
+      },
+      () => {
+        if (!this.disposed) callback(undefined);
+      }
+    );
   }
 
-  dispose(): void {}
+  dispose(): void {
+    this.disposed = true;
+  }
 }
 
 // No `hoveredLink` either: that feeds the context menu's "Open link" and "Copy

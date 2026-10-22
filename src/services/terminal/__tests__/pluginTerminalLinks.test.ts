@@ -12,18 +12,41 @@ const { actionServiceMock, panelState, viewWorkspace } = vi.hoisted(() => ({
 vi.mock("@/services/ActionService", () => ({ actionService: actionServiceMock }));
 vi.mock("@/store/panelStore", () => ({ usePanelStore: { getState: () => panelState } }));
 vi.mock("@/store/viewWorkspaceId", () => ({ getViewWorkspaceId: () => viewWorkspace.id }));
+vi.mock("@/utils/logger", () => ({ logWarn: vi.fn(), logError: vi.fn() }));
 
 import { usePluginRuntimeStore, type PluginTerminalLink } from "@/store/pluginRuntimeStore";
 import { usePluginTerminalLinkPreferencesStore } from "@/store/pluginTerminalLinkPreferencesStore";
 import {
-  _resetPluginTerminalLinksForTest,
   activatePluginPatternLink,
   activatePluginUrlLink,
   findPluginPatternLinks,
   findPluginUrlClaim,
   getLivePluginTerminalLinks,
   getTerminalLinkSubject,
+  isPluginPatternLinkCurrent,
+  selectPluginPatternLinks,
 } from "../pluginTerminalLinks";
+import {
+  TerminalLinkMatchClient,
+  _setTerminalLinkMatchClientForTest,
+  type TerminalLinkWorker,
+} from "../terminalLinkMatchClient";
+import { createTerminalLinkMatchHandler } from "../terminalLinkMatchWork";
+import { TERMINAL_LINK_MAX_MATCHES_PER_ROW } from "@shared/utils/pluginTerminalLinks";
+
+/** A worker that runs the real handler, answering on a microtask. */
+function inlineWorker(): TerminalLinkWorker {
+  const worker: TerminalLinkWorker = {
+    onmessage: null,
+    onerror: null,
+    terminate: () => {},
+    postMessage: (request) => {
+      queueMicrotask(() => handle(request));
+    },
+  };
+  const handle = createTerminalLinkMatchHandler((message) => worker.onmessage?.({ data: message }));
+  return worker;
+}
 
 function entry(
   pluginId: string,
@@ -45,7 +68,7 @@ function setLinks(links: PluginTerminalLink[]) {
 }
 
 beforeEach(() => {
-  _resetPluginTerminalLinksForTest();
+  _setTerminalLinkMatchClientForTest(new TerminalLinkMatchClient(inlineWorker));
   actionServiceMock.has.mockReset().mockReturnValue(true);
   actionServiceMock.dispatch.mockClear();
   panelState.panelsById = { "term-1": { kind: "terminal", worktreeId: "wt-1" } };
@@ -55,6 +78,7 @@ beforeEach(() => {
 
 afterEach(() => {
   setLinks([]);
+  _setTerminalLinkMatchClientForTest(null);
 });
 
 describe("getLivePluginTerminalLinks", () => {
@@ -85,30 +109,49 @@ describe("getLivePluginTerminalLinks", () => {
 });
 
 describe("findPluginPatternLinks", () => {
-  it("lets the earlier plugin keep an overlapping match", () => {
+  it("lets the earlier plugin keep an overlapping match", async () => {
     setLinks([
       entry("b-plugin", { id: "wide", pattern: "INV-\\d{1,4}" }),
       entry("a-plugin", { id: "narrow", pattern: "\\d{1,4}" }),
     ]);
-    const found = findPluginPatternLinks("INV-42 and 7");
+    const found = await findPluginPatternLinks("INV-42 and 7");
     expect(found.map((m) => [m.entry.pluginId, m.text])).toEqual([
       ["a-plugin", "42"],
       ["a-plugin", "7"],
     ]);
   });
 
-  it("never compiles a pattern that fails the safety check", () => {
+  it("never runs a pattern that fails the safety check", async () => {
     setLinks([entry("bad", { id: "x", pattern: "(a+)+b" })]);
-    expect(findPluginPatternLinks("aaaaaaaaaaaaaaaaaaaaaaaaaaab")).toEqual([]);
+    expect(await findPluginPatternLinks("aaaaaaaaaaaaaaaaaaaaaaaaaaab")).toEqual([]);
   });
 
-  it("switches a slow matcher off for the session", () => {
-    setLinks([entry("slow", { id: "x", pattern: "S-\\d" })]);
-    const now = vi.spyOn(performance, "now");
-    now.mockReturnValueOnce(0).mockReturnValueOnce(500);
-    expect(findPluginPatternLinks("S-1")).toHaveLength(1);
-    now.mockRestore();
-    expect(findPluginPatternLinks("S-1")).toEqual([]);
+  it("asks nothing of the worker when no live matcher has a pattern", async () => {
+    setLinks([entry("acme", { id: "rec", url: { scheme: "https", host: "records.example.com" } })]);
+    const match = vi.spyOn(TerminalLinkMatchClient.prototype, "match");
+    expect(await findPluginPatternLinks("INV-1")).toEqual([]);
+    expect(match).not.toHaveBeenCalled();
+    match.mockRestore();
+  });
+});
+
+describe("selectPluginPatternLinks", () => {
+  it("counts only kept matches toward the row cap", () => {
+    const wide = entry("a", { id: "wide", pattern: "x" });
+    const narrow = entry("b", { id: "narrow", pattern: "y" });
+    const overlapped = Array.from({ length: TERMINAL_LINK_MAX_MATCHES_PER_ROW }, (_, i) => ({
+      index: i,
+      text: "x",
+      groups: [],
+    }));
+    const found = selectPluginPatternLinks([wide, narrow], {
+      "a::wide": [{ index: 0, text: "x".repeat(40), groups: [] }],
+      "b::narrow": [...overlapped, { index: 50, text: "y", groups: [] }],
+    });
+    expect(found.map((m) => [m.entry.key, m.index])).toEqual([
+      ["a::wide", 0],
+      ["b::narrow", 50],
+    ]);
   });
 });
 
@@ -129,10 +172,10 @@ describe("findPluginUrlClaim", () => {
 });
 
 describe("activation", () => {
-  it("dispatches a pattern match with its text, groups and the terminal's subject", () => {
+  it("dispatches a pattern match with its text, groups and the terminal's subject", async () => {
     const live = entry("acme", { id: "inv", pattern: "INV-(\\d{1,4})" });
     setLinks([live]);
-    const [match] = findPluginPatternLinks("INV-42");
+    const [match] = await findPluginPatternLinks("INV-42");
     expect(activatePluginPatternLink(match!, "term-1")).toBe(true);
     expect(actionServiceMock.dispatch).toHaveBeenCalledWith(
       "acme.open",
@@ -147,10 +190,22 @@ describe("activation", () => {
     );
   });
 
-  it("re-checks the switch on click, since it may have flipped since the hover", () => {
+  it("re-checks the switch on click, since it may have flipped since the hover", async () => {
     setLinks([entry("acme", { id: "inv", pattern: "INV-\\d{1,4}" })]);
-    const [match] = findPluginPatternLinks("INV-42");
+    const [match] = await findPluginPatternLinks("INV-42");
     usePluginTerminalLinkPreferencesStore.getState().setEnabled("acme", false);
+    expect(isPluginPatternLinkCurrent(match!)).toBe(false);
+    expect(activatePluginPatternLink(match!, "term-1")).toBe(false);
+    expect(actionServiceMock.dispatch).not.toHaveBeenCalled();
+  });
+
+  it("refuses a match whose matcher a reload changed or removed, though the command remains", async () => {
+    setLinks([entry("acme", { id: "inv", pattern: "INV-\\d{1,4}" })]);
+    const [match] = await findPluginPatternLinks("INV-42");
+
+    setLinks([entry("acme", { id: "inv", pattern: "INV-\\d{1,8}" })]);
+    expect(activatePluginPatternLink(match!, "term-1")).toBe(false);
+    setLinks([]);
     expect(activatePluginPatternLink(match!, "term-1")).toBe(false);
     expect(actionServiceMock.dispatch).not.toHaveBeenCalled();
   });

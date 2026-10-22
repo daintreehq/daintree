@@ -797,8 +797,17 @@ function TerminalContextMenuBody({
         return;
       }
 
-      if (actionId === "open-link-external") {
-        terminalInstanceService.openHoveredLinkExternally(terminalId);
+      // The URL was captured when the menu opened; the hover itself ends as
+      // soon as the pointer moves onto the menu.
+      if (actionId.startsWith("open-link-claimed:")) {
+        terminalInstanceService.openLink(terminalId, actionId.slice("open-link-claimed:".length));
+        return;
+      }
+
+      if (actionId.startsWith("open-link-external:")) {
+        terminalInstanceService.openLink(terminalId, actionId.slice("open-link-external:".length), {
+          external: true,
+        });
         return;
       }
 
@@ -1774,12 +1783,16 @@ function TerminalContextMenuBody({
                   <ContextMenuSeparator />
                   {hoveredUrlPluginName ? (
                     <>
-                      <ContextMenuItem onSelect={() => handleAction("open-link")}>
+                      <ContextMenuItem
+                        onSelect={() => handleAction(`open-link-claimed:${hoveredUrl}`)}
+                      >
                         <Puzzle className={ICON_CLASS} aria-hidden="true" />
                         Open with {hoveredUrlPluginName}
                       </ContextMenuItem>
                       {/* A claimed URL still reaches the browser from here. */}
-                      <ContextMenuItem onSelect={() => handleAction("open-link-external")}>
+                      <ContextMenuItem
+                        onSelect={() => handleAction(`open-link-external:${hoveredUrl}`)}
+                      >
                         <Globe className={ICON_CLASS} aria-hidden="true" />
                         Open in external browser
                       </ContextMenuItem>

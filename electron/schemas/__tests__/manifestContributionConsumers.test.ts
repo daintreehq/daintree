@@ -1275,9 +1275,13 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       mode: "verbatim",
       consumers: [
         { file: PLUGIN_TERMINAL_LINKS, symbol: "findPluginPatternLinks" },
+        {
+          file: "src/services/terminal/terminalLinkMatchWork.ts",
+          symbol: "createTerminalLinkMatchHandler",
+        },
         { file: PLUGIN_TERMINAL_LINK_UTIL, symbol: "compileTerminalLinkPattern" },
       ],
-      note: "Compiled once and run over the hovered row's text.",
+      note: "Compiled once per worker and run over the hovered row's text, off the renderer thread.",
     },
     ignoreCase: {
       mode: "verbatim",

@@ -3,7 +3,7 @@ import { usePanelStore } from "@/store/panelStore";
 import { usePluginRuntimeStore, type PluginTerminalLink } from "@/store/pluginRuntimeStore";
 import { arePluginTerminalLinksEnabled } from "@/store/pluginTerminalLinkPreferencesStore";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
-import { logError, logWarn } from "@/utils/logger";
+import { logError } from "@/utils/logger";
 import type {
   TerminalLinkPatternArgs,
   TerminalLinkSubject,
@@ -11,34 +11,10 @@ import type {
 } from "@shared/types/plugin";
 import {
   TERMINAL_LINK_MAX_MATCHES_PER_ROW,
-  compileTerminalLinkPattern,
-  findTerminalLinkMatches,
   urlMatchesTerminalLinkTarget,
   type TerminalLinkPatternMatch,
 } from "@shared/utils/pluginTerminalLinks";
-
-/**
- * A matcher whose scan of one row took longer than this is switched off for
- * the rest of the session. The manifest check bounds a pattern's worst case,
- * but it is an estimate, and the renderer thread can't interrupt a running
- * `exec` — this keeps a misjudged pattern to one slow hover.
- */
-const SLOW_SCAN_MS = 50;
-
-const compiledPatterns = new Map<string, RegExp | null>();
-const slowMatchers = new Set<string>();
-
-function compiledPattern(entry: PluginTerminalLink): RegExp | null {
-  const { pattern, ignoreCase } = entry.link;
-  if (pattern === undefined) return null;
-  const cacheKey = `${ignoreCase === true ? "i" : ""}/${pattern}`;
-  let regex = compiledPatterns.get(cacheKey);
-  if (regex === undefined) {
-    regex = compileTerminalLinkPattern(pattern, ignoreCase === true);
-    compiledPatterns.set(cacheKey, regex);
-  }
-  return regex;
-}
+import { getTerminalLinkMatchClient, type TerminalLinkMatches } from "./terminalLinkMatchClient";
 
 function isLive(entry: PluginTerminalLink, viewWorkspaceId: string | null): boolean {
   return (
@@ -89,35 +65,19 @@ export interface PluginPatternLinkMatch extends TerminalLinkPatternMatch {
 }
 
 /**
- * Every plugin pattern match in one row's text, at most
- * {@link TERMINAL_LINK_MAX_MATCHES_PER_ROW}. A match overlapping one already
- * taken is dropped, so the earlier matcher wins.
+ * The links to offer from each matcher's results, at most
+ * {@link TERMINAL_LINK_MAX_MATCHES_PER_ROW}, in `entries` order. A match
+ * overlapping one already taken is dropped, so the earlier matcher wins, and
+ * only taken matches count toward the cap.
  */
-export function findPluginPatternLinks(
-  text: string,
-  entries: readonly PluginTerminalLink[] = getLivePluginTerminalLinks()
+export function selectPluginPatternLinks(
+  entries: readonly PluginTerminalLink[],
+  matchesByKey: TerminalLinkMatches
 ): PluginPatternLinkMatch[] {
   const found: PluginPatternLinkMatch[] = [];
   for (const entry of entries) {
-    if (found.length >= TERMINAL_LINK_MAX_MATCHES_PER_ROW) break;
-    const regex = compiledPattern(entry);
-    if (regex === null || slowMatchers.has(entry.key)) continue;
-    const started = performance.now();
-    const matches = findTerminalLinkMatches(
-      regex,
-      text,
-      TERMINAL_LINK_MAX_MATCHES_PER_ROW - found.length
-    );
-    const elapsed = performance.now() - started;
-    if (elapsed > SLOW_SCAN_MS) {
-      slowMatchers.add(entry.key);
-      logWarn("Switched off a slow plugin terminal link matcher for this session", {
-        pluginId: entry.pluginId,
-        matcherId: entry.link.id,
-        elapsedMs: Math.round(elapsed),
-      });
-    }
-    for (const match of matches) {
+    for (const match of matchesByKey[entry.key] ?? []) {
+      if (found.length >= TERMINAL_LINK_MAX_MATCHES_PER_ROW) return found;
       const end = match.index + match.text.length;
       const overlaps = found.some(
         (taken) => match.index < taken.index + taken.text.length && taken.index < end
@@ -126,6 +86,39 @@ export function findPluginPatternLinks(
     }
   }
   return found;
+}
+
+/**
+ * Every plugin pattern match in one hovered row's text. The patterns run in a
+ * worker, so a slow one never stalls the terminal; an unanswered request
+ * offers no links.
+ */
+export async function findPluginPatternLinks(text: string): Promise<PluginPatternLinkMatch[]> {
+  const entries = getLivePluginTerminalLinks().filter((entry) => entry.link.pattern !== undefined);
+  if (entries.length === 0) return [];
+  const matches = await getTerminalLinkMatchClient().match(
+    text,
+    entries.map((entry) => ({
+      key: entry.key,
+      pattern: entry.link.pattern!,
+      ignoreCase: entry.link.ignoreCase === true,
+    }))
+  );
+  return matches === null ? [] : selectPluginPatternLinks(entries, matches);
+}
+
+/**
+ * Whether a match found on an earlier hover still stands: its matcher is still
+ * live in this view and declared exactly as it was. A plugin reloaded with the
+ * matcher changed or gone keeps its command, so the command alone can't say.
+ */
+export function isPluginPatternLinkCurrent(match: PluginPatternLinkMatch): boolean {
+  const current = getLivePluginTerminalLinks().find((entry) => entry.key === match.entry.key);
+  return (
+    current !== undefined &&
+    current.actionId === match.entry.actionId &&
+    JSON.stringify(current.link) === JSON.stringify(match.entry.link)
+  );
 }
 
 /**
@@ -168,7 +161,7 @@ export function activatePluginPatternLink(
   terminalId: string
 ): boolean {
   const subject = getTerminalLinkSubject(terminalId);
-  if (subject === null || !isLive(match.entry, getViewWorkspaceId())) return false;
+  if (subject === null || !isPluginPatternLinkCurrent(match)) return false;
   dispatch(match.entry, { ...subject, text: match.text, groups: match.groups });
   return true;
 }
@@ -185,10 +178,4 @@ export function activatePluginUrlLink(url: string, terminalId: string): boolean 
   if (subject === null) return false;
   dispatch(entry, { ...subject, url });
   return true;
-}
-
-/** Test-only: forget compiled patterns and slow-matcher verdicts. */
-export function _resetPluginTerminalLinksForTest(): void {
-  compiledPatterns.clear();
-  slowMatchers.clear();
 }

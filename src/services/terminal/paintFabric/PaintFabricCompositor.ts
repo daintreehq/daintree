@@ -11,6 +11,7 @@ import { GRID_RESIZE_COALESCE_MS } from "../types";
 import type { UnseenOutputSnapshot } from "../TerminalUnseenOutputTracker";
 import type { TerminalGeometry } from "@shared/types/terminal";
 import type { TerminalPaintPlane } from "../TerminalInstanceService";
+import type { OpenLinkOptions } from "../TerminalLinkHandler";
 import type { BatchResizeOptions, ResizePassOptions } from "../TerminalResizePassScheduler";
 import type { TerminalPaddingPaint } from "../terminalPaddingPaint";
 import { logWarn } from "@/utils/logger";
@@ -634,8 +635,8 @@ export class PaintFabricCompositor implements TerminalPaintPlane {
     return this.plane(id).openHoveredLink(id, event);
   }
 
-  openHoveredLinkExternally(id: string): void {
-    this.plane(id).openHoveredLinkExternally(id);
+  openLink(id: string, url: string, options?: OpenLinkOptions): void {
+    this.plane(id).openLink(id, url, options);
   }
 
   clearDirectingState(id: string, trigger?: string): void {

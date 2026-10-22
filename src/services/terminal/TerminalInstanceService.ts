@@ -37,13 +37,14 @@ import { PartialEscapeTracker } from "@shared/utils/terminalPartialEscapeTail";
 import { TerminalParserHandler } from "./TerminalParserHandler";
 import { TerminalUnseenOutputTracker, UnseenOutputSnapshot } from "./TerminalUnseenOutputTracker";
 import { TerminalOffscreenManager } from "./TerminalOffscreenManager";
-import { TerminalLinkHandler } from "./TerminalLinkHandler";
+import { TerminalLinkHandler, type OpenLinkOptions } from "./TerminalLinkHandler";
 import {
   activatePluginPatternLink,
   findPluginPatternLinks,
   findPluginUrlClaim,
   getTerminalLinkSubject,
   initPluginTerminalLinks,
+  isPluginPatternLinkCurrent,
 } from "./pluginTerminalLinks";
 import { hideTerminalLinkTooltip, showTerminalLinkTooltip } from "./terminalLinkTooltip";
 import { isSuggestedCommandSource, runSuggestedCommand } from "./suggestedCommandRunner";
@@ -860,13 +861,12 @@ class TerminalInstanceService {
   }
 
   /**
-   * Opens the hovered URL in the external browser, skipping any plugin that
+   * Opens a URL the context menu captured when it opened: the hover itself is
+   * gone by the time an item is chosen. `external` skips any plugin that
    * claims it — the escape hatch every URL keeps (#13798).
    */
-  openHoveredLinkExternally(id: string): void {
-    const link = this.instances.get(id)?.hoveredLink;
-    if (link?.kind !== "url") return;
-    this.linkHandler.openLink(link.text, id, undefined, { external: true });
+  openLink(id: string, url: string, options?: OpenLinkOptions): void {
+    this.linkHandler.openLink(url, id, undefined, options);
   }
 
   /**
@@ -1969,8 +1969,13 @@ class TerminalInstanceService {
     // Claude Code's `! command` suggestions register first: xterm gives an
     // overlapping link to the earliest provider, and a suggestion often holds a
     // path or URL that must not take the click away from the whole command.
+    // Set when this call registers a built-in provider: one created after the
+    // plugin provider (a help lane bound later, a retried failure) would rank
+    // below it, so the plugin provider is then registered again, last.
+    let builtInAdded = false;
     if (!managed.commandLinksDisposable) {
       try {
+        builtInAdded = true;
         managed.commandLinksDisposable = createSuggestedCommandLinksAddon(
           managed.terminal,
           () => isSuggestedCommandSource(id, this.instances.get(id)?.runtimeAgentId),
@@ -1982,6 +1987,7 @@ class TerminalInstanceService {
     }
     if (!managed.fileLinksDisposable) {
       try {
+        builtInAdded = true;
         managed.fileLinksDisposable = createFileLinksAddon(
           managed.terminal,
           () => (this.cwdProviders.get(id) ?? (() => ""))(),
@@ -2008,6 +2014,7 @@ class TerminalInstanceService {
       selectSlotForTerminal(useHelpPanelStore.getState(), id) !== null
     ) {
       try {
+        builtInAdded = true;
         managed.imageLinksDisposable = createImageLinksAddon(
           managed.terminal,
           () => {
@@ -2031,6 +2038,7 @@ class TerminalInstanceService {
     }
     if (!managed.webLinksAddon) {
       try {
+        builtInAdded = true;
         managed.webLinksAddon = createWebLinksAddon(
           managed.terminal,
           (event, uri) => {
@@ -2062,18 +2070,29 @@ class TerminalInstanceService {
     // never takes a click from a path, URL, figure or suggested command. The
     // matchers are read live on each hover, so nothing here rebuilds when a
     // plugin loads, stops or is switched off.
+    if (builtInAdded && managed.pluginLinksDisposable) {
+      managed.pluginLinksDisposable.dispose();
+      managed.pluginLinksDisposable = null;
+    }
     if (!managed.pluginLinksDisposable) {
       const terminal = managed.terminal;
       try {
         initPluginTerminalLinks();
         managed.pluginLinksDisposable = createPluginTerminalLinksAddon(terminal, {
-          find: (text) => (getTerminalLinkSubject(id) === null ? [] : findPluginPatternLinks(text)),
+          find: (text) =>
+            getTerminalLinkSubject(id) === null
+              ? Promise.resolve([])
+              : findPluginPatternLinks(text),
           activate: (match) => {
             hideTerminalLinkTooltip(terminal);
             activatePluginPatternLink(match, id);
           },
-          hover: (match, event) =>
-            showTerminalLinkTooltip(terminal, event, `Open with ${match.entry.pluginName}`),
+          // xterm keeps a row's links while the pointer stays on it, so a link
+          // found before its plugin was switched off can still be hovered.
+          hover: (match, event) => {
+            if (!isPluginPatternLinkCurrent(match)) return;
+            showTerminalLinkTooltip(terminal, event, `Open with ${match.entry.pluginName}`);
+          },
           leave: () => hideTerminalLinkTooltip(terminal),
         });
       } catch (err) {
@@ -2706,6 +2725,7 @@ class TerminalInstanceService {
     // ImageAddon first and by name: its dispose() is what restores the
     // `_core.open` it monkey-patched. Disposing the terminal with the patch
     // still installed is how the wedge survives a rebuild.
+    hideTerminalLinkTooltip(managed.terminal);
     for (const [label, disposable] of [
       ["image addon", managed.imageAddon],
       ["file links", managed.fileLinksDisposable],
@@ -3045,6 +3065,7 @@ class TerminalInstanceService {
       return;
     }
     this.cancelAttachReveal(managed);
+    hideTerminalLinkTooltip(managed.terminal);
 
     const isDirectChild = managed.hostElement.parentElement === container;
     logDebug(`[TIS.detach] ${id}`, {
@@ -3081,6 +3102,7 @@ class TerminalInstanceService {
     this.cancelAttachReveal(managed);
 
     logDebug(`[TIS.detachForProjectSwitch] ${id}`);
+    hideTerminalLinkTooltip(managed.terminal);
 
     managed.isVisible = false;
     managed.isDetached = true;
@@ -4169,6 +4191,7 @@ class TerminalInstanceService {
     if (!managed) return;
 
     this.settleWaiters.rejectAll(id);
+    hideTerminalLinkTooltip(managed.terminal);
 
     // The attach banner describes an xterm instance that is about to stop
     // existing (#11776). Its Retry would target a terminal this service no
