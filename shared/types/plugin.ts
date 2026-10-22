@@ -3845,10 +3845,13 @@ export type PluginWorktreeGitOperation = "merge" | "rebase" | "cherry-pick" | "r
  *
  * - `pending`: the worktree exists and setup has not started
  * - `running`: config copy, submodule init or the setup commands are in flight
- * - `ready`: every stage finished, including a project with no setup commands
+ * - `ready`: the recorded run finished without a failure, including a project
+ *   with no setup commands. A retry reruns only the setup commands, so after a
+ *   retry `ready` speaks for those alone
  * - `failed` / `timed-out`: a stage failed; {@link PluginWorktreeSetup.stage} says which
- * - `needs-approval`: the setup commands come from the repository and the user
- *   has not approved them, so they were skipped. The worktree itself is usable
+ * - `needs-approval`: setup or provisioning commands from the repository are
+ *   waiting for the user's approval, so they were skipped. The checkout exists,
+ *   but its initialization may be incomplete
  */
 export type PluginWorktreeSetupState =
   "pending" | "running" | "ready" | "failed" | "timed-out" | "needs-approval";
@@ -3920,8 +3923,8 @@ export interface PluginWorktreeSnapshot {
    * Setup progress, or `null` when the workspace host has no record of a setup
    * run for this worktree. The record is held in memory and written when the
    * host creates the worktree or retries its setup, so a worktree made outside
-   * Daintree, or one from before the workspace host last started, reads `null`.
-   * `null` means unknown, never ready.
+   * Daintree, or one from before the workspace host last started, reads `null`
+   * until its setup is retried. `null` means unknown, never ready.
    */
   readonly setup: PluginWorktreeSetup | null;
 }
