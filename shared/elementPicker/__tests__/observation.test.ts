@@ -5,7 +5,8 @@ import {
   ElementObservationSchema,
   FrameworkEvidenceSchema,
   HoverObservationSchema,
-  MAX_LAYOUT_PX,
+  MAX_RECT_PX,
+  MAX_SOURCE_COORDINATE,
   OBSERVATION_LIMITS,
   SelectionObservationSchema,
   type ElementContext,
@@ -80,8 +81,11 @@ describe("observations", () => {
       SelectionObservationSchema.safeParse(selection({ bounds: [{ ...rect, ...patch }] })).success;
     expect(withRect({ width: -1 })).toBe(false);
     // Scrolled above or left of the viewport: a real box, so negative positions stay legal.
-    expect(withRect({ x: -MAX_LAYOUT_PX, y: -120 })).toBe(true);
-    expect(withRect({ x: -MAX_LAYOUT_PX - 1 })).toBe(false);
+    expect(withRect({ x: -MAX_RECT_PX, y: -120 })).toBe(true);
+    expect(withRect({ x: -MAX_RECT_PX - 1 })).toBe(false);
+    // `scaleX(2)` on a 20M px box: past layout's own range, still a real client rect.
+    expect(withRect({ width: 40_000_000 })).toBe(true);
+    expect(withRect({ width: MAX_RECT_PX + 2 ** 20 })).toBe(false);
     expect(withRect({ width: Number.MAX_VALUE })).toBe(false);
     expect(withRect({ x: Number.MAX_VALUE })).toBe(false);
     expect(
@@ -141,6 +145,17 @@ describe("FrameworkEvidenceSchema", () => {
   it("keeps a block kind a newer compiler adds instead of failing the observation", () => {
     const future = { ...svelte, ancestry: [{ ...svelte.ancestry[0], type: "boundary" }] };
     expect(FrameworkEvidenceSchema.parse(future)).toEqual(future);
+  });
+
+  it("bounds Svelte ancestry coordinates", () => {
+    const at = (patch: object) =>
+      FrameworkEvidenceSchema.safeParse({
+        ...svelte,
+        ancestry: [{ ...svelte.ancestry[0], ...patch }],
+      }).success;
+    expect(at({ line: MAX_SOURCE_COORDINATE, column: MAX_SOURCE_COORDINATE })).toBe(true);
+    expect(at({ line: MAX_SOURCE_COORDINATE + 1 })).toBe(false);
+    expect(at({ column: MAX_SOURCE_COORDINATE + 1 })).toBe(false);
   });
 
   it("bounds Svelte ancestry depth", () => {

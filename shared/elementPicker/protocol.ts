@@ -3,7 +3,7 @@ import { utf8ByteLength } from "../utils/boundedOutput.js";
 import {
   FrameworkDetectionSchema,
   HoverObservationSchema,
-  MAX_LAYOUT_PX,
+  MAX_RECT_PX,
   OBSERVATION_LIMITS,
   SelectionObservationSchema,
 } from "./observation.js";
@@ -73,8 +73,8 @@ export const ElementPickerEventSchema = z.discriminatedUnion("type", [
     type: z.literal("documentReady"),
     url: z.string().max(2048),
     viewport: z.strictObject({
-      width: z.number().int().positive().max(MAX_LAYOUT_PX),
-      height: z.number().int().positive().max(MAX_LAYOUT_PX),
+      width: z.number().int().positive().max(MAX_RECT_PX),
+      height: z.number().int().positive().max(MAX_RECT_PX),
       /** `devicePixelRatio`, which browser zoom multiplies, so it runs well past any display's own. */
       deviceScaleFactor: z.number().positive().max(64),
     }),

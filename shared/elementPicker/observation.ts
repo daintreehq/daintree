@@ -22,17 +22,18 @@ export const OBSERVATION_LIMITS = {
 } as const;
 
 /**
- * Chromium's layout saturates near 2^25 px (a 32-bit fixed-point unit with six
- * fractional bits), so no rendered box lies past it, and a page-supplied rect
- * that does would turn edge arithmetic into Infinity.
+ * Not a layout limit: a transform scales a client rect past anything layout
+ * itself produces. It keeps edge arithmetic exact, since two values this size
+ * sum to at most 2^53, where a page-supplied `Number.MAX_VALUE` would turn
+ * `x + width` into Infinity.
  */
-export const MAX_LAYOUT_PX = 2 ** 25;
+export const MAX_RECT_PX = 2 ** 52;
 
 export const RectSchema = z.strictObject({
-  x: z.number().min(-MAX_LAYOUT_PX).max(MAX_LAYOUT_PX),
-  y: z.number().min(-MAX_LAYOUT_PX).max(MAX_LAYOUT_PX),
-  width: z.number().nonnegative().max(MAX_LAYOUT_PX),
-  height: z.number().nonnegative().max(MAX_LAYOUT_PX),
+  x: z.number().min(-MAX_RECT_PX).max(MAX_RECT_PX),
+  y: z.number().min(-MAX_RECT_PX).max(MAX_RECT_PX),
+  width: z.number().nonnegative().max(MAX_RECT_PX),
+  height: z.number().nonnegative().max(MAX_RECT_PX),
 });
 export type Rect = z.infer<typeof RectSchema>;
 

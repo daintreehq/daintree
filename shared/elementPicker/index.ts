@@ -44,7 +44,7 @@ export {
   ElementObservationSchema,
   FrameworkDetectionSchema,
   HoverObservationSchema,
-  MAX_LAYOUT_PX,
+  MAX_RECT_PX,
   OBSERVATION_LIMITS,
   RectSchema,
   SelectionObservationSchema,

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ELEMENT_PICKER_PROTOCOL_VERSION,
   MAX_ELEMENT_PICKER_MESSAGE_BYTES,
+  MAX_RECT_PX,
   SELECTION_LIMITS,
   admitElementPickerMessage,
   type ElementPickerAdmission,
@@ -15,11 +16,11 @@ const admission: ElementPickerAdmission = Object.freeze({
   lastSequence: 4,
 });
 
-const ready: ElementPickerEvent = {
+const ready = {
   type: "documentReady",
   url: "http://localhost:5173/pricing",
   viewport: { width: 1280, height: 800, deviceScaleFactor: 2 },
-};
+} satisfies ElementPickerEvent;
 
 function envelope(event: unknown = ready, overrides: Record<string, unknown> = {}) {
   return {
@@ -215,6 +216,19 @@ describe("admitElementPickerMessage", () => {
         admitElementPickerMessage(send({ ...base, observations: tooMany }), admission).ok
       ).toBe(false);
     });
+  });
+
+  it("bounds the viewport a page reports", () => {
+    const withViewport = (patch: object) =>
+      admitElementPickerMessage(
+        send({ ...ready, viewport: { ...ready.viewport, ...patch } }),
+        admission
+      ).ok;
+    expect(withViewport({ width: MAX_RECT_PX, deviceScaleFactor: 64 })).toBe(true);
+    expect(withViewport({ width: MAX_RECT_PX + 1 })).toBe(false);
+    expect(withViewport({ height: MAX_RECT_PX + 1 })).toBe(false);
+    expect(withViewport({ deviceScaleFactor: 64.5 })).toBe(false);
+    expect(withViewport({ width: 1280.5 })).toBe(false);
   });
 
   it("names a protocol version mismatch separately from a malformed body", () => {
