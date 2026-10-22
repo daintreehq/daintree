@@ -311,6 +311,20 @@ describe("DriveLeaseBanner", () => {
     }
   });
 
+  it("says a controller already away when the view first hears of it is away, not in control", () => {
+    const announce = vi.fn();
+    const realAnnounce = useAnnouncerStore.getState().announce;
+    useAnnouncerStore.setState({ announce });
+    try {
+      render(<Harness />);
+      act(() => emit?.({ type: "changed", state: view({ holderAwayMs: 45_000 }) }));
+      expect(screen.getByText("greg-mbp is away")).toBeTruthy();
+      expect(announce.mock.calls.map(([message]) => message)).toEqual(["greg-mbp is away"]);
+    } finally {
+      useAnnouncerStore.setState({ announce: realAnnounce });
+    }
+  });
+
   it("keeps the live wording for a host that doesn't say whether its controller is away", () => {
     render(<Harness />);
     act(() => emit?.({ type: "changed", state: view() }));

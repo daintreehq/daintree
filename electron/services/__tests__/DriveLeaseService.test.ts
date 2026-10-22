@@ -528,6 +528,30 @@ describe("DriveLeaseService", () => {
     expect(changes).toHaveLength(holderChanges);
   });
 
+  it("taking control from an away holder lands at once, and its old grace hands nothing on", async () => {
+    const hostWindow = local(1);
+    const laptop = remote("s1:e1", "c1");
+    const studio = remote("s2:e1", "c2");
+    registry.add(hostWindow);
+    registry.add(laptop);
+    registry.add(studio);
+    await settle();
+    service.takeOver("p", laptop);
+    service.noteEndpointTransport([laptop.endpointId], false);
+    expect(studio.events().at(-1)?.state.holderAwayMs).toBe(GRACE_MS);
+
+    const taken = service.takeOver("p", studio);
+    expect(service.getHolder("p")).toBe(taken);
+    for (const endpoint of [hostWindow, studio]) {
+      expect(endpoint.events().at(-1)?.state.holder).toBe(taken);
+      expect(endpoint.events().at(-1)?.state).not.toHaveProperty("holderAwayMs");
+    }
+
+    vi.advanceTimersByTime(GRACE_MS * 2);
+    expect(service.getHolder("p")).toBe(taken);
+    expect(service.viewFor("p", hostWindow)).not.toHaveProperty("holderAwayMs");
+  });
+
   it("says a closed holder is away until the grace hands the project on", async () => {
     const hostWindow = local(1);
     const laptop = remote("s1:e1", "c1");

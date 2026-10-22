@@ -97,7 +97,11 @@ function announceControlChange(prev: DriveLeaseView | null, next: DriveLeaseView
   }
   if (after !== null) {
     announce(
-      sameProject ? `Control moved to ${after.name}` : `${after.name} has control of this project`,
+      sameProject
+        ? `Control moved to ${after.name}`
+        : next.holderAwayMs !== undefined
+          ? `${after.name} is away`
+          : `${after.name} has control of this project`,
       "polite"
     );
   } else if (before !== null && next.drivingHere) {
