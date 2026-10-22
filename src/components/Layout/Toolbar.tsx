@@ -360,12 +360,13 @@ function OverflowMenu({
   const popoverOrigin = side === "left" ? "overflow-left" : "overflow-right";
   const openPopover = usePluginToolbarPopoverStore((s) => s.open);
   // A plugin popover picked from a row opens once the menu has closed, off the
-  // `…` button — the row goes with the menu. See PluginTrayButton for why the
-  // close hook spends it rather than the row.
-  const pendingPopoverRef = useRef<string | null>(null);
+  // `…` button — the row goes with the menu. The store holds it meanwhile; see
+  // its `deferred` for why the close hook spends it rather than the row.
+  const deferPopover = usePluginToolbarPopoverStore((s) => s.defer);
+  const takeDeferredPopover = usePluginToolbarPopoverStore((s) => s.takeDeferred);
   const selectPluginItem = (config: ToolbarButtonConfig) => {
     if (config.popover) {
-      pendingPopoverRef.current = config.id;
+      deferPopover(config.id, popoverOrigin);
       return;
     }
     overflowActions[config.id]?.();
@@ -374,7 +375,7 @@ function OverflowMenu({
     if (nextOpen) {
       // Dropped on reopen: a menu reopened inside its exit animation never ran
       // the close hook that spends it.
-      pendingPopoverRef.current = null;
+      takeDeferredPopover(popoverOrigin);
       setRepoStats(forgeStatsRef.current?.stats ?? null);
       // Same reason PluginTrayButton refreshes on open: a dev-attached plugin
       // registers its buttons without broadcasting provenance, so its display
@@ -481,8 +482,7 @@ function OverflowMenu({
             overflowMenuPointerCloseRef.current = true;
           }}
           onCloseAutoFocus={(e) => {
-            const pendingPopover = pendingPopoverRef.current;
-            pendingPopoverRef.current = null;
+            const pendingPopover = takeDeferredPopover(popoverOrigin);
             if (pendingPopover !== null) {
               // The popover takes focus into itself; returning it to the button
               // first would only flash a ring on the way.

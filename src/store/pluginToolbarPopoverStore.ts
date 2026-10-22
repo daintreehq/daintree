@@ -15,8 +15,20 @@ export interface PluginToolbarPopoverOpening {
   seq: number;
 }
 
+/**
+ * A popover picked from a tray or overflow menu row, waiting for that menu to
+ * close. Opening it from the row would raise it while the menu still holds
+ * focus, and the menu's own focus return would then pull focus back out of the
+ * popover onto its trigger, which reads as an outside focus and dismisses it.
+ */
+interface PluginToolbarPopoverDeferral {
+  buttonId: string;
+  origin: PluginToolbarPopoverOrigin;
+}
+
 interface PluginToolbarPopoverState {
   opening: PluginToolbarPopoverOpening | null;
+  deferred: PluginToolbarPopoverDeferral | null;
   /**
    * Finds where focus goes when the popover closes, in place of the control it
    * hangs off — set by a close that is hiding that control, and asked only
@@ -31,8 +43,19 @@ interface PluginToolbarPopoverState {
    * optionally handing focus to what `focus` finds instead of its own control.
    */
   close: (seq?: number, focus?: (() => HTMLElement | null) | null) => void;
-  /** Close the open popover if its button is no longer contributed. */
+  /**
+   * Close the open popover, and drop a deferred one, whose button is no longer
+   * contributed or shown.
+   */
   retain: (buttonIds: ReadonlySet<string>) => void;
+  /** Hold `buttonId`'s popover until the menu at `origin` has closed. */
+  defer: (buttonId: string, origin: PluginToolbarPopoverOrigin) => void;
+  /**
+   * The button deferred off `origin`, cleared as it is read. Null when there is
+   * none, including one {@link retain} dropped because its button went out of
+   * sight while the menu was closing.
+   */
+  takeDeferred: (origin: PluginToolbarPopoverOrigin) => string | null;
   /** The pending {@link closeFocus}, cleared as it is read. */
   takeCloseFocus: () => (() => HTMLElement | null) | null;
 }
@@ -46,6 +69,7 @@ let nextSeq = 1;
  */
 export const usePluginToolbarPopoverStore = create<PluginToolbarPopoverState>((set, get) => ({
   opening: null,
+  deferred: null,
   closeFocus: null,
   open: (buttonId, origin) =>
     set({ opening: { buttonId, origin, seq: nextSeq++ }, closeFocus: null }),
@@ -56,8 +80,16 @@ export const usePluginToolbarPopoverStore = create<PluginToolbarPopoverState>((s
     set({ opening: null, closeFocus: focus });
   },
   retain: (buttonIds) => {
-    const { opening } = get();
+    const { opening, deferred } = get();
     if (opening !== null && !buttonIds.has(opening.buttonId)) set({ opening: null });
+    if (deferred !== null && !buttonIds.has(deferred.buttonId)) set({ deferred: null });
+  },
+  defer: (buttonId, origin) => set({ deferred: { buttonId, origin } }),
+  takeDeferred: (origin) => {
+    const { deferred } = get();
+    if (deferred === null || deferred.origin !== origin) return null;
+    set({ deferred: null });
+    return deferred.buttonId;
   },
   takeCloseFocus: () => {
     const { closeFocus } = get();

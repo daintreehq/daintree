@@ -154,7 +154,7 @@ beforeAll(async () => {
 beforeEach(() => {
   h.dispatch.mockReset();
   h.mounts.length = 0;
-  usePluginToolbarPopoverStore.setState({ opening: null });
+  usePluginToolbarPopoverStore.setState({ opening: null, deferred: null });
   registerPanelKind(kind());
 });
 
@@ -287,6 +287,45 @@ describe("plugin toolbar popover (#13784)", () => {
     expect(popovers()).toHaveLength(0);
     // The row went with the menu; the tray button is the control left to land on.
     expect(document.activeElement).toBe(tray);
+  });
+
+  it("drops a tray row's popover whose button is hidden while the menu closes", async () => {
+    const all = new Map<string, ToolbarButtonConfig>([
+      ["acme.inbox.open", popoverButton("acme.inbox.open")],
+      ["acme.inbox.sync", actionButton("acme.inbox.sync", "Sync")],
+    ]);
+    const visible = new Map([...all].filter(([id]) => id !== "acme.inbox.open"));
+    const { rerender } = render(<PluginTrayButton configs={all} />);
+    // What `useVisiblePluginToolbarButtons` does as a clause flips: the
+    // toolbar redraws with the shown set, then retains it.
+    const show = (configs: Map<string, ToolbarButtonConfig>) => {
+      rerender(<PluginTrayButton configs={configs} />);
+      usePluginToolbarPopoverStore.getState().retain(new Set(configs.keys()));
+    };
+    const tray = screen.getByRole("button", { name: "Plugin tray" });
+    await act(async () => {
+      tray.focus();
+      fireEvent.keyDown(tray, { key: "Enter" });
+    });
+    await flush();
+
+    // The row is picked, and its `when` goes false before the menu's close
+    // hook runs.
+    await act(async () => {
+      fireEvent.click(screen.getByRole("menuitem", { name: /Inbox/ }));
+      show(visible);
+    });
+    await flush();
+    await flush();
+    expect(popovers()).toHaveLength(0);
+
+    // Back on the toolbar, it waits for a click rather than springing open.
+    await act(async () => {
+      show(all);
+    });
+    await flush();
+    expect(popovers()).toHaveLength(0);
+    expect(usePluginToolbarPopoverStore.getState().opening).toBeNull();
   });
 
   it("still dispatches an action row from the tray", async () => {
@@ -425,5 +464,18 @@ describe("plugin toolbar popover (#13784)", () => {
     expect(usePluginToolbarPopoverStore.getState().opening).not.toBeNull();
     store.retain(new Set(["acme.inbox.a"]));
     expect(usePluginToolbarPopoverStore.getState().opening).toBeNull();
+  });
+
+  it("spends a deferred popover only off its own menu, and drops one whose button goes", () => {
+    const store = usePluginToolbarPopoverStore.getState();
+    store.defer("acme.inbox.a", "overflow-right");
+    expect(store.takeDeferred("tray")).toBeNull();
+    expect(store.takeDeferred("overflow-right")).toBe("acme.inbox.a");
+    expect(store.takeDeferred("overflow-right")).toBeNull();
+
+    store.defer("acme.inbox.a", "overflow-left");
+    store.retain(new Set(["acme.inbox.a", "acme.inbox.b"]));
+    store.retain(new Set(["acme.inbox.b"]));
+    expect(store.takeDeferred("overflow-left")).toBeNull();
   });
 });

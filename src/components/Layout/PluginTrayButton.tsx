@@ -498,14 +498,12 @@ export function PluginTrayButton({
   const isRestoringFocusRef = useRef(false);
   const wasPointerCloseRef = useRef(false);
   const lastPinActionAt = useRef(0);
-  // A popover row records its button here and the menu's close hook spends
-  // it. Opening straight from the row would raise the popover while the menu
-  // still holds focus, and the menu's own focus return would then pull focus
-  // back out of the popover onto this button — which reads as an outside focus
-  // and dismisses it.
-  const pendingPopoverRef = useRef<string | null>(null);
   const trayButtonRef = useRef<HTMLButtonElement>(null);
   const openPopover = usePluginToolbarPopoverStore((s) => s.open);
+  // A popover row defers its button in the store and the menu's close hook
+  // spends it; the store drops it if `when` hides the button meanwhile.
+  const deferPopover = usePluginToolbarPopoverStore((s) => s.defer);
+  const takeDeferredPopover = usePluginToolbarPopoverStore((s) => s.takeDeferred);
 
   const groups = useMemo(
     () =>
@@ -557,7 +555,7 @@ export function PluginTrayButton({
     // A menu reopened inside its exit animation never unmounts, so the close
     // hook never ran for that close; drop the intent rather than let it open
     // the popover on some later, unrelated close.
-    pendingPopoverRef.current = null;
+    takeDeferredPopover("tray");
     // A dev-attached plugin registers its buttons without broadcasting
     // provenance, so the runtime store can be missing its display name at
     // this point — pull once on open rather than rendering a raw plugin id.
@@ -566,7 +564,7 @@ export function PluginTrayButton({
 
   const handleSelect = (config: ToolbarButtonConfig) => {
     if (config.popover) {
-      pendingPopoverRef.current = config.id;
+      deferPopover(config.id, "tray");
       return;
     }
     void actionService.dispatch(
@@ -662,8 +660,7 @@ export function PluginTrayButton({
           onCloseAutoFocus={(e) => {
             setTooltipOpen(false);
             isRestoringFocusRef.current = true;
-            const pendingPopover = pendingPopoverRef.current;
-            pendingPopoverRef.current = null;
+            const pendingPopover = takeDeferredPopover("tray");
             if (pendingPopover !== null) {
               // The popover takes focus into itself; returning it to this button
               // first would only flash a ring on the way.
