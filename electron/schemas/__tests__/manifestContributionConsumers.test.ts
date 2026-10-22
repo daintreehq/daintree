@@ -1239,6 +1239,14 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       consumers: [{ file: AGENT_REGISTRY, symbol: "toPluginAgentConfig" }],
       note: "Copied into the runtime agent config detection block (see agents.detection).",
     },
+    launchMcp: {
+      mode: "derived-input",
+      consumers: [
+        { file: AGENT_REGISTRY, symbol: "contributionToAgentConfig" },
+        { file: "shared/config/launchMcp.ts", symbol: "buildLaunchMcpInjection" },
+      ],
+      note: "Only the format is declared; the registry builds capabilities.launchMcp, pinning any env var name, and lifecycle hands the agent the endpoints its project allows.",
+    },
     resume: {
       mode: "derived-input",
       consumers: [

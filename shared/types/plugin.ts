@@ -20,6 +20,7 @@ import type {
 } from "./actions.js";
 import type { AgentState, WaitingReason } from "./agent.js";
 import type { AgentDetectionConfig, AgentResumeTemplate } from "../config/agentRegistry.js";
+import type { LaunchMcpFormat } from "../config/launchMcp.js";
 import type { z } from "zod";
 
 /** Default byte ceiling when a `contributes.fileEditors` entry omits `maxBytes`. */
@@ -2268,6 +2269,14 @@ export interface PluginAgentContribution {
    * resume command is built. Plugin agents never claim a `continuity` tier.
    */
   resume?: AgentResumeTemplate;
+  /**
+   * Optional additive launch mechanism (#13803): the CLI's own way of merging
+   * extra MCP servers over the user's, which Daintree uses to hand the agent its
+   * orchestration server and the plugin endpoints the project turned on. Declaring
+   * a format grants nothing — access still comes from the project's tool
+   * settings. Only the format is declared; Daintree owns any env var name.
+   */
+  launchMcp?: { format: LaunchMcpFormat };
 }
 
 /**

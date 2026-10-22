@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { LAUNCH_MCP_FORMATS } from "../../../shared/config/launchMcp.js";
 import { AgentContributionSchema, getPluginManifestSchema } from "../plugin.js";
 
 const VALID_AGENT = {
@@ -106,6 +107,25 @@ describe("AgentContributionSchema (issue #9560)", () => {
     expect(AgentContributionSchema.safeParse({ ...VALID_AGENT, continuity: {} }).success).toBe(
       false
     );
+  });
+
+  describe("launchMcp (#13803)", () => {
+    const parses = (launchMcp: unknown) =>
+      AgentContributionSchema.safeParse({ ...VALID_AGENT, launchMcp }).success;
+
+    it.each(LAUNCH_MCP_FORMATS)("accepts the %s format", (format) => {
+      expect(parses({ format })).toBe(true);
+    });
+
+    it("rejects an unknown format, a missing format and extra keys", () => {
+      expect(parses({ format: "replace-user-servers" })).toBe(false);
+      expect(parses({})).toBe(false);
+      expect(parses({ format: "claude-mcp-config", strict: true })).toBe(false);
+    });
+
+    it("rejects a manifest-chosen env var", () => {
+      expect(parses({ format: "opencode-config-content", envVar: "NODE_OPTIONS" })).toBe(false);
+    });
   });
 
   describe("resume (#13687)", () => {
