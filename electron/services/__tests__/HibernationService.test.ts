@@ -165,6 +165,19 @@ describe("HibernationService", () => {
       expect(await service.hibernateProjectOnDemand("proj-1", "Old")).toBe(1);
     });
 
+    it("never kills for a background reason while the experiment is on, even when routed on demand", async () => {
+      // hibernateUnderMemoryPressure returns before reaching this guard, so the
+      // on-demand entry point is the only way to prove the kill-site guard holds.
+      ptyManagerMock.gracefulKillByProject.mockResolvedValue([{ id: "t1", agentSessionId: null }]);
+
+      const service = makeService();
+      const killed = await service.hibernateProjectOnDemand("proj-1", "Proj One", "memory-pressure");
+
+      expect(killed).toBe(0);
+      expect(ptyManagerMock.gracefulKillByProject).not.toHaveBeenCalled();
+      expect(writeHibernatedMarkerMock).not.toHaveBeenCalled();
+    });
+
     describe("with the hibernation-removal experiment off", () => {
       beforeEach(() => disableHibernationExperiment());
 
@@ -700,6 +713,22 @@ describe("HibernationService", () => {
       await service.hibernateUnderMemoryPressure();
 
       expect(hibernatedProjectIds()).toEqual(["proj-1"]);
+    });
+
+    it("memory pressure skips a project whose index.lock is fresh", async () => {
+      setupMemoryPressureProject();
+      fsMock.readdir.mockImplementation(async (dirPath: string) => {
+        if (String(dirPath).endsWith(".git")) return ["index.lock", "HEAD"];
+        throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+      });
+      // Written a minute ago — a git command is still holding it.
+      fsMock.stat.mockResolvedValue({ mtimeMs: Date.now() - 60 * 1000 });
+
+      const service = makeService();
+      await service.hibernateUnderMemoryPressure();
+
+      expect(ptyManagerMock.gracefulKillByProject).not.toHaveBeenCalled();
+      expect(hibernatedProjectIds()).toEqual([]);
     });
 
     it("handles index.lock disappearing between readdir and stat", async () => {

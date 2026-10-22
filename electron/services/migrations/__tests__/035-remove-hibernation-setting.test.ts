@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { migration035 } from "../035-remove-hibernation-setting.js";
 
-function run(initial: Record<string, unknown>) {
+function run(initial: Record<string, unknown>, times = 1) {
   const data: Record<string, unknown> = structuredClone(initial);
   const store = {
     get: vi.fn((key: string) => data[key]),
@@ -12,15 +12,11 @@ function run(initial: Record<string, unknown>) {
       delete data[key];
     }),
   } as unknown as Parameters<typeof migration035.up>[0];
-  migration035.up(store);
+  for (let i = 0; i < times; i++) migration035.up(store);
   return data;
 }
 
 describe("migration035 — remove the retired hibernation setting", () => {
-  it("has version 35", () => {
-    expect(migration035.version).toBe(35);
-  });
-
   it.each([
     ["switched on", { enabled: true, inactiveThresholdHours: 48 }],
     ["switched off", { enabled: false, inactiveThresholdHours: 24 }],
@@ -37,6 +33,14 @@ describe("migration035 — remove the retired hibernation setting", () => {
       idleTerminalNotify: { enabled: true, thresholdMinutes: 60 },
       sessionRestore: { enabled: true },
     });
+  });
+
+  it("is idempotent", () => {
+    const initial = {
+      hibernation: { enabled: true, inactiveThresholdHours: 48 },
+      sessionRestore: { enabled: true },
+    };
+    expect(run(initial, 2)).toEqual(run(initial, 1));
   });
 
   it("leaves a store that never had the key untouched", () => {

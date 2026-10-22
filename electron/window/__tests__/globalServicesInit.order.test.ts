@@ -152,7 +152,7 @@ const hibernationServiceMock = vi.hoisted(() => ({
 
 vi.mock("../../services/HibernationService.js", () => ({
   initializeHibernationService: vi.fn(() => hibernationServiceMock),
-  getHibernationService: () => ({ stop: vi.fn(), hibernateUnderMemoryPressure: vi.fn() }),
+  getHibernationService: () => ({ hibernateUnderMemoryPressure: vi.fn() }),
 }));
 
 const initIdleTerminalNotificationMock = vi.hoisted(() => vi.fn());
