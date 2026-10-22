@@ -57,8 +57,9 @@ export const TOOLBAR_AGENTS = ["claude", "codex", "antigravity"] as const;
 /**
  * Canvas centres of the frame controls that menus and tooltips hang from. The
  * pointer never reads these — it targets `data-tour-anchor` names measured from
- * the render. After changing the frame's layout, open tour-preview.html and run
- * `__tourAnchors()` in the console to re-measure, then update this table.
+ * the render. After changing the frame's layout, run `__tourAnchors()` in the
+ * console of a `daintree-plugin tour preview` page to re-measure, then update
+ * this table.
  */
 export const ANCHOR = {
   launcher: { x: 51, y: 14 },

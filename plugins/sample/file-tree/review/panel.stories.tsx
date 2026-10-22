@@ -10,8 +10,7 @@ import FileTreeView from "../renderer/file-tree-view";
  *
  * Like `renderer/`, `review/` is skipped by the build, so nothing here ships.
  * Each named export is one state of the panel, rendered against a mock view
- * host instead of a running Daintree — open them with `plugin-panel-preview.html`
- * (`?plugin=sample/file-tree&story=Populated`), or capture all of them with
+ * host instead of a running Daintree — capture all of them with
  * `review/panel.spec.ts` (`@daintreehq/plugin-sdk/testing/playwright`).
  */
 

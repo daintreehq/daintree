@@ -181,8 +181,8 @@ describe("plugin prompts — attribution", () => {
 
 describe("PluginInputBoxDialog", () => {
   // Only half of this is observable here: jsdom never lets the dialog's own
-  // initial-focus pass win, so a regression to `initialFocus="first"` is caught
-  // by plugin-prompt-review.spec.ts in a real browser instead.
+  // initial-focus pass win, so a regression to `initialFocus="first"` only shows
+  // in a real browser.
   it("puts focus in the field on open", () => {
     seed({ kind: "inputBox", options: { title: "Name it" } });
     render(<PluginInputBoxDialog />);

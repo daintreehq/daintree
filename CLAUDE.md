@@ -71,6 +71,8 @@ CI on PRs: `npm run check` split into `static` (typecheck, guards, format) and `
 
 ## Repository workflow
 
+**NEVER put anything in the repo root that isn't project config or a top-level doc.** No preview or harness HTML pages, scratch scripts, logs, reports or audit dumps, tracked or not. Temporary output goes in `.tmp/` (gitignored); anything worth keeping goes in the directory it belongs to. No exceptions.
+
 - **Gitflow** — all PRs target `develop`, never `main` (release merges only).
 - **Never operate in the main worktree** when a session has its own; other trees have live sessions in them.
 - Use the `gh` CLI for all GitHub operations — plain HTTP fetches fail on auth.

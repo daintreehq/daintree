@@ -8,7 +8,7 @@ import type {
 /**
  * Commit histories for the local commits dropdown, served through the same two
  * bridge reads the dropdown makes (`git.listCommits`, `git.listPushCommits`).
- * Selected with `?commits=<name>` on `forge-stats-preview.html`.
+ * Selected with `?commits=<name>`.
  */
 
 const minute = 60_000;
