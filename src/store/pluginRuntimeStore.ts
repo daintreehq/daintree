@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { logError } from "@/utils/logger";
+import type { PromptTemplateContribution } from "@shared/types/plugin";
 
 /**
  * Renderer mirror of live plugin runtime state: which plugins are disabled, so
@@ -44,7 +45,19 @@ export interface PluginRuntimeMeta {
   previewToolIds?: ReadonlySet<string>;
 }
 
+/** A prompt template a loaded plugin contributes, with who it belongs to. */
+export interface PluginPromptTemplate {
+  /** `{instanceId}::{template id}`: unique across plugins, which may reuse an id. */
+  key: string;
+  pluginId: string;
+  pluginName: string;
+  /** Owning project for a project plugin; null for an installed or builtin one. */
+  projectId: string | null;
+  template: PromptTemplateContribution;
+}
+
 interface PluginRuntimeState {
+  promptTemplates: readonly PluginPromptTemplate[];
   disabledPluginIds: ReadonlySet<string>;
   /**
    * Keyed by plugin *instance* id — the host-side key every contribution
@@ -96,6 +109,7 @@ async function pullPluginRuntimeSnapshot(
     committedSeq = seq;
     const disabledPluginIds = new Set<string>();
     const pluginMetaById = new Map<string, PluginRuntimeMeta>();
+    const promptTemplates: PluginPromptTemplate[] = [];
     for (const p of list) {
       // Both maps key on the instance id for the same reason: every consumer
       // holds a contribution's `pluginId`, which is this key, never the bare
@@ -105,6 +119,18 @@ async function pullPluginRuntimeSnapshot(
       // silently overwrite the other's metadata.
       const id = p.instanceId;
       if (p.disabled) disabledPluginIds.add(id);
+      // A disabled or blocklisted plugin never ran, so what it declares is not on offer.
+      if (!p.disabled && !p.blocklisted) {
+        for (const template of p.manifest.contributes?.promptTemplates ?? []) {
+          promptTemplates.push({
+            key: `${id}::${template.id}`,
+            pluginId: id,
+            pluginName: p.manifest.displayName?.trim() || p.manifest.name,
+            projectId: p.projectId,
+            template,
+          });
+        }
+      }
       pluginMetaById.set(id, {
         devMode: p.devMode,
         // Falls back to the manifest id, never the instance key: the key
@@ -123,7 +149,7 @@ async function pullPluginRuntimeSnapshot(
     }
     // One commit: a consumer must never read a plugin's dev-mode flag from a
     // different snapshot than the disabled set it renders against.
-    set({ disabledPluginIds, pluginMetaById });
+    set({ disabledPluginIds, pluginMetaById, promptTemplates });
   } catch (err) {
     logError("Failed to load plugin runtime state", err);
   }
@@ -169,6 +195,7 @@ function ensureSubscribed(set: (state: Partial<PluginRuntimeState>) => void): bo
 }
 
 export const usePluginRuntimeStore = create<PluginRuntimeState>((set) => ({
+  promptTemplates: [],
   disabledPluginIds: new Set<string>(),
   pluginMetaById: new Map<string, PluginRuntimeMeta>(),
   init: () => {
@@ -192,6 +219,7 @@ export function _resetPluginRuntimeStoreForTest(): void {
   pullSeq = 0;
   committedSeq = 0;
   usePluginRuntimeStore.setState({
+    promptTemplates: [],
     disabledPluginIds: new Set<string>(),
     pluginMetaById: new Map<string, PluginRuntimeMeta>(),
   });

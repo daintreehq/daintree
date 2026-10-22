@@ -4,6 +4,10 @@ import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { useCommandStore } from "@/store/commandStore";
 import { CommandPicker } from "./CommandPicker";
 import { CommandBuilder } from "./CommandBuilder";
+import { PromptTemplateForm } from "./PromptTemplateForm";
+import { usePluginPromptTemplates } from "@/hooks/usePluginPromptTemplates";
+import { usePluginRuntimeStore, type PluginPromptTemplate } from "@/store/pluginRuntimeStore";
+import { renderPromptTemplate } from "@shared/utils/pluginPromptTemplates";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Spinner } from "@/components/ui/Spinner";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
@@ -19,9 +23,22 @@ interface CommandPickerHostProps {
   ownerId?: string;
   context: CommandContext;
   onCommandExecuted?: (commandId: string, result: CommandResult) => void;
+  /** The project whose view this composer is in; scopes which plugins' templates are offered. */
+  templateProjectId?: string;
+  /**
+   * A prompt template, expanded. The composer puts it in the draft for the
+   * user to edit; nothing here sends it.
+   */
+  onDraftReady?: (text: string) => void;
 }
 
-export function CommandPickerHost({ ownerId, context, onCommandExecuted }: CommandPickerHostProps) {
+export function CommandPickerHost({
+  ownerId,
+  context,
+  onCommandExecuted,
+  templateProjectId,
+  onDraftReady,
+}: CommandPickerHostProps) {
   const {
     isPickerOpen: isAnyPickerOpen,
     pickerOwnerId,
@@ -101,6 +118,42 @@ export function CommandPickerHost({ ownerId, context, onCommandExecuted }: Comma
     }
   }, [isPickerOpen, context, loadCommands]);
 
+  const templates = usePluginPromptTemplates(templateProjectId);
+  // A plugin attached in dev mode announces itself without a provenance event.
+  useEffect(() => {
+    if (isPickerOpen) usePluginRuntimeStore.getState().refresh();
+  }, [isPickerOpen]);
+
+  // Held by key and read back through the live list, so a plugin that is
+  // disabled, unloaded or changed while its form is open takes the form with it.
+  const [activeTemplateKey, setActiveTemplateKey] = useState<string | null>(null);
+  const activeTemplate: PluginPromptTemplate | null =
+    (isOwner && templates.find((t) => t.key === activeTemplateKey)) || null;
+
+  const handleSelectTemplate = useCallback(
+    (entry: PluginPromptTemplate) => {
+      closePicker();
+      if (entry.template.args.length === 0) {
+        onDraftReady?.(renderPromptTemplate(entry.template.body, {}));
+        return;
+      }
+      suppressPaletteFocusRestore();
+      setActiveTemplateKey(entry.key);
+    },
+    [closePicker, onDraftReady]
+  );
+
+  const handleTemplateSubmit = useCallback(
+    (values: Record<string, string>) => {
+      if (!activeTemplate) return;
+      setActiveTemplateKey(null);
+      onDraftReady?.(renderPromptTemplate(activeTemplate.template.body, values));
+    },
+    [activeTemplate, onDraftReady]
+  );
+
+  const handleTemplateCancel = useCallback(() => setActiveTemplateKey(null), []);
+
   const handleSelect = useCallback(
     async (command: CommandManifestEntry) => {
       // The form takes the keyboard from here. Without this the palette's exit
@@ -162,7 +215,21 @@ export function CommandPickerHost({ ownerId, context, onCommandExecuted }: Comma
         onRetryLoad={handleRetryLoadCommands}
         onSelect={handleSelect}
         onDismiss={closePicker}
+        templates={templates}
+        onSelectTemplate={handleSelectTemplate}
       />
+
+      {activeTemplate && (
+        <PromptTemplateForm
+          key={activeTemplate.key}
+          title={activeTemplate.template.title}
+          pluginName={activeTemplate.pluginName}
+          args={activeTemplate.template.args}
+          onSubmit={handleTemplateSubmit}
+          onCancel={handleTemplateCancel}
+          restoreFocusTo={getInvoker}
+        />
+      )}
 
       {builderCommand && showBuilderLoading && !retryingError && (
         <AppDialog

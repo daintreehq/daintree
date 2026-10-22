@@ -8,6 +8,7 @@ import { paletteSummary } from "@/lib/paletteSummary";
 import type { CommandManifestEntry, CommandCategory } from "@shared/types/commands";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import type { PluginPromptTemplate } from "@/store/pluginRuntimeStore";
 
 interface CommandPickerProps {
   isOpen: boolean;
@@ -19,6 +20,66 @@ interface CommandPickerProps {
   onSelect: (command: CommandManifestEntry) => void;
   onDismiss: () => void;
   filter?: CommandCategory[];
+  /** Plugin prompt templates, listed after the host commands. They fill the draft; they run nothing. */
+  templates?: readonly PluginPromptTemplate[];
+  onSelectTemplate?: (template: PluginPromptTemplate) => void;
+}
+
+interface TemplateRow {
+  kind: "template";
+  entry: PluginPromptTemplate;
+}
+
+// A host command stays the bare manifest entry, so everything that reads the
+// picker's results as commands keeps working; a template is the tagged case.
+type PickerRow = CommandManifestEntry | TemplateRow;
+
+function isTemplateRow(row: PickerRow): row is TemplateRow {
+  return "kind" in row && row.kind === "template";
+}
+
+// A module constant: an inline `[]` default is a new array every render and would
+// rebuild the rows, resetting the highlight, on each one.
+const NO_TEMPLATES: readonly PluginPromptTemplate[] = [];
+
+const TEMPLATE_BAND_LABEL = "Prompt templates";
+
+function rowKey(row: PickerRow): string {
+  return isTemplateRow(row) ? `template:${row.entry.key}` : row.id;
+}
+
+function isRowEnabled(row: PickerRow): boolean {
+  return isTemplateRow(row) || row.enabled;
+}
+
+/** What Enter does to a template: ask for its arguments, or fill the draft at once. */
+export function getTemplateActionLabel(entry: PluginPromptTemplate): string {
+  return entry.template.args.length > 0 ? "Open form" : "Fill draft";
+}
+
+/**
+ * How well a template answers a query, or null when it does not. Every term
+ * must land in the title, the plugin's name or the description; a title hit
+ * ranks above the rest, as a command name does for a command.
+ */
+export function scoreTemplate(entry: PluginPromptTemplate, query: string): number | null {
+  const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
+  if (terms.length === 0) return 0;
+  const title = entry.template.title.toLowerCase();
+  const titleWords = title.split(/[^a-z0-9]+/);
+  const pluginWords = entry.pluginName.toLowerCase().split(/[^a-z0-9]+/);
+  const descriptionWords = entry.template.description.toLowerCase().split(/[^a-z0-9]+/);
+
+  let total = 0;
+  for (const term of terms) {
+    if (title.startsWith(term)) total += 8;
+    else if (titleWords.some((w) => w.startsWith(term))) total += 6;
+    else if (title.includes(term)) total += 4;
+    else if (pluginWords.some((w) => w.startsWith(term))) total += 3;
+    else if (descriptionWords.some((w) => w.startsWith(term))) total += 2;
+    else return null;
+  }
+  return total;
 }
 
 const CATEGORY_ORDER: CommandCategory[] = ["github", "git", "workflow", "project", "system"];
@@ -133,8 +194,8 @@ const LOAD_ERROR_TITLE = "Couldn't load commands";
 const LOAD_ERROR_DETAIL_ID = "command-load-error-detail";
 const LOAD_ERROR_HINT_ID = "command-load-error-hint";
 
-function firstEnabledIndex(commands: CommandManifestEntry[]): number {
-  const index = commands.findIndex((cmd) => cmd.enabled);
+function firstEnabledIndex(rows: PickerRow[]): number {
+  const index = rows.findIndex(isRowEnabled);
   return index === -1 ? 0 : index;
 }
 
@@ -143,6 +204,24 @@ function EmptyHint() {
     <p className="mt-2 text-xs text-text-secondary">
       Press <kbd className={KBD_CLASS}>Esc</kbd> to go back to the composer
     </p>
+  );
+}
+
+function BandLabel({ label, first }: { label: string; first: boolean }) {
+  // A band label, not a row: listbox children must be options, and
+  // role="group" loses its label under Chromium + VoiceOver, so it
+  // stands as an inert option that the arrow keys never reach
+  // (it is not in `results`). Same shape as the action palette.
+  return (
+    <div
+      role="option"
+      aria-disabled="true"
+      aria-selected="false"
+      aria-label={label}
+      className={cn(PALETTE_SECTION_LABEL_CLASS, "px-3 pb-1 pt-1", !first && "mt-2")}
+    >
+      {label}
+    </div>
   );
 }
 
@@ -155,6 +234,8 @@ export function CommandPicker({
   onSelect,
   onDismiss,
   filter,
+  templates = NO_TEMPLATES,
+  onSelectTemplate,
 }: CommandPickerProps) {
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -172,31 +253,51 @@ export function CommandPicker({
     [commands, filter]
   );
 
+  // A category filter narrows the host commands to a kind of work; templates
+  // belong to none of them.
+  const offeredTemplates = useMemo(
+    () => (filter && filter.length > 0 ? [] : templates),
+    [templates, filter]
+  );
+
   // Browsing reads by category; a search reads by relevance. Category bands
   // stay only while nothing is typed — ranked results under bands would put the
   // best match wherever its category happened to sort, not first under Enter.
-  const { flatCommands, categoryStarts } = useMemo(() => {
-    const starts = new Map<string, CommandCategory>();
+  const { flatRows, bandStarts } = useMemo(() => {
+    const starts = new Map<string, string>();
     if (trimmedQuery) {
-      const ranked = available
-        .map((cmd, order) => ({ cmd, order, score: scoreCommand(cmd, trimmedQuery) }))
-        .filter(
-          (r): r is { cmd: CommandManifestEntry; order: number; score: number } => r.score !== null
-        )
+      const candidates: { row: PickerRow; score: number | null }[] = [
+        ...available.map((cmd) => ({
+          row: cmd as PickerRow,
+          score: scoreCommand(cmd, trimmedQuery),
+        })),
+        ...offeredTemplates.map((entry) => ({
+          row: { kind: "template", entry } as PickerRow,
+          score: scoreTemplate(entry, trimmedQuery),
+        })),
+      ];
+      const ranked = candidates
+        .map((c, order) => ({ ...c, order }))
+        .filter((c): c is { row: PickerRow; score: number; order: number } => c.score !== null)
         .sort((a, b) => b.score - a.score || a.order - b.order)
-        .map((r) => r.cmd);
-      return { flatCommands: ranked, categoryStarts: starts };
+        .map((c) => c.row);
+      return { flatRows: ranked, bandStarts: starts };
     }
 
-    const flat: CommandManifestEntry[] = [];
+    const flat: PickerRow[] = [];
     for (const category of CATEGORY_ORDER) {
       const inCategory = available.filter((cmd) => cmd.category === category);
       if (inCategory.length === 0) continue;
-      starts.set(inCategory[0]!.id, category);
+      starts.set(inCategory[0]!.id, CATEGORY_LABELS[category]);
       flat.push(...inCategory);
     }
-    return { flatCommands: flat, categoryStarts: starts };
-  }, [available, trimmedQuery]);
+    if (offeredTemplates.length > 0) {
+      const rows = offeredTemplates.map((entry): PickerRow => ({ kind: "template", entry }));
+      starts.set(rowKey(rows[0]!), TEMPLATE_BAND_LABEL);
+      flat.push(...rows);
+    }
+    return { flatRows: flat, bandStarts: starts };
+  }, [available, offeredTemplates, trimmedQuery]);
 
   useEffect(() => {
     if (isOpen) {
@@ -207,32 +308,34 @@ export function CommandPicker({
   // Unavailable rows stay in the arrow-key path so their reason can be reached
   // and read, but the highlight starts on the first command Enter can run.
   useEffect(() => {
-    setSelectedIndex(firstEnabledIndex(flatCommands));
-  }, [flatCommands, isOpen]);
+    setSelectedIndex(firstEnabledIndex(flatRows));
+  }, [flatRows, isOpen]);
 
   const handleSelectPrevious = useCallback(() => {
     setSelectedIndex((prev) =>
-      flatCommands.length === 0 ? 0 : (prev - 1 + flatCommands.length) % flatCommands.length
+      flatRows.length === 0 ? 0 : (prev - 1 + flatRows.length) % flatRows.length
     );
-  }, [flatCommands]);
+  }, [flatRows]);
 
   const handleSelectNext = useCallback(() => {
-    setSelectedIndex((prev) => (flatCommands.length === 0 ? 0 : (prev + 1) % flatCommands.length));
-  }, [flatCommands]);
+    setSelectedIndex((prev) => (flatRows.length === 0 ? 0 : (prev + 1) % flatRows.length));
+  }, [flatRows]);
 
   const activate = useCallback(
-    (cmd: CommandManifestEntry | undefined) => {
+    (row: PickerRow | undefined) => {
       // While the deferred filter is catching up, results may not match the input.
       // No-op and wait for the next render; a repeat Enter lands on the right item.
-      if (isStale || !cmd?.enabled) return;
-      onSelect(cmd);
+      if (isStale || !row || !isRowEnabled(row)) return;
+      if (isTemplateRow(row)) onSelectTemplate?.(row.entry);
+      else onSelect(row);
     },
-    [isStale, onSelect]
+    [isStale, onSelect, onSelectTemplate]
   );
 
   // A failed list with nothing cached reads as an empty catalogue unless it says
   // otherwise; a cached list stays usable through a failed refresh.
-  const showLoadError = loadError !== null && commands.length === 0 && !isLoading;
+  const showLoadError =
+    loadError !== null && commands.length === 0 && offeredTemplates.length === 0 && !isLoading;
 
   const loadErrorContent = showLoadError ? (
     <div className="mt-2 flex flex-col items-center gap-3">
@@ -265,17 +368,17 @@ export function CommandPicker({
       onRetryLoad?.();
       return;
     }
-    activate(flatCommands[selectedIndex]);
-  }, [activate, flatCommands, selectedIndex, showLoadError, onRetryLoad]);
+    activate(flatRows[selectedIndex]);
+  }, [activate, flatRows, selectedIndex, showLoadError, onRetryLoad]);
 
-  const setSize = flatCommands.length;
+  const setSize = flatRows.length;
 
   return (
-    <SearchablePalette<CommandManifestEntry>
+    <SearchablePalette<PickerRow>
       tier="command"
       isOpen={isOpen}
       query={query}
-      results={flatCommands}
+      results={flatRows}
       selectedIndex={selectedIndex}
       onQueryChange={setQuery}
       onSelectPrevious={handleSelectPrevious}
@@ -283,12 +386,80 @@ export function CommandPicker({
       onConfirm={handleConfirm}
       onClose={onDismiss}
       onHoverIndex={setSelectedIndex}
-      getItemId={(cmd) => cmd.id}
-      getActionLabel={getCommandActionLabel}
+      getItemId={rowKey}
+      getActionLabel={(row) =>
+        isTemplateRow(row) ? getTemplateActionLabel(row.entry) : getCommandActionLabel(row)
+      }
       isLoading={isLoading}
       isFiltering={isStale}
-      renderItem={(cmd, index, isSelected, onHoverIndex) => {
-        const category = categoryStarts.get(cmd.id);
+      renderItem={(row, index, isSelected, onHoverIndex) => {
+        const band = bandStarts.get(rowKey(row));
+        if (isTemplateRow(row)) {
+          const { entry } = row;
+          const domId = `command-template-${entry.key}`;
+          const titleId = `${domId}-title`;
+          const summaryId = `${domId}-summary`;
+          const sourceId = `${domId}-source`;
+          const formId = `${domId}-form`;
+          const opensForm = entry.template.args.length > 0;
+          const summary = paletteSummary(entry.template.description);
+          return (
+            <div key={rowKey(row)}>
+              {band && <BandLabel label={band} first={index === 0} />}
+              <div
+                id={domId}
+                data-template-key={entry.key}
+                role="option"
+                aria-selected={isSelected}
+                aria-posinset={index + 1}
+                aria-setsize={setSize}
+                aria-labelledby={titleId}
+                aria-describedby={[sourceId, summaryId, opensForm && formId]
+                  .filter(Boolean)
+                  .join(" ")}
+                aria-haspopup={opensForm ? "dialog" : undefined}
+                onPointerDown={(e) => e.preventDefault()}
+                onPointerMove={() => onHoverIndex(index)}
+                onClick={() => activate(row)}
+                className={cn(
+                  PALETTE_ROW_CLASS,
+                  "flex w-full cursor-pointer flex-col gap-0.5 px-3 py-2 rounded-[var(--radius-md)] text-left text-text-secondary"
+                )}
+              >
+                <div className="flex min-w-0 items-center justify-between gap-3">
+                  <span id={titleId} className="min-w-0 truncate text-sm text-text-primary">
+                    <HighlightedText
+                      text={entry.template.title}
+                      indices={
+                        trimmedQuery
+                          ? matchRanges(entry.template.title, trimmedQuery, false)
+                          : undefined
+                      }
+                    />
+                  </span>
+                  <span className="flex shrink-0 items-center gap-2">
+                    {opensForm && (
+                      <Badge id={formId} size="xs" className="shrink-0">
+                        Opens form
+                      </Badge>
+                    )}
+                    <span id={sourceId} className="max-w-40 truncate text-xs text-text-secondary">
+                      {entry.pluginName}
+                    </span>
+                  </span>
+                </div>
+                <div id={summaryId} className="truncate text-xs text-text-secondary">
+                  <HighlightedText
+                    text={summary}
+                    indices={trimmedQuery ? matchRanges(summary, trimmedQuery, false) : undefined}
+                  />
+                </div>
+              </div>
+            </div>
+          );
+        }
+        const cmd = row;
+        const category = band;
         const titleId = `command-${cmd.id}-title`;
         const summaryId = `command-${cmd.id}-summary`;
         const reasonId = `command-${cmd.id}-reason`;
@@ -298,21 +469,7 @@ export function CommandPicker({
         const summary = paletteSummary(cmd.description);
         return (
           <div key={cmd.id}>
-            {category && (
-              // A band label, not a row: listbox children must be options, and
-              // role="group" loses its label under Chromium + VoiceOver, so it
-              // stands as an inert option that the arrow keys never reach
-              // (it is not in `results`). Same shape as the action palette.
-              <div
-                role="option"
-                aria-disabled="true"
-                aria-selected="false"
-                aria-label={CATEGORY_LABELS[category]}
-                className={cn(PALETTE_SECTION_LABEL_CLASS, "px-3 pb-1 pt-1", index > 0 && "mt-2")}
-              >
-                {CATEGORY_LABELS[category]}
-              </div>
-            )}
+            {category && <BandLabel label={category} first={index === 0} />}
             <div
               id={`command-${cmd.id}`}
               data-command-id={cmd.id}
@@ -330,7 +487,7 @@ export function CommandPicker({
               aria-haspopup={opensForm ? "dialog" : undefined}
               onPointerDown={(e) => e.preventDefault()}
               onPointerMove={() => onHoverIndex(index)}
-              onClick={() => activate(cmd)}
+              onClick={() => activate(row)}
               className={cn(
                 PALETTE_ROW_CLASS,
                 "flex w-full flex-col gap-0.5 px-3 py-2 rounded-[var(--radius-md)] text-left text-text-secondary",

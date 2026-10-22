@@ -12,6 +12,7 @@ const commandsClientMock = vi.hoisted(() => ({
 vi.mock("@/clients/commandsClient", () => ({ commandsClient: commandsClientMock }));
 
 import { useCommandStore } from "@/store/commandStore";
+import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 import { CommandPickerHost } from "../CommandPickerHost";
 
 const command: CommandManifestEntry = {
@@ -60,5 +61,87 @@ describe("CommandPickerHost load failure", () => {
     });
     expect(screen.queryByRole("alert")).toBeNull();
     expect(screen.getByLabelText("X")).toBeTruthy();
+  });
+});
+
+describe("CommandPickerHost prompt templates", () => {
+  const template = (args: { name: string; label: string; required?: boolean }[]) => ({
+    key: "acme::reply",
+    pluginId: "acme",
+    pluginName: "Acme CRM",
+    projectId: null,
+    template: {
+      id: "reply",
+      title: "Draft a reply",
+      description: "Reply to the selected record.",
+      body: "Reply to {{name}} about {{topic}}.",
+      args,
+    },
+  });
+
+  function openWith(entry: ReturnType<typeof template>) {
+    usePluginRuntimeStore.setState({ promptTemplates: [entry] });
+    commandsClientMock.list.mockResolvedValue([]);
+    const onDraftReady = vi.fn();
+    const onCommandExecuted = vi.fn();
+    render(
+      <CommandPickerHost
+        context={{}}
+        onDraftReady={onDraftReady}
+        onCommandExecuted={onCommandExecuted}
+      />
+    );
+    act(() => useCommandStore.getState().openPicker());
+    return { onDraftReady, onCommandExecuted };
+  }
+
+  beforeEach(() => {
+    Object.defineProperty(window, "electron", {
+      configurable: true,
+      writable: true,
+      value: { plugin: {} },
+    });
+    useCommandStore.setState({
+      activeCommand: null,
+      activeCommandId: null,
+      builderLoadError: null,
+    });
+  });
+
+  it("fills the draft at once from a template with no arguments, attributed to its plugin", async () => {
+    const { onDraftReady, onCommandExecuted } = openWith({
+      ...template([]),
+      template: { ...template([]).template, body: "Say hello." },
+    });
+    const row = await screen.findByRole("option", { name: /Draft a reply/ });
+    expect(row.textContent).toContain("Acme CRM");
+
+    fireEvent.click(row);
+
+    expect(onDraftReady).toHaveBeenCalledWith("Say hello.");
+    expect(onCommandExecuted).not.toHaveBeenCalled();
+    expect(commandsClientMock.execute).not.toHaveBeenCalled();
+  });
+
+  it("asks for the arguments, then fills the draft with them", async () => {
+    const { onDraftReady, onCommandExecuted } = openWith(
+      template([
+        { name: "name", label: "Recipient", required: true },
+        { name: "topic", label: "Topic" },
+      ])
+    );
+    fireEvent.click(await screen.findByRole("option", { name: /Draft a reply/ }));
+
+    const recipient = await screen.findByLabelText("Recipient");
+    fireEvent.click(screen.getByRole("button", { name: "Fill draft" }));
+    expect(onDraftReady).not.toHaveBeenCalled();
+    expect(screen.getByText("Required")).toBeTruthy();
+
+    fireEvent.change(recipient, { target: { value: "Ada" } });
+    fireEvent.change(screen.getByLabelText("Topic"), { target: { value: "{{name}}" } });
+    fireEvent.click(screen.getByRole("button", { name: "Fill draft" }));
+
+    expect(onDraftReady).toHaveBeenCalledWith("Reply to Ada about {{name}}.");
+    expect(onCommandExecuted).not.toHaveBeenCalled();
   });
 });

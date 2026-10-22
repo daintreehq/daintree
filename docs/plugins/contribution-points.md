@@ -26,6 +26,7 @@ A plugin that declares `"scope": "project"` lives in a project's own repository 
 | `agentMcp` | Available — every credential for the plugin's server is minted per terminal and bound to one project, and a project plugin's server can only be granted to its own project |
 | `databases` | Available — a `"project"` database is a file in the repository, resolved against the bound project root; `"local"` stays in this machine's plugin data |
 | `recipes` | Available — only in the owning project's launcher, empty state and recipe manager, and gone while the plugin is switched off or its folder is untrusted. A terminal may use `terminal`, `dev-preview` or a built-in agent; `agents` is rejected below, so there is no plugin agent of its own to name |
+| `promptTemplates` | Available — offered only in the owning project's composer, and gone while the plugin is switched off or its folder is untrusted |
 | `menuItems` | Rejected — the application menu is one OS-level menu shared by every window, with no per-project projection |
 | `agents` | Rejected — the agent roster is one app-wide registry mirrored into the shared pty-host, and launch identity outlives the project binding |
 | `skills` | Rejected — contributed skills land in one app-wide index behind the MCP server's `skills.search` / `skills.load`, which filter by no project |
@@ -1084,6 +1085,41 @@ Markdown-defined instruction/knowledge snippets that extend Daintree's built-in 
 A skill file larger than 512 KiB is skipped with a warning, as is one that cannot be read; the rest of the plugin's skills still register. Of a leading YAML frontmatter block, only `description` is read, and it is shown in search results; the rest of the file after the block is the body.
 
 The markdown file content is returned to the agent when it calls `skills.load`, so it can be incorporated into the current task. See [Agent extensions → Skills](./agent-extensions.md#skills) for the full file format and invocation mechanics.
+
+## Prompt templates — _Shipped_
+
+Prompt templates a plugin offers in the composer's ❯ command picker, for the well-worn prompts of its domain. Choosing one asks for its arguments, if it has any, then puts the expanded text in the composer's draft for the user to edit and send. A template **never submits**, and it never appears in the `/` or `$` menus, which belong to the agent CLI's own commands. Each row names the plugin it comes from. Templates are declarative content and require no capability. An installed plugin's templates appear in every project; a [project plugin](./project-local.md)'s appear only in its own project.
+
+```json
+{
+  "contributes": {
+    "promptTemplates": [
+      {
+        "id": "reconcile",
+        "title": "Reconcile this month",
+        "description": "Match the month's ledger against the bank export.",
+        "body": "Reconcile {{month}} for the {{account}} account and list anything that doesn't match.",
+        "args": [
+          { "name": "month", "label": "Month", "required": true },
+          { "name": "account", "label": "Account" }
+        ]
+      }
+    ]
+  }
+}
+```
+
+**Fields:**
+
+| Field | Required | Notes |
+| --- | --- | --- |
+| `id` | yes | Unique within the plugin's `promptTemplates`. |
+| `title` | yes | The row's name in the picker. At most 80 characters. |
+| `description` | yes | The row's summary line. At most 300 characters. |
+| `body` | yes | The prompt. `{{name}}` is replaced by the argument of that name. At most 8192 characters. |
+| `args` | no | Up to 20 single-line text fields, each `{ name, label, required? }`. `name` is lowercase letters, digits and underscores, starting with a letter. A template with no `args` fills the draft as soon as it is chosen. |
+
+Every `{{name}}` in the body must name a declared argument; anything else is a manifest error. Values are inserted exactly as typed, once: a value that itself contains `{{other}}` is not expanded again. An optional argument left blank becomes empty text. Choosing a template replaces the current draft, and the replacement can be undone.
 
 ## Recipes — _Shipped_
 

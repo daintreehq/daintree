@@ -29,6 +29,7 @@ import {
   RecipeContributionSchema,
   RecipeContributionTerminalSchema,
   SettingDefinitionObjectSchema,
+  PromptTemplateContributionSchema,
   SkillContributionSchema,
   SurfaceContributionsSchema,
   ThemeContributionSchema,
@@ -99,6 +100,10 @@ const MCP_SUPERVISOR = "electron/services/PluginMcpSupervisor.ts";
 const PLUGIN_SCHEMA = "electron/schemas/plugin.ts";
 const PLUGIN_TOOLBAR_POPOVER = "src/components/Layout/PluginToolbarPopover.tsx";
 const SKILL_REGISTRY = "electron/services/plugin/PluginSkillRegistry.ts";
+const PROMPT_TEMPLATE_UTIL = "shared/utils/pluginPromptTemplates.ts";
+const PLUGIN_RUNTIME_STORE = "src/store/pluginRuntimeStore.ts";
+const COMMAND_PICKER = "src/components/Commands/CommandPicker.tsx";
+const PROMPT_TEMPLATE_FORM = "src/components/Commands/PromptTemplateForm.tsx";
 const THEME_REGISTRY = "electron/services/plugin/PluginThemeRegistry.ts";
 const RECIPE_REGISTRY = "electron/services/plugin/PluginRecipeRegistry.ts";
 const TOUR_REGISTRY = "electron/services/plugin/PluginTourRegistry.ts";
@@ -141,6 +146,7 @@ const SWEPT_SCHEMAS = {
   mcpServers: McpServerContributionSchema,
   skills: SkillContributionSchema,
   themes: ThemeContributionSchema,
+  promptTemplates: PromptTemplateContributionSchema,
   forgeProviders: ForgeProviderContributionSchema,
   fileDecorationProviders: FileDecorationContributionSchema,
   fileEditors: FileEditorContributionSchema,
@@ -187,6 +193,7 @@ const TOP_LEVEL_GROUPS = [
   "mcpServers",
   "skills",
   "themes",
+  "promptTemplates",
   "forgeProviders",
   "fileDecorationProviders",
   "fileEditors",
@@ -233,6 +240,10 @@ type FieldConsumerCoverage = {
   mcpServers: Record<keyof z.infer<typeof McpServerContributionSchema>, ConsumerDescriptor>;
   skills: Record<keyof z.infer<typeof SkillContributionSchema>, ConsumerDescriptor>;
   themes: Record<keyof z.infer<typeof ThemeContributionSchema>, ConsumerDescriptor>;
+  promptTemplates: Record<
+    keyof z.infer<typeof PromptTemplateContributionSchema>,
+    ConsumerDescriptor
+  >;
   forgeProviders: Record<keyof z.infer<typeof ForgeProviderContributionSchema>, ConsumerDescriptor>;
   fileDecorationProviders: Record<
     keyof z.infer<typeof FileDecorationContributionSchema>,
@@ -791,6 +802,36 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
         { file: THEME_REGISTRY, symbol: "readThemeFile (resolveContainedPath → readFile)" },
       ],
       note: "Resolved against the plugin dir, realpath-contained, and read as the theme JSON.",
+    },
+  },
+  promptTemplates: {
+    id: {
+      mode: "verbatim",
+      consumers: [{ file: PLUGIN_RUNTIME_STORE, symbol: "pullPluginRuntimeSnapshot (key)" }],
+      note: "Namespaced under the plugin's instance id into the picker row's key.",
+    },
+    title: {
+      mode: "verbatim",
+      consumers: [{ file: COMMAND_PICKER, symbol: "CommandPicker (template row) / scoreTemplate" }],
+      note: "The row's name in the command picker and the form's title; searched.",
+    },
+    description: {
+      mode: "verbatim",
+      consumers: [{ file: COMMAND_PICKER, symbol: "CommandPicker (template row) / scoreTemplate" }],
+      note: "The row's summary line in the command picker; searched.",
+    },
+    body: {
+      mode: "verbatim",
+      consumers: [{ file: PROMPT_TEMPLATE_UTIL, symbol: "renderPromptTemplate" }],
+      note: "Expanded with the form's values and put in the composer draft.",
+    },
+    args: {
+      mode: "verbatim",
+      consumers: [
+        { file: PROMPT_TEMPLATE_FORM, symbol: "PromptTemplateForm" },
+        { file: PROMPT_TEMPLATE_UTIL, symbol: "renderPromptTemplate" },
+      ],
+      note: "Each argument is a form field whose value replaces {{name}} in the body; required ones must be filled.",
     },
   },
   forgeProviders: {

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { LoadedPluginInfo } from "@shared/types/plugin";
+import type { LoadedPluginInfo, PromptTemplateContribution } from "@shared/types/plugin";
 import { _resetPluginRuntimeStoreForTest, usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 
 const logErrorMock = vi.hoisted(() => vi.fn());
@@ -18,6 +18,8 @@ function makePlugin(opts: {
   disabled?: boolean;
   /** Project-owned instance: `id` stays the manifest id, the key gets qualified. */
   projectId?: string;
+  promptTemplates?: PromptTemplateContribution[];
+  blocklisted?: boolean;
 }): LoadedPluginInfo {
   const projectId = opts.projectId ?? null;
   const instanceId = projectId === null ? opts.id : `project__${projectId}__${opts.id}`;
@@ -45,6 +47,7 @@ function makePlugin(opts: {
         agents: [],
         processTools: [],
         recipes: [],
+        ...(opts.promptTemplates ? { promptTemplates: opts.promptTemplates } : {}),
       },
     },
     dir: `/plugins/${opts.id}`,
@@ -60,7 +63,7 @@ function makePlugin(opts: {
     updateAvailable: null,
     devMode: opts.devMode ?? false,
     pluginDanger: "safe",
-    blocklisted: false,
+    blocklisted: opts.blocklisted ?? false,
   };
 }
 
@@ -402,5 +405,28 @@ describe("usePluginRuntimeStore", () => {
       previewToolIds: new Set(),
     });
     expect(state.disabledPluginIds.has("acme.a")).toBe(true);
+  });
+
+  it("offers the prompt templates of running plugins, namespaced and attributed", async () => {
+    const template = { id: "t", title: "T", description: "d", body: "b", args: [] };
+    listMock.mockResolvedValue([
+      makePlugin({ id: "acme.a", displayName: "Acme A", promptTemplates: [template] }),
+      makePlugin({ id: "acme.a", projectId: "p1", promptTemplates: [template] }),
+      makePlugin({ id: "acme.off", disabled: true, promptTemplates: [template] }),
+      makePlugin({ id: "acme.blocked", blocklisted: true, promptTemplates: [template] }),
+      makePlugin({ id: "acme.none" }),
+    ]);
+
+    usePluginRuntimeStore.getState().init();
+
+    await vi.waitFor(() => expect(usePluginRuntimeStore.getState().promptTemplates.length).toBe(2));
+    expect(
+      usePluginRuntimeStore
+        .getState()
+        .promptTemplates.map((e) => [e.key, e.pluginName, e.projectId])
+    ).toEqual([
+      ["acme.a::t", "Acme A", null],
+      ["project__p1__acme.a::t", "acme.a", "p1"],
+    ]);
   });
 });

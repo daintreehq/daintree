@@ -1838,6 +1838,32 @@ export interface RecipeContributionTerminal {
 }
 
 /**
+ * One argument of a {@link PromptTemplateContribution}: a single-line text
+ * field in the form the picker opens, filled into `{{name}}` in the body.
+ */
+export interface PromptTemplateArgument {
+  name: string;
+  label: string;
+  required?: boolean;
+}
+
+/**
+ * One `contributes.promptTemplates` entry (#13799). A prompt template is
+ * offered in the composer's command picker under the plugin's name; choosing
+ * it asks for its arguments and puts the expanded body in the composer's
+ * draft. It never submits, and it never appears in the `/` or `$` menus, which
+ * belong to the agent CLI. Inert declarative content: no capability required.
+ */
+export interface PromptTemplateContribution {
+  id: string;
+  title: string;
+  description: string;
+  /** Prompt text; `{{name}}` is replaced by the argument of that name. */
+  body: string;
+  args: PromptTemplateArgument[];
+}
+
+/**
  * One `contributes.recipes` entry (#11860). A recipe is a named multi-terminal
  * launch layout the plugin ships; the host registers it under the qualified id
  * `{pluginId}.{id}` and merges it into the recipe list as a plugin-owned tier:
@@ -2251,6 +2277,13 @@ export interface PluginManifest {
      * as `surfaces`. Installed and built-in plugins only.
      */
     themes?: ThemeContribution[];
+    /**
+     * Plugin-contributed prompt templates (#13799). Optional in the type but
+     * always materialized by the manifest schema's `.default([])`. Shown in
+     * every project for an installed plugin, in its own project only for a
+     * `scope: "project"` one.
+     */
+    promptTemplates?: PromptTemplateContribution[];
     forgeProviders: ForgeProviderContribution[];
     fileDecorationProviders: FileDecorationContribution[];
     /**
