@@ -12,6 +12,10 @@ describe("hostCallDeadlineMs (#13410)", () => {
     }
   });
 
+  it("never bounds a recipe run, which waits on the user reading it (#13797)", () => {
+    expect(hostCallDeadlineMs("runRecipe", { recipeId: "review" })).toBe(0);
+  });
+
   it("bounds an untargeted sendToAgent only once it names a terminal", () => {
     expect(hostCallDeadlineMs("sendToAgent", { text: "hi" })).toBe(0);
     expect(hostCallDeadlineMs("sendToAgent", undefined)).toBe(0);

@@ -26,7 +26,18 @@ import {
 } from "../../shared/types/plugin.js";
 import { isBuiltInAgentId } from "../../shared/config/agentIds.js";
 import { PLUGIN_ACTION_CATEGORY_MAX_LENGTH } from "../../shared/config/actionCategories.js";
-import { MAX_TERMINALS_PER_RECIPE } from "../../shared/utils/recipeSanitizer.js";
+import {
+  MAX_TERMINALS_PER_RECIPE,
+  RECIPE_PANEL_ARGS_MAX_BYTES,
+} from "../../shared/utils/recipeSanitizer.js";
+import {
+  MAX_PLUGIN_RECIPE_VARIABLES,
+  PLUGIN_RECIPE_VARIABLE_NAME_MAX_LENGTH,
+  PLUGIN_RECIPE_VARIABLE_NAME_PATTERN,
+  pluginVariableReferences,
+} from "../../shared/utils/pluginRecipeVariables.js";
+import { isAgentRecipeType } from "../../shared/types/project.js";
+import { SYSTEM_PROMPT_MAX_LENGTH } from "../../shared/utils/agentSystemPrompt.js";
 import {
   PROMPT_TEMPLATE_ARG_NAME_PATTERN,
   PROMPT_TEMPLATE_MAX_ARGS,
@@ -932,9 +943,17 @@ export const RecipeContributionTerminalSchema = z
     command: z.string().max(4096).optional(),
     env: z.record(z.string(), z.string()).optional(),
     initialPrompt: z.string().max(8192).optional(),
+    systemPrompt: z.string().max(SYSTEM_PROMPT_MAX_LENGTH).optional(),
     args: z.string().max(4096).optional(),
     devCommand: z.string().max(4096).optional(),
     exitBehavior: z.enum(["keep", "trash", "remove"]).optional(),
+    panelId: z.string().min(1).max(64).regex(SAFE_ID_PATTERN).optional(),
+    panelArgs: z
+      .record(z.string(), z.unknown())
+      .refine((args) => utf8.encode(JSON.stringify(args)).length <= RECIPE_PANEL_ARGS_MAX_BYTES, {
+        message: `panelArgs must be at most ${RECIPE_PANEL_ARGS_MAX_BYTES} bytes of JSON`,
+      })
+      .optional(),
   })
   .strict();
 
@@ -959,6 +978,22 @@ export const RecipeContributionSchema = z
     terminals: z.array(RecipeContributionTerminalSchema).min(1).max(MAX_TERMINALS_PER_RECIPE),
     showInEmptyState: z.boolean().optional(),
     autoAssign: z.enum(["always", "never", "prompt"]).optional(),
+    variables: z
+      .array(
+        z
+          .string()
+          .max(PLUGIN_RECIPE_VARIABLE_NAME_MAX_LENGTH)
+          .regex(PLUGIN_RECIPE_VARIABLE_NAME_PATTERN, {
+            message:
+              "variable names are lowercase letters, digits and underscores, starting with a letter",
+          })
+      )
+      .max(MAX_PLUGIN_RECIPE_VARIABLES)
+      .refine((names) => new Set(names).size === names.length, {
+        message: "variables must not repeat a name",
+      })
+      .optional(),
+    requiresAgentTools: z.boolean().optional(),
   })
   .strict();
 
@@ -3896,6 +3931,101 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
             path: [...path, "panel", "args"],
             message: `Launch entry "${entry.id}" passes args to panel "${panelId}", which is PTY-backed (hasPty: true) and has no view to receive them.`,
             params: { errorCode: "launch_entry_panel_args_pty" },
+          });
+        }
+      });
+
+      // Recipes (#13797): a `plugin-panel` step opens only this plugin's own
+      // panels, the fields of one step kind are refused on another rather than
+      // dropped, and every `{{plugin.<name>}}` is a declared variable.
+      const declaresAgentTools =
+        manifest.contributes.agentMcp.length > 0 || manifest.contributes.databases.length > 0;
+      manifest.contributes.recipes.forEach((recipe, recipeIndex) => {
+        const recipePath = ["contributes", "recipes", recipeIndex] as const;
+        const declared = new Set(recipe.variables ?? []);
+        let hasAgentStep = false;
+        recipe.terminals.forEach((step, stepIndex) => {
+          const path = [...recipePath, "terminals", stepIndex] as const;
+          const isPanel = step.type === "plugin-panel";
+          const isAgent = isAgentRecipeType(step.type);
+          if (isAgent) hasAgentStep = true;
+          if (isPanel) {
+            const stray = (
+              ["command", "env", "initialPrompt", "systemPrompt", "args", "devCommand"] as const
+            ).filter((field) => step[field] !== undefined);
+            if (stray.length > 0) {
+              ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: [...path],
+                message: `Recipe "${recipe.id}" step ${stepIndex + 1} opens a panel, so ${stray.join(", ")} would never be used — a plugin-panel step takes panelId and panelArgs.`,
+                params: { errorCode: "recipe_panel_step_fields" },
+              });
+            }
+            const panel =
+              step.panelId === undefined
+                ? undefined
+                : manifest.contributes.panels.find((candidate) => candidate.id === step.panelId);
+            if (panel === undefined) {
+              ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: [...path, "panelId"],
+                message:
+                  step.panelId === undefined
+                    ? `Recipe "${recipe.id}" step ${stepIndex + 1} is a plugin-panel step with no panelId.`
+                    : `Recipe "${recipe.id}" step ${stepIndex + 1} panelId "${step.panelId}" matches no contributes.panels[].id — a recipe opens only this plugin's own panels.`,
+                params: { errorCode: "recipe_panel_unknown" },
+              });
+            } else if (step.panelArgs !== undefined && panel.hasPty === true) {
+              ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: [...path, "panelArgs"],
+                message: `Recipe "${recipe.id}" step ${stepIndex + 1} passes panelArgs to panel "${panel.id}", which is PTY-backed (hasPty: true) and has no view to receive them.`,
+                params: { errorCode: "recipe_panel_args_pty" },
+              });
+            }
+          } else if (step.panelId !== undefined || step.panelArgs !== undefined) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: [...path],
+              message: `Recipe "${recipe.id}" step ${stepIndex + 1} sets panelId or panelArgs on a "${step.type}" step — only type "plugin-panel" opens a panel.`,
+              params: { errorCode: "recipe_panel_step_fields" },
+            });
+          }
+          if (step.systemPrompt !== undefined && !isAgent) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: [...path, "systemPrompt"],
+              message: `Recipe "${recipe.id}" step ${stepIndex + 1} sets systemPrompt on a "${step.type}" step — only an agent step has a system prompt.`,
+              params: { errorCode: "recipe_system_prompt_not_agent" },
+            });
+          }
+          for (const field of ["initialPrompt", "systemPrompt"] as const) {
+            const text = step[field];
+            if (text === undefined) continue;
+            for (const name of pluginVariableReferences(text)) {
+              if (declared.has(name)) continue;
+              ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: [...path, field],
+                message: `Recipe "${recipe.id}" step ${stepIndex + 1} uses {{plugin.${name}}}, which isn't in the recipe's variables.`,
+                params: { errorCode: "recipe_variable_undeclared" },
+              });
+            }
+          }
+        });
+        if (recipe.requiresAgentTools === true && !declaresAgentTools) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [...recipePath, "requiresAgentTools"],
+            message: `Recipe "${recipe.id}" requires agent tools, but this plugin offers none — declare contributes.agentMcp or contributes.databases.`,
+            params: { errorCode: "recipe_requires_agent_tools_none" },
+          });
+        } else if (recipe.requiresAgentTools === true && !hasAgentStep) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [...recipePath, "requiresAgentTools"],
+            message: `Recipe "${recipe.id}" requires agent tools but starts no agent.`,
+            params: { errorCode: "recipe_requires_agent_tools_no_agent" },
           });
         }
       });

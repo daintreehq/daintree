@@ -64,6 +64,7 @@ import {
   LazyPluginSendToAgentDialog,
   LazyPluginInputBoxDialog,
   LazyPluginConfirmPromptDialog,
+  LazyPluginRunRecipeDialog,
   LazyPluginCapabilityConfirmDialog,
   LazyPanelDialogHost,
   LazyGitInitDialog,
@@ -805,6 +806,13 @@ export function ModalHostLayer({
         <ErrorBoundary variant="component" componentName="PluginConfirmPromptDialog">
           <Suspense fallback={null}>
             <LazyPluginConfirmPromptDialog />
+          </Suspense>
+        </ErrorBoundary>
+      )}
+      {isStateLoaded && (
+        <ErrorBoundary variant="component" componentName="PluginRunRecipeDialog">
+          <Suspense fallback={null}>
+            <LazyPluginRunRecipeDialog />
           </Suspense>
         </ErrorBoundary>
       )}

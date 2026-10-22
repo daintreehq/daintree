@@ -3152,6 +3152,45 @@ type PluginSendToAgentResult = {
     reason: PluginSendToAgentRefusalReason;
     worktreeId?: string;
 };
+/** Options for {@link PluginHostApi.runRecipe}. */
+interface PluginRunRecipeOptions {
+    /**
+     * Values for the recipe's declared `variables`, filling `{{plugin.<name>}}`
+     * in its prompts. A name the recipe doesn't declare is an error; a declared
+     * one left out is empty.
+     */
+    variables?: Record<string, string>;
+    /** The worktree to run it in. Omit for the active one. */
+    worktreeId?: string;
+}
+/**
+ * Why a {@link PluginHostApi.runRecipe} call ran nothing:
+ *
+ * - `unknown-worktree` — `options.worktreeId` is not a worktree of the plugin's project.
+ * - `recipe-unavailable` — the recipe isn't offered in the project's window,
+ *   for example because the plugin is hidden there.
+ * - `agent-tools-off` — the recipe declares `requiresAgentTools` and this
+ *   plugin's agent tools are off in the project. The dialog said so.
+ * - `project-unavailable` — the plugin's project has no open view, or it did not answer.
+ * - `prompt-open` — another dialog from this plugin is already open.
+ * - `launch-failed` — the user ran it and nothing started.
+ */
+type PluginRunRecipeRefusalReason = "unknown-worktree" | "recipe-unavailable" | "agent-tools-off" | "project-unavailable" | "prompt-open" | "launch-failed";
+/**
+ * How a {@link PluginHostApi.runRecipe} call ended. `ran` means the user
+ * confirmed and at least one step started; `failedCount` is the steps that
+ * didn't.
+ */
+type PluginRunRecipeResult = {
+    status: "ran";
+    spawnedCount: number;
+    failedCount: number;
+} | {
+    status: "cancelled";
+} | {
+    status: "refused";
+    reason: PluginRunRecipeRefusalReason;
+};
 /**
  * Options for {@link PluginHostApi.showToast}. Intentionally narrower than the
  * app's internal `notify()` surface: plugins cannot set `priority` (a
@@ -4801,6 +4840,28 @@ interface PluginHostApi extends PluginActivationApi {
      */
     sendToAgent(text: string, options?: PluginSendToAgentOptions, callOptions?: PluginHostCallOptions): Promise<PluginSendToAgentResult>;
     /**
+     * Offer to run one of this plugin's own `contributes.recipes`, named by its
+     * manifest `id`, with values for its `{{plugin.<name>}}` variables (#13797).
+     * Nothing starts until the user confirms: the host shows every step with its
+     * final prompt, system prompt and arguments resolved, and runs exactly that.
+     *
+     * Needs no capability — the recipe is the plugin's own declared content, and
+     * each run is the user's decision. Only the plugin's own recipes are
+     * reachable. A recipe declaring `requiresAgentTools` is refused while those
+     * tools are off in the project; this never turns them on.
+     *
+     * Resolves `{ status: "ran", spawnedCount, failedCount }`,
+     * `{ status: "cancelled" }` (the user dismissed it, or the call was aborted
+     * or the plugin unloaded before they answered), or
+     * `{ status: "refused", reason }` — see {@link PluginRunRecipeRefusalReason}.
+     * Once the user confirms, the run is theirs: an abort no longer cancels it.
+     *
+     * @throws {Error} If `recipeId` names no recipe this plugin contributes, or a
+     *   variable is undeclared, not a string, holds control characters, or is
+     *   longer than 8,192 characters (32,768 across all of them).
+     */
+    runRecipe(recipeId: string, options?: PluginRunRecipeOptions, callOptions?: PluginHostCallOptions): Promise<PluginRunRecipeResult>;
+    /**
      * Signal that decorations for `scope` (optionally narrowed to `paths`) have
      * changed and any renderer showing them should re-pull. Unlike the
      * `register*` methods this is NOT revoke-guarded: it is called from the
@@ -5412,6 +5473,12 @@ interface SentToAgentRecord {
     options: PluginSendToAgentOptions | undefined;
     result: PluginSendToAgentResult;
 }
+/** Captured `host.runRecipe(recipeId, options)` calls, with what each resolved. */
+interface RunRecipeRecord {
+    recipeId: string;
+    options: PluginRunRecipeOptions | undefined;
+    result: PluginRunRecipeResult;
+}
 /** Captured `host.terminals.readScreen(terminalId, options)` calls, with what each resolved. */
 interface ReadScreenRecord {
     terminalId: string;
@@ -5533,6 +5600,8 @@ interface MockHostState {
     readonly sentToActiveAgentCalls: ReadonlyArray<SentToActiveAgentRecord>;
     /** Every `host.sendToAgent` call that got past validation, in order. */
     readonly sentToAgentCalls: ReadonlyArray<SentToAgentRecord>;
+    /** Every `host.runRecipe` call that got past validation, in order. */
+    readonly runRecipeCalls: ReadonlyArray<RunRecipeRecord>;
     /** Every `host.terminals.readScreen` call that got past validation, in order. */
     readonly readScreenCalls: ReadonlyArray<ReadScreenRecord>;
     readonly registeredForgeProviders: ReadonlyArray<RegisteredForgeProviderRecord>;
@@ -5713,6 +5782,11 @@ interface MockHostState {
      */
     simulateSendToAgentPick(terminalId: string | null): void;
     /**
+     * Configure how the user answers `runRecipe`'s confirmation. The default,
+     * `{ status: "cancelled" }`, is the user dismissing it.
+     */
+    simulateRunRecipeResult(result: PluginRunRecipeResult): void;
+    /**
      * Set what `terminals.readScreen(terminalId)` finds, or pass `null` to forget
      * the terminal so it reads `not-found`. An `ok` screen's `text` is trimmed to
      * the call's last `lines` lines, as the host does.
@@ -5860,4 +5934,4 @@ interface CreateMockHostOptions {
 }
 declare function createMockHost(options?: CreateMockHostOptions): PluginHostApi & MockHostState;
 
-export { type BroadcastRecord, type CreateMockHostOptions, type DispatchedActionRecord, type InvalidationRecord, type MockHostState, type NotificationRecord, type PluginActionManifestEntry, type PluginCanDispatchResult, type ReadScreenRecord, type RegisteredActionRecord, type RegisteredFileDecorationProviderRecord, type RegisteredForgeProviderRecord, type RegisteredHandlerRecord, type RegisteredMcpToolsRecord, type SentToAgentRecord, type ShowConfirmRecord, type ShowInputBoxRecord, type ShowQuickPickRecord, type ShownToastRecord, createMockHost };
+export { type BroadcastRecord, type CreateMockHostOptions, type DispatchedActionRecord, type InvalidationRecord, type MockHostState, type NotificationRecord, type PluginActionManifestEntry, type PluginCanDispatchResult, type ReadScreenRecord, type RegisteredActionRecord, type RegisteredFileDecorationProviderRecord, type RegisteredForgeProviderRecord, type RegisteredHandlerRecord, type RegisteredMcpToolsRecord, type RunRecipeRecord, type SentToAgentRecord, type ShowConfirmRecord, type ShowInputBoxRecord, type ShowQuickPickRecord, type ShownToastRecord, createMockHost };

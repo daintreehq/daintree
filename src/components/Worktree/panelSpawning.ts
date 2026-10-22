@@ -5,6 +5,7 @@ import { agentSettingsClient, systemClient } from "@/clients";
 import { getAgentConfig } from "@/config/agents";
 import { generateAgentCommand, buildAgentLaunchFlags, mintAssignedSessionId } from "@shared/types";
 import type { RecipeTerminal } from "@shared/types";
+import { isAgentRecipeType } from "@shared/types/project";
 import { extractSystemPromptArgs } from "@shared/utils/agentSystemPrompt";
 import { preflightSpawnBatchLimit, type PanelLimitBatchSource } from "@/store/panelLimitStore";
 import { PANEL_LIMIT_DECLINED_REASON } from "@/services/actions/definitions/panelLimitError";
@@ -30,7 +31,7 @@ export interface SpawnPanelsOptions {
 
 /** Whether any of these recipe terminals launches an agent rather than a shell or preview. */
 export function recipeTerminalsStartAgent(terminals: readonly RecipeTerminal[]): boolean {
-  return terminals.some((t) => t.type !== "terminal" && t.type !== "dev-preview");
+  return terminals.some((t) => isAgentRecipeType(t.type));
 }
 
 export async function spawnPanelsFromRecipe(options: SpawnPanelsOptions): Promise<void> {
@@ -120,7 +121,11 @@ export async function spawnPanelsFromRecipe(options: SpawnPanelsOptions): Promis
               location: t.location,
               bypassLimits: true,
             });
-          } else if (t.type !== "terminal") {
+          } else if (t.type === "plugin-panel") {
+            // Only a plugin's own recipe opens its panels, and that runs through
+            // the recipe store; a cloned layout never carries one.
+            throw new Error("A plugin's panel can't be opened from a cloned layout");
+          } else if (isAgentRecipeType(t.type)) {
             const agentId = t.type;
             const agentConfig = getAgentConfig(agentId);
             const baseCommand = agentConfig?.command ?? "";

@@ -151,3 +151,78 @@ describe("PluginRecipeRegistry (#11860)", () => {
     expect(second.terminals[0]?.env).toEqual({ API: "a" });
   });
 });
+
+describe("plugin panels, variables and agent tools (#13797)", () => {
+  const PANELS = new Map([["records", "acme.tools.records"]]);
+
+  it("maps a panel step's manifest id to the plugin's own runtime kind", () => {
+    registerPluginRecipes(
+      "acme.tools",
+      [
+        recipe({
+          terminals: [
+            { type: "plugin-panel", panelId: "records", panelArgs: { view: "open" } },
+            { type: "claude", initialPrompt: "Review {{plugin.record_id}}" },
+          ],
+        }),
+      ],
+      new Set(),
+      PANELS
+    );
+    expect(getPluginRecipe("acme.tools.deploy")?.terminals[0]).toEqual({
+      type: "plugin-panel",
+      title: undefined,
+      panelKindId: "acme.tools.records",
+      panelArgs: { view: "open" },
+    });
+  });
+
+  it("drops a panel step naming a panel the plugin doesn't declare", () => {
+    registerPluginRecipes(
+      "acme.tools",
+      [
+        recipe({
+          terminals: [
+            { type: "plugin-panel", panelId: "elsewhere" },
+            { type: "terminal", command: "ls" },
+          ],
+        }),
+      ],
+      new Set(),
+      PANELS
+    );
+    expect(getPluginRecipe("acme.tools.deploy")?.terminals.map((t) => t.type)).toEqual([
+      "terminal",
+    ]);
+  });
+
+  it("carries the declared variables and the agent-tools requirement", () => {
+    registerPluginRecipes(
+      "acme.tools",
+      [
+        recipe({
+          variables: ["record_id"],
+          requiresAgentTools: true,
+          terminals: [{ type: "claude", systemPrompt: "Use {{plugin.record_id}}" }],
+        }),
+      ],
+      new Set()
+    );
+    const registered = getPluginRecipe("acme.tools.deploy");
+    expect(registered?.pluginVariables).toEqual(["record_id"]);
+    expect(registered?.requiresAgentTools).toBe(true);
+    expect(registered?.terminals[0]?.systemPrompt).toBe("Use {{plugin.record_id}}");
+  });
+
+  it("hands out copies of panel args", () => {
+    registerPluginRecipes(
+      "acme.tools",
+      [recipe({ terminals: [{ type: "plugin-panel", panelId: "records", panelArgs: { a: 1 } }] })],
+      new Set(),
+      PANELS
+    );
+    const first = getPluginRecipe("acme.tools.deploy")!;
+    (first.terminals[0]!.panelArgs as Record<string, unknown>).a = 2;
+    expect(getPluginRecipe("acme.tools.deploy")?.terminals[0]?.panelArgs).toEqual({ a: 1 });
+  });
+});

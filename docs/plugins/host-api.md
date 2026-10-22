@@ -14,7 +14,7 @@ This page is the reference: every member, its gates and its failure modes. For a
 - Registration: [`registerAction`](#registeraction) · [`registerHandler` and `broadcastToRenderer`](#registerhandler-and-broadcasttorenderer) · [Deadlines and size limits](#deadlines-and-size-limits) · [`postToPanel`](#posttopanel) · [Push delivery](#push-delivery) · [Listener hints](#listener-hints--haslisteners-ondidchangelisteners) · [`registerForgeProvider`](#registerforgeprovider) · [File decorations](#registerfiledecorationprovider-and-invalidatefiledecorations) · [`mcp.registerTools`](#mcpregistertools)
 - Observation: [Worktrees](#worktree-observation) · [Agent state](#agent-observation) · [Focused panel](#ondidchangefocusedpanel) · [Panel lifecycle](#ondidchangepanellifecycle) · [`onDidWake`](#ondidwake)
 - Panels and actions: [`reloadPanel`](#reloadpanel) · [`restartWorker`](#restartworker) · [`setPanelBadge`](#setpanelbadge) · [`setToolbarButtonBadge`](#settoolbarbuttonbadge) · [`setToolbarButtonState`](#settoolbarbuttonstate) · [`setContext`](#setcontext) · [`setWorktreeCardStatus`](#setworktreecardstatus) · [`setWorktreeReviewChecks`](#setworktreereviewchecks) · [`setPanelMenuItems`](#setpanelmenuitems) · [`dispatch`](#dispatch) · [`actions`](#actions--built-in-action-catalog)
-- Agents: [`sendToActiveAgent`](#sendtoactiveagent--inject-text-into-the-active-agent) · [`sendToAgent`](#sendtoagent--hand-work-to-an-agents-draft) · [`agents.list`](#agentslist--the-projects-agent-panes) · [`agents.listAll`](#agentslistall--every-agent-in-every-open-project) · [`terminals.readScreen`](#terminalsreadscreen--what-a-terminal-shows)
+- Agents: [`sendToActiveAgent`](#sendtoactiveagent--inject-text-into-the-active-agent) · [`sendToAgent`](#sendtoagent--hand-work-to-an-agents-draft) · [`runRecipe`](#runrecipe--offer-to-run-one-of-your-recipes) · [`agents.list`](#agentslist--the-projects-agent-panes) · [`agents.listAll`](#agentslistall--every-agent-in-every-open-project) · [`terminals.readScreen`](#terminalsreadscreen--what-a-terminal-shows)
 - State: [`settings`](#settings) · [`storage`](#storage--private-keyvalue-storage) · [`db`](#db--host-managed-sqlite)
 - UI: [`logger`](#logger) · [`showToast`](#showtoast) · [`notify`](#notify) · [User prompts](#user-prompts--showquickpick-showinputbox-showconfirm)
 - System: [`process`](#process--managed-child-processes) · [`fs`](#fs--host-mediated-scope-contained-filesystem) · [`git`](#git--host-mediated-git-scoped-to-a-worktree) · [`clipboard`](#clipboard--host-mediated-os-clipboard) · [`system`](#system--open-and-reveal-files-in-your-own-scope) · [`documents`](#documents--render-html-to-pdf)
@@ -227,6 +227,12 @@ interface PluginHostApi {
     options?: PluginSendToAgentOptions,
     callOptions?: PluginHostCallOptions
   ): Promise<PluginSendToAgentResult>;
+  // One of this plugin's own recipes, after the user confirms — no capability
+  runRecipe(
+    recipeId: string,
+    options?: PluginRunRecipeOptions,
+    callOptions?: PluginHostCallOptions
+  ): Promise<PluginRunRecipeResult>;
   // The project's agent panes — gated on `agent:read`
   readonly agents: PluginAgentsApi;
   // What a terminal's screen shows, as plain text — gated on `terminal:read`
@@ -1324,6 +1330,34 @@ const result = await window.electron.plugin.invoke(pluginId, "sendToAgent", {
 ```
 
 Dragging a card onto an agent terminal needs no worker at all — see [Views → Handing work to an agent by drag](./views.md#handing-work-to-an-agent-by-drag).
+
+## `runRecipe` — offer to run one of your recipes
+
+`host.runRecipe(recipeId, { variables?, worktreeId? }, callOptions?)` offers to run one of your own [`contributes.recipes`](./contribution-points.md#recipes--shipped), named by its manifest `id`, with values for its `{{plugin.<name>}}` variables. The user sees a confirmation listing every step as it will launch — your panel steps, each agent's final prompt and system prompt with your values in place, its arguments, and its environment keys (values are never shown) — and nothing starts until they confirm. `worktreeId` picks the worktree, and omitting it uses the active one.
+
+```ts
+const result = await host.runRecipe("review-record", {
+  variables: { record_id: record.id, record_title: record.title },
+  worktreeId: props.worktreeId,
+});
+if (result.status === "refused" && result.reason === "agent-tools-off") {
+  // The dialog already told the user; nothing started.
+}
+```
+
+It needs no capability: the recipe is your own declared content, and every run is the user's decision. Only your own recipes are reachable. Another plugin's id, qualified or not, throws. So does a recipe whose agent step sets `args` or `env`: a plugin never chooses how an agent runs, as with [`agent.launch`](./trust-model.md), although the user can still run that recipe from the recipe list. So does a variable the recipe doesn't declare, a value that isn't a string, holds control characters, or is longer than 8,192 characters (32,768 across all of them). A declared variable you leave out is empty. Each prompt is resolved once, and the dialog shows the same text the launch uses. A first turn your values make start with `-` is refused, because the agent would read it as an option.
+
+It resolves to one of:
+
+- `{ status: "ran", spawnedCount, failedCount }` — the user confirmed and at least one step started.
+- `{ status: "cancelled" }` — the user dismissed the dialog, or the call was aborted or your plugin unloaded before they answered. Once the user confirms, the run is theirs, and an abort no longer cancels it.
+- `{ status: "refused", reason }`, where `reason` is one of:
+  - `unknown-worktree`
+  - `recipe-unavailable` — the recipe isn't offered in that window, for example because your plugin is hidden there.
+  - `agent-tools-off` — the recipe declares `requiresAgentTools`, and the dialog said the tools are off.
+  - `project-unavailable`
+  - `prompt-open` — another dialog of yours is open.
+  - `launch-failed` — nothing started.
 
 ## `agents.list` — the project's agent panes
 

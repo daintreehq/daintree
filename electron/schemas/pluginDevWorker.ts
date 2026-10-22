@@ -44,6 +44,7 @@ const HOST_CALL_METHODS = {
   "agents.listAll": true,
   "terminals.readScreen": true,
   sendToAgent: true,
+  runRecipe: true,
   showToast: true,
   notify: true,
   dispatch: true,

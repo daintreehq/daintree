@@ -4,13 +4,20 @@ import {
   type RecipeSpawnFailure,
   type RecipeSpawnResults,
 } from "@/store/recipeStore";
+import { pluginOnlyCopyRefusal, recipeUsesPluginOnlyFeatures } from "@/utils/pluginRecipeCopy";
+import { notify } from "@/lib/notify";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { usePanelStore } from "@/store/panelStore";
 import { actionService } from "@/services/ActionService";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
-import { detectUnresolvedVariables, type RecipeContext } from "@/utils/recipeVariables";
+import {
+  NO_PLUGIN_VARIABLE_VALUES,
+  detectUnresolvedVariables,
+  type RecipeContext,
+} from "@/utils/recipeVariables";
 import { getAgentConfig } from "@/config/agents";
+import { recipePanelStepName } from "@/components/Terminal/utils/recipeUtils";
 import { isInRepoRecipeId } from "@shared/utils/recipeFilename";
 import { isPluginRecipe } from "@shared/types/project";
 import { logError } from "@/utils/logger";
@@ -87,6 +94,9 @@ function getTerminalDisplayName(terminal: RecipeTerminal, index: number): string
   if (terminal.type === "dev-preview") {
     return "Dev server";
   }
+  if (terminal.type === "plugin-panel") {
+    return recipePanelStepName(terminal);
+  }
   if (terminal.type !== "terminal") {
     const agent = getAgentConfig(terminal.type);
     if (agent?.name) return agent.name;
@@ -94,17 +104,23 @@ function getTerminalDisplayName(terminal: RecipeTerminal, index: number): string
   return `Terminal ${index + 1}`;
 }
 
-// Only scans terminal.initialPrompt — that is the single field the store
-// passes through replaceRecipeVariables (recipeStore.ts:600). terminal.command,
+// Only scans the prompts — initialPrompt and a plugin step's systemPrompt are
+// the fields the store passes through replaceRecipeVariables. terminal.command,
 // terminal.devCommand, and terminal.args are forwarded raw, so flagging
 // {{var}} in them would mislead the user into thinking the substitution was
 // expected to happen.
-function collectUnresolvedVars(recipe: TerminalRecipe, context: RecipeContext): string[] {
+function collectUnresolvedVars(recipe: TerminalRecipe, baseContext: RecipeContext): string[] {
+  // A plugin recipe started from here has no values for its own variables.
+  const context: RecipeContext = isPluginRecipe(recipe)
+    ? { ...baseContext, pluginVariables: NO_PLUGIN_VARIABLE_VALUES }
+    : baseContext;
   const seen = new Set<string>();
   for (const terminal of recipe.terminals) {
-    if (!terminal.initialPrompt) continue;
-    for (const name of detectUnresolvedVariables(terminal.initialPrompt, context)) {
-      seen.add(name);
+    for (const text of [terminal.initialPrompt, terminal.systemPrompt]) {
+      if (!text) continue;
+      for (const name of detectUnresolvedVariables(text, context)) {
+        seen.add(name);
+      }
     }
   }
   return Array.from(seen);
@@ -412,6 +428,18 @@ export function useRecipeRunner({
     (recipeId: string) => {
       const recipe = getRecipeById(recipeId);
       if (!recipe) return;
+      // A plugin's panel steps and variables only work in its own recipe (#13797).
+      if (recipeUsesPluginOnlyFeatures(recipe)) {
+        notify({
+          type: "warning",
+          title: "Can't duplicate recipe",
+          message: pluginOnlyCopyRefusal(recipe),
+          // The click did nothing else, so it stays a toast rather than inbox-only.
+          priority: "high",
+          context: { eventKind: "uiFeedback" },
+        });
+        return;
+      }
       // Pick a name that doesn't collide with any existing recipe name —
       // otherwise duplicating a recipe twice produces two same-named copies
       // that slug to the same on-disk filename and overwrite each other.

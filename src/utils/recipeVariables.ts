@@ -3,6 +3,24 @@ export interface RecipeContext {
   prNumber?: number;
   worktreePath?: string;
   branchName?: string;
+  /**
+   * Values for a plugin recipe's `{{plugin.<name>}}` variables (#13797), as
+   * `host.runRecipe` supplied them, read by own key only. Set — empty when a
+   * run supplies none — only for a plugin's own recipe; absent, `{{plugin.x}}`
+   * is ordinary text, as it always was in a user's recipe.
+   */
+  pluginVariables?: Readonly<Record<string, string>>;
+}
+
+/** The values for a plugin recipe run that supplied none: every variable empty. */
+export const NO_PLUGIN_VARIABLE_VALUES: Readonly<Record<string, string>> = Object.freeze({});
+
+const PLUGIN_VARIABLE_PREFIX = "plugin.";
+
+function pluginVariableValue(name: string, context: RecipeContext): string | undefined {
+  const values = context.pluginVariables;
+  const key = name.slice(PLUGIN_VARIABLE_PREFIX.length);
+  return values !== undefined && Object.hasOwn(values, key) ? values[key] : undefined;
 }
 
 const VARIABLE_DEFINITIONS = [
@@ -13,11 +31,18 @@ const VARIABLE_DEFINITIONS = [
   { name: "branch_name", description: "Git branch name" },
 ] as const;
 
-const VARIABLE_PATTERN = /\{\{(\w+)\}\}/gi;
+// One pass with a replacer function, so a value is inserted as typed: a `$&`
+// in it is not a replacement pattern, and a `{{...}}` in it is never expanded.
+const VARIABLE_PATTERN = /\{\{(\w+|plugin\.\w+)\}\}/gi;
 
 export function replaceRecipeVariables(text: string, context: RecipeContext): string {
   return text.replace(VARIABLE_PATTERN, (match, name: string) => {
-    switch (name.toLowerCase()) {
+    const lowered = name.toLowerCase();
+    if (lowered.startsWith(PLUGIN_VARIABLE_PREFIX)) {
+      if (context.pluginVariables === undefined) return match;
+      return pluginVariableValue(lowered, context) ?? "";
+    }
+    switch (lowered) {
       case "issue_number":
         return context.issueNumber != null ? `#${context.issueNumber}` : "";
       case "pr_number":
@@ -52,6 +77,15 @@ export function detectUnresolvedVariables(text: string, context: RecipeContext):
     const name = match[1]!.toLowerCase();
     if (seen.has(name)) continue;
     seen.add(name);
+    if (name.startsWith(PLUGIN_VARIABLE_PREFIX)) {
+      if (
+        context.pluginVariables !== undefined &&
+        pluginVariableValue(name, context) === undefined
+      ) {
+        unresolved.push(name);
+      }
+      continue;
+    }
     if (name === "number") {
       if (context.issueNumber == null && context.prNumber == null) {
         unresolved.push(name);
@@ -96,6 +130,9 @@ export function splitByRecipeVariables(text: string): Array<{ text: string; isVa
   return parts;
 }
 
+/** `plugin.<name>`, the name half of a plugin variable token. */
+const PLUGIN_VARIABLE_NAME = /^plugin\.\w+$/;
+
 export type RecipePromptSegment =
   | { kind: "text"; text: string }
   /** A known variable whose value is only known at launch. */
@@ -122,6 +159,9 @@ export function segmentRecipePrompt(
   // `{{issue-number}}` is sent as typed, so it has to show up as unknown.
   const pattern = /\{\{([^{}\n]+?)\}\}/g;
   const knownNames = new Set<string>(KNOWN_VARIABLE_NAMES);
+  const isKnown = (name: string) =>
+    knownNames.has(name) ||
+    (context?.pluginVariables !== undefined && PLUGIN_VARIABLE_NAME.test(name));
   let lastIndex = 0;
   let match: RegExpExecArray | null;
   while ((match = pattern.exec(source)) !== null) {
@@ -130,7 +170,7 @@ export function segmentRecipePrompt(
     }
     const token = match[0];
     const name = match[1]!.toLowerCase();
-    if (!knownNames.has(name)) {
+    if (!isKnown(name)) {
       segments.push({ kind: "unknown", text: token, name: match[1]! });
     } else if (context === null) {
       segments.push({ kind: "variable", text: token, name });

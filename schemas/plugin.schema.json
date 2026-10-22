@@ -1762,6 +1762,10 @@
                       "type": "string",
                       "maxLength": 8192
                     },
+                    "systemPrompt": {
+                      "type": "string",
+                      "maxLength": 2000
+                    },
                     "args": {
                       "type": "string",
                       "maxLength": 4096
@@ -1777,6 +1781,19 @@
                         "trash",
                         "remove"
                       ]
+                    },
+                    "panelId": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 64,
+                      "pattern": "^[a-zA-Z0-9._-]+$"
+                    },
+                    "panelArgs": {
+                      "type": "object",
+                      "propertyNames": {
+                        "type": "string"
+                      },
+                      "additionalProperties": {}
                     }
                   },
                   "required": [
@@ -1795,6 +1812,18 @@
                   "never",
                   "prompt"
                 ]
+              },
+              "variables": {
+                "maxItems": 20,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "maxLength": 64,
+                  "pattern": "^[a-z][a-z0-9_]*$"
+                }
+              },
+              "requiresAgentTools": {
+                "type": "boolean"
               }
             },
             "required": [

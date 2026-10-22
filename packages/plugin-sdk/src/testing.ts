@@ -10,6 +10,7 @@ export type {
   NotificationRecord,
   DispatchedActionRecord,
   SentToAgentRecord,
+  RunRecipeRecord,
   ReadScreenRecord,
   RegisteredForgeProviderRecord,
   RegisteredFileDecorationProviderRecord,

@@ -43,6 +43,9 @@ const KNOWN_TERMINAL_FIELDS = {
   command: true,
   env: true,
   initialPrompt: true,
+  systemPrompt: true,
+  panelKindId: true,
+  panelArgs: true,
   args: true,
   devCommand: true,
   exitBehavior: true,
@@ -65,10 +68,38 @@ const KNOWN_RECIPE_FIELDS = {
   shadowedBy: true,
   scope: true,
   origin: true,
+  pluginVariables: true,
+  requiresAgentTools: true,
 } satisfies Record<keyof TerminalRecipe, true>;
+
+/**
+ * Fields only the plugin-recipe boundary reads (#13797). A user-owned file
+ * carrying one has nothing here that carries it back to disk, so for those
+ * files they count as unknown — a later build that lets user recipes use them
+ * must not have this one delete them silently.
+ */
+const PLUGIN_ONLY_TERMINAL_FIELDS: ReadonlySet<string> = new Set([
+  "systemPrompt",
+  "panelKindId",
+  "panelArgs",
+]);
+const PLUGIN_ONLY_RECIPE_FIELDS: ReadonlySet<string> = new Set([
+  "pluginVariables",
+  "requiresAgentTools",
+]);
 
 const KNOWN_TERMINAL_KEYS: ReadonlySet<string> = new Set(Object.keys(KNOWN_TERMINAL_FIELDS));
 const KNOWN_RECIPE_KEYS: ReadonlySet<string> = new Set(Object.keys(KNOWN_RECIPE_FIELDS));
+const USER_TERMINAL_KEYS: ReadonlySet<string> = new Set(
+  [...KNOWN_TERMINAL_KEYS].filter((key) => !PLUGIN_ONLY_TERMINAL_FIELDS.has(key))
+);
+const USER_RECIPE_KEYS: ReadonlySet<string> = new Set(
+  [...KNOWN_RECIPE_KEYS].filter((key) => !PLUGIN_ONLY_RECIPE_FIELDS.has(key))
+);
+
+function isPluginRecipeBoundary(options?: RecipeSanitizeOptions): boolean {
+  return options?.allowSystemPrompt === true || (options?.pluginPanelKinds?.size ?? 0) > 0;
+}
 
 /** A terminal this build cannot represent, identified by its position on disk. */
 export interface UnsupportedTerminal {
@@ -134,7 +165,12 @@ export function detectRecipeForwardIncompat(
 ): RecipeForwardIncompat | null {
   if (!isPlainObject(parsed)) return null;
 
-  const unknownRecipeKeys = unknownKeysOf(parsed, KNOWN_RECIPE_KEYS);
+  const pluginBoundary = isPluginRecipeBoundary(options);
+  const knownTerminalKeys = pluginBoundary ? KNOWN_TERMINAL_KEYS : USER_TERMINAL_KEYS;
+  const unknownRecipeKeys = unknownKeysOf(
+    parsed,
+    pluginBoundary ? KNOWN_RECIPE_KEYS : USER_RECIPE_KEYS
+  );
   const unknownTerminalKeys: UnsupportedTerminalKeys[] = [];
   const unsupportedTerminals: UnsupportedTerminal[] = [];
   // The sanitizer is used here only to COUNT survivors, never to report what it
@@ -148,7 +184,7 @@ export function detectRecipeForwardIncompat(
   if (Array.isArray(parsed.terminals)) {
     parsed.terminals.forEach((raw, index) => {
       if (!isPlainObject(raw)) return;
-      const keys = unknownKeysOf(raw, KNOWN_TERMINAL_KEYS);
+      const keys = unknownKeysOf(raw, knownTerminalKeys);
       if (keys.length > 0) unknownTerminalKeys.push({ index, keys });
       // Only a *well-formed* type that this build doesn't know counts. A missing
       // or non-string type is malformed input, not a newer schema.

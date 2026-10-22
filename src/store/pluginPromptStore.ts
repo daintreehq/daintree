@@ -7,14 +7,15 @@ import type {
 
 /**
  * The dismiss/cancel outcome for a prompt kind — `false` for a confirm (the
- * user did not confirm), `{ status: "cancelled" }` for a send-to-agent picker,
+ * user did not confirm), `{ status: "cancelled" }` for a send-to-agent picker
+ * or a recipe run,
  * `undefined` for quick-pick / input-box. Used whenever a prompt is resolved
  * without an explicit answer (Escape, click-away, or a main-process cancel
  * after the plugin unloads).
  */
 export function dismissValueFor(kind: PluginUiPromptParams["kind"]): PluginUiPromptResultValue {
   if (kind === "confirm") return false;
-  if (kind === "sendToAgent") return { status: "cancelled" };
+  if (kind === "sendToAgent" || kind === "runRecipe") return { status: "cancelled" };
   return undefined;
 }
 

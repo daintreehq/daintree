@@ -2607,7 +2607,19 @@ export class PluginService {
           .map((agent) => agent.id)
           .filter((id) => getPluginIdForAgent(id) === pluginId)
       );
-      registerPluginRecipes(pluginId, manifest.contributes.recipes, ownedAgentIds);
+      // A `plugin-panel` step (#13797) names its kind as the panels loop below
+      // registers it, qualified the same way as a launch entry's panel target.
+      const ownedPanelKinds = new Map<string, string>();
+      for (const panel of manifest.contributes.panels) {
+        const panelKindId = isProject
+          ? toRuntimePanelKindId(
+              { origin: "project", pluginId: manifest.name, kindId: panel.id },
+              binding.projectId
+            )
+          : `${manifest.name}.${panel.id}`;
+        if (panelKindId !== null) ownedPanelKinds.set(panel.id, panelKindId);
+      }
+      registerPluginRecipes(pluginId, manifest.contributes.recipes, ownedAgentIds, ownedPanelKinds);
       this.broadcaster.scheduleRecipesBroadcast(false);
     }
 

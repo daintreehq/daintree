@@ -1,6 +1,6 @@
 import { create, type StateCreator } from "zustand";
 import type { TerminalRecipe, RecipeTerminal, RecipeTerminalType } from "@/types";
-import { isPluginRecipe } from "@shared/types/project";
+import { isAgentRecipeType, isPluginRecipe } from "@shared/types/project";
 import { pluginManifestIdFromInstanceKey } from "@shared/types/plugin";
 import type { PluginRecipeMetadataPatch } from "@shared/types/project";
 import { usePanelStore } from "./panelStore";
@@ -42,9 +42,18 @@ import {
 } from "@/utils/agentRuntimeSettings";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { useProjectPresetsStore } from "@/store/projectPresetsStore";
-import { replaceRecipeVariables, type RecipeContext } from "@/utils/recipeVariables";
+import type { RecipeContext } from "@/utils/recipeVariables";
 import { sanitizeTerminalName } from "@/utils/agentLaunchValidation";
 import { extractSystemPromptArgs } from "@shared/utils/agentSystemPrompt";
+import { resolveRecipeAgentStep } from "@/utils/recipeAgentStep";
+import { getPanelKindConfig, panelKindIsProjectScoped } from "@shared/config/panelKindRegistry";
+import { pluginAgentToolsProblem, recipeRunNeedsAgentTools } from "@/utils/pluginRecipeAgentTools";
+import {
+  importedRecipeUsesPluginOnlyFeatures,
+  pluginOnlyCopyRefusal,
+  recipeTerminalsUsePluginOnlyFeatures,
+  recipeUsesPluginOnlyFeatures,
+} from "@/utils/pluginRecipeCopy";
 import { sanitizeRecipeTerminals, MAX_TERMINALS_PER_RECIPE } from "@shared/utils/recipeSanitizer";
 import type { ActionSource, HostApprovedRecipeRun } from "@shared/types/actions";
 import type { AgentCliDetail } from "@shared/types/ipc";
@@ -105,10 +114,78 @@ export interface RecipeRunOptions {
    * present but no longer covering this recipe authorizes nothing at all.
    */
   hostApprovedRecipeRun?: HostApprovedRecipeRun;
+  /**
+   * The recipe a host dialog showed, by id and terminal digest (#13797). When
+   * set, the run refuses unless the id resolves to exactly that recipe — not a
+   * shadowing winner, and not content a plugin reload swapped in since.
+   */
+  expectedRecipe?: { id: string; terminalsDigest: string };
 }
 
-function isAgentRecipeType(type: RecipeTerminalType): boolean {
-  return type !== "terminal" && type !== "dev-preview";
+/** How long a panel step waits for a worktree created moments ago to reach this view. */
+const WORKTREE_ARRIVAL_WAIT_MS = 5_000;
+
+/**
+ * A worktree created just before its recipe runs reaches this view over its
+ * own port, after creation has already resolved. `panel.openPluginPanel` checks
+ * the view's worktree list, so wait (bounded) for it to arrive rather than
+ * refuse the panel while the terminals beside it start.
+ */
+async function waitForWorktreeInView(worktreeId: string): Promise<void> {
+  const { getCurrentViewStoreOrNull } = await import("@/store/createWorktreeStore");
+  const store = getCurrentViewStoreOrNull();
+  if (store === null || store.getState().worktrees.has(worktreeId)) return;
+  await new Promise<void>((resolve) => {
+    const finish = () => {
+      clearTimeout(timer);
+      unsubscribe();
+      resolve();
+    };
+    const timer = setTimeout(finish, WORKTREE_ARRIVAL_WAIT_MS);
+    const unsubscribe = store.subscribe((state) => {
+      if (state.worktrees.has(worktreeId)) finish();
+    });
+  });
+}
+
+/**
+ * Open a recipe's `plugin-panel` step through `panel.openPluginPanel`, so it
+ * gets that action's worktree, dock and reuse rules (#13797). The kind must
+ * still be registered to the plugin that contributed the recipe: a stale
+ * recipe never opens another plugin's panel.
+ */
+async function openRecipePluginPanel(
+  recipe: TerminalRecipe,
+  terminal: RecipeTerminal,
+  worktreeId: string | undefined
+): Promise<string> {
+  const kind = terminal.panelKindId;
+  const config = kind !== undefined ? getPanelKindConfig(kind) : undefined;
+  if (
+    kind === undefined ||
+    config === undefined ||
+    !isPluginRecipe(recipe) ||
+    config.extensionId !== recipe.origin.pluginId
+  ) {
+    throw new Error("This plugin's panel isn't available");
+  }
+  const targetWorktreeId =
+    worktreeId !== undefined && !panelKindIsProjectScoped(kind) ? worktreeId : undefined;
+  if (targetWorktreeId !== undefined) await waitForWorktreeInView(targetWorktreeId);
+  // Loaded on demand: the action layer imports half the renderer, and only a
+  // plugin recipe with a panel step needs it.
+  const { actionService } = await import("@/services/ActionService");
+  const result = await actionService.dispatch<{ panelId: string }>(
+    "panel.openPluginPanel",
+    {
+      kind,
+      ...(terminal.panelArgs !== undefined ? { initialArgs: terminal.panelArgs } : {}),
+      ...(targetWorktreeId !== undefined ? { worktreeId: targetWorktreeId } : {}),
+    },
+    { source: "user" }
+  );
+  if (!result.ok) throw new Error(result.error.message);
+  return result.result.panelId;
 }
 
 // Recipes read from disk may still contain agentModelId/agentLaunchFlags/location
@@ -119,23 +196,46 @@ function isAgentRecipeType(type: RecipeTerminalType): boolean {
 // USER-OWNED tiers, whose files a user can hand-edit and whose schema is
 // `.passthrough()`. An `origin` present there is a forgery — only the plugin
 // registry stamps real provenance — and honouring it would route that recipe's
-// writes into the plugin sidecar and make it undeletable (#11860).
+// writes into the plugin sidecar and make it undeletable (#11860). The fields
+// only a plugin's own recipe carries (#13797) go for the same reason.
 function stripSessionOverridesFromRecipe(recipe: TerminalRecipe): TerminalRecipe {
   let changed = false;
   const terminals = recipe.terminals.map((terminal) => {
     if (
       terminal.agentModelId === undefined &&
       terminal.agentLaunchFlags === undefined &&
-      terminal.location === undefined
+      terminal.location === undefined &&
+      terminal.systemPrompt === undefined &&
+      terminal.panelKindId === undefined &&
+      terminal.panelArgs === undefined
     ) {
       return terminal;
     }
     changed = true;
-    const { agentModelId: _m, agentLaunchFlags: _f, location: _l, ...rest } = terminal;
+    const {
+      agentModelId: _m,
+      agentLaunchFlags: _f,
+      location: _l,
+      systemPrompt: _sp,
+      panelKindId: _pk,
+      panelArgs: _pa,
+      ...rest
+    } = terminal;
     return rest;
   });
-  if (recipe.shadowedBy !== undefined || recipe.origin !== undefined) {
-    const { shadowedBy: _s, origin: _o, ...rest } = recipe;
+  if (
+    recipe.shadowedBy !== undefined ||
+    recipe.origin !== undefined ||
+    recipe.pluginVariables !== undefined ||
+    recipe.requiresAgentTools !== undefined
+  ) {
+    const {
+      shadowedBy: _s,
+      origin: _o,
+      pluginVariables: _pv,
+      requiresAgentTools: _rt,
+      ...rest
+    } = recipe;
     return { ...rest, ...(changed ? { terminals } : {}) };
   }
   return changed ? { ...recipe, terminals } : recipe;
@@ -548,6 +648,13 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
     if (terminals.length > MAX_TERMINALS_PER_RECIPE) {
       throw new Error(`Recipe cannot exceed ${MAX_TERMINALS_PER_RECIPE} terminals`);
     }
+    // A user-owned recipe has no plugin to own a panel step or a system
+    // prompt (#13797); a copy carrying one would launch less than it shows.
+    if (recipeTerminalsUsePluginOnlyFeatures(terminals)) {
+      throw new Error(
+        "This recipe opens a plugin's panels or sets a system prompt, which only work in the plugin's own recipe."
+      );
+    }
 
     const isGlobal = projectId === undefined;
     const newRecipe: TerminalRecipe = {
@@ -912,12 +1019,21 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
     // copy is genuinely user-owned, and the original is never deleted — the
     // plugin still owns it (#11860).
     const fromPlugin = isPluginRecipe(recipe);
+    // A panel step, a plugin variable, a system prompt or the agent-tools
+    // requirement only works inside the plugin's own recipe (#13797), and a
+    // team recipe would drop them on its next read. Copying one would make a
+    // recipe that quietly does less.
+    if (fromPlugin && recipeUsesPluginOnlyFeatures(recipe)) {
+      throw new Error(pluginOnlyCopyRefusal(recipe));
+    }
     const isGlobal = !fromPlugin && recipe.projectId === undefined;
     const {
       projectId: _,
       worktreeId: _w,
       shadowedBy: _s,
       origin: _o,
+      pluginVariables: _pv,
+      requiresAgentTools: _rt,
       lastUsedAt: priorLastUsedAt,
       usageHistory: priorUsageHistory,
       ...rest
@@ -1036,6 +1152,30 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
     if (!recipe) {
       throw new Error(`Recipe ${recipeId} not found`);
     }
+    const expected = options?.expectedRecipe;
+    if (
+      expected !== undefined &&
+      (recipe.id !== expected.id ||
+        recipeApprovalDigest(recipe.terminals) !== expected.terminalsDigest)
+    ) {
+      throw new Error("Recipe changed since it was shown");
+    }
+
+    // A recipe that needs its plugin's agent tools says so rather than starting
+    // agents without them (#13797). Before anything is stamped or spawned: a
+    // refused run is not a use.
+    const requestedIndices = options?.terminalIndices ?? recipe.terminals.map((_, i) => i);
+    if (recipeRunNeedsAgentTools(recipe, requestedIndices) && isPluginRecipe(recipe)) {
+      const problem = await pluginAgentToolsProblem(recipe.origin.pluginId);
+      if (problem !== null) {
+        return {
+          spawned: [],
+          failed: [...requestedIndices]
+            .sort((a, b) => a - b)
+            .map((index) => ({ index, error: problem.message })),
+        };
+      }
+    }
 
     // getRecipeById resolves shadowed recipes to the winner, so use the resolved id
     const resolvedId = recipe.id;
@@ -1086,7 +1226,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
 
     const terminalStore = usePanelStore.getState();
 
-    const indicesToSpawn = options?.terminalIndices ?? recipe.terminals.map((_, i) => i);
+    const indicesToSpawn = requestedIndices;
     const spawnedBy = options?.spawnedBy;
     // Pass focusPolicy through as-is (potentially undefined). panelStore.addPanel
     // resolves undefined to "auto" — which suppresses focus only when the assistant
@@ -1156,10 +1296,25 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
     // Pre-fetch agent settings once for all agent terminals
     let agentSettings: Awaited<ReturnType<typeof agentSettingsClient.get>> | null = null;
     let clipboardDirectory: string | undefined;
+    // A plugin's panel steps open first, one at a time and outside the spawn
+    // batch: `panel.openPluginPanel` reuses and limit-checks against the live
+    // panel list, which a batch's deferred append would leave stale (#13797).
+    const panelIndices = validIndices.filter((i) => recipe.terminals[i]!.type === "plugin-panel");
+    for (const index of panelIndices) {
+      try {
+        const panelId = await openRecipePluginPanel(recipe, recipe.terminals[index]!, worktreeId);
+        results.spawned.push({ index, terminalId: panelId });
+      } catch (error) {
+        results.failed.push({ index, error: formatErrorMessage(error, "Failed to open panel") });
+      }
+    }
+    if (panelIndices.length > 0) {
+      const opened = new Set(panelIndices);
+      validIndices.splice(0, validIndices.length, ...validIndices.filter((i) => !opened.has(i)));
+    }
+
     const terminalsToSpawn = validIndices.map((i) => recipe.terminals[i]!);
-    const hasAgent = terminalsToSpawn.some(
-      (t) => t.type !== "terminal" && t.type !== "dev-preview"
-    );
+    const hasAgent = terminalsToSpawn.some((t) => isAgentRecipeType(t.type));
     if (hasAgent) {
       try {
         const [settings, tmpDir] = await Promise.all([
@@ -1177,7 +1332,10 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
     // defers the `panelIds` append, so per-call limit checks would all read the
     // same stale count and under-enforce the ceiling; gate the whole burst once
     // here and pass `bypassLimits` on each individual call. (#9165)
-    const currentCount = countPanelsTowardLimit(terminalStore.panelsById, terminalStore.panelIds);
+    // Read fresh: the plugin panels opened above already count toward the limit,
+    // and the snapshot taken before them would let the batch overshoot it.
+    const livePanels = usePanelStore.getState();
+    const currentCount = countPanelsTowardLimit(livePanels.panelsById, livePanels.panelIds);
     const { allowed, declined } = await preflightSpawnBatchLimit(
       currentCount,
       validIndices.length,
@@ -1281,11 +1439,14 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
               agentConfig?.command ?? "",
               await launchCliDetail
             );
-            const rawPrompt = terminal.initialPrompt?.trim();
             const resolvedContext: RecipeContext = { ...context, worktreePath };
-            const initialPrompt = rawPrompt
-              ? replaceRecipeVariables(rawPrompt, resolvedContext)
-              : undefined;
+            const step = resolveRecipeAgentStep(recipe, terminal, agentId, resolvedContext);
+            if (!step.ok) throw new Error(step.reason);
+            const { initialPrompt } = step;
+            const systemPromptArgs =
+              step.systemPromptArgs.length > 0
+                ? step.systemPromptArgs
+                : extractSystemPromptArgs(terminal.agentLaunchFlags, agentId);
             const entry = agentSettings?.agents?.[agentId] ?? {};
             const globalSkipPermissions = agentSettings?.globalSkipPermissions ?? false;
             const globalUseAltScreen = agentSettings?.globalUseAltScreen ?? false;
@@ -1346,7 +1507,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
               modelId: terminal.agentModelId,
               // An in-memory recipe's captured flags can carry a standing
               // instruction; apply it to this launch as well (#12431).
-              systemPromptArgs: extractSystemPromptArgs(terminal.agentLaunchFlags, agentId),
+              systemPromptArgs,
               recipeArgs: terminal.args?.trim() || undefined,
               presetArgs: preset?.args?.join(" "),
               globalSkipPermissions,
@@ -1370,6 +1531,8 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
                 globalUseAltScreen,
               }),
               ...(terminal.args?.trim().split(/\s+/).filter(Boolean) ?? []),
+              // Last, where the launch command puts it, so restart replays it.
+              ...step.systemPromptArgs,
             ];
             return terminalStore.addPanel({
               kind: "terminal",
@@ -1529,6 +1692,13 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
     }
     if (recipe.terminals.length > MAX_TERMINALS_PER_RECIPE) {
       throw new Error(`Recipe cannot exceed ${MAX_TERMINALS_PER_RECIPE} terminals`);
+    }
+    // An exported plugin recipe would import as a copy that quietly does less:
+    // the sanitizer below drops its panel steps and system prompts (#13797).
+    if (importedRecipeUsesPluginOnlyFeatures(recipe)) {
+      throw new Error(
+        `"${String(recipe.name)}" opens a plugin's panels, uses its variables or needs its agent tools, which only work in the plugin's own recipe, so it can't be imported.`
+      );
     }
 
     // Content-validate at the import trust boundary. Shared with the in-repo

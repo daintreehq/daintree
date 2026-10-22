@@ -1,4 +1,7 @@
-import type { RecipeContribution } from "../../../shared/types/plugin.js";
+import type {
+  RecipeContribution,
+  RecipeContributionTerminal,
+} from "../../../shared/types/plugin.js";
 import type {
   PluginRecipeMetadata,
   RecipeTerminal,
@@ -35,6 +38,8 @@ interface RegisteredPluginRecipe {
   /** Manifest defaults; a user override in the metadata snapshot wins. */
   defaultShowInEmptyState?: boolean;
   defaultAutoAssign?: TerminalRecipe["autoAssign"];
+  variables?: string[];
+  requiresAgentTools?: true;
 }
 
 const recipesByQualifiedId = new Map<string, RegisteredPluginRecipe>();
@@ -67,18 +72,29 @@ export function setPluginRecipeMetadataSnapshot(
  * from the live agent registry (not the manifest) because a cross-plugin agent
  * id collision resolves first-registered-wins — a plugin that lost the
  * collision must not have its recipe launch the winner's agent.
+ *
+ * `ownedPanelKinds` maps this plugin's manifest panel ids to the runtime kind
+ * ids its panels register under (#13797), so a `plugin-panel` step carries the
+ * kind it opens and can only ever name one of its own plugin's.
  */
 export function registerPluginRecipes(
   pluginId: string,
   contributions: readonly RecipeContribution[],
-  ownedAgentIds: ReadonlySet<string>
+  ownedAgentIds: ReadonlySet<string>,
+  ownedPanelKinds: ReadonlyMap<string, string> = new Map()
 ): void {
   unregisterPluginRecipes(pluginId);
+  const sanitizeOptions = {
+    additionalAllowedTypes: ownedAgentIds,
+    pluginPanelKinds: new Set(ownedPanelKinds.values()),
+    allowSystemPrompt: true,
+  };
   for (const contribution of contributions) {
     const qualifiedId = `${pluginId}.${contribution.id}`;
-    const terminals = sanitizeRecipeTerminals(contribution.terminals, {
-      additionalAllowedTypes: ownedAgentIds,
-    });
+    const terminals = sanitizeRecipeTerminals(
+      contribution.terminals.map((terminal) => toRuntimeStep(terminal, ownedPanelKinds)),
+      sanitizeOptions
+    );
     if (terminals.length === 0) {
       console.warn(
         `[PluginRecipeRegistry] Skipping recipe "${qualifiedId}": no terminal survived content validation.`
@@ -98,6 +114,10 @@ export function registerPluginRecipes(
     if (contribution.autoAssign !== undefined) {
       entry.defaultAutoAssign = contribution.autoAssign;
     }
+    if (contribution.variables !== undefined && contribution.variables.length > 0) {
+      entry.variables = [...contribution.variables];
+    }
+    if (contribution.requiresAgentTools === true) entry.requiresAgentTools = true;
     recipesByQualifiedId.set(qualifiedId, entry);
     let ids = qualifiedIdsByPlugin.get(pluginId);
     if (!ids) {
@@ -106,6 +126,21 @@ export function registerPluginRecipes(
     }
     ids.add(qualifiedId);
   }
+}
+
+/**
+ * A manifest step as the sanitizer reads it: a `plugin-panel` step's manifest
+ * `panelId` becomes the runtime `panelKindId`, or is left without one — which
+ * the sanitizer drops — when the plugin declares no such panel.
+ */
+function toRuntimeStep(
+  terminal: RecipeContributionTerminal,
+  ownedPanelKinds: ReadonlyMap<string, string>
+): unknown {
+  if (terminal.type !== "plugin-panel") return terminal;
+  const { panelId, ...rest } = terminal;
+  const panelKindId = panelId !== undefined ? ownedPanelKinds.get(panelId) : undefined;
+  return panelKindId !== undefined ? { ...rest, panelKindId } : rest;
 }
 
 /** Drop every recipe registered by `pluginId`. Safe to call for an unknown id. */
@@ -137,6 +172,7 @@ function toTerminalRecipe(entry: RegisteredPluginRecipe): TerminalRecipe {
     terminals: entry.terminals.map((terminal) => ({
       ...terminal,
       ...(terminal.env ? { env: { ...terminal.env } } : {}),
+      ...(terminal.panelArgs ? { panelArgs: structuredClone(terminal.panelArgs) } : {}),
     })),
     // Deterministic rather than install time: a contributed recipe has no
     // meaningful creation moment, and a reload-varying value would churn every
@@ -144,6 +180,8 @@ function toTerminalRecipe(entry: RegisteredPluginRecipe): TerminalRecipe {
     createdAt: 0,
     origin: { kind: "plugin", pluginId: entry.pluginId, contributionId: entry.contributionId },
   };
+  if (entry.variables !== undefined) recipe.pluginVariables = [...entry.variables];
+  if (entry.requiresAgentTools === true) recipe.requiresAgentTools = true;
   const showInEmptyState = metadata?.showInEmptyState ?? entry.defaultShowInEmptyState;
   if (showInEmptyState !== undefined) recipe.showInEmptyState = showInEmptyState;
   const autoAssign = metadata?.autoAssign ?? entry.defaultAutoAssign;

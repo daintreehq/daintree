@@ -43,6 +43,7 @@ import type {
   PluginMcpJsonSchema,
   PluginMcpToolAnnotations,
   PluginSendToAgentOptions,
+  PluginRunRecipeOptions,
   PluginTerminalReadScreenOptions,
   PluginFsReadFilesEncoding,
   PluginFsWalkOptions,
@@ -62,6 +63,7 @@ export type PluginHostCallMethod =
   | "agents.listAll"
   | "terminals.readScreen"
   | "sendToAgent"
+  | "runRecipe"
   | "showToast"
   | "notify"
   | "dispatch"
@@ -633,6 +635,12 @@ export interface TerminalsReadScreenParams {
 export interface SendToAgentParams {
   text: string;
   options?: PluginSendToAgentOptions;
+}
+
+/** Params for `runRecipe` (`host-call`). */
+export interface RunRecipeParams {
+  recipeId: string;
+  options?: PluginRunRecipeOptions;
 }
 
 /** Params for `showQuickPick` (`host-call`). */

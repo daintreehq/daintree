@@ -489,8 +489,17 @@ export interface ProjectState {
   mruList?: string[];
 }
 
-/** Recipe terminal type */
-export type RecipeTerminalType = AgentId | "terminal" | "dev-preview";
+/**
+ * Recipe terminal type. `plugin-panel` opens one of the contributing plugin's
+ * own panels (#13797) and exists only in plugin recipes: every other recipe
+ * tier's sanitizer drops it.
+ */
+export type RecipeTerminalType = AgentId | "terminal" | "dev-preview" | "plugin-panel";
+
+/** Whether a recipe step launches an agent rather than a shell, a dev preview or a panel. */
+export function isAgentRecipeType(type: string): boolean {
+  return type !== "terminal" && type !== "dev-preview" && type !== "plugin-panel";
+}
 
 /** A single terminal definition within a recipe */
 export interface RecipeTerminal {
@@ -502,8 +511,17 @@ export interface RecipeTerminal {
   command?: string;
   /** Environment variables to set (optional) */
   env?: Record<string, string>;
-  /** Initial prompt to send to agent terminals after boot (optional). Supports {{issue_number}}, {{pr_number}}, {{worktree_path}}, {{branch_name}} variables replaced at runtime. */
+  /** Initial prompt to send to agent terminals after boot (optional). Supports {{issue_number}}, {{pr_number}}, {{worktree_path}}, {{branch_name}} variables replaced at runtime, and a plugin recipe's {{plugin.<name>}} variables. */
   initialPrompt?: string;
+  /**
+   * Standing instruction appended to an agent's system prompt (#13797). Plugin
+   * recipes only, and substituted like `initialPrompt`.
+   */
+  systemPrompt?: string;
+  /** The runtime panel kind a `plugin-panel` step opens, always one of its own plugin's. */
+  panelKindId?: string;
+  /** Handed to a `plugin-panel` step's view as `initialArgs`, or as `openRequest` to a panel it reuses. */
+  panelArgs?: Record<string, unknown>;
   /** Additional CLI arguments for agent terminals (e.g., "--model sonnet"). Whitespace-separated; applied at spawn time only. */
   args?: string;
   /** Dev server command for dev-preview terminals (optional). Falls back to project devServerCommand if not set. */
@@ -564,6 +582,17 @@ export interface TerminalRecipe {
    * import/export, so a hand-edited `recipes.json` cannot impersonate a plugin.
    */
   origin?: PluginRecipeOrigin;
+  /**
+   * The `{{plugin.<name>}}` variables a plugin recipe declares (#13797), which
+   * `host.runRecipe` may fill. Plugin recipes only.
+   */
+  pluginVariables?: string[];
+  /**
+   * The recipe's agents need its plugin's agent tools, so a launch while those
+   * are off in the project is refused rather than starting without them.
+   * Plugin recipes only; never grants access.
+   */
+  requiresAgentTools?: true;
 }
 
 /** How a recipe's `autoAssign` behaviour is spelled everywhere it is carried. */

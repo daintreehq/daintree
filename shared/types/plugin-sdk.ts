@@ -242,6 +242,9 @@ export type {
   PluginSendToAgentOptions,
   PluginSendToAgentResult,
   PluginSendToAgentRefusalReason,
+  PluginRunRecipeOptions,
+  PluginRunRecipeResult,
+  PluginRunRecipeRefusalReason,
 } from "./plugin.js";
 export type {
   AgentContextDragPayload,

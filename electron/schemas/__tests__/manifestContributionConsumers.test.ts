@@ -113,6 +113,8 @@ const RECIPE_REGISTRY = "electron/services/plugin/PluginRecipeRegistry.ts";
 const TOUR_REGISTRY = "electron/services/plugin/PluginTourRegistry.ts";
 const PLUGIN_TOURS = "src/components/Tour/pluginTours.tsx";
 const RECIPE_SANITIZER = "shared/utils/recipeSanitizer.ts";
+const RECIPE_AGENT_STEP = "src/utils/recipeAgentStep.ts";
+const PLUGIN_RECIPE_AGENT_TOOLS = "src/utils/pluginRecipeAgentTools.ts";
 const ARCHIVE_INSTALL_INTENT = "electron/setup/archiveInstallIntent.ts";
 const PROCESS_TOOL_REGISTRY = "shared/config/pluginProcessToolRegistry.ts";
 const PLUGIN_ICON_ASSETS = "electron/services/plugin/pluginIconAssets.ts";
@@ -1529,6 +1531,22 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       consumers: [{ file: RECIPE_REGISTRY, symbol: "toTerminalRecipe (metadata overlay)" }],
       note: "Default issue auto-assign mode; a user override in the sidecar wins.",
     },
+    variables: {
+      mode: "verbatim",
+      consumers: [
+        { file: RECIPE_REGISTRY, symbol: "toTerminalRecipe (TerminalRecipe.pluginVariables)" },
+        { file: PLUGIN_HOST_FACTORY, symbol: "validateRunRecipeCall" },
+      ],
+      note: "The {{plugin.<name>}} names host.runRecipe may fill; any other name is refused.",
+    },
+    requiresAgentTools: {
+      mode: "derived-input",
+      consumers: [
+        { file: RECIPE_REGISTRY, symbol: "toTerminalRecipe (TerminalRecipe.requiresAgentTools)" },
+        { file: PLUGIN_RECIPE_AGENT_TOOLS, symbol: "recipeRunNeedsAgentTools" },
+      ],
+      note: "Refuses a launch with agent steps while the plugin's agent tools are off in the project.",
+    },
   },
   "recipes.terminals": {
     type: {
@@ -1570,6 +1588,24 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       mode: "verbatim",
       consumers: [{ file: RECIPE_SANITIZER, symbol: "sanitizeRecipeTerminal" }],
       note: "What happens to the panel when its process exits.",
+    },
+    systemPrompt: {
+      mode: "verbatim",
+      consumers: [
+        { file: RECIPE_SANITIZER, symbol: "sanitizeRecipeTerminal (allowSystemPrompt)" },
+        { file: RECIPE_AGENT_STEP, symbol: "resolveRecipeAgentStep" },
+      ],
+      note: "Standing instruction for an agent step, substituted like the prompt.",
+    },
+    panelId: {
+      mode: "cross-reference",
+      consumers: [{ file: RECIPE_REGISTRY, symbol: "toRuntimeStep (panelKindId)" }],
+      note: "Must name one of this plugin's own panels; becomes the runtime kind the step opens.",
+    },
+    panelArgs: {
+      mode: "verbatim",
+      consumers: [{ file: RECIPE_SANITIZER, symbol: "copyPanelArgs" }],
+      note: "Handed to the opened panel as initialArgs, or as openRequest to a panel it reuses.",
     },
   },
   "agents.detection": {

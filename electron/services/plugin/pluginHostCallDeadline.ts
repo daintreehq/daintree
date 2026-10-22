@@ -39,6 +39,8 @@ const HOST_CALL_DEADLINES = {
     (params as SendToAgentParams | undefined)?.options?.terminalId !== undefined
       ? INTERACTIVE
       : NONE,
+  // A confirmation dialog the person reads before anything starts (#13797).
+  runRecipe: NONE,
   showToast: DEFAULT,
   notify: DEFAULT,
   dispatch: DEFAULT,
