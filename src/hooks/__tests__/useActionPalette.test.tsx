@@ -9,6 +9,7 @@ const {
   getContextMock,
   notifyMock,
   selfNotifiesMock,
+  paletteArgsMock,
 } = vi.hoisted(() => ({
   listMock: vi.fn(),
   dispatchMock: vi.fn(),
@@ -16,6 +17,7 @@ const {
   getContextMock: vi.fn(),
   notifyMock: vi.fn(),
   selfNotifiesMock: vi.fn<(id: string) => boolean>(() => false),
+  paletteArgsMock: vi.fn<(id: string) => unknown>(() => null),
 }));
 
 vi.mock("@/services/ActionService", () => ({
@@ -24,6 +26,7 @@ vi.mock("@/services/ActionService", () => ({
     dispatch: dispatchMock,
     getContext: getContextMock,
     selfNotifiesOnExecutionError: selfNotifiesMock,
+    getPluginPaletteArgs: paletteArgsMock,
   },
 }));
 
@@ -96,6 +99,7 @@ describe("useActionPalette", () => {
     // Most actions don't own their failure toast; the flagged cases opt in
     // per-test so a stale `true` can't leak across tests and silence one.
     selfNotifiesMock.mockReturnValue(false);
+    paletteArgsMock.mockReturnValue(null);
     usePaletteStore.setState({ activePaletteId: null });
     useActionMruStore.setState({ actionUsageEntries: new Map() });
     useActionPrefsStore.setState({ pinnedActionIds: [], hiddenActionIds: [] });
@@ -1520,6 +1524,147 @@ describe("useActionPalette", () => {
 
       // Title match "Save Output" should rank above keyword-only "Stash Input"
       expect(result.current.results[0]!.id).toBe("terminal.saveOutput");
+    });
+  });
+  describe("plugin command arguments", () => {
+    const spec = {
+      fields: [
+        {
+          kind: "enum",
+          name: "env",
+          title: "Environment",
+          options: [
+            { value: "dev", label: "dev" },
+            { value: "prod", label: "prod" },
+          ],
+        },
+        { kind: "boolean", name: "force", title: "Force" },
+        { kind: "string", name: "tag", title: "Tag", minLength: 2 },
+      ],
+    };
+    const pluginEntry = (extra: Record<string, unknown> = {}) => ({
+      ...makeEntry("plugin.acme.deploy", "Deploy"),
+      requiresArgs: true,
+      pluginId: "acme",
+      ...extra,
+    });
+
+    async function openPalette(entries: unknown[]) {
+      listMock.mockReturnValue(entries);
+      dispatchMock.mockResolvedValue({ ok: true, result: undefined });
+      const hook = renderHook(() => useActionPalette());
+      act(() => {
+        hook.result.current.open();
+      });
+      await waitFor(() => {
+        expect(hook.result.current.results.length).toBe(entries.length);
+      });
+      return hook;
+    }
+
+    it("lists a promptable plugin command and keeps unsupported ones out", async () => {
+      paletteArgsMock.mockImplementation((id) => (id === "plugin.acme.deploy" ? spec : null));
+      const { result } = await (async () => {
+        listMock.mockReturnValue([
+          pluginEntry(),
+          pluginEntry({ id: "plugin.acme.complex", title: "Complex" }),
+          { ...makeEntry("builtin.needsArgs", "Built-in"), requiresArgs: true },
+        ]);
+        const hook = renderHook(() => useActionPalette());
+        act(() => hook.result.current.open());
+        await waitFor(() => expect(hook.result.current.results.length).toBeGreaterThan(0));
+        return hook;
+      })();
+      expect(result.current.results.map((r) => r.id)).toEqual(["plugin.acme.deploy"]);
+      expect(result.current.results[0]!.promptsForArgs).toBe(true);
+    });
+
+    it("collects typed arguments step by step and dispatches them once", async () => {
+      paletteArgsMock.mockReturnValue(spec);
+      const { result } = await openPalette([pluginEntry()]);
+
+      act(() => result.current.executeAction(result.current.results[0]!));
+      expect(dispatchMock).not.toHaveBeenCalled();
+      expect(result.current.argPrompt).toMatchObject({
+        fieldTitle: "Environment",
+        step: 1,
+        total: 3,
+      });
+      expect(result.current.results.map((r) => r.title)).toEqual(["dev", "prod"]);
+
+      act(() => result.current.selectNext());
+      act(() => result.current.confirmSelection());
+      expect(result.current.argPrompt).toMatchObject({ fieldTitle: "Force", step: 2 });
+      expect(result.current.results.map((r) => r.title)).toEqual(["Yes", "No"]);
+
+      act(() => result.current.selectNext());
+      act(() => result.current.confirmSelection());
+      expect(result.current.argPrompt).toMatchObject({ fieldTitle: "Tag", kind: "string" });
+
+      act(() => result.current.setQuery("v"));
+      await waitFor(() => expect(result.current.results[0]!.enabled).toBe(false));
+      act(() => result.current.confirmSelection());
+      expect(dispatchMock).not.toHaveBeenCalled();
+
+      act(() => result.current.setQuery("v1"));
+      await waitFor(() => expect(result.current.results[0]!.enabled).toBe(true));
+      act(() => result.current.confirmSelection());
+
+      expect(dispatchMock).toHaveBeenCalledTimes(1);
+      expect(dispatchMock).toHaveBeenCalledWith(
+        "plugin.acme.deploy",
+        { env: "prod", force: false, tag: "v1" },
+        { source: "user" }
+      );
+    });
+
+    it("steps back a field, then out to the list with the prior search", async () => {
+      paletteArgsMock.mockReturnValue(spec);
+      const { result } = await openPalette([pluginEntry()]);
+      act(() => result.current.setQuery("dep"));
+      await waitFor(() => expect(result.current.results.length).toBe(1));
+
+      act(() => result.current.executeAction(result.current.results[0]!));
+      act(() => result.current.confirmSelection());
+      expect(result.current.argPrompt?.step).toBe(2);
+
+      act(() => result.current.argBack());
+      expect(result.current.argPrompt?.step).toBe(1);
+
+      act(() => result.current.argBack());
+      expect(result.current.argPrompt).toBeNull();
+      expect(result.current.query).toBe("dep");
+      expect(dispatchMock).not.toHaveBeenCalled();
+    });
+
+    it("records MRU only when the command is finally dispatched", async () => {
+      paletteArgsMock.mockReturnValue({ fields: [spec.fields[1]] });
+      const { result } = await openPalette([pluginEntry()]);
+      act(() => result.current.executeAction(result.current.results[0]!));
+      expect(useActionMruStore.getState().actionUsageEntries.has("plugin.acme.deploy")).toBe(false);
+      act(() => result.current.confirmSelection());
+      expect(useActionMruStore.getState().actionUsageEntries.has("plugin.acme.deploy")).toBe(true);
+    });
+
+    it("drops the answers when the command was re-registered mid-prompt", async () => {
+      paletteArgsMock.mockReturnValue({ fields: [spec.fields[1]] });
+      const { result } = await openPalette([pluginEntry()]);
+      act(() => result.current.executeAction(result.current.results[0]!));
+      paletteArgsMock.mockReturnValue({ fields: [spec.fields[1]] });
+      act(() => result.current.confirmSelection());
+      expect(dispatchMock).not.toHaveBeenCalled();
+      expect(result.current.argPrompt).toBeNull();
+    });
+
+    it("keeps the highlighted row when a choice filter drops earlier ones", async () => {
+      paletteArgsMock.mockReturnValue(spec);
+      const { result } = await openPalette([pluginEntry()]);
+      act(() => result.current.executeAction(result.current.results[0]!));
+      act(() => result.current.selectNext());
+      expect(result.current.results[result.current.selectedIndex]!.title).toBe("prod");
+      act(() => result.current.setQuery("pro"));
+      expect(result.current.results.map((r) => r.title)).toEqual(["prod"]);
+      expect(result.current.results[result.current.selectedIndex]!.title).toBe("prod");
     });
   });
 });

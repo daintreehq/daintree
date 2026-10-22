@@ -21,6 +21,7 @@ import { currentHostId, getHostPlatformInfo, isRemoteWindow } from "@/hooks/useH
 import { isClientAppError } from "@/utils/clientAppError";
 import { PartialSuccessError } from "@shared/utils/partialSuccess";
 import { TerminalInOtherProjectError } from "@shared/utils/terminalInOtherProject";
+import { parsePluginPaletteArgs, type PluginPaletteArgs } from "@/lib/pluginPaletteArgs";
 import { ConfirmationStagedError } from "./actions/confirmationStaged";
 import { UnactionableTargetError } from "./actions/unactionableTarget";
 import {
@@ -313,6 +314,8 @@ export class ActionService {
   private pluginIdsSeen = new Set<string>();
   private onlyHereCache: { hostId: string; pluginIds: string[]; at: number } | null = null;
   private requiresArgsCache = new Map<ActionId, boolean>();
+  /** Palette prompt specs for plugin commands, `null` for ones the palette can't prompt. */
+  private paletteArgsCache = new Map<ActionId, PluginPaletteArgs | null>();
   /**
    * Lazily-filled JSON schema cache. Populated on first `toManifestEntry()` for
    * a given id; `.has(id)` distinguishes "not computed yet" from "computed but
@@ -349,6 +352,7 @@ export class ActionService {
     if (typed.pluginId) this.pluginIdsSeen.add(typed.pluginId);
     this.registry.set(definition.id, typed);
     this.requiresArgsCache.set(definition.id, requiresArgs);
+    this.paletteArgsCache.delete(definition.id);
   }
 
   /** Whether an action id is present in the registry. */
@@ -440,7 +444,27 @@ export class ActionService {
   unregister(id: ActionId): void {
     this.registry.delete(id);
     this.requiresArgsCache.delete(id);
+    this.paletteArgsCache.delete(id);
     this.schemaCache.delete(id);
+  }
+
+  /**
+   * The prompts the palette can use to collect a plugin command's required
+   * arguments, or null when the action isn't a plugin command with a small flat
+   * schema. Reads the raw schema directly and memoizes per registration, so
+   * re-registering yields a new object — callers compare identity to detect it.
+   */
+  getPluginPaletteArgs(id: ActionId): PluginPaletteArgs | null {
+    const cached = this.paletteArgsCache.get(id);
+    if (cached !== undefined) return cached;
+    const definition = this.registry.get(id);
+    if (!definition) return null;
+    const spec =
+      definition.pluginId && definition.kind === "command" && this.requiresArgsCache.get(id)
+        ? parsePluginPaletteArgs(definition.rawInputSchema)
+        : null;
+    this.paletteArgsCache.set(id, spec);
+    return spec;
   }
 
   /**

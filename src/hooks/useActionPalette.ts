@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { actionService } from "@/services/ActionService";
 import { keybindingService } from "@/services/KeybindingService";
@@ -13,6 +13,12 @@ import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { isPanelLimitError } from "@/services/actions/definitions/panelLimitError";
 import { useSearchablePalette } from "./useSearchablePalette";
 import { isStagedConfirmation } from "@/services/actions/confirmationStaged";
+import {
+  validateStringField,
+  type PluginPaletteArgs,
+  type PromptField,
+  type PromptValue,
+} from "@/lib/pluginPaletteArgs";
 
 export interface ActionPaletteItem {
   id: string;
@@ -45,6 +51,11 @@ export interface ActionPaletteItem {
    * generic `{ ok: false }` toast for these rows to avoid double-notifying.
    */
   pluginId?: string;
+  /**
+   * A plugin command whose required arguments the palette collects itself
+   * before dispatching. Picking the row starts a prompt instead of running.
+   */
+  promptsForArgs?: boolean;
   titleLower: string;
   categoryLower: string;
   descriptionLower: string;
@@ -66,7 +77,30 @@ export interface ActionPaletteSection {
   readonly count: number;
 }
 
+interface ArgSession {
+  item: ActionPaletteItem;
+  spec: PluginPaletteArgs;
+  step: number;
+  values: Record<string, PromptValue>;
+  /** The search text to restore if the user backs out to the action list. */
+  returnQuery: string;
+}
+
+/** The argument prompt the palette is showing in place of the action list. */
+export interface ActionPaletteArgPrompt {
+  actionTitle: string;
+  fieldTitle: string;
+  /** 1-based position of the field being asked. */
+  step: number;
+  total: number;
+  kind: PromptField["kind"];
+}
+
 export interface UseActionPaletteReturn {
+  /** Set while the palette is collecting a plugin command's arguments. */
+  argPrompt: ActionPaletteArgPrompt | null;
+  /** Steps back one field, or out of the prompt to the action list from the first. */
+  argBack: () => void;
   isOpen: boolean;
   query: string;
   results: ActionPaletteItem[];
@@ -191,10 +225,18 @@ export function useActionPalette(): UseActionPaletteReturn {
         // A redirect entry runs its interactive sibling, not itself, so its own
         // args are irrelevant — show it even when its schema would require args.
         if (e.paletteRedirectTo) return true;
-        // Default: gate on the schema heuristic, as before.
-        return !e.requiresArgs;
+        if (!e.requiresArgs) return true;
+        // A plugin command with a small flat schema is asked for its arguments
+        // by the palette itself. The check reads the raw schema and is only
+        // reached for plugin commands that require args, so list building
+        // still never compiles or clones a schema.
+        return e.pluginId !== undefined && actionService.getPluginPaletteArgs(e.id) !== null;
       })
-      .map(toActionPaletteItem);
+      .map((e) => {
+        const item = toActionPaletteItem(e);
+        if (e.requiresArgs && !e.paletteRedirectTo) item.promptsForArgs = true;
+        return item;
+      });
   }, [isActionOpen]);
 
   // Strip confirm-danger ids from the MRU/Favorites lists so destructive actions
@@ -325,7 +367,7 @@ export function useActionPalette(): UseActionPaletteReturn {
     selectedIndex: rawSelectedIndex,
     isStale,
     open,
-    close,
+    close: baseClose,
     toggle,
     setQuery,
     setSelectedIndex,
@@ -360,18 +402,14 @@ export function useActionPalette(): UseActionPaletteReturn {
         ? 0
         : -1;
 
-  const executeAction = useCallback(
-    (item: ActionPaletteItem) => {
-      // Enter on a disabled row is a silent no-op: palette stays open, no
-      // dispatch, no toast. The inline disabled-reason text in the row already
-      // explains why it's unavailable (issue #8814).
-      if (!item.enabled) return;
+  const dispatchAction = useCallback(
+    (item: ActionPaletteItem, args: Record<string, unknown>) => {
       // Skip confirm-danger actions (e.g. "Delete worktree") from frecency so
       // destructive actions don't land in the "Recently used" rail (#7481).
       if (item.danger !== "confirm") {
         useActionMruStore.getState().recordActionMru(item.id);
       }
-      close();
+      baseClose();
       // A redirect row runs its interactive sibling (e.g. a dialog-opener)
       // instead of the headless action the user searched for. MRU above still
       // records the picked id so the familiar entry reappears.
@@ -383,13 +421,9 @@ export function useActionPalette(): UseActionPaletteReturn {
         dispatchId as Parameters<typeof actionService.selfNotifiesOnExecutionError>[0]
       );
       void actionService
-        .dispatch(
-          dispatchId as Parameters<typeof actionService.dispatch>[0],
-          {},
-          {
-            source: "user",
-          }
-        )
+        .dispatch(dispatchId as Parameters<typeof actionService.dispatch>[0], args, {
+          source: "user",
+        })
         .then((result) => {
           if (result.ok) return;
           // DISABLED is already visible on the originating surface (#8814).
@@ -438,10 +472,145 @@ export function useActionPalette(): UseActionPaletteReturn {
           });
         });
     },
-    [close]
+    [baseClose]
   );
 
+  const [argSession, setArgSession] = useState<ArgSession | null>(null);
+  const [argSelectedId, setArgSelectedId] = useState<string | null>(null);
+
+  const close = useCallback(() => {
+    setArgSession(null);
+    setArgSelectedId(null);
+    baseClose();
+  }, [baseClose]);
+
+  // Closed from outside (another palette taking over, a project switch): the
+  // half-collected arguments must not greet the next opening.
+  useEffect(() => {
+    if (!isOpen) {
+      setArgSession(null);
+      setArgSelectedId(null);
+    }
+  }, [isOpen]);
+
+  const executeAction = useCallback(
+    (item: ActionPaletteItem) => {
+      // Enter on a disabled row is a silent no-op: palette stays open, no
+      // dispatch, no toast. The inline disabled-reason text in the row already
+      // explains why it's unavailable (issue #8814).
+      if (!item.enabled) return;
+      if (item.promptsForArgs) {
+        const spec = actionService.getPluginPaletteArgs(item.id);
+        if (!spec) return;
+        setArgSession({ item, spec, step: 0, values: {}, returnQuery: query });
+        setArgSelectedId(null);
+        setQuery("");
+        return;
+      }
+      dispatchAction(item, {});
+    },
+    [dispatchAction, query, setQuery]
+  );
+
+  const argField = argSession ? argSession.spec.fields[argSession.step]! : null;
+
+  const argRows = useMemo<ActionPaletteItem[]>(() => {
+    if (!argSession || !argField) return [];
+    const row = (id: string, title: string, disabledReason?: string): ActionPaletteItem => ({
+      id,
+      title,
+      description: "",
+      category: argField.title,
+      enabled: disabledReason === undefined,
+      danger: "safe",
+      disabledReason,
+      kind: "command",
+      titleLower: title.toLowerCase(),
+      categoryLower: argField.title.toLowerCase(),
+      descriptionLower: "",
+      titleAcronym: "",
+      keywordsLower: [],
+    });
+    if (argField.kind === "string") {
+      const reason = validateStringField(argField, query);
+      return [
+        row("arg:value", query === "" ? "Leave empty" : `Use “${query}”`, reason ?? undefined),
+      ];
+    }
+    const options =
+      argField.kind === "boolean"
+        ? [
+            { value: true as PromptValue, label: "Yes" },
+            { value: false as PromptValue, label: "No" },
+          ]
+        : argField.options;
+    const needle = query.trim().toLowerCase();
+    const rows: ActionPaletteItem[] = [];
+    options.forEach((option, index) => {
+      if (needle && !option.label.toLowerCase().includes(needle)) return;
+      rows.push(row(`arg:${index}`, option.label));
+    });
+    return rows;
+  }, [argSession, argField, query]);
+
+  const argSelectedIndex = useMemo(() => {
+    if (argRows.length === 0) return -1;
+    const index = argSelectedId ? argRows.findIndex((r) => r.id === argSelectedId) : -1;
+    return index >= 0 ? index : 0;
+  }, [argRows, argSelectedId]);
+
+  const submitArgValue = useCallback(
+    (value: PromptValue) => {
+      if (!argSession || !argField) return;
+      const values = { ...argSession.values, [argField.name]: value };
+      const nextStep = argSession.step + 1;
+      if (nextStep < argSession.spec.fields.length) {
+        setArgSession({ ...argSession, step: nextStep, values });
+        setArgSelectedId(null);
+        setQuery("");
+        return;
+      }
+      // The registration may have changed while the user typed; collected
+      // answers belong to the schema they were asked against.
+      const current = actionService.getPluginPaletteArgs(argSession.item.id);
+      setArgSession(null);
+      setArgSelectedId(null);
+      if (current !== argSession.spec) {
+        setQuery(argSession.returnQuery);
+        return;
+      }
+      dispatchAction(argSession.item, values);
+    },
+    [argSession, argField, dispatchAction, setQuery]
+  );
+
+  const argBack = useCallback(() => {
+    if (!argSession) return;
+    setArgSelectedId(null);
+    if (argSession.step === 0) {
+      setArgSession(null);
+      setQuery(argSession.returnQuery);
+      return;
+    }
+    const previous = argSession.spec.fields[argSession.step - 1]!;
+    const prior = argSession.values[previous.name];
+    setArgSession({ ...argSession, step: argSession.step - 1 });
+    setQuery(previous.kind === "string" && typeof prior === "string" ? prior : "");
+  }, [argSession, setQuery]);
+
   const confirmSelection = useCallback(() => {
+    if (argSession && argField) {
+      const row = argRows[argSelectedIndex];
+      if (!row || !row.enabled) return;
+      if (argField.kind === "string") {
+        submitArgValue(query);
+      } else {
+        const options =
+          argField.kind === "boolean" ? [true, false] : argField.options.map((o) => o.value);
+        submitArgValue(options[Number(row.id.slice("arg:".length))]!);
+      }
+      return;
+    }
     // While the deferred filter is catching up, `results` reflects the previous
     // query — firing on Enter would dispatch an action that doesn't match the
     // text in the input. Wait for the next render; the user's repeat Enter
@@ -452,7 +621,18 @@ export function useActionPalette(): UseActionPaletteReturn {
     if (selectedIndex >= 0) {
       executeAction(results[selectedIndex]!);
     }
-  }, [isStale, results, selectedIndex, executeAction]);
+  }, [
+    argSession,
+    argField,
+    argRows,
+    argSelectedIndex,
+    submitArgValue,
+    query,
+    isStale,
+    results,
+    selectedIndex,
+    executeAction,
+  ]);
 
   const pinAction = useCallback((item: ActionPaletteItem): boolean => {
     if (item.danger === "confirm") {
@@ -496,21 +676,55 @@ export function useActionPalette(): UseActionPaletteReturn {
     });
   }, []);
 
+  const argPrompt = useMemo<ActionPaletteArgPrompt | null>(
+    () =>
+      argSession && argField
+        ? {
+            actionTitle: argSession.item.title,
+            fieldTitle: argField.title,
+            step: argSession.step + 1,
+            total: argSession.spec.fields.length,
+            kind: argField.kind,
+          }
+        : null,
+    [argSession, argField]
+  );
+
+  const moveArgSelection = useCallback(
+    (delta: number) => {
+      if (argRows.length === 0) return;
+      const next = (argSelectedIndex + delta + argRows.length) % argRows.length;
+      setArgSelectedId(argRows[next]!.id);
+    },
+    [argRows, argSelectedIndex]
+  );
+  const selectArgIndex = useCallback(
+    (index: number) => {
+      const row = argRows[index];
+      if (row) setArgSelectedId(row.id);
+    },
+    [argRows]
+  );
+  const selectArgPrevious = useCallback(() => moveArgSelection(-1), [moveArgSelection]);
+  const selectArgNext = useCallback(() => moveArgSelection(1), [moveArgSelection]);
+
   return {
+    argPrompt,
+    argBack,
     isOpen,
     query,
-    results,
-    totalResults,
-    selectedIndex,
-    isStale,
-    sections,
+    results: argSession ? argRows : results,
+    totalResults: argSession ? argRows.length : totalResults,
+    selectedIndex: argSession ? argSelectedIndex : selectedIndex,
+    isStale: argSession ? false : isStale,
+    sections: argSession ? EMPTY_SECTIONS : sections,
     open,
     close,
     toggle,
     setQuery,
-    setSelectedIndex,
-    selectPrevious,
-    selectNext,
+    setSelectedIndex: argSession ? selectArgIndex : setSelectedIndex,
+    selectPrevious: argSession ? selectArgPrevious : selectPrevious,
+    selectNext: argSession ? selectArgNext : selectNext,
     executeAction,
     confirmSelection,
     pinAction,

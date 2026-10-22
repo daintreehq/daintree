@@ -149,6 +149,49 @@ describe("ActionService", () => {
       expect(service.get("acme.plugin.maybe" as ActionId)!.requiresArgs).toBe(false);
     });
 
+    it("exposes palette prompts only for plugin commands with a small flat schema, per registration", () => {
+      const plugin = (id: string, rawInputSchema: Record<string, unknown>) =>
+        ({
+          id: id,
+          title: id,
+          description:
+            "A plugin command used to check which schemas the palette is willing to prompt for.",
+          category: "plugin",
+          kind: "command",
+          danger: "safe",
+          scope: "renderer",
+          pluginId: "acme.plugin",
+          rawInputSchema,
+          run: vi.fn().mockResolvedValue(undefined),
+        }) as unknown as ActionDefinition;
+      const flat = {
+        type: "object",
+        properties: { name: { type: "string" } },
+        required: ["name"],
+      };
+
+      service.register(plugin("acme.plugin.flat", flat));
+      service.register(
+        plugin("acme.plugin.nested", {
+          type: "object",
+          properties: { o: { type: "object", properties: {} } },
+          required: ["o"],
+        })
+      );
+
+      const first = service.getPluginPaletteArgs("acme.plugin.flat");
+      expect(first?.fields.map((f) => f.name)).toEqual(["name"]);
+      expect(service.getPluginPaletteArgs("acme.plugin.flat")).toBe(first);
+      expect(service.getPluginPaletteArgs("acme.plugin.nested")).toBeNull();
+      expect(service.getPluginPaletteArgs("actions.list")).toBeNull();
+
+      service.unregister("acme.plugin.flat");
+      service.register(plugin("acme.plugin.flat", flat));
+      const second = service.getPluginPaletteArgs("acme.plugin.flat");
+      expect(second).not.toBe(first);
+      expect(second?.fields.map((f) => f.name)).toEqual(["name"]);
+    });
+
     it("propagates rawOutputSchema onto ActionManifestEntry when no Zod resultSchema is set", () => {
       const rawOutput = {
         type: "object",

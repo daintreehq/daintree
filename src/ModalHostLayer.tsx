@@ -635,6 +635,8 @@ export function ModalHostLayer({
               pinAction={actionPalette.pinAction}
               unpinAction={actionPalette.unpinAction}
               hideAction={actionPalette.hideAction}
+              argPrompt={actionPalette.argPrompt}
+              argBack={actionPalette.argBack}
             />
           </Suspense>
         )}
