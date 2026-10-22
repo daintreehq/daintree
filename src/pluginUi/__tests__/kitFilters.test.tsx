@@ -269,6 +269,50 @@ describe("FilterBuilder", () => {
     ).toEqual(["z", "a"]);
   });
 
+  it("draws an unreadable value as no conditions, render after render", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const draw = () =>
+      createElement(kit.FilterBuilder, {
+        fields,
+        // @ts-expect-error the untyped value a JavaScript view can send
+        value: null,
+        onChange: () => {},
+        "aria-label": "Filters",
+      });
+    const { rerender } = render(draw());
+    rerender(draw());
+    expect(screen.queryAllByRole("group", { name: /^Condition/ })).toHaveLength(0);
+    expect(screen.getByRole("button", { name: "Add condition" })).toBeTruthy();
+    warn.mockRestore();
+  });
+
+  it("gives a row whose removal the plugin refused a new key, never a neighbour's", () => {
+    render(
+      createElement(kit.FilterBuilder, {
+        fields,
+        value: {
+          match: "all",
+          conditions: [
+            { field: "title", op: "eq", value: "a" },
+            { field: "title", op: "eq", value: "b" },
+            { field: "title", op: "eq", value: "c" },
+          ],
+        },
+        onChange: () => {},
+        "aria-label": "Filters",
+      })
+    );
+    const before = rows();
+    fireEvent.click(screen.getByRole("button", { name: "Remove condition 2" }));
+    const after = rows();
+    expect(after).toHaveLength(3);
+    expect(after[2]).toBe(before[2]);
+    expect(after[1]).not.toBe(before[2]);
+    expect(
+      after.map((row) => (within(row).getByRole("textbox") as HTMLInputElement).value)
+    ).toEqual(["a", "b", "c"]);
+  });
+
   it("disables every control, and changes nothing, when disabled", () => {
     const onChange = vi.fn<FilterSpy>();
     render(
@@ -411,11 +455,21 @@ async function openMenu() {
   return screen.findByRole("menu");
 }
 
-async function choose(name: string) {
-  const menu = await openMenu();
-  const item = [...menu.querySelectorAll<HTMLElement>('[role^="menuitem"]')].find(
+const menuItem = (menu: HTMLElement, name: string) =>
+  [...menu.querySelectorAll<HTMLElement>('[role^="menuitem"]')].find(
     (element) => element.textContent?.trim() === name
   );
+
+// A dialog's exit hands focus back to the trigger; a menu opened before then would lose it.
+const dialogsGone = () =>
+  vi.waitFor(() => {
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
+async function choose(name: string) {
+  const menu = await openMenu();
+  const item = menuItem(menu, name);
   if (!item) throw new Error(`no menu item "${name}"`);
   await act(async () => {
     fireEvent.click(item);
@@ -489,11 +543,15 @@ describe("SavedViews", () => {
     fireEvent.change(name, { target: { value: " mine " } });
     fireEvent.submit(name.closest("form")!);
     expect(within(dialog).getByText("A view with this name already exists")).toBeTruthy();
+    fireEvent.change(name, { target: { value: "x".repeat(81) } });
+    fireEvent.submit(name.closest("form")!);
+    expect(within(dialog).getByText("Use 80 characters or fewer")).toBeTruthy();
     fireEvent.change(name, { target: { value: "Mine, no title" } });
     await act(async () => {
       fireEvent.submit(name.closest("form")!);
     });
     expect(trigger().getAttribute("aria-label")).toBe("Saved views: Mine, no title");
+    await dialogsGone();
     const menu = await openMenu();
     const radios = within(menu).getAllByRole("menuitemradio");
     expect(radios.map((radio) => radio.textContent)).toEqual(["Open", "Mine", "Mine, no title"]);
@@ -531,6 +589,7 @@ describe("SavedViews", () => {
     expect(trigger().getAttribute("aria-label")).toBe("Saved views: Views");
     expect(onApplied).not.toHaveBeenCalled();
     expect(stateShown().filter).toEqual(mine);
+    await dialogsGone();
     const menu = await openMenu();
     expect(
       within(menu)
@@ -539,7 +598,7 @@ describe("SavedViews", () => {
     ).toEqual(["Open"]);
   });
 
-  it("restores remembered views, leaving out entries that cannot be read whole", () => {
+  it("restores remembered views, leaving out entries that cannot be read whole", async () => {
     const { wrapper } = hostWith({
       [`${VIEW_STATE_KEY_PREFIX}savedViews:issues`]: {
         views: [
@@ -552,6 +611,17 @@ describe("SavedViews", () => {
             name: "Legacy",
             filter: { match: "all", conditions: [{ field: "priority", op: "eq", value: "high" }] },
           },
+          {
+            // Copied without `not`, this would read as its opposite.
+            id: "negated",
+            name: "Negated",
+            filter: {
+              match: "all",
+              conditions: [{ field: "status", op: "eq", value: "open", not: true }],
+            },
+            sort: null,
+            hiddenColumns: [],
+          },
         ],
         active: "legacy",
       },
@@ -559,6 +629,45 @@ describe("SavedViews", () => {
     render(createElement(Screen, { initial: { ...openView }, defaultViews: [] }), { wrapper });
     // A field the schema dropped is the builder's to flag; the view stays.
     expect(trigger().getAttribute("aria-label")).toBe("Saved views: Legacy, modified");
+    const menu = await openMenu();
+    expect(
+      within(menu)
+        .getAllByRole("menuitemradio")
+        .map((radio) => radio.textContent)
+    ).toEqual(["Open", "Legacy"]);
+  });
+
+  it("offers neither Save changes nor Revert while nothing has changed", async () => {
+    const { wrapper } = hostWith();
+    render(createElement(Screen, { initial: { ...openView }, defaultActiveViewId: "open" }), {
+      wrapper,
+    });
+    const menu = await openMenu();
+    expect(menuItem(menu, "Save changes")).toBeUndefined();
+    expect(menuItem(menu, "Revert changes")).toBeUndefined();
+    expect(menuItem(menu, "Save as new view…")).toBeTruthy();
+  });
+
+  it("keeps the chosen view revertible when the choices on screen cannot be read", async () => {
+    const negated = { field: "status", op: "eq" as const, value: "open", not: true };
+    const conditions: PluginFilterCondition[] = [negated];
+    const { wrapper } = hostWith();
+    render(
+      createElement(Screen, {
+        initial: { filter: { match: "all", conditions }, sort: null, hiddenColumns: [] },
+        defaultActiveViewId: "mine",
+      }),
+      { wrapper }
+    );
+    expect(trigger().getAttribute("aria-label")).toBe("Saved views: Mine, modified");
+    const menu = await openMenu();
+    expect(menuItem(menu, "Save changes")?.hasAttribute("data-disabled")).toBe(true);
+    expect(menuItem(menu, "Save as new view…")?.hasAttribute("data-disabled")).toBe(true);
+    await act(async () => {
+      fireEvent.click(menuItem(menu, "Revert changes")!);
+    });
+    expect(stateShown().filter).toEqual(mine);
+    expect(trigger().getAttribute("aria-label")).toBe("Saved views: Mine");
   });
 
   it("starts from nothing when what was remembered is not views at all", () => {
@@ -570,8 +679,8 @@ describe("SavedViews", () => {
   });
 
   it("follows controlled views and reports every change", async () => {
-    const onViewsChange = vi.fn();
-    const onActiveViewChange = vi.fn();
+    const onViewsChange = vi.fn<(views: PluginSavedView[]) => void>();
+    const onActiveViewChange = vi.fn<(id: string | null) => void>();
     const onApply = vi.fn<(state: PluginSavedViewState) => void>();
     render(
       createElement(
@@ -598,6 +707,49 @@ describe("SavedViews", () => {
     // Still controlled: the plugin did not move it.
     expect(trigger().getAttribute("aria-label")).toBe("Saved views: Mine");
     expect(onApply.mock.lastCall?.[0]?.filter).not.toBe(openView.filter);
+    expect(onViewsChange).not.toHaveBeenCalled();
+
+    await choose("Save as new view…");
+    const dialog = await screen.findByRole("dialog", { name: "Save view" });
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "View name" }), {
+      target: { value: "Copy" },
+    });
+    await act(async () => {
+      fireEvent.click(within(dialog).getByRole("button", { name: "Save view" }));
+    });
+    const sent = onViewsChange.mock.lastCall?.[0];
+    expect(sent?.map((view) => view.name)).toEqual(["Open", "Mine", "Copy"]);
+    expect(sent?.[0]).toEqual(openView);
+    expect(sent?.[0]).not.toBe(openView);
+    expect(sent?.[2]?.filter).toEqual(mine);
+    expect(onActiveViewChange).toHaveBeenLastCalledWith(sent?.[2]?.id);
+  });
+
+  it("changes nothing from a dialog left open when the control is disabled", async () => {
+    const onViewsChange = vi.fn<(views: PluginSavedView[]) => void>();
+    const draw = (disabled: boolean) =>
+      createElement(
+        TooltipProvider,
+        null,
+        createElement(kit.SavedViews, {
+          current: { ...mineView },
+          views: [mineView],
+          activeViewId: "mine",
+          onViewsChange,
+          onApply: () => {},
+          disabled,
+        })
+      );
+    const { rerender } = render(draw(false));
+    await choose("Rename view…");
+    const dialog = await screen.findByRole("dialog", { name: "Rename view" });
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "View name" }), {
+      target: { value: "Renamed" },
+    });
+    rerender(draw(true));
+    await act(async () => {
+      fireEvent.click(within(dialog).getByRole("button", { name: "Rename view" }));
+    });
     expect(onViewsChange).not.toHaveBeenCalled();
   });
 });

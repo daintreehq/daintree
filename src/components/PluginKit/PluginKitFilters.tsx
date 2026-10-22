@@ -27,6 +27,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Field, FieldError, FieldLabel, InlineError } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import {
   Select,
   SelectContent,
@@ -127,20 +128,61 @@ function readRow(entry: unknown, fields: ReadonlyMap<string, FilterFieldModel>):
   return { fieldId, op, value, field: model, allowedOp, problem };
 }
 
+// One empty list for every unreadable value: a fresh one per render would
+// never match the last, and the row keys would reconcile forever.
+const NO_CONDITIONS: readonly PluginFilterCondition[] = [];
+
 function readRoot(value: unknown): {
   match: "all" | "any";
   conditions: readonly PluginFilterCondition[];
   readable: boolean;
 } {
   if (typeof value !== "object" || value === null) {
-    return { match: "all", conditions: [], readable: false };
+    return { match: "all", conditions: NO_CONDITIONS, readable: false };
   }
   const conditions = field(value, "conditions");
   return {
     match: field(value, "match") === "any" ? "any" : "all",
-    conditions: Array.isArray(conditions) ? conditions : [],
+    conditions: Array.isArray(conditions) ? conditions : NO_CONDITIONS,
     readable: Array.isArray(conditions),
   };
+}
+
+/**
+ * Keys for `next`, carried over from the list they were last given to: a
+ * condition still there by identity keeps its key (a repeat takes the next
+ * one), and the rest take the key at their position when nothing else has
+ * it. A plugin that hands back a copy keeps every key; one that refuses a
+ * removal gets the removed row back under a new key, not a neighbour's.
+ */
+function carryKeys(
+  previous: readonly unknown[],
+  previousKeys: readonly string[],
+  next: readonly unknown[]
+): string[] {
+  const byCondition = new Map<unknown, string[]>();
+  previous.forEach((condition, index) => {
+    const key = previousKeys[index];
+    if (key === undefined) return;
+    const queue = byCondition.get(condition);
+    if (queue) queue.push(key);
+    else byCondition.set(condition, [key]);
+  });
+  const claimed = new Set<string>();
+  const keys: (string | undefined)[] = next.map((condition) => {
+    const key = byCondition.get(condition)?.shift();
+    if (key !== undefined) claimed.add(key);
+    return key;
+  });
+  return keys.map((key, index) => {
+    if (key !== undefined) return key;
+    const positional = previousKeys[index];
+    if (positional !== undefined && !claimed.has(positional)) {
+      claimed.add(positional);
+      return positional;
+    }
+    return newRowKey();
+  });
 }
 
 const FOCUSABLE =
@@ -305,15 +347,15 @@ function KitFilterBuilder({
   const inert = disabled === true;
 
   // Keys stay with their rows across an edit, so a number or date field's
-  // draft never lands on a neighbour. An edit made here hands its keys over;
-  // a list from anywhere else keeps them by position.
+  // draft never lands on a neighbour. An edit made here hands its keys over
+  // with the list it sent.
   const [keyed, setKeyed] = useState(() => ({
     list: conditions,
     keys: conditions.map(() => newRowKey()),
   }));
   let keys = keyed.keys;
   if (keyed.list !== conditions) {
-    keys = conditions.map((_, index) => keyed.keys[index] ?? newRowKey());
+    keys = carryKeys(keyed.list, keyed.keys, conditions);
     setKeyed({ list: conditions, keys });
   }
 
@@ -543,13 +585,20 @@ function isScalar(value: unknown): value is PluginFilterValue {
   );
 }
 
+function hasOnlyKeys(value: object, keys: readonly string[]): boolean {
+  return Object.keys(value).every((key) => keys.includes(key));
+}
+
 /**
  * A condition's shape: a field and a comparison named, a scalar value or
- * none. Whether the schema still allows it is the builder's to say, so a
- * comparison this kit does not know is kept rather than lost on the next save.
+ * none, and no other key. Whether the schema still allows it is the
+ * builder's to say, so a comparison this kit does not know is kept; a key it
+ * does not know is not, since copying the condition without it would change
+ * what it means.
  */
 function isConditionShape(value: unknown): value is PluginFilterCondition {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  if (!hasOnlyKeys(value, ["field", "op", "value"])) return false;
   const given = field(value, "value");
   return (
     typeof field(value, "field") === "string" &&
@@ -564,7 +613,8 @@ function copyCondition(condition: PluginFilterCondition): PluginFilterCondition 
 }
 
 function readFilterShape(value: unknown): PluginFilter | null {
-  if (typeof value !== "object" || value === null) return null;
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  if (!hasOnlyKeys(value, ["match", "conditions"])) return null;
   const match = field(value, "match");
   const conditions = field(value, "conditions");
   if ((match !== "all" && match !== "any") || !Array.isArray(conditions)) return null;
@@ -760,7 +810,9 @@ function SavedViewsControl({
     : store.activeId;
   const active = views.find((view) => view.id === activeId) ?? null;
   const now = readSavedViewState(current);
-  const modified = active !== null && now !== null && !sameSavedViewState(active, now);
+  // Choices that cannot be read differ from the view by definition: saving
+  // them is refused, but putting the view back stays possible.
+  const modified = active !== null && (now === null || !sameSavedViewState(active, now));
   const inert = disabled === true;
   const apply = fn(onApply);
   const label = nonEmpty(ariaLabel) ?? "Saved views";
@@ -791,7 +843,7 @@ function SavedViewsControl({
     if (notify) runPluginAction("SavedViews onActiveViewChange", () => notify(id));
   };
   const applyView = (view: PluginSavedView) => {
-    if (apply) runPluginAction("SavedViews onApply", () => apply(copyState(view)));
+    if (apply && !inert) runPluginAction("SavedViews onApply", () => apply(copyState(view)));
   };
 
   const choose = (id: string) => {
@@ -818,6 +870,7 @@ function SavedViewsControl({
   };
   const closeNaming = () => setNaming((state) => ({ ...state, open: false }));
   const submitName = () => {
+    if (inert) return closeNaming();
     const name = draft.trim();
     const renaming = naming.mode === "rename";
     const problem = nameProblem(name, views, renaming ? naming.target : null);
@@ -839,7 +892,7 @@ function SavedViewsControl({
   const remove = () => {
     const id = removing.id;
     setRemoving((state) => ({ ...state, open: false }));
-    if (!views.some((view) => view.id === id)) return;
+    if (inert || !views.some((view) => view.id === id)) return;
     commitViews(views.filter((view) => view.id !== id));
     // What is on screen stays: removing a view never applies another.
     if (id === activeId) commitActive(null);
@@ -857,7 +910,9 @@ function SavedViewsControl({
             aria-label={`${label}: ${shownName}${modified ? ", modified" : ""}`}
             className="min-w-0 max-w-full"
           >
-            <span className="min-w-0 truncate">{shownName}</span>
+            <TruncatedTooltip content={shownName} focusable={false}>
+              <span className="min-w-0 truncate">{shownName}</span>
+            </TruncatedTooltip>
             {modified ? (
               <span data-saved-view-modified="" className="shrink-0 text-xs text-text-secondary">
                 Modified
@@ -872,7 +927,9 @@ function SavedViewsControl({
               <DropdownMenuRadioGroup value={activeId ?? ""} onValueChange={choose}>
                 {views.map((view) => (
                   <DropdownMenuRadioItem key={view.id} value={view.id}>
-                    <span className="min-w-0 truncate">{view.name}</span>
+                    <TruncatedTooltip content={view.name} focusable={false}>
+                      <span className="min-w-0 truncate">{view.name}</span>
+                    </TruncatedTooltip>
                   </DropdownMenuRadioItem>
                 ))}
               </DropdownMenuRadioGroup>
@@ -880,7 +937,9 @@ function SavedViewsControl({
             </>
           ) : null}
           {active && modified ? (
-            <DropdownMenuItem onSelect={saveChanges}>Save changes</DropdownMenuItem>
+            <DropdownMenuItem disabled={!now} onSelect={saveChanges}>
+              Save changes
+            </DropdownMenuItem>
           ) : null}
           <DropdownMenuItem disabled={!now} onSelect={() => openNaming("new")}>
             {active ? "Save as new view…" : "Save view…"}
@@ -935,6 +994,7 @@ function SavedViewsControl({
           primaryAction={{
             label: naming.mode === "rename" ? "Rename view" : "Save view",
             onClick: submitName,
+            disabled: inert,
           }}
         />
       </AppDialog>
@@ -946,6 +1006,7 @@ function SavedViewsControl({
         confirmLabel="Remove view"
         variant="destructive"
         restoreFocusTo={triggerRef}
+        confirmDisabled={inert}
         onConfirm={remove}
       />
     </div>

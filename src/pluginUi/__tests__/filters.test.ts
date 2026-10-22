@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import type { PluginFilter, PluginFilterField } from "@shared/types/plugin-sdk-react";
+import type {
+  PluginFilter,
+  PluginFilterCondition,
+  PluginFilterField,
+} from "@shared/types/plugin-sdk-react";
 import { matchesFilter, readFilter, readFilterFields } from "../filters";
 
 const fields: PluginFilterField[] = [
@@ -174,6 +178,19 @@ describe("matchesFilter", () => {
     expect(passes({ field: "due", op: "eq", value: "2026-03-10" }, { due: "soon" })).toBe(false);
   });
 
+  it("never rolls an impossible day into the next month", () => {
+    // Date.parse would read both as 2 March.
+    expect(passes({ field: "due", op: "eq", value: "2026-03-02" }, { due: "2026-02-30" })).toBe(
+      false
+    );
+    expect(
+      passes({ field: "due", op: "eq", value: "2026-03-02" }, { due: "2026-02-30T10:00:00" })
+    ).toBe(false);
+    expect(passes({ field: "due", op: "eq", value: "2026-03-10" }, { due: "March 10, 2026" })).toBe(
+      false
+    );
+  });
+
   it("compares booleans and options", () => {
     expect(passes({ field: "archived", op: "eq", value: false })).toBe(true);
     expect(passes({ field: "archived", op: "eq", value: true })).toBe(false);
@@ -200,6 +217,33 @@ describe("matchesFilter", () => {
       "any"
     );
     expect(matchesFilter(filter, record, fields)).toBe(false);
+  });
+
+  it("fails closed on a getter that throws", () => {
+    const hostile: PluginFilter = {
+      match: "all",
+      get conditions(): PluginFilterCondition[] {
+        throw new Error("boom");
+      },
+    };
+    expect(readFilter(hostile, fields)).toBeNull();
+    expect(matchesFilter(hostile, record, fields)).toBe(false);
+    const filter = where([{ field: "title", op: "not_empty" }]);
+    const trap = {
+      get title(): string {
+        throw new Error("boom");
+      },
+    };
+    expect(matchesFilter(filter, trap, fields)).toBe(false);
+  });
+
+  it("reads a schema the plugin changed in place", () => {
+    const schema: PluginFilterField[] = [{ id: "title", label: "Title", type: "text" }];
+    const filter = where([{ field: "title", op: "empty" }]);
+    expect(readFilter(filter, schema)).not.toBeNull();
+    schema.pop();
+    expect(readFilter(filter, schema)).toBeNull();
+    expect(matchesFilter(filter, { title: "" }, schema)).toBe(false);
   });
 
   it("leaves its inputs untouched", () => {

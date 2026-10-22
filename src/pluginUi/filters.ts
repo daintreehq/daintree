@@ -106,21 +106,42 @@ function readField(value: unknown): FilterFieldModel | null {
   };
 }
 
-// A schema is usually one constant, and `matchesFilter` runs once per record.
-const fieldCache = new WeakMap<object, ReadonlyMap<string, FilterFieldModel>>();
-
 /** The usable fields by id, in the plugin's order; a repeated id keeps its first. */
 export function readFilterFields(fields: unknown): ReadonlyMap<string, FilterFieldModel> {
-  if (!Array.isArray(fields)) return new Map();
-  const cached = fieldCache.get(fields);
-  if (cached) return cached;
   const out = new Map<string, FilterFieldModel>();
+  if (!Array.isArray(fields)) return out;
   for (const entry of fields) {
     const model = readField(entry);
     if (model && !out.has(model.id)) out.set(model.id, model);
   }
-  fieldCache.set(fields, out);
   return out;
+}
+
+type FieldLookup = (id: string) => FilterFieldModel | undefined;
+
+/**
+ * The fields a filter names, read on demand: `matchesFilter` runs once per
+ * record, so only the fields its conditions use are read, and read afresh
+ * each call rather than cached against an array a plugin may change in place.
+ */
+function fieldLookup(fields: unknown): FieldLookup {
+  const found = new Map<string, FilterFieldModel | undefined>();
+  return (id) => {
+    if (found.has(id)) return found.get(id);
+    let model: FilterFieldModel | undefined;
+    if (Array.isArray(fields)) {
+      for (const entry of fields) {
+        if (!isRecord(entry) || own(entry, "id") !== id) continue;
+        const read = readField(entry);
+        if (read) {
+          model = read;
+          break;
+        }
+      }
+    }
+    found.set(id, model);
+    return model;
+  };
 }
 
 /** Whether `value` is one this field can compare against. */
@@ -146,15 +167,12 @@ function hasOnlyKeys(value: object, keys: readonly string[]): boolean {
   return Object.keys(value).every((key) => keys.includes(key));
 }
 
-function readCondition(
-  value: unknown,
-  fields: ReadonlyMap<string, FilterFieldModel>
-): PluginFilterCondition | null {
+function readCondition(value: unknown, fieldOf: FieldLookup): PluginFilterCondition | null {
   // Unknown keys refuse the condition: one a later version adds (a negation,
   // a nested group) would change its meaning if it were skipped.
   if (!isRecord(value) || !hasOnlyKeys(value, ["field", "op", "value"])) return null;
   const id = own(value, "field");
-  const field = typeof id === "string" ? fields.get(id) : undefined;
+  const field = typeof id === "string" ? fieldOf(id) : undefined;
   if (!field) return null;
   const op = field.operators.find((candidate) => candidate === own(value, "op"));
   if (op === undefined) return null;
@@ -164,17 +182,14 @@ function readCondition(
   return { field: field.id, op, value: given };
 }
 
-function readWith(
-  value: unknown,
-  fields: ReadonlyMap<string, FilterFieldModel>
-): PluginFilter | null {
+function readWith(value: unknown, fieldOf: FieldLookup): PluginFilter | null {
   if (!isRecord(value) || !hasOnlyKeys(value, ["match", "conditions"])) return null;
   const match = own(value, "match");
   const list = own(value, "conditions");
   if ((match !== "all" && match !== "any") || !Array.isArray(list)) return null;
   const conditions: PluginFilterCondition[] = [];
   for (const entry of list) {
-    const condition = readCondition(entry, fields);
+    const condition = readCondition(entry, fieldOf);
     if (!condition) return null;
     conditions.push(condition);
   }
@@ -192,7 +207,12 @@ export function readFilter(
   value: unknown,
   fields: readonly PluginFilterField[]
 ): PluginFilter | null {
-  return readWith(value, readFilterFields(fields));
+  try {
+    return readWith(value, fieldLookup(fields));
+  } catch {
+    // A getter that throws makes the filter unreadable, never half-read.
+    return null;
+  }
 }
 
 function isEmptyValue(type: PluginFilterFieldType, value: unknown): boolean {
@@ -200,11 +220,17 @@ function isEmptyValue(type: PluginFilterFieldType, value: unknown): boolean {
   return value === "" && (type === "text" || type === "select" || type === "date");
 }
 
+const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
+const ISO_TIMESTAMP = /^(\d{4}-\d{2}-\d{2})T\d{2}:\d{2}/;
+
 /** The day a record's date falls on, from a `YYYY-MM-DD` day, an ISO timestamp, epoch ms or a `Date`. */
 function dayOf(value: unknown): string | null {
   if (typeof value === "string") {
-    const day = toIsoDate(value);
-    if (day !== null) return day;
+    if (ISO_DAY.test(value)) return toIsoDate(value);
+    // Only an ISO timestamp, and only on a day the calendar has: `Date.parse`
+    // would roll "2026-02-30" into March and guess at anything else.
+    const stamp = ISO_TIMESTAMP.exec(value);
+    if (!stamp || toIsoDate(stamp[1]) === null) return null;
     return dayOf(Date.parse(value));
   }
   if (value instanceof Date) return dayOf(value.getTime());
@@ -272,14 +298,19 @@ export function matchesFilter(
   values: Readonly<Record<string, unknown>>,
   fields: readonly PluginFilterField[]
 ): boolean {
-  const schema = readFilterFields(fields);
-  const read = readWith(filter, schema);
-  if (!read) return false;
-  if (read.conditions.length === 0) return true;
-  if (typeof values !== "object" || values === null) return false;
-  const test = (condition: PluginFilterCondition) => {
-    const field = schema.get(condition.field);
-    return field !== undefined && compare(field, condition, own(values, condition.field));
-  };
-  return read.match === "all" ? read.conditions.every(test) : read.conditions.some(test);
+  try {
+    const fieldOf = fieldLookup(fields);
+    const read = readWith(filter, fieldOf);
+    if (!read) return false;
+    if (read.conditions.length === 0) return true;
+    if (typeof values !== "object" || values === null) return false;
+    const test = (condition: PluginFilterCondition) => {
+      const field = fieldOf(condition.field);
+      return field !== undefined && compare(field, condition, own(values, condition.field));
+    };
+    return read.match === "all" ? read.conditions.every(test) : read.conditions.some(test);
+  } catch {
+    // A getter that throws, in the filter, the schema or the record, fails closed.
+    return false;
+  }
 }

@@ -1094,15 +1094,24 @@ const FIELDS = [
 ];
 const START = { filter: { match: "all", conditions: [] }, sort: null, hiddenColumns: [] };
 
+// DataTable reports a sort; putting the rows in that order is the view's job.
+const bySort =
+  ({ columnId, direction }) =>
+  (a, b) =>
+    (a[columnId] < b[columnId] ? -1 : a[columnId] > b[columnId] ? 1 : 0) *
+    (direction === "asc" ? 1 : -1);
+
 function Issues({ issues, me }) {
   // Kept with the view, so a reload shows what the chosen view is compared against.
   const [state, setState] = usePersistentViewState("issues:current", START);
   const filter = readFilter(state.filter, FIELDS);
-  const rows = filter
+  // A filter readFilter refuses shows nothing, never everything.
+  const matching = filter
     ? issues.filter((issue) =>
         matchesFilter(filter, { ...issue, owner: issue.owner === me ? "me" : issue.owner }, FIELDS)
       )
-    : issues;
+    : [];
+  const rows = state.sort ? [...matching].sort(bySort(state.sort)) : matching;
   return (
     <>
       <SavedViews viewStateKey="issues" current={state} onApply={setState} />
@@ -1113,6 +1122,7 @@ function Issues({ issues, me }) {
         onChange={(next) => setState((s) => ({ ...s, filter: next }))}
       />
       <DataTable
+        aria-label="Issues"
         rows={rows}
         columns={COLUMNS}
         rowKey="id"
@@ -1127,7 +1137,7 @@ function Issues({ issues, me }) {
 }
 ```
 
-While a condition is unfinished `readFilter` returns `null`, and the example shows every issue rather than none; a query-backed view would keep its last results instead.
+While a condition is unfinished, or a saved one no longer fits the schema, `readFilter` returns `null` and the example shows no issues: running it as no filter would show every issue under a view that promised a few. A query-backed view can keep its last results instead, but should still say the filter needs finishing.
 
 ### Icons
 
