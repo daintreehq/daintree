@@ -100,6 +100,20 @@ interface ProjectEntry {
 }
 
 /**
+ * What a `"session"` grant leaves behind when its project closes: the decision's
+ * own bookkeeping, and nothing about what was running. `known` is the part that
+ * matters — without it a reopen would stage every plugin the user had already
+ * said yes to, and seeding it from the reopen's scan instead would wave through
+ * a plugin that appeared while the project was closed.
+ */
+interface SessionGrant {
+  decidedAt: number;
+  known: Set<string>;
+  staged: Set<string>;
+  muted: Set<string>;
+}
+
+/**
  * Project-plugin lifecycle reaches `daintree.log`. A manifest the host refused
  * and a trust decision that would not persist are both invisible in a packaged
  * app otherwise — the plugin manager's red row was the only record (#12212).
@@ -143,6 +157,13 @@ const EVENT_PLUGIN_STAGED = "plugin:project-plugin-staged";
  */
 export class ProjectPluginController {
   private readonly entries = new Map<string, ProjectEntry>();
+  /**
+   * Session grants of projects that are closed right now. A grant moves here
+   * when its entry is deleted and back onto the next entry when the project
+   * reopens, so it never sits in both places. The controller lives as long as
+   * the app, which is exactly how long "for this session" means.
+   */
+  private readonly sessionGrants = new Map<string, SessionGrant>();
   /**
    * One serialization chain per project. Two rapid switches into the same
    * project would otherwise interleave their scans and their loads, and the
@@ -235,9 +256,12 @@ export class ProjectPluginController {
     // runs behind us in the chain, so a generation read at task start would be
     // the already-bumped one, compare equal to itself, and let this open load
     // plugins the user has just turned off (#12230).
+    // The generation as well as the entry: `requested?.generation` read inside
+    // the callback is exactly the task-start read described above.
     const requested = this.entries.get(projectId);
+    const requestedGeneration = requested?.generation;
     return this.serialize(projectId, () =>
-      this.doOpen(projectId, projectRoot, requested, requested?.generation)
+      this.doOpen(projectId, projectRoot, requested, requestedGeneration)
     );
   }
 
@@ -321,7 +345,9 @@ export class ProjectPluginController {
    * `plugin://` authorities invalidated, workers killed by the unload cascade.
    *
    * Trust is NOT forgotten here. A close is not a revoke, and re-prompting on
-   * every reopen would defeat the "once, at the folder" contract.
+   * every reopen would defeat the "once, at the folder" contract. A persisted
+   * decision is re-read from disk on reopen; a session grant has no record, so
+   * it is set aside in {@link sessionGrants} until then.
    */
   async onProjectClosed(projectId: string): Promise<void> {
     // Invalidate in-flight work synchronously, BEFORE queueing, so a scan or a
@@ -330,6 +356,17 @@ export class ProjectPluginController {
     if (entry) entry.generation++;
     const done = this.serialize(projectId, async () => {
       await this.unloadAll(projectId);
+      // Read at the end of the queue rather than at request time, so a stage, a
+      // mute or an activation that ran ahead of this close is what reopens.
+      const closing = this.entries.get(projectId);
+      if (closing?.decision === "session" && !this.disposed) {
+        this.sessionGrants.set(projectId, {
+          decidedAt: closing.decidedAt,
+          known: new Set(closing.known),
+          staged: new Set(closing.staged),
+          muted: new Set(closing.muted),
+        });
+      }
       this.entries.delete(projectId);
     });
     void done.then(() => {
@@ -345,8 +382,9 @@ export class ProjectPluginController {
    * Record the user's answer to the trust gate.
    *
    * `"session"` is held in memory and never written, which is what makes it a
-   * session grant rather than a slow yes. `"disabled"` IS written — a remembered
-   * no is the difference between a gate and a nag.
+   * session grant rather than a slow yes. It lasts until the app quits, through
+   * any number of closes. `"disabled"` IS written — a remembered no is the
+   * difference between a gate and a nag.
    */
   async setTrust(projectId: string, decision: ProjectPluginTrustDecision): Promise<void> {
     const pending = this.entries.get(projectId);
@@ -397,6 +435,13 @@ export class ProjectPluginController {
         // `revoke` is a no-op — it re-reads `this.entries`, which the close has
         // already emptied — but the consent purge and the write are not: both
         // run off the captured entry's own `known`/`discovered` sets.
+        //
+        // That close also set aside any session grant the entry held, and this
+        // is the one place a grant can be waiting when a new decision lands —
+        // a reopen consumes it, so every other branch below has an entry and no
+        // grant to drop. Left behind, it would outrank the "disabled" written
+        // here on the next open.
+        this.sessionGrants.delete(projectId);
         requested.decision = "disabled";
         await this.revoke(projectId, requested);
         const stored = this.persist(projectId, requested);
@@ -748,6 +793,11 @@ export class ProjectPluginController {
   getTrustState(projectId: string): ProjectPluginTrustState {
     const entry = this.entries.get(projectId);
     if (!entry) {
+      // `enabled` is permission to run, not "running": a closed project with a
+      // persisted enable reports true as well.
+      if (this.sessionGrants.has(projectId)) {
+        return { projectId, decision: "session", enabled: true, persisted: false };
+      }
       const record = this.deps.readTrust(projectId);
       return {
         projectId,
@@ -788,6 +838,7 @@ export class ProjectPluginController {
       entry.loaded.clear();
     }
     this.entries.clear();
+    this.sessionGrants.clear();
   }
 
   // ---------------------------------------------------------------------
@@ -796,16 +847,22 @@ export class ProjectPluginController {
     const existing = this.entries.get(projectId);
     if (existing) return existing;
 
-    const record = this.deps.readTrust(projectId);
+    // A session grant outranks whatever is on disk. The two do coexist — "Enable
+    // for this session" is offered over a remembered "Keep disabled", and writes
+    // nothing over it — and the answer given in this session is the newer one.
+    const grant = this.sessionGrants.get(projectId);
+    this.sessionGrants.delete(projectId);
+    const record = grant ? undefined : this.deps.readTrust(projectId);
     const entry: ProjectEntry = {
       projectRoot,
       generation: 0,
-      decision: record?.decision ?? null,
+      decision: grant ? "session" : (record?.decision ?? null),
       persisted: record !== undefined,
-      decidedAt: record?.decidedAt ?? 0,
-      known: new Set(record?.knownPluginIds ?? []),
-      staged: new Set(record?.stagedPluginIds ?? []),
-      muted: new Set(record?.mutedPluginIds ?? []),
+      decidedAt: grant?.decidedAt ?? record?.decidedAt ?? 0,
+      // A grant is consumed here, so its sets are handed over rather than copied.
+      known: grant?.known ?? new Set(record?.knownPluginIds ?? []),
+      staged: grant?.staged ?? new Set(record?.stagedPluginIds ?? []),
+      muted: grant?.muted ?? new Set(record?.mutedPluginIds ?? []),
       discovered: [],
       loggedRejections: new Map(),
       loaded: new Map(),
