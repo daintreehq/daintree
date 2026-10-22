@@ -150,6 +150,7 @@ describe("the Element Picker host boundary", () => {
     // import. Asserted apart, since the model alone would satisfy a joint check
     // once the compiler stopped being bundled.
     expect(reachable).toContain(`${RESOLVERS_DIR}svelte.ts`);
+    expect(reachable).toContain(`${RESOLVERS_DIR}angular.ts`);
     const behind = scanForbiddenModules(reachable);
     expect(behind.filter((m) => m.label === "Svelte compiler").length).toBeGreaterThan(0);
     expect(behind.filter((m) => m.label === "svelte-source-model").length).toBeGreaterThan(0);

@@ -10,4 +10,5 @@ import type { ResolverLoaders } from "./runtime.js";
 export const RESOLVER_LOADERS: ResolverLoaders = {
   svelte: () => import("./resolvers/svelte.js").then((module) => module.svelteResolver),
   react: () => import("./resolvers/react.js").then((module) => module.reactResolver),
+  angular: () => import("./resolvers/angular.js").then((module) => module.angularResolver),
 };
