@@ -7,7 +7,7 @@ import { useResolvedForgeProvider } from "@/hooks/useResolvedForgeProvider";
 import { ChevronsUpDown, CircleDot, UserPlus, X } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Avatar, avatarUrlAtSize } from "@/components/ui/Avatar";
-import { Tooltip } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { FIELD_SURFACE } from "./WorktreeFormLayout";
 
@@ -71,7 +71,12 @@ export function IssueLinkerView({
  * worktree card's "Attach issue…", so any provider that can list issues can be
  * linked from here without shipping a picker of its own.
  */
-function HostIssueSelector({ projectPath, selectedIssue, onSelectIssue, disabled }: IssueLinkerViewProps) {
+function HostIssueSelector({
+  projectPath,
+  selectedIssue,
+  onSelectIssue,
+  disabled,
+}: IssueLinkerViewProps) {
   const [open, setOpen] = useState(false);
   // Stays mounted after the first open so the dialog can play its exit.
   const [pickerMounted, setPickerMounted] = useState(false);
@@ -119,25 +124,28 @@ function HostIssueSelector({ projectPath, selectedIssue, onSelectIssue, disabled
           <ChevronsUpDown className="h-4 w-4 text-text-secondary shrink-0" aria-hidden="true" />
         </button>
         {selectedIssue && !disabled && (
-          <Tooltip content="Clear selection" side="left">
-            <button
-              type="button"
-              aria-label="Clear the linked issue"
-              onClick={() => {
-                onSelectIssue(null);
-                // This button unmounts with the selection it clears, so hand
-                // focus to the control that survives.
-                triggerRef.current?.focus();
-              }}
-              className={cn(
-                "flex h-full w-8 shrink-0 items-center justify-center border-l border-border-subtle",
-                "text-text-secondary transition-colors duration-150 ease-out",
-                "hover:bg-overlay-hover hover:text-text-primary",
-                "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2"
-              )}
-            >
-              <X className="h-3.5 w-3.5" aria-hidden="true" />
-            </button>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                aria-label="Clear the linked issue"
+                onClick={() => {
+                  onSelectIssue(null);
+                  // This button unmounts with the selection it clears, so hand
+                  // focus to the control that survives.
+                  triggerRef.current?.focus();
+                }}
+                className={cn(
+                  "flex h-full w-8 shrink-0 items-center justify-center border-l border-border-subtle",
+                  "text-text-secondary transition-colors duration-150 ease-out",
+                  "hover:bg-overlay-hover hover:text-text-primary",
+                  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2"
+                )}
+              >
+                <X className="h-3.5 w-3.5" aria-hidden="true" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="left">Clear selection</TooltipContent>
           </Tooltip>
         )}
       </div>

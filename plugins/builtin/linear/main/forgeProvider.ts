@@ -9,7 +9,10 @@ import type {
   ListOptions,
   Page,
   RepoRef,
+  RepoStatsCapability,
+  RepoStatsSnapshot,
 } from "../../../../shared/types/forge.js";
+import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 import {
   LinearApiError,
   getToken,
@@ -64,8 +67,16 @@ async function getViewer(): Promise<Viewer> {
   return data.viewer;
 }
 
+/** Counting pages through every open issue's id; past this many, the count reads as unknown. */
+const COUNT_PAGE_SIZE = 250;
+const COUNT_PAGE_LIMIT = 8;
+const STATS_CACHE_TTL_MS = 60_000;
+
+const statsCache = new Map<string, { version: number; at: number; issueCount: number | null }>();
+
 export function clearLinearCaches(): void {
   cachedViewer = null;
+  statsCache.clear();
 }
 
 /** Normalize a stored team key, or `null` when it can't be one. */
@@ -169,12 +180,78 @@ async function validateWithToken(token?: string): Promise<AuthValidation> {
     const viewer = data.viewer;
     return { valid: true, account: viewer.displayName || viewer.name || viewer.id };
   } catch (err) {
-    return {
-      valid: false,
-      error: err instanceof Error ? err.message : "Couldn't validate the Linear API key",
-    };
+    return { valid: false, error: formatErrorMessage(err, "Couldn't validate the Linear API key") };
   }
 }
+
+/**
+ * Linear's issue connection carries no total, so the open count is read by
+ * paging through the open set's ids — never the length of one page, which is
+ * the page size rather than a count. Teams too large to count within
+ * {@link COUNT_PAGE_LIMIT} pages report the count as unknown.
+ */
+async function countOpenIssues(repo: RepoRef): Promise<number | null> {
+  const filter = issueFilter(repo, { state: "open" });
+  let count = 0;
+  let after: string | null = null;
+  for (let page = 0; page < COUNT_PAGE_LIMIT; page++) {
+    const data: {
+      issues: {
+        nodes: Array<{ id: string }>;
+        pageInfo: { hasNextPage: boolean; endCursor: string | null };
+      };
+    } = await linearGraphQL(
+      `query ($filter: IssueFilter, $first: Int!, $after: String) {
+        issues(filter: $filter, first: $first, after: $after) {
+          nodes { id }
+          pageInfo { hasNextPage endCursor }
+        }
+      }`,
+      { filter, first: COUNT_PAGE_SIZE, after }
+    );
+    count += data.issues.nodes.length;
+    if (!data.issues.pageInfo.hasNextPage) return count;
+    after = data.issues.pageInfo.endCursor;
+  }
+  return null;
+}
+
+/**
+ * Without this the host would count the toolbar's issues by listing one issue
+ * per poll, which carries no total and so marks every stats poll unclean.
+ * Linear has no pull requests, so the PR count is always unknown here; the host
+ * takes only the issue side of an issues provider's snapshot.
+ */
+const repoStatsCapability: RepoStatsCapability = {
+  async getRepoStats(repo: RepoRef, opts?: { bypassCache?: boolean }): Promise<RepoStatsSnapshot> {
+    const key = `${repo.owner}/${teamKeyOf(repo)}`;
+    const version = getTokenVersion();
+    const now = Date.now();
+    const cached = statsCache.get(key);
+    if (
+      !opts?.bypassCache &&
+      cached &&
+      cached.version === version &&
+      now - cached.at < STATS_CACHE_TTL_MS
+    ) {
+      return {
+        counts: {
+          issueCount: cached.issueCount,
+          prCount: null,
+          lastUpdated: cached.at,
+          issueCountRefreshedAt: cached.at,
+        },
+        source: "memory-cache",
+      };
+    }
+    const issueCount = await countOpenIssues(repo);
+    if (getTokenVersion() === version) statsCache.set(key, { version, at: now, issueCount });
+    return {
+      counts: { issueCount, prCount: null, lastUpdated: now, issueCountRefreshedAt: now },
+      source: "network",
+    };
+  },
+};
 
 const identityCapability: IdentityCapability = {
   async getCurrentUser(): Promise<ForgeUser | null> {
@@ -316,4 +393,5 @@ export const linearForgeProvider: ForgeIssueProviderImpl = {
   removeIssueLabel: () => notSupported("Removing labels"),
 
   identity: identityCapability,
+  repoStats: repoStatsCapability,
 };

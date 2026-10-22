@@ -1422,6 +1422,7 @@ export const SETTINGS_REGISTRY = [
           "github",
           "gitlab",
           "gitea",
+          "linear",
           "API",
         ],
       },

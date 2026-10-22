@@ -1,8 +1,4 @@
-import type {
-  ForgeUser,
-  Issue,
-  NormalizedIssueState,
-} from "../../../../shared/types/forge.js";
+import type { ForgeUser, Issue, NormalizedIssueState } from "../../../../shared/types/forge.js";
 
 /** The issue fields every query in this plugin selects. */
 export const ISSUE_FIELDS = `
@@ -76,7 +72,8 @@ export function mapUser(node: LinearUserNode): ForgeUser {
 
 export function mapIssue(node: LinearIssueNode): Issue {
   const state = normalizeIssueState(node.state?.type);
-  const closedAt = state === "closed" ? (toEpoch(node.completedAt) ?? toEpoch(node.canceledAt)) : null;
+  const closedAt =
+    state === "closed" ? (toEpoch(node.completedAt) ?? toEpoch(node.canceledAt)) : null;
   return {
     number: node.number,
     title: node.title,

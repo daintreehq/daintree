@@ -95,7 +95,9 @@ describe("linearGraphQL", () => {
     fetchMock().mockResolvedValueOnce(
       gql(null, {
         status: 401,
-        errors: [{ message: "Authentication required", extensions: { code: "AUTHENTICATION_ERROR" } }],
+        errors: [
+          { message: "Authentication required", extensions: { code: "AUTHENTICATION_ERROR" } },
+        ],
       })
     );
     await expect(linearGraphQL("query { x }")).rejects.toMatchObject({ credentialRejected: true });
@@ -103,7 +105,10 @@ describe("linearGraphQL", () => {
 
   it("names a rate limit", async () => {
     fetchMock().mockResolvedValueOnce(
-      gql(null, { status: 400, errors: [{ message: "Rate limit", extensions: { code: "RATELIMITED" } }] })
+      gql(null, {
+        status: 400,
+        errors: [{ message: "Rate limit", extensions: { code: "RATELIMITED" } }],
+      })
     );
     await expect(linearGraphQL("query { x }")).rejects.toMatchObject({ kind: "ratelimited" });
   });
@@ -209,7 +214,10 @@ describe("listIssues", () => {
     await linearForgeProvider.listIssues(REPO, { state: "all", search: "eng-42" });
     const filter = body(0).variables.filter as Record<string, unknown>;
     expect(filter.state).toBeUndefined();
-    expect(filter.or).toEqual([{ title: { containsIgnoreCase: "eng-42" } }, { number: { eq: 42 } }]);
+    expect(filter.or).toEqual([
+      { title: { containsIgnoreCase: "eng-42" } },
+      { number: { eq: 42 } },
+    ]);
   });
 });
 
@@ -245,7 +253,9 @@ describe("issue lookups", () => {
 
 describe("URLs", () => {
   it("builds issue and team links in the workspace", () => {
-    expect(linearForgeProvider.buildIssueUrl(REPO, 42)).toBe("https://linear.app/acme/issue/ENG-42");
+    expect(linearForgeProvider.buildIssueUrl(REPO, 42)).toBe(
+      "https://linear.app/acme/issue/ENG-42"
+    );
     expect(linearForgeProvider.buildIssuesUrl(REPO)).toBe("https://linear.app/acme/team/ENG/all");
   });
 });
@@ -255,9 +265,7 @@ describe("assignment", () => {
     fetchMock()
       .mockResolvedValueOnce(gql({ viewer: VIEWER }))
       .mockResolvedValueOnce(gql({ issues: { nodes: [issueNode()] } }))
-      .mockResolvedValueOnce(
-        gql({ issueUpdate: { success: true, issue: { assignee: VIEWER } } })
-      );
+      .mockResolvedValueOnce(gql({ issueUpdate: { success: true, issue: { assignee: VIEWER } } }));
 
     const assignees = await linearForgeProvider.assignIssue(REPO, 42, "ada");
 
@@ -326,7 +334,9 @@ describe("credentials", () => {
 
   it("reports a rejected key as invalid instead of throwing", async () => {
     fetchMock().mockResolvedValueOnce(gql(null, { status: 401, errors: [{ message: "nope" }] }));
-    await expect(linearForgeProvider.validateCredentials()).resolves.toMatchObject({ valid: false });
+    await expect(linearForgeProvider.validateCredentials()).resolves.toMatchObject({
+      valid: false,
+    });
   });
 
   it("drops the cached viewer when the key changes", async () => {
@@ -344,5 +354,58 @@ describe("credentials", () => {
     linearForgeProvider.setCredentials!(null);
     await expect(linearForgeProvider.identity!.getCurrentUser()).resolves.toBeNull();
     expect(fetchMock()).not.toHaveBeenCalled();
+  });
+});
+
+describe("repoStats", () => {
+  function idPage(count: number, hasNextPage: boolean, endCursor: string | null = null) {
+    return gql({
+      issues: {
+        nodes: Array.from({ length: count }, (_, i) => ({ id: `id-${i}` })),
+        pageInfo: { hasNextPage, endCursor },
+      },
+    });
+  }
+
+  it("counts the open set across pages rather than reporting a page length", async () => {
+    fetchMock()
+      .mockResolvedValueOnce(idPage(250, true, "c1"))
+      .mockResolvedValueOnce(idPage(17, false));
+
+    const snapshot = await linearForgeProvider.repoStats!.getRepoStats(REPO);
+
+    expect(snapshot.counts.issueCount).toBe(267);
+    expect(snapshot.counts.prCount).toBeNull();
+    expect(snapshot.source).toBe("network");
+    expect(body(1).variables).toMatchObject({ after: "c1", first: 250 });
+    expect(body(0).variables.filter).toMatchObject({
+      state: { type: { nin: ["completed", "canceled", "duplicate"] } },
+    });
+  });
+
+  it("reports an unknown count for a team too large to page through", async () => {
+    fetchMock().mockImplementation(async () => idPage(250, true, "next"));
+    const snapshot = await linearForgeProvider.repoStats!.getRepoStats(REPO);
+    expect(snapshot.counts.issueCount).toBeNull();
+    expect(fetchMock()).toHaveBeenCalledTimes(8);
+  });
+
+  it("serves a recent count from memory until asked to bypass it", async () => {
+    fetchMock().mockImplementation(async () => idPage(3, false));
+    await linearForgeProvider.repoStats!.getRepoStats(REPO);
+    const cached = await linearForgeProvider.repoStats!.getRepoStats(REPO);
+    expect(cached).toMatchObject({ source: "memory-cache", counts: { issueCount: 3 } });
+    expect(fetchMock()).toHaveBeenCalledTimes(1);
+
+    await linearForgeProvider.repoStats!.getRepoStats(REPO, { bypassCache: true });
+    expect(fetchMock()).toHaveBeenCalledTimes(2);
+  });
+
+  it("counts again once the key changes", async () => {
+    fetchMock().mockImplementation(async () => idPage(3, false));
+    await linearForgeProvider.repoStats!.getRepoStats(REPO);
+    linearForgeProvider.setCredentials!({ kind: "bearer", value: "lin_api_other" });
+    await linearForgeProvider.repoStats!.getRepoStats(REPO);
+    expect(fetchMock()).toHaveBeenCalledTimes(2);
   });
 });

@@ -1,4 +1,3 @@
-import path from "node:path";
 import type { PluginHostApi } from "../../../../shared/types/plugin.js";
 import { clearLinearCaches, linearForgeProvider, setTeamKeyReader } from "./forgeProvider.js";
 import { setMemoryToken } from "./LinearClient.js";
@@ -10,14 +9,20 @@ const TEAM_KEY_SETTING = "teamKey";
  * Read the project-scoped `teamKey` for one project. `host.settings.get`
  * resolves project scope against whichever project is active, but the host
  * asks for a specific project's issues — a background project's list must not
- * come back filtered by the focused project's team. So this reads the same
- * file the settings form writes, `<projectRoot>/.daintree/plugin-settings/`,
- * for the project the host named.
+ * come back filtered by the focused project's team. So the project the host
+ * named is looked up by path and read through the same id-targeted settings
+ * path the Project settings form uses. Both services load lazily: this module
+ * is loaded by `PluginService` itself.
  */
 async function readTeamKey(projectPath: string): Promise<string | undefined> {
-  const { PluginSettingsStore } = await import("../../../../electron/services/PluginSettingsStore.js");
-  const filePath = path.join(projectPath, ".daintree", "plugin-settings", `${PLUGIN_ID}.json`);
-  const value = await new PluginSettingsStore(filePath).get<unknown>(TEAM_KEY_SETTING);
+  const [{ projectStore }, { pluginService }] = await Promise.all([
+    import("../../../../electron/services/ProjectStore.js"),
+    import("../../../../electron/services/PluginService.js"),
+  ]);
+  const project = await projectStore.getProjectByPath(projectPath);
+  if (!project) return undefined;
+  const { values } = await pluginService.getSettingValuesForUi(PLUGIN_ID, "project", project.id);
+  const value = values[TEAM_KEY_SETTING];
   return typeof value === "string" ? value : undefined;
 }
 

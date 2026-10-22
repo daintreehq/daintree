@@ -50,6 +50,8 @@ vi.mock("@/store/projectStore", () => ({
 
 vi.mock("@/components/ui/tooltip", () => ({
   Tooltip: ({ children }: { children: ReactNode }) => <>{children}</>,
+  TooltipTrigger: ({ children }: { children: ReactNode }) => <>{children}</>,
+  TooltipContent: () => null,
 }));
 
 import { IssueLinkerView } from "../IssueSelectorView";

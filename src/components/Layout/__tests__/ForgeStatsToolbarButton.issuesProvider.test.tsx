@@ -25,8 +25,8 @@ vi.mock("@/clients/forgeClient", () => ({
 }));
 
 const refreshStatsMock = vi.fn().mockResolvedValue(undefined);
-let mockIsTokenError = false;
-let mockRateLimitResetAt: number | null = null;
+const mockIsTokenError = false;
+const mockRateLimitResetAt: number | null = null;
 
 vi.mock("@/hooks/useRepositoryStats", () => ({
   useRepositoryStats: () => ({
@@ -126,7 +126,9 @@ function issuesButton(container: HTMLElement): HTMLButtonElement {
 }
 
 function prsButton(container: HTMLElement): HTMLButtonElement {
-  const btn = container.querySelector<HTMLButtonElement>('button[aria-label*="open pull requests"]');
+  const btn = container.querySelector<HTMLButtonElement>(
+    'button[aria-label*="open pull requests"]'
+  );
   if (!btn) throw new Error("PRs button not found");
   return btn;
 }

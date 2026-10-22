@@ -84,12 +84,11 @@ export async function linearGraphQL<T>(
     );
   }
 
-  let payload: { data?: T; errors?: GraphQLError[] } | null = null;
-  try {
-    payload = (await response.json()) as { data?: T; errors?: GraphQLError[] };
-  } catch {
-    payload = null;
-  }
+  // A body that isn't JSON (a proxy's error page) reads as no payload.
+  const payload = (await response.json().catch(() => null)) as {
+    data?: T;
+    errors?: GraphQLError[];
+  } | null;
 
   const errors = payload?.errors ?? [];
   if (response.status === 401 || errors.some((e) => errorKind(e) === "authentication_error")) {

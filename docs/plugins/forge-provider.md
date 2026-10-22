@@ -87,13 +87,13 @@ With no `credentialFields`, the page shows no form: it says the provider needs n
 
 `slots` names builtin views your renderer entry registers with `registerBuiltinView`, so the host can render the active provider's UI at fixed seams without knowing any plugin's view ids. All are optional:
 
-| Slot                       | Seam                                                          |
-| -------------------------- | ------------------------------------------------------------- |
-| `settingsTab`              | The provider's panel in Settings → Code forge                 |
-| `icon`                     | Brand icon beside the provider's name                         |
-| `statsDropdown`            | Content of the toolbar stats dropdown (issues, PRs, commits)  |
-| `bulkCreateWorktreeDialog` | The bulk create-worktrees-from-issues dialog                  |
-| `issueSelector`            | The issue field in the New Worktree dialog                    |
+| Slot                       | Seam                                                         |
+| -------------------------- | ------------------------------------------------------------ |
+| `settingsTab`              | The provider's panel in Settings → Code forge                |
+| `icon`                     | Brand icon beside the provider's name                        |
+| `statsDropdown`            | Content of the toolbar stats dropdown (issues, PRs, commits) |
+| `bulkCreateWorktreeDialog` | The bulk create-worktrees-from-issues dialog                 |
+| `issueSelector`            | The issue field in the New Worktree dialog                   |
 
 Refs are checked for shape only (a non-empty string) when the manifest is parsed; a ref that resolves to nothing renders a neutral fallback. `plugins/builtin/github/plugin.json` fills all five, and `plugins/builtin/github/renderer/index.tsx` registers them.
 
