@@ -363,7 +363,7 @@ describe("CoreGuest", () => {
     await h.install();
     h.guest.onGuestEvent(0, {
       type: "frameworksDetected",
-      detections: [{ framework: "angular", signals: [{ via: "attribute", name: "ng-version" }] }],
+      detections: [{ framework: "vue", signals: [{ via: "attribute", name: "data-v-app" }] }],
     });
     await h.settle();
     expect(h.extractorEvaluates()).toHaveLength(0);

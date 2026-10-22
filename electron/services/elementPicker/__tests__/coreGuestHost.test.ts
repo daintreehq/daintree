@@ -22,6 +22,7 @@ import type {
   Capability,
   SelectionObservation,
 } from "../../../../shared/elementPicker/observation.js";
+import { FakeAngular, type ComponentSpec } from "../guest/extractors/__tests__/angularFixture.js";
 import { buildCoreGuestAssets } from "./buildCoreGuestAssets.js";
 import { LIT_CARD_TAG, mountLitPage, mountSolidPage, mountStaticPage } from "./fixtures/pages.js";
 
@@ -721,6 +722,84 @@ describe("core Element Picker guest loading", () => {
       act(() => root.unmount());
       if (actFlag) Object.defineProperty(scope, "IS_REACT_ACT_ENVIRONMENT", actFlag);
       else delete scope.IS_REACT_ACT_ENVIRONMENT;
+    }
+  });
+
+  it("describes an Angular selection with the shipped extractor: host ancestry, declaring owner, file hints and hosts as element ids", async () => {
+    document.body.innerHTML = '<div id="root"></div>';
+    const angular = new FakeAngular();
+    const Label: ComponentSpec = {
+      selector: "app-label",
+      className: "_LabelComponent",
+      debugInfo: {
+        className: "LabelComponent",
+        filePath: "src/app/label.component.ts",
+        lineNumber: 4,
+      },
+      template: [{ tag: "button", attrs: { id: "cta" }, children: [{ text: "Go" }] }],
+    };
+    const Card: ComponentSpec = {
+      selector: "app-card",
+      className: "_CardComponent",
+      template: [{ tag: "section", children: [{ projection: true }] }],
+    };
+    angular.bootstrap(
+      {
+        selector: "app-root",
+        className: "_AppComponent",
+        debugInfo: { className: "AppComponent" },
+        template: [{ component: Card, children: [{ component: Label }] }],
+      },
+      document.getElementById("root")!
+    );
+    vi.stubGlobal("ng", angular.ng);
+    vi.stubGlobal("ngDevMode", {});
+    try {
+      const h = makeHarness({ catalog: shipped });
+      await h.bind();
+      await settle();
+      expect(h.kinds("extractor-installed")).toEqual([
+        expect.objectContaining({ framework: "angular" }),
+      ]);
+
+      document.getElementById("cta")!.click();
+      await settle();
+      const observation = (
+        h.pickerEvents("selectionChanged").at(-1)!.event as {
+          observations: Array<{
+            componentChain: {
+              nearestId: string;
+              components: Array<{
+                componentId: string;
+                name: { value: string } | null;
+                renderParentId?: string | null;
+                ownerId?: string | null;
+                rootElementIds: string[];
+                sourceCandidates: Array<{ kind: string; file: string }>;
+              }>;
+            };
+          }>;
+        }
+      ).observations[0]!;
+      const records = observation.componentChain.components;
+      expect(records.map((record) => record.name?.value)).toEqual([
+        "LabelComponent",
+        "_CardComponent",
+        "AppComponent",
+      ]);
+      const [label, card, app] = records;
+      expect(observation.componentChain.nearestId).toBe(label!.componentId);
+      expect(label!.renderParentId).toBe(card!.componentId);
+      expect(label!.ownerId).toBe(app!.componentId);
+      expect(label!.sourceCandidates).toEqual([
+        expect.objectContaining({ kind: "file-hint", file: "src/app/label.component.ts" }),
+      ]);
+      // Each root is a host, arrived as the picker's own id for it.
+      const ids = new Set(records.flatMap((record) => record.rootElementIds));
+      expect(ids.size).toBe(3);
+      expect(records.every((record) => record.rootElementIds.length === 1)).toBe(true);
+    } finally {
+      vi.unstubAllGlobals();
     }
   });
 });
