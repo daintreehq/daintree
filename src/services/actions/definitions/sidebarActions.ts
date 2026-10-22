@@ -4,6 +4,7 @@ import { getSidebarViewOptions } from "@/hooks/useSidebarViews";
 import { OPEN_SIDEBAR_VIEW_SWITCHER_EVENT } from "@/lib/sidebarViews";
 import { suppressSidebarResizes } from "@/lib/sidebarToggle";
 import { useFocusStore } from "@/store/focusStore";
+import { useMacroFocusStore } from "@/store/macroFocusStore";
 import { useSidebarViewStore, WORKTREES_SIDEBAR_VIEW_ID } from "@/store/sidebarViewStore";
 
 const NO_PLUGIN_VIEWS = "No plugin adds a sidebar view to this project";
@@ -28,7 +29,12 @@ type SidebarActionCallbacks = Pick<ActionCallbacks, "onToggleSidebar">;
 function revealSidebar(callbacks: SidebarActionCallbacks): boolean {
   if (!useFocusStore.getState().gestureSidebarHidden) return false;
   callbacks.onToggleSidebar();
-  if (useFocusStore.getState().gestureSidebarHidden) {
+  // Only where a sidebar exists to reveal — with no workspace there is none,
+  // and flipping the flag anyway is the dead toggle #11499 removed.
+  if (
+    useFocusStore.getState().gestureSidebarHidden &&
+    useMacroFocusStore.getState().refs.has("sidebar")
+  ) {
     suppressSidebarResizes();
     useFocusStore.getState().setSidebarGestureHidden(false);
   }

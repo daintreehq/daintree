@@ -15,6 +15,7 @@ vi.mock("@/lib/sidebarToggle", () => ({ suppressSidebarResizes: () => {} }));
 import { registerSidebarActions } from "../sidebarActions";
 import { OPEN_SIDEBAR_VIEW_SWITCHER_EVENT } from "@/lib/sidebarViews";
 import { useFocusStore } from "@/store/focusStore";
+import { useMacroFocusStore } from "@/store/macroFocusStore";
 import { useSidebarViewStore, WORKTREES_SIDEBAR_VIEW_ID } from "@/store/sidebarViewStore";
 
 const BUILT_IN: SidebarViewOption = { id: WORKTREES_SIDEBAR_VIEW_ID, priority: 0, view: null };
@@ -114,7 +115,12 @@ describe("ui.sidebar.switchView", () => {
 });
 
 describe("revealing a hidden sidebar", () => {
+  afterEach(() => {
+    useMacroFocusStore.getState().setRegionRef("sidebar", null);
+  });
+
   it("reveals it even when the toggle event is dropped behind a closing palette", async () => {
+    useMacroFocusStore.getState().setRegionRef("sidebar", document.createElement("aside"));
     useFocusStore.setState({ gestureSidebarHidden: true });
     const onToggleSidebar = vi.fn();
     const actions: ActionRegistry = new Map();
@@ -122,6 +128,14 @@ describe("revealing a hidden sidebar", () => {
     await actions.get("ui.sidebar.showWorktrees")?.().run(undefined, ctx);
     expect(onToggleSidebar).toHaveBeenCalledTimes(1);
     expect(useFocusStore.getState().gestureSidebarHidden).toBe(false);
+  });
+
+  it("flips nothing when there is no sidebar to reveal", async () => {
+    useFocusStore.setState({ gestureSidebarHidden: true });
+    const actions: ActionRegistry = new Map();
+    registerSidebarActions(actions, { onToggleSidebar: vi.fn() });
+    await actions.get("ui.sidebar.showWorktrees")?.().run(undefined, ctx);
+    expect(useFocusStore.getState().gestureSidebarHidden).toBe(true);
   });
 });
 

@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
+import type { ReactNode } from "react";
 import { describe, it, expect, vi } from "vitest";
 import { render } from "@testing-library/react";
+import { SidebarViewSwitcherContext } from "@/components/Sidebar/sidebarViewContext";
 import { DRAG_GHOST_OPACITY } from "@/lib/animationUtils";
 import { SortableWorktreeCard } from "../SortableWorktreeCard";
 
@@ -15,20 +17,24 @@ interface MockSortableState {
 }
 
 let mockState: MockSortableState = { isDragging: false };
+const sortableArgs = vi.hoisted(() => ({ last: null as { disabled?: unknown } | null }));
 
 vi.mock("@dnd-kit/sortable", () => ({
-  useSortable: () => ({
-    attributes: { role: "listitem" },
-    listeners: undefined,
-    setNodeRef: vi.fn(),
-    setActivatorNodeRef: vi.fn(),
-    transform: null,
-    transition: undefined,
-    isDragging: mockState.isDragging ?? false,
-    isOver: mockState.isOver ?? false,
-    active: mockState.active ?? null,
-    over: mockState.over ?? null,
-  }),
+  useSortable: (args: { disabled?: unknown }) => {
+    sortableArgs.last = args;
+    return {
+      attributes: { role: "listitem" },
+      listeners: undefined,
+      setNodeRef: vi.fn(),
+      setActivatorNodeRef: vi.fn(),
+      transform: null,
+      transition: undefined,
+      isDragging: mockState.isDragging ?? false,
+      isOver: mockState.isOver ?? false,
+      active: mockState.active ?? null,
+      over: mockState.over ?? null,
+    };
+  },
 }));
 
 vi.mock("@dnd-kit/utilities", () => ({
@@ -39,7 +45,44 @@ vi.mock("@dnd-kit/utilities", () => ({
   },
 }));
 
+// Stands in for SidebarViewHost: the worktree list is hidden while a plugin's
+// sidebar view shows.
+function underPluginView(children: ReactNode) {
+  return (
+    <SidebarViewSwitcherContext.Provider
+      value={{
+        options: [],
+        activeId: "acme.beads.board",
+        builtIn: { title: "Worktrees", icon: () => null },
+        choose: () => {},
+      }}
+    >
+      {children}
+    </SidebarViewSwitcherContext.Provider>
+  );
+}
+
 describe("SortableWorktreeCard", () => {
+  it("keeps its drag lock, and stops taking drops while hidden behind a plugin's sidebar view", () => {
+    mockState = { isDragging: false };
+    const card = (disabled: boolean) => (
+      <SortableWorktreeCard
+        worktreeId="wt1"
+        dragStartOrder={["wt1"]}
+        ariaRowIndex={1}
+        isActive={false}
+        disabled={disabled}
+      >
+        {() => <div />}
+      </SortableWorktreeCard>
+    );
+    const first = render(card(true));
+    expect(sortableArgs.last?.disabled).toEqual({ draggable: true, droppable: false });
+    first.unmount();
+    render(underPluginView(card(false)));
+    expect(sortableArgs.last?.disabled).toEqual({ draggable: false, droppable: true });
+  });
+
   it("isolates the card at idle so the flash overlay's blend mode anchors to the active background", () => {
     mockState = { isDragging: false };
     const { container } = render(

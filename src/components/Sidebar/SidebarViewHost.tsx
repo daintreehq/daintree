@@ -132,6 +132,34 @@ function isFocusStranded(): boolean {
   );
 }
 
+/** How often an owed hand-off looks again while focus still has somewhere to be. */
+const FOCUS_HAND_OFF_POLL_MS = 50;
+/**
+ * How long an owed hand-off waits for focus to strand: long enough for a
+ * retiring overlay's exit animation (the worktree list's popovers keep their
+ * portalled content for one), short enough that nothing later is mistaken
+ * for this change's doing.
+ */
+const FOCUS_HAND_OFF_DEADLINE_MS = 600;
+
+interface OwedFocusHandOff {
+  focusVisible?: boolean;
+  /** Looks left before giving up, counted rather than timed so it can't outrun its own polling. */
+  checksLeft: number;
+}
+
+const FOCUS_HAND_OFF_CHECKS = Math.ceil(FOCUS_HAND_OFF_DEADLINE_MS / FOCUS_HAND_OFF_POLL_MS);
+
+/** Focus the sidebar's switcher, or its region when there is none. */
+function focusSidebarSwitcher(focusVisible: boolean | undefined): void {
+  const target =
+    getMountedSidebarViewTrigger() ?? useMacroFocusStore.getState().refs.get("sidebar");
+  target?.focus({
+    preventScroll: true,
+    ...(focusVisible !== undefined ? { focusVisible } : {}),
+  });
+}
+
 /**
  * Keep keyboard focus in the sidebar when the view showing changes. Whatever
  * held focus in the view that left is retired — inert with the worktree list,
@@ -144,24 +172,64 @@ function isFocusStranded(): boolean {
  * layer from its portalled menus and popovers too, rather than from the DOM:
  * the menu a pick was made in is not inside the layer it belongs to. A change
  * nobody was in — the remembered view arriving with the first plugin snapshot —
- * moves nothing, and nothing moves focus that already has somewhere to be.
+ * moves nothing.
+ *
+ * An owed hand-off outlives the change that owed it. Focus strands only once
+ * whatever held it is truly gone, which can be a beat later — a popover the
+ * worktree list closed still animates out, then hands focus to a trigger now
+ * inert — and further changes can land meanwhile. So it waits, across them,
+ * until focus strands (then the switcher takes it), finds a home of its own,
+ * or the deadline passes; it never moves focus that has somewhere to be.
  */
 function useSidebarViewFocusHandOff(activeId: string) {
   const focusOwnerRef = useRef<SidebarLayer | null>(null);
   const shownRef = useRef(activeId);
+  const owedRef = useRef<OwedFocusHandOff | null>(null);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Capture on the document runs before React's own listeners, so any focus
-  // clears the owner and a layer's handler, if it is that layer's, sets it back.
+  // clears the owner and a layer's handler, if it is that layer's, sets it
+  // back. Focus that lands somewhere real also settles an owed hand-off.
   useEffect(() => {
-    const clearOwner = () => {
+    const onFocusIn = () => {
       focusOwnerRef.current = null;
+      if (owedRef.current !== null && !isFocusStranded()) owedRef.current = null;
     };
-    document.addEventListener("focusin", clearOwner, true);
-    return () => document.removeEventListener("focusin", clearOwner, true);
+    document.addEventListener("focusin", onFocusIn, true);
+    return () => {
+      document.removeEventListener("focusin", onFocusIn, true);
+      if (timerRef.current !== null) clearTimeout(timerRef.current);
+      timerRef.current = null;
+      owedRef.current = null;
+    };
   }, []);
 
   const markFocus = useCallback((layer: SidebarLayer) => {
     focusOwnerRef.current = layer;
+  }, []);
+
+  const settle = useCallback(() => {
+    // A task later, at the soonest: inert moves focus off the worktree list
+    // only at the next rendering update, and Radix's own close-time
+    // restoration aims at a trigger this change has retired.
+    const check = () => {
+      timerRef.current = null;
+      const owed = owedRef.current;
+      if (owed === null) return;
+      if (isFocusStranded()) {
+        owedRef.current = null;
+        focusSidebarSwitcher(owed.focusVisible);
+        return;
+      }
+      owed.checksLeft -= 1;
+      if (owed.checksLeft <= 0) {
+        owedRef.current = null;
+        return;
+      }
+      timerRef.current = setTimeout(check, FOCUS_HAND_OFF_POLL_MS);
+    };
+    if (timerRef.current !== null) clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(check, 0);
   }, []);
 
   useLayoutEffect(() => {
@@ -170,21 +238,14 @@ function useSidebarViewFocusHandOff(activeId: string) {
     shownRef.current = activeId;
     const leftLayer: SidebarLayer = left === WORKTREES_SIDEBAR_VIEW_ID ? "builtin" : "plugin";
     const requested = takeSidebarViewFocusHandOff();
-    if (requested === null && focusOwnerRef.current !== leftLayer) return;
-    // A task later, once the commit has settled: inert moves focus off the
-    // worktree list only at the next rendering update, and Radix's own
-    // close-time restoration aims at a trigger this change has retired.
-    const timer = setTimeout(() => {
-      if (!isFocusStranded()) return;
-      const target =
-        getMountedSidebarViewTrigger() ?? useMacroFocusStore.getState().refs.get("sidebar");
-      target?.focus({
-        preventScroll: true,
-        ...(requested?.focusVisible !== undefined ? { focusVisible: requested.focusVisible } : {}),
-      });
-    }, 0);
-    return () => clearTimeout(timer);
-  }, [activeId]);
+    const pending = owedRef.current;
+    if (requested === null && pending === null && focusOwnerRef.current !== leftLayer) return;
+    owedRef.current = {
+      focusVisible: requested?.focusVisible ?? pending?.focusVisible,
+      checksLeft: FOCUS_HAND_OFF_CHECKS,
+    };
+    settle();
+  }, [activeId, settle]);
 
   return { markFocus };
 }

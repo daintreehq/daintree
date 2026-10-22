@@ -100,8 +100,10 @@ export const SortableWorktreeCard = React.memo(function SortableWorktreeCard({
   } = useSortable({
     id: getWorktreeSortDragId(worktreeId),
     data: dragData,
-    // Hidden behind a plugin's sidebar view, it would still take drops there.
-    disabled: disabled || isHiddenInSidebar,
+    // The object form: a boolean disables dragging only and leaves the drop
+    // target live, and hidden behind a plugin's sidebar view the card would
+    // still take drops there.
+    disabled: { draggable: disabled === true, droppable: isHiddenInSidebar },
     animateLayoutChanges: () => false,
   });
 

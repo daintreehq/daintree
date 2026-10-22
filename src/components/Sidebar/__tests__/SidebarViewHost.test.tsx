@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { createPortal } from "react-dom";
 import type { PluginSidebarHostedViewDescriptor } from "@shared/types/plugin";
 import { resolveSidebarViewOptions, type SidebarViewOption } from "@/lib/sidebarViews";
 
@@ -70,19 +71,27 @@ function offer(views: PluginSidebarHostedViewDescriptor[]) {
   h.options = resolveSidebarViewOptions(views, {});
 }
 
-function BuiltIn() {
+function BuiltIn({ popover = false }: { popover?: boolean }) {
   const hidden = useBuiltInSidebarViewHidden();
   return (
     <div>
       <SidebarViewHeading className="truncate">Worktrees</SidebarViewHeading>
       <div role="grid" aria-label="Worktrees" tabIndex={0} data-hidden={String(hidden)} />
+      {/* A popover the list owns, portalled out of the layer like the filter popover. */}
+      {popover &&
+        createPortal(
+          <button type="button" data-testid="list-popover-field">
+            Filter
+          </button>,
+          document.body
+        )}
     </div>
   );
 }
 
-const ui = () => (
+const ui = ({ popover = false }: { popover?: boolean } = {}) => (
   <SidebarViewHost>
-    <BuiltIn />
+    <BuiltIn popover={popover} />
   </SidebarViewHost>
 );
 
@@ -296,6 +305,56 @@ describe("SidebarViewHost", () => {
     }
   });
 
+  it("keeps an owed hand-off across a second change made before it settled", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const docs: PluginSidebarHostedViewDescriptor = {
+        ...board(),
+        id: "plugin-view:acme.beads/docs",
+        viewId: "docs",
+        title: "Docs",
+      };
+      offer([board(), docs]);
+      useSidebarViewStore.setState({ chosenSidebarView: BOARD_ID });
+      render(ui());
+      act(() => screen.getByRole("button", { name: "Plugin control" }).focus());
+      act(() => useSidebarViewStore.getState().chooseSidebarView(WORKTREES_SIDEBAR_VIEW_ID));
+      act(() => useSidebarViewStore.getState().chooseSidebarView("acme.beads.docs"));
+      await act(async () => {
+        vi.runAllTimers();
+      });
+      const trigger = screen.getByTestId("sidebar-view-switcher");
+      expect(trigger.textContent).toBe("Docs");
+      expect(document.activeElement).toBe(trigger);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("waits for a popover the worktree list owns to finish retiring before taking focus", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      offer([board()]);
+      const { rerender } = render(ui({ popover: true }));
+      const field = screen.getByTestId("list-popover-field");
+      act(() => field.focus());
+      act(() => useSidebarViewStore.getState().chooseSidebarView(BOARD_ID));
+      // Still animating out: focus has somewhere to be, so nothing moves.
+      await act(async () => {
+        vi.advanceTimersByTime(100);
+      });
+      expect(document.activeElement).toBe(field);
+      // Gone at last, focus falls to the document — the switcher takes it.
+      rerender(ui());
+      await act(async () => {
+        vi.advanceTimersByTime(100);
+      });
+      expect(document.activeElement).toBe(screen.getByTestId("sidebar-view-switcher"));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps a right-click on the plugin view's header from reaching the sidebar's own menu", () => {
     offer([board()]);
     useSidebarViewStore.setState({ chosenSidebarView: BOARD_ID });
@@ -331,6 +390,10 @@ describe("SidebarViewHost", () => {
       act(() => {
         items[0]!.focus();
       });
+      // A press inside the menu first, then the keyboard pick: the pick still
+      // counts as the keyboard's, so the hand-off rings the new trigger.
+      fireEvent.pointerDown(screen.getByRole("menu"));
+      const focusSpy = vi.spyOn(HTMLElement.prototype, "focus");
       fireEvent.keyDown(items[0]!, { key: "Enter" });
       await act(async () => {
         vi.runAllTimers();
@@ -338,6 +401,9 @@ describe("SidebarViewHost", () => {
       const trigger = screen.getByTestId("sidebar-view-switcher");
       expect(trigger.closest("[data-testid='sidebar-plugin-view']")).not.toBeNull();
       expect(document.activeElement).toBe(trigger);
+      const handOff = focusSpy.mock.contexts.lastIndexOf(trigger);
+      expect(focusSpy.mock.calls[handOff]?.[0]).toMatchObject({ focusVisible: true });
+      focusSpy.mockRestore();
     } finally {
       vi.useRealTimers();
     }

@@ -54,8 +54,9 @@ export function SortableWorktreeTerminal({
   } = useSortable({
     id: getAccordionDragId(terminal.id),
     data: dragData,
-    // Hidden behind a plugin's sidebar view, it would still take drops there.
-    disabled: isHiddenInSidebar,
+    // Hidden behind a plugin's sidebar view it would still take drops there.
+    // The object form, because a boolean disables dragging only.
+    disabled: { draggable: false, droppable: isHiddenInSidebar },
     animateLayoutChanges: () => false,
   });
 
