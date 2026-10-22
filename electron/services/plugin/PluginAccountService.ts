@@ -208,6 +208,8 @@ export class PluginAccountService {
   /** Sign-ins in progress, from the click until the tokens are stored. */
   private readonly pending = new Map<string, symbol>();
   private readonly generations = new Map<string, number>();
+  /** Bumped when the plugin unloads: retires every read that began before it. */
+  private readonly epochs = new Map<string, number>();
   private readonly locks = new Map<string, Promise<void>>();
 
   constructor(deps: PluginAccountServiceDeps) {
@@ -254,6 +256,10 @@ export class PluginAccountService {
 
   private generation(pluginId: string): number {
     return this.generations.get(pluginId) ?? 0;
+  }
+
+  private epoch(pluginId: string): number {
+    return this.epochs.get(pluginId) ?? 0;
   }
 
   private bumpGeneration(pluginId: string): void {
@@ -381,7 +387,9 @@ export class PluginAccountService {
         code_verifier: verifier,
       });
       if (!current()) return { status: "cancelled" };
-      saved = await this.saveConnected(pluginId, account, credentials, current);
+      saved = await this.saveConnected(pluginId, account, credentials, current, {
+        cancellable: true,
+      });
     } catch (err) {
       if (!current()) return { status: "cancelled" };
       return { status: "failed", message: this.describeFailure(err, "Couldn't finish signing in") };
@@ -464,8 +472,11 @@ export class PluginAccountService {
     pluginId: string,
     account: PluginAccountContribution
   ): Promise<PluginAccountAccessToken | null> {
+    const epoch = this.epoch(pluginId);
     for (let attempt = 0; attempt < MAX_TOKEN_READ_ATTEMPTS; attempt++) {
-      const outcome = await this.readTokenOnce(pluginId, account, this.generation(pluginId));
+      // Unloaded since the read began: nothing may act on the account for it.
+      if (this.epoch(pluginId) !== epoch) return null;
+      const outcome = await this.readTokenOnce(pluginId, account, epoch);
       // A read that saw the account replaced or removed under it starts over.
       if (outcome !== "stale") return outcome;
     }
@@ -475,22 +486,32 @@ export class PluginAccountService {
   private async readTokenOnce(
     pluginId: string,
     account: PluginAccountContribution,
-    generation: number
+    epoch: number
   ): Promise<PluginAccountAccessToken | null | "stale"> {
-    if (!(await this.hasCurrentCredentials(pluginId, account))) {
+    // Read under the lock, so the credentials and the generation they belong
+    // to are one snapshot: no sign-in or disconnect can land between them.
+    const snapshot = await this.withLock(pluginId, async () => {
+      const generation = this.generation(pluginId);
+      const current = await this.hasCurrentCredentials(pluginId, account);
+      return {
+        generation,
+        current,
+        credentials: current ? await this.readCredentials(pluginId) : null,
+      };
+    });
+    const { generation, credentials } = snapshot;
+    if (!snapshot.current) {
       // Tokens issued for an earlier account declaration are not handed out.
       await this.clear(pluginId, generation);
       return null;
     }
-    const credentials = await this.readCredentials(pluginId);
-    if (this.generation(pluginId) !== generation) return "stale";
     if (!credentials) return null;
     const now = this.now();
     if (credentials.expiresAt === null || credentials.expiresAt - ACCOUNT_REFRESH_SKEW_MS > now) {
       return { accessToken: credentials.accessToken, expiresAt: credentials.expiresAt };
     }
     if (account.kind === "oauth2" && credentials.refreshToken !== null) {
-      return this.refresh(pluginId, account, credentials, generation);
+      return this.refresh(pluginId, account, credentials, generation, epoch);
     }
     // No way to renew it: hand it out until it actually expires, then the
     // account has to be connected again.
@@ -501,11 +522,17 @@ export class PluginAccountService {
     return null;
   }
 
+  /** Whether an operation that began under `generation` and `epoch` still speaks for the account. */
+  private stillCurrent(pluginId: string, generation: number, epoch: number): boolean {
+    return this.generation(pluginId) === generation && this.epoch(pluginId) === epoch;
+  }
+
   private async refresh(
     pluginId: string,
     account: OAuthAccount,
     credentials: StoredCredentials,
-    generation: number
+    generation: number,
+    epoch: number
   ): Promise<PluginAccountAccessToken | null | "stale"> {
     let next: StoredCredentials;
     try {
@@ -515,7 +542,7 @@ export class PluginAccountService {
         client_id: account.clientId,
       });
     } catch (err) {
-      if (this.generation(pluginId) !== generation) return "stale";
+      if (!this.stillCurrent(pluginId, generation, epoch)) return "stale";
       if (err instanceof AccountRequestError && err.oauthError === "invalid_grant") {
         // RFC 6749 §5.2: the grant is revoked or expired. Retrying can't help.
         await this.clear(pluginId, generation);
@@ -531,7 +558,7 @@ export class PluginAccountService {
       refreshToken: next.refreshToken ?? credentials.refreshToken,
     };
     const stored = await this.withLock(pluginId, async () => {
-      if (this.generation(pluginId) !== generation) return false;
+      if (!this.stillCurrent(pluginId, generation, epoch)) return false;
       await this.store(pluginId).set(CREDENTIALS_KEY, merged, { secret: true });
       return true;
     });
@@ -555,20 +582,23 @@ export class PluginAccountService {
 
   /**
    * Store a new sign-in, unless `stillWanted` says it was cancelled or
-   * superseded by the time it holds the lock. Resolves whether it was stored.
+   * superseded. A `cancellable` one is checked again once the keychain has
+   * written, since that can wait on a prompt: a sign-in cancelled meanwhile is
+   * taken back out.
+   * Resolves whether it was stored.
    */
   private async saveConnected(
     pluginId: string,
     account: PluginAccountContribution,
     credentials: StoredCredentials,
     stillWanted: () => boolean,
-    options: { rejectUnauthorized?: boolean } = {}
+    options: { rejectUnauthorized?: boolean; cancellable?: boolean } = {}
   ): Promise<boolean> {
     const identity = account.identity
       ? await this.fetchIdentity(account.identity, credentials.accessToken, options)
       : null;
-    const stored = await this.withLock(pluginId, async () => {
-      if (!stillWanted()) return false;
+    const outcome = await this.withLock(pluginId, async () => {
+      if (!stillWanted()) return "skipped" as const;
       // Whatever was running against the previous tokens no longer applies.
       this.bumpGeneration(pluginId);
       const store = this.store(pluginId);
@@ -576,26 +606,39 @@ export class PluginAccountService {
       await store.set(CONFIG_KEY, accountFingerprint(account));
       if (identity === null) await store.delete(IDENTITY_KEY);
       else await store.set(IDENTITY_KEY, identity);
-      return true;
+      // Only a browser sign-in has a Cancel; a Disconnect waits for this lock.
+      if (!options.cancellable || stillWanted()) return "stored" as const;
+      await this.removeStored(pluginId);
+      return "withdrawn" as const;
     });
-    if (stored) this.notify(pluginId, { connected: true, identity });
-    return stored;
+    if (outcome === "stored") this.notify(pluginId, { connected: true, identity });
+    // Whatever the account held before was overwritten, so it is disconnected now.
+    else if (outcome === "withdrawn") this.notify(pluginId, { connected: false, identity: null });
+    return outcome === "stored";
+  }
+
+  /** Delete the stored account under the lock already held. Resolves whether anything was there. */
+  private async removeStored(pluginId: string): Promise<boolean> {
+    const store = this.store(pluginId);
+    const removedCredentials = await store.delete(CREDENTIALS_KEY);
+    const removedIdentity = await store.delete(IDENTITY_KEY);
+    const removedConfig = await store.delete(CONFIG_KEY);
+    return removedCredentials || removedIdentity || removedConfig;
   }
 
   /**
-   * Remove the account's stored tokens. With `expected`, only while the
-   * account is still the one that generation saw: a late failure must not
-   * remove a newer sign-in.
+   * Remove the account's stored tokens. With `expected`, this is automatic
+   * cleanup: it runs only while the account is still the one that generation
+   * saw, so a late failure can't remove a newer sign-in, and it retires other
+   * operations only when there was something to remove. Without it (the
+   * user's Disconnect) everything in flight is retired.
    */
   private async clear(pluginId: string, expected?: number): Promise<void> {
     const removed = await this.withLock(pluginId, async () => {
       if (expected !== undefined && this.generation(pluginId) !== expected) return false;
-      this.bumpGeneration(pluginId);
-      const store = this.store(pluginId);
-      const removedCredentials = await store.delete(CREDENTIALS_KEY);
-      const removedIdentity = await store.delete(IDENTITY_KEY);
-      await store.delete(CONFIG_KEY);
-      return removedCredentials || removedIdentity;
+      const removedAny = await this.removeStored(pluginId);
+      if (removedAny || expected === undefined) this.bumpGeneration(pluginId);
+      return removedAny;
     });
     if (removed) this.notify(pluginId, { connected: false, identity: null });
   }
@@ -755,6 +798,8 @@ export class PluginAccountService {
     this.listeners.delete(pluginId);
     this.cancelConnect(pluginId);
     this.bumpGeneration(pluginId);
+    this.epochs.set(pluginId, this.epoch(pluginId) + 1);
+    this.tokenReads.delete(pluginId);
     try {
       this.stores.delete(this.accountFilePath(pluginId));
     } catch {

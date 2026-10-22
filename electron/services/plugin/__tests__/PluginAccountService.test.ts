@@ -397,6 +397,45 @@ describe("PluginAccountService ordering", () => {
     expect((await h.service.getState(PLUGIN_ID)).connected).toBe(false);
   });
 
+  it("takes back a sign-in cancelled while the keychain was writing it", async () => {
+    const base = fakeCipher();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const encrypting = vi.fn();
+    const cipher: SecretCipher = {
+      ...base,
+      encrypt: async (plaintext) => {
+        encrypting();
+        await gate;
+        return base.encrypt(plaintext);
+      },
+    };
+    const h = harness(OAUTH_ACCOUNT, { cipher });
+    h.fetch.mockResolvedValueOnce(jsonResponse({ access_token: "at-1" }));
+    h.fetch.mockResolvedValueOnce(jsonResponse({ user: { login: "octo" } }));
+    const connecting = h.service.connect(PLUGIN_ID);
+    await vi.waitFor(() => expect(encrypting).toHaveBeenCalled());
+
+    h.service.cancelConnect(PLUGIN_ID);
+    release();
+
+    expect(await connecting).toEqual({ status: "cancelled" });
+    expect((await h.service.getState(PLUGIN_ID)).connected).toBe(false);
+  });
+
+  it("doesn't reject a pasted token because a plugin asked for a token meanwhile", async () => {
+    const h = harness(TOKEN_ACCOUNT);
+    let answer!: (r: Response) => void;
+    h.fetch.mockReturnValueOnce(new Promise<Response>((resolve) => (answer = resolve)));
+    const saving = h.service.setToken(PLUGIN_ID, "pat-good");
+    await vi.waitFor(() => expect(h.fetch).toHaveBeenCalledTimes(1));
+
+    expect(await h.service.getAccessToken(PLUGIN_ID)).toBeNull();
+    answer(jsonResponse({ user: { login: "octo" } }));
+
+    expect(await saving).toMatchObject({ connected: true, identity: "octo" });
+  });
+
   it("doesn't let an old refresh's invalid_grant remove a newer sign-in", async () => {
     const h = harness(OAUTH_ACCOUNT);
     await connectOAuth(h);

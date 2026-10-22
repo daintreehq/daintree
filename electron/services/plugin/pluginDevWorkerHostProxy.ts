@@ -345,7 +345,13 @@ export class PluginDevWorkerHostProxy {
         const cb = this.subscriptions.get(msg.subscriptionId);
         if (cb) {
           try {
-            cb(msg.payload);
+            const result: unknown = cb(msg.payload);
+            // An async callback's rejection is the same failure as a throw.
+            if (result instanceof Promise) {
+              result.catch((err: unknown) =>
+                console.error(`[plugin-dev:${this.pluginId}] subscription callback threw:`, err)
+              );
+            }
           } catch (err) {
             console.error(`[plugin-dev:${this.pluginId}] subscription callback threw:`, err);
           }
