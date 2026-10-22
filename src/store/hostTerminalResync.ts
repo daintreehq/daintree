@@ -1,8 +1,10 @@
 import { isPtyPanel, type PanelKind } from "@shared/types/panel";
+import type { AgentState } from "@shared/types/agent";
 import type { BackendTerminalInfo, TerminalReconnectResult } from "@shared/types/ipc/terminal";
 import { getWorktreePathIndex, getWorktreeSelectionSnapshot } from "@/store/storeAccessors";
 import { cancelDriveLeaseHold, isHeldForDriveLease } from "@/store/driveLeaseWaitStore";
 import { logWarn } from "@/utils/logger";
+import { isSpawnUnconfirmed } from "@/store/slices/panelRegistry/unconfirmedSpawn";
 
 export interface HostTerminalResyncOptions {
   /**
@@ -49,32 +51,7 @@ export async function resyncHostTerminals(
   const store = usePanelStore.getState();
 
   for (const info of infos) {
-    const panel = store.panelsById[info.id];
-    if (!panel || !isPtyPanel(panel) || panel.isRestarting) continue;
-    if (!info.agentState || typeof info.lastStateChange !== "number") continue;
-    const newIncarnation =
-      info.agentIncarnation !== undefined &&
-      panel.agentIncarnation !== undefined &&
-      info.agentIncarnation !== panel.agentIncarnation;
-    if (!newIncarnation && panel.lastStateChange && info.lastStateChange <= panel.lastStateChange) {
-      continue;
-    }
-    terminalInstanceService.setAgentState(info.id, info.agentState);
-    // Same guard as the live state listener: a waiting report never overwrites
-    // the renderer's directing, which the controller only writes on entry and
-    // so could not restore on later keystrokes.
-    if (!newIncarnation && panel.agentState === "directing" && info.agentState === "waiting") {
-      continue;
-    }
-    store.updateAgentState(
-      info.id,
-      info.agentState,
-      undefined,
-      info.lastStateChange,
-      undefined,
-      undefined,
-      info.waitingReason
-    );
+    takeHostAgentState(info.id, info, store, terminalInstanceService);
   }
 
   adoptAwaitedTerminals(infos, usePanelStore, terminalInstanceService);
@@ -84,8 +61,10 @@ export async function resyncHostTerminals(
     if (!options.isCurrent()) return;
   }
 
+  // A spawn whose answer was lost is still this view's own launch, closed or
+  // not: its check attaches it or ends it once the host answers.
   await adoptNewTerminals(
-    infos.filter((info) => !store.panelsById[info.id]),
+    infos.filter((info) => !store.panelsById[info.id] && !isSpawnUnconfirmed(info.id)),
     store.addPanel,
     options
   );
@@ -99,6 +78,53 @@ export async function resyncHostTerminals(
   if (!options.isCurrent()) return;
 
   replayWatchedPanels(usePanelStore.getState());
+}
+
+type HostAgentStateRecord = Pick<
+  BackendTerminalInfo,
+  "agentState" | "lastStateChange" | "agentIncarnation" | "waitingReason"
+>;
+
+/**
+ * Take the host's agent state for a pane where it is newer than the pane's, or
+ * belongs to a new incarnation of the agent. `overGuess` takes it whatever its
+ * stamp: the pane holds only the state it guessed at launch, which the host's
+ * own clock never has to be ahead of.
+ */
+export function takeHostAgentState(
+  id: string,
+  record: HostAgentStateRecord,
+  store: Pick<PanelState, "panelsById" | "updateAgentState">,
+  instances: { setAgentState: (id: string, state: AgentState) => void },
+  overGuess = false
+): void {
+  const panel = store.panelsById[id];
+  if (!panel || !isPtyPanel(panel) || panel.isRestarting) return;
+  if (!record.agentState || typeof record.lastStateChange !== "number") return;
+  const newIncarnation =
+    overGuess ||
+    (record.agentIncarnation !== undefined &&
+      panel.agentIncarnation !== undefined &&
+      record.agentIncarnation !== panel.agentIncarnation);
+  if (!newIncarnation && panel.lastStateChange && record.lastStateChange <= panel.lastStateChange) {
+    return;
+  }
+  instances.setAgentState(id, record.agentState);
+  // Same guard as the live state listener: a waiting report never overwrites
+  // the renderer's directing, which the controller only writes on entry and
+  // so could not restore on later keystrokes.
+  if (!newIncarnation && panel.agentState === "directing" && record.agentState === "waiting") {
+    return;
+  }
+  store.updateAgentState(
+    id,
+    record.agentState,
+    undefined,
+    record.lastStateChange,
+    undefined,
+    undefined,
+    record.waitingReason
+  );
 }
 
 /**
@@ -166,6 +192,8 @@ async function observeVanishedTerminals(
       // host's project list, and say nothing about the driver.
       (!options.follow || followsHostLayout(panel)) &&
       !panel.isRestarting &&
+      // Still starting: nothing ran yet to be lost, and its own spawn settles it.
+      panel.spawnStatus !== "spawning" &&
       !panel.spawnError &&
       // Waiting for control, it has started nothing the host could have lost.
       !isHeldForDriveLease(id) &&
@@ -205,6 +233,7 @@ async function observeVanishedTerminals(
     if (!panel || !isPtyPanel(panel) || panel.isRestarting) continue;
     // Refused while the probe was out, it now waits for control instead.
     if (isHeldForDriveLease(id)) continue;
+    if (panel.spawnStatus === "spawning") continue;
     if ((panel.restartKey ?? 0) !== probed.get(id)) continue;
     // A real exit reported while the probe was out already says it all, code included.
     if (panel.exitCode !== undefined || panel.runtimeStatus === "exited") continue;

@@ -64,6 +64,7 @@ import {
   syncWorktreeAttributionToHost,
 } from "./helpers";
 import { cancelReconnectErrorDebounce } from "./browser";
+import { isSpawnUnconfirmed } from "./unconfirmedSpawn";
 import { logDebug, logWarn, logError } from "@/utils/logger";
 import {
   buildAgentLaunchFlagsForRuntimeSettings,
@@ -334,6 +335,15 @@ export const createRestartActions = (
     // once this view drives, and a restart alongside it would spawn twice.
     if (isHeldForDriveLease(id)) {
       logWarn("[TerminalStore] Cannot restart a pane waiting for control", { id });
+      return;
+    }
+
+    // Nor one whose launch lost its answer with the link (#13915): the host may
+    // be running it, and the check that settles the pane is still out.
+    if (isSpawnUnconfirmed(id)) {
+      logWarn("[TerminalStore] Cannot restart a pane still checking its launch with the host", {
+        id,
+      });
       return;
     }
 
@@ -781,14 +791,18 @@ export const createRestartActions = (
       // adds a needless round-trip to the restart hot path.
       const [capturedSessionId, restartEnv] = await Promise.all([
         (async (): Promise<string | null> => {
-          // A failed spawn (`wasFailed`) has no live process to quit — bare
-          // kill keeps PtyManager's missing-terminal cleanup (session-file
-          // delete), which the graceful channel skips on a registry miss.
           // A forced resume of a pane whose agent already quit has nothing live
           // to quit and capture; the shell it left behind just goes.
-          if (isAgent && !wasFailed && !(forcedResume && currentTerminal.agentState === "exited")) {
+          if (isAgent && !(forcedResume && currentTerminal.agentState === "exited")) {
             try {
-              return await terminalClient.gracefulKill(id, { forRestart: true });
+              const captured = await terminalClient.gracefulKill(id, { forRestart: true });
+              // A failed spawn usually left nothing on the host, but one whose
+              // answer was lost may be running there (#13915), so it is quit and
+              // captured like any agent. When nothing was captured, the bare kill
+              // below still runs PtyManager's missing-terminal cleanup
+              // (session-file delete), which the graceful channel skips on a
+              // registry miss.
+              if (captured !== null || !wasFailed) return captured;
             } catch (error) {
               logWarn("[TerminalStore] gracefulKill failed during restart; falling back to kill", {
                 id,

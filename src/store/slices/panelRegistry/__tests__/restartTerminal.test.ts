@@ -919,7 +919,8 @@ describe("restartTerminal captured live-session resume", () => {
     expect(mockKill).toHaveBeenCalledWith("test-1", { forRestart: true });
   });
 
-  it("uses bare kill for failed-spawn retries (no live process to quit)", async () => {
+  it("bare-kills a failed-spawn retry the host has nothing for, after asking to capture", async () => {
+    mockGracefulKill.mockResolvedValueOnce(null);
     const failedToStart = {
       ...agentPanelBase,
       agentState: "exited" as const,
@@ -932,11 +933,42 @@ describe("restartTerminal captured live-session resume", () => {
 
     await usePanelStore.getState().restartTerminal("test-1");
 
-    expect(mockGracefulKill).not.toHaveBeenCalled();
+    expect(mockGracefulKill).toHaveBeenCalledWith("test-1", { forRestart: true });
+    // Nothing captured: the bare kill still runs the missing-terminal cleanup.
     expect(mockKill).toHaveBeenCalledWith("test-1", { forRestart: true });
     // The retry still relaunches as the agent (#10816).
     const payload = mockSpawn.mock.calls[0]![0];
     expect(payload.launchAgentId).toBe("claude");
+  });
+
+  it("resumes the session a failed-spawn pane's live agent was on, not the latest (#13915)", async () => {
+    // A spawn whose answer was lost can be running on the host behind a failed
+    // pane; Codex assigns no id at launch, so only the capture names its session.
+    const { buildResumeCommand, buildResumeLatestCommand } = await import("@shared/types");
+    mockGracefulKill.mockResolvedValueOnce("live-session-7");
+    vi.mocked(buildResumeCommand).mockReturnValue("claude --resume live-session-7");
+    vi.mocked(buildResumeLatestCommand).mockReturnValue("claude --continue");
+    const failedButRunning = {
+      ...agentPanelBase,
+      agentState: "exited" as const,
+      spawnStatus: "failed" as const,
+    };
+    usePanelStore.setState({
+      panelsById: { [failedButRunning.id]: failedButRunning },
+      panelIds: [failedButRunning.id],
+    });
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    expect(mockGracefulKill).toHaveBeenCalledWith("test-1", { forRestart: true });
+    // Quit and captured: no second, bare kill of the restart.
+    expect(mockKill).not.toHaveBeenCalledWith("test-1", { forRestart: true });
+    expect(buildResumeCommand).toHaveBeenCalledWith("claude", "live-session-7", [
+      "--persisted-flag",
+    ]);
+    expect(buildResumeLatestCommand).not.toHaveBeenCalled();
+    const payload = mockSpawn.mock.calls[0]![0];
+    expect(payload.command).toBe("claude --resume live-session-7");
   });
 
   it("never degrades an exact candidate to resume-latest when its command is unbuildable", async () => {

@@ -7,8 +7,9 @@
  * dispatching six PTY spawns / xterm opens in the same layout burst.
  */
 
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import type { PtyPanelData } from "@shared/types/panel";
+import { ClientAppError } from "@/utils/clientAppError";
 
 vi.mock("@/clients", () => ({
   terminalClient: {
@@ -55,6 +56,8 @@ vi.mock("@/services/TerminalInstanceService", () => ({
     sendPtyResize: vi.fn(),
     invalidatePtyGrid: vi.fn(),
     waitForAttachSettled: vi.fn().mockResolvedValue(undefined),
+    fetchAndRestore: vi.fn().mockResolvedValue(true),
+    setAgentState: vi.fn(),
     // No attached renderer xterm in these tests — spawn falls back to the
     // default/estimated dims path.
     get: vi.fn(() => null),
@@ -81,10 +84,13 @@ beforeEach(() => {
 
 const { usePanelStore } = await import("../../../panelStore");
 const { agentLifecycleLedger } = await import("@/services/terminal/lifecycleLedger");
+const { useHostConnectionStore } = await import("@/store/hostConnectionStore");
+const { isSpawnUnconfirmed } = await import("../unconfirmedSpawn");
 const { terminalClient } = (await import("@/clients")) as unknown as {
   terminalClient: {
     spawn: ReturnType<typeof vi.fn>;
     kill: ReturnType<typeof vi.fn>;
+    trash: ReturnType<typeof vi.fn>;
   };
 };
 
@@ -700,6 +706,399 @@ describe("addPanel lifecycle ledger", () => {
         "inferred"
       ).accepted
     ).toBe(false);
+  });
+});
+
+describe("a spawn whose answer was lost with the link (#13915)", () => {
+  const lostReply = () =>
+    new ClientAppError(
+      "OUTCOME_UNKNOWN",
+      "Link closed before the peer answered: socket closed",
+      "The host may have completed this; check before retrying."
+    );
+  const hostReconnect = vi.fn();
+  const reconnect = () => hostReconnect;
+
+  beforeEach(async () => {
+    await usePanelStore.getState().reset();
+    agentLifecycleLedger.clear();
+    useHostConnectionStore.getState().reset();
+    terminalClient.spawn.mockReset().mockResolvedValue(undefined);
+    terminalClient.kill.mockReset().mockResolvedValue(undefined);
+    hostReconnect.mockReset().mockResolvedValue({ exists: false });
+    Object.assign(window.electron, { terminal: { reconnect: hostReconnect } });
+    const { terminalInstanceService } = await import("@/services/TerminalInstanceService");
+    vi.mocked(terminalInstanceService.waitForAttachSettled)
+      .mockReset()
+      .mockResolvedValue(undefined);
+    vi.mocked(terminalInstanceService.fetchAndRestore).mockClear();
+  });
+
+  // A test that stopped early leaves its check waiting on the link; settle it
+  // here, at once, before the next test's mocks are in place.
+  afterEach(async () => {
+    hostReconnect.mockResolvedValue({ exists: false, conflict: true });
+    useHostConnectionStore.getState().reset();
+    await drainMicrotasks(300);
+  });
+
+  it("attaches to the terminal the host started instead of failing the pane", async () => {
+    terminalClient.spawn.mockRejectedValueOnce(lostReply());
+    reconnect().mockResolvedValue({
+      exists: true,
+      id: "lost-1",
+      hasPty: true,
+      agentState: "waiting",
+      waitingReason: "prompt",
+      lastStateChange: Date.now() + 1_000,
+    });
+
+    await usePanelStore.getState().addPanel({
+      kind: "terminal",
+      launchAgentId: "claude",
+      command: "claude",
+      requestedId: "lost-1",
+      cwd: "/",
+      bypassLimits: true,
+    });
+    await drainMicrotasks(300);
+
+    const panel = getPtyPanel("lost-1");
+    expect(reconnect()).toHaveBeenCalledWith("lost-1");
+    expect(panel?.spawnStatus).toBe("ready");
+    expect(panel?.spawnError).toBeUndefined();
+    expect(panel?.runtimeStatus).not.toBe("error");
+    expect(panel?.agentState).toBe("waiting");
+    expect(agentLifecycleLedger.getEntry("lost-1")?.spawnOk).toBe(true);
+    // The screen the agent drew while the link was down comes from the host.
+    const { terminalInstanceService } = await import("@/services/TerminalInstanceService");
+    expect(terminalInstanceService.fetchAndRestore).toHaveBeenCalledWith("lost-1");
+  });
+
+  const launchAgent = (requestedId: string) =>
+    usePanelStore.getState().addPanel({
+      kind: "terminal",
+      launchAgentId: "claude",
+      command: "claude",
+      requestedId,
+      cwd: "/",
+      bypassLimits: true,
+    });
+
+  const linkDown = () =>
+    useHostConnectionStore.setState({
+      hostId: "studio-01",
+      hostName: "studio-01",
+      connection: { status: "connecting", attempt: 1 },
+    });
+  const linkUp = () =>
+    useHostConnectionStore.setState({
+      connection: {
+        status: "connected",
+        rttMs: null,
+        handshake: {
+          version: "1.0.0",
+          commit: "abc123",
+          protocolVersion: 1,
+          platform: "darwin",
+          arch: "arm64",
+        },
+      },
+    });
+
+  it("fails the pane, with Retry, once the host has gone on not listing the terminal", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      terminalClient.spawn.mockRejectedValueOnce(lostReply());
+      await launchAgent("lost-absent");
+      await drainMicrotasks(300);
+      // Still unknown while the host is asked again: not failed yet.
+      expect(getPtyPanel("lost-absent")?.spawnStatus).toBe("spawning");
+
+      await vi.advanceTimersByTimeAsync(30_000);
+      // Still being asked well past the first answers: a large recipe can keep
+      // a launch in the host's admission queue that long.
+      expect(getPtyPanel("lost-absent")?.spawnStatus).toBe("spawning");
+
+      await vi.advanceTimersByTimeAsync(40_000);
+      await drainMicrotasks(300);
+    } finally {
+      vi.useRealTimers();
+    }
+
+    const panel = getPtyPanel("lost-absent");
+    expect(reconnect().mock.calls.length).toBeGreaterThan(1);
+    expect(panel?.spawnStatus).toBe("failed");
+    expect(panel?.runtimeStatus).toBe("error");
+    expect(panel?.agentState).toBe("exited");
+    expect(panel?.spawnError?.message).toBe(
+      "The host didn't start this terminal before the connection dropped."
+    );
+  });
+
+  it("fails a spawn that never left the queue at once, without asking the host", async () => {
+    terminalClient.spawn.mockRejectedValueOnce(
+      new ClientAppError("HOST_DISCONNECTED", "Link is not open", "The host isn't connected.")
+    );
+
+    await launchAgent("queued-1");
+    await drainMicrotasks(300);
+
+    expect(reconnect()).not.toHaveBeenCalled();
+    expect(getPtyPanel("queued-1")?.spawnStatus).toBe("failed");
+  });
+
+  it("waits for the link before asking, and shows it is checking with the host", async () => {
+    linkDown();
+    terminalClient.spawn.mockRejectedValueOnce(lostReply());
+    reconnect().mockResolvedValue({ exists: true, id: "lost-wait", hasPty: true });
+
+    await launchAgent("lost-wait");
+    await drainMicrotasks(300);
+    expect(reconnect()).not.toHaveBeenCalled();
+    expect(getPtyPanel("lost-wait")?.spawnStatus).toBe("spawning");
+    expect(useHostConnectionStore.getState().checking).toBe(1);
+
+    linkUp();
+    await drainMicrotasks(300);
+
+    expect(getPtyPanel("lost-wait")?.spawnStatus).toBe("ready");
+    expect(useHostConnectionStore.getState().checking).toBe(0);
+  });
+
+  it("refuses a restart while the launch is being checked", async () => {
+    linkDown();
+    terminalClient.spawn.mockRejectedValueOnce(lostReply());
+    await launchAgent("lost-restart");
+    await drainMicrotasks(300);
+
+    await usePanelStore.getState().restartTerminal("lost-restart");
+
+    expect(terminalClient.kill).not.toHaveBeenCalled();
+    expect(terminalClient.spawn).toHaveBeenCalledTimes(1);
+    expect(getPtyPanel("lost-restart")?.isRestarting).toBeFalsy();
+    expect(getPtyPanel("lost-restart")?.spawnStatus).toBe("spawning");
+    // Refused up front, not stopped later by the restart's own validation.
+    expect(getPtyPanel("lost-restart")?.restartError).toBeUndefined();
+
+    reconnect().mockResolvedValue({ exists: true, id: "lost-restart", hasPty: true });
+    linkUp();
+    await drainMicrotasks(300);
+    expect(getPtyPanel("lost-restart")?.spawnStatus).toBe("ready");
+  });
+
+  it("ends the terminal on the host when its pane was closed while checking", async () => {
+    linkDown();
+    terminalClient.spawn.mockRejectedValueOnce(lostReply());
+    reconnect().mockResolvedValue({ exists: true, id: "lost-closed", hasPty: true });
+    await launchAgent("lost-closed");
+    await drainMicrotasks(300);
+
+    usePanelStore.getState().removePanel("lost-closed");
+    const killsAtClose = terminalClient.kill.mock.calls.length;
+
+    linkUp();
+    await drainMicrotasks(300);
+
+    expect(terminalClient.kill.mock.calls.length).toBeGreaterThan(killsAtClose);
+    expect(terminalClient.kill).toHaveBeenLastCalledWith("lost-closed");
+    expect(usePanelStore.getState().panelsById["lost-closed"]).toBeUndefined();
+  });
+
+  it("keeps the id from resync until the closed pane's terminal is really ended", async () => {
+    linkDown();
+    terminalClient.spawn.mockRejectedValueOnce(lostReply());
+    reconnect().mockResolvedValue({ exists: true, id: "lost-closed-2", hasPty: true });
+    await launchAgent("lost-closed-2");
+    await drainMicrotasks(300);
+    usePanelStore.getState().removePanel("lost-closed-2");
+    // The link drops again before the compensating kill gets through.
+    terminalClient.kill.mockImplementationOnce(async () => {
+      linkDown();
+      throw new ClientAppError("HOST_DISCONNECTED", "Link is not open");
+    });
+    const killsAtClose = terminalClient.kill.mock.calls.length;
+
+    linkUp();
+    await drainMicrotasks(300);
+    expect(terminalClient.kill.mock.calls.length).toBe(killsAtClose + 1);
+    expect(isSpawnUnconfirmed("lost-closed-2")).toBe(true);
+
+    linkUp();
+    await drainMicrotasks(300);
+    expect(terminalClient.kill.mock.calls.length).toBe(killsAtClose + 2);
+    expect(isSpawnUnconfirmed("lost-closed-2")).toBe(false);
+  });
+
+  it("leaves the assistant's own pane to fail at once: the host's probe never lists it", async () => {
+    terminalClient.spawn.mockRejectedValueOnce(lostReply());
+
+    await usePanelStore.getState().addPanel({
+      kind: "terminal",
+      launchAgentId: "claude",
+      command: "claude",
+      requestedId: "lost-assistant",
+      cwd: "/",
+      location: "overlay",
+      bypassLimits: true,
+    });
+    await drainMicrotasks(300);
+
+    expect(reconnect()).not.toHaveBeenCalled();
+    expect(getPtyPanel("lost-assistant")?.spawnStatus).toBe("failed");
+  });
+
+  it("shows an agent that started and already quit as exited, not failed to start", async () => {
+    terminalClient.spawn.mockRejectedValueOnce(lostReply());
+    // No agent state on the record: the PTY going is enough to say it quit.
+    reconnect().mockResolvedValue({ exists: true, id: "lost-exited", hasPty: false });
+
+    await launchAgent("lost-exited");
+    await drainMicrotasks(300);
+
+    const panel = getPtyPanel("lost-exited");
+    expect(panel?.spawnStatus).toBe("ready");
+    expect(panel?.spawnError).toBeUndefined();
+    expect(panel?.runtimeStatus).toBe("exited");
+    expect(panel?.agentState).toBe("exited");
+  });
+
+  it("takes the host's agent state over the launch guess, whatever the host's clock says", async () => {
+    terminalClient.spawn.mockRejectedValueOnce(lostReply());
+    reconnect().mockResolvedValue({
+      exists: true,
+      id: "lost-skew",
+      hasPty: true,
+      agentState: "waiting",
+      waitingReason: "prompt",
+      // A host clock behind this machine's.
+      lastStateChange: Date.now() - 60_000,
+    });
+
+    await launchAgent("lost-skew");
+    await drainMicrotasks(300);
+
+    expect(getPtyPanel("lost-skew")?.agentState).toBe("waiting");
+  });
+
+  it("clears a launch error reported while it was asked, once the host has the terminal", async () => {
+    linkDown();
+    terminalClient.spawn.mockRejectedValueOnce(lostReply());
+    reconnect().mockResolvedValue({ exists: true, id: "lost-timeout", hasPty: true });
+    await launchAgent("lost-timeout");
+    await drainMicrotasks(300);
+    usePanelStore.getState().setSpawnError("lost-timeout", {
+      code: "SPAWN_TIMEOUT",
+      message: "The terminal backend hasn't confirmed this launch after 30 seconds.",
+    });
+
+    linkUp();
+    await drainMicrotasks(300);
+
+    const panel = getPtyPanel("lost-timeout");
+    expect(panel?.spawnStatus).toBe("ready");
+    expect(panel?.spawnError).toBeUndefined();
+    expect(panel?.runtimeStatus).not.toBe("error");
+  });
+
+  it("keeps the reason the host gave when it never started the terminal", async () => {
+    linkDown();
+    terminalClient.spawn.mockRejectedValueOnce(lostReply());
+    reconnect().mockResolvedValue({ exists: false, conflict: true });
+    await launchAgent("lost-refused");
+    await drainMicrotasks(300);
+    usePanelStore.getState().setSpawnError("lost-refused", {
+      code: "ENOENT",
+      message: "No such file or directory: /bin/nosh",
+    });
+
+    linkUp();
+    await drainMicrotasks(300);
+
+    const panel = getPtyPanel("lost-refused");
+    expect(panel?.spawnStatus).toBe("failed");
+    expect(panel?.spawnError?.code).toBe("ENOENT");
+    expect(panel?.spawnError?.message).toBe("No such file or directory: /bin/nosh");
+  });
+
+  it("fails with the lost answer when the host can't be asked at all", async () => {
+    terminalClient.spawn.mockRejectedValueOnce(lostReply());
+    reconnect().mockRejectedValue(new Error("Failed to reconnect to terminal: shard down"));
+
+    await launchAgent("lost-unaskable");
+    await drainMicrotasks(300);
+
+    const panel = getPtyPanel("lost-unaskable");
+    expect(panel?.spawnStatus).toBe("failed");
+    expect(panel?.spawnError?.message).toBe(
+      "The host may have completed this; check before retrying."
+    );
+    expect(useHostConnectionStore.getState().checking).toBe(0);
+  });
+
+  it("trashes the terminal on the host when its pane was trashed while checking", async () => {
+    linkDown();
+    terminalClient.spawn.mockRejectedValueOnce(lostReply());
+    reconnect().mockResolvedValue({ exists: true, id: "lost-trashed", hasPty: true });
+    await launchAgent("lost-trashed");
+    await drainMicrotasks(300);
+    usePanelStore.getState().trashPanel("lost-trashed");
+    const trashesAtClose = terminalClient.trash.mock.calls.length;
+
+    linkUp();
+    await drainMicrotasks(300);
+
+    expect(getPtyPanel("lost-trashed")?.location).toBe("trash");
+    expect(getPtyPanel("lost-trashed")?.spawnStatus).toBe("ready");
+    expect(terminalClient.trash.mock.calls.length).toBeGreaterThan(trashesAtClose);
+    expect(terminalClient.trash).toHaveBeenLastCalledWith("lost-trashed");
+  });
+
+  it("settles each member of a recipe on its own, without holding the queue for the lost one", async () => {
+    linkDown();
+    terminalClient.spawn.mockImplementation(async ({ id }: { id: string }) => {
+      if (id === "batch-lost") throw lostReply();
+      if (id === "batch-queued") {
+        throw new ClientAppError(
+          "HOST_DISCONNECTED",
+          "Link is not open",
+          "The host isn't connected."
+        );
+      }
+      return id;
+    });
+    reconnect().mockResolvedValue({ exists: true, id: "batch-lost", hasPty: true });
+
+    const ids = ["batch-lost", "batch-queued", "batch-a", "batch-b", "batch-c"];
+    await Promise.all(
+      ids.map((requestedId) =>
+        usePanelStore.getState().addPanel({
+          kind: "terminal",
+          launchAgentId: "claude",
+          command: "claude",
+          requestedId,
+          cwd: "/",
+          bypassLimits: true,
+          spawnBatchId: "recipe-1",
+          spawnBatchSize: ids.length,
+        })
+      )
+    );
+    await drainMicrotasks(300);
+
+    // Every member reached the host while the link was still down.
+    expect(terminalClient.spawn).toHaveBeenCalledTimes(ids.length);
+    expect(getPtyPanel("batch-lost")?.spawnStatus).toBe("spawning");
+    expect(getPtyPanel("batch-queued")?.spawnStatus).toBe("failed");
+    expect(getPtyPanel("batch-a")?.spawnStatus).toBe("ready");
+    expect(getPtyPanel("batch-c")?.spawnStatus).toBe("ready");
+
+    linkUp();
+    await drainMicrotasks(300);
+
+    expect(reconnect().mock.calls).toEqual([["batch-lost"]]);
+    expect(getPtyPanel("batch-lost")?.spawnStatus).toBe("ready");
+    expect(getPtyPanel("batch-queued")?.spawnStatus).toBe("failed");
   });
 });
 
