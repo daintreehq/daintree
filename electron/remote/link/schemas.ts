@@ -176,6 +176,13 @@ const TerminalResetSchema = z.object({
       data: z.string(),
       cols: z.number().int().min(1).max(MAX_TERMINAL_GRID_DIMENSION),
       rows: z.number().int().min(1).max(MAX_TERMINAL_GRID_DIMENSION),
+      // Absent from a host that does not forward stream offsets.
+      continuation: z
+        .object({
+          pendingEscapeTail: z.string().nullable(),
+          streamOffset: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional(),
+        })
+        .optional(),
     })
     .nullable(),
   seq: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),

@@ -535,7 +535,8 @@ export class TerminalRestoreController {
   applyReset(
     id: string,
     serializedState: string | null,
-    captureGeometry?: TerminalGeometry
+    captureGeometry?: TerminalGeometry,
+    continuation?: SnapshotContinuation
   ): Promise<boolean> {
     // A reset starts the host's stream over, so a fence from before it would
     // swallow the output that follows. A snapshot carrying its own offset sets
@@ -543,9 +544,10 @@ export class TerminalRestoreController {
     const managed = this.deps.getInstance(id);
     if (managed) managed.streamFence = undefined;
     if (serializedState) {
-      return this.restoreFetchedState(id, serializedState, captureGeometry);
+      return this.restoreFetchedState(id, serializedState, captureGeometry, continuation);
     }
-    return Promise.resolve(this.restoreFromSerialized(id, "\x1bc", captureGeometry));
+    // A blank screen can still be mid-sequence, and the tail lands after the clear.
+    return Promise.resolve(this.restoreFromSerialized(id, "\x1bc", captureGeometry, continuation));
   }
 
   async fetchAndRestore(id: string): Promise<boolean> {

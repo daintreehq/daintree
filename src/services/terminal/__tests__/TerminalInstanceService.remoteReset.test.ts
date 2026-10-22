@@ -156,7 +156,8 @@ describe("TerminalInstanceService — remote terminal reset", () => {
 
     expect(dropQueue).toHaveBeenCalledWith("t1");
     expect(managed.deferredOutput).toEqual([{ data: "after", chunkCount: 2, ackGeneration: 1 }]);
-    expect(restore).toHaveBeenCalledWith("t1", "SNAP", { cols: 132, rows: 43 });
+    // No continuation: the host sent none, so the restore writes no tail and arms no fence.
+    expect(restore).toHaveBeenCalledWith("t1", "SNAP", { cols: 132, rows: 43 }, undefined);
   });
 
   it("clears the terminal when the host sends no snapshot", async () => {
@@ -168,8 +169,19 @@ describe("TerminalInstanceService — remote terminal reset", () => {
 
     capturedResetCb?.("t1", null);
 
-    expect(applyReset).toHaveBeenCalledWith("t1", null, undefined);
+    expect(applyReset).toHaveBeenCalledWith("t1", null, undefined, undefined);
     expect(restore).not.toHaveBeenCalled();
+  });
+
+  it("hands the snapshot's continuation to the restore", async () => {
+    await service.prewarmTerminal("warm", "terminal", {});
+    service.instances.set("t1", makeManaged());
+    const applyReset = vi.spyOn(service.restoreController, "applyReset").mockResolvedValue(true);
+    const continuation = { pendingEscapeTail: "\x1b[3", streamOffset: 42 };
+
+    capturedResetCb?.("t1", { data: "SNAP", cols: 132, rows: 43, continuation });
+
+    expect(applyReset).toHaveBeenCalledWith("t1", "SNAP", { cols: 132, rows: 43 }, continuation);
   });
 
   it("repaints the real xterm buffer from the snapshot, replacing what was on screen", async () => {

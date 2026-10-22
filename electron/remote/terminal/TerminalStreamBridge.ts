@@ -6,6 +6,7 @@ import {
 } from "../../services/pty/types.js";
 import {
   isValidTerminalGeometry,
+  toSnapshotContinuation,
   type SerializedTerminalSnapshot,
 } from "../../../shared/types/terminal.js";
 import { Lane } from "../link/frames.js";
@@ -151,9 +152,16 @@ function toIncarnation(value: number): number {
 
 function toSnapshot(value: unknown): SerializedTerminalSnapshot | null {
   if (!isValidTerminalGeometry(value)) return null;
-  const data = (value as { data?: unknown }).data;
+  const { data, continuation } = value as { data?: unknown; continuation?: unknown };
   if (typeof data !== "string") return null;
-  return { data, cols: value.cols, rows: value.rows };
+  const checked = toSnapshotContinuation(continuation);
+  return checked
+    ? { data, cols: value.cols, rows: value.rows, continuation: checked }
+    : { data, cols: value.cols, rows: value.rows };
+}
+
+function toStreamEnd(value: unknown): number | undefined {
+  return Number.isSafeInteger(value) && (value as number) >= 0 ? (value as number) : undefined;
 }
 
 export class TerminalStreamBridge {
@@ -460,9 +468,13 @@ export class TerminalStreamBridge {
     const message = raw as { type?: unknown; id?: unknown; requestId?: unknown };
     if (typeof message.id !== "string" || message.id.length === 0) return;
     if (message.type === "data") {
-      const { data, bytes } = raw as { data?: unknown; bytes?: unknown };
+      const { data, bytes, streamEnd } = raw as {
+        data?: unknown;
+        bytes?: unknown;
+        streamEnd?: unknown;
+      };
       if (!(data instanceof Uint8Array) || typeof bytes !== "number") return;
-      this.onData(message.id, data, bytes);
+      this.onData(message.id, data, bytes, toStreamEnd(streamEnd));
       return;
     }
     if (message.type === "serialize-fence" || message.type === "serialized-state") {
@@ -496,7 +508,7 @@ export class TerminalStreamBridge {
     return toIncarnation(this.opts.getIncarnation(terminalId));
   }
 
-  private onData(id: string, data: Uint8Array, bytes: number): void {
+  private onData(id: string, data: Uint8Array, bytes: number, streamEnd: number | undefined): void {
     const incarnation = this.incarnationOf(id);
     let stream = this.streams.get(id);
     if (!stream || stream.incarnation !== incarnation) {
@@ -515,7 +527,11 @@ export class TerminalStreamBridge {
     }
     stream.seq++;
     stream.lastActivity = ++this.activityClock;
-    stream.ring.push({ seq: stream.seq, data, bytes });
+    stream.ring.push(
+      streamEnd === undefined
+        ? { seq: stream.seq, data, bytes }
+        : { seq: stream.seq, data, bytes, streamEnd }
+    );
     if (!this.canSend || stream.resetting) {
       // Nobody to ack it, or it is about to be covered by a snapshot.
       this.ackPty(id, bytes);
@@ -610,12 +626,13 @@ export class TerminalStreamBridge {
         this.reset(stream);
         return;
       }
-      const result = this.post(stream.id, stream.incarnation, frame.seq, {
-        type: "data",
-        id: stream.id,
-        data: frame.data,
-        bytes: frame.bytes,
-      });
+      const message = { type: "data", id: stream.id, data: frame.data, bytes: frame.bytes };
+      const result = this.post(
+        stream.id,
+        stream.incarnation,
+        frame.seq,
+        frame.streamEnd === undefined ? message : { ...message, streamEnd: frame.streamEnd }
+      );
       if (result === "refused") {
         this.behind.add(stream);
         return;

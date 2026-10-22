@@ -1837,6 +1837,42 @@ describe("TerminalRestoreController replay fidelity (real xterm)", () => {
   });
 
   describe("host reset", () => {
+    /** The host reset the stream after parsing `parsed` chunks; the rest follow it. */
+    async function resetMidStream(
+      chunks: string[],
+      parsed: number,
+      redelivered = 0
+    ): Promise<ReturnType<typeof screen>> {
+      const terminal = makeGrid();
+      const pane = makePane(terminal);
+      for (const chunk of chunks.slice(0, parsed)) pane.deliver(chunk);
+      await flush(terminal);
+      const snapshot = await hostSnapshot(chunks, parsed);
+      await pane.restorer.applyReset("t1", snapshot.data, snapshot, snapshot.continuation);
+      await settle(terminal);
+      // Chunks the snapshot already holds, arriving again (a replay racing the reset).
+      pane.stream.end = utf8Length(chunks.slice(0, parsed - redelivered).join(""));
+      for (const chunk of chunks.slice(parsed - redelivered)) pane.deliver(chunk);
+      await settle(terminal);
+      return screen(terminal);
+    }
+
+    for (const [name, chunks] of Object.entries(SPLITS)) {
+      it(`renders a ${name} split across the reset the same as uninterrupted playback`, async () => {
+        expect(await resetMidStream(chunks, 1)).toEqual(await uninterrupted(chunks));
+      });
+    }
+
+    it("drops output the reset's snapshot already holds", async () => {
+      const chunks = ["one\r\n", "two\r\n", "three\r\n"];
+      expect(await resetMidStream(chunks, 2, 2)).toEqual(await uninterrupted(chunks));
+    });
+
+    it("lands the escape tail of a reset to a screen that is only mid-sequence", async () => {
+      const chunks = ["\x1b[3", "1mRED"];
+      expect(await resetMidStream(chunks, 1)).toEqual(await uninterrupted(chunks));
+    });
+
     it("clears a visible screen when the reset carries no snapshot", async () => {
       const live = makeTerminal(40, 5);
       await writeAndFlush(live, "OLD SCREEN");

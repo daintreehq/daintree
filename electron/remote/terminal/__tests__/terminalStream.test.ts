@@ -25,6 +25,7 @@ import {
   TerminalStreamBridge,
   type TerminalStreamBridgeOptions,
 } from "../TerminalStreamBridge.js";
+import type { SerializedTerminalSnapshot } from "../../../../shared/types/terminal.js";
 import { FakePeer, FakePtyHost, decode } from "./streamTestUtils.js";
 
 let dir: string;
@@ -587,6 +588,98 @@ describe("terminal stream over the link", () => {
     expect(rendererData(h)).not.toContain("before-fence");
     const order = h.renderer().received.map((m) => (m.type === "reset" ? "reset" : decode(m)));
     expect(order.slice(order.indexOf("reset"))).toEqual(["reset", "after-fence"]);
+  });
+
+  it("carries each chunk's stream offset to the renderer, live and replayed", async () => {
+    const h = await setup();
+    await h.connectLink();
+    h.pty().stampStreams = true;
+
+    h.pty().emit("t1", "one");
+    await waitFor(() => rendererData(h).length === 1);
+    expect(h.outFrames[0]!.message).toMatchObject({ streamEnd: 3 });
+    expect(h.renderer().ofType("data")[0]).toMatchObject({ streamEnd: 3 });
+
+    await h.dropLink();
+    h.pty().emit("t1", "two");
+    h.pty().emit("t1", "three");
+    await waitFor(() => h.bridge.position("t1")?.seq === 3);
+
+    await h.connectLink();
+    await waitFor(() => rendererData(h).length === 3);
+    // Replayed from the ring with the offsets they were stamped with.
+    expect(
+      h
+        .renderer()
+        .ofType("data")
+        .map((m) => m.streamEnd)
+    ).toEqual([3, 6, 11]);
+  });
+
+  it("leaves a chunk the pty-host did not stamp without an offset", async () => {
+    const h = await setup();
+    await h.connectLink();
+
+    h.pty().emit("t1", "legacy");
+    await waitFor(() => rendererData(h).length === 1);
+    expect(h.renderer().ofType("data")[0]).not.toHaveProperty("streamEnd");
+  });
+
+  it("hands a fenced reset's continuation to the renderer", async () => {
+    const h = await setup({ maxOutstandingBytes: 10 });
+    await h.connectLink();
+    h.pty().holdFences = true;
+    h.pty().stampStreams = true;
+
+    h.pty().emit("t1", "0123456789\x1b[");
+    await waitFor(() => h.pty().pendingFences.length === 1);
+    const fence = h.pty().pendingFences[0]!;
+    h.pty().postFenceMarker(fence);
+    const continuation = { pendingEscapeTail: "\x1b[", streamOffset: h.pty().streamOffset("t1") };
+    h.pty().emit("t1", "1mRED");
+    await waitFor(() => h.bridge.position("t1")?.seq === 2);
+    h.pty().postSnapshot(fence, { data: "0123456789", cols: 132, rows: 43, continuation });
+
+    await waitFor(() => rendererData(h).includes("1mRED"));
+    // Through the link's schema, then the relay.
+    expect(h.resets[0]!.snapshot).toEqual({
+      data: "0123456789",
+      cols: 132,
+      rows: 43,
+      continuation,
+    });
+    expect(h.renderer().ofType("reset")).toEqual([
+      {
+        type: "reset",
+        id: "t1",
+        snapshot: { data: "0123456789", cols: 132, rows: 43, continuation },
+      },
+    ]);
+    expect(h.renderer().ofType("data").at(-1)).toMatchObject({ streamEnd: 17 });
+  });
+
+  it("drops a malformed continuation from a reset but keeps the snapshot", async () => {
+    const h = await setup({ maxOutstandingBytes: 10 });
+    await h.connectLink();
+    h.pty().holdFences = true;
+
+    h.pty().emit("t1", "0123456789ABC");
+    await waitFor(() => h.pty().pendingFences.length === 1);
+    const fence = h.pty().pendingFences[0]!;
+    h.pty().postFenceMarker(fence);
+    h.pty().postSnapshot(fence, {
+      data: "SNAP",
+      cols: 80,
+      rows: 24,
+      continuation: { pendingEscapeTail: 7, streamOffset: -1 },
+    } as unknown as SerializedTerminalSnapshot);
+
+    await waitFor(() => h.renderer().ofType("reset").length === 1);
+    expect(h.renderer().ofType("reset")[0]).toEqual({
+      type: "reset",
+      id: "t1",
+      snapshot: { data: "SNAP", cols: 80, rows: 24 },
+    });
   });
 
   it("resets to a cleared screen when the snapshot never arrives", async () => {
