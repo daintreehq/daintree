@@ -536,6 +536,10 @@ export const createAddPanelActions = (
         ...(location === "background" && {
           backgroundRestoreLocation: parkedRestoreTarget(get(), id, options),
         }),
+        ...(location === "grid" &&
+          options.pendingDockWorktreeId !== undefined && {
+            pendingDockWorktreeId: options.pendingDockWorktreeId,
+          }),
         isVisible: location === "grid",
         runtimeStatus,
         extensionState: options.extensionState,

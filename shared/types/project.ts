@@ -252,6 +252,13 @@ export interface PanelSnapshot {
   location: PanelLocation;
   /** Restore target of a parked panel; written only with `location: "background"`. */
   backgroundRestoreLocation?: "grid" | "dock";
+  /**
+   * Set while a plugin panel the user docked sits in the grid only because its
+   * kind wasn't registered when it was restored (#13907). The value is the
+   * worktree it was docked with: `null` for none (a `scope: "project"` panel).
+   * `undefined` means no dock restore is pending.
+   */
+  pendingDockWorktreeId?: string | null;
   /** Command to execute after shell starts (e.g., 'claude --model sonnet-4' for AI agents) */
   command?: string;
   /** Current URL for browser/dev-preview panes */

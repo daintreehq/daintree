@@ -9,7 +9,7 @@ import {
 import { registerPanelKindDefinition, unregisterPanelKindDefinition } from "@/registry";
 import { TerminalPane } from "@/components/Terminal/TerminalPane";
 import { makePluginViewHost } from "@/components/Plugin/PluginViewHost";
-import { reconcileDockMembership } from "@/store/reconcileDockMembership";
+import { reconcileDockMembership, restorePendingDockPanels } from "@/store/reconcileDockMembership";
 import { logWarn } from "@/utils/logger";
 
 /**
@@ -236,6 +236,11 @@ export function usePluginPanelKinds(): void {
       // stay reachable (#11375). Cheap — it scans dock membership, which is
       // small, and no-ops when nothing is stranded.
       reconcileDockMembership();
+      // The other direction (#13907): a plugin panel restored into the grid
+      // because its kind wasn't registered yet goes back to the dock now that
+      // it is. After the pass above so a kind that came back non-dockable is
+      // settled by that rule, not bounced.
+      restorePendingDockPanels();
     };
 
     const electron = typeof window !== "undefined" ? window.electron : undefined;

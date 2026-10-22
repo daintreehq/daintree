@@ -55,7 +55,11 @@ import {
   resolveRespawnAgentId,
 } from "@shared/utils/savedAgentIdentity";
 import { isAbsolute } from "@shared/utils/path";
-import { panelKindIsDockable, type PersistedPanelKindRef } from "@shared/config/panelKindRegistry";
+import {
+  getPanelKindConfig,
+  panelKindIsDockable,
+  type PersistedPanelKindRef,
+} from "@shared/config/panelKindRegistry";
 import { restoredExtensionStateVersion } from "@shared/utils/panelExtensionState";
 import { getDeserializer } from "@/config/panelKindSerialisers";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
@@ -1060,10 +1064,31 @@ export function buildArgsForNonPtyRecreation(
   // would strand in the global-only grid bucket, invisible once a worktree is
   // active (#11375 point 3). A worktree-less panel adopts the active worktree so
   // it returns VISIBLY to the grid; a dockable kind keeps its dock placement.
-  const rescueDockToGrid = savedLocation === "dock" && !panelKindIsDockable(kind);
-  const location = rescueDockToGrid ? "grid" : savedLocation;
-  const worktreeId =
-    rescueDockToGrid && saved.worktreeId == null && activeWorktreeId != null
+  //
+  // A kind that isn't registered YET is not a kind that's gone (#13907): the
+  // plugin host starts after panel restore, so a plugin panel's kind is absent
+  // on every cold start. The rescue is only a stopgap there — the dock request
+  // (and the worktree it was docked with, which the rescue overwrites) is
+  // carried as `pendingDockWorktreeId` until the kind registers. A pending
+  // request already saved from an earlier boot is kept the same way, and
+  // honored outright if the kind has registered by now.
+  const pluginOwned = saved.pluginId !== undefined || kind.includes(".");
+  const kindRegistered = getPanelKindConfig(kind) !== undefined;
+  const kindPending = !kindRegistered && pluginOwned;
+  const savedPending = saved.pendingDockWorktreeId;
+  const honorPending = savedPending !== undefined && panelKindIsDockable(kind);
+  const requestedDock = savedLocation === "dock" || honorPending;
+  const rescueDockToGrid = requestedDock && !panelKindIsDockable(kind);
+  const location = rescueDockToGrid ? "grid" : requestedDock ? "dock" : "grid";
+  const pendingDockWorktreeId =
+    rescueDockToGrid && kindPending
+      ? savedLocation === "dock"
+        ? (saved.worktreeId ?? null)
+        : (savedPending ?? null)
+      : undefined;
+  const worktreeId = honorPending
+    ? (savedPending ?? undefined)
+    : rescueDockToGrid && saved.worktreeId == null && activeWorktreeId != null
       ? activeWorktreeId
       : saved.worktreeId;
   const base: AddTerminalArgs = {
@@ -1073,6 +1098,7 @@ export function buildArgsForNonPtyRecreation(
     cwd: resolveSavedCwd(saved.cwd, projectRoot),
     worktreeId,
     location,
+    ...(pendingDockWorktreeId !== undefined && { pendingDockWorktreeId }),
     requestedId: saved.id,
     exitBehavior: saved.exitBehavior,
     agentPresetId: readPresetId(saved),

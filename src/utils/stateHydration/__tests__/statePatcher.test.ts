@@ -1981,6 +1981,76 @@ describe("detectedAgentId propagation", () => {
 });
 
 describe("buildArgsForNonPtyRecreation", () => {
+  describe("docked plugin panel whose kind is not registered yet (#13907)", () => {
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension kind string is outside the built-in union
+    const pluginKind = "ext-a.viewer" as Parameters<typeof buildArgsForNonPtyRecreation>[1];
+    const savedPlugin = (extra: Record<string, unknown> = {}) =>
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension kind string is outside the built-in union
+      ({
+        id: "p1",
+        kind: "ext-a.viewer",
+        title: "Viewer",
+        location: "dock",
+        pluginId: "ext-a",
+        ...extra,
+      }) as Parameters<typeof buildArgsForNonPtyRecreation>[0];
+
+    it("records the saved worktree before the grid rescue adopts the active one", () => {
+      const result = buildArgsForNonPtyRecreation(
+        savedPlugin({ worktreeId: "wt-saved" }),
+        pluginKind,
+        "/project",
+        "wt-active"
+      );
+      expect(result.location).toBe("grid");
+      expect(result.worktreeId).toBe("wt-saved");
+      expect(result.pendingDockWorktreeId).toBe("wt-saved");
+    });
+
+    it("records a worktree-less panel as null", () => {
+      const result = buildArgsForNonPtyRecreation(
+        savedPlugin(),
+        pluginKind,
+        "/project",
+        "wt-active"
+      );
+      expect(result.worktreeId).toBe("wt-active");
+      expect(result.pendingDockWorktreeId).toBeNull();
+    });
+
+    it("keeps a pending request saved by an earlier boot", () => {
+      const result = buildArgsForNonPtyRecreation(
+        savedPlugin({ location: "grid", worktreeId: "wt-active", pendingDockWorktreeId: null }),
+        pluginKind,
+        "/project",
+        "wt-active"
+      );
+      expect(result.location).toBe("grid");
+      expect(result.pendingDockWorktreeId).toBeNull();
+    });
+
+    it("does not mark a plain grid panel", () => {
+      const result = buildArgsForNonPtyRecreation(
+        savedPlugin({ location: "grid" }),
+        pluginKind,
+        "/project",
+        "wt-active"
+      );
+      expect(result).not.toHaveProperty("pendingDockWorktreeId");
+    });
+
+    it("does not mark a built-in non-dockable kind", () => {
+      const result = buildArgsForNonPtyRecreation(
+        { id: "r1", kind: "review", title: "Review", location: "dock" },
+        "review",
+        "/project",
+        "wt-active"
+      );
+      expect(result.location).toBe("grid");
+      expect(result).not.toHaveProperty("pendingDockWorktreeId");
+    });
+  });
+
   it("builds browser panel args", () => {
     const result = buildArgsForNonPtyRecreation(
       {

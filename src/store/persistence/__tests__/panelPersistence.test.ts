@@ -165,6 +165,27 @@ describe("PanelPersistence", () => {
       expect(byId.get("grid-1")).not.toHaveProperty("backgroundRestoreLocation");
     });
 
+    it("persists a pending dock restore, including the no-worktree null (#13907)", async () => {
+      const client = createMockProjectClient();
+      const persistence = new PanelPersistence(client, { debounceMs: 100 });
+
+      persistence.save(
+        [
+          createMockTerminal({ id: "pending-wt", location: "grid", pendingDockWorktreeId: "wt-1" }),
+          createMockTerminal({ id: "pending-none", location: "grid", pendingDockWorktreeId: null }),
+          createMockTerminal({ id: "plain", location: "grid" }),
+        ],
+        projectId
+      );
+      await vi.advanceTimersByTimeAsync(100);
+
+      const saved = client.setTerminals.mock.calls[0]![1] as TerminalSnapshot[];
+      const byId = new Map(saved.map((s) => [s.id, s]));
+      expect(byId.get("pending-wt")?.pendingDockWorktreeId).toBe("wt-1");
+      expect(byId.get("pending-none")?.pendingDockWorktreeId).toBeNull();
+      expect(byId.get("plain")).not.toHaveProperty("pendingDockWorktreeId");
+    });
+
     it("excludes dialog panels that are missing the ephemeral flag", async () => {
       // The location alone has to be disqualifying. Hydration coerces any
       // unrecognized location to "grid", so a dialog snapshot that slipped
