@@ -24,7 +24,7 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+} from "@/components/ui/dropdown-menu-base";
 import { Field, FieldError, FieldLabel, InlineError } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
