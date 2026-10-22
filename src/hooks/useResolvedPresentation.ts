@@ -61,6 +61,8 @@ function withToolbarDefaults(profile: ProfileForView) {
 }
 
 export interface ProjectToolbarOverlay {
+  /** The view's own project once its profile has loaded, else `null`. */
+  projectId: string | null;
   /** Main has answered for this view's own project, so the toolbar toggle can be offered and written. */
   available: boolean;
   /** "Use this project's toolbar" is in effect. */
@@ -76,8 +78,9 @@ export function projectToolbarOverlayFor(
   project: Pick<Project, "id"> | null | undefined,
   profile: ProfileForView
 ): ProjectToolbarOverlay {
-  if (!profileAppliesTo(project, profile)) {
+  if (project == null || !profileAppliesTo(project, profile)) {
     return {
+      projectId: null,
       available: false,
       active: false,
       hasOverrides: false,
@@ -87,6 +90,7 @@ export function projectToolbarOverlayFor(
   const toolbar = withToolbarDefaults(profile);
   const active = isProjectToolbarActive(toolbar);
   return {
+    projectId: project.id,
     available: true,
     active,
     hasOverrides: hasProjectToolbarOverrides(toolbar),

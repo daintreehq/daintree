@@ -16,6 +16,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { ToolbarContextMenuItems } from "./ToolbarContextMenuItems";
+import { saveProjectToolbar } from "./saveProjectToolbar";
 import {
   TOOLBAR_CUSTOMIZE_ICON,
   TOOLBAR_CUSTOMIZE_LABEL,
@@ -208,10 +209,10 @@ export function PluginToolbarButton({
           buttonId={pluginId}
           side="right"
           onUnpin={() => {
-            // Promoted by this project's toolbar (#13783): unpinning takes it
-            // back out of the profile, not out of the app-wide layout.
-            if (projectPromoted && !appPromoted) void setProjectPromoted(pluginId, false);
-            else setPluginButtonPromoted(pluginId, false);
+            // Promoted by this project's toolbar (#13783), the app-wide
+            // layout, or both: unpinning takes away whichever put it here.
+            if (projectPromoted) saveProjectToolbar(() => setProjectPromoted(pluginId, false));
+            if (appPromoted || !projectPromoted) setPluginButtonPromoted(pluginId, false);
           }}
         />
       </ContextMenuContent>
@@ -319,11 +320,14 @@ function PluginMenuRowState({
 function PluginTrayRow({
   config,
   promoted,
+  pinDisabled = false,
   onSelect,
   onTogglePin,
 }: {
   config: ToolbarButtonConfig;
   promoted: boolean;
+  /** This project's toolbar already shows as many plugin buttons as it can (#13783). */
+  pinDisabled?: boolean;
   onSelect: (config: ToolbarButtonConfig) => void;
   onTogglePin: (config: ToolbarButtonConfig) => void;
 }) {
@@ -334,7 +338,7 @@ function PluginTrayRow({
     if (e.key === "p" || e.key === "P") {
       e.preventDefault();
       e.stopPropagation();
-      onTogglePin(config);
+      if (!pinDisabled) onTogglePin(config);
     }
   };
 
@@ -380,38 +384,46 @@ function PluginTrayRow({
         </>
       )}
 
-      <span className="sr-only">Press P to {promoted ? "unpin from" : "pin to"} toolbar</span>
-
-      <RowControlTooltip label={promoted ? TOOLBAR_UNPIN_LABEL : TOOLBAR_PIN_LABEL} shortcut="P">
-        <span
-          role="presentation"
-          aria-hidden="true"
-          data-testid={`plugin-tray-pin-${config.id}`}
-          data-pinned={promoted ? "true" : "false"}
-          onPointerDown={(e) => e.stopPropagation()}
-          onPointerUp={(e) => e.stopPropagation()}
-          onClick={(e) => {
-            e.stopPropagation();
-            onTogglePin(config);
-          }}
-          className={cn(
-            ROW_CONTROL_CLASS,
-            // 24px inside a 28px menu row: the negative margin keeps the row's
-            // height where every other menu item has it.
-            "-my-1 ml-1",
-            !promoted && "opacity-0 group-data-[highlighted]:opacity-100"
-          )}
-        >
-          <Pin
-            className={cn(
-              "h-3 w-3",
-              promoted &&
-                "fill-current text-text-secondary group-data-[highlighted]:text-text-primary"
-            )}
-            strokeWidth={promoted ? 2 : 1.75}
-          />
+      {pinDisabled ? (
+        <span className="sr-only">
+          This project&apos;s toolbar already shows {MAX_PROMOTED_PLUGIN_BUTTONS} plugin buttons
         </span>
-      </RowControlTooltip>
+      ) : (
+        <span className="sr-only">Press P to {promoted ? "unpin from" : "pin to"} toolbar</span>
+      )}
+
+      {!pinDisabled && (
+        <RowControlTooltip label={promoted ? TOOLBAR_UNPIN_LABEL : TOOLBAR_PIN_LABEL} shortcut="P">
+          <span
+            role="presentation"
+            aria-hidden="true"
+            data-testid={`plugin-tray-pin-${config.id}`}
+            data-pinned={promoted ? "true" : "false"}
+            onPointerDown={(e) => e.stopPropagation()}
+            onPointerUp={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              e.stopPropagation();
+              onTogglePin(config);
+            }}
+            className={cn(
+              ROW_CONTROL_CLASS,
+              // 24px inside a 28px menu row: the negative margin keeps the row's
+              // height where every other menu item has it.
+              "-my-1 ml-1",
+              !promoted && "opacity-0 group-data-[highlighted]:opacity-100"
+            )}
+          >
+            <Pin
+              className={cn(
+                "h-3 w-3",
+                promoted &&
+                  "fill-current text-text-secondary group-data-[highlighted]:text-text-primary"
+              )}
+              strokeWidth={promoted ? 2 : 1.75}
+            />
+          </span>
+        </RowControlTooltip>
+      )}
     </DropdownMenuItem>
   );
 }
@@ -441,6 +453,11 @@ export function PluginTrayButton({
   const setProjectPromoted = useProjectPresentationStore((s) => s.setPluginButtonPromoted);
   const isPromoted = (id: PluginToolbarButtonId) =>
     pinnedButtons[id] === true || projectPromoted.includes(id);
+  const isProjectPromotable = (config: ToolbarButtonConfig) =>
+    toolbarOverlay.active && projectIdFromPluginInstanceKey(config.pluginId) !== null;
+  // At the profile's cap a further project button can't be pinned; it says so
+  // rather than quietly pinning it app-wide.
+  const atProjectCap = projectPromoted.length >= MAX_PROMOTED_PLUGIN_BUTTONS;
   const pluginMetaById = usePluginRuntimeStore((s) => s.pluginMetaById);
   const badgesByPlugin = usePluginToolbarBadgeStore((s) => s.badgesByPlugin);
 
@@ -521,18 +538,17 @@ export function PluginTrayButton({
     lastPinActionAt.current = now;
     const appPinned = pinnedButtons[config.id] === true;
     // While this project's toolbar is in use, its own plugin's buttons are
-    // promoted by the profile (#13783), up to its cap; past that, and for
-    // installed plugins, the pin is the app-wide one it always was.
-    if (
-      toolbarOverlay.active &&
-      !appPinned &&
-      projectIdFromPluginInstanceKey(config.pluginId) !== null
-    ) {
+    // promoted by the profile (#13783), never app-wide. Installed plugins keep
+    // the app-wide pin they always had.
+    if (isProjectPromotable(config)) {
       const promoted = projectPromoted.includes(config.id);
-      if (promoted || projectPromoted.length < MAX_PROMOTED_PLUGIN_BUTTONS) {
-        void setProjectPromoted(config.id, !promoted);
-        return;
+      if (promoted || appPinned) {
+        if (promoted) saveProjectToolbar(() => setProjectPromoted(config.id, false));
+        if (appPinned) setPluginButtonPromoted(config.id, false);
+      } else if (projectPromoted.length < MAX_PROMOTED_PLUGIN_BUTTONS) {
+        saveProjectToolbar(() => setProjectPromoted(config.id, true));
       }
+      return;
     }
     setPluginButtonPromoted(config.id, !appPinned);
   };
@@ -613,6 +629,7 @@ export function PluginTrayButton({
                 key={config.id}
                 config={config}
                 promoted={isPromoted(config.id)}
+                pinDisabled={!isPromoted(config.id) && atProjectCap && isProjectPromotable(config)}
                 onSelect={handleSelect}
                 onTogglePin={handleTogglePin}
               />

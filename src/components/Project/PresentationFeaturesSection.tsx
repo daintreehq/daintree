@@ -138,7 +138,7 @@ export function PresentationFeaturesSection({ isOpen }: { isOpen: boolean }) {
             </InlineError>
           </SettingsEmptyRow>
         )}
-        {failedSave !== null && (
+        {(failedSave?.kind === "level" || failedSave?.kind === "answer") && (
           <SettingsEmptyRow
             action={
               <Button variant="outline" size="sm" onClick={retryFailedSave}>

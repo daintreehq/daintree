@@ -59,11 +59,12 @@ interface ProjectPresentationState {
    * next time the project opens, an unanswered suggestion asks again.
    */
   deferredSuggestionHash: string | null;
-  setLevel: (feature: PresentationFeatureId, level: PresentationLevel | null) => Promise<void>;
+  /** Each write resolves to whether main recorded it. */
+  setLevel: (feature: PresentationFeatureId, level: PresentationLevel | null) => Promise<boolean>;
   answerSuggestion: (hash: string, answer: PresentationSuggestionAnswer) => Promise<void>;
-  setToolbarEnabled: (enabled: boolean) => Promise<void>;
-  setPluginButtonPromoted: (buttonId: string, promoted: boolean) => Promise<void>;
-  resetToolbar: () => Promise<void>;
+  setToolbarEnabled: (enabled: boolean) => Promise<boolean>;
+  setPluginButtonPromoted: (buttonId: string, promoted: boolean) => Promise<boolean>;
+  resetToolbar: () => Promise<boolean>;
   /** Make the last failed write again. */
   retryFailedSave: () => void;
   dismissFailedSave: () => void;
@@ -239,8 +240,8 @@ export const useProjectPresentationStore = create<ProjectPresentationState>((set
     deferredSuggestionHash: null,
     setLevel: async (feature, level) => {
       const api = window.electron?.projectPresentation;
-      if (typeof api?.setLevel !== "function") return;
-      await write({ kind: "level", feature, level }, () => api.setLevel(feature, level));
+      if (typeof api?.setLevel !== "function") return false;
+      return write({ kind: "level", feature, level }, () => api.setLevel(feature, level));
     },
     answerSuggestion: async (hash, answer) => {
       const api = window.electron?.projectPresentation;
@@ -260,20 +261,20 @@ export const useProjectPresentationStore = create<ProjectPresentationState>((set
     },
     setToolbarEnabled: async (enabled) => {
       const api = window.electron?.projectPresentation;
-      if (typeof api?.setToolbarEnabled !== "function") return;
-      await write({ kind: "toolbarEnabled", enabled }, () => api.setToolbarEnabled(enabled));
+      if (typeof api?.setToolbarEnabled !== "function") return false;
+      return write({ kind: "toolbarEnabled", enabled }, () => api.setToolbarEnabled(enabled));
     },
     setPluginButtonPromoted: async (buttonId, promoted) => {
       const api = window.electron?.projectPresentation;
-      if (typeof api?.setPluginButtonPromoted !== "function") return;
-      await write({ kind: "pluginPromotion", buttonId, promoted }, () =>
+      if (typeof api?.setPluginButtonPromoted !== "function") return false;
+      return write({ kind: "pluginPromotion", buttonId, promoted }, () =>
         api.setPluginButtonPromoted(buttonId, promoted)
       );
     },
     resetToolbar: async () => {
       const api = window.electron?.projectPresentation;
-      if (typeof api?.resetToolbar !== "function") return;
-      await write({ kind: "resetToolbar" }, () => api.resetToolbar());
+      if (typeof api?.resetToolbar !== "function") return false;
+      return write({ kind: "resetToolbar" }, () => api.resetToolbar());
     },
     retryFailedSave: () => {
       const failed = get().failedSave;

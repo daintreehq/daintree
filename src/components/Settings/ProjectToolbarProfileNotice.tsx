@@ -4,6 +4,8 @@ import { SettingsSection } from "@/components/Settings/SettingsSection";
 import { SettingsEmptyRow, SettingsGroup, SettingsRow } from "@/components/Settings/SettingsGroup";
 import { useProjectToolbarOverlay, useResolvedPresentation } from "@/hooks/useResolvedPresentation";
 import { useProjectStore } from "@/store/projectStore";
+import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
+import { selectViewProject } from "@/store/viewWorkspace";
 import { useProjectPresentationStore } from "@/store/projectPresentationStore";
 import { pluralize } from "@/lib/pluralize";
 import {
@@ -20,7 +22,10 @@ import {
  * nothing for the toolbar.
  */
 export function ProjectToolbarProfileNotice() {
-  const project = useProjectStore((s) => s.currentProject);
+  // The view's own project, which is the one main resets — not the globally
+  // broadcast `currentProject`, which a sibling window can repoint.
+  const viewWorkspaceId = getViewWorkspaceId();
+  const project = useProjectStore((s) => selectViewProject(viewWorkspaceId, s));
   const overlay = useProjectToolbarOverlay();
   const presentation = useResolvedPresentation();
   const useProjectToolbar = useProjectPresentationStore((s) => s.useProjectToolbar);

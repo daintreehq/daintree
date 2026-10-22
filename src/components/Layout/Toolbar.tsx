@@ -97,6 +97,7 @@ import {
 import { isPluginToolbarButtonIdShape } from "@shared/types/toolbar";
 import { useProjectPresentationStore } from "@/store/projectPresentationStore";
 import { copyWithToast } from "@/lib/copyWithToast";
+import { saveProjectToolbar } from "./saveProjectToolbar";
 import type { ToolbarButtonConfig } from "@shared/config/toolbarButtonRegistry";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
@@ -1847,7 +1848,10 @@ export function Toolbar({
     if (!projectToolbarMode) return appPinnedButtons;
     const next = { ...appPinnedButtons };
     for (const [buttonId, feature] of PRESENTATION_FEATURE_BY_TOOLBAR_BUTTON) {
-      if (profileLevels[feature] === "shown") next[buttonId] = true;
+      // Demoted counts too: the button has to stay mounted to be folded into
+      // `…`, even where it is off app-wide.
+      const level = profileLevels[feature];
+      if (level === "shown" || level === "demoted") next[buttonId] = true;
     }
     for (const id of toolbarOverlay.promotedPluginButtons) {
       // Plugin button ids are `{instanceKey}.{id}`; main only stores those.
@@ -2325,16 +2329,17 @@ export function Toolbar({
 
   // This project's own plugin buttons (#13783). Installed plugins have no say
   // over placement (#11304), so only these can be promoted by the profile.
+  const overlayProjectId = toolbarOverlay.projectId;
   const ownProjectPluginButtonIds = useMemo(
     () =>
-      currentProject === null
+      overlayProjectId === null
         ? []
         : pluginButtonIds.filter(
             (id) =>
               projectIdFromPluginInstanceKey(pluginConfigs.get(id)?.pluginId ?? "") ===
-              currentProject.id
+              overlayProjectId
           ),
-    [currentProject, pluginButtonIds, pluginConfigs]
+    [overlayProjectId, pluginButtonIds, pluginConfigs]
   );
 
   // In project mode the menu also offers this project's own plugin buttons
@@ -2429,9 +2434,9 @@ export function Toolbar({
         if (feature !== undefined) {
           // An explicit "shown" keeps the button on this project's toolbar
           // even where it is off app-wide.
-          void setPresentationLevel(feature, onToolbar ? "shown" : "demoted");
+          saveProjectToolbar(() => setPresentationLevel(feature, onToolbar ? "shown" : "demoted"));
         } else if ((ownProjectPluginButtonIds as readonly string[]).includes(buttonId)) {
-          void setProjectPluginButtonPromoted(buttonId, onToolbar);
+          saveProjectToolbar(() => setProjectPluginButtonPromoted(buttonId, onToolbar));
         }
         return;
       }
@@ -2728,13 +2733,15 @@ export function Toolbar({
     toolbarOverlay.available && currentProject !== null
       ? {
           active: toolbarOverlay.active,
-          onToggle: (active) => void setProjectToolbarEnabled(active),
+          onToggle: (active) => saveProjectToolbar(() => setProjectToolbarEnabled(active)),
           branchChip:
             toolbarOverlay.active && presentation.branchChip !== "hidden"
               ? {
                   checked: presentation.branchChip === "shown",
                   onToggle: (shown) =>
-                    void setPresentationLevel("branchChip", shown ? "shown" : "demoted"),
+                    saveProjectToolbar(() =>
+                      setPresentationLevel("branchChip", shown ? "shown" : "demoted")
+                    ),
                 }
               : null,
         }

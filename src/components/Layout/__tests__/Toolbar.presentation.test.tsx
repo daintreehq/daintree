@@ -6,7 +6,7 @@
  */
 import "../__preview__/toolbarShims";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { act, cleanup, render } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import type { CliAvailability, AgentSettings } from "@shared/types";
 import type { PresentationLevels } from "@shared/config/presentationProfile";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -196,5 +196,102 @@ describe("Toolbar items under the project's toolbar (#13783)", () => {
 
     await applyProfile({ resumeSessions: "shown" }, false);
     expect(resumeSlot()).toBeNull();
+  });
+});
+
+describe("Toolbar menus while the project's toolbar is on (#13783)", () => {
+  const setLevel = vi.fn((_feature: string, _level: string | null) => new Promise(() => {}));
+  const setToolbarEnabled = vi.fn((_enabled: boolean) => new Promise(() => {}));
+
+  let originalBridge: unknown;
+
+  beforeEach(() => {
+    // Writes only, swapped into the shimmed bridge: no `get`, so the store
+    // never pulls over the state each test sets.
+    originalBridge = Reflect.get(window.electron, "projectPresentation");
+    Reflect.set(window.electron, "projectPresentation", { setLevel, setToolbarEnabled });
+    setLevel.mockClear();
+    setToolbarEnabled.mockClear();
+  });
+
+  afterEach(() => {
+    Reflect.set(window.electron, "projectPresentation", originalBridge);
+  });
+
+  async function openEmptySpaceMenu(): Promise<HTMLElement> {
+    fireEvent.contextMenu(screen.getByRole("toolbar", { name: "Main toolbar" }));
+    return screen.findByRole("menu", { name: "Toolbar buttons" });
+  }
+
+  it("demotes from the empty-space menu through the profile, writing nothing app-wide", async () => {
+    await applyProfile({}, true);
+    const layoutBefore = useToolbarPreferencesStore.getState().layout;
+
+    const menu = await openEmptySpaceMenu();
+    const toggle = within(menu).getByRole("menuitemcheckbox", {
+      name: "Use this project's toolbar",
+    });
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
+    // Not the profile's to place: listed, but not changeable from here.
+    expect(
+      within(menu)
+        .getByRole("menuitemcheckbox", { name: /Settings/ })
+        .getAttribute("data-disabled")
+    ).not.toBeNull();
+
+    fireEvent.click(within(menu).getByRole("menuitemcheckbox", { name: /Resume session/ }));
+
+    expect(setLevel).toHaveBeenCalledExactlyOnceWith("resumeSessions", "demoted");
+    expect(useToolbarPreferencesStore.getState().layout).toBe(layoutBefore);
+  });
+
+  it("re-checks a demoted button as explicitly shown for this project", async () => {
+    await applyProfile({ resumeSessions: "demoted" });
+
+    const menu = await openEmptySpaceMenu();
+    const row = within(menu).getByRole("menuitemcheckbox", { name: /Resume session/ });
+    expect(row.getAttribute("aria-checked")).toBe("false");
+    fireEvent.click(row);
+
+    expect(setLevel).toHaveBeenCalledExactlyOnceWith("resumeSessions", "shown");
+  });
+
+  it("turns the project's toolbar off from the toggle", async () => {
+    await applyProfile({ resumeSessions: "demoted" });
+
+    const menu = await openEmptySpaceMenu();
+    fireEvent.click(
+      within(menu).getByRole("menuitemcheckbox", { name: "Use this project's toolbar" })
+    );
+
+    expect(setToolbarEnabled).toHaveBeenCalledExactlyOnceWith(false);
+  });
+
+  it("unpins a demotable button from its own menu into … for this project only", async () => {
+    await applyProfile({}, true);
+    const layoutBefore = useToolbarPreferencesStore.getState().layout;
+    const slot = document.querySelector('[data-toolbar-button-id="resume-sessions"]')!;
+
+    fireEvent.contextMenu(slot.querySelector("button")!);
+    fireEvent.click(await screen.findByRole("menuitem", { name: /Unpin from toolbar/ }));
+
+    expect(setLevel).toHaveBeenCalledExactlyOnceWith("resumeSessions", "demoted");
+    expect(useToolbarPreferencesStore.getState().layout).toBe(layoutBefore);
+  });
+
+  it("keeps the app-wide menu when the project's toolbar is off", async () => {
+    await applyProfile({ resumeSessions: "demoted" }, false);
+
+    const menu = await openEmptySpaceMenu();
+    expect(
+      within(menu)
+        .getByRole("menuitemcheckbox", { name: "Use this project's toolbar" })
+        .getAttribute("aria-checked")
+    ).toBe("false");
+    expect(
+      within(menu)
+        .getByRole("menuitemcheckbox", { name: /Settings/ })
+        .getAttribute("data-disabled")
+    ).toBeNull();
   });
 });

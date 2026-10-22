@@ -92,10 +92,11 @@ function parseAnswers(value: unknown): Record<string, AnswerEntry> {
 export function isOwnProjectPluginButtonId(projectId: string, buttonId: unknown): boolean {
   if (typeof buttonId !== "string" || buttonId.length > 512) return false;
   if (projectIdFromPluginInstanceKey(buttonId) !== projectId) return false;
-  // `{manifest}.{button}`: a bare instance key is a plugin, not one of its buttons.
-  const rest = pluginManifestIdFromInstanceKey(buttonId);
-  const dot = rest.lastIndexOf(".");
-  return dot > 0 && dot < rest.length - 1;
+  // `{publisher}.{name}.{button}`: manifest names are always `publisher.name`
+  // with no dot in either half, so a bare instance key — a plugin, not one of
+  // its buttons — has one dot fewer.
+  const parts = pluginManifestIdFromInstanceKey(buttonId).split(".");
+  return parts.length >= 3 && parts.every((part) => part.length > 0);
 }
 
 /** Deduped, own-project only and capped: the list is read from a user-editable file (#10938). */

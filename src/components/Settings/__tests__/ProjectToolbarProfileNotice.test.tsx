@@ -60,7 +60,7 @@ describe("ProjectToolbarProfileNotice", () => {
   });
 
   it("names what the project changes and resets only the project's toolbar", () => {
-    const resetToolbar = vi.fn(() => Promise.resolve());
+    const resetToolbar = vi.fn(() => Promise.resolve(true));
     const resetAppWide = vi.spyOn(useToolbarPreferencesStore.getState(), "reset");
     render(<ProjectToolbarProfileNotice />);
     applyProfile(

@@ -128,10 +128,16 @@ describe("toolbar features (#13783)", () => {
     }
   });
 
-  it("maps each toolbar button to exactly one feature that follows the toolbar toggle", () => {
-    for (const [buttonId, feature] of PRESENTATION_FEATURE_BY_TOOLBAR_BUTTON) {
+  it("gives each toolbar button to exactly one feature, which follows the toolbar toggle", () => {
+    // Read from the definitions, not the derived map, where a duplicate would
+    // already have overwritten the first.
+    const buttons = PRESENTATION_FEATURE_IDS.flatMap((id) => {
+      const toolbar = (PRESENTATION_FEATURES[id] as { toolbar?: string | true }).toolbar;
+      return typeof toolbar === "string" ? [toolbar] : [];
+    });
+    expect(new Set(buttons).size).toBe(buttons.length);
+    for (const feature of PRESENTATION_FEATURE_BY_TOOLBAR_BUTTON.values()) {
       expect(isToolbarPresentationFeature(feature)).toBe(true);
-      expect((PRESENTATION_FEATURES[feature] as { toolbar?: unknown }).toolbar).toBe(buttonId);
     }
     expect(isToolbarPresentationFeature("branchChip")).toBe(true);
   });

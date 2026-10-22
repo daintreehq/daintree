@@ -249,6 +249,9 @@ describe("project toolbar (#13783)", () => {
       false
     );
     expect(isOwnProjectPluginButtonId(PROJECT_A, `project__${PROJECT_A}__acme`)).toBe(false);
+    // A bare instance key: manifest names are `publisher.name`, so this is the
+    // plugin itself, not one of its buttons.
+    expect(isOwnProjectPluginButtonId(PROJECT_A, `project__${PROJECT_A}__acme.tools`)).toBe(false);
     expect(() => setProjectPluginButtonPromoted(PROJECT_A, "acme.tools.btn", true)).toThrow();
   });
 
@@ -273,7 +276,16 @@ describe("project toolbar (#13783)", () => {
   it("reads a hand-edited list deduped, own-project only and capped", () => {
     storeMock.data.set("projectPresentation", {
       [PROJECT_A]: {
-        promotedPluginButtons: [own(1), own(1), "acme.tools.btn", 7, own(2), own(3), own(4)],
+        promotedPluginButtons: [
+          own(1),
+          `project__${PROJECT_A}__acme.tools`,
+          own(1),
+          "acme.tools.btn",
+          7,
+          own(2),
+          own(3),
+          own(4),
+        ],
         useProjectToolbar: "yes",
       },
     });
