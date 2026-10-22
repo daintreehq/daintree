@@ -118,15 +118,44 @@ describe("useProjectPresence", () => {
     again.unmount();
   });
 
-  it("asks again on the next push after a failed first read, keeping that push", async () => {
+  it("asks again on the next push after a failed first read", async () => {
     const { reads, push, answer } = installBridge();
     const { result, unmount } = renderHook(() => useProjectPresence());
     await act(async () => reads[0].reject(new Error("link down")));
+    expect(reads).toHaveLength(1);
+    // Pushed before the next read began, so that read's answer is the newer.
     push({ projectId: OWN, state: "background" });
     expect(reads).toHaveLength(2);
     await answer(1, { projectId: OWN, state: "foreground" });
 
+    expect(result.current).toBe("foreground");
+    unmount();
+  });
+
+  it("reads once more when a push raced a read that failed, and drops that push", async () => {
+    const { reads, push, answer } = installBridge();
+    const { result, unmount } = renderHook(() => useProjectPresence());
+    push({ projectId: OWN, state: "foreground" });
+    await act(async () => reads[0].reject(new Error("link down")));
+    expect(reads).toHaveLength(2);
+    // The project went to the background while the link was down.
+    await answer(1, { projectId: OWN, state: "background" });
+
     expect(result.current).toBe("background");
+    expect(reads).toHaveLength(2);
+    unmount();
+  });
+
+  it("reads once more when a push raced a read that named no project", async () => {
+    const { reads, push, answer } = installBridge();
+    const { result, unmount } = renderHook(() => useProjectPresence());
+    push({ projectId: OWN, state: "foreground" });
+    await answer(0, null);
+    expect(reads).toHaveLength(2);
+    await answer(1, { projectId: OWN, state: "foreground" });
+
+    expect(result.current).toBe("foreground");
+    expect(reads).toHaveLength(2);
     unmount();
   });
 

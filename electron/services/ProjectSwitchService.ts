@@ -332,6 +332,10 @@ export function activateProjectOnHost(
   project: Pick<Project, "id" | "path">,
   residentId: number
 ): Promise<void> {
+  // Every activation is an open as plugins count it, the re-hold of a project
+  // the view never left included: a project closed under a still-attached view
+  // is reopened by that same view switching back to it.
+  getProjectPresenceTracker().markOpened(project.id);
   const current = hostResidency.get(residentId);
   if (current?.projectId === project.id && isResidencyHeld(workspace, residentId, current)) {
     return current.load;
@@ -401,9 +405,6 @@ export function getHostResidentProject(residentId: number): string | null {
 function markProjectActiveOnHost(projectId: string): void {
   try {
     projectStore.recordRemoteActivation(projectId);
-    // A remote view opening it here reopens a project closed since; plugins
-    // hear it shown once the Shell reports the view visible.
-    getProjectPresenceTracker().markOpened(projectId);
     broadcastProjectSwitchUpdates(null, projectId);
   } catch (error) {
     console.warn("[ProjectSwitch] Failed to record remote activation:", error);

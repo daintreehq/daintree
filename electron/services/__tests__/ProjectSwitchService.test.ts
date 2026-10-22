@@ -90,6 +90,10 @@ import {
   isProjectHeldOnHost,
   releaseProjectOnHost,
 } from "../ProjectSwitchService.js";
+import {
+  ProjectPresenceTracker,
+  _setProjectPresenceTrackerForTests,
+} from "../ProjectPresenceTracker.js";
 
 describe("ProjectSwitchService", () => {
   beforeEach(() => {
@@ -587,6 +591,24 @@ describe("Host activation for a remote view", () => {
     await Promise.all([first, second]);
     expect(ws.loadProject).toHaveBeenCalledTimes(1);
     expect(projectStoreMock.recordRemoteActivation).toHaveBeenCalledTimes(1);
+  });
+
+  it("reopens presence on every activation, the re-hold of a project closed under the view included", async () => {
+    const id = "c".repeat(64);
+    const tracker = new ProjectPresenceTracker(() => []);
+    _setProjectPresenceTrackerForTests(tracker);
+    try {
+      const ws = workspace();
+      await activateProjectOnHost(ws, { id, path: "/tmp/c" }, -5);
+      expect(tracker.getState(id)).toBe("background");
+      tracker.markClosed(id);
+      await activateProjectOnHost(ws, { id, path: "/tmp/c" }, -5);
+
+      expect(tracker.getState(id)).toBe("background");
+      expect(ws.loadProject).toHaveBeenCalledTimes(1);
+    } finally {
+      _setProjectPresenceTrackerForTests(null);
+    }
   });
 
   it("drops residency when the load fails so a retry starts over", async () => {

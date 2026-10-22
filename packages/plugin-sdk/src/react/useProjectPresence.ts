@@ -37,8 +37,9 @@ function start(bridge: PluginHostBridge): () => void {
   let again = false;
   // A push is never older than a read it raced — any change after it pushes
   // again — so pushes win. These count this project's pushes since the read in
-  // flight began, and keep, per project, the latest push that landed while main
-  // had not named this view's project, to apply once it has.
+  // flight began, and keep, per project, the latest push that landed during a
+  // read begun before main had named this view's project, to apply once it
+  // has. Anything pushed before a read began is older than its answer.
   let pushes = 0;
   const unattributed = new Map<string, PluginProjectPresenceState>();
   const read = (): void => {
@@ -48,24 +49,30 @@ function start(bridge: PluginHostBridge): () => void {
     }
     reading = true;
     again = false;
+    unattributed.clear();
     const seen = pushes;
+    // A push the read could not place, which a read that names no project (or
+    // fails) cannot have accounted for: worth exactly one more read.
+    const settle = (raced: boolean): void => {
+      unattributed.clear();
+      if (again || raced) read();
+    };
     getProjectPresence.call(bridge).then(
       (value) => {
         reading = false;
         if (!live) return;
         const presence = toPluginProjectPresence(value);
         projectId = presence?.projectId ?? null;
+        const raced = unattributed.size > 0;
         const pushed = presence ? unattributed.get(presence.projectId) : undefined;
-        unattributed.clear();
         if (pushed !== undefined) publish(pushed);
         else if (pushes === seen) publish(presence?.state ?? null);
-        if (again) read();
+        settle(presence === null && raced);
       },
       () => {
-        // A failed read is no answer: keep the last one rather than guess, and
-        // let the next push or resync ask again.
+        // A failed read is no answer: keep the last one rather than guess.
         reading = false;
-        if (live && again) read();
+        if (live) settle(unattributed.size > 0);
       }
     );
   };
@@ -82,8 +89,8 @@ function start(bridge: PluginHostBridge): () => void {
     }
     // Not attributable yet: main has not answered, or answered before this
     // view was registered to a project, which a view that loads first outgrows.
-    unattributed.set(presence.projectId, presence.state);
-    if (!reading) read();
+    if (reading) unattributed.set(presence.projectId, presence.state);
+    else read();
   });
   // A remote view's link dropped pushes on the way: read again once it is back.
   const onResync = (): void => {
