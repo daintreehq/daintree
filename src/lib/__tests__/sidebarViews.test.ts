@@ -6,6 +6,7 @@ import type {
 import { makeProjectPluginInstanceKey } from "@shared/types/plugin";
 import {
   resolveActiveSidebarView,
+  resolveDefaultSidebarView,
   resolveSidebarViewOptions,
   sidebarViewPublicId,
 } from "../sidebarViews";
@@ -105,8 +106,8 @@ describe("resolveSidebarViewOptions", () => {
     ];
     expect(ids(hosted)).toEqual([
       WORKTREES_SIDEBAR_VIEW_ID,
-      "acme.beads.board",
       "project:acme.beads.board",
+      "acme.beads.board",
     ]);
   });
 });
@@ -120,5 +121,63 @@ describe("resolveActiveSidebarView", () => {
 
   it("falls back to the worktree list for a choice not on offer", () => {
     expect(resolveActiveSidebarView(options, "acme.gone.view").id).toBe(WORKTREES_SIDEBAR_VIEW_ID);
+  });
+});
+
+describe("resolveDefaultSidebarView", () => {
+  const project = (viewId: string, extra: Partial<PluginSidebarHostedViewDescriptor> = {}) =>
+    sidebarView(viewId, {
+      pluginId: makeProjectPluginInstanceKey("p1", "acme.beads"),
+      ...extra,
+    });
+  const defaultId = (hosted: PluginHostedViewDescriptor[]) =>
+    resolveDefaultSidebarView(resolveSidebarViewOptions(hosted, {})).id;
+
+  it("opens on the worktree list when no plugin view outranks it", () => {
+    expect(defaultId([])).toBe(WORKTREES_SIDEBAR_VIEW_ID);
+    expect(defaultId([project("board", { priority: 0 })])).toBe(WORKTREES_SIDEBAR_VIEW_ID);
+    expect(defaultId([project("board", { priority: -5 })])).toBe(WORKTREES_SIDEBAR_VIEW_ID);
+  });
+
+  it("opens on a project plugin's view that outranks the worktree list", () => {
+    expect(defaultId([project("board", { priority: 10 })])).toBe("project:acme.beads.board");
+  });
+
+  it("only offers an installed plugin's view, however high it ranks", () => {
+    expect(defaultId([sidebarView("board", { priority: 100 })])).toBe(WORKTREES_SIDEBAR_VIEW_ID);
+  });
+
+  it("skips an installed view for a lower-ranked project one", () => {
+    expect(
+      defaultId([sidebarView("board", { priority: 100 }), project("docs", { priority: 5 })])
+    ).toBe("project:acme.beads.docs");
+  });
+
+  it("breaks a tie toward the project plugin whatever order they arrive in", () => {
+    const installed = sidebarView("board", { priority: 10 });
+    const proj = project("board", { priority: 10 });
+    const options = (hosted: PluginHostedViewDescriptor[]) =>
+      resolveSidebarViewOptions(hosted, {}).map((option) => option.id);
+    expect(options([installed, proj])).toEqual(options([proj, installed]));
+    expect(options([installed, proj])[0]).toBe("project:acme.beads.board");
+  });
+});
+
+describe("resolveActiveSidebarView with no pick", () => {
+  it("follows the default, and a pick that isn't on offer falls back to it", () => {
+    const options = resolveSidebarViewOptions(
+      [
+        sidebarView("board", {
+          pluginId: makeProjectPluginInstanceKey("p1", "acme.beads"),
+          priority: 10,
+        }),
+      ],
+      {}
+    );
+    expect(resolveActiveSidebarView(options, null).id).toBe("project:acme.beads.board");
+    expect(resolveActiveSidebarView(options, "acme.gone.view").id).toBe("project:acme.beads.board");
+    expect(resolveActiveSidebarView(options, WORKTREES_SIDEBAR_VIEW_ID).id).toBe(
+      WORKTREES_SIDEBAR_VIEW_ID
+    );
   });
 });

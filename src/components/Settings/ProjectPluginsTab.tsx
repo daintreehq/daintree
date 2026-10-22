@@ -28,6 +28,7 @@ import {
 } from "@/components/Settings/PluginSettingsForm";
 import { pluginHasSettings } from "@/services/plugin/pluginSettingsHome";
 import { usePluginManagerStore } from "@/store/pluginManagerStore";
+import { SidebarDefaultViewSection } from "@/components/Settings/SidebarDefaultViewSection";
 import { ProjectAgentToolsSection } from "@/components/Settings/ProjectAgentToolsSection";
 import {
   PROJECT_PLUGINS_OVERVIEW_ID,
@@ -736,6 +737,8 @@ function ProjectOverviewPane({
       </SettingsSection>
 
       <ProjectSurfacesSection />
+
+      <SidebarDefaultViewSection />
 
       <HiddenLauncherGroupsSection />
 
