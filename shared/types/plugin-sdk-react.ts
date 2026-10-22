@@ -7295,3 +7295,164 @@ export interface PluginDecisionRequestProps extends PluginRootAttributes {
   answer?: string;
   className?: string;
 }
+
+/**
+ * The comparisons a filter condition can make. Which ones a field offers
+ * depends on its type:
+ *
+ * - `text`: `eq`, `neq`, `contains`, `not_contains`, `empty`, `not_empty`
+ * - `number`: `eq`, `neq`, `gt`, `gte`, `lt`, `lte`, `empty`, `not_empty`
+ * - `date`: `eq` (on the day), `before`, `after`, `empty`, `not_empty`
+ * - `select`: `eq`, `neq`, `empty`, `not_empty`
+ * - `boolean`: `eq`, `empty`, `not_empty`
+ *
+ * `empty` and `not_empty` take no value. A later minor version may add
+ * comparisons, so a translator should refuse one it does not know rather
+ * than skip it.
+ */
+export type PluginFilterOperator =
+  | "eq"
+  | "neq"
+  | "contains"
+  | "not_contains"
+  | "gt"
+  | "gte"
+  | "lt"
+  | "lte"
+  | "before"
+  | "after"
+  | "empty"
+  | "not_empty";
+
+/** The kinds of field a `FilterBuilder` can filter on. */
+export type PluginFilterFieldType = "text" | "number" | "date" | "select" | "boolean";
+
+/**
+ * A condition's value: text for `text`, a finite number for `number`, a
+ * `"YYYY-MM-DD"` day for `date`, an option's `value` for `select`, and
+ * `true` or `false` for `boolean`.
+ */
+export type PluginFilterValue = string | number | boolean;
+
+/**
+ * One comparison in a filter: `field` is a schema field's `id`, never a
+ * path. `value` is left out for `empty` and `not_empty`, and while the user
+ * has yet to give one.
+ */
+export interface PluginFilterCondition {
+  field: string;
+  op: PluginFilterOperator;
+  value?: PluginFilterValue;
+}
+
+/**
+ * A filter as plain JSON, for your plugin to turn into a query or run with
+ * `matchesFilter`: every condition must hold (`all`) or any one (`any`). No
+ * conditions is no filter. Groups do not nest. Read one you did not just
+ * receive from a `FilterBuilder` (a saved one, an agent's) with `readFilter`,
+ * which refuses anything incomplete or outside the schema.
+ */
+export interface PluginFilter {
+  match: "all" | "any";
+  conditions: readonly PluginFilterCondition[];
+}
+
+/**
+ * One field a `FilterBuilder` offers. Ids must be non-empty and unique.
+ * "Owner is me" is a `select` with an option whose `value` your plugin
+ * resolves to the current user when it runs the filter; the kit has no
+ * notion of who that is.
+ */
+export interface PluginFilterField {
+  id: string;
+  label: string;
+  type: PluginFilterFieldType;
+  /** A `select` field's choices. A condition naming a value not listed here is invalid. */
+  options?: readonly PluginSelectOption[];
+  /**
+   * Narrows the comparisons offered, from those the type allows. The kit's
+   * order is kept. An empty list leaves the field out of the builder.
+   */
+  operators?: readonly PluginFilterOperator[];
+  /** A `text` or `number` field's placeholder. */
+  placeholder?: string;
+}
+
+/**
+ * Props of `FilterBuilder`: rows of field, comparison and value that edit a
+ * `PluginFilter`, with All or Any once there are two. The filter is
+ * controlled. A condition the schema no longer allows (a field removed, a
+ * comparison it does not offer, an option gone) keeps its row and its JSON,
+ * marked with the reason, until the user changes or removes it. Unfinished
+ * conditions are part of the value too: run it through `readFilter` before
+ * querying with it.
+ */
+export interface PluginFilterBuilderProps extends PluginRootAttributes {
+  fields: readonly PluginFilterField[];
+  value: PluginFilter;
+  /** The whole filter after any change. */
+  onChange: (value: PluginFilter) => void;
+  /** Add's label. Defaults to "Add condition". */
+  addLabel?: string;
+  disabled?: boolean;
+  /** Required: names the group ("Issue filters"). */
+  "aria-label": string;
+  className?: string;
+}
+
+/**
+ * The choices a saved view holds. All three are always present, so switching
+ * views replaces every one of them, not only those the new view changed.
+ * `sort` and `hiddenColumns` are `DataTable`'s controlled `sort` and
+ * `hiddenColumns`; a view with no table keeps `null` and `[]`.
+ */
+export interface PluginSavedViewState {
+  filter: PluginFilter;
+  sort: PluginDataTableSort | null;
+  hiddenColumns: readonly string[];
+}
+
+/** One named set of filter, sort and column choices. */
+export interface PluginSavedView extends PluginSavedViewState {
+  /** Non-empty and unique among the views. */
+  id: string;
+  name: string;
+}
+
+/**
+ * Props of `SavedViews`: a compact menu of named views, with Save changes,
+ * Save as new view, Rename, Revert and Remove. Pass what is on screen now as
+ * `current`; choosing a view or reverting calls `onApply` with its choices,
+ * for you to put on screen. The control marks `current` as modified when it
+ * differs from the chosen view, and never applies a view on its own.
+ *
+ * The views and the chosen one are controlled when `views` and
+ * `activeViewId` are passed. Otherwise `viewStateKey` remembers them with
+ * `usePersistentViewState`; keep `current` there too, so a reload shows the
+ * choices the chosen view is compared against. Controlled props still win.
+ */
+export interface PluginSavedViewsProps extends PluginRootAttributes {
+  /** The filter, sort and hidden columns on screen now. */
+  current: PluginSavedViewState;
+  /** Put a view's choices on screen: called on choosing a view, and on Revert. */
+  onApply: (state: PluginSavedViewState) => void;
+  /** The views, controlled. */
+  views?: readonly PluginSavedView[];
+  /** The views to start from when uncontrolled and nothing is remembered. */
+  defaultViews?: readonly PluginSavedView[];
+  /** The whole list after a save, rename or removal. */
+  onViewsChange?: (views: PluginSavedView[]) => void;
+  /** The chosen view's id, controlled. `null` is none. */
+  activeViewId?: string | null;
+  defaultActiveViewId?: string | null;
+  /** A view was chosen, saved as new, or removed while chosen (`null`). */
+  onActiveViewChange?: (id: string | null) => void;
+  /** Remembers the views and the chosen one under this key when they are not controlled. */
+  viewStateKey?: string;
+  /** The trigger's label while no view is chosen. Defaults to "Views". */
+  placeholder?: string;
+  disabled?: boolean;
+  /** Defaults to "Saved views". */
+  "aria-label"?: string;
+  className?: string;
+}

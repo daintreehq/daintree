@@ -1043,6 +1043,92 @@ Pieces for plugins that move records and agent output through review: attachment
 | `SourceList` | `sources: { id, title, locator?, excerpt?, icon? }[]`, `onOpen?(id)`, `"aria-label"?` ("Sources"), `className?` | The numbered sources behind an answer, in citation order, each with the passage relied on. |
 | `DecisionRequest` | `title`, `description?`, `consequence?`, `children?`, `choices: { id, label, variant?: "default" \| "secondary" \| "destructive" }[]`, `onRespond(id)`, `status?: "pending" \| "answered" \| "expired" \| "cancelled" \| "superseded"`, `answer?`, `className?` | A question a run is waiting on. Choices are secondary unless marked `default` (the one accent answer). A promise from `onRespond` holds the answers until it settles, so one press is one answer; a rejection says why and offers them again. Anything but `pending` takes the answers away and announces what happened, keeping focus in the card; a change of `status` drops whatever was in flight. Give each request its own `key`. |
 
+### Filters and saved views
+
+A structured filter over fields you declare, and named sets of filter, sort and column choices. Both are controlled: the filter is plain JSON in your state, and running it (a database query, `matchesFilter` over rows in memory) is yours.
+
+| Export | Props | Notes |
+| --- | --- | --- |
+| `FilterBuilder` | `fields: FilterField[]`, `value: Filter`, `onChange(filter)`, `addLabel?` ("Add condition"), `disabled?`, `"aria-label"`, `className?` | Rows of field, comparison and value, with All or Any once there are two. A field is `{ id, label, type: "text" \| "number" \| "date" \| "select" \| "boolean", options?, operators?, placeholder? }`; `options` are a `select`'s choices and `operators` narrows the comparisons offered (an empty list leaves the field out). Add starts a row on the first field; a new field resets the comparison and value, and a value carries across comparisons that take one. A condition the schema no longer allows (its field gone, a comparison the field does not offer, an option no longer listed) keeps its row and its JSON, marked with the reason, until the user changes or removes it; editing another row never touches it. Remove focuses the next row's Remove, then the one before, then Add. `onChange` gets unfinished conditions too. |
+| `SavedViews` | `current: SavedViewState`, `onApply(state)`, `views?`, `defaultViews?`, `onViewsChange?(views)`, `activeViewId?`, `defaultActiveViewId?`, `onActiveViewChange?(id)`, `viewStateKey?`, `placeholder?` ("Views"), `disabled?`, `"aria-label"?` ("Saved views"), `className?` | A compact menu: the views to switch between, then Save changes, Save as new view…, Revert changes, Rename view… and Remove view… (confirmed). A view is `{ id, name, filter, sort, hiddenColumns }`, and `SavedViewState` is the last three, always all three, so switching replaces every choice. The trigger names the chosen view and says "Modified" when `current` differs from it (hidden columns compare in any order). Choosing a view or reverting calls `onApply`; the control never applies a view on its own, and removing the chosen view leaves what is on screen. Names are trimmed, required, at most 80 characters and unique ignoring case. `views` and `activeViewId` make it controlled; otherwise `viewStateKey` remembers both with `usePersistentViewState`. |
+
+The filter is `{ match: "all" | "any", conditions: { field, op, value? }[] }`. Comparisons by type:
+
+| Type | Comparisons | Value |
+| --- | --- | --- |
+| `text` | `eq` (is), `neq` (isn't), `contains`, `not_contains`, `empty`, `not_empty` | A non-empty string. `contains` ignores case; `eq` is exact. |
+| `number` | `eq`, `neq`, `gt`, `gte`, `lt`, `lte`, `empty`, `not_empty` | A finite number. |
+| `date` | `eq` (is on), `before`, `after`, `empty`, `not_empty` | A `"YYYY-MM-DD"` day. |
+| `select` | `eq`, `neq`, `empty`, `not_empty` | One of the field's option `value`s. |
+| `boolean` | `eq`, `empty`, `not_empty` | `true` or `false`. |
+
+`empty` and `not_empty` take no value. A later minor version may add comparisons, so a translator should refuse one it does not know rather than skip it. "Owner is me" is a `select` with an option whose `value` you resolve to the current user when you run the filter; the kit has no notion of who that is, so a saved view stays correct for whoever opens it.
+
+Two helpers read and run a filter, and are worth using even with a database behind you:
+
+- `readFilter(value, fields)`: a copy of the filter, or `null` when any condition is incomplete or outside the schema (an unknown field or comparison, a missing or mistyped value, an option not listed, a key the format does not have). Nothing is dropped or filled in, so never run a `null` as "no filter". Read every filter you did not just get from a `FilterBuilder`, and every one you are about to turn into a query.
+- `matchesFilter(filter, values, fields)`: whether one record passes, given its values by field id (own properties, never a dotted path). A filter `readFilter` refuses matches nothing; no conditions match everything. A missing value matches only `empty`, as in SQL, so "Owner isn't Me" leaves out the unassigned. A `date` field also reads an ISO timestamp, epoch ms or a `Date`, on the user's local day.
+
+```jsx
+import {
+  DataTable,
+  FilterBuilder,
+  SavedViews,
+  matchesFilter,
+  readFilter,
+  usePersistentViewState,
+} from "@daintreehq/plugin-ui";
+
+const FIELDS = [
+  {
+    id: "status",
+    label: "Status",
+    type: "select",
+    options: [
+      { value: "open", label: "Open" },
+      { value: "closed", label: "Closed" },
+    ],
+  },
+  { id: "owner", label: "Owner", type: "select", options: [{ value: "me", label: "Me" }] },
+  { id: "title", label: "Title", type: "text" },
+];
+const START = { filter: { match: "all", conditions: [] }, sort: null, hiddenColumns: [] };
+
+function Issues({ issues, me }) {
+  // Kept with the view, so a reload shows what the chosen view is compared against.
+  const [state, setState] = usePersistentViewState("issues:current", START);
+  const filter = readFilter(state.filter, FIELDS);
+  const rows = filter
+    ? issues.filter((issue) =>
+        matchesFilter(filter, { ...issue, owner: issue.owner === me ? "me" : issue.owner }, FIELDS)
+      )
+    : issues;
+  return (
+    <>
+      <SavedViews viewStateKey="issues" current={state} onApply={setState} />
+      <FilterBuilder
+        aria-label="Issue filters"
+        fields={FIELDS}
+        value={state.filter}
+        onChange={(next) => setState((s) => ({ ...s, filter: next }))}
+      />
+      <DataTable
+        rows={rows}
+        columns={COLUMNS}
+        rowKey="id"
+        sort={state.sort}
+        onSortChange={(sort) => setState((s) => ({ ...s, sort }))}
+        hiddenColumns={state.hiddenColumns}
+        onHiddenColumnsChange={(hiddenColumns) => setState((s) => ({ ...s, hiddenColumns }))}
+        columnsMenu
+      />
+    </>
+  );
+}
+```
+
+While a condition is unfinished `readFilter` returns `null`, and the example shows every issue rather than none; a query-backed view would keep its last results instead.
+
 ### Icons
 
 Any icon prop in the kit takes a name or your own element, and `Icon` draws one by name: `name`, `size?` (16 px; inside a kit `Button` the button sizes it), `className?`, `"aria-label"?` (omitted, the icon is decorative and `aria-hidden`).

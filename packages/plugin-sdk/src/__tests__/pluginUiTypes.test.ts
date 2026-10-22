@@ -711,6 +711,34 @@ export function useLayoutHooks(el: HTMLElement | null) {
   const custom: "narrow" | "wide" | null = ui.useBreakpoint(el, { narrow: 0, wide: 640 });
   return [size.width, step, custom];
 }
+const issueFields: ui.FilterField[] = [
+  { id: "status", label: "Status", type: "select", options: [{ value: "open", label: "Open" }] },
+  { id: "owner", label: "Owner", type: "select", options: [{ value: "me", label: "Me" }], operators: ["eq", "neq"] },
+  { id: "points", label: "Points", type: "number", placeholder: "0" },
+];
+const openAndMine: ui.Filter = {
+  match: "all",
+  conditions: [
+    { field: "status", op: "eq", value: "open" },
+    { field: "owner", op: "eq", value: "me" },
+    { field: "points", op: "empty" },
+  ],
+};
+export const builder = createElement(ui.FilterBuilder, { fields: issueFields, value: openAndMine, onChange: (next: ui.Filter) => void next, "aria-label": "Issue filters", addLabel: "Add filter" });
+// @ts-expect-error a builder must be named
+export const unnamedBuilder = createElement(ui.FilterBuilder, { fields: issueFields, value: openAndMine, onChange: () => {} });
+// @ts-expect-error comparisons are a closed set
+export const badCondition: ui.FilterCondition = { field: "status", op: "like", value: "o" };
+// @ts-expect-error values are scalars
+export const listValue: ui.FilterCondition = { field: "status", op: "eq", value: ["open"] };
+export const checked: ui.Filter | null = ui.readFilter(JSON.parse("{}"), issueFields);
+export const passes: boolean = ui.matchesFilter(openAndMine, { status: "open", owner: "me" }, issueFields);
+const viewState: ui.SavedViewState = { filter: openAndMine, sort: { columnId: "points", direction: "desc" }, hiddenColumns: ["owner"] };
+const savedView: ui.SavedView = { id: "mine", name: "My open issues", ...viewState };
+export const views = createElement(ui.SavedViews, { current: viewState, onApply: (next: ui.SavedViewState) => void next, viewStateKey: "issues", defaultViews: [savedView], defaultActiveViewId: "mine" });
+export const controlledViews = createElement(ui.SavedViews, { current: viewState, onApply: () => {}, views: [savedView], onViewsChange: (next: ui.SavedView[]) => void next, activeViewId: null, onActiveViewChange: (id: string | null) => void id, placeholder: "All issues" });
+// @ts-expect-error a saved view holds all three choices
+export const partialView: ui.SavedViewState = { filter: openAndMine, sort: null };
 `;
 
 let consumerDir: string;

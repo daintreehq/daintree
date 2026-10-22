@@ -1548,4 +1548,49 @@ declare module "@daintreehq/plugin-ui" {
   export const SourceList: ComponentType<SourceListProps>;
   /** A question a run is waiting on, with its answers. */
   export const DecisionRequest: ComponentType<DecisionRequestProps>;
+
+  // Filters and saved views: a structured filter over a declared field schema,
+  // and named sets of filter, sort and column choices.
+  import type {
+    PluginFilter,
+    PluginFilterBuilderProps,
+    PluginFilterCondition,
+    PluginFilterField,
+    PluginFilterFieldType,
+    PluginFilterOperator,
+    PluginFilterValue,
+    PluginSavedView,
+    PluginSavedViewState,
+    PluginSavedViewsProps,
+  } from "@daintreehq/plugin-sdk/react";
+
+  export type Filter = PluginFilter;
+  export type FilterCondition = PluginFilterCondition;
+  export type FilterOperator = PluginFilterOperator;
+  export type FilterValue = PluginFilterValue;
+  export type FilterField = PluginFilterField;
+  export type FilterFieldType = PluginFilterFieldType;
+  export type FilterBuilderProps = PluginFilterBuilderProps;
+  export type SavedViewState = PluginSavedViewState;
+  export type SavedView = PluginSavedView;
+  export type SavedViewsProps = PluginSavedViewsProps;
+
+  /** Field, comparison and value rows editing a plain JSON filter; rows the schema no longer allows stay, marked. */
+  export const FilterBuilder: ComponentType<FilterBuilderProps>;
+  /** A compact menu of named filter, sort and column choices: switch, save, rename, revert, remove. */
+  export const SavedViews: ComponentType<SavedViewsProps>;
+  /**
+   * `value` as a filter over `fields`, copied, or `null` when any condition is
+   * incomplete or outside the schema. Never run a `null` as "no filter".
+   */
+  export function readFilter(value: unknown, fields: readonly FilterField[]): Filter | null;
+  /**
+   * Whether one record, given as its values by field id, passes `filter`. A
+   * filter `readFilter` refuses matches nothing; no conditions match everything.
+   */
+  export function matchesFilter(
+    filter: Filter,
+    values: Readonly<Record<string, unknown>>,
+    fields: readonly FilterField[]
+  ): boolean;
 }

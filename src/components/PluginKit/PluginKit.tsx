@@ -136,6 +136,7 @@ import { pluginKitNativeAgents } from "./PluginKitNativeAgents";
 import { pluginKitGit } from "./PluginKitGit";
 import { pluginKitWorkflowsRecords } from "./PluginKitWorkflows";
 import { pluginKitAgentWork } from "./PluginKitAgentWork";
+import { pluginKitFilters } from "./PluginKitFilters";
 import { primeRadix } from "@/components/ui/radix-loader";
 import { invalidProp } from "./kitField";
 
@@ -1317,6 +1318,7 @@ export const pluginKitFamilies = [
   pluginKitGit,
   pluginKitWorkflowsRecords,
   pluginKitAgentWork,
+  pluginKitFilters,
   pluginKitDataTables,
 ];
 
@@ -1353,6 +1355,7 @@ export const pluginKit = {
   ...pluginKitGit,
   ...pluginKitWorkflowsRecords,
   ...pluginKitAgentWork,
+  ...pluginKitFilters,
   // Last: its DataTable wraps the basic one from pluginKitLists.
   ...pluginKitDataTables,
 };

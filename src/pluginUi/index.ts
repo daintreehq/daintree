@@ -222,6 +222,10 @@ import type {
   PluginToolCallCardProps,
   PluginUnsavedChangesBarProps,
 } from "@shared/types/plugin-sdk-react";
+import type {
+  PluginFilterBuilderProps,
+  PluginSavedViewsProps,
+} from "@shared/types/plugin-sdk-react";
 import { fromKit } from "./kit";
 
 export { preloadPluginUi, whenPluginUiReady } from "./kit";
@@ -1476,4 +1480,30 @@ export type {
   PluginDecisionChoice as DecisionChoice,
   PluginDecisionStatus as DecisionStatus,
   PluginDecisionRequestProps as DecisionRequestProps,
+} from "@shared/types/plugin-sdk-react";
+
+// Filters and saved views: a structured filter over a declared field schema,
+// and named sets of filter, sort and column choices.
+
+export const FilterBuilder: ComponentType<PluginFilterBuilderProps> = fromKit(
+  "FilterBuilder",
+  (kit) => kit.FilterBuilder
+);
+export const SavedViews: ComponentType<PluginSavedViewsProps> = fromKit(
+  "SavedViews",
+  (kit) => kit.SavedViews
+);
+export { matchesFilter, readFilter } from "./filters";
+
+export type {
+  PluginFilter as Filter,
+  PluginFilterCondition as FilterCondition,
+  PluginFilterOperator as FilterOperator,
+  PluginFilterValue as FilterValue,
+  PluginFilterField as FilterField,
+  PluginFilterFieldType as FilterFieldType,
+  PluginFilterBuilderProps as FilterBuilderProps,
+  PluginSavedViewState as SavedViewState,
+  PluginSavedView as SavedView,
+  PluginSavedViewsProps as SavedViewsProps,
 } from "@shared/types/plugin-sdk-react";
