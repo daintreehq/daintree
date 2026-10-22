@@ -38,6 +38,8 @@ import { resolveEffectiveActionDanger } from "@shared/utils/effectiveActionDange
 import {
   setAgentContextDragData,
   validateAgentContextPayload,
+  validateAgentContextReferencePayload,
+  type AgentContextDragData,
 } from "@shared/utils/agentContextDrag";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { getAgentConfig } from "@/config/agents";
@@ -1319,6 +1321,7 @@ function KitContextDragSource({
   text,
   title,
   sourceLabel,
+  reference,
   children,
   label,
   disabled,
@@ -1326,12 +1329,17 @@ function KitContextDragSource({
   className,
   ...rest
 }: PluginContextDragSourceProps) {
-  const payload = validateAgentContextPayload({
-    v: 1,
-    text,
-    ...(title !== undefined ? { title } : {}),
-    ...(sourceLabel !== undefined ? { source: { label: sourceLabel } } : {}),
-  });
+  // A reference (#13795) is carried instead of the text whenever one is given:
+  // the agent then gets the item as it reads when the user sends.
+  const payload: AgentContextDragData | null =
+    reference !== undefined
+      ? validateAgentContextReferencePayload({ v: 2, reference })
+      : validateAgentContextPayload({
+          v: 1,
+          text,
+          ...(title !== undefined ? { title } : {}),
+          ...(sourceLabel !== undefined ? { source: { label: sourceLabel } } : {}),
+        });
   const live = payload !== null && disabled !== true;
   const started = fn(onDragStart);
   const handleDragStart = (event: DragEvent<HTMLElement>) => {

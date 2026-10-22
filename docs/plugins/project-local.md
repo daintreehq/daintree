@@ -159,6 +159,7 @@ Scoped to the owning project, and visible only in its views:
 | `promptTemplates` | In the owning project's composer command picker only, and gone while the plugin is switched off or the folder is untrusted. They fill the draft and never submit. See [Prompt templates](./contribution-points.md#prompt-templates--shipped) |
 | `worktreeSetupSteps` | Run only for worktrees created in the owning project, from the copy of the plugin in the project root, never the new worktree's branch. The user allows each step once for the project. See [Worktree setup steps](./contribution-points.md#worktree-setup-steps--shipped) |
 | `terminalLinks` | In the owning project's terminals only, and gone while the plugin is switched off or the folder is untrusted. See [Terminal links](./contribution-points.md#terminal-links--shipped) |
+| `contextProviders` | In the owning project's agent composer only. A prefix an installed plugin already holds is refused for the project plugin. The provider's switch in Project settings → Plugins applies to this project. See [Context providers](./contribution-points.md#context-providers--shipped) |
 
 Forbidden under `scope: "project"`, each rejected at manifest validation with an error naming the real obstacle:
 

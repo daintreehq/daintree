@@ -717,6 +717,14 @@ export interface StoreSchema {
   hiddenSearchProviders?: string[];
 
   /**
+   * Plugin instance ids whose `@` context providers the user switched off
+   * (#13795). An installed plugin's id spans every project; a project plugin's
+   * embeds its project, so its switch is that project's alone. Daintree's own
+   * settings, never the repository. Same additive-key convention as above.
+   */
+  pluginContextProvidersOff?: string[];
+
+  /**
    * Per-project presentation profiles (#13771): the levels the user set or
    * accepted for each built-in surface, and their answer to the repository's
    * `.daintree/presentation.json` suggestion. Read and written only through
@@ -1069,6 +1077,7 @@ const storeOptions = {
     projectHiddenLaunchGroups: {},
     pluginNotificationSilences: [],
     hiddenSearchProviders: [],
+    pluginContextProvidersOff: [],
     projectPresentation: {},
     worktreeCustomTitles: {},
     projectAgentMcpEnablement: {},

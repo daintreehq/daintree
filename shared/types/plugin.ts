@@ -21,6 +21,11 @@ import type {
 import type { AgentState, WaitingReason } from "./agent.js";
 import type { AgentDetectionConfig, AgentResumeTemplate } from "../config/agentRegistry.js";
 import type { LaunchMcpFormat } from "../config/launchMcp.js";
+import type {
+  ContextProviderContribution,
+  ContextProviderDescriptor,
+  ContextProviderImpl,
+} from "./pluginContextProvider.js";
 import type { z } from "zod";
 
 /** Default byte ceiling when a `contributes.fileEditors` entry omits `maxBytes`. */
@@ -2831,6 +2836,12 @@ export interface PluginManifest {
      * project's only for a `scope: "project"` one.
      */
     terminalLinks?: TerminalLinkContribution[];
+    /**
+     * `@` context providers for the agent composer (#13795). Optional in the
+     * type but always materialized by the manifest schema's `.default([])`. A
+     * project plugin's providers show in its own project only.
+     */
+    contextProviders?: ContextProviderContribution[];
     forgeProviders: ForgeProviderContribution[];
     fileDecorationProviders: FileDecorationContribution[];
     /**
@@ -6140,6 +6151,23 @@ export interface PluginActivationApi {
    *   is revoked and registration is rejected.
    */
   registerSearchProvider(id: string, provider: PluginSearchProvider): Promise<() => void>;
+  /**
+   * Bind a runtime {@link ContextProviderImpl} to a provider declared in
+   * `contributes.contextProviders` (#13795). The host asks it for matches when
+   * the user types `@{prefix}:` in an agent composer, and for an item's content
+   * when the user sends a draft holding one of its chips — each call under a
+   * deadline, with a signal aborted when the host stops waiting. An undeclared
+   * id is rejected. Returns a disposer; every binding is removed when the plugin
+   * unloads. Must be called during `activate()`. Registering the same id again
+   * replaces the prior binding and leaves the older disposer inert.
+   *
+   * @throws {Error} If called after activation resolves or times out — the host
+   *   is revoked and registration is rejected.
+   */
+  registerContextProvider(
+    descriptor: ContextProviderDescriptor,
+    impl: ContextProviderImpl
+  ): Promise<() => void>;
   /**
    * Subscribe to active-worktree changes. The callback fires with the new
    * active snapshot (or `null` when none is active). Returns a disposer;

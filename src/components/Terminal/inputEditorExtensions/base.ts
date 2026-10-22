@@ -199,6 +199,20 @@ export function buildInputBarTheme(theme: ITheme): Extension {
         ...chipStyle,
       },
       ".cm-selection-chip svg": CHIP_SVG_SIZE,
+      ".cm-context-chip": {
+        ...chipStyle,
+      },
+      ".cm-context-chip svg": CHIP_SVG_SIZE,
+      // The plugin the content comes from, a step quieter than the item itself.
+      ".cm-context-chip-source": {
+        color: `color-mix(in oklab, ${c.foreground} 60%, ${c.shellBg})`,
+      },
+      ".cm-context-chip-label": {
+        maxWidth: "28ch",
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        whiteSpace: "nowrap",
+      },
       // Opaque, so the label keeps its resting contrast at the one moment the
       // user has to confirm which chip is about to go; the contour sits inside
       // the box so the staged chip keeps its geometry.
@@ -242,6 +256,7 @@ const CHIP_CLASSES = [
   ".cm-diff-chip",
   ".cm-terminal-chip",
   ".cm-selection-chip",
+  ".cm-context-chip",
 ];
 
 const CHIP_ANIMATION = `chip-enter ${UI_PALETTE_ENTER_DURATION}ms ${EASE_OUT_EXPO} both`;

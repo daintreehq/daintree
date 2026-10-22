@@ -64,6 +64,7 @@ function makeHost() {
     registerForgeProvider: vi.fn(() => vi.fn()),
     registerFileDecorationProvider: vi.fn(() => vi.fn()),
     registerWorktreeSetupStep: vi.fn((_stepId: string, _handler: any) => vi.fn()),
+    registerContextProvider: vi.fn(async () => vi.fn()),
     invalidateFileDecorations: vi.fn(),
     setPanelBadge: vi.fn(async () => {}),
     setToolbarButtonBadge: vi.fn(async () => {}),
@@ -1537,6 +1538,48 @@ describe("PluginDevWorkerMainBridge", () => {
       params: { stepId: "db" },
     });
     expect(dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it("registerContextProvider round-trips search and cancels the worker call when main stops waiting (#13795)", async () => {
+    const { host, workerHost } = makeBridge();
+    workerHost.emit("worker-message", {
+      type: "host-notify",
+      method: "registerContextProvider",
+      registrationKey: "contextProvider:cards",
+      params: { descriptor: { id: "cards" } },
+    });
+    await flush();
+    expect(host.registerContextProvider).toHaveBeenCalledTimes(1);
+    const [descriptor, proxyImpl] = host.registerContextProvider.mock.calls[0] as unknown as [
+      { id: string },
+      {
+        search: (q: string, o: { signal: AbortSignal }) => Promise<unknown>;
+        resolve: (id: string, o: { signal: AbortSignal }) => Promise<unknown>;
+      },
+    ];
+    expect(descriptor).toEqual({ id: "cards" });
+
+    const found = proxyImpl.search("fix", { signal: new AbortController().signal });
+    const search = workerHost.sent.find(
+      (m) => m.type === "invoke" && m.kind === "context-provider-method" && m.method === "search"
+    );
+    expect(search).toMatchObject({ providerId: "cards", args: ["fix"] });
+    workerHost.emit("worker-message", {
+      type: "invoke-result",
+      requestId: search.requestId,
+      ok: true,
+      result: [{ id: "1", label: "Fix" }],
+    });
+    await expect(found).resolves.toEqual([{ id: "1", label: "Fix" }]);
+
+    const controller = new AbortController();
+    const resolving = proxyImpl.resolve("7", { signal: controller.signal });
+    const resolve = workerHost.sent.find(
+      (m) => m.type === "invoke" && m.kind === "context-provider-method" && m.method === "resolve"
+    );
+    controller.abort(new Error("timed out"));
+    await expect(resolving).rejects.toThrow();
+    expect(workerHost.sent).toContainEqual({ type: "invoke-cancel", requestId: resolve.requestId });
   });
 
   it("unregisterFileDecorationProvider disposes the host registration", async () => {

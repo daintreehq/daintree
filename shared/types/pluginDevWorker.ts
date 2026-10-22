@@ -139,6 +139,8 @@ export type PluginHostNotifyMethod =
   | "unregisterWorktreeSetupStep"
   | "registerSearchProvider"
   | "unregisterSearchProvider"
+  | "registerContextProvider"
+  | "unregisterContextProvider"
   | "mcp.registerTools"
   | "mcp.unregisterTools"
   | "logger.info"
@@ -194,9 +196,11 @@ export type PluginWorkerSubscriptionKind =
  * `provideDecorations`, which is async — see {@link RegisterFileDecorationProviderParams}).
  * `mcp-tool` runs one tool of a roster bound through `host.mcp.registerTools`,
  * `worktree-setup-step` one handler bound through
- * `host.registerWorktreeSetupStep`, and `search-provider` asks a quick switcher
- * provider bound through `host.registerSearchProvider`; they are the kinds main
- * can cancel (`invoke-cancel`), each handing the plugin a signal.
+ * `host.registerWorktreeSetupStep`, `search-provider` asks a quick switcher
+ * provider bound through `host.registerSearchProvider`, and
+ * `context-provider-method` asks a `host.registerContextProvider` impl to
+ * search or resolve (#13795); they are the kinds main can cancel
+ * (`invoke-cancel`), each handing the plugin a signal.
  * `command` is the odd one out: nothing is registered ahead of it. The handler
  * module for a manifest-declared command is imported by the worker on first
  * dispatch, from the absolute path main resolved (#12274), so there is no
@@ -212,7 +216,8 @@ export type PluginWorkerInvokeKind =
   | "file-decoration-method"
   | "mcp-tool"
   | "worktree-setup-step"
-  | "search-provider";
+  | "search-provider"
+  | "context-provider-method";
 
 /** Messages sent main → worker. */
 export type PluginHostToWorkerMessage =
@@ -294,6 +299,19 @@ export type PluginHostToWorkerMessage =
       args: unknown[];
     }
   /**
+   * Ask a registered context provider to search (the user's text after its
+   * prefix) or resolve (one item id). Cancellable like `mcp-tool`: the worker
+   * hands the plugin a signal that a matching `invoke-cancel` aborts.
+   */
+  | {
+      type: "invoke";
+      requestId: string;
+      kind: "context-provider-method";
+      providerId: string;
+      method: "search" | "resolve";
+      args: [string];
+    }
+  /**
    * Run one tool of an `agentMcp` roster the worker registered. `caller` is the
    * host's provenance for the call, copied field by field on the main side so
    * nothing beyond the public descriptor crosses the port.
@@ -331,7 +349,8 @@ export type PluginHostToWorkerMessage =
       context: { mode: "scoped" | "blended"; limit: number };
     }
   /**
-   * Abort an in-flight `mcp-tool`, `worktree-setup-step` or `search-provider` invoke — the main-side counterpart of the
+   * Abort an in-flight `mcp-tool`, `worktree-setup-step`, `search-provider` or
+   * `context-provider-method` invoke — the main-side counterpart of the
    * worker's `host-cancel`, since an `AbortSignal` cannot cross the port. Main
    * has already settled the caller by the time this is sent, so any
    * `invoke-result` that follows for this id is dropped.
@@ -575,6 +594,20 @@ export type WorktreeSetupStepWireContext = Omit<PluginWorktreeSetupStepContext, 
  * worker and main asks it through a `search-provider` invoke.
  */
 export interface SearchProviderRegistrationParams {
+  providerId: string;
+}
+
+/**
+ * Params for `registerContextProvider` (`host-notify`, #13795). Only the
+ * descriptor travels; `search` and `resolve` stay in the worker and main asks
+ * them through a `context-provider-method` invoke.
+ */
+export interface RegisterContextProviderParams {
+  descriptor: { id: string };
+}
+
+/** Params for `unregisterContextProvider` (`host-notify`). */
+export interface UnregisterContextProviderParams {
   providerId: string;
 }
 

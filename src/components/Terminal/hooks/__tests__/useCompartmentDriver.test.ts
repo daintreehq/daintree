@@ -38,6 +38,7 @@ const TOOLTIP_NAMES = [
   "diffChip",
   "terminalChip",
   "selectionChip",
+  "contextChip",
 ];
 
 describe("useCompartmentDriver", () => {
@@ -83,6 +84,7 @@ describe("useCompartmentDriver", () => {
           diffChipTooltipCompartmentRef: c.diffChip!.ref as any,
           terminalChipTooltipCompartmentRef: c.terminalChip!.ref as any,
           selectionChipTooltipCompartmentRef: c.selectionChip!.ref as any,
+          contextChipTooltipCompartmentRef: c.contextChip!.ref,
           ...props,
         }),
       { initialProps: props }

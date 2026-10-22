@@ -28,6 +28,16 @@ import {
   fileSearchQuery,
   type ActiveCompletionContext,
 } from "./hybridInputParsing";
+import { splitContextProviderQuery } from "@shared/utils/pluginContextReference";
+import type { ContextProviderItem } from "@shared/types/pluginContextProvider";
+import { usePluginContextProvidersStore } from "@/store/pluginContextProvidersStore";
+import { useContextProviderSearch } from "./hooks/useContextProviderSearch";
+import { contextItemKey, type ContextProviderClaim } from "./hooks/useAutocompleteItems";
+import {
+  contextReferenceChipProviders,
+  setContextReferenceProviders,
+  type ContextReferenceChipProvider,
+} from "./inputEditorExtensions/contextReferenceChip";
 import type { CompletionTrigger } from "@shared/types";
 import { CommandPickerHost } from "@/components/Commands";
 import { PromptHistoryPalette } from "./PromptHistoryPalette";
@@ -228,6 +238,8 @@ type ApplyEditorValue = (
 ) => void;
 
 const EMPTY_STALE_KEYS: ReadonlySet<string> = new Set<string>();
+const NO_CONTEXT_CHIP_PROVIDERS: ReadonlyMap<string, ContextReferenceChipProvider> = new Map();
+const NO_CONTEXT_ITEMS: ContextProviderItem[] = [];
 
 /**
  * Whether the editor holds the caret, judged by the DOM rather than by
@@ -428,6 +440,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       diffChipTooltipCompartmentRef,
       terminalChipTooltipCompartmentRef,
       selectionChipTooltipCompartmentRef,
+      contextChipTooltipCompartmentRef,
       autoSizeCompartmentRef,
       themeCompartmentRef,
     } = compartments;
@@ -620,11 +633,66 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     }, [agentId, thisMachineOff]);
 
     const triggerChar = activeCompletionContext?.triggerChar ?? null;
-    // Which Daintree `@` provider claims the query (else `@file` fallback).
+    // A plugin's `@{prefix}:` (#13795) claims the query when a provider holds
+    // that prefix in this project; then Daintree's own providers; else `@file`.
+    const contextProviderEntries = usePluginContextProvidersStore((s) => s.entries);
+    const completionQuery = activeCompletionContext?.query ?? "";
+    const contextClaim = useMemo((): ContextProviderClaim | null => {
+      if (triggerChar !== "@") return null;
+      const split = splitContextProviderQuery(completionQuery);
+      if (split === null) return null;
+      const entry = contextProviderEntries.find(
+        (e) => e.status === "active" && e.prefix === split.prefix
+      );
+      return entry
+        ? { prefix: entry.prefix, pluginName: entry.pluginName, query: split.query }
+        : null;
+    }, [triggerChar, completionQuery, contextProviderEntries]);
     const atClaim =
-      triggerChar === "@" ? getDaintreeAtClaim(activeCompletionContext?.query ?? "") : null;
-    const isFileMode = triggerChar === "@" && atClaim === null;
+      triggerChar === "@" && contextClaim === null ? getDaintreeAtClaim(completionQuery) : null;
+    const isFileMode = triggerChar === "@" && atClaim === null && contextClaim === null;
     const isAutocompleteOpen = activeCompletionContext !== null && !disabled;
+    const isAtMenuOpen = isAutocompleteOpen && triggerChar === "@";
+
+    useEffect(() => {
+      usePluginContextProvidersStore.getState().init();
+    }, []);
+    // Which prefixes this project's plugins hold can change without an event
+    // reaching this view; the moment it matters is when an `@` menu opens.
+    useEffect(() => {
+      if (isAtMenuOpen) usePluginContextProvidersStore.getState().refresh();
+    }, [isAtMenuOpen]);
+
+    // Chips are drawn for the prefixes a provider holds here, and never on a
+    // terminal of another host, where references go as typed.
+    const contextChipProviders = useMemo(
+      (): ReadonlyMap<string, ContextReferenceChipProvider> =>
+        thisMachineOff
+          ? NO_CONTEXT_CHIP_PROVIDERS
+          : contextReferenceChipProviders(contextProviderEntries),
+      [thisMachineOff, contextProviderEntries]
+    );
+    useEffect(() => {
+      editorViewRef.current?.dispatch({
+        effects: setContextReferenceProviders.of(contextChipProviders),
+      });
+    }, [contextChipProviders, editorViewRef, terminalId]);
+
+    const {
+      items: contextSearchItems,
+      isLoading: isContextLoading,
+      resultsFor: contextResultsFor,
+    } = useContextProviderSearch({
+      prefix: contextClaim?.prefix ?? null,
+      query: contextClaim?.query ?? "",
+      enabled: isAutocompleteOpen && contextClaim !== null,
+    });
+    // Rows another provider answered are never shown under this one's prefix:
+    // its ids mean nothing here.
+    const contextItems =
+      contextClaim !== null && contextResultsFor?.prefix === contextClaim.prefix
+        ? contextSearchItems
+        : NO_CONTEXT_ITEMS;
 
     const fileQuery = isFileMode ? fileSearchQuery(activeCompletionContext?.query ?? "") : "";
     const {
@@ -655,16 +723,27 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       isAutocompleteLoading,
       autocompleteCommands,
       isCommandsLoading,
+      contextClaim,
+      contextItems,
+      isContextLoading,
     });
 
-    // Per-provider staleness: only the debounced async `@file` search can go
-    // stale. Its item keys ARE the file paths, so a stale file search dims only
-    // those rows — never a fresh `$` or static `@diff` list.
+    // Per-provider staleness: the debounced async searches — `@file` and a
+    // plugin's `@{prefix}:` — can go stale. Each dims only its own rows, never
+    // a fresh `$` or static `@diff` list, and Enter on a dimmed row inserts
+    // nothing, so a row answering an older query is never picked.
     const isFileStale = isFileMode && fileResultsQuery !== fileQuery;
-    const staleItemKeys = useMemo(
-      () => (isFileStale ? new Set(autocompleteFiles) : EMPTY_STALE_KEYS),
-      [isFileStale, autocompleteFiles]
-    );
+    const staleContextPrefix =
+      contextClaim !== null && contextResultsFor?.query !== contextClaim.query
+        ? contextClaim.prefix
+        : null;
+    const staleItemKeys = useMemo(() => {
+      if (isFileStale) return new Set(autocompleteFiles);
+      if (staleContextPrefix !== null) {
+        return new Set(contextItems.map((item) => contextItemKey(staleContextPrefix, item.id)));
+      }
+      return EMPTY_STALE_KEYS;
+    }, [isFileStale, autocompleteFiles, staleContextPrefix, contextItems]);
 
     useEffect(() => {
       latestRef.current = {
@@ -1150,6 +1229,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       diffChipTooltipCompartmentRef,
       terminalChipTooltipCompartmentRef,
       selectionChipTooltipCompartmentRef,
+      contextChipTooltipCompartmentRef,
       isAutocompleteOpen,
     });
 

@@ -1127,6 +1127,37 @@
             "additionalProperties": false
           }
         },
+        "contextProviders": {
+          "default": [],
+          "maxItems": 10,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64,
+                "pattern": "^[a-zA-Z0-9._-]+$"
+              },
+              "prefix": {
+                "type": "string",
+                "pattern": "^[a-z]{1,16}$"
+              },
+              "label": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 60
+              }
+            },
+            "required": [
+              "id",
+              "prefix",
+              "label"
+            ],
+            "additionalProperties": false
+          }
+        },
         "forgeProviders": {
           "default": [],
           "maxItems": 20,

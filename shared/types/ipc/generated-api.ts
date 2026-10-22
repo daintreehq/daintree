@@ -846,6 +846,9 @@ export interface GeneratedElectronAPI {
     getBackgroundUpdateCheckSettings(
       ...args: IpcInvokeMap["plugin:bg-update-check-settings-get"]["args"]
     ): Promise<IpcInvokeMap["plugin:bg-update-check-settings-get"]["result"]>;
+    getContextProviders(
+      ...args: IpcInvokeMap["plugin:context-providers-get"]["args"]
+    ): Promise<IpcInvokeMap["plugin:context-providers-get"]["result"]>;
     getDecorations(
       ...args: IpcInvokeMap["plugin:file-decorations-get"]["args"]
     ): Promise<IpcInvokeMap["plugin:file-decorations-get"]["result"]>;
@@ -963,12 +966,18 @@ export interface GeneratedElectronAPI {
     reportPanelLifecycle(
       ...args: IpcInvokeMap["plugin:report-panel-lifecycle"]["args"]
     ): Promise<IpcInvokeMap["plugin:report-panel-lifecycle"]["result"]>;
+    resolveContextReferences(
+      ...args: IpcInvokeMap["plugin:context-references-resolve"]["args"]
+    ): Promise<IpcInvokeMap["plugin:context-references-resolve"]["result"]>;
     restartWorker(
       ...args: IpcInvokeMap["plugin:restart-worker"]["args"]
     ): Promise<IpcInvokeMap["plugin:restart-worker"]["result"]>;
     revealSecretSetting(
       ...args: IpcInvokeMap["plugin:settings-reveal-secret"]["args"]
     ): Promise<IpcInvokeMap["plugin:settings-reveal-secret"]["result"]>;
+    searchContextProvider(
+      ...args: IpcInvokeMap["plugin:context-provider-search"]["args"]
+    ): Promise<IpcInvokeMap["plugin:context-provider-search"]["result"]>;
     setAccountToken(
       ...args: IpcInvokeMap["plugin:account-set-token"]["args"]
     ): Promise<IpcInvokeMap["plugin:account-set-token"]["result"]>;
@@ -981,6 +990,9 @@ export interface GeneratedElectronAPI {
     setBackgroundUpdateCheckSettings(
       ...args: IpcInvokeMap["plugin:bg-update-check-settings-set"]["args"]
     ): Promise<IpcInvokeMap["plugin:bg-update-check-settings-set"]["result"]>;
+    setContextProvidersEnabled(
+      ...args: IpcInvokeMap["plugin:context-providers-enabled-set"]["args"]
+    ): Promise<IpcInvokeMap["plugin:context-providers-enabled-set"]["result"]>;
     setEnabled(
       ...args: IpcInvokeMap["plugin:set-enabled"]["args"]
     ): Promise<IpcInvokeMap["plugin:set-enabled"]["result"]>;

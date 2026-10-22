@@ -54,6 +54,10 @@ import type {
   ForgeProviderDescriptor,
   AnyForgeProviderImpl,
 } from "../types/forge.js";
+import type {
+  ContextProviderDescriptor,
+  ContextProviderImpl,
+} from "../types/pluginContextProvider.js";
 import type { NotificationType } from "../types/notification.js";
 import type {
   ActionHandler,
@@ -222,6 +226,12 @@ export interface RegisteredSearchProviderRecord {
   provider: PluginSearchProvider;
 }
 
+/** A provider bound through `host.registerContextProvider`; call `impl` directly to test it. */
+export interface RegisteredContextProviderRecord {
+  descriptor: ContextProviderDescriptor;
+  impl: ContextProviderImpl;
+}
+
 /**
  * A handler bound through `host.registerWorktreeSetupStep`. Call `handler`
  * with a context of your own to run the step as the host would.
@@ -376,6 +386,7 @@ export interface MockHostState {
   readonly registeredWorktreeSetupSteps: ReadonlyArray<RegisteredWorktreeSetupStepRecord>;
   /** Live `host.registerSearchProvider` bindings, one per provider id. */
   readonly registeredSearchProviders: ReadonlyArray<RegisteredSearchProviderRecord>;
+  readonly registeredContextProviders: ReadonlyArray<RegisteredContextProviderRecord>;
   /** Live `host.mcp.registerTools` rosters, one per endpoint id. */
   readonly registeredMcpTools: ReadonlyArray<RegisteredMcpToolsRecord>;
   readonly invalidationCalls: ReadonlyArray<InvalidationRecord>;
@@ -1282,6 +1293,7 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
   const registeredFileDecorationProviders: RegisteredFileDecorationProviderRecord[] = [];
   const registeredWorktreeSetupSteps: RegisteredWorktreeSetupStepRecord[] = [];
   const registeredSearchProviders: RegisteredSearchProviderRecord[] = [];
+  const registeredContextProviders: RegisteredContextProviderRecord[] = [];
   const registeredMcpTools: RegisteredMcpToolsRecord[] = [];
   const invalidationCalls: InvalidationRecord[] = [];
   const setPanelBadgeCalls: SetPanelBadgeRecord[] = [];
@@ -2458,6 +2470,35 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
       };
       return Promise.resolve(dispose);
     },
+    async registerContextProvider(descriptor, impl) {
+      // Structural checks in the host's order; the declared-id check is skipped
+      // because the mock has no manifest model (#9878). Replace-by-id, with an
+      // identity-guarded disposer, as in production.
+      if (!descriptor || typeof descriptor !== "object") {
+        throw new Error("registerContextProvider: descriptor must be an object");
+      }
+      if (typeof descriptor.id !== "string" || descriptor.id.length === 0) {
+        throw new Error("registerContextProvider: descriptor.id must be a non-empty string");
+      }
+      if (
+        !impl ||
+        typeof impl !== "object" ||
+        typeof impl.search !== "function" ||
+        typeof impl.resolve !== "function"
+      ) {
+        throw new Error("registerContextProvider: impl must expose search() and resolve()");
+      }
+      const providerId = descriptor.id;
+      const existing = registeredContextProviders.findIndex((r) => r.descriptor.id === providerId);
+      if (existing >= 0) registeredContextProviders[existing] = { descriptor, impl };
+      else registeredContextProviders.push({ descriptor, impl });
+      return () => {
+        const i = registeredContextProviders.findIndex(
+          (r) => r.descriptor.id === providerId && r.impl === impl
+        );
+        if (i >= 0) registeredContextProviders.splice(i, 1);
+      };
+    },
     mcp: {
       registerTools(endpointId, tools) {
         // Structural checks only. The mock has no manifest model (#9878), so the
@@ -3375,6 +3416,7 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
     registeredFileDecorationProviders,
     registeredWorktreeSetupSteps,
     registeredSearchProviders,
+    registeredContextProviders,
     registeredMcpTools,
     invalidationCalls,
     setPanelBadgeCalls,

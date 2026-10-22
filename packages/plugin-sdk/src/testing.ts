@@ -15,6 +15,7 @@ export type {
   RegisteredForgeProviderRecord,
   RegisteredFileDecorationProviderRecord,
   RegisteredWorktreeSetupStepRecord,
+  RegisteredContextProviderRecord,
   RegisteredMcpToolsRecord,
   InvalidationRecord,
   ShowQuickPickRecord,

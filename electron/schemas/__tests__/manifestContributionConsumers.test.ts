@@ -14,6 +14,7 @@ import {
   DatabaseQueryContributionSchema,
   DatabaseQueryParamSchema,
   FileDecorationContributionSchema,
+  ContextProviderContributionSchema,
   FileEditorContributionSchema,
   ForgeProviderContributionSchema,
   getPluginManifestSchema,
@@ -176,6 +177,7 @@ const SWEPT_SCHEMAS = {
   themes: ThemeContributionSchema,
   promptTemplates: PromptTemplateContributionSchema,
   terminalLinks: TerminalLinkContributionSchema,
+  contextProviders: ContextProviderContributionSchema,
   forgeProviders: ForgeProviderContributionSchema,
   fileDecorationProviders: FileDecorationContributionSchema,
   fileEditors: FileEditorContributionSchema,
@@ -235,6 +237,7 @@ const TOP_LEVEL_GROUPS = [
   "themes",
   "promptTemplates",
   "terminalLinks",
+  "contextProviders",
   "forgeProviders",
   "fileDecorationProviders",
   "fileEditors",
@@ -314,6 +317,10 @@ type FieldConsumerCoverage = {
   >;
   terminalLinks: Record<keyof z.infer<typeof TerminalLinkContributionSchema>, ConsumerDescriptor>;
   "terminalLinks.url": Record<keyof z.infer<typeof TerminalLinkUrlSchema>, ConsumerDescriptor>;
+  contextProviders: Record<
+    keyof z.infer<typeof ContextProviderContributionSchema>,
+    ConsumerDescriptor
+  >;
   forgeProviders: Record<keyof z.infer<typeof ForgeProviderContributionSchema>, ConsumerDescriptor>;
   fileDecorationProviders: Record<
     keyof z.infer<typeof FileDecorationContributionSchema>,
@@ -1374,6 +1381,51 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       mode: "verbatim",
       consumers: [{ file: CODE_FORGE_TAB, symbol: "CodeForgeSettingsTab (slot resolution)" }],
       note: "Resolved to renderer view ids for the provider's UI slots.",
+    },
+  },
+  contextProviders: {
+    id: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: "electron/services/contextProviderRegistry.ts",
+          symbol: "registerContextProviders",
+        },
+        {
+          file: "electron/services/plugin/PluginHostFactory.ts",
+          symbol: "registerContextProvider (declared-id check)",
+        },
+      ],
+      note: "Keys the provider's descriptor and the impl host.registerContextProvider binds to it.",
+    },
+    prefix: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: "electron/services/contextProviderRegistry.ts",
+          symbol: "arbitrateContextProviders",
+        },
+        {
+          file: "electron/services/plugin/contextProviderCalls.ts",
+          symbol: "searchContextProvider / resolveContextReferences",
+        },
+        { file: "src/components/Terminal/HybridInputBar.tsx", symbol: "contextClaim" },
+      ],
+      note: "The @{prefix}: the composer routes to the provider; first claimant in a project holds it.",
+    },
+    label: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: "src/components/Terminal/inputEditorExtensions/contextReferenceChip.ts",
+          symbol: "createContextReferenceChipTooltip",
+        },
+        {
+          file: "src/components/Settings/ProjectPluginsTab.tsx",
+          symbol: "ContextProvidersSection",
+        },
+      ],
+      note: "What the provider offers, on its chips' card and in Project settings.",
     },
   },
   fileDecorationProviders: {

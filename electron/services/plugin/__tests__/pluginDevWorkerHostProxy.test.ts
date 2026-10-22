@@ -38,6 +38,98 @@ function makeProxy() {
   return { proxy, post, sent };
 }
 
+describe("PluginDevWorkerHostProxy context providers (#13795)", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("notifies main of the descriptor and answers search and resolve in the worker", async () => {
+    const { proxy, sent } = makeProxy();
+    const impl = {
+      search: vi.fn(async (query: string) => [{ id: "1", label: query }]),
+      resolve: vi.fn(async (id: string) => ({ text: `card ${id}` })),
+    };
+    await proxy.host.registerContextProvider({ id: "cards" }, impl);
+    expect(sent.find((m) => m.type === "host-notify")).toMatchObject({
+      method: "registerContextProvider",
+      registrationKey: "contextProvider:cards",
+      params: { descriptor: { id: "cards" } },
+    });
+
+    proxy.handleMessage({
+      type: "invoke",
+      requestId: "s1",
+      kind: "context-provider-method",
+      providerId: "cards",
+      method: "search",
+      args: ["fix"],
+    } as any);
+    proxy.handleMessage({
+      type: "invoke",
+      requestId: "r1",
+      kind: "context-provider-method",
+      providerId: "cards",
+      method: "resolve",
+      args: ["7"],
+    } as any);
+    await flush();
+
+    expect(impl.search).toHaveBeenCalledWith("fix", { signal: expect.any(AbortSignal) });
+    expect(sent.find((m) => m.requestId === "s1")).toMatchObject({
+      ok: true,
+      result: [{ id: "1", label: "fix" }],
+    });
+    expect(sent.find((m) => m.requestId === "r1")).toMatchObject({
+      ok: true,
+      result: { text: "card 7" },
+    });
+  });
+
+  it("aborts the provider's signal on invoke-cancel and posts nothing after", async () => {
+    const { proxy, sent } = makeProxy();
+    let seen: AbortSignal | undefined;
+    let finish: (value: unknown) => void = () => {};
+    await proxy.host.registerContextProvider(
+      { id: "cards" },
+      {
+        search: vi.fn(),
+        resolve: vi.fn((_id: string, { signal }: { signal: AbortSignal }) => {
+          seen = signal;
+          return new Promise<any>((resolve) => (finish = resolve));
+        }),
+      }
+    );
+    proxy.handleMessage({
+      type: "invoke",
+      requestId: "r2",
+      kind: "context-provider-method",
+      providerId: "cards",
+      method: "resolve",
+      args: ["7"],
+    } as any);
+    await flush();
+    proxy.handleMessage({ type: "invoke-cancel", requestId: "r2" } as any);
+    expect(seen?.aborted).toBe(true);
+    finish({ text: "late" });
+    await flush();
+    expect(sent.some((m) => m.type === "invoke-result" && m.requestId === "r2")).toBe(false);
+  });
+
+  it("rejects an impl without both methods, and a stale disposer unbinds nothing", async () => {
+    const { proxy, sent } = makeProxy();
+    await expect(
+      proxy.host.registerContextProvider({ id: "cards" }, { search: vi.fn() } as any)
+    ).rejects.toThrow(/search\(\) and resolve\(\)/);
+
+    const first = { search: vi.fn(async () => []), resolve: vi.fn(async () => null) };
+    const second = { search: vi.fn(async () => []), resolve: vi.fn(async () => null) };
+    const disposeFirst = await proxy.host.registerContextProvider({ id: "cards" }, first);
+    await proxy.host.registerContextProvider({ id: "cards" }, second);
+    disposeFirst();
+    expect(
+      sent.some((m) => m.type === "host-notify" && m.method === "unregisterContextProvider")
+    ).toBe(false);
+  });
+});
+
 describe("PluginDevWorkerHostProxy file decoration providers", () => {
   beforeEach(() => vi.clearAllMocks());
   afterEach(() => vi.restoreAllMocks());

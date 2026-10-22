@@ -6,6 +6,10 @@ import {
   backtickFenceFor,
   closingFenceForOpenBlock,
 } from "@shared/utils/agentContextDrag";
+import {
+  findContextReferences,
+  type ContextReferenceToken,
+} from "@shared/utils/pluginContextReference";
 
 /**
  * Drop the context tokens that sit inside a plugin's handoff block. The block
@@ -38,6 +42,21 @@ export interface TokenExpansion {
   start: number;
   end: number;
   replacement: string;
+  /**
+   * The replacement is a fenced block that must stand on lines of its own: a
+   * fence the text before it leaves open is closed first, and what follows it
+   * on the token's line moves to the next one, so its closing fence ends it.
+   */
+  block?: boolean;
+}
+
+/** `out` with `block` started on a fresh line, after any fence `out` leaves open is closed. */
+function spliceBlock(out: string, block: string): string {
+  let head = out.replace(/[ \t]+$/, "");
+  const closer = closingFenceForOpenBlock(head);
+  if (head.length > 0 && !head.endsWith("\n")) head += "\n";
+  if (closer !== null) head += `${closer}\n`;
+  return head + block;
 }
 
 /**
@@ -66,8 +85,18 @@ export function resolveTokenExpansions(
     while (next < sorted.length && sorted[next]!.start < limit) {
       const expansion = sorted[next++]!;
       if (expansion.start < cursor) continue;
-      out += text.slice(cursor, expansion.start) + expansion.replacement;
+      out += text.slice(cursor, expansion.start);
+      if (!expansion.block) {
+        out += expansion.replacement;
+        cursor = expansion.end;
+        continue;
+      }
+      out = spliceBlock(out, expansion.replacement);
+      // Spaces after the token would open the next line; a newline is never
+      // skipped, so this can't run past a handoff block, which starts a line.
       cursor = expansion.end;
+      while (cursor < text.length && (text[cursor] === " " || text[cursor] === "\t")) cursor++;
+      if (cursor < text.length && text[cursor] !== "\n") out += "\n";
     }
     if (cursor < limit) out += text.slice(cursor, limit);
     cursor = Math.max(cursor, limit);
@@ -138,6 +167,15 @@ export function getActiveCompletionContext(
   while (tokenEnd < text.length && !/\s/.test(text[tokenEnd]!)) tokenEnd++;
 
   return { triggerChar, start, tokenEnd, query };
+}
+
+/**
+ * Every plugin context reference (`@rec:142`, #13795) outside handoff blocks,
+ * whatever its prefix: which ones a provider holds is decided per project, by
+ * main at send time and by the chip field's provider list in the editor.
+ */
+export function getAllAtContextReferences(text: string): ContextReferenceToken[] {
+  return outsideHandoffBlocks(text, findContextReferences(text));
 }
 
 /** Daintree's own `@` providers; each claims its prefix ahead of `@file`. */

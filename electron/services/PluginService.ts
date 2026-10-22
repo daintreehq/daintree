@@ -307,6 +307,15 @@ import {
   unregisterWorktreeSetupSteps,
 } from "./worktreeSetupStepRegistry.js";
 import {
+  arbitrateContextProviders,
+  getRegisteredContextProviders,
+  registerContextProviders,
+  unregisterContextProviderImpls,
+  unregisterContextProviders,
+} from "./contextProviderRegistry.js";
+import { getContextProvidersOff } from "./plugin/contextProvidersOff.js";
+import type { ContextProviderEntry } from "../../shared/types/pluginContextProvider.js";
+import {
   getPluginIdForAgent,
   registerPluginAgents,
   unregisterPluginAgents,
@@ -2626,6 +2635,15 @@ export class PluginService {
       );
     }
 
+    const contextProviders = manifest.contributes.contextProviders ?? [];
+    if (contextProviders.length > 0) {
+      registerContextProviders(
+        pluginId,
+        manifest.displayName?.trim() || manifest.name,
+        contextProviders
+      );
+    }
+
     // Skills (#10892) are read and parsed eagerly here so the built-in MCP
     // server's `skills.search`/`skills.load` tools query an in-memory registry.
     // A malformed/unreadable skill file is skipped (with a warning) rather than
@@ -4231,6 +4249,21 @@ export class PluginService {
         live.recoveryViewGeneration
       ),
     };
+  }
+
+  /**
+   * The `@` context providers a view of `projectId` sees (#13795), each with
+   * whether it holds its prefix there, was refused it, or is switched off.
+   */
+  getContextProvidersForProject(projectId: string | null): ContextProviderEntry[] {
+    const visible = selectContributionsForProject(
+      getRegisteredContextProviders(),
+      (entry) => entry.pluginId,
+      projectId
+    );
+    if (visible.length === 0) return [];
+    const off = getContextProvidersOff();
+    return arbitrateContextProviders(visible, (pluginId) => off.has(pluginId));
   }
 
   /**
@@ -7479,6 +7512,12 @@ export class PluginService {
     runUnloadStep(pluginId, "unregisterWorktreeSetupStepHandlers", () =>
       unregisterWorktreeSetupStepHandlers(pluginId)
     );
+    runUnloadStep(pluginId, "unregisterContextProviders", () =>
+      unregisterContextProviders(pluginId)
+    );
+    runUnloadStep(pluginId, "unregisterContextProviderImpls", () =>
+      unregisterContextProviderImpls(pluginId)
+    );
     runUnloadStep(pluginId, "unregisterPluginSkills", () => unregisterPluginSkills(pluginId));
     runUnloadStep(pluginId, "unregisterPluginThemes", () => {
       if (!unregisterPluginThemes(pluginId)) return;
@@ -7901,6 +7940,9 @@ export class PluginService {
     );
     runUnloadStep(pluginId, "unregisterWorktreeSetupStepHandlers", () =>
       unregisterWorktreeSetupStepHandlers(pluginId)
+    );
+    runUnloadStep(pluginId, "unregisterContextProviderImpls", () =>
+      unregisterContextProviderImpls(pluginId)
     );
     runUnloadStep(pluginId, "cancelUiPrompts", () =>
       this.promptDispatcher.cancelForPlugin(pluginId)

@@ -73,6 +73,10 @@ import type {
   ForgeProviderImpl,
 } from "../../../shared/types/forge.js";
 import type {
+  ContextProviderDescriptor,
+  ContextProviderImpl,
+} from "../../../shared/types/pluginContextProvider.js";
+import type {
   ActionDispatchResult,
   PluginActionManifestEntry,
 } from "../../../shared/types/actions.js";
@@ -225,6 +229,10 @@ export class PluginDevWorkerHostProxy {
    * The record object per registration is its identity, so a disposer only ever
    * unbinds the registration it came from, even when a later one reused the function. */
   private readonly searchProviders = new Map<string, { provider: PluginSearchProvider }>();
+  private readonly contextProviders = new Map<string, ContextProviderImpl>();
+  /** Signals handed to in-flight context provider calls, keyed by invoke requestId,
+   * so a main-side `invoke-cancel` (its deadline passed) reaches the plugin. */
+  private readonly contextProviderAborts = new Map<string, AbortController>();
   /** Open `host.db` handles, closed on dispose so a reload never leaks a connection. */
   private readonly databases = new Set<PluginDatabase>();
   /** Bound `agentMcp` rosters, keyed by endpoint id. The map object per roster
@@ -302,6 +310,9 @@ export class PluginDevWorkerHostProxy {
     this.subscriptions.clear();
     this.fileDecorationProviders.clear();
     this.searchProviders.clear();
+    this.contextProviders.clear();
+    for (const controller of this.contextProviderAborts.values()) controller.abort();
+    this.contextProviderAborts.clear();
     this.mcpRosters.clear();
     for (const controller of this.mcpInvokeAborts.values()) controller.abort();
     this.mcpInvokeAborts.clear();
@@ -358,8 +369,10 @@ export class PluginDevWorkerHostProxy {
         // its signal may never settle, and its entry must not outlive the call.
         // The invoke still holds the controller, so it still sees the abort and
         // posts nothing. A no-op once the execute settled.
-        const controller = this.mcpInvokeAborts.get(msg.requestId);
+        const controller =
+          this.mcpInvokeAborts.get(msg.requestId) ?? this.contextProviderAborts.get(msg.requestId);
         this.mcpInvokeAborts.delete(msg.requestId);
+        this.contextProviderAborts.delete(msg.requestId);
         controller?.abort();
         const setupStep = this.setupStepInvokeAborts.get(msg.requestId);
         this.setupStepInvokeAborts.delete(msg.requestId);
@@ -556,7 +569,9 @@ export class PluginDevWorkerHostProxy {
         ? msg.channel
         : msg.kind === "file-decoration-method"
           ? null
-          : msg.namespacedId;
+          : msg.kind === "context-provider-method"
+            ? `context provider "${msg.providerId}"`
+            : msg.namespacedId;
     const settle = (
       outcome: { ok: true; result: unknown } | { ok: false; error: string }
     ): void => {
@@ -642,6 +657,28 @@ export class PluginDevWorkerHostProxy {
         const [scope, paths] = msg.args as [string, string[]];
         const result = await impl.provideDecorations(scope, paths);
         settle({ ok: true, result });
+        return;
+      }
+      if (msg.kind === "context-provider-method") {
+        const impl = this.contextProviders.get(msg.providerId);
+        if (!impl) {
+          throw new Error(`No context provider registered for "${msg.providerId}"`);
+        }
+        const controller = new AbortController();
+        this.contextProviderAborts.set(msg.requestId, controller);
+        try {
+          const [arg] = msg.args;
+          const options = { signal: controller.signal };
+          let result: unknown;
+          if (msg.method === "search") result = await impl.search(arg, options);
+          else if (msg.method === "resolve") result = await impl.resolve(arg, options);
+          else throw new Error(`Unknown context provider method "${String(msg.method)}"`);
+          settle({ ok: true, result });
+        } finally {
+          if (this.contextProviderAborts.get(msg.requestId) === controller) {
+            this.contextProviderAborts.delete(msg.requestId);
+          }
+        }
         return;
       }
       // kind === "handler"
@@ -1365,6 +1402,51 @@ export class PluginDevWorkerHostProxy {
           this.notify("unregisterSearchProvider", { providerId: id });
         };
         return Promise.resolve(dispose);
+      },
+      // Async so a refusal arrives as a rejection, as it does in process.
+      registerContextProvider: async (
+        descriptor: ContextProviderDescriptor,
+        impl: ContextProviderImpl
+      ) => {
+        this.assertActivationOpen("registerContextProvider");
+        if (!descriptor || typeof descriptor !== "object") {
+          throw new Error(
+            `Plugin "${this.pluginId}" registerContextProvider: descriptor must be an object`
+          );
+        }
+        const providerId = descriptor.id;
+        if (typeof providerId !== "string" || providerId.length === 0) {
+          throw new Error(
+            `Plugin "${this.pluginId}" registerContextProvider: descriptor.id must be a non-empty string`
+          );
+        }
+        if (
+          !impl ||
+          typeof impl !== "object" ||
+          typeof impl.search !== "function" ||
+          typeof impl.resolve !== "function"
+        ) {
+          throw new Error(
+            `Plugin "${this.pluginId}" registerContextProvider: impl must expose search() and resolve()`
+          );
+        }
+        // Main checks the id against the manifest, which lives there, and
+        // reports a refusal as a `register-error` that fails activation.
+        this.contextProviders.set(providerId, impl);
+        this.notify(
+          "registerContextProvider",
+          { descriptor: { id: providerId } },
+          `contextProvider:${providerId}`
+        );
+        let disposed = false;
+        return (): void => {
+          if (disposed) return;
+          disposed = true;
+          // A disposer from a binding a later register replaced unbinds nothing.
+          if (this.contextProviders.get(providerId) !== impl) return;
+          this.contextProviders.delete(providerId);
+          this.notify("unregisterContextProvider", { providerId });
+        };
       },
       mcp: {
         registerTools: (endpointId, tools) => {

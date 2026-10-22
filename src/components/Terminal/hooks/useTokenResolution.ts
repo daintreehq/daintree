@@ -11,6 +11,7 @@ import {
 } from "@shared/utils/phoneticSimilarity";
 import type { SuggestedDictionaryEntry } from "@shared/types";
 import {
+  getAllAtContextReferences,
   getAllAtTerminalTokens,
   getAllAtSelectionTokens,
   getAllAtDiffTokens,
@@ -21,6 +22,30 @@ import {
   type TokenExpansion,
 } from "../hybridInputParsing";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { usePluginContextProvidersStore } from "@/store/pluginContextProvidersStore";
+import type {
+  ContextReference,
+  ContextReferenceResolution,
+} from "@shared/types/pluginContextProvider";
+import { expandContextReferences } from "../contextReferenceExpansion";
+
+/** The plugin this view believes holds `prefix`, for a placeholder when main can't be asked. */
+function activeProviderName(prefix: string): string | undefined {
+  return usePluginContextProvidersStore
+    .getState()
+    .entries.find((entry) => entry.status === "active" && entry.prefix === prefix)?.pluginName;
+}
+
+/** Ask main for a draft's references; a bridge without the method answers that nothing is held. */
+function resolveContextReferences(
+  references: ContextReference[]
+): Promise<ContextReferenceResolution[]> {
+  const bridge = window.electron?.plugin;
+  if (typeof bridge?.resolveContextReferences !== "function") {
+    return Promise.resolve(references.map(() => ({ status: "unknown" })));
+  }
+  return bridge.resolveContextReferences(references);
+}
 
 /** Cap on the pending-suggestions queue — confirmed words live in customDictionary. */
 const MAX_SUGGESTED_WORDS = 50;
@@ -200,9 +225,10 @@ interface UseTokenResolutionParams {
   cwd: string;
   agentId?: BuiltInAgentId;
   /**
-   * Expand `@terminal`, `@selection` and `@diff` into what they name here.
-   * Off for a terminal on another host, where this machine's screens and
-   * working tree are not the agent's: the tokens go as typed.
+   * Expand `@terminal`, `@selection`, `@diff` and plugin context references
+   * into what they name here. Off for a terminal on another host, where this
+   * machine's screens, working tree and plugins are not the agent's: the
+   * tokens go as typed.
    */
   expandContext?: boolean;
 }
@@ -239,6 +265,17 @@ export function useTokenResolution({
         const terminalTokens = expandContext ? getAllAtTerminalTokens(text) : [];
         const selectionTokens = expandContext ? getAllAtSelectionTokens(text) : [];
         const diffTokens = expandContext ? getAllAtDiffTokens(text) : [];
+        const contextReferences = expandContext ? getAllAtContextReferences(text) : [];
+        // Started first so the plugins answer while the diff is fetched; every
+        // reference resolves in parallel under main's deadline.
+        const contextExpansions =
+          contextReferences.length > 0
+            ? expandContextReferences(
+                contextReferences,
+                resolveContextReferences,
+                activeProviderName
+              )
+            : null;
 
         const replacements: TokenExpansion[] = [];
 
@@ -289,6 +326,8 @@ export function useTokenResolution({
           }
           replacements.push({ start: token.start, end: token.end, replacement });
         }
+
+        if (contextExpansions) replacements.push(...(await contextExpansions));
 
         const resolvedText = resolveTokenExpansions(text, replacements);
 

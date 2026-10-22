@@ -3,7 +3,14 @@ import type {
   PluginSendToAgentRefusalReason,
   PluginSendToAgentResult,
 } from "@shared/types/plugin";
-import { appendAgentContextToDraft, formatAgentContextBlock } from "@shared/utils/agentContextDrag";
+import {
+  appendAgentContextToDraft,
+  formatAgentContextBlock,
+  type AgentContextReferenceDragPayload,
+} from "@shared/utils/agentContextDrag";
+import { formatContextReference } from "@shared/utils/pluginContextReference";
+import { rememberContextReferenceLabel } from "@/lib/contextReferenceLabels";
+import { usePluginContextProvidersStore } from "@/store/pluginContextProvidersStore";
 import { usePanelStore } from "@/store/panelStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
 import { useProjectStore } from "@/store/projectStore";
@@ -140,6 +147,53 @@ export function draftAgentContext(
   inputStore.setDraftInput(
     terminalId,
     appendAgentContextToDraft(inputStore.getDraftInput(terminalId, projectId), block),
+    projectId
+  );
+  inputStore.bumpExternalDraftRevision();
+
+  const panelState = usePanelStore.getState();
+  panelState.pingTerminal(terminalId);
+  const panel = panelState.panelsById[terminalId];
+  report({
+    kind: "draft-added",
+    lead: "Added to draft in",
+    ...(panel ? { target: getTerminalDisplayTitle(panel, "full") } : {}),
+  });
+  return { status: "drafted", terminalId };
+}
+
+/**
+ * Append a plugin context reference (#13795) to an agent's draft as the same
+ * `@{prefix}:{id}` chip the `@` menu leaves, or refuse with the reason. The
+ * item is read when the user sends, not now. Refused when no provider holds the
+ * prefix in this project — the chip would go as typed — and otherwise gated
+ * exactly like {@link draftAgentContext}.
+ */
+export function draftAgentContextReference(
+  terminalId: string,
+  reference: AgentContextReferenceDragPayload["reference"]
+): PluginSendToAgentResult | { status: "unavailable" } {
+  const held = usePluginContextProvidersStore
+    .getState()
+    .entries.some((entry) => entry.status === "active" && entry.prefix === reference.prefix);
+  if (!held) {
+    reportDraftNotAdded(`nothing in this project offers @${reference.prefix}:`);
+    return { status: "unavailable" };
+  }
+  const refusal = getDraftRefusal(terminalId);
+  if (refusal !== null) {
+    reportDraftRefused(refusal);
+    return { status: "refused", reason: refusal };
+  }
+
+  if (reference.label !== undefined) rememberContextReferenceLabel(reference, reference.label);
+  const inputStore = useTerminalInputStore.getState();
+  const projectId = useProjectStore.getState().currentProject?.id;
+  const draft = inputStore.getDraftInput(terminalId, projectId);
+  const separator = draft.length === 0 || /\s$/.test(draft) ? "" : " ";
+  inputStore.setDraftInput(
+    terminalId,
+    `${draft}${separator}${formatContextReference(reference)} `,
     projectId
   );
   inputStore.bumpExternalDraftRevision();

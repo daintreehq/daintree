@@ -42,6 +42,13 @@ export { diffChipField, createDiffChipTooltip } from "./diffChip";
 export { terminalChipField, createTerminalChipTooltip } from "./terminalChip";
 export { selectionChipField, createSelectionChipTooltip } from "./selectionChip";
 export {
+  contextReferenceChipField,
+  contextReferenceChipProviders,
+  createContextReferenceChipTooltip,
+  isOwnedByContextReferenceChip,
+  setContextReferenceProviders,
+} from "./contextReferenceChip";
+export {
   chipPendingDeleteField,
   setChipPendingDelete,
   createChipBackspaceKeymap,

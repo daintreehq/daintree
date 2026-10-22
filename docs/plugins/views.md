@@ -545,6 +545,14 @@ import { setAgentContextDragData } from "@daintreehq/plugin-sdk";
 onDragStart={(event) => setAgentContextDragData(event.dataTransfer, { v: 1, title, text })}
 ```
 
+When the item lives in one of the plugin's [context providers](./contribution-points.md#context-providers--shipped), drag a reference instead of a copy. The drop leaves the same `@{prefix}:{id}` chip the composer's `@` menu would, and the agent gets the item as it reads when the user sends, not as it was when it was dragged:
+
+```js
+createElement(ContextDragSource, { reference: { prefix: "rec", id: card.id, label: card.title } });
+```
+
+By hand, the payload is `{ v: 2, reference: { prefix, id, label? } }` under the same type, with the label (or `@{prefix}:{id}`) as `text/plain`. The drop is refused when no provider in that project holds the prefix.
+
 Kit drags (`SortableList`, `Kanban`, `DragDropProvider`) never carry this payload: they move with pointer events and stay inside the view, so a card on a kit board is reordered, not handed off. To offer both, keep the handoff on a separate element inside the card — a `ContextDragSource` chip, or your own element that sets `draggable` and the payload — and offer **Send to agent…** beside it for the keyboard.
 
 What lands is the same block `host.sendToAgent` drafts: one fenced block tagged `daintree-context`, holding your `source.label` and `title` as a heading (`Kanban: Fix login redirect`) and then the text, appended after whatever the user already typed and kept literal on submit — `@diff` and the other tokens inside it are never expanded. Control characters other than tab and newline are stripped. The drop selects the pane and puts the caret in its input bar, exactly like dropping a file there. Only an agent pane whose input bar can take a draft shows the drop affordance; a plain shell, an exited, docked, locked or restarting agent, one in an armed fleet, or any pane while the input bar is switched off refuses the drag outright, and nothing is ever typed into a terminal. The payload is data, not instructions — anything can start a drag carrying this type, so the host validates it in full at the drop and drops anything malformed: a wrong `v`, blank or oversized text, an over-long `title` or label, or a non-string where a string belongs. Unknown extra keys are ignored.

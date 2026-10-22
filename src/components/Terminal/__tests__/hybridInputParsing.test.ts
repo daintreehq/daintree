@@ -17,6 +17,8 @@ import {
   formatAtFileToken,
   formatAtFileTokenForCwd,
   RESERVED_AT_TOKEN_PATHS,
+  getAllAtContextReferences,
+  resolveTokenExpansions,
 } from "../hybridInputParsing";
 
 const ALL: ReadonlySet<CompletionTrigger> = new Set(["/", "$", "@"]);
@@ -554,5 +556,41 @@ describe("context tokens inside a handoff block", () => {
     expect(getAllAtSelectionTokens(withOpenFence)).toEqual([]);
     // The user's own fence was closed before the block, not by it.
     expect(withOpenFence).toContain("const a = 1;\n```\n\n```daintree-context\n");
+  });
+});
+
+describe("plugin context references (#13795)", () => {
+  it("are read outside handoff blocks only", () => {
+    const draft = appendAgentContextToDraft(
+      "look at @rec:1",
+      formatAgentContextBlock({ text: "quoted @rec:2", title: "Card" })
+    );
+    expect(getAllAtContextReferences(draft).map((t) => t.id)).toEqual(["1"]);
+  });
+
+  it("splice a block expansion onto lines of its own", () => {
+    const text = "compare @rec:1 with this";
+    const start = text.indexOf("@rec:1");
+    const out = resolveTokenExpansions(text, [
+      { start, end: start + 6, replacement: "```daintree-context\nbody\n```", block: true },
+    ]);
+    expect(out).toBe("compare\n```daintree-context\nbody\n```\nwith this");
+  });
+
+  it("close a fence the user left open before a block lands", () => {
+    const text = "```\nconst a = 1; @rec:1";
+    const start = text.indexOf("@rec:1");
+    const out = resolveTokenExpansions(text, [
+      { start, end: text.length, replacement: "```daintree-context\nbody\n```", block: true },
+    ]);
+    expect(out).toBe("```\nconst a = 1;\n```\n```daintree-context\nbody\n```");
+  });
+
+  it("leave an inline expansion where it was", () => {
+    const text = "see @rec:1 now";
+    const out = resolveTokenExpansions(text, [
+      { start: 4, end: 10, replacement: "[Couldn't attach @rec:1 from Kanban: timed out]" },
+    ]);
+    expect(out).toBe("see [Couldn't attach @rec:1 from Kanban: timed out] now");
   });
 });
