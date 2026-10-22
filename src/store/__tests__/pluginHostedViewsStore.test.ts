@@ -62,8 +62,9 @@ afterEach(() => {
 describe("pluginHostedViewsStore", () => {
   it("subscribes before it pulls, and fills from the pull", async () => {
     usePluginHostedViewsStore.getState().init();
-    expect(bridge.onHostedViewsChanged.mock.invocationCallOrder[0]).toBeLessThan(
-      bridge.getHostedViews.mock.invocationCallOrder[0]
+    // A call that never happened fails the comparison rather than passing it.
+    expect(bridge.onHostedViewsChanged.mock.invocationCallOrder[0] ?? Infinity).toBeLessThan(
+      bridge.getHostedViews.mock.invocationCallOrder[0] ?? -Infinity
     );
     expect(usePluginHostedViewsStore.getState().views).toBeNull();
 
