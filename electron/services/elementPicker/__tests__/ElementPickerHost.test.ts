@@ -300,6 +300,9 @@ describe("ElementPickerHost", () => {
     expect(results(response)).toEqual([
       { state: "unavailable", candidateId: "c-1", claim: "file-hint", reason: "budget-exhausted" },
     ]);
+    // The grace fallback retires the host as it settles; still running means
+    // the resolver's own answer is what came back.
+    expect(host.running).toBe(true);
     expect(children[0]?.alive).toBe(true);
   });
 
@@ -319,12 +322,12 @@ describe("ElementPickerHost", () => {
                   documentEpoch: req.documentEpoch,
                   outcomes: [],
                 }),
-              900
+              1_200
             )
           );
         }),
     };
-    const { host } = harness({ svelte: async () => slow }, { cancelGraceMs: 2_000 });
+    const { host } = harness({ svelte: async () => slow }, { cancelGraceMs: 3_000 });
     const id = await workspace(host);
     const controller = new AbortController();
     const pending = host.resolve(
@@ -333,10 +336,11 @@ describe("ElementPickerHost", () => {
       }),
       { signal: controller.signal }
     );
+    // Cancelled as soon as it starts, answered only after the deadline has passed.
     await vi.waitFor(() => expect(entered).toBe(true));
-    await new Promise((resolve) => setTimeout(resolve, 300));
     controller.abort();
     expect(results(await pending)[0]).toMatchObject({ reason: "cancelled" });
+    expect(host.running).toBe(true);
   });
 
   it("keeps a host that answers a cancel, with every unanswered candidate cancelled", async () => {
