@@ -1050,6 +1050,27 @@ describe("onExit — session-preserving teardown (#13841)", () => {
     }
   );
 
+  it.each([
+    ["an agent", { launchAgentId: "claude" }, 0],
+    ["a failed shell", {}, 1],
+  ])("keeps %s in place and marks it", (_label, overrides, exitCode) => {
+    setupShell(overrides);
+
+    getExitHandler()("shell", exitCode, { preserveSession: true });
+
+    expect(getShell()?.location).toBe("grid");
+    expect(getShell()?.sessionPreservingExit).toBe(true);
+  });
+
+  it("ignores a teardown exit for a pane this view does not hold", () => {
+    setupShell();
+    const before = usePanelStore.getState().panelsById;
+
+    getExitHandler()("elsewhere", 0, { preserveSession: true });
+
+    expect(usePanelStore.getState().panelsById).toBe(before);
+  });
+
   it("still removes a pane that was already in the trash", () => {
     setupShell({ location: "trash" });
 

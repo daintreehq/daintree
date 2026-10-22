@@ -848,6 +848,29 @@ describe("PtyManager session-preserving teardown exits (#13841)", () => {
     ]);
   });
 
+  it("does not mark a same-id respawn that lands while the teardown is still running", async () => {
+    const manager = new PtyManager();
+    manager.spawn("shell", spawnOptions({ projectId: "project-a" }));
+    manager.spawn("agent", spawnOptions({ projectId: "project-a", kind: "agent" }));
+    let finishAgent: (id: string | null) => void = () => {};
+    shared.created[1]!.gracefulShutdown = () =>
+      new Promise<string | null>((resolve) => {
+        finishAgent = resolve;
+      });
+    const exits = recordExits(manager);
+
+    const teardown = manager.gracefulKillByProject("project-a", { preserveSession: true });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(shared.created[0]!.kill).toHaveBeenCalled();
+    manager.spawn("shell", spawnOptions({ projectId: "project-a" }));
+    shared.created[2]!.callbacks.onExit("shell", 0);
+    finishAgent(null);
+    await teardown;
+
+    expect(exits).toEqual([{ id: "shell", preserveSession: undefined }]);
+  });
+
   it("does not carry the mark onto a same-id respawn", async () => {
     const manager = new PtyManager();
     manager.spawn("t1", spawnOptions({ projectId: "project-a" }));
