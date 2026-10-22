@@ -1292,6 +1292,36 @@ describe("the bridge's element exchanges", () => {
     expect(ofType("selectionChanged").at(-1)?.scope).toEqual({ kind: "element" });
   });
 
+  it("widens to a named component the page never placed, past one it cannot name", () => {
+    const first = document.getElementById("first")!;
+    const second = document.getElementById("second")!;
+    const anonymous = { ...record, componentId: "c0", name: null, sourceCandidates: [] };
+    const unplaced = { ...record, sourceCandidates: [] };
+    const asked: string[] = [];
+    installReact({
+      extract: () => ({
+        componentChain: {
+          nearestId: "c0",
+          components: [{ ...anonymous, renderParentId: "c1" }, unplaced],
+          truncated: false,
+        },
+      }),
+      locate: (query) => {
+        asked.push((query as { componentId?: string }).componentId ?? "");
+        return { elements: [first, second], data: { complete: true } };
+      },
+    });
+    start();
+    first.click();
+
+    press("ArrowUp", { altKey: true });
+    expect(asked).toEqual(["c1"]);
+    expect(ofType("selectionChanged").at(-1)?.scope).toEqual({
+      kind: "component",
+      componentId: "c1",
+    });
+  });
+
   it("stops calling a widened component's roots complete once the document drops one", () => {
     const first = document.getElementById("first")!;
     const second = document.getElementById("second")!;

@@ -84,6 +84,7 @@ const isHostProcessCode = (file: string) =>
 const isSourceMapDecoder = (file: string) =>
   file.includes("node_modules/@jridgewell/trace-mapping/");
 const isJsParser = (file: string) => file.includes("node_modules/@babel/parser/");
+const isJsxParser = (file: string) => file.includes("node_modules/@lezer/");
 
 describe("the Element Picker host boundary", () => {
   it("keeps the host process's code out of main, eagerly or lazily", async () => {
@@ -157,6 +158,10 @@ describe("the Element Picker host boundary", () => {
     expect(reachable).toContain(`${RESOLVERS_DIR}react.ts`);
     expect(reachable.some(isJsParser)).toBe(true);
     expect(eager.filter(isJsParser)).toEqual([]);
+    // So are the Preact resolver and the JavaScript parser it checks a position with.
+    expect(reachable).toContain(`${RESOLVERS_DIR}preact.ts`);
+    expect(reachable.some(isJsxParser)).toBe(true);
+    expect(eager.filter(isJsxParser)).toEqual([]);
     // Bytes come from main; nothing the host runs can open a file or a socket itself.
     expect(authorityImports(metafile)).toEqual([]);
     // Project adapters walk directories, which is main's authority, never the host's.

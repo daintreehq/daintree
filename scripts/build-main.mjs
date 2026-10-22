@@ -251,6 +251,11 @@ export const CORE_PICKER_GUEST_ASSETS = [
     entry: "electron/services/elementPicker/guest/extractors/solid.ts",
     outfile: "dist-electron/element-picker/guest/extractors/solid.js",
   },
+  {
+    id: "extractor:preact",
+    entry: "electron/services/elementPicker/guest/extractors/preact.ts",
+    outfile: "dist-electron/element-picker/guest/extractors/preact.js",
+  },
 ];
 
 /**

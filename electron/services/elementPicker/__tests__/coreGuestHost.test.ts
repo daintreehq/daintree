@@ -2,6 +2,7 @@
 import { EventEmitter } from "node:events";
 import { act, createElement, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
+import { h as preactElement, render as renderPreact, type ComponentChildren } from "preact";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("electron", () => ({
@@ -1086,6 +1087,67 @@ describe("DOM-level picking on a page with no component information", () => {
       `<${LIT_CARD_TAG} id="hero"><template shadowrootmode="open"><article class="card">` +
         '<h2 class="heading">…</h2><div class="body">…</div><button class="action">…</button>' +
         `</article></template><p class="projected">Slotted copy</p></${LIT_CARD_TAG}>`
+    );
+  });
+});
+
+describe("the shipped Preact extractor", () => {
+  it("is installed on a page Preact rendered, and describes a selection in terms the host admits", async () => {
+    document.body.innerHTML = '<div id="root"></div>';
+    const root = document.getElementById("root")!;
+    const Card = ({ children }: { children?: ComponentChildren }) =>
+      preactElement("section", { class: "card" }, children);
+    const Label = () => preactElement("button", { id: "cta" }, "Go");
+    renderPreact(preactElement(Card, null, preactElement(Label, null)), root);
+    try {
+      const h = makeHarness({ catalog: shipped });
+      const state = await h.bind();
+      await settle();
+      // Found by the render container's own `__k`; no node Preact drew carries one.
+      expect(h.kinds("extractor-installed")).toEqual([
+        expect.objectContaining({ framework: "preact" }),
+      ]);
+
+      document.getElementById("cta")!.click();
+      await settle();
+      const observation = (
+        h.pickerEvents("selectionChanged").at(-1)!.event as {
+          observations: Array<{
+            elementId: string;
+            componentChain: {
+              nearestId: string;
+              components: Array<{
+                componentId: string;
+                name: { value: string } | null;
+                renderParentId?: string | null;
+                rootElementIds: string[];
+              }>;
+            };
+          }>;
+        }
+      ).observations[0]!;
+      const [label, card] = observation.componentChain.components;
+      expect(observation.componentChain.components.map((record) => record.name?.value)).toEqual([
+        "Label",
+        "Card",
+      ]);
+      expect(observation.componentChain.nearestId).toBe(label!.componentId);
+      expect(label!.renderParentId).toBe(card!.componentId);
+      expect(card!.renderParentId).toBeNull();
+      expect(label!.rootElementIds).toEqual([observation.elementId]);
+      expect(h.bridge.getState(PROJECT_ID, state.sessionId)?.droppedMessages).toBe(0);
+    } finally {
+      renderPreact(null, root);
+    }
+  });
+
+  it("carries neither Preact nor the shared schemas into the page", () => {
+    const asset = shipped["extractor:preact"];
+    expect(asset).toBeDefined();
+    expect(asset).not.toMatch(/ZodError|\$ZodType/);
+    // Strings only Preact's runtime and its debug build hold: the extractor reads, never imports.
+    expect(asset).not.toMatch(
+      /debounceRendering|__PREACT_DEVTOOLS__|plugin-transform-react-jsx-source/
     );
   });
 });

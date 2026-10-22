@@ -72,6 +72,8 @@ const EXPANDO_MARKERS: readonly ExpandoMarker[] = [
   { framework: "vue", name: "__vnode" },
   { framework: "svelte", name: "__svelte_meta" },
   { framework: "angular", name: "__ngContext__" },
+  // Preact's mangled `_children`, which only a render container carries.
+  { framework: "preact", name: "__k" },
 ];
 
 interface AttributeMarker {
