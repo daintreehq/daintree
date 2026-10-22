@@ -122,6 +122,18 @@ describe("channel lease policy", () => {
     ]);
   });
 
+  it("gates clearing and pruning session history, which every project resumes from, but not reading it", () => {
+    expect(requiresDriveLease("agent-session:clear", "local")).toBe(true);
+    expect(requiresDriveLease("agent-session:set-retention", "local")).toBe(true);
+    expect(requiresDriveLease("agent-session:list", "link")).toBe(false);
+    expect(requiresDriveLease("agent-session:get-retention", "link")).toBe(false);
+  });
+
+  it("leaves a plugin call's writes to the host APIs it reaches, since the same call carries its reads", () => {
+    expect(getChannelLeasePolicy("plugin:invoke")).toBe("handler");
+    expect(requiresDriveLease("plugin:invoke", "link")).toBe(false);
+  });
+
   it("keeps navigation free: switching and reopening hold their outgoing save to the lease themselves", () => {
     expect(getChannelLeasePolicy("project:switch")).toBe("free");
     expect(getChannelLeasePolicy("project:reopen")).toBe("free");

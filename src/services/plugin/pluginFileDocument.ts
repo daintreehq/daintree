@@ -7,7 +7,7 @@ import type {
 } from "@shared/types/plugin";
 import { useFileDocumentStore, type FileDocumentProjection } from "@/store/fileDocumentStore";
 import { logWarn } from "@/utils/logger";
-import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { clientErrorText } from "@/utils/clientAppError";
 import { relativeFilePath } from "@/registry/fileEditorGlob";
 import { pluginFileDocumentIdentity } from "./pluginFileDocumentIdentity";
 
@@ -156,7 +156,9 @@ async function save(
       expectedRevision,
     });
   } catch (err) {
-    result = { status: "error", message: formatErrorMessage(err, "Save failed") };
+    // The host's own words, so a save refused while another screen drives
+    // says to take control rather than showing the wire-encoded error.
+    result = { status: "error", message: clientErrorText(err, "Save failed") };
   } finally {
     record.pending -= 1;
   }

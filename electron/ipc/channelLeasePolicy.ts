@@ -12,7 +12,8 @@ import { CHANNEL_LOCALITY, getChannelLocality } from "./channelLocality.js";
  *   project is the one the call targets, found through
  *   {@link CHANNEL_LEASE_TARGETS}, not the one the caller is showing.
  * - `handler`: the handler enforces the lease itself, per terminal rather
- *   than per caller's project (terminal input, submit and resizes).
+ *   than per caller's project (terminal input, submit and resizes), or per
+ *   change for a channel that also reads (a plugin's host calls).
  *
  * The dispatcher applies it to link calls from remote views, and to calls
  * from this machine's own views once the lease service exists (Host mode);
@@ -44,7 +45,7 @@ export const CHANNEL_LEASE_POLICY = {
   "agent-defaults:migrate-legacy": "free",
   "agent-defaults:set": "free",
   "agent-presets:updated": "free",
-  "agent-session:clear": "free",
+  "agent-session:clear": "driver",
   "agent-session:delete-bookmark": "free",
   "agent-session:get-retention": "free",
   "agent-session:list": "free",
@@ -52,7 +53,7 @@ export const CHANNEL_LEASE_POLICY = {
   "agent-session:prepare-bookmark": "driver",
   "agent-session:promote-bookmark": "free",
   "agent-session:rename-bookmark": "free",
-  "agent-session:set-retention": "free",
+  "agent-session:set-retention": "driver",
   "agent-settings:get": "free",
   "agent-settings:reset": "free",
   "agent-settings:set": "free",
@@ -435,7 +436,9 @@ export const CHANNEL_LEASE_POLICY = {
   "plugin:install-from-path": "free",
   "plugin:install-from-url": "free",
   "plugin:install-progress": "free",
-  "plugin:invoke": "free",
+  // One channel for a plugin's reads and writes: each host API that changes a
+  // project checks the calling view's lease itself (`assertPluginCallerDrives`).
+  "plugin:invoke": "handler",
   "plugin:keybindings": "free",
   "plugin:list": "free",
   "plugin:perf-snapshots-changed": "free",
@@ -733,7 +736,8 @@ export type LeaseArgPath = readonly [index: number, ...keys: string[]];
  * - `caller`: the project the calling view is bound to, for a handler that acts
  *   on exactly that (`ctx.projectId`).
  * - `every-project`: host-wide, so it changes every project anyone drives here;
- *   with `when`, only for a call whose argument at `when.at` is `when.equals`.
+ *   with `when`, only for a call whose argument at `when.at` is `when.equals`,
+ *   or, with `absent`, is missing (undefined or null).
  * - `optional: true` skips an argument that is absent; `optional: "caller"`
  *   falls back to the caller's project instead, and `"current-project"` to
  *   this Host's current project, for a handler that falls back to it.
@@ -749,7 +753,9 @@ export type LeaseTargetSource =
   | { readonly from: "caller" }
   | {
       readonly from: "every-project";
-      readonly when?: { readonly at: LeaseArgPath; readonly equals: string };
+      readonly when?:
+        | { readonly at: LeaseArgPath; readonly equals: string }
+        | { readonly at: LeaseArgPath; readonly absent: true };
     }
   | {
       readonly from: "project" | "worktree";
@@ -798,7 +804,14 @@ const WORKTREE_PATH_FIELD: LeaseTarget = [{ from: "path", at: [0, "worktreePath"
  * gate checks the lease on every project it names, not the caller's own.
  */
 export const CHANNEL_LEASE_TARGETS = {
+  // With no worktree it clears every project's history.
+  "agent-session:clear": [
+    { from: "worktree", at: [0, "worktreeId"], optional: true },
+    { from: "every-project", when: { at: [0, "worktreeId"], absent: true } },
+  ],
   "agent-session:prepare-bookmark": [{ from: "terminal", at: [0, "terminalId"] }],
+  // A shorter window prunes every project's history the moment it is saved.
+  "agent-session:set-retention": [{ from: "every-project" }],
   "app:set-state": CALLER,
   "artifact:apply-patch": CWD_FIELD,
   "artifact:save-to-file": [{ from: "path", at: [0, "cwd"], optional: "caller", unowned: "allow" }],

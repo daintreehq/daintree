@@ -68,7 +68,13 @@ function resolveSource(
 ): MaybePromise<SourceResult> {
   if (source.from === "caller") return one(callerProjectId, "the caller's project");
   if (source.from === "every-project") {
-    if (source.when && readArg(args, source.when.at) !== source.when.equals) return [];
+    const when = source.when;
+    if (when) {
+      const value = readArg(args, when.at);
+      const applies =
+        "absent" in when ? value === undefined || value === null : value === when.equals;
+      if (!applies) return [];
+    }
     return "every";
   }
 

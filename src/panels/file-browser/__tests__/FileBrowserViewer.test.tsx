@@ -257,6 +257,7 @@ import type { WorkingTreeFileChange } from "@/lib/workingTreeDiff";
 import { NO_HIDDEN_ROWS } from "../fileBrowserTree";
 import { ClientAppError } from "@/utils/clientAppError";
 import { revealCopy } from "@/components/FileViewer/revealCopy";
+import { seedDriveLeaseView } from "@/components/Recovery/driveLeaseState";
 import type {
   FileBrowserSortOrder,
   FileEntryLike,
@@ -1762,6 +1763,7 @@ describe("plugin-contributed editing in the file browser", () => {
     __resetBuiltinRendererRegistryForTests();
     _resetPluginRuntimeStoreForTest();
     useFileDocumentStore.setState({ byPanelId: {} });
+    seedDriveLeaseView(null);
     if (bridge) Object.defineProperty(window, "electron", bridge);
     else Reflect.deleteProperty(window, "electron");
   });
@@ -1873,6 +1875,37 @@ describe("plugin-contributed editing in the file browser", () => {
     expect(editorProps.at(-1)).toMatchObject({ filePath: "/repo/note.txt" });
     expect(screen.queryByRole("radio", { name: "Rendered" })).toBeNull();
     expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
+  // #13920: the host refuses a save from a view another screen drives.
+  const drivenElsewhere = {
+    projectId: "project-1",
+    holder: {
+      leaseId: 1,
+      endpointId: "remote:-9",
+      clientId: "client-c",
+      clientName: "greg-mbp",
+      isHostLocal: false,
+      acquiredAt: 0,
+    },
+    drivingHere: false,
+    isHolderEndpoint: false,
+    viewerIsHostLocal: true,
+  };
+
+  it("withdraws Edit once another screen drives the project", async () => {
+    enabled = true;
+    renderViewer("/repo/notes.md", { editorContext: context });
+    expect(await screen.findByRole("radio", { name: "Edit" })).toBeTruthy();
+    act(() => seedDriveLeaseView(drivenElsewhere));
+    expect(screen.queryByRole("radio", { name: "Edit" })).toBeNull();
+  });
+
+  it("stops offering to enable the editor while another screen drives the project", async () => {
+    renderViewer("/repo/notes.md", { editorContext: context });
+    expect(await screen.findByRole("button", { name: "Enable and edit" })).toBeTruthy();
+    act(() => seedDriveLeaseView(drivenElsewhere));
+    expect(screen.queryByRole("button", { name: "Enable and edit" })).toBeNull();
   });
 
   it("removes Edit live when the plugin is disabled", async () => {

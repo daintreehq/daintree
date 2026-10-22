@@ -322,12 +322,16 @@ vi.mock("@/registry/fileEditorRegistry", async (importOriginal) => ({
             extensions: ["md"],
             maxBytes: fileEditorState.resolved.maxBytes,
           },
-          Component: (props: Record<string, unknown>) => {
-            fileEditorState.renderedProps.push(props);
-            return <div data-testid="file-editor-mock" />;
-          },
+          Component: FileEditorMock,
         },
 }));
+
+// One component for every render, as a real registration's is: a fresh one per
+// render would remount the editor each time the pane re-renders.
+function FileEditorMock(props: Record<string, unknown>) {
+  fileEditorState.renderedProps.push(props);
+  return <div data-testid="file-editor-mock" />;
+}
 
 import { FilePane } from "../FilePane";
 import { useFileDocumentStore } from "@/store/fileDocumentStore";
@@ -341,6 +345,7 @@ import {
   _resetTerminalInputGateForTesting,
   setDriveLeaseSnapshot,
 } from "@/services/terminal/inputGate";
+import { seedDriveLeaseView } from "@/components/Recovery/driveLeaseState";
 
 /**
  * An element of the SVG FileImagePreview shows, read back from the data URL of
@@ -3840,6 +3845,86 @@ describe("FilePane edit mode (#12323)", () => {
     expect(screen.getByTestId("file-pane-dirty").getAttribute("aria-label")).toBe(
       "Unsaved changes, file changed on disk"
     );
+  });
+
+  // #13920: the host refuses a save from a view another screen drives.
+  describe("while another screen drives the project", () => {
+    const drivenElsewhere = {
+      projectId: "proj-1",
+      holder: {
+        leaseId: 1,
+        endpointId: "remote:-9",
+        clientId: "client-c",
+        clientName: "greg-mbp",
+        isHostLocal: false,
+        acquiredAt: 0,
+      },
+      drivingHere: false,
+      isHolderEndpoint: false,
+      viewerIsHostLocal: true,
+    };
+
+    afterEach(() => {
+      seedDriveLeaseView(null);
+    });
+
+    it("withholds Edit, and keeps a persisted edit mode for when control comes back", async () => {
+      seedWorktree();
+      seedDriveLeaseView(drivenElsewhere);
+      await renderPane({ fileViewMode: "edit" });
+      expect(toggleLabels()).toEqual(["Source", "Rendered"]);
+      expect(screen.queryByTestId("file-editor-mock")).toBeNull();
+      expect(setFileViewModeMock).not.toHaveBeenCalled();
+
+      await act(async () => {
+        seedDriveLeaseView({ ...drivenElsewhere, holder: null, drivingHere: true });
+      });
+      expect(toggleLabels()).toEqual(["Source", "Rendered", "Edit"]);
+      expect(await screen.findByTestId("file-editor-mock")).toBeTruthy();
+    });
+
+    it("keeps an open editor with nothing published yet until the pane leaves Edit", async () => {
+      seedWorktree();
+      const view = await renderPane({ fileViewMode: "edit" });
+      const editor = await screen.findByTestId("file-editor-mock");
+      await act(async () => {
+        seedDriveLeaseView(drivenElsewhere);
+      });
+      // Same node: a composition or an unpublished keystroke in it survives.
+      expect(screen.getByTestId("file-editor-mock")).toBe(editor);
+      expect(toggleLabels()).toEqual(["Source", "Rendered", "Edit"]);
+
+      panelsById["file-1"] = {
+        id: "file-1",
+        kind: "file",
+        filePath: "/repo/docs/spec.md",
+        worktreeId: WORKTREE_ID,
+        fileViewMode: "source",
+      };
+      view.rerender(paneElement());
+      await act(async () => {});
+      expect(toggleLabels()).toEqual(["Source", "Rendered"]);
+    });
+
+    it("keeps the editor and its draft when control is taken mid-edit", async () => {
+      seedWorktree();
+      await renderPane({ fileViewMode: "edit" });
+      await act(async () => {
+        useFileDocumentStore.getState().setFileDocument("file-1", {
+          identityKey: "doc",
+          draftText: "# Plan (edited)\n",
+          dirty: true,
+          conflict: false,
+          save: async () => false,
+          discard: async () => {},
+        });
+      });
+      await act(async () => {
+        seedDriveLeaseView(drivenElsewhere);
+      });
+      expect(toggleLabels()).toEqual(["Source", "Rendered", "Edit"]);
+      expect(screen.getByTestId("file-editor-mock")).toBeTruthy();
+    });
   });
 
   describe("installed and project plugin editors (#13809)", () => {

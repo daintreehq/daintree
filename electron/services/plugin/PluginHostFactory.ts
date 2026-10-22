@@ -49,6 +49,7 @@ import {
   noFrontendAttached,
   resolvePluginFrontend,
 } from "./pluginFrontendRouting.js";
+import { assertPluginCallerDrives } from "./pluginDriveLease.js";
 import {
   PluginFrontendMethod,
   REMOTE_CLIPBOARD_IMAGE_MAX_BYTES,
@@ -1600,6 +1601,9 @@ export function createHost(
       if (!ptyClient) {
         throw new Error("NO_ACTIVE_AGENT: terminal host is not available");
       }
+      // Typing into an agent is held to the lease its terminal's input is.
+      await assertPluginCallerDrives(pluginId, "sendToActiveAgent", { terminalId });
+      if (!isBound()) return;
       // submit defaults to false — stage-only (no Enter) is the default-safe
       // mode per #10558. submit:true appends Enter and runs the text.
       if (options?.submit === true) {
@@ -3386,6 +3390,9 @@ export function createHost(
             `Plugin "${pluginId}" settings.set: no active project — "project" scope has no target`
           );
         }
+        // Project settings live in the repository's `.daintree`; user and local
+        // files, outside every project, change none.
+        await assertPluginCallerDrives(pluginId, "settings.set", { paths: [filePath] });
         const store = deps.settings.getOrCreateSettingsStore(pluginId, filePath);
         const changed = await store.set(key, value, {
           secret: deps.settings.isSecretKey(pluginId, key),
@@ -3485,6 +3492,10 @@ export function createHost(
             `Plugin "${pluginId}" storage.set: no active ${scope} — "${scope}" scope has no target`
           );
         }
+        // Project and worktree storage lives in the repository's `.daintree`;
+        // user storage is in no project unless one holds the storage dir.
+        await assertPluginCallerDrives(pluginId, "storage.set", { paths: [filePath] });
+        if (!isBound()) return;
         const store = deps.storage.getOrCreateStorageStore(pluginId, scope, filePath);
         const changed = await store.set(key, value);
         if (changed) deps.storage.notifyStorageSubscribers(pluginId, scope, key, value);
@@ -3499,6 +3510,8 @@ export function createHost(
         // Missing target or unloaded plugin: a delete is a no-op rather than a
         // throw (matching the "already absent" return of the store).
         if (!filePath || !isBound()) return;
+        await assertPluginCallerDrives(pluginId, "storage.delete", { paths: [filePath] });
+        if (!isBound()) return;
         const store = deps.storage.getOrCreateStorageStore(pluginId, scope, filePath);
         const changed = await store.delete(key);
         if (changed) deps.storage.notifyStorageSubscribers(pluginId, scope, key, undefined);
@@ -3641,6 +3654,19 @@ function buildProcessApi(
     if (!deps.plugins.has(pluginId)) {
       throw new Error(`Plugin "${pluginId}" process.spawn: plugin is no longer loaded`);
     }
+    // A process started in a project works on it, as a terminal spawned there
+    // does, so a call from a view must drive it: judged before the consent
+    // prompt and again after it, which can outlast a takeover.
+    // With no cwd the child inherits Main's, which is judged in its place.
+    const requireCallerDrives = async () => {
+      await assertPluginCallerDrives(pluginId, "process.spawn", {
+        paths: [path.resolve(cwd ?? process.cwd())],
+      });
+      if (!deps.plugins.has(pluginId)) {
+        throw new Error(`Plugin "${pluginId}" process.spawn: plugin is no longer loaded`);
+      }
+    };
+    await requireCallerDrives();
     // JIT consent fires LAST, right before the spawn — first use prompts the
     // user; the grant covers every later spawn by this plugin. Throws
     // PERMISSION_REQUIRED on denial. Re-check membership after the prompt await.
@@ -3648,6 +3674,7 @@ function buildProcessApi(
     if (!deps.plugins.has(pluginId)) {
       throw new Error(`Plugin "${pluginId}" process.spawn: plugin is no longer loaded`);
     }
+    await requireCallerDrives();
 
     const handle = await deps
       .getProcessManager()
@@ -4240,6 +4267,12 @@ function buildFsApi(
   };
   const containWithClass = (targetPath: string) =>
     containToDeclaredRoots(deps, pluginId, targetPath, workspaceScope);
+  // A write a call makes into a project is held to the lease of the view that
+  // made the call; one into no project (the plugin's own data) passes.
+  const requireCallerDrives = async (op: string, resolved: string): Promise<void> => {
+    await assertPluginCallerDrives(pluginId, `fs.${op}`, { paths: [resolved] });
+    requireLoaded(op);
+  };
   // Every gate a mutation passes before it may touch the disk: the root-class
   // capability, containment, and JIT consent — taken exactly once, and always
   // before anything is created.
@@ -4268,6 +4301,9 @@ function buildFsApi(
       requireWriteCapForClass(op, "user-data");
       await ensureCapabilityConsent(deps, pluginId, writeCap);
       requireLoaded(op);
+      // A data dir is normally in no project, but nothing stops one sitting
+      // inside a registered folder: judge it before anything is created there.
+      await requireCallerDrives(op, dataDir);
       await createDirectoryChain(
         pluginId,
         op,
@@ -4280,6 +4316,9 @@ function buildFsApi(
     const { resolved, rootClass } = await containWithClass(targetPath);
     requireLoaded(op);
     requireWriteCapForClass(op, rootClass);
+    // Before consent, so a write the lease refuses never banks a grant; the
+    // resolved target, since a link inside the data dir can lead into a project.
+    await requireCallerDrives(op, resolved);
     if (!isDataDirTarget) {
       await ensureCapabilityConsent(deps, pluginId, writeCap);
       requireLoaded(op);
@@ -4363,6 +4402,8 @@ function buildFsApi(
     }
     const { resolved, isDataDirTarget } = await gateMutation(op, targetPath, writeCap);
     if (isDataDirTarget) await createDataDirParents(op, resolved);
+    // The approval is the last this host sees of the write: judge it after the consent wait.
+    await requireCallerDrives(op, resolved);
     await refuseSymlinkLeaf(op, targetPath);
     // Recorded when approved: the write itself happens in the plugin's own
     // process, which the audit trail cannot see.
@@ -4536,6 +4577,8 @@ function buildFsApi(
         // the recheck below misreports an unloaded plugin's roots as scope.
         requireLoaded("writeFile");
         await recheckContained("writeFile", filePath, resolved);
+        // The queue wait can outlast a takeover, too.
+        await requireCallerDrives("writeFile", resolved);
         const leafStat = await refuseSymlinkLeaf("writeFile", filePath);
         const bytes = Buffer.from(contents, "utf-8");
         if (expected === null) {
@@ -4627,6 +4670,7 @@ function buildFsApi(
       await runExclusive(resolved, async () => {
         requireLoaded("mkdir");
         await recheckContained("mkdir", dirPath, resolved);
+        await requireCallerDrives("mkdir", resolved);
         await createDirectoryChain(
           pluginId,
           "mkdir",
@@ -4650,6 +4694,7 @@ function buildFsApi(
       await runExclusive(resolved, async () => {
         requireLoaded("appendFile");
         await recheckContained("appendFile", filePath, resolved);
+        await requireCallerDrives("appendFile", resolved);
         const leafStat = await refuseSymlinkLeaf("appendFile", filePath);
         // A FIFO or device is refused before the open, which on a FIFO with
         // no reader would otherwise block.
@@ -5066,6 +5111,12 @@ function buildGitApi(deps: PluginHostFactoryDeps, pluginId: string): PluginGitAp
       );
     }
   };
+  // Staging and committing change the worktree's project, so a call from a
+  // view must drive it.
+  const requireCallerDrives = async (op: string, resolved: string): Promise<void> => {
+    await assertPluginCallerDrives(pluginId, `git.${op}`, { paths: [resolved] });
+    requireLoaded(op);
+  };
   // A worktree the plugin may access = one contained inside its declared
   // allowedPaths (with `${project}` / `${worktree}` tokens expanded at call
   // time). We resolve the worktree root itself (not a child) so the git ops
@@ -5114,11 +5165,13 @@ function buildGitApi(deps: PluginHostFactoryDeps, pluginId: string): PluginGitAp
       const targets = resolveAddPathspecs(pluginId, paths);
       const resolved = await containWorktree(worktreePath);
       requireLoaded("add");
+      await requireCallerDrives("add", resolved);
       // Consent fires after containment + pathspec validation so a doomed call
       // never banks a git:write grant (#10524). Re-check liveness after the
       // prompt await.
       await ensureCapabilityConsent(deps, pluginId, "git:write");
       requireLoaded("add");
+      await requireCallerDrives("add", resolved);
       await git.add(resolved, targets, options?.signal);
       deps.safeAppendAudit({
         pluginId,
@@ -5152,10 +5205,12 @@ function buildGitApi(deps: PluginHostFactoryDeps, pluginId: string): PluginGitAp
       }
       const resolved = await containWorktree(worktreePath);
       requireLoaded("commit");
+      await requireCallerDrives("commit", resolved);
       // Consent fires after containment + message validation so a doomed call
       // never banks a grant (#10524). Re-check liveness after the prompt await.
       await ensureCapabilityConsent(deps, pluginId, "git:write");
       requireLoaded("commit");
+      await requireCallerDrives("commit", resolved);
       const result = await git.commit(resolved, options, callOptions?.signal);
       deps.safeAppendAudit({
         pluginId,
@@ -5690,6 +5745,10 @@ function buildDocumentsApi(deps: PluginHostFactoryDeps, pluginId: string): Plugi
           const contained = await containToDeclaredRoots(deps, pluginId, outputPath);
           requireLoaded();
           requireCapForClass("write", contained.rootClass, "the output");
+          await assertPluginCallerDrives(pluginId, "documents.renderPdf", {
+            paths: [contained.resolved],
+          });
+          requireLoaded();
           const parent = await fs.stat(path.dirname(contained.resolved)).catch(() => null);
           if (!parent?.isDirectory()) {
             throw new Error(
@@ -5768,6 +5827,10 @@ function buildDocumentsApi(deps: PluginHostFactoryDeps, pluginId: string): Plugi
             }
           );
           if (recheck.resolved !== contained.resolved) throw moved();
+          await assertPluginCallerDrives(pluginId, "documents.renderPdf", {
+            paths: [contained.resolved],
+          });
+          requireLoaded();
           const leafStat = await refuseSymlinkLeaf(outputPath);
           const mode = leafStat ? leafStat.mode & 0o777 : undefined;
           requireLoaded();

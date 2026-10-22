@@ -103,6 +103,29 @@ describe("pluginFileDocument (#13809)", () => {
     });
   });
 
+  it("hands a save refused for another screen's lease the host's words, and keeps the draft", async () => {
+    const wording = "greg-mbp has control of this project. Take control first.";
+    bridge.read.mockResolvedValue({ status: "ok", text: "{}", revision: REV_A });
+    // As the preload rethrows a host AppError across the bridge.
+    bridge.save.mockRejectedValue(
+      new Error(
+        `[AppError|DRIVEN_ELSEWHERE|${encodeURIComponent(wording)}] file-document:save changes p1`
+      )
+    );
+    const handle = openPluginFileDocument(target());
+    handle.retain();
+    await handle.document.read();
+    handle.document.setDraft("mine");
+    await expect(handle.document.save("mine", { expectedRevision: REV_A })).resolves.toEqual({
+      status: "error",
+      message: wording,
+    });
+    expect(useFileDocumentStore.getState().byPanelId["panel-1"]).toMatchObject({
+      dirty: true,
+      draftText: "mine",
+    });
+  });
+
   it("raises a conflict when the disk moves under a draft, and reports it once", async () => {
     bridge.read.mockResolvedValueOnce({ status: "ok", text: "{}", revision: REV_A });
     const handle = openPluginFileDocument(target());

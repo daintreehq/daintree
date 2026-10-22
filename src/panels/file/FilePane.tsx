@@ -105,6 +105,7 @@ import { useFileEditorChoicesStore } from "@/store/fileEditorChoicesStore";
 import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 import { FileEditorPicker, type FileEditorPickerOption } from "./FileEditorPicker";
 import { FileEditorBanner } from "@/components/FileViewer/FileEditorBanner";
+import { useFileEditLock } from "@/hooks/useFileEditLock";
 import {
   useFileDocumentDraftText,
   useFileDocumentFlags,
@@ -597,12 +598,19 @@ export function FilePane({
   // missing, still reaches the editor's own unavailable state rather than a
   // read-only error that hides the draft. The editor refuses what it cannot
   // edit (binary, oversized, undecodable) itself.
+  // While another screen drives the project, only what is already open keeps
+  // it (see useFileEditLock).
   const requestedMode = panel?.fileViewMode ?? "source";
-  const isEditable =
+  const canEdit =
     (builtinEditor !== null || pluginEditor !== null) &&
     location !== "dialog" &&
     isInsideGovernedRoot &&
     (loadState === "loaded" || requestedMode === "edit" || isDirty);
+  const { lockedBy: editLockedBy, mayEdit } = useFileEditLock(
+    canEdit && requestedMode === "edit",
+    isDirty
+  );
+  const isEditable = canEdit && mayEdit;
   // A plugin viewer fills Rendered for a type the host can't render.
   const hasPluginRendered = pluginViewer !== null;
 
@@ -1600,6 +1608,7 @@ export function FilePane({
       </FileViewerToolbar.Root>
       {location !== "dialog" &&
         isInsideGovernedRoot &&
+        editLockedBy === null &&
         viewMode !== "edit" &&
         loadState === "loaded" &&
         content !== null && (
