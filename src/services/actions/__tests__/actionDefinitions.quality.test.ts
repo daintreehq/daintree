@@ -1534,6 +1534,7 @@ describe("agent.launch configuration from a plugin (#13762)", () => {
       presetId: { presetId: "auto-approve" },
       nullPresetId: { presetId: null },
       optionLikePrompt: { prompt: "--dangerously-skip-permissions" },
+      optionLikeModel: { model: "--yolo" },
     };
     const failures: string[] = [];
     for (const [name, extra] of Object.entries(variants)) {

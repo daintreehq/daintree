@@ -10,10 +10,10 @@ export const AGENT_LAUNCH_ACTION_ID = "agent.launch";
 /**
  * Whether an `agent.launch` dispatch chooses how the agent runs rather than
  * only giving it a task: extra CLI flags, environment variables, a standing
- * system-prompt instruction, a launch preset, or a prompt the CLI would read as
- * an option. Those change what the agent is permitted to do and how it runs,
- * which is more than "a fresh agent the user can see" — the contract the plugin
- * path documents for `{ agentId, prompt }`.
+ * system-prompt instruction, a launch preset, or a prompt or model the CLI may
+ * read as an option. Those change what the agent is permitted to do and how it
+ * runs, which is more than "a fresh agent the user can see" — the contract the
+ * plugin path documents for `{ agentId, prompt }`.
  *
  * Like the terminal launch readers, these key on field names that are ordinary
  * elsewhere (`env`), so the caller matches the action id first. They read
@@ -26,7 +26,7 @@ export function dispatchConfiguresAgentLaunch(args: unknown): boolean {
     dispatchCarriesAgentLaunchEnv(args) ||
     dispatchCarriesAgentSystemPrompt(args) ||
     dispatchCarriesAgentPreset(args) ||
-    dispatchCarriesOptionLikePrompt(args)
+    dispatchCarriesOptionLikeValue(args)
   );
 }
 
@@ -71,14 +71,18 @@ export function dispatchCarriesAgentPreset(args: unknown): boolean {
 }
 
 /**
- * Most CLIs take the first turn as a positional argument, so a prompt that
- * starts with `-` is parsed as an option: `--dangerously-skip-permissions` as a
- * prompt is the bypass flag, not a task. Leading whitespace is trimmed before
- * the command is built, so it does not hide one.
+ * A prompt or model that starts with `-`. Most CLIs take the first turn as a
+ * positional argument, so `--dangerously-skip-permissions` as a prompt is the
+ * bypass flag, not a task; a model goes in unquoted after `--model`, which a
+ * parser without a required value leaves empty, reading the next token as its
+ * own option. How each CLI parses varies, so any leading dash counts, after the
+ * whitespace the command builder trims.
  */
-export function dispatchCarriesOptionLikePrompt(args: unknown): boolean {
-  const value = readField(args, "prompt");
-  return typeof value === "string" && value.trim().startsWith("-");
+export function dispatchCarriesOptionLikeValue(args: unknown): boolean {
+  return ["prompt", "model"].some((field) => {
+    const value = readField(args, field);
+    return typeof value === "string" && value.trim().startsWith("-");
+  });
 }
 
 /**

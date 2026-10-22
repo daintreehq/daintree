@@ -71,8 +71,8 @@ export function resolveEffectiveActionDanger(
     return "confirm";
   }
   // `agent.launch` from a PLUGIN that chooses how the agent runs (#13762): flags,
-  // env, a system prompt, a preset, or a prompt the CLI would parse as an
-  // option. The plugin path is documented as `{ agentId, prompt }`: a fresh
+  // env, a system prompt, a preset, or a prompt or model the CLI may parse as
+  // an option. The plugin path is documented as `{ agentId, prompt }`: a fresh
   // agent the user can see, given a task. These configure the agent instead —
   // what it may do, what it runs with — and reach the bypass flags agent
   // settings classify as dangerous, so with no confirm bypass for plugins this

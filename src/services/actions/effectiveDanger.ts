@@ -12,7 +12,7 @@ export {
   dispatchCarriesAgentLaunchFlags,
   dispatchCarriesAgentPreset,
   dispatchCarriesAgentSystemPrompt,
-  dispatchCarriesOptionLikePrompt,
+  dispatchCarriesOptionLikeValue,
   dispatchConfiguresAgentLaunch,
 } from "@shared/utils/dispatchAgentLaunch";
 export { dispatchCarriesRecipeId, readDispatchRecipeId } from "@shared/utils/dispatchRecipeId";
@@ -68,7 +68,7 @@ export const CLOSE_ALL_DISPATCH_DANGER_RATIONALE =
 
 /** Counterpart for a plugin choosing how the agent it launches runs. */
 export const AGENT_LAUNCH_CONFIG_DISPATCH_DANGER_RATIONALE =
-  "This call launches an agent with its own CLI flags, environment variables, system prompt or preset, or with a prompt the CLI would read as an option. Those change what the agent may do and how it runs rather than only giving it a task, so a plugin can't choose them.";
+  "This call launches an agent with its own CLI flags, environment variables, system prompt or preset, or with a prompt or model the CLI may read as an option. Those change what the agent may do and how it runs rather than only giving it a task, so a plugin can't choose them.";
 
 /** Counterpart for a dispatch that only chooses where the terminal opens. */
 export const TERMINAL_CWD_DISPATCH_DANGER_RATIONALE =

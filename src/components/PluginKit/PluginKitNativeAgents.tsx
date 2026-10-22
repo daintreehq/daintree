@@ -113,7 +113,7 @@ const UNKNOWN_ACTION_REASON = "Not available in this version of Daintree";
 const PLUGIN_BLOCKED_REASON = "Plugins can't run this action";
 const CONFIRM_REASON = "Asks for confirmation, so run it from Daintree itself";
 const AGENT_LAUNCH_CONFIG_REASON =
-  "Plugins can give an agent a task, not choose its flags, environment, system prompt or preset";
+  "Plugins can give an agent a task, not choose its flags, environment, system prompt or preset, or start the task or model with -";
 const DISABLED_FALLBACK_REASON = "Not available right now";
 const PLUGIN_BLOCKED_META = "Not for plugins";
 const CONFIRM_META = "Needs confirmation";

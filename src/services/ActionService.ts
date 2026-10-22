@@ -673,7 +673,7 @@ export class ActionService {
       const error: ActionError = {
         code: "CONFIRMATION_REQUIRED",
         message: pluginLaunchConfig
-          ? `Action "${actionId}" can't take agentLaunchFlags, env, systemPrompt, presetId or a prompt starting with "-" from a plugin: plugins can give an agent a task, not choose how it runs.`
+          ? `Action "${actionId}" can't take agentLaunchFlags, env, systemPrompt, presetId, or a prompt or model starting with "-" from a plugin: plugins can give an agent a task, not choose how it runs.`
           : `Action "${actionId}" requires explicit confirmation from ${source} sources.`,
       };
       return { ok: false, error };

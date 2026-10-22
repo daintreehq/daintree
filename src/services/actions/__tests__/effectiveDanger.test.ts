@@ -11,7 +11,7 @@ import {
   dispatchCarriesAgentLaunchFlags,
   dispatchCarriesAgentPreset,
   dispatchCarriesAgentSystemPrompt,
-  dispatchCarriesOptionLikePrompt,
+  dispatchCarriesOptionLikeValue,
   dispatchConfiguresAgentLaunch,
   dispatchCarriesRecipeId,
   dispatchCarriesTerminalCommand,
@@ -161,13 +161,19 @@ describe("agent.launch configuration from a plugin (#13762)", () => {
     expect(resolve("plugin", { agentId: "claude", presetId: null })).toBe("confirm");
   });
 
-  it("refuses a prompt the CLI would parse as an option", () => {
+  it("refuses a prompt or model the CLI may parse as an option", () => {
     // The first turn is a positional argument, so this prompt is the bypass flag.
     expect(
       resolve("plugin", { agentId: "codex", prompt: "--dangerously-bypass-approvals-and-sandbox" })
     ).toBe("confirm");
     expect(resolve("plugin", { agentId: "claude", prompt: "\n  -p" })).toBe("confirm");
     expect(resolve("plugin", { agentId: "claude", prompt: "Fix --verbose output" })).toBe("safe");
+    // `--model` takes it unquoted, and a parser without a required value reads
+    // `--yolo` as its own option.
+    expect(resolve("plugin", { agentId: "qwen", model: "--yolo", prompt: "Fix it" })).toBe(
+      "confirm"
+    );
+    expect(resolve("plugin", { agentId: "claude", model: "claude-opus-4-7" })).toBe("safe");
   });
 
   it("refuses the bypass flags agent settings classify as dangerous", () => {
@@ -235,8 +241,9 @@ describe("dispatchConfiguresAgentLaunch", () => {
     expect(dispatchCarriesAgentSystemPrompt({ systemPrompt: "\n\t" })).toBe(false);
     expect(dispatchCarriesAgentPreset({ presetId: "p1" })).toBe(true);
     expect(dispatchCarriesAgentPreset({ agentId: "claude" })).toBe(false);
-    expect(dispatchCarriesOptionLikePrompt({ prompt: "-c x=1" })).toBe(true);
-    expect(dispatchCarriesOptionLikePrompt({ prompt: "Write it" })).toBe(false);
+    expect(dispatchCarriesOptionLikeValue({ prompt: "-c x=1" })).toBe(true);
+    expect(dispatchCarriesOptionLikeValue({ model: " -x" })).toBe(true);
+    expect(dispatchCarriesOptionLikeValue({ prompt: "Write it", model: "gpt-5" })).toBe(false);
   });
 
   it("fails closed on a value the schema would reject", () => {
