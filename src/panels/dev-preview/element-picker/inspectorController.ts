@@ -26,7 +26,7 @@ import { forgetComposerMemories } from "./composerMemory.js";
 import { isRemoteWindow } from "@/hooks/useHostPlatform";
 import {
   unionBounds,
-  type PageNode,
+  type ShownNode,
   type PageScreenshot,
   type PageSelection,
 } from "./pageSelection.js";
@@ -598,7 +598,7 @@ export class InspectorController implements DevPreviewToolSession {
   /** Each selection's picture, taken when it was made: oldest first, bounded. */
   private readonly captures = new Map<string, Promise<PageScreenshot>>();
   /** What the page showed of each traced selection's elements, kept the same way. */
-  private readonly shown = new Map<string, ReadonlyMap<string, PageNode>>();
+  private readonly shown = new Map<string, ReadonlyMap<string, ShownNode>>();
 
   constructor(
     panelId: string,
@@ -2309,6 +2309,9 @@ export class InspectorController implements DevPreviewToolSession {
             label: singleLineLabel(node.label),
             tagName: node.tagName,
             context: node.context ?? null,
+            stamp: node.loc
+              ? { file: node.loc.file, line: node.loc.line, column: node.loc.column }
+              : null,
           },
         ])
       )
@@ -2316,7 +2319,7 @@ export class InspectorController implements DevPreviewToolSession {
   }
 
   /** What the page showed of a traced selection's elements, by occurrence id; null once too old to be kept. */
-  shownNodes(selectionId: string): ReadonlyMap<string, PageNode> | null {
+  shownNodes(selectionId: string): ReadonlyMap<string, ShownNode> | null {
     return this.shown.get(selectionId) ?? null;
   }
 

@@ -10,7 +10,7 @@ import { untestedVersionNotes, type SelectedNode, type SiteSelection } from "./l
 import { untestedToolchainPromptLine } from "./copy.js";
 import type { AgentPromptInput, PromptElement, PromptProject, PromptScope } from "./agentPrompt.js";
 import type { CallSite, PagePlace, TaskScope } from "./agentTask.js";
-import type { PageNode, PageScreenshot, PageSelection } from "./pageSelection.js";
+import type { PageScreenshot, PageSelection, ShownNode } from "./pageSelection.js";
 
 // What the plugin's resolve says, in the neutral terms the prompt is built
 // from, until the core picker's own observations replace it (#13886). Every
@@ -19,6 +19,7 @@ import type { PageNode, PageScreenshot, PageSelection } from "./pageSelection.js
 
 const LOC_FIELD = "__svelte_meta.loc";
 const PARENT_FIELD = "__svelte_meta.parent";
+const META_FIELD = "__svelte_meta";
 
 function svelteLocation(line: number, column: number): SourceLocation {
   return { ...COORDINATE_CONVENTIONS.svelteMeta, columnUnit: "utf16", line, column };
@@ -45,10 +46,29 @@ function appPrefixIn(worktreePath: string | null, appRoot: string): string | nul
   return app.startsWith(`${root}/`) ? `${app.slice(root.length + 1)}/` : null;
 }
 
+/**
+ * Where main's location for an element came from. It checks the place the page
+ * stamped, but places an element by its template's shape when the stamp is a
+ * neighbour's or missing — and then the location came from Svelte's metadata
+ * as a whole, not that one field. Without the stamp to compare, it can't say
+ * which, so it says the less specific of the two.
+ */
+function locationField(node: SelectedNode | undefined, shown: ShownNode | undefined): string {
+  const stamp = shown?.stamp;
+  const at = node?.definition?.location;
+  return stamp &&
+    at &&
+    stamp.file === at.file &&
+    stamp.line === at.line &&
+    stamp.column === at.column
+    ? LOC_FIELD
+    : META_FIELD;
+}
+
 function siteElement(
   node: SelectedNode,
   ref: (appRelative: string) => SourceFileRef,
-  shown: PageNode | undefined
+  shown: ShownNode | undefined
 ): PromptElement {
   const definition = node.definition;
   const sourceCandidates: SourceCandidate[] = [];
@@ -59,7 +79,7 @@ function siteElement(
       kind: "template-location",
       candidateId: "loc",
       framework: "svelte",
-      extraction: { kind: "runtime-field", field: LOC_FIELD },
+      extraction: { kind: "runtime-field", field: locationField(node, shown) },
       file: definition.location.file,
       location,
     });
@@ -140,6 +160,7 @@ function scopedElement(
   scope: Extract<TaskScope, { kind: "component" }>,
   element: PromptElement,
   node: SelectedNode | undefined,
+  ownField: string,
   ref: (appRelative: string) => SourceFileRef
 ): { element: PromptElement; componentId: string } {
   const { observation } = element;
@@ -178,7 +199,7 @@ function scopedElement(
     kind: "file-hint",
     candidateId: "scope:file",
     framework: "svelte",
-    extraction: { kind: "runtime-field", field: own === null ? PARENT_FIELD : LOC_FIELD },
+    extraction: { kind: "runtime-field", field: own === null ? PARENT_FIELD : ownField },
     file: own?.location.file ?? scope.file,
   };
   if (own === null || node?.sourceFile === undefined) return withRecord(record([hint]));
@@ -222,6 +243,24 @@ function projectOf(place: PagePlace): PromptProject {
   };
 }
 
+/**
+ * The app the page is from, with whatever the project model added. Svelte
+ * reports files relative to the app, so in a monorepo a quoted path is only
+ * findable from the worktree with the app's place in front of it.
+ */
+function projectFor(place: PagePlace | null, appPrefix: string | null): PromptProject | null {
+  const project: PromptProject | null = place
+    ? projectOf(place)
+    : appPrefix === null
+      ? null
+      : { appPath: appPrefix.replace(/\/$/, ""), stack: [], notes: [], route: null };
+  if (project === null || project.appPath === "") return project;
+  return {
+    ...project,
+    notes: [...project.notes, "- Files the page reports are relative to the app, not the worktree"],
+  };
+}
+
 export interface SitePromptContext {
   instruction: string;
   selection: SiteSelection;
@@ -234,7 +273,7 @@ export interface SitePromptContext {
   scope?: TaskScope;
   picture: PageScreenshot;
   /** What the page itself showed of each element, by occurrence id; null once no longer kept. */
-  shown: ReadonlyMap<string, PageNode> | null;
+  shown: ReadonlyMap<string, ShownNode> | null;
 }
 
 export function sitePromptInput(context: SitePromptContext): AgentPromptInput {
@@ -244,8 +283,9 @@ export function sitePromptInput(context: SitePromptContext): AgentPromptInput {
   // root doesn't have.
   const owner = selection.nodes[0];
   const ownerLocation = owner?.sourceFile ?? owner?.definition?.location.file;
+  const inApp = appPrefixIn(worktreePath, selection.appRoot);
   const appPrefix =
-    appPrefixIn(worktreePath, selection.appRoot) ??
+    inApp ??
     (file && ownerLocation && file.endsWith(ownerLocation)
       ? file.slice(0, file.length - ownerLocation.length)
       : "");
@@ -259,7 +299,11 @@ export function sitePromptInput(context: SitePromptContext): AgentPromptInput {
   const scope = context.scope;
   let promptScope: PromptScope = { kind: "element" };
   if (scope?.kind === "component" && elements[0]) {
-    const scoped = scopedElement(scope, elements[0], owner, ref);
+    const ownField = locationField(
+      owner,
+      owner ? context.shown?.get(owner.runtimeOccurrenceId) : undefined
+    );
+    const scoped = scopedElement(scope, elements[0], owner, ownField, ref);
     elements[0] = scoped.element;
     promptScope = {
       kind: "component",
@@ -277,7 +321,7 @@ export function sitePromptInput(context: SitePromptContext): AgentPromptInput {
       reportedRouteId: selection.routeId,
       viewport: selection.viewport,
     },
-    project: context.place ? projectOf(context.place) : null,
+    project: projectFor(context.place, inApp),
     elements,
     scope: promptScope,
     screenshot: context.picture,

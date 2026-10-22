@@ -8,7 +8,7 @@ import {
 } from "../legacyPrompt.js";
 import { callSiteKey, scopesFor, taskScopes } from "../agentTask.js";
 import type { SiteSelection } from "../legacyBridge.js";
-import type { PageNode, PageSelection } from "../pageSelection.js";
+import type { PageSelection, ShownNode } from "../pageSelection.js";
 import { FILE, makeSelection } from "./testHost.js";
 
 const NO_PICTURE = { status: "omitted", reason: "the element has no size on screen" } as const;
@@ -24,7 +24,29 @@ function pagePrompt(context: PagePromptContext): string {
   return buildAgentTaskPrompt(pagePromptInput(context));
 }
 
-const LOC = '(reported by the page in runtime field "__svelte_meta.loc"; checked against the file)';
+// Without the page's own stamp beside it, main's location can only be credited
+// to Svelte's metadata as a whole: it may have placed the element by shape.
+const LOC = '(reported by the page in runtime field "__svelte_meta"; checked against the file)';
+const STAMPED =
+  '(reported by the page in runtime field "__svelte_meta.loc"; checked against the file)';
+
+function shownAt(line: number, column: number): Map<string, ShownNode> {
+  return new Map([
+    [
+      "occ-1",
+      {
+        label: 'button "Start Pro"',
+        tagName: "BUTTON",
+        context: {
+          selector: "main > article > button",
+          markup: '<button class="cta">Start Pro</button>',
+          styles: [{ property: "padding", value: "8px 16px" }],
+        },
+        stamp: { file: FILE, line, column },
+      },
+    ],
+  ]);
+}
 
 const PARENT = "__svelte_meta.parent";
 
@@ -247,7 +269,7 @@ describe("a traced selection's prompt", () => {
       place: null,
     });
     expect(prompt).toContain(
-      "At least 1 copy of this markup is on the page and the count could not be finished"
+      "At least 1 copy of this markup is on the page; any others weren't counted"
     );
   });
 
@@ -274,25 +296,11 @@ describe("a traced selection's prompt", () => {
     });
 
     expect(prompt).toContain(
-      `  - Source: written at "${FILE}:6:3" (reported by the page in runtime field "__svelte_meta.loc"; not checked)`
+      `  - Source: written at "${FILE}:6:3" (reported by the page in runtime field "__svelte_meta"; not checked)`
     );
   });
 
   it("goes with what the page showed of the element as well as its source", () => {
-    const shown = new Map<string, PageNode>([
-      [
-        "occ-1",
-        {
-          label: 'button "Start Pro"',
-          tagName: "BUTTON",
-          context: {
-            selector: "main > article > button",
-            markup: '<button class="cta">Start Pro</button>',
-            styles: [{ property: "padding", value: "8px 16px" }],
-          },
-        },
-      ],
-    ]);
     const prompt = sitePrompt({
       instruction: "Make this bigger",
       selection: makeSelection(),
@@ -300,16 +308,77 @@ describe("a traced selection's prompt", () => {
       worktreePath: "/repo",
       place: null,
       picture: { status: "attached", path: "/tmp/daintree-clipboard/element-1.png" },
-      shown,
+      shown: shownAt(6, 2),
     });
 
-    expect(prompt).toContain(`  - Source: written at ${FILE}:6:3 ${LOC}`);
+    // The page stamped the place main checked, so the field is named exactly.
+    expect(prompt).toContain(`  - Source: written at ${FILE}:6:3 ${STAMPED}`);
     expect(prompt).toContain('  - Selector: "main > article > button"');
     expect(prompt).toContain('"<button class=\\"cta\\">Start Pro</button>"');
     expect(prompt).toContain('"padding: 8px 16px"');
     expect(prompt).toContain(
       "- Screenshot of the selection, cropped from the preview: /tmp/daintree-clipboard/element-1.png"
     );
+  });
+  it("doesn't credit the stamp when main placed the element somewhere else", () => {
+    // A hydrated page stamps an element with its neighbour's location; main
+    // places it by the template's shape instead, and checks that place.
+    const prompt = sitePrompt({
+      instruction: "Make this bigger",
+      selection: makeSelection(),
+      file: FILE,
+      worktreePath: "/repo",
+      place: null,
+      shown: shownAt(7, 2),
+    });
+
+    expect(prompt).toContain(`  - Source: written at ${FILE}:6:3 ${LOC}`);
+    expect(prompt).not.toContain("__svelte_meta.loc");
+  });
+
+  it("says which app the page's paths are relative to, even without the project model", () => {
+    const prompt = sitePrompt({
+      instruction: "Tighten the spacing",
+      selection: { ...makeSelection(), appRoot: "/repo/apps/site" },
+      file: `apps/site/${FILE}`,
+      worktreePath: "/repo",
+      place: null,
+    });
+
+    expect(prompt).toContain(
+      "- App: apps/site\n- Files the page reports are relative to the app, not the worktree"
+    );
+    // The page's own spelling is quoted as it was reported, not rewritten.
+    expect(prompt).toContain('used at "src/lib/PricingCard.svelte:3:1"');
+  });
+
+  it("names the app the worktree is without a note when the two are the same", () => {
+    const prompt = sitePrompt({
+      instruction: "Tighten the spacing",
+      selection: makeSelection(),
+      file: FILE,
+      worktreePath: "/repo",
+      place: null,
+    });
+
+    expect(prompt).toContain("- App: the worktree root");
+    expect(prompt).not.toContain("relative to the app");
+  });
+
+  it("says once that siblings picked together render inside the same components", () => {
+    const base = makeSelection();
+    const first = base.nodes[0]!;
+    const second = { ...first, runtimeOccurrenceId: "occ-2", label: 'button "Start Team"' };
+    const prompt = sitePrompt({
+      instruction: "Make these match",
+      selection: { ...base, nodes: [first, second] },
+      file: FILE,
+      worktreePath: null,
+      place: null,
+    });
+
+    expect(prompt.split("\n").filter((line) => line.includes('"PricingCard"'))).toHaveLength(1);
+    expect(prompt).toContain("  - Rendered inside the same components as the element before it");
   });
 });
 
@@ -415,7 +484,7 @@ describe("a component request's prompt", () => {
     });
 
     expect(lineAfter(prompt, "- Target:")).toBe(
-      `  - Source: in ${FILE} (a file without a line, reported by the page in runtime field "__svelte_meta.loc"; checked against the file)`
+      `  - Source: in ${FILE} (a file without a line, reported by the page in runtime field "__svelte_meta"; checked against the file)`
     );
   });
 });
@@ -692,7 +761,7 @@ describe("page observations as data", () => {
     expect(/[\u2028\u2029]/u.test(prompt)).toBe(false);
     // Quoted whole: the line and column were proved against a file, and this
     // is not the file they were proved against.
-    expect(data(lineWith(prompt, "- Source:"))).toEqual([`${SPELLED}:6:3`, "__svelte_meta.loc"]);
+    expect(data(lineWith(prompt, "- Source:"))).toEqual([`${SPELLED}:6:3`, "__svelte_meta"]);
     expect(prompt.split("\n").some((line) => line.startsWith("## "))).toBe(false);
   });
 

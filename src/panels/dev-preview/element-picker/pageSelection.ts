@@ -26,6 +26,15 @@ export interface PageNode {
   context: ElementContext | null;
 }
 
+/**
+ * What the page showed of an element whose source was traced: its own account
+ * of it, and the location it stamped on it, verbatim — which is not always
+ * where main found it, so the two are kept apart.
+ */
+export interface ShownNode extends PageNode {
+  stamp: { file: string; line: number; column: number } | null;
+}
+
 /** The picture of a selection, cropped from the preview, or why there isn't one. */
 export type PageScreenshot =
   { status: "attached"; path: string } | { status: "omitted"; reason: string };

@@ -211,6 +211,20 @@ function unavailableBecause(reason: UnavailableReason): string {
   }
 }
 
+/** How far a held target got, carried wherever it appears so no two states read as one. */
+function heldHow(target: HeldTarget): string {
+  switch (target.state) {
+    case "observed":
+      return "found in the worktree, not checked against the file";
+    case "mapped":
+      return `mapped through ${throughMap(target.sourceMap)}, not checked against the file`;
+    case "verified":
+      return target.sourceMap
+        ? `mapped through ${throughMap(target.sourceMap)}, then checked against the file`
+        : "checked against the file";
+  }
+}
+
 /**
  * One source claim, cited as far as it got and saying how. Only a target the
  * host holds now is written plainly; anything else is the page's report,
@@ -234,17 +248,15 @@ function claimText(candidate: SourceCandidate, result: ResolutionResult | undefi
   if (result === undefined) return `${verb} ${reported} (${from}; not checked)`;
   switch (result.state) {
     case "observed":
-      return `${verb} ${held(result)} (${from}; found in the worktree, not checked against the file)`;
     case "mapped":
-      return `${verb} ${held(result)} (${from}; mapped through ${throughMap(result.sourceMap)}, not checked against the file)`;
-    case "verified": {
-      const mapped = result.sourceMap
-        ? `mapped through ${throughMap(result.sourceMap)}, then `
-        : "";
-      return `${verb} ${held(result)} (${from}; ${mapped}checked against the file)`;
+    case "verified":
+      return `${verb} ${held(result)} (${from}; ${heldHow(result)})`;
+    case "ambiguous": {
+      const fits = result.alternatives.map(
+        (alternative) => `${held(alternative)} (${heldHow(alternative)})`
+      );
+      return `${verb} ${reported} (${from}; ${result.alternatives.length} places in the worktree fit and none was chosen: ${fits.join(", ")})`;
     }
-    case "ambiguous":
-      return `${verb} ${reported} (${from}; ${result.alternatives.length} places in the worktree fit and none was chosen: ${result.alternatives.map(held).join(", ")})`;
     case "stale":
       return `${verb} ${reported} (${from}; no longer holds: ${staleBecause(result.reason)})`;
     case "unavailable":
@@ -317,7 +329,7 @@ function copiesLine(observation: PromptObservation): string | null {
   // A floor also comes from a structural placement, where the page counted
   // nothing at all; the line has to be true either way.
   if (svelte.sameLocCountPartial) {
-    return `At least ${pluralize(count, "copy of this markup is", "copies of this markup are")} on the page and the count could not be finished; changing it changes every copy`;
+    return `At least ${pluralize(count, "copy of this markup is", "copies of this markup are")} on the page; any others weren't counted, and changing it changes every copy`;
   }
   if (count > 1) {
     return `The page counted ${pluralize(count, "copy", "copies")} of this markup on it; changing it changes all of them`;
@@ -325,7 +337,29 @@ function copiesLine(observation: PromptObservation): string | null {
   return null;
 }
 
-function describeElement(lines: string[], element: PromptElement, index: number): void {
+function chainLines(element: PromptElement): string[] {
+  const { observation } = element;
+  const chain = renderChain(observation);
+  if (chain.length === 0) return [];
+  const lines = chain.map((record) => {
+    const claims = record.sourceCandidates.map((candidate) =>
+      claimText(candidate, resultFor(element, candidate))
+    );
+    return `    - ${[componentName(record), ...claims].join(", ")}`;
+  });
+  if (observation.componentChain.truncated) {
+    lines.push("    - The page stopped reading the chain here; there may be more further out");
+  }
+  return lines;
+}
+
+/** Describes one element and returns its chain, so the next can say it shares it rather than repeat it. */
+function describeElement(
+  lines: string[],
+  element: PromptElement,
+  index: number,
+  previousChain: readonly string[]
+): string[] {
   const { observation } = element;
   lines.push(
     `- ${index === 0 ? "Selected element" : "Also selected"}: ${elementName(observation)}`
@@ -342,30 +376,28 @@ function describeElement(lines: string[], element: PromptElement, index: number)
   }
   const copies = copiesLine(observation);
   if (copies !== null) lines.push(`  - ${copies}`);
-  // The first element's chain: a selection of several shares its context, and
-  // "make these match" needs their sources, not each one's ancestors again.
-  if (index === 0) {
-    const chain = renderChain(observation);
-    if (chain.length > 0) {
+  // Siblings picked together usually share their components, and the second
+  // copy of the same chain only buries what differs.
+  const chain = chainLines(element);
+  if (chain.length > 0) {
+    const same =
+      index > 0 &&
+      chain.length === previousChain.length &&
+      chain.every((line, at) => line === previousChain[at]);
+    if (same) {
+      lines.push("  - Rendered inside the same components as the element before it");
+    } else {
       lines.push("  - Rendered inside, innermost first:");
-      for (const record of chain) {
-        const claims = record.sourceCandidates.map((candidate) =>
-          claimText(candidate, resultFor(element, candidate))
-        );
-        lines.push(`    - ${[componentName(record), ...claims].join(", ")}`);
-      }
-      if (observation.componentChain.truncated) {
-        lines.push("    - The page stopped reading the chain here; there may be more further out");
-      }
+      lines.push(...chain);
     }
   }
   if (context === undefined) {
     if (candidates.length === 0)
       lines.push("  - The page's markup and styles for it couldn't be read");
-    return;
+    return chain;
   }
   lines.push(`  - Selector: ${pageData(context.selector)}`);
-  if (index >= DESCRIBED_NODES) return;
+  if (index >= DESCRIBED_NODES) return chain;
   if (context.markup !== "") {
     const trimmed = context.markupTruncated === true ? ", cut short" : "";
     lines.push(
@@ -378,6 +410,7 @@ function describeElement(lines: string[], element: PromptElement, index: number)
       `  - Computed styles that differ from the defaults or the parent: ${pageData(styles)}`
     );
   }
+  return chain;
 }
 
 /**
@@ -459,7 +492,10 @@ export function buildAgentTaskPrompt(input: AgentPromptInput): string {
   }
   // Every selected element goes out, not just the first: "make these match"
   // is meaningless with one of them missing.
-  elements.forEach((element, index) => describeElement(lines, element, index));
+  let previousChain: readonly string[] = [];
+  elements.forEach((element, index) => {
+    previousChain = describeElement(lines, element, index, previousChain);
+  });
 
   if (screenshot.status === "attached") {
     lines.push(

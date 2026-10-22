@@ -207,7 +207,7 @@ describe("how the prompt says a source claim was established", () => {
     });
 
     expect(sourceLines(prompt)).toEqual([
-      '- Source: created at "http://localhost:3000/assets/app.js:410:19" (reported by the page in frame 0 of "_debugStack", a position in the code the dev server sent; 2 places in the worktree fit and none was chosen: src/components/SaveButton.tsx:18:5, src/components/Toolbar.tsx:42:7)',
+      '- Source: created at "http://localhost:3000/assets/app.js:410:19" (reported by the page in frame 0 of "_debugStack", a position in the code the dev server sent; 2 places in the worktree fit and none was chosen: src/components/SaveButton.tsx:18:5 (found in the worktree, not checked against the file), src/components/Toolbar.tsx:42:7 (checked against the file))',
     ]);
   });
 
@@ -305,7 +305,9 @@ describe("how the prompt says a source claim was established", () => {
         ],
       });
 
-      expect(sourceLines(prompt)[0]).toContain("none was chosen: src/a/Card.vue, src/b/Card.vue)");
+      expect(sourceLines(prompt)[0]).toContain(
+        "none was chosen: src/a/Card.vue (found in the worktree, not checked against the file), src/b/Card.vue (found in the worktree, not checked against the file))"
+      );
     });
   });
 });
@@ -456,6 +458,40 @@ describe("what the prompt carries", () => {
         '    - "SaveButton" (named in runtime field "type.displayName"), used at "http://localhost:3000/assets/app.js:822:11" (reported by the page in frame 1 of "_debugStack", a position in the code the dev server sent; not checked)',
       ]);
     });
+  });
+
+  it("carries each selected element's own components, not only the first's", () => {
+    const own = (componentId: string, name: string): ComponentRecord => ({
+      componentId,
+      framework: "react",
+      name: { value: name, extraction: { kind: "runtime-field", field: "type.name" } },
+      environment: "client",
+      rootElementIds: [],
+      rootsComplete: true,
+      sourceCandidates: [],
+    });
+    const prompt = buildAgentTaskPrompt(
+      input([
+        {
+          observation: observation({
+            componentChain: { nearestId: "a", components: [own("a", "Header")], truncated: false },
+          }),
+          resolutions: [],
+        },
+        {
+          observation: observation({
+            elementId: "el-2",
+            label: "button.cancel",
+            componentChain: { nearestId: "b", components: [own("b", "Footer")], truncated: false },
+          }),
+          resolutions: [],
+        },
+      ])
+    );
+
+    expect(prompt).toContain('    - "Header" (named in runtime field "type.name")');
+    expect(prompt).toContain('    - "Footer" (named in runtime field "type.name")');
+    expect(prompt).not.toContain("the same components");
   });
 
   it("frames a component request around the record it names", () => {
