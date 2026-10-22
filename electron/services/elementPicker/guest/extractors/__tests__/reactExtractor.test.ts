@@ -4,7 +4,11 @@ import {
   Fragment,
   Suspense,
   act,
+  cloneElement,
   createElement,
+  createRef,
+  forwardRef,
+  memo,
   use,
   useEffect,
   useState,
@@ -16,6 +20,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ComponentRecord } from "../../../../../../shared/elementPicker/component.js";
 import type { SelectionObservation } from "../../../../../../shared/elementPicker/observation.js";
+import type { SourceCandidate } from "../../../../../../shared/elementPicker/source.js";
 import {
   ElementPickerEventSchema,
   type ElementPickerEvent,
@@ -131,6 +136,20 @@ function record(observation: SelectionObservation, name: string): ComponentRecor
   return found;
 }
 
+function kinds(component: ComponentRecord): string[] {
+  return component.sourceCandidates.map((candidate) => candidate.kind);
+}
+
+function definitionOf(component: ComponentRecord): SourceCandidate | undefined {
+  const found = component.sourceCandidates.filter((entry) => entry.kind === "component-definition");
+  expect(found.length).toBeLessThanOrEqual(1);
+  return found[0];
+}
+
+function locationOf(candidate: SourceCandidate | undefined): unknown {
+  return candidate !== undefined && candidate.kind !== "file-hint" ? candidate.location : undefined;
+}
+
 function nameOf(observation: SelectionObservation, id: string | null | undefined): string | null {
   const found = observation.componentChain.components.find((entry) => entry.componentId === id);
   return found?.name?.value ?? null;
@@ -206,7 +225,12 @@ describe.each(["plain", "compiled"] as const)("the React extractor, compiler %s"
     expect(observation.capabilities.line).toEqual({ state: "unknown" });
     // App's element was made by this test, outside any render: its stack has no
     // bottom marker and runs past what one record sends, and the rest is counted.
-    expect(record(observation, "App").sourceCandidates).toHaveLength(4);
+    expect(kinds(record(observation, "App"))).toEqual([
+      "component-invocation",
+      "component-invocation",
+      "component-invocation",
+      "component-definition",
+    ]);
     const fields =
       observation.frameworkEvidence[0]?.kind === "generic"
         ? observation.frameworkEvidence[0].fields
@@ -217,6 +241,41 @@ describe.each(["plain", "compiled"] as const)("the React extractor, compiler %s"
     ]);
     const omitted = fields.find((entry) => entry.name === "framesOmitted")?.value;
     expect(typeof omitted === "number" && omitted > 0).toBe(true);
+  });
+
+  it("reports where each component is written, from an element it made itself", () => {
+    mount(fixtures[variant]);
+    const button = pick("button.action-go");
+    const [own] = button.sourceCandidates;
+    const definition = definitionOf(record(button, "Button"));
+    // <button> is Button's own, made directly in the function React called.
+    expect(definition).toMatchObject({
+      kind: "component-definition",
+      framework: "react",
+      extraction: { kind: "generated-stack-frame", field: "_debugStack", frameIndex: 1 },
+    });
+    expect(locationOf(definition)).toEqual(locationOf(own));
+    expect(definition?.file).toBe(own?.file);
+    // Not where it was called: that is App's code.
+    expect(locationOf(definition)).not.toEqual(
+      locationOf(record(button, "Button").sourceCandidates[0])
+    );
+
+    // Each <li> is made in a callback; the frame React called is Items itself, further down.
+    const item = pick("li.item");
+    const items = definitionOf(record(item, "Items"));
+    const [li] = item.sourceCandidates;
+    expect(items?.kind === "component-definition" && items.extraction).toMatchObject({
+      kind: "generated-stack-frame",
+    });
+    const frameIndex = (candidate: SourceCandidate | undefined) =>
+      candidate?.extraction.kind === "generated-stack-frame" ? candidate.extraction.frameIndex : -1;
+    expect(frameIndex(items)).toBeGreaterThan(frameIndex(li));
+    expect(locationOf(items)).not.toEqual(locationOf(li));
+
+    // A memo with a compare renders through its implementation, on its behalf.
+    expect(definitionOf(record(pick("span.badge"), "Badge"))).toBeDefined();
+    expect(definitionOf(record(pick("input.field"), "Field"))).toBeDefined();
   });
 
   it("lists every element of a fragment as its component's roots", () => {
@@ -462,6 +521,64 @@ describe("the React extractor on what a render hides or hands elsewhere", () => 
     // Text is all it rendered, and text has no element id.
     expect(producer.rootElementIds).toEqual([]);
     expect(producer.rootsComplete).toBe(false);
+    // Nor a stack: the element it made renders under Consumer, so nothing says where it is written.
+    expect(kinds(producer)).not.toContain("component-definition");
+    expect(kinds(record(observation, "Consumer"))).toContain("component-definition");
+    expect(kinds(badge)).toContain("component-definition");
+  });
+});
+
+describe("the React extractor on an element one component made and another cloned", () => {
+  it("claims no definition from a stack React kept when another component took the element", () => {
+    // Slot and `asChild` do this: the ref they set makes the clone theirs, the stack stays Parent's.
+    function Slot({ children }: { children: ReactElement }) {
+      return cloneElement(children, { ref: createRef<HTMLElement>() } as Record<string, unknown>);
+    }
+    function Parent() {
+      return createElement(Slot, null, createElement("i", { className: "cloned" }));
+    }
+    mountTree(createElement(Parent));
+    const node = query("i.cloned");
+    const owner = (fiberOf(node)._debugOwner ?? null) as Record<string, unknown> | null;
+    expect((owner?.type as { name?: string } | undefined)?.name).toBe("Slot");
+
+    const observation = pick("i.cloned");
+    expect(kinds(record(observation, "Slot"))).not.toContain("component-definition");
+    expect(kinds(record(observation, "Parent"))).toContain("component-definition");
+  });
+
+  it("tells a clone from the cloner's own element by its stack, not by a name both may lack", () => {
+    // Both anonymous, as Radix's SlotClone and a `memo(() => …)` page are.
+    const Slot = forwardRef<HTMLElement, { children: ReactElement }>((props, ref) =>
+      cloneElement(props.children, { ref } as Record<string, unknown>)
+    );
+    Slot.displayName = "Slot";
+    const Page = memo(() => createElement(Slot, null, createElement("i", { className: "anon" })));
+    Page.displayName = "Page";
+    mountTree(createElement(Page));
+    const observation = pick("i.anon");
+    expect(kinds(record(observation, "Slot"))).not.toContain("component-definition");
+    expect(kinds(record(observation, "Page"))).toContain("component-definition");
+  });
+
+  it("looks past a clone to an element the component made itself", () => {
+    function Both({ children }: { children: ReactElement }) {
+      return [
+        cloneElement(children, { key: "clone", ref: createRef<HTMLElement>() } as Record<
+          string,
+          unknown
+        >),
+        createElement("span", { key: "own", className: "own" }),
+      ];
+    }
+    function Host() {
+      return createElement(Both, null, createElement("i", { className: "handed" }));
+    }
+    mountTree(createElement(Host));
+    const both = record(pick("i.handed"), "Both");
+    const span = pick("span.own");
+    // Its own <span> says where Both is written: the same frame as the span's own creation.
+    expect(locationOf(definitionOf(both))).toEqual(locationOf(span.sourceCandidates[0]));
   });
 });
 

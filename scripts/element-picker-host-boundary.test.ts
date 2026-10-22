@@ -83,6 +83,7 @@ const isHostProcessCode = (file: string) =>
 /** Wherever the install resolves from: a worktree's node_modules can be a link to another checkout's. */
 const isSourceMapDecoder = (file: string) =>
   file.includes("node_modules/@jridgewell/trace-mapping/");
+const isJsParser = (file: string) => file.includes("node_modules/@babel/parser/");
 
 describe("the Element Picker host boundary", () => {
   it("keeps the host process's code out of main, eagerly or lazily", async () => {
@@ -92,6 +93,7 @@ describe("the Element Picker host boundary", () => {
     const reachable = Object.keys(metafile.inputs);
     expect(reachable.filter(isHostProcessCode)).toEqual([]);
     expect(reachable.filter(isSourceMapDecoder)).toEqual([]);
+    expect(reachable.filter(isJsParser)).toEqual([]);
     expect(
       [...walkEagerGraph(metafile, "electron/main.ts")].filter((f) => f.startsWith(HOST_DIR))
     ).toEqual([]);
@@ -151,6 +153,10 @@ describe("the Element Picker host boundary", () => {
     const behind = scanForbiddenModules(reachable);
     expect(behind.filter((m) => m.label === "Svelte compiler").length).toBeGreaterThan(0);
     expect(behind.filter((m) => m.label === "svelte-source-model").length).toBeGreaterThan(0);
+    // React's resolver and the parser it reads JSX with, likewise behind theirs.
+    expect(reachable).toContain(`${RESOLVERS_DIR}react.ts`);
+    expect(reachable.some(isJsParser)).toBe(true);
+    expect(eager.filter(isJsParser)).toEqual([]);
     // Bytes come from main; nothing the host runs can open a file or a socket itself.
     expect(authorityImports(metafile)).toEqual([]);
     // Project adapters walk directories, which is main's authority, never the host's.

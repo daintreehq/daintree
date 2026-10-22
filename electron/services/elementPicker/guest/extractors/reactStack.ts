@@ -29,6 +29,11 @@ export interface CreationFrame {
   column: number;
 }
 
+/** A located frame with the function name V8 printed for it; null for an anonymous function. */
+export interface NamedFrame extends CreationFrame {
+  name: string | null;
+}
+
 export interface CreationFrames {
   frames: CreationFrame[];
   /** Located frames past the limit, which a reader choosing between them did not get to see. */
@@ -91,17 +96,25 @@ const LOCATION_START = /^(?:[a-z][a-z0-9+.-]*:|\/)/i;
  * starts like one — a URL, which is all a browser prints, or a path. A frame
  * with no such tail is skipped rather than misread.
  */
-function parseFrame(line: string): { file: string; line: number; column: number } | null {
+function parseFrame(
+  line: string
+): { file: string; line: number; column: number; name: string | null } | null {
   const text = line.trim();
   if (!text.startsWith("at ")) return null;
   // `at async url:line:col` is an anonymous async frame.
   const body = text.slice(text.startsWith("at async ") ? 9 : 3);
   // Inside an eval: the position is in code no file holds.
   if (body.includes("eval at ")) return null;
-  if (!body.endsWith(")")) return parseLocation(body);
+  if (!body.endsWith(")")) {
+    const location = parseLocation(body);
+    return location && { ...location, name: null };
+  }
   for (let open = body.lastIndexOf(" ("); open >= 0; open = body.lastIndexOf(" (", open - 1)) {
     const location = body.slice(open + 2, -1);
-    if (LOCATION_START.test(location)) return parseLocation(location);
+    if (LOCATION_START.test(location)) {
+      const parsed = parseLocation(location);
+      return parsed && { ...parsed, name: body.slice(0, open).replace(/^new /, "") };
+    }
     if (open === 0) break;
   }
   return null;
@@ -116,19 +129,39 @@ function parseFrame(line: string): { file: string; line: number; column: number 
  * bottom marker; its frames are all above the render entry, so they are kept.
  */
 export function creationFrames(error: unknown, limit: number): CreationFrames {
+  const { frames: located } = stackFrames(error);
+  return {
+    frames: located
+      .slice(0, limit)
+      .map(({ index, file, line, column }) => ({ index, file, line, column })),
+    omitted: Math.max(0, located.length - limit),
+  };
+}
+
+/**
+ * The frame React called the rendering component through: the last one above
+ * `react_stack_bottom_frame`, which is the function React invokes as the
+ * component (`Component(props)`, or a class instance's `render()`). An element
+ * the component itself created therefore says where that component is written,
+ * which none of its own call sites do. Null without the bottom marker: a stack
+ * cut short by the capture limit ends wherever the limit fell.
+ */
+export function componentFrame(error: unknown): NamedFrame | null {
+  const { frames, bottom } = stackFrames(error);
+  return bottom ? (frames.at(-1) ?? null) : null;
+}
+
+function stackFrames(error: unknown): { frames: NamedFrame[]; bottom: boolean } {
   const raw = readRawStack(error);
-  if (raw === null || !raw.startsWith(TOP_FRAME)) return { frames: [], omitted: 0 };
+  if (raw === null || !raw.startsWith(TOP_FRAME)) return { frames: [], bottom: false };
   const lines = raw.slice(TOP_FRAME.length, MAX_STACK_CHARS).split("\n", MAX_STACK_LINES);
-  const frames: CreationFrame[] = [];
-  let omitted = 0;
+  const frames: NamedFrame[] = [];
   // Line 0 is React's own factory frame.
   for (let index = 1; index < lines.length; index += 1) {
     const line = lines[index]!;
-    if (line.includes(BOTTOM_FRAME)) break;
+    if (line.includes(BOTTOM_FRAME)) return { frames, bottom: true };
     const location = parseFrame(line);
-    if (location === null) continue;
-    if (frames.length < limit) frames.push({ index, ...location });
-    else omitted += 1;
+    if (location !== null) frames.push({ index, ...location });
   }
-  return { frames, omitted };
+  return { frames, bottom: false };
 }

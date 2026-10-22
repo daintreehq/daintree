@@ -230,6 +230,99 @@ export function isMemoImplementation(fiber: Fiber): boolean {
   return canonicalFiber(fiber) !== fiber;
 }
 
+/**
+ * The first fiber below `component` that the component's own render created
+ * from an element, so its `_debugStack` was captured while that render ran,
+ * and that `read` makes something of. Text, implicit fragments and anything
+ * passed in as children are skipped: the first carry no stack, and children
+ * were made by whoever passed them. A memo's implementation renders on its
+ * memo's behalf. Null when nothing the component made gave `read` an answer
+ * within the budget.
+ */
+export function readOwnedElement<T>(
+  component: Fiber,
+  budget: Budget,
+  read: (fiber: Fiber) => T | null
+): T | null {
+  const halves = new Set<Fiber>([component]);
+  const alternate = fiberField(component, "alternate");
+  if (alternate !== null) halves.add(alternate);
+  const pending: Fiber[] = [];
+  const first = fiberField(component, "child");
+  if (first !== null) pending.push(first);
+  while (pending.length > 0) {
+    if (!budget.spend()) return null;
+    const fiber = pending.pop()!;
+    const sibling = fiberField(fiber, "sibling");
+    if (sibling !== null) pending.push(sibling);
+    const owner = fiberField(fiber, "_debugOwner");
+    if (
+      owner !== null &&
+      halves.has(canonicalFiber(owner)) &&
+      field(fiber, "_debugStack") != null
+    ) {
+      const answer = read(fiber);
+      if (answer !== null) return answer;
+    }
+    const child = fiberField(fiber, "child");
+    if (child !== null) pending.push(child);
+  }
+  return null;
+}
+
+const RECEIVED_LIMITS = { keys: 64, items: 64, depth: 3, values: 256 } as const;
+
+/**
+ * The `_debugStack` of each element `component` was handed in its props,
+ * children included, a few arrays deep. `cloneElement` with a ref makes the
+ * clone the cloning component's own but keeps the very stack object of the
+ * element it was cloned from, so an owned fiber holding one of these is a
+ * copy of something it received, not something it made.
+ */
+export function receivedStacks(component: Fiber): Set<unknown> {
+  const stacks = new Set<unknown>();
+  const props = field(component, "memoizedProps");
+  if (typeof props !== "object" || props === null) return stacks;
+  let left: number = RECEIVED_LIMITS.values;
+  const visit = (value: unknown, depth: number): void => {
+    if ((left -= 1) < 0 || typeof value !== "object" || value === null) return;
+    try {
+      if (Array.isArray(value)) {
+        if (depth >= RECEIVED_LIMITS.depth) return;
+        const count = Math.min(value.length, RECEIVED_LIMITS.items);
+        for (let index = 0; index < count; index += 1) visit(value[index], depth + 1);
+        return;
+      }
+    } catch {
+      return;
+    }
+    const stack = field(value, "_debugStack");
+    if (stack != null) stacks.add(stack);
+  };
+  let keys: string[];
+  try {
+    keys = Object.keys(props).slice(0, RECEIVED_LIMITS.keys);
+  } catch {
+    return stacks;
+  }
+  for (const key of keys) visit(field(props, key), 0);
+  return stacks;
+}
+
+/**
+ * The function React calls to render `component`: the component itself, a
+ * forwardRef's `render`, or what a memo wraps, as deep as React nests them.
+ * A class component renders through its instance's `render`, named for the class.
+ */
+export function renderFunction(component: Fiber): unknown {
+  let type = field(component, "type");
+  for (let depth = 0; depth < MAX_TYPE_DEPTH && typeof type !== "function"; depth += 1) {
+    const render = field(type, "render");
+    type = typeof render === "function" ? render : field(type, "type");
+  }
+  return typeof type === "function" ? type : null;
+}
+
 /** The innermost component above `fiber`, the memo standing for its implementation. */
 export function nearestComponent(fiber: Fiber, budget: Budget): Fiber | null {
   for (let next = parentOf(fiber); next !== null && budget.spend(); next = parentOf(next)) {
