@@ -598,14 +598,16 @@ function CellEditor({
   // Enter, Tab and Escape settle the edit themselves; the blur that follows
   // as focus goes back to the grid must not commit it a second time.
   const settled = useRef(false);
-  const errorId = useId();
   const settle = (run: () => boolean | void) => {
     if (settled.current) return;
     settled.current = true;
     if (run() === false) settled.current = false;
   };
   const invalid = edit.error !== undefined;
-  const described = invalid ? { "aria-describedby": errorId, "aria-invalid": true } : {};
+  // The open tooltip is the description: Radix appends its content id to the
+  // trigger's aria-describedby, so a second copy of the message here would be
+  // announced twice.
+  const described = invalid ? { "aria-invalid": true } : {};
 
   // A select commits as soon as a choice is made; a refused choice keeps the
   // list open (Radix closes it after every choice) with the message showing.
@@ -700,17 +702,12 @@ function CellEditor({
   // One structure whether or not there is an error, so the field is never
   // remounted (and blurred) when a refusal arrives.
   return (
-    <>
-      <Tooltip open={invalid}>
-        <TooltipTrigger asChild>{control}</TooltipTrigger>
-        <TooltipContent side="bottom" align="start" className={overlayZ}>
-          {edit.error}
-        </TooltipContent>
-      </Tooltip>
-      <span id={errorId} className="sr-only">
+    <Tooltip open={invalid}>
+      <TooltipTrigger asChild>{control}</TooltipTrigger>
+      <TooltipContent side="bottom" align="start" className={overlayZ}>
         {edit.error}
-      </span>
-    </>
+      </TooltipContent>
+    </Tooltip>
   );
 }
 

@@ -448,6 +448,8 @@ describe("DataTable, rich", () => {
     })) as HTMLInputElement;
     expect(reopened.value).toBe("bad");
     expect(reopened.getAttribute("aria-invalid")).toBe("true");
+    // One description, so the message is announced once.
+    expect(reopened.getAttribute("aria-describedby")!.split(/\s+/)).toHaveLength(1);
     expect(document.getElementById(reopened.getAttribute("aria-describedby")!)?.textContent).toBe(
       "Unknown region"
     );
