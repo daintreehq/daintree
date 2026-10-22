@@ -15,7 +15,7 @@
 // and the browser viewport has re-synced to the rebuilt buffer. Agent-agnostic:
 // only the byte sequence and the buffer position decide anything.
 //
-// Pinned to @xterm 6.1.0-beta.304 behaviour: CSI handlers run newest-first and
+// Pinned to @xterm 6.1.0-beta.315 behaviour: CSI handlers run newest-first and
 // `false` falls through to xterm's own; ED3 fires no public onScroll and drops
 // isUserScrolling (#6081), so the replay's own scrolls report the bottom; a
 // DECSTBM region with a top margin of 0 still scrolls lines into scrollback;

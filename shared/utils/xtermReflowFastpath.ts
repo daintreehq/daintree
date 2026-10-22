@@ -35,6 +35,9 @@ type SparseMap = Record<number, unknown>;
 interface BufferLineLike {
   length: number;
   isWrapped: boolean;
+  // Backing field since upstream #5788: `isWrapped` became a getter with no
+  // setter, so writes must go through the field.
+  _isWrapped?: boolean;
   _data: Uint32Array;
   _combined: SparseMap;
   _extendedAttrs: SparseMap;
@@ -64,7 +67,7 @@ interface FillCellLike {
   bg: number;
 }
 
-// Mirrors of const-enum values inlined into the pinned 6.1.0-beta.304
+// Mirrors of const-enum values inlined into the pinned 6.1.0-beta.315
 // bundles (src/common/buffer/{BufferLine,Constants}.ts upstream). The
 // equivalence suite catches drift on version bumps.
 const CELL_SIZE = 3;
@@ -259,7 +262,8 @@ function makeCopyFrom(original: BufferLineLike["copyFrom"]) {
     } else {
       this._copySparseMapsFrom(line);
     }
-    this.isWrapped = line.isWrapped;
+    if ("_isWrapped" in this) this._isWrapped = line.isWrapped;
+    else this.isWrapped = line.isWrapped;
   };
 }
 

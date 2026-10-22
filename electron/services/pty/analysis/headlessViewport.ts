@@ -12,7 +12,7 @@ type CursorBufferLine = {
   translateToString: (trimRight?: boolean) => string;
   getCell?: (index: number, cell?: IBufferCell) => IBufferCell | undefined;
   _line?: RawBufferLine;
-};
+} & Partial<RawBufferLine>;
 
 type RawBufferLine = {
   _data: Uint32Array;
@@ -101,8 +101,10 @@ const FNV_SEED = 0x811c9dc5;
 const FNV_PRIME = 0x01000193;
 const HASH_UNIT_SEPARATOR = 10;
 
-// Mirrors the pinned xterm 6.1 buffer layout. The public BufferLineApiView
-// retains `_line`; shape checks below keep a public-cell fallback for drift.
+// Mirrors the pinned xterm 6.1 buffer layout. Since upstream #6193 the public
+// `getLine()` returns the internal BufferLine itself; older builds wrapped it
+// in a BufferLineApiView holding `_line`. Shape checks below keep a
+// public-cell fallback for drift.
 const CELL_SIZE = 3;
 const CONTENT_CODEPOINT_MASK = 0x1fffff;
 const CONTENT_IS_COMBINED_MASK = 0x200000;
@@ -176,14 +178,15 @@ function isCollapsibleFillCode(code: number): boolean {
 }
 
 function rawBufferLine(line: CursorBufferLine, cols: number): RawBufferLine | undefined {
-  const raw = line._line;
-  return raw?._data instanceof Uint32Array &&
+  const raw: Partial<RawBufferLine> = line._line ?? line;
+  return raw._data instanceof Uint32Array &&
     raw._data.length >= cols * CELL_SIZE &&
+    typeof raw.length === "number" &&
     typeof raw._combined === "object" &&
     raw._combined !== null &&
     typeof raw._extendedAttrs === "object" &&
     raw._extendedAttrs !== null
-    ? raw
+    ? (raw as RawBufferLine)
     : undefined;
 }
 

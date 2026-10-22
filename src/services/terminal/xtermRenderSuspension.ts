@@ -19,7 +19,7 @@ import type { Terminal } from "@xterm/xterm";
  * but answered with "not intersecting", and resume replays the last real one
  * — a pane that genuinely scrolled out of view while cached stays paused.
  *
- * Pinned to @xterm/xterm 6.1.0-beta.300, where `_handleIntersectionChange` is
+ * Pinned to @xterm/xterm 6.1.0-beta.315, where `_handleIntersectionChange` is
  * the only writer of `_isPaused` and the observer invokes it through `this` at
  * call time (RenderService `_registerIntersectionObserver`), so an instance
  * property shadows it. Every access fails closed: on API drift the terminal
