@@ -197,6 +197,7 @@ function makeHarness(): Harness {
     validateAndBuildActionDescriptor: vi.fn(),
     safeAppendAudit: vi.fn(),
     safeArgsHash: () => "",
+    pluginNotificationsBlocked: async () => false,
   } as unknown as PluginHostFactoryDeps;
 
   return {

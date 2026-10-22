@@ -866,7 +866,7 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
     id: "project.muteNotifications",
     title: "Mute project notifications",
     description:
-      "Stop a project from raising notifications when its agents finish or need attention. The user will no longer be prompted for work that is waiting, so anything blocked on them may sit unnoticed. This persists until it is turned back on.",
+      "Stop a project from raising notifications when its agents finish or need attention, and stop its plugins' notifications too. The user will no longer be prompted for work that is waiting, so anything blocked on them may sit unnoticed. This persists until it is turned back on.",
     category: "project",
     kind: "command",
     danger: "safe",

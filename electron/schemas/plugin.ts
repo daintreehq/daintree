@@ -2282,14 +2282,27 @@ const PluginNotifyActionSchema = z
   })
   .strict();
 
+const PluginNotifyTargetSchema = z.union([
+  z.object({ panelId: z.string().min(1).max(256) }).strict(),
+  z.object({ worktreeId: z.string().min(1).max(4096) }).strict(),
+]);
+
 /**
  * Validates `host.notify` options (#13505). Strict like the toast schema. The
- * action ids' namespace is checked by the host, which knows the caller.
+ * action ids' namespace and the target's ownership are checked by the host,
+ * which knows the caller.
+ *
+ * An error carries exactly one action, the same rule as the app's own error
+ * toasts, and is never passive: a passive error would sit in the inbox with
+ * nothing to say it happened (#13818).
  */
 export const PluginNotifyOptionsSchema = z
   .object({
     title: z.string().trim().min(1).max(200),
     body: z.string().trim().min(1).max(2000),
+    severity: z.enum(["info", "warning", "error"]).optional(),
+    delivery: z.enum(["active", "passive"]).optional(),
+    target: PluginNotifyTargetSchema.optional(),
     actions: z
       .array(PluginNotifyActionSchema)
       .max(PLUGIN_NOTIFY_MAX_ACTIONS)
@@ -2300,7 +2313,30 @@ export const PluginNotifyOptionsSchema = z
     os: z.boolean().optional(),
     dedupeKey: z.string().trim().min(1).max(200).optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((options, ctx) => {
+    if (options.severity === "error" && options.actions?.length !== 1) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["actions"],
+        message: 'an "error" notification needs exactly one action, the way out of it',
+      });
+    }
+    if (options.delivery === "passive" && options.severity === "error") {
+      ctx.addIssue({
+        code: "custom",
+        path: ["delivery"],
+        message: 'an "error" notification can\'t be passive',
+      });
+    }
+    if (options.delivery === "passive" && options.os === true) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["os"],
+        message: "a passive notification stays in the inbox and can't page the OS",
+      });
+    }
+  });
 
 const PluginPanelBadgeColorSchema = z.enum(["default", "success", "warning", "error"]);
 const PluginPanelBadgeTooltipSchema = z.string().trim().min(1).max(200).optional();

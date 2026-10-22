@@ -1795,6 +1795,14 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("../plugin.js").LoadedPluginInfo[];
   };
+  "plugin:notification-silence-set": {
+    args: [pluginId: string, silenced: boolean];
+    result: import("./maps.js").PluginNotificationSilence[];
+  };
+  "plugin:notification-silences-get": {
+    args: [];
+    result: import("./maps.js").PluginNotificationSilence[];
+  };
   "plugin:panel-kinds-get": {
     args: [];
     result: import("../../config/panelKindRegistry.js").PanelKindConfig[];

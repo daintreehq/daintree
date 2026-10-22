@@ -23,6 +23,7 @@ import type { NotificationHistoryEntry } from "@/store/slices/notificationHistor
 import { actionService } from "@/services/ActionService";
 import { EVENT_KIND_LABEL, isNotificationEventKind, notify } from "@/lib/notify";
 import type { ActionId } from "@shared/types/actions";
+import { parseProjectPluginInstanceKey } from "@shared/types/plugin";
 import type { NotificationType } from "@/store/notificationStore";
 import { DURATION_150, DURATION_250 } from "@/lib/animationUtils";
 import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
@@ -772,7 +773,9 @@ function RowOptionsMenu({
   destination,
 }: RowOptionsMenuProps) {
   const eventKind = entry.context?.eventKind;
-  const hasContextActions = isNotificationEventKind(eventKind) || !!entry.context?.projectId;
+  const plugin = entry.context?.plugin;
+  const hasContextActions =
+    isNotificationEventKind(eventKind) || !!entry.context?.projectId || !!plugin;
   // Not on a filed row: the Snoozed tab never shows archived entries, so a
   // snooze set here vanished into neither tab.
   const supportsSnooze = !!entry.correlationId && !!onSnooze && !entry.archivedAt;
@@ -1070,6 +1073,22 @@ function RowOptionsMenu({
                 <BellMinus data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
                 Silence {EVENT_KIND_LABEL[eventKind]}
                 {entry.context?.projectId && eventKind !== "uiFeedback" ? " from this project" : ""}
+              </DropdownMenuItem>
+            )}
+            {plugin && (
+              // Main holds the plugin's later notifications back; this row and
+              // the rest already in the inbox stay (#13818).
+              <DropdownMenuItem
+                onSelect={() => {
+                  void actionService.dispatch("plugin.setNotificationsSilenced", {
+                    pluginId: plugin.id,
+                    silenced: true,
+                  });
+                }}
+              >
+                <BellMinus data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+                Silence {plugin.name}
+                {parseProjectPluginInstanceKey(plugin.id) ? " in this project" : ""}
               </DropdownMenuItem>
             )}
             {entry.context?.projectId && (

@@ -494,6 +494,8 @@ export const CHANNEL_LEASE_POLICY = {
   "plugin:layouts": "free",
   "plugin:launch-groups-hidden-get": "free",
   "plugin:launch-group-hidden-set": "driver",
+  "plugin:notification-silences-get": "free",
+  "plugin:notification-silence-set": "free",
   "plugin:uninstall": "free",
   "plugin:validate-action-ids": "free",
   "plugin:validate-manifest": "free",

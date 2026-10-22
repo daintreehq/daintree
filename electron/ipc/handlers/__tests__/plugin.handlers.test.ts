@@ -92,6 +92,15 @@ const { mockGetPluginRecipes, mockRecordPluginRecipeUse, mockUpdatePluginRecipeM
   }));
 
 const mockGetPluginTours = vi.hoisted(() => vi.fn((): unknown[] => []));
+const silencedPlugins = vi.hoisted(() => new Set<string>());
+vi.mock("../../../services/plugin/pluginNotificationSilences.js", () => ({
+  getPluginNotificationSilences: () => [...silencedPlugins],
+  setPluginNotificationSilenced: (pluginId: string, silenced: boolean) => {
+    if (silenced) silencedPlugins.add(pluginId);
+    else silencedPlugins.delete(pluginId);
+    return [...silencedPlugins];
+  },
+}));
 const mockMetricsRecordInvoke = vi.hoisted(() => vi.fn());
 
 vi.mock("../../../services/PluginService.js", () => ({
@@ -140,6 +149,8 @@ vi.mock("../../../services/PluginService.js", () => ({
     getDataBackupSource: (...args: unknown[]) => mockGetDataBackupSource(...args),
     metrics: { recordInvoke: (...args: unknown[]) => mockMetricsRecordInvoke(...args) },
     isRemoteUnsupported: (pluginId: string) => mockIsRemoteUnsupported(pluginId),
+    getPluginDisplayName: (pluginId: string) =>
+      pluginId === "acme.tools" ? "Acme Tools" : pluginId.split("__").at(-1),
   },
 }));
 
@@ -3655,5 +3666,48 @@ describe("plugin:invoke over the link", () => {
       pluginId: "acme.local-only",
       reason: { kind: "remote-unsupported" },
     });
+  });
+});
+
+describe("plugin notification silences (#13818)", () => {
+  const PROJECT = "c".repeat(64);
+  const PROJECT_INSTANCE = `project__${PROJECT}__acme.records`;
+
+  function getHandler(channel: string) {
+    registerPluginHandlers();
+    return mockIpcMainHandle.mock.calls.find((c: unknown[]) => c[0] === channel)![1] as (
+      ...args: unknown[]
+    ) => unknown;
+  }
+
+  beforeEach(() => silencedPlugins.clear());
+
+  it("silences and lists plugins by name, with a project plugin's project", async () => {
+    const set = getHandler("plugin:notification-silence-set");
+    await set({ sender: { id: 1 } }, "acme.tools", true);
+    const listed = await set({ sender: { id: 1 } }, PROJECT_INSTANCE, true);
+
+    expect(listed).toEqual([
+      { pluginId: "acme.tools", name: "Acme Tools", projectId: null },
+      { pluginId: PROJECT_INSTANCE, name: "acme.records", projectId: PROJECT },
+    ]);
+    expect(await getHandler("plugin:notification-silences-get")({ sender: { id: 1 } })).toEqual(
+      listed
+    );
+
+    expect(await set({ sender: { id: 1 } }, "acme.tools", false)).toEqual([
+      { pluginId: PROJECT_INSTANCE, name: "acme.records", projectId: PROJECT },
+    ]);
+  });
+
+  it("rejects a malformed plugin id and a non-boolean flag", async () => {
+    const set = getHandler("plugin:notification-silence-set");
+    await expect(set({ sender: { id: 1 } }, "../../etc/passwd", true)).rejects.toThrow(
+      /malformed plugin id/
+    );
+    await expect(set({ sender: { id: 1 } }, "acme.tools", "yes")).rejects.toThrow(
+      /malformed silenced flag/
+    );
+    expect(silencedPlugins.size).toBe(0);
   });
 });

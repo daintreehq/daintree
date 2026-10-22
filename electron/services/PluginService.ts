@@ -157,6 +157,7 @@ import {
   resolveLiveWebContents,
 } from "../window/webContentsRegistry.js";
 import { projectStore } from "./ProjectStore.js";
+import { isPluginNotificationSilenced } from "./plugin/pluginNotificationSilences.js";
 import { store } from "../store.js";
 import type { EventBusEnvelope } from "../../shared/types/ipc/maps.js";
 import {
@@ -4394,7 +4395,29 @@ export class PluginService {
       trackPromptWait: (pluginId) => this.metrics.beginPromptWait(pluginId),
       requestWorkerSelfRestart: (pluginId, boundPlugin) =>
         this.requestWorkerSelfRestart(pluginId, boundPlugin),
+      pluginNotificationsBlocked: (pluginId, projectId) =>
+        this.pluginNotificationsBlocked(pluginId, projectId),
     };
+  }
+
+  /**
+   * The user's off switches for a plugin's toasts and notifications (#13818):
+   * the plugin silenced, or the project the notification is about muted. A
+   * project's settings that can't be read mute nothing — the failure is the
+   * settings file's to report, and a lost plugin error would be a second one.
+   */
+  private async pluginNotificationsBlocked(
+    pluginId: string,
+    projectId: string | null
+  ): Promise<boolean> {
+    if (isPluginNotificationSilenced(pluginId)) return true;
+    if (projectId === null) return false;
+    try {
+      return await projectStore.isProjectNotificationsMuted(projectId);
+    } catch (err) {
+      console.warn("[PluginService] Couldn't read a project's notification mute:", err);
+      return false;
+    }
   }
 
   /**

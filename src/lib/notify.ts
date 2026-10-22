@@ -22,6 +22,7 @@ import { UNDO_ACTION_LABEL } from "@/lib/undoToast";
 import { worktreeNameFromId } from "@/lib/notificationSourceLabel";
 import type { ErrorRetryability, ErrorType } from "@/store/errorStore";
 import type { NotificationSettings } from "@shared/types/ipc/api";
+import type { NotificationPluginSource } from "@shared/types/ipc/maps";
 
 /**
  * Closed union of routing-relevant notification domains. Kept closed (not
@@ -370,6 +371,11 @@ interface NotifyPayloadBase {
      * Its project ids mean nothing here, so the host's name is the source.
      */
     hostName?: string;
+    /**
+     * The plugin that raised it, set by main from the plugin's own binding.
+     * Names the plugin in the row's source and offers "Silence <Plugin>".
+     */
+    plugin?: NotificationPluginSource;
   };
 }
 
@@ -799,6 +805,10 @@ function checkAndApplyRateLimit(payload: NotifyPayload): boolean {
     // like "Mute project X" would dispatch against the first overflow's
     // project and silently mute the wrong target on later events. A
     // worktree-keyed bucket is about one worktree, so the row files under it.
+    // A plugin's bucket is that one plugin's, so its row keeps the plugin: a
+    // noisy plugin's summary is exactly where "Silence <Plugin>" is wanted.
+    const plugin = payload.context?.plugin;
+    const bucketPlugin = plugin && key === `plugin:${plugin.id}` ? plugin : undefined;
     bucket.overflowEntryId = historyStore.addEntry({
       type: payload.type,
       title: payload.title,
@@ -806,7 +816,14 @@ function checkAndApplyRateLimit(payload: NotifyPayload): boolean {
       correlationId: payload.correlationId,
       seenAsToast: false,
       countable: payload.countable,
-      ...(worktreeId ? { context: { worktreeId } } : {}),
+      ...(worktreeId || bucketPlugin
+        ? {
+            context: {
+              ...(worktreeId ? { worktreeId } : {}),
+              ...(bucketPlugin ? { plugin: bucketPlugin } : {}),
+            },
+          }
+        : {}),
     });
   }
 

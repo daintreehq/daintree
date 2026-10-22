@@ -20,6 +20,8 @@ export const PLUGIN_METHOD_CHANNELS = {
   layouts: "plugin:layouts",
   getHiddenLaunchGroups: "plugin:launch-groups-hidden-get",
   setLaunchGroupHidden: "plugin:launch-group-hidden-set",
+  getNotificationSilences: "plugin:notification-silences-get",
+  setNotificationSilenced: "plugin:notification-silence-set",
   keybindings: "plugin:keybindings",
   contextMenuItems: "plugin:context-menu-items",
   validateActionIds: "plugin:validate-action-ids",

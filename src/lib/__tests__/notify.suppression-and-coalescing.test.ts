@@ -800,6 +800,31 @@ describe("per-source rate-limit", () => {
     expect(updated.message).not.toContain("plugin:");
   });
 
+  it("keeps the plugin on its own bucket's summary row, and no project (#13818)", () => {
+    const plugin = { id: "project__0f3a9c__acme.records", name: "Acme Records" };
+    for (let i = 0; i < 4; i++) {
+      notify({
+        type: "info",
+        message: `Synced ${i}`,
+        rateLimitKey: `plugin:${plugin.id}`,
+        rateLimitLabel: "Acme Records",
+        context: { projectId: "p1", plugin },
+      });
+    }
+    expect(useNotificationHistoryStore.getState().entries[0]!.context).toEqual({ plugin });
+
+    // A bucket that isn't that plugin's alone says nothing about which plugin.
+    for (let i = 0; i < 4; i++) {
+      notify({
+        type: "info",
+        message: `m${i}`,
+        rateLimitKey: "shared-source",
+        context: { plugin },
+      });
+    }
+    expect(useNotificationHistoryStore.getState().entries[0]!.context).toBeUndefined();
+  });
+
   it("keeps two sources that share a label in separate buckets", () => {
     for (const rateLimitKey of ["plugin:project__aaa__acme.records", "plugin:acme.records"]) {
       for (let i = 0; i < 4; i++) {

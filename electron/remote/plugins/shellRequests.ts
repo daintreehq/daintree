@@ -365,7 +365,7 @@ export function installPluginShellRequests(deps: PluginShellRequestDeps = {}): (
   const showToast = (request: ViewReverseRequest): null => {
     const parsed = PluginToastPayloadSchema.safeParse(request.payload);
     if (!parsed.success) throw malformed("toast");
-    const { pluginId, type, message, durationMs, pluginDisplayName } = parsed.data;
+    const { pluginId, type, message, durationMs, pluginDisplayName, passive } = parsed.data;
     const wc = scopeView(request, pluginId);
     // Every plugin on a host draws on the host's one budget, so naming more
     // plugins can't raise more toasts; past it, a toast is dropped quietly.
@@ -382,6 +382,9 @@ export function installPluginShellRequests(deps: PluginShellRequestDeps = {}): (
       rateLimitLabel:
         displaySafeText(pluginDisplayName ?? "").trim() ||
         pluginManifestIdFromInstanceKey(pluginId),
+      // The host already applied its silence and project mute; passive only
+      // decides where this screen puts it.
+      ...(passive === true ? { priority: "low" as const } : {}),
     });
     return null;
   };

@@ -1475,9 +1475,9 @@ describe("plugin-dispatch injection guard (#10558)", () => {
     // short-circuiting on VALIDATION_ERROR (terminal.sendCommand requires both;
     // project.runCheck requires projectId + runnerId; the terminal-watch tools
     // take terminalIds or a watchId; plugin.reloadPanel a panelId;
-    // plugin.backupDatabases a pluginId; agentSettings.set an agentId and
-    // settings). Schemas are non-strict, so the union satisfies every denied
-    // action.
+    // plugin.backupDatabases a pluginId; plugin.setNotificationsSilenced a
+    // pluginId and a flag; agentSettings.set an agentId and settings). Schemas
+    // are non-strict, so the union satisfies every denied action.
     const args = {
       terminalId: "t-placeholder",
       panelId: "p-placeholder",
@@ -1490,6 +1490,7 @@ describe("plugin-dispatch injection guard (#10558)", () => {
       pluginId: "acme.placeholder",
       agentId: "claude",
       settings: {},
+      silenced: true,
     };
     // ...except where a schema is strict, which the union above cannot satisfy:
     // the extra keys are themselves a VALIDATION_ERROR, so dispatch would never

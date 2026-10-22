@@ -91,6 +91,7 @@ export type {
   PluginNotifyAction,
   PluginNotifyOptions,
   PluginNotifyResult,
+  PluginNotifyTarget,
   PluginPanelBadge,
   PluginToolbarButtonRuntimeState,
   PluginContextValue,

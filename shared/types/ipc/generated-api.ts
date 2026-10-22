@@ -864,6 +864,9 @@ export interface GeneratedElectronAPI {
     getLatestBackgroundUpdateCheck(
       ...args: IpcInvokeMap["plugin:bg-update-check-latest"]["args"]
     ): Promise<IpcInvokeMap["plugin:bg-update-check-latest"]["result"]>;
+    getNotificationSilences(
+      ...args: IpcInvokeMap["plugin:notification-silences-get"]["args"]
+    ): Promise<IpcInvokeMap["plugin:notification-silences-get"]["result"]>;
     getPanelKinds(
       ...args: IpcInvokeMap["plugin:panel-kinds-get"]["args"]
     ): Promise<IpcInvokeMap["plugin:panel-kinds-get"]["result"]>;
@@ -975,6 +978,9 @@ export interface GeneratedElectronAPI {
     setLaunchGroupHidden(
       ...args: IpcInvokeMap["plugin:launch-group-hidden-set"]["args"]
     ): Promise<IpcInvokeMap["plugin:launch-group-hidden-set"]["result"]>;
+    setNotificationSilenced(
+      ...args: IpcInvokeMap["plugin:notification-silence-set"]["args"]
+    ): Promise<IpcInvokeMap["plugin:notification-silence-set"]["result"]>;
     setPluginVisibilityDefault(
       ...args: IpcInvokeMap["plugin:visibility-default-set"]["args"]
     ): Promise<IpcInvokeMap["plugin:visibility-default-set"]["result"]>;

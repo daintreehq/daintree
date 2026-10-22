@@ -26,12 +26,17 @@ const BASE: NotificationSettings = {
 
 let getSettings: ReturnType<typeof vi.fn>;
 let setSettings: ReturnType<typeof vi.fn>;
+let getNotificationSilences: ReturnType<typeof vi.fn>;
+let setNotificationSilenced: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   getSettings = vi.fn().mockResolvedValue({ ...BASE });
   setSettings = vi.fn().mockResolvedValue(undefined);
+  getNotificationSilences = vi.fn().mockResolvedValue([]);
+  setNotificationSilenced = vi.fn().mockResolvedValue([]);
   Reflect.set(window, "electron", {
     notification: { getSettings, setSettings, playSound: vi.fn().mockResolvedValue(undefined) },
+    plugin: { getNotificationSilences, setNotificationSilenced },
   });
 });
 
@@ -334,5 +339,69 @@ describe("NotificationSettingsTab", () => {
       fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     });
     expect(setSettings).toHaveBeenLastCalledWith({ quietHoursStartMin: 23 * 60 });
+  });
+});
+
+describe("NotificationSettingsTab silenced plugins (#13818)", () => {
+  const PROJECT = "a".repeat(64);
+  const silences = [
+    { pluginId: "acme.tools", name: "Acme Tools", projectId: null },
+    { pluginId: `project__${PROJECT}__acme.records`, name: "Acme Records", projectId: PROJECT },
+  ];
+
+  it("lists nothing while no plugin is silenced", async () => {
+    render(<NotificationSettingsTab />);
+    await waitFor(() => expect(getNotificationSilences).toHaveBeenCalled());
+    expect(screen.queryByText("Silenced plugins")).toBeNull();
+  });
+
+  it("lists each silence with its scope and lifts one on Unsilence", async () => {
+    getNotificationSilences.mockResolvedValue(silences);
+    setNotificationSilenced.mockResolvedValue([silences[1]]);
+    render(<NotificationSettingsTab />);
+
+    const tools = await screen.findByTestId("silenced-plugin-acme.tools");
+    expect(within(tools).getByText("In every project")).toBeTruthy();
+    const records = screen.getByTestId(`silenced-plugin-project__${PROJECT}__acme.records`);
+    // A project this window doesn't know is named, never printed as its id.
+    expect(within(records).getByText("In another project")).toBeTruthy();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Unsilence Acme Tools" }));
+    });
+    expect(setNotificationSilenced).toHaveBeenCalledWith("acme.tools", false);
+    await waitFor(() => expect(screen.queryByTestId("silenced-plugin-acme.tools")).toBeNull());
+    expect(screen.getByRole("button", { name: "Unsilence Acme Records" })).toBeTruthy();
+  });
+
+  it("keeps a plugin listed and offers Retry when Unsilence fails", async () => {
+    getNotificationSilences.mockResolvedValue([silences[0]]);
+    setNotificationSilenced.mockRejectedValueOnce(new Error("disk full"));
+    render(<NotificationSettingsTab />);
+
+    const unsilence = await screen.findByRole("button", { name: "Unsilence Acme Tools" });
+    await act(async () => {
+      fireEvent.click(unsilence);
+    });
+    expect(await screen.findByText("Couldn't unsilence Acme Tools")).toBeTruthy();
+    expect(screen.getByTestId("silenced-plugin-acme.tools")).toBeTruthy();
+
+    setNotificationSilenced.mockResolvedValueOnce([]);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    });
+    await waitFor(() => expect(screen.queryByText("Silenced plugins")).toBeNull());
+  });
+
+  it("says the list couldn't be read, with a Retry", async () => {
+    getNotificationSilences.mockRejectedValueOnce(new Error("boom"));
+    render(<NotificationSettingsTab />);
+
+    expect(await screen.findByText("Couldn't load silenced plugins")).toBeTruthy();
+    getNotificationSilences.mockResolvedValueOnce([silences[0]]);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    });
+    expect(await screen.findByTestId("silenced-plugin-acme.tools")).toBeTruthy();
   });
 });

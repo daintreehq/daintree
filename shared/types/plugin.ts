@@ -4560,10 +4560,35 @@ export interface PluginNotifyAction {
   args?: Record<string, unknown>;
 }
 
+/**
+ * Where a {@link PluginHostApi.notify} notification leads: one of the plugin's
+ * own panels (an id from {@link PluginHostApi.onDidChangePanelLifecycle}) or a
+ * worktree the plugin can see. The inbox row's Go to source opens it.
+ */
+export type PluginNotifyTarget = { panelId: string } | { worktreeId: string };
+
 /** Options for {@link PluginHostApi.notify}. */
 export interface PluginNotifyOptions {
   title: string;
   body: string;
+  /**
+   * How serious it is. Defaults to `"info"`. An `"error"` needs exactly one
+   * action, the way out of it, and can't be passive.
+   */
+  severity?: "info" | "warning" | "error";
+  /**
+   * `"active"` (the default) shows a toast when the window has focus and keeps
+   * an inbox row either way. `"passive"` goes to the inbox only: no toast and
+   * no OS banner, so it can't be combined with `os`.
+   */
+  delivery?: "active" | "passive";
+  /**
+   * What the notification is about. A panel must be one of this plugin's own
+   * and a worktree one it can see; anything else rejects. A target the host
+   * can't check yet (a panel no window has reported) is dropped and the
+   * notification still goes out.
+   */
+  target?: PluginNotifyTarget;
   /** At most {@link PLUGIN_NOTIFY_MAX_ACTIONS}. */
   actions?: PluginNotifyAction[];
   /**
@@ -4571,7 +4596,7 @@ export interface PluginNotifyOptions {
    * the banner when the user hasn't turned it on, during quiet hours or a
    * session mute, while the user is looking at the plugin's project, and when
    * the plugin pages faster than the host allows. Needs the `notification:os`
-   * capability.
+   * capability, and an active notification.
    */
   os?: boolean;
   /**
@@ -6672,7 +6697,9 @@ export interface PluginHostApi extends PluginActivationApi {
    * through the app's `notify()` path so rate-limit, quiet-hours, and
    * inbox-history semantics apply identically to plugin toasts. One rate limit
    * covers all of a plugin's toasts, whatever their `type`, and its
-   * {@link notify} calls; past it in main a toast is dropped quietly.
+   * {@link notify} calls; past it in main a toast is dropped quietly. The inbox
+   * row names the plugin and its project, and a toast from a plugin the user
+   * silenced, or from a project the user muted, is never sent.
    *
    * Like {@link invalidateFileDecorations} this is NOT revoke-guarded: plugins
    * call it from post-activation subscription callbacks and timers. It becomes
@@ -6686,7 +6713,12 @@ export interface PluginHostApi extends PluginActivationApi {
    * the app's notification path like {@link showToast} — inbox, focus, quiet
    * hours, session mute and the plugin's rate limit, shared with its toasts —
    * and the title carries the plugin's display name for provenance. A call
-   * past that limit shows, pages and replaces nothing.
+   * past that limit shows, pages and replaces nothing, and so does a call from
+   * a plugin the user silenced or in a project the user muted.
+   *
+   * `delivery: "passive"` keeps it to the inbox. A `severity: "error"` needs
+   * exactly one action and can't be passive. A `target` gives the inbox row a
+   * Go to source.
    *
    * `os: true` also asks for an OS banner. Banners carry no buttons: clicking
    * one brings the plugin's project forward and runs the first action. The

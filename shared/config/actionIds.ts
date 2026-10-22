@@ -318,6 +318,7 @@ export const BUILT_IN_ACTION_IDS = [
   "plugin.reloadWindow",
   "plugin.openSettings",
   "plugin.backupDatabases",
+  "plugin.setNotificationsSilenced",
   "project.getStats",
   "project.settings.open",
   "project.cloneRepo",
@@ -648,6 +649,9 @@ export const DENY_PLUGIN_DISPATCH_ACTION_IDS = [
   "plugin.reloadProject",
   // Raises a native save dialog for any plugin's data; only a person asks for that.
   "plugin.backupDatabases",
+  // Turns off what a plugin can tell the user, so a plugin could lift its own
+  // silence or silence a rival's (#13818).
+  "plugin.setNotificationsSilenced",
   "fleet.accept",
   "fleet.reject",
   "fleet.interrupt",

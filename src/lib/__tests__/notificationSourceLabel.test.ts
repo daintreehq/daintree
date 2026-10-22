@@ -25,4 +25,16 @@ describe("notification source labels", () => {
       "studio-01 · Helios · feature-x"
     );
   });
+
+  it("names the plugin before its project, and alone for an app-wide plugin (#13818)", () => {
+    expect(formatNotificationSource("Helios", undefined, undefined, "Acme Records")).toBe(
+      "Acme Records · Helios"
+    );
+    expect(formatNotificationSource(undefined, undefined, undefined, " Acme Records ")).toBe(
+      "Acme Records"
+    );
+    expect(formatNotificationSource("Helios", "feature-x", "studio-01", "Acme")).toBe(
+      "studio-01 · Acme · Helios · feature-x"
+    );
+  });
 });

@@ -66,6 +66,21 @@ export class ProjectSettingsManager {
   }
 
   /**
+   * Whether the user muted `projectId`: both of its own agent switches set off,
+   * the pair `project.muteNotifications` writes and the inbox reports as "This
+   * project is muted". Only the project's overrides count, so global defaults
+   * that happen to be off mute nothing. A cold cache is filled by reading the
+   * project's settings, which is what plugins arriving before the project's
+   * view has loaded them would otherwise slip past (#13818).
+   */
+  async isNotificationsMuted(projectId: string): Promise<boolean> {
+    const overrides = this.notificationOverridesCache.has(projectId)
+      ? this.notificationOverridesCache.get(projectId)
+      : (await this.getProjectSettings(projectId)).notificationOverrides;
+    return overrides?.completedEnabled === false && overrides.waitingEnabled === false;
+  }
+
+  /**
    * Reads take a turn in the project's write queue unless it is idle and the
    * cache is warm: an unreadable file is quarantined by rename, so a read
    * holding bytes from before a queued save would otherwise move the newly

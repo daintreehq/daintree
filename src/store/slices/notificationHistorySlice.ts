@@ -3,6 +3,7 @@ import { persist } from "zustand/middleware";
 import type { ActionId } from "@shared/types/actions";
 import type { NotificationActionVariant } from "@/store/notificationStore";
 import type { NotificationEventKind } from "@/lib/notify";
+import type { NotificationPluginSource } from "@shared/types/ipc/maps";
 import { createDebouncedSafeJSONStorage } from "@/store/persistence/safeStorage";
 import { registerPersistedStore } from "@/store/persistence/persistedStoreRegistry";
 
@@ -46,6 +47,8 @@ export interface NotificationHistoryEntry {
     eventKind?: NotificationEventKind;
     /** The other machine this came from; its project ids mean nothing here. */
     hostName?: string;
+    /** The plugin that raised it; a silence is keyed on its id. */
+    plugin?: NotificationPluginSource;
   };
   actions?: NotificationHistoryAction[];
 }

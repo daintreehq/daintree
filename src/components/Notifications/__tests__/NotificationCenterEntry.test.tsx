@@ -91,6 +91,80 @@ describe("NotificationCenterEntry overflow menu", () => {
   });
 });
 
+describe("NotificationCenterEntry plugin provenance (#13818)", () => {
+  const PROJECT_PLUGIN = `project__${"a".repeat(64)}__acme.records`;
+
+  async function openMenu() {
+    const trigger = screen.getByLabelText(/^Options for /);
+    await act(async () => {
+      fireEvent.pointerDown(trigger, { button: 0 });
+      fireEvent.pointerUp(trigger, { button: 0 });
+      fireEvent.click(trigger);
+    });
+  }
+
+  const initialProjects = useProjectStore.getState().projects;
+  beforeEach(() => {
+    useProjectStore.setState({
+      projects: [{ id: "p1", name: "Helios" }] as never,
+    });
+  });
+  afterEach(() => {
+    useProjectStore.setState({ projects: initialProjects });
+  });
+
+  it("names the plugin and its project as the source", () => {
+    render(
+      <NotificationCenterEntry
+        entry={makeEntry({
+          context: { projectId: "p1", plugin: { id: PROJECT_PLUGIN, name: "Acme Records" } },
+        })}
+      />
+    );
+    expect(screen.getByTestId("notification-source").textContent).toBe("Acme Records · Helios");
+  });
+
+  it("silences a project plugin in this project from the row menu", async () => {
+    render(
+      <NotificationCenterEntry
+        entry={makeEntry({
+          context: { projectId: "p1", plugin: { id: PROJECT_PLUGIN, name: "Acme Records" } },
+        })}
+      />
+    );
+    await openMenu();
+    // Project mute stays on offer beside it: it covers the plugin too.
+    expect(screen.getByText("Mute project notifications")).toBeTruthy();
+    await act(async () => {
+      fireEvent.click(screen.getByText("Silence Acme Records in this project"));
+    });
+
+    expect(dispatchMock).toHaveBeenCalledWith("plugin.setNotificationsSilenced", {
+      pluginId: PROJECT_PLUGIN,
+      silenced: true,
+    });
+  });
+
+  it("silences an installed plugin everywhere, even with no project on the row", async () => {
+    render(
+      <NotificationCenterEntry
+        entry={makeEntry({ context: { plugin: { id: "acme.tools", name: "Acme Tools" } } })}
+      />
+    );
+    expect(screen.getByTestId("notification-source").textContent).toBe("Acme Tools");
+    await openMenu();
+    expect(screen.queryByText("Mute project notifications")).toBeNull();
+    await act(async () => {
+      fireEvent.click(screen.getByText("Silence Acme Tools"));
+    });
+
+    expect(dispatchMock).toHaveBeenCalledWith("plugin.setNotificationsSilenced", {
+      pluginId: "acme.tools",
+      silenced: true,
+    });
+  });
+});
+
 describe("NotificationCenterEntry unread signal", () => {
   it("renders the unread dot when isNew=true", () => {
     const { container } = render(<NotificationCenterEntry entry={makeEntry()} isNew />);
