@@ -83,7 +83,10 @@ const flushMicrotasks = () => new Promise<void>((resolve) => setTimeout(resolve,
 
 /** Projects an MCP dispatch is waiting on, as every window's manager reports them. */
 let leased: Set<string>;
-let workspaceClient: { evictProject: ReturnType<typeof vi.fn>; releaseWindowForProject: ReturnType<typeof vi.fn> };
+let workspaceClient: {
+  evictProject: ReturnType<typeof vi.fn>;
+  releaseWindowForProject: ReturnType<typeof vi.fn>;
+};
 
 function makeDeps(managers: () => ProjectViewManager[] = () => [backgroundWindow()]) {
   return {

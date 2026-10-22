@@ -863,9 +863,7 @@ describe("HibernationService", () => {
     type ProjectViewManagerMock = {
       getActiveProjectId: Mock<() => string | null>;
       getOutgoingBridgeProjectId: Mock<() => string | null>;
-      destroyView: Mock<
-        (projectId: string, options?: { protectMcpDispatch?: boolean }) => boolean
-      >;
+      destroyView: Mock<(projectId: string, options?: { protectMcpDispatch?: boolean }) => boolean>;
     };
 
     function makeManager(
@@ -1095,9 +1093,7 @@ describe("HibernationService", () => {
     type PvmMock = {
       getActiveProjectId: Mock<() => string | null>;
       getOutgoingBridgeProjectId: Mock<() => string | null>;
-      destroyView: Mock<
-        (projectId: string, options?: { protectMcpDispatch?: boolean }) => boolean
-      >;
+      destroyView: Mock<(projectId: string, options?: { protectMcpDispatch?: boolean }) => boolean>;
     };
 
     function makePvm(

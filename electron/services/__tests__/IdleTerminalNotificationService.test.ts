@@ -33,7 +33,12 @@ vi.mock("../ProjectStore.js", () => ({ projectStore: projectStoreMock }));
 const broadcastToRendererMock = vi.hoisted(() => vi.fn());
 const writeHibernatedMarkerMock = vi.hoisted(() => vi.fn());
 type SleepOutcome =
-  | { status: "slept"; terminalsKilled: number; rendererViewsEvicted: number; workspaceEvicted: boolean }
+  | {
+      status: "slept";
+      terminalsKilled: number;
+      rendererViewsEvicted: number;
+      workspaceEvicted: boolean;
+    }
   | { status: "already-closed" };
 const sleepProjectMock = vi.hoisted(() =>
   vi.fn<(projectId: string, options: unknown, deps: unknown) => Promise<SleepOutcome>>()

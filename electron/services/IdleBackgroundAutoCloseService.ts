@@ -540,7 +540,8 @@ export class IdleBackgroundAutoCloseService {
         initiator: "policy",
         autoParkedAt: now,
         isStillEligible: () =>
-          this.ptyClient === client && this.readEligibleProject(projectId, now, thresholdMs) !== null,
+          this.ptyClient === client &&
+          this.readEligibleProject(projectId, now, thresholdMs) !== null,
         allowsTerminals: (snapshot) =>
           !snapshot.degraded && this.blockingReason(projectId, snapshot.terminals) === null,
       },
