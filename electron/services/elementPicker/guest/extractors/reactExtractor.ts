@@ -11,6 +11,11 @@
  * itself created, whose last frame above React's render entry is the function
  * React ran as the component, which is where it is written.
  *
+ * Server components (#13885) are records too, read from the `_debugInfo` the
+ * Flight client left on the fibers below them rather than from a fiber of
+ * their own. They render on the server, so no DOM in the page is theirs to
+ * list, and their frames are the server's, faked by Flight for the host to map.
+ *
  * Hover pays for one walk up to the nearest component and its name; the
  * owners, roots and stacks are read on selection only.
  */
@@ -19,6 +24,7 @@ import type {
   ComponentChain,
   ComponentRecord,
 } from "../../../../../shared/elementPicker/component.js";
+import type { GenericEvidence } from "../../../../../shared/elementPicker/evidence.js";
 import type { Capabilities, Capability } from "../../../../../shared/elementPicker/observation.js";
 import type { ObservedName, SourceCandidate } from "../../../../../shared/elementPicker/source.js";
 import type { ElementPickerExtractor, ElementRefs } from "../registry.js";
@@ -35,7 +41,6 @@ import {
   isComponentFiber,
   isFiber,
   isMemoImplementation,
-  nearestComponent,
   parentOf,
   tagOf,
   canonicalFiber,
@@ -44,6 +49,14 @@ import {
   renderFunction,
   type Fiber,
 } from "./reactFiber.js";
+import {
+  ServerIds,
+  isServerInfo,
+  serverEntries,
+  serverEnvironment,
+  serverName,
+  type ServerInfo,
+} from "./reactServer.js";
 import { componentFrame, creationFrames, type CreationFrame } from "./reactStack.js";
 
 /**
@@ -74,11 +87,26 @@ const MAX_CANDIDATE_CHARS = 32 * 1024;
 const CANDIDATE_OVERHEAD_CHARS = 256;
 /** UTF-8 bytes, which bound the bridge's code units and the host's envelope bytes alike. */
 const MAX_REPLY_BYTES = 96 * 1024;
+/**
+ * A server record's field path grows by one `.owner` per hop it was reached
+ * through; past this it could not be named within the extraction's own bound
+ * once a field is appended, so the walk stops there instead.
+ */
+const MAX_PATH_CHARS = 96;
 
 const AVAILABLE: Capability = { state: "available" };
 const UNKNOWN: Capability = { state: "unknown" };
 const NOT_EXPOSED: Capability = { state: "unavailable", reason: "not-exposed" };
 const PRODUCTION: Capability = { state: "unavailable", reason: "production-build" };
+
+/** A release as Next.js numbers them; anything else the page put there is not reported. */
+const NEXT_VERSION = /^\d{1,4}\.\d{1,4}\.\d{1,4}(?:-[0-9A-Za-z.]{1,64})?$/;
+
+/** What a record was read from: a client component's fiber, or a server component's info. */
+type Origin =
+  | { kind: "client"; fiber: Fiber }
+  /** `path` is the field the info was read at, relative to the fiber the walk found it on. */
+  | { kind: "server"; info: ServerInfo; path: string };
 
 /** Only a development build gives fibers their `_debug*` fields, null or not. */
 function isDevelopmentFiber(fiber: Fiber): boolean {
@@ -106,6 +134,32 @@ function recordFor(fiber: Fiber, id: string): ComponentRecord {
     rootsComplete: false,
     sourceCandidates: [],
   };
+}
+
+/**
+ * A server component leaves no instance in the page, so its roots are never
+ * listed: the DOM below it belongs to the fibers its output made, and saying
+ * which of those are its own would be a reconstruction, not an observation.
+ */
+function serverRecordFor(info: ServerInfo, id: string, path: string): ComponentRecord {
+  const name = serverName(info);
+  return {
+    componentId: id,
+    framework: "react",
+    name:
+      name === null
+        ? null
+        : { value: name, extraction: { kind: "runtime-field", field: `${path}.name` } },
+    environment: serverEnvironment(info),
+    rootElementIds: [],
+    rootsComplete: false,
+    sourceCandidates: [],
+  };
+}
+
+function ownerPath(path: string): string | null {
+  const next = `${path}.owner`;
+  return next.length <= MAX_PATH_CHARS ? next : null;
 }
 
 /** Owner edges come from page data, so one that loops is cut rather than sent to be refused. */
@@ -155,11 +209,20 @@ class CandidateWriter {
     kind: "element-creation" | "component-invocation",
     limit: number
   ): SourceCandidate[] {
+    return this.writeStack(field(fiber, "_debugStack"), "_debugStack", kind, limit);
+  }
+
+  writeStack(
+    stack: unknown,
+    path: string,
+    kind: "element-creation" | "component-invocation",
+    limit: number
+  ): SourceCandidate[] {
     const out: SourceCandidate[] = [];
-    const { frames, omitted } = creationFrames(field(fiber, "_debugStack"), limit);
+    const { frames, omitted } = creationFrames(stack, limit);
     this.omitted += omitted;
     for (const frame of frames) {
-      const candidate = this.candidate(kind, frame);
+      const candidate = this.candidate(kind, frame, path);
       if (candidate !== null) out.push(candidate);
     }
     return out;
@@ -182,13 +245,30 @@ class CandidateWriter {
       const found = componentFrame(stack);
       return found !== null && ranAs(found.name, render) ? found : null;
     });
-    const candidate = frame === null ? null : this.candidate("component-definition", frame);
+    const candidate =
+      frame === null ? null : this.candidate("component-definition", frame, "_debugStack");
+    return candidate === null ? [] : [candidate];
+  }
+
+  /**
+   * Where a server component is written: the location Flight gives an info,
+   * a child's creation stack whose last frame is the component's own function,
+   * which React's component stacks cite it by. Counted only when the frame
+   * runs under the component's name, as React itself checks.
+   */
+  writeServerDefinition(info: ServerInfo, path: string): SourceCandidate[] {
+    const name = serverName(info);
+    const frame = componentFrame(field(info, "debugLocation"));
+    if (frame === null || name === null) return [];
+    if (frame.name !== name && !(frame.name?.endsWith(`.${name}`) ?? false)) return [];
+    const candidate = this.candidate("component-definition", frame, `${path}.debugLocation`);
     return candidate === null ? [] : [candidate];
   }
 
   private candidate(
     kind: "element-creation" | "component-invocation" | "component-definition",
-    frame: CreationFrame
+    frame: CreationFrame,
+    path: string
   ): SourceCandidate | null {
     const size = frame.file.length + CANDIDATE_OVERHEAD_CHARS;
     if (this.chars + size > MAX_CANDIDATE_CHARS) {
@@ -201,11 +281,7 @@ class CandidateWriter {
       kind,
       candidateId: `react-frame-${this.next}`,
       framework: "react",
-      extraction: {
-        kind: "generated-stack-frame",
-        field: "_debugStack",
-        frameIndex: frame.index,
-      },
+      extraction: { kind: "generated-stack-frame", field: path, frameIndex: frame.index },
       file: frame.file,
       location: {
         lineBase: 1,
@@ -218,8 +294,52 @@ class CandidateWriter {
   }
 }
 
-function hoverOf(host: Fiber, ids: FiberIds): ExtractorContribution {
-  const nearest = nearestComponent(host, new Budget(STEPS.hover));
+/**
+ * What a Next.js page says of itself: the version on `window.next`, and
+ * which router's globals it set. Page data like any other, so only a value
+ * shaped like a release is passed on, and the router only by a fixed name.
+ */
+function nextFields(): GenericEvidence["fields"] {
+  const scope: unknown = globalThis;
+  const fields: GenericEvidence["fields"] = [];
+  const version = field(field(scope, "next"), "version");
+  if (typeof version === "string" && NEXT_VERSION.test(version)) {
+    fields.push({ name: "nextVersion", value: version });
+  }
+  const data = field(scope, "__NEXT_DATA__");
+  let router: string | null = null;
+  try {
+    if (Array.isArray(field(scope, "__next_f"))) router = "app";
+    else if (typeof data === "object" && data !== null) router = "pages";
+  } catch {
+    // A revoked proxy throws on `Array.isArray`; that is no router either way.
+  }
+  if (router !== null) fields.push({ name: "nextRouter", value: router });
+  return fields;
+}
+
+/**
+ * The innermost component above `host`, client or server, in the order a
+ * selection's chain reads them: a fiber's own record is inside the server
+ * components its `_debugInfo` lists, and those are inside its parent. The
+ * memo stands for its implementation.
+ */
+function nearestOf(host: Fiber, budget: Budget): Origin | null {
+  for (let at: Fiber | null = host; at !== null && budget.spend(); at = parentOf(at)) {
+    if (at !== host) {
+      if (tagOf(at) === FIBER_TAGS.hostRoot) return null;
+      if (isComponentFiber(at)) return { kind: "client", fiber: canonicalFiber(at) };
+    }
+    const innermost = serverEntries(at).entries.at(-1);
+    if (innermost !== undefined) {
+      return { kind: "server", info: innermost.info, path: `_debugInfo[${innermost.index}]` };
+    }
+  }
+  return null;
+}
+
+function hoverOf(host: Fiber, ids: FiberIds, serverIds: ServerIds): ExtractorContribution {
+  const nearest = nearestOf(host, new Budget(STEPS.hover));
   const capabilities: Capabilities = {
     names: nearest === null ? UNKNOWN : AVAILABLE,
     chain: UNKNOWN,
@@ -231,7 +351,10 @@ function hoverOf(host: Fiber, ids: FiberIds): ExtractorContribution {
   if (nearest === null) {
     return { componentChain: { nearestId: null, components: [], truncated: true }, capabilities };
   }
-  const record = recordFor(nearest, ids.idOf(nearest));
+  const record =
+    nearest.kind === "client"
+      ? recordFor(nearest.fiber, ids.idOf(nearest.fiber))
+      : serverRecordFor(nearest.info, serverIds.idOf(nearest.info), nearest.path);
   // One record by design: the rest of the chain is a selection's to read.
   return {
     componentChain: { nearestId: record.componentId, components: [record], truncated: true },
@@ -242,12 +365,13 @@ function hoverOf(host: Fiber, ids: FiberIds): ExtractorContribution {
 function selectionOf(
   host: { fiber: Fiber; own: boolean },
   ids: FiberIds,
+  serverIds: ServerIds,
   refs: ElementRefs
 ): ExtractorContribution {
   const development = isDevelopmentFiber(host.fiber);
   const records: ComponentRecord[] = [];
-  /** The committed half of each record's fiber, by index. */
-  const fibers: Fiber[] = [];
+  /** What each record was read from, by index; a client record's fiber is its committed half. */
+  const origins: Origin[] = [];
   const indexById = new Map<string, number>();
   const commitBudget = new Budget(STEPS.commit);
   let truncated = false;
@@ -260,27 +384,62 @@ function selectionOf(
     const canonical = canonicalFiber(fiber);
     indexById.set(id, records.length);
     records.push(recordFor(canonical, id));
-    fibers.push(committedFiber(canonical, commitBudget));
+    origins.push({ kind: "client", fiber: committedFiber(canonical, commitBudget) });
     return records.length - 1;
+  };
+
+  const addServer = (info: ServerInfo, path: string): number | null => {
+    const id = serverIds.idOf(info);
+    const known = indexById.get(id);
+    if (known !== undefined) return known;
+    if (records.length >= LIMITS.records) return null;
+    indexById.set(id, records.length);
+    records.push(serverRecordFor(info, id, path));
+    origins.push({ kind: "server", info, path });
+    return records.length - 1;
+  };
+
+  /**
+   * The server components between `fiber` and its parent, innermost first,
+   * so each is the render parent of the record before it. False when the
+   * walk has to stop.
+   */
+  const climb = (fiber: Fiber): boolean => {
+    const { entries, cut } = serverEntries(fiber);
+    if (cut) truncated = true;
+    for (let at = entries.length - 1; at >= 0; at -= 1) {
+      const { info, index } = entries[at]!;
+      // One already in the chain would make the render edges loop.
+      if (indexById.has(serverIds.idOf(info)) || addServer(info, `_debugInfo[${index}]`) === null) {
+        truncated = true;
+        return false;
+      }
+    }
+    return true;
   };
 
   // Render ancestry, innermost first. Each record's render parent is the next.
   const ancestry = new Budget(STEPS.ancestry);
   let reachedRoot = false;
-  for (let next = parentOf(host.fiber); next !== null; next = parentOf(next)) {
-    if (!ancestry.spend()) {
-      truncated = true;
-      break;
-    }
-    if (tagOf(next) === FIBER_TAGS.hostRoot) {
-      reachedRoot = true;
-      break;
-    }
-    if (!isComponentFiber(next) || isMemoImplementation(next)) continue;
-    // A return pointer back into the chain is a loop, not an ancestor.
-    if (indexById.has(ids.idOf(next)) || add(next) === null) {
-      truncated = true;
-      break;
+  if (climb(host.fiber)) {
+    for (let next = parentOf(host.fiber); next !== null; next = parentOf(next)) {
+      if (!ancestry.spend()) {
+        truncated = true;
+        break;
+      }
+      if (tagOf(next) === FIBER_TAGS.hostRoot) {
+        reachedRoot = true;
+        break;
+      }
+      if (isComponentFiber(next) && !isMemoImplementation(next)) {
+        // A return pointer back into the chain is a loop, not an ancestor.
+        if (indexById.has(ids.idOf(next)) || add(next) === null) {
+          truncated = true;
+          break;
+        }
+      }
+      // Server components can sit above any fiber, a fragment or a boundary included.
+      if (!climb(next)) break;
     }
   }
   const rendered = records.length;
@@ -290,18 +449,29 @@ function selectionOf(
   }
 
   // Owners. One outside the render chain — an element made in one component
-  // and rendered by another, through context or a store — gets a record of
-  // its own, with the render parent nobody walked left out.
+  // and rendered by another, through context or a store, or a server
+  // component that rendered nothing between — gets a record of its own, with
+  // the render parent nobody walked left out. A fiber made from an element
+  // the server created is owned by that server component's info.
   if (development) {
     for (let index = 0; index < records.length; index += 1) {
-      const owner = field(fibers[index], "_debugOwner");
+      const origin = origins[index]!;
+      const owner =
+        origin.kind === "client" ? field(origin.fiber, "_debugOwner") : field(origin.info, "owner");
       if (owner === null) {
         records[index]!.ownerId = null;
         continue;
       }
-      // A server component's owner is not a fiber; that is #13885's to read.
-      if (!isFiber(owner) || !isComponentFiber(owner)) continue;
-      const ownerIndex = add(owner);
+      let ownerIndex: number | null;
+      if (isFiber(owner)) {
+        if (!isComponentFiber(owner)) continue;
+        ownerIndex = add(owner);
+      } else if (isServerInfo(owner)) {
+        const path = origin.kind === "client" ? "_debugOwner" : ownerPath(origin.path);
+        ownerIndex = path === null ? null : addServer(owner, path);
+      } else {
+        continue;
+      }
       if (ownerIndex === null) {
         truncated = true;
         continue;
@@ -313,8 +483,10 @@ function selectionOf(
 
   const rootBudget = new Budget(STEPS.roots);
   records.forEach((record, index) => {
+    const origin = origins[index]!;
+    if (origin.kind === "server") return;
     const roots = hostRoots(
-      fibers[index]!,
+      origin.fiber,
       LIMITS.roots,
       new Budget(STEPS.rootsPerRecord, rootBudget)
     );
@@ -333,16 +505,29 @@ function selectionOf(
   if (development) {
     const definitionBudget = new Budget(STEPS.definitions);
     records.forEach((record, index) => {
-      record.sourceCandidates = [
-        ...writer.write(fibers[index]!, "component-invocation", LIMITS.invocations),
-        ...writer.writeDefinition(
-          fibers[index]!,
-          new Budget(STEPS.definitionsPerRecord, definitionBudget)
-        ),
-      ];
+      const origin = origins[index]!;
+      record.sourceCandidates =
+        origin.kind === "client"
+          ? [
+              ...writer.write(origin.fiber, "component-invocation", LIMITS.invocations),
+              ...writer.writeDefinition(
+                origin.fiber,
+                new Budget(STEPS.definitionsPerRecord, definitionBudget)
+              ),
+            ]
+          : [
+              ...writer.writeStack(
+                field(origin.info, "debugStack"),
+                `${origin.path}.debugStack`,
+                "component-invocation",
+                LIMITS.invocations
+              ),
+              ...writer.writeServerDefinition(origin.info, origin.path),
+            ];
     });
   }
 
+  const next = nextFields();
   let kept = records;
   let elementCandidates = sourceCandidates;
   let omitted = writer.omitted;
@@ -369,6 +554,7 @@ function selectionOf(
             { name: "fiberLookup", value: host.own ? "element" : "ancestor" },
             { name: "debugFields", value: development },
             { name: "framesOmitted", value: omitted },
+            ...next,
           ],
         },
       ],
@@ -425,11 +611,14 @@ function keepInnermost(records: ComponentRecord[], count: number): ComponentReco
 export function createReactExtractor(): ElementPickerExtractor {
   // Per install, so ids last as long as the bootstrap that shows them.
   const ids = new FiberIds("react-");
+  const serverIds = new ServerIds("react-server-");
   return {
     extract(element, phase, refs) {
       const host = hostFiberOf(element);
       if (host === null) return null;
-      return phase === "hover" ? hoverOf(host.fiber, ids) : selectionOf(host, ids, refs);
+      return phase === "hover"
+        ? hoverOf(host.fiber, ids, serverIds)
+        : selectionOf(host, ids, serverIds, refs);
     },
   };
 }
