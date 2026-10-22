@@ -172,7 +172,7 @@ function toReadinessResultItem(
 }
 
 /**
- * Args shared by both file-browser openers. The two actions differ only in the
+ * Args shared by both file-browser openers. The two actions differ mainly in the
  * surface they present on, so a caller that knows what it wants to browse
  * names it identically either way — and `revealPath` in particular must not
  * become the thing that picks a surface, since revealing the root passes no
@@ -219,6 +219,12 @@ const fileBrowserPanelArgsSchema = fileBrowserArgsObject
       .boolean()
       .optional()
       .describe("Open the dock popover immediately (default: false). Ignored unless docking."),
+    rootPath: z
+      .string()
+      .optional()
+      .describe(
+        "Folder to root the tree at, relative to the worktree or workspace root (e.g. `content`). Absolute paths and `..` are rejected. An existing browser is rescoped to it; `.` or an empty string resets to the base folder; omit to leave the scope alone. `revealPath` must sit inside it."
+      ),
   })
   .optional();
 
@@ -316,6 +322,29 @@ function resolveFileBrowserTarget(
 function isWithinBrowserRoot(path: string, root: string | undefined): boolean {
   if (!root) return true;
   return path === root || path.startsWith(`${root}/`);
+}
+
+/**
+ * The folder to scope the tree to, relative to the browsed base, or `undefined`
+ * when the caller named none. An explicit empty root is `""` — the base itself —
+ * so it can reset a scoped panel, which omission must not do.
+ *
+ * Rejected rather than canonicalized: `canonicalizeRootPath` turns `..` into
+ * `""` and strips a leading slash, so either would silently open a different
+ * folder than the one asked for.
+ */
+function resolveFileBrowserRoot(args: FileBrowserPanelArgs): string | undefined {
+  const raw = args?.rootPath;
+  if (raw === undefined) return undefined;
+  const normalized = raw.replace(/\\/g, "/");
+  if (normalized.startsWith("/") || /^[A-Za-z]:/.test(normalized)) {
+    throw new Error(`Root must be inside the worktree, not an absolute path: ${raw}`);
+  }
+  const segments = normalized.split("/").filter((segment) => segment !== "" && segment !== ".");
+  if (segments.includes("..")) {
+    throw new Error(`Root must be inside the worktree: ${raw}`);
+  }
+  return segments.join("/");
 }
 
 /** Selection and expansion state for a requested reveal, or nothing to reveal. */
@@ -810,6 +839,20 @@ export function registerWorktreeContextActions(
       run: async (args: FileBrowserPanelArgs, ctx: ActionContext) => {
         const { worktreeId, title } = resolveFileBrowserTarget(args, ctx);
         const reveal = await resolveFileBrowserReveal(args);
+        const rootPath = resolveFileBrowserRoot(args);
+        // Settled before anything is selected or focused: a request that can't
+        // be honored must not have already moved the user to another worktree.
+        // `..` is refused outright since a prefix test would pass `src/../x`.
+        if (
+          rootPath &&
+          reveal &&
+          (reveal.browserSelectedPath.split("/").includes("..") ||
+            !isWithinBrowserRoot(reveal.browserSelectedPath, rootPath))
+        ) {
+          throw new Error(
+            `Reveal path ${reveal.browserSelectedPath} is outside the root ${rootPath}`
+          );
+        }
         const foreground = isForegroundDispatch(ctx.dispatchSource);
         // Grid stays the default, so every caller that predates the dock
         // launcher keeps landing exactly where it did.
@@ -886,16 +929,24 @@ export function registerWorktreeContextActions(
                 ]),
               ].sort(),
               browserSelectedPath: reveal.browserSelectedPath,
-              // Reveal paths are base-relative, so a tree scoped to a subfolder
-              // can only show one that lives under it. Cleared when the target
-              // is outside — otherwise the selection would name a row the tree
-              // does not contain — and left alone when it is already inside,
-              // since dropping a scope the user chose is not part of revealing
+              // An explicit root is the caller's scope and was already checked
+              // against the reveal above. Otherwise, reveal paths are
+              // base-relative, so a tree scoped to a subfolder can only show
+              // one that lives under it. Cleared when the target is outside —
+              // otherwise the selection would name a row the tree does not
+              // contain — and left alone when it is already inside, since
+              // dropping a scope the user chose is not part of revealing
               // something they can already see.
-              ...(!isWithinBrowserRoot(reveal.browserSelectedPath, existing.browserRootPath) && {
-                browserRootPath: "",
-              }),
+              ...(rootPath !== undefined
+                ? { browserRootPath: rootPath }
+                : !isWithinBrowserRoot(reveal.browserSelectedPath, existing.browserRootPath) && {
+                    browserRootPath: "",
+                  }),
             });
+          } else if (rootPath !== undefined) {
+            // Root alone, like the pane's own "set as root": the selection and
+            // expansions the user has are left as they are.
+            store.setFileBrowserView(existing.id, { browserRootPath: rootPath });
           }
           // Reuse has to answer the same focus question the create path below
           // does. `activateTerminal` moves `focusedId` AND leaves fullscreen
@@ -932,6 +983,7 @@ export function registerWorktreeContextActions(
           title,
           ...(worktreeId !== undefined && { worktreeId }),
           ...reveal,
+          ...(rootPath && { browserRootPath: rootPath }),
           location,
           // Folded into the same set() that commits the panel, so the offscreen
           // container's watchdog can't close the popover in the render gap

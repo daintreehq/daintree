@@ -543,7 +543,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `worktree.openChanges` | Open changes | safe | `worktreeId?` |
 | `worktree.openEditor` | Open in editor | safe | `worktreeId?` |
 | `worktree.openFileBrowser` | Browse files | safe | `revealKind?`, `revealPath?`, `worktreeId?` |
-| `worktree.openFileBrowserPanel` | Browse files | safe | `activateDockOnCreate?`, `location?`, `revealKind?`, `revealPath?`, `worktreeId?` |
+| `worktree.openFileBrowserPanel` | Browse files | safe | `activateDockOnCreate?`, `location?`, `revealKind?`, `revealPath?`, `rootPath?`, `worktreeId?` |
 | `worktree.openIssue` | Open worktree issue | safe | `worktreeId?` |
 | `worktree.openPR` | Open worktree pull request | safe | `worktreeId?` |
 | `worktree.openReviewHub` | Open review hub | safe | `worktreeId?` |
