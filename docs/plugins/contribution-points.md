@@ -21,6 +21,7 @@ A plugin that declares `"scope": "project"` lives in a project's own repository 
 | `toolbarButtons` | Available — only in the owning project's toolbar |
 | `launchEntries` | Available — only in the owning project's launcher, and a pinned entry's toolbar button is that project's alone |
 | `layouts` | Available — only in the owning project's palette, and only that project's views can apply them |
+| `searchProviders` | Available — only in the owning project's quick switcher; its keyword is checked against the providers that project can see, and its "Show in quick switcher" switch is that project's alone |
 | `contextMenus` | Available — only in the owning project's views |
 | `keybindings` | Available — renderer-level, so they resolve within the focused project |
 | `settings` | Available — every field, whatever its `scope`, lives in Project settings; `project` and `local` values resolve from the bound project root, not the focused one |
@@ -758,6 +759,83 @@ Applying a layout is additive. It opens what's missing and moves, groups and max
 A layout that runs a recipe never starts it silently. Before anything opens or moves, the user sees a confirmation listing every terminal the recipes start, as the recipe confirmation lists them, and the layout applies only if they approve. A command that applies such a layout gets `{ "status": "awaiting-confirmation" }` back at once rather than waiting on the dialog. A recipe that changed after the user approved it doesn't start, and neither does one a team recipe of the same name now shadows.
 
 Your commands can apply only your own layouts, and MCP clients and agents can't apply layouts at all. Validation refuses an entry with no target or several (`layout_entry_target_missing`, `layout_entry_target_conflict`), a panel or recipe you don't declare (`layout_panel_unknown`, `layout_recipe_unknown`), a PTY panel (`layout_panel_pty`), a placement the panel can't take (`layout_panel_placement`), the same panel, recipe or page twice (`layout_entry_duplicate`), a second or docked maximize (`layout_maximized_invalid`), and a tab group split between grid and dock, mixing project and worktree panels, or holding one panel (`layout_tab_group_location`, `layout_tab_group_scope`, `layout_tab_group_single`). A plugin may declare at most 20 layouts. An entry naming a recipe Daintree couldn't register, because none of its terminals passed the recipe checks, is dropped from the layout when the plugin loads.
+
+## Search providers — _Shipped_
+
+A search provider makes your plugin's content findable from the quick switcher (`⌘P` / `Ctrl+P`). Typing the provider's `keyword` and pressing Tab scopes the switcher to it: the field shows a chip with your `title`, and every keystroke after that asks your provider. With `blend: true` it also adds a few results below the built-in ones in the unscoped search. Backspace on an empty field, or Escape once the query is clear, steps back out.
+
+The host draws every result from data you return: a label, a description, an icon, and a target that is one of your own panels or commands with small arguments. Picking a result opens a panel through `panel.openPluginPanel` — an open panel of that kind is reused and receives the result's args as `openRequest` — or dispatches the command with them.
+
+```json
+{
+  "contributes": {
+    "panels": [{ "id": "notes", "name": "Notes", "iconId": "notebook", "color": "#0ea5e9" }],
+    "databases": [
+      {
+        "id": "notes",
+        "location": "local",
+        "queries": [
+          {
+            "name": "find_notes",
+            "mode": "read",
+            "description": "Notes whose title matches.",
+            "params": { "q": { "type": "string", "maxLength": 200 } },
+            "sql": "SELECT id, title AS label, folder AS description, json_object('noteId', id) AS args FROM notes WHERE title LIKE '%' || :q || '%' ORDER BY updated_at DESC LIMIT 20"
+          }
+        ]
+      }
+    ],
+    "searchProviders": [
+      {
+        "id": "notes",
+        "kind": "declarative",
+        "title": "Notes",
+        "keyword": "notes",
+        "iconId": "notebook",
+        "blend": true,
+        "query": "find_notes",
+        "target": { "panel": "notes" }
+      },
+      { "id": "people", "kind": "runtime", "title": "People", "keyword": "people" }
+    ]
+  }
+}
+```
+
+**Fields:**
+
+| Field | Required | Notes |
+| --- | --- | --- |
+| `id` | yes | Namespaced at runtime as `{pluginId}.{id}`. The user's "Show in quick switcher" choice is stored under it. |
+| `kind` | yes | `"declarative"` or `"runtime"` — see below. |
+| `title` | yes | Up to 80 characters. The scope chip, the scoped placeholder ("Search Notes") and the Settings row. |
+| `keyword` | yes | 1–24 lowercase letters, digits or `-`, starting with a letter. The palettes' prefix characters (`>`, `@`, `#`, `:`, `/`) can never be part of one. |
+| `iconId` | no | A shared plugin icon id or a [custom SVG](#custom-icons) for results that carry none. Default `search`. |
+| `blend` | no | `true` also adds results to the unscoped search. Default `false`. |
+| `query` | declarative only | The `name` of one of your `databases[].queries`. It must be `mode: "read"` and declare exactly one param, of type `"string"`, which receives what the user typed. |
+| `target` | declarative: yes; runtime: no | `{ "panel": "<panel id>" }` or `{ "command": "<manifest name>.<id>" }`. Where results open; for a runtime provider, the default for results without their own. |
+
+**Declarative providers** answer without your plugin running. The host binds what the user typed to the query's one param and runs the statement read-only in the same child process an agent's declared query uses, so an expensive statement costs that process, never Daintree. Rows are read by column name — alias your columns to match:
+
+| Column | Required | Notes |
+| --- | --- | --- |
+| `id` | yes | Stable within the provider. Rows with a repeated id are dropped. |
+| `label` | yes | The row's text, cut at 160 characters. |
+| `description` | no | The second line, cut at 256 characters. |
+| `iconId` | no | A shared plugin icon id; anything else falls back to the provider's icon. |
+| `args` | no | A JSON object as text (SQLite's `json_object()`), at most 4 KB. Handed to the target. |
+
+Text your param's own constraints refuse (its `maxLength`, `pattern`, …), and a database your plugin hasn't created yet, answer with no rows.
+
+**Runtime providers** are a function you bind in `activate()` with [`host.registerSearchProvider`](./host-api.md#registersearchprovider). It returns results of the same shape — `{ id, label, description?, iconId?, target?, args? }` — and gets a `signal` that aborts when the query is superseded.
+
+**Budgets.** The switcher waits 150 ms after the last keystroke, and a new query cancels the one before it. Each provider has one second to answer; one that misses it is left out of that query and a warning lands in your plugin's diagnostics (at most once a minute per provider). A scoped provider shows up to 20 results; a blended one adds up to 3, and the unscoped search shows at most 6 provider results in all, always below the built-in rows, which never wait for a provider. A blended search only asks declarative providers and runtime providers whose plugin is already running — it never starts your plugin. A scoped search may: the first query after the user picks your provider activates the plugin, inside the same one-second deadline.
+
+**Checks.** Every result is checked host-side before the switcher sees it: a target outside your plugin, args that aren't a small JSON object, or a missing id or label drop that row, and the dropped rows are counted in your diagnostics. The manifest gate refuses a declarative provider with no query (`search_provider_query_missing`) or no target (`search_provider_target_missing`), a query you don't declare (`search_provider_query_unknown`), a write query (`search_provider_query_not_read`), a query without exactly one string param (`search_provider_query_params`), a runtime provider naming a query (`search_provider_query_runtime`), a target naming both or neither of panel and command (`search_provider_target_conflict`), a command outside your namespace (`search_provider_command_not_own`), a panel you don't declare (`search_provider_panel_unknown`), a PTY-backed panel, which has no view to hand args to (`search_provider_panel_pty`), and two of your providers sharing a keyword (`search_provider_keyword_duplicate`). A plugin may declare at most 5 providers.
+
+**Keywords are first come, first served.** When two plugins claim the same keyword in a project they can both be seen in, the provider registered first keeps it and the other is refused there: it never appears in that project's switcher, its Settings row says which plugin holds the keyword, and a warning lands in the refused plugin's diagnostics. Two project plugins in different projects never collide.
+
+**Show in quick switcher.** Each provider has a switch in Project settings → Plugins, on your plugin's page. For an installed plugin the choice holds in every project; for a project plugin, only in that project. Hiding an installed plugin in a project hides its providers there too.
 
 ## Menu items — _Shipped_
 

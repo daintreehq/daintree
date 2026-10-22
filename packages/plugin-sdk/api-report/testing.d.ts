@@ -1822,6 +1822,39 @@ interface PanelMenuItemContribution {
     label?: string;
 }
 /**
+ * Where a quick switcher search result opens, in manifest terms: one of the
+ * plugin's own `contributes.panels[].id`, or one of its own commands written
+ * `{manifest name}.{command id}`. Exactly one of the two.
+ */
+interface PluginSearchResultTarget {
+    panel?: string;
+    command?: string;
+}
+/** One result a runtime search provider returns. The host renders it; nothing here is markup. */
+interface PluginSearchResult {
+    /** Stable within this provider; results with a repeated id are dropped. */
+    id: string;
+    label: string;
+    description?: string;
+    /** A generic plugin icon id or one of this plugin's registered custom icons. */
+    iconId?: string;
+    /** Omitted: the provider's manifest `target`. */
+    target?: PluginSearchResultTarget;
+    /** Handed to the target: the panel's `initialArgs` (or `openRequest`), or the command's args. */
+    args?: Record<string, unknown>;
+}
+/** What a runtime search provider is told about the query it is answering. */
+interface PluginSearchContext {
+    /** `scoped` when the user picked this provider by keyword; `blended` for the unscoped search. */
+    mode: "scoped" | "blended";
+    /** Most results the host will show; extra ones are dropped. */
+    limit: number;
+    /** Aborted when the user typed on, closed the switcher, or the deadline passed. */
+    signal: AbortSignal;
+}
+/** A runtime search provider, bound with {@link PluginHostApi.registerSearchProvider}. */
+type PluginSearchProvider = (query: string, context: PluginSearchContext) => PluginSearchResult[] | Promise<PluginSearchResult[]>;
+/**
  * Semantic color for a {@link PluginPanelBadge}. Plugins pick intent, not a raw
  * hex value, so badges stay theme-consistent. `"warning"` and `"error"` map to
  * the app's status palette; `"default"` is the neutral accent-free tint.
@@ -4516,6 +4549,23 @@ interface PluginActivationApi {
      */
     registerWorktreeSetupStep(stepId: string, handler: PluginWorktreeSetupStepHandler): Promise<() => void>;
     /**
+     * Answer a `kind: "runtime"` entry of `contributes.searchProviders` (#13792)
+     * with `provider`. `id` must name such an entry; an undeclared id, or a
+     * declarative one, is rejected. The host asks it while the user types in the
+     * quick switcher, with a short deadline: an answer that misses it is dropped
+     * and recorded in this plugin's diagnostics, and `context.signal` aborts when
+     * the query is superseded. Results are re-checked host-side — a target outside
+     * this plugin, or args over the size limit, drop the row.
+     *
+     * A blended (unscoped) search only asks a provider whose plugin is already
+     * running; it never activates the plugin. Returns a disposer; re-registering
+     * the same id replaces the binding. Must be called during `activate()`.
+     *
+     * @throws {Error} If called after activation resolves or times out — the host
+     *   is revoked and registration is rejected.
+     */
+    registerSearchProvider(id: string, provider: PluginSearchProvider): Promise<() => void>;
+    /**
      * Subscribe to active-worktree changes. The callback fires with the new
      * active snapshot (or `null` when none is active). Returns a disposer;
      * calling it more than once is a no-op. All subscriptions are automatically
@@ -5719,6 +5769,11 @@ interface RegisteredFileDecorationProviderRecord {
     descriptor: FileDecorationProviderDescriptor;
     impl: FileDecorationProviderImpl;
 }
+/** A live `host.registerSearchProvider` binding; call `provider` to drive it in a test. */
+interface RegisteredSearchProviderRecord {
+    id: string;
+    provider: PluginSearchProvider;
+}
 /**
  * A handler bound through `host.registerWorktreeSetupStep`. Call `handler`
  * with a context of your own to run the step as the host would.
@@ -5847,6 +5902,8 @@ interface MockHostState {
     readonly registeredFileDecorationProviders: ReadonlyArray<RegisteredFileDecorationProviderRecord>;
     /** Live `host.registerWorktreeSetupStep` bindings, one per step id. */
     readonly registeredWorktreeSetupSteps: ReadonlyArray<RegisteredWorktreeSetupStepRecord>;
+    /** Live `host.registerSearchProvider` bindings, one per provider id. */
+    readonly registeredSearchProviders: ReadonlyArray<RegisteredSearchProviderRecord>;
     /** Live `host.mcp.registerTools` rosters, one per endpoint id. */
     readonly registeredMcpTools: ReadonlyArray<RegisteredMcpToolsRecord>;
     readonly invalidationCalls: ReadonlyArray<InvalidationRecord>;

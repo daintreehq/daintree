@@ -637,6 +637,74 @@
             "additionalProperties": false
           }
         },
+        "searchProviders": {
+          "default": [],
+          "maxItems": 5,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64,
+                "pattern": "^[a-zA-Z0-9._-]+$"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "declarative",
+                  "runtime"
+                ]
+              },
+              "title": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80
+              },
+              "keyword": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9-]{0,23}$"
+              },
+              "iconId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "blend": {
+                "type": "boolean"
+              },
+              "query": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              },
+              "target": {
+                "type": "object",
+                "properties": {
+                  "panel": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 64,
+                    "pattern": "^[a-zA-Z0-9._-]+$"
+                  },
+                  "command": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  }
+                },
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "id",
+              "kind",
+              "title",
+              "keyword"
+            ],
+            "additionalProperties": false
+          }
+        },
         "menuItems": {
           "default": [],
           "maxItems": 200,

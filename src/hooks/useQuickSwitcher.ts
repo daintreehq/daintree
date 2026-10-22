@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useEffect } from "react";
+import { useCallback, useMemo, useEffect, useState } from "react";
 import Fuse, { type IFuseOptions } from "fuse.js";
 import { useShallow } from "zustand/react/shallow";
 import { usePanelStore } from "@/store";
@@ -10,8 +10,12 @@ import { useSearchablePalette, type FuseResultMatch } from "./useSearchablePalet
 import { usePaletteStore } from "@/store/paletteStore";
 import { deferPaletteFocusRestore } from "@/components/ui/paletteFocusRestore";
 import { deriveTerminalChrome, type TerminalChromeDescriptor } from "@/utils/terminalChrome";
+import { usePluginSearch, type PluginSearchHit, type PluginSearchStatus } from "./usePluginSearch";
+import { openPluginSearchHit } from "@/components/QuickSwitcher/openPluginSearchHit";
+import { SEARCH_PROVIDER_BLENDED_TOTAL } from "@shared/config/pluginSearchProviders";
+import type { PluginSearchProviderInfo } from "@shared/types/plugin";
 
-export type QuickSwitcherItemType = "terminal" | "worktree";
+export type QuickSwitcherItemType = "terminal" | "worktree" | "plugin";
 
 export interface QuickSwitcherItem {
   id: string;
@@ -21,6 +25,8 @@ export interface QuickSwitcherItem {
   terminalKind?: PanelKind;
   chrome?: TerminalChromeDescriptor;
   worktreeId?: string;
+  /** A plugin search provider's result (#13792): what it opens and who it came from. */
+  pluginHit?: PluginSearchHit;
 }
 
 export interface UseQuickSwitcherReturn {
@@ -41,6 +47,14 @@ export interface UseQuickSwitcherReturn {
   selectNext: () => void;
   selectItem: (item: QuickSwitcherItem) => void;
   confirmSelection: () => void;
+  /** The plugin search provider the switcher is scoped to (#13792), if any. */
+  scopedProvider: PluginSearchProviderInfo | null;
+  /** The provider whose keyword the unscoped query spells exactly — Tab scopes to it. */
+  keywordProvider: PluginSearchProviderInfo | null;
+  /** How the scoped provider's last answer for this query went. */
+  scopedStatus: PluginSearchStatus;
+  enterScope: (providerKey: string) => void;
+  exitScope: () => void;
 }
 
 const FUSE_OPTIONS: IFuseOptions<QuickSwitcherItem> = {
@@ -99,7 +113,21 @@ export function useQuickSwitcher(): UseQuickSwitcherReturn {
     }))
   );
 
-  const items = useMemo<QuickSwitcherItem[]>(() => {
+  // Plugin search providers (#13792). The scope is the provider the user
+  // picked by keyword + Tab; it only counts while that provider is still in
+  // the catalog, so a provider switched off or unloaded drops the scope too.
+  const pluginSearch = usePluginSearch(paletteIsOpen);
+  const [scopeKey, setScopeKey] = useState<string | null>(null);
+  const scopedProvider = scopeKey
+    ? (pluginSearch.providers.find((provider) => provider.key === scopeKey) ?? null)
+    : null;
+  const activeScopeKey = scopedProvider?.key ?? null;
+
+  useEffect(() => {
+    if (!paletteIsOpen && scopeKey !== null) setScopeKey(null);
+  }, [paletteIsOpen, scopeKey]);
+
+  const builtinItems = useMemo<QuickSwitcherItem[]>(() => {
     const result: QuickSwitcherItem[] = [];
 
     // Every open panel, PTY or not, keyed `terminal:` so persisted MRU
@@ -138,6 +166,28 @@ export function useQuickSwitcher(): UseQuickSwitcherReturn {
     return result;
   }, [panelIds, panelsById, worktrees, worktreeMap]);
 
+  const { state: pluginState } = pluginSearch;
+  const pluginItems = useMemo<QuickSwitcherItem[]>(() => {
+    const hits =
+      pluginState.scopeKey === null
+        ? pluginState.hits.slice(0, SEARCH_PROVIDER_BLENDED_TOTAL)
+        : pluginState.hits;
+    return hits.map((hit) => ({
+      id: hit.id,
+      type: "plugin",
+      title: hit.row.label,
+      subtitle: hit.row.description,
+      pluginHit: hit,
+    }));
+  }, [pluginState]);
+
+  // Scoped, the list is the provider's alone. Unscoped, its blended rows sit
+  // below the built-in ones, which never wait on them.
+  const items = useMemo<QuickSwitcherItem[]>(
+    () => (activeScopeKey !== null ? pluginItems : [...builtinItems, ...pluginItems]),
+    [activeScopeKey, builtinItems, pluginItems]
+  );
+
   // Prune stale MRU entries when item set or MRU list changes (e.g. after hydration).
   // Panels and worktrees populate asynchronously during hydration, so a category
   // can be momentarily empty while the other has loaded. Pruning a category before
@@ -146,28 +196,35 @@ export function useQuickSwitcher(): UseQuickSwitcherReturn {
   // protecting the not-yet-loaded category's entries in the meantime (#9922).
   useEffect(() => {
     if (mruList.length === 0) return;
-    if (items.length === 0) return;
-    const hasTerminalItems = items.some((item) => item.type === "terminal");
-    const hasWorktreeItems = items.some((item) => item.type === "worktree");
-    const validIds = new Set(items.map((item) => item.id));
+    if (builtinItems.length === 0) return;
+    const hasTerminalItems = builtinItems.some((item) => item.type === "terminal");
+    const hasWorktreeItems = builtinItems.some((item) => item.type === "worktree");
+    const validIds = new Set(builtinItems.map((item) => item.id));
     for (const id of mruList) {
       if (!hasTerminalItems && id.startsWith("terminal:")) validIds.add(id);
       if (!hasWorktreeItems && id.startsWith("worktree:")) validIds.add(id);
     }
     pruneMru(validIds);
-  }, [items, mruList, pruneMru]);
+  }, [builtinItems, mruList, pruneMru]);
 
-  const fuse = useMemo(() => new Fuse(items, FUSE_OPTIONS), [items]);
+  const fuse = useMemo(() => new Fuse(builtinItems, FUSE_OPTIONS), [builtinItems]);
 
   const filterFn = useCallback(
-    (allItems: QuickSwitcherItem[], query: string): QuickSwitcherItem[] => {
+    (_allItems: QuickSwitcherItem[], query: string): QuickSwitcherItem[] => {
+      // Plugin rows answer one (scope, query); for any other they are stale,
+      // and left out in the same render the input changed, so neither Enter
+      // nor a click can open a row from the previous query.
+      const live =
+        pluginState.scopeKey === activeScopeKey && pluginState.query === query ? pluginItems : [];
+      if (activeScopeKey !== null) return live;
+
       const mruIndexMap = new Map<string, number>();
       mruList.forEach((id, index) => mruIndexMap.set(id, index));
       const mruSize = mruList.length;
 
       if (!query.trim()) {
         // Empty query: return items in MRU order (MRU items first, then others)
-        return [...allItems].sort((a, b) => {
+        return [...builtinItems].sort((a, b) => {
           const aIndex = mruIndexMap.get(a.id) ?? Infinity;
           const bIndex = mruIndexMap.get(b.id) ?? Infinity;
           return aIndex - bIndex;
@@ -176,7 +233,7 @@ export function useQuickSwitcher(): UseQuickSwitcherReturn {
 
       // Non-empty query: Fuse search with MRU boost (lower score = better match)
       const fuseResults = fuse.search(query);
-      return fuseResults
+      const ranked = fuseResults
         .map((r) => {
           const rank = mruIndexMap.get(r.item.id);
           const boost =
@@ -185,8 +242,12 @@ export function useQuickSwitcher(): UseQuickSwitcherReturn {
         })
         .sort((a, b) => a.boostedScore - b.boostedScore)
         .map((r) => r.item);
+      // Blended rows go after the built-in budget, in arrival order, so one
+      // landing late never moves a row already on screen.
+      if (live.length === 0) return ranked;
+      return [...ranked.slice(0, MAX_RESULTS), ...live, ...ranked.slice(MAX_RESULTS)];
     },
-    [fuse, mruList]
+    [fuse, mruList, builtinItems, pluginItems, pluginState, activeScopeKey]
   );
 
   const {
@@ -205,11 +266,41 @@ export function useQuickSwitcher(): UseQuickSwitcherReturn {
   } = useSearchablePalette<QuickSwitcherItem>({
     items,
     filterFn,
-    maxResults: MAX_RESULTS,
+    maxResults: MAX_RESULTS + pluginItems.length,
     paletteId: "quick-switcher",
   });
 
-  const matchFuse = useMemo(() => new Fuse(items, FUSE_MATCH_OPTIONS), [items]);
+  const { request: requestPluginSearch, providers: pluginProviders } = pluginSearch;
+  useEffect(() => {
+    requestPluginSearch(paletteIsOpen, activeScopeKey, query, pluginProviders);
+  }, [requestPluginSearch, paletteIsOpen, activeScopeKey, query, pluginProviders]);
+
+  // Scoped and not yet answered for this exact query (debouncing or in
+  // flight) reads as loading, so the empty state never flashes between keys.
+  const scopedStatus: PluginSearchStatus =
+    activeScopeKey === null
+      ? "idle"
+      : pluginState.scopeKey === activeScopeKey && pluginState.query === query
+        ? pluginState.status
+        : "loading";
+
+  const keywordProvider = useMemo(() => {
+    if (activeScopeKey !== null) return null;
+    const typed = query.trim().toLowerCase();
+    if (typed.length === 0) return null;
+    return pluginProviders.find((provider) => provider.keyword === typed) ?? null;
+  }, [activeScopeKey, query, pluginProviders]);
+
+  const enterScope = useCallback(
+    (providerKey: string) => {
+      setScopeKey(providerKey);
+      setQuery("");
+    },
+    [setQuery]
+  );
+  const exitScope = useCallback(() => setScopeKey(null), []);
+
+  const matchFuse = useMemo(() => new Fuse(builtinItems, FUSE_MATCH_OPTIONS), [builtinItems]);
   const matchesById = useMemo(() => {
     if (!query.trim()) return EMPTY_MATCHES;
     const byId = new Map<string, readonly FuseResultMatch[]>();
@@ -224,6 +315,20 @@ export function useQuickSwitcher(): UseQuickSwitcherReturn {
 
   const selectItem = useCallback(
     (item: QuickSwitcherItem) => {
+      // A plugin row opens only while it still answers what the field says:
+      // with deferred filtering the list can trail the input by a render, and
+      // Enter in that gap would open the previous query's result.
+      const hit = item.pluginHit;
+      if (
+        hit &&
+        !(
+          pluginState.scopeKey === activeScopeKey &&
+          pluginState.query === query &&
+          pluginState.hits.some((candidate) => candidate.id === hit.id)
+        )
+      ) {
+        return;
+      }
       // The palette refocuses its opener after the exit animation, which would
       // pull the keyboard straight off the pick. Restore only if nothing took
       // it — re-picking the focused panel moves no focus at all.
@@ -247,10 +352,20 @@ export function useQuickSwitcher(): UseQuickSwitcherReturn {
       } else if (item.type === "worktree") {
         const worktreeId = item.id.replace("worktree:", "");
         selectWorktree(worktreeId);
+      } else if (hit) {
+        openPluginSearchHit(hit);
       }
       close();
     },
-    [selectWorktree, close, restoreBackgroundTerminal, activateTerminal]
+    [
+      selectWorktree,
+      close,
+      restoreBackgroundTerminal,
+      activateTerminal,
+      pluginState,
+      activeScopeKey,
+      query,
+    ]
   );
 
   const confirmSelection = useCallback(() => {
@@ -266,7 +381,9 @@ export function useQuickSwitcher(): UseQuickSwitcherReturn {
     totalResults,
     selectedIndex,
     matchesById,
-    isLoading: !worktreesInitialized && worktreeError === null,
+    isLoading:
+      (activeScopeKey === null && !worktreesInitialized && worktreeError === null) ||
+      scopedStatus === "loading",
     open,
     close,
     toggle,
@@ -276,5 +393,10 @@ export function useQuickSwitcher(): UseQuickSwitcherReturn {
     selectNext,
     selectItem,
     confirmSelection,
+    scopedProvider,
+    keywordProvider,
+    scopedStatus,
+    enterScope,
+    exitScope,
   };
 }

@@ -31,6 +31,10 @@ import { LAUNCH_MCP_FORMATS } from "../../shared/config/launchMcp.js";
 import { isBuiltInAgentId } from "../../shared/config/agentIds.js";
 import { PLUGIN_ACTION_CATEGORY_MAX_LENGTH } from "../../shared/config/actionCategories.js";
 import {
+  SEARCH_PROVIDER_KEYWORD_PATTERN,
+  SEARCH_PROVIDER_TITLE_MAX_LENGTH,
+} from "../../shared/config/pluginSearchProviders.js";
+import {
   MAX_TERMINALS_PER_RECIPE,
   RECIPE_PANEL_ARGS_MAX_BYTES,
 } from "../../shared/utils/recipeSanitizer.js";
@@ -426,6 +430,41 @@ export const LayoutContributionSchema = z
     id: z.string().min(1).max(64).regex(SAFE_ID_PATTERN),
     name: z.string().trim().min(1).max(80),
     entries: z.array(LayoutEntryContributionSchema).min(1).max(LAYOUT_MAX_ENTRIES),
+  })
+  .strict();
+
+/**
+ * Where a search provider's results open (#13792): one of this plugin's own
+ * panels or commands. Both are optional here so the object keeps a `.shape`;
+ * that exactly one is present, and that it is this plugin's own, is checked
+ * with the manifest's cross-references (`search_provider_target_*`).
+ */
+export const SearchProviderTargetSchema = z
+  .object({
+    panel: z.string().min(1).max(64).regex(SAFE_ID_PATTERN).optional(),
+    command: z.string().min(1).max(200).optional(),
+  })
+  .strict();
+
+/**
+ * A quick switcher search provider (#13792). `kind` decides what answers it:
+ * a declared read-only query (`query`) or a function bound in `activate()`.
+ * Both kinds share one object so it keeps a `.shape`; the fields one kind
+ * needs or refuses are checked with the manifest's cross-references.
+ */
+export const SearchProviderContributionSchema = z
+  .object({
+    id: z.string().min(1).max(64).regex(SAFE_ID_PATTERN),
+    kind: z.enum(["declarative", "runtime"]),
+    title: z.string().trim().min(1).max(SEARCH_PROVIDER_TITLE_MAX_LENGTH),
+    keyword: z.string().regex(SEARCH_PROVIDER_KEYWORD_PATTERN, {
+      message:
+        "keyword must be 1-24 lowercase letters, digits or '-', starting with a letter — the palettes' prefix characters (>, @, #, :, /) can't be keywords",
+    }),
+    iconId: z.string().min(1).optional(),
+    blend: z.boolean().optional(),
+    query: z.string().min(1).max(64).optional(),
+    target: SearchProviderTargetSchema.optional(),
   })
   .strict();
 
@@ -2586,6 +2625,8 @@ export const MANIFEST_CONTRIBUTION_CAPS = {
   // one plugin must not be able to bury everyone else's.
   launchEntries: 20,
   layouts: 20,
+  // Each claims a keyword in a shared switcher, so a plugin gets a handful.
+  searchProviders: 5,
   menuItems: 200,
   keybindings: 200,
   contextMenus: 200,
@@ -3010,6 +3051,10 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
               .array(LayoutContributionSchema)
               .max(MANIFEST_CONTRIBUTION_CAPS.layouts)
               .default([]),
+            searchProviders: z
+              .array(SearchProviderContributionSchema)
+              .max(MANIFEST_CONTRIBUTION_CAPS.searchProviders)
+              .default([]),
             menuItems: z
               .array(MenuItemContributionSchema)
               .max(MANIFEST_CONTRIBUTION_CAPS.menuItems)
@@ -3111,6 +3156,7 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
             toolbarButtons: [],
             launchEntries: [],
             layouts: [],
+            searchProviders: [],
             menuItems: [],
             keybindings: [],
             contextMenus: [],
@@ -3693,6 +3739,7 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
       reportDuplicateIds("toolbarButtons", manifest.contributes.toolbarButtons);
       reportDuplicateIds("launchEntries", manifest.contributes.launchEntries);
       reportDuplicateIds("layouts", manifest.contributes.layouts);
+      reportDuplicateIds("searchProviders", manifest.contributes.searchProviders);
       reportDuplicateIds("commands", manifest.contributes.commands);
       reportDuplicateIds("views", manifest.contributes.views);
       reportDuplicateIds("mcpServers", manifest.contributes.mcpServers);
@@ -4054,6 +4101,133 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
             path: [...path, "panel", "args"],
             message: `Launch entry "${entry.id}" passes args to panel "${panelId}", which is PTY-backed (hasPty: true) and has no view to receive them.`,
             params: { errorCode: "launch_entry_panel_args_pty" },
+          });
+        }
+      });
+
+      // Search providers (#13792): a declarative one names a read-only declared
+      // query with one string parameter, a runtime one names none, and every
+      // target opens only something of this plugin's own — the switcher is not
+      // a side door to dispatch either.
+      const seenKeywords = new Set<string>();
+      manifest.contributes.searchProviders.forEach((provider, index) => {
+        const path = ["contributes", "searchProviders", index] as const;
+        if (seenKeywords.has(provider.keyword)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [...path, "keyword"],
+            message: `Search provider "${provider.id}" keyword "${provider.keyword}" is already used by another of this plugin's search providers — each needs its own keyword.`,
+            params: { errorCode: "search_provider_keyword_duplicate" },
+          });
+        }
+        seenKeywords.add(provider.keyword);
+
+        if (provider.kind === "declarative") {
+          if (provider.query === undefined) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: [...path, "query"],
+              message: `Search provider "${provider.id}" is declarative but names no query — give it the name of one of contributes.databases[].queries.`,
+              params: { errorCode: "search_provider_query_missing" },
+            });
+          } else {
+            const query = manifest.contributes.databases
+              .flatMap((database) => database.queries ?? [])
+              .find((candidate) => candidate.name === provider.query);
+            const params = query ? Object.values(query.params) : [];
+            if (query === undefined) {
+              ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: [...path, "query"],
+                message: `Search provider "${provider.id}" query "${provider.query}" matches no contributes.databases[].queries[].name.`,
+                params: { errorCode: "search_provider_query_unknown" },
+              });
+            } else if (query.mode !== "read") {
+              ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: [...path, "query"],
+                message: `Search provider "${provider.id}" query "${provider.query}" is a write — a search runs as the user types, so it may only name a mode: "read" query.`,
+                params: { errorCode: "search_provider_query_not_read" },
+              });
+            } else if (params.length !== 1 || params[0]!.type !== "string") {
+              ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: [...path, "query"],
+                message: `Search provider "${provider.id}" query "${provider.query}" must declare exactly one param, of type "string", to receive what the user typed.`,
+                params: { errorCode: "search_provider_query_params" },
+              });
+            }
+          }
+          if (provider.target === undefined) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: [...path, "target"],
+              message: `Search provider "${provider.id}" is declarative but declares no target — its rows open one of this plugin's panels or commands, so name one.`,
+              params: { errorCode: "search_provider_target_missing" },
+            });
+          }
+        } else if (provider.query !== undefined) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [...path, "query"],
+            message: `Search provider "${provider.id}" is a runtime provider, so it can't also name a query — use kind: "declarative" to answer from the query instead.`,
+            params: { errorCode: "search_provider_query_runtime" },
+          });
+        }
+
+        const { target } = provider;
+        if (target === undefined) return;
+        if ((target.panel === undefined) === (target.command === undefined)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [...path, "target"],
+            message: `Search provider "${provider.id}" target must name exactly one of panel and command.`,
+            params: { errorCode: "search_provider_target_conflict" },
+          });
+          return;
+        }
+        if (target.command !== undefined) {
+          const actionId = target.command;
+          if (
+            !actionId.startsWith(ownNamespacePrefix) ||
+            actionId.length === ownNamespacePrefix.length ||
+            !PANEL_MENU_ACTION_ID.test(actionId) ||
+            BUILT_IN_ACTION_ID_SET.has(actionId)
+          ) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: [...path, "target", "command"],
+              message: `Search provider "${provider.id}" target.command "${actionId}" must be one of this plugin's own actions, written "${manifest.name}.<id>" — a search result can't run built-in or other plugins' actions.`,
+              params: { errorCode: "search_provider_command_not_own" },
+            });
+          } else if (declaredCommandActionIds.size > 0 && !declaredCommandActionIds.has(actionId)) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: [...path, "target", "command"],
+              message: `Search provider "${provider.id}" target.command "${actionId}" is in this plugin's "${manifest.name}" namespace but matches no entry in contributes.commands — likely a typo for a declared command.`,
+              params: { errorCode: "action_id_undeclared_command" },
+            });
+          }
+          return;
+        }
+        const panel = manifest.contributes.panels.find(
+          (candidate) => candidate.id === target.panel
+        );
+        if (panel === undefined) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [...path, "target", "panel"],
+            message: `Search provider "${provider.id}" target.panel "${target.panel}" matches no contributes.panels[].id — a search result opens only this plugin's own panels.`,
+            params: { errorCode: "search_provider_panel_unknown" },
+          });
+        } else if (panel.hasPty === true) {
+          // A result's args are the point of opening it, and a PTY panel has no
+          // view to hand them to.
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [...path, "target", "panel"],
+            message: `Search provider "${provider.id}" target.panel "${target.panel}" is PTY-backed (hasPty: true) and has no view to receive a result's args.`,
+            params: { errorCode: "search_provider_panel_pty" },
           });
         }
       });

@@ -60,7 +60,9 @@ import type {
   PluginProcessDataChunk,
   PluginProcessMode,
   PluginWorktreeSetupStepHandler,
+  PluginSearchProvider,
 } from "../../../shared/types/plugin.js";
+import { SEARCH_PROVIDER_MAX_RESPONSE_BYTES } from "../../../shared/config/pluginSearchProviders.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { pathToFileURL } from "node:url";
 import { toRuntimePanelKindId } from "../../../shared/config/panelKindRegistry.js";
@@ -219,13 +221,17 @@ export class PluginDevWorkerHostProxy {
   private readonly ipcHandlers = new Map<string, RegisteredHandler>();
   private readonly subscriptions = new Map<string, (payload: unknown) => void>();
   private readonly fileDecorationProviders = new Map<string, FileDecorationProviderImpl>();
+  /** Quick switcher search providers bound with `host.registerSearchProvider`, by provider id.
+   * The record object per registration is its identity, so a disposer only ever
+   * unbinds the registration it came from, even when a later one reused the function. */
+  private readonly searchProviders = new Map<string, { provider: PluginSearchProvider }>();
   /** Open `host.db` handles, closed on dispose so a reload never leaks a connection. */
   private readonly databases = new Set<PluginDatabase>();
   /** Bound `agentMcp` rosters, keyed by endpoint id. The map object per roster
    * is its identity: a disposer only unbinds the roster it was handed for. */
   private readonly mcpRosters = new Map<string, Map<string, RegisteredMcpTool>>();
-  /** Signals handed to in-flight `mcp-tool` executes, keyed by invoke requestId,
-   * so a main-side `invoke-cancel` reaches the plugin's `execute`. */
+  /** Signals handed to in-flight `mcp-tool` executes and `search-provider` calls,
+   * keyed by invoke requestId, so a main-side `invoke-cancel` reaches the plugin. */
   private readonly mcpInvokeAborts = new Map<string, AbortController>();
   /** Bound `worktreeSetupSteps` handlers, keyed by step id. Each registration
    * is its own binding object, so a disposer owns exactly the one it made even
@@ -295,6 +301,7 @@ export class PluginDevWorkerHostProxy {
     this.ipcHandlers.clear();
     this.subscriptions.clear();
     this.fileDecorationProviders.clear();
+    this.searchProviders.clear();
     this.mcpRosters.clear();
     for (const controller of this.mcpInvokeAborts.values()) controller.abort();
     this.mcpInvokeAborts.clear();
@@ -343,6 +350,7 @@ export class PluginDevWorkerHostProxy {
       case "invoke":
         if (msg.kind === "mcp-tool") void this.handleMcpToolInvoke(msg);
         else if (msg.kind === "worktree-setup-step") void this.handleSetupStepInvoke(msg);
+        else if (msg.kind === "search-provider") void this.handleSearchProviderInvoke(msg);
         else void this.invocation.run(msg.requestId, () => this.handleInvoke(msg));
         return true;
       case "invoke-cancel": {
@@ -489,10 +497,54 @@ export class PluginDevWorkerHostProxy {
     }
   }
 
+  /**
+   * Ask one quick switcher search provider (#13792). Cancellable like an
+   * `mcp-tool`: the provider's signal aborts on a matching `invoke-cancel`, and
+   * nothing is posted back after that. The answer is bounded and serialized
+   * here, in the plugin's process, so an oversized one costs this worker.
+   */
+  private async handleSearchProviderInvoke(
+    msg: Extract<PluginHostToWorkerMessage, { type: "invoke"; kind: "search-provider" }>
+  ): Promise<void> {
+    const controller = new AbortController();
+    this.mcpInvokeAborts.set(msg.requestId, controller);
+    const settle = (outcome: { ok: true; result: string } | { ok: false; error: string }): void => {
+      if (controller.signal.aborted || this.disposed) return;
+      this.post({ type: "invoke-result", requestId: msg.requestId, ...outcome });
+    };
+    try {
+      const provider = this.searchProviders.get(msg.providerId)?.provider;
+      if (!provider) throw new Error(`No search provider "${msg.providerId}" registered`);
+      const results: unknown = await provider(msg.query, {
+        mode: msg.context.mode,
+        limit: msg.context.limit,
+        signal: controller.signal,
+      });
+      const json = JSON.stringify(
+        Array.isArray(results) ? results.slice(0, msg.context.limit) : (results ?? null)
+      );
+      if (json === undefined) {
+        throw new Error("the provider returned a value that cannot be serialized to JSON");
+      }
+      if (Buffer.byteLength(json, "utf8") > SEARCH_PROVIDER_MAX_RESPONSE_BYTES) {
+        throw new Error(
+          `the provider's results are over the ${SEARCH_PROVIDER_MAX_RESPONSE_BYTES}-byte limit for one answer`
+        );
+      }
+      settle({ ok: true, result: json });
+    } catch (err) {
+      settle({ ok: false, error: formatErrorMessage(err, "search failed") });
+    } finally {
+      if (this.mcpInvokeAborts.get(msg.requestId) === controller) {
+        this.mcpInvokeAborts.delete(msg.requestId);
+      }
+    }
+  }
+
   private async handleInvoke(
     msg: Exclude<
       Extract<PluginHostToWorkerMessage, { type: "invoke" }>,
-      { kind: "mcp-tool" } | { kind: "worktree-setup-step" }
+      { kind: "mcp-tool" } | { kind: "worktree-setup-step" } | { kind: "search-provider" }
     >
   ): Promise<void> {
     const running = { cancelled: false };
@@ -1284,6 +1336,33 @@ export class PluginDevWorkerHostProxy {
           if (this.worktreeSetupSteps.get(stepId) !== binding) return;
           this.worktreeSetupSteps.delete(stepId);
           this.notify("unregisterWorktreeSetupStep", { stepId });
+        };
+        return Promise.resolve(dispose);
+      },
+      registerSearchProvider: (id: string, provider: PluginSearchProvider) => {
+        this.assertActivationOpen("registerSearchProvider");
+        if (typeof id !== "string" || id.length === 0) {
+          throw new Error(
+            `Plugin "${this.pluginId}" registerSearchProvider: id must be a non-empty string`
+          );
+        }
+        if (typeof provider !== "function") {
+          throw new Error(
+            `Plugin "${this.pluginId}" registerSearchProvider: provider must be a function`
+          );
+        }
+        const binding = { provider };
+        this.searchProviders.set(id, binding);
+        this.notify("registerSearchProvider", { providerId: id }, `searchProvider:${id}`);
+        let disposed = false;
+        const dispose = (): void => {
+          if (disposed) return;
+          disposed = true;
+          // Only while it is still the bound one: a later register on the same
+          // id replaced it, and unbinding then would drop the replacement.
+          if (this.searchProviders.get(id) !== binding) return;
+          this.searchProviders.delete(id);
+          this.notify("unregisterSearchProvider", { providerId: id });
         };
         return Promise.resolve(dispose);
       },

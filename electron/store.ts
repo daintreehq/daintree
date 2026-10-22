@@ -708,6 +708,15 @@ export interface StoreSchema {
   pluginNotificationSilences?: string[];
 
   /**
+   * Plugin search providers the user turned off in the quick switcher
+   * (#13792), as `{pluginId}.{provider id}` keys. One list serves both scopes:
+   * a project plugin's instance id already names its project, so its key is
+   * per project, and an installed plugin's is global. Same additive-key
+   * convention as above.
+   */
+  hiddenSearchProviders?: string[];
+
+  /**
    * Per-project presentation profiles (#13771): the levels the user set or
    * accepted for each built-in surface, and their answer to the repository's
    * `.daintree/presentation.json` suggestion. Read and written only through
@@ -1059,6 +1068,7 @@ const storeOptions = {
     projectFileEditorChoices: {},
     projectHiddenLaunchGroups: {},
     pluginNotificationSilences: [],
+    hiddenSearchProviders: [],
     projectPresentation: {},
     worktreeCustomTitles: {},
     projectAgentMcpEnablement: {},

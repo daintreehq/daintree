@@ -30,7 +30,10 @@ import type {
   PluginStorageScope,
   PluginRenderPdfOptions,
   PluginWorktreeSetupStepContext,
+  PluginSearchProvider,
+  PluginSearchResult,
 } from "../../../shared/types/plugin.js";
+import { SEARCH_PROVIDER_MAX_RESPONSE_BYTES } from "../../../shared/config/pluginSearchProviders.js";
 import type { FileDecoration, FileDecorationProviderImpl } from "../../../shared/types/forge.js";
 import type {
   ActionsGetParams,
@@ -89,6 +92,7 @@ import type {
   ProcessHandleRefParams,
   ProcessWriteParams,
   ProcessResizeParams,
+  SearchProviderRegistrationParams,
 } from "../../../shared/types/pluginDevWorker.js";
 import type { PluginDevWorkerHost } from "./PluginDevWorkerHost.js";
 import { parseWorkerToHostMessage } from "../../schemas/pluginDevWorker.js";
@@ -181,7 +185,26 @@ type InvokeTarget =
       args: Record<string, unknown>;
       caller: PluginMcpCaller;
     }
-  | { kind: "worktree-setup-step"; stepId: string; context: WorktreeSetupStepWireContext };
+  | { kind: "worktree-setup-step"; stepId: string; context: WorktreeSetupStepWireContext }
+  | {
+      kind: "search-provider";
+      providerId: string;
+      query: string;
+      context: { mode: "scoped" | "blended"; limit: number };
+    };
+
+/** A runtime search provider's answer, which the worker sends as one JSON string. */
+function parseWorkerSearchResult(result: unknown): unknown {
+  if (typeof result !== "string") {
+    throw new Error("plugin worker returned search results that are not serialized JSON");
+  }
+  if (Buffer.byteLength(result, "utf8") > SEARCH_PROVIDER_MAX_RESPONSE_BYTES) {
+    throw new Error(
+      `the search results are over the ${SEARCH_PROVIDER_MAX_RESPONSE_BYTES}-byte limit for one answer`
+    );
+  }
+  return JSON.parse(result) as unknown;
+}
 
 export interface PluginDevWorkerMainBridgeDeps {
   pluginId: string;
@@ -299,6 +322,10 @@ export class PluginDevWorkerMainBridge {
   /** Disposers for the worktree setup step handlers the worker bound, keyed by
    * step id. Retired with the generation like providers. */
   private readonly setupStepDisposers = new Map<string, () => void>();
+  /** Disposers for the quick switcher search providers the worker bound, keyed by
+   * provider id. Kept apart from {@link providerDisposers}: a decoration provider
+   * and a search provider may share an id. Retired with the generation too. */
+  private readonly searchProviderDisposers = new Map<string, () => void>();
   /** Live handles for processes the worker spawned via `host.process.spawn`,
    * keyed by the host-assigned handle id. The worker addresses `kill` /
    * `restart` / `onExit` / `onCrash` by id; all are killed when a generation is
@@ -433,6 +460,7 @@ export class PluginDevWorkerMainBridge {
       ...this.providerDisposers.values(),
       ...this.mcpRosterDisposers.values(),
       ...this.setupStepDisposers.values(),
+      ...this.searchProviderDisposers.values(),
     ]) {
       try {
         dispose();
@@ -443,6 +471,7 @@ export class PluginDevWorkerMainBridge {
     this.providerDisposers.clear();
     this.mcpRosterDisposers.clear();
     this.setupStepDisposers.clear();
+    this.searchProviderDisposers.clear();
   }
 
   /** Kill every process the worker spawned (the worker is going away — a fresh
@@ -1495,6 +1524,63 @@ export class PluginDevWorkerMainBridge {
         }
         return;
       }
+      case "registerSearchProvider": {
+        const { providerId } = params as SearchProviderRegistrationParams;
+        if (typeof providerId !== "string" || providerId.length === 0) {
+          throw new Error("registerSearchProvider: malformed provider id");
+        }
+        const generation = this.reloadGeneration;
+        // The function lives in the worker; this proxy asks it over the port and
+        // forwards the caller's signal, so a superseded query is cancelled there.
+        const proxy: PluginSearchProvider = (query, context) => {
+          // Fenced to the generation that registered it, as MCP tools are: a
+          // replacement worker hasn't bound its own provider yet.
+          if (generation !== this.reloadGeneration) {
+            return Promise.reject(
+              new Error(`Plugin "${this.pluginId}" worker restarted before the search could run`)
+            );
+          }
+          return this.invoke(
+            {
+              kind: "search-provider",
+              providerId,
+              query,
+              context: { mode: context.mode, limit: context.limit },
+            },
+            context.signal
+          ).then(parseWorkerSearchResult) as Promise<PluginSearchResult[]>;
+        };
+        const dispose = await this.host.registerSearchProvider(providerId, proxy);
+        if (this.disposed || generation !== this.reloadGeneration) {
+          try {
+            dispose();
+          } catch {
+            // best-effort
+          }
+          return;
+        }
+        const prior = this.searchProviderDisposers.get(providerId);
+        this.searchProviderDisposers.set(providerId, dispose);
+        // The registry's own disposer is identity-checked, so releasing the
+        // superseded binding after the swap can't drop the new one.
+        if (prior) {
+          try {
+            prior();
+          } catch {
+            // best-effort
+          }
+        }
+        return;
+      }
+      case "unregisterSearchProvider": {
+        const { providerId } = params as SearchProviderRegistrationParams;
+        const dispose = this.searchProviderDisposers.get(providerId);
+        if (dispose) {
+          this.searchProviderDisposers.delete(providerId);
+          dispose();
+        }
+        return;
+      }
       case "mcp.unregisterTools": {
         const { endpointId } = params as UnregisterMcpToolsParams;
         const dispose = this.mcpRosterDisposers.get(endpointId);
@@ -1795,6 +1881,15 @@ export class PluginDevWorkerMainBridge {
           namespacedId: target.namespacedId,
           resolvedPath: target.resolvedPath,
           args: target.args,
+        });
+      } else if (target.kind === "search-provider") {
+        sent = this.workerHost.send({
+          type: "invoke",
+          requestId,
+          kind: "search-provider",
+          providerId: target.providerId,
+          query: target.query,
+          context: target.context,
         });
       } else if (target.kind === "handler") {
         sent = this.workerHost.send({

@@ -300,6 +300,16 @@ export type {
   FileDecorationContribution,
 } from "./forge.js";
 
+// ── Quick switcher search providers (#13792) ────────────────────────
+
+export type {
+  PluginSearchProviderContribution,
+  PluginSearchResultTarget,
+  PluginSearchResult,
+  PluginSearchContext,
+  PluginSearchProvider,
+} from "./plugin.js";
+
 // ── File editor contract (#12323, #13809) ───────────────────────────
 // The manifest shape and the host-owned document a `location: "fileEditor"`
 // view receives as `PanelViewProps.fileDocument`.

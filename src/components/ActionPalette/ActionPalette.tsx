@@ -13,13 +13,8 @@ import { useEffectiveCombo } from "@/hooks/useKeybinding";
 import { useActionPrefsStore } from "@/store/actionPrefsStore";
 import { usePaletteStore, type PaletteId } from "@/store/paletteStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
-import {
-  UI_PALETTE_ENTER_DURATION,
-  UI_PALETTE_EXIT_DURATION,
-  UI_ENTER_EASING,
-  UI_EXIT_EASING,
-} from "@/lib/animationUtils";
-import { cn } from "@/lib/utils";
+import { UI_PALETTE_EXIT_DURATION } from "@/lib/animationUtils";
+import { PaletteScopeChip } from "@/components/ui/PaletteScopeChip";
 import { isMac } from "@/lib/platform";
 import { parseChord } from "@/lib/kbdShortcut";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
@@ -117,36 +112,6 @@ function PrefixDiscoverabilityRow() {
         </span>
       ))}
     </div>
-  );
-}
-
-type ModeChipProps = {
-  label: string;
-  isVisible: boolean;
-  id?: string;
-};
-
-function ModeChip({ label, isVisible, id }: ModeChipProps) {
-  return (
-    <span
-      id={id}
-      role="status"
-      aria-live="polite"
-      className={cn(
-        "inline-flex items-center gap-1 px-1.5 py-0.5 rounded-[var(--radius-sm)]",
-        "bg-overlay-subtle text-xs text-text-secondary select-none shrink-0 origin-left",
-        "transition-[opacity,scale] motion-reduce:transition-opacity motion-reduce:scale-100",
-        isVisible ? "opacity-100 scale-100" : "opacity-0 scale-95"
-      )}
-      style={{
-        transitionDuration: isVisible
-          ? `${UI_PALETTE_ENTER_DURATION}ms`
-          : `${UI_PALETTE_EXIT_DURATION}ms`,
-        transitionTimingFunction: isVisible ? UI_ENTER_EASING : UI_EXIT_EASING,
-      }}
-    >
-      {label}
-    </span>
   );
 }
 
@@ -606,7 +571,9 @@ export function ActionPalette({
     [argPrompt, argBack, close]
   );
 
-  const chipNode = chipShouldRender ? <ModeChip label={chipLabel} isVisible={chipVisible} /> : null;
+  const chipNode = chipShouldRender ? (
+    <PaletteScopeChip label={chipLabel} isVisible={chipVisible} />
+  ) : null;
 
   return (
     <SearchablePalette<ActionPaletteItemType>

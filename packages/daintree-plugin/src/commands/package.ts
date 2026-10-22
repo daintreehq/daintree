@@ -85,6 +85,7 @@ function requiredManifestPaths(manifest: MinimalManifest): string[] {
     ...(manifest.contributes?.panels ?? []),
     ...(manifest.contributes?.toolbarButtons ?? []),
     ...(manifest.contributes?.launchEntries ?? []),
+    ...(manifest.contributes?.searchProviders ?? []),
     ...(manifest.contributes?.processTools ?? []),
   ]) {
     if (isPluginCustomIconRef(entry.iconId)) add(entry.iconId);
@@ -120,6 +121,7 @@ interface MinimalManifest {
     panels?: Array<{ iconId?: string }>;
     toolbarButtons?: Array<{ iconId?: string }>;
     launchEntries?: Array<{ iconId?: string }>;
+    searchProviders?: Array<{ iconId?: string }>;
     processTools?: Array<{ iconId?: string }>;
   };
 }

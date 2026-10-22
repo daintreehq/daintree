@@ -1899,6 +1899,22 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("../plugin.js").PluginRuntimeStatus[];
   };
+  "plugin:search-provider-shown-set": {
+    args: [key: string, shown: boolean];
+    result: import("../plugin.js").PluginSearchProviderInfo[];
+  };
+  "plugin:search-providers-cancel": {
+    args: [];
+    result: void;
+  };
+  "plugin:search-providers-get": {
+    args: [];
+    result: import("../plugin.js").PluginSearchProviderInfo[];
+  };
+  "plugin:search-providers-query": {
+    args: [request: import("../plugin.js").PluginSearchQueryRequest];
+    result: import("../plugin.js").PluginSearchQueryResponse;
+  };
   "plugin:set-audit-enabled": {
     args: [enabled: boolean];
     result: import("./pluginAudit.js").PluginAuditConfig;
