@@ -771,6 +771,7 @@ describe("worktree.openFileBrowserPanel", () => {
       "\\\\server\\share",
       "C:\\repo",
       "C:content",
+      "./C:/repo",
       "../other",
       "a/../../b",
       "a\\..\\b",
@@ -885,6 +886,18 @@ describe("worktree.openFileBrowserPanel", () => {
         expect(addPanelMock).not.toHaveBeenCalled();
       }
     );
+
+    it.each(["", "."])("rejects a traversal reveal under the base root %j", async (rootPath) => {
+      seedWorktree("wt-1");
+      panelsMock.byId = [
+        browserPanel("fb-existing", { worktreeId: "wt-1", browserRootPath: "docs" }),
+      ];
+
+      await expect(run({ rootPath, revealPath: "../outside.txt" })).rejects.toThrow(
+        /outside the root/
+      );
+      expect(setFileBrowserViewMock).not.toHaveBeenCalled();
+    });
 
     it("accepts a relative root with no worktree, against the workspace folder", async () => {
       await getAction().run({ rootPath: "content" }, {

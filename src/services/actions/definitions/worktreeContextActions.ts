@@ -344,7 +344,13 @@ function resolveFileBrowserRoot(args: FileBrowserPanelArgs): string | undefined 
   if (segments.includes("..")) {
     throw new Error(`Root must be inside the worktree: ${raw}`);
   }
-  return segments.join("/");
+  const root = segments.join("/");
+  // Again after dropping `.` segments: `./C:/x` only becomes drive-qualified
+  // once the dot is gone, and the listing refuses such a path.
+  if (/^[A-Za-z]:/.test(root)) {
+    throw new Error(`Root must be inside the worktree, not an absolute path: ${raw}`);
+  }
+  return root;
 }
 
 /** Selection and expansion state for a requested reveal, or nothing to reveal. */
@@ -843,14 +849,16 @@ export function registerWorktreeContextActions(
         // Settled before anything is selected or focused: a request that can't
         // be honored must not have already moved the user to another worktree.
         // `..` is refused outright since a prefix test would pass `src/../x`.
+        // Tested on presence, not truthiness: an explicit base root (`""`)
+        // contains everything except a traversal.
         if (
-          rootPath &&
+          rootPath !== undefined &&
           reveal &&
           (reveal.browserSelectedPath.split("/").includes("..") ||
             !isWithinBrowserRoot(reveal.browserSelectedPath, rootPath))
         ) {
           throw new Error(
-            `Reveal path ${reveal.browserSelectedPath} is outside the root ${rootPath}`
+            `Reveal path ${reveal.browserSelectedPath} is outside the root ${rootPath || "."}`
           );
         }
         const foreground = isForegroundDispatch(ctx.dispatchSource);
