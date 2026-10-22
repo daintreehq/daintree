@@ -65,7 +65,7 @@ import {
   groupPluginToolbarButtons,
   type PluginTrayGroup,
 } from "./PluginTrayButton";
-import { PluginToolbarPopover } from "./PluginToolbarPopover";
+import { PluginToolbarPopover, closePluginToolbarPopoverIfHidden } from "./PluginToolbarPopover";
 import { PopoverAnchor } from "@/components/ui/popover";
 import { usePluginToolbarPopoverStore } from "@/store/pluginToolbarPopoverStore";
 import {
@@ -313,6 +313,20 @@ interface OverflowMenuProps {
   branchRow?: { label: string; copyLabel: string; copyValue: string } | null;
 }
 
+/**
+ * The focusable control of a toolbar button that is on the toolbar right now —
+ * not one an overflow wrapper is holding hidden for measurement.
+ */
+function visibleToolbarButton(id: string): HTMLElement | null {
+  for (const wrapper of document.querySelectorAll<HTMLElement>("[data-toolbar-button-id]")) {
+    if (wrapper.dataset.toolbarButtonId !== id || wrapper.getAttribute("aria-hidden") === "true") {
+      continue;
+    }
+    return wrapper.querySelector<HTMLElement>("[data-toolbar-item]");
+  }
+  return null;
+}
+
 // Overflow `…` menu. A component (not just a render helper) so the trigger can
 // stay mounted across the empty↔non-empty transition and animate its entry /
 // exit via CSS (issue #9821) while `open` stays controlled — avoiding React's
@@ -389,11 +403,14 @@ function OverflowMenu({
     if (isEmpty) setOpen(false);
   }, [isEmpty]);
   // The `…` button hides with nothing to hold, and a plugin popover hanging off
-  // it would be left pointing at nothing.
+  // it would be left pointing at nothing. What it held is back on the toolbar,
+  // so focus goes to the button itself, or to the tray it came out of.
   useEffect(() => {
     if (!isEmpty) return;
-    const { opening, close } = usePluginToolbarPopoverStore.getState();
-    if (opening?.origin === popoverOrigin) close(opening.seq);
+    closePluginToolbarPopoverIfHidden(
+      (opening) => opening.origin === popoverOrigin,
+      (opening) => visibleToolbarButton(opening.buttonId) ?? visibleToolbarButton("plugin-tray")
+    );
   }, [isEmpty, popoverOrigin]);
   // Set in onPointerDownOutside, read in onCloseAutoFocus. Suppresses focus
   // restoration for pointer dismissals so the ellipsis button doesn't keep its
@@ -478,7 +495,9 @@ function OverflowMenu({
           onCloseAutoFocus={(e) => {
             const pendingPopover = pendingPopoverRef.current;
             pendingPopoverRef.current = null;
-            if (pendingPopover !== null) {
+            // Not if the menu emptied while it closed: the `…` button it would
+            // hang off is gone, and the row's button is back on the toolbar.
+            if (pendingPopover !== null && !isEmpty) {
               // The popover takes focus into itself; returning it to the button
               // first would only flash a ring on the way.
               e.preventDefault();
@@ -2285,6 +2304,26 @@ export function Toolbar({
       }
       setCopyTreeOpen(false);
     }
+    // A plugin popover is portaled too. It hangs off a promoted button or the
+    // tray, so it closes with whichever one moved, and focus goes where the
+    // command lives now: the `…` trigger on the side that took it (see the
+    // copy-tree note above for why that side).
+    const hiddenIds: ReadonlySet<string> = overflowSet;
+    const rightHiddenIds: readonly string[] = measuredRightOverflow;
+    closePluginToolbarPopoverIfHidden(
+      (opening) =>
+        (opening.origin === "button" && hiddenIds.has(opening.buttonId)) ||
+        (opening.origin === "tray" && hiddenIds.has("plugin-tray")),
+      (opening) => {
+        const id = opening.origin === "tray" ? "plugin-tray" : opening.buttonId;
+        const side = rightHiddenIds.includes(id) ? "right" : "left";
+        return (
+          toolbarRef.current?.querySelector<HTMLElement>(
+            `[data-toolbar-overflow-trigger][data-toolbar-overflow-side="${side}"][data-visible="true"]`
+          ) ?? null
+        );
+      }
+    );
   }, [measuredLeftOverflow, measuredRightOverflow, demotedIds, copyTreeOnRight]);
 
   const renderGroupedButtons = (

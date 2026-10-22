@@ -17,12 +17,22 @@ export interface PluginToolbarPopoverOpening {
 
 interface PluginToolbarPopoverState {
   opening: PluginToolbarPopoverOpening | null;
+  /**
+   * Where focus goes when the popover closes, in place of the control it hangs
+   * off — set by a close that is hiding that control. Spent by the close.
+   */
+  closeFocusTarget: HTMLElement | null;
   /** Open `buttonId`'s popover off `origin`, replacing whichever was open. */
   open: (buttonId: string, origin: PluginToolbarPopoverOrigin) => void;
-  /** Close the open popover — only if it is still opening `seq`, when given. */
-  close: (seq?: number) => void;
+  /**
+   * Close the open popover — only if it is still opening `seq`, when given —
+   * optionally handing focus to `focusTarget` instead of its own control.
+   */
+  close: (seq?: number, focusTarget?: HTMLElement | null) => void;
   /** Close the open popover if its button is no longer contributed. */
   retain: (buttonIds: ReadonlySet<string>) => void;
+  /** The pending {@link closeFocusTarget}, cleared as it is read. */
+  takeCloseFocusTarget: () => HTMLElement | null;
 }
 
 let nextSeq = 1;
@@ -34,15 +44,22 @@ let nextSeq = 1;
  */
 export const usePluginToolbarPopoverStore = create<PluginToolbarPopoverState>((set, get) => ({
   opening: null,
-  open: (buttonId, origin) => set({ opening: { buttonId, origin, seq: nextSeq++ } }),
-  close: (seq) => {
+  closeFocusTarget: null,
+  open: (buttonId, origin) =>
+    set({ opening: { buttonId, origin, seq: nextSeq++ }, closeFocusTarget: null }),
+  close: (seq, focusTarget = null) => {
     const { opening } = get();
     if (opening === null) return;
     if (seq !== undefined && opening.seq !== seq) return;
-    set({ opening: null });
+    set({ opening: null, closeFocusTarget: focusTarget });
   },
   retain: (buttonIds) => {
     const { opening } = get();
     if (opening !== null && !buttonIds.has(opening.buttonId)) set({ opening: null });
+  },
+  takeCloseFocusTarget: () => {
+    const { closeFocusTarget } = get();
+    if (closeFocusTarget !== null) set({ closeFocusTarget: null });
+    return closeFocusTarget;
   },
 }));

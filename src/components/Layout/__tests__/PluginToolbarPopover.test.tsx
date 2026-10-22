@@ -69,6 +69,7 @@ vi.mock("@/components/Plugin/PluginHostedView", () => ({
 
 const { PluginToolbarButton, PluginTrayButton } = await import("../PluginTrayButton");
 const { usePluginToolbarPopoverStore } = await import("@/store/pluginToolbarPopoverStore");
+const { closePluginToolbarPopoverIfHidden } = await import("../PluginToolbarPopover");
 
 const KIND_ID = "acme.inbox.inbox";
 
@@ -115,6 +116,18 @@ async function flush() {
   await act(async () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
   });
+}
+
+/** A real mouse press and release, as Chromium orders it. */
+async function pointerClick(target: HTMLElement) {
+  await act(async () => {
+    fireEvent.pointerDown(target, { pointerType: "mouse", button: 0, pointerId: 1 });
+    fireEvent.mouseDown(target, { button: 0 });
+    fireEvent.pointerUp(target, { pointerType: "mouse", button: 0, pointerId: 1 });
+    fireEvent.mouseUp(target, { button: 0 });
+    fireEvent.click(target, { button: 0, detail: 1 });
+  });
+  await flush();
 }
 
 async function openTrayRow(trayButton: HTMLElement, rowName: string) {
@@ -289,6 +302,59 @@ describe("plugin toolbar popover (#13784)", () => {
     expect(popovers()).toHaveLength(1);
     expect(screen.queryByTestId("plugin-view")).toBeNull();
     expect(screen.getByText("Inbox isn't available")).toBeTruthy();
+  });
+
+  it("hands focus back to a promoted button when the view closes it from a click", async () => {
+    // The button sits inside its own context menu, whose focus policy is the
+    // nearer one; the popover's must still be the one that knows the button.
+    render(
+      <PluginToolbarButton pluginId={"acme.inbox.open"} config={popoverButton("acme.inbox.open")} />
+    );
+    const button = screen.getByRole("button", { name: "Inbox" });
+    await act(async () => {
+      fireEvent.click(button);
+    });
+    await pointerClick(screen.getByRole("button", { name: "Done" }));
+    expect(popovers()).toHaveLength(0);
+    expect(document.activeElement).toBe(button);
+  });
+
+  it("moves focus off a control being hidden to its successor, when focus was inside", async () => {
+    render(
+      <>
+        <PluginToolbarButton
+          pluginId={"acme.inbox.open"}
+          config={popoverButton("acme.inbox.open")}
+        />
+        <button type="button">More</button>
+      </>
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Inbox" }));
+    });
+    await act(async () => {
+      screen.getByRole("button", { name: "Done" }).focus();
+    });
+    const successor = screen.getByRole("button", { name: "More" });
+
+    // Not this button's opening: nothing happens.
+    act(() => {
+      closePluginToolbarPopoverIfHidden(
+        (opening) => opening.buttonId === "acme.inbox.other",
+        () => successor
+      );
+    });
+    expect(popovers()).toHaveLength(1);
+
+    act(() => {
+      closePluginToolbarPopoverIfHidden(
+        (opening) => opening.buttonId === "acme.inbox.open",
+        () => successor
+      );
+    });
+    await flush();
+    expect(popovers()).toHaveLength(0);
+    expect(document.activeElement).toBe(successor);
   });
 
   it("closes when its button goes away, and ignores a close kept from an earlier opening", () => {

@@ -16,6 +16,30 @@ import { keepOpenBehindAppDialog, yieldEscapeToFocusedDialog } from "./dockPopov
 
 type PopoverButtonConfig = ToolbarButtonConfig & { popover: ToolbarButtonPopoverConfig };
 
+/** Marks the popover's content, so a close can tell whether focus was inside it. */
+const POPOVER_CONTENT_ATTR = "data-plugin-toolbar-popover";
+
+/**
+ * Close the open plugin popover if the toolbar control it hangs off is about to
+ * be hidden — moved into overflow, or the `…` button emptied. Its portalled
+ * content would otherwise stay on screen, pinned to a control nobody can see.
+ *
+ * The hidden control can't take focus back either, so when focus was inside
+ * the popover it goes to `successor` — wherever the command lives now —
+ * instead of falling to `document.body`.
+ */
+export function closePluginToolbarPopoverIfHidden(
+  isHidden: (opening: PluginToolbarPopoverOpening) => boolean,
+  successor: (opening: PluginToolbarPopoverOpening) => HTMLElement | null
+): void {
+  const { opening, close } = usePluginToolbarPopoverStore.getState();
+  if (opening === null || !isHidden(opening)) return;
+  const active = document.activeElement;
+  const focusInside =
+    active instanceof Element && active.closest(`[${POPOVER_CONTENT_ATTR}]`) !== null;
+  close(opening.seq, focusInside ? successor(opening) : null);
+}
+
 function isPopoverButton(config: ToolbarButtonConfig | undefined): config is PopoverButtonConfig {
   return config?.popover !== undefined;
 }
@@ -77,16 +101,28 @@ export function PluginToolbarPopover({
         align="end"
         aria-label={shownConfig?.label}
         data-testid="plugin-toolbar-popover"
+        {...{ [POPOVER_CONTENT_ATTR]: "" }}
         // The forge dropdowns' box, so a plugin's inbox sits beside the
         // built-in ones at the same size; clamped to the room the anchor has.
         className="flex h-[min(500px,var(--radix-popover-content-available-height))] w-[min(450px,var(--radix-popover-content-available-width))] flex-col p-0"
         onInteractOutside={keepOpenBehindAppDialog}
         onEscapeKeyDown={yieldEscapeToFocusedDialog}
         onCloseAutoFocus={(event) => {
+          const { opening, takeCloseFocusTarget } = usePluginToolbarPopoverStore.getState();
+          const successor = takeCloseFocusTarget();
           // Replaced by another button's popover, which holds focus now.
           // Handing it back to this one's control would read there as focus
           // leaving, and close that one too.
-          if (usePluginToolbarPopoverStore.getState().opening !== null) event.preventDefault();
+          if (opening !== null) {
+            event.preventDefault();
+            return;
+          }
+          // Closed because its control is being hidden; see
+          // `closePluginToolbarPopoverIfHidden`.
+          if (successor?.isConnected) {
+            event.preventDefault();
+            successor.focus({ preventScroll: true });
+          }
         }}
       >
         {shown !== null && isPopoverButton(shownConfig) && (

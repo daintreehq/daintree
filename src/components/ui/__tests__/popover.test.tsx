@@ -241,6 +241,28 @@ describe("PopoverAnchor restoreFocus", () => {
     expect(document.activeElement).toBe(getByRole("button", { name: "Menu" }));
   });
 
+  it("does not pull focus back from wherever an outside focus took it", async () => {
+    const { getByRole } = render(
+      <>
+        <AnchoredPopover restoreFocus />
+        <input aria-label="Elsewhere" />
+      </>
+    );
+    await act(async () => {
+      fireEvent.click(getByRole("button", { name: "Menu" }));
+    });
+    const elsewhere = getByRole("textbox", { name: "Elsewhere" });
+    // A palette opened by shortcut, say: focus leaves without a press.
+    await act(async () => {
+      elsewhere.focus();
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(document.querySelector("[data-radix-popper-content-wrapper]")).toBeNull();
+    expect(document.activeElement).toBe(elsewhere);
+  });
+
   it("leaves an anchor that did not opt in alone", async () => {
     const { getByRole } = render(<AnchoredPopover restoreFocus={false} />);
     await openThenEscape(getByRole);
