@@ -77,7 +77,12 @@ export function projectToolbarOverlayFor(
   profile: ProfileForView
 ): ProjectToolbarOverlay {
   if (!profileAppliesTo(project, profile)) {
-    return { available: false, active: false, hasOverrides: false, promotedPluginButtons: NO_PROMOTED };
+    return {
+      available: false,
+      active: false,
+      hasOverrides: false,
+      promotedPluginButtons: NO_PROMOTED,
+    };
   }
   const toolbar = withToolbarDefaults(profile);
   const active = isProjectToolbarActive(toolbar);
@@ -126,7 +131,15 @@ export function useResolvedPresentation(): ResolvedPresentation {
         useProjectToolbar,
         promotedPluginButtons,
       }),
-    [projectId, gitBacked, levels, loaded, profileProjectId, useProjectToolbar, promotedPluginButtons]
+    [
+      projectId,
+      gitBacked,
+      levels,
+      loaded,
+      profileProjectId,
+      useProjectToolbar,
+      promotedPluginButtons,
+    ]
   );
 }
 

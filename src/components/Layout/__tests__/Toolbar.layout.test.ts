@@ -108,8 +108,13 @@ describe("Toolbar layout — issue #2584 project switcher collision", () => {
     it("builds the rows from the side lists before the visibility filter", () => {
       // Built from `effective*Buttons` instead, a hidden button would drop out of
       // the one menu that exists to bring it back.
+      // The right list adds this project's tray-only plugin buttons in project
+      // mode (#13783), on top of the same pre-filter side list.
       expect(source).toMatch(
-        /buildToolbarVisibilityMenuRows\(\s*positionedLeftButtons,\s*positionedRightButtons/
+        /buildToolbarVisibilityMenuRows\(\s*positionedLeftButtons,\s*menuRightButtons/
+      );
+      expect(source).toMatch(
+        /const menuRightButtons = useMemo\([\s\S]*?return positionedRightButtons;/
       );
     });
 

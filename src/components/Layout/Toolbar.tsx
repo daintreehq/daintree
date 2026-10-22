@@ -36,7 +36,10 @@ import {
 } from "./toolbarButtonMetadata";
 import { getToolbarDividerAfterIds, orderToolbarButtonsByGroup } from "./toolbarButtonGrouping";
 import { ToolbarContextMenuItems } from "./ToolbarContextMenuItems";
-import { ToolbarButtonsContextMenu } from "./ToolbarButtonsContextMenu";
+import {
+  ToolbarButtonsContextMenu,
+  type ProjectToolbarMenuState,
+} from "./ToolbarButtonsContextMenu";
 import {
   buildToolbarVisibilityMenuRows,
   canListToolbarButton,
@@ -89,7 +92,9 @@ import {
 import {
   MAX_PROMOTED_PLUGIN_BUTTONS,
   PRESENTATION_FEATURE_BY_TOOLBAR_BUTTON,
+  presentationFeatureForToolbarButton,
 } from "@shared/config/presentationProfile";
+import { isPluginToolbarButtonIdShape } from "@shared/types/toolbar";
 import { useProjectPresentationStore } from "@/store/projectPresentationStore";
 import { copyWithToast } from "@/lib/copyWithToast";
 import type { ToolbarButtonConfig } from "@shared/config/toolbarButtonRegistry";
@@ -1842,16 +1847,14 @@ export function Toolbar({
     if (!projectToolbarMode) return appPinnedButtons;
     const next = { ...appPinnedButtons };
     for (const [buttonId, feature] of PRESENTATION_FEATURE_BY_TOOLBAR_BUTTON) {
-      if (profileLevels[feature] === "shown") next[buttonId as AnyToolbarButtonId] = true;
+      if (profileLevels[feature] === "shown") next[buttonId] = true;
     }
-    for (const id of toolbarOverlay.promotedPluginButtons) next[id as AnyToolbarButtonId] = true;
+    for (const id of toolbarOverlay.promotedPluginButtons) {
+      // Plugin button ids are `{instanceKey}.{id}`; main only stores those.
+      if (isPluginToolbarButtonIdShape(id)) next[id] = true;
+    }
     return next;
-  }, [
-    projectToolbarMode,
-    appPinnedButtons,
-    profileLevels,
-    toolbarOverlay.promotedPluginButtons,
-  ]);
+  }, [projectToolbarMode, appPinnedButtons, profileLevels, toolbarOverlay.promotedPluginButtons]);
 
   // An agent the user explicitly pinned but that sits in neither side array
   // still has to render (#11680). Two ways to get here, and neither can be
@@ -2068,13 +2071,13 @@ export function Toolbar({
           .filter(([, feature]) => presentation[feature] === "demoted")
           .map(([buttonId]) => buttonId)
           .join(" ");
-  const demotedIds = useMemo<ReadonlySet<AnyToolbarButtonId>>(
-    () =>
-      demotedKey === ""
-        ? NO_DEMOTED_IDS
-        : new Set(demotedKey.split(" ") as AnyToolbarButtonId[]),
-    [demotedKey]
-  );
+  const demotedIds = useMemo<ReadonlySet<AnyToolbarButtonId>>(() => {
+    if (demotedKey === "") return NO_DEMOTED_IDS;
+    const demoted = new Set(demotedKey.split(" "));
+    return new Set(
+      [...PRESENTATION_FEATURE_BY_TOOLBAR_BUTTON.keys()].filter((id) => demoted.has(id))
+    );
+  }, [demotedKey]);
   const measuredLeftIds = useMemo(
     () => availableLeftIds.filter((id) => !demotedIds.has(id)),
     [availableLeftIds, demotedIds]
@@ -2346,7 +2349,12 @@ export function Toolbar({
     return trayOnly.length === 0
       ? positionedRightButtons
       : [...positionedRightButtons, ...trayOnly];
-  }, [projectToolbarMode, positionedLeftButtons, positionedRightButtons, ownProjectPluginButtonIds]);
+  }, [
+    projectToolbarMode,
+    positionedLeftButtons,
+    positionedRightButtons,
+    ownProjectPluginButtonIds,
+  ]);
 
   // Rows for the empty-space menu (#12355), built from the side lists before
   // the visibility filter so a hidden button still has one.
@@ -2386,7 +2394,7 @@ export function Toolbar({
     const ownPlugins = new Set<string>(ownProjectPluginButtonIds);
     const promoted = new Set(toolbarOverlay.promotedPluginButtons);
     const toProjectRow = (row: ToolbarVisibilityMenuRow): ToolbarVisibilityMenuRow => {
-      const feature = PRESENTATION_FEATURE_BY_TOOLBAR_BUTTON.get(row.id);
+      const feature = presentationFeatureForToolbarButton(row.id);
       if (feature !== undefined) {
         const level = presentation[feature];
         return { ...row, checked: row.checked && level !== "demoted" && level !== "hidden" };
@@ -2417,7 +2425,7 @@ export function Toolbar({
     (buttonId: AnyToolbarButtonId, side: ToolbarSide, onToolbar: boolean) => {
       if (projectToolbarMode) {
         // Never falls through to an app-wide setter below.
-        const feature = PRESENTATION_FEATURE_BY_TOOLBAR_BUTTON.get(buttonId);
+        const feature = presentationFeatureForToolbarButton(buttonId);
         if (feature !== undefined) {
           // An explicit "shown" keeps the button on this project's toolbar
           // even where it is off app-wide.
@@ -2716,6 +2724,22 @@ export function Toolbar({
     </ContextMenuTrigger>
   );
 
+  const projectToolbarMenu: ProjectToolbarMenuState | null =
+    toolbarOverlay.available && currentProject !== null
+      ? {
+          active: toolbarOverlay.active,
+          onToggle: (active) => void setProjectToolbarEnabled(active),
+          branchChip:
+            toolbarOverlay.active && presentation.branchChip !== "hidden"
+              ? {
+                  checked: presentation.branchChip === "shown",
+                  onToggle: (shown) =>
+                    void setPresentationLevel("branchChip", shown ? "shown" : "demoted"),
+                }
+              : null,
+        }
+      : null;
+
   // Static per view: a project view is bound to one host for its life.
   const remoteWindow = getViewHostId() !== null;
 
@@ -2727,22 +2751,7 @@ export function Toolbar({
         <ToolbarButtonsContextMenu
           rows={toolbarMenuRows}
           onToggle={handleToolbarMenuToggle}
-          projectToolbar={
-            toolbarOverlay.available && currentProject !== null
-              ? {
-                  active: toolbarOverlay.active,
-                  onToggle: (active) => void setProjectToolbarEnabled(active),
-                  branchChip:
-                    toolbarOverlay.active && presentation.branchChip !== "hidden"
-                      ? {
-                          checked: presentation.branchChip === "shown",
-                          onToggle: (shown) =>
-                            void setPresentationLevel("branchChip", shown ? "shown" : "demoted"),
-                        }
-                      : null,
-                }
-              : null
-          }
+          projectToolbar={projectToolbarMenu}
         >
           <div
             ref={toolbarRef}

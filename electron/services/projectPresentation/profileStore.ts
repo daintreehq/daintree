@@ -126,7 +126,8 @@ function parseEntry(projectId: string, value: unknown): StoredProjectPresentatio
   return {
     levels: parsePresentationLevels(entry.levels),
     suggestionAnswers: parseAnswers(entry.suggestionAnswers),
-    useProjectToolbar: typeof entry.useProjectToolbar === "boolean" ? entry.useProjectToolbar : null,
+    useProjectToolbar:
+      typeof entry.useProjectToolbar === "boolean" ? entry.useProjectToolbar : null,
     promotedPluginButtons: parsePromoted(projectId, entry.promotedPluginButtons),
     revision: parseRevision(entry.revision),
   };

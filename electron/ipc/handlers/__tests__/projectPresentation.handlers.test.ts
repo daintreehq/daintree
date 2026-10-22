@@ -275,7 +275,9 @@ describe("project toolbar ops (#13783)", () => {
     expect(off.levels).toEqual({ copyTree: "demoted" });
     await expect(invoke("project-presentation:set-toolbar-enabled", "no")).rejects.toThrow();
 
-    const reset = (await invoke("project-presentation:reset-toolbar")) as ProjectPresentationSnapshot;
+    const reset = (await invoke(
+      "project-presentation:reset-toolbar"
+    )) as ProjectPresentationSnapshot;
     expect(reset.levels).toEqual({});
     expect(reset.useProjectToolbar).toBeNull();
   });

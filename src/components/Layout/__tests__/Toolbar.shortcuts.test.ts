@@ -324,7 +324,7 @@ describe("Toolbar shortcut tooltips — issue #3443", () => {
       // belongs in it — asserted against its neighbours rather than as a
       // standalone literal, so deleting the effect fails here too.
       const evictionEffect = source.match(
-        /Close open dropdowns when their buttons move into overflow[\s\S]*?\}, \[measuredLeftOverflow, measuredRightOverflow, demotedIds\]\);/
+        /Close open dropdowns when their buttons move into overflow[\s\S]*?\}, \[measuredLeftOverflow, measuredRightOverflow, demotedIds[^\]]*\]\);/
       );
       expect(evictionEffect).not.toBeNull();
       expect(evictionEffect![0]).toContain('overflowSet.has("notification-center")');

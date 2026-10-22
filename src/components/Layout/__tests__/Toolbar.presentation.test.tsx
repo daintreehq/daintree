@@ -178,7 +178,10 @@ describe("Toolbar items under the project's toolbar (#13783)", () => {
   it("explicitly shown: keeps a button on this project's toolbar while it's off app-wide", async () => {
     act(() => {
       useToolbarPreferencesStore.setState((state) => ({
-        layout: { ...state.layout, pinnedButtons: { ...state.layout.pinnedButtons, "resume-sessions": false }, },
+        layout: {
+          ...state.layout,
+          pinnedButtons: { ...state.layout.pinnedButtons, "resume-sessions": false },
+        },
       }));
     });
     await settle();
@@ -187,7 +190,9 @@ describe("Toolbar items under the project's toolbar (#13783)", () => {
     await applyProfile({ resumeSessions: "shown" });
     expect(resumeSlot()?.getAttribute("aria-hidden")).toBeNull();
     // The app-wide pin is untouched: other projects still go without it.
-    expect(useToolbarPreferencesStore.getState().layout.pinnedButtons["resume-sessions"]).toBe(false);
+    expect(useToolbarPreferencesStore.getState().layout.pinnedButtons["resume-sessions"]).toBe(
+      false
+    );
 
     await applyProfile({ resumeSessions: "shown" }, false);
     expect(resumeSlot()).toBeNull();

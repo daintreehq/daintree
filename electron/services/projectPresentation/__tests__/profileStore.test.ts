@@ -264,9 +264,10 @@ describe("project toolbar (#13783)", () => {
       own(3),
     ]);
     expect(() => setProjectPluginButtonPromoted(PROJECT_A, own(4), true)).toThrow(/at most 3/);
-    expect(
-      setProjectPluginButtonPromoted(PROJECT_A, own(2), false).promotedPluginButtons
-    ).toEqual([own(1), own(3)]);
+    expect(setProjectPluginButtonPromoted(PROJECT_A, own(2), false).promotedPluginButtons).toEqual([
+      own(1),
+      own(3),
+    ]);
   });
 
   it("reads a hand-edited list deduped, own-project only and capped", () => {

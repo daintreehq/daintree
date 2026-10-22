@@ -71,7 +71,6 @@ export function PresentationFeaturesSection({ isOpen }: { isOpen: boolean }) {
   // user made in another window.
   const applies = project != null && loaded && profileProjectId === project.id;
 
-
   return (
     <SettingsSection
       id="project-features"

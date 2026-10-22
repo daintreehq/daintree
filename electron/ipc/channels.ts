@@ -1290,7 +1290,8 @@ export const CHANNELS = {
   PROJECT_PRESENTATION_SET_LEVEL: "project-presentation:set-level",
   PROJECT_PRESENTATION_ANSWER_SUGGESTION: "project-presentation:answer-suggestion",
   PROJECT_PRESENTATION_SET_TOOLBAR_ENABLED: "project-presentation:set-toolbar-enabled",
-  PROJECT_PRESENTATION_SET_PLUGIN_BUTTON_PROMOTED: "project-presentation:set-plugin-button-promoted",
+  PROJECT_PRESENTATION_SET_PLUGIN_BUTTON_PROMOTED:
+    "project-presentation:set-plugin-button-promoted",
   PROJECT_PRESENTATION_RESET_TOOLBAR: "project-presentation:reset-toolbar",
   PROJECT_PRESENTATION_CHANGED: "project-presentation:changed",
 

@@ -128,7 +128,9 @@ describe("ToolbarButtonsContextMenu with a project's toolbar (#13783)", () => {
 
   it("turns the project's toolbar off from its toggle", async () => {
     const onProjectToggle = vi.fn();
-    renderToolbar({ projectToolbar: { active: true, onToggle: onProjectToggle, branchChip: null } });
+    renderToolbar({
+      projectToolbar: { active: true, onToggle: onProjectToggle, branchChip: null },
+    });
 
     fireEvent.contextMenu(screen.getByRole("toolbar"));
     const menu = await screen.findByRole("menu");

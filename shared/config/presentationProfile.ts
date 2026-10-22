@@ -1,3 +1,5 @@
+import type { ToolbarButtonId } from "../types/toolbar.js";
+
 /**
  * The per-project presentation profile (#13771): how much room each built-in
  * surface takes in one project.
@@ -65,7 +67,7 @@ export interface PresentationFeatureDefinition {
    * features follow "Use this project's toolbar" — while that is off they draw
    * as the app-wide toolbar does.
    */
-  toolbar?: string | true;
+  toolbar?: ToolbarButtonId | true;
 }
 
 const DEMOTABLE: readonly PresentationLevel[] = ["shown", "demoted"];
@@ -231,13 +233,23 @@ export function isToolbarPresentationFeature(feature: PresentationFeatureId): bo
 }
 
 /** The toolbar features that place a button, keyed by that button's id. */
-export const PRESENTATION_FEATURE_BY_TOOLBAR_BUTTON: ReadonlyMap<string, PresentationFeatureId> =
-  new Map(
-    PRESENTATION_FEATURE_IDS.flatMap((id) => {
-      const toolbar = (PRESENTATION_FEATURES[id] as PresentationFeatureDefinition).toolbar;
-      return typeof toolbar === "string" ? [[toolbar, id] as const] : [];
-    })
-  );
+export const PRESENTATION_FEATURE_BY_TOOLBAR_BUTTON: ReadonlyMap<
+  ToolbarButtonId,
+  PresentationFeatureId
+> = new Map(
+  PRESENTATION_FEATURE_IDS.flatMap((id) => {
+    const toolbar = (PRESENTATION_FEATURES[id] as PresentationFeatureDefinition).toolbar;
+    return typeof toolbar === "string" ? [[toolbar, id] as const] : [];
+  })
+);
+
+/** The feature that places toolbar button `id`, for any id the toolbar holds. */
+export function presentationFeatureForToolbarButton(id: string): PresentationFeatureId | undefined {
+  for (const [buttonId, feature] of PRESENTATION_FEATURE_BY_TOOLBAR_BUTTON) {
+    if (buttonId === id) return feature;
+  }
+  return undefined;
+}
 
 /** At most this many of a project plugin's own toolbar buttons can be promoted by its profile. */
 export const MAX_PROMOTED_PLUGIN_BUTTONS = 3;

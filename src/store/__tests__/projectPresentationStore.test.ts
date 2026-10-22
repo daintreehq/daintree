@@ -33,6 +33,8 @@ function installBridge(
       feature: string,
       level: PresentationLevel | null
     ) => Promise<ProjectPresentationSnapshot>;
+    /** Further bridge methods, beside the four every test gets. */
+    extra?: Record<string, unknown>;
   } = {}
 ) {
   const listeners: ChangedCallback[] = [];
@@ -56,7 +58,9 @@ function installBridge(
   // `defineProperty` rather than an assignment + cast: a partial stub of the
   // full `ElectronAPI` would need a type assertion the lint ratchet counts.
   Object.defineProperty(window, "electron", {
-    value: { projectPresentation: { get, setLevel, answerSuggestion, onChanged } },
+    value: {
+      projectPresentation: { get, setLevel, answerSuggestion, onChanged, ...options.extra },
+    },
     configurable: true,
     writable: true,
   });
@@ -302,20 +306,22 @@ describe("projectPresentationStore", () => {
 
 describe("projectPresentationStore toolbar writes (#13783)", () => {
   it("adopts the toolbar fields main records, and retries a failed promotion as it was", async () => {
-    installBridge();
     const promote = vi
       .fn<(buttonId: string, promoted: boolean) => Promise<ProjectPresentationSnapshot>>()
       .mockRejectedValueOnce(new Error("offline"))
       .mockResolvedValueOnce(
         snapshot({}, { revision: 5, promotedPluginButtons: ["p.run"], useProjectToolbar: true })
       );
-    const bridge = window.electron!.projectPresentation as unknown as Record<string, unknown>;
-    bridge.setPluginButtonPromoted = promote;
+    installBridge({ extra: { setPluginButtonPromoted: promote } });
     state().init();
     await flush();
 
     await state().setPluginButtonPromoted("p.run", true);
-    expect(state().failedSave).toEqual({ kind: "pluginPromotion", buttonId: "p.run", promoted: true });
+    expect(state().failedSave).toEqual({
+      kind: "pluginPromotion",
+      buttonId: "p.run",
+      promoted: true,
+    });
     expect(state().promotedPluginButtons).toEqual([]);
 
     state().retryFailedSave();
@@ -327,10 +333,23 @@ describe("projectPresentationStore toolbar writes (#13783)", () => {
   });
 
   it("reads a snapshot from a main without toolbar fields as never set", async () => {
-    const legacy = { ...snapshot(), revision: 3 } as Partial<ProjectPresentationSnapshot>;
-    delete legacy.useProjectToolbar;
-    delete legacy.promotedPluginButtons;
-    installBridge({ get: () => Promise.resolve(legacy as ProjectPresentationSnapshot) });
+    const legacy = {
+      projectId: PROJECT,
+      levels: {},
+      suggestion: null,
+      suggestionAnswer: null,
+      revision: 3,
+    };
+    Object.defineProperty(window, "electron", {
+      value: {
+        projectPresentation: {
+          get: vi.fn(() => Promise.resolve(legacy)),
+          onChanged: () => () => {},
+        },
+      },
+      configurable: true,
+      writable: true,
+    });
     state().init();
     await flush();
     expect(state().loaded).toBe(true);
