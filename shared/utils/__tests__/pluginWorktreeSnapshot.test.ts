@@ -486,6 +486,7 @@ describe("toPluginWorktreeSnapshot — HEAD, git operation and setup (#13804)", 
     for (const leaked of ["secret subject", "secret body", "Ada", "ada@example.com"]) {
       expect(serialized).not.toContain(leaked);
     }
+    expect(serialized).not.toContain(String(1_700_000_000_000));
   });
 
   it("maps each blocking operation and reads CLEAN, DIRTY and absent as null", () => {

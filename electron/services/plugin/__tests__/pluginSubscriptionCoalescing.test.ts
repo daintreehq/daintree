@@ -135,6 +135,7 @@ describe("WorktreeChangeTracker", () => {
     const steps: Array<Partial<PluginWorktreeSnapshot>> = [
       { headOid: "aaa", setup: { state: "running", stage: "copy-config" } },
       { headOid: "aaa", setup: { state: "running", stage: "setup-script" } },
+      { headOid: "aaa", setup: { state: "failed", stage: "setup-script" } },
       { headOid: "aaa", setup: { state: "ready", stage: null } },
       { headOid: "aaa", setup: { state: "ready", stage: null }, gitOperation: "merge" },
       { headOid: "aaa", setup: { state: "ready", stage: null } },
@@ -145,7 +146,7 @@ describe("WorktreeChangeTracker", () => {
       expect(t.next([snap("a", step)]).changed).toEqual(["a"]);
     }
     // A rebuilt but equal setup object is not a change.
-    expect(t.next([snap("a", { ...steps[5], setup: { state: "ready", stage: null } })])).toEqual({
+    expect(t.next([snap("a", { ...steps[6], setup: { state: "ready", stage: null } })])).toEqual({
       added: [],
       removed: [],
       changed: [],
@@ -208,6 +209,13 @@ describe("createMockHost parity with the host's coalescing rules", () => {
           status: status([["g", "added"]]),
           headOid: "aaa",
           setup: { state: "failed", stage: "submodules" },
+        }),
+      ],
+      [
+        snap("c", {
+          status: status([["g", "added"]]),
+          headOid: "aaa",
+          setup: { state: "timed-out", stage: "submodules" },
         }),
       ],
       [],

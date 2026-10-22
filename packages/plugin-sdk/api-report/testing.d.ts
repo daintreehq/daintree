@@ -2763,7 +2763,7 @@ type PluginWorktreeSetupState = "pending" | "running" | "ready" | "failed" | "ti
  * the project's setup commands and any resource provisioning that follows them.
  */
 type PluginWorktreeSetupStage = "copy-config" | "submodules" | "setup-script";
-/** Setup progress for a worktree the host created this session. */
+/** The workspace host's record of a worktree's setup run, including a retry. */
 interface PluginWorktreeSetup {
     readonly state: PluginWorktreeSetupState;
     /** The stage running, or the one that failed. `null` once `ready`. */
@@ -2805,10 +2805,12 @@ interface PluginWorktreeSnapshot {
     readonly status: PluginWorktreeStatus | null;
     /**
      * Object id of the commit HEAD points at, from the same status poll as
-     * `status`. Compare it across deliveries to tell that a commit landed, from
-     * any source. Treat it as an opaque string. `null` before the first status
-     * poll and on a repository with no commits yet. While a git operation is in
-     * progress the host pauses status polling, so this holds its last value.
+     * `status`. A new value means HEAD moved since the last poll: a commit from
+     * any source, a checkout, a reset or a pull. It is a sample, not a commit
+     * log, so a move that returns to the same oid between polls is not seen.
+     * Treat it as an opaque string. `null` before the first status poll and on a
+     * repository with no commits yet. While a git operation is in progress the
+     * host pauses status polling, so this holds its last value.
      */
     readonly headOid: string | null;
     /**
@@ -2818,8 +2820,11 @@ interface PluginWorktreeSnapshot {
      */
     readonly gitOperation: PluginWorktreeGitOperation | null;
     /**
-     * Setup progress, or `null` when the host has no record of it — any worktree
-     * it did not create this session. `null` means unknown, never ready.
+     * Setup progress, or `null` when the workspace host has no record of a setup
+     * run for this worktree. The record is held in memory and written when the
+     * host creates the worktree or retries its setup, so a worktree made outside
+     * Daintree, or one from before the workspace host last started, reads `null`.
+     * `null` means unknown, never ready.
      */
     readonly setup: PluginWorktreeSetup | null;
 }
