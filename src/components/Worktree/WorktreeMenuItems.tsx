@@ -1341,7 +1341,11 @@ export function WorktreeMenuItems({
               <C.Item
                 key={`${entry.pluginId}:${entry.item.actionId}`}
                 onSelect={() =>
-                  void actionService.dispatch(entry.item.actionId, undefined, { source })
+                  void actionService.dispatch(
+                    entry.item.actionId,
+                    worktree ? { worktreeId: worktree.id } : undefined,
+                    { source }
+                  )
                 }
               >
                 <Puzzle className={ICON} />

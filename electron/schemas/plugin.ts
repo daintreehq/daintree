@@ -320,7 +320,7 @@ export const ContextMenuContributionSchema = z
     // `"panel"` removed (#10512) — no renderer surface consumed it, so a
     // contributed panel context-menu item was dead. Reject it at the manifest
     // gate so authors get a clear error instead of a silently-ignored item.
-    location: z.enum(["worktree", "terminal", "file", "project"]),
+    location: z.enum(["worktree", "terminal", "file", "browser", "project"]),
     label: z.string().min(1),
     when: z.string().min(1).optional(),
   })

@@ -826,28 +826,29 @@ Adds entries to right-click menus on specific UI elements.
 | Field | Required | Notes |
 | --- | --- | --- |
 | `actionId` | yes | Fully-qualified action ID to dispatch. |
-| `location` | yes | `"worktree"`, `"terminal"`, `"file"` or `"project"`. |
+| `location` | yes | `"worktree"`, `"terminal"`, `"file"`, `"browser"` or `"project"`. |
 | `label` | yes | Menu entry label. |
 | `when` | no | Context expression gating whether the item appears, in the same syntax as a [keybinding `when`](#keybindings--shipped). See below. |
 
 **`when` context keys.** A context menu's `when` is evaluated in the renderer against keys describing what was right-clicked, not the keybinding keys:
 
-| Location   | Keys                                                            |
-| ---------- | --------------------------------------------------------------- |
-| `worktree` | `worktreeId` — the clicked worktree's id                        |
-| `terminal` | `panelId` — the clicked pane's id; `panelKind` — its panel kind |
-| `file`     | None                                                            |
-| `project`  | `projectId` — the project the pill belongs to                   |
+| Location | Keys |
+| --- | --- |
+| `worktree` | `worktreeId` — the clicked worktree's id |
+| `terminal` | `panelId` — the clicked pane's id; `panelKind` — its panel kind; `worktreeId` — the worktree the panel belongs to (unset for a panel with none) |
+| `browser` | `panelId` — the pane's id; `panelKind` — `browser` or `dev-preview` |
+| `file` | None |
+| `project` | `projectId` — the project the pill belongs to |
 
 An identifier that names no key evaluates false, so `"worktree.hasBranch"` hides the item everywhere while `"!worktree.hasBranch"` shows it everywhere; an expression that fails to parse hides the item. Every location also sees the [project keys](#keybindings--shipped) (`isGitBacked`, `workspaceKind`, `activeSidebarView`, `presentation*`) and the keys plugins publish with [`host.setContext`](./host-api.md#setcontext), under each plugin's manifest name; a location's own key wins a clash. Because `file` supplies no keys of its own, a `when` on a `file` item can only test those shared keys or a constant.
 
-**Dispatch arguments.** A `worktree` or `terminal` item is dispatched with no arguments, so its handler cannot tell which worktree or pane was clicked; use it for actions that act on the user's current context. A `project` item is dispatched with `{ projectId }`, the project whose pill was right-clicked. A `file` item is dispatched with the clicked file, as described next.
+**Dispatch arguments.** Every location dispatches its action with the clicked subject, so your handler receives what was clicked rather than `undefined`: `worktree` with `{ worktreeId }`, `terminal` with `{ panelId, panelKind, worktreeId }` (`worktreeId` is omitted for a panel with no worktree), `browser` with `{ panelId, panelKind, url }`, `project` with `{ projectId }` for the project whose pill was right-clicked, and `file` with the clicked file, as described next. Only ids and the page URL are passed — never terminal output or a selection, which stay behind `terminal:read`.
 
-**Locations:** `worktree`, `terminal`, `file`, `project`. More may be added. The `file` location is the one file menu Daintree shares across every surface that shows a file — the Review Hub's changed-file rows, the worktree card's changed-files list, the file browser's tree, folder listing and change summary, the diff viewer's file sidebar, and the right-click menu on a file's own content in the file browser and in a file panel — so a single `file` contribution reaches all of them without any per-surface work. Its action is dispatched with `{ path, worktreePath, status }` for the clicked file (so your handler receives the file, not `undefined`) — `path` is always absolute, while `worktreePath` and `status` are each omitted when the row has no worktree root or no git status, so an unchanged file in the file browser arrives as `{ path }` alone.
+**Locations:** `worktree`, `terminal`, `file`, `browser`, `project`. More may be added. `terminal` is the title-bar and right-click menu of every panel kind, not only PTY terminals; `browser` is the "More page actions" menu of a browser or dev preview panel, and its `url` is the address the pane shows with any `user:password@` credentials removed. The `file` location is the one file menu Daintree shares across every surface that shows a file — the Review Hub's changed-file rows, the worktree card's changed-files list, the file browser's tree, folder listing and change summary, the diff viewer's file sidebar, and the right-click menu on a file's own content in the file browser and in a file panel — so a single `file` contribution reaches all of them without any per-surface work. Its action is dispatched with `{ path, worktreePath, status }` for the clicked file (so your handler receives the file, not `undefined`) — `path` is always absolute, while `worktreePath` and `status` are each omitted when the row has no worktree root or no git status, so an unchanged file in the file browser arrives as `{ path }` alone.
 
 **Where the items go.** On a file menu and on the worktree card's menu, contributed items sit in an **Extensions** submenu, one group per plugin (labelled when more than one plugin contributes), after Daintree's own entries and before the destructive ones — Discard changes and Delete file on a file, Delete worktree… on a worktree. The submenu appears only when at least one item passes its `when`, and a `worktree` item is not offered on a bare workspace root. On the toolbar project pill, `project` items sit in the same **Extensions** submenu, after Project settings and before Stop all agents and Close project. A project plugin's items appear only in its own project, and an installed plugin's only in projects where it is visible. On a terminal, contributed items are appended at the end of the right-click menu.
 
-Context menus follow the same `actionId` dispatch pattern as menu items; only `file` and `project` items receive the clicked subject as dispatch args. A `terminal`-location item is dispatched with no arguments and appears on every terminal. To put entries on your own panels, including a PTY-backed one, that know which panel was right-clicked, use the panel's `menu` or [runtime menu entries](#runtime-menu-entries) instead: those are dispatched with `{ panelId }`. Two built-in actions pair well here: `file.openDiff` opens the side-by-side diff for the dispatched `{ path, worktreePath, status }`, and `panel.openPluginPanel` spawns (or focuses) one of your plugin panels, passing `initialArgs` straight through to the view's `initialArgs` prop — so a context-menu item can open your panel scoped to the file the user clicked.
+Context menus follow the same `actionId` dispatch pattern as menu items. A `terminal`-location item appears on every panel; gate it with `when` (for example `panelKind == 'terminal'`). To put entries on your own panels only, use the panel's `menu` or [runtime menu entries](#runtime-menu-entries) instead: those are dispatched with `{ panelId }`. Two built-in actions pair well here: `file.openDiff` opens the side-by-side diff for the dispatched `{ path, worktreePath, status }`, and `panel.openPluginPanel` spawns (or focuses) one of your plugin panels, passing `initialArgs` straight through to the view's `initialArgs` prop — so a context-menu item can open your panel scoped to the file the user clicked.
 
 ## MCP servers — _Shipped_
 
