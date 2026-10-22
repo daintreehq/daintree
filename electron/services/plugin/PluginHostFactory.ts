@@ -2776,43 +2776,36 @@ export function createHost(
         }
         let byProject = deps.pluginTerminalStatuses.get(pluginId);
         let statuses = byProject?.get(projectId);
-        // The list just named a live terminal, so it is a real read: a chip on
-        // a terminal that has since left it (closed, exited) is dropped here
-        // rather than holding a slot of the cap for good.
         let changed = false;
-        if (statuses) {
-          const live = new Set(read.agents.map((a) => a.terminalId));
-          for (const held of [...statuses.keys()]) {
-            if (live.has(held)) continue;
-            statuses.delete(held);
-            changed = true;
-          }
-          if (statuses.size === 0) {
-            byProject!.delete(projectId);
-            if (byProject!.size === 0) deps.pluginTerminalStatuses.delete(pluginId);
-            byProject = deps.pluginTerminalStatuses.get(pluginId);
-            statuses = byProject?.get(projectId);
-          }
-        }
         const publish = (): void => {
           flushPluginPushes();
           deps.emitTerminalStatuses(pluginId, projectId);
         };
         if (entry.status === null) {
-          if (!statuses?.delete(entry.terminalId)) {
-            if (changed) publish();
-            return;
-          }
+          if (!statuses?.delete(entry.terminalId)) return;
           if (statuses.size === 0) byProject!.delete(projectId);
           if (byProject!.size === 0) deps.pluginTerminalStatuses.delete(pluginId);
         } else {
-          if (sameTerminalStatus(statuses?.get(entry.terminalId), entry.status)) {
-            if (changed) publish();
-            return;
+          if (sameTerminalStatus(statuses?.get(entry.terminalId), entry.status)) return;
+          if (
+            statuses &&
+            !statuses.has(entry.terminalId) &&
+            statuses.size >= PLUGIN_TERMINAL_STATUS_MAX_PER_PROJECT
+          ) {
+            // At the cap, free the slots of terminals that have left the list
+            // (closed, exited). Only here: a list is a projection that can omit
+            // a live pane, so pruning on every call could drop a shown chip.
+            const live = new Set(read.agents.map((a) => a.terminalId));
+            for (const held of [...statuses.keys()]) {
+              if (live.has(held)) continue;
+              statuses.delete(held);
+              changed = true;
+            }
           }
           if (
-            !statuses?.has(entry.terminalId) &&
-            (statuses?.size ?? 0) >= PLUGIN_TERMINAL_STATUS_MAX_PER_PROJECT
+            statuses &&
+            !statuses.has(entry.terminalId) &&
+            statuses.size >= PLUGIN_TERMINAL_STATUS_MAX_PER_PROJECT
           ) {
             if (changed) publish();
             throw new Error(

@@ -2562,22 +2562,22 @@ describe("createHost setTerminalStatus", () => {
     });
   });
 
-  it("drops a chip whose terminal has left the list, freeing its slot", async () => {
+  it("keeps a chip the list omits until the cap needs its slot", async () => {
     const h = makeHarness();
-    const emitted = withEmitter(h);
-    sees(h, PROJECT_A, "gone", "kept");
+    withEmitter(h);
+    const ids = Array.from({ length: 256 }, (_, i) => `t-${i}`);
+    sees(h, PROJECT_A, ...ids, "new");
     const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
-    await host.setTerminalStatus("gone", { label: "x" });
-    await host.setTerminalStatus("kept", { label: "y" });
-    emitted.mockClear();
+    for (const id of ids) await host.setTerminalStatus(id, { label: "x" });
 
-    sees(h, PROJECT_A, "kept");
-    await host.setTerminalStatus("kept", { label: "y" });
+    sees(h, PROJECT_A, ...ids.slice(1), "new");
+    await host.setTerminalStatus("t-1", { label: "y" });
+    expect(h.deps.pluginTerminalStatuses.get(PLUGIN_ID)!.get(PROJECT_A)!.has("t-0")).toBe(true);
 
-    expect([...h.deps.pluginTerminalStatuses.get(PLUGIN_ID)!.get(PROJECT_A)!.keys()]).toEqual([
-      "kept",
-    ]);
-    expect(emitted).toHaveBeenCalledTimes(1);
+    await host.setTerminalStatus("new", { label: "z" });
+    const held = h.deps.pluginTerminalStatuses.get(PLUGIN_ID)!.get(PROJECT_A)!;
+    expect(held.has("t-0")).toBe(false);
+    expect(held.get("new")).toEqual({ label: "z" });
   });
 
   it("rejects, rather than throws, when the status cannot be read", async () => {
