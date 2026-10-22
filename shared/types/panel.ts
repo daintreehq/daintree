@@ -1189,6 +1189,8 @@ export interface TerminalInstance {
   lastCommand?: string;
   location: PanelLocation;
   backgroundRestoreLocation?: "grid" | "dock";
+  /** See `BasePanelData.pendingDockWorktreeId`. */
+  pendingDockWorktreeId?: string | null;
   command?: string;
   isVisible?: boolean;
   restartKey?: number;

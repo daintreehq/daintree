@@ -137,6 +137,7 @@ export interface SavedTerminalData {
   worktreeId?: string;
   location?: string;
   backgroundRestoreLocation?: string;
+  pendingDockWorktreeId?: string | null;
   command?: string;
   isInputLocked?: boolean;
   browserUrl?: string;
@@ -1081,7 +1082,7 @@ export function buildArgsForNonPtyRecreation(
   const rescueDockToGrid = requestedDock && !panelKindIsDockable(kind);
   const location = rescueDockToGrid ? "grid" : requestedDock ? "dock" : "grid";
   const pendingDockWorktreeId =
-    rescueDockToGrid && kindPending
+    kindPending && !honorPending && (savedLocation === "dock" || savedPending !== undefined)
       ? savedLocation === "dock"
         ? (saved.worktreeId ?? null)
         : (savedPending ?? null)

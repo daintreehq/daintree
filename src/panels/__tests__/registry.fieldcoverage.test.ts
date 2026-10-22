@@ -49,6 +49,8 @@ const PTY_FIELD_CLASSIFICATION = {
   titleMode: false,
   location: false,
   backgroundRestoreLocation: false,
+  // Boot-time dock stopgap (#13907) — written by the base serialization layer.
+  pendingDockWorktreeId: false,
   worktreeId: false,
   isVisible: false,
   extensionState: false,
@@ -175,6 +177,8 @@ const BROWSER_FIELD_CLASSIFICATION = {
   titleMode: false,
   location: false,
   backgroundRestoreLocation: false,
+  // Boot-time dock stopgap (#13907) — written by the base serialization layer.
+  pendingDockWorktreeId: false,
   worktreeId: false,
   isVisible: false,
   extensionState: false,
@@ -205,6 +209,8 @@ const DEV_PREVIEW_FIELD_CLASSIFICATION = {
   titleMode: false,
   location: false,
   backgroundRestoreLocation: false,
+  // Boot-time dock stopgap (#13907) — written by the base serialization layer.
+  pendingDockWorktreeId: false,
   worktreeId: false,
   isVisible: false,
   extensionState: false,
@@ -251,6 +257,8 @@ const FILE_FIELD_CLASSIFICATION = {
   titleMode: false,
   location: false,
   backgroundRestoreLocation: false,
+  // Boot-time dock stopgap (#13907) — written by the base serialization layer.
+  pendingDockWorktreeId: false,
   worktreeId: false,
   isVisible: false,
   extensionState: false,
@@ -285,6 +293,8 @@ const DIFF_FIELD_CLASSIFICATION = {
   titleMode: false,
   location: false,
   backgroundRestoreLocation: false,
+  // Boot-time dock stopgap (#13907) — written by the base serialization layer.
+  pendingDockWorktreeId: false,
   worktreeId: false,
   isVisible: false,
   extensionState: false,
@@ -320,6 +330,8 @@ const FILE_BROWSER_FIELD_CLASSIFICATION = {
   titleMode: false,
   location: false,
   backgroundRestoreLocation: false,
+  // Boot-time dock stopgap (#13907) — written by the base serialization layer.
+  pendingDockWorktreeId: false,
   worktreeId: false,
   isVisible: false,
   extensionState: false,
