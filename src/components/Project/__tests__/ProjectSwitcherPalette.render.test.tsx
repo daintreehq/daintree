@@ -967,6 +967,24 @@ describe("ProjectSwitcherPalette current-project marker", () => {
     expect(screen.queryByRole("option", { name: /[A-Za-z]Notifications muted/ })).toBeNull();
   });
 
+  it("marks a project that never sleeps automatically, separated from the name", () => {
+    render(
+      <ProjectSwitcherPalette
+        {...modalProps}
+        results={[
+          makeProject({ name: "Payments", section: "other", neverAutoSleep: true }),
+          makeProject({ id: "proj-2", name: "Billing", section: "other" }),
+        ]}
+      />
+    );
+
+    expect(screen.getAllByTestId("project-never-auto-sleep-marker")).toHaveLength(1);
+    expect(
+      screen.getByRole("option", { name: /Payments,\s*Never sleeps automatically/ })
+    ).toBeTruthy();
+    expect(screen.queryByRole("option", { name: /[A-Za-z]Never sleeps automatically/ })).toBeNull();
+  });
+
   // The header is chrome, not a row. Arrow keys walk `results`, and a label
   // that registered as an option would put a dead stop in that walk.
   it("does not add the header to the option count", () => {

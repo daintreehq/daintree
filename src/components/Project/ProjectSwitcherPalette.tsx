@@ -23,7 +23,8 @@ import {
   X,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { FolderClosed, FolderDown, Moon } from "@/components/icons";
+import { AlarmClockOff, FolderClosed, FolderDown, Moon } from "@/components/icons";
+import { actionService } from "@/services/ActionService";
 import { cn } from "@/lib/utils";
 import { isMac } from "@/lib/platform";
 import { describeKeyCap, formatChordText } from "@/lib/kbdShortcut";
@@ -39,6 +40,7 @@ import { inlineRenameFieldInputProps } from "@/components/Panel/inlineRenameFiel
 import { AppPalettePopover } from "@/components/ui/AppPalettePopover";
 import {
   ContextMenu,
+  ContextMenuCheckboxItem,
   ContextMenuContent,
   ContextMenuItem,
   ContextMenuRadioGroup,
@@ -968,6 +970,16 @@ function ProjectListItem({
               />
             </>
           )}
+          {project.neverAutoSleep && (
+            <>
+              <span className="sr-only">, </span>
+              <AlarmClockOff
+                className="w-3.5 h-3.5 text-text-secondary shrink-0 ml-1"
+                aria-label="Never sleeps automatically"
+                data-testid="project-never-auto-sleep-marker"
+              />
+            </>
+          )}
           {isProjectNotificationsMuted && (
             <>
               {/*
@@ -1077,6 +1089,20 @@ function ProjectListItem({
             <CircleStop className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
             Stop all agents
           </ContextMenuItem>
+        )}
+        {showSleep && onSleepProject && (
+          <ContextMenuCheckboxItem
+            checked={project.neverAutoSleep ?? false}
+            onCheckedChange={(checked) =>
+              void actionService.dispatch(
+                "project.toggleNeverAutoSleep",
+                { projectId: project.id, enabled: checked },
+                { source: "user" }
+              )
+            }
+          >
+            Never sleep automatically
+          </ContextMenuCheckboxItem>
         )}
         {showSleep && onSleepProject && (
           <ContextMenuItem onSelect={() => onSleepProject(project.id)}>

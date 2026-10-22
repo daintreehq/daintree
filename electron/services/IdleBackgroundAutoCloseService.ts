@@ -475,6 +475,10 @@ export class IdleBackgroundAutoCloseService {
       // Never opened in this install — no cached resources to reclaim.
       if (!project.lastOpened || project.lastOpened <= 0) continue;
 
+      // The user opted this project out of automatic sleep; manual Sleep is
+      // unaffected because it never passes through the sweep.
+      if (project.neverAutoSleep) continue;
+
       // A project whose only terminals are idle shells has a separate opt-in,
       // a separate threshold and a far longer list of things that hold it.
       const hasTerminals = allTerminals.some((t) => t.projectId === pid && isLiveTerminal(t));
@@ -576,6 +580,7 @@ export class IdleBackgroundAutoCloseService {
     if (!this.getConfig().enabled) return null;
     const fresh = projectStore.getProjectById(projectId);
     if (!fresh || fresh.status !== "background") return null;
+    if (fresh.neverAutoSleep) return null;
     if (!fresh.lastOpened || fresh.lastOpened <= 0) return null;
     // Read the active set first: it is what stamps a visit that came and went
     // during the caller's await, and the age check below has to see that stamp.
@@ -663,6 +668,7 @@ export class IdleBackgroundAutoCloseService {
     if (!config.enabled || !config.includeIdleShells) return null;
     const fresh = projectStore.getProjectById(projectId);
     if (!fresh || fresh.status !== "background") return null;
+    if (fresh.neverAutoSleep) return null;
     if (!fresh.lastOpened || fresh.lastOpened <= 0) return null;
     if (this.collectActiveProjectIds().has(projectId)) return null;
     if (this.hasRemoteView(projectId)) return null;

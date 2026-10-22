@@ -10,7 +10,9 @@ const storeMock = vi.hoisted(() => ({
 
 const projectStoreMock = vi.hoisted(() => ({
   getCurrentProjectId: vi.fn<() => string | null>(() => null),
-  getAllProjects: vi.fn<() => Array<{ id: string; name: string; path: string }>>(() => []),
+  getAllProjects: vi.fn<
+    () => Array<{ id: string; name: string; path: string; neverAutoSleep?: boolean }>
+  >(() => []),
 }));
 
 const ptyManagerMock = vi.hoisted(() => ({
@@ -236,6 +238,16 @@ describe("IdleTerminalNotificationService", () => {
         "proj-1",
         "proj-2",
       ]);
+    });
+
+    it("doesn't suggest sleeping a project that opted out of automatic sleep", async () => {
+      setup();
+      projectStoreMock.getAllProjects.mockReturnValue([
+        { ...makeProject("proj-1", "Old"), neverAutoSleep: true },
+      ]);
+      const service = makeService();
+      await runCheck(service);
+      expect(broadcastToRendererMock).not.toHaveBeenCalled();
     });
 
     it("skips the current active project", async () => {

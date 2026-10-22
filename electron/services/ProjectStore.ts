@@ -152,6 +152,7 @@ function rowToProject(row: ProjectRow): Project {
   if (row.inRepoSettings !== null && row.inRepoSettings !== undefined)
     project.inRepoSettings = row.inRepoSettings;
   if (row.pinned) project.pinned = true;
+  if (row.neverAutoSleep) project.neverAutoSleep = true;
   project.frecencyScore =
     typeof row.frecencyScore === "number" ? row.frecencyScore : FRECENCY_COLD_START;
   project.lastAccessedAt = typeof row.lastAccessedAt === "number" ? row.lastAccessedAt : 0;
@@ -1092,6 +1093,7 @@ export class ProjectStore {
       daintreeConfigPresent: boolean | null;
       inRepoSettings: boolean | null;
       pinned: number;
+      neverAutoSleep: number;
       frecencyScore: number;
       lastAccessedAt: number;
       lastCompletionSeenAt: number;
@@ -1111,6 +1113,7 @@ export class ProjectStore {
       set.daintreeConfigPresent = updates.daintreeConfigPresent ?? null;
     if (updates.inRepoSettings !== undefined) set.inRepoSettings = updates.inRepoSettings ?? null;
     if (updates.pinned !== undefined) set.pinned = updates.pinned ? 1 : 0;
+    if (updates.neverAutoSleep !== undefined) set.neverAutoSleep = updates.neverAutoSleep ? 1 : 0;
     if (updates.frecencyScore !== undefined) set.frecencyScore = updates.frecencyScore;
     if (updates.lastAccessedAt !== undefined) set.lastAccessedAt = updates.lastAccessedAt;
     if (updates.lastCompletionSeenAt !== undefined)

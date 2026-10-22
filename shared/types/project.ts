@@ -118,6 +118,8 @@ export interface Project {
   inRepoSettings?: boolean;
   /** Whether the project is pinned to the top of the project switcher */
   pinned?: boolean;
+  /** Exempts the project from automatic idle sleep; manual Sleep still works. */
+  neverAutoSleep?: boolean;
   /**
    * Epoch ms the user filed this project away. Archived projects leave the
    * switcher's browse bands for a folded "Archived" band, but keep everything

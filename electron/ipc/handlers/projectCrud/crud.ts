@@ -224,6 +224,9 @@ export function registerProjectCrudCoreHandlers(deps: HandlerDependencies): () =
     if (typeof updates !== "object" || updates === null) {
       throw new Error("Invalid updates object");
     }
+    if (updates.neverAutoSleep !== undefined && typeof updates.neverAutoSleep !== "boolean") {
+      throw new Error("Invalid neverAutoSleep value");
+    }
     // `id` and `path` are identity, not metadata: entry-scoped authorization
     // (fileBrowser's project routing) resolves hosts by the row's path, so a
     // renderer that could rewrite its own project's path to a sibling's would
