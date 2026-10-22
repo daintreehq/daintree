@@ -6,6 +6,7 @@ import { getAllAppWebContents } from "../../window/webContentsRegistry.js";
 import type { HostModeEvent, HostModeStatus } from "../../../shared/types/ipc/hostMode.js";
 import { getLocalHandshakeInfo } from "../handshakeInfo.js";
 import { HostAdvertiser } from "./advertise.js";
+import { clearAdvertRecord, reapOrphanedAdvert, saveAdvertRecord } from "./advertRecord.js";
 import { runCommand, spawnOwnedProcess } from "./hostCommands.js";
 import { hostLocation, startHostListener } from "./hostListener.js";
 import { HostModeService, type HostModeSettings } from "./HostModeService.js";
@@ -92,6 +93,8 @@ export function createHostModeService(
     // Reported through the listener's own error when it tries to start.
   }
   const statusDir = socketDir;
+  // Whatever the settings now say: an advert the last launch left behind keeps announcing this machine.
+  if (statusDir) reapOrphanedAdvert(statusDir);
   return new HostModeService({
     platform: process.platform,
     readSettings,
@@ -105,6 +108,12 @@ export function createHostModeService(
         hostName: os.hostname(),
         handshake: getLocalHandshakeInfo(),
         spawn: spawnOwnedProcess,
+        record: statusDir
+          ? {
+              save: (child) => void saveAdvertRecord(statusDir, child),
+              clear: (pid) => clearAdvertRecord(statusDir, pid),
+            }
+          : undefined,
         onChange,
       }),
     keychain: {

@@ -90,6 +90,50 @@ describe("HostAdvertiser", () => {
     expect(onChange).toHaveBeenCalled();
   });
 
+  it("records the tool it spawns and clears the record when it stops or exits", () => {
+    const save = vi.fn();
+    const clear = vi.fn();
+    const first = Object.assign(fakeProcess(), { pid: 321 });
+    const advertiser = new HostAdvertiser({
+      platform: "darwin",
+      hostName: "studio-01.local",
+      handshake: HANDSHAKE,
+      spawn: () => first,
+      record: { save, clear },
+    });
+    advertiser.start();
+    expect(save).toHaveBeenCalledWith(
+      expect.objectContaining({ pid: 321, file: "dns-sd", args: expect.arrayContaining(["-R"]) })
+    );
+    advertiser.stop();
+    expect(clear).toHaveBeenCalledWith(321);
+
+    const second = Object.assign(fakeProcess(), { pid: 322 });
+    const again = new HostAdvertiser({
+      platform: "darwin",
+      hostName: "studio-01.local",
+      handshake: HANDSHAKE,
+      spawn: () => second,
+      record: { save, clear },
+    });
+    again.start();
+    second.exit({ code: 1, notFound: false });
+    expect(clear).toHaveBeenCalledWith(322);
+  });
+
+  it("records nothing when the spawn produced no pid", () => {
+    const save = vi.fn();
+    const advertiser = new HostAdvertiser({
+      platform: "linux",
+      hostName: "rack-1",
+      handshake: HANDSHAKE,
+      spawn: () => fakeProcess(),
+      record: { save, clear: vi.fn() },
+    });
+    advertiser.start();
+    expect(save).not.toHaveBeenCalled();
+  });
+
   it("reports a missing Avahi rather than failing", () => {
     const proc = fakeProcess();
     const advertiser = new HostAdvertiser({

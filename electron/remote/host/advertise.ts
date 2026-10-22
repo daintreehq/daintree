@@ -66,6 +66,11 @@ export class HostAdvertiser {
       hostName: string;
       handshake: HostHandshakeInfo;
       spawn: ProcessSpawner;
+      /** Where the spawned tool is recorded so a later launch can end it if this one dies. */
+      record?: {
+        save(child: { pid: number; file: string; args: readonly string[] }): void;
+        clear(pid: number): void;
+      };
       onChange?: () => void;
     }
   ) {}
@@ -94,7 +99,11 @@ export class HostAdvertiser {
       return;
     }
     this.child = child;
+    if (child.pid !== undefined) {
+      this.deps.record?.save({ pid: child.pid, file: command.file, args: command.args });
+    }
     child.onExit(({ code, notFound }) => {
+      if (child.pid !== undefined) this.deps.record?.clear(child.pid);
       if (this.child !== child) return;
       this.child = null;
       this.set({
@@ -114,6 +123,7 @@ export class HostAdvertiser {
     const child = this.child;
     this.child = null;
     child?.kill();
+    if (child?.pid !== undefined) this.deps.record?.clear(child.pid);
     this.set({ status: "off" });
   }
 
