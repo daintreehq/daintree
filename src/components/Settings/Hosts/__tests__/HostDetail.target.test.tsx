@@ -55,6 +55,8 @@ function probe(overrides: Partial<HostProbeResult> = {}): HostProbeResult {
     appImages: [],
     canDownload: true,
     matchesClient: null,
+    hostBuild: null,
+    stagedUpdate: null,
     advice: {
       sleepObserved: null,
       sleepDisabled: null,

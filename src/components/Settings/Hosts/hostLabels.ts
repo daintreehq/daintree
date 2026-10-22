@@ -12,6 +12,7 @@ import type {
   HostInstallPlan,
   HostProbeResult,
   HostRestartImpact,
+  StagedHostUpdate,
 } from "@shared/types/ipc/remoteHosts";
 import { pluralize } from "@/lib/pluralize";
 
@@ -62,6 +63,22 @@ export function installLabel(install: HostInstallInfo | null): string {
   const version = install.version ? `Daintree ${install.version}` : "Daintree (version unknown)";
   const commit = shortCommit(install.commit);
   return commit ? `${version} (${commit})` : version;
+}
+
+/** How the host's build compares with this machine's, as far as the probe could tell. */
+export function buildMatchLabel(
+  probe: Pick<HostProbeResult, "matchesClient" | "hostBuild">
+): string {
+  if (probe.matchesClient === true) return "Same build";
+  if (probe.hostBuild?.order === "newer") return "Newer build";
+  if (probe.hostBuild?.order === "older") return "Older build";
+  return probe.matchesClient === false ? "Different build" : "Can't tell";
+}
+
+export function stagedUpdateLabel(staged: StagedHostUpdate): string {
+  return staged.installsOnQuit && !staged.ready
+    ? `Daintree ${staged.version}, still being prepared`
+    : `Daintree ${staged.version}`;
 }
 
 function formatSeen(at: number | null, now: number): string {

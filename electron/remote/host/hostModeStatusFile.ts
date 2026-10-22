@@ -25,6 +25,16 @@ const ObservationSchema = z.object({
       commit: z.string().max(64),
     })
     .optional(),
+  // A malformed value drops only itself: the setting the rest records still counts.
+  windows: z.boolean().optional().catch(undefined),
+  stagedUpdate: z
+    .object({
+      version: z.string().min(1).max(64),
+      installsOnQuit: z.boolean(),
+      ready: z.boolean(),
+    })
+    .optional()
+    .catch(undefined),
   stopped: z.literal(true).optional(),
   enabled: z.boolean(),
   startAtLogin: z.boolean(),

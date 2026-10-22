@@ -33,6 +33,8 @@ function probe(overrides: Partial<HostProbeResult> = {}): HostProbeResult {
     appImages: [],
     canDownload: true,
     matchesClient: false,
+    hostBuild: null,
+    stagedUpdate: null,
     advice: {
       sleepObserved: null,
       sleepDisabled: null,
@@ -189,6 +191,96 @@ describe("planInstall", () => {
     expect(
       planInstall({ client: macClient, probe: probe({ appRunning: true }) }).restartsHost
     ).toBe(true);
+  });
+});
+
+describe("planInstall for a host on a later release", () => {
+  const installedAt = (version: string) => ({
+    path: "/Applications/Daintree.app",
+    version,
+    commit: "fedcba9876",
+    packaging: "app-bundle" as const,
+  });
+
+  it("leaves a newer host alone and says why, unless asked to downgrade it", () => {
+    const newer = probe({
+      install: installedAt("1.5.0"),
+      hostBuild: { version: "1.5.0", commit: "fedcba9876", order: "newer" },
+    });
+    const refused = planInstall({ client: macClient, probe: newer });
+    expect(refused).toMatchObject({ kind: "host-newer", delivery: null, downgrade: false });
+    expect(refused.reason).toContain("1.5.0");
+    expect(planInstall({ client: macClient, probe: newer, allowDowngrade: true })).toMatchObject({
+      kind: "install",
+      delivery: "push-bundle",
+      version: "1.4.0",
+      downgrade: true,
+    });
+  });
+
+  it("guards a newer build put in place but not yet restarted into", () => {
+    const plan = planInstall({
+      client: macClient,
+      probe: probe({
+        install: installedAt("1.5.0"),
+        hostModeListening: true,
+        appRunning: true,
+        hostBuild: { version: "1.3.0", commit: "0123456789", order: "older" },
+      }),
+    });
+    expect(plan.kind).toBe("host-newer");
+  });
+
+  it("updates an older host as before, and isn't a downgrade", () => {
+    const plan = planInstall({
+      client: macClient,
+      probe: probe({
+        install: installedAt("1.3.0"),
+        hostBuild: { version: "1.3.0", commit: "0123456789", order: "older" },
+      }),
+    });
+    expect(plan).toMatchObject({ kind: "install", downgrade: false });
+  });
+
+  it("treats a build it can't order as one to update, as before", () => {
+    const plan = planInstall({
+      client: macClient,
+      probe: probe({
+        install: installedAt("1.4.0"),
+        hostBuild: { version: "1.4.0", commit: "fedcba9876", order: "unordered" },
+      }),
+    });
+    expect(plan.kind).toBe("install");
+  });
+});
+
+describe("planInstall while the host holds a downloaded update", () => {
+  const staged = (installsOnQuit: boolean) => ({ version: "1.3.5", installsOnQuit, ready: true });
+
+  it("won't restart a host whose stop would install that update over this one", () => {
+    const plan = planInstall({
+      client: macClient,
+      probe: probe({ appRunning: true, hostModeListening: true, stagedUpdate: staged(true) }),
+    });
+    expect(plan.kind).toBe("unsupported");
+    expect(plan.reason).toContain("1.3.5");
+  });
+
+  it("goes ahead where nothing restarts, or the update only installs on request", () => {
+    expect(
+      planInstall({ client: macClient, probe: probe({ stagedUpdate: staged(true) }) }).kind
+    ).toBe("install");
+    const deb = planInstall({
+      client: macClient,
+      probe: probe({
+        platform: "linux",
+        arch: "x64",
+        appRunning: true,
+        install: { path: "/opt/Daintree", version: "1.3.0", commit: null, packaging: "deb" },
+        stagedUpdate: staged(false),
+      }),
+    });
+    expect(deb).toMatchObject({ kind: "install", packaging: "deb" });
   });
 });
 

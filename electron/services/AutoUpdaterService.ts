@@ -1,7 +1,7 @@
 // eager-import-allow: reads updater config via store.get and the staged installer via sync fs
 import { existsSync, readFileSync } from "fs";
 import path from "path";
-import { app, BrowserWindow, dialog, ipcMain } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, autoUpdater as nativeAutoUpdater } from "electron";
 import electronUpdater from "electron-updater";
 import type { UpdateInfo, ProgressInfo } from "electron-updater";
 import * as semver from "semver";
@@ -24,6 +24,7 @@ import { PRODUCT_NAME, PRODUCT_WEBSITE } from "../utils/productBranding.js";
 import { isTrustedRendererUrl } from "../../shared/utils/trustedRenderer.js";
 import { isWindowsStoreBuild } from "../../shared/config/distribution.js";
 import { notifyAppImageRelocated } from "./appImageRelocation.js";
+import { getStagedUpdate, setStagedUpdate } from "./stagedUpdateState.js";
 import { armRelaunch } from "../lifecycle/armRelaunch.js";
 import { stripLaunchTargets } from "../lifecycle/launchIntent.js";
 import { routeAppImageRelaunchThroughWaiter } from "./appImageUpdateRelaunch.js";
@@ -214,6 +215,7 @@ class AutoUpdaterService {
   private notAvailableHandler: ((info: UpdateInfo) => void) | null = null;
   private errorHandler: ((err: Error) => void) | null = null;
   private progressHandler: ((progress: ProgressInfo) => void) | null = null;
+  private nativeDownloadedHandler: (() => void) | null = null;
   private downloadedHandler: ((info: UpdateInfo) => void) | null = null;
 
   // Persist how far an install attempt got, for the next boot to act on.
@@ -818,6 +820,7 @@ class AutoUpdaterService {
     // during the await window and install the old channel's payload.
     autoUpdater.autoInstallOnAppQuit = false;
     this.updateDownloaded = false;
+    setStagedUpdate(null);
     this.lastBroadcastVersion = null;
     // The staged payload belongs to the channel being left; a renderer that
     // mounts before the new channel's first check must not be handed it.
@@ -1159,10 +1162,25 @@ class AutoUpdaterService {
         // version arrived in. A stage left over from an earlier update would
         // otherwise be read back on the next boot and blamed on this one.
         this.forgetInstallStage();
+        // A Mac hands the download to its native updater after this event;
+        // quitting installs it only once that says it has it (below).
+        setStagedUpdate({
+          version: info.version,
+          installsOnQuit: installsOnQuit(),
+          ready: process.platform !== "darwin",
+        });
         this.setMenuState("ready");
         broadcastToRenderer(CHANNELS.UPDATE_DOWNLOADED, { version: info.version });
       };
       autoUpdater.on("update-downloaded", this.downloadedHandler);
+
+      if (process.platform === "darwin") {
+        this.nativeDownloadedHandler = () => {
+          const staged = getStagedUpdate();
+          if (staged && !staged.ready) setStagedUpdate({ ...staged, ready: true });
+        };
+        nativeAutoUpdater.on("update-downloaded", this.nativeDownloadedHandler);
+      }
 
       // AppImageUpdater installs a versioned image under the new version's
       // name and deletes the old one, then emits this from inside the install —
@@ -1340,6 +1358,11 @@ class AutoUpdaterService {
       autoUpdater.off("update-downloaded", this.downloadedHandler);
       this.downloadedHandler = null;
     }
+    if (this.nativeDownloadedHandler) {
+      nativeAutoUpdater.off("update-downloaded", this.nativeDownloadedHandler);
+      this.nativeDownloadedHandler = null;
+    }
+    setStagedUpdate(null);
 
     try {
       ipcMain.removeHandler(CHANNELS.UPDATE_QUIT_AND_INSTALL);

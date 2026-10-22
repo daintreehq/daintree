@@ -332,6 +332,14 @@ describe("Host mode setup read-back", () => {
     }
   });
 
+  it("keeps the record when a field it doesn't understand is malformed", () => {
+    const text = JSON.stringify({ ...STATE, windows: "yes", stagedUpdate: { version: "" } });
+    const probe = parseHostProbe(`@@dt:uname Darwin arm64\n@@dt:hostmodestate ${text}\n@@dt:end`);
+    expect(probe.hostModeState?.enabled).toBe(true);
+    expect(probe.hostModeState?.windows).toBeUndefined();
+    expect(probe.hostModeState?.stagedUpdate).toBeUndefined();
+  });
+
   it("counts a Linux unit as start at login only when systemd says it is enabled", () => {
     const linux = (lines: string[]) =>
       parseHostProbe(["@@dt:uname Linux x86_64", ...lines, "@@dt:end"].join("\n")).advice;
@@ -472,11 +480,16 @@ describe("probeHost", () => {
   });
 
   describe("a listening host's own build", () => {
-    const state = (pid: number, build: { version: string; commit: string }) =>
+    const state = (
+      pid: number,
+      build: { version: string; commit: string },
+      extra: Record<string, unknown> = {}
+    ) =>
       JSON.stringify({
         daintreeHostMode: 1,
         pid,
         build,
+        ...extra,
         enabled: true,
         startAtLogin: false,
         startAtLoginInstalled: false,
@@ -533,6 +546,46 @@ describe("probeHost", () => {
       expect(stale.matchesClient).toBe(false);
       const notListening = await probe([...OLD_APP, `@@dt:hostmodestate ${state(4242, CLIENT)}`]);
       expect(notListening.matchesClient).toBe(false);
+    });
+
+    it("says which side is ahead: the listener's build, else the installed one", async () => {
+      const newer = { version: "1.5.0", commit: "ffffffffffffffff" };
+      const ahead = await probe([
+        ...OLD_APP,
+        "@@dt:listening yes",
+        "@@dt:hostpid 4242",
+        `@@dt:hostmodestate ${state(4242, newer)}`,
+      ]);
+      expect(ahead.hostBuild).toEqual({ ...newer, order: "newer" });
+      const behind = await probe(OLD_APP);
+      expect(behind.hostBuild).toEqual({
+        version: "1.3.0",
+        commit: "0000000000000000",
+        order: "older",
+      });
+      expect((await probe(["@@dt:uname Darwin arm64"])).hostBuild).toBeNull();
+    });
+
+    it("passes on a downloaded update only from the live listener's own record", async () => {
+      const stagedUpdate = { version: "1.5.0", installsOnQuit: true, ready: false };
+      const record = (pid: number) =>
+        `@@dt:hostmodestate ${state(pid, CLIENT, { stagedUpdate, windows: true })}`;
+      const live = await probe([
+        ...OLD_APP,
+        "@@dt:listening yes",
+        "@@dt:hostpid 4242",
+        record(4242),
+      ]);
+      expect(live.stagedUpdate).toEqual(stagedUpdate);
+      expect(live.hostModeState?.windows).toBe(true);
+      const stale = await probe([
+        ...OLD_APP,
+        "@@dt:listening yes",
+        "@@dt:hostpid 4242",
+        record(1111),
+      ]);
+      expect(stale.stagedUpdate).toBeNull();
+      expect((await probe([...OLD_APP, record(4242)])).stagedUpdate).toBeNull();
     });
   });
 });

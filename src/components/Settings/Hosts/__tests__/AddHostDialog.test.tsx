@@ -37,6 +37,8 @@ function probeResult(overrides: Partial<HostProbeResult> = {}): HostProbeResult 
     appImages: [],
     canDownload: true,
     matchesClient: true,
+    hostBuild: { version: "1.4.0", commit: "abcdef0", order: "same" },
+    stagedUpdate: null,
     advice: {
       sleepObserved: null,
       sleepDisabled: null,
@@ -65,6 +67,7 @@ const UPDATE_PLAN: HostInstallPlan = {
   channel: "stable",
   delivery: "push-bundle",
   packaging: "app-bundle",
+  downgrade: false,
   artifactName: null,
   artifactUrl: null,
   restartsHost: true,
@@ -551,6 +554,131 @@ describe("AddHostDialog", () => {
     } finally {
       consoleError.mockRestore();
     }
+  });
+
+  describe("a host on another release", () => {
+    const EXISTING = {
+      hostId: "studio",
+      name: "studio",
+      connection: { kind: "ssh" as const, target: "greg@studio" },
+    };
+    const NEWER = probeResult({
+      matchesClient: false,
+      install: {
+        path: "/Applications/Daintree.app",
+        version: "1.5.0",
+        commit: "fedcba9",
+        packaging: "app-bundle",
+      },
+      hostBuild: { version: "1.5.0", commit: "fedcba9", order: "newer" },
+    });
+
+    it("says a host ahead of this machine is newer, and offers to update this machine", async () => {
+      const checkForUpdates = vi.fn(async () => {});
+      Object.assign(window.electron, { update: { checkForUpdates } });
+      remoteHosts.probe!.mockResolvedValue(NEWER);
+      render(<AddHostDialog isOpen onClose={() => {}} existing={EXISTING} />);
+      fireEvent.click(screen.getByRole("button", { name: "Check host" }));
+      expect(await screen.findByText("Newer build")).toBeTruthy();
+      expect(screen.getByTestId("add-host-newer").textContent).toContain("Daintree 1.5.0");
+      expect(screen.queryByRole("button", { name: "Plan update" })).toBeNull();
+      fireEvent.click(screen.getByRole("button", { name: "Update this machine" }));
+      expect(checkForUpdates).toHaveBeenCalledOnce();
+      expect(remoteHosts.planInstall).not.toHaveBeenCalled();
+      expect(remoteHosts.install).not.toHaveBeenCalled();
+    });
+
+    it("downgrades it only through a confirmation that names the downgrade", async () => {
+      remoteHosts.probe!.mockResolvedValue(NEWER);
+      remoteHosts.planInstall!.mockResolvedValue({ ...UPDATE_PLAN, downgrade: true });
+      render(<AddHostDialog isOpen onClose={() => {}} existing={EXISTING} />);
+      fireEvent.click(screen.getByRole("button", { name: "Check host" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Downgrade studio…" }));
+      await waitFor(() =>
+        expect(remoteHosts.planInstall).toHaveBeenLastCalledWith(
+          expect.objectContaining({ allowDowngrade: true })
+        )
+      );
+      expect((await screen.findByTestId("add-host-downgrade")).textContent).toMatch(
+        /over the newer 1\.5\.0 on studio: a downgrade/
+      );
+      expect(screen.queryByRole("button", { name: "Update host" })).toBeNull();
+      fireEvent.click(screen.getByRole("button", { name: "Downgrade studio…" }));
+      expect(await screen.findByText("Downgrade 'studio'?")).toBeTruthy();
+      expect(remoteHosts.install).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole("button", { name: "Downgrade host" }));
+      await waitFor(() => expect(remoteHosts.install).toHaveBeenCalledOnce());
+      expect(remoteHosts.install).toHaveBeenLastCalledWith(
+        expect.objectContaining({ allowDowngrade: true, whileWorking: "refuse" })
+      );
+      // The restart it needs is confirmed as any other, and stays a downgrade.
+      fireEvent.click(await screen.findByRole("button", { name: "Update now…" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Update and end 3 terminals" }));
+      await waitFor(() => expect(remoteHosts.install).toHaveBeenCalledTimes(2));
+      expect(remoteHosts.install).toHaveBeenLastCalledWith(
+        expect.objectContaining({ allowDowngrade: true, whileWorking: "proceed" })
+      );
+    });
+
+    it("installs the update the host downloaded by restarting it, behind the same confirmation", async () => {
+      remoteHosts.probe!.mockResolvedValue(
+        probeResult({
+          matchesClient: false,
+          hostBuild: { version: "1.3.0", commit: "0123456", order: "older" },
+          stagedUpdate: { version: "1.4.0", installsOnQuit: true, ready: true },
+        })
+      );
+      render(<AddHostDialog isOpen onClose={() => {}} existing={EXISTING} />);
+      fireEvent.click(screen.getByRole("button", { name: "Check host" }));
+      expect(await screen.findByText("Daintree 1.4.0")).toBeTruthy();
+      fireEvent.click(screen.getByRole("button", { name: "Install downloaded update" }));
+      await waitFor(() => expect(remoteHosts.install).toHaveBeenCalledOnce());
+      expect(remoteHosts.install).toHaveBeenLastCalledWith(
+        expect.objectContaining({ applyStaged: { version: "1.4.0" }, whileWorking: "refuse" })
+      );
+      expect(remoteHosts.planInstall).not.toHaveBeenCalled();
+      await screen.findByText("api: 3 terminals (agents 1 working, 1 waiting)");
+      fireEvent.click(screen.getByRole("button", { name: "Update now…" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Update and end 3 terminals" }));
+      await waitFor(() => expect(remoteHosts.install).toHaveBeenCalledTimes(2));
+      expect(remoteHosts.install).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          applyStaged: { version: "1.4.0" },
+          whileWorking: "proceed",
+          confirmed: IMPACT,
+        })
+      );
+    });
+
+    it("waits while the host is still preparing its update", async () => {
+      remoteHosts.probe!.mockResolvedValue(
+        probeResult({
+          matchesClient: false,
+          hostBuild: { version: "1.3.0", commit: "0123456", order: "older" },
+          stagedUpdate: { version: "1.4.0", installsOnQuit: true, ready: false },
+        })
+      );
+      render(<AddHostDialog isOpen onClose={() => {}} existing={EXISTING} />);
+      fireEvent.click(screen.getByRole("button", { name: "Check host" }));
+      expect(await screen.findByText("Daintree 1.4.0, still being prepared")).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Check again" })).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Install downloaded update" })).toBeNull();
+    });
+
+    it("says a package update installs on the host's own screen, and updates from here as before", async () => {
+      remoteHosts.probe!.mockResolvedValue(
+        probeResult({
+          matchesClient: false,
+          hostBuild: { version: "1.3.0", commit: "0123456", order: "older" },
+          stagedUpdate: { version: "1.4.0", installsOnQuit: false, ready: true },
+        })
+      );
+      render(<AddHostDialog isOpen onClose={() => {}} existing={EXISTING} />);
+      fireEvent.click(screen.getByRole("button", { name: "Check host" }));
+      expect(await screen.findByText(/from Restart to update on its own screen/)).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Plan update" })).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Install downloaded update" })).toBeNull();
+    });
   });
 
   it("dispatches nothing when the update confirmation is cancelled", async () => {

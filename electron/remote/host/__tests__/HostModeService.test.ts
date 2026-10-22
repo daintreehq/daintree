@@ -779,3 +779,66 @@ describe("HostModeService keychain history", () => {
     );
   });
 });
+
+describe("HostModeService recording what the process is doing", () => {
+  type Runtime = ReturnType<NonNullable<HostModeServiceDeps["runtime"]>["read"]>;
+  function fakeRuntime(initial: Runtime) {
+    let state = initial;
+    const listeners = new Set<() => void>();
+    return {
+      listeners,
+      read: () => state,
+      subscribe: (listener: () => void) => {
+        listeners.add(listener);
+        return () => void listeners.delete(listener);
+      },
+      set(next: Runtime) {
+        state = next;
+        for (const listener of listeners) listener();
+      },
+    };
+  }
+  const STAGED = { version: "1.5.0", installsOnQuit: true, ready: true };
+
+  it("records whether a window is open and the staged update, and again when either changes", async () => {
+    const runtime = fakeRuntime({ windows: false, stagedUpdate: null });
+    const recorded: Array<Record<string, unknown>> = [];
+    const { service } = makeService({
+      runtime,
+      writeStatus: async (observation) => void recorded.push(observation),
+    });
+    await service.setEnabled({ enabled: true });
+    await waitFor(() => recorded.length > 0);
+    expect(recorded.at(-1)).toMatchObject({ windows: false, enabled: true });
+    expect(recorded.at(-1)?.stagedUpdate).toBeUndefined();
+    runtime.set({ windows: true, stagedUpdate: STAGED });
+    await waitFor(() => recorded.at(-1)?.windows === true);
+    expect(recorded.at(-1)).toMatchObject({ windows: true, stagedUpdate: STAGED });
+  });
+
+  it("records nothing for a change before Host mode kept any record", async () => {
+    const runtime = fakeRuntime({ windows: false, stagedUpdate: null });
+    const writeStatus = vi.fn(async () => {});
+    makeService({ runtime, writeStatus });
+    runtime.set({ windows: true, stagedUpdate: STAGED });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(writeStatus).not.toHaveBeenCalled();
+  });
+
+  it("leaves windows and updates out of a quit process's last record, and stops listening", async () => {
+    const runtime = fakeRuntime({ windows: true, stagedUpdate: STAGED });
+    const recorded: Array<Record<string, unknown>> = [];
+    const { service } = makeService({
+      runtime,
+      writeStatus: async (observation) => void recorded.push(observation),
+    });
+    await service.setEnabled({ enabled: true });
+    await waitFor(() => recorded.length > 0);
+    await service.dispose();
+    const last = recorded.at(-1)!;
+    expect(last.stopped).toBe(true);
+    expect(last.windows).toBeUndefined();
+    expect(last.stagedUpdate).toBeUndefined();
+    expect(runtime.listeners.size).toBe(0);
+  });
+});
